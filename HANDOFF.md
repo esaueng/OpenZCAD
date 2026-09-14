@@ -40,6 +40,34 @@ below). The guard is now the measured invariant **a closing apex may only add
 material**: the run is lofted again without the apex and the two volumes are
 compared. No positional side reasoning is left.
 
+A **fifth round** closed two silent-wrongness defects that survived all four,
+both of them cases where a body shipped as if it were exact when it was not:
+
+- **Both new options were silently downgrading an exact result to a faceted
+  one.** On a curved profile the kernel drops its exact surfaces for these
+  options and rebuilds the whole body as flat facets, with `validateSolid`
+  passing, `warnings: []`, and `exportableStep` still true. Measured: a loft of
+  circles r = 2 and r = 3 ten apart is 1 cone plus 2 planes at the exact
+  198.9675, and **66 planes at 0.6413% under the analytic volume** once an apex
+  is given — and a **large** apex was accepted and shipped that body, not just
+  refused when small. A circle swept along a line is 1 cylinder plus 2 planes
+  at the exact 251.3274, and **74 planes at 2.0184% under** once a rail is
+  given, with the rail _parallel to the path_ so the correct answer is the
+  plain sweep unchanged. Both are now refused by name, from the measurement:
+  build the body both ways and compare the two curved-surface censuses. The
+  branch already refused a Smooth sweep with a rail on exactly this reasoning;
+  it is now applied to the case that can be measured. Planar profiles carry no
+  curved faces, so they never reach the guard and are untouched.
+- **The coplanar `baseline = 0` escape was fail-open.** Where the section run
+  could not be lofted without its apex, the guard substituted a baseline of
+  nought material. Measured, that admitted degenerate bodies: 100×100 then a
+  closing 4×4 on the same plane built at 53.3333 — exactly the 4×4×10/3 pyramid
+  with the 100×100 section kept as a zero-thickness web contributing no
+  material — and a disjoint pair reported `centerOfMass.x = 20.0` with a whole
+  section absent from the mass. The apex sign made no difference in any of
+  them, which is the invariant failing to decide rather than deciding. The
+  substitute is gone; a run with no measured baseline is refused.
+
 Both are exposed in the existing Loft and Sweep editors from PR #314 (a
 checkbox plus the shared `VectorFields` for the apex; a "Guide rail" select
 that defaults to "None — follow the path" for the rail), and both round trip
@@ -63,13 +91,18 @@ added could never be taken off again. `CLEARABLE_FEATURE_DATA_KEYS` in
 
 ## Kernel calls adopted
 
-| Call                                                       | Used for                                                                                                      | Replaces                                                                                           |
-| ---------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------- | -------------------------------------------------------------------------------------------------- |
-| `loftWithOptions(faces, json)`                             | a loft with `endPoint`                                                                                        | nothing — `loft`/`loftSmooth` still serve the unapexed case                                        |
-| `guidedSweep(face, spine…, aux…)`                          | a sweep with `guide`                                                                                          | nothing — `sweepWithOptions`/`sweepAlongEdges` still serve the unguided case                       |
-| `getNurbsCurveData(edge)`                                  | reading the spine and rail curves `guidedSweep` wants as raw NURBS                                            | new                                                                                                |
-| `getFaceVertices(face)` + `getVertexPosition(v)`           | recognising a section run that lies _in_ the closing section's plane                                          | replaces a `planarFaceCentroid` point for that one measurement; the centroid stays as the fallback |
-| `loft(faces)` a second time, whenever an apex is asked for | the baseline volume the apexed loft has to beat, and telling an apex failure apart from a section-run failure | new                                                                                                |
+| Call                                                                | Used for                                                                                                                                                 | Replaces                                                                     |
+| ------------------------------------------------------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------- | ---------------------------------------------------------------------------- |
+| `loftWithOptions(faces, json)`                                      | a loft with `endPoint`                                                                                                                                   | nothing — `loft`/`loftSmooth` still serve the unapexed case                  |
+| `guidedSweep(face, spine…, aux…)`                                   | a sweep with `guide`                                                                                                                                     | nothing — `sweepWithOptions`/`sweepAlongEdges` still serve the unguided case |
+| `getNurbsCurveData(edge)`                                           | reading the spine and rail curves `guidedSweep` wants as raw NURBS                                                                                       | new                                                                          |
+| `getSolidFaces(solid)` + `getSurfaceType(face)`                     | censusing a build's exact curved surfaces, to refuse an option that would replace them with facets                                                       | new for this path; both already used elsewhere in the adapter                |
+| `loft(faces)` a second time, whenever an apex is asked for          | the baseline volume the apexed loft has to beat, the curved-surface census it has to match, and telling an apex failure apart from a section-run failure | new                                                                          |
+| `sweepWithOptions(...)` a second time, whenever a rail is asked for | the curved-surface census the guided sweep has to match                                                                                                  | new                                                                          |
+
+Round 4's `getFaceVertices` / `getVertexPosition` section-offset measurement is
+**gone**. It existed only to recognise a run lying in the closing plane, which
+was only ever read to justify the substitute baseline that round 5 deleted.
 
 ### The `loftWithOptions` options schema, as measured
 
@@ -154,44 +187,64 @@ rather than picked for roundness:
 An exact float comparison would have been wrong in the other direction, and a
 relative-only slack would have thrown that tiny apex away.
 
-### The one run with no baseline, decided rather than waved through
+### The run with no baseline is refused, not given a substitute
 
 If _every_ section lies in the closing section's plane, the run encloses
 nothing: lofted without an apex it is refused outright ("Loft did not produce a
-finite positive volume"), so there is no measurement to compare against. That
-run also has no interior for an apex to fold into, so its baseline is nought
-material rather than an unknown, and measured it closes correctly either way:
-4×4 and 8×8 both on z = 0 with an apex at z = 10 and at z = −10 both give
-213.3333, the analytic 8 × 8 × 10 / 3 pyramid. Both signs are accepted, with a
-regression test pinning them. Refusing that run would take away a loft the
-kernel builds correctly.
+finite positive volume"), so there is no measurement to compare against.
 
-That branch is a **degeneracy** test (`runLiesInClosingPlane`), not a side
-test, and a straddling section can never satisfy it. Any _other_ run whose
-unapexed loft fails while the apexed one validates is undecidable and is
-refused by name — the apex cannot be proved sound, so it is not accepted. I
-could not construct such a run on this pin (see Risks).
+Round 4 substituted a baseline of nought material there, on the reasoning that
+such a run has no interior for the apex to fold into. Round 5 removed that: the
+reasoning is true about folding and false about the result. What the kernel
+actually builds is a pyramid off the **last** section, with every earlier
+section kept in the B-Rep as a zero-thickness web holding no material at all.
+Measured on the pin, apex sign making no difference in any case — which is the
+invariant failing to decide rather than deciding:
+
+| coplanar run (all sections on z = 0)      | apex         | built    | what it really is                                        |
+| ----------------------------------------- | ------------ | -------- | -------------------------------------------------------- |
+| 4×4 then closing 8×8                      | z = ±10      | 213.3333 | the 8×8×10/3 pyramid alone; the 4×4 is an internal sheet |
+| 100×100 then closing 4×4                  | z = ±10      | 53.3333  | the 4×4×10/3 pyramid alone, in a bbox 100 mm wide        |
+| 4×4 at x = −20 then closing 4×4 at x = 20 | (20, 0, ±10) | 53.3333  | `centerOfMass.x = 20.0`; the x = −20 section has no mass |
+
+All three validated clean, warned nothing and were offered for STEP export. So
+`baseline` is now `unapexedLoft(...)` and nothing else: **any** run whose
+unapexed loft fails is refused by name, because the apex cannot be proved
+sound. The 213.3333 fixture that round 4 defended is now a refusal test with
+the same inputs, alongside the other two.
+
+Cost of this, measured: the only runs it takes away are the degenerate ones
+above. A run with two genuinely identical coplanar sections already fails
+`validateSolid` on its own, apex or no apex.
 
 ### What it costs
 
-One extra `loft` call per rebuild of a loft that **asks for an apex**; a loft
-with no apex point takes exactly the call it always did and pays nothing. Round
-3 already paid this cost, but only on the error path — it is now paid on the
-success path as well, which is the price of measuring the invariant instead of
-guessing it. Face handles survive repeated loft calls on this pin (verified:
-`loft`, `loftWithOptions`, `loft` again over the same `Uint32Array` each return
-their own solid), so the second build is safe as well as cheap.
+One extra `loft` call per rebuild of a loft that **asks for an apex**, and one
+extra `sweepWithOptions` call per rebuild of a sweep that **asks for a rail**.
+A loft with no apex point and a sweep with no rail take exactly the calls they
+always did and pay nothing. Round 3 already paid the loft cost on the error
+path; rounds 4 and 5 pay it on the success path too, which is the price of
+measuring the invariants instead of guessing them. Face handles survive
+repeated calls on this pin (verified: `loft`, `loftWithOptions`, `loft` again
+over the same `Uint32Array` each return their own solid; the same holds for
+`sweepWithOptions` and `guidedSweep` over one profile face), so the second
+build is safe as well as cheap.
 
 ### What still builds, unchanged
 
-Every case the earlier rounds established as valid was re-measured end to end
-through `syncDocument` after the rewrite: the 373.3333 plain frustum, the
+Every planar case the earlier rounds established as valid was re-measured end
+to end through `syncDocument` after round 5: the 373.3333 plain frustum, the
 480.0000 two-section apex, the 400.0000 descending run closed below itself, the
 394.6667 apex 200 mm off axis, both 433.3333 clear-apex runs (the coplanar
-closing pair and the overshooting run), the 213.3333 all-coplanar run from
-either side, and the 2333.3333 correct-side straddling apex. The guard is not a
-"higher z" test and not an "above the axis" test: reversing the section order
-makes an apex _below_ both sections the correct one.
+closing pair and the overshooting run), the 2333.3333 correct-side straddling
+apex, and the 160.0000 rectangular sweep on a parallel rail with its quarter
+turn intact (bbox 2 mm on x, 4 mm on y). The guard is not a "higher z" test and
+not an "above the axis" test: reversing the section order makes an apex _below_
+both sections the correct one.
+
+The one case that no longer builds is the 213.3333 all-coplanar run, which
+round 5 converted to a refusal deliberately — see above for why that body was
+not material.
 
 ### When the kernel refuses an apexed loft anyway
 
@@ -210,9 +263,20 @@ second build the volume comparison needs, so it is made once and read by both.
   sweep. `multiSectionSweep(faces, params, spine…, ruled)` can express a twist
   only if the _user_ rotates the section profiles themselves; that is a
   multi-section feature, not a twist control, and it is not this PR.
-- **An apex smaller than the kernel's own apexed-surfacing loss on a curved
-  run is refused, not accepted on faith.** See the first entry under Risks for
-  the measurement and the reasoning; planar sections are unaffected.
+- **Neither option is available on a curved profile at all, and that is the
+  largest single scope decision here.** The kernel has no exact surfacing for
+  either: `loftWithOptions` with an `endPoint` and `guidedSweep` with a rail
+  both rebuild a curved body as flat facets. Rather than ship a 32-segment
+  prism that measures and exports as if it were an exact cone, the builder
+  refuses by name. See "Exact surfaces are never traded for facets" under Risks
+  for the full measurement. Planar (straight-edged) profiles carry no curved
+  faces and are entirely unaffected — the guard never fires on them.
+- **The refusal is detected from geometry, not from a list of profile kinds.**
+  `refuseLostExactSurfaces` builds the body both ways and compares
+  `getSurfaceType` censuses over `getSolidFaces`. If a later kernel holds the
+  exact surfaces, the censuses match and the option is admitted with no change
+  here — the guard retires itself.
+- **The mirror-apex baseline was evaluated and not adopted.** See Risks.
 - **No end-tangency option.** `loftWithOptions` does not accept one (see the
   schema above), and no other bound entry point takes a tangency vector. The
   task listed end tangency as highest-value; the pin does not offer it. Report
@@ -345,7 +409,7 @@ pnpm lint               ✖ 19 problems (0 errors, 19 warnings)      [exit 0]
 pnpm typecheck          clean, no output                           [exit 0]
 pnpm test               (root vitest)
                         Test Files  241 passed | 2 skipped (243)
-                        Tests  2507 passed | 4 skipped (2511)
+                        Tests  2509 passed | 4 skipped (2513)
                         (web vitest)
                         Test Files  156 passed (156)
                         Tests  1188 passed (1188)
@@ -364,7 +428,9 @@ this branch: `test/hammer-holder-growing`, `-imported`, `-measurement` and
 `test/reconstruction-measurement` are `it.skipIf(!process.env.OPENZCAD_HAMMER_STEP)`,
 and that STEP fixture is not present here. The 2495 root tests the verifier
 measured on the first round, plus the 5 added in the second, the 5 added in the
-third and the 2 added in the fourth, give the 2507 above.
+third, the 2 added in the fourth, and the net 2 added in the fifth (three new
+cases, one existing case rewritten from a build into a refusal), give the 2509
+above.
 
 `node scripts/check-css-classes.mjs` also passes (275 files against 811
 classes); no new CSS class names were introduced — the apex checkbox and the
@@ -401,8 +467,22 @@ workflow were not run, per the briefing.
   - **an apex the model can barely measure** (2 µm above an 8×8 closing
     section, adding 4.3e-5 mm³) still builds, so the comparison's tolerance is
     proved not to eat a legitimately tiny apex;
-  - **a run whose sections are all coplanar** closes from either side, both at
-    the analytic 213.3333, with the bbox reaching the apex;
+  - **a coplanar run with no baseline to check the apex against** is refused,
+    in all three measured shapes and from either side: 4×4 then closing 8×8
+    (the 213.3333 body round 4 defended), 100×100 then closing 4×4 (53.3333 in
+    a 100 mm bbox), and disjoint 4×4s at x = ∓20 (53.3333 with
+    `centerOfMass.x = 20.0`). **This test was converted from a build into a
+    refusal deliberately**, with its fixture unchanged and two more added
+    beside it: the bodies it used to assert are a pyramid off the last section
+    plus zero-thickness internal sheets, not material. That is a
+    strengthening — the assertion is now "no body and a named refusal" where it
+    used to be "a body nobody had measured";
+  - **a loft apex that would trade exact curved surfaces for facets** refused
+    by name over circles r = 2 and r = 3 ten apart, at an apex the old volume
+    comparison rejected (z = 11) _and_ at one it accepted (z = 20), with the
+    plain loft asserted to still build at the exact 198.9675 on 3 faces and to
+    stay STEP-exportable. The two apex positions are the point: the loss is the
+    same size either way, so the volume comparison must not be what decides it;
   - **an apex 200 mm off the section axis** builds at the analytic 394.6667, so
     lateral position is the user's business;
   - **a loft the sections cannot make** keeps the kernel's own message and says
@@ -415,6 +495,11 @@ workflow were not run, per the briefing.
     volume 160, bbox 4 mm on x and 2 mm on y;
   - same sweep with a rail offset along y: volume still 160, bbox now 2 mm on
     x and 4 mm on y — the quarter turn the rail is for;
+  - **a guide rail that would trade exact curved surfaces for facets** refused
+    by name for a circular profile on a rail _parallel to the path_ — the case
+    whose correct answer is provably the plain sweep unchanged — with the plain
+    sweep asserted to still build at the exact 251.3274 on 3 faces and to stay
+    STEP-exportable;
   - a half-turn arc rail refused by name ("resolves to 2 curves");
   - **a rail on a Smooth sweep refused by name** instead of being resurfaced;
   - **an edit that sets a rail** with an empty entity list, or with entity ids
@@ -452,37 +537,74 @@ workflow were not run, per the briefing.
   is the first place in the adapter that reads `getNurbsCurveData`.
 - The guided sweep keeps ADR-011 hash-only lineage, so a rail change
   re-fingerprints downstream references exactly as a path change already does.
-- **A small apex on a _curved_ section is now refused, and that is the one
-  behaviour change a reviewer should weigh.** Asking for an apex moves the run
-  onto the kernel's chordal apexed surfacing: two circles r = 2 and r = 3 ten
-  apart measure the exact 198.9675 with no apex and 0.642% less — exactly the
-  32-segment chord ratio — as soon as an apex is given. So on curved sections
-  the apex has to add more than that surfacing costs (here, a standoff over
-  about 0.14 mm) before the body holds more material than the plain loft, and a
-  smaller one is refused with both volumes quoted. I kept that rather than
-  loosening the slack, on three grounds: the refusal states a true measurement
-  (the body really does hold less material than the plain loft, whichever half
-  of the build gave it away); loosening the slack to absorb a 0.6% surfacing
-  loss would re-open a fail-open window of the same size for real folds; and
-  the direction of the error is closed, not open. If the maintainer would
-  rather accept those, the honest fix is upstream — ask Remus why `endPoint`
-  drops the exact surfaces — not a wider tolerance here. A planar-section apex
-  is unaffected: both builds surface it identically, and a 2 µm apex passes.
-- **The undecidable branch has no fixture.** If the unapexed loft fails, the
-  apexed one validates, and the run does not lie in the closing plane, the
-  builder refuses because it cannot prove the apex only adds. I could not
-  construct such a run on this pin: crossed-plane runs fail with an apex too
-  (nine apex positions tried), and the only run whose unapexed loft fails while
-  the apexed one builds is the all-coplanar one, which is decided by
-  `runLiesInClosingPlane`. So that branch is a fail-closed safety net with no
-  test behind it.
-- **The apex guard reads section faces through `getFaceVertices`.** A section
-  face that reports no vertices falls back to `planarFaceCentroid`, and that to
-  the sketch plane's origin. That fallback now only affects whether a run is
-  recognised as lying in the closing plane (which decides only whether a zero
-  baseline may be used), not which side anything is on, so its blast radius is
-  much smaller than in earlier rounds — but it is still the part I have not
-  exercised on a real face.
+- **Exact surfaces are never traded for facets — so neither option works on a
+  curved profile, and this is the behaviour change to weigh.** Earlier
+  revisions of this file disclosed only half of this measurement: they said a
+  _small_ curved apex was refused, and left a reader to conclude that a larger
+  one was either refused or correct. It was neither. A large enough curved apex
+  was **accepted** and shipped a chordal body, silently. The full measurement,
+  taken end to end through `syncDocument` on the pin:
+
+  | fixture                                        | plain build                                 | with the option                                                | error vs analytic           |
+  | ---------------------------------------------- | ------------------------------------------- | -------------------------------------------------------------- | --------------------------- |
+  | loft, circles r = 2 @ z = 0 and r = 3 @ z = 10 | 198.967535, 3 faces (1 cone + 2 planes)     | apex z = 11 → 207.055862, 66 faces, all planes                 | −0.6413% (**was accepted**) |
+  | same                                           | same                                        | apex z = 20 → 291.334884, 66 faces, all planes                 | −0.6413% (**was accepted**) |
+  | sweep, circle r = 2 along (0,0)→(0,20)         | 251.327412, 3 faces (1 cylinder + 2 planes) | rail _parallel to the path_ → 246.254503, 74 faces, all planes | −2.0184% (**was accepted**) |
+  | sweep, rectangle 4×2 along the same path       | 160.000000, 6 planes                        | same rail → 160.000000, 18 planes                              | 0.0000% (still builds)      |
+
+  Every accepted row above validated clean, emitted no warning and was offered
+  for STEP export. The parallel-rail row is the sharpest: the rail changes
+  nothing about the correct answer, and what shipped was an 18-sided prism two
+  percent undersized. All three are now refused by name; the rectangular row is
+  untouched, which is what "planar cases are unaffected" means concretely.
+
+  The refusal is measured, not assumed: `refuseLostExactSurfaces` censuses the
+  non-`plane` faces of both builds and refuses only when the optioned build has
+  fewer. A plain build with no curved faces returns immediately.
+
+  If the maintainer would rather have the faceted bodies, the honest fix is
+  upstream — ask Remus for exact apexed and guided surfacing — not a warning on
+  an approximate body here.
+
+- **The mirror-apex baseline was evaluated and deliberately not adopted.** The
+  round-4 verifier proposed replacing the unapexed baseline with the same run
+  apexed at the apex _reflected through the closing plane_, so both builds sit
+  on one surfacing basis. I reproduced its numbers exactly on the curved
+  fixture — apex +0.05 → 198.1597, apex −0.05 → 197.2233, delta 0.9364, against
+  `2 × 0.99358 × (π × 9 × 0.05 / 3) = 0.9364` — so the claim is real. I did not
+  adopt it, for three reasons that only became true once the curved refusal
+  landed:
+  1. **It has no remaining job.** Its whole value was making the sign test
+     exact on a run whose two builds had different surfacing. After the curved
+     refusal, every run that reaches the volume comparison has an all-planar
+     plain build, so both builds are on one basis already and the tolerance
+     argument is retired.
+  2. **It is a _third_ build, not a swap.** The plain unapexed build is still
+     needed for the exact-surface census and for the "is the section run itself
+     at fault?" diagnosis, so a mirror baseline would be added to it rather
+     than replace it.
+  3. **It would damage the refusals.** The message quotes the two measured
+     volumes, and users act on them. "the same sections loft to 373.3333 mm³
+     without the apex and to 266.6667 mm³ with it" is readable; the volume of a
+     mirrored apex nobody asked for is not.
+
+  It remains a good idea if a later kernel gains exact apexed surfacing and the
+  curved refusal is lifted. It is recorded under Follow-ups.
+
+- **The undecidable branch is now the coplanar branch, and has fixtures.** Any
+  run whose unapexed loft fails is refused, which is what round 5 changed. The
+  runs that actually reach it on this pin are the all-coplanar ones, and all
+  three measured shapes of that are pinned as refusal tests. Crossed-plane runs
+  reach the _other_ refusal (the kernel's own validation failure, with the
+  advice pointing at the section run rather than the apex), also pinned.
+
+- **The sweep's baseline build can itself fail.** If the profile and path do
+  not sweep without the rail, there is no census to compare against, and the
+  builder refuses by name rather than trusting the guided build. I could not
+  construct such a case on this pin — the guided sweep is the more constrained
+  call — so this is a fail-closed safety net with no fixture behind it. If a
+  real model turns up that only the guided sweep can build, this is the line
+  that would be standing in its way.
 - **The refusal message names measured volumes, so it changes with the
   fixture.** The tests match on those numbers deliberately (they are the
   evidence), which means a kernel bump that moves a volume will fail them
@@ -503,8 +625,15 @@ workflow were not run, per the briefing.
   (sections at z = 0, 20, 10 loft to 253.3333 with no warning today). That is a
   larger piece of work and belongs with the kernel people, since `validateSolid`
   is where it would naturally live.
-- Ask upstream why `loftWithOptions` with an `endPoint` surfaces a curved run
-  chordally when the same run without one keeps exact surfaces. If that is a
-  defect, fixing it removes the only capability this round narrows.
+- **Ask upstream why `loftWithOptions` with an `endPoint`, and `guidedSweep`
+  with a rail, surface a curved body chordally when the same body without the
+  option keeps exact surfaces.** This is the single highest-value follow-up on
+  this branch: it is the only reason curved profiles are refused at all, and
+  `refuseLostExactSurfaces` is written so that a kernel which keeps the
+  surfaces admits them again with no code change here. Repro numbers are in the
+  Risks table above.
+- If that upstream fix lands, revisit the **mirror-apex baseline** (Risks): the
+  sign test would then again be comparing two builds on different surfacing
+  bases, which is exactly the problem it solves.
 - `multiSectionSweep` remains unadopted and would be the natural home for a
   multi-section sweep feature if one is ever wanted.
