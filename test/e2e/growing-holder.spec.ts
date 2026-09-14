@@ -31,7 +31,7 @@ async function importHolder(page: Page, file: string, project: string) {
   await page.getByLabel('Project name').fill(project);
   await page.getByRole('button', { name: 'Create project' }).click();
   await expect(page.getByRole('region', { name: '3D viewport' })).toBeVisible();
-  await page.getByLabel('Import STEP or STL…').setInputFiles(fixture(file));
+  await page.getByLabel(/^Import STEP or /).setInputFiles(fixture(file));
   await expect(page.locator('.feature-row').first()).toBeVisible({
     timeout: 60_000
   });

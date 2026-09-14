@@ -1946,7 +1946,7 @@ test('view keys still work while a profile pick is waiting for a click', async (
   );
 });
 
-test('section view cycles planes, offers an offset slider, and cuts nothing from the model', async ({
+test('section view cycles planes, cuts exactly at rest, and cuts nothing from the model', async ({
   page
 }) => {
   await stubApi(page);
@@ -1964,26 +1964,35 @@ test('section view cycles planes, offers an offset slider, and cuts nothing from
     page.locator('.feature-row-main', { hasText: 'Box' })
   ).toBeVisible();
 
-  const caps = () =>
+  interface SectionGeometry {
+    triangles: number;
+    bounds: { min: number[]; max: number[] };
+  }
+  const sectionState = () =>
     page.locator('.viewer-host canvas').evaluate(
       (canvas) =>
-        new Promise<
-          { triangles: number; bounds: { min: number[]; max: number[] } }[]
-        >((resolve) => {
+        new Promise<{
+          sectionCaps: SectionGeometry[];
+          exactSections: SectionGeometry[];
+        }>((resolve) => {
           canvas.dispatchEvent(
             new CustomEvent('openzcad:e2e-render-policy', {
               detail: {
                 resolve: (state: {
-                  sectionCaps: {
-                    triangles: number;
-                    bounds: { min: number[]; max: number[] };
-                  }[];
-                }) => resolve(state.sectionCaps)
+                  sectionCaps: SectionGeometry[];
+                  exactSections: SectionGeometry[];
+                }) =>
+                  resolve({
+                    sectionCaps: state.sectionCaps,
+                    exactSections: state.exactSections
+                  })
               }
             })
           );
         })
     );
+  const caps = async () => (await sectionState()).sectionCaps;
+  const exact = async () => (await sectionState()).exactSections;
   expect(await caps()).toEqual([]);
   const sectionButton = page.getByRole('button', { name: /^Section view/ });
   await expect(sectionButton).toHaveAttribute('aria-pressed', 'false');
@@ -1994,18 +2003,48 @@ test('section view cycles planes, offers an offset slider, and cuts nothing from
   await expect(sectionButton).toHaveAttribute('aria-label', /now: XY plane/);
   const slider = page.getByRole('slider', { name: 'Section plane offset' });
   await expect(slider).toBeVisible();
-  await expect.poll(async () => (await caps()).length).toBe(1);
-  const first = (await caps())[0]!;
-  expect(first.triangles).toBeGreaterThanOrEqual(2);
-  expect(first.bounds.min[2]).toBeCloseTo(Number(await slider.inputValue()));
-  expect(first.bounds.max[2]).toBeCloseTo(first.bounds.min[2]!);
+
+  // Switching the section on asks for the exact cut straight away, so the
+  // approximate cap is what the viewport shows only until the kernel
+  // answers. Either geometry is at the plane, and never both at once.
+  await expect
+    .poll(async () => {
+      const state = await sectionState();
+      return state.sectionCaps.length + state.exactSections.length;
+    })
+    .toBe(1);
+  const offset = Number(await slider.inputValue());
+  const atPlane = (geometry: SectionGeometry) => {
+    expect(geometry.bounds.min[2]).toBeCloseTo(offset);
+    expect(geometry.bounds.max[2]).toBeCloseTo(geometry.bounds.min[2]!);
+  };
+  const shown = (await sectionState());
+  atPlane(shown.sectionCaps[0] ?? shown.exactSections[0]!);
+
+  // The kernel sections a plain box exactly, and its curves take the cap's
+  // place: the drawing, not the approximation of it.
+  await expect.poll(async () => (await exact()).length).toBe(1);
+  expect(await caps()).toEqual([]);
+  const drawn = (await exact())[0]!;
+  expect(drawn.triangles).toBeGreaterThanOrEqual(2);
+  atPlane(drawn);
+  await expect(page.getByText('Exact section')).toBeVisible();
+
+  // Moving the plane hands the viewport back to the clipped preview at once
+  // — an exact section belongs to the cut it was computed for — and the new
+  // cut is sectioned exactly in turn when the key is released.
   await slider.focus();
   await page.keyboard.press('ArrowLeft');
-
   const movedOffset = Number(await slider.inputValue());
-  expect(movedOffset).not.toBe(first.bounds.min[2]);
+  expect(movedOffset).not.toBe(offset);
   await expect
-    .poll(async () => (await caps())[0]?.bounds.min[2])
+    .poll(async () => {
+      const state = await sectionState();
+      return (
+        state.sectionCaps[0]?.bounds.min[2] ??
+        state.exactSections[0]?.bounds.min[2]
+      );
+    })
     .toBeCloseTo(movedOffset);
 
   // XY → XZ → YZ → off; the cut is display-only, so the feature tree and
@@ -2017,7 +2056,12 @@ test('section view cycles planes, offers an offset slider, and cuts nothing from
   await sectionButton.click();
   await expect(sectionButton).toHaveAttribute('aria-pressed', 'false');
   await expect(slider).toHaveCount(0);
-  expect(await caps()).toEqual([]);
+  await expect
+    .poll(async () => {
+      const state = await sectionState();
+      return state.sectionCaps.length + state.exactSections.length;
+    })
+    .toBe(0);
   await expect(
     page.locator('.feature-row-main', { hasText: 'Box' })
   ).toBeVisible();

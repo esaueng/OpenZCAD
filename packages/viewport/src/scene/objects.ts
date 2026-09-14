@@ -7,8 +7,9 @@ import type {
   SketchOverlay
 } from '../types';
 import type { EdgeTopology } from '@openzcad/shared';
-import { isViewerMesh, type ViewerMesh } from '../pick/meshes';
+import { findBodyId, isViewerMesh, type ViewerMesh } from '../pick/meshes';
 import { updateSectionCap } from './sectionCaps';
+import { applyExactSection, type ExactSectionDisplay } from './exactSection';
 import {
   EDGE_IDLE_COLOR,
   EDGE_IDLE_OPACITY,
@@ -64,7 +65,20 @@ export function makeLabel(className: string, text: string): CSS2DObject {
  */
 export function applyDisplayMode(bodyGroup: THREE.Group, mode: DisplayMode) {
   bodyGroup.traverse((child: THREE.Object3D) => {
-    if (isViewerMesh(child) || child.userData.sectionCap === true) {
+    if (child.userData.exactSection === true) {
+      // Only the cut SURFACE follows the display mode. The section curves
+      // are an outline — the same kind of thing wireframe keeps the body's
+      // own edges for, and what the DXF export writes — so hiding them would
+      // leave wireframe showing no cut at all while the body edges around it
+      // stayed on screen. A THREE.Line is not a THREE.Mesh, which is what
+      // tells the fill and the curves apart here.
+      if (child instanceof THREE.Mesh) {
+        const material = (child as THREE.Mesh).material;
+        if (material instanceof THREE.Material) {
+          material.visible = mode !== 'wireframe';
+        }
+      }
+    } else if (isViewerMesh(child) || child.userData.sectionCap === true) {
       const mesh = child as ViewerMesh;
       mesh.material.visible = mode !== 'wireframe';
       mesh.material.wireframe = false;
@@ -107,16 +121,31 @@ export function sectionClippingPlane(
  * highlight geometry parented to them. Closed mesh cross-sections receive
  * disposable caps; holes stay open. Back faces remain visible while sectioning
  * and normal face culling returns as soon as the section is cleared.
+ *
+ * `exact` replaces those caps with the kernel's own section geometry once it
+ * has been computed for this plane position. It carries the display mode the
+ * section must be built for, because the display-mode pass does not re-run
+ * when a section arrives. The two never appear together on
+ * the same body: one is an approximation of the cut drawn from the display
+ * mesh, the other is the cross-section the export writes, and a viewport
+ * showing both would be showing the same cut twice at two different
+ * fidelities. It is per body, because the kernel can section one body of a
+ * model and refuse another — and a body with no exact section still needs its
+ * cap, or it renders as an open shell.
  */
 export function applySectionPlane(
   root: THREE.Object3D,
-  plane: THREE.Plane | null
+  plane: THREE.Plane | null,
+  exact: ExactSectionDisplay = null
 ) {
   const planes = plane ? [plane] : null;
   const meshes: ViewerMesh[] = [];
   root.updateWorldMatrix(true, true);
   root.traverse((child: THREE.Object3D) => {
     if (child.userData.sectionCap === true) return;
+    // Exact section geometry lies in the cutting plane; clipping it would
+    // clip it away.
+    if (child.userData.exactSection === true) return;
     if (isViewerMesh(child)) meshes.push(child);
     const materials = (child as THREE.Mesh).material;
     for (const material of Array.isArray(materials)
@@ -135,7 +164,15 @@ export function applySectionPlane(
     }
   });
   // Adding/removing children during traverse would skip siblings.
-  for (const mesh of meshes) updateSectionCap(mesh, plane);
+  const showExact = plane !== null && exact !== null && exact.regions.length > 0;
+  const exactBodyIds = new Set(
+    showExact ? exact.regions.map((region) => region.bodyId) : []
+  );
+  for (const mesh of meshes) {
+    const replaced = exactBodyIds.has(findBodyId(mesh) ?? '');
+    updateSectionCap(mesh, replaced ? null : plane);
+  }
+  applyExactSection(root, showExact ? exact : null);
 }
 
 export function sketchCentroid(sketch: SketchOverlay): THREE.Vector3 {
