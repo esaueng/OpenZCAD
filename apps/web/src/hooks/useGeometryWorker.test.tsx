@@ -36,6 +36,29 @@ afterEach(() => {
 });
 
 describe('useGeometryWorker', () => {
+  it('preserves selected analysis on one-off sync requests', async () => {
+    installWorker();
+    const document = createProjectDocument('Analysis', toUserId('user'));
+    const host = { manager: () => null, onDerived: vi.fn(), onError: vi.fn() };
+    const { result } = renderHook(() => useGeometryWorker(host));
+    const worker = FakeWorker.instances[0]!;
+    const analysis = { bodyId: 'imported', faceHashes: [701, 702] };
+    const pending = result.current.syncOnce(document, analysis);
+    const request = worker.postMessage.mock.calls.at(-1)![0] as {
+      requestId: string;
+    };
+    expect(request).toMatchObject({ type: 'sync', document, analysis });
+    act(() => {
+      worker.emit({
+        type: 'sync', ok: true, requestId: request.requestId,
+        projectId: document.projectId, version: document.version,
+        derived: document.derived
+      });
+    });
+    await expect(pending).resolves.toEqual(document.derived);
+    expect(host.onDerived).not.toHaveBeenCalled();
+  });
+
   it('keeps upstream projections ephemeral and ignores other revisions', () => {
     installWorker();
     const document = createProjectDocument('Projection', toUserId('user'));
