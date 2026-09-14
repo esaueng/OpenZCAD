@@ -13,9 +13,13 @@ offsets, exports and refuses booleans identically to one imported from an STL,
 because it is the same feature and the same rebuild.
 
 **One file becomes one body, several shells included.** A file holding several
-objects imports as one body carrying all of them. A file whose triangles the
-rebuild cannot take is refused at import, by name, with the kernel's own
-reason — see *One body per file, decided by trying*.
+objects imports as one body carrying all of them. For every format read through
+`importMeshFile` — 3MF, OBJ, GLB and PLY — a file whose triangles the rebuild
+cannot take is refused at import, by name, with the kernel's own reason, and
+that check runs at the **open document's units** rather than in millimetres.
+STL keeps its own parser and does not get the check; that carve-out is stated
+in *Deliberate limits* and, since this round, in the README as well — see *One
+body per file, decided by trying*.
 
 **A 3MF's declared unit and its `<build>` section are honoured.** Per-item
 transforms are applied, an object placed twice imports twice, and an object the
@@ -31,10 +35,11 @@ Where the work happens:
   reached as `@openzcad/kernel-adapter/mesh-import-formats`, its own package
   entry point, **not** through the adapter's index barrel — see *Bundle budget*.
 - `packages/kernel-adapter/src/mesh-file-import.ts` — `importMeshFile(format,
-  bytes)`: size check, package read (3MF), translator call, arena document →
-  solids → placements → `tessellateSolid` → one triangle list → unit
-  conversion, the document's own 200,000-triangle ceiling, then the rebuild
-  check.
+  bytes, documentUnits)`: size check, package read (3MF), translator call,
+  arena document → solids → placements → `tessellateSolid` → one triangle list
+  → unit conversion, the document's own 200,000-triangle ceiling, then the
+  rebuild check — run on the triangles scaled into `documentUnits`, exactly as
+  the commit will scale them.
 - `packages/kernel-adapter/src/three-mf-package.ts` — opens the Zip package and
   reports what the 3MF states: its `unit`, its mesh objects in `<resources>`
   order, and its `<build>` items with their matrices. Refuses rather than
@@ -114,8 +119,37 @@ about to return, and refuses only if that refuses:
 > part from its own file.
 
 (that is a real refusal, from a 3MF whose build places one object twice at the
-same spot). No path can now report success and then rebuild to nothing: the
-import runs the rebuild.
+same spot).
+
+**The check runs at the document's units, because the rebuild does.** Round 3
+claimed "no path can now report success and then rebuild to nothing"; that was
+false twice over, and both were measured rather than argued.
+
+The first is the scale. `importMeshSolid` sews at
+`max(1, extent) * MESH_SEW_TOLERANCE_RATIO`, and `commitImportedMesh` stores an
+imported mesh at `1 / UNIT_TO_MM[units]` — so a check run on millimetres and a
+rebuild run on the document's own numbers are two different questions whenever
+the document is not in millimetres. Measured on the pin, a 2 x 3 x 0.0002 mm
+OBJ plate:
+
+| | check (as run) | `syncDocument` on the stored vertices |
+| --- | --- | --- |
+| document in `mm` | passes, 12 triangles | volume 0.0012, warnings `[]` |
+| document in `m`, **before** | passes, 12 triangles | **no body** — "Sewing this mesh changed its size, so the import was refused rather than publishing altered geometry." |
+| document in `m`, **after** | refused, naming that same sentence | — |
+
+The same plate 0.0005 mm thick rebuilds cleanly at both scales and still
+imports at both, so the fix is the scale and not a new refusal of thin parts.
+`importMeshFile` therefore takes the document's `UnitSystem` as a **required**
+third argument, `MeshImportWorkerRequest` carries it, and `App.tsx` passes
+`doc.units`; the returned vertices are still millimetres, so
+`commitImportedMesh`'s conversion stays the one place units are applied.
+
+The second is STL, which never went through `importMeshFile` at all — see
+*Deliberate limits*. The README used to claim the check for all five formats;
+it now scopes the claim and states what an STL does instead, and
+`test/mesh-import.test.ts` asserts the README sentence and the measured STL
+behaviour together, so the two cannot drift apart again.
 
 ## A 3MF's `<build>` section is honoured
 
@@ -229,6 +263,24 @@ findings are these. Round-2 findings first:
   and then fails the rebuild's sew as non-manifold — the fixture behind the
   rebuild-check regression test.
 
+Measured this round:
+
+- **The sew's answer depends on the numbers, not the shape.** A
+  2 x 3 x 0.0002 mm OBJ plate sews and rebuilds to volume 0.0012 when its
+  vertices are millimetres, and the same plate scaled by 1/1000 comes back with
+  **no body** and "Sewing this mesh changed its size, so the import was refused
+  rather than publishing altered geometry." The same plate 0.0005 mm thick
+  rebuilds at both scales (0.003 and 3e-12). `importMeshSolid`'s
+  `max(1, extent)` floor is the mechanism: below one unit across, the tolerance
+  is an absolute `1e-6` of whatever unit the numbers are in.
+- **The 3MF model-part scan was quadratic on a hostile part**, measured with a
+  `<model>` whose `name` attribute withholds a `>`: 4 MB → 221 ms, 8 MB →
+  878 ms, 16 MB → 3,442 ms, from deflated Zip packages of 4.6 KB, 8.7 KB and
+  16.9 KB. With the 256 KB carry cap the same three refuse in 6, 2 and 3 ms,
+  and a 32 MB one — 17,677 ms before, from a 33 KB package — refuses in 2 ms.
+  (A JS measurement, not a kernel one; recorded here because the file that
+  triggers it is a legal-looking 3MF.)
+
 Carried over from round 1, still true:
 
 - All four importers accept a hand-written box and return an arena document of
@@ -252,14 +304,16 @@ Run from the worktree root on this branch, at the final commit:
   pre-existing `react-hooks/exhaustive-deps` warnings, unchanged.
 - `pnpm typecheck` → clean, no output, exit 0.
 - `pnpm test` → root `Test Files 242 passed | 2 skipped (244)`,
-  `Tests 2541 passed | 4 skipped (2545)`; web `Test Files 157 passed (157)`,
-  `Tests 1187 passed (1187)`; exit 0. (`origin/main` baseline: root 241 files /
-  2489 tests + 2 skipped, web 156 files / 1182 tests.)
+  `Tests 2549 passed | 4 skipped (2553)`; web `Test Files 157 passed (157)`,
+  `Tests 1188 passed (1188)`; exit 0. (`origin/main` baseline: root 241 files /
+  2489 tests + 2 skipped, web 156 files / 1182 tests. The eight new root cases
+  and one new web case are this round's regressions.)
 - `pnpm test:parity-corpus` → `Test Files 7 passed (7)`,
   `Tests 174 passed | 1 skipped (175)`, exit 0 — the baseline exactly.
 - `pnpm build` → exit 0, `"warnings": []`, `"failures": []`. Entry chunk
-  `assets/index-*.js` 508,054 bytes against the 512,000-byte budget, and no
-  `assets/src-*.js` among `initialAssets`.
+  `assets/index-*.js` 508,062 bytes against the 512,000-byte budget — eight
+  bytes more than the previous round, the `doc.units` argument — and no
+  `assets/src-*.js` among the 36 `initialAssets`.
 
 `pnpm test:e2e` was not run (per the briefing).
 
@@ -303,8 +357,29 @@ Run from the worktree root on this branch, at the final commit:
 - `apps/web/src/lib/meshImportWorkerClient.test.ts` (web): the oversized refusal
   happens **before** a worker is constructed; a mismatched request id is
   ignored; the transferred typed arrays are unpacked to plain arrays; a declared
-  source unit is carried back to the caller; abort and worker refusals both
-  terminate the worker.
+  source unit is carried back to the caller; **the document's units reach the
+  worker request**; abort and worker refusals both terminate the worker.
+- The rebuild check's **scale** (`test/mesh-import.test.ts`): a
+  2 x 3 x 0.0002 mm OBJ plate imports and rebuilds in a millimetre document;
+  the same plate's stored vertices at metre scale are measured coming back as
+  no body with the sewing warning, and `importMeshFile(..., 'm')` is then
+  asserted to refuse with that same sentence; a 0.0005 mm plate imports at
+  metre scale and rebuilds to `2 x 3 x 0.0005 mm` worth of volume, so the
+  check is not a blanket refusal of thin parts; and the returned vertices are
+  asserted to still be millimetres whatever the units passed.
+- The **STL carve-out** (`test/mesh-import.test.ts`): two coincident fixture
+  boxes parse as 24 triangles through `parseStl` and then rebuild to no body
+  with the kernel's non-manifold warning, while the same geometry as a 3MF is
+  refused at import — and the README's mesh bullet is read from disk and
+  asserted to scope its claim to "every format but STL" and to say what an STL
+  does instead. Extending the check to STL fails that assertion, which is the
+  point: the claim and the code cannot drift apart silently.
+- The **3MF model-part scan** (`test/mesh-import.test.ts`): a package whose
+  `<model>` tag carries a 64 KB `name` still imports to 12 triangles and
+  24 mm³, and one carrying 32 MB of it — a 33 KB deflated package, well under
+  the 32 MB input ceiling — is refused by the tag cap in under 3 s. Measured
+  against the pre-cap code the same case takes 17,677 ms, so the bound is the
+  assertion.
 
 ## Deliberate limits
 
@@ -318,7 +393,8 @@ Run from the worktree root on this branch, at the final commit:
   triangles the sew refuses still reports success and then warns at rebuild.
   Routing STL through this path is a behaviour change on the one mesh path with
   e2e coverage; it is a follow-up, and it is the only remaining
-  success-then-warn case.
+  success-then-warn case. Since this round the README says so too, and a test
+  holds the sentence and the behaviour together.
 - **The 3MF reader is not a general Zip or 3MF reader.** Zip64 packages and
   compression methods other than stored and deflate are refused by name.
   `<components>` composition, the production extension's multi-part models, and
@@ -326,7 +402,9 @@ Run from the worktree root on this branch, at the final commit:
   rather than resolved. The model-part scan matches tags with a regex, so an
   attribute value containing a literal `>` — legal XML, written by nothing in
   circulation — would confuse it; the failure mode is a refusal, since the
-  mapping check and the rebuild check both sit behind it.
+  mapping check and the rebuild check both sit behind it. A part that runs
+  more than 256 K characters without closing a tag is refused outright rather
+  than carried, which is what keeps the scan linear and flat in memory.
 - **No pre-import preview.** STEP has `inspectStep` and an import card with
   progress and cancel; mesh imports show a status line, as STL does. The client
   accepts an `AbortSignal` already, so wiring the card later is small.
@@ -344,13 +422,24 @@ Run from the worktree root on this branch, at the final commit:
   UI thread. It is the price of never reporting a success that cannot come
   back; if it proves too slow, the cheaper version is to hand the verified
   solid forward rather than re-deriving it, which is a bigger change.
-- **The check runs on millimetres, the document may store other units.**
-  `commitImportedMesh` scales by `1/UNIT_TO_MM` after the check. The sew
-  tolerance is relative to the mesh's own extent (`max(1, extent) * 1e-6`), so
-  a uniform scale is nearly invariant — but the `max(1, …)` floor means a
-  document in metres verifies a 12 mm part and then stores a 0.012 m one. This
-  is pre-existing for STL and was not changed here; it is the one way the
-  check's answer could differ from the rebuild's.
+- **The sew tolerance is still unit-dependent; only the check was aligned to
+  it.** `importMeshSolid`'s `max(1, extent)` floor makes the tolerance an
+  absolute `1e-6` document units for any body under one unit across, so the
+  same physical plate that sews in a millimetre document collapses in a metre
+  one. The check now asks the rebuild's question instead of a different one, so
+  the failure is a named refusal rather than a success in front of no body —
+  but the underlying limit is unchanged, and a user in metres still cannot
+  import a sub-micron-thick plate. Removing the floor would make the tolerance
+  scale-invariant and is the real fix; it changes the sew for **every**
+  imported mesh including STL, so it is a follow-up with its own corpus, not a
+  rider on this one.
+- **The 3MF model-part scan now refuses a tag over 256 K characters.** No element of a
+  real 3MF is remotely that long — the largest is a `<model>` open tag — and a
+  64 KB padded one is asserted to still import. But it is a new refusal, and a
+  package that embeds something enormous in a single attribute would meet it.
+  The alternative measured on the pin was 3,442 ms for 16 MB of tag and about
+  seventeen minutes at the scan's own ceiling, in a worker `App.tsx` starts
+  without an `AbortSignal`.
 - **`unifySewnMesh` no longer rethrows.** Any failure of the heal pipeline now
   falls back to the sewn shell, including one that is not a validator refusal
   (a kernel fault, say). The volume and bounds oracle immediately after it is
@@ -383,11 +472,19 @@ Run from the worktree root on this branch, at the final commit:
   undo step, or several solids in one body's shape (`shape.solids` is already a
   list), belongs with the assembly work in I-3.
 - **Route STL through `importMeshFile`'s rebuild check**, closing the last
-  success-then-warn path.
+  success-then-warn path. The README documents the carve-out now, and a test
+  asserts both halves, so doing this means updating the sentence with the code.
+- **Make `importMeshSolid`'s sew tolerance scale-invariant** by dropping the
+  `max(1, extent)` floor, so a thin plate imports in a metre document rather
+  than being refused there. It changes the sew for every imported mesh
+  including STL and wants its own measurements.
+- **Wire the mesh import into the import card (progress + cancel).** The
+  client already takes an `AbortSignal` and `App.tsx` passes none, so a slow
+  parse cannot be cancelled and there is no card to cancel it from. The 3MF
+  scan is bounded now, but the translator and the sew are still synchronous
+  WASM.
 - **Surface `validateSolidDetailed` on an imported mesh body** as a warning, so
   a shell with inconsistent face orientations says so instead of looking clean.
-- Wire the mesh import into the import card (progress + cancel) — the client
-  already takes an `AbortSignal`.
 - An e2e case that drops a `.3mf` on the viewport, mirroring the existing STL
   e2e, would cover the DOM half this branch tests only in unit form.
 - `importIges` and `importIndexedMesh` exist on the same translator and are
