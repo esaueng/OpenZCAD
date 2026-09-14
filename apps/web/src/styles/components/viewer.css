@@ -146,12 +146,14 @@
   position: relative;
 }
 
-/* Slides out beside the section button while a cut is active, growing
-   upward like the views flyout so the dock lane never clips its lower half. */
+/* Opens above the section button while a cut is active. Beside it, the
+   panel reaches across the viewport into the model tree at narrow widths;
+   upward it stays over the viewport wherever the bar itself fits. */
 .rail-section-panel {
   position: absolute;
-  right: calc(100% + 7px);
-  bottom: -4px;
+  left: 50%;
+  transform: translateX(-50%);
+  bottom: calc(100% + 7px);
   display: flex;
   /* The cut's state line reads as a caption under the slider it belongs to;
      side by side, the panel grows wider than the rail has room for. */
