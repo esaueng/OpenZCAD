@@ -48,6 +48,15 @@ import {
   directEditFacetFallbackWarning
 } from './boolean-result-validation';
 import {
+  exactBooleanRefusalReason,
+  exactCut,
+  exactFuse
+} from './exact-boolean-refusal';
+import {
+  requireValidSolid,
+  unifyAndRequireValidSolid
+} from './kernel-validation';
+import {
   ambiguousReferenceError,
   unresolvedReferenceError
 } from './topology-fingerprint';
@@ -177,22 +186,34 @@ function enlargeThroughHole(
   newBore: number
 ): number {
   try {
-    return kernel.cut(solid, newBore);
+    return exactCut(kernel, solid, newBore);
   } catch (shortCutError) {
     const axis = normalized(subtract(geometry.axisEnd, geometry.axisStart));
     if (!axis) throw shortCutError;
     const bounds = Array.from(kernel.boundingBox(solid));
-    if (bounds.length !== 6 || !bounds.every(Number.isFinite)) throw shortCutError;
+    if (bounds.length !== 6 || !bounds.every(Number.isFinite))
+      throw shortCutError;
     const corners: Vec3[] = [];
     for (const x of [bounds[0]!, bounds[3]!])
       for (const y of [bounds[1]!, bounds[4]!])
         for (const z of [bounds[2]!, bounds[5]!]) corners.push({ x, y, z });
-    const along = (point: Vec3) => dot(subtract(point, geometry.axisStart), axis);
+    const along = (point: Vec3) =>
+      dot(subtract(point, geometry.axisStart), axis);
     const reach = corners.map(along);
     const margin = Math.max(1, radius);
-    const start = add(geometry.axisStart, scale(axis, Math.min(...reach) - margin));
-    const end = add(geometry.axisStart, scale(axis, Math.max(...reach) + margin));
-    return kernel.cut(solid, cylinderAlongAxis(kernel, start, end, radius));
+    const start = add(
+      geometry.axisStart,
+      scale(axis, Math.min(...reach) - margin)
+    );
+    const end = add(
+      geometry.axisStart,
+      scale(axis, Math.max(...reach) + margin)
+    );
+    return exactCut(
+      kernel,
+      solid,
+      cylinderAlongAxis(kernel, start, end, radius)
+    );
   }
 }
 
@@ -249,9 +270,11 @@ export function resizeThroughHole(
     output =
       radius > geometry.radius
         ? enlargeThroughHole(kernel, solid, geometry, radius, newBore)
-        : kernel.fuse(
+        : exactFuse(
+            kernel,
             solid,
-            kernel.cut(
+            exactCut(
+              kernel,
               cylinderAlongAxis(
                 kernel,
                 geometry.axisStart,
@@ -264,17 +287,17 @@ export function resizeThroughHole(
   } catch (error) {
     throw new Error(
       `Through-hole diameter ${diameter} does not fit this body: ${
-        error instanceof Error ? error.message : 'the kernel rejected the cut'
+        exactBooleanRefusalReason(error) ??
+        (error instanceof Error ? error.message : 'the kernel rejected the cut')
       }.`,
       { cause: error }
     );
   }
-  kernel.unifyFaces(output);
-  if (kernel.validateSolid(output) !== 0) {
-    throw new Error(
-      `Resizing the through-hole to diameter ${diameter} does not produce a valid solid.`
-    );
-  }
+  unifyAndRequireValidSolid(
+    kernel,
+    output,
+    `Resizing the through-hole to diameter ${diameter} does not produce a valid solid.`
+  );
   // The kernel can clear its own gates and still hand back a degraded
   // result: a boolean that meets a coaxial cylindrical face may return the
   // untouched original, and the mesh fallback encloses the right space with
@@ -574,24 +597,27 @@ function fillImportedHole(
   const facesBefore = kernel.getSolidFaces(solid).length;
   let filled: number;
   try {
-    filled = kernel.fuse(
+    filled = exactFuse(
+      kernel,
       solid,
       cylinderAlongAxis(kernel, openingPoint, end, maximumRadius)
     );
   } catch (error) {
     throw new Error(
       `Filling the imported hole before resizing failed: ${
-        error instanceof Error ? error.message : 'the kernel rejected the fuse'
+        exactBooleanRefusalReason(error) ??
+        (error instanceof Error
+          ? error.message
+          : 'the kernel rejected the fuse')
       }.`,
       { cause: error }
     );
   }
-  kernel.unifyFaces(filled);
-  if (kernel.validateSolid(filled) !== 0) {
-    throw new Error(
-      'Filling the imported hole before resizing did not produce a valid solid.'
-    );
-  }
+  unifyAndRequireValidSolid(
+    kernel,
+    filled,
+    'Filling the imported hole before resizing did not produce a valid solid.'
+  );
   if (kernel.getSolidFaces(filled).length >= facesBefore) {
     throw new Error(
       'This imported hole cannot be resized exactly: filling it would need an approximate operation.'
@@ -920,12 +946,11 @@ export function removeFaceFeature(
       { cause: error }
     );
   }
-  kernel.unifyFaces(output);
-  if (kernel.validateSolid(output) !== 0) {
-    throw new Error(
-      'Removing the selected face did not produce a valid solid.'
-    );
-  }
+  unifyAndRequireValidSolid(
+    kernel,
+    output,
+    'Removing the selected face did not produce a valid solid.'
+  );
   return output;
 }
 
@@ -1221,11 +1246,11 @@ export function applyDirectEdit(
       throw new Error('Blend radius must differ from its current radius.');
     }
     const output = kernel.resizeBlend(solid, face, snapshot.radius, newRadius);
-    if (kernel.validateSolid(output) !== 0) {
-      throw new Error(
-        `Resizing the blend to radius ${newRadius} does not produce a valid solid.`
-      );
-    }
+    requireValidSolid(
+      kernel,
+      output,
+      `Resizing the blend to radius ${newRadius} does not produce a valid solid.`
+    );
     let lineage: RemusLineageState | undefined;
     if (newRadius > GEOMETRY_EPSILON) {
       const candidates = topologyCandidatesForSolid(kernel, output);
