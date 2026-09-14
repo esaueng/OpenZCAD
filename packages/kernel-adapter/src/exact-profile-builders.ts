@@ -1004,6 +1004,25 @@ function loftApexPoint(
   return [point.x, point.y, point.z];
 }
 
+/**
+ * Whether the apex point is what this loft cannot take. The same section run
+ * is lofted again without it: if that builds a valid solid the apex is the
+ * only difference and saying so points at the input the user can change, and
+ * if it does not, the run itself is what fails and blaming the apex sends the
+ * user after the wrong input.
+ */
+function unapexedLoftBuilds(
+  kernel: RemusKernel,
+  handles: Uint32Array
+): boolean {
+  try {
+    validateGeneratedSolid(kernel, kernel.loft(handles), 'Loft');
+    return true;
+  } catch {
+    return false;
+  }
+}
+
 export function buildLoft(
   kernel: RemusKernel,
   document: ProjectDocument,
@@ -1093,7 +1112,9 @@ export function buildLoft(
     validated = validateGeneratedSolid(kernel, solid, 'Loft to an apex point');
   } catch (error) {
     throw new Error(
-      `${errorText(error)} An apex that is off to one side of the closing section, far enough for the last band to cross an earlier one, folds the loft back on itself; move the apex over the closing section, or clear it.`,
+      unapexedLoftBuilds(kernel, handles)
+        ? `${errorText(error)} The same sections do loft into a valid solid without the apex point, so the apex is what this loft cannot take: move it, or clear it.`
+        : `${errorText(error)} The same sections do not loft into a valid solid without the apex point either, so the section run itself is what the kernel cannot take; the apex is not what to change.`,
       { cause: error }
     );
   }
