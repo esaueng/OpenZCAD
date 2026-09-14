@@ -9,8 +9,8 @@ import { describe, expect, it } from 'vitest';
  * Three mechanisms have broken that in turn — a preview document, an
  * unapplied parameter edit, and the Move gizmo posing a body's mesh straight
  * into the scene — and the first two were fixed by declaring themselves to
- * the section. The third could not be: posing a mesh is three lines against
- * an `Object3D` inside a pointer handler, and a fourth mechanism is under no
+ * the section. The third could not be: posing a mesh is two lines against an
+ * `Object3D` inside a pointer handler, and a fourth mechanism is under no
  * obligation to announce itself either.
  *
  * So the section no longer asks the mechanisms. The viewer samples the body
