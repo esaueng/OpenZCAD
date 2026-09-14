@@ -137,13 +137,19 @@ so it is a commit of its own.
 Run from the worktree root.
 
 ```
-pnpm lint                 ✖ 19 problems (0 errors, 19 warnings)   [baseline: 0 errors / 19 warnings]
+pnpm lint                 ✖ 19 problems (0 errors, 19 warnings)
+                          [baseline: 0 errors / 19 warnings]
 pnpm typecheck            clean, no output
-pnpm test                 Test Files 160 passed (160) / Tests 1231 passed (1231)
-                          [baseline: 156 files / 1182 tests]
-pnpm test:parity-corpus   Test Files 7 passed (7) / Tests 174 passed | 1 skipped (175)
+pnpm test                 root:  Test Files 242 passed | 2 skipped (244)
+                                 Tests 2507 passed | 4 skipped (2511)
+                          web:   Test Files 157 passed (157)
+                                 Tests 1209 passed (1209)
+                          [baseline web: 156 files / 1182 tests; +18 root, +27 web]
+pnpm test:parity-corpus   Test Files 7 passed (7)
+                          Tests 174 passed | 1 skipped (175)
                           [baseline: 174 passed, 1 skipped]
-pnpm build                "failures": []   entry chunk 510,066 bytes of 512,000
+pnpm build                "failures": []
+                          entry chunk 510,066 bytes against a 512,000 budget
 ```
 
 `pnpm test:e2e` was not run (out of scope per the briefing), so the tools have
