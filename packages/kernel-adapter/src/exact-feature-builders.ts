@@ -1,10 +1,10 @@
-import { type FaceEvolutionPayloadV1 } from './remus-runtime';
+import { type FaceEvolutionPayloadV1, type RemusKernel } from './remus-runtime';
 import {
   findSketch,
   listFeaturesInOrder,
   resolveParamValue
 } from '@openzcad/document-core';
-import { geometryTolerance } from '@openzcad/geometry';
+import { geometryTolerance, type Vec3 } from '@openzcad/geometry';
 import {
   FULL_REVOLVE_ANGLE_DEG,
   UNIT_TO_MM,
@@ -14,7 +14,9 @@ import {
 import type { ExactShape, ImportedStepDiagnostics } from './exact-types';
 import {
   diagnoseImportedSolid,
+  faceCandidatesForSolid,
   modifierChainRootPrimitive,
+  patternJournalFaceClaims,
   rederiveBoxModifierLineage,
   rederiveCylinderModifierLineage,
   rederivePrimitiveDirectEditLineage,
@@ -50,7 +52,6 @@ import {
 } from './exact-reference-resolution';
 import {
   bodyName,
-  copyShape,
   copyShapeWithVerifiedLineage,
   formatMeasuredVolume,
   importMeshSolid,
@@ -67,6 +68,7 @@ import {
   axisDirection,
   cross,
   dot,
+  errorText,
   length,
   normalized,
   resolvePatternDirection,
@@ -94,8 +96,11 @@ import {
   remusHashOnlyLineage,
   createRemusImportedStepLineage,
   createRemusModifierEvolutionLineage,
+  decodeRemusPatternJournal,
   deriveRemusBooleanCarrierLineage,
+  deriveRemusPatternInstanceLineage,
   mergeRemusLineageStates,
+  type RemusLineageDiagnostic,
   type RemusLineageState
 } from './remus-lineage';
 
@@ -1501,6 +1506,387 @@ function buildEdgeModifierFeature(
   }
 }
 
+/**
+ * One patterned copy: what it contributed and the transform that made it.
+ *
+ * `solids` holds one entry per source solid in the source body's own order,
+ * so the instances can be re-interleaved into the solid order this feature
+ * has always published. `claims` is the kernel journal's face map for the
+ * same slot, where the entry point journals its work.
+ */
+interface PatternInstanceBuild {
+  readonly instance: string;
+  readonly matrix: Float64Array;
+  readonly solids: number[];
+  readonly claims: (ReadonlyMap<number, number> | undefined)[];
+}
+
+/** What one source solid's kernel pattern produced. */
+interface KernelPatternCopies {
+  readonly solids: number[];
+  readonly claims: (ReadonlyMap<number, number> | undefined)[] | null;
+}
+
+/**
+ * One pattern kind reduced to the three things the build needs: how many
+ * instances there are, where each one sits, and the kernel entry point that
+ * makes them — `null` where no entry point expresses the arrangement.
+ */
+interface PatternArm {
+  readonly total: number;
+  readonly label: (index: number) => string;
+  readonly matrix: (index: number) => Float64Array;
+  readonly kernelCopies: ((solid: number) => KernelPatternCopies) | null;
+}
+
+const PATTERN_ORIGIN = { x: 0, y: 0, z: 0 };
+
+/**
+ * The copies a kernel pattern entry point produced, checked before use.
+ *
+ * The kernel leaves the seed solid in place and returns it as the compound's
+ * first member, so the source handle is expected there rather than a copy.
+ */
+function kernelPatternInstanceSolids(
+  kernel: RemusKernel,
+  compound: number,
+  source: number,
+  expected: number
+): number[] {
+  const solids = Array.from<number>(kernel.getCompoundSolids(compound));
+  if (solids.length !== expected || solids[0] !== source) {
+    throw new Error('The kernel pattern did not return one copy per instance.');
+  }
+  return solids;
+}
+
+/**
+ * Whether any two instances could share material, read from bounding boxes.
+ *
+ * The kernel's pattern entry points REFUSE an arrangement whose instances
+ * interpenetrate — "exact instance fusing with face evolution is not yet
+ * supported" — which is exactly the arrangement this feature has always
+ * supported by fusing the copies itself. Boxes decide which path to take
+ * because a box-disjoint pattern is material-disjoint for certain, so the
+ * kernel can never refuse one on those grounds. The converse is deliberately
+ * conservative: instances whose boxes merely graze take the copy path, which
+ * costs a fuse that turns out to be unnecessary and nothing else.
+ *
+ * A rotated instance's box is the axis-aligned box of the rotated corners,
+ * which is larger than the body — conservative in the same direction.
+ */
+function patternInstancesMayOverlap(
+  kernel: RemusKernel,
+  sourceSolids: readonly number[],
+  matrices: readonly Float64Array[]
+): boolean {
+  const source = sourceSolids.reduce<number[] | null>((box, solid) => {
+    const next = Array.from<number>(kernel.boundingBox(solid));
+    return box
+      ? [
+          Math.min(box[0]!, next[0]!),
+          Math.min(box[1]!, next[1]!),
+          Math.min(box[2]!, next[2]!),
+          Math.max(box[3]!, next[3]!),
+          Math.max(box[4]!, next[4]!),
+          Math.max(box[5]!, next[5]!)
+        ]
+      : next;
+  }, null);
+  if (
+    !source ||
+    source.length !== 6 ||
+    source.some((value) => !Number.isFinite(value))
+  ) {
+    // No measurable extent to reason about: fuse-capable copies are the safe
+    // answer, because they are what shipped.
+    return true;
+  }
+  const boxes = matrices.map((matrix) => {
+    const low = [Infinity, Infinity, Infinity];
+    const high = [-Infinity, -Infinity, -Infinity];
+    for (let corner = 0; corner < 8; corner += 1) {
+      const point = [
+        source[corner & 1 ? 3 : 0]!,
+        source[corner & 2 ? 4 : 1]!,
+        source[corner & 4 ? 5 : 2]!
+      ];
+      for (let axis = 0; axis < 3; axis += 1) {
+        const row = axis * 4;
+        const value =
+          matrix[row]! * point[0]! +
+          matrix[row + 1]! * point[1]! +
+          matrix[row + 2]! * point[2]! +
+          matrix[row + 3]!;
+        low[axis] = Math.min(low[axis]!, value);
+        high[axis] = Math.max(high[axis]!, value);
+      }
+    }
+    return { low, high };
+  });
+  for (let left = 0; left < boxes.length; left += 1) {
+    for (let right = left + 1; right < boxes.length; right += 1) {
+      const a = boxes[left]!;
+      const b = boxes[right]!;
+      if (
+        [0, 1, 2].every(
+          (axis) =>
+            Math.min(a.high[axis]!, b.high[axis]!) -
+              Math.max(a.low[axis]!, b.low[axis]!) >
+            GEOMETRY_EPSILON
+        )
+      ) {
+        return true;
+      }
+    }
+  }
+  return false;
+}
+
+/** Regroups per-source-solid copies into one entry per instance. */
+function patternInstances(
+  arm: PatternArm,
+  perSource: readonly KernelPatternCopies[]
+): PatternInstanceBuild[] {
+  return Array.from({ length: arm.total }, (_unused, index) => ({
+    instance: arm.label(index),
+    matrix: arm.matrix(index),
+    solids: perSource.map((copies) => copies.solids[index]!),
+    claims: perSource.map((copies) => copies.claims?.[index])
+  }));
+}
+
+/**
+ * Pattern lineage for the instances, or a stated hash-only fallback.
+ *
+ * The kernel journal is candidate evidence and the witnesses decide, so this
+ * runs the same way whether or not a journal was available: `remus-lineage`
+ * publishes a name only where the source witness carried through the
+ * instance's own transform lands on exactly one measured face, and refuses
+ * where a journal claim points somewhere else.
+ */
+function patternInstanceLineage(
+  kernel: RemusKernel,
+  feature: FeatureNode,
+  target: ExactShape,
+  instances: readonly PatternInstanceBuild[]
+): RemusLineageState {
+  if (!target.lineage) {
+    return remusHashOnlyLineage(
+      'pattern',
+      'The source body has no verified topology lineage.'
+    );
+  }
+  const derived = deriveRemusPatternInstanceLineage({
+    producingFeatureId: feature.featureId,
+    sourceLineage: target.lineage,
+    sourceCandidates: target.solids.flatMap((solid) =>
+      faceCandidatesForSolid(kernel, solid)
+    ),
+    instances: instances.map((instance) => ({
+      instance: instance.instance,
+      matrix: Array.from(instance.matrix),
+      candidates: instance.solids.flatMap((solid) =>
+        faceCandidatesForSolid(kernel, solid)
+      ),
+      claimedFaces: new Map(
+        instance.claims.flatMap((claims) => [...(claims ?? [])])
+      )
+    }))
+  });
+  return derived.faceReferences.size > 0
+    ? derived
+    : mergeRemusLineageStates([
+        derived,
+        remusHashOnlyLineage(
+          'pattern',
+          'No instance face passed the transformed-witness check.'
+        )
+      ]);
+}
+
+/** The linear arm: one kernel `linearPattern`, journaled, per source solid. */
+function linearPatternArm(
+  kernel: RemusKernel,
+  direction: Vec3,
+  spacing: number,
+  count: number
+): PatternArm {
+  // The kernel takes a positive step along a direction it normalizes, so a
+  // negative spacing — which this feature has always accepted — is the same
+  // step along the reversed direction. The instance transforms below stay
+  // built from the signed spacing, so both agree on where instance i sits.
+  const sense = spacing < 0 ? -1 : 1;
+  return {
+    total: count,
+    label: (index) => String(index),
+    matrix: (index) =>
+      transformMatrix(
+        {
+          x: direction.x * spacing * index,
+          y: direction.y * spacing * index,
+          z: direction.z * spacing * index
+        },
+        PATTERN_ORIGIN
+      ),
+    kernelCopies: (solid) => {
+      const journal = decodeRemusPatternJournal(
+        kernel.linearPatternJournaled(
+          solid,
+          direction.x * sense,
+          direction.y * sense,
+          direction.z * sense,
+          Math.abs(spacing),
+          count
+        )
+      );
+      const solids = kernelPatternInstanceSolids(
+        kernel,
+        journal.compound,
+        solid,
+        count
+      );
+      return {
+        solids,
+        claims: patternJournalFaceClaims(
+          kernel,
+          journal.op,
+          Array.from<number>(kernel.getSolidFaces(solid)),
+          solids
+        )
+      };
+    }
+  };
+}
+
+/** The grid arm: one kernel `gridPattern` per source solid. */
+function gridPatternArm(
+  kernel: RemusKernel,
+  columns: { direction: Vec3; spacing: number; count: number },
+  rows: { direction: Vec3; spacing: number; count: number }
+): PatternArm {
+  const total = columns.count * rows.count;
+  const columnOf = (ordinal: number) => Math.floor(ordinal / rows.count);
+  const rowOf = (ordinal: number) => ordinal % rows.count;
+  return {
+    total,
+    label: (ordinal) => `${columnOf(ordinal)}-${rowOf(ordinal)}`,
+    matrix: (ordinal) => {
+      const column = columnOf(ordinal);
+      const row = rowOf(ordinal);
+      return transformMatrix(
+        {
+          x:
+            columns.direction.x * columns.spacing * column +
+            rows.direction.x * rows.spacing * row,
+          y:
+            columns.direction.y * columns.spacing * column +
+            rows.direction.y * rows.spacing * row,
+          z:
+            columns.direction.z * columns.spacing * column +
+            rows.direction.z * rows.spacing * row
+        },
+        PATTERN_ORIGIN
+      );
+    },
+    kernelCopies: (solid) => {
+      const columnSense = columns.spacing < 0 ? -1 : 1;
+      const rowSense = rows.spacing < 0 ? -1 : 1;
+      const produced = kernelPatternInstanceSolids(
+        kernel,
+        kernel.gridPattern(
+          solid,
+          columns.direction.x * columnSense,
+          columns.direction.y * columnSense,
+          columns.direction.z * columnSense,
+          rows.direction.x * rowSense,
+          rows.direction.y * rowSense,
+          rows.direction.z * rowSense,
+          Math.abs(columns.spacing),
+          Math.abs(rows.spacing),
+          columns.count,
+          rows.count
+        ),
+        solid,
+        total
+      );
+      // `gridPattern` lays its copies out row-major — index `row * columns +
+      // column` — while this feature has always published them column-major.
+      // Reordering here keeps the solid order, and so every mesh and export
+      // that walks it, exactly as it was.
+      return {
+        solids: Array.from(
+          { length: total },
+          (_unused, ordinal) =>
+            produced[rowOf(ordinal) * columns.count + columnOf(ordinal)]!
+        ),
+        claims: null
+      };
+    }
+  };
+}
+
+/**
+ * The circular arm. `circularPattern` spreads `count` copies over one whole
+ * turn about a world-origin axis, right-handed, which is this feature's own
+ * full-turn step of `angle / count`; a negative sweep is the same ring taken
+ * the other way, so it reverses the axis rather than the step.
+ *
+ * A PARTIAL sweep — five instances over 90 degrees — has no kernel entry
+ * point, since the kernel's ring always closes, so that arrangement keeps the
+ * copy-and-transform build. Its instances are still rigid copies under a
+ * known transform, so their lineage is derived by the same witness check.
+ */
+function circularPatternArm(
+  kernel: RemusKernel,
+  axis: 'x' | 'y' | 'z',
+  angleDeg: number,
+  count: number
+): PatternArm {
+  const fullTurn = Math.abs(Math.abs(angleDeg) - 360) <= GEOMETRY_EPSILON;
+  const step = fullTurn ? angleDeg / count : angleDeg / (count - 1);
+  const direction = axisDirection(axis);
+  const turn = angleDeg < 0 ? -1 : 1;
+  return {
+    total: count,
+    label: (index) => String(index),
+    matrix: (index) =>
+      transformMatrix(PATTERN_ORIGIN, {
+        x: axis === 'x' ? step * index : 0,
+        y: axis === 'y' ? step * index : 0,
+        z: axis === 'z' ? step * index : 0
+      }),
+    kernelCopies: fullTurn
+      ? (solid) => ({
+          solids: kernelPatternInstanceSolids(
+            kernel,
+            kernel.circularPattern(
+              solid,
+              direction.x * turn,
+              direction.y * turn,
+              direction.z * turn,
+              count
+            ),
+            solid,
+            count
+          ),
+          claims: null
+        })
+      : null
+  };
+}
+
+/** Records a kernel refusal alongside whatever lineage the build published. */
+function withPatternDiagnostic(
+  state: RemusLineageState,
+  diagnostic: RemusLineageDiagnostic | null
+): RemusLineageState {
+  if (diagnostic) {
+    state.diagnostics.push(diagnostic);
+  }
+  return state;
+}
+
 function buildPatternFeature(
   ctx: FeatureBuildContext,
   feature: FeatureNode,
@@ -1537,27 +1923,13 @@ function buildPatternFeature(
     data.patternKind !== 'circular' && data.direction
       ? resolvePatternDirection(data.direction, scope)
       : axisDirection(data.axis);
-  const solids = [...target.solids];
+  let arm: PatternArm;
   if (data.patternKind === 'linear') {
     const spacing = resolveParamValue(data.spacing, scope, 'spacing');
     if (Math.abs(spacing) <= GEOMETRY_EPSILON) {
       throw new Error('Pattern spacing cannot be zero.');
     }
-    for (let index = 1; index < count; index += 1) {
-      const instance = copyShape(
-        kernel,
-        target,
-        transformMatrix(
-          {
-            x: direction.x * spacing * index,
-            y: direction.y * spacing * index,
-            z: direction.z * spacing * index
-          },
-          { x: 0, y: 0, z: 0 }
-        )
-      );
-      solids.push(...instance.solids);
-    }
+    arm = linearPatternArm(kernel, direction, spacing, count);
   } else if (data.patternKind === 'grid') {
     const spacing = resolveParamValue(data.spacing, scope, 'spacing');
     const spacing2 = resolveParamValue(
@@ -1573,52 +1945,72 @@ function buildPatternFeature(
     }
     const direction2 = axisDirection(data.axis2 ?? 'y');
     const crossProduct = cross(direction, direction2);
+    // Checked here rather than left to the kernel's own parallel-direction
+    // refusal, so the product keeps its own wording for a product rule and
+    // keeps it on the copy path too.
     if (length(crossProduct) <= GEOMETRY_EPSILON) {
       throw new Error('Grid pattern directions cannot be parallel.');
     }
-    for (let ix = 0; ix < count; ix += 1) {
-      for (let iy = 0; iy < count2; iy += 1) {
-        if (ix === 0 && iy === 0) {
-          continue; // the original occupies (0, 0)
-        }
-        const instance = copyShape(
-          kernel,
-          target,
-          transformMatrix(
-            {
-              x: direction.x * spacing * ix + direction2.x * spacing2 * iy,
-              y: direction.y * spacing * ix + direction2.y * spacing2 * iy,
-              z: direction.z * spacing * ix + direction2.z * spacing2 * iy
-            },
-            { x: 0, y: 0, z: 0 }
-          )
-        );
-        solids.push(...instance.solids);
-      }
-    }
+    arm = gridPatternArm(
+      kernel,
+      { direction, spacing, count },
+      { direction: direction2, spacing: spacing2, count: count2 }
+    );
   } else {
     const angle = resolveParamValue(data.angleDeg, scope, 'pattern angle');
     if (Math.abs(angle) <= GEOMETRY_EPSILON) {
       throw new Error('Pattern angle cannot be zero.');
     }
-    const angleStep =
-      Math.abs(Math.abs(angle) - 360) <= GEOMETRY_EPSILON
-        ? angle / count
-        : angle / (count - 1);
-    for (let index = 1; index < count; index += 1) {
-      const rotation = {
-        x: data.axis === 'x' ? angleStep * index : 0,
-        y: data.axis === 'y' ? angleStep * index : 0,
-        z: data.axis === 'z' ? angleStep * index : 0
-      };
-      const instance = copyShape(
-        kernel,
-        target,
-        transformMatrix({ x: 0, y: 0, z: 0 }, rotation)
-      );
-      solids.push(...instance.solids);
-    }
+    arm = circularPatternArm(kernel, data.axis, angle, count);
   }
+
+  const matrices = Array.from({ length: arm.total }, (_unused, index) =>
+    arm.matrix(index)
+  );
+  // The kernel's pattern operations refuse an arrangement whose instances
+  // interpenetrate, which this feature supports by fusing the copies itself,
+  // so an overlapping pattern keeps the copy-and-fuse build. See
+  // `patternInstancesMayOverlap`.
+  //
+  // The kernel arm can still refuse — the entry points reject arrangements
+  // they cannot fuse, and the compound layout `kernelPatternInstanceSolids`
+  // insists on is read-back behaviour of one pinned build. The build loop is
+  // not transactional, so an uncaught throw here would delete the patterned
+  // body from the viewport, the parts list and the STEP scope, where the copy
+  // path always produced one. So a refusal degrades to that copy build: the
+  // geometry is the same, the instance names are still derived from the
+  // transformed witnesses, and only the journal cross-check is lost. That loss
+  // is recorded as a diagnostic rather than absorbed silently.
+  const copyInstances = (): KernelPatternCopies[] =>
+    target.solids.map((solid) => ({
+      solids: matrices.map((matrix, instance) =>
+        instance === 0 ? solid : kernel.copyAndTransformSolid(solid, matrix)
+      ),
+      claims: null
+    }));
+  const kernelCopies =
+    arm.kernelCopies &&
+    !patternInstancesMayOverlap(kernel, target.solids, matrices)
+      ? arm.kernelCopies
+      : null;
+  let declined: RemusLineageDiagnostic | null = null;
+  let perSource: KernelPatternCopies[];
+  if (kernelCopies) {
+    try {
+      perSource = target.solids.map(kernelCopies);
+    } catch (error) {
+      declined = {
+        code: 'pattern-kernel-declined',
+        operation: 'pattern',
+        message: `The kernel pattern entry point did not produce the instances, so the copy-and-transform build made them and the kernel journal was not consulted: ${errorText(error)}`
+      };
+      perSource = copyInstances();
+    }
+  } else {
+    perSource = copyInstances();
+  }
+  const instances = patternInstances(arm, perSource);
+  const solids = instances.flatMap((instance) => instance.solids);
   // Instances that interpenetrate have to become ONE solid before
   // anything measures them. Every consumer downstream — the volume
   // the Inspector prints, the STL writer, the mesh the viewport
@@ -1687,9 +2079,26 @@ function buildPatternFeature(
         'advisory'
       );
     }
-    result.shapes.set(feature.bodyId, { solids: [fused] });
+    result.shapes.set(feature.bodyId, {
+      solids: [fused],
+      // The fuse rewrites the instance topology and reports no output
+      // relation across itself, so the instance names cannot survive it.
+      lineage: withPatternDiagnostic(
+        remusHashOnlyLineage(
+          'pattern',
+          'Overlapping instances were fused into one solid, which publishes no face output relation.'
+        ),
+        declined
+      )
+    });
   } else {
-    result.shapes.set(feature.bodyId, { solids });
+    result.shapes.set(feature.bodyId, {
+      solids,
+      lineage: withPatternDiagnostic(
+        patternInstanceLineage(kernel, feature, target, instances),
+        declined
+      )
+    });
   }
   // Consumed only once a shape exists, which is what the other eight consume
   // sites in this file do. The build loop is not transactional: it catches a
