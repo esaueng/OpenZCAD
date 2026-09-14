@@ -642,11 +642,6 @@ function importedThroughHoleCandidates(
               key: 'diameter',
               baseName: parameterBase(...nameBase, 'diameter'),
               expression: String(recognized.diameter)
-            },
-            {
-              key: 'depth',
-              baseName: parameterBase(...nameBase, 'depth'),
-              expression: String(recognized.depth)
             }
           ],
           imported: true,
@@ -663,12 +658,15 @@ function importedThroughHoleCandidates(
               sourceDiameter: recognized.diameter,
               sourceDepth: recognized.depth,
               diameter: parameterNames.get('diameter')!,
-              depth: parameterNames.get('depth')!,
+              depth: recognized.depth,
               parameterBinding: true
             }
           })
         });
       } else if (recognized.kind === 'counterbore') {
+        // The kernel can measure these but cannot yet resize their chamfered
+        // entry. Do not create controls that only succeed at the initial value.
+        if (recognized.entryChamfered) continue;
         candidates.push({
           parameters: [
             {
@@ -680,11 +678,6 @@ function importedThroughHoleCandidates(
               key: 'counterboreDiameter',
               baseName: parameterBase(...nameBase, 'counterbore', 'diameter'),
               expression: String(recognized.counterboreDiameter)
-            },
-            {
-              key: 'counterboreDepth',
-              baseName: parameterBase(...nameBase, 'counterbore', 'depth'),
-              expression: String(recognized.counterboreDepth)
             }
           ],
           imported: true,
@@ -705,7 +698,7 @@ function importedThroughHoleCandidates(
               sourceEntryChamfered: recognized.entryChamfered,
               boreDiameter: parameterNames.get('boreDiameter')!,
               counterboreDiameter: parameterNames.get('counterboreDiameter')!,
-              counterboreDepth: parameterNames.get('counterboreDepth')!,
+              counterboreDepth: recognized.counterboreDepth,
               parameterBinding: true
             }
           })
@@ -722,11 +715,6 @@ function importedThroughHoleCandidates(
               key: 'sinkDiameter',
               baseName: parameterBase(...nameBase, 'sink', 'diameter'),
               expression: String(recognized.sinkDiameter)
-            },
-            {
-              key: 'angleRadians',
-              baseName: parameterBase(...nameBase, 'sink', 'angle', 'radians'),
-              expression: String(recognized.angleRadians)
             }
           ],
           imported: true,
@@ -747,7 +735,7 @@ function importedThroughHoleCandidates(
               sourceTotalDepth: recognized.totalDepth,
               boreDiameter: parameterNames.get('boreDiameter')!,
               sinkDiameter: parameterNames.get('sinkDiameter')!,
-              angleRadians: parameterNames.get('angleRadians')!,
+              angleRadians: recognized.angleRadians,
               parameterBinding: true
             }
           })
@@ -1123,10 +1111,16 @@ export function createAutoParameterizeProposal(
   const native = nativeCandidates(document, scope);
   const allCandidates = [
     ...native.candidates,
+    ...importedFaceDistanceCandidates(document, selection),
     ...importedThroughHoleCandidates(document, selection),
-    ...importedBlendCandidates(document, selection),
-    ...importedFaceDistanceCandidates(document, selection)
-  ];
+    ...importedBlendCandidates(document, selection)
+  ].filter(candidate => {
+    const faces = selection.topologies.filter(item => item.kind === 'face');
+    if (!candidate.imported || faces.length === 0) return true;
+    const operation = candidate.bind(new Map(candidate.parameters.map(parameter => [parameter.key, parameter.key])));
+    if (operation.kind !== 'add_direct_edit') return true;
+    return faces.some(face => face.bodyId === operation.targetBodyId && (face.hash === operation.operation.faceHash || (operation.operation.kind === 'set-face-distance' && face.hash === operation.operation.oppositeFaceHash)));
+  });
   if (allCandidates.length === 0) {
     return null;
   }
