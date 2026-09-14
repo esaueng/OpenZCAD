@@ -227,11 +227,6 @@ import {
   reparkFailedAutosave
 } from './lib/localAutosaveFailure';
 import {
-  MAX_SOURCE_IMPORT_BYTES,
-  MAX_SOURCE_IMPORT_MB,
-  runStepImport
-} from './lib/stepImportRun';
-import {
   inspectShaprPair,
   type ShaprPairInspection
 } from './lib/shaprImportWorkerClient';
@@ -572,6 +567,18 @@ function focusedControlOwnsSpace(target: HTMLElement | null): boolean {
   }
   return false;
 }
+
+/**
+ * The STEP/STL import run, loaded on the gesture that imports a file.
+ *
+ * It is several kilobytes of orchestration — checksum marks, artifact
+ * archival, abort plumbing, the guided Shapr3D path — and a session that
+ * never imports a file should not carry it at launch. Both call sites are
+ * already inside an async handler that is about to read a file off disk, so
+ * the fetch costs nothing measurable next to that. The refusals that come
+ * BEFORE it (unsupported extension, a lone `.shapr`) stay synchronous.
+ */
+const stepImportRun = () => import('./lib/stepImportRun');
 
 const LazyViewerShell = lazyWithStaleChunkNotice(() =>
   import('./components/ViewerShell').then((module) => ({
@@ -8692,6 +8699,9 @@ export function App() {
       return;
     }
 
+    const { MAX_SOURCE_IMPORT_BYTES, MAX_SOURCE_IMPORT_MB, runStepImport } =
+      await stepImportRun();
+
     if (lowerName.endsWith('.stl')) {
       if (file.size > MAX_SOURCE_IMPORT_BYTES) {
         setStatus(`STL import is limited to ${MAX_SOURCE_IMPORT_MB} MB.`);
@@ -8969,6 +8979,7 @@ export function App() {
         : null
     );
     const shaprAbort = startImportAbort();
+    const { runStepImport } = await stepImportRun();
     const result = await runStepImport({
       file: pending.inspection.sanitizedStepFile,
       contentType:
