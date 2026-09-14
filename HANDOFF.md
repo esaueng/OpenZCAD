@@ -48,6 +48,33 @@ fillet fallback. Two things follow for the adapter, and both are in this branch.
    bevel; only the surfaces tell the two apart. A fillet result must now gain
    at least one rolling-ball blend band over its target or it is declined.
 
+3. **An angled chamfer is now probed at its own angle.** The ladder and the
+   message took no angle, so under a `distance + angle` chamfer they proved
+   and quoted the SYMMETRIC 45° chamfer. On a 30x18x24 box, one edge,
+   distance 20 at 80°:
+
+   ```
+   Chamfer could not be created on 1 selected edge with distance 20.
+   Try a smaller distance: distance 10 builds here.      <- refused at 80°
+   ```
+
+   Distance 10 builds symmetrically and is refused at 80°; 10 then answered
+   "distance 5 builds here", and 5 answered 2.5 — the same loop item 1 set out
+   to remove, on the neighbouring path, and worse than the generic "Try a
+   smaller distance." this path emitted before the branch. The angle now
+   reaches the ladder, so the quoted distance is proved for the operation
+   asked for (1.763 in that case).
+
+   Threading it is only half the fix. An angled chamfer takes `distance ×
+tan(angle)` off its second face, so past 45° a ladder measured from the
+   distance is aimed tan(angle) times too high — 28x at 88° — and comes back
+   empty, and an empty ladder makes the message reach for a structural cause
+   that is not there: a cylinder rim at distance 40 and 88° was told "closed
+   rim edges cannot be chamfered on this body at any distance" while 0.1746
+   chamfers it. `chamferLadderAim` measures the ladder from the setback
+   instead, and like the kernel's cliff ceiling it only aims — every rung is
+   still proved by `applyEdgeModifier` at the requested angle.
+
 The fillet edge retargeting from PR #311 (`resolveEdgeModifierEdges` and the
 `referenceRepairs` it feeds) is untouched.
 
@@ -56,10 +83,11 @@ The fillet edge retargeting from PR #311 (`resolveEdgeModifierEdges` and the
 No new kernel entry points. What changed is that the adapter now _reads_ the
 kernel's typed blend refusal instead of re-deriving its content:
 
-| Adopted                                                                                                                                        | Replacing                                                                                                                                                                                                  |
-| ---------------------------------------------------------------------------------------------------------------------------------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| the `available radius` field of a `cliff-encountered` refusal from `kernel.fillet` / `kernel.filletWithEvolution`, parsed by `blendCliffLimit` | nothing — it re-aims the existing 1/2, 1/8, 1/64 ladder at the kernel's ceiling instead of at the _refused_ size. The ladder itself, and its role as the only evidence a smaller size works, are unchanged |
-| `countBlendFaces` (existing `isBlendFace` surface test) over the fillet result                                                                 | nothing — there was no check that a fillet was rounded rather than bevelled                                                                                                                                |
+| Adopted                                                                                                                                                                                     | Replacing                                                                                                                                                                                                  |
+| ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| the `available radius` field of a `cliff-encountered` refusal from `kernel.fillet` / `kernel.filletWithEvolution`, parsed by `blendCliffLimit`                                              | nothing — it re-aims the existing 1/2, 1/8, 1/64 ladder at the kernel's ceiling instead of at the _refused_ size. The ladder itself, and its role as the only evidence a smaller size works, are unchanged |
+| `countBlendFaces` (existing `isBlendFace` surface test) over the fillet result                                                                                                              | nothing — there was no check that a fillet was rounded rather than bevelled                                                                                                                                |
+| `chamferDistanceAngle` / `chamferDistanceAngleWithEvolution` on the PROBE path, and the `distance × tan(angle)` setback the kernel states in its own `chamfer setback does not fit` refusal | the probe ran the symmetric `chamfer` under an angled request, and aimed its ladder at the requested distance                                                                                              |
 
 `edgeModifierSucceedsSmaller` is renamed to `acceptedEdgeModifierProbe` and
 returns the accepted size (`number | null`) instead of a boolean, because the
@@ -73,7 +101,7 @@ Run from the worktree root on the final tree.
 pnpm lint                 ✖ 19 problems (0 errors, 19 warnings)
 pnpm typecheck            clean (no output)
 pnpm test                 Test Files  241 passed | 2 skipped (243)   [root project]
-                          Tests  2493 passed | 4 skipped (2497)      [root project]
+                          Tests  2496 passed | 4 skipped (2500)      [root project]
                           Test Files  156 passed (156)               [web project]
                           Tests  1182 passed (1182)                  [web project]
 pnpm test:parity-corpus   Test Files  7 passed (7)
@@ -155,14 +183,54 @@ cylinder rim fillet `0 -> 1`, a filleted box re-filleted `1 -> 2`; box single
 chamfer `0 -> 0`, box all-12 chamfer `0 -> 0`, cylinder rim chamfer `0 -> 0`.
 Chamfer results are all-planar on this kernel.
 
+**An angled chamfer is a different operation from the symmetric one, and the
+difference is a factor of tan(angle).** 30x18x24 box, one edge:
+
+| distance | symmetric (`chamfer`) | 80° (`chamferDistanceAngle`) |
+| -------- | --------------------- | ---------------------------- |
+| 20       | refused               | refused                      |
+| 10       | **builds**            | refused (setback 56.712818)  |
+| 5        | **builds**            | refused (setback 28.356409)  |
+| 2.5      | builds                | builds                       |
+
+The reported setbacks are exactly `distance · tan(80°)`, which is where
+`chamferLadderAim` comes from. Aiming was then measured over every refused
+angled chamfer on five bodies (30x18x24 box, 50x50x2 plate, 40x3x3 sliver,
+r10 h20 cylinder, r10→r4 h20 cone), every edge of each, angles 60°, 75°, 80°,
+85°, 88°, 89°, 89.5° and distances 0.5, 2, 8, 40, 100 — 1232 refusals:
+
+```
+unaimed ladder finds no size, aimed ladder does:   412
+aimed ladder finds no size, unaimed ladder does:     0
+aimed ladder empty while the symmetric ladder works: 0
+```
+
+The last line is why no "reduce the angle instead" branch was added: across
+those 1232 refusals there was no case where the aimed ladder came back empty
+and a symmetric chamfer of a laddered size would have built. Without the aim
+that third number is not zero, and the message reaches a structural cause
+instead — the cylinder rim at distance 40 and 88° is the case pinned in the
+tests.
+
 ## Deliberate limits
 
-- **The chamfer path is left alone.** `chamfer` reports its own typed size
-  limit (`invalid input: chamfer setback does not fit: 20.000000 of material
-must be taken from an edge only 18.000000 long. Reduce the chamfer distance
-below 18.000000.`), which is the same opportunity, but it is a different
-  refusal shape from a different builder and the task is the fillet ladder.
-  A chamfer refusal still spends the full blind ladder.
+- **The chamfer ladder carries the angle and an aim, but not the kernel's
+  reported numbers.** An earlier draft of this file said "the chamfer path is
+  left alone"; that was true of the first two commits and is no longer true.
+  The probe now runs `chamferDistanceAngle` at the requested angle, and aims
+  from `distance / tan(angle)`. What it still does NOT do is parse the
+  kernel's own `chamfer setback does not fit: 56.712818 of material must be
+taken from an edge only 24.000000 long` numbers into a ceiling. Two reasons:
+  the setback the aim needs is already derivable from the angle (the same
+  arithmetic, without parsing a sentence), and the refusals that most need
+  aiming do not carry numbers at all — a cylinder rim at 88° refuses with
+  `partial-result: chamfer produced a partial result: 0 succeeded, 1 failed`.
+- **The aim does not try to be tight.** `distance / tan(angle)` is where a
+  symmetric ladder would have started, not a limit; the rungs below it are
+  what prove a size. On a body whose real limit is close to the requested
+  distance the quoted distance can therefore be smaller than it needed to be.
+  It is still a distance that builds, which is the property the message
+  promises; a tighter aim would be a second ceiling to be wrong about.
 - **Every size-bound message now names the size that built**, cliff-reported
   or not. Once the ceiling was out of the sentence there was no reason left to
   word the two cases differently: the probed size is proven in both.
@@ -198,6 +266,20 @@ is bevelled rather than rounded`, which is greppable.
   and nothing else — but anyone reaching for it for a slider limit or a
   clamped input should read that measurement first. It is pinned by the
   `never quotes a ceiling the kernel has not proved` test.
+- **The aim assumes the kernel's angle convention.** `chamferLadderAim`
+  divides by `tan(angle)` because `chamferDistanceAngle(d, a)` takes `d` off
+  the first face and `d·tan(a)` off the second. That is measured, not assumed:
+  the kernel's refusal reports 56.712818 for `d=10, a=80°` (10·tan80°) and
+  28.575131 for `d=2.5, a=85°` (2.5·tan85°), and the adapter's existing
+  `builds distance-angle chamfers with the exact bevel volume` test already
+  pins the removed wedge at legs `d` and `d·tan(a)`. If a kernel bump changed
+  which face the angle is measured from, the aim would point the wrong way —
+  it would cost rungs, not truth, because every rung is still proved.
+- **Angles approaching 90° aim very low.** At 89.9° the aim is 1/572 of the
+  requested distance, and the deepest rung is 1/64 of that. Those probes stay
+  above `GEOMETRY_EPSILON` for any distance a person would type, and the
+  builder already refuses an angle at or past 90°, but a message on such a
+  request will name a very small distance.
 - **`blendCliffLimit` parses a kernel sentence.** A kernel that renames its
   refusal prefix or its `available radius` field silently reverts the ladder to
   its blind aim; nothing breaks and the message is unaffected, but the
@@ -211,8 +293,12 @@ is bevelled rather than rounded`, which is greppable.
 
 ## Follow-ups
 
-- Relay the chamfer builder's own `setback does not fit` limit the same way and
-  skip the blind ladder for chamfers.
+- The chamfer ladder is aimed from the angle, not from the kernel's reported
+  setback. If Remus grows a typed, numeric refusal for the `partial-result`
+  chamfer failures too, the same `blendCliffLimit` plumbing would take it.
+- The probe ladder now has two aims (the fillet cliff ceiling and the chamfer
+  setback) and one shape. If a third arrives it is worth giving the ladder an
+  explicit "aim" argument rather than another optional parameter.
 - `unsupported-vertex-blend` is the remaining size-bound refusal with no
   reported ceiling. If Remus grows one for it, the plumbing here takes it with
   a one-line change to `blendCliffLimit`.
