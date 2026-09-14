@@ -81,7 +81,7 @@ setback against the requested one and refuses the clamp rather than returning
 a chamfer the user did not ask for.
 
 **`offsetWire2DWithJoin` is exact for straight-sided closed wires, and fails
-open in three ways.** Join types are exactly `"intersection"`, `"arc"` and
+open in five ways.** Join types are exactly `"intersection"`, `"arc"` and
 `"chamfer"` — anything else raises. Positive is outward for a
 counter-clockwise wire; `arc` gives true `CIRCLE` edges. But:
 
