@@ -162,6 +162,8 @@ import {
   updateSketchObject
 } from '@openzcad/document-core';
 import {
+  expandEditCandidateProposal,
+  unmodifiedImportedSource,
   isSketchDimensionField,
   isLocalBodyRef,
   normalizeLocalId,
@@ -2091,6 +2093,7 @@ export function commandsForCadPatch(
   document: ProjectDocument,
   proposal: CadPatchProposal
 ): AnyCommand[] {
+  proposal = expandEditCandidateProposal(document, proposal);
   const scope = new LocalBodyScope(document);
   let projectedDocument = document;
   const parameterScope = projectedParameterScope(document, proposal);
@@ -2190,6 +2193,53 @@ export function commandsForCadPatch(
     operation: CadPatchProposal['operations'][number]
   ): AnyCommand => {
     switch (operation.kind) {
+      case 'add_raised_feature_control': {
+        const bodyId = resolveBody(operation.targetBodyId);
+        const source = unmodifiedImportedSource(projectedDocument, bodyId);
+        if (!source || source.data.featureKind !== 'imported-step')
+          throw new Error(
+            'Raised-feature separation requires an unmodified imported source.'
+          );
+        const measured =
+          projectedDocument.derived.bodyRepresentations[bodyId]?.topology
+            ?.recognizedPlanarEmboss;
+        if (
+          !measured ||
+          JSON.stringify(measured) !== JSON.stringify(operation.selection)
+        )
+          throw new Error(
+            'Raised features no longer match the current measurement.'
+          );
+        const details = createBodyFeatureIds();
+        return composeCommands('Separate measured raised features', [
+          commandFactories.updateFeature({
+            featureId: source.featureId,
+            data: {
+              ...source.data,
+              planarEmboss: { part: 'base', selection: measured }
+            }
+          }),
+          commandFactories.importStep({
+            ...source.data,
+            name: 'Raised features',
+            ids: details,
+            planarEmboss: { part: 'text', selection: measured }
+          }),
+          commandFactories.configureParameterToggle({
+            name: operation.parameter,
+            bodyIds: [details.bodyId]
+          }),
+          commandFactories.setParameterDescription({
+            name: operation.parameter,
+            description:
+              'Show or hide the complete raised-feature group, including exports.'
+          })
+        ]);
+      }
+      case 'use_edit_candidate':
+        throw new Error(
+          'Measured edit candidates must be expanded before command compilation.'
+        );
       case 'set_parameter':
         return commandFactories.setParameter({
           name: operation.name,
