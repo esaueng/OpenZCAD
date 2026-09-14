@@ -16,6 +16,7 @@ import type {
 } from '@openzcad/shared';
 import type { RemusKernel } from './remus-runtime';
 import { recognizePlanarEmboss } from './planar-emboss';
+import { exactIntersect } from './exact-boolean-refusal';
 import {
   detectReflectionSymmetries,
   measureAnalyticInventory,
@@ -323,7 +324,7 @@ function proveStraightSection(
       kernel.makeBox(max.x - min.x, max.y - min.y, max.z - min.z),
       Float64Array.of(1, 0, 0, min.x, 0, 1, 0, min.y, 0, 0, 1, min.z, 0, 0, 0, 1)
     );
-    slab = kernel.intersect(solid, box);
+    slab = exactIntersect(kernel, solid, box);
     if (kernel.validateSolid(slab) !== 0)
       return 'The material between the proposed cuts is not a valid solid.';
   } catch (error) {
