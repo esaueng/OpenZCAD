@@ -3,9 +3,47 @@ import {
   isFeatureSuppressed,
   type BodyId,
   type FeatureId,
+  type FeatureKind,
   type ProjectDocument,
   type SketchId
 } from '@openzcad/shared';
+
+// Every FeatureKind must be handled in the downstream walk below. The check is
+// structural (not behavioral): hole was once missing here, so downstream hole
+// failures never gated sketch/extrude/direct-edit commits and edits silently
+// dropped holes.
+const HANDLED_FEATURE_KINDS: ReadonlySet<FeatureKind> = new Set<FeatureKind>([
+  'primitive',
+  'sketch',
+  'extrude',
+  'revolve',
+  'loft',
+  'sweep',
+  'helical-sweep',
+  'boolean',
+  'split',
+  'hole',
+  'transform',
+  'mirror',
+  'shell',
+  'solid-offset',
+  'draft',
+  'thicken',
+  'fillet',
+  'chamfer',
+  'pattern',
+  'direct-edit',
+  'imported-step',
+  'imported-mesh'
+]);
+
+function assertAllFeatureKindsHandled(kind: FeatureKind): void {
+  if (!HANDLED_FEATURE_KINDS.has(kind)) {
+    throw new Error(
+      `affectedFeatureTargets: unhandled feature kind "${kind}".`
+    );
+  }
+}
 
 export interface AffectedFeatureTarget {
   featureName: string;
@@ -73,6 +111,7 @@ export function affectedFeatureTargets(
     const data = feature.data;
     let affected = false;
 
+    assertAllFeatureKindsHandled(data.featureKind);
     switch (data.featureKind) {
       case 'sketch': {
         const sketch = findSketch(document, data.sketchId);
@@ -114,6 +153,7 @@ export function affectedFeatureTargets(
         );
         break;
       case 'split':
+      case 'hole':
       case 'transform':
       case 'mirror':
       case 'shell':
