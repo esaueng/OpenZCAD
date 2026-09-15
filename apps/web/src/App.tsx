@@ -5104,7 +5104,17 @@ export function App() {
     nextDocument: ProjectDocument,
     options: { restoreView?: boolean; rememberProject?: boolean } = {}
   ) {
-    const normalized = normalizeDocument(nextDocument);
+    let normalized: ProjectDocument;
+    try {
+      normalized = normalizeDocument(nextDocument);
+    } catch (error) {
+      // A newer client wrote this document: the version stamp cannot be
+      // trusted and unknown features would rebuild silently, so refuse with
+      // the same update-required surface the collaboration path uses rather
+      // than showing a quietly incomplete model.
+      setStatus(errorMessage(error, 'This project needs a newer OpenZCAD.'));
+      return;
+    }
     const restoreView = options.restoreView ?? true;
     const rememberProject = options.rememberProject ?? true;
     if (restoreView) {
@@ -10764,23 +10774,29 @@ export function App() {
     label: string,
     objectId?: string
   ) {
-    const { checkSketchEdit } = await import('./lib/sketch/editing');
+    const { checkSketchEdit, sketchEditRaceRefusal } = await import(
+      './lib/sketch/editing'
+    );
     const derived = await checkSketchEdit(
       base,
       sketchId,
       commands,
       (document) => geometry.syncOnce(document)
     );
-    const live = managerRef.current?.document;
-    const current = interactionRef.current;
-    if (
-      !live ||
-      live.projectId !== base.projectId ||
-      live.version !== base.version ||
-      current.mode !== 'sketch' ||
-      current.session.sketchId !== sketchId ||
-      (objectId !== undefined && current.session.selectedObjectId !== objectId)
-    ) {
+    const refusal = sketchEditRaceRefusal(
+      base,
+      sketchId,
+      managerRef.current?.document,
+      interactionRef.current,
+      objectId
+    );
+    if (refusal) {
+      // The edit was validated against a document that moved mid-flight
+      // (collaborator/second-tab edit, sketch close, project switch, or
+      // selection move). Nothing was committed — say so, or the typed edit
+      // silently vanishes.
+      setSketchEditError(refusal);
+      setStatus(refusal);
       return false;
     }
     return executeTransaction(label, commands, derived);
