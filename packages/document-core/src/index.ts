@@ -636,9 +636,18 @@ export function createProjectDocument(
 /**
  * Fills in collections that older saved documents may lack, so loading a
  * pre-parametric document does not crash newer code paths.
+ *
+ * Fails closed on documents from a newer client: stamping the current version
+ * and silently skipping unknown feature kinds would show and export a quietly
+ * incomplete model, so a newer schema is refused instead.
  */
 export function normalizeDocument(document: ProjectDocument): ProjectDocument {
   assertDocumentHistory(document);
+  if (document.schemaVersion > PROJECT_DOCUMENT_SCHEMA_VERSION) {
+    throw new Error(
+      `Unsupported project schema (v${document.schemaVersion}). Update OpenZCAD to open it.`
+    );
+  }
   const revisions = Array.isArray(document.revisions)
     ? document.revisions
         .filter(isRevisionRecord)
