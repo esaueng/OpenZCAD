@@ -1994,7 +1994,7 @@ test('section view cycles planes, cuts exactly at rest, and cuts nothing from th
   const caps = async () => (await sectionState()).sectionCaps;
   const exact = async () => (await sectionState()).exactSections;
   expect(await caps()).toEqual([]);
-  const sectionButton = page.getByRole('button', { name: /^Section view/ });
+  const sectionButton = page.getByRole('button', { name: /^Section display/ });
   await expect(sectionButton).toHaveAttribute('aria-pressed', 'false');
 
   // Off → XY, with the offset slider sliding out beside the rail.
