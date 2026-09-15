@@ -170,6 +170,7 @@ import {
   measureDrivingDimension,
   planConstraintFromSelection,
   refusePick,
+  topResidualConstraints,
   type ConstraintPick,
   type DrivingDimensionKind
 } from './lib/sketch/constraints';
@@ -1776,7 +1777,17 @@ export function App() {
   const toastIdRef = useRef(0);
   const announce = useCallback((message: string, action?: ToastAction) => {
     toastIdRef.current += 1;
-    setToast({ id: toastIdRef.current, message, action });
+    const id = toastIdRef.current;
+    // An action-bearing toast (the delete Undo above all) is never silently
+    // replaced by a text-only notice: the action moves into the slot the new
+    // message would have taken, so Undo stays one click away no matter how
+    // fast notices arrive.
+    setToast((current) => {
+      if (current?.action && !action) {
+        return { id, message, action: current.action };
+      }
+      return { id, message, action };
+    });
   }, []);
   const dismissToast = useCallback((id: number) => {
     setToast((current) => (current?.id === id ? null : current));
@@ -3174,6 +3185,19 @@ export function App() {
       : panelState.workspaceMode;
   const viewMode = resolvedWorkspaceMode === 'view';
   const tweakMode = resolvedWorkspaceMode === 'tweak';
+  // Toolbar undo affordance in Tweak: live only for a parameter-only top
+  // entry. Computed at render from the manager's tracked kinds — unknown
+  // (pre-kind histories) reads as unavailable, matching handleUndo.
+  const parameterOnlyUndoAvailable = (() => {
+    const kinds = managerRef.current?.undoEntryKinds;
+    return (
+      (managerRef.current?.canUndo ?? false) &&
+      kinds !== null &&
+      kinds !== undefined &&
+      kinds.length > 0 &&
+      kinds.every((kind) => kind === 'parameter.set')
+    );
+  })();
   // Both reading workspaces disarm every modeling surface — tools, handles,
   // sketches, the inspector. Tweak differs from View in one thing only: the
   // parameter guard below lets `parameter.set` commands through.
@@ -6028,7 +6052,7 @@ export function App() {
     if (!next) {
       setViewerSettings(({ sectionView: _cleared, ...rest }) => rest);
       clearSectionOutline();
-      setStatus('Section view off.');
+      setStatus('Section display off.');
       return;
     }
     const range = sectionAxisRange(next);
@@ -6038,7 +6062,7 @@ export function App() {
       sectionView: { plane: next, offset }
     }));
     setStatus(
-      `Section view: ${next} plane. Drag the slider to move the cut; the model itself is untouched.`
+      `Section display: ${next} plane (display clipping, not exact). Drag the slider to move the cut; the model itself is untouched.`
     );
     void requestExactSection({ plane: next, offset });
   }
@@ -8110,7 +8134,23 @@ export function App() {
   }
 
   function handleUndo() {
-    if (!managerRef.current || !ensureCanEdit('undo')) {
+    if (!managerRef.current) {
+      return;
+    }
+    // Tweak mode locks modeling, not parameters: an undo entry that touched
+    // parameter sets only is Tweak's own vocabulary and stays available, so
+    // a typo made seconds ago is one keypress away. Anything else — a
+    // feature edit, a mixed batch, or an entry from before kind tracking —
+    // keeps the modeling refusal rather than reverting unseen work.
+    const undoKinds = managerRef.current.undoEntryKinds;
+    const parametersOnly =
+      undoKinds !== null &&
+      undoKinds.length > 0 &&
+      undoKinds.every((kind) => kind === 'parameter.set');
+    if (!parametersOnly && !ensureCanEdit('undo')) {
+      return;
+    }
+    if (parametersOnly && !ensureCanEditParameters('undo')) {
       return;
     }
     const label = managerRef.current.undoLabel;
@@ -8132,7 +8172,21 @@ export function App() {
   }
 
   function handleRedo() {
-    if (!managerRef.current || !ensureCanEdit('redo')) {
+    if (!managerRef.current) {
+      return;
+    }
+    // Same split as undo: redoing a parameter-only step is a parameter edit,
+    // redoing anything else is modeling. (The redo entry's kinds are not
+    // tracked separately; the undone entry still on the stack decides.)
+    const undoKinds = managerRef.current.undoEntryKinds;
+    const parametersOnly =
+      undoKinds !== null &&
+      undoKinds.length > 0 &&
+      undoKinds.every((kind) => kind === 'parameter.set');
+    if (!parametersOnly && !ensureCanEdit('redo')) {
+      return;
+    }
+    if (parametersOnly && !ensureCanEditParameters('redo')) {
       return;
     }
     const label = managerRef.current.redoLabel;
@@ -11456,11 +11510,19 @@ export function App() {
               : 'warn'
       });
       if (!outcome.converged || outcome.rolledBack) {
+        const culprits = topResidualConstraints(
+          prospective,
+          findSketch(prospective, sketchId),
+          outcome.constraintResiduals,
+          2
+        );
+        const culpritSuffix =
+          culprits.length > 0 ? ` Likely culprit: ${culprits.join('; ')}.` : '';
         setSketchEditError(
-          `${spec.label} dimension conflicts with existing constraints. Edit or remove a conflicting constraint; no change was applied.`
+          `${spec.label} dimension conflicts with existing constraints.${culpritSuffix} Edit or remove a conflicting constraint; no change was applied.`
         );
         setStatus(
-          `${spec.label} dimension refused: ${solveStatusLabel(outcome)}; no change was applied.`
+          `${spec.label} dimension refused: ${solveStatusLabel(outcome)};${culpritSuffix} no change was applied.`
         );
         return;
       }
@@ -13893,8 +13955,22 @@ export function App() {
 
   function handleDeleteFeature(featureId: FeatureId, name: string) {
     // Counted before the delete: afterwards the source is gone and the walk
-    // has nothing to start from.
+    // has nothing to start from. A load-bearing delete announces its blast
+    // radius up front — the confirm names the dependent count — while the
+    // toast's Undo survives either way, so a surprise rebuild of every
+    // dependent is a choice, not a discovery. Playwright auto-dismisses the
+    // native confirm, which reads as cancel: the e2e delete specs accept it
+    // explicitly, matching the cloud-sync repair specs' dialog handling.
     const dependents = doc ? featureHistory(doc).downstream(featureId) : [];
+    if (
+      dependents.length > 0 &&
+      appSettings.general.confirmDestructiveActions &&
+      !window.confirm(
+        `Delete “${name}”? ${dependents.length} ${dependents.length === 1 ? 'feature depends' : 'features depend'} on it and will rebuild without it.`
+      )
+    ) {
+      return;
+    }
     if (
       executeCommand(
         commandFactories.deleteFeature({ featureId }, `Delete ${name}`)
@@ -14479,10 +14555,19 @@ export function App() {
         return;
       }
       if (historyKey && modelingLocked) {
-        // Undo stays locked in Tweak too: history snapshots restore whole
-        // documents, so an undo here could quietly revert modeling work.
+        // Tweak mode locks modeling, not parameters: let the undo/redo
+        // handlers decide — they allow a parameter-only top entry and keep
+        // the refusal for anything that would revert modeling work.
         event.preventDefault();
-        ensureCanEdit('undo or redo');
+        if (event.key.toLowerCase() === 'z') {
+          if (event.shiftKey) {
+            handleRedo();
+          } else {
+            handleUndo();
+          }
+        } else {
+          handleRedo();
+        }
         return;
       }
       if (meta && event.key.toLowerCase() === 'z') {
@@ -16097,8 +16182,18 @@ export function App() {
             viewMode={modelingLocked}
             selectionChip={selectionChip}
             onClearSelection={clearSelection}
-            canUndo={!modelingLocked && (managerRef.current?.canUndo ?? false)}
-            canRedo={!modelingLocked && (managerRef.current?.canRedo ?? false)}
+            canUndo={
+              !viewMode &&
+              (tweakMode
+                ? parameterOnlyUndoAvailable
+                : (managerRef.current?.canUndo ?? false))
+            }
+            canRedo={
+              !viewMode &&
+              (tweakMode
+                ? parameterOnlyUndoAvailable
+                : (managerRef.current?.canRedo ?? false))
+            }
             onUndo={handleUndo}
             onRedo={handleRedo}
             key={`workspace-view-${resumeViewGeneration}`}
