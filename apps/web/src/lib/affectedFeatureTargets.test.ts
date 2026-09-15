@@ -7,6 +7,7 @@ import {
   directEditBody,
   filletEdges,
   findSketch,
+  holeBody,
   listFeaturesInOrder,
   sweepProfile,
   transformBody
@@ -175,6 +176,49 @@ describe('affected feature targets', () => {
       affectedFeatureTargets(swept.document, railFeature.featureId)
     ).toMatchObject([
       { featureName: 'Guided sweep', resultBodyId: swept.bodyId }
+    ]);
+  });
+
+  it('includes a downstream hole and everything past it', () => {
+    const plate = addPrimitiveFeature(
+      createProjectDocument('Hole branch', toUserId('user_hole')),
+      {
+        name: 'Plate',
+        primitiveKind: 'box',
+        dimensions: { width: 40, height: 10, depth: 24 }
+      }
+    );
+    const plateBodyId = plate.bodyOrder[0]!;
+    const hole = holeBody(plate, {
+      name: 'Mounting hole',
+      targetBodyId: plateBodyId,
+      faceHash: 4242,
+      style: 'simple',
+      diameter: 6,
+      depthMode: 'through',
+      position: { u: 0, v: 0 }
+    });
+    const softened = filletEdges(hole.document, {
+      name: 'Soften hole rim',
+      targetBodyId: hole.bodyId,
+      edgeHashes: [303],
+      size: 1
+    });
+    const sourceFeature = listFeaturesInOrder(softened.document)[0]!;
+
+    const targets = affectedFeatureTargets(
+      softened.document,
+      sourceFeature.featureId
+    );
+    expect(
+      targets.map(({ featureName, resultBodyId }) => ({
+        featureName,
+        resultBodyId
+      }))
+    ).toEqual([
+      { featureName: 'Plate', resultBodyId: plateBodyId },
+      { featureName: 'Mounting hole', resultBodyId: hole.bodyId },
+      { featureName: 'Soften hole rim', resultBodyId: softened.bodyId }
     ]);
   });
 });

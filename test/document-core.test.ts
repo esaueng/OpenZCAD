@@ -85,6 +85,24 @@ describe('document-core', () => {
     expect(migrated.checkpoints[0]?.reason).toBe('Migrated save point');
   });
 
+  it('refuses documents from a newer client instead of stamping them', () => {
+    const current = createProjectDocument('Future', user());
+    const future = {
+      ...structuredClone(current),
+      schemaVersion: PROJECT_DOCUMENT_SCHEMA_VERSION + 84
+    } as unknown as typeof current;
+
+    expect(() => normalizeDocument(future)).toThrow(
+      /newer OpenZCAD|Unsupported project schema/i
+    );
+    // The refusal happens before any stamp: the input keeps its version and
+    // the current version is untouched.
+    expect(future.schemaVersion).toBe(PROJECT_DOCUMENT_SCHEMA_VERSION + 84);
+    expect(
+      normalizeDocument(structuredClone(current)).schemaVersion
+    ).toBe(PROJECT_DOCUMENT_SCHEMA_VERSION);
+  });
+
   it('records save checkpoints without changing model version', () => {
     const document = createProjectDocument('Checkpoint', user());
     const saved = createCheckpoint(document, 'Manual save');
