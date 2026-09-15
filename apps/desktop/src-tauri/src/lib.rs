@@ -64,6 +64,7 @@ async fn open_cad_file() -> Result<Option<NativeCadFile>, String> {
 fn export_path(path: &Path, format: &str) -> Result<PathBuf, String> {
     let expected = match format {
         "step" => &["step", "stp"][..],
+        "dxf" => &["dxf"][..],
         "3mf" => &["3mf"][..],
         "obj" => &["obj"][..],
         "glb" => &["glb"][..],
@@ -325,5 +326,25 @@ mod tests {
         assert!(export_path(Path::new("part.stl"), "3mf").is_err());
         assert!(export_path(Path::new("part.obj"), "glb").is_err());
         assert!(export_path(Path::new("part.glb"), "obj").is_err());
+    }
+
+    #[test]
+    fn accepts_dxf_face_export_names() {
+        // The face-DXF handoff suggests `*-face.dxf`; without a dxf arm the
+        // save rejects the very extension it suggests.
+        assert_eq!(
+            export_path(Path::new("plate-face.dxf"), "dxf").unwrap(),
+            Path::new("plate-face.dxf")
+        );
+        assert_eq!(
+            export_path(Path::new("plate-face.DXF"), "dxf").unwrap(),
+            Path::new("plate-face.DXF")
+        );
+        assert_eq!(
+            export_path(Path::new("plate-face"), "dxf").unwrap(),
+            Path::new("plate-face.dxf")
+        );
+        assert!(export_path(Path::new("plate-face.stl"), "dxf").is_err());
+        assert!(export_path(Path::new("plate-face.dxf"), "stl").is_err());
     }
 }
