@@ -284,6 +284,13 @@ export const KEYBOARD_CONTROL_GROUPS = [
         keys: ['T'],
         action: 'Text',
         detail: 'Place editable text on the sketch plane.'
+      },
+      {
+        id: 'sketch-constraints',
+        keys: ['—'],
+        action: 'Constraints (Horizontal, Vertical, Parallel, …)',
+        detail:
+          'No shortcut: pick a rail button (Horizontal, Vertical, Parallel, Perpendicular, Equal, Tangent, Concentric, Coincident, Midpoint, Radius, Distance, Angle) after drawing an entity.'
       }
     ]
   },
