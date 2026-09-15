@@ -41,6 +41,13 @@ export interface DocumentHistoryEntry {
   id: string;
   label: string;
   changes: DocumentChange[];
+  /**
+   * Top-level command kinds the entry applied (e.g. `parameter.set`), oldest
+   * first. Lets Tweak mode allow undo when the entry touched parameters only.
+   * Absent on histories recorded before it existed — treated as unknown, not
+   * as parameter-only.
+   */
+  commandKinds?: string[];
 }
 
 export interface DocumentHistory {
@@ -86,7 +93,13 @@ export function isDocumentHistory(
       typeof entry.label !== 'string' ||
       entry.label.length > 256 ||
       !Array.isArray(entry.changes) ||
-      entry.changes.length > 100_000
+      entry.changes.length > 100_000 ||
+      (entry.commandKinds !== undefined &&
+        (!Array.isArray(entry.commandKinds) ||
+          entry.commandKinds.length > 100 ||
+          entry.commandKinds.some(
+            (kind) => typeof kind !== 'string' || kind.length > 64
+          )))
     )
       return false;
     ids.add(entry.id);

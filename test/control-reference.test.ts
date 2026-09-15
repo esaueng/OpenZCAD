@@ -52,6 +52,9 @@ describe('controls reference', () => {
     expect(keyboardItem('sketch-circle')?.keys).toEqual(['C']);
     expect(keyboardItem('sketch-rectangle')?.keys).toEqual(['R']);
     expect(keyboardItem('sketch-text')?.keys).toEqual(['T']);
+    // Constraint tools have no shortcuts; the reference must say so and name
+    // them, or they stay tooltip-only and undiscoverable without a hover.
+    expect(keyboardItem('sketch-constraints')?.action).toContain('Horizontal');
     expect(pointerItem('orbit')?.keys[0]).toContain('Shift');
     expect(pointerItem('window-select')?.keys).toEqual(['Drag left → right']);
     expect(pointerItem('window-select')?.detail).toContain('fully enclosed');
