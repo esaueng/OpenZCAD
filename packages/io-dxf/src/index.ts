@@ -44,11 +44,16 @@ export type DxfEntity = DxfLine | DxfCircle | DxfArc | DxfPolyline;
 /**
  * DXF forbids exponent notation, so plain `toString` (which yields `1e-7`
  * for small values) would corrupt the file. Fixed-point with trailing zeros
- * trimmed keeps files small and exact to a nanometre.
+ * trimmed keeps files small and exact to a nanometre. `toFixed` itself falls
+ * back to exponent notation at |value| >= 1e21, so magnitudes beyond any
+ * plausible model are refused rather than emitted corrupt.
  */
 export function formatDxfNumber(value: number): string {
   if (!Number.isFinite(value)) {
     throw new Error(`DXF coordinate is not finite: ${value}`);
+  }
+  if (Math.abs(value) >= 1e21) {
+    throw new Error(`DXF coordinate out of range: ${value}`);
   }
   const fixed = value.toFixed(9);
   const trimmed = fixed.replace(/\.?0+$/, '');
