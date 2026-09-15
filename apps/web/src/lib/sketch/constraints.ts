@@ -608,6 +608,40 @@ export function constraintToolsForObject(
   return kinds.map(constraintToolSpec);
 }
 
+/**
+ * Human-readable names of the constraints with the worst solve residuals —
+ * the ones most likely fighting the edit that just failed. Pure lookup over
+ * the given sketch's stored constraints; unknown ids are skipped, so a stale
+ * residual can never surface a phantom culprit.
+ */
+export function topResidualConstraints(
+  document: ProjectDocument,
+  sketch: SketchNode | undefined,
+  residuals: ReadonlyArray<{ constraintId: string; maxResidual: number }>,
+  limit = 2
+): string[] {
+  if (!sketch) return [];
+  const nameOf = (objectId: EntityId) => {
+    const node = document.nodes[objectId];
+    return node?.kind === 'sketch-object'
+      ? node.name || node.data.objectKind
+      : 'entity';
+  };
+  const byId = new Map(
+    (sketch.constraints ?? []).map((constraint) => [
+      String(constraint.constraintId),
+      constraint.data
+    ])
+  );
+  return [...residuals]
+    .sort((a, b) => b.maxResidual - a.maxResidual)
+    .flatMap(({ constraintId }) => {
+      const data = byId.get(String(constraintId));
+      return data ? [describeConstraint(data, nameOf)] : [];
+    })
+    .slice(0, Math.max(0, limit));
+}
+
 /** True when the constraint mentions the object, as a whole or by a point. */
 export function constraintReferencesObject(
   data: SketchConstraintData,
