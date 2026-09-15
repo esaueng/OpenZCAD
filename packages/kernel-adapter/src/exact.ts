@@ -1727,8 +1727,13 @@ export class RemusKernelAdapter implements ExactKernelAdapter {
     bodyIds: BodyId[]
   ): number[] {
     const hidden = getParameterHiddenBodyIds(document);
+    // Consumed operands keep their retained shapes in the build, but they are
+    // superseded bodies — exporting one would ship a dead body as if it were
+    // the model. Skip them exactly like parameter-hidden bodies, so a stale
+    // caller list degrades to "nothing left to export" instead of a silent
+    // wrong file.
     const solids = bodyIds
-      .filter((id) => !hidden.has(id))
+      .filter((id) => !hidden.has(id) && !build.consumed.has(id))
       .flatMap((bodyId) => {
         const shape = build.shapes.get(bodyId);
         if (!shape) {
