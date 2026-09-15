@@ -10,10 +10,6 @@ import {
   createExactKernelAdapter,
   type ExactKernelAdapter
 } from '@openzcad/kernel-adapter/exact';
-import type {
-  DxfFaceKernel,
-  faceDxfEntities as faceDxfEntitiesFn
-} from '../packages/kernel-adapter/src/exact-dxf';
 import { toUserId } from '@openzcad/shared';
 import type {
   BodyId,
@@ -237,9 +233,8 @@ describe('exportFaceDxf', () => {
   });
 
   it('names a face with no boundary wires instead of throwing a TypeError', async () => {
-    const { faceDxfEntities }: { faceDxfEntities: typeof faceDxfEntitiesFn } =
-      await import('../packages/kernel-adapter/src/exact-dxf');
-    const stub: DxfFaceKernel = {
+    const dxf = await import('../packages/kernel-adapter/src/exact-dxf');
+    const stub: import('../packages/kernel-adapter/src/exact-dxf').DxfFaceKernel = {
       getEdgeCurveType: () => {
         throw new Error('unreachable');
       },
@@ -254,7 +249,7 @@ describe('exportFaceDxf', () => {
       getWireEdges: () => []
     };
     expect(() =>
-      faceDxfEntities(stub, 1, 1)
+      dxf.faceDxfEntities(stub, 1, 1)
     ).toThrow(/no boundary edges/);
   });
 });
