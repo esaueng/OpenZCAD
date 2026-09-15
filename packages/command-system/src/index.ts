@@ -2839,6 +2839,17 @@ export class CommandManager {
       this.history?.entries[(this.history?.cursor ?? 0) - 1]?.label ?? null
     );
   }
+  /**
+   * Command kinds of the entry Ctrl+Z would undo, or null when there is
+   * nothing to undo. Lets Tweak mode allow undo when the top entry touched
+   * parameters only — without it the workspace can only refuse every undo,
+   * including a parameter typo made seconds ago.
+   */
+  get undoEntryKinds(): string[] | null {
+    const entry = this.history?.entries[(this.history?.cursor ?? 0) - 1];
+    if (!entry) return null;
+    return entry.commandKinds ?? null;
+  }
   get redoLabel(): string | null {
     return this.history?.entries[this.history.cursor]?.label ?? null;
   }
@@ -2863,7 +2874,8 @@ export class CommandManager {
       previous,
       next,
       command.label,
-      this.actorUserId
+      this.actorUserId,
+      serializedLeaves(command).map((entry) => entry.kind)
     );
     return this.document;
   }
@@ -2941,7 +2953,13 @@ export class CommandManager {
     }
     next.commandLog.push(...serialized);
     next = appendRevision(next, label);
-    this.document = recordDocumentEdit(previous, next, label, this.actorUserId);
+    this.document = recordDocumentEdit(
+      previous,
+      next,
+      label,
+      this.actorUserId,
+      serialized.map((entry) => entry.kind)
+    );
     return this.document;
   }
 

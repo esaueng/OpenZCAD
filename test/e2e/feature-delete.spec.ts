@@ -33,7 +33,12 @@ test('deleting a history feature raises an undoable toast that counts its depend
 
   const bossRow = page.locator('.feature-row', { hasText: 'Boss' }).first();
   await bossRow.hover();
-  await page.getByRole('button', { name: 'Delete Boss', exact: true }).click();
+  // The load-bearing delete confirms first (native confirm, accepted here —
+  // Playwright would auto-dismiss it as cancel otherwise).
+  await Promise.all([
+    page.waitForEvent('dialog').then((dialog) => dialog.accept()),
+    page.getByRole('button', { name: 'Delete Boss', exact: true }).click()
+  ]);
 
   const toast = page.locator('.toast');
   await expect(toast).toHaveText(/Deleted Boss · \d+ features depended on it/);
