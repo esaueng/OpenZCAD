@@ -2028,7 +2028,9 @@ test('section view cycles planes, cuts exactly at rest, and cuts nothing from th
   const drawn = (await exact())[0]!;
   expect(drawn.triangles).toBeGreaterThanOrEqual(2);
   atPlane(drawn);
-  await expect(page.getByText('Exact section')).toBeVisible();
+  await expect(
+    page.locator('.rail-section-state-kind', { hasText: 'Exact section' })
+  ).toBeVisible();
 
   // Moving the plane hands the viewport back to the clipped preview at once
   // — an exact section belongs to the cut it was computed for — and the new

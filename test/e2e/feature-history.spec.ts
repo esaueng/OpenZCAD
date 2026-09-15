@@ -128,9 +128,13 @@ test('names a deleted sketch input and restores the dependent model with undo', 
   await page.locator('.feature-row-main', { hasText: 'Base profile' }).click();
   const details = page.getByRole('region', { name: 'History details' });
   await expect(details.getByText(/Affects [1-9]/)).toBeVisible();
-  await page
-    .getByRole('button', { name: 'Delete Base profile', exact: true })
-    .click();
+  // Load-bearing deletes confirm first (native confirm, accepted here).
+  await Promise.all([
+    page.waitForEvent('dialog').then((dialog) => dialog.accept()),
+    page
+      .getByRole('button', { name: 'Delete Base profile', exact: true })
+      .click()
+  ]);
   await page.locator('.feature-row-main', { hasText: 'Extrude base' }).click();
   await expect(
     details.getByText(/An input sketch is missing from history/)
