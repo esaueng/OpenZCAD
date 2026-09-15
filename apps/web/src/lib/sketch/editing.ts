@@ -62,6 +62,46 @@ export async function checkSketchEdit(
   return derived;
 }
 
+/** The live interaction state re-read after an async validate. Only the sketch branch carries a session. */
+export type SketchEditSession = {
+  mode: string;
+  session?: {
+    sketchId: string | null;
+    selectedObjectId: string | null;
+  };
+};
+
+/**
+ * The race guard in `commitSketchEdit` (App.tsx): after validation awaits a
+ * worker round-trip, the edit applies only when the live document and sketch
+ * session still match the validated base. Returns the user-facing message
+ * when the edit must be refused, or null when it may proceed. Nothing is
+ * committed either way — the message is the whole point, so a typed edit can
+ * never vanish silently.
+ *
+ * The parameter shape is structural on purpose: the live interaction state is
+ * a wide union, and only the sketch branch carries a session.
+ */
+export function sketchEditRaceRefusal(
+  base: { projectId: string; version: number },
+  sketchId: SketchId,
+  live: { projectId: string; version: number } | null | undefined,
+  current: SketchEditSession,
+  objectId?: string
+): string | null {
+  if (
+    !live ||
+    live.projectId !== base.projectId ||
+    live.version !== base.version ||
+    current.mode !== 'sketch' ||
+    current.session?.sketchId !== sketchId ||
+    (objectId !== undefined && current.session?.selectedObjectId !== objectId)
+  ) {
+    return 'The sketch changed while applying the edit; no change was saved. Retry.';
+  }
+  return null;
+}
+
 /** Solve an entity edit without silently replacing the values the user entered. */
 export async function sketchEntityEditCommands(
   base: ProjectDocument,
