@@ -1994,7 +1994,7 @@ test('section view cycles planes, cuts exactly at rest, and cuts nothing from th
   const caps = async () => (await sectionState()).sectionCaps;
   const exact = async () => (await sectionState()).exactSections;
   expect(await caps()).toEqual([]);
-  const sectionButton = page.getByRole('button', { name: /^Section view/ });
+  const sectionButton = page.getByRole('button', { name: /^Section display/ });
   await expect(sectionButton).toHaveAttribute('aria-pressed', 'false');
 
   // Off → XY, with the offset slider sliding out beside the rail.
@@ -2028,7 +2028,9 @@ test('section view cycles planes, cuts exactly at rest, and cuts nothing from th
   const drawn = (await exact())[0]!;
   expect(drawn.triangles).toBeGreaterThanOrEqual(2);
   atPlane(drawn);
-  await expect(page.getByText('Exact section')).toBeVisible();
+  await expect(
+    page.locator('.rail-section-state-kind', { hasText: 'Exact section' })
+  ).toBeVisible();
 
   // Moving the plane hands the viewport back to the clipped preview at once
   // — an exact section belongs to the cut it was computed for — and the new

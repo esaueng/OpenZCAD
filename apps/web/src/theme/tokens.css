@@ -298,6 +298,17 @@ textarea:focus {
   }
 }
 
+/* The in-app toggle paints `data-reduced-motion` on <html>; mirror the
+   OS-level collapse so an explicit choice works with OS motion left on. */
+html[data-reduced-motion='true'] *,
+html[data-reduced-motion='true'] *::before,
+html[data-reduced-motion='true'] *::after {
+  animation-duration: 0.01ms !important;
+  animation-iteration-count: 1 !important;
+  transition-duration: 0.01ms !important;
+  scroll-behavior: auto !important;
+}
+
 ::-webkit-scrollbar {
   width: 10px;
   height: 10px;

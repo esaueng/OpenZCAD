@@ -182,7 +182,8 @@ export function recordDocumentEdit(
   before: ProjectDocument,
   after: ProjectDocument,
   label: string,
-  actorUserId: UserId
+  actorUserId: UserId,
+  commandKinds?: readonly string[]
 ): ProjectDocument {
   const previous =
     before.editHistory?.actorUserId === actorUserId
@@ -192,7 +193,8 @@ export function recordDocumentEdit(
   entries.push({
     id: crypto.randomUUID(),
     label: label.slice(0, 256),
-    changes: documentChanges(before, after)
+    changes: documentChanges(before, after),
+    ...(commandKinds ? { commandKinds: [...commandKinds] } : {})
   });
   return archiveHistorySources({
     ...after,
