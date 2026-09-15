@@ -1,6 +1,7 @@
 import { growingHolderHistories } from '@openzcad/command-system';
 import { getParameterScope } from '@openzcad/document-core';
 import type { DerivedState, ProjectDocument } from '@openzcad/shared';
+import { newExactWarnings } from './exactWarnings';
 
 /** Only advertise bounds from a construction whose stored history still matches. */
 export function parameterMinimums(
@@ -43,13 +44,19 @@ export function parameterInputError(
   return null;
 }
 
-/** Existing imported-source advisories must not prevent repairing a project. */
+/**
+ * The parameter-edit commit gate: refuses when the candidate rebuild reports
+ * a warning the base did not already carry. Shares newExactWarnings with AI
+ * preflight, so both gates agree on which provenance blocks (build-failed
+ * and refusal only — a new advisory is successful work, not a failure) and
+ * subtract by occurrence with feature identity (a Set would let one
+ * pre-existing warning hide a newly failing same-named feature).
+ */
 export function parameterBuildError(
   base: ProjectDocument,
   derived: DerivedState
 ): string | null {
-  const existing = new Set(base.derived.warnings);
-  const warning = derived.warnings.find((message) => !existing.has(message));
+  const warning = newExactWarnings(base, derived)[0];
   if (warning) return warning;
   for (const id of base.derived.exportableBodyIds) {
     if (!derived.bodyRepresentations[id])
