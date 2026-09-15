@@ -126,6 +126,9 @@ export function faceDxfEntities(
   }
 
   const wires = Array.from(kernel.getFaceWires(face));
+  if (wires.length === 0) {
+    throw new Error('DXF export: the face has no boundary edges.');
+  }
   const firstEdges = Array.from(kernel.getWireEdges(wires[0]!));
   if (firstEdges.length === 0) {
     throw new Error('DXF export: the face has no boundary edges.');

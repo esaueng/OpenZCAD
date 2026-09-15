@@ -29,6 +29,13 @@ describe('formatDxfNumber', () => {
   it('refuses non-finite coordinates', () => {
     expect(() => formatDxfNumber(Number.NaN)).toThrow(/not finite/);
   });
+
+  it('refuses magnitudes toFixed would render with exponents', () => {
+    for (const value of [1e21, -1e21, 1e30]) {
+      expect(() => formatDxfNumber(value)).toThrow(/out of range/);
+    }
+    expect(formatDxfNumber(1e20)).not.toMatch(/e/i);
+  });
 });
 
 describe('writeDxf', () => {
