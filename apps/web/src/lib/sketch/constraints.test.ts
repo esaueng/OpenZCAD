@@ -20,6 +20,7 @@ import {
   measureDrivingDimension,
   planConstraintFromSelection,
   refusePick,
+  topResidualConstraints,
   type PendingConstraintKind,
   type ConstraintPick
 } from './constraints';
@@ -838,5 +839,63 @@ describe('constraints from the selection dock', () => {
         lineB
       )
     ).toBe(false);
+  });
+});
+
+describe('topResidualConstraints', () => {
+  it('names the worst-residual constraints and skips unknown ids', () => {
+    const { document, sketch, lineA, lineB } = fixture();
+    const first = commandFactories.addSketchConstraint({
+      sketchId: sketch.sketchId,
+      constraint: {
+        constraintKind: 'horizontal',
+        objectId: lineA as EntityId
+      }
+    });
+    const second = commandFactories.addSketchConstraint({
+      sketchId: sketch.sketchId,
+      constraint: { constraintKind: 'vertical', objectId: lineB as EntityId }
+    });
+    const withConstraints = second.apply(first.apply(document));
+    const stored = findSketch(withConstraints, sketch.sketchId)!;
+    const [idA, idB] = (stored.constraints ?? []).map((entry) =>
+      String(entry.constraintId)
+    );
+    // Ghost ids never surface: unknown residuals are skipped BEFORE the
+    // limit applies, so a stale entry cannot crowd out a real culprit.
+    expect(
+      topResidualConstraints(
+        withConstraints,
+        stored,
+        [
+          { constraintId: idB!, maxResidual: 9 },
+          { constraintId: idA!, maxResidual: 1 },
+          { constraintId: 'constraint_ghost', maxResidual: 99 }
+        ],
+        2
+      )
+    ).toEqual([
+      expect.stringContaining('Vertical'),
+      expect.stringContaining('Horizontal')
+    ]);
+    expect(
+      topResidualConstraints(
+        withConstraints,
+        stored,
+        [
+          { constraintId: idB!, maxResidual: 9 },
+          { constraintId: idA!, maxResidual: 1 }
+        ],
+        2
+      )
+    ).toEqual([
+      expect.stringContaining('Vertical'),
+      expect.stringContaining('Horizontal')
+    ]);
+    expect(
+      topResidualConstraints(withConstraints, undefined, [
+        { constraintId: idA!, maxResidual: 1 }
+      ])
+    ).toEqual([]);
   });
 });
