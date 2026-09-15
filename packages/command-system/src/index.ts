@@ -2875,7 +2875,7 @@ export class CommandManager {
       next,
       command.label,
       this.actorUserId,
-      [command.kind]
+      serializedLeaves(command).map((entry) => entry.kind)
     );
     return this.document;
   }
@@ -2958,7 +2958,7 @@ export class CommandManager {
       next,
       label,
       this.actorUserId,
-      commands.map((command) => command.kind)
+      serialized.map((entry) => entry.kind)
     );
     return this.document;
   }
