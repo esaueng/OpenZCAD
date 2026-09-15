@@ -13955,9 +13955,12 @@ export function App() {
 
   function handleDeleteFeature(featureId: FeatureId, name: string) {
     // Counted before the delete: afterwards the source is gone and the walk
-    // has nothing to start from. A load-bearing delete is confirmed first —
-    // the toast's Undo survives either way, but a surprise rebuild of every
-    // dependent should be a choice, not a discovery.
+    // has nothing to start from. A load-bearing delete announces its blast
+    // radius up front — the confirm names the dependent count — while the
+    // toast's Undo survives either way, so a surprise rebuild of every
+    // dependent is a choice, not a discovery. Playwright auto-dismisses the
+    // native confirm, which reads as cancel: the e2e delete specs accept it
+    // explicitly, matching the cloud-sync repair specs' dialog handling.
     const dependents = doc ? featureHistory(doc).downstream(featureId) : [];
     if (
       dependents.length > 0 &&
