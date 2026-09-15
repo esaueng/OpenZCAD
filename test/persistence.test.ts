@@ -55,6 +55,26 @@ describe('in-memory persistence', () => {
     expect(loaded?.schemaVersion).toBe(PROJECT_DOCUMENT_SCHEMA_VERSION);
   });
 
+  it('refuses to load a document stored by a newer client', async () => {
+    const service = new InMemoryPersistenceService();
+    const created = await service.createProject(userId, { name: 'Future' });
+    const future = {
+      ...structuredClone(created.document),
+      schemaVersion: PROJECT_DOCUMENT_SCHEMA_VERSION + 84
+    } as unknown as typeof created.document;
+    // Same bypass the write guard a newer deployment would have used: the
+    // store holds a newer-schema blob, and every read path funnels through
+    // normalizeDocument — which must refuse rather than stamp v15.
+    (
+      service as unknown as {
+        projects: Map<string, typeof created.document>;
+      }
+    ).projects.set(created.document.projectId, future);
+    await expect(
+      service.loadProject(userId, created.document.projectId)
+    ).rejects.toThrow(/newer OpenZCAD|Unsupported project schema/i);
+  });
+
   it('resolves owner, editor, and viewer access without changing ownership', async () => {
     const service = new InMemoryPersistenceService();
     const owner = toUserId('user_owner');
