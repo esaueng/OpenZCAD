@@ -1,6 +1,7 @@
 import { expect, it } from 'vitest';
 import {
   addPrimitiveFeature,
+  booleanBodies,
   configureParameterToggle,
   createProjectDocument,
   setParameter,
@@ -75,5 +76,52 @@ it('omits off bodies from exact STEP and mesh exports while preserving their rig
   } finally {
     adapter.dispose();
     kernel.free();
+  }
+}, 30_000);
+
+it('skips consumed union operands instead of exporting dead bodies', async () => {
+  let document = createProjectDocument('Consumed', toUserId('test'));
+  document = addPrimitiveFeature(document, {
+    name: 'A',
+    primitiveKind: 'box',
+    dimensions: { width: 10, height: 10, depth: 10 }
+  });
+  const operandA = document.bodyOrder[0]!;
+  document = addPrimitiveFeature(document, {
+    name: 'B',
+    primitiveKind: 'box',
+    dimensions: { width: 10, height: 10, depth: 10 }
+  });
+  const operandB = document.bodyOrder[1]!;
+  const adapter = await createExactKernelAdapter();
+  const fused = booleanBodies(document, {
+    name: 'Union',
+    operation: 'union',
+    targetBodyIds: [operandA, operandB]
+  });
+  const derived = await adapter.syncDocument(fused.document);
+  try {
+    expect(derived.warnings).toEqual([]);
+    // A stale caller list naming a consumed operand degrades to the live
+    // result — never a silent export of the superseded body.
+    const step = await adapter.exportStep(fused.document, [
+      operandA,
+      fused.bodyId
+    ]);
+    const io = await loadRemusTranslators();
+    const kernel = new RemusKernel();
+    try {
+      const solids = kernel.deserializeSolids(
+        io.importStep(new TextEncoder().encode(step))
+      );
+      expect(solids).toHaveLength(1);
+    } finally {
+      kernel.free();
+    }
+    await expect(adapter.exportStep(fused.document, [operandA])).rejects.toThrow(
+      /at least one body/
+    );
+  } finally {
+    adapter.dispose();
   }
 }, 30_000);

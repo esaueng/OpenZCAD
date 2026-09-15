@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import { parseCadPatchProposal } from '@openzcad/ai-contracts';
-import { createProjectDocument } from '@openzcad/document-core';
+import { createProjectDocument, holeBody } from '@openzcad/document-core';
 import {
   toFeatureId,
   toUserId,
@@ -239,5 +239,58 @@ describe('AI modeling command translation', () => {
       /same closed region more than once/
     );
     expect(manager.document.featureOrder).toEqual([]);
+  });
+
+  it('rejects retargeting a body a historical hole or split consumed', () => {
+    const manager = new CommandManager(
+      createProjectDocument('Consumed history', toUserId('user_ai'))
+    );
+    manager.execute(
+      commandFactories.addPrimitive({
+        name: 'Plate',
+        primitiveKind: 'box',
+        dimensions: { width: 20, height: 20, depth: 20 }
+      })
+    );
+    const plateBodyId = manager.document.bodyOrder[0]!;
+    manager.execute(
+      commandFactories.addPrimitive({
+        name: 'Tool',
+        primitiveKind: 'box',
+        dimensions: { width: 20, height: 20, depth: 20 }
+      })
+    );
+    const toolBodyId = manager.document.bodyOrder[1]!;
+    const holed = holeBody(manager.document, {
+      name: 'Mounting hole',
+      targetBodyId: plateBodyId,
+      faceHash: 4242,
+      style: 'simple',
+      diameter: 6,
+      depthMode: 'through',
+      position: { u: 0, v: 0 }
+    });
+    // Fresh load: derived is absent/stale, so only the history-primary
+    // LocalBodyScope stands between the proposal and the wrong model.
+    const historyOnly = { ...holed.document, derived: undefined as never };
+    const proposal = parseCadPatchProposal({
+      proposalId: 'proposal_consumed_retarget',
+      summary: 'Retarget a consumed body.',
+      assumptions: [],
+      operations: [
+        {
+          kind: 'add_boolean',
+          name: 'Bad union',
+          localId: null,
+          operation: 'union',
+          targetBodyIds: [plateBodyId, toolBodyId]
+        }
+      ]
+    });
+
+    expect(() => commandsForCadPatch(historyOnly, proposal)).toThrow(
+      /already consumed/
+    );
+    expect(manager.document.featureOrder).toHaveLength(2);
   });
 });
