@@ -207,7 +207,9 @@ describe('Inspector feature provenance', () => {
     expect(within(inspector).getByText('Mounting bracket')).toBeVisible();
     expect(within(inspector).getByText('Measurements')).toBeVisible();
     expect(within(inspector).getByText('120 mm³')).toBeVisible();
-    expect(within(inspector).getByText('Mass properties')).toBeVisible();
+    expect(
+      within(inspector).getByText('Mass properties (at unit density)')
+    ).toBeVisible();
     expect(within(inspector).getByText('Lower rim fillet')).toBeVisible();
     expect(
       within(inspector).queryByLabelText('Radius')
@@ -384,6 +386,24 @@ describe('imported face recognition display', () => {
       within(inspector).queryByRole('button', { name: /Apply diameter/ })
     ).not.toBeInTheDocument();
     expect(onResizeThroughHole).not.toHaveBeenCalled();
+  });
+
+  it('marks read-only proof families as read-only beside their dimensions', () => {
+    render(
+      <Inspector
+        {...importedProps({
+          recognition: {
+            kind: 'recognized',
+            featureKind: 'cylindrical-boss',
+            message: 'Boss recognized from the imported STEP body.',
+            dimensions: { diameter: 10, height: 4 }
+          }
+        })}
+      />
+    );
+    const inspector = screen.getByRole('region', { name: 'Feature inspector' });
+    expect(within(inspector).getByText('Boss')).toBeVisible();
+    expect(within(inspector).getByText(/read-only/)).toBeVisible();
   });
 
   it('shows the typed refusal reason when recognition declines', () => {

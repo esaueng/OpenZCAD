@@ -392,7 +392,9 @@ function BodyStats({
         // Unit density: multiply by a material density for physical values.
         // Rendered only when the kernel integrated this solid — the absence
         // of the section is the honest reading of a failed integration.
-        <CollapsibleSection title="Mass properties">
+        // The heading says so explicitly: without it these read as physical
+        // mass, and length⁵ moments doubly so.
+        <CollapsibleSection title="Mass properties (at unit density)">
           <div className="kv-grid">
             <b>center of mass</b>
             <span>
@@ -405,7 +407,8 @@ function BodyStats({
               {formatNumber(mass.principalMoments[0])} ·{' '}
               {formatNumber(mass.principalMoments[1])} ·{' '}
               {formatNumber(mass.principalMoments[2])}{' '}
-              {unitLabel('length', units)}⁵
+              {unitLabel('length', units)}⁵ · multiply by material density
+              for physical values
             </span>
           </div>
         </CollapsibleSection>
@@ -748,10 +751,30 @@ function ImportedFaceRecognition({
         ? RECOGNIZED_FEATURE_LABELS[recognition.featureKind]
         : undefined) ?? 'Recognized feature';
     const dimensions = Object.entries(recognition.dimensions ?? {});
+    // Proof families other than the shipped through-hole/blend edits are
+    // read-only: the recognizer publishes their shape but no coordinated
+    // direct-edit replays them. Say so beside the dimensions, or a measured
+    // boss reads as an editable one with its edit button missing.
+    const readOnlyNote =
+      recognition.featureKind !== undefined &&
+      ![
+        'blind-cylindrical-hole',
+        'counterbore',
+        'countersink',
+        'fillet-band'
+      ].includes(recognition.featureKind)
+        ? 'Recognized — read-only: no direct edit replays this family yet.'
+        : null;
     return (
       <div className="kv-grid">
         <b>recognized</b>
         <span>{label}</span>
+        {readOnlyNote ? (
+          <>
+            <b>editing</b>
+            <span>{readOnlyNote}</span>
+          </>
+        ) : null}
         {dimensions.map(([key, value]) => (
           <Fragment key={key}>
             <b>{RECOGNIZED_DIMENSION_LABELS[key] ?? key}</b>
