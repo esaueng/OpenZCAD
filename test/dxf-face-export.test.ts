@@ -10,6 +10,10 @@ import {
   createExactKernelAdapter,
   type ExactKernelAdapter
 } from '@openzcad/kernel-adapter/exact';
+import type {
+  DxfFaceKernel,
+  faceDxfEntities as faceDxfEntitiesFn
+} from '../packages/kernel-adapter/src/exact-dxf';
 import { toUserId } from '@openzcad/shared';
 import type {
   BodyId,
@@ -230,5 +234,27 @@ describe('exportFaceDxf', () => {
         ...(wall!.reference ? { faceReference: wall!.reference } : {})
       })
     ).rejects.toThrow(/planar/);
+  });
+
+  it('names a face with no boundary wires instead of throwing a TypeError', async () => {
+    const { faceDxfEntities }: { faceDxfEntities: typeof faceDxfEntitiesFn } =
+      await import('../packages/kernel-adapter/src/exact-dxf');
+    const stub: DxfFaceKernel = {
+      getEdgeCurveType: () => {
+        throw new Error('unreachable');
+      },
+      getEdgeVertices: () => new Float64Array(6),
+      getEdgeParamSpan: () => new Float64Array(2),
+      evaluateEdgeCurve: () => new Float64Array(3),
+      measureCurvatureAtEdge: () => new Float64Array(4),
+      sampleEdge: () => new Float64Array(3),
+      getSurfaceType: () => 'plane',
+      getFaceNormal: () => new Float64Array([0, 0, 1]),
+      getFaceWires: () => [],
+      getWireEdges: () => []
+    };
+    expect(() =>
+      faceDxfEntities(stub, 1, 1)
+    ).toThrow(/no boundary edges/);
   });
 });

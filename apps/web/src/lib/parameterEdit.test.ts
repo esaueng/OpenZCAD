@@ -120,4 +120,68 @@ describe('parameter edit validation', () => {
       parameterBuildError(base, { ...base.derived, bodyRepresentations: {} })
     ).toContain('existing result body');
   });
+
+  it('allows a new advisory delta while refusing a migrated same-text failure', () => {
+    const base = holder();
+    base.derived.warnings = [];
+    base.derived.featureWarnings = [];
+    // A new advisory (overlap merge notice, faceted curves, glyph polylines)
+    // is successful work — the parameter edit must not refuse it.
+    expect(
+      parameterBuildError(base, {
+        ...base.derived,
+        warnings: ['Feature "Pattern": instances overlap; volume double-counted.'],
+        featureWarnings: [
+          {
+            featureId: base.featureOrder[0]!,
+            featureName: 'Pattern',
+            message:
+              'Feature "Pattern": instances overlap; volume double-counted.',
+            kind: 'advisory'
+          }
+        ]
+      })
+    ).toBeNull();
+    // The same refusal text migrating between same-named features is a new
+    // failure, not a pre-existing one — the Set-based gate used to hide it.
+    const message = 'Feature "Union": open result.';
+    const refused = (featureId: string) => ({
+      featureId: featureId as never,
+      featureName: 'Union',
+      message,
+      kind: 'refusal' as const
+    });
+    const migratedBase: typeof base = {
+      ...base,
+      derived: {
+        ...base.derived,
+        warnings: [message],
+        featureWarnings: [refused('feat_a')]
+      }
+    };
+    expect(
+      parameterBuildError(migratedBase, {
+        ...migratedBase.derived,
+        warnings: [message],
+        featureWarnings: [refused('feat_b')]
+      })
+    ).toBe(message);
+    // Occurrence counting: two identical base strings excuse two, not three.
+    // (No featureWarnings channel here: the legacy string fallback must count
+    // too — a Set would excuse any number.)
+    const doubled: typeof base = {
+      ...base,
+      derived: {
+        ...base.derived,
+        warnings: [message, message],
+        featureWarnings: undefined
+      }
+    };
+    expect(
+      parameterBuildError(doubled, {
+        ...doubled.derived,
+        warnings: [message, message, message]
+      })
+    ).toBe(message);
+  });
 });

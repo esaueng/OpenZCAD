@@ -1990,7 +1990,8 @@ class LocalBodyScope {
     // because derived state can be absent or stale — a document that was
     // loaded but not rebuilt yet — and this check must fail closed without
     // it. The kinds below mirror exactly which features the exact adapter
-    // marks as consuming their target; an extrude whose stored operation the
+    // marks as consuming their target (hole and split included: both replace
+    // their target, like every other arm here); an extrude whose stored operation the
     // kernel later refuses stays consumed here, which rejects rather than
     // risks targeting it.
     const consumedByHistory = 'feature in the document';
@@ -2017,6 +2018,8 @@ class LocalBodyScope {
         case 'fillet':
         case 'chamfer':
         case 'pattern':
+        case 'hole':
+        case 'split':
           this.consumed.set(data.targetBodyId, consumedByHistory);
           break;
         default:
@@ -2024,7 +2027,7 @@ class LocalBodyScope {
       }
     }
     for (const [bodyId, body] of Object.entries(
-      document.derived.bodyRepresentations
+      document.derived?.bodyRepresentations ?? {}
     )) {
       if (body.consumed && !this.consumed.has(bodyId as BodyId)) {
         this.consumed.set(bodyId as BodyId, consumedByHistory);
