@@ -13,10 +13,11 @@ carries the existing endpoint certificate through the rigid transform within
 the bounded roundoff allowance. It does not bypass the export validator or
 permit meaningful geometric gaps.
 
-OpenZCAD uses that source patch on its existing compatible kernel baseline
-(`4bbcd5c7`), with both WASM packages rebuilt from source. Adopting the newer
-kernel wholesale also changed measurement and partial-revolve behavior;
-those existing acceptance tests remain unchanged with this backport.
+OpenZCAD consumes that fix on the mainline kernel pin (`49567b02`,
+v2.130.23, the remus#474 squash merge). An earlier backport of the same
+patch to the previous baseline (remus#480) was superseded when the mainline
+pin landed with the measurement and partial-revolve adaptations that came
+with it.
 
 `test/saved-project-export.test.ts` includes an always-on synthetic cylinder
 whose tolerance lies at this numerical boundary. It fails on the previous

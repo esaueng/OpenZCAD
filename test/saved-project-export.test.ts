@@ -9,8 +9,8 @@
  *   edges), finite coordinates, and facet-volume agreement with the kernel
  *   volumes.
  *
- * The copy under test should be a disposable duplicate: the test only reads
- * it. Provide it via
+ * The copy under test must be a disposable duplicate: the test only reads
+ * it, and it refuses the known original path. Provide it via
  * `OPENZCAD_EXPORT_PROJECT_COPY`. Without it the test skips — this keeps
  * private project data out of CI while letting anyone with the file verify.
  *
@@ -31,7 +31,9 @@ import type { ProjectDocument } from '@openzcad/shared';
 import { measureThreeMfExport } from './support/three-mf-export';
 
 const copyPath = process.env.OPENZCAD_EXPORT_PROJECT_COPY;
-const hasFixture = !!copyPath;
+const hasFixture =
+  !!copyPath &&
+  copyPath !== '/Users/userzero/Downloads/Tiny-Fox(1).openzcad';
 
 type FixturePoint = [number, number, number];
 interface CylinderArena {
