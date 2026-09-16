@@ -34,6 +34,56 @@ export function createCylinderProfilePreview(
   const span = axis.length();
   if (span <= 1e-9 || profile.coreRadius <= 1e-9) return null;
   axis.divideScalar(span);
+  return createProfilePreview(
+    object,
+    (point) => {
+      point.sub(profile.axisStart);
+      const axial = point.dot(axis);
+      if (dimension === 'height') {
+        point
+          .copy(axis)
+          .multiplyScalar(THREE.MathUtils.clamp(axial / span, 0, 1));
+      } else {
+        point.addScaledVector(axis, -axial);
+        point.divideScalar(Math.max(point.length(), profile.coreRadius));
+      }
+    },
+    dimension === 'radius' ? profile.coreRadius : span
+  );
+}
+
+/** The two planes bounding the straight span; material beyond them moves rigidly. */
+export interface LinearPreviewProfile {
+  axisStart: Vector3;
+  axisEnd: Vector3;
+}
+
+/** Preserves the end rounds of a recognized box while stretching its straight span. */
+export function createLinearProfilePreview(
+  object: THREE.Object3D,
+  profile: LinearPreviewProfile
+): CylinderProfilePreview | null {
+  const axis = new THREE.Vector3().copy(profile.axisEnd).sub(profile.axisStart);
+  const span = axis.length();
+  if (!Number.isFinite(span) || span <= 1e-9) return null;
+  axis.divideScalar(span);
+  return createProfilePreview(
+    object,
+    (point) => {
+      const axial = point.sub(profile.axisStart).dot(axis);
+      point
+        .copy(axis)
+        .multiplyScalar(THREE.MathUtils.clamp(axial / span, 0, 1));
+    },
+    span
+  );
+}
+
+function createProfilePreview(
+  object: THREE.Object3D,
+  velocityAt: (point: THREE.Vector3) => void,
+  span: number
+): CylinderProfilePreview | null {
   const attributes = new Set<PositionAttribute>();
   const geometries = new Set<THREE.BufferGeometry>();
   object.traverse((child) => {
@@ -61,16 +111,7 @@ export function createCylinderProfilePreview(
     for (let index = 0; index < attribute.count; index += 1) {
       point.fromBufferAttribute(attribute, index);
       point.toArray(original, index * 3);
-      point.sub(profile.axisStart);
-      const axial = point.dot(axis);
-      if (dimension === 'height') {
-        point
-          .copy(axis)
-          .multiplyScalar(THREE.MathUtils.clamp(axial / span, 0, 1));
-      } else {
-        point.addScaledVector(axis, -axial);
-        point.divideScalar(Math.max(point.length(), profile.coreRadius));
-      }
+      velocityAt(point);
       point.toArray(velocity, index * 3);
     }
     return { attribute, original, velocity };
@@ -96,11 +137,7 @@ export function createCylinderProfilePreview(
   return {
     cachedBytes,
     apply(delta) {
-      if (
-        !Number.isFinite(delta) ||
-        delta <= -(dimension === 'radius' ? profile.coreRadius : span) + 1e-6
-      )
-        return false;
+      if (!Number.isFinite(delta) || delta <= -span + 1e-6) return false;
       write(delta);
       return true;
     },

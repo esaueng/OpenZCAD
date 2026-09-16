@@ -1,7 +1,10 @@
 import { describe, expect, it } from 'vitest';
 import * as THREE from 'three';
 import { createFatLineSegments } from '../render/scene';
-import { createCylinderProfilePreview } from './cylinderProfilePreview';
+import {
+  createCylinderProfilePreview,
+  createLinearProfilePreview
+} from './cylinderProfilePreview';
 
 const profile = {
   axisStart: { x: 0, y: 0, z: 2 },
@@ -136,4 +139,63 @@ describe('cylinder profile preview', () => {
         .version
     ).toBe(version);
   });
+});
+
+describe('linear profile preview', () => {
+  it.each([1, -1])(
+    'preserves end rounds, overlays and source buffers for side %s',
+    (sign) => {
+      const source = [
+        0, 0, 0, 0.586, 1.414, 0, 2, 2, 0, 10, 2, 0, 18, 2, 0, 19.414, 1.414, 0,
+        20, 0, 0
+      ];
+      const object = objectAtPoints(source);
+      const highlight = new THREE.Mesh(new THREE.BufferGeometry());
+      highlight.geometry.setAttribute(
+        'position',
+        object.geometry.getAttribute('position')
+      );
+      object.add(highlight);
+      const line = createFatLineSegments([0.586, 1.414, 0, 19.414, 1.414, 0], {
+        color: '#ffffff',
+        linewidth: 1
+      });
+      object.add(line);
+      const quad = Array.from(line.geometry.getAttribute('position').array);
+      const original = coordinates(object);
+      const profile = {
+        axisStart: { x: sign > 0 ? 2 : 18, y: 0, z: 0 },
+        axisEnd: { x: sign > 0 ? 18 : 2, y: 0, z: 0 }
+      };
+      const preview = createLinearProfilePreview(object, profile)!;
+      for (const delta of [12, -5, 4, 0]) {
+        expect(preview.apply(delta)).toBe(true);
+        const position = object.geometry.getAttribute('position');
+        for (const i of [0, 1, 2, 4, 5, 6]) {
+          const moves = sign > 0 ? i >= 4 : i <= 2;
+          expect(position.getX(i)).toBeCloseTo(
+            source[i * 3]! + (moves ? sign * delta : 0),
+            4
+          );
+          expect(position.getY(i)).toBeCloseTo(source[i * 3 + 1]!, 4);
+        }
+        expect(line.geometry.getAttribute('instanceStart').getX(0)).toBeCloseTo(
+          position.getX(1),
+          4
+        );
+        expect(line.geometry.getAttribute('instanceEnd').getX(0)).toBeCloseTo(
+          position.getX(5),
+          4
+        );
+        expect(
+          Array.from(line.geometry.getAttribute('position').array)
+        ).toEqual(quad);
+      }
+      expect(preview.apply(-16)).toBe(false);
+      expect(preview.apply(NaN)).toBe(false);
+      preview.restore();
+      expect(coordinates(object)).toEqual(original);
+      expect(source[0]).toBe(0);
+    }
+  );
 });
