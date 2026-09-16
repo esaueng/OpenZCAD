@@ -9,6 +9,32 @@ test('previews and commits a compound STEP cap offset, then undoes, redoes and r
   page
 }) => {
   test.setTimeout(120_000);
+  await page.addInitScript(() => {
+    const scope = window as typeof window & {
+      holdFaceEdit?: boolean;
+      heldFaceEdits?: number;
+      releaseFaceEdits?: () => void;
+    };
+    const pending: (() => void)[] = [];
+    const send = Worker.prototype.postMessage;
+    scope.releaseFaceEdits = () => {
+      scope.holdFaceEdit = false;
+      for (const release of pending.splice(0)) release();
+    };
+    Worker.prototype.postMessage = function (message, transfer) {
+      if (
+        scope.holdFaceEdit &&
+        (message as { type?: string } | null)?.type === 'sync'
+      ) {
+        scope.heldFaceEdits = (scope.heldFaceEdits ?? 0) + 1;
+        pending.push(() =>
+          send.call(this, message, transfer as StructuredSerializeOptions)
+        );
+        return;
+      }
+      return send.call(this, message, transfer as StructuredSerializeOptions);
+    };
+  });
   const kernel = new RemusKernel();
   const io = await loadRemusTranslators();
   const solids = compoundOffsetSolids(kernel);
@@ -68,6 +94,80 @@ test('previews and commits a compound STEP cap offset, then undoes, redoes and r
         })
     );
   await expect.poll(capX, { timeout: 30_000 }).toBeCloseTo(63, 5);
+  await expect
+    .poll(async () => {
+      await selectCap();
+      return canvas.getAttribute('data-e2e-handle-x');
+    })
+    .not.toBeNull();
+  const worldBounds = () =>
+    canvas.evaluate(
+      (element) =>
+        new Promise<unknown>((resolve) => {
+          element.dispatchEvent(
+            new CustomEvent('openzcad:e2e-render-policy', {
+              detail: {
+                resolve: (state: { bodyFaces: { worldBounds?: unknown }[] }) =>
+                  resolve(state.bodyFaces.map((face) => face.worldBounds))
+              }
+            })
+          );
+        })
+    );
+  const before = await worldBounds();
+  const handle = await canvas.evaluate((element) => ({
+    x: Number(element.dataset.e2eHandleX),
+    y: Number(element.dataset.e2eHandleY),
+    dx: Number(element.dataset.e2eHandleDx),
+    dy: Number(element.dataset.e2eHandleDy),
+    pixelsPerUnit: Number(element.dataset.e2eHandlePixelsPerUnit)
+  }));
+  const bounds = (await canvas.boundingBox())!;
+  await page.evaluate(() => {
+    (window as typeof window & { holdFaceEdit?: boolean }).holdFaceEdit = true;
+  });
+  await page.mouse.move(bounds.x + handle.x, bounds.y + handle.y);
+  await page.mouse.down();
+  await page.mouse.move(
+    bounds.x + handle.x + handle.dx * handle.pixelsPerUnit * 5,
+    bounds.y + handle.y + handle.dy * handle.pixelsPerUnit * 5
+  );
+  await expect
+    .poll(() =>
+      page.evaluate(
+        () =>
+          (window as typeof window & { heldFaceEdits?: number })
+            .heldFaceEdits ?? 0
+      )
+    )
+    .toBeGreaterThan(0);
+  // A compound cap edit must never stretch its sibling solids, even when
+  // the exact worker is slow. Keep the last exact mesh through release too.
+  await expect(canvas).not.toHaveAttribute('data-e2e-height-proxy-offset');
+  expect(await worldBounds()).toEqual(before);
+  // Screen-space drags are grid-snapped. Commit must match the displayed
+  // requested delta, independently of the current camera's snap interval.
+  const requestedOffset = Number(
+    (await page.getByTestId('direct-manipulation-value').innerText()).match(
+      /([+-]?[\d.]+) mm/
+    )?.[1]
+  );
+  expect(requestedOffset).toBeGreaterThan(0);
+  await page.mouse.up();
+  await expect(
+    page.getByText('Checking geometry…', { exact: true }).first()
+  ).toBeVisible();
+  expect(await worldBounds()).toEqual(before);
+  await page.evaluate(() => {
+    (window as typeof window & { releaseFaceEdits?: () => void })
+      .releaseFaceEdits!();
+  });
+  await expect(page.locator('.feature-row')).toHaveCount(2);
+  await expect
+    .poll(capX, { timeout: 30_000 })
+    .toBeCloseTo(63 + requestedOffset, 2);
+  await page.getByRole('button', { name: 'Undo', exact: true }).click();
+  await expect.poll(capX).toBeCloseTo(63, 5);
   await expect
     .poll(async () => {
       await selectCap();
