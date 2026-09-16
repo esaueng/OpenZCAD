@@ -64,6 +64,8 @@ import {
   computeNormalToFacePose,
   cylinderRadiusPreviewMatrix,
   createCylinderProfilePreview,
+  createLinearProfilePreview,
+  type LinearPreviewProfile,
   createOffsetBodyPreview,
   type CylinderPreviewProfile,
   type CylinderProfilePreview,
@@ -245,6 +247,7 @@ export interface FaceResizeCommit {
 
 /** An armed face-offset handle: where it sits and which face it edits. */
 export interface OffsetHandleTarget {
+  linearProfilePreview?: LinearPreviewProfile;
   profilePreview?: CylinderPreviewProfile;
   bodyId: string;
   topologyId: string;
@@ -2225,27 +2228,30 @@ export function ModelViewer({
           )
         : null;
       if (!target || !object || !body) return false;
-      const preview = profile
-        ? (() => {
-            const axis = new THREE.Vector3()
-              .copy(profile.axisEnd)
-              .sub(profile.axisStart);
-            const oriented =
-              axis.dot(target.normal) >= 0
-                ? profile
-                : {
-                    ...profile,
-                    axisStart: profile.axisEnd,
-                    axisEnd: profile.axisStart
-                  };
-            return createCylinderProfilePreview(object, oriented, 'height');
-          })()
-        : createOffsetBodyPreview(object, body.mesh.vertices, target.normal);
+      const linearProfile = target.linearProfilePreview;
+      const preview = linearProfile
+        ? createLinearProfilePreview(object, linearProfile)
+        : profile
+          ? (() => {
+              const axis = new THREE.Vector3()
+                .copy(profile.axisEnd)
+                .sub(profile.axisStart);
+              const oriented =
+                axis.dot(target.normal) >= 0
+                  ? profile
+                  : {
+                      ...profile,
+                      axisStart: profile.axisEnd,
+                      axisEnd: profile.axisStart
+                    };
+              return createCylinderProfilePreview(object, oriented, 'height');
+            })()
+          : createOffsetBodyPreview(object, body.mesh.vertices, target.normal);
       if (preview) {
         offsetBodyProxy = {
           preview,
-          baseline: profile ? 0 : (target.initialValue ?? 0),
-          exactOnRelease: Boolean(profile),
+          baseline: profile || linearProfile ? 0 : (target.initialValue ?? 0),
+          exactOnRelease: Boolean(profile || linearProfile),
           pending: null,
           requestedAt: performance.now()
         };
