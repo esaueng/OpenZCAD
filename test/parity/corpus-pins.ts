@@ -575,7 +575,7 @@ export const KERNEL_DELTAS: KernelDeltaPin[] = [
   {
     subject: 'e-nurbs-fillet-plate',
     metric: 'volume',
-    remus: 9537.866030094898,
+    remus: 9539.115868770154,
     occt: 9499.999999999998,
     owner: 'K0.1',
     note:
@@ -586,8 +586,10 @@ export const KERNEL_DELTAS: KernelDeltaPin[] = [
       'degree-2 NON-RATIONAL B-splines — parabolas, which remove 1.5 mm² ' +
       'per corner where the true r=3 arc removes 9·(1 − π/4) ≈ 1.9314 — so ' +
       'the file content is exactly 9540.0 mm³, +0.181% over the 9522.7433 ' +
-      'intent. Remus tessellation converges on 9540.0; the +0.16% pinned ' +
-      'here is the file deviation minus a small inscribed-mesh undercount. ' +
+      'intent. Remus converges on 9540.0: the B20 exact-measurement pin ' +
+      '(2.130.23, remus #457) moved the read from 9537.866 to 9539.116, ' +
+      'halving the residual inscribed undercount; the +0.17% pinned here ' +
+      'remains the file deviation minus that undercount. ' +
       'OCCT is -0.24%, at a suspiciously round 9500.0 that matches neither ' +
       'the file nor the intent. Both REFERENCE_DEVIATIONS entries below ' +
       'record the two sides against the arithmetic.'
@@ -774,15 +776,17 @@ export const KERNEL_DELTAS: KernelDeltaPin[] = [
   {
     subject: 'boolean-on-nurbs-import',
     metric: 'volume',
-    remus: 9427.714820937017,
+    remus: 9428.680386824797,
     occt: 9546.002960523074,
     owner: 'OCCT-defect',
     note:
       'The K0.5 scenario, and OpenCascade is the kernel that gets it wrong. ' +
       'An r4 bore is cut through a corner whose band arrived as a B-spline. ' +
-      'The closed-form answer is 9416.3938 mm3; Remus reads +0.12%, OCCT ' +
+      'The closed-form answer is 9416.3938 mm3; Remus reads +0.13%, OCCT ' +
       'reads +1.38%. The arc-chained quadric ray-cast classifier fix moved ' +
-      'Remus from +0.096% to +0.12% — still an order of magnitude closer ' +
+      'Remus from +0.096% to +0.12%, and the 2.130.23 pin (B20 exact ' +
+      'measurement plus stepped-rim tessellation seeding) nudged it to ' +
+      '+0.13% — still an order of magnitude closer ' +
       'to the arithmetic than OCCT. OCCT returns MORE volume ' +
       'after a SUBTRACT than its own ' +
       'import of the same body (9500.0), which is not a tolerance question. ' +
@@ -971,14 +975,15 @@ export const REFERENCE_DEVIATIONS: ReferenceDeviationPin[] = [
     subject: 'e-nurbs-fillet-plate',
     kernel: 'remus',
     referenceMm3: 40 * 24 * 10 - 4 * (1 - Math.PI / 4) * 9 * 10,
-    reported: 9537.866030094898,
+    reported: 9539.115868770154,
     owner: 'K0.1',
     note:
-      'Reads 0.16% over the closed-form INTENT because the FILE is 0.181% ' +
+      'Reads 0.17% over the closed-form INTENT because the FILE is 0.181% ' +
       'over it: the corner bands are non-rational quadratic B-splines ' +
       '(parabolas), and the file content is exactly 9540.0 mm³. Remus is ' +
-      'FAITHFUL to the file (converges on 9540.0 as deflection shrinks; ' +
-      'the residue vs 9540 is the ordinary inscribed-mesh undercount). ' +
+      'FAITHFUL to the file, and the B20 exact-measurement pin (2.130.23, ' +
+      'remus #457) brought the read from 9537.866 to 9539.116 — the ' +
+      'residue vs 9540 is the ordinary inscribed undercount, now smaller. ' +
       'Resolved by remus PR #62; the pin stays because the corpus compares ' +
       'against the design intent, which no honest reader of this file can ' +
       'hit. A fix that merely agreed with OCCT would aim at a number that ' +
