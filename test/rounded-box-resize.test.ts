@@ -1,3 +1,4 @@
+import { boxPreviewProfile } from '../apps/web/src/lib/interaction/boxPreviewProfile';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import {
   addPrimitiveFeature,
@@ -106,6 +107,38 @@ describe('rounded box body resizing', { timeout: 120000 }, () => {
     adapter = await createExactKernelAdapter();
   }, 60000);
   afterAll(() => adapter.dispose());
+
+  it('recognizes the straight span between end fillets on all six sides', async () => {
+    const { body } = await roundedBox();
+    for (const axis of ['x', 'y', 'z'] as const) {
+      for (const sign of [-1, 1]) {
+        const direction = { x: 0, y: 0, z: 0, [axis]: sign };
+        const profile = boxPreviewProfile(body, direction);
+        expect(profile, `${axis} ${sign}`).not.toBeNull();
+        const start =
+          sign > 0 ? body.bbox.min[axis] + 1.5 : body.bbox.max[axis] - 1.5;
+        const end =
+          sign > 0 ? body.bbox.max[axis] - 1.5 : body.bbox.min[axis] + 1.5;
+        expect(profile!.axisStart[axis]).toBeCloseTo(start, 4);
+        expect(profile!.axisEnd[axis]).toBeCloseTo(end, 4);
+      }
+    }
+    expect(boxPreviewProfile(body, { x: 1, y: 1, z: 0 })).toBeNull();
+    expect(boxPreviewProfile(body, { x: NaN, y: 0, z: 0 })).toBeNull();
+    const extraFace = {
+      ...body,
+      topology: {
+        ...body.topology!,
+        faces: [
+          ...body.topology!.faces,
+          body.topology!.faces.find(
+            (face) => face.geometry?.surfaceType === 'plane'
+          )!
+        ]
+      }
+    };
+    expect(boxPreviewProfile(extraFace, { x: 1, y: 0, z: 0 })).toBeNull();
+  });
 
   for (const kind of ['fillet', 'chamfer'] as const)
     for (const axis of ['x', 'y', 'z'] as const)
