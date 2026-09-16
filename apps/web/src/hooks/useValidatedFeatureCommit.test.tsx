@@ -571,6 +571,22 @@ function importCommand(name: string, artifactId: string) {
   };
 }
 
+function importMeshCommand(name: string, artifactId: string) {
+  const ids = createBodyFeatureIds();
+  return {
+    ids,
+    command: commandFactories.importMesh({
+      name,
+      artifactId,
+      sourceName: `${name}.stl`,
+      triangleCount: 2,
+      vertices: [0, 0, 0, 20, 0, 0, 0, 20, 0, 0, 20, 0, 20, 20, 0, 20, 0, 0],
+      indices: [0, 1, 2, 3, 4, 5],
+      ids
+    })
+  };
+}
+
 /**
  * The commit lock decides which run owns document history, and both of its
  * edges had a defect: refusing a run said nothing at all, and an import held
@@ -967,6 +983,138 @@ describe('the validated commit lock', () => {
     expect(outcome).toBe('rejected');
     expect(commit).not.toHaveBeenCalled();
     expect(listFeaturesInOrder(other.document)).toHaveLength(0);
+  });
+
+  it('refuses to land a mesh import in a project that was opened meanwhile', async () => {
+    // The STL arm of the importer (`App.tsx handleImportFile`) commits an
+    // `importMesh` command through this same hook — lock, progress card,
+    // cancel, finalize permission recheck — after switching projects
+    // mid-upload. The e2e `an STL import that outlives its project` spec pins
+    // the app half of this (no feature row, no body in the next project);
+    // this pins the hook half directly: a mesh candidate validated against
+    // the origin project must not commit into whichever project is open when
+    // its archive settles. `revalidateOnDocumentMove` stays false here on
+    // purpose: rebuilding the candidate against the new project is exactly
+    // what must not happen.
+    const manager = new CommandManager(
+      createProjectDocument('Import Origin', toUserId('user_mesh_switch'))
+    );
+    const other = new CommandManager(
+      createProjectDocument('Somewhere Else', toUserId('user_mesh_switch'))
+    );
+    let live = manager;
+    const upload = deferred<void>();
+    const imported = importMeshCommand(
+      'simple-block.stl',
+      'artifact_local_preflight'
+    );
+    const commit = vi.fn(() => true);
+    const onBusy: Array<boolean> = [];
+    const { result } = renderHook(() =>
+      useValidatedFeatureCommit({
+        manager: () => live,
+        derive: async (candidate: ProjectDocument) =>
+          derivedWith(imported.ids.bodyId, candidate),
+        commit,
+        commitTransaction: () => true,
+        onBusy: (next) => onBusy.push(next),
+        onStatus: vi.fn()
+      })
+    );
+
+    let outcome: ValidatedFeatureOutcome | undefined;
+    await act(async () => {
+      const importing = result.current
+        .run(imported.command, {
+          featureName: 'simple-block.stl',
+          resultBodyId: imported.ids.bodyId,
+          revalidateOnDocumentMove: false,
+          finalize: async () => {
+            await upload.promise;
+            return imported.command;
+          },
+          successMessage: () => 'imported'
+        })
+        .then((value) => {
+          outcome = value;
+        });
+      await flush();
+      // Leave for a different project while the upload is still in flight.
+      live = other;
+      upload.settle();
+      await importing;
+    });
+
+    expect(outcome).toBe('rejected');
+    expect(commit).not.toHaveBeenCalled();
+    expect(listFeaturesInOrder(manager.document)).toHaveLength(0);
+    expect(listFeaturesInOrder(other.document)).toHaveLength(0);
+    // The lock still serialised the run — the refusal is a project guard,
+    // not a lock that was never taken — so busy opened and closed around it.
+    expect(onBusy).toEqual([true, true, false]);
+  });
+
+  it('a cancelled mesh import commits nothing and reports the cancel', async () => {
+    // The card's Cancel for an STL run aborts the same signal the rebuild and
+    // the archive share. The e2e archive spec pins the app half (no File-menu
+    // record lands in the next project); this pins the hook half: a cancel
+    // racing the archive still ends as `cancelled`, never as a commit, and
+    // the lock comes back for whatever runs next.
+    const manager = new CommandManager(
+      createProjectDocument('Import Origin', toUserId('user_mesh_cancel'))
+    );
+    const upload = deferred<void>();
+    const imported = importMeshCommand(
+      'simple-block.stl',
+      'artifact_local_preflight'
+    );
+    const commit = vi.fn(() => true);
+    const { result } = renderHook(() =>
+      useValidatedFeatureCommit({
+        manager: () => manager,
+        derive: async (candidate: ProjectDocument) =>
+          derivedWith(imported.ids.bodyId, candidate),
+        commit,
+        commitTransaction: () => true,
+        onBusy: vi.fn(),
+        onStatus: vi.fn()
+      })
+    );
+    const abort = new AbortController();
+
+    let outcome: ValidatedFeatureOutcome | undefined;
+    await act(async () => {
+      const importing = result.current
+        .run(imported.command, {
+          featureName: 'simple-block.stl',
+          resultBodyId: imported.ids.bodyId,
+          revalidateOnDocumentMove: false,
+          cancelled: () => abort.signal.aborted,
+          signal: abort.signal,
+          finalize: async () => {
+            await upload.promise;
+            if (abort.signal.aborted) {
+              throw new DOMException('The import was cancelled.', 'AbortError');
+            }
+            return imported.command;
+          },
+          successMessage: () => 'imported'
+        })
+        .then((value) => {
+          outcome = value;
+        });
+      await flush();
+      abort.abort();
+      upload.settle();
+      await importing;
+    });
+
+    expect(outcome).toBe('cancelled');
+    expect(commit).not.toHaveBeenCalled();
+    expect(listFeaturesInOrder(manager.document)).toHaveLength(0);
+    const afterwards = result.current.reserve();
+    expect(afterwards).not.toBeNull();
+    afterwards?.release();
   });
 });
 
