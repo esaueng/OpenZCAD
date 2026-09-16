@@ -13,11 +13,18 @@ carries the existing endpoint certificate through the rigid transform within
 the bounded roundoff allowance. It does not bypass the export validator or
 permit meaningful geometric gaps.
 
-OpenZCAD consumes that fix on the mainline kernel pin (`49567b02`,
-v2.130.23, the remus#474 squash merge). An earlier backport of the same
-patch to the previous baseline (remus#480) was superseded when the mainline
-pin landed with the measurement and partial-revolve adaptations that came
-with it.
+OpenZCAD pins `325c5bc3`, the remus#474 head build (v2.130.22-era
+packages). The fix's squash merge on remus main (`49567b02`, v2.130.23)
+ships packages built with simd128 enabled by default, and the 4-lane
+homogeneous contraction from remus#470 rounds the transform path
+differently enough that the carried certificate undershoots again — the
+real project and the synthetic fixture below both fail there with the
+identical residual excess the patch fixes on scalar builds
+([remus#483](https://github.com/esaueng/remus/issues/483)). The pin moves
+to a fixed mainline build once remus#483 is resolved. The remus#480
+backport to the previous baseline also fixes the case but was superseded:
+this pin keeps the newer kernel line and its adapted measurement,
+partial-revolve and parity characterizations.
 
 `test/saved-project-export.test.ts` includes an always-on synthetic cylinder
 whose tolerance lies at this numerical boundary. It fails on the previous
