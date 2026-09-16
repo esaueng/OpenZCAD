@@ -9,23 +9,24 @@
  * comments, because the two claims that mattered most both turned out to be
  * wrong in this file's first run.
  *
- * The results, all measured below:
+ * The results, all measured below (pin 2.130.23, which includes Remus
+ * #457's B20 exact-measurement completion):
  *
  *   box face area              rel = 0            EXACT
- *   cylinder lateral area      rel = 0            EXACT   (closed form)
- *   sphere area                rel = 0            EXACT   (closed form)
+ *   cylinder lateral area      rel ~ -2.1e-13     EXACT   (Gauss quadrature)
+ *   sphere area                rel ~ -2.9e-15     EXACT   (Gauss quadrature)
  *   cylinder PLANAR cap area   rel = 0            EXACT   (Green's theorem)
- *   ellipse cap area           rel = -1.004e-4    SAMPLED <- the fallback
+ *   ellipse cap area           rel ~ 2e-15        EXACT   (Green's theorem)
  *   any facePerimeter          rel = 0            EXACT
  *
- * A planar face whose boundary is made of lines, circles or parabolas
- * integrates exactly by Green's theorem over the boundary. The sampled class
- * that remains is the boundary the exact integrator does not cover —
- * ellipse, hyperbola, NURBS — inscribed with a fixed 256-point polygon, so
- * it reads LOW. The error is invariant under both scale and deflection,
- * which is what identifies it as a fixed sample count rather than a
- * tessellation artifact — see the inscribed-polygon test below, which
- * recovers the sample count from the error itself.
+ * A planar face whose boundary is made of lines, circles, ellipses,
+ * parabolas, hyperbolas or recognized-as-such NURBS integrates exactly by
+ * Green's theorem over the boundary — before B20 the ellipse fell back to
+ * an inscribed 256-point polygon and read LOW by 1.004e-4, and the analytic
+ * curved faces returned bit-exact closed forms where they now integrate
+ * exact Gauss quadrature at ~1e-13. The sampled class that remains is the
+ * boundary the exact integrator does not cover — general unrecognized
+ * NURBS. The exact paths are invariant under both scale and deflection.
  *
  * This matters beyond a label. `MEASUREMENT_DEFLECTION` is the knob a caller
  * would reach for to buy accuracy, and on this class of face it buys nothing.
@@ -59,9 +60,9 @@ function relativeError(value: number, exact: number): number {
 
 /**
  * Semi-axes 10·scale by 20·scale, so the exact area is 200*pi*scale^2. The
- * elliptic cylinder is the one readily built boundary class the kernel's
- * exact planar integrator does not cover, which keeps the sampled fallback
- * measurable.
+ * elliptic cylinder is the one readily built non-circular boundary class,
+ * and since B20 the kernel's exact planar integrator covers it — before
+ * that it was the measurable case of the sampled fallback.
  */
 const ELLIPTIC_CAP_AREA = 200 * Math.PI;
 
@@ -92,19 +93,26 @@ describe('face area provenance', () => {
     const wall = facesOf(cylinder).find(
       (face) => useKernel().getSurfaceType(face) === 'cylinder'
     )!;
+    // B20 routes analytic curved faces through exact Gauss quadrature
+    // instead of the closed forms, so the result is deflection-independent
+    // but no longer bit-exact: measured -2.1e-13 relative on this wall.
     expect(
-      relativeError(
-        useKernel().faceArea(wall, MEASUREMENT_DEFLECTION),
-        2 * Math.PI * 10 * 20
+      Math.abs(
+        relativeError(
+          useKernel().faceArea(wall, MEASUREMENT_DEFLECTION),
+          2 * Math.PI * 10 * 20
+        )
       )
-    ).toBe(0);
+    ).toBeLessThan(1e-12);
 
     const sphere = useKernel().makeSphere(10, 64);
     const sphereArea = facesOf(sphere).reduce(
       (sum, face) => sum + useKernel().faceArea(face, MEASUREMENT_DEFLECTION),
       0
     );
-    expect(relativeError(sphereArea, 4 * Math.PI * 100)).toBe(0);
+    expect(
+      Math.abs(relativeError(sphereArea, 4 * Math.PI * 100))
+    ).toBeLessThan(1e-12);
   });
 
   it('is EXACT for a planar face bounded by a circle', () => {
@@ -122,23 +130,24 @@ describe('face area provenance', () => {
     expect(Math.abs(error)).toBeLessThan(1e-12);
   }, 120_000);
 
-  it('is SAMPLED for a planar face bounded by an ellipse, and reads low', () => {
+  it('is EXACT for a planar face bounded by an ellipse', () => {
+    // B20 promoted the ellipse from the sampled fallback (which read low by
+    // 1.004e-4) to the exact Green-theorem path; measured ~2e-15 relative,
+    // the f64 rounding floor.
     const error = relativeError(
       useKernel().faceArea(ellipticCap(1), MEASUREMENT_DEFLECTION),
       ELLIPTIC_CAP_AREA
     );
 
-    // Inscribed, so under-reported, by ~100 parts per million. That is
-    // visible at four decimal places on a 100 mm-scale disc.
-    expect(error).toBeLessThan(0);
-    expect(error).toBeCloseTo(-1.004e-4, 7);
+    expect(Math.abs(error)).toBeLessThan(1e-12);
   }, 120_000);
 
-  it('samples that boundary a FIXED number of times — deflection buys nothing', () => {
+  it('is deflection-independent — the knob buys nothing on this class', () => {
     const cap = ellipticCap(1);
 
     // A 500x range of deflection, including one far finer than the app ever
-    // asks for. If this were tessellation-bound the error would collapse.
+    // asks for. The exact integrator ignores deflection entirely — before
+    // B20 this same identity pinned the fixed 256-point sampling instead.
     const errors = [0.5, MEASUREMENT_DEFLECTION, 0.001].map((deflection) =>
       relativeError(useKernel().faceArea(cap, deflection), ELLIPTIC_CAP_AREA)
     );
@@ -146,9 +155,10 @@ describe('face area provenance', () => {
     expect(errors[2]).toBe(errors[0]);
   }, 120_000);
 
-  it('is scale-invariant, and the error recovers a 256-point boundary', () => {
-    // Same relative error across four orders of magnitude of size: the
-    // count is fixed, not chosen from the geometry.
+  it('is scale-invariant and exact across four orders of magnitude', () => {
+    // Exact Green-theorem integration keeps the relative error at the f64
+    // floor from 1x to 1000x: measured 1.7e-15 to 2.1e-15, where the sampled
+    // fallback pinned a scale-invariant -1.004e-4 instead.
     const errors = [1, 10, 100, 1000].map((scale) =>
       relativeError(
         useKernel().faceArea(ellipticCap(scale), MEASUREMENT_DEFLECTION),
@@ -157,19 +167,8 @@ describe('face area provenance', () => {
     );
     for (const error of errors) {
       expect(error).toBeCloseTo(errors[0]!, 12);
+      expect(Math.abs(error)).toBeLessThan(1e-12);
     }
-
-    // A regular n-gon inscribed in an ellipse (uniform in the eccentric
-    // anomaly) keeps area ratio n*sin(2*pi/n)/(2*pi), exactly as for a
-    // circle. Solving that against the measured error names the sample
-    // count outright, which is the difference between "some approximation"
-    // and a number a reader can reason about.
-    const ratioFor = (n: number) =>
-      (n * Math.sin((2 * Math.PI) / n)) / (2 * Math.PI);
-    expect(ratioFor(256) - 1).toBeCloseTo(errors[0]!, 9);
-    // Neighbouring counts do not fit, so 256 is identified rather than fitted.
-    expect(ratioFor(128) - 1).not.toBeCloseTo(errors[0]!, 9);
-    expect(ratioFor(512) - 1).not.toBeCloseTo(errors[0]!, 9);
   }, 120_000);
 });
 
