@@ -1,3 +1,4 @@
+import { boxPreviewProfile } from './lib/interaction/boxPreviewProfile';
 import {
   parameterMinimums,
   parameterInputError,
@@ -12538,7 +12539,24 @@ export function App() {
       )
         ? cylinderPreviewProfile(representations[target.bodyId as BodyId])
         : null;
+    const boxProfile =
+      doc &&
+      !target.localFaceOffset &&
+      target.hash !== undefined &&
+      primitiveBoxFaceAncestor(
+        doc,
+        target.bodyId as BodyId,
+        target.reference,
+        target.hash
+      )
+        ? boxPreviewProfile(representations[target.bodyId as BodyId], {
+            x: target.normal[0],
+            y: target.normal[1],
+            z: target.normal[2]
+          })
+        : null;
     return {
+      ...(boxProfile ? { linearProfilePreview: boxProfile } : {}),
       ...(profile ? { profilePreview: profile } : {}),
       bodyId: target.bodyId,
       topologyId: target.topologyId,
