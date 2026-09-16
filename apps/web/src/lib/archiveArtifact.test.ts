@@ -161,4 +161,63 @@ describe('archiving an artifact for an import that is cancelled', () => {
       expect.objectContaining({ artifactId: 'art_one' })
     );
   });
+
+  it('reports a finished archive to the project that started it', async () => {
+    // The second e2e modeling case: an STL archive that outlives its project
+    // must not prepend its record into whichever project's File menu is now
+    // showing. The transport-level guard lives in `App.tsx archiveArtifact`,
+    // which drops the callback when the open project moved on — this pins the
+    // contract that callback implements: it fires for the owning project and
+    // stays silent for any other.
+    const owner = toProjectId('proj_import_origin');
+    const seen: string[] = [];
+    const onArtifactStored = (artifact: ArtifactRecord) => {
+      // Mirrors `App.tsx`: the artifacts list is keyed to the OPEN project.
+      if (artifact.projectId !== owner) {
+        return;
+      }
+      seen.push(artifact.artifactId);
+    };
+
+    const stored = record();
+    expect(stored.projectId).toBe(PROJECT);
+    const owned = { ...stored, projectId: owner };
+    const ownedTransport = transport({
+      getArtifactMetadata: vi.fn(() => Promise.resolve({ artifact: owned }))
+    });
+    await archiveArtifact(
+      ownedTransport.api,
+      owner,
+      {
+        fileName: 'simple-block.stl',
+        contentType: 'model/stl',
+        kind: 'stl-import',
+        body: new Blob(['solid'])
+      },
+      onArtifactStored
+    );
+    expect(seen).toEqual(['art_one']);
+
+    // The same archive settling after a project switch: the record belongs to
+    // the origin project, so the callback for the newly opened one drops it.
+    const switchedOwner = toProjectId('proj_somewhere_else');
+    const seenAfterSwitch: string[] = [];
+    await archiveArtifact(
+      ownedTransport.api,
+      owner,
+      {
+        fileName: 'simple-block.stl',
+        contentType: 'model/stl',
+        kind: 'stl-import',
+        body: new Blob(['solid'])
+      },
+      (artifact) => {
+        if (artifact.projectId !== switchedOwner) {
+          return;
+        }
+        seenAfterSwitch.push(artifact.artifactId);
+      }
+    );
+    expect(seenAfterSwitch).toEqual([]);
+  });
 });
