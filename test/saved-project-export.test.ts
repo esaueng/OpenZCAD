@@ -33,6 +33,24 @@ import { measureThreeMfExport } from './support/three-mf-export';
 const copyPath = process.env.OPENZCAD_EXPORT_PROJECT_COPY;
 const hasFixture = !!copyPath;
 
+type FixturePoint = [number, number, number];
+interface CylinderArena {
+  vertices: { point: FixturePoint }[];
+  edges: {
+    start: number;
+    trim: [number, number];
+    tolerance: number | null;
+    curve: {
+      Circle: {
+        center: FixturePoint;
+        u_axis: FixturePoint;
+        v_axis: FixturePoint;
+        radius: number;
+      };
+    };
+  }[];
+}
+
 // A public, synthetic cylinder isolates the same numerical boundary without
 // including a user's model. A STEP reader can stamp an edge's tolerance at
 // its measured endpoint residual; rotating it must preserve that certificate.
@@ -42,20 +60,20 @@ function cylinderAtEndpointTolerance(kernel: RemusKernel): number {
     new TextDecoder().decode(
       kernel.serializeSolids(new Uint32Array([original]))
     )
-  );
-  const edge = arena.edges[0];
+  ) as CylinderArena;
+  const edge = arena.edges[0]!;
   const circle = edge.curve.Circle;
-  const point = arena.vertices[edge.start].point as number[];
+  const point = arena.vertices[edge.start]!.point;
   point[1] = 0.00004;
   const residual = Math.max(
     ...edge.trim.map((t: number) =>
       Math.hypot(
         ...point.map(
           (value, i) =>
-            circle.center[i] +
+            circle.center[i]! +
             circle.radius *
-              (circle.u_axis[i] * Math.cos(t) +
-                circle.v_axis[i] * Math.sin(t)) -
+              (circle.u_axis[i]! * Math.cos(t) +
+                circle.v_axis[i]! * Math.sin(t)) -
             value
         )
       )
@@ -65,7 +83,7 @@ function cylinderAtEndpointTolerance(kernel: RemusKernel): number {
   // fixture; the old rotation drifts farther and still fails the strict gate.
   const stamp = new Float64Array([residual]);
   new BigUint64Array(stamp.buffer)[0]! += 1n;
-  edge.tolerance = stamp[0];
+  edge.tolerance = stamp[0]!;
   return kernel.deserializeSolids(
     new TextEncoder().encode(JSON.stringify(arena))
   )[0]!;
@@ -106,8 +124,10 @@ describe('rigid transform mesh exports', () => {
       ).toBeLessThan(0.02);
 
       // Real geometric gaps must still be refused by both file writers.
-      const invalid = JSON.parse(new TextDecoder().decode(arena));
-      invalid.vertices[0].point[0] += 0.01;
+      const invalid = JSON.parse(
+        new TextDecoder().decode(arena)
+      ) as CylinderArena;
+      invalid.vertices[0]!.point[0] += 0.01;
       const invalidBytes = new TextEncoder().encode(JSON.stringify(invalid));
       expect(() => io.exportStl(invalidBytes, 0.1)).toThrow(
         'exceeds effective tolerance'
