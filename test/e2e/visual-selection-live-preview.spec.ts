@@ -129,7 +129,7 @@ async function armChamferedTopCapOffset(page: Page) {
   return { canvas, chip, readAxisLength, handle, start, consoleErrors };
 }
 
-test('replaces the whole body immediately while the exact offset rebuild is pending', async ({
+test('keeps generic face geometry unchanged while the exact offset rebuild is pending', async ({
   page
 }) => {
   test.setTimeout(120_000);
@@ -166,13 +166,13 @@ test('replaces the whole body immediately while the exact offset rebuild is pend
     start.y + handle.dy * handle.pixelsPerUnit * 4,
     { steps: 1 }
   );
-  await expect(canvas).toHaveAttribute('data-e2e-height-proxy-offset', '4');
-  const preview = await renderedWorldBounds(page);
-  expect(preview.min[2]).toBeCloseTo(before.min[2]!, 4);
-  expect(preview.max[2]).toBeCloseTo(before.max[2]! + 4, 4);
+  // An unqualified local face edit must not scale the entire body while
+  // waiting: that moves unrelated geometry and disagrees with the kernel.
+  await expect(canvas).not.toHaveAttribute('data-e2e-height-proxy-offset');
+  expect(await renderedWorldBounds(page)).toEqual(before);
   await expect(
     page.getByText('Preview · exact on release', { exact: true })
-  ).toBeVisible();
+  ).not.toBeVisible();
 
   await page.keyboard.press('Escape');
   await page.mouse.up();
