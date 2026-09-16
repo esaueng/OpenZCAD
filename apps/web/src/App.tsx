@@ -1820,6 +1820,25 @@ export function App() {
   }, []);
   const [busy, setBusy] = useState(false);
   /**
+   * The validated-commit lock's presentation. A long import holds the lock
+   * across parse, rebuild and archive — and the lock must stay held, because
+   * it is the one thing that serialises validate → commit. But the project
+   * shelf cannot read the lock directly: an in-progress import still owns it
+   * while the user walks Home, and a shelf disabled by it strands the switch
+   * the import then has to refuse at commit. This tracks the same lock for
+   * the editor surfaces that must wait for it, while the shelf stays live.
+   *
+   * The project shelf while an exact run holds the lock is always live: the
+   * shelf navigates between projects, and a switch mid-import is answered by
+   * the run's own project re-check at commit — never by disabling the way
+   * out. (The lock's `busy` still gates the editor surfaces above.)
+   */
+  const [geometryBusy, setGeometryBusy] = useState(false);
+  const handleValidatedBusy = useCallback((next: boolean) => {
+    setBusy(next);
+    setGeometryBusy(next);
+  }, []);
+  /**
    * The import the progress card is reporting, or null for none. The card
    * owns its own clock, so this only changes on a phase step or an ending —
    * not on every tick.
@@ -2855,7 +2874,7 @@ export function App() {
     commit: (command, derived) => executeCommand(command, derived ?? undefined),
     commitTransaction: (label, commands, derived) =>
       executeTransaction(label, commands, derived ?? undefined),
-    onBusy: setBusy,
+    onBusy: handleValidatedBusy,
     onStatus: setStatus,
     onFailure: setFeatureFormError,
     onRejection: recordHistoryFailure
@@ -2934,7 +2953,7 @@ export function App() {
     kind: 'fillet' | 'chamfer',
     value: EdgeModifierFormValue | null
   ) {
-    if (!value || busy) {
+    if (!value || geometryBusy) {
       edgeFormPreview.clear();
       setEdgeFormSize(null);
       return;
@@ -2965,7 +2984,7 @@ export function App() {
   ) {
     edgeFormPreview.clear();
     setFeatureFormError(null);
-    if (!value || busy || !feature.bodyId || !managerRef.current) return;
+    if (!value || geometryBusy || !feature.bodyId || !managerRef.current) return;
     try {
       const command = extrudeEditCommand(feature, value);
       command.validate(managerRef.current.document);
@@ -2985,7 +3004,7 @@ export function App() {
   }
 
   function applyExtrudeForm(feature: FeatureNode, value: ExtrudeFormValue) {
-    if (busy || !feature.bodyId || !doc) return;
+    if (geometryBusy || !feature.bodyId || !doc) return;
     edgeFormPreview.clear();
     const request = ++extrudeEditRequest.current;
     void executeValidatedFeature(extrudeEditCommand(feature, value), {
@@ -3006,7 +3025,7 @@ export function App() {
     kind: 'fillet' | 'chamfer',
     value: EdgeModifierFormValue
   ) {
-    if (busy) return;
+    if (geometryBusy) return;
     const command = edgeModifierCommand(feature, kind, value);
     const bodyId =
       feature?.bodyId ??
@@ -8806,10 +8825,11 @@ export function App() {
     if (!managerRef.current || !doc || !ensureCanEdit('import geometry')) {
       return;
     }
-    // The manager this import belongs to, by identity rather than by project
-    // id: reopening the same project replaces the manager too, and a mesh
-    // built against the document that was on screen does not belong in the
-    // one that replaced it.
+    // The manager the kernel-read mesh path below belongs to, by identity
+    // rather than by project id: reopening the same project replaces the
+    // manager too, and a mesh built against the document that was on screen
+    // does not belong in the one that replaced it. (The STL arm no longer
+    // needs it — its validated-feature run re-checks the project at commit.)
     const importManager = managerRef.current;
     const contentType = file.type || inferContentType(file.name);
     const lowerName = file.name.toLowerCase();
@@ -8833,29 +8853,166 @@ export function App() {
         setStatus(`STL import is limited to ${MAX_SOURCE_IMPORT_MB} MB.`);
         return;
       }
-      let parsed;
+      // STL through the same validated-feature job as STEP — commit lock,
+      // progress card, cancel signal, finalize permission recheck — minus the
+      // source-blob store (triangles embed in the feature; the original
+      // upload archives like any mesh import). Without the lock a second drop
+      // mid-parse lands a duplicate mesh, and without the signal Cancel cannot
+      // reach the read it is supposed to stop.
+      //
+      // The lock also drives the editor's busy state — and deliberately NOT
+      // the project shelf's. `geometryBusy` gates the forms that must wait
+      // for the run; the shelf stays live throughout, and a switch mid-run is
+      // answered by the run's own project re-check at commit. Holding shelf
+      // availability on the lock stranded the switch the e2e
+      // outlive-its-project specs perform (PR #349 R-C2).
+      const abort = startImportAbort();
+      const progress = createImportProgressSink();
+      progress.start({
+        fileName: file.name,
+        phases: ['reading', 'building', 'archiving']
+      });
       try {
+        if (abort.signal.aborted) {
+          progress.finish({ tone: 'cancelled', message: 'nothing was added' });
+          setStatus(`${file.name} was not imported: you cancelled it.`);
+          return;
+        }
+        progress.update({ phase: 'reading', fraction: null });
         const [{ parseStl }, contents] = await Promise.all([
           import('@openzcad/io-stl'),
           file.arrayBuffer()
         ]);
-        parsed = parseStl(contents, file.name);
-      } catch (error) {
-        setStatus(errorMessage(error, 'STL import failed.'));
-        return;
-      }
-      await commitImportedMesh({
-        file,
-        contentType,
-        artifactKind: 'stl-import',
-        importManager,
-        mesh: {
+        if (abort.signal.aborted) {
+          // Cancelled during the read, before any lock was taken: finish the
+          // abort handle here so navigation never sees a run that no longer
+          // exists. (Later exits go through the run's own finally.)
+          progress.finish({ tone: 'cancelled', message: 'nothing was added' });
+          setStatus(`${file.name} was not imported: you cancelled it.`);
+          finishImportAbort(abort);
+          return;
+        }
+        // Taken only around the validated run itself — never across the read.
+        // The run's own busy check still refuses a concurrent second drop,
+        // and the shelf stays navigable for the switch the run then refuses
+        // or cancels at commit.
+        const reservation = validatedFeature.reserve();
+        if (!reservation) {
+          const message =
+            'Another exact operation is still finishing. Try again once it completes.';
+          progress.finish({ tone: 'warning', message });
+          setStatus(message);
+          setFeatureFormError(message);
+          return;
+        }
+        let parsed;
+        try {
+          parsed = parseStl(contents, file.name);
+        } catch (error) {
+          const message = errorMessage(error, 'STL import failed.');
+          progress.finish({ tone: 'error', message });
+          setStatus(message);
+          return;
+        } finally {
+          // Parse-only failures release here; the run below adopts the
+          // reservation and releases it when it settles.
+          if (parsed === undefined) {
+            reservation.release();
+          }
+        }
+        progress.update({ phase: 'building', fraction: null });
+        const { createBodyFeatureIds } = await import(
+          '@openzcad/document-core'
+        );
+        const previewIds = createBodyFeatureIds();
+        const previewCommand = commandFactories.importMesh({
           name: parsed.name,
+          artifactId: `artifact_local_${crypto.randomUUID()}`,
+          sourceName: parsed.name,
           triangleCount: parsed.triangleCount,
           vertices: parsed.vertices,
-          indices: parsed.indices
+          indices: parsed.indices,
+          ids: previewIds
+        });
+        try {
+          const outcome = await validatedFeature.run(previewCommand, {
+            featureName: parsed.name,
+            resultBodyId: previewIds.bodyId,
+            reservation,
+            cancelled: () => abort.signal.aborted,
+            signal: abort.signal,
+            validatingMessage: `Checking ${file.name} against exact geometry…`,
+            successMessage: () =>
+              `Imported ${parsed.triangleCount} triangles from ${file.name}.`,
+            // No revalidation: an import appends a feature to a project, and a
+            // project switch mid-rebuild must refuse (or cancel), not rebuild
+            // the candidate against a document it was never meant for. The
+            // hook still re-checks the project at commit, and drops a stale
+            // derived rather than blanking whatever else landed meanwhile.
+            revalidateOnDocumentMove: false,
+            finalize: async () => {
+              const blockedReason = editDisabledReasonRef.current;
+              if (blockedReason) {
+                throw new Error(`Cannot import geometry: ${blockedReason}.`);
+              }
+              progress.update({ phase: 'archiving', fraction: 0 });
+              let artifactId = `artifact_local_${crypto.randomUUID()}`;
+              try {
+                artifactId = await archiveArtifact({
+                  fileName: file.name,
+                  contentType,
+                  kind: 'stl-import',
+                  body: file,
+                  metadata: { source: 'direct-upload' },
+                  signal: abort.signal
+                });
+              } catch (error) {
+                // A cancelled archive is the user withdrawing, not a storage
+                // failure: rethrow so the run ends cancelled and nothing
+                // commits, instead of landing local-only.
+                if (
+                  error instanceof Error &&
+                  (error.name === 'AbortError' || abort.signal.aborted)
+                ) {
+                  throw error;
+                }
+                // Local-only: the mesh itself lives in the document.
+              }
+              if (abort.signal.aborted) {
+                throw new DOMException(
+                  'The import was cancelled.',
+                  'AbortError'
+                );
+              }
+              return commandFactories.importMesh({
+                name: parsed.name,
+                artifactId,
+                sourceName: parsed.name,
+                triangleCount: parsed.triangleCount,
+                vertices: parsed.vertices,
+                indices: parsed.indices,
+                ids: previewIds
+              });
+            }
+          });
+          if (outcome === 'cancelled') {
+            progress.finish({
+              tone: 'cancelled',
+              message: 'nothing was added'
+            });
+            setStatus(`${file.name} was not imported: you cancelled it.`);
+          } else if (outcome === 'busy') {
+            progress.finish({
+              tone: 'warning',
+              message: 'another exact operation was still running'
+            });
+          }
+        } finally {
+          reservation.release();
         }
-      });
+      } finally {
+        finishImportAbort(abort);
+      }
       return;
     }
 
@@ -10866,7 +11023,7 @@ export function App() {
       !current.session.sketchId ||
       !current.session.selectedObjectId ||
       sketchSolving ||
-      busy
+      geometryBusy
     )
       return;
     const sketchId = current.session.sketchId as SketchId;
@@ -14959,7 +15116,11 @@ export function App() {
           onImportProject={(file) => void handleImportProject(file)}
           projects={projects}
           status={status}
-          busy={busy}
+          // The shelf navigates between projects, and a validated import
+          // answers a mid-run switch at commit — so it never reads the
+          // import lock's busy state. Passing `busy` here is what stranded
+          // the shelf disabled behind an in-progress import.
+          busy={false}
           demos={START_SCREEN_DEMOS}
           defaultUnits={appSettings.general.defaultUnits}
           onCreate={(name, units) => void handleCreateProject(name, units)}
@@ -15689,7 +15850,7 @@ export function App() {
             analysisError={sketchOverview.error}
             geometrySnaps={appSettings.sketching.geometrySnapEnabled}
             gridSnaps={appSettings.sketching.snapEnabled}
-            busy={sketchSolving || busy}
+            busy={sketchSolving || geometryBusy}
             error={
               interaction.session.selectedObjectId ? null : sketchEditError
             }
@@ -16428,7 +16589,7 @@ export function App() {
                                 : [];
                             })}
                             disabled={
-                              busy || interaction.phase === 'validating'
+                              geometryBusy || interaction.phase === 'validating'
                             }
                             submitLabel="Create"
                             distanceSetterRef={regionDistanceSetter}
@@ -16507,7 +16668,7 @@ export function App() {
                   {interaction.mode === 'sketch' && selectedSketchEntity && (
                     <SketchEntityEditor
                       key={`${selectedSketchEntity.id}:${doc.version}`}
-                      disabled={sketchSolving || busy}
+                      disabled={sketchSolving || geometryBusy}
                       error={sketchEditError}
                       data={selectedSketchEntity.data}
                       scope={parameterScope.scope}
@@ -17172,7 +17333,7 @@ export function App() {
                     );
                   }
                 }}
-                extrudeBusy={busy}
+                extrudeBusy={geometryBusy}
                 onApplyExtrude={applyExtrudeForm}
                 onPreviewExtrude={previewExtrudeForm}
                 extrudeTargets={availableExtrudeTargets}
