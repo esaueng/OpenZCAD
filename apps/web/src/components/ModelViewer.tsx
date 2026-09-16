@@ -66,10 +66,8 @@ import {
   createCylinderProfilePreview,
   createLinearProfilePreview,
   type LinearPreviewProfile,
-  createOffsetBodyPreview,
   type CylinderPreviewProfile,
   type CylinderProfilePreview,
-  type OffsetBodyPreview,
   faceTrianglesCentroid,
   createBodyEdgeOverlay,
   createAnalyticCylinderGhost,
@@ -2199,10 +2197,7 @@ export function ModelViewer({
     profilePreviewBadge.style.top = '100px';
     profilePreviewBadge.style.transform = 'translateX(-50%)';
     let offsetBodyProxy: {
-      preview: CylinderProfilePreview | OffsetBodyPreview;
-      baseline: number;
-      /** Profile-aware previews are exact enough to defer the worker until release. */
-      exactOnRelease: boolean;
+      preview: CylinderProfilePreview;
       pending: number | null;
       requestedAt: number;
     } | null = null;
@@ -2222,12 +2217,7 @@ export function ModelViewer({
       const target = offsetHandleRef.current;
       const profile = target?.profilePreview;
       const object = target && context.objectsByBodyId.get(target.bodyId);
-      const body = target
-        ? bodiesRef.current.find(
-            (candidate) => candidate.bodyId === target.bodyId
-          )
-        : null;
-      if (!target || !object || !body) return false;
+      if (!target || !object) return false;
       const linearProfile = target.linearProfilePreview;
       const preview = linearProfile
         ? createLinearProfilePreview(object, linearProfile)
@@ -2246,12 +2236,15 @@ export function ModelViewer({
                     };
               return createCylinderProfilePreview(object, oriented, 'height');
             })()
-          : createOffsetBodyPreview(object, body.mesh.vertices, target.normal);
+          : null;
+      // Generic offsets edit one face (or one constituent of an imported
+      // compound), not the whole body's extent. An affine body stretch moves
+      // unrelated geometry and snaps back as exact frames arrive. Without a
+      // recognized profile, keep the last exact body while the worker streams
+      // the requested edit; the handle still follows the pointer immediately.
       if (preview) {
         offsetBodyProxy = {
           preview,
-          baseline: profile || linearProfile ? 0 : (target.initialValue ?? 0),
-          exactOnRelease: Boolean(profile || linearProfile),
           pending: null,
           requestedAt: performance.now()
         };
@@ -2267,16 +2260,14 @@ export function ModelViewer({
       offsetBodyProxy!.pending = offset;
       offsetBodyProxy!.requestedAt = requestedAt;
       requestRender();
-      // Generic affine previews keep the exact worker streaming behind them.
-      // Only the profile-aware path is intentionally exact-on-release.
-      return offsetBodyProxy!.exactOnRelease;
+      return true;
     }
     function flushOffsetBodyProxy() {
       const proxy = offsetBodyProxy;
       if (!proxy || proxy.pending === null) return;
       const offset = proxy.pending;
       proxy.pending = null;
-      if (!proxy.preview.apply(offset - proxy.baseline)) {
+      if (!proxy.preview.apply(offset)) {
         restoreOffsetBodyProxy();
         onOffsetPreviewRef.current(offset, true);
         return;
@@ -8135,10 +8126,9 @@ export function ModelViewer({
       return;
     }
     offsetBodyProxyControllerRef.current?.restore();
-    // The selected body itself is the preview. A disposable viewport proxy
-    // stretches it while the hand moves, so the user never sees a detached
-    // face or slab sitting on top of the unchanged solid. Exact geometry still
-    // replaces this approximation on release.
+    // Recognized primitive profiles have a disposable viewport preview.
+    // Generic face edits stream exact worker geometry so unrelated faces and
+    // compound siblings stay fixed. Neither path overlays a detached slab.
     const rig = buildOffsetFaceHandle({
       ...offsetHandlePlacement(offsetHandle.point, offsetHandle.normal),
       ghostGeometry: null
