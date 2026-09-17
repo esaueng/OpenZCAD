@@ -131,3 +131,9 @@ field keeps the typed value, the document does not, and a second attempt
 succeeds. The lettered holder's single suggestion does not trigger it. Tracked
 against U02; the samples labelled "first edit after assistant apply" carry the
 refusal text.
+
+Follow-up (#359): the probe's Apply wait matched the previous recipe's
+already-applied card, so that edit was typed while the second patch was still
+in exact preflight; the patch then landed a new document version under the
+edit's check. The product now waits for a landing patch and re-validates on the
+moved document, and the probe counts applied cards before running on.
