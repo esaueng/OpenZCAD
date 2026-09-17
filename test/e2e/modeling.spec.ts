@@ -208,7 +208,11 @@ test('resizes a cylinder wall concentrically with one undoable radius edit', asy
   await expect(page.getByTestId('direct-manipulation-value')).toHaveText(
     'Ø 40 mm'
   );
-  await expect(radiusOperation).toContainText('Dragging');
+  // Dragging collapses the card to its accessible status marker (778d539e).
+  await expect(radiusOperation.locator('.tool-card-phase-dot')).toHaveAttribute(
+    'aria-label',
+    'Dragging'
+  );
   await page.keyboard.press('Escape');
   await expect(page.getByTestId('direct-manipulation-value')).toHaveText(
     'Ø 36 mm'
