@@ -4743,6 +4743,10 @@ export function ModelViewer({
       chip.title = previewDeferredRef.current
         ? 'Preview is catching up — the shape follows as fast as the kernel can rebuild it.'
         : '';
+      chip.setAttribute(
+        'aria-busy',
+        String(previewDeferredRef.current && !offsetWarning)
+      );
       chip.setAttribute('aria-invalid', String(offsetWarning));
       hud.showAt(chip, screen.x, screen.y);
       if (rig?.kind === 'cylinder-radius') {
