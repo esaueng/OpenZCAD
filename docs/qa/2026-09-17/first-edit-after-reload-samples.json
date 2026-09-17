@@ -1,0 +1,1617 @@
+[
+  {
+    "recordedAt": "2026-09-17T05:30:47.958Z",
+    "build": "preview",
+    "repeat": 0,
+    "scenario": "synthetic holder: opening and mounting holes",
+    "fixture": "synthetic-holder.step",
+    "parameter": "opening_width",
+    "featureCount": 15,
+    "valueAfterReload": "50",
+    "reload": {
+      "navigationToExactReadyMs": 2448,
+      "loadingRemusAtMs": 196,
+      "rebuild": {
+        "ms": {
+          "Loading imported sources": 27.2,
+          "features": 361.9,
+          "Building history": 365.6,
+          "measurement: Display mesh and face topology": 168.4,
+          "measurement: Imported feature recognition": 143.5,
+          "measurement: Edge topology": 4.5,
+          "measurement: Volume and validation": 34.4,
+          "measurement: Mass properties": 61.2,
+          "measurement": 1243.3,
+          "measurement: Opening recognition": 101.0,
+          "measurement: Planar distance edit proofs": 720.6
+        },
+        "featuresReplayed": [1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15]
+      }
+    },
+    "secondReload": {
+      "fieldVisibleAtMs": 147,
+      "firstExactReadyAtMs": 2374
+    },
+    "edits": [
+      {
+        "label": "first edit after assistant apply",
+        "value": "48",
+        "exactMs": 2367,
+        "previewInstallMs": 4.6,
+        "statusText": "The project or parameter changed during validation. Try again.",
+        "preflight": {
+          "ms": {
+            "features": 240.0,
+            "Building history": 242.5,
+            "measurement": 1015.8,
+            "measurement: Display mesh and face topology": 91.5,
+            "measurement: Imported feature recognition": 123.5,
+            "measurement: Edge topology": 2.1,
+            "measurement: Volume and validation": 26.2,
+            "measurement: Mass properties": 46.5,
+            "measurement: Opening recognition": 89.7,
+            "measurement: Planar distance edit proofs": 631.9
+          },
+          "featuresReplayed": [4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15]
+        },
+        "liveStages": 0
+      },
+      {
+        "label": "warm edit before reload",
+        "value": "50",
+        "exactMs": 1461,
+        "previewInstallMs": 3.8,
+        "statusText": "Parameter opening_width updated.",
+        "preflight": {
+          "ms": {
+            "Loading imported sources": 0.0,
+            "features": 246.8,
+            "Building history": 249.9,
+            "measurement": 1033.4,
+            "measurement: Display mesh and face topology": 89.7,
+            "measurement: Imported feature recognition": 129.3,
+            "measurement: Edge topology": 1.7,
+            "measurement: Volume and validation": 25.9,
+            "measurement: Mass properties": 47.4,
+            "measurement: Opening recognition": 96.2,
+            "measurement: Planar distance edit proofs": 639.5
+          },
+          "featuresReplayed": [4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15]
+        },
+        "liveStages": 0
+      },
+      {
+        "label": "first edit after reload",
+        "value": "52",
+        "exactMs": 1218,
+        "previewInstallMs": 3.7,
+        "statusText": "Parameter opening_width updated.",
+        "preflight": {
+          "ms": {
+            "Loading imported sources": 0.1,
+            "features": 100.5,
+            "Building history": 101.5,
+            "measurement": 996.8,
+            "measurement: Display mesh and face topology": 87.2,
+            "measurement: Imported feature recognition": 127.8,
+            "measurement: Edge topology": 2.5,
+            "measurement: Volume and validation": 25.0,
+            "measurement: Mass properties": 45.7,
+            "measurement: Opening recognition": 90.3,
+            "measurement: Planar distance edit proofs": 614.5
+          },
+          "featuresReplayed": [11, 12, 13, 14, 15]
+        },
+        "liveStages": 0
+      },
+      {
+        "label": "second edit after reload",
+        "value": "54",
+        "exactMs": 1541,
+        "previewInstallMs": 3.9,
+        "statusText": "Parameter opening_width updated.",
+        "preflight": {
+          "ms": {
+            "Loading imported sources": 0.0,
+            "features": 107.1,
+            "Building history": 108.5,
+            "measurement": 1010.1,
+            "measurement: Display mesh and face topology": 93.9,
+            "measurement: Imported feature recognition": 127.2,
+            "measurement: Edge topology": 1.6,
+            "measurement: Volume and validation": 26.4,
+            "measurement: Mass properties": 48.3,
+            "measurement: Opening recognition": 88.9,
+            "measurement: Planar distance edit proofs": 621.1
+          },
+          "featuresReplayed": [11, 12, 13, 14, 15]
+        },
+        "liveStages": 0
+      },
+      {
+        "label": "immediate edit after reload",
+        "value": "56",
+        "exactMs": 2062,
+        "previewInstallMs": 2971.7,
+        "statusText": "Parameter opening_width updated.",
+        "preflight": {
+          "ms": {
+            "Loading imported sources": 0.2,
+            "features": 114.8,
+            "Building history": 115.7,
+            "measurement": 1090.6,
+            "measurement: Display mesh and face topology": 90.4,
+            "measurement: Imported feature recognition": 132.6,
+            "measurement: Edge topology": 2.1,
+            "measurement: Volume and validation": 29.7,
+            "measurement: Mass properties": 54.4,
+            "measurement: Opening recognition": 93.6,
+            "measurement: Planar distance edit proofs": 683.8
+          },
+          "featuresReplayed": [11, 12, 13, 14, 15]
+        },
+        "liveStages": 82
+      }
+    ]
+  },
+  {
+    "recordedAt": "2026-09-17T05:31:30.090Z",
+    "build": "preview",
+    "repeat": 0,
+    "scenario": "lettered holder: height with separated text",
+    "fixture": "lettered-holder (kernel-built)",
+    "parameter": "holder_height",
+    "featureCount": 31,
+    "valueAfterReload": "40",
+    "reload": {
+      "navigationToExactReadyMs": 2309,
+      "loadingRemusAtMs": 166,
+      "rebuild": {
+        "ms": {
+          "Loading imported sources": 25.1,
+          "features": 111.2,
+          "Building history": 117.5,
+          "measurement: Display mesh and face topology": 3.8,
+          "measurement: Imported feature recognition": 23.4,
+          "measurement: Edge topology": 1.5,
+          "measurement: Volume and validation": 0.8,
+          "measurement: Mass properties": 0.2,
+          "measurement": 39.3,
+          "measurement: Opening recognition": 7.8,
+          "measurement: Planar distance edit proofs": 0.9
+        },
+        "featuresReplayed": [
+          1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20,
+          21, 22, 23, 24, 25, 26, 27, 28, 29, 30, 31
+        ]
+      }
+    },
+    "secondReload": {
+      "fieldVisibleAtMs": 161,
+      "firstExactReadyAtMs": 2140
+    },
+    "edits": [
+      {
+        "label": "first edit after assistant apply",
+        "value": "36",
+        "exactMs": 358,
+        "previewInstallMs": null,
+        "statusText": "Parameter holder_height updated.",
+        "preflight": {
+          "ms": {
+            "Loading imported sources": 0.0,
+            "features": 18.8,
+            "Building history": 22.7,
+            "measurement": 30.5,
+            "measurement: Display mesh and face topology": 1.5,
+            "measurement: Imported feature recognition": 24.5,
+            "measurement: Edge topology": 0.6,
+            "measurement: Volume and validation": 0.6,
+            "measurement: Mass properties": 0.1,
+            "measurement: Opening recognition": 1.8,
+            "measurement: Planar distance edit proofs": 0.6
+          },
+          "featuresReplayed": [
+            17, 18, 19, 20, 21, 22, 23, 24, 25, 26, 27, 28, 29, 30, 31
+          ]
+        },
+        "liveStages": 0
+      },
+      {
+        "label": "warm edit before reload",
+        "value": "40",
+        "exactMs": 351,
+        "previewInstallMs": null,
+        "statusText": "Parameter holder_height updated.",
+        "preflight": {
+          "ms": {
+            "Loading imported sources": 0.0,
+            "features": 18.6,
+            "Building history": 21.0,
+            "measurement": 35.8,
+            "measurement: Display mesh and face topology": 1.3,
+            "measurement: Imported feature recognition": 25.0,
+            "measurement: Edge topology": 0.5,
+            "measurement: Volume and validation": 0.7,
+            "measurement: Mass properties": 0.1,
+            "measurement: Opening recognition": 7.1,
+            "measurement: Planar distance edit proofs": 0.6
+          },
+          "featuresReplayed": [
+            17, 18, 19, 20, 21, 22, 23, 24, 25, 26, 27, 28, 29, 30, 31
+          ]
+        },
+        "liveStages": 0
+      },
+      {
+        "label": "first edit after reload",
+        "value": "44",
+        "exactMs": 308,
+        "previewInstallMs": null,
+        "statusText": "Parameter holder_height updated.",
+        "preflight": {
+          "ms": {
+            "Loading imported sources": 0.0,
+            "features": 14.5,
+            "Building history": 16.7,
+            "measurement": 32.9,
+            "measurement: Display mesh and face topology": 1.0,
+            "measurement: Imported feature recognition": 21.9,
+            "measurement: Edge topology": 2.6,
+            "measurement: Volume and validation": 0.6,
+            "measurement: Mass properties": 0.0,
+            "measurement: Opening recognition": 5.3,
+            "measurement: Planar distance edit proofs": 0.5
+          },
+          "featuresReplayed": [
+            17, 18, 19, 20, 21, 22, 23, 24, 25, 26, 27, 28, 29, 30, 31
+          ]
+        },
+        "liveStages": 0
+      },
+      {
+        "label": "second edit after reload",
+        "value": "48",
+        "exactMs": 312,
+        "previewInstallMs": null,
+        "statusText": "Parameter holder_height updated.",
+        "preflight": {
+          "ms": {
+            "Loading imported sources": 0.0,
+            "features": 16.2,
+            "Building history": 18.5,
+            "measurement": 37.3,
+            "measurement: Display mesh and face topology": 1.0,
+            "measurement: Imported feature recognition": 22.2,
+            "measurement: Edge topology": 0.5,
+            "measurement: Volume and validation": 1.4,
+            "measurement: Mass properties": 0.2,
+            "measurement: Opening recognition": 11.1,
+            "measurement: Planar distance edit proofs": 0.4
+          },
+          "featuresReplayed": [
+            17, 18, 19, 20, 21, 22, 23, 24, 25, 26, 27, 28, 29, 30, 31
+          ]
+        },
+        "liveStages": 0
+      },
+      {
+        "label": "immediate edit after reload",
+        "value": "52",
+        "exactMs": 624,
+        "previewInstallMs": null,
+        "statusText": "Parameter holder_height updated.",
+        "preflight": {
+          "ms": {
+            "Loading imported sources": 0.0,
+            "features": 18.1,
+            "Building history": 20.5,
+            "measurement": 40.9,
+            "measurement: Display mesh and face topology": 1.0,
+            "measurement: Imported feature recognition": 23.3,
+            "measurement: Edge topology": 0.5,
+            "measurement: Volume and validation": 0.9,
+            "measurement: Mass properties": 0.1,
+            "measurement: Opening recognition": 13.7,
+            "measurement: Planar distance edit proofs": 0.6
+          },
+          "featuresReplayed": [
+            17, 18, 19, 20, 21, 22, 23, 24, 25, 26, 27, 28, 29, 30, 31
+          ]
+        },
+        "liveStages": 174
+      }
+    ]
+  },
+  {
+    "recordedAt": "2026-09-17T05:32:28.521Z",
+    "build": "preview",
+    "repeat": 1,
+    "scenario": "synthetic holder: opening and mounting holes",
+    "fixture": "synthetic-holder.step",
+    "parameter": "opening_width",
+    "featureCount": 15,
+    "valueAfterReload": "50",
+    "reload": {
+      "navigationToExactReadyMs": 2370,
+      "loadingRemusAtMs": 154,
+      "rebuild": {
+        "ms": {
+          "Loading imported sources": 24.3,
+          "features": 332.3,
+          "Building history": 336.5,
+          "measurement: Display mesh and face topology": 146.7,
+          "measurement: Imported feature recognition": 125.9,
+          "measurement: Edge topology": 5.6,
+          "measurement: Volume and validation": 27.3,
+          "measurement: Mass properties": 45.5,
+          "measurement": 1181.7,
+          "measurement: Opening recognition": 100.5,
+          "measurement: Planar distance edit proofs": 725.3
+        },
+        "featuresReplayed": [1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15]
+      }
+    },
+    "secondReload": {
+      "fieldVisibleAtMs": 140,
+      "firstExactReadyAtMs": 2042
+    },
+    "edits": [
+      {
+        "label": "first edit after assistant apply",
+        "value": "48",
+        "exactMs": 2402,
+        "previewInstallMs": 4.6,
+        "statusText": "The project or parameter changed during validation. Try again.",
+        "preflight": {
+          "ms": {
+            "features": 232.1,
+            "Building history": 241.2,
+            "measurement": 1014.0,
+            "measurement: Display mesh and face topology": 89.2,
+            "measurement: Imported feature recognition": 124.3,
+            "measurement: Edge topology": 2.5,
+            "measurement: Volume and validation": 25.5,
+            "measurement: Mass properties": 49.6,
+            "measurement: Opening recognition": 89.8,
+            "measurement: Planar distance edit proofs": 629.7
+          },
+          "featuresReplayed": [5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15]
+        },
+        "liveStages": 0
+      },
+      {
+        "label": "warm edit before reload",
+        "value": "50",
+        "exactMs": 1508,
+        "previewInstallMs": 4,
+        "statusText": "Parameter opening_width updated.",
+        "preflight": {
+          "ms": {
+            "Loading imported sources": 0.0,
+            "features": 251.8,
+            "Building history": 255.2,
+            "measurement": 1058.2,
+            "measurement: Display mesh and face topology": 95.5,
+            "measurement: Imported feature recognition": 126.5,
+            "measurement: Edge topology": 2.1,
+            "measurement: Volume and validation": 29.5,
+            "measurement: Mass properties": 48.8,
+            "measurement: Opening recognition": 93.4,
+            "measurement: Planar distance edit proofs": 656.9
+          },
+          "featuresReplayed": [4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15]
+        },
+        "liveStages": 0
+      },
+      {
+        "label": "first edit after reload",
+        "value": "52",
+        "exactMs": 1151,
+        "previewInstallMs": 3.9,
+        "statusText": "Parameter opening_width updated.",
+        "preflight": {
+          "ms": {
+            "Loading imported sources": 0.1,
+            "features": 98.9,
+            "Building history": 99.9,
+            "measurement": 958.8,
+            "measurement: Display mesh and face topology": 85.2,
+            "measurement: Imported feature recognition": 120.3,
+            "measurement: Edge topology": 1.5,
+            "measurement: Volume and validation": 24.9,
+            "measurement: Mass properties": 44.7,
+            "measurement: Opening recognition": 84.6,
+            "measurement: Planar distance edit proofs": 594.8
+          },
+          "featuresReplayed": [11, 12, 13, 14, 15]
+        },
+        "liveStages": 0
+      },
+      {
+        "label": "second edit after reload",
+        "value": "54",
+        "exactMs": 1206,
+        "previewInstallMs": 3.4,
+        "statusText": "Parameter opening_width updated.",
+        "preflight": {
+          "ms": {
+            "Loading imported sources": 0.0,
+            "features": 100.3,
+            "Building history": 101.3,
+            "measurement": 989.2,
+            "measurement: Display mesh and face topology": 86.6,
+            "measurement: Imported feature recognition": 119.2,
+            "measurement: Edge topology": 1.6,
+            "measurement: Volume and validation": 25.8,
+            "measurement: Mass properties": 44.9,
+            "measurement: Opening recognition": 84.8,
+            "measurement: Planar distance edit proofs": 623.9
+          },
+          "featuresReplayed": [11, 12, 13, 14, 15]
+        },
+        "liveStages": 0
+      },
+      {
+        "label": "immediate edit after reload",
+        "value": "56",
+        "exactMs": 1724,
+        "previewInstallMs": 2541.5,
+        "statusText": "Parameter opening_width updated.",
+        "preflight": {
+          "ms": {
+            "Loading imported sources": 0.0,
+            "features": 97.9,
+            "Building history": 98.9,
+            "measurement": 1010.7,
+            "measurement: Display mesh and face topology": 89.1,
+            "measurement: Imported feature recognition": 120.5,
+            "measurement: Edge topology": 1.6,
+            "measurement: Volume and validation": 25.6,
+            "measurement: Mass properties": 48.4,
+            "measurement: Opening recognition": 90.7,
+            "measurement: Planar distance edit proofs": 632.3
+          },
+          "featuresReplayed": [11, 12, 13, 14, 15]
+        },
+        "liveStages": 82
+      }
+    ]
+  },
+  {
+    "recordedAt": "2026-09-17T05:33:09.554Z",
+    "build": "preview",
+    "repeat": 1,
+    "scenario": "lettered holder: height with separated text",
+    "fixture": "lettered-holder (kernel-built)",
+    "parameter": "holder_height",
+    "featureCount": 31,
+    "valueAfterReload": "40",
+    "reload": {
+      "navigationToExactReadyMs": 2175,
+      "loadingRemusAtMs": 137,
+      "rebuild": {
+        "ms": {
+          "Loading imported sources": 18.6,
+          "features": 93.8,
+          "Building history": 98.4,
+          "measurement: Display mesh and face topology": 3.0,
+          "measurement: Imported feature recognition": 23.7,
+          "measurement: Edge topology": 1.2,
+          "measurement: Volume and validation": 0.7,
+          "measurement: Mass properties": 0.3,
+          "measurement": 39.0,
+          "measurement: Opening recognition": 8.3,
+          "measurement: Planar distance edit proofs": 0.6
+        },
+        "featuresReplayed": [
+          1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20,
+          21, 22, 23, 24, 25, 26, 27, 28, 29, 30, 31
+        ]
+      }
+    },
+    "secondReload": {
+      "fieldVisibleAtMs": 2191,
+      "firstExactReadyAtMs": 2197
+    },
+    "edits": [
+      {
+        "label": "first edit after assistant apply",
+        "value": "36",
+        "exactMs": 318,
+        "previewInstallMs": null,
+        "statusText": "Parameter holder_height updated.",
+        "preflight": {
+          "ms": {
+            "Loading imported sources": 0.0,
+            "features": 18.8,
+            "Building history": 21.9,
+            "measurement": 28.7,
+            "measurement: Display mesh and face topology": 2.2,
+            "measurement: Imported feature recognition": 22.3,
+            "measurement: Edge topology": 0.5,
+            "measurement: Volume and validation": 0.7,
+            "measurement: Mass properties": 0.0,
+            "measurement: Opening recognition": 1.4,
+            "measurement: Planar distance edit proofs": 0.7
+          },
+          "featuresReplayed": [
+            17, 18, 19, 20, 21, 22, 23, 24, 25, 26, 27, 28, 29, 30, 31
+          ]
+        },
+        "liveStages": 0
+      },
+      {
+        "label": "warm edit before reload",
+        "value": "40",
+        "exactMs": 320,
+        "previewInstallMs": null,
+        "statusText": "Parameter holder_height updated.",
+        "preflight": {
+          "ms": {
+            "Loading imported sources": 0.0,
+            "features": 17.5,
+            "Building history": 21.2,
+            "measurement": 34.0,
+            "measurement: Display mesh and face topology": 1.8,
+            "measurement: Imported feature recognition": 23.4,
+            "measurement: Edge topology": 0.4,
+            "measurement: Volume and validation": 0.8,
+            "measurement: Mass properties": 0.2,
+            "measurement: Opening recognition": 6.3,
+            "measurement: Planar distance edit proofs": 0.6
+          },
+          "featuresReplayed": [
+            17, 18, 19, 20, 21, 22, 23, 24, 25, 26, 27, 28, 29, 30, 31
+          ]
+        },
+        "liveStages": 0
+      },
+      {
+        "label": "first edit after reload",
+        "value": "44",
+        "exactMs": 328,
+        "previewInstallMs": null,
+        "statusText": "Parameter holder_height updated.",
+        "preflight": {
+          "ms": {
+            "Loading imported sources": 0.1,
+            "features": 17.4,
+            "Building history": 20.2,
+            "measurement": 32.6,
+            "measurement: Display mesh and face topology": 1.7,
+            "measurement: Imported feature recognition": 22.3,
+            "measurement: Edge topology": 0.5,
+            "measurement: Volume and validation": 0.4,
+            "measurement: Mass properties": 0.1,
+            "measurement: Opening recognition": 6.6,
+            "measurement: Planar distance edit proofs": 0.5
+          },
+          "featuresReplayed": [
+            17, 18, 19, 20, 21, 22, 23, 24, 25, 26, 27, 28, 29, 30, 31
+          ]
+        },
+        "liveStages": 0
+      },
+      {
+        "label": "second edit after reload",
+        "value": "48",
+        "exactMs": 332,
+        "previewInstallMs": null,
+        "statusText": "Parameter holder_height updated.",
+        "preflight": {
+          "ms": {
+            "Loading imported sources": 0.0,
+            "features": 15.0,
+            "Building history": 17.8,
+            "measurement": 39.6,
+            "measurement: Display mesh and face topology": 1.1,
+            "measurement: Imported feature recognition": 23.3,
+            "measurement: Edge topology": 0.6,
+            "measurement: Volume and validation": 0.8,
+            "measurement: Mass properties": 0.1,
+            "measurement: Opening recognition": 12.2,
+            "measurement: Planar distance edit proofs": 0.7
+          },
+          "featuresReplayed": [
+            17, 18, 19, 20, 21, 22, 23, 24, 25, 26, 27, 28, 29, 30, 31
+          ]
+        },
+        "liveStages": 0
+      },
+      {
+        "label": "immediate edit after reload",
+        "value": "52",
+        "exactMs": 331,
+        "previewInstallMs": null,
+        "statusText": "Parameter holder_height updated.",
+        "preflight": {
+          "ms": {
+            "Loading imported sources": 0.0,
+            "features": 14.9,
+            "Building history": 17.1,
+            "measurement": 39.2,
+            "measurement: Display mesh and face topology": 1.2,
+            "measurement: Imported feature recognition": 21.1,
+            "measurement: Edge topology": 0.4,
+            "measurement: Volume and validation": 1.0,
+            "measurement: Mass properties": 0.2,
+            "measurement: Opening recognition": 14.4,
+            "measurement: Planar distance edit proofs": 0.3
+          },
+          "featuresReplayed": [
+            17, 18, 19, 20, 21, 22, 23, 24, 25, 26, 27, 28, 29, 30, 31
+          ]
+        },
+        "liveStages": 0
+      }
+    ]
+  },
+  {
+    "recordedAt": "2026-09-17T05:34:08.900Z",
+    "build": "preview",
+    "repeat": 2,
+    "scenario": "synthetic holder: opening and mounting holes",
+    "fixture": "synthetic-holder.step",
+    "parameter": "opening_width",
+    "featureCount": 15,
+    "valueAfterReload": "50",
+    "reload": {
+      "navigationToExactReadyMs": 2257,
+      "loadingRemusAtMs": 131,
+      "rebuild": {
+        "ms": {
+          "Loading imported sources": 19.6,
+          "features": 315.0,
+          "Building history": 317.2,
+          "measurement: Display mesh and face topology": 154.5,
+          "measurement: Imported feature recognition": 130.9,
+          "measurement: Edge topology": 4.0,
+          "measurement: Volume and validation": 27.4,
+          "measurement: Mass properties": 47.2,
+          "measurement": 1103.8,
+          "measurement: Opening recognition": 96.0,
+          "measurement: Planar distance edit proofs": 639.1
+        },
+        "featuresReplayed": [1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15]
+      }
+    },
+    "secondReload": {
+      "fieldVisibleAtMs": 121,
+      "firstExactReadyAtMs": 2592
+    },
+    "edits": [
+      {
+        "label": "first edit after assistant apply",
+        "value": "48",
+        "exactMs": 2738,
+        "previewInstallMs": 4.3,
+        "statusText": "The project or parameter changed during validation. Try again.",
+        "preflight": {
+          "ms": {
+            "features": 229.2,
+            "Building history": 238.3,
+            "measurement": 1026.3,
+            "measurement: Display mesh and face topology": 92.3,
+            "measurement: Imported feature recognition": 123.5,
+            "measurement: Edge topology": 1.5,
+            "measurement: Volume and validation": 26.1,
+            "measurement: Mass properties": 47.0,
+            "measurement: Opening recognition": 89.8,
+            "measurement: Planar distance edit proofs": 641.6
+          },
+          "featuresReplayed": [5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15]
+        },
+        "liveStages": 0
+      },
+      {
+        "label": "warm edit before reload",
+        "value": "50",
+        "exactMs": 1443,
+        "previewInstallMs": 3.7,
+        "statusText": "Parameter opening_width updated.",
+        "preflight": {
+          "ms": {
+            "Loading imported sources": 0.1,
+            "features": 246.1,
+            "Building history": 249.9,
+            "measurement": 1042.4,
+            "measurement: Display mesh and face topology": 89.1,
+            "measurement: Imported feature recognition": 128.0,
+            "measurement: Edge topology": 2.2,
+            "measurement: Volume and validation": 26.7,
+            "measurement: Mass properties": 48.3,
+            "measurement: Opening recognition": 94.8,
+            "measurement: Planar distance edit proofs": 650.5
+          },
+          "featuresReplayed": [4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15]
+        },
+        "liveStages": 0
+      },
+      {
+        "label": "first edit after reload",
+        "value": "52",
+        "exactMs": 1224,
+        "previewInstallMs": 4.2,
+        "statusText": "Parameter opening_width updated.",
+        "preflight": {
+          "ms": {
+            "Loading imported sources": 0.1,
+            "features": 98.7,
+            "Building history": 100.5,
+            "measurement": 1004.3,
+            "measurement: Display mesh and face topology": 90.2,
+            "measurement: Imported feature recognition": 136.7,
+            "measurement: Edge topology": 1.4,
+            "measurement: Volume and validation": 26.0,
+            "measurement: Mass properties": 46.0,
+            "measurement: Opening recognition": 93.0,
+            "measurement: Planar distance edit proofs": 607.7
+          },
+          "featuresReplayed": [11, 12, 13, 14, 15]
+        },
+        "liveStages": 0
+      },
+      {
+        "label": "second edit after reload",
+        "value": "54",
+        "exactMs": 1286,
+        "previewInstallMs": 2.8,
+        "statusText": "Parameter opening_width updated.",
+        "preflight": {
+          "ms": {
+            "Loading imported sources": 0.1,
+            "features": 102.9,
+            "Building history": 104.3,
+            "measurement": 1017.8,
+            "measurement: Display mesh and face topology": 89.0,
+            "measurement: Imported feature recognition": 124.6,
+            "measurement: Edge topology": 2.0,
+            "measurement: Volume and validation": 26.2,
+            "measurement: Mass properties": 46.4,
+            "measurement: Opening recognition": 86.7,
+            "measurement: Planar distance edit proofs": 638.5
+          },
+          "featuresReplayed": [11, 12, 13, 14, 15]
+        },
+        "liveStages": 0
+      },
+      {
+        "label": "immediate edit after reload",
+        "value": "56",
+        "exactMs": 1932,
+        "previewInstallMs": 3182.7,
+        "statusText": "Parameter opening_width updated.",
+        "preflight": {
+          "ms": {
+            "Loading imported sources": 0.1,
+            "features": 96.1,
+            "Building history": 96.9,
+            "measurement": 1010.4,
+            "measurement: Display mesh and face topology": 90.8,
+            "measurement: Imported feature recognition": 126.2,
+            "measurement: Edge topology": 1.6,
+            "measurement: Volume and validation": 25.6,
+            "measurement: Mass properties": 46.8,
+            "measurement: Opening recognition": 93.3,
+            "measurement: Planar distance edit proofs": 622.6
+          },
+          "featuresReplayed": [11, 12, 13, 14, 15]
+        },
+        "liveStages": 82
+      }
+    ]
+  },
+  {
+    "recordedAt": "2026-09-17T05:34:54.444Z",
+    "build": "preview",
+    "repeat": 2,
+    "scenario": "lettered holder: height with separated text",
+    "fixture": "lettered-holder (kernel-built)",
+    "parameter": "holder_height",
+    "featureCount": 31,
+    "valueAfterReload": "40",
+    "reload": {
+      "navigationToExactReadyMs": 2032,
+      "loadingRemusAtMs": 134,
+      "rebuild": {
+        "ms": {
+          "Loading imported sources": 17.6,
+          "features": 79.4,
+          "Building history": 82.9,
+          "measurement: Display mesh and face topology": 3.7,
+          "measurement: Imported feature recognition": 23.2,
+          "measurement: Edge topology": 1.2,
+          "measurement: Volume and validation": 0.9,
+          "measurement: Mass properties": 0.2,
+          "measurement": 38.7,
+          "measurement: Opening recognition": 7.8,
+          "measurement: Planar distance edit proofs": 0.7
+        },
+        "featuresReplayed": [
+          1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20,
+          21, 22, 23, 24, 25, 26, 27, 28, 29, 30, 31
+        ]
+      }
+    },
+    "secondReload": {
+      "fieldVisibleAtMs": 231,
+      "firstExactReadyAtMs": 2126
+    },
+    "edits": [
+      {
+        "label": "first edit after assistant apply",
+        "value": "36",
+        "exactMs": 326,
+        "previewInstallMs": null,
+        "statusText": "Parameter holder_height updated.",
+        "preflight": {
+          "ms": {
+            "Loading imported sources": 0.0,
+            "features": 20.6,
+            "Building history": 23.8,
+            "measurement": 30.0,
+            "measurement: Display mesh and face topology": 1.5,
+            "measurement: Imported feature recognition": 24.8,
+            "measurement: Edge topology": 0.7,
+            "measurement: Volume and validation": 0.6,
+            "measurement: Mass properties": 0.1,
+            "measurement: Opening recognition": 1.2,
+            "measurement: Planar distance edit proofs": 0.5
+          },
+          "featuresReplayed": [
+            17, 18, 19, 20, 21, 22, 23, 24, 25, 26, 27, 28, 29, 30, 31
+          ]
+        },
+        "liveStages": 0
+      },
+      {
+        "label": "warm edit before reload",
+        "value": "40",
+        "exactMs": 343,
+        "previewInstallMs": null,
+        "statusText": "Parameter holder_height updated.",
+        "preflight": {
+          "ms": {
+            "Loading imported sources": 0.0,
+            "features": 19.3,
+            "Building history": 22.6,
+            "measurement": 37.5,
+            "measurement: Display mesh and face topology": 1.6,
+            "measurement: Imported feature recognition": 25.5,
+            "measurement: Edge topology": 0.6,
+            "measurement: Volume and validation": 1.0,
+            "measurement: Mass properties": 0.1,
+            "measurement: Opening recognition": 7.5,
+            "measurement: Planar distance edit proofs": 0.7
+          },
+          "featuresReplayed": [
+            17, 18, 19, 20, 21, 22, 23, 24, 25, 26, 27, 28, 29, 30, 31
+          ]
+        },
+        "liveStages": 0
+      },
+      {
+        "label": "first edit after reload",
+        "value": "44",
+        "exactMs": 348,
+        "previewInstallMs": null,
+        "statusText": "Parameter holder_height updated.",
+        "preflight": {
+          "ms": {
+            "Loading imported sources": 0.2,
+            "features": 17.2,
+            "Building history": 21.4,
+            "measurement": 31.9,
+            "measurement: Display mesh and face topology": 1.2,
+            "measurement: Imported feature recognition": 21.9,
+            "measurement: Edge topology": 0.3,
+            "measurement: Volume and validation": 1.0,
+            "measurement: Mass properties": 0.2,
+            "measurement: Opening recognition": 6.2,
+            "measurement: Planar distance edit proofs": 0.6
+          },
+          "featuresReplayed": [
+            17, 18, 19, 20, 21, 22, 23, 24, 25, 26, 27, 28, 29, 30, 31
+          ]
+        },
+        "liveStages": 0
+      },
+      {
+        "label": "second edit after reload",
+        "value": "48",
+        "exactMs": 372,
+        "previewInstallMs": null,
+        "statusText": "Parameter holder_height updated.",
+        "preflight": {
+          "ms": {
+            "Loading imported sources": 0.0,
+            "features": 18.3,
+            "Building history": 21.1,
+            "measurement": 37.8,
+            "measurement: Display mesh and face topology": 1.0,
+            "measurement: Imported feature recognition": 22.9,
+            "measurement: Edge topology": 0.4,
+            "measurement: Volume and validation": 0.6,
+            "measurement: Mass properties": 0.2,
+            "measurement: Opening recognition": 12.0,
+            "measurement: Planar distance edit proofs": 0.4
+          },
+          "featuresReplayed": [
+            17, 18, 19, 20, 21, 22, 23, 24, 25, 26, 27, 28, 29, 30, 31
+          ]
+        },
+        "liveStages": 0
+      },
+      {
+        "label": "immediate edit after reload",
+        "value": "52",
+        "exactMs": 102,
+        "previewInstallMs": null,
+        "statusText": "Parameter holder_height updated.",
+        "preflight": {
+          "ms": {
+            "Loading imported sources": 0.0,
+            "features": 17.4,
+            "Building history": 19.7,
+            "measurement": 40.1,
+            "measurement: Display mesh and face topology": 1.1,
+            "measurement: Imported feature recognition": 22.5,
+            "measurement: Edge topology": 0.6,
+            "measurement: Volume and validation": 0.9,
+            "measurement: Mass properties": 0.1,
+            "measurement: Opening recognition": 13.7,
+            "measurement: Planar distance edit proofs": 0.4
+          },
+          "featuresReplayed": [
+            17, 18, 19, 20, 21, 22, 23, 24, 25, 26, 27, 28, 29, 30, 31
+          ]
+        },
+        "liveStages": 173
+      }
+    ]
+  },
+  {
+    "recordedAt": "2026-09-17T05:26:23.923Z",
+    "build": "dev",
+    "repeat": 0,
+    "scenario": "synthetic holder: opening and mounting holes",
+    "fixture": "synthetic-holder.step",
+    "parameter": "opening_width",
+    "featureCount": 15,
+    "valueAfterReload": "50",
+    "reload": {
+      "navigationToExactReadyMs": 8972,
+      "loadingRemusAtMs": 769,
+      "rebuild": {
+        "ms": {
+          "Loading imported sources": 157.8,
+          "features": 435.9,
+          "Building history": 440.0,
+          "measurement: Display mesh and face topology": 214.4,
+          "measurement: Imported feature recognition": 199.3,
+          "measurement: Edge topology": 5.2,
+          "measurement: Volume and validation": 40.4,
+          "measurement: Mass properties": 72.6,
+          "measurement": 1550.6,
+          "measurement: Opening recognition": 122.9,
+          "measurement: Planar distance edit proofs": 886.9
+        },
+        "featuresReplayed": [1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15]
+      }
+    },
+    "secondReload": {
+      "fieldVisibleAtMs": 1263,
+      "firstExactReadyAtMs": 8867
+    },
+    "edits": [
+      {
+        "label": "first edit after assistant apply",
+        "value": "48",
+        "exactMs": 2220,
+        "previewInstallMs": 14,
+        "statusText": "The project or parameter changed during validation. Try again.",
+        "preflight": {
+          "ms": {
+            "measurement: Imported feature recognition": 269.6,
+            "measurement: Opening recognition": 116.1,
+            "measurement: Planar distance edit proofs": 911.0,
+            "measurement: Edge topology": 1.9,
+            "measurement: Volume and validation": 37.6,
+            "measurement: Mass properties": 69.3,
+            "measurement": 1519.5
+          },
+          "featuresReplayed": []
+        },
+        "liveStages": 0
+      },
+      {
+        "label": "warm edit before reload",
+        "value": "50",
+        "exactMs": 2579,
+        "previewInstallMs": 47.6,
+        "statusText": "Parameter opening_width updated.",
+        "preflight": {
+          "ms": {
+            "Loading imported sources": 0.1,
+            "features": 341.4,
+            "Building history": 345.5,
+            "measurement": 1540.3,
+            "measurement: Display mesh and face topology": 135.1,
+            "measurement: Imported feature recognition": 205.5,
+            "measurement: Edge topology": 3.5,
+            "measurement: Volume and validation": 35.7,
+            "measurement: Mass properties": 64.5,
+            "measurement: Opening recognition": 140.8,
+            "measurement: Planar distance edit proofs": 949.2
+          },
+          "featuresReplayed": [4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15]
+        },
+        "liveStages": 0
+      },
+      {
+        "label": "first edit after reload",
+        "value": "52",
+        "exactMs": 2001,
+        "previewInstallMs": 65.4,
+        "statusText": "Parameter opening_width updated.",
+        "preflight": {
+          "ms": {
+            "Loading imported sources": 0.4,
+            "features": 150.6,
+            "Building history": 158.4,
+            "measurement": 1460.6,
+            "measurement: Display mesh and face topology": 142.5,
+            "measurement: Imported feature recognition": 179.6,
+            "measurement: Edge topology": 2.6,
+            "measurement: Volume and validation": 37.9,
+            "measurement: Mass properties": 85.8,
+            "measurement: Opening recognition": 117.0,
+            "measurement: Planar distance edit proofs": 889.2
+          },
+          "featuresReplayed": [11, 12, 13, 14, 15]
+        },
+        "liveStages": 0
+      },
+      {
+        "label": "second edit after reload",
+        "value": "54",
+        "exactMs": 1959,
+        "previewInstallMs": 50.6,
+        "statusText": "Parameter opening_width updated.",
+        "preflight": {
+          "ms": {
+            "Loading imported sources": 0.1,
+            "features": 136.3,
+            "Building history": 138.1,
+            "measurement": 1434.4,
+            "measurement: Display mesh and face topology": 128.9,
+            "measurement: Imported feature recognition": 171.4,
+            "measurement: Edge topology": 4.5,
+            "measurement: Volume and validation": 38.8,
+            "measurement: Mass properties": 68.5,
+            "measurement: Opening recognition": 116.1,
+            "measurement: Planar distance edit proofs": 882.6
+          },
+          "featuresReplayed": [11, 12, 13, 14, 15]
+        },
+        "liveStages": 0
+      },
+      {
+        "label": "immediate edit after reload",
+        "value": "56",
+        "exactMs": 8096,
+        "previewInstallMs": null,
+        "statusText": "Parameter opening_width updated.",
+        "preflight": {
+          "ms": {
+            "Loading imported sources": 0.0,
+            "features": 135.3,
+            "Building history": 136.3,
+            "measurement": 1338.3,
+            "measurement: Display mesh and face topology": 119.4,
+            "measurement: Imported feature recognition": 165.7,
+            "measurement: Edge topology": 1.9,
+            "measurement: Volume and validation": 34.4,
+            "measurement: Mass properties": 63.0,
+            "measurement: Opening recognition": 115.3,
+            "measurement: Planar distance edit proofs": 833.9
+          },
+          "featuresReplayed": [11, 12, 13, 14, 15]
+        },
+        "liveStages": 82
+      }
+    ]
+  },
+  {
+    "recordedAt": "2026-09-17T05:27:14.126Z",
+    "build": "dev",
+    "repeat": 0,
+    "scenario": "lettered holder: height with separated text",
+    "fixture": "lettered-holder (kernel-built)",
+    "parameter": "holder_height",
+    "featureCount": 31,
+    "valueAfterReload": "40",
+    "reload": {
+      "navigationToExactReadyMs": 4121,
+      "loadingRemusAtMs": 572,
+      "rebuild": {
+        "ms": {
+          "Loading imported sources": 98.3,
+          "features": 95.4,
+          "Building history": 100.9,
+          "measurement: Display mesh and face topology": 5.2,
+          "measurement: Imported feature recognition": 30.6,
+          "measurement: Edge topology": 2.1,
+          "measurement: Volume and validation": 0.9,
+          "measurement: Mass properties": 0.3,
+          "measurement": 53.6,
+          "measurement: Opening recognition": 11.8,
+          "measurement: Planar distance edit proofs": 0.9
+        },
+        "featuresReplayed": [
+          1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20,
+          21, 22, 23, 24, 25, 26, 27, 28, 29, 30, 31
+        ]
+      }
+    },
+    "secondReload": {
+      "fieldVisibleAtMs": 579,
+      "firstExactReadyAtMs": 4891
+    },
+    "edits": [
+      {
+        "label": "first edit after assistant apply",
+        "value": "36",
+        "exactMs": 449,
+        "previewInstallMs": null,
+        "statusText": "Parameter holder_height updated.",
+        "preflight": {
+          "ms": {
+            "Loading imported sources": 0.2,
+            "features": 19.3,
+            "Building history": 23.7,
+            "measurement": 32.9,
+            "measurement: Display mesh and face topology": 1.0,
+            "measurement: Imported feature recognition": 26.6,
+            "measurement: Edge topology": 0.5,
+            "measurement: Volume and validation": 1.0,
+            "measurement: Mass properties": 0.1,
+            "measurement: Opening recognition": 2.2,
+            "measurement: Planar distance edit proofs": 0.8
+          },
+          "featuresReplayed": [
+            17, 18, 19, 20, 21, 22, 23, 24, 25, 26, 27, 28, 29, 30, 31
+          ]
+        },
+        "liveStages": 0
+      },
+      {
+        "label": "warm edit before reload",
+        "value": "40",
+        "exactMs": 424,
+        "previewInstallMs": null,
+        "statusText": "Parameter holder_height updated.",
+        "preflight": {
+          "ms": {
+            "Loading imported sources": 0.0,
+            "features": 26.7,
+            "Building history": 31.4,
+            "measurement": 45.5,
+            "measurement: Display mesh and face topology": 1.6,
+            "measurement: Imported feature recognition": 31.4,
+            "measurement: Edge topology": 2.4,
+            "measurement: Volume and validation": 0.7,
+            "measurement: Mass properties": 0.1,
+            "measurement: Opening recognition": 8.1,
+            "measurement: Planar distance edit proofs": 0.5
+          },
+          "featuresReplayed": [
+            17, 18, 19, 20, 21, 22, 23, 24, 25, 26, 27, 28, 29, 30, 31
+          ]
+        },
+        "liveStages": 0
+      },
+      {
+        "label": "first edit after reload",
+        "value": "44",
+        "exactMs": 446,
+        "previewInstallMs": null,
+        "statusText": "Parameter holder_height updated.",
+        "preflight": {
+          "ms": {
+            "Loading imported sources": 0.0,
+            "features": 18.2,
+            "Building history": 21.5,
+            "measurement": 35.4,
+            "measurement: Display mesh and face topology": 2.1,
+            "measurement: Imported feature recognition": 24.4,
+            "measurement: Edge topology": 0.9,
+            "measurement: Volume and validation": 0.8,
+            "measurement: Mass properties": 0.1,
+            "measurement: Opening recognition": 6.3,
+            "measurement: Planar distance edit proofs": 0.5
+          },
+          "featuresReplayed": [
+            17, 18, 19, 20, 21, 22, 23, 24, 25, 26, 27, 28, 29, 30, 31
+          ]
+        },
+        "liveStages": 0
+      },
+      {
+        "label": "second edit after reload",
+        "value": "48",
+        "exactMs": 407,
+        "previewInstallMs": null,
+        "statusText": "Parameter holder_height updated.",
+        "preflight": {
+          "ms": {
+            "Loading imported sources": 0.0,
+            "features": 17.2,
+            "Building history": 19.5,
+            "measurement": 41.4,
+            "measurement: Display mesh and face topology": 1.0,
+            "measurement: Imported feature recognition": 23.2,
+            "measurement: Edge topology": 0.5,
+            "measurement: Volume and validation": 1.1,
+            "measurement: Mass properties": 0.2,
+            "measurement: Opening recognition": 14.1,
+            "measurement: Planar distance edit proofs": 0.8
+          },
+          "featuresReplayed": [
+            17, 18, 19, 20, 21, 22, 23, 24, 25, 26, 27, 28, 29, 30, 31
+          ]
+        },
+        "liveStages": 0
+      },
+      {
+        "label": "immediate edit after reload",
+        "value": "52",
+        "exactMs": 4969,
+        "previewInstallMs": null,
+        "statusText": "Parameter holder_height updated.",
+        "preflight": {
+          "ms": {
+            "Loading imported sources": 0.1,
+            "features": 21.8,
+            "Building history": 25.5,
+            "measurement": 54.1,
+            "measurement: Display mesh and face topology": 1.7,
+            "measurement: Imported feature recognition": 31.4,
+            "measurement: Edge topology": 0.6,
+            "measurement: Volume and validation": 0.7,
+            "measurement: Mass properties": 0.2,
+            "measurement: Opening recognition": 18.2,
+            "measurement: Planar distance edit proofs": 0.6
+          },
+          "featuresReplayed": [
+            17, 18, 19, 20, 21, 22, 23, 24, 25, 26, 27, 28, 29, 30, 31
+          ]
+        },
+        "liveStages": 174
+      }
+    ]
+  },
+  {
+    "recordedAt": "2026-09-17T05:28:24.566Z",
+    "build": "dev",
+    "repeat": 1,
+    "scenario": "synthetic holder: opening and mounting holes",
+    "fixture": "synthetic-holder.step",
+    "parameter": "opening_width",
+    "featureCount": 15,
+    "valueAfterReload": "50",
+    "reload": {
+      "navigationToExactReadyMs": 4488,
+      "loadingRemusAtMs": 570,
+      "rebuild": {
+        "ms": {
+          "Loading imported sources": 127.3,
+          "features": 348.8,
+          "Building history": 352.0,
+          "measurement: Display mesh and face topology": 159.4,
+          "measurement: Imported feature recognition": 145.8,
+          "measurement: Edge topology": 5.9,
+          "measurement: Volume and validation": 32.9,
+          "measurement: Mass properties": 54.1,
+          "measurement": 1208.7,
+          "measurement: Opening recognition": 108.5,
+          "measurement: Planar distance edit proofs": 696.3
+        },
+        "featuresReplayed": [1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15]
+      }
+    },
+    "secondReload": {
+      "fieldVisibleAtMs": 466,
+      "firstExactReadyAtMs": 4231
+    },
+    "edits": [
+      {
+        "label": "first edit after assistant apply",
+        "value": "48",
+        "exactMs": 2476,
+        "previewInstallMs": 53.8,
+        "statusText": "The project or parameter changed during validation. Try again.",
+        "preflight": {
+          "ms": {
+            "measurement: Display mesh and face topology": 85.1,
+            "measurement: Imported feature recognition": 176.4,
+            "measurement: Opening recognition": 127.4,
+            "measurement: Planar distance edit proofs": 845.4,
+            "measurement: Edge topology": 1.5,
+            "measurement: Volume and validation": 28.6,
+            "measurement: Mass properties": 52.5,
+            "measurement": 1320.2
+          },
+          "featuresReplayed": []
+        },
+        "liveStages": 0
+      },
+      {
+        "label": "warm edit before reload",
+        "value": "50",
+        "exactMs": 2102,
+        "previewInstallMs": 42,
+        "statusText": "Parameter opening_width updated.",
+        "preflight": {
+          "ms": {
+            "Loading imported sources": 0.0,
+            "features": 322.4,
+            "Building history": 326.2,
+            "measurement": 1434.6,
+            "measurement: Display mesh and face topology": 117.2,
+            "measurement: Imported feature recognition": 169.2,
+            "measurement: Edge topology": 2.5,
+            "measurement: Volume and validation": 36.4,
+            "measurement: Mass properties": 65.5,
+            "measurement: Opening recognition": 122.9,
+            "measurement: Planar distance edit proofs": 913.7
+          },
+          "featuresReplayed": [4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15]
+        },
+        "liveStages": 0
+      },
+      {
+        "label": "first edit after reload",
+        "value": "52",
+        "exactMs": 1274,
+        "previewInstallMs": 9.9,
+        "statusText": "Parameter opening_width updated.",
+        "preflight": {
+          "ms": {
+            "Loading imported sources": 0.0,
+            "features": 101.3,
+            "Building history": 102.8,
+            "measurement": 984.5,
+            "measurement: Display mesh and face topology": 92.8,
+            "measurement: Imported feature recognition": 125.2,
+            "measurement: Edge topology": 1.8,
+            "measurement: Volume and validation": 25.1,
+            "measurement: Mass properties": 46.7,
+            "measurement: Opening recognition": 90.9,
+            "measurement: Planar distance edit proofs": 598.8
+          },
+          "featuresReplayed": [11, 12, 13, 14, 15]
+        },
+        "liveStages": 0
+      },
+      {
+        "label": "second edit after reload",
+        "value": "54",
+        "exactMs": 1297,
+        "previewInstallMs": 7.8,
+        "statusText": "Parameter opening_width updated.",
+        "preflight": {
+          "ms": {
+            "Loading imported sources": 0.0,
+            "features": 106.1,
+            "Building history": 107.1,
+            "measurement": 1010.7,
+            "measurement: Display mesh and face topology": 86.8,
+            "measurement: Imported feature recognition": 124.6,
+            "measurement: Edge topology": 1.9,
+            "measurement: Volume and validation": 25.6,
+            "measurement: Mass properties": 47.9,
+            "measurement: Opening recognition": 98.1,
+            "measurement: Planar distance edit proofs": 622.7
+          },
+          "featuresReplayed": [11, 12, 13, 14, 15]
+        },
+        "liveStages": 0
+      },
+      {
+        "label": "immediate edit after reload",
+        "value": "56",
+        "exactMs": 3989,
+        "previewInstallMs": null,
+        "statusText": "Parameter opening_width updated.",
+        "preflight": {
+          "ms": {
+            "Loading imported sources": 0.0,
+            "features": 102.0,
+            "Building history": 102.8,
+            "measurement": 1125.6,
+            "measurement: Display mesh and face topology": 85.6,
+            "measurement: Imported feature recognition": 129.5,
+            "measurement: Edge topology": 1.8,
+            "measurement: Volume and validation": 29.8,
+            "measurement: Mass properties": 54.1,
+            "measurement: Opening recognition": 93.6,
+            "measurement: Planar distance edit proofs": 726.2
+          },
+          "featuresReplayed": [11, 12, 13, 14, 15]
+        },
+        "liveStages": 82
+      }
+    ]
+  },
+  {
+    "recordedAt": "2026-09-17T05:29:13.083Z",
+    "build": "dev",
+    "repeat": 1,
+    "scenario": "lettered holder: height with separated text",
+    "fixture": "lettered-holder (kernel-built)",
+    "parameter": "holder_height",
+    "featureCount": 31,
+    "valueAfterReload": "40",
+    "reload": {
+      "navigationToExactReadyMs": 3849,
+      "loadingRemusAtMs": 555,
+      "rebuild": {
+        "ms": {
+          "Loading imported sources": 104.2,
+          "features": 92.2,
+          "Building history": 95.6,
+          "measurement: Display mesh and face topology": 3.5,
+          "measurement: Imported feature recognition": 24.2,
+          "measurement: Edge topology": 1.5,
+          "measurement: Volume and validation": 0.8,
+          "measurement: Mass properties": 0.2,
+          "measurement": 41.3,
+          "measurement: Opening recognition": 9.4,
+          "measurement: Planar distance edit proofs": 0.5
+        },
+        "featuresReplayed": [
+          1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20,
+          21, 22, 23, 24, 25, 26, 27, 28, 29, 30, 31
+        ]
+      }
+    },
+    "secondReload": {
+      "fieldVisibleAtMs": 545,
+      "firstExactReadyAtMs": 4072
+    },
+    "edits": [
+      {
+        "label": "first edit after assistant apply",
+        "value": "36",
+        "exactMs": 498,
+        "previewInstallMs": null,
+        "statusText": "Parameter holder_height updated.",
+        "preflight": {
+          "ms": {
+            "Loading imported sources": 0.1,
+            "features": 20.3,
+            "Building history": 24.4,
+            "measurement": 35.1,
+            "measurement: Display mesh and face topology": 1.5,
+            "measurement: Imported feature recognition": 27.9,
+            "measurement: Edge topology": 0.6,
+            "measurement: Volume and validation": 0.8,
+            "measurement: Mass properties": 0.1,
+            "measurement: Opening recognition": 2.7,
+            "measurement: Planar distance edit proofs": 0.9
+          },
+          "featuresReplayed": [
+            17, 18, 19, 20, 21, 22, 23, 24, 25, 26, 27, 28, 29, 30, 31
+          ]
+        },
+        "liveStages": 0
+      },
+      {
+        "label": "warm edit before reload",
+        "value": "40",
+        "exactMs": 384,
+        "previewInstallMs": null,
+        "statusText": "Parameter holder_height updated.",
+        "preflight": {
+          "ms": {
+            "Loading imported sources": 0.1,
+            "features": 18.6,
+            "Building history": 21.6,
+            "measurement": 33.8,
+            "measurement: Display mesh and face topology": 1.3,
+            "measurement: Imported feature recognition": 22.8,
+            "measurement: Edge topology": 0.4,
+            "measurement: Volume and validation": 0.7,
+            "measurement: Mass properties": 0.0,
+            "measurement: Opening recognition": 7.2,
+            "measurement: Planar distance edit proofs": 0.4
+          },
+          "featuresReplayed": [
+            17, 18, 19, 20, 21, 22, 23, 24, 25, 26, 27, 28, 29, 30, 31
+          ]
+        },
+        "liveStages": 0
+      },
+      {
+        "label": "first edit after reload",
+        "value": "44",
+        "exactMs": 465,
+        "previewInstallMs": null,
+        "statusText": "Parameter holder_height updated.",
+        "preflight": {
+          "ms": {
+            "Loading imported sources": 0.1,
+            "features": 19.5,
+            "Building history": 23.4,
+            "measurement": 37.1,
+            "measurement: Display mesh and face topology": 1.4,
+            "measurement: Imported feature recognition": 25.6,
+            "measurement: Edge topology": 0.8,
+            "measurement: Volume and validation": 0.5,
+            "measurement: Mass properties": 0.2,
+            "measurement: Opening recognition": 6.8,
+            "measurement: Planar distance edit proofs": 0.7
+          },
+          "featuresReplayed": [
+            17, 18, 19, 20, 21, 22, 23, 24, 25, 26, 27, 28, 29, 30, 31
+          ]
+        },
+        "liveStages": 0
+      },
+      {
+        "label": "second edit after reload",
+        "value": "48",
+        "exactMs": 404,
+        "previewInstallMs": null,
+        "statusText": "Parameter holder_height updated.",
+        "preflight": {
+          "ms": {
+            "Loading imported sources": 0.0,
+            "features": 19.3,
+            "Building history": 22.0,
+            "measurement": 43.4,
+            "measurement: Display mesh and face topology": 2.1,
+            "measurement: Imported feature recognition": 23.5,
+            "measurement: Edge topology": 0.4,
+            "measurement: Volume and validation": 0.6,
+            "measurement: Mass properties": 0.2,
+            "measurement: Opening recognition": 14.6,
+            "measurement: Planar distance edit proofs": 0.5
+          },
+          "featuresReplayed": [
+            17, 18, 19, 20, 21, 22, 23, 24, 25, 26, 27, 28, 29, 30, 31
+          ]
+        },
+        "liveStages": 0
+      },
+      {
+        "label": "immediate edit after reload",
+        "value": "52",
+        "exactMs": 3931,
+        "previewInstallMs": null,
+        "statusText": "Parameter holder_height updated.",
+        "preflight": {
+          "ms": {
+            "Loading imported sources": 0.0,
+            "features": 16.2,
+            "Building history": 19.0,
+            "measurement": 44.8,
+            "measurement: Display mesh and face topology": 1.7,
+            "measurement: Imported feature recognition": 26.1,
+            "measurement: Edge topology": 0.9,
+            "measurement: Volume and validation": 0.7,
+            "measurement: Mass properties": 0.1,
+            "measurement: Opening recognition": 14.1,
+            "measurement: Planar distance edit proofs": 0.6
+          },
+          "featuresReplayed": [
+            17, 18, 19, 20, 21, 22, 23, 24, 25, 26, 27, 28, 29, 30, 31
+          ]
+        },
+        "liveStages": 174
+      }
+    ]
+  }
+]
