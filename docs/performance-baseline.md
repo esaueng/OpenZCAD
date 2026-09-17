@@ -543,6 +543,19 @@ used. Reproduce the complete raw/gzip inventory with `pnpm build:report`; the
 script reports every JS, CSS, and WASM asset instead of depending on hashed
 filenames in this document.
 
+## H02 first parameter edit after reload (2026-09-17)
+
+Measured for ROADMAP row H02 on an Apple M5 Pro with the production preview
+build and, for comparison, the Vite dev server:
+[`docs/qa/2026-09-17/first-edit-after-reload.md`](qa/2026-09-17/first-edit-after-reload.md).
+Once a reload has settled, the first parameter edit costs what any warm edit
+costs, because the exact history cache restores its prefix from the reload's
+own rebuild. An edit typed before the reload settles pays that reload once.
+The per-edit floor on a drilled holder is measurement of the edited body
+(planar-distance edit proofs 0.6–0.7 s), not history replay. The probe is
+`test/e2e/perf-holder-reload.spec.ts` under `OZ_PERF=1`; `OZ_PERF_BUDGET=1`
+asserts the within-run ratios the report pins.
+
 ## Exact-kernel fixture refresh (2026-07-31)
 
 `test/parity/parity.test.ts` passed all 24 cross-kernel cases. The committed
