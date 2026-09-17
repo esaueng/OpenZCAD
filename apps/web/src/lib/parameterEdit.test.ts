@@ -4,12 +4,17 @@ import {
   commandFactories,
   growingHolderCommand
 } from '@openzcad/command-system';
-import { createProjectDocument, setParameter } from '@openzcad/document-core';
+import {
+  createProjectDocument,
+  deleteParameter,
+  setParameter
+} from '@openzcad/document-core';
 import { toUserId } from '@openzcad/shared';
 import {
   parameterMinimums,
   parameterInputError,
-  parameterBuildError
+  parameterBuildError,
+  parameterUntouchedSince
 } from './parameterEdit';
 
 function holder() {
@@ -130,7 +135,9 @@ describe('parameter edit validation', () => {
     expect(
       parameterBuildError(base, {
         ...base.derived,
-        warnings: ['Feature "Pattern": instances overlap; volume double-counted.'],
+        warnings: [
+          'Feature "Pattern": instances overlap; volume double-counted.'
+        ],
         featureWarnings: [
           {
             featureId: base.featureOrder[0]!,
@@ -183,5 +190,44 @@ describe('parameter edit validation', () => {
         warnings: [message, message, message]
       })
     ).toBe(message);
+  });
+});
+
+describe('parameterUntouchedSince', () => {
+  // A parameter edit is validated against the document it was typed into. When
+  // that document moves meanwhile (an assistant patch landing, an undo), the
+  // edit may be re-checked on the live document only if the parameter it sets
+  // still reads as it did — otherwise "try again" is the honest answer.
+  it('permits a re-check when the moved document left the parameter alone', () => {
+    const base = holder();
+    const live = setParameter(base, { name: 'hole_diameter', expression: '5' });
+    expect(parameterUntouchedSince(base, live, 'opening_width')).toBe(true);
+    // Creating a parameter the moved document still lacks is also safe.
+    expect(parameterUntouchedSince(base, live, 'wall')).toBe(true);
+  });
+  it('refuses when the moved document changed, created or removed the parameter', () => {
+    const base = holder();
+    expect(
+      parameterUntouchedSince(
+        base,
+        setParameter(base, { name: 'opening_width', expression: '52' }),
+        'opening_width'
+      )
+    ).toBe(false);
+    expect(
+      parameterUntouchedSince(
+        base,
+        setParameter(base, { name: 'wall', expression: '3' }),
+        'wall'
+      )
+    ).toBe(false);
+    const withWall = setParameter(base, { name: 'wall', expression: '3' });
+    expect(
+      parameterUntouchedSince(
+        withWall,
+        deleteParameter(withWall, { name: 'wall' }),
+        'wall'
+      )
+    ).toBe(false);
   });
 });
