@@ -22,12 +22,51 @@ describe('ToolCard', () => {
 
     expect(screen.getByText('Drag the arrow to offset the face.')).toBeTruthy();
     expect(screen.queryByText(/need re-picking/)).toBeNull();
-    const badge = screen.getByText('Geometry-anchored');
+    const badge = screen.getByLabelText('Geometry-anchored');
     expect(badge).not.toHaveAttribute('title');
     fireEvent.focus(badge);
     expect(screen.getByRole('tooltip')).toHaveTextContent(
       'Geometry-anchoredThis face will need re-picking if earlier geometry moves.'
     );
+  });
+
+  it('reduces an active drag to a compact status marker', () => {
+    render(
+      <ToolCard
+        model={{
+          icon: 'offset-face',
+          title: 'Offset Face',
+          hint: 'Drag the arrow to offset the face.',
+          phase: 'dragging',
+          badge: {
+            label: 'Geometry-anchored',
+            detail: 'This face will need re-picking if earlier geometry moves.'
+          },
+          actions: [
+            {
+              id: 'offset-face',
+              label: 'Offset Face',
+              active: true,
+              enabled: true
+            },
+            {
+              id: 'sketch-on-face',
+              label: 'Sketch',
+              active: false,
+              enabled: true
+            }
+          ]
+        }}
+        onClose={vi.fn()}
+      />
+    );
+
+    const card = screen.getByRole('region', {
+      name: 'Offset Face operation'
+    });
+    expect(card).toHaveClass('phase-dragging');
+    expect(screen.getByLabelText('Dragging')).toBeTruthy();
+    expect(screen.queryByText('Dragging')).toBeNull();
   });
 
   it('renders an unavailable face-sketch action with its exact reason', async () => {
