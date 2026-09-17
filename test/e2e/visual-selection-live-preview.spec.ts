@@ -222,8 +222,10 @@ test('streams exact planar previews and restores invalid or canceled offsets', a
     .not.toBe('stale');
   await expect(canvas).toHaveAttribute('data-e2e-selected-face', /.+/);
   await expect(
-    page.getByRole('region', { name: 'Offset Face operation' })
-  ).toContainText('Dragging');
+    page
+      .getByRole('region', { name: 'Offset Face operation' })
+      .locator('.tool-card-phase-dot')
+  ).toHaveAttribute('aria-label', 'Dragging');
   await expect(page.getByRole('button', { name: 'History 2' })).toBeVisible();
 
   // Still holding the button, drive the total below zero. The kernel refuses
@@ -255,8 +257,10 @@ test('streams exact planar previews and restores invalid or canceled offsets', a
     timeout: PREVIEW_BUDGET_MS
   });
   await expect(
-    page.getByRole('region', { name: 'Offset Face operation' })
-  ).toContainText('Dragging');
+    page
+      .getByRole('region', { name: 'Offset Face operation' })
+      .locator('.tool-card-phase-dot')
+  ).toHaveAttribute('aria-label', 'Dragging');
 
   await page.keyboard.press('Escape');
   await page.mouse.up();
