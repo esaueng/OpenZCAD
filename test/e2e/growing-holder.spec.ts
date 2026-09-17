@@ -41,8 +41,11 @@ async function importHolder(page: Page, file: string, project: string) {
   await expectBodyCount(page, 1);
 }
 
-/** Applies a verified suggestion from the assistant's empty state or footer. */
-async function applyVerified(page: Page, label: string) {
+/**
+ * Requests a verified suggestion from the assistant's empty state or footer
+ * and returns its open proposal card, ready to apply.
+ */
+async function requestVerified(page: Page, label: string) {
   const chip = page
     .locator('.assistant-suggestion, .assistant-verified-action', {
       hasText: label
@@ -56,10 +59,19 @@ async function applyVerified(page: Page, label: string) {
   await page.getByRole('button', { name: 'Send to the assistant' }).click();
   const proposal = page.locator('.assistant-card.proposal.open').last();
   await expect(proposal).toBeVisible({ timeout: 60_000 });
+  return proposal;
+}
+
+/** Applies a verified suggestion and waits for its patch to land. */
+async function applyVerified(page: Page, label: string) {
+  // Counted, not `.last()`: with one recipe already applied, the previous
+  // card satisfies "an applied card says Applied" the instant Apply is
+  // clicked, and the caller runs on while this patch is still in preflight.
+  const applied = page.locator('.assistant-card.proposal.applied');
+  const before = await applied.count();
+  const proposal = await requestVerified(page, label);
   await proposal.getByRole('button', { name: 'Apply', exact: true }).click();
-  await expect(
-    page.locator('.assistant-card.proposal.applied').last()
-  ).toContainText('Applied', { timeout: 120_000 });
+  await expect(applied).toHaveCount(before + 1, { timeout: 120_000 });
   await expect(page.getByRole('contentinfo')).toContainText('warnings0', {
     timeout: 120_000
   });
@@ -70,6 +82,12 @@ async function setParameter(page: Page, name: string, value: string) {
   await field.fill(value);
   await field.press('Enter');
   await expect(field).toHaveValue(value);
+  // A refused edit also keeps the typed value until its check settles, so
+  // the readout is the assertion: the edit was validated and committed.
+  await expect(page.getByRole('contentinfo').getByRole('status')).toHaveText(
+    new RegExp(`Parameter ${name} updated\\.`),
+    { timeout: 180_000 }
+  );
   await expectExactReady(page);
 }
 
@@ -200,6 +218,50 @@ test('parameterizes a moved holder import: opening, mounting holes, edits, reloa
     []
   );
   expect(consoleErrors).toHaveLength(2);
+});
+
+test('applies a parameter typed while the second verified suggestion is still landing', async ({
+  page
+}) => {
+  test.setTimeout(420_000);
+  await importHolder(page, 'synthetic-holder.step', 'Holder edit during apply');
+  await openAssistant(page);
+  await applyVerified(page, 'Parameterize the opening');
+  const width = page.getByLabel('Expression for opening_width');
+  await expect(width).toHaveValue('44');
+
+  // Type into the opening while the second recipe's exact preflight is still
+  // running. Its patch then lands a new document version under the edit's own
+  // check. The edit must follow the patch and be validated against what it
+  // produced: before that it was refused as "The project or parameter changed
+  // during validation. Try again." and the document kept 44 (H02 probe).
+  const applied = page.locator('.assistant-card.proposal.applied');
+  const proposal = await requestVerified(
+    page,
+    'Parameterize the mounting holes'
+  );
+  await proposal.getByRole('button', { name: 'Apply', exact: true }).click();
+  await width.fill('48');
+  await width.press('Enter');
+  await expect(page.getByRole('contentinfo').getByRole('status')).toHaveText(
+    /Parameter opening_width updated\./,
+    { timeout: 180_000 }
+  );
+  await expect(applied).toHaveCount(2);
+  await expect(page.getByLabel('Expression for hole_diameter')).toHaveValue(
+    '5'
+  );
+  await expect(width).toHaveValue('48');
+  await expect(page.locator('.parameter-feedback.error')).toHaveCount(0);
+  await expectExactReady(page);
+  await expectBodyCount(page, 1);
+
+  // Both changes survive a reload: the patch and the edit typed over it.
+  await page.reload();
+  await expect(width).toHaveValue('48', { timeout: 60_000 });
+  await expect(page.getByLabel('Expression for hole_diameter')).toHaveValue(
+    '5'
+  );
 });
 
 test('offers and grows the arm height on a holder whose arms are solid', async ({
