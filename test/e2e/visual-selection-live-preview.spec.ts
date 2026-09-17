@@ -210,7 +210,7 @@ test('streams exact planar previews and restores invalid or canceled offsets', a
   );
   const secondSample = async () => {
     if ((await chip.getAttribute('data-state')) === 'deferred') {
-      return 'paused';
+      return 'catching-up';
     }
     const length = await readAxisLength();
     return length !== null && Math.abs(length - 33) < 5e-5
@@ -350,7 +350,7 @@ test('keeps the last value that built when a drag is released on a refusal', asy
   expect(consoleErrors).toEqual([]);
 });
 
-test('clears the paused-preview chip when a degraded gesture is canceled', async ({
+test('clears the catching-up preview state when a degraded gesture is canceled', async ({
   page
 }) => {
   test.setTimeout(process.env.CI ? 240_000 : 120_000);
@@ -375,8 +375,8 @@ test('clears the paused-preview chip when a degraded gesture is canceled', async
     timeout: PREVIEW_BUDGET_MS
   });
 
-  // clear() re-arms the previewer, so the chip must stop claiming the preview
-  // is paused. It used to stay deferred until the next commit.
+  // clear() re-arms the previewer, so the chip must leave its catching-up
+  // state. It used to stay deferred until the next commit.
   await page.keyboard.press('Escape');
   await page.mouse.up();
   await expect(chip).toHaveAttribute('data-state', 'ready', {
