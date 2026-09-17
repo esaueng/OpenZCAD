@@ -625,8 +625,10 @@ test('accepts exact visual selection and direct editing on the seeded boss', asy
   // The bore, not the outer wall: an inward-facing cylindrical face is a hole,
   // and the command is named for it.
   await expect(
-    page.getByRole('region', { name: 'Resize Hole operation' })
-  ).toContainText('Dragging');
+    page
+      .getByRole('region', { name: 'Resize Hole operation' })
+      .locator('.tool-card-phase-dot')
+  ).toHaveAttribute('aria-label', 'Dragging');
   // Keep the probe the poll accepted. Re-reading it is a second round trip
   // into a viewport that may already have moved on, and every round trip is
   // seconds of budget when the main thread is contended.
