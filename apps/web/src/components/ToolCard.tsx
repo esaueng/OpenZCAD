@@ -1,5 +1,13 @@
 import type { ReactNode } from 'react';
-import { Circle, Layers3, MoveUpRight, PenLine, Spline, X } from 'lucide-react';
+import {
+  Anchor,
+  Circle,
+  Layers3,
+  MoveUpRight,
+  PenLine,
+  Spline,
+  X
+} from 'lucide-react';
 import type {
   OperationPhase,
   ToolCardIcon,
@@ -72,7 +80,13 @@ export function ToolCard({
       <span className="tool-card-copy">
         <strong>
           <span className="tool-card-title">{model.title}</span>
-          {model.phase ? (
+          {model.phase === 'dragging' ? (
+            <span
+              className="tool-card-phase-dot"
+              aria-label={PHASE_LABELS[model.phase]}
+              title={PHASE_LABELS[model.phase]}
+            />
+          ) : model.phase ? (
             <span className={`tool-card-phase pill-${model.phase}`}>
               <StableLabel reserve={PHASE_LABEL_RESERVE} align="center">
                 {PHASE_LABELS[model.phase]}
@@ -81,8 +95,12 @@ export function ToolCard({
           ) : null}
           {model.badge ? (
             <Tooltip label={model.badge.label} description={model.badge.detail}>
-              <span className="tool-card-badge" tabIndex={0}>
-                {model.badge.label}
+              <span
+                className="tool-card-badge"
+                tabIndex={0}
+                aria-label={model.badge.label}
+              >
+                <Anchor size={12} aria-hidden="true" />
               </span>
             </Tooltip>
           ) : null}
