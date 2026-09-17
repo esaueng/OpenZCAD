@@ -174,10 +174,14 @@ async function applyVerified(page: Page, label: string) {
   await page.getByRole('button', { name: 'Send to the assistant' }).click();
   const proposal = page.locator('.assistant-card.proposal.open').last();
   await expect(proposal).toBeVisible({ timeout: 60_000 });
+  // Counted, not `.last()`: with one recipe already applied, the previous
+  // card says "Applied" the instant this Apply is clicked, and the probe ran
+  // on into its first edit while the patch was still in preflight — which is
+  // what the "refused first edit" this probe reported actually was (#359).
+  const applied = page.locator('.assistant-card.proposal.applied');
+  const before = await applied.count();
   await proposal.getByRole('button', { name: 'Apply', exact: true }).click();
-  await expect(
-    page.locator('.assistant-card.proposal.applied').last()
-  ).toContainText('Applied', { timeout: 120_000 });
+  await expect(applied).toHaveCount(before + 1, { timeout: 120_000 });
   await expect(page.getByRole('contentinfo')).toContainText('warnings0', {
     timeout: 120_000
   });
@@ -367,10 +371,11 @@ for (const scenario of scenarios) {
       resolveValue(value, initial)
     ) as [string, string, string, string, string];
     let offset = await clockOffset(page);
-    // The first edit after an assistant Apply is refused as "changed during
-    // validation" on this head (3/3 runs); it is recorded, then retried so the
-    // warm sample is a real edit.
-    const refusedAfterApply = await measureEdit(
+    // Recorded before the warm sample so the first edit after an Apply stays
+    // a distinct sample. Earlier runs saw it refused as "changed during
+    // validation": the Apply wait above returned early, so the edit was typed
+    // during the patch's preflight (#359 fixed both the wait and the refusal).
+    const afterApply = await measureEdit(
       page,
       stages,
       offset,
@@ -531,7 +536,7 @@ for (const scenario of scenarios) {
       copiesBeforeReload,
       valueAfterReload,
       secondReload,
-      edits: [refusedAfterApply, warmBefore, first, second, immediate]
+      edits: [afterApply, warmBefore, first, second, immediate]
     };
     if (process.env.OZ_PERF_BUDGET) {
       // H02 budgets: the first edit after a settled reload is a warm edit, and
