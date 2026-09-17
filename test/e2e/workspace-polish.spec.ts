@@ -212,10 +212,14 @@ test('names picked faces and edges without raw fingerprints', async ({
   const card = page.getByRole('region', { name: 'Resize Body operation' });
   await expect(card.locator('.tool-card-phase')).toHaveText('Ready');
 
-  // Dragging switches the phase pill.
+  // Dragging collapses the card to a compact, accessible status marker.
   await page.mouse.down();
   await page.mouse.move(facePoint.x + 30, facePoint.y - 20, { steps: 3 });
-  await expect(card.locator('.tool-card-phase')).toHaveText('Dragging');
+  await expect(card.locator('.tool-card-phase-dot')).toHaveAttribute(
+    'aria-label',
+    'Dragging'
+  );
+  await expect(card.locator('.tool-card-copy > small')).toBeHidden();
   await page.mouse.up();
   await page.waitForTimeout(1200);
 });
