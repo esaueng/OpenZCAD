@@ -10,6 +10,16 @@
       ],
       "autoPort": true,
       "port": 5199
+    },
+    {
+      "name": "openzcad-preview",
+      "runtimeExecutable": "sh",
+      "runtimeArgs": [
+        "-c",
+        "pnpm --filter @openzcad/web exec vite preview --port ${PORT:-4199} --strictPort"
+      ],
+      "autoPort": true,
+      "port": 4199
     }
   ]
 }
