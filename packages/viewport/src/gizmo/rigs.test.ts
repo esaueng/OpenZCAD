@@ -245,6 +245,28 @@ describe('the cylinder-radius rig', () => {
     ]);
   });
 
+  it('turns its pin to face the camera along the projected radial', () => {
+    const rig = buildCylinderRadiusHandle({
+      origin: { x: 14, y: 0, z: 8 },
+      direction: { x: 1, y: 0, z: 0 },
+      originalRadius: 14
+    });
+    const camera = new THREE.PerspectiveCamera();
+    camera.position.set(14, -60, 8);
+    camera.lookAt(14, 0, 8);
+    camera.updateMatrixWorld();
+    rig.orient?.(camera);
+    const localY = new THREE.Vector3(0, 1, 0).applyQuaternion(
+      rig.group.quaternion
+    );
+    const localZ = new THREE.Vector3(0, 0, 1).applyQuaternion(
+      rig.group.quaternion
+    );
+    expect(localY.x).toBeCloseTo(1, 1);
+    expect(localZ.y).toBeCloseTo(-1, 1);
+    rig.dispose();
+  });
+
   it('anchors the value chip on the dimension line inside the cylinder', () => {
     const rig = buildCylinderRadiusHandle({
       origin: { x: 14, y: 0, z: 8 },
