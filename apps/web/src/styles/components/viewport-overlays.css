@@ -10,14 +10,16 @@
   right: 10px;
   z-index: var(--z-viewer-overlay);
   display: flex;
-  align-items: flex-start;
-  gap: 2px;
+  align-items: center;
+  gap: 0;
   pointer-events: none;
 }
 
 /* The transparent SVG stays click-through; visible faces own click and drag. */
 .orientation-cube {
   pointer-events: none;
+  /* The box hugs the cube; triad tips may reach past it in some views. */
+  overflow: visible;
   touch-action: none;
   user-select: none;
 }
@@ -107,9 +109,8 @@
 
 .orientation-roll {
   pointer-events: auto;
-  width: 26px;
-  height: 26px;
-  margin-top: 16px;
+  width: 22px;
+  height: 22px;
   display: flex;
   align-items: center;
   justify-content: center;
