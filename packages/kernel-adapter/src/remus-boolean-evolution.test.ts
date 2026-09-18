@@ -338,14 +338,112 @@ describe('boolean entity evolution against the pinned kernel', () => {
         (entry) => entry.code === 'boolean-edge-unresolved'
       )
     ).toBe(true);
-    // Neither are the edges the boolean modified or generated: only the
-    // `preserved` event has an exact witness relation to verify against.
-    for (const handle of evolution.edges.modified.keys()) {
-      expect(derived.edgeReferences.has(handle)).toBe(false);
-    }
+    // Nor generated edges, which have no source. A modified edge carries
+    // only when its exact witness is unchanged, which a bore through a plate
+    // never leaves behind: every edge it modifies is shortened or split.
     for (const handle of evolution.edges.generated.keys()) {
       expect(derived.edgeReferences.has(handle)).toBe(false);
     }
-    expect(derived.edgeReferences.size).toBe(evolution.edges.preserved.size);
+    const resultEdges = new Map(
+      resultCandidates
+        .filter((candidate) => candidate.kind === 'edge')
+        .map((candidate) => [candidate.handle, candidate] as const)
+    );
+    const unchangedModified = [...evolution.edges.modified].filter(
+      ([resultHandle, sourceHandle]) =>
+        JSON.stringify(resultEdges.get(resultHandle)?.witness) ===
+        JSON.stringify(
+          boxCandidates
+            .concat(boreCandidates)
+            .find((candidate) => candidate.handle === sourceHandle)?.witness
+        )
+    );
+    for (const [handle] of evolution.edges.modified) {
+      expect(derived.edgeReferences.has(handle)).toBe(
+        unchangedModified.some(([unchanged]) => unchanged === handle)
+      );
+    }
+    expect(derived.edgeReferences.size).toBe(
+      evolution.edges.preserved.size + unchangedModified.length
+    );
+  });
+
+  it('carries a modified edge whose geometry the fuse left untouched', () => {
+    // An L-bracket: a wall fused onto the back of a base plate, seated 0.5 mm
+    // into it. The kernel reports the base's two FRONT vertical corners and
+    // its top front edge as `modified` — their neighbouring side faces were
+    // re-trimmed — although their exact witnesses are byte-identical to the
+    // base's own. The back corners are genuinely split by the wall and stay
+    // hash-only. Before this, no vertical corner of a fused body could be
+    // filleted by reference, and a demo fillet on them broke on any
+    // parameter tweak that moved them (QA ZCAD-001).
+    const kernel = new RemusKernel();
+    const base = kernel.makeBox(80, 40, 8);
+    const wall = kernel.makeBox(80, 8, 32);
+    kernel.transformSolid(wall, rowMajor(0, 32, 7.5));
+    const baseCandidates = topologyCandidatesForSolid(kernel, base);
+    const wallCandidates = topologyCandidatesForSolid(kernel, wall);
+    const evolution = decodeRemusBooleanEntityEvolution(
+      kernel.fuseWithEntityEvolution(base, wall)
+    );
+    const resultCandidates = topologyCandidatesForSolid(
+      kernel,
+      evolution.solid
+    );
+    const derived = deriveRemusBooleanEvolutionLineage({
+      producingFeatureId: 'feature_lbracket' as FeatureId,
+      evolution,
+      resultSolid: evolution.solid,
+      operands: [
+        {
+          lineage: nameEverything(baseCandidates, 'base'),
+          candidates: baseCandidates
+        },
+        {
+          lineage: nameEverything(wallCandidates, 'wall'),
+          candidates: wallCandidates
+        }
+      ],
+      resultCandidates
+    });
+    const edgeAt = (
+      from: [number, number, number],
+      to: [number, number, number]
+    ) => {
+      const q = (p: [number, number, number]) => p.map((v) => v * 1_000_000);
+      const want = JSON.stringify([q(from), q(to)]);
+      return resultCandidates.find(
+        (candidate) =>
+          candidate.kind === 'edge' &&
+          !(candidate.witness as { closed: boolean }).closed &&
+          JSON.stringify(
+            (candidate.witness as { endpoints: unknown }).endpoints
+          ) === want
+      )!;
+    };
+    const frontLeft = edgeAt([0, 0, 0], [0, 0, 8]);
+    const frontRight = edgeAt([80, 0, 0], [80, 0, 8]);
+    const topFront = edgeAt([0, 0, 8], [80, 0, 8]);
+    for (const edge of [frontLeft, frontRight, topFront]) {
+      expect(evolution.edges.modified.has(edge.handle)).toBe(true);
+      expect(derived.edgeReferences.get(edge.handle)?.lineageName).toMatch(
+        /^boolean\.edge\.operand\.0\.base\./
+      );
+    }
+    // The back corners are split at z = 7.5 where the wall seats: two result
+    // edges each, neither the original.
+    const backLeftLower = edgeAt([0, 40, 0], [0, 40, 7.5]);
+    const backLeftUpper = edgeAt([0, 40, 7.5], [0, 40, 8]);
+    expect(derived.edgeReferences.has(backLeftLower.handle)).toBe(false);
+    expect(derived.edgeReferences.has(backLeftUpper.handle)).toBe(false);
+    // Every carried edge still passes the unchanged-witness relation.
+    for (const [handle, reference] of derived.edgeReferences) {
+      expect(reference.witness).toEqual(
+        resultCandidates.find(
+          (candidate) =>
+            candidate.kind === 'edge' && candidate.handle === handle
+        )?.witness
+      );
+    }
   });
 });
