@@ -455,6 +455,53 @@
   transform: translate(-50%, -50%);
 }
 
+/* Line variant: the label rides its dimension line, rotated to read along
+   it, as a drawing's dimension text does. A light pill with the accent
+   border marks the value as the editable one; the mode tag beside it is the
+   same pill without the border. */
+.handle-value-chip[data-variant='line'],
+.handle-label-chip[data-variant='line'] {
+  padding: 2px 8px;
+  color: #14202e;
+  background: rgba(252, 253, 255, 0.98);
+  border: 1.5px solid var(--color-accent);
+  border-radius: 999px;
+  box-shadow: 0 1px 4px rgba(0, 0, 0, 0.35);
+  backdrop-filter: none;
+  font-family: var(--font-ui);
+  font-size: var(--fs-xs);
+  font-weight: 700;
+  transform: translate(-50%, -50%) rotate(var(--chip-rotate, 0deg));
+}
+
+.handle-label-chip[data-variant='line'] {
+  border-color: transparent;
+  font-weight: 600;
+}
+
+.handle-value-chip[data-variant='line']:hover,
+.handle-label-chip[data-variant='line']:hover {
+  color: #14202e;
+  background: #ffffff;
+}
+
+.handle-value-chip[data-variant='line'] .chip-prefix,
+.handle-value-chip[data-variant='line'] .chip-units {
+  opacity: 0.8;
+}
+
+.handle-value-chip[data-variant='line'][data-engaged='false'] {
+  color: #14202e;
+  background: rgba(252, 253, 255, 0.92);
+  border-color: color-mix(in srgb, var(--color-accent) 60%, transparent);
+}
+
+.handle-value-chip[data-variant='line'][data-state='warning'] {
+  color: #14202e;
+  background: #fff4dc;
+  border-color: var(--color-warning);
+}
+
 /* Dimension-line variant: a light pill centred on the radius callout line,
    styled like a drawing annotation rather than a dark tooltip. */
 .handle-value-chip[data-variant='dimension'] {

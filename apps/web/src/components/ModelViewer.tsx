@@ -1085,6 +1085,42 @@ const SNAP_PROJECT_SCRATCH = new THREE.Vector3();
  * before — a rig being torn down because its body was replaced has nothing
  * left to fade against.
  */
+/**
+ * How far a body reaches behind a face along its normal, from the rendered
+ * mesh: the far end of the dimension an offset handle draws. Exact for the
+ * mesh as drawn; null when nothing lies behind the face.
+ */
+function bodyExtentBehind(
+  object: THREE.Object3D,
+  origin: THREE.Vector3,
+  direction: THREE.Vector3
+): number | null {
+  let least = Number.POSITIVE_INFINITY;
+  const vertex = new THREE.Vector3();
+  object.updateWorldMatrix(true, true);
+  object.traverse((child) => {
+    if (!(child instanceof THREE.Mesh)) {
+      return;
+    }
+    const mesh = child as THREE.Mesh<THREE.BufferGeometry, THREE.Material>;
+    const position = mesh.geometry.getAttribute('position') as
+      THREE.BufferAttribute | THREE.InterleavedBufferAttribute | undefined;
+    if (!position) {
+      return;
+    }
+    for (let index = 0; index < position.count; index += 1) {
+      vertex
+        .fromBufferAttribute(position, index)
+        .applyMatrix4(child.matrixWorld);
+      const along = vertex.sub(origin).dot(direction);
+      if (along < least) {
+        least = along;
+      }
+    }
+  });
+  return Number.isFinite(least) && least < -1e-6 ? -least : null;
+}
+
 function retireRig(rig: DragRig, retiring: DragRig[]): void {
   if (!rig.beginExit || !rig.isGone) {
     rig.dispose();
@@ -1114,6 +1150,10 @@ function stepRetiringRigs(retiring: DragRig[], dtMs: number): boolean {
 
 /** Screen gap between a pin's centre and its value chip. */
 const PIN_CHIP_GAP_PX = 44;
+/** A dimension line shorter than this on screen cannot carry its label. */
+const LINE_LABEL_MIN_PX = 150;
+/** Air between the mode tag and the value pill along the line. */
+const LINE_LABEL_GAP_PX = 6;
 /**
  * The cylinder chip rides its radius line, but leaves it for the pin's side
  * once the pill would reach the pin. This is the pin's half-extent plus a
@@ -1547,6 +1587,10 @@ export function ModelViewer({
   /** Live offset-handle rig; owned by the offsetHandle effect below. */
   const offsetRigRef = useRef<DragRig | null>(null);
   const offsetDragActiveRef = useRef(false);
+  /** How far the body reaches behind the armed face, for the "Total" reading. */
+  const offsetExtentRef = useRef<number | null>(null);
+  /** Which number the offset chip shows: the drag delta, or the whole span. */
+  const offsetChipModeRef = useRef<'offset' | 'total'>('offset');
   /** Cylindrical radius has its own non-translating affordance and lifecycle. */
   const cylinderRadiusRigRef = useRef<DragRig | null>(null);
   const cylinderRadiusDragActiveRef = useRef(false);
@@ -2679,7 +2723,23 @@ export function ModelViewer({
     // either pill opens the same exact-entry keypad.
     const radiusLabelChip = hud.create('handle-label-chip');
     radiusLabelChip.textContent = 'Diameter';
-    radiusLabelChip.addEventListener('click', handleChipClick);
+    radiusLabelChip.addEventListener('click', (event) => {
+      // On an offset line the tag is the Total/Offset switch; on a radius
+      // line it names the dimension and opens exact entry like the value.
+      const offsetRig = offsetRigRef.current;
+      if (offsetRig && !cylinderRadiusRigRef.current) {
+        event.stopPropagation();
+        const span =
+          offsetHandleRef.current?.totalBaseline ?? offsetExtentRef.current;
+        if (span !== null && span !== undefined) {
+          offsetChipModeRef.current =
+            offsetChipModeRef.current === 'total' ? 'offset' : 'total';
+          requestRender();
+        }
+        return;
+      }
+      handleChipClick();
+    });
 
     // Cursor-following dimension readout for in-viewport sketching.
     const sketchDimLabel = hud.create('sketch-dim-label');
@@ -4605,12 +4665,16 @@ export function ModelViewer({
           const label = edgeHandleRef.current?.label;
           text = `${label ? `${label} · ` : ''}${prefix} ${value} ${unitsRef.current}`;
         } else {
+          // "Total" reads the whole span this face sets: a primitive's own
+          // height when it has one, else the body's reach behind the face.
           const totalBaseline = offsetHandleRef.current?.totalBaseline;
           const totalSense = offsetHandleRef.current?.totalSense ?? 1;
-          text =
-            totalBaseline === undefined
-              ? `${value >= 0 ? '+' : ''}${value} ${unitsRef.current}`
-              : `Total ${formatNumber(totalBaseline + totalSense * rawValue)} ${unitsRef.current}`;
+          const span = totalBaseline ?? offsetExtentRef.current;
+          const showTotal =
+            offsetChipModeRef.current === 'total' && span !== null;
+          text = showTotal
+            ? `${formatNumber(span + totalSense * rawValue)} ${unitsRef.current}`
+            : `${value >= 0 ? '+' : ''}${value} ${unitsRef.current}`;
           if (offsetPreviewInvalidRef.current) {
             text = `⚠ ${text}`;
           }
@@ -4686,7 +4750,46 @@ export function ModelViewer({
           screen = pinScreen;
         }
       }
-      if (rig && (rig.kind === 'offset-face' || dimensionChipBesidePin)) {
+      // A rig with a dimension line lays its label along the line, rotated
+      // to read with it, once the line is long enough on screen to carry
+      // the two pills. Otherwise the label hangs beside the pin.
+      let lineAngle: number | null = null;
+      const line =
+        rig && !dimensionChipBesidePin && rig.kind !== 'edge-radius'
+          ? (rig.chipLine?.() ?? null)
+          : null;
+      if (line) {
+        const start = projectToScreen(
+          line.start,
+          context.activeCamera,
+          renderer.domElement.clientWidth,
+          renderer.domElement.clientHeight
+        );
+        const end = projectToScreen(
+          line.end,
+          context.activeCamera,
+          renderer.domElement.clientWidth,
+          renderer.domElement.clientHeight
+        );
+        if (start && end) {
+          const dx = end.x - start.x;
+          const dy = end.y - start.y;
+          if (Math.hypot(dx, dy) >= LINE_LABEL_MIN_PX) {
+            lineAngle = Math.atan2(dy, dx);
+            // Text reads left to right: flip a line that runs leftward.
+            if (lineAngle > Math.PI / 2) {
+              lineAngle -= Math.PI;
+            } else if (lineAngle < -Math.PI / 2) {
+              lineAngle += Math.PI;
+            }
+          }
+        }
+      }
+      if (
+        rig &&
+        lineAngle === null &&
+        (rig.kind === 'offset-face' || dimensionChipBesidePin)
+      ) {
         // The chip hangs beside the pin, perpendicular to the drag axis on
         // screen and always to the right, at a fixed pixel gap: it stays
         // clear of both arrow heads however the face is foreshortened.
@@ -4815,13 +4918,15 @@ export function ModelViewer({
         renderChipText(chip, text);
       }
       chip.dataset.variant =
-        rig?.kind === 'cylinder-radius'
-          ? dimensionChipBesidePin
-            ? 'pin'
-            : 'dimension'
-          : rig?.kind === 'offset-face'
-            ? 'pin'
-            : 'default';
+        lineAngle !== null
+          ? 'line'
+          : rig?.kind === 'cylinder-radius'
+            ? dimensionChipBesidePin
+              ? 'pin'
+              : 'dimension'
+            : rig?.kind === 'offset-face'
+              ? 'pin'
+              : 'default';
       // A chip at its starting value, with no hand on it, is a tap target
       // for exact entry and nothing more: it recedes until something moves.
       const engaged =
@@ -4850,19 +4955,62 @@ export function ModelViewer({
         String(previewDeferredRef.current && !offsetWarning)
       );
       chip.setAttribute('aria-invalid', String(offsetWarning));
-      hud.showAt(chip, screen.x, screen.y);
-      // Beside the pin there is no line to name, and the Ø/R prefix on the
-      // value already says (and switches) which one is shown, so the name
-      // tag stays with the line-riding layout only.
-      if (rig?.kind === 'cylinder-radius' && !dimensionChipBesidePin) {
-        radiusLabelChip.textContent =
+      // What the tag beside the value says, when there is a line to name:
+      // the radius line's Diameter/Radius, or the offset line's Total/Offset
+      // switch (only a switch when a span is known to switch to).
+      let tagText: string | null = null;
+      if (rig?.kind === 'cylinder-radius') {
+        tagText =
           cylinderDimensionModeRef.current === 'diameter'
             ? 'Diameter'
             : 'Radius';
-        // Same anchor; CSS shifts it to sit flush against the value pill.
-        hud.showAt(radiusLabelChip, screen.x, screen.y);
+      } else if (rig?.kind === 'offset-face' && lineAngle !== null) {
+        tagText =
+          offsetChipModeRef.current === 'total' ? 'Total ⌄' : 'Offset ⌄';
+      }
+      if (lineAngle !== null) {
+        // Both pills ride the line, rotated to read along it: the tag first,
+        // then the value, each pushed half its own width out from the anchor
+        // so they sit end to end with a little air between.
+        const degrees = (lineAngle * 180) / Math.PI;
+        chip.style.setProperty('--chip-rotate', `${degrees}deg`);
+        radiusLabelChip.style.setProperty('--chip-rotate', `${degrees}deg`);
+        radiusLabelChip.dataset.variant = 'line';
+        const alongX = Math.cos(lineAngle);
+        const alongY = Math.sin(lineAngle);
+        const half = LINE_LABEL_GAP_PX / 2;
+        const valueReach = chip.offsetWidth / 2 + half;
+        hud.showAt(
+          chip,
+          screen.x + alongX * valueReach,
+          screen.y + alongY * valueReach
+        );
+        if (tagText !== null) {
+          radiusLabelChip.textContent = tagText;
+          const tagReach = radiusLabelChip.offsetWidth / 2 + half;
+          hud.showAt(
+            radiusLabelChip,
+            screen.x - alongX * tagReach,
+            screen.y - alongY * tagReach
+          );
+        } else {
+          radiusLabelChip.hidden = true;
+        }
       } else {
-        radiusLabelChip.hidden = true;
+        chip.style.removeProperty('--chip-rotate');
+        radiusLabelChip.style.removeProperty('--chip-rotate');
+        delete radiusLabelChip.dataset.variant;
+        hud.showAt(chip, screen.x, screen.y);
+        // Beside the pin there is no line to name, and the Ø/R prefix on
+        // the value already says (and switches) which one is shown, so the
+        // name tag stays with the line-riding layout only.
+        if (rig?.kind === 'cylinder-radius' && !dimensionChipBesidePin) {
+          radiusLabelChip.textContent = tagText ?? '';
+          // Same anchor; CSS shifts it to sit flush against the value pill.
+          hud.showAt(radiusLabelChip, screen.x, screen.y);
+        } else {
+          radiusLabelChip.hidden = true;
+        }
       }
       keypadAnchorRef.current?.(screen);
     }
@@ -8242,9 +8390,35 @@ export function ModelViewer({
     // Recognized primitive profiles have a disposable viewport preview.
     // Generic face edits stream exact worker geometry so unrelated faces and
     // compound siblings stay fixed. Neither path overlays a detached slab.
+    const placement = offsetHandlePlacement(
+      offsetHandle.point,
+      offsetHandle.normal
+    );
+    const body = context.objectsByBodyId.get(offsetHandle.bodyId);
+    const extentBehind = body
+      ? bodyExtentBehind(
+          body,
+          new THREE.Vector3(
+            placement.origin.x,
+            placement.origin.y,
+            placement.origin.z
+          ),
+          new THREE.Vector3(
+            placement.direction.x,
+            placement.direction.y,
+            placement.direction.z
+          )
+        )
+      : null;
+    offsetExtentRef.current = extentBehind;
+    // A primitive height edit already knows its total; any other face
+    // starts as a plain offset and the tag on the chip switches it.
+    offsetChipModeRef.current =
+      offsetHandle.totalBaseline !== undefined ? 'total' : 'offset';
     const rig = buildOffsetFaceHandle({
-      ...offsetHandlePlacement(offsetHandle.point, offsetHandle.normal),
-      ghostGeometry: null
+      ...placement,
+      ghostGeometry: null,
+      ...(extentBehind === null ? {} : { extentBehind })
     });
     rig.setValue(offsetHandle.initialValue ?? 0);
     rig.setWarning?.(offsetPreviewInvalidRef.current);
