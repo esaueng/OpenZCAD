@@ -88,7 +88,7 @@ describe('the offset-face rig', () => {
     expect(rig.chipAnchor(20).z).toBeCloseTo(3 + 5, 6);
   });
 
-  it('faces the camera and keeps its arrow along the projected normal', () => {
+  it('keeps its arrow on the face normal and rolls its face to the camera', () => {
     const rig = offsetRig({ x: 1, y: 0, z: 0 });
     const camera = new THREE.PerspectiveCamera();
     camera.position.set(0, -50, 0);
@@ -101,24 +101,41 @@ describe('the offset-face rig', () => {
     const localZ = new THREE.Vector3(0, 0, 1).applyQuaternion(
       rig.group.quaternion
     );
-    expect(localY.x).toBeCloseTo(1, 1);
-    // The pin's plane faces the camera.
+    // The axis is the normal itself, not its screen projection.
+    expect(localY.x).toBeCloseTo(1, 6);
+    // The pin's flat face looks at the camera.
     expect(localZ.y).toBeCloseTo(-1, 1);
   });
 
-  it('stands upright when the normal points at the camera', () => {
+  it('stays on the normal even when it points straight at the camera', () => {
     const rig = offsetRig({ x: 0, y: -1, z: 0 });
     const camera = new THREE.PerspectiveCamera();
-    camera.up.set(0, 0, 1);
-    camera.position.set(0, -50, 0);
-    camera.lookAt(0, 0, 0);
+    camera.position.set(1, -50, 3);
+    camera.lookAt(1, 0, 3);
     camera.updateMatrixWorld();
     rig.orient?.(camera);
     const localY = new THREE.Vector3(0, 1, 0).applyQuaternion(
       rig.group.quaternion
     );
-    // No usable projection, so the arrow follows the camera's up (world Z).
-    expect(localY.z).toBeCloseTo(1, 1);
+    expect(localY.y).toBeCloseTo(-1, 6);
+    // No roll is preferable here; whichever it picked must be a real one.
+    const q = rig.group.quaternion;
+    expect(Number.isFinite(q.x + q.y + q.z + q.w)).toBe(true);
+  });
+
+  it('carries a ring in the face plane for the head-on view', () => {
+    const rig = offsetRig({ x: 0, y: 0, z: 1 });
+    const ring = rig.group.children.find(
+      (child) =>
+        child instanceof THREE.Mesh &&
+        child.geometry instanceof THREE.RingGeometry
+    ) as THREE.Mesh;
+    expect(ring).toBeDefined();
+    // Its own normal lies along the rig's local +Y, the face normal.
+    const ringNormal = new THREE.Vector3(0, 0, 1).applyQuaternion(
+      ring.quaternion
+    );
+    expect(Math.abs(ringNormal.y)).toBeCloseTo(1, 6);
   });
 
   it('keeps world-space parts out of the rescaled group', () => {
