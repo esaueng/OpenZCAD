@@ -20,8 +20,12 @@ import { SELECTION_SEMANTICS } from '../render/semantics';
  *   witness lines   short ticks standing off the geometry, so the dimension
  *                   line does not sit on top of the edge it measures
  *   dimension line  dashed, between the two witness ticks
- *   arrowheads      cones whose TIPS land on the measured points, not their
- *                   centres — an arrow that overshoots reads as a longer part
+ *   arrowheads      flat triangles whose TIPS land on the measured points, not
+ *                   their centres — an arrow that overshoots reads as a longer
+ *                   part. They were cones once; a cone seen along its own axis
+ *                   is a disc, and at close range perspective blew the near
+ *                   one up while the far one shrank. A triangle turned to face
+ *                   the camera (`orient`) keeps its drawn shape from any angle.
  *
  * Everything sized in pixels is scaled per frame by the caller, which is the
  * only way a dimension stays legible across a zoom range that spans a bolt and
@@ -32,8 +36,9 @@ import { SELECTION_SEMANTICS } from '../render/semantics';
 export const DIMENSION_LINE_COLOR = SELECTION_SEMANTICS.reference.dimension;
 
 /**
- * Cone size in world units at unit scale, kept identical to the rig's shipped
- * values so the two graphics cannot diverge visually.
+ * Arrowhead size in world units at unit scale, kept identical to the rig's
+ * shipped values so the two graphics cannot diverge visually. The radius is
+ * the head's half-width at its base.
  */
 export const DIMENSION_ARROW_RADIUS = 0.055;
 export const DIMENSION_ARROW_LENGTH = 0.22;
@@ -72,6 +77,13 @@ export interface DimensionGraphic {
    * arrowheads at their pre-zoom size.
    */
   update(start: THREE.Vector3, end: THREE.Vector3, pixelScale: number): void;
+  /**
+   * Turns the flat arrowheads to face the camera, rolling each around the
+   * dimension's own axis so the tips stay on the measured points. Call it
+   * once per drawn frame; `update` keeps the last camera for its own
+   * re-layouts.
+   */
+  orient(camera: THREE.Camera): void;
   /** Changes linework and arrowheads in place without rebuilding geometry. */
   setColor(color: THREE.ColorRepresentation): void;
   /** A point on the dimension line, for hanging the value label from. */
@@ -143,13 +155,17 @@ export function createDimensionGraphic(
     opacity: Math.min(opacity + 0.05, 1),
     depthTest
   });
-  // One cone geometry shared by both heads: they are the same shape, and the
-  // second allocation would be freed by the same dispose anyway.
-  const coneGeometry = new THREE.ConeGeometry(
-    DIMENSION_ARROW_RADIUS,
-    DIMENSION_ARROW_LENGTH,
-    12
-  );
+  // One triangle shared by both heads: they are the same shape, and the
+  // second allocation would be freed by the same dispose anyway. Its tip is
+  // at local +Y, half a length up, exactly where the cone's tip used to be,
+  // so the tip placement below is unchanged.
+  const headShape = new THREE.Shape();
+  headShape.moveTo(0, DIMENSION_ARROW_LENGTH / 2);
+  headShape.lineTo(-DIMENSION_ARROW_RADIUS * 1.4, -DIMENSION_ARROW_LENGTH / 2);
+  headShape.lineTo(DIMENSION_ARROW_RADIUS * 1.4, -DIMENSION_ARROW_LENGTH / 2);
+  headShape.closePath();
+  const coneGeometry = new THREE.ShapeGeometry(headShape);
+  arrowMaterial.side = THREE.DoubleSide;
   const makeHead = () => {
     const head = new THREE.Mesh(coneGeometry, arrowMaterial);
     head.renderOrder = renderOrder + 1;
@@ -185,23 +201,66 @@ export function createDimensionGraphic(
   const anchor = new THREE.Vector3();
   const axis = new THREE.Vector3();
   const up = new THREE.Vector3(0, 1, 0);
+  let camera: THREE.Camera | null = null;
+  let hasAxis = false;
+
+  const toCamera = new THREE.Vector3();
+  const facing = new THREE.Vector3();
+  const across = new THREE.Vector3();
+  const basis = new THREE.Matrix4();
+  /**
+   * Points a head's local +Y along `along` and rolls it about that axis so
+   * its face turns toward the camera. With no camera yet, the roll is
+   * arbitrary but the tip is still right.
+   */
+  const aimHead = (head: THREE.Mesh, along: THREE.Vector3) => {
+    if (!camera) {
+      head.quaternion.setFromUnitVectors(up, along);
+      return;
+    }
+    if ((camera as THREE.OrthographicCamera).isOrthographicCamera) {
+      camera.getWorldDirection(toCamera).negate();
+    } else {
+      toCamera.copy(camera.position).sub(head.position).normalize();
+    }
+    facing.copy(toCamera).addScaledVector(along, -along.dot(toCamera));
+    if (facing.lengthSq() < 1e-6) {
+      // The dimension points straight at the camera: it projects to a point,
+      // so any roll is as good as another.
+      head.quaternion.setFromUnitVectors(up, along);
+      return;
+    }
+    facing.normalize();
+    across.crossVectors(along, facing).normalize();
+    head.quaternion.setFromRotationMatrix(
+      basis.makeBasis(across, along, facing)
+    );
+  };
+  const aimHeads = () => {
+    aimHead(startHead, axis.clone().negate());
+    aimHead(endHead, axis);
+  };
 
   return {
     object,
     update(start, end, pixelScale) {
-      // A clamp at 1, matching the rig: without it the graphic collapses to
-      // nothing at extreme zoom-in, where `pixelScale` goes to zero and the
-      // arrowheads would vanish exactly when they are most readable.
-      const scale = Math.max(pixelScale, 1);
+      // The heads scale with the world size of a pixel like everything else,
+      // so they hold their screen size at any zoom. A floor here (the rig
+      // once clamped at 1) is what made them balloon when zoomed in past
+      // one world unit per hundred pixels.
+      const scale =
+        Number.isFinite(pixelScale) && pixelScale > 0 ? pixelScale : 1;
       axis.subVectors(end, start);
       const length = axis.length();
       if (length <= 1e-9) {
         // A zero-length dimension has no direction to orient anything by.
         // Collapsing to a hidden graphic beats drawing a NaN.
         object.visible = false;
+        hasAxis = false;
         return;
       }
       object.visible = true;
+      hasAxis = true;
       axis.divideScalar(length);
 
       lineGeometry.setPositions([
@@ -216,8 +275,6 @@ export function createDimensionGraphic(
 
       startHead.scale.setScalar(scale);
       endHead.scale.setScalar(scale);
-      startHead.quaternion.setFromUnitVectors(up, axis.clone().negate());
-      endHead.quaternion.setFromUnitVectors(up, axis);
       // Half a cone back from each end, so the TIP lands on the measured
       // point. Centring the cone there would overstate the measurement by
       // half an arrowhead at each end.
@@ -227,6 +284,7 @@ export function createDimensionGraphic(
       endHead.position
         .copy(end)
         .addScaledVector(axis, (-DIMENSION_ARROW_LENGTH / 2) * scale);
+      aimHeads();
 
       if (witnesses.length === 2) {
         // Ticks run perpendicular to the dimension, in whichever direction is
@@ -260,6 +318,12 @@ export function createDimensionGraphic(
       // than the midpoint: dead centre collides with the dimension line's own
       // dash pattern more often than not.
       anchor.copy(start).addScaledVector(axis, length * 0.45);
+    },
+    orient(nextCamera) {
+      camera = nextCamera;
+      if (hasAxis) {
+        aimHeads();
+      }
     },
     setColor(nextColor) {
       line.material.color.set(nextColor);

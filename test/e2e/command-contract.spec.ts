@@ -177,8 +177,9 @@ test('cap height under chamfers: Enter commits the chip value, Escape leaves his
   await proveContract(page, canvas, {
     arm,
     dialog: 'Total value',
-    chipBefore: 'Total 28 mm',
-    chipAfter: 'Total 34 mm',
+    // The "Total" word lives on the tag pill beside the value now.
+    chipBefore: '28 mm',
+    chipAfter: '34 mm',
     commitValue: '34',
     cancelValue: '40',
     baseline: 28,
