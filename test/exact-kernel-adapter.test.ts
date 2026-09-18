@@ -1224,20 +1224,26 @@ describe('exact kernel adapter', { timeout: 30_000 }, () => {
     expect(front?.reference?.lineageName).toBe(
       'boolean.face.operand.0.primitive.box.face.y-min'
     );
-    // Edges the kernel's boolean evolution calls `preserved`, and whose exact
-    // witness is unchanged, now keep their operand's name (K05). Both plates
-    // stand clear of the fuse at one end, so the base's four bottom edges and
-    // the wall's four top edges survive; everything the fuse touched, and
-    // everything it declined to trace, stays hash-only.
+    // Edges the kernel's boolean evolution calls `preserved` or `modified`,
+    // and whose exact witness is unchanged, keep their operand's name (K05).
+    // Both plates stand clear of the fuse at one end, so the base's four
+    // bottom edges and the wall's four top edges survive as `preserved`. The
+    // base's two front vertical corners and its top front edge come back as
+    // `modified` — the side faces next to them were re-trimmed — with their
+    // geometry untouched, so they carry too. Everything the fuse actually
+    // changed, and everything it declined to trace, stays hash-only.
     const namedEdges = (body?.topology?.edges ?? [])
       .map((edge) => edge.reference?.lineageName)
       .filter((name): name is string => name !== undefined)
       .sort();
     expect(namedEdges).toEqual([
       'boolean.edge.operand.0.primitive.box.edge.x.y-max.z-min',
+      'boolean.edge.operand.0.primitive.box.edge.x.y-min.z-max',
       'boolean.edge.operand.0.primitive.box.edge.x.y-min.z-min',
       'boolean.edge.operand.0.primitive.box.edge.y.x-max.z-min',
       'boolean.edge.operand.0.primitive.box.edge.y.x-min.z-min',
+      'boolean.edge.operand.0.primitive.box.edge.z.x-max.y-min',
+      'boolean.edge.operand.0.primitive.box.edge.z.x-min.y-min',
       'boolean.edge.operand.1.primitive.box.edge.x.y-max.z-max',
       'boolean.edge.operand.1.primitive.box.edge.x.y-min.z-max',
       'boolean.edge.operand.1.primitive.box.edge.y.x-max.z-max',
