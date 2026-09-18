@@ -5039,22 +5039,26 @@ export function ModelViewer({
           // Same anchor; CSS shifts it to sit flush against the value pill.
           hud.showAt(radiusLabelChip, screen.x, screen.y);
         } else if (
-          rig?.kind === 'offset-face' &&
-          offsetSpan !== null &&
-          offsetSpan !== undefined
+          rig?.kind === 'cylinder-radius' ||
+          (rig?.kind === 'offset-face' &&
+            offsetSpan !== null &&
+            offsetSpan !== undefined)
         ) {
-          // Beside the pin the Total/Offset switch still has to be
-          // reachable: it sits flush against the value chip's left edge.
+          // Beside the pin the tag stays reachable — the Total/Offset
+          // switch, or the Diameter/Radius name that also opens exact
+          // entry — flush against the value chip's left edge.
           radiusLabelChip.textContent =
-            offsetChipModeRef.current === 'total' ? 'Total ⌄' : 'Offset ⌄';
+            rig.kind === 'cylinder-radius'
+              ? (tagText ?? '')
+              : offsetChipModeRef.current === 'total'
+                ? 'Total ⌄'
+                : 'Offset ⌄';
           hud.showAt(
             radiusLabelChip,
             screen.x - chip.offsetWidth / 2 - 2,
             screen.y
           );
         } else {
-          // A radius chip beside its pin needs no name: the Ø/R prefix on
-          // the value already says (and switches) which one is shown.
           radiusLabelChip.hidden = true;
         }
       }
