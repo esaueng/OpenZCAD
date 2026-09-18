@@ -1112,8 +1112,46 @@ function stepRetiringRigs(retiring: DragRig[], dtMs: number): boolean {
   return animating;
 }
 
-/** Screen gap between the offset pin's centre and its value chip. */
+/** Screen gap between a pin's centre and its value chip. */
 const PIN_CHIP_GAP_PX = 44;
+/**
+ * The cylinder chip rides its radius line, but leaves it for the pin's side
+ * once the pill would reach the pin. This is the pin's half-extent plus a
+ * little air, added to the pill's own width when deciding.
+ */
+const DIMENSION_CHIP_PIN_CLEARANCE_PX = 36;
+
+/**
+ * Splits a chip's text into prefix, number and units so the number can carry
+ * the weight and the rest can recede. The concatenated text is unchanged:
+ * "Total 25.59 mm" reads back exactly as written.
+ */
+function renderChipText(chip: HTMLElement, text: string): void {
+  const match = /^(.*?)(-?\d[\d.,]*)(\s\S+)?$/.exec(text);
+  if (!match) {
+    chip.textContent = text;
+    return;
+  }
+  const [, prefix = '', number = '', units = ''] = match;
+  const parts: Node[] = [];
+  if (prefix) {
+    const span = document.createElement('span');
+    span.className = 'chip-prefix';
+    span.textContent = prefix;
+    parts.push(span);
+  }
+  const value = document.createElement('span');
+  value.className = 'chip-number';
+  value.textContent = number;
+  parts.push(value);
+  if (units) {
+    const span = document.createElement('span');
+    span.className = 'chip-units';
+    span.textContent = units;
+    parts.push(span);
+  }
+  chip.replaceChildren(...parts);
+}
 
 const E2E_CANVAS_HOOKS_ENABLED =
   (
@@ -4618,7 +4656,37 @@ export function ModelViewer({
         }
         return;
       }
-      if (rig?.kind === 'offset-face') {
+      // The cylinder chip rides its radius line, but a line seen nearly
+      // end-on has no room on it: the chip would land on the pin. It then
+      // hangs beside the pin like the offset chip does.
+      let dimensionChipBesidePin = false;
+      if (rig?.kind === 'cylinder-radius') {
+        const pinScreen = projectToScreen(
+          rig.group.position,
+          context.activeCamera,
+          renderer.domElement.clientWidth,
+          renderer.domElement.clientHeight
+        );
+        // The pill starts at the anchor and runs toward the pin, so it
+        // reaches the pin once the gap between them is shorter than the
+        // pill itself (last frame's width) plus the pin's half-extent.
+        const gapToPin = pinScreen
+          ? Math.hypot(pinScreen.x - screen.x, pinScreen.y - screen.y)
+          : 0;
+        const pillReach = chip.offsetWidth + DIMENSION_CHIP_PIN_CLEARANCE_PX;
+        // Zoomed in on the wall, the 45% point of the radius is off the
+        // canvas while the pin is still in view: the value follows the pin.
+        const anchorOffCanvas =
+          screen.x < 0 ||
+          screen.y < 0 ||
+          screen.x > renderer.domElement.clientWidth ||
+          screen.y > renderer.domElement.clientHeight;
+        if (pinScreen && (gapToPin < pillReach || anchorOffCanvas)) {
+          dimensionChipBesidePin = true;
+          screen = pinScreen;
+        }
+      }
+      if (rig && (rig.kind === 'offset-face' || dimensionChipBesidePin)) {
         // The chip hangs beside the pin, perpendicular to the drag axis on
         // screen and always to the right, at a fixed pixel gap: it stays
         // clear of both arrow heads however the face is foreshortened.
@@ -4744,14 +4812,26 @@ export function ModelViewer({
           units
         );
       } else {
-        chip.textContent = text;
+        renderChipText(chip, text);
       }
       chip.dataset.variant =
         rig?.kind === 'cylinder-radius'
-          ? 'dimension'
+          ? dimensionChipBesidePin
+            ? 'pin'
+            : 'dimension'
           : rig?.kind === 'offset-face'
             ? 'pin'
             : 'default';
+      // A chip at its starting value, with no hand on it, is a tap target
+      // for exact entry and nothing more: it recedes until something moves.
+      const engaged =
+        offsetDragActiveRef.current ||
+        cylinderRadiusDragActiveRef.current ||
+        edgeDragActiveRef.current ||
+        (rig !== null &&
+          rig.kind !== 'cylinder-radius' &&
+          Math.abs(rig.value()) > 1e-9);
+      chip.dataset.engaged = String(engaged);
       // Any armed rig can hold a refused value: the flag is the operation's
       // failed phase, whichever handle is driving it.
       const offsetWarning = offsetPreviewInvalidRef.current;
@@ -4771,7 +4851,10 @@ export function ModelViewer({
       );
       chip.setAttribute('aria-invalid', String(offsetWarning));
       hud.showAt(chip, screen.x, screen.y);
-      if (rig?.kind === 'cylinder-radius') {
+      // Beside the pin there is no line to name, and the Ø/R prefix on the
+      // value already says (and switches) which one is shown, so the name
+      // tag stays with the line-riding layout only.
+      if (rig?.kind === 'cylinder-radius' && !dimensionChipBesidePin) {
         radiusLabelChip.textContent =
           cylinderDimensionModeRef.current === 'diameter'
             ? 'Diameter'
@@ -6826,9 +6909,11 @@ export function ModelViewer({
       // arrowheads frozen at their pre-zoom size. The loop is already
       // on-demand, so this costs nothing on a still frame.
       sketchDimensionsRef.current?.update(
-        (point) => moveGizmoWorldScale(worldPerPixelAt(point)) * 0.55
+        (point) => moveGizmoWorldScale(worldPerPixelAt(point)) * 0.55,
+        context.activeCamera
       );
       for (const entry of measurementDimensionsRef.current) {
+        entry.graphic.orient(context.activeCamera);
         entry.graphic.update(
           entry.start,
           entry.end,
@@ -6871,6 +6956,7 @@ export function ModelViewer({
         }
         cylinderRig.group.scale.setScalar(rigScale);
         cylinderRig.group.userData.gizmoScale = rigScale;
+        cylinderRig.orient?.(context.activeCamera);
         // Re-run the rig's layout so its dimension-line arrowheads track the
         // freshly stamped screen-constant scale.
         cylinderRig.setValue(cylinderRig.value());
