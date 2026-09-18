@@ -138,6 +138,32 @@ describe('the offset-face rig', () => {
     expect(Math.abs(ringNormal.y)).toBeCloseTo(1, 6);
   });
 
+  it('draws the whole span from the moment it arms when it knows the body behind', () => {
+    const rig = buildOffsetFaceHandle({
+      origin: { x: 1, y: 2, z: 3 },
+      direction: { x: 0, y: 0, z: 1 },
+      ghostGeometry: null,
+      extentBehind: 20
+    });
+    const dimension = rig.worldGroup.children[0]!;
+    // Visible at rest, not only once a drag has moved the face.
+    expect(dimension.visible).toBe(true);
+    const line = rig.chipLine?.();
+    expect(line?.start.z).toBeCloseTo(3 - 20, 6);
+    expect(line?.end.z).toBeCloseTo(3, 6);
+    // The label sits midway along the span and follows the moving end.
+    expect(rig.chipAnchor(1).z).toBeCloseTo((3 - 20 + 3) / 2, 6);
+    rig.setValue(5);
+    expect(rig.chipLine?.()?.end.z).toBeCloseTo(8, 6);
+    expect(rig.chipAnchor(1).z).toBeCloseTo((3 - 20 + 8) / 2, 6);
+    rig.dispose();
+  });
+
+  it('has no line to ride without a body behind the face', () => {
+    const rig = offsetRig();
+    expect(rig.chipLine?.()).toBeNull();
+  });
+
   it('keeps world-space parts out of the rescaled group', () => {
     const rig = buildOffsetFaceHandle({
       origin: { x: 0, y: 0, z: 0 },
