@@ -407,8 +407,8 @@ function BodyStats({
               {formatNumber(mass.principalMoments[0])} ·{' '}
               {formatNumber(mass.principalMoments[1])} ·{' '}
               {formatNumber(mass.principalMoments[2])}{' '}
-              {unitLabel('length', units)}⁵ · multiply by material density
-              for physical values
+              {unitLabel('length', units)}⁵ · multiply by material density for
+              physical values
             </span>
           </div>
         </CollapsibleSection>
@@ -568,17 +568,21 @@ function BodyAppearance({
         commitDraftRef.current();
       }
     };
+    // Capture phase, and stop there: the panel's own Escape handler closes
+    // the whole panel, and it sits on an element, so a bubble-phase document
+    // listener would never even see the key. Escape unwinds one layer.
     const onKeyDown = (event: KeyboardEvent) => {
       if (event.key === 'Escape') {
+        event.stopPropagation();
         setPickerOpen(false);
         commitDraftRef.current();
       }
     };
     document.addEventListener('pointerdown', onPointerDown);
-    document.addEventListener('keydown', onKeyDown);
+    document.addEventListener('keydown', onKeyDown, true);
     return () => {
       document.removeEventListener('pointerdown', onPointerDown);
-      document.removeEventListener('keydown', onKeyDown);
+      document.removeEventListener('keydown', onKeyDown, true);
     };
   }, [pickerOpen]);
 

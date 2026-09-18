@@ -840,7 +840,7 @@ export function SettingsPage({
 
           {active === 'appearance' && (
             <Section
-              title="Appearance & accessibility"
+              title="Appearance & motion"
               intro="Keep the engineering workspace dense, readable, and predictable."
             >
               <SettingRow
@@ -1995,7 +1995,7 @@ export function SettingsPage({
           {active === 'privacy' && (
             <Section
               title="Privacy & data"
-              intro="Review and permanently remove device or cloud data from one place. Local and cloud copies remain separate."
+              intro="Reset this device's settings and permanently remove your cloud data. Local projects are managed from the Trash on the start screen, and local and cloud copies remain separate."
             >
               <SettingRow
                 title="Reset application settings"
@@ -2013,7 +2013,7 @@ export function SettingsPage({
               </SettingRow>
               <SettingRow
                 title="Local project data"
-                description="Local projects remain in IndexedDB. The cloud actions below never delete projects or settings from this device."
+                description="Local projects stay in this browser's storage. Delete them from the start screen; the cloud actions below never touch projects or settings on this device."
                 scope="This device"
               >
                 <ShieldCheck size={17} aria-hidden="true" />
