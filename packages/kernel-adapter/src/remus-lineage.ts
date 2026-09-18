@@ -254,9 +254,11 @@ export function deriveRemusBooleanCarrierLineage(input: {
     const targets = entries.filter((entry) => entry.role === 'target');
     const toolCaps = entries.filter(
       (entry) =>
-        entry.role === 'tool' && /\.face\.cap\.(start|end)\b/.test(entry.reference.lineageName)
+        entry.role === 'tool' &&
+        /\.face\.cap\.(start|end)\b/.test(entry.reference.lineageName)
     );
-    return targets.length === 1 && targets.length + toolCaps.length === entries.length
+    return targets.length === 1 &&
+      targets.length + toolCaps.length === entries.length
       ? [targets[0]!]
       : [...entries];
   };
@@ -1591,11 +1593,14 @@ function operandSlot(operand: RemusBooleanOperand, index: number): string {
  * Faces with no analytic carrier (free-form surfaces) cannot be verified under
  * ADR-013 and stay hash-only, exactly as the carrier rule leaves them.
  *
- * Edges are carried for the `preserved` event only, and only when the result
- * edge's witness is exactly the operand edge's: that is the kernel and the
- * measurement independently agreeing the boolean did not touch it. `modified`
- * and `generated` edges have no witness relation to verify against and
- * `unresolved` is the kernel declining, so all three stay hash-only.
+ * Edges are carried for the `preserved` and `modified` events, and only when
+ * the result edge's witness is exactly the operand edge's: that is the kernel
+ * naming the source and the measurement independently agreeing the boolean
+ * left the edge's geometry alone. The kernel reports `modified` for an edge
+ * whose neighbouring face it re-trimmed, which says nothing about the edge
+ * itself; a `modified` edge whose witness did change stays hash-only, as the
+ * event intends. `generated` edges have no source and `unresolved` is the
+ * kernel declining, so both stay hash-only.
  */
 export function deriveRemusBooleanEvolutionLineage(input: {
   readonly producingFeatureId: FeatureId;
@@ -1731,20 +1736,40 @@ export function deriveRemusBooleanEvolutionLineage(input: {
         'The boolean evolution payload did not cover the measured result edges; edge provenance stays hash-only.'
     });
   } else {
-    const preservedUse = new Map<number, number>();
-    for (const source of evolution.edges.preserved.values()) {
-      preservedUse.set(source, (preservedUse.get(source) ?? 0) + 1);
+    // `preserved` and `modified` both name a source edge, and both are held
+    // to the same unchanged-witness relation. The kernel says `modified` for
+    // an edge whose neighbouring face it re-trimmed even when the edge's own
+    // geometry is untouched — the front corners of an L-bracket's base plate
+    // after the wall is fused onto its back — and an identical exact witness
+    // is the measurement independently agreeing the edge is the same one. A
+    // `modified` edge whose witness did change is exactly what the event is
+    // for and stays hash-only, silently: unlike `preserved`, a changed
+    // witness there is the kernel being right, not a claim to refuse. A
+    // source named for more than one result edge is a split, and no piece is
+    // the original.
+    const sourceUse = new Map<number, number>();
+    for (const events of [
+      evolution.edges.preserved,
+      evolution.edges.modified
+    ]) {
+      for (const source of events.values()) {
+        sourceUse.set(source, (sourceUse.get(source) ?? 0) + 1);
+      }
     }
-    for (const [resultHandle, sourceHandle] of evolution.edges.preserved) {
+    const carry = (
+      resultHandle: number,
+      sourceHandle: number,
+      event: 'preserved' | 'modified'
+    ) => {
       const result = resultEdges.get(resultHandle)!;
       const origin = operandEdges.get(sourceHandle);
       const reference = origin?.reference;
       if (
         reference?.kind !== 'edge' ||
         !edgeReferenceMatchesCandidate(reference, origin?.candidate) ||
-        preservedUse.get(sourceHandle) !== 1
+        sourceUse.get(sourceHandle) !== 1
       ) {
-        continue;
+        return;
       }
       const verification = verifyTopologyEvolution({
         operation: 'boolean',
@@ -1754,21 +1779,29 @@ export function deriveRemusBooleanEvolutionLineage(input: {
         relation: { kind: 'unchanged' }
       });
       if (verification.status !== 'verified') {
-        diagnostics.push({
-          code: 'boolean-evolution-unverified',
-          operation: 'boolean',
-          topologyKind: 'edge',
-          lineageName: reference.lineageName,
-          sourceHandle,
-          resultHandles: [resultHandle],
-          message: `Boolean evolution called edge ${resultHandle} preserved from ${reference.lineageName}, but its exact witness changed.`
-        });
-        continue;
+        if (event === 'preserved') {
+          diagnostics.push({
+            code: 'boolean-evolution-unverified',
+            operation: 'boolean',
+            topologyKind: 'edge',
+            lineageName: reference.lineageName,
+            sourceHandle,
+            resultHandles: [resultHandle],
+            message: `Boolean evolution called edge ${resultHandle} preserved from ${reference.lineageName}, but its exact witness changed.`
+          });
+        }
+        return;
       }
       assignments.push({
         ...result,
         lineageName: `boolean.edge.${origin!.slot}.${reference.lineageName}`
       });
+    };
+    for (const [resultHandle, sourceHandle] of evolution.edges.preserved) {
+      carry(resultHandle, sourceHandle, 'preserved');
+    }
+    for (const [resultHandle, sourceHandle] of evolution.edges.modified) {
+      carry(resultHandle, sourceHandle, 'modified');
     }
     if (evolution.edges.unresolved.size > 0) {
       diagnostics.push({
