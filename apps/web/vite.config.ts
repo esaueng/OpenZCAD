@@ -337,6 +337,16 @@ export default defineConfig(async ({ command, isPreview, mode }) => {
             import.meta.url
           )
         ),
+        // The extrude operation classifier is pure arithmetic, but reaching it
+        // through the adapter's index barrel put the whole exact kernel — and
+        // its multi-megabyte wasm — into the launcher's entry chunk
+        // (ZCAD-004). Same leaf-module rule as the two above.
+        '@openzcad/kernel-adapter/extrude-inference': fileURLToPath(
+          new URL(
+            '../../packages/kernel-adapter/src/extrude-inference.ts',
+            import.meta.url
+          )
+        ),
         '@openzcad/kernel-adapter/face-attachment': fileURLToPath(
           new URL(
             '../../packages/kernel-adapter/src/face-attachment.ts',
@@ -418,6 +428,19 @@ export default defineConfig(async ({ command, isPreview, mode }) => {
             // deliberate: Build mode needs it immediately.
             if (id.includes('/packages/geometry/')) {
               return 'geometry';
+            }
+            // Sketch editing and viewport interaction: Build-mode code the
+            // workspace needs at once. Named for the same reason as
+            // `geometry` above — once the exact kernel left the eager graph
+            // (ZCAD-004), rolldown folded these into the entry chunk, which
+            // is measured against a per-file budget meant to catch launcher
+            // growth, not a regrouping of workspace modules it already
+            // preloaded.
+            if (
+              id.includes('/apps/web/src/lib/sketch/') ||
+              id.includes('/apps/web/src/lib/interaction/')
+            ) {
+              return 'sketching';
             }
             return undefined;
           }
