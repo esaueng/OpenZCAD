@@ -415,6 +415,12 @@
     0 8px 22px rgba(0, 0, 0, 0.35);
 }
 
+/* Pin variant: the viewport already offsets the anchor beside the pin, so the
+   chip centres on that point instead of floating above it. */
+.handle-value-chip[data-variant='pin'] {
+  transform: translate(-50%, -50%);
+}
+
 /* Dimension-line variant: a light pill centred on the radius callout line,
    styled like a drawing annotation rather than a dark tooltip. */
 .handle-value-chip[data-variant='dimension'] {
