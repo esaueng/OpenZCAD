@@ -4800,6 +4800,7 @@ export function ModelViewer({
           sideX = -sideX;
           sideY = -sideY;
         }
+        const pinScreen = screen;
         screen = {
           ...screen,
           x: screen.x + sideX * PIN_CHIP_GAP_PX,
@@ -4814,9 +4815,16 @@ export function ModelViewer({
           const hostRect = renderer.domElement.getBoundingClientRect();
           const inspectorLeft =
             inspector.getBoundingClientRect().left - hostRect.left;
-          // A cap or region anchor can project underneath its floating editor.
-          // Keep the chip and the keypad anchor on the visible
-          // side of that boundary so exact entry remains reachable.
+          // A cap or region anchor can project underneath its floating
+          // editor. Rather than clamp the chip back onto the pin, swap it to
+          // the pin's other side; only if that is under the editor too does
+          // it clamp, so exact entry remains reachable.
+          if (screen.x > inspectorLeft - 72) {
+            screen = {
+              x: pinScreen.x - sideX * PIN_CHIP_GAP_PX,
+              y: pinScreen.y - sideY * PIN_CHIP_GAP_PX
+            };
+          }
           screen = {
             ...screen,
             x: Math.min(screen.x, inspectorLeft - 72)
