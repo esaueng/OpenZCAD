@@ -928,6 +928,7 @@ import {
   saveProjectMeasurements,
   saveProjectThumbnail,
   saveLocalProject,
+  saveLocalSaveStates,
   withMatchingLocalDerived
 } from './lib/localProjectStore';
 import { reconcileRemoteOrganizations } from './lib/projectOrganizationMirror';
@@ -2995,7 +2996,8 @@ export function App() {
   ) {
     edgeFormPreview.clear();
     setFeatureFormError(null);
-    if (!value || geometryBusy || !feature.bodyId || !managerRef.current) return;
+    if (!value || geometryBusy || !feature.bodyId || !managerRef.current)
+      return;
     try {
       const command = extrudeEditCommand(feature, value);
       command.validate(managerRef.current.document);
@@ -7396,12 +7398,15 @@ export function App() {
       // The builders are only reachable from here, and only for a demo that
       // has not been seeded yet — the branch above returns for every later
       // open. Fetching them now keeps them out of first paint.
-      const { buildDemoDocument } = await import('./lib/demos');
-      const document = await buildDemoDocument(
+      const { buildDemoSeed } = await import('./lib/demos');
+      const { document, saveStates } = await buildDemoSeed(
         definition,
         session?.userId ?? localUserId,
         (candidate) => geometry.syncOnce(candidate)
       );
+      // Every revision the launcher promises is stored as a save state, so
+      // Rev A and Rev B can be restored rather than listed as "not stored".
+      await saveLocalSaveStates(saveStates);
       await saveLocalProject(document);
       hydrateDocument(document);
       setCloudAvailable(false);
@@ -8938,9 +8943,8 @@ export function App() {
           }
         }
         progress.update({ phase: 'building', fraction: null });
-        const { createBodyFeatureIds } = await import(
-          '@openzcad/document-core'
-        );
+        const { createBodyFeatureIds } =
+          await import('@openzcad/document-core');
         const previewIds = createBodyFeatureIds();
         const previewCommand = commandFactories.importMesh({
           name: parsed.name,
@@ -11003,9 +11007,8 @@ export function App() {
     label: string,
     objectId?: string
   ) {
-    const { checkSketchEdit, sketchEditRaceRefusal } = await import(
-      './lib/sketch/editing'
-    );
+    const { checkSketchEdit, sketchEditRaceRefusal } =
+      await import('./lib/sketch/editing');
     const derived = await checkSketchEdit(
       base,
       sketchId,

@@ -16,6 +16,8 @@ import {
 import {
   toUserId,
   type DerivedState,
+  type EdgeTopology,
+  type EdgeTopologyReferenceV5,
   type ProjectDocument,
   type UserId
 } from '@openzcad/shared';
@@ -40,17 +42,29 @@ export {
  * exactly like an interactive edge pick.
  */
 
-export type ExactSyncFn = (
-  document: ProjectDocument
-) => Promise<DerivedState>;
+export type ExactSyncFn = (document: ProjectDocument) => Promise<DerivedState>;
+
+/**
+ * A seeded demo: the finished document plus the document as it stood at each
+ * of its checkpoints, so every revision the launcher promises can be stored
+ * as a save state and restored (ZCAD-002). Only the final document carries
+ * derived state.
+ */
+export interface DemoSeed {
+  document: ProjectDocument;
+  saveStates: ProjectDocument[];
+}
 
 class DemoBuilder {
   private readonly manager: CommandManager;
+  private readonly saveStates: ProjectDocument[] = [];
 
   constructor(name: string, ownerUserId: UserId) {
     this.manager = new CommandManager(
       createProjectDocument(name, ownerUserId, 'mm')
     );
+    // A new document is born with its "Initial document" checkpoint.
+    this.saveStates.push(this.manager.document);
   }
 
   get document(): ProjectDocument {
@@ -61,10 +75,14 @@ class DemoBuilder {
   stage(label: string, checkpoint: string, commands: AnyCommand[]) {
     this.manager.runTransaction(label, commands);
     this.manager.document = createCheckpoint(this.manager.document, checkpoint);
+    this.saveStates.push(this.manager.document);
   }
 
-  finish(derived: DerivedState): ProjectDocument {
-    return attachDerivedState(this.manager.document, derived);
+  finish(derived: DerivedState): DemoSeed {
+    return {
+      document: attachDerivedState(this.manager.document, derived),
+      saveStates: [...this.saveStates]
+    };
   }
 }
 
@@ -96,8 +114,20 @@ function pickEdgeHashes(
   predicate: (p: P3) => boolean,
   edgeSpan?: (span: P3) => boolean
 ): number[] {
+  return pickEdges(derived, bodyId, predicate, edgeSpan).map(
+    (edge) => edge.hash
+  );
+}
+
+/** The exact edges themselves, for a pick that also needs their lineage. */
+function pickEdges(
+  derived: DerivedState,
+  bodyId: BodyFeatureIds['bodyId'],
+  predicate: (p: P3) => boolean,
+  edgeSpan?: (span: P3) => boolean
+): EdgeTopology[] {
   const representation = derived.bodyRepresentations[bodyId];
-  const hashes: number[] = [];
+  const picked: EdgeTopology[] = [];
   for (const edge of representation?.topology?.edges ?? []) {
     let all = true;
     const min: P3 = { x: Infinity, y: Infinity, z: Infinity };
@@ -129,10 +159,37 @@ function pickEdgeHashes(
       all = false;
     }
     if (all) {
-      hashes.push(edge.hash);
+      picked.push(edge);
     }
   }
-  return hashes;
+  return picked;
+}
+
+/**
+ * A pick every edge of which carries a lineage reference, so the feature it
+ * seeds survives a parameter tweak. Throws otherwise: a demo that silently
+ * fell back to hashes would break again the way ZCAD-001 did.
+ */
+function requireReferencedEdges(
+  edges: EdgeTopology[],
+  what: string,
+  expected?: { count?: number; min?: number }
+): { hashes: number[]; references: EdgeTopologyReferenceV5[] } {
+  requireHashes(
+    edges.map((edge) => edge.hash),
+    what,
+    expected
+  );
+  const references: EdgeTopologyReferenceV5[] = [];
+  for (const edge of edges) {
+    if (!edge.reference) {
+      throw new Error(
+        `Demo seeding picked an edge without a lineage reference for ${what}.`
+      );
+    }
+    references.push(edge.reference);
+  }
+  return { hashes: edges.map((edge) => edge.hash), references };
 }
 
 function requireHashes(
@@ -159,10 +216,6 @@ function requireHashes(
 const near = (value: number, target: number, tolerance = 0.75) =>
   Math.abs(value - target) <= tolerance;
 
-/** Vertical corner edges: point-pinned to the corner, tall in Z, narrow in XY. */
-const verticalCornerSpan = (minHeight: number) => (span: P3) =>
-  span.x <= 1.5 && span.y <= 1.5 && span.z >= minHeight;
-
 // ---------------------------------------------------------------------------
 // Demo 1 — Mounting Bracket (the workspace concept part)
 // ---------------------------------------------------------------------------
@@ -171,7 +224,7 @@ async function buildBracket(
   definition: DemoDefinition,
   ownerUserId: UserId,
   syncExact: ExactSyncFn
-): Promise<ProjectDocument> {
+): Promise<DemoSeed> {
   const builder = new DemoBuilder(definition.name, ownerUserId);
 
   builder.stage('Define parameters', 'Parameters', [
@@ -223,6 +276,7 @@ async function buildBracket(
   const cutBore = createBodyFeatureIds();
   const mountA = createBodyFeatureIds();
   const mountB = createBodyFeatureIds();
+  const cutMountA = createBodyFeatureIds();
   const cutMounts = createBodyFeatureIds();
   builder.stage('Rev B — Boss + mounting holes', 'Rev B — Boss + holes', [
     commandFactories.addPrimitive({
@@ -291,38 +345,48 @@ async function buildBracket(
       targetBodyId: mountB.bodyId,
       translation: { x: 'width - mount_inset', y: 'depth / 2', z: -2 }
     }),
+    // One tool per subtract: a multi-tool boolean publishes no lineage for
+    // its result, and Rev C's fillet needs edges it can find again after a
+    // parameter tweak.
+    commandFactories.booleanBodies({
+      name: 'Mount hole L cut',
+      operation: 'subtract',
+      targetBodyIds: [cutBore.bodyId, mountA.bodyId],
+      ids: cutMountA
+    }),
     commandFactories.booleanBodies({
       name: 'Mounting holes',
       operation: 'subtract',
-      targetBodyIds: [cutBore.bodyId, mountA.bodyId, mountB.bodyId],
+      targetBodyIds: [cutMountA.bodyId, mountB.bodyId],
       ids: cutMounts
     })
   ]);
 
-  // Rev C fillet needs the exact edge ordinals of the Rev B body, resolved
-  // through the same worker sync the interactive viewport relies on.
+  // Rev C breaks the wall's two long top edges. They are picked by lineage
+  // reference, not by hash alone: a hash encodes the edge's position, so a
+  // hash-only pick stopped resolving the moment `width` or `depth` moved
+  // (ZCAD-001), while a reference follows the edge through the rebuild. The
+  // base corners cannot be picked this way yet — the unions publish no
+  // lineage for them — so the edge break moved to edges that carry one.
   const revBDerived = await syncExact(builder.document);
-  const cornerHashes = requireHashes(
-    pickEdgeHashes(
+  const wallTop = requireReferencedEdges(
+    pickEdges(
       revBDerived,
       cutMounts.bodyId,
-      (p) =>
-        (near(p.x, 0) || near(p.x, 80)) &&
-        (near(p.y, 0) || near(p.y, 40)) &&
-        p.z >= -0.1 &&
-        p.z <= 8.1,
-      verticalCornerSpan(4)
+      (p) => (near(p.y, 32) || near(p.y, 40)) && near(p.z, 39.5),
+      (span) => span.x >= 70 && span.y <= 0.1 && span.z <= 0.1
     ),
-    'base corners',
-    { count: 4 }
+    'wall top edges',
+    { count: 2 }
   );
 
   const fillet = createBodyFeatureIds();
   builder.stage('Rev C — Edge break fillet', 'Rev C — Edge break fillet', [
     commandFactories.filletEdges({
-      name: 'Base corner fillets',
+      name: 'Wall top edge break',
       targetBodyId: cutMounts.bodyId,
-      edgeHashes: cornerHashes,
+      edgeHashes: wallTop.hashes,
+      edgeReferences: wallTop.references,
       size: 'fillet_r',
       ids: fillet
     }),
@@ -350,7 +414,7 @@ async function buildVisualSelectionAcceptance(
   definition: DemoDefinition,
   ownerUserId: UserId,
   syncExact: ExactSyncFn
-): Promise<ProjectDocument> {
+): Promise<DemoSeed> {
   const builder = new DemoBuilder(definition.name, ownerUserId);
 
   builder.stage('Define parameters', 'Parameters', [
@@ -446,7 +510,7 @@ async function buildFlange(
   definition: DemoDefinition,
   ownerUserId: UserId,
   syncExact: ExactSyncFn
-): Promise<ProjectDocument> {
+): Promise<DemoSeed> {
   const builder = new DemoBuilder(definition.name, ownerUserId);
 
   builder.stage('Define parameters', 'Parameters', [
@@ -602,7 +666,7 @@ async function buildHeatSink(
   definition: DemoDefinition,
   ownerUserId: UserId,
   syncExact: ExactSyncFn
-): Promise<ProjectDocument> {
+): Promise<DemoSeed> {
   const builder = new DemoBuilder(definition.name, ownerUserId);
 
   builder.stage('Define parameters', 'Parameters', [
@@ -722,7 +786,7 @@ const DEMO_BUILDERS: Record<
     definition: DemoDefinition,
     ownerUserId: UserId,
     syncExact: ExactSyncFn
-  ) => Promise<ProjectDocument>
+  ) => Promise<DemoSeed>
 > = {
   bracket: buildBracket,
   flange: buildFlange,
@@ -739,17 +803,41 @@ export async function buildDemoDocument(
   ownerUserId: UserId | undefined,
   syncExact: ExactSyncFn
 ): Promise<ProjectDocument> {
+  return (await buildDemoSeed(definition, ownerUserId, syncExact)).document;
+}
+
+export async function buildDemoSeed(
+  definition: DemoDefinition,
+  ownerUserId: UserId | undefined,
+  syncExact: ExactSyncFn
+): Promise<DemoSeed> {
   const builder = DEMO_BUILDERS[definition.key];
   if (!builder) {
     throw new Error(`Unknown demo "${definition.key}".`);
   }
-  const document = await builder(
+  const seed = await builder(
     definition,
     ownerUserId ?? toUserId('user_local_browser'),
     syncExact
   );
-  // Deterministic identity keeps seeding idempotent and lets the demos live
-  // alongside user projects without ever colliding with them.
+  return {
+    document: withDemoIdentity(seed.document, definition),
+    saveStates: seed.saveStates.map((saveState) =>
+      withDemoIdentity(saveState, definition)
+    )
+  };
+}
+
+/**
+ * Deterministic identity keeps seeding idempotent and lets the demos live
+ * alongside user projects without ever colliding with them. Applied to every
+ * save state as well as the final document, so the stored revisions belong to
+ * the project they are listed under.
+ */
+function withDemoIdentity(
+  document: ProjectDocument,
+  definition: DemoDefinition
+): ProjectDocument {
   const rootNode = document.nodes[document.rootNodeId];
   return {
     ...document,
