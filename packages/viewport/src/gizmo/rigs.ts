@@ -187,10 +187,12 @@ function solidPinParts(kind: string): {
     ringMaterial
   );
   ring.rotation.x = -Math.PI / 2;
+  // The hover halo keeps the resting colour: the arrow itself darkens under
+  // the pointer, and a dark halo would read as a shadow, not a glow.
   const halo = new THREE.Mesh(
     new THREE.CircleGeometry(0.5, 32),
     new THREE.MeshBasicMaterial({
-      color: HANDLE_HOT_COLOR,
+      color: HANDLE_COLOR,
       transparent: true,
       opacity: 0,
       depthTest: false,

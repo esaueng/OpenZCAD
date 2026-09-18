@@ -429,7 +429,7 @@ describe('offset rig entrance and hover', () => {
     expect(rig.step?.(16)).toBe(false);
   });
 
-  it('warms under the pointer and cools when it leaves', () => {
+  it('deepens under the pointer and recovers when it leaves', () => {
     const rig = offsetRig();
     settle(rig);
     const resting = arrowColor(rig);
@@ -438,6 +438,13 @@ describe('offset rig entrance and hover', () => {
     settle(rig);
     const hot = arrowColor(rig);
     expect(hot).not.toBe(resting);
+    // Darker, not lighter: a handle that washes out under the hand reads as
+    // disabled rather than grabbed.
+    const luminance = (hex: number) => {
+      const color = new THREE.Color(hex);
+      return color.r + color.g + color.b;
+    };
+    expect(luminance(hot)).toBeLessThan(luminance(resting));
 
     rig.setHot!(false);
     settle(rig);
