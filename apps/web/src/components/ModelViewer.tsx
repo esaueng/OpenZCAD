@@ -1591,6 +1591,8 @@ export function ModelViewer({
   const offsetExtentRef = useRef<number | null>(null);
   /** Which number the offset chip shows: the drag delta, or the whole span. */
   const offsetChipModeRef = useRef<'offset' | 'total'>('offset');
+  /** Last frame's cylinder chip layout, for hysteresis at the threshold. */
+  const dimensionChipBesidePinRef = useRef(false);
   /** Cylindrical radius has its own non-translating affordance and lifecycle. */
   const cylinderRadiusRigRef = useRef<DragRig | null>(null);
   const cylinderRadiusDragActiveRef = useRef(false);
@@ -2734,6 +2736,7 @@ export function ModelViewer({
     // just ahead of the value chip like a drawing callout's name tag. Tapping
     // either pill opens the same exact-entry keypad.
     const radiusLabelChip = hud.create('handle-label-chip');
+    radiusLabelChip.dataset.testid = 'direct-manipulation-mode';
     radiusLabelChip.textContent = 'Diameter';
     radiusLabelChip.addEventListener('click', (event) => {
       // On an offset line the tag is the Total/Offset switch; on a radius
@@ -4749,7 +4752,13 @@ export function ModelViewer({
         const gapToPin = pinScreen
           ? Math.hypot(pinScreen.x - screen.x, pinScreen.y - screen.y)
           : 0;
-        const pillReach = chip.offsetWidth + DIMENSION_CHIP_PIN_CLEARANCE_PX;
+        // Hysteresis: the pill is wider in one layout than the other, and
+        // measuring last frame's width would otherwise flip the decision
+        // every frame right at the threshold, so the chip never settles.
+        const pillReach =
+          chip.offsetWidth +
+          DIMENSION_CHIP_PIN_CLEARANCE_PX +
+          (dimensionChipBesidePinRef.current ? 24 : 0);
         // Zoomed in on the wall, the 45% point of the radius is off the
         // canvas while the pin is still in view: the value follows the pin.
         const anchorOffCanvas =
@@ -4761,6 +4770,7 @@ export function ModelViewer({
           dimensionChipBesidePin = true;
           screen = pinScreen;
         }
+        dimensionChipBesidePinRef.current = dimensionChipBesidePin;
       }
       // A rig with a dimension line lays its label along the line, rotated
       // to read with it, once the line is long enough on screen to carry
@@ -4856,7 +4866,7 @@ export function ModelViewer({
           (rig.group.userData.gizmoScale as number | undefined) ?? 1;
         const hitCenter = rig.group.position
           .clone()
-          .addScaledVector(rig.direction, 0.7 * scale);
+          .addScaledVector(rig.direction, 0.4 * scale);
         const hitScreen = projectToScreen(
           hitCenter,
           context.activeCamera,
@@ -4883,10 +4893,11 @@ export function ModelViewer({
       } else if (e2eCanvasHooksEnabled && rig?.kind === 'offset-face') {
         const scale =
           (rig.group.userData.gizmoScale as number | undefined) ?? 1;
-        // The negative arrow stays clear of the value chip at the positive end.
+        // On the shaft just below the pin: the arrow is half a unit long
+        // now, so anything further out misses its hit volume.
         const hitCenter = rig.group.position
           .clone()
-          .addScaledVector(rig.direction, -0.7 * scale);
+          .addScaledVector(rig.direction, -0.4 * scale);
         const hitScreen = projectToScreen(
           hitCenter,
           context.activeCamera,
@@ -5021,14 +5032,29 @@ export function ModelViewer({
         radiusLabelChip.style.removeProperty('--chip-rotate');
         delete radiusLabelChip.dataset.variant;
         hud.showAt(chip, screen.x, screen.y);
-        // Beside the pin there is no line to name, and the Ø/R prefix on
-        // the value already says (and switches) which one is shown, so the
-        // name tag stays with the line-riding layout only.
+        const offsetSpan =
+          offsetHandleRef.current?.totalBaseline ?? offsetExtentRef.current;
         if (rig?.kind === 'cylinder-radius' && !dimensionChipBesidePin) {
           radiusLabelChip.textContent = tagText ?? '';
           // Same anchor; CSS shifts it to sit flush against the value pill.
           hud.showAt(radiusLabelChip, screen.x, screen.y);
+        } else if (
+          rig?.kind === 'offset-face' &&
+          offsetSpan !== null &&
+          offsetSpan !== undefined
+        ) {
+          // Beside the pin the Total/Offset switch still has to be
+          // reachable: it sits flush against the value chip's left edge.
+          radiusLabelChip.textContent =
+            offsetChipModeRef.current === 'total' ? 'Total ⌄' : 'Offset ⌄';
+          hud.showAt(
+            radiusLabelChip,
+            screen.x - chip.offsetWidth / 2 - 2,
+            screen.y
+          );
         } else {
+          // A radius chip beside its pin needs no name: the Ø/R prefix on
+          // the value already says (and switches) which one is shown.
           radiusLabelChip.hidden = true;
         }
       }
