@@ -44,6 +44,12 @@ export interface DragRig {
   /** Marks the rig as the thing under the pointer, before any press. */
   setHot?(hot: boolean): void;
   /**
+   * Turns a screen-space rig to face the camera. Called once per frame after
+   * the rescale, so a flat handle keeps its drawn shape from every angle
+   * instead of foreshortening with the face normal.
+   */
+  orient?(camera: THREE.Camera): void;
+  /**
    * Starts the rig leaving. Disarming disposes immediately without this; with
    * it the caller keeps stepping the rig until `isGone()`, then disposes.
    */

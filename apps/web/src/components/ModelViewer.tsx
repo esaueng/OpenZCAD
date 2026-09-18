@@ -1112,6 +1112,9 @@ function stepRetiringRigs(retiring: DragRig[], dtMs: number): boolean {
   return animating;
 }
 
+/** Screen gap between the offset pin's centre and its value chip. */
+const PIN_CHIP_GAP_PX = 44;
+
 const E2E_CANVAS_HOOKS_ENABLED =
   (
     import.meta.env as unknown as {
@@ -4616,6 +4619,21 @@ export function ModelViewer({
         return;
       }
       if (rig?.kind === 'offset-face') {
+        // The chip hangs beside the pin, perpendicular to the drag axis on
+        // screen and always to the right, at a fixed pixel gap: it stays
+        // clear of both arrow heads however the face is foreshortened.
+        const axis = screenDirectionFor(rig.group.position, rig.direction);
+        let sideX = -axis.directionY;
+        let sideY = axis.directionX;
+        if (sideX < 0 || (sideX === 0 && sideY > 0)) {
+          sideX = -sideX;
+          sideY = -sideY;
+        }
+        screen = {
+          ...screen,
+          x: screen.x + sideX * PIN_CHIP_GAP_PX,
+          y: screen.y + sideY * PIN_CHIP_GAP_PX
+        };
         const inspector = renderer.domElement
           .closest('.viewer-area')
           ?.querySelector<HTMLElement>(
@@ -4729,7 +4747,11 @@ export function ModelViewer({
         chip.textContent = text;
       }
       chip.dataset.variant =
-        rig?.kind === 'cylinder-radius' ? 'dimension' : 'default';
+        rig?.kind === 'cylinder-radius'
+          ? 'dimension'
+          : rig?.kind === 'offset-face'
+            ? 'pin'
+            : 'default';
       // Any armed rig can hold a refused value: the flag is the operation's
       // failed phase, whichever handle is driving it.
       const offsetWarning = offsetPreviewInvalidRef.current;
@@ -6835,6 +6857,7 @@ export function ModelViewer({
         }
         offsetRig.group.scale.setScalar(rigScale);
         offsetRig.group.userData.gizmoScale = rigScale;
+        offsetRig.orient?.(context.activeCamera);
         // Keep dimension arrowheads screen-sized across a pure wheel zoom.
         offsetRig.setValue(offsetRig.value());
       }
