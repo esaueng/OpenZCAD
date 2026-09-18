@@ -36,6 +36,11 @@ export interface DragRig {
   /** World point the value chip should track, given the rig's frame scale. */
   chipAnchor(gizmoScale: number): THREE.Vector3;
   /**
+   * The dimension line the chip rides, when the rig draws one: the viewport
+   * lays the label along it on screen. Null when there is no line to ride.
+   */
+  chipLine?(): { start: THREE.Vector3; end: THREE.Vector3 } | null;
+  /**
    * Advances the rig's own eased state — its entrance, and whether the
    * pointer is over it. Returns true while something is still moving, so the
    * render loop knows to keep drawing. Rigs without eased state omit it.

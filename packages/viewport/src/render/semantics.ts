@@ -73,8 +73,10 @@ export const SELECTION_SEMANTICS = {
   },
   /** The thing being dragged. */
   handle: {
-    idle: 0xff8a2b,
-    hot: 0xffc178,
+    /** A light lavender fill, drawn over a deeper blue outline. */
+    idle: 0xb4bcff,
+    hot: 0xe4e8ff,
+    outline: 0x3549d6,
     /** The value under the pointer will not build. */
     invalid: 0xf59e0b
   },

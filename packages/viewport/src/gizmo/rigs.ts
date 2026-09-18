@@ -10,13 +10,16 @@ import {
   type DragRig,
   type HandleVec3
 } from './DragRig';
-import { createDimensionGraphic } from '../annotation/dimensionGraphic';
+import {
+  DIMENSION_LINE_COLOR,
+  createDimensionGraphic
+} from '../annotation/dimensionGraphic';
 import { ANALYTIC_GHOST_COLOR } from '../selection/analyticCylinderGhost';
 import { easeToward, hasSettled } from '../motion';
 import { SELECTION_SEMANTICS } from '../render/semantics';
 
-const ARROW_HEAD_LENGTH = 0.3;
-const ARROW_HALF_LENGTH = 0.75;
+const ARROW_HEAD_LENGTH = 0.22;
+const ARROW_HALF_LENGTH = 0.5;
 const ARROW_HIT_RADIUS = 0.34;
 const GHOST_OPACITY = 0.28;
 export const HANDLE_WARNING_COLOR = SELECTION_SEMANTICS.handle.invalid;
@@ -86,23 +89,34 @@ function createRigPresence(roots: readonly THREE.Object3D[]) {
     hotness(): number {
       return hot;
     },
-    /** Re-reads base opacities after a material's own opacity changed. */
+    /**
+     * Re-reads a material's base opacity and applies it at the current
+     * presence at once, so a change made between animation frames shows.
+     */
     rebase(material: THREE.Material, opacity: number) {
       materials.set(material, opacity);
+      material.opacity = opacity * presence;
     }
   };
 }
 
-const PIN_OUTLINE_COLOR = 0x0b1118;
-const PIN_OUTLINE_OPACITY = 0.45;
+const PIN_OUTLINE_COLOR = SELECTION_SEMANTICS.handle.outline;
+const PIN_OUTLINE_OPACITY = 0.9;
 const PIN_HALO_OPACITY = 0.16;
-const PIN_SHAFT_WIDTH = 0.06;
-const PIN_HEAD_HALF_WIDTH = 0.15;
+const PIN_SHAFT_WIDTH = 0.075;
+const PIN_HEAD_HALF_WIDTH = 0.19;
 /** The ring lying in the face plane around the pick point. */
 const PIN_RING_INNER = 0.13;
 const PIN_RING_OUTER = 0.17;
+const PIN_RING_OPACITY = 0.95;
 const PIN_DOT_RADIUS = 0.045;
-const PIN_OUTLINE_MARGIN = 0.03;
+const PIN_OUTLINE_MARGIN = 0.035;
+/**
+ * The ring fades in as the view turns to look down the normal: below this
+ * much of the normal lying across the screen it is fully shown, and it is
+ * gone once twice this much lies across.
+ */
+const PIN_RING_FADE_START = 0.25;
 
 function triangle(halfWidth: number, base: number, tip: number): THREE.Shape {
   const shape = new THREE.Shape();
@@ -134,6 +148,8 @@ function flatPinParts(kind: string): {
   arrow: THREE.Mesh[];
   outline: THREE.Mesh[];
   halo: THREE.Mesh<THREE.BufferGeometry, THREE.MeshBasicMaterial>;
+  /** The face-plane ring's own materials, faded by the view angle. */
+  ringMaterials: THREE.MeshBasicMaterial[];
   hit: THREE.Mesh;
 } {
   const solid = handleMaterial();
@@ -155,10 +171,15 @@ function flatPinParts(kind: string): {
     ),
     solid
   );
-  // Local +Y is the normal, so the face plane is local XZ.
+  // Local +Y is the normal, so the face plane is local XZ. The ring has its
+  // own material because it fades with the view angle while the arrow does
+  // not; it starts hidden and `orientPin` brings it up.
+  const ringFill = handleMaterial(PIN_RING_OPACITY);
+  ringFill.side = THREE.DoubleSide;
+  ringFill.opacity = 0;
   const ring = new THREE.Mesh(
     new THREE.RingGeometry(PIN_RING_INNER, PIN_RING_OUTER, 40),
-    solid
+    ringFill
   );
   ring.rotation.x = -Math.PI / 2;
   const dot = new THREE.Mesh(
@@ -175,9 +196,11 @@ function flatPinParts(kind: string): {
   });
   solid.side = THREE.DoubleSide;
   const m = PIN_OUTLINE_MARGIN;
+  const ringDark = dark.clone();
+  ringDark.opacity = 0;
   const ringOutline = new THREE.Mesh(
     new THREE.RingGeometry(PIN_RING_INNER - m, PIN_RING_OUTER + m, 40),
-    dark
+    ringDark
   );
   ringOutline.rotation.x = -Math.PI / 2;
   const outline = [
@@ -229,7 +252,13 @@ function flatPinParts(kind: string): {
     ),
     kind
   );
-  return { arrow: [shaft, headOut, headIn, ring, dot], outline, halo, hit };
+  return {
+    arrow: [shaft, headOut, headIn, ring, dot],
+    outline,
+    halo,
+    ringMaterials: [ringFill, ringDark],
+    hit
+  };
 }
 
 /**
@@ -238,12 +267,15 @@ function flatPinParts(kind: string): {
  * every viewpoint; only its roll follows the view. Looking straight down the
  * normal there is no roll to prefer, and any one will do: the arrow is a
  * point then and the ring carries the affordance.
+ *
+ * Returns how much of the normal lies across the screen, 0 when the view
+ * looks straight down it and 1 when it lies flat in the screen plane.
  */
 function orientPin(
   group: THREE.Group,
   direction: THREE.Vector3,
   camera: THREE.Camera
-): void {
+): number {
   const toCamera = new THREE.Vector3();
   if ((camera as THREE.OrthographicCamera).isOrthographicCamera) {
     camera.getWorldDirection(toCamera).negate();
@@ -252,7 +284,8 @@ function orientPin(
   }
   const up = direction.clone().normalize();
   const facing = toCamera.clone().addScaledVector(up, -up.dot(toCamera));
-  if (facing.lengthSq() < 1e-6) {
+  const across = facing.length();
+  if (across < 1e-3) {
     const seed =
       Math.abs(up.z) < 0.9
         ? new THREE.Vector3(0, 0, 1)
@@ -263,6 +296,16 @@ function orientPin(
   const right = new THREE.Vector3().crossVectors(up, facing).normalize();
   group.quaternion.setFromRotationMatrix(
     new THREE.Matrix4().makeBasis(right, up, facing)
+  );
+  return across;
+}
+
+/** 1 looking down the normal, 0 once it lies well across the screen. */
+function ringPresenceFor(across: number): number {
+  return THREE.MathUtils.clamp(
+    (2 * PIN_RING_FADE_START - across) / PIN_RING_FADE_START,
+    0,
+    1
   );
 }
 
@@ -323,6 +366,13 @@ export interface OffsetFaceRigParams {
   direction: HandleVec3;
   /** World-space triangles of the face, kept as the original-position reference. */
   ghostGeometry: THREE.BufferGeometry | null;
+  /**
+   * How far the body reaches behind the face along the normal. With it the
+   * rig draws its dimension for the whole span, far side to handle, from
+   * the moment it arms — the height this face sets — rather than only the
+   * delta of a drag in progress.
+   */
+  extentBehind?: number;
   /**
    * A profile to sweep along the drag direction instead of a flat ghost. The
    * rig extrudes it by the current value every frame, so the volume the
@@ -478,14 +528,26 @@ export function buildOffsetFaceHandle(params: OffsetFaceRigParams): DragRig {
   const worldGroup = new THREE.Group();
   worldGroup.name = `${kind}-handle-world`;
 
+  // Drawing white, like every other dimension: the handle is the coloured
+  // thing, the measurement is the annotation.
   const dimension = createDimensionGraphic({
-    color: HANDLE_COLOR,
+    color: DIMENSION_LINE_COLOR,
     linewidth: 1.5,
-    opacity: 0.85,
+    opacity: 0.9,
     renderOrder: 29
   });
   dimension.object.visible = false;
   worldGroup.add(dimension.object);
+  const extentBehind =
+    params.extentBehind !== undefined &&
+    Number.isFinite(params.extentBehind) &&
+    params.extentBehind > 1e-9
+      ? params.extentBehind
+      : null;
+  const farPoint =
+    extentBehind === null
+      ? null
+      : origin.clone().addScaledVector(direction, -extentBehind);
 
   const sweep = params.sweep ? createSweepGhost(params.sweep, direction) : null;
   if (sweep) {
@@ -536,7 +598,7 @@ export function buildOffsetFaceHandle(params: OffsetFaceRigParams): DragRig {
     return color;
   };
 
-  return {
+  const rig: DragRig = {
     kind,
     group,
     worldGroup,
@@ -556,7 +618,13 @@ export function buildOffsetFaceHandle(params: OffsetFaceRigParams): DragRig {
       presence.setHot(hot);
     },
     orient(camera: THREE.Camera) {
-      orientPin(group, direction, camera);
+      const across = orientPin(group, direction, camera);
+      const ringPresence = ringPresenceFor(across);
+      presence.rebase(pin.ringMaterials[0]!, PIN_RING_OPACITY * ringPresence);
+      presence.rebase(
+        pin.ringMaterials[1]!,
+        PIN_OUTLINE_OPACITY * ringPresence
+      );
       dimension.orient(camera);
     },
     beginExit() {
@@ -570,10 +638,16 @@ export function buildOffsetFaceHandle(params: OffsetFaceRigParams): DragRig {
       const tip = origin.clone().addScaledVector(direction, value);
       group.position.copy(tip);
       const engaged = Math.abs(value) > 1e-9;
-      dimension.object.visible = engaged;
-      if (engaged) {
-        const scale = (group.userData.gizmoScale as number | undefined) ?? 1;
-        dimension.update(origin, tip, scale);
+      const scale = (group.userData.gizmoScale as number | undefined) ?? 1;
+      if (farPoint) {
+        // The whole span, drawn from the moment the rig arms.
+        dimension.object.visible = true;
+        dimension.update(farPoint, tip, scale);
+      } else {
+        dimension.object.visible = engaged;
+        if (engaged) {
+          dimension.update(origin, tip, scale);
+        }
       }
       if (ghost) {
         ghost.visible = engaged;
@@ -590,20 +664,39 @@ export function buildOffsetFaceHandle(params: OffsetFaceRigParams): DragRig {
     },
     setWarning(warning) {
       warned = warning;
-      dimension.setColor(paintArrows().getHex());
+      paintArrows();
+      dimension.setColor(warning ? HANDLE_WARNING_COLOR : DIMENSION_LINE_COLOR);
       group.userData.previewWarning = warning;
     },
     chipAnchor() {
+      const tip = origin.clone().addScaledVector(direction, current);
+      if (farPoint) {
+        // Midway along the span, like a drawing's dimension text.
+        return farPoint.clone().lerp(tip, 0.5);
+      }
       // The pin's own centre: the viewport offsets the chip beside it in
       // screen pixels, so a foreshortened direction can never fold the chip
       // back onto the arrow head.
-      return origin.clone().addScaledVector(direction, current);
+      return tip;
+    },
+    chipLine() {
+      if (!farPoint) {
+        return null;
+      }
+      return {
+        start: farPoint.clone(),
+        end: origin.clone().addScaledVector(direction, current)
+      };
     },
     dispose() {
       dimension.dispose();
       disposeRigGroups(group, worldGroup);
     }
   };
+  // Lay out the resting state now: with a known span the dimension is part
+  // of the handle from the first frame, not something a drag reveals.
+  rig.setValue(0);
+  return rig;
 }
 
 export interface CylinderRadiusRigParams {
@@ -732,6 +825,12 @@ export function buildCylinderRadiusHandle(
       return axisCenter
         .clone()
         .addScaledVector(direction, currentRadius * 0.45);
+    },
+    chipLine() {
+      return {
+        start: axisCenter.clone(),
+        end: axisCenter.clone().addScaledVector(direction, currentRadius)
+      };
     },
     dispose() {
       dimension.dispose();
