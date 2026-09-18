@@ -94,10 +94,15 @@ function createRigPresence(roots: readonly THREE.Object3D[]) {
 }
 
 const PIN_OUTLINE_COLOR = 0x0b1118;
-const PIN_OUTLINE_OPACITY = 0.6;
+const PIN_OUTLINE_OPACITY = 0.45;
 const PIN_HALO_OPACITY = 0.16;
-/** Below this much of the direction lying in the screen plane, draw it upright. */
-const PIN_FORESHORTEN_LIMIT = 0.15;
+const PIN_SHAFT_WIDTH = 0.06;
+const PIN_HEAD_HALF_WIDTH = 0.15;
+/** The ring lying in the face plane around the pick point. */
+const PIN_RING_INNER = 0.13;
+const PIN_RING_OUTER = 0.17;
+const PIN_DOT_RADIUS = 0.045;
+const PIN_OUTLINE_MARGIN = 0.03;
 
 function triangle(halfWidth: number, base: number, tip: number): THREE.Shape {
   const shape = new THREE.Shape();
@@ -109,14 +114,21 @@ function triangle(halfWidth: number, base: number, tip: number): THREE.Shape {
 }
 
 /**
- * The flat pin: a double-headed arrow drawn as 2D shapes in the rig's local
- * XY plane, with a dark outline under it and a puck at the pick point.
+ * The pin: a slim double-headed arrow standing on the face normal, a ring
+ * lying in the face plane around the pick point, and a dot at the point
+ * itself.
  *
- * The earlier handle was three solids — a cylinder and two cones — which the
- * camera saw end-on whenever the face normal pointed at it, so the arrow
- * collapsed into one translucent smear. Flat shapes plus `orientPin` keep the
- * drawn silhouette at every angle; the outline keeps it legible on any face
- * colour.
+ * The arrow is flat, in the rig's local XY plane, and `orientPin` rolls that
+ * plane about the normal to face the camera — so the arrow always stands
+ * perpendicular to the face and never spins with the view, but is seen
+ * face-on rather than edge-on. Looking straight down the normal the arrow
+ * foreshortens to nothing, which is where the ring takes over: a full
+ * circle around the dot says "pull this toward you". A thin dark outline
+ * keeps it legible on any face colour.
+ *
+ * The earlier handle was three solids — a cylinder and two cones — which
+ * the camera saw end-on whenever the normal pointed at it, so the arrow
+ * collapsed into one translucent smear.
  */
 function flatPinParts(kind: string): {
   arrow: THREE.Mesh[];
@@ -128,37 +140,57 @@ function flatPinParts(kind: string): {
   const shaftLength = 2 * (ARROW_HALF_LENGTH - ARROW_HEAD_LENGTH);
   const headBase = ARROW_HALF_LENGTH - ARROW_HEAD_LENGTH;
   const shaft = new THREE.Mesh(
-    new THREE.PlaneGeometry(0.08, shaftLength),
+    new THREE.PlaneGeometry(PIN_SHAFT_WIDTH, shaftLength),
     solid
   );
   const headOut = new THREE.Mesh(
-    new THREE.ShapeGeometry(triangle(0.19, headBase, ARROW_HALF_LENGTH)),
+    new THREE.ShapeGeometry(
+      triangle(PIN_HEAD_HALF_WIDTH, headBase, ARROW_HALF_LENGTH)
+    ),
     solid
   );
   const headIn = new THREE.Mesh(
-    new THREE.ShapeGeometry(triangle(0.19, -headBase, -ARROW_HALF_LENGTH)),
+    new THREE.ShapeGeometry(
+      triangle(PIN_HEAD_HALF_WIDTH, -headBase, -ARROW_HALF_LENGTH)
+    ),
     solid
   );
-  const puck = new THREE.Mesh(new THREE.RingGeometry(0.07, 0.12, 24), solid);
+  // Local +Y is the normal, so the face plane is local XZ.
+  const ring = new THREE.Mesh(
+    new THREE.RingGeometry(PIN_RING_INNER, PIN_RING_OUTER, 40),
+    solid
+  );
+  ring.rotation.x = -Math.PI / 2;
+  const dot = new THREE.Mesh(
+    new THREE.SphereGeometry(PIN_DOT_RADIUS, 12, 8),
+    solid
+  );
 
   const dark = new THREE.MeshBasicMaterial({
     color: PIN_OUTLINE_COLOR,
     transparent: true,
     opacity: PIN_OUTLINE_OPACITY,
-    depthTest: false
+    depthTest: false,
+    side: THREE.DoubleSide
   });
-  const margin = 0.045;
+  solid.side = THREE.DoubleSide;
+  const m = PIN_OUTLINE_MARGIN;
+  const ringOutline = new THREE.Mesh(
+    new THREE.RingGeometry(PIN_RING_INNER - m, PIN_RING_OUTER + m, 40),
+    dark
+  );
+  ringOutline.rotation.x = -Math.PI / 2;
   const outline = [
     new THREE.Mesh(
-      new THREE.PlaneGeometry(0.08 + 2 * margin, shaftLength),
+      new THREE.PlaneGeometry(PIN_SHAFT_WIDTH + 2 * m, shaftLength),
       dark
     ),
     new THREE.Mesh(
       new THREE.ShapeGeometry(
         triangle(
-          0.19 + margin * 1.6,
-          headBase - margin,
-          ARROW_HALF_LENGTH + margin
+          PIN_HEAD_HALF_WIDTH + m * 1.6,
+          headBase - m,
+          ARROW_HALF_LENGTH + m
         )
       ),
       dark
@@ -166,14 +198,15 @@ function flatPinParts(kind: string): {
     new THREE.Mesh(
       new THREE.ShapeGeometry(
         triangle(
-          0.19 + margin * 1.6,
-          -(headBase - margin),
-          -(ARROW_HALF_LENGTH + margin)
+          PIN_HEAD_HALF_WIDTH + m * 1.6,
+          -(headBase - m),
+          -(ARROW_HALF_LENGTH + m)
         )
       ),
       dark
     ),
-    new THREE.Mesh(new THREE.CircleGeometry(0.12 + margin, 24), dark)
+    ringOutline,
+    new THREE.Mesh(new THREE.SphereGeometry(PIN_DOT_RADIUS + m, 12, 8), dark)
   ];
   const halo = new THREE.Mesh(
     new THREE.CircleGeometry(0.5, 32),
@@ -181,21 +214,30 @@ function flatPinParts(kind: string): {
       color: HANDLE_HOT_COLOR,
       transparent: true,
       opacity: 0,
-      depthTest: false
+      depthTest: false,
+      side: THREE.DoubleSide
     })
   );
+  // A volume rather than the arrow's own plane: seen down the normal the
+  // plane is edge-on and would be impossible to press.
   const hit = createHitMesh(
-    new THREE.PlaneGeometry(2 * ARROW_HIT_RADIUS, 2 * ARROW_HALF_LENGTH + 0.3),
+    new THREE.CylinderGeometry(
+      ARROW_HIT_RADIUS,
+      ARROW_HIT_RADIUS,
+      2 * ARROW_HALF_LENGTH + 0.3,
+      8
+    ),
     kind
   );
-  return { arrow: [shaft, headOut, headIn, puck], outline, halo, hit };
+  return { arrow: [shaft, headOut, headIn, ring, dot], outline, halo, hit };
 }
 
 /**
- * Faces the pin at the camera and turns it so local +Y follows the screen
- * projection of `direction`. A direction pointing nearly at the camera has
- * no usable projection, so it is drawn upright — the same fallback the drag
- * mapping uses for pixels along that axis.
+ * Keeps local +Y on `direction` and rolls the pin about it so its flat face
+ * turns toward the camera. The arrow therefore stays on the face normal from
+ * every viewpoint; only its roll follows the view. Looking straight down the
+ * normal there is no roll to prefer, and any one will do: the arrow is a
+ * point then and the ring carries the affordance.
  */
 function orientPin(
   group: THREE.Group,
@@ -208,19 +250,19 @@ function orientPin(
   } else {
     toCamera.copy(camera.position).sub(group.position).normalize();
   }
-  const up = new THREE.Vector3()
-    .copy(direction)
-    .addScaledVector(toCamera, -direction.dot(toCamera));
-  if (up.length() < PIN_FORESHORTEN_LIMIT) {
-    const cameraUp = new THREE.Vector3(0, 1, 0).applyQuaternion(
-      camera.quaternion
-    );
-    up.copy(cameraUp).addScaledVector(toCamera, -cameraUp.dot(toCamera));
+  const up = direction.clone().normalize();
+  const facing = toCamera.clone().addScaledVector(up, -up.dot(toCamera));
+  if (facing.lengthSq() < 1e-6) {
+    const seed =
+      Math.abs(up.z) < 0.9
+        ? new THREE.Vector3(0, 0, 1)
+        : new THREE.Vector3(1, 0, 0);
+    facing.crossVectors(up, seed);
   }
-  up.normalize();
-  const right = new THREE.Vector3().crossVectors(up, toCamera).normalize();
+  facing.normalize();
+  const right = new THREE.Vector3().crossVectors(up, facing).normalize();
   group.quaternion.setFromRotationMatrix(
-    new THREE.Matrix4().makeBasis(right, up, toCamera)
+    new THREE.Matrix4().makeBasis(right, up, facing)
   );
 }
 
