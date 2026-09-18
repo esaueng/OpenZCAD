@@ -73,9 +73,9 @@ export const SELECTION_SEMANTICS = {
   },
   /** The thing being dragged. */
   handle: {
-    /** A light lavender, lit by the scene rather than outlined. */
-    idle: 0xb4bcff,
-    hot: 0xe4e8ff,
+    /** A periwinkle blue, lit by the scene rather than outlined. */
+    idle: 0x7c8cff,
+    hot: 0xbfc8ff,
     /** The value under the pointer will not build. */
     invalid: 0xf59e0b
   },
