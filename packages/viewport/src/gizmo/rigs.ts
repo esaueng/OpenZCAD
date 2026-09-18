@@ -100,17 +100,20 @@ function createRigPresence(roots: readonly THREE.Object3D[]) {
   };
 }
 
-const PIN_OUTLINE_COLOR = SELECTION_SEMANTICS.handle.outline;
-const PIN_OUTLINE_OPACITY = 0.9;
 const PIN_HALO_OPACITY = 0.16;
-const PIN_SHAFT_WIDTH = 0.075;
-const PIN_HEAD_HALF_WIDTH = 0.19;
+/**
+ * How far short of the handle's centre a dimension line stops, in rig
+ * units: the arrow's half-length plus a little air, so the line's own white
+ * head never sits under the blue arrow.
+ */
+const DIMENSION_CLEARANCE = ARROW_HALF_LENGTH + 0.18;
+/** Solid arrow proportions, in rig units the viewer rescales per frame. */
+const PIN_SHAFT_RADIUS = 0.05;
+const PIN_HEAD_RADIUS = 0.17;
 /** The ring lying in the face plane around the pick point. */
 const PIN_RING_INNER = 0.13;
 const PIN_RING_OUTER = 0.17;
 const PIN_RING_OPACITY = 0.95;
-const PIN_DOT_RADIUS = 0.045;
-const PIN_OUTLINE_MARGIN = 0.035;
 /**
  * The ring fades in as the view turns to look down the normal: below this
  * much of the normal lying across the screen it is fully shown, and it is
@@ -118,119 +121,72 @@ const PIN_OUTLINE_MARGIN = 0.035;
  */
 const PIN_RING_FADE_START = 0.25;
 
-function triangle(halfWidth: number, base: number, tip: number): THREE.Shape {
-  const shape = new THREE.Shape();
-  shape.moveTo(0, tip);
-  shape.lineTo(-halfWidth, base);
-  shape.lineTo(halfWidth, base);
-  shape.closePath();
-  return shape;
+/** The lit lavender every handle shares; shading does the outlining. */
+function pinMaterial(): THREE.MeshStandardMaterial {
+  return new THREE.MeshStandardMaterial({
+    color: HANDLE_COLOR,
+    emissive: HANDLE_COLOR,
+    emissiveIntensity: 0.18,
+    roughness: 0.55,
+    metalness: 0.05,
+    transparent: true,
+    opacity: 1,
+    depthTest: false
+  });
 }
 
 /**
- * The pin: a slim double-headed arrow standing on the face normal, a ring
- * lying in the face plane around the pick point, and a dot at the point
- * itself.
+ * The pin: a solid double-headed arrow standing on the face normal — a
+ * shaft with a cone at each end, lit by the scene so it reads as an object
+ * from any angle without an outline — and a ring lying in the face plane
+ * that fades in as the view turns to look down the normal, where the arrow
+ * is only a cone tip.
  *
- * The arrow is flat, in the rig's local XY plane, and `orientPin` rolls that
- * plane about the normal to face the camera — so the arrow always stands
- * perpendicular to the face and never spins with the view, but is seen
- * face-on rather than edge-on. Looking straight down the normal the arrow
- * foreshortens to nothing, which is where the ring takes over: a full
- * circle around the dot says "pull this toward you". A thin dark outline
- * keeps it legible on any face colour.
- *
- * The earlier handle was three solids — a cylinder and two cones — which
- * the camera saw end-on whenever the normal pointed at it, so the arrow
- * collapsed into one translucent smear.
+ * It draws over the model (no depth test), so its three solids are ordered
+ * by distance to the camera every frame (`orderByDepth`): the far cone must
+ * not paint over the near end of the shaft.
  */
-function flatPinParts(kind: string): {
+function solidPinParts(kind: string): {
   arrow: THREE.Mesh[];
-  outline: THREE.Mesh[];
+  /** The shaft and the two cones, for per-frame depth ordering. */
+  solids: THREE.Mesh[];
   halo: THREE.Mesh<THREE.BufferGeometry, THREE.MeshBasicMaterial>;
-  /** The face-plane ring's own materials, faded by the view angle. */
-  ringMaterials: THREE.MeshBasicMaterial[];
+  ringMaterial: THREE.MeshBasicMaterial;
   hit: THREE.Mesh;
 } {
-  const solid = handleMaterial();
+  const material = pinMaterial();
   const shaftLength = 2 * (ARROW_HALF_LENGTH - ARROW_HEAD_LENGTH);
-  const headBase = ARROW_HALF_LENGTH - ARROW_HEAD_LENGTH;
   const shaft = new THREE.Mesh(
-    new THREE.PlaneGeometry(PIN_SHAFT_WIDTH, shaftLength),
-    solid
+    new THREE.CylinderGeometry(
+      PIN_SHAFT_RADIUS,
+      PIN_SHAFT_RADIUS,
+      shaftLength,
+      24
+    ),
+    material
   );
   const headOut = new THREE.Mesh(
-    new THREE.ShapeGeometry(
-      triangle(PIN_HEAD_HALF_WIDTH, headBase, ARROW_HALF_LENGTH)
-    ),
-    solid
+    new THREE.ConeGeometry(PIN_HEAD_RADIUS, ARROW_HEAD_LENGTH, 32),
+    material
   );
+  headOut.position.y = ARROW_HALF_LENGTH - ARROW_HEAD_LENGTH / 2;
   const headIn = new THREE.Mesh(
-    new THREE.ShapeGeometry(
-      triangle(PIN_HEAD_HALF_WIDTH, -headBase, -ARROW_HALF_LENGTH)
-    ),
-    solid
+    new THREE.ConeGeometry(PIN_HEAD_RADIUS, ARROW_HEAD_LENGTH, 32),
+    material
   );
+  headIn.rotation.z = Math.PI;
+  headIn.position.y = -(ARROW_HALF_LENGTH - ARROW_HEAD_LENGTH / 2);
   // Local +Y is the normal, so the face plane is local XZ. The ring has its
   // own material because it fades with the view angle while the arrow does
-  // not; it starts hidden and `orientPin` brings it up.
-  const ringFill = handleMaterial(PIN_RING_OPACITY);
-  ringFill.side = THREE.DoubleSide;
-  ringFill.opacity = 0;
+  // not; it starts hidden and the rig's `orient` brings it up.
+  const ringMaterial = handleMaterial(PIN_RING_OPACITY);
+  ringMaterial.side = THREE.DoubleSide;
+  ringMaterial.opacity = 0;
   const ring = new THREE.Mesh(
     new THREE.RingGeometry(PIN_RING_INNER, PIN_RING_OUTER, 40),
-    ringFill
+    ringMaterial
   );
   ring.rotation.x = -Math.PI / 2;
-  const dot = new THREE.Mesh(
-    new THREE.SphereGeometry(PIN_DOT_RADIUS, 12, 8),
-    solid
-  );
-
-  const dark = new THREE.MeshBasicMaterial({
-    color: PIN_OUTLINE_COLOR,
-    transparent: true,
-    opacity: PIN_OUTLINE_OPACITY,
-    depthTest: false,
-    side: THREE.DoubleSide
-  });
-  solid.side = THREE.DoubleSide;
-  const m = PIN_OUTLINE_MARGIN;
-  const ringDark = dark.clone();
-  ringDark.opacity = 0;
-  const ringOutline = new THREE.Mesh(
-    new THREE.RingGeometry(PIN_RING_INNER - m, PIN_RING_OUTER + m, 40),
-    ringDark
-  );
-  ringOutline.rotation.x = -Math.PI / 2;
-  const outline = [
-    new THREE.Mesh(
-      new THREE.PlaneGeometry(PIN_SHAFT_WIDTH + 2 * m, shaftLength),
-      dark
-    ),
-    new THREE.Mesh(
-      new THREE.ShapeGeometry(
-        triangle(
-          PIN_HEAD_HALF_WIDTH + m * 1.6,
-          headBase - m,
-          ARROW_HALF_LENGTH + m
-        )
-      ),
-      dark
-    ),
-    new THREE.Mesh(
-      new THREE.ShapeGeometry(
-        triangle(
-          PIN_HEAD_HALF_WIDTH + m * 1.6,
-          -(headBase - m),
-          -(ARROW_HALF_LENGTH + m)
-        )
-      ),
-      dark
-    ),
-    ringOutline,
-    new THREE.Mesh(new THREE.SphereGeometry(PIN_DOT_RADIUS + m, 12, 8), dark)
-  ];
   const halo = new THREE.Mesh(
     new THREE.CircleGeometry(0.5, 32),
     new THREE.MeshBasicMaterial({
@@ -241,8 +197,6 @@ function flatPinParts(kind: string): {
       side: THREE.DoubleSide
     })
   );
-  // A volume rather than the arrow's own plane: seen down the normal the
-  // plane is edge-on and would be impossible to press.
   const hit = createHitMesh(
     new THREE.CylinderGeometry(
       ARROW_HIT_RADIUS,
@@ -253,12 +207,29 @@ function flatPinParts(kind: string): {
     kind
   );
   return {
-    arrow: [shaft, headOut, headIn, ring, dot],
-    outline,
+    arrow: [shaft, headOut, headIn, ring],
+    solids: [shaft, headOut, headIn],
     halo,
-    ringMaterials: [ringFill, ringDark],
+    ringMaterial,
     hit
   };
+}
+
+/**
+ * Draws the farthest solid first. Without a depth test the draw order is
+ * the only thing keeping a cone behind the shaft from painting over it.
+ */
+function orderByDepth(solids: THREE.Mesh[], camera: THREE.Camera): void {
+  const position = new THREE.Vector3();
+  const byDistance = solids
+    .map((mesh) => ({
+      mesh,
+      distance: mesh.getWorldPosition(position).distanceTo(camera.position)
+    }))
+    .sort((a, b) => b.distance - a.distance);
+  byDistance.forEach(({ mesh }, index) => {
+    mesh.renderOrder = HANDLE_RENDER_ORDER + index;
+  });
 }
 
 /**
@@ -515,15 +486,11 @@ export function buildOffsetFaceHandle(params: OffsetFaceRigParams): DragRig {
     )
   );
 
-  const pin = flatPinParts(kind);
+  const pin = solidPinParts(kind);
   const arrowParts = [...pin.arrow, pin.hit];
-  // Fills first so the first visible material found is the handle colour;
-  // the outline and halo draw beneath through a lower render order.
   addHandleParts(group, arrowParts);
-  addHandleParts(group, [pin.halo, ...pin.outline]);
-  for (const part of [pin.halo, ...pin.outline]) {
-    part.renderOrder = HANDLE_RENDER_ORDER - 1;
-  }
+  addHandleParts(group, [pin.halo]);
+  pin.halo.renderOrder = HANDLE_RENDER_ORDER - 1;
 
   const worldGroup = new THREE.Group();
   worldGroup.name = `${kind}-handle-world`;
@@ -588,7 +555,10 @@ export function buildOffsetFaceHandle(params: OffsetFaceRigParams): DragRig {
           presence.hotness()
         );
     for (const part of arrowParts) {
-      if (
+      if (part.material instanceof THREE.MeshStandardMaterial) {
+        part.material.color.copy(color);
+        part.material.emissive.copy(color);
+      } else if (
         part.material instanceof THREE.MeshBasicMaterial &&
         part.material.visible
       ) {
@@ -619,12 +589,11 @@ export function buildOffsetFaceHandle(params: OffsetFaceRigParams): DragRig {
     },
     orient(camera: THREE.Camera) {
       const across = orientPin(group, direction, camera);
-      const ringPresence = ringPresenceFor(across);
-      presence.rebase(pin.ringMaterials[0]!, PIN_RING_OPACITY * ringPresence);
       presence.rebase(
-        pin.ringMaterials[1]!,
-        PIN_OUTLINE_OPACITY * ringPresence
+        pin.ringMaterial,
+        PIN_RING_OPACITY * ringPresenceFor(across)
       );
+      orderByDepth(pin.solids, camera);
       dimension.orient(camera);
     },
     beginExit() {
@@ -639,14 +608,27 @@ export function buildOffsetFaceHandle(params: OffsetFaceRigParams): DragRig {
       group.position.copy(tip);
       const engaged = Math.abs(value) > 1e-9;
       const scale = (group.userData.gizmoScale as number | undefined) ?? 1;
+      // The line ends short of the handle, its head pointing at the arrow
+      // rather than sitting under it.
+      const lineEnd = tip
+        .clone()
+        .addScaledVector(direction, -DIMENSION_CLEARANCE * scale);
       if (farPoint) {
-        // The whole span, drawn from the moment the rig arms.
-        dimension.object.visible = true;
-        dimension.update(farPoint, tip, scale);
+        // The whole span, drawn from the moment the rig arms, as long as
+        // there is still room for the line once it clears the handle.
+        const room = lineEnd.clone().sub(farPoint).dot(direction) > 0;
+        dimension.object.visible = room;
+        if (room) {
+          dimension.update(farPoint, lineEnd, scale);
+        }
       } else {
-        dimension.object.visible = engaged;
-        if (engaged) {
-          dimension.update(origin, tip, scale);
+        // The delta of a drag in progress, once it is longer than the gap.
+        const room =
+          engaged &&
+          lineEnd.clone().sub(origin).dot(direction) * Math.sign(value) > 0;
+        dimension.object.visible = room;
+        if (room) {
+          dimension.update(origin, lineEnd, scale);
         }
       }
       if (ghost) {
@@ -735,13 +717,11 @@ export function buildCylinderRadiusHandle(
 
   // The same flat pin as the offset rig, pointing along the radial direction
   // and turned to face the camera each frame.
-  const pin = flatPinParts(kind);
+  const pin = solidPinParts(kind);
   const cylinderArrowParts = [...pin.arrow, pin.hit];
   addHandleParts(group, cylinderArrowParts);
-  addHandleParts(group, [pin.halo, ...pin.outline]);
-  for (const part of [pin.halo, ...pin.outline]) {
-    part.renderOrder = HANDLE_RENDER_ORDER - 1;
-  }
+  addHandleParts(group, [pin.halo]);
+  pin.halo.renderOrder = HANDLE_RENDER_ORDER - 1;
 
   // The measurement graphic is a radius callout: a dashed line from the axis
   // out to the handle on the wall, with a small arrowhead at each end. It is
@@ -765,7 +745,10 @@ export function buildCylinderRadiusHandle(
       presence.hotness()
     );
     for (const part of cylinderArrowParts) {
-      if (
+      if (part.material instanceof THREE.MeshStandardMaterial) {
+        part.material.color.copy(color);
+        part.material.emissive.copy(color);
+      } else if (
         part.material instanceof THREE.MeshBasicMaterial &&
         part.material.visible
       ) {
@@ -781,7 +764,15 @@ export function buildCylinderRadiusHandle(
     // Match the screen-space sizing of the handle, whose scale the viewer
     // stamps on the group each frame.
     const scale = (group.userData.gizmoScale as number | undefined) ?? 1;
-    dimension.update(axisCenter, tip, scale);
+    // Stops short of the handle so the line's head stays clear of the arrow.
+    const lineEnd = tip
+      .clone()
+      .addScaledVector(direction, -DIMENSION_CLEARANCE * scale);
+    const room = lineEnd.clone().sub(axisCenter).dot(direction) > 0;
+    dimension.object.visible = room;
+    if (room) {
+      dimension.update(axisCenter, lineEnd, scale);
+    }
   };
   updateGraphic();
 
@@ -803,7 +794,12 @@ export function buildCylinderRadiusHandle(
       presence.setHot(hot);
     },
     orient(camera: THREE.Camera) {
-      orientPin(group, direction, camera);
+      const across = orientPin(group, direction, camera);
+      presence.rebase(
+        pin.ringMaterial,
+        PIN_RING_OPACITY * ringPresenceFor(across)
+      );
+      orderByDepth(pin.solids, camera);
       dimension.orient(camera);
     },
     beginExit() {
