@@ -211,9 +211,9 @@ describe('the offset-face rig', () => {
     const visibleArrow = rig.group.children.find(
       (child) =>
         child instanceof THREE.Mesh &&
-        child.material instanceof THREE.MeshBasicMaterial &&
+        child.material instanceof THREE.MeshStandardMaterial &&
         child.material.visible
-    ) as THREE.Mesh<THREE.BufferGeometry, THREE.MeshBasicMaterial>;
+    ) as THREE.Mesh<THREE.BufferGeometry, THREE.MeshStandardMaterial>;
     const dimensionLine = rig.worldGroup.children[0]!
       .children[0] as THREE.Object3D & {
       material: { color: THREE.Color };
@@ -388,9 +388,10 @@ describe('offset rig entrance and hover', () => {
     let hex = -1;
     rig.group.traverse((child) => {
       const material = (child as THREE.Mesh).material;
+      // The arrow is lit geometry now; the halo and hit target are not.
       if (
         hex === -1 &&
-        material instanceof THREE.MeshBasicMaterial &&
+        material instanceof THREE.MeshStandardMaterial &&
         material.visible
       ) {
         hex = material.color.getHex();
