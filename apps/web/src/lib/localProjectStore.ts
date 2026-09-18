@@ -850,6 +850,32 @@ export function saveLocalProject(document: ProjectDocument): Promise<void> {
 }
 
 /**
+ * Stores the save states these documents ARE, and nothing else.
+ *
+ * {@link saveLocalProject} keeps the current document and writes one save
+ * state as a side effect; a seeded demo also arrives with the documents it
+ * stood at on every earlier checkpoint, and those must be restorable without
+ * ever becoming the current document. A document not sitting exactly on its
+ * newest checkpoint contributes nothing.
+ */
+export function saveLocalSaveStates(
+  documents: readonly ProjectDocument[]
+): Promise<void> {
+  return scopedTransaction(
+    'readwrite',
+    [CHECKPOINT_STORE_NAME],
+    async (store) => {
+      for (const document of documents) {
+        const saveState = unstoredSaveState(document);
+        if (saveState) {
+          await putSaveState(store(CHECKPOINT_STORE_NAME), document, saveState);
+        }
+      }
+    }
+  );
+}
+
+/**
  * The checkpoint this document *is*, if it holds one.
  *
  * `createCheckpoint` stamps the version it was taken at and does not advance
