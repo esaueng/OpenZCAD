@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import * as THREE from 'three';
-import { CHIP_ANCHOR_LOCAL_DISTANCE, type DragRig } from './DragRig';
+import type { DragRig } from './DragRig';
 import {
   HANDLE_WARNING_COLOR,
   buildCylinderRadiusHandle,
@@ -78,11 +78,47 @@ describe('the offset-face rig', () => {
     expect(rig.group.position.z).toBeCloseTo(1, 6);
   });
 
-  it('floats its chip past the arrow head, scaled with the frame', () => {
+  it('anchors its chip on the pin itself, whatever the frame scale', () => {
+    // The viewport adds the screen-space gap; a world-space reach past the
+    // head is what used to fold the chip onto the arrow when the face
+    // normal pointed at the camera.
     const rig = offsetRig();
     rig.setValue(5);
-    const anchor = rig.chipAnchor(2);
-    expect(anchor.z).toBeCloseTo(3 + 5 + CHIP_ANCHOR_LOCAL_DISTANCE * 2, 6);
+    expect(rig.chipAnchor(2).z).toBeCloseTo(3 + 5, 6);
+    expect(rig.chipAnchor(20).z).toBeCloseTo(3 + 5, 6);
+  });
+
+  it('faces the camera and keeps its arrow along the projected normal', () => {
+    const rig = offsetRig({ x: 1, y: 0, z: 0 });
+    const camera = new THREE.PerspectiveCamera();
+    camera.position.set(0, -50, 0);
+    camera.lookAt(0, 0, 0);
+    camera.updateMatrixWorld();
+    rig.orient?.(camera);
+    const localY = new THREE.Vector3(0, 1, 0).applyQuaternion(
+      rig.group.quaternion
+    );
+    const localZ = new THREE.Vector3(0, 0, 1).applyQuaternion(
+      rig.group.quaternion
+    );
+    expect(localY.x).toBeCloseTo(1, 1);
+    // The pin's plane faces the camera.
+    expect(localZ.y).toBeCloseTo(-1, 1);
+  });
+
+  it('stands upright when the normal points at the camera', () => {
+    const rig = offsetRig({ x: 0, y: -1, z: 0 });
+    const camera = new THREE.PerspectiveCamera();
+    camera.up.set(0, 0, 1);
+    camera.position.set(0, -50, 0);
+    camera.lookAt(0, 0, 0);
+    camera.updateMatrixWorld();
+    rig.orient?.(camera);
+    const localY = new THREE.Vector3(0, 1, 0).applyQuaternion(
+      rig.group.quaternion
+    );
+    // No usable projection, so the arrow follows the camera's up (world Z).
+    expect(localY.z).toBeCloseTo(1, 1);
   });
 
   it('keeps world-space parts out of the rescaled group', () => {
