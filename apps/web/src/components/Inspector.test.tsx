@@ -445,3 +445,22 @@ describe('imported face recognition display', () => {
     expect(screen.getByText(/worker gone/)).toBeVisible();
   });
 });
+
+describe('body appearance color picker', () => {
+  it('closes only the color picker on Escape, leaving the inspector open', () => {
+    const props = makeProps({
+      selectedFeature: feature,
+      featureSelectionSource: 'pinned',
+      commandSession: null
+    });
+    render(<Inspector {...props} />);
+    const swatch = screen.getByRole('button', { name: 'Pick body color' });
+    fireEvent.click(swatch);
+    expect(swatch).toHaveAttribute('aria-expanded', 'true');
+    fireEvent.keyDown(swatch, { key: 'Escape' });
+    expect(swatch).toHaveAttribute('aria-expanded', 'false');
+    expect(props.onCancel).not.toHaveBeenCalled();
+    fireEvent.keyDown(swatch, { key: 'Escape' });
+    expect(props.onCancel).toHaveBeenCalledOnce();
+  });
+});
