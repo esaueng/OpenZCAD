@@ -250,7 +250,16 @@ export function PrimitiveForm({
     dimensionErrors.bottomRadius =
       'At least one radius must be greater than zero.';
   }
+  // Editing an existing feature: Apply stays off until something differs
+  // from the document, so the primary action never re-runs a no-op.
+  const unchanged =
+    initialDimensions !== undefined &&
+    name.trim() === initialName.trim() &&
+    fields.every(
+      (field) => (values[field.key] ?? '').trim() === documentValues[field.key]
+    );
   const canSubmit =
+    !unchanged &&
     name.trim().length > 0 &&
     fieldsValid(scope, Object.values(values)) &&
     Object.values(dimensionErrors).every((error) => !error);
@@ -917,7 +926,9 @@ export function BooleanForm({
         </select>
       </label>
       <div className="field">
-        <span>Bodies (numbered in the viewport · pick order sets the base)</span>
+        <span>
+          Bodies (numbered in the viewport · pick order sets the base)
+        </span>
         <div className="pick-list">
           {selectable.length === 0 && (
             <p className="muted">No bodies available.</p>
@@ -1406,9 +1417,7 @@ export function EdgeModifierForm({
                 }}
               >
                 {(
-                  Object.keys(
-                    VARIABLE_FILLET_LAW_LABELS
-                  ) as VariableFilletLaw[]
+                  Object.keys(VARIABLE_FILLET_LAW_LABELS) as VariableFilletLaw[]
                 ).map((law) => (
                   <option key={law} value={law}>
                     {VARIABLE_FILLET_LAW_LABELS[law]}
@@ -1424,9 +1433,9 @@ export function EdgeModifierForm({
             // smallest ball are the two radii above — the bound it can
             // prove. Failures on this path report the kernel's own reason.
             <p className="muted edge-selection-hint">
-              Variable radius runs the kernel&rsquo;s experimental blend and
-              is offered only for these two laws. Radius runs from Radius at
-              each edge&rsquo;s start to End radius at its far end.
+              Variable radius runs the kernel&rsquo;s experimental blend and is
+              offered only for these two laws. Radius runs from Radius at each
+              edge&rsquo;s start to End radius at its far end.
             </p>
           ) : null}
         </>
@@ -1478,9 +1487,9 @@ export function EdgeModifierForm({
                       cannot honestly be named here. The preview shows where
                       each setback landed and this button exchanges them. */}
                   <p className="muted edge-selection-hint">
-                    Distance and Second distance land on the two faces the
-                    edge separates. The preview shows which is which; swap
-                    them if it is the wrong way round.
+                    Distance and Second distance land on the two faces the edge
+                    separates. The preview shows which is which; swap them if it
+                    is the wrong way round.
                   </p>
                 </>
               ) : null}
