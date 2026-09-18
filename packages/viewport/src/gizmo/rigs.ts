@@ -1,7 +1,7 @@
 import * as THREE from 'three';
 import {
-  CHIP_ANCHOR_LOCAL_DISTANCE,
   HANDLE_COLOR,
+  HANDLE_RENDER_ORDER,
   addHandleParts,
   createHitMesh,
   disposeRigGroups,
@@ -93,6 +93,137 @@ function createRigPresence(roots: readonly THREE.Object3D[]) {
       materials.set(material, opacity);
     }
   };
+}
+
+const PIN_OUTLINE_COLOR = 0x0b1118;
+const PIN_OUTLINE_OPACITY = 0.6;
+const PIN_HALO_OPACITY = 0.16;
+/** Below this much of the direction lying in the screen plane, draw it upright. */
+const PIN_FORESHORTEN_LIMIT = 0.15;
+
+function triangle(halfWidth: number, base: number, tip: number): THREE.Shape {
+  const shape = new THREE.Shape();
+  shape.moveTo(0, tip);
+  shape.lineTo(-halfWidth, base);
+  shape.lineTo(halfWidth, base);
+  shape.closePath();
+  return shape;
+}
+
+/**
+ * The flat pin: a double-headed arrow drawn as 2D shapes in the rig's local
+ * XY plane, with a dark outline under it and a puck at the pick point.
+ *
+ * The earlier handle was three solids — a cylinder and two cones — which the
+ * camera saw end-on whenever the face normal pointed at it, so the arrow
+ * collapsed into one translucent smear. Flat shapes plus `orientPin` keep the
+ * drawn silhouette at every angle; the outline keeps it legible on any face
+ * colour.
+ */
+function flatPinParts(kind: string): {
+  arrow: THREE.Mesh[];
+  outline: THREE.Mesh[];
+  halo: THREE.Mesh<THREE.BufferGeometry, THREE.MeshBasicMaterial>;
+  hit: THREE.Mesh;
+} {
+  const solid = handleMaterial();
+  const shaftLength = 2 * (ARROW_HALF_LENGTH - ARROW_HEAD_LENGTH);
+  const headBase = ARROW_HALF_LENGTH - ARROW_HEAD_LENGTH;
+  const shaft = new THREE.Mesh(
+    new THREE.PlaneGeometry(0.08, shaftLength),
+    solid
+  );
+  const headOut = new THREE.Mesh(
+    new THREE.ShapeGeometry(triangle(0.19, headBase, ARROW_HALF_LENGTH)),
+    solid
+  );
+  const headIn = new THREE.Mesh(
+    new THREE.ShapeGeometry(triangle(0.19, -headBase, -ARROW_HALF_LENGTH)),
+    solid
+  );
+  const puck = new THREE.Mesh(new THREE.RingGeometry(0.07, 0.12, 24), solid);
+
+  const dark = new THREE.MeshBasicMaterial({
+    color: PIN_OUTLINE_COLOR,
+    transparent: true,
+    opacity: PIN_OUTLINE_OPACITY,
+    depthTest: false
+  });
+  const margin = 0.045;
+  const outline = [
+    new THREE.Mesh(
+      new THREE.PlaneGeometry(0.08 + 2 * margin, shaftLength),
+      dark
+    ),
+    new THREE.Mesh(
+      new THREE.ShapeGeometry(
+        triangle(
+          0.19 + margin * 1.6,
+          headBase - margin,
+          ARROW_HALF_LENGTH + margin
+        )
+      ),
+      dark
+    ),
+    new THREE.Mesh(
+      new THREE.ShapeGeometry(
+        triangle(
+          0.19 + margin * 1.6,
+          -(headBase - margin),
+          -(ARROW_HALF_LENGTH + margin)
+        )
+      ),
+      dark
+    ),
+    new THREE.Mesh(new THREE.CircleGeometry(0.12 + margin, 24), dark)
+  ];
+  const halo = new THREE.Mesh(
+    new THREE.CircleGeometry(0.5, 32),
+    new THREE.MeshBasicMaterial({
+      color: HANDLE_HOT_COLOR,
+      transparent: true,
+      opacity: 0,
+      depthTest: false
+    })
+  );
+  const hit = createHitMesh(
+    new THREE.PlaneGeometry(2 * ARROW_HIT_RADIUS, 2 * ARROW_HALF_LENGTH + 0.3),
+    kind
+  );
+  return { arrow: [shaft, headOut, headIn, puck], outline, halo, hit };
+}
+
+/**
+ * Faces the pin at the camera and turns it so local +Y follows the screen
+ * projection of `direction`. A direction pointing nearly at the camera has
+ * no usable projection, so it is drawn upright — the same fallback the drag
+ * mapping uses for pixels along that axis.
+ */
+function orientPin(
+  group: THREE.Group,
+  direction: THREE.Vector3,
+  camera: THREE.Camera
+): void {
+  const toCamera = new THREE.Vector3();
+  if ((camera as THREE.OrthographicCamera).isOrthographicCamera) {
+    camera.getWorldDirection(toCamera).negate();
+  } else {
+    toCamera.copy(camera.position).sub(group.position).normalize();
+  }
+  const up = new THREE.Vector3()
+    .copy(direction)
+    .addScaledVector(toCamera, -direction.dot(toCamera));
+  if (up.length() < PIN_FORESHORTEN_LIMIT) {
+    const cameraUp = new THREE.Vector3(0, 1, 0).applyQuaternion(
+      camera.quaternion
+    );
+    up.copy(cameraUp).addScaledVector(toCamera, -cameraUp.dot(toCamera));
+  }
+  up.normalize();
+  const right = new THREE.Vector3().crossVectors(up, toCamera).normalize();
+  group.quaternion.setFromRotationMatrix(
+    new THREE.Matrix4().makeBasis(right, up, toCamera)
+  );
 }
 
 /**
@@ -302,8 +433,10 @@ function createSweepGhost(
     update(value: number) {
       for (const { top, base } of layout.moving) {
         positions[top * 3] = layout.base[base * 3]! + direction.x * value;
-        positions[top * 3 + 1] = layout.base[base * 3 + 1]! + direction.y * value;
-        positions[top * 3 + 2] = layout.base[base * 3 + 2]! + direction.z * value;
+        positions[top * 3 + 1] =
+          layout.base[base * 3 + 1]! + direction.y * value;
+        positions[top * 3 + 2] =
+          layout.base[base * 3 + 2]! + direction.z * value;
       }
       attribute.needsUpdate = true;
     }
@@ -330,8 +463,15 @@ export function buildOffsetFaceHandle(params: OffsetFaceRigParams): DragRig {
     )
   );
 
-  const arrowParts = doubleArrowParts(kind);
+  const pin = flatPinParts(kind);
+  const arrowParts = [...pin.arrow, pin.hit];
+  // Fills first so the first visible material found is the handle colour;
+  // the outline and halo draw beneath through a lower render order.
   addHandleParts(group, arrowParts);
+  addHandleParts(group, [pin.halo, ...pin.outline]);
+  for (const part of [pin.halo, ...pin.outline]) {
+    part.renderOrder = HANDLE_RENDER_ORDER - 1;
+  }
 
   const worldGroup = new THREE.Group();
   worldGroup.name = `${kind}-handle-world`;
@@ -404,11 +544,17 @@ export function buildOffsetFaceHandle(params: OffsetFaceRigParams): DragRig {
       if (!presence.step(dtMs)) {
         return false;
       }
+      // The halo is hover feedback only: it grows with hotness and the
+      // presence ramp then scales it with everything else.
+      presence.rebase(pin.halo.material, PIN_HALO_OPACITY * presence.hotness());
       paintArrows();
       return true;
     },
     setHot(hot: boolean) {
       presence.setHot(hot);
+    },
+    orient(camera: THREE.Camera) {
+      orientPin(group, direction, camera);
     },
     beginExit() {
       presence.beginExit();
@@ -444,12 +590,11 @@ export function buildOffsetFaceHandle(params: OffsetFaceRigParams): DragRig {
       dimension.setColor(paintArrows().getHex());
       group.userData.previewWarning = warning;
     },
-    chipAnchor(gizmoScale: number) {
-      // The chip rides just past the arrow head, which has already travelled
-      // by `current`.
-      const reach =
-        current + CHIP_ANCHOR_LOCAL_DISTANCE * Math.max(gizmoScale, 0);
-      return origin.clone().addScaledVector(direction, reach);
+    chipAnchor() {
+      // The pin's own centre: the viewport offsets the chip beside it in
+      // screen pixels, so a foreshortened direction can never fold the chip
+      // back onto the arrow head.
+      return origin.clone().addScaledVector(direction, current);
     },
     dispose() {
       dimension.dispose();
