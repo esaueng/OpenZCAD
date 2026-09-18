@@ -114,7 +114,7 @@ async function armChamferedTopCapOffset(page: Page) {
     )
     .not.toBeNull();
   const chip = page.getByTestId('direct-manipulation-value');
-  await expect(chip).toHaveText('Total 28 mm');
+  await expect(chip).toHaveText('28 mm');
   const handle = await canvas.evaluate((element) => ({
     x: Number(element.dataset.e2eHandleX),
     y: Number(element.dataset.e2eHandleY),
@@ -267,7 +267,7 @@ test('streams exact planar previews and restores invalid or canceled offsets', a
   await expect
     .poll(readAxisLength, { timeout: PREVIEW_BUDGET_MS })
     .toBeCloseTo(28, 4);
-  await expect(chip).toHaveText('Total 28 mm');
+  await expect(chip).toHaveText('28 mm');
   await expect(chip).toHaveAttribute('data-state', 'ready');
 
   await chip.click();
@@ -277,13 +277,13 @@ test('streams exact planar previews and restores invalid or canceled offsets', a
   await expect(apply).toBeDisabled({ timeout: PREVIEW_BUDGET_MS });
   await expect(keypad.getByRole('alert')).toBeVisible();
   await expect(chip).toHaveAttribute('data-state', 'warning');
-  await expect(chip).toContainText('⚠ Total -1 mm');
+  await expect(chip).toContainText('⚠ -1 mm');
   await expect
     .poll(readAxisLength, { timeout: PREVIEW_BUDGET_MS })
     .toBeCloseTo(28, 4);
   await page.keyboard.press('Escape');
   await expect(keypad).toBeHidden();
-  await expect(chip).toHaveText('Total 28 mm');
+  await expect(chip).toHaveText('28 mm');
   await expect(chip).toHaveAttribute('data-state', 'ready');
   await expect(page.getByRole('button', { name: 'History 2' })).toBeVisible();
 
@@ -386,7 +386,7 @@ test('clears the catching-up preview state when a degraded gesture is canceled',
   await expect(chip).toHaveAttribute('data-state', 'ready', {
     timeout: PREVIEW_BUDGET_MS
   });
-  await expect(chip).toHaveText('Total 28 mm');
+  await expect(chip).toHaveText('28 mm');
   await expect
     .poll(readAxisLength, { timeout: PREVIEW_BUDGET_MS })
     .toBeCloseTo(28, 4);
@@ -490,7 +490,7 @@ test('streams an exact extrude preview while a region drag is held', async ({
 
   // The extrude stays open: the handle moves to the new cap, the chip reads
   // the stored distance, and the card still says Extrude.
-  await expect(chip).toHaveText(/^Total \d+(\.\d+)? mm$/);
+  await expect(chip).toHaveText(/^\d+(\.\d+)? mm$/);
   await expect(
     page.getByRole('region', { name: 'Extrude operation' })
   ).toBeVisible();
