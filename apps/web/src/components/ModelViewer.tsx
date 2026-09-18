@@ -2695,15 +2695,27 @@ export function ModelViewer({
         return true;
       }
       const offsetRig = offsetRigRef.current;
-      if (
-        offsetRig &&
-        onOpenOffsetKeypadRef.current(
-          offsetRig.value(),
-          offsetHandleRef.current?.totalBaseline,
-          offsetHandleRef.current?.totalSense
-        )
-      ) {
-        return true;
+      if (offsetRig) {
+        // Exact entry edits whatever the chip is showing: the whole span
+        // (a primitive's height, or the body's reach behind the face) in
+        // Total mode, the plain offset otherwise.
+        const span =
+          offsetHandleRef.current?.totalBaseline ?? offsetExtentRef.current;
+        const total =
+          offsetChipModeRef.current === 'total' && span !== null
+            ? span
+            : undefined;
+        if (
+          onOpenOffsetKeypadRef.current(
+            offsetRig.value(),
+            total,
+            total === undefined
+              ? undefined
+              : (offsetHandleRef.current?.totalSense ?? 1)
+          )
+        ) {
+          return true;
+        }
       }
       const edgeRig = edgeRigRef.current;
       if (edgeRig && onOpenEdgeKeypadRef.current(edgeRig.value())) {
@@ -8419,10 +8431,11 @@ export function ModelViewer({
         )
       : null;
     offsetExtentRef.current = extentBehind;
-    // A primitive height edit already knows its total; any other face
-    // starts as a plain offset and the tag on the chip switches it.
-    offsetChipModeRef.current =
-      offsetHandle.totalBaseline !== undefined ? 'total' : 'offset';
+    // The whole span is the default reading wherever one is known — a
+    // primitive's own height, or the body's reach behind the face; the tag
+    // on the chip switches to the plain offset. With no span it is an
+    // offset regardless.
+    offsetChipModeRef.current = 'total';
     const rig = buildOffsetFaceHandle({
       ...placement,
       ghostGeometry: null,
