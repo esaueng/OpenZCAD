@@ -75,7 +75,8 @@ export const SELECTION_SEMANTICS = {
   handle: {
     /** A periwinkle blue, lit by the scene rather than outlined. */
     idle: 0x7c8cff,
-    hot: 0xbfc8ff,
+    /** Under the pointer or in hand it deepens rather than washing out. */
+    hot: 0x4656e0,
     /** The value under the pointer will not build. */
     invalid: 0xf59e0b
   },
