@@ -15,8 +15,6 @@ import { ANALYTIC_GHOST_COLOR } from '../selection/analyticCylinderGhost';
 import { easeToward, hasSettled } from '../motion';
 import { SELECTION_SEMANTICS } from '../render/semantics';
 
-const ARROW_SHAFT_RADIUS = 0.05;
-const ARROW_HEAD_RADIUS = 0.14;
 const ARROW_HEAD_LENGTH = 0.3;
 const ARROW_HALF_LENGTH = 0.75;
 const ARROW_HIT_RADIUS = 0.34;
@@ -224,44 +222,6 @@ function orientPin(
   group.quaternion.setFromRotationMatrix(
     new THREE.Matrix4().makeBasis(right, up, toCamera)
   );
-}
-
-/**
- * The shared drag-arrow affordance: a double-headed arrow centered on the
- * pick point, saying "this adjusts in either direction".
- */
-function doubleArrowParts(kind: string): THREE.Mesh[] {
-  const solid = handleMaterial();
-  const shaft = new THREE.Mesh(
-    new THREE.CylinderGeometry(
-      ARROW_SHAFT_RADIUS,
-      ARROW_SHAFT_RADIUS,
-      2 * (ARROW_HALF_LENGTH - ARROW_HEAD_LENGTH),
-      12
-    ),
-    solid
-  );
-  const headOut = new THREE.Mesh(
-    new THREE.ConeGeometry(ARROW_HEAD_RADIUS, ARROW_HEAD_LENGTH, 16),
-    solid
-  );
-  headOut.position.y = ARROW_HALF_LENGTH - ARROW_HEAD_LENGTH / 2;
-  const headIn = new THREE.Mesh(
-    new THREE.ConeGeometry(ARROW_HEAD_RADIUS, ARROW_HEAD_LENGTH, 16),
-    solid
-  );
-  headIn.rotation.z = Math.PI;
-  headIn.position.y = -(ARROW_HALF_LENGTH - ARROW_HEAD_LENGTH / 2);
-  const hit = createHitMesh(
-    new THREE.CylinderGeometry(
-      ARROW_HIT_RADIUS,
-      ARROW_HIT_RADIUS,
-      2 * ARROW_HALF_LENGTH + 0.3,
-      8
-    ),
-    kind
-  );
-  return [shaft, headOut, headIn, hit];
 }
 
 const EDGE_HANDLE_RADIUS = 0.16;
@@ -555,6 +515,7 @@ export function buildOffsetFaceHandle(params: OffsetFaceRigParams): DragRig {
     },
     orient(camera: THREE.Camera) {
       orientPin(group, direction, camera);
+      dimension.orient(camera);
     },
     beginExit() {
       presence.beginExit();
@@ -637,8 +598,15 @@ export function buildCylinderRadiusHandle(
     )
   );
 
-  const cylinderArrowParts = doubleArrowParts(kind);
+  // The same flat pin as the offset rig, pointing along the radial direction
+  // and turned to face the camera each frame.
+  const pin = flatPinParts(kind);
+  const cylinderArrowParts = [...pin.arrow, pin.hit];
   addHandleParts(group, cylinderArrowParts);
+  addHandleParts(group, [pin.halo, ...pin.outline]);
+  for (const part of [pin.halo, ...pin.outline]) {
+    part.renderOrder = HANDLE_RENDER_ORDER - 1;
+  }
 
   // The measurement graphic is a radius callout: a dashed line from the axis
   // out to the handle on the wall, with a small arrowhead at each end. It is
@@ -692,11 +660,16 @@ export function buildCylinderRadiusHandle(
       if (!presence.step(dtMs)) {
         return false;
       }
+      presence.rebase(pin.halo.material, PIN_HALO_OPACITY * presence.hotness());
       paintParts();
       return true;
     },
     setHot(hot: boolean) {
       presence.setHot(hot);
+    },
+    orient(camera: THREE.Camera) {
+      orientPin(group, direction, camera);
+      dimension.orient(camera);
     },
     beginExit() {
       presence.beginExit();
