@@ -329,7 +329,7 @@ describe('settings privacy and data section', () => {
     expect(
       screen.getByRole('button', { name: 'Delete all data' })
     ).toBeEnabled();
-    expect(screen.getByText(/cloud actions below never delete/)).toBeVisible();
+    expect(screen.getByText(/cloud actions below never touch/)).toBeVisible();
   });
 
   it('does not duplicate destructive cloud actions on Account or Files & autosave', async () => {
