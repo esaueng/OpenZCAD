@@ -340,18 +340,23 @@
   background: rgba(255, 255, 255, 0.06);
 }
 
-/* Value chip riding the drag-handle arrow tip; tap to type the exact value. */
+/* Value chip beside a drag handle; tap to type the exact value. A small,
+   translucent tag rather than a tooltip: it reads at a glance and lets the
+   geometry under it show through. */
 .handle-value-chip {
   position: absolute;
   z-index: calc(var(--z-viewer-overlay) + 1);
-  padding: 4px 8px;
+  padding: 2px 7px;
   color: #eaf4ff;
-  background: rgba(8, 18, 30, 0.96);
-  border: 1px solid var(--color-accent-border);
+  background: rgba(8, 18, 30, 0.8);
+  border: 1px solid
+    color-mix(in srgb, var(--color-accent-border) 70%, transparent);
   border-radius: var(--radius-sm);
-  box-shadow: 0 8px 22px rgba(0, 0, 0, 0.35);
+  box-shadow: 0 2px 10px rgba(0, 0, 0, 0.3);
+  backdrop-filter: blur(6px);
   font-family: var(--font-mono);
   font-size: var(--fs-xs);
+  line-height: 1.5;
   white-space: nowrap;
   transform: translate(-50%, -130%);
   cursor: pointer;
@@ -370,6 +375,35 @@
 .handle-value-chip:hover {
   border-color: var(--color-accent-hi);
   background: rgba(14, 30, 48, 0.98);
+}
+
+/* The number carries the weight; the prefix and units step back. */
+.chip-number {
+  font-weight: 600;
+}
+
+.chip-prefix,
+.chip-units {
+  opacity: 0.72;
+}
+
+.chip-units {
+  font-size: 0.85em;
+}
+
+/* Nothing has moved and no hand is on the handle: the chip is only a tap
+   target for exact entry, so it recedes rather than announcing "+0". */
+.handle-value-chip[data-engaged='false'] {
+  color: #c9d6e4;
+  background: rgba(8, 18, 30, 0.55);
+  border-color: color-mix(in srgb, var(--color-accent-border) 45%, transparent);
+  box-shadow: none;
+}
+
+.handle-value-chip[data-engaged='false']:hover {
+  color: #eaf4ff;
+  background: rgba(14, 30, 48, 0.95);
+  border-color: var(--color-accent-hi);
 }
 
 /* The kernel stopped keeping up: the number is still live, the shape is not. */

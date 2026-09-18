@@ -70,13 +70,43 @@ describe('a dimension between two points', () => {
     graphic.dispose();
   });
 
-  it('never lets the graphic collapse at extreme zoom-in', () => {
-    // The rig's `min 1` clamp, kept: at very close range the pixel scale goes
-    // toward zero, and the arrowheads would vanish exactly when they are most
-    // readable.
+  it('keeps the heads screen-sized at extreme zoom-in', () => {
+    // There used to be a floor of 1 here, on the theory that the heads would
+    // vanish as the pixel scale went toward zero. They do not: the scale IS
+    // the world size of a pixel, so following it is what keeps them the same
+    // size on screen. The floor was what made them balloon once a pixel was
+    // smaller than a hundredth of a unit.
     const graphic = createDimensionGraphic();
     graphic.update(at(0, 0, 0), at(10, 0, 0), 0.0001);
+    expect(meshes(graphic)[0]!.scale.x).toBeCloseTo(0.0001, 9);
+    // A nonsense scale still falls back to something drawable.
+    graphic.update(at(0, 0, 0), at(10, 0, 0), Number.NaN);
     expect(meshes(graphic)[0]!.scale.x).toBe(1);
+    graphic.dispose();
+  });
+
+  it('turns each flat head to face the camera without leaving the axis', () => {
+    const graphic = createDimensionGraphic();
+    graphic.update(at(0, 0, 0), at(10, 0, 0), 1);
+    const camera = new THREE.PerspectiveCamera();
+    camera.position.set(5, -40, 0);
+    camera.lookAt(5, 0, 0);
+    camera.updateMatrixWorld();
+    graphic.orient(camera);
+    const [start, end] = meshes(graphic);
+    const upOf = (mesh: THREE.Mesh) =>
+      new THREE.Vector3(0, 1, 0).applyQuaternion(mesh.quaternion);
+    const normalOf = (mesh: THREE.Mesh) =>
+      new THREE.Vector3(0, 0, 1).applyQuaternion(mesh.quaternion);
+    // Tips still point along the dimension...
+    expect(upOf(start!).x).toBeCloseTo(-1, 6);
+    expect(upOf(end!).x).toBeCloseTo(1, 6);
+    // ...and the triangle's face now looks at the camera on -Y.
+    expect(normalOf(start!).y).toBeCloseTo(-1, 2);
+    expect(normalOf(end!).y).toBeCloseTo(-1, 2);
+    // A later re-layout keeps facing the camera it was last given.
+    graphic.update(at(0, 0, 0), at(10, 0, 0), 2);
+    expect(normalOf(end!).y).toBeCloseTo(-1, 2);
     graphic.dispose();
   });
 
