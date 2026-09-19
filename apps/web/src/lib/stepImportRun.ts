@@ -22,7 +22,11 @@
  *    anything that reached no verdict at all.
  */
 
-import { commandFactories, type AnyCommand } from '@openzcad/command-system';
+import {
+  commandFactories,
+  composeCommands,
+  type AnyCommand
+} from '@openzcad/command-system';
 import {
   createBodyFeatureIds,
   type ImportedStepInput
@@ -34,6 +38,7 @@ import type {
 } from '@openzcad/shared';
 
 import { errorMessage } from './errors';
+import { inspectStepSolidsInWorker } from './stepImportWorkerClient';
 import {
   settleImportSource,
   type InFlightImportChecksums
@@ -165,6 +170,8 @@ export interface StepImportCommitHook {
 
 export interface StepImportRunDeps {
   file: File;
+  /** Kernel discovery for ordinary STEP imports; guided imports retain their compound contract. */
+  inspectSolids?(file: File, signal?: AbortSignal): Promise<number[]>;
   /** MIME type for the archived copy; the caller infers it from the name. */
   contentType: string;
   /** Defaults to {@link localStepImportSourceStore}; a test supplies a fake. */
@@ -468,115 +475,130 @@ export async function runStepImport(
     stopIfCancelled();
     const productName = metadata.products[0]?.trim();
     const name = productName || file.name.replace(/\.(step|stp)$/i, '');
-    // Pre-assigned so the pre-flight can ask about THIS body, and reused
-    // verbatim by the finalized command: the candidate that was accepted and
-    // the command that lands must name the same feature and body, or the
-    // acceptance check proved nothing about what is in history.
-    const ids = createBodyFeatureIds();
-    const payload = {
-      name,
-      ids,
+    progress?.update({ phase: 'building', fraction: null });
+    const solidIndices = deps.commandFactory
+      ? []
+      : await (deps.inspectSolids ?? inspectStepSolidsInWorker)(file, signal);
+    stopIfCancelled();
+    // Empty discovery still runs the ordinary validator so its precise refusal
+    // and source-cleanup behavior are preserved. Never infer solid count/order
+    // from STEP text: assembly instances and rejected shells change both.
+    const selections = solidIndices.length > 1 ? solidIndices : [undefined];
+    // Preassign every id so validation and the finalized command name the
+    // same bodies, including when the source is archived after validation.
+    const payloads = selections.map((solidIndex, index) => ({
+      name: selections.length > 1 ? `${name} — Body ${index + 1}` : name,
+      ids: createBodyFeatureIds(),
       sourceName: file.name,
-      ...(sourceRef ? { stepSourceRef: sourceRef } : { stepText })
+      ...(sourceRef ? { stepSourceRef: sourceRef } : { stepText }),
+      ...(solidIndex === undefined ? {} : { solidIndices: [solidIndex] })
+    }));
+    const makeImport = (artifactId: string): AnyCommand => {
+      const commands = payloads.map((payload) =>
+        commandFactory({ ...payload, artifactId })
+      );
+      return commands.length === 1
+        ? commands[0]!
+        : composeCommands('Import STEP bodies', commands);
     };
     // The artifact id is geometry-inert: the worker resolves source bytes by
     // checksum from the local blob store and reaches for the archive only as a
     // fallback. So a candidate validated against a provisional local id
     // rebuilds identically once the finalized id replaces it.
     const localArtifactId = `artifact_local_${deps.newId()}`;
-    // The long pole, and the one phase with nothing to report: the kernel
-    // reads the file inside one synchronous wasm call. Its disposable worker
-    // is the cancellation boundary even though the call cannot yield progress.
-    progress?.update({ phase: 'building', fraction: null });
-    outcome = await deps.validatedFeature.run(
-      commandFactory({ ...payload, artifactId: localArtifactId }),
-      {
-        featureName: name,
-        resultBodyId: ids.bodyId,
-        // The lock this run has been holding since before it wrote a byte. The
-        // run adopts it instead of competing for it.
-        reservation: commitLock,
-        // The hook terminates the disposable rebuild worker through this same
-        // signal, then re-checks it at the upload and commit boundaries.
-        cancelled: () => signal?.aborted === true,
-        ...(signal ? { signal } : {}),
-        validatingMessage:
-          deps.validatingMessage ??
-          `Checking ${file.name} against exact geometry…`,
-        // The workspace stays live while this rebuilds, and rebuilding a large
-        // assembly takes minutes: renaming a feature or nudging a body in that
-        // time must not destroy the import. The candidate is simply rebuilt
-        // against the moved document instead — an import appends a feature that
-        // reads nothing but its own source bytes, so the second pass can only
-        // reach the same verdict, and the parsed source is cached by checksum
-        // so it costs no re-parse.
-        revalidateOnDocumentMove: true,
-        // Archiving ahead of the rebuild spends a transfer of up to 128 MB on a
-        // file the kernel may be about to refuse, and leaves an artifact
-        // nothing references. Best-effort: the source stays in the local blob
-        // store (or embedded) and rebuilds remain deterministic and offline
-        // either way.
-        finalize: async () => {
-          // Edit permission can flip during a rebuild that takes minutes (View
-          // mode, or the project opened in a second tab). Refusing here costs
-          // nothing and keeps the upload from producing an artifact the commit
-          // is then not allowed to reference. The window it leaves is the
-          // upload itself, which is why the local bytes survive an archive that
-          // outran its permission.
-          const blockedReason = deps.editDisabledReason();
-          if (blockedReason) {
-            throw new Error(`Cannot import geometry: ${blockedReason}.`);
-          }
-          let artifactId = localArtifactId;
-          try {
-            progress?.update({ phase: 'archiving', fraction: 0 });
-            artifactId = await deps.archive({
-              fileName: file.name,
-              contentType: deps.contentType,
-              kind: 'step-import',
-              body: file,
-              metadata: { source: 'direct-upload' },
-              ...(signal ? { signal } : {}),
-              onUploadProgress: (uploaded, total) =>
-                progress?.update({
-                  phase: 'archiving',
-                  fraction: total > 0 ? uploaded / total : null
-                })
-            });
-            archived = true;
-          } catch {
-            // Local-only, and listed in the File menu for a later retry.
-            //
-            // A cancelled upload lands here too, and must NOT be rethrown: a
-            // throw out of `finalize` is caught by the commit hook and reported
-            // as a rejection, which would blame the file for something the user
-            // did. The hook re-checks `cancelled` immediately after finalize
-            // returns, so the run still ends as cancelled and nothing commits.
-          }
-          return commandFactory({ ...payload, artifactId });
-        },
-        // Two separate facts: the source is stored, and the exact kernel
-        // rebuilt a body from it. Claiming the second before the rebuild ran is
-        // what left a success toast next to an empty viewport.
-        successMessage: () =>
-          deps.successMessage?.({ fileName: file.name, archived }) ??
-          `Imported editable STEP solid from ${file.name}: ` +
-            (archived
-              ? 'exact body rebuilt, source archived.'
-              : 'exact body rebuilt (cloud archive unavailable; source saved locally).'),
-        onFailure: (message) => {
-          // The kernel's verdict is already in the status bar. The host sink
-          // renders inline in whichever feature form is open, and an import has
-          // none of its own — routing it there would show a STEP parse error as
-          // the refusal of an unrelated operation.
-          //
-          // Kept here, though, because the progress card is this import's own
-          // surface: it can say why the file was refused instead of leaving
-          // the reason in a status line that the next message overwrites.
-          rejection = message;
+    outcome = await deps.validatedFeature.run(makeImport(localArtifactId), {
+      featureName: name,
+      resultBodyId: payloads[0]!.ids.bodyId,
+      targets: payloads.map((payload) => ({
+        featureName: payload.name,
+        featureId: payload.ids.featureId,
+        resultBodyId: payload.ids.bodyId
+      })),
+      // The lock this run has been holding since before it wrote a byte. The
+      // run adopts it instead of competing for it.
+      reservation: commitLock,
+      // The hook terminates the disposable rebuild worker through this same
+      // signal, then re-checks it at the upload and commit boundaries.
+      cancelled: () => signal?.aborted === true,
+      ...(signal ? { signal } : {}),
+      validatingMessage:
+        deps.validatingMessage ??
+        `Checking ${file.name} against exact geometry…`,
+      // The workspace stays live while this rebuilds, and rebuilding a large
+      // assembly takes minutes: renaming a feature or nudging a body in that
+      // time must not destroy the import. The candidate is simply rebuilt
+      // against the moved document instead — an import appends a feature that
+      // reads nothing but its own source bytes, so the second pass can only
+      // reach the same verdict, and the parsed source is cached by checksum
+      // so it costs no re-parse.
+      revalidateOnDocumentMove: true,
+      // Archiving ahead of the rebuild spends a transfer of up to 128 MB on a
+      // file the kernel may be about to refuse, and leaves an artifact
+      // nothing references. Best-effort: the source stays in the local blob
+      // store (or embedded) and rebuilds remain deterministic and offline
+      // either way.
+      finalize: async () => {
+        // Edit permission can flip during a rebuild that takes minutes (View
+        // mode, or the project opened in a second tab). Refusing here costs
+        // nothing and keeps the upload from producing an artifact the commit
+        // is then not allowed to reference. The window it leaves is the
+        // upload itself, which is why the local bytes survive an archive that
+        // outran its permission.
+        const blockedReason = deps.editDisabledReason();
+        if (blockedReason) {
+          throw new Error(`Cannot import geometry: ${blockedReason}.`);
         }
+        let artifactId = localArtifactId;
+        try {
+          progress?.update({ phase: 'archiving', fraction: 0 });
+          artifactId = await deps.archive({
+            fileName: file.name,
+            contentType: deps.contentType,
+            kind: 'step-import',
+            body: file,
+            metadata: { source: 'direct-upload' },
+            ...(signal ? { signal } : {}),
+            onUploadProgress: (uploaded, total) =>
+              progress?.update({
+                phase: 'archiving',
+                fraction: total > 0 ? uploaded / total : null
+              })
+          });
+          archived = true;
+        } catch {
+          // Local-only, and listed in the File menu for a later retry.
+          //
+          // A cancelled upload lands here too, and must NOT be rethrown: a
+          // throw out of `finalize` is caught by the commit hook and reported
+          // as a rejection, which would blame the file for something the user
+          // did. The hook re-checks `cancelled` immediately after finalize
+          // returns, so the run still ends as cancelled and nothing commits.
+        }
+        return makeImport(artifactId);
+      },
+      // Two separate facts: the source is stored, and the exact kernel
+      // rebuilt a body from it. Claiming the second before the rebuild ran is
+      // what left a success toast next to an empty viewport.
+      successMessage: () =>
+        deps.successMessage?.({ fileName: file.name, archived }) ??
+        (payloads.length === 1
+          ? `Imported editable STEP solid from ${file.name}: `
+          : `Imported ${payloads.length} editable STEP bodies from ${file.name}: `) +
+          (archived
+            ? `exact ${payloads.length === 1 ? 'body' : 'bodies'} rebuilt, source archived.`
+            : `exact ${payloads.length === 1 ? 'body' : 'bodies'} rebuilt (cloud archive unavailable; source saved locally).`),
+      onFailure: (message) => {
+        // The kernel's verdict is already in the status bar. The host sink
+        // renders inline in whichever feature form is open, and an import has
+        // none of its own — routing it there would show a STEP parse error as
+        // the refusal of an unrelated operation.
+        //
+        // Kept here, though, because the progress card is this import's own
+        // surface: it can say why the file was refused instead of leaving
+        // the reason in a status line that the next message overwrites.
+        rejection = message;
       }
-    );
+    });
   } catch (error) {
     if (isCancellation(error, signal)) {
       outcome = 'cancelled';
