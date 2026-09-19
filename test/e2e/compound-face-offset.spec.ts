@@ -1,3 +1,5 @@
+import { createProjectDocument, importStepBody } from '@openzcad/document-core';
+import { toUserId } from '@openzcad/shared';
 import { test, expect, stubApi, expectBodyCount } from './openzcad-fixtures';
 import {
   RemusKernel,
@@ -53,10 +55,29 @@ test('previews and commits a compound STEP cap offset, then undoes, redoes and r
   await page.goto('/');
   await page.getByLabel('Project name').fill('Compound face offset');
   await page.getByRole('button', { name: 'Create project' }).click();
-  await page.getByLabel('Import STEP or a mesh file…').setInputFiles({
-    name: 'components.step',
-    mimeType: 'application/step',
-    buffer: Buffer.from(bytes)
+  // Legacy documents intentionally retain their compound body. Fresh STEP
+  // imports now create independent bodies and are covered in step-bodies.spec.
+  await expect(page.locator('.save-state')).toHaveClass(/is-synced/);
+  const document = importStepBody(
+    createProjectDocument('Compound face offset', toUserId('user_test')),
+    {
+      name: 'components',
+      sourceName: 'components.step',
+      artifactId: 'artifact_test',
+      stepText: new TextDecoder().decode(bytes)
+    }
+  ).document;
+  await page.getByLabel('Import project backup').setInputFiles({
+    name: 'compound.openzcad',
+    mimeType: 'application/json',
+    buffer: Buffer.from(
+      JSON.stringify({
+        format: 'openzcad-project',
+        version: 1,
+        document,
+        files: []
+      })
+    )
   });
   await expectBodyCount(page, 1);
   const canvas = page.locator('.viewer-host canvas');
