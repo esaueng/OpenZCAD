@@ -43,6 +43,14 @@ function exportedModel(bytes: Uint8Array): string {
   throw new Error('Missing 3MF model');
 }
 
+/** Read the length unit declared by the generated 3MF model part. */
+export function threeMfExportUnit(bytes: Uint8Array): string {
+  const model = exportedModel(bytes);
+  const unit = model.match(/<model\b[^>]*\bunit="([^"]+)"/)?.[1];
+  if (!unit) throw new Error('Missing 3MF model unit');
+  return unit;
+}
+
 /** Measure the indexed triangles actually written, without import-time welding. */
 export function measureThreeMfExport(bytes: Uint8Array) {
   const xml = exportedModel(bytes);
@@ -60,8 +68,15 @@ export function measureThreeMfExport(bytes: Uint8Array) {
     const triangles = [...match[1]!.matchAll(/<triangle\b[^>]*\/>/g)].map(
       ([tag]) => attributes(tag, ['v1', 'v2', 'v3'])
     );
+    const canonicalIds = new Map<string, number>();
+    const canonical = vertices.map((vertex) => {
+      const key = vertex.join(',');
+      if (!canonicalIds.has(key)) canonicalIds.set(key, canonicalIds.size);
+      return canonicalIds.get(key)!;
+    });
     const edges = new Map<string, number[]>();
     let volume = 0;
+    let degenerateTriangles = 0;
     for (const indices of triangles) {
       if (
         indices.some(
@@ -70,14 +85,16 @@ export function measureThreeMfExport(bytes: Uint8Array) {
       )
         throw new Error('Invalid triangle index');
       const [a, b, c] = indices.map((i) => vertices[i]!);
+      const welded = indices.map((i) => canonical[i]!);
+      if (new Set(welded).size !== 3) degenerateTriangles++;
       volume +=
         (a![0]! * (b![1]! * c![2]! - b![2]! * c![1]!) -
           a![1]! * (b![0]! * c![2]! - b![2]! * c![0]!) +
           a![2]! * (b![0]! * c![1]! - b![1]! * c![0]!)) /
         6;
       for (let i = 0; i < 3; i++) {
-        const x = indices[i]!,
-          y = indices[(i + 1) % 3]!;
+        const x = welded[i]!,
+          y = welded[(i + 1) % 3]!;
         const key = x < y ? `${x}:${y}` : `${y}:${x}`;
         const uses = edges.get(key) ?? [];
         uses.push(x < y ? 1 : -1);
@@ -87,6 +104,7 @@ export function measureThreeMfExport(bytes: Uint8Array) {
     return {
       triangles: triangles.length,
       volume,
+      degenerateTriangles,
       invalidEdges: [...edges.values()].filter(
         (uses) => uses.length !== 2 || uses[0]! + uses[1]! !== 0
       ).length
