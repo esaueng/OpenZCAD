@@ -12,7 +12,7 @@
  *
  * Two users survive, and both are deliberate:
  *
- * - `directEditFacetFallbackWarning` guards `pushPullFace`, which is not a
+ * - `directEditFacetFallbackWarning` guards `moveFaces`, which is not a
  *   boolean and has no exact-only policy behind it. It still facets.
  * - `unionSwallowedCurvature` answers a different question for the union
  *   move probe: whether a candidate offset merely buries the moving body
