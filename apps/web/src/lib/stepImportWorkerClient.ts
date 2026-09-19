@@ -47,7 +47,9 @@ export function inspectStepSolidsInWorker(
     try {
       worker.postMessage(file);
     } catch (error) {
-      finish(() => reject(error));
+      finish(() =>
+        reject(error instanceof Error ? error : new Error(String(error)))
+      );
     }
   });
 }
