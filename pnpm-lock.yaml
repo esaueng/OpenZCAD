@@ -265,6 +265,9 @@ importers:
       '@openzcad/shared':
         specifier: workspace:*
         version: link:../shared
+      fflate:
+        specifier: 0.8.3
+        version: 0.8.3
       remus-wasm:
         specifier: github:esaueng/remus#4c81a6ecef879a7345df35d33cec77c0a0032c1d&path:/crates/wasm/pkg
         version: https://codeload.github.com/esaueng/remus/tar.gz/4c81a6ecef879a7345df35d33cec77c0a0032c1d#path:/crates/wasm/pkg
