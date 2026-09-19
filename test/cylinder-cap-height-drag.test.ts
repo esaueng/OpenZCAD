@@ -202,7 +202,7 @@ describe('cylinder cap height drag', { timeout: 60_000 }, () => {
     expect(capRadiusRatio(topCapFace(body))).toBeCloseTo(1, 3);
   });
 
-  it('is a different solid from offsetting the blended cap in place', async () => {
+  it('rebuilds the rounded rim when offsetting the blended cap directly', async () => {
     const model = await roundedCylinder(20);
     const cap = topCapFace(
       model.derived.bodyRepresentations[model.filletBodyId]
@@ -225,18 +225,26 @@ describe('cylinder cap height drag', { timeout: 60_000 }, () => {
     );
     expect(offset.warnings).toEqual([]);
 
-    // The old behaviour adds a boss the width of the flat remainder; the new
-    // one adds a full-diameter slice. Both are exact — only one is the drag.
+    // The direct edit now uses the same exact support move as the primitive
+    // height route: it removes and rebuilds the incident torus instead of
+    // extruding only the flat remainder into a narrow boss.
     const before =
       model.derived.bodyRepresentations[model.filletBodyId]!.volume;
-    expect(offset.bodyRepresentations[model.filletBodyId]!.volume).toBeCloseTo(
-      before + Math.PI * (RADIUS - FILLET) ** 2 * 8,
+    const rebuilt = await roundedCylinder(28);
+    const offsetBody = offset.bodyRepresentations[model.filletBodyId]!;
+    const rebuiltBody =
+      rebuilt.derived.bodyRepresentations[rebuilt.filletBodyId]!;
+    expect(offsetBody.volume).toBeCloseTo(rebuiltBody.volume, 6);
+    expect(offsetBody.volume).toBeCloseTo(
+      before + Math.PI * RADIUS ** 2 * 8,
       3
     );
-    const rebuilt = await roundedCylinder(28);
     expect(
-      rebuilt.derived.bodyRepresentations[rebuilt.filletBodyId]!.volume
-    ).toBeCloseTo(before + Math.PI * RADIUS ** 2 * 8, 3);
+      offsetBody.topology!.faces.filter(
+        (face) => face.geometry?.surfaceType === 'torus'
+      )
+    ).toHaveLength(2);
+    expect(offsetBody.faceCount).toBe(rebuiltBody.faceCount);
   });
   it.each([false, true])(
     'keeps the far cap fixed and preserves later edits, replay, and one-step undo (separate rims: %s)',
