@@ -82,7 +82,8 @@ describe('box modifier lineage', { timeout: 120_000 }, () => {
 
   async function blendedBox(
     kind: 'fillet' | 'chamfer',
-    width = WIDTH
+    width = WIDTH,
+    depth = DEPTH
   ): Promise<{
     document: ProjectDocument;
     primitiveBodyId: BodyId;
@@ -94,7 +95,7 @@ describe('box modifier lineage', { timeout: 120_000 }, () => {
       {
         name: 'Block',
         primitiveKind: 'box',
-        dimensions: { width, height: HEIGHT, depth: DEPTH }
+        dimensions: { width, height: HEIGHT, depth }
       }
     );
     const primitiveBodyId = base.bodyOrder[0]!;
@@ -162,10 +163,9 @@ describe('box modifier lineage', { timeout: 120_000 }, () => {
     const face = topFace(model.body);
     expect(face.reference?.lineageName).toBe('modifier.box.face.z-max');
 
-    // Deliberately the RAW op, not the planner's route: this is the *local*
-    // push/pull semantics, kept here only to pin that the new reference
-    // re-resolves after an upstream edit. What the gesture should build on a
-    // blended box is pinned in `test/box-face-dimension-drag.test.ts`.
+    // Deliberately the raw operation, not the planner's primitive route. It
+    // still has to re-resolve through lineage after an upstream edit, then
+    // move the support and rebuild the rounded boundary exactly.
     const edited = directEditBody(model.document, {
       name: 'Offset face',
       targetBodyId: model.bodyId,
@@ -195,21 +195,17 @@ describe('box modifier lineage', { timeout: 120_000 }, () => {
     // replay with "no longer exists" (direct-edit-face-repair.test.ts).
     expect(after.warnings).toEqual([]);
 
-    // Oracle: the widened blended box measured on its own, plus the prism the
-    // local op raises over the picked face's outline.
+    // Oracle: independently rebuild the widened box with its top support five
+    // millimetres higher, then apply the same fillet radius.
     const wide = await blendedBox('fillet', 50);
     const wideTop = topFace(wide.body);
     expect(wideTop.geometry!.area).toBeCloseTo(
       (50 - 2 * BLEND) * (HEIGHT - 2 * BLEND),
       6
     );
-    const expected = wide.body.volume + wideTop.geometry!.area * 5;
-    // The reported planar area is the face's outline rectangle while the
-    // solid's own corners are rounded, so the two routes differ by a few
-    // thousandths of a mm3 rather than exactly.
-    expect(
-      Math.abs(after.bodyRepresentations[model.bodyId]!.volume - expected),
-      `edited ${after.bodyRepresentations[model.bodyId]!.volume} vs ${expected}`
-    ).toBeLessThan(0.01);
+    const oracle = await blendedBox('fillet', 50, DEPTH + 5);
+    const editedBody = after.bodyRepresentations[model.bodyId]!;
+    expect(editedBody.volume).toBeCloseTo(oracle.body.volume, 6);
+    expect(editedBody.faceCount).toBe(oracle.body.faceCount);
   });
 });

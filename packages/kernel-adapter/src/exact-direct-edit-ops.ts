@@ -1172,7 +1172,7 @@ function setFaceDistance(
 
 /**
  * History-backed direct edits on the Remus path. Planar offsets and
- * cylindrical resizes are the kernel's own `pushPullFace` and
+ * cylindrical resizes are the kernel's own `moveFaces` and
  * `resizeCylindricalFace`; through-hole resizes and feature removals build
  * their own tools from the selected face's analytic geometry. Each derives
  * its tool from the selected face, merges the seams the boolean leaves
@@ -1270,17 +1270,18 @@ export function applyDirectEdit(
     if (!Number.isFinite(offset) || Math.abs(offset) <= GEOMETRY_EPSILON) {
       throw new Error('Face offset must be a non-zero distance.');
     }
-    // `pushPullFace` walks the face along the solid's own outward normal,
-    // which is the direction the stored normal holds too — it came from the
-    // picked triangle, not from the surface parameterization, so the sign
-    // carries through unchanged even where the two disagree. A prismatic
-    // move is worth exactly `offset * area`, and the kernel gates the result
-    // on that, so a tool that reached material it should not have is
-    // rejected rather than returned.
+    // `moveFaces` walks the face along the solid's own outward normal, which
+    // is the direction the stored normal holds too — it came from the picked
+    // triangle, not from the surface parameterization, so the sign carries
+    // through unchanged even where the two disagree. Unlike `pushPullFace`,
+    // this operation re-limits neighboring analytic supports and removes /
+    // rebuilds a uniquely proven incident blend region. Unsupported or
+    // ambiguous neighborhoods throw; never fall back to the old face-prism
+    // construction, which leaves a fillet rim behind as a ledge.
     const sourceCensus = censusOfSolids(kernel, [solid]);
     const output =
       tryExactAnalyticCylinderCapOffset(kernel, solid, face, offset) ??
-      kernel.pushPullFace(solid, face, offset);
+      kernel.moveFaces(solid, new Uint32Array([face]), offset);
     if (kernel.validateSolidRelaxed(output) !== 0) {
       throw new Error(
         `Offsetting the face by ${offset} does not produce a valid solid.`
