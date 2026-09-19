@@ -149,7 +149,7 @@ it('imports two exact solids through the real orchestration with shared source, 
     const replayed = replayCommands(initial, manager.document.commandLog);
     expect(replayed.bodyOrder).toEqual(ids);
     const reopened = await adapter.syncDocument(
-      JSON.parse(JSON.stringify(manager.document))
+      structuredClone(manager.document)
     );
     expect(reopened.exportableBodyIds).toEqual(ids);
   } finally {
@@ -175,12 +175,15 @@ it('discovers original indices after rejecting an open middle shell', async () =
     let shell = 0;
     const source = new TextDecoder()
       .decode(bytes)
-      .replace(/CLOSED_SHELL\('',\s*\(([^)]+)\)\)/g, (record, faces: string) => {
-        shell += 1;
-        return shell === 2
-          ? `CLOSED_SHELL('',(${faces.split(',').slice(1).join(',')}))`
-          : record;
-      });
+      .replace(
+        /CLOSED_SHELL\('',\s*\(([^)]+)\)\)/g,
+        (record, faces: string) => {
+          shell += 1;
+          return shell === 2
+            ? `CLOSED_SHELL('',(${faces.split(',').slice(1).join(',')}))`
+            : record;
+        }
+      );
     expect(shell).toBe(3);
     const inspection = await adapter.inspectStep(source);
     expect(inspection.solidIndices).toEqual([0, 2]);
