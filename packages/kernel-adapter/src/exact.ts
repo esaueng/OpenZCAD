@@ -581,6 +581,8 @@ export interface ExactKernelAdapter {
     solid: boolean;
     valid: boolean;
     volume: number;
+    /** Accepted indices in the original kernel import order, before rejection filtering. */
+    solidIndices: number[];
     /**
      * Why the probe answered as it did, when there is something to say. K0.6:
      * the probe never raises, so a parse error or a rejected open shell has to
@@ -2179,6 +2181,8 @@ export class RemusKernelAdapter implements ExactKernelAdapter {
     solid: boolean;
     valid: boolean;
     volume: number;
+    /** Accepted indices in the original kernel import order, before rejection filtering. */
+    solidIndices: number[];
     reason?: string;
   }> {
     await loadRemusTranslators();
@@ -2199,6 +2203,7 @@ export class RemusKernelAdapter implements ExactKernelAdapter {
           solid: false,
           valid: false,
           volume: 0,
+          solidIndices: [],
           reason: error instanceof Error ? error.message : String(error)
         };
       }
@@ -2213,6 +2218,9 @@ export class RemusKernelAdapter implements ExactKernelAdapter {
       );
       return {
         solid: accepted.length > 0,
+        solidIndices: declared.flatMap((_, index) =>
+          verdicts[index]!.kind !== 'not-a-solid' ? [index] : []
+        ),
         valid:
           declared.length > 0 &&
           verdicts.every((verdict) => verdict.kind === 'solid'),
