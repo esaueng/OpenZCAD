@@ -207,6 +207,10 @@ export function writeAsciiStl(solidName: string, meshes: StlExportMesh[]): strin
         }
       }
       const [nx, ny, nz] = facetNormal(mesh.vertices, a, b, c);
+      // A shared-edge tessellation can contain a collapsed seam facet. It
+      // carries no area or volume and makes the emitted STL non-manifold, so
+      // omit only the exact zero-area case; no welding tolerance is involved.
+      if (nx === 0 && ny === 0 && nz === 0) continue;
       lines.push(
         `  facet normal ${nx} ${ny} ${nz}`,
         '    outer loop',
