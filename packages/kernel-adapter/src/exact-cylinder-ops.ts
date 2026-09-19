@@ -50,7 +50,7 @@ export function revolveRadialProfile(
  * resizes leave a valid analytic solid, but Remus's generic cap boolean can
  * accumulate a mismatched circular boundary and fail its exact volume gate.
  * This path is deliberately limited to the three-face cylinder case; every
- * more complex prismatic face still uses the general push/pull operation.
+ * more complex planar face still uses the general exact move operation.
  */
 export function tryExactAnalyticCylinderCapOffset(
   kernel: RemusKernel,

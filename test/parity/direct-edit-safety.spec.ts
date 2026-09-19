@@ -215,7 +215,7 @@ describe(
         const derived = await adapter.syncDocument(overcut);
         expect(derived.warnings, adapter.kind).toHaveLength(1);
         expect(derived.warnings[0], adapter.kind).toMatch(
-          /empty result|does not produce a valid solid/
+          /empty result|does not produce a valid solid|move-face would change topology/
         );
         const preserved = bodyOf(derived, bodyId);
         expect(preserved.volume, adapter.kind).toBeCloseTo(6000, 4);
@@ -296,12 +296,12 @@ describe(
         }
       }).document;
 
-      const pushPull = vi
-        .spyOn(RemusKernel.prototype, 'pushPullFace')
+      const moveFaces = vi
+        .spyOn(RemusKernel.prototype, 'moveFaces')
         .mockImplementation(function (
           this: RemusKernel,
           _solid: number,
-          _face: number,
+          _faces: Uint32Array,
           _distance: number
         ) {
           return this.makeBox(40, 40, 50);
@@ -312,7 +312,7 @@ describe(
         after = await remus.syncDocument(edited);
         exported = await remus.exportStep(edited, [bodyId]);
       } finally {
-        pushPull.mockRestore();
+        moveFaces.mockRestore();
       }
 
       expect(after.warnings).toContain(
