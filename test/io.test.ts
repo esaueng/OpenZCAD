@@ -119,6 +119,19 @@ describe('STL parsing', () => {
     expect(Math.abs(solidVolume(solid))).toBeCloseTo(1 / 6, 6);
   });
 
+  it('omits only exact zero-area ASCII facets', () => {
+    const stl = writeAsciiStl('seam', [
+      {
+        name: 'Seam',
+        vertices: [0, 0, 0, 1, 0, 0, 0, 0, 0, 0, 1e-12, 0],
+        indices: [0, 1, 2, 0, 1, 3]
+      }
+    ]);
+
+    expect((stl.match(/facet normal/g) ?? []).length).toBe(1);
+    expect(stl).toContain('1e-12');
+  });
+
   it('rejects writing a mesh whose indices are out of range', () => {
     const mesh = { name: 'Bad', vertices: [0, 0, 0, 1, 0, 0, 0, 1, 0], indices: [0, 1, 3] };
     expect(() => writeAsciiStl('bad', [mesh])).toThrowError(StlWriteError);
