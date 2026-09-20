@@ -11142,11 +11142,15 @@ export function App() {
     outcome: SketchSolveOutcome,
     sketch: SketchNode | undefined
   ): SketchSolveStatus {
-    const conflictingConstraintIds = outcome.constraintResiduals
-      .filter(
-        ({ maxResidual }) => Number.isFinite(maxResidual) && maxResidual > 1e-12
-      )
-      .map(({ constraintId }) => String(constraintId));
+    const failedSolve = outcome.classification === 'unsatisfied';
+    const conflictingConstraintIds = failedSolve
+      ? outcome.constraintResiduals
+          .filter(
+            ({ maxResidual }) =>
+              Number.isFinite(maxResidual) && maxResidual > 1e-10
+          )
+          .map(({ constraintId }) => String(constraintId))
+      : [];
     return {
       label: solveStatusLabel(outcome),
       tone:
@@ -11156,10 +11160,9 @@ export function App() {
             ? 'info'
             : 'warn',
       conflictingConstraintIds,
-      diagnosticObjectIds: residualConstraintObjectIds(
-        sketch,
-        outcome.constraintResiduals
-      )
+      diagnosticObjectIds: failedSolve
+        ? residualConstraintObjectIds(sketch, outcome.constraintResiduals)
+        : []
     };
   }
   const [sketchSolving, setSketchSolving] = useState(false);

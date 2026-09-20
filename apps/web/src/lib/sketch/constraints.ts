@@ -673,7 +673,7 @@ export function constraintReferencesObject(
 export function residualConstraintObjectIds(
   sketch: SketchNode | undefined,
   residuals: ReadonlyArray<{ constraintId: string; maxResidual: number }>,
-  tolerance = 1e-12
+  tolerance = 1e-10
 ): string[] {
   if (!sketch) return [];
   const byId = new Map(

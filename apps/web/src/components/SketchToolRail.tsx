@@ -508,12 +508,26 @@ export function SketchToolRail({
                           key={constraintId}
                           className={conflicted ? 'conflicted' : undefined}
                           data-conflicted={conflicted ? 'true' : undefined}
+                          aria-label={
+                            conflicted
+                              ? `${label} · solver residual; edit or delete this constraint`
+                              : label
+                          }
                         >
                           {editable ? (
-                            <Tooltip label={`Edit constraint: ${label}`}>
+                            <Tooltip
+                              label={
+                                conflicted
+                                  ? `Edit conflicting constraint: ${label}`
+                                  : `Edit constraint: ${label}`
+                              }
+                            >
                               <button
                                 type="button"
                                 className="sketch-constraint-edit"
+                                data-conflicted={
+                                  conflicted ? 'true' : undefined
+                                }
                                 aria-label={`Edit constraint: ${label}`}
                                 onClick={(event) =>
                                   onEditConstraint(constraintId, {
