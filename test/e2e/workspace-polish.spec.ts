@@ -497,6 +497,60 @@ test('places, retypes, solves, and undoes a driving angle dimension', async ({
   await expect(canvasDimension).not.toContainText('angle_target');
   await page.keyboard.press('Control+Shift+z');
   await expect(canvasDimension).toContainText('angle_target = 60°');
+
+  // A large persisted offset may project below the orientation rail after a
+  // cold reopen. Drag it there, save the document, and verify the presentation
+  // clamp keeps the label reachable without changing the stored dimension.
+  const railStack = page.locator('.viewer-rail-stack');
+  await expect(canvasDimension).toBeVisible();
+  const beforeDrag = await canvasDimension.boundingBox();
+  const railBounds = await railStack.boundingBox();
+  expect(beforeDrag).not.toBeNull();
+  expect(railBounds).not.toBeNull();
+  await page.mouse.move(
+    beforeDrag!.x + beforeDrag!.width / 2,
+    beforeDrag!.y + beforeDrag!.height / 2
+  );
+  await page.mouse.down();
+  await page.mouse.move(
+    railBounds!.x + railBounds!.width / 2,
+    railBounds!.y + railBounds!.height / 2,
+    { steps: 6 }
+  );
+  await page.mouse.up();
+  await page.keyboard.press('ControlOrMeta+s');
+  await expect(
+    page.getByRole('group', { name: 'Workspace status' })
+  ).not.toContainText('Saving', { timeout: 30_000 });
+
+  await page.reload();
+  await expect(
+    page.getByRole('button', { name: 'Sketch 01', exact: true })
+  ).toBeVisible({
+    timeout: 30_000
+  });
+  await page.getByRole('button', { name: 'Sketch 01', exact: true }).click();
+  await page
+    .getByRole('button', { name: 'Edit sketch in viewport', exact: true })
+    .click();
+  const reopenedDimension = page.getByRole('button', {
+    name: /^Edit driving angle:/
+  });
+  await expect(reopenedDimension).toBeVisible({ timeout: 30_000 });
+  await expect(reopenedDimension).toContainText('angle_target = 60°');
+  const reopenedBounds = await reopenedDimension.boundingBox();
+  const reopenedRailBounds = await railStack.boundingBox();
+  expect(reopenedBounds).not.toBeNull();
+  expect(reopenedRailBounds).not.toBeNull();
+  expect(
+    reopenedBounds!.x + reopenedBounds!.width <= reopenedRailBounds!.x ||
+      reopenedBounds!.x >= reopenedRailBounds!.x + reopenedRailBounds!.width ||
+      reopenedBounds!.y + reopenedBounds!.height <= reopenedRailBounds!.y ||
+      reopenedBounds!.y >= reopenedRailBounds!.y + reopenedRailBounds!.height
+  ).toBe(true);
+  await reopenedDimension.click();
+  await expect(page.getByRole('dialog', { name: 'Angle value' })).toBeVisible();
+
   await page.screenshot({ path: '/tmp/openzcad-sketch-driving-dimension.png' });
   await page
     .getByRole('button', { name: 'Finish Sketch', exact: true })
