@@ -531,7 +531,11 @@
   font-size: var(--fs-xs);
   font-variant-numeric: tabular-nums;
   white-space: nowrap;
-  cursor: pointer;
+  cursor: grab;
+}
+
+.sketch-dimension-label:active {
+  cursor: grabbing;
 }
 
 .sketch-dimension-label:focus-visible {

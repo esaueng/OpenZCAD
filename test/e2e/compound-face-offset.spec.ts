@@ -1,3 +1,5 @@
+import { createProjectDocument, importStepBody } from '@openzcad/document-core';
+import { toUserId } from '@openzcad/shared';
 import { test, expect, stubApi, expectBodyCount } from './openzcad-fixtures';
 import {
   RemusKernel,
@@ -53,10 +55,29 @@ test('previews and commits a compound STEP cap offset, then undoes, redoes and r
   await page.goto('/');
   await page.getByLabel('Project name').fill('Compound face offset');
   await page.getByRole('button', { name: 'Create project' }).click();
-  await page.getByLabel('Import STEP or a mesh file…').setInputFiles({
-    name: 'components.step',
-    mimeType: 'application/step',
-    buffer: Buffer.from(bytes)
+  // Legacy documents intentionally retain their compound body. Fresh STEP
+  // imports now create independent bodies and are covered in step-bodies.spec.
+  await expect(page.locator('.save-state')).toHaveClass(/is-synced/);
+  const document = importStepBody(
+    createProjectDocument('Compound face offset', toUserId('user_test')),
+    {
+      name: 'components',
+      sourceName: 'components.step',
+      artifactId: 'artifact_test',
+      stepText: new TextDecoder().decode(bytes)
+    }
+  ).document;
+  await page.getByLabel('Import project backup').setInputFiles({
+    name: 'compound.openzcad',
+    mimeType: 'application/json',
+    buffer: Buffer.from(
+      JSON.stringify({
+        format: 'openzcad-project',
+        version: 1,
+        document,
+        files: []
+      })
+    )
   });
   await expectBodyCount(page, 1);
   const canvas = page.locator('.viewer-host canvas');
@@ -126,6 +147,15 @@ test('previews and commits a compound STEP cap offset, then undoes, redoes and r
   await page.evaluate(() => {
     (window as typeof window & { holdFaceEdit?: boolean }).holdFaceEdit = true;
   });
+  // The chip reads the cap's total reach by default; the drag's delta is
+  // the difference from this resting reading.
+  const readChip = async () =>
+    Number(
+      (await page.getByTestId('direct-manipulation-value').innerText()).match(
+        /([+-]?[\d.]+) mm/
+      )?.[1]
+    );
+  const restingTotal = await readChip();
   await page.mouse.move(bounds.x + handle.x, bounds.y + handle.y);
   await page.mouse.down();
   await page.mouse.move(
@@ -147,11 +177,7 @@ test('previews and commits a compound STEP cap offset, then undoes, redoes and r
   expect(await worldBounds()).toEqual(before);
   // Screen-space drags are grid-snapped. Commit must match the displayed
   // requested delta, independently of the current camera's snap interval.
-  const requestedOffset = Number(
-    (await page.getByTestId('direct-manipulation-value').innerText()).match(
-      /([+-]?[\d.]+) mm/
-    )?.[1]
-  );
+  const requestedOffset = (await readChip()) - restingTotal;
   expect(requestedOffset).toBeGreaterThan(0);
   await page.mouse.up();
   await expect(
@@ -174,6 +200,12 @@ test('previews and commits a compound STEP cap offset, then undoes, redoes and r
       return canvas.getAttribute('data-e2e-handle-x');
     })
     .not.toBeNull();
+  // Total is the default reading; the tag beside the value switches exact
+  // entry to the plain offset.
+  await page.getByTestId('direct-manipulation-mode').click();
+  await expect(page.getByTestId('direct-manipulation-mode')).toHaveText(
+    /^Offset/
+  );
   await page.getByTestId('direct-manipulation-value').click();
   const keypad = page.getByRole('dialog', { name: 'Offset value' });
   await keypad.getByRole('textbox').fill('5');
