@@ -7,7 +7,7 @@ projection adapter.
 
 ## Scope and product contract
 
-D01 is a drawing-sheet document attached to one saved model revision. The MVP
+D01 is a drawing-sheet document attached to one exact saved model snapshot. The MVP
 has four standard orthographic/axonometric views (front, top, right, iso), a
 sheet size and units, an explicit scale, offline save/reload, and a PDF handoff
 whose line geometry comes from the same view records. Dimensions, centerlines,
@@ -36,30 +36,53 @@ type DrawingProjection = {
 type DrawingSheet = {
   id: EntityId;
   name: string;
-  units: UnitSystem;
+  modelUnits: UnitSystem;
   paper: { size: 'A4' | 'A3' | 'letter'; orientation: 'portrait' | 'landscape' };
   scale: { numerator: number; denominator: number }; // 1:1, 1:2, 2:1; positive integers
-  modelRevision: RevisionId;
+  modelSnapshot: {
+    projectId: ProjectId;
+    checkpointId: string;
+    revisionId: RevisionId;
+    documentVersion: number;
+  };
   views: Array<{
     id: EntityId;
     kind: DrawingViewKind;
     sourceBodyIds: BodyId[];
     projection: DrawingProjection;
-    centerMm: { x: number; y: number };
+    centerMm: { x: number; y: number }; // fixed millimetres on the paper
     visible: boolean;
     hiddenLines: boolean;
   }>;
 };
 ```
 
-The persisted contract stores intent only: source body IDs, revision fence,
-projection frame, sheet placement, visibility policy, units, paper, and scale.
+The persisted contract stores intent only: source body IDs, exact checkpoint
+snapshot fence, projection frame, sheet placement, visibility policy, model
+units, paper, and scale. Creating or rebinding a sheet requires selecting an
+existing checkpoint; an unsaved current document is not an implicit snapshot.
 It does not store WASM handles, tessellated meshes, flattened polylines, SVG,
 or PDF bytes. The view validator rejects non-finite vectors, zero directions,
-an x-axis parallel to the direction, non-positive scale, and views that name a
-body absent from the fenced revision. The normalizer must fail closed on a
-future drawing schema, matching `normalizeDocument`'s existing behavior for a
-future project schema.
+zero or near-zero x-axes, an x-axis parallel to the direction, non-positive
+scale, and views that name a body absent from the fenced snapshot. The explicit
+consumer tolerance for frame vectors is `FRAME_VECTOR_TOLERANCE = 1e-12` as a
+dimensionless vector-norm threshold: reject `norm(direction) <= tolerance` and
+`norm(xAxis) <= tolerance` before normalization, then reject the orthogonalized
+x-axis when its norm is at or below the same tolerance. The normalizer must fail
+closed on a future drawing schema, matching `normalizeDocument`'s existing
+behavior for a future project schema.
+
+Projection resolves `modelSnapshot` by loading the exact save-state body from
+the local checkpoint store (`loadLocalSaveState(projectId, checkpointId)`) or
+the equivalent account save-state endpoint. It verifies project ID, checkpoint
+ID, revision ID, document version, and the matching revision/checkpoint records
+in the loaded snapshot before replaying it. A missing or pruned checkpoint,
+missing source blob needed by replay, or failed metadata check produces a named
+stale/refused state. The current open document is never substituted merely
+because it has the same `revisionId`; it is usable only when it is the exact
+requested checkpoint/version. An explicit rebind selects a new checkpoint and
+updates `modelSnapshot`; it is the only operation that changes the source
+fence.
 
 The current canonical document already preserves feature history, revision
 records, and command log in `ProjectDocument`; `withoutDerivedProjection`
@@ -77,9 +100,31 @@ deflection and surface the kernel's refusal if sampling exceeds the native
 100,000-point work limit. Curves are therefore polygonal polylines in this
 MVP; line-weight/style and curve fitting are export policy, not hidden geometry.
 
+The pinned kernel defines `view = normalize(direction)`, re-orthogonalizes
+`xAxis` to `x`, and computes `y = normalize(x × view)`. Thus the kernel's
+right-handed plane normal is `x × y = -view`; positive page-up is the returned
+`y` coordinate, and `direction` points from camera into the model. D01 must
+preserve that sign in both preview and PDF. The standard frame contract is:
+
+| View | direction | xAxis | positive page-up (`y = x × direction`) |
+| --- | --- | --- | --- |
+| front | `(0,0,1)` | `(1,0,0)` | model `-Y` |
+| top | `(0,1,0)` | `(1,0,0)` | model `+Z` |
+| right | `(1,0,0)` | `(0,1,0)` | model `-Z` |
+| iso | `(1,1,1)` | `(1,-1,0)` | `(-1,-1,2)/√6` |
+
 For each returned point `(u, v)` in model units, convert to page millimetres by
 
-`page = viewCenterMm + (u, v) * (scale.numerator / scale.denominator) * unitToMm`.
+`page = centerMm + (u, v) * (scale.numerator / scale.denominator) * unitToMm`.
+
+`modelUnits` describes the source geometry (`mm`, `cm`, `m`, or `inch`);
+`unitToMm` is respectively `1`, `10`, `1000`, or `25.4`. Paper coordinates
+are always millimetres, independent of model units. The supported paper boxes
+are A4 `210 × 297 mm`, A3 `297 × 420 mm`, and Letter `215.9 × 279.4 mm`; the
+orientation field swaps width and height before margins/centers are applied.
+PDF points, when implemented, are derived from these fixed paper millimetres
+with `72 / 25.4`. The sheet scale changes model spans, while `centerMm` remains
+a fixed page position.
 
 The transform is deterministic and shared by screen preview and PDF export.
 Fit-to-sheet is a placement helper only; it must write an explicit scale and
@@ -126,6 +171,25 @@ bounds within `1e-6` model units for boxes, hidden-line presence for the
 oblique box, and scale ratios (`1:2` produces exactly half the page span while
 preserving model-space bounds).
 
+The current consumer probe also checks orientation and a known run, rather than
+using only aggregate counts. For the iso box, the analytic corner projection
+with `x = (1,-1,0)/√2` and `y = (-1,-1,2)/√6` is:
+
+```text
+p000 = (0, 0)                 p200 = (14.1421356, -8.1649658)
+p010 = (-7.0710678, -4.0824829) p210 = (7.0710678, -12.2474487)
+p001 = (0, 4.8989795)        p201 = (14.1421356, -3.2659863)
+p011 = (-7.0710678, 0.8164966) p211 = (7.0710678, -7.3484692)
+```
+
+The pinned consumer output contains the visible run `p000 → p200` and the
+three independently expected hidden runs `p201 → p211`, `p211 → p011`, and
+`p210 → p211`, each within `1e-6` per coordinate (endpoint order may reverse).
+This pins the camera-to-model direction, page-up sign, and a known occlusion
+classification. The probe also rejects zero and near-zero x-axis vectors at the
+consumer validation boundary; the WASM binding separately rejects non-finite
+inputs, while the native operation rejects an exactly zero or parallel frame.
+
 The native Rust test was not run because `cargo` is unavailable in this
 workspace. The Node22 probe used the prebuilt paired packages shipped by the
 exact current-main pin; it is consumer-artifact evidence, not a substitute for
@@ -138,23 +202,30 @@ partial/display path recorded in the roadmap.
 
 1. **Canonical model:** add a versioned sheet/view section, normalize and
    validate it, and round-trip it through `withoutDerivedProjection` and the
-   existing IndexedDB local store without storing derived lines.
-2. **Projection service:** resolve the fenced source revision, call the pinned
+   existing IndexedDB local store without storing derived lines. Persist the
+   exact checkpoint ID, project ID, revision ID, and document version.
+2. **Snapshot resolution:** load the exact local/account checkpoint body,
+   verify all four identity fields and required source blobs, and refuse with a
+   named stale reason when it is missing or pruned. Rebinding must be explicit;
+   a current document with a matching revision ID is not a fallback.
+3. **Projection service:** resolve the fenced source snapshot, call the pinned
    `projectEdges` API for each selected body, merge line classes without
    dropping a body, and expose refusal/stale reasons. Add the synthetic box and
-   drilled-plate oracle harness above; keep run counts diagnostic.
-3. **Preview:** render visible and hidden polylines through the shared page
-   transform; prove front/top/right/iso placement and a `1:2` scale change in a
-   browser test. Keep camera zoom out of the persisted sheet.
-4. **PDF handoff:** serialize the same transformed line records to a bounded
-   vector PDF writer, include paper/units/scale metadata, and test that a
-   reload then export is byte-stable for the same canonical document and kernel
-   pin. PDF dependencies and font policy require a separate implementation
-   decision; this design does not select one.
-
-5. **Revision behavior:** after a model edit, a sheet whose `modelRevision`
-   differs must rebuild before export or show an explicit stale/refused state;
-   it must not silently export its prior derived lines.
+   drilled-plate extent/orientation/known-run oracle harness above; keep run
+   counts diagnostic except for those named oracle edges.
+4. **Preview:** render visible and hidden polylines through the shared page
+   transform; prove front/top/right/iso placement, handedness/page-up sign, and
+   a `1:2` scale change in a browser test. Keep camera zoom out of the persisted
+   sheet.
+5. **PDF handoff:** serialize the same transformed line records to a bounded
+   vector PDF writer, include fixed-mm paper/model-unit/scale metadata, and test
+   that a reload then export is byte-stable for the same canonical document and
+   kernel pin. PDF dependencies and font policy require a separate
+   implementation decision; this design does not select one.
+6. **Revision behavior:** after a model edit, a sheet whose exact checkpoint is
+   no longer available must show an explicit stale/refused state. It must not
+   silently project the current document or export prior derived lines; only an
+   explicit rebind may select a new checkpoint.
 
 Dependencies remain narrow: R01's datum-plane identity can later supply custom
 view frames; M08's exact section work is for D03 and does not gate these four
