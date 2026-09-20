@@ -10853,7 +10853,8 @@ export function App() {
         objects,
         sketch?.constraints ?? [],
         (value) => evalParamValue(value, parameterScope.scope) ?? undefined,
-        doc.units
+        doc.units,
+        sketch?.dimensionLabelPositions
       ),
       diagnosticPoints: sketchDiagnosticPoints
     };
@@ -11572,6 +11573,36 @@ export function App() {
       fixedClientAnchor: anchor
     });
     setStatus(`Edit ${data.constraintKind} driving value.`);
+  }
+
+  function handleMoveSketchDimension(
+    constraintId: string,
+    offset: { x: number; y: number }
+  ) {
+    const base = managerRef.current?.document;
+    const session = interactionRef.current;
+    if (!base || session.mode !== 'sketch' || !session.session.sketchId) {
+      return;
+    }
+    const sketchId = session.session.sketchId as SketchId;
+    const sketch = findSketch(base, sketchId);
+    if (
+      !sketch?.constraints?.some(
+        (constraint) => String(constraint.constraintId) === constraintId
+      )
+    ) {
+      return;
+    }
+    executeCommand(
+      commandFactories.setSketchDimensionLabelPosition(
+        {
+          sketchId,
+          constraintId: toSketchConstraintId(constraintId),
+          position: offset
+        },
+        'Move driving dimension label'
+      )
+    );
   }
 
   async function handleCommitSketchDimension(
@@ -16494,6 +16525,7 @@ export function App() {
             sketchMode={modelingLocked ? null : sketchModeState}
             onSketchCommit={handleSketchCommit}
             onEditSketchDimension={handleEditSketchDimension}
+            onMoveSketchDimension={handleMoveSketchDimension}
             onSketchDrawingChange={(drawing) =>
               dispatchInteraction({ type: 'sketch-drawing', drawing })
             }
