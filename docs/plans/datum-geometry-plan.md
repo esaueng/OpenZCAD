@@ -110,7 +110,7 @@ migrated automatically to datum nodes.
 R01 must share one additive schema envelope with the S01 label-placement fields
 and S04 composite point/edge references. The envelope has optional, independently
 validated fields, one normalization path, and one newer-schema refusal; it must
-not become three competing v15-to-v16 migrations. If the merged base has moved
+not become three competing versioned migrations. If the merged base has moved
 past v15, the next unused schema version is selected from that base and all
 three designs update together. Existing documents keep their node IDs,
 `featureOrder`, command log, primitive constraint operands, and canonical/frame/
