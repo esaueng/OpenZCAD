@@ -39,8 +39,8 @@ writes a partial file after silently dropping an authored object.
 | --- | --- | --- |
 | `line` | one `LINE` | Resolve `x1,y1,x2,y2` and preserve both endpoints. A zero-length line is refused. |
 | `circle` | one `CIRCLE` | Resolve center and positive radius. No sampled points. |
-| `arc` | one `ARC` | Resolve center, radius, and degree endpoints. DXF's counter-clockwise start/end convention preserves the sketch's counter-clockwise sweep, including sweeps crossing 0°. A zero sweep is refused. |
-| `arc` with a 360° sweep | one `CIRCLE` | DXF R12 has no portable full-turn arc representation; a full-turn sketch arc is the same exact locus as a circle. The conversion is recorded in the export diagnostic, if diagnostics are exposed. |
+| `arc` | one `ARC` | Resolve center, radius, and degree endpoints. DXF's counter-clockwise start/end convention preserves the sketch's counter-clockwise sweep, including sweeps crossing 0°. A true zero sweep is refused. |
+| `arc` with a raw `endAngleDeg - startAngleDeg` of `+360°` | one `CIRCLE` | DXF R12 has no portable full-turn arc representation; a full-turn sketch arc is the same exact locus as a circle. The conversion is recorded in the export diagnostic, if diagnostics are exposed. |
 | `rectangle` | four `LINE`s | Use the same exact corner order and centered dimensions as `rectangleProfile`; do not use a sampled polyline. |
 | `polygon` | N `LINE`s, N in [3, 64] | Use the same exact regular-polygon points and top-start counter-clockwise order as `polygonProfile`; do not approximate a circle or emit a mesh. |
 | `text` | refusal | Glyph outlines are derived font curves, not persisted sketch primitives. Until an exact text-to-DXF outline contract exists, omitting or flattening text would misrepresent the sketch. |
@@ -131,6 +131,11 @@ The sketch object model defines arcs as counter-clockwise from `startAngleDeg`
 to `endAngleDeg`, with wrapped values such as 300° to 60° meaning a positive
 120° sweep. DXF R12 `ARC` uses the same counter-clockwise interpretation, so
 the two stored degree values are passed through after finite/range checks.
+The exporter classifies the raw difference before modulo normalization:
+`end-start === 0` is a zero-sweep refusal, while an allowed raw `+360°`
+means full-circle intent and follows the exact `CIRCLE` rule above. A
+normalization that turns either case into equal ARC endpoints must never be
+serialized as a zero-length `ARC`; it must become the exact circle or refuse.
 Angles may be normalized for stable text only if that leaves the directed
 sweep unchanged. A negative raw difference that crosses zero must never be
 swapped as though it were a clockwise arc.
@@ -199,8 +204,9 @@ Required tests for the implementation PR:
 - canonical XZ and YZ sketches preserve local coordinates and orientation;
 - inch and centimetre documents scale coordinates and radii once, and the
   header declares millimetres;
-- a circle remains `CIRCLE`, and arcs crossing 0° remain the same directed
-  `ARC`; a 360° arc is handled by the documented full-turn rule;
+- a circle remains `CIRCLE`, arcs crossing 0° remain the same directed
+  `ARC`, raw `start=0°, end=360°` becomes `CIRCLE`, and raw `start=0°,
+  end=0°` refuses without emitting a zero-length `ARC`;
 - a polygon exports the exact bounded side count and no sampled polyline;
 - an expression-driven value is resolved, while an unresolved expression
   refuses the whole file;
