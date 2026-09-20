@@ -81,9 +81,13 @@ export function buildSketchDimensions(
   });
   return {
     group,
-    update(scaleAt: (point: THREE.Vector3) => number) {
-      for (const span of spans)
+    update(scaleAt: (point: THREE.Vector3) => number, camera?: THREE.Camera) {
+      for (const span of spans) {
+        if (camera) {
+          span.graphic.orient(camera);
+        }
         span.graphic.update(span.start, span.end, scaleAt(span.start));
+      }
     },
     dispose() {
       for (const span of spans) {
