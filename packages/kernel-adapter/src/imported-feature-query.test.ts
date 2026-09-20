@@ -1,17 +1,26 @@
-import { afterEach, beforeEach, describe, expect, it } from 'vitest';
+import { afterEach, beforeAll, beforeEach, describe, expect, it } from 'vitest';
 
 import { drillHole } from './exact-cylinder-ops';
 import {
   collectRecognizedImportedFeatures,
   importedProofDisplayDimensions,
+  listPlanarFloorSeeds,
   RemusImportedFeatureQuery,
   recognizeImportedFeatureOnSolid
 } from './imported-feature-query';
 import { recognitionRefusalMessage } from './imported-feature-recognition';
-import { RemusKernel } from './remus-runtime';
+import {
+  RemusKernel,
+  loadRemusTranslators,
+  remusTranslators
+} from './remus-runtime';
 
 describe('live imported-feature recognition query', () => {
   let kernel: RemusKernel;
+
+  beforeAll(async () => {
+    await loadRemusTranslators();
+  });
 
   beforeEach(() => {
     kernel = new RemusKernel();
@@ -238,5 +247,150 @@ describe('live imported-feature recognition query', () => {
     expect(recognitionRefusalMessage(refusal.reason).length).toBeGreaterThan(
       0
     );
+  });
+
+  describe('exact straight-edge loops and planar-floor seeds', () => {
+    function translated(solid: number, x: number, y: number, z: number): number {
+      kernel.transformSolid(
+        solid,
+        new Float64Array([1, 0, 0, x, 0, 1, 0, y, 0, 0, 1, z, 0, 0, 0, 1])
+      );
+      return solid;
+    }
+
+    /** A 10 × 6 × 3 pocket milled into the top of a 30 × 20 × 8 plate. */
+    function pocketedPlate(): number {
+      const tool = translated(kernel.makeBox(10, 6, 3), 5, 5, 5);
+      const result = kernel.cutDetailed(kernel.makeBox(30, 20, 8), tool);
+      expect(result.status).toBe('ok');
+      return result.value!;
+    }
+
+    /** A Ø6 × 4 boss fused onto the top of a 30 × 20 × 8 plate. */
+    function bossedPlate(): number {
+      const boss = translated(kernel.makeCylinder(3, 4), 10, 10, 8);
+      const result = kernel.fuseDetailed(kernel.makeBox(30, 20, 8), boss);
+      expect(result.status).toBe('ok');
+      return result.value!;
+    }
+
+    /** Bodies arrive as STEP: prove the loop survives the real round trip. */
+    function importedStep(solid: number): number {
+      const step = remusTranslators().exportStep(
+        kernel.serializeSolids(new Uint32Array([solid]))
+      );
+      const solids = Array.from(
+        kernel.deserializeSolids(
+          remusTranslators().importStep(step, step.byteLength, 2_000_000)
+        )
+      );
+      expect(solids).toHaveLength(1);
+      return solids[0]!;
+    }
+
+    function planarFaces(solid: number) {
+      const query = new RemusImportedFeatureQuery(kernel, solid);
+      return Array.from(kernel.getSolidFaces(solid)).flatMap((face) => {
+        const candidate = query.getFace(String(face));
+        return candidate?.surface.kind === 'plane'
+          ? [{ face, surface: candidate.surface }]
+          : [];
+      });
+    }
+
+    it('publishes the exact outer loop on straight faces and nothing elsewhere', () => {
+      const solid = importedStep(kernel.makeBox(10, 10, 10));
+      const faces = planarFaces(solid);
+      expect(faces).toHaveLength(6);
+      for (const { surface } of faces) {
+        expect(surface.polygon).toHaveLength(4);
+      }
+
+      // A cylindrical wall carries no polygon: only planes do.
+      const bored = plateWithHole('simple');
+      const query = new RemusImportedFeatureQuery(kernel, bored);
+      const boredWall = Array.from(kernel.getSolidFaces(bored)).find(
+        (face) => query.getFace(String(face))?.surface.kind === 'cylinder'
+      );
+      expect(boredWall).toBeDefined();
+      const wallSurface = query.getFace(String(boredWall!))?.surface;
+      expect(wallSurface?.kind).toBe('cylinder');
+      expect(wallSurface).not.toHaveProperty('polygon');
+    });
+
+    it('withholds the loop from the holed opening plane above a pocket', () => {
+      const solid = importedStep(pocketedPlate());
+      const faces = planarFaces(solid);
+      const holed = faces.filter(
+        (entry) => entry.surface.polygon === undefined
+      );
+      // Only the plate top pierced by the pocket mouth has a second loop.
+      expect(holed).toHaveLength(1);
+      expect(holed[0]!.surface.area).toBeCloseTo(30 * 20 - 10 * 6, 8);
+    });
+
+    it('enumerates the pocket floor as a seed but never the holed opening', () => {
+      const solid = importedStep(pocketedPlate());
+      const query = new RemusImportedFeatureQuery(kernel, solid);
+      const seeds = listPlanarFloorSeeds(kernel, solid, query);
+      expect(seeds.length).toBeGreaterThan(0);
+      const seedFaces = new Set(seeds.map(String));
+      const floor = Array.from(kernel.getSolidFaces(solid)).find((face) => {
+        const candidate = query.getFace(String(face));
+        return (
+          candidate?.surface.kind === 'plane' &&
+          Math.abs(candidate.surface.area - 60) <= 1e-8 &&
+          candidate.surface.polygon?.length === 4
+        );
+      });
+      expect(floor).toBeDefined();
+      expect(seedFaces.has(String(floor!))).toBe(true);
+      const faces = planarFaces(solid);
+      const holed = faces.find(
+        (entry) => entry.surface.polygon === undefined
+      );
+      expect(holed).toBeDefined();
+      expect(seedFaces.has(String(holed!.face))).toBe(false);
+    });
+
+    it('proves an exact prismatic pocket from the STEP pocket fixture', () => {
+      const solid = importedStep(pocketedPlate());
+      const faces = Array.from(kernel.getSolidFaces(solid));
+      const identities = new Map(
+        faces.map((face, index) => [face, { hash: index + 1 }])
+      );
+      const recognized = collectRecognizedImportedFeatures(
+        kernel,
+        solid,
+        identities
+      );
+      expect(recognized).toHaveLength(1);
+      expect(recognized[0]).toMatchObject({
+        kind: 'prismatic-pocket',
+        depth: 3
+      });
+      expect(recognized[0]).not.toHaveProperty('provenance');
+      expect(recognized[0]?.participatingFaceHashes).toHaveLength(6);
+    });
+
+    it('keeps proving the exact cylindrical boss from the STEP boss fixture', () => {
+      const solid = importedStep(bossedPlate());
+      const faces = Array.from(kernel.getSolidFaces(solid));
+      const identities = new Map(
+        faces.map((face, index) => [face, { hash: index + 1 }])
+      );
+      const recognized = collectRecognizedImportedFeatures(
+        kernel,
+        solid,
+        identities
+      );
+      expect(recognized).toHaveLength(1);
+      expect(recognized[0]).toMatchObject({
+        kind: 'cylindrical-boss',
+        diameter: 6,
+        height: 4
+      });
+      expect(recognized[0]).not.toHaveProperty('provenance');
+    });
   });
 });
