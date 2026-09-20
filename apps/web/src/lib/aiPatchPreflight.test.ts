@@ -52,14 +52,27 @@ function exactDerived(candidate: ProjectDocument): ProjectDocument['derived'] {
         exportableStep: true,
         mesh: {
           kind: 'mesh',
-          vertices: new Float32Array(),
-          indices: new Uint32Array()
+          vertices: new Float32Array([0, 0, 0, 10, 0, 0, 10, 20, 0]),
+          indices: new Uint32Array([0, 1, 2])
         },
         faceCount: 6,
         volume: 6000,
         bbox: {
           min: { x: 0, y: 0, z: 0 },
           max: { x: 10, y: 20, z: 30 }
+        },
+        topology: {
+          faces: [1, 2, 3, 4, 5, 6].map((hash) => ({
+            topologyId: `face_${hash}`,
+            hash,
+            triangleStart: 0,
+            triangleCount: 1
+          })),
+          edges: [11, 12].map((hash) => ({
+            topologyId: `edge_${hash}`,
+            hash,
+            points: []
+          }))
         }
       }
     },
@@ -304,6 +317,67 @@ describe('AI exact patch preflight', () => {
         return changed;
       })
     ).rejects.toThrow(/changed the exact geometry/);
+    await expect(
+      preflightCadPatch(base, parameterize, async (candidate) => {
+        const changed = exactDerived(candidate);
+        const bodyId = candidate.bodyOrder[0]!;
+        changed.bodyRepresentations[bodyId]!.topology!.faces[0]!.hash += 1;
+        return changed;
+      })
+    ).rejects.toThrow(/changed the exact geometry/);
+  });
+
+  it('accepts a rebuild that only rearranges the display mesh', async () => {
+    const manager = new CommandManager(
+      createProjectDocument('AI', toUserId('user_ai'))
+    );
+    manager.execute(
+      commandFactories.addPrimitive({
+        name: 'Exact box',
+        primitiveKind: 'box',
+        dimensions: { width: 10, height: 20, depth: 30 }
+      })
+    );
+    const featureId = manager.document.featureOrder[0]!;
+    const base = manager.document;
+    base.derived = exactDerived(base);
+    const parameterize = {
+      proposalId: 'auto_parameterize_reordered_mesh',
+      summary: 'Bind the width without changing the box.',
+      assumptions: [],
+      preserveGeometry: true as const,
+      operations: [
+        {
+          kind: 'set_parameter' as const,
+          name: 'box_width',
+          expression: '10'
+        },
+        {
+          kind: 'set_feature_dimension' as const,
+          featureId,
+          field: 'width',
+          value: 'box_width'
+        }
+      ]
+    };
+
+    // The same solid, meshed with its triangles emitted in a different order:
+    // what the exact worker returns when it rebuilds the whole document
+    // instead of replaying the body from a history checkpoint. Every exact
+    // quantity — inventory, volume, bounds, face and edge fingerprints — is
+    // unchanged, so the parameterization must still be allowed to apply.
+    await expect(
+      preflightCadPatch(base, parameterize, async (candidate) => {
+        const reordered = exactDerived(candidate);
+        const body = reordered.bodyRepresentations[candidate.bodyOrder[0]!]!;
+        body.mesh = {
+          kind: 'mesh',
+          vertices: new Float32Array([...body.mesh.vertices].reverse()),
+          indices: new Uint32Array([...body.mesh.indices].reverse())
+        };
+        return reordered;
+      })
+    ).resolves.toBeTruthy();
   });
 
   it('preflights and applies an imported blend binding as an exact geometric no-op', async () => {

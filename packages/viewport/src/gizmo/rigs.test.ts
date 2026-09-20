@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import * as THREE from 'three';
-import { CHIP_ANCHOR_LOCAL_DISTANCE, type DragRig } from './DragRig';
+import type { DragRig } from './DragRig';
 import {
   HANDLE_WARNING_COLOR,
   buildCylinderRadiusHandle,
@@ -78,11 +78,90 @@ describe('the offset-face rig', () => {
     expect(rig.group.position.z).toBeCloseTo(1, 6);
   });
 
-  it('floats its chip past the arrow head, scaled with the frame', () => {
+  it('anchors its chip on the pin itself, whatever the frame scale', () => {
+    // The viewport adds the screen-space gap; a world-space reach past the
+    // head is what used to fold the chip onto the arrow when the face
+    // normal pointed at the camera.
     const rig = offsetRig();
     rig.setValue(5);
-    const anchor = rig.chipAnchor(2);
-    expect(anchor.z).toBeCloseTo(3 + 5 + CHIP_ANCHOR_LOCAL_DISTANCE * 2, 6);
+    expect(rig.chipAnchor(2).z).toBeCloseTo(3 + 5, 6);
+    expect(rig.chipAnchor(20).z).toBeCloseTo(3 + 5, 6);
+  });
+
+  it('keeps its arrow on the face normal and rolls its face to the camera', () => {
+    const rig = offsetRig({ x: 1, y: 0, z: 0 });
+    const camera = new THREE.PerspectiveCamera();
+    camera.position.set(0, -50, 0);
+    camera.lookAt(0, 0, 0);
+    camera.updateMatrixWorld();
+    rig.orient?.(camera);
+    const localY = new THREE.Vector3(0, 1, 0).applyQuaternion(
+      rig.group.quaternion
+    );
+    const localZ = new THREE.Vector3(0, 0, 1).applyQuaternion(
+      rig.group.quaternion
+    );
+    // The axis is the normal itself, not its screen projection.
+    expect(localY.x).toBeCloseTo(1, 6);
+    // The pin's flat face looks at the camera.
+    expect(localZ.y).toBeCloseTo(-1, 1);
+  });
+
+  it('stays on the normal even when it points straight at the camera', () => {
+    const rig = offsetRig({ x: 0, y: -1, z: 0 });
+    const camera = new THREE.PerspectiveCamera();
+    camera.position.set(1, -50, 3);
+    camera.lookAt(1, 0, 3);
+    camera.updateMatrixWorld();
+    rig.orient?.(camera);
+    const localY = new THREE.Vector3(0, 1, 0).applyQuaternion(
+      rig.group.quaternion
+    );
+    expect(localY.y).toBeCloseTo(-1, 6);
+    // No roll is preferable here; whichever it picked must be a real one.
+    const q = rig.group.quaternion;
+    expect(Number.isFinite(q.x + q.y + q.z + q.w)).toBe(true);
+  });
+
+  it('carries a ring in the face plane for the head-on view', () => {
+    const rig = offsetRig({ x: 0, y: 0, z: 1 });
+    const ring = rig.group.children.find(
+      (child) =>
+        child instanceof THREE.Mesh &&
+        child.geometry instanceof THREE.RingGeometry
+    ) as THREE.Mesh;
+    expect(ring).toBeDefined();
+    // Its own normal lies along the rig's local +Y, the face normal.
+    const ringNormal = new THREE.Vector3(0, 0, 1).applyQuaternion(
+      ring.quaternion
+    );
+    expect(Math.abs(ringNormal.y)).toBeCloseTo(1, 6);
+  });
+
+  it('draws the whole span from the moment it arms when it knows the body behind', () => {
+    const rig = buildOffsetFaceHandle({
+      origin: { x: 1, y: 2, z: 3 },
+      direction: { x: 0, y: 0, z: 1 },
+      ghostGeometry: null,
+      extentBehind: 20
+    });
+    const dimension = rig.worldGroup.children[0]!;
+    // Visible at rest, not only once a drag has moved the face.
+    expect(dimension.visible).toBe(true);
+    const line = rig.chipLine?.();
+    expect(line?.start.z).toBeCloseTo(3 - 20, 6);
+    expect(line?.end.z).toBeCloseTo(3, 6);
+    // The label sits midway along the span and follows the moving end.
+    expect(rig.chipAnchor(1).z).toBeCloseTo((3 - 20 + 3) / 2, 6);
+    rig.setValue(5);
+    expect(rig.chipLine?.()?.end.z).toBeCloseTo(8, 6);
+    expect(rig.chipAnchor(1).z).toBeCloseTo((3 - 20 + 8) / 2, 6);
+    rig.dispose();
+  });
+
+  it('has no line to ride without a body behind the face', () => {
+    const rig = offsetRig();
+    expect(rig.chipLine?.()).toBeNull();
   });
 
   it('keeps world-space parts out of the rescaled group', () => {
@@ -132,9 +211,9 @@ describe('the offset-face rig', () => {
     const visibleArrow = rig.group.children.find(
       (child) =>
         child instanceof THREE.Mesh &&
-        child.material instanceof THREE.MeshBasicMaterial &&
+        child.material instanceof THREE.MeshStandardMaterial &&
         child.material.visible
-    ) as THREE.Mesh<THREE.BufferGeometry, THREE.MeshBasicMaterial>;
+    ) as THREE.Mesh<THREE.BufferGeometry, THREE.MeshStandardMaterial>;
     const dimensionLine = rig.worldGroup.children[0]!
       .children[0] as THREE.Object3D & {
       material: { color: THREE.Color };
@@ -207,6 +286,28 @@ describe('the cylinder-radius rig', () => {
       'Mesh',
       'Mesh'
     ]);
+  });
+
+  it('turns its pin to face the camera along the projected radial', () => {
+    const rig = buildCylinderRadiusHandle({
+      origin: { x: 14, y: 0, z: 8 },
+      direction: { x: 1, y: 0, z: 0 },
+      originalRadius: 14
+    });
+    const camera = new THREE.PerspectiveCamera();
+    camera.position.set(14, -60, 8);
+    camera.lookAt(14, 0, 8);
+    camera.updateMatrixWorld();
+    rig.orient?.(camera);
+    const localY = new THREE.Vector3(0, 1, 0).applyQuaternion(
+      rig.group.quaternion
+    );
+    const localZ = new THREE.Vector3(0, 0, 1).applyQuaternion(
+      rig.group.quaternion
+    );
+    expect(localY.x).toBeCloseTo(1, 1);
+    expect(localZ.y).toBeCloseTo(-1, 1);
+    rig.dispose();
   });
 
   it('anchors the value chip on the dimension line inside the cylinder', () => {
@@ -287,9 +388,10 @@ describe('offset rig entrance and hover', () => {
     let hex = -1;
     rig.group.traverse((child) => {
       const material = (child as THREE.Mesh).material;
+      // The arrow is lit geometry now; the halo and hit target are not.
       if (
         hex === -1 &&
-        material instanceof THREE.MeshBasicMaterial &&
+        material instanceof THREE.MeshStandardMaterial &&
         material.visible
       ) {
         hex = material.color.getHex();
@@ -327,7 +429,7 @@ describe('offset rig entrance and hover', () => {
     expect(rig.step?.(16)).toBe(false);
   });
 
-  it('warms under the pointer and cools when it leaves', () => {
+  it('deepens under the pointer and recovers when it leaves', () => {
     const rig = offsetRig();
     settle(rig);
     const resting = arrowColor(rig);
@@ -336,6 +438,13 @@ describe('offset rig entrance and hover', () => {
     settle(rig);
     const hot = arrowColor(rig);
     expect(hot).not.toBe(resting);
+    // Darker, not lighter: a handle that washes out under the hand reads as
+    // disabled rather than grabbed.
+    const luminance = (hex: number) => {
+      const color = new THREE.Color(hex);
+      return color.r + color.g + color.b;
+    };
+    expect(luminance(hot)).toBeLessThan(luminance(resting));
 
     rig.setHot!(false);
     settle(rig);

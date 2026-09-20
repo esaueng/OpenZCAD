@@ -28,12 +28,14 @@ import {
   loadRemusTranslators
 } from '../packages/kernel-adapter/src/remus-runtime';
 import type { ProjectDocument } from '@openzcad/shared';
-import { measureThreeMfExport } from './support/three-mf-export';
+import {
+  measureThreeMfExport,
+  threeMfExportUnit
+} from './support/three-mf-export';
 
 const copyPath = process.env.OPENZCAD_EXPORT_PROJECT_COPY;
 const hasFixture =
-  !!copyPath &&
-  copyPath !== '/Users/dev/Downloads/Tiny-Fox(1).openzcad';
+  !!copyPath && copyPath !== '/Users/dev/Downloads/Tiny-Fox(1).openzcad';
 
 type FixturePoint = [number, number, number];
 interface CylinderArena {
@@ -146,6 +148,7 @@ describe('rigid transform mesh exports', () => {
 function parseAsciiStlFacets(stl: string): {
   triangles: number;
   openEdges: number;
+  invalidEdges: number;
   volume: number;
   nonFinite: number;
 } {
@@ -168,7 +171,7 @@ function parseAsciiStlFacets(stl: string): {
     if (!ids.has(key)) ids.set(key, ids.size);
     return ids.get(key)!;
   });
-  const use = new Map<string, number>();
+  const use = new Map<string, number[]>();
   let volume = 0;
   for (let i = 0; i + 2 < canon.length; i += 3) {
     const tri = [canon[i]!, canon[i + 1]!, canon[i + 2]!];
@@ -176,7 +179,9 @@ function parseAsciiStlFacets(stl: string): {
       const a = tri[k]!;
       const b = tri[(k + 1) % 3]!;
       const key = a < b ? `${a}_${b}` : `${b}_${a}`;
-      use.set(key, (use.get(key) ?? 0) + 1);
+      const uses = use.get(key) ?? [];
+      uses.push(a < b ? 1 : -1);
+      use.set(key, uses);
     }
     const [p, q, r] = [vertices[i]!, vertices[i + 1]!, vertices[i + 2]!];
     volume +=
@@ -187,9 +192,59 @@ function parseAsciiStlFacets(stl: string): {
   }
   return {
     triangles: Math.floor(vertices.length / 3),
-    openEdges: [...use.values()].filter((n) => n === 1).length,
+    openEdges: [...use.values()].filter((uses) => uses.length === 1).length,
+    invalidEdges: [...use.values()].filter(
+      (uses) => uses.length !== 2 || uses[0]! + uses[1]! !== 0
+    ).length,
     volume: Math.abs(volume),
     nonFinite
+  };
+}
+
+function measureBinaryStl(stl: Uint8Array): {
+  triangles: number;
+  invalidEdges: number;
+  degenerateTriangles: number;
+  nonFinite: number;
+} {
+  const view = new DataView(stl.buffer, stl.byteOffset, stl.byteLength);
+  const triangles = view.getUint32(80, true);
+  if (stl.length !== 84 + triangles * 50) throw new Error('Invalid binary STL');
+  const ids = new Map<string, number>();
+  const edges = new Map<string, number[]>();
+  let degenerateTriangles = 0;
+  let nonFinite = 0;
+  for (let triangle = 0; triangle < triangles; triangle++) {
+    const vertices: number[] = [];
+    for (let vertex = 0; vertex < 3; vertex++) {
+      const offset = 84 + triangle * 50 + 12 + vertex * 12;
+      const point = [
+        view.getFloat32(offset, true),
+        view.getFloat32(offset + 4, true),
+        view.getFloat32(offset + 8, true)
+      ];
+      if (!point.every(Number.isFinite)) nonFinite++;
+      const key = point.join(',');
+      if (!ids.has(key)) ids.set(key, ids.size);
+      vertices.push(ids.get(key)!);
+    }
+    if (new Set(vertices).size !== 3) degenerateTriangles++;
+    for (let edge = 0; edge < 3; edge++) {
+      const a = vertices[edge]!;
+      const b = vertices[(edge + 1) % 3]!;
+      const key = a < b ? `${a}:${b}` : `${b}:${a}`;
+      const uses = edges.get(key) ?? [];
+      uses.push(a < b ? 1 : -1);
+      edges.set(key, uses);
+    }
+  }
+  return {
+    triangles,
+    degenerateTriangles,
+    nonFinite,
+    invalidEdges: [...edges.values()].filter(
+      (uses) => uses.length !== 2 || uses[0]! + uses[1]! !== 0
+    ).length
   };
 }
 
@@ -212,6 +267,9 @@ describe.skipIf(!hasFixture)('saved-project export validation', () => {
     });
     try {
       const document = backup.document;
+      // Tiny-Fox is authored in millimetres. The mesh exporters have no
+      // license to reinterpret its saved coordinates as another unit.
+      expect(document.units).toBe('mm');
       const derived = await adapter.syncDocument(document);
       const liveBodies = [...document.bodyOrder].filter(
         (id) => derived.bodyRepresentations[id]
@@ -256,6 +314,7 @@ describe.skipIf(!hasFixture)('saved-project export validation', () => {
       expect(facets.nonFinite).toBe(0);
       expect(facets.triangles).toBeGreaterThan(0);
       expect(facets.openEdges).toBe(0);
+      expect(facets.invalidEdges).toBe(0);
       expect(Math.abs(facets.volume - kernelTotal) / kernelTotal).toBeLessThan(
         0.02
       );
@@ -264,17 +323,16 @@ describe.skipIf(!hasFixture)('saved-project export validation', () => {
         format: 'stl-binary',
         deflection: 0.1
       });
-      const triangles = new DataView(
-        binaryStl.buffer,
-        binaryStl.byteOffset,
-        binaryStl.byteLength
-      ).getUint32(80, true);
-      expect(triangles).toBeGreaterThan(0);
-      expect(binaryStl.length).toBe(84 + triangles * 50);
+      const binaryMesh = measureBinaryStl(binaryStl);
+      expect(binaryMesh.triangles).toBeGreaterThan(0);
+      expect(binaryMesh.nonFinite).toBe(0);
+      expect(binaryMesh.degenerateTriangles).toBe(0);
+      expect(binaryMesh.invalidEdges).toBe(0);
       const threeMf = await adapter.exportMesh(document, liveBodies, {
         format: '3mf',
         deflection: 0.1
       });
+      expect(threeMfExportUnit(threeMf)).toBe('millimeter');
       // Inspect the exported indexed mesh directly: importing it first can
       // weld close vertices and change the topology we are trying to test.
       const meshes = measureThreeMfExport(threeMf);
@@ -283,6 +341,7 @@ describe.skipIf(!hasFixture)('saved-project export validation', () => {
       );
       for (const mesh of meshes) {
         expect(mesh.triangles).toBeGreaterThan(0);
+        expect(mesh.degenerateTriangles).toBe(0);
         expect(mesh.invalidEdges).toBe(0);
         expect(mesh.volume).toBeGreaterThan(0);
       }
