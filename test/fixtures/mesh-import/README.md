@@ -7,7 +7,8 @@ eight vertices, twelve outward-facing triangles, bounds `(0, 0, 0)` to
 
 The OBJ and PLY files are readable text. The GLB and 3MF packages are stored as
 base64 text so the repository stays source-only and reviewable; the test
-helper decodes them before handing bytes to the production import path.
+helper decodes them before handing bytes to the production import path. The
+translated 3MF places the same box at `x = 7` through its `<build>` transform.
 
 These files are independent of `test/support/mesh-import-fixtures.ts`. The
 support builders remain useful for unit, placement, malformed-input, and
