@@ -178,6 +178,36 @@ one kernel constraint handle in declaration order, as the current
 [`gcs-sketch.ts`](../../packages/kernel-adapter/src/gcs-sketch.ts) contract
 already requires for residual attribution.
 
+The virtual points and lines are not independent GCS bodies. A dedicated
+composite solve path keeps one canonical parameter vector per object and adds
+the following structural equations before translating user constraints:
+
+* A rectangle derives its points from
+  `p0=(cx-w/2,cy-h/2)`, `p1=(cx+w/2,cy-h/2)`,
+  `p2=(cx+w/2,cy+h/2)`, and `p3=(cx-w/2,cy+h/2)`. The four edge vectors,
+  closure, and `w > 0`, `h > 0` are structural residuals, so horizontal,
+  vertical, opposite-edge, and corner relationships cannot free a virtual
+  corner independently.
+* A regular polygon derives `pi` from `(centerX, centerY, radius)` and its
+  fixed top-first phase. Equal edge lengths, equal radial distances to the
+  center, closure, and `radius > 0` are structural residuals. There is no
+  rotation residual because rotation is not a persisted polygon parameter;
+  any requested rotation is a named refusal.
+
+Structural residuals are adapter-owned and are not persisted as user
+constraints. User constraints remain one-for-one with kernel handles and
+residual attribution. The solve report exposes `structuralResiduals` and a
+rank-based `freeDof` count for diagnostics: rectangle DOF starts at four and
+regular-polygon DOF starts at three, then independent user equations reduce
+that count. A nonzero `freeDof` is not by itself a refusal. The solver keeps
+the prior canonical values as the deterministic seed for unconstrained
+parameters and commits when all structural and user residuals satisfy
+tolerance and the inverse representation is unique. It refuses only when a
+changed result is inconsistent, non-converged, or cannot be represented by
+the canonical fields. This prevents an otherwise valid rectangle with only a
+horizontal edge constraint from being rejected as an immediately
+under-constrained free-line graph.
+
 The inverse map is deliberately stricter than the forward lowering:
 
 * A rectangle candidate is calculated from its four canonical vertices as one
@@ -194,11 +224,12 @@ The inverse map is deliberately stricter than the forward lowering:
   the phase, radius, and residual. A solved rotation cannot be written because
   the current polygon schema has no rotation field; it is a named refusal or
   an explicit future schema change.
-* A composite solve is committed only when the kernel converged, did not roll
-  back, and the inverse fit is unique. An under-constrained kernel result is a
-  preview/diagnostic result, not a document mutation: choosing one arbitrary
-  GCS position would make replay nondeterministic. Redundant or unsatisfied
-  results follow the current refusal path.
+* A composite solve is committed only when the structural path converged, did
+  not roll back, and the inverse fit is unique. An under-constrained result
+  with unchanged seeded canonical values may commit the user constraint
+  records without moving the composite; an under-constrained result that
+  proposes changed geometry refuses rather than choosing an arbitrary GCS
+  position. Redundant or unsatisfied results follow the current refusal path.
 
 The write-back command stores only canonical composite fields. It must capture
 the raw `ParamValue` fields before solving and apply this expression policy:
@@ -311,9 +342,13 @@ New resolution order:
    geometry-derived fingerprint/area are refreshed for the rebuild.
 3. If a source edge has been split into several candidate cells, strict loop
    matching may leave several candidates. The resolver may use the stored
-   sample point and area only when exactly one candidate remains. It must
-   refuse when the sample/area witness is outside, non-finite, or still
-   ambiguous; it must not pick by array order or nearest geometry.
+   sample point and area only among candidates with the exact same token
+   multiplicities. It must refuse when the sample/area witness is outside,
+   non-finite, or still ambiguous; it must not pick by array order or nearest
+   geometry. A crossing that changes one source edge from two arrangement
+   segments to one or three changes the repeated-token count and is a
+   topology/provenance mismatch: it refuses before sample/area fallback. S04
+   never normalizes split counts or silently remaps them.
 4. A reference without boundary provenance follows the existing `profileId`,
    source-entity, and legacy geometric fallback tiers exactly as before.
 
@@ -348,12 +383,24 @@ The later conversion command must persist a promotion record containing:
   and
 * a versioned alias map used by profile and attachment resolvers.
 
-The conversion also writes deterministic structural constraints for each
-generated loop: adjacent edge endpoints are coincident, and the original
-rectangle's horizontal/vertical relationships or regular polygon's equal/
-radial relationships are recorded as system-owned promotion constraints. The
-system IDs are derived from the promotion ID and canonical index and are
-distinct from user constraint IDs.
+The conversion also writes only existing legal constraint payloads as
+system-owned promotion constraints. For a rectangle, it writes coincident
+constraints for adjacent endpoints, `horizontal` for edges `0` and `2`,
+`vertical` for edges `1` and `3`, and `equal` for the two opposite-edge
+pairs. For a regular polygon, it writes coincident constraints for adjacent
+endpoints, `equal` between edge `0` and every other edge, `vertical` on the
+construction center spoke to preserve the top-first phase, and one `distance`
+constraint from the spoke's `start` (the center) to each generated vertex.
+Each polygon distance uses the source radius `ParamValue` verbatim. This is
+the persisted radial relationship; S04 does not invent a `radial` constraint
+kind. The spoke is construction geometry owned by the promotion record, and
+its generated ID, endpoint ownership, and system constraint IDs are replayed
+and deleted with that record.
+
+The system IDs are derived from the promotion ID and canonical index and are
+distinct from user constraint IDs. If the v16 constraint schema cannot yet
+carry the additive `origin: 'promotion-structure'` marker below, promotion is
+deferred as unsupported; it must not write unowned structural records.
 
 The constraint schema needs an additive `origin?: 'user' | 'promotion-structure'`
 marker so structural records can be hidden from the ordinary user list while
@@ -396,11 +443,11 @@ work must not invent a partial conversion.
 | --- | --- | --- | --- |
 | Rectangle width, height, or center changes | Same tokens; virtual points move | Same boundary tokens; recompute fingerprints and exact geometry | Commit and replay normally |
 | Polygon radius or center changes | Same tokens while `sides` is unchanged | Same boundary tokens; recompute geometry | Commit and replay normally |
-| Polygon `sides` changes | **Atomic refusal when any new S04 point/edge constraint references the polygon** | **Atomic refusal when any new `sourceBoundaryLoops` profile reference names the polygon**; legacy refs retain their existing resolver behavior | No document mutation, no stale constraint state, and an actionable “remove/repair the reference or convert to editable edges” diagnostic |
+| Polygon `sides` changes | **Atomic refusal when any v16 typed point/edge reference resolves to the polygon** | **Atomic refusal when any v16 `sourceBoundaryLoops` reference names the polygon**; v15 geometry-only refs retain their existing resolver behavior | No document mutation, no stale constraint state, and an actionable “remove/repair the reference or convert to editable edges” diagnostic |
 | Composite object kind changes | Existing composite refs no longer validate | Old source tokens do not match the new kind | Refuse when referenced, or require an explicit conversion command; never reinterpret an index |
 | Composite is deleted | References cannot resolve | Load-bearing downstream deletion policy applies | Delete is refused or presents the existing dependent-delete flow; no dangling ref is saved |
 | Object is deleted and recreated with a new ID | Old refs do not match | Old profiles do not rebind by geometry | Broken reference until the user explicitly repairs it |
-| A different entity splits an authored edge into multiple cells | Token may occur in several candidates | Sample/area may disambiguate only uniquely | Otherwise fail closed as ambiguous |
+| A different entity changes an authored edge's split count | Repeated token multiplicity no longer matches | Boundary provenance is a topology mismatch | Refuse before sample/area fallback; never normalize `2` segments to `1` or `3` |
 
 Parameter edits that preserve topology must never delete constraints. A kind or
 topology change may leave a diagnostic-bearing stale constraint for repair, or
@@ -410,15 +457,19 @@ that constraints attached to a deleted object go with that object; undo must
 restore them under their original IDs.
 
 The polygon side-count rule is deliberately one behavior rather than a mixed
-“sometimes stale, sometimes committed” policy: S04-aware side-count edits are
-preflighted against all sketch constraints and downstream feature profile
-references, and the entire command is refused if any new typed reference
-would become invalid. A side-count edit with no S04-aware references is one
-ordinary atomic parameter update and creates the new descriptor; old v15
-geometry-only profile references remain on their existing resolver path. This
-keeps legacy documents compatible without allowing a new reference to enter a
-partially broken state. Undo/redo of an accepted side-count edit is the same
-single parameter command; undo/redo of a refused edit is empty.
+“sometimes stale, sometimes committed” policy: every path that can change
+`sides`—direct parameter editing, expression evaluation, `updateSketchObject`,
+solver write-back, redo, and replay—must call the same preflight before it
+evaluates or mutates the candidate. The preflight scans all v16 typed point/
+edge refs and v16 boundary-aware profile refs, including existing refs loaded
+from disk; it is not limited to refs added by the current command. If any
+would become invalid, the entire command is refused. A side-count edit with
+no v16 S04-aware references is one ordinary atomic parameter update and
+creates the new descriptor; old v15 geometry-only profile references remain
+on their existing resolver path. This keeps legacy documents compatible
+without allowing a typed reference to enter a partially broken state.
+Undo/redo of an accepted side-count edit is the same single parameter command;
+undo/redo of a refused edit is empty.
 
 ## Compatibility, schema, and persistence
 
@@ -427,15 +478,32 @@ compatibility rules are therefore:
 
 * A v15 document with a rectangle or polygon is opened exactly as the current
   composite node. It has no new point refs and no generated line children.
+  v15 is never a legal carrier for a tagged topology ref, boundary token, or
+  promotion ownership field; a v15 payload containing one is rejected as a
+  malformed document rather than silently upgraded.
+* At this baseline `PROJECT_DOCUMENT_SCHEMA_VERSION` is v15, so S04 v16 is
+  the first legal schema for tagged point/edge refs, `sourceBoundaryLoops`,
+  and promotion `origin`. Loading v15 performs the
+  repository's normal in-memory upgrade to v16 without synthesizing any of
+  those optional fields; saving writes v16. Loading and saving v16 both run
+  the same recursive validator over every constraint operand, topology
+  descriptor, boundary token, and promotion record. Unknown descriptor or
+  token versions, missing required tags, invalid indices/counts, and
+  `promotion-structure` records without a promotion owner are refusals.
 * Existing primitive constraint records remain byte-for-byte compatible in
-  meaning. New tagged refs are additive and are validated only when present.
+  meaning. New tagged refs are additive only in v16 and are validated on both
+  load and save, not merely when a new UI command creates them.
 * Existing region refs continue through their current resolver tiers. They are
   not rewritten to boundary tokens merely because the current client can
   derive them.
-* A future schema bump should be a no-op/additive v15→v16 normalization for
-  optional topology-aware fields. It must reject malformed tagged refs and
-  unknown descriptor versions, and it must refuse newer schemas before
-  stamping them, matching `normalizeDocument`'s current fail-closed rule.
+* The v15→v16 normalization is no-op/additive for legacy data: it changes the
+  schema version but does not synthesize refs, constraints, line children, or
+  boundary provenance. Future schema versions must be rejected before
+  stamping, matching `normalizeDocument`'s current fail-closed rule.
+  If another approved slice increments the shared document schema before S04
+  lands, S04 uses the next monotonic version and keeps this same first-legal
+  tagged-ref rule; S01 annotation fields do not get a private competing
+  schema counter.
 * Saving, cloning, cloud sync, and save-state branching copy refs as document
   data. Derived profiles, virtual solver graphs, and display polylines remain
   rebuild products and are not persisted as an alternate source of truth.
@@ -474,19 +542,19 @@ identity oracle.
 | Rectangle vertex/edge refs | All four corners and edges resolve in canonical order; width/height/center edits preserve refs | shared validation and solver adapter tests |
 | Polygon vertex/edge refs | `n` refs resolve top-first/CCW; radius/center edits preserve refs | geometry identity tests for 3, 6, and 64 sides |
 | All constraint operand kinds | Point, curve, tangent, midpoint, distance, and angle operands use the tagged union or their existing primitive form; concentric/radius reject composites with named diagnostics; deleting a referenced object removes every affected constraint and undo restores IDs | document-core validation/deletion matrix plus GCS translation fixtures |
-| Supported constraint solve | A compatible distance/coincident/midpoint/edge constraint commits one exact parameter edit and replays | solver/apply-solve tests; one browser flow |
-| Deterministic inverse solve | Rectangle and regular-polygon fits regenerate every canonical vertex within tolerance; under-constrained, rotated, reflected, or inconsistent virtual graphs do not write back | inverse-fit tests with repeated replay |
+| Supported constraint solve | A compatible distance/coincident/midpoint/edge constraint solves against the derived structural equations, reports canonical DOF, commits one exact parameter edit when residuals pass, and replays | solver/apply-solve tests; one browser flow |
+| Deterministic inverse solve | Rectangle and regular-polygon fits regenerate every canonical vertex within tolerance; under-constrained unchanged seeds may preserve constraint records, while changed, rotated, reflected, or inconsistent virtual graphs do not write geometry back | inverse-fit tests with repeated replay |
 | Expression preservation | Unchanged expression fields remain byte-for-byte; changed expression-backed composite fields refuse with a named conflict; constraint expressions remain raw | expression-backed rectangle/polygon tests |
 | Non-representable solve | Free corner deformation refuses with a conversion instruction; node, history, and exact derived result stay unchanged | command and browser refusal test |
-| Polygon side-count change | With any new typed constraint or boundary-aware downstream ref, the whole update refuses with no mutation; without one, one accepted parameter command changes the descriptor | atomic preflight test plus legacy v15 replay test |
+| Polygon side-count change | With any existing v16 typed constraint or boundary-aware downstream ref, every sides-changing path refuses with no mutation; without one, one accepted parameter command changes the descriptor; v15 geometry-only refs keep their legacy path | atomic preflight tests for direct edit, expression/update, and solver write-back plus legacy v15 replay test |
 | Region after rectangle resize | New boundary-aware extrusion resolves the same source region; exact body rebuilds and face lineage remains source-derived | region-profile and exact lineage tests |
-| Boundary provenance | Exact `b1/...` tokens validate; outer and hole loops compare sequence-aware multisets with repeated split-edge tokens preserved | token parser, loop canonicalization, hole, and split-edge tests |
+| Boundary provenance | Exact `b1/...` tokens validate; outer and hole loops compare sequence-aware multisets with repeated split-edge tokens preserved; a changed split count refuses before witness fallback | token parser, loop canonicalization, hole, split-edge, and crossing-count tests |
 | Region ambiguity | An edge split into multiple candidate cells refuses unless sample/area selects exactly one; array order and nearest geometry never decide | resolver test |
 | Upstream deletion | Dependent deletion follows load-bearing policy; no dangling reference survives save | document-core command test |
-| Explicit conversion | Existing point/edge/center operands remap through edge endpoints/lines/center spoke while preserving user constraint IDs and expressions; missing aliases refuse before mutation | promotion remap and structural-constraint tests, when that slice starts |
+| Explicit conversion | Existing point/edge/center operands remap through edge endpoints/lines/center spoke while preserving user constraint IDs and expressions; only legal coincident/horizontal/vertical/parallel/equal/distance payloads with promotion ownership are generated; missing aliases refuse before mutation | promotion remap and structural-constraint tests, when that slice starts |
 | Conversion undo/replay | Undo restores the exact composite and constraint array; redo reuses generated line/system IDs and alias map after save/reopen | command-log replay test, when that slice starts |
 | Annotation interaction | S01 label placement is keyed by `constraintId`; moving a label never changes a composite point/edge or driving value | S01 annotation persistence tests |
-| Future schema refusal | Newer/unknown topology schema is refused without stamping or partial load | normalization test |
+| Future schema refusal | v15 legacy loads without synthesized fields, v16 tagged refs validate on load/save, and newer/unknown topology schema is refused without stamping or partial load | normalization, save, and round-trip tests |
 
 The S04 row is complete only when the supported subset and refusal boundary are
 covered. A passing geometry test alone does not prove saved-history replay or
@@ -505,22 +573,27 @@ code:
    cover every row.
 2. **Parameter mapping and expressions:** rectangle and regular-polygon
    inverse fits are canonical regeneration checks, not averages; under-
-   constrained or rotated/reflected/inconsistent results do not commit. Raw
+   constrained results retain the deterministic canonical seed when geometry
+   is unchanged, while changed ambiguous or rotated/reflected/inconsistent
+   results do not commit. Structural equations and rank/DOF diagnostics keep
+   valid composite graphs from being treated as free independent lines. Raw
    expressions remain byte-for-byte unless a changed expression-backed field
    causes an explicit conflict refusal.
 3. **Boundary provenance:** the `b1/...` grammar is fixed, and provenance is
    outer-loop plus a sequence-aware multiset of hole loops. Repeated split-edge
    tokens remain repeated, loop roles remain distinct, and sample/area is only
-   a unique disambiguator.
+   a unique disambiguator among exact multiplicity matches. A changed split
+   count is a topology refusal, never a normalization.
 4. **Promotion remapping:** explicit conversion maps vertices, edges, and
    centers through generated endpoints/lines/center spokes, preserves user
-   constraint IDs and raw values, adds deterministic structural constraints,
-   and refuses atomically when any alias is incomplete. Undo/redo reuses the
-   same IDs and alias map.
-5. **Polygon side-count behavior:** new typed references cause an atomic
-   preflight refusal with no mutation; an unreferenced polygon may change side
-   count in one parameter command. Legacy v15 geometry-only references keep
-   their existing resolver behavior.
+   constraint IDs and raw values, adds only legal existing constraint kinds
+   with an explicit promotion owner, and refuses atomically when any alias is
+   incomplete. Undo/redo reuses the same IDs and alias map.
+5. **Polygon side-count behavior:** every sides-changing entry point shares an
+   atomic preflight over all existing v16 typed references; any match refuses
+   with no mutation. An unreferenced v16 polygon may change side count in one
+   parameter command. Legacy v15 geometry-only references keep their existing
+   resolver behavior.
 
 ## Bounded implementation slices
 
@@ -530,9 +603,11 @@ code:
 2. **Region provenance.** Carry optional boundary tokens through composite
    curve expansion, profile references, and `resolveRegionProfiles`; preserve
    every legacy resolver tier and add ambiguity tests.
-3. **Virtual solver bridge.** Lower composite refs to a temporary graph,
-   support only parameter-representable rectangle/regular-polygon constraints,
-   map solutions back to canonical parameters, and fail closed otherwise.
+3. **Virtual solver bridge.** Lower composite refs to a temporary graph backed
+   by parameter-coupled structural equations, expose structural residuals and
+   canonical DOF diagnostics, support only parameter-representable
+   rectangle/regular-polygon constraints, map solutions back to canonical
+   parameters, and fail closed otherwise.
 4. **Picking, labels, and diagnostics.** Expose stable snap targets, typed
    edge/point names, and refusal/recovery copy. Keep annotation placement
    presentation-only and keyed by `constraintId`.
@@ -565,9 +640,25 @@ choices before changing runtime types:
 8. Preserve user constraint IDs and raw expressions through explicit promotion;
    map centers through a generated construction center spoke, and refuse the
    entire conversion if any alias is incomplete.
-9. Refuse polygon side-count edits atomically whenever a new typed constraint
-   or boundary-aware downstream reference would become invalid; preserve the
-   legacy resolver path for old documents without typed refs.
+9. Refuse polygon side-count edits atomically whenever any existing v16 typed
+   constraint or boundary-aware downstream reference would become invalid;
+   preserve the legacy resolver path for old documents without typed refs.
+10. Treat v16 as the first legal carrier for tagged refs, boundary loops, and
+    promotion ownership; validate them recursively on both load and save, and
+    reject those fields in v15 rather than silently normalizing them.
+11. Solve composites through parameter-coupled structural equations with
+    explicit DOF/residual diagnostics. Under-constrained seeded values may
+    remain unchanged and commit; changed ambiguous geometry refuses.
+12. Run one polygon-side-count preflight from every sides-changing entry
+    point, including expression/update and solver write-back, against all
+    existing v16 typed refs, not only refs added by the current command.
+13. Generate promotion structure only from existing constraint kinds: polygon
+    radial preservation uses persisted `distance` payloads from the center
+    spoke, not an invented radial kind; the construction spoke is owned and
+    replayed by the promotion record.
+14. Treat any changed repeated-token count from a crossing as a topology
+    refusal. Sample/area can select only among candidates with exact token
+    multiplicity; S04 never normalizes split counts.
 
 ## Source-grounded evidence
 
