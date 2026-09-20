@@ -14862,6 +14862,15 @@ export function App() {
       }
 
       if (interaction.mode === 'sketch' && event.key !== 'Escape') {
+        // The sketch profile status promises that E starts the same extrude
+        // flow as the rail. Handle it before the sketch-tool shortcuts, whose
+        // early return otherwise prevents the global E shortcut from seeing
+        // this key while a sketch is active.
+        if (event.key.toLowerCase() === 'e') {
+          event.preventDefault();
+          startExtrude(interaction.session.sketchId as SketchId);
+          return;
+        }
         if (
           (event.key === 'Delete' || event.key === 'Backspace') &&
           interaction.session.selectedObjectId
