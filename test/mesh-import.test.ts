@@ -22,6 +22,7 @@ import { toUserId, type ProjectDocument } from '@openzcad/shared';
 
 import {
   coincidentBoxSoup,
+  committedMeshFixture,
   deflatedThreeMfFixture,
   FIXTURE_BOX,
   FIXTURE_BOX_TRIANGLES,
@@ -109,9 +110,14 @@ describe('mesh file imports', { timeout: 30_000 }, () => {
   it.each(FORMATS)(
     'reads a %s box into the triangles an imported mesh stores',
     async (format) => {
-      const mesh = await importMeshFile(format, meshFixture(format), 'mm');
+      const mesh = await importMeshFile(
+        format,
+        committedMeshFixture(format),
+        'mm'
+      );
 
       expect(mesh.triangleCount).toBe(FIXTURE_BOX_TRIANGLES);
+      expect(mesh.sourceUnit).toBe(format === '3mf' ? 'millimeter' : undefined);
       expect(mesh.indices.length).toBe(mesh.triangleCount * 3);
       expect(mesh.vertices.length % 3).toBe(0);
       expect(mesh.vertices.every(Number.isFinite)).toBe(true);
@@ -120,9 +126,15 @@ describe('mesh file imports', { timeout: 30_000 }, () => {
           (index) => index >= 0 && index < mesh.vertices.length / 3
         )
       ).toBe(true);
-      // The file's own coordinates, adopted unscaled: the box is still
-      // 2 x 3 x 4 and still encloses 24 mm³.
+      // These expected values are the fixture contract, independent of the
+      // generated variant builders in the support module.
       expect(meshVolume(mesh)).toBeCloseTo(FIXTURE_BOX_VOLUME, 9);
+      expect(Math.min(...mesh.vertices.filter((_v, i) => i % 3 === 0))).toBe(0);
+      expect(Math.max(...mesh.vertices.filter((_v, i) => i % 3 === 0))).toBe(2);
+      expect(Math.min(...mesh.vertices.filter((_v, i) => i % 3 === 1))).toBe(0);
+      expect(Math.max(...mesh.vertices.filter((_v, i) => i % 3 === 1))).toBe(3);
+      expect(Math.min(...mesh.vertices.filter((_v, i) => i % 3 === 2))).toBe(0);
+      expect(Math.max(...mesh.vertices.filter((_v, i) => i % 3 === 2))).toBe(4);
     }
   );
 
@@ -541,6 +553,15 @@ describe('mesh file imports', { timeout: 30_000 }, () => {
     expect(oneByteOver).not.toContain('(33,554,432 bytes); this file is 32 MB');
   });
 
+  it('keeps each reader’s byte and entity fences explicit', () => {
+    expect(MESH_IMPORT_POLICIES).toMatchObject({
+      '3mf': { maxInputBytes: 32 * 1024 * 1024, maxEntities: 600_000 },
+      obj: { maxInputBytes: 128 * 1024 * 1024, maxEntities: 600_000 },
+      glb: { maxInputBytes: 128 * 1024 * 1024, maxEntities: 2_400_000 },
+      ply: { maxInputBytes: 128 * 1024 * 1024, maxEntities: 600_000 }
+    });
+  });
+
   /**
    * The rebuild check runs at the units the document stores, not millimetres.
    *
@@ -735,13 +756,27 @@ describe('mesh file imports', { timeout: 30_000 }, () => {
   });
 
   it('refuses a file that is not the format it claims, by name', async () => {
-    await expect(
-      importMeshFile('ply', new TextEncoder().encode('not a ply file'), 'mm')
-    ).rejects.toThrow(/^PLY import failed: /);
+    const malformed: Record<MeshImportFormat, Uint8Array> = {
+      '3mf': new TextEncoder().encode('not a zip at all'),
+      obj: new TextEncoder().encode('v 0 0 0\nf 1 2\n'),
+      glb: new TextEncoder().encode('{"asset":{}}'),
+      ply: new TextEncoder().encode('not a ply file')
+    };
+    const errors: Record<MeshImportFormat, RegExp> = {
+      '3mf': /^(?:This 3MF package could not be read|3MF import failed:)/,
+      obj: /^OBJ import failed:/,
+      glb: /^glTF binary import failed:/,
+      ply: /^PLY import failed:/
+    };
+    for (const format of FORMATS) {
+      await expect(
+        importMeshFile(format, malformed[format], 'mm')
+      ).rejects.toThrow(errors[format]);
+    }
     // A JSON glTF is not a GLB, which is why `.gltf` is not offered at all.
-    await expect(
-      importMeshFile('glb', new TextEncoder().encode('{"asset":{}}'), 'mm')
-    ).rejects.toThrow(/glTF binary import failed: .*GLB/);
+    await expect(importMeshFile('glb', malformed.glb, 'mm')).rejects.toThrow(
+      /glTF binary import failed: .*GLB/
+    );
   });
 
   it('claims exactly the extensions the importers can read', () => {
