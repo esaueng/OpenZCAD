@@ -28,6 +28,8 @@ import {
   FIXTURE_BOX_TRIANGLES,
   FIXTURE_BOX_VOLUME,
   FIXTURE_OBJECT_PITCH,
+  committedThreeMfPlacementFixture,
+  meshEntityLimitFixture,
   meshFixture,
   thinPlateObj,
   THREE_MF_UNIT_MILLIMETRES,
@@ -141,7 +143,11 @@ describe('mesh file imports', { timeout: 30_000 }, () => {
   it.each(FORMATS)(
     'rebuilds a %s import as a body that survives a save and a reload',
     async (format) => {
-      const mesh = await importMeshFile(format, meshFixture(format), 'mm');
+      const mesh = await importMeshFile(
+        format,
+        committedMeshFixture(format),
+        'mm'
+      );
       const imported = importMeshBody(
         createProjectDocument(`${format} part`, user),
         {
@@ -281,6 +287,20 @@ describe('mesh file imports', { timeout: 30_000 }, () => {
       const body = derived.bodyRepresentations[imported.bodyId]!;
       expect(body.volume).toBeCloseTo(FIXTURE_BOX_VOLUME * 25.4 ** 3, 3);
       expect(body.bbox.max.x).toBeCloseTo(FIXTURE_BOX.x * 25.4, 6);
+    });
+
+    it('honours placement in the committed 3MF fixture', async () => {
+      const mesh = await importMeshFile(
+        '3mf',
+        committedThreeMfPlacementFixture(),
+        'mm'
+      );
+
+      expect(mesh.sourceUnit).toBe('millimeter');
+      expect(mesh.triangleCount).toBe(FIXTURE_BOX_TRIANGLES);
+      expect(meshVolume(mesh)).toBeCloseTo(FIXTURE_BOX_VOLUME, 9);
+      expect(Math.min(...mesh.vertices.filter((_v, i) => i % 3 === 0))).toBe(7);
+      expect(Math.max(...mesh.vertices.filter((_v, i) => i % 3 === 0))).toBe(9);
     });
   });
 
@@ -561,6 +581,15 @@ describe('mesh file imports', { timeout: 30_000 }, () => {
       ply: { maxInputBytes: 128 * 1024 * 1024, maxEntities: 600_000 }
     });
   });
+
+  it.each(FORMATS)(
+    'enforces the pinned %s reader entity fence before rebuild',
+    async (format) => {
+      await expect(
+        importMeshFile(format, meshEntityLimitFixture(format), 'mm')
+      ).rejects.toThrow(/import failed: .*import limit exceeded/i);
+    }
+  );
 
   /**
    * The rebuild check runs at the units the document stores, not millimetres.
