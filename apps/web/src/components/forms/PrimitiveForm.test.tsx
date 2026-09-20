@@ -43,9 +43,34 @@ describe('PrimitiveForm dimension validation', () => {
       onSubmit: vi.fn()
     };
     const { rerender } = render(<PrimitiveForm {...props} scope={{ w: 30 }} />);
+    // Nothing differs from the document yet, so Apply has nothing to do.
+    expect(screen.getByRole('button', { name: 'Apply' })).toBeDisabled();
+    const height = screen.getByRole('textbox', { name: 'Height (Z)' });
+    fireEvent.change(height, { target: { value: '20' } });
     expect(screen.getByRole('button', { name: 'Apply' })).toBeEnabled();
+    fireEvent.change(height, { target: { value: '24' } });
+    expect(screen.getByRole('button', { name: 'Apply' })).toBeDisabled();
+    fireEvent.change(height, { target: { value: '20' } });
     rerender(<PrimitiveForm {...props} scope={{ w: -5 }} />);
     expect(screen.getByRole('button', { name: 'Apply' })).toBeDisabled();
+  });
+
+  it('enables Apply for a rename alone', () => {
+    render(
+      <PrimitiveForm
+        kind="box"
+        scope={{}}
+        initialName="QA Box"
+        initialDimensions={{ width: 30, height: 18, depth: 24 }}
+        submitLabel="Apply"
+        onSubmit={vi.fn()}
+      />
+    );
+    expect(screen.getByRole('button', { name: 'Apply' })).toBeDisabled();
+    fireEvent.change(screen.getByRole('textbox', { name: 'Name' }), {
+      target: { value: 'Renamed' }
+    });
+    expect(screen.getByRole('button', { name: 'Apply' })).toBeEnabled();
   });
 
   it('allows a pointed cone but rejects two zero radii', () => {

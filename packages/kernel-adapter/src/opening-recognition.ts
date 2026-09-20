@@ -41,6 +41,14 @@ export interface OpeningRecognitionOptions {
   faces?: [number, number];
   /** Linear tolerance in document units. */
   tolerance?: number;
+  /**
+   * One millimetre expressed in document units (1 for a millimetre document,
+   * 1 / 25.4 for inches). The margins below are millimetre lengths — how far a
+   * cut keeps from a change of section, the shortest run worth bridging — and
+   * they scale by this so an inch document is measured to the same physical
+   * margins instead of twenty-five times wider ones.
+   */
+  millimetre?: number;
 }
 
 const AXES: readonly OpeningAxis[] = ['x', 'y', 'z'];
@@ -63,6 +71,8 @@ const MAX_SECTION_EDGES = 64;
 const MAX_CANDIDATES = 8;
 /** Edge sampling deflection for face extents; coarse is enough for bounds. */
 const EXTENT_DEFLECTION = 0.05;
+/** Edge sampling deflection for reading a section arc's midpoint. */
+const ARC_DEFLECTION = 0.01;
 /** Sketch-plane bases, kept identical to `PLANE_BASES` in @openzcad/geometry. */
 const SECTION_FRAME: Record<
   OpeningAxis,
@@ -74,6 +84,31 @@ const SECTION_FRAME: Record<
 };
 
 const round = (value: number): number => Math.round(value * 1e6) / 1e6;
+
+/** The millimetre margins above, expressed in the document's units. */
+interface Margins {
+  cutMargin: number;
+  minStraightRun: number;
+  minBridge: number;
+  heightCutMargin: number;
+  minHeightRun: number;
+  minUpperPiece: number;
+  extentDeflection: number;
+  arcDeflection: number;
+}
+
+function marginsIn(millimetre: number): Margins {
+  return {
+    cutMargin: CUT_MARGIN * millimetre,
+    minStraightRun: MIN_STRAIGHT_RUN * millimetre,
+    minBridge: MIN_BRIDGE * millimetre,
+    heightCutMargin: HEIGHT_CUT_MARGIN * millimetre,
+    minHeightRun: MIN_HEIGHT_RUN * millimetre,
+    minUpperPiece: MIN_UPPER_PIECE * millimetre,
+    extentDeflection: EXTENT_DEFLECTION * millimetre,
+    arcDeflection: ARC_DEFLECTION * millimetre
+  };
+}
 const dot = (a: Vector3, b: Vector3): number => a.x * b.x + a.y * b.y + a.z * b.z;
 const unsupported = (reason: string): OpeningRecognition => ({
   status: 'unsupported',
@@ -110,7 +145,8 @@ type Extents = Record<OpeningAxis, [number, number]>;
  */
 function faceExtents(
   kernel: RemusKernel,
-  inventory: AnalyticInventory
+  inventory: AnalyticInventory,
+  extentDeflection: number
 ): Map<number, Extents> {
   const extents = new Map<number, Extents>();
   for (const face of inventory.faces) {
@@ -120,7 +156,7 @@ function faceExtents(
       z: [Infinity, -Infinity]
     };
     for (const edge of kernel.getFaceEdges(face.face)) {
-      const samples = kernel.sampleEdge(edge, EXTENT_DEFLECTION);
+      const samples = kernel.sampleEdge(edge, extentDeflection);
       for (let i = 0; i + 2 < samples.length; i += 3) {
         const point = { x: samples[i]!, y: samples[i + 1]!, z: samples[i + 2]! };
         for (const axis of AXES) {
@@ -236,7 +272,8 @@ function readProfile(
   kernel: RemusKernel,
   face: number,
   axis: OpeningAxis,
-  label: string
+  label: string,
+  arcDeflection: number
 ): SectionEdge[] | string {
   if (kernel.getFaceWires(face).length !== 1)
     return `${label} has an inner loop; a hollow section is not supported.`;
@@ -264,7 +301,7 @@ function readProfile(
     }
     if (type !== 'CIRCLE')
       return `${label} has a ${type.toLowerCase()} edge; only lines and arcs are supported.`;
-    const samples = Array.from(kernel.sampleEdge(edge, 0.01));
+    const samples = Array.from(kernel.sampleEdge(edge, arcDeflection));
     if (samples.length < 9) return `${label} could not sample an arc.`;
     const middle = Math.floor(samples.length / 3 / 2) * 3;
     const mid = project({ x: samples[middle]!, y: samples[middle + 1]!, z: samples[middle + 2]! }, axis);
@@ -312,7 +349,8 @@ function proveStraightSection(
   axis: OpeningAxis,
   cuts: [number, number],
   box: { min: Vector3; max: Vector3 },
-  tolerance: number
+  tolerance: number,
+  arcDeflection: number
 ): { section: SectionEdge[] } | string {
   const min = { ...box.min };
   const max = { ...box.max };
@@ -353,9 +391,21 @@ function proveStraightSection(
   }
   if (ends[0].length !== 1 || ends[1].length !== 1)
     return `The section between the cuts has ${ends[0].length} and ${ends[1].length} regions; the straight section must be one.`;
-  const first = readProfile(kernel, ends[0][0]!, axis, `The section at ${axis} = ${cuts[0]}`);
+  const first = readProfile(
+    kernel,
+    ends[0][0]!,
+    axis,
+    `The section at ${axis} = ${cuts[0]}`,
+    arcDeflection
+  );
   if (typeof first === 'string') return first;
-  const second = readProfile(kernel, ends[1][0]!, axis, `The section at ${axis} = ${cuts[1]}`);
+  const second = readProfile(
+    kernel,
+    ends[1][0]!,
+    axis,
+    `The section at ${axis} = ${cuts[1]}`,
+    arcDeflection
+  );
   if (typeof second === 'string') return second;
   if (sectionSignature(first) !== sectionSignature(second))
     return 'The section differs at the two cuts; the region between them is not straight.';
@@ -423,7 +473,8 @@ function recognizeArmHeight(
     innerFaces: [number, number];
     section: SectionEdge[];
   },
-  tolerance: number
+  tolerance: number,
+  margins: Margins
 ): RecognizedArmHeight | string {
   const others = AXES.filter((a) => a !== opening.axis) as [OpeningAxis, OpeningAxis];
   // The arms extend along whichever remaining axis the inner faces span more.
@@ -438,7 +489,7 @@ function recognizeArmHeight(
   const baseTop = sectionReach(opening.section, opening.axis, axis);
   if (!Number.isFinite(baseTop)) return 'The bridge section has no extent along the arm axis.';
   const top = bounds.max[axis];
-  if (top - baseTop < MIN_STRAIGHT_RUN + MIN_UPPER_PIECE)
+  if (top - baseTop < margins.minStraightRun + margins.minUpperPiece)
     return 'The ends do not rise far enough above the bridge section to grow.';
   const sideFaces = (side: 'negative' | 'positive') =>
     inventory.faces.filter((face) => {
@@ -450,7 +501,7 @@ function recognizeArmHeight(
           : extent[0] >= opening.cuts[1] - tolerance)
       );
     });
-  const range: [number, number] = [baseTop, top - MIN_UPPER_PIECE];
+  const range: [number, number] = [baseTop, top - margins.minUpperPiece];
   const runs = {
     negative: straightRuns(sideFaces('negative'), extents, axis, range, tolerance),
     positive: straightRuns(sideFaces('positive'), extents, axis, range, tolerance)
@@ -465,11 +516,15 @@ function recognizeArmHeight(
       if (shared[1] - shared[0] > (best ? best.shared[1] - best.shared[0] : 0))
         best = { negative, positive, shared };
     }
-  if (!best || best.shared[1] - best.shared[0] < MIN_HEIGHT_RUN + 2 * HEIGHT_CUT_MARGIN)
+  if (
+    !best ||
+    best.shared[1] - best.shared[0] <
+      margins.minHeightRun + 2 * margins.heightCutMargin
+  )
     return 'No straight run along the arms is shared by both ends above the bridge section.';
   const cuts: [number, number] = [
-    round(best.shared[0] + HEIGHT_CUT_MARGIN),
-    round(best.shared[1] - HEIGHT_CUT_MARGIN)
+    round(best.shared[0] + margins.heightCutMargin),
+    round(best.shared[1] - margins.heightCutMargin)
   ];
   const sideBox = (side: 'negative' | 'positive') => {
     const box = { min: { ...grownBox.min }, max: { ...grownBox.max } };
@@ -479,7 +534,15 @@ function recognizeArmHeight(
   };
   const sections: Partial<Record<'negative' | 'positive', SketchObjectData[]>> = {};
   for (const side of ['negative', 'positive'] as const) {
-    const proof = proveStraightSection(kernel, solid, axis, cuts, sideBox(side), Math.max(tolerance, 1e-6));
+    const proof = proveStraightSection(
+      kernel,
+      solid,
+      axis,
+      cuts,
+      sideBox(side),
+      Math.max(tolerance, 1e-6),
+      margins.arcDeflection
+    );
     if (typeof proof === 'string') return `${side} end: ${proof}`;
     sections[side] = proof.section.map((edge) => edge.data);
   }
@@ -488,7 +551,9 @@ function recognizeArmHeight(
     axis,
     cuts,
     sourceHeight,
-    minimumHeight: round(sourceHeight - (cuts[1] - cuts[0]) + MIN_BRIDGE),
+    minimumHeight: round(
+      sourceHeight - (cuts[1] - cuts[0]) + margins.minBridge
+    ),
     sections: { negative: sections.negative!, positive: sections.positive! },
     straightRuns: {
       negative: [round(best.negative[0]), round(best.negative[1])],
@@ -510,6 +575,7 @@ export function recognizeOpening(
   options: OpeningRecognitionOptions = {}
 ): OpeningRecognition {
   const tolerance = options.tolerance ?? DEFAULT_TOLERANCE;
+  const margins = marginsIn(options.millimetre ?? 1);
   let inventory: AnalyticInventory;
   let bounds: { min: Vector3; max: Vector3 };
   try {
@@ -524,7 +590,7 @@ export function recognizeOpening(
   }
   if (![bounds.min, bounds.max].every((p) => AXES.every((a) => Number.isFinite(p[a]))))
     return unsupported('The solid has no finite bounds.');
-  const extents = faceExtents(kernel, inventory);
+  const extents = faceExtents(kernel, inventory, margins.extentDeflection);
   const candidates: OpeningCandidate[] = [];
   // Candidate openings are pairs of planar faces that look at each other
   // along a world axis with an empty gap between them. The kernel's opposing
@@ -600,18 +666,30 @@ export function recognizeOpening(
   const symmetry = detectReflectionSymmetries(inventory, bounds).find(
     (plane) =>
       axisOf(plane.planeNormal, 1e-6) === axis &&
-      Math.abs(Math.abs(plane.planeOffset) - Math.abs(center)) <= Math.max(CUT_MARGIN, tolerance)
+      Math.abs(Math.abs(plane.planeOffset) - Math.abs(center)) <=
+      Math.max(margins.cutMargin, tolerance)
   );
   if (!symmetry)
     return unsupported(
       `No reflection plane at ${axis} = ${round(center)} confirms that the two ends are mirror images; asymmetric ends are not supported.`
     );
   const run = straightRuns(inventory.faces, extents, axis, candidate.innerFaces, tolerance)[0];
-  if (!run || run[1] - run[0] < MIN_STRAIGHT_RUN + 2 * CUT_MARGIN)
+  if (!run || run[1] - run[0] < margins.minStraightRun + 2 * margins.cutMargin)
     return unsupported('No straight section long enough to grow was found between the inner faces.');
-  const cuts: [number, number] = [round(run[0] + CUT_MARGIN), round(run[1] - CUT_MARGIN)];
+  const cuts: [number, number] = [
+    round(run[0] + margins.cutMargin),
+    round(run[1] - margins.cutMargin)
+  ];
   const grownBox = grown(bounds);
-  const proof = proveStraightSection(kernel, solid, axis, cuts, grownBox, Math.max(tolerance, 1e-6));
+  const proof = proveStraightSection(
+    kernel,
+    solid,
+    axis,
+    cuts,
+    grownBox,
+    Math.max(tolerance, 1e-6),
+    margins.arcDeflection
+  );
   if (typeof proof === 'string') return unsupported(proof);
   const height = recognizeArmHeight(
     kernel,
@@ -621,7 +699,8 @@ export function recognizeOpening(
     bounds,
     grownBox,
     { axis, cuts, innerFaces: [candidate.faceA, candidate.faceB], section: proof.section },
-    tolerance
+    tolerance,
+    margins
   );
   const sectionLength = cuts[1] - cuts[0];
   const emboss = typeof height === 'string' ? null : recognizePlanarEmboss(kernel, solid);
@@ -640,7 +719,9 @@ export function recognizeOpening(
       cuts,
       center: round(center),
       sourceOpening: candidate.opening,
-      minimumOpening: round(candidate.opening - sectionLength + MIN_BRIDGE),
+      minimumOpening: round(
+        candidate.opening - sectionLength + margins.minBridge
+      ),
       section: proof.section.map((edge) => edge.data),
       ...(typeof height === 'string' ? {} : { height }),
       ...(emboss && side ? { lettering: { selection: emboss, side } } : {})

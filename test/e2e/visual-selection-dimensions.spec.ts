@@ -92,11 +92,11 @@ test('round-trips diameter entry and edits a cylinder cap by total height', asyn
     .toBeCloseTo(17.4, 5);
 
   await selectCylinderSurface('top-cap');
-  await expect(valueChip).toHaveText('Total 28 mm');
+  await expect(valueChip).toHaveText('28 mm');
   await valueChip.click();
   const totalKeypad = page.getByRole('dialog', { name: 'Total value' });
   await totalKeypad.getByRole('textbox').fill('35.7');
-  await expect(valueChip).toHaveText('Total 35.7 mm');
+  await expect(valueChip).toHaveText('35.7 mm');
   // The value chip updates immediately, before the exact preview replaces the
   // rendered body and rebuilds its handle. Prove that replacement has landed
   // before checking that the dimension survived it.

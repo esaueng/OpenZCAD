@@ -28,6 +28,12 @@ import { letteredHolder } from '../support/lettered-holder';
  *   OZ_PERF_HOLDER_PARAMETER=opening_width \
  *   pnpm exec playwright test perf-holder-reload
  *
+ * The documented private hammer source contains raised lettering, so its
+ * current-main verified suggestion is "Parameterize holder and text" and its
+ * parameter is `holder_height`. Set `OZ_PERF_HOLDER_SUGGESTIONS` explicitly
+ * when measuring that source (or another private source with a different
+ * verified proposal).
+ *
  * OZ_PERF_BUDGET=1 additionally asserts the H02 budgets recorded in
  * docs/qa/2026-09-17/first-edit-after-reload.md: after the reload has
  * settled, the first edit costs no more than 1.5× the warm edit plus 250 ms,
@@ -174,10 +180,14 @@ async function applyVerified(page: Page, label: string) {
   await page.getByRole('button', { name: 'Send to the assistant' }).click();
   const proposal = page.locator('.assistant-card.proposal.open').last();
   await expect(proposal).toBeVisible({ timeout: 60_000 });
+  // Counted, not `.last()`: with one recipe already applied, the previous
+  // card says "Applied" the instant this Apply is clicked, and the probe ran
+  // on into its first edit while the patch was still in preflight — which is
+  // what the "refused first edit" this probe reported actually was (#359).
+  const applied = page.locator('.assistant-card.proposal.applied');
+  const before = await applied.count();
   await proposal.getByRole('button', { name: 'Apply', exact: true }).click();
-  await expect(
-    page.locator('.assistant-card.proposal.applied').last()
-  ).toContainText('Applied', { timeout: 120_000 });
+  await expect(applied).toHaveCount(before + 1, { timeout: 120_000 });
   await expect(page.getByRole('contentinfo')).toContainText('warnings0', {
     timeout: 120_000
   });
@@ -319,6 +329,10 @@ const scenarios: Scenario[] = [
 if (process.env.OZ_PERF_HOLDER_STEP) {
   const file = process.env.OZ_PERF_HOLDER_STEP;
   const parameter = process.env.OZ_PERF_HOLDER_PARAMETER ?? 'opening_width';
+  const defaultSuggestions =
+    parameter === 'holder_height'
+      ? 'Parameterize holder and text'
+      : 'Parameterize the opening;Parameterize the mounting holes';
   scenarios.push({
     title: `private holder: ${parameter}`,
     fixture: `private file (${file.split('/').at(-1) ?? file})`,
@@ -327,8 +341,7 @@ if (process.env.OZ_PERF_HOLDER_STEP) {
       buffer: await readFile(file)
     }),
     suggestions: (
-      process.env.OZ_PERF_HOLDER_SUGGESTIONS ??
-      'Parameterize the opening;Parameterize the mounting holes'
+      process.env.OZ_PERF_HOLDER_SUGGESTIONS ?? defaultSuggestions
     ).split(';'),
     parameter,
     initial: '',
@@ -367,10 +380,11 @@ for (const scenario of scenarios) {
       resolveValue(value, initial)
     ) as [string, string, string, string, string];
     let offset = await clockOffset(page);
-    // The first edit after an assistant Apply is refused as "changed during
-    // validation" on this head (3/3 runs); it is recorded, then retried so the
-    // warm sample is a real edit.
-    const refusedAfterApply = await measureEdit(
+    // Recorded before the warm sample so the first edit after an Apply stays
+    // a distinct sample. Earlier runs saw it refused as "changed during
+    // validation": the Apply wait above returned early, so the edit was typed
+    // during the patch's preflight (#359 fixed both the wait and the refusal).
+    const afterApply = await measureEdit(
       page,
       stages,
       offset,
@@ -531,7 +545,7 @@ for (const scenario of scenarios) {
       copiesBeforeReload,
       valueAfterReload,
       secondReload,
-      edits: [refusedAfterApply, warmBefore, first, second, immediate]
+      edits: [afterApply, warmBefore, first, second, immediate]
     };
     if (process.env.OZ_PERF_BUDGET) {
       // H02 budgets: the first edit after a settled reload is a warm edit, and

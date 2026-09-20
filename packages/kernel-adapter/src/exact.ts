@@ -134,6 +134,7 @@ export {
   importMeshFile,
   type ImportedMeshTriangles
 } from './mesh-file-import';
+import { sanitizeBinaryStl, sanitizeThreeMf } from './mesh-export-sanitize';
 import {
   readMeshQuality,
   type BodyMeshQuality,
@@ -581,6 +582,8 @@ export interface ExactKernelAdapter {
     solid: boolean;
     valid: boolean;
     volume: number;
+    /** Accepted indices in the original kernel import order, before rejection filtering. */
+    solidIndices: number[];
     /**
      * Why the probe answered as it did, when there is something to say. K0.6:
      * the probe never raises, so a parse error or a rejected open shell has to
@@ -1101,7 +1104,9 @@ export class RemusKernelAdapter implements ExactKernelAdapter {
     recognizeImportedFeatures = false,
     onStage?: (name: string) => () => void,
     includeMassProperties = true,
-    analysisHashes?: readonly number[]
+    analysisHashes?: readonly number[],
+    /** One millimetre in document units, for the recognizer's margins. */
+    millimetre = 1
   ): MeasuredShape {
     if (shape.solids.length === 0) {
       throw new Error('Exact body contains no solids.');
@@ -1251,13 +1256,20 @@ export class RemusKernelAdapter implements ExactKernelAdapter {
         if (recognized.length > 0) {
           topology.recognizedImportedFeatures ??= [];
           topology.recognizedImportedFeatures.push(...recognized);
-          // Only an exactly proved feature claims its faces. A read-only
-          // kernel-recognized one is published for reading, and must not cost
-          // those faces the planar-distance proof they would otherwise carry.
+          // A face is claimed only by a proof that backs a coordinated
+          // direct-edit replay (the hole family today). Pocket, boss and
+          // taper proofs — exact or kernel-recognized — publish knowledge
+          // with no replay behind them, so they must not cost those faces
+          // the planar-distance proof they would otherwise carry. Revisit
+          // this filter when a pocket/boss/taper edit command lands.
           claimedFaceHashes = new Set(
             recognized
               .filter(
-                (feature) => !isReadOnlyRecognizedImportedFeature(feature)
+                (feature) =>
+                  !isReadOnlyRecognizedImportedFeature(feature) &&
+                  (feature.kind === 'blind-cylindrical-hole' ||
+                    feature.kind === 'counterbore' ||
+                    feature.kind === 'countersink')
               )
               .flatMap((feature) => feature.participatingFaceHashes)
           );
@@ -1272,7 +1284,9 @@ export class RemusKernelAdapter implements ExactKernelAdapter {
         if (recognizeImportedFeatures && shape.solids.length === 1) {
           const openingDone = onStage?.('Opening recognition');
           try {
-            topology.recognizedOpening = recognizeOpening(kernel, solid);
+            topology.recognizedOpening = recognizeOpening(kernel, solid, {
+              millimetre
+            });
           } catch (error) {
             topology.recognizedOpening = {
               status: 'unsupported',
@@ -1558,7 +1572,8 @@ export class RemusKernelAdapter implements ExactKernelAdapter {
                 document.bodyOrder.length
               ),
             !consumed,
-            analysisHashes
+            analysisHashes,
+            1 / UNIT_TO_MM[document.units]
           );
           remeasured += 1;
           this.storeMeasuredShape(bodyId, {
@@ -2022,7 +2037,11 @@ export class RemusKernelAdapter implements ExactKernelAdapter {
             : format === 'glb'
               ? io.exportGlb(bodies, deflection)
               : io.exportStl(bodies, deflection);
-      return bytes as Uint8Array<ArrayBuffer>;
+      return format === '3mf'
+        ? sanitizeThreeMf(bytes)
+        : format === 'stl-binary'
+          ? sanitizeBinaryStl(bytes)
+          : (bytes as Uint8Array<ArrayBuffer>);
     });
   }
 
@@ -2174,6 +2193,8 @@ export class RemusKernelAdapter implements ExactKernelAdapter {
     solid: boolean;
     valid: boolean;
     volume: number;
+    /** Accepted indices in the original kernel import order, before rejection filtering. */
+    solidIndices: number[];
     reason?: string;
   }> {
     await loadRemusTranslators();
@@ -2194,6 +2215,7 @@ export class RemusKernelAdapter implements ExactKernelAdapter {
           solid: false,
           valid: false,
           volume: 0,
+          solidIndices: [],
           reason: error instanceof Error ? error.message : String(error)
         };
       }
@@ -2208,6 +2230,9 @@ export class RemusKernelAdapter implements ExactKernelAdapter {
       );
       return {
         solid: accepted.length > 0,
+        solidIndices: declared.flatMap((_, index) =>
+          verdicts[index]!.kind !== 'not-a-solid' ? [index] : []
+        ),
         valid:
           declared.length > 0 &&
           verdicts.every((verdict) => verdict.kind === 'solid'),
