@@ -1,3 +1,5 @@
+import { readFileSync } from 'node:fs';
+
 import type { MeshImportFormat } from '@openzcad/kernel-adapter/mesh-import-formats';
 
 /**
@@ -537,4 +539,154 @@ export function meshFixture(
   count = 1
 ): Uint8Array {
   return MESH_FIXTURE_BUILDERS[format](count);
+}
+
+const COMMITTED_MESH_FIXTURE_PATHS: Readonly<Record<MeshImportFormat, string>> =
+  {
+    '3mf': '../fixtures/mesh-import/box.3mf.b64',
+    obj: '../fixtures/mesh-import/box.obj',
+    glb: '../fixtures/mesh-import/box.glb.b64',
+    ply: '../fixtures/mesh-import/box.ply'
+  };
+
+/**
+ * Read the committed per-format parity payload, independent of the builders
+ * above. Base64 keeps the binary GLB and 3MF fixtures source-only and easy to
+ * review; the production importer still receives their decoded bytes.
+ */
+export function committedMeshFixture(format: MeshImportFormat): Uint8Array {
+  const source = readFileSync(
+    new URL(COMMITTED_MESH_FIXTURE_PATHS[format], import.meta.url)
+  );
+  if (format === '3mf' || format === 'glb') {
+    return Uint8Array.from(
+      Buffer.from(source.toString('ascii').trim(), 'base64')
+    );
+  }
+  return Uint8Array.from(source);
+}
+
+export function committedThreeMfPlacementFixture(): Uint8Array {
+  const source = readFileSync(
+    new URL('../fixtures/mesh-import/box-translated.3mf.b64', import.meta.url)
+  );
+  return Uint8Array.from(
+    Buffer.from(source.toString('ascii').trim(), 'base64')
+  );
+}
+
+/**
+ * One entity past each reader's production fence. These are deliberately
+ * generated at test time: unlike the small parity files, their only purpose
+ * is to exercise the reader's refusal before it allocates a mesh body.
+ */
+export function meshEntityLimitFixture(format: MeshImportFormat): Uint8Array {
+  switch (format) {
+    case '3mf':
+      return overEntityThreeMfFixture();
+    case 'obj':
+      return encoder.encode(
+        `# one vertex past the OBJ entity fence\n${Array.from(
+          { length: 600_001 },
+          (_unused, index) => `v 0 0 ${index}`
+        ).join('\n')}\nf 1 2 3\n`
+      );
+    case 'ply':
+      return encoder.encode(
+        [
+          'ply',
+          'format ascii 1.0',
+          'element vertex 600001',
+          'property float x',
+          'property float y',
+          'property float z',
+          'element face 1',
+          'property list uchar int vertex_index',
+          'end_header',
+          ...Array.from({ length: 600_001 }, () => '0 0 0'),
+          '3 0 1 2'
+        ].join('\n') + '\n'
+      );
+    case 'glb':
+      return overEntityGlbFixture();
+  }
+}
+
+function overEntityThreeMfFixture(): Uint8Array {
+  const model = encoder.encode(
+    '<?xml version="1.0" encoding="UTF-8"?>' +
+      '<model unit="millimeter" xmlns="http://schemas.microsoft.com/3dmanufacturing/core/2015/02">' +
+      '<resources><object id="1" type="model"><mesh><vertices>' +
+      '<vertex x="0" y="0" z="0"/>'.repeat(600_001) +
+      '</vertices><triangles><triangle v1="0" v2="0" v3="0"/></triangles>' +
+      '</mesh></object></resources><build><item objectid="1"/></build></model>'
+  );
+  const contentTypes = encoder.encode(
+    '<?xml version="1.0" encoding="UTF-8"?>' +
+      '<Types xmlns="http://schemas.openxmlformats.org/package/2006/content-types">' +
+      '<Default Extension="rels" ContentType="application/vnd.openxmlformats-package.relationships+xml"/>' +
+      '<Default Extension="model" ContentType="application/vnd.ms-package.3dmanufacturing-3dmodel+xml"/>' +
+      '</Types>'
+  );
+  const relationships = encoder.encode(
+    '<?xml version="1.0" encoding="UTF-8"?>' +
+      '<Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships">' +
+      '<Relationship Target="/3D/3dmodel.model" Id="rel0" ' +
+      'Type="http://schemas.microsoft.com/3dmanufacturing/2013/01/3dmodel"/>' +
+      '</Relationships>'
+  );
+  return storedZip([
+    { name: '[Content_Types].xml', data: contentTypes },
+    { name: '_rels/.rels', data: relationships },
+    { name: '3D/3dmodel.model', data: model }
+  ]);
+}
+
+function overEntityGlbFixture(): Uint8Array {
+  const positionBytes = new Uint8Array(2_400_001 * 12);
+  const indexBytes = new Uint8Array(new Uint16Array([0, 1, 2]).buffer);
+  const binary = concat([positionBytes, indexBytes]);
+  const json = encoder.encode(
+    JSON.stringify({
+      asset: { version: '2.0' },
+      scene: 0,
+      scenes: [{ nodes: [0] }],
+      nodes: [{ mesh: 0 }],
+      meshes: [{ primitives: [{ attributes: { POSITION: 0 }, indices: 1 }] }],
+      accessors: [
+        {
+          bufferView: 0,
+          componentType: 5126,
+          count: 2_400_001,
+          type: 'VEC3'
+        },
+        { bufferView: 1, componentType: 5123, count: 3, type: 'SCALAR' }
+      ],
+      bufferViews: [
+        { buffer: 0, byteOffset: 0, byteLength: positionBytes.length },
+        {
+          buffer: 0,
+          byteOffset: positionBytes.length,
+          byteLength: indexBytes.length
+        }
+      ],
+      buffers: [{ byteLength: binary.length }]
+    })
+  );
+  const jsonChunk = new Uint8Array(align4(json.length)).fill(0x20);
+  jsonChunk.set(json);
+  const total = 12 + 8 + jsonChunk.length + 8 + binary.length;
+  const glb = new Uint8Array(total);
+  const view = new DataView(glb.buffer);
+  view.setUint32(0, 0x46546c67, true);
+  view.setUint32(4, 2, true);
+  view.setUint32(8, total, true);
+  view.setUint32(12, jsonChunk.length, true);
+  view.setUint32(16, 0x4e4f534a, true);
+  glb.set(jsonChunk, 20);
+  const binaryHeader = 20 + jsonChunk.length;
+  view.setUint32(binaryHeader, binary.length, true);
+  view.setUint32(binaryHeader + 4, 0x004e4942, true);
+  glb.set(binary, binaryHeader + 8);
+  return glb;
 }

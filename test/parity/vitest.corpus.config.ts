@@ -65,6 +65,9 @@ export default defineConfig({
       '@openzcad/kernel-adapter/exact': fileURLToPath(
         new URL('packages/kernel-adapter/src/exact.ts', REPO_ROOT)
       ),
+      '@openzcad/kernel-adapter/extrude-inference': fileURLToPath(
+        new URL('packages/kernel-adapter/src/extrude-inference.ts', REPO_ROOT)
+      ),
       ...workspaceAliases,
       'cloudflare:workers': fileURLToPath(
         new URL('test/cloudflare-workers.mock.ts', REPO_ROOT)

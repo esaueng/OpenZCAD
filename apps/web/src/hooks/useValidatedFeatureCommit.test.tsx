@@ -48,6 +48,12 @@ import {
   type StepImportSourceStore
 } from '../lib/stepImportRun';
 
+// Orchestration tests supply geometry verdicts; real worker discovery is covered
+// by the browser import regression and the exact adapter tests.
+vi.mock('../lib/stepImportWorkerClient', () => ({
+  inspectStepSolidsInWorker: vi.fn(async () => [0])
+}));
+
 const TANGENT_BOSS_DIAGNOSTIC =
   'Union dropped geometry from operand "Boss Body": the result\'s maximum z is 8 mm, but the operand reaches 16 mm (8 mm missing). A cylindrical boss can trigger this kernel failure at exact tangency; move the operand slightly off tangency while keeping positive overlap, then try again.';
 
@@ -3592,4 +3598,76 @@ it('does not publish a repair target from a rebuild of an older document version
   });
   expect(commit).not.toHaveBeenCalled();
   expect(onRejection).not.toHaveBeenCalled();
+});
+
+describe('multi-solid STEP atomic import', () => {
+  it.each([false, true])(
+    'validates every body before archiving (missing second: %s)',
+    async (missingSecond) => {
+      const initial = createProjectDocument(
+        'Two bodies',
+        toUserId('user_test')
+      );
+      const manager = new CommandManager(initial);
+      const archive = vi.fn(async () => 'artifact_shared');
+      const { result } = renderHook(() =>
+        useValidatedFeatureCommit(
+          tabHost(manager, async (candidate) => {
+            const derived = derivedFromCandidate(candidate);
+            if (missingSecond)
+              delete derived.bodyRepresentations[candidate.bodyOrder[1]!];
+            return derived;
+          })
+        )
+      );
+      let outcome: StepImportResult | undefined;
+      await act(async () => {
+        outcome = await runStepImport({
+          file: new File(['ISO-10303-21;'], 'two.step'),
+          contentType: 'model/step',
+          // A rejected middle solid must not renumber the surviving selections.
+          inspectSolids: async () => [0, 2],
+          store: {
+            ...localStepImportSourceStore,
+            ensureLocalProjectStorage: async () => 'unavailable'
+          },
+          archive,
+          validatedFeature: result.current,
+          status: { setStatus: vi.fn(), setFeatureFormError: vi.fn() },
+          marks: {
+            inFlight: createInFlightImportChecksums(),
+            abandoned: new Set()
+          },
+          currentDocument: () => manager.document,
+          editDisabledReason: () => null,
+          newId: () => crypto.randomUUID()
+        });
+      });
+      if (missingSecond) {
+        expect(outcome?.outcome).toBe('rejected');
+        expect(archive).not.toHaveBeenCalled();
+        expect(manager.document.bodyOrder).toEqual([]);
+        return;
+      }
+      expect(outcome?.outcome).toBe('committed');
+      expect(archive).toHaveBeenCalledTimes(1);
+      const features = listFeaturesInOrder(manager.document);
+      expect(features.map((feature) => feature.data)).toEqual([
+        expect.objectContaining({
+          solidIndices: [0],
+          artifactId: 'artifact_shared'
+        }),
+        expect.objectContaining({
+          solidIndices: [2],
+          artifactId: 'artifact_shared'
+        })
+      ]);
+      const bodyIds = [...manager.document.bodyOrder];
+      expect(new Set(bodyIds).size).toBe(2);
+      manager.undo();
+      expect(manager.document.bodyOrder).toEqual([]);
+      manager.redo();
+      expect(manager.document.bodyOrder).toEqual(bodyIds);
+    }
+  );
 });
