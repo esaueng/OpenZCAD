@@ -355,9 +355,18 @@ radial relationships are recorded as system-owned promotion constraints. The
 system IDs are derived from the promotion ID and canonical index and are
 distinct from user constraint IDs.
 
+The constraint schema needs an additive `origin?: 'user' | 'promotion-structure'`
+marker so structural records can be hidden from the ordinary user list while
+remaining visible to deletion, replay, and diagnostics. An absent marker is
+interpreted as `user` for older documents.
+
 Before replacing the composite, the command rewrites each existing constraint
 operand through the alias map while preserving its `constraintId`, kind, raw
 `ParamValue`, and declaration order:
+
+User records remain first in their original order. Generated structural
+records are appended in canonical edge order, so serialized order is stable
+across save/reopen and redo.
 
 * a composite vertex maps to the mapped edge endpoint;
 * a composite edge maps to the generated line entity;
