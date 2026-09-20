@@ -18,4 +18,4 @@ jobs:
   checks:
     permissions:
       contents: read
-    uses: esaueng/OpenZCAD/.github/workflows/fleet-ci.yml@e785c2055b299e51ad7dec47a7894e5c3729fc65
+    uses: esaueng/OpenZCAD/.github/workflows/fleet-ci.yml@8922d4f3ae7693d25b00c6b44fbb226c39cb1eb3
