@@ -107,6 +107,7 @@ import {
   resolveFaceAttachment,
   type FaceAttachmentCandidate
 } from '@openzcad/kernel-adapter/face-attachment';
+import type { SketchSolveOutcome } from '@openzcad/kernel-adapter/exact';
 import type {
   ArtifactKind,
   AccountDeletionScope,
@@ -172,6 +173,7 @@ import {
   measureDrivingDimension,
   planConstraintFromSelection,
   refusePick,
+  residualConstraintObjectIds,
   topResidualConstraints,
   type ConstraintPick,
   type DrivingDimensionKind
@@ -10760,6 +10762,10 @@ export function App() {
       : 'New sketch';
   const parameterScopeRef = useRef(parameterScope);
   parameterScopeRef.current = parameterScope;
+  // Solver diagnostics are transient UI state. Keep the entity ids beside
+  // the solve snapshot so the viewport can colour only solver-named objects.
+  const [sketchSolveDiagnosticObjectIds, setSketchSolveDiagnosticObjectIds] =
+    useState<string[]>([]);
   const sketchDocumentRef = useRef(doc);
   sketchDocumentRef.current = doc;
   const sketchSessionNameRef = useRef(sketchSessionName);
@@ -10849,6 +10855,7 @@ export function App() {
       profiles,
       selectedObjectId: session.selectedObjectId,
       parameterScope: parameterScope.scope,
+      constraintDiagnosticObjectIds: sketchSolveDiagnosticObjectIds,
       dimensions: sketchDimensionAnnotations(
         objects,
         sketch?.constraints ?? [],
@@ -10864,7 +10871,8 @@ export function App() {
     sketchBasis,
     appSettings.sketching,
     parameterScope.scope,
-    sketchDiagnosticPoints
+    sketchDiagnosticPoints,
+    sketchSolveDiagnosticObjectIds
   ]);
 
   const selectedSketchEntity = useMemo(() => {
@@ -11130,6 +11138,7 @@ export function App() {
     status: SketchSolveStatus;
   } | null>(null);
   function setSketchSolveStatus(status: SketchSolveStatus | null) {
+    setSketchSolveDiagnosticObjectIds(status?.diagnosticObjectIds ?? []);
     setSketchSolveSnapshot(
       status
         ? {
@@ -11149,6 +11158,34 @@ export function App() {
     sketchSolveSnapshot?.sketchId === interaction.session.sketchId
       ? sketchSolveSnapshot.status
       : null;
+
+  function solveStatusFor(
+    outcome: SketchSolveOutcome,
+    sketch: SketchNode | undefined
+  ): SketchSolveStatus {
+    const failedSolve = outcome.classification === 'unsatisfied';
+    const conflictingConstraintIds = failedSolve
+      ? outcome.constraintResiduals
+          .filter(
+            ({ maxResidual }) =>
+              Number.isFinite(maxResidual) && maxResidual > 1e-10
+          )
+          .map(({ constraintId }) => String(constraintId))
+      : [];
+    return {
+      label: solveStatusLabel(outcome),
+      tone:
+        outcome.classification === 'solved'
+          ? 'ok'
+          : outcome.classification === 'underConstrained'
+            ? 'info'
+            : 'warn',
+      conflictingConstraintIds,
+      diagnosticObjectIds: failedSolve
+        ? residualConstraintObjectIds(sketch, outcome.constraintResiduals)
+        : []
+    };
+  }
   const [sketchSolving, setSketchSolving] = useState(false);
   const [sketchDimensionDraft, setSketchDimensionDraft] = useState<{
     kind: DrivingDimensionKind | 'radius';
@@ -11211,6 +11248,7 @@ export function App() {
 
   useEffect(() => {
     setSketchDiagnosticPoints([]);
+    setSketchSolveDiagnosticObjectIds([]);
     setSketchEditError(null);
   }, [doc?.version, editingSketchNode?.sketchId]);
 
@@ -11224,17 +11262,21 @@ export function App() {
         ? node.name || node.data.objectKind
         : 'entity';
     };
+    const conflicting = new Set(
+      sketchSolveStatus?.conflictingConstraintIds ?? []
+    );
     return (editingSketchNode.constraints ?? []).map(
       ({ constraintId, data }) => ({
         constraintId: String(constraintId),
         label: describeConstraint(data, nameOf),
+        conflicted: conflicting.has(String(constraintId)),
         editable:
           data.constraintKind === 'distance' ||
           data.constraintKind === 'angle' ||
           data.constraintKind === 'radius'
       })
     );
-  }, [editingSketchNode, doc]);
+  }, [editingSketchNode, doc, sketchSolveStatus]);
 
   /** The selected entity's own constraints, for the entity editor's list. */
   const selectedEntityConstraints = useMemo(() => {
@@ -11709,15 +11751,9 @@ export function App() {
         );
         return;
       }
-      setSketchSolveStatus({
-        label: solveStatusLabel(outcome),
-        tone:
-          outcome.classification === 'solved'
-            ? 'ok'
-            : outcome.classification === 'underConstrained'
-              ? 'info'
-              : 'warn'
-      });
+      setSketchSolveStatus(
+        solveStatusFor(outcome, findSketch(prospective, sketchId))
+      );
       if (!outcome.converged || outcome.rolledBack) {
         const culprits = topResidualConstraints(
           prospective,
@@ -11751,10 +11787,9 @@ export function App() {
           label
         )
       ) {
-        setSketchSolveStatus({
-          label: solveStatusLabel(outcome),
-          tone: outcome.classification === 'solved' ? 'ok' : 'info'
-        });
+        setSketchSolveStatus(
+          solveStatusFor(outcome, findSketch(prospective, sketchId))
+        );
         setStatus(
           `${spec.label} dimension ${draft.constraintId ? 'updated' : 'added'} · ${solveStatusLabel(outcome)}.`
         );
@@ -12025,15 +12060,9 @@ export function App() {
         setStatus('The sketch changed while the solver ran. Solve again.');
         return;
       }
-      setSketchSolveStatus({
-        label: solveStatusLabel(outcome),
-        tone:
-          outcome.classification === 'solved'
-            ? 'ok'
-            : outcome.classification === 'underConstrained'
-              ? 'info'
-              : 'warn'
-      });
+      setSketchSolveStatus(
+        solveStatusFor(outcome, findSketch(base, startedSketchId))
+      );
       if (!outcome.converged || outcome.rolledBack) {
         setSketchEditError(
           'Constraints did not solve. Edit or remove a conflicting constraint; no geometry was changed.'
@@ -12053,10 +12082,9 @@ export function App() {
       if (
         await commitSketchEdit(base, startedSketchId, commands, 'Solve sketch')
       ) {
-        setSketchSolveStatus({
-          label: solveStatusLabel(outcome),
-          tone: outcome.classification === 'solved' ? 'ok' : 'info'
-        });
+        setSketchSolveStatus(
+          solveStatusFor(outcome, findSketch(base, startedSketchId))
+        );
         setStatus(
           `Solved sketch · ${commands.length} ${commands.length === 1 ? 'entity' : 'entities'} updated · ${solveStatusLabel(outcome)}.`
         );
