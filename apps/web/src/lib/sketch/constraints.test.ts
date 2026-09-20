@@ -20,6 +20,7 @@ import {
   measureDrivingDimension,
   planConstraintFromSelection,
   refusePick,
+  residualConstraintObjectIds,
   topResidualConstraints,
   type PendingConstraintKind,
   type ConstraintPick
@@ -895,6 +896,39 @@ describe('topResidualConstraints', () => {
     expect(
       topResidualConstraints(withConstraints, undefined, [
         { constraintId: idA!, maxResidual: 1 }
+      ])
+    ).toEqual([]);
+  });
+
+  it('highlights only entities named by measured residuals', () => {
+    const { document, sketch, lineA, lineB } = fixture();
+    const first = commandFactories.addSketchConstraint({
+      sketchId: sketch.sketchId,
+      constraint: {
+        constraintKind: 'horizontal',
+        objectId: lineA as EntityId
+      }
+    });
+    const second = commandFactories.addSketchConstraint({
+      sketchId: sketch.sketchId,
+      constraint: { constraintKind: 'vertical', objectId: lineB as EntityId }
+    });
+    const withConstraints = second.apply(first.apply(document));
+    const stored = findSketch(withConstraints, sketch.sketchId)!;
+    const [idA, idB] = (stored.constraints ?? []).map((entry) =>
+      String(entry.constraintId)
+    );
+
+    expect(
+      residualConstraintObjectIds(stored, [
+        { constraintId: idA!, maxResidual: 0 },
+        { constraintId: idB!, maxResidual: 2 },
+        { constraintId: 'ghost', maxResidual: 99 }
+      ])
+    ).toEqual([lineB]);
+    expect(
+      residualConstraintObjectIds(stored, [
+        { constraintId: idA!, maxResidual: 1e-14 }
       ])
     ).toEqual([]);
   });
