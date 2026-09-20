@@ -319,6 +319,8 @@ export interface SketchModeState {
   parameterScope: Record<string, number>;
   /** Plane-local endpoints highlighted by Profile diagnostics on request. */
   diagnosticPoints: { x: number; y: number }[];
+  /** Solver-named entities with a measured non-zero residual. */
+  constraintDiagnosticObjectIds: string[];
   dimensions: SketchDimensionAnnotation[];
 }
 
@@ -9214,7 +9216,12 @@ export function ModelViewer({
     }
     const resolve = (value: unknown) =>
       evalParamValue(value as ParamValue, sketchMode.parameterScope) ?? 0;
-    rig.setObjects(sketchMode.objects, sketchMode.selectedObjectId, resolve);
+    rig.setObjects(
+      sketchMode.objects,
+      sketchMode.selectedObjectId,
+      resolve,
+      sketchMode.constraintDiagnosticObjectIds
+    );
     rig.setProfiles(sketchMode.profiles, true);
     rig.setDiagnostics(sketchMode.diagnosticPoints);
     try {

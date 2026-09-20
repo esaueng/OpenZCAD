@@ -1004,6 +1004,14 @@
   font-size: var(--fs-xs);
 }
 
+.sketch-constraint-list li[data-conflicted='true'] {
+  color: var(--color-error);
+}
+
+.sketch-constraint-list li[data-conflicted='true'] .sketch-constraint-edit {
+  color: var(--color-error);
+}
+
 .sketch-constraint-edit {
   min-width: 0;
   flex: 1;
