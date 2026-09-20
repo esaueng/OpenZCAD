@@ -226,7 +226,7 @@ test('previews and commits a compound STEP cap offset, then undoes, redoes and r
   await expect
     .poll(() =>
       page.evaluate(
-        () =>
+        (projectId) =>
           new Promise<number>((resolve, reject) => {
             const request = indexedDB.open('openzcad-v2');
             request.onerror = () =>
@@ -242,12 +242,19 @@ test('previews and commits a compound STEP cap offset, then undoes, redoes and r
                 reject(new Error('Could not read the saved project.'));
               };
               all.onsuccess = () => {
-                const projects = all.result as { featureOrder?: string[] }[];
+                const projects = all.result as {
+                  projectId: string;
+                  featureOrder?: string[];
+                }[];
                 db.close();
-                resolve(projects[0]?.featureOrder?.length ?? 0);
+                resolve(
+                  projects.find((project) => project.projectId === projectId)
+                    ?.featureOrder?.length ?? 0
+                );
               };
             };
-          })
+          }),
+        document.projectId
       )
     )
     .toBe(2);
