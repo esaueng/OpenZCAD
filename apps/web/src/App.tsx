@@ -2,7 +2,8 @@ import { boxPreviewProfile } from './lib/interaction/boxPreviewProfile';
 import {
   parameterMinimums,
   parameterInputError,
-  parameterBuildError
+  parameterBuildError,
+  parameterUntouchedSince
 } from './lib/parameterEdit';
 import type {
   ParameterPreviewBody,
@@ -106,6 +107,7 @@ import {
   resolveFaceAttachment,
   type FaceAttachmentCandidate
 } from '@openzcad/kernel-adapter/face-attachment';
+import type { SketchSolveOutcome } from '@openzcad/kernel-adapter/exact';
 import type {
   ArtifactKind,
   AccountDeletionScope,
@@ -171,6 +173,7 @@ import {
   measureDrivingDimension,
   planConstraintFromSelection,
   refusePick,
+  residualConstraintObjectIds,
   topResidualConstraints,
   type ConstraintPick,
   type DrivingDimensionKind
@@ -927,6 +930,7 @@ import {
   saveProjectMeasurements,
   saveProjectThumbnail,
   saveLocalProject,
+  saveLocalSaveStates,
   withMatchingLocalDerived
 } from './lib/localProjectStore';
 import { reconcileRemoteOrganizations } from './lib/projectOrganizationMirror';
@@ -1393,6 +1397,14 @@ interface PendingShaprImport {
   progress: string;
   error: string | null;
   inspection: ShaprPairInspection | null;
+}
+
+/** The document moved before a queued parameter check reached the worker. */
+class ParameterCheckStale extends Error {
+  constructor() {
+    super('The project or parameter changed during validation.');
+    this.name = 'ParameterCheckStale';
+  }
 }
 
 export function App() {
@@ -2199,6 +2211,8 @@ export function App() {
   const contextMenuActionsRef = useRef<Record<string, () => void>>({});
   const managerRef = useRef<CommandManager | null>(null);
   const parameterEditRequest = useRef(0);
+  /** The assistant patch currently landing, for edits that must follow it. */
+  const patchApplyRef = useRef<Promise<boolean> | null>(null);
   const parameterChecks = useRef(
     new LatestTask<ProjectDocument['derived']>()
   ).current;
@@ -2984,7 +2998,8 @@ export function App() {
   ) {
     edgeFormPreview.clear();
     setFeatureFormError(null);
-    if (!value || geometryBusy || !feature.bodyId || !managerRef.current) return;
+    if (!value || geometryBusy || !feature.bodyId || !managerRef.current)
+      return;
     try {
       const command = extrudeEditCommand(feature, value);
       command.validate(managerRef.current.document);
@@ -7385,12 +7400,15 @@ export function App() {
       // The builders are only reachable from here, and only for a demo that
       // has not been seeded yet — the branch above returns for every later
       // open. Fetching them now keeps them out of first paint.
-      const { buildDemoDocument } = await import('./lib/demos');
-      const document = await buildDemoDocument(
+      const { buildDemoSeed } = await import('./lib/demos');
+      const { document, saveStates } = await buildDemoSeed(
         definition,
         session?.userId ?? localUserId,
         (candidate) => geometry.syncOnce(candidate)
       );
+      // Every revision the launcher promises is stored as a save state, so
+      // Rev A and Rev B can be restored rather than listed as "not stored".
+      await saveLocalSaveStates(saveStates);
       await saveLocalProject(document);
       hydrateDocument(document);
       setCloudAvailable(false);
@@ -8748,9 +8766,15 @@ export function App() {
     }
   }
 
-  async function handleApplyPatch(
-    proposal: CadPatchProposal
-  ): Promise<boolean> {
+  function handleApplyPatch(proposal: CadPatchProposal): Promise<boolean> {
+    const run = applyPatch(proposal).finally(() => {
+      if (patchApplyRef.current === run) patchApplyRef.current = null;
+    });
+    patchApplyRef.current = run;
+    return run;
+  }
+
+  async function applyPatch(proposal: CadPatchProposal): Promise<boolean> {
     if (!ensureCanEdit('apply this AI proposal')) {
       return false;
     }
@@ -8921,9 +8945,8 @@ export function App() {
           }
         }
         progress.update({ phase: 'building', fraction: null });
-        const { createBodyFeatureIds } = await import(
-          '@openzcad/document-core'
-        );
+        const { createBodyFeatureIds } =
+          await import('@openzcad/document-core');
         const previewIds = createBodyFeatureIds();
         const previewCommand = commandFactories.importMesh({
           name: parsed.name,
@@ -10739,6 +10762,10 @@ export function App() {
       : 'New sketch';
   const parameterScopeRef = useRef(parameterScope);
   parameterScopeRef.current = parameterScope;
+  // Solver diagnostics are transient UI state. Keep the entity ids beside
+  // the solve snapshot so the viewport can colour only solver-named objects.
+  const [sketchSolveDiagnosticObjectIds, setSketchSolveDiagnosticObjectIds] =
+    useState<string[]>([]);
   const sketchDocumentRef = useRef(doc);
   sketchDocumentRef.current = doc;
   const sketchSessionNameRef = useRef(sketchSessionName);
@@ -10828,11 +10855,13 @@ export function App() {
       profiles,
       selectedObjectId: session.selectedObjectId,
       parameterScope: parameterScope.scope,
+      constraintDiagnosticObjectIds: sketchSolveDiagnosticObjectIds,
       dimensions: sketchDimensionAnnotations(
         objects,
         sketch?.constraints ?? [],
         (value) => evalParamValue(value, parameterScope.scope) ?? undefined,
-        doc.units
+        doc.units,
+        sketch?.dimensionLabelPositions
       ),
       diagnosticPoints: sketchDiagnosticPoints
     };
@@ -10842,7 +10871,8 @@ export function App() {
     sketchBasis,
     appSettings.sketching,
     parameterScope.scope,
-    sketchDiagnosticPoints
+    sketchDiagnosticPoints,
+    sketchSolveDiagnosticObjectIds
   ]);
 
   const selectedSketchEntity = useMemo(() => {
@@ -10986,9 +11016,8 @@ export function App() {
     label: string,
     objectId?: string
   ) {
-    const { checkSketchEdit, sketchEditRaceRefusal } = await import(
-      './lib/sketch/editing'
-    );
+    const { checkSketchEdit, sketchEditRaceRefusal } =
+      await import('./lib/sketch/editing');
     const derived = await checkSketchEdit(
       base,
       sketchId,
@@ -11109,6 +11138,7 @@ export function App() {
     status: SketchSolveStatus;
   } | null>(null);
   function setSketchSolveStatus(status: SketchSolveStatus | null) {
+    setSketchSolveDiagnosticObjectIds(status?.diagnosticObjectIds ?? []);
     setSketchSolveSnapshot(
       status
         ? {
@@ -11128,6 +11158,34 @@ export function App() {
     sketchSolveSnapshot?.sketchId === interaction.session.sketchId
       ? sketchSolveSnapshot.status
       : null;
+
+  function solveStatusFor(
+    outcome: SketchSolveOutcome,
+    sketch: SketchNode | undefined
+  ): SketchSolveStatus {
+    const failedSolve = outcome.classification === 'unsatisfied';
+    const conflictingConstraintIds = failedSolve
+      ? outcome.constraintResiduals
+          .filter(
+            ({ maxResidual }) =>
+              Number.isFinite(maxResidual) && maxResidual > 1e-10
+          )
+          .map(({ constraintId }) => String(constraintId))
+      : [];
+    return {
+      label: solveStatusLabel(outcome),
+      tone:
+        outcome.classification === 'solved'
+          ? 'ok'
+          : outcome.classification === 'underConstrained'
+            ? 'info'
+            : 'warn',
+      conflictingConstraintIds,
+      diagnosticObjectIds: failedSolve
+        ? residualConstraintObjectIds(sketch, outcome.constraintResiduals)
+        : []
+    };
+  }
   const [sketchSolving, setSketchSolving] = useState(false);
   const [sketchDimensionDraft, setSketchDimensionDraft] = useState<{
     kind: DrivingDimensionKind | 'radius';
@@ -11190,6 +11248,7 @@ export function App() {
 
   useEffect(() => {
     setSketchDiagnosticPoints([]);
+    setSketchSolveDiagnosticObjectIds([]);
     setSketchEditError(null);
   }, [doc?.version, editingSketchNode?.sketchId]);
 
@@ -11203,17 +11262,21 @@ export function App() {
         ? node.name || node.data.objectKind
         : 'entity';
     };
+    const conflicting = new Set(
+      sketchSolveStatus?.conflictingConstraintIds ?? []
+    );
     return (editingSketchNode.constraints ?? []).map(
       ({ constraintId, data }) => ({
         constraintId: String(constraintId),
         label: describeConstraint(data, nameOf),
+        conflicted: conflicting.has(String(constraintId)),
         editable:
           data.constraintKind === 'distance' ||
           data.constraintKind === 'angle' ||
           data.constraintKind === 'radius'
       })
     );
-  }, [editingSketchNode, doc]);
+  }, [editingSketchNode, doc, sketchSolveStatus]);
 
   /** The selected entity's own constraints, for the entity editor's list. */
   const selectedEntityConstraints = useMemo(() => {
@@ -11554,6 +11617,36 @@ export function App() {
     setStatus(`Edit ${data.constraintKind} driving value.`);
   }
 
+  function handleMoveSketchDimension(
+    constraintId: string,
+    offset: { x: number; y: number }
+  ) {
+    const base = managerRef.current?.document;
+    const session = interactionRef.current;
+    if (!base || session.mode !== 'sketch' || !session.session.sketchId) {
+      return;
+    }
+    const sketchId = session.session.sketchId as SketchId;
+    const sketch = findSketch(base, sketchId);
+    if (
+      !sketch?.constraints?.some(
+        (constraint) => String(constraint.constraintId) === constraintId
+      )
+    ) {
+      return;
+    }
+    executeCommand(
+      commandFactories.setSketchDimensionLabelPosition(
+        {
+          sketchId,
+          constraintId: toSketchConstraintId(constraintId),
+          position: offset
+        },
+        'Move driving dimension label'
+      )
+    );
+  }
+
   async function handleCommitSketchDimension(
     draft: NonNullable<typeof sketchDimensionDraft>,
     evaluatedValue: number,
@@ -11658,15 +11751,9 @@ export function App() {
         );
         return;
       }
-      setSketchSolveStatus({
-        label: solveStatusLabel(outcome),
-        tone:
-          outcome.classification === 'solved'
-            ? 'ok'
-            : outcome.classification === 'underConstrained'
-              ? 'info'
-              : 'warn'
-      });
+      setSketchSolveStatus(
+        solveStatusFor(outcome, findSketch(prospective, sketchId))
+      );
       if (!outcome.converged || outcome.rolledBack) {
         const culprits = topResidualConstraints(
           prospective,
@@ -11700,10 +11787,9 @@ export function App() {
           label
         )
       ) {
-        setSketchSolveStatus({
-          label: solveStatusLabel(outcome),
-          tone: outcome.classification === 'solved' ? 'ok' : 'info'
-        });
+        setSketchSolveStatus(
+          solveStatusFor(outcome, findSketch(prospective, sketchId))
+        );
         setStatus(
           `${spec.label} dimension ${draft.constraintId ? 'updated' : 'added'} · ${solveStatusLabel(outcome)}.`
         );
@@ -11752,6 +11838,17 @@ export function App() {
     }
   }
 
+  /**
+   * Validates one parameter edit against the document it was typed into and
+   * applies it. When that document moves under the check — an assistant patch
+   * landing its own preflight, an undo, a collaborator's edit — the edit is
+   * checked again against the live document instead of being refused, as long
+   * as the named parameter still reads as it did: then nothing but this edit
+   * would change it, and "try again" would only ask the user to retype what
+   * they typed. A parameter someone else changed meanwhile is refused for
+   * real. An assistant patch already landing is awaited first, since its
+   * commit is what the edit must be checked against.
+   */
   async function handleSetParameter(
     name: string,
     expression: string
@@ -11761,12 +11858,6 @@ export function App() {
       return 'Parameter editing is unavailable.';
     }
     const request = ++parameterEditRequest.current;
-    const base = manager.document;
-    const current = () =>
-      parameterEditRequest.current === request &&
-      managerRef.current === manager &&
-      manager.document.projectId === base.projectId &&
-      manager.document.version === base.version;
     const refuse = (message: string) => {
       if (
         parameterEditRequest.current === request &&
@@ -11775,9 +11866,23 @@ export function App() {
         setStatus(message);
       return message;
     };
-    setParameterEditPending(true);
-    setParameterCandidate(null);
-    try {
+    const moved =
+      'The project or parameter changed during validation. Try again.';
+    type Attempt =
+      | { kind: 'applied' }
+      | { kind: 'refused'; message: string }
+      | { kind: 'moved' };
+    const attempt = async (base: ProjectDocument): Promise<Attempt> => {
+      const sameOwner = () =>
+        parameterEditRequest.current === request &&
+        managerRef.current === manager &&
+        manager.document.projectId === base.projectId;
+      const current = () =>
+        sameOwner() && manager.document.version === base.version;
+      // Only a version move on the same project is worth re-checking; a newer
+      // edit, a replaced manager or another project is a refusal.
+      const stale = (): Attempt =>
+        sameOwner() ? { kind: 'moved' } : { kind: 'refused', message: moved };
       const parameterCommand = commandFactories.setParameter({
         name,
         expression
@@ -11785,7 +11890,7 @@ export function App() {
       parameterCommand.validate(base);
       let prospective = parameterCommand.apply(base);
       const inputError = parameterInputError(base, prospective);
-      if (inputError) return refuse(inputError);
+      if (inputError) return { kind: 'refused', message: inputError };
       const beforeScope = getParameterScope(base).scope;
       const afterScope = getParameterScope(prospective).scope;
       const constrainedSketches = listNodesByKind(prospective, 'sketch').filter(
@@ -11812,12 +11917,12 @@ export function App() {
           prospective,
           sketch.sketchId
         );
-        if (!current())
-          return refuse(
-            'The project or parameter changed during validation. Try again.'
-          );
+        if (!current()) return stale();
         if (!outcome.converged || outcome.rolledBack) {
-          return refuse(`${sketch.name} is ${solveStatusLabel(outcome)}.`);
+          return {
+            kind: 'refused',
+            message: `${sketch.name} is ${solveStatusLabel(outcome)}.`
+          };
         }
         const solved = solvedSketchCommands(
           prospective,
@@ -11833,19 +11938,19 @@ export function App() {
       // Keep the live document, history and last valid geometry untouched while
       // the worker checks every dependent feature, including the final union.
       setParameterCandidate({ base, document: prospective });
-      const derived = await parameterChecks.request(() => {
-        if (!current())
-          return Promise.reject(
-            new Error('The project or parameter changed during validation.')
-          );
-        return geometry.syncOnce(prospective);
-      });
-      if (!current())
-        return refuse(
-          'The project or parameter changed during validation. Try again.'
-        );
+      let derived: ProjectDocument['derived'];
+      try {
+        derived = await parameterChecks.request(() => {
+          if (!current()) return Promise.reject(new ParameterCheckStale());
+          return geometry.syncOnce(prospective);
+        });
+      } catch (error) {
+        if (error instanceof ParameterCheckStale) return stale();
+        throw error;
+      }
+      if (!current()) return stale();
       const buildError = parameterBuildError(base, derived);
-      if (buildError) return refuse(buildError);
+      if (buildError) return { kind: 'refused', message: buildError };
       if (
         !executeTransaction(
           `Set parameter ${name}`,
@@ -11854,7 +11959,10 @@ export function App() {
           'parameters'
         )
       ) {
-        return refuse('The parameter could not be applied.');
+        return {
+          kind: 'refused',
+          message: 'The parameter could not be applied.'
+        };
       }
       const toggle = listParameters(prospective).find(
         (p) => p.name === name
@@ -11867,7 +11975,27 @@ export function App() {
             )
         );
       setStatus(`Parameter ${name} updated.`);
-      return null;
+      return { kind: 'applied' };
+    };
+    setParameterEditPending(true);
+    setParameterCandidate(null);
+    try {
+      if (patchApplyRef.current) {
+        setStatus(`Checking ${name}…`);
+        await patchApplyRef.current;
+      }
+      let base = manager.document;
+      // Bounded: a document that keeps moving is being edited by someone.
+      for (let rebase = 0; ; rebase += 1) {
+        const outcome = await attempt(base);
+        if (outcome.kind === 'applied') return null;
+        if (outcome.kind === 'refused') return refuse(outcome.message);
+        const live = manager.document;
+        if (rebase >= 2 || !parameterUntouchedSince(base, live, name)) {
+          return refuse(moved);
+        }
+        base = live;
+      }
     } catch (error) {
       return refuse(
         errorMessage(error, `Parameter ${name} could not be updated.`)
@@ -11932,15 +12060,9 @@ export function App() {
         setStatus('The sketch changed while the solver ran. Solve again.');
         return;
       }
-      setSketchSolveStatus({
-        label: solveStatusLabel(outcome),
-        tone:
-          outcome.classification === 'solved'
-            ? 'ok'
-            : outcome.classification === 'underConstrained'
-              ? 'info'
-              : 'warn'
-      });
+      setSketchSolveStatus(
+        solveStatusFor(outcome, findSketch(base, startedSketchId))
+      );
       if (!outcome.converged || outcome.rolledBack) {
         setSketchEditError(
           'Constraints did not solve. Edit or remove a conflicting constraint; no geometry was changed.'
@@ -11960,10 +12082,9 @@ export function App() {
       if (
         await commitSketchEdit(base, startedSketchId, commands, 'Solve sketch')
       ) {
-        setSketchSolveStatus({
-          label: solveStatusLabel(outcome),
-          tone: outcome.classification === 'solved' ? 'ok' : 'info'
-        });
+        setSketchSolveStatus(
+          solveStatusFor(outcome, findSketch(base, startedSketchId))
+        );
         setStatus(
           `Solved sketch · ${commands.length} ${commands.length === 1 ? 'entity' : 'entities'} updated · ${solveStatusLabel(outcome)}.`
         );
@@ -14800,6 +14921,15 @@ export function App() {
       }
 
       if (interaction.mode === 'sketch' && event.key !== 'Escape') {
+        // The sketch profile status promises that E starts the same extrude
+        // flow as the rail. Handle it before the sketch-tool shortcuts, whose
+        // early return otherwise prevents the global E shortcut from seeing
+        // this key while a sketch is active.
+        if (event.key.toLowerCase() === 'e') {
+          event.preventDefault();
+          startExtrude(interaction.session.sketchId as SketchId);
+          return;
+        }
         if (
           (event.key === 'Delete' || event.key === 'Backspace') &&
           interaction.session.selectedObjectId
@@ -16432,6 +16562,7 @@ export function App() {
             sketchMode={modelingLocked ? null : sketchModeState}
             onSketchCommit={handleSketchCommit}
             onEditSketchDimension={handleEditSketchDimension}
+            onMoveSketchDimension={handleMoveSketchDimension}
             onSketchDrawingChange={(drawing) =>
               dispatchInteraction({ type: 'sketch-drawing', drawing })
             }

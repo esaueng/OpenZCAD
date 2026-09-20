@@ -168,3 +168,34 @@ test('undo inside a text field edits the text, not the document', async ({
   await expect(page.getByRole('contentinfo')).not.toContainText(/Undo /);
   await expectBodyCount(page, 1);
 });
+
+test('a seeded demo stores every revision it promises, and restores one', async ({
+  page
+}) => {
+  // ZCAD-002: the launcher walks a part through revisions A → C, but only the
+  // final save state used to be stored, so Rev A and Rev B read "not stored".
+  test.setTimeout(120_000);
+  await stubApi(page);
+  await page.goto('/');
+  await page
+    .getByRole('button', { name: /^Open demo: Mounting Bracket/ })
+    .click();
+  await expectBodyCount(page, 1);
+  await expect(page.getByText('not stored')).toHaveCount(0);
+  await expect(
+    page.getByRole('button', { name: 'Restore Rev A — L-bracket blank' })
+  ).toBeVisible();
+  await expect(
+    page.getByRole('button', { name: 'Restore Rev B — Boss + holes' })
+  ).toBeVisible();
+  await page
+    .getByRole('button', { name: 'Restore Rev A — L-bracket blank' })
+    .click();
+  await expect(
+    page.locator('.feature-row-main', { hasText: 'Union L bracket' })
+  ).toBeVisible({ timeout: 60_000 });
+  await expect(
+    page.locator('.feature-row-main', { hasText: 'Boss' })
+  ).toHaveCount(0);
+  await expectBodyCount(page, 1);
+});
