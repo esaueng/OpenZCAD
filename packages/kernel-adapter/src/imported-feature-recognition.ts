@@ -1063,11 +1063,15 @@ function recognizePocket(
         `Pocket wall ${wallFace.id} has an extra or missing intersection.`
       );
     }
+    // The rim where a wall meets the opening is a 90-degree outer edge in
+    // local material angle — the same configuration as any outer box edge,
+    // which the live query reports as convex. Only the floor/wall and
+    // wall/wall junctions wrap material past 180 degrees and read concave.
     requireLink(
       context,
       wallFace.id,
       openings[0]!.faceId,
-      'concave',
+      'convex',
       'line',
       false
     );
