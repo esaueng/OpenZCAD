@@ -6,7 +6,7 @@ import {
   type ExtrudeInferenceBody,
   type ExtrudeOperationInference,
   type ExtrudeUnionMeasurement
-} from '@openzcad/kernel-adapter';
+} from '@openzcad/kernel-adapter/extrude-inference';
 import type { BodyId, ProjectDocument } from '@openzcad/shared';
 
 type DerivedState = ProjectDocument['derived'];

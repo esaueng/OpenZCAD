@@ -1224,20 +1224,26 @@ describe('exact kernel adapter', { timeout: 30_000 }, () => {
     expect(front?.reference?.lineageName).toBe(
       'boolean.face.operand.0.primitive.box.face.y-min'
     );
-    // Edges the kernel's boolean evolution calls `preserved`, and whose exact
-    // witness is unchanged, now keep their operand's name (K05). Both plates
-    // stand clear of the fuse at one end, so the base's four bottom edges and
-    // the wall's four top edges survive; everything the fuse touched, and
-    // everything it declined to trace, stays hash-only.
+    // Edges the kernel's boolean evolution calls `preserved` or `modified`,
+    // and whose exact witness is unchanged, keep their operand's name (K05).
+    // Both plates stand clear of the fuse at one end, so the base's four
+    // bottom edges and the wall's four top edges survive as `preserved`. The
+    // base's two front vertical corners and its top front edge come back as
+    // `modified` — the side faces next to them were re-trimmed — with their
+    // geometry untouched, so they carry too. Everything the fuse actually
+    // changed, and everything it declined to trace, stays hash-only.
     const namedEdges = (body?.topology?.edges ?? [])
       .map((edge) => edge.reference?.lineageName)
       .filter((name): name is string => name !== undefined)
       .sort();
     expect(namedEdges).toEqual([
       'boolean.edge.operand.0.primitive.box.edge.x.y-max.z-min',
+      'boolean.edge.operand.0.primitive.box.edge.x.y-min.z-max',
       'boolean.edge.operand.0.primitive.box.edge.x.y-min.z-min',
       'boolean.edge.operand.0.primitive.box.edge.y.x-max.z-min',
       'boolean.edge.operand.0.primitive.box.edge.y.x-min.z-min',
+      'boolean.edge.operand.0.primitive.box.edge.z.x-max.y-min',
+      'boolean.edge.operand.0.primitive.box.edge.z.x-min.y-min',
       'boolean.edge.operand.1.primitive.box.edge.x.y-max.z-max',
       'boolean.edge.operand.1.primitive.box.edge.x.y-min.z-max',
       'boolean.edge.operand.1.primitive.box.edge.y.x-max.z-max',
@@ -2165,7 +2171,93 @@ describe('exact kernel adapter', { timeout: 30_000 }, () => {
     });
   });
 
-  it('leaves a bored body exact when face offset falls back to facets', async () => {
+  it('moves a blend-bounded face and rebuilds its rounded neighbors exactly', async () => {
+    const roundedBlock = async (depth: number, name: string) => {
+      const base = addPrimitiveFeature(
+        createProjectDocument(name, toUserId('user_exact')),
+        {
+          name: 'Block',
+          primitiveKind: 'box',
+          dimensions: { width: 40, height: 18, depth }
+        }
+      );
+      const baseBody = Object.values(
+        (await adapter.syncDocument(base)).bodyRepresentations
+      )[0]!;
+      const filleted = filletEdges(base, {
+        name: 'Rounded edges',
+        targetBodyId: base.bodyOrder[0]!,
+        edgeHashes: baseBody.topology!.edges.map((edge) => edge.hash),
+        size: 2
+      }).document;
+      const bodyId = filleted.bodyOrder.at(-1)!;
+      const derived = await adapter.syncDocument(filleted);
+      expect(derived.warnings).toEqual([]);
+      return {
+        document: filleted,
+        bodyId,
+        body: derived.bodyRepresentations[bodyId]!
+      };
+    };
+
+    // Distilled from Tiny-Fox-copy: expanding only the trimmed planar patch
+    // used to add a prism inside the rounded boundary and leave the blend rim
+    // behind. The intended edit moves the support and rebuilds its incident
+    // analytic blend, which is independently reproduced here by changing the
+    // source dimension before applying the same radius.
+    const source = await roundedBlock(24, 'Blend-aware face move');
+    const top = source.body.topology!.faces.find(
+      (face) =>
+        face.geometry?.surfaceType === 'plane' &&
+        (face.geometry.normal?.z ?? 0) > 0.99 &&
+        Math.abs(face.geometry.center.z - 24) < 1e-6
+    );
+    expect(top).toBeTruthy();
+
+    const edited = directEditBody(source.document, {
+      name: 'Expand rounded top',
+      targetBodyId: source.bodyId,
+      operation: {
+        kind: 'offset-face',
+        faceHash: top!.hash,
+        ...(top!.reference ? { faceReference: top!.reference } : {}),
+        sourceSurfaceType: 'plane',
+        sourceArea: top!.geometry!.area,
+        sourceCenter: top!.geometry!.center,
+        sourceNormal: top!.geometry!.normal!,
+        offset: 5
+      }
+    }).document;
+    const actual = await adapter.syncDocument(edited);
+    const actualBody = actual.bodyRepresentations[source.bodyId]!;
+    const oracle = await roundedBlock(29, 'Blend-aware face move oracle');
+    const surfaceCensus = (body: BodyRepresentation) =>
+      body.topology!.faces.reduce<Record<string, number>>((counts, face) => {
+        const type = face.geometry?.surfaceType ?? 'unknown';
+        counts[type] = (counts[type] ?? 0) + 1;
+        return counts;
+      }, {});
+
+    expect(actual.warnings).toEqual([]);
+    expect(actualBody.volume).toBeCloseTo(oracle.body.volume, 5);
+    for (const bound of ['min', 'max'] as const) {
+      for (const axis of ['x', 'y', 'z'] as const) {
+        expect(actualBody.bbox[bound][axis]).toBeCloseTo(
+          oracle.body.bbox[bound][axis],
+          9
+        );
+      }
+    }
+    expect(actualBody.faceCount).toBe(oracle.body.faceCount);
+    expect(surfaceCensus(actualBody)).toEqual(surfaceCensus(oracle.body));
+    expect(surfaceCensus(actualBody)).toMatchObject({
+      plane: 6,
+      cylinder: 12,
+      sphere: 8
+    });
+  }, 60_000);
+
+  it('leaves a bored body exact when face offset loses curved surfaces', async () => {
     const withOuter = addPrimitiveFeature(
       createProjectDocument('Blind bore offset', toUserId('user_exact')),
       {
@@ -2227,12 +2319,12 @@ describe('exact kernel adapter', { timeout: 30_000 }, () => {
 
     // Fault injection pins the reported kernel failure: a valid result that
     // silently replaces both cylinders with planar faces.
-    const pushPull = vi
-      .spyOn(RemusKernel.prototype, 'pushPullFace')
+    const moveFaces = vi
+      .spyOn(RemusKernel.prototype, 'moveFaces')
       .mockImplementation(function (
         this: RemusKernel,
         _solid: number,
-        _face: number,
+        _faces: Uint32Array,
         _distance: number
       ) {
         return this.makeBox(40, 40, 50);
@@ -2241,7 +2333,7 @@ describe('exact kernel adapter', { timeout: 30_000 }, () => {
     try {
       after = await adapter.syncDocument(edited);
     } finally {
-      pushPull.mockRestore();
+      moveFaces.mockRestore();
     }
 
     expect(after.warnings).toContain(
@@ -3896,14 +3988,14 @@ describe('exact kernel adapter', { timeout: 30_000 }, () => {
       })
     );
     const overcut = await adapter.syncDocument(manager.document);
-    // Z3 pin. OpenCascade answered this with a generic "Offsetting the
-    // selected face does not produce a valid solid."; Remus names the
-    // boolean that came back empty. Both fail closed, which is the property
-    // that matters — an overcut must never yield a body.
-    expect(overcut.warnings).toEqual([
-      'Feature "Sink past the floor": empty result: Cut with target fully ' +
-        'contained in tool'
-    ]);
+    // The blend-aware move refuses before construction once the swept face
+    // reaches a nonadjacent support. The important contract is fail-closed:
+    // an overcut must never yield a body or fall back to the face prism.
+    expect(overcut.warnings).toHaveLength(1);
+    expect(overcut.warnings[0]).toContain('move-face would change topology');
+    expect(overcut.warnings[0]).toContain(
+      'swept face reaches nonadjacent face'
+    );
     expect(overcut.bodyRepresentations[importedBodyId]?.volume).toBeCloseTo(
       10 * 20 * 25,
       4
