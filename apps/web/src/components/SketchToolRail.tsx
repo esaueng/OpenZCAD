@@ -506,7 +506,6 @@ export function SketchToolRail({
                       ({ constraintId, label, editable, conflicted }) => (
                         <li
                           key={constraintId}
-                          className={conflicted ? 'conflicted' : undefined}
                           data-conflicted={conflicted ? 'true' : undefined}
                           aria-label={
                             conflicted
