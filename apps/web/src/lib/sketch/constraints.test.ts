@@ -928,8 +928,13 @@ describe('topResidualConstraints', () => {
     ).toEqual([lineB]);
     expect(
       residualConstraintObjectIds(stored, [
-        { constraintId: idA!, maxResidual: 1e-14 }
+        { constraintId: idA!, maxResidual: 1e-10 }
       ])
     ).toEqual([]);
+    expect(
+      residualConstraintObjectIds(stored, [
+        { constraintId: idA!, maxResidual: 1e-9 }
+      ])
+    ).toEqual([lineA]);
   });
 });
