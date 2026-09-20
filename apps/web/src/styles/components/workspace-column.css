@@ -780,12 +780,14 @@
 }
 
 /* The bottom-right corner holds the cube with undo/redo and, under it, the
-   scale bar; clear of the assistant tab at mid-height and the dock on top. */
+   scale bar; clear of the assistant tab at mid-height and the dock on top.
+   The cube box hugs its silhouette, so the few pixels the triad tips
+   overhang need room below rather than sitting flush on the edge. */
 .workspace.column-layout .viewer-rail-stack,
 .workspace.column-layout .viewer-area.has-inspector .viewer-rail-stack {
   top: auto;
   right: 2px;
-  bottom: 0;
+  bottom: 4px;
 }
 
 /* The sketch grid readout used to sit on the orientation cube: both were
@@ -853,6 +855,17 @@
 }
 
 /* ── Narrow windows ── */
+
+/* The dock outgrows its lane below ~1000px and left-anchors at the column
+   edge, so its right end (about 848px in from the left) runs under the cube
+   once the window is narrower than that plus the 132px widget. Step the cube
+   up above the dock there, the way the phone layout already does. */
+@media (max-width: 960px) {
+  .workspace.column-layout .viewer-rail-stack,
+  .workspace.column-layout .viewer-area.has-inspector .viewer-rail-stack {
+    bottom: 52px;
+  }
+}
 
 /* Same steps as the docked sidebar: labels go first, then width. */
 @media (max-width: 1120px) {
