@@ -265,4 +265,34 @@ describe('SketchToolRail', () => {
       ).toBeEnabled();
     }
   });
+
+  it('marks solver-named constraints as actionable conflicts', async () => {
+    const user = userEvent.setup();
+    renderRail({
+      constraints: [
+        {
+          constraintId: 'scon_1',
+          label: 'Distance · Line 1',
+          editable: true,
+          conflicted: true
+        },
+        { constraintId: 'scon_2', label: 'Vertical · Line 2', editable: false }
+      ]
+    });
+    await user.click(screen.getByRole('button', { name: /Sketch palette/ }));
+    const conflictingRow = screen
+      .getByRole('button', { name: 'Edit constraint: Distance · Line 1' })
+      .closest('li');
+    expect(conflictingRow).toHaveAttribute('data-conflicted', 'true');
+    expect(conflictingRow).toHaveAttribute(
+      'aria-label',
+      'Distance · Line 1 · solver residual; edit or delete this constraint'
+    );
+    expect(
+      screen.getByRole('button', { name: 'Edit constraint: Distance · Line 1' })
+    ).toHaveAttribute('data-conflicted', 'true');
+    expect(
+      screen.getByText('Vertical · Line 2').closest('li')
+    ).not.toHaveAttribute('data-conflicted');
+  });
 });
