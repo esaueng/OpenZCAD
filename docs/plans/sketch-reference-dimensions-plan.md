@@ -52,7 +52,7 @@ must follow the sketch through save/reopen and command replay.
 ## Proposed additive document shape
 
 The implementation should add an optional field to `SketchNode` in the shared
-S01/S02/S04/R01 v15-to-v16 envelope:
+S01/S02/S04/R01 shared additive envelope selected from the merged base:
 
 ```ts
 type SketchReferenceDimensionData =
@@ -223,16 +223,16 @@ owned by a sketch and are evaluated at that sketch's existing history position.
 
 S02 coordinates with the active designs as follows:
 
-* **S01 / PR #381, head `6bc19e48`:** keep `dimensionLabelPositions` as
+* **S01 / PR #381, head `269009c2`:** keep `dimensionLabelPositions` as
   plane-local offsets. Driving rows continue to use `constraintId`; reference
   rows use `annotationId` through an explicit tagged placement input. A datum
   move changes the world projection of both rows while preserving local offset
   and driving/reference identity.
-* **S03 / PR #383, head `24ed4ccd`:** reference rows are not solver rows. They
+* **S03 / PR #383, head `adb3827c`:** reference rows are not solver rows. They
   do not participate in residual ranking, conflict refusal, DOF, or entity
   highlighting. A failed reference measurement leaves S03's solver result
   unchanged.
-* **S04 / PR #379, head `06fff2d6` (latest reviewed design head):** use the
+* **S04 / PR #379, head `614b0b8` (latest reviewed design head):** use the
   shared point/curve reference union and stable composite topology tokens once
   available. Do not add a second composite-ref encoding in S02 or change
   `constraintId` semantics.
@@ -241,11 +241,13 @@ S02 coordinates with the active designs as follows:
   the world annotation unavailable while preserving the local target record;
   no display frame or last-good frame is used as an exact replacement.
 
-All four designs must join one additive v15-to-v16 normalization envelope
-selected from the merged base. The envelope validates optional S01 label
-positions, S02 reference dimensions, S04 tagged refs, and R01 datum/history
-fields together, with one newer-schema refusal and shared legacy fixtures.
-S02 itself does not edit `PROJECT_DOCUMENT_SCHEMA_VERSION`.
+All four designs must join one additive normalization envelope selected from
+the actual merged S01/S04/R01 base. S01 label placement remains optional and
+additive on the current v15 document. S02 reference dimensions, S04 tagged
+refs, and R01 datum/history fields are future fields that must be introduced
+under that one coordinated next schema envelope, with one newer-schema refusal
+and shared legacy fixtures. No design reserves or bumps a schema version
+independently. S02 itself does not edit `PROJECT_DOCUMENT_SCHEMA_VERSION`.
 
 ## Bounded implementation slices
 
@@ -255,7 +257,7 @@ S02 itself does not edit `PROJECT_DOCUMENT_SCHEMA_VERSION`.
    cases, expression resolution, units, finite bounds, and named failures.
 2. **S02-B — commands and persistence.** Add add/delete/placement commands,
    dependency checks, undo/redo, command replay, normalizer, and backup/cloud
-   fixtures within the shared v16 envelope. Test save/reopen and identity
+   fixtures within the shared envelope selected from the merged base. Test save/reopen and identity
    preservation after parameter edits.
 3. **S02-C — distinct rendering and accessibility.** Reuse the existing
    dimension graphic machinery, but render reference styling and “Reference”
