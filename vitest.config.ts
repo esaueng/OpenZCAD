@@ -73,6 +73,12 @@ export default defineConfig({
           import.meta.url
         )
       ),
+      '@openzcad/kernel-adapter/extrude-inference': fileURLToPath(
+        new URL(
+          './packages/kernel-adapter/src/extrude-inference.ts',
+          import.meta.url
+        )
+      ),
       '@openzcad/ai-contracts/auto-parameterize': fileURLToPath(
         new URL(
           './packages/ai-contracts/src/auto-parameterize.ts',

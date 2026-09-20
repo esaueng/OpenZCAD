@@ -137,11 +137,13 @@ import {
   configureParameterToggle,
   setParameterDescription,
   setParameterExposed,
+  setSketchDimensionLabelPosition,
   shellBody,
   type ShellInput,
   type ShaprGuidedImportInput,
   type SketchConstraintAddInput,
   type SketchConstraintDeleteInput,
+  type SketchDimensionLabelPositionInput,
   type SketchInput,
   type SketchObjectAddInput,
   type SketchObjectDeleteInput,
@@ -187,6 +189,7 @@ export type CommandKind =
   | 'sketch.object.delete'
   | 'sketch.constraint.add'
   | 'sketch.constraint.delete'
+  | 'sketch.constraint.label-position'
   | 'feature.extrude'
   | 'feature.revolve'
   | 'feature.loft'
@@ -242,6 +245,7 @@ export type AnyCommand =
   | CommandDefinition<SketchObjectDeleteInput>
   | CommandDefinition<SketchConstraintAddInput>
   | CommandDefinition<SketchConstraintDeleteInput>
+  | CommandDefinition<SketchDimensionLabelPositionInput>
   | CommandDefinition<ExtrudeInput>
   | CommandDefinition<RevolveInput>
   | CommandDefinition<LoftInput>
@@ -1145,6 +1149,32 @@ export const commandFactories = {
       (document) => {
         if (!findSketch(document, payload.sketchId)) {
           throw new Error(`Sketch ${payload.sketchId} not found.`);
+        }
+      }
+    );
+  },
+  setSketchDimensionLabelPosition(
+    payload: SketchDimensionLabelPositionInput,
+    label = 'Move driving dimension label'
+  ): CommandDefinition<SketchDimensionLabelPositionInput> {
+    return makeCommand(
+      'sketch.constraint.label-position',
+      label,
+      payload,
+      (document) => setSketchDimensionLabelPosition(document, payload),
+      (document) => {
+        const sketch = findSketch(document, payload.sketchId);
+        if (!sketch) {
+          throw new Error(`Sketch ${payload.sketchId} not found.`);
+        }
+        if (
+          !sketch.constraints?.some(
+            (constraint) => constraint.constraintId === payload.constraintId
+          )
+        ) {
+          throw new Error(
+            `Sketch ${payload.sketchId} has no constraint ${payload.constraintId}.`
+          );
         }
       }
     );
@@ -3048,6 +3078,12 @@ export function replayCommands(
         next = deleteSketchConstraint(
           next,
           command.payload as SketchConstraintDeleteInput
+        );
+        break;
+      case 'sketch.constraint.label-position':
+        next = setSketchDimensionLabelPosition(
+          next,
+          command.payload as SketchDimensionLabelPositionInput
         );
         break;
       case 'feature.extrude':

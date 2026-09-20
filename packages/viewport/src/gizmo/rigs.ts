@@ -1,7 +1,7 @@
 import * as THREE from 'three';
 import {
-  CHIP_ANCHOR_LOCAL_DISTANCE,
   HANDLE_COLOR,
+  HANDLE_RENDER_ORDER,
   addHandleParts,
   createHitMesh,
   disposeRigGroups,
@@ -10,15 +10,16 @@ import {
   type DragRig,
   type HandleVec3
 } from './DragRig';
-import { createDimensionGraphic } from '../annotation/dimensionGraphic';
+import {
+  DIMENSION_LINE_COLOR,
+  createDimensionGraphic
+} from '../annotation/dimensionGraphic';
 import { ANALYTIC_GHOST_COLOR } from '../selection/analyticCylinderGhost';
 import { easeToward, hasSettled } from '../motion';
 import { SELECTION_SEMANTICS } from '../render/semantics';
 
-const ARROW_SHAFT_RADIUS = 0.05;
-const ARROW_HEAD_RADIUS = 0.14;
-const ARROW_HEAD_LENGTH = 0.3;
-const ARROW_HALF_LENGTH = 0.75;
+const ARROW_HEAD_LENGTH = 0.22;
+const ARROW_HALF_LENGTH = 0.5;
 const ARROW_HIT_RADIUS = 0.34;
 const GHOST_OPACITY = 0.28;
 export const HANDLE_WARNING_COLOR = SELECTION_SEMANTICS.handle.invalid;
@@ -88,39 +89,116 @@ function createRigPresence(roots: readonly THREE.Object3D[]) {
     hotness(): number {
       return hot;
     },
-    /** Re-reads base opacities after a material's own opacity changed. */
+    /**
+     * Re-reads a material's base opacity and applies it at the current
+     * presence at once, so a change made between animation frames shows.
+     */
     rebase(material: THREE.Material, opacity: number) {
       materials.set(material, opacity);
+      material.opacity = opacity * presence;
     }
   };
 }
 
+const PIN_HALO_OPACITY = 0.16;
 /**
- * The shared drag-arrow affordance: a double-headed arrow centered on the
- * pick point, saying "this adjusts in either direction".
+ * How far short of the handle's centre a dimension line stops, in rig
+ * units: the arrow's half-length plus a little air, so the line's own white
+ * head never sits under the blue arrow.
  */
-function doubleArrowParts(kind: string): THREE.Mesh[] {
-  const solid = handleMaterial();
+const DIMENSION_CLEARANCE = ARROW_HALF_LENGTH + 0.18;
+/** Solid arrow proportions, in rig units the viewer rescales per frame. */
+const PIN_SHAFT_RADIUS = 0.05;
+const PIN_HEAD_RADIUS = 0.17;
+/** The ring lying in the face plane around the pick point. */
+const PIN_RING_INNER = 0.13;
+const PIN_RING_OUTER = 0.17;
+const PIN_RING_OPACITY = 0.95;
+/**
+ * The ring fades in as the view turns to look down the normal: below this
+ * much of the normal lying across the screen it is fully shown, and it is
+ * gone once twice this much lies across.
+ */
+const PIN_RING_FADE_START = 0.25;
+
+/** The lit lavender every handle shares; shading does the outlining. */
+function pinMaterial(): THREE.MeshStandardMaterial {
+  return new THREE.MeshStandardMaterial({
+    color: HANDLE_COLOR,
+    emissive: HANDLE_COLOR,
+    emissiveIntensity: 0.18,
+    roughness: 0.55,
+    metalness: 0.05,
+    transparent: true,
+    opacity: 1,
+    depthTest: false
+  });
+}
+
+/**
+ * The pin: a solid double-headed arrow standing on the face normal — a
+ * shaft with a cone at each end, lit by the scene so it reads as an object
+ * from any angle without an outline — and a ring lying in the face plane
+ * that fades in as the view turns to look down the normal, where the arrow
+ * is only a cone tip.
+ *
+ * It draws over the model (no depth test), so its three solids are ordered
+ * by distance to the camera every frame (`orderByDepth`): the far cone must
+ * not paint over the near end of the shaft.
+ */
+function solidPinParts(kind: string): {
+  arrow: THREE.Mesh[];
+  /** The shaft and the two cones, for per-frame depth ordering. */
+  solids: THREE.Mesh[];
+  halo: THREE.Mesh<THREE.BufferGeometry, THREE.MeshBasicMaterial>;
+  ringMaterial: THREE.MeshBasicMaterial;
+  hit: THREE.Mesh;
+} {
+  const material = pinMaterial();
+  const shaftLength = 2 * (ARROW_HALF_LENGTH - ARROW_HEAD_LENGTH);
   const shaft = new THREE.Mesh(
     new THREE.CylinderGeometry(
-      ARROW_SHAFT_RADIUS,
-      ARROW_SHAFT_RADIUS,
-      2 * (ARROW_HALF_LENGTH - ARROW_HEAD_LENGTH),
-      12
+      PIN_SHAFT_RADIUS,
+      PIN_SHAFT_RADIUS,
+      shaftLength,
+      24
     ),
-    solid
+    material
   );
   const headOut = new THREE.Mesh(
-    new THREE.ConeGeometry(ARROW_HEAD_RADIUS, ARROW_HEAD_LENGTH, 16),
-    solid
+    new THREE.ConeGeometry(PIN_HEAD_RADIUS, ARROW_HEAD_LENGTH, 32),
+    material
   );
   headOut.position.y = ARROW_HALF_LENGTH - ARROW_HEAD_LENGTH / 2;
   const headIn = new THREE.Mesh(
-    new THREE.ConeGeometry(ARROW_HEAD_RADIUS, ARROW_HEAD_LENGTH, 16),
-    solid
+    new THREE.ConeGeometry(PIN_HEAD_RADIUS, ARROW_HEAD_LENGTH, 32),
+    material
   );
   headIn.rotation.z = Math.PI;
   headIn.position.y = -(ARROW_HALF_LENGTH - ARROW_HEAD_LENGTH / 2);
+  // Local +Y is the normal, so the face plane is local XZ. The ring has its
+  // own material because it fades with the view angle while the arrow does
+  // not; it starts hidden and the rig's `orient` brings it up.
+  const ringMaterial = handleMaterial(PIN_RING_OPACITY);
+  ringMaterial.side = THREE.DoubleSide;
+  ringMaterial.opacity = 0;
+  const ring = new THREE.Mesh(
+    new THREE.RingGeometry(PIN_RING_INNER, PIN_RING_OUTER, 40),
+    ringMaterial
+  );
+  ring.rotation.x = -Math.PI / 2;
+  // The hover halo keeps the resting colour: the arrow itself darkens under
+  // the pointer, and a dark halo would read as a shadow, not a glow.
+  const halo = new THREE.Mesh(
+    new THREE.CircleGeometry(0.5, 32),
+    new THREE.MeshBasicMaterial({
+      color: HANDLE_COLOR,
+      transparent: true,
+      opacity: 0,
+      depthTest: false,
+      side: THREE.DoubleSide
+    })
+  );
   const hit = createHitMesh(
     new THREE.CylinderGeometry(
       ARROW_HIT_RADIUS,
@@ -130,7 +208,78 @@ function doubleArrowParts(kind: string): THREE.Mesh[] {
     ),
     kind
   );
-  return [shaft, headOut, headIn, hit];
+  return {
+    arrow: [shaft, headOut, headIn, ring],
+    solids: [shaft, headOut, headIn],
+    halo,
+    ringMaterial,
+    hit
+  };
+}
+
+/**
+ * Draws the farthest solid first. Without a depth test the draw order is
+ * the only thing keeping a cone behind the shaft from painting over it.
+ */
+function orderByDepth(solids: THREE.Mesh[], camera: THREE.Camera): void {
+  const position = new THREE.Vector3();
+  const byDistance = solids
+    .map((mesh) => ({
+      mesh,
+      distance: mesh.getWorldPosition(position).distanceTo(camera.position)
+    }))
+    .sort((a, b) => b.distance - a.distance);
+  byDistance.forEach(({ mesh }, index) => {
+    mesh.renderOrder = HANDLE_RENDER_ORDER + index;
+  });
+}
+
+/**
+ * Keeps local +Y on `direction` and rolls the pin about it so its flat face
+ * turns toward the camera. The arrow therefore stays on the face normal from
+ * every viewpoint; only its roll follows the view. Looking straight down the
+ * normal there is no roll to prefer, and any one will do: the arrow is a
+ * point then and the ring carries the affordance.
+ *
+ * Returns how much of the normal lies across the screen, 0 when the view
+ * looks straight down it and 1 when it lies flat in the screen plane.
+ */
+function orientPin(
+  group: THREE.Group,
+  direction: THREE.Vector3,
+  camera: THREE.Camera
+): number {
+  const toCamera = new THREE.Vector3();
+  if ((camera as THREE.OrthographicCamera).isOrthographicCamera) {
+    camera.getWorldDirection(toCamera).negate();
+  } else {
+    toCamera.copy(camera.position).sub(group.position).normalize();
+  }
+  const up = direction.clone().normalize();
+  const facing = toCamera.clone().addScaledVector(up, -up.dot(toCamera));
+  const across = facing.length();
+  if (across < 1e-3) {
+    const seed =
+      Math.abs(up.z) < 0.9
+        ? new THREE.Vector3(0, 0, 1)
+        : new THREE.Vector3(1, 0, 0);
+    facing.crossVectors(up, seed);
+  }
+  facing.normalize();
+  const right = new THREE.Vector3().crossVectors(up, facing).normalize();
+  group.quaternion.setFromRotationMatrix(
+    new THREE.Matrix4().makeBasis(right, up, facing)
+  );
+  return across;
+}
+
+/** 1 looking down the normal, 0 once it lies well across the screen. */
+function ringPresenceFor(across: number): number {
+  return THREE.MathUtils.clamp(
+    (2 * PIN_RING_FADE_START - across) / PIN_RING_FADE_START,
+    0,
+    1
+  );
 }
 
 const EDGE_HANDLE_RADIUS = 0.16;
@@ -190,6 +339,13 @@ export interface OffsetFaceRigParams {
   direction: HandleVec3;
   /** World-space triangles of the face, kept as the original-position reference. */
   ghostGeometry: THREE.BufferGeometry | null;
+  /**
+   * How far the body reaches behind the face along the normal. With it the
+   * rig draws its dimension for the whole span, far side to handle, from
+   * the moment it arms — the height this face sets — rather than only the
+   * delta of a drag in progress.
+   */
+  extentBehind?: number;
   /**
    * A profile to sweep along the drag direction instead of a flat ghost. The
    * rig extrudes it by the current value every frame, so the volume the
@@ -302,8 +458,10 @@ function createSweepGhost(
     update(value: number) {
       for (const { top, base } of layout.moving) {
         positions[top * 3] = layout.base[base * 3]! + direction.x * value;
-        positions[top * 3 + 1] = layout.base[base * 3 + 1]! + direction.y * value;
-        positions[top * 3 + 2] = layout.base[base * 3 + 2]! + direction.z * value;
+        positions[top * 3 + 1] =
+          layout.base[base * 3 + 1]! + direction.y * value;
+        positions[top * 3 + 2] =
+          layout.base[base * 3 + 2]! + direction.z * value;
       }
       attribute.needsUpdate = true;
     }
@@ -330,20 +488,35 @@ export function buildOffsetFaceHandle(params: OffsetFaceRigParams): DragRig {
     )
   );
 
-  const arrowParts = doubleArrowParts(kind);
+  const pin = solidPinParts(kind);
+  const arrowParts = [...pin.arrow, pin.hit];
   addHandleParts(group, arrowParts);
+  addHandleParts(group, [pin.halo]);
+  pin.halo.renderOrder = HANDLE_RENDER_ORDER - 1;
 
   const worldGroup = new THREE.Group();
   worldGroup.name = `${kind}-handle-world`;
 
+  // Drawing white, like every other dimension: the handle is the coloured
+  // thing, the measurement is the annotation.
   const dimension = createDimensionGraphic({
-    color: HANDLE_COLOR,
+    color: DIMENSION_LINE_COLOR,
     linewidth: 1.5,
-    opacity: 0.85,
+    opacity: 0.9,
     renderOrder: 29
   });
   dimension.object.visible = false;
   worldGroup.add(dimension.object);
+  const extentBehind =
+    params.extentBehind !== undefined &&
+    Number.isFinite(params.extentBehind) &&
+    params.extentBehind > 1e-9
+      ? params.extentBehind
+      : null;
+  const farPoint =
+    extentBehind === null
+      ? null
+      : origin.clone().addScaledVector(direction, -extentBehind);
 
   const sweep = params.sweep ? createSweepGhost(params.sweep, direction) : null;
   if (sweep) {
@@ -384,7 +557,10 @@ export function buildOffsetFaceHandle(params: OffsetFaceRigParams): DragRig {
           presence.hotness()
         );
     for (const part of arrowParts) {
-      if (
+      if (part.material instanceof THREE.MeshStandardMaterial) {
+        part.material.color.copy(color);
+        part.material.emissive.copy(color);
+      } else if (
         part.material instanceof THREE.MeshBasicMaterial &&
         part.material.visible
       ) {
@@ -394,7 +570,7 @@ export function buildOffsetFaceHandle(params: OffsetFaceRigParams): DragRig {
     return color;
   };
 
-  return {
+  const rig: DragRig = {
     kind,
     group,
     worldGroup,
@@ -404,11 +580,23 @@ export function buildOffsetFaceHandle(params: OffsetFaceRigParams): DragRig {
       if (!presence.step(dtMs)) {
         return false;
       }
+      // The halo is hover feedback only: it grows with hotness and the
+      // presence ramp then scales it with everything else.
+      presence.rebase(pin.halo.material, PIN_HALO_OPACITY * presence.hotness());
       paintArrows();
       return true;
     },
     setHot(hot: boolean) {
       presence.setHot(hot);
+    },
+    orient(camera: THREE.Camera) {
+      const across = orientPin(group, direction, camera);
+      presence.rebase(
+        pin.ringMaterial,
+        PIN_RING_OPACITY * ringPresenceFor(across)
+      );
+      orderByDepth(pin.solids, camera);
+      dimension.orient(camera);
     },
     beginExit() {
       presence.beginExit();
@@ -421,10 +609,29 @@ export function buildOffsetFaceHandle(params: OffsetFaceRigParams): DragRig {
       const tip = origin.clone().addScaledVector(direction, value);
       group.position.copy(tip);
       const engaged = Math.abs(value) > 1e-9;
-      dimension.object.visible = engaged;
-      if (engaged) {
-        const scale = (group.userData.gizmoScale as number | undefined) ?? 1;
-        dimension.update(origin, tip, scale);
+      const scale = (group.userData.gizmoScale as number | undefined) ?? 1;
+      // The line ends short of the handle, its head pointing at the arrow
+      // rather than sitting under it.
+      const lineEnd = tip
+        .clone()
+        .addScaledVector(direction, -DIMENSION_CLEARANCE * scale);
+      if (farPoint) {
+        // The whole span, drawn from the moment the rig arms, as long as
+        // there is still room for the line once it clears the handle.
+        const room = lineEnd.clone().sub(farPoint).dot(direction) > 0;
+        dimension.object.visible = room;
+        if (room) {
+          dimension.update(farPoint, lineEnd, scale);
+        }
+      } else {
+        // The delta of a drag in progress, once it is longer than the gap.
+        const room =
+          engaged &&
+          lineEnd.clone().sub(origin).dot(direction) * Math.sign(value) > 0;
+        dimension.object.visible = room;
+        if (room) {
+          dimension.update(origin, lineEnd, scale);
+        }
       }
       if (ghost) {
         ghost.visible = engaged;
@@ -441,21 +648,39 @@ export function buildOffsetFaceHandle(params: OffsetFaceRigParams): DragRig {
     },
     setWarning(warning) {
       warned = warning;
-      dimension.setColor(paintArrows().getHex());
+      paintArrows();
+      dimension.setColor(warning ? HANDLE_WARNING_COLOR : DIMENSION_LINE_COLOR);
       group.userData.previewWarning = warning;
     },
-    chipAnchor(gizmoScale: number) {
-      // The chip rides just past the arrow head, which has already travelled
-      // by `current`.
-      const reach =
-        current + CHIP_ANCHOR_LOCAL_DISTANCE * Math.max(gizmoScale, 0);
-      return origin.clone().addScaledVector(direction, reach);
+    chipAnchor() {
+      const tip = origin.clone().addScaledVector(direction, current);
+      if (farPoint) {
+        // Midway along the span, like a drawing's dimension text.
+        return farPoint.clone().lerp(tip, 0.5);
+      }
+      // The pin's own centre: the viewport offsets the chip beside it in
+      // screen pixels, so a foreshortened direction can never fold the chip
+      // back onto the arrow head.
+      return tip;
+    },
+    chipLine() {
+      if (!farPoint) {
+        return null;
+      }
+      return {
+        start: farPoint.clone(),
+        end: origin.clone().addScaledVector(direction, current)
+      };
     },
     dispose() {
       dimension.dispose();
       disposeRigGroups(group, worldGroup);
     }
   };
+  // Lay out the resting state now: with a known span the dimension is part
+  // of the handle from the first frame, not something a drag reveals.
+  rig.setValue(0);
+  return rig;
 }
 
 export interface CylinderRadiusRigParams {
@@ -492,8 +717,13 @@ export function buildCylinderRadiusHandle(
     )
   );
 
-  const cylinderArrowParts = doubleArrowParts(kind);
+  // The same flat pin as the offset rig, pointing along the radial direction
+  // and turned to face the camera each frame.
+  const pin = solidPinParts(kind);
+  const cylinderArrowParts = [...pin.arrow, pin.hit];
   addHandleParts(group, cylinderArrowParts);
+  addHandleParts(group, [pin.halo]);
+  pin.halo.renderOrder = HANDLE_RENDER_ORDER - 1;
 
   // The measurement graphic is a radius callout: a dashed line from the axis
   // out to the handle on the wall, with a small arrowhead at each end. It is
@@ -517,7 +747,10 @@ export function buildCylinderRadiusHandle(
       presence.hotness()
     );
     for (const part of cylinderArrowParts) {
-      if (
+      if (part.material instanceof THREE.MeshStandardMaterial) {
+        part.material.color.copy(color);
+        part.material.emissive.copy(color);
+      } else if (
         part.material instanceof THREE.MeshBasicMaterial &&
         part.material.visible
       ) {
@@ -533,7 +766,15 @@ export function buildCylinderRadiusHandle(
     // Match the screen-space sizing of the handle, whose scale the viewer
     // stamps on the group each frame.
     const scale = (group.userData.gizmoScale as number | undefined) ?? 1;
-    dimension.update(axisCenter, tip, scale);
+    // Stops short of the handle so the line's head stays clear of the arrow.
+    const lineEnd = tip
+      .clone()
+      .addScaledVector(direction, -DIMENSION_CLEARANCE * scale);
+    const room = lineEnd.clone().sub(axisCenter).dot(direction) > 0;
+    dimension.object.visible = room;
+    if (room) {
+      dimension.update(axisCenter, lineEnd, scale);
+    }
   };
   updateGraphic();
 
@@ -547,11 +788,21 @@ export function buildCylinderRadiusHandle(
       if (!presence.step(dtMs)) {
         return false;
       }
+      presence.rebase(pin.halo.material, PIN_HALO_OPACITY * presence.hotness());
       paintParts();
       return true;
     },
     setHot(hot: boolean) {
       presence.setHot(hot);
+    },
+    orient(camera: THREE.Camera) {
+      const across = orientPin(group, direction, camera);
+      presence.rebase(
+        pin.ringMaterial,
+        PIN_RING_OPACITY * ringPresenceFor(across)
+      );
+      orderByDepth(pin.solids, camera);
+      dimension.orient(camera);
     },
     beginExit() {
       presence.beginExit();
@@ -572,6 +823,12 @@ export function buildCylinderRadiusHandle(
       return axisCenter
         .clone()
         .addScaledVector(direction, currentRadius * 0.45);
+    },
+    chipLine() {
+      return {
+        start: axisCenter.clone(),
+        end: axisCenter.clone().addScaledVector(direction, currentRadius)
+      };
     },
     dispose() {
       dimension.dispose();
