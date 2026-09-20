@@ -12,7 +12,11 @@ import {
   type CadPatchOperation,
   type CadPatchProposal
 } from '@openzcad/ai-contracts';
-import type { BodyId, ProjectDocument } from '@openzcad/shared';
+import type {
+  BodyId,
+  BodyRepresentation,
+  ProjectDocument
+} from '@openzcad/shared';
 import { newExactWarnings } from './exactWarnings';
 
 export interface ExactPatchTarget {
@@ -70,6 +74,28 @@ function exactWarningsError(warnings: readonly string[]): Error {
 
 function sortedStrings(values: readonly string[]): string[] {
   return [...values].sort((left, right) => left.localeCompare(right));
+}
+
+/**
+ * The body's exact identity: its ADR-011 face and edge fingerprints, ordered
+ * so the answer does not depend on the order the kernel happened to publish
+ * them in. Each hash covers the surface or curve kind, its analytic
+ * parameters and its quantized position, so two bodies that agree here agree
+ * on every exact surface they carry.
+ *
+ * Null for a body that publishes no exact topology — an imported mesh, whose
+ * stored triangles are the geometry rather than a projection of it.
+ */
+function exactIdentity(body: BodyRepresentation): string | null {
+  if (!body.topology) {
+    return null;
+  }
+  const hashes = (values: readonly { hash: number }[]) =>
+    values.map((entry) => entry.hash).sort((left, right) => left - right);
+  return JSON.stringify({
+    faces: hashes(body.topology.faces),
+    edges: hashes(body.topology.edges)
+  });
 }
 
 function assertPreservedGeometry(
@@ -130,19 +156,35 @@ function assertPreservedGeometry(
       after.bbox.max.y,
       after.bbox.max.z
     ];
+    const beforeIdentity = exactIdentity(before);
+    const afterIdentity = exactIdentity(after);
+    // The display mesh is a disposable projection, not geometry, and it is
+    // not a function of the solid alone: the same B-Rep tessellates to the
+    // same faces, the same face order and the same triangle counts, but with
+    // the triangle vertices arranged differently, depending on whether the
+    // kernel replayed the body from a history checkpoint or rebuilt the whole
+    // document. Comparing those buffers float by float therefore failed every
+    // parameterization proposed right after a direct edit — the base was the
+    // replayed build and the candidate a full rebuild — while the identical
+    // document reloaded from storage passed. Preservation is proved from the
+    // exact quantities instead. The mesh still stands in for a body with no
+    // exact topology to compare, where the stored triangles ARE the geometry.
     const meshChanged =
-      before.mesh.vertices.length !== after.mesh.vertices.length ||
-      before.mesh.indices.length !== after.mesh.indices.length ||
-      before.mesh.vertices.some(
-        (value, index) =>
-          !close(value, after.mesh.vertices[index]!, linearTolerance)
-      ) ||
-      before.mesh.indices.some(
-        (value, index) => value !== after.mesh.indices[index]
-      );
+      beforeIdentity !== null || afterIdentity !== null
+        ? false
+        : before.mesh.vertices.length !== after.mesh.vertices.length ||
+          before.mesh.indices.length !== after.mesh.indices.length ||
+          before.mesh.vertices.some(
+            (value, index) =>
+              !close(value, after.mesh.vertices[index]!, linearTolerance)
+          ) ||
+          before.mesh.indices.some(
+            (value, index) => value !== after.mesh.indices[index]
+          );
     if (
       before.consumed !== after.consumed ||
       before.faceCount !== after.faceCount ||
+      beforeIdentity !== afterIdentity ||
       !close(before.volume, after.volume, volumeTolerance) ||
       bboxBefore.some(
         (value, index) => !close(value, bboxAfter[index]!, linearTolerance)
