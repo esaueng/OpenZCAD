@@ -20,9 +20,15 @@ const AXIS_COLORS = {
   z: 'var(--color-handle-z)'
 };
 
-/** SVG center and pixels per cube half-edge. */
-const CX = 56;
-const CY = 56;
+/**
+ * SVG size, center and pixels per cube half-edge. The box hugs the cube: its
+ * silhouette reaches at most sqrt(3) half-edges (~36 px) from the center, and
+ * the triad tips that reach past the box overhang with `overflow: visible`
+ * rather than earning padding on every side.
+ */
+const SIZE = 88;
+const CX = SIZE / 2;
+const CY = SIZE / 2;
 const SCALE = 21;
 /** Fraction of a half-edge cut off each corner for the isometric facets. */
 const BEVEL = 0.42;
@@ -545,13 +551,13 @@ export function OrientationWidget({
         aria-label="Rotate view clockwise"
         onClick={() => onRotateView('cw')}
       >
-        <Redo2 size={14} aria-hidden="true" />
+        <Redo2 size={12} aria-hidden="true" />
       </button>
       <svg
         className="orientation-cube"
-        viewBox="0 0 112 112"
-        width="112"
-        height="112"
+        viewBox={`0 0 ${SIZE} ${SIZE}`}
+        width={SIZE}
+        height={SIZE}
         onPointerDown={handlePointerDown}
         onPointerMove={handlePointerMove}
         onPointerUp={(event) => finishPointerDrag(event.pointerId, false, true)}
@@ -674,7 +680,7 @@ export function OrientationWidget({
         aria-label="Rotate view counterclockwise"
         onClick={() => onRotateView('ccw')}
       >
-        <Undo2 size={14} aria-hidden="true" />
+        <Undo2 size={12} aria-hidden="true" />
       </button>
     </div>
   );
