@@ -1,5 +1,5 @@
 import { growingHolderHistories } from '@openzcad/command-system';
-import { getParameterScope } from '@openzcad/document-core';
+import { getParameterScope, listParameters } from '@openzcad/document-core';
 import type { DerivedState, ProjectDocument } from '@openzcad/shared';
 import { newExactWarnings } from './exactWarnings';
 
@@ -63,4 +63,20 @@ export function parameterBuildError(
       return 'The edit did not rebuild an existing result body.';
   }
   return null;
+}
+
+/**
+ * Whether an edit typed against `base` can be re-checked against `live`: the
+ * named parameter reads the same in both, so nothing but the edit itself would
+ * change it. Absent from both counts — the edit is the one creating it.
+ */
+export function parameterUntouchedSince(
+  base: ProjectDocument,
+  live: ProjectDocument,
+  name: string
+): boolean {
+  const expressionIn = (document: ProjectDocument) =>
+    listParameters(document).find((parameter) => parameter.name === name)
+      ?.expression ?? null;
+  return expressionIn(base) === expressionIn(live);
 }

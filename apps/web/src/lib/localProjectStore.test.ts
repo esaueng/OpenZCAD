@@ -31,6 +31,7 @@ import {
   releaseSourceBlobClaim,
   saveLocalProject,
   saveLocalProjectOrganization,
+  saveLocalSaveStates,
   listLocalProjectOrganizations,
   listPendingOrganizationMirrors
 } from './localProjectStore';
@@ -976,6 +977,36 @@ describe('save states on the device', () => {
   ): ProjectDocument {
     return createCheckpoint(projectDocument(name, id), reason);
   }
+
+  it('stores earlier save states without making any of them current', async () => {
+    const first = savedDocument('Bracket', 'proj-a', 'Rev A');
+    const boxed = appendRevision(
+      addPrimitiveFeature(first, {
+        name: 'Box',
+        primitiveKind: 'box',
+        dimensions: { width: 10, depth: 10, height: 10 }
+      }),
+      'Added box'
+    );
+    const second = createCheckpoint(boxed, 'Rev B');
+    // A seeded demo arrives with every checkpoint's document at once; only
+    // the last one is saved as the project.
+    await saveLocalSaveStates([first, second, boxed]);
+    await saveLocalProject(second);
+
+    expect(await listLocalSaveStateIds('proj-a')).toEqual(
+      new Set([
+        first.checkpoints.at(-1)!.checkpointId,
+        second.checkpoints.at(-1)!.checkpointId
+      ])
+    );
+    const restored = await loadLocalSaveState(
+      'proj-a',
+      first.checkpoints.at(-1)!.checkpointId
+    );
+    expect(restored?.featureOrder).toEqual([]);
+    expect((await loadLocalProject('proj-a'))?.featureOrder).toHaveLength(1);
+  });
 
   it('keeps the model of each save, and gives it back', async () => {
     const first = savedDocument('Bracket', 'proj-a', 'First save');

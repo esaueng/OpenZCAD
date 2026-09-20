@@ -261,7 +261,7 @@ function faceCensusDetail(census: BooleanFaceCensus): string {
 /**
  * Reject a direct edit that silently replaced analytic faces with facets.
  *
- * This guards `pushPullFace`, which is NOT a boolean and has no exact-only
+ * This guards `moveFaces`, which is NOT a boolean and has no exact-only
  * policy behind it: it can still abandon exact surfaces and hand back a
  * triangulated, all-planar body. That result is watertight, passes
  * validation, and has a plausible volume and triangle count, so none of the

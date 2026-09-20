@@ -208,7 +208,11 @@ test('resizes a cylinder wall concentrically with one undoable radius edit', asy
   await expect(page.getByTestId('direct-manipulation-value')).toHaveText(
     'Ø 40 mm'
   );
-  await expect(radiusOperation).toContainText('Dragging');
+  // Dragging collapses the card to its accessible status marker (778d539e).
+  await expect(radiusOperation.locator('.tool-card-phase-dot')).toHaveAttribute(
+    'aria-label',
+    'Dragging'
+  );
   await page.keyboard.press('Escape');
   await expect(page.getByTestId('direct-manipulation-value')).toHaveText(
     'Ø 36 mm'
@@ -562,6 +566,15 @@ test('keeps face sketching available after a primitive direct edit', async ({
     .getByRole('region', { name: 'Resize Body operation' })
     .getByRole('tab', { name: 'Offset Face', exact: true })
     .click();
+  // The chip reads the total by default; the tag beside it switches exact
+  // entry to the plain offset.
+  await expect(page.getByTestId('direct-manipulation-mode')).toHaveText(
+    /^Total/
+  );
+  await page.getByTestId('direct-manipulation-mode').click();
+  await expect(page.getByTestId('direct-manipulation-mode')).toHaveText(
+    /^Offset/
+  );
   await page.getByTestId('direct-manipulation-value').click();
   const offsetKeypad = page.getByRole('dialog', { name: 'Offset value' });
   await offsetKeypad.getByRole('textbox').fill('2');

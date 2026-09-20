@@ -8,6 +8,7 @@
     ".": "./src/index.ts",
     "./exact": "./src/exact.ts",
     "./face-attachment": "./src/face-attachment.ts",
+    "./extrude-inference": "./src/extrude-inference.ts",
     "./mesh-import-formats": "./src/mesh-import-formats.ts"
   },
   "dependencies": {
@@ -17,7 +18,8 @@
     "@openzcad/io-step": "workspace:*",
     "@openzcad/io-stl": "workspace:*",
     "@openzcad/shared": "workspace:*",
-    "remus-wasm": "github:esaueng/remus#325c5bc3624750399171bd44a45837d58beed785&path:/crates/wasm/pkg",
-    "remus-wasm-io": "github:esaueng/remus#325c5bc3624750399171bd44a45837d58beed785&path:/crates/wasm-io/pkg"
+    "fflate": "0.8.3",
+    "remus-wasm": "github:esaueng/remus#62bf14725585dc869d41fc64822ef1f339dcb09c&path:/crates/wasm/pkg",
+    "remus-wasm-io": "github:esaueng/remus#62bf14725585dc869d41fc64822ef1f339dcb09c&path:/crates/wasm-io/pkg"
   }
 }
