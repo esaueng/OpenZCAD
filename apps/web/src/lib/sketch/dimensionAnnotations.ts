@@ -1,5 +1,6 @@
 import type {
   SketchConstraint,
+  SketchDimensionLabelPosition,
   SketchObjectData,
   SketchPointRef
 } from '@openzcad/shared';
@@ -13,6 +14,10 @@ export interface SketchDimensionAnnotation {
   id: string;
   kind: 'distance' | 'angle' | 'radius';
   label: string;
+  /** Derived placement before the user's persistent decluttering offset. */
+  baseAnchor?: Point;
+  /** Plane-local offset from `baseAnchor`; absent storage means zero. */
+  labelOffset?: Point;
   anchor: Point;
   span?: { start: Point; end: Point };
   lines: Point[][];
@@ -23,7 +28,8 @@ export function sketchDimensionAnnotations(
   objects: readonly { id: string; data: SketchObjectData }[],
   constraints: readonly SketchConstraint[],
   resolve: Resolve,
-  units: string
+  units: string,
+  labelPositions?: Readonly<Record<string, SketchDimensionLabelPosition>>
 ): SketchDimensionAnnotation[] {
   const byId = new Map(objects.map((object) => [object.id, object.data]));
   const scalar = (value: number | string): number | undefined => {
@@ -59,6 +65,30 @@ export function sketchDimensionAnnotations(
   const format = (raw: number | string, value: number, suffix: string) =>
     `${typeof raw === 'string' ? `${raw} = ` : ''}${formatNumber(value)}${suffix}`;
   const result: SketchDimensionAnnotation[] = [];
+  const positioned = (
+    annotation: Omit<
+      SketchDimensionAnnotation,
+      'baseAnchor' | 'labelOffset' | 'anchor'
+    > & {
+      anchor: Point;
+    }
+  ): SketchDimensionAnnotation => {
+    const baseAnchor = annotation.anchor;
+    const stored = labelPositions?.[annotation.id];
+    const labelOffset =
+      stored && Number.isFinite(stored.x) && Number.isFinite(stored.y)
+        ? { x: stored.x, y: stored.y }
+        : { x: 0, y: 0 };
+    return {
+      ...annotation,
+      baseAnchor,
+      labelOffset,
+      anchor: {
+        x: baseAnchor.x + labelOffset.x,
+        y: baseAnchor.y + labelOffset.y
+      }
+    };
+  };
   for (const constraint of constraints) {
     const data = constraint.data;
     if (data.constraintKind === 'radius') {
@@ -96,17 +126,19 @@ export function sketchDimensionAnnotations(
         y: center.y + radius * Math.sin(angle)
       };
       if (!Number.isFinite(end.x) || !Number.isFinite(end.y)) continue;
-      result.push({
-        id: constraint.constraintId,
-        kind: 'radius',
-        label: `R ${format(data.value, target, ` ${units}`)}`,
-        anchor: {
-          x: center.x + (end.x - center.x) * 0.6,
-          y: center.y + (end.y - center.y) * 0.6
-        },
-        span: { start: center, end },
-        lines: []
-      });
+      result.push(
+        positioned({
+          id: constraint.constraintId,
+          kind: 'radius',
+          label: `R ${format(data.value, target, ` ${units}`)}`,
+          anchor: {
+            x: center.x + (end.x - center.x) * 0.6,
+            y: center.y + (end.y - center.y) * 0.6
+          },
+          span: { start: center, end },
+          lines: []
+        })
+      );
     } else if (data.constraintKind === 'distance') {
       const a = point(data.a);
       const b = point(data.b);
@@ -118,17 +150,19 @@ export function sketchDimensionAnnotations(
       const normal = { x: -(b.y - a.y) / length, y: (b.x - a.x) / length };
       const start = { x: a.x + normal.x * offset, y: a.y + normal.y * offset };
       const end = { x: b.x + normal.x * offset, y: b.y + normal.y * offset };
-      result.push({
-        id: constraint.constraintId,
-        kind: 'distance',
-        label: format(data.value, target, ` ${units}`),
-        anchor: { x: (start.x + end.x) / 2, y: (start.y + end.y) / 2 },
-        span: { start, end },
-        lines: [
-          [a, start],
-          [b, end]
-        ]
-      });
+      result.push(
+        positioned({
+          id: constraint.constraintId,
+          kind: 'distance',
+          label: format(data.value, target, ` ${units}`),
+          anchor: { x: (start.x + end.x) / 2, y: (start.y + end.y) / 2 },
+          span: { start, end },
+          lines: [
+            [a, start],
+            [b, end]
+          ]
+        })
+      );
     } else if (data.constraintKind === 'angle') {
       if (
         byId.get(data.a)?.objectKind !== 'line' ||
@@ -167,13 +201,15 @@ export function sketchDimensionAnnotations(
       const arc = Array.from({ length: 33 }, (_, index) =>
         at(startAngle + (sweep * index) / 32)
       );
-      result.push({
-        id: constraint.constraintId,
-        kind: 'angle',
-        label: format(data.valueDeg, target, '°'),
-        anchor: at(startAngle + sweep / 2),
-        lines: [[center, arc[0]!], arc, [center, arc[32]!]]
-      });
+      result.push(
+        positioned({
+          id: constraint.constraintId,
+          kind: 'angle',
+          label: format(data.valueDeg, target, '°'),
+          anchor: at(startAngle + sweep / 2),
+          lines: [[center, arc[0]!], arc, [center, arc[32]!]]
+        })
+      );
     }
   }
   return result;
