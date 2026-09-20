@@ -1,3 +1,5 @@
+import { readFileSync } from 'node:fs';
+
 import type { MeshImportFormat } from '@openzcad/kernel-adapter/mesh-import-formats';
 
 /**
@@ -537,4 +539,29 @@ export function meshFixture(
   count = 1
 ): Uint8Array {
   return MESH_FIXTURE_BUILDERS[format](count);
+}
+
+const COMMITTED_MESH_FIXTURE_PATHS: Readonly<Record<MeshImportFormat, string>> =
+  {
+    '3mf': '../fixtures/mesh-import/box.3mf.b64',
+    obj: '../fixtures/mesh-import/box.obj',
+    glb: '../fixtures/mesh-import/box.glb.b64',
+    ply: '../fixtures/mesh-import/box.ply'
+  };
+
+/**
+ * Read the committed per-format parity payload, independent of the builders
+ * above. Base64 keeps the binary GLB and 3MF fixtures source-only and easy to
+ * review; the production importer still receives their decoded bytes.
+ */
+export function committedMeshFixture(format: MeshImportFormat): Uint8Array {
+  const source = readFileSync(
+    new URL(COMMITTED_MESH_FIXTURE_PATHS[format], import.meta.url)
+  );
+  if (format === '3mf' || format === 'glb') {
+    return Uint8Array.from(
+      Buffer.from(source.toString('ascii').trim(), 'base64')
+    );
+  }
+  return Uint8Array.from(source);
 }
