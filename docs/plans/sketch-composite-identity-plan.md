@@ -398,8 +398,8 @@ its generated ID, endpoint ownership, and system constraint IDs are replayed
 and deleted with that record.
 
 The system IDs are derived from the promotion ID and canonical index and are
-distinct from user constraint IDs. If the v16 constraint schema cannot yet
-carry the additive `origin: 'promotion-structure'` marker below, promotion is
+distinct from user constraint IDs. If the coordinated schema cannot yet carry
+the additive `origin: 'promotion-structure'` marker below, promotion is
 deferred as unsupported; it must not write unowned structural records.
 
 The constraint schema needs an additive `origin?: 'user' | 'promotion-structure'`
@@ -443,7 +443,7 @@ work must not invent a partial conversion.
 | --- | --- | --- | --- |
 | Rectangle width, height, or center changes | Same tokens; virtual points move | Same boundary tokens; recompute fingerprints and exact geometry | Commit and replay normally |
 | Polygon radius or center changes | Same tokens while `sides` is unchanged | Same boundary tokens; recompute geometry | Commit and replay normally |
-| Polygon `sides` changes | **Atomic refusal when any v16 typed point/edge reference resolves to the polygon** | **Atomic refusal when any v16 `sourceBoundaryLoops` reference names the polygon**; v15 geometry-only refs retain their existing resolver behavior | No document mutation, no stale constraint state, and an actionable “remove/repair the reference or convert to editable edges” diagnostic |
+| Polygon `sides` changes | **Atomic refusal when any typed point/edge reference resolves to the polygon** | **Atomic refusal when any boundary-aware `sourceBoundaryLoops` reference names the polygon**; v15 geometry-only refs retain their existing resolver behavior | No document mutation, no stale constraint state, and an actionable “remove/repair the reference or convert to editable edges” diagnostic |
 | Composite object kind changes | Existing composite refs no longer validate | Old source tokens do not match the new kind | Refuse when referenced, or require an explicit conversion command; never reinterpret an index |
 | Composite is deleted | References cannot resolve | Load-bearing downstream deletion policy applies | Delete is refused or presents the existing dependent-delete flow; no dangling ref is saved |
 | Object is deleted and recreated with a new ID | Old refs do not match | Old profiles do not rebind by geometry | Broken reference until the user explicitly repairs it |
@@ -460,11 +460,12 @@ The polygon side-count rule is deliberately one behavior rather than a mixed
 “sometimes stale, sometimes committed” policy: every path that can change
 `sides`—direct parameter editing, expression evaluation, `updateSketchObject`,
 solver write-back, redo, and replay—must call the same preflight before it
-evaluates or mutates the candidate. The preflight scans all v16 typed point/
-edge refs and v16 boundary-aware profile refs, including existing refs loaded
-from disk; it is not limited to refs added by the current command. If any
-would become invalid, the entire command is refused. A side-count edit with
-no v16 S04-aware references is one ordinary atomic parameter update and
+evaluates or mutates the candidate. The preflight scans all typed point/edge
+refs and boundary-aware profile refs, including existing refs loaded from
+disk; it is not limited to refs added by the current command. If any would
+become invalid, the entire command is refused. A side-count edit with no
+S04-aware references in the coordinated schema is one ordinary atomic
+parameter update and
 creates the new descriptor; old v15 geometry-only profile references remain
 on their existing resolver path. This keeps legacy documents compatible
 without allowing a typed reference to enter a partially broken state.
@@ -481,29 +482,29 @@ compatibility rules are therefore:
   v15 is never a legal carrier for a tagged topology ref, boundary token, or
   promotion ownership field; a v15 payload containing one is rejected as a
   malformed document rather than silently upgraded.
-* At this baseline `PROJECT_DOCUMENT_SCHEMA_VERSION` is v15, so S04 v16 is
-  the first legal schema for tagged point/edge refs, `sourceBoundaryLoops`,
-  and promotion `origin`. Loading v15 performs the
-  repository's normal in-memory upgrade to v16 without synthesizing any of
-  those optional fields; saving writes v16. Loading and saving v16 both run
-  the same recursive validator over every constraint operand, topology
-  descriptor, boundary token, and promotion record. Unknown descriptor or
-  token versions, missing required tags, invalid indices/counts, and
-  `promotion-structure` records without a promotion owner are refusals.
+* At this baseline `PROJECT_DOCUMENT_SCHEMA_VERSION` is v15. S04's tagged
+  point/edge refs, `sourceBoundaryLoops`, and promotion `origin` are future
+  fields and may be written only by the one additive schema envelope selected
+  from the actual merged S01/S04/R01 base. Loading v15 keeps the current
+  composite node and does not synthesize any optional fields. Loading and
+  saving the coordinated newer schema run the same recursive validator over
+  every constraint operand, topology descriptor, boundary token, and
+  promotion record. Unknown descriptors and `promotion-structure` records
+  without a promotion owner are refusals.
 * Existing primitive constraint records remain byte-for-byte compatible in
-  meaning. New tagged refs are additive only in v16 and are validated on both
-  load and save, not merely when a new UI command creates them.
+  meaning. New tagged refs are additive fields in that coordinated envelope
+  and are validated on both load and save, not merely when a new UI command
+  creates them.
 * Existing region refs continue through their current resolver tiers. They are
   not rewritten to boundary tokens merely because the current client can
   derive them.
-* The v15→v16 normalization is no-op/additive for legacy data: it changes the
-  schema version but does not synthesize refs, constraints, line children, or
-  boundary provenance. Future schema versions must be rejected before
-  stamping, matching `normalizeDocument`'s current fail-closed rule.
-  If another approved slice increments the shared document schema before S04
-  lands, S04 uses the next monotonic version and keeps this same first-legal
-  tagged-ref rule; S01 annotation fields do not get a private competing
-  schema counter.
+* The shared normalization is no-op/additive for legacy data: it does not
+  synthesize refs, constraints, line children, or boundary provenance. Future
+  schema versions must be rejected before stamping, matching
+  `normalizeDocument`'s current fail-closed rule. If another approved slice
+  increments the shared document schema before S04 lands, S04 uses the next
+  monotonic version selected from that merged base; S01 annotation fields do
+  not get a private competing schema counter.
 * Saving, cloning, cloud sync, and save-state branching copy refs as document
   data. Derived profiles, virtual solver graphs, and display polylines remain
   rebuild products and are not persisted as an alternate source of truth.
@@ -546,7 +547,7 @@ identity oracle.
 | Deterministic inverse solve | Rectangle and regular-polygon fits regenerate every canonical vertex within tolerance; under-constrained unchanged seeds may preserve constraint records, while changed, rotated, reflected, or inconsistent virtual graphs do not write geometry back | inverse-fit tests with repeated replay |
 | Expression preservation | Unchanged expression fields remain byte-for-byte; changed expression-backed composite fields refuse with a named conflict; constraint expressions remain raw | expression-backed rectangle/polygon tests |
 | Non-representable solve | Free corner deformation refuses with a conversion instruction; node, history, and exact derived result stay unchanged | command and browser refusal test |
-| Polygon side-count change | With any existing v16 typed constraint or boundary-aware downstream ref, every sides-changing path refuses with no mutation; without one, one accepted parameter command changes the descriptor; v15 geometry-only refs keep their legacy path | atomic preflight tests for direct edit, expression/update, and solver write-back plus legacy v15 replay test |
+| Polygon side-count change | With any existing typed constraint or boundary-aware downstream ref, every sides-changing path refuses with no mutation; without one, one accepted parameter command changes the descriptor; v15 geometry-only refs keep their legacy path | atomic preflight tests for direct edit, expression/update, and solver write-back plus legacy v15 replay test |
 | Region after rectangle resize | New boundary-aware extrusion resolves the same source region; exact body rebuilds and face lineage remains source-derived | region-profile and exact lineage tests |
 | Boundary provenance | Exact `b1/...` tokens validate; outer and hole loops compare sequence-aware multisets with repeated split-edge tokens preserved; a changed split count refuses before witness fallback | token parser, loop canonicalization, hole, split-edge, and crossing-count tests |
 | Region ambiguity | An edge split into multiple candidate cells refuses unless sample/area selects exactly one; array order and nearest geometry never decide | resolver test |
@@ -554,7 +555,7 @@ identity oracle.
 | Explicit conversion | Existing point/edge/center operands remap through edge endpoints/lines/center spoke while preserving user constraint IDs and expressions; only legal coincident/horizontal/vertical/parallel/equal/distance payloads with promotion ownership are generated; missing aliases refuse before mutation | promotion remap and structural-constraint tests, when that slice starts |
 | Conversion undo/replay | Undo restores the exact composite and constraint array; redo reuses generated line/system IDs and alias map after save/reopen | command-log replay test, when that slice starts |
 | Annotation interaction | S01 label placement is keyed by `constraintId`; moving a label never changes a composite point/edge or driving value | S01 annotation persistence tests |
-| Future schema refusal | v15 legacy loads without synthesized fields, v16 tagged refs validate on load/save, and newer/unknown topology schema is refused without stamping or partial load | normalization, save, and round-trip tests |
+| Future schema refusal | v15 legacy loads without synthesized fields, coordinated-schema tagged refs validate on load/save, and newer/unknown topology schema is refused without stamping or partial load | normalization, save, and round-trip tests |
 
 The S04 row is complete only when the supported subset and refusal boundary are
 covered. A passing geometry test alone does not prove saved-history replay or
@@ -590,8 +591,9 @@ code:
    with an explicit promotion owner, and refuses atomically when any alias is
    incomplete. Undo/redo reuses the same IDs and alias map.
 5. **Polygon side-count behavior:** every sides-changing entry point shares an
-   atomic preflight over all existing v16 typed references; any match refuses
-   with no mutation. An unreferenced v16 polygon may change side count in one
+   atomic preflight over all existing typed references; any match refuses
+   with no mutation. An unreferenced polygon in the coordinated schema may
+   change side count in one
    parameter command. Legacy v15 geometry-only references keep their existing
    resolver behavior.
 
@@ -640,18 +642,19 @@ choices before changing runtime types:
 8. Preserve user constraint IDs and raw expressions through explicit promotion;
    map centers through a generated construction center spoke, and refuse the
    entire conversion if any alias is incomplete.
-9. Refuse polygon side-count edits atomically whenever any existing v16 typed
+9. Refuse polygon side-count edits atomically whenever any existing typed
    constraint or boundary-aware downstream reference would become invalid;
    preserve the legacy resolver path for old documents without typed refs.
-10. Treat v16 as the first legal carrier for tagged refs, boundary loops, and
-    promotion ownership; validate them recursively on both load and save, and
-    reject those fields in v15 rather than silently normalizing them.
+10. Treat the coordinated future schema as the legal carrier for tagged refs,
+    boundary loops, and promotion ownership; validate them recursively on both
+    load and save, and reject those fields in v15 rather than silently
+    normalizing them.
 11. Solve composites through parameter-coupled structural equations with
     explicit DOF/residual diagnostics. Under-constrained seeded values may
     remain unchanged and commit; changed ambiguous geometry refuses.
 12. Run one polygon-side-count preflight from every sides-changing entry
     point, including expression/update and solver write-back, against all
-    existing v16 typed refs, not only refs added by the current command.
+    existing typed refs, not only refs added by the current command.
 13. Generate promotion structure only from existing constraint kinds: polygon
     radial preservation uses persisted `distance` payloads from the center
     spoke, not an invented radial kind; the construction spoke is owned and
