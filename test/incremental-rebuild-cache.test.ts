@@ -538,7 +538,7 @@ describe('incremental prefix rebuild cache', { timeout: 120_000 }, () => {
     }
   });
 
-  it('bypasses caching above the checkpoint limit and stays correct', async () => {
+  it('retains the bounded prefix and replays the uncached suffix exactly', async () => {
     const events: RebuildCacheEvent[] = [];
     const adapter = await createExactKernelAdapter({
       historyCheckpointLimit: 2,
@@ -557,11 +557,11 @@ describe('incremental prefix rebuild cache', { timeout: 120_000 }, () => {
           reusedMeasurements: 0
         },
         {
-          kind: 'full-rebuild',
-          replayed: 5,
-          restored: 0,
-          remeasured: 3,
-          reusedMeasurements: 0
+          kind: 'prefix-restore',
+          replayed: 3,
+          restored: 2,
+          remeasured: 2,
+          reusedMeasurements: 1
         }
       ]);
       expect(normalized(second)).toEqual(normalized(first));
