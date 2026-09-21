@@ -124,9 +124,14 @@ for (const guarded of [true, false])
     await input.press('Enter');
     await expect(page.getByRole('alert')).toContainText('No change applied');
     await expect(input).toHaveValue('58');
-    await expect(page.getByRole('alert')).toContainText(
+    await expect(page.getByRole('alert')).not.toContainText(
       guarded ? '56.910504' : 'positive'
     );
+    await page.getByRole('button', { name: 'View details' }).click();
+    await expect(
+      page.getByRole('region', { name: 'Activity log' })
+    ).toContainText(guarded ? '56.910504' : 'positive');
+    await page.keyboard.press('Escape');
     const refused = await backup(page);
     expect(refused.version).toBe(before.version);
     expect(refused.commandLog).toEqual(before.commandLog);
@@ -258,7 +263,10 @@ for (const guarded of [true, false])
       // The newest edit waits on the main thread while the old exact job is
       // held. Neither candidate may commit until its validation has finished.
       const queued = await backup(page);
-      expect(Object.values(queued.nodes).find(n => n.kind === 'parameter')?.expression).toBe('58');
+      expect(
+        Object.values(queued.nodes).find((n) => n.kind === 'parameter')
+          ?.expression
+      ).toBe('58');
       await page.evaluate(() =>
         (
           window as typeof window & { releaseHeightCheck?: () => void }
@@ -273,10 +281,14 @@ for (const guarded of [true, false])
           )
         )
         .toBe(true);
-      await expect(page.getByText('Checking geometry…', { exact: true })).toHaveCount(0);
+      await expect(
+        page.getByText('Checking geometry…', { exact: true })
+      ).toHaveCount(0);
       const afterLateResult = await backup(page);
       // The superseded 60 must never become a history entry; only 62 commits.
-      expect(afterLateResult.commandLog.length).toBe(queued.commandLog.length + 1);
+      expect(afterLateResult.commandLog.length).toBe(
+        queued.commandLog.length + 1
+      );
       expect(
         Object.values(afterLateResult.nodes).find((n) => n.kind === 'parameter')
           ?.expression

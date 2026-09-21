@@ -162,6 +162,7 @@ interface SidebarProps {
     name: string,
     expression: string
   ): void | Promise<string | null>;
+  onViewActivityLog(): void;
   parameterMinimums?: Record<string, number>;
   onDeleteParameter(name: string): void;
   onExposeParameter(name: string, exposed: boolean): void;
@@ -221,6 +222,7 @@ export function Sidebar({
   onRollbackAfterFeature,
   onConfigureToggle,
   onSetParameter,
+  onViewActivityLog,
   onPreviewParameter,
   onDeleteParameter,
   onExposeParameter,
@@ -368,6 +370,7 @@ export function Sidebar({
               value={parameterValues[parameter.name]}
               minimum={parameterMinimums?.[parameter.name]}
               onSet={onSetParameter}
+              onViewDetails={onViewActivityLog}
               onPreview={onPreviewParameter}
               onDelete={onDeleteParameter}
               onExpose={onExposeParameter}

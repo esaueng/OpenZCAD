@@ -43,6 +43,8 @@ interface ToolCardProps {
   onAction?(action: SelectionActionId): void;
   /** Opens the existing feature a refusal named, so the way out is a button. */
   onEditCulprit?(featureId: string): void;
+  /** Opens the Activity log, where the full kernel diagnostic is retained. */
+  onViewDetails?(): void;
   /**
    * Commits the value the last passing preview showed. After a refusal at
    * release the model on screen is already that value; this keeps it rather
@@ -63,6 +65,7 @@ export function ToolCard({
   cancelableWhileValidating = false,
   onAction,
   onEditCulprit,
+  onViewDetails,
   keepLastValid,
   onClose
 }: ToolCardProps) {
@@ -126,14 +129,14 @@ export function ToolCard({
                 {keepLastValid.label}
               </button>
             ) : null}
-            {model.error.detail ? (
-              // The kernel's own words are kept, but a person reads the cause
-              // first and asks for the machinery only if the cause was not
-              // enough.
-              <details className="tool-card-details">
-                <summary>Details</summary>
-                <span>{model.error.detail}</span>
-              </details>
+            {model.error.detail && onViewDetails ? (
+              <button
+                type="button"
+                className="activity-log-link"
+                onClick={onViewDetails}
+              >
+                View details
+              </button>
             ) : null}
           </span>
         ) : null}

@@ -1775,9 +1775,10 @@ export function App() {
    * that describes a mode the user is still in, such as sketching on a plane.
    */
   const setStatus = useCallback(
-    (text: string, options?: { sticky?: boolean }) => {
+    (text: string, options?: { sticky?: boolean; detail?: string }) => {
       setStatusEntry({
         text,
+        ...(options?.detail ? { detail: options.detail } : {}),
         at: Date.now(),
         sticky: options?.sticky ?? false
       });
@@ -2202,8 +2203,6 @@ export function App() {
       ) => void)
     | null
   >(null);
-  /** Whether the running command will render the current edit's rejection. */
-  const commandOwnsDiagnosticRef = useRef(false);
   /** Cancels the viewport's captured pointer session on keyboard Escape. */
   const cancelDirectManipulationRef = useRef<(() => boolean) | null>(null);
   /** Opens exact entry for the armed handle, as tapping its chip would. */
@@ -2774,12 +2773,6 @@ export function App() {
     onValidationStart: (value) => {
       cylinderRadiusPreview.stop();
       offsetPreview.stop();
-      // Recorded before the dispatch, while the machine still holds the state
-      // the reducer will test: a command that owns this run will render its own
-      // rejection, so the status line must not print a second copy.
-      commandOwnsDiagnosticRef.current = isOperationState(
-        interactionRef.current
-      );
       const document = managerRef.current?.document;
       pendingDirectEditRef.current = document
         ? {
@@ -2816,9 +2809,13 @@ export function App() {
         diagnostic,
         value
       });
-      if (!commandOwnsDiagnosticRef.current) {
-        setStatus(diagnostic.message);
-      }
+      // The card owns the compact visible refusal, while the status entry
+      // retains the same diagnostic for the Activity log even when the bar is
+      // muted behind that card.
+      setStatus(
+        diagnostic.message,
+        diagnostic.detail ? { detail: diagnostic.detail } : undefined
+      );
     },
     onCommitted: (bodyId) => {
       const pending = pendingDirectEditRef.current;
@@ -11863,7 +11860,7 @@ export function App() {
         parameterEditRequest.current === request &&
         managerRef.current === manager
       )
-        setStatus(message);
+        setStatus(`Parameter ${name} was not changed.`, { detail: message });
       return message;
     };
     const moved =
@@ -13570,11 +13567,16 @@ export function App() {
     if (!isOperationState(interactionRef.current)) {
       return;
     }
+    const diagnostic = splitRefusal(message);
     dispatchInteraction({
       type: 'validation-failed',
-      diagnostic: splitRefusal(message),
+      diagnostic,
       value
     });
+    setStatus(
+      diagnostic.message,
+      diagnostic.detail ? { detail: diagnostic.detail } : undefined
+    );
     recordDirectEditOutcome('preview-failed', { value, message });
   }
 
@@ -16118,6 +16120,7 @@ export function App() {
       onSetParameter={(name, expression) =>
         handleSetParameter(name, expression)
       }
+      onViewActivityLog={() => setActivityLogOpen(true)}
       onDeleteParameter={(name) =>
         executeCommand(commandFactories.deleteParameter({ name }))
       }
@@ -16388,6 +16391,7 @@ export function App() {
             onSetParameter={(name, expression) =>
               handleSetParameter(name, expression)
             }
+            onViewActivityLog={() => setActivityLogOpen(true)}
             onExportStep={() => void handleExportStep()}
             onOpenMeshExport={() => setMeshExportOpen(true)}
             share={
@@ -16778,6 +16782,7 @@ export function App() {
                       }
                       onAction={handleSelectionAction}
                       onEditCulprit={handleEditCulpritFeature}
+                      onViewDetails={() => setActivityLogOpen(true)}
                       {...(keepLastValid ? { keepLastValid } : {})}
                       // Never up in sketch mode (the column header names the
                       // sketch), so a close is always a clear.
@@ -17634,6 +17639,9 @@ export function App() {
             id={activityLogId}
             open={activityLogOpen}
             status={visibleStatus}
+            {...(visibleStatus === status && statusEntry.detail
+              ? { detail: statusEntry.detail }
+              : {})}
             tone={tone}
             triggerRef={activityLogTriggerRef}
             onClose={(restoreFocus) => {

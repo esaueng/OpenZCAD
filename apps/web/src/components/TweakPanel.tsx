@@ -14,6 +14,7 @@ interface TweakPanelProps {
     name: string,
     expression: string
   ): void | Promise<string | null>;
+  onViewActivityLog(): void;
   parameterMinimums?: Record<string, number>;
   onExportStep(): void;
   onOpenMeshExport(): void;
@@ -40,6 +41,7 @@ export function TweakPanel({
   modelError,
   exportScope,
   onSetParameter,
+  onViewActivityLog,
   onPreviewParameter,
   onExportStep,
   onOpenMeshExport,
@@ -71,6 +73,7 @@ export function TweakPanel({
               value={parameterValues[parameter.name]}
               minimum={parameterMinimums?.[parameter.name]}
               onSet={onSetParameter}
+              onViewDetails={onViewActivityLog}
               onPreview={onPreviewParameter}
             />
             {parameter.description && (
