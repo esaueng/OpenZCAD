@@ -11,6 +11,11 @@ import {
   faceWitnessOf
 } from './exact-witnesses';
 import { topologyHashOfWitness } from './topology-lineage';
+import {
+  decodeRemusMoveFacesJournal,
+  type RemusMoveFacesRelation
+} from './remus-lineage';
+import { moveFacesJournalFaceMap } from './exact-lineage-builders';
 
 export interface RemusOpposingPlanarFacePair {
   faceA: number;
@@ -156,6 +161,81 @@ function unchangedFaceAfterMove(
   return matches[0]!;
 }
 
+/**
+ * One move through the journaled entry point, with its source-to-result face
+ * map read back against the solid the kernel actually built.
+ *
+ * The journal is history, not geometry: when the entry point refuses, the
+ * plain move builds the same solid without it and lineage falls back to
+ * unchanged witnesses. Either way the acceptance gates below still prove the
+ * geometry before anything is published.
+ */
+function journaledMove(
+  kernel: RemusKernel,
+  solid: number,
+  faces: Uint32Array,
+  distance: number
+): { solid: number; relation: RemusMoveFacesRelation | null } {
+  const sourceFaces = Array.from(kernel.getSolidFaces(solid));
+  let journal: { solid: number; op: number };
+  try {
+    journal = decodeRemusMoveFacesJournal(
+      kernel.moveFacesJournaled(solid, faces, distance)
+    );
+  } catch {
+    return { solid: kernel.moveFaces(solid, faces, distance), relation: null };
+  }
+  const relation = moveFacesJournalFaceMap(
+    kernel,
+    journal.op,
+    sourceFaces,
+    Array.from(kernel.getSolidFaces(journal.solid))
+  );
+  return { solid: journal.solid, relation };
+}
+
+/**
+ * Compose the two legs of a symmetric move into one source-to-final map.
+ * Either leg falling back to the unjournaled entry point refuses the whole
+ * composition: a half-traced history is not evidence. Merge conflicts poison
+ * their original sources even where only one leg saw the merge, so a source
+ * the journal refused can never ride the unchanged-witness fallback.
+ */
+function composeMoveFacesRelations(
+  first: RemusMoveFacesRelation | null,
+  second: RemusMoveFacesRelation | null
+): RemusMoveFacesRelation | null {
+  if (!first || !second) {
+    return null;
+  }
+  const conflictedSources = new Set<number>(first.conflictedSources);
+  const finalClaimants = new Map<number, number[]>();
+  for (const [source, intermediate] of first.faceMap) {
+    if (first.conflictedSources.has(source)) {
+      continue;
+    }
+    const final = second.faceMap.get(intermediate);
+    if (final === undefined) {
+      if (second.conflictedSources.has(intermediate)) {
+        conflictedSources.add(source);
+      }
+      continue;
+    }
+    finalClaimants.set(final, [...(finalClaimants.get(final) ?? []), source]);
+  }
+  const faceMap = new Map<number, number>();
+  for (const [final, sources] of finalClaimants) {
+    if (sources.length !== 1) {
+      for (const source of sources) {
+        conflictedSources.add(source);
+      }
+      continue;
+    }
+    faceMap.set(sources[0]!, final);
+  }
+  return { faceMap, conflictedSources };
+}
+
 function moveFacePair(
   kernel: RemusKernel,
   solid: number,
@@ -163,30 +243,37 @@ function moveFacePair(
   faceB: number,
   mode: FaceDistanceMoveMode,
   delta: number
-): number {
+): { solid: number; relation: RemusMoveFacesRelation | null } {
   if (!Number.isFinite(delta) || Math.abs(delta) <= DIRECT_EDIT_TOLERANCE) {
     throw new Error('Face-distance move must be a finite non-zero distance.');
   }
   if (mode === 'symmetric') {
     const oppositeHash = faceFingerprint(kernel, faceB);
-    const first = kernel.moveFaces(
+    const first = journaledMove(
+      kernel,
       solid,
       coplanarFaceGroup(kernel, solid, faceA),
       delta / 2
     );
     const intermediateOpposite = unchangedFaceAfterMove(
       kernel,
-      first,
+      first.solid,
       oppositeHash
     );
-    return kernel.moveFaces(
-      first,
-      coplanarFaceGroup(kernel, first, intermediateOpposite),
+    const second = journaledMove(
+      kernel,
+      first.solid,
+      coplanarFaceGroup(kernel, first.solid, intermediateOpposite),
       delta / 2
     );
+    return {
+      solid: second.solid,
+      relation: composeMoveFacesRelations(first.relation, second.relation)
+    };
   }
   const movingFace = mode === 'one-sided-first' ? faceA : faceB;
-  return kernel.moveFaces(
+  return journaledMove(
+    kernel,
     solid,
     coplanarFaceGroup(kernel, solid, movingFace),
     delta
@@ -271,14 +358,14 @@ export function rebuildFaceDistance(
   source: RemusOpposingPlanarFacePair,
   mode: FaceDistanceMoveMode,
   desiredDistance: number
-): number {
+): { solid: number; relation: RemusMoveFacesRelation | null } {
   if (
     !Number.isFinite(desiredDistance) ||
     desiredDistance <= DIRECT_EDIT_TOLERANCE
   ) {
     throw new Error('Face distance must be greater than zero.');
   }
-  const output = moveFacePair(
+  const moved = moveFacePair(
     kernel,
     solid,
     source.faceA,
@@ -286,6 +373,7 @@ export function rebuildFaceDistance(
     mode,
     desiredDistance - source.distance
   );
+  const output = moved.solid;
   requireValidSolid(
     kernel,
     output,
@@ -300,7 +388,7 @@ export function rebuildFaceDistance(
     );
   }
   requireMovedPair(kernel, output, source, mode, desiredDistance);
-  return output;
+  return moved;
 }
 
 /** Returns the accepted changed distance, or null when this mode is unsupported. */

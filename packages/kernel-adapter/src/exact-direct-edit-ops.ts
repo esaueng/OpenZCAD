@@ -62,6 +62,7 @@ import {
 } from './topology-fingerprint';
 import {
   createRemusSemanticLineage,
+  deriveRemusMoveFacesDirectEditLineage,
   mergeRemusLineageStates,
   propagateRemusUnchangedDirectEditLineage,
   type RemusLineageState
@@ -1156,18 +1157,31 @@ function setFaceDistance(
     }
     throw new Error('Face distance must differ from its current distance.');
   }
-  const output = rebuildFaceDistance(
+  const sourceCandidates = topologyCandidatesForSolid(kernel, solid);
+  const moved = rebuildFaceDistance(
     kernel,
     solid,
     proof,
     operation.moveMode,
     distance
   );
-  const lineage = propagateRemusUnchangedDirectEditLineage(
-    target.lineage,
-    topologyCandidatesForSolid(kernel, output)
-  );
-  return { solids: [output], ...(lineage ? { lineage } : {}) };
+  const resultCandidates = topologyCandidatesForSolid(kernel, moved.solid);
+  // A face-distance move re-limits the neighbours of the faces it moves, so
+  // the moved faces' witnesses change and the unchanged carry below would
+  // drop every downstream reference that names them. The journaled move
+  // records which result face each source face became; the derivation
+  // re-verifies each claim against the measured source and result solids and
+  // refuses disagreements, while sources the journal could not trace keep
+  // the unchanged carry they always had.
+  const lineage = moved.relation
+    ? deriveRemusMoveFacesDirectEditLineage({
+        source: target.lineage,
+        sourceCandidates,
+        resultCandidates,
+        relation: moved.relation
+      })
+    : propagateRemusUnchangedDirectEditLineage(target.lineage, resultCandidates);
+  return { solids: [moved.solid], ...(lineage ? { lineage } : {}) };
 }
 
 /**
