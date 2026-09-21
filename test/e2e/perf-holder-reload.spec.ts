@@ -28,6 +28,12 @@ import { letteredHolder } from '../support/lettered-holder';
  *   OZ_PERF_HOLDER_PARAMETER=opening_width \
  *   pnpm exec playwright test perf-holder-reload
  *
+ * The documented private hammer source contains raised lettering, so its
+ * current-main verified suggestion is "Parameterize holder and text" and its
+ * parameter is `holder_height`. Set `OZ_PERF_HOLDER_SUGGESTIONS` explicitly
+ * when measuring that source (or another private source with a different
+ * verified proposal).
+ *
  * OZ_PERF_BUDGET=1 additionally asserts the H02 budgets recorded in
  * docs/qa/2026-09-17/first-edit-after-reload.md: after the reload has
  * settled, the first edit costs no more than 1.5× the warm edit plus 250 ms,
@@ -323,6 +329,10 @@ const scenarios: Scenario[] = [
 if (process.env.OZ_PERF_HOLDER_STEP) {
   const file = process.env.OZ_PERF_HOLDER_STEP;
   const parameter = process.env.OZ_PERF_HOLDER_PARAMETER ?? 'opening_width';
+  const defaultSuggestions =
+    parameter === 'holder_height'
+      ? 'Parameterize holder and text'
+      : 'Parameterize the opening;Parameterize the mounting holes';
   scenarios.push({
     title: `private holder: ${parameter}`,
     fixture: `private file (${file.split('/').at(-1) ?? file})`,
@@ -331,8 +341,7 @@ if (process.env.OZ_PERF_HOLDER_STEP) {
       buffer: await readFile(file)
     }),
     suggestions: (
-      process.env.OZ_PERF_HOLDER_SUGGESTIONS ??
-      'Parameterize the opening;Parameterize the mounting holes'
+      process.env.OZ_PERF_HOLDER_SUGGESTIONS ?? defaultSuggestions
     ).split(';'),
     parameter,
     initial: '',
