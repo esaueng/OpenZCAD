@@ -252,7 +252,7 @@ describe('planar-distance proof paths', { timeout: 120_000 }, () => {
         source!,
         'one-sided-first',
         desiredDistance
-      );
+      ).solid;
       const measured = queryOpposingPlanarFacePairs(kernel, solid).find(
         (pair) =>
           Math.abs(pair.normal[2]) > 0.99 &&
