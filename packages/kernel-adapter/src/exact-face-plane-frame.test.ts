@@ -254,7 +254,9 @@ describe('planar-distance proof paths', { timeout: 120_000 }, () => {
         desiredDistance
       );
       const measured = queryOpposingPlanarFacePairs(kernel, solid).find(
-        (pair) => Math.abs(pair.normal[2]) > 0.99
+        (pair) =>
+          Math.abs(pair.normal[2]) > 0.99 &&
+          Math.abs(pair.distance - desiredDistance) <= 1e-8
       );
       expect(measured?.distance).toBeCloseTo(desiredDistance, 8);
     }
