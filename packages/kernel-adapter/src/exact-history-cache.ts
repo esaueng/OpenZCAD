@@ -4,16 +4,18 @@
  *
  * `syncDocument` used to rebuild the whole history in a throwaway kernel on
  * every call. The adapter now keeps ONE long-lived history kernel and takes a
- * kernel checkpoint plus a JS-state snapshot after every feature. The next
- * sync digests the incoming feature list, restores the longest prefix whose
- * digests still match, and replays only the edited suffix. The kernel
+ * kernel checkpoint plus a JS-state snapshot after each of the earliest
+ * features, up to the retention limit. The next sync digests the eligible
+ * prefix, restores the longest prefix whose digests still match, and replays
+ * the remaining suffix. The kernel
  * guarantees this is sound: handles allocated before a checkpoint stay valid
  * after `restore`, and handles allocated after it are permanently retired,
  * never reused for a different entity.
  *
- * Export, mesh-quality, and sketch-solve methods keep their own throwaway
- * kernels: they are rare, and sharing the history kernel with them would put
- * its checkpoints one bug away from corruption.
+ * Export, mesh-quality and imported-face recognition share this history
+ * kernel and restore its last retained prefix after operating. Sketch solves
+ * use a separate kernel. Scratch checkpoints must be restored and discarded
+ * before returning so the kernel stack and adapter table remain aligned.
  */
 import {
   expressionIdentifiers,
@@ -33,8 +35,10 @@ import { bezierProfileEdgesEnabled } from './profile-bezier-edges';
 /**
  * Retained checkpoints are full `Topology` arena clones (the kernel
  * copy-on-writes the arena at the first mutation after each checkpoint), so
- * the cap bounds wasm-heap retention. A document with more features than
- * this rebuilds from scratch every sync, exactly as before the cache.
+ * the cap bounds their COUNT, not their bytes or the kernel's lifetime arena
+ * allocation. Longer histories retain this earliest prefix and replay the
+ * remaining suffix on every sync. Suppressed and failed features also occupy
+ * a prefix entry, preserving their build state and attributed warnings.
  */
 export const MAX_HISTORY_CHECKPOINTS = 32;
 
