@@ -637,7 +637,10 @@ test('keeps a source circle stable over its coincident extrude edge', async ({
     page.locator('.feature-row-main', { hasText: 'Sketch 01' })
   ).toBeVisible();
 
-  await sketchTools.getByRole('button', { name: 'Extrude' }).click();
+  // The status prompt advertises E while sketch mode is active; exercise the
+  // keyboard route rather than the rail so that it cannot regress behind the
+  // sketch-mode key handler's early return.
+  await page.keyboard.press('e');
   await page.getByTestId('direct-manipulation-value').click();
   const heightKeypad = page.getByRole('dialog', { name: 'Height value' });
   await heightKeypad.getByRole('textbox').fill('24');
