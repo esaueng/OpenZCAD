@@ -1,6 +1,6 @@
 import { resolve } from 'node:path';
 import { defineConfig } from 'vitest/config';
-import config from '../../vitest.config.ts';
+import config from '../../vitest.config';
 
 const baseline = process.env.HISTORY_MODE === 'baseline';
 const baselineRoot = process.env.HISTORY_BASELINE_ROOT;
