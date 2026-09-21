@@ -317,6 +317,47 @@ export function deriveRemusBooleanCarrierLineage(input: {
   return state;
 }
 
+/** The `{solid, op}` record a journaled kernel move-faces returns. */
+export interface RemusMoveFacesJournal {
+  readonly solid: number;
+  readonly op: number;
+}
+
+/**
+ * Strict decoder for a journaled move-faces result. A malformed record is a
+ * refusal, never an empty map: the caller must fall back to the unjournaled
+ * entry point deliberately rather than inherit a silent blank.
+ */
+export function decodeRemusMoveFacesJournal(
+  value: unknown
+): RemusMoveFacesJournal {
+  try {
+    if (typeof value !== 'string') {
+      throw new Error('Move-faces journal must be JSON text.');
+    }
+    const decoded: unknown = JSON.parse(value);
+    if (!decoded || typeof decoded !== 'object' || Array.isArray(decoded)) {
+      throw new Error('Move-faces journal root must be an object.');
+    }
+    const root = decoded as Record<string, unknown>;
+    const { solid, op } = root;
+    if (
+      !Number.isSafeInteger(solid) ||
+      (solid as number) < 0 ||
+      !Number.isSafeInteger(op) ||
+      (op as number) < 0
+    ) {
+      throw new Error('Move-faces journal must name a solid and a journal op.');
+    }
+    return { solid: solid as number, op: op as number };
+  } catch (error) {
+    const message = error instanceof Error ? error.message : 'invalid payload';
+    throw new Error(`Remus move-faces journal rejected: ${message}`, {
+      cause: error
+    });
+  }
+}
+
 /** The `{compound, op}` record a journaled kernel pattern returns. */
 export interface RemusPatternJournal {
   readonly compound: number;
@@ -612,6 +653,276 @@ export function carryRemusUnchangedLineage(
       code: omittedCode,
       operation,
       message: `${operation} retained ${references.length - omitted} unchanged semantic references; ${omitted} changed or ambiguous references remain hash-only.`
+    });
+  }
+  return output;
+}
+
+export interface RemusMoveFacesRelation {
+  /**
+   * Verified source-face → result-face entries read from the move journal
+   * against the actual resulting geometry: every bound handle was checked to
+   * be a face of the solid the production path actually built.
+   */
+  readonly faceMap: ReadonlyMap<number, number>;
+  /**
+   * Sources the journal merged into a shared result face. These are never
+   * carried and never fall back to witness matching: neither piece is "the"
+   * original, so publishing either would be a guess.
+   */
+  readonly conflictedSources: ReadonlySet<number>;
+}
+
+function sameLineageName(
+  left: FaceTopologyReferenceV5,
+  right: FaceTopologyReferenceV5
+): boolean {
+  return (
+    left.producingFeatureId === right.producingFeatureId &&
+    left.lineageName === right.lineageName
+  );
+}
+
+/** A face reference rebound to its measured result witness. */
+function transformedFaceReference(
+  reference: FaceTopologyReferenceV5,
+  witness: FaceWitnessV1
+): FaceTopologyReferenceV5 {
+  return {
+    ...reference,
+    currentHash: topologyHashOfWitness('face', witness),
+    witness
+  };
+}
+
+/**
+ * Direct-edit (face-distance) lineage from the kernel's own move-faces
+ * construction history (roadmap K05).
+ *
+ * A face-distance move re-limits the neighbours of the faces it moves, so the
+ * moved faces' exact witnesses change and the unchanged-witness carry
+ * ({@link propagateRemusUnchangedDirectEditLineage}) drops every one of them —
+ * along with each downstream reference that names them. The journaled entry
+ * point records, per source face, which result face it became; that claim is
+ * candidate evidence, not the answer, and is held to the same standard as the
+ * boolean evolution payload:
+ *
+ * 1. The source reference has to re-verify against the source solid's own
+ *    measured witness, so a reference its own build had already invalidated
+ *    cannot travel.
+ * 2. The claimed result face must be a measured face of the result solid, and
+ *    its stored witness is refreshed from that measurement — a carried
+ *    reference always matches the exact face it is bound to.
+ * 3. The journal-independent unchanged-witness derivation runs alongside, and
+ *    a result face the two name DIFFERENTLY publishes neither name. Kernel
+ *    history is the claim, the measured geometry is the witness, and a
+ *    disagreement is a refusal rather than a silent overwrite.
+ *
+ * Sources the journal merged into one result, sources it left unbound, and
+ * references whose witnesses changed without a journal claim stay hash-only,
+ * exactly as before. Nothing is placed by proximity or traversal order.
+ */
+export function deriveRemusMoveFacesDirectEditLineage(input: {
+  readonly source: RemusLineageState | undefined;
+  readonly sourceCandidates: readonly RemusTopologyCandidate[];
+  readonly resultCandidates: readonly RemusTopologyCandidate[];
+  readonly relation: RemusMoveFacesRelation;
+}): RemusLineageState | undefined {
+  const { source } = input;
+  if (!source) {
+    return undefined;
+  }
+  const output = emptyLineageState();
+  output.diagnostics.push(...source.diagnostics);
+  const sourceFaces = new Map<number, RemusTopologyCandidate>();
+  for (const candidate of input.sourceCandidates) {
+    if (candidate.kind === 'face') {
+      sourceFaces.set(candidate.handle, candidate);
+    }
+  }
+  const resultFaces = new Map<number, RemusTopologyCandidate>();
+  const resultEdges = new Map<number, RemusTopologyCandidate>();
+  for (const candidate of input.resultCandidates) {
+    (candidate.kind === 'edge' ? resultEdges : resultFaces).set(
+      candidate.handle,
+      candidate
+    );
+  }
+
+  interface FaceClaim {
+    readonly reference: FaceTopologyReferenceV5;
+  }
+  // Journal claims, after source re-verification. A result face two sources
+  // claim is a merge the reader should already have reported; dropping both
+  // here as well keeps a mis-composed relation fail-closed.
+  const journalClaims = new Map<number, FaceClaim>();
+  const journalConflicted = new Set<number>();
+  for (const [sourceHandle, resultHandle] of input.relation.faceMap) {
+    if (input.relation.conflictedSources.has(sourceHandle)) {
+      continue;
+    }
+    const reference = source.faceReferences.get(sourceHandle);
+    const origin = sourceFaces.get(sourceHandle);
+    const result = resultFaces.get(resultHandle);
+    if (!reference || !origin || !result) {
+      continue;
+    }
+    if (!referenceMatchesCandidate(reference, origin)) {
+      continue;
+    }
+    if (
+      inspectTopologyWitness('face', result.witness as FaceWitnessV1).status !==
+      'supported'
+    ) {
+      continue;
+    }
+    if (journalClaims.has(resultHandle)) {
+      journalClaims.delete(resultHandle);
+      journalConflicted.add(resultHandle);
+      continue;
+    }
+    if (journalConflicted.has(resultHandle)) {
+      continue;
+    }
+    journalClaims.set(resultHandle, { reference });
+  }
+  // The independent derivation: exact witness equality, unique match only.
+  const unchangedClaims = new Map<number, FaceClaim>();
+  const unchangedTaken = new Set<string>();
+  for (const reference of source.faceReferences.values()) {
+    const matches = [...resultFaces.values()].filter(
+      (candidate) =>
+        topologyWitnessesEqual(
+          'face',
+          reference.witness,
+          candidate.witness as FaceWitnessV1
+        )
+    );
+    if (matches.length !== 1) {
+      continue;
+    }
+    const match = matches[0]!;
+    const key = `face:${match.handle}`;
+    if (unchangedTaken.has(key)) {
+      continue;
+    }
+    unchangedTaken.add(key);
+    if (!unchangedClaims.has(match.handle)) {
+      unchangedClaims.set(match.handle, { reference });
+    }
+  }
+
+  const publishedIdentities = new Set<string>();
+  const identityKey = (reference: FaceTopologyReferenceV5) =>
+    `${reference.producingFeatureId}:${reference.lineageName}`;
+  const conflictedIdentities = new Set<string>();
+  for (const sourceHandle of input.relation.conflictedSources) {
+    const reference = source.faceReferences.get(sourceHandle);
+    if (reference) {
+      conflictedIdentities.add(identityKey(reference));
+    }
+  }
+  let carriedJournal = 0;
+  let carriedUnchanged = 0;
+  for (const handle of new Set([
+    ...journalClaims.keys(),
+    ...unchangedClaims.keys()
+  ])) {
+    const journal = journalClaims.get(handle);
+    const unchanged = unchangedClaims.get(handle);
+    if (journal && unchanged) {
+      if (!sameLineageName(journal.reference, unchanged.reference)) {
+        output.diagnostics.push({
+          code: 'hash-only',
+          operation: 'direct-edit',
+          topologyKind: 'face',
+          lineageName: journal.reference.lineageName,
+          resultHandles: [handle],
+          message: `Direct-edit construction history named result face ${handle} ${journal.reference.lineageName} where the measured witnesses named it ${unchanged.reference.lineageName}; neither is published.`
+        });
+        continue;
+      }
+      const result = resultFaces.get(handle)!;
+      output.faceReferences.set(
+        handle,
+        transformedFaceReference(
+          journal.reference,
+          result.witness as FaceWitnessV1
+        )
+      );
+      publishedIdentities.add(identityKey(journal.reference));
+      carriedJournal += 1;
+      continue;
+    }
+    if (journal) {
+      const result = resultFaces.get(handle)!;
+      output.faceReferences.set(
+        handle,
+        transformedFaceReference(
+          journal.reference,
+          result.witness as FaceWitnessV1
+        )
+      );
+      publishedIdentities.add(identityKey(journal.reference));
+      carriedJournal += 1;
+      continue;
+    }
+    const claim = unchangedClaims.get(handle)!;
+    // An unchanged match for a CONFLICTED source would republish a name the
+    // journal refused, so conflicted sources never ride the fallback.
+    if (conflictedIdentities.has(identityKey(claim.reference))) {
+      continue;
+    }
+    output.faceReferences.set(
+      handle,
+      transformedFaceReference(
+        claim.reference,
+        resultFaces.get(handle)!.witness as FaceWitnessV1
+      )
+    );
+    publishedIdentities.add(identityKey(claim.reference));
+    carriedUnchanged += 1;
+  }
+  // Edges keep the unchanged-witness carry: the move journal's edge history
+  // is out of scope for dimension-edit references, and an edge whose exact
+  // witness survived is the same edge by measurement.
+  const claimedEdges = new Set<string>();
+  for (const reference of source.edgeReferences.values()) {
+    const matches = [...resultEdges.values()].filter((candidate) =>
+      topologyWitnessesEqual(
+        'edge',
+        reference.witness,
+        candidate.witness as EdgeWitnessV1
+      )
+    );
+    if (matches.length !== 1) {
+      continue;
+    }
+    const match = matches[0]!;
+    const key = `edge:${match.handle}`;
+    if (claimedEdges.has(key)) {
+      continue;
+    }
+    claimedEdges.add(key);
+    const inherited = transformedReference(reference, match.witness);
+    if (inherited.kind !== 'edge') {
+      continue;
+    }
+    output.edgeReferences.set(match.handle, inherited);
+    publishedIdentities.add(
+      `${reference.producingFeatureId}:${reference.lineageName}`
+    );
+    carriedUnchanged += 1;
+  }
+
+  const totalReferences =
+    source.faceReferences.size + source.edgeReferences.size;
+  const omitted = totalReferences - publishedIdentities.size;
+  if (omitted > 0) {
+    output.diagnostics.push({
+      code: 'hash-only',
+      operation: 'direct-edit',
+      message: `Direct-edit carried ${publishedIdentities.size} semantic references through move-faces construction history (${carriedJournal} journal-mapped, ${carriedUnchanged} unchanged); ${omitted} changed, conflicting or ambiguous references remain hash-only.`
     });
   }
   return output;
