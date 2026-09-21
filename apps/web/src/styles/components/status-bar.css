@@ -113,9 +113,37 @@
   white-space: nowrap;
 }
 
-.status-log-entry > span {
+.status-log-copy {
+  display: flex;
+  min-width: 0;
+  flex-direction: column;
+  gap: 2px;
+}
+
+.status-log-copy > span {
   overflow-wrap: anywhere;
   white-space: normal;
+}
+
+.status-log-detail {
+  color: var(--color-text-subtle);
+  white-space: pre-wrap;
+}
+
+.activity-log-link {
+  align-self: flex-start;
+  padding: 0;
+  border: 0;
+  color: var(--color-accent-hi);
+  background: transparent;
+  font: inherit;
+  text-decoration: underline;
+  text-underline-offset: 2px;
+  cursor: pointer;
+}
+
+.activity-log-link:hover {
+  color: var(--color-text);
 }
 
 @media (max-width: 720px) {

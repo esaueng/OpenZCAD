@@ -333,6 +333,73 @@ test('fits the face tool card and orientation cube beside the inspector', async 
   }
 });
 
+test('opens long tool-card diagnostics in the Activity log', async ({
+  page
+}) => {
+  await stubApi(page);
+  await page.setViewportSize({ width: 640, height: 480 });
+  await page.goto('/');
+
+  await page.evaluate(() => {
+    // The deterministic modeling fixtures return a plain refusal, so mount
+    // the production compact-card and Activity-log markup for this state.
+    const card = document.createElement('section');
+    card.className = 'tool-card phase-failed';
+    card.setAttribute('role', 'region');
+    card.setAttribute('aria-label', 'Edit Fillet operation');
+    card.style.position = 'fixed';
+    card.style.zIndex = '9999';
+    card.innerHTML = `
+      <span class="tool-card-icon" aria-hidden="true"></span>
+      <span class="tool-card-copy">
+        <strong>
+          <span class="tool-card-title">Edit Fillet</span>
+          <span class="tool-card-phase pill-failed">Failed</span>
+        </strong>
+        <span class="tool-card-diagnostic" role="alert">
+          <span class="tool-card-error">The exact kernel could not build this result.</span>
+          <button type="button" class="activity-log-link">View details</button>
+        </span>
+      </span>
+      <button type="button" class="tool-card-close" aria-label="Dismiss Edit Fillet"></button>
+    `;
+    document.body.append(card);
+
+    const log = document.createElement('section');
+    log.className = 'status-log-panel';
+    log.setAttribute('role', 'region');
+    log.setAttribute('aria-label', 'Activity log');
+    log.hidden = true;
+    log.innerHTML = `
+      <ol class="status-log-list">
+        <li class="status-log-entry current">
+          <i class="warning"></i><time>02:28:17 AM</time>
+          <span class="status-log-copy">
+            <span>The exact kernel could not build this result.</span>
+            <span class="status-log-detail">resize-blend-failed:resize_blend_exact_reconstruction_refused:planar_support_heal_failed:defeature:unsupported_configuration:kept_face_16_is_not_cylinder_surface</span>
+          </span>
+        </li>
+      </ol>
+    `;
+    document.body.append(log);
+    card.querySelector('.activity-log-link')?.addEventListener('click', () => {
+      log.hidden = false;
+    });
+  });
+
+  const card = page.getByRole('region', { name: 'Edit Fillet operation' });
+  await expect(card).not.toContainText('resize-blend-failed');
+  await card.getByRole('button', { name: 'View details' }).click();
+  const log = page.getByRole('region', { name: 'Activity log' });
+  await expect(log).toBeVisible();
+  await expect(log).toContainText('resize-blend-failed');
+  expect(
+    await card.evaluate(
+      (element) => element.scrollWidth <= element.clientWidth + 1
+    )
+  ).toBe(true);
+});
+
 test('keeps a chained line anchored across committed sketch entities', async ({
   page
 }) => {
