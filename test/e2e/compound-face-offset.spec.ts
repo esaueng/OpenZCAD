@@ -58,7 +58,45 @@ test('previews and commits a compound STEP cap offset, then undoes, redoes and r
   // Legacy documents intentionally retain their compound body. Fresh STEP
   // imports now create independent bodies and are covered in step-bodies.spec.
   await expect(page.locator('.save-state')).toHaveClass(/is-synced/);
-  const document = importStepBody(
+  // Backup import regenerates the project id (importProjectCopy), so the
+  // pre-import id can never identify the stored record. Capture the ids that
+  // already exist and select the imported record by exclusion instead of
+  // trusting projects[0] order.
+  const readSavedProjects = () =>
+    page.evaluate(
+      () =>
+        new Promise<{ projectId: string; featureOrder?: string[] }[]>(
+          (resolve, reject) => {
+            const request = indexedDB.open('openzcad-v2');
+            request.onerror = () =>
+              reject(new Error('Could not read the saved project.'));
+            request.onsuccess = () => {
+              const db = request.result;
+              const all = db
+                .transaction('projects', 'readonly')
+                .objectStore('projects')
+                .getAll();
+              all.onerror = () => {
+                db.close();
+                reject(new Error('Could not read the saved project.'));
+              };
+              all.onsuccess = () => {
+                db.close();
+                resolve(
+                  all.result as {
+                    projectId: string;
+                    featureOrder?: string[];
+                  }[]
+                );
+              };
+            };
+          }
+        )
+    );
+  const preImportProjectIds = new Set(
+    (await readSavedProjects()).map((project) => project.projectId)
+  );
+  const importedDocument = importStepBody(
     createProjectDocument('Compound face offset', toUserId('user_test')),
     {
       name: 'components',
@@ -74,7 +112,7 @@ test('previews and commits a compound STEP cap offset, then undoes, redoes and r
       JSON.stringify({
         format: 'openzcad-project',
         version: 1,
-        document,
+        document: importedDocument,
         files: []
       })
     )
@@ -224,32 +262,14 @@ test('previews and commits a compound STEP cap offset, then undoes, redoes and r
   // The source badge does not indicate whether the debounced device save
   // has finished. Wait for the committed history in IndexedDB before reload.
   await expect
-    .poll(() =>
-      page.evaluate(
-        () =>
-          new Promise<number>((resolve, reject) => {
-            const request = indexedDB.open('openzcad-v2');
-            request.onerror = () =>
-              reject(new Error('Could not read the saved project.'));
-            request.onsuccess = () => {
-              const db = request.result;
-              const all = db
-                .transaction('projects', 'readonly')
-                .objectStore('projects')
-                .getAll();
-              all.onerror = () => {
-                db.close();
-                reject(new Error('Could not read the saved project.'));
-              };
-              all.onsuccess = () => {
-                const projects = all.result as { featureOrder?: string[] }[];
-                db.close();
-                resolve(projects[0]?.featureOrder?.length ?? 0);
-              };
-            };
-          })
-      )
-    )
+    .poll(async () => {
+      const projects = await readSavedProjects();
+      return (
+        projects.find(
+          (project) => !preImportProjectIds.has(project.projectId)
+        )?.featureOrder?.length ?? 0
+      );
+    })
     .toBe(2);
   await page.reload();
   await expect.poll(capX, { timeout: 30_000 }).toBeCloseTo(68, 2);
