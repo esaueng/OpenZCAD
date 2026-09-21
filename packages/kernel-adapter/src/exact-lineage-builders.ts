@@ -32,6 +32,7 @@ import {
   mergeRemusLineageStates,
   remusHashOnlyLineage,
   type RemusLineageState,
+  type RemusMoveFacesRelation,
   type RemusSemanticAssignment,
   type RemusTopologyCandidate
 } from './remus-lineage';
@@ -221,6 +222,72 @@ export function patternJournalFaceClaims(
         sourceFaces.map((source, index) => [source, block[index]!] as const)
       );
     });
+  } catch {
+    return null;
+  }
+}
+
+/**
+ * A journaled move-faces op's face outputs, read back as one source-to-result
+ * map.
+ *
+ * The kernel publishes one face output per source-solid face, in the source
+ * solid's own face order — that layout is CHECKED rather than assumed: the op
+ * must hold exactly one output per source face, or the indices below are
+ * reading a layout the kernel did not write and the whole map is refused.
+ * Each bound handle is then verified against the actual result solid: a claim
+ * for a face the result does not have is unverifiable, so that source keeps
+ * the legacy unchanged-witness fallback rather than inheriting a dangling
+ * handle. Two sources bound to one result face is a merge conflict both are
+ * excluded for, and a source with no clean binding keeps the fallback the
+ * same way. Anything the map cannot prove stays hash-only downstream; nothing
+ * is placed by proximity or traversal order.
+ */
+export function moveFacesJournalFaceMap(
+  kernel: RemusKernel,
+  op: number,
+  sourceFaces: readonly number[],
+  resultFaces: readonly number[]
+): RemusMoveFacesRelation | null {
+  if (sourceFaces.length === 0 || resultFaces.length === 0) {
+    return null;
+  }
+  if (
+    new Set(sourceFaces).size !== sourceFaces.length ||
+    new Set(resultFaces).size !== resultFaces.length
+  ) {
+    return null;
+  }
+  try {
+    // The op must have produced exactly these and no more, or the blocking
+    // below is reading a layout that is not the one the kernel wrote.
+    if (boundFaceOutput(kernel, op, sourceFaces.length) !== null) {
+      return null;
+    }
+    const results = new Set(resultFaces);
+    const claimants = new Map<number, number[]>();
+    for (let index = 0; index < sourceFaces.length; index += 1) {
+      const handle = boundFaceOutput(kernel, op, index);
+      if (handle === null || !results.has(handle)) {
+        continue;
+      }
+      claimants.set(handle, [
+        ...(claimants.get(handle) ?? []),
+        sourceFaces[index]!
+      ]);
+    }
+    const faceMap = new Map<number, number>();
+    const conflictedSources = new Set<number>();
+    for (const [result, sources] of claimants) {
+      if (sources.length !== 1) {
+        for (const source of sources) {
+          conflictedSources.add(source);
+        }
+        continue;
+      }
+      faceMap.set(sources[0]!, result);
+    }
+    return { faceMap, conflictedSources };
   } catch {
     return null;
   }
