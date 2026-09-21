@@ -24,12 +24,14 @@ it('shows pending validation, explains refusal, and restores the committed value
         finish = resolve;
       })
   );
+  const onViewDetails = vi.fn();
   render(
     <ParameterRow
       parameter={parameter()}
       value={58}
       minimum={56.910504}
       onSet={onSet}
+      onViewDetails={onViewDetails}
     />
   );
   expect(screen.getByText('Minimum 56.910504')).toBeTruthy();
@@ -39,7 +41,14 @@ it('shows pending validation, explains refusal, and restores the committed value
   expect(screen.getByText('Checking geometry…')).toBeTruthy();
   finish('holder_height must be at least 56.910504 mm.');
   await waitFor(() => expect(input).toHaveValue('58'));
-  expect(screen.getByRole('alert')).toHaveTextContent('No change applied');
+  expect(screen.getByRole('alert')).toHaveTextContent(
+    'No change applied.View details'
+  );
+  expect(
+    screen.queryByText('holder_height must be at least 56.910504 mm.')
+  ).toBeNull();
+  await user.click(screen.getByRole('button', { name: 'View details' }));
+  expect(onViewDetails).toHaveBeenCalledOnce();
   expect(input).toHaveAttribute('aria-invalid', 'true');
   await user.clear(input);
   await user.type(input, '60');
@@ -73,7 +82,14 @@ it('previews drafts before committing and cancels the display on Escape', async 
   const user = userEvent.setup();
   const onPreview = vi.fn();
   const onSet = vi.fn();
-  render(<ParameterRow parameter={parameter()} value={58} onSet={onSet} onPreview={onPreview} />);
+  render(
+    <ParameterRow
+      parameter={parameter()}
+      value={58}
+      onSet={onSet}
+      onPreview={onPreview}
+    />
+  );
   const input = screen.getByLabelText('Expression for holder_height');
   await user.clear(input);
   await user.type(input, '62');

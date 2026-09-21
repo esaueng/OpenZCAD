@@ -21,6 +21,7 @@ interface ParameterRowProps extends ToggleBindingProps {
   parameter: ParameterNode;
   value: number | undefined;
   onSet(name: string, expression: string): void | Promise<string | null>;
+  onViewDetails?(): void;
   minimum?: number;
   onPreview?(name: string, expression: string | null): void;
   /** Absent hides the delete affordance: Tweak adjusts, it never removes. */
@@ -50,6 +51,7 @@ export function ParameterRow({
   parameter,
   value,
   onSet,
+  onViewDetails,
   onPreview,
   minimum,
   onDelete,
@@ -68,7 +70,9 @@ export function ParameterRow({
   const latestParameter = useRef(parameter);
   latestParameter.current = parameter;
   const submission = useRef(0);
-  const [error, setError] = useState<string | null>(null);
+  const [error, setError] = useState<{ detailsAvailable: boolean } | null>(
+    null
+  );
   const [pending, setPending] = useState(false);
 
   // Undo/redo, document hydration and collaborator edits all replace the
@@ -103,16 +107,12 @@ export function ParameterRow({
       const refusal = await onSet(parameter.name, trimmed);
       if (token !== submission.current) return;
       if (refusal) {
-        setError(`${refusal} No change applied.`);
+        setError({ detailsAvailable: true });
         setExpression(latestParameter.current.expression);
       }
-    } catch (cause) {
+    } catch {
       if (token !== submission.current) return;
-      setError(
-        cause instanceof Error
-          ? cause.message
-          : 'The parameter could not be updated.'
-      );
+      setError({ detailsAvailable: false });
       setExpression(latestParameter.current.expression);
     } finally {
       if (token === submission.current) setPending(false);
@@ -232,7 +232,24 @@ export function ParameterRow({
           className={`parameter-feedback${error ? ' error' : ''}`}
           role={error ? 'alert' : 'status'}
         >
-          {error ?? (pending ? 'Checking geometry…' : `Minimum ${minimum}`)}
+          {error ? (
+            <>
+              <span>No change applied.</span>
+              {error.detailsAvailable && onViewDetails ? (
+                <button
+                  type="button"
+                  className="activity-log-link"
+                  onClick={onViewDetails}
+                >
+                  View details
+                </button>
+              ) : null}
+            </>
+          ) : pending ? (
+            'Checking geometry…'
+          ) : (
+            `Minimum ${minimum}`
+          )}
         </p>
       )}
       {parameter.toggle && onConfigureToggle && (

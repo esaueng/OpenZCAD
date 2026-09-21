@@ -537,3 +537,7 @@
 .parameter-feedback.error {
   color: var(--color-error);
 }
+
+.parameter-feedback .activity-log-link {
+  margin-left: 6px;
+}
