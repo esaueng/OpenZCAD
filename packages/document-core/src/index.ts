@@ -63,6 +63,7 @@ import {
   type SketchConstraint,
   type SketchConstraintData,
   type SketchConstraintId,
+  type SketchDimensionLabelPosition,
   type SketchId,
   type SketchNode,
   type SketchObjectData,
@@ -248,6 +249,12 @@ export interface SketchConstraintAddInput {
 export interface SketchConstraintDeleteInput {
   sketchId: SketchId;
   constraintId: SketchConstraintId;
+}
+
+export interface SketchDimensionLabelPositionInput {
+  sketchId: SketchId;
+  constraintId: SketchConstraintId;
+  position: SketchDimensionLabelPosition;
 }
 
 export interface ExtrudeInput {
@@ -1523,6 +1530,52 @@ export function deleteSketchConstraint(
     );
   }
   sketch.constraints = remaining;
+  // Keep an orphaned position in the additive map. Replacing a driving
+  // constraint during value editing deletes and re-adds the same identity in
+  // one transaction; retaining it preserves the user's label placement.
+  next.version += 1;
+  return next;
+}
+
+/**
+ * Stores a driving-dimension label's plane-local decluttering offset. This is
+ * presentation state attached to the sketch, not a constraint value: it
+ * cannot alter solved geometry and replays independently through history.
+ */
+export function setSketchDimensionLabelPosition(
+  document: ProjectDocument,
+  input: SketchDimensionLabelPositionInput
+): ProjectDocument {
+  const { x, y } = input.position;
+  if (!Number.isFinite(x) || !Number.isFinite(y)) {
+    throw new Error('Dimension label position must be finite.');
+  }
+  if (Math.max(Math.abs(x), Math.abs(y)) > 1e6) {
+    throw new Error('Dimension label position is outside the supported range.');
+  }
+  const next = cloneDocument(document);
+  const sketch = findSketch(next, input.sketchId);
+  if (!sketch) {
+    throw new Error(`Sketch ${input.sketchId} not found.`);
+  }
+  const constraint = sketch.constraints?.find(
+    (candidate) => candidate.constraintId === input.constraintId
+  );
+  if (!constraint) {
+    throw new Error(
+      `Sketch ${input.sketchId} has no constraint ${input.constraintId}.`
+    );
+  }
+  const positions = { ...(sketch.dimensionLabelPositions ?? {}) };
+  // Zero is the canonical default, so omit it and keep legacy documents as
+  // compact as possible after a label is returned to its derived anchor.
+  if (Math.abs(x) < 1e-12 && Math.abs(y) < 1e-12) {
+    delete positions[String(input.constraintId)];
+  } else {
+    positions[String(input.constraintId)] = { x, y };
+  }
+  sketch.dimensionLabelPositions =
+    Object.keys(positions).length > 0 ? positions : undefined;
   next.version += 1;
   return next;
 }

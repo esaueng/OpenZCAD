@@ -499,6 +499,17 @@ export interface SketchNode extends BaseNode {
    * earlier document replays untouched.
    */
   constraints?: SketchConstraint[];
+  /**
+   * Plane-local offsets for driving-dimension labels. The offset is relative
+   * to the derived geometric anchor, so parameter edits move the label with
+   * its dimension while preserving the user's decluttering choice.
+   */
+  dimensionLabelPositions?: Record<string, SketchDimensionLabelPosition>;
+}
+
+export interface SketchDimensionLabelPosition {
+  x: number;
+  y: number;
 }
 
 /**

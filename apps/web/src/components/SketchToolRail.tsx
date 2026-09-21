@@ -39,12 +39,17 @@ export interface SketchConstraintListItem {
   constraintId: string;
   label: string;
   editable: boolean;
+  conflicted?: boolean;
 }
 
 /** What the solve-status pill shows; null until a solve has run. */
 export interface SketchSolveStatus {
   label: string;
   tone: 'ok' | 'info' | 'warn';
+  /** Entities named by constraints with measurable residuals, if any. */
+  diagnosticObjectIds?: string[];
+  /** Constraints with measurable residuals, if the solver named any. */
+  conflictingConstraintIds?: string[];
 }
 
 interface SketchToolRailProps {
@@ -497,41 +502,60 @@ export function SketchToolRail({
                 <fieldset>
                   <legend>Constraints</legend>
                   <ul className="sketch-constraint-list">
-                    {constraints.map(({ constraintId, label, editable }) => (
-                      <li key={constraintId}>
-                        {editable ? (
-                          <Tooltip label={`Edit constraint: ${label}`}>
-                            <button
-                              type="button"
-                              className="sketch-constraint-edit"
-                              aria-label={`Edit constraint: ${label}`}
-                              onClick={(event) =>
-                                onEditConstraint(constraintId, {
-                                  x: event.clientX,
-                                  y: event.clientY
-                                })
+                    {constraints.map(
+                      ({ constraintId, label, editable, conflicted }) => (
+                        <li
+                          key={constraintId}
+                          data-conflicted={conflicted ? 'true' : undefined}
+                          aria-label={
+                            conflicted
+                              ? `${label} · solver residual; edit or delete this constraint`
+                              : label
+                          }
+                        >
+                          {editable ? (
+                            <Tooltip
+                              label={
+                                conflicted
+                                  ? `Edit conflicting constraint: ${label}`
+                                  : `Edit constraint: ${label}`
                               }
                             >
-                              {label}
+                              <button
+                                type="button"
+                                className="sketch-constraint-edit"
+                                data-conflicted={
+                                  conflicted ? 'true' : undefined
+                                }
+                                aria-label={`Edit constraint: ${label}`}
+                                onClick={(event) =>
+                                  onEditConstraint(constraintId, {
+                                    x: event.clientX,
+                                    y: event.clientY
+                                  })
+                                }
+                              >
+                                {label}
+                              </button>
+                            </Tooltip>
+                          ) : (
+                            <Tooltip label={label}>
+                              <span>{label}</span>
+                            </Tooltip>
+                          )}
+                          <Tooltip label={`Delete constraint: ${label}`}>
+                            <button
+                              type="button"
+                              className="row-delete"
+                              aria-label={`Delete constraint: ${label}`}
+                              onClick={() => onDeleteConstraint(constraintId)}
+                            >
+                              <Trash2 size={12} aria-hidden="true" />
                             </button>
                           </Tooltip>
-                        ) : (
-                          <Tooltip label={label}>
-                            <span>{label}</span>
-                          </Tooltip>
-                        )}
-                        <Tooltip label={`Delete constraint: ${label}`}>
-                          <button
-                            type="button"
-                            className="row-delete"
-                            aria-label={`Delete constraint: ${label}`}
-                            onClick={() => onDeleteConstraint(constraintId)}
-                          >
-                            <Trash2 size={12} aria-hidden="true" />
-                          </button>
-                        </Tooltip>
-                      </li>
-                    ))}
+                        </li>
+                      )
+                    )}
                   </ul>
                 </fieldset>
               ) : null}
