@@ -170,6 +170,12 @@ test('offers no action for a save state whose model is not stored', async ({
     });
     database.close();
   });
+  // Move the open document past the pruned checkpoint before reopening it.
+  // Startup autosave is allowed to store the current save point again, so a
+  // current checkpoint would make this fixture race its own retention setup.
+  await addPrimitive(page, /^Cylinder/);
+  await expectBodyCount(page, 2);
+  await expectSaveSettled(page);
   await page.reload();
 
   const savedRow = revisionRow(page, 'Manual save');

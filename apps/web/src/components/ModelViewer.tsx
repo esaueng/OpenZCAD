@@ -4,7 +4,10 @@ import { useEffect, useRef, type MutableRefObject } from 'react';
 import { axisDimensionLabel } from '../lib/primitiveDimensionLabel';
 import * as THREE from 'three';
 import { mark, measure, timed } from '../lib/perf';
-import { buildSketchDimensions } from './viewer/sketchDimensions';
+import {
+  avoidSketchDimensionOverlays,
+  buildSketchDimensions
+} from './viewer/sketchDimensions';
 import type { SketchDimensionAnnotation } from '../lib/sketch/dimensionAnnotations';
 import {
   disposeRetiringOverlays,
@@ -316,6 +319,8 @@ export interface SketchModeState {
   parameterScope: Record<string, number>;
   /** Plane-local endpoints highlighted by Profile diagnostics on request. */
   diagnosticPoints: { x: number; y: number }[];
+  /** Solver-named entities with a measured non-zero residual. */
+  constraintDiagnosticObjectIds: string[];
   dimensions: SketchDimensionAnnotation[];
 }
 
@@ -641,6 +646,7 @@ interface ModelViewerProps {
   /** A drawing gesture completed an entity. */
   onSketchCommit(object: SketchObjectData): void;
   onEditSketchDimension(id: string, anchor: { x: number; y: number }): void;
+  onMoveSketchDimension(id: string, offset: { x: number; y: number }): void;
   /** Mirrors chain/drag liveness into the interaction machine. */
   onSketchDrawingChange(drawing: boolean): void;
   /** Selects a committed entity for exact-value editing. */
@@ -1323,6 +1329,7 @@ export function ModelViewer({
   sketchMode,
   onSketchCommit,
   onEditSketchDimension,
+  onMoveSketchDimension,
   onSketchDrawingChange,
   onSketchSelectObject,
   onSelectSketchProfile,
@@ -1476,6 +1483,8 @@ export function ModelViewer({
   > | null>(null);
   const editSketchDimensionRef = useRef(onEditSketchDimension);
   editSketchDimensionRef.current = onEditSketchDimension;
+  const moveSketchDimensionRef = useRef(onMoveSketchDimension);
+  moveSketchDimensionRef.current = onMoveSketchDimension;
   /** Separate from direct-edit overlays so body rebuilds do not erase it. */
   const measurementGroupRef = useRef<THREE.Group | null>(null);
   /**
@@ -7253,6 +7262,10 @@ export function ModelViewer({
         renderer.domElement.clientHeight
       );
       labelRenderer.render(scene, context.activeCamera);
+      avoidSketchDimensionOverlays(
+        labelRenderer.domElement,
+        viewerHost.parentElement
+      );
       if (cylinderRadiusProxyFrame && import.meta.env.OZ_PERF === '1') {
         mark('cylinder-radius.proxy-frame', {
           latencyMs: Math.max(
@@ -8874,7 +8887,55 @@ export function ModelViewer({
       sketchDimensions,
       sketchBasis,
       context.fatLineResolution(),
-      (id, anchor) => editSketchDimensionRef.current(id, anchor)
+      (id, anchor) => editSketchDimensionRef.current(id, anchor),
+      (clientX, clientY) => {
+        const rect = context.renderer.domElement.getBoundingClientRect();
+        if (rect.width <= 0 || rect.height <= 0) return null;
+        const ndc = new THREE.Vector2(
+          ((clientX - rect.left) / rect.width) * 2 - 1,
+          -((clientY - rect.top) / rect.height) * 2 + 1
+        );
+        context.raycaster.setFromCamera(ndc, context.activeCamera);
+        const normal = new THREE.Vector3()
+          .crossVectors(
+            new THREE.Vector3(
+              sketchBasis.u.x,
+              sketchBasis.u.y,
+              sketchBasis.u.z
+            ),
+            new THREE.Vector3(sketchBasis.v.x, sketchBasis.v.y, sketchBasis.v.z)
+          )
+          .normalize();
+        const plane = new THREE.Plane().setFromNormalAndCoplanarPoint(
+          normal,
+          new THREE.Vector3(
+            sketchBasis.origin.x,
+            sketchBasis.origin.y,
+            sketchBasis.origin.z
+          )
+        );
+        const hit = context.raycaster.ray.intersectPlane(
+          plane,
+          new THREE.Vector3()
+        );
+        if (!hit) return null;
+        const delta = hit.sub(
+          new THREE.Vector3(
+            sketchBasis.origin.x,
+            sketchBasis.origin.y,
+            sketchBasis.origin.z
+          )
+        );
+        return {
+          x: delta.dot(
+            new THREE.Vector3(sketchBasis.u.x, sketchBasis.u.y, sketchBasis.u.z)
+          ),
+          y: delta.dot(
+            new THREE.Vector3(sketchBasis.v.x, sketchBasis.v.y, sketchBasis.v.z)
+          )
+        };
+      },
+      (id, offset) => moveSketchDimensionRef.current(id, offset)
     );
     context.scene.add(overlay.group);
     sketchDimensionsRef.current = overlay;
@@ -9155,7 +9216,12 @@ export function ModelViewer({
     }
     const resolve = (value: unknown) =>
       evalParamValue(value as ParamValue, sketchMode.parameterScope) ?? 0;
-    rig.setObjects(sketchMode.objects, sketchMode.selectedObjectId, resolve);
+    rig.setObjects(
+      sketchMode.objects,
+      sketchMode.selectedObjectId,
+      resolve,
+      sketchMode.constraintDiagnosticObjectIds
+    );
     rig.setProfiles(sketchMode.profiles, true);
     rig.setDiagnostics(sketchMode.diagnosticPoints);
     try {

@@ -42,7 +42,8 @@ export interface SketchModeRig {
   setObjects(
     objects: { id: string; data: SketchObjectData }[],
     selectedObjectId: string | null,
-    resolve: (value: unknown) => number
+    resolve: (value: unknown) => number,
+    diagnosticObjectIds?: readonly string[]
   ): void;
   /** Updates the adaptive sketch-local grid and returns its minor spacing. */
   setGrid(worldPerPixel: number, visible: boolean): number;
@@ -313,8 +314,9 @@ export function buildSketchModeRig(
 
   return {
     group,
-    setObjects(objects, selectedObjectId, resolve) {
+    setObjects(objects, selectedObjectId, resolve, diagnosticObjectIds = []) {
       disposeChildren(committedGroup);
+      const diagnosticIds = new Set(diagnosticObjectIds);
       for (const object of objects) {
         // One object can draw several runs — a text object is one loop per
         // glyph region plus one per counter.
@@ -346,14 +348,19 @@ export function buildSketchModeRig(
           committedGroup.add(pickProxy);
 
           const visual = createFatLine(vertices, {
-            color:
-              object.id === selectedObjectId
+            color: diagnosticIds.has(object.id)
+              ? 0xff5d73
+              : object.id === selectedObjectId
                 ? SELECTED_COLOR
                 : object.data.construction
                   ? 0x7b8da3
                   : COMMITTED_COLOR,
             linewidth: SKETCH_LINE_WIDTH,
-            opacity: object.data.construction ? 0.72 : 0.95,
+            opacity: diagnosticIds.has(object.id)
+              ? 1
+              : object.data.construction
+                ? 0.72
+                : 0.95,
             depthTest: true,
             closed: polyline.closed,
             resolution: resolution()

@@ -44,6 +44,7 @@ export {
   RemusImportedFeatureQuery,
   collectRecognizedImportedFeatures,
   importedProofDisplayDimensions,
+  listPlanarFloorSeeds,
   recognizeImportedFeatureOnSolid,
   type ImportedRecognitionFaceIdentity
 } from './imported-feature-query';
