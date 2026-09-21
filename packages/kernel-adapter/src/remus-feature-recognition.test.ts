@@ -148,7 +148,7 @@ describe('kernel feature recognition', () => {
     return bore(bore(kernel.makeBox(30, 20, 8), 8), 22);
   }
 
-  it('publishes a verified rectangular pocket as a read-only feature', () => {
+  it('publishes an exactly proved rectangular pocket ahead of the kernel claim', () => {
     const solid = imported(pocketedPlate());
     const claimed = parseKernelFeatureClaims(
       kernel.recognizeFeatures(solid, 0.08)
@@ -159,14 +159,16 @@ describe('kernel feature recognition', () => {
     expect(recognized).toHaveLength(1);
     expect(recognized[0]).toMatchObject({
       kind: 'prismatic-pocket',
-      depth: 3,
-      provenance: 'kernel-recognized'
+      depth: 3
     });
+    expect(recognized[0]).not.toHaveProperty('provenance');
     // Floor, four walls and the opening plane the walls end on.
     expect(recognized[0]?.participatingFaceHashes).toHaveLength(6);
-    // Nothing is published without the kernel's claim: this family is the
-    // kernel recognizer's, and the exact one still proves nothing here.
-    expect(recognize(solid, withKernelClaims())).toEqual([]);
+    // The exact floor-loop proof owns these faces, so the agreeing kernel
+    // claim publishes no second answer for the same pocket.
+    // The exact proof needs no kernel claim at all: it publishes unchanged
+    // when the recognizer is unavailable.
+    expect(recognize(solid, withKernelClaims())).toEqual(recognized);
   });
 
   it('measures a fillet band exactly rather than trusting the claim', () => {
