@@ -309,7 +309,7 @@ describe('recognizeImportedFeature', () => {
     for (const wall of walls) {
       graph
         .link('floor', wall, 'concave', 'line', false)
-        .link('opening', wall, 'concave', 'line', false);
+        .link('opening', wall, 'convex', 'line', false);
     }
     graph
       .link('west', 'south', 'concave', 'line', false)

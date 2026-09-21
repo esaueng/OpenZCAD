@@ -665,6 +665,40 @@ export function constraintReferencesObject(
   }
 }
 
+/**
+ * Returns only sketch entities named by constraints with a measured residual.
+ * The solver does not identify a unique culprit for rank redundancy, so this
+ * deliberately leaves those cases unhighlighted instead of guessing.
+ */
+export function residualConstraintObjectIds(
+  sketch: SketchNode | undefined,
+  residuals: ReadonlyArray<{ constraintId: string; maxResidual: number }>,
+  tolerance = 1e-10
+): string[] {
+  if (!sketch) return [];
+  const byId = new Map(
+    (sketch.constraints ?? []).map((constraint) => [
+      String(constraint.constraintId),
+      constraint.data
+    ])
+  );
+  const ids = new Set<string>();
+  for (const residual of residuals) {
+    if (
+      !Number.isFinite(residual.maxResidual) ||
+      residual.maxResidual <= tolerance
+    ) {
+      continue;
+    }
+    const data = byId.get(String(residual.constraintId));
+    if (!data) continue;
+    for (const objectId of sketch.objectIds) {
+      if (constraintReferencesObject(data, objectId)) ids.add(objectId);
+    }
+  }
+  return [...ids];
+}
+
 export type SelectionConstraintPlan =
   | { action: 'refuse'; reason: string }
   /** Single-pick tool: the constraint is complete. */
