@@ -333,6 +333,60 @@ test('fits the face tool card and orientation cube beside the inspector', async 
   }
 });
 
+test('wraps expanded kernel details inside the tool card', async ({ page }) => {
+  await stubApi(page);
+  await page.setViewportSize({ width: 640, height: 480 });
+  await page.goto('/');
+
+  await page.evaluate(() => {
+    // The deterministic modeling fixtures return a plain refusal, so mount
+    // the production ToolCard markup for the long-detail layout state.
+    const card = document.createElement('section');
+    card.className = 'tool-card phase-failed';
+    card.setAttribute('role', 'region');
+    card.setAttribute('aria-label', 'Edit Fillet operation');
+    card.style.position = 'fixed';
+    card.style.zIndex = '9999';
+    card.innerHTML = `
+      <span class="tool-card-icon" aria-hidden="true"></span>
+      <span class="tool-card-copy">
+        <strong>
+          <span class="tool-card-title">Edit Fillet</span>
+          <span class="tool-card-phase pill-failed">Failed</span>
+        </strong>
+        <span class="tool-card-diagnostic" role="alert">
+          <span class="tool-card-error">The exact kernel could not build this result.</span>
+          <details class="tool-card-details">
+            <summary>Details</summary>
+            <span>resize-blend-failed:resize_blend_exact_reconstruction_refused:planar_support_heal_failed:defeature:unsupported_configuration:kept_face_16_is_not_cylinder_surface</span>
+          </details>
+        </span>
+      </span>
+      <button type="button" class="tool-card-close" aria-label="Dismiss Edit Fillet"></button>
+    `;
+    document.body.append(card);
+  });
+
+  const card = page.getByRole('region', { name: 'Edit Fillet operation' });
+  await card.getByText('Details').click();
+  const details = card.locator('.tool-card-details');
+  await expect(details).toHaveAttribute('open', '');
+  expect(
+    await card.evaluate((element) => {
+      const disclosure =
+        element.querySelector<HTMLElement>('.tool-card-details');
+      if (!disclosure) throw new Error('Expected expanded failure details.');
+      return {
+        cardContainsDiagnostic: element.scrollWidth <= element.clientWidth + 1,
+        detailsContainText: disclosure.scrollWidth <= disclosure.clientWidth + 1
+      };
+    })
+  ).toEqual({
+    cardContainsDiagnostic: true,
+    detailsContainText: true
+  });
+});
+
 test('keeps a chained line anchored across committed sketch entities', async ({
   page
 }) => {

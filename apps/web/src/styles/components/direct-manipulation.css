@@ -234,6 +234,7 @@
 .tool-card-diagnostic {
   display: flex;
   flex-direction: column;
+  min-width: 0;
   gap: 4px;
   margin-top: 2px;
   padding: 6px 8px;
@@ -263,8 +264,11 @@
 }
 
 .tool-card-details {
+  min-width: 0;
   font-size: var(--fs-xs);
   color: var(--color-text-dim);
+  white-space: normal;
+  overflow-wrap: anywhere;
 }
 
 .tool-card-details summary {
