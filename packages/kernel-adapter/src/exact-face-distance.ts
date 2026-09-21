@@ -1,7 +1,7 @@
 import type { FaceDistanceMoveMode, Vector3 } from '@openzcad/shared';
 
 import type { RemusKernel } from './remus-runtime';
-import { measureFaceGeometry } from './exact-measure';
+import { readFacePlaneFrame } from './exact-face-plane-frame';
 import { DIRECT_EDIT_TOLERANCE, dot, normalized } from './exact-math';
 import { readMeshQuality } from './exact-shape-utils';
 import { requireValidSolid } from './kernel-validation';
@@ -113,7 +113,7 @@ function coplanarFaceGroup(
   solid: number,
   selectedFace: number
 ): Uint32Array {
-  const selected = measureFaceGeometry(kernel, selectedFace);
+  const selected = readFacePlaneFrame(kernel, selectedFace);
   if (
     selected?.surfaceType !== 'plane' ||
     !selected.normal ||
@@ -126,7 +126,7 @@ function coplanarFaceGroup(
   const scale = Math.max(1, Math.abs(selectedOffset));
   const planeTolerance = Math.max(DIRECT_EDIT_TOLERANCE, scale * 1e-8);
   const group = Array.from(kernel.getSolidFaces(solid)).filter((face) => {
-    const candidate = measureFaceGeometry(kernel, face);
+    const candidate = readFacePlaneFrame(kernel, face);
     return (
       candidate?.surfaceType === 'plane' &&
       candidate.normal !== undefined &&
@@ -303,8 +303,8 @@ function requireMovedPair(
   mode: FaceDistanceMoveMode,
   desiredDistance: number
 ): void {
-  const sourceA = measureFaceGeometry(kernel, source.faceA);
-  const sourceB = measureFaceGeometry(kernel, source.faceB);
+  const sourceA = readFacePlaneFrame(kernel, source.faceA);
+  const sourceB = readFacePlaneFrame(kernel, source.faceB);
   if (
     sourceA?.surfaceType !== 'plane' ||
     sourceB?.surfaceType !== 'plane' ||
@@ -333,8 +333,8 @@ function requireMovedPair(
       ) {
         return false;
       }
-      const candidateA = measureFaceGeometry(kernel, candidate.faceA);
-      const candidateB = measureFaceGeometry(kernel, candidate.faceB);
+      const candidateA = readFacePlaneFrame(kernel, candidate.faceA);
+      const candidateB = readFacePlaneFrame(kernel, candidate.faceB);
       return (
         candidateA?.surfaceType === 'plane' &&
         candidateB?.surfaceType === 'plane' &&
