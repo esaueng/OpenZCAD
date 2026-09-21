@@ -284,7 +284,9 @@ test('offers and grows the arm height on a holder whose arms are solid', async (
   ).toBeVisible();
   await height.fill('1');
   await height.press('Enter');
-  await expect(page.getByRole('alert')).toContainText('must be at least');
+  await expect(page.getByRole('alert')).toHaveText(
+    'No change applied.View details'
+  );
   await expect(height).toHaveValue('32');
   await page.getByRole('button', { name: 'Build', exact: true }).click();
   await expect(page.getByRole('contentinfo')).toContainText('warnings0');
