@@ -115,6 +115,7 @@ describe('ToolCard', () => {
     // The recorded failure told the user to go and edit an earlier fillet and
     // left them to find it. The rejection knows which feature refused.
     const onEditCulprit = vi.fn();
+    const onViewDetails = vi.fn();
     render(
       <ToolCard
         model={{
@@ -133,15 +134,19 @@ describe('ToolCard', () => {
           }
         }}
         onEditCulprit={onEditCulprit}
+        onViewDetails={onViewDetails}
         onClose={vi.fn()}
       />
     );
 
-    // The cause leads; the kernel's own words wait behind a disclosure.
+    // The cause leads; the kernel's own words stay out of the compact card.
     expect(
       screen.getByText('Fillet could not be created on 1 selected edge.')
     ).toBeTruthy();
-    expect(screen.getByText('Details')).toBeTruthy();
+    expect(screen.queryByText(/BRepFilletAPI/)).toBeNull();
+
+    await userEvent.click(screen.getByRole('button', { name: 'View details' }));
+    expect(onViewDetails).toHaveBeenCalledOnce();
 
     await userEvent.click(
       screen.getByRole('button', { name: 'Edit Lower rim fillet' })
@@ -186,7 +191,7 @@ describe('ToolCard', () => {
     expect(screen.getByRole('alert').textContent).toBe(
       'The offset removed the whole body.'
     );
-    expect(screen.queryByText('Details')).toBeNull();
+    expect(screen.queryByText('View details')).toBeNull();
   });
 });
 
