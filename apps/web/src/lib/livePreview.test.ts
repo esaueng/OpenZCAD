@@ -462,7 +462,7 @@ describe('bounded progressive gestures', () => {
     }
   });
 
-  it('budgets measured installation time along with rebuild time', async () => {
+  it('yields for presentation without doubling the worker rebuild time', async () => {
     vi.useFakeTimers();
     try {
       const starts: number[] = [];
@@ -483,11 +483,47 @@ describe('bounded progressive gestures', () => {
       });
       preview.request(1);
       preview.request(2);
-      await vi.advanceTimersByTimeAsync(219);
+      await vi.advanceTimersByTimeAsync(109);
       expect(starts).toHaveLength(1);
       await vi.advanceTimersByTimeAsync(1);
-      expect(starts[1]! - starts[0]!).toBe(220);
+      expect(starts[1]! - starts[0]!).toBe(110);
       preview.clear();
+      await vi.runAllTimersAsync();
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it('bounds the yield after slow work and starts only the newest pending value', async () => {
+    vi.useFakeTimers();
+    try {
+      const starts: { at: number; value: number }[] = [];
+      const preview = new LivePreview<Doc, string>({
+        build: (value) => {
+          starts.push({ at: Date.now(), value });
+          return { value };
+        },
+        derive: async () => {
+          await new Promise((resolve) => setTimeout(resolve, 1500));
+          return 'derived';
+        },
+        publish: () => undefined,
+        publishIntermediate: true,
+        continueAfterSlow: true,
+        minIntervalMs: 100,
+        presentationTimeMs: () => 300,
+        now: () => Date.now()
+      });
+      preview.request(1);
+      await vi.advanceTimersByTimeAsync(1500);
+      preview.request(2);
+      await vi.advanceTimersByTimeAsync(31);
+      preview.request(3);
+      expect(starts).toHaveLength(1);
+      await vi.advanceTimersByTimeAsync(1);
+      expect(starts[1]!.value).toBe(3);
+      expect(starts[1]!.at - starts[0]!.at).toBe(1532);
+      preview.stop();
       await vi.runAllTimersAsync();
     } finally {
       vi.useRealTimers();
