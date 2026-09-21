@@ -222,6 +222,10 @@ interface ViewerShellProps {
   sketchMode: SketchModeState | null;
   onSketchCommit(object: SketchObjectData): void;
   onEditSketchDimension(id: string, anchor: { x: number; y: number }): void;
+  onMoveSketchDimension(
+    id: string,
+    offset: { x: number; y: number }
+  ): void;
   onSketchDrawingChange(drawing: boolean): void;
   onSketchSelectObject(
     objectId: string | null,
@@ -355,6 +359,7 @@ export function ViewerShell({
   sketchMode,
   onSketchCommit,
   onEditSketchDimension,
+  onMoveSketchDimension,
   onSketchDrawingChange,
   onSketchSelectObject,
   sketchViews,
@@ -535,6 +540,7 @@ export function ViewerShell({
         sketchMode={sketchMode}
         onSketchCommit={onSketchCommit}
         onEditSketchDimension={onEditSketchDimension}
+        onMoveSketchDimension={onMoveSketchDimension}
         onSketchDrawingChange={onSketchDrawingChange}
         onSketchSelectObject={onSketchSelectObject}
         sketchViews={sketchViews}
