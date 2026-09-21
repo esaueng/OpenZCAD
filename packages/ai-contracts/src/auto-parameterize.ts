@@ -1031,12 +1031,19 @@ function importedFaceDistanceCandidates(
           : [];
       })
     );
-    // Read-only kernel-recognized features do not claim their faces: a pocket
-    // published for reading must not withdraw the planar-distance proof that
-    // measures its depth.
+    // Only a proof that backs a coordinated edit claims its faces. Pocket,
+    // boss and taper proofs — exact or kernel-recognized — publish knowledge
+    // with no replay behind them, so a pocket published for reading must not
+    // withdraw the planar-distance proof that measures its depth.
     const claimedFaceHashes = new Set(
       (topology.recognizedImportedFeatures ?? [])
-        .filter((feature) => !isReadOnlyRecognizedImportedFeature(feature))
+        .filter(
+          (feature) =>
+            !isReadOnlyRecognizedImportedFeature(feature) &&
+            (feature.kind === 'blind-cylindrical-hole' ||
+              feature.kind === 'counterbore' ||
+              feature.kind === 'countersink')
+        )
         .flatMap((feature) => feature.participatingFaceHashes)
     );
     const ranked = [...(topology.opposingPlanarFacePairs ?? [])]

@@ -1,18 +1,21 @@
 /**
- * The kernel's own feature recognizer, adopted for the two families the exact
- * kernel-neutral recognizer does not publish: rectangular prismatic pockets and
- * curved fillet bands.
+ * The kernel's own feature recognizer, adopted for curved fillet bands and
+ * as a backstop for prismatic pockets the exact kernel-neutral recognizer
+ * declines.
  *
  * One authority per family, recorded here so it cannot drift:
  *
- * - Holes, counterbores, countersinks, bosses and tapers stay the exact
- *   recognizer's. `recognizeFeatures` is read as a cross-check only: where a
- *   kernel hole claim covers an exactly proved feature, the two must agree, and
- *   a disagreement withdraws BOTH answers rather than picking a winner.
- * - Pockets and fillet bands are published from the kernel's claims, tagged
- *   `kernel-recognized`, and are read-only. The claim is candidate evidence
- *   only: nothing is published until the witnesses below prove it against
- *   exact surfaces, and an unprovable claim is dropped rather than softened.
+ * - Holes, counterbores, countersinks, bosses, tapers and exactly proved
+ *   prismatic pockets stay the exact recognizer's. `recognizeFeatures` is
+ *   read as a cross-check only: where a kernel hole claim covers an exactly
+ *   proved feature, the two must agree, and a disagreement withdraws BOTH
+ *   answers rather than picking a winner.
+ * - Fillet bands are published from the kernel's claims, tagged
+ *   `kernel-recognized`, and are read-only, as is a pocket published from a
+ *   verified kernel claim on faces no exact proof touched. The claim is
+ *   candidate evidence only: nothing is published until the witnesses below
+ *   prove it against exact surfaces, and an unprovable claim is dropped
+ *   rather than softened.
  *
  * Nothing here consumes tessellation samples, traversal order, or nearest
  * geometry. Every witness is an analytic surface, an outward face normal, an
