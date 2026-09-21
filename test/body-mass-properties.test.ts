@@ -1,7 +1,8 @@
 import { afterAll, describe, expect, it } from 'vitest';
 import {
   addPrimitiveFeature,
-  createProjectDocument
+  createProjectDocument,
+  transformBody
 } from '@openzcad/document-core';
 import { toUserId } from '@openzcad/shared';
 import type { BodyRepresentation, ProjectDocument } from '@openzcad/shared';
@@ -74,6 +75,37 @@ describe('a box', () => {
       expect(near(moment, expected)).toBeLessThan(1e-9);
     }
     // Products of inertia vanish on the symmetry axes.
+    expect(Math.abs(mass.inertia[3])).toBeLessThan(1e-6);
+    expect(Math.abs(mass.inertia[4])).toBeLessThan(1e-6);
+    expect(Math.abs(mass.inertia[5])).toBeLessThan(1e-6);
+  }, 120_000);
+
+  it('preserves volume and principal moments through a rigid transform', async () => {
+    let document = primitive('box', { width: 20, height: 10, depth: 4 });
+    const bodyId = document.bodyOrder.at(-1)!;
+    document = transformBody(document, {
+      name: 'Place box',
+      targetBodyId: bodyId,
+      translation: { x: 7, y: -3, z: 5 },
+      rotationDeg: { x: 0, y: 0, z: 90 }
+    }).document;
+
+    const body = await bodyOf(document);
+    const mass = body.massProperties!;
+    const volume = 20 * 10 * 4;
+    const expected = [
+      (volume * (10 ** 2 + 4 ** 2)) / 12,
+      (volume * (20 ** 2 + 4 ** 2)) / 12,
+      (volume * (20 ** 2 + 10 ** 2)) / 12
+    ].sort((a, b) => a - b);
+
+    expect(body.volume).toBe(volume);
+    expect(mass.centerOfMass.x).toBeCloseTo(2, 9);
+    expect(mass.centerOfMass.y).toBeCloseTo(7, 9);
+    expect(mass.centerOfMass.z).toBeCloseTo(7, 9);
+    for (const [index, value] of expected.entries()) {
+      expect(near(mass.principalMoments[index]!, value)).toBeLessThan(1e-9);
+    }
     expect(Math.abs(mass.inertia[3])).toBeLessThan(1e-6);
     expect(Math.abs(mass.inertia[4])).toBeLessThan(1e-6);
     expect(Math.abs(mass.inertia[5])).toBeLessThan(1e-6);
