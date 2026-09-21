@@ -263,18 +263,6 @@
   background: rgba(255, 255, 255, 0.16);
 }
 
-.tool-card-details {
-  min-width: 0;
-  font-size: var(--fs-xs);
-  color: var(--color-text-dim);
-  white-space: normal;
-  overflow-wrap: anywhere;
-}
-
-.tool-card-details summary {
-  cursor: pointer;
-}
-
 .tool-card[aria-busy='true'] .tool-card-icon svg {
   animation: tool-card-validating 900ms linear infinite;
 }

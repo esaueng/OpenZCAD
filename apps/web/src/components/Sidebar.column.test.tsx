@@ -52,6 +52,7 @@ function renderSidebar(
     onToggleFeatureSuppression: vi.fn(),
     onRollbackAfterFeature: vi.fn(),
     onSetParameter: vi.fn(),
+    onViewActivityLog: vi.fn(),
     onDeleteParameter: vi.fn(),
     onExposeParameter: vi.fn(),
     onDescribeParameter: vi.fn(),
