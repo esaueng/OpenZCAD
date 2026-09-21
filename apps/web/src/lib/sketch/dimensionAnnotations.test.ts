@@ -49,6 +49,42 @@ const line: SketchObjectData = {
 };
 
 describe('persistent sketch dimensions', () => {
+  it('keeps a stored label offset as geometry and parameters change', () => {
+    const { entries, constraints } = fixture([line], (sketch) => ({
+      constraintKind: 'distance',
+      a: { objectId: sketch.objectIds[0]!, point: 'start' },
+      b: { objectId: sketch.objectIds[0]!, point: 'end' },
+      value: 5
+    }));
+    const id = String(constraints[0]!.constraintId);
+    const [placed] = sketchDimensionAnnotations(
+      entries,
+      constraints,
+      resolve,
+      'mm',
+      { [id]: { x: 2, y: -1 } }
+    );
+    expect(placed?.baseAnchor?.x).toBeCloseTo(0.9, 12);
+    expect(placed?.baseAnchor?.y).toBeCloseTo(2.45, 12);
+    expect(placed?.labelOffset).toEqual({ x: 2, y: -1 });
+    expect(placed?.anchor?.x).toBeCloseTo(2.9, 12);
+    expect(placed?.anchor?.y).toBeCloseTo(1.45, 12);
+
+    const [afterParameterEdit] = sketchDimensionAnnotations(
+      entries.map((entry) => ({
+        ...entry,
+        data: { ...entry.data, x2: 6, y2: 8 }
+      })),
+      constraints,
+      resolve,
+      'mm',
+      { [id]: { x: 2, y: -1 } }
+    );
+    expect(afterParameterEdit?.labelOffset).toEqual({ x: 2, y: -1 });
+    expect(afterParameterEdit?.anchor?.x).toBeCloseTo(3.8, 12);
+    expect(afterParameterEdit?.anchor?.y).toBeCloseTo(3.9, 12);
+  });
+
   it('uses a commanded constraint identity and a 3-4-5 span with in-plane witnesses', () => {
     const { entries, constraints } = fixture([line], (sketch) => ({
       constraintKind: 'distance',
