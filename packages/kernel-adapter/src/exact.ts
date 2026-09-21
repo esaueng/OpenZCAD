@@ -644,9 +644,8 @@ export interface ExactKernelAdapterOptions {
    */
   importedStepCacheBytes?: number;
   /**
-   * Overrides {@link MAX_HISTORY_CHECKPOINTS}. Tests pin the over-limit
-   * bypass without building a 33-feature document; nothing in the app sets
-   * it.
+   * Overrides {@link MAX_HISTORY_CHECKPOINTS}, the maximum number of retained
+   * feature prefixes (not a byte budget). Zero disables history caching.
    */
   historyCheckpointLimit?: number;
   /**
@@ -743,15 +742,17 @@ export class RemusKernelAdapter implements ExactKernelAdapter {
   }
 
   /**
-   * The long-lived history kernel and its per-feature checkpoint table. Owned
-   * exclusively by {@link syncDocument}; every other method keeps its own
-   * throwaway kernel. Invariant: `historyCheckpoints[i].checkpointId === i`,
+   * The adapter-owned history kernel and its retained prefix table, shared by
+   * sync, export, mesh-quality and imported-face recognition. Operations that
+   * allocate scratch restore the last retained prefix before returning.
+   * Invariant: `historyCheckpoints[i].checkpointId === i`,
    * because checkpoints are taken in feature order and `restore(k)` truncates
    * the kernel's stack to `k + 1` while the table is sliced in lockstep.
    */
   private historyKernel: RemusKernel | null = null;
   private historyCheckpoints: HistoryCheckpointEntry[] = [];
   private historyScopeKey: string | null = null;
+  private historyProjectId: ProjectDocument['projectId'] | null = null;
 
   /**
    * Per-body measure-pass cache; see {@link MeasuredBodyCacheEntry} for the
@@ -779,6 +780,7 @@ export class RemusKernelAdapter implements ExactKernelAdapter {
   private invalidateHistoryCache(): void {
     this.historyCheckpoints = [];
     this.historyScopeKey = null;
+    this.historyProjectId = null;
     this.measuredShapeCache.clear();
     this.measuredShapeCacheBytes = 0;
     if (this.historyKernel) {
@@ -820,8 +822,8 @@ export class RemusKernelAdapter implements ExactKernelAdapter {
   /**
    * Restores the longest cached prefix whose digests still match and replays
    * only the remaining features; falls back to a from-scratch build when the
-   * scope changed, no prefix matches, the document is over the checkpoint
-   * cap, or a kernel restore fails.
+   * scope or project changed, no prefix matches, caching is disabled, or a
+   * kernel restore fails. The uncached suffix is always replayed exactly.
    */
   private buildWithHistoryCache(
     document: ProjectDocument,
@@ -836,13 +838,20 @@ export class RemusKernelAdapter implements ExactKernelAdapter {
     restored: number;
   } {
     const features = listFeaturesInOrder(document);
-    const cachingEnabled = features.length <= this.maxHistoryCheckpoints;
+    // Slice keeps the established integer-count meaning of the option: a
+    // fractional budget retains only complete prefixes; nonpositive/NaN
+    // budgets retain none. Never digest or advertise an uncached suffix.
+    const retainedFeatures = features.slice(
+      0,
+      Math.max(0, this.maxHistoryCheckpoints)
+    );
+    const cachingEnabled = retainedFeatures.length > 0;
     const scopeKey = cachingEnabled ? historyScopeDigest(document) : null;
     const scope = cachingEnabled
       ? getParameterScope(document).scope
       : undefined;
     const digests = cachingEnabled
-      ? features.map((feature, index) =>
+      ? retainedFeatures.map((feature, index) =>
           historyFeatureDigest(document, feature, index, scope)
         )
       : [];
@@ -854,6 +863,7 @@ export class RemusKernelAdapter implements ExactKernelAdapter {
     if (
       kernel &&
       cachingEnabled &&
+      this.historyProjectId === document.projectId &&
       this.historyScopeKey !== null &&
       this.historyScopeKey === scopeKey
     ) {
@@ -893,6 +903,7 @@ export class RemusKernelAdapter implements ExactKernelAdapter {
       kernel = new RemusKernel();
       this.historyKernel = kernel;
       this.historyScopeKey = scopeKey;
+      this.historyProjectId = document.projectId;
     }
     const activeKernel = kernel;
 
@@ -958,7 +969,7 @@ export class RemusKernelAdapter implements ExactKernelAdapter {
           /* Display observers cannot change exact acceptance. */
         }
       }
-      if (!cachingEnabled) return;
+      if (index >= digests.length) return;
       const done = report(
         'checkpoint',
         features[index]!.name,
@@ -974,16 +985,24 @@ export class RemusKernelAdapter implements ExactKernelAdapter {
       done();
     };
 
-    const build = buildDocumentHistory(
-      activeKernel,
-      document,
-      importSources,
-      pinnedImports,
-      initial ? { startIndex, initial } : undefined,
-      this.importedSteps,
-      onFeature,
-      onFeatureStart
-    );
+    let build: ExactBuildResult;
+    try {
+      build = buildDocumentHistory(
+        activeKernel,
+        document,
+        importSources,
+        pinnedImports,
+        initial ? { startIndex, initial } : undefined,
+        this.importedSteps,
+        onFeature,
+        onFeatureStart
+      );
+    } catch (error) {
+      // All callers (including export and recognition) must abandon both
+      // halves of a partially built cache if checkpointing or replay throws.
+      this.invalidateHistoryCache();
+      throw error;
+    }
     // The cache event is emitted by syncDocument AFTER the measure pass, so
     // it can carry the measure-reuse counts alongside the replay counts.
     return {
@@ -1698,14 +1717,13 @@ export class RemusKernelAdapter implements ExactKernelAdapter {
 
   /**
    * Runs `operate` against a build of `document` on the long-lived history
-   * kernel instead of a throwaway one. Right after a sync this is a full
-   * prefix restore — zero features replayed — which is what makes "export
-   * doesn't rebuild the model" true.
+   * kernel instead of a throwaway one. It restores the retained prefix and
+   * replays any uncached suffix, just like syncDocument.
    *
-   * The kernel is restored to the last feature checkpoint afterwards, so
-   * anything the operation allocated (unit-scaling solid copies, tessellation
-   * scratch) vanishes and the checkpoint table stays sound for the next sync.
-   * With checkpointing disabled (over-cap histories) there is nothing to
+   * Afterwards the kernel is restored to the last retained checkpoint, so
+   * the uncached suffix and operation scratch (unit-scaling solid copies,
+   * tessellation) vanish. The table stays sound for the next sync.
+   * With checkpointing disabled there is nothing to
    * restore to, so the cache is invalidated exactly as a thrown sync would —
    * the next sync rebuilds from scratch either way.
    */
