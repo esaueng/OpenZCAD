@@ -17,6 +17,8 @@ export const STATUS_SETTLE_MS = 300;
 
 export interface StatusEntry {
   text: string;
+  /** Full diagnostic retained for the Activity log, never the compact bar. */
+  detail?: string;
   /** When the message was set (ms since the epoch); 0 retires it at once. */
   at: number;
   /** Mode text that describes a state the user is still in; never expires. */

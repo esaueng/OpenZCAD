@@ -6,6 +6,7 @@ export type StatusTone = 'ready' | 'warning' | 'running';
 interface StatusLogEntry {
   id: number;
   message: string;
+  detail?: string;
   timestamp: number;
   tone: StatusTone;
 }
@@ -14,6 +15,7 @@ interface StatusActivityLogProps {
   id: string;
   open: boolean;
   status: string;
+  detail?: string;
   tone: StatusTone;
   triggerRef: RefObject<HTMLButtonElement | null>;
   onClose(restoreFocus: boolean): void;
@@ -34,36 +36,48 @@ export function StatusActivityLog({
   id,
   open,
   status,
+  detail,
   tone,
   triggerRef,
   onClose
 }: StatusActivityLogProps) {
   const nextEntryIdRef = useRef(1);
-  const previousStatusRef = useRef({ status, tone });
+  const previousStatusRef = useRef({ status, detail, tone });
   const panelRef = useRef<HTMLElement | null>(null);
   const listRef = useRef<HTMLOListElement | null>(null);
   const [entries, setEntries] = useState<StatusLogEntry[]>(() => [
-    { id: 0, message: status, timestamp: Date.now(), tone }
+    {
+      id: 0,
+      message: status,
+      ...(detail ? { detail } : {}),
+      timestamp: Date.now(),
+      tone
+    }
   ]);
 
   useEffect(() => {
     const previous = previousStatusRef.current;
-    if (previous.status === status && previous.tone === tone) {
+    if (
+      previous.status === status &&
+      previous.detail === detail &&
+      previous.tone === tone
+    ) {
       return;
     }
-    previousStatusRef.current = { status, tone };
+    previousStatusRef.current = { status, detail, tone };
     setEntries((current) =>
       [
         ...current,
         {
           id: nextEntryIdRef.current++,
           message: status,
+          ...(detail ? { detail } : {}),
           timestamp: Date.now(),
           tone
         }
       ].slice(-MAX_STATUS_LOG_ENTRIES)
     );
-  }, [status, tone]);
+  }, [detail, status, tone]);
 
   useEffect(() => {
     if (!open) {
@@ -148,7 +162,12 @@ export function StatusActivityLog({
               <time dateTime={date.toISOString()}>
                 {statusTimeFormatter.format(date)}
               </time>
-              <span>{entry.message}</span>
+              <span className="status-log-copy">
+                <span>{entry.message}</span>
+                {entry.detail ? (
+                  <span className="status-log-detail">{entry.detail}</span>
+                ) : null}
+              </span>
             </li>
           );
         })}

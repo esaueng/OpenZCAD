@@ -234,6 +234,7 @@
 .tool-card-diagnostic {
   display: flex;
   flex-direction: column;
+  min-width: 0;
   gap: 4px;
   margin-top: 2px;
   padding: 6px 8px;
@@ -260,15 +261,6 @@
 
 .tool-card-recovery:hover {
   background: rgba(255, 255, 255, 0.16);
-}
-
-.tool-card-details {
-  font-size: var(--fs-xs);
-  color: var(--color-text-dim);
-}
-
-.tool-card-details summary {
-  cursor: pointer;
 }
 
 .tool-card[aria-busy='true'] .tool-card-icon svg {
