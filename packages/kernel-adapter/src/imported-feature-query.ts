@@ -129,6 +129,136 @@ function exactCircularPlanarArea(
   );
 }
 
+/**
+ * Exact ordered vertices of a planar face's single straight-edged outer
+ * loop, or `undefined` when the face proves no such loop.
+ *
+ * Fail-closed by construction: multiple wires (a holed face), any non-LINE
+ * edge, a non-manifold or open vertex chain, or any unreadable vertex
+ * publishes nothing. The pocket proof's own area check then decides whether
+ * the loop proves the floor; this helper never guesses.
+ *
+ * Chaining is topological (shared vertex handles), never geometric
+ * snapping, so traversal order and tessellation samples cannot leak in.
+ */
+function exactStraightEdgePolygon(
+  kernel: RemusKernel,
+  face: number
+): ExactPoint3[] | undefined {
+  try {
+    const wires = Array.from(kernel.getFaceWires(face));
+    if (wires.length !== 1) {
+      return undefined;
+    }
+    const outer = kernel.getFaceOuterWire(face);
+    if (outer !== wires[0]) {
+      return undefined;
+    }
+    const edges = Array.from(kernel.getWireEdges(outer));
+    if (edges.length < 3 || new Set(edges).size !== edges.length) {
+      return undefined;
+    }
+    for (const edge of edges) {
+      if (kernel.getEdgeCurveType(edge) !== 'LINE') {
+        return undefined;
+      }
+    }
+    const endpoints = new Map<number, [number, number]>();
+    const incidence = new Map<number, number[]>();
+    for (const edge of edges) {
+      const handles = Array.from(kernel.getEdgeVertexHandles(edge));
+      if (handles.length !== 2 || handles[0] === handles[1]) {
+        return undefined;
+      }
+      const [start, end] = [handles[0]!, handles[1]!];
+      endpoints.set(edge, [start, end]);
+      for (const vertex of [start, end]) {
+        incidence.set(vertex, [...(incidence.get(vertex) ?? []), edge]);
+      }
+    }
+    // A single closed loop meets every vertex exactly twice.
+    for (const uses of incidence.values()) {
+      if (uses.length !== 2) {
+        return undefined;
+      }
+    }
+    const ordered: number[] = [];
+    const usedEdges = new Set<number>();
+    const [firstStart, firstEnd] = endpoints.get(edges[0]!)!;
+    ordered.push(firstStart);
+    usedEdges.add(edges[0]!);
+    let current = firstEnd;
+    for (let step = 1; step < edges.length; step += 1) {
+      ordered.push(current);
+      const candidates = (incidence.get(current) ?? []).filter(
+        (edge) => !usedEdges.has(edge)
+      );
+      if (candidates.length !== 1) {
+        return undefined;
+      }
+      const edge = candidates[0]!;
+      usedEdges.add(edge);
+      const [start, end] = endpoints.get(edge)!;
+      current = start === current ? end : start;
+    }
+    if (current !== ordered[0] || usedEdges.size !== edges.length) {
+      return undefined;
+    }
+    const polygon: ExactPoint3[] = [];
+    for (const vertex of ordered) {
+      const position = Array.from(kernel.getVertexPosition(vertex));
+      if (
+        position.length !== 3 ||
+        !position.every((coordinate) => Number.isFinite(coordinate))
+      ) {
+        return undefined;
+      }
+      polygon.push([position[0]!, position[1]!, position[2]!]);
+    }
+    return polygon;
+  } catch {
+    return undefined;
+  }
+}
+
+/**
+ * Planar faces that can seed an exact prismatic-pocket proof: one
+ * straight-edged outer loop with three or more vertices.
+ *
+ * Sorted by handle so recognition order is deterministic and independent of
+ * the kernel's face enumeration. Faces without a proved loop are not seeds;
+ * they still reach the recognizer only as neighbours, never as a pocket
+ * floor.
+ */
+export function listPlanarFloorSeeds(
+  kernel: RemusKernel,
+  solid: number,
+  query?: ExactFaceAdjacencyQuery
+): number[] {
+  const view = query ?? new RemusImportedFeatureQuery(kernel, solid);
+  const seeds: number[] = [];
+  let faces: ArrayLike<number>;
+  try {
+    faces = kernel.getSolidFaces(solid);
+  } catch {
+    return seeds;
+  }
+  for (const face of Array.from(faces)) {
+    const candidate = view.getFace(String(face));
+    if (candidate?.surface.kind !== 'plane') {
+      continue;
+    }
+    if (
+      candidate.surface.polygon !== undefined &&
+      candidate.surface.polygon.length >= 3
+    ) {
+      seeds.push(face);
+    }
+  }
+  seeds.sort((left, right) => left - right);
+  return seeds;
+}
+
 function axialEndpoint(
   kernel: RemusKernel,
   face: number,
@@ -292,7 +422,7 @@ export class RemusImportedFeatureQuery implements ExactFaceAdjacencyQuery {
         faceId: String(neighbor),
         relation: entry.nonManifold
           ? ('non-manifold' as const)
-          : this.adjacencyRelation(handle, neighbor),
+          : this.adjacencyRelation(handle, neighbor, entry.edges),
         boundary,
         closed
       };
@@ -304,12 +434,20 @@ export class RemusImportedFeatureQuery implements ExactFaceAdjacencyQuery {
 
   private adjacencyRelation(
     leftHandle: number,
-    rightHandle: number
+    rightHandle: number,
+    sharedEdges: readonly number[] = []
   ): ExactFaceAdjacency['relation'] {
     const left = this.getFace(String(leftHandle))?.surface;
     const right = this.getFace(String(rightHandle))?.surface;
     if (left?.kind === 'blend' || right?.kind === 'blend') {
       return 'smooth';
+    }
+    if (
+      left?.kind === 'plane' &&
+      right?.kind === 'plane' &&
+      sharedEdges.length > 0
+    ) {
+      return this.planePlaneRelation(left.normal, right.normal, sharedEdges[0]!);
     }
     const senses = [left, right].flatMap((surface) =>
       surface?.kind === 'cylinder' || surface?.kind === 'cone'
@@ -322,17 +460,137 @@ export class RemusImportedFeatureQuery implements ExactFaceAdjacencyQuery {
     return senses.length > 0 ? 'intersection' : 'convex';
   }
 
+  /**
+   * Concave/convex for two planar faces sharing a straight edge, proved by
+   * sampling the solid on both sides of the edge's diagonal wedge.
+   *
+   * A convex outer edge leaves both diagonal neighbours outside the solid
+   * while a concave pocket edge keeps both inside; anything else (a
+   * boundary hit, a mixed answer, a non-straight or skewed edge) is not a
+   * simple two-plane junction and fails closed as `intersection`. Coplanar
+   * neighbours stay `convex`: they never satisfy the pocket proof's
+   * perpendicularity check, so this label cannot promote them into a wall.
+   */
+  private planePlaneRelation(
+    leftNormal: ExactPoint3,
+    rightNormal: ExactPoint3,
+    sharedEdge: number
+  ): ExactFaceAdjacency['relation'] {
+    try {
+      const cross: ExactPoint3 = [
+        leftNormal[1] * rightNormal[2] - leftNormal[2] * rightNormal[1],
+        leftNormal[2] * rightNormal[0] - leftNormal[0] * rightNormal[2],
+        leftNormal[0] * rightNormal[1] - leftNormal[1] * rightNormal[0]
+      ];
+      const crossLength = Math.hypot(cross[0], cross[1], cross[2]);
+      if (!(crossLength > 1e-10)) {
+        return 'convex';
+      }
+      if (this.kernel.getEdgeCurveType(sharedEdge) !== 'LINE') {
+        return 'intersection';
+      }
+      const handles = Array.from(this.kernel.getEdgeVertexHandles(sharedEdge));
+      if (handles.length !== 2 || handles[0] === handles[1]) {
+        return 'intersection';
+      }
+      const start = Array.from(this.kernel.getVertexPosition(handles[0]!));
+      const end = Array.from(this.kernel.getVertexPosition(handles[1]!));
+      if (
+        start.length !== 3 ||
+        end.length !== 3 ||
+        ![...start, ...end].every((coordinate) => Number.isFinite(coordinate))
+      ) {
+        return 'intersection';
+      }
+      const tangent: ExactPoint3 = [
+        end[0]! - start[0]!,
+        end[1]! - start[1]!,
+        end[2]! - start[2]!
+      ];
+      const tangentLength = Math.hypot(tangent[0], tangent[1], tangent[2]);
+      if (!(tangentLength > 0)) {
+        return 'intersection';
+      }
+      const alignment =
+        Math.abs(
+          (tangent[0] * cross[0] + tangent[1] * cross[1] + tangent[2] * cross[2]) /
+            (tangentLength * crossLength)
+        );
+      if (!(alignment > 1 - 1e-9)) {
+        return 'intersection';
+      }
+      const diagonal: ExactPoint3 = [
+        leftNormal[0] - rightNormal[0],
+        leftNormal[1] - rightNormal[1],
+        leftNormal[2] - rightNormal[2]
+      ];
+      const diagonalLength = Math.hypot(
+        diagonal[0],
+        diagonal[1],
+        diagonal[2]
+      );
+      if (!(diagonalLength > 1e-10)) {
+        return 'convex';
+      }
+      let edgeLength = 0;
+      try {
+        edgeLength = this.kernel.edgeLength(sharedEdge);
+      } catch {
+        return 'intersection';
+      }
+      if (!Number.isFinite(edgeLength) || !(edgeLength > 0)) {
+        return 'intersection';
+      }
+      const step = Math.min(0.25, Math.max(1e-4, edgeLength * 0.05));
+      const midpoint = [
+        (start[0]! + end[0]!) / 2,
+        (start[1]! + end[1]!) / 2,
+        (start[2]! + end[2]!) / 2
+      ];
+      const offset = [
+        (diagonal[0] / diagonalLength) * step,
+        (diagonal[1] / diagonalLength) * step,
+        (diagonal[2] / diagonalLength) * step
+      ];
+      const first = this.kernel.classifyPoint(
+        this.solid,
+        midpoint[0]! + offset[0]!,
+        midpoint[1]! + offset[1]!,
+        midpoint[2]! + offset[2]!,
+        1e-7
+      );
+      const second = this.kernel.classifyPoint(
+        this.solid,
+        midpoint[0]! - offset[0]!,
+        midpoint[1]! - offset[1]!,
+        midpoint[2]! - offset[2]!,
+        1e-7
+      );
+      if (first === 'inside' && second === 'inside') {
+        return 'concave';
+      }
+      if (first === 'outside' && second === 'outside') {
+        return 'convex';
+      }
+      return 'intersection';
+    } catch {
+      return 'intersection';
+    }
+  }
+
   private readSurface(handle: number): ExactRecognitionFace['surface'] {
     const surfaceType = this.kernel.getSurfaceType(handle);
     const geometry = measureFaceGeometry(this.kernel, handle);
     if (surfaceType === 'plane' && geometry?.normal) {
       const normal = normalized(geometry.normal);
       if (normal) {
+        const polygon = exactStraightEdgePolygon(this.kernel, handle);
         return {
           kind: 'plane',
           origin: pointTuple(geometry.center),
           normal: pointTuple(normal),
-          area: exactCircularPlanarArea(this.kernel, handle, geometry.area)
+          area: exactCircularPlanarArea(this.kernel, handle, geometry.area),
+          ...(polygon ? { polygon } : {})
         };
       }
     }
@@ -666,20 +924,26 @@ function publishedKernelFeature(
 }
 
 /**
- * Recognize every full cylindrical/conical seed once, then read the kernel's
- * own recognizer for the two families this one does not publish.
+ * Recognize every full cylindrical/conical seed once, then every planar
+ * floor seed with a proved straight-edge loop, then read the kernel's own
+ * recognizer for the families the exact proofs did not already claim.
  *
  * Shared support planes do not count as overlap: two holes in one plate
  * legitimately share an opening face, while their owned walls/floors remain
  * disjoint.
  *
- * Authority is fixed per family. An exactly proved hole, counterbore or
- * countersink is published unchanged when the kernel agrees with it or says
- * nothing about it, and withdrawn — together with every kernel claim over the
- * same faces — when the kernel contradicts it. A pocket or fillet band is
- * published from a verified kernel claim, marked `kernel-recognized` and
- * read-only, and only on faces no exact proof touched, so no consumer can be
- * shown two answers for one feature.
+ * Authority is fixed per family. An exactly proved hole, counterbore,
+ * countersink, boss, taper or prismatic pocket is published unchanged when
+ * the kernel agrees with it or says nothing about it, and withdrawn —
+ * together with every kernel claim over the same faces — when the kernel
+ * contradicts it. A pocket or fillet band with no exact proof is published
+ * from a verified kernel claim, marked `kernel-recognized` and read-only,
+ * and only on faces no exact proof touched, so no consumer can be shown two
+ * answers for one feature.
+ *
+ * Planar seeds publish no UI or AI edit: pocket/boss/taper families have no
+ * coordinated direct-edit replay, the Inspector renders them read-only, and
+ * the assistant's edit binding accepts only the hole-family proofs.
  */
 export function collectRecognizedImportedFeatures(
   kernel: RemusKernel,
@@ -689,6 +953,21 @@ export function collectRecognizedImportedFeatures(
   const query = new RemusImportedFeatureQuery(kernel, solid);
   const claimedOwnedFaces = new Set<string>();
   const exactProofs: ImportedFeatureProof[] = [];
+  const attemptSeed = (face: number): void => {
+    const result = recognizeImportedFeature(query, String(face));
+    if (result.status !== 'recognized') {
+      return;
+    }
+    const owned = featureOwnedFaceIds(result.proof);
+    if (owned.some((faceId) => claimedOwnedFaces.has(faceId))) {
+      return;
+    }
+    if (!publishedProof(result.proof, identities)) {
+      return;
+    }
+    owned.forEach((faceId) => claimedOwnedFaces.add(faceId));
+    exactProofs.push(result.proof);
+  };
   for (const face of kernel.getSolidFaces(solid)) {
     const candidate = query.getFace(String(face));
     if (
@@ -700,19 +979,10 @@ export function collectRecognizedImportedFeatures(
     if (Math.abs(candidate.surface.sweepRadians - FULL_REVOLUTION) > 1e-5) {
       continue;
     }
-    const result = recognizeImportedFeature(query, String(face));
-    if (result.status !== 'recognized') {
-      continue;
-    }
-    const owned = featureOwnedFaceIds(result.proof);
-    if (owned.some((faceId) => claimedOwnedFaces.has(faceId))) {
-      continue;
-    }
-    if (!publishedProof(result.proof, identities)) {
-      continue;
-    }
-    owned.forEach((faceId) => claimedOwnedFaces.add(faceId));
-    exactProofs.push(result.proof);
+    attemptSeed(face);
+  }
+  for (const face of listPlanarFloorSeeds(kernel, solid, query)) {
+    attemptSeed(face);
   }
 
   const claims = readKernelFeatureClaims(kernel, solid);
