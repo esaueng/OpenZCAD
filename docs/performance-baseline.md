@@ -642,3 +642,56 @@ assets instead of over a third-party connection.
 
 This is the only finding here that has been acted on. Everything above remains
 measurement only.
+
+## Terminal cap dragging (2026-09-21)
+
+A supplied stepped, rounded part exposed a gap between primitive previews and
+ordinary face offsets: after an additive extrusion, neither end qualified for
+the immediate cylinder preview. Every drag update waited for exact geometry,
+mesh/face measurements and viewport installation. The progressive scheduler
+then waited for another rebuild-sized interval before starting the latest value.
+
+`capPreviewProfile.ts` now recognizes a terminal circular disk, one full
+cylindrical wall and an optional convex toroidal rim from the current exact
+body's measurements and display topology. Every other face must lie behind the
+straight span. This bounds deformation to that end: the cap and round translate,
+the straight wall changes length, and shoulders and the other end stay fixed.
+Missing/overlapping mesh ranges, holes or incomplete walls, off-axis rounds,
+additional geometry crossing the span, and oversized inputs decline the preview.
+Recognition is display-only; it does not change the exact command, history,
+tolerances or exported geometry. The existing disposable profile controller
+handles cancel, reversal, range refusal and retention through release validation.
+
+For gestures that still need exact previews, `LivePreview` retains one active
+request and the newest pending value, but now yields only 8–32 ms after a result
+while respecting its configured minimum request interval. It no longer doubles
+the worker rebuild plus presentation duration. The scheduler regression exercises
+both a measured presentation cost and a 1.5-second rebuild with superseded input.
+
+Local measurements on an Apple M5 Pro, headless Chrome, a 1512 × 950 viewport,
+the same supplied model and the same 60-position top-cap drag:
+
+| Measurement                              | Baseline (`91c34841`) | With cap preview                                      |
+| ---------------------------------------- | --------------------- | ----------------------------------------------------- |
+| Geometry worker requests during the drag | 10                    | 0                                                     |
+| Exact preview worker round trip          | 146–162 ms            | None during drag                                      |
+| Interval between exact-preview requests  | Median 405 ms         | Not applicable                                        |
+| Input event to preview frame mark        | Not instrumented      | Median 14.5 ms; max 17.7 ms across 11 snapped changes |
+| Exact rebuild on release                 | 141 ms                | 133 ms                                                |
+
+The before/after rows distinguish update cadence from input-to-frame latency;
+they are not interchangeable speedup ratios. The after build enables `OZ_PERF`
+and uses the existing `oz:offset-face.proxy-frame` mark, emitted after the render
+call, not GPU completion or monitor scanout. The 60 pointer positions produce 11
+changes after grid snapping. Both sessions show the unrelated box as well as the
+edited part. These are local samples, not universal latency guarantees. The
+private recording/model and raw probe output remain outside the repository.
+
+Verification uses an independently authored revolved stepped-cylinder fixture:
+`cap-preview-profile.test.ts` checks both ends and a rotated part against exact
+volume and bounding-box oracles, re-recognition after edits and conservative
+refusals. `cylinder-preview.spec.ts` exercises real handle drags in both directions,
+reversal, cancel, zero worker requests during drag, delayed exact release, fixed
+opposite ends and undo. Existing compound-offset and unsupported-face preview
+regressions continue to cover the fallback. Instant previews do not make exact
+release validation instantaneous or extend the kernel's supported edit families.
