@@ -46,6 +46,29 @@ export interface ImportedStepStore {
 }
 
 /**
+ * Strict verdicts the union gate established while producing a solid, keyed
+ * by kernel handle, handed to the same sync's measurement pass so it does
+ * not validate the same handle again. Scoped to one sync: handles are never
+ * mutated in place after their feature ran, and the map dies with the sync.
+ */
+export type StrictUnionVerdicts = Map<number, StrictUnionVerdict>;
+
+/**
+ * What the union gate learned about a solid while producing it, so the
+ * later checks on the same handle (the union refusal, the strict
+ * measurement pass) reuse the verdict instead of validating a NURBS-heavy
+ * body again. `meshClosed` stays undefined when it was never needed: a
+ * solid whose strict validation already failed is refused without
+ * tessellating it.
+ */
+export interface StrictUnionVerdict {
+  /** Strict `validateSolid` error count of exactly this handle. */
+  strictErrors: number;
+  /** Whether its display projection was closed and consistently oriented. */
+  meshClosed?: boolean;
+}
+
+/**
  * Everything a per-feature builder may touch: the kernel, the document and
  * its parameter scope, the accumulating build result, and the import seams.
  * One shared shape keeps the 21 builders' signatures uniform.
@@ -58,6 +81,14 @@ export interface FeatureBuildContext {
   importSources: ReadonlyMap<string, Uint8Array>;
   pinnedImports: ReadonlySet<string>;
   importedSteps?: ImportedStepStore;
+  /**
+   * Strict verdicts the union gate established on the solids it produced,
+   * keyed by kernel handle, for the measurement pass of the same sync.
+   * Scoped to one sync: handles are never mutated in place after their
+   * feature ran, and the map is dropped before the next sync builds
+   * anything.
+   */
+  strictVerdicts?: StrictUnionVerdicts;
 }
 
 /** The narrowed data payload for one feature kind (or a union of kinds). */
@@ -82,7 +113,9 @@ export function buildDocumentHistory(
   /** Runs after every feature index this call executed, failed included. */
   onFeature?: (index: number, result: ExactBuildResult) => void,
   /** Diagnostic hook before synchronous feature work begins. */
-  onFeatureStart?: (index: number) => void
+  onFeatureStart?: (index: number) => void,
+  /** Receives the union gate's verdicts; see {@link FeatureBuildContext}. */
+  strictVerdicts?: StrictUnionVerdicts
 ): ExactBuildResult {
   const { scope, errors } = getParameterScope(document);
   const result: ExactBuildResult = resume?.initial ?? {
@@ -105,7 +138,8 @@ export function buildDocumentHistory(
     result,
     importSources,
     pinnedImports,
-    importedSteps
+    importedSteps,
+    strictVerdicts
   };
 
   for (let index = startIndex; index < features.length; index += 1) {

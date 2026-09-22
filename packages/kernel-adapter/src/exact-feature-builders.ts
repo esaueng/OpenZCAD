@@ -37,6 +37,7 @@ import {
   collapseShape,
   exactUnionOffsetSuggestion,
   fuseUniformSolid,
+  fuseUniformSolidChecked,
   inferenceBodyForShape,
   isFaceConnectedSolid,
   sharedShapeVolume,
@@ -46,6 +47,8 @@ import {
   tessellatedFaceBounds,
   unifyBooleanFaces,
   unifyUnionFaces,
+  verdictRefusesUnion,
+  type StrictUnionVerdict,
   type UnionFuseOperand
 } from './exact-boolean-helpers';
 import {
@@ -1180,6 +1183,9 @@ function buildBooleanFeature(
     operands.length === 2 &&
     operands.every((shape) => shape.solids.length === 1);
   let unionFuseOperands: UnionFuseOperand[] | null = null;
+  // The union gate's strict verdict on `solid`, reused by the refusal below
+  // and by the measurement pass instead of validating the same handle again.
+  let unionVerdict: StrictUnionVerdict | null = null;
   // A disconnected union is a different complaint with its own
   // remedy and its own warning; it must not also be reported as
   // non-manifold, nor be offered a move-to-overlap suggestion.
@@ -1244,7 +1250,7 @@ function buildBooleanFeature(
         }
       }
     );
-    solid = fuseUniformSolid(
+    const unified = fuseUniformSolidChecked(
       kernel,
       unionSolids,
       unionOperands.map((operand) => operand.name),
@@ -1252,6 +1258,8 @@ function buildBooleanFeature(
         acceptedUnionSolid = accepted;
       }
     );
+    solid = unified.solid;
+    unionVerdict = unified.verdict;
     if (pairwiseOperands && unionSolids.length === 2) {
       evolutionProbe = {
         operation: 'fuse',
@@ -1439,7 +1447,12 @@ function buildBooleanFeature(
     unionFuseOperands !== null &&
     !unionDisconnected &&
     acceptedUnionSolid !== solid &&
-    (kernel.validateSolid(solid) !== 0 || !solidMeshIsClosed(kernel, solid));
+    (unionVerdict
+      ? verdictRefusesUnion(unionVerdict)
+      : kernel.validateSolid(solid) !== 0 || !solidMeshIsClosed(kernel, solid));
+  if (unionVerdict) {
+    ctx.strictVerdicts?.set(solid, unionVerdict);
+  }
   // Which warning the proved move belongs to.
   //
   // This used to be the index of the feature's FIRST warning, on the
