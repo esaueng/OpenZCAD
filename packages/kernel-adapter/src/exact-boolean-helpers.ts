@@ -235,6 +235,181 @@ export function unifyUnionFaces(
 }
 
 /**
+ * What the union gate learned about a solid while producing it, so the
+ * later checks on the same handle (the union refusal, the strict
+ * measurement pass) reuse the verdict instead of validating a NURBS-heavy
+ * body again. `meshClosed` stays undefined when it was never needed: a
+ * solid whose strict validation already failed is refused without
+ * tessellating it.
+ */
+export interface StrictUnionVerdict {
+  /** Strict `validateSolid` error count of exactly this handle. */
+  strictErrors: number;
+  /** Whether its display projection was closed and consistently oriented. */
+  meshClosed?: boolean;
+}
+
+/** A union result together with the verdict its gate established. */
+export interface UnifiedUnion {
+  solid: number;
+  verdict: StrictUnionVerdict;
+}
+
+/**
+ * `unifyUnionFaces` that keeps the strict verdicts the kernel already
+ * established on the way: `unifyFacesChecked` validates the raw solid
+ * before merging and the candidate after, so accepting or refusing the
+ * candidate needs no further `validateSolid` call. Same acceptance rule as
+ * `unifyUnionFaces`: strict solid AND closed display projection, otherwise
+ * the raw union stands. Falls back to plain validation when the checked
+ * entry point is unavailable.
+ *
+ * Healing still runs on a copy, exactly as `selectSafelyUnifiedSolid` does
+ * it: the checked call below runs against a copy of the raw union, never
+ * the shipped handle, so a throw leaves the raw result untouched.
+ */
+export function unifyUnionFacesChecked(
+  kernel: RemusKernel,
+  rawSolid: number,
+  onAccepted?: (solid: number) => void
+): UnifiedUnion {
+  try {
+    if (typeof kernel.unifyFacesChecked !== 'function') {
+      throw new Error('unifyFacesChecked is unavailable on this kernel.');
+    }
+    // Heal the copy; the raw handle is never unified in place here.
+    const healedCopy = kernel.copyAndTransformSolid(
+      rawSolid,
+      new Float64Array([1, 0, 0, 0, 0, 1, 0, 0, 0, 0, 1, 0, 0, 0, 0, 1])
+    );
+    const raw: unknown = kernel.unifyFacesChecked(healedCopy);
+    const parsed: unknown = typeof raw === 'string' ? JSON.parse(raw) : raw;
+    const record =
+      typeof parsed === 'object' && parsed !== null
+        ? (parsed as Record<string, unknown>)
+        : null;
+    const count = (key: string): number => {
+      const value = record?.[key];
+      if (typeof value !== 'number' || !Number.isFinite(value) || value < 0) {
+        throw new Error(`unifyFacesChecked report is missing "${key}".`);
+      }
+      return value;
+    };
+    const report = {
+      facesMerged: count('facesMerged'),
+      inputErrors: count('inputErrors'),
+      resultErrors: count('resultErrors'),
+      reverted: record?.['reverted'] === true
+    };
+    return unifyUnionFacesWithVerdict(
+      kernel,
+      rawSolid,
+      report,
+      healedCopy,
+      onAccepted
+    );
+  } catch {
+    return unifyUnionFacesWithVerdict(kernel, rawSolid, null, null, onAccepted);
+  }
+}
+
+/**
+ * Core of `unifyUnionFacesChecked` with the report supplied separately, so
+ * tests can pin the verdict mapping without a kernel. `healedCopy` is the
+ * already-unified copy the checked call produced (null when the checked
+ * path was unavailable); the gate adopts it only when it also passes the
+ * closed-projection half, mirroring `unifyUnionFaces`.
+ */
+export function unifyUnionFacesWithVerdict(
+  kernel: RemusKernel,
+  rawSolid: number,
+  report: {
+    facesMerged: number;
+    inputErrors: number;
+    resultErrors: number;
+    reverted: boolean;
+  } | null,
+  healedCopy: number | null,
+  onAccepted?: (solid: number) => void
+): UnifiedUnion {
+  if (!report || healedCopy === null) {
+    const solid = unifyUnionFaces(kernel, rawSolid, onAccepted);
+    const strictErrors =
+      solid === rawSolid ? kernel.validateSolid(rawSolid) : 0;
+    // A unified candidate passed the gate's own strict check; only a kept
+    // raw solid still needs its verdict established, and only then when the
+    // gate never tessellated it.
+    return solid === rawSolid
+      ? {
+          solid,
+          verdict: {
+            strictErrors,
+            ...(strictErrors === 0
+              ? { meshClosed: solidMeshIsClosed(kernel, rawSolid) }
+              : {})
+          }
+        }
+      : { solid, verdict: { strictErrors: 0, meshClosed: true } };
+  }
+  // The checked merge was kept (faces merged, strict candidate, not
+  // reverted): adopt the healed copy only when its display projection is
+  // also closed — the same two halves `unifyUnionFaces` requires. A
+  // candidate that merged nothing is the raw solid again; keep the
+  // original handle and the kernel's own verdict on it.
+  if (!report.reverted && report.facesMerged > 0 && report.resultErrors === 0) {
+    if (solidMeshIsClosed(kernel, healedCopy)) {
+      onAccepted?.(healedCopy);
+      return { solid: healedCopy, verdict: { strictErrors: 0, meshClosed: true } };
+    }
+    return {
+      solid: rawSolid,
+      verdict: {
+        strictErrors: report.inputErrors,
+        ...(report.inputErrors === 0
+          ? { meshClosed: solidMeshIsClosed(kernel, rawSolid) }
+          : {})
+      }
+    };
+  }
+  // The merge was reverted or the candidate failed strict validation: the
+  // raw solid stands with the kernel's own verdict on it.
+  return {
+    solid: rawSolid,
+    verdict: {
+      strictErrors: report.inputErrors,
+      ...(report.inputErrors === 0
+        ? { meshClosed: solidMeshIsClosed(kernel, rawSolid) }
+        : {})
+    }
+  };
+}
+
+/** `fuseUniformSolid` that returns the gate's verdict with the solid. */
+export function fuseUniformSolidChecked(
+  kernel: RemusKernel,
+  solids: number[],
+  labels?: readonly string[],
+  onAccepted?: (solid: number) => void
+): UnifiedUnion {
+  return unifyUnionFacesChecked(
+    kernel,
+    // `exactFuseAll` refuses by name on a non-exact pair; only a fused
+    // solid reaches the gate.
+    exactFuseAll(kernel, solids, labels),
+    onAccepted
+  );
+}
+
+/**
+ * Whether a union verdict means the body is not an acceptable solid: the
+ * same question `validateSolid(...) !== 0 || !solidMeshIsClosed(...)` asks,
+ * answered from what the gate already measured.
+ */
+export function verdictRefusesUnion(verdict: StrictUnionVerdict): boolean {
+  return verdict.strictErrors !== 0 || verdict.meshClosed !== true;
+}
+
+/**
  * Fuse a cluster into one solid, naming the member that refused.
  *
  * `labels` runs parallel to `solids`: a union passes the body names, a

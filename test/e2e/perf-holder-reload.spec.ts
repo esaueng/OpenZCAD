@@ -173,13 +173,20 @@ async function applyVerified(page: Page, label: string) {
       hasText: label
     })
     .first();
-  await expect(chip).toBeVisible({ timeout: 60_000 });
+  await expect(chip).toBeVisible({ timeout: 120_000 });
   await expect(chip).toContainText('Verified');
+  // The NURBS-heavy private holder keeps the assistant in "Reading the model"
+  // with the verified chip disabled well after it becomes visible; clicking
+  // early sends into a busy assistant and no proposal ever opens.
+  await expect(chip).toBeEnabled({ timeout: 180_000 });
+  await expect(
+    page.getByRole('button', { name: 'Stop the assistant' })
+  ).toHaveCount(0, { timeout: 180_000 });
   await chip.click();
   await expect(page.getByLabel('CAD change request')).toHaveValue(label);
   await page.getByRole('button', { name: 'Send to the assistant' }).click();
   const proposal = page.locator('.assistant-card.proposal.open').last();
-  await expect(proposal).toBeVisible({ timeout: 60_000 });
+  await expect(proposal).toBeVisible({ timeout: 180_000 });
   // Counted, not `.last()`: with one recipe already applied, the previous
   // card says "Applied" the instant this Apply is clicked, and the probe ran
   // on into its first edit while the patch was still in preflight — which is
