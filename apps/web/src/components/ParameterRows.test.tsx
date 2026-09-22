@@ -88,6 +88,58 @@ describe('ParameterRow Tweak exposure', () => {
   });
 });
 
+describe('parameter rename', () => {
+  it('renames from the parameter row and trims the new name', async () => {
+    const onRename = vi.fn().mockReturnValue(null);
+    render(
+      <ParameterRow
+        parameter={parameter('80')}
+        value={80}
+        onSet={vi.fn()}
+        onRename={onRename}
+      />
+    );
+
+    fireEvent.click(
+      screen.getByRole('button', { name: 'Rename parameter width' })
+    );
+    const input = screen.getByRole('textbox', {
+      name: 'Rename parameter width'
+    });
+    fireEvent.change(input, { target: { value: ' plate_width ' } });
+    fireEvent.keyDown(input, { key: 'Enter' });
+
+    expect(onRename).toHaveBeenCalledWith('width', 'plate_width');
+  });
+
+  it('keeps the editor open and reports a refused rename', async () => {
+    render(
+      <ParameterRow
+        parameter={parameter('80')}
+        value={80}
+        onSet={vi.fn()}
+        onRename={vi.fn().mockReturnValue('That name already exists.')}
+      />
+    );
+
+    fireEvent.click(
+      screen.getByRole('button', { name: 'Rename parameter width' })
+    );
+    const input = screen.getByRole('textbox', {
+      name: 'Rename parameter width'
+    });
+    fireEvent.change(input, { target: { value: 'height' } });
+    fireEvent.blur(input);
+
+    expect(await screen.findByRole('alert')).toHaveTextContent(
+      'That name already exists. No change applied.'
+    );
+    expect(
+      screen.getByRole('textbox', { name: 'Rename parameter width' })
+    ).toHaveValue('height');
+  });
+});
+
 describe('on/off parameter controls', () => {
   it('renders an accessible switch and follows undo/collaborator values', () => {
     const onSet = vi.fn();
