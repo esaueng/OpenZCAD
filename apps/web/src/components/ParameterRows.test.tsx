@@ -50,6 +50,44 @@ describe('ParameterRow evaluated value', () => {
   });
 });
 
+describe('ParameterRow Tweak exposure', () => {
+  it('reports the opposite state when the eye is clicked', () => {
+    const onExpose = vi.fn();
+    const { rerender } = render(
+      <ParameterRow
+        parameter={parameter('80')}
+        value={80}
+        onSet={vi.fn()}
+        onExpose={onExpose}
+        exposedInTweak
+      />
+    );
+
+    const hide = screen.getByRole('button', {
+      name: 'Hide width in Tweak mode'
+    });
+    expect(hide).toHaveAttribute('aria-pressed', 'true');
+    fireEvent.click(hide);
+    expect(onExpose).toHaveBeenCalledWith('width', false);
+
+    rerender(
+      <ParameterRow
+        parameter={{ ...parameter('80'), exposed: false }}
+        value={80}
+        onSet={vi.fn()}
+        onExpose={onExpose}
+        exposedInTweak={false}
+      />
+    );
+    const show = screen.getByRole('button', {
+      name: 'Show width in Tweak mode'
+    });
+    expect(show).toHaveAttribute('aria-pressed', 'false');
+    fireEvent.click(show);
+    expect(onExpose).toHaveBeenLastCalledWith('width', true);
+  });
+});
+
 describe('on/off parameter controls', () => {
   it('renders an accessible switch and follows undo/collaborator values', () => {
     const onSet = vi.fn();
