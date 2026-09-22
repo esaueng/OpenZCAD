@@ -2177,9 +2177,7 @@ export function chamferEdges(
         : {}),
       distance: input.size,
       ...(input.angleDeg !== undefined ? { angleDeg: input.angleDeg } : {}),
-      ...(input.distance2 !== undefined
-        ? { distance2: input.distance2 }
-        : {})
+      ...(input.distance2 !== undefined ? { distance2: input.distance2 } : {})
     },
     input.ids
   );
@@ -2394,9 +2392,8 @@ export function setParameter(
     throw new Error('Parameter expression must not be empty.');
   }
   const next = cloneDocument(document);
-  const existing = listParameters(next).find(
-    (parameter) => parameter.name === name
-  );
+  const parameters = listParameters(next);
+  const existing = parameters.find((parameter) => parameter.name === name);
   if (existing) {
     if (existing.toggle && !['0', '1'].includes(input.expression.trim())) {
       throw new Error('An on/off parameter must be 0 (off) or 1 (on).');
@@ -2412,7 +2409,12 @@ export function setParameter(
       revisionId: null,
       parameterId,
       expression: input.expression,
-      value: 0
+      value: 0,
+      // Once the owner has curated Tweak, a newly-created parameter stays out
+      // of that public surface until its own eye is explicitly enabled.
+      ...(parameters.some((parameter) => parameter.exposed !== undefined)
+        ? { exposed: false }
+        : {})
     };
     next.parameterOrder.push(parameterId);
   }
@@ -2572,26 +2574,30 @@ export function setParameterExposed(
   input: ParameterExposeInput
 ): ProjectDocument {
   const next = cloneDocument(document);
-  const parameter = listParameters(next).find(
+  const parameters = listParameters(next);
+  const parameter = parameters.find(
     (candidate) => candidate.name === input.name
   );
   if (!parameter) {
     throw new Error(`Parameter "${input.name}" does not exist.`);
+  }
+
+  // Legacy and never-curated documents omit this field. Materialize their
+  // current effective state before changing one row so toggling an eye never
+  // changes the exposure of its neighbours as a side effect.
+  if (parameters.some((candidate) => candidate.exposed === undefined)) {
+    const currentlyExposed = new Set(
+      listExposedParameters(next).map((candidate) => candidate.parameterId)
+    );
+    for (const candidate of parameters) {
+      candidate.exposed = currentlyExposed.has(candidate.parameterId);
+    }
   }
   parameter.exposed = input.exposed;
   next.version += 1;
   return next;
 }
 
-/**
- * The parameters a Tweak-mode workspace offers, in `parameterOrder`.
- *
- * An uncurated document — nobody has exposed anything — offers all of them,
- * so a model authored before curation existed, or shared without thinking
- * about it, behaves as it always did. The moment one parameter is exposed the
- * list is taken as deliberate and becomes exactly the exposed set, which is
- * also how hiding everything but one dimension is expressed.
- */
 /**
  * Sets the gloss shown beside a parameter in Tweak mode and share links.
  *
@@ -2622,12 +2628,25 @@ export function setParameterDescription(
   return next;
 }
 
+/**
+ * The parameters a Tweak-mode workspace offers, in `parameterOrder`.
+ *
+ * An uncurated document offers every parameter for backwards compatibility.
+ * Explicit `true` values are an older curated allow-list. A false-only legacy
+ * state came from the previously inert eye toggle, so it hides those rows and
+ * keeps still-absent neighbours visible. The next curation command normalizes
+ * every row to an explicit boolean.
+ */
 export function listExposedParameters(
   document: ProjectDocument
 ): ParameterNode[] {
   const parameters = listParameters(document);
   const exposed = parameters.filter((parameter) => parameter.exposed === true);
-  return exposed.length > 0 ? exposed : parameters;
+  if (exposed.length > 0) return exposed;
+  if (parameters.some((parameter) => parameter.exposed === false)) {
+    return parameters.filter((parameter) => parameter.exposed !== false);
+  }
+  return parameters;
 }
 
 export interface ParameterScopeResult {
