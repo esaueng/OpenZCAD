@@ -417,13 +417,11 @@ export interface ParameterNode extends BaseNode {
   expression: string;
   value: number;
   /**
-   * Offered in Tweak mode and through a share link. Absent means "not
-   * curated": a model where nobody has chosen exposes every parameter, so an
-   * older document and a first share both behave the way they did before
-   * curation existed. Once any parameter is exposed, the choice is taken to
-   * be deliberate and only the exposed ones are offered — see
-   * `listExposedParameters` in document-core, which is the single place that
-   * rule lives.
+   * Offered in Tweak mode and through a share link. Absent means the row has
+   * not been curated. A wholly uncurated model exposes every parameter for
+   * backwards compatibility; the first eye-toggle materializes that effective
+   * state before changing one row. See `listExposedParameters` in
+   * document-core, which also interprets legacy partially-curated documents.
    */
   exposed?: boolean;
   /**
