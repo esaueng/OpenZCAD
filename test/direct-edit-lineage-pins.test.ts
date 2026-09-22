@@ -325,7 +325,7 @@ describe('resize-blend under lineage', { timeout: 120_000 }, () => {
       await movedImportedBlend({
       withReference: true
       });
-    const resizedBlendReferences = resizedTopology?.faces
+    const resizedBlendReferences = (resizedTopology?.faces ?? [])
       .filter((face) => face.geometry?.featureType === 'blend')
       .map((face) => face.reference?.lineageName)
       .filter((lineageName): lineageName is string => lineageName !== undefined);
