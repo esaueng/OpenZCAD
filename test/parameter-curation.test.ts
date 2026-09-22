@@ -31,39 +31,80 @@ describe('curated parameters', () => {
     ]);
   });
 
-  it('offers exactly the chosen ones once any is chosen', () => {
+  it('hides one parameter without changing its neighbours', () => {
     const document = setParameterExposed(documentWithParameters(), {
       name: 'width',
-      exposed: true
+      exposed: false
     });
     expect(listExposedParameters(document).map((p) => p.name)).toEqual([
-      'width'
+      'height',
+      'wall'
+    ]);
+    expect(listParameters(document).map((p) => p.exposed)).toEqual([
+      false,
+      true,
+      true
     ]);
   });
 
   it('keeps parameterOrder, not the order they were chosen in', () => {
     let document = documentWithParameters();
-    document = setParameterExposed(document, { name: 'wall', exposed: true });
-    document = setParameterExposed(document, { name: 'width', exposed: true });
+    document = setParameterExposed(document, {
+      name: 'height',
+      exposed: false
+    });
     expect(listExposedParameters(document).map((p) => p.name)).toEqual([
       'width',
       'wall'
     ]);
   });
 
-  it('falls back to offering everything when the last choice is undone', () => {
+  it('can hide every parameter and expose one again', () => {
     let document = documentWithParameters();
-    document = setParameterExposed(document, { name: 'width', exposed: true });
     document = setParameterExposed(document, { name: 'width', exposed: false });
-    expect(listExposedParameters(document)).toHaveLength(3);
+    document = setParameterExposed(document, {
+      name: 'height',
+      exposed: false
+    });
+    document = setParameterExposed(document, { name: 'wall', exposed: false });
+    expect(listExposedParameters(document)).toEqual([]);
+    document = setParameterExposed(document, { name: 'width', exposed: true });
+    expect(listExposedParameters(document).map((p) => p.name)).toEqual([
+      'width'
+    ]);
+  });
+
+  it('keeps a new parameter hidden after the owner curates Tweak', () => {
+    let document = documentWithParameters();
+    document = setParameterExposed(document, { name: 'width', exposed: false });
+    document = setParameterExposed(document, {
+      name: 'height',
+      exposed: false
+    });
+    document = setParameterExposed(document, { name: 'wall', exposed: false });
+    document = setParameter(document, { name: 'depth', expression: '20' });
+    expect(listExposedParameters(document)).toEqual([]);
+    expect(
+      listParameters(document).find((p) => p.name === 'depth')?.exposed
+    ).toBe(false);
+  });
+
+  it('honours false-only documents saved by the previously inert eye toggle', () => {
+    const document = documentWithParameters();
+    listParameters(document).find((p) => p.name === 'width')!.exposed = false;
+    expect(listExposedParameters(document).map((p) => p.name)).toEqual([
+      'height',
+      'wall'
+    ]);
   });
 
   it('survives an expression edit', () => {
     // Curation is a property of the parameter, not of its current value.
     let document = setParameterExposed(documentWithParameters(), {
-      name: 'width',
-      exposed: true
+      name: 'height',
+      exposed: false
     });
+    document = setParameterExposed(document, { name: 'wall', exposed: false });
     document = setParameter(document, { name: 'width', expression: '45' });
     expect(listExposedParameters(document).map((p) => p.name)).toEqual([
       'width'
