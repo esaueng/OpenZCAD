@@ -109,7 +109,7 @@ describe('fillet face editing', () => {
       ...blendFace('direct-edit.resize-blend.band.import.step.face.a', point(0, 0, 0), 99),
       reference: {
         ...blendFace('first-reference', point(0, 0, 0)).reference!,
-        producingFeatureId: 'direct-edit-feature',
+        producingFeatureId: toFeatureId('direct-edit-feature'),
         lineageName: 'direct-edit.resize-blend.band.import.step.face.a'
       },
       geometry: {
@@ -122,7 +122,7 @@ describe('fillet face editing', () => {
       ...blendFace('direct-edit.resize-blend.band.import.step.face.b', point(100, 0, 0), 100),
       reference: {
         ...blendFace('second-reference', point(100, 0, 0)).reference!,
-        producingFeatureId: 'direct-edit-feature',
+        producingFeatureId: toFeatureId('direct-edit-feature'),
         lineageName: 'direct-edit.resize-blend.band.import.step.face.b'
       },
       geometry: {
@@ -134,7 +134,11 @@ describe('fillet face editing', () => {
       }
     };
     expect(
-      resolveImportedBlendFace([first, second], source, 'direct-edit-feature')
+      resolveImportedBlendFace(
+        [first, second],
+        source,
+        toFeatureId('direct-edit-feature')
+      )
     ).toBe(first);
   });
 
@@ -144,7 +148,7 @@ describe('fillet face editing', () => {
       ...blendFace('moved', point(10, 0, 0), 99),
       reference: {
         ...blendFace('moved-reference', point(10, 0, 0)).reference!,
-        producingFeatureId: 'direct-edit-feature',
+        producingFeatureId: toFeatureId('direct-edit-feature'),
         lineageName: 'direct-edit.resize-blend.band.import.step.face.a'
       },
       geometry: {
@@ -156,7 +160,11 @@ describe('fillet face editing', () => {
       }
     };
     expect(
-      resolveImportedBlendFace([moved], source, 'direct-edit-feature')
+      resolveImportedBlendFace(
+        [moved],
+        source,
+        toFeatureId('direct-edit-feature')
+      )
     ).toBe(moved);
   });
 
@@ -166,7 +174,7 @@ describe('fillet face editing', () => {
       ...blendFace(`shifted-${x}`, point(x, 0, 0), x),
       reference: {
         ...blendFace(`shifted-reference-${x}`, point(x, 0, 0)).reference!,
-        producingFeatureId: 'direct-edit-feature',
+        producingFeatureId: toFeatureId('direct-edit-feature'),
         lineageName
       },
       geometry: {
@@ -184,14 +192,14 @@ describe('fillet face editing', () => {
           shifted(20, 'direct-edit.resize-blend.band.b')
         ],
         source,
-        'direct-edit-feature'
+        toFeatureId('direct-edit-feature')
       )
     ).toBeNull();
     expect(
       resolveImportedBlendFace(
         [shifted(10, 'direct-edit.resize-blend.bandX.a')],
         source,
-        'direct-edit-feature'
+        toFeatureId('direct-edit-feature')
       )
     ).toBeNull();
   });
