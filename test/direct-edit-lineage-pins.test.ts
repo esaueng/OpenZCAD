@@ -17,6 +17,8 @@ import {
   toUserId,
   type BodyId,
   type BodyRepresentation,
+  type DirectEditOperation,
+  type OpposingPlanarFacePair,
   type ProjectDocument
 } from '@openzcad/shared';
 
@@ -40,6 +42,22 @@ function cylinderWall(body: BodyRepresentation | undefined) {
   return body?.topology?.faces.find(
     (face) => face.geometry?.surfaceType === 'cylinder'
   );
+}
+
+function distanceOperation(
+  pair: OpposingPlanarFacePair,
+  distance: number
+): Extract<DirectEditOperation, { kind: 'set-face-distance' }> {
+  return {
+    kind: 'set-face-distance',
+    faceHash: pair.faceAHash,
+    faceReference: pair.faceAReference,
+    oppositeFaceHash: pair.faceBHash,
+    oppositeFaceReference: pair.faceBReference,
+    sourceDistance: pair.distance,
+    moveMode: pair.moveMode,
+    distance
+  };
 }
 
 describe('resize-cylindrical-face under lineage', { timeout: 60_000 }, () => {
@@ -178,6 +196,7 @@ describe('resize-blend under lineage', { timeout: 120_000 }, () => {
   async function movedImportedBlend(options: {
     withReference: boolean;
     newRadius?: number;
+    singleEdge?: boolean;
   }) {
     const source = addPrimitiveFeature(
       createProjectDocument('Blend source', user),
@@ -207,10 +226,13 @@ describe('resize-blend under lineage', { timeout: 120_000 }, () => {
       return false;
     }).map((edge) => edge.hash);
     expect(edgeHashes).toHaveLength(3);
+    const selectedEdges = options.singleEdge
+      ? edgeHashes.slice(0, 1)
+      : edgeHashes;
     const filleted = filletEdges(source, {
       name: 'Corner fillet',
       targetBodyId: sourceBodyId,
-      edgeHashes,
+      edgeHashes: selectedEdges,
       size: 3
     }).document;
     const stepText = await adapter.exportStep(filleted, [
@@ -275,7 +297,11 @@ describe('resize-blend under lineage', { timeout: 120_000 }, () => {
     return {
       document: edited,
       bodyId,
-      resizedVolume: resized.bodyRepresentations[bodyId]!.volume
+      resizedVolume: resized.bodyRepresentations[bodyId]!.volume,
+      resizedTopology: resized.bodyRepresentations[bodyId]!.topology,
+      sourceBlendLineageName: seed!.reference?.lineageName,
+      sourceBlendReference: seed!.reference,
+      sourceBlendHash: seed!.hash
     };
   }
 
@@ -331,6 +357,107 @@ describe('resize-blend under lineage', { timeout: 120_000 }, () => {
     expect(after.bodyRepresentations[bodyId]!.volume).not.toBeCloseTo(
       resizedVolume,
       3
+    );
+  });
+
+  it('uses construction evolution to remove a cylindrical planar-pair blend at R0', async () => {
+    const {
+      document,
+      bodyId,
+      resizedVolume,
+      resizedTopology,
+      sourceBlendLineageName,
+      sourceBlendReference,
+      sourceBlendHash
+    } =
+      await movedImportedBlend({
+        withReference: true,
+        newRadius: 0,
+        singleEdge: true
+      });
+    expect(
+      resizedTopology?.faces.some(
+        (face) => face.geometry?.featureType === 'blend'
+      )
+    ).toBe(false);
+    expect(
+      resizedTopology?.faces.some((face) =>
+        face.reference?.lineageName?.startsWith('import.step.face.')
+      )
+    ).toBe(true);
+    expect(
+      resizedTopology?.faces.some(
+        (face) => face.reference?.lineageName === sourceBlendLineageName
+      )
+    ).toBe(false);
+
+    const pair = resizedTopology?.opposingPlanarFacePairs?.find(
+      (candidate) => Math.abs(candidate.normal.x) > 1 - 1e-6
+    );
+    expect(pair).toBeDefined();
+    expect(
+      resizedTopology?.faces.some(
+        (face) =>
+          face.reference?.lineageName === pair!.faceAReference.lineageName
+      )
+    ).toBe(true);
+    expect(
+      resizedTopology?.faces.some(
+        (face) =>
+          face.reference?.lineageName === pair!.faceBReference.lineageName
+      )
+    ).toBe(true);
+    const downstream = directEditBody(document, {
+      name: 'Downstream support distance',
+      targetBodyId: bodyId,
+      operation: distanceOperation(pair!, pair!.distance + 1)
+    }).document;
+    const rebuilt = await adapter.syncDocument(downstream);
+    expect(rebuilt.warnings).toEqual([]);
+    expect(rebuilt.bodyRepresentations[bodyId]!.volume).not.toBeCloseTo(
+      resizedVolume,
+      6
+    );
+    const rebuiltPair = rebuilt.bodyRepresentations[
+      bodyId
+    ]!.topology!.opposingPlanarFacePairs?.find(
+      (candidate) =>
+        candidate.faceAReference.lineageName ===
+          pair!.faceAReference.lineageName &&
+        candidate.faceBReference.lineageName === pair!.faceBReference.lineageName
+    );
+    expect(rebuiltPair).toBeDefined();
+    expect(rebuiltPair!.distance).toBeCloseTo(pair!.distance + 1, 6);
+
+    const freshAdapter = await createExactKernelAdapter();
+    try {
+      const reloaded = await freshAdapter.syncDocument(
+        JSON.parse(JSON.stringify(downstream)) as ProjectDocument
+      );
+      expect(reloaded.warnings).toEqual([]);
+      expect(reloaded.bodyRepresentations[bodyId]!.volume).toBeCloseTo(
+        rebuilt.bodyRepresentations[bodyId]!.volume,
+        6
+      );
+    } finally {
+      freshAdapter.dispose();
+    }
+
+    const stale = directEditBody(document, {
+      name: 'Rejected deleted blend reference',
+      targetBodyId: bodyId,
+      operation: {
+        ...distanceOperation(pair!, pair!.distance + 1),
+        faceHash: sourceBlendHash,
+        faceReference: sourceBlendReference
+      }
+    }).document;
+    const staleResult = await adapter.syncDocument(stale);
+    expect(staleResult.warnings).toHaveLength(1);
+    expect(staleResult.warnings[0]).toMatch(/face|reference/i);
+    expect(staleResult.bodyRepresentations[bodyId]!.volume).toBeCloseTo(
+      resizedVolume,
+      6
     );
   });
 });
