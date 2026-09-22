@@ -1147,9 +1147,6 @@ export function createRemusModifierEvolutionLineage(input: {
   }
   const assignments: RemusSemanticAssignment[] = [];
   for (const resultHandle of input.generatedBlendFaces) {
-    if (input.operation === 'direct-edit' && input.generatedBlendFaces.size !== 1) {
-      continue;
-    }
     const resultCandidate = resultFaces.get(resultHandle);
     const sources = [...(generatedSources.get(resultHandle) ?? [])];
     const requiredSourceCount = input.operation === 'direct-edit' ? 1 : 2;
@@ -1177,7 +1174,7 @@ export function createRemusModifierEvolutionLineage(input: {
       ...resultCandidate,
       lineageName:
         input.operation === 'direct-edit'
-          ? 'direct-edit.resize-blend.band'
+          ? `direct-edit.resize-blend.band.${identities.join('|')}`
           : `modifier.${input.operation}.face.band-between.${identities.join('|')}`
     });
   }

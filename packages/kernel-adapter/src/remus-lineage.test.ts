@@ -283,7 +283,7 @@ describe('Remus modifier evolution lineage', () => {
     });
     expect(singleSource.faceReferences.get(13)).toMatchObject({
       producingFeatureId: FILLET_FEATURE_ID,
-      lineageName: 'direct-edit.resize-blend.band'
+      lineageName: 'direct-edit.resize-blend.band.import.step.face.17'
     });
   });
 
