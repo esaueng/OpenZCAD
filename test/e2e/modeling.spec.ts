@@ -2949,6 +2949,52 @@ test('models a parametric part and exports a true STEP file', async ({
   await expect(paramInput).toHaveValue('30');
 });
 
+test('renames a parameter without stranding dependent expressions', async ({
+  page
+}) => {
+  await stubApi(page);
+  await page.goto('/');
+  await page.getByLabel('Project name').fill('Rename Parameter');
+  await page.getByRole('button', { name: 'Create project' }).click();
+
+  await page.getByLabel('New parameter name').fill('width_x');
+  await page.getByLabel('New parameter expression').fill('30');
+  await page.getByRole('button', { name: 'Add parameter' }).click();
+  await page.getByLabel('New parameter name').fill('twice');
+  await page.getByLabel('New parameter expression').fill('width_x * 2');
+  await page.getByRole('button', { name: 'Add parameter' }).click();
+
+  await page.getByRole('button', { name: /^Box \(B\)/ }).click();
+  const inspector = page.getByRole('region', { name: 'Feature inspector' });
+  await inspector.getByLabel('Width (X)').fill('twice');
+  await inspector.getByLabel('Depth (Y)').fill('width_x');
+  await inspector.getByLabel('Height (Z)').fill('2');
+  await inspector.getByRole('button', { name: /^Create/ }).click();
+
+  await page.getByRole('button', { name: 'Rename parameter width_x' }).click();
+  const rename = page.getByRole('textbox', {
+    name: 'Rename parameter width_x'
+  });
+  await rename.fill('overall_width');
+  await rename.press('Enter');
+
+  await expect(
+    page.getByRole('button', { name: 'Rename parameter overall_width' })
+  ).toBeVisible();
+  await expect(page.getByLabel('Expression for twice')).toHaveValue(
+    'overall_width * 2'
+  );
+  await page.locator('.feature-row-main', { hasText: 'Box' }).click();
+  await expect(inspector.getByLabel('Width (X)')).toHaveValue('twice');
+  await expect(inspector.getByLabel('Depth (Y)')).toHaveValue('overall_width');
+  await expect(inspector).toContainText('3600 mm³');
+
+  const renamedValue = page.getByLabel('Expression for overall_width');
+  await renamedValue.fill('40');
+  await renamedValue.press('Enter');
+  await expect(inspector).toContainText('6400 mm³');
+});
+
 test('keeps parameter names visible in the 252px Build sidebar', async ({
   page
 }) => {

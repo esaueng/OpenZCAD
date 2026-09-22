@@ -165,6 +165,7 @@ interface SidebarProps {
   onViewActivityLog(): void;
   parameterMinimums?: Record<string, number>;
   onDeleteParameter(name: string): void;
+  onRenameParameter(name: string, newName: string): string | null;
   onExposeParameter(name: string, exposed: boolean): void;
   onDescribeParameter(name: string, description: string): void;
   /** Names currently offered in Tweak, from `listExposedParameters`. */
@@ -225,6 +226,7 @@ export function Sidebar({
   onViewActivityLog,
   onPreviewParameter,
   onDeleteParameter,
+  onRenameParameter,
   onExposeParameter,
   onDescribeParameter,
   exposedParameterNames,
@@ -373,6 +375,7 @@ export function Sidebar({
               onViewDetails={onViewActivityLog}
               onPreview={onPreviewParameter}
               onDelete={onDeleteParameter}
+              onRename={onRenameParameter}
               onExpose={onExposeParameter}
               exposedInTweak={exposedParameterNames.has(parameter.name)}
               onDescribe={onDescribeParameter}

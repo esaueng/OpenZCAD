@@ -1,5 +1,5 @@
 import { useRef, useState } from 'react';
-import { Eye, EyeOff, Plus, Trash2 } from 'lucide-react';
+import { Eye, EyeOff, Pencil, Plus, Trash2 } from 'lucide-react';
 import type { BodyId, ParameterNode } from '@openzcad/shared';
 import { formatNumber } from '../lib/model';
 
@@ -26,6 +26,11 @@ interface ParameterRowProps extends ToggleBindingProps {
   onPreview?(name: string, expression: string | null): void;
   /** Absent hides the delete affordance: Tweak adjusts, it never removes. */
   onDelete?: (name: string) => void;
+  /** Absent keeps the parameter name read-only, as it is in Tweak mode. */
+  onRename?: (
+    name: string,
+    newName: string
+  ) => string | null | void | Promise<string | null | void>;
   /**
    * Absent hides the curation toggle, which belongs to Build mode — the
    * workspace that decides what a share link offers, rather than the one
@@ -55,6 +60,7 @@ export function ParameterRow({
   onPreview,
   minimum,
   onDelete,
+  onRename,
   onExpose,
   exposedInTweak,
   onDescribe,
@@ -73,7 +79,35 @@ export function ParameterRow({
   const [error, setError] = useState<{ detailsAvailable: boolean } | null>(
     null
   );
+  const [renameError, setRenameError] = useState<string | null>(null);
+  const [renaming, setRenaming] = useState(false);
+  const [nameDraft, setNameDraft] = useState(parameter.name);
   const [pending, setPending] = useState(false);
+
+  async function commitRename() {
+    const newName = nameDraft.trim();
+    if (!newName || newName === parameter.name) {
+      setNameDraft(parameter.name);
+      setRenameError(null);
+      setRenaming(false);
+      return;
+    }
+    try {
+      const refusal = await onRename?.(parameter.name, newName);
+      if (refusal) {
+        setRenameError(`${refusal} No change applied.`);
+        return;
+      }
+      setRenameError(null);
+      setRenaming(false);
+    } catch (cause) {
+      setRenameError(
+        cause instanceof Error
+          ? cause.message
+          : 'The parameter could not be renamed.'
+      );
+    }
+  }
 
   // Undo/redo, document hydration and collaborator edits all replace the
   // canonical expression underneath us. Adopt it, but never yank the field out
@@ -129,7 +163,54 @@ export function ParameterRow({
         className="param-row"
         title={`${parameter.name} = ${parameter.expression}`}
       >
-        <span className="param-name mono">{parameter.name}</span>
+        {renaming ? (
+          <input
+            className="param-name-editor mono"
+            value={nameDraft}
+            spellCheck={false}
+            autoFocus
+            aria-label={`Rename parameter ${parameter.name}`}
+            aria-invalid={renameError ? true : undefined}
+            aria-describedby={
+              renameError
+                ? `parameter-feedback-${parameter.parameterId}`
+                : undefined
+            }
+            onFocus={(event) => event.currentTarget.select()}
+            onChange={(event) => {
+              setNameDraft(event.target.value);
+              setRenameError(null);
+            }}
+            onBlur={() => void commitRename()}
+            onKeyDown={(event) => {
+              if (event.key === 'Enter') {
+                event.currentTarget.blur();
+              }
+              if (event.key === 'Escape') {
+                setNameDraft(parameter.name);
+                setRenameError(null);
+                setRenaming(false);
+              }
+            }}
+          />
+        ) : onRename ? (
+          <button
+            type="button"
+            className="param-name param-name-button mono"
+            title={`Rename parameter ${parameter.name}`}
+            aria-label={`Rename parameter ${parameter.name}`}
+            onClick={() => {
+              setNameDraft(parameter.name);
+              setRenameError(null);
+              setRenaming(true);
+            }}
+          >
+            <span>{parameter.name}</span>
+            <Pencil size={10} aria-hidden="true" />
+          </button>
+        ) : (
+          <span className="param-name mono">{parameter.name}</span>
+        )}
         {parameter.toggle ? (
           <button
             type="button"
@@ -226,13 +307,15 @@ export function ParameterRow({
           </button>
         )}
       </div>
-      {(error || pending || minimum !== undefined) && (
+      {(renameError || error || pending || minimum !== undefined) && (
         <p
           id={`parameter-feedback-${parameter.parameterId}`}
-          className={`parameter-feedback${error ? ' error' : ''}`}
-          role={error ? 'alert' : 'status'}
+          className={`parameter-feedback${renameError || error ? ' error' : ''}`}
+          role={renameError || error ? 'alert' : 'status'}
         >
-          {error ? (
+          {renameError ? (
+            renameError
+          ) : error ? (
             <>
               <span>No change applied.</span>
               {error.detailsAvailable && onViewDetails ? (

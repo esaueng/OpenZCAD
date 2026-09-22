@@ -2500,9 +2500,9 @@ export function deleteParameter(
  * Readers are found the way {@link findParameterReferences} finds them: a
  * string counts only if it both names the parameter and evaluates against the
  * live scope, which is what keeps ids, enum discriminants, and font families
- * out of the rewrite. An unevaluatable parameter is therefore read by nobody
- * and only the node itself is renamed — its readers were already failing and
- * keep the text the user typed.
+ * out of the rewrite. Parameter-node expressions are a known expression field,
+ * so their identifier is rewritten even while another typo makes them
+ * unevaluatable; the broader mixed payloads remain conservative.
  */
 export function renameParameter(
   document: ProjectDocument,
@@ -2537,7 +2537,15 @@ export function renameParameter(
   for (const node of Object.values(next.nodes)) {
     if (node.kind === 'parameter') {
       if (node.name !== input.name) {
-        node.expression = rewrite(node.expression);
+        // This field is known to be an expression, so keep its reference
+        // intact even when another typo currently prevents evaluation. The
+        // broader payload walk remains conservative because it also contains
+        // ids, enum values and font names that can resemble expressions.
+        node.expression = expressionIdentifiers(node.expression).includes(
+          input.name
+        )
+          ? renameIdentifierInExpression(node.expression, input.name, newName)
+          : node.expression;
       }
     } else if (node.kind === 'feature' || node.kind === 'sketch-object') {
       node.data = rewritePayloadStrings(node.data, rewrite) as typeof node.data;
