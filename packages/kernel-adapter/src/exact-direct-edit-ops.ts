@@ -1397,18 +1397,10 @@ export function applyDirectEdit(
           .filter((handle) => {
             const geometry = measureFaceGeometry(kernel, handle);
             return (
-              geometry?.featureType === 'blend' &&
-              geometry.surfaceType === operation.surfaceClass
+              geometry?.surfaceType === operation.surfaceClass
             );
           })
       );
-      // The app's direct-edit identity is intentionally singular. A
-      // multi-band result must remain hash-only rather than assigning the
-      // same semantic name to several generated faces.
-      const qualifiedGeneratedBlendFaces =
-        generatedBlendFaces.size === 1
-          ? generatedBlendFaces
-          : new Set<number>();
       lineage = createRemusModifierEvolutionLineage({
         producingFeatureId,
         operation: 'direct-edit',
@@ -1418,7 +1410,7 @@ export function applyDirectEdit(
         sourceCandidates,
         resultCandidates,
         sourceLineage: target.lineage,
-        generatedBlendFaces: qualifiedGeneratedBlendFaces
+        generatedBlendFaces
       });
     } else if (newRadius > GEOMETRY_EPSILON) {
       const candidates = topologyCandidatesForSolid(kernel, output);

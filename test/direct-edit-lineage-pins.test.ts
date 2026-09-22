@@ -321,9 +321,27 @@ describe('resize-blend under lineage', { timeout: 120_000 }, () => {
   }
 
   it('follows the body when the transform before it moves', async () => {
-    const { document, bodyId, resizedVolume } = await movedImportedBlend({
+    const { document, bodyId, resizedVolume, resizedTopology } =
+      await movedImportedBlend({
       withReference: true
-    });
+      });
+    const resizedBlendReferences = resizedTopology?.faces
+      .filter((face) => face.geometry?.featureType === 'blend')
+      .map((face) => face.reference?.lineageName)
+      .filter((lineageName): lineageName is string => lineageName !== undefined);
+    expect(resizedBlendReferences.length).toBeGreaterThan(0);
+    expect(new Set(resizedBlendReferences).size).toBe(
+      resizedBlendReferences.length
+    );
+    expect(resizedBlendReferences.every((lineageName) =>
+      lineageName.startsWith('direct-edit.resize-blend.band.')
+    )).toBe(true);
+    const resizedBlend = resizedTopology?.faces.find(
+      (face) => face.geometry?.featureType === 'blend'
+    );
+    expect(resizedBlend?.reference?.lineageName).toMatch(
+      /^direct-edit\.resize-blend\.band\./
+    );
     const after = await adapter.syncDocument(movedTo(document, 9));
     expect(after.warnings).toEqual([]);
     // A translation changes no volume: the blend is still resized to 2.
