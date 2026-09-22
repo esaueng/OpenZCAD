@@ -10375,7 +10375,10 @@ export function App() {
                 importedBlend.axis.z
               ] as [number, number, number],
               ...(faceTopology?.reference?.lineageName ===
-              'direct-edit.resize-blend.band'
+                'direct-edit.resize-blend.band' ||
+              faceTopology?.reference?.lineageName?.startsWith(
+                'direct-edit.resize-blend.band.'
+              )
                 ? {
                     directEditFeatureId: String(
                       faceTopology.reference.producingFeatureId
