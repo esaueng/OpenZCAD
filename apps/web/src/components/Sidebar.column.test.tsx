@@ -54,6 +54,7 @@ function renderSidebar(
     onSetParameter: vi.fn(),
     onViewActivityLog: vi.fn(),
     onDeleteParameter: vi.fn(),
+    onRenameParameter: vi.fn().mockReturnValue(null),
     onExposeParameter: vi.fn(),
     onDescribeParameter: vi.fn(),
     exposedParameterNames: new Set(),

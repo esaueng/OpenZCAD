@@ -117,6 +117,25 @@ describe('renameParameter', () => {
       listParameters(applied).map((parameter) => parameter.name)
     );
   });
+
+  it('preserves references in a temporarily invalid parameter expression', () => {
+    let document = createProjectDocument('Rename invalid reader', USER, 'mm');
+    document = setParameter(document, { name: 'width', expression: '40' });
+    document = setParameter(document, {
+      name: 'unfinished',
+      expression: 'width + missing'
+    });
+
+    const renamed = renameParameter(document, {
+      name: 'width',
+      newName: 'plate_width'
+    });
+
+    expect(
+      listParameters(renamed).find(({ name }) => name === 'unfinished')
+        ?.expression
+    ).toBe('plate_width + missing');
+  });
 });
 
 describe('parameter patch operations', () => {

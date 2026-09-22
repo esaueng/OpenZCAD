@@ -117,6 +117,38 @@
   white-space: nowrap;
 }
 
+.param-name-button {
+  display: flex;
+  align-items: center;
+  justify-content: flex-start;
+  gap: 5px;
+  min-width: 0;
+  padding: 2px 0;
+  border: 0;
+  background: transparent;
+  text-align: left;
+}
+
+.param-name-button span {
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.param-name-button svg {
+  flex: 0 0 auto;
+  color: var(--color-text-subtle);
+  opacity: 0;
+}
+
+.param-name-button:hover svg,
+.param-name-button:focus-visible svg {
+  opacity: 1;
+}
+
+.param-name-editor {
+  color: var(--color-accent);
+}
+
 .param-value {
   color: var(--color-text-muted);
   font-size: var(--fs-mini);
