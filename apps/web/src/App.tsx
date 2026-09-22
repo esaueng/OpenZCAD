@@ -12006,6 +12006,27 @@ export function App() {
     }
   }
 
+  function handleRenameParameter(name: string, newName: string): string | null {
+    const manager = managerRef.current;
+    if (!manager || !ensureCanEditParameters('rename this parameter')) {
+      return 'Parameter editing is unavailable.';
+    }
+    const command = commandFactories.renameParameter({ name, newName });
+    try {
+      command.validate(manager.document);
+    } catch (error) {
+      const message = errorMessage(
+        error,
+        'The parameter could not be renamed.'
+      );
+      setStatus(message);
+      return message;
+    }
+    return executeCommand(command)
+      ? null
+      : 'The parameter could not be renamed.';
+  }
+
   function handleDeleteSketchConstraint(constraintId: string) {
     if (!editingSketchNode) {
       return;
@@ -16138,6 +16159,7 @@ export function App() {
       onDeleteParameter={(name) =>
         executeCommand(commandFactories.deleteParameter({ name }))
       }
+      onRenameParameter={handleRenameParameter}
       onExposeParameter={(name, exposed) =>
         executeCommand(commandFactories.setParameterExposed({ name, exposed }))
       }
