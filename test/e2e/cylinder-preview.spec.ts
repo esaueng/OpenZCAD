@@ -1,4 +1,5 @@
 import type { Page } from '@playwright/test';
+import { steppedCylinderDocument } from '../support/stepped-cylinder';
 import {
   test,
   expect,
@@ -295,3 +296,178 @@ const rendered = (canvas: ReturnType<Page['locator']>) =>
         );
       })
   );
+
+for (const sense of [1, -1]) {
+  test(`stepped rounded cap ${sense} previews without worker work and keeps the other end fixed`, async ({
+    page
+  }) => {
+    test.setTimeout(90_000);
+    await stubApi(page);
+    await page.setViewportSize({ width: 1440, height: 1000 });
+    await page.addInitScript(() => {
+      const scope = window as typeof window & {
+        editSyncs: number;
+        holdEdits: boolean;
+        releaseEdits: () => void;
+      };
+      scope.editSyncs = 0;
+      const pending: (() => void)[] = [];
+      scope.releaseEdits = () => {
+        scope.holdEdits = false;
+        pending.splice(0).forEach((send) => send());
+      };
+      const send = Worker.prototype.postMessage;
+      Worker.prototype.postMessage = function (message, transfer) {
+        if ((message as { type?: string })?.type === 'sync') {
+          scope.editSyncs++;
+          if (scope.holdEdits) {
+            pending.push(() =>
+              send.call(this, message, transfer as StructuredSerializeOptions)
+            );
+            return;
+          }
+        }
+        send.call(this, message, transfer as StructuredSerializeOptions);
+      };
+    });
+    const errors: string[] = [];
+    page.on('pageerror', (error) => errors.push(error.message));
+    const { document } = await steppedCylinderDocument();
+    await page.goto('/');
+    await page.getByRole('button', { name: 'Import project…' }).click();
+    // The chooser is driven through the same input used by the File menu.
+    await page.getByLabel('Import project backup').setInputFiles({
+      name: 'stepped.openzcad',
+      mimeType: 'application/json',
+      buffer: Buffer.from(
+        JSON.stringify({
+          format: 'openzcad-project',
+          version: 1,
+          document,
+          files: []
+        })
+      )
+    });
+    await expect(page.locator('.feature-row')).toHaveCount(1);
+    const canvas = page.locator('.viewer-host canvas');
+    await page
+      .getByRole('button', {
+        name:
+          sense < 0
+            ? 'Bottom front right isometric view'
+            : 'Top front right isometric view',
+        exact: true
+      })
+      .click();
+    await page
+      .getByRole('button', { name: 'Fit view (F)', exact: true })
+      .click();
+    const select = () =>
+      canvas.evaluate(
+        (element, z) =>
+          element.dispatchEvent(
+            new CustomEvent('openzcad:e2e-select-planar-face', {
+              detail: { normal: { x: 0, y: 0, z } }
+            })
+          ),
+        sense
+      );
+    await expect
+      .poll(async () => {
+        await select();
+        return canvas.getAttribute('data-e2e-handle-x');
+      })
+      .not.toBeNull();
+    const before = await rendered(canvas);
+    const moving = sense > 0 ? 'max' : 'min',
+      fixed = sense > 0 ? 'min' : 'max';
+    const syncs = () =>
+      page.evaluate(
+        () => (window as typeof window & { editSyncs: number }).editSyncs
+      );
+    for (const outcome of ['cancel', 'commit'] as const) {
+      await select();
+      await expect(canvas).toHaveAttribute('data-e2e-handle-x', /.+/);
+      const handle = await canvas.evaluate((el) => ({
+        x: Number(el.dataset.e2eHandleX),
+        y: Number(el.dataset.e2eHandleY),
+        dx: Number(el.dataset.e2eHandleDx),
+        dy: Number(el.dataset.e2eHandleDy),
+        scale: Number(el.dataset.e2eHandlePixelsPerUnit)
+      }));
+      const bounds = (await canvas.boundingBox())!;
+      const count = await syncs();
+      await page.mouse.move(bounds.x + handle.x, bounds.y + handle.y);
+      await page.mouse.down();
+      for (const delta of [2, 5, 3, -1, 4]) {
+        await page.mouse.move(
+          bounds.x + handle.x + handle.dx * handle.scale * delta,
+          bounds.y + handle.y + handle.dy * handle.scale * delta,
+          { steps: 4 }
+        );
+        await expect(canvas).toHaveAttribute(
+          'data-e2e-height-proxy-offset',
+          /.+/
+        );
+        const value = Number(
+          await canvas.getAttribute('data-e2e-height-proxy-offset')
+        );
+        await expect
+          .poll(async () => (await rendered(canvas))[moving][2]!)
+          .toBeCloseTo(before[moving][2]! + sense * value, 3);
+        expect((await rendered(canvas))[fixed][2]).toBeCloseTo(
+          before[fixed][2]!,
+          4
+        );
+      }
+      expect(await syncs()).toBe(count);
+      await expect(page.locator('.feature-row')).toHaveCount(1);
+      await expect(
+        page.getByText('Preview · exact on release', { exact: true })
+      ).toBeVisible();
+      if (outcome === 'cancel') {
+        await page.keyboard.press('Escape');
+        await page.mouse.up();
+        await expect(canvas).not.toHaveAttribute(
+          'data-e2e-height-proxy-offset',
+          /.+/
+        );
+        expect(await rendered(canvas)).toEqual(before);
+        expect(await syncs()).toBe(count);
+      } else {
+        const held = await rendered(canvas);
+        await page.evaluate(() => {
+          (window as typeof window & { holdEdits: boolean }).holdEdits = true;
+        });
+        await page.mouse.up();
+        await expect(
+          page.getByText('Checking geometry…', { exact: true }).first()
+        ).toBeVisible();
+        expect(await rendered(canvas)).toEqual(held);
+        await page.evaluate(() =>
+          (
+            window as typeof window & { releaseEdits: () => void }
+          ).releaseEdits()
+        );
+        await expect(page.locator('.feature-row')).toHaveCount(2);
+        await expect(canvas).not.toHaveAttribute(
+          'data-e2e-height-proxy-offset',
+          /.+/
+        );
+        await expect
+          .poll(async () => (await rendered(canvas))[moving][2]!)
+          .toBeCloseTo(held[moving][2]!, 3);
+        expect((await rendered(canvas))[fixed][2]).toBeCloseTo(
+          before[fixed][2]!,
+          4
+        );
+        await page.getByRole('button', { name: 'Undo', exact: true }).click();
+        await expect(page.locator('.feature-row')).toHaveCount(1);
+        await expect
+          .poll(async () => (await rendered(canvas))[moving][2]!)
+          .toBeCloseTo(before[moving][2]!, 3);
+      }
+    }
+    expect(errors).toEqual([]);
+  });
+}

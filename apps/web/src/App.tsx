@@ -1,4 +1,5 @@
 import { boxPreviewProfile } from './lib/interaction/boxPreviewProfile';
+import { capPreviewProfile } from './lib/interaction/capPreviewProfile';
 import {
   parameterMinimums,
   parameterInputError,
@@ -12673,8 +12674,21 @@ export function App() {
             z: target.normal[2]
           })
         : null;
+    const body = representations[target.bodyId as BodyId];
+    const terminalProfile =
+      !profile && !boxProfile
+        ? capPreviewProfile(
+            body,
+            body?.topology?.faces.find(
+              (face) =>
+                face.topologyId === target.topologyId &&
+                face.hash === target.hash
+            )
+          )
+        : null;
+    const linearProfile = boxProfile ?? terminalProfile;
     return {
-      ...(boxProfile ? { linearProfilePreview: boxProfile } : {}),
+      ...(linearProfile ? { linearProfilePreview: linearProfile } : {}),
       ...(profile ? { profilePreview: profile } : {}),
       bodyId: target.bodyId,
       topologyId: target.topologyId,
