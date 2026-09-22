@@ -112,7 +112,9 @@ import {
 import {
   buildDocumentHistory,
   type CachedImportedStep,
-  type ImportedStepStore
+  type ImportedStepStore,
+  type StrictUnionVerdict,
+  type StrictUnionVerdicts
 } from './exact-build-loop';
 import {
   countFaceHandles,
@@ -836,6 +838,8 @@ export class RemusKernelAdapter implements ExactKernelAdapter {
     build: ExactBuildResult;
     replayed: number;
     restored: number;
+    /** Strict verdicts the union gate established, keyed by kernel handle. */
+    strictVerdicts: StrictUnionVerdicts;
   } {
     const features = listFeaturesInOrder(document);
     // Slice keeps the established integer-count meaning of the option: a
@@ -986,6 +990,12 @@ export class RemusKernelAdapter implements ExactKernelAdapter {
     };
 
     let build: ExactBuildResult;
+    // Strict verdicts the union gate established on the solids it produced,
+    // keyed by kernel handle, for the measurement pass of the same sync.
+    // Scoped to one sync: handles are never mutated in place after their
+    // feature ran, and the map is dropped before the next sync builds
+    // anything.
+    const strictVerdicts: StrictUnionVerdicts = new Map();
     try {
       build = buildDocumentHistory(
         activeKernel,
@@ -995,7 +1005,8 @@ export class RemusKernelAdapter implements ExactKernelAdapter {
         initial ? { startIndex, initial } : undefined,
         this.importedSteps,
         onFeature,
-        onFeatureStart
+        onFeatureStart,
+        strictVerdicts
       );
     } catch (error) {
       // All callers (including export and recognition) must abandon both
@@ -1009,7 +1020,8 @@ export class RemusKernelAdapter implements ExactKernelAdapter {
       kernel: activeKernel,
       build,
       replayed: features.length - startIndex,
-      restored: startIndex
+      restored: startIndex,
+      strictVerdicts
     };
   }
 
@@ -1125,7 +1137,12 @@ export class RemusKernelAdapter implements ExactKernelAdapter {
     includeMassProperties = true,
     analysisHashes?: readonly number[],
     /** One millimetre in document units, for the recognizer's margins. */
-    millimetre = 1
+    millimetre = 1,
+    /**
+     * Strict verdicts the union gate established earlier in this sync, keyed
+     * by handle; a hit replaces the strict `validateSolid` call.
+     */
+    strictVerdicts?: ReadonlyMap<number, StrictUnionVerdict>
   ): MeasuredShape {
     if (shape.solids.length === 0) {
       throw new Error('Exact body contains no solids.');
@@ -1422,7 +1439,15 @@ export class RemusKernelAdapter implements ExactKernelAdapter {
       volume += kernel.volume(solid, MEASUREMENT_DEFLECTION);
       valid = valid && kernel.validateSolidRelaxed(solid) === 0;
       if (strictBooleanValidation) {
-        strictValid = kernel.validateSolid(solid) === 0 && strictValid;
+        // The union gate validated this very handle moments ago; nothing
+        // mutates a handle in place after its feature ran, so its verdict is
+        // the verdict. Anything without one is validated here as before.
+        const verdict = strictVerdicts?.get(solid);
+        const strictErrors =
+          verdict !== undefined
+            ? verdict.strictErrors
+            : kernel.validateSolid(solid);
+        strictValid = strictErrors === 0 && strictValid;
       }
       volumeDone?.();
     }
@@ -1505,13 +1530,8 @@ export class RemusKernelAdapter implements ExactKernelAdapter {
     // a failed sync must never leave a table the next sync would trust.
     try {
       const historyDone = report('history', 'Building history');
-      const { kernel, build, replayed, restored } = this.buildWithHistoryCache(
-        document,
-        sources,
-        pinned,
-        onProgress,
-        onProjection
-      );
+      const { kernel, build, replayed, restored, strictVerdicts } =
+        this.buildWithHistoryCache(document, sources, pinned, onProgress, onProjection);
       historyDone();
       const bodies = listNodesByKind(document, 'body');
       const features = new Map(
@@ -1592,7 +1612,8 @@ export class RemusKernelAdapter implements ExactKernelAdapter {
               ),
             !consumed,
             analysisHashes,
-            1 / UNIT_TO_MM[document.units]
+            1 / UNIT_TO_MM[document.units],
+            strictVerdicts
           );
           remeasured += 1;
           this.storeMeasuredShape(bodyId, {
