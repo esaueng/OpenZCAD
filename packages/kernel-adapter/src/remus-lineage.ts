@@ -1152,7 +1152,12 @@ export function createRemusModifierEvolutionLineage(input: {
     }
     const resultCandidate = resultFaces.get(resultHandle);
     const sources = [...(generatedSources.get(resultHandle) ?? [])];
-    if (!resultCandidate || sources.length !== 2) {
+    const requiredSourceCount = input.operation === 'direct-edit' ? 1 : 2;
+    if (
+      !resultCandidate ||
+      sources.length < requiredSourceCount ||
+      sources.length > 2
+    ) {
       continue;
     }
     const references = sources.flatMap((handle) => {
@@ -1162,7 +1167,10 @@ export function createRemusModifierEvolutionLineage(input: {
         : [];
     });
     const identities = references.map(supportIdentity).sort();
-    if (identities.length !== 2 || new Set(identities).size !== 2) {
+    if (
+      references.length !== sources.length ||
+      new Set(identities).size !== identities.length
+    ) {
       continue;
     }
     assignments.push({

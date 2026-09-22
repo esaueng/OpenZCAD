@@ -7,7 +7,7 @@ blend support.
 The adapter uses Remus construction evolution for the qualified cylindrical
 planar-pair `resize-blend` path, including resize-to-zero. A generated blend
 band receives a semantic reference only when the evolution identifies one
-unambiguous band. One-to-one changed support faces retain their producing
+unambiguous band with one or two verified construction sources. One-to-one changed support faces retain their producing
 feature and lineage name with a refreshed witness. Split, merge, duplicate,
 stale, or deleted references remain unresolved and fail closed. The document
 was also exercised through JSON serialization and a fresh adapter replay.
@@ -20,15 +20,14 @@ existing imported/direct-edit feature suites. The recorded local checks are:
 ```text
 pnpm lint
 pnpm typecheck
-pnpm exec vitest run packages/kernel-adapter/src/remus-lineage.test.ts
-pnpm exec vitest run test/direct-edit-lineage-pins.test.ts
-pnpm --filter @openzcad/web test
+pnpm test
+pnpm test:parity-corpus
+pnpm build
 ```
 
-The application pins generated Remus packages 2.130.43 at immutable commit
-`04b50762c1d147c89e4ff1eb414857840266c079`, from
-[Remus PR #602](https://github.com/esaueng/remus/pull/602). The later kernel
-module-map documentation commit does not change those package contents.
+The application pins generated Remus packages 2.130.44 at immutable commit
+`adcf3e988fc70f5bb6e5f54b26bdf4d4591fba8e`, from
+[Remus PR #602](https://github.com/esaueng/remus/pull/602).
 
 Kernel qualification covers ordered split contacts, an atomic connected-group
 API, isolated spherical ends, bounded affine-NURBS caps, and additional analytic

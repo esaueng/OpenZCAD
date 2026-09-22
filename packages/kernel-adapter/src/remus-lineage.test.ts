@@ -260,6 +260,33 @@ describe('Remus modifier evolution lineage', () => {
     expect(duplicate.faceReferences.has(12)).toBe(false);
   });
 
+  it('publishes a single-source imported band from its exact evolution relation', () => {
+    const original = input([13]);
+    const singleSource = createRemusModifierEvolutionLineage({
+      ...original,
+      operation: 'direct-edit',
+      sourceLineage: createRemusSemanticLineage(FEATURE_ID, 'imported-step', [
+        {
+          handle: 1,
+          kind: 'face',
+          lineageName: 'import.step.face.17',
+          witness: FACE
+        }
+      ]),
+      payload: {
+        ...original.payload,
+        evolution: {
+          ...original.payload.evolution,
+          generated: [{ source: 1, results: [13] }]
+        }
+      }
+    });
+    expect(singleSource.faceReferences.get(13)).toMatchObject({
+      producingFeatureId: FILLET_FEATURE_ID,
+      lineageName: 'direct-edit.resize-blend.band'
+    });
+  });
+
   it('fails closed for malformed direct-edit evolution', () => {
     const malformed = createRemusModifierEvolutionLineage({
       ...input([13]),
