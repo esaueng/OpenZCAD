@@ -166,15 +166,16 @@ export class LivePreview<TDocument, TDerived> {
       if (current()) {
         const elapsed = this.now() - started;
         const interval = this.options.minIntervalMs ?? 0;
-        // Reserve idle time for input and drawing instead of saturating the
-        // worker. Presentation is measured by the previous installed frame.
+        // Leave a bounded presentation/input yield, not another rebuild-sized
+        // pause. Exact work runs in a worker: doubling its elapsed time made
+        // a 150 ms edit with a 45 ms installation advance only every 390 ms.
+        const presentationYield = Math.min(
+          32,
+          Math.max(8, this.options.presentationTimeMs?.() ?? 0)
+        );
         this.nextStartAt =
           interval > 0
-            ? started +
-              Math.max(
-                interval,
-                2 * (elapsed + (this.options.presentationTimeMs?.() ?? 0))
-              )
+            ? Math.max(started + interval, this.now() + presentationYield)
             : 0;
         if (elapsed > (this.options.slowFrameMs ?? DEFAULT_SLOW_FRAME_MS)) {
           if (!this.slow) this.options.onDegrade?.();
