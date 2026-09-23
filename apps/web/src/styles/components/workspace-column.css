@@ -689,6 +689,41 @@
   transform: none;
 }
 
+/* ── The notice lane ──
+   Everything that talks above the dock shares one centred lane, stacked from
+   the dock up: the selection chip, then the status toast or the activity
+   pill, then the action toast (Undo). Each row that is showing lifts the rows
+   above it. The rows used to carry fixed offsets of their own, so the Undo
+   toast, the status toast and the chip landed on the same pixels whenever
+   two of them were up at once. */
+.viewer-area {
+  --lane-chip: 0px;
+  --lane-status: 0px;
+}
+
+.workspace.column-layout .viewer-area:has(.selection-chip) {
+  --lane-chip: 34px;
+}
+
+.viewer-area:has(.workspace-toast:not(.hidden)),
+.viewer-area:has(.activity-pill) {
+  --lane-status: 40px;
+}
+
+/* A settled status only repeats what the action toast has just said
+   ("Deleted Boss bore." under "Deleted Boss bore · Undo"), so it steps aside
+   and its message stays in the activity log. A running or warning status is
+   news of its own and keeps its row under the toast. */
+.viewer-area:has(.toast):has(.workspace-toast.ready):not(:has(.activity-pill)) {
+  --lane-status: 0px;
+}
+
+.viewer-area:has(.toast) .workspace-toast.ready,
+.viewer-area:has(.toast) .workspace-toast.ready .workspace-toast-body {
+  opacity: 0;
+  pointer-events: none;
+}
+
 /* The toast: the live message, centred above the dock. The footer is the
    page's contentinfo landmark and stays in the tree; only the visual hides
    when there is nothing to say. */
@@ -698,7 +733,7 @@
      column. */
   left: calc(var(--column-w) + 12px);
   right: calc(var(--column-w) + 12px);
-  bottom: 58px;
+  bottom: calc(58px + var(--lane-chip, 0px));
   z-index: var(--z-viewer-overlay);
   display: flex;
   justify-content: safe center;
@@ -715,14 +750,10 @@
   pointer-events: none;
 }
 
-/* The selection chip sits on the dock's shoulder, and the toast steps up
-   over it while it is there, so neither covers the dock's buttons. */
+/* The selection chip sits on the dock's shoulder, and the lane above it steps
+   up while it is there (--lane-chip), so nothing covers the dock's buttons. */
 .workspace.column-layout .selection-chip {
   bottom: 56px;
-}
-
-.workspace.column-layout .viewer-area:has(.selection-chip) .workspace-toast {
-  bottom: 92px;
 }
 
 .workspace-toast-body {
