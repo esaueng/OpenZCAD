@@ -9,7 +9,7 @@
   position: absolute;
   left: calc(var(--column-w) + 12px);
   right: calc(var(--column-w) + 12px);
-  bottom: 58px;
+  bottom: calc(58px + var(--lane-chip, 0px));
   z-index: calc(var(--z-viewer-overlay) + 1);
   display: flex;
   justify-content: safe center;
@@ -21,20 +21,13 @@
 }
 
 /* The lane and the status toast are the same slot. While a pill is up the
-   toast steps aside; its message is still in the activity log. */
-.viewer-area:has(.activity-pill) .workspace-toast {
+   toast steps aside; its message is still in the activity log. The undo
+   toast and the selection chip stack around it through the notice-lane
+   variables in workspace-column.css. */
+.viewer-area:has(.activity-pill) .workspace-toast,
+.viewer-area:has(.activity-pill) .workspace-toast-body {
   opacity: 0;
   pointer-events: none;
-}
-
-/* The undo toast keeps its place by moving up one row. */
-.viewer-area:has(.activity-pill) .toast {
-  bottom: 100px;
-}
-
-/* The selection chip lifts the lane the way it lifts the toast. */
-.workspace.column-layout .viewer-area:has(.selection-chip) .activity-lane {
-  bottom: 92px;
 }
 
 .activity-pill {
