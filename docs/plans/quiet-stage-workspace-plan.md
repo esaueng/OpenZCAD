@@ -1,6 +1,6 @@
 # Quiet-stage workspace redesign (U04)
 
-Status: slice 1 in review (#411); slice 2 in review (#412); slice 3 in review (#413); slice 4 in review (#414); slice 5 in review; slices 6–7 open. Roadmap row: [U04](../../ROADMAP.md#u04).
+Status: slice 1 in review (#411); slice 2 in review (#412); slice 3 in review (#413); slice 4 in review (#414); slice 5 in review (#415); slice 6 in review; slice 7 open. Roadmap row: [U04](../../ROADMAP.md#u04).
 
 ## Intent
 
@@ -122,7 +122,16 @@ Each slice is one PR against `main`, recorded on the U04 row when it merges.
 6. **Sketch card and relations rail.** Draw and modify tools in the left card,
    Finish at its foot; the relations rail on the right. Acceptance: every
    constraint kind reachable in rail order; greyed kinds carry the refusal
-   reason as their accessible description.
+   reason as their accessible description. As built: "fits the selection"
+   uses the app's single sketch selection and `constraintToolsForObject`, and
+   a fitting relation starts from the selection through the path the entity
+   editor already had (`planConstraintFromSelection`: one-pick relations apply
+   at once, two-pick ones arm with one pick left), so the editor's own row of
+   relation buttons went. With nothing selected every relation arms for canvas
+   picks as before, and none is named unless armed. The entity editor moved
+   from its top-right float into the card under the tools, since the rail's
+   names now use that corner. No relation shortcuts: their letters collide
+   with the draw tools' keys.
 7. **Face offset preview.** The B-refined preview in `packages/viewport`
    (band, seam, cut ghost, in-line change arrow, beside-pin label).
    Acceptance: add and cut previews match the design at 20 mm and 0.05 mm

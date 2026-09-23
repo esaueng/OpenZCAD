@@ -663,6 +663,11 @@ const LazySketchToolRail = lazyWithStaleChunkNotice(() =>
     default: module.SketchToolRail
   }))
 );
+const LazySketchRelationsRail = lazyWithStaleChunkNotice(() =>
+  import('./components/SketchToolRail').then((module) => ({
+    default: module.SketchRelationsRail
+  }))
+);
 // Three modal dialogs nobody sees in an ordinary session: a resume offer, a
 // named checkpoint, and a save conflict. They loaded with the app and sat in
 // the entry chunk; the gesture that opens one can afford to fetch it.
@@ -810,6 +815,16 @@ function SketchToolRail(props: ComponentProps<typeof LazySketchToolRail>) {
   return (
     <Suspense fallback={null}>
       <LazySketchToolRail {...props} />
+    </Suspense>
+  );
+}
+
+function SketchRelationsRail(
+  props: ComponentProps<typeof LazySketchRelationsRail>
+) {
+  return (
+    <Suspense fallback={null}>
+      <LazySketchRelationsRail {...props} />
     </Suspense>
   );
 }
@@ -11309,15 +11324,20 @@ export function App() {
       }));
   }, [editingSketchNode, doc, selectedSketchEntity]);
 
-  const selectedEntityConstraintTools = useMemo(() => {
-    if (!selectedSketchEntity || interaction.mode !== 'sketch') {
-      return [];
-    }
-    const armed = interaction.session.pendingConstraint?.kind ?? null;
-    return constraintToolsForObject(selectedSketchEntity.data.objectKind).map(
-      ({ kind, label }) => ({ kind, label, armed: armed === kind })
-    );
-  }, [selectedSketchEntity, interaction]);
+  // What the relations rail offers the selected entity: its kind, for the
+  // refusal it names, and the relations that take it as their first pick.
+  const relationSelection = useMemo(
+    () =>
+      selectedSketchEntity && interaction.mode === 'sketch'
+        ? {
+            kind: selectedSketchEntity.data.objectKind,
+            fitting: constraintToolsForObject(
+              selectedSketchEntity.data.objectKind
+            ).map(({ kind }) => kind)
+          }
+        : null,
+    [selectedSketchEntity, interaction.mode]
+  );
 
   /**
    * A constraint tool chosen from the entity editor: the selection is pick 1,
@@ -16054,9 +16074,54 @@ export function App() {
   const sketchOverviewPlane =
     editingSketchNode?.planeRef ??
     (interaction.mode === 'sketch' ? interaction.session.plane : null);
+  // The selected entity's editor rides in the sketch card, under the tools:
+  // the card changes with the pick, and the right side stays the relations'.
+  const sketchEntityEditor =
+    interaction.mode === 'sketch' && selectedSketchEntity ? (
+      <SketchEntityEditor
+        key={`${selectedSketchEntity.id}:${doc.version}`}
+        disabled={sketchSolving || geometryBusy}
+        error={sketchEditError}
+        data={selectedSketchEntity.data}
+        scope={parameterScope.scope}
+        onApply={(data) => {
+          void handleUpdateSketchEntity(data);
+        }}
+        onDelete={handleDeleteSketchEntity}
+        constraints={selectedEntityConstraints}
+        onEditConstraint={handleEditSketchDimension}
+        onDeleteConstraint={handleDeleteSketchConstraint}
+        onClose={() =>
+          dispatchInteraction({
+            type: 'sketch-select-object',
+            objectId: null
+          })
+        }
+      />
+    ) : null;
+  const armConstraintTool = (kind: SketchConstraintToolKind | null) => {
+    dispatchInteraction({
+      type: 'sketch-constraint-tool',
+      kind
+    });
+    if (kind) {
+      setStatus(constraintToolSpec(kind).hint);
+    }
+  };
+  const sketchRelations =
+    interaction.mode === 'sketch' ? (
+      <SketchRelationsRail
+        canConstrain={Boolean(interaction.session.sketchId)}
+        pendingConstraint={interaction.session.pendingConstraint}
+        selection={relationSelection}
+        onConstraintTool={armConstraintTool}
+        onSelectionConstraintTool={handleSelectionConstraintTool}
+      />
+    ) : null;
   const sketchRail =
     interaction.mode === 'sketch' ? (
       <SketchToolRail
+        entityEditor={sketchEntityEditor}
         workflow={
           <SketchWorkflow
             plane={
@@ -16115,20 +16180,10 @@ export function App() {
         units={doc.units}
         paletteVisible
         canConstrain={Boolean(interaction.session.sketchId)}
-        pendingConstraint={interaction.session.pendingConstraint}
         pendingEdit={interaction.session.pendingEdit}
         constraints={sketchConstraintItems}
         solveStatus={sketchSolveStatus}
         solving={sketchSolving}
-        onConstraintTool={(kind) => {
-          dispatchInteraction({
-            type: 'sketch-constraint-tool',
-            kind
-          });
-          if (kind) {
-            setStatus(constraintToolSpec(kind).hint);
-          }
-        }}
         onEditTool={(kind, hint) => {
           dispatchInteraction({ type: 'sketch-edit-tool', kind });
           if (hint) {
@@ -16264,26 +16319,29 @@ export function App() {
       <>
         <PenLine size={14} aria-hidden="true" className="sketch-mark" />
         <strong>{editingSketchName}</strong>
-        <span className="spacer" />
-        <button
-          type="button"
-          className="workspace-column-finish"
-          title="Finish Sketch"
-          aria-label="Finish Sketch"
-          onClick={() => {
-            dispatchInteraction({ type: 'exit-sketch' });
-            setTool(null);
-            setSketchEditError(null);
-            setSketchDiagnosticPoints([]);
-            setStatus(
-              `${editingSketchName} finished · sketch edits preserved.`
-            );
-          }}
-        >
-          <Check size={14} aria-hidden="true" />
-          Finish
-        </button>
       </>
+    ) : null;
+  // Finish closes the sketch card at its foot, where the eye ends up after
+  // the tools; every sketch edit is already committed, so there is nothing
+  // to discard.
+  const columnFooter =
+    interaction.mode === 'sketch' ? (
+      <button
+        type="button"
+        className="workspace-column-finish"
+        title="Finish Sketch"
+        aria-label="Finish Sketch"
+        onClick={() => {
+          dispatchInteraction({ type: 'exit-sketch' });
+          setTool(null);
+          setSketchEditError(null);
+          setSketchDiagnosticPoints([]);
+          setStatus(`${editingSketchName} finished · sketch edits preserved.`);
+        }}
+      >
+        <Check size={14} aria-hidden="true" />
+        Finish sketch
+      </button>
     ) : null;
   // Direct-mode strips (plane picking, direct extrude) keep floating over
   // the viewport; the column shows the palette so the tool can be changed.
@@ -16474,7 +16532,11 @@ export function App() {
             }
           />
         ) : (
-          <WorkspaceColumn header={columnHeader} tools={columnTools} />
+          <WorkspaceColumn
+            header={columnHeader}
+            tools={columnTools}
+            footer={columnFooter}
+          />
         )
       }
       viewer={
@@ -16543,40 +16605,44 @@ export function App() {
             hideViewerToolbar={false}
             dockLayout={!tweakMode}
             railExtras={
-              <div
-                className="viewer-rail rail-panels"
-                role="toolbar"
-                aria-label="Model panels"
-              >
-                {(
-                  [
-                    ['bodies', 'Items', Layers],
-                    ['history', 'History', ListOrdered],
-                    ['parameters', 'Parameters', SlidersHorizontal]
-                  ] as const
-                ).map(([section, label, Icon]) => {
-                  const showing =
-                    panelState.drawerOpen &&
-                    panelState.sidebarSections[section];
-                  return (
-                    <button
-                      key={section}
-                      type="button"
-                      className={`rail-button${showing ? ' active' : ''}`}
-                      aria-label={`${label} panel`}
-                      aria-pressed={showing}
-                      title={label}
-                      onClick={() =>
-                        setPanelState((current) =>
-                          toggleDrawerSection(current, section)
-                        )
-                      }
-                    >
-                      <Icon size={16} aria-hidden="true" />
-                    </button>
-                  );
-                })}
-              </div>
+              <>
+                {/* While sketching, the relations stand beside the rail. */}
+                {sketchRelations}
+                <div
+                  className="viewer-rail rail-panels"
+                  role="toolbar"
+                  aria-label="Model panels"
+                >
+                  {(
+                    [
+                      ['bodies', 'Items', Layers],
+                      ['history', 'History', ListOrdered],
+                      ['parameters', 'Parameters', SlidersHorizontal]
+                    ] as const
+                  ).map(([section, label, Icon]) => {
+                    const showing =
+                      panelState.drawerOpen &&
+                      panelState.sidebarSections[section];
+                    return (
+                      <button
+                        key={section}
+                        type="button"
+                        className={`rail-button${showing ? ' active' : ''}`}
+                        aria-label={`${label} panel`}
+                        aria-pressed={showing}
+                        title={label}
+                        onClick={() =>
+                          setPanelState((current) =>
+                            toggleDrawerSection(current, section)
+                          )
+                        }
+                      >
+                        <Icon size={16} aria-hidden="true" />
+                      </button>
+                    );
+                  })}
+                </div>
+              </>
             }
             dockExtras={
               !tweakMode ? (
@@ -16906,30 +16972,6 @@ export function App() {
                         }
                         dispatchInteraction({ type: 'clear' });
                       }}
-                    />
-                  )}
-                  {interaction.mode === 'sketch' && selectedSketchEntity && (
-                    <SketchEntityEditor
-                      key={`${selectedSketchEntity.id}:${doc.version}`}
-                      disabled={sketchSolving || geometryBusy}
-                      error={sketchEditError}
-                      data={selectedSketchEntity.data}
-                      scope={parameterScope.scope}
-                      onApply={(data) => {
-                        void handleUpdateSketchEntity(data);
-                      }}
-                      onDelete={handleDeleteSketchEntity}
-                      constraints={selectedEntityConstraints}
-                      constraintTools={selectedEntityConstraintTools}
-                      onConstraintTool={handleSelectionConstraintTool}
-                      onEditConstraint={handleEditSketchDimension}
-                      onDeleteConstraint={handleDeleteSketchConstraint}
-                      onClose={() =>
-                        dispatchInteraction({
-                          type: 'sketch-select-object',
-                          objectId: null
-                        })
-                      }
                     />
                   )}
                   {keypad && (
