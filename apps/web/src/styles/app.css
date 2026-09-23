@@ -33,5 +33,8 @@
 @import './components/tour.css';
 @import './components/activity-pill.css';
 @import './components/workspace-column.css';
-/* Last: View mode subtracts from the layouts every file above establishes. */
+/* View mode subtracts from the layouts every file above establishes. */
 @import './components/view-mode.css';
+/* Last: the quiet stage re-anchors every floating region, in every mode, as
+   islands over the viewport; it only positions and frames, never hides. */
+@import './components/quiet-stage.css';

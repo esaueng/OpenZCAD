@@ -1,6 +1,6 @@
 # Quiet-stage workspace redesign (U04)
 
-Status: slice 1 in review; slices 2–7 open. Roadmap row: [U04](../../ROADMAP.md#u04).
+Status: slice 1 in review (#411); slice 2 in review; slices 3–7 open. Roadmap row: [U04](../../ROADMAP.md#u04).
 
 ## Intent
 
@@ -72,9 +72,13 @@ Each slice is one PR against `main`, recorded on the U04 row when it merges.
 2. **Shell islands.** Top bar becomes three islands; the viewer bar leaves the
    bottom dock for a right-hand icon rail with the view cube bottom-right; the
    bottom lane becomes the hint line and the ⌘K bar. Acceptance: names kept
-   (`Viewer bar`, `Undo`, `Redo`, `Selection filter`); the layout specs
-   (`viewport-overlay-lanes`, `settings` top-bar order, `viewport` dock) are
-   rewritten to the new regions, not deleted.
+   (`Viewer bar`, `Undo`, `Redo`, `Selection filter`, `Search commands (…)`);
+   the layout specs (`viewport-overlay-lanes`, `settings` top-bar order and
+   phone fit, `viewport` scale stability, `sidebar-divider`) are rewritten to
+   the new regions, not deleted. As built: undo and redo stay in the viewer
+   bar (now the rail) rather than moving to the top-right island, which keeps
+   the `viewport.spec.ts` contract; the scale bar sits beside the cube so the
+   readout fits under the column.
 3. **Command card.** Replaces the tool palette. Extends
    `lib/interaction/capabilities.ts` to idle and body selections so one
    function answers "what applies"; the header reuses `selectionSummary`.

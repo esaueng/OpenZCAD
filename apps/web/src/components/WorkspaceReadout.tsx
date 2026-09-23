@@ -1,5 +1,5 @@
 import { useEffect, useState, type RefObject } from 'react';
-import { History } from 'lucide-react';
+import { History, Search } from 'lucide-react';
 import {
   SELECTION_FILTERS,
   SELECTION_FILTER_LABELS,
@@ -36,6 +36,12 @@ interface WorkspaceReadoutProps {
   warningCount: number;
   documentVersion: number | null;
   saveState: WorkspaceSaveState;
+  /**
+   * Opens command search. The bar at the foot of the stage is the one
+   * search entry point; the key glyph is the platform's (⌘K or Ctrl+K).
+   */
+  onOpenSearch(): void;
+  searchKey: { glyph: string; accessible: string };
 }
 
 /**
@@ -57,7 +63,9 @@ export function WorkspaceReadout({
   bodyCount,
   warningCount,
   documentVersion,
-  saveState
+  saveState,
+  onOpenSearch,
+  searchKey
 }: WorkspaceReadoutProps) {
   const expiresAt =
     statusAt === undefined
@@ -88,46 +96,69 @@ export function WorkspaceReadout({
   // bar used to be for assistive tech and for the specs that read it. Only
   // its visibility changes.
   return (
-    <footer
-      className={`workspace-toast ${tone}${shown ? '' : ' hidden'}`}
-      role="contentinfo"
-    >
-      <button
-        type="button"
-        className={`workspace-toast-body${quiet ? ' quiet' : ''}`}
-        title={quiet ? 'View activity log' : `${status} — View activity log`}
-        aria-label={
-          quiet || status === ''
-            ? `${logOpen ? 'Close' : 'Open'} activity log.`
-            : `${logOpen ? 'Close' : 'Open'} activity log. Current status: ${status}`
-        }
-        aria-expanded={logOpen}
-        onClick={onToggleLog}
-      >
-        <i aria-hidden="true" />
-        <span role="status" aria-live="polite" aria-atomic="true">
-          {shownStatus}
-        </span>
-      </button>
-      <div
-        className="workspace-status-summary"
-        role="group"
-        aria-label="Workspace status"
-      >
-        {prompt && <span>{prompt}</span>}
-        <span>
-          <b>warnings</b>
-          {warningCount}
-        </span>
-        <span
-          title={`${workspaceSummary} · rev ${documentVersion ?? '—'}`}
-          aria-label={`${workspaceSummary}. Sync ${syncLabel}.`}
+    <>
+      {/* The foot of the stage: one line of guidance over the search bar.
+          The guidance is the prompt the summary below already carries for
+          assistive tech, so it is drawn here but hidden from the tree; a live
+          status message takes its place while the toast is up. */}
+      <div className="command-bar-lane">
+        {prompt && !shown ? (
+          <p className="workspace-hint" aria-hidden="true">
+            {prompt}
+          </p>
+        ) : null}
+        <button
+          type="button"
+          className="command-bar"
+          aria-label={`Search commands (${searchKey.accessible})`}
+          onClick={onOpenSearch}
         >
-          <b>sync</b>
-          {syncLabel}
-        </span>
+          <Search size={15} aria-hidden="true" />
+          <span>Search commands</span>
+          <kbd>{searchKey.glyph}</kbd>
+        </button>
       </div>
-    </footer>
+      <footer
+        className={`workspace-toast ${tone}${shown ? '' : ' hidden'}`}
+        role="contentinfo"
+      >
+        <button
+          type="button"
+          className={`workspace-toast-body${quiet ? ' quiet' : ''}`}
+          title={quiet ? 'View activity log' : `${status} — View activity log`}
+          aria-label={
+            quiet || status === ''
+              ? `${logOpen ? 'Close' : 'Open'} activity log.`
+              : `${logOpen ? 'Close' : 'Open'} activity log. Current status: ${status}`
+          }
+          aria-expanded={logOpen}
+          onClick={onToggleLog}
+        >
+          <i aria-hidden="true" />
+          <span role="status" aria-live="polite" aria-atomic="true">
+            {shownStatus}
+          </span>
+        </button>
+        <div
+          className="workspace-status-summary"
+          role="group"
+          aria-label="Workspace status"
+        >
+          {prompt && <span>{prompt}</span>}
+          <span>
+            <b>warnings</b>
+            {warningCount}
+          </span>
+          <span
+            title={`${workspaceSummary} · rev ${documentVersion ?? '—'}`}
+            aria-label={`${workspaceSummary}. Sync ${syncLabel}.`}
+          >
+            <b>sync</b>
+            {syncLabel}
+          </span>
+        </div>
+      </footer>
+    </>
   );
 }
 

@@ -41,7 +41,7 @@ export function avoidSketchDimensionOverlays(
   const occupied = occupiedRoot
     ? [
         ...occupiedRoot.querySelectorAll<HTMLElement>(
-          '.viewer-rail-stack, .viewer-rail, .viewport-dock-lane'
+          '.viewer-rail-stack, .viewer-rail, .viewport-readout'
         )
       ]
         .map((element) => element.getBoundingClientRect())
