@@ -37,6 +37,7 @@ import {
   buildCylinderRadiusHandle,
   buildEdgeRadiusHandle,
   buildOffsetFaceHandle,
+  faceSweepProfile,
   bodiesInBox,
   boxSelectMode,
   cycleDepthPick,
@@ -148,6 +149,7 @@ import {
   sketchGlideEase,
   viewJumpEase,
   type CameraGlideStyle,
+  type HandleVec3,
   type WheelDevice
 } from '@openzcad/viewport';
 import type {
@@ -1096,6 +1098,92 @@ const SNAP_PROJECT_SCRATCH = new THREE.Vector3();
  * mesh: the far end of the dimension an offset handle draws. Exact for the
  * mesh as drawn; null when nothing lies behind the face.
  */
+/**
+ * While a face offset is engaged only the change is coloured: the selected
+ * face's fill gives way to the band, and its rim (drawn by the edge overlay)
+ * stays to say which face is moving. The fills fade rather than switch.
+ */
+function muteSelectedFaceFill(context: SceneContext, muted: boolean) {
+  context.bodyGroup.traverse((child) => {
+    if (
+      !(child instanceof THREE.Mesh) ||
+      (child.name !== 'body-face-selected' &&
+        child.name !== 'body-face-selected-hidden')
+    ) {
+      return;
+    }
+    const material = child.material as THREE.Material;
+    material.userData.targetOpacity = muted
+      ? 0
+      : child.name === 'body-face-selected'
+        ? SELECTED_FACE_OPACITY
+        : SELECTED_FACE_HIDDEN_OPACITY;
+    context.fadeIns.add(material);
+  });
+  context.requestRender();
+}
+
+/**
+ * A planar face's boundary loops in world space, recovered from the body's
+ * display mesh: what the offset rig sweeps into the band of wall a push or
+ * pull adds or removes. Null when the face is not in the mesh or its
+ * triangles do not close into loops, and the rig then draws no band.
+ */
+function faceBoundaryLoops(
+  body: THREE.Object3D,
+  topologyId: string
+): HandleVec3[][] | null {
+  const indexed: THREE.Mesh<THREE.BufferGeometry>[] = [];
+  body.traverse((child) => {
+    if (
+      child instanceof THREE.Mesh &&
+      (child.geometry as THREE.BufferGeometry).getIndex()
+    ) {
+      indexed.push(child as THREE.Mesh<THREE.BufferGeometry>);
+    }
+  });
+  const found = indexed[0];
+  if (!found) {
+    return null;
+  }
+  const topology = (
+    found.userData as {
+      topology?: {
+        faces: {
+          topologyId: string;
+          triangleStart: number;
+          triangleCount: number;
+        }[];
+      };
+    }
+  ).topology;
+  const face = topology?.faces.find(
+    (candidate) => candidate.topologyId === topologyId
+  );
+  const position = found.geometry.getAttribute('position');
+  const index = found.geometry.getIndex();
+  if (!face || !position || !index) {
+    return null;
+  }
+  const profile = faceSweepProfile(
+    position.array,
+    index.array,
+    face.triangleStart,
+    face.triangleCount
+  );
+  if (!profile) {
+    return null;
+  }
+  found.updateWorldMatrix(true, false);
+  const world = new THREE.Vector3();
+  return profile.loops.map((loop) =>
+    loop.map((point) => {
+      world.set(point.x, point.y, point.z).applyMatrix4(found.matrixWorld);
+      return { x: world.x, y: world.y, z: world.z };
+    })
+  );
+}
+
 function bodyExtentBehind(
   object: THREE.Object3D,
   origin: THREE.Vector3,
@@ -1600,6 +1688,8 @@ export function ModelViewer({
   const offsetExtentRef = useRef<number | null>(null);
   /** Which number the offset chip shows: the drag delta, or the whole span. */
   const offsetChipModeRef = useRef<'offset' | 'total'>('offset');
+  // Whether the selected face's fill is faded for an engaged offset.
+  const offsetFillMutedRef = useRef(false);
   /** Last frame's cylinder chip layout, for hysteresis at the threshold. */
   const dimensionChipBesidePinRef = useRef(false);
   /** Cylindrical radius has its own non-translating affordance and lifecycle. */
@@ -4714,7 +4804,7 @@ export function ModelViewer({
           delete renderer.domElement.dataset.e2eHandleDx;
           delete renderer.domElement.dataset.e2eHandleDy;
           delete renderer.domElement.dataset.e2eHandlePixelsPerUnit;
-          delete renderer.domElement.dataset.e2eOffsetDimensionVisible;
+          delete renderer.domElement.dataset.e2eOffsetChangeVisible;
           delete renderer.domElement.dataset.e2eChipAnchorX;
           delete renderer.domElement.dataset.e2eChipAnchorY;
           delete renderer.domElement.dataset.e2eChipAnchorWorldX;
@@ -4816,6 +4906,8 @@ export function ModelViewer({
           }
         }
       }
+      // Where the pin itself projects, when the label hangs beside it.
+      let pinScreenAt: { x: number; y: number } | null = null;
       if (
         rig &&
         lineAngle === null &&
@@ -4832,6 +4924,7 @@ export function ModelViewer({
           sideY = -sideY;
         }
         const pinScreen = screen;
+        pinScreenAt = pinScreen;
         screen = {
           ...screen,
           x: screen.x + sideX * PIN_CHIP_GAP_PX,
@@ -4932,8 +5025,9 @@ export function ModelViewer({
             dragDirection.pixelsPerUnit
           );
         }
-        renderer.domElement.dataset.e2eOffsetDimensionVisible = String(
-          rig.worldGroup.getObjectByName('dimension-graphic')?.visible === true
+        renderer.domElement.dataset.e2eOffsetChangeVisible = String(
+          rig.worldGroup.getObjectByName('offset-change-arrow')?.visible ===
+            true
         );
       }
       if (rig?.kind === 'cylinder-radius') {
@@ -5064,11 +5158,27 @@ export function ModelViewer({
               : offsetChipModeRef.current === 'total'
                 ? 'Total ⌄'
                 : 'Offset ⌄';
-          hud.showAt(
-            radiusLabelChip,
-            screen.x - chip.offsetWidth / 2 - 2,
-            screen.y
-          );
+          if (rig.kind === 'offset-face' && pinScreenAt) {
+            // The pair reads tag then value and stays clear of the pin: on
+            // the pin's right it starts just past the pin, on its left it
+            // ends there. Centred on the anchor instead, the tag reached
+            // back over the pin whenever the axis pointed at the camera.
+            const clearance = PIN_CHIP_GAP_PX / 2;
+            const tagWidth = radiusLabelChip.offsetWidth;
+            const valueWidth = chip.offsetWidth;
+            const start =
+              screen.x >= pinScreenAt.x
+                ? screen.x - clearance
+                : screen.x + clearance - tagWidth - 2 - valueWidth;
+            hud.showAt(chip, start + tagWidth + 2 + valueWidth / 2, screen.y);
+            hud.showAt(radiusLabelChip, start + tagWidth, screen.y);
+          } else {
+            hud.showAt(
+              radiusLabelChip,
+              screen.x - chip.offsetWidth / 2 - 2,
+              screen.y
+            );
+          }
         } else {
           radiusLabelChip.hidden = true;
         }
@@ -7155,6 +7265,12 @@ export function ModelViewer({
         // Keep dimension arrowheads screen-sized across a pure wheel zoom.
         offsetRig.setValue(offsetRig.value());
       }
+      const fillMuted =
+        offsetRig !== null && Math.abs(offsetRig.value()) > 1e-9;
+      if (fillMuted !== offsetFillMutedRef.current) {
+        offsetFillMutedRef.current = fillMuted;
+        muteSelectedFaceFill(context, fillMuted);
+      }
       const cylinderRig = cylinderRadiusRigRef.current;
       if (cylinderRig) {
         const rigScale =
@@ -7828,7 +7944,10 @@ export function ModelViewer({
           polygonOffset: true,
           polygonOffsetFactor: -3
         });
-        highlightMaterial.userData.targetOpacity = SELECTED_FACE_OPACITY;
+        // A preview rebuilt mid-drag must not bring the fill back.
+        highlightMaterial.userData.targetOpacity = offsetFillMutedRef.current
+          ? 0
+          : SELECTED_FACE_OPACITY;
         const highlight = new THREE.Mesh(geometry, highlightMaterial);
         highlight.name = 'body-face-selected';
         highlight.renderOrder = VIEWPORT_RENDER_ORDER.SELECTED_GEOMETRY;
@@ -7849,7 +7968,9 @@ export function ModelViewer({
           depthWrite: false,
           depthFunc: THREE.GreaterDepth
         });
-        hiddenMaterial.userData.targetOpacity = SELECTED_FACE_HIDDEN_OPACITY;
+        hiddenMaterial.userData.targetOpacity = offsetFillMutedRef.current
+          ? 0
+          : SELECTED_FACE_HIDDEN_OPACITY;
         context.fadeIns.add(hiddenMaterial);
         const hiddenHighlight = new THREE.Mesh(hiddenGeometry, hiddenMaterial);
         hiddenHighlight.name = 'body-face-selected-hidden';
@@ -8476,15 +8597,36 @@ export function ModelViewer({
         )
       : null;
     offsetExtentRef.current = extentBehind;
-    // The whole span is the default reading wherever one is known — a
-    // primitive's own height, or the body's reach behind the face; the tag
-    // on the chip switches to the plain offset. With no span it is an
-    // offset regardless.
-    offsetChipModeRef.current = 'total';
+    // Resizing a primitive reads its own dimension (the total) by default:
+    // that is the number the gesture sets. Moving any other face reads the
+    // change, how far the face moves; the body's reach behind it stays one
+    // click away on the tag.
+    offsetChipModeRef.current =
+      offsetHandle.totalBaseline === undefined ? 'offset' : 'total';
+    // The band starts at the face's old level. A rig re-armed after a preview
+    // landed reads the moved face from the rendered body, so the loops go
+    // back onto the plane the gesture started from (the pick point stays on
+    // the original face; the face only ever moves along its normal).
+    const loops = body
+      ? faceBoundaryLoops(body, offsetHandle.topologyId)?.map((loop) =>
+          loop.map((point) => {
+            const lift =
+              (point.x - placement.origin.x) * placement.direction.x +
+              (point.y - placement.origin.y) * placement.direction.y +
+              (point.z - placement.origin.z) * placement.direction.z;
+            return {
+              x: point.x - placement.direction.x * lift,
+              y: point.y - placement.direction.y * lift,
+              z: point.z - placement.direction.z * lift
+            };
+          })
+        )
+      : null;
     const rig = buildOffsetFaceHandle({
       ...placement,
       ghostGeometry: null,
-      ...(extentBehind === null ? {} : { extentBehind })
+      pixelRatio: context.renderer.getPixelRatio(),
+      ...(loops ? { band: { loops } } : {})
     });
     rig.setValue(offsetHandle.initialValue ?? 0);
     rig.setWarning?.(offsetPreviewInvalidRef.current);

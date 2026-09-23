@@ -572,12 +572,8 @@ test('keeps face sketching available after a primitive direct edit', async ({
     .getByRole('region', { name: 'Resize Body operation' })
     .getByRole('tab', { name: 'Offset Face', exact: true })
     .click();
-  // The chip reads the total by default; the tag beside it switches exact
-  // entry to the plain offset.
-  await expect(page.getByTestId('direct-manipulation-mode')).toHaveText(
-    /^Total/
-  );
-  await page.getByTestId('direct-manipulation-mode').click();
+  // Moving a face reads the change by default (Resize body read the total);
+  // the tag beside the value is the switch to the whole span.
   await expect(page.getByTestId('direct-manipulation-mode')).toHaveText(
     /^Offset/
   );

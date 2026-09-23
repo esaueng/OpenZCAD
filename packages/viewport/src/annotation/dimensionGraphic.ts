@@ -62,6 +62,8 @@ export interface DimensionGraphicOptions {
   depthTest?: boolean;
   /** Render order for the line; arrowheads take this plus one. */
   renderOrder?: number;
+  /** Dashed like a drawing's dimension (the default), or one solid line. */
+  dashed?: boolean;
 }
 
 export interface DimensionGraphic {
@@ -96,6 +98,8 @@ export interface DimensionLineMaterialOptions {
   linewidth?: number;
   opacity?: number;
   depthTest?: boolean;
+  /** Defaults to dashed, the drawing convention. */
+  dashed?: boolean;
   resolution?: FatLineResolution;
 }
 
@@ -106,7 +110,7 @@ export function createDimensionLineMaterial(
   const material = new LineMaterial({
     color: options.color ?? DIMENSION_LINE_COLOR,
     linewidth: options.linewidth ?? 1.5,
-    dashed: true,
+    dashed: options.dashed ?? true,
     dashSize: 2,
     gapSize: 1.5,
     transparent: true,
@@ -142,7 +146,8 @@ export function createDimensionGraphic(
         ? {}
         : { linewidth: options.linewidth }),
       opacity,
-      depthTest
+      depthTest,
+      ...(options.dashed === undefined ? {} : { dashed: options.dashed })
     })
   );
   line.computeLineDistances();

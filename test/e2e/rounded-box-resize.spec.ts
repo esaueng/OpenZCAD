@@ -197,9 +197,8 @@ test('resizes a rounded box from its minimum side with exact entry, drag, cancel
   await expect(
     page.getByRole('region', { name: 'Offset Face operation' })
   ).toBeVisible();
-  // Total is the default reading; the tag beside the value switches exact
-  // entry to the plain offset.
-  await page.getByTestId('direct-manipulation-mode').click();
+  // Moving a face reads the change by default (Resize body read the total);
+  // the tag beside the value still switches to the whole span.
   await expect(page.getByTestId('direct-manipulation-mode')).toHaveText(
     /^Offset/
   );

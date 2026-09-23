@@ -10,11 +10,9 @@ import {
   type DragRig,
   type HandleVec3
 } from './DragRig';
-import {
-  DIMENSION_LINE_COLOR,
-  createDimensionGraphic
-} from '../annotation/dimensionGraphic';
+import { createDimensionGraphic } from '../annotation/dimensionGraphic';
 import { ANALYTIC_GHOST_COLOR } from '../selection/analyticCylinderGhost';
+import { createChangeBand, createLevelRing } from './changeBand';
 import { easeToward, hasSettled } from '../motion';
 import { SELECTION_SEMANTICS } from '../render/semantics';
 
@@ -340,12 +338,13 @@ export interface OffsetFaceRigParams {
   /** World-space triangles of the face, kept as the original-position reference. */
   ghostGeometry: THREE.BufferGeometry | null;
   /**
-   * How far the body reaches behind the face along the normal. With it the
-   * rig draws its dimension for the whole span, far side to handle, from
-   * the moment it arms — the height this face sets — rather than only the
-   * delta of a drag in progress.
+   * The face's boundary loops at its old level (outer first, then holes),
+   * when they are known. The rig sweeps them by the current value into the
+   * band of wall the offset adds or removes, so only the change is coloured.
    */
-  extentBehind?: number;
+  band?: { loops: HandleVec3[][] };
+  /** Device pixels per CSS pixel, for the band's hatching pitch. */
+  pixelRatio?: number;
   /**
    * A profile to sweep along the drag direction instead of a flat ghost. The
    * rig extrudes it by the current value every frame, so the volume the
@@ -469,9 +468,11 @@ function createSweepGhost(
 }
 
 /**
- * An arrow anchored at the click point on a face, pointing along the face
- * normal, with a dashed leader back to the original position and a
- * translucent ghost that marks the face's original position during the drag.
+ * The face-offset handle ("B refined"): a pin on the face normal that stands
+ * on the outer end of the change — the new face when adding, the old level
+ * when cutting — with a white change arrow on the same axis between the two
+ * levels, a dashed ring at the old level (coral when cutting), and, when the
+ * face's outline is known, the band of wall the change adds or removes.
  */
 export function buildOffsetFaceHandle(params: OffsetFaceRigParams): DragRig {
   const kind = 'offset-face';
@@ -497,26 +498,28 @@ export function buildOffsetFaceHandle(params: OffsetFaceRigParams): DragRig {
   const worldGroup = new THREE.Group();
   worldGroup.name = `${kind}-handle-world`;
 
-  // Drawing white, like every other dimension: the handle is the coloured
-  // thing, the measurement is the annotation.
-  const dimension = createDimensionGraphic({
-    color: DIMENSION_LINE_COLOR,
-    linewidth: 1.5,
-    opacity: 0.9,
-    renderOrder: 29
+  // The change itself, measured: a solid white arrow on the pin's axis
+  // between the old level and the new, heads at both ends.
+  const changeArrow = createDimensionGraphic({
+    color: SELECTION_SEMANTICS.change.arrow,
+    linewidth: 1.8,
+    opacity: 0.95,
+    renderOrder: 29,
+    dashed: false
   });
-  dimension.object.visible = false;
-  worldGroup.add(dimension.object);
-  const extentBehind =
-    params.extentBehind !== undefined &&
-    Number.isFinite(params.extentBehind) &&
-    params.extentBehind > 1e-9
-      ? params.extentBehind
-      : null;
-  const farPoint =
-    extentBehind === null
-      ? null
-      : origin.clone().addScaledVector(direction, -extentBehind);
+  changeArrow.object.name = 'offset-change-arrow';
+  changeArrow.object.visible = false;
+  worldGroup.add(changeArrow.object);
+  const oldLevel = createLevelRing();
+  oldLevel.object.position.copy(origin);
+  oldLevel.object.quaternion.copy(group.quaternion);
+  worldGroup.add(oldLevel.object);
+  const band = params.band
+    ? createChangeBand(params.band.loops, direction, params.pixelRatio)
+    : null;
+  if (band) {
+    worldGroup.add(band.object);
+  }
 
   const sweep = params.sweep ? createSweepGhost(params.sweep, direction) : null;
   if (sweep) {
@@ -596,7 +599,7 @@ export function buildOffsetFaceHandle(params: OffsetFaceRigParams): DragRig {
         PIN_RING_OPACITY * ringPresenceFor(across)
       );
       orderByDepth(pin.solids, camera);
-      dimension.orient(camera);
+      changeArrow.orient(camera);
     },
     beginExit() {
       presence.beginExit();
@@ -607,32 +610,32 @@ export function buildOffsetFaceHandle(params: OffsetFaceRigParams): DragRig {
     setValue(value: number) {
       current = value;
       const tip = origin.clone().addScaledVector(direction, value);
-      group.position.copy(tip);
       const engaged = Math.abs(value) > 1e-9;
+      const cutting = value < -1e-9;
+      // The pin stands on the outer end of the change: the new face when
+      // adding, the old level when cutting, where the removed slab began.
+      const outer = cutting ? origin : tip;
+      const inner = cutting ? tip : origin;
+      group.position.copy(outer);
       const scale = (group.userData.gizmoScale as number | undefined) ?? 1;
-      // The line ends short of the handle, its head pointing at the arrow
-      // rather than sitting under it.
-      const lineEnd = tip
+      // The arrow runs up the axis from the inner level and stops short of
+      // the pin, its head pointing at the handle rather than under it.
+      const arrowEnd = outer
         .clone()
         .addScaledVector(direction, -DIMENSION_CLEARANCE * scale);
-      if (farPoint) {
-        // The whole span, drawn from the moment the rig arms, as long as
-        // there is still room for the line once it clears the handle.
-        const room = lineEnd.clone().sub(farPoint).dot(direction) > 0;
-        dimension.object.visible = room;
-        if (room) {
-          dimension.update(farPoint, lineEnd, scale);
-        }
-      } else {
-        // The delta of a drag in progress, once it is longer than the gap.
-        const room =
-          engaged &&
-          lineEnd.clone().sub(origin).dot(direction) * Math.sign(value) > 0;
-        dimension.object.visible = room;
-        if (room) {
-          dimension.update(origin, lineEnd, scale);
-        }
+      const room = arrowEnd.clone().sub(inner).dot(direction) > 0;
+      changeArrow.object.visible = engaged && room;
+      if (engaged && room) {
+        changeArrow.update(inner, arrowEnd, scale);
       }
+      oldLevel.object.visible = engaged;
+      oldLevel.object.scale.setScalar(scale);
+      oldLevel.setColor(
+        cutting
+          ? SELECTION_SEMANTICS.change.cut
+          : SELECTION_SEMANTICS.change.oldLevel
+      );
+      band?.update(value);
       if (ghost) {
         ghost.visible = engaged;
       }
@@ -649,36 +652,28 @@ export function buildOffsetFaceHandle(params: OffsetFaceRigParams): DragRig {
     setWarning(warning) {
       warned = warning;
       paintArrows();
-      dimension.setColor(warning ? HANDLE_WARNING_COLOR : DIMENSION_LINE_COLOR);
+      changeArrow.setColor(
+        warning ? HANDLE_WARNING_COLOR : SELECTION_SEMANTICS.change.arrow
+      );
       group.userData.previewWarning = warning;
     },
     chipAnchor() {
-      const tip = origin.clone().addScaledVector(direction, current);
-      if (farPoint) {
-        // Midway along the span, like a drawing's dimension text.
-        return farPoint.clone().lerp(tip, 0.5);
-      }
-      // The pin's own centre: the viewport offsets the chip beside it in
-      // screen pixels, so a foreshortened direction can never fold the chip
-      // back onto the arrow head.
-      return tip;
+      // The pin's own centre, wherever it stands: the label sits beside the
+      // pin, and the viewport offsets it in screen pixels, so a
+      // foreshortened direction can never fold it back onto the arrow head.
+      return current < -1e-9
+        ? origin.clone()
+        : origin.clone().addScaledVector(direction, current);
     },
     chipLine() {
-      if (!farPoint) {
-        return null;
-      }
-      return {
-        start: farPoint.clone(),
-        end: origin.clone().addScaledVector(direction, current)
-      };
+      return null;
     },
     dispose() {
-      dimension.dispose();
+      changeArrow.dispose();
+      band?.dispose();
       disposeRigGroups(group, worldGroup);
     }
   };
-  // Lay out the resting state now: with a known span the dimension is part
-  // of the handle from the first frame, not something a drag reveals.
   rig.setValue(0);
   return rig;
 }

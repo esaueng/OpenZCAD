@@ -72,10 +72,11 @@ describe('the offset-face rig', () => {
     expect(rig.origin.z).toBe(3);
   });
 
-  it('travels backwards for a negative value', () => {
+  it('stands on the old level while cutting: the outer end of the change', () => {
     const rig = offsetRig();
     rig.setValue(-2);
-    expect(rig.group.position.z).toBeCloseTo(1, 6);
+    expect(rig.value()).toBe(-2);
+    expect(rig.group.position.z).toBeCloseTo(3, 6);
   });
 
   it('anchors its chip on the pin itself, whatever the frame scale', () => {
@@ -86,6 +87,11 @@ describe('the offset-face rig', () => {
     rig.setValue(5);
     expect(rig.chipAnchor(2).z).toBeCloseTo(3 + 5, 6);
     expect(rig.chipAnchor(20).z).toBeCloseTo(3 + 5, 6);
+    // Cutting, the pin — and so the label — stays at the old level.
+    rig.setValue(-4);
+    expect(rig.chipAnchor(2).z).toBeCloseTo(3, 6);
+    // The label rides beside the pin, never along a line.
+    expect(rig.chipLine?.()).toBeNull();
   });
 
   it('keeps its arrow on the face normal and rolls its face to the camera', () => {
@@ -138,30 +144,84 @@ describe('the offset-face rig', () => {
     expect(Math.abs(ringNormal.y)).toBeCloseTo(1, 6);
   });
 
-  it('draws the whole span from the moment it arms when it knows the body behind', () => {
-    const rig = buildOffsetFaceHandle({
-      origin: { x: 1, y: 2, z: 3 },
-      direction: { x: 0, y: 0, z: 1 },
-      ghostGeometry: null,
-      extentBehind: 20
-    });
-    const dimension = rig.worldGroup.children[0]!;
-    // Visible at rest, not only once a drag has moved the face.
-    expect(dimension.visible).toBe(true);
-    const line = rig.chipLine?.();
-    expect(line?.start.z).toBeCloseTo(3 - 20, 6);
-    expect(line?.end.z).toBeCloseTo(3, 6);
-    // The label sits midway along the span and follows the moving end.
-    expect(rig.chipAnchor(1).z).toBeCloseTo((3 - 20 + 3) / 2, 6);
-    rig.setValue(5);
-    expect(rig.chipLine?.()?.end.z).toBeCloseTo(8, 6);
-    expect(rig.chipAnchor(1).z).toBeCloseTo((3 - 20 + 8) / 2, 6);
-    rig.dispose();
+  it('measures the change with a solid white arrow between the two levels', () => {
+    const rig = offsetRig();
+    const arrow = rig.worldGroup.getObjectByName('offset-change-arrow')!;
+    const ring = rig.worldGroup.getObjectByName('offset-old-level')!;
+    expect(arrow.children.map((child) => child.type)).toEqual([
+      'Line2',
+      'Mesh',
+      'Mesh'
+    ]);
+    const line = arrow.children[0] as THREE.Object3D & {
+      material: { dashed: boolean; color: THREE.Color };
+    };
+    expect(line.material.dashed).toBe(false);
+    expect(line.material.color.getHex()).toBe(0xffffff);
+    // Nothing to measure at rest.
+    expect(arrow.visible).toBe(false);
+    expect(ring.visible).toBe(false);
+    rig.setValue(4);
+    expect(arrow.visible).toBe(true);
+    // The old level is marked where the change starts, on the axis.
+    expect(ring.visible).toBe(true);
+    expect(ring.position.z).toBeCloseTo(3, 6);
+    rig.setValue(0);
+    expect(arrow.visible).toBe(false);
   });
 
-  it('has no line to ride without a body behind the face', () => {
+  it('marks the old level in coral while cutting', () => {
     const rig = offsetRig();
-    expect(rig.chipLine?.()).toBeNull();
+    const ring = rig.worldGroup.getObjectByName('offset-old-level')!;
+    const ringLine = ring.children[0] as THREE.Object3D & {
+      material: { color: THREE.Color };
+    };
+    rig.setValue(3);
+    expect(ringLine.material.color.getHex()).toBe(0xffffff);
+    rig.setValue(-3);
+    expect(ringLine.material.color.getHex()).toBe(0xff644d);
+  });
+
+  it('sweeps the face outline into a band of the change, green adding and coral cutting', () => {
+    const square = [
+      { x: 0, y: 0, z: 3 },
+      { x: 4, y: 0, z: 3 },
+      { x: 4, y: 4, z: 3 },
+      { x: 0, y: 4, z: 3 }
+    ];
+    const rig = buildOffsetFaceHandle({
+      origin: { x: 2, y: 2, z: 3 },
+      direction: { x: 0, y: 0, z: 1 },
+      ghostGeometry: null,
+      band: { loops: [square] }
+    });
+    const walls = rig.worldGroup.getObjectByName(
+      'offset-change-walls'
+    ) as THREE.Mesh<THREE.BufferGeometry, THREE.ShaderMaterial>;
+    const outline = rig.worldGroup.getObjectByName(
+      'offset-change-cut-outline'
+    )!;
+    expect(walls.visible).toBe(false);
+
+    rig.setValue(2);
+    expect(walls.visible).toBe(true);
+    expect(outline.visible).toBe(false);
+    const positions = walls.geometry.getAttribute('position');
+    const heights = Array.from({ length: positions.count }, (_, index) =>
+      positions.getZ(index)
+    );
+    // The old level stays put and the far edge moves with the value.
+    expect(new Set(heights)).toEqual(new Set([3, 5]));
+    expect(
+      (walls.material.uniforms.stripe!.value as THREE.Color).getHex()
+    ).toBe(0x5bc794);
+
+    rig.setValue(-1.5);
+    expect(outline.visible).toBe(true);
+    expect(
+      (walls.material.uniforms.stripe!.value as THREE.Color).getHex()
+    ).toBe(0xdd7362);
+    rig.dispose();
   });
 
   it('keeps world-space parts out of the rescaled group', () => {
@@ -170,30 +230,14 @@ describe('the offset-face rig', () => {
       direction: { x: 0, y: 0, z: 1 },
       ghostGeometry: new THREE.BufferGeometry()
     });
-    // The leader and ghost are true world geometry: rescaling `group` for the
-    // screen-constant arrow must never reach them.
-    expect(rig.worldGroup.children.length).toBe(2);
+    // The change arrow, the old level and the ghost are true world geometry:
+    // rescaling `group` for the screen-constant arrow must never reach them.
+    expect(rig.worldGroup.children.length).toBe(3);
     expect(rig.group.children).not.toContain(rig.worldGroup.children[0]);
-    const ghost = rig.worldGroup.children[1]!;
+    const ghost = rig.worldGroup.children[2]!;
     rig.setValue(4);
     expect(ghost.visible).toBe(true);
     expect(ghost.position).toMatchObject({ x: 0, y: 0, z: 0 });
-  });
-
-  it('uses the shared dashed dimension through the geometry while engaged', () => {
-    const rig = offsetRig();
-    const dimension = rig.worldGroup.children[0]!;
-    expect(dimension.name).toBe('dimension-graphic');
-    expect(dimension.children.map((child) => child.type)).toEqual([
-      'Line2',
-      'Mesh',
-      'Mesh'
-    ]);
-    expect(dimension.visible).toBe(false);
-    rig.setValue(1);
-    expect(dimension.visible).toBe(true);
-    rig.setValue(0);
-    expect(dimension.visible).toBe(false);
   });
 
   it('separates reference ghost styling from invalid-preview warning styling', () => {
@@ -202,7 +246,7 @@ describe('the offset-face rig', () => {
       direction: { x: 0, y: 0, z: 1 },
       ghostGeometry: new THREE.BufferGeometry()
     });
-    const ghost = rig.worldGroup.children[1] as THREE.Mesh<
+    const ghost = rig.worldGroup.children[2] as THREE.Mesh<
       THREE.BufferGeometry,
       THREE.MeshBasicMaterial
     >;
@@ -214,7 +258,7 @@ describe('the offset-face rig', () => {
         child.material instanceof THREE.MeshStandardMaterial &&
         child.material.visible
     ) as THREE.Mesh<THREE.BufferGeometry, THREE.MeshStandardMaterial>;
-    const dimensionLine = rig.worldGroup.children[0]!
+    const dimensionLine = rig.worldGroup.getObjectByName('offset-change-arrow')!
       .children[0] as THREE.Object3D & {
       material: { color: THREE.Color };
     };
