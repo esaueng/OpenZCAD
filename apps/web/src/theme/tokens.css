@@ -120,6 +120,15 @@
 
   /* ── Layout dimensions ────────────────────────────────── */
   --topbar-h: 44px;
+  /* The quiet stage: every island floats this far from the viewport's edges
+     and from its neighbours, and the stage's usable top starts under the
+     top islands. */
+  --island-gap: 10px;
+  --stage-top: calc(var(--topbar-h) + var(--island-gap) * 2);
+  /* Width of the instrument rail on the right edge. */
+  --rail-w: 40px;
+  /* Height of the command bar at the foot of the stage. */
+  --command-bar-h: 38px;
   --toolbar-h: 48px;
   --statusbar-h: 30px;
   /* Starting widths for the two resizable panels. The workspace republishes
