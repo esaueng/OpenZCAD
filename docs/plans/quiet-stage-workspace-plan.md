@@ -1,6 +1,6 @@
 # Quiet-stage workspace redesign (U04)
 
-Status: slice 1 in review (#411); slice 2 in review (#412); slice 3 in review (#413); slice 4 in review; slices 5–7 open. Roadmap row: [U04](../../ROADMAP.md#u04).
+Status: slice 1 in review (#411); slice 2 in review (#412); slice 3 in review (#413); slice 4 in review (#414); slice 5 in review; slices 6–7 open. Roadmap row: [U04](../../ROADMAP.md#u04).
 
 ## Intent
 
@@ -108,7 +108,17 @@ Each slice is one PR against `main`, recorded on the U04 row when it merges.
 5. **Search and ask.** ⌘K gains features and parameters as results and an
    "Ask" row that submits to the assistant; the conversation surface anchors
    to the bar. Acceptance: proposals still preview and apply through the same
-   validated path; ⌘J still opens the conversation.
+   validated path; ⌘J still opens the conversation. As built: the closed
+   assistant is an Ask button at the end of the search bar (the readout hands
+   it a slot; the panel portals its launcher there). The Ask row is last, so
+   Enter still runs a matching command, and is the only row when nothing
+   matches. A question is sent as a turn when the assistant can take it, and
+   otherwise waits in the composer. The open conversation floats centred over
+   the bottom lane, standing on the bar, instead of docking a column; its
+   collapse control moves into its header, and the column resizer goes. A
+   feature result opens the drawer on History and selects it; a parameter
+   result opens it on Parameters and focuses the expression. The stored
+   assistant width is no longer read; removing it is a follow-up.
 6. **Sketch card and relations rail.** Draw and modify tools in the left card,
    Finish at its foot; the relations rail on the right. Acceptance: every
    constraint kind reachable in rail order; greyed kinds carry the refusal

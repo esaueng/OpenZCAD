@@ -198,14 +198,6 @@
   width: auto;
 }
 
-/* The assistant's tab — on the window's right edge while it is closed, on
-   the dock's seam while it is open — crosses the rail's end at mid-height:
-   it stays in front of the raised rail. */
-.assistant-launcher,
-.assistant-seam {
-  z-index: calc(var(--z-inspector-float) + 2);
-}
-
 /* Direct-edit controls (Move, the extrude value) are the operation of the
    moment: top of the right lane, over the drawer, clear of the rail. */
 .workspace.column-layout .extrude-controller {
@@ -300,6 +292,29 @@
 .command-bar:hover {
   color: var(--color-text-muted);
   border-color: var(--color-border-strong);
+}
+
+/* The bar and, at its end, the slot the assistant's Ask button renders
+   into (slice 5); the slot is empty while the conversation is open. */
+.command-bar-row {
+  width: min(520px, 100%);
+  display: flex;
+  gap: 6px;
+}
+
+.command-bar-row > .command-bar {
+  flex: 1;
+  width: auto;
+  min-width: 0;
+}
+
+.command-bar-slot {
+  display: flex;
+  pointer-events: auto;
+}
+
+.command-bar-slot:empty {
+  display: none;
 }
 
 .workspace-hint {
@@ -436,6 +451,16 @@
   .workspace.column-layout .viewer-rail-stack,
   .workspace.column-layout .viewer-area.has-inspector .viewer-rail-stack {
     bottom: calc(var(--island-gap) * 2 + var(--command-bar-h));
+  }
+
+  /* The lane is too short for a word beside the bar: Ask is its icon (the
+     button keeps its name), so the bar keeps room to say what it is. */
+  .command-bar-slot .assistant-launcher {
+    padding-inline: 11px;
+  }
+
+  .command-bar-slot .assistant-launcher-word {
+    display: none;
   }
 }
 
