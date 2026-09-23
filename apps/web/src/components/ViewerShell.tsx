@@ -138,6 +138,11 @@ interface ViewerShellProps {
    */
   dockLayout?: boolean;
   dockExtras?: ReactNode;
+  /**
+   * More islands for the instrument rail, under the viewer bar: the model
+   * drawer's Items, History and Parameters buttons.
+   */
+  railExtras?: ReactNode;
   hideViewerToolbar?: boolean;
   /**
    * View mode drops the utility rail — its controls move to the floating view
@@ -308,6 +313,7 @@ export function ViewerShell({
   hideViewerToolbar = false,
   dockLayout = false,
   dockExtras = null,
+  railExtras = null,
   viewMode = false,
   selectionChip,
   onClearSelection,
@@ -576,7 +582,12 @@ export function ViewerShell({
         <>
           {/* How you look at the model: icon instruments down the right edge,
               under the top islands. They never change with the selection. */}
-          {!viewMode && <div className="instrument-rail">{viewerToolbar}</div>}
+          {!viewMode && (
+            <div className="instrument-rail">
+              {viewerToolbar}
+              {railExtras}
+            </div>
+          )}
           {/* How picks and snaps behave, and the activity log: one quiet
               readout in the bottom-left corner, under the column. */}
           <div

@@ -624,9 +624,9 @@ test('keeps a source circle stable over its coincident extrude edge', async ({
   const bounds = await canvas.boundingBox();
   expect(bounds).not.toBeNull();
   const center = {
-    // Stay clear of the empty-viewport getting-started card while keeping the
-    // whole circle inside the real WebGL canvas.
-    x: bounds!.x + bounds!.width * 0.72,
+    // Stay clear of the empty-viewport getting-started card and, on the right,
+    // the model drawer, while keeping the whole circle on the open canvas.
+    x: bounds!.x + bounds!.width * 0.6,
     y: bounds!.y + bounds!.height * 0.64
   };
   await page.mouse.move(center.x, center.y);

@@ -46,10 +46,19 @@ export async function stubApi(
   {
     assistantEnabled = false,
     collaborationRole,
-    workspaceTour = false
+    workspaceTour = false,
+    modelDrawer = true
   }: {
     assistantEnabled?: boolean;
     collaborationRole?: 'owner' | 'editor' | 'viewer';
+    /**
+     * The model drawer (parameters, bodies, history) opens on demand from
+     * the instrument rail and starts closed. Most specs exercise what is in
+     * it rather than how it opens, so the suite's baseline is a returning
+     * user who keeps it open; `quiet-stage-drawer.spec.ts` covers the closed
+     * default and the rail buttons.
+     */
+    modelDrawer?: boolean;
     /**
      * Every fresh context is a "first run", so without this pre-seed the
      * first-model tour card would float over the lower-left viewport in
@@ -62,6 +71,9 @@ export async function stubApi(
 ) {
   if (!workspaceTour) {
     await seedDismissedWorkspaceTour(page);
+  }
+  if (modelDrawer) {
+    await seedOpenModelDrawer(page);
   }
   const settings = structuredClone(DEFAULT_APP_SETTINGS);
   settings.assistant.enabled = assistantEnabled;
@@ -340,6 +352,7 @@ export async function stubApi(
 
 export async function stubAnonymousApi(page: Page) {
   await seedDismissedWorkspaceTour(page);
+  await seedOpenModelDrawer(page);
   await page.route('**/api/auth/config', (route) =>
     route.fulfill({
       json: {
@@ -893,6 +906,28 @@ export async function seedDismissedWorkspaceTour(page: Page) {
         : {};
       state.workspaceTourDismissed = true;
       window.localStorage.setItem(key, JSON.stringify(state));
+    } catch {
+      // Unreadable storage falls back to the app's own defaults.
+    }
+  });
+}
+
+/**
+ * Opens the model drawer the way a returning user left it, unless the spec
+ * has already said otherwise.
+ */
+export async function seedOpenModelDrawer(page: Page) {
+  await page.addInitScript(() => {
+    const key = 'openzcad-panel-state:v1';
+    try {
+      const raw = window.localStorage.getItem(key);
+      const state: Record<string, unknown> = raw
+        ? (JSON.parse(raw) as Record<string, unknown>)
+        : {};
+      if (typeof state.drawerOpen !== 'boolean') {
+        state.drawerOpen = true;
+        window.localStorage.setItem(key, JSON.stringify(state));
+      }
     } catch {
       // Unreadable storage falls back to the app's own defaults.
     }

@@ -54,6 +54,8 @@ import {
   Settings as SettingsIcon,
   Scissors,
   SlidersHorizontal,
+  Layers,
+  ListOrdered,
   Spline,
   Trash2,
   TriangleRight,
@@ -1002,6 +1004,7 @@ import {
 import {
   loadPanelState,
   savePanelState,
+  toggleDrawerSection,
   toggleSidebarSection,
   type PanelState,
   type SidebarSectionId,
@@ -16426,9 +16429,7 @@ export function App() {
             }
           />
         ) : (
-          <WorkspaceColumn header={columnHeader} tools={columnTools}>
-            {modelBrowser}
-          </WorkspaceColumn>
+          <WorkspaceColumn header={columnHeader} tools={columnTools} />
         )
       }
       viewer={
@@ -16496,6 +16497,42 @@ export function App() {
             appearancePreview={bodyAppearancePreview}
             hideViewerToolbar={false}
             dockLayout={!tweakMode}
+            railExtras={
+              <div
+                className="viewer-rail rail-panels"
+                role="toolbar"
+                aria-label="Model panels"
+              >
+                {(
+                  [
+                    ['bodies', 'Items', Layers],
+                    ['history', 'History', ListOrdered],
+                    ['parameters', 'Parameters', SlidersHorizontal]
+                  ] as const
+                ).map(([section, label, Icon]) => {
+                  const showing =
+                    panelState.drawerOpen &&
+                    panelState.sidebarSections[section];
+                  return (
+                    <button
+                      key={section}
+                      type="button"
+                      className={`rail-button${showing ? ' active' : ''}`}
+                      aria-label={`${label} panel`}
+                      aria-pressed={showing}
+                      title={label}
+                      onClick={() =>
+                        setPanelState((current) =>
+                          toggleDrawerSection(current, section)
+                        )
+                      }
+                    >
+                      <Icon size={16} aria-hidden="true" />
+                    </button>
+                  );
+                })}
+              </div>
+            }
             dockExtras={
               !tweakMode ? (
                 <ViewportDockExtras
@@ -17173,6 +17210,9 @@ export function App() {
             aboveViewBar={viewMode}
           />
         </ErrorBoundary>
+      }
+      drawer={
+        !viewMode && !tweakMode && panelState.drawerOpen ? modelBrowser : null
       }
       inspector={
         inspectorActive ? (

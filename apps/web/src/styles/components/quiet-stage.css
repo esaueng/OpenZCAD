@@ -127,7 +127,9 @@
   position: absolute;
   top: var(--stage-top);
   right: var(--island-gap);
-  z-index: var(--z-viewer-overlay);
+  /* Over the right lane, so a panel the rail opens to its left lands on top
+     of the drawer or the inspector rather than under them. */
+  z-index: calc(var(--z-inspector-float) + 1);
 }
 
 .instrument-rail .viewer-rail {
@@ -163,11 +165,53 @@
   right: calc(100% + 10px);
 }
 
-/* The inspector opens beside the rail rather than over it. */
-.workspace.column-layout .inspector-float {
+/* The right lane, beside the rail: the inspector at the top, hugging its
+   content, and the model drawer filling what it leaves. One column, so an
+   open drawer never pushes the inspector into the canvas, where it covered
+   the values riding the model. */
+.stage-right {
+  position: absolute;
   top: var(--stage-top);
   right: var(--lane-end);
   bottom: var(--island-gap);
+  z-index: var(--z-inspector-float);
+  width: var(--drawer-w);
+  display: flex;
+  flex-direction: column;
+  gap: var(--island-gap);
+  pointer-events: none;
+}
+
+.viewer-area.has-inspector .stage-right {
+  width: min(
+    var(--context-w),
+    calc(100% - var(--lane-end) - var(--island-gap))
+  );
+}
+
+/* shell.css draws the inspector as its own overlay; in the lane it is the
+   column's first item, shrinking (and scrolling) before the drawer does. */
+.stage-right > .inspector-float {
+  position: static;
+  flex: 0 1 auto;
+  min-height: 0;
+  width: auto;
+}
+
+/* The assistant's tab — on the window's right edge while it is closed, on
+   the dock's seam while it is open — crosses the rail's end at mid-height:
+   it stays in front of the raised rail. */
+.assistant-launcher,
+.assistant-seam {
+  z-index: calc(var(--z-inspector-float) + 2);
+}
+
+/* Direct-edit controls (Move, the extrude value) are the operation of the
+   moment: top of the right lane, over the drawer, clear of the rail. */
+.workspace.column-layout .extrude-controller {
+  top: var(--stage-top);
+  right: var(--lane-end);
+  z-index: calc(var(--z-inspector-float) + 1);
 }
 
 /* ── The bottom-left readout and the corner ──────────────── */
@@ -372,6 +416,14 @@
     --lane-right: var(--island-gap);
   }
 
+  /* There is no second column on a phone: the right lane, when something
+     is in it, is the stage beside the rail, over the command card. */
+  .viewer-area .stage-right,
+  .viewer-area.has-inspector .stage-right {
+    left: var(--island-gap);
+    width: auto;
+  }
+
   /* The ruler moves to the bottom-left, above the readout and the search
      bar; the measurement workbench, which spans a phone's width, rises
      above the ruler so neither covers the other. */
@@ -380,7 +432,6 @@
     right: auto;
     bottom: calc(var(--island-gap) * 2 + var(--command-bar-h));
   }
-
 
   .workspace.column-layout .viewer-rail-stack,
   .workspace.column-layout .viewer-area.has-inspector .viewer-rail-stack {
@@ -557,4 +608,72 @@
 .command-icon svg {
   width: 16px;
   height: 16px;
+}
+
+/* ── The model drawer (U04 slice 4) ──────────────────────── */
+
+.workspace.column-layout {
+  --drawer-w: min(300px, 32vw);
+}
+
+/* The rail stacks its islands: the viewer bar, then the drawer's buttons. */
+.instrument-rail {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+/* Parameters, bodies and history in the right lane, on demand. The
+   bottom-right corner stays the cube's and the scale's: the drawer stops
+   above that row so navigation is never under it, and keeps enough height
+   to read under a tall inspector. */
+.model-drawer-float {
+  flex: 1 1 0;
+  min-height: min(180px, 100%);
+  margin-bottom: calc(var(--island-gap) + 96px);
+  display: flex;
+  pointer-events: none;
+}
+
+.model-drawer-float > .sidebar {
+  flex: 1;
+  min-width: 0;
+  overflow-y: auto;
+  background: var(--color-surface);
+  border: var(--border-thin);
+  border-radius: var(--radius-lg);
+  box-shadow: var(--shadow-2);
+  scrollbar-width: none;
+  pointer-events: auto;
+}
+
+.model-drawer-float > .sidebar::-webkit-scrollbar {
+  display: none;
+}
+
+/* With the browser in the drawer, the column is the command card alone and
+   hugs it, rather than running the height of the stage. */
+.viewer-area .workspace-column-float:not(:has(> .sidebar)) {
+  bottom: auto;
+  max-height: calc(
+    100% - var(--stage-top) - var(--island-gap) * 2 - var(--readout-h)
+  );
+}
+
+.workspace-column-float:not(:has(> .sidebar)) .workspace-column-tools {
+  max-height: none;
+  flex: 1 1 auto;
+  overflow-y: auto;
+  border-bottom: 0;
+}
+
+/* A drawer alone narrows the right lane to its own width; with the
+   inspector the lane is the inspector's, which the rule above covers. */
+.workspace.column-layout
+  .viewer-area.has-drawer:not(.has-inspector)
+  .tool-card {
+  --tool-card-room: calc(
+    100% - var(--lane-inset) - var(--lane-end) - var(--drawer-w) -
+      var(--island-gap)
+  );
 }
