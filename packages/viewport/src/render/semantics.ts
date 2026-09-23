@@ -80,6 +80,23 @@ export const SELECTION_SEMANTICS = {
     /** The value under the pointer will not build. */
     invalid: 0xf59e0b
   },
+  /**
+   * A face offset's change, while it is being dragged. Only what the gesture
+   * changes is coloured: material it adds is green, material it removes is
+   * coral, and the arrow that measures it is drawing white, rising from a
+   * dashed ring at the face's old level.
+   */
+  change: {
+    arrow: 0xffffff,
+    oldLevel: 0xffffff,
+    add: 0x48cd8f,
+    addStripe: 0x5bc794,
+    addSeam: 0x2f8a60,
+    cut: 0xff644d,
+    cutStripe: 0xdd7362,
+    cutSeam: 0x994e42,
+    bandOpacity: 0.9
+  },
   /** Shown for reference, never committable. */
   reference: {
     ghost: 0x78998a,
