@@ -31,7 +31,7 @@
   touch-action: none;
   cursor: grab;
   /* Dark seams between the opaque facets draw the cube's edges and bevels. */
-  stroke: #10151c;
+  stroke: #12161a;
   stroke-width: 2.5;
   stroke-linejoin: round;
   transition: fill var(--dur-fast) ease;
@@ -64,7 +64,7 @@
 /* A CSS rule outranks the presentation attribute the frame loop writes. */
 .cube-face:hover,
 .cube-corner-target:hover .cube-corner {
-  fill: #37527a;
+  fill: #4a5767;
 }
 
 /* Clicking a facet leaves it focused; never let the browser draw its native
@@ -88,8 +88,8 @@
 .cube-face-label {
   /* Drawn on the viewport's dark stage, which never re-themes — so this is
      --color-viewport-text, not --color-text. Under the light chrome
-     --color-text resolves to #1a2330 and the face labels fell to 1.25:1
-     against #070b10. */
+     --color-text resolves to #1f242b and the face labels fell to 1.25:1
+     against #0a0b0d. */
   fill: var(--color-viewport-text);
   font-size: 9px;
   font-weight: var(--fw-medium);
@@ -116,7 +116,7 @@
   justify-content: center;
   border-radius: 999px;
   color: var(--color-viewport-text);
-  background: rgba(17, 24, 33, 0.72);
+  background: rgba(21, 24, 29, 0.72);
   border: 1px solid var(--color-viewport-border);
   transition:
     background var(--dur-fast) var(--ease-out),
@@ -127,7 +127,7 @@
    in the light theme and flipped this button white against the canvas. */
 .orientation-roll:hover {
   color: var(--color-viewport-text);
-  background: rgba(230, 237, 243, 0.16);
+  background: rgba(230, 234, 243, 0.16);
   border-color: var(--color-viewport-text-muted);
 }
 
@@ -240,7 +240,7 @@
   padding: 5px 14px 5px 8px;
   border: 1px solid var(--color-viewport-border);
   border-radius: 999px;
-  background: rgba(11, 15, 20, 0.94);
+  background: rgba(13, 15, 18, 0.94);
   color: var(--color-viewport-text);
   white-space: nowrap;
   line-height: var(--lh-tight);
