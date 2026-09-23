@@ -251,8 +251,7 @@ test('keeps every workspace surface inside a narrow viewport', async ({
     '.instrument-rail'
   ];
   // What has to hold is where these surfaces come to rest. The assistant
-  // opens with a 200 ms slide from `translateX(12px)`, which deliberately
-  // starts it past the right edge (the shell clips it), so measure once that
+  // opens with a 200 ms rise from `translateY(8px)`, so measure once that
   // has landed.
   await waitForSurfacesToSettle(page, selectors);
   for (const selector of selectors) {
@@ -781,7 +780,7 @@ test('a direct mode hides the assistant without ending the conversation', async 
   );
 });
 
-test('collapsing the assistant frees its column and keeps the thread', async ({
+test('collapsing the assistant folds it into Ask and keeps the thread', async ({
   page
 }) => {
   await stubApi(page, { assistantEnabled: true });
@@ -795,18 +794,15 @@ test('collapsing the assistant frees its column and keeps the thread', async ({
     'Add a 10 mm cube.'
   );
 
-  const viewerBefore = await page.locator('.viewer-area').boundingBox();
   await page.getByRole('button', { name: 'Collapse the assistant' }).click();
 
-  // A collapse has to give the dock's whole column back, not just its contents.
+  // The conversation folds back into the Ask button on the search bar.
   await expect(page.locator('.assistant-panel')).toHaveCount(0);
   await expect(page.locator('.workspace.with-assistant')).toHaveCount(0);
-  const launcher = page.getByRole('button', {
-    name: /Open the modeling assistant/
-  });
+  const launcher = page
+    .locator('.command-bar-row')
+    .getByRole('button', { name: /Open the modeling assistant/ });
   await expect(launcher).toBeVisible();
-  const viewerAfter = await page.locator('.viewer-area').boundingBox();
-  expect(viewerAfter!.width).toBeGreaterThan(viewerBefore!.width + 100);
 
   await launcher.click();
   await expect(page.locator('.assistant-thread')).toContainText(

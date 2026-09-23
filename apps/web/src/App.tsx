@@ -1015,10 +1015,8 @@ import {
   updateSettingsViewState
 } from './lib/settingsViewState';
 import {
-  ASSISTANT_WIDTH_LIMITS,
   clampAssistantWidth,
   clampSidebarWidth,
-  maxAssistantWidth,
   maxSidebarWidth,
   savedPanelWidths,
   SIDEBAR_WIDTH_LIMITS
@@ -2064,6 +2062,14 @@ export function App() {
     nonce: number;
   } | null>(null);
   const [paletteOpen, setPaletteOpen] = useState(false);
+  // A question typed into command search, handed to the assistant with a
+  // fresh id so the same words asked twice still send twice.
+  const [assistantRequest, setAssistantRequest] = useState<{
+    id: number;
+    text: string;
+  } | null>(null);
+  // The slot at the end of the search bar where the Ask launcher sits.
+  const [askSlot, setAskSlot] = useState<HTMLElement | null>(null);
   const [shortcutsOpen, setShortcutsOpen] = useState(false);
   const [contextMenu, setContextMenu] = useState<ContextMenuState | null>(null);
   const orientationRef = useRef<((axes: AxisProjection) => void) | null>(null);
@@ -15604,7 +15610,60 @@ export function App() {
       shortcut: 'Ctrl+,',
       icon: <SettingsIcon size={16} aria-hidden="true" />,
       run: openSettings
-    }
+    },
+    // What the model is made of: every feature and parameter by name, last,
+    // so a search that names one lands on it in the drawer.
+    ...(!modelingLocked
+      ? [
+          ...features.map(
+            (feature) =>
+              ({
+                id: `feature-${feature.id}`,
+                label: feature.name,
+                group: 'Feature',
+                icon: <ListOrdered size={16} aria-hidden="true" />,
+                run: () => {
+                  setPanelState((current) => ({
+                    ...current,
+                    drawerOpen: true,
+                    sidebarSections: {
+                      ...current.sidebarSections,
+                      history: true
+                    }
+                  }));
+                  handleOpenHistoryFeature(feature.id);
+                }
+              }) satisfies PaletteCommand
+          ),
+          ...parameters.map(
+            (parameter) =>
+              ({
+                id: `parameter-${parameter.parameterId}`,
+                label: `${parameter.name} = ${parameter.expression}`,
+                group: 'Parameter',
+                icon: <SlidersHorizontal size={16} aria-hidden="true" />,
+                run: () => {
+                  setPanelState((current) => ({
+                    ...current,
+                    drawerOpen: true,
+                    sidebarSections: {
+                      ...current.sidebarSections,
+                      parameters: true
+                    }
+                  }));
+                  // The drawer renders on the next commit; focus follows it.
+                  window.setTimeout(() => {
+                    document
+                      .querySelector<HTMLInputElement>(
+                        `[aria-label="Expression for ${CSS.escape(parameter.name)}"]`
+                      )
+                      ?.focus();
+                  }, 0);
+                }
+              }) satisfies PaletteCommand
+          )
+        ]
+      : [])
   ];
 
   const directMode =
@@ -16267,20 +16326,6 @@ export function App() {
           onCommit={(width) => commitPanelWidth('sidebar', width)}
           onReset={() =>
             commitPanelWidth('sidebar', SIDEBAR_WIDTH_LIMITS.default)
-          }
-        />
-      }
-      assistantResizer={
-        <PanelResizer
-          label="Resize the assistant"
-          edge="right"
-          width={assistantWidth}
-          min={ASSISTANT_WIDTH_LIMITS.min}
-          max={maxAssistantWidth(windowWidth)}
-          onPreview={(width) => previewPanelWidth('--assistant-w', width)}
-          onCommit={(width) => commitPanelWidth('assistant', width)}
-          onReset={() =>
-            commitPanelWidth('assistant', ASSISTANT_WIDTH_LIMITS.default)
           }
         />
       }
@@ -17662,6 +17707,8 @@ export function App() {
               onCollapsedChange={setAssistantCollapsed}
               confirmDestructive={appSettings.general.confirmDestructiveActions}
               hidden={assistantHidden}
+              launcherSlot={askSlot}
+              request={assistantRequest}
             />
           </ErrorBoundary>
         ) : null
@@ -17701,6 +17748,7 @@ export function App() {
             saveState={presentedSaveState}
             onOpenSearch={() => setPaletteOpen(true)}
             searchKey={commandPaletteKey}
+            onSearchSlot={setAskSlot}
           />
           <StatusActivityLog
             id={activityLogId}
@@ -17776,6 +17824,17 @@ export function App() {
               <LazyCommandPalette
                 commands={paletteCommands}
                 onClose={() => setPaletteOpen(false)}
+                onAsk={
+                  assistantAvailable
+                    ? (question) => {
+                        setAssistantCollapsed(false);
+                        setAssistantRequest((current) => ({
+                          id: (current?.id ?? 0) + 1,
+                          text: question
+                        }));
+                      }
+                    : undefined
+                }
               />
             </Suspense>
           )}

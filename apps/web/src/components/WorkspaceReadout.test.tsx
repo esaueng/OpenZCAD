@@ -52,6 +52,27 @@ describe('WorkspaceReadout', () => {
     expect(container.querySelector('.workspace-hint')).toBeNull();
   });
 
+  it('hands the assistant a slot at the end of the search bar', () => {
+    const onSearchSlot = vi.fn();
+    render(
+      <WorkspaceReadout
+        status=""
+        tone="ready"
+        logOpen={false}
+        onToggleLog={vi.fn()}
+        {...SUMMARY}
+        onSearchSlot={onSearchSlot}
+      />
+    );
+    const bar = screen.getByRole('button', {
+      name: 'Search commands (Cmd+K)'
+    });
+    expect(bar).toHaveTextContent('Search commands or ask the assistant');
+    const slot = onSearchSlot.mock.calls[0]?.[0] as HTMLElement;
+    expect(slot).toHaveClass('command-bar-slot');
+    expect(slot.previousElementSibling).toBe(bar);
+  });
+
   it('shows the live status as a toast that opens the activity log', async () => {
     const user = userEvent.setup();
     const onToggleLog = vi.fn();
