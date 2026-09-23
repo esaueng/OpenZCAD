@@ -500,8 +500,8 @@ test('places, retypes, solves, and undoes a driving angle dimension', async ({
   await page.mouse.click(p1.x, p1.y);
   await page.mouse.click(p2.x, p2.y);
 
-  const sketchTools = page.getByRole('toolbar', { name: 'Sketch tools' });
-  const angleTool = sketchTools.getByRole('button', {
+  const relations = page.getByRole('toolbar', { name: 'Relations' });
+  const angleTool = relations.getByRole('button', {
     name: 'Angle',
     exact: true
   });
@@ -670,7 +670,10 @@ test('edits a canvas radius with expressions, refuses zero, and undoes the solve
   await expect(
     page.locator('.feature-row-main', { hasText: 'Sketch 01' })
   ).toBeVisible();
-  await rail.getByRole('button', { name: 'Radius', exact: true }).click();
+  await page
+    .getByRole('toolbar', { name: 'Relations' })
+    .getByRole('button', { name: 'Radius', exact: true })
+    .click();
   await page.mouse.click(center.x + 72, center.y);
   const label = page.getByRole('button', { name: /^Edit driving radius:/ });
   await expect(label).toBeVisible();
