@@ -452,14 +452,19 @@
 .toast {
   position: absolute;
   bottom: calc(58px + var(--lane-chip, 0px) + var(--lane-status, 0px));
-  left: 50%;
+  /* Centred on the lane, which is the viewer's centre unless the first-run
+     tour or a phone width narrows one side of it. */
+  left: calc((var(--lane-start, 12px) + 100% - var(--lane-end, 12px)) / 2);
   transform: translateX(-50%);
   z-index: calc(var(--z-inspector-float) + 1);
   display: inline-flex;
   align-items: center;
   gap: 10px;
   min-height: 30px;
-  max-width: min(560px, calc(100% - 24px));
+  max-width: min(
+    560px,
+    calc(100% - var(--lane-start, 12px) - var(--lane-end, 12px))
+  );
   padding: 4px 4px 4px 12px;
   color: var(--color-text);
   background: var(--color-surface-2);
