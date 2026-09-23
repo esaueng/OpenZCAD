@@ -42,6 +42,11 @@ interface WorkspaceReadoutProps {
    */
   onOpenSearch(): void;
   searchKey: { glyph: string; accessible: string };
+  /**
+   * The slot at the search bar's right end, handed to the assistant so its
+   * Ask launcher sits on the bar it shares with command search.
+   */
+  onSearchSlot?(slot: HTMLElement | null): void;
 }
 
 /**
@@ -65,7 +70,8 @@ export function WorkspaceReadout({
   documentVersion,
   saveState,
   onOpenSearch,
-  searchKey
+  searchKey,
+  onSearchSlot
 }: WorkspaceReadoutProps) {
   const expiresAt =
     statusAt === undefined
@@ -107,16 +113,19 @@ export function WorkspaceReadout({
             {prompt}
           </p>
         ) : null}
-        <button
-          type="button"
-          className="command-bar"
-          aria-label={`Search commands (${searchKey.accessible})`}
-          onClick={onOpenSearch}
-        >
-          <Search size={15} aria-hidden="true" />
-          <span>Search commands</span>
-          <kbd>{searchKey.glyph}</kbd>
-        </button>
+        <div className="command-bar-row">
+          <button
+            type="button"
+            className="command-bar"
+            aria-label={`Search commands (${searchKey.accessible})`}
+            onClick={onOpenSearch}
+          >
+            <Search size={15} aria-hidden="true" />
+            <span>Search commands or ask the assistant</span>
+            <kbd>{searchKey.glyph}</kbd>
+          </button>
+          <div className="command-bar-slot" ref={onSearchSlot} />
+        </div>
       </div>
       <footer
         className={`workspace-toast ${tone}${shown ? '' : ' hidden'}`}
