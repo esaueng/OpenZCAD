@@ -1,6 +1,6 @@
 # Quiet-stage workspace redesign (U04)
 
-Status: slice 1 in review (#411); slice 2 in review (#412); slice 3 in review (#413); slice 4 in review (#414); slice 5 in review (#415); slice 6 in review; slice 7 open. Roadmap row: [U04](../../ROADMAP.md#u04).
+Status: slice 1 in review (#411); slice 2 in review (#412); slice 3 in review (#413); slice 4 in review (#414); slice 5 in review (#415); slice 6 in review (#416); slice 7 in review. Roadmap row: [U04](../../ROADMAP.md#u04).
 
 ## Intent
 
@@ -136,7 +136,18 @@ Each slice is one PR against `main`, recorded on the U04 row when it merges.
    (band, seam, cut ghost, in-line change arrow, beside-pin label).
    Acceptance: add and cut previews match the design at 20 mm and 0.05 mm
    scale bars in default, head-on and side views; the committed geometry is
-   unchanged.
+   unchanged. As built: the band comes from the picked face's display
+   triangles (`faceSweepProfile`), projected back onto the plane the gesture
+   started from, so a rig re-armed over a landed preview still starts at the
+   old level; its hatching is a screen-space shader, so it keeps one pitch
+   however the wall is foreshortened. The default reading follows the
+   operation: Offset for moving a face, Total for resizing a primitive, whose
+   number is its own dimension. Where the axis points at the camera the label
+   keeps to the pin's right rather than covering it. Not yet as designed: the
+   moved face keeps its selection fill. Fading it during the drag made hosted
+   CI's software-GL drag specs miss their budgets on every attempt (bisected
+   on CI: the same build without the fade passed), so a neutral moved face
+   needs another route and is a follow-up.
 
 ## Open questions
 
