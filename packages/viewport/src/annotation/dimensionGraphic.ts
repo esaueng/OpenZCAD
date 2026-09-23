@@ -62,6 +62,13 @@ export interface DimensionGraphicOptions {
   depthTest?: boolean;
   /** Render order for the line; arrowheads take this plus one. */
   renderOrder?: number;
+  /** Dashed like a drawing's dimension (the default), or one solid line. */
+  dashed?: boolean;
+  /**
+   * Leave the materials undisposed so their compiled programs stay cached,
+   * for a graphic rebuilt with every re-armed handle (see `keepProgram`).
+   */
+  keepProgram?: boolean;
 }
 
 export interface DimensionGraphic {
@@ -96,6 +103,8 @@ export interface DimensionLineMaterialOptions {
   linewidth?: number;
   opacity?: number;
   depthTest?: boolean;
+  /** Defaults to dashed, the drawing convention. */
+  dashed?: boolean;
   resolution?: FatLineResolution;
 }
 
@@ -106,9 +115,12 @@ export function createDimensionLineMaterial(
   const material = new LineMaterial({
     color: options.color ?? DIMENSION_LINE_COLOR,
     linewidth: options.linewidth ?? 1.5,
+    // A solid line is a dash with no gap: it shares the dashed program rather
+    // than compiling the undashed fat-line variant, which on software GL cost
+    // more than a second the first time a handle showed one.
     dashed: true,
     dashSize: 2,
-    gapSize: 1.5,
+    gapSize: options.dashed === false ? 0 : 1.5,
     transparent: true,
     opacity: options.opacity ?? 0.9,
     // Dimensions read through the part, the way they do on paper. A dimension
@@ -142,12 +154,14 @@ export function createDimensionGraphic(
         ? {}
         : { linewidth: options.linewidth }),
       opacity,
-      depthTest
+      depthTest,
+      ...(options.dashed === undefined ? {} : { dashed: options.dashed })
     })
   );
   line.computeLineDistances();
   line.renderOrder = renderOrder;
   object.add(line);
+  const keepPrograms = options.keepProgram === true;
 
   const arrowMaterial = new THREE.MeshBasicMaterial({
     color,
@@ -337,9 +351,11 @@ export function createDimensionGraphic(
     },
     dispose() {
       lineGeometry.dispose();
-      line.material.dispose();
       coneGeometry.dispose();
-      arrowMaterial.dispose();
+      if (!keepPrograms) {
+        line.material.dispose();
+        arrowMaterial.dispose();
+      }
       for (const geometry of witnessGeometries) {
         geometry.dispose();
       }

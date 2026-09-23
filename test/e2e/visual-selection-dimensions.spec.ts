@@ -99,10 +99,10 @@ test('round-trips diameter entry and edits a cylinder cap by total height', asyn
   await expect(valueChip).toHaveText('35.7 mm');
   // The value chip updates immediately, before the exact preview replaces the
   // rendered body and rebuilds its handle. Prove that replacement has landed
-  // before checking that the dimension survived it.
+  // before checking that the change arrow survived it.
   await expect.poll(readCylinderHeight).toBeCloseTo(35.7, 5);
   await expect(canvas).toHaveAttribute(
-    'data-e2e-offset-dimension-visible',
+    'data-e2e-offset-change-visible',
     'true'
   );
   await totalKeypad.getByRole('button', { name: 'Apply total' }).click();
