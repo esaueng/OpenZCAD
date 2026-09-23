@@ -1889,7 +1889,9 @@ test('view keys still work while a profile pick is waiting for a click', async (
   await expect(page.locator('.sketch-palette')).toBeVisible();
   const centres = await bareCanvasDrags(page, { count: 2, dragX: 55 });
   const circleTool = sketchTools.getByRole('button', { name: /^Circle/ });
-  const gridReadout = page.locator('.sketch-grid-indicator');
+  // The dock's grid segment; the floating HUD label only stands in when no
+  // dock is up. Both are written from the same render pass.
+  const gridReadout = page.locator('.viewport-dock-grid');
   for (const centre of centres) {
     await circleTool.click();
     // The rail button is React state and flips first; the viewport only owns

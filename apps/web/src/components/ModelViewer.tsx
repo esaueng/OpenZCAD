@@ -517,6 +517,14 @@ interface ModelViewerProps {
   scaleIndicatorRef: MutableRefObject<
     ((scale: ViewportScale | null) => void) | null
   >;
+  /**
+   * Imperative sink for the sketch grid spacing ("Grid 5 mm"), or null when no
+   * grid is shown. When a host renders one (the viewport dock), the readout
+   * lives there and the floating HUD label stays hidden.
+   */
+  sketchGridReadoutRef?: MutableRefObject<
+    ((label: string | null) => void) | null
+  >;
   onSelectTopology(
     selection: TopologySelection | null,
     additive: boolean,
@@ -1286,6 +1294,7 @@ export function ModelViewer({
   orientationRef,
   orientationDragRef,
   scaleIndicatorRef,
+  sketchGridReadoutRef,
   onSelectTopology,
   onSelectEdgeChain,
   selectionFilter,
@@ -7079,10 +7088,18 @@ export function ModelViewer({
           worldPerPixelAt(sketchOrigin),
           activeSketchMode.gridVisible
         );
+        const gridSink = sketchGridReadoutRef?.current ?? null;
         if (activeSketchMode.gridVisible) {
-          sketchGridIndicator.textContent = `Grid ${formatNumber(spacing)} ${unitsRef.current} · adaptive`;
-          sketchGridIndicator.hidden = false;
+          const gridLabel = `Grid ${formatNumber(spacing)} ${unitsRef.current}`;
+          if (gridSink) {
+            gridSink(gridLabel);
+            sketchGridIndicator.hidden = true;
+          } else {
+            sketchGridIndicator.textContent = `${gridLabel} · adaptive`;
+            sketchGridIndicator.hidden = false;
+          }
         } else {
+          gridSink?.(null);
           sketchGridIndicator.hidden = true;
         }
         inferenceAnimating = activeSketchRig.advanceInference(
@@ -7090,6 +7107,7 @@ export function ModelViewer({
           reducedMotionRef.current === true
         );
       } else {
+        sketchGridReadoutRef?.current?.(null);
         sketchGridIndicator.hidden = true;
       }
 

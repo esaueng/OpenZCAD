@@ -59,6 +59,27 @@ describe('CommandPalette', () => {
     expect(visibleLabels()).toEqual(['Export STEP', 'Export mesh']);
   });
 
+  it('matches a command by its keywords as well as its label', async () => {
+    const commands = [
+      command('export-dxf', 'Export face outline as DXF', 'File', {
+        keywords: ['laser', 'outline']
+      }),
+      command('import', 'Import CAD files…', 'File', {
+        keywords: ['step', 'stl']
+      }),
+      command('export-step', 'Export STEP', 'File')
+    ];
+    render(<CommandPalette commands={commands} onClose={vi.fn()} />);
+    const search = screen.getByRole('textbox', { name: 'Search commands' });
+
+    await userEvent.type(search, 'laser');
+    expect(visibleLabels()).toEqual(['Export face outline as DXF']);
+
+    await userEvent.clear(search);
+    await userEvent.type(search, 'step');
+    expect(visibleLabels()).toEqual(['Export STEP', 'Import CAD files…']);
+  });
+
   it('does not run a disabled result by click or Enter', async () => {
     const run = vi.fn();
     const onClose = vi.fn();
