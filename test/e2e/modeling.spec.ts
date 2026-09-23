@@ -387,6 +387,12 @@ test('switches a planar-face selection into an editable arc sketch', async ({
 
   const sketchTools = page.getByRole('toolbar', { name: 'Sketch tools' });
   await expect(sketchTools).toBeVisible();
+  // Grid snapping rounds the arc's radius to whole millimetres, which moves
+  // it off the 45° point the selection click aims at by a zoom-dependent few
+  // pixels; this test is about editing the arc, so draw it where clicked.
+  await page.getByRole('button', { name: /Sketch palette/ }).click();
+  await page.getByLabel('Snap to grid').uncheck();
+  await page.getByRole('button', { name: /Sketch palette/ }).click();
   await sketchTools.getByRole('button', { name: /^Arc/ }).click();
   const sketchBounds = await canvas.boundingBox();
   expect(sketchBounds).not.toBeNull();

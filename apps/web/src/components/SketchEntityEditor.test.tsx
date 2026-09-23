@@ -348,9 +348,8 @@ describe('textObjectFromPoint', () => {
     expect(object.objectKind === 'text' && object.size).toBeGreaterThan(0);
   });
 
-  it('offers constraint tools from the entity and lists what holds it', async () => {
+  it('lists what holds the entity, with edit and delete per row', async () => {
     const user = userEvent.setup();
-    const onConstraintTool = vi.fn();
     const onDeleteConstraint = vi.fn();
     const onEditConstraint = vi.fn();
     render(
@@ -360,10 +359,6 @@ describe('textObjectFromPoint', () => {
         onApply={vi.fn()}
         onDelete={vi.fn()}
         onClose={vi.fn()}
-        constraintTools={[
-          { kind: 'horizontal', label: 'Horizontal', armed: false },
-          { kind: 'tangent', label: 'Tangent', armed: true }
-        ]}
         constraints={[
           {
             constraintId: 'c1',
@@ -378,18 +373,14 @@ describe('textObjectFromPoint', () => {
             editable: true
           }
         ]}
-        onConstraintTool={onConstraintTool}
         onEditConstraint={onEditConstraint}
         onDeleteConstraint={onDeleteConstraint}
       />
     );
+    // Adding a relation starts from the relations rail, not from here.
     expect(
-      screen.getByRole('button', { name: 'Tangent constraint', pressed: true })
-    ).toBeInTheDocument();
-    await user.click(
-      screen.getByRole('button', { name: 'Horizontal constraint' })
-    );
-    expect(onConstraintTool).toHaveBeenCalledWith('horizontal');
+      screen.queryByRole('group', { name: 'Add a constraint from this entity' })
+    ).not.toBeInTheDocument();
     await user.click(
       screen.getByRole('button', {
         name: 'Delete constraint: Tangent · line ○ circle'
@@ -421,7 +412,7 @@ describe('textObjectFromPoint', () => {
     expect(screen.queryByLabelText('Constraints')).not.toBeInTheDocument();
   });
 
-  it('keeps the constraint tools out of the form so field labels stay unique', () => {
+  it('keeps the constraints out of the form so field labels stay unique', () => {
     render(
       <SketchEntityEditor
         data={{
@@ -436,15 +427,20 @@ describe('textObjectFromPoint', () => {
         onApply={vi.fn()}
         onDelete={vi.fn()}
         onClose={vi.fn()}
-        constraintTools={[{ kind: 'radius', label: 'Radius', armed: false }]}
-        constraints={[]}
-        onConstraintTool={vi.fn()}
+        constraints={[
+          {
+            constraintId: 'c1',
+            kind: 'radius',
+            label: 'Radius 5 mm',
+            editable: true
+          }
+        ]}
       />
     );
     const form = screen.getByRole('form', { name: 'Edit arc' });
     expect(within(form).getAllByLabelText(/radius/i)).toHaveLength(1);
     expect(
-      screen.getByRole('button', { name: 'Radius constraint' })
-    ).toBeInTheDocument();
+      screen.getByRole('region', { name: 'Constraints' })
+    ).not.toContainElement(form);
   });
 });
