@@ -453,13 +453,15 @@ test('a wheel notch over viewport chrome zooms without scrolling the page', asyn
 
   // Make the browser page scrollable so an unhandled wheel event has a visible
   // default action. The production shell normally sits at scrollTop 0, where
-  // the same leak presents as elastic/rubber-band movement instead.
+  // the same leak presents as elastic/rubber-band movement instead. A small
+  // offset: the viewer bar is the instrument rail under the top islands, so a
+  // deep scroll would carry the button under the pointer off the screen.
   await page.evaluate(() => {
     document.documentElement.style.overflowY = 'auto';
     document.body.style.minHeight = '200vh';
-    window.scrollTo(0, 160);
+    window.scrollTo(0, 40);
   });
-  await expect.poll(() => page.evaluate(() => window.scrollY)).toBe(160);
+  await expect.poll(() => page.evaluate(() => window.scrollY)).toBe(40);
 
   const before = await readLiveCamera(canvas);
   const buttonBox = await railButton.boundingBox();
@@ -483,7 +485,7 @@ test('a wheel notch over viewport chrome zooms without scrolling the page', asyn
     after.position[2]! - after.target[2]!
   );
   expect(afterDistance).toBeLessThan(beforeDistance);
-  expect(await page.evaluate(() => window.scrollY)).toBe(160);
+  expect(await page.evaluate(() => window.scrollY)).toBe(40);
 });
 
 test('a batched trackpad pinch renders as bounded zoom steps', async ({

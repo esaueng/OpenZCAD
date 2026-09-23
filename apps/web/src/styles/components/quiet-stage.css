@@ -77,11 +77,15 @@
   width: calc((100% - 6px) / 3);
 }
 
-.topbar > .topbar-actions.topbar-island {
+.topbar > .topbar-actions-island {
   justify-self: end;
   align-self: center;
-  margin-left: 0;
+  display: flex;
   padding: 3px var(--sp-1);
+}
+
+.topbar-actions-island > .topbar-actions {
+  margin-left: 0;
 }
 
 /* ── The column ──────────────────────────────────────────── */
@@ -350,6 +354,14 @@
     grid-template-columns: minmax(0, 1fr) auto auto;
     gap: var(--sp-1);
   }
+
+  /* View mode's own narrow rule docks the measurement workbench across the
+     bottom; it rises above the ruler and the search bar here, and the base
+     rule's top above must not stretch it back up to the islands. */
+  .measurement-dock {
+    top: auto;
+    bottom: calc(var(--island-gap) * 3 + var(--command-bar-h) + 36px);
+  }
 }
 
 /* A phone keeps the column over the left edge, so the bottom lanes run from
@@ -360,9 +372,15 @@
     --lane-right: var(--island-gap);
   }
 
+  /* The ruler moves to the bottom-left, above the readout and the search
+     bar; the measurement workbench, which spans a phone's width, rises
+     above the ruler so neither covers the other. */
   .workspace.column-layout .viewport-scale-indicator {
-    display: none;
+    left: var(--island-gap);
+    right: auto;
+    bottom: calc(var(--island-gap) * 2 + var(--command-bar-h));
   }
+
 
   .workspace.column-layout .viewer-rail-stack,
   .workspace.column-layout .viewer-area.has-inspector .viewer-rail-stack {

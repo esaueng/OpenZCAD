@@ -342,278 +342,282 @@ export function TopBar({
           );
         })}
       </div>
-      <div
-        className="topbar-actions topbar-island"
-        role="group"
-        aria-label="Workspace actions"
-      >
-        {/* Signed in is the happy default and the save chip already shows
+      {/* The island frame wraps the group rather than padding it: the
+          group's children own exactly its width at every breakpoint. */}
+      <div className="topbar-island topbar-actions-island">
+        <div
+          className="topbar-actions"
+          role="group"
+          aria-label="Workspace actions"
+        >
+          {/* Signed in is the happy default and the save chip already shows
             cloud state, so the account chip appears only when something
             needs attention. */}
-        {accountState !== 'signed-in' && (
-          <span
-            className={`account-state is-${accountState}`}
-            role="status"
-            title={`Cloud account: ${accountLabel.toLowerCase()}`}
-            aria-label={`Cloud account: ${accountLabel.toLowerCase()}`}
-          >
-            {accountState === 'checking' ? (
-              <LoaderCircle className="spin" size={13} aria-hidden="true" />
-            ) : (
-              <CloudOff size={13} aria-hidden="true" />
-            )}
-            <StableLabel reserve={ACCOUNT_LABEL_RESERVE} align="center">
-              {accountLabel}
-            </StableLabel>
-          </span>
-        )}
-        <button
-          className={`save-state topbar-action is-${saveState}`}
-          type="button"
-          disabled={!projectName}
-          onClick={onSave}
-          aria-label={
-            saveToAccount
-              ? 'Save to my account'
-              : WORKSPACE_SAVE_STATE_PRESENTATION[saveState].topBarLabel
-          }
-          title={`${saveToAccount ? 'Save this local project and its source files to your account.' : WORKSPACE_SAVE_STATE_PRESENTATION[saveState].title} Click to save a revision (Ctrl+S), or Ctrl+Shift+S to name it.`}
-        >
-          {saveState === 'saving' || saveState === 'syncing' ? (
-            <LoaderCircle className="spin" size={14} aria-hidden="true" />
-          ) : saveState === 'conflict' ||
-            saveState === 'repair' ||
-            saveState === 'refused' ||
-            saveState === 'local-source' ? (
-            <TriangleAlert size={14} aria-hidden="true" />
-          ) : saveState === 'synced' ? (
-            <Check size={14} aria-hidden="true" />
-          ) : (
-            <CloudOff size={14} aria-hidden="true" />
+          {accountState !== 'signed-in' && (
+            <span
+              className={`account-state is-${accountState}`}
+              role="status"
+              title={`Cloud account: ${accountLabel.toLowerCase()}`}
+              aria-label={`Cloud account: ${accountLabel.toLowerCase()}`}
+            >
+              {accountState === 'checking' ? (
+                <LoaderCircle className="spin" size={13} aria-hidden="true" />
+              ) : (
+                <CloudOff size={13} aria-hidden="true" />
+              )}
+              <StableLabel reserve={ACCOUNT_LABEL_RESERVE} align="center">
+                {accountLabel}
+              </StableLabel>
+            </span>
           )}
-          <StableLabel
-            reserve={
-              saveToAccount
-                ? ['Save to my account']
-                : accountState === 'signed-in'
-                  ? CLOUD_SAVE_LABEL_RESERVE
-                  : DEVICE_SAVE_LABEL_RESERVE
-            }
-            align="center"
-          >
-            {saveToAccount
-              ? 'Save to my account'
-              : WORKSPACE_SAVE_STATE_PRESENTATION[saveState].topBarLabel}
-          </StableLabel>
-        </button>
-        {projectSharingEnabled ? (
           <button
+            className={`save-state topbar-action is-${saveState}`}
             type="button"
-            className={`collaboration-state ${collaborationStatus}`}
-            title={`Project sharing · ${collaborationLabel}`}
-            aria-label={`Open project sharing · ${collaborationLabel}`}
-            disabled={!projectName || !session}
-            onClick={onOpenSharing}
+            disabled={!projectName}
+            onClick={onSave}
+            aria-label={
+              saveToAccount
+                ? 'Save to my account'
+                : WORKSPACE_SAVE_STATE_PRESENTATION[saveState].topBarLabel
+            }
+            title={`${saveToAccount ? 'Save this local project and its source files to your account.' : WORKSPACE_SAVE_STATE_PRESENTATION[saveState].title} Click to save a revision (Ctrl+S), or Ctrl+Shift+S to name it.`}
           >
-            <Users size={13} aria-hidden="true" />
-            {collaborationStatus === 'live' ? (
-              // Only drawn once the row has collapsed to icons; the label
-              // carries the count everywhere else.
-              <span className="live-badge" aria-hidden="true">
-                {collaboratorCount}
-              </span>
-            ) : null}
-            <StableLabel reserve={COLLABORATION_LABEL_RESERVE} align="center">
-              {collaborationLabel}
+            {saveState === 'saving' || saveState === 'syncing' ? (
+              <LoaderCircle className="spin" size={14} aria-hidden="true" />
+            ) : saveState === 'conflict' ||
+              saveState === 'repair' ||
+              saveState === 'refused' ||
+              saveState === 'local-source' ? (
+              <TriangleAlert size={14} aria-hidden="true" />
+            ) : saveState === 'synced' ? (
+              <Check size={14} aria-hidden="true" />
+            ) : (
+              <CloudOff size={14} aria-hidden="true" />
+            )}
+            <StableLabel
+              reserve={
+                saveToAccount
+                  ? ['Save to my account']
+                  : accountState === 'signed-in'
+                    ? CLOUD_SAVE_LABEL_RESERVE
+                    : DEVICE_SAVE_LABEL_RESERVE
+              }
+              align="center"
+            >
+              {saveToAccount
+                ? 'Save to my account'
+                : WORKSPACE_SAVE_STATE_PRESENTATION[saveState].topBarLabel}
             </StableLabel>
           </button>
-        ) : null}
-        <details ref={fileMenuRef} className="topbar-menu file-menu">
-          <summary
-            className="secondary topbar-action"
-            title="Import and export"
-            aria-label={`Import and export${
-              artifacts.length > 0
-                ? ` · ${artifacts.length} stored ${artifacts.length === 1 ? 'file' : 'files'}`
-                : ''
-            }${
-              localOnlySourceCount > 0
-                ? ` · ${localOnlySourceCount} import ${localOnlySourceCount === 1 ? 'source needs' : 'sources need'} archiving`
-                : ''
-            }`}
-          >
-            <FolderOpen size={14} aria-hidden="true" />
-            File
-            {localOnlySourceCount > 0 ? (
-              <i className="file-menu-attention" aria-hidden="true" />
-            ) : null}
-            {artifacts.length > 0 ? (
-              <>
-                {' '}
-                <span className="file-menu-count">{artifacts.length}</span>
-              </>
-            ) : null}
-          </summary>
-          <div className="topbar-menu-panel">
-            <strong className="topbar-menu-label">Import</strong>
-            <label
-              className="topbar-menu-item"
-              title="Import STEP, a mesh file (STL, 3MF, OBJ, GLB, PLY), or a paired Shapr3D project and STEP"
-            >
-              <Upload size={13} aria-hidden="true" />
-              <span>Import CAD files…</span>
-              <small>STEP · STL · 3MF · OBJ · GLB · PLY</small>
-              <input
-                type="file"
-                aria-label="Import STEP or a mesh file…"
-                accept=".shapr,.stl,.step,.stp,.3mf,.obj,.glb,.ply"
-                multiple
-                style={{ display: 'none' }}
-                onChange={(event: ChangeEvent<HTMLInputElement>) => {
-                  const files = [...(event.target.files ?? [])];
-                  event.target.value = '';
-                  if (files.length > 0) {
-                    onImportFiles(files);
-                  }
-                }}
-              />
-            </label>
-            {onImportProject && (
-              <ProjectImportButton
-                onImport={onImportProject}
-                disabled={projectTransferBusy}
-                hint=".openzcad backup"
-              />
-            )}
-            <strong className="topbar-menu-label">Export</strong>
+          {projectSharingEnabled ? (
             <button
               type="button"
-              className="topbar-menu-item"
-              disabled={!canExport}
-              title={exportTitle('STEP')}
-              onClick={onExportStep}
+              className={`collaboration-state ${collaborationStatus}`}
+              title={`Project sharing · ${collaborationLabel}`}
+              aria-label={`Open project sharing · ${collaborationLabel}`}
+              disabled={!projectName || !session}
+              onClick={onOpenSharing}
             >
-              <Download size={13} aria-hidden="true" />
-              <span>Export STEP</span>
-              <small>{exportScope ?? 'all bodies'}</small>
+              <Users size={13} aria-hidden="true" />
+              {collaborationStatus === 'live' ? (
+                // Only drawn once the row has collapsed to icons; the label
+                // carries the count everywhere else.
+                <span className="live-badge" aria-hidden="true">
+                  {collaboratorCount}
+                </span>
+              ) : null}
+              <StableLabel reserve={COLLABORATION_LABEL_RESERVE} align="center">
+                {collaborationLabel}
+              </StableLabel>
             </button>
-            <button
-              type="button"
-              className="topbar-menu-item"
-              disabled={!canExport}
-              title={exportTitle('3MF, STL, OBJ or glTF')}
-              onClick={onOpenMeshExport}
+          ) : null}
+          <details ref={fileMenuRef} className="topbar-menu file-menu">
+            <summary
+              className="secondary topbar-action"
+              title="Import and export"
+              aria-label={`Import and export${
+                artifacts.length > 0
+                  ? ` · ${artifacts.length} stored ${artifacts.length === 1 ? 'file' : 'files'}`
+                  : ''
+              }${
+                localOnlySourceCount > 0
+                  ? ` · ${localOnlySourceCount} import ${localOnlySourceCount === 1 ? 'source needs' : 'sources need'} archiving`
+                  : ''
+              }`}
             >
-              <Download size={13} aria-hidden="true" />
-              <span>Export Mesh…</span>
-              <small>3MF · STL · OBJ · glTF</small>
-            </button>
-            {onExportProject && (
+              <FolderOpen size={14} aria-hidden="true" />
+              File
+              {localOnlySourceCount > 0 ? (
+                <i className="file-menu-attention" aria-hidden="true" />
+              ) : null}
+              {artifacts.length > 0 ? (
+                <>
+                  {' '}
+                  <span className="file-menu-count">{artifacts.length}</span>
+                </>
+              ) : null}
+            </summary>
+            <div className="topbar-menu-panel">
+              <strong className="topbar-menu-label">Import</strong>
+              <label
+                className="topbar-menu-item"
+                title="Import STEP, a mesh file (STL, 3MF, OBJ, GLB, PLY), or a paired Shapr3D project and STEP"
+              >
+                <Upload size={13} aria-hidden="true" />
+                <span>Import CAD files…</span>
+                <small>STEP · STL · 3MF · OBJ · GLB · PLY</small>
+                <input
+                  type="file"
+                  aria-label="Import STEP or a mesh file…"
+                  accept=".shapr,.stl,.step,.stp,.3mf,.obj,.glb,.ply"
+                  multiple
+                  style={{ display: 'none' }}
+                  onChange={(event: ChangeEvent<HTMLInputElement>) => {
+                    const files = [...(event.target.files ?? [])];
+                    event.target.value = '';
+                    if (files.length > 0) {
+                      onImportFiles(files);
+                    }
+                  }}
+                />
+              </label>
+              {onImportProject && (
+                <ProjectImportButton
+                  onImport={onImportProject}
+                  disabled={projectTransferBusy}
+                  hint=".openzcad backup"
+                />
+              )}
+              <strong className="topbar-menu-label">Export</strong>
               <button
                 type="button"
                 className="topbar-menu-item"
-                disabled={!projectName || projectTransferBusy}
-                onClick={onExportProject}
+                disabled={!canExport}
+                title={exportTitle('STEP')}
+                onClick={onExportStep}
               >
                 <Download size={13} aria-hidden="true" />
-                <span>Export project</span>
-                <small>complete .openzcad backup</small>
+                <span>Export STEP</span>
+                <small>{exportScope ?? 'all bodies'}</small>
               </button>
-            )}
-            {localOnlySourceCount > 0 ? (
-              <>
-                <div className="topbar-menu-sep" />
+              <button
+                type="button"
+                className="topbar-menu-item"
+                disabled={!canExport}
+                title={exportTitle('3MF, STL, OBJ or glTF')}
+                onClick={onOpenMeshExport}
+              >
+                <Download size={13} aria-hidden="true" />
+                <span>Export Mesh…</span>
+                <small>3MF · STL · OBJ · glTF</small>
+              </button>
+              {onExportProject && (
                 <button
                   type="button"
                   className="topbar-menu-item"
-                  title="Upload import sources that exist only on this device so other devices can rebuild this project"
-                  onClick={onArchiveLocalSources}
-                >
-                  <Upload size={13} aria-hidden="true" />
-                  <span>
-                    Archive local sources
-                    <span className="topbar-menu-badge">
-                      {localOnlySourceCount} file
-                      {localOnlySourceCount === 1 ? '' : 's'}
-                    </span>
-                  </span>
-                  <small>
-                    {localOnlySourceCount === 1
-                      ? 'one import exists only on this device'
-                      : 'these imports exist only on this device'}
-                  </small>
-                </button>
-              </>
-            ) : null}
-            <div className="topbar-menu-sep" />
-            <strong className="topbar-menu-label">
-              <Files size={12} aria-hidden="true" />
-              Stored files
-            </strong>
-            {artifacts.length === 0 ? (
-              <span className="topbar-menu-empty">
-                No archived imports or exports yet.
-              </span>
-            ) : (
-              artifacts.map((artifact) => (
-                <a
-                  key={artifact.artifactId}
-                  className="topbar-menu-item"
-                  href={`/api/artifacts/${artifact.artifactId}/download`}
-                  download={artifact.name}
-                  onClick={
-                    onDownloadArtifact
-                      ? (event) => {
-                          event.preventDefault();
-                          onDownloadArtifact(artifact);
-                        }
-                      : undefined
-                  }
+                  disabled={!projectName || projectTransferBusy}
+                  onClick={onExportProject}
                 >
                   <Download size={13} aria-hidden="true" />
-                  <span>{artifact.name}</span>
-                  <small>
-                    {artifact.bytes === undefined
-                      ? artifact.kind
-                      : `${artifact.kind} · ${Math.max(1, Math.round(artifact.bytes / 1024))} KB`}
-                  </small>
-                </a>
-              ))
-            )}
-            <div className="topbar-menu-sep" />
-            <strong className="topbar-menu-label">Troubleshooting</strong>
-            <button
-              type="button"
-              className="topbar-menu-item"
-              title="Export a sanitized feature-history snapshot for troubleshooting"
-              onClick={onExportDiagnostics}
-            >
-              <Download size={13} aria-hidden="true" />
-              <span>Export diagnostics</span>
-              <small>sanitized JSON</small>
-            </button>
-            <button
-              type="button"
-              className="topbar-menu-item"
-              title="Export the on-device log of direct-edit attempts and refusals for troubleshooting"
-              onClick={onExportInteractionLog}
-            >
-              <Download size={13} aria-hidden="true" />
-              <span>Export interaction log</span>
-              <small>direct edits</small>
-            </button>
-          </div>
-        </details>
-        <button
-          className="secondary topbar-action settings-action"
-          type="button"
-          title="Settings (Ctrl+,)"
-          aria-label="Open settings"
-          onClick={onOpenSettings}
-        >
-          <SettingsIcon size={14} aria-hidden="true" />
-          Settings
-        </button>
+                  <span>Export project</span>
+                  <small>complete .openzcad backup</small>
+                </button>
+              )}
+              {localOnlySourceCount > 0 ? (
+                <>
+                  <div className="topbar-menu-sep" />
+                  <button
+                    type="button"
+                    className="topbar-menu-item"
+                    title="Upload import sources that exist only on this device so other devices can rebuild this project"
+                    onClick={onArchiveLocalSources}
+                  >
+                    <Upload size={13} aria-hidden="true" />
+                    <span>
+                      Archive local sources
+                      <span className="topbar-menu-badge">
+                        {localOnlySourceCount} file
+                        {localOnlySourceCount === 1 ? '' : 's'}
+                      </span>
+                    </span>
+                    <small>
+                      {localOnlySourceCount === 1
+                        ? 'one import exists only on this device'
+                        : 'these imports exist only on this device'}
+                    </small>
+                  </button>
+                </>
+              ) : null}
+              <div className="topbar-menu-sep" />
+              <strong className="topbar-menu-label">
+                <Files size={12} aria-hidden="true" />
+                Stored files
+              </strong>
+              {artifacts.length === 0 ? (
+                <span className="topbar-menu-empty">
+                  No archived imports or exports yet.
+                </span>
+              ) : (
+                artifacts.map((artifact) => (
+                  <a
+                    key={artifact.artifactId}
+                    className="topbar-menu-item"
+                    href={`/api/artifacts/${artifact.artifactId}/download`}
+                    download={artifact.name}
+                    onClick={
+                      onDownloadArtifact
+                        ? (event) => {
+                            event.preventDefault();
+                            onDownloadArtifact(artifact);
+                          }
+                        : undefined
+                    }
+                  >
+                    <Download size={13} aria-hidden="true" />
+                    <span>{artifact.name}</span>
+                    <small>
+                      {artifact.bytes === undefined
+                        ? artifact.kind
+                        : `${artifact.kind} · ${Math.max(1, Math.round(artifact.bytes / 1024))} KB`}
+                    </small>
+                  </a>
+                ))
+              )}
+              <div className="topbar-menu-sep" />
+              <strong className="topbar-menu-label">Troubleshooting</strong>
+              <button
+                type="button"
+                className="topbar-menu-item"
+                title="Export a sanitized feature-history snapshot for troubleshooting"
+                onClick={onExportDiagnostics}
+              >
+                <Download size={13} aria-hidden="true" />
+                <span>Export diagnostics</span>
+                <small>sanitized JSON</small>
+              </button>
+              <button
+                type="button"
+                className="topbar-menu-item"
+                title="Export the on-device log of direct-edit attempts and refusals for troubleshooting"
+                onClick={onExportInteractionLog}
+              >
+                <Download size={13} aria-hidden="true" />
+                <span>Export interaction log</span>
+                <small>direct edits</small>
+              </button>
+            </div>
+          </details>
+          <button
+            className="secondary topbar-action settings-action"
+            type="button"
+            title="Settings (Ctrl+,)"
+            aria-label="Open settings"
+            onClick={onOpenSettings}
+          >
+            <SettingsIcon size={14} aria-hidden="true" />
+            Settings
+          </button>
+        </div>
       </div>
     </header>
   );
