@@ -1,4 +1,51 @@
+import type { Page } from '@playwright/test';
 import { expect, stubApi, test } from './openzcad-fixtures';
+
+/**
+ * The Undo toast, the status toast and the dock share one lane. Each used to
+ * carry a fixed offset of its own, so the Undo toast was drawn over the
+ * status toast ("Deleted … Undo" across "Measuring … as stale") and over the
+ * dock's top edge. Every visible notice now has pixels of its own.
+ */
+async function expectNoticeLaneClear(page: Page) {
+  const lane = await page.evaluate(async () => {
+    const selectors = ['.toast', '.workspace-toast', '.workspace-toast-body'];
+    // Past the pop-in and the status fade: the pop-in's transform nudges the
+    // toast's box while it runs.
+    await Promise.all(
+      selectors
+        .flatMap((selector) => [...document.querySelectorAll(selector)])
+        .flatMap((element) => element.getAnimations())
+        .map((animation) => animation.finished)
+    );
+    const box = (selector: string) => {
+      const element = document.querySelector(selector);
+      if (!element) return null;
+      for (
+        let node: Element | null = element;
+        node;
+        node = node.parentElement
+      ) {
+        if (Number(getComputedStyle(node).opacity) === 0) return null;
+      }
+      const { top, bottom } = element.getBoundingClientRect();
+      return { top, bottom };
+    };
+    return {
+      toast: box('.toast'),
+      status: box('.workspace-toast-body'),
+      dock: box('.viewport-dock')
+    };
+  });
+  expect(lane.toast).not.toBeNull();
+  expect(lane.dock).not.toBeNull();
+  expect(lane.toast!.bottom).toBeLessThanOrEqual(lane.dock!.top);
+  if (lane.status) {
+    // A running or warning status keeps its own row under the toast; a
+    // settled one steps aside rather than repeat it.
+    expect(lane.toast!.bottom).toBeLessThanOrEqual(lane.status.top);
+  }
+}
 
 /**
  * Deleting a feature from its history row used to be instant, silent and
@@ -47,6 +94,7 @@ test('deleting a history feature raises an undoable toast that counts its depend
   );
   expect(count).toBeGreaterThanOrEqual(4);
   await expect(summary.getByLabel(/ · 16 features · /)).toBeVisible();
+  await expectNoticeLaneClear(page);
 
   await toast.getByRole('button', { name: 'Undo' }).click();
   await expect(toast).toHaveCount(0);

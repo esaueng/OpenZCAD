@@ -1085,7 +1085,9 @@ function importedFaceDistanceCandidates(
         bindOrder: -1,
         bind: (parameterNames) => ({
           kind: 'add_direct_edit',
-          name: `Parameterize ${body.name} ${dimensionBaseName(pair.normal, rank)}`,
+          // The bound name, not the base: a second `depth_y` binds
+          // `depth_y_2`, and History should say so.
+          name: `Parameterize ${body.name} ${parameterNames.get('distance')!}`,
           targetBodyId: bodyId,
           operation: {
             kind: 'set-face-distance',

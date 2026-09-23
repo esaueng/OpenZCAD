@@ -445,13 +445,13 @@
   white-space: nowrap;
 }
 
-/* Transient notice above the selection chip: one at a time, short-lived,
-   raised only by actions the viewport itself does not show the result of
-   (a delete, an export). It sits in the viewer area rather than the shell so
-   it clears the shell's overflow clip. */
+/* Transient notice at the top of the notice lane (workspace-column.css):
+   one at a time, short-lived, raised only by actions the viewport itself does
+   not show the result of (a delete, an export). It sits in the viewer area
+   rather than the shell so it clears the shell's overflow clip. */
 .toast {
   position: absolute;
-  bottom: 48px;
+  bottom: calc(58px + var(--lane-chip, 0px) + var(--lane-status, 0px));
   left: 50%;
   transform: translateX(-50%);
   z-index: calc(var(--z-inspector-float) + 1);

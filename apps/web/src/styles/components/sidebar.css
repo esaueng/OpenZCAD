@@ -90,14 +90,20 @@
 .param-row,
 .param-add {
   display: grid;
-  /* name · expression · value · curation toggle · delete */
-  grid-template-columns: minmax(0, 1fr) 76px minmax(0, max-content) 20px 20px;
+  /* name · expression · value · curation toggle · delete. The expression
+     track is 64px: at 76px a 290px column left an auto-parameterized
+     `root_fillet_1_radius` 9px short, while the values it holds (87, 15.5)
+     used a third of the box. A longer expression scrolls in place. */
+  grid-template-columns: minmax(0, 1fr) 64px minmax(0, max-content) 20px 20px;
   align-items: center;
   gap: 6px;
 }
 
+/* The expression track is wider than a row's: 76px clipped its own
+   "expression" placeholder to "expressio", and it is where a new
+   expression is typed from scratch. */
 .param-add {
-  grid-template-columns: minmax(0, 1fr) 76px 28px;
+  grid-template-columns: minmax(0, 1fr) 96px 28px;
   margin-top: 4px;
 }
 
@@ -134,15 +140,18 @@
   text-overflow: ellipsis;
 }
 
+/* The rename pencil only takes room while it shows. Held open at opacity 0
+   it cost every name 15px of a narrow track, so an auto-parameterized
+   `root_fillet_1_radius` read "root_fillet_1_radi…" at rest. */
 .param-name-button svg {
+  display: none;
   flex: 0 0 auto;
   color: var(--color-text-subtle);
-  opacity: 0;
 }
 
 .param-name-button:hover svg,
 .param-name-button:focus-visible svg {
-  opacity: 1;
+  display: block;
 }
 
 .param-name-editor {
