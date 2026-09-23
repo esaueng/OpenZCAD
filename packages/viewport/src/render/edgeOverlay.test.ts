@@ -105,13 +105,17 @@ describe('BodyEdgeOverlay', () => {
         bodyId: BODY_ID,
         topologyId: 'edge-a',
         hash: 11,
-        reference: EDGE_REFERENCE
+        reference: EDGE_REFERENCE,
+        // Carried for picking: an inside-corner edge wins a click on the face
+        // it bounds only if the batch knows which faces those are.
+        adjacentFaceHashes: [101]
       },
       {
         bodyId: BODY_ID,
         topologyId: 'edge-a',
         hash: 11,
-        reference: EDGE_REFERENCE
+        reference: EDGE_REFERENCE,
+        adjacentFaceHashes: [101]
       },
       { bodyId: BODY_ID, topologyId: 'edge-b', hash: 13 }
     ]);

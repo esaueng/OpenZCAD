@@ -32,6 +32,8 @@ export interface EdgeSegmentOwner {
   topologyId: string;
   hash: number;
   reference?: EdgeTopologyReferenceV5;
+  /** The kernel's `EdgeTopology.adjacentFaceHashes`, when it published them. */
+  adjacentFaceHashes?: readonly number[];
 }
 
 interface EdgeEntry {
@@ -282,7 +284,10 @@ export class BodyEdgeOverlay extends THREE.Group {
         bodyId: body.bodyId,
         topologyId: edge.topologyId,
         hash: edge.hash,
-        ...(edge.reference ? { reference: edge.reference } : {})
+        ...(edge.reference ? { reference: edge.reference } : {}),
+        ...(edge.adjacentFaceHashes
+          ? { adjacentFaceHashes: edge.adjacentFaceHashes }
+          : {})
       };
       const positions = segmentsFromPolyline(edge.points);
       if (positions.length === 0) {
