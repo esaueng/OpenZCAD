@@ -230,7 +230,9 @@ test('the viewport scale indicator tracks zoom in document units', async ({
   const canvas = page.locator('.viewer-host canvas');
   await expect(canvas).toHaveAttribute('data-e2e-camera-distance', /.+/);
   const initialLabel = await indicator.textContent();
-  const dock = page.locator('.viewport-dock');
+  // The scale bar resizes with zoom; nothing around it may move. It sits
+  // beside the cube now, and the readout's controls are the nearest chrome.
+  const dock = page.locator('.viewport-readout');
   const control = dock.getByRole('button').first();
   const initialDock = await dock.boundingBox();
   const initialControl = await control.boundingBox();

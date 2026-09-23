@@ -248,20 +248,70 @@ export function TopBar({
           ? 'Signed out'
           : 'Unavailable';
 
+  const breadcrumb = (
+    <div className="breadcrumb">
+      {projectName ? (
+        editingProjectName && canRenameProject ? (
+          <input
+            ref={projectNameInputRef}
+            className="project-title-input"
+            value={projectNameDraft}
+            maxLength={200}
+            aria-label="Project name"
+            onChange={(event) => setProjectNameDraft(event.target.value)}
+            onBlur={commitProjectRename}
+            onKeyDown={(event) => {
+              if (event.key === 'Enter') {
+                event.preventDefault();
+                commitProjectRename();
+              } else if (event.key === 'Escape') {
+                event.preventDefault();
+                setProjectNameDraft(projectName);
+                setEditingProjectName(false);
+              }
+            }}
+          />
+        ) : canRenameProject ? (
+          <button
+            className="project-title-button"
+            type="button"
+            aria-label="Rename project"
+            title="Rename project"
+            onClick={beginProjectRename}
+          >
+            <strong>{projectName}</strong>
+            <Pencil size={11} aria-hidden="true" />
+          </button>
+        ) : (
+          <strong>{projectName}</strong>
+        )
+      ) : (
+        <strong>No project</strong>
+      )}
+      {projectName && <span className="mono">{units ?? ''}</span>}
+    </div>
+  );
+
   return (
     <header className="topbar">
-      <button
-        className="brand"
-        type="button"
-        onClick={onGoHome}
-        title="Back to projects"
-      >
-        <BrandMark compact />
-        OpenZCAD <span className="beta-tag">Beta</span>
-      </button>
-      <div className="topbar-divider" />
+      {/* Three islands over the stage: who and what (identity), the mode,
+          then the actions. The header itself is transparent and lets the
+          viewport show between them. */}
+      <div className="topbar-island topbar-identity">
+        <button
+          className="brand"
+          type="button"
+          onClick={onGoHome}
+          title="Back to projects"
+        >
+          <BrandMark compact />
+          OpenZCAD <span className="beta-tag">Beta</span>
+        </button>
+        <div className="topbar-divider" />
+        {breadcrumb}
+      </div>
       <div
-        className="mode-switch"
+        className="mode-switch topbar-island"
         data-active={workspaceMode}
         role="group"
         aria-label="Workspace mode"
@@ -292,50 +342,8 @@ export function TopBar({
           );
         })}
       </div>
-      <div className="topbar-divider" />
-      <div className="breadcrumb">
-        {projectName ? (
-          editingProjectName && canRenameProject ? (
-            <input
-              ref={projectNameInputRef}
-              className="project-title-input"
-              value={projectNameDraft}
-              maxLength={200}
-              aria-label="Project name"
-              onChange={(event) => setProjectNameDraft(event.target.value)}
-              onBlur={commitProjectRename}
-              onKeyDown={(event) => {
-                if (event.key === 'Enter') {
-                  event.preventDefault();
-                  commitProjectRename();
-                } else if (event.key === 'Escape') {
-                  event.preventDefault();
-                  setProjectNameDraft(projectName);
-                  setEditingProjectName(false);
-                }
-              }}
-            />
-          ) : canRenameProject ? (
-            <button
-              className="project-title-button"
-              type="button"
-              aria-label="Rename project"
-              title="Rename project"
-              onClick={beginProjectRename}
-            >
-              <strong>{projectName}</strong>
-              <Pencil size={11} aria-hidden="true" />
-            </button>
-          ) : (
-            <strong>{projectName}</strong>
-          )
-        ) : (
-          <strong>No project</strong>
-        )}
-        {projectName && <span className="mono">{units ?? ''}</span>}
-      </div>
       <div
-        className="topbar-actions"
+        className="topbar-actions topbar-island"
         role="group"
         aria-label="Workspace actions"
       >

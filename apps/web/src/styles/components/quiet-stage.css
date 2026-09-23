@@ -1,0 +1,371 @@
+/* ── Quiet stage (U04 slice 2): islands over the viewport ──
+   The viewport is the page. The top bar, the column, the instruments on the
+   right, the readout and the command bar all float over it as islands, each
+   --island-gap from the edges. This file only positions and frames regions
+   the files above build; it never hides one, so it can come last. ── */
+
+.workspace.column-layout {
+  /* Where the bottom and top lanes start and end: clear of the column on
+     the left and of the instrument rail on the right. */
+  --lane-inset: calc(var(--column-w) + var(--island-gap) * 2);
+  --lane-end: calc(var(--rail-w) + var(--island-gap) * 2);
+  /* The bottom lanes' right edge: symmetric with the left on a wide stage
+     so they stay centred, the window edge on a phone. */
+  --lane-right: var(--lane-inset);
+  /* The readout under the column, and what the column leaves it. */
+  --readout-h: 32px;
+}
+
+/* ── The top islands ─────────────────────────────────────── */
+
+/* The top bar leaves the page flow: the viewport reaches the window's top
+   edge and the bar's three islands float over it. */
+.app-shell {
+  position: relative;
+  grid-template-rows: minmax(0, 1fr);
+}
+
+.app-shell > .topbar {
+  position: absolute;
+  z-index: calc(var(--z-panel-resizer) + 1);
+  top: var(--island-gap);
+  left: var(--island-gap);
+  right: var(--island-gap);
+  height: var(--topbar-h);
+  /* Equal flanks keep the mode switch on the window's centre line. */
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto minmax(0, 1fr);
+  align-items: stretch;
+  gap: var(--sp-2);
+  padding: 0;
+  background: transparent;
+  border: 0;
+  pointer-events: none;
+}
+
+.topbar-island {
+  min-width: 0;
+  background: var(--color-surface);
+  border: var(--border-thin);
+  border-radius: var(--radius-lg);
+  box-shadow: var(--shadow-1);
+  pointer-events: auto;
+}
+
+.topbar-identity {
+  justify-self: start;
+  max-width: 100%;
+  display: flex;
+  align-items: center;
+  gap: var(--sp-3);
+  padding: 0 var(--sp-3) 0 var(--sp-2);
+}
+
+.topbar-identity .breadcrumb {
+  max-width: none;
+}
+
+.topbar > .mode-switch.topbar-island {
+  justify-self: center;
+  align-self: center;
+  padding: 3px;
+}
+
+/* The thumb rides inside the island's padding, one segment wide. */
+.topbar > .mode-switch.topbar-island::before {
+  inset: 3px auto 3px 3px;
+  width: calc((100% - 6px) / 3);
+}
+
+.topbar > .topbar-actions.topbar-island {
+  justify-self: end;
+  align-self: center;
+  margin-left: 0;
+  padding: 3px var(--sp-1);
+}
+
+/* ── The column ──────────────────────────────────────────── */
+
+.workspace-column-float {
+  top: var(--stage-top);
+  left: var(--island-gap);
+  bottom: var(--island-gap);
+  width: min(var(--column-w), calc(100% - var(--island-gap) * 2));
+}
+
+/* The readout sits under the column in the bottom-left corner. */
+.viewer-area:has(.viewport-readout) .workspace-column-float,
+.workspace.column-layout .viewer-area:has(.viewport-readout) .sidebar-resizer {
+  bottom: calc(var(--island-gap) * 2 + var(--readout-h));
+}
+
+/* The column, or Tweak's parameters panel in its slot, is an island. */
+.workspace-column,
+.workspace-column-float > .sidebar {
+  border: var(--border-thin);
+  border-radius: var(--radius-lg);
+  overflow: hidden;
+}
+
+.workspace.column-layout .sidebar-resizer {
+  top: var(--stage-top);
+  bottom: var(--island-gap);
+  left: calc(
+    var(--island-gap) + min(var(--column-w), calc(100% - var(--island-gap) * 2))
+  );
+}
+
+/* ── The instruments on the right ────────────────────────── */
+
+/* How you look at the model: the viewer bar as a vertical icon rail under
+   the top-right island. Its panels open to the left of it. */
+.instrument-rail {
+  position: absolute;
+  top: var(--stage-top);
+  right: var(--island-gap);
+  z-index: var(--z-viewer-overlay);
+}
+
+.instrument-rail .viewer-rail {
+  position: static;
+  width: var(--rail-w);
+  align-items: center;
+  padding: 4px 0;
+  border-radius: var(--radius-lg);
+  box-shadow: var(--shadow-1);
+  transform: none;
+}
+
+.instrument-rail .rail-button {
+  width: 30px;
+  height: 30px;
+}
+
+.instrument-rail .rail-divider {
+  width: 22px;
+}
+
+.instrument-rail .rail-section-panel {
+  top: 0;
+  bottom: auto;
+  left: auto;
+  right: calc(100% + 10px);
+  transform: none;
+}
+
+.instrument-rail .rail-views-panel {
+  top: -4px;
+  bottom: auto;
+  right: calc(100% + 10px);
+}
+
+/* The inspector opens beside the rail rather than over it. */
+.workspace.column-layout .inspector-float {
+  top: var(--stage-top);
+  right: var(--lane-end);
+  bottom: var(--island-gap);
+}
+
+/* ── The bottom-left readout and the corner ──────────────── */
+
+.viewport-readout {
+  position: absolute;
+  left: var(--island-gap);
+  bottom: var(--island-gap);
+  z-index: var(--z-viewer-overlay);
+  width: min(var(--column-w), calc(100% - var(--island-gap) * 2));
+  height: var(--readout-h);
+  box-sizing: border-box;
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: 0 4px;
+  background: var(--color-surface);
+  border: var(--border-thin);
+  border-radius: var(--radius-lg);
+  box-shadow: var(--shadow-1);
+}
+
+.viewport-readout > .viewport-dock-divider {
+  display: none;
+}
+
+.viewport-readout .viewport-dock-filter,
+.viewport-readout .viewport-dock-snap {
+  height: 24px;
+}
+
+.viewport-readout .viewport-dock-log {
+  margin-left: auto;
+}
+
+/* The scale bar reads beside the orientation cube, bottom-right. */
+.workspace.column-layout .viewport-scale-indicator {
+  left: auto;
+  right: calc(var(--island-gap) + 144px);
+  bottom: calc(var(--island-gap) + 4px);
+}
+
+/* ── The bottom lane: guidance, then search ──────────────── */
+
+.command-bar-lane {
+  position: absolute;
+  left: var(--lane-inset);
+  right: var(--lane-right);
+  bottom: var(--island-gap);
+  z-index: var(--z-viewer-overlay);
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 8px;
+  pointer-events: none;
+}
+
+.command-bar {
+  width: min(440px, 100%);
+  height: var(--command-bar-h);
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 0 6px 0 12px;
+  color: var(--color-text-subtle);
+  background: var(--color-surface);
+  border: var(--border-thin);
+  border-radius: var(--radius-lg);
+  box-shadow: var(--shadow-2);
+  font-size: var(--fs-base);
+  pointer-events: auto;
+  transition:
+    border-color var(--dur-fast) var(--ease-out),
+    color var(--dur-fast) var(--ease-out);
+}
+
+.command-bar > span {
+  flex: 1;
+  min-width: 0;
+  overflow: hidden;
+  text-align: left;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.command-bar:hover {
+  color: var(--color-text-muted);
+  border-color: var(--color-border-strong);
+}
+
+.workspace-hint {
+  max-width: min(560px, 100%);
+  margin: 0;
+  padding: 4px 10px;
+  overflow: hidden;
+  color: var(--color-text-muted);
+  background: color-mix(in srgb, var(--color-bg) 78%, transparent);
+  border-radius: var(--radius-md);
+  font-size: var(--fs-xs);
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+/* The chip names the selection where the hint would be; it wins. */
+.viewer-area:has(.selection-chip) .workspace-hint {
+  display: none;
+}
+
+/* The toast, the selection chip and the activity pill stand on the bar. */
+.workspace-toast,
+.activity-lane {
+  left: var(--lane-inset);
+  right: var(--lane-right);
+  bottom: calc(var(--island-gap) + var(--command-bar-h) + 8px);
+}
+
+.workspace.column-layout .selection-chip {
+  bottom: calc(var(--island-gap) + var(--command-bar-h) + 8px);
+}
+
+.workspace.column-layout .viewer-area:has(.selection-chip) .workspace-toast,
+.workspace.column-layout .viewer-area:has(.selection-chip) .activity-lane {
+  bottom: calc(var(--island-gap) + var(--command-bar-h) + 44px);
+}
+
+.workspace.column-layout .toast {
+  bottom: calc(var(--island-gap) + var(--command-bar-h) + 44px);
+}
+
+/* ── Floating cards under the top islands ────────────────── */
+
+.workspace.column-layout .tool-card {
+  --tool-card-room: calc(100% - var(--lane-inset) - var(--lane-end));
+  top: var(--stage-top);
+  left: calc(var(--lane-inset) + var(--tool-card-room) / 2);
+}
+
+.workspace.column-layout .viewer-area.has-inspector .tool-card {
+  --tool-card-room: calc(
+    100% - var(--lane-inset) - var(--lane-end) - var(--context-w) -
+      var(--island-gap)
+  );
+}
+
+.workspace.column-layout .sketch-entity-dock {
+  top: var(--stage-top);
+  right: var(--lane-end);
+}
+
+.workspace.column-layout .sketch-grid-indicator {
+  left: var(--lane-inset);
+  bottom: var(--island-gap);
+}
+
+.workspace-tour {
+  left: var(--lane-inset);
+}
+
+/* Everything that floats in the palette slot (direct-mode strips such as
+   the plane picker, and View's bar) starts under the top islands, as do the
+   parts rail and the measurement dock. */
+.workspace.column-layout .palette-float,
+.workspace.column-layout .palette-float:has(.view-mode-bar) {
+  top: var(--stage-top);
+}
+
+.view-mode-rail,
+.view-mode-rail-launcher {
+  top: var(--stage-top);
+  left: var(--island-gap);
+}
+
+.measurement-dock {
+  top: var(--stage-top);
+  right: var(--island-gap);
+}
+
+/* ── Narrow windows ──────────────────────────────────────── */
+
+/* Content-sized flanks: equal ones overran the action icons into the mode
+   switch once the window was too narrow to centre it. */
+@media (max-width: 620px) {
+  .app-shell > .topbar {
+    grid-template-columns: minmax(0, 1fr) auto auto;
+    gap: var(--sp-1);
+  }
+}
+
+/* A phone keeps the column over the left edge, so the bottom lanes run from
+   the column to the window's right edge; the scale bar is the first thing to
+   go and the cube steps up above the search bar. */
+@media (max-width: 520px) {
+  .workspace.column-layout {
+    --lane-right: var(--island-gap);
+  }
+
+  .workspace.column-layout .viewport-scale-indicator {
+    display: none;
+  }
+
+  .workspace.column-layout .viewer-rail-stack,
+  .workspace.column-layout .viewer-area.has-inspector .viewer-rail-stack {
+    bottom: calc(var(--island-gap) * 2 + var(--command-bar-h));
+  }
+}

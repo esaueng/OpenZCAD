@@ -51,7 +51,6 @@ import {
   PenLine,
   Move3d,
   Save,
-  Search,
   Settings as SettingsIcon,
   Scissors,
   SlidersHorizontal,
@@ -434,7 +433,6 @@ import {
   resolveFilletBlendFace,
   resolveImportedBlendFace
 } from './lib/interaction/filletFaceEdit';
-import { Tooltip } from './components/Tooltip';
 import { ToastHost } from './components/Toast';
 import { commandPaletteShortcut } from './lib/platformShortcut';
 import { retireStatus, type StatusEntry } from './lib/statusLifetime';
@@ -16224,24 +16222,7 @@ export function App() {
           Finish
         </button>
       </>
-    ) : (
-      <Tooltip
-        label="Search commands"
-        shortcut={commandPaletteKey.glyph}
-        description="Open the command palette"
-      >
-        <button
-          type="button"
-          className="workspace-column-search"
-          aria-label={`Search commands (${commandPaletteKey.accessible})`}
-          onClick={() => setPaletteOpen(true)}
-        >
-          <Search size={14} aria-hidden="true" />
-          <span>Search commands</span>
-          <kbd>{commandPaletteKey.glyph}</kbd>
-        </button>
-      </Tooltip>
-    );
+    ) : null;
   // Direct-mode strips (plane picking, direct extrude) keep floating over
   // the viewport; the column shows the palette so the tool can be changed.
   const columnTools =
@@ -17670,6 +17651,8 @@ export function App() {
             warningCount={diagnostics.length}
             documentVersion={doc.version}
             saveState={presentedSaveState}
+            onOpenSearch={() => setPaletteOpen(true)}
+            searchKey={commandPaletteKey}
           />
           <StatusActivityLog
             id={activityLogId}
