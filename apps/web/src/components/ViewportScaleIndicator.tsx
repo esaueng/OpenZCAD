@@ -29,9 +29,9 @@ function drawRule(canvas: HTMLCanvasElement, widthPx: number) {
   context.clearRect(0, 0, cssWidth, BAR_HEIGHT_PX);
 
   const styles = window.getComputedStyle(canvas);
-  const primary = cssColor(styles, '--color-text', '#e6edf3');
-  const secondary = cssColor(styles, '--color-text-muted', '#8b949e');
-  const accent = cssColor(styles, '--color-accent', '#4da3ff');
+  const primary = cssColor(styles, '--color-text', '#ebedef');
+  const secondary = cssColor(styles, '--color-text-muted', '#9ba2ab');
+  const accent = cssColor(styles, '--color-accent', '#6798ff');
   const left = 1;
   const right = Math.max(cssWidth - 1, left);
   const baselineY = 16;

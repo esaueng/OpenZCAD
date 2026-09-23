@@ -147,7 +147,7 @@ export function buildSketchDimensions(
     );
   for (const annotation of annotations) {
     if (annotation.span) {
-      const graphic = createDimensionGraphic({ color: 0x7cc0ff });
+      const graphic = createDimensionGraphic({ color: 0x81a9ff });
       const start = world(annotation.span.start);
       const end = world(annotation.span.end);
       graphic.update(start, end, 1);
@@ -156,7 +156,7 @@ export function buildSketchDimensions(
     }
     for (const points of annotation.lines) {
       const line = createFatLine(points.map(world), {
-        color: 0x7cc0ff,
+        color: 0x81a9ff,
         linewidth: 1.5,
         depthTest: false,
         resolution

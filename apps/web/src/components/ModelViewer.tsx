@@ -1205,8 +1205,8 @@ const E2E_CANVAS_HOOKS_ENABLED =
       VITE_E2E?: string;
     }
   ).VITE_E2E === '1';
-const SKETCH_COLOR = 0x4da3ff;
-const SKETCH_SELECTED_COLOR = 0x9ecbff;
+const SKETCH_COLOR = 0x6798ff;
+const SKETCH_SELECTED_COLOR = 0x9eb8ff;
 /**
  * Screen-space widths in CSS pixels for the non-body polylines. Native WebGL
  * lines were locked to one device pixel; a hair over one CSS pixel keeps the
@@ -1636,7 +1636,7 @@ export function ModelViewer({
     const scene = new THREE.Scene();
     // Solid clear colour stays behind the clip-space gradient as a safe first
     // frame/context-recovery fallback.
-    scene.background = new THREE.Color('#05070a');
+    scene.background = new THREE.Color('#0b0c0f');
     const gradientBackdrop = createGradientBackdrop();
     scene.add(gradientBackdrop);
 
@@ -7523,8 +7523,8 @@ export function ModelViewer({
       const color = stale
         ? 0xf59e0b
         : annotation.selected
-          ? 0x9bd3ff
-          : 0x7cc0ff;
+          ? 0x9eb8ff
+          : 0x81a9ff;
       // A measured span is drawn as a drawing's dimension rather than as a
       // bare line: witness ticks stand it off the geometry, and the arrowheads
       // say which two points the number is between. Angle arms are not a span,
@@ -7918,7 +7918,7 @@ export function ModelViewer({
                 lineEnd.z
               ]);
               const dimensionMaterial = createFatLineMaterial({
-                color: 0x7cc0ff,
+                color: 0x81a9ff,
                 linewidth: 1.5,
                 opacity: 0.48,
                 depthTest: false,
@@ -8658,7 +8658,7 @@ export function ModelViewer({
               )
           );
           const boundary = createFatLine(points, {
-            color: 0x79b8ff,
+            color: 0x7aa0ff,
             linewidth: 1.6,
             opacity: 0.72,
             closed: true,
@@ -9302,7 +9302,7 @@ export function ModelViewer({
       const profileFill = new THREE.Mesh(
         profileGeometry,
         new THREE.MeshBasicMaterial({
-          color: sketch.selected ? 0x4da3ff : 0x2f6ea8,
+          color: sketch.selected ? 0x6798ff : 0x2f4fa8,
           transparent: true,
           opacity: sketch.selected ? 0.3 : 0.1,
           side: THREE.DoubleSide,
