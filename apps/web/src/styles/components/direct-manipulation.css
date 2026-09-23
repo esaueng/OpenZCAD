@@ -147,7 +147,7 @@
   color: var(--color-text-muted);
   background: rgba(255, 255, 255, 0.05);
   border: 1px solid var(--color-border);
-  border-radius: 999px;
+  border-radius: var(--radius-md);
 }
 
 .tool-card-phase.pill-dragging,
@@ -159,8 +159,8 @@
 
 .tool-card-phase.pill-validating {
   color: var(--color-preview);
-  background: rgba(88, 214, 194, 0.1);
-  border-color: rgba(88, 214, 194, 0.4);
+  background: rgba(72, 205, 143, 0.1);
+  border-color: rgba(72, 205, 143, 0.4);
 }
 
 .tool-card-phase.pill-failed {
@@ -215,7 +215,7 @@
   color: var(--color-preview);
   background: color-mix(in srgb, var(--color-preview) 10%, transparent);
   border: 1px solid color-mix(in srgb, var(--color-preview) 45%, transparent);
-  border-radius: 999px;
+  border-radius: var(--radius-md);
   cursor: help;
 }
 
@@ -339,8 +339,8 @@
   position: absolute;
   z-index: calc(var(--z-viewer-overlay) + 1);
   padding: 2px 7px;
-  color: #eaf4ff;
-  background: rgba(8, 18, 30, 0.8);
+  color: #eaf1ff;
+  background: rgba(16, 19, 22, 0.8);
   border: 1px solid
     color-mix(in srgb, var(--color-accent-border) 70%, transparent);
   border-radius: var(--radius-sm);
@@ -366,7 +366,7 @@
 
 .handle-value-chip:hover {
   border-color: var(--color-accent-hi);
-  background: rgba(14, 30, 48, 0.98);
+  background: rgba(26, 30, 36, 0.98);
 }
 
 /* The number carries the weight; the prefix and units step back. */
@@ -386,23 +386,23 @@
 /* Nothing has moved and no hand is on the handle: the chip is only a tap
    target for exact entry, so it recedes rather than announcing "+0". */
 .handle-value-chip[data-engaged='false'] {
-  color: #c9d6e4;
-  background: rgba(8, 18, 30, 0.55);
+  color: #c9d2e4;
+  background: rgba(16, 19, 22, 0.55);
   border-color: color-mix(in srgb, var(--color-accent-border) 45%, transparent);
   box-shadow: none;
 }
 
 .handle-value-chip[data-engaged='false']:hover {
-  color: #eaf4ff;
-  background: rgba(14, 30, 48, 0.95);
+  color: #eaf1ff;
+  background: rgba(26, 30, 36, 0.95);
   border-color: var(--color-accent-hi);
 }
 
 /* The kernel stopped keeping up: the number is still live, the shape is not. */
 .handle-value-chip[data-state='deferred'] {
-  color: #dbe7f5;
-  border-color: color-mix(in srgb, var(--color-accent-border) 60%, #3d4a5c);
-  background: rgba(12, 20, 30, 0.96);
+  color: #dbe3f5;
+  border-color: color-mix(in srgb, var(--color-accent-border) 60%, #404b59);
+  background: rgba(18, 21, 24, 0.96);
 }
 
 /* A quiet activity dot communicates that exact geometry is catching up
@@ -417,7 +417,7 @@
   height: 7px;
   border-radius: 999px;
   background: var(--color-accent-hi);
-  box-shadow: 0 0 0 3px rgba(12, 20, 30, 0.96);
+  box-shadow: 0 0 0 3px rgba(18, 21, 24, 0.96);
   transform: translateY(-50%);
   animation: preview-catching-up 900ms ease-in-out infinite alternate;
 }
@@ -434,7 +434,7 @@
 
 .handle-value-chip[data-state='warning'] {
   color: #fff4dc;
-  background: color-mix(in srgb, var(--color-warning) 18%, #08121e);
+  background: color-mix(in srgb, var(--color-warning) 18%, #101316);
   border-color: var(--color-warning);
   box-shadow:
     0 0 0 1px color-mix(in srgb, var(--color-warning) 35%, transparent),
@@ -454,10 +454,10 @@
 .handle-value-chip[data-variant='line'],
 .handle-label-chip[data-variant='line'] {
   padding: 2px 8px;
-  color: #14202e;
+  color: #1c2026;
   background: rgba(252, 253, 255, 0.98);
   border: 1.5px solid var(--color-accent);
-  border-radius: 999px;
+  border-radius: var(--radius-md);
   box-shadow: 0 1px 4px rgba(0, 0, 0, 0.35);
   backdrop-filter: none;
   font-family: var(--font-ui);
@@ -473,7 +473,7 @@
 
 .handle-value-chip[data-variant='line']:hover,
 .handle-label-chip[data-variant='line']:hover {
-  color: #14202e;
+  color: #1c2026;
   background: #ffffff;
 }
 
@@ -483,13 +483,13 @@
 }
 
 .handle-value-chip[data-variant='line'][data-engaged='false'] {
-  color: #14202e;
+  color: #1c2026;
   background: rgba(252, 253, 255, 0.92);
   border-color: color-mix(in srgb, var(--color-accent) 60%, transparent);
 }
 
 .handle-value-chip[data-variant='line'][data-state='warning'] {
-  color: #14202e;
+  color: #1c2026;
   background: #fff4dc;
   border-color: var(--color-warning);
 }
@@ -497,10 +497,10 @@
 /* Dimension-line variant: a light pill centred on the radius callout line,
    styled like a drawing annotation rather than a dark tooltip. */
 .handle-value-chip[data-variant='dimension'] {
-  color: #14202e;
+  color: #1c2026;
   background: rgba(250, 252, 255, 0.97);
   border: 1.5px solid var(--color-accent-hi);
-  border-radius: 999px;
+  border-radius: var(--radius-md);
   font-weight: 600;
   transform: translate(4px, -50%);
 }
@@ -538,7 +538,7 @@
   color: var(--color-text);
   background: var(--color-surface-2);
   border: 1px solid var(--color-accent-border);
-  border-radius: 999px;
+  border-radius: var(--radius-md);
   box-shadow: 0 8px 22px rgba(0, 0, 0, 0.35);
   font-family: var(--font-mono);
   font-size: var(--fs-xs);
@@ -684,7 +684,7 @@
 .keypad-commit {
   grid-column: span 3;
   padding: 7px 0;
-  color: #08121e;
+  color: #101316;
   font-size: var(--fs-sm);
   font-weight: 600;
   background: var(--color-accent);
@@ -751,8 +751,8 @@
   padding: 2px 5px;
   color: var(--color-viewport-text);
   content: attr(data-label);
-  background: rgba(12, 17, 23, 0.9);
-  border: 1px solid rgba(125, 211, 252, 0.34);
+  background: rgba(15, 17, 20, 0.9);
+  border: 1px solid rgba(125, 165, 252, 0.34);
   border-radius: 3px;
   font-family: var(--font-ui);
   font-size: var(--fs-mini);
@@ -770,16 +770,16 @@
 /* Center discovery appears before the snap engages. HUD axes remain legible
    over the adaptive grid while the matching WebGL guides stay plane-exact. */
 .sketch-center-target {
-  --sketch-center-guide: rgba(125, 211, 252, 0.88);
+  --sketch-center-guide: rgba(125, 165, 252, 0.88);
   position: absolute;
   z-index: calc(var(--z-viewer-overlay) + 1);
   width: 28px;
   height: 28px;
-  border: 1px solid rgba(125, 211, 252, 0.8);
+  border: 1px solid rgba(125, 165, 252, 0.8);
   border-radius: 50%;
   box-shadow:
-    0 0 0 4px rgba(125, 211, 252, 0.1),
-    0 0 18px rgba(125, 211, 252, 0.34);
+    0 0 0 4px rgba(125, 165, 252, 0.1),
+    0 0 18px rgba(125, 165, 252, 0.34);
   transform: translate(-50%, -50%);
   animation: sketch-center-breathe 900ms ease-in-out infinite alternate;
   pointer-events: none;
@@ -791,7 +791,7 @@
   left: 50%;
   display: block;
   opacity: 0.82;
-  filter: drop-shadow(0 0 3px rgba(125, 211, 252, 0.62));
+  filter: drop-shadow(0 0 3px rgba(125, 165, 252, 0.62));
   pointer-events: none;
 }
 
@@ -825,8 +825,8 @@
   top: 50%;
   left: 50%;
   content: '';
-  background: #b9e7ff;
-  box-shadow: 0 0 6px rgba(125, 211, 252, 0.85);
+  background: #b9cfff;
+  box-shadow: 0 0 6px rgba(125, 165, 252, 0.85);
   transform: translate(-50%, -50%);
 }
 
@@ -841,19 +841,19 @@
 }
 
 .sketch-center-target[data-engaged='true'] {
-  --sketch-center-guide: rgba(134, 239, 172, 0.94);
-  border-color: #86efac;
+  --sketch-center-guide: rgba(134, 239, 190, 0.94);
+  border-color: #86efbe;
   box-shadow:
-    0 0 0 5px rgba(74, 222, 128, 0.14),
-    0 0 22px rgba(74, 222, 128, 0.5);
+    0 0 0 5px rgba(74, 222, 153, 0.14),
+    0 0 22px rgba(74, 222, 153, 0.5);
   animation-name: sketch-center-lock;
   animation-duration: 440ms;
 }
 
 .sketch-center-target[data-engaged='true']::before,
 .sketch-center-target[data-engaged='true']::after {
-  background: #bbf7d0;
-  box-shadow: 0 0 7px rgba(74, 222, 128, 0.9);
+  background: #bbf7db;
+  box-shadow: 0 0 7px rgba(74, 222, 153, 0.9);
 }
 
 @keyframes sketch-center-breathe {
@@ -902,7 +902,7 @@
   z-index: calc(var(--z-viewer-overlay) + 1);
   padding: 4px 7px;
   color: var(--color-viewport-text-muted);
-  background: rgba(12, 17, 23, 0.82);
+  background: rgba(15, 17, 20, 0.82);
   border: 1px solid var(--color-viewport-border);
   border-radius: var(--radius-sm);
   font-family: var(--font-mono);
@@ -955,7 +955,7 @@
 .sketch-rail .sketch-solve-pill {
   padding: 3px 8px;
   border: 1px solid var(--color-border-strong);
-  border-radius: 999px;
+  border-radius: var(--radius-md);
   font-size: var(--fs-xs);
   white-space: nowrap;
   color: var(--color-text-dim);
@@ -1464,7 +1464,7 @@
 }
 
 .sketch-plane-buttons button:hover {
-  background: rgba(77, 163, 255, 0.22);
+  background: rgba(103, 152, 255, 0.22);
 }
 
 /*
@@ -1500,7 +1500,7 @@
   font-size: var(--fs-xs);
   background: var(--color-surface-2);
   border: 1px solid var(--color-accent-border);
-  border-radius: 999px;
+  border-radius: var(--radius-md);
   box-shadow: 0 12px 30px rgba(0, 0, 0, 0.4);
   transform: translateX(-50%);
   cursor: pointer;

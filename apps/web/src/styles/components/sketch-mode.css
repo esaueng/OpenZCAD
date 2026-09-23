@@ -9,7 +9,7 @@
   inset: 0;
   z-index: calc(var(--z-viewer-overlay) + 2);
   overflow: hidden;
-  background: #090b0e;
+  background: #0a0b0d;
 }
 
 .sketch-canvas {
@@ -93,7 +93,7 @@
   display: grid;
   gap: 3px;
   padding: 6px;
-  background: rgba(22, 24, 28, 0.94);
+  background: rgba(22, 25, 28, 0.94);
   border: var(--border-thin);
   border-radius: var(--radius-lg);
   box-shadow: 0 14px 34px rgba(0, 0, 0, 0.3);
@@ -143,7 +143,7 @@
   width: 238px;
   padding: 10px;
   color: var(--color-text-muted);
-  background: rgba(22, 24, 28, 0.94);
+  background: rgba(22, 25, 28, 0.94);
   border: var(--border-thin);
   border-radius: var(--radius-lg);
   box-shadow: 0 14px 34px rgba(0, 0, 0, 0.3);
@@ -280,7 +280,7 @@
   min-width: 370px;
   padding: 7px 8px 7px 10px;
   color: var(--color-viewport-text);
-  background: rgba(17, 24, 33, 0.95);
+  background: rgba(21, 24, 29, 0.95);
   border: 1px solid var(--color-accent-border);
   border-radius: var(--radius-lg);
   box-shadow: 0 12px 30px rgba(0, 0, 0, 0.34);
@@ -293,9 +293,9 @@
   height: 25px;
   display: grid;
   place-items: center;
-  color: #dff9e8;
-  background: rgba(34, 197, 94, 0.18);
-  border: 1px solid rgba(34, 197, 94, 0.38);
+  color: #dff9ed;
+  background: rgba(72, 205, 143, 0.18);
+  border: 1px solid rgba(72, 205, 143, 0.38);
   border-radius: 50%;
 }
 
@@ -370,7 +370,7 @@
   width: 250px;
   padding: 12px;
   color: var(--color-viewport-text-muted);
-  background: rgba(17, 24, 33, 0.95);
+  background: rgba(21, 24, 29, 0.95);
   border: 1px solid var(--color-viewport-border);
   border-radius: var(--radius-lg);
   box-shadow: 0 14px 34px rgba(0, 0, 0, 0.38);
@@ -516,9 +516,9 @@
 }
 
 .extrude-value-callout {
-  color: #e6f2ff;
-  background: rgba(8, 18, 30, 0.95);
-  border-color: rgba(124, 192, 255, 0.7);
+  color: #e6eeff;
+  background: rgba(16, 19, 22, 0.95);
+  border-color: rgba(129, 169, 255, 0.7);
 }
 
 .sketch-dimension-label {

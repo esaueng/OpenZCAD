@@ -428,7 +428,7 @@
   padding: 0 5px;
   color: var(--color-text-subtle);
   background: var(--color-surface-2);
-  border-radius: 999px;
+  border-radius: var(--radius-md);
   font-family: var(--font-mono);
   font-size: var(--fs-mini);
   font-variant-numeric: tabular-nums;
@@ -554,7 +554,7 @@
 .start-sync-track {
   display: flex;
   height: 4px;
-  border-radius: 999px;
+  border-radius: var(--radius-md);
   background: var(--color-surface-2);
   overflow: hidden;
 }

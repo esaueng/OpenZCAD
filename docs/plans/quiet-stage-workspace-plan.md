@@ -1,0 +1,111 @@
+# Quiet-stage workspace redesign (U04)
+
+Status: slice 1 in review; slices 2–7 open. Roadmap row: [U04](../../ROADMAP.md#u04).
+
+## Intent
+
+A full visual and layout redesign of the workspace, decided 2026-09-23 on a
+design canvas that walked the reference CAD's interaction model and then
+diverged from it. The model owns the screen. Four islands float over the
+viewport and only one of them changes with context:
+
+| Zone                     | Contents                                                                                                                                         | Changes with context? |
+| ------------------------ | ------------------------------------------------------------------------------------------------------------------------------------------------ | --------------------- |
+| Document (top)           | project name and save state · View / Tweak / Build · undo, export, share, account                                                                | no                    |
+| Verbs (left)             | one **command card**: a header naming the selection with a deselect control, then the commands that apply to it, one primary verb highlighted    | **yes**               |
+| Instruments (right)      | icon-only view controls (fit, display, section, measure, grid), then Items / History / Parameters, which open one drawer; view cube bottom-right | no                    |
+| Hint and search (bottom) | one line of guidance, then a ⌘K bar that searches commands, features and parameters and hands a question to the assistant                        | the hint text only    |
+
+While a command runs, the left card collapses to its header and an operation
+card (title, add/cut badge, sub-mode controls, Cancel, Apply) sits top-centre.
+Values ride the model at the point of action.
+
+## Decisions
+
+- **Palette A, "steel and cobalt".** Neutrals carry a faint steel tint
+  (hue 214). One signal colour, `#6798ff`, marks selection, handles and the
+  primary verb; it is deliberately the strongest hue on screen. Adds are
+  `#48cd8f`, cuts `#ff644d`, construction `#ef91ef` (moved off the signal hue
+  so a construction line never reads as a selection).
+- **Type:** Geist Sans 400/500/600 and Geist Mono 400/500, self-hosted like the
+  fonts they replace. Every number is monospaced.
+- **Corners:** near-square. Keys and chips 2px, controls 3px, panels 4px. Dots
+  and the marking-menu hub stay round.
+- **Sketch relations:** a fixed icon rail on the right in the order of
+  `CONSTRAINT_TOOL_SPECS`; icons never move, relations that do not fit the
+  selection grey out, and a name label appears only beside the ones that fit.
+- **History, Items, Parameters:** one drawer on the right, closed by default.
+- **Assistant:** merged into the ⌘K bar; the conversation grows up out of it.
+- **Face offset preview ("B refined"):** only the change is coloured. The moved
+  face is neutral with a signal outline; added material is a shaded green band
+  on the side walls with a crisp seam at the old level; a cut shows the removed
+  slab as a dashed coral outline and tints the newly exposed wall. The pin
+  stands on the outer end of the change, the white change arrow runs straight
+  beneath it on the same axis from a dashed ring at the old level, and the
+  `Offset ⌄` label sits beside the pin. Offset, not Total, is the default
+  reading here; Total stays in the tag menu.
+
+## Constraints every slice keeps
+
+- **Accessible names are the e2e contract.** The suite finds the shell by role
+  and name (`Workspace mode`, `Viewer bar`, `Box (B)`, `/^Fillet/`,
+  `Feature inspector`, `contentinfo`, `Workspace status`). A slice may move a
+  control; it keeps its name unless the slice updates every spec that uses it.
+- **The launcher chunk has a few hundred bytes of headroom.** New shell pieces
+  are `lazy()` unless they must paint on first frame; measure with
+  `pnpm build` (its bundle report is the gate), never a filtered build.
+- **Class coverage.** Every new class needs a rule or a reasoned allowance in
+  `scripts/check-css-classes.mjs`.
+- **No behaviour hides behind the redesign.** A slice that moves a command keeps
+  it reachable; the command card always ends in "All commands".
+
+## Slices
+
+Each slice is one PR against `main`, recorded on the U04 row when it merges.
+
+1. **Visual foundation.** Palette A tokens, Geist, the radius scale, the raw
+   colours in component CSS mapped onto palette A families, and the viewport's
+   blue family (selection, hover, handle, sketch, region, measurement) shifted
+   to cobalt with the stage moved to steel. No layout change.
+   Acceptance: theme contrast test passes in both themes; class coverage and
+   token-definition tests pass; e2e passes unchanged.
+2. **Shell islands.** Top bar becomes three islands; the viewer bar leaves the
+   bottom dock for a right-hand icon rail with the view cube bottom-right; the
+   bottom lane becomes the hint line and the ⌘K bar. Acceptance: names kept
+   (`Viewer bar`, `Undo`, `Redo`, `Selection filter`); the layout specs
+   (`viewport-overlay-lanes`, `settings` top-bar order, `viewport` dock) are
+   rewritten to the new regions, not deleted.
+3. **Command card.** Replaces the tool palette. Extends
+   `lib/interaction/capabilities.ts` to idle and body selections so one
+   function answers "what applies"; the header reuses `selectionSummary`.
+   Acceptance: each context (idle, body, face, edges) lists its commands with
+   the primary one marked; "All commands" reaches every tool by its current
+   name.
+4. **Right drawer.** Items (bodies), History and Parameters move from the left
+   column into one drawer. Acceptance: rollback, suppress, delete and
+   parameter editing unchanged; drawer state persists in panel state.
+5. **Search and ask.** ⌘K gains features and parameters as results and an
+   "Ask" row that submits to the assistant; the conversation surface anchors
+   to the bar. Acceptance: proposals still preview and apply through the same
+   validated path; ⌘J still opens the conversation.
+6. **Sketch card and relations rail.** Draw and modify tools in the left card,
+   Finish at its foot; the relations rail on the right. Acceptance: every
+   constraint kind reachable in rail order; greyed kinds carry the refusal
+   reason as their accessible description.
+7. **Face offset preview.** The B-refined preview in `packages/viewport`
+   (band, seam, cut ghost, in-line change arrow, beside-pin label).
+   Acceptance: add and cut previews match the design at 20 mm and 0.05 mm
+   scale bars in default, head-on and side views; the committed geometry is
+   unchanged.
+
+## Open questions
+
+- **Neutral solids.** The design shows committed bodies in neutral grey so the
+  signal colour carries selection. Body colours today are written into the
+  document at creation (`featureColor`), so changing the default is a
+  document-level decision, not a restyle. Not in any slice yet.
+- **Sketch Discard.** The design has Discard beside Finish. Each sketch entity
+  is committed as its own command, so there is no session to discard; slice 6
+  ships Finish only unless a rollback is designed.
+- **Band style.** Shaded (default in the design) or hatched for added and cut
+  material in slice 7.
