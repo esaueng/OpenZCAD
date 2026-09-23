@@ -641,12 +641,13 @@ function SketchWorkflow(props: ComponentProps<typeof LazySketchWorkflow>) {
     </Suspense>
   );
 }
-// The feature tools are the first thing the column shows, but their chunk
-// is small and fetched with the workspace: keeping the component out of the
-// entry chunk is what keeps that chunk under its budget.
-const LazyToolBar = lazyWithStaleChunkNotice(() =>
-  import('./components/ToolBar').then((module) => ({
-    default: module.ToolBar
+// The command card is the first thing the column shows, but its chunk is
+// small and fetched with the workspace: keeping the component (and the
+// selection-to-context rules it carries) out of the entry chunk is what
+// keeps that chunk under its budget.
+const LazyCommandCard = lazyWithStaleChunkNotice(() =>
+  import('./components/CommandCard').then((module) => ({
+    default: module.CommandCard
   }))
 );
 // The first-model tour shows once per device; nobody else pays for it.
@@ -787,10 +788,10 @@ function MeasurementDock(props: ComponentProps<typeof LazyMeasurementDock>) {
   );
 }
 
-function ToolBar(props: ComponentProps<typeof LazyToolBar>) {
+function CommandCard(props: ComponentProps<typeof LazyCommandCard>) {
   return (
     <Suspense fallback={null}>
-      <LazyToolBar {...props} />
+      <LazyCommandCard {...props} />
     </Suspense>
   );
 }
@@ -1002,7 +1003,6 @@ import {
   loadPanelState,
   savePanelState,
   toggleSidebarSection,
-  toggleToolGroup,
   type PanelState,
   type SidebarSectionId,
   type WorkspaceMode
@@ -16229,14 +16229,22 @@ export function App() {
     interaction.mode === 'sketch' ? (
       sketchRail
     ) : (
-      <ToolBar
+      <CommandCard
+        selection={{
+          edgeCount: selectedEdges.length,
+          faceSelected: renderedSelectedTopology?.kind === 'face',
+          bodyCount: selectedBodyIds.length,
+          regionCount: selectedProfiles.length
+        }}
+        summary={selectionSummary}
+        onClear={
+          selectionSummary || selectedProfiles.length > 0
+            ? clearSelection
+            : undefined
+        }
         activeTool={tool}
         availability={availability}
-        openGroups={panelState.toolGroups}
         onLaunchTool={launchTool}
-        onToggleGroup={(group) =>
-          setPanelState((current) => toggleToolGroup(current, group))
-        }
       />
     );
   return (

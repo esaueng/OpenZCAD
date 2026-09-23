@@ -1,6 +1,6 @@
 # Quiet-stage workspace redesign (U04)
 
-Status: slice 1 in review (#411); slice 2 in review; slices 3–7 open. Roadmap row: [U04](../../ROADMAP.md#u04).
+Status: slice 1 in review (#411); slice 2 in review (#412); slice 3 in review; slices 4–7 open. Roadmap row: [U04](../../ROADMAP.md#u04).
 
 ## Intent
 
@@ -84,7 +84,13 @@ Each slice is one PR against `main`, recorded on the U04 row when it merges.
    function answers "what applies"; the header reuses `selectionSummary`.
    Acceptance: each context (idle, body, face, edges) lists its commands with
    the primary one marked; "All commands" reaches every tool by its current
-   name.
+   name. As built: the rows are tools only. The face and edge verbs that act
+   on the pick itself (Offset Face, Adjust Radius, Edit Fillet…) stay in the
+   floating tool card, which already marks the preferred one, so no command
+   has two buttons; the face context therefore marks no primary of its own.
+   The context rules live in `lib/commandContext.ts` inside the lazy card, off
+   the entry chunk. The folds and `panelState.toolGroups` are no longer read;
+   removing the stored field is a follow-up.
 4. **Right drawer.** Items (bodies), History and Parameters move from the left
    column into one drawer. Acceptance: rollback, suppress, delete and
    parameter editing unchanged; drawer state persists in panel state.
