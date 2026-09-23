@@ -381,7 +381,6 @@
     bottom: calc(var(--island-gap) * 2 + var(--command-bar-h));
   }
 
-
   .workspace.column-layout .viewer-rail-stack,
   .workspace.column-layout .viewer-area.has-inspector .viewer-rail-stack {
     bottom: calc(var(--island-gap) * 2 + var(--command-bar-h));
@@ -557,4 +556,83 @@
 .command-icon svg {
   width: 16px;
   height: 16px;
+}
+
+/* ── The model drawer (U04 slice 4) ──────────────────────── */
+
+.workspace.column-layout {
+  --drawer-w: min(300px, 32vw);
+}
+
+/* The rail stacks its islands: the viewer bar, then the drawer's buttons. */
+.instrument-rail {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+/* Parameters, bodies and history float beside the rail, on demand. The
+   bottom-right corner stays the cube's and the scale's: the drawer stops
+   above that row so navigation is never under it. */
+.model-drawer-float {
+  position: absolute;
+  top: var(--stage-top);
+  right: var(--lane-end);
+  bottom: calc(var(--island-gap) * 2 + 96px);
+  z-index: var(--z-inspector-float);
+  width: var(--drawer-w);
+  display: flex;
+  pointer-events: none;
+}
+
+.model-drawer-float > .sidebar {
+  flex: 1;
+  min-width: 0;
+  overflow-y: auto;
+  background: var(--color-surface);
+  border: var(--border-thin);
+  border-radius: var(--radius-lg);
+  box-shadow: var(--shadow-2);
+  scrollbar-width: none;
+  pointer-events: auto;
+}
+
+.model-drawer-float > .sidebar::-webkit-scrollbar {
+  display: none;
+}
+
+/* With the browser in the drawer, the column is the command card alone and
+   hugs it, rather than running the height of the stage. */
+.viewer-area .workspace-column-float:not(:has(> .sidebar)) {
+  bottom: auto;
+  max-height: calc(
+    100% - var(--stage-top) - var(--island-gap) * 2 - var(--readout-h)
+  );
+}
+
+.workspace-column-float:not(:has(> .sidebar)) .workspace-column-tools {
+  max-height: none;
+  flex: 1 1 auto;
+  overflow-y: auto;
+  border-bottom: 0;
+}
+
+/* An open drawer takes the right edge; the inspector and the tool card make
+   room for it. */
+.workspace.column-layout .viewer-area.has-drawer .inspector-float {
+  right: calc(var(--lane-end) + var(--drawer-w) + var(--island-gap));
+}
+
+.workspace.column-layout .viewer-area.has-drawer .tool-card {
+  --tool-card-room: calc(
+    100% - var(--lane-inset) - var(--lane-end) - var(--drawer-w) -
+      var(--island-gap)
+  );
+}
+
+.workspace.column-layout .viewer-area.has-drawer.has-inspector .tool-card {
+  --tool-card-room: calc(
+    100% - var(--lane-inset) - var(--lane-end) - var(--drawer-w) -
+      var(--context-w) - var(--island-gap) * 2
+  );
 }
