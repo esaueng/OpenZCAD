@@ -1,8 +1,8 @@
 import type { ReactNode } from 'react';
 
 interface WorkspaceColumnProps {
-  /** Mode header: the sketch being edited with its Finish, or command search. */
-  header: ReactNode;
+  /** Mode header: the sketch being edited with its Finish; null for none. */
+  header: ReactNode | null;
   /** The mode's tools — the feature palette, or the sketch rail. */
   tools: ReactNode | null;
   /** The model browser (parameters, bodies, history, revisions). */
@@ -22,7 +22,7 @@ export function WorkspaceColumn({
 }: WorkspaceColumnProps) {
   return (
     <div className="workspace-column">
-      <div className="workspace-column-header">{header}</div>
+      {header && <div className="workspace-column-header">{header}</div>}
       {tools && <div className="workspace-column-tools">{tools}</div>}
       <div className="workspace-column-browser">{children}</div>
     </div>

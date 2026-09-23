@@ -222,10 +222,7 @@ interface ViewerShellProps {
   sketchMode: SketchModeState | null;
   onSketchCommit(object: SketchObjectData): void;
   onEditSketchDimension(id: string, anchor: { x: number; y: number }): void;
-  onMoveSketchDimension(
-    id: string,
-    offset: { x: number; y: number }
-  ): void;
+  onMoveSketchDimension(id: string, offset: { x: number; y: number }): void;
   onSketchDrawingChange(drawing: boolean): void;
   onSketchSelectObject(
     objectId: string | null,
@@ -576,20 +573,20 @@ export function ViewerShell({
         </>
       )}
       {dockLayout && !hideViewerToolbar && (
-        <div className="viewport-dock-lane">
+        <>
+          {/* How you look at the model: icon instruments down the right edge,
+              under the top islands. They never change with the selection. */}
+          {!viewMode && <div className="instrument-rail">{viewerToolbar}</div>}
+          {/* How picks and snaps behave, and the activity log: one quiet
+              readout in the bottom-left corner, under the column. */}
           <div
-            className="viewport-dock"
+            className="viewport-readout"
             role="group"
-            aria-label="Viewport dock"
+            aria-label="Viewport readout"
           >
-            {!viewMode && viewerToolbar}
             {dockExtras}
-            <ViewportScaleIndicator
-              scaleSinkRef={scaleIndicatorRef}
-              units={units}
-            />
           </div>
-        </div>
+        </>
       )}
       {selectionChip && (
         <div className="selection-chip" role="status">
@@ -613,12 +610,8 @@ export function ViewerShell({
         </div>
       )}
       {modeOverlay}
-      {(!dockLayout || hideViewerToolbar) && (
-        <ViewportScaleIndicator
-          scaleSinkRef={scaleIndicatorRef}
-          units={units}
-        />
-      )}
+      {/* The scale sits beside the orientation cube in every layout. */}
+      <ViewportScaleIndicator scaleSinkRef={scaleIndicatorRef} units={units} />
     </section>
   );
 }
