@@ -27,6 +27,11 @@ interface AppShellProps {
   /** Contextual properties panel; null hides it and gives the space back. */
   inspector: ReactNode | null;
   /**
+   * The model drawer (parameters, bodies, history), floating beside the
+   * instrument rail on the right; null while it is closed.
+   */
+  drawer?: ReactNode | null;
+  /**
    * Assistant dock, to the right of the viewport. Null removes it entirely —
    * what the assistant setting does — and the viewport takes back the space.
    */
@@ -75,6 +80,7 @@ export function AppShell({
   sidebar,
   viewer,
   inspector,
+  drawer = null,
   assistant,
   assistantHidden = false,
   assistantCollapsed = false,
@@ -107,12 +113,23 @@ export function AppShell({
         }`}
         style={widths}
       >
-        <div className={`viewer-area${inspector ? ' has-inspector' : ''}`}>
+        <div
+          className={`viewer-area${inspector ? ' has-inspector' : ''}${
+            drawer ? ' has-drawer' : ''
+          }`}
+        >
           {viewer}
           {sidebar && <div className="workspace-column-float">{sidebar}</div>}
           {sidebar && sidebarResizer}
           {toolBar && <div className="palette-float">{toolBar}</div>}
-          {inspector && <div className="inspector-float">{inspector}</div>}
+          {/* The right lane, beside the instrument rail: the inspector over
+              the drawer, one column, so neither pushes into the canvas. The
+              wrapper always renders, so opening the drawer never remounts
+              an inspector form mid-edit. */}
+          <div className="stage-right">
+            {inspector && <div className="inspector-float">{inspector}</div>}
+            {drawer && <div className="model-drawer-float">{drawer}</div>}
+          </div>
           {readout}
           {onDropFiles && (
             <Suspense fallback={null}>

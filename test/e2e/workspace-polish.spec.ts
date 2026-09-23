@@ -1,5 +1,8 @@
 import { test, expect, type Locator, type Page } from '@playwright/test';
-import { seedDismissedWorkspaceTour } from './openzcad-fixtures';
+import {
+  seedDismissedWorkspaceTour,
+  seedOpenModelDrawer
+} from './openzcad-fixtures';
 import { createProjectDocument } from '@openzcad/document-core';
 import { toUserId, type SketchObjectData } from '@openzcad/shared';
 
@@ -44,6 +47,7 @@ function lineAngleDegrees(state: LiveSketchState): number {
 
 async function stubApi(page: Page) {
   await seedDismissedWorkspaceTour(page);
+  await seedOpenModelDrawer(page);
   await page.route('**/api/health', (route) =>
     route.fulfill({
       json: {
@@ -814,7 +818,7 @@ test('snaps sketch drawing to existing endpoints', async ({ page }) => {
   await expect(marker).toBeHidden();
 });
 
-test('empty-state copy points at the tools above the history', async ({
+test('empty-state copy points at the command card beside the history', async ({
   page
 }) => {
   await stubApi(page);
@@ -824,16 +828,16 @@ test('empty-state copy points at the tools above the history', async ({
 
   // Several sections carry a .sidebar-hint; match the History one by text.
   const hint = page.locator('.sidebar-hint', { hasText: 'No features yet' });
-  await expect(hint).toContainText('Pick a tool above');
+  await expect(hint).toContainText('Pick a tool from the command card');
 
-  // "Above" has to be literally true: the tool palette is the column's first
-  // section, over the history at every width.
+  // The card it names is on screen, and it is the other side of the stage
+  // from the history in the drawer.
   const tools = page.getByRole('navigation', { name: 'Feature tools' });
   await expect(tools).toBeVisible();
   const toolsBounds = await tools.boundingBox();
   const hintBounds = await hint.boundingBox();
-  expect(toolsBounds!.y + toolsBounds!.height).toBeLessThanOrEqual(
-    hintBounds!.y + 0.5
+  expect(toolsBounds!.x + toolsBounds!.width).toBeLessThanOrEqual(
+    hintBounds!.x + 0.5
   );
 
   // Selecting an edge points at the same place, and neither tool it names has

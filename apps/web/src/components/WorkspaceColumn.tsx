@@ -5,8 +5,11 @@ interface WorkspaceColumnProps {
   header: ReactNode | null;
   /** The mode's tools — the feature palette, or the sketch rail. */
   tools: ReactNode | null;
-  /** The model browser (parameters, bodies, history, revisions). */
-  children: ReactNode;
+  /**
+   * The model browser, when the column carries it. The quiet stage keeps the
+   * browser in the drawer on the right, so Build passes none.
+   */
+  children?: ReactNode;
 }
 
 /**
@@ -24,7 +27,7 @@ export function WorkspaceColumn({
     <div className="workspace-column">
       {header && <div className="workspace-column-header">{header}</div>}
       {tools && <div className="workspace-column-tools">{tools}</div>}
-      <div className="workspace-column-browser">{children}</div>
+      {children && <div className="workspace-column-browser">{children}</div>}
     </div>
   );
 }

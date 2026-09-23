@@ -76,7 +76,17 @@ export interface PanelState {
    * someone gives the model browser more of the column.
    */
   toolGroups: Record<ToolGroup, boolean>;
+  /**
+   * The model drawer on the right (parameters, bodies, history, revisions,
+   * diagnostics). Closed to begin with: the quiet stage opens on the model,
+   * and the instrument rail's Items, History and Parameters buttons open it
+   * on the section they name. Remembered like every other chrome habit.
+   */
+  drawerOpen: boolean;
 }
+
+/** The drawer sections the instrument rail can open directly. */
+export type DrawerSectionId = 'parameters' | 'bodies' | 'history';
 
 export const DEFAULT_PANEL_STATE: PanelState = {
   sidebarSections: {
@@ -96,7 +106,8 @@ export const DEFAULT_PANEL_STATE: PanelState = {
     'edges-faces': true,
     bodies: true,
     pattern: true
-  }
+  },
+  drawerOpen: false
 };
 
 export const TOOL_GROUP_KEYS = Object.keys(
@@ -110,7 +121,8 @@ function copyDefaults(): PanelState {
     viewModeRailOpen: DEFAULT_PANEL_STATE.viewModeRailOpen,
     assistantCollapsed: DEFAULT_PANEL_STATE.assistantCollapsed,
     workspaceTourDismissed: DEFAULT_PANEL_STATE.workspaceTourDismissed,
-    toolGroups: { ...DEFAULT_PANEL_STATE.toolGroups }
+    toolGroups: { ...DEFAULT_PANEL_STATE.toolGroups },
+    drawerOpen: DEFAULT_PANEL_STATE.drawerOpen
   };
 }
 
@@ -135,6 +147,9 @@ export function normalizePanelState(value: unknown): PanelState {
   }
   if (typeof root.viewModeRailOpen === 'boolean') {
     state.viewModeRailOpen = root.viewModeRailOpen;
+  }
+  if (typeof root.drawerOpen === 'boolean') {
+    state.drawerOpen = root.drawerOpen;
   }
   const sections = root.sidebarSections;
   if (sections && typeof sections === 'object' && !Array.isArray(sections)) {
@@ -189,6 +204,32 @@ export function toggleSidebarSection(
     sidebarSections: {
       ...state.sidebarSections,
       [id]: !state.sidebarSections[id]
+    }
+  };
+}
+
+/**
+ * What a rail button does: open the drawer on its section, or close the
+ * drawer when that section is already showing in it. Opening folds the other
+ * two primary sections so the named one gets the drawer's height, the way
+ * opening History always folded the tree above it; Revisions and Diagnostics
+ * keep whatever the user left them at.
+ */
+export function toggleDrawerSection(
+  state: PanelState,
+  id: DrawerSectionId
+): PanelState {
+  if (state.drawerOpen && state.sidebarSections[id]) {
+    return { ...state, drawerOpen: false };
+  }
+  return {
+    ...state,
+    drawerOpen: true,
+    sidebarSections: {
+      ...state.sidebarSections,
+      parameters: id === 'parameters',
+      bodies: id === 'bodies',
+      history: id === 'history'
     }
   };
 }

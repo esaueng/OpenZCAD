@@ -1,6 +1,6 @@
 # Quiet-stage workspace redesign (U04)
 
-Status: slice 1 in review (#411); slice 2 in review (#412); slice 3 in review; slices 4–7 open. Roadmap row: [U04](../../ROADMAP.md#u04).
+Status: slice 1 in review (#411); slice 2 in review (#412); slice 3 in review (#413); slice 4 in review; slices 5–7 open. Roadmap row: [U04](../../ROADMAP.md#u04).
 
 ## Intent
 
@@ -93,7 +93,18 @@ Each slice is one PR against `main`, recorded on the U04 row when it merges.
    removing the stored field is a follow-up.
 4. **Right drawer.** Items (bodies), History and Parameters move from the left
    column into one drawer. Acceptance: rollback, suppress, delete and
-   parameter editing unchanged; drawer state persists in panel state.
+   parameter editing unchanged; drawer state persists in panel state. As
+   built: the drawer carries the whole browser (Revisions and Diagnostics
+   too), and each rail button opens it on its section with the other two
+   primary sections folded. It stops above the bottom-right row so the cube
+   and scale stay reachable. The inspector and the drawer share one right
+   lane beside the rail — the inspector on top, hugging its content, the
+   drawer filling the rest — because pushing the inspector left of the
+   drawer put it over the values riding the model. Direct-edit controls
+   (Move, the extrude value) and the rail's own panels float over the lane.
+   The e2e fixtures (`stubApi`, `stubAnonymousApi`, the cloud-sync stub and
+   `workspace-polish.spec.ts`'s own stub) seed it open for the specs that
+   exercise its contents; a dedicated spec covers the closed default.
 5. **Search and ask.** ⌘K gains features and parameters as results and an
    "Ask" row that submits to the assistant; the conversation surface anchors
    to the bar. Acceptance: proposals still preview and apply through the same

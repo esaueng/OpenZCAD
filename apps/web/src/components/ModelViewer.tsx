@@ -4837,10 +4837,12 @@ export function ModelViewer({
           x: screen.x + sideX * PIN_CHIP_GAP_PX,
           y: screen.y + sideY * PIN_CHIP_GAP_PX
         };
+        // The right lane's first panel (the inspector, or the model drawer
+        // alone) shares the lane's left edge with whatever is under it.
         const inspector = renderer.domElement
           .closest('.viewer-area')
           ?.querySelector<HTMLElement>(
-            '.inspector-float, .tool-card:has(.extrude-form)'
+            '.stage-right > *, .tool-card:has(.extrude-form)'
           );
         if (inspector) {
           const hostRect = renderer.domElement.getBoundingClientRect();

@@ -451,7 +451,7 @@ export function Sidebar({
         <div className="feature-list">
           {features.length === 0 && (
             <p className="muted sidebar-hint">
-              No features yet. Pick a tool above to start.
+              No features yet. Pick a tool from the command card to start.
             </p>
           )}
           {features.map((feature, index) => {
