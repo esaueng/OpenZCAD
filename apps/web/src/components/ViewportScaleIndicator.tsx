@@ -142,3 +142,45 @@ export function ViewportScaleIndicator({
     </div>
   );
 }
+
+export type SketchGridReadoutSink = (label: string | null) => void;
+
+/**
+ * The sketch grid spacing as a dock segment beside the scale bar. It used to
+ * float at the viewport's bottom-left, where the dock — wider in sketch mode
+ * for its snap segment — ran underneath it at desktop widths. The render loop
+ * pushes the label every frame; the node is only touched when it changes.
+ */
+export function ViewportGridReadout({
+  sinkRef
+}: {
+  sinkRef: MutableRefObject<SketchGridReadoutSink | null>;
+}) {
+  const nodeRef = useRef<HTMLSpanElement | null>(null);
+  useEffect(() => {
+    let shown: string | null = null;
+    const update: SketchGridReadoutSink = (label) => {
+      const node = nodeRef.current;
+      if (!node || label === shown) {
+        return;
+      }
+      shown = label;
+      node.textContent = label ?? '';
+      node.hidden = label === null;
+    };
+    sinkRef.current = update;
+    return () => {
+      if (sinkRef.current === update) {
+        sinkRef.current = null;
+      }
+    };
+  }, [sinkRef]);
+  return (
+    <span
+      ref={nodeRef}
+      className="viewport-dock-grid mono"
+      title="Sketch grid spacing — it adapts as you zoom"
+      hidden
+    />
+  );
+}
