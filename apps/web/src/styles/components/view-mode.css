@@ -770,7 +770,7 @@
   flex: 0 0 auto;
   padding: 1px 4px;
   border: 1px solid color-mix(in srgb, currentColor 28%, transparent);
-  border-radius: 999px;
+  border-radius: var(--radius-md);
   font-family: var(--font-mono);
   font-size: var(--fs-mini);
   line-height: 14px;
@@ -965,7 +965,7 @@
   z-index: calc(var(--z-viewer-overlay) + 1);
   padding: 2px 7px;
   color: var(--color-text);
-  background: rgba(8, 18, 30, 0.82);
+  background: rgba(16, 19, 22, 0.82);
   border: var(--border-thin);
   border-radius: var(--radius-sm);
   font-family: var(--font-mono);

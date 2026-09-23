@@ -324,7 +324,7 @@
   color: var(--color-text-subtle);
   background: var(--color-surface-2);
   border: var(--border-thin);
-  border-radius: 999px;
+  border-radius: var(--radius-md);
   font-family: var(--font-mono);
   font-size: var(--fs-mini);
   font-weight: var(--fw-regular);
@@ -417,7 +417,7 @@
   color: var(--color-text-muted);
   background: var(--color-surface-2);
   border: var(--border-thin);
-  border-radius: 999px;
+  border-radius: var(--radius-md);
   font-family: var(--font-mono);
   font-size: var(--fs-mini);
 }

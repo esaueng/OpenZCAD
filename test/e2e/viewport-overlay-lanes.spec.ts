@@ -131,10 +131,10 @@ test('orientation cube labels keep viewport text in both themes', async ({
 
   // The cube is drawn on the viewport's dark stage, which never re-themes,
   // so its labels must not follow --color-text. At #1a2330 on #070b10 they
-  // reached 1.25:1 under the light chrome.
+  // reached 1.25:1 under the light chrome. #ebedef is --color-viewport-text.
   for (const scheme of ['dark', 'light'] as const) {
     await page.emulateMedia({ colorScheme: scheme });
     await expect(root).toHaveAttribute('data-theme', scheme);
-    await expect(label).toHaveCSS('fill', 'rgb(230, 237, 243)');
+    await expect(label).toHaveCSS('fill', 'rgb(235, 237, 239)');
   }
 });

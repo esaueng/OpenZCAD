@@ -60,7 +60,7 @@ export function triangulateRegionGeometry(
   return { positions, indices: triangles.flat() };
 }
 
-export const REGION_FILL_COLOR = 0x4da3ff;
+export const REGION_FILL_COLOR = 0x6798ff;
 
 /** Builds the cached fill mesh for one first-class sketch profile. */
 export function buildRegionMesh(
