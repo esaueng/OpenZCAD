@@ -2,7 +2,7 @@ import * as THREE from 'three';
 import { Line2 } from 'three/examples/jsm/lines/Line2.js';
 import { LineGeometry } from 'three/examples/jsm/lines/LineGeometry.js';
 import { LineMaterial } from 'three/examples/jsm/lines/LineMaterial.js';
-import type { HandleVec3 } from './DragRig';
+import { keepProgram, type HandleVec3 } from './DragRig';
 import { SELECTION_SEMANTICS } from '../render/semantics';
 
 const CHANGE = SELECTION_SEMANTICS.change;
@@ -135,24 +135,26 @@ export function createChangeBand(
     new THREE.BufferAttribute(new Float32Array(levels), 1)
   );
   geometry.setIndex(indices);
-  const material = new THREE.ShaderMaterial({
-    vertexShader: BAND_VERTEX,
-    fragmentShader: BAND_FRAGMENT,
-    uniforms: {
-      stripe: { value: new THREE.Color(CHANGE.addStripe) },
-      seam: { value: new THREE.Color(CHANGE.addSeam) },
-      opacity: { value: CHANGE.bandOpacity },
-      pixelRatio: { value: pixelRatio }
-    },
-    transparent: true,
-    depthWrite: false,
-    side: THREE.DoubleSide,
-    // The band lies on the preview body's own walls; it wins that tie but
-    // still hides behind anything genuinely in front of it.
-    polygonOffset: true,
-    polygonOffsetFactor: -2,
-    polygonOffsetUnits: -2
-  });
+  const material = keepProgram(
+    new THREE.ShaderMaterial({
+      vertexShader: BAND_VERTEX,
+      fragmentShader: BAND_FRAGMENT,
+      uniforms: {
+        stripe: { value: new THREE.Color(CHANGE.addStripe) },
+        seam: { value: new THREE.Color(CHANGE.addSeam) },
+        opacity: { value: CHANGE.bandOpacity },
+        pixelRatio: { value: pixelRatio }
+      },
+      transparent: true,
+      depthWrite: false,
+      side: THREE.DoubleSide,
+      // The band lies on the preview body's own walls; it wins that tie but
+      // still hides behind anything genuinely in front of it.
+      polygonOffset: true,
+      polygonOffsetFactor: -2,
+      polygonOffsetUnits: -2
+    })
+  );
   const walls = new THREE.Mesh(geometry, material);
   walls.name = 'offset-change-walls';
   // The band moves every frame of a drag; recomputing its bounds that often
@@ -168,16 +170,18 @@ export function createChangeBand(
   outlineGeometry.setAttribute('position', outlineAttribute);
   const outline = new THREE.LineSegments(
     outlineGeometry,
-    new THREE.LineDashedMaterial({
-      color: CHANGE.cut,
-      dashSize: 1.2,
-      gapSize: 0.8,
-      transparent: true,
-      opacity: 0.95,
-      // The removed slab is gone from the preview: its outline is a ghost
-      // and reads through whatever now stands in front of it.
-      depthTest: false
-    })
+    keepProgram(
+      new THREE.LineDashedMaterial({
+        color: CHANGE.cut,
+        dashSize: 1.2,
+        gapSize: 0.8,
+        transparent: true,
+        opacity: 0.95,
+        // The removed slab is gone from the preview: its outline is a ghost
+        // and reads through whatever now stands in front of it.
+        depthTest: false
+      })
+    )
   );
   outline.name = 'offset-change-cut-outline';
   outline.frustumCulled = false;
@@ -226,10 +230,9 @@ export function createChangeBand(
       }
     },
     dispose() {
+      // Geometries only: the materials keep their programs (keepProgram).
       geometry.dispose();
-      material.dispose();
       outlineGeometry.dispose();
-      (outline.material as THREE.Material).dispose();
       object.removeFromParent();
     }
   };
@@ -263,16 +266,18 @@ export function createLevelRing(): LevelRing {
   }
   const geometry = new LineGeometry();
   geometry.setPositions(points);
-  const material = new LineMaterial({
-    color: CHANGE.oldLevel,
-    linewidth: 1.4,
-    dashed: true,
-    dashSize: 0.06,
-    gapSize: 0.06,
-    transparent: true,
-    opacity: 0.85,
-    depthTest: false
-  });
+  const material = keepProgram(
+    new LineMaterial({
+      color: CHANGE.oldLevel,
+      linewidth: 1.4,
+      dashed: true,
+      dashSize: 0.06,
+      gapSize: 0.06,
+      transparent: true,
+      opacity: 0.85,
+      depthTest: false
+    })
+  );
   const ring = new Line2(geometry, material);
   ring.computeLineDistances();
   ring.renderOrder = 29;

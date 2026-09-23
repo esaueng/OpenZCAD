@@ -64,6 +64,11 @@ export interface DimensionGraphicOptions {
   renderOrder?: number;
   /** Dashed like a drawing's dimension (the default), or one solid line. */
   dashed?: boolean;
+  /**
+   * Leave the materials undisposed so their compiled programs stay cached,
+   * for a graphic rebuilt with every re-armed handle (see `keepProgram`).
+   */
+  keepProgram?: boolean;
 }
 
 export interface DimensionGraphic {
@@ -153,6 +158,7 @@ export function createDimensionGraphic(
   line.computeLineDistances();
   line.renderOrder = renderOrder;
   object.add(line);
+  const keepPrograms = options.keepProgram === true;
 
   const arrowMaterial = new THREE.MeshBasicMaterial({
     color,
@@ -342,9 +348,11 @@ export function createDimensionGraphic(
     },
     dispose() {
       lineGeometry.dispose();
-      line.material.dispose();
       coneGeometry.dispose();
-      arrowMaterial.dispose();
+      if (!keepPrograms) {
+        line.material.dispose();
+        arrowMaterial.dispose();
+      }
       for (const geometry of witnessGeometries) {
         geometry.dispose();
       }

@@ -505,7 +505,8 @@ export function buildOffsetFaceHandle(params: OffsetFaceRigParams): DragRig {
     linewidth: 1.8,
     opacity: 0.95,
     renderOrder: 29,
-    dashed: false
+    dashed: false,
+    keepProgram: true
   });
   changeArrow.object.name = 'offset-change-arrow';
   changeArrow.object.visible = false;
