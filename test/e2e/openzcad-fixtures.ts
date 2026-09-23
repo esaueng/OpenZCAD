@@ -352,6 +352,7 @@ export async function stubApi(
 
 export async function stubAnonymousApi(page: Page) {
   await seedDismissedWorkspaceTour(page);
+  await seedOpenModelDrawer(page);
   await page.route('**/api/auth/config', (route) =>
     route.fulfill({
       json: {

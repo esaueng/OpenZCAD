@@ -242,7 +242,8 @@ test('keeps every workspace surface inside a narrow viewport', async ({
   const selectors = [
     '.topbar',
     '.workspace',
-    '.sidebar',
+    '.workspace-column',
+    '.model-drawer-float',
     '.viewer-area',
     '.assistant-panel',
     '.viewport-readout',
@@ -269,7 +270,7 @@ test('keeps every workspace surface inside a narrow viewport', async ({
 
   // The column floats over the viewport at every width; on a phone it must
   // still fit, leaving canvas beside it.
-  const sidebarBounds = await page.locator('.sidebar').boundingBox();
+  const sidebarBounds = await page.locator('.workspace-column').boundingBox();
   const viewerBounds = await page.locator('.viewer-area').boundingBox();
   expect(sidebarBounds!.x + sidebarBounds!.width).toBeLessThan(
     viewerBounds!.x + viewerBounds!.width - 100

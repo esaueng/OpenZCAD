@@ -19,7 +19,9 @@ test('invalid primitive dimensions never enter saved history', async ({
   await width.press('Enter');
   await expect(inspector).toBeVisible();
   await expect(
-    page.getByText('No features yet. Pick a tool above to start.')
+    page.getByText(
+      'No features yet. Pick a tool from the command card to start.'
+    )
   ).toBeVisible();
   await width.fill('30');
   await inspector.getByRole('button', { name: 'Create', exact: true }).click();

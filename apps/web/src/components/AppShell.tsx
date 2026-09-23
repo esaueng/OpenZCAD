@@ -122,8 +122,14 @@ export function AppShell({
           {sidebar && <div className="workspace-column-float">{sidebar}</div>}
           {sidebar && sidebarResizer}
           {toolBar && <div className="palette-float">{toolBar}</div>}
-          {drawer && <div className="model-drawer-float">{drawer}</div>}
-          {inspector && <div className="inspector-float">{inspector}</div>}
+          {/* The right lane, beside the instrument rail: the inspector over
+              the drawer, one column, so neither pushes into the canvas. The
+              wrapper always renders, so opening the drawer never remounts
+              an inspector form mid-edit. */}
+          <div className="stage-right">
+            {inspector && <div className="inspector-float">{inspector}</div>}
+            {drawer && <div className="model-drawer-float">{drawer}</div>}
+          </div>
           {readout}
           {onDropFiles && (
             <Suspense fallback={null}>
