@@ -50,14 +50,17 @@ import {
   Monitor,
   PenLine,
   Move3d,
+  Redo2,
   Save,
   Search,
   Settings as SettingsIcon,
   Scissors,
+  Slice,
   SlidersHorizontal,
   Spline,
   Trash2,
   TriangleRight,
+  Undo2,
   Upload,
   X
 } from 'lucide-react';
@@ -4118,12 +4121,12 @@ export function App() {
         }
         setStatus(
           !bootCloudFunctionsEnabledRef.current
-            ? `Offline mode · ${userProjectCount(merged)} local project(s)`
+            ? `Offline mode · ${countLabel(userProjectCount(merged), 'local project', 'local projects')}`
             : activeSession && listed.remoteReached
-              ? `Cloud profile ready · ${userProjectCount(merged)} project(s)`
+              ? `Cloud profile ready · ${countLabel(userProjectCount(merged), 'project', 'projects')}`
               : health
-                ? `Local workspace · ${userProjectCount(merged)} local project(s)`
-                : `Offline workspace · ${userProjectCount(merged)} local project(s)`
+                ? `Local workspace · ${countLabel(userProjectCount(merged), 'local project', 'local projects')}`
+                : `Offline workspace · ${countLabel(userProjectCount(merged), 'local project', 'local projects')}`
         );
       } catch (error) {
         if (!cancelled) {
@@ -5609,7 +5612,9 @@ export function App() {
     if (nextTool === 'sketch') {
       clearSelection();
       setTool('sketch');
-      setStatus('Sketch mode: draw one closed profile on the selected plane.', {
+      // No plane is chosen yet: "on the selected plane" described a choice
+      // the plane picker was still asking for.
+      setStatus('Sketch: pick a plane or a planar face to draw on.', {
         sticky: true
       });
       return;
@@ -6420,7 +6425,7 @@ export function App() {
       setAccountProjectListReached(listed.remoteReached);
       setSettingsMessage('Cloud profile connected.');
       setStatus(
-        `Cloud profile ready · ${userProjectCount(listed.projects)} project(s)`
+        `Cloud profile ready · ${countLabel(userProjectCount(listed.projects), 'project', 'projects')}`
       );
     } catch {
       if (cloudFunctionsEnabledRef.current) {
@@ -6637,7 +6642,7 @@ export function App() {
         ? `Signed in as ${activeSession.email ?? activeSession.displayName} · cloud projects are temporarily unavailable.`
         : localOnly === 0
           ? `Signed in as ${activeSession.email ?? activeSession.displayName}.`
-          : `Signed in as ${activeSession.email ?? activeSession.displayName} · ${localOnly} project(s) on this device only.`
+          : `Signed in as ${activeSession.email ?? activeSession.displayName} · ${countLabel(localOnly, 'project', 'projects')} on this device only.`
     );
   }
 
@@ -6838,7 +6843,7 @@ export function App() {
         projectController?.openProject(currentProjectId, currentVersion);
       }
       setSettingsMessage(
-        `${deleted.deletedProjectIds.length} cloud project(s) deleted permanently · local copies remain.`
+        `${countLabel(deleted.deletedProjectIds.length, 'cloud project', 'cloud projects')} deleted permanently · local copies remain.`
       );
     } catch (error) {
       setSettingsMessage(errorMessage(error, 'Cloud data deletion failed.'));
@@ -7314,7 +7319,9 @@ export function App() {
       return;
     }
     setBusy(true);
-    setStatus(`Saving ${candidates.length} project(s) to your account…`);
+    setStatus(
+      `Saving ${countLabel(candidates.length, 'project', 'projects')} to your account…`
+    );
     setSyncRun(
       candidates.map((candidate) => ({
         projectId: candidate.projectId,
@@ -7349,8 +7356,8 @@ export function App() {
       // would overflow the status line with the very names that failed.
       setStatus(
         failed === 0
-          ? `Saved ${saved} project(s) to your account.`
-          : `Saved ${saved} project(s) · ${failed} could not be saved. See the list above for why.`
+          ? `Saved ${countLabel(saved, 'project', 'projects')} to your account.`
+          : `Saved ${countLabel(saved, 'project', 'projects')} · ${failed} could not be saved. See the list above for why.`
       );
     } finally {
       setBusy(false);
@@ -7721,8 +7728,8 @@ export function App() {
       setCloudAvailable(listed.remoteReached);
       setStatus(
         session && !listed.remoteReached
-          ? `Cloud projects are temporarily unavailable · ${userProjectCount(listed.projects)} project(s) remain on this device.`
-          : `${userProjectCount(listed.projects)} project(s) available.`
+          ? `Cloud projects are temporarily unavailable · ${countLabel(userProjectCount(listed.projects), 'project', 'projects')} remain on this device.`
+          : `${countLabel(userProjectCount(listed.projects), 'project', 'projects')} available.`
       );
     } catch (error) {
       setStatus(errorMessage(error, 'Failed to refresh projects.'));
@@ -8153,7 +8160,7 @@ export function App() {
     if (
       appSettings.general.confirmDestructiveActions &&
       !window.confirm(
-        `Permanently delete ${trashed.length} project(s) in the trash? This cannot be undone.`
+        `Permanently delete ${countLabel(trashed.length, 'project', 'projects')} in the trash? This cannot be undone.`
       )
     ) {
       return;
@@ -8161,7 +8168,9 @@ export function App() {
     setBusy(true);
     try {
       await destroyProjects(trashed);
-      setStatus(`Emptied the trash · ${trashed.length} project(s) deleted.`);
+      setStatus(
+        `Emptied the trash · ${countLabel(trashed.length, 'project', 'projects')} deleted.`
+      );
     } catch (error) {
       setStatus(errorMessage(error, 'Could not empty the trash.'));
     } finally {
@@ -9463,7 +9472,9 @@ export function App() {
       return;
     }
     const originatingManager = managerRef.current;
-    setStatus(`Archiving ${localOnlySources.length} local import source(s)…`);
+    setStatus(
+      `Archiving ${countLabel(localOnlySources.length, 'local import source', 'local import sources')}…`
+    );
     const result = await archiveLocalOnlyImportSources({
       document: doc,
       loadSourceBytes: loadSourceBlob,
@@ -15476,6 +15487,49 @@ export function App() {
       run: showAllBodies
     },
     {
+      // The dock's section toggle had no palette entry: "section" found
+      // nothing, so the only way in was an unlabelled dock icon.
+      id: 'view-section',
+      label: viewerSettings.sectionView
+        ? `Section view: next plane (now ${viewerSettings.sectionView.plane})`
+        : 'Section view: on',
+      group: 'View',
+      keywords: ['section', 'cut', 'clip', 'plane'],
+      icon: <Slice size={16} aria-hidden="true" />,
+      disabledReason: viewerBodies.length === 0 ? 'Create a body first' : null,
+      run: cycleSectionView
+    },
+    {
+      id: 'edit-undo',
+      label: 'Undo',
+      group: 'Edit',
+      shortcut: 'Ctrl+Z',
+      icon: <Undo2 size={16} aria-hidden="true" />,
+      disabledReason: (
+        tweakMode
+          ? parameterOnlyUndoAvailable
+          : (managerRef.current?.canUndo ?? false)
+      )
+        ? null
+        : 'Nothing to undo',
+      run: handleUndo
+    },
+    {
+      id: 'edit-redo',
+      label: 'Redo',
+      group: 'Edit',
+      shortcut: 'Ctrl+Shift+Z',
+      icon: <Redo2 size={16} aria-hidden="true" />,
+      disabledReason: (
+        tweakMode
+          ? parameterOnlyUndoAvailable
+          : (managerRef.current?.canRedo ?? false)
+      )
+        ? null
+        : 'Nothing to redo',
+      run: handleRedo
+    },
+    {
       id: 'file-save',
       label: 'Save revision',
       group: 'File',
@@ -15536,16 +15590,20 @@ export function App() {
     },
     {
       id: 'file-export-mesh',
-      label: 'Export mesh (3MF / STL)…',
+      // Named as the File menu names it; the formats are search terms. The
+      // palette said "3MF / STL" after OBJ and glTF had shipped.
+      label: 'Export mesh…',
       group: 'File',
+      keywords: ['3mf', 'stl', 'obj', 'gltf', 'mesh'],
       icon: <Download size={16} aria-hidden="true" />,
       disabledReason: exportBodyIds.length === 0 ? 'Create a body first' : null,
       run: () => setMeshExportOpen(true)
     },
     {
       id: 'file-import',
-      label: 'Import STEP / STL…',
+      label: 'Import CAD files…',
       group: 'File',
+      keywords: ['step', 'stl', '3mf', 'obj', 'glb', 'ply', 'mesh'],
       icon: <Upload size={16} aria-hidden="true" />,
       run: () => importInputRef.current?.click()
     },

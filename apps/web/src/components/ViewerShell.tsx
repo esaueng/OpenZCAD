@@ -35,7 +35,9 @@ import {
 import { OrientationWidget } from './OrientationWidget';
 import {
   ViewportScaleIndicator,
-  type ViewportScaleSink
+  type ViewportScaleSink,
+  ViewportGridReadout,
+  type SketchGridReadoutSink
 } from './ViewportScaleIndicator';
 import type {
   ArtifactId,
@@ -222,10 +224,7 @@ interface ViewerShellProps {
   sketchMode: SketchModeState | null;
   onSketchCommit(object: SketchObjectData): void;
   onEditSketchDimension(id: string, anchor: { x: number; y: number }): void;
-  onMoveSketchDimension(
-    id: string,
-    offset: { x: number; y: number }
-  ): void;
+  onMoveSketchDimension(id: string, offset: { x: number; y: number }): void;
   onSketchDrawingChange(drawing: boolean): void;
   onSketchSelectObject(
     objectId: string | null,
@@ -402,6 +401,7 @@ export function ViewerShell({
     drawnSection.kind === 'exact' ? drawnSection.regions : null;
   const orientationDragRef = useRef<OrientationDragControls | null>(null);
   const scaleIndicatorRef = useRef<ViewportScaleSink | null>(null);
+  const sketchGridReadoutRef = useRef<SketchGridReadoutSink | null>(null);
   const selectionChipLabelRef = useRef<HTMLSpanElement | null>(null);
   const cylinderRadiusLabelSetterRef = useRef<
     ((radius: number | null) => void) | null
@@ -506,6 +506,7 @@ export function ViewerShell({
         orientationRef={orientationRef}
         orientationDragRef={orientationDragRef}
         scaleIndicatorRef={scaleIndicatorRef}
+        sketchGridReadoutRef={sketchGridReadoutRef}
         onSelectTopology={onSelectTopology}
         onSelectEdgeChain={onSelectEdgeChain}
         selectionFilter={selectionFilter}
@@ -584,6 +585,7 @@ export function ViewerShell({
           >
             {!viewMode && viewerToolbar}
             {dockExtras}
+            <ViewportGridReadout sinkRef={sketchGridReadoutRef} />
             <ViewportScaleIndicator
               scaleSinkRef={scaleIndicatorRef}
               units={units}

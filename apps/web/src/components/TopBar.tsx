@@ -1,8 +1,10 @@
 import { ProjectImportButton } from './ProjectImportButton';
+import { platformShortcutLabel } from '../lib/platformShortcut';
 import { type ChangeEvent, useEffect, useRef, useState } from 'react';
 import {
   Box,
   Check,
+  CircleUserRound,
   CloudOff,
   Download,
   Eye,
@@ -265,7 +267,7 @@ export function TopBar({
         data-active={workspaceMode}
         role="group"
         aria-label="Workspace mode"
-        title="Switch between viewing, tweaking parameters and modeling (Ctrl+Shift+M)"
+        title={`Switch between viewing, tweaking parameters and modeling (${platformShortcutLabel('Ctrl+Shift+M')})`}
       >
         {WORKSPACE_MODE_OPTIONS.map(({ mode, label, hint, Icon }) => {
           const disabledReason =
@@ -352,7 +354,10 @@ export function TopBar({
             {accountState === 'checking' ? (
               <LoaderCircle className="spin" size={13} aria-hidden="true" />
             ) : (
-              <CloudOff size={13} aria-hidden="true" />
+              // A person, not a cloud: at icon-only widths this chip and the
+              // "Local only" save chip beside it were two identical
+              // cloud-off glyphs.
+              <CircleUserRound size={13} aria-hidden="true" />
             )}
             <StableLabel reserve={ACCOUNT_LABEL_RESERVE} align="center">
               {accountLabel}
@@ -369,7 +374,7 @@ export function TopBar({
               ? 'Save to my account'
               : WORKSPACE_SAVE_STATE_PRESENTATION[saveState].topBarLabel
           }
-          title={`${saveToAccount ? 'Save this local project and its source files to your account.' : WORKSPACE_SAVE_STATE_PRESENTATION[saveState].title} Click to save a revision (Ctrl+S), or Ctrl+Shift+S to name it.`}
+          title={`${saveToAccount ? 'Save this local project and its source files to your account.' : WORKSPACE_SAVE_STATE_PRESENTATION[saveState].title} Click to save a revision (${platformShortcutLabel('Ctrl+S')}), or ${platformShortcutLabel('Ctrl+Shift+S')} to name it.`}
         >
           {saveState === 'saving' || saveState === 'syncing' ? (
             <LoaderCircle className="spin" size={14} aria-hidden="true" />
@@ -599,7 +604,7 @@ export function TopBar({
         <button
           className="secondary topbar-action settings-action"
           type="button"
-          title="Settings (Ctrl+,)"
+          title={`Settings (${platformShortcutLabel('Ctrl+,')})`}
           aria-label="Open settings"
           onClick={onOpenSettings}
         >
