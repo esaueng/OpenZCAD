@@ -115,9 +115,12 @@ export function createDimensionLineMaterial(
   const material = new LineMaterial({
     color: options.color ?? DIMENSION_LINE_COLOR,
     linewidth: options.linewidth ?? 1.5,
-    dashed: options.dashed ?? true,
+    // A solid line is a dash with no gap: it shares the dashed program rather
+    // than compiling the undashed fat-line variant, which on software GL cost
+    // more than a second the first time a handle showed one.
+    dashed: true,
     dashSize: 2,
-    gapSize: 1.5,
+    gapSize: options.dashed === false ? 0 : 1.5,
     transparent: true,
     opacity: options.opacity ?? 0.9,
     // Dimensions read through the part, the way they do on paper. A dimension

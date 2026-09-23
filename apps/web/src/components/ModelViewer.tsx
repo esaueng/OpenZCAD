@@ -1102,7 +1102,13 @@ const SNAP_PROJECT_SCRATCH = new THREE.Vector3();
  * While a face offset is engaged only the change is coloured: the selected
  * face's fill gives way to the band, and its rim (drawn by the edge overlay)
  * stays to say which face is moving. The fills fade rather than switch.
+ *
+ * They fade to a trace, not to zero: a highlight settled at opacity 0 had its
+ * programs torn down and recompiled on the next preview, six times in one
+ * cylinder drag, which on software GL added seconds per test.
  */
+const MUTED_FACE_FILL_OPACITY = 0.06;
+
 function muteSelectedFaceFill(context: SceneContext, muted: boolean) {
   context.bodyGroup.traverse((child) => {
     if (
@@ -1114,7 +1120,7 @@ function muteSelectedFaceFill(context: SceneContext, muted: boolean) {
     }
     const material = child.material as THREE.Material;
     material.userData.targetOpacity = muted
-      ? 0
+      ? MUTED_FACE_FILL_OPACITY
       : child.name === 'body-face-selected'
         ? SELECTED_FACE_OPACITY
         : SELECTED_FACE_HIDDEN_OPACITY;
@@ -7967,7 +7973,7 @@ export function ModelViewer({
         });
         // A preview rebuilt mid-drag must not bring the fill back.
         highlightMaterial.userData.targetOpacity = offsetFillMutedRef.current
-          ? 0
+          ? MUTED_FACE_FILL_OPACITY
           : SELECTED_FACE_OPACITY;
         const highlight = new THREE.Mesh(geometry, highlightMaterial);
         highlight.name = 'body-face-selected';
@@ -7990,7 +7996,7 @@ export function ModelViewer({
           depthFunc: THREE.GreaterDepth
         });
         hiddenMaterial.userData.targetOpacity = offsetFillMutedRef.current
-          ? 0
+          ? MUTED_FACE_FILL_OPACITY
           : SELECTED_FACE_HIDDEN_OPACITY;
         context.fadeIns.add(hiddenMaterial);
         const hiddenHighlight = new THREE.Mesh(hiddenGeometry, hiddenMaterial);

@@ -154,9 +154,10 @@ describe('the offset-face rig', () => {
       'Mesh'
     ]);
     const line = arrow.children[0] as THREE.Object3D & {
-      material: { dashed: boolean; color: THREE.Color };
+      material: { gapSize: number; color: THREE.Color };
     };
-    expect(line.material.dashed).toBe(false);
+    // Solid: a dash with no gap, sharing the dashed line's program.
+    expect(line.material.gapSize).toBe(0);
     expect(line.material.color.getHex()).toBe(0xffffff);
     // Nothing to measure at rest.
     expect(arrow.visible).toBe(false);
