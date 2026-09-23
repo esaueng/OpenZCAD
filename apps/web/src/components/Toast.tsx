@@ -10,8 +10,6 @@ import {
 interface ToastHostProps {
   toast: ToastModel | null;
   onDismiss(id: number): void;
-  /** View mode docks a bar along the bottom edge; sit above it. */
-  aboveViewBar?: boolean;
 }
 
 /**
@@ -20,11 +18,7 @@ interface ToastHostProps {
  * carries at most one action — the action a user reaches for right after the
  * thing the toast reports, which so far is always Undo.
  */
-export function ToastHost({
-  toast,
-  onDismiss,
-  aboveViewBar = false
-}: ToastHostProps) {
+export function ToastHost({ toast, onDismiss }: ToastHostProps) {
   const { rendered, closing } = useDelayedUnmount(toast, TOAST_EXIT_MS);
   const [held, setHeld] = useState(false);
 
@@ -53,7 +47,7 @@ export function ToastHost({
 
   return (
     <div
-      className={`toast${closing ? ' closing' : ''}${aboveViewBar ? ' above-view-bar' : ''}`}
+      className={`toast${closing ? ' closing' : ''}`}
       role="status"
       aria-live="polite"
       onMouseEnter={() => setHeld(true)}

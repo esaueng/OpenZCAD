@@ -99,11 +99,11 @@
   gap: 6px;
 }
 
-/* The expression track is wider than a row's: 76px clipped its own
-   "expression" placeholder to "expressio", and it is where a new
-   expression is typed from scratch. */
+/* Name and expression split the add row evenly. A row-width 76px track
+   clipped its own "expression" placeholder to "expressio"; a fixed 96px one
+   squeezed the name to "na" in a phone-width column. */
 .param-add {
-  grid-template-columns: minmax(0, 1fr) 96px 28px;
+  grid-template-columns: minmax(0, 1fr) minmax(0, 1fr) 28px;
   margin-top: 4px;
 }
 

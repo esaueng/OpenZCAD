@@ -60,6 +60,21 @@ for (const width of [1440, 1024]) {
         .map((button) => button.getAttribute('aria-label') ?? '')
     );
     expect(obscured).toEqual([]);
+
+    // Nor the notice lane above the dock. The card sat in the lane's
+    // bottom-left corner, so the status toast ("Created Tour lane locally.")
+    // and the selection chip it asks for in step 2 ran under it at 1024px.
+    const status = page.locator('.workspace-toast-body');
+    await expect(status).toContainText(/Created Tour lane/);
+    const statusBox = await status.boundingBox();
+    const card = (await tour.boundingBox())!;
+    expect(statusBox).not.toBeNull();
+    const overlaps =
+      statusBox!.x < card.x + card.width &&
+      card.x < statusBox!.x + statusBox!.width &&
+      statusBox!.y < card.y + card.height &&
+      card.y < statusBox!.y + statusBox!.height;
+    expect(overlaps).toBe(false);
   });
 }
 
