@@ -168,6 +168,12 @@ export function createChangeBand(
   const outlineGeometry = new THREE.BufferGeometry();
   const outlineAttribute = new THREE.BufferAttribute(outlinePositions, 3);
   outlineGeometry.setAttribute('position', outlineAttribute);
+  // The dash distances live in one attribute updated in place:
+  // `computeLineDistances` allocates a new one on every call, and a
+  // replaced attribute's GPU buffer is never freed.
+  const outlineDistances = new Float32Array(outlineLevel.length);
+  const distanceAttribute = new THREE.BufferAttribute(outlineDistances, 1);
+  outlineGeometry.setAttribute('lineDistance', distanceAttribute);
   const outline = new THREE.LineSegments(
     outlineGeometry,
     keepProgram(
@@ -194,6 +200,10 @@ export function createChangeBand(
     seam: { value: THREE.Color };
   };
 
+  // The viewport re-applies the value every frame to keep the handle
+  // screen-sized; the band only needs rebuilding when the value moves.
+  let applied = Number.NaN;
+
   return {
     object,
     update(value: number) {
@@ -201,9 +211,10 @@ export function createChangeBand(
       const cutting = value < 0;
       walls.visible = engaged;
       outline.visible = engaged && cutting;
-      if (!engaged) {
+      if (!engaged || value === applied) {
         return;
       }
+      applied = value;
       uniforms.stripe.value.setHex(
         cutting ? CHANGE.cutStripe : CHANGE.addStripe
       );
@@ -226,7 +237,21 @@ export function createChangeBand(
             outlineBase[vertex * 3 + 2]! + direction.z * lift;
         }
         outlineAttribute.needsUpdate = true;
-        outline.computeLineDistances();
+        // Cumulative per segment, as LineSegments.computeLineDistances does.
+        for (let vertex = 0; vertex + 1 < outlineLevel.length; vertex += 2) {
+          const start = vertex === 0 ? 0 : outlineDistances[vertex - 1]!;
+          const dx =
+            outlinePositions[vertex * 3 + 3]! - outlinePositions[vertex * 3]!;
+          const dy =
+            outlinePositions[vertex * 3 + 4]! -
+            outlinePositions[vertex * 3 + 1]!;
+          const dz =
+            outlinePositions[vertex * 3 + 5]! -
+            outlinePositions[vertex * 3 + 2]!;
+          outlineDistances[vertex] = start;
+          outlineDistances[vertex + 1] = start + Math.hypot(dx, dy, dz);
+        }
+        distanceAttribute.needsUpdate = true;
       }
     },
     dispose() {
