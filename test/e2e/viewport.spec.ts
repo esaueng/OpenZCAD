@@ -390,9 +390,10 @@ test('the wheel zooms toward the pointer, and the preference turns it off', asyn
   const box = await canvas.boundingBox();
   expect(box).not.toBeNull();
   // Well off-centre: centre-zoom leaves the target alone, cursor-zoom pulls
-  // it toward this point.
+  // it toward this point. Left of the right lane, where a wheel would
+  // scroll the model drawer instead.
   const cursor = {
-    x: box!.x + box!.width * 0.75,
+    x: box!.x + box!.width * 0.64,
     y: box!.y + box!.height * 0.3
   };
 
