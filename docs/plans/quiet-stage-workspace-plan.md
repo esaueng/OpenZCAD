@@ -143,7 +143,11 @@ Each slice is one PR against `main`, recorded on the U04 row when it merges.
    however the wall is foreshortened. The default reading follows the
    operation: Offset for moving a face, Total for resizing a primitive, whose
    number is its own dimension. Where the axis points at the camera the label
-   keeps to the pin's right rather than covering it.
+   keeps to the pin's right rather than covering it. Not yet as designed: the
+   moved face keeps its selection fill. Fading it during the drag made hosted
+   CI's software-GL drag specs miss their budgets on every attempt (bisected
+   on CI: the same build without the fade passed), so a neutral moved face
+   needs another route and is a follow-up.
 
 ## Open questions
 

@@ -1099,37 +1099,6 @@ const SNAP_PROJECT_SCRATCH = new THREE.Vector3();
  * mesh as drawn; null when nothing lies behind the face.
  */
 /**
- * While a face offset is engaged only the change is coloured: the selected
- * face's fill gives way to the band, and its rim (drawn by the edge overlay)
- * stays to say which face is moving. The fills fade rather than switch.
- *
- * They fade to a trace, not to zero: a highlight settled at opacity 0 had its
- * programs torn down and recompiled on the next preview, six times in one
- * cylinder drag, which on software GL added seconds per test.
- */
-const MUTED_FACE_FILL_OPACITY = 0.06;
-
-function muteSelectedFaceFill(context: SceneContext, muted: boolean) {
-  context.bodyGroup.traverse((child) => {
-    if (
-      !(child instanceof THREE.Mesh) ||
-      (child.name !== 'body-face-selected' &&
-        child.name !== 'body-face-selected-hidden')
-    ) {
-      return;
-    }
-    const material = child.material as THREE.Material;
-    material.userData.targetOpacity = muted
-      ? MUTED_FACE_FILL_OPACITY
-      : child.name === 'body-face-selected'
-        ? SELECTED_FACE_OPACITY
-        : SELECTED_FACE_HIDDEN_OPACITY;
-    context.fadeIns.add(material);
-  });
-  context.requestRender();
-}
-
-/**
  * A planar face's boundary loops in world space, recovered from the body's
  * display mesh: what the offset rig sweeps into the band of wall a push or
  * pull adds or removes. Null when the face is not in the mesh or its
@@ -1694,8 +1663,6 @@ export function ModelViewer({
   const offsetExtentRef = useRef<number | null>(null);
   /** Which number the offset chip shows: the drag delta, or the whole span. */
   const offsetChipModeRef = useRef<'offset' | 'total'>('offset');
-  // Whether the selected face's fill is faded for an engaged offset.
-  const offsetFillMutedRef = useRef(false);
   /** Last frame's cylinder chip layout, for hysteresis at the threshold. */
   const dimensionChipBesidePinRef = useRef(false);
   /** Cylindrical radius has its own non-translating affordance and lifecycle. */
@@ -7292,12 +7259,6 @@ export function ModelViewer({
         // Keep dimension arrowheads screen-sized across a pure wheel zoom.
         offsetRig.setValue(offsetRig.value());
       }
-      const fillMuted =
-        offsetRig !== null && Math.abs(offsetRig.value()) > 1e-9;
-      if (fillMuted !== offsetFillMutedRef.current) {
-        offsetFillMutedRef.current = fillMuted;
-        muteSelectedFaceFill(context, fillMuted);
-      }
       const cylinderRig = cylinderRadiusRigRef.current;
       if (cylinderRig) {
         const rigScale =
@@ -7971,10 +7932,7 @@ export function ModelViewer({
           polygonOffset: true,
           polygonOffsetFactor: -3
         });
-        // A preview rebuilt mid-drag must not bring the fill back.
-        highlightMaterial.userData.targetOpacity = offsetFillMutedRef.current
-          ? MUTED_FACE_FILL_OPACITY
-          : SELECTED_FACE_OPACITY;
+        highlightMaterial.userData.targetOpacity = SELECTED_FACE_OPACITY;
         const highlight = new THREE.Mesh(geometry, highlightMaterial);
         highlight.name = 'body-face-selected';
         highlight.renderOrder = VIEWPORT_RENDER_ORDER.SELECTED_GEOMETRY;
@@ -7995,9 +7953,7 @@ export function ModelViewer({
           depthWrite: false,
           depthFunc: THREE.GreaterDepth
         });
-        hiddenMaterial.userData.targetOpacity = offsetFillMutedRef.current
-          ? MUTED_FACE_FILL_OPACITY
-          : SELECTED_FACE_HIDDEN_OPACITY;
+        hiddenMaterial.userData.targetOpacity = SELECTED_FACE_HIDDEN_OPACITY;
         context.fadeIns.add(hiddenMaterial);
         const hiddenHighlight = new THREE.Mesh(hiddenGeometry, hiddenMaterial);
         hiddenHighlight.name = 'body-face-selected-hidden';
