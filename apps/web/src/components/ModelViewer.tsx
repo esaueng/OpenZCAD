@@ -5166,10 +5166,31 @@ export function ModelViewer({
             const clearance = PIN_CHIP_GAP_PX / 2;
             const tagWidth = radiusLabelChip.offsetWidth;
             const valueWidth = chip.offsetWidth;
-            const start =
+            const width = tagWidth + 2 + valueWidth;
+            // The whole pair keeps out from under the right lane (the anchor
+            // dodge above only reserves a centred value's width): one that
+            // would reach it goes to the pin's other side, and clamps only
+            // when that side is under the lane too.
+            const lane = renderer.domElement
+              .closest('.viewer-area')
+              ?.querySelector<HTMLElement>(
+                '.stage-right > *, .tool-card:has(.extrude-form)'
+              );
+            const limit = lane
+              ? lane.getBoundingClientRect().left -
+                renderer.domElement.getBoundingClientRect().left -
+                8
+              : Number.POSITIVE_INFINITY;
+            let start =
               screen.x >= pinScreenAt.x
                 ? screen.x - clearance
-                : screen.x + clearance - tagWidth - 2 - valueWidth;
+                : screen.x + clearance - width;
+            if (start + width > limit) {
+              start = Math.min(
+                pinScreenAt.x - clearance - width,
+                limit - width
+              );
+            }
             hud.showAt(chip, start + tagWidth + 2 + valueWidth / 2, screen.y);
             hud.showAt(radiusLabelChip, start + tagWidth, screen.y);
           } else {

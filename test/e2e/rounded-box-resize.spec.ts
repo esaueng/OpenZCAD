@@ -202,6 +202,19 @@ test('resizes a rounded box from its minimum side with exact entry, drag, cancel
   await expect(page.getByTestId('direct-manipulation-mode')).toHaveText(
     /^Offset/
   );
+  // The label pair beside the pin stays out from under the right lane: on
+  // CI's font metrics it once reached into the inspector, which took the
+  // click meant for the value.
+  const lane = await page.locator('.stage-right > *').first().boundingBox();
+  const valueBox = await page
+    .getByTestId('direct-manipulation-value')
+    .boundingBox();
+  const tagBox = await page
+    .getByTestId('direct-manipulation-mode')
+    .boundingBox();
+  expect(lane).not.toBeNull();
+  expect(valueBox!.x + valueBox!.width).toBeLessThanOrEqual(lane!.x);
+  expect(tagBox!.x + tagBox!.width).toBeLessThanOrEqual(lane!.x);
   await page.getByTestId('direct-manipulation-value').click();
   await expect(
     page.getByRole('dialog', { name: 'Offset value' })
