@@ -90,6 +90,13 @@ export interface PanelState {
    * and keeps it.
    */
   commandFoldOpen: boolean;
+  /**
+   * The sketch palette flyout (overview, snapping, grid, constraints)
+   * beside the sketch rail. Closed to begin with, and remembered across
+   * sketch sessions: leaving a sketch and editing it again should not fold
+   * the settings someone was working from.
+   */
+  sketchPaletteOpen: boolean;
 }
 
 /** The drawer sections the instrument rail can open directly. */
@@ -115,7 +122,8 @@ export const DEFAULT_PANEL_STATE: PanelState = {
     pattern: true
   },
   drawerOpen: false,
-  commandFoldOpen: false
+  commandFoldOpen: false,
+  sketchPaletteOpen: false
 };
 
 export const TOOL_GROUP_KEYS = Object.keys(
@@ -131,7 +139,8 @@ function copyDefaults(): PanelState {
     workspaceTourDismissed: DEFAULT_PANEL_STATE.workspaceTourDismissed,
     toolGroups: { ...DEFAULT_PANEL_STATE.toolGroups },
     drawerOpen: DEFAULT_PANEL_STATE.drawerOpen,
-    commandFoldOpen: DEFAULT_PANEL_STATE.commandFoldOpen
+    commandFoldOpen: DEFAULT_PANEL_STATE.commandFoldOpen,
+    sketchPaletteOpen: DEFAULT_PANEL_STATE.sketchPaletteOpen
   };
 }
 
@@ -162,6 +171,9 @@ export function normalizePanelState(value: unknown): PanelState {
   }
   if (typeof root.commandFoldOpen === 'boolean') {
     state.commandFoldOpen = root.commandFoldOpen;
+  }
+  if (typeof root.sketchPaletteOpen === 'boolean') {
+    state.sketchPaletteOpen = root.sketchPaletteOpen;
   }
   const sections = root.sidebarSections;
   if (sections && typeof sections === 'object' && !Array.isArray(sections)) {

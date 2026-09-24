@@ -186,118 +186,9 @@
   padding: 1px 0 2px;
 }
 
-/* ── Sketch rail in the column ── */
-
-.sketch-rail {
-  position: static;
-  max-width: none;
-  display: flex;
-  flex-direction: column;
-  align-items: stretch;
-  gap: 4px;
-  padding: 6px;
-  background: transparent;
-  border: 0;
-  border-radius: 0;
-  box-shadow: none;
-  transform: none;
-  animation: none;
-}
-
-.sketch-rail .sketch-rail-group-label {
-  padding: 6px 4px 0;
-}
-
-.sketch-rail-group {
-  display: grid;
-  gap: 2px;
-}
-
-.sketch-rail-group.draw {
-  grid-template-columns: repeat(3, minmax(0, 1fr));
-}
-
-.sketch-rail-group.draw > button,
-.sketch-rail-group.draw .sketch-circle-tool > button:first-child {
-  min-height: 46px;
-  flex-direction: column;
-  justify-content: center;
-  gap: 3px;
-  padding: 5px 2px;
-  font-size: 10px;
-}
-
-.sketch-rail-group.draw button kbd {
-  display: none;
-}
-
-.sketch-rail-group.draw .sketch-circle-tool {
-  display: flex;
-  min-width: 0;
-}
-
-.sketch-rail-group.draw .sketch-circle-tool > button:first-child {
-  flex: 1;
-  min-width: 0;
-}
-
-.sketch-rail-group.modify {
-  grid-template-columns: repeat(3, minmax(0, 1fr));
-}
-
-.sketch-rail-group.modify > button {
-  flex-direction: column;
-  justify-content: center;
-  gap: 3px;
-  min-height: 40px;
-  padding: 5px 2px;
-  font-size: 10px;
-}
-
-.sketch-rail-group.constrain {
-  grid-template-columns: repeat(6, minmax(0, 1fr));
-}
-
-.sketch-rail-group.constrain > button {
-  justify-content: center;
-  padding: 5px 0;
-}
-
-.sketch-rail-group.solve {
-  grid-template-columns: max-content minmax(0, 1fr);
-  align-items: center;
-  gap: 6px;
-  padding-top: 2px;
-}
-
-.sketch-rail-group.solve .sketch-solve-pill {
-  justify-self: start;
-  min-width: 0;
-  /* The pill reserves its widest reading so it never jitters; at a narrow
-     column that reservation is wider than the cell, so it is capped here. */
-  max-width: 100%;
-  overflow: hidden;
-  text-overflow: ellipsis;
-}
-
-.sketch-rail-group.solve .sketch-solve-pill .stable-label {
-  max-width: 100%;
-  overflow: hidden;
-}
-
-.sketch-rail-group.utility {
-  grid-template-columns: repeat(3, minmax(0, 1fr));
-  padding-top: 4px;
-  border-top: var(--border-thin);
-}
-
-.sketch-rail-group.utility > button {
-  flex-direction: column;
-  justify-content: center;
-  gap: 3px;
-  padding: 5px 2px;
-  font-size: 10px;
-}
+/* ── Sketch rail in the column ──
+   The rail's own layout is in quiet-stage.css (it is the verb rail's twin);
+   only the settings flyout's frame is undone here. ── */
 
 /* The sketch settings ride in the column instead of floating. */
 .sketch-palette {
@@ -664,27 +555,11 @@
   .workspace.column-layout {
     --column-w: min(var(--sidebar-w), 232px);
   }
-
-  .sketch-rail-group.draw > button > span:not(.sketch-circle-tool),
-  .sketch-rail-group.utility > button {
-    font-size: 0;
-  }
-
-  .sketch-rail-group.draw > button,
-  .sketch-rail-group.draw .sketch-circle-tool > button:first-child,
-  .sketch-rail-group.utility > button {
-    min-height: 32px;
-    gap: 0;
-  }
 }
 
 @media (max-width: 820px) {
   .workspace.column-layout {
     --column-w: min(var(--sidebar-w), 200px);
-  }
-
-  .sketch-rail-group.draw {
-    grid-template-columns: repeat(3, minmax(0, 1fr));
   }
 }
 

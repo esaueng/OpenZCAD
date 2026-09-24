@@ -1891,7 +1891,7 @@ test('view keys still work while a profile pick is waiting for a click', async (
   // palette over the right of it — offsetting from the canvas centre left the
   // second drag ending 15.6px short of the palette's left edge, so measure
   // what is bare instead.
-  await expect(page.locator('.sketch-palette')).toBeVisible();
+  await expect(page.locator('.sketch-rail')).toBeVisible();
   const centres = await bareCanvasDrags(page, { count: 2, dragX: 55 });
   const circleTool = sketchTools.getByRole('button', { name: /^Circle/ });
   // The dock's grid segment; the floating HUD label only stands in when no
