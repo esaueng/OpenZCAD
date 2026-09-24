@@ -1,3 +1,4 @@
+import { countLabel } from './toasts';
 import { CommandManager } from '@openzcad/command-system';
 import {
   documentNodesWithHistory,
@@ -42,7 +43,7 @@ export function sourceUploadMessage(
   ]
     .filter(Boolean)
     .join(' ');
-  return `Project saved, but ${remaining} source file(s) still need uploading. ${details} Use Save to retry.`;
+  return `Project saved, but ${countLabel(remaining, 'source file', 'source files')} still need uploading. ${details} Use Save to retry.`;
 }
 
 /** Carry acknowledged source locations into edits made while an upload ran. */

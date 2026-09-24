@@ -380,7 +380,9 @@
   background: var(--color-border-strong);
   border: 1px solid var(--color-border-strong);
   border-radius: 999px;
-  transition: background-color var(--dur-fast) var(--ease-out);
+  transition:
+    background-color var(--dur-fast) var(--ease-out),
+    border-color var(--dur-fast) var(--ease-out);
 }
 
 .settings-toggle span::after {

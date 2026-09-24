@@ -609,16 +609,6 @@
   white-space: nowrap;
 }
 
-.start-sync-spin {
-  animation: start-sync-spin 900ms linear infinite;
-}
-
-@keyframes start-sync-spin {
-  to {
-    transform: rotate(360deg);
-  }
-}
-
 /* ── Part tiles ──────────────────────────────────────────── */
 
 .start-tile-grid {
