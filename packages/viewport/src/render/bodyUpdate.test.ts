@@ -163,4 +163,34 @@ describe('retained exact body buffers', () => {
     expect(updateObjectForBody(object, cylinder(12, 15))).toBe(true);
     disposeObject(object);
   });
+
+  it('keeps the body shader program when a replaced body is disposed', () => {
+    // Disposing the material is what releases its program; a body disposed
+    // before its replacement first draws would relink the same shader.
+    const object = createObjectForBody(cylinder()) as THREE.Mesh;
+    const material = object.material as THREE.Material;
+    let materialDisposed = false;
+    let geometryDisposed = false;
+    material.addEventListener('dispose', () => {
+      materialDisposed = true;
+    });
+    object.geometry.addEventListener('dispose', () => {
+      geometryDisposed = true;
+    });
+    const overlay = new THREE.Mesh(
+      new THREE.BufferGeometry(),
+      new THREE.MeshBasicMaterial()
+    );
+    let overlayDisposed = false;
+    overlay.material.addEventListener('dispose', () => {
+      overlayDisposed = true;
+    });
+    object.add(overlay);
+
+    disposeObject(object);
+
+    expect(materialDisposed).toBe(false);
+    expect(geometryDisposed).toBe(true);
+    expect(overlayDisposed).toBe(true);
+  });
 });
