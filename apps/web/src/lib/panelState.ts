@@ -97,6 +97,11 @@ export interface PanelState {
    * the settings someone was working from.
    */
   sketchPaletteOpen: boolean;
+  /**
+   * Tweak's parameter table, the flyout beside its rail. Open to begin
+   * with — the knobs are what Tweak is for — and remembered per device.
+   */
+  tweakPanelOpen: boolean;
 }
 
 /** The drawer sections the instrument rail can open directly. */
@@ -123,7 +128,8 @@ export const DEFAULT_PANEL_STATE: PanelState = {
   },
   drawerOpen: false,
   commandFoldOpen: false,
-  sketchPaletteOpen: false
+  sketchPaletteOpen: false,
+  tweakPanelOpen: true
 };
 
 export const TOOL_GROUP_KEYS = Object.keys(
@@ -140,7 +146,8 @@ function copyDefaults(): PanelState {
     toolGroups: { ...DEFAULT_PANEL_STATE.toolGroups },
     drawerOpen: DEFAULT_PANEL_STATE.drawerOpen,
     commandFoldOpen: DEFAULT_PANEL_STATE.commandFoldOpen,
-    sketchPaletteOpen: DEFAULT_PANEL_STATE.sketchPaletteOpen
+    sketchPaletteOpen: DEFAULT_PANEL_STATE.sketchPaletteOpen,
+    tweakPanelOpen: DEFAULT_PANEL_STATE.tweakPanelOpen
   };
 }
 
@@ -174,6 +181,9 @@ export function normalizePanelState(value: unknown): PanelState {
   }
   if (typeof root.sketchPaletteOpen === 'boolean') {
     state.sketchPaletteOpen = root.sketchPaletteOpen;
+  }
+  if (typeof root.tweakPanelOpen === 'boolean') {
+    state.tweakPanelOpen = root.tweakPanelOpen;
   }
   const sections = root.sidebarSections;
   if (sections && typeof sections === 'object' && !Array.isArray(sections)) {
