@@ -17361,11 +17361,7 @@ export function App() {
                 }
               />
             )}
-          <ToastHost
-            toast={toast}
-            onDismiss={dismissToast}
-            aboveViewBar={viewMode}
-          />
+          <ToastHost toast={toast} onDismiss={dismissToast} />
         </ErrorBoundary>
       }
       drawer={

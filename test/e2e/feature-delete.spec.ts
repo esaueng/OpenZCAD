@@ -1,4 +1,80 @@
+import type { Page } from '@playwright/test';
 import { expect, stubApi, test } from './openzcad-fixtures';
+
+/**
+ * The Undo toast, the status toast, the selection chip and the search bar
+ * share one lane. Each notice used to carry a fixed offset of its own, so the
+ * Undo toast was drawn over the status toast ("Deleted … Undo" across
+ * "Measuring … as stale"), over the chip, and over the chrome under the lane.
+ * Every visible notice now has pixels of its own, and the toast stands clear
+ * above the search bar and beside the readout.
+ */
+async function expectNoticeLaneClear(page: Page) {
+  const lane = await page.evaluate(async () => {
+    const selectors = [
+      '.toast',
+      '.workspace-toast',
+      '.workspace-toast-body',
+      '.selection-chip',
+      '.activity-pill'
+    ];
+    // Past the pop-in and the status fade: the pop-in's transform nudges the
+    // toast's box while it runs.
+    await Promise.all(
+      selectors
+        .flatMap((selector) => [...document.querySelectorAll(selector)])
+        .flatMap((element) => element.getAnimations())
+        .map((animation) => animation.finished)
+    );
+    const box = (selector: string) => {
+      const element = document.querySelector(selector);
+      if (!element) return null;
+      for (
+        let node: Element | null = element;
+        node;
+        node = node.parentElement
+      ) {
+        if (Number(getComputedStyle(node).opacity) === 0) return null;
+      }
+      const { top, bottom, left, right, width } =
+        element.getBoundingClientRect();
+      // `display: none` (the hint while the chip names the selection).
+      if (width === 0) return null;
+      return { top, bottom, left, right };
+    };
+    return {
+      toast: box('.toast'),
+      bar: box('.command-bar-row'),
+      readout: box('.viewport-readout'),
+      rows: {
+        status: box('.workspace-toast-body'),
+        chip: box('.selection-chip'),
+        pill: box('.activity-pill'),
+        hint: box('.workspace-hint')
+      }
+    };
+  });
+  expect(lane.toast).not.toBeNull();
+  // The search bar is the chrome the lane stands on.
+  expect(lane.bar).not.toBeNull();
+  expect(lane.toast!.bottom).toBeLessThanOrEqual(lane.bar!.top);
+  // The readout sits in the bottom-left corner, under the column.
+  expect(lane.readout).not.toBeNull();
+  expect(
+    lane.toast!.right <= lane.readout!.left ||
+      lane.toast!.left >= lane.readout!.right ||
+      lane.toast!.bottom <= lane.readout!.top
+  ).toBe(true);
+  // A running or warning status keeps its own row under the toast (a
+  // settled one steps aside rather than repeat it), as do the chip, the
+  // activity pill and the guidance hint.
+  for (const [name, row] of Object.entries(lane.rows)) {
+    if (!row) continue;
+    expect(lane.toast!.bottom, `toast clears the ${name}`).toBeLessThanOrEqual(
+      row.top
+    );
+  }
+}
 
 /**
  * Deleting a feature from its history row used to be instant, silent and
@@ -47,6 +123,26 @@ test('deleting a history feature raises an undoable toast that counts its depend
   );
   expect(count).toBeGreaterThanOrEqual(4);
   await expect(summary.getByLabel(/ · 16 features · /)).toBeVisible();
+  await expectNoticeLaneClear(page);
+
+  // The full stack: a selection chip, a rebuild still running and the Undo
+  // toast at once. Holding the toast under the pointer keeps it up while the
+  // pick lands. The running tone is set directly: a real rebuild is over
+  // before a spec could measure it, and the lane keys on the tone alone.
+  await toast.hover();
+  const canvas = page.locator('.viewer-host canvas');
+  const canvasBox = (await canvas.boundingBox())!;
+  await page.mouse.click(
+    canvasBox.x + canvasBox.width / 2,
+    canvasBox.y + canvasBox.height / 2
+  );
+  await expect(page.locator('.selection-chip')).toBeVisible();
+  await toast.hover();
+  await status.evaluate((footer) => {
+    footer.classList.remove('ready', 'hidden');
+    footer.classList.add('running');
+  });
+  await expectNoticeLaneClear(page);
 
   await toast.getByRole('button', { name: 'Undo' }).click();
   await expect(toast).toHaveCount(0);

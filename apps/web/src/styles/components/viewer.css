@@ -445,21 +445,28 @@
   white-space: nowrap;
 }
 
-/* Transient notice above the selection chip: one at a time, short-lived,
-   raised only by actions the viewport itself does not show the result of
-   (a delete, an export). It sits in the viewer area rather than the shell so
-   it clears the shell's overflow clip. */
+/* Transient notice at the top of the notice lane (quiet-stage.css): one at
+   a time, short-lived, raised only by actions the viewport itself does not
+   show the result of (a delete, an export). It sits in the viewer area
+   rather than the shell so it clears the shell's overflow clip. */
 .toast {
   position: absolute;
-  bottom: 48px;
-  left: 50%;
+  bottom: calc(
+    var(--lane-base, 48px) + var(--lane-chip, 0px) + var(--lane-status, 0px)
+  );
+  /* Centred on the lane, which is the viewer's centre unless the first-run
+     tour or a phone width narrows one side of it. */
+  left: calc((var(--notice-start, 12px) + 100% - var(--notice-end, 12px)) / 2);
   transform: translateX(-50%);
   z-index: calc(var(--z-inspector-float) + 1);
   display: inline-flex;
   align-items: center;
   gap: 10px;
   min-height: 30px;
-  max-width: min(560px, calc(100% - 24px));
+  max-width: min(
+    560px,
+    calc(100% - var(--notice-start, 12px) - var(--notice-end, 12px))
+  );
   padding: 4px 4px 4px 12px;
   color: var(--color-text);
   background: var(--color-surface-2);

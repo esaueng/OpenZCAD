@@ -1284,6 +1284,37 @@ describe(
       ).toBeNull();
     });
 
+    it('names each history feature after the parameter it actually binds', () => {
+      // A document that already owns `width_x` gets `width_x_2` for the new
+      // binding. The feature was named from the base name, so History read
+      // "Parameterize … width_x" for a feature that drives width_x_2 — two
+      // rows naming one parameter and none naming the other.
+      const manager = new CommandManager(structuredClone(imported));
+      manager.execute(
+        commandFactories.setParameter({ name: 'width_x', expression: '1' })
+      );
+      manager.document.derived = imported.derived;
+      const proposal = createAutoParameterizeProposal(
+        manager.document,
+        noSelection
+      )!;
+      const edits = proposal.operations.filter(
+        (operation): operation is DirectEditPatchOperation =>
+          operation.kind === 'add_direct_edit' &&
+          operation.operation.kind === 'set-face-distance'
+      );
+      expect(edits).toHaveLength(3);
+      const bound = edits.map((edit) =>
+        edit.operation.kind === 'set-face-distance'
+          ? String(edit.operation.distance)
+          : ''
+      );
+      expect(bound).toContain('width_x_2');
+      for (const [index, edit] of edits.entries()) {
+        expect(edit.name).toMatch(new RegExp(` ${bound[index]}$`));
+      }
+    });
+
     it('applies all initial bindings as identity-preserving no-ops', async () => {
       const bodyId = imported.bodyOrder[0]!;
       const before = imported.derived.bodyRepresentations[bodyId]!;
