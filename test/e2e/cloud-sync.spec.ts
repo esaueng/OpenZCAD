@@ -16,6 +16,7 @@ import type { StoredMeasurementRecord } from '../../apps/web/src/lib/measurement
 import {
   createProject,
   expect,
+  seedOpenModelDrawer,
   setSelectionFilter,
   stubApi,
   test
@@ -42,6 +43,7 @@ class SharedCloudProjectApi {
   projectLoadAttempts = 0;
 
   async install(page: Page): Promise<void> {
+    await seedOpenModelDrawer(page);
     const settings = structuredClone(DEFAULT_APP_SETTINGS);
     settings.assistant.enabled = false;
     settings.files.cloudAutosaveDelaySeconds = 1;

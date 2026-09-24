@@ -266,3 +266,91 @@ describe('assistant model settings', () => {
     expect(screen.queryByText('gpt-5.6-sol · medium')).toBeNull();
   });
 });
+
+/**
+ * Search and the assistant are one entry point: a question typed into command
+ * search arrives here as a request, and the closed conversation waits as an
+ * Ask button on the search bar.
+ */
+describe('asking from command search', () => {
+  const configured = {
+    configured: true,
+    provider: 'openai',
+    model: 'gpt-5.6-sol',
+    reasoningEffort: 'medium'
+  } as const;
+
+  function panelProps(
+    overrides: Partial<ComponentProps<typeof AssistantPanel>> = {}
+  ): ComponentProps<typeof AssistantPanel> {
+    return {
+      document: doc,
+      selection: { bodyIds: [], featureIds: [], topologies: [] },
+      onApply: vi.fn().mockResolvedValue(true),
+      onPreview: vi.fn().mockResolvedValue({ ok: true }),
+      collapsed: false,
+      onCollapsedChange: vi.fn(),
+      confirmDestructive: true,
+      ...overrides
+    };
+  }
+
+  it('sends the question as a turn, once per request id', async () => {
+    const props = panelProps({ effectiveAssistant: configured });
+    const { rerender } = render(<AssistantPanel {...props} />);
+    await act(async () => {});
+
+    const request = { id: 1, text: '  Why is the wall so thin?  ' };
+    await act(async () => {
+      rerender(<AssistantPanel {...props} request={request} />);
+    });
+    expect(await screen.findAllByText('Why is the wall so thin?')).toHaveLength(
+      1
+    );
+    expect(screen.getByLabelText('CAD change request')).toHaveValue('');
+    expect(fetch).toHaveBeenCalled();
+
+    // The same id again — any re-render of the app — does not ask twice.
+    const calls = vi.mocked(fetch).mock.calls.length;
+    await act(async () => {
+      rerender(<AssistantPanel {...props} request={{ ...request }} />);
+    });
+    expect(screen.getAllByText('Why is the wall so thin?')).toHaveLength(1);
+    expect(vi.mocked(fetch).mock.calls.length).toBe(calls);
+  });
+
+  it('leaves the question in the composer when the assistant cannot take it', async () => {
+    render(
+      <AssistantPanel
+        {...panelProps()}
+        request={{ id: 1, text: 'Why is the wall so thin?' }}
+      />
+    );
+    const composer = await screen.findByLabelText('CAD change request');
+    expect(composer).toHaveValue('Why is the wall so thin?');
+    // Waiting, not sent: no turn carries it.
+    expect(
+      screen.queryAllByText('Why is the wall so thin?', { ignore: 'textarea' })
+    ).toHaveLength(0);
+  });
+
+  it('renders the closed conversation as an Ask button in the slot it is given', () => {
+    const slot = document.createElement('div');
+    document.body.append(slot);
+    try {
+      render(
+        <AssistantPanel
+          {...panelProps({ collapsed: true })}
+          launcherSlot={slot}
+        />
+      );
+      const ask = screen.getByRole('button', {
+        name: 'Open the modeling assistant'
+      });
+      expect(slot).toContainElement(ask);
+      expect(ask).toHaveTextContent('Ask');
+    } finally {
+      slot.remove();
+    }
+  });
+});

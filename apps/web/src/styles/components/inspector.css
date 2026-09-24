@@ -260,7 +260,7 @@
 .kbd-inline {
   /* Always a lightened chip with dark text, whatever the theme: the primary
      button behind it is accent-filled in both. */
-  color: rgba(6, 17, 30, 0.75);
+  color: rgba(15, 18, 21, 0.75);
   background: rgba(255, 255, 255, 0.28);
   border: none;
   border-radius: var(--radius-sm);
@@ -487,7 +487,7 @@
   color: var(--color-text-muted);
   background: var(--color-surface-2);
   border: var(--border-thin);
-  border-radius: 999px;
+  border-radius: var(--radius-md);
   font-size: var(--fs-xs);
 }
 

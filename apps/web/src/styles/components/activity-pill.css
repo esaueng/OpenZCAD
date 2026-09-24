@@ -44,7 +44,7 @@
   color: var(--color-text);
   background: var(--color-surface);
   border: var(--border-strong);
-  border-radius: 6px;
+  border-radius: var(--radius-lg);
   box-shadow: var(--shadow-2);
   font-size: var(--fs-sm);
   white-space: nowrap;
@@ -236,13 +236,6 @@
   border: 1.5px solid var(--color-accent-dim);
   border-top-color: var(--color-accent);
   border-radius: 50%;
-  animation: activity-pill-spin 800ms linear infinite;
-}
-
-@keyframes activity-pill-spin {
-  to {
-    transform: rotate(360deg);
-  }
 }
 
 .activity-dot {
@@ -266,7 +259,24 @@
 
 /* The spinner and the stripe are the only proof the pill is live while the
    worker is blocked, so the reduced-motion fallback keeps a visible state
-   rather than removing the distinction entirely. */
+   rather than removing the distinction entirely. The in-app toggle gets the
+   same fallback: without it the stripe and ring froze on whatever frame the
+   global collapse landed on. */
+[data-reduced-motion='true'] .activity-pill {
+  animation: none;
+}
+
+[data-reduced-motion='true'] .activity-pill-bar.indeterminate > i {
+  animation: none;
+  background: var(--color-accent-dim);
+}
+
+[data-reduced-motion='true'] .activity-spin {
+  animation: none;
+  border-color: var(--color-accent);
+  border-top-color: var(--color-accent-dim);
+}
+
 @media (prefers-reduced-motion: reduce) {
   .activity-pill {
     animation: none;

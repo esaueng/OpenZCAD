@@ -182,10 +182,10 @@
 /* ── Workspace without a sidebar ─────────────────────────── */
 
 /*
-  Matches `.workspace.with-assistant`'s specificity so it survives the
-  narrow-screen rules in responsive.css, which reassert the sidebar column at
-  that weight. The column is zeroed as well as removed from the template so the
-  splitter offsets that read `--sidebar-col-w` collapse with it.
+  Two classes, so it survives the narrow-screen rules in responsive.css, which
+  reassert the sidebar column on `.workspace`. The column is zeroed as well as
+  removed from the template so the splitter offsets that read
+  `--sidebar-col-w` collapse with it.
 */
 .workspace.no-sidebar {
   --sidebar-col-w: 0px;
@@ -268,10 +268,12 @@
   display: inline-flex;
 }
 
-/* Opens upward: the bar is at the bottom edge of the viewport. */
+/* Opens downward: the bar sits at the top of the viewport. Opening upward
+   (from when the bar was at the bottom edge) put the panel at -67px, off
+   the window and over the top bar, with Front to Right unreachable. */
 .view-mode-views-panel {
   position: absolute;
-  bottom: calc(100% + 6px);
+  top: calc(100% + 6px);
   left: 50%;
   transform: translateX(-50%);
   z-index: var(--z-viewer-overlay);
@@ -761,7 +763,7 @@
   flex: 0 0 auto;
   padding: 1px 4px;
   border: 1px solid color-mix(in srgb, currentColor 28%, transparent);
-  border-radius: 999px;
+  border-radius: var(--radius-md);
   font-family: var(--font-mono);
   font-size: var(--fs-mini);
   line-height: 14px;
@@ -904,10 +906,9 @@
   }
 
   /* The stacked narrow layout gives the sidebar a row; without one the
-     viewport takes the whole workspace. Matches the specificity of the
-     stacked rule in responsive.css, and follows it in the cascade. */
-  .workspace.no-sidebar,
-  .workspace.no-sidebar.with-assistant {
+     viewport takes the whole workspace. Outranks the stacked rule in
+     responsive.css, and follows it in the cascade. */
+  .workspace.no-sidebar {
     grid-template-columns: minmax(0, 1fr);
     grid-template-rows: minmax(0, 1fr);
   }
@@ -956,7 +957,7 @@
   z-index: calc(var(--z-viewer-overlay) + 1);
   padding: 2px 7px;
   color: var(--color-text);
-  background: rgba(8, 18, 30, 0.82);
+  background: rgba(16, 19, 22, 0.82);
   border: var(--border-thin);
   border-radius: var(--radius-sm);
   font-family: var(--font-mono);
@@ -966,4 +967,89 @@
      a keyframe touching `transform` would fight that on every pointer move. */
   pointer-events: none;
   user-select: none;
+}
+
+/* ── Changing mode ─────────────────────────────────────────
+   Build, Tweak and View add and remove whole panels. Each one travels to or
+   from the edge it lives against — the column and the parts rail on the
+   left, the instrument rail on the right, the strip at the top, the readout
+   at the bottom — so a switch reads as the stage clearing or filling rather
+   than as a cut. The column and the strip also leave that way (AppShell
+   keeps them mounted for the exit); the rails and readout are small enough
+   that entering is the part that shows.
+
+   The strip and the column animate their child, not the float: a
+   direct-mode strip centres its float with translateX(-50%), which an
+   animated transform on the float itself would throw away. */
+.workspace-column-float > :is(.workspace-column, .tweak-panel),
+.view-mode-rail,
+.view-mode-rail-launcher {
+  animation: mode-in-left var(--dur-base) var(--ease-out);
+}
+
+.instrument-rail {
+  animation: mode-in-right var(--dur-base) var(--ease-out);
+}
+
+.palette-float > * {
+  animation: mode-in-top var(--dur-base) var(--ease-out);
+}
+
+.viewport-readout {
+  animation: mode-in-bottom var(--dur-base) var(--ease-out);
+}
+
+.workspace-column-float.closing,
+.palette-float.closing {
+  pointer-events: none;
+}
+
+.workspace-column-float.closing > * {
+  animation: mode-out-left var(--dur-fast) ease-in forwards;
+}
+
+.palette-float.closing > * {
+  animation: mode-out-top var(--dur-fast) ease-in forwards;
+}
+
+@keyframes mode-in-left {
+  from {
+    opacity: 0;
+    transform: translateX(-16px);
+  }
+}
+
+@keyframes mode-in-right {
+  from {
+    opacity: 0;
+    transform: translateX(16px);
+  }
+}
+
+@keyframes mode-in-top {
+  from {
+    opacity: 0;
+    transform: translateY(-12px);
+  }
+}
+
+@keyframes mode-in-bottom {
+  from {
+    opacity: 0;
+    transform: translateY(12px);
+  }
+}
+
+@keyframes mode-out-left {
+  to {
+    opacity: 0;
+    transform: translateX(-16px);
+  }
+}
+
+@keyframes mode-out-top {
+  to {
+    opacity: 0;
+    transform: translateY(-12px);
+  }
 }

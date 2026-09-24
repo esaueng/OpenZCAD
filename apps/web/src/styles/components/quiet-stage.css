@@ -1,0 +1,901 @@
+/* ── Quiet stage (U04 slice 2): islands over the viewport ──
+   The viewport is the page. The top bar, the column, the instruments on the
+   right, the readout and the command bar all float over it as islands, each
+   --island-gap from the edges. This file only positions and frames regions
+   the files above build; it never hides one, so it can come last. ── */
+
+.workspace.column-layout {
+  /* Where the bottom and top lanes start and end: clear of the column on
+     the left and of the instrument rail on the right. */
+  --lane-inset: calc(var(--column-w) + var(--island-gap) * 2);
+  --lane-end: calc(var(--rail-w) + var(--island-gap) * 2);
+  /* The bottom lanes' right edge: symmetric with the left on a wide stage
+     so they stay centred, the window edge on a phone. */
+  --lane-right: var(--lane-inset);
+  /* The readout under the column, and what the column leaves it. */
+  --readout-h: 32px;
+}
+
+/* Sketching adds the grid spacing to the readout, and a column-wide island
+   has no room for a fourth segment: it takes a second row, and the column
+   and drawer, which size off --readout-h, move up with it. Left floating
+   beside the island instead, the label sat on the search bar below ~1300px. */
+.workspace.column-layout:has(
+    .viewport-readout .viewport-dock-grid:not([hidden])
+  ) {
+  --readout-h: 60px;
+}
+
+/* ── The top islands ─────────────────────────────────────── */
+
+/* The top bar leaves the page flow: the viewport reaches the window's top
+   edge and the bar's three islands float over it. */
+.app-shell {
+  position: relative;
+  grid-template-rows: minmax(0, 1fr);
+}
+
+.app-shell > .topbar {
+  position: absolute;
+  z-index: calc(var(--z-panel-resizer) + 1);
+  top: var(--island-gap);
+  left: var(--island-gap);
+  right: var(--island-gap);
+  height: var(--topbar-h);
+  /* Equal flanks keep the mode switch on the window's centre line. */
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto minmax(0, 1fr);
+  align-items: stretch;
+  gap: var(--sp-2);
+  padding: 0;
+  background: transparent;
+  border: 0;
+  pointer-events: none;
+}
+
+.topbar-island {
+  min-width: 0;
+  background: var(--color-surface);
+  border: var(--border-thin);
+  border-radius: var(--radius-lg);
+  box-shadow: var(--shadow-1);
+  pointer-events: auto;
+}
+
+.topbar-identity {
+  justify-self: start;
+  max-width: 100%;
+  display: flex;
+  align-items: center;
+  gap: var(--sp-3);
+  padding: 0 var(--sp-3) 0 var(--sp-2);
+}
+
+.topbar-identity .breadcrumb {
+  max-width: none;
+}
+
+.topbar > .mode-switch.topbar-island {
+  justify-self: center;
+  align-self: center;
+  padding: 3px;
+}
+
+/* The thumb rides inside the island's padding, one segment wide. */
+.topbar > .mode-switch.topbar-island::before {
+  inset: 3px auto 3px 3px;
+  width: calc((100% - 6px) / 3);
+}
+
+.topbar > .topbar-actions-island {
+  justify-self: end;
+  align-self: center;
+  display: flex;
+  padding: 3px var(--sp-1);
+}
+
+.topbar-actions-island > .topbar-actions {
+  margin-left: 0;
+}
+
+/* ── The column ──────────────────────────────────────────── */
+
+.workspace-column-float {
+  top: var(--stage-top);
+  left: var(--island-gap);
+  bottom: var(--island-gap);
+  width: min(var(--column-w), calc(100% - var(--island-gap) * 2));
+}
+
+/* The readout sits under the column in the bottom-left corner. */
+.viewer-area:has(.viewport-readout) .workspace-column-float,
+.workspace.column-layout .viewer-area:has(.viewport-readout) .sidebar-resizer {
+  bottom: calc(var(--island-gap) * 2 + var(--readout-h));
+}
+
+/* The column, or Tweak's parameters panel in its slot, is an island. */
+.workspace-column,
+.workspace-column-float > .sidebar {
+  border: var(--border-thin);
+  border-radius: var(--radius-lg);
+  overflow: hidden;
+}
+
+.workspace.column-layout .sidebar-resizer {
+  top: var(--stage-top);
+  bottom: var(--island-gap);
+  left: calc(
+    var(--island-gap) + min(var(--column-w), calc(100% - var(--island-gap) * 2))
+  );
+}
+
+/* ── The instruments on the right ────────────────────────── */
+
+/* How you look at the model: the viewer bar as a vertical icon rail under
+   the top-right island. Its panels open to the left of it. */
+.instrument-rail {
+  position: absolute;
+  top: var(--stage-top);
+  right: var(--island-gap);
+  /* Over the right lane, so a panel the rail opens to its left lands on top
+     of the drawer or the inspector rather than under them. */
+  z-index: calc(var(--z-inspector-float) + 1);
+}
+
+.instrument-rail .viewer-rail {
+  position: static;
+  width: var(--rail-w);
+  align-items: center;
+  padding: 4px 0;
+  border-radius: var(--radius-lg);
+  box-shadow: var(--shadow-1);
+  transform: none;
+}
+
+.instrument-rail .rail-button {
+  width: 30px;
+  height: 30px;
+}
+
+.instrument-rail .rail-divider {
+  width: 22px;
+}
+
+.instrument-rail .rail-section-panel {
+  top: 0;
+  bottom: auto;
+  left: auto;
+  right: calc(100% + 10px);
+  transform: none;
+}
+
+.instrument-rail .rail-views-panel {
+  top: -4px;
+  bottom: auto;
+  right: calc(100% + 10px);
+}
+
+/* The right lane, beside the rail: the inspector at the top, hugging its
+   content, and the model drawer filling what it leaves. One column, so an
+   open drawer never pushes the inspector into the canvas, where it covered
+   the values riding the model. */
+.stage-right {
+  position: absolute;
+  top: var(--stage-top);
+  right: var(--lane-end);
+  bottom: var(--island-gap);
+  z-index: var(--z-inspector-float);
+  width: var(--drawer-w);
+  display: flex;
+  flex-direction: column;
+  gap: var(--island-gap);
+  pointer-events: none;
+}
+
+.viewer-area.has-inspector .stage-right {
+  width: min(
+    var(--context-w),
+    calc(100% - var(--lane-end) - var(--island-gap))
+  );
+}
+
+/* shell.css draws the inspector as its own overlay; in the lane it is the
+   column's first item, shrinking (and scrolling) before the drawer does. */
+.stage-right > .inspector-float {
+  position: static;
+  flex: 0 1 auto;
+  min-height: 0;
+  width: auto;
+}
+
+/* Direct-edit controls (Move, the extrude value) are the operation of the
+   moment: top of the right lane, over the drawer, clear of the rail. */
+.workspace.column-layout .extrude-controller {
+  top: var(--stage-top);
+  right: var(--lane-end);
+  z-index: calc(var(--z-inspector-float) + 1);
+}
+
+/* ── The bottom-left readout and the corner ──────────────── */
+
+.viewport-readout {
+  position: absolute;
+  left: var(--island-gap);
+  bottom: var(--island-gap);
+  z-index: var(--z-viewer-overlay);
+  width: min(var(--column-w), calc(100% - var(--island-gap) * 2));
+  height: var(--readout-h);
+  box-sizing: border-box;
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  align-content: center;
+  gap: 4px 6px;
+  padding: 0 4px;
+  background: var(--color-surface);
+  border: var(--border-thin);
+  border-radius: var(--radius-lg);
+  box-shadow: var(--shadow-1);
+}
+
+.viewport-readout > .viewport-dock-divider {
+  display: none;
+}
+
+.viewport-readout .viewport-dock-filter,
+.viewport-readout .viewport-dock-snap,
+.viewport-readout .viewport-dock-grid {
+  height: 24px;
+}
+
+/* The log closes the first row; the grid segment, when sketching, wraps to
+   the second. */
+.viewport-readout .viewport-dock-log {
+  order: 1;
+  margin-left: auto;
+}
+
+.viewport-readout .viewport-dock-grid {
+  order: 2;
+}
+
+/* The scale bar reads beside the orientation cube, bottom-right. */
+.workspace.column-layout .viewport-scale-indicator {
+  left: auto;
+  right: calc(var(--island-gap) + 144px);
+  bottom: calc(var(--island-gap) + 4px);
+}
+
+/* ── The bottom lane: guidance, then search ──────────────── */
+
+.command-bar-lane {
+  position: absolute;
+  left: var(--lane-inset);
+  right: var(--lane-right);
+  bottom: var(--island-gap);
+  z-index: var(--z-viewer-overlay);
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 8px;
+  pointer-events: none;
+}
+
+.command-bar {
+  width: min(440px, 100%);
+  height: var(--command-bar-h);
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 0 6px 0 12px;
+  color: var(--color-text-subtle);
+  background: var(--color-surface);
+  border: var(--border-thin);
+  border-radius: var(--radius-lg);
+  box-shadow: var(--shadow-2);
+  font-size: var(--fs-base);
+  pointer-events: auto;
+  transition:
+    border-color var(--dur-fast) var(--ease-out),
+    color var(--dur-fast) var(--ease-out);
+}
+
+.command-bar > span {
+  flex: 1;
+  min-width: 0;
+  overflow: hidden;
+  text-align: left;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.command-bar:hover {
+  color: var(--color-text-muted);
+  border-color: var(--color-border-strong);
+}
+
+/* The bar and, at its end, the slot the assistant's Ask button renders
+   into (slice 5); the slot is empty while the conversation is open. */
+.command-bar-row {
+  width: min(520px, 100%);
+  display: flex;
+  gap: 6px;
+}
+
+.command-bar-row > .command-bar {
+  flex: 1;
+  width: auto;
+  min-width: 0;
+}
+
+.command-bar-slot {
+  display: flex;
+  pointer-events: auto;
+}
+
+.command-bar-slot:empty {
+  display: none;
+}
+
+.workspace-hint {
+  max-width: min(560px, 100%);
+  margin: 0;
+  padding: 4px 10px;
+  overflow: hidden;
+  color: var(--color-text-muted);
+  background: color-mix(in srgb, var(--color-bg) 78%, transparent);
+  border-radius: var(--radius-md);
+  font-size: var(--fs-xs);
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+/* The chip names the selection where the hint would be; it wins. */
+.viewer-area:has(.selection-chip) .workspace-hint {
+  display: none;
+}
+
+/* The toast, the selection chip and the activity pill stand on the bar. */
+.workspace-toast,
+.activity-lane {
+  left: var(--lane-inset);
+  right: var(--lane-right);
+  bottom: calc(var(--island-gap) + var(--command-bar-h) + 8px);
+}
+
+.workspace.column-layout .selection-chip {
+  bottom: calc(var(--island-gap) + var(--command-bar-h) + 8px);
+}
+
+.workspace.column-layout .viewer-area:has(.selection-chip) .workspace-toast,
+.workspace.column-layout .viewer-area:has(.selection-chip) .activity-lane {
+  bottom: calc(var(--island-gap) + var(--command-bar-h) + 44px);
+}
+
+.workspace.column-layout .toast {
+  bottom: calc(var(--island-gap) + var(--command-bar-h) + 44px);
+}
+
+/* ── Floating cards under the top islands ────────────────── */
+
+.workspace.column-layout .tool-card {
+  --tool-card-room: calc(100% - var(--lane-inset) - var(--lane-end));
+  top: var(--stage-top);
+  left: calc(var(--lane-inset) + var(--tool-card-room) / 2);
+}
+
+.workspace.column-layout .viewer-area.has-inspector .tool-card {
+  --tool-card-room: calc(
+    100% - var(--lane-inset) - var(--lane-end) - var(--context-w) -
+      var(--island-gap)
+  );
+}
+
+.workspace.column-layout .sketch-grid-indicator {
+  left: var(--lane-inset);
+  bottom: var(--island-gap);
+}
+
+.workspace-tour {
+  left: var(--lane-inset);
+}
+
+/* Everything that floats in the palette slot (direct-mode strips such as
+   the plane picker, and View's bar) starts under the top islands, as do the
+   parts rail and the measurement dock. */
+.workspace.column-layout .palette-float,
+.workspace.column-layout .palette-float:has(.view-mode-bar) {
+  top: var(--stage-top);
+}
+
+.view-mode-rail,
+.view-mode-rail-launcher {
+  top: var(--stage-top);
+  left: var(--island-gap);
+}
+
+.measurement-dock {
+  top: var(--stage-top);
+  right: var(--island-gap);
+}
+
+/* ── Narrow windows ──────────────────────────────────────── */
+
+/* Content-sized flanks: equal ones overran the action icons into the mode
+   switch once the window was too narrow to centre it. */
+@media (max-width: 620px) {
+  .app-shell > .topbar {
+    grid-template-columns: minmax(0, 1fr) auto auto;
+    gap: var(--sp-1);
+  }
+
+  /* View mode's own narrow rule docks the measurement workbench across the
+     bottom; it rises above the ruler and the search bar here, and the base
+     rule's top above must not stretch it back up to the islands. */
+  .measurement-dock {
+    top: auto;
+    bottom: calc(var(--island-gap) * 3 + var(--command-bar-h) + 36px);
+  }
+}
+
+/* A phone keeps the column over the left edge, so the bottom lanes run from
+   the column to the window's right edge; the scale bar is the first thing to
+   go and the cube steps up above the search bar. */
+@media (max-width: 520px) {
+  .workspace.column-layout {
+    --lane-right: var(--island-gap);
+  }
+
+  /* There is no second column on a phone: the right lane, when something
+     is in it, is the stage beside the rail, over the command card. */
+  .viewer-area .stage-right,
+  .viewer-area.has-inspector .stage-right {
+    left: var(--island-gap);
+    width: auto;
+  }
+
+  /* The ruler moves to the bottom-left, above the readout and the search
+     bar; the measurement workbench, which spans a phone's width, rises
+     above the ruler so neither covers the other. */
+  .workspace.column-layout .viewport-scale-indicator {
+    left: var(--island-gap);
+    right: auto;
+    bottom: calc(var(--island-gap) * 2 + var(--command-bar-h));
+  }
+
+  .workspace.column-layout .viewer-rail-stack,
+  .workspace.column-layout .viewer-area.has-inspector .viewer-rail-stack {
+    bottom: calc(var(--island-gap) * 2 + var(--command-bar-h));
+  }
+
+  /* The lane is too short for a word beside the bar: Ask is its icon (the
+     button keeps its name), so the bar keeps room to say what it is. */
+  .command-bar-slot .assistant-launcher {
+    padding-inline: 11px;
+  }
+
+  .command-bar-slot .assistant-launcher-word {
+    display: none;
+  }
+}
+
+/* ── The command card (U04 slice 3) ──────────────────────── */
+
+/* The column's first section answers "what can I do with what I picked":
+   a header naming the pick, the rows for it with one primary verb, then
+   every other tool in a grid. */
+.command-card {
+  display: flex;
+  flex-direction: column;
+  gap: 1px;
+  padding: 6px;
+}
+
+.command-card-head {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  min-height: 42px;
+  padding: 2px 2px 8px 4px;
+  margin-bottom: 2px;
+  border-bottom: var(--border-thin);
+}
+
+.command-card-icon {
+  flex: 0 0 auto;
+  display: grid;
+  place-items: center;
+  width: 28px;
+  height: 28px;
+  color: var(--color-text-muted);
+  background: var(--color-surface-2);
+  border-radius: var(--radius-md);
+}
+
+.command-card:not([data-context='idle']) .command-card-icon {
+  color: var(--color-on-accent);
+  background: var(--color-accent);
+}
+
+.command-card-title {
+  flex: 1;
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 1px;
+}
+
+.command-card-title strong {
+  overflow: hidden;
+  color: var(--color-text);
+  font-size: var(--fs-base);
+  font-weight: var(--fw-semibold);
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.command-card-title small {
+  overflow: hidden;
+  color: var(--color-text-muted);
+  font-family: var(--font-mono);
+  font-size: var(--fs-mini);
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.command-card-clear {
+  flex: 0 0 auto;
+  display: grid;
+  place-items: center;
+  width: 26px;
+  height: 26px;
+  color: var(--color-text-muted);
+  border-radius: var(--radius-md);
+}
+
+.command-card-clear:hover {
+  color: var(--color-text);
+  background: var(--color-surface-hover);
+}
+
+.command-group {
+  display: flex;
+  flex-direction: column;
+  gap: 1px;
+}
+
+.command-group-label {
+  padding: 8px 8px 3px;
+  color: var(--color-text-subtle);
+  font-family: var(--font-mono);
+  font-size: var(--fs-mini);
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+}
+
+.command-row {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  min-height: 32px;
+  padding: 0 6px 0 8px;
+  color: var(--color-text);
+  border: 1px solid transparent;
+  border-radius: var(--radius-md);
+  text-align: left;
+}
+
+.command-row svg {
+  flex: 0 0 auto;
+  width: 16px;
+  height: 16px;
+  color: var(--color-text-muted);
+}
+
+.command-row-label {
+  flex: 1;
+  min-width: 0;
+  overflow: hidden;
+  font-size: var(--fs-base);
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.command-row kbd {
+  flex: 0 0 auto;
+}
+
+.command-row:hover:not(:disabled),
+.command-icon:hover:not(:disabled) {
+  background: var(--color-surface-hover);
+}
+
+.command-row.primary {
+  color: var(--color-accent);
+  background: var(--color-accent-dim);
+}
+
+.command-row.primary svg {
+  color: var(--color-accent);
+}
+
+.command-row.primary:hover:not(:disabled) {
+  background: color-mix(in srgb, var(--color-accent) 22%, transparent);
+}
+
+.command-row.active,
+.command-icon.active {
+  color: var(--color-accent);
+  border-color: var(--color-accent-border);
+}
+
+.command-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(32px, 1fr));
+  gap: 2px;
+  padding: 0 2px 2px;
+}
+
+.command-icon {
+  display: grid;
+  place-items: center;
+  height: 32px;
+  color: var(--color-text-muted);
+  border: 1px solid transparent;
+  border-radius: var(--radius-md);
+}
+
+.command-icon svg {
+  width: 16px;
+  height: 16px;
+}
+
+/* ── The model drawer (U04 slice 4) ──────────────────────── */
+
+.workspace.column-layout {
+  --drawer-w: min(300px, 32vw);
+}
+
+/* The rail stacks its islands: the viewer bar, then the drawer's buttons. */
+.instrument-rail {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+/* Parameters, bodies and history in the right lane, on demand. The
+   bottom-right corner stays the cube's and the scale's: the drawer stops
+   above that row so navigation is never under it, and keeps enough height
+   to read under a tall inspector. */
+.model-drawer-float {
+  flex: 1 1 0;
+  min-height: min(180px, 100%);
+  margin-bottom: calc(var(--island-gap) + 96px);
+  display: flex;
+  pointer-events: none;
+}
+
+.model-drawer-float > .sidebar {
+  flex: 1;
+  min-width: 0;
+  overflow-y: auto;
+  background: var(--color-surface);
+  border: var(--border-thin);
+  border-radius: var(--radius-lg);
+  box-shadow: var(--shadow-2);
+  scrollbar-width: none;
+  pointer-events: auto;
+}
+
+.model-drawer-float > .sidebar::-webkit-scrollbar {
+  display: none;
+}
+
+/* With the browser in the drawer, the column is the command card alone and
+   hugs it, rather than running the height of the stage. */
+.viewer-area .workspace-column-float:not(:has(> .sidebar)) {
+  bottom: auto;
+  max-height: calc(
+    100% - var(--stage-top) - var(--island-gap) * 2 - var(--readout-h)
+  );
+}
+
+.workspace-column-float:not(:has(> .sidebar)) .workspace-column-tools {
+  max-height: none;
+  flex: 1 1 auto;
+  overflow-y: auto;
+  border-bottom: 0;
+}
+
+/* A drawer alone narrows the right lane to its own width; with the
+   inspector the lane is the inspector's, which the rule above covers. */
+.workspace.column-layout
+  .viewer-area.has-drawer:not(.has-inspector)
+  .tool-card {
+  --tool-card-room: calc(
+    100% - var(--lane-inset) - var(--lane-end) - var(--drawer-w) -
+      var(--island-gap)
+  );
+}
+
+/* ── The sketch card and the relations rail (U04 slice 6) ── */
+
+/* Draw and modify read as a list, each tool named with its key, rather
+   than a grid of tiles; the icons keep their places at every width. */
+.workspace-column .sketch-rail-group.draw,
+.workspace-column .sketch-rail-group.modify {
+  grid-template-columns: minmax(0, 1fr);
+  gap: 1px;
+}
+
+.workspace-column .sketch-rail-group.draw > button,
+.workspace-column
+  .sketch-rail-group.draw
+  .sketch-circle-tool
+  > button:first-child,
+.workspace-column .sketch-rail-group.modify > button {
+  min-height: 30px;
+  flex-direction: row;
+  justify-content: flex-start;
+  gap: 9px;
+  padding: 0 8px;
+  color: var(--color-text-muted);
+  font-size: var(--fs-base);
+}
+
+.workspace-column .sketch-rail-group.draw > button.active,
+.workspace-column
+  .sketch-rail-group.draw
+  .sketch-circle-tool
+  > button.active:first-child,
+.workspace-column .sketch-rail-group.modify > button.active {
+  color: var(--color-text);
+}
+
+.workspace-column .sketch-rail-group.draw button kbd {
+  display: inline-block;
+  margin-left: auto;
+}
+
+.workspace-column .sketch-rail-group.draw .sketch-circle-tool {
+  gap: 1px;
+}
+
+/* The card names its groups at every width; the floating rail it replaced
+   dropped them for room. */
+.workspace-column .sketch-rail-group-label {
+  display: block;
+}
+
+/* The selected entity's editor sits in the card under the tools, part of
+   the card rather than a float of its own. */
+.workspace-column .sketch-entity-dock {
+  position: static;
+  width: auto;
+  padding: 6px;
+  border-top: var(--border-thin);
+}
+
+.workspace-column .sketch-entity-editor,
+.workspace-column .sketch-entity-constraints {
+  box-shadow: none;
+}
+
+.workspace-column-footer {
+  padding: 8px;
+  border-top: var(--border-thin);
+}
+
+.workspace-column-footer .workspace-column-finish {
+  width: 100%;
+  height: 32px;
+  justify-content: center;
+}
+
+/* While sketching the relations stand beside the instrument rail, so the
+   right lane — and everything that keeps clear of it — steps left. */
+.workspace.column-layout .viewer-area:has(.sketch-relations) {
+  --lane-end: calc(var(--rail-w) + 44px + var(--island-gap) * 3);
+}
+
+.instrument-rail > .sketch-relations {
+  position: absolute;
+  top: 0;
+  right: calc(100% + var(--island-gap));
+  width: 44px;
+  box-sizing: border-box;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 2px;
+  padding: 5px 0;
+  background: var(--color-surface);
+  border: var(--border-thin);
+  border-radius: var(--radius-lg);
+  box-shadow: var(--shadow-2);
+}
+
+.sketch-relation-slot {
+  display: contents;
+}
+
+.sketch-relations-divider {
+  flex: 0 0 auto;
+  width: 20px;
+  height: 1px;
+  margin: 4px 0;
+  background: var(--color-border);
+}
+
+.sketch-relation {
+  position: relative;
+  flex: 0 0 auto;
+  width: 34px;
+  height: 34px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 0;
+  color: var(--color-text-muted);
+  background: transparent;
+  border: 1px solid transparent;
+  border-radius: var(--radius-md);
+}
+
+.sketch-relation:hover:not(:disabled) {
+  color: var(--color-text);
+  background: var(--color-surface-hover);
+}
+
+.sketch-relation.active {
+  color: var(--color-accent);
+  background: var(--color-accent-dim);
+  border-color: var(--color-accent-border);
+}
+
+/* Greyed, not hidden: the icons never move, and the reason is the
+   button's description. */
+.sketch-relation:disabled {
+  color: var(--color-text-dim);
+  opacity: 0.5;
+  cursor: default;
+}
+
+/* The name of a relation that fits the pick, outside the rail's left edge,
+   level with its icon. */
+.sketch-relation-name {
+  position: absolute;
+  top: 50%;
+  right: calc(100% + 11px);
+  height: 28px;
+  display: flex;
+  align-items: center;
+  padding: 0 10px;
+  color: var(--color-text);
+  background: var(--color-surface);
+  border: var(--border-thin);
+  border-radius: var(--radius-md);
+  box-shadow: var(--shadow-1);
+  font-size: var(--fs-sm);
+  font-weight: var(--fw-medium);
+  white-space: nowrap;
+  transform: translateY(-50%);
+  pointer-events: none;
+}
+
+.sketch-relation.active .sketch-relation-name {
+  color: var(--color-accent);
+  border-color: var(--color-accent-border);
+}
+
+.visually-hidden {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  margin: -1px;
+  padding: 0;
+  overflow: hidden;
+  clip: rect(0 0 0 0);
+  white-space: nowrap;
+  border: 0;
+}

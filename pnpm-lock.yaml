@@ -83,10 +83,10 @@ importers:
       '@cloudflare/vite-plugin':
         specifier: ^1.52.1
         version: 1.54.2(vite@8.2.2(@types/node@26.4.1)(esbuild@0.28.1)(jiti@2.7.0)(tsx@4.23.5)(yaml@2.9.0))(wrangler@4.128.0)
-      '@fontsource/ibm-plex-mono':
+      '@fontsource/geist-mono':
         specifier: ^5.3.0
         version: 5.3.0
-      '@fontsource/ibm-plex-sans':
+      '@fontsource/geist-sans':
         specifier: ^5.3.0
         version: 5.3.0
       '@openzcad/ai-contracts':
@@ -269,11 +269,11 @@ importers:
         specifier: 0.8.3
         version: 0.8.3
       remus-wasm:
-        specifier: github:esaueng/remus#8d5d532449276164e86ae76029648f2991953f1b&path:/crates/wasm/pkg
-        version: https://codeload.github.com/esaueng/remus/tar.gz/8d5d532449276164e86ae76029648f2991953f1b#path:/crates/wasm/pkg
+        specifier: github:esaueng/remus#cb13b53f5a40a56e78ae2efd4f7798280e2e0cc2&path:/crates/wasm/pkg
+        version: https://codeload.github.com/esaueng/remus/tar.gz/cb13b53f5a40a56e78ae2efd4f7798280e2e0cc2#path:/crates/wasm/pkg
       remus-wasm-io:
-        specifier: github:esaueng/remus#8d5d532449276164e86ae76029648f2991953f1b&path:/crates/wasm-io/pkg
-        version: https://codeload.github.com/esaueng/remus/tar.gz/8d5d532449276164e86ae76029648f2991953f1b#path:/crates/wasm-io/pkg
+        specifier: github:esaueng/remus#cb13b53f5a40a56e78ae2efd4f7798280e2e0cc2&path:/crates/wasm-io/pkg
+        version: https://codeload.github.com/esaueng/remus/tar.gz/cb13b53f5a40a56e78ae2efd4f7798280e2e0cc2#path:/crates/wasm-io/pkg
 
   packages/persistence:
     dependencies:
@@ -669,11 +669,11 @@ packages:
     resolution: {integrity: sha512-+CNAzxglkrpNf/kKywqQfk74QjtceuOE7Qm+AF8miRvPF/wmmK5+OJOgVh3AVTT3RP2mH3+FOaxlE5v72owk0A==}
     engines: {node: ^20.19.0 || ^22.13.0 || >=24}
 
-  '@fontsource/ibm-plex-mono@5.3.0':
-    resolution: {integrity: sha512-eTgnZjZEGk1QtD3ZstF+Vclo2HLAni8YMy34/DxllwZvyz1lR/1RF/xTiAquOBO7MvqBx8D2Ig2WCPMVfdZu7Q==}
+  '@fontsource/geist-mono@5.3.0':
+    resolution: {integrity: sha512-UtJ1BBBCVpMYdIcW7nEB45UAoAw5M53ZXs2t0ciPW+IokuAAIc56M8+kW5tXbRJCTpDw4XTtU7proT6NdQAHTg==}
 
-  '@fontsource/ibm-plex-sans@5.3.0':
-    resolution: {integrity: sha512-CbE4CbbEEZJX860XyUiRpsksXIQR8Rp2XDva2VO53NJox9tVNtusrysd2x5YkUEY3ErQ66W1IiiQL8/wihhw5w==}
+  '@fontsource/geist-sans@5.3.0':
+    resolution: {integrity: sha512-AmG7cE1AvE4NHROPaOl1sN+a02cB5xy6pA/ZV76HXqWTCsJTV2SCBc9DTFHfJqnVOODm7HhXIYtUIb75NP5QXQ==}
 
   '@humanfs/core@0.19.2':
     resolution: {integrity: sha512-UhXNm+CFMWcbChXywFwkmhqjs3PRCmcSa/hfBgLIb7oQ5HNb1wS0icWsGtSAUNgefHeI+eBrA8I1fxmbHsGdvA==}
@@ -1926,13 +1926,13 @@ packages:
     resolution: {integrity: sha512-6tDA8g98We0zd0GvVeMT9arEOnTw9qM03L9cJXaCjrip1OO764RDBLBfrB4cwzNGDj5OA5ioymC9GkizgWJDUg==}
     engines: {node: '>=8'}
 
-  remus-wasm-io@https://codeload.github.com/esaueng/remus/tar.gz/8d5d532449276164e86ae76029648f2991953f1b#path:/crates/wasm-io/pkg:
-    resolution: {path: /crates/wasm-io/pkg, tarball: https://codeload.github.com/esaueng/remus/tar.gz/8d5d532449276164e86ae76029648f2991953f1b}
-    version: 2.130.44
+  remus-wasm-io@https://codeload.github.com/esaueng/remus/tar.gz/cb13b53f5a40a56e78ae2efd4f7798280e2e0cc2#path:/crates/wasm-io/pkg:
+    resolution: {path: /crates/wasm-io/pkg, tarball: https://codeload.github.com/esaueng/remus/tar.gz/cb13b53f5a40a56e78ae2efd4f7798280e2e0cc2}
+    version: 2.130.47
 
-  remus-wasm@https://codeload.github.com/esaueng/remus/tar.gz/8d5d532449276164e86ae76029648f2991953f1b#path:/crates/wasm/pkg:
-    resolution: {path: /crates/wasm/pkg, tarball: https://codeload.github.com/esaueng/remus/tar.gz/8d5d532449276164e86ae76029648f2991953f1b}
-    version: 2.130.44
+  remus-wasm@https://codeload.github.com/esaueng/remus/tar.gz/cb13b53f5a40a56e78ae2efd4f7798280e2e0cc2#path:/crates/wasm/pkg:
+    resolution: {path: /crates/wasm/pkg, tarball: https://codeload.github.com/esaueng/remus/tar.gz/cb13b53f5a40a56e78ae2efd4f7798280e2e0cc2}
+    version: 2.130.47
 
   rolldown@1.2.4:
     resolution: {integrity: sha512-rSr7irW0K7QRWzjdJXqZowkcRdDtjRduh43rBltnVKd0VFq839l1lJoDvGJb6gl7+4rTTCrPWu+YfujUL8Ug7w==}
@@ -2534,9 +2534,9 @@ snapshots:
       '@eslint/core': 1.2.1
       levn: 0.4.1
 
-  '@fontsource/ibm-plex-mono@5.3.0': {}
+  '@fontsource/geist-mono@5.3.0': {}
 
-  '@fontsource/ibm-plex-sans@5.3.0': {}
+  '@fontsource/geist-sans@5.3.0': {}
 
   '@humanfs/core@0.19.2':
     dependencies:
@@ -3640,9 +3640,9 @@ snapshots:
       indent-string: 4.0.0
       strip-indent: 3.0.0
 
-  remus-wasm-io@https://codeload.github.com/esaueng/remus/tar.gz/8d5d532449276164e86ae76029648f2991953f1b#path:/crates/wasm-io/pkg: {}
+  remus-wasm-io@https://codeload.github.com/esaueng/remus/tar.gz/cb13b53f5a40a56e78ae2efd4f7798280e2e0cc2#path:/crates/wasm-io/pkg: {}
 
-  remus-wasm@https://codeload.github.com/esaueng/remus/tar.gz/8d5d532449276164e86ae76029648f2991953f1b#path:/crates/wasm/pkg: {}
+  remus-wasm@https://codeload.github.com/esaueng/remus/tar.gz/cb13b53f5a40a56e78ae2efd4f7798280e2e0cc2#path:/crates/wasm/pkg: {}
 
   rolldown@1.2.4:
     dependencies:

@@ -37,6 +37,7 @@ import {
   buildCylinderRadiusHandle,
   buildEdgeRadiusHandle,
   buildOffsetFaceHandle,
+  faceSweepProfile,
   bodiesInBox,
   boxSelectMode,
   cycleDepthPick,
@@ -148,6 +149,7 @@ import {
   sketchGlideEase,
   viewJumpEase,
   type CameraGlideStyle,
+  type HandleVec3,
   type WheelDevice
 } from '@openzcad/viewport';
 import type {
@@ -516,6 +518,14 @@ interface ModelViewerProps {
   /** Imperative sink for the zoom-aware scale without React frame updates. */
   scaleIndicatorRef: MutableRefObject<
     ((scale: ViewportScale | null) => void) | null
+  >;
+  /**
+   * Imperative sink for the sketch grid spacing ("Grid 5 mm"), or null when no
+   * grid is shown. When a host renders one (the viewport dock), the readout
+   * lives there and the floating HUD label stays hidden.
+   */
+  sketchGridReadoutRef?: MutableRefObject<
+    ((label: string | null) => void) | null
   >;
   onSelectTopology(
     selection: TopologySelection | null,
@@ -1096,6 +1106,67 @@ const SNAP_PROJECT_SCRATCH = new THREE.Vector3();
  * mesh: the far end of the dimension an offset handle draws. Exact for the
  * mesh as drawn; null when nothing lies behind the face.
  */
+/**
+ * A planar face's boundary loops in world space, recovered from the body's
+ * display mesh: what the offset rig sweeps into the band of wall a push or
+ * pull adds or removes. Null when the face is not in the mesh or its
+ * triangles do not close into loops, and the rig then draws no band.
+ */
+function faceBoundaryLoops(
+  body: THREE.Object3D,
+  topologyId: string
+): HandleVec3[][] | null {
+  const indexed: THREE.Mesh<THREE.BufferGeometry>[] = [];
+  body.traverse((child) => {
+    if (
+      child instanceof THREE.Mesh &&
+      (child.geometry as THREE.BufferGeometry).getIndex()
+    ) {
+      indexed.push(child as THREE.Mesh<THREE.BufferGeometry>);
+    }
+  });
+  const found = indexed[0];
+  if (!found) {
+    return null;
+  }
+  const topology = (
+    found.userData as {
+      topology?: {
+        faces: {
+          topologyId: string;
+          triangleStart: number;
+          triangleCount: number;
+        }[];
+      };
+    }
+  ).topology;
+  const face = topology?.faces.find(
+    (candidate) => candidate.topologyId === topologyId
+  );
+  const position = found.geometry.getAttribute('position');
+  const index = found.geometry.getIndex();
+  if (!face || !position || !index) {
+    return null;
+  }
+  const profile = faceSweepProfile(
+    position.array,
+    index.array,
+    face.triangleStart,
+    face.triangleCount
+  );
+  if (!profile) {
+    return null;
+  }
+  found.updateWorldMatrix(true, false);
+  const world = new THREE.Vector3();
+  return profile.loops.map((loop) =>
+    loop.map((point) => {
+      world.set(point.x, point.y, point.z).applyMatrix4(found.matrixWorld);
+      return { x: world.x, y: world.y, z: world.z };
+    })
+  );
+}
+
 function bodyExtentBehind(
   object: THREE.Object3D,
   origin: THREE.Vector3,
@@ -1205,8 +1276,8 @@ const E2E_CANVAS_HOOKS_ENABLED =
       VITE_E2E?: string;
     }
   ).VITE_E2E === '1';
-const SKETCH_COLOR = 0x4da3ff;
-const SKETCH_SELECTED_COLOR = 0x9ecbff;
+const SKETCH_COLOR = 0x6798ff;
+const SKETCH_SELECTED_COLOR = 0x9eb8ff;
 /**
  * Screen-space widths in CSS pixels for the non-body polylines. Native WebGL
  * lines were locked to one device pixel; a hair over one CSS pixel keeps the
@@ -1286,6 +1357,7 @@ export function ModelViewer({
   orientationRef,
   orientationDragRef,
   scaleIndicatorRef,
+  sketchGridReadoutRef,
   onSelectTopology,
   onSelectEdgeChain,
   selectionFilter,
@@ -1636,7 +1708,7 @@ export function ModelViewer({
     const scene = new THREE.Scene();
     // Solid clear colour stays behind the clip-space gradient as a safe first
     // frame/context-recovery fallback.
-    scene.background = new THREE.Color('#05070a');
+    scene.background = new THREE.Color('#0b0c0f');
     const gradientBackdrop = createGradientBackdrop();
     scene.add(gradientBackdrop);
 
@@ -4714,7 +4786,7 @@ export function ModelViewer({
           delete renderer.domElement.dataset.e2eHandleDx;
           delete renderer.domElement.dataset.e2eHandleDy;
           delete renderer.domElement.dataset.e2eHandlePixelsPerUnit;
-          delete renderer.domElement.dataset.e2eOffsetDimensionVisible;
+          delete renderer.domElement.dataset.e2eOffsetChangeVisible;
           delete renderer.domElement.dataset.e2eChipAnchorX;
           delete renderer.domElement.dataset.e2eChipAnchorY;
           delete renderer.domElement.dataset.e2eChipAnchorWorldX;
@@ -4816,6 +4888,8 @@ export function ModelViewer({
           }
         }
       }
+      // Where the pin itself projects, when the label hangs beside it.
+      let pinScreenAt: { x: number; y: number } | null = null;
       if (
         rig &&
         lineAngle === null &&
@@ -4832,15 +4906,18 @@ export function ModelViewer({
           sideY = -sideY;
         }
         const pinScreen = screen;
+        pinScreenAt = pinScreen;
         screen = {
           ...screen,
           x: screen.x + sideX * PIN_CHIP_GAP_PX,
           y: screen.y + sideY * PIN_CHIP_GAP_PX
         };
+        // The right lane's first panel (the inspector, or the model drawer
+        // alone) shares the lane's left edge with whatever is under it.
         const inspector = renderer.domElement
           .closest('.viewer-area')
           ?.querySelector<HTMLElement>(
-            '.inspector-float, .tool-card:has(.extrude-form)'
+            '.stage-right > *, .tool-card:has(.extrude-form)'
           );
         if (inspector) {
           const hostRect = renderer.domElement.getBoundingClientRect();
@@ -4930,8 +5007,9 @@ export function ModelViewer({
             dragDirection.pixelsPerUnit
           );
         }
-        renderer.domElement.dataset.e2eOffsetDimensionVisible = String(
-          rig.worldGroup.getObjectByName('dimension-graphic')?.visible === true
+        renderer.domElement.dataset.e2eOffsetChangeVisible = String(
+          rig.worldGroup.getObjectByName('offset-change-arrow')?.visible ===
+            true
         );
       }
       if (rig?.kind === 'cylinder-radius') {
@@ -5062,11 +5140,48 @@ export function ModelViewer({
               : offsetChipModeRef.current === 'total'
                 ? 'Total ⌄'
                 : 'Offset ⌄';
-          hud.showAt(
-            radiusLabelChip,
-            screen.x - chip.offsetWidth / 2 - 2,
-            screen.y
-          );
+          if (rig.kind === 'offset-face' && pinScreenAt) {
+            // The pair reads tag then value and stays clear of the pin: on
+            // the pin's right it starts just past the pin, on its left it
+            // ends there. Centred on the anchor instead, the tag reached
+            // back over the pin whenever the axis pointed at the camera.
+            const clearance = PIN_CHIP_GAP_PX / 2;
+            const tagWidth = radiusLabelChip.offsetWidth;
+            const valueWidth = chip.offsetWidth;
+            const width = tagWidth + 2 + valueWidth;
+            // The whole pair keeps out from under the right lane (the anchor
+            // dodge above only reserves a centred value's width): one that
+            // would reach it goes to the pin's other side, and clamps only
+            // when that side is under the lane too.
+            const lane = renderer.domElement
+              .closest('.viewer-area')
+              ?.querySelector<HTMLElement>(
+                '.stage-right > *, .tool-card:has(.extrude-form)'
+              );
+            const limit = lane
+              ? lane.getBoundingClientRect().left -
+                renderer.domElement.getBoundingClientRect().left -
+                8
+              : Number.POSITIVE_INFINITY;
+            let start =
+              screen.x >= pinScreenAt.x
+                ? screen.x - clearance
+                : screen.x + clearance - width;
+            if (start + width > limit) {
+              start = Math.min(
+                pinScreenAt.x - clearance - width,
+                limit - width
+              );
+            }
+            hud.showAt(chip, start + tagWidth + 2 + valueWidth / 2, screen.y);
+            hud.showAt(radiusLabelChip, start + tagWidth, screen.y);
+          } else {
+            hud.showAt(
+              radiusLabelChip,
+              screen.x - chip.offsetWidth / 2 - 2,
+              screen.y
+            );
+          }
         } else {
           radiusLabelChip.hidden = true;
         }
@@ -7079,10 +7194,18 @@ export function ModelViewer({
           worldPerPixelAt(sketchOrigin),
           activeSketchMode.gridVisible
         );
+        const gridSink = sketchGridReadoutRef?.current ?? null;
         if (activeSketchMode.gridVisible) {
-          sketchGridIndicator.textContent = `Grid ${formatNumber(spacing)} ${unitsRef.current} · adaptive`;
-          sketchGridIndicator.hidden = false;
+          const gridLabel = `Grid ${formatNumber(spacing)} ${unitsRef.current}`;
+          if (gridSink) {
+            gridSink(gridLabel);
+            sketchGridIndicator.hidden = true;
+          } else {
+            sketchGridIndicator.textContent = `${gridLabel} · adaptive`;
+            sketchGridIndicator.hidden = false;
+          }
         } else {
+          gridSink?.(null);
           sketchGridIndicator.hidden = true;
         }
         inferenceAnimating = activeSketchRig.advanceInference(
@@ -7090,6 +7213,7 @@ export function ModelViewer({
           reducedMotionRef.current === true
         );
       } else {
+        sketchGridReadoutRef?.current?.(null);
         sketchGridIndicator.hidden = true;
       }
 
@@ -7523,8 +7647,8 @@ export function ModelViewer({
       const color = stale
         ? 0xf59e0b
         : annotation.selected
-          ? 0x9bd3ff
-          : 0x7cc0ff;
+          ? 0x9eb8ff
+          : 0x81a9ff;
       // A measured span is drawn as a drawing's dimension rather than as a
       // bare line: witness ticks stand it off the geometry, and the arrowheads
       // say which two points the number is between. Angle arms are not a span,
@@ -7918,7 +8042,7 @@ export function ModelViewer({
                 lineEnd.z
               ]);
               const dimensionMaterial = createFatLineMaterial({
-                color: 0x7cc0ff,
+                color: 0x81a9ff,
                 linewidth: 1.5,
                 opacity: 0.48,
                 depthTest: false,
@@ -8474,15 +8598,36 @@ export function ModelViewer({
         )
       : null;
     offsetExtentRef.current = extentBehind;
-    // The whole span is the default reading wherever one is known — a
-    // primitive's own height, or the body's reach behind the face; the tag
-    // on the chip switches to the plain offset. With no span it is an
-    // offset regardless.
-    offsetChipModeRef.current = 'total';
+    // Resizing a primitive reads its own dimension (the total) by default:
+    // that is the number the gesture sets. Moving any other face reads the
+    // change, how far the face moves; the body's reach behind it stays one
+    // click away on the tag.
+    offsetChipModeRef.current =
+      offsetHandle.totalBaseline === undefined ? 'offset' : 'total';
+    // The band starts at the face's old level. A rig re-armed after a preview
+    // landed reads the moved face from the rendered body, so the loops go
+    // back onto the plane the gesture started from (the pick point stays on
+    // the original face; the face only ever moves along its normal).
+    const loops = body
+      ? faceBoundaryLoops(body, offsetHandle.topologyId)?.map((loop) =>
+          loop.map((point) => {
+            const lift =
+              (point.x - placement.origin.x) * placement.direction.x +
+              (point.y - placement.origin.y) * placement.direction.y +
+              (point.z - placement.origin.z) * placement.direction.z;
+            return {
+              x: point.x - placement.direction.x * lift,
+              y: point.y - placement.direction.y * lift,
+              z: point.z - placement.direction.z * lift
+            };
+          })
+        )
+      : null;
     const rig = buildOffsetFaceHandle({
       ...placement,
       ghostGeometry: null,
-      ...(extentBehind === null ? {} : { extentBehind })
+      pixelRatio: context.renderer.getPixelRatio(),
+      ...(loops ? { band: { loops } } : {})
     });
     rig.setValue(offsetHandle.initialValue ?? 0);
     rig.setWarning?.(offsetPreviewInvalidRef.current);
@@ -8658,7 +8803,7 @@ export function ModelViewer({
               )
           );
           const boundary = createFatLine(points, {
-            color: 0x79b8ff,
+            color: 0x7aa0ff,
             linewidth: 1.6,
             opacity: 0.72,
             closed: true,
@@ -9302,7 +9447,7 @@ export function ModelViewer({
       const profileFill = new THREE.Mesh(
         profileGeometry,
         new THREE.MeshBasicMaterial({
-          color: sketch.selected ? 0x4da3ff : 0x2f6ea8,
+          color: sketch.selected ? 0x6798ff : 0x2f4fa8,
           transparent: true,
           opacity: sketch.selected ? 0.3 : 0.1,
           side: THREE.DoubleSide,

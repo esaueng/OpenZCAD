@@ -21,7 +21,11 @@ function bodyFixture(
     bodyId: toBodyId('body_appearance'),
     name: 'Appearance body',
     source: 'primitive',
-    mesh: { kind: 'mesh', vertices: Float32Array.from([]), indices: Uint32Array.from([]) },
+    mesh: {
+      kind: 'mesh',
+      vertices: Float32Array.from([]),
+      indices: Uint32Array.from([])
+    },
     faceCount: 0,
     color: '#4da3ff',
     exportableStep: true,
@@ -62,7 +66,7 @@ describe('createBodyMaterial', () => {
 });
 
 describe('createGradientBackdrop', () => {
-  it('dithers the original studio gradient behind scene geometry', () => {
+  it('dithers the steel stage gradient behind scene geometry', () => {
     const backdrop = createGradientBackdrop();
     const material = backdrop.material as THREE.ShaderMaterial;
 
@@ -76,13 +80,13 @@ describe('createGradientBackdrop', () => {
     expect(material.dithering).toBe(true);
     expect(
       (material.uniforms.topColor!.value as THREE.Color).getHexString()
-    ).toBe('131922');
+    ).toBe('171a1f');
     expect(
       (material.uniforms.middleColor!.value as THREE.Color).getHexString()
-    ).toBe('0b0f15');
+    ).toBe('101215'); // --color-viewport-bg: the stage the islands float on
     expect(
       (material.uniforms.bottomColor!.value as THREE.Color).getHexString()
-    ).toBe('05070a');
+    ).toBe('0b0c0f');
     expect(material.uniforms.middleStop!.value).toBe(0.45);
     expect(material.fragmentShader).toContain(
       '#include <dithering_pars_fragment>'
