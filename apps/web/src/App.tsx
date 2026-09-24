@@ -969,6 +969,7 @@ import { useAppSettingsSync } from './hooks/useAppSettingsSync';
 import { useDirectEditCommit } from './hooks/useDirectEditCommit';
 import { useMeasurementWorkbench } from './hooks/useMeasurementWorkbench';
 import { useValidatedFeatureCommit } from './hooks/useValidatedFeatureCommit';
+import { OVERLAY_EXIT_MS, useDelayedUnmount } from './hooks/useDelayedUnmount';
 import {
   affectedFeatureTargets,
   type AffectedFeatureTarget
@@ -2090,6 +2091,12 @@ export function App() {
   const [askSlot, setAskSlot] = useState<HTMLElement | null>(null);
   const [shortcutsOpen, setShortcutsOpen] = useState(false);
   const [contextMenu, setContextMenu] = useState<ContextMenuState | null>(null);
+  // The list menu fades out; the radial one is a pointer gesture and goes
+  // with the pointer.
+  const listMenuExit = useDelayedUnmount(
+    contextMenu?.origin === 'viewport' ? null : contextMenu,
+    OVERLAY_EXIT_MS
+  );
   const orientationRef = useRef<((axes: AxisProjection) => void) | null>(null);
   /** Click point + normal of the latest topology pick (drag-handle anchor). */
   const lastPickDetailRef = useRef<PickDetail | null>(null);
@@ -10408,7 +10415,10 @@ export function App() {
                 importedBlend.axis.z
               ] as [number, number, number],
               ...(faceTopology?.reference?.lineageName ===
-              'direct-edit.resize-blend.band'
+                'direct-edit.resize-blend.band' ||
+              faceTopology?.reference?.lineageName?.startsWith(
+                'direct-edit.resize-blend.band.'
+              )
                 ? {
                     directEditFeatureId: String(
                       faceTopology.reference.producingFeatureId
@@ -17941,22 +17951,22 @@ export function App() {
           {shortcutsOpen && (
             <ShortcutsOverlay onClose={() => setShortcutsOpen(false)} />
           )}
-          {contextMenu &&
-            (contextMenu.origin === 'viewport' ? (
-              <MarkingMenu
-                x={contextMenu.x}
-                y={contextMenu.y}
-                items={contextMenu.items}
-                onSelect={(itemId) => contextMenuActionsRef.current[itemId]?.()}
-                onClose={() => setContextMenu(null)}
-              />
-            ) : (
-              <ContextMenu
-                menu={contextMenu}
-                onSelect={(itemId) => contextMenuActionsRef.current[itemId]?.()}
-                onClose={() => setContextMenu(null)}
-              />
-            ))}
+          {contextMenu?.origin === 'viewport' ? (
+            <MarkingMenu
+              x={contextMenu.x}
+              y={contextMenu.y}
+              items={contextMenu.items}
+              onSelect={(itemId) => contextMenuActionsRef.current[itemId]?.()}
+              onClose={() => setContextMenu(null)}
+            />
+          ) : listMenuExit.rendered ? (
+            <ContextMenu
+              menu={listMenuExit.rendered}
+              closing={listMenuExit.closing}
+              onSelect={(itemId) => contextMenuActionsRef.current[itemId]?.()}
+              onClose={() => setContextMenu(null)}
+            />
+          ) : null}
           {sharingOpen &&
             cloudFunctionsEnabled &&
             projectSharingPreferenceEnabled &&
