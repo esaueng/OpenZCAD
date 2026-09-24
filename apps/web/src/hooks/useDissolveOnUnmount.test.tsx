@@ -9,7 +9,11 @@ function Screen() {
   return (
     <div ref={ref} className="start-screen">
       <label htmlFor="project-name">Name</label>
-      <input id="project-name" />
+      <input id="project-name" aria-label="Project name" />
+      <button type="button" title="Settings" aria-label="Open settings">
+        Settings
+      </button>
+      <input type="file" hidden aria-label="Import project backup" />
     </div>
   );
 }
@@ -53,6 +57,13 @@ describe('useDissolveOnUnmount', () => {
     expect(ghost?.getAttribute('aria-hidden')).toBe('true');
     expect(ghost?.inert).toBe(true);
     expect(ghost?.querySelector('[id]')).toBeNull();
+    // aria-hidden does not stop a lookup by label, so the copy carries no
+    // names at all and drops the controls that never paint: the workspace's
+    // own "Import project backup" input must stay the only one.
+    expect(
+      ghost?.querySelector('[aria-label], [title], [for], input[type="file"]')
+    ).toBeNull();
+    expect(ghost?.querySelector('button')?.textContent).toContain('Settings');
     expect(animate).toHaveBeenCalledWith(
       [{ opacity: 1 }, { opacity: 0 }],
       expect.objectContaining({ duration: 240 })

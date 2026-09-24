@@ -1,6 +1,8 @@
 import {
   lazy,
   Suspense,
+  useLayoutEffect,
+  useRef,
   type CSSProperties,
   type ReactNode,
   type Ref
@@ -14,6 +16,43 @@ const LazyFileDropTarget = lazy(() =>
     default: module.FileDropTarget
   }))
 );
+
+/**
+ * A floating panel that can play an exit. While `closing` it is `inert` —
+ * gone as far as input goes — and it gives up focus on the commit that
+ * starts the exit. Inert alone is not enough: the browser only moves focus
+ * out of an inert subtree at its next rendering update, so a key pressed
+ * straight after the Escape that closed the inspector still landed in the
+ * inspector's field, typing a shortcut into a form on its way out instead of
+ * reaching the workspace. Focus goes to the body, where an unmount would
+ * have left it.
+ */
+function ExitingFloat({
+  className,
+  closing,
+  children
+}: {
+  className: string;
+  closing: boolean;
+  children: ReactNode;
+}) {
+  const ref = useRef<HTMLDivElement | null>(null);
+  useLayoutEffect(() => {
+    const active = document.activeElement;
+    if (
+      closing &&
+      active instanceof HTMLElement &&
+      ref.current?.contains(active)
+    ) {
+      active.blur();
+    }
+  }, [closing]);
+  return (
+    <div ref={ref} className={className} inert={closing}>
+      {children}
+    </div>
+  );
+}
 
 interface AppShellProps {
   topBar: ReactNode;
@@ -126,19 +165,21 @@ export function AppShell({
         >
           {viewer}
           {columnExit.rendered && (
-            <div
+            <ExitingFloat
               className={`workspace-column-float${columnExit.closing ? ' closing' : ''}`}
+              closing={columnExit.closing}
             >
               {columnExit.rendered}
-            </div>
+            </ExitingFloat>
           )}
           {sidebar && sidebarResizer}
           {stripExit.rendered && (
-            <div
+            <ExitingFloat
               className={`palette-float${stripExit.closing ? ' closing' : ''}`}
+              closing={stripExit.closing}
             >
               {stripExit.rendered}
-            </div>
+            </ExitingFloat>
           )}
           {/* The right lane, beside the instrument rail: the inspector over
               the drawer, one column, so neither pushes into the canvas. The
@@ -146,11 +187,12 @@ export function AppShell({
               an inspector form mid-edit. */}
           <div className="stage-right">
             {inspectorExit.rendered && (
-              <div
+              <ExitingFloat
                 className={`inspector-float${inspectorExit.closing ? ' closing' : ''}`}
+                closing={inspectorExit.closing}
               >
                 {inspectorExit.rendered}
-              </div>
+              </ExitingFloat>
             )}
             {drawer && <div className="model-drawer-float">{drawer}</div>}
           </div>
