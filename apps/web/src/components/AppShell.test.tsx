@@ -56,6 +56,9 @@ describe('AppShell', () => {
       const leaving = container.querySelector('.inspector-float');
       expect(leaving?.classList.contains('closing')).toBe(true);
       expect(leaving?.textContent).toBe('panel');
+      // A panel on its way out takes no input: Escape closing the inspector
+      // must not leave the next shortcut key typing into its fields.
+      expect((leaving as HTMLElement | null)?.inert).toBe(true);
 
       act(() => {
         vi.advanceTimersByTime(100);
@@ -85,6 +88,46 @@ describe('AppShell', () => {
     expect(container.querySelector('.viewer-area output')).toHaveTextContent(
       'readout'
     );
+  });
+
+  it('takes focus out of the inspector on the commit that closes it', () => {
+    vi.useFakeTimers();
+    try {
+      const { container, rerender } = renderShell(
+        <section>
+          <input aria-label="Width" />
+        </section>
+      );
+      const field = container.querySelector('input');
+      field?.focus();
+      expect(document.activeElement).toBe(field);
+      rerender(shell(null));
+      // Still mounted for its exit, but the next key must reach the
+      // workspace, not the field of a form on its way out.
+      expect(container.querySelector('.inspector-float input')).toBe(field);
+      expect(document.activeElement).toBe(document.body);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it('makes the leaving column inert, and a present one live', () => {
+    vi.useFakeTimers();
+    try {
+      const { container, rerender } = renderShell(null);
+      const column = () =>
+        container.querySelector<HTMLElement>('.workspace-column-float');
+      expect(column()?.inert).toBe(false);
+      rerender(shell(null, null));
+      expect(column()?.classList.contains('closing')).toBe(true);
+      expect(column()?.inert).toBe(true);
+      act(() => {
+        vi.advanceTimersByTime(100);
+      });
+      expect(column()).toBeNull();
+    } finally {
+      vi.useRealTimers();
+    }
   });
 
   it('removes the column and its splitter together', () => {
