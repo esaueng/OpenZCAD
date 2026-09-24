@@ -3,6 +3,7 @@ import {
   compareProjectSummaries,
   DEFAULT_PROJECT_ORGANIZATION,
   duplicateProjectName,
+  documentNodesWithHistory,
   isPurgeDue,
   MAX_ACTIVE_ARTIFACT_UPLOAD_SESSIONS,
   MAX_ACCOUNT_ARTIFACT_BYTES,
@@ -129,6 +130,31 @@ export interface SharedProjectAssetDownload {
   kind: 'step-source' | 'mesh-payload';
   contentType: string;
   body: ArrayBuffer;
+}
+
+/** A STEP import referenced by a shared document, served without an account session. */
+export interface SharedProjectImportDownload {
+  contentType: string;
+  bytes?: number;
+  body: ArtifactBody;
+}
+
+/** Grant only source artifacts actually named by the shared model's history. */
+export function sharedDocumentReferencesImport(
+  document: ProjectDocument,
+  artifactId: string
+): boolean {
+  for (const node of documentNodesWithHistory(document)) {
+    if (
+      node.kind === 'feature' &&
+      node.data.featureKind === 'imported-step' &&
+      node.data.stepSourceRef !== undefined &&
+      node.data.artifactId === artifactId
+    ) {
+      return true;
+    }
+  }
+  return false;
 }
 
 /**
@@ -333,6 +359,10 @@ export interface PersistenceService {
     tokenHash: string,
     assetId: string
   ): Promise<SharedProjectAssetDownload | null>;
+  loadSharedProjectImportSource(
+    tokenHash: string,
+    artifactId: string
+  ): Promise<SharedProjectImportDownload | null>;
   listProjects(userId: UserId): Promise<ListProjectsResponse>;
   createProject(
     userId: UserId,
@@ -878,6 +908,31 @@ export class InMemoryPersistenceService implements PersistenceService {
     // The in-memory service has no project_storage_assets analog: documents
     // stay self-contained, so a share-link visitor never needs a side asset.
     return null;
+  }
+
+  async loadSharedProjectImportSource(
+    tokenHash: string,
+    artifactId: string
+  ): Promise<SharedProjectImportDownload | null> {
+    const shared = await this.loadSharedProjectByTokenHash(tokenHash);
+    if (
+      !shared ||
+      !sharedDocumentReferencesImport(shared.document, artifactId)
+    ) {
+      return null;
+    }
+    const artifact = this.artifacts.get(artifactId);
+    if (
+      !artifact ||
+      artifact.projectId !== shared.projectId ||
+      artifact.kind !== 'step-import'
+    ) {
+      return null;
+    }
+    const body = this.uploadBodies.get(artifact.objectKey);
+    return body
+      ? { contentType: artifact.contentType, bytes: artifact.bytes, body }
+      : null;
   }
 
   async listProjects(userId: UserId): Promise<ListProjectsResponse> {
