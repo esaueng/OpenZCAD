@@ -472,17 +472,179 @@
 }
 
 /* Everything that floats in the palette slot (direct-mode strips such as
-   the plane picker, and View's bar) starts under the top islands, as do the
-   parts rail and the measurement dock. */
-.workspace.column-layout .palette-float,
-.workspace.column-layout .palette-float:has(.view-mode-bar) {
+   the plane picker) starts under the top islands, as does the measurement
+   dock. */
+.workspace.column-layout .palette-float {
   top: var(--stage-top);
 }
 
-.view-mode-rail,
-.view-mode-rail-launcher {
-  top: var(--stage-top);
+/* View's bar stands on the right at the stage's middle, a vertical rail
+   like Build's instruments (View and Tweak have no instrument rail of their
+   own): Measure, then fit, views, grid, display and projection, icons only
+   with their names as tooltips. The views panel opens beside it, leftward. */
+.workspace.column-layout .palette-float:has(.view-mode-bar) {
+  top: var(--stage-middle);
+  right: var(--island-gap);
+  bottom: auto;
+  left: auto;
+  align-items: flex-start;
+  transform: translateY(-50%);
+}
+
+.workspace.column-layout .view-mode-bar {
+  flex-direction: column;
+  width: var(--rail-w);
+  box-sizing: border-box;
+  padding: 4px 0;
+  border-radius: var(--radius-lg);
+  box-shadow: var(--shadow-2);
+}
+
+.workspace.column-layout .view-mode-button,
+.workspace.column-layout .view-mode-button.wide {
+  width: 30px;
+  min-width: 0;
+  height: 30px;
+  min-height: 0;
+  padding: 0;
+  border-radius: var(--radius-md);
+}
+
+.workspace.column-layout .view-mode-button-label {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  overflow: hidden;
+  clip: rect(0 0 0 0);
+  white-space: nowrap;
+}
+
+.workspace.column-layout .view-mode-divider {
+  width: 22px;
+  height: 1px;
+  align-self: center;
+  margin: 3px 0;
+}
+
+.workspace.column-layout .view-mode-views-panel {
+  top: 0;
+  right: calc(100% + var(--island-gap));
+  left: auto;
+  transform: none;
+}
+
+/* The measurement workbench keeps clear of the rail on its right. */
+.workspace.column-layout .measurement-dock {
+  right: calc(var(--rail-w) + var(--island-gap) * 2);
+}
+
+/* View's rail: the Parts button (and Show all) as an island at the stage's
+   middle, the parts list as a flyout beside it. There is no column float in
+   View, so the rail places itself. */
+.view-rail {
+  position: absolute;
+  top: var(--stage-middle);
   left: var(--island-gap);
+  z-index: var(--z-viewer-overlay);
+  width: var(--rail-w);
+  box-sizing: border-box;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 2px;
+  padding: 4px 0;
+  background: var(--color-surface);
+  border: var(--border-thin);
+  border-radius: var(--radius-lg);
+  box-shadow: var(--shadow-2);
+  transform: translateY(-50%);
+}
+
+.view-rail button,
+.tweak-rail button {
+  position: relative;
+}
+
+.view-rail button {
+  display: grid;
+  place-items: center;
+  width: 30px;
+  height: 30px;
+  min-height: 0;
+  padding: 0;
+  color: var(--color-text-muted);
+  background: transparent;
+  border: 1px solid transparent;
+  border-radius: var(--radius-md);
+}
+
+.view-rail button svg {
+  width: 16px;
+  height: 16px;
+}
+
+.view-rail button:hover:not(:disabled) {
+  color: var(--color-text);
+  background: var(--color-surface-hover);
+}
+
+.view-rail button.active {
+  color: var(--color-accent);
+  background: var(--color-accent-dim);
+  border-color: var(--color-accent-border);
+}
+
+/* A count in the button's corner: parts, or parts hidden. */
+.rail-count {
+  position: absolute;
+  right: 0;
+  bottom: 0;
+  min-width: 12px;
+  padding: 0 2px;
+  color: var(--color-text-subtle);
+  background: var(--color-surface);
+  border-radius: var(--radius-sm);
+  font-family: var(--font-mono);
+  font-size: 9px;
+  line-height: 12px;
+  text-align: center;
+  font-variant-numeric: tabular-nums;
+}
+
+.view-rail button.active .rail-count {
+  color: var(--color-accent);
+}
+
+.view-flyouts {
+  position: absolute;
+  top: 50%;
+  left: calc(100% + var(--island-gap));
+  display: flex;
+  flex-direction: column;
+  transform: translateY(-50%);
+  pointer-events: none;
+}
+
+.view-flyouts > * {
+  pointer-events: auto;
+}
+
+.view-flyouts > .view-mode-rail,
+.tweak-flyouts > .view-mode-rail {
+  border-radius: var(--radius-lg);
+  box-shadow: var(--shadow-2);
+  animation: oz-fade var(--dur-fast) var(--ease-out);
+}
+
+/* In Tweak the list stands above the parameter table, and both share the
+   rail's centre line. */
+.tweak-flyouts {
+  gap: var(--island-gap);
+}
+
+.tweak-flyouts > .view-mode-rail {
+  width: auto;
+  max-height: 40vh;
 }
 
 .measurement-dock {
