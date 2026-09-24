@@ -780,7 +780,7 @@ test('extrudes and edits one of multiple closed sketch regions', async ({
   // it: a fraction of the canvas box is not an anchor, and the fractions this
   // test used put the second circle's row 0.96px below the palette's lower
   // edge, with both of its drag points inside the palette's column.
-  await expect(page.locator('.sketch-palette')).toBeVisible();
+  await expect(page.locator('.sketch-rail')).toBeVisible();
   const centers = await bareCanvasDrags(page, { count: 2, dragX: 38 });
   // Closed regions the sketch has actually detected. The status bar cannot
   // stand in for this: every circle after the first reports the same "Add
