@@ -975,3 +975,88 @@
   pointer-events: none;
   user-select: none;
 }
+
+/* ── Changing mode ─────────────────────────────────────────
+   Build, Tweak and View add and remove whole panels. Each one travels to or
+   from the edge it lives against — the column and the parts rail on the
+   left, the instrument rail on the right, the strip at the top, the readout
+   at the bottom — so a switch reads as the stage clearing or filling rather
+   than as a cut. The column and the strip also leave that way (AppShell
+   keeps them mounted for the exit); the rails and readout are small enough
+   that entering is the part that shows.
+
+   The strip and the column animate their child, not the float: a
+   direct-mode strip centres its float with translateX(-50%), which an
+   animated transform on the float itself would throw away. */
+.workspace-column-float > :is(.workspace-column, .tweak-panel),
+.view-mode-rail,
+.view-mode-rail-launcher {
+  animation: mode-in-left var(--dur-base) var(--ease-out);
+}
+
+.instrument-rail {
+  animation: mode-in-right var(--dur-base) var(--ease-out);
+}
+
+.palette-float > * {
+  animation: mode-in-top var(--dur-base) var(--ease-out);
+}
+
+.viewport-readout {
+  animation: mode-in-bottom var(--dur-base) var(--ease-out);
+}
+
+.workspace-column-float.closing,
+.palette-float.closing {
+  pointer-events: none;
+}
+
+.workspace-column-float.closing > * {
+  animation: mode-out-left var(--dur-fast) ease-in forwards;
+}
+
+.palette-float.closing > * {
+  animation: mode-out-top var(--dur-fast) ease-in forwards;
+}
+
+@keyframes mode-in-left {
+  from {
+    opacity: 0;
+    transform: translateX(-16px);
+  }
+}
+
+@keyframes mode-in-right {
+  from {
+    opacity: 0;
+    transform: translateX(16px);
+  }
+}
+
+@keyframes mode-in-top {
+  from {
+    opacity: 0;
+    transform: translateY(-12px);
+  }
+}
+
+@keyframes mode-in-bottom {
+  from {
+    opacity: 0;
+    transform: translateY(12px);
+  }
+}
+
+@keyframes mode-out-left {
+  to {
+    opacity: 0;
+    transform: translateX(-16px);
+  }
+}
+
+@keyframes mode-out-top {
+  to {
+    opacity: 0;
+    transform: translateY(-12px);
+  }
+}
