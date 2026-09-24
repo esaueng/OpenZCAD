@@ -567,7 +567,7 @@
 }
 
 .workspace.column-layout:has(
-    .workspace-column-float :is(.command-rail, .sketch-rail)
+    .workspace-column-float :is(.command-rail, .sketch-rail, .tweak-rail)
   ) {
   --column-w: var(--rail-w);
   --lane-inset: calc(
@@ -584,7 +584,9 @@
   );
 }
 
-.viewer-area:has(.workspace-column-float :is(.command-rail, .sketch-rail))
+.viewer-area:has(
+    .workspace-column-float :is(.command-rail, .sketch-rail, .tweak-rail)
+  )
   .workspace-column-float {
   top: var(--stage-middle);
   bottom: auto;
@@ -609,7 +611,9 @@
 
 /* The rail is not resizable; the splitter belongs to the sketch card and
    Tweak's parameters. */
-.viewer-area:has(.workspace-column-float :is(.command-rail, .sketch-rail))
+.viewer-area:has(
+    .workspace-column-float :is(.command-rail, .sketch-rail, .tweak-rail)
+  )
   .sidebar-resizer {
   display: none;
 }
@@ -746,6 +750,119 @@ button.command-rail:disabled {
   color: var(--color-text-dim);
   opacity: 0.5;
   cursor: default;
+}
+
+/* ── The Tweak rail ───────────────────────────────────────── */
+
+/* Tweak's left side is the same 40px rail: the parameter table's button
+   and the export actions, with the table as a flyout beside it. The float
+   holds the rail directly (there is no column), so the rail is the island. */
+.workspace-column-float > .tweak-rail {
+  flex: 0 0 auto;
+  width: var(--rail-w);
+  box-sizing: border-box;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 2px;
+  padding: 4px 0;
+  background: var(--color-surface);
+  border: var(--border-thin);
+  border-radius: var(--radius-lg);
+  box-shadow: var(--shadow-2);
+}
+
+.tweak-rail-divider {
+  width: 22px;
+  height: 1px;
+  margin: 3px 0;
+  background: var(--color-border);
+}
+
+.tweak-rail button {
+  position: relative;
+  display: grid;
+  place-items: center;
+  width: 30px;
+  height: 30px;
+  min-height: 0;
+  padding: 0;
+  color: var(--color-text-muted);
+  background: transparent;
+  border: 1px solid transparent;
+  border-radius: var(--radius-md);
+}
+
+.tweak-rail button svg {
+  width: 16px;
+  height: 16px;
+}
+
+.tweak-rail button:hover:not(:disabled) {
+  color: var(--color-text);
+  background: var(--color-surface-hover);
+}
+
+.tweak-rail button.active {
+  color: var(--color-accent);
+  background: var(--color-accent-dim);
+  border-color: var(--color-accent-border);
+}
+
+.tweak-rail button:disabled {
+  color: var(--color-text-dim);
+  opacity: 0.5;
+  cursor: default;
+}
+
+/* The two exports share a glyph; the mesh one wears a badge. */
+.tweak-rail-badge {
+  position: absolute;
+  right: 1px;
+  bottom: 1px;
+  padding: 0 2px;
+  color: var(--color-text-subtle);
+  background: var(--color-surface);
+  border-radius: var(--radius-sm);
+  font-family: var(--font-mono);
+  font-size: 8px;
+  line-height: 11px;
+  letter-spacing: 0.04em;
+}
+
+/* The parameter table beside the rail, its own island. The rail is short
+   and stands at the stage's middle, so the table centres on it too rather
+   than hanging from its top; View's parts island keeps the top-left. */
+.tweak-flyouts {
+  position: absolute;
+  top: 50%;
+  left: calc(100% + var(--island-gap));
+  width: 300px;
+  display: flex;
+  flex-direction: column;
+  transform: translateY(-50%);
+  pointer-events: none;
+}
+
+.tweak-flyouts > * {
+  pointer-events: auto;
+}
+
+.tweak-flyouts > .tweak-panel {
+  flex: 0 1 auto;
+  min-width: 0;
+  max-height: calc(100vh - var(--stage-top) - var(--island-gap) * 2);
+  overflow-y: auto;
+  scrollbar-width: none;
+  background: var(--color-surface);
+  border: var(--border-thin);
+  border-radius: var(--radius-lg);
+  box-shadow: var(--shadow-2);
+  animation: oz-fade var(--dur-fast) var(--ease-out);
+}
+
+.tweak-flyouts > .tweak-panel::-webkit-scrollbar {
+  display: none;
 }
 
 /* ── The model drawer (U04 slice 4) ──────────────────────── */

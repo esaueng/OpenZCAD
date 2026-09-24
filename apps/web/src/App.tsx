@@ -16612,6 +16612,13 @@ export function App() {
                 ? { onMakeCopy: () => void handleMakeShareCopy() }
                 : null
             }
+            panelOpen={panelState.tweakPanelOpen}
+            onTogglePanel={() =>
+              setPanelState((current) => ({
+                ...current,
+                tweakPanelOpen: !current.tweakPanelOpen
+              }))
+            }
           />
         ) : (
           <WorkspaceColumn
