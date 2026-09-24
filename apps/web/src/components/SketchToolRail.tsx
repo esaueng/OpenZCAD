@@ -385,11 +385,11 @@ export function SketchToolRail({
               <Grid3x3 size={14} aria-hidden="true" />
               Sketch palette
             </span>
-            {paletteOpen ? (
-              <ChevronDown size={13} aria-hidden="true" />
-            ) : (
-              <ChevronRight size={13} aria-hidden="true" />
-            )}
+            <ChevronRight
+              size={13}
+              className="disclosure-chevron"
+              aria-hidden="true"
+            />
           </button>
           {paletteOpen ? (
             <div className="sketch-palette-content">
