@@ -17,20 +17,14 @@ for (const dimension of ['radius', 'height', 'bottom-height'] as const) {
       dimension === 'bottom-height'
     );
     const select = () =>
-      canvas.evaluate(
-        (element, surface) => {
-          element.dispatchEvent(
-            new CustomEvent('openzcad:e2e-select-cylinder', {
-              detail: { surface }
-            })
-          );
-        },
-        dimension === 'radius'
-          ? 'wall'
-          : dimension === 'bottom-height'
-            ? 'bottom-cap'
-            : 'top-cap'
-      );
+      selectHandle(canvas, 'openzcad:e2e-select-cylinder', {
+        surface:
+          dimension === 'radius'
+            ? 'wall'
+            : dimension === 'bottom-height'
+              ? 'bottom-cap'
+              : 'top-cap'
+      });
     const syncs = () =>
       page.evaluate(
         () => (window as typeof window & { editSyncs: number }).editSyncs
@@ -50,19 +44,10 @@ for (const dimension of ['radius', 'height', 'bottom-height'] as const) {
           ? -value
           : original + value;
     await select();
-    await expect(canvas).toHaveAttribute('data-e2e-handle-x', /.+/);
     const originalBounds = await rendered(canvas);
 
     for (const outcome of ['cancel', 'commit'] as const) {
-      await select();
-      await expect(canvas).toHaveAttribute('data-e2e-handle-x', /.+/);
-      const handle = await canvas.evaluate((element) => ({
-        x: Number(element.dataset.e2eHandleX),
-        y: Number(element.dataset.e2eHandleY),
-        dx: Number(element.dataset.e2eHandleDx),
-        dy: Number(element.dataset.e2eHandleDy),
-        scale: Number(element.dataset.e2eHandlePixelsPerUnit)
-      }));
+      const handle = await select();
       const bounds = (await canvas.boundingBox())!;
       const count = await syncs();
       await page.mouse.move(bounds.x + handle.x, bounds.y + handle.y);
@@ -112,15 +97,7 @@ for (const dimension of ['radius', 'height', 'bottom-height'] as const) {
           .toBeCloseTo(original, 3);
       }
     }
-    await select();
-    await expect(canvas).toHaveAttribute('data-e2e-handle-x', /.+/);
-    const handle = await canvas.evaluate((element) => ({
-      x: Number(element.dataset.e2eHandleX),
-      y: Number(element.dataset.e2eHandleY),
-      dx: Number(element.dataset.e2eHandleDx),
-      dy: Number(element.dataset.e2eHandleDy),
-      scale: Number(element.dataset.e2eHandlePixelsPerUnit)
-    }));
+    const handle = await select();
     const bounds = (await canvas.boundingBox())!;
     await page.mouse.move(bounds.x + handle.x, bounds.y + handle.y);
     await page.mouse.down();
@@ -281,6 +258,59 @@ async function setupRoundedCylinder(page: Page, bottomView: boolean) {
   return { canvas, errors };
 }
 
+interface Handle {
+  x: number;
+  y: number;
+  dx: number;
+  dy: number;
+  scale: number;
+}
+
+/**
+ * Dispatches a selection hook and reads the drag handle it arms. The render
+ * loop writes the handle's screen position, so a read straight after a
+ * cancelled drag still sees where that drag left it until the next frame
+ * draws — on a slow software-GL frame the test then pressed empty canvas.
+ * Two frames: the loop's own callback may already be queued ahead of the
+ * first, and the second runs after it either way.
+ */
+async function selectHandle(
+  canvas: ReturnType<Page['locator']>,
+  event: string,
+  detail: unknown
+): Promise<Handle> {
+  let handle: Handle | null = null;
+  await expect
+    .poll(async () => {
+      handle = await canvas.evaluate(
+        (element, { event, detail }) =>
+          new Promise<Handle | null>((resolve) => {
+            element.dispatchEvent(new CustomEvent(event, { detail }));
+            requestAnimationFrame(() =>
+              requestAnimationFrame(() => {
+                const data = element.dataset;
+                resolve(
+                  data.e2eHandleX
+                    ? {
+                        x: Number(data.e2eHandleX),
+                        y: Number(data.e2eHandleY),
+                        dx: Number(data.e2eHandleDx),
+                        dy: Number(data.e2eHandleDy),
+                        scale: Number(data.e2eHandlePixelsPerUnit)
+                      }
+                    : null
+                );
+              })
+            );
+          }),
+        { event, detail }
+      );
+      return handle;
+    })
+    .not.toBeNull();
+  return handle!;
+}
+
 const rendered = (canvas: ReturnType<Page['locator']>) =>
   canvas.evaluate(
     (element) =>
@@ -386,15 +416,11 @@ for (const sense of [1, -1]) {
         () => (window as typeof window & { editSyncs: number }).editSyncs
       );
     for (const outcome of ['cancel', 'commit'] as const) {
-      await select();
-      await expect(canvas).toHaveAttribute('data-e2e-handle-x', /.+/);
-      const handle = await canvas.evaluate((el) => ({
-        x: Number(el.dataset.e2eHandleX),
-        y: Number(el.dataset.e2eHandleY),
-        dx: Number(el.dataset.e2eHandleDx),
-        dy: Number(el.dataset.e2eHandleDy),
-        scale: Number(el.dataset.e2eHandlePixelsPerUnit)
-      }));
+      const handle = await selectHandle(
+        canvas,
+        'openzcad:e2e-select-planar-face',
+        { normal: { x: 0, y: 0, z: sense } }
+      );
       const bounds = (await canvas.boundingBox())!;
       const count = await syncs();
       await page.mouse.move(bounds.x + handle.x, bounds.y + handle.y);
