@@ -561,7 +561,14 @@
   --readout-min-w: 96px;
 }
 
-.workspace.column-layout:has(.workspace-column-float .command-rail) {
+/* Sketching adds the snap and grid segments: room for all three on a row. */
+.workspace.column-layout:has(.workspace-column-float .sketch-rail) {
+  --readout-min-w: 264px;
+}
+
+.workspace.column-layout:has(
+    .workspace-column-float :is(.command-rail, .sketch-rail)
+  ) {
   --column-w: var(--rail-w);
   --lane-inset: calc(
     max(var(--column-w), var(--readout-min-w)) + var(--island-gap) * 2
@@ -577,7 +584,7 @@
   );
 }
 
-.viewer-area:has(.workspace-column-float .command-rail)
+.viewer-area:has(.workspace-column-float :is(.command-rail, .sketch-rail))
   .workspace-column-float {
   top: var(--stage-middle);
   bottom: auto;
@@ -593,7 +600,7 @@
    is only ever the Build column's content, so :has(.command-rail) alone
    identifies that column; :has() cannot nest.) */
 .viewer-area
-  .workspace-column-float:has(.command-rail)
+  .workspace-column-float:has(:is(.command-rail, .sketch-rail))
   :is(.workspace-column, .workspace-column-tools) {
   /* Outranks the drawer-era rule below that makes the tools a scroller;
      the rail is short and never needs one. */
@@ -602,7 +609,8 @@
 
 /* The rail is not resizable; the splitter belongs to the sketch card and
    Tweak's parameters. */
-.viewer-area:has(.workspace-column-float .command-rail) .sidebar-resizer {
+.viewer-area:has(.workspace-column-float :is(.command-rail, .sketch-rail))
+  .sidebar-resizer {
   display: none;
 }
 
@@ -808,78 +816,227 @@ button.command-rail:disabled {
   );
 }
 
-/* ── The sketch card and the relations rail (U04 slice 6) ── */
+/* ── The sketch rail and the relations rail (U04 slice 6, streamlined) ── */
 
-/* Draw and modify read as a list, each tool named with its key, rather
-   than a grid of tiles; the icons keep their places at every width. */
-.workspace-column .sketch-rail-group.draw,
-.workspace-column .sketch-rail-group.modify {
-  grid-template-columns: minmax(0, 1fr);
-  gap: 1px;
-}
-
-.workspace-column .sketch-rail-group.draw > button,
-.workspace-column
-  .sketch-rail-group.draw
-  .sketch-circle-tool
-  > button:first-child,
-.workspace-column .sketch-rail-group.modify > button {
-  min-height: 30px;
-  flex-direction: row;
-  justify-content: flex-start;
-  gap: 9px;
-  padding: 0 8px;
-  color: var(--color-text-muted);
-  font-size: var(--fs-base);
-}
-
-.workspace-column .sketch-rail-group.draw > button.active,
-.workspace-column
-  .sketch-rail-group.draw
-  .sketch-circle-tool
-  > button.active:first-child,
-.workspace-column .sketch-rail-group.modify > button.active {
-  color: var(--color-text);
-}
-
-.workspace-column .sketch-rail-group.draw button kbd {
-  display: inline-block;
-  margin-left: auto;
-}
-
-.workspace-column .sketch-rail-group.draw .sketch-circle-tool {
-  gap: 1px;
-}
-
-/* The card names its groups at every width; the floating rail it replaced
-   dropped them for room. */
-.workspace-column .sketch-rail-group-label {
-  display: block;
-}
-
-/* The selected entity's editor sits in the card under the tools, part of
-   the card rather than a float of its own. */
-.workspace-column .sketch-entity-dock {
+/* In a sketch the column is the sketch rail, the verb rail's twin: draw,
+   modify, solve and the utilities as one icon column, the palette button
+   at its foot and Finish under it. The overview, the settings and the
+   selected entity's editor open beside it as flyouts. */
+.workspace-column .sketch-rail {
   position: static;
-  width: auto;
-  padding: 6px;
-  border-top: var(--border-thin);
-}
-
-.workspace-column .sketch-entity-editor,
-.workspace-column .sketch-entity-constraints {
+  max-width: none;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 2px;
+  padding: 4px 0 2px;
+  background: transparent;
+  border: 0;
+  border-radius: 0;
   box-shadow: none;
+  transform: none;
+  animation: none;
 }
 
+.workspace-column .sketch-rail-group {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 2px;
+  padding: 0;
+  border: 0;
+}
+
+.workspace-column .sketch-rail-group-label {
+  display: none;
+}
+
+.sketch-rail-divider {
+  width: 22px;
+  height: 1px;
+  margin: 3px 0;
+  background: var(--color-border);
+}
+
+.workspace-column .sketch-rail button {
+  display: grid;
+  place-items: center;
+  width: 30px;
+  height: 30px;
+  min-height: 0;
+  padding: 0;
+  color: var(--color-text-muted);
+  background: transparent;
+  border: 1px solid transparent;
+  border-radius: var(--radius-md);
+  font-size: 0;
+}
+
+.workspace-column .sketch-rail button svg {
+  width: 16px;
+  height: 16px;
+}
+
+.workspace-column .sketch-rail button:hover:not(:disabled) {
+  color: var(--color-text);
+  background: var(--color-surface-hover);
+}
+
+.workspace-column .sketch-rail button.active {
+  color: var(--color-accent);
+  background: var(--color-accent-dim);
+  border-color: var(--color-accent-border);
+}
+
+.workspace-column .sketch-rail button:disabled {
+  color: var(--color-text-dim);
+  opacity: 0.5;
+  cursor: default;
+}
+
+/* The solve status rides the Solve button as a dot in its tone; the words
+   are its tooltip and an off-screen status line. */
+.workspace-column .sketch-rail button[data-tone] {
+  position: relative;
+}
+
+.workspace-column .sketch-rail button[data-tone]::after {
+  content: '';
+  position: absolute;
+  top: 3px;
+  right: 3px;
+  width: 6px;
+  height: 6px;
+  border-radius: 999px;
+  background: var(--color-accent);
+}
+
+.workspace-column .sketch-rail button[data-tone='ok']::after {
+  background: var(--color-success);
+}
+
+.workspace-column .sketch-rail button[data-tone='warn']::after {
+  background: var(--color-warning);
+}
+
+/* The circle tool carries its type menu as a corner badge; the menu opens
+   beside the rail. */
+.workspace-column .sketch-circle-tool {
+  position: relative;
+  display: flex;
+}
+
+.workspace-column .sketch-rail .sketch-circle-chevron {
+  position: absolute;
+  right: -1px;
+  bottom: -1px;
+  width: 13px;
+  min-width: 0;
+  height: 13px;
+  color: var(--color-text-subtle);
+  background: var(--color-surface);
+  border-radius: 999px;
+}
+
+.workspace-column .sketch-rail .sketch-circle-chevron svg {
+  width: 10px;
+  height: 10px;
+}
+
+.workspace-column .sketch-circle-menu {
+  top: 0;
+  left: calc(100% + var(--island-gap));
+}
+
+/* Finish is the column's foot, lit like the primary verb. */
 .workspace-column-footer {
-  padding: 8px;
-  border-top: var(--border-thin);
+  display: flex;
+  justify-content: center;
+  padding: 2px 0 5px;
+  border-top: 0;
 }
 
 .workspace-column-footer .workspace-column-finish {
-  width: 100%;
-  height: 32px;
+  width: 30px;
+  height: 30px;
+  padding: 0;
   justify-content: center;
+  border-radius: var(--radius-md);
+}
+
+.workspace-column-finish-label {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  overflow: hidden;
+  clip: rect(0 0 0 0);
+  white-space: nowrap;
+}
+
+/* The flyouts beside the rail: the selected entity's editor, then the
+   palette (overview and settings), each its own island. */
+.sketch-flyouts {
+  position: absolute;
+  top: 0;
+  left: calc(100% + var(--island-gap));
+  width: 272px;
+  display: flex;
+  flex-direction: column;
+  gap: var(--island-gap);
+  pointer-events: none;
+}
+
+.sketch-flyouts > * {
+  pointer-events: auto;
+}
+
+.sketch-flyouts .sketch-entity-dock {
+  position: static;
+  width: auto;
+  padding: 6px;
+  background: var(--color-surface);
+  border: var(--border-thin);
+  border-radius: var(--radius-lg);
+  box-shadow: var(--shadow-2);
+  animation: oz-fade var(--dur-fast) var(--ease-out);
+}
+
+.sketch-flyouts .sketch-entity-editor,
+.sketch-flyouts .sketch-entity-constraints {
+  box-shadow: none;
+}
+
+.sketch-flyouts .sketch-palette {
+  position: static;
+  width: auto;
+  max-height: calc(100vh - var(--stage-top) - var(--island-gap) * 2);
+  overflow-y: auto;
+  scrollbar-width: none;
+  background: var(--color-surface);
+  border: var(--border-thin);
+  border-radius: var(--radius-lg);
+  box-shadow: var(--shadow-2);
+  backdrop-filter: none;
+  animation: oz-fade var(--dur-fast) var(--ease-out);
+}
+
+.sketch-flyouts .sketch-palette::-webkit-scrollbar {
+  display: none;
+}
+
+.sketch-flyouts .sketch-palette-header {
+  min-height: 32px;
+  padding: 6px 10px;
+  border-bottom: var(--border-thin);
+  font-weight: var(--fw-medium);
+}
+
+.sketch-flyouts .sketch-workflow {
+  border-bottom: var(--border-thin);
+}
+
+.sketch-flyouts .sketch-palette-content {
+  padding: 8px 10px 10px;
 }
 
 /* While sketching the relations stand beside the instrument rail, so the

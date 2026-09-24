@@ -31,6 +31,14 @@ Values ride the model at the point of action.
   fonts they replace. Every number is monospaced.
 - **Corners:** near-square. Keys and chips 2px, controls 3px, panels 4px. Dots
   and the marking-menu hub stay round.
+- **Sketch rail (compaction pass):** in a sketch the left column is the same
+  40px icon rail as Build's verb rail — draw, modify, utilities and solve,
+  then a Sketch palette button and Finish at its foot. The overview, the
+  settings and the constraint list open beside it as the palette flyout; the
+  selected entity's editor is a second flyout above it. Nothing on the rail
+  carries a word: names and keys are tooltips, and every button keeps the
+  accessible name the specs use (`Line`, `Circle: Center Circle`, `Solve`,
+  `Sketch palette`, `Finish Sketch`).
 - **Sketch relations:** a fixed icon rail on the right in the order of
   `CONSTRAINT_TOOL_SPECS`; icons never move, relations that do not fit the
   selection grey out, and a name label appears only beside the ones that fit.

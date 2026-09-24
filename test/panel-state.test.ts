@@ -86,6 +86,16 @@ describe('workspace panel state', () => {
     expect(loadPanelState().commandFoldOpen).toBe(true);
   });
 
+  it('remembers the sketch palette flyout across sketch sessions', () => {
+    expect(defaultPanelState().sketchPaletteOpen).toBe(false);
+    expect(
+      normalizePanelState({ sketchPaletteOpen: true }).sketchPaletteOpen
+    ).toBe(true);
+    expect(
+      normalizePanelState({ sketchPaletteOpen: 1 }).sketchPaletteOpen
+    ).toBe(false);
+  });
+
   it('toggles one section without touching the others', () => {
     const collapsed = toggleSidebarSection(defaultPanelState(), 'history');
     expect(collapsed.sidebarSections.history).toBe(false);
