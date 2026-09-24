@@ -11,12 +11,13 @@ import {
   type DragEvent,
   type ReactNode
 } from 'react';
+import { createPortal } from 'react-dom';
 import {
   ArrowDown,
   ArrowUp,
   ImageIcon,
   Paperclip,
-  ChevronRight,
+  ChevronDown,
   RotateCcw,
   Sparkles,
   Square,
@@ -113,6 +114,18 @@ interface AssistantPanelProps {
    * rather than destroying what the user is in the middle of.
    */
   hidden?: boolean;
+  /**
+   * Where the Ask launcher goes while the conversation is closed: the slot at
+   * the end of the search bar. Absent, the launcher renders in place.
+   */
+  launcherSlot?: HTMLElement | null;
+  /**
+   * A question typed into command search and sent with its Ask row. It is
+   * sent as if typed here — the user pressed Enter on it, so it is not a
+   * suggestion to review — unless the assistant cannot take it right now, in
+   * which case it waits in the composer.
+   */
+  request?: { id: number; text: string } | null;
 }
 
 let entrySequence = 0;
@@ -232,7 +245,9 @@ export function AssistantPanel({
   collapsed,
   onCollapsedChange,
   confirmDestructive,
-  hidden = false
+  hidden = false,
+  launcherSlot = null,
+  request = null
 }: AssistantPanelProps) {
   const [analyzedDocument, setAnalyzedDocument] =
     useState<ProjectDocument | null>(null);
@@ -667,6 +682,27 @@ export function AssistantPanel({
     [conversation, doc, onPreview, selection, findDirectSuggestion]
   );
 
+  const handledRequestId = useRef<number | null>(null);
+  useEffect(() => {
+    if (!request || handledRequestId.current === request.id) {
+      return;
+    }
+    handledRequestId.current = request.id;
+    const text = request.text.trim();
+    if (!text) {
+      return;
+    }
+    const verified = Boolean(findDirectSuggestion(text));
+    if (thinking || (!configured && !verified)) {
+      setPrompt(text);
+      promptRef.current?.focus();
+      return;
+    }
+    void send(text, []);
+    // Only a new request id sends; the rest are read at that moment.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [request]);
+
   function submitPrompt() {
     const text = prompt.trim();
     const verified = Boolean(
@@ -996,7 +1032,7 @@ export function AssistantPanel({
   }
 
   if (collapsed) {
-    return (
+    const launcher = (
       <AssistantLauncher
         unread={unread}
         thinking={thinking}
@@ -1005,6 +1041,7 @@ export function AssistantPanel({
         onOpen={() => onCollapsedChange(false)}
       />
     );
+    return launcherSlot ? createPortal(launcher, launcherSlot) : launcher;
   }
 
   const turnCount = entries.filter((entry) => entry.kind === 'user').length;
@@ -1057,19 +1094,18 @@ export function AssistantPanel({
             <Trash2 size={13} aria-hidden="true" />
           </button>
         )}
+        {/* Folds the conversation back into the Ask button on the search
+            bar below it: the thread is kept. */}
+        <button
+          type="button"
+          className="assistant-icon-button"
+          title="Collapse the assistant (⌘J)"
+          aria-label="Collapse the assistant"
+          onClick={() => onCollapsedChange(true)}
+        >
+          <ChevronDown size={14} aria-hidden="true" />
+        </button>
       </header>
-      {/* The same tab that opened the dock, riding on its seam: open and
-          close are one gesture in one place. */}
-      <button
-        type="button"
-        className="assistant-seam"
-        title="Collapse the assistant (⌘J)"
-        aria-label="Collapse the assistant"
-        onClick={() => onCollapsedChange(true)}
-      >
-        <ChevronRight size={14} aria-hidden="true" />
-        <span className="assistant-launcher-word">Assistant</span>
-      </button>
 
       <div
         className="assistant-thread"

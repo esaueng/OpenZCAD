@@ -28,11 +28,11 @@ import { triangulateRegionGeometry } from './regionOverlay';
  */
 
 const PLANE_EXTENT = 400;
-const TINT_COLOR = 0x0d1b2e;
-const COMMITTED_COLOR = 0x4da3ff;
+const TINT_COLOR = 0x10172e;
+const COMMITTED_COLOR = 0x6798ff;
 const SELECTED_COLOR = 0xf59e0b;
 const IN_PROGRESS_COLOR = 0xf59e0b;
-const INFERENCE_COLOR = 0x7dd3fc;
+const INFERENCE_COLOR = 0x7da3fc;
 /** Screen-space width in CSS pixels for the sketch polylines. */
 const SKETCH_LINE_WIDTH = 1.6;
 

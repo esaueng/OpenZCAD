@@ -387,6 +387,12 @@ test('switches a planar-face selection into an editable arc sketch', async ({
 
   const sketchTools = page.getByRole('toolbar', { name: 'Sketch tools' });
   await expect(sketchTools).toBeVisible();
+  // Grid snapping rounds the arc's radius to whole millimetres, which moves
+  // it off the 45° point the selection click aims at by a zoom-dependent few
+  // pixels; this test is about editing the arc, so draw it where clicked.
+  await page.getByRole('button', { name: /Sketch palette/ }).click();
+  await page.getByLabel('Snap to grid').uncheck();
+  await page.getByRole('button', { name: /Sketch palette/ }).click();
   await sketchTools.getByRole('button', { name: /^Arc/ }).click();
   const sketchBounds = await canvas.boundingBox();
   expect(sketchBounds).not.toBeNull();
@@ -566,12 +572,8 @@ test('keeps face sketching available after a primitive direct edit', async ({
     .getByRole('region', { name: 'Resize Body operation' })
     .getByRole('tab', { name: 'Offset Face', exact: true })
     .click();
-  // The chip reads the total by default; the tag beside it switches exact
-  // entry to the plain offset.
-  await expect(page.getByTestId('direct-manipulation-mode')).toHaveText(
-    /^Total/
-  );
-  await page.getByTestId('direct-manipulation-mode').click();
+  // Moving a face reads the change by default (Resize body read the total);
+  // the tag beside the value is the switch to the whole span.
   await expect(page.getByTestId('direct-manipulation-mode')).toHaveText(
     /^Offset/
   );
@@ -624,9 +626,9 @@ test('keeps a source circle stable over its coincident extrude edge', async ({
   const bounds = await canvas.boundingBox();
   expect(bounds).not.toBeNull();
   const center = {
-    // Stay clear of the empty-viewport getting-started card while keeping the
-    // whole circle inside the real WebGL canvas.
-    x: bounds!.x + bounds!.width * 0.72,
+    // Stay clear of the empty-viewport getting-started card and, on the right,
+    // the model drawer, while keeping the whole circle on the open canvas.
+    x: bounds!.x + bounds!.width * 0.6,
     y: bounds!.y + bounds!.height * 0.64
   };
   await page.mouse.move(center.x, center.y);

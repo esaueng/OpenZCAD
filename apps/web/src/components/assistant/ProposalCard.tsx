@@ -203,11 +203,7 @@ export function ProposalCard({
             onClick={onApply}
           >
             {applying ? (
-              <LoaderCircle
-                size={13}
-                aria-hidden="true"
-                className="assistant-spin"
-              />
+              <LoaderCircle size={13} aria-hidden="true" className="spin" />
             ) : (
               <Check size={13} aria-hidden="true" />
             )}

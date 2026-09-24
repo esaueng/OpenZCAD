@@ -21,13 +21,6 @@ export interface EntityConstraintItem {
   editable: boolean;
 }
 
-/** A constraint tool the entity can start, with whether it is armed now. */
-export interface EntityConstraintTool {
-  kind: SketchConstraintToolKind;
-  label: string;
-  armed: boolean;
-}
-
 interface SketchEntityEditorProps {
   data: SketchObjectData;
   scope: Record<string, number>;
@@ -37,12 +30,11 @@ interface SketchEntityEditorProps {
   onDelete(): void;
   onClose(): void;
   /**
-   * The constraints section: what the entity is already held by, and what
-   * can be added from it. Absent, the editor is the plain value form.
+   * The constraints section: what the entity is already held by. Adding one
+   * starts from the relations rail, which takes this entity as pick 1.
+   * Absent or empty, the editor is the plain value form.
    */
   constraints?: EntityConstraintItem[];
-  constraintTools?: EntityConstraintTool[];
-  onConstraintTool?(kind: SketchConstraintToolKind): void;
   onEditConstraint?(
     constraintId: string,
     anchor: { x: number; y: number }
@@ -288,8 +280,6 @@ export function SketchEntityEditor({
   onDelete,
   onClose,
   constraints,
-  constraintTools,
-  onConstraintTool,
   onEditConstraint,
   onDeleteConstraint
 }: SketchEntityEditorProps) {
@@ -386,76 +376,50 @@ export function SketchEntityEditor({
         </fieldset>
         {error && <p role="alert">{error}</p>}
       </form>
-      {constraintTools && constraintTools.length > 0 && (
+      {constraints && constraints.length > 0 && (
         <section className="sketch-entity-constraints" aria-label="Constraints">
           <span className="eyebrow">Constraints</span>
-          {Boolean(constraints?.length) && (
-            <p className="muted">
-              These constraints control this geometry. Edit a driving dimension
-              below to change its constrained size.
-            </p>
-          )}
-          <div
-            className="sketch-entity-constraint-tools"
-            role="group"
-            aria-label="Add a constraint from this entity"
-          >
-            {constraintTools.map(({ kind, label, armed }) => {
+          <p className="muted">
+            These constraints control this geometry. Edit a driving dimension
+            below to change its constrained size.
+          </p>
+          <ul className="sketch-constraint-list">
+            {constraints.map(({ constraintId, kind, label, editable }) => {
               const Icon = CONSTRAINT_ICONS[kind];
               return (
-                <button
-                  key={kind}
-                  type="button"
-                  className={armed ? 'active' : undefined}
-                  aria-pressed={armed}
-                  aria-label={`${label} constraint`}
-                  title={`${label} constraint`}
-                  onClick={() => onConstraintTool?.(kind)}
-                >
-                  <Icon size={14} aria-hidden="true" />
-                </button>
-              );
-            })}
-          </div>
-          {constraints && constraints.length > 0 && (
-            <ul className="sketch-constraint-list">
-              {constraints.map(({ constraintId, kind, label, editable }) => {
-                const Icon = CONSTRAINT_ICONS[kind];
-                return (
-                  <li key={constraintId}>
-                    <Icon size={12} aria-hidden="true" />
-                    {editable ? (
-                      <button
-                        type="button"
-                        className="sketch-constraint-edit"
-                        title={`Edit constraint: ${label}`}
-                        aria-label={`Edit constraint: ${label}`}
-                        onClick={(event) =>
-                          onEditConstraint?.(constraintId, {
-                            x: event.clientX,
-                            y: event.clientY
-                          })
-                        }
-                      >
-                        {label}
-                      </button>
-                    ) : (
-                      <span title={label}>{label}</span>
-                    )}
+                <li key={constraintId}>
+                  <Icon size={12} aria-hidden="true" />
+                  {editable ? (
                     <button
                       type="button"
-                      className="row-delete"
-                      title={`Delete constraint: ${label}`}
-                      aria-label={`Delete constraint: ${label}`}
-                      onClick={() => onDeleteConstraint?.(constraintId)}
+                      className="sketch-constraint-edit"
+                      title={`Edit constraint: ${label}`}
+                      aria-label={`Edit constraint: ${label}`}
+                      onClick={(event) =>
+                        onEditConstraint?.(constraintId, {
+                          x: event.clientX,
+                          y: event.clientY
+                        })
+                      }
                     >
-                      <Trash2 size={12} aria-hidden="true" />
+                      {label}
                     </button>
-                  </li>
-                );
-              })}
-            </ul>
-          )}
+                  ) : (
+                    <span title={label}>{label}</span>
+                  )}
+                  <button
+                    type="button"
+                    className="row-delete"
+                    title={`Delete constraint: ${label}`}
+                    aria-label={`Delete constraint: ${label}`}
+                    onClick={() => onDeleteConstraint?.(constraintId)}
+                  >
+                    <Trash2 size={12} aria-hidden="true" />
+                  </button>
+                </li>
+              );
+            })}
+          </ul>
         </section>
       )}
     </div>

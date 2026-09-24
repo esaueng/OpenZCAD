@@ -12,7 +12,7 @@
   justify-content: center;
   align-items: flex-start;
   padding: 12vh 16px 16px;
-  background: rgba(4, 7, 11, 0.55);
+  background: rgba(6, 7, 9, 0.55);
   backdrop-filter: blur(2px);
 }
 
@@ -523,7 +523,7 @@
 
 .shapr-status {
   padding: 2px var(--sp-2);
-  border-radius: 999px;
+  border-radius: var(--radius-md);
   font-family: var(--font-mono);
   font-size: var(--fs-mini);
   color: var(--color-warning);

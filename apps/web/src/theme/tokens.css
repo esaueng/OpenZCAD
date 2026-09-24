@@ -4,53 +4,66 @@
    ───────────────────────────────────────────────────────────── */
 
 :root {
-  /* ── Surfaces & text (Esau / OpenCAE cool-steel ramp) ───── */
-  --color-bg: #0b0f14;
-  --color-surface: #111821;
-  --color-surface-2: #17202b;
-  --color-surface-hover: #1b2430;
-  --color-border: #2a3441;
-  --color-border-strong: #3a4554;
-  --color-text: #e6edf3;
-  --color-text-muted: #8b949e;
-  --color-text-subtle: #828d99;
-  --color-text-dim: #6e7681;
+  /* ── Surfaces & text (steel graphite) ─────────────────────
+     The quiet-stage workspace: the viewport is the page, and every panel is
+     an island floating over it. Neutrals carry a faint steel tint (hue 214)
+     so islands separate from the stage without a second colour. */
+  --color-bg: #101215;
+  --color-surface: #181b1f;
+  --color-surface-2: #1e2126;
+  --color-surface-hover: #23272c;
+  --color-border: #282d33;
+  --color-border-strong: #353c44;
+  --color-text: #ebedef;
+  --color-text-muted: #9ba2ab;
+  --color-text-subtle: #8f97a2;
+  --color-text-dim: #69717c;
   --color-surface-1: var(--color-surface);
   --color-surface-raised: var(--color-surface-hover);
 
   /* ── Semantic ─────────────────────────────────────────── */
-  --color-accent: #4da3ff;
-  --color-accent-hi: #7cc0ff;
-  --color-accent-dim: rgba(77, 163, 255, 0.12);
-  --color-accent-border: rgba(77, 163, 255, 0.45);
-  --color-on-accent: #06111e;
+  /* One signal colour: selection, handles and the one primary action per
+     context. It is deliberately the strongest hue on screen, stronger than
+     the add/cut previews, because it answers "what did I pick". */
+  --color-accent: #6798ff;
+  --color-accent-hi: #81a9ff;
+  --color-accent-dim: rgba(103, 152, 255, 0.14);
+  --color-accent-border: rgba(103, 152, 255, 0.45);
+  --color-on-accent: #0e1830;
   --color-warning: #f59e0b;
   --color-error: #ef4444;
   /* Error TEXT on tinted chips: lighter than --color-error so it clears the
      dark surfaces; the light theme swaps it for a deeper red instead. */
   --color-error-text: #fca5a5;
-  --color-success: #22c55e;
-  --color-viewport-bg: #070b10;
+  /* Material gained. Also the success tone: both mean "this adds". */
+  --color-success: #48cd8f;
+  /* Material removed by a cut. Distinct from --color-error: a cut is an
+     intended result, not a failure. */
+  --color-cut: #ff644d;
+  --color-viewport-bg: #101215;
   /* Overlays drawn on the viewport's dark stage (orientation widget, scale
      bar, pick lists, callouts) keep light text in every theme — the light
      theme repaints the chrome, not the canvas. Never use --color-text there. */
-  --color-viewport-text: #e6edf3;
-  --color-viewport-text-muted: #8b949e;
+  --color-viewport-text: #ebedef;
+  --color-viewport-text-muted: #9ba2ab;
   /* Borders on those same overlays: --color-border re-themes to a light grey
      and drew a pale ring round the dark rotate-view button in light theme. */
-  --color-viewport-border: rgba(230, 237, 243, 0.18);
+  --color-viewport-border: rgba(235, 237, 239, 0.18);
 
   /* ── Viewport selection & manipulation ────────────────── */
-  --color-select: #4da3ff;      /* selected geometry */
-  --color-preselect: #7cc0ff;   /* hover preselection */
-  --color-preview: #58d6c2;     /* ghost geometry during a command */
+  --color-select: #6798ff;      /* selected geometry */
+  --color-preselect: #81a9ff;   /* hover preselection */
+  --color-preview: #48cd8f;     /* ghost geometry during a command */
+  /* Reference geometry (sketch construction lines). Magenta, well away from
+     the signal hue so a construction line never reads as a selection. */
+  --color-construction: #ef91ef;
   --color-handle-x: #ef6a6a;
   --color-handle-y: #6fd66f;
   --color-handle-z: #5f8fef;
 
   /* ── Typography ───────────────────────────────────────── */
-  --font-ui: 'IBM Plex Sans', system-ui, -apple-system, sans-serif;
-  --font-mono: 'IBM Plex Mono', ui-monospace, 'SF Mono', Menlo, monospace;
+  --font-ui: 'Geist Sans', system-ui, -apple-system, sans-serif;
+  --font-mono: 'Geist Mono', ui-monospace, 'SF Mono', Menlo, monospace;
 
   /* The accessibility review's floor: below 11px this metadata stops being
      readable at 100% zoom. Half a pixel less used to be needed because it
@@ -86,9 +99,11 @@
   --sp-6: 32px;
 
   /* ── Radii ────────────────────────────────────────────── */
-  --radius-sm: 3px;
-  --radius-md: 4px;
-  --radius-lg: 8px;
+  /* Near-square on purpose: keys and chips 2px, controls 3px, panels 4px.
+     Only true dots and the round marking-menu hub stay round. */
+  --radius-sm: 2px;
+  --radius-md: 3px;
+  --radius-lg: 4px;
 
   /* ── Borders (composed) ───────────────────────────────── */
   --border-thin: 1px solid var(--color-border);
@@ -105,6 +120,15 @@
 
   /* ── Layout dimensions ────────────────────────────────── */
   --topbar-h: 44px;
+  /* The quiet stage: every island floats this far from the viewport's edges
+     and from its neighbours, and the stage's usable top starts under the
+     top islands. */
+  --island-gap: 10px;
+  --stage-top: calc(var(--topbar-h) + var(--island-gap) * 2);
+  /* Width of the instrument rail on the right edge. */
+  --rail-w: 40px;
+  /* Height of the command bar at the foot of the stage. */
+  --command-bar-h: 38px;
   --toolbar-h: 48px;
   --statusbar-h: 30px;
   /* Starting widths for the two resizable panels. The workspace republishes
