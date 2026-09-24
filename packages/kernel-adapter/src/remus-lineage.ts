@@ -1090,7 +1090,7 @@ function supportIdentity(reference: FaceTopologyReferenceV5): string {
  */
 export function createRemusModifierEvolutionLineage(input: {
   readonly producingFeatureId: FeatureId;
-  readonly operation: 'fillet' | 'chamfer';
+  readonly operation: 'fillet' | 'chamfer' | 'direct-edit';
   readonly payload: FaceEvolutionPayloadV1;
   readonly sourceSolid: number;
   readonly resultSolid: number;
@@ -1149,7 +1149,12 @@ export function createRemusModifierEvolutionLineage(input: {
   for (const resultHandle of input.generatedBlendFaces) {
     const resultCandidate = resultFaces.get(resultHandle);
     const sources = [...(generatedSources.get(resultHandle) ?? [])];
-    if (!resultCandidate || sources.length !== 2) {
+    const requiredSourceCount = input.operation === 'direct-edit' ? 1 : 2;
+    if (
+      !resultCandidate ||
+      sources.length < requiredSourceCount ||
+      sources.length > 2
+    ) {
       continue;
     }
     const references = sources.flatMap((handle) => {
@@ -1159,13 +1164,66 @@ export function createRemusModifierEvolutionLineage(input: {
         : [];
     });
     const identities = references.map(supportIdentity).sort();
-    if (identities.length !== 2 || new Set(identities).size !== 2) {
+    if (
+      references.length !== sources.length ||
+      new Set(identities).size !== identities.length
+    ) {
       continue;
     }
     assignments.push({
       ...resultCandidate,
-      lineageName: `modifier.${input.operation}.face.band-between.${identities.join('|')}`
+      lineageName:
+        input.operation === 'direct-edit'
+          ? `direct-edit.resize-blend.band.${identities.join('|')}`
+          : `modifier.${input.operation}.face.band-between.${identities.join('|')}`
     });
+  }
+
+  const sourceIdentityCounts = new Map<string, number>();
+  const identityKey = (reference: FaceTopologyReferenceV5) =>
+    `${reference.producingFeatureId}:${reference.lineageName}`;
+  for (const reference of input.sourceLineage?.faceReferences.values() ?? []) {
+    const key = identityKey(reference);
+    sourceIdentityCounts.set(key, (sourceIdentityCounts.get(key) ?? 0) + 1);
+  }
+
+  // A resize-to-zero changes the support trims even though each support face
+  // remains a one-to-one construction result. Preserve that reference only
+  // when the kernel's evolution names exactly one result and the stored source
+  // witness still verifies; split, merge, stale, and ambiguous claims remain
+  // hash-only.
+  const directEditModified = new Map<
+    number,
+    { reference: FaceTopologyReferenceV5; candidate: RemusTopologyCandidate }
+  >();
+  const directEditConflicted = new Set<number>();
+  if (input.operation === 'direct-edit') {
+    for (const relation of input.payload.evolution.modified) {
+      if (relation.results.length !== 1) continue;
+      const reference = input.sourceLineage?.faceReferences.get(
+        relation.source
+      );
+      const source = sourceFaces.get(relation.source);
+      const candidate = resultFaces.get(relation.results[0]!);
+      if (
+        !reference ||
+        !source ||
+        !candidate ||
+        !referenceMatchesCandidate(reference, source) ||
+        sourceIdentityCounts.get(identityKey(reference)) !== 1 ||
+        inspectTopologyWitness('face', candidate.witness as FaceWitnessV1)
+          .status !== 'supported' ||
+        directEditModified.has(candidate.handle) ||
+        directEditConflicted.has(candidate.handle)
+      ) {
+        if (candidate && directEditModified.has(candidate.handle)) {
+          directEditModified.delete(candidate.handle);
+          directEditConflicted.add(candidate.handle);
+        }
+        continue;
+      }
+      directEditModified.set(candidate.handle, { reference, candidate });
+    }
   }
 
   const state = createRemusSemanticLineage(
@@ -1173,12 +1231,11 @@ export function createRemusModifierEvolutionLineage(input: {
     input.operation,
     assignments
   );
-  const sourceIdentityCounts = new Map<string, number>();
-  const identityKey = (reference: FaceTopologyReferenceV5) =>
-    `${reference.producingFeatureId}:${reference.lineageName}`;
-  for (const reference of input.sourceLineage?.faceReferences.values() ?? []) {
-    const key = identityKey(reference);
-    sourceIdentityCounts.set(key, (sourceIdentityCounts.get(key) ?? 0) + 1);
+  for (const { reference, candidate } of directEditModified.values()) {
+    state.faceReferences.set(
+      candidate.handle,
+      transformedFaceReference(reference, candidate.witness as FaceWitnessV1)
+    );
   }
   // A later modifier must not steal an unchanged face from its original
   // feature. Construction history and the unchanged witness must both agree.
