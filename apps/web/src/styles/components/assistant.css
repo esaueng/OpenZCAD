@@ -223,6 +223,20 @@
   animation: assistant-pulse 1.8s var(--ease-out) infinite;
 }
 
+/* The pulse ends fully transparent, so collapsing it for reduced motion left
+   the launcher looking idle while a reply streamed. Hold the outline still. */
+[data-reduced-motion='true'] .assistant-launcher.working::before {
+  animation: none;
+  opacity: 0.75;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .assistant-launcher.working::before {
+    animation: none;
+    opacity: 0.75;
+  }
+}
+
 @keyframes assistant-pulse {
   0% {
     opacity: 0.75;
@@ -557,6 +571,20 @@
   animation-delay: 0.3s;
 }
 
+/* Still dots at the bounce's resting 0.25 read as disabled; hold them at a
+   legible middle instead. */
+[data-reduced-motion='true'] .assistant-typing i {
+  animation: none;
+  opacity: 0.6;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .assistant-typing i {
+    animation: none;
+    opacity: 0.6;
+  }
+}
+
 @keyframes assistant-typing {
   0%,
   60%,
@@ -581,16 +609,6 @@
   color: var(--color-text-muted);
   font-style: normal;
   overflow-wrap: anywhere;
-}
-
-.assistant-spin {
-  animation: assistant-spin 900ms linear infinite;
-}
-
-@keyframes assistant-spin {
-  to {
-    transform: rotate(360deg);
-  }
 }
 
 /* ── Jump to latest ─────────────────────────────────────── */
