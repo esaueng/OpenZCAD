@@ -9,6 +9,7 @@ import type {
 import type { EdgeTopology } from '@openzcad/shared';
 import { findBodyId, isViewerMesh, type ViewerMesh } from '../pick/meshes';
 import { updateSectionCap } from './sectionCaps';
+import { disposeMaterial } from '../render/programRetention';
 import { applyExactSection, type ExactSectionDisplay } from './exactSection';
 import {
   EDGE_IDLE_COLOR,
@@ -16,19 +17,20 @@ import {
   EDGE_WIREFRAME_COLOR
 } from '../pick/edges';
 
+/** Frees an object tree's geometries and materials (see `keepProgram`). */
 export function disposeObject(object: THREE.Object3D) {
   object.traverse((child: THREE.Object3D) => {
     const disposable = child as unknown as {
       geometry?: { dispose(): void };
-      material?: { dispose(): void } | { dispose(): void }[];
+      material?: THREE.Material | THREE.Material[];
     };
     disposable.geometry?.dispose();
     if (Array.isArray(disposable.material)) {
       for (const material of disposable.material) {
-        material.dispose();
+        disposeMaterial(material);
       }
-    } else {
-      disposable.material?.dispose();
+    } else if (disposable.material) {
+      disposeMaterial(disposable.material);
     }
   });
 }
