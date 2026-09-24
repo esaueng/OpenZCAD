@@ -171,29 +171,55 @@ export function WorkspaceReadout({
   );
 }
 
-interface ViewportDockExtrasProps {
-  selectionFilter: SelectionFilter;
-  selectionFilterIsAutomatic: boolean;
-  onSelectionFilter(filter: SelectionFilter | null): void;
-  /** Sketch snap spacing while a sketch is open; null hides it. */
-  snap: { spacing: number; units: string; enabled: boolean } | null;
+interface ActivityLogButtonProps {
   logOpen: boolean;
   onToggleLog(): void;
   logTriggerRef: RefObject<HTMLButtonElement | null>;
 }
 
 /**
- * The dock's middle segments: the selection filter (click or Q cycles it),
- * the sketch snap, and the activity log's button.
+ * The activity log's button, on the instrument rail with the other panels.
+ * It used to close the bottom-left readout, which made that island as wide
+ * as the column for one chip and one icon; here it sits with Items, History
+ * and Parameters, which is what it is: a panel about the model.
+ */
+export function ActivityLogButton({
+  logOpen,
+  onToggleLog,
+  logTriggerRef
+}: ActivityLogButtonProps) {
+  return (
+    <button
+      ref={logTriggerRef}
+      type="button"
+      className={`rail-button${logOpen ? ' active' : ''}`}
+      title="Activity log"
+      aria-label={`${logOpen ? 'Close' : 'Open'} activity log`}
+      aria-expanded={logOpen}
+      onClick={onToggleLog}
+    >
+      <History size={16} aria-hidden="true" />
+    </button>
+  );
+}
+
+interface ViewportDockExtrasProps {
+  selectionFilter: SelectionFilter;
+  selectionFilterIsAutomatic: boolean;
+  onSelectionFilter(filter: SelectionFilter | null): void;
+  /** Sketch snap spacing while a sketch is open; null hides it. */
+  snap: { spacing: number; units: string; enabled: boolean } | null;
+}
+
+/**
+ * The readout's segments: the selection filter (click or Q cycles it) and
+ * the sketch snap. The island hugs them, so it is as wide as what it says.
  */
 export function ViewportDockExtras({
   selectionFilter,
   selectionFilterIsAutomatic,
   onSelectionFilter,
-  snap,
-  logOpen,
-  onToggleLog,
-  logTriggerRef
+  snap
 }: ViewportDockExtrasProps) {
   const filterIndex = SELECTION_FILTERS.indexOf(selectionFilter);
   const nextFilter =
@@ -224,17 +250,6 @@ export function ViewportDockExtras({
           {snap.enabled ? `Snap ${snap.spacing} ${snap.units}` : 'Snap off'}
         </span>
       )}
-      <button
-        ref={logTriggerRef}
-        type="button"
-        className="viewport-dock-log"
-        title="Activity log"
-        aria-label={`${logOpen ? 'Close' : 'Open'} activity log`}
-        aria-expanded={logOpen}
-        onClick={onToggleLog}
-      >
-        <History size={14} aria-hidden="true" />
-      </button>
       <span className="viewport-dock-divider" aria-hidden="true" />
     </>
   );

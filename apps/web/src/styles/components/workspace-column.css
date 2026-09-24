@@ -477,23 +477,6 @@
   border-color: var(--color-border-strong);
 }
 
-.viewport-dock-log {
-  display: grid;
-  place-items: center;
-  width: 26px;
-  height: 26px;
-  color: var(--color-text-muted);
-  border: 1px solid transparent;
-  border-radius: var(--radius-sm);
-}
-
-.viewport-dock-log:hover,
-.viewport-dock-log[aria-expanded='true'] {
-  color: var(--color-text);
-  background: var(--color-surface-hover);
-  border-color: var(--color-border-strong);
-}
-
 /* The scale bar as the dock's last segment. */
 .viewport-dock .viewport-scale-indicator {
   position: static;

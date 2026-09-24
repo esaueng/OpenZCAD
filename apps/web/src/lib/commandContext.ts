@@ -6,8 +6,8 @@ import { TOOL_GROUPS, type ToolId } from './tools';
  * The card answers one question: what can I do with what I picked? Each
  * context lists the tools that act on that kind of pick, in the order they
  * are usually reached for, with at most one primary tool. Every other tool
- * stays one click away in the card's "All tools" grid, so a context never
- * hides a command; it only decides which ones get a named row.
+ * stays one click away behind the card's "More tools" fold, so a context
+ * never loses a command; it only decides which ones get a named row.
  *
  * The face and edge verbs that act on the pick itself (Offset Face, Adjust
  * Radius, Edit Fillet…) are not tools and live in the floating tool card;
