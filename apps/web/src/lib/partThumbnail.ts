@@ -5,6 +5,7 @@ import {
   clearGroup,
   createFatLine,
   createObjectForBody,
+  keepProgram,
   shouldRenderTopologyEdge
 } from '@openzcad/viewport';
 
@@ -106,23 +107,11 @@ export function renderThumbnailFrame(
     return null;
   }
 
-  const renderer = new THREE.WebGLRenderer({
-    antialias: true,
-    alpha: false,
-    powerPreference: 'low-power',
-    preserveDrawingBuffer: true
-  });
+  const renderer = thumbnailRenderer();
   const scene = new THREE.Scene();
   const bodyGroup = new THREE.Group();
 
   try {
-    renderer.setPixelRatio(1);
-    renderer.setSize(THUMBNAIL_WIDTH, THUMBNAIL_HEIGHT, false);
-    renderer.setClearColor('#05080c', 1);
-    renderer.outputColorSpace = THREE.SRGBColorSpace;
-    renderer.toneMapping = THREE.ACESFilmicToneMapping;
-    renderer.toneMappingExposure = 1.08;
-
     scene.add(bodyGroup);
     scene.add(new THREE.HemisphereLight('#d7e6f7', '#28384b', 1.25));
 
@@ -178,10 +167,49 @@ export function renderThumbnailFrame(
     renderer.render(scene, camera);
     return renderer.domElement.toDataURL('image/webp', 0.86);
   } finally {
+    // The card's materials are identical from one capture to the next, so
+    // their programs stay with the kept renderer instead of relinking.
+    bodyGroup.traverse((child) => {
+      const material = (child as THREE.Mesh).material;
+      for (const entry of Array.isArray(material) ? material : [material]) {
+        if (entry) keepProgram(entry);
+      }
+    });
     clearGroup(bodyGroup);
-    renderer.dispose();
-    renderer.forceContextLoss();
   }
+}
+
+let keptRenderer: THREE.WebGLRenderer | null = null;
+
+/**
+ * The one renderer every card is drawn with, created on first use and kept.
+ * A renderer per card cost a WebGL context and a full set of shader links on
+ * every capture — on software GL that blocked the main thread for seconds,
+ * and the idle capture lands whenever the user pauses, so it landed in the
+ * middle of their next gesture. One context also keeps the count the live
+ * viewport competes with at exactly one, where disposed per-card contexts
+ * lingered until the browser collected them. A context the browser has
+ * since taken away is replaced rather than reused.
+ */
+function thumbnailRenderer(): THREE.WebGLRenderer {
+  if (keptRenderer && !keptRenderer.getContext().isContextLost()) {
+    return keptRenderer;
+  }
+  keptRenderer?.dispose();
+  const renderer = new THREE.WebGLRenderer({
+    antialias: true,
+    alpha: false,
+    powerPreference: 'low-power',
+    preserveDrawingBuffer: true
+  });
+  renderer.setPixelRatio(1);
+  renderer.setSize(THUMBNAIL_WIDTH, THUMBNAIL_HEIGHT, false);
+  renderer.setClearColor('#05080c', 1);
+  renderer.outputColorSpace = THREE.SRGBColorSpace;
+  renderer.toneMapping = THREE.ACESFilmicToneMapping;
+  renderer.toneMappingExposure = 1.08;
+  keptRenderer = renderer;
+  return renderer;
 }
 
 /**
