@@ -57,6 +57,7 @@ import type { RegionPickData } from './viewer/regionOverlay';
 import { setLiveDiameter } from '../lib/liveLabels';
 import type { LabelSegment } from '../lib/topologyLabels';
 import { LabelSegments } from './LabelSegments';
+import { OVERLAY_EXIT_MS, useDelayedUnmount } from '../hooks/useDelayedUnmount';
 import {
   MeasurementCloudSyncAgent,
   type MeasurementCloudSyncAgentProps
@@ -409,6 +410,8 @@ export function ViewerShell({
   const scaleIndicatorRef = useRef<ViewportScaleSink | null>(null);
   const sketchGridReadoutRef = useRef<SketchGridReadoutSink | null>(null);
   const selectionChipLabelRef = useRef<HTMLSpanElement | null>(null);
+  const chipExit = useDelayedUnmount(selectionChip, OVERLAY_EXIT_MS);
+  const chip = chipExit.rendered;
   const cylinderRadiusLabelSetterRef = useRef<
     ((radius: number | null) => void) | null
   >(null);
@@ -606,15 +609,16 @@ export function ViewerShell({
           </div>
         </>
       )}
-      {selectionChip && (
-        <div className="selection-chip" role="status">
+      {chip && (
+        <div
+          className={`selection-chip${chipExit.closing ? ' closing' : ''}`}
+          role="status"
+        >
           <span ref={selectionChipLabelRef} className="selection-chip-label">
-            <LabelSegments segments={selectionChip.label} />
+            <LabelSegments segments={chip.label} />
           </span>
-          {selectionChip.detail && (
-            <span className="selection-chip-detail">
-              {selectionChip.detail}
-            </span>
+          {chip.detail && (
+            <span className="selection-chip-detail">{chip.detail}</span>
           )}
           <button
             type="button"
