@@ -89,11 +89,24 @@
   animation: none;
 }
 
-[data-reduced-motion='true'] .tool-card[aria-busy='true'] .tool-card-icon svg {
+/* Without motion the segment would freeze wherever the collapsed animation
+   ended; a full, quieter ring still marks the tile as busy. */
+[data-reduced-motion='true'] .tool-card-orbit rect {
+  stroke-dasharray: none;
+  opacity: 0.5;
   animation: none;
 }
 
+@media (prefers-reduced-motion: reduce) {
+  .tool-card-orbit rect {
+    stroke-dasharray: none;
+    opacity: 0.5;
+    animation: none;
+  }
+}
+
 .tool-card-icon {
+  position: relative;
   display: grid;
   place-items: center;
   width: 28px;
@@ -263,13 +276,30 @@
   background: rgba(255, 255, 255, 0.16);
 }
 
-.tool-card[aria-busy='true'] .tool-card-icon svg {
-  animation: tool-card-validating 900ms linear infinite;
+/* The busy tile keeps its glyph still and runs a short segment round its
+   own edge. The ring is drawn on the 28px tile with pathLength="1", so the
+   dash reads as a fraction of the perimeter at any tile size. */
+.tool-card-orbit {
+  position: absolute;
+  inset: 0;
+  width: 100%;
+  height: 100%;
+  overflow: visible;
+  pointer-events: none;
 }
 
-@keyframes tool-card-validating {
+.tool-card-orbit rect {
+  fill: none;
+  stroke: var(--color-accent-hi);
+  stroke-width: 2;
+  stroke-linecap: round;
+  stroke-dasharray: 0.22 0.78;
+  animation: tool-card-orbit 1100ms linear infinite;
+}
+
+@keyframes tool-card-orbit {
   to {
-    transform: rotate(360deg);
+    stroke-dashoffset: -1;
   }
 }
 

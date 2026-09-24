@@ -79,6 +79,18 @@ export function ToolCard({
     >
       <span className="tool-card-icon">
         <Icon size={16} aria-hidden="true" />
+        {model.phase === 'validating' ? (
+          // A segment running round the tile says "working" while the glyph
+          // stays still — spinning the glyph itself turned a fillet arc or
+          // an offset arrow into a meaningless pinwheel.
+          <svg
+            className="tool-card-orbit"
+            viewBox="0 0 28 28"
+            aria-hidden="true"
+          >
+            <rect x="1" y="1" width="26" height="26" rx="2" pathLength={1} />
+          </svg>
+        ) : null}
       </span>
       <span className="tool-card-copy">
         <strong>
