@@ -462,6 +462,12 @@
   animation: none;
 }
 
+@media (prefers-reduced-motion: reduce) {
+  .handle-value-chip[data-state='deferred']::after {
+    animation: none;
+  }
+}
+
 .handle-value-chip[data-state='warning'] {
   color: #fff4dc;
   background: color-mix(in srgb, var(--color-warning) 18%, #101316);
@@ -923,6 +929,13 @@
 [data-reduced-motion='true'] .sketch-center-target,
 [data-reduced-motion='true'] .sketch-center-axis {
   animation: none;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .sketch-center-target,
+  .sketch-center-axis {
+    animation: none;
+  }
 }
 
 .sketch-grid-indicator {

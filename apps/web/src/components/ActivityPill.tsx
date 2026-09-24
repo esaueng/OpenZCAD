@@ -169,7 +169,7 @@ export function ActivityPill({
         {outcome ? (
           <i className={`activity-dot ${outcome.tone}`} />
         ) : (
-          <i className="activity-spin" />
+          <i className="activity-spin spin" />
         )}
       </span>
       {/* Only the verb, name and detail are announced. The clock is a sibling
