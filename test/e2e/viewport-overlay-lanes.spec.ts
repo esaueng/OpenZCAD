@@ -64,6 +64,29 @@ for (const width of [1440, 1024]) {
         .map((button) => button.getAttribute('aria-label') ?? '')
     );
     expect(obscured).toEqual([]);
+
+    // Nor the notice lane above the search bar. The card sat in the lane's
+    // bottom-left corner, so the status toast ("Created Tour lane.") and the
+    // selection chip it asks for in step 2 ran under it at 1024px.
+    //
+    // Measure the lane's status row, not the message in it. Every status the
+    // toast shows is drawn inside that row, which is laid out whether or not
+    // a message is up. The creation message itself is an 8 s transient whose
+    // clock runs while the geometry worker's own status covers it: on a cold
+    // CI runner the worker took longer than that to start, and the message
+    // had already expired, blank, by the time the tour was measured.
+    const row = page.locator('.workspace-toast');
+    const statusBox = await row.boundingBox();
+    const card = (await tour.boundingBox())!;
+    expect(statusBox).not.toBeNull();
+    expect(statusBox!.width).toBeGreaterThan(0);
+    expect(statusBox!.height).toBeGreaterThan(0);
+    const overlaps =
+      statusBox!.x < card.x + card.width &&
+      card.x < statusBox!.x + statusBox!.width &&
+      statusBox!.y < card.y + card.height &&
+      card.y < statusBox!.y + statusBox!.height;
+    expect(overlaps).toBe(false);
   });
 }
 
