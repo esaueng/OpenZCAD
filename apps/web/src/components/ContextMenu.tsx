@@ -33,12 +33,19 @@ export interface ContextMenuState {
 
 interface ContextMenuProps {
   menu: ContextMenuState;
+  /** Fading out after it closed: still drawn, but deaf to input. */
+  closing?: boolean;
   onSelect(itemId: string): void;
   onClose(): void;
 }
 
 /** Positioned right-click menu; closes on outside pointer, Esc, or selection. */
-export function ContextMenu({ menu, onSelect, onClose }: ContextMenuProps) {
+export function ContextMenu({
+  menu,
+  closing = false,
+  onSelect,
+  onClose
+}: ContextMenuProps) {
   const ref = useRef<HTMLDivElement | null>(null);
   const [position, setPosition] = useState({ x: menu.x, y: menu.y });
   useMenuKeyboard(ref);
@@ -57,6 +64,9 @@ export function ContextMenu({ menu, onSelect, onClose }: ContextMenuProps) {
   }, [menu]);
 
   useEffect(() => {
+    if (closing) {
+      return;
+    }
     function onPointerDown(event: PointerEvent) {
       if (ref.current && !ref.current.contains(event.target as Node)) {
         onClose();
@@ -74,12 +84,12 @@ export function ContextMenu({ menu, onSelect, onClose }: ContextMenuProps) {
       window.removeEventListener('pointerdown', onPointerDown, true);
       window.removeEventListener('keydown', onKeyDown, true);
     };
-  }, [onClose]);
+  }, [closing, onClose]);
 
   return (
     <div
       ref={ref}
-      className="context-menu"
+      className={`context-menu${closing ? ' closing' : ''}`}
       role="menu"
       tabIndex={-1}
       style={{ left: position.x, top: position.y }}

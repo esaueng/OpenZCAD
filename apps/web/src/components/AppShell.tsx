@@ -5,6 +5,7 @@ import {
   type ReactNode,
   type Ref
 } from 'react';
+import { OVERLAY_EXIT_MS, useDelayedUnmount } from '../hooks/useDelayedUnmount';
 
 // Off the entry chunk, which has no room left; it mounts long before anyone
 // could have started dragging a file toward the window.
@@ -91,6 +92,9 @@ export function AppShell({
   overlays,
   onDropFiles
 }: AppShellProps) {
+  // The inspector fades out rather than vanishing. `has-inspector` still
+  // follows the live prop, so the lane is released on the frame it closes.
+  const inspectorExit = useDelayedUnmount(inspector || null, OVERLAY_EXIT_MS);
   const assistantDocked = Boolean(
     assistant && !assistantHidden && !assistantCollapsed
   );
@@ -125,7 +129,13 @@ export function AppShell({
               wrapper always renders, so opening the drawer never remounts
               an inspector form mid-edit. */}
           <div className="stage-right">
-            {inspector && <div className="inspector-float">{inspector}</div>}
+            {inspectorExit.rendered && (
+              <div
+                className={`inspector-float${inspectorExit.closing ? ' closing' : ''}`}
+              >
+                {inspectorExit.rendered}
+              </div>
+            )}
             {drawer && <div className="model-drawer-float">{drawer}</div>}
           </div>
           {readout}

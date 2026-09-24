@@ -1,5 +1,6 @@
 import type { DiagnosticRow } from '../lib/diagnosticsRows';
 import { useState, type ReactNode } from 'react';
+import { useArrivals } from '../hooks/useArrivals';
 import {
   AlertTriangle,
   Box,
@@ -199,6 +200,9 @@ function bodyIcon(body: BodyRepresentation) {
   }
 }
 
+/** How long a new row keeps `.is-arrival`: its accent wash drains in 900ms. */
+const ARRIVAL_MS = 900;
+
 export function Sidebar({
   parameters,
   parameterValues,
@@ -262,6 +266,14 @@ export function Sidebar({
   // Consumed bodies live behind a disclosure row: in a model built from
   // booleans nearly every body is an input to a later feature, and a list
   // that is mostly dead entries buries the ones that still exist.
+  const featureArrivals = useArrivals(
+    features.map((feature) => feature.id),
+    ARRIVAL_MS
+  );
+  const bodyArrivals = useArrivals(
+    bodies.map((body) => body.bodyId),
+    ARRIVAL_MS
+  );
   const liveBodies = bodies.filter((body) => !body.consumed);
   const consumedBodies = bodies.filter((body) => body.consumed);
 
@@ -271,7 +283,7 @@ export function Sidebar({
     return (
       <div
         key={body.bodyId}
-        className={`body-row ${selected ? 'selected' : ''} ${body.consumed ? 'consumed' : ''} ${hidden ? 'hidden-body' : ''}`}
+        className={`body-row ${selected ? 'selected' : ''} ${body.consumed ? 'consumed' : ''} ${hidden ? 'hidden-body' : ''}${bodyArrivals.has(body.bodyId) ? ' is-arrival' : ''}`}
         role="listitem"
       >
         <button
@@ -471,7 +483,7 @@ export function Sidebar({
             return (
               <div
                 key={feature.id}
-                className={`feature-row ${selectedFeatureNodeId === feature.id ? 'selected' : ''} ${consumed ? 'consumed' : ''} ${hidden ? 'hidden-body' : ''} ${suppressed ? 'suppressed' : ''} ${rollbackMarkerIndex === index ? 'rollback-marker' : ''} ${dragFeatureId === feature.featureId ? 'is-dragging' : ''} ${dropFeatureId === feature.featureId ? 'is-drop-target' : ''}`}
+                className={`feature-row ${selectedFeatureNodeId === feature.id ? 'selected' : ''} ${consumed ? 'consumed' : ''} ${hidden ? 'hidden-body' : ''} ${suppressed ? 'suppressed' : ''} ${rollbackMarkerIndex === index ? 'rollback-marker' : ''} ${dragFeatureId === feature.featureId ? 'is-dragging' : ''} ${dropFeatureId === feature.featureId ? 'is-drop-target' : ''}${featureArrivals.has(feature.id) ? ' is-arrival' : ''}`}
                 onContextMenu={(event) => {
                   event.preventDefault();
                   onFeatureContextMenu(event, feature);
