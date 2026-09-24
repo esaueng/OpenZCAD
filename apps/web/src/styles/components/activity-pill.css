@@ -7,9 +7,9 @@
 
 .activity-lane {
   position: absolute;
-  left: var(--lane-start, calc(var(--column-w) + 12px));
-  right: var(--lane-end, calc(var(--column-w) + 12px));
-  bottom: calc(58px + var(--lane-chip, 0px));
+  left: calc(var(--column-w) + 12px);
+  right: calc(var(--column-w) + 12px);
+  bottom: 58px;
   z-index: calc(var(--z-viewer-overlay) + 1);
   display: flex;
   justify-content: safe center;
@@ -23,7 +23,7 @@
 /* The lane and the status toast are the same slot. While a pill is up the
    toast steps aside; its message is still in the activity log. The undo
    toast and the selection chip stack around it through the notice-lane
-   variables in workspace-column.css. */
+   variables in quiet-stage.css. */
 /* The body rule names .workspace-toast too: at the specificity of
    `.workspace-toast:not(.hidden) .workspace-toast-body`, which loads later,
    the invisible body stayed clickable beside the pill. */

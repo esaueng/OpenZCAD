@@ -504,78 +504,6 @@
   transform: none;
 }
 
-/* ── The notice lane ──
-   Everything that talks above the dock shares one centred lane, stacked from
-   the dock up: the selection chip, then the status toast or the activity
-   pill, then the action toast (Undo). Each row that is showing lifts the rows
-   above it. The rows used to carry fixed offsets of their own, so the Undo
-   toast, the status toast and the chip landed on the same pixels whenever
-   two of them were up at once. */
-.viewer-area {
-  --lane-chip: 0px;
-  --lane-status: 0px;
-}
-
-.workspace.column-layout .viewer-area:has(.selection-chip) {
-  --lane-chip: 34px;
-}
-
-.viewer-area:has(.workspace-toast:not(.hidden)),
-.viewer-area:has(.activity-pill) {
-  --lane-status: 40px;
-}
-
-/* A settled status only repeats what the action toast has just said
-   ("Deleted Boss bore." under "Deleted Boss bore · Undo"), so it steps aside
-   and its message stays in the activity log. A running or warning status is
-   news of its own and keeps its row under the toast. */
-.viewer-area:has(.toast:not(.closing)):has(.workspace-toast.ready):not(
-    :has(.activity-pill)
-  ) {
-  --lane-status: 0px;
-}
-
-.viewer-area:has(.toast:not(.closing)) .workspace-toast.ready,
-.viewer-area:has(.toast:not(.closing))
-  .workspace-toast.ready
-  .workspace-toast-body {
-  opacity: 0;
-  pointer-events: none;
-}
-
-/* Horizontally the lane runs between the column and its mirror inset on the
-   right, so every row centres on the same line: the status toast and the
-   activity lane span it, the chip and the Undo toast centre on it. */
-.workspace.column-layout
-  .viewer-area
-  :is(.workspace-toast, .activity-lane, .toast, .selection-chip) {
-  --lane-start: calc(var(--column-w) + 12px);
-  --lane-end: calc(var(--column-w) + 12px);
-}
-
-/* The first-run tour card sits in the lane's bottom-left corner, 296px wide,
-   and hid the chip, the status toast and the Undo toast's start behind it.
-   Where the viewport has the room, the lane starts after the card; where it
-   does not, the card lifts above the tallest stack the lane can build
-   (58 base + 34 chip + 40 status + 34 toast + 14). */
-@container viewer-area (min-width: 1240px) {
-  .workspace.column-layout
-    .viewer-area:has(.workspace-tour)
-    :is(.workspace-toast, .activity-lane, .toast, .selection-chip) {
-    --lane-start: calc(var(--column-w) + 12px + 296px + 12px);
-  }
-}
-
-@container viewer-area (max-width: 1239px) {
-  .workspace.column-layout .workspace-tour {
-    bottom: 180px;
-  }
-}
-
-.workspace.column-layout .selection-chip {
-  left: calc((var(--lane-start) + 100% - var(--lane-end)) / 2);
-}
-
 /* The toast: the live message, centred above the dock. The footer is the
    page's contentinfo landmark and stays in the tree; only the visual hides
    when there is nothing to say. */
@@ -583,9 +511,9 @@
   position: absolute;
   /* The same lane as the dock: centred on the viewport, never under the
      column. */
-  left: var(--lane-start, calc(var(--column-w) + 12px));
-  right: var(--lane-end, calc(var(--column-w) + 12px));
-  bottom: calc(58px + var(--lane-chip, 0px));
+  left: calc(var(--column-w) + 12px);
+  right: calc(var(--column-w) + 12px);
+  bottom: 58px;
   z-index: var(--z-viewer-overlay);
   display: flex;
   justify-content: safe center;
@@ -602,11 +530,9 @@
   pointer-events: none;
 }
 
-/* The selection chip sits on the dock's shoulder, and the lane above it steps
-   up while it is there (--lane-chip), so nothing covers the dock's buttons. */
-.workspace.column-layout .selection-chip {
-  bottom: 56px;
-}
+/* Where the toast, the selection chip and the Undo toast stand is the notice
+   lane's business (quiet-stage.css): one stack on the search bar, not a
+   fixed offset per state. */
 
 .workspace-toast-body {
   display: inline-flex;
@@ -791,14 +717,6 @@
        the column at 390px. */
     left: calc(var(--column-w) + 8px);
     right: 8px;
-  }
-
-  /* The chip and the Undo toast centre on the same narrowed lane. */
-  .workspace.column-layout
-    .viewer-area
-    :is(.workspace-toast, .activity-lane, .toast, .selection-chip) {
-    --lane-start: calc(var(--column-w) + 8px);
-    --lane-end: 8px;
   }
 
   /* Above this branch the dock is wider than its lane and spills over bare
