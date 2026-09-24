@@ -15,6 +15,7 @@ import {
   ProjectSharingError,
   RevisionConflictError,
   RevisionNotFoundError,
+  sharedDocumentReferencesImport,
   UPLOAD_SESSION_TTL_MS,
   type ArtifactBody,
   type CreateProjectInvitationInput,
@@ -23,6 +24,7 @@ import {
   type ProjectMemberRole,
   type PersistenceService,
   type SharedProjectAssetDownload,
+  type SharedProjectImportDownload,
   type SharedProjectSnapshot
 } from '@openzcad/persistence';
 import {
@@ -1040,6 +1042,59 @@ export class D1R2PersistenceService implements PersistenceService {
         row.kind === 'step-source' ? 'application/step' : 'application/json',
       body: Uint8Array.from(body).buffer
     };
+  }
+
+  async loadSharedProjectImportSource(
+    tokenHash: string,
+    artifactId: string
+  ): Promise<SharedProjectImportDownload | null> {
+    if (!this.env.DB) {
+      return getInMemoryPersistence().loadSharedProjectImportSource(
+        tokenHash,
+        artifactId
+      );
+    }
+    const shared = await this.loadSharedProjectByTokenHash(tokenHash);
+    if (
+      !shared ||
+      !sharedDocumentReferencesImport(shared.document, artifactId)
+    ) {
+      return null;
+    }
+    // Recheck the capability and both owner kill switches in this query. A
+    // revocation between document lookup and R2 lookup must stop the download.
+    const row = await this.env.DB.prepare(
+      `SELECT a.id, a.project_id, a.kind, a.name, a.object_key,
+              a.content_type, a.bytes, a.metadata_json, a.created_at
+       FROM artifacts a
+       INNER JOIN project_share_links l ON l.project_id = a.project_id
+       INNER JOIN projects p ON p.id = a.project_id
+       LEFT JOIN user_settings owner_settings ON owner_settings.user_id = p.user_id
+       WHERE l.token_hash = ? AND l.revoked_at IS NULL
+         AND a.id = ? AND a.kind = 'step-import'
+         AND p.status != 'deleted'
+         AND COALESCE(
+           CASE WHEN json_valid(owner_settings.settings_json)
+             THEN json_extract(owner_settings.settings_json, '$.collaboration.enabled')
+           END, 1
+         ) = 1`
+    )
+      .bind(tokenHash, artifactId)
+      .first<ArtifactRow>();
+    if (!row || row.project_id !== shared.projectId) {
+      return null;
+    }
+    if (!this.env.ARTIFACTS) {
+      throw new ArtifactStorageError();
+    }
+    const stored = await this.env.ARTIFACTS.get(row.object_key);
+    return stored
+      ? {
+          contentType: row.content_type,
+          bytes: row.bytes ?? undefined,
+          body: stored.body
+        }
+      : null;
   }
 
   async listProjects(userId: UserId): Promise<ListProjectsResponse> {
