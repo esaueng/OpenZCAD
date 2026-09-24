@@ -234,6 +234,121 @@ textarea {
   transform-origin: top left;
 }
 
+/* Overlays leave the way they arrived instead of vanishing in a frame. The
+   component keeps each mounted for the fade (useDelayedUnmount, EXIT_MS), and
+   a closing overlay takes no input: the click that dismissed it must not land
+   on the ghost. */
+.selection-chip.closing,
+.context-menu.closing,
+.inspector-float.closing {
+  animation: oz-fade-out var(--dur-fast) var(--ease-out) forwards;
+  pointer-events: none;
+}
+
+/* Popovers open from the control that owns them: a dropdown drops, a panel
+   above its button rises, the drawer slides in from its edge, and the
+   marking menu blooms out of the pointer. Centred panels carry
+   translateX(-50%) in their own transform, so they use oz-pop, which keeps
+   it. */
+.file-menu[open] > .topbar-menu-panel,
+.measurement-dock {
+  animation: oz-drop var(--dur-fast) var(--ease-out);
+}
+
+.rail-views-panel,
+.status-log-panel,
+.color-picker {
+  animation: oz-rise var(--dur-fast) var(--ease-out);
+}
+
+.rail-section-panel,
+.view-mode-views-panel {
+  animation: oz-pop var(--dur-fast) var(--ease-out);
+}
+
+.model-drawer-float {
+  animation: oz-enter-left var(--dur-base) var(--ease-out);
+}
+
+.marking-menu {
+  animation: oz-bloom var(--dur-fast) var(--ease-out);
+}
+
+/* The command card's contextual groups are keyed by selection, so a new
+   pick swaps them; the fresh rows settle in rather than replacing the old
+   ones in a single frame. The All tools grid below never remounts. */
+.command-group.is-contextual {
+  animation: oz-rise var(--dur-fast) var(--ease-out);
+}
+
+/* A feature or body that just joined the model announces itself once: it
+   rises into the list with an accent wash that drains back to the row's
+   own background. Only arrivals get it (useArrivals), not every row on a
+   panel open. */
+.feature-row.is-arrival,
+.body-row.is-arrival {
+  animation:
+    oz-rise var(--dur-base) var(--ease-out),
+    row-arrival 900ms var(--ease-out);
+}
+
+/* The save button's glyph pops when its state changes kind (saving, saved,
+   warning, offline), so the change registers without reading the label. */
+.save-state-icon {
+  display: inline-flex;
+  animation: oz-swap var(--dur-base) var(--ease-out);
+}
+
+@keyframes oz-drop {
+  from {
+    opacity: 0;
+    transform: translateY(-4px);
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0);
+  }
+}
+
+@keyframes oz-enter-left {
+  from {
+    opacity: 0;
+    transform: translateX(8px);
+  }
+  to {
+    opacity: 1;
+    transform: translateX(0);
+  }
+}
+
+@keyframes oz-bloom {
+  from {
+    opacity: 0;
+    transform: scale(0.92);
+  }
+  to {
+    opacity: 1;
+    transform: scale(1);
+  }
+}
+
+@keyframes oz-swap {
+  from {
+    opacity: 0;
+    transform: scale(0.6);
+  }
+  to {
+    opacity: 1;
+    transform: scale(1);
+  }
+}
+
+@keyframes row-arrival {
+  from {
+    background-color: var(--color-accent-dim);
+  }
+}
+
 /* Start screen part tiles lift slightly toward the pointer. */
 .start-tile-project:not(:disabled):hover {
   transform: translateY(-1px);

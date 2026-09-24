@@ -1,10 +1,13 @@
 import {
   lazy,
   Suspense,
+  useLayoutEffect,
+  useRef,
   type CSSProperties,
   type ReactNode,
   type Ref
 } from 'react';
+import { OVERLAY_EXIT_MS, useDelayedUnmount } from '../hooks/useDelayedUnmount';
 
 // Off the entry chunk, which has no room left; it mounts long before anyone
 // could have started dragging a file toward the window.
@@ -13,6 +16,43 @@ const LazyFileDropTarget = lazy(() =>
     default: module.FileDropTarget
   }))
 );
+
+/**
+ * A floating panel that can play an exit. While `closing` it is `inert` —
+ * gone as far as input goes — and it gives up focus on the commit that
+ * starts the exit. Inert alone is not enough: the browser only moves focus
+ * out of an inert subtree at its next rendering update, so a key pressed
+ * straight after the Escape that closed the inspector still landed in the
+ * inspector's field, typing a shortcut into a form on its way out instead of
+ * reaching the workspace. Focus goes to the body, where an unmount would
+ * have left it.
+ */
+function ExitingFloat({
+  className,
+  closing,
+  children
+}: {
+  className: string;
+  closing: boolean;
+  children: ReactNode;
+}) {
+  const ref = useRef<HTMLDivElement | null>(null);
+  useLayoutEffect(() => {
+    const active = document.activeElement;
+    if (
+      closing &&
+      active instanceof HTMLElement &&
+      ref.current?.contains(active)
+    ) {
+      active.blur();
+    }
+  }, [closing]);
+  return (
+    <div ref={ref} className={className} inert={closing}>
+      {children}
+    </div>
+  );
+}
 
 interface AppShellProps {
   topBar: ReactNode;
@@ -91,6 +131,13 @@ export function AppShell({
   overlays,
   onDropFiles
 }: AppShellProps) {
+  // The inspector fades out rather than vanishing. `has-inspector` still
+  // follows the live prop, so the lane is released on the frame it closes.
+  const inspectorExit = useDelayedUnmount(inspector || null, OVERLAY_EXIT_MS);
+  // Changing mode slides the column and the strip off toward their edges
+  // (view-mode.css) before they unmount.
+  const columnExit = useDelayedUnmount(sidebar || null, OVERLAY_EXIT_MS);
+  const stripExit = useDelayedUnmount(toolBar || null, OVERLAY_EXIT_MS);
   const assistantDocked = Boolean(
     assistant && !assistantHidden && !assistantCollapsed
   );
@@ -117,15 +164,36 @@ export function AppShell({
           }`}
         >
           {viewer}
-          {sidebar && <div className="workspace-column-float">{sidebar}</div>}
+          {columnExit.rendered && (
+            <ExitingFloat
+              className={`workspace-column-float${columnExit.closing ? ' closing' : ''}`}
+              closing={columnExit.closing}
+            >
+              {columnExit.rendered}
+            </ExitingFloat>
+          )}
           {sidebar && sidebarResizer}
-          {toolBar && <div className="palette-float">{toolBar}</div>}
+          {stripExit.rendered && (
+            <ExitingFloat
+              className={`palette-float${stripExit.closing ? ' closing' : ''}`}
+              closing={stripExit.closing}
+            >
+              {stripExit.rendered}
+            </ExitingFloat>
+          )}
           {/* The right lane, beside the instrument rail: the inspector over
               the drawer, one column, so neither pushes into the canvas. The
               wrapper always renders, so opening the drawer never remounts
               an inspector form mid-edit. */}
           <div className="stage-right">
-            {inspector && <div className="inspector-float">{inspector}</div>}
+            {inspectorExit.rendered && (
+              <ExitingFloat
+                className={`inspector-float${inspectorExit.closing ? ' closing' : ''}`}
+                closing={inspectorExit.closing}
+              >
+                {inspectorExit.rendered}
+              </ExitingFloat>
+            )}
             {drawer && <div className="model-drawer-float">{drawer}</div>}
           </div>
           {readout}
