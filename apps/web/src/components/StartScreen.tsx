@@ -1,4 +1,5 @@
 import { ProjectImportButton } from './ProjectImportButton';
+import { platformShortcutLabel } from '../lib/platformShortcut';
 import { useEffect, useRef, useState } from 'react';
 import { useDissolveOnUnmount } from '../hooks/useDissolveOnUnmount';
 import {
@@ -378,11 +379,7 @@ export function StartScreen({
               {syncEntry.state === 'pending' ? (
                 <CloudUpload size={12} aria-hidden="true" />
               ) : syncEntry.state === 'syncing' ? (
-                <LoaderCircle
-                  size={12}
-                  className="start-sync-spin"
-                  aria-hidden="true"
-                />
+                <LoaderCircle size={12} className="spin" aria-hidden="true" />
               ) : syncEntry.state === 'synced' ? (
                 <Check size={12} aria-hidden="true" />
               ) : (
@@ -715,7 +712,7 @@ export function StartScreen({
           className="start-settings-button icon-button"
           type="button"
           aria-label="Open settings"
-          title="Settings (Ctrl+,)"
+          title={`Settings (${platformShortcutLabel('Ctrl+,')})`}
           onClick={onOpenSettings}
         >
           <Settings size={16} aria-hidden="true" />
@@ -889,11 +886,7 @@ export function StartScreen({
             <div className="start-sync-panel" role="status" aria-live="polite">
               <div className="start-sync-head">
                 {syncTotals.active ? (
-                  <LoaderCircle
-                    size={14}
-                    className="start-sync-spin"
-                    aria-hidden="true"
-                  />
+                  <LoaderCircle size={14} className="spin" aria-hidden="true" />
                 ) : syncTotals.failed > 0 ? (
                   <TriangleAlert
                     size={14}

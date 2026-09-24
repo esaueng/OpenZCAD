@@ -214,7 +214,10 @@
   top: calc(100% + 8px);
   right: 0;
   width: min(340px, 80vw);
-  max-height: 320px;
+  /* As tall as the window allows. A fixed 320px predates Stored files and
+     Troubleshooting: the File menu grew to ~470px, so on a 900px window its
+     last section sat behind a scrollbar with 500px of room below it. */
+  max-height: calc(100dvh - 60px);
   overflow: auto;
   padding: var(--sp-3);
   color: var(--color-text-muted);
@@ -544,14 +547,4 @@
   font-size: 9.5px;
   font-weight: var(--fw-medium);
   line-height: 1;
-}
-
-.spin {
-  animation: spin 0.9s linear infinite;
-}
-
-@keyframes spin {
-  to {
-    transform: rotate(360deg);
-  }
 }
