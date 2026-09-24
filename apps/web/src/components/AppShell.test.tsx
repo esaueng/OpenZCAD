@@ -1,12 +1,12 @@
-import { render } from '@testing-library/react';
-import { describe, expect, it } from 'vitest';
+import { act, render } from '@testing-library/react';
+import { describe, expect, it, vi } from 'vitest';
 import { AppShell } from './AppShell';
 
-function renderShell(
+function shell(
   inspector: React.ReactNode | null,
   sidebar: React.ReactNode | null = <nav>sidebar</nav>
 ) {
-  return render(
+  return (
     <AppShell
       topBar={<header>top</header>}
       toolBar={null}
@@ -20,6 +20,13 @@ function renderShell(
       readout={<output>readout</output>}
     />
   );
+}
+
+function renderShell(
+  inspector: React.ReactNode | null,
+  sidebar: React.ReactNode | null = <nav>sidebar</nav>
+) {
+  return render(shell(inspector, sidebar));
 }
 
 describe('AppShell', () => {
@@ -37,6 +44,26 @@ describe('AppShell', () => {
     const area = container.querySelector('.viewer-area');
     expect(area?.classList.contains('has-inspector')).toBe(false);
     expect(container.querySelector('.inspector-float')).toBeNull();
+  });
+
+  it('fades the inspector out, releasing the lane on the frame it closes', () => {
+    vi.useFakeTimers();
+    try {
+      const { container, rerender } = renderShell(<section>panel</section>);
+      rerender(shell(null));
+      const area = container.querySelector('.viewer-area');
+      expect(area?.classList.contains('has-inspector')).toBe(false);
+      const leaving = container.querySelector('.inspector-float');
+      expect(leaving?.classList.contains('closing')).toBe(true);
+      expect(leaving?.textContent).toBe('panel');
+
+      act(() => {
+        vi.advanceTimersByTime(100);
+      });
+      expect(container.querySelector('.inspector-float')).toBeNull();
+    } finally {
+      vi.useRealTimers();
+    }
   });
 
   it('floats the column and its splitter over the viewport, with no status row', () => {
