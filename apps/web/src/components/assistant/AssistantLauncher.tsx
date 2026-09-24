@@ -1,4 +1,4 @@
-import { ChevronLeft } from 'lucide-react';
+import { MessageSquare } from 'lucide-react';
 
 interface AssistantLauncherProps {
   /** Turns that landed while the dock was closed. */
@@ -12,10 +12,11 @@ interface AssistantLauncherProps {
 }
 
 /**
- * The assistant when the dock is closed: a tab on the right edge, where the
- * dock will open from. It sits at the seam rather than over the canvas, so
- * the modeling space is given back completely and the handle is always in
- * the one place the panel can appear.
+ * The assistant while the conversation is closed: an Ask button at the end
+ * of the search bar, where the conversation will open from. Command search
+ * and the assistant are one entry point on the quiet stage — a question typed
+ * into search goes to the same conversation — and the button is where replies
+ * that landed while it was closed show up.
  */
 export function AssistantLauncher({
   unread,
@@ -41,8 +42,8 @@ export function AssistantLauncher({
       aria-label={label}
       aria-hidden={hidden || undefined}
     >
-      <ChevronLeft size={14} aria-hidden="true" />
-      <span className="assistant-launcher-word">Assistant</span>
+      <MessageSquare size={14} aria-hidden="true" />
+      <span className="assistant-launcher-word">Ask</span>
       {unread > 0 && (
         <span className="assistant-launcher-badge" aria-hidden="true" />
       )}

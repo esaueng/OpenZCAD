@@ -3,7 +3,8 @@ import userEvent from '@testing-library/user-event';
 import type { ComponentProps } from 'react';
 import { describe, expect, it, vi } from 'vitest';
 import { DEFAULT_APP_SETTINGS } from '@openzcad/shared';
-import { SketchToolRail } from './SketchToolRail';
+import { CONSTRAINT_TOOL_SPECS } from '../lib/sketch/constraints';
+import { SketchRelationsRail, SketchToolRail } from './SketchToolRail';
 
 function renderRail(
   overrides: Partial<ComponentProps<typeof SketchToolRail>> = {}
@@ -16,7 +17,6 @@ function renderRail(
     units: 'mm',
     paletteVisible: true,
     canConstrain: true,
-    pendingConstraint: null,
     pendingEdit: null,
     constraints: [],
     solveStatus: null,
@@ -25,7 +25,6 @@ function renderRail(
     onCircleMode: vi.fn(),
     onConstruction: vi.fn(),
     onSettings: vi.fn(),
-    onConstraintTool: vi.fn(),
     onEditTool: vi.fn(),
     onEditConstraint: vi.fn(),
     onDeleteConstraint: vi.fn(),
@@ -35,6 +34,20 @@ function renderRail(
     ...overrides
   };
   return { ...render(<SketchToolRail {...props} />), props };
+}
+
+function renderRelations(
+  overrides: Partial<ComponentProps<typeof SketchRelationsRail>> = {}
+) {
+  const props: ComponentProps<typeof SketchRelationsRail> = {
+    canConstrain: true,
+    pendingConstraint: null,
+    selection: null,
+    onConstraintTool: vi.fn(),
+    onSelectionConstraintTool: vi.fn(),
+    ...overrides
+  };
+  return { ...render(<SketchRelationsRail {...props} />), props };
 }
 
 describe('SketchToolRail', () => {
@@ -97,43 +110,15 @@ describe('SketchToolRail', () => {
     );
   });
 
-  it('arms a constraint tool and disarms it on a second click', async () => {
-    const user = userEvent.setup();
-    const onConstraintTool = vi.fn();
-    const { rerender, props } = renderRail({ onConstraintTool });
-
-    await user.click(screen.getByRole('button', { name: 'Parallel' }));
-    expect(onConstraintTool).toHaveBeenLastCalledWith('parallel');
-
-    rerender(
-      <SketchToolRail
-        {...props}
-        pendingConstraint={{ kind: 'parallel', picks: [] }}
-      />
-    );
-    const armed = screen.getByRole('button', { name: 'Parallel' });
-    expect(armed).toHaveAttribute('aria-pressed', 'true');
-    await user.click(armed);
-    expect(onConstraintTool).toHaveBeenLastCalledWith(null);
-  });
-
-  it('exposes every solver-ready constraint and driving dimension', () => {
+  it('keeps the relations off the card: they have their own rail', () => {
     renderRail();
-    for (const name of [
-      'Perpendicular',
-      'Equal',
-      'Concentric',
-      'Midpoint',
-      'Distance',
-      'Angle'
-    ]) {
-      expect(screen.getByRole('button', { name })).toBeEnabled();
-    }
+    expect(
+      screen.queryByRole('button', { name: 'Parallel' })
+    ).not.toBeInTheDocument();
   });
 
-  it('disables constraining until the sketch node exists', () => {
+  it('disables solving until the sketch node exists', () => {
     renderRail({ canConstrain: false });
-    expect(screen.getByRole('button', { name: 'Horizontal' })).toBeDisabled();
     expect(screen.getByRole('button', { name: 'Solve' })).toBeDisabled();
   });
 
@@ -217,13 +202,13 @@ describe('SketchToolRail', () => {
     const { container } = renderRail();
     const rail = screen.getByRole('toolbar', { name: 'Sketch tools' });
     expect(rail.querySelector('.sketch-rail-group.draw')).not.toBeNull();
-    expect(rail.querySelector('.sketch-rail-group.constrain')).not.toBeNull();
+    expect(rail.querySelector('.sketch-rail-group.modify')).not.toBeNull();
     // Every draw tool is still there, by the same names the float uses.
     expect(screen.getByRole('button', { name: /^Line/ })).toBeInTheDocument();
     expect(
       screen.getByRole('button', { name: 'Circle: Center Circle' })
     ).toBeInTheDocument();
-    // Finish belongs to the column header, not the rail.
+    // Finish belongs to the column's foot, not the rail.
     expect(
       screen.queryByRole('button', { name: 'Finish Sketch' })
     ).not.toBeInTheDocument();
@@ -294,5 +279,78 @@ describe('SketchToolRail', () => {
     expect(
       screen.getByText('Vertical · Line 2').closest('li')
     ).not.toHaveAttribute('data-conflicted');
+  });
+});
+
+describe('SketchRelationsRail', () => {
+  it('keeps every relation in spec order, icon-only while nothing is picked', () => {
+    const { container } = renderRelations();
+    const rail = screen.getByRole('toolbar', { name: 'Relations' });
+    const names = Array.from(rail.querySelectorAll('button')).map((button) =>
+      button.getAttribute('aria-label')
+    );
+    expect(names).toEqual(CONSTRAINT_TOOL_SPECS.map(({ label }) => label));
+    for (const name of names) {
+      expect(screen.getByRole('button', { name: name! })).toBeEnabled();
+    }
+    expect(container.querySelector('.sketch-relation-name')).toBeNull();
+  });
+
+  it('arms a relation and disarms it on a second click', async () => {
+    const user = userEvent.setup();
+    const onConstraintTool = vi.fn();
+    const { rerender, props } = renderRelations({ onConstraintTool });
+
+    await user.click(screen.getByRole('button', { name: 'Parallel' }));
+    expect(onConstraintTool).toHaveBeenLastCalledWith('parallel');
+
+    rerender(
+      <SketchRelationsRail
+        {...props}
+        pendingConstraint={{ kind: 'parallel', picks: [] }}
+      />
+    );
+    const armed = screen.getByRole('button', { name: 'Parallel' });
+    expect(armed).toHaveAttribute('aria-pressed', 'true');
+    // The armed relation is named beside its icon.
+    expect(armed.querySelector('.sketch-relation-name')).toHaveTextContent(
+      'Parallel'
+    );
+    await user.click(armed);
+    expect(onConstraintTool).toHaveBeenLastCalledWith(null);
+  });
+
+  it('names what fits the selection, starts from it, and greys the rest with a reason', async () => {
+    const user = userEvent.setup();
+    const onSelectionConstraintTool = vi.fn();
+    const onConstraintTool = vi.fn();
+    renderRelations({
+      selection: { kind: 'circle', fitting: ['equal', 'tangent', 'radius'] },
+      onSelectionConstraintTool,
+      onConstraintTool
+    });
+
+    const radius = screen.getByRole('button', { name: 'Radius' });
+    expect(radius).toBeEnabled();
+    expect(radius.querySelector('.sketch-relation-name')).toHaveTextContent(
+      'Radius'
+    );
+    await user.click(radius);
+    expect(onSelectionConstraintTool).toHaveBeenCalledWith('radius');
+    expect(onConstraintTool).not.toHaveBeenCalled();
+
+    const horizontal = screen.getByRole('button', { name: 'Horizontal' });
+    expect(horizontal).toBeDisabled();
+    expect(horizontal).toHaveAccessibleDescription(
+      'Does not apply to a circle.'
+    );
+    expect(horizontal.querySelector('.sketch-relation-name')).toBeNull();
+  });
+
+  it('greys every relation until there is geometry, and says so', () => {
+    renderRelations({ canConstrain: false });
+    const horizontal = screen.getByRole('button', { name: 'Horizontal' });
+    expect(horizontal).toBeDisabled();
+    expect(horizontal).toHaveAccessibleDescription('Draw an entity first.');
   });
 });

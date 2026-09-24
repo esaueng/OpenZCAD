@@ -37,7 +37,7 @@ const OUT_DIR = path.join(ROOT, 'packages/geometry/assets/fonts');
  */
 const OFL_SOURCE = path.join(
   ROOT,
-  'node_modules/.pnpm/@fontsource+ibm-plex-sans@5.3.0/node_modules/@fontsource/ibm-plex-sans/LICENSE'
+  'node_modules/.pnpm/@fontsource+geist-sans@5.3.0/node_modules/@fontsource/geist-sans/LICENSE'
 );
 const APACHE_SOURCE = path.join(ROOT, 'LICENSE');
 

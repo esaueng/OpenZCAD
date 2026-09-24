@@ -2,34 +2,48 @@
    Split out of app.css; the cascade still depends on the import order
    in app.css, so this file is not free to move. ── */
 
-/* ── Assistant dock ──────────────────────────────────────── */
-
-.workspace.with-assistant {
-  --assistant-col-w: min(var(--assistant-w), 35vw);
-  grid-template-columns:
-    var(--sidebar-col-w) minmax(280px, 1fr)
-    var(--assistant-col-w);
-}
+/* ── The conversation, floating above the search bar ─────────
+   Search and the assistant are one entry point (U04 slice 5), so the
+   conversation opens where it is asked from: centred over the bottom lane,
+   standing on the search bar. It floats over the viewport like every other
+   island, so opening it costs the model no width. */
 
 .assistant-panel {
+  --assistant-bottom: calc(var(--island-gap) + var(--command-bar-h) + 8px);
+  position: absolute;
+  z-index: var(--z-assistant-float);
+  left: var(--lane-inset);
+  right: var(--lane-right);
+  bottom: var(--assistant-bottom);
+  max-width: 560px;
+  height: min(560px, calc(100% - var(--stage-top) - var(--assistant-bottom)));
   min-width: 0;
-  min-height: 0;
-  position: relative;
+  margin-inline: auto;
   display: grid;
   grid-template-rows: auto minmax(0, 1fr) auto;
   background: var(--color-surface);
-  border-left: var(--border-thin);
+  border: var(--border-thin);
+  border-radius: var(--radius-lg);
+  box-shadow: var(--shadow-2);
   animation: assistant-dock-in var(--dur-base) var(--ease-out);
 }
 
 @keyframes assistant-dock-in {
   from {
     opacity: 0;
-    transform: translateX(12px);
+    transform: translateY(8px);
   }
   to {
     opacity: 1;
     transform: none;
+  }
+}
+
+/* A phone's bottom lane starts beside the column, which leaves a sliver;
+   the conversation takes the stage's width instead. */
+@media (max-width: 520px) {
+  .assistant-panel {
+    left: var(--island-gap);
   }
 }
 
@@ -117,75 +131,49 @@
   border-color: var(--color-border-strong);
 }
 
-/* ── Collapsed launcher: a tab on the seam ───────────────────
-   Fixed to the window's right edge at mid-height, where the dock opens
-   from. Collapsing gives the dock's whole column back, and the tab is the
-   only thing left: 26px, off the canvas' working area. */
-.assistant-launcher,
-.assistant-seam {
-  position: fixed;
-  right: 0;
-  top: 50%;
-  z-index: var(--z-inspector-float);
-  width: 26px;
-  height: 128px;
-  display: flex;
-  flex-direction: column;
+/* ── Collapsed: the Ask button on the search bar ─────────────
+   The readout hands the assistant a slot at the end of the search bar, and
+   the closed conversation waits there as one button the bar's height: the
+   same place a question typed into search goes. */
+.assistant-launcher {
+  position: relative;
+  height: var(--command-bar-h);
+  display: inline-flex;
   align-items: center;
-  justify-content: center;
-  gap: 8px;
-  padding: 0;
+  gap: 6px;
+  padding: 0 12px;
   color: var(--color-text-muted);
   background: var(--color-surface);
-  border: 1px solid var(--color-border-strong);
-  border-right: 0;
-  border-radius: var(--radius-lg) 0 0 var(--radius-lg);
-  box-shadow: -6px 0 18px rgba(0, 0, 0, 0.3);
-  transform: translateY(-50%);
+  border: var(--border-thin);
+  border-radius: var(--radius-lg);
+  box-shadow: var(--shadow-2);
+  font-size: var(--fs-base);
   cursor: pointer;
+  animation: assistant-launcher-in var(--dur-base) var(--ease-out);
   transition:
     color var(--dur-fast) var(--ease-out),
-    background-color var(--dur-fast) var(--ease-out);
-}
-
-.assistant-launcher {
-  animation: assistant-launcher-in var(--dur-base) var(--ease-out);
+    background-color var(--dur-fast) var(--ease-out),
+    border-color var(--dur-fast) var(--ease-out);
 }
 
 @keyframes assistant-launcher-in {
   from {
     opacity: 0;
-    transform: translateY(-50%) translateX(8px);
   }
   to {
     opacity: 1;
-    transform: translateY(-50%);
   }
 }
 
 .assistant-launcher:hover,
-.assistant-launcher:focus-visible,
-.assistant-seam:hover,
-.assistant-seam:focus-visible {
+.assistant-launcher:focus-visible {
   color: var(--color-text);
   background: var(--color-surface-hover);
-  outline: none;
-}
-
-/* On the open dock the tab sits on the seam, just outside the panel. */
-.assistant-seam {
-  position: absolute;
-  right: 100%;
-  border-right: 0;
+  border-color: var(--color-border-strong);
 }
 
 .assistant-launcher-word {
-  writing-mode: vertical-rl;
-  transform: rotate(180deg);
-  color: var(--color-text-subtle);
-  font-size: var(--fs-mini);
-  letter-spacing: 0.08em;
-  text-transform: uppercase;
+  font-weight: 500;
   white-space: nowrap;
 }
 
@@ -224,15 +212,29 @@
   animation: none;
 }
 
-/* Something is still streaming behind the closed dock. */
+/* Something is still streaming behind the closed conversation. */
 .assistant-launcher.working::before {
   content: '';
   position: absolute;
-  inset: -3px 0 -3px -3px;
+  inset: -3px;
   border: 1px solid var(--color-accent-hi);
-  border-right: 0;
-  border-radius: var(--radius-lg) 0 0 var(--radius-lg);
+  border-radius: calc(var(--radius-lg) + 3px);
+  pointer-events: none;
   animation: assistant-pulse 1.8s var(--ease-out) infinite;
+}
+
+/* The pulse ends fully transparent, so collapsing it for reduced motion left
+   the launcher looking idle while a reply streamed. Hold the outline still. */
+[data-reduced-motion='true'] .assistant-launcher.working::before {
+  animation: none;
+  opacity: 0.75;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .assistant-launcher.working::before {
+    animation: none;
+    opacity: 0.75;
+  }
 }
 
 @keyframes assistant-pulse {
@@ -357,7 +359,7 @@
   color: var(--color-accent);
   background: var(--color-accent-dim);
   border: 1px solid var(--color-accent-border);
-  border-radius: 999px;
+  border-radius: var(--radius-md);
   font-size: var(--fs-mini);
   font-weight: var(--fw-medium);
   letter-spacing: 0.02em;
@@ -452,7 +454,7 @@
     color-mix(in srgb, var(--color-accent) 9%, transparent)
   );
   border: 1px solid var(--color-accent-border);
-  border-radius: 10px 10px 3px 10px;
+  border-radius: var(--radius-lg);
   box-shadow: 0 1px 2px rgba(0, 0, 0, 0.25);
   font-size: var(--fs-sm);
   line-height: 1.5;
@@ -460,7 +462,7 @@
 }
 
 .assistant-turn.continues .assistant-bubble {
-  border-radius: 10px 3px 3px 10px;
+  border-radius: var(--radius-lg);
 }
 
 .assistant-turn.user:hover .assistant-bubble {
@@ -569,6 +571,20 @@
   animation-delay: 0.3s;
 }
 
+/* Still dots at the bounce's resting 0.25 read as disabled; hold them at a
+   legible middle instead. */
+[data-reduced-motion='true'] .assistant-typing i {
+  animation: none;
+  opacity: 0.6;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .assistant-typing i {
+    animation: none;
+    opacity: 0.6;
+  }
+}
+
 @keyframes assistant-typing {
   0%,
   60%,
@@ -595,16 +611,6 @@
   overflow-wrap: anywhere;
 }
 
-.assistant-spin {
-  animation: assistant-spin 900ms linear infinite;
-}
-
-@keyframes assistant-spin {
-  to {
-    transform: rotate(360deg);
-  }
-}
-
 /* ── Jump to latest ─────────────────────────────────────── */
 
 /* Sits against the right edge: centred, it landed on a proposal's Apply row. */
@@ -620,7 +626,7 @@
   color: var(--color-on-accent);
   background: var(--color-accent);
   border: 1px solid var(--color-accent-hi);
-  border-radius: 999px;
+  border-radius: var(--radius-md);
   font-size: var(--fs-mini);
   box-shadow: 0 4px 14px rgba(0, 0, 0, 0.45);
   cursor: pointer;
@@ -640,13 +646,13 @@
   padding: 9px 11px;
   background: var(--color-surface-2);
   border: var(--border-thin);
-  border-radius: 3px 10px 10px 10px;
+  border-radius: var(--radius-lg);
   box-shadow: 0 1px 2px rgba(0, 0, 0, 0.25);
   font-size: var(--fs-xs);
 }
 
 .assistant-turn.continues .assistant-card {
-  border-radius: 3px 10px 10px 3px;
+  border-radius: var(--radius-lg);
 }
 
 .assistant-card.questions {
@@ -715,7 +721,7 @@
   padding: 1px 6px;
   color: var(--color-preview);
   background: color-mix(in srgb, var(--color-preview) 12%, transparent);
-  border-radius: 999px;
+  border-radius: var(--radius-md);
   letter-spacing: 0.04em;
   text-transform: none;
 }
@@ -896,7 +902,7 @@
   color: var(--color-accent);
   background: var(--color-accent-dim);
   border: 1px solid var(--color-accent-border);
-  border-radius: 999px;
+  border-radius: var(--radius-md);
   font-size: var(--fs-mini);
   cursor: pointer;
   transition:
