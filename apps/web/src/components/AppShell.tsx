@@ -95,6 +95,10 @@ export function AppShell({
   // The inspector fades out rather than vanishing. `has-inspector` still
   // follows the live prop, so the lane is released on the frame it closes.
   const inspectorExit = useDelayedUnmount(inspector || null, OVERLAY_EXIT_MS);
+  // Changing mode slides the column and the strip off toward their edges
+  // (view-mode.css) before they unmount.
+  const columnExit = useDelayedUnmount(sidebar || null, OVERLAY_EXIT_MS);
+  const stripExit = useDelayedUnmount(toolBar || null, OVERLAY_EXIT_MS);
   const assistantDocked = Boolean(
     assistant && !assistantHidden && !assistantCollapsed
   );
@@ -121,9 +125,21 @@ export function AppShell({
           }`}
         >
           {viewer}
-          {sidebar && <div className="workspace-column-float">{sidebar}</div>}
+          {columnExit.rendered && (
+            <div
+              className={`workspace-column-float${columnExit.closing ? ' closing' : ''}`}
+            >
+              {columnExit.rendered}
+            </div>
+          )}
           {sidebar && sidebarResizer}
-          {toolBar && <div className="palette-float">{toolBar}</div>}
+          {stripExit.rendered && (
+            <div
+              className={`palette-float${stripExit.closing ? ' closing' : ''}`}
+            >
+              {stripExit.rendered}
+            </div>
+          )}
           {/* The right lane, beside the instrument rail: the inspector over
               the drawer, one column, so neither pushes into the canvas. The
               wrapper always renders, so opening the drawer never remounts
