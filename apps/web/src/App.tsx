@@ -16193,6 +16193,7 @@ export function App() {
     interaction.mode === 'sketch' ? (
       <SketchToolRail
         entityEditor={sketchEntityEditor}
+        sketchName={editingSketchName}
         workflow={
           <SketchWorkflow
             plane={
@@ -16250,6 +16251,13 @@ export function App() {
         settings={appSettings.sketching}
         units={doc.units}
         paletteVisible
+        paletteOpen={panelState.sketchPaletteOpen}
+        onTogglePalette={() =>
+          setPanelState((current) => ({
+            ...current,
+            sketchPaletteOpen: !current.sketchPaletteOpen
+          }))
+        }
         canConstrain={Boolean(interaction.session.sketchId)}
         pendingEdit={interaction.session.pendingEdit}
         constraints={sketchConstraintItems}
@@ -16385,13 +16393,9 @@ export function App() {
     />
   );
   const commandPaletteKey = commandPaletteShortcut();
-  const columnHeader =
-    interaction.mode === 'sketch' ? (
-      <>
-        <PenLine size={14} aria-hidden="true" className="sketch-mark" />
-        <strong>{editingSketchName}</strong>
-      </>
-    ) : null;
+  // The sketch rail has no header: the sketch's name heads its palette
+  // flyout and the status line says a sketch is open.
+  const columnHeader = null;
   // Finish closes the sketch card at its foot, where the eye ends up after
   // the tools; every sketch edit is already committed, so there is nothing
   // to discard.
@@ -16410,8 +16414,8 @@ export function App() {
           setStatus(`${editingSketchName} finished · sketch edits preserved.`);
         }}
       >
-        <Check size={14} aria-hidden="true" />
-        Finish sketch
+        <Check size={16} aria-hidden="true" />
+        <span className="workspace-column-finish-label">Finish sketch</span>
       </button>
     ) : null;
   // Direct-mode strips (plane picking, direct extrude) keep floating over

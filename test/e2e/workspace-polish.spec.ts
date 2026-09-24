@@ -473,7 +473,7 @@ test('places, retypes, solves, and undoes a driving angle dimension', async ({
   ).toBeVisible();
   await page.waitForTimeout(800);
 
-  // The sketch settings are a disclosure under the tools, closed to begin with.
+  // The sketch settings open beside the rail, closed to begin with.
   if (
     !(await page.getByRole('checkbox', { name: 'Snap to grid' }).isVisible())
   ) {
@@ -483,6 +483,9 @@ test('places, retypes, solves, and undoes a driving angle dimension', async ({
   if (await gridSnap.isChecked()) {
     await gridSnap.uncheck();
   }
+  // The palette is a flyout over the canvas now; close it before drawing.
+  await page.getByRole('button', { name: /Sketch palette/ }).click();
+  await expect(gridSnap).toBeHidden();
   const canvas = page.locator('.viewer-host canvas');
   const bounds = await canvas.boundingBox();
   expect(bounds).not.toBeNull();
@@ -649,7 +652,7 @@ test('edits a canvas radius with expressions, refuses zero, and undoes the solve
   const rail = page.getByRole('toolbar', { name: 'Sketch tools' });
   await expect(rail).toBeVisible();
   await page.waitForTimeout(800);
-  // The sketch settings are a disclosure under the tools, closed to begin with.
+  // The sketch settings open beside the rail, closed to begin with.
   if (
     !(await page.getByRole('checkbox', { name: 'Snap to grid' }).isVisible())
   ) {
@@ -657,6 +660,9 @@ test('edits a canvas radius with expressions, refuses zero, and undoes the solve
   }
   const gridSnap = page.getByRole('checkbox', { name: 'Snap to grid' });
   if (await gridSnap.isChecked()) await gridSnap.uncheck();
+  // The palette is a flyout over the canvas now; close it before drawing.
+  await page.getByRole('button', { name: /Sketch palette/ }).click();
+  await expect(gridSnap).toBeHidden();
   await rail.getByRole('button', { name: /^Circle/ }).click();
   const canvas = page.locator('.viewer-host canvas');
   const bounds = await canvas.boundingBox();
@@ -737,7 +743,7 @@ test('clears every transient sketch HUD overlay when finishing a sketch', async 
   ).toBeVisible();
   await page.waitForTimeout(800);
 
-  // The sketch settings are a disclosure under the tools, closed to begin with.
+  // The sketch settings open beside the rail, closed to begin with.
   if (
     !(await page.getByRole('checkbox', { name: 'Snap to grid' }).isVisible())
   ) {
@@ -747,6 +753,9 @@ test('clears every transient sketch HUD overlay when finishing a sketch', async 
   if (await gridSnap.isChecked()) {
     await gridSnap.uncheck();
   }
+  // The palette is a flyout over the canvas now; close it before drawing.
+  await page.getByRole('button', { name: /Sketch palette/ }).click();
+  await expect(gridSnap).toBeHidden();
   const canvas = page.locator('.viewer-host canvas');
   const bounds = await canvas.boundingBox();
   expect(bounds).not.toBeNull();
@@ -867,6 +876,8 @@ test('shows profile readiness and preserves exact entity edits through extrude a
   await page.getByRole('button', { name: 'Create project' }).click();
   await page.getByRole('button', { name: /^Sketch \(S\)/ }).click();
   await page.getByRole('button', { name: 'Top (XY)' }).click();
+  // The overview heads the palette flyout beside the rail.
+  await page.getByRole('button', { name: /Sketch palette/ }).click();
   const overview = page.getByRole('region', { name: 'Sketch overview' });
   await expect(overview).toContainText('Draw a closed outline');
   await expect(overview).toContainText('XY plane');
