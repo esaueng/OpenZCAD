@@ -1,21 +1,11 @@
-import {
-  Box,
-  Boxes,
-  MousePointer2,
-  Shapes,
-  Slash,
-  Square,
-  X
-} from 'lucide-react';
-import type { ReactNode } from 'react';
+import { Ellipsis } from 'lucide-react';
+import { Fragment } from 'react';
 import {
   commandContextFor,
   remainingTools,
-  type CommandContextKind,
   type CommandSelection
 } from '../lib/commandContext';
 import type { LabelSegment } from '../lib/topologyLabels';
-import { LabelSegments } from './LabelSegments';
 import {
   TOOL_META,
   toolDisabledReason,
@@ -25,48 +15,54 @@ import {
 } from '../lib/tools';
 import { Tooltip } from './Tooltip';
 
-const CONTEXT_ICON: Record<CommandContextKind, ReactNode> = {
-  idle: <MousePointer2 size={16} aria-hidden="true" />,
-  body: <Box size={16} aria-hidden="true" />,
-  bodies: <Boxes size={16} aria-hidden="true" />,
-  face: <Square size={16} aria-hidden="true" />,
-  edges: <Slash size={16} aria-hidden="true" />,
-  region: <Shapes size={16} aria-hidden="true" />
-};
-
 interface CommandCardProps {
   selection: CommandSelection;
-  /** What is picked, in words: the selection summary's own label. */
+  /**
+   * What is picked, in words. The rail does not draw it — the selection chip
+   * in the bottom lane names the pick — but the summary and the clear action
+   * stay in the contract so the caller's wiring is unchanged.
+   */
   summary: { label: readonly LabelSegment[]; detail?: string } | null;
   /** Clears the selection; absent while nothing is picked. */
   onClear?: (() => void) | undefined;
   activeTool: ToolId | null;
   availability: ToolAvailability;
   onLaunchTool(tool: ToolId): void;
+  /** The "More tools" fold, remembered per device in the panel state. */
+  moreOpen: boolean;
+  onToggleMore(): void;
 }
 
 /**
- * The one surface on the left that changes with the selection. Its header
- * names the pick; its rows are the tools that act on that kind of pick, with
- * the context's primary verb marked; every other tool waits in the grid
- * below, by the same accessible name the palette's tiles always had, so no
- * command is ever out of reach and none appears twice.
+ * The verb rail: the one surface on the left that changes with the
+ * selection, drawn as a thin icon column to match the instrument rail on
+ * the right. Its buttons are the tools that act on the current kind of
+ * pick, in the order they are usually reached for, the context's primary
+ * verb lit; every other tool waits behind the "More tools" button at its
+ * foot, which opens a flyout of named tiles beside the rail. Names and keys
+ * ride the tooltips, and every button keeps the accessible name the
+ * palette's tiles always had, so no command is out of reach and none
+ * appears twice.
+ *
+ * The fold is closed by default: the rail is meant to show what fits the
+ * pick and nothing else, and ⌘K reaches every command by name regardless.
+ * Opened, it stays open across picks and reloads, like the drawer.
  */
 export function CommandCard({
   selection,
-  summary,
-  onClear,
   activeTool,
   availability,
-  onLaunchTool
+  onLaunchTool,
+  moreOpen,
+  onToggleMore
 }: CommandCardProps) {
   const context = commandContextFor(selection);
   const rest = remainingTools(context);
-  const button = (tool: ToolId, variant: 'row' | 'icon') => {
+  const button = (tool: ToolId, variant: 'rail' | 'tile') => {
     const meta = TOOL_META[tool];
     const disabledReason = toolDisabledReason(tool, availability);
     const active = activeTool === tool;
-    const primary = variant === 'row' && context.primary === tool;
+    const primary = variant === 'rail' && context.primary === tool;
     return (
       <Tooltip
         key={tool}
@@ -76,73 +72,67 @@ export function CommandCard({
       >
         <button
           type="button"
-          className={`command-${variant}${primary ? ' primary' : ''}${active ? ' active' : ''}`}
+          className={`command-${variant}${primary ? ' is-primary' : ''}${active ? ' active' : ''}`}
           disabled={disabledReason !== null}
           aria-label={toolTitle(tool, availability)}
           aria-pressed={active}
           onClick={() => onLaunchTool(tool)}
         >
           {meta.icon}
-          {variant === 'row' && (
-            <span className="command-row-label">{meta.label}</span>
-          )}
-          {variant === 'row' && meta.shortcut && (
-            <kbd aria-hidden="true">{meta.shortcut}</kbd>
-          )}
+          {variant === 'tile' && <span>{meta.label}</span>}
         </button>
       </Tooltip>
     );
   };
-  const title: ReactNode = summary ? (
-    <LabelSegments segments={summary.label} />
-  ) : context.kind === 'region' ? (
-    `${selection.regionCount} sketch ${selection.regionCount === 1 ? 'region' : 'regions'}`
-  ) : (
-    'Nothing selected'
-  );
-  const detail =
-    summary?.detail ??
-    (context.kind === 'idle' ? 'Pick a face, edge or body' : undefined);
   return (
     <nav
-      className="tool-palette command-card"
+      className="tool-palette command-rail"
       aria-label="Feature tools"
       data-context={context.kind}
     >
-      <div className="command-card-head">
-        <span className="command-card-icon">{CONTEXT_ICON[context.kind]}</span>
-        <span className="command-card-title">
-          <strong>{title}</strong>
-          {detail && <small>{detail}</small>}
-        </span>
-        {onClear && (
+      {context.groups.map((group, index) => (
+        <Fragment key={`${context.kind}:${group.label}`}>
+          {index > 0 && (
+            <span className="command-rail-divider" aria-hidden="true" />
+          )}
+          <section
+            role="group"
+            aria-label={group.label}
+            className="command-rail-group"
+          >
+            {group.tools.map((tool) => button(tool, 'rail'))}
+          </section>
+        </Fragment>
+      ))}
+      <span className="command-rail-divider" aria-hidden="true" />
+      <section
+        role="group"
+        aria-label="All tools"
+        className={`command-more${moreOpen ? ' open' : ''}`}
+      >
+        <Tooltip
+          label={moreOpen ? 'Hide other tools' : 'More tools'}
+          description={
+            moreOpen
+              ? 'Close the list of tools that do not act on this selection'
+              : `The ${rest.length} other tools, by name`
+          }
+        >
           <button
             type="button"
-            className="command-card-clear"
-            aria-label="Clear selection (Esc)"
-            title="Clear selection (Esc)"
-            onClick={onClear}
+            className={`command-rail command-more-toggle${moreOpen ? ' active' : ''}`}
+            aria-expanded={moreOpen}
+            aria-label={`More tools (${rest.length})`}
+            onClick={onToggleMore}
           >
-            <X size={14} aria-hidden="true" />
+            <Ellipsis size={16} aria-hidden="true" />
           </button>
+        </Tooltip>
+        {moreOpen && (
+          <div className="command-flyout">
+            {rest.map((tool) => button(tool, 'tile'))}
+          </div>
         )}
-      </div>
-      {context.groups.map((group) => (
-        <section
-          key={`${context.kind}:${group.label}`}
-          role="group"
-          aria-label={group.label}
-          className="command-group is-contextual"
-        >
-          <span className="command-group-label">{group.label}</span>
-          {group.tools.map((tool) => button(tool, 'row'))}
-        </section>
-      ))}
-      <section role="group" aria-label="All tools" className="command-group">
-        <span className="command-group-label">All tools</span>
-        <div className="command-grid">
-          {rest.map((tool) => button(tool, 'icon'))}
-        </div>
       </section>
     </nav>
   );

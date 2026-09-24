@@ -1,5 +1,8 @@
 import { test, expect, type Page } from '@playwright/test';
-import { seedDismissedWorkspaceTour } from './openzcad-fixtures';
+import {
+  seedDismissedWorkspaceTour,
+  seedOpenCommandFold
+} from './openzcad-fixtures';
 import { createProjectDocument } from '@openzcad/document-core';
 import { toUserId } from '@openzcad/shared';
 
@@ -10,6 +13,7 @@ test.skip(!process.env.OZ_PERF, 'Performance probe; set OZ_PERF=1 to run it.');
 
 async function stubApi(page: Page) {
   await seedDismissedWorkspaceTour(page);
+  await seedOpenCommandFold(page);
   await page.route('**/api/health', (route) =>
     route.fulfill({
       json: {
