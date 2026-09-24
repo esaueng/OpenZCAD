@@ -2704,7 +2704,7 @@ export const PANEL_WIDTH_LIMITS: {
   sidebar: PanelWidthLimits;
   assistant: PanelWidthLimits;
 } = {
-  sidebar: { min: 180, max: 720, default: 252 },
+  sidebar: { min: 180, max: 720, default: 232 },
   // The assistant needs room for a question card's chips and an audit table.
   assistant: { min: 300, max: 900, default: 360 }
 };

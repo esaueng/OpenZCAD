@@ -83,6 +83,13 @@ export interface PanelState {
    * on the section they name. Remembered like every other chrome habit.
    */
   drawerOpen: boolean;
+  /**
+   * The command card's "More tools" fold: every tool the selection did not
+   * give a named row. Closed to begin with, so the card is the pick and its
+   * verbs and nothing else; someone who works from the grid opens it once
+   * and keeps it.
+   */
+  commandFoldOpen: boolean;
 }
 
 /** The drawer sections the instrument rail can open directly. */
@@ -107,7 +114,8 @@ export const DEFAULT_PANEL_STATE: PanelState = {
     bodies: true,
     pattern: true
   },
-  drawerOpen: false
+  drawerOpen: false,
+  commandFoldOpen: false
 };
 
 export const TOOL_GROUP_KEYS = Object.keys(
@@ -122,7 +130,8 @@ function copyDefaults(): PanelState {
     assistantCollapsed: DEFAULT_PANEL_STATE.assistantCollapsed,
     workspaceTourDismissed: DEFAULT_PANEL_STATE.workspaceTourDismissed,
     toolGroups: { ...DEFAULT_PANEL_STATE.toolGroups },
-    drawerOpen: DEFAULT_PANEL_STATE.drawerOpen
+    drawerOpen: DEFAULT_PANEL_STATE.drawerOpen,
+    commandFoldOpen: DEFAULT_PANEL_STATE.commandFoldOpen
   };
 }
 
@@ -150,6 +159,9 @@ export function normalizePanelState(value: unknown): PanelState {
   }
   if (typeof root.drawerOpen === 'boolean') {
     state.drawerOpen = root.drawerOpen;
+  }
+  if (typeof root.commandFoldOpen === 'boolean') {
+    state.commandFoldOpen = root.commandFoldOpen;
   }
   const sections = root.sidebarSections;
   if (sections && typeof sections === 'object' && !Array.isArray(sections)) {

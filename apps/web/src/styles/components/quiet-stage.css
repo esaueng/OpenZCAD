@@ -14,16 +14,17 @@
   --lane-right: var(--lane-inset);
   /* The readout under the column, and what the column leaves it. */
   --readout-h: 32px;
+  --readout-reserve: var(--readout-h);
 }
 
-/* Sketching adds the grid spacing to the readout, and a column-wide island
-   has no room for a fourth segment: it takes a second row, and the column
-   and drawer, which size off --readout-h, move up with it. Left floating
-   beside the island instead, the label sat on the search bar below ~1300px. */
+/* Sketching adds the snap and grid spacing to the readout. The island hugs
+   its segments and wraps them once they outgrow the column, so the height
+   the column and the resizer reserve above it allows for two rows there. */
 .workspace.column-layout:has(
     .viewport-readout .viewport-dock-grid:not([hidden])
   ) {
-  --readout-h: 60px;
+  --readout-h: 32px;
+  --readout-reserve: 60px;
 }
 
 /* ── The top islands ─────────────────────────────────────── */
@@ -110,7 +111,7 @@
 /* The readout sits under the column in the bottom-left corner. */
 .viewer-area:has(.viewport-readout) .workspace-column-float,
 .workspace.column-layout .viewer-area:has(.viewport-readout) .sidebar-resizer {
-  bottom: calc(var(--island-gap) * 2 + var(--readout-h));
+  bottom: calc(var(--island-gap) * 2 + var(--readout-reserve));
 }
 
 /* The column, or Tweak's parameters panel in its slot, is an island. */
@@ -218,20 +219,27 @@
 
 /* ── The bottom-left readout and the corner ──────────────── */
 
+/* The readout is as wide as what it says: the filter chip alone in Build,
+   the snap and grid segments beside it in a sketch. It used to span the
+   column, which drew a column-wide island around one chip and one icon (the
+   activity log, now on the instrument rail with the other panels). It still
+   never grows past the column, so the search lane beside it keeps its
+   start. */
 .viewport-readout {
   position: absolute;
   left: var(--island-gap);
   bottom: var(--island-gap);
   z-index: var(--z-viewer-overlay);
-  width: min(var(--column-w), calc(100% - var(--island-gap) * 2));
-  height: var(--readout-h);
+  width: max-content;
+  max-width: min(var(--column-w), calc(100% - var(--island-gap) * 2));
+  min-height: var(--readout-h);
   box-sizing: border-box;
   display: flex;
   flex-wrap: wrap;
   align-items: center;
   align-content: center;
-  gap: 4px 6px;
-  padding: 0 4px;
+  gap: 4px;
+  padding: 3px;
   background: var(--color-surface);
   border: var(--border-thin);
   border-radius: var(--radius-lg);
@@ -246,17 +254,7 @@
 .viewport-readout .viewport-dock-snap,
 .viewport-readout .viewport-dock-grid {
   height: 24px;
-}
-
-/* The log closes the first row; the grid segment, when sketching, wraps to
-   the second. */
-.viewport-readout .viewport-dock-log {
-  order: 1;
-  margin-left: auto;
-}
-
-.viewport-readout .viewport-dock-grid {
-  order: 2;
+  padding: 0 7px;
 }
 
 /* The scale bar reads beside the orientation cube, bottom-right. */
@@ -553,21 +551,23 @@
 
 /* The column's first section answers "what can I do with what I picked":
    a header naming the pick, the rows for it with one primary verb, then
-   every other tool in a grid. */
+   every other tool behind a fold. The metrics are the tightest the rows
+   stay readable at: the card is chrome over the model, and every pixel it
+   does not need is canvas. */
 .command-card {
   display: flex;
   flex-direction: column;
   gap: 1px;
-  padding: 6px;
+  padding: 4px;
 }
 
 .command-card-head {
   display: flex;
   align-items: center;
-  gap: 10px;
-  min-height: 42px;
-  padding: 2px 2px 8px 4px;
-  margin-bottom: 2px;
+  gap: 8px;
+  min-height: 32px;
+  padding: 2px 2px 6px 4px;
+  margin-bottom: 1px;
   border-bottom: var(--border-thin);
 }
 
@@ -575,11 +575,16 @@
   flex: 0 0 auto;
   display: grid;
   place-items: center;
-  width: 28px;
-  height: 28px;
+  width: 22px;
+  height: 22px;
   color: var(--color-text-muted);
   background: var(--color-surface-2);
   border-radius: var(--radius-md);
+}
+
+.command-card-icon svg {
+  width: 13px;
+  height: 13px;
 }
 
 .command-card:not([data-context='idle']) .command-card-icon {
@@ -598,7 +603,7 @@
 .command-card-title strong {
   overflow: hidden;
   color: var(--color-text);
-  font-size: var(--fs-base);
+  font-size: var(--fs-sm);
   font-weight: var(--fw-semibold);
   text-overflow: ellipsis;
   white-space: nowrap;
@@ -617,8 +622,8 @@
   flex: 0 0 auto;
   display: grid;
   place-items: center;
-  width: 26px;
-  height: 26px;
+  width: 22px;
+  height: 22px;
   color: var(--color-text-muted);
   border-radius: var(--radius-md);
 }
@@ -635,10 +640,10 @@
 }
 
 .command-group-label {
-  padding: 8px 8px 3px;
+  padding: 5px 6px 2px;
   color: var(--color-text-subtle);
   font-family: var(--font-mono);
-  font-size: var(--fs-mini);
+  font-size: 10px;
   letter-spacing: 0.08em;
   text-transform: uppercase;
 }
@@ -646,9 +651,9 @@
 .command-row {
   display: flex;
   align-items: center;
-  gap: 10px;
-  min-height: 32px;
-  padding: 0 6px 0 8px;
+  gap: 8px;
+  min-height: 26px;
+  padding: 0 5px 0 6px;
   color: var(--color-text);
   border: 1px solid transparent;
   border-radius: var(--radius-md);
@@ -657,8 +662,8 @@
 
 .command-row svg {
   flex: 0 0 auto;
-  width: 16px;
-  height: 16px;
+  width: 14px;
+  height: 14px;
   color: var(--color-text-muted);
 }
 
@@ -666,7 +671,7 @@
   flex: 1;
   min-width: 0;
   overflow: hidden;
-  font-size: var(--fs-base);
+  font-size: var(--fs-sm);
   text-overflow: ellipsis;
   white-space: nowrap;
 }
@@ -699,25 +704,70 @@
   border-color: var(--color-accent-border);
 }
 
+/* The fold at the card's foot: a row that reads "More tools" with a count
+   while closed and opens onto the grid of every tool the context did not
+   name. Closed, the card is exactly the pick and its verbs. */
+.command-more {
+  margin-top: 2px;
+  padding-top: 2px;
+  border-top: var(--border-thin);
+}
+
+.command-more-toggle {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  min-height: 24px;
+  padding: 0 6px 0 5px;
+  color: var(--color-text-subtle);
+  border-radius: var(--radius-md);
+  font-family: var(--font-mono);
+  font-size: 10px;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  text-align: left;
+}
+
+.command-more-toggle:hover {
+  color: var(--color-text);
+  background: var(--color-surface-hover);
+}
+
+.command-more-toggle svg {
+  flex: 0 0 auto;
+  transition: transform var(--dur-fast) var(--ease-out);
+}
+
+.command-more-toggle[aria-expanded='true'] svg {
+  transform: rotate(90deg);
+}
+
+.command-more-count {
+  margin-left: auto;
+  color: var(--color-text-dim);
+  font-size: 10px;
+  letter-spacing: 0;
+}
+
 .command-grid {
   display: grid;
-  grid-template-columns: repeat(auto-fill, minmax(32px, 1fr));
+  grid-template-columns: repeat(auto-fill, minmax(28px, 1fr));
   gap: 2px;
-  padding: 0 2px 2px;
+  padding: 2px 1px 1px;
 }
 
 .command-icon {
   display: grid;
   place-items: center;
-  height: 32px;
+  height: 28px;
   color: var(--color-text-muted);
   border: 1px solid transparent;
   border-radius: var(--radius-md);
 }
 
 .command-icon svg {
-  width: 16px;
-  height: 16px;
+  width: 15px;
+  height: 15px;
 }
 
 /* ── The model drawer (U04 slice 4) ──────────────────────── */
@@ -766,7 +816,7 @@
 .viewer-area .workspace-column-float:not(:has(> .sidebar)) {
   bottom: auto;
   max-height: calc(
-    100% - var(--stage-top) - var(--island-gap) * 2 - var(--readout-h)
+    100% - var(--stage-top) - var(--island-gap) * 2 - var(--readout-reserve)
   );
 }
 

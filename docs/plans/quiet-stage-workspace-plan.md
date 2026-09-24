@@ -57,7 +57,9 @@ Values ride the model at the point of action.
 - **Class coverage.** Every new class needs a rule or a reasoned allowance in
   `scripts/check-css-classes.mjs`.
 - **No behaviour hides behind the redesign.** A slice that moves a command keeps
-  it reachable; the command card always ends in "All commands".
+  it reachable; the command card always ends in a "More tools" fold that opens
+  onto every tool it did not name (closed by default since the compaction pass,
+  so the card shows only what fits the pick; ⌘K reaches everything by name).
 
 ## Slices
 
