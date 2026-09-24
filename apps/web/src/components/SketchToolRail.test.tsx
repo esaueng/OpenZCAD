@@ -89,7 +89,7 @@ describe('SketchToolRail', () => {
     const user = userEvent.setup();
     const onSettings = vi.fn();
     renderRail({ onSettings });
-    // The settings are a disclosure under the tools, closed to begin with.
+    // The settings open beside the rail, closed to begin with.
     await user.click(screen.getByRole('button', { name: /Sketch palette/ }));
 
     // Grid snapping starts on, so the first click turns it off and leaves
@@ -198,23 +198,58 @@ describe('SketchToolRail', () => {
     expect(Number.isFinite(anchor.y)).toBe(true);
   });
 
-  it('lays the tools out as a column with the settings folded away', () => {
-    const { container } = renderRail();
+  it('is one icon column with the palette closed beside it', async () => {
+    const user = userEvent.setup();
+    const { container } = renderRail({ sketchName: 'Boss profile' });
     const rail = screen.getByRole('toolbar', { name: 'Sketch tools' });
     expect(rail.querySelector('.sketch-rail-group.draw')).not.toBeNull();
     expect(rail.querySelector('.sketch-rail-group.modify')).not.toBeNull();
-    // Every draw tool is still there, by the same names the float uses.
-    expect(screen.getByRole('button', { name: /^Line/ })).toBeInTheDocument();
+    // Every tool is still there, by name; the rail draws icons alone and
+    // the names ride the tooltips.
+    const line = screen.getByRole('button', { name: /^Line/ });
+    expect(line).toHaveTextContent('');
+    expect(line.querySelector('svg')).not.toBeNull();
     expect(
       screen.getByRole('button', { name: 'Circle: Center Circle' })
     ).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: 'Solve' })).toBeInTheDocument();
+    // No group headings, no words: dividers separate the groups.
+    expect(rail.querySelector('.sketch-rail-group-label')).toBeNull();
+    expect(rail.querySelectorAll('.sketch-rail-divider')).toHaveLength(3);
     // Finish belongs to the column's foot, not the rail.
     expect(
       screen.queryByRole('button', { name: 'Finish Sketch' })
     ).not.toBeInTheDocument();
-    // The settings start folded: they are a disclosure here, not a palette.
-    expect(container.querySelector('.sketch-palette.collapsed')).not.toBeNull();
+    // The palette starts closed and opens beside the rail, headed by the
+    // sketch's name, with the settings inside.
+    expect(container.querySelector('.sketch-palette')).toBeNull();
     expect(screen.queryByLabelText('Snap to grid')).not.toBeInTheDocument();
+    const palette = screen.getByRole('button', { name: 'Sketch palette' });
+    expect(palette).toHaveAttribute('aria-expanded', 'false');
+    await user.click(palette);
+    expect(
+      container.querySelector('.sketch-flyouts .sketch-palette')
+    ).not.toBeNull();
+    expect(screen.getByLabelText('Snap to grid')).toBeInTheDocument();
+    expect(container.querySelector('.sketch-palette-header')).toHaveTextContent(
+      'Boss profile'
+    );
+    await user.click(palette);
+    expect(container.querySelector('.sketch-palette')).toBeNull();
+  });
+
+  it('shows the solve status as the Solve button’s tone', () => {
+    renderRail({
+      constraints: [
+        { constraintId: 'scon_1', label: 'Horizontal · Line', editable: false }
+      ],
+      solveStatus: { label: 'Fully constrained', tone: 'ok' }
+    });
+    expect(screen.getByRole('button', { name: 'Solve' })).toHaveAttribute(
+      'data-tone',
+      'ok'
+    );
+    expect(screen.getByRole('status')).toHaveTextContent('Fully constrained');
   });
 
   it('arms and disarms a modify tool, and disables the group until there is geometry', async () => {

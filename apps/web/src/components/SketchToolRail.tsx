@@ -1,7 +1,6 @@
 import { useId, useState, type ReactNode } from 'react';
 import {
   ChevronDown,
-  ChevronRight,
   Circle,
   Construction,
   Grid3x3,
@@ -31,7 +30,6 @@ import type {
 import { CONSTRAINT_TOOL_SPECS } from '../lib/sketch/constraints';
 import { SKETCH_EDIT_TOOL_SPECS } from '../lib/sketch/edits';
 import { CONSTRAINT_ICONS } from './constraintIcons';
-import { StableLabel } from './StableLabel';
 import { Tooltip } from './Tooltip';
 
 /** One row of the palette's constraint list, pre-rendered by App. */
@@ -54,6 +52,8 @@ export interface SketchSolveStatus {
 
 interface SketchToolRailProps {
   workflow?: ReactNode;
+  /** The sketch being edited, named at the head of the palette flyout. */
+  sketchName?: string;
   /**
    * The selected entity's editor, when one is selected: the card changes
    * with the pick like the command card does, under the tools that stay put.
@@ -66,6 +66,13 @@ interface SketchToolRailProps {
   settings: AppSettings['sketching'];
   units: string;
   paletteVisible: boolean;
+  /**
+   * The palette flyout's open state, when the caller remembers it (App
+   * keeps it in the panel state so it survives leaving and re-entering a
+   * sketch). Absent, the rail holds it itself.
+   */
+  paletteOpen?: boolean;
+  onTogglePalette?(): void;
   /** Null until the first entity commit creates the sketch node. */
   canConstrain: boolean;
   /** Armed modify tool, if any. */
@@ -136,17 +143,11 @@ const CIRCLE_LABELS: Record<SketchCircleMode, string> = {
   'three-point': 'Three-Point Circle'
 };
 
-/** Dedicated sketch toolbar and contextual palette for in-viewport sketching. */
-const SOLVE_LABEL_RESERVE = [
-  'Fully constrained',
-  '99 DOF remaining',
-  'Over-constrained',
-  'Constraints conflict'
-];
-
+/** The sketch rail: the sketch's tools as one icon column, plus its flyouts. */
 export function SketchToolRail({
   workflow,
   entityEditor,
+  sketchName,
   canExtrude = true,
   tool,
   circleMode,
@@ -154,6 +155,8 @@ export function SketchToolRail({
   settings,
   units,
   paletteVisible,
+  paletteOpen: paletteOpenProp,
+  onTogglePalette,
   canConstrain,
   pendingEdit,
   constraints,
@@ -171,34 +174,42 @@ export function SketchToolRail({
   onExtrude
 }: SketchToolRailProps) {
   const [circleMenuOpen, setCircleMenuOpen] = useState(false);
-  // The sketch settings are a disclosure under the tools; closed until asked.
-  const [paletteOpen, setPaletteOpen] = useState(false);
+  // The sketch's overview and settings open beside the rail; closed until asked.
+  const [paletteOpenState, setPaletteOpenState] = useState(false);
+  const paletteOpen = paletteOpenProp ?? paletteOpenState;
+  const togglePalette = () =>
+    onTogglePalette ? onTogglePalette() : setPaletteOpenState((open) => !open);
   const patchSettings = (patch: Partial<AppSettings['sketching']>) =>
     onSettings({ ...settings, ...patch });
 
-  // The same buttons serve both layouts; only their grouping differs, so each
-  // block is rendered once here and placed below.
+  // Icon-only, like the verb rail: the name and key ride the tooltip, and
+  // the accessible name is the tool's name alone.
+  const drawTool = ({
+    id,
+    label,
+    keyHint,
+    icon: Icon
+  }: (typeof TOOLS)[number]) => (
+    <Tooltip key={id} label={label} shortcut={keyHint}>
+      <button
+        type="button"
+        className={tool === id ? 'active' : undefined}
+        aria-pressed={tool === id}
+        aria-label={label}
+        onClick={() => onTool(id)}
+      >
+        <Icon size={16} aria-hidden="true" />
+      </button>
+    </Tooltip>
+  );
   const drawTools = (
     <>
-      {TOOLS.slice(0, 3).map(({ id, label, keyHint, icon: Icon }) => (
-        <Tooltip key={id} label={label} shortcut={keyHint}>
-          <button
-            type="button"
-            className={tool === id ? 'active' : undefined}
-            aria-pressed={tool === id}
-            onClick={() => onTool(id)}
-          >
-            <Icon size={14} aria-hidden="true" />
-            {label}
-            <kbd>{keyHint}</kbd>
-          </button>
-        </Tooltip>
-      ))}
+      {TOOLS.slice(0, 3).map(drawTool)}
       <span className="sketch-circle-tool">
         <Tooltip
           label={CIRCLE_LABELS[circleMode]}
           shortcut="C"
-          description="Choose the circle type from the adjacent menu"
+          description="Choose the circle type from the corner menu"
         >
           <button
             type="button"
@@ -207,9 +218,7 @@ export function SketchToolRail({
             aria-label={`Circle: ${CIRCLE_LABELS[circleMode]}`}
             onClick={() => onTool('circle')}
           >
-            <Circle size={14} aria-hidden="true" />
-            Circle
-            <kbd>C</kbd>
+            <Circle size={16} aria-hidden="true" />
           </button>
         </Tooltip>
         <button
@@ -219,7 +228,7 @@ export function SketchToolRail({
           aria-expanded={circleMenuOpen}
           onClick={() => setCircleMenuOpen((open) => !open)}
         >
-          <ChevronDown size={12} aria-hidden="true" />
+          <ChevronDown size={10} aria-hidden="true" />
         </button>
         {circleMenuOpen ? (
           <span className="sketch-circle-menu" role="menu">
@@ -245,20 +254,7 @@ export function SketchToolRail({
           </span>
         ) : null}
       </span>
-      {TOOLS.slice(3).map(({ id, label, keyHint, icon: Icon }) => (
-        <Tooltip key={id} label={label} shortcut={keyHint}>
-          <button
-            type="button"
-            className={tool === id ? 'active' : undefined}
-            aria-pressed={tool === id}
-            onClick={() => onTool(id)}
-          >
-            <Icon size={14} aria-hidden="true" />
-            {label}
-            <kbd>{keyHint}</kbd>
-          </button>
-        </Tooltip>
-      ))}
+      {TOOLS.slice(3).map(drawTool)}
     </>
   );
   const modifyTools = (
@@ -276,54 +272,48 @@ export function SketchToolRail({
               type="button"
               className={active ? 'active' : undefined}
               aria-pressed={active}
+              aria-label={label}
               disabled={!canConstrain}
               onClick={() =>
                 active ? onEditTool(null) : onEditTool(kind, hint)
               }
             >
-              <Icon size={14} aria-hidden="true" />
-              {label}
+              <Icon size={16} aria-hidden="true" />
             </button>
           </Tooltip>
         );
       })}
     </>
   );
-  const solveButton = (
+  // The solve status is the button's tone dot and its tooltip; the text
+  // itself stays in the tree for assistive tech, off screen.
+  const solveTools = (
     <>
       <Tooltip
         label={solving ? 'Solving…' : 'Solve'}
         description={
-          constraints.length === 0
+          solveStatus?.label ??
+          (constraints.length === 0
             ? 'Add a constraint first.'
-            : 'Solve the sketch constraints and apply the result.'
+            : 'Solve the sketch constraints and apply the result.')
         }
       >
         <button
           type="button"
+          aria-label="Solve"
+          data-tone={solveStatus?.tone}
           disabled={!canConstrain || constraints.length === 0 || solving}
           onClick={onSolve}
         >
-          <Play size={14} aria-hidden="true" />
-          <StableLabel reserve={['Solving…', 'Solve']}>
-            {solving ? 'Solving…' : 'Solve'}
-          </StableLabel>
+          <Play size={16} aria-hidden="true" />
         </button>
       </Tooltip>
-    </>
-  );
-  const solvePill = (
-    <>
-      {/* Always in the rail: the rail is centred, so a pill that came and
-          went re-centred every sketch tool button with it. */}
       <span
-        className={`sketch-solve-pill${solveStatus ? '' : ' empty'}`}
+        className={`sketch-solve-pill visually-hidden${solveStatus ? '' : ' empty'}`}
         data-tone={solveStatus?.tone}
         role="status"
       >
-        <StableLabel reserve={SOLVE_LABEL_RESERVE} align="center">
-          {solveStatus?.label ?? ''}
-        </StableLabel>
+        {solveStatus?.label ?? ''}
       </span>
     </>
   );
@@ -334,19 +324,18 @@ export function SketchToolRail({
           type="button"
           className={construction ? 'active' : undefined}
           aria-pressed={construction}
+          aria-label="Construction"
           onClick={() => onConstruction(!construction)}
         >
-          <Construction size={14} aria-hidden="true" />
-          Construction
+          <Construction size={16} aria-hidden="true" />
         </button>
       </Tooltip>
       <Tooltip
         label="Diagnostics"
         description="Find open endpoints and invalid profile geometry"
       >
-        <button type="button" onClick={onDiagnostics}>
-          <ScanSearch size={14} aria-hidden="true" />
-          Diagnostics
+        <button type="button" aria-label="Diagnostics" onClick={onDiagnostics}>
+          <ScanSearch size={16} aria-hidden="true" />
         </button>
       </Tooltip>
       <Tooltip
@@ -359,209 +348,214 @@ export function SketchToolRail({
       >
         <button
           type="button"
+          aria-label="Extrude"
           disabled={!canExtrude || solving}
           onClick={onExtrude}
         >
-          <Layers3 size={14} aria-hidden="true" />
-          Extrude
+          <Layers3 size={16} aria-hidden="true" />
         </button>
       </Tooltip>
     </>
   );
-  const palette = (
-    <>
-      {paletteVisible ? (
-        <aside
-          className={`sketch-palette${paletteOpen ? '' : ' collapsed'}`}
-          aria-label="Sketch palette"
-        >
-          <button
-            type="button"
-            className="sketch-palette-header"
-            aria-expanded={paletteOpen}
-            onClick={() => setPaletteOpen((open) => !open)}
-          >
-            <span>
-              <Grid3x3 size={14} aria-hidden="true" />
-              Sketch palette
-            </span>
-            <ChevronRight
-              size={13}
-              className="disclosure-chevron"
-              aria-hidden="true"
-            />
-          </button>
-          {paletteOpen ? (
-            <div className="sketch-palette-content">
-              <fieldset>
-                <legend>Display</legend>
-                <label>
-                  <input
-                    type="checkbox"
-                    checked={settings.gridVisible}
-                    onChange={(event) =>
-                      patchSettings({
-                        gridVisible: event.currentTarget.checked
-                      })
+  const paletteButton = paletteVisible ? (
+    <Tooltip
+      label="Sketch palette"
+      description="The sketch's plane, snapping, grid and constraints"
+    >
+      <button
+        type="button"
+        className={paletteOpen ? 'active' : undefined}
+        aria-label="Sketch palette"
+        aria-expanded={paletteOpen}
+        onClick={togglePalette}
+      >
+        <Grid3x3 size={16} aria-hidden="true" />
+      </button>
+    </Tooltip>
+  ) : null;
+  const palette =
+    paletteVisible && paletteOpen ? (
+      <aside className="sketch-palette" aria-label="Sketch palette">
+        <header className="sketch-palette-header">
+          <span>
+            <Grid3x3 size={14} aria-hidden="true" />
+            {sketchName ?? 'Sketch'}
+          </span>
+        </header>
+        {workflow}
+        <div className="sketch-palette-content">
+          <fieldset>
+            <legend>Display</legend>
+            <label>
+              <input
+                type="checkbox"
+                checked={settings.gridVisible}
+                onChange={(event) =>
+                  patchSettings({
+                    gridVisible: event.currentTarget.checked
+                  })
+                }
+              />
+              Show adaptive grid
+            </label>
+          </fieldset>
+          <fieldset>
+            <legend>Snapping</legend>
+            <label>
+              <input
+                type="checkbox"
+                checked={settings.geometrySnapEnabled}
+                onChange={(event) =>
+                  patchSettings({
+                    geometrySnapEnabled: event.currentTarget.checked
+                  })
+                }
+              />
+              Geometry snaps
+            </label>
+            <label>
+              <input
+                type="checkbox"
+                checked={settings.inferenceEnabled}
+                onChange={(event) =>
+                  patchSettings({
+                    inferenceEnabled: event.currentTarget.checked
+                  })
+                }
+              />
+              Automatic inferencing
+            </label>
+            <label>
+              <input
+                type="checkbox"
+                checked={settings.snapEnabled}
+                onChange={(event) =>
+                  patchSettings({
+                    snapEnabled: event.currentTarget.checked
+                  })
+                }
+              />
+              Snap to grid
+            </label>
+            <label className="sketch-palette-number">
+              <span>Snap spacing</span>
+              <span>
+                <input
+                  type="number"
+                  min="0.001"
+                  max="10000"
+                  step="0.1"
+                  value={settings.linearSnap}
+                  aria-label="Sketch snap spacing"
+                  onChange={(event) => {
+                    const value = event.currentTarget.valueAsNumber;
+                    if (
+                      Number.isFinite(value) &&
+                      value >= 0.001 &&
+                      value <= 10_000
+                    ) {
+                      patchSettings({ linearSnap: value });
                     }
-                  />
-                  Show adaptive grid
-                </label>
-              </fieldset>
-              <fieldset>
-                <legend>Snapping</legend>
-                <label>
-                  <input
-                    type="checkbox"
-                    checked={settings.geometrySnapEnabled}
-                    onChange={(event) =>
-                      patchSettings({
-                        geometrySnapEnabled: event.currentTarget.checked
-                      })
-                    }
-                  />
-                  Geometry snaps
-                </label>
-                <label>
-                  <input
-                    type="checkbox"
-                    checked={settings.inferenceEnabled}
-                    onChange={(event) =>
-                      patchSettings({
-                        inferenceEnabled: event.currentTarget.checked
-                      })
-                    }
-                  />
-                  Automatic inferencing
-                </label>
-                <label>
-                  <input
-                    type="checkbox"
-                    checked={settings.snapEnabled}
-                    onChange={(event) =>
-                      patchSettings({
-                        snapEnabled: event.currentTarget.checked
-                      })
-                    }
-                  />
-                  Snap to grid
-                </label>
-                <label className="sketch-palette-number">
-                  <span>Snap spacing</span>
-                  <span>
-                    <input
-                      type="number"
-                      min="0.001"
-                      max="10000"
-                      step="0.1"
-                      value={settings.linearSnap}
-                      aria-label="Sketch snap spacing"
-                      onChange={(event) => {
-                        const value = event.currentTarget.valueAsNumber;
-                        if (
-                          Number.isFinite(value) &&
-                          value >= 0.001 &&
-                          value <= 10_000
-                        ) {
-                          patchSettings({ linearSnap: value });
-                        }
-                      }}
-                    />
-                    <small>{units}</small>
-                  </span>
-                </label>
-              </fieldset>
-              {constraints.length > 0 ? (
-                <fieldset>
-                  <legend>Constraints</legend>
-                  <ul className="sketch-constraint-list">
-                    {constraints.map(
-                      ({ constraintId, label, editable, conflicted }) => (
-                        <li
-                          key={constraintId}
-                          data-conflicted={conflicted ? 'true' : undefined}
-                          aria-label={
+                  }}
+                />
+                <small>{units}</small>
+              </span>
+            </label>
+          </fieldset>
+          {constraints.length > 0 ? (
+            <fieldset>
+              <legend>Constraints</legend>
+              <ul className="sketch-constraint-list">
+                {constraints.map(
+                  ({ constraintId, label, editable, conflicted }) => (
+                    <li
+                      key={constraintId}
+                      data-conflicted={conflicted ? 'true' : undefined}
+                      aria-label={
+                        conflicted
+                          ? `${label} · solver residual; edit or delete this constraint`
+                          : label
+                      }
+                    >
+                      {editable ? (
+                        <Tooltip
+                          label={
                             conflicted
-                              ? `${label} · solver residual; edit or delete this constraint`
-                              : label
+                              ? `Edit conflicting constraint: ${label}`
+                              : `Edit constraint: ${label}`
                           }
                         >
-                          {editable ? (
-                            <Tooltip
-                              label={
-                                conflicted
-                                  ? `Edit conflicting constraint: ${label}`
-                                  : `Edit constraint: ${label}`
-                              }
-                            >
-                              <button
-                                type="button"
-                                className="sketch-constraint-edit"
-                                data-conflicted={
-                                  conflicted ? 'true' : undefined
-                                }
-                                aria-label={`Edit constraint: ${label}`}
-                                onClick={(event) =>
-                                  onEditConstraint(constraintId, {
-                                    x: event.clientX,
-                                    y: event.clientY
-                                  })
-                                }
-                              >
-                                {label}
-                              </button>
-                            </Tooltip>
-                          ) : (
-                            <Tooltip label={label}>
-                              <span>{label}</span>
-                            </Tooltip>
-                          )}
-                          <Tooltip label={`Delete constraint: ${label}`}>
-                            <button
-                              type="button"
-                              className="row-delete"
-                              aria-label={`Delete constraint: ${label}`}
-                              onClick={() => onDeleteConstraint(constraintId)}
-                            >
-                              <Trash2 size={12} aria-hidden="true" />
-                            </button>
-                          </Tooltip>
-                        </li>
-                      )
-                    )}
-                  </ul>
-                </fieldset>
-              ) : null}
-              <p className="sketch-palette-help">
-                <Magnet size={12} aria-hidden="true" />
-                Tab cycles overlaps · Shift suppresses snaps
-              </p>
-            </div>
+                          <button
+                            type="button"
+                            className="sketch-constraint-edit"
+                            data-conflicted={conflicted ? 'true' : undefined}
+                            aria-label={`Edit constraint: ${label}`}
+                            onClick={(event) =>
+                              onEditConstraint(constraintId, {
+                                x: event.clientX,
+                                y: event.clientY
+                              })
+                            }
+                          >
+                            {label}
+                          </button>
+                        </Tooltip>
+                      ) : (
+                        <Tooltip label={label}>
+                          <span>{label}</span>
+                        </Tooltip>
+                      )}
+                      <Tooltip label={`Delete constraint: ${label}`}>
+                        <button
+                          type="button"
+                          className="row-delete"
+                          aria-label={`Delete constraint: ${label}`}
+                          onClick={() => onDeleteConstraint(constraintId)}
+                        >
+                          <Trash2 size={12} aria-hidden="true" />
+                        </button>
+                      </Tooltip>
+                    </li>
+                  )
+                )}
+              </ul>
+            </fieldset>
           ) : null}
-        </aside>
-      ) : null}
-    </>
-  );
+          <p className="sketch-palette-help">
+            <Magnet size={12} aria-hidden="true" />
+            Tab cycles overlaps · Shift suppresses snaps
+          </p>
+        </div>
+      </aside>
+    ) : null;
 
-  // The tools come first and never move; what changes with the pick (the
-  // entity editor) follows them, then the sketch's own state and settings.
-  // The relations live on their own rail on the right (SketchRelationsRail).
+  // The rail is one icon column, the verb rail's twin: draw, modify, then
+  // solve and the utilities, then the palette. What changes with the pick
+  // (the entity editor) and the palette open beside it as flyouts, so the
+  // rail never grows. The relations live on their own rail on the right
+  // (SketchRelationsRail); Finish is the column's foot, under the rail.
   return (
     <>
       <div className="sketch-rail" role="toolbar" aria-label="Sketch tools">
-        <span className="sketch-rail-group-label">Draw</span>
         <div className="sketch-rail-group draw">{drawTools}</div>
-        <span className="sketch-rail-group-label">Modify</span>
+        <span className="sketch-rail-divider" aria-hidden="true" />
         <div className="sketch-rail-group modify">{modifyTools}</div>
-        <div className="sketch-rail-group solve">
-          {solveButton}
-          {solvePill}
+        <span className="sketch-rail-divider" aria-hidden="true" />
+        <div className="sketch-rail-group utility">
+          {utilityTools}
+          {solveTools}
         </div>
-        <div className="sketch-rail-group utility">{utilityTools}</div>
+        {paletteButton && (
+          <>
+            <span className="sketch-rail-divider" aria-hidden="true" />
+            <div className="sketch-rail-group palette">{paletteButton}</div>
+          </>
+        )}
       </div>
-      {entityEditor}
-      {workflow}
-      {palette}
+      <div className="sketch-flyouts">
+        {entityEditor}
+        {palette}
+      </div>
     </>
   );
 }
