@@ -129,10 +129,10 @@ export function CommandCard({
       </div>
       {context.groups.map((group) => (
         <section
-          key={group.label}
+          key={`${context.kind}:${group.label}`}
           role="group"
           aria-label={group.label}
-          className="command-group"
+          className="command-group is-contextual"
         >
           <span className="command-group-label">{group.label}</span>
           {group.tools.map((tool) => button(tool, 'row'))}
