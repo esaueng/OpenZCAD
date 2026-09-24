@@ -35,7 +35,9 @@ import {
 import { OrientationWidget } from './OrientationWidget';
 import {
   ViewportScaleIndicator,
-  type ViewportScaleSink
+  type ViewportScaleSink,
+  ViewportGridReadout,
+  type SketchGridReadoutSink
 } from './ViewportScaleIndicator';
 import type {
   ArtifactId,
@@ -55,6 +57,7 @@ import type { RegionPickData } from './viewer/regionOverlay';
 import { setLiveDiameter } from '../lib/liveLabels';
 import type { LabelSegment } from '../lib/topologyLabels';
 import { LabelSegments } from './LabelSegments';
+import { OVERLAY_EXIT_MS, useDelayedUnmount } from '../hooks/useDelayedUnmount';
 import {
   MeasurementCloudSyncAgent,
   type MeasurementCloudSyncAgentProps
@@ -138,6 +141,11 @@ interface ViewerShellProps {
    */
   dockLayout?: boolean;
   dockExtras?: ReactNode;
+  /**
+   * More islands for the instrument rail, under the viewer bar: the model
+   * drawer's Items, History and Parameters buttons.
+   */
+  railExtras?: ReactNode;
   hideViewerToolbar?: boolean;
   /**
    * View mode drops the utility rail — its controls move to the floating view
@@ -222,10 +230,7 @@ interface ViewerShellProps {
   sketchMode: SketchModeState | null;
   onSketchCommit(object: SketchObjectData): void;
   onEditSketchDimension(id: string, anchor: { x: number; y: number }): void;
-  onMoveSketchDimension(
-    id: string,
-    offset: { x: number; y: number }
-  ): void;
+  onMoveSketchDimension(id: string, offset: { x: number; y: number }): void;
   onSketchDrawingChange(drawing: boolean): void;
   onSketchSelectObject(
     objectId: string | null,
@@ -311,6 +316,7 @@ export function ViewerShell({
   hideViewerToolbar = false,
   dockLayout = false,
   dockExtras = null,
+  railExtras = null,
   viewMode = false,
   selectionChip,
   onClearSelection,
@@ -402,7 +408,10 @@ export function ViewerShell({
     drawnSection.kind === 'exact' ? drawnSection.regions : null;
   const orientationDragRef = useRef<OrientationDragControls | null>(null);
   const scaleIndicatorRef = useRef<ViewportScaleSink | null>(null);
+  const sketchGridReadoutRef = useRef<SketchGridReadoutSink | null>(null);
   const selectionChipLabelRef = useRef<HTMLSpanElement | null>(null);
+  const chipExit = useDelayedUnmount(selectionChip, OVERLAY_EXIT_MS);
+  const chip = chipExit.rendered;
   const cylinderRadiusLabelSetterRef = useRef<
     ((radius: number | null) => void) | null
   >(null);
@@ -506,6 +515,7 @@ export function ViewerShell({
         orientationRef={orientationRef}
         orientationDragRef={orientationDragRef}
         scaleIndicatorRef={scaleIndicatorRef}
+        sketchGridReadoutRef={sketchGridReadoutRef}
         onSelectTopology={onSelectTopology}
         onSelectEdgeChain={onSelectEdgeChain}
         selectionFilter={selectionFilter}
@@ -576,30 +586,39 @@ export function ViewerShell({
         </>
       )}
       {dockLayout && !hideViewerToolbar && (
-        <div className="viewport-dock-lane">
+        <>
+          {/* How you look at the model: icon instruments down the right edge,
+              under the top islands. They never change with the selection. */}
+          {!viewMode && (
+            <div className="instrument-rail">
+              {viewerToolbar}
+              {railExtras}
+            </div>
+          )}
+          {/* How picks and snaps behave, and the activity log: one quiet
+              readout in the bottom-left corner, under the column. */}
           <div
-            className="viewport-dock"
+            className="viewport-readout"
             role="group"
-            aria-label="Viewport dock"
+            aria-label="Viewport readout"
           >
-            {!viewMode && viewerToolbar}
             {dockExtras}
-            <ViewportScaleIndicator
-              scaleSinkRef={scaleIndicatorRef}
-              units={units}
-            />
+            {/* The sketch grid spacing reads beside the snap segment; the
+                scale bar itself sits by the orientation cube. */}
+            <ViewportGridReadout sinkRef={sketchGridReadoutRef} />
           </div>
-        </div>
+        </>
       )}
-      {selectionChip && (
-        <div className="selection-chip" role="status">
+      {chip && (
+        <div
+          className={`selection-chip${chipExit.closing ? ' closing' : ''}`}
+          role="status"
+        >
           <span ref={selectionChipLabelRef} className="selection-chip-label">
-            <LabelSegments segments={selectionChip.label} />
+            <LabelSegments segments={chip.label} />
           </span>
-          {selectionChip.detail && (
-            <span className="selection-chip-detail">
-              {selectionChip.detail}
-            </span>
+          {chip.detail && (
+            <span className="selection-chip-detail">{chip.detail}</span>
           )}
           <button
             type="button"
@@ -613,12 +632,8 @@ export function ViewerShell({
         </div>
       )}
       {modeOverlay}
-      {(!dockLayout || hideViewerToolbar) && (
-        <ViewportScaleIndicator
-          scaleSinkRef={scaleIndicatorRef}
-          units={units}
-        />
-      )}
+      {/* The scale sits beside the orientation cube in every layout. */}
+      <ViewportScaleIndicator scaleSinkRef={scaleIndicatorRef} units={units} />
     </section>
   );
 }

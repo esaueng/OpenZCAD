@@ -59,6 +59,27 @@ describe('CommandPalette', () => {
     expect(visibleLabels()).toEqual(['Export STEP', 'Export mesh']);
   });
 
+  it('matches a command by its keywords as well as its label', async () => {
+    const commands = [
+      command('export-dxf', 'Export face outline as DXF', 'File', {
+        keywords: ['laser', 'outline']
+      }),
+      command('import', 'Import CAD files…', 'File', {
+        keywords: ['step', 'stl']
+      }),
+      command('export-step', 'Export STEP', 'File')
+    ];
+    render(<CommandPalette commands={commands} onClose={vi.fn()} />);
+    const search = screen.getByRole('textbox', { name: 'Search commands' });
+
+    await userEvent.type(search, 'laser');
+    expect(visibleLabels()).toEqual(['Export face outline as DXF']);
+
+    await userEvent.clear(search);
+    await userEvent.type(search, 'step');
+    expect(visibleLabels()).toEqual(['Export STEP', 'Import CAD files…']);
+  });
+
   it('does not run a disabled result by click or Enter', async () => {
     const run = vi.fn();
     const onClose = vi.fn();
@@ -84,5 +105,71 @@ describe('CommandPalette', () => {
 
     expect(run).not.toHaveBeenCalled();
     expect(onClose).not.toHaveBeenCalled();
+  });
+
+  it('ends the list with an Ask row that sends the typed words to the assistant', async () => {
+    const onAsk = vi.fn();
+    const onClose = vi.fn();
+    const commands = [
+      command('fillet', 'Fillet', 'Modify'),
+      command('front', 'Front view', 'View')
+    ];
+    render(
+      <CommandPalette commands={commands} onClose={onClose} onAsk={onAsk} />
+    );
+
+    const search = screen.getByRole('textbox', { name: 'Search commands' });
+    expect(search).toHaveAttribute(
+      'placeholder',
+      expect.stringContaining('or a question')
+    );
+    // Nothing typed, nothing to ask: the Ask row waits for words.
+    expect(visibleLabels()).not.toContain(
+      expect.stringContaining('Ask the assistant')
+    );
+
+    await userEvent.type(search, 'fil');
+    // A command match still comes first, so Enter runs it, not the question.
+    expect(visibleLabels()).toEqual(['Fillet', 'Ask the assistant: “fil”']);
+    await userEvent.click(
+      screen.getByRole('option', { name: /Ask the assistant/ })
+    );
+    expect(onClose).toHaveBeenCalledTimes(1);
+    expect(onAsk).toHaveBeenCalledWith('fil');
+  });
+
+  it('asks on Enter when no command matches', async () => {
+    const onAsk = vi.fn();
+    render(
+      <CommandPalette
+        commands={[command('fillet', 'Fillet', 'Modify')]}
+        onClose={vi.fn()}
+        onAsk={onAsk}
+      />
+    );
+
+    const search = screen.getByRole('textbox', { name: 'Search commands' });
+    await userEvent.type(search, '  round the top edges 2 mm  ');
+    expect(
+      screen.getByText('No matching command. Enter asks the assistant.')
+    ).toBeTruthy();
+    await userEvent.type(search, '{Enter}');
+    expect(onAsk).toHaveBeenCalledWith('round the top edges 2 mm');
+  });
+
+  it('offers no Ask row without an assistant', async () => {
+    render(
+      <CommandPalette
+        commands={[command('fillet', 'Fillet', 'Modify')]}
+        onClose={vi.fn()}
+      />
+    );
+
+    await userEvent.type(
+      screen.getByRole('textbox', { name: 'Search commands' }),
+      'round'
+    );
+    expect(screen.queryAllByRole('option')).toHaveLength(0);
+    expect(screen.getByText('No matching command.')).toBeTruthy();
   });
 });

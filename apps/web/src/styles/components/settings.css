@@ -324,7 +324,7 @@
   color: var(--color-text-subtle);
   background: var(--color-surface-2);
   border: var(--border-thin);
-  border-radius: 999px;
+  border-radius: var(--radius-md);
   font-family: var(--font-mono);
   font-size: var(--fs-mini);
   font-weight: var(--fw-regular);
@@ -380,7 +380,9 @@
   background: var(--color-border-strong);
   border: 1px solid var(--color-border-strong);
   border-radius: 999px;
-  transition: background-color var(--dur-fast) var(--ease-out);
+  transition:
+    background-color var(--dur-fast) var(--ease-out),
+    border-color var(--dur-fast) var(--ease-out);
 }
 
 .settings-toggle span::after {
@@ -417,7 +419,7 @@
   color: var(--color-text-muted);
   background: var(--color-surface-2);
   border: var(--border-thin);
-  border-radius: 999px;
+  border-radius: var(--radius-md);
   font-family: var(--font-mono);
   font-size: var(--fs-mini);
 }

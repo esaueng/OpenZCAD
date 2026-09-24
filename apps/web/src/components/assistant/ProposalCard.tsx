@@ -1,7 +1,6 @@
 import { useState } from 'react';
 import {
   Check,
-  ChevronDown,
   ChevronRight,
   Eye,
   EyeOff,
@@ -97,11 +96,11 @@ export function ProposalCard({
             aria-expanded={showReadings}
             onClick={() => setShowReadings((open) => !open)}
           >
-            {showReadings ? (
-              <ChevronDown size={12} aria-hidden="true" />
-            ) : (
-              <ChevronRight size={12} aria-hidden="true" />
-            )}
+            <ChevronRight
+              size={12}
+              className="disclosure-chevron"
+              aria-hidden="true"
+            />
             <Ruler size={12} aria-hidden="true" />
             {entry.readings.length} dimension
             {entry.readings.length === 1 ? '' : 's'} read from the drawing
@@ -156,11 +155,11 @@ export function ProposalCard({
         aria-expanded={showOperations}
         onClick={() => setShowOperations((open) => !open)}
       >
-        {showOperations ? (
-          <ChevronDown size={12} aria-hidden="true" />
-        ) : (
-          <ChevronRight size={12} aria-hidden="true" />
-        )}
+        <ChevronRight
+          size={12}
+          className="disclosure-chevron"
+          aria-hidden="true"
+        />
         {entry.proposal.operations.length} operation
         {entry.proposal.operations.length === 1 ? '' : 's'}
         <span className="assistant-op-totals">
@@ -203,11 +202,7 @@ export function ProposalCard({
             onClick={onApply}
           >
             {applying ? (
-              <LoaderCircle
-                size={13}
-                aria-hidden="true"
-                className="assistant-spin"
-              />
+              <LoaderCircle size={13} aria-hidden="true" className="spin" />
             ) : (
               <Check size={13} aria-hidden="true" />
             )}

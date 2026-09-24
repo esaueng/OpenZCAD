@@ -428,7 +428,7 @@
   padding: 0 5px;
   color: var(--color-text-subtle);
   background: var(--color-surface-2);
-  border-radius: 999px;
+  border-radius: var(--radius-md);
   font-family: var(--font-mono);
   font-size: var(--fs-mini);
   font-variant-numeric: tabular-nums;
@@ -554,7 +554,7 @@
 .start-sync-track {
   display: flex;
   height: 4px;
-  border-radius: 999px;
+  border-radius: var(--radius-md);
   background: var(--color-surface-2);
   overflow: hidden;
 }
@@ -607,16 +607,6 @@
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
-}
-
-.start-sync-spin {
-  animation: start-sync-spin 900ms linear infinite;
-}
-
-@keyframes start-sync-spin {
-  to {
-    transform: rotate(360deg);
-  }
 }
 
 /* ── Part tiles ──────────────────────────────────────────── */
@@ -970,4 +960,13 @@
     margin-left: 0;
     width: 100%;
   }
+}
+
+/* Opening a part crossfades: the start screen's last frame, cloned when it
+   unmounts (useDissolveOnUnmount), fades out over the workspace mounting
+   beneath it. The copy is inert and deaf to the pointer, so the workspace
+   takes input from its first frame. */
+.start-screen.dissolving {
+  position: fixed;
+  pointer-events: none;
 }

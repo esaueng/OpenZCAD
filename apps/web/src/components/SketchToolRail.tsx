@@ -1,4 +1,4 @@
-import { useState, type ReactNode } from 'react';
+import { useId, useState, type ReactNode } from 'react';
 import {
   ChevronDown,
   ChevronRight,
@@ -54,6 +54,11 @@ export interface SketchSolveStatus {
 
 interface SketchToolRailProps {
   workflow?: ReactNode;
+  /**
+   * The selected entity's editor, when one is selected: the card changes
+   * with the pick like the command card does, under the tools that stay put.
+   */
+  entityEditor?: ReactNode;
   canExtrude?: boolean;
   tool: SketchToolId;
   circleMode: SketchCircleMode;
@@ -63,7 +68,6 @@ interface SketchToolRailProps {
   paletteVisible: boolean;
   /** Null until the first entity commit creates the sketch node. */
   canConstrain: boolean;
-  pendingConstraint: PendingSketchConstraint | null;
   /** Armed modify tool, if any. */
   pendingEdit: PendingSketchEdit | null;
   constraints: SketchConstraintListItem[];
@@ -73,7 +77,6 @@ interface SketchToolRailProps {
   onCircleMode(mode: SketchCircleMode): void;
   onConstruction(value: boolean): void;
   onSettings(settings: AppSettings['sketching']): void;
-  onConstraintTool(kind: SketchConstraintToolKind | null): void;
   /** The hint travels with the tool: the rail already holds the specs. */
   onEditTool(kind: SketchEditToolKind | null, hint?: string): void;
   onEditConstraint(
@@ -143,6 +146,7 @@ const SOLVE_LABEL_RESERVE = [
 
 export function SketchToolRail({
   workflow,
+  entityEditor,
   canExtrude = true,
   tool,
   circleMode,
@@ -151,7 +155,6 @@ export function SketchToolRail({
   units,
   paletteVisible,
   canConstrain,
-  pendingConstraint,
   pendingEdit,
   constraints,
   solveStatus,
@@ -160,7 +163,6 @@ export function SketchToolRail({
   onCircleMode,
   onConstruction,
   onSettings,
-  onConstraintTool,
   onEditTool,
   onEditConstraint,
   onDeleteConstraint,
@@ -257,35 +259,6 @@ export function SketchToolRail({
           </button>
         </Tooltip>
       ))}
-    </>
-  );
-  const constraintTools = (
-    <>
-      {CONSTRAINT_TOOL_SPECS.map(({ kind, label, hint }) => {
-        const Icon = CONSTRAINT_ICONS[kind];
-        const active = pendingConstraint?.kind === kind;
-        return (
-          // Icon-only on purpose: five labelled buttons made the rail wider
-          // than the viewer, sliding its left edge under the sidebar where
-          // the parameter form intercepted every click on the Select tool.
-          <Tooltip
-            key={kind}
-            label={label}
-            description={canConstrain ? hint : 'Draw an entity first.'}
-          >
-            <button
-              type="button"
-              className={active ? 'active' : undefined}
-              aria-pressed={active}
-              aria-label={label}
-              disabled={!canConstrain}
-              onClick={() => onConstraintTool(active ? null : kind)}
-            >
-              <Icon size={14} aria-hidden="true" />
-            </button>
-          </Tooltip>
-        );
-      })}
     </>
   );
   const modifyTools = (
@@ -412,11 +385,11 @@ export function SketchToolRail({
               <Grid3x3 size={14} aria-hidden="true" />
               Sketch palette
             </span>
-            {paletteOpen ? (
-              <ChevronDown size={13} aria-hidden="true" />
-            ) : (
-              <ChevronRight size={13} aria-hidden="true" />
-            )}
+            <ChevronRight
+              size={13}
+              className="disclosure-chevron"
+              aria-hidden="true"
+            />
           </button>
           {paletteOpen ? (
             <div className="sketch-palette-content">
@@ -570,22 +543,122 @@ export function SketchToolRail({
     </>
   );
 
+  // The tools come first and never move; what changes with the pick (the
+  // entity editor) follows them, then the sketch's own state and settings.
+  // The relations live on their own rail on the right (SketchRelationsRail).
   return (
     <>
-      {workflow}
       <div className="sketch-rail" role="toolbar" aria-label="Sketch tools">
+        <span className="sketch-rail-group-label">Draw</span>
         <div className="sketch-rail-group draw">{drawTools}</div>
         <span className="sketch-rail-group-label">Modify</span>
         <div className="sketch-rail-group modify">{modifyTools}</div>
-        <span className="sketch-rail-group-label">Constrain</span>
-        <div className="sketch-rail-group constrain">{constraintTools}</div>
         <div className="sketch-rail-group solve">
           {solveButton}
           {solvePill}
         </div>
         <div className="sketch-rail-group utility">{utilityTools}</div>
       </div>
+      {entityEditor}
+      {workflow}
       {palette}
     </>
+  );
+}
+
+/** Relations dividers: before the positional group and the dimensions. */
+const RELATION_GROUP_STARTS = new Set<SketchConstraintToolKind>([
+  'concentric',
+  'radius'
+]);
+
+interface SketchRelationsRailProps {
+  /** Null until the first entity commit creates the sketch node. */
+  canConstrain: boolean;
+  pendingConstraint: PendingSketchConstraint | null;
+  /**
+   * The selected entity, if any: its kind, and the relations that take it as
+   * their first pick. Null while nothing is selected, when every relation
+   * arms and waits for its picks on the canvas.
+   */
+  selection: {
+    kind: string;
+    fitting: readonly SketchConstraintToolKind[];
+  } | null;
+  /** Arms (or, with null, disarms) a relation that collects its picks. */
+  onConstraintTool(kind: SketchConstraintToolKind | null): void;
+  /** Starts a relation from the selection: the selected entity is pick 1. */
+  onSelectionConstraintTool(kind: SketchConstraintToolKind): void;
+}
+
+/**
+ * The sketch relations as a fixed icon rail on the right. The icons never
+ * move — they keep the order of CONSTRAINT_TOOL_SPECS — and a name appears
+ * beside a relation only when it fits the selection (or is armed), so the
+ * rail reads as "what you can do with this" without rearranging itself.
+ * A relation that does not fit is greyed and says why.
+ */
+export function SketchRelationsRail({
+  canConstrain,
+  pendingConstraint,
+  selection,
+  onConstraintTool,
+  onSelectionConstraintTool
+}: SketchRelationsRailProps) {
+  const reasonId = useId();
+  return (
+    <div
+      className="sketch-relations"
+      role="toolbar"
+      aria-label="Relations"
+      aria-orientation="vertical"
+    >
+      {CONSTRAINT_TOOL_SPECS.map(({ kind, label, hint }) => {
+        const Icon = CONSTRAINT_ICONS[kind];
+        const armed = pendingConstraint?.kind === kind;
+        const fits = !selection || selection.fitting.includes(kind);
+        const reason = !canConstrain
+          ? 'Draw an entity first.'
+          : fits
+            ? null
+            : `Does not apply to a ${selection.kind}.`;
+        const named = armed || Boolean(selection && fits && canConstrain);
+        return (
+          <span key={kind} className="sketch-relation-slot">
+            {RELATION_GROUP_STARTS.has(kind) && (
+              <span className="sketch-relations-divider" aria-hidden="true" />
+            )}
+            <Tooltip label={label} description={reason ?? hint}>
+              <button
+                type="button"
+                className={`sketch-relation${armed ? ' active' : ''}`}
+                aria-pressed={armed}
+                aria-label={label}
+                aria-describedby={reason ? `${reasonId}-${kind}` : undefined}
+                // An armed relation can always be put down again.
+                disabled={reason !== null && !armed}
+                onClick={() =>
+                  selection && !armed
+                    ? onSelectionConstraintTool(kind)
+                    : onConstraintTool(armed ? null : kind)
+                }
+              >
+                <Icon size={15} aria-hidden="true" />
+                {named && (
+                  <span className="sketch-relation-name" aria-hidden="true">
+                    {label}
+                  </span>
+                )}
+                {reason && (
+                  <span id={`${reasonId}-${kind}`} className="visually-hidden">
+                    {reason}
+                  </span>
+                )}
+              </button>
+            </Tooltip>
+          </span>
+        );
+      })}
+    </div>
   );
 }

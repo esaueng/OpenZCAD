@@ -36,7 +36,7 @@
 .color-picker-hue {
   position: relative;
   height: 12px;
-  border-radius: 6px;
+  border-radius: var(--radius-lg);
   cursor: crosshair;
   touch-action: none;
   background: linear-gradient(

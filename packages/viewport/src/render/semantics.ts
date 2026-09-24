@@ -18,25 +18,25 @@
 export const SELECTION_SEMANTICS = {
   /** Nothing is pointing at it. */
   idle: {
-    edge: 0x151c26,
+    edge: 0x121519,
     /** Idle edge contrast when no shaded face sits behind the topology. */
-    wireframeEdge: 0xa9c2da,
+    wireframeEdge: 0xb0bcd4,
     edgeWidth: 1.4,
     edgeOpacity: 0.92
   },
   /** Under the pointer, not yet committed to. */
   hover: {
-    face: 0x8fc8ff,
+    face: 0x8fb0ff,
     faceOpacity: 0.3,
     /** The part of the face behind other geometry. */
     hiddenFaceOpacity: 0.1,
-    faceEmissive: 0x101d2c,
-    edge: 0xbfdcff,
+    faceEmissive: 0x10172c,
+    edge: 0xbfcfff,
     edgeWidth: 4
   },
   /** Picked, and what a command will act on. */
   selected: {
-    face: 0x4da3ff,
+    face: 0x6798ff,
     /**
      * Lowered from 0.5. A large selected face was hiding its own edges and the
      * holes through it; the rim below is already the stronger signal at width
@@ -45,7 +45,7 @@ export const SELECTION_SEMANTICS = {
     faceOpacity: 0.38,
     hiddenFaceOpacity: 0.16,
     /** Whole-body tint. See `bodyEmissive` below before reaching for it. */
-    bodyEmissive: 0x173a5e,
+    bodyEmissive: 0x17295e,
     /**
      * Every edge of a selected body, in the selection blue at a width between
      * idle and a selected edge. The emissive tint alone was too quiet: two
@@ -53,10 +53,10 @@ export const SELECTION_SEMANTICS = {
      * from most angles, so the outline carries the state instead.
      */
     bodyEdgeWidth: 2.6,
-    edge: 0x7cc0ff,
+    edge: 0x81a9ff,
     edgeWidth: 4.5,
     /** The rim of a selected face: brighter and wider than its own edges. */
-    boundary: 0xc7ebff,
+    boundary: 0xc7d6ff,
     boundaryWidth: 6
   },
   /**
@@ -68,17 +68,34 @@ export const SELECTION_SEMANTICS = {
    * the selection fill measurably dimmed the preview with it.
    */
   preview: {
-    added: 0x4da3ff,
+    added: 0x6798ff,
     addedOpacity: 0.5
   },
   /** The thing being dragged. */
   handle: {
     /** A periwinkle blue, lit by the scene rather than outlined. */
-    idle: 0x7c8cff,
+    idle: 0x5987ff,
     /** Under the pointer or in hand it deepens rather than washing out. */
-    hot: 0x4656e0,
+    hot: 0x3d68de,
     /** The value under the pointer will not build. */
     invalid: 0xf59e0b
+  },
+  /**
+   * A face offset's change, while it is being dragged. Only what the gesture
+   * changes is coloured: material it adds is green, material it removes is
+   * coral, and the arrow that measures it is drawing white, rising from a
+   * dashed ring at the face's old level.
+   */
+  change: {
+    arrow: 0xffffff,
+    oldLevel: 0xffffff,
+    add: 0x48cd8f,
+    addStripe: 0x5bc794,
+    addSeam: 0x2f8a60,
+    cut: 0xff644d,
+    cutStripe: 0xdd7362,
+    cutSeam: 0x994e42,
+    bandOpacity: 0.9
   },
   /** Shown for reference, never committable. */
   reference: {
@@ -91,8 +108,8 @@ export const SELECTION_SEMANTICS = {
     commandOpacity: 0.28,
     hoverOpacity: 0.38,
     selectedOpacity: 0.52,
-    boundaryIdle: 0x79b8ff,
-    boundaryHover: 0xaed5ff,
+    boundaryIdle: 0x7aa0ff,
+    boundaryHover: 0xaec4ff,
     boundarySelected: 0xffc45c
   },
   /** Opacity an overlay fades to when it registers without naming a target. */

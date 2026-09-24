@@ -83,18 +83,6 @@
   .workspace {
     grid-template-columns: var(--sidebar-col-w) minmax(320px, 1fr);
   }
-  /* The dock floats over the viewport here, so it claims no column — but it
-     keeps its width, and its splitter still tracks the edge it draws at. */
-  .workspace.with-assistant {
-    --assistant-col-w: min(var(--assistant-w), 100%);
-    grid-template-columns: var(--sidebar-col-w) minmax(280px, 1fr);
-  }
-  .assistant-panel {
-    position: absolute;
-    inset: 0 0 0 auto;
-    width: var(--assistant-col-w);
-    z-index: var(--z-assistant-float);
-  }
 
   /* There is no useful corner left beside a full-width inspector here. */
   .viewer-area.has-inspector .viewer-rail-stack {
@@ -153,12 +141,8 @@
     font-size: 0;
   }
 
-  /* `.workspace.with-assistant` in the 820px block outranks a bare
-     `.workspace` here, so the stacked layout has to match that specificity
-     or the sidebar keeps its column and the viewer overflows the screen.
-     The assistant is an overlay at this width, so it needs no column. */
-  .workspace,
-  .workspace.with-assistant {
+  /* The assistant floats over the viewport, so it needs no column. */
+  .workspace {
     grid-template-columns: minmax(0, 1fr);
     grid-template-rows: minmax(120px, 32%) minmax(160px, 1fr);
   }
