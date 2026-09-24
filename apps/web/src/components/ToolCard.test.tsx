@@ -216,3 +216,25 @@ describe('pending extrusion cancellation', () => {
     expect(onClose).toHaveBeenCalledOnce();
   });
 });
+
+describe('validating indicator', () => {
+  it('runs the orbit ring only while validating and keeps the glyph as-is', () => {
+    const model = {
+      icon: 'fillet' as const,
+      title: 'Edit Fillet',
+      hint: 'Checking geometry…'
+    };
+    const { container, rerender } = render(
+      <ToolCard model={{ ...model, phase: 'validating' }} onClose={vi.fn()} />
+    );
+    const icon = container.querySelector('.tool-card-icon')!;
+    expect(icon.querySelector('.tool-card-orbit')).not.toBeNull();
+    expect(icon.querySelectorAll('svg')).toHaveLength(2);
+
+    rerender(
+      <ToolCard model={{ ...model, phase: 'armed' }} onClose={vi.fn()} />
+    );
+    expect(icon.querySelector('.tool-card-orbit')).toBeNull();
+    expect(icon.querySelectorAll('svg')).toHaveLength(1);
+  });
+});
