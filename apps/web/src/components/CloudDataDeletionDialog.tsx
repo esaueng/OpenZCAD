@@ -1,3 +1,4 @@
+import { countLabel } from '../lib/toasts';
 import { useEffect, useRef, useState } from 'react';
 import { TriangleAlert } from 'lucide-react';
 import type {
@@ -53,9 +54,9 @@ function inventory(
 ): string {
   const totalBytes = preview.documentBytes + preview.revisionBytes;
   if (scope === 'profile') {
-    return `${preview.projectCount} owned cloud project(s) will be retained under a minimal anonymous ownership record.`;
+    return `${countLabel(preview.projectCount, 'owned cloud project', 'owned cloud projects')} will be retained under a minimal anonymous ownership record.`;
   }
-  return `${preview.projectCount} owned cloud project(s), ${preview.revisionCount} saved revision(s), and at least ${formatBytes(totalBytes)} of document and revision data will be deleted.`;
+  return `${countLabel(preview.projectCount, 'owned cloud project', 'owned cloud projects')}, ${countLabel(preview.revisionCount, 'saved revision', 'saved revisions')}, and at least ${formatBytes(totalBytes)} of document and revision data will be deleted.`;
 }
 
 export function CloudDataDeletionDialog({
@@ -165,8 +166,12 @@ export function CloudDataDeletionDialog({
               <p>{inventory(scope, preview)}</p>
               {preview.collaboratorCount > 0 && scope !== 'profile' ? (
                 <p>
-                  {preview.collaboratorCount} collaborator(s) will immediately
-                  lose access to projects you own.
+                  {countLabel(
+                    preview.collaboratorCount,
+                    'collaborator',
+                    'collaborators'
+                  )}{' '}
+                  will immediately lose access to projects you own.
                 </p>
               ) : null}
               <p>
