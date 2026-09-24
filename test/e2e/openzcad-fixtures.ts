@@ -47,7 +47,8 @@ export async function stubApi(
     assistantEnabled = false,
     collaborationRole,
     workspaceTour = false,
-    modelDrawer = true
+    modelDrawer = true,
+    commandFoldClosed = false
   }: {
     assistantEnabled?: boolean;
     collaborationRole?: 'owner' | 'editor' | 'viewer';
@@ -67,6 +68,14 @@ export async function stubApi(
      * coverage.
      */
     workspaceTour?: boolean;
+    /**
+     * The command card's "More tools" fold is closed for a fresh device, so
+     * only the tools for the current pick have a button. The specs reach
+     * every tool by name from whatever is selected, so the suite's baseline
+     * is the fold as someone who works from the grid left it: open. A spec
+     * about the fold itself opts out.
+     */
+    commandFoldClosed?: boolean;
   } = {}
 ) {
   if (!workspaceTour) {
@@ -74,6 +83,9 @@ export async function stubApi(
   }
   if (modelDrawer) {
     await seedOpenModelDrawer(page);
+  }
+  if (!commandFoldClosed) {
+    await seedOpenCommandFold(page);
   }
   const settings = structuredClone(DEFAULT_APP_SETTINGS);
   settings.assistant.enabled = assistantEnabled;
@@ -353,6 +365,7 @@ export async function stubApi(
 export async function stubAnonymousApi(page: Page) {
   await seedDismissedWorkspaceTour(page);
   await seedOpenModelDrawer(page);
+  await seedOpenCommandFold(page);
   await page.route('**/api/auth/config', (route) =>
     route.fulfill({
       json: {
@@ -926,6 +939,28 @@ export async function seedOpenModelDrawer(page: Page) {
         : {};
       if (typeof state.drawerOpen !== 'boolean') {
         state.drawerOpen = true;
+        window.localStorage.setItem(key, JSON.stringify(state));
+      }
+    } catch {
+      // Unreadable storage falls back to the app's own defaults.
+    }
+  });
+}
+
+/**
+ * Opens the command card's "More tools" fold the way a returning user left
+ * it, unless the spec has already said otherwise.
+ */
+export async function seedOpenCommandFold(page: Page) {
+  await page.addInitScript(() => {
+    const key = 'openzcad-panel-state:v1';
+    try {
+      const raw = window.localStorage.getItem(key);
+      const state: Record<string, unknown> = raw
+        ? (JSON.parse(raw) as Record<string, unknown>)
+        : {};
+      if (typeof state.commandFoldOpen !== 'boolean') {
+        state.commandFoldOpen = true;
         window.localStorage.setItem(key, JSON.stringify(state));
       }
     } catch {

@@ -1,6 +1,7 @@
 import { test, expect, type Locator, type Page } from '@playwright/test';
 import {
   seedDismissedWorkspaceTour,
+  seedOpenCommandFold,
   seedOpenModelDrawer
 } from './openzcad-fixtures';
 import { createProjectDocument } from '@openzcad/document-core';
@@ -48,6 +49,7 @@ function lineAngleDegrees(state: LiveSketchState): number {
 async function stubApi(page: Page) {
   await seedDismissedWorkspaceTour(page);
   await seedOpenModelDrawer(page);
+  await seedOpenCommandFold(page);
   await page.route('**/api/health', (route) =>
     route.fulfill({
       json: {

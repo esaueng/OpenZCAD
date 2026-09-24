@@ -74,6 +74,18 @@ describe('workspace panel state', () => {
     expect(normalizePanelState({ drawerOpen: 'yes' }).drawerOpen).toBe(false);
   });
 
+  it('keeps the command card fold closed until it is opened', () => {
+    expect(defaultPanelState().commandFoldOpen).toBe(false);
+    expect(normalizePanelState({ commandFoldOpen: true }).commandFoldOpen).toBe(
+      true
+    );
+    expect(
+      normalizePanelState({ commandFoldOpen: 'open' }).commandFoldOpen
+    ).toBe(false);
+    savePanelState({ ...defaultPanelState(), commandFoldOpen: true });
+    expect(loadPanelState().commandFoldOpen).toBe(true);
+  });
+
   it('toggles one section without touching the others', () => {
     const collapsed = toggleSidebarSection(defaultPanelState(), 'history');
     expect(collapsed.sidebarSections.history).toBe(false);
