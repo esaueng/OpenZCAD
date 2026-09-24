@@ -13,7 +13,6 @@
 .icon-button,
 .topbar-action,
 .settings-back-action,
-.tool-tile,
 .rail-button,
 .rail-views-panel button,
 .feature-row-main,
@@ -44,7 +43,6 @@
 .primary:active:not(:disabled),
 .secondary:active:not(:disabled),
 .icon-button:active:not(:disabled),
-.tool-tile:active:not(:disabled),
 .rail-views-panel button:active:not(:disabled),
 .context-menu-item:active:not(:disabled),
 .assistant-card-actions button:active:not(:disabled) {
@@ -53,8 +51,7 @@
 
 .primary:not(:disabled),
 .secondary:not(:disabled),
-.icon-button:not(:disabled),
-.tool-tile:not(:disabled) {
+.icon-button:not(:disabled) {
   cursor: pointer;
 }
 
@@ -89,24 +86,6 @@ textarea {
     opacity var(--dur-fast) var(--ease-out),
     color var(--dur-fast) var(--ease-out),
     background-color var(--dur-fast) var(--ease-out);
-}
-
-/* Tool palette: the active tool glows in, icons tint on hover. */
-.tool-tile svg {
-  transition:
-    color var(--dur-fast) var(--ease-out),
-    transform var(--dur-fast) var(--ease-out);
-}
-
-.tool-tile:hover:not(:disabled) svg {
-  transform: translateX(1px);
-}
-
-.tool-tile.active {
-  transition:
-    background-color var(--dur-base) var(--ease-out),
-    color var(--dur-fast) var(--ease-out),
-    border-color var(--dur-base) var(--ease-out);
 }
 
 @keyframes oz-rise {
