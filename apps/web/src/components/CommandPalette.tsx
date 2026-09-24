@@ -1,6 +1,6 @@
 import { useEffect, useMemo, useRef, useState, type ReactNode } from 'react';
 import { platformShortcutLabel } from '../lib/platformShortcut';
-import { Search } from 'lucide-react';
+import { MessageSquare, Search } from 'lucide-react';
 import { useModalFocus } from '../lib/useModalFocus';
 
 const LIST_ID = 'command-palette-list';
@@ -23,6 +23,12 @@ export interface PaletteCommand {
 interface CommandPaletteProps {
   commands: PaletteCommand[];
   onClose(): void;
+  /**
+   * Sends the typed text to the assistant. Present, the list ends with an
+   * Ask row for whatever is typed, so search and asking are one entry point:
+   * Enter on a command runs it, Enter on the Ask row asks.
+   */
+  onAsk?(question: string): void;
 }
 
 function wordStartsWith(value: string, token: string): boolean {
@@ -87,7 +93,11 @@ function rankedCommands(
  * Ctrl+K launcher over every workspace command. Type to filter, arrows to
  * move, Enter to run.
  */
-export function CommandPalette({ commands, onClose }: CommandPaletteProps) {
+export function CommandPalette({
+  commands,
+  onClose,
+  onAsk
+}: CommandPaletteProps) {
   const [query, setQuery] = useState('');
   const [activeIndex, setActiveIndex] = useState(0);
   const listRef = useRef<HTMLDivElement | null>(null);
@@ -99,9 +109,26 @@ export function CommandPalette({ commands, onClose }: CommandPaletteProps) {
   // after it has already unmounted.
   useModalFocus(dialogRef, { autoFocus: true, initialFocusRef: searchRef });
 
-  const visible = useMemo(
+  const matches = useMemo(
     () => rankedCommands(commands, query),
     [commands, query]
+  );
+  const question = query.trim();
+  const visible = useMemo<PaletteCommand[]>(
+    () =>
+      onAsk && question
+        ? [
+            ...matches,
+            {
+              id: 'ask-assistant',
+              label: `Ask the assistant: “${question}”`,
+              group: 'Ask',
+              icon: <MessageSquare size={14} aria-hidden="true" />,
+              run: () => onAsk(question)
+            }
+          ]
+        : matches,
+    [matches, onAsk, question]
   );
   // View mode hands the palette no modeling commands, so the examples have to
   // follow — a hint naming tools the list does not contain reads as a bug.
@@ -149,7 +176,11 @@ export function CommandPalette({ commands, onClose }: CommandPaletteProps) {
           <input
             ref={searchRef}
             value={query}
-            placeholder={`Type a command… (${examples})`}
+            placeholder={
+              onAsk
+                ? `Type a command or a question… (${examples})`
+                : `Type a command… (${examples})`
+            }
             spellCheck={false}
             aria-label="Search commands"
             aria-controls={LIST_ID}
@@ -177,8 +208,12 @@ export function CommandPalette({ commands, onClose }: CommandPaletteProps) {
           />
         </div>
         <div className="palette-list" id={LIST_ID} role="listbox" ref={listRef}>
-          {visible.length === 0 && (
-            <p className="palette-empty">No matching command.</p>
+          {matches.length === 0 && (
+            <p className="palette-empty">
+              {onAsk && question
+                ? 'No matching command. Enter asks the assistant.'
+                : 'No matching command.'}
+            </p>
           )}
           {visible.map((command, index) => (
             <button

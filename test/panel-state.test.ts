@@ -7,6 +7,7 @@ import {
   PANEL_STATE_STORAGE_KEY,
   savePanelState,
   SIDEBAR_SECTION_IDS,
+  toggleDrawerSection,
   toggleSidebarSection,
   toggleToolGroup
 } from '../apps/web/src/lib/panelState';
@@ -41,6 +42,36 @@ describe('workspace panel state', () => {
     first.sidebarSections.history = false;
     expect(defaultPanelState().sidebarSections.history).toBe(true);
     expect(DEFAULT_PANEL_STATE.sidebarSections.history).toBe(true);
+  });
+
+  it('keeps the model drawer closed until a rail button opens it', () => {
+    // The quiet stage opens on the model; the drawer is on demand.
+    expect(defaultPanelState().drawerOpen).toBe(false);
+    const history = toggleDrawerSection(defaultPanelState(), 'history');
+    expect(history.drawerOpen).toBe(true);
+    // The named section gets the drawer's height; the other two fold, and
+    // the ones the rail does not name keep what the user left them at.
+    expect(history.sidebarSections).toMatchObject({
+      history: true,
+      parameters: false,
+      bodies: false,
+      revisions: true,
+      diagnostics: true
+    });
+    // The same button again closes the drawer without refolding anything.
+    const closed = toggleDrawerSection(history, 'history');
+    expect(closed.drawerOpen).toBe(false);
+    expect(closed.sidebarSections).toEqual(history.sidebarSections);
+    // Another button on an open drawer switches the section instead.
+    const parameters = toggleDrawerSection(history, 'parameters');
+    expect(parameters.drawerOpen).toBe(true);
+    expect(parameters.sidebarSections.parameters).toBe(true);
+    expect(parameters.sidebarSections.history).toBe(false);
+  });
+
+  it('remembers the drawer across reloads', () => {
+    expect(normalizePanelState({ drawerOpen: true }).drawerOpen).toBe(true);
+    expect(normalizePanelState({ drawerOpen: 'yes' }).drawerOpen).toBe(false);
   });
 
   it('toggles one section without touching the others', () => {
