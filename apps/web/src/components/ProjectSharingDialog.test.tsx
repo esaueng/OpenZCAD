@@ -270,6 +270,7 @@ describe('ProjectSharingDialog', () => {
   it('mints a share link shown once, copies it, and revokes active links', async () => {
     const base = createProjectDocument('Share links', owner);
     const links = shareLinkClient();
+    const beforeCreate = vi.fn(async () => undefined);
     const writeText = vi.fn(async () => undefined);
     vi.spyOn(navigator.clipboard, 'writeText').mockImplementation(writeText);
     const user = userEvent.setup();
@@ -281,6 +282,7 @@ describe('ProjectSharingDialog', () => {
         lease={null}
         client={client()}
         shareLinkClient={links}
+        onBeforeCreateShareLink={beforeCreate}
         onClose={vi.fn()}
       />
     );
@@ -299,6 +301,7 @@ describe('ProjectSharingDialog', () => {
         'tweak'
       )
     );
+    expect(beforeCreate).toHaveBeenCalledOnce();
     const url = screen.getByLabelText('Share link');
     expect(url).toHaveValue(`${location.origin}/#share=${'a'.repeat(43)}`);
     await user.click(screen.getByRole('button', { name: 'Copy' }));
@@ -321,6 +324,55 @@ describe('ProjectSharingDialog', () => {
     );
     expect(await screen.findByText('No active share links.')).toBeVisible();
     expect(screen.queryByLabelText('Share link')).not.toBeInTheDocument();
+  });
+
+  it('blocks a new link while a STEP source exists only on this device', async () => {
+    const base = createProjectDocument('Local source', owner);
+    const links = shareLinkClient();
+    render(
+      <ProjectSharingDialog
+        projectId={base.projectId}
+        role="owner"
+        collaborationStatus="live"
+        lease={null}
+        localImportSourceNames={['synthetic.step']}
+        client={client()}
+        shareLinkClient={links}
+        onClose={vi.fn()}
+      />
+    );
+    expect(
+      await screen.findByText(/Save the source files for synthetic.step/)
+    ).toBeVisible();
+    expect(screen.getByRole('button', { name: 'Create link' })).toBeDisabled();
+    expect(links.createProjectShareLink).not.toHaveBeenCalled();
+  });
+
+  it('does not issue a link if the account copy cannot be brought current', async () => {
+    const base = createProjectDocument('Unsynced', owner);
+    const links = shareLinkClient();
+    const user = userEvent.setup();
+    render(
+      <ProjectSharingDialog
+        projectId={base.projectId}
+        role="owner"
+        collaborationStatus="live"
+        lease={null}
+        client={client()}
+        shareLinkClient={links}
+        onBeforeCreateShareLink={async () => {
+          throw new Error('Save this project before creating a link.');
+        }}
+        onClose={vi.fn()}
+      />
+    );
+    await user.click(
+      await screen.findByRole('button', { name: 'Create link' })
+    );
+    expect(
+      await screen.findByText('Save this project before creating a link.')
+    ).toBeVisible();
+    expect(links.createProjectShareLink).not.toHaveBeenCalled();
   });
 
   it('keeps editor assignment unavailable when lease enforcement is off', async () => {
