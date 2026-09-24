@@ -624,7 +624,8 @@
 }
 
 .viewport-dock-filter,
-.viewport-dock-snap {
+.viewport-dock-snap,
+.viewport-dock-grid {
   display: inline-flex;
   align-items: center;
   height: 26px;
@@ -635,6 +636,11 @@
   border-radius: var(--radius-sm);
   font-size: var(--fs-mini);
   white-space: nowrap;
+}
+
+/* `display: inline-flex` above would otherwise override `hidden`. */
+.viewport-dock-grid[hidden] {
+  display: none;
 }
 
 .viewport-dock-filter.automatic {
@@ -774,9 +780,9 @@
   bottom: 4px;
 }
 
-/* The sketch grid readout used to sit on the orientation cube: both were
-   pinned to the bottom-right corner. It moves to the bottom-left, beside
-   the column, where nothing else lives in sketch mode. */
+/* The floating sketch grid label is only the fallback now: with the dock up,
+   the spacing is a dock segment (ViewportGridReadout). Pinned bottom-left it
+   sat on the dock's first buttons wherever the dock outgrew its lane. */
 .workspace.column-layout .sketch-grid-indicator {
   right: auto;
   left: calc(var(--column-w) + 12px);
