@@ -273,17 +273,12 @@
 /* ── The parts rail ──────────────────────────────────────── */
 
 /*
-  Floats top-left over the viewport, where Build mode keeps its tool palette.
-  Capped short of the view bar so the two never meet on a short window; the
-  list scrolls inside that cap rather than the rail growing past it.
+  The parts list is a flyout beside the mode's rail (quiet-stage.css places
+  it). The list scrolls inside its cap rather than the island growing past it.
 */
 .view-mode-rail {
-  position: absolute;
-  top: 10px;
-  left: 10px;
-  z-index: var(--z-viewer-overlay);
-  width: 208px;
-  max-height: calc(100% - 68px);
+  width: 232px;
+  max-height: calc(100vh - var(--stage-top) - var(--island-gap) * 2);
   display: flex;
   flex-direction: column;
   background: var(--color-surface);
@@ -313,24 +308,6 @@
   color: var(--color-text-subtle);
   font-family: var(--font-mono);
   font-size: var(--fs-mini);
-}
-
-.view-mode-rail-collapse {
-  width: 22px;
-  height: 22px;
-  margin-left: auto;
-  display: inline-grid;
-  place-items: center;
-  color: var(--color-text-muted);
-  background: none;
-  border: 0;
-  border-radius: var(--radius-sm);
-  cursor: pointer;
-}
-
-.view-mode-rail-collapse:hover {
-  color: var(--color-text);
-  background: var(--color-surface-hover);
 }
 
 .view-mode-rail-list {
@@ -457,26 +434,6 @@
 .view-mode-rail-foot button:hover {
   color: var(--color-accent-hi);
   text-decoration: underline;
-}
-
-.view-mode-rail-launcher {
-  position: absolute;
-  top: 10px;
-  left: 10px;
-  z-index: var(--z-viewer-overlay);
-  min-height: 28px;
-  display: inline-flex;
-  align-items: center;
-  gap: 6px;
-  padding: 0 9px;
-  color: var(--color-text-muted);
-  background: var(--color-surface);
-  border: var(--border-thin);
-  border-radius: var(--radius-md);
-  font: inherit;
-  font-size: var(--fs-sm);
-  font-variant-numeric: tabular-nums;
-  cursor: pointer;
 }
 
 .view-mode-rail-launcher:hover {
@@ -944,12 +901,12 @@
    direct-mode strip centres its float with translateX(-50%), which an
    animated transform on the float itself would throw away. */
 .workspace-column-float > :is(.workspace-column, .tweak-rail),
-.view-mode-rail,
-.view-mode-rail-launcher {
+.view-rail {
   animation: mode-in-left var(--dur-base) var(--ease-out);
 }
 
-.instrument-rail {
+.instrument-rail,
+.palette-float > .view-mode-bar {
   animation: mode-in-right var(--dur-base) var(--ease-out);
 }
 
