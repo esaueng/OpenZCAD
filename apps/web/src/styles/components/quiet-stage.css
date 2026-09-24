@@ -355,25 +355,95 @@
   display: none;
 }
 
-/* The toast, the selection chip and the activity pill stand on the bar. */
+/* ── The notice lane ──
+   Everything that talks above the search bar shares one centred lane,
+   stacked from the bar up: the selection chip, then the status row (the
+   status toast, the activity pill or, failing both, the guidance hint),
+   then the action toast (Undo). Each row that is showing lifts the rows
+   above it. The rows used to carry fixed offsets of their own, so the Undo
+   toast, the status toast and the chip landed on the same pixels whenever
+   two of them were up at once. */
+.workspace.column-layout {
+  /* The lane's foot, 8px over the search bar, and its sides: the bottom
+     lanes' own insets, which the tour card below can narrow. */
+  --lane-base: calc(var(--island-gap) + var(--command-bar-h) + 8px);
+  --notice-start: var(--lane-inset);
+  --notice-end: var(--lane-right);
+}
+
+.viewer-area {
+  --lane-chip: 0px;
+  --lane-status: 0px;
+}
+
+/* The chip is 24px tall: its row leaves 12px under the row above. */
+.workspace.column-layout .viewer-area:has(.selection-chip) {
+  --lane-chip: 36px;
+}
+
+/* The status row holds a 28px toast, a 32px pill or the one-line hint.
+   The hint only draws while no status is live, and the chip, which names
+   the selection where the hint would be, hides it. */
+.viewer-area:has(.workspace-toast:not(.hidden)),
+.viewer-area:has(.activity-pill),
+.viewer-area:not(:has(.selection-chip)):has(.workspace-hint) {
+  --lane-status: 40px;
+}
+
+/* The pill has the status row while it is up; the hint waits. */
+.viewer-area:has(.activity-pill) .workspace-hint {
+  display: none;
+}
+
+/* A settled status only repeats what the action toast has just said
+   ("Deleted Boss bore." under "Deleted Boss bore · Undo"), so it steps aside
+   and its message stays in the activity log. A running or warning status is
+   news of its own and keeps its row under the toast. */
+.viewer-area:has(.toast:not(.closing)):has(
+    .workspace-toast.ready:not(.hidden)
+  ):not(:has(.activity-pill)) {
+  --lane-status: 0px;
+}
+
+.viewer-area:has(.toast:not(.closing)) .workspace-toast.ready,
+.viewer-area:has(.toast:not(.closing))
+  .workspace-toast.ready
+  .workspace-toast-body {
+  opacity: 0;
+  pointer-events: none;
+}
+
+/* The status toast and the activity lane span the lane; the chip and the
+   Undo toast (viewer.css) centre on it. */
 .workspace-toast,
 .activity-lane {
-  left: var(--lane-inset);
-  right: var(--lane-right);
-  bottom: calc(var(--island-gap) + var(--command-bar-h) + 8px);
+  left: var(--notice-start);
+  right: var(--notice-end);
+  bottom: calc(var(--lane-base) + var(--lane-chip));
 }
 
 .workspace.column-layout .selection-chip {
-  bottom: calc(var(--island-gap) + var(--command-bar-h) + 8px);
+  bottom: var(--lane-base);
+  left: calc((var(--notice-start) + 100% - var(--notice-end)) / 2);
 }
 
-.workspace.column-layout .viewer-area:has(.selection-chip) .workspace-toast,
-.workspace.column-layout .viewer-area:has(.selection-chip) .activity-lane {
-  bottom: calc(var(--island-gap) + var(--command-bar-h) + 44px);
+/* The first-run tour card sits in the lane's bottom-left corner, 296px wide,
+   and hid the chip, the status toast and the Undo toast's start behind it.
+   Where the viewport has the room, the notice rows start after the card;
+   where it does not, the card lifts above the tallest stack the lane can
+   build (56 base + 36 chip + 40 status + 34 toast, and 14 to spare). */
+@container viewer-area (min-width: 1240px) {
+  .workspace.column-layout
+    .viewer-area:has(.workspace-tour)
+    :is(.workspace-toast, .activity-lane, .toast, .selection-chip) {
+    --notice-start: calc(var(--lane-inset) + 296px + 12px);
+  }
 }
 
-.workspace.column-layout .toast {
-  bottom: calc(var(--island-gap) + var(--command-bar-h) + 44px);
+@container viewer-area (max-width: 1239px) {
+  .workspace.column-layout .workspace-tour {
+    bottom: 180px;
+  }
 }
 
 /* ── Floating cards under the top islands ────────────────── */

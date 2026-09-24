@@ -530,15 +530,9 @@
   pointer-events: none;
 }
 
-/* The selection chip sits on the dock's shoulder, and the toast steps up
-   over it while it is there, so neither covers the dock's buttons. */
-.workspace.column-layout .selection-chip {
-  bottom: 56px;
-}
-
-.workspace.column-layout .viewer-area:has(.selection-chip) .workspace-toast {
-  bottom: 92px;
-}
+/* Where the toast, the selection chip and the Undo toast stand is the notice
+   lane's business (quiet-stage.css): one stack on the search bar, not a
+   fixed offset per state. */
 
 .workspace-toast-body {
   display: inline-flex;
