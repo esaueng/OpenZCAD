@@ -117,32 +117,34 @@ export function FeatureHistoryPanel({
               deletion or edit this feature's references.
             </p>
           )}
-          <details open>
-            <summary>
-              Uses {parents.length} earlier{' '}
-              {parents.length === 1 ? 'feature' : 'features'}
-            </summary>
-            {parents.length ? (
-              <ul>{parents.map(link)}</ul>
-            ) : (
-              <p className="muted">
-                {missing.length
-                  ? 'Earlier inputs could not be resolved.'
-                  : 'No earlier geometry dependencies.'}
-              </p>
-            )}
-          </details>
-          <details open>
-            <summary>
-              Affects {downstream.length} later{' '}
-              {downstream.length === 1 ? 'feature' : 'features'}
-            </summary>
-            {downstream.length ? (
+          {/* An empty disclosure said it twice: "Uses 0 earlier features"
+              over "No earlier geometry dependencies." One line instead. */}
+          {parents.length === 0 && missing.length === 0 ? (
+            <p className="muted">No earlier features feed this one.</p>
+          ) : (
+            <details open>
+              <summary>
+                Uses {parents.length} earlier{' '}
+                {parents.length === 1 ? 'feature' : 'features'}
+              </summary>
+              {parents.length ? (
+                <ul>{parents.map(link)}</ul>
+              ) : (
+                <p className="muted">Earlier inputs could not be resolved.</p>
+              )}
+            </details>
+          )}
+          {downstream.length === 0 ? (
+            <p className="muted">Nothing later depends on it.</p>
+          ) : (
+            <details open>
+              <summary>
+                Affects {downstream.length} later{' '}
+                {downstream.length === 1 ? 'feature' : 'features'}
+              </summary>
               <ul>{downstream.map(link)}</ul>
-            ) : (
-              <p className="muted">No later geometry dependencies.</p>
-            )}
-          </details>
+            </details>
+          )}
           {downstream.length > 0 && (
             <p className="muted">
               Deleting or suppressing this feature can break these later

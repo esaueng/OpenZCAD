@@ -806,7 +806,9 @@ test('extrudes and edits one of multiple closed sketch regions', async ({
         })
     );
   const circleTool = sketchTools.getByRole('button', { name: /^Circle/ });
-  const gridReadout = page.locator('.sketch-grid-indicator');
+  // The dock's grid segment; the floating HUD label only stands in when no
+  // dock is up. Both are written from the same render pass.
+  const gridReadout = page.locator('.viewport-dock-grid');
   for (const [index, center] of centers.entries()) {
     await circleTool.click();
     // The rail button is React state and flips first; the viewport only owns

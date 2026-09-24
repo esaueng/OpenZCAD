@@ -1,4 +1,5 @@
 import { useEffect, useMemo, useRef, useState, type ReactNode } from 'react';
+import { platformShortcutLabel } from '../lib/platformShortcut';
 import { MessageSquare, Search } from 'lucide-react';
 import { useModalFocus } from '../lib/useModalFocus';
 
@@ -10,7 +11,7 @@ export interface PaletteCommand {
   label: string;
   /** Group caption shown right-aligned (e.g. "Tool", "View", "File"). */
   group: string;
-  /** Additional search terms reserved for command-specific aliases. */
+  /** Aliases a search matches as strongly as a word inside the label. */
   keywords?: string[];
   shortcut?: string;
   icon?: ReactNode;
@@ -43,6 +44,13 @@ function tokenScore(command: PaletteCommand, token: string): number {
     return 3;
   }
   if (label.includes(token)) {
+    return 2;
+  }
+  // Declared on commands long before anything read them: "laser" never
+  // found the DXF outline export its keywords name.
+  if (
+    command.keywords?.some((keyword) => keyword.toLowerCase().startsWith(token))
+  ) {
     return 2;
   }
   return wordStartsWith(command.group.toLowerCase(), token) ? 1 : 0;
@@ -234,7 +242,9 @@ export function CommandPalette({
               ) : (
                 <small className="palette-group">{command.group}</small>
               )}
-              {command.shortcut && <kbd>{command.shortcut}</kbd>}
+              {command.shortcut && (
+                <kbd>{platformShortcutLabel(command.shortcut)}</kbd>
+              )}
             </button>
           ))}
         </div>
