@@ -207,6 +207,7 @@ const PROJECT_SHARE_LINK_ROUTE =
   /^\/api\/projects\/([^/]+)\/share-links\/([^/]+)$/;
 const SHARED_PROJECT_ROUTE = /^\/api\/share\/([^/]+)$/;
 const SHARED_PROJECT_ASSET_ROUTE = /^\/api\/share\/([^/]+)\/assets\/([^/]+)$/;
+const SHARED_PROJECT_SOURCE_ROUTE = /^\/api\/share\/([^/]+)\/sources\/([^/]+)$/;
 const INVITATION_ACCEPT_ROUTE = '/api/project-invitations/accept';
 const PROJECT_ARTIFACTS_ROUTE = /^\/api\/projects\/([^/]+)\/artifacts$/;
 const UPLOAD_CONTENT_ROUTE = /^\/api\/uploads\/([^/]+)\/content$/;
@@ -541,9 +542,10 @@ async function handleApiRequest(request: Request, env: Env): Promise<Response> {
   // revoked tokens all collapse into one opaque 404.
   const sharedProjectMatch = SHARED_PROJECT_ROUTE.exec(pathname);
   const sharedProjectAssetMatch = SHARED_PROJECT_ASSET_ROUTE.exec(pathname);
+  const sharedProjectSourceMatch = SHARED_PROJECT_SOURCE_ROUTE.exec(pathname);
   if (
     request.method === 'GET' &&
-    (sharedProjectMatch || sharedProjectAssetMatch)
+    (sharedProjectMatch || sharedProjectAssetMatch || sharedProjectSourceMatch)
   ) {
     const sharedNotFound = () => json({ error: 'Share link not found.' }, 404);
     // The sharing flag has to reach this route too, or turning it off would
@@ -557,13 +559,34 @@ async function handleApiRequest(request: Request, env: Env): Promise<Response> {
       return sharedNotFound();
     }
     const token = parseShareLinkToken(
-      (sharedProjectAssetMatch ?? sharedProjectMatch)![1]!
+      (sharedProjectSourceMatch ??
+        sharedProjectAssetMatch ??
+        sharedProjectMatch)![1]!
     );
     if (!token) {
       return sharedNotFound();
     }
     const sharedPersistence = createPersistenceService(env);
     const tokenHash = await hashProjectInvitationToken(token);
+    if (sharedProjectSourceMatch) {
+      const source = await sharedPersistence.loadSharedProjectImportSource(
+        tokenHash,
+        sharedProjectSourceMatch[2]!
+      );
+      if (!source) {
+        return sharedNotFound();
+      }
+      return new Response(source.body, {
+        headers: {
+          'content-type': source.contentType,
+          ...(source.bytes !== undefined
+            ? { 'content-length': String(source.bytes) }
+            : {}),
+          'cache-control': 'no-store',
+          'x-content-type-options': 'nosniff'
+        }
+      });
+    }
     if (sharedProjectAssetMatch) {
       const asset = await sharedPersistence.loadSharedProjectAsset(
         tokenHash,
