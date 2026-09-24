@@ -193,28 +193,14 @@ export function resolveImportedBlendFace(
   source: FaceTopology,
   directEditFeatureId?: string
 ): FaceTopology | null {
-  if (directEditFeatureId) {
-    const lineageMatches = faces.filter(
-      (face) =>
-        face.geometry?.featureType === 'blend' &&
-        face.geometry.blendRadius !== undefined &&
-        face.reference?.lineageName === 'direct-edit.resize-blend.band' &&
-        (String(face.reference.producingFeatureId) === directEditFeatureId ||
-          source.reference?.lineageName === 'direct-edit.resize-blend.band')
-    );
-    if (lineageMatches.length === 1) {
-      return lineageMatches[0]!;
-    }
-  }
   const snapshot = importedBlendSnapshot(source);
-  if (!snapshot) {
-    return null;
-  }
-  const tolerance = Math.max(snapshot.radius * 1e-5, 1e-6);
-  const matches = faces.filter((face) => {
+  const carrierMatches = (face: FaceTopology): boolean => {
     const candidate = importedBlendSnapshot(face);
+    if (!snapshot || !candidate || candidate.surfaceClass !== snapshot.surfaceClass) {
+      return false;
+    }
+    const tolerance = Math.max(snapshot.radius * 1e-5, 1e-6);
     return (
-      candidate?.surfaceClass === snapshot.surfaceClass &&
       (snapshot.surfaceClass === 'torus'
         ? length(subtract(candidate.center, snapshot.center)) <= tolerance
         : distanceToAxis(candidate.center, snapshot.center, snapshot.axis) <=
@@ -223,7 +209,31 @@ export function resolveImportedBlendFace(
             tolerance) &&
       Math.abs(dot(candidate.axis, snapshot.axis)) >= 1 - 1e-6
     );
-  });
+  };
+  if (directEditFeatureId) {
+    const lineageMatches = faces.filter(
+      (face) =>
+        face.geometry?.featureType === 'blend' &&
+        face.geometry.blendRadius !== undefined &&
+        (face.reference?.lineageName === 'direct-edit.resize-blend.band' ||
+          face.reference?.lineageName?.startsWith(
+            'direct-edit.resize-blend.band.'
+          )) &&
+        (String(face.reference.producingFeatureId) === directEditFeatureId ||
+          source.reference?.lineageName === face.reference.lineageName)
+    );
+    const carrierLineageMatches = lineageMatches.filter(carrierMatches);
+    if (carrierLineageMatches.length === 1) {
+      return carrierLineageMatches[0]!;
+    }
+    if (lineageMatches.length === 1) {
+      return lineageMatches[0]!;
+    }
+  }
+  if (!snapshot) {
+    return null;
+  }
+  const matches = faces.filter(carrierMatches);
   return matches.length === 1 ? matches[0]! : null;
 }
 

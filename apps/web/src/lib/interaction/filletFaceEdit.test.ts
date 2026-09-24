@@ -103,6 +103,107 @@ describe('fillet face editing', () => {
     ).toBeNull();
   });
 
+  it('uses the exact carrier when one direct edit produces several bands', () => {
+    const source = blendFace('source', point(0, 0, 0), 10);
+    const first = {
+      ...blendFace('direct-edit.resize-blend.band.import.step.face.a', point(0, 0, 0), 99),
+      reference: {
+        ...blendFace('first-reference', point(0, 0, 0)).reference!,
+        producingFeatureId: toFeatureId('direct-edit-feature'),
+        lineageName: 'direct-edit.resize-blend.band.import.step.face.a'
+      },
+      geometry: {
+        ...blendFace('first', point(0, 0, 0)).geometry!,
+        blendRadius: 3,
+        radius: 3
+      }
+    };
+    const second = {
+      ...blendFace('direct-edit.resize-blend.band.import.step.face.b', point(100, 0, 0), 100),
+      reference: {
+        ...blendFace('second-reference', point(100, 0, 0)).reference!,
+        producingFeatureId: toFeatureId('direct-edit-feature'),
+        lineageName: 'direct-edit.resize-blend.band.import.step.face.b'
+      },
+      geometry: {
+        ...blendFace('second', point(100, 0, 0)).geometry!,
+        blendRadius: 3,
+        radius: 3,
+        axisStart: point(100, 0, -5),
+        axisEnd: point(100, 0, 5)
+      }
+    };
+    expect(
+      resolveImportedBlendFace(
+        [first, second],
+        source,
+        toFeatureId('direct-edit-feature')
+      )
+    ).toBe(first);
+  });
+
+  it('retains a single authoritative band when its cylinder axis moves', () => {
+    const source = blendFace('source', point(0, 0, 0), 10);
+    const moved = {
+      ...blendFace('moved', point(10, 0, 0), 99),
+      reference: {
+        ...blendFace('moved-reference', point(10, 0, 0)).reference!,
+        producingFeatureId: toFeatureId('direct-edit-feature'),
+        lineageName: 'direct-edit.resize-blend.band.import.step.face.a'
+      },
+      geometry: {
+        ...blendFace('moved-geometry', point(10, 0, 0)).geometry!,
+        blendRadius: 3,
+        radius: 3,
+        axisStart: point(10, 0, -5),
+        axisEnd: point(10, 0, 5)
+      }
+    };
+    expect(
+      resolveImportedBlendFace(
+        [moved],
+        source,
+        toFeatureId('direct-edit-feature')
+      )
+    ).toBe(moved);
+  });
+
+  it('refuses ambiguous shifted bands and malformed direct-edit names', () => {
+    const source = blendFace('source', point(0, 0, 0), 10);
+    const shifted = (x: number, lineageName: string): FaceTopology => ({
+      ...blendFace(`shifted-${x}`, point(x, 0, 0), x),
+      reference: {
+        ...blendFace(`shifted-reference-${x}`, point(x, 0, 0)).reference!,
+        producingFeatureId: toFeatureId('direct-edit-feature'),
+        lineageName
+      },
+      geometry: {
+        ...blendFace(`shifted-geometry-${x}`, point(x, 0, 0)).geometry!,
+        blendRadius: 3,
+        radius: 3,
+        axisStart: point(x, 0, -5),
+        axisEnd: point(x, 0, 5)
+      }
+    });
+    expect(
+      resolveImportedBlendFace(
+        [
+          shifted(10, 'direct-edit.resize-blend.band.a'),
+          shifted(20, 'direct-edit.resize-blend.band.b')
+        ],
+        source,
+        toFeatureId('direct-edit-feature')
+      )
+    ).toBeNull();
+    expect(
+      resolveImportedBlendFace(
+        [shifted(10, 'direct-edit.resize-blend.bandX.a')],
+        source,
+        toFeatureId('direct-edit-feature')
+      )
+    ).toBeNull();
+  });
+
   it('arms only a blend whose lineage resolves to a fillet feature', () => {
     const base = addPrimitiveFeature(
       createProjectDocument('Fillet edit', toUserId('user_fillet_edit')),
