@@ -331,6 +331,7 @@ import {
   clearProjectShareFragment
 } from './lib/projectShareLink';
 import { fetchSharedProject } from './lib/projectShareClient';
+import { preloadSharedImportSources } from './lib/exactSourceResolver';
 import type {
   ExportProgress,
   MeshExportDialogFormat
@@ -7589,9 +7590,9 @@ export function App() {
 
   /**
    * Opens a `#share=` link: fetches the shared snapshot anonymously and
-   * hydrates it as a session-local document. Nothing is remembered and
-   * nothing is stored — reloading the link re-fetches the owner's current
-   * model, and Make a copy below is how the visitor keeps anything.
+   * verifies its exact import sources, then hydrates it as a session-local
+   * document. Reloading re-fetches the owner's current model; Make a copy is
+   * how the visitor keeps a project. Source bytes use the local rebuild cache.
    */
   useEffect(() => {
     if (!pendingShareToken || shareOpenAttemptRef.current) {
@@ -7608,6 +7609,7 @@ export function App() {
           );
           return;
         }
+        await preloadSharedImportSources(shared.document, pendingShareToken);
         // Before the document lands: the collaboration hook and the cloud
         // autosave controller must treat this project as not account-backed,
         // whatever this browser knew about the account before.
@@ -17974,10 +17976,31 @@ export function App() {
               <ProjectSharingDialog
                 projectId={doc.projectId}
                 localProject={!activeProjectIsCloud}
+                localImportSourceNames={localOnlySources.map(
+                  (source) => source.sourceName
+                )}
                 savingToAccount={busy}
                 onSaveToAccount={() =>
                   handleSaveToAccount(summarizeLocalDocument(doc), true)
                 }
+                onBeforeCreateShareLink={async () => {
+                  await flushPendingLocalSave();
+                  const controller = cloudProjectAutosaveRef.current;
+                  await controller?.flushPending();
+                  const current = managerRef.current?.document;
+                  if (
+                    !controller ||
+                    !current ||
+                    current.projectId !== doc.projectId ||
+                    controller.hasPendingChanges ||
+                    !controller.holdsDocument(current) ||
+                    listLocalOnlyImportSources(current).length > 0
+                  ) {
+                    throw new Error(
+                      'Save this project and its source files to your account before creating a link.'
+                    );
+                  }
+                }}
                 role={collaboration.role}
                 collaborationStatus={collaboration.status}
                 lease={collaboration.lease}
