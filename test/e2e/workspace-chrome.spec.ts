@@ -2,6 +2,7 @@ import { expect, test } from '@playwright/test';
 import {
   createProject,
   seedDismissedWorkspaceTour,
+  seedOpenCommandFold,
   stubApi
 } from './openzcad-fixtures';
 
@@ -19,6 +20,7 @@ test('the File menu shows every section on a desktop window', async ({
   await page.setViewportSize({ width: 1440, height: 900 });
   await stubApi(page);
   await seedDismissedWorkspaceTour(page);
+  await seedOpenCommandFold(page);
   await createProject(page, 'File menu');
 
   await page.locator('details.file-menu > summary').click();
@@ -40,6 +42,7 @@ test('View mode opens its standard views inside the window', async ({
   await page.setViewportSize({ width: 1440, height: 900 });
   await stubApi(page);
   await seedDismissedWorkspaceTour(page);
+  await seedOpenCommandFold(page);
   await createProject(page, 'Views panel');
   await page.getByRole('button', { name: /^Box \(B\)/ }).click();
   await page
