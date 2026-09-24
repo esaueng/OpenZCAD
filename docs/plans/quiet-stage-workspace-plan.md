@@ -9,12 +9,12 @@ design canvas that walked the reference CAD's interaction model and then
 diverged from it. The model owns the screen. Four islands float over the
 viewport and only one of them changes with context:
 
-| Zone                     | Contents                                                                                                                                         | Changes with context? |
-| ------------------------ | ------------------------------------------------------------------------------------------------------------------------------------------------ | --------------------- |
-| Document (top)           | project name and save state · View / Tweak / Build · undo, export, share, account                                                                | no                    |
-| Verbs (left)             | one **command card**: a header naming the selection with a deselect control, then the commands that apply to it, one primary verb highlighted    | **yes**               |
-| Instruments (right)      | icon-only view controls (fit, display, section, measure, grid), then Items / History / Parameters, which open one drawer; view cube bottom-right | no                    |
-| Hint and search (bottom) | one line of guidance, then a ⌘K bar that searches commands, features and parameters and hands a question to the assistant                        | the hint text only    |
+| Zone                     | Contents                                                                                                                                                                                                          | Changes with context? |
+| ------------------------ | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | --------------------- |
+| Document (top)           | project name and save state · View / Tweak / Build · undo, export, share, account                                                                                                                                 | no                    |
+| Verbs (left)             | one **verb rail**, the instrument rail's mirror: icon buttons for the commands that apply to the selection, one primary verb lit, "More tools" at its foot (the selection chip in the bottom lane names the pick) | **yes**               |
+| Instruments (right)      | icon-only view controls (fit, display, section, measure, grid), then Items / History / Parameters, which open one drawer; view cube bottom-right                                                                  | no                    |
+| Hint and search (bottom) | one line of guidance, then a ⌘K bar that searches commands, features and parameters and hands a question to the assistant                                                                                         | the hint text only    |
 
 While a command runs, the left card collapses to its header and an operation
 card (title, add/cut badge, sub-mode controls, Cancel, Apply) sits top-centre.
@@ -57,9 +57,10 @@ Values ride the model at the point of action.
 - **Class coverage.** Every new class needs a rule or a reasoned allowance in
   `scripts/check-css-classes.mjs`.
 - **No behaviour hides behind the redesign.** A slice that moves a command keeps
-  it reachable; the command card always ends in a "More tools" fold that opens
-  onto every tool it did not name (closed by default since the compaction pass,
-  so the card shows only what fits the pick; ⌘K reaches everything by name).
+  it reachable; the verb rail always ends in a "More tools" button that opens a
+  flyout of every tool it did not name (closed by default since the compaction
+  pass, so the rail shows only what fits the pick; ⌘K reaches everything by
+  name).
 
 ## Slices
 

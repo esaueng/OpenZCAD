@@ -231,7 +231,10 @@
   bottom: var(--island-gap);
   z-index: var(--z-viewer-overlay);
   width: max-content;
-  max-width: min(var(--column-w), calc(100% - var(--island-gap) * 2));
+  max-width: min(
+    max(var(--column-w), var(--readout-min-w)),
+    calc(100% - var(--island-gap) * 2)
+  );
   min-height: var(--readout-h);
   box-sizing: border-box;
   display: flex;
@@ -547,227 +550,194 @@
   }
 }
 
-/* ── The command card (U04 slice 3) ──────────────────────── */
+/* ── The verb rail (U04 slice 3, streamlined) ─────────── */
 
-/* The column's first section answers "what can I do with what I picked":
-   a header naming the pick, the rows for it with one primary verb, then
-   every other tool behind a fold. The metrics are the tightest the rows
-   stay readable at: the card is chrome over the model, and every pixel it
-   does not need is canvas. */
-.command-card {
+/* In Build the column is the verb rail: one icon wide, the instrument
+   rail's mirror. The column, the resizer and the lanes all read --column-w,
+   so they follow; the readout under the rail is wider than the rail, so the
+   bottom lanes start after the readout instead. The sketch card and Tweak's
+   parameters keep the stored width. */
+.workspace.column-layout {
+  --readout-min-w: 96px;
+}
+
+.workspace.column-layout:has(.workspace-column-float .command-rail) {
+  --column-w: var(--rail-w);
+  --lane-inset: calc(
+    max(var(--column-w), var(--readout-min-w)) + var(--island-gap) * 2
+  );
+}
+
+/* Both rails stand at the middle of the stage's height — the room under the
+   top islands — rather than hanging from them, so the tools sit level with
+   the model. The sketch card is tall and keeps the top edge. */
+.workspace.column-layout {
+  --stage-middle: calc(
+    var(--stage-top) + (100% - var(--stage-top) - var(--island-gap)) / 2
+  );
+}
+
+.viewer-area:has(.workspace-column-float .command-rail)
+  .workspace-column-float {
+  top: var(--stage-middle);
+  bottom: auto;
+  transform: translateY(-50%);
+}
+
+.workspace.column-layout .instrument-rail {
+  top: var(--stage-middle);
+  transform: translateY(-50%);
+}
+
+/* The flyout opens beside the rail, outside the column's box. (The rail
+   is only ever the Build column's content, so :has(.command-rail) alone
+   identifies that column; :has() cannot nest.) */
+.viewer-area
+  .workspace-column-float:has(.command-rail)
+  :is(.workspace-column, .workspace-column-tools) {
+  /* Outranks the drawer-era rule below that makes the tools a scroller;
+     the rail is short and never needs one. */
+  overflow: visible;
+}
+
+/* The rail is not resizable; the splitter belongs to the sketch card and
+   Tweak's parameters. */
+.viewer-area:has(.workspace-column-float .command-rail) .sidebar-resizer {
+  display: none;
+}
+
+.command-rail {
+  position: relative;
   display: flex;
   flex-direction: column;
-  gap: 1px;
-  padding: 4px;
-}
-
-.command-card-head {
-  display: flex;
   align-items: center;
-  gap: 8px;
-  min-height: 32px;
-  padding: 2px 2px 6px 4px;
-  margin-bottom: 1px;
-  border-bottom: var(--border-thin);
+  gap: 2px;
+  padding: 4px 0;
 }
 
-.command-card-icon {
-  flex: 0 0 auto;
+.command-rail-group,
+.command-more {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 2px;
+}
+
+.command-rail-divider {
+  width: 22px;
+  height: 1px;
+  margin: 3px 0;
+  background: var(--color-border);
+}
+
+button.command-rail {
+  position: static;
   display: grid;
   place-items: center;
-  width: 22px;
-  height: 22px;
+  width: 30px;
+  height: 30px;
+  /* The base button rule reserves 32px; the rail's buttons are 30px like
+     the instrument rail's opposite. */
+  min-height: 0;
+  padding: 0;
   color: var(--color-text-muted);
-  background: var(--color-surface-2);
-  border-radius: var(--radius-md);
-}
-
-.command-card-icon svg {
-  width: 13px;
-  height: 13px;
-}
-
-.command-card:not([data-context='idle']) .command-card-icon {
-  color: var(--color-on-accent);
-  background: var(--color-accent);
-}
-
-.command-card-title {
-  flex: 1;
-  min-width: 0;
-  display: flex;
-  flex-direction: column;
-  gap: 1px;
-}
-
-.command-card-title strong {
-  overflow: hidden;
-  color: var(--color-text);
-  font-size: var(--fs-sm);
-  font-weight: var(--fw-semibold);
-  text-overflow: ellipsis;
-  white-space: nowrap;
-}
-
-.command-card-title small {
-  overflow: hidden;
-  color: var(--color-text-muted);
-  font-family: var(--font-mono);
-  font-size: var(--fs-mini);
-  text-overflow: ellipsis;
-  white-space: nowrap;
-}
-
-.command-card-clear {
-  flex: 0 0 auto;
-  display: grid;
-  place-items: center;
-  width: 22px;
-  height: 22px;
-  color: var(--color-text-muted);
-  border-radius: var(--radius-md);
-}
-
-.command-card-clear:hover {
-  color: var(--color-text);
-  background: var(--color-surface-hover);
-}
-
-.command-group {
-  display: flex;
-  flex-direction: column;
-  gap: 1px;
-}
-
-.command-group-label {
-  padding: 5px 6px 2px;
-  color: var(--color-text-subtle);
-  font-family: var(--font-mono);
-  font-size: 10px;
-  letter-spacing: 0.08em;
-  text-transform: uppercase;
-}
-
-.command-row {
-  display: flex;
-  align-items: center;
-  gap: 8px;
-  min-height: 26px;
-  padding: 0 5px 0 6px;
-  color: var(--color-text);
   border: 1px solid transparent;
   border-radius: var(--radius-md);
-  text-align: left;
 }
 
-.command-row svg {
-  flex: 0 0 auto;
-  width: 14px;
-  height: 14px;
-  color: var(--color-text-muted);
+button.command-rail svg {
+  width: 16px;
+  height: 16px;
 }
 
-.command-row-label {
-  flex: 1;
-  min-width: 0;
-  overflow: hidden;
-  font-size: var(--fs-sm);
-  text-overflow: ellipsis;
-  white-space: nowrap;
-}
-
-.command-row kbd {
-  flex: 0 0 auto;
-}
-
-.command-row:hover:not(:disabled),
-.command-icon:hover:not(:disabled) {
+button.command-rail:hover:not(:disabled) {
+  color: var(--color-text);
   background: var(--color-surface-hover);
 }
 
-.command-row.primary {
+/* The context's primary verb is lit; the armed tool is outlined. */
+/* `is-primary`, not `primary`: the base button style claims that word. */
+button.command-rail.is-primary {
   color: var(--color-accent);
   background: var(--color-accent-dim);
 }
 
-.command-row.primary svg {
-  color: var(--color-accent);
-}
-
-.command-row.primary:hover:not(:disabled) {
+button.command-rail.is-primary:hover:not(:disabled) {
   background: color-mix(in srgb, var(--color-accent) 22%, transparent);
 }
 
-.command-row.active,
-.command-icon.active {
+button.command-rail.active {
   color: var(--color-accent);
   border-color: var(--color-accent-border);
 }
 
-/* The fold at the card's foot: a row that reads "More tools" with a count
-   while closed and opens onto the grid of every tool the context did not
-   name. Closed, the card is exactly the pick and its verbs. */
-.command-more {
-  margin-top: 2px;
-  padding-top: 2px;
-  border-top: var(--border-thin);
+/* Greyed, not hidden: the icons never move, and the reason is the
+   button's description. */
+button.command-rail:disabled {
+  color: var(--color-text-dim);
+  opacity: 0.5;
+  cursor: default;
 }
 
-.command-more-toggle {
+/* Every tool the context did not name, by name, beside the rail. Two
+   columns keep the panel shorter than the rail at every context. */
+.command-flyout {
+  position: absolute;
+  top: 0;
+  left: calc(100% + var(--island-gap));
+  width: 244px;
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 1px;
+  padding: 4px;
+  background: var(--color-surface);
+  border: var(--border-thin);
+  border-radius: var(--radius-lg);
+  box-shadow: var(--shadow-2);
+  animation: oz-fade var(--dur-fast) var(--ease-out);
+}
+
+.command-tile {
   display: flex;
   align-items: center;
-  gap: 6px;
-  min-height: 24px;
-  padding: 0 6px 0 5px;
-  color: var(--color-text-subtle);
+  gap: 7px;
+  min-width: 0;
+  height: 26px;
+  padding: 0 7px;
+  color: var(--color-text-muted);
+  border: 1px solid transparent;
   border-radius: var(--radius-md);
-  font-family: var(--font-mono);
-  font-size: 10px;
-  letter-spacing: 0.08em;
-  text-transform: uppercase;
+  font-size: var(--fs-sm);
   text-align: left;
 }
 
-.command-more-toggle:hover {
+.command-tile svg {
+  flex: 0 0 auto;
+  width: 14px;
+  height: 14px;
+}
+
+.command-tile > span {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.command-tile:hover:not(:disabled) {
   color: var(--color-text);
   background: var(--color-surface-hover);
 }
 
-.command-more-toggle svg {
-  flex: 0 0 auto;
-  transition: transform var(--dur-fast) var(--ease-out);
+.command-tile.active {
+  color: var(--color-accent);
+  border-color: var(--color-accent-border);
 }
 
-.command-more-toggle[aria-expanded='true'] svg {
-  transform: rotate(90deg);
-}
-
-.command-more-count {
-  margin-left: auto;
+.command-tile:disabled {
   color: var(--color-text-dim);
-  font-size: 10px;
-  letter-spacing: 0;
-}
-
-.command-grid {
-  display: grid;
-  grid-template-columns: repeat(auto-fill, minmax(28px, 1fr));
-  gap: 2px;
-  padding: 2px 1px 1px;
-}
-
-.command-icon {
-  display: grid;
-  place-items: center;
-  height: 28px;
-  color: var(--color-text-muted);
-  border: 1px solid transparent;
-  border-radius: var(--radius-md);
-}
-
-.command-icon svg {
-  width: 15px;
-  height: 15px;
+  opacity: 0.5;
+  cursor: default;
 }
 
 /* ── The model drawer (U04 slice 4) ──────────────────────── */
