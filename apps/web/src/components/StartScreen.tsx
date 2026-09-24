@@ -1,4 +1,5 @@
 import { ProjectImportButton } from './ProjectImportButton';
+import { platformShortcutLabel } from '../lib/platformShortcut';
 import { useEffect, useRef, useState } from 'react';
 import {
   Archive,
@@ -704,7 +705,7 @@ export function StartScreen({
           className="start-settings-button icon-button"
           type="button"
           aria-label="Open settings"
-          title="Settings (Ctrl+,)"
+          title={`Settings (${platformShortcutLabel('Ctrl+,')})`}
           onClick={onOpenSettings}
         >
           <Settings size={16} aria-hidden="true" />
