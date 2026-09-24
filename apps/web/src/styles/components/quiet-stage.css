@@ -16,6 +16,16 @@
   --readout-h: 32px;
 }
 
+/* Sketching adds the grid spacing to the readout, and a column-wide island
+   has no room for a fourth segment: it takes a second row, and the column
+   and drawer, which size off --readout-h, move up with it. Left floating
+   beside the island instead, the label sat on the search bar below ~1300px. */
+.workspace.column-layout:has(
+    .viewport-readout .viewport-dock-grid:not([hidden])
+  ) {
+  --readout-h: 60px;
+}
+
 /* ── The top islands ─────────────────────────────────────── */
 
 /* The top bar leaves the page flow: the viewport reaches the window's top
@@ -217,8 +227,10 @@
   height: var(--readout-h);
   box-sizing: border-box;
   display: flex;
+  flex-wrap: wrap;
   align-items: center;
-  gap: 6px;
+  align-content: center;
+  gap: 4px 6px;
   padding: 0 4px;
   background: var(--color-surface);
   border: var(--border-thin);
@@ -231,12 +243,20 @@
 }
 
 .viewport-readout .viewport-dock-filter,
-.viewport-readout .viewport-dock-snap {
+.viewport-readout .viewport-dock-snap,
+.viewport-readout .viewport-dock-grid {
   height: 24px;
 }
 
+/* The log closes the first row; the grid segment, when sketching, wraps to
+   the second. */
 .viewport-readout .viewport-dock-log {
+  order: 1;
   margin-left: auto;
+}
+
+.viewport-readout .viewport-dock-grid {
+  order: 2;
 }
 
 /* The scale bar reads beside the orientation cube, bottom-right. */
