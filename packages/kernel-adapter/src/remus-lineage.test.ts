@@ -203,6 +203,108 @@ describe('Remus modifier evolution lineage', () => {
     expect(result.faceReferences.get(12)?.producingFeatureId).toBe(FEATURE_ID);
   });
 
+  it('carries changed direct-edit supports only through unique construction identities', () => {
+    const direct = createRemusModifierEvolutionLineage({
+      ...input([13]),
+      operation: 'direct-edit',
+      resultCandidates: input([13]).resultCandidates.map((candidate) =>
+        candidate.handle === 11
+          ? { ...candidate, witness: { ...FACE, perimeter: FACE.perimeter + 1 } }
+          : candidate.handle === 12
+            ? {
+                ...candidate,
+                witness: { ...OPPOSITE_FACE, perimeter: OPPOSITE_FACE.perimeter + 1 }
+              }
+            : candidate
+      )
+    });
+    expect(direct.faceReferences.get(11)).toMatchObject({
+      producingFeatureId: FEATURE_ID,
+      lineageName: 'primitive.box.face.z-min',
+      witness: { perimeter: FACE.perimeter + 1 }
+    });
+    expect(direct.faceReferences.get(12)).toMatchObject({
+      producingFeatureId: FEATURE_ID,
+      lineageName: 'primitive.box.face.z-max',
+      witness: { perimeter: OPPOSITE_FACE.perimeter + 1 }
+    });
+
+    const duplicateSource: RemusLineageState = {
+      faceReferences: new Map([
+        [1, faceReference('duplicate.support')],
+        [2, {
+          ...faceReference('duplicate.support'),
+          witness: OPPOSITE_FACE,
+          currentHash: topologyHashOfWitness('face', OPPOSITE_FACE)
+        }]
+      ]),
+      edgeReferences: new Map(),
+      diagnostics: []
+    };
+    const duplicate = createRemusModifierEvolutionLineage({
+      ...input([13]),
+      operation: 'direct-edit',
+      sourceLineage: duplicateSource,
+      resultCandidates: input([13]).resultCandidates.map((candidate) =>
+        candidate.handle === 11
+          ? { ...candidate, witness: { ...FACE, perimeter: FACE.perimeter + 1 } }
+          : candidate.handle === 12
+            ? {
+                ...candidate,
+                witness: { ...OPPOSITE_FACE, perimeter: OPPOSITE_FACE.perimeter + 1 }
+              }
+            : candidate
+      )
+    });
+    expect(duplicate.faceReferences.has(11)).toBe(false);
+    expect(duplicate.faceReferences.has(12)).toBe(false);
+  });
+
+  it('publishes a single-source imported band from its exact evolution relation', () => {
+    const original = input([13]);
+    const singleSource = createRemusModifierEvolutionLineage({
+      ...original,
+      operation: 'direct-edit',
+      sourceLineage: createRemusSemanticLineage(FEATURE_ID, 'imported-step', [
+        {
+          handle: 1,
+          kind: 'face',
+          lineageName: 'import.step.face.17',
+          witness: FACE
+        }
+      ]),
+      payload: {
+        ...original.payload,
+        evolution: {
+          ...original.payload.evolution,
+          generated: [{ source: 1, results: [13] }]
+        }
+      }
+    });
+    expect(singleSource.faceReferences.get(13)).toMatchObject({
+      producingFeatureId: FILLET_FEATURE_ID,
+      lineageName: 'direct-edit.resize-blend.band.import.step.face.17'
+    });
+  });
+
+  it('fails closed for malformed direct-edit evolution', () => {
+    const malformed = createRemusModifierEvolutionLineage({
+      ...input([13]),
+      operation: 'direct-edit',
+      payload: {
+        ...input([13]).payload,
+        evolution: {
+          ...input([13]).payload.evolution,
+          modified: [{ source: 1, results: [99] }]
+        }
+      }
+    });
+    expect(malformed.faceReferences.size).toBe(0);
+    expect(malformed.diagnostics).toEqual([
+      expect.objectContaining({ code: 'hash-only' })
+    ]);
+  });
+
   it('retains an earlier blend only through unique unchanged construction ancestry', () => {
     const original = input([13]);
     const prior = createRemusSemanticLineage(FEATURE_ID, 'fillet', [
