@@ -1,6 +1,9 @@
 import * as THREE from 'three';
 import { Line2 } from 'three/examples/jsm/lines/Line2.js';
 import { SELECTION_SEMANTICS } from '../render/semantics';
+import { disposeMaterial } from '../render/programRetention';
+
+export { keepProgram } from '../render/programRetention';
 
 /**
  * Selection-first drag handles.
@@ -117,30 +120,13 @@ export function addHandleParts(group: THREE.Group, parts: THREE.Object3D[]) {
 }
 
 /** Detaches and frees every geometry and material a rig owns. */
-/**
- * Marks a material whose compiled program should outlive it. Disposing a
- * material releases its program, and three.js deletes a program nobody holds,
- * so a rig re-armed on every preview recompiled the same shaders each time:
- * 19 extra program links in one resize flow, which on a software GL runner
- * was enough to time the suite out. A kept material is simply dropped; its
- * program stays cached for the next rig's identical material. It owns no
- * other GPU resource, and geometries are still disposed.
- */
-export function keepProgram<T extends THREE.Material>(material: T): T {
-  material.userData.keepProgram = true;
-  return material;
-}
-
 export function disposeRigGroups(...groups: THREE.Group[]) {
   for (const group of groups) {
     group.removeFromParent();
     group.traverse((child) => {
       if (child instanceof THREE.Mesh || child instanceof Line2) {
         (child.geometry as THREE.BufferGeometry).dispose();
-        const material = child.material as THREE.Material;
-        if (material.userData.keepProgram !== true) {
-          material.dispose();
-        }
+        disposeMaterial(child.material as THREE.Material);
       }
     });
   }
