@@ -62,6 +62,7 @@ import {
 } from './topology-fingerprint';
 import {
   createRemusSemanticLineage,
+  createRemusModifierEvolutionLineage,
   deriveRemusMoveFacesDirectEditLineage,
   mergeRemusLineageStates,
   propagateRemusUnchangedDirectEditLineage,
@@ -1369,14 +1370,49 @@ export function applyDirectEdit(
       }
       throw new Error('Blend radius must differ from its current radius.');
     }
-    const output = kernel.resizeBlend(solid, face, snapshot.radius, newRadius);
+    const sourceCandidates = topologyCandidatesForSolid(kernel, solid);
+    const evolution =
+      operation.surfaceClass === 'cylinder'
+        ? kernel.resizeBlendWithEvolution(
+            solid,
+            face,
+            snapshot.radius,
+            newRadius
+          )
+        : null;
+    const output =
+      evolution?.result.solid ??
+      kernel.resizeBlend(solid, face, snapshot.radius, newRadius);
     requireValidSolid(
       kernel,
       output,
       `Resizing the blend to radius ${newRadius} does not produce a valid solid.`
     );
     let lineage: RemusLineageState | undefined;
-    if (newRadius > GEOMETRY_EPSILON) {
+    if (evolution && producingFeatureId) {
+      const resultCandidates = topologyCandidatesForSolid(kernel, output);
+      const generatedBlendFaces = new Set(
+        evolution.evolution.generated
+          .flatMap((relation) => relation.results)
+          .filter((handle) => {
+            const geometry = measureFaceGeometry(kernel, handle);
+            return (
+              geometry?.surfaceType === operation.surfaceClass
+            );
+          })
+      );
+      lineage = createRemusModifierEvolutionLineage({
+        producingFeatureId,
+        operation: 'direct-edit',
+        payload: evolution,
+        sourceSolid: solid,
+        resultSolid: output,
+        sourceCandidates,
+        resultCandidates,
+        sourceLineage: target.lineage,
+        generatedBlendFaces
+      });
+    } else if (newRadius > GEOMETRY_EPSILON) {
       const candidates = topologyCandidatesForSolid(kernel, output);
       const matching = candidates.filter((candidate) => {
         if (candidate.kind !== 'face') {
