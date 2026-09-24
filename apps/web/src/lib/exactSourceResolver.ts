@@ -1,10 +1,12 @@
-import type { ArtifactId, ImportedSourceReference } from '@openzcad/shared';
+import { documentNodesWithHistory } from '@openzcad/shared';
+import type {
+  ArtifactId,
+  ImportedSourceReference,
+  ProjectDocument
+} from '@openzcad/shared';
 
-import {
-  loadSourceBlob,
-  putSourceBlob,
-  sha256Hex
-} from './localProjectStore';
+import { loadSourceBlob, putSourceBlob, sha256Hex } from './localProjectStore';
+import { sharedImportSourceUrl } from './projectShareClient';
 
 /**
  * Bytes a cloud artifact download may stream before the rebuild gives up on
@@ -62,6 +64,61 @@ async function readResponseBytes(
     offset += chunk.byteLength;
   }
   return bytes;
+}
+
+/**
+ * Fetch every reference-form STEP source before opening an anonymous share.
+ * Workers resolve from the local content-addressed cache, so a missing or
+ * damaged source must stop the open rather than produce an empty viewport.
+ */
+export async function preloadSharedImportSources(
+  document: ProjectDocument,
+  token: string,
+  fetcher: typeof fetch = fetch
+): Promise<void> {
+  const seen = new Set<string>();
+  for (const node of documentNodesWithHistory(document)) {
+    if (
+      node.kind !== 'feature' ||
+      node.data.featureKind !== 'imported-step' ||
+      !node.data.stepSourceRef
+    ) {
+      continue;
+    }
+    const ref = node.data.stepSourceRef;
+    if (seen.has(ref.checksumSha256)) continue;
+    seen.add(ref.checksumSha256);
+    if (await loadSourceBlob(ref.checksumSha256)) continue;
+    const sourceName = node.data.sourceName;
+    if (node.data.artifactId.startsWith('artifact_local_')) {
+      throw new Error(
+        `The owner needs to save the source file for "${sourceName}" to their account before this link can open.`
+      );
+    }
+    const response = await fetcher(
+      sharedImportSourceUrl(token, node.data.artifactId),
+      { credentials: 'omit' }
+    );
+    if (!response.ok) {
+      throw new Error(
+        `The shared source file for "${sourceName}" is unavailable. Ask the owner to save its source file to their account.`
+      );
+    }
+    const bytes = await readResponseBytes(
+      response,
+      MAX_ARTIFACT_DOWNLOAD_BYTES
+    );
+    if (
+      !bytes ||
+      bytes.byteLength !== ref.logicalBytes ||
+      (await sha256Hex(bytes)) !== ref.checksumSha256
+    ) {
+      throw new Error(
+        `The shared source file for "${sourceName}" failed its integrity check.`
+      );
+    }
+    await putSourceBlob(bytes);
+  }
 }
 
 /**

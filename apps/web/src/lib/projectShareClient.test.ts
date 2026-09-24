@@ -2,7 +2,8 @@ import { describe, expect, it, vi } from 'vitest';
 import {
   buildShareLinkUrl,
   createProjectShareLinkClient,
-  sharedAssetUrl
+  sharedAssetUrl,
+  sharedImportSourceUrl
 } from './projectShareClient';
 import { ProjectSharingApiError } from './projectSharing';
 
@@ -38,13 +39,13 @@ describe('project share link client', () => {
     await expect(
       client.createProjectShareLink('project/one', 'tweak')
     ).resolves.toMatchObject({ token: 'secret' });
-    await expect(
-      client.listProjectShareLinks('project/one')
-    ).resolves.toEqual([shareLink]);
+    await expect(client.listProjectShareLinks('project/one')).resolves.toEqual([
+      shareLink
+    ]);
     await client.revokeProjectShareLink('project/one', 'share/1');
-    await expect(client.fetchSharedProject('token_value')).resolves.toMatchObject(
-      { project: { name: 'One' } }
-    );
+    await expect(
+      client.fetchSharedProject('token_value')
+    ).resolves.toMatchObject({ project: { name: 'One' } });
 
     expect(fetcher.mock.calls.map(([url]) => url)).toEqual([
       '/api/projects/project%2Fone/share-links',
@@ -67,9 +68,7 @@ describe('project share link client', () => {
       .mockResolvedValueOnce(
         jsonResponse({ error: 'Share link not found.' }, 404)
       )
-      .mockResolvedValueOnce(
-        jsonResponse({ error: 'Internal error' }, 500)
-      );
+      .mockResolvedValueOnce(jsonResponse({ error: 'Internal error' }, 500));
     const client = createProjectShareLinkClient(fetcher);
 
     await expect(client.fetchSharedProject('gone_token')).resolves.toBeNull();
@@ -80,14 +79,15 @@ describe('project share link client', () => {
   });
 
   it('surfaces route error payloads as typed errors', async () => {
-    const fetcher = vi
-      .fn<typeof fetch>()
-      .mockResolvedValueOnce(
-        jsonResponse(
-          { error: 'Project sharing is disabled for this account.', code: 'FEATURE_DISABLED' },
-          501
-        )
-      );
+    const fetcher = vi.fn<typeof fetch>().mockResolvedValueOnce(
+      jsonResponse(
+        {
+          error: 'Project sharing is disabled for this account.',
+          code: 'FEATURE_DISABLED'
+        },
+        501
+      )
+    );
     const client = createProjectShareLinkClient(fetcher);
     const failure = await client
       .createProjectShareLink('project_x', 'tweak')
@@ -102,11 +102,12 @@ describe('project share link client', () => {
 
   it('builds fragment share URLs and asset URLs', () => {
     const token = 'a'.repeat(43);
-    expect(buildShareLinkUrl(token)).toBe(
-      `${location.origin}/#share=${token}`
-    );
+    expect(buildShareLinkUrl(token)).toBe(`${location.origin}/#share=${token}`);
     expect(sharedAssetUrl(token, 'asset/1')).toBe(
       `/api/share/${token}/assets/asset%2F1`
+    );
+    expect(sharedImportSourceUrl(token, 'artifact/1')).toBe(
+      `/api/share/${token}/sources/artifact%2F1`
     );
     expect(() => sharedAssetUrl('  ', 'asset_1')).toThrow(
       'Share token is required.'
