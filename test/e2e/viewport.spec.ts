@@ -2023,7 +2023,7 @@ test('section view cycles planes, cuts exactly at rest, and cuts nothing from th
     expect(geometry.bounds.min[2]).toBeCloseTo(offset);
     expect(geometry.bounds.max[2]).toBeCloseTo(geometry.bounds.min[2]!);
   };
-  const shown = (await sectionState());
+  const shown = await sectionState();
   atPlane(shown.sectionCaps[0] ?? shown.exactSections[0]!);
 
   // The kernel sections a plain box exactly, and its curves take the cap's
@@ -2645,17 +2645,31 @@ test('pressing to orbit writes no storage on the press frame', async ({
 
   const canvas = page.locator('.viewer-host canvas');
   await expect(canvas).toBeVisible({ timeout: 120_000 });
+  // The History row lands before the kernel result reaches the viewer, and
+  // the viewer's first fit writes the pose the moment the box is installed —
+  // a write that could otherwise commit just after the press. The attribute
+  // is set in the same effect run as that fit, so once it reads 1 the fit
+  // and its write are behind us.
+  await expect(canvas).toHaveAttribute('data-e2e-rendered-bodies', '1', {
+    timeout: 60_000
+  });
   const bounds = (await canvas.boundingBox())!;
-
-  // Let any settle scheduled by the camera fit above land first, or its write
-  // arrives during the press and is counted against it.
-  await page.waitForTimeout(400);
 
   // Counted rather than timed: the cost was a synchronous
   // read-parse-validate-serialise-write of the whole session record, run from
   // pointerdown because pressing re-pivots the orbit onto the picked point.
+  //
+  // The count starts at the press itself, not here: the fit leaves a settle
+  // timer whose pose write may still be pending, so a baseline taken now
+  // races it. Pressing cancels that timer (`beginGesture`), so every write
+  // after the press's capture listener belongs to the press. The listener is
+  // on `window` in the capture phase so it runs before any viewer handler
+  // can write or stop propagation.
   await page.evaluate(() => {
-    const scope = window as typeof window & { __ozWrites?: number };
+    const scope = window as typeof window & {
+      __ozWrites?: number;
+      __ozWritesAtPress?: number;
+    };
     scope.__ozWrites = 0;
     const setItem = Storage.prototype.setItem;
     Storage.prototype.setItem = function patched(key: string, value: string) {
@@ -2664,6 +2678,13 @@ test('pressing to orbit writes no storage on the press frame', async ({
       }
       return setItem.call(this, key, value);
     };
+    window.addEventListener(
+      'pointerdown',
+      () => {
+        scope.__ozWritesAtPress = scope.__ozWrites ?? 0;
+      },
+      { capture: true, once: true }
+    );
   });
 
   const centre = {
@@ -2673,9 +2694,13 @@ test('pressing to orbit writes no storage on the press frame', async ({
   await page.mouse.move(centre.x, centre.y);
   await page.keyboard.down('Shift');
   await page.mouse.down();
-  const onPress = await page.evaluate(
-    () => (window as typeof window & { __ozWrites?: number }).__ozWrites ?? 0
-  );
+  const onPress = await page.evaluate(() => {
+    const scope = window as typeof window & {
+      __ozWrites?: number;
+      __ozWritesAtPress?: number;
+    };
+    return (scope.__ozWrites ?? 0) - (scope.__ozWritesAtPress ?? Infinity);
+  });
   for (let step = 1; step <= 10; step += 1) {
     await page.mouse.move(centre.x + step * 4, centre.y + step * 2);
   }
