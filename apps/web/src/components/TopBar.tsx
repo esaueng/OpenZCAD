@@ -148,6 +148,20 @@ const COLLABORATION_LABELS: Record<CollaborationStatus, string> = {
 };
 const ACCOUNT_LABEL_RESERVE = ['Checking', 'Signed out'];
 
+type SaveGlyph = 'busy' | 'warning' | 'saved' | 'idle';
+function saveGlyphFor(state: WorkspaceSaveState): SaveGlyph {
+  if (state === 'saving' || state === 'syncing') return 'busy';
+  if (
+    state === 'conflict' ||
+    state === 'repair' ||
+    state === 'refused' ||
+    state === 'local-source'
+  ) {
+    return 'warning';
+  }
+  return state === 'synced' ? 'saved' : 'idle';
+}
+
 export function TopBar({
   projectName,
   units,
@@ -187,6 +201,7 @@ export function TopBar({
   const [projectNameDraft, setProjectNameDraft] = useState(projectName ?? '');
   const projectNameInputRef = useRef<HTMLInputElement>(null);
   const fileMenuRef = useRef<HTMLDetailsElement>(null);
+  const saveGlyph = saveGlyphFor(saveState);
 
   useEffect(() => {
     if (editingProjectName) {
@@ -387,18 +402,23 @@ export function TopBar({
             }
             title={`${saveToAccount ? 'Save this local project and its source files to your account.' : WORKSPACE_SAVE_STATE_PRESENTATION[saveState].title} Click to save a revision (${platformShortcutLabel('Ctrl+S')}), or ${platformShortcutLabel('Ctrl+Shift+S')} to name it.`}
           >
-            {saveState === 'saving' || saveState === 'syncing' ? (
-              <LoaderCircle className="spin" size={14} aria-hidden="true" />
-            ) : saveState === 'conflict' ||
-              saveState === 'repair' ||
-              saveState === 'refused' ||
-              saveState === 'local-source' ? (
-              <TriangleAlert size={14} aria-hidden="true" />
-            ) : saveState === 'synced' ? (
-              <Check size={14} aria-hidden="true" />
-            ) : (
-              <CloudOff size={14} aria-hidden="true" />
-            )}
+            {/* Keyed by the glyph, not the state: saving → syncing keeps the
+                same ring turning, and only a change of kind pops. */}
+            <span
+              key={saveGlyph}
+              className="save-state-icon"
+              aria-hidden="true"
+            >
+              {saveGlyph === 'busy' ? (
+                <LoaderCircle className="spin" size={14} />
+              ) : saveGlyph === 'warning' ? (
+                <TriangleAlert size={14} />
+              ) : saveGlyph === 'saved' ? (
+                <Check size={14} />
+              ) : (
+                <CloudOff size={14} />
+              )}
+            </span>
             <StableLabel
               reserve={
                 saveToAccount

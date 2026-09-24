@@ -1,6 +1,7 @@
 import { ProjectImportButton } from './ProjectImportButton';
 import { platformShortcutLabel } from '../lib/platformShortcut';
 import { useEffect, useRef, useState } from 'react';
+import { useDissolveOnUnmount } from '../hooks/useDissolveOnUnmount';
 import {
   Archive,
   ArchiveRestore,
@@ -167,6 +168,9 @@ const SHELVES: ReadonlyArray<{
   { status: 'deleted', label: 'Trash', empty: 'the recycle bin is empty' }
 ];
 
+/** The start screen's crossfade into the workspace. */
+const START_SCREEN_DISSOLVE_MS = 240;
+
 export function StartScreen({
   projects,
   status,
@@ -205,6 +209,9 @@ export function StartScreen({
   const [dragId, setDragId] = useState<string | null>(null);
   const [dropId, setDropId] = useState<string | null>(null);
   const tileRefs = useRef(new Map<string, HTMLDivElement>());
+  const screenRef = useRef<HTMLDivElement | null>(null);
+  // Opening a part crossfades into the workspace instead of cutting to it.
+  useDissolveOnUnmount(screenRef, START_SCREEN_DISSOLVE_MS);
 
   // The server measures the trimmed name, so the form has to agree exactly or
   // it would block names the API accepts (or vice versa).
@@ -686,7 +693,7 @@ export function StartScreen({
   }
 
   return (
-    <div className="start-screen">
+    <div ref={screenRef} className="start-screen">
       <header className="start-header">
         <div className="start-brand">
           <BrandMark />
