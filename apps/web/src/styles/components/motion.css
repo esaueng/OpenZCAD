@@ -253,10 +253,10 @@ textarea {
   animation: oz-bloom var(--dur-fast) var(--ease-out);
 }
 
-/* The command card's contextual groups are keyed by selection, so a new
-   pick swaps them; the fresh rows settle in rather than replacing the old
-   ones in a single frame. The All tools grid below never remounts. */
-.command-group.is-contextual {
+/* The verb rail's groups are keyed by selection, so a new pick swaps
+   them; the fresh buttons settle in rather than replacing the old ones in
+   a single frame. The fold at the foot never remounts. */
+.command-rail-group {
   animation: oz-rise var(--dur-fast) var(--ease-out);
 }
 
