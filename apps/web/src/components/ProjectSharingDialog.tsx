@@ -27,8 +27,10 @@ const defaultShareLinkClient = createProjectShareLinkClient();
 export interface ProjectSharingDialogProps {
   projectId: string;
   localProject?: boolean;
+  localImportSourceNames?: readonly string[];
   savingToAccount?: boolean;
   onSaveToAccount?(): void | Promise<void>;
+  onBeforeCreateShareLink?(): void | Promise<void>;
   role: ProjectAccessRole | null;
   collaborationStatus: CollaborationStatus;
   lease: ProjectEditLease | null;
@@ -82,8 +84,10 @@ function activeLease(
 export function ProjectSharingDialog({
   projectId,
   localProject = false,
+  localImportSourceNames = [],
   savingToAccount = false,
   onSaveToAccount,
+  onBeforeCreateShareLink,
   role,
   collaborationStatus,
   lease,
@@ -509,12 +513,22 @@ export function ProjectSharingDialog({
                   Anyone with the link can open this model, adjust its
                   parameters and export — without an account.
                 </p>
+                {localImportSourceNames.length > 0 && (
+                  <p className="sharing-share-hint" role="alert">
+                    Save the source files for{' '}
+                    {localImportSourceNames.join(', ')} to your account with
+                    File → Save before creating a link.
+                  </p>
+                )}
                 <button
                   type="button"
                   className="primary sharing-share-create"
-                  disabled={interactionBusy}
+                  disabled={
+                    interactionBusy || localImportSourceNames.length > 0
+                  }
                   onClick={() =>
                     void mutate('share-link:create', async () => {
+                      await onBeforeCreateShareLink?.();
                       setCreatedShareLinkUrl(null);
                       setShareLinkCopied(false);
                       const created =

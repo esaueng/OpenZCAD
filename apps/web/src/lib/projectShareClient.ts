@@ -22,10 +22,7 @@ export interface ProjectShareLinkClient {
     mode: ProjectShareLinkMode
   ): Promise<CreateProjectShareLinkResponse>;
   listProjectShareLinks(projectId: string): Promise<ProjectShareLinkSummary[]>;
-  revokeProjectShareLink(
-    projectId: string,
-    shareLinkId: string
-  ): Promise<void>;
+  revokeProjectShareLink(projectId: string, shareLinkId: string): Promise<void>;
   /** Anonymous fetch by token; unknown and revoked links resolve to null. */
   fetchSharedProject(token: string): Promise<SharedProjectResponse | null>;
 }
@@ -70,6 +67,17 @@ export function sharedAssetUrl(token: string, assetId: string): string {
   return `/api/share/${routePart(token, 'Share token')}/assets/${routePart(
     assetId,
     'Asset ID'
+  )}`;
+}
+
+/** Anonymous STEP source referenced by a shared project's feature history. */
+export function sharedImportSourceUrl(
+  token: string,
+  artifactId: string
+): string {
+  return `/api/share/${routePart(token, 'Share token')}/sources/${routePart(
+    artifactId,
+    'Artifact ID'
   )}`;
 }
 
