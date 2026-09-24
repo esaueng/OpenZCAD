@@ -141,44 +141,6 @@
   gap: 2px;
 }
 
-.tweak-panel-actions {
-  display: grid;
-  gap: 6px;
-  margin-top: auto;
-  padding: 10px;
-  border-top: var(--border-thin);
-}
-
-.tweak-panel-action {
-  display: grid;
-  grid-template-columns: auto minmax(0, 1fr);
-  align-items: center;
-  gap: 2px 8px;
-  padding: 7px 8px;
-  color: var(--color-text);
-  background: var(--color-surface-2);
-  border: var(--border-thin);
-  border-radius: var(--radius-md);
-  font-size: var(--fs-xs);
-  text-align: left;
-}
-
-.tweak-panel-action svg {
-  grid-row: 1 / span 2;
-  color: var(--color-text-muted);
-}
-
-.tweak-panel-action small {
-  color: var(--color-text-subtle);
-}
-
-.tweak-panel-action:hover:not(:disabled),
-.tweak-panel-action:focus-visible {
-  background: var(--color-surface-hover);
-  border-color: var(--color-border-strong);
-  outline: none;
-}
-
 /* ── Workspace without a sidebar ─────────────────────────── */
 
 /*
@@ -981,7 +943,7 @@
    The strip and the column animate their child, not the float: a
    direct-mode strip centres its float with translateX(-50%), which an
    animated transform on the float itself would throw away. */
-.workspace-column-float > :is(.workspace-column, .tweak-panel),
+.workspace-column-float > :is(.workspace-column, .tweak-rail),
 .view-mode-rail,
 .view-mode-rail-launcher {
   animation: mode-in-left var(--dur-base) var(--ease-out);

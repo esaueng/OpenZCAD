@@ -96,6 +96,16 @@ describe('workspace panel state', () => {
     ).toBe(false);
   });
 
+  it('opens Tweak’s parameter table to begin with and remembers a close', () => {
+    expect(defaultPanelState().tweakPanelOpen).toBe(true);
+    expect(normalizePanelState({ tweakPanelOpen: false }).tweakPanelOpen).toBe(
+      false
+    );
+    expect(normalizePanelState({ tweakPanelOpen: 'no' }).tweakPanelOpen).toBe(
+      true
+    );
+  });
+
   it('toggles one section without touching the others', () => {
     const collapsed = toggleSidebarSection(defaultPanelState(), 'history');
     expect(collapsed.sidebarSections.history).toBe(false);
