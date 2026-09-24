@@ -1,4 +1,5 @@
 import { Copy, Download, SlidersHorizontal } from 'lucide-react';
+import type { ReactNode } from 'react';
 import type { ParameterNode } from '@openzcad/shared';
 import { ParameterRow } from './ParameterRows';
 import { Tooltip } from './Tooltip';
@@ -31,6 +32,11 @@ interface TweakPanelProps {
    */
   panelOpen: boolean;
   onTogglePanel(): void;
+  /**
+   * The parts list, shared with View mode: its rail button(s) go first on
+   * this rail, and its list, when open, stands above the parameter table.
+   */
+  parts?: { buttons: ReactNode; list: ReactNode };
 }
 
 /**
@@ -56,7 +62,8 @@ export function TweakPanel({
   onOpenMeshExport,
   share,
   panelOpen,
-  onTogglePanel
+  onTogglePanel,
+  parts
 }: TweakPanelProps) {
   const exportTitle = (format: string) =>
     canExport
@@ -67,6 +74,12 @@ export function TweakPanel({
   return (
     <>
       <div className="tweak-rail" role="toolbar" aria-label="Tweak tools">
+        {parts && (
+          <>
+            {parts.buttons}
+            <span className="tweak-rail-divider" aria-hidden="true" />
+          </>
+        )}
         <Tooltip
           label="Parameters"
           description={
@@ -126,6 +139,7 @@ export function TweakPanel({
         )}
       </div>
       <div className="tweak-flyouts">
+        {parts?.list}
         {panelOpen && (
           <aside className="sidebar tweak-panel" aria-label="Parameters">
             <div className="sidebar-label">Parameters</div>
