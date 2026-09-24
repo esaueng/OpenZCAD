@@ -8,6 +8,22 @@
    overlays. Durations stay inside the token scale and collapse to zero
    under prefers-reduced-motion (tokens.css). */
 
+/* The default for every control: hover, pressed and selected colours ease
+   rather than snap. :where() keeps this at zero specificity, so a component
+   that declares its own transition (a sliding thumb, a width bar) still wins.
+   Transform is left out on purpose: the viewport chips are positioned by
+   transform and must track the model, not glide after it. Before this, the
+   command card rows, sketch rail, tabs and dialog rows each snapped while
+   the older surfaces listed below eased. */
+:where(button, summary, [role='button'], [role='tab'], [role='option']) {
+  transition:
+    background-color var(--dur-fast) var(--ease-out),
+    color var(--dur-fast) var(--ease-out),
+    border-color var(--dur-fast) var(--ease-out),
+    box-shadow var(--dur-fast) var(--ease-out),
+    opacity var(--dur-fast) var(--ease-out);
+}
+
 .primary,
 .secondary,
 .icon-button,
@@ -73,12 +89,57 @@ textarea {
     background-color var(--dur-fast) var(--ease-out);
 }
 
-/* Feature/parameter rows sweep instead of snapping. */
+/* Feature/parameter rows sweep instead of snapping; a row picked up for a
+   reorder dims in rather than blinking. The drop-target outline stays
+   instant: it tracks the pointer, and a lagging target reads as the wrong
+   slot. */
 .feature-row,
 .body-row {
   transition:
     background-color var(--dur-fast) var(--ease-out),
-    border-color var(--dur-fast) var(--ease-out);
+    border-color var(--dur-fast) var(--ease-out),
+    opacity var(--dur-fast) var(--ease-out);
+}
+
+/* Row affordances revealed on hover fade in with the row's own highlight. */
+.feature-row-grip,
+.param-name-button svg {
+  transition: opacity var(--dur-fast) var(--ease-out);
+}
+
+.param-toggle > span {
+  transition: background-color var(--dur-fast) var(--ease-out);
+}
+
+/* The tool card's phase pill changes tone as the operation moves from
+   armed to validating to failed; a colour step reads as the same pill
+   changing state rather than a new one replacing it. */
+.tool-card-phase {
+  transition:
+    color var(--dur-base) var(--ease-out),
+    background-color var(--dur-base) var(--ease-out),
+    border-color var(--dur-base) var(--ease-out);
+}
+
+/* ── Disclosures ────────────────────────────────────────────
+   One chevron that turns, rather than two icons swapped in a frame, so the
+   header visibly opens. It keys off the owning control's aria-expanded, which
+   every disclosure already sets for assistive tech. */
+.disclosure-chevron {
+  flex: 0 0 auto;
+  transition: transform var(--dur-fast) var(--ease-out);
+}
+
+[aria-expanded='true'] > .disclosure-chevron {
+  transform: rotate(90deg);
+}
+
+/* Opened content drops in beneath its header instead of appearing whole. */
+.sidebar-section:not(.collapsed) > .section-title ~ *,
+.sketch-palette-content,
+.assistant-readings > table,
+.assistant-operations {
+  animation: oz-rise var(--dur-base) var(--ease-out);
 }
 
 .row-delete,
@@ -311,5 +372,34 @@ textarea {
 @keyframes oz-fade-out {
   to {
     opacity: 0;
+  }
+}
+
+/* ── Loading ring ──────────────────────────────────────────
+   The one rotation in the app. Two rings can share the screen (a save in
+   the top bar, an import in the activity pill); each surface used to carry
+   its own keyframes at 800 or 900ms, and side by side they visibly
+   disagreed. Only a glyph drawn to be turned gets this class: a tool icon
+   that spins reads as a pinwheel (the tool card orbits its tile instead). */
+.spin {
+  animation: oz-spin 900ms linear infinite;
+}
+
+@keyframes oz-spin {
+  to {
+    transform: rotate(360deg);
+  }
+}
+
+/* The ring at rest is still a loading glyph, so stopping it keeps the
+   meaning; stating it here keeps the collapse in tokens.css from landing on
+   an arbitrary frame. */
+[data-reduced-motion='true'] .spin {
+  animation: none;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .spin {
+    animation: none;
   }
 }

@@ -35,7 +35,9 @@ import {
 import { OrientationWidget } from './OrientationWidget';
 import {
   ViewportScaleIndicator,
-  type ViewportScaleSink
+  type ViewportScaleSink,
+  ViewportGridReadout,
+  type SketchGridReadoutSink
 } from './ViewportScaleIndicator';
 import type {
   ArtifactId,
@@ -406,6 +408,7 @@ export function ViewerShell({
     drawnSection.kind === 'exact' ? drawnSection.regions : null;
   const orientationDragRef = useRef<OrientationDragControls | null>(null);
   const scaleIndicatorRef = useRef<ViewportScaleSink | null>(null);
+  const sketchGridReadoutRef = useRef<SketchGridReadoutSink | null>(null);
   const selectionChipLabelRef = useRef<HTMLSpanElement | null>(null);
   const chipExit = useDelayedUnmount(selectionChip, OVERLAY_EXIT_MS);
   const chip = chipExit.rendered;
@@ -512,6 +515,7 @@ export function ViewerShell({
         orientationRef={orientationRef}
         orientationDragRef={orientationDragRef}
         scaleIndicatorRef={scaleIndicatorRef}
+        sketchGridReadoutRef={sketchGridReadoutRef}
         onSelectTopology={onSelectTopology}
         onSelectEdgeChain={onSelectEdgeChain}
         selectionFilter={selectionFilter}
@@ -599,6 +603,9 @@ export function ViewerShell({
             aria-label="Viewport readout"
           >
             {dockExtras}
+            {/* The sketch grid spacing reads beside the snap segment; the
+                scale bar itself sits by the orientation cube. */}
+            <ViewportGridReadout sinkRef={sketchGridReadoutRef} />
           </div>
         </>
       )}

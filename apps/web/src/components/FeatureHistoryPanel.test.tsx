@@ -57,3 +57,29 @@ it('shows dependent history and routes a failed edit by feature identity', async
     .click(screen.getByRole('button', { name: 'Inspect Round corners' }));
   expect(select).toHaveBeenLastCalledWith(fillet!.id);
 });
+
+it('says a standalone feature has no dependencies once, not as an empty count', () => {
+  const document = addPrimitiveFeature(
+    createProjectDocument('History', toUserId('user_test')),
+    {
+      name: 'Plate',
+      primitiveKind: 'box',
+      dimensions: { width: 40, height: 20, depth: 8 }
+    }
+  );
+  const [plate] = listFeaturesInOrder(document);
+  render(
+    <FeatureHistoryPanel
+      document={document}
+      selectedId={plate!.id}
+      failure={null}
+      onSelect={vi.fn()}
+      onResumeHistory={vi.fn()}
+      onDismissFailure={vi.fn()}
+    />
+  );
+  expect(screen.getByText('No earlier features feed this one.')).toBeVisible();
+  expect(screen.getByText('Nothing later depends on it.')).toBeVisible();
+  expect(screen.queryByText(/Uses 0 earlier/)).toBeNull();
+  expect(screen.queryByText(/Affects 0 later/)).toBeNull();
+});
