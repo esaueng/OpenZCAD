@@ -3,7 +3,6 @@ import { useState, type ReactNode } from 'react';
 import {
   AlertTriangle,
   Box,
-  ChevronDown,
   ChevronRight,
   CirclePause,
   CirclePlay,
@@ -113,11 +112,11 @@ function SidebarSection({
         onClick={() => onToggle(id)}
         title={open ? `Collapse ${title}` : `Expand ${title}`}
       >
-        {open ? (
-          <ChevronDown size={12} aria-hidden="true" />
-        ) : (
-          <ChevronRight size={12} aria-hidden="true" />
-        )}
+        <ChevronRight
+          size={12}
+          className="disclosure-chevron"
+          aria-hidden="true"
+        />
         <span>{title}</span>
         {showSummary && summary}
         {!showSummary && count !== null && count > 0 && (
@@ -423,11 +422,11 @@ export function Sidebar({
                   : 'Show the earlier bodies this model was built from — each was combined into a later feature and is no longer separate'
               }
             >
-              {showConsumed ? (
-                <ChevronDown size={11} aria-hidden="true" />
-              ) : (
-                <ChevronRight size={11} aria-hidden="true" />
-              )}
+              <ChevronRight
+                size={11}
+                className="disclosure-chevron"
+                aria-hidden="true"
+              />
               <span>
                 {consumedBodies.length} source{' '}
                 {consumedBodies.length === 1 ? 'body' : 'bodies'}
