@@ -86,6 +86,7 @@ import {
   updateObjectForBody,
   sameBodyProjection,
   disposeObject,
+  keepProgram,
   createShadowCatcher,
   createStudioEnvironment,
   createStudioGrid,
@@ -7940,16 +7941,21 @@ export function ModelViewer({
           context.renderer.domElement.dataset.e2eSelectedFace =
             selectedFace.topologyId;
         }
-        const highlightMaterial = new THREE.MeshLambertMaterial({
-          color: SELECTED_FACE_COLOR,
-          toneMapped: false,
-          transparent: true,
-          opacity: 0,
-          side: THREE.DoubleSide,
-          depthWrite: false,
-          polygonOffset: true,
-          polygonOffsetFactor: -3
-        });
+        // Both halves are rebuilt for every body refresh and every new pick,
+        // usually after the previous pair was disposed: kept, so neither
+        // relinks its shader.
+        const highlightMaterial = keepProgram(
+          new THREE.MeshLambertMaterial({
+            color: SELECTED_FACE_COLOR,
+            toneMapped: false,
+            transparent: true,
+            opacity: 0,
+            side: THREE.DoubleSide,
+            depthWrite: false,
+            polygonOffset: true,
+            polygonOffsetFactor: -3
+          })
+        );
         highlightMaterial.userData.targetOpacity = SELECTED_FACE_OPACITY;
         const highlight = new THREE.Mesh(geometry, highlightMaterial);
         highlight.name = 'body-face-selected';
@@ -7959,18 +7965,20 @@ export function ModelViewer({
         selectionOverlay.add(highlight);
         context.fadeIns.add(highlightMaterial);
 
-        const hiddenMaterial = new THREE.MeshBasicMaterial({
-          color: SELECTED_FACE_COLOR,
-          toneMapped: false,
-          transparent: true,
-          // Rises with its visible twin rather than arriving whole: the two
-          // halves are one highlight, and staggering them reads as a flicker
-          // behind the solid.
-          opacity: 0,
-          side: THREE.DoubleSide,
-          depthWrite: false,
-          depthFunc: THREE.GreaterDepth
-        });
+        const hiddenMaterial = keepProgram(
+          new THREE.MeshBasicMaterial({
+            color: SELECTED_FACE_COLOR,
+            toneMapped: false,
+            transparent: true,
+            // Rises with its visible twin rather than arriving whole: the two
+            // halves are one highlight, and staggering them reads as a
+            // flicker behind the solid.
+            opacity: 0,
+            side: THREE.DoubleSide,
+            depthWrite: false,
+            depthFunc: THREE.GreaterDepth
+          })
+        );
         hiddenMaterial.userData.targetOpacity = SELECTED_FACE_HIDDEN_OPACITY;
         context.fadeIns.add(hiddenMaterial);
         const hiddenHighlight = new THREE.Mesh(hiddenGeometry, hiddenMaterial);
