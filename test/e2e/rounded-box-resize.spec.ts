@@ -197,12 +197,24 @@ test('resizes a rounded box from its minimum side with exact entry, drag, cancel
   await expect(
     page.getByRole('region', { name: 'Offset Face operation' })
   ).toBeVisible();
-  // Total is the default reading; the tag beside the value switches exact
-  // entry to the plain offset.
-  await page.getByTestId('direct-manipulation-mode').click();
+  // Moving a face reads the change by default (Resize body read the total);
+  // the tag beside the value still switches to the whole span.
   await expect(page.getByTestId('direct-manipulation-mode')).toHaveText(
     /^Offset/
   );
+  // The label pair beside the pin stays out from under the right lane: on
+  // CI's font metrics it once reached into the inspector, which took the
+  // click meant for the value.
+  const lane = await page.locator('.stage-right > *').first().boundingBox();
+  const valueBox = await page
+    .getByTestId('direct-manipulation-value')
+    .boundingBox();
+  const tagBox = await page
+    .getByTestId('direct-manipulation-mode')
+    .boundingBox();
+  expect(lane).not.toBeNull();
+  expect(valueBox!.x + valueBox!.width).toBeLessThanOrEqual(lane!.x);
+  expect(tagBox!.x + tagBox!.width).toBeLessThanOrEqual(lane!.x);
   await page.getByTestId('direct-manipulation-value').click();
   await expect(
     page.getByRole('dialog', { name: 'Offset value' })

@@ -27,20 +27,24 @@ interface AppShellProps {
   /** Contextual properties panel; null hides it and gives the space back. */
   inspector: ReactNode | null;
   /**
-   * Assistant dock, to the right of the viewport. Null removes it entirely —
-   * what the assistant setting does — and the viewport takes back the space.
+   * The model drawer (parameters, bodies, history), floating beside the
+   * instrument rail on the right; null while it is closed.
+   */
+  drawer?: ReactNode | null;
+  /**
+   * The assistant's conversation, floating over the viewport above the search
+   * bar. Null removes it entirely — what the assistant setting does.
    */
   assistant: ReactNode | null;
   /**
-   * Gives the assistant's column back without unmounting it. A direct
-   * manipulation mode hides the dock, but the panel holds the conversation and
-   * any request still streaming, so it has to stay mounted underneath.
+   * Hides the conversation without unmounting it. A direct manipulation mode
+   * hides it, but the panel holds the conversation and any request still
+   * streaming, so it has to stay mounted underneath.
    */
   assistantHidden?: boolean;
   /**
-   * Same deal for a deliberate collapse: the panel renders its launcher instead
-   * of the dock, so the column has to go too — a collapse that left a 360 px
-   * gap behind would not be a collapse.
+   * A deliberate collapse: the panel renders its Ask launcher on the search
+   * bar instead of the conversation.
    */
   assistantCollapsed?: boolean;
   /** The user's panel widths, in CSS pixels, published to the layout. */
@@ -51,9 +55,8 @@ interface AppShellProps {
    * for the duration of the gesture instead of re-rendering the editor.
    */
   workspaceRef?: Ref<HTMLElement>;
-  /** Splitters: the column's right edge and the assistant's left edge. */
+  /** The column's splitter. The assistant floats, so it has none. */
   sidebarResizer?: ReactNode;
-  assistantResizer?: ReactNode;
   /** The status toast and the activity log, over the viewport. */
   readout?: ReactNode;
   overlays?: ReactNode;
@@ -65,9 +68,10 @@ interface AppShellProps {
 }
 
 /**
- * Workspace layout frame: TopBar / [Viewer | Assistant]. The column, the
- * inspector and the dock float over the viewer like CAD dialogs, so the
- * viewport keeps its full size while modeling; there is no status bar.
+ * Workspace layout frame: the viewer fills the workspace, and everything else
+ * — the top islands, the column, the inspector, the drawer, the assistant —
+ * floats over it, so the viewport keeps its full size while modeling; there
+ * is no status bar.
  */
 export function AppShell({
   topBar,
@@ -75,6 +79,7 @@ export function AppShell({
   sidebar,
   viewer,
   inspector,
+  drawer = null,
   assistant,
   assistantHidden = false,
   assistantCollapsed = false,
@@ -82,7 +87,6 @@ export function AppShell({
   assistantWidth,
   workspaceRef,
   sidebarResizer,
-  assistantResizer,
   readout,
   overlays,
   onDropFiles
@@ -107,12 +111,23 @@ export function AppShell({
         }`}
         style={widths}
       >
-        <div className={`viewer-area${inspector ? ' has-inspector' : ''}`}>
+        <div
+          className={`viewer-area${inspector ? ' has-inspector' : ''}${
+            drawer ? ' has-drawer' : ''
+          }`}
+        >
           {viewer}
           {sidebar && <div className="workspace-column-float">{sidebar}</div>}
           {sidebar && sidebarResizer}
           {toolBar && <div className="palette-float">{toolBar}</div>}
-          {inspector && <div className="inspector-float">{inspector}</div>}
+          {/* The right lane, beside the instrument rail: the inspector over
+              the drawer, one column, so neither pushes into the canvas. The
+              wrapper always renders, so opening the drawer never remounts
+              an inspector form mid-edit. */}
+          <div className="stage-right">
+            {inspector && <div className="inspector-float">{inspector}</div>}
+            {drawer && <div className="model-drawer-float">{drawer}</div>}
+          </div>
           {readout}
           {onDropFiles && (
             <Suspense fallback={null}>
@@ -121,7 +136,6 @@ export function AppShell({
           )}
         </div>
         {assistant}
-        {assistantDocked && assistantResizer}
       </main>
       {overlays}
     </div>

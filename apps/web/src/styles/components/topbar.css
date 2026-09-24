@@ -56,7 +56,7 @@
   padding: 0 4px;
   color: var(--color-text-muted);
   background: var(--color-surface-2);
-  border-radius: 999px;
+  border-radius: var(--radius-md);
   font-family: var(--font-mono);
   font-size: var(--fs-mini);
   line-height: 1;
@@ -539,7 +539,7 @@
   height: 14px;
   padding: 0 3px;
   place-items: center;
-  border-radius: 999px;
+  border-radius: var(--radius-md);
   color: var(--color-on-accent);
   background: var(--color-success);
   box-shadow: 0 0 0 2px var(--color-surface);
@@ -547,14 +547,4 @@
   font-size: 9.5px;
   font-weight: var(--fw-medium);
   line-height: 1;
-}
-
-.spin {
-  animation: spin 0.9s linear infinite;
-}
-
-@keyframes spin {
-  to {
-    transform: rotate(360deg);
-  }
 }

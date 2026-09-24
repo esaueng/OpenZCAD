@@ -372,11 +372,7 @@ export function StartScreen({
               {syncEntry.state === 'pending' ? (
                 <CloudUpload size={12} aria-hidden="true" />
               ) : syncEntry.state === 'syncing' ? (
-                <LoaderCircle
-                  size={12}
-                  className="start-sync-spin"
-                  aria-hidden="true"
-                />
+                <LoaderCircle size={12} className="spin" aria-hidden="true" />
               ) : syncEntry.state === 'synced' ? (
                 <Check size={12} aria-hidden="true" />
               ) : (
@@ -883,11 +879,7 @@ export function StartScreen({
             <div className="start-sync-panel" role="status" aria-live="polite">
               <div className="start-sync-head">
                 {syncTotals.active ? (
-                  <LoaderCircle
-                    size={14}
-                    className="start-sync-spin"
-                    aria-hidden="true"
-                  />
+                  <LoaderCircle size={14} className="spin" aria-hidden="true" />
                 ) : syncTotals.failed > 0 ? (
                   <TriangleAlert
                     size={14}
