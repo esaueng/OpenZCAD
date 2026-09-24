@@ -108,8 +108,8 @@ test('keeps the top-bar order fixed and dismisses the file menu outside', async 
   await fileMenu.locator('summary').click();
   await expect(fileMenu).toHaveAttribute('open', '');
 
-  // The bar carries a divider either side of the workspace-mode switch; any
-  // one of them is the neutral outside-click this dismissal needs.
+  // The identity island's divider, between the brand and the project name,
+  // is the neutral outside-click this dismissal needs.
   await topbar.locator('.topbar-divider').first().click();
   await expect(fileMenu).not.toHaveAttribute('open', '');
 
@@ -242,14 +242,17 @@ test('keeps every workspace surface inside a narrow viewport', async ({
   const selectors = [
     '.topbar',
     '.workspace',
-    '.sidebar',
+    '.workspace-column',
+    '.model-drawer-float',
     '.viewer-area',
     '.assistant-panel',
-    '.viewport-dock'
+    '.viewport-readout',
+    '.command-bar',
+    '.instrument-rail'
   ];
-  // What has to hold is where these surfaces come to rest. The dock opens with
-  // a 200 ms slide from `translateX(12px)`, which deliberately starts it past
-  // the right edge (the shell clips it), so measure once that has landed.
+  // What has to hold is where these surfaces come to rest. The assistant
+  // opens with a 200 ms rise from `translateY(8px)`, so measure once that
+  // has landed.
   await waitForSurfacesToSettle(page, selectors);
   for (const selector of selectors) {
     const bounds = await page.locator(selector).boundingBox();
@@ -266,17 +269,36 @@ test('keeps every workspace surface inside a narrow viewport', async ({
 
   // The column floats over the viewport at every width; on a phone it must
   // still fit, leaving canvas beside it.
-  const sidebarBounds = await page.locator('.sidebar').boundingBox();
+  const sidebarBounds = await page.locator('.workspace-column').boundingBox();
   const viewerBounds = await page.locator('.viewer-area').boundingBox();
   expect(sidebarBounds!.x + sidebarBounds!.width).toBeLessThan(
     viewerBounds!.x + viewerBounds!.width - 100
   );
-  // The dock has to fit a phone width whole: it is the only bottom chrome.
-  const dockBounds = await page.locator('.viewport-dock').boundingBox();
-  expect(dockBounds).not.toBeNull();
-  expect(dockBounds!.x).toBeGreaterThanOrEqual(0);
-  expect(dockBounds!.x + dockBounds!.width).toBeLessThanOrEqual(390.5);
+  // The bottom chrome is the readout under the column and the search bar
+  // beside it; on a phone they share one row and must not overlap.
+  const readoutBounds = await page.locator('.viewport-readout').boundingBox();
+  const barBounds = await page.locator('.command-bar').boundingBox();
+  expect(readoutBounds!.x + readoutBounds!.width).toBeLessThanOrEqual(
+    barBounds!.x + 0.5
+  );
   await expect(page.locator('.viewer-rail-stack')).toBeVisible();
+
+  // The three top islands keep to themselves: with equal-width flanks the
+  // actions ran into the mode switch at this width.
+  const islands = await page
+    .locator('.topbar > .topbar-island')
+    .evaluateAll((elements) =>
+      elements.map((element) => {
+        const bounds = element.getBoundingClientRect();
+        return { left: bounds.left, right: bounds.right };
+      })
+    );
+  expect(islands).toHaveLength(3);
+  for (let index = 1; index < islands.length; index += 1) {
+    expect(islands[index]!.left).toBeGreaterThanOrEqual(
+      islands[index - 1]!.right - 0.5
+    );
+  }
 
   const overflowingTopbarChildren = await page.locator('.topbar').evaluate(
     (topbar) =>
@@ -758,7 +780,7 @@ test('a direct mode hides the assistant without ending the conversation', async 
   );
 });
 
-test('collapsing the assistant frees its column and keeps the thread', async ({
+test('collapsing the assistant folds it into Ask and keeps the thread', async ({
   page
 }) => {
   await stubApi(page, { assistantEnabled: true });
@@ -772,18 +794,15 @@ test('collapsing the assistant frees its column and keeps the thread', async ({
     'Add a 10 mm cube.'
   );
 
-  const viewerBefore = await page.locator('.viewer-area').boundingBox();
   await page.getByRole('button', { name: 'Collapse the assistant' }).click();
 
-  // A collapse has to give the dock's whole column back, not just its contents.
+  // The conversation folds back into the Ask button on the search bar.
   await expect(page.locator('.assistant-panel')).toHaveCount(0);
   await expect(page.locator('.workspace.with-assistant')).toHaveCount(0);
-  const launcher = page.getByRole('button', {
-    name: /Open the modeling assistant/
-  });
+  const launcher = page
+    .locator('.command-bar-row')
+    .getByRole('button', { name: /Open the modeling assistant/ });
   await expect(launcher).toBeVisible();
-  const viewerAfter = await page.locator('.viewer-area').boundingBox();
-  expect(viewerAfter!.width).toBeGreaterThan(viewerBefore!.width + 100);
 
   await launcher.click();
   await expect(page.locator('.assistant-thread')).toContainText(

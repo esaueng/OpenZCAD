@@ -6,11 +6,13 @@ import type * as LocalProjectStore from './lib/localProjectStore';
 // Self-hosted rather than fetched from Google Fonts: as a stylesheet in
 // <head> that request was render-blocking on every cold visit. Bundled here,
 // the @font-face rules ride along in the CSS we already load. Latin subsets
-// only, at the two weights the design tokens actually use.
-import '@fontsource/ibm-plex-sans/latin-400.css';
-import '@fontsource/ibm-plex-sans/latin-500.css';
-import '@fontsource/ibm-plex-mono/latin-400.css';
-import '@fontsource/ibm-plex-mono/latin-500.css';
+// only. Geist Sans carries 600 because panel titles and the primary action
+// are set semibold; the browser would otherwise synthesize it from 500.
+import '@fontsource/geist-sans/latin-400.css';
+import '@fontsource/geist-sans/latin-500.css';
+import '@fontsource/geist-sans/latin-600.css';
+import '@fontsource/geist-mono/latin-400.css';
+import '@fontsource/geist-mono/latin-500.css';
 import { mark } from './lib/perf';
 import './theme/tokens.css';
 import './styles/app.css';

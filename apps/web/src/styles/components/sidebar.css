@@ -71,7 +71,7 @@
   font-variant-numeric: tabular-nums;
   color: var(--color-text-muted);
   background: var(--color-surface-2);
-  border-radius: 999px;
+  border-radius: var(--radius-md);
   font-family: var(--font-mono);
   font-size: var(--fs-mini);
 }

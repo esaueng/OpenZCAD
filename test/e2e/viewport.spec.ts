@@ -230,7 +230,9 @@ test('the viewport scale indicator tracks zoom in document units', async ({
   const canvas = page.locator('.viewer-host canvas');
   await expect(canvas).toHaveAttribute('data-e2e-camera-distance', /.+/);
   const initialLabel = await indicator.textContent();
-  const dock = page.locator('.viewport-dock');
+  // The scale bar resizes with zoom; nothing around it may move. It sits
+  // beside the cube now, and the readout's controls are the nearest chrome.
+  const dock = page.locator('.viewport-readout');
   const control = dock.getByRole('button').first();
   const initialDock = await dock.boundingBox();
   const initialControl = await control.boundingBox();
@@ -388,9 +390,10 @@ test('the wheel zooms toward the pointer, and the preference turns it off', asyn
   const box = await canvas.boundingBox();
   expect(box).not.toBeNull();
   // Well off-centre: centre-zoom leaves the target alone, cursor-zoom pulls
-  // it toward this point.
+  // it toward this point. Left of the right lane, where a wheel would
+  // scroll the model drawer instead.
   const cursor = {
-    x: box!.x + box!.width * 0.75,
+    x: box!.x + box!.width * 0.64,
     y: box!.y + box!.height * 0.3
   };
 
@@ -451,13 +454,15 @@ test('a wheel notch over viewport chrome zooms without scrolling the page', asyn
 
   // Make the browser page scrollable so an unhandled wheel event has a visible
   // default action. The production shell normally sits at scrollTop 0, where
-  // the same leak presents as elastic/rubber-band movement instead.
+  // the same leak presents as elastic/rubber-band movement instead. A small
+  // offset: the viewer bar is the instrument rail under the top islands, so a
+  // deep scroll would carry the button under the pointer off the screen.
   await page.evaluate(() => {
     document.documentElement.style.overflowY = 'auto';
     document.body.style.minHeight = '200vh';
-    window.scrollTo(0, 160);
+    window.scrollTo(0, 40);
   });
-  await expect.poll(() => page.evaluate(() => window.scrollY)).toBe(160);
+  await expect.poll(() => page.evaluate(() => window.scrollY)).toBe(40);
 
   const before = await readLiveCamera(canvas);
   const buttonBox = await railButton.boundingBox();
@@ -481,7 +486,7 @@ test('a wheel notch over viewport chrome zooms without scrolling the page', asyn
     after.position[2]! - after.target[2]!
   );
   expect(afterDistance).toBeLessThan(beforeDistance);
-  expect(await page.evaluate(() => window.scrollY)).toBe(160);
+  expect(await page.evaluate(() => window.scrollY)).toBe(40);
 });
 
 test('a batched trackpad pinch renders as bounded zoom steps', async ({
@@ -1889,7 +1894,9 @@ test('view keys still work while a profile pick is waiting for a click', async (
   await expect(page.locator('.sketch-palette')).toBeVisible();
   const centres = await bareCanvasDrags(page, { count: 2, dragX: 55 });
   const circleTool = sketchTools.getByRole('button', { name: /^Circle/ });
-  const gridReadout = page.locator('.sketch-grid-indicator');
+  // The dock's grid segment; the floating HUD label only stands in when no
+  // dock is up. Both are written from the same render pass.
+  const gridReadout = page.locator('.viewport-dock-grid');
   for (const centre of centres) {
     await circleTool.click();
     // The rail button is React state and flips first; the viewport only owns
@@ -2018,7 +2025,7 @@ test('section view cycles planes, cuts exactly at rest, and cuts nothing from th
     expect(geometry.bounds.min[2]).toBeCloseTo(offset);
     expect(geometry.bounds.max[2]).toBeCloseTo(geometry.bounds.min[2]!);
   };
-  const shown = (await sectionState());
+  const shown = await sectionState();
   atPlane(shown.sectionCaps[0] ?? shown.exactSections[0]!);
 
   // The kernel sections a plain box exactly, and its curves take the cap's
@@ -2640,17 +2647,31 @@ test('pressing to orbit writes no storage on the press frame', async ({
 
   const canvas = page.locator('.viewer-host canvas');
   await expect(canvas).toBeVisible({ timeout: 120_000 });
+  // The History row lands before the kernel result reaches the viewer, and
+  // the viewer's first fit writes the pose the moment the box is installed —
+  // a write that could otherwise commit just after the press. The attribute
+  // is set in the same effect run as that fit, so once it reads 1 the fit
+  // and its write are behind us.
+  await expect(canvas).toHaveAttribute('data-e2e-rendered-bodies', '1', {
+    timeout: 60_000
+  });
   const bounds = (await canvas.boundingBox())!;
-
-  // Let any settle scheduled by the camera fit above land first, or its write
-  // arrives during the press and is counted against it.
-  await page.waitForTimeout(400);
 
   // Counted rather than timed: the cost was a synchronous
   // read-parse-validate-serialise-write of the whole session record, run from
   // pointerdown because pressing re-pivots the orbit onto the picked point.
+  //
+  // The count starts at the press itself, not here: the fit leaves a settle
+  // timer whose pose write may still be pending, so a baseline taken now
+  // races it. Pressing cancels that timer (`beginGesture`), so every write
+  // after the press's capture listener belongs to the press. The listener is
+  // on `window` in the capture phase so it runs before any viewer handler
+  // can write or stop propagation.
   await page.evaluate(() => {
-    const scope = window as typeof window & { __ozWrites?: number };
+    const scope = window as typeof window & {
+      __ozWrites?: number;
+      __ozWritesAtPress?: number;
+    };
     scope.__ozWrites = 0;
     const setItem = Storage.prototype.setItem;
     Storage.prototype.setItem = function patched(key: string, value: string) {
@@ -2659,6 +2680,13 @@ test('pressing to orbit writes no storage on the press frame', async ({
       }
       return setItem.call(this, key, value);
     };
+    window.addEventListener(
+      'pointerdown',
+      () => {
+        scope.__ozWritesAtPress = scope.__ozWrites ?? 0;
+      },
+      { capture: true, once: true }
+    );
   });
 
   const centre = {
@@ -2668,9 +2696,13 @@ test('pressing to orbit writes no storage on the press frame', async ({
   await page.mouse.move(centre.x, centre.y);
   await page.keyboard.down('Shift');
   await page.mouse.down();
-  const onPress = await page.evaluate(
-    () => (window as typeof window & { __ozWrites?: number }).__ozWrites ?? 0
-  );
+  const onPress = await page.evaluate(() => {
+    const scope = window as typeof window & {
+      __ozWrites?: number;
+      __ozWritesAtPress?: number;
+    };
+    return (scope.__ozWrites ?? 0) - (scope.__ozWritesAtPress ?? Infinity);
+  });
   for (let step = 1; step <= 10; step += 1) {
     await page.mouse.move(centre.x + step * 4, centre.y + step * 2);
   }

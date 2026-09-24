@@ -66,6 +66,7 @@ function clampAutosaveDelay(seconds: number): number {
     )
   );
 }
+import { countLabel } from '../lib/toasts';
 import { api } from '../lib/api';
 import { isDesktopApp } from '../lib/desktopBridge';
 import {
@@ -108,7 +109,7 @@ function storageDescription(usage: AccountStorageUsage | null): string {
   if (!usage) {
     return 'Sign in to see what your account is storing.';
   }
-  return `${usage.projectCount} project(s) · ${formatBytes(usage.documentBytes)} current, ${formatBytes(usage.revisionBytes)} across ${usage.revisionCount} saved revision(s). Each project may be up to ${formatBytes(usage.documentLimitBytes)} and keeps its last ${usage.maxRevisionsPerProject} revisions.`;
+  return `${countLabel(usage.projectCount, 'project', 'projects')} · ${formatBytes(usage.documentBytes)} current, ${formatBytes(usage.revisionBytes)} across ${countLabel(usage.revisionCount, 'saved revision', 'saved revisions')}. Each project may be up to ${formatBytes(usage.documentLimitBytes)} and keeps its last ${usage.maxRevisionsPerProject} revisions.`;
 }
 
 type SectionId = SettingsSectionId;
