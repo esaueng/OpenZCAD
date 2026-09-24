@@ -303,6 +303,7 @@ import {
 import { AppShell } from './components/AppShell';
 import { WorkspaceColumn } from './components/WorkspaceColumn';
 import {
+  ActivityLogButton,
   ViewportDockExtras,
   WorkspaceReadout
 } from './components/WorkspaceReadout';
@@ -16435,6 +16436,13 @@ export function App() {
         activeTool={tool}
         availability={availability}
         onLaunchTool={launchTool}
+        moreOpen={panelState.commandFoldOpen}
+        onToggleMore={() =>
+          setPanelState((current) => ({
+            ...current,
+            commandFoldOpen: !current.commandFoldOpen
+          }))
+        }
       />
     );
   return (
@@ -16711,6 +16719,11 @@ export function App() {
                       </button>
                     );
                   })}
+                  <ActivityLogButton
+                    logOpen={activityLogOpen}
+                    onToggleLog={() => setActivityLogOpen((open) => !open)}
+                    logTriggerRef={activityLogTriggerRef}
+                  />
                 </div>
               </>
             }
@@ -16729,9 +16742,6 @@ export function App() {
                         }
                       : null
                   }
-                  logOpen={activityLogOpen}
-                  onToggleLog={() => setActivityLogOpen((open) => !open)}
-                  logTriggerRef={activityLogTriggerRef}
                 />
               ) : null
             }

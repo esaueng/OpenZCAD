@@ -119,7 +119,7 @@
   --shadow-popover: var(--shadow-2);
 
   /* ── Layout dimensions ────────────────────────────────── */
-  --topbar-h: 44px;
+  --topbar-h: 40px;
   /* The quiet stage: every island floats this far from the viewport's edges
      and from its neighbours, and the stage's usable top starts under the
      top islands. */
@@ -134,7 +134,7 @@
   /* Starting widths for the two resizable panels. The workspace republishes
      both from the user's saved layout, so these are what a fresh profile —
      or a workspace rendered before settings load — gets. */
-  --sidebar-w: 252px;
+  --sidebar-w: 232px;
   --context-w: 330px;
   /* Wide enough for a question card's chips and a dimension audit table. */
   --assistant-w: 360px;

@@ -2,7 +2,11 @@ import { render, screen } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { createRef } from 'react';
 import { describe, expect, it, vi } from 'vitest';
-import { ViewportDockExtras, WorkspaceReadout } from './WorkspaceReadout';
+import {
+  ActivityLogButton,
+  ViewportDockExtras,
+  WorkspaceReadout
+} from './WorkspaceReadout';
 
 const SUMMARY = {
   prompt: 'Click a body, face, or edge · Shift+Click adds to selection',
@@ -128,19 +132,15 @@ describe('WorkspaceReadout', () => {
 });
 
 describe('ViewportDockExtras', () => {
-  it('cycles the selection filter and opens the log from the dock', async () => {
+  it('cycles the selection filter and reads the snap', async () => {
     const user = userEvent.setup();
     const onSelectionFilter = vi.fn();
-    const onToggleLog = vi.fn();
     render(
       <ViewportDockExtras
         selectionFilter="any"
         selectionFilterIsAutomatic
         onSelectionFilter={onSelectionFilter}
         snap={{ spacing: 1, units: 'mm', enabled: true }}
-        logOpen={false}
-        onToggleLog={onToggleLog}
-        logTriggerRef={createRef<HTMLButtonElement>()}
       />
     );
     await user.click(
@@ -149,8 +149,8 @@ describe('ViewportDockExtras', () => {
     expect(onSelectionFilter).toHaveBeenCalledTimes(1);
     expect(onSelectionFilter.mock.calls[0]?.[0]).not.toBe('any');
     expect(screen.getByText('Snap 1 mm')).toBeInTheDocument();
-    await user.click(screen.getByRole('button', { name: 'Open activity log' }));
-    expect(onToggleLog).toHaveBeenCalledTimes(1);
+    // The log's button left the readout for the instrument rail.
+    expect(screen.queryByRole('button', { name: /activity log/ })).toBeNull();
   });
 
   it('hands the filter back to the tool at the end of the cycle', async () => {
@@ -162,14 +162,43 @@ describe('ViewportDockExtras', () => {
         selectionFilterIsAutomatic={false}
         onSelectionFilter={onSelectionFilter}
         snap={null}
-        logOpen={false}
-        onToggleLog={vi.fn()}
-        logTriggerRef={createRef<HTMLButtonElement>()}
       />
     );
     await user.click(
       screen.getByRole('button', { name: /Selection filter: Sketch/ })
     );
     expect(onSelectionFilter).toHaveBeenCalledWith(null);
+  });
+});
+
+describe('ActivityLogButton', () => {
+  it('is a rail button that names its state and opens the log', async () => {
+    const user = userEvent.setup();
+    const onToggleLog = vi.fn();
+    const ref = createRef<HTMLButtonElement>();
+    const { rerender } = render(
+      <ActivityLogButton
+        logOpen={false}
+        onToggleLog={onToggleLog}
+        logTriggerRef={ref}
+      />
+    );
+    const button = screen.getByRole('button', { name: 'Open activity log' });
+    expect(button).toHaveClass('rail-button');
+    expect(button).toHaveAttribute('aria-expanded', 'false');
+    // The log returns focus here when it closes.
+    expect(ref.current).toBe(button);
+    await user.click(button);
+    expect(onToggleLog).toHaveBeenCalledTimes(1);
+    rerender(
+      <ActivityLogButton
+        logOpen
+        onToggleLog={onToggleLog}
+        logTriggerRef={ref}
+      />
+    );
+    expect(
+      screen.getByRole('button', { name: 'Close activity log' })
+    ).toHaveClass('active');
   });
 });

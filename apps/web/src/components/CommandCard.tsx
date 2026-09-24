@@ -1,6 +1,7 @@
 import {
   Box,
   Boxes,
+  ChevronRight,
   MousePointer2,
   Shapes,
   Slash,
@@ -43,14 +44,21 @@ interface CommandCardProps {
   activeTool: ToolId | null;
   availability: ToolAvailability;
   onLaunchTool(tool: ToolId): void;
+  /** The "More tools" fold, remembered per device in the panel state. */
+  moreOpen: boolean;
+  onToggleMore(): void;
 }
 
 /**
  * The one surface on the left that changes with the selection. Its header
  * names the pick; its rows are the tools that act on that kind of pick, with
- * the context's primary verb marked; every other tool waits in the grid
- * below, by the same accessible name the palette's tiles always had, so no
- * command is ever out of reach and none appears twice.
+ * the context's primary verb marked; every other tool waits behind the "More
+ * tools" fold at the foot, by the same accessible name the palette's tiles
+ * always had, so no command is ever out of reach and none appears twice.
+ *
+ * The fold is closed by default: the card is meant to show what fits the
+ * pick and nothing else, and ⌘K reaches every command by name regardless.
+ * Opened, it stays open across picks and reloads, like the drawer.
  */
 export function CommandCard({
   selection,
@@ -58,7 +66,9 @@ export function CommandCard({
   onClear,
   activeTool,
   availability,
-  onLaunchTool
+  onLaunchTool,
+  moreOpen: showAll,
+  onToggleMore
 }: CommandCardProps) {
   const context = commandContextFor(selection);
   const rest = remainingTools(context);
@@ -138,11 +148,31 @@ export function CommandCard({
           {group.tools.map((tool) => button(tool, 'row'))}
         </section>
       ))}
-      <section role="group" aria-label="All tools" className="command-group">
-        <span className="command-group-label">All tools</span>
-        <div className="command-grid">
-          {rest.map((tool) => button(tool, 'icon'))}
-        </div>
+      <section
+        role="group"
+        aria-label="All tools"
+        className={`command-group command-more${showAll ? ' open' : ''}`}
+      >
+        <button
+          type="button"
+          className="command-more-toggle"
+          aria-expanded={showAll}
+          title={
+            showAll
+              ? 'Hide the tools that do not act on this selection'
+              : `Show the ${rest.length} other tools`
+          }
+          onClick={onToggleMore}
+        >
+          <ChevronRight size={12} aria-hidden="true" />
+          <span>{showAll ? 'All tools' : 'More tools'}</span>
+          <small className="command-more-count">{rest.length}</small>
+        </button>
+        {showAll && (
+          <div className="command-grid">
+            {rest.map((tool) => button(tool, 'icon'))}
+          </div>
+        )}
       </section>
     </nav>
   );
