@@ -230,7 +230,9 @@ test('the viewport scale indicator tracks zoom in document units', async ({
   const canvas = page.locator('.viewer-host canvas');
   await expect(canvas).toHaveAttribute('data-e2e-camera-distance', /.+/);
   const initialLabel = await indicator.textContent();
-  const dock = page.locator('.viewport-dock');
+  // The scale bar resizes with zoom; nothing around it may move. It sits
+  // beside the cube now, and the readout's controls are the nearest chrome.
+  const dock = page.locator('.viewport-readout');
   const control = dock.getByRole('button').first();
   const initialDock = await dock.boundingBox();
   const initialControl = await control.boundingBox();
@@ -388,9 +390,10 @@ test('the wheel zooms toward the pointer, and the preference turns it off', asyn
   const box = await canvas.boundingBox();
   expect(box).not.toBeNull();
   // Well off-centre: centre-zoom leaves the target alone, cursor-zoom pulls
-  // it toward this point.
+  // it toward this point. Left of the right lane, where a wheel would
+  // scroll the model drawer instead.
   const cursor = {
-    x: box!.x + box!.width * 0.75,
+    x: box!.x + box!.width * 0.64,
     y: box!.y + box!.height * 0.3
   };
 
@@ -451,13 +454,15 @@ test('a wheel notch over viewport chrome zooms without scrolling the page', asyn
 
   // Make the browser page scrollable so an unhandled wheel event has a visible
   // default action. The production shell normally sits at scrollTop 0, where
-  // the same leak presents as elastic/rubber-band movement instead.
+  // the same leak presents as elastic/rubber-band movement instead. A small
+  // offset: the viewer bar is the instrument rail under the top islands, so a
+  // deep scroll would carry the button under the pointer off the screen.
   await page.evaluate(() => {
     document.documentElement.style.overflowY = 'auto';
     document.body.style.minHeight = '200vh';
-    window.scrollTo(0, 160);
+    window.scrollTo(0, 40);
   });
-  await expect.poll(() => page.evaluate(() => window.scrollY)).toBe(160);
+  await expect.poll(() => page.evaluate(() => window.scrollY)).toBe(40);
 
   const before = await readLiveCamera(canvas);
   const buttonBox = await railButton.boundingBox();
@@ -481,7 +486,7 @@ test('a wheel notch over viewport chrome zooms without scrolling the page', asyn
     after.position[2]! - after.target[2]!
   );
   expect(afterDistance).toBeLessThan(beforeDistance);
-  expect(await page.evaluate(() => window.scrollY)).toBe(160);
+  expect(await page.evaluate(() => window.scrollY)).toBe(40);
 });
 
 test('a batched trackpad pinch renders as bounded zoom steps', async ({

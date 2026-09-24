@@ -397,6 +397,159 @@ describe('batched topology edge picking', () => {
   });
 });
 
+/**
+ * An inside corner: two faces meeting in a valley along X at the origin, each
+ * rising toward the camera at 45°, like a wall under a lip seen from below.
+ * Off the crease, either face is nearer along the ray than the crease is.
+ */
+function insideCornerBody(adjacentFaceHashes?: number[]) {
+  const body = new THREE.Group();
+  body.userData.bodyId = 'corner';
+  const geometry = new THREE.BufferGeometry();
+  // Triangles 0–1 are the lower face (hash 11), 2–3 the upper face (hash 12).
+  geometry.setAttribute(
+    'position',
+    new THREE.Float32BufferAttribute(
+      [
+        [-4, 0, 0],
+        [4, 0, 0],
+        [4, -4, 4],
+        [-4, 0, 0],
+        [4, -4, 4],
+        [-4, -4, 4],
+        [-4, 0, 0],
+        [4, 4, 4],
+        [4, 0, 0],
+        [-4, 0, 0],
+        [-4, 4, 4],
+        [4, 4, 4]
+      ].flat(),
+      3
+    )
+  );
+  const mesh = new THREE.Mesh(
+    geometry,
+    new THREE.MeshBasicMaterial({ side: THREE.DoubleSide })
+  );
+  mesh.userData = {
+    bodyId: 'corner',
+    topology: {
+      faces: [
+        { topologyId: 'lower', hash: 11, triangleStart: 0, triangleCount: 2 },
+        { topologyId: 'upper', hash: 12, triangleStart: 2, triangleCount: 2 }
+      ]
+    }
+  };
+  body.add(mesh);
+  body.add(
+    createBodyEdgeOverlay(
+      {
+        bodyId: toBodyId('corner'),
+        topology: {
+          faces: [],
+          edges: [
+            {
+              topologyId: 'crease',
+              hash: 3,
+              points: [-4, 0, 0, 0, 0, 0, 4, 0, 0],
+              ...(adjacentFaceHashes ? { adjacentFaceHashes } : {})
+            }
+          ]
+        }
+      },
+      { width: 100, height: 100 }
+    )
+  );
+  body.updateMatrixWorld(true);
+  return body;
+}
+
+/** A pointer `dy` CSS px below the centre of the 100 px stub element. */
+function offsetEvent(dy: number): MouseEvent {
+  return { clientX: 50, clientY: 50 + dy } as MouseEvent;
+}
+
+describe('inside-corner edge picking', () => {
+  it('takes the crease from a pointer a few pixels onto either face', () => {
+    const bodyGroup = new THREE.Group();
+    bodyGroup.add(insideCornerBody([11, 12]));
+    const { service } = makeService({ bodyGroup });
+
+    for (const dy of [-5, -3, 3, 5]) {
+      const pick = service.pick(offsetEvent(dy));
+      expect(pick?.kind, `pointer ${dy} px off the crease`).toBe('edge');
+      expect(pick?.selection?.topologyId).toBe('crease');
+    }
+  });
+
+  it('still gives the face a pointer outside the edge band', () => {
+    const bodyGroup = new THREE.Group();
+    bodyGroup.add(insideCornerBody([11, 12]));
+    const { service } = makeService({ bodyGroup });
+
+    expect(service.pick(offsetEvent(-15))?.selection?.topologyId).toBe('upper');
+    expect(service.pick(offsetEvent(15))?.selection?.topologyId).toBe('lower');
+  });
+
+  it('keeps the face first in depth cycling order after the crease', () => {
+    const bodyGroup = new THREE.Group();
+    bodyGroup.add(insideCornerBody([11, 12]));
+    const { service } = makeService({ bodyGroup });
+
+    expect(
+      service
+        .pickAll(offsetEvent(-3))
+        .map((candidate) => candidate.selection?.topologyId)
+    ).toEqual(['crease', 'upper']);
+  });
+
+  it('does not promote an edge the kernel did not say bounds the face', () => {
+    const bodyGroup = new THREE.Group();
+    bodyGroup.add(insideCornerBody([99]));
+    const { service } = makeService({ bodyGroup });
+
+    expect(service.pick(offsetEvent(-3))?.kind).toBe('face');
+  });
+
+  it('falls back to depth order when adjacency was not published', () => {
+    const bodyGroup = new THREE.Group();
+    bodyGroup.add(insideCornerBody());
+    const { service } = makeService({ bodyGroup });
+
+    expect(service.pick(offsetEvent(-3))?.kind).toBe('face');
+  });
+
+  it('leaves a boundary hidden behind other geometry to the face', () => {
+    const bodyGroup = new THREE.Group();
+    bodyGroup.add(insideCornerBody([11, 12]));
+    // A strip between the camera and the crease that the pointer ray, 3 px
+    // up the upper face, passes above.
+    const lip = new THREE.Mesh(
+      new THREE.PlaneGeometry(10, 0.4),
+      new THREE.MeshBasicMaterial({ side: THREE.DoubleSide })
+    );
+    lip.position.set(0, -0.1, 4);
+    lip.userData.bodyId = 'lip';
+    lip.updateMatrixWorld(true);
+    bodyGroup.add(lip);
+    const { service } = makeService({ bodyGroup });
+
+    const pick = service.pick(offsetEvent(-3));
+    expect(pick?.kind).toBe('face');
+    expect(pick?.selection?.topologyId).toBe('upper');
+  });
+
+  it('never hands a face click to another body’s edge', () => {
+    const bodyGroup = new THREE.Group();
+    const corner = insideCornerBody([11, 12]);
+    corner.children[0]!.userData.bodyId = 'other';
+    bodyGroup.add(corner);
+    const { service } = makeService({ bodyGroup });
+
+    expect(service.pick(offsetEvent(-3))?.kind).toBe('face');
+  });
+});
+
 describe('pickAll feeds depth cycling', () => {
   it('returns every body under the pointer nearest first', () => {
     const bodyGroup = new THREE.Group();

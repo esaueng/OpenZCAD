@@ -82,6 +82,15 @@ interface TopologyUserData {
 }
 
 /**
+ * How far in front of an edge point, relative to its camera distance, another
+ * surface may sit and still count as that same boundary rather than an
+ * occluder. Tessellated curved faces meet their exact edges only to chord
+ * precision, so this is looser than the coplanar allowance in `edges.ts`; a
+ * genuine occluder — the lip over a blind hole's floor — is far outside it.
+ */
+const BOUNDARY_OCCLUSION_RELATIVE_EPSILON = 1e-3;
+
+/**
  * Raycasting and topology resolution for the viewport.
  *
  * `pick` answers "what did the user click", applying the layered precedence
@@ -90,6 +99,8 @@ interface TopologyUserData {
  */
 export class PickService {
   readonly raycaster = new THREE.Raycaster();
+  /** Separate so an occlusion probe never re-aims the ray callers read. */
+  private readonly occlusionRaycaster = new THREE.Raycaster();
 
   private options: PickServiceOptions;
   private pointer = new THREE.Vector2();
@@ -325,8 +336,10 @@ export class PickService {
     return projected;
   }
 
-  private bodyIntersections(): THREE.Intersection<THREE.Object3D>[] {
-    return this.raycaster
+  private bodyIntersections(
+    raycaster: THREE.Raycaster = this.raycaster
+  ): THREE.Intersection<THREE.Object3D>[] {
+    return raycaster
       .intersectObjects(this.options.bodyGroup.children, true)
       .filter((hit) => {
         let object: THREE.Object3D | null = hit.object;
@@ -359,6 +372,126 @@ export class PickService {
           sketchId: sketchHit.object.userData.sketchId as string
         }
       : null;
+  }
+
+  /** The exact face owning a body-mesh triangle hit, if the body has one. */
+  private faceAt(hit: THREE.Intersection<THREE.Object3D>) {
+    const faceIndex = hit.faceIndex;
+    const data = hit.object.userData as TopologyUserData;
+    return typeof faceIndex === 'number'
+      ? data.topology?.faces.find(
+          (candidate) =>
+            faceIndex >= candidate.triangleStart &&
+            faceIndex < candidate.triangleStart + candidate.triangleCount
+        )
+      : undefined;
+  }
+
+  /**
+   * The faces an edge hit bounds, as the kernel published them. Null for
+   * anything that is not an edge, and for adapters that predate the field.
+   */
+  private edgeBoundary(
+    hit: THREE.Intersection<THREE.Object3D>
+  ): { bodyId: string; adjacentFaceHashes: readonly number[] } | null {
+    const batchTarget = batchedEdgeTarget(hit.object, hit.faceIndex);
+    if (batchTarget) {
+      const hashes = batchTarget.owner.adjacentFaceHashes;
+      return hashes
+        ? { bodyId: batchTarget.owner.bodyId, adjacentFaceHashes: hashes }
+        : null;
+    }
+    const data = hit.object.userData as TopologyUserData;
+    if (data.topologyKind !== 'edge' || !data.topologyId) {
+      return null;
+    }
+    const bodyId = data.bodyId ?? findBodyId(hit.object);
+    const hashes = data.topology?.edges.find(
+      (edge) => edge.topologyId === data.topologyId
+    )?.adjacentFaceHashes;
+    return bodyId && hashes ? { bodyId, adjacentFaceHashes: hashes } : null;
+  }
+
+  /**
+   * Whether nothing solid stands between the camera and a point on an edge.
+   * One extra ray, cast only when a boundary edge is about to be promoted.
+   */
+  private edgePointVisible(point: THREE.Vector3): boolean {
+    const camera = this.options.camera();
+    const ndc = point.clone().project(camera);
+    this.occlusionRaycaster.setFromCamera(
+      new THREE.Vector2(ndc.x, ndc.y),
+      camera
+    );
+    const reach = this.occlusionRaycaster.ray.origin.distanceTo(point);
+    const blocker = this.bodyIntersections(this.occlusionRaycaster).find(
+      (hit) => hit.face
+    );
+    return (
+      !blocker ||
+      blocker.distance >= reach * (1 - BOUNDARY_OCCLUSION_RELATIVE_EPSILON)
+    );
+  }
+
+  /**
+   * Promotes an edge in the pick band that bounds the face under the pointer.
+   *
+   * `prioritizeVisibleEdgeHit` settles edge-versus-face by depth, which only
+   * works for outside corners: there the edge is the nearest thing along a
+   * ray a few pixels off it. At an inside corner — a wall meeting the
+   * underside of a lip, a boss meeting its plate — both faces rise toward
+   * the camera away from the crease, so the face always wins and the edge
+   * answered only to a pointer exactly on its line. Adjacency is the depth-
+   * free question: if the edge bounds the face being hovered and nothing
+   * hides it, the pointer is on that boundary for picking purposes, the same
+   * band an outside corner already gets.
+   *
+   * When several boundary edges qualify (near a vertex), the one drawn
+   * nearest the pointer wins.
+   */
+  private promoteBoundaryEdge(
+    hits: THREE.Intersection<THREE.Object3D>[]
+  ): THREE.Intersection<THREE.Object3D>[] {
+    const nearest = hits[0];
+    // Only a surface hit can hand the click to its boundary; an edge already
+    // in front was placed there by the depth rule.
+    if (!nearest?.face) {
+      return hits;
+    }
+    const face = this.faceAt(nearest);
+    const bodyId =
+      (nearest.object.userData as TopologyUserData).bodyId ??
+      findBodyId(nearest.object);
+    if (!face || !bodyId) {
+      return hits;
+    }
+    const camera = this.options.camera();
+    const pointer = nearest.point.clone().project(camera);
+    const boundary = hits
+      .map((hit) => {
+        const edge = this.edgeBoundary(hit);
+        const onLine = (hit as { pointOnLine?: THREE.Vector3 }).pointOnLine;
+        if (
+          !edge ||
+          !onLine ||
+          edge.bodyId !== bodyId ||
+          !edge.adjacentFaceHashes.includes(face.hash)
+        ) {
+          return null;
+        }
+        const drawn = onLine.clone().project(camera);
+        return {
+          hit,
+          onLine,
+          offset: Math.hypot(drawn.x - pointer.x, drawn.y - pointer.y)
+        };
+      })
+      .filter((entry) => entry !== null)
+      .sort((left, right) => left.offset - right.offset)
+      .find((entry) => this.edgePointVisible(entry.onLine));
+    return boundary
+      ? [boundary.hit, ...hits.filter((hit) => hit !== boundary.hit)]
+      : hits;
   }
 
   /** Resolves one body-group intersection into edge, face, or whole body. */
@@ -403,15 +536,7 @@ export class PickService {
         }
       };
     }
-    const faceIndex = hit.faceIndex;
-    const face =
-      typeof faceIndex === 'number'
-        ? data.topology?.faces.find(
-            (candidate) =>
-              faceIndex >= candidate.triangleStart &&
-              faceIndex < candidate.triangleStart + candidate.triangleCount
-          )
-        : undefined;
+    const face = this.faceAt(hit);
     if (face) {
       return {
         kind: 'face',
@@ -448,7 +573,7 @@ export class PickService {
     bodyIntersections: () => THREE.Intersection<THREE.Object3D>[]
   ): PickCandidate[] {
     return this.applyFilter(
-      prioritizeVisibleEdgeHit(bodyIntersections())
+      this.promoteBoundaryEdge(prioritizeVisibleEdgeHit(bodyIntersections()))
         .map((hit) => this.topologyCandidate(hit))
         .filter((candidate): candidate is PickCandidate => candidate !== null)
     );

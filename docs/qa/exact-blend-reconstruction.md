@@ -27,9 +27,13 @@ pnpm test:parity-corpus
 pnpm build
 ```
 
-The application pins generated Remus packages 2.130.44 at immutable commit
-`5543fd0a90788c5842438b4e7c8487edbb7d0f4f`, from
-[Remus PR #602](https://github.com/esaueng/remus/pull/602).
+The application pins generated Remus packages 2.130.47 at immutable commit
+`54484bc9570d62e25122dbcb32ed53355b75eca1` on Remus `main`: the
+[#609](https://github.com/esaueng/remus/pull/609) package refresh built from
+[#608](https://github.com/esaueng/remus/pull/608), which landed the reviewed
+source of [Remus PR #602](https://github.com/esaueng/remus/pull/602) on current
+`main` alongside the concave tessellation fix
+([#606](https://github.com/esaueng/remus/pull/606)).
 
 Kernel qualification covers ordered split contacts, an atomic connected-group
 API, isolated spherical ends, bounded affine-NURBS caps, and additional analytic

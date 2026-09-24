@@ -51,10 +51,11 @@ import {
   PenLine,
   Move3d,
   Save,
-  Search,
   Settings as SettingsIcon,
   Scissors,
   SlidersHorizontal,
+  Layers,
+  ListOrdered,
   Spline,
   Trash2,
   TriangleRight,
@@ -434,7 +435,6 @@ import {
   resolveFilletBlendFace,
   resolveImportedBlendFace
 } from './lib/interaction/filletFaceEdit';
-import { Tooltip } from './components/Tooltip';
 import { ToastHost } from './components/Toast';
 import { commandPaletteShortcut } from './lib/platformShortcut';
 import { retireStatus, type StatusEntry } from './lib/statusLifetime';
@@ -643,12 +643,13 @@ function SketchWorkflow(props: ComponentProps<typeof LazySketchWorkflow>) {
     </Suspense>
   );
 }
-// The feature tools are the first thing the column shows, but their chunk
-// is small and fetched with the workspace: keeping the component out of the
-// entry chunk is what keeps that chunk under its budget.
-const LazyToolBar = lazyWithStaleChunkNotice(() =>
-  import('./components/ToolBar').then((module) => ({
-    default: module.ToolBar
+// The command card is the first thing the column shows, but its chunk is
+// small and fetched with the workspace: keeping the component (and the
+// selection-to-context rules it carries) out of the entry chunk is what
+// keeps that chunk under its budget.
+const LazyCommandCard = lazyWithStaleChunkNotice(() =>
+  import('./components/CommandCard').then((module) => ({
+    default: module.CommandCard
   }))
 );
 // The first-model tour shows once per device; nobody else pays for it.
@@ -660,6 +661,11 @@ const LazyWorkspaceTour = lazyWithStaleChunkNotice(() =>
 const LazySketchToolRail = lazyWithStaleChunkNotice(() =>
   import('./components/SketchToolRail').then((module) => ({
     default: module.SketchToolRail
+  }))
+);
+const LazySketchRelationsRail = lazyWithStaleChunkNotice(() =>
+  import('./components/SketchToolRail').then((module) => ({
+    default: module.SketchRelationsRail
   }))
 );
 // Three modal dialogs nobody sees in an ordinary session: a resume offer, a
@@ -789,10 +795,10 @@ function MeasurementDock(props: ComponentProps<typeof LazyMeasurementDock>) {
   );
 }
 
-function ToolBar(props: ComponentProps<typeof LazyToolBar>) {
+function CommandCard(props: ComponentProps<typeof LazyCommandCard>) {
   return (
     <Suspense fallback={null}>
-      <LazyToolBar {...props} />
+      <LazyCommandCard {...props} />
     </Suspense>
   );
 }
@@ -809,6 +815,16 @@ function SketchToolRail(props: ComponentProps<typeof LazySketchToolRail>) {
   return (
     <Suspense fallback={null}>
       <LazySketchToolRail {...props} />
+    </Suspense>
+  );
+}
+
+function SketchRelationsRail(
+  props: ComponentProps<typeof LazySketchRelationsRail>
+) {
+  return (
+    <Suspense fallback={null}>
+      <LazySketchRelationsRail {...props} />
     </Suspense>
   );
 }
@@ -1003,8 +1019,8 @@ import {
 import {
   loadPanelState,
   savePanelState,
+  toggleDrawerSection,
   toggleSidebarSection,
-  toggleToolGroup,
   type PanelState,
   type SidebarSectionId,
   type WorkspaceMode
@@ -1014,10 +1030,8 @@ import {
   updateSettingsViewState
 } from './lib/settingsViewState';
 import {
-  ASSISTANT_WIDTH_LIMITS,
   clampAssistantWidth,
   clampSidebarWidth,
-  maxAssistantWidth,
   maxSidebarWidth,
   savedPanelWidths,
   SIDEBAR_WIDTH_LIMITS
@@ -2063,6 +2077,14 @@ export function App() {
     nonce: number;
   } | null>(null);
   const [paletteOpen, setPaletteOpen] = useState(false);
+  // A question typed into command search, handed to the assistant with a
+  // fresh id so the same words asked twice still send twice.
+  const [assistantRequest, setAssistantRequest] = useState<{
+    id: number;
+    text: string;
+  } | null>(null);
+  // The slot at the end of the search bar where the Ask launcher sits.
+  const [askSlot, setAskSlot] = useState<HTMLElement | null>(null);
   const [shortcutsOpen, setShortcutsOpen] = useState(false);
   const [contextMenu, setContextMenu] = useState<ContextMenuState | null>(null);
   const orientationRef = useRef<((axes: AxisProjection) => void) | null>(null);
@@ -11305,15 +11327,20 @@ export function App() {
       }));
   }, [editingSketchNode, doc, selectedSketchEntity]);
 
-  const selectedEntityConstraintTools = useMemo(() => {
-    if (!selectedSketchEntity || interaction.mode !== 'sketch') {
-      return [];
-    }
-    const armed = interaction.session.pendingConstraint?.kind ?? null;
-    return constraintToolsForObject(selectedSketchEntity.data.objectKind).map(
-      ({ kind, label }) => ({ kind, label, armed: armed === kind })
-    );
-  }, [selectedSketchEntity, interaction]);
+  // What the relations rail offers the selected entity: its kind, for the
+  // refusal it names, and the relations that take it as their first pick.
+  const relationSelection = useMemo(
+    () =>
+      selectedSketchEntity && interaction.mode === 'sketch'
+        ? {
+            kind: selectedSketchEntity.data.objectKind,
+            fitting: constraintToolsForObject(
+              selectedSketchEntity.data.objectKind
+            ).map(({ kind }) => kind)
+          }
+        : null,
+    [selectedSketchEntity, interaction.mode]
+  );
 
   /**
    * A constraint tool chosen from the entity editor: the selection is pick 1,
@@ -15606,7 +15633,60 @@ export function App() {
       shortcut: 'Ctrl+,',
       icon: <SettingsIcon size={16} aria-hidden="true" />,
       run: openSettings
-    }
+    },
+    // What the model is made of: every feature and parameter by name, last,
+    // so a search that names one lands on it in the drawer.
+    ...(!modelingLocked
+      ? [
+          ...features.map(
+            (feature) =>
+              ({
+                id: `feature-${feature.id}`,
+                label: feature.name,
+                group: 'Feature',
+                icon: <ListOrdered size={16} aria-hidden="true" />,
+                run: () => {
+                  setPanelState((current) => ({
+                    ...current,
+                    drawerOpen: true,
+                    sidebarSections: {
+                      ...current.sidebarSections,
+                      history: true
+                    }
+                  }));
+                  handleOpenHistoryFeature(feature.id);
+                }
+              }) satisfies PaletteCommand
+          ),
+          ...parameters.map(
+            (parameter) =>
+              ({
+                id: `parameter-${parameter.parameterId}`,
+                label: `${parameter.name} = ${parameter.expression}`,
+                group: 'Parameter',
+                icon: <SlidersHorizontal size={16} aria-hidden="true" />,
+                run: () => {
+                  setPanelState((current) => ({
+                    ...current,
+                    drawerOpen: true,
+                    sidebarSections: {
+                      ...current.sidebarSections,
+                      parameters: true
+                    }
+                  }));
+                  // The drawer renders on the next commit; focus follows it.
+                  window.setTimeout(() => {
+                    document
+                      .querySelector<HTMLInputElement>(
+                        `[aria-label="Expression for ${CSS.escape(parameter.name)}"]`
+                      )
+                      ?.focus();
+                  }, 0);
+                }
+              }) satisfies PaletteCommand
+          )
+        ]
+      : [])
   ];
 
   const directMode =
@@ -15997,9 +16077,54 @@ export function App() {
   const sketchOverviewPlane =
     editingSketchNode?.planeRef ??
     (interaction.mode === 'sketch' ? interaction.session.plane : null);
+  // The selected entity's editor rides in the sketch card, under the tools:
+  // the card changes with the pick, and the right side stays the relations'.
+  const sketchEntityEditor =
+    interaction.mode === 'sketch' && selectedSketchEntity ? (
+      <SketchEntityEditor
+        key={`${selectedSketchEntity.id}:${doc.version}`}
+        disabled={sketchSolving || geometryBusy}
+        error={sketchEditError}
+        data={selectedSketchEntity.data}
+        scope={parameterScope.scope}
+        onApply={(data) => {
+          void handleUpdateSketchEntity(data);
+        }}
+        onDelete={handleDeleteSketchEntity}
+        constraints={selectedEntityConstraints}
+        onEditConstraint={handleEditSketchDimension}
+        onDeleteConstraint={handleDeleteSketchConstraint}
+        onClose={() =>
+          dispatchInteraction({
+            type: 'sketch-select-object',
+            objectId: null
+          })
+        }
+      />
+    ) : null;
+  const armConstraintTool = (kind: SketchConstraintToolKind | null) => {
+    dispatchInteraction({
+      type: 'sketch-constraint-tool',
+      kind
+    });
+    if (kind) {
+      setStatus(constraintToolSpec(kind).hint);
+    }
+  };
+  const sketchRelations =
+    interaction.mode === 'sketch' ? (
+      <SketchRelationsRail
+        canConstrain={Boolean(interaction.session.sketchId)}
+        pendingConstraint={interaction.session.pendingConstraint}
+        selection={relationSelection}
+        onConstraintTool={armConstraintTool}
+        onSelectionConstraintTool={handleSelectionConstraintTool}
+      />
+    ) : null;
   const sketchRail =
     interaction.mode === 'sketch' ? (
       <SketchToolRail
+        entityEditor={sketchEntityEditor}
         workflow={
           <SketchWorkflow
             plane={
@@ -16058,20 +16183,10 @@ export function App() {
         units={doc.units}
         paletteVisible
         canConstrain={Boolean(interaction.session.sketchId)}
-        pendingConstraint={interaction.session.pendingConstraint}
         pendingEdit={interaction.session.pendingEdit}
         constraints={sketchConstraintItems}
         solveStatus={sketchSolveStatus}
         solving={sketchSolving}
-        onConstraintTool={(kind) => {
-          dispatchInteraction({
-            type: 'sketch-constraint-tool',
-            kind
-          });
-          if (kind) {
-            setStatus(constraintToolSpec(kind).hint);
-          }
-        }}
         onEditTool={(kind, hint) => {
           dispatchInteraction({ type: 'sketch-edit-tool', kind });
           if (hint) {
@@ -16207,58 +16322,52 @@ export function App() {
       <>
         <PenLine size={14} aria-hidden="true" className="sketch-mark" />
         <strong>{editingSketchName}</strong>
-        <span className="spacer" />
-        <button
-          type="button"
-          className="workspace-column-finish"
-          title="Finish Sketch"
-          aria-label="Finish Sketch"
-          onClick={() => {
-            dispatchInteraction({ type: 'exit-sketch' });
-            setTool(null);
-            setSketchEditError(null);
-            setSketchDiagnosticPoints([]);
-            setStatus(
-              `${editingSketchName} finished · sketch edits preserved.`
-            );
-          }}
-        >
-          <Check size={14} aria-hidden="true" />
-          Finish
-        </button>
       </>
-    ) : (
-      <Tooltip
-        label="Search commands"
-        shortcut={commandPaletteKey.glyph}
-        description="Open the command palette"
+    ) : null;
+  // Finish closes the sketch card at its foot, where the eye ends up after
+  // the tools; every sketch edit is already committed, so there is nothing
+  // to discard.
+  const columnFooter =
+    interaction.mode === 'sketch' ? (
+      <button
+        type="button"
+        className="workspace-column-finish"
+        title="Finish Sketch"
+        aria-label="Finish Sketch"
+        onClick={() => {
+          dispatchInteraction({ type: 'exit-sketch' });
+          setTool(null);
+          setSketchEditError(null);
+          setSketchDiagnosticPoints([]);
+          setStatus(`${editingSketchName} finished · sketch edits preserved.`);
+        }}
       >
-        <button
-          type="button"
-          className="workspace-column-search"
-          aria-label={`Search commands (${commandPaletteKey.accessible})`}
-          onClick={() => setPaletteOpen(true)}
-        >
-          <Search size={14} aria-hidden="true" />
-          <span>Search commands</span>
-          <kbd>{commandPaletteKey.glyph}</kbd>
-        </button>
-      </Tooltip>
-    );
+        <Check size={14} aria-hidden="true" />
+        Finish sketch
+      </button>
+    ) : null;
   // Direct-mode strips (plane picking, direct extrude) keep floating over
   // the viewport; the column shows the palette so the tool can be changed.
   const columnTools =
     interaction.mode === 'sketch' ? (
       sketchRail
     ) : (
-      <ToolBar
+      <CommandCard
+        selection={{
+          edgeCount: selectedEdges.length,
+          faceSelected: renderedSelectedTopology?.kind === 'face',
+          bodyCount: selectedBodyIds.length,
+          regionCount: selectedProfiles.length
+        }}
+        summary={selectionSummary}
+        onClear={
+          selectionSummary || selectedProfiles.length > 0
+            ? clearSelection
+            : undefined
+        }
         activeTool={tool}
         availability={availability}
-        openGroups={panelState.toolGroups}
         onLaunchTool={launchTool}
-        onToggleGroup={(group) =>
-          setPanelState((current) => toggleToolGroup(current, group))
-        }
       />
     );
   return (
@@ -16278,20 +16387,6 @@ export function App() {
           onCommit={(width) => commitPanelWidth('sidebar', width)}
           onReset={() =>
             commitPanelWidth('sidebar', SIDEBAR_WIDTH_LIMITS.default)
-          }
-        />
-      }
-      assistantResizer={
-        <PanelResizer
-          label="Resize the assistant"
-          edge="right"
-          width={assistantWidth}
-          min={ASSISTANT_WIDTH_LIMITS.min}
-          max={maxAssistantWidth(windowWidth)}
-          onPreview={(width) => previewPanelWidth('--assistant-w', width)}
-          onCommit={(width) => commitPanelWidth('assistant', width)}
-          onReset={() =>
-            commitPanelWidth('assistant', ASSISTANT_WIDTH_LIMITS.default)
           }
         />
       }
@@ -16440,9 +16535,11 @@ export function App() {
             }
           />
         ) : (
-          <WorkspaceColumn header={columnHeader} tools={columnTools}>
-            {modelBrowser}
-          </WorkspaceColumn>
+          <WorkspaceColumn
+            header={columnHeader}
+            tools={columnTools}
+            footer={columnFooter}
+          />
         )
       }
       viewer={
@@ -16510,6 +16607,46 @@ export function App() {
             appearancePreview={bodyAppearancePreview}
             hideViewerToolbar={false}
             dockLayout={!tweakMode}
+            railExtras={
+              <>
+                {/* While sketching, the relations stand beside the rail. */}
+                {sketchRelations}
+                <div
+                  className="viewer-rail rail-panels"
+                  role="toolbar"
+                  aria-label="Model panels"
+                >
+                  {(
+                    [
+                      ['bodies', 'Items', Layers],
+                      ['history', 'History', ListOrdered],
+                      ['parameters', 'Parameters', SlidersHorizontal]
+                    ] as const
+                  ).map(([section, label, Icon]) => {
+                    const showing =
+                      panelState.drawerOpen &&
+                      panelState.sidebarSections[section];
+                    return (
+                      <button
+                        key={section}
+                        type="button"
+                        className={`rail-button${showing ? ' active' : ''}`}
+                        aria-label={`${label} panel`}
+                        aria-pressed={showing}
+                        title={label}
+                        onClick={() =>
+                          setPanelState((current) =>
+                            toggleDrawerSection(current, section)
+                          )
+                        }
+                      >
+                        <Icon size={16} aria-hidden="true" />
+                      </button>
+                    );
+                  })}
+                </div>
+              </>
+            }
             dockExtras={
               !tweakMode ? (
                 <ViewportDockExtras
@@ -16840,30 +16977,6 @@ export function App() {
                       }}
                     />
                   )}
-                  {interaction.mode === 'sketch' && selectedSketchEntity && (
-                    <SketchEntityEditor
-                      key={`${selectedSketchEntity.id}:${doc.version}`}
-                      disabled={sketchSolving || geometryBusy}
-                      error={sketchEditError}
-                      data={selectedSketchEntity.data}
-                      scope={parameterScope.scope}
-                      onApply={(data) => {
-                        void handleUpdateSketchEntity(data);
-                      }}
-                      onDelete={handleDeleteSketchEntity}
-                      constraints={selectedEntityConstraints}
-                      constraintTools={selectedEntityConstraintTools}
-                      onConstraintTool={handleSelectionConstraintTool}
-                      onEditConstraint={handleEditSketchDimension}
-                      onDeleteConstraint={handleDeleteSketchConstraint}
-                      onClose={() =>
-                        dispatchInteraction({
-                          type: 'sketch-select-object',
-                          objectId: null
-                        })
-                      }
-                    />
-                  )}
                   {keypad && (
                     <NumericKeypad
                       request={keypad}
@@ -17187,6 +17300,9 @@ export function App() {
             aboveViewBar={viewMode}
           />
         </ErrorBoundary>
+      }
+      drawer={
+        !viewMode && !tweakMode && panelState.drawerOpen ? modelBrowser : null
       }
       inspector={
         inspectorActive ? (
@@ -17636,6 +17752,8 @@ export function App() {
               onCollapsedChange={setAssistantCollapsed}
               confirmDestructive={appSettings.general.confirmDestructiveActions}
               hidden={assistantHidden}
+              launcherSlot={askSlot}
+              request={assistantRequest}
             />
           </ErrorBoundary>
         ) : null
@@ -17673,6 +17791,9 @@ export function App() {
             warningCount={diagnostics.length}
             documentVersion={doc.version}
             saveState={presentedSaveState}
+            onOpenSearch={() => setPaletteOpen(true)}
+            searchKey={commandPaletteKey}
+            onSearchSlot={setAskSlot}
           />
           <StatusActivityLog
             id={activityLogId}
@@ -17748,6 +17869,17 @@ export function App() {
               <LazyCommandPalette
                 commands={paletteCommands}
                 onClose={() => setPaletteOpen(false)}
+                onAsk={
+                  assistantAvailable
+                    ? (question) => {
+                        setAssistantCollapsed(false);
+                        setAssistantRequest((current) => ({
+                          id: (current?.id ?? 0) + 1,
+                          text: question
+                        }));
+                      }
+                    : undefined
+                }
               />
             </Suspense>
           )}

@@ -677,9 +677,9 @@ export function createGradientBackdrop(): THREE.Mesh {
     fog: false,
     toneMapped: false,
     uniforms: {
-      topColor: { value: new THREE.Color('#131922') },
-      middleColor: { value: new THREE.Color('#0b0f15') },
-      bottomColor: { value: new THREE.Color('#05070a') },
+      topColor: { value: new THREE.Color('#171a1f') },
+      middleColor: { value: new THREE.Color('#101215') },
+      bottomColor: { value: new THREE.Color('#0b0c0f') },
       middleStop: { value: 0.45 }
     },
     vertexShader: /* glsl */ `
@@ -758,8 +758,8 @@ export function createStudioGrid(): THREE.Mesh {
     uniforms: {
       minorStep: { value: 1 },
       levelFract: { value: 0 },
-      minorColor: { value: new THREE.Color('#64789c') },
-      majorColor: { value: new THREE.Color('#8b9dc0') },
+      minorColor: { value: new THREE.Color('#5c6573') },
+      majorColor: { value: new THREE.Color('#838d9c') },
       fadeRadius: { value: 300 },
       fadeCenter: { value: new THREE.Vector2(0, 0) }
     },

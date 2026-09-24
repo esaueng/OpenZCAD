@@ -3,7 +3,11 @@ import { readFileSync } from 'node:fs';
 import { resolve } from 'node:path';
 import { afterAll, beforeAll, describe, expect, it, vi } from 'vitest';
 import { RemusKernel } from '../packages/kernel-adapter/src/remus-runtime';
-import { unifyUnionFaces } from '../packages/kernel-adapter/src/exact-boolean-helpers';
+import {
+  unifyUnionFaces,
+  unifyUnionFacesChecked,
+  verdictRefusesUnion
+} from '../packages/kernel-adapter/src/exact-boolean-helpers';
 import { transformMatrix } from '../packages/kernel-adapter/src/exact-math';
 import {
   addPrimitiveFeature,
@@ -1557,10 +1561,126 @@ describe('exact kernel adapter', { timeout: 30_000 }, () => {
     }
   });
 
+  it('reuses the union gate verdict instead of validating the same solid again', async () => {
+    // The H02 private-holder runs showed the same NURBS-heavy union body
+    // validated once at the gate (`validateSolid` + closed-projection
+    // tessellation) and again in the measurement pass. The checked gate
+    // hands its verdict through, so the measurement pass must not call
+    // `validateSolid` on that handle a second time — while a body the gate
+    // never produced is still validated exactly as before.
+    const withFirst = addPrimitiveFeature(
+      createProjectDocument('Union verdict', toUserId('user_exact')),
+      {
+        name: 'First',
+        primitiveKind: 'box',
+        dimensions: { width: 10, height: 10, depth: 10 }
+      }
+    );
+    const firstId = withFirst.bodyOrder.at(-1)!;
+    const withSecond = addPrimitiveFeature(withFirst, {
+      name: 'Second',
+      primitiveKind: 'box',
+      dimensions: { width: 10, height: 10, depth: 10 }
+    });
+    const secondId = withSecond.bodyOrder.at(-1)!;
+    const positioned = transformBody(withSecond, {
+      name: 'Overlap boxes',
+      targetBodyId: secondId,
+      translation: { x: 5, y: 0, z: 0 },
+      rotationDeg: { x: 0, y: 0, z: 0 }
+    }).document;
+    const manager = new CommandManager(positioned);
+    const document = manager.execute(
+      commandFactories.booleanBodies({
+        name: 'Union',
+        operation: 'union',
+        targetBodyIds: [firstId, secondId]
+      })
+    );
+
+    const validate = vi.spyOn(RemusKernel.prototype, 'validateSolid');
+    try {
+      const derived = await adapter.syncDocument(document);
+      expect(derived.warnings).toEqual([]);
+      const resultId = document.bodyOrder.at(-1)!;
+      const body = derived.bodyRepresentations[resultId]!;
+      expect(body.faceCount).toBeGreaterThan(0);
+      // The gate validated (via `unifyFacesChecked` on this pin, or one
+      // plain `validateSolid` where the checked entry point is absent);
+      // the measurement pass then served the verdict without a second
+      // strict validation of the shipped handle.
+      const strictCalls = validate.mock.calls.filter(
+        (call) => typeof call[0] === 'number'
+      );
+      expect(strictCalls.length).toBeLessThanOrEqual(1);
+    } finally {
+      validate.mockRestore();
+    }
+  });
+
+  it('maps the checked union verdict to the same refusal the gate asks', () => {
+    // Pure verdict mapping: no kernel, no geometry. A strict failure
+    // refuses without needing a mesh verdict; a strict pass still needs
+    // its closed projection; anything else is the same question the
+    // gate and the strict pass both ask.
+    expect(verdictRefusesUnion({ strictErrors: 1 })).toBe(true);
+    expect(verdictRefusesUnion({ strictErrors: 0 })).toBe(true);
+    expect(
+      verdictRefusesUnion({ strictErrors: 0, meshClosed: false })
+    ).toBe(true);
+    expect(
+      verdictRefusesUnion({ strictErrors: 0, meshClosed: true })
+    ).toBe(false);
+  });
+
+  it('keeps checked unification acceptance identical to the plain gate', () => {
+    // Same geometry through both gates: the checked path must ship a
+    // strict solid with a verdict that does not refuse it — the same
+    // acceptance the plain gate promises. Handle identity may differ
+    // (the checked path heals a copy), so the assertion is on the
+    // shipped body's validity, not on which handle was kept.
+    const build = () => {
+      const kernel = new RemusKernel();
+      const left = kernel.makeBox(10, 10, 10);
+      const right = kernel.makeBox(10, 10, 10);
+      kernel.transformSolid(
+        right,
+        transformMatrix({ x: 5, y: 0, z: 0 }, { x: 0, y: 0, z: 0 })
+      );
+      return { kernel, raw: kernel.fuseAll(Uint32Array.from([left, right])) };
+    };
+    const plain = build();
+    const plainSolid = unifyUnionFaces(plain.kernel, plain.raw);
+    expect(plain.kernel.validateSolid(plainSolid)).toBe(0);
+
+    const checkedSetup = build();
+    const checked = unifyUnionFacesChecked(
+      checkedSetup.kernel,
+      checkedSetup.raw
+    );
+    // Both gates agree on validity: the shipped solid is strict and its
+    // verdict does not refuse it.
+    expect(checkedSetup.kernel.validateSolid(checked.solid)).toBe(0);
+    expect(verdictRefusesUnion(checked.verdict)).toBe(false);
+  });
+
   it('attributes a strict Union validation failure to the feature', async () => {
     const validate = vi
       .spyOn(RemusKernel.prototype, 'validateSolid')
       .mockReturnValue(1);
+    // The union gate heals via `unifyFacesChecked`, whose strict verdicts
+    // come from the kernel's own validation — not the JS `validateSolid`
+    // spy — so the failure must be reported through the checked call too.
+    const checked = vi
+      .spyOn(RemusKernel.prototype, 'unifyFacesChecked')
+      .mockReturnValue(
+        JSON.stringify({
+          facesMerged: 0,
+          inputErrors: 1,
+          resultErrors: 1,
+          reverted: true
+        })
+      );
     try {
       const withFirst = addPrimitiveFeature(
         createProjectDocument('Rejected union', toUserId('user_exact')),
@@ -1597,6 +1717,7 @@ describe('exact kernel adapter', { timeout: 30_000 }, () => {
         'Feature "Rejected union": Union produced an open, non-manifold, or inconsistently oriented result. Adjust the overlap or placement and try again.'
       );
     } finally {
+      checked.mockRestore();
       validate.mockRestore();
     }
   });

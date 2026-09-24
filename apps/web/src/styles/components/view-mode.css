@@ -182,10 +182,10 @@
 /* ── Workspace without a sidebar ─────────────────────────── */
 
 /*
-  Matches `.workspace.with-assistant`'s specificity so it survives the
-  narrow-screen rules in responsive.css, which reassert the sidebar column at
-  that weight. The column is zeroed as well as removed from the template so the
-  splitter offsets that read `--sidebar-col-w` collapse with it.
+  Two classes, so it survives the narrow-screen rules in responsive.css, which
+  reassert the sidebar column on `.workspace`. The column is zeroed as well as
+  removed from the template so the splitter offsets that read
+  `--sidebar-col-w` collapse with it.
 */
 .workspace.no-sidebar {
   --sidebar-col-w: 0px;
@@ -770,7 +770,7 @@
   flex: 0 0 auto;
   padding: 1px 4px;
   border: 1px solid color-mix(in srgb, currentColor 28%, transparent);
-  border-radius: 999px;
+  border-radius: var(--radius-md);
   font-family: var(--font-mono);
   font-size: var(--fs-mini);
   line-height: 14px;
@@ -913,10 +913,9 @@
   }
 
   /* The stacked narrow layout gives the sidebar a row; without one the
-     viewport takes the whole workspace. Matches the specificity of the
-     stacked rule in responsive.css, and follows it in the cascade. */
-  .workspace.no-sidebar,
-  .workspace.no-sidebar.with-assistant {
+     viewport takes the whole workspace. Outranks the stacked rule in
+     responsive.css, and follows it in the cascade. */
+  .workspace.no-sidebar {
     grid-template-columns: minmax(0, 1fr);
     grid-template-rows: minmax(0, 1fr);
   }
@@ -965,7 +964,7 @@
   z-index: calc(var(--z-viewer-overlay) + 1);
   padding: 2px 7px;
   color: var(--color-text);
-  background: rgba(8, 18, 30, 0.82);
+  background: rgba(16, 19, 22, 0.82);
   border: var(--border-thin);
   border-radius: var(--radius-sm);
   font-family: var(--font-mono);

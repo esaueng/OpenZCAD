@@ -11,10 +11,68 @@ const SUMMARY = {
   bodyCount: 1,
   warningCount: 0,
   documentVersion: 3,
-  saveState: 'synced' as const
+  saveState: 'synced' as const,
+  onOpenSearch: () => {},
+  searchKey: { glyph: '⌘K', accessible: 'Cmd+K' }
 };
 
 describe('WorkspaceReadout', () => {
+  it('puts the guidance over the search bar while the toast is quiet, and the bar opens search', async () => {
+    const user = userEvent.setup();
+    const onOpenSearch = vi.fn();
+    const { container, rerender } = render(
+      <WorkspaceReadout
+        status=""
+        tone="ready"
+        logOpen={false}
+        onToggleLog={vi.fn()}
+        {...SUMMARY}
+        onOpenSearch={onOpenSearch}
+      />
+    );
+    // Drawn for sighted users only: the summary already speaks the prompt.
+    const hint = container.querySelector('.workspace-hint');
+    expect(hint).toHaveTextContent('Click a body, face, or edge');
+    expect(hint).toHaveAttribute('aria-hidden', 'true');
+    await user.click(
+      screen.getByRole('button', { name: 'Search commands (Cmd+K)' })
+    );
+    expect(onOpenSearch).toHaveBeenCalledTimes(1);
+    // A live message takes the guidance's place.
+    rerender(
+      <WorkspaceReadout
+        status="Fillet added"
+        statusAt={Date.now()}
+        tone="ready"
+        logOpen={false}
+        onToggleLog={vi.fn()}
+        {...SUMMARY}
+      />
+    );
+    expect(container.querySelector('.workspace-hint')).toBeNull();
+  });
+
+  it('hands the assistant a slot at the end of the search bar', () => {
+    const onSearchSlot = vi.fn();
+    render(
+      <WorkspaceReadout
+        status=""
+        tone="ready"
+        logOpen={false}
+        onToggleLog={vi.fn()}
+        {...SUMMARY}
+        onSearchSlot={onSearchSlot}
+      />
+    );
+    const bar = screen.getByRole('button', {
+      name: 'Search commands (Cmd+K)'
+    });
+    expect(bar).toHaveTextContent('Search commands or ask the assistant');
+    const slot = onSearchSlot.mock.calls[0]?.[0] as HTMLElement;
+    expect(slot).toHaveClass('command-bar-slot');
+    expect(slot.previousElementSibling).toBe(bar);
+  });
+
   it('shows the live status as a toast that opens the activity log', async () => {
     const user = userEvent.setup();
     const onToggleLog = vi.fn();
