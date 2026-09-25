@@ -311,7 +311,11 @@ import { StatusActivityLog } from './components/StatusActivityLog';
 import { PanelResizer } from './components/PanelResizer';
 import { ErrorBoundary } from './components/ErrorBoundary';
 import { TopBar } from './components/TopBar';
-import { ViewModeRail } from './components/ViewModeRail';
+import {
+  PartsList,
+  PartsRailButtons,
+  ViewModeRail
+} from './components/ViewModeRail';
 import { Sidebar } from './components/Sidebar';
 import { TweakPanel } from './components/TweakPanel';
 import { StartScreen } from './components/StartScreen';
@@ -16449,6 +16453,19 @@ export function App() {
         }
       />
     );
+  // The parts list is View's panel and Tweak's too; both rails share it.
+  const partsProps = {
+    bodies: partBodies,
+    hiddenBodyIds,
+    selectedBodyIds,
+    open: panelState.viewModeRailOpen,
+    onOpenChange: (viewModeRailOpen: boolean) =>
+      setPanelState((current) => ({ ...current, viewModeRailOpen })),
+    onSelectBody: handleSelectBodyFromTree,
+    onToggleVisibility: toggleBodyVisibility,
+    onIsolate: isolateBody,
+    onShowAll: showAllBodies
+  };
   return (
     <AppShell
       workspaceRef={workspaceRef}
@@ -16612,6 +16629,19 @@ export function App() {
                 ? { onMakeCopy: () => void handleMakeShareCopy() }
                 : null
             }
+            panelOpen={panelState.tweakPanelOpen}
+            onTogglePanel={() =>
+              setPanelState((current) => ({
+                ...current,
+                tweakPanelOpen: !current.tweakPanelOpen
+              }))
+            }
+            parts={{
+              buttons: <PartsRailButtons {...partsProps} />,
+              list: panelState.viewModeRailOpen ? (
+                <PartsList {...partsProps} />
+              ) : null
+            }}
           />
         ) : (
           <WorkspaceColumn
@@ -16857,22 +16887,7 @@ export function App() {
             modeOverlay={
               modelingLocked ? (
                 <>
-                  <ViewModeRail
-                    bodies={partBodies}
-                    hiddenBodyIds={hiddenBodyIds}
-                    selectedBodyIds={selectedBodyIds}
-                    open={panelState.viewModeRailOpen}
-                    onOpenChange={(viewModeRailOpen) =>
-                      setPanelState((current) => ({
-                        ...current,
-                        viewModeRailOpen
-                      }))
-                    }
-                    onSelectBody={handleSelectBodyFromTree}
-                    onToggleVisibility={toggleBodyVisibility}
-                    onIsolate={isolateBody}
-                    onShowAll={showAllBodies}
-                  />
+                  {viewMode && <ViewModeRail {...partsProps} />}
                   {(measuring || measurements.length > 0) && (
                     <MeasurementDock
                       measurements={measurements}

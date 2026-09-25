@@ -39,6 +39,18 @@ Values ride the model at the point of action.
   carries a word: names and keys are tooltips, and every button keeps the
   accessible name the specs use (`Line`, `Circle: Center Circle`, `Solve`,
   `Sketch palette`, `Finish Sketch`).
+- **Tweak rail (compaction pass):** Tweak's left side is the same rail: a
+  Parameters button whose flyout is the parameter table (open to begin with,
+  remembered per device), then Export STEP, Export Mesh and, on a share link,
+  Make a copy. The rail and the table share the stage's centre line; View's
+  parts island keeps the top-left corner.
+- **View rail (compaction pass):** View's left side is the same rail: a Parts
+  button (count in its corner) whose flyout is the parts list, and Show all
+  while parts are hidden. Tweak's rail carries the same buttons ahead of its
+  own, with the list stacked above the parameter table — one rail per mode.
+  View's bar (Measure, fit, views, grid, display, projection) is a vertical
+  rail at the right middle in View and Tweak, where Build keeps its
+  instruments.
 - **Sketch relations:** a fixed icon rail on the right in the order of
   `CONSTRAINT_TOOL_SPECS`; icons never move, relations that do not fit the
   selection grey out, and a name label appears only beside the ones that fit.

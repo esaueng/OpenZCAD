@@ -88,10 +88,11 @@ export function ViewModeBar({
         className={`view-mode-button wide${measuring ? ' active' : ''}`}
         aria-pressed={measuring}
         title="Measure (M) — inspect geometry, distance, and angle"
+        aria-label="Measure"
         onClick={() => onMeasure(!measuring)}
       >
         <Ruler size={15} aria-hidden="true" />
-        Measure
+        <span className="view-mode-button-label">Measure</span>
       </button>
       <span className="view-mode-divider" aria-hidden="true" />
       <button
