@@ -11,6 +11,7 @@ import type {
   FaceTopologyReferenceV5,
   BodyTopology,
   EdgeReferenceRepair,
+  FaceReferenceRepair,
   FeatureWarning,
   SketchId
 } from '@openzcad/shared';
@@ -71,6 +72,7 @@ export interface ExactBuildResult {
    * the upgrade while the stored hashes still resolve.
    */
   referenceRepairs: EdgeReferenceRepair[];
+  faceReferenceRepairs?: FaceReferenceRepair[];
 }
 
 export interface MeasuredShape {

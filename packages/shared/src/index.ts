@@ -1985,6 +1985,13 @@ export interface ShaprMigrationRecord {
   privateDataOmitted: true;
 }
 
+/** A legacy direct-edit face proven by the successful original replay. */
+export interface FaceReferenceRepair {
+  featureId: FeatureId;
+  faceHash: number;
+  faceReference: FaceTopologyReferenceV5;
+}
+
 /**
  * Kernel-proven v5 references for one legacy hash-only edge modifier. A
  * closed-edge hash embeds its length, so the only moment a hash-only
@@ -2086,6 +2093,8 @@ export interface DerivedState {
    * `attachDerivedState` strips it so it is never persisted or replayed.
    */
   referenceRepairs?: EdgeReferenceRepair[];
+  /** Session-only direct-edit advice, stripped alongside edge repairs. */
+  faceReferenceRepairs?: FaceReferenceRepair[];
   /**
    * Complete feature-warning provenance for this rebuild. Session-only and
    * stripped like the repairs. Older adapter results may omit it.

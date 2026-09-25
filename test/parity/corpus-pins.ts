@@ -732,28 +732,74 @@ export const KERNEL_DELTAS: KernelDeltaPin[] = [
   {
     subject: 'fillet-on-import',
     metric: 'witnessedFaces',
-    remus: 4,
+    remus: 10,
     occt: 0,
     owner: 'Phase A',
     note:
-      'The pinned Remus binding exposes construction-history attribution ' +
-      'for the four generated corner bands. The OCCT adapter has no matching ' +
-      'generated-face relation, so it remains fail-closed and hash-only.'
+      'K05 parameter replay retains uniquely verified analytic supports and ' +
+      'names unique boundaries between named faces, alongside existing ' +
+      'generated-band evolution. Geometry and topology hashes are unchanged. ' +
+      'OCCT has no corresponding modifier lineage and stays hash-only.'
+  },
+  {
+    subject: 'fillet-on-import',
+    metric: 'witnessedEdges',
+    remus: 24,
+    occt: 0,
+    owner: 'Phase A',
+    note:
+      'K05 parameter replay retains uniquely verified analytic supports and ' +
+      'names unique boundaries between named faces, alongside existing ' +
+      'generated-band evolution. Geometry and topology hashes are unchanged. ' +
+      'OCCT has no corresponding modifier lineage and stays hash-only.'
   },
   {
     subject: 'fillet-on-import',
     metric: 'lineageNames',
-    remus:
-      'modifier.fillet.face.band-between.import.step.face.426c91a5|import.step.face.58bf7705,' +
-      'modifier.fillet.face.band-between.import.step.face.426c91a5|import.step.face.62e02c7d,' +
-      'modifier.fillet.face.band-between.import.step.face.58bf7705|import.step.face.ac22b2bd,' +
-      'modifier.fillet.face.band-between.import.step.face.62e02c7d|import.step.face.ac22b2bd',
+    remus: '34 names · 8e79d2ac',
     occt: 'none',
     owner: 'Phase A',
     note:
-      'Each Remus band is named by its unique pair of exact imported-face ' +
-      'support identities. OCCT publishes no generated-face evidence, so it ' +
-      'cannot safely assign the same semantic names.'
+      'K05 parameter replay retains uniquely verified analytic supports and ' +
+      'names unique boundaries between named faces, alongside existing ' +
+      'generated-band evolution. Geometry and topology hashes are unchanged. ' +
+      'OCCT has no corresponding modifier lineage and stays hash-only.'
+  },
+  {
+    subject: 'chamfer-on-import',
+    metric: 'witnessedFaces',
+    remus: 6,
+    occt: 0,
+    owner: 'Phase A',
+    note:
+      'K05 parameter replay retains uniquely verified analytic supports and ' +
+      'names unique boundaries between named faces, alongside existing ' +
+      'generated-band evolution. Geometry and topology hashes are unchanged. ' +
+      'OCCT has no corresponding modifier lineage and stays hash-only.'
+  },
+  {
+    subject: 'chamfer-on-import',
+    metric: 'witnessedEdges',
+    remus: 8,
+    occt: 0,
+    owner: 'Phase A',
+    note:
+      'K05 parameter replay retains uniquely verified analytic supports and ' +
+      'names unique boundaries between named faces, alongside existing ' +
+      'generated-band evolution. Geometry and topology hashes are unchanged. ' +
+      'OCCT has no corresponding modifier lineage and stays hash-only.'
+  },
+  {
+    subject: 'chamfer-on-import',
+    metric: 'lineageNames',
+    remus: '14 names · 5f335868',
+    occt: 'none',
+    owner: 'Phase A',
+    note:
+      'K05 parameter replay retains uniquely verified analytic supports and ' +
+      'names unique boundaries between named faces, alongside existing ' +
+      'generated-band evolution. Geometry and topology hashes are unchanged. ' +
+      'OCCT has no corresponding modifier lineage and stays hash-only.'
   },
   {
     subject: 'fillet-on-import',

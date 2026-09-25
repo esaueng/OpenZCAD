@@ -1,3 +1,9 @@
+import { faceReferenceRepairCandidate } from './exact-reference-resolution';
+import {
+  carryAnalyticFaces,
+  holeLineage,
+  withBoundaryEdgeLineage
+} from './exact-operation-lineage';
 import { type FaceEvolutionPayloadV1, type RemusKernel } from './remus-runtime';
 import {
   findSketch,
@@ -23,7 +29,11 @@ import {
   topologyCandidatesForSolid
 } from './exact-lineage-builders';
 import { measureFaceGeometry } from './exact-measure';
-import { drillHole, tryExactCoaxialCylinderCut } from './exact-cylinder-ops';
+import {
+  drillHole,
+  tryExactCoaxialCylinderCut,
+  type HoleToolSpec
+} from './exact-cylinder-ops';
 import {
   applyEdgeModifier,
   edgeModifierFailureMessage
@@ -216,6 +226,9 @@ function buildDirectEditFeature(
   if (!target) {
     throw new Error('Direct-edit target is unavailable.');
   }
+  const repair = !data.operation.faceReference
+    ? faceReferenceRepairCandidate(kernel, target, data.operation.faceHash)
+    : null;
   const edited = applyDirectEdit(
     kernel,
     target,
@@ -234,6 +247,12 @@ function buildDirectEditFeature(
       'Remus does not expose a complete direct-edit output relation.'
     );
   result.shapes.set(data.targetBodyId, edited);
+  if (repair)
+    (result.faceReferenceRepairs ??= []).push({
+      featureId: feature.featureId,
+      faceHash: data.operation.faceHash,
+      faceReference: repair
+    });
 }
 
 function buildImportedStepFeature(
@@ -863,7 +882,7 @@ function buildHoleFeature(
     data.counterboreDiameter,
     'counterbore diameter'
   );
-  const drilled = drillHole(kernel, targetSolid, {
+  const holeSpec: HoleToolSpec = {
     surfacePoint,
     axis,
     radius: diameter / 2,
@@ -888,13 +907,18 @@ function buildHoleFeature(
         : (countersinkAngleDeg * Math.PI) / 180,
     entryExtension: extension,
     exitExtension: data.depthMode === 'through' ? extension : 0
-  });
+  };
+  const drilled = drillHole(kernel, targetSolid, holeSpec);
   result.consumed.add(data.targetBodyId);
   result.shapes.set(feature.bodyId, {
     solids: [drilled],
-    lineage: remusHashOnlyLineage(
-      'hole',
-      'The compound cut does not report face ancestry through the bore.'
+    lineage: holeLineage(
+      kernel,
+      targetSolid,
+      drilled,
+      shape.lineage,
+      feature.featureId,
+      holeSpec
     )
   });
   inheritMeshOrigin(result, data.targetBodyId, feature.bodyId);
@@ -1661,10 +1685,17 @@ function buildEdgeModifierFeature(
         )
       })
     : null;
-  const verifiedLineages = [primitiveFallbackLineage, evolutionLineage].filter(
-    (lineage): lineage is RemusLineageState => !!lineage
+  const verifiedLineages = [
+    carryAnalyticFaces(kernel, target, modified, storedTarget.lineage),
+    primitiveFallbackLineage,
+    evolutionLineage
+  ].filter((lineage): lineage is RemusLineageState => !!lineage);
+  const verifiedLineage = withBoundaryEdgeLineage(
+    kernel,
+    modified,
+    feature.featureId,
+    mergeRemusLineageStates(verifiedLineages)
   );
-  const verifiedLineage = mergeRemusLineageStates(verifiedLineages);
   result.consumed.add(data.targetBodyId);
   result.shapes.set(feature.bodyId, {
     solids: [modified],
