@@ -613,14 +613,6 @@
   }
 }
 
-/* View mode's tool strip used to sit where the dock is now; it takes the
-   top of the viewport, beside the column. */
-.workspace.column-layout .palette-float:has(.view-mode-bar) {
-  top: 10px;
-  bottom: auto;
-  align-items: flex-start;
-}
-
 /* ── Drop to import ──
    Lights the whole stage while a file from the desktop is over it. Not a
    dialog and not a card: the drop runs the same import the File menu does.
