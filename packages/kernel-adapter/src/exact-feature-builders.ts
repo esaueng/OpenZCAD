@@ -43,7 +43,6 @@ import {
   sharedShapeVolume,
   shapesShareMaterialOrTouch,
   sharedSolidVolume,
-  solidMeshIsClosed,
   tessellatedFaceBounds,
   unifyBooleanFaces,
   unifyUnionFaces,
@@ -1443,13 +1442,16 @@ function buildBooleanFeature(
   // back a body that is not a valid solid at all, which is the same
   // complaint to the user and is answered by the same move, so it
   // keeps its own classification here.
+  //
+  // The gate's verdict answers it: every union that reaches this line was
+  // produced by `fuseUniformSolidChecked`, which set `unionVerdict` from the
+  // kernel's unification report, so the body is not validated again here.
   const unionNotSolid =
     unionFuseOperands !== null &&
+    unionVerdict !== null &&
     !unionDisconnected &&
     acceptedUnionSolid !== solid &&
-    (unionVerdict
-      ? verdictRefusesUnion(unionVerdict)
-      : kernel.validateSolid(solid) !== 0 || !solidMeshIsClosed(kernel, solid));
+    verdictRefusesUnion(unionVerdict);
   if (unionVerdict) {
     ctx.strictVerdicts?.set(solid, unionVerdict);
   }

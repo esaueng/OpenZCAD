@@ -18,9 +18,13 @@ import {
   countFaceConnectedComponents,
   inspectTriangleMeshClosure,
   isClosedConsistentlyOrientedMesh,
-  selectSafelyUnifiedSolid,
+  unifyCopyChecked,
   unionSwallowedCurvature
 } from './boolean-result-validation';
+import {
+  type KernelUnifyReport,
+  validationReport
+} from './kernel-validation';
 import {
   exactBooleanOutcome,
   exactFuseAll
@@ -134,21 +138,22 @@ export function exactUnionOffsetSuggestion(
       continue;
     }
     let candidate: number;
+    let verdict: StrictUnionVerdict;
     try {
       const moved = kernel.copySolid(mover.solid);
       kernel.transformSolid(
         moved,
         transformMatrix(offset, { x: 0, y: 0, z: 0 })
       );
-      // Through `fuseUniformSolid`, the same call the real union makes, not a
+      // Through the union gate, the same call the real union makes, not a
       // bare `fuseAll`. The unification step it adds is not cosmetic: without
       // it a candidate can fail the solid check below that the actual edit
       // would have accepted, and the probe then reports no move exists when
-      // one plainly does.
-      candidate = fuseUniformSolid(kernel, [
+      // one plainly does. The gate's verdict is that solid check.
+      ({ solid: candidate, verdict } = fuseUniformSolidChecked(kernel, [
         kernel.copySolid(anchor.solid),
         moved
-      ]);
+      ]));
     } catch {
       continue;
     }
@@ -169,14 +174,7 @@ export function exactUnionOffsetSuggestion(
     // tangency fails, so clearing the curvature check alone would let this
     // offer a move that trades one refusal for the other — worse than the
     // general advice it replaces, which is the one thing this must never be.
-    try {
-      if (
-        kernel.validateSolid(candidate) !== 0 ||
-        !solidMeshIsClosed(kernel, candidate)
-      ) {
-        continue;
-      }
-    } catch {
+    if (verdictRefusesUnion(verdict)) {
       continue;
     }
     const described = moves
@@ -217,21 +215,16 @@ export function unifyBooleanFaces(kernel: RemusKernel, solid: number): number {
  * validates while its tessellation is open along the merged notch; accepting
  * it on validation alone sent a perfectly good raw union to the strict pass
  * as "open, non-manifold, or inconsistently oriented".
+ *
+ * The strict half is the kernel's own verdict from `unifyFacesChecked`; see
+ * {@link unifyUnionFacesChecked}, which this returns the solid of.
  */
 export function unifyUnionFaces(
   kernel: RemusKernel,
   solid: number,
   onAccepted?: (solid: number) => void
 ): number {
-  return selectSafelyUnifiedSolid(
-    kernel,
-    solid,
-    (candidate) => {
-      const accepted = isStrictBooleanSolid(kernel, candidate) && solidMeshIsClosed(kernel, candidate);
-      if (accepted) onAccepted?.(candidate);
-      return accepted;
-    }
-  );
+  return unifyUnionFacesChecked(kernel, solid, onAccepted).solid;
 }
 
 /**
@@ -243,7 +236,7 @@ export function unifyUnionFaces(
  * tessellating it.
  */
 export interface StrictUnionVerdict {
-  /** Strict `validateSolid` error count of exactly this handle. */
+  /** Strict validation error count of exactly this handle. */
   strictErrors: number;
   /** Whether its display projection was closed and consistently oriented. */
   meshClosed?: boolean;
@@ -256,128 +249,86 @@ export interface UnifiedUnion {
 }
 
 /**
- * `unifyUnionFaces` that keeps the strict verdicts the kernel already
- * established on the way: `unifyFacesChecked` validates the raw solid
- * before merging and the candidate after, so accepting or refusing the
- * candidate needs no further `validateSolid` call. Same acceptance rule as
- * `unifyUnionFaces`: strict solid AND closed display projection, otherwise
- * the raw union stands. Falls back to plain validation when the checked
- * entry point is unavailable.
+ * The union gate, decided by the kernel's unification report.
  *
- * Healing still runs on a copy, exactly as `selectSafelyUnifiedSolid` does
- * it: the checked call below runs against a copy of the raw union, never
- * the shipped handle, so a throw leaves the raw result untouched.
+ * Healing runs on a copy (`unifyCopyChecked`), and `unifyFacesChecked`
+ * validates the raw solid before merging and the candidate after, so
+ * accepting or refusing the candidate needs no `validateSolid` call of its
+ * own. The adapter used to ask `validateSolid` about the unified copy, then
+ * about the raw union, then once more in the measurement pass — the same
+ * strict validation of one body up to five times per rebuild.
+ *
+ * Acceptance: the copy is adopted when the kernel kept a merge
+ * (`facesMerged > 0`, not `reverted`), the result is strict
+ * (`resultErrors === 0`), and its display projection is closed. Anything
+ * else leaves the raw union standing with the kernel's verdict on it
+ * (`inputErrors`). A copy that merged nothing, or whose merge was rolled
+ * back, is the raw solid again, so keeping the raw handle ships the same
+ * body.
  */
 export function unifyUnionFacesChecked(
   kernel: RemusKernel,
   rawSolid: number,
   onAccepted?: (solid: number) => void
 ): UnifiedUnion {
-  try {
-    if (typeof kernel.unifyFacesChecked !== 'function') {
-      throw new Error('unifyFacesChecked is unavailable on this kernel.');
-    }
-    // Heal the copy; the raw handle is never unified in place here.
-    const healedCopy = kernel.copyAndTransformSolid(
-      rawSolid,
-      new Float64Array([1, 0, 0, 0, 0, 1, 0, 0, 0, 0, 1, 0, 0, 0, 0, 1])
-    );
-    const raw: unknown = kernel.unifyFacesChecked(healedCopy);
-    const parsed: unknown = typeof raw === 'string' ? JSON.parse(raw) : raw;
-    const record =
-      typeof parsed === 'object' && parsed !== null
-        ? (parsed as Record<string, unknown>)
-        : null;
-    const count = (key: string): number => {
-      const value = record?.[key];
-      if (typeof value !== 'number' || !Number.isFinite(value) || value < 0) {
-        throw new Error(`unifyFacesChecked report is missing "${key}".`);
-      }
-      return value;
-    };
-    const report = {
-      facesMerged: count('facesMerged'),
-      inputErrors: count('inputErrors'),
-      resultErrors: count('resultErrors'),
-      reverted: record?.['reverted'] === true
-    };
-    return unifyUnionFacesWithVerdict(
+  const unified = unifyCopyChecked(kernel, rawSolid);
+  if (unified === null) {
+    // The kernel threw instead of reporting, so nothing was measured: the
+    // raw union stands and still needs its one strict verdict for the
+    // refusal and the measurement pass.
+    return rawUnionWithVerdict(
       kernel,
       rawSolid,
-      report,
-      healedCopy,
-      onAccepted
+      validationReport(kernel, rawSolid).errorCount
     );
-  } catch {
-    return unifyUnionFacesWithVerdict(kernel, rawSolid, null, null, onAccepted);
   }
+  return unifyUnionFacesWithVerdict(
+    kernel,
+    rawSolid,
+    unified.report,
+    unified.candidate,
+    onAccepted
+  );
 }
 
 /**
  * Core of `unifyUnionFacesChecked` with the report supplied separately, so
  * tests can pin the verdict mapping without a kernel. `healedCopy` is the
- * already-unified copy the checked call produced (null when the checked
- * path was unavailable); the gate adopts it only when it also passes the
- * closed-projection half, mirroring `unifyUnionFaces`.
+ * copy the checked call unified; the gate adopts it only when it also
+ * passes the closed-projection half.
  */
 export function unifyUnionFacesWithVerdict(
   kernel: RemusKernel,
   rawSolid: number,
-  report: {
-    facesMerged: number;
-    inputErrors: number;
-    resultErrors: number;
-    reverted: boolean;
-  } | null,
-  healedCopy: number | null,
+  report: KernelUnifyReport,
+  healedCopy: number,
   onAccepted?: (solid: number) => void
 ): UnifiedUnion {
-  if (!report || healedCopy === null) {
-    const solid = unifyUnionFaces(kernel, rawSolid, onAccepted);
-    const strictErrors =
-      solid === rawSolid ? kernel.validateSolid(rawSolid) : 0;
-    // A unified candidate passed the gate's own strict check; only a kept
-    // raw solid still needs its verdict established, and only then when the
-    // gate never tessellated it.
-    return solid === rawSolid
-      ? {
-          solid,
-          verdict: {
-            strictErrors,
-            ...(strictErrors === 0
-              ? { meshClosed: solidMeshIsClosed(kernel, rawSolid) }
-              : {})
-          }
-        }
-      : { solid, verdict: { strictErrors: 0, meshClosed: true } };
+  if (
+    !report.reverted &&
+    report.facesMerged > 0 &&
+    report.resultErrors === 0 &&
+    solidMeshIsClosed(kernel, healedCopy)
+  ) {
+    onAccepted?.(healedCopy);
+    return { solid: healedCopy, verdict: { strictErrors: 0, meshClosed: true } };
   }
-  // The checked merge was kept (faces merged, strict candidate, not
-  // reverted): adopt the healed copy only when its display projection is
-  // also closed — the same two halves `unifyUnionFaces` requires. A
-  // candidate that merged nothing is the raw solid again; keep the
-  // original handle and the kernel's own verdict on it.
-  if (!report.reverted && report.facesMerged > 0 && report.resultErrors === 0) {
-    if (solidMeshIsClosed(kernel, healedCopy)) {
-      onAccepted?.(healedCopy);
-      return { solid: healedCopy, verdict: { strictErrors: 0, meshClosed: true } };
-    }
-    return {
-      solid: rawSolid,
-      verdict: {
-        strictErrors: report.inputErrors,
-        ...(report.inputErrors === 0
-          ? { meshClosed: solidMeshIsClosed(kernel, rawSolid) }
-          : {})
-      }
-    };
-  }
-  // The merge was reverted or the candidate failed strict validation: the
-  // raw solid stands with the kernel's own verdict on it.
+  // The merge was declined, reverted, not strict, or opened the projection:
+  // the raw solid stands with the kernel's own verdict on it.
+  return rawUnionWithVerdict(kernel, rawSolid, report.inputErrors);
+}
+
+/** The raw union kept, with its projection measured only when it is strict. */
+function rawUnionWithVerdict(
+  kernel: RemusKernel,
+  rawSolid: number,
+  strictErrors: number
+): UnifiedUnion {
   return {
     solid: rawSolid,
     verdict: {
-      strictErrors: report.inputErrors,
-      ...(report.inputErrors === 0
+      strictErrors,
+      ...(strictErrors === 0
         ? { meshClosed: solidMeshIsClosed(kernel, rawSolid) }
         : {})
     }
@@ -402,7 +353,7 @@ export function fuseUniformSolidChecked(
 
 /**
  * Whether a union verdict means the body is not an acceptable solid: the
- * same question `validateSolid(...) !== 0 || !solidMeshIsClosed(...)` asks,
+ * same question as "strict errors, or an open display projection",
  * answered from what the gate already measured.
  */
 export function verdictRefusesUnion(verdict: StrictUnionVerdict): boolean {
@@ -715,19 +666,6 @@ export function sharedShapeVolume(
     }
   }
   return total > extrudeVolumeTolerance(leftBody, rightBody) ? total : 0;
-}
-
-/**
- * Face unification is allowed to replace the raw Union only when the copied
- * result remains a strict topological solid. The final Union acceptance gate
- * below separately checks its disposable viewport projection.
- */
-export function isStrictBooleanSolid(kernel: RemusKernel, solid: number): boolean {
-  try {
-    return kernel.validateSolid(solid) === 0;
-  } catch {
-    return false;
-  }
 }
 
 export function isFaceConnectedSolid(kernel: RemusKernel, solid: number): boolean {

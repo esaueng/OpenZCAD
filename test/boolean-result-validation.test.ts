@@ -4,7 +4,7 @@ import {
   droppedUnionOperandWarning,
   inspectTriangleMeshClosure,
   isClosedConsistentlyOrientedMesh,
-  selectSafelyUnifiedSolid
+  unifyCopyChecked
 } from '../packages/kernel-adapter/src/boolean-result-validation';
 
 const TETRAHEDRON_POSITIONS = [0, 0, 0, 1, 0, 0, 0, 1, 0, 0, 0, 1];
@@ -302,32 +302,46 @@ describe('boolean result validation', () => {
     expect(isClosedConsistentlyOrientedMesh(branching)).toBe(false);
   });
 
-  it('keeps the raw boolean when face unification degrades its copy', () => {
+  it('heals an identity copy and hands back the kernel report on it', () => {
     const unified: number[] = [];
     const matrices: Float64Array[] = [];
+    const report = {
+      facesMerged: 3,
+      inputErrors: 0,
+      resultErrors: 0,
+      reverted: false
+    };
     const kernel = {
       copyAndTransformSolid: (_solid: number, matrix: Float64Array) => {
         matrices.push(matrix);
         return 2;
       },
-      unifyFaces: (solid: number) => {
+      unifyFacesChecked: (solid: number) => {
         unified.push(solid);
-        return 1;
+        return JSON.stringify(report);
       }
     };
 
-    expect(selectSafelyUnifiedSolid(kernel, 1, (solid) => solid === 1)).toBe(1);
+    expect(unifyCopyChecked(kernel, 1)).toEqual({ candidate: 2, report });
+    // Only the copy is unified; the raw result is never touched.
     expect(unified).toEqual([2]);
     expect(Array.from(matrices[0]!)).toEqual([
       1, 0, 0, 0, 0, 1, 0, 0, 0, 0, 1, 0, 0, 0, 0, 1
     ]);
   });
 
-  it('uses a face-unified copy only after it passes validation', () => {
-    const kernel = {
+  it('gives no verdict when healing the copy throws or cannot be read', () => {
+    const throwing = {
       copyAndTransformSolid: () => 2,
-      unifyFaces: () => 1
+      unifyFacesChecked: () => {
+        throw new Error('topology lookup failed');
+      }
     };
-    expect(selectSafelyUnifiedSolid(kernel, 1, (solid) => solid === 2)).toBe(2);
+    expect(unifyCopyChecked(throwing, 1)).toBeNull();
+    const unreadable = {
+      copyAndTransformSolid: () => 2,
+      unifyFacesChecked: () => 'not json'
+    };
+    expect(unifyCopyChecked(unreadable, 1)).toBeNull();
   });
 });
