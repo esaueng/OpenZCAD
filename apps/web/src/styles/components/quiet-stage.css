@@ -79,13 +79,14 @@
 .topbar > .mode-switch.topbar-island {
   justify-self: center;
   align-self: center;
-  padding: 3px;
+  /* No border or padding: the thumb meets the island's edge, so there is no
+     inset box around the selection. */
+  border: 0;
 }
 
-/* The thumb rides inside the island's padding, one segment wide. */
-.topbar > .mode-switch.topbar-island::before {
-  inset: 3px auto 3px 3px;
-  width: calc((100% - 6px) / 3);
+/* Keeps the island its bordered, padded height (26 + 2 × 3 + 2 × 1). */
+.topbar > .mode-switch.topbar-island .mode-switch-option {
+  min-height: 34px;
 }
 
 .topbar > .topbar-actions-island {

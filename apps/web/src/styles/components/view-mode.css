@@ -8,13 +8,11 @@
 /* Docked at the left of the bar, between the brand and the project name:
    the workspace you are in reads before the document you are in it with.
 
-   Three equal segments and one raised thumb that slides to the segment you
-   chose. There is no track: the bar itself is the surface the thumb sits on,
-   so the control is one box, not a box inside a box. The thumb is a neutral
-   surface rather than an accent tint — the Beta tag beside it already wears
-   the accent fill, and two tinted chips in a row read as one cluster. Accent
-   is kept for the active icon alone, so the mode still catches the eye
-   without competing with the brand. */
+   Three equal segments and one accent-tinted thumb that slides to the
+   segment you chose. There is no track and no outline: the island has no
+   border or padding, so the thumb fills its segment edge to edge and the
+   control reads as one seamless surface, not a box inside a box. The Beta
+   tag sits in its own island, so the tint no longer crowds it. */
 .mode-switch {
   --mode-switch-index: 0;
   position: relative;
@@ -42,9 +40,9 @@
   z-index: -1;
   inset: 0 auto 0 0;
   width: calc(100% / 3);
-  background: var(--color-surface-2);
-  border: var(--border-thin);
-  border-radius: var(--radius-md);
+  background: var(--color-accent-dim);
+  /* The island's radius, so the flush thumb's outer corners follow it. */
+  border-radius: var(--radius-lg);
   transform: translateX(calc(var(--mode-switch-index) * 100%));
   transition: transform var(--dur-base) var(--ease-out);
 }
@@ -85,13 +83,9 @@
 }
 
 .mode-switch-option.active {
-  color: var(--color-text);
+  color: var(--color-accent);
   font-weight: var(--fw-medium);
   cursor: default;
-}
-
-.mode-switch-option.active svg {
-  color: var(--color-accent);
 }
 
 .mode-switch-option:disabled {
