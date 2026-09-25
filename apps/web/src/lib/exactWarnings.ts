@@ -64,3 +64,31 @@ export function newExactWarnings(
     return false;
   });
 }
+
+/**
+ * Persisted projections omit attribution. Rebuild a warning-bearing baseline
+ * before comparing failures by feature identity; display strings cannot prove
+ * that two same-named features are the same failure.
+ */
+export async function exactWarningBaseline(
+  base: ProjectDocument,
+  derive: (document: ProjectDocument) => Promise<ProjectDocument['derived']>
+): Promise<ProjectDocument> {
+  if (
+    base.derived.featureWarnings !== undefined ||
+    !base.derived.warnings.length
+  )
+    return base;
+  const derived = await derive(base);
+  // A legacy worker still cannot attribute failures. Keep the conservative
+  // comparison rather than treating its newly reported strings as baseline.
+  if (derived.featureWarnings === undefined) return base;
+  return {
+    ...base,
+    derived: {
+      ...base.derived,
+      warnings: derived.warnings,
+      featureWarnings: derived.featureWarnings
+    }
+  };
+}

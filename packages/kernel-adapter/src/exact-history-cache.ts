@@ -272,7 +272,10 @@ export function cloneBuildState(result: ExactBuildResult): ExactBuildResult {
     // the gate would go on mistaking a suppression for a failure exactly
     // where it does most of its work.
     featureWarnings: result.featureWarnings.map((entry) => ({ ...entry })),
-    referenceRepairs: [...result.referenceRepairs]
+    referenceRepairs: [...result.referenceRepairs],
+    ...(result.faceReferenceRepairs
+      ? { faceReferenceRepairs: [...result.faceReferenceRepairs] }
+      : {})
   };
 }
 

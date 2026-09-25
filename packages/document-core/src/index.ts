@@ -3402,6 +3402,7 @@ export function attachDerivedState(
   // replayed documents.
   const {
     referenceRepairs: _referenceRepairs,
+    faceReferenceRepairs: _faceReferenceRepairs,
     featureWarnings: _featureWarnings,
     ...persisted
   } = derived;
