@@ -35,8 +35,13 @@ packages 2.130.47 at immutable commit
 source of [Remus PR #602](https://github.com/esaueng/remus/pull/602) on `main`
 alongside the concave tessellation fix
 ([#606](https://github.com/esaueng/remus/pull/606)). The pin has since moved to
-2.130.51 at `cf411cd87e537d5f7b64938c831920774ad86030`, which contains both;
-the private acceptance model below was not re-run on it.
+2.130.51 at `cf411cd87e537d5f7b64938c831920774ad86030`, which contains both
+[#606](https://github.com/esaueng/remus/pull/606) and
+[#608](https://github.com/esaueng/remus/pull/608). On that pin the recorded
+checks above are green again (`test/growing-holder-recipe.test.ts` x/y at
+width 10 had failed on the intermediate 2.130.49 pin and passes on 2.130.51
+after Remus [#619](https://github.com/esaueng/remus/pull/619)); the private
+acceptance model below was not re-run on it.
 
 Kernel qualification covers ordered split contacts, an atomic connected-group
 API, isolated spherical ends, bounded affine-NURBS caps, and additional analytic
