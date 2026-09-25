@@ -1529,9 +1529,12 @@ describe('exact kernel adapter', { timeout: 30_000 }, () => {
     const kernel = new RemusKernel();
     const left = kernel.makeBox(10, 10, 10);
     const right = kernel.makeBox(10, 10, 10);
+    // Overlapping at a corner, so the fuse leaves coplanar pieces on the top
+    // and bottom for the gate to merge; offset along one axis only, the
+    // fuse merges them itself and the gate keeps the raw handle.
     kernel.transformSolid(
       right,
-      transformMatrix({ x: 5, y: 0, z: 0 }, { x: 0, y: 0, z: 0 })
+      transformMatrix({ x: 5, y: 5, z: 0 }, { x: 0, y: 0, z: 0 })
     );
     const raw = kernel.fuseAll(Uint32Array.from([left, right]));
     // A healthy unification is still adopted: the merged copy is a new solid.
@@ -1605,10 +1608,9 @@ describe('exact kernel adapter', { timeout: 30_000 }, () => {
       const resultId = document.bodyOrder.at(-1)!;
       const body = derived.bodyRepresentations[resultId]!;
       expect(body.faceCount).toBeGreaterThan(0);
-      // The gate validated (via `unifyFacesChecked` on this pin, or one
-      // plain `validateSolid` where the checked entry point is absent);
-      // the measurement pass then served the verdict without a second
-      // strict validation of the shipped handle.
+      // The gate's verdict came from `unifyFacesChecked`, and the
+      // measurement pass then served it without a strict validation of
+      // the shipped handle.
       const strictCalls = validate.mock.calls.filter(
         (call) => typeof call[0] === 'number'
       );
