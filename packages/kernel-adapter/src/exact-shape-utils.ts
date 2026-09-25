@@ -286,6 +286,15 @@ export function importMeshSolid(kernel: RemusKernel, stlText: string): number {
  * `sewFaces` guard, and fails the import by name. Degrading that second case
  * into the first would publish the pre-merge handle as if the kernel had
  * chosen it.
+ *
+ * This is deliberately not the union gate's `unifyFacesChecked`. Measured on
+ * the pin, the two agree on a closed box, a faceted cylinder and an open
+ * shell (the open shell's merge reports `resultErrors: 2`, so it would be
+ * refused either way), but not on two disjoint boxes: the pipeline refuses
+ * that merge while the checked unify accepts it, which would turn a
+ * two-object file's 24 imported triangles into 12 faces and move every face
+ * reference a saved document holds on them. `import-mesh-solid.test.ts`
+ * records the disagreement.
  */
 function unifySewnMesh(kernel: RemusKernel, sewn: number): number {
   return healPipelineSolid(kernel, sewn, ['unify_same_domain']) ?? sewn;
