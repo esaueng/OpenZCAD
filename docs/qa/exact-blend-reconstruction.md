@@ -35,7 +35,7 @@ packages 2.130.47 at immutable commit
 source of [Remus PR #602](https://github.com/esaueng/remus/pull/602) on `main`
 alongside the concave tessellation fix
 ([#606](https://github.com/esaueng/remus/pull/606)). The pin has since moved to
-2.130.49 at `bdb4430435308dcb13286b6b8181c8de77ea87f2`, which contains both;
+2.130.51 at `cf411cd87e537d5f7b64938c831920774ad86030`, which contains both;
 the private acceptance model below was not re-run on it.
 
 Kernel qualification covers ordered split contacts, an atomic connected-group
