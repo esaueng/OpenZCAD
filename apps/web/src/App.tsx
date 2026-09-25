@@ -1,3 +1,5 @@
+import { exactWarningBaseline } from './lib/exactWarnings';
+import { topologyReferenceRepairCommand } from './lib/topologyReferenceRepairs';
 import { boxPreviewProfile } from './lib/interaction/boxPreviewProfile';
 import { capPreviewProfile } from './lib/interaction/capPreviewProfile';
 import {
@@ -2358,7 +2360,7 @@ export function App() {
         // unless their version matches), so any held Move pose must release
         // in this same batch — one render later would double-transform.
         setMoveCommitHold(null);
-        applyEdgeReferenceRepairs(derived.referenceRepairs);
+        applyTopologyReferenceRepairs(derived);
       }
     },
     onError: (message) => {
@@ -5357,36 +5359,27 @@ export function App() {
   }
 
   /**
-   * Backfills kernel-proven v5 references onto legacy hash-only fillet and
-   * chamfer features. A closed-edge hash embeds its length, so the only
+   * Backfills kernel-proven references onto legacy face and edge selections.
+   * A geometric fingerprint embeds its dimensions, so the only
    * moment a legacy feature can be upgraded is while its stored hashes still
    * resolve — right after the clean rebuild that carried these repairs.
    * Applied as a normalization: it persists and syncs like an edit without
    * stealing an undo step from the user.
    */
-  function applyEdgeReferenceRepairs(
-    repairs: ProjectDocument['derived']['referenceRepairs']
+  function applyTopologyReferenceRepairs(
+    derived: ProjectDocument['derived']
   ): void {
     const manager = managerRef.current;
-    if (!manager || !repairs?.length || editDisabledReason) {
-      return;
-    }
+    // This normalization preserves geometry and is needed before Tweak edits
+    // too. Read-only sessions still cannot write repairs.
+    if (!manager || parameterEditDisabledReason) return;
+    const command = topologyReferenceRepairCommand(manager.document, derived);
+    if (!command) return;
     try {
-      for (const repair of repairs) {
-        manager.normalize(
-          commandFactories.updateFeature(
-            {
-              featureId: repair.featureId,
-              data: { edgeReferences: repair.edgeReferences }
-            },
-            'Repair edge references'
-          )
-        );
-      }
+      manager.normalize(command);
       setDoc(manager.document);
     } catch {
-      // A failed repair leaves the document exactly as it was; the legacy
-      // hash resolver keeps working at the current geometry.
+      // Atomic normalization failed; keep the original legacy selections.
     }
   }
 
@@ -11936,6 +11929,10 @@ export function App() {
       // edit, a replaced manager or another project is a refusal.
       const stale = (): Attempt =>
         sameOwner() ? { kind: 'moved' } : { kind: 'refused', message: moved };
+      base = await exactWarningBaseline(base, (document) =>
+        geometry.syncOnce(document)
+      );
+      if (!current()) return stale();
       const parameterCommand = commandFactories.setParameter({
         name,
         expression

@@ -257,3 +257,30 @@ export function resolveEdgeModifierEdges(
       : null;
   return { handles: resolved, repairedReferences };
 }
+
+/** A face repair cannot change the saved pick, only add its proven identity. */
+export function faceReferenceRepairCandidate(
+  kernel: RemusKernel,
+  shape: ExactShape,
+  storedHash: number
+): FaceTopologyReferenceV5 | null {
+  if (shape.solids.length !== 1) return null;
+  const matches =
+    faceHandlesByFingerprint(kernel, shape.solids[0]!).get(storedHash) ?? [];
+  if (matches.length !== 1) return null;
+  const reference = shape.lineage?.faceReferences.get(matches[0]!);
+  if (!reference || reference.currentHash !== storedHash) return null;
+  if (
+    [...(shape.lineage?.faceReferences.values() ?? [])].filter(
+      (other) =>
+        other.producingFeatureId === reference.producingFeatureId &&
+        other.lineageName === reference.lineageName
+    ).length !== 1
+  )
+    return null;
+  const witness = faceWitnessOf(kernel, matches[0]!);
+  return topologyHashOfWitness('face', witness) === storedHash &&
+    topologyWitnessesEqual('face', reference.witness, witness)
+    ? reference
+    : null;
+}
