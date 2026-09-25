@@ -1725,6 +1725,9 @@ export class RemusKernelAdapter implements ExactKernelAdapter {
         ),
         warnings: build.warnings,
         updatedAt: nowIso(),
+        ...(build.faceReferenceRepairs?.length
+          ? { faceReferenceRepairs: build.faceReferenceRepairs }
+          : {}),
         ...(build.referenceRepairs.length > 0
           ? { referenceRepairs: build.referenceRepairs }
           : {}),

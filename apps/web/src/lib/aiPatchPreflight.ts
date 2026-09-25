@@ -17,7 +17,7 @@ import type {
   BodyRepresentation,
   ProjectDocument
 } from '@openzcad/shared';
-import { newExactWarnings } from './exactWarnings';
+import { exactWarningBaseline, newExactWarnings } from './exactWarnings';
 
 export interface ExactPatchTarget {
   featureName: string;
@@ -372,6 +372,7 @@ export async function preflightCadPatch(
     throw new Error('Analyze and bind one selected region at a time.');
   if (uniqueAnalyses[0])
     base = { ...base, derived: await derive(base, uniqueAnalyses[0]) };
+  else base = await exactWarningBaseline(base, derive);
   const { expandEditCandidateProposal } =
     await import('@openzcad/ai-contracts');
   proposal = expandEditCandidateProposal(base, proposal);

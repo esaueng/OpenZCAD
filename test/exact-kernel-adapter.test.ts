@@ -2443,14 +2443,14 @@ describe('exact kernel adapter', { timeout: 30_000 }, () => {
     // Fault injection pins the reported kernel failure: a valid result that
     // silently replaces both cylinders with planar faces.
     const moveFaces = vi
-      .spyOn(RemusKernel.prototype, 'moveFaces')
+      .spyOn(RemusKernel.prototype, 'moveFacesJournaled')
       .mockImplementation(function (
         this: RemusKernel,
         _solid: number,
         _faces: Uint32Array,
         _distance: number
       ) {
-        return this.makeBox(40, 40, 50);
+        return JSON.stringify({ solid: this.makeBox(40, 40, 50), op: 0 });
       });
     let after: DerivedState;
     try {

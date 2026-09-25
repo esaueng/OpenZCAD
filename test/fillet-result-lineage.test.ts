@@ -204,9 +204,18 @@ describe('fillet result lineage', { timeout: 60_000 }, () => {
     const derived = await adapter.syncDocument(filleted.document);
     expect(derived.warnings).toEqual([]);
     const body = derived.bodyRepresentations[filleted.bodyId];
+    // Unique boundaries now carry the identities of their two named faces.
+    const referencedEdges = (body?.topology?.edges ?? []).filter(
+      (edge) => edge.reference
+    );
+    expect(referencedEdges.length).toBeGreaterThan(0);
     expect(
-      (body?.topology?.edges ?? []).every((candidate) => !candidate.reference)
-    ).toBe(true);
+      new Set(referencedEdges.map((edge) => edge.reference!.lineageName)).size
+    ).toBe(referencedEdges.length);
+    for (const edge of referencedEdges) {
+      expect(edge.reference!.currentHash).toBe(edge.hash);
+      expect(edge.reference!.lineageName).toMatch(/^boundary\.edge\./);
+    }
     const referencedFaces = (body?.topology?.faces ?? []).filter(
       (candidate) => candidate.reference
     );
