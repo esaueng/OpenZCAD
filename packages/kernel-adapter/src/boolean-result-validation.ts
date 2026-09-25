@@ -1,6 +1,7 @@
 import { geometryTolerance } from '@openzcad/geometry';
 import type { UnitSystem } from '@openzcad/shared';
 import type { UnionBounds } from './union-connectivity';
+import { unifyFacesReport, type KernelUnifyReport } from './kernel-validation';
 
 export interface TriangleMeshClosure {
   boundaryEdges: number;
@@ -410,26 +411,38 @@ export function droppedUnionOperandWarning(
 
 interface BooleanFaceUnifier {
   copyAndTransformSolid(solid: number, matrix: Float64Array): number;
-  unifyFaces(solid: number): number;
+  unifyFacesChecked(solid: number): unknown;
+}
+
+/** A face-unified copy of a boolean result and the kernel's report on it. */
+export interface UnifiedCopy {
+  /** The copy, unified in place: merged when the kernel kept the merge. */
+  candidate: number;
+  /**
+   * The strict verdicts the kernel established while unifying the copy:
+   * `inputErrors` describes the raw result (the copy is an identity copy of
+   * it) and `resultErrors` describes `candidate` as it now stands.
+   */
+  report: KernelUnifyReport;
 }
 
 /**
- * Face healing mutates a solid in place. Run it on a copy and keep the raw
- * boolean whenever healing throws or degrades an otherwise usable result.
+ * Face healing mutates a solid in place, so it runs on a copy and the raw
+ * boolean is never touched. `unifyFacesChecked` reports the strict verdicts
+ * it already computes on the way, so the caller decides whether to keep the
+ * copy from those counts instead of validating either solid again.
+ *
+ * Returns null when copying, healing or reading the report throws: there is
+ * no verdict to act on, and the raw result still stands untouched.
  */
-export function selectSafelyUnifiedSolid(
+export function unifyCopyChecked(
   kernel: BooleanFaceUnifier,
-  rawSolid: number,
-  isAcceptable: (solid: number) => boolean
-): number {
+  rawSolid: number
+): UnifiedCopy | null {
   try {
     const candidate = kernel.copyAndTransformSolid(rawSolid, IDENTITY_MATRIX);
-    kernel.unifyFaces(candidate);
-    if (isAcceptable(candidate)) {
-      return candidate;
-    }
+    return { candidate, report: unifyFacesReport(kernel, candidate) };
   } catch {
-    // The raw result is still available because healing ran on a copy.
+    return null;
   }
-  return rawSolid;
 }
