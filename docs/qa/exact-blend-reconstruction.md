@@ -27,13 +27,21 @@ pnpm test:parity-corpus
 pnpm build
 ```
 
-The application pins generated Remus packages 2.130.47 at immutable commit
+This evidence was recorded with the application pinned to generated Remus
+packages 2.130.47 at immutable commit
 `cb13b53f5a40a56e78ae2efd4f7798280e2e0cc2` on Remus `main`: the
 [#609](https://github.com/esaueng/remus/pull/609) package refresh built from
 [#608](https://github.com/esaueng/remus/pull/608), which landed the reviewed
-source of [Remus PR #602](https://github.com/esaueng/remus/pull/602) on current
-`main` alongside the concave tessellation fix
-([#606](https://github.com/esaueng/remus/pull/606)).
+source of [Remus PR #602](https://github.com/esaueng/remus/pull/602) on `main`
+alongside the concave tessellation fix
+([#606](https://github.com/esaueng/remus/pull/606)). The pin has since moved to
+2.130.51 at `cf411cd87e537d5f7b64938c831920774ad86030`, which contains both
+[#606](https://github.com/esaueng/remus/pull/606) and
+[#608](https://github.com/esaueng/remus/pull/608). On that pin the recorded
+checks above are green again (`test/growing-holder-recipe.test.ts` x/y at
+width 10 had failed on the intermediate 2.130.49 pin and passes on 2.130.51
+after Remus [#619](https://github.com/esaueng/remus/pull/619)); the private
+acceptance model below was not re-run on it.
 
 Kernel qualification covers ordered split contacts, an atomic connected-group
 API, isolated spherical ends, bounded affine-NURBS caps, and additional analytic

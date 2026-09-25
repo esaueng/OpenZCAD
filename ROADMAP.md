@@ -4,12 +4,20 @@
 Consolidated 2026-09-12 against OpenZCAD `main` at `28d1551f` (PR #315) and
 reconciled 2026-09-17 against `main` at `3d7fdc33` (#316–#356). Canonical
 documents use schema v15 (on/off parameters with body visibility bindings).
-The consumer pins Remus kernel and IO packages to `cb13b53` (Remus `main`
-after the [remus#609](https://github.com/esaueng/remus/pull/609) package
-refresh, 2.130.47 packages, containing
-[remus#606](https://github.com/esaueng/remus/pull/606) and
-[remus#608](https://github.com/esaueng/remus/pull/608)). This is an OpenZCAD roadmap, not a fresh qualification of upstream
-Remus `main` or a production-site acceptance report.
+The consumer pins Remus kernel and IO packages to `cf411cd` (Remus `main`
+after the [remus#630](https://github.com/esaueng/remus/pull/630) package
+refresh, 2.130.51 packages, containing
+[remus#606](https://github.com/esaueng/remus/pull/606),
+[remus#608](https://github.com/esaueng/remus/pull/608),
+[remus#592](https://github.com/esaueng/remus/pull/592),
+[remus#603](https://github.com/esaueng/remus/pull/603),
+[remus#612](https://github.com/esaueng/remus/pull/612),
+[remus#615](https://github.com/esaueng/remus/pull/615),
+[remus#616](https://github.com/esaueng/remus/pull/616),
+[remus#619](https://github.com/esaueng/remus/pull/619) and
+[remus#627](https://github.com/esaueng/remus/pull/627)). This is an OpenZCAD
+roadmap, not a fresh qualification of upstream Remus `main` or a
+production-site acceptance report.
 
 Start here to choose work. The documents in [Supporting plans](#supporting-plans)
 retain specifications, acceptance details and historical evidence; their old
