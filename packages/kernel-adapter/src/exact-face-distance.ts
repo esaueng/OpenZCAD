@@ -170,7 +170,7 @@ function unchangedFaceAfterMove(
  * unchanged witnesses. Either way the acceptance gates below still prove the
  * geometry before anything is published.
  */
-function journaledMove(
+export function journaledMove(
   kernel: RemusKernel,
   solid: number,
   faces: Uint32Array,

@@ -21,6 +21,7 @@ import {
 } from '@openzcad/document-core';
 import {
   toUserId,
+  toFeatureId,
   type BodyId,
   type DerivedState,
   type EdgeTopology,
@@ -312,7 +313,11 @@ function importedPlateManager(
   const manager = new CommandManager(
     createProjectDocument(name, IMPORT_USER, 'mm')
   );
-  const imported = createBodyFeatureIds();
+  // Boundary roles include support feature identities; keep corpus names stable.
+  const imported = {
+    ...createBodyFeatureIds(),
+    featureId: toFeatureId(`feat_parity_import_${name}`)
+  };
   manager.execute(
     commandFactories.importStep({
       name: 'Imported plate',
@@ -428,7 +433,10 @@ export const IMPORT_MODELING_SCENARIOS: ImportModelingScenario[] = [
           targetBodyId: imported.bodyId,
           edgeHashes: verticalCornerEdges(edges, 'fillet-on-import'),
           size: 3,
-          ids: createBodyFeatureIds()
+          ids: {
+            ...createBodyFeatureIds(),
+            featureId: toFeatureId('feat_parity_fillet')
+          }
         })
       ]);
       return manager.document;

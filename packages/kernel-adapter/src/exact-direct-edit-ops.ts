@@ -1,9 +1,20 @@
+import {
+  assignCarrierFace,
+  carryAnalyticFaces,
+  withBoundaryEdgeLineage
+} from './exact-operation-lineage';
+import {
+  cylinderCarrier,
+  planeCarrier,
+  sameAnalyticCarrier
+} from './exact-lineage-builders';
 import type { RemusKernel } from './remus-runtime';
 import { resolveParamValue } from '@openzcad/document-core';
 import { type Vec3 } from '@openzcad/geometry';
 import {
   type DirectEditOperation,
   type FaceGeometry,
+  type FaceWitnessV1,
   type FaceTopologyReferenceV5,
   type FeatureId
 } from '@openzcad/shared';
@@ -75,6 +86,7 @@ import {
   type TopologyResolutionCandidate
 } from './topology-lineage';
 import {
+  journaledMove,
   measuredOpposingPlanarFacePair,
   rebuildFaceDistance
 } from './exact-face-distance';
@@ -292,9 +304,9 @@ function enlargeThroughHole(
   geometry: ThroughHoleGeometry,
   radius: number,
   newBore: number
-): number {
+): { solid: number; boundedCutter: boolean } {
   try {
-    return exactCut(kernel, solid, newBore);
+    return { solid: exactCut(kernel, solid, newBore), boundedCutter: true };
   } catch (shortCutError) {
     const axis = normalized(subtract(geometry.axisEnd, geometry.axisStart));
     if (!axis) throw shortCutError;
@@ -317,11 +329,14 @@ function enlargeThroughHole(
       geometry.axisStart,
       scale(axis, Math.max(...reach) + margin)
     );
-    return exactCut(
-      kernel,
-      solid,
-      cylinderAlongAxis(kernel, start, end, radius)
-    );
+    return {
+      solid: exactCut(
+        kernel,
+        solid,
+        cylinderAlongAxis(kernel, start, end, radius)
+      ),
+      boundedCutter: false
+    };
   }
 }
 
@@ -330,15 +345,16 @@ export function resizeThroughHole(
   solid: number,
   face: number,
   operation: Extract<DirectEditOperation, { kind: 'resize-through-hole' }>,
-  scope: Record<string, number>
-): { solid: number; changed: boolean } {
+  scope: Record<string, number>,
+  viaLineage = false
+): { solid: number; changed: boolean; boundedCutter?: boolean } {
   const geometry = requireThroughHole(
     kernel,
     solid,
     face,
-    operation.sourceDiameter,
-    operation.sourceAxisStart,
-    operation.sourceAxisEnd
+    viaLineage ? undefined : operation.sourceDiameter,
+    viaLineage ? undefined : operation.sourceAxisStart,
+    viaLineage ? undefined : operation.sourceAxisEnd
   );
   const diameter = resolveParamValue(
     operation.diameter,
@@ -374,24 +390,28 @@ export function resizeThroughHole(
     extension
   );
   let output: number;
+  let boundedCutter = false;
   try {
-    output =
-      radius > geometry.radius
-        ? enlargeThroughHole(kernel, solid, geometry, radius, newBore)
-        : exactFuse(
+    if (radius > geometry.radius) {
+      const cut = enlargeThroughHole(kernel, solid, geometry, radius, newBore);
+      output = cut.solid;
+      boundedCutter = cut.boundedCutter;
+    } else {
+      output = exactFuse(
+        kernel,
+        solid,
+        exactCut(
+          kernel,
+          cylinderAlongAxis(
             kernel,
-            solid,
-            exactCut(
-              kernel,
-              cylinderAlongAxis(
-                kernel,
-                geometry.axisStart,
-                geometry.axisEnd,
-                geometry.radius
-              ),
-              newBore
-            )
-          );
+            geometry.axisStart,
+            geometry.axisEnd,
+            geometry.radius
+          ),
+          newBore
+        )
+      );
+    }
   } catch (error) {
     throw new Error(
       `Through-hole diameter ${diameter} does not fit this body: ${
@@ -439,7 +459,7 @@ export function resizeThroughHole(
         : `The hole could not be resized to Ø${diameter} exactly; its wall would become an approximation.`
     );
   }
-  return { solid: output, changed: true };
+  return { solid: output, changed: true, boundedCutter };
 }
 
 type ImportedBlindHoleOperation = Extract<
@@ -1181,7 +1201,10 @@ function setFaceDistance(
         resultCandidates,
         relation: moved.relation
       })
-    : propagateRemusUnchangedDirectEditLineage(target.lineage, resultCandidates);
+    : propagateRemusUnchangedDirectEditLineage(
+        target.lineage,
+        resultCandidates
+      );
   return { solids: [moved.solid], ...(lineage ? { lineage } : {}) };
 }
 
@@ -1223,10 +1246,115 @@ export function applyDirectEdit(
       : resolveDirectEditFace(kernel, target, solid, operation);
   const { face, viaLineage } = resolved;
   if (operation.kind === 'resize-through-hole') {
-    const resized = resizeThroughHole(kernel, solid, face, operation, scope);
+    const resized = resizeThroughHole(
+      kernel,
+      solid,
+      face,
+      operation,
+      scope,
+      viaLineage
+    );
     // Keeping only the same solid handle would still discard the imported
     // semantic face map and make the next no-op binding stale.
-    return resized.changed ? { solids: [resized.solid] } : target;
+    if (!resized.changed) return target;
+    const lineage = carryAnalyticFaces(
+      kernel,
+      solid,
+      resized.solid,
+      target.lineage
+    );
+    const verifiedSource = carryAnalyticFaces(
+      kernel,
+      solid,
+      solid,
+      target.lineage
+    );
+    const reference = verifiedSource.faceReferences.get(face);
+    const geometry = measureFaceGeometry(kernel, face);
+    if (reference && geometry?.axisStart && geometry.axisEnd) {
+      assignCarrierFace(
+        kernel,
+        resized.solid,
+        lineage,
+        reference.producingFeatureId,
+        reference.lineageName,
+        cylinderCarrier(
+          geometry.axisStart,
+          subtract(geometry.axisEnd, geometry.axisStart),
+          resolveParamValue(operation.diameter, scope, 'diameter') / 2
+        )
+      );
+    }
+    // The legacy wider-bore cut extends its cylinder at both ends. Where
+    // one end meets a planar shoulder, the cutter's cap constructs the new
+    // shoulder. Its carrier is determined by the exact tool, not proximity.
+    if (
+      resized.boundedCutter &&
+      geometry?.axisStart &&
+      geometry.axisEnd &&
+      geometry.radius !== undefined
+    ) {
+      const axis = normalized(subtract(geometry.axisEnd, geometry.axisStart));
+      const diameter = resolveParamValue(operation.diameter, scope, 'diameter');
+      if (axis && diameter > geometry.radius * 2) {
+        const axialLength = length(
+          subtract(geometry.axisEnd, geometry.axisStart)
+        );
+        const extension = Math.max(
+          DIRECT_EDIT_TOLERANCE * 10,
+          axialLength * 0.02,
+          diameter * 0.01
+        );
+        const selectedEdges = new Set(kernel.getFaceEdges(face));
+        for (const endpoint of [
+          { point: geometry.axisStart, sign: -1 },
+          { point: geometry.axisEnd, sign: 1 }
+        ]) {
+          const carrier = planeCarrier(axis, endpoint.point);
+          if (!carrier) continue;
+          const supports = topologyCandidatesForSolid(kernel, solid).filter(
+            (candidate) =>
+              candidate.kind === 'face' &&
+              sameAnalyticCarrier(
+                (candidate.witness as FaceWitnessV1).analytic,
+                carrier
+              )
+          );
+          if (supports.length !== 1) continue;
+          const handle = supports[0]!.handle;
+          const support = verifiedSource.faceReferences.get(handle);
+          if (
+            !support ||
+            ![...kernel.getFaceEdges(handle)].some((edge) =>
+              selectedEdges.has(edge)
+            )
+          )
+            continue;
+          assignCarrierFace(
+            kernel,
+            resized.solid,
+            lineage,
+            support.producingFeatureId,
+            support.lineageName,
+            planeCarrier(
+              axis,
+              add(endpoint.point, scale(axis, extension * endpoint.sign))
+            )
+          );
+        }
+      }
+    }
+    return {
+      solids: [resized.solid],
+      lineage: producingFeatureId
+        ? withBoundaryEdgeLineage(
+            kernel,
+            resized.solid,
+            producingFeatureId,
+            lineage
+          )
+        : lineage
+    };
   }
   if (
     operation.kind === 'resize-imported-blind-hole' ||
@@ -1294,9 +1422,18 @@ export function applyDirectEdit(
     // ambiguous neighborhoods throw; never fall back to the old face-prism
     // construction, which leaves a fillet rim behind as a ledge.
     const sourceCensus = censusOfSolids(kernel, [solid]);
-    const output =
-      tryExactAnalyticCylinderCapOffset(kernel, solid, face, offset) ??
-      kernel.moveFaces(solid, new Uint32Array([face]), offset);
+    const sourceCandidates = topologyCandidatesForSolid(kernel, solid);
+    const analytic = tryExactAnalyticCylinderCapOffset(
+      kernel,
+      solid,
+      face,
+      offset
+    );
+    const moved =
+      analytic === null
+        ? journaledMove(kernel, solid, new Uint32Array([face]), offset)
+        : { solid: analytic, relation: null };
+    const output = moved.solid;
     if (kernel.validateSolidRelaxed(output) !== 0) {
       throw new Error(
         `Offsetting the face by ${offset} does not produce a valid solid.`
@@ -1311,7 +1448,27 @@ export function applyDirectEdit(
     if (facetFallback) {
       throw new Error(facetFallback);
     }
-    return { solids: [output] };
+    const lineage = moved.relation
+      ? deriveRemusMoveFacesDirectEditLineage({
+          source: target.lineage,
+          sourceCandidates,
+          resultCandidates: topologyCandidatesForSolid(kernel, output),
+          relation: moved.relation
+        })
+      : undefined;
+    return {
+      solids: [output],
+      ...(lineage && producingFeatureId
+        ? {
+            lineage: withBoundaryEdgeLineage(
+              kernel,
+              output,
+              producingFeatureId,
+              lineage
+            )
+          }
+        : {})
+    };
   }
 
   if (operation.kind === 'resize-blend') {
