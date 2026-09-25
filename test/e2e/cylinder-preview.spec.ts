@@ -11,7 +11,11 @@ for (const dimension of ['radius', 'height', 'bottom-height'] as const) {
   test(`rounded cylinder ${dimension} follows the drag without worker rebuilds and restores on cancel`, async ({
     page
   }) => {
-    test.setTimeout(90_000);
+    // Three exact rebuilds (commit, undo, refused fillet) plus two preview
+    // passes. On hosted 2-core software-GL runners the radius and height
+    // cases ran out of 90 s at varying late steps after #430 and #433; the
+    // no-rebuild and restore assertions are unchanged.
+    test.setTimeout(180_000);
     const { canvas, errors } = await setupRoundedCylinder(
       page,
       dimension === 'bottom-height'
