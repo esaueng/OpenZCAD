@@ -15,19 +15,24 @@ const PORT = portForCheckout();
 
 export default defineConfig({
   testDir: './test/e2e',
-  // Without this, CI's four-way shard split allocates whole files, and the
-  // suite's sizes make that allocation the wall clock: one run landed
-  // 80/13/57/20 tests per shard with modeling.spec.ts alone at 7.3 minutes,
-  // so the slowest shard ran six times longer than the fastest. Per-test
-  // allocation keeps the shards near even. Tests already run in isolated
-  // browser contexts; nothing in the suite depends on in-file order.
+  // Playwright's default also collects `*.test.ts` and `*.spec.tsx`, which
+  // `scripts/e2e-shards.mjs` would not assign to a CI shard (and a `.test.ts`
+  // here is already a root Vitest file). Pinning the pattern keeps the two
+  // in step by construction; `test/e2e-shards.test.ts` checks this line.
+  testMatch: '**/*.spec.ts',
+  // Tests in one file run on different workers, so a long file such as
+  // modeling.spec.ts (53 tests) does not serialise a CI shard onto one
+  // worker. CI assigns whole files to shards by recorded duration through
+  // `scripts/e2e-shards.mjs`; this keeps each shard's own workers busy. Tests
+  // already run in isolated browser contexts; nothing in the suite depends
+  // on in-file order.
   fullyParallel: true,
   // Playwright's focus is run-wide, not file-wide, so one `test.only` left in a
-  // push turns all four CI shards into a single executed test: three run zero,
-  // every shard exits 0, and the `e2e` aggregate — documented below as the one
-  // stable context a human is meant to trust — prints green having exercised
-  // that single test. Root Vitest gets this for free (`allowOnly` defaults to
-  // `!CI`); Playwright does not.
+  // push turns the CI shard holding it into a single executed test: the other
+  // shards run zero, every shard exits 0, and the `e2e` aggregate — documented
+  // below as the one stable context a human is meant to trust — prints green
+  // having exercised that single test. Root Vitest gets this for free
+  // (`allowOnly` defaults to `!CI`); Playwright does not.
   forbidOnly: !!process.env.CI,
   // GitHub-hosted runners are much slower than the previous CI hardware: cold
   // Chromium, IndexedDB, and geometry-worker starts can eat most of the 30 s

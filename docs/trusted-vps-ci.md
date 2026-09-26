@@ -38,7 +38,7 @@ that workflow. Changing its policy requires a new reviewed commit, an explicit
 runner-group allowlist update, and an update to the caller pin. Editing the local
 workflow file alone does not change the executed policy.
 
-Unit tests, parity, builds, and four browser shards remain hosted. The stable
+Unit tests, parity, builds, and the browser shards remain hosted. The stable
 required `validate` check requires both the reusable quality workflow and hosted
 validation to succeed; failed, cancelled, or skipped checks cannot make it green.
 VPS install, lint, and typecheck durations are written to the run summary. This

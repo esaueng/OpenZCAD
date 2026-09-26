@@ -182,8 +182,9 @@ describe('beta deployment safety', () => {
 describe('CI gates cannot silently stop testing', () => {
   it('forbids test.only in CI so a shard cannot report green on one test', () => {
     // Playwright's focus is run-wide, not file-wide: one stray `test.only`
-    // makes all four shards run that single test, three run zero, every shard
-    // exits 0, and the `e2e` aggregate prints green having exercised 1 of 161.
+    // makes the shard holding it run that single test, the others run zero,
+    // every shard exits 0, and the `e2e` aggregate prints green having
+    // exercised one test of the whole suite.
     // Root Vitest is safe by default (`allowOnly` defaults to `!CI`).
     expect(readFileSync('playwright.config.ts', 'utf8')).toMatch(
       /forbidOnly:\s*!!process\.env\.CI/

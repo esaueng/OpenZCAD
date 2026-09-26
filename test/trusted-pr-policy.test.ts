@@ -127,10 +127,21 @@ describe('immutable trusted PR policy', () => {
     'requires hosted success when the route is unavailable or disabled: %s',
     (target) => {
       for (const hosted of ['success', 'failure', 'skipped', 'cancelled']) {
-        const result = spawnSync('bash', ['-e', '-c', stepScript('Require the selected checks to succeed')], {
-          env: { ...process.env, SELECT_RESULT: 'success', TRUSTED: 'true',
-            ROUTE_RESULT: 'skipped', TARGET: target, VPS_RESULT: 'skipped', HOSTED_RESULT: hosted }
-        });
+        const result = spawnSync(
+          'bash',
+          ['-e', '-c', stepScript('Require the selected checks to succeed')],
+          {
+            env: {
+              ...process.env,
+              SELECT_RESULT: 'success',
+              TRUSTED: 'true',
+              ROUTE_RESULT: 'skipped',
+              TARGET: target,
+              VPS_RESULT: 'skipped',
+              HOSTED_RESULT: hosted
+            }
+          }
+        );
         expect(result.status).toBe(hosted === 'success' ? 0 : 1);
       }
     }
@@ -173,29 +184,55 @@ describe('required validation gate', () => {
       /uses: esaueng\/OpenZCAD\/\.github\/workflows\/fleet-ci\.yml@[0-9a-f]{40}\n/
     );
     expect(caller).not.toMatch(/secrets: inherit|runs-on:/);
-    expect(ci).toContain('needs: [quality, validation]\n    if: always()');
+    expect(ci).toContain(
+      'needs: [quality, unit, validation]\n    if: always()'
+    );
   });
 
   it.each([
-    ['success', 'success', 0],
-    ['failure', 'success', 1],
-    ['cancelled', 'success', 1],
-    ['skipped', 'success', 1],
-    ['success', 'failure', 1],
-    ['success', 'cancelled', 1],
-    ['success', 'skipped', 1]
-  ])('requires quality %s and validation %s', (quality, validation, status) => {
-    const result = spawnSync(
-      'bash',
-      ['-e', '-c', stepScript('Require all validation checks', ci)],
-      {
-        env: {
-          ...process.env,
-          QUALITY_RESULT: String(quality),
-          VALIDATION_RESULT: String(validation)
+    ['success', 'success', 'success', 0],
+    ['failure', 'success', 'success', 1],
+    ['cancelled', 'success', 'success', 1],
+    ['skipped', 'success', 'success', 1],
+    ['success', 'failure', 'success', 1],
+    ['success', 'cancelled', 'success', 1],
+    ['success', 'skipped', 'success', 1],
+    ['success', 'success', 'failure', 1],
+    ['success', 'success', 'cancelled', 1],
+    ['success', 'success', 'skipped', 1]
+  ])(
+    'requires quality %s, unit %s and validation %s',
+    (quality, unit, validation, status) => {
+      const result = spawnSync(
+        'bash',
+        ['-e', '-c', stepScript('Require all validation checks', ci)],
+        {
+          env: {
+            ...process.env,
+            QUALITY_RESULT: String(quality),
+            UNIT_RESULT: String(unit),
+            VALIDATION_RESULT: String(validation)
+          }
         }
-      }
+      );
+      expect(result.status).toBe(status);
+    }
+  );
+
+  it('runs both halves of `pnpm test` across the unit and validation jobs', () => {
+    // `pnpm test` is the root project followed by the web project; the jobs
+    // split them, so each half has to appear or a whole project goes untested.
+    const unit = ci.slice(
+      ci.indexOf('\n  unit:\n'),
+      ci.indexOf('\n  validate:\n')
     );
-    expect(result.status).toBe(status);
+    const validation = ci.slice(
+      ci.indexOf('\n  validation:\n'),
+      ci.indexOf('\n  unit:\n')
+    );
+    expect(unit).toContain('- run: pnpm exec vitest run\n');
+    expect(validation).toContain('- run: pnpm test:web\n');
+    expect(validation).toContain('- run: pnpm test:parity-corpus\n');
+    expect(validation).toContain('run: pnpm build\n');
   });
 });

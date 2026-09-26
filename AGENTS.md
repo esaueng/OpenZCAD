@@ -67,8 +67,8 @@ pnpm install --frozen-lockfile
 ```
 
 That install needs network access because `pnpm-lock.yaml` pins a GitHub-hosted
-`remus-wasm` tarball. Pull requests and manual dispatches run a `validate`
-job with these gates in order:
+`remus-wasm` tarball. Pull requests and manual dispatches run these gates,
+which the required `validate` check aggregates:
 
 ```bash
 pnpm lint
@@ -78,10 +78,18 @@ pnpm test:parity-corpus
 pnpm build
 ```
 
-plus a parallel `e2e-tests` job that shards the Playwright suite four ways
-(`pnpm test:e2e --shard=N/4`, each shard runs
-`pnpm exec playwright install --with-deps chromium` first) and an `e2e` gate
-job that aggregates the shards for branch protection.
+They run as three parallel jobs: `quality` (lint, typecheck), `unit` (the root
+Vitest project, `pnpm exec vitest run`) and `validation` (the web Vitest
+project via `pnpm test:web`, the parity corpus, the build). Together `unit`
+and `validation` are `pnpm test`. A parallel `e2e-tests` job runs the
+Playwright suite as six shards, each taking the spec files
+`scripts/e2e-shards.mjs` assigns it (every shard runs
+`pnpm exec playwright install --with-deps chromium` first), and an `e2e` gate
+job aggregates the shards for branch protection. Shards are balanced by the
+per-file seconds in `test/e2e/shard-weights.json`; a new spec file needs no
+entry (it gets a default weight), and each shard uploads its Playwright JSON
+report as an `e2e-report-N` artifact, so after the suite drifts, download
+those and run `node scripts/e2e-shards.mjs --update <reports>` to rebalance.
 
 The Playwright install downloads Chromium and may install system packages; do
 not run it where network or system changes are unavailable. `pnpm test:e2e`
@@ -154,13 +162,13 @@ off (an admin merge bypasses the requirement), and the rule does not require
 the branch to be up to date with `main`. Consequences:
 
 - **Never `gh pr merge --auto` here.** Auto-merge fires the moment the
-  *required* checks pass, so it never waits for `Cloudflare version /
-  verify`. Merging before the shards reported has already put a red `main`
+  _required_ checks pass, so it never waits for `Cloudflare version /
+verify`. Merging before the shards reported has already put a red `main`
   in front of us once, before protection existed: #55 went in with three
   Playwright shards outstanding, and shard 3 was failing.
 - **Read `gh pr checks` and see `validate`, `e2e`, and `Cloudflare version /
-  verify` pass before merging.** `validate` is the slow one at roughly seven
-  minutes. `e2e` is the aggregate over the four Playwright shards (it fails,
+verify` pass before merging.** `validate` is the slow one at roughly seven
+  minutes. `e2e` is the aggregate over the six Playwright shards (it fails,
   rather than skips, when a shard fails), and `Cloudflare version / verify`
   proves the Worker config still dry-run deploys. Those three are the merge
   gate; `apple-silicon` is not one of them — see below.
