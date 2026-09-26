@@ -17,6 +17,7 @@ import {
   readWeights,
   shardFilters,
   SPEC_DIR,
+  SPEC_PATTERN,
   weightsFromReports
 } from '../scripts/e2e-shards.mjs';
 
@@ -51,6 +52,19 @@ describe('balanced e2e shards', () => {
     for (const filter of shardFilters(1, 1, specs, weights)) {
       const matcher = new RegExp(filter, 'i');
       expect(paths.filter((path) => matcher.test(path))).toHaveLength(1);
+    }
+  });
+
+  it('discovers exactly what Playwright is configured to collect', () => {
+    // Playwright's default testMatch also takes `*.test.ts` and `*.spec.tsx`;
+    // such a file would run locally yet land in no CI shard. The config pins
+    // the pattern to what this script discovers, so the two cannot drift.
+    expect(readFileSync('playwright.config.ts', 'utf8')).toMatch(
+      /testMatch:\s*'\*\*\/\*\.spec\.ts'/
+    );
+    expect(SPEC_PATTERN.test('a.spec.ts')).toBe(true);
+    for (const name of ['a.test.ts', 'a.spec.tsx', 'a.spec.js', 'a.spec.mts']) {
+      expect(SPEC_PATTERN.test(name)).toBe(false);
     }
   });
 

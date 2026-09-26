@@ -30,6 +30,7 @@ import { pathToFileURL } from 'node:url';
 
 export const SPEC_DIR = 'test/e2e';
 export const WEIGHTS_PATH = 'test/e2e/shard-weights.json';
+/** Mirrors `testMatch` in `playwright.config.ts`; the test keeps them equal. */
 export const SPEC_PATTERN = /\.spec\.ts$/;
 /** Seconds assumed for a spec with no recorded weight. */
 export const DEFAULT_WEIGHT_SECONDS = 60;
