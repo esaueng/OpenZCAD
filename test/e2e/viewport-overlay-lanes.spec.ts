@@ -136,12 +136,14 @@ test('search bar and toast clear the column at phone width', async ({
 
 // Below 1160px the sketch readout trades its words for glyphs, so the search
 // row beside it keeps its full width (520px: the bar and Ask) instead of the
-// readout wrapping or squeezing it. Narrower still, the lane only clears the
-// cube on the right rather than mirroring the readout, so it stays usable.
-for (const { width, compact, minLane } of [
-  { width: 1440, compact: false, minLane: 520 },
-  { width: 1024, compact: true, minLane: 520 },
-  { width: 600, compact: true, minLane: 170 }
+// readout wrapping or squeezing it. Narrower still, the lane stops mirroring
+// the readout on the right (at 960px and below it runs to the edge, the cube
+// standing above it), and below 664px the bar drops its ⌘K glyph as on a
+// phone, so the field keeps room.
+for (const { width, compact, minLane, phoneBar } of [
+  { width: 1440, compact: false, minLane: 520, phoneBar: false },
+  { width: 1024, compact: true, minLane: 520, phoneBar: false },
+  { width: 600, compact: true, minLane: 320, phoneBar: true }
 ]) {
   test(`sketch readout keeps its segments on one row at ${width}px`, async ({
     page
@@ -202,5 +204,9 @@ for (const { width, compact, minLane } of [
     const laneBox = await page.locator('.command-bar-lane').boundingBox();
     expect(laneBox).not.toBeNull();
     expect(laneBox!.width).toBeGreaterThanOrEqual(minLane);
+    const searchKey = page.locator('.command-bar > kbd');
+    await (phoneBar
+      ? expect(searchKey).toBeHidden()
+      : expect(searchKey).toBeVisible());
   });
 }
