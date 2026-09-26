@@ -767,6 +767,32 @@
   --readout-min-w: 300px;
 }
 
+/* Narrower than 2 × (300 + 2 × 10) + 520 = 1160px, the full sketch readout
+   would squeeze the search row beside it (the bar and Ask, 520px at most).
+   The readout trades its words for glyphs instead and reserves 240px, which
+   still fits four-character snap and grid values on one row. The words stay
+   for screen readers, and each segment's tooltip names it. */
+@media (max-width: 1159px) {
+  .workspace.column-layout:has(.workspace-column-float .sketch-rail) {
+    --readout-min-w: 240px;
+  }
+
+  .viewport-readout:has(.viewport-dock-snap) .viewport-readout-icon {
+    display: block;
+  }
+
+  .viewport-readout:has(.viewport-dock-snap)
+    :is(.viewport-dock-filter-label, .viewport-readout-word) {
+    position: absolute;
+    width: 1px;
+    height: 1px;
+    margin: 0;
+    overflow: hidden;
+    clip-path: inset(50%);
+    white-space: nowrap;
+  }
+}
+
 .workspace.column-layout:has(
     .workspace-column-float :is(.command-rail, .sketch-rail, .tweak-rail)
   ) {
