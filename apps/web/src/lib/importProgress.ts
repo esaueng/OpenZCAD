@@ -211,6 +211,33 @@ export function importOverallFraction(
   return clamp01((behind + within) / total);
 }
 
+export interface ImportPhaseSpan {
+  phase: ImportPhase;
+  /** Where the phase starts and ends on the bar, 0–1. */
+  start: number;
+  end: number;
+}
+
+/**
+ * The stretch of the bar each phase owns, in the same weights as
+ * {@link importOverallFraction}, so the pill can mark phase boundaries and
+ * sweep the one phase that cannot report without inventing a position in it.
+ */
+export function importPhaseSpans(
+  phases: readonly ImportPhase[]
+): ImportPhaseSpan[] {
+  const total = phases.reduce((sum, phase) => sum + PHASE_WEIGHT[phase], 0);
+  if (total <= 0) {
+    return [];
+  }
+  let behind = 0;
+  return phases.map((phase) => {
+    const start = behind / total;
+    behind += PHASE_WEIGHT[phase];
+    return { phase, start, end: clamp01(behind / total) };
+  });
+}
+
 /**
  * Drops updates too small to see, so a chatty source cannot flood the host.
  *
