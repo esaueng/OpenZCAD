@@ -37,7 +37,7 @@ interface TooltipProps {
 interface TooltipPosition {
   left: number;
   top: number;
-  placement: 'above' | 'below';
+  placement: 'above' | 'below' | 'left' | 'right';
 }
 
 let lastClosedTooltip: { id: string; at: number } | null = null;
@@ -48,6 +48,32 @@ function setRef(ref: Ref<HTMLElement> | undefined, node: HTMLElement | null) {
   } else if (ref) {
     ref.current = node;
   }
+}
+
+/**
+ * The vertical icon rail the trigger sits in, if any. Orientation comes from
+ * the rail's live layout so a rail that a narrow viewport lays out in a row
+ * keeps the above/below placement. A trigger outside the rail's column (a
+ * flyout nested in the toolbar) does not count as on the rail.
+ */
+function verticalRailBox(trigger: HTMLElement): DOMRect | null {
+  const rail = trigger.closest<HTMLElement>('[role="toolbar"]');
+  if (!rail) {
+    return null;
+  }
+  const vertical =
+    rail.getAttribute('aria-orientation') === 'vertical' ||
+    window.getComputedStyle(rail).flexDirection.startsWith('column');
+  if (!vertical) {
+    return null;
+  }
+  const railBox = rail.getBoundingClientRect();
+  const triggerBox = trigger.getBoundingClientRect();
+  const slack = 1;
+  return triggerBox.left >= railBox.left - slack &&
+    triggerBox.right <= railBox.right + slack
+    ? railBox
+    : null;
 }
 
 /** Styled, portal-mounted help for a single control or readout. */
@@ -184,6 +210,36 @@ export function Tooltip({
       }
       const gap = 8;
       const viewportPadding = 8;
+      // On a vertical rail, open beside the rail rather than below the
+      // button: below, the tooltip covers the rail's next buttons and, once
+      // clamped into the viewport, whatever panel sits beside the rail.
+      const railBox = triggerRef.current
+        ? verticalRailBox(triggerRef.current)
+        : null;
+      if (railBox) {
+        const needed = tooltipBox.width + gap + viewportPadding;
+        const side =
+          window.innerWidth - railBox.right >= needed
+            ? 'right'
+            : railBox.left >= needed
+              ? 'left'
+              : null;
+        if (side) {
+          const halfHeight = tooltipBox.height / 2;
+          setPosition({
+            left: side === 'right' ? railBox.right + gap : railBox.left - gap,
+            top: Math.min(
+              window.innerHeight - halfHeight - viewportPadding,
+              Math.max(
+                halfHeight + viewportPadding,
+                triggerBox.top + triggerBox.height / 2
+              )
+            ),
+            placement: side
+          });
+          return;
+        }
+      }
       const roomBelow = window.innerHeight - triggerBox.bottom;
       const placement =
         roomBelow < tooltipBox.height + gap &&

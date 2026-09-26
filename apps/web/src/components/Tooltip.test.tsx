@@ -79,4 +79,78 @@ describe('Tooltip', () => {
     fireEvent.pointerEnter(redo);
     expect(screen.getByRole('tooltip')).toHaveTextContent('Redo');
   });
+
+  describe('on a vertical rail', () => {
+    const boxes: Record<string, DOMRect> = {};
+    const box = (left: number, top: number, width: number, height: number) =>
+      new DOMRect(left, top, width, height);
+
+    beforeEach(() => {
+      vi.spyOn(
+        HTMLElement.prototype,
+        'getBoundingClientRect'
+      ).mockImplementation(function (this: HTMLElement) {
+        const key =
+          this.getAttribute('role') === 'tooltip'
+            ? 'tooltip'
+            : (this.getAttribute('aria-label') ?? '');
+        return boxes[key] ?? box(0, 0, 0, 0);
+      });
+      boxes.tooltip = box(0, 0, 200, 24);
+    });
+
+    afterEach(() => {
+      vi.restoreAllMocks();
+    });
+
+    const renderRail = (style?: { flexDirection: 'column' | 'row' }) =>
+      render(
+        <div role="toolbar" aria-label="Rail" style={style}>
+          <Tooltip label="Parts" description="Show the parts list">
+            <button type="button" aria-label="Parts">
+              P
+            </button>
+          </Tooltip>
+        </div>
+      );
+
+    it('opens beside the rail instead of over its next buttons', () => {
+      boxes.Rail = box(20, 300, 40, 120);
+      boxes.Parts = box(25, 305, 30, 30);
+      renderRail({ flexDirection: 'column' });
+
+      fireEvent.focus(screen.getByRole('button', { name: 'Parts' }));
+      const tooltip = screen.getByRole('tooltip');
+      expect(tooltip).toHaveAttribute('data-placement', 'right');
+      // Rail's right edge plus the 8 px gap, centred on the button.
+      expect(parseFloat(tooltip.style.left)).toBeCloseTo(68, 6);
+      expect(parseFloat(tooltip.style.top)).toBeCloseTo(320, 6);
+    });
+
+    it('opens to the left of a rail on the right edge', () => {
+      boxes.Rail = box(window.innerWidth - 50, 300, 40, 120);
+      boxes.Parts = box(window.innerWidth - 45, 305, 30, 30);
+      renderRail({ flexDirection: 'column' });
+
+      fireEvent.focus(screen.getByRole('button', { name: 'Parts' }));
+      const tooltip = screen.getByRole('tooltip');
+      expect(tooltip).toHaveAttribute('data-placement', 'left');
+      expect(parseFloat(tooltip.style.left)).toBeCloseTo(
+        window.innerWidth - 58,
+        6
+      );
+    });
+
+    it('keeps the below placement on a horizontal toolbar', () => {
+      boxes.Rail = box(20, 300, 120, 40);
+      boxes.Parts = box(25, 305, 30, 30);
+      renderRail({ flexDirection: 'row' });
+
+      fireEvent.focus(screen.getByRole('button', { name: 'Parts' }));
+      expect(screen.getByRole('tooltip')).toHaveAttribute(
+        'data-placement',
+        'below'
+      );
+    });
+  });
 });
