@@ -138,7 +138,7 @@ test('search bar and toast clear the column at phone width', async ({
 // row beside it keeps its full width (520px: the bar and Ask) instead of the
 // readout wrapping or squeezing it. Narrower still, the lane stops mirroring
 // the readout on the right (at 960px and below it runs to the edge, the cube
-// standing above it), and below 664px the bar drops its ⌘K glyph as on a
+// standing above it), and below 657px the bar drops its ⌘K glyph as on a
 // phone, so the field keeps room.
 for (const { width, compact, minLane, phoneBar } of [
   { width: 1440, compact: false, minLane: 520, phoneBar: false },
@@ -223,3 +223,37 @@ for (const { width, compact, minLane, phoneBar } of [
       : expect(searchKey).toBeVisible());
   });
 }
+
+test('Build readout fits its longest filter inside the island', async ({
+  page
+}) => {
+  await page.setViewportSize({ width: 1440, height: 900 });
+  await stubApi(page);
+  await seedDismissedWorkspaceTour(page);
+  await createProject(page, 'Readout filter');
+
+  // "select Sketch" is the longest label; at a 96px reserve it ran past the
+  // island's right border.
+  const readout = page.locator('.viewport-readout');
+  const filter = readout.getByRole('button', { name: /^Selection filter:/ });
+  for (let step = 0; step < 5; step += 1) {
+    if ((await filter.getAttribute('aria-label'))?.includes('Sketch')) {
+      break;
+    }
+    await filter.click();
+  }
+  await expect(filter).toHaveAccessibleName(/Selection filter: Sketch/);
+
+  const fit = await readout.evaluate((el) => {
+    const button = el.querySelector('.viewport-dock-filter')!;
+    const island = el.getBoundingClientRect();
+    return {
+      overflow: el.scrollWidth - el.clientWidth,
+      gap: island.right - button.getBoundingClientRect().right
+    };
+  });
+  // scrollWidth and clientWidth are whole pixels; allow their rounding.
+  expect(fit.overflow).toBeLessThanOrEqual(1);
+  // The island's 3px padding and 1px border stay outside the button.
+  expect(fit.gap).toBeGreaterThanOrEqual(3.5);
+});

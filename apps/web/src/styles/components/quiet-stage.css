@@ -869,9 +869,11 @@
    rail's mirror. The column, the resizer and the lanes all read --column-w,
    so they follow; the readout under the rail is wider than the rail, so the
    bottom lanes start after the readout instead. The sketch card and Tweak's
-   parameters keep the stored width. */
+   parameters keep the stored width. The Build reserve fits the longest
+   filter, "select Sketch" (102.7px at 11px Geist Mono), which overran the
+   island at 96px. */
 .workspace.column-layout {
-  --readout-min-w: 96px;
+  --readout-min-w: 104px;
 }
 
 /* Sketching adds the snap and grid segments: room for all three on one
@@ -938,10 +940,10 @@
   }
 }
 
-/* Below 664px that lane (W − 270px) is no wider than the widest phone lane,
-   394px, so the bar takes the phone's treatment there too: no ⌘K glyph,
-   and Ask as its icon (the button keeps its name). */
-@media (min-width: 521px) and (max-width: 663px) {
+/* Below 657px that lane (W − 270px) is no wider than the widest phone lane
+   (386px: Build at 520px), so the bar takes the phone's treatment there
+   too: no ⌘K glyph, and Ask as its icon (the button keeps its name). */
+@media (min-width: 521px) and (max-width: 656px) {
   .workspace.column-layout:has(.workspace-column-float .sketch-rail)
     .command-bar-slot
     .assistant-launcher {
