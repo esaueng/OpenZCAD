@@ -115,8 +115,8 @@ interface AssistantPanelProps {
    */
   hidden?: boolean;
   /**
-   * Where the Ask launcher goes while the conversation is closed: the slot at
-   * the end of the search bar. Absent, the launcher renders in place.
+   * Where the Ask launcher goes while the conversation is closed: the slot
+   * inside the command bar. Absent, the launcher renders in place.
    */
   launcherSlot?: HTMLElement | null;
   /**

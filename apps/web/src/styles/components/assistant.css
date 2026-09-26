@@ -131,22 +131,21 @@
   border-color: var(--color-border-strong);
 }
 
-/* ── Collapsed: the Ask button on the search bar ─────────────
-   The readout hands the assistant a slot at the end of the search bar, and
-   the closed conversation waits there as one button the bar's height: the
-   same place a question typed into search goes. */
+/* ── Collapsed: the Ask button inside the command bar ─────────
+   The command bar hands the assistant a slot before its key glyph, and the
+   closed conversation waits there as a quiet button in the field: the same
+   place a question typed into the bar goes. */
 .assistant-launcher {
   position: relative;
-  height: var(--command-bar-h);
+  height: 28px;
   display: inline-flex;
   align-items: center;
   gap: 6px;
-  padding: 0 12px;
+  padding: 0 8px;
   color: var(--color-text-muted);
-  background: var(--color-surface);
-  border: var(--border-thin);
-  border-radius: var(--radius-lg);
-  box-shadow: var(--shadow-2);
+  background: transparent;
+  border: 1px solid transparent;
+  border-radius: var(--radius-md);
   font-size: var(--fs-base);
   cursor: pointer;
   animation: assistant-launcher-in var(--dur-base) var(--ease-out);
@@ -218,7 +217,7 @@
   position: absolute;
   inset: -3px;
   border: 1px solid var(--color-accent-hi);
-  border-radius: calc(var(--radius-lg) + 3px);
+  border-radius: calc(var(--radius-md) + 3px);
   pointer-events: none;
   animation: assistant-pulse 1.8s var(--ease-out) infinite;
 }
