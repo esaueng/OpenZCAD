@@ -15,6 +15,24 @@ Related: [ADR-003](../adrs/ADR-003-cloudflare-storage-split.md) (D1/R2 split),
 [ADR-007](../adrs/ADR-007-access-auth-and-live-rooms.md) (live rooms),
 [ADR-012](../adrs/ADR-012-email-code-identity.md) (identity)
 
+## Cloud access and storage bounds
+
+The owner can retain and restore a trashed project. While it is trashed,
+members cannot list, read, edit, join its live room, or accept an invitation
+to it. Restoring the project restores existing memberships. Archiving does not
+withdraw member access.
+
+An account can hold at most 100 projects, including projects in the trash.
+Stored project snapshots and externalized assets share a 2 GiB account limit
+in R2-backed storage; D1-backed documents and revisions have the same limit.
+Existing accounts above a limit remain readable and can remove data, but
+cannot increase usage. The R2 path needs space for a replacement snapshot
+before it can prune the old one.
+
+Single-request artifact uploads use a durable byte reservation before the
+object is completed. Finalization requires a completed upload whose stored
+size matches that reservation.
+
 ## What shipped, against what was planned
 
 Two things came out differently from the plan above, both for the better:
