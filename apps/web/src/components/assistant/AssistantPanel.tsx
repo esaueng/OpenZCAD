@@ -65,6 +65,7 @@ import {
   AttachmentError
 } from '../../lib/assistant/attachments';
 import {
+  ASSISTANT_PROMPT_SELECTOR,
   ASSISTANT_PROMPT_FILES_EVENT,
   ASSISTANT_PROMPT_KEY_EVENT,
   type AssistantPromptFilesDetail,
@@ -556,6 +557,43 @@ export function AssistantPanel({
     scrollback,
     scrollToLatest
   ]);
+
+  // The prompt taking focus brings the stream up, so a tucked-away
+  // conversation is one click on the bar away. Only the moment focus arrives
+  // opens it: hiding it while the prompt keeps focus has to stick.
+  const wasPromptingRef = useRef(prompting);
+  useEffect(() => {
+    const tookFocus = prompting && !wasPromptingRef.current;
+    wasPromptingRef.current = prompting;
+    if (tookFocus && collapsed && !hidden) {
+      onCollapsedChange(false);
+    }
+  }, [prompting, collapsed, hidden, onCollapsedChange]);
+
+  // A press anywhere but the stream or the prompt line tucks the stream away.
+  // Capture phase, so a canvas or menu that stops propagation still counts.
+  // The conversation and any request in flight keep running; the prompt's
+  // dot reports what lands meanwhile.
+  const panelRef = useRef<HTMLElement | null>(null);
+  useEffect(() => {
+    if (collapsed || hidden) {
+      return;
+    }
+    function onPointerDown(event: PointerEvent) {
+      const target = event.target;
+      if (
+        !(target instanceof Element) ||
+        panelRef.current?.contains(target) ||
+        target.closest(ASSISTANT_PROMPT_SELECTOR)
+      ) {
+        return;
+      }
+      onCollapsedChange(true);
+    }
+    window.document.addEventListener('pointerdown', onPointerDown, true);
+    return () =>
+      window.document.removeEventListener('pointerdown', onPointerDown, true);
+  }, [collapsed, hidden, onCollapsedChange]);
 
   // Reopening the stream lands at the newest turn, which stands on the prompt.
   useLayoutEffect(() => {
@@ -1097,6 +1135,7 @@ export function AssistantPanel({
 
   return (
     <section
+      ref={panelRef}
       className={`assistant-panel${dragging ? ' dragging' : ''}${
         hidden ? ' assistant-off-screen' : ''
       }${quiet ? ' quiet' : ''}${scrollback ? ' scrollback' : ''}`}
