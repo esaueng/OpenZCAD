@@ -255,14 +255,22 @@
 }
 
 /* The island is the only frame: its segments are flat text, so a chip
-   inside it never draws a second box. A hairline centred in the space
-   before the snap and grid segments tells them apart in a sketch; only
-   the filter, which is a button, answers the pointer. */
+   inside it never draws a second box. A hairline centred in the gap before
+   the snap and grid segments tells them apart in a sketch; only the filter,
+   which is a button, answers the pointer. */
+.viewport-readout:has(.viewport-dock-snap) {
+  column-gap: 9px;
+  /* A segment that wraps to the start of a row puts its hairline 1px past
+     the island's left border, so clipping to the padding box drops it;
+     focus rings (2px + 1px offset) stay inside the 3px padding. */
+  overflow: clip;
+}
+
 .viewport-readout .viewport-dock-filter,
 .viewport-readout .viewport-dock-snap,
 .viewport-readout .viewport-dock-grid {
   height: 24px;
-  padding: 0 7px;
+  padding: 0 5px;
   background: transparent;
   border: 0;
 }
@@ -270,17 +278,16 @@
 .viewport-readout .viewport-dock-snap,
 .viewport-readout .viewport-dock-grid {
   position: relative;
-  margin-left: 4px;
 }
 
-/* 4px margin + the island's 4px gap: -4.5px centres the 1px line. */
+/* -5px centres the 1px line in the 9px gap. */
 .viewport-readout .viewport-dock-snap::before,
 .viewport-readout .viewport-dock-grid::before {
   content: '';
   position: absolute;
   top: 5px;
   bottom: 5px;
-  left: -4.5px;
+  left: -5px;
   width: 1px;
   background: var(--color-border);
 }
@@ -867,9 +874,88 @@
   --readout-min-w: 96px;
 }
 
-/* Sketching adds the snap and grid segments: room for all three on a row. */
+/* Sketching adds the snap and grid segments: room for all three on one
+   row with four-character values in both ("Snap 0.25 mm", "Grid 1000 mm").
+   The grid label follows the zoom, so sizing for the defaults wrapped as
+   soon as it read "Grid 10 mm". Anything longer wraps to a second row. */
 .workspace.column-layout:has(.workspace-column-float .sketch-rail) {
-  --readout-min-w: 264px;
+  --readout-min-w: 300px;
+}
+
+/* Narrower than 2 × (300 + 2 × 10) + 520 = 1160px, the full sketch readout
+   would squeeze the search row beside it (the bar and Ask, 520px at most).
+   The readout trades its words for glyphs instead and reserves 240px, which
+   still fits four-character snap and grid values on one row. The words stay
+   for screen readers, and each segment's tooltip names it. */
+@media (max-width: 1159px) {
+  .workspace.column-layout:has(.workspace-column-float .sketch-rail) {
+    --readout-min-w: 240px;
+  }
+
+  .viewport-readout:has(.viewport-dock-snap) .viewport-readout-icon {
+    display: block;
+  }
+
+  .viewport-readout:has(.viewport-dock-snap)
+    :is(.viewport-dock-filter-label, .viewport-readout-word) {
+    position: absolute;
+    width: 1px;
+    height: 1px;
+    margin: 0;
+    overflow: hidden;
+    clip-path: inset(50%);
+    white-space: nowrap;
+  }
+}
+
+/* In the same range the search lane stops mirroring the readout's reserve on
+   the right, which left it W − 520px wide (80px at a 600px window). Above
+   960px it only has to clear the orientation cube in the corner, the 144px
+   the scale bar also steps around; at 960px and below the cube already
+   stands above the search row (workspace-column.css), so the lane runs to
+   the island gap as on a phone and is W − 270px wide. */
+@media (min-width: 961px) and (max-width: 1159px) {
+  .workspace.column-layout:has(.workspace-column-float .sketch-rail) {
+    --lane-right: calc(var(--island-gap) * 2 + 144px);
+  }
+}
+
+@media (min-width: 521px) and (max-width: 960px) {
+  .workspace.column-layout:has(.workspace-column-float .sketch-rail) {
+    --lane-right: var(--island-gap);
+  }
+}
+
+/* Across the compact range the search row reaches the scale bar's spot left
+   of the cube (it already did at 1024px), so the ruler takes its phone
+   place: bottom-left, above the readout and the search row. */
+@media (min-width: 521px) and (max-width: 1159px) {
+  .workspace.column-layout:has(.workspace-column-float .sketch-rail)
+    .viewport-scale-indicator {
+    left: var(--island-gap);
+    right: auto;
+    bottom: calc(var(--island-gap) * 2 + var(--command-bar-h));
+  }
+}
+
+/* Below 664px that lane (W − 270px) is no wider than the widest phone lane,
+   394px, so the bar takes the phone's treatment there too: no ⌘K glyph,
+   and Ask as its icon (the button keeps its name). */
+@media (min-width: 521px) and (max-width: 663px) {
+  .workspace.column-layout:has(.workspace-column-float .sketch-rail)
+    .command-bar-slot
+    .assistant-launcher {
+    padding-inline: 7px;
+  }
+
+  .workspace.column-layout:has(.workspace-column-float .sketch-rail)
+    .command-bar
+    > kbd,
+  .workspace.column-layout:has(.workspace-column-float .sketch-rail)
+    .command-bar-slot
+    .assistant-launcher-word {
+    display: none;
+  }
 }
 
 .workspace.column-layout:has(

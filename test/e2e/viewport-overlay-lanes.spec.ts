@@ -133,3 +133,93 @@ test('search bar and toast clear the column at phone width', async ({
   );
   expect(covered).toEqual([]);
 });
+
+// Below 1160px the sketch readout trades its words for glyphs, so the search
+// row beside it keeps its full width (520px: the bar and Ask) instead of the
+// readout wrapping or squeezing it. Narrower still, the lane stops mirroring
+// the readout on the right (at 960px and below it runs to the edge, the cube
+// standing above it), and below 664px the bar drops its ⌘K glyph as on a
+// phone, so the field keeps room.
+for (const { width, compact, minLane, phoneBar } of [
+  { width: 1440, compact: false, minLane: 520, phoneBar: false },
+  { width: 1024, compact: true, minLane: 520, phoneBar: false },
+  { width: 600, compact: true, minLane: 320, phoneBar: true }
+]) {
+  test(`sketch readout keeps its segments on one row at ${width}px`, async ({
+    page
+  }) => {
+    await page.setViewportSize({ width, height: 900 });
+    await stubApi(page);
+    await seedDismissedWorkspaceTour(page);
+    await createProject(page, 'Readout row');
+    await page.getByRole('button', { name: /^Sketch \(S\)/ }).click();
+    await page.getByRole('button', { name: 'Top (XY)' }).click();
+    await expect(page.locator('.sketch-rail')).toBeVisible();
+
+    const readout = page.locator('.viewport-readout');
+    const grid = readout.locator('.viewport-dock-grid');
+    await expect(grid).toBeVisible();
+    await expect(grid).toHaveText(/^Grid \S+ mm$/);
+
+    const icons = readout.locator('.viewport-readout-icon');
+    await expect(icons).toHaveCount(3);
+    for (const icon of await icons.all()) {
+      await (compact ? expect(icon).toBeVisible() : expect(icon).toBeHidden());
+    }
+    // Hidden words stay in the accessibility tree: 1px and clipped, never
+    // display: none.
+    const snapWord = readout.locator(
+      '.viewport-dock-snap .viewport-readout-word'
+    );
+    const wordWidth = await snapWord.evaluate(
+      (el) => el.getBoundingClientRect().width
+    );
+    if (compact) {
+      expect(wordWidth).toBeLessThanOrEqual(1);
+    } else {
+      expect(wordWidth).toBeGreaterThan(10);
+    }
+
+    // Filter, snap and grid used to outgrow the width a sketch reserves and
+    // wrap the grid onto a second row, led by a stray separator.
+    const tops = await readout.evaluate((el) =>
+      [
+        ...el.querySelectorAll(
+          '.viewport-dock-filter, .viewport-dock-snap, .viewport-dock-grid'
+        )
+      ].map((segment) => segment.getBoundingClientRect().top)
+    );
+    expect(tops).toHaveLength(3);
+    for (const top of tops) {
+      expect(Math.abs(top - tops[0]!)).toBeLessThan(1);
+    }
+
+    // The reserve that keeps it on one row also moves the search lane, so
+    // the readout still ends before the search bar starts.
+    const readoutBox = await readout.boundingBox();
+    const barBox = await page.locator('.command-bar').boundingBox();
+    expect(readoutBox).not.toBeNull();
+    expect(barBox).not.toBeNull();
+    expect(readoutBox!.x + readoutBox!.width).toBeLessThanOrEqual(barBox!.x);
+    const laneBox = await page.locator('.command-bar-lane').boundingBox();
+    expect(laneBox).not.toBeNull();
+    expect(laneBox!.width).toBeGreaterThanOrEqual(minLane);
+    // The ruler never sits under the search row (below 1160px it steps up
+    // to the bottom-left, as on a phone).
+    const ruler = page.locator('.viewport-scale-indicator');
+    if (await ruler.isVisible()) {
+      const rulerBox = await ruler.boundingBox();
+      expect(rulerBox).not.toBeNull();
+      const overlaps =
+        rulerBox!.x < barBox!.x + barBox!.width &&
+        barBox!.x < rulerBox!.x + rulerBox!.width &&
+        rulerBox!.y < barBox!.y + barBox!.height &&
+        barBox!.y < rulerBox!.y + rulerBox!.height;
+      expect(overlaps).toBe(false);
+    }
+    const searchKey = page.locator('.command-bar > kbd');
+    await (phoneBar
+      ? expect(searchKey).toBeHidden()
+      : expect(searchKey).toBeVisible());
+  });
+}
