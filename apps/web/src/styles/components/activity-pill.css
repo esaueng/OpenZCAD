@@ -33,14 +33,19 @@
   pointer-events: none;
 }
 
+/* A fixed width, so the card does not twitch every time the detail line
+   changes phase; the height is --activity-pill-h, which the notice lane in
+   quiet-stage.css reserves. */
 .activity-pill {
+  --activity-pill-h: 58px;
+  --activity-pill-tone: var(--color-accent);
   position: relative;
-  display: inline-flex;
+  display: flex;
   align-items: center;
-  gap: 10px;
-  max-width: min(720px, 100%);
-  height: 32px;
-  padding: 0 6px 0 12px;
+  gap: 12px;
+  width: min(460px, 100%);
+  height: var(--activity-pill-h);
+  padding: 0 8px 0 12px;
   color: var(--color-text);
   background: var(--color-surface);
   border: var(--border-strong);
@@ -53,48 +58,83 @@
   animation: oz-fade var(--dur-fast) var(--ease-out);
 }
 
+.activity-pill.ok {
+  --activity-pill-tone: var(--color-success);
+}
+
+.activity-pill.warning {
+  --activity-pill-tone: var(--color-warning);
+}
+
+.activity-pill.error {
+  --activity-pill-tone: var(--color-error);
+}
+
+.activity-pill.cancelled {
+  --activity-pill-tone: var(--color-text-subtle);
+}
+
 .activity-pill-glyph {
   flex: 0 0 auto;
   display: grid;
   place-items: center;
-  width: 12px;
-  height: 12px;
+  width: 30px;
+  height: 30px;
+  color: var(--activity-pill-tone);
+  background: color-mix(in srgb, var(--activity-pill-tone) 14%, transparent);
+  border: 1px solid
+    color-mix(in srgb, var(--activity-pill-tone) 28%, transparent);
+  border-radius: var(--radius-md);
+}
+
+.activity-pill-glyph.cancelled {
+  background: var(--color-surface-2);
+  border-color: var(--color-border);
+}
+
+/* Name and clock on the first row, the phase under the name, the bar under
+   both. The text is one live region spanning two rows, so the announcement
+   order stays verb, name, detail. */
+.activity-pill-main {
+  flex: 1 1 auto;
+  min-width: 0;
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  grid-template-rows: auto auto;
+  column-gap: 12px;
+  row-gap: 7px;
+  align-items: start;
 }
 
 .activity-pill-text {
-  display: inline-flex;
+  grid-column: 1;
+  grid-row: 1;
+  display: grid;
+  grid-template-columns: auto minmax(0, 1fr);
   align-items: baseline;
+  row-gap: 2px;
   min-width: 0;
-  overflow: hidden;
 }
 
 .activity-pill-verb {
-  flex: 0 0 auto;
   color: var(--color-text-muted);
   white-space: pre;
 }
 
 .activity-pill-name {
-  flex: 0 1 auto;
   min-width: 0;
-  max-width: 260px;
   overflow: hidden;
   text-overflow: ellipsis;
   font-weight: var(--fw-medium);
 }
 
 .activity-pill-detail {
-  flex: 0 1 auto;
+  grid-column: 1 / -1;
   min-width: 0;
   overflow: hidden;
   text-overflow: ellipsis;
-  color: var(--color-text-muted);
-}
-
-.activity-pill-detail::before {
-  content: '·';
-  margin: 0 8px;
   color: var(--color-text-subtle);
+  font-size: var(--fs-xs);
 }
 
 .activity-pill-detail.warning {
@@ -105,12 +145,10 @@
   color: var(--color-error);
 }
 
-.activity-pill-detail.cancelled {
-  color: var(--color-text-subtle);
-}
-
 .activity-pill-time {
-  flex: 0 0 auto;
+  grid-column: 2;
+  grid-row: 1;
+  padding-top: 1px;
   font-family: var(--font-mono);
   font-size: var(--fs-xs);
   font-variant-numeric: tabular-nums;
@@ -119,17 +157,17 @@
 
 .activity-pill-sep {
   flex: 0 0 auto;
+  align-self: stretch;
   width: 1px;
-  height: 16px;
-  margin-left: 2px;
+  margin: 12px 0;
   background: var(--color-border);
 }
 
 .activity-pill-action,
 .activity-pill-cancel {
   flex: 0 0 auto;
-  padding: 3px 8px;
-  border-radius: var(--radius-sm);
+  padding: 5px 10px;
+  border-radius: var(--radius-md);
   font-size: var(--fs-xs);
 }
 
@@ -164,12 +202,12 @@
 
 .activity-pill-close {
   flex: 0 0 auto;
-  width: 20px;
-  height: 20px;
+  width: 26px;
+  height: 26px;
   display: grid;
   place-items: center;
   color: var(--color-text-subtle);
-  border-radius: var(--radius-sm);
+  border-radius: var(--radius-md);
 }
 
 .activity-pill-close:hover {
@@ -177,46 +215,27 @@
   background: var(--color-surface-hover);
 }
 
-/* The bar is the pill's bottom edge. It fills while progress is knowable,
-   and holds still with a moving stripe while the kernel is inside its
-   blocking wasm call — a bar that crept to 90% and sat there would be
-   inventing the number. */
+/* The bar fills while progress is knowable. A phase that cannot report —
+   the kernel inside its blocking wasm call — leaves the fill parked at its
+   start and sweeps its own stretch of the track instead: a bar that crept
+   to 90% and sat there would be inventing the number. */
 .activity-pill-bar {
-  position: absolute;
-  left: 0;
-  right: 0;
-  bottom: 0;
-  height: 2px;
+  grid-column: 1 / -1;
+  grid-row: 2;
+  position: relative;
+  display: block;
+  height: 3px;
+  overflow: hidden;
+  border-radius: 2px;
   background: var(--color-surface-hover);
 }
 
 .activity-pill-bar > i {
   display: block;
   height: 100%;
-  background: var(--color-accent);
+  border-radius: inherit;
+  background: var(--activity-pill-tone);
   transition: width var(--dur-base) linear;
-}
-
-.activity-pill-bar.indeterminate > i {
-  background: repeating-linear-gradient(
-    115deg,
-    var(--color-accent) 0 6px,
-    color-mix(in srgb, var(--color-accent) 30%, transparent) 6px 14px
-  );
-  background-size: 200% 100%;
-  animation: activity-pill-stripe 900ms linear infinite;
-}
-
-.activity-pill-bar.ok > i {
-  background: var(--color-success);
-}
-
-.activity-pill-bar.warning > i {
-  background: var(--color-warning);
-}
-
-.activity-pill-bar.error > i {
-  background: var(--color-error);
 }
 
 /* A cancel is not a fault, so it drains of colour rather than turning amber. */
@@ -224,51 +243,63 @@
   background: var(--color-border-strong);
 }
 
-@keyframes activity-pill-stripe {
+.activity-pill-sweep {
+  position: absolute;
+  top: 0;
+  bottom: 0;
+  overflow: hidden;
+  background: color-mix(in srgb, var(--color-accent) 16%, transparent);
+}
+
+.activity-pill-sweep::after {
+  content: '';
+  position: absolute;
+  top: 0;
+  bottom: 0;
+  left: 0;
+  width: 40%;
+  background: linear-gradient(
+    90deg,
+    transparent,
+    var(--color-accent) 50%,
+    transparent
+  );
+  animation: activity-pill-sweep 1400ms ease-in-out infinite;
+}
+
+@keyframes activity-pill-sweep {
+  from {
+    transform: translateX(-100%);
+  }
+
   to {
-    background-position: -28px 0;
+    transform: translateX(250%);
   }
 }
 
 .activity-spin {
-  width: 12px;
-  height: 12px;
-  border: 1.5px solid var(--color-accent-dim);
+  width: 14px;
+  height: 14px;
+  border: 1.5px solid color-mix(in srgb, var(--color-accent) 25%, transparent);
   border-top-color: var(--color-accent);
   border-radius: 50%;
 }
 
-.activity-dot {
-  width: 8px;
-  height: 8px;
-  border-radius: 50%;
-  background: var(--color-success);
-}
-
-.activity-dot.warning {
-  background: var(--color-warning);
-}
-
-.activity-dot.error {
-  background: var(--color-error);
-}
-
-.activity-dot.cancelled {
-  background: var(--color-text-subtle);
-}
-
-/* The spinner and the stripe are the only proof the pill is live while the
+/* The spinner and the sweep are the only proof the pill is live while the
    worker is blocked, so the reduced-motion fallback keeps a visible state
    rather than removing the distinction entirely. The in-app toggle gets the
-   same fallback: without it the stripe and ring froze on whatever frame the
+   same fallback: without it the sweep and ring froze on whatever frame the
    global collapse landed on. */
 [data-reduced-motion='true'] .activity-pill {
   animation: none;
 }
 
-[data-reduced-motion='true'] .activity-pill-bar.indeterminate > i {
-  animation: none;
-  background: var(--color-accent-dim);
+[data-reduced-motion='true'] .activity-pill-sweep {
+  background: color-mix(in srgb, var(--color-accent) 45%, transparent);
+}
+
+[data-reduced-motion='true'] .activity-pill-sweep::after {
+  display: none;
 }
 
 [data-reduced-motion='true'] .activity-spin {
@@ -282,9 +313,12 @@
     animation: none;
   }
 
-  .activity-pill-bar.indeterminate > i {
-    animation: none;
-    background: var(--color-accent-dim);
+  .activity-pill-sweep {
+    background: color-mix(in srgb, var(--color-accent) 45%, transparent);
+  }
+
+  .activity-pill-sweep::after {
+    display: none;
   }
 
   .activity-spin {
