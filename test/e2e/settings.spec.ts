@@ -63,12 +63,13 @@ test('keeps command names visible at the compact desktop breakpoint', async ({
   await page.getByLabel('Project name').fill('Palette Part');
   await page.getByRole('button', { name: 'Create project' }).click();
 
-  await page.getByRole('button', { name: 'Search commands (Ctrl+K)' }).click();
-  const palette = page.getByRole('dialog', { name: 'Command palette' });
+  const search = page.getByRole('combobox', { name: 'Search commands' });
+  await search.click();
+  const palette = page.getByRole('listbox', { name: 'Commands' });
   await expect(
     palette.locator('.palette-label', { hasText: 'Box' })
   ).toBeVisible();
-  await palette.getByRole('textbox', { name: 'Search commands' }).fill('box');
+  await search.fill('box');
   await expect(
     palette.locator('.palette-label', { hasText: 'Box' })
   ).toBeVisible();
@@ -555,25 +556,27 @@ test('command palette and shortcut overlay behave as modal dialogs', async ({
   await page.getByRole('button', { name: 'Create project' }).click();
   await expect(page.getByRole('button', { name: /^Box \(B\)/ })).toBeVisible();
 
-  const paletteTrigger = page.getByRole('button', {
-    name: 'Search commands (Ctrl+K)'
-  });
-  await paletteTrigger.click();
-  const palette = page.getByRole('dialog', { name: 'Command palette' });
-  await expect(palette).toHaveAttribute('aria-modal', 'true');
+  const paletteInput = page.getByRole('combobox', { name: 'Search commands' });
+  await paletteInput.click();
+  const palette = page.getByRole('listbox', { name: 'Commands' });
+  await expect(paletteInput).toHaveAttribute('aria-expanded', 'true');
+  await expect(paletteInput).toHaveAttribute(
+    'aria-controls',
+    'command-palette-list'
+  );
   // The highlighted row is now exposed, not merely styled.
   await expect(palette.locator('.palette-row.active')).toHaveAttribute(
     'aria-selected',
     'true'
   );
-  const paletteInput = page.getByRole('textbox', { name: 'Search commands' });
   await expect(paletteInput).toHaveAttribute(
     'aria-activedescendant',
     /command-palette-option-\d+/
   );
   await expect(paletteInput).toBeFocused();
   await page.keyboard.press('Escape');
-  await expect(paletteTrigger).toBeFocused();
+  await expect(paletteInput).not.toBeFocused();
+  await expect(palette).toHaveCount(0);
 
   await page.keyboard.press('?');
   const shortcuts = page.getByRole('dialog', { name: 'Keyboard shortcuts' });
@@ -732,9 +735,10 @@ test('settings swallow workspace shortcuts instead of editing behind them', asyn
   // Every one of those keys edited or opened something behind the settings UI
   // before the workspace map learned to stand down.
   await expect(feature).toBeVisible();
+  await expect(page.getByRole('listbox', { name: 'Commands' })).toHaveCount(0);
   await expect(
-    page.getByRole('dialog', { name: 'Command palette' })
-  ).toHaveCount(0);
+    page.getByRole('combobox', { name: 'Search commands' })
+  ).not.toBeFocused();
   await expect(page.getByRole('region', { name: 'Box operation' })).toHaveCount(
     0
   );
@@ -796,7 +800,7 @@ test('collapsing the assistant folds it into Ask and keeps the thread', async ({
 
   await page.getByRole('button', { name: 'Collapse the assistant' }).click();
 
-  // The conversation folds back into the Ask button on the search bar.
+  // The conversation folds back into the Ask button in the search bar.
   await expect(page.locator('.assistant-panel')).toHaveCount(0);
   await expect(page.locator('.workspace.with-assistant')).toHaveCount(0);
   const launcher = page
