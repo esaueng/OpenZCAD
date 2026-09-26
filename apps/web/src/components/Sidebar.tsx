@@ -186,7 +186,7 @@ interface SidebarProps {
  * controls so a fast double-select on a feature never closes the drawer.
  */
 const DOUBLE_CLICK_OWNERS =
-  'button, a, input, textarea, select, label, [contenteditable], [role="listitem"], [role="button"], .feature-row, .body-row, .revision-row, .diagnostic-row, .param-row';
+  'button, a, input, textarea, select, label, summary, [contenteditable], [role="listitem"], [role="button"], .feature-row, .body-row, .revision-row, .diagnostic-row, .param-row';
 
 /** Body kind icons mirror the feature icons so the two lists read as one. */
 function bodyIcon(body: BodyRepresentation) {

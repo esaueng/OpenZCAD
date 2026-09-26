@@ -132,4 +132,20 @@ describe('Sidebar', () => {
     await user.dblClick(screen.getByText('Feature 2'));
     expect(onClose).not.toHaveBeenCalled();
   });
+
+  it('stays open when the double-click toggles a history disclosure', async () => {
+    const user = userEvent.setup();
+    const onClose = vi.fn();
+    renderSidebar({
+      onClose,
+      panelState: defaultPanelState(),
+      historyDetails: (
+        <details open>
+          <summary>Uses 1 feature</summary>
+        </details>
+      )
+    });
+    await user.dblClick(screen.getByText('Uses 1 feature'));
+    expect(onClose).not.toHaveBeenCalled();
+  });
 });
