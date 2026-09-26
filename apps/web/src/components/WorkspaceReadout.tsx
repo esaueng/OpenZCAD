@@ -243,7 +243,8 @@ export function ViewportDockExtras({
         aria-label={`Selection filter: ${SELECTION_FILTER_LABELS[selectionFilter]}. Cycle.`}
         onClick={() => onSelectionFilter(handsBack ? null : nextFilter)}
       >
-        select {SELECTION_FILTER_LABELS[selectionFilter]}
+        <span className="viewport-dock-filter-label">select</span>
+        {SELECTION_FILTER_LABELS[selectionFilter]}
       </button>
       {snap && (
         <span className="viewport-dock-snap mono">
