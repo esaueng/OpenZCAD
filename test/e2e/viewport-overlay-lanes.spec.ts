@@ -204,6 +204,19 @@ for (const { width, compact, minLane, phoneBar } of [
     const laneBox = await page.locator('.command-bar-lane').boundingBox();
     expect(laneBox).not.toBeNull();
     expect(laneBox!.width).toBeGreaterThanOrEqual(minLane);
+    // The ruler never sits under the search row (below 1160px it steps up
+    // to the bottom-left, as on a phone).
+    const ruler = page.locator('.viewport-scale-indicator');
+    if (await ruler.isVisible()) {
+      const rulerBox = await ruler.boundingBox();
+      expect(rulerBox).not.toBeNull();
+      const overlaps =
+        rulerBox!.x < barBox!.x + barBox!.width &&
+        barBox!.x < rulerBox!.x + rulerBox!.width &&
+        rulerBox!.y < barBox!.y + barBox!.height &&
+        barBox!.y < rulerBox!.y + rulerBox!.height;
+      expect(overlaps).toBe(false);
+    }
     const searchKey = page.locator('.command-bar > kbd');
     await (phoneBar
       ? expect(searchKey).toBeHidden()
