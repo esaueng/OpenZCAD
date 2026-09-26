@@ -431,6 +431,13 @@
   white-space: nowrap;
 }
 
+/* How many messages a burst passed over; the activity log holds them. */
+.workspace-toast-body > .workspace-toast-more {
+  flex: 0 0 auto;
+  color: var(--color-text-subtle);
+  font-variant-numeric: tabular-nums;
+}
+
 .workspace-toast-body > i {
   width: 6px;
   height: 6px;
