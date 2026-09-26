@@ -65,7 +65,9 @@ import {
   AttachmentError
 } from '../../lib/assistant/attachments';
 import {
+  ASSISTANT_PROMPT_FILES_EVENT,
   ASSISTANT_PROMPT_KEY_EVENT,
+  type AssistantPromptFilesDetail,
   type AssistantPromptKeyDetail
 } from '../../lib/assistant/promptKeys';
 import { QuestionCard } from './QuestionCard';
@@ -925,6 +927,19 @@ export function AssistantPanel({
     rejectProposal(openProposal.id);
     return true;
   };
+  // Files pasted into the prompt line attach the way a drop here does, and
+  // bring a tucked-away stream up so the drawing can be seen.
+  const promptFilesRef = useRef<(files: File[]) => boolean>(() => false);
+  promptFilesRef.current = (files) => {
+    if (hidden) {
+      return false;
+    }
+    if (collapsed) {
+      onCollapsedChange(false);
+    }
+    void addFiles(files);
+    return true;
+  };
   useEffect(() => {
     function onPromptKey(event: Event) {
       const { key } = (event as CustomEvent<AssistantPromptKeyDetail>).detail;
@@ -932,9 +947,19 @@ export function AssistantPanel({
         event.preventDefault();
       }
     }
+    function onPromptFiles(event: Event) {
+      const { files } = (event as CustomEvent<AssistantPromptFilesDetail>)
+        .detail;
+      if (promptFilesRef.current(files)) {
+        event.preventDefault();
+      }
+    }
     window.addEventListener(ASSISTANT_PROMPT_KEY_EVENT, onPromptKey);
-    return () =>
+    window.addEventListener(ASSISTANT_PROMPT_FILES_EVENT, onPromptFiles);
+    return () => {
       window.removeEventListener(ASSISTANT_PROMPT_KEY_EVENT, onPromptKey);
+      window.removeEventListener(ASSISTANT_PROMPT_FILES_EVENT, onPromptFiles);
+    };
   }, []);
 
   function renderEntry(entry: AssistantEntry) {

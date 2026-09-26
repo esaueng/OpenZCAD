@@ -2106,12 +2106,13 @@ export function App() {
   // What the assistant reports about itself, for the prompt's glyph and
   // placeholder: a reply streaming, replies unread behind a tucked-away
   // stream, and what the selection lets an ask see.
-  const [assistantActivity, setAssistantActivity] =
-    useState<AssistantActivity>({
+  const [assistantActivity, setAssistantActivity] = useState<AssistantActivity>(
+    {
       thinking: false,
       unread: 0,
       context: null
-    });
+    }
+  );
   const [shortcutsOpen, setShortcutsOpen] = useState(false);
   const [contextMenu, setContextMenu] = useState<ContextMenuState | null>(null);
   // The list menu fades out; the radial one is a pointer gesture and goes
@@ -14903,8 +14904,9 @@ export function App() {
       }
       if (paletteOpen || shortcutsOpen) {
         // The command bar and the overlay own their keys; Escape is handled
-        // here as a safety net.
-        if (event.key === 'Escape') {
+        // here as a safety net. A handled one (the bar clearing its text,
+        // or the stream rejecting a proposal) keeps the prompt's focus.
+        if (event.key === 'Escape' && !event.defaultPrevented) {
           setPaletteOpen(false);
           setShortcutsOpen(false);
         }

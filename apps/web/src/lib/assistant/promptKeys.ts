@@ -33,3 +33,23 @@ export function sendAssistantPromptKey(key: AssistantPromptKey): boolean {
   window.dispatchEvent(event);
   return event.defaultPrevented;
 }
+
+/**
+ * Files pasted into the prompt line: a screenshot or a copied drawing. The
+ * stream attaches them to the next ask the way a drop on it does.
+ */
+export const ASSISTANT_PROMPT_FILES_EVENT = 'openzcad:assistant-prompt-files';
+
+export interface AssistantPromptFilesDetail {
+  files: File[];
+}
+
+/** Hands pasted files to the stream; true when it took them. */
+export function sendAssistantPromptFiles(files: File[]): boolean {
+  const event = new CustomEvent<AssistantPromptFilesDetail>(
+    ASSISTANT_PROMPT_FILES_EVENT,
+    { detail: { files }, cancelable: true }
+  );
+  window.dispatchEvent(event);
+  return event.defaultPrevented;
+}

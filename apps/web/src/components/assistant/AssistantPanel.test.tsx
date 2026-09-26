@@ -8,7 +8,10 @@ import {
   loadAssistantThread,
   saveAssistantThread
 } from '../../lib/assistant/history';
-import { sendAssistantPromptKey } from '../../lib/assistant/promptKeys';
+import {
+  sendAssistantPromptFiles,
+  sendAssistantPromptKey
+} from '../../lib/assistant/promptKeys';
 import { AssistantPanel } from './AssistantPanel';
 
 const doc = createProjectDocument('Bracket', toUserId('user_a'));
@@ -545,6 +548,56 @@ describe('prompt keys on the open proposal', () => {
     expect(taken).toBe(true);
     await waitFor(() => expect(card).toHaveClass('applied'));
     expect(props.onApply).toHaveBeenCalledTimes(1);
+  });
+
+  it('takes files pasted into the prompt line and brings a tucked-away stream up', async () => {
+    const onCollapsedChange = vi.fn();
+    render(
+      <AssistantPanel
+        document={doc}
+        selection={{ bodyIds: [], featureIds: [], topologies: [] }}
+        onApply={vi.fn().mockResolvedValue(true)}
+        onPreview={vi.fn().mockResolvedValue({ ok: true })}
+        collapsed
+        onCollapsedChange={onCollapsedChange}
+        confirmDestructive={false}
+      />
+    );
+    await act(async () => {});
+    let taken = false;
+    await act(async () => {
+      taken = sendAssistantPromptFiles([
+        new File(['not a drawing'], 'notes.txt', { type: 'text/plain' })
+      ]);
+    });
+    expect(taken).toBe(true);
+    expect(onCollapsedChange).toHaveBeenCalledWith(false);
+  });
+
+  it('reports a pasted file it cannot attach', async () => {
+    window.localStorage.clear();
+    render(
+      <AssistantPanel
+        document={doc}
+        selection={{ bodyIds: [], featureIds: [], topologies: [] }}
+        onApply={vi.fn().mockResolvedValue(true)}
+        onPreview={vi.fn().mockResolvedValue({ ok: true })}
+        collapsed={false}
+        onCollapsedChange={vi.fn()}
+        confirmDestructive={false}
+      />
+    );
+    await act(async () => {
+      sendAssistantPromptFiles([
+        new File(['not a drawing'], 'notes.txt', { type: 'text/plain' })
+      ]);
+    });
+    // The same path a drop takes: an unsupported file is refused by name.
+    await waitFor(() =>
+      expect(screen.getAllByRole('status').map((el) => el.textContent)).toEqual(
+        expect.arrayContaining([expect.stringContaining('notes.txt')])
+      )
+    );
   });
 
   it('opens scrollback on the history key, even from a tucked-away stream', async () => {

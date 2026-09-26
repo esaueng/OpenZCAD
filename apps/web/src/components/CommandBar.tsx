@@ -4,7 +4,10 @@ import {
   type PlatformShortcutCopy
 } from '../lib/platformShortcut';
 import { Sparkles } from 'lucide-react';
-import { sendAssistantPromptKey } from '../lib/assistant/promptKeys';
+import {
+  sendAssistantPromptFiles,
+  sendAssistantPromptKey
+} from '../lib/assistant/promptKeys';
 
 const LIST_ID = 'command-palette-list';
 const optionId = (index: number) => `command-palette-option-${index}`;
@@ -375,6 +378,14 @@ export function CommandBar({
               onOpenChange(false);
             }}
             onChange={(event) => setQuery(event.target.value)}
+            onPaste={(event) => {
+              // A pasted screenshot or drawing attaches to the next ask;
+              // pasted text is typed as usual.
+              const files = Array.from(event.clipboardData?.files ?? []);
+              if (files.length > 0 && sendAssistantPromptFiles(files)) {
+                event.preventDefault();
+              }
+            }}
             onKeyDown={(event) => {
               const meta = event.metaKey || event.ctrlKey;
               if (event.key === 'Escape') {

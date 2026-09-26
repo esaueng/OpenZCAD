@@ -1,8 +1,11 @@
-import { render, screen, within } from '@testing-library/react';
+import { fireEvent, render, screen, within } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { useState } from 'react';
 import { afterEach, describe, expect, it, vi } from 'vitest';
-import { ASSISTANT_PROMPT_KEY_EVENT } from '../lib/assistant/promptKeys';
+import {
+  ASSISTANT_PROMPT_FILES_EVENT,
+  ASSISTANT_PROMPT_KEY_EVENT
+} from '../lib/assistant/promptKeys';
 import { CommandBar, type PaletteCommand } from './CommandBar';
 
 function command(
@@ -253,6 +256,32 @@ describe('CommandBar', () => {
     expect(search).toHaveFocus();
     await userEvent.keyboard('{Escape}');
     expect(search).not.toHaveFocus();
+  });
+
+  it('hands pasted files to the conversation and keeps pasted text', () => {
+    render(<Bar commands={[]} onAsk={vi.fn()} />);
+    const search = searchField();
+    const files: File[][] = [];
+    const take = (event: Event) => {
+      files.push((event as CustomEvent<{ files: File[] }>).detail.files);
+      event.preventDefault();
+    };
+    window.addEventListener(ASSISTANT_PROMPT_FILES_EVENT, take);
+
+    const drawing = new File(['png'], 'drawing.png', { type: 'image/png' });
+    const taken = !fireEvent.paste(search, {
+      clipboardData: { files: [drawing], getData: () => '' }
+    });
+    expect(taken).toBe(true);
+    expect(files).toEqual([[drawing]]);
+
+    // Plain text is not the stream's: the paste goes through as typing.
+    const textOnly = !fireEvent.paste(search, {
+      clipboardData: { files: [], getData: () => 'round it' }
+    });
+    expect(textOnly).toBe(false);
+    expect(files).toHaveLength(1);
+    window.removeEventListener(ASSISTANT_PROMPT_FILES_EVENT, take);
   });
 
   it('runs a command from the list and hands focus back to where it was', async () => {
