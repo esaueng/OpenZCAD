@@ -143,8 +143,10 @@ jobs:
           node-version: 22
           cache: pnpm
       - run: pnpm install --frozen-lockfile
-      # The root command runs both the Node and web Vitest projects.
-      - run: pnpm test
+      # `pnpm test` runs the root and web Vitest projects back to back; the
+      # root project is the five-minute half and runs in the `unit` job, so
+      # only the web happy-dom project runs here.
+      - run: pnpm test:web
       # Keep exact Remus/OpenCascade STEP parity in the critical beta gate.
       - run: pnpm test:parity-corpus
       - name: Build and enforce bundle budgets
@@ -160,9 +162,30 @@ jobs:
           path: ${{ runner.temp }}/bundle-size-report.json
           if-no-files-found: warn
 
+  # The root Vitest project (packages and `test/`): the other half of
+  # `pnpm test`, on its own runner so it runs beside the web project, parity
+  # and build instead of ahead of them.
+  unit:
+    runs-on: *fleet-runner
+    timeout-minutes: 30
+    steps:
+      - *fleet-isolation
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+        with:
+          persist-credentials: false
+      - uses: pnpm/action-setup@0977fd99725f1db4007ccb2928dbb4e90d06cc86 # v6
+        with:
+          version: 10.8.0
+      - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7
+        with:
+          node-version: 22
+          cache: pnpm
+      - run: pnpm install --frozen-lockfile
+      - run: pnpm exec vitest run
+
   # Keep the existing required check fail-closed across both execution paths.
   validate:
-    needs: [quality, validation]
+    needs: [quality, unit, validation]
     if: always()
     runs-on: *fleet-runner
     timeout-minutes: 5
@@ -171,20 +194,27 @@ jobs:
       - name: Require all validation checks
         env:
           QUALITY_RESULT: ${{ needs.quality.result }}
+          UNIT_RESULT: ${{ needs.unit.result }}
           VALIDATION_RESULT: ${{ needs.validation.result }}
         run: |
           test "$QUALITY_RESULT" = success
+          test "$UNIT_RESULT" = success
           test "$VALIDATION_RESULT" = success
   e2e-tests:
     runs-on: *fleet-runner
     timeout-minutes: 30
     strategy:
       fail-fast: false
-      # GitHub-hosted runners are 2-core; running the whole Playwright suite
-      # serially on one of them keeps the box saturated for ~25 minutes and
-      # timing-sensitive tests flake. Four shards run in parallel instead.
+      # The suite is ~80 runner-minutes of browser work at Playwright's two
+      # workers per hosted runner, so it runs as parallel shards. Each shard
+      # takes the spec files `scripts/e2e-shards.mjs` assigns it by recorded
+      # duration rather than Playwright's `--shard`, which slices the
+      # alphabetical test list into equal counts: that put the slow c* and g*
+      # specs on one shard, which then ran 19.7 minutes while the others ran
+      # 6 to 8. Six file-balanced shards come out near 7 minutes each; the
+      # count is mirrored in `test/e2e-shards.test.ts`.
       matrix:
-        shard: [1, 2, 3, 4]
+        shard: [1, 2, 3, 4, 5, 6]
     steps:
       - *fleet-isolation
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
@@ -213,13 +243,24 @@ jobs:
           else
             pnpm exec playwright install --with-deps chromium
           fi
-      # The Playwright webServer builds and serves the app inside the job.
-      - run: |
+      # The Playwright webServer builds and serves the app inside the job. The
+      # JSON report is what `scripts/e2e-shards.mjs --update` rebalances from.
+      - env:
+          PLAYWRIGHT_JSON_OUTPUT_FILE: ${{ runner.temp }}/e2e-report-${{ matrix.shard }}.json
+        run: |
           if [ "${{ runner.environment }}" = self-hosted ]; then
             exec 9</run/ci-browser.lock
             flock --exclusive 9
           fi
-          pnpm test:e2e --shard=${{ matrix.shard }}/4
+          specs="$(node scripts/e2e-shards.mjs "${{ matrix.shard }}/${{ strategy.job-total }}")"
+          pnpm test:e2e --reporter=dot,json $specs
+      - name: Upload e2e timing report
+        if: always()
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: e2e-report-${{ matrix.shard }}
+          path: ${{ runner.temp }}/e2e-report-${{ matrix.shard }}.json
+          if-no-files-found: warn
 
   # A single stable check context for branch protection, so the required-check
   # list does not depend on the shard count. Runs even when a shard fails:
@@ -236,21 +277,3 @@ jobs:
           echo "e2e shards result: ${{ needs.e2e-tests.result }}"
           exit 1
       - run: echo "all e2e shards green"
-  cloudflare-verify:
-    runs-on: *fleet-runner
-    timeout-minutes: 30
-    steps:
-      - *fleet-isolation
-      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
-        with:
-          persist-credentials: false
-      - uses: pnpm/action-setup@0977fd99725f1db4007ccb2928dbb4e90d06cc86 # v6
-        with:
-          version: 10.8.0
-      - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
-        with:
-          node-version: 22
-          cache: pnpm
-      - run: pnpm install --frozen-lockfile
-      - run: pnpm build
-      - run: pnpm --filter @openzcad/web exec wrangler deploy --dry-run --config ../../wrangler.jsonc
