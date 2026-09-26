@@ -17,9 +17,11 @@ import {
   ArtifactStorageError,
   DocumentTooLargeError,
   ProjectAdoptionError,
+  ProjectQuotaError,
   ProjectNotFoundError,
   ProjectSharingError,
   RevisionConflictError,
+  RevisionIdCollisionError,
   RevisionNotFoundError
 } from '@openzcad/persistence';
 import {
@@ -98,7 +100,8 @@ import {
   isArtifactUploadAccountingReady,
   isDocumentStorageAccountingReady,
   isProjectMeasurementStorageReady,
-  isProjectObjectStorageReady
+  isProjectObjectStorageReady,
+  isD1ProjectStorageReady
 } from './readiness';
 import {
   deleteProjectMeasurements,
@@ -125,7 +128,9 @@ const MAX_JSON_BODY_BYTES = 25 * 1024 * 1024;
 const MAX_ARTIFACT_BODY_BYTES = 25 * 1024 * 1024;
 /** Cache only a proven-ready schema; failures stay retryable without a deploy. */
 const projectStorageReadyEnvironments = new WeakSet<Env>();
+const d1ProjectStorageReadyEnvironments = new WeakSet<Env>();
 const projectMeasurementStorageReadyEnvironments = new WeakSet<Env>();
+const artifactUploadReadyEnvironments = new WeakSet<Env>();
 const HEALTH_READINESS_TTL_MS = 60_000;
 interface HealthReadiness {
   artifactUploadAccountingReady: boolean;
@@ -232,6 +237,17 @@ async function projectStorageIsReady(
   return ready;
 }
 
+async function d1ProjectStorageIsReady(env: Env): Promise<boolean> {
+  if (d1ProjectStorageReadyEnvironments.has(env)) {
+    return true;
+  }
+  const ready = await isD1ProjectStorageReady(env.DB);
+  if (ready) {
+    d1ProjectStorageReadyEnvironments.add(env);
+  }
+  return ready;
+}
+
 async function projectMeasurementStorageIsReady(env: Env): Promise<boolean> {
   if (projectMeasurementStorageReadyEnvironments.has(env)) {
     return true;
@@ -240,6 +256,13 @@ async function projectMeasurementStorageIsReady(env: Env): Promise<boolean> {
   if (ready) {
     projectMeasurementStorageReadyEnvironments.add(env);
   }
+  return ready;
+}
+
+async function artifactUploadIsReady(env: Env): Promise<boolean> {
+  if (artifactUploadReadyEnvironments.has(env)) return true;
+  const ready = await isArtifactUploadAccountingReady(env.DB);
+  if (ready) artifactUploadReadyEnvironments.add(env);
   return ready;
 }
 
@@ -717,6 +740,17 @@ async function handleApiRequest(request: Request, env: Env): Promise<Response> {
       501
     );
   }
+  if (
+    requiresArtifactStorage &&
+    request.method !== 'GET' &&
+    env.DB &&
+    !(await artifactUploadIsReady(env))
+  ) {
+    return json(
+      { error: 'Artifact upload storage is temporarily unavailable.' },
+      503
+    );
+  }
 
   if (!['GET', 'HEAD', 'OPTIONS'].includes(request.method)) {
     assertSameOrigin(request);
@@ -730,8 +764,9 @@ async function handleApiRequest(request: Request, env: Env): Promise<Response> {
   if (
     requiresProjectStorage &&
     env.DB &&
-    projectStorageBucket &&
-    !(await projectStorageIsReady(env, projectStorageBucket))
+    !(projectStorageBucket
+      ? await projectStorageIsReady(env, projectStorageBucket)
+      : await d1ProjectStorageIsReady(env))
   ) {
     return json(
       {
@@ -1449,7 +1484,7 @@ async function handleApiRequest(request: Request, env: Env): Promise<Response> {
   if (request.method === 'GET' && measurementsMatch) {
     const projectId = measurementsMatch[1]!;
     await persistence.requireProjectRead(userId, projectId);
-    return json(await loadProjectMeasurements(env.DB!, projectId));
+    return json(await loadProjectMeasurements(env.DB!, projectId, userId));
   }
 
   if (request.method === 'PUT' && measurementsMatch) {
@@ -1459,7 +1494,7 @@ async function handleApiRequest(request: Request, env: Env): Promise<Response> {
       await readJsonBody(request, MAX_PROJECT_MEASUREMENT_BYTES + 16 * 1024),
       projectId
     );
-    return json(await saveProjectMeasurements(env.DB!, projectId, input));
+    return json(await saveProjectMeasurements(env.DB!, projectId, userId, input));
   }
 
   if (request.method === 'DELETE' && measurementsMatch) {
@@ -1468,7 +1503,7 @@ async function handleApiRequest(request: Request, env: Env): Promise<Response> {
     const expectedRevision = parseDeleteProjectMeasurementsRequest(
       await readJsonBody(request, 1024)
     );
-    await deleteProjectMeasurements(env.DB!, projectId, expectedRevision);
+    await deleteProjectMeasurements(env.DB!, projectId, userId, expectedRevision);
     return new Response(null, { status: 204 });
   }
 
@@ -1682,14 +1717,19 @@ export default {
       const headers = {
         'content-type': 'application/json; charset=utf-8',
         'cache-control': 'no-store',
-        'x-content-type-options': 'nosniff',
+        'x-content-type-options': 'nosniff'
       };
       if (request.method !== 'GET' && request.method !== 'HEAD') {
-        return new Response(null, { status: 405, headers: { ...headers, allow: 'GET, HEAD' } });
+        return new Response(null, {
+          status: 405,
+          headers: { ...headers, allow: 'GET, HEAD' }
+        });
       }
       return new Response(
-        request.method === 'HEAD' ? null : JSON.stringify({ status: 'ok', service: 'openzcad' }),
-        { headers },
+        request.method === 'HEAD'
+          ? null
+          : JSON.stringify({ status: 'ok', service: 'openzcad' }),
+        { headers }
       );
     }
 
@@ -1767,6 +1807,21 @@ async function dispatchApiRequest(
     if (error instanceof ProjectAdoptionError) {
       return json({ error: error.message, code: error.code }, 409);
     }
+    if (error instanceof ProjectQuotaError) {
+      return json(
+        {
+          error: error.message,
+          code:
+            error.kind === 'count'
+              ? 'PROJECT_COUNT_QUOTA'
+              : 'PROJECT_STORAGE_QUOTA',
+          ...(error.kind === 'count'
+            ? { limitCount: error.limit }
+            : { limitBytes: error.limit })
+        },
+        413
+      );
+    }
     if (error instanceof DocumentTooLargeError) {
       return json(
         {
@@ -1786,6 +1841,9 @@ async function dispatchApiRequest(
         },
         409
       );
+    }
+    if (error instanceof RevisionIdCollisionError) {
+      return json({ error: error.message, code: 'REVISION_ID_CONFLICT' }, 409);
     }
     if (error instanceof ProjectMeasurementRequestError) {
       return json({ error: error.message }, error.status);

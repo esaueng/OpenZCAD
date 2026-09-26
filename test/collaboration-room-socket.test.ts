@@ -254,6 +254,64 @@ describe('collaboration room socket handling', () => {
     );
   });
 
+  it('refuses a pending ticket and closes a live member socket after trashing', async () => {
+    const { context } = createRoomContext();
+    const base = createProjectDocument('Trashed room', toUserId('user_room'));
+    let trashed = false;
+    const room = new ProjectCollaborationRoom(context, {
+      ENVIRONMENT: 'development',
+      AUTH_MODE: 'development',
+      DB: {
+        prepare: (query: string) => ({
+          bind: () => ({
+            first: async () => {
+              if (query.includes('account_erasure_requests')) return null;
+              if (query.includes('SELECT user_id FROM projects')) return null;
+              expect(query).toContain("p.status != 'deleted'");
+              return trashed
+                ? null
+                : { role: 'viewer', collaboration_enabled: 1 };
+            }
+          })
+        })
+      }
+    });
+    const owner = await openSocket(room, base.projectId);
+    await owner.receive(hello(base, 'client_owner'));
+    const identity = {
+      userId: 'user_trash_viewer',
+      displayName: 'Trashed viewer',
+      role: 'viewer' as const
+    };
+    const member = await openSocket(room, base.projectId, identity);
+    await member.receive(hello(null, 'client_member'));
+    const issued = await issueSocketTicket(room, base.projectId, identity);
+    trashed = true;
+
+    const ticketResponse = await room.fetch(
+      new Request(
+        `https://room.test/?projectId=${base.projectId}&ticket=${issued.ticket}`,
+        { headers: { upgrade: 'websocket' } }
+      )
+    );
+    expect(ticketResponse.status).toBe(401);
+
+    const next = addPrimitiveFeature(base, {
+      name: 'Private after trash',
+      primitiveKind: 'box',
+      dimensions: { width: 1, height: 1, depth: 1 }
+    });
+    member.sent.length = 0;
+    await owner.receive(documentFrame(next, base.version, 'client_owner'));
+    expect(member.closed).toEqual({
+      code: 1008,
+      reason: 'Project collaboration access is no longer available.'
+    });
+    expect(member.frames()).not.toContainEqual(
+      expect.objectContaining({ type: 'document' })
+    );
+  });
+
   it('sends immediately after each recipient access check', async () => {
     const { context } = createRoomContext();
     const base = createProjectDocument(

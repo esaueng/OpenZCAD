@@ -48,12 +48,18 @@ export async function loadWorkspaceSessions(
   const rows = await db
     .prepare(
       `SELECT record_json, updated_at FROM project_workspace_sessions
-    WHERE user_id = ? AND project_id = ? AND updated_at > ? ORDER BY updated_at DESC LIMIT 20`
+    WHERE user_id = ? AND project_id = ? AND updated_at > ?
+      AND EXISTS (
+        SELECT 1 FROM projects WHERE id = ? AND (user_id = ? OR status != 'deleted')
+      )
+    ORDER BY updated_at DESC LIMIT 20`
     )
     .bind(
       userId,
       projectId,
-      new Date(Date.now() - 30 * 86400_000).toISOString()
+      new Date(Date.now() - 30 * 86400_000).toISOString(),
+      projectId,
+      userId
     )
     .all<{ record_json: string; updated_at: string }>();
   return (rows.results ?? []).map((row) => ({
@@ -72,7 +78,10 @@ export async function saveWorkspaceSession(
     .prepare(
       `INSERT INTO project_workspace_sessions
     (user_id, project_id, session_id, device_id, sequence, record_json, updated_at)
-    SELECT ?, ?, ?, ?, ?, ?, ? WHERE EXISTS (SELECT 1 FROM projects WHERE id = ? AND document_version >= ?)
+    SELECT ?, ?, ?, ?, ?, ?, ? WHERE EXISTS (
+      SELECT 1 FROM projects WHERE id = ? AND document_version >= ?
+        AND (user_id = ? OR status != 'deleted')
+    )
     ON CONFLICT(user_id, project_id, session_id) DO UPDATE SET
       sequence = excluded.sequence, record_json = excluded.record_json, updated_at = excluded.updated_at
     WHERE excluded.sequence > project_workspace_sessions.sequence AND excluded.device_id = project_workspace_sessions.device_id`
@@ -86,7 +95,8 @@ export async function saveWorkspaceSession(
       JSON.stringify(input),
       now,
       input.projectId,
-      input.documentVersion
+      input.documentVersion,
+      userId
     )
     .run();
   if (!result.meta?.changes) {
