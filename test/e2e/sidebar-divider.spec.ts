@@ -58,12 +58,11 @@ for (const width of [1440, 390]) {
     // Search lives in the bar at the foot of the stage now.
     await page.locator('.command-bar').click();
     await expect(
-      page.getByRole('textbox', { name: 'Search commands' })
-    ).toBeVisible();
+      page.getByRole('combobox', { name: 'Search commands' })
+    ).toBeFocused();
+    await expect(page.getByRole('listbox', { name: 'Commands' })).toBeVisible();
     await page.keyboard.press('Escape');
-    await expect(
-      page.getByRole('textbox', { name: 'Search commands' })
-    ).toBeHidden();
+    await expect(page.getByRole('listbox', { name: 'Commands' })).toBeHidden();
     if (process.env.DIVIDER_SCREENSHOT_DIR) {
       await page.screenshot({
         path: `${process.env.DIVIDER_SCREENSHOT_DIR}/column-island-${width}.png`

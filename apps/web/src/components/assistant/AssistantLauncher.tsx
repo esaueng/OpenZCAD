@@ -12,8 +12,8 @@ interface AssistantLauncherProps {
 }
 
 /**
- * The assistant while the conversation is closed: an Ask button at the end
- * of the search bar, where the conversation will open from. Command search
+ * The assistant while the conversation is closed: an Ask button inside the
+ * command bar, where the conversation will open from. Command search
  * and the assistant are one entry point on the quiet stage — a question typed
  * into search goes to the same conversation — and the button is where replies
  * that landed while it was closed show up.
