@@ -1,7 +1,12 @@
 import { readFile } from 'node:fs/promises';
 import { fileURLToPath } from 'node:url';
 import { expect, test, type Page } from '@playwright/test';
-import { expectBodyCount, openAssistant, stubApi } from './openzcad-fixtures';
+import {
+  expectBodyCount,
+  openAssistant,
+  promptField,
+  stubApi
+} from './openzcad-fixtures';
 
 /**
  * Phase 7 of `docs/plans/step-parameter-hammer-holder-plan.md`: the fresh
@@ -55,8 +60,8 @@ async function requestVerified(page: Page, label: string) {
   await expect(chip).toContainText('Verified');
   await chip.click();
   // The chip fills the request; sending it runs the recipe's exact preflight.
-  await expect(page.getByLabel('CAD change request')).toHaveValue(label);
-  await page.getByRole('button', { name: 'Send to the assistant' }).click();
+  await expect(promptField(page)).toHaveValue(label);
+  await promptField(page).press('Enter');
   const proposal = page.locator('.assistant-card.proposal.open').last();
   await expect(proposal).toBeVisible({ timeout: 60_000 });
   return proposal;
