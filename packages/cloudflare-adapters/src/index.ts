@@ -15,6 +15,7 @@ import {
   ProjectNotFoundError,
   ProjectSharingError,
   RevisionConflictError,
+  RevisionIdCollisionError,
   RevisionNotFoundError,
   sharedDocumentReferencesImport,
   UPLOAD_SESSION_TTL_MS,
@@ -1619,7 +1620,7 @@ export class D1R2PersistenceService implements PersistenceService {
               resolution.currentVersion
             );
           }
-          throw projectQuotaError(error);
+          throw revisionSaveError(error);
         }
       }
       const projectUpdate = results?.[1];
@@ -1681,7 +1682,7 @@ export class D1R2PersistenceService implements PersistenceService {
         )
       ]);
     } catch (error) {
-      throw projectQuotaError(error);
+      throw revisionSaveError(error);
     }
     if (results[0]?.meta?.changes === 0) {
       await this.requireProjectRead(userId, request.projectId);
@@ -3868,6 +3869,14 @@ function projectQuotaError(error: unknown): unknown {
     return new ProjectQuotaError('storage', MAX_ACCOUNT_PROJECT_STORAGE_BYTES);
   }
   return error;
+}
+
+function revisionSaveError(error: unknown): unknown {
+  const message = error instanceof Error ? error.message : String(error);
+  if (message.includes('revision_project_collision')) {
+    return new RevisionIdCollisionError();
+  }
+  return projectQuotaError(error);
 }
 
 function artifactAccountingError(error: unknown): Error {

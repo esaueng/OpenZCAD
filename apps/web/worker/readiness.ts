@@ -20,6 +20,7 @@ interface ProjectObjectStorageSchema {
   storage_assets_index: number;
   pointer_indexes: number;
   quota_triggers: number;
+  revision_owner_trigger: number;
 }
 
 interface DesktopAuthSchema {
@@ -374,7 +375,13 @@ export async function isProjectObjectStorageReady(
               'project_account_object_bytes_immutable',
               'project_account_asset_bytes_immutable'
             )
-          ) AS quota_triggers`
+          ) AS quota_triggers,
+          EXISTS (
+            SELECT 1 FROM sqlite_schema
+            WHERE type = 'trigger'
+              AND name = 'project_revision_id_owner_before_insert'
+              AND tbl_name = 'revisions'
+          ) AS revision_owner_trigger`
       )
       .first<ProjectObjectStorageSchema>();
 
@@ -386,8 +393,44 @@ export async function isProjectObjectStorageReady(
       schema.document_objects_index === 1 &&
       schema.storage_assets_index === 1 &&
       schema.pointer_indexes === 2 &&
-      schema.quota_triggers === 11
+      schema.quota_triggers === 11 &&
+      schema.revision_owner_trigger === 1
     );
+  } catch {
+    return false;
+  }
+}
+
+/** D1-backed project writes require atomic account bounds and revision ownership. */
+export async function isD1ProjectStorageReady(
+  db: D1Database | undefined
+): Promise<boolean> {
+  if (!db) {
+    return false;
+  }
+  try {
+    const row = await db
+      .prepare(
+        `SELECT
+          (SELECT COUNT(*) FROM sqlite_schema
+           WHERE type = 'trigger' AND name IN (
+             'project_account_count_before_insert',
+             'project_account_owner_immutable',
+             'project_account_d1_project_bytes_before_insert',
+             'project_account_d1_project_bytes_before_update',
+             'project_account_d1_revision_bytes_before_insert',
+             'project_account_d1_revision_bytes_before_update',
+             'project_account_revision_owner_immutable'
+           )) AS trigger_count,
+          EXISTS (
+            SELECT 1 FROM sqlite_schema
+            WHERE type = 'trigger'
+              AND name = 'project_revision_id_owner_before_insert'
+              AND tbl_name = 'revisions'
+          ) AS revision_owner_trigger`
+      )
+      .first<{ trigger_count: number; revision_owner_trigger: number }>();
+    return row?.trigger_count === 7 && row.revision_owner_trigger === 1;
   } catch {
     return false;
   }

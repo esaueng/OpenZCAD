@@ -1,6 +1,9 @@
 import { describe, expect, it, vi } from 'vitest';
 import { D1R2PersistenceService } from '@openzcad/cloudflare-adapters';
-import { ProjectNotFoundError } from '@openzcad/persistence';
+import {
+  ProjectNotFoundError,
+  RevisionIdCollisionError
+} from '@openzcad/persistence';
 import { createProjectDocument } from '@openzcad/document-core';
 import {
   toArtifactId,
@@ -73,6 +76,68 @@ function createAuthorizationDb(options?: { batchChanges?: number }): {
 }
 
 describe('project authorization', () => {
+  it.each(['D1', 'R2'] as const)(
+    'maps a %s revision ownership guard failure to a typed conflict',
+    async (mode) => {
+      const owner = toUserId('user_revision_collision_owner');
+      const document = createProjectDocument('Revision collision', owner);
+      const bucket = {
+        put: vi.fn(async () => undefined),
+        get: vi.fn(async () => null),
+        delete: vi.fn(async () => undefined)
+      };
+      const prepare = (sql: string) => ({
+        bind: (..._bindings: unknown[]) => ({
+          first: async () => {
+            if (sql.includes('AS resolved_role')) {
+              return { owner_user_id: owner, resolved_role: 'owner' };
+            }
+            if (sql.includes('AS current_document_object_id')) {
+              return {
+                current_document_object_id: null,
+                current_document_version: document.version,
+                object_state: null,
+                project_references: 0,
+                revision_references: 0
+              };
+            }
+            if (sql.includes('SELECT document_version FROM projects')) {
+              return { document_version: document.version };
+            }
+            return null;
+          },
+          run: async () => ({ meta: { changes: 1 } }),
+          all: async () => ({ results: [] })
+        })
+      });
+      const service = new D1R2PersistenceService({
+        DB: {
+          prepare,
+          batch: async () => {
+            throw new Error('D1_ERROR: revision_project_collision');
+          }
+        } as unknown as D1Database,
+        PROJECT_SHARING_ENABLED: 'true',
+        ...(mode === 'R2'
+          ? { PROJECT_STORAGE: bucket as unknown as R2Bucket }
+          : {})
+      });
+
+      await expect(
+        service.saveRevision(owner, {
+          projectId: document.projectId,
+          expectedVersion: document.version,
+          reason: 'Manual save',
+          document
+        })
+      ).rejects.toThrow(RevisionIdCollisionError);
+      if (mode === 'R2') {
+        expect(bucket.put).toHaveBeenCalled();
+        expect(bucket.delete).toHaveBeenCalled();
+      }
+    }
+  );
+
   it('resolves D1 owner, editor, and viewer roles and hides unrelated users', async () => {
     const { db, prepared } = createAuthorizationDb();
     const service = new D1R2PersistenceService({
