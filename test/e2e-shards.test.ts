@@ -1,4 +1,12 @@
-import { readFileSync } from 'node:fs';
+import {
+  mkdirSync,
+  mkdtempSync,
+  readFileSync,
+  rmSync,
+  writeFileSync
+} from 'node:fs';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
 import { describe, expect, it } from 'vitest';
 import {
   DEFAULT_WEIGHT_SECONDS,
@@ -43,6 +51,28 @@ describe('balanced e2e shards', () => {
     for (const filter of shardFilters(1, 1, specs, weights)) {
       const matcher = new RegExp(filter, 'i');
       expect(paths.filter((path) => matcher.test(path))).toHaveLength(1);
+    }
+  });
+
+  it('finds specs in subdirectories, as Playwright collects testDir', () => {
+    // A nested spec that only Playwright's recursive collection saw would be
+    // in no shard's file list, and `e2e` would go green without running it.
+    const dir = mkdtempSync(join(tmpdir(), 'e2e-shards-'));
+    try {
+      mkdirSync(join(dir, 'nested', 'deeper'), { recursive: true });
+      writeFileSync(join(dir, 'b.spec.ts'), '');
+      writeFileSync(join(dir, 'a.spec.ts'), '');
+      writeFileSync(join(dir, 'helper.ts'), '');
+      writeFileSync(join(dir, 'nested', 'c.spec.ts'), '');
+      writeFileSync(join(dir, 'nested', 'deeper', 'd.spec.ts'), '');
+      expect(listSpecs(dir)).toEqual([
+        'a.spec.ts',
+        'b.spec.ts',
+        'nested/c.spec.ts',
+        'nested/deeper/d.spec.ts'
+      ]);
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
     }
   });
 
@@ -105,10 +135,15 @@ describe('balanced e2e shards', () => {
               specs: [{ tests: [{ results: [{ duration: 1_500 }] }] }]
             }
           ]
+        },
+        {
+          file: 'nested\\fast.spec.ts',
+          specs: [{ tests: [{ results: [{ duration: 2_000 }] }] }]
         }
       ]
     };
     expect(weightsFromReports([report, report])).toEqual({
+      'nested/fast.spec.ts': 4,
       'slow.spec.ts': 243
     });
   });
