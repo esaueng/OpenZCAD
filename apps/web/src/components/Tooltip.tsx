@@ -38,7 +38,12 @@ interface TooltipPosition {
   left: number;
   top: number;
   placement: 'above' | 'below' | 'left' | 'right';
+  /** Beside an open rail flyout: label and shortcut only, no description. */
+  compact?: boolean;
 }
+
+/** Marks a rail's flyout container; its children are the open flyouts. */
+const RAIL_FLYOUTS_ATTRIBUTE = 'data-rail-flyouts';
 
 let lastClosedTooltip: { id: string; at: number } | null = null;
 
@@ -74,6 +79,35 @@ function verticalRailBox(trigger: HTMLElement): DOMRect | null {
     triggerBox.right <= railBox.right + slack
     ? railBox
     : null;
+}
+
+/**
+ * Whether an open flyout starts right beside the rail on `side`, level with
+ * the tooltip. Only the gap-wide band next to the rail is probed, so the
+ * answer does not depend on the tooltip's own (description-dependent) width.
+ */
+function flyoutBesideRail(
+  railBox: DOMRect,
+  side: 'left' | 'right',
+  top: number,
+  bottom: number,
+  gap: number
+): boolean {
+  const bandLeft = side === 'right' ? railBox.right : railBox.left - gap - 1;
+  const bandRight = side === 'right' ? railBox.right + gap + 1 : railBox.left;
+  return Array.from(
+    document.querySelectorAll(`[${RAIL_FLYOUTS_ATTRIBUTE}] > *`)
+  ).some((flyout) => {
+    const box = flyout.getBoundingClientRect();
+    return (
+      box.width > 0 &&
+      box.height > 0 &&
+      box.left < bandRight &&
+      box.right > bandLeft &&
+      box.top < bottom &&
+      box.bottom > top
+    );
+  });
 }
 
 /** Styled, portal-mounted help for a single control or readout. */
@@ -226,16 +260,26 @@ export function Tooltip({
               : null;
         if (side) {
           const halfHeight = tooltipBox.height / 2;
+          const top = Math.min(
+            window.innerHeight - halfHeight - viewportPadding,
+            Math.max(
+              halfHeight + viewportPadding,
+              triggerBox.top + triggerBox.height / 2
+            )
+          );
           setPosition({
             left: side === 'right' ? railBox.right + gap : railBox.left - gap,
-            top: Math.min(
-              window.innerHeight - halfHeight - viewportPadding,
-              Math.max(
-                halfHeight + viewportPadding,
-                triggerBox.top + triggerBox.height / 2
-              )
-            ),
-            placement: side
+            top,
+            placement: side,
+            // An open flyout already fills that side; a label-only tooltip
+            // covers as little of it as possible.
+            compact: flyoutBesideRail(
+              railBox,
+              side,
+              top - halfHeight,
+              top + halfHeight,
+              gap
+            )
           });
           return;
         }
@@ -314,7 +358,7 @@ export function Tooltip({
                     : shortcut}
                 </kbd>
               ) : null}
-              {description ? (
+              {description && !position?.compact ? (
                 <span className="tooltip-description">{description}</span>
               ) : null}
             </div>,

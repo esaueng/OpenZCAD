@@ -127,6 +127,64 @@ describe('Tooltip', () => {
       expect(parseFloat(tooltip.style.top)).toBeCloseTo(320, 6);
     });
 
+    it('drops the description beside an open flyout', () => {
+      boxes.Rail = box(20, 300, 40, 120);
+      boxes.Parts = box(25, 305, 30, 30);
+      boxes.Flyout = box(68, 100, 320, 500);
+      render(
+        <>
+          <div
+            role="toolbar"
+            aria-label="Rail"
+            style={{ flexDirection: 'column' }}
+          >
+            <Tooltip label="Parts" description="Show the parts list">
+              <button type="button" aria-label="Parts">
+                P
+              </button>
+            </Tooltip>
+          </div>
+          <div data-rail-flyouts="">
+            <aside aria-label="Flyout" />
+          </div>
+        </>
+      );
+
+      fireEvent.focus(screen.getByRole('button', { name: 'Parts' }));
+      const tooltip = screen.getByRole('tooltip');
+      expect(tooltip).toHaveAttribute('data-placement', 'right');
+      expect(tooltip).toHaveTextContent(/^Parts$/);
+    });
+
+    it('keeps the description when the flyout is elsewhere', () => {
+      boxes.Rail = box(20, 300, 40, 120);
+      boxes.Parts = box(25, 305, 30, 30);
+      boxes.Flyout = box(600, 100, 320, 500);
+      render(
+        <>
+          <div
+            role="toolbar"
+            aria-label="Rail"
+            style={{ flexDirection: 'column' }}
+          >
+            <Tooltip label="Parts" description="Show the parts list">
+              <button type="button" aria-label="Parts">
+                P
+              </button>
+            </Tooltip>
+          </div>
+          <div data-rail-flyouts="">
+            <aside aria-label="Flyout" />
+          </div>
+        </>
+      );
+
+      fireEvent.focus(screen.getByRole('button', { name: 'Parts' }));
+      expect(screen.getByRole('tooltip')).toHaveTextContent(
+        'PartsShow the parts list'
+      );
+    });
+
     it('opens to the left of a rail on the right edge', () => {
       boxes.Rail = box(window.innerWidth - 50, 300, 40, 120);
       boxes.Parts = box(window.innerWidth - 45, 305, 30, 30);
