@@ -793,6 +793,16 @@
   }
 }
 
+/* In the same range the search lane stops mirroring the readout's reserve on
+   the right, which left it W − 520px wide (80px at a 600px window): it only
+   has to clear the orientation cube, the 144px the scale bar also steps
+   around. A phone keeps its own edge-to-edge lane. */
+@media (min-width: 521px) and (max-width: 1159px) {
+  .workspace.column-layout:has(.workspace-column-float .sketch-rail) {
+    --lane-right: calc(var(--island-gap) * 2 + 144px);
+  }
+}
+
 .workspace.column-layout:has(
     .workspace-column-float :is(.command-rail, .sketch-rail, .tweak-rail)
   ) {
