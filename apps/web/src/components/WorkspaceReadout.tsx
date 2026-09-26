@@ -1,5 +1,5 @@
-import { useEffect, useState, type RefObject } from 'react';
-import { History, Search } from 'lucide-react';
+import { useEffect, useState, type ReactNode, type RefObject } from 'react';
+import { History } from 'lucide-react';
 import {
   SELECTION_FILTERS,
   SELECTION_FILTER_LABELS,
@@ -37,16 +37,10 @@ interface WorkspaceReadoutProps {
   documentVersion: number | null;
   saveState: WorkspaceSaveState;
   /**
-   * Opens command search. The bar at the foot of the stage is the one
-   * search entry point; the key glyph is the platform's (⌘K or Ctrl+K).
+   * The command bar at the foot of the stage: the one place to search
+   * commands or ask the assistant, under the guidance line.
    */
-  onOpenSearch(): void;
-  searchKey: { glyph: string; accessible: string };
-  /**
-   * The slot at the search bar's right end, handed to the assistant so its
-   * Ask launcher sits on the bar it shares with command search.
-   */
-  onSearchSlot?(slot: HTMLElement | null): void;
+  searchBar: ReactNode;
 }
 
 /**
@@ -69,9 +63,7 @@ export function WorkspaceReadout({
   warningCount,
   documentVersion,
   saveState,
-  onOpenSearch,
-  searchKey,
-  onSearchSlot
+  searchBar
 }: WorkspaceReadoutProps) {
   const expiresAt =
     statusAt === undefined
@@ -113,19 +105,7 @@ export function WorkspaceReadout({
             {prompt}
           </p>
         ) : null}
-        <div className="command-bar-row">
-          <button
-            type="button"
-            className="command-bar"
-            aria-label={`Search commands (${searchKey.accessible})`}
-            onClick={onOpenSearch}
-          >
-            <Search size={15} aria-hidden="true" />
-            <span>Search commands or ask the assistant</span>
-            <kbd>{searchKey.glyph}</kbd>
-          </button>
-          <div className="command-bar-slot" ref={onSearchSlot} />
-        </div>
+        {searchBar}
       </div>
       <footer
         className={`workspace-toast ${tone}${shown ? '' : ' hidden'}`}
