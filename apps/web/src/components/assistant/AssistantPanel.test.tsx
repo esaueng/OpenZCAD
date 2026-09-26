@@ -623,4 +623,93 @@ describe('prompt keys on the open proposal', () => {
     expect(taken).toBe(true);
     expect(onCollapsedChange).toHaveBeenCalledWith(false);
   });
+
+  it('comes back up when the prompt line takes focus', async () => {
+    const onCollapsedChange = vi.fn();
+    const props: ComponentProps<typeof AssistantPanel> = {
+      document: doc,
+      selection: { bodyIds: [], featureIds: [], topologies: [] },
+      onApply: vi.fn().mockResolvedValue(true),
+      onPreview: vi.fn().mockResolvedValue({ ok: true }),
+      collapsed: true,
+      onCollapsedChange,
+      confirmDestructive: false,
+      prompting: false
+    };
+    const { rerender } = render(<AssistantPanel {...props} />);
+    await act(async () => {});
+    expect(onCollapsedChange).not.toHaveBeenCalled();
+
+    rerender(<AssistantPanel {...props} prompting />);
+    expect(onCollapsedChange).toHaveBeenCalledWith(false);
+
+    // Tucked away again while the prompt keeps focus: it stays down.
+    onCollapsedChange.mockClear();
+    rerender(<AssistantPanel {...props} prompting collapsed />);
+    rerender(<AssistantPanel {...props} prompting collapsed />);
+    expect(onCollapsedChange).not.toHaveBeenCalled();
+  });
+
+  it('tucks away on a press outside the stream and the prompt line', async () => {
+    const onCollapsedChange = vi.fn();
+    const outside = window.document.createElement('button');
+    const prompt = window.document.createElement('div');
+    prompt.setAttribute('data-assistant-prompt', '');
+    const field = window.document.createElement('input');
+    prompt.append(field);
+    window.document.body.append(outside, prompt);
+    try {
+      const user = userEvent.setup();
+      render(
+        <AssistantPanel
+          document={doc}
+          selection={{ bodyIds: [], featureIds: [], topologies: [] }}
+          onApply={vi.fn().mockResolvedValue(true)}
+          onPreview={vi.fn().mockResolvedValue({ ok: true })}
+          collapsed={false}
+          onCollapsedChange={onCollapsedChange}
+          confirmDestructive={false}
+        />
+      );
+      const panel = await screen.findByRole('region', {
+        name: 'AI modeling assistant'
+      });
+
+      await user.click(panel);
+      await user.click(field);
+      expect(onCollapsedChange).not.toHaveBeenCalled();
+
+      await user.click(outside);
+      expect(onCollapsedChange).toHaveBeenCalledWith(true);
+    } finally {
+      outside.remove();
+      prompt.remove();
+    }
+  });
+
+  it('leaves a hidden stream alone on a press outside it', async () => {
+    const onCollapsedChange = vi.fn();
+    const outside = window.document.createElement('button');
+    window.document.body.append(outside);
+    try {
+      const user = userEvent.setup();
+      render(
+        <AssistantPanel
+          document={doc}
+          selection={{ bodyIds: [], featureIds: [], topologies: [] }}
+          onApply={vi.fn().mockResolvedValue(true)}
+          onPreview={vi.fn().mockResolvedValue({ ok: true })}
+          collapsed={false}
+          onCollapsedChange={onCollapsedChange}
+          confirmDestructive={false}
+          hidden
+        />
+      );
+      await act(async () => {});
+      await user.click(outside);
+      expect(onCollapsedChange).not.toHaveBeenCalled();
+    } finally {
+      outside.remove();
+    }
+  });
 });
