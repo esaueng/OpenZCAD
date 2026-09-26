@@ -191,7 +191,9 @@ export function ViewModeRail(props: PartsProps) {
   return (
     <div className="view-rail" role="toolbar" aria-label="Parts tools">
       <PartsRailButtons {...props} />
-      <div className="view-flyouts">{flyout}</div>
+      <div className="view-flyouts" data-rail-flyouts="">
+        {flyout}
+      </div>
     </div>
   );
 }

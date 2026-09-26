@@ -37,8 +37,27 @@ interface TooltipProps {
 interface TooltipPosition {
   left: number;
   top: number;
-  placement: 'above' | 'below';
+  placement: 'above' | 'below' | 'left' | 'right';
+  /** Beside an open rail flyout: label and shortcut only, no description. */
+  compact?: boolean;
 }
+
+/**
+ * Open rail flyouts: the children of a rail's flyout container
+ * (`data-rail-flyouts`), or a popover the rail mounts itself
+ * (`data-rail-flyout`, the viewer rail's section and views panels).
+ */
+const RAIL_FLYOUT_SELECTOR = '[data-rail-flyouts] > *, [data-rail-flyout]';
+
+/**
+ * How far from a rail's edge a flyout or another rail still counts as beside
+ * it. The layout parts islands by --island-gap (10 px); this leaves slack
+ * for borders without reaching across the viewport.
+ */
+const ADJACENT_PX = 24;
+
+/** Sub-pixel moves are not worth a re-render. */
+const POSITION_EPSILON_PX = 0.5;
 
 let lastClosedTooltip: { id: string; at: number } | null = null;
 
@@ -48,6 +67,67 @@ function setRef(ref: Ref<HTMLElement> | undefined, node: HTMLElement | null) {
   } else if (ref) {
     ref.current = node;
   }
+}
+
+function isVerticalToolbar(toolbar: Element): boolean {
+  return (
+    toolbar.getAttribute('aria-orientation') === 'vertical' ||
+    window.getComputedStyle(toolbar).flexDirection.startsWith('column')
+  );
+}
+
+/**
+ * The vertical icon rail the trigger sits in, if any. Orientation comes from
+ * the rail's live layout so a rail that a narrow viewport lays out in a row
+ * keeps the above/below placement. A trigger outside the rail's column (a
+ * flyout nested in the toolbar) does not count as on the rail.
+ */
+function verticalRail(trigger: HTMLElement): HTMLElement | null {
+  const rail = trigger.closest<HTMLElement>('[role="toolbar"]');
+  if (!rail) {
+    return null;
+  }
+  if (!isVerticalToolbar(rail)) {
+    return null;
+  }
+  const railBox = rail.getBoundingClientRect();
+  const triggerBox = trigger.getBoundingClientRect();
+  const slack = 1;
+  return triggerBox.left >= railBox.left - slack &&
+    triggerBox.right <= railBox.right + slack
+    ? rail
+    : null;
+}
+
+/**
+ * The first of `elements` that stands beside `edge` on `side` — starting
+ * within ADJACENT_PX of it — and level with the tooltip's rows. Only that
+ * narrow band is probed, so the answer does not depend on the tooltip's own
+ * (description-dependent) width.
+ */
+function besideEdge(
+  edge: number,
+  side: 'left' | 'right',
+  top: number,
+  bottom: number,
+  elements: Iterable<Element>
+): DOMRect | null {
+  const bandLeft = side === 'right' ? edge : edge - ADJACENT_PX;
+  const bandRight = side === 'right' ? edge + ADJACENT_PX : edge;
+  for (const element of elements) {
+    const box = element.getBoundingClientRect();
+    if (
+      box.width > 0 &&
+      box.height > 0 &&
+      box.left < bandRight &&
+      box.right > bandLeft &&
+      box.top < bottom &&
+      box.bottom > top
+    ) {
+      return box;
+    }
+  }
+  return null;
 }
 
 /** Styled, portal-mounted help for a single control or readout. */
@@ -172,48 +252,133 @@ export function Tooltip({
     return () => window.removeEventListener('keydown', dismissOnEscape, true);
   }, [closeTooltip, open]);
 
+  // Bails out on an unchanged position so the per-render re-measure below
+  // settles instead of re-rendering forever.
+  const applyPosition = useCallback((next: TooltipPosition) => {
+    setPosition((previous) =>
+      previous &&
+      previous.placement === next.placement &&
+      previous.compact === next.compact &&
+      Math.abs(previous.left - next.left) < POSITION_EPSILON_PX &&
+      Math.abs(previous.top - next.top) < POSITION_EPSILON_PX
+        ? previous
+        : next
+    );
+  }, []);
+
+  const updatePosition = useCallback(() => {
+    const triggerBox = triggerRef.current?.getBoundingClientRect();
+    const tooltipBox = tooltipRef.current?.getBoundingClientRect();
+    if (!triggerBox || !tooltipBox) {
+      return;
+    }
+    const gap = 8;
+    const viewportPadding = 8;
+    // On a vertical rail, open beside the rail rather than below the
+    // button: below, the tooltip covers the rail's next buttons and, once
+    // clamped into the viewport, whatever panel sits beside the rail.
+    const rail = triggerRef.current ? verticalRail(triggerRef.current) : null;
+    if (rail) {
+      const railBox = rail.getBoundingClientRect();
+      const halfHeight = tooltipBox.height / 2;
+      const top = Math.min(
+        window.innerHeight - halfHeight - viewportPadding,
+        Math.max(
+          halfHeight + viewportPadding,
+          triggerBox.top + triggerBox.height / 2
+        )
+      );
+      const rowTop = top - halfHeight;
+      const rowBottom = top + halfHeight;
+      // Another rail standing beside this one (the sketch relations beside
+      // the viewer rail) is stepped over, so its buttons stay clear.
+      const otherRails = Array.from(
+        document.querySelectorAll('[role="toolbar"]')
+      ).filter(
+        (other) =>
+          other !== rail &&
+          !other.contains(rail) &&
+          !rail.contains(other) &&
+          isVerticalToolbar(other)
+      );
+      const outerEdge = (side: 'left' | 'right') => {
+        const edge = side === 'right' ? railBox.right : railBox.left;
+        const neighbour = besideEdge(edge, side, rowTop, rowBottom, otherRails);
+        if (!neighbour) {
+          return edge;
+        }
+        return side === 'right' ? neighbour.right : neighbour.left;
+      };
+      const rightEdge = outerEdge('right');
+      const leftEdge = outerEdge('left');
+      const needed = tooltipBox.width + gap + viewportPadding;
+      const side =
+        window.innerWidth - rightEdge >= needed
+          ? 'right'
+          : leftEdge >= needed
+            ? 'left'
+            : null;
+      if (side) {
+        const edge = side === 'right' ? rightEdge : leftEdge;
+        applyPosition({
+          left: side === 'right' ? edge + gap : edge - gap,
+          top,
+          placement: side,
+          // An open flyout already fills that side; a label-only tooltip
+          // covers as little of it as possible.
+          compact:
+            besideEdge(
+              edge,
+              side,
+              rowTop,
+              rowBottom,
+              document.querySelectorAll(RAIL_FLYOUT_SELECTOR)
+            ) !== null
+        });
+        return;
+      }
+    }
+    const roomBelow = window.innerHeight - triggerBox.bottom;
+    const placement =
+      roomBelow < tooltipBox.height + gap &&
+      triggerBox.top >= tooltipBox.height + gap
+        ? 'above'
+        : 'below';
+    const halfWidth = tooltipBox.width / 2;
+    applyPosition({
+      left: Math.min(
+        window.innerWidth - halfWidth - viewportPadding,
+        Math.max(
+          halfWidth + viewportPadding,
+          triggerBox.left + triggerBox.width / 2
+        )
+      ),
+      top:
+        placement === 'above' ? triggerBox.top - gap : triggerBox.bottom + gap,
+      placement
+    });
+  }, [applyPosition]);
+
+  // Re-measured after every render while open, not only on opening: the
+  // trigger's own click can mount or unmount the flyout beside the rail (and
+  // change the description) while the tooltip stays up.
   useLayoutEffect(() => {
+    if (open) {
+      updatePosition();
+    }
+  });
+
+  useEffect(() => {
     if (!open) {
       return;
     }
-    const updatePosition = () => {
-      const triggerBox = triggerRef.current?.getBoundingClientRect();
-      const tooltipBox = tooltipRef.current?.getBoundingClientRect();
-      if (!triggerBox || !tooltipBox) {
-        return;
-      }
-      const gap = 8;
-      const viewportPadding = 8;
-      const roomBelow = window.innerHeight - triggerBox.bottom;
-      const placement =
-        roomBelow < tooltipBox.height + gap &&
-        triggerBox.top >= tooltipBox.height + gap
-          ? 'above'
-          : 'below';
-      const halfWidth = tooltipBox.width / 2;
-      setPosition({
-        left: Math.min(
-          window.innerWidth - halfWidth - viewportPadding,
-          Math.max(
-            halfWidth + viewportPadding,
-            triggerBox.left + triggerBox.width / 2
-          )
-        ),
-        top:
-          placement === 'above'
-            ? triggerBox.top - gap
-            : triggerBox.bottom + gap,
-        placement
-      });
-    };
-    updatePosition();
     window.addEventListener('resize', updatePosition);
     window.addEventListener('scroll', updatePosition, true);
     return () => {
       window.removeEventListener('resize', updatePosition);
       window.removeEventListener('scroll', updatePosition, true);
     };
-  }, [open]);
+  }, [open, updatePosition]);
 
   const describedBy = [
     trigger.props['aria-describedby'],
@@ -258,7 +423,7 @@ export function Tooltip({
                     : shortcut}
                 </kbd>
               ) : null}
-              {description ? (
+              {description && !position?.compact ? (
                 <span className="tooltip-description">{description}</span>
               ) : null}
             </div>,

@@ -24,6 +24,14 @@
   transform: translate(-50%, -100%);
 }
 
+.tooltip[data-placement='right'] {
+  transform: translateY(-50%);
+}
+
+.tooltip[data-placement='left'] {
+  transform: translate(-100%, -50%);
+}
+
 .tooltip-label {
   font-weight: var(--fw-medium);
 }
