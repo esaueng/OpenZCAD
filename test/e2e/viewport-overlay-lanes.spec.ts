@@ -134,7 +134,13 @@ test('search bar and toast clear the column at phone width', async ({
   expect(covered).toEqual([]);
 });
 
-for (const width of [1440, 1024]) {
+// Below 1160px the sketch readout trades its words for glyphs, so the search
+// row beside it keeps its full width instead of the readout wrapping or
+// squeezing it.
+for (const { width, compact } of [
+  { width: 1440, compact: false },
+  { width: 1024, compact: true }
+]) {
   test(`sketch readout keeps its segments on one row at ${width}px`, async ({
     page
   }) => {
@@ -149,7 +155,26 @@ for (const width of [1440, 1024]) {
     const readout = page.locator('.viewport-readout');
     const grid = readout.locator('.viewport-dock-grid');
     await expect(grid).toBeVisible();
-    await expect(grid).not.toHaveText('');
+    await expect(grid).toHaveText(/^Grid \S+ mm$/);
+
+    const icons = readout.locator('.viewport-readout-icon');
+    await expect(icons).toHaveCount(3);
+    for (const icon of await icons.all()) {
+      await (compact ? expect(icon).toBeVisible() : expect(icon).toBeHidden());
+    }
+    // Hidden words stay in the accessibility tree: 1px and clipped, never
+    // display: none.
+    const snapWord = readout.locator(
+      '.viewport-dock-snap .viewport-readout-word'
+    );
+    const wordWidth = await snapWord.evaluate(
+      (el) => el.getBoundingClientRect().width
+    );
+    if (compact) {
+      expect(wordWidth).toBeLessThanOrEqual(1);
+    } else {
+      expect(wordWidth).toBeGreaterThan(10);
+    }
 
     // Filter, snap and grid used to outgrow the width a sketch reserves and
     // wrap the grid onto a second row, led by a stray separator.
@@ -166,7 +191,7 @@ for (const width of [1440, 1024]) {
     }
 
     // The reserve that keeps it on one row also moves the search lane, so
-    // the wider readout still ends before the search bar starts.
+    // the readout still ends before the search bar starts.
     const readoutBox = await readout.boundingBox();
     const barBox = await page.locator('.command-bar').boundingBox();
     expect(readoutBox).not.toBeNull();
