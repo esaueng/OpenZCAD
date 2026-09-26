@@ -3,7 +3,6 @@ import {
   platformShortcutLabel,
   type PlatformShortcutCopy
 } from '../lib/platformShortcut';
-import { Sparkles } from 'lucide-react';
 import {
   sendAssistantPromptFiles,
   sendAssistantPromptKey
@@ -334,10 +333,52 @@ export function CommandBar({
           </div>
         )}
         <span className="command-bar-lead" aria-hidden="true">
-          <span className="command-bar-glyph">›</span>
-          <span className="command-bar-spark">
-            <Sparkles size={13} />
-          </span>
+          {/* The chevron as a two-line sketch with its three points, so the
+              assistant's working state can redraw it point by point. */}
+          <svg
+            className="command-bar-glyph"
+            viewBox="0 0 16 16"
+            width="16"
+            height="16"
+          >
+            <line
+              className="command-bar-stroke command-bar-stroke-in"
+              pathLength={100}
+              x1="6"
+              y1="4"
+              x2="10"
+              y2="8"
+            />
+            <line
+              className="command-bar-stroke command-bar-stroke-out"
+              pathLength={100}
+              x1="10"
+              y1="8"
+              x2="6"
+              y2="12"
+            />
+            <rect
+              className="command-bar-point command-bar-point-start"
+              x="5"
+              y="3"
+              width="2"
+              height="2"
+            />
+            <rect
+              className="command-bar-point command-bar-point-tip"
+              x="9"
+              y="7"
+              width="2"
+              height="2"
+            />
+            <rect
+              className="command-bar-point command-bar-point-end"
+              x="5"
+              y="11"
+              width="2"
+              height="2"
+            />
+          </svg>
         </span>
         <span className="command-bar-field">
           {completion && (
