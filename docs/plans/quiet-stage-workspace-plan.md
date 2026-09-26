@@ -149,9 +149,10 @@ Each slice is one PR against `main`, recorded on the U04 row when it merges.
    applies, previews or rejects the newest open proposal (Enter, `p`, Esc).
    The stream sits on the stage colour at full opacity and dissolves over
    its top edge, goes quiet while the prompt is unfocused, and keeps its
-   foot line (model, attach, history, clear, hide). No launcher: ⌘J tucks
-   the stream away and brings it back, and the bar's glyph carries the
-   working spark and the unread dot. Open: number keys for a question's
+   foot line (model, attach, history, clear, hide). No launcher: focusing
+   the prompt brings the stream up, a press outside the stream and the bar
+   tucks it away, ⌘J toggles it, and the bar's glyph carries the working
+   spark and the unread dot. Open: number keys for a question's
    options, and `/attach` as a command for keyboard users.
 6. **Sketch card and relations rail.** Draw and modify tools in the left card,
    Finish at its foot; the relations rail on the right. Acceptance: every

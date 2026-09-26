@@ -53,3 +53,10 @@ export function sendAssistantPromptFiles(files: File[]): boolean {
   window.dispatchEvent(event);
   return event.defaultPrevented;
 }
+
+/**
+ * Finds the prompt line for the stream's click-off check: a press on the bar
+ * (its field, glyph, or command list) belongs to the conversation, so it
+ * must not tuck the stream away.
+ */
+export const ASSISTANT_PROMPT_SELECTOR = '[data-assistant-prompt]';
