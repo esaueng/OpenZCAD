@@ -200,17 +200,19 @@
 }
 
 /* ── Marking menu ──
-   Laid out around the point that summoned it, so the slots are already
+   Laid out around the point that summoned it, so the pills are already
    where the hand will flick. The container has no box of its own: the
    ring is the menu, and a panel drawn behind it would fight the model it
-   is meant to be acting on. Names live in the hub rather than beside each
-   slot, so what covers the model is one readout instead of eight. ── */
+   is meant to be acting on. The ring sits on the viewport stage, which is
+   dark in both themes, so it takes the viewport's chrome tokens like the
+   orientation widget does, and the selection blue rather than the chrome
+   accent, which the light theme darkens past reading on a dark pill. ── */
 
 .marking-menu {
   position: fixed;
   z-index: var(--z-context-menu);
   /* An anchor, not a panel: it draws nothing and catches nothing, so the
-     model stays visible and clickable right up to the sectors themselves. */
+     model stays visible and clickable right up to the pills themselves. */
   width: 1px;
   height: 1px;
   overflow: visible;
@@ -221,145 +223,113 @@
   pointer-events: auto;
 }
 
-/* Invisible copies of every pill the hub could show, so the ring can be
-   laid out against the widest one without guessing at text metrics. */
-.marking-menu-measure {
-  visibility: hidden;
+/* Transparent, and the reason the ring is modal: a press anywhere in its
+   box starts a flick instead of reaching the model, which would otherwise
+   take the press as a face drag and move geometry under the gesture. */
+.marking-menu-field {
+  position: absolute;
+  cursor: default;
 }
 
-/* The readout is a pill that hugs whatever it is naming: a fixed disc has
-   to choose between clipping long labels and hanging them over bare
-   geometry, and a pill never has to. */
-.marking-menu-hub {
+/* The click point. It takes the aimed pill's colour so the eye can stay
+   at the centre of the flick and still see that something is armed. */
+.marking-menu-origin {
   position: absolute;
+  left: 0;
+  top: 0;
+  width: 8px;
+  height: 8px;
   transform: translate(-50%, -50%);
+  border-radius: 999px;
+  background: var(--color-viewport-text-muted);
+  box-shadow: 0 0 0 2px rgba(13, 15, 18, 0.72);
+  pointer-events: none;
+  transition: background var(--dur-fast) var(--ease-out);
+}
+
+.marking-menu-origin.armed {
+  background: var(--color-select);
+}
+
+.marking-menu-origin.armed.danger {
+  background: var(--color-error);
+}
+
+/* One pill per action: icon, name and shortcut in a row, so the ring is
+   read where the hand is headed rather than looked up at the centre. */
+.marking-menu-slot {
+  position: absolute;
   display: inline-flex;
   align-items: center;
   gap: 8px;
-  max-width: 240px;
-  padding: 5px 14px 5px 8px;
-  border: 1px solid var(--color-viewport-border);
-  border-radius: 999px;
-  background: rgba(13, 15, 18, 0.94);
+  height: 28px;
+  padding: 0 10px 0 9px;
   color: var(--color-viewport-text);
-  white-space: nowrap;
-  line-height: var(--lh-tight);
-  pointer-events: none;
-}
-
-/* At rest there is no icon to lead with, so the padding evens out. */
-.marking-menu-hub:not(.armed) {
-  padding: 5px 14px;
-}
-
-/* The aimed slot's icon, echoed at the centre of the flick. */
-.marking-menu-hub-icon {
-  display: inline-grid;
-  place-items: center;
-  width: 22px;
-  height: 22px;
-  flex: none;
-  border-radius: 999px;
-  background: var(--color-accent-dim);
-  color: var(--color-accent);
-  font-size: var(--fs-mini);
-}
-
-.marking-menu-hub.armed.danger .marking-menu-hub-icon {
-  background: rgba(239, 68, 68, 0.12);
-  color: var(--color-error);
-}
-
-/* Naming what a release would run is the hub's whole job, so it says so as
-   soon as there is something to name. */
-.marking-menu-hub.armed {
-  border-color: var(--color-accent);
-}
-
-.marking-menu-hub.armed.danger {
-  border-color: var(--color-error);
-  color: var(--color-error);
-}
-
-.marking-menu-rest {
-  font-family: var(--font-mono);
-  font-size: var(--fs-mini);
-  letter-spacing: var(--ls-eyebrow);
-  text-transform: uppercase;
-  color: var(--color-text-subtle);
-}
-
-/* An extreme label still has a ceiling (the pill's max-width); it ends in
-   an ellipsis rather than pushing the shortcut out of the pill. */
-.marking-menu-read {
-  overflow: hidden;
-  text-overflow: ellipsis;
-  font-size: var(--fs-xs);
-}
-
-.marking-menu-hub small {
-  font-family: var(--font-mono);
-  font-size: var(--fs-mini);
-  color: var(--color-text-subtle);
-}
-
-.marking-menu-hub.armed.danger small {
-  color: inherit;
-}
-
-.marking-menu-slot {
-  position: absolute;
-  width: 38px;
-  height: 38px;
-  transform: translate(-50%, -50%);
-  display: grid;
-  place-items: center;
-  color: var(--color-text-muted);
-  background: var(--color-surface);
-  border: 1px solid var(--color-border-strong);
+  background: rgba(13, 15, 18, 0.9);
+  border: 1px solid var(--color-viewport-border);
   border-radius: 999px;
   box-shadow: 0 6px 20px rgba(0, 0, 0, 0.45);
   font-size: var(--fs-sm);
+  line-height: 1;
+  white-space: nowrap;
   transition:
-    transform 120ms ease,
-    background 120ms ease,
-    border-color 120ms ease,
-    color 120ms ease;
+    background var(--dur-fast) var(--ease-out),
+    border-color var(--dur-fast) var(--ease-out),
+    color var(--dur-fast) var(--ease-out);
 }
 
+/* Which edge sits on the anchor: pills off the vertical hang outward, so
+   the gap between the centre and the ring never depends on a label's length. */
+.marking-menu-slot.center {
+  transform: translate(-50%, -50%);
+}
+
+.marking-menu-slot.start {
+  transform: translate(0, -50%);
+}
+
+.marking-menu-slot.end {
+  transform: translate(-100%, -50%);
+}
+
+/* The aimed pill is what a release would take, so it reads as committed
+   rather than merely hovered: the hover and the aim are the same state. */
+/* The tint is layered over the dark fill rather than replacing it, so the
+   aimed pill stays opaque over a pale face. */
 .marking-menu-slot:hover:not(:disabled),
 .marking-menu-slot:focus-visible,
 .marking-menu-slot.aimed:not(:disabled) {
-  color: var(--color-text);
-  border-color: var(--color-accent);
-  background: var(--color-surface-hover);
+  color: var(--color-viewport-text);
+  border-color: var(--color-select);
+  background:
+    linear-gradient(rgba(103, 152, 255, 0.22), rgba(103, 152, 255, 0.22)),
+    rgba(13, 15, 18, 0.9);
+  outline: none;
 }
 
-/* The aimed slot is what a release would take, so it reads as committed
-   rather than merely hovered. */
-.marking-menu-slot.aimed:not(:disabled) {
-  box-shadow: 0 0 0 2px var(--color-accent);
-  transform: translate(-50%, -50%) scale(1.12);
+.marking-menu-slot.aimed:not(:disabled),
+.marking-menu-slot:focus-visible {
+  box-shadow:
+    0 0 0 1px var(--color-select),
+    0 6px 20px rgba(0, 0, 0, 0.45);
 }
 
-/* The disc stays opaque when disabled: fading the whole button lets the
-   model bleed through, and over a pale body the slot reads as a smudge of
-   whatever colour happens to be behind it. Only the icon dims. */
+/* The pill stays opaque when disabled: fading the whole button lets the
+   model bleed through, and over a pale body the pill reads as a smudge of
+   whatever colour happens to be behind it. Only the contents dim. */
 .marking-menu-slot:disabled {
-  /* Overrides the global button:disabled fade, which would let the model
-     bleed through the disc. */
   opacity: 1;
-  color: var(--color-text-subtle);
-  border-color: var(--color-border);
+  color: var(--color-viewport-text-muted);
+  border-color: var(--color-viewport-border);
   box-shadow: none;
 }
 
-.marking-menu-slot:disabled .marking-menu-icon {
+.marking-menu-slot:disabled > * {
   opacity: 0.45;
 }
 
-/* Destructive at rest as well as under the pointer: with no label beside it,
-   the colour is the only warning the slot carries until it is aimed at. */
+/* Destructive at rest as well as under the pointer, so the colour warns
+   before the name has been read. */
 .marking-menu-slot.danger {
   color: var(--color-error);
 }
@@ -369,16 +339,45 @@
 .marking-menu-slot.danger.aimed:not(:disabled) {
   color: var(--color-error);
   border-color: var(--color-error);
+  background:
+    linear-gradient(rgba(239, 68, 68, 0.18), rgba(239, 68, 68, 0.18)),
+    rgba(13, 15, 18, 0.9);
 }
 
-.marking-menu-slot.danger.aimed:not(:disabled) {
-  box-shadow: 0 0 0 2px var(--color-error);
+.marking-menu-slot.danger.aimed:not(:disabled),
+.marking-menu-slot.danger:focus-visible {
+  box-shadow:
+    0 0 0 1px var(--color-error),
+    0 6px 20px rgba(0, 0, 0, 0.45);
 }
 
 .marking-menu-icon {
   display: inline-grid;
   place-items: center;
   flex: 0 0 auto;
+  color: var(--color-select);
+}
+
+.marking-menu-slot.danger .marking-menu-icon {
+  color: inherit;
+}
+
+.marking-menu-label {
+  max-width: 180px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+/* The shortcut rides on the pill, so the ring teaches the faster path
+   rather than only being it. */
+.marking-menu-key {
+  margin-left: 2px;
+  padding: 1px 5px;
+  font-family: var(--font-mono);
+  font-size: var(--fs-mini);
+  color: var(--color-viewport-text-muted);
+  border: 1px solid var(--color-viewport-border);
+  border-radius: var(--radius-sm);
 }
 
 .row-visibility {

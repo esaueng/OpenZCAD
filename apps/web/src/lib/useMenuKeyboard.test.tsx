@@ -157,22 +157,42 @@ describe.each(['context', 'marking'] as const)(
   }
 );
 
-describe('the marking menu hub', () => {
-  function hub(): HTMLElement | null {
-    return document.querySelector('.marking-menu > .marking-menu-hub');
+describe('the marking menu ring', () => {
+  function litPill(): string | null {
+    return (
+      document.querySelector('.marking-menu-slot.aimed')?.getAttribute(
+        'aria-label'
+      ) ?? null
+    );
   }
 
-  it('still reads Aim when the menu opens', async () => {
+  it('lights no pill when the menu opens', async () => {
     await openMenu('marking');
-    // The hub names whatever a release would run. Focusing an item on open
-    // would make it name one the hand never aimed at, and a release in the
-    // dead zone runs nothing.
-    expect(hub()?.textContent).toContain('Aim');
+    // The lit pill is whatever a release would run. Focusing an item on open
+    // would light one the hand never aimed at, and a release in the dead
+    // zone runs nothing.
+    expect(litPill()).toBeNull();
   });
 
-  it('names the item the arrow keys reach', async () => {
+  it('lights the pill the arrow keys reach', async () => {
     const { user } = await openMenu('marking');
     await user.keyboard('{ArrowDown}');
-    expect(hub()?.textContent).toContain('Edit Properties');
+    expect(litPill()).toBe('Edit Properties');
+    // The skipped disabled item still holds its place on the ring.
+    await user.keyboard('{ArrowDown}{ArrowDown}');
+    expect(litPill()).toBe('Delete');
+  });
+
+  it('names every action on its pill', async () => {
+    await openMenu('marking');
+    const labels = Array.from(
+      document.querySelectorAll('.marking-menu-slot .marking-menu-label')
+    ).map((label) => label.textContent);
+    expect(labels).toEqual([
+      'Edit Properties',
+      'Hide Body',
+      'Repair Face',
+      'Delete'
+    ]);
   });
 });

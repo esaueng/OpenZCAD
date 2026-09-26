@@ -3,15 +3,18 @@ import type { ContextMenuItem } from './ContextMenu';
 import { useMenuKeyboard } from '../lib/useMenuKeyboard';
 import {
   clampMenuOrigin,
+  MARKING_DEAD_ZONE_PX,
+  sectorAnchor,
   sectorForVector,
-  sectorPosition,
-  slotPositionClearOfHub
+  type MenuExtents
 } from '../lib/markingMenu';
 
-/** How far from the centre the slots sit. */
+/** How far from the centre the pills are anchored (before the ring's aspect). */
 const RING_RADIUS = 96;
-/** Half a slot plus breathing room; added to every clearance the ring keeps. */
-const SLOT_CLEARANCE = 27;
+/** Breathing room kept between the ring and the screen edge. */
+const EDGE_MARGIN = 12;
+/** Height of a pill before it has been measured, for the first frame. */
+const PILL_FALLBACK = { width: 120, height: 28 };
 
 interface MarkingMenuProps {
   x: number;
@@ -28,16 +31,14 @@ interface MarkingMenuProps {
  * button already means panning the view and that binding is worth more than
  * opening a frame earlier. So the flick is a second press: press anywhere and
  * drag outward, and the direction alone commits on release — the pointer
- * never has to reach the slot. Clicking a slot works too, and both paths read
+ * never has to reach the pill. Clicking a pill works too, and both paths read
  * the same ring, so the fast way is the slow way done confidently rather than
  * something separate to learn.
  *
- * The slots carry icons alone. Names would put eight labelled boxes over the
- * model at the moment the model is what you are pointing at, so instead the
- * hub names one thing: whatever a release would run. It sits dead centre,
- * where the eye already is at the start of a flick, and it carries the
- * action's shortcut with it so the ring teaches the faster path rather than
- * only being it.
+ * Each action is a labelled pill, name and shortcut on it, hung around a
+ * dot at the click point. The pill a release would take is the one lit, so
+ * an overshoot is caught before the button comes up; nothing else is drawn,
+ * because the model underneath is what the menu is about.
  */
 export function MarkingMenu({
   x,
@@ -47,36 +48,28 @@ export function MarkingMenu({
   onClose
 }: MarkingMenuProps) {
   const ref = useRef<HTMLDivElement | null>(null);
-  const measureRef = useRef<HTMLDivElement | null>(null);
+  const slotRefs = useRef<(HTMLButtonElement | null)[]>([]);
   const [aimed, setAimed] = useState<number | null>(null);
   const [hovered, setHovered] = useState<number | null>(null);
-  // Half the widest pill this menu can show, plus half its height. The ring
-  // is laid out against the widest label rather than the hovered one, so the
-  // slots never move while the hand is mid-gesture.
-  const [pillHalf, setPillHalf] = useState({ width: 0, height: 0 });
+  const [extents, setExtents] = useState<MenuExtents>(() =>
+    ringExtents(items.length, () => PILL_FALLBACK)
+  );
   useMenuKeyboard(ref);
 
+  // The pills hang outward from their anchors, so how far the ring reaches
+  // depends on the labels. Measured from layout rather than from the drawn
+  // boxes: the opening animation scales the whole ring for its first frame.
   useLayoutEffect(() => {
-    const host = measureRef.current;
-    if (!host) {
-      return;
-    }
-    let width = 0;
-    let height = 0;
-    for (const child of host.children) {
-      const rect = child.getBoundingClientRect();
-      width = Math.max(width, rect.width);
-      height = Math.max(height, rect.height);
-    }
-    setPillHalf({ width: width / 2, height: height / 2 });
+    setExtents(
+      ringExtents(items.length, (index) => {
+        const slot = slotRefs.current[index];
+        return slot && slot.offsetWidth > 0
+          ? { width: slot.offsetWidth, height: slot.offsetHeight }
+          : PILL_FALLBACK;
+      })
+    );
   }, [items]);
 
-  // Slots never share the pill's horizontal band (they settle above or
-  // below it), but the pill itself still widens with its longest label, so
-  // the screen-edge clamp and the dismiss radius follow whichever is wider.
-  const clearWidth = pillHalf.width + SLOT_CLEARANCE;
-  const clearHeight = pillHalf.height + SLOT_CLEARANCE;
-  const reach = Math.max(RING_RADIUS, clearWidth) + 48;
   // Aiming is measured from where the menu actually is, so the clamped
   // centre has to be what both the layout and the flick use.
   const origin = clampMenuOrigin(
@@ -84,18 +77,17 @@ export function MarkingMenu({
     y,
     window.innerWidth,
     window.innerHeight,
-    reach
+    extents
   );
   // A flick outranks the pointer resting somewhere: while one is in progress
   // it is what a release would take.
   const reading = aimed ?? hovered;
-  const readItem = reading === null ? null : items[reading];
 
   useEffect(() => {
     /**
      * A press with the menu already open is a flick: track where it points,
      * and commit on release. Releases with no travel fall in the dead zone
-     * and pick nothing, which is what leaves plain clicking a slot intact.
+     * and pick nothing, which is what leaves plain clicking a pill intact.
      */
     function onPointerMove(event: PointerEvent) {
       if (event.buttons === 0) {
@@ -126,17 +118,9 @@ export function MarkingMenu({
       if (ref.current?.contains(event.target as Node)) {
         return;
       }
-      // A press inside the ring is a flick starting, not a press elsewhere.
-      // The menu draws nothing between the slots, so that press lands on the
-      // model behind it and would otherwise dismiss the menu before the
-      // gesture it was beginning could finish.
-      const travel = Math.hypot(
-        event.clientX - origin.x,
-        event.clientY - origin.y
-      );
-      if (travel > reach) {
-        onClose();
-      }
+      // The field catches every press inside the ring's box, so a press that
+      // reaches here is outside it: elsewhere on the page, not a flick.
+      onClose();
     }
     function onKeyDown(event: KeyboardEvent) {
       if (event.key === 'Escape') {
@@ -154,7 +138,9 @@ export function MarkingMenu({
       window.removeEventListener('pointerdown', onPointerDown, true);
       window.removeEventListener('keydown', onKeyDown, true);
     };
-  }, [origin.x, origin.y, items, onSelect, onClose, reach]);
+  }, [origin.x, origin.y, items, onSelect, onClose]);
+
+  const readItem = reading === null ? null : items[reading];
 
   return (
     <div
@@ -165,70 +151,45 @@ export function MarkingMenu({
       tabIndex={-1}
       style={{ left: origin.x, top: origin.y }}
     >
+      {/* Everything inside the ring's box is the menu's: a press there is a
+          flick starting, and the model behind must not see it, or a flick
+          from the centre would drag whatever face it happened to open over. */}
+      <div
+        className="marking-menu-field"
+        aria-hidden="true"
+        style={{
+          left: -extents.left,
+          top: -extents.top,
+          width: extents.left + extents.right,
+          height: extents.top + extents.bottom
+        }}
+      />
+      {/* The click point itself. Releasing within the dead zone around it
+          picks nothing, which is what keeps a plain click on a pill intact. */}
       <span
-        className={`marking-menu-hub${readItem ? ' armed' : ''}${
+        className={`marking-menu-origin${readItem ? ' armed' : ''}${
           readItem?.danger ? ' danger' : ''
         }`}
         aria-hidden="true"
-      >
-        {readItem ? (
-          <>
-            {/* The aimed slot's own icon rides along, so the readout
-                confirms which button the flick is on without the eye
-                leaving the centre. */}
-            <span className="marking-menu-hub-icon">
-              {readItem.icon ?? readItem.label.slice(0, 1)}
-            </span>
-            {/* The ellipsis promises a dialog, which the hub has no room to
-                keep saying — the slot's own name still carries it. */}
-            <span className="marking-menu-read">
-              {readItem.label.replace(/…$/, '')}
-            </span>
-            <small>
-              {readItem.disabled
-                ? 'unavailable'
-                : (readItem.shortcut ?? 'release')}
-            </small>
-          </>
-        ) : (
-          <span className="marking-menu-rest">Aim</span>
-        )}
-      </span>
-      {/* One hidden pill per item, rendered with the hub's own classes so
-          the measurement is the truth rather than an estimate. */}
-      <div ref={measureRef} className="marking-menu-measure" aria-hidden="true">
-        {items.map((item) => (
-          <span key={item.id} className="marking-menu-hub">
-            <span className="marking-menu-hub-icon">
-              {item.icon ?? item.label.slice(0, 1)}
-            </span>
-            <span className="marking-menu-read">
-              {item.label.replace(/…$/, '')}
-            </span>
-            <small>
-              {item.disabled ? 'unavailable' : (item.shortcut ?? 'release')}
-            </small>
-          </span>
-        ))}
-      </div>
+      />
       {items.map((item, index) => {
-        const at = slotPositionClearOfHub(
-          sectorPosition(index, items.length, RING_RADIUS),
-          clearHeight
-        );
+        const anchor = sectorAnchor(index, items.length, RING_RADIUS);
         return (
           <button
             key={item.id}
+            ref={(element) => {
+              slotRefs.current[index] = element;
+            }}
             type="button"
             role="menuitem"
-            // Icons alone leave nothing for a screen reader — or for a test —
-            // to go on, so the name the hub shows is the name the slot has.
+            // The shortcut rides on the pill, so the accessible name stays
+            // the action alone.
             aria-label={item.label}
-            className={`marking-menu-slot${aimed === index ? ' aimed' : ''}${
-              item.danger ? ' danger' : ''
-            }`}
+            className={`marking-menu-slot ${anchor.align}${
+              reading === index ? ' aimed' : ''
+            }${item.danger ? ' danger' : ''}`}
             disabled={item.disabled}
-            style={{ left: at.x, top: at.y }}
+            style={{ left: anchor.x, top: anchor.y }}
             onPointerEnter={() => setHovered(index)}
             onPointerLeave={() =>
               setHovered((current) => (current === index ? null : current))
@@ -245,9 +206,54 @@ export function MarkingMenu({
             <span className="marking-menu-icon" aria-hidden="true">
               {item.icon ?? item.label.slice(0, 1)}
             </span>
+            {/* The ellipsis promises a dialog; the pill has no room to keep
+                saying so and the accessible name still carries it. */}
+            <span className="marking-menu-label" aria-hidden="true">
+              {item.label.replace(/…$/, '')}
+            </span>
+            {item.shortcut && !item.disabled ? (
+              <kbd className="marking-menu-key" aria-hidden="true">
+                {item.shortcut}
+              </kbd>
+            ) : null}
           </button>
         );
       })}
     </div>
   );
+}
+
+/**
+ * How far the ring reaches from its centre on each side, from the anchors
+ * and each pill's size. Pills hang outward from their anchors, so the
+ * extent on a side is the farthest pill edge on that side.
+ */
+function ringExtents(
+  count: number,
+  sizeOf: (index: number) => { width: number; height: number }
+): MenuExtents {
+  let left = MARKING_DEAD_ZONE_PX;
+  let right = MARKING_DEAD_ZONE_PX;
+  let top = MARKING_DEAD_ZONE_PX;
+  let bottom = MARKING_DEAD_ZONE_PX;
+  for (let index = 0; index < count; index += 1) {
+    const anchor = sectorAnchor(index, count, RING_RADIUS);
+    const { width, height } = sizeOf(index);
+    const pillLeft =
+      anchor.align === 'center'
+        ? anchor.x - width / 2
+        : anchor.align === 'start'
+          ? anchor.x
+          : anchor.x - width;
+    left = Math.max(left, -pillLeft);
+    right = Math.max(right, pillLeft + width);
+    top = Math.max(top, -(anchor.y - height / 2));
+    bottom = Math.max(bottom, anchor.y + height / 2);
+  }
+  return {
+    left: left + EDGE_MARGIN,
+    right: right + EDGE_MARGIN,
+    top: top + EDGE_MARGIN,
+    bottom: bottom + EDGE_MARGIN
+  };
 }

@@ -2,9 +2,10 @@ import { describe, expect, it } from 'vitest';
 import {
   clampMenuOrigin,
   MARKING_DEAD_ZONE_PX,
-  sectorForVector,
-  sectorPosition,
-  slotPositionClearOfHub
+  RING_ASPECT,
+  sectorAnchor,
+  sectorAngle,
+  sectorForVector
 } from './markingMenu';
 
 describe('aiming at a sector', () => {
@@ -41,10 +42,7 @@ describe('aiming at a sector', () => {
     expect(sectorForVector(0, 0, 8)).toBeNull();
   });
 
-  it('picks nothing while the pointer is still on the hub', () => {
-    // The hub is drawn at the dead zone's radius, so anything it covers has
-    // to be a release that chose nothing — otherwise the readout would name
-    // an action the menu was not going to run.
+  it('picks nothing until the pointer has left the dead zone', () => {
     expect(sectorForVector(0, -(MARKING_DEAD_ZONE_PX - 1), 8)).toBeNull();
     expect(sectorForVector(0, -(MARKING_DEAD_ZONE_PX + 1), 8)).toBe(0);
   });
@@ -52,6 +50,14 @@ describe('aiming at a sector', () => {
   it('adapts to a ring that is not full', () => {
     expect(sectorForVector(0, -far, 3)).toBe(0);
     expect(sectorForVector(0, far, 4)).toBe(2);
+    // Just clockwise of straight up on a ring of five is still the first
+    // sector, which spans 36° either side of the top.
+    expect(sectorForVector(far * Math.sin(0.5), -far * Math.cos(0.5), 5)).toBe(
+      0
+    );
+    expect(sectorForVector(far * Math.sin(0.8), -far * Math.cos(0.8), 5)).toBe(
+      1
+    );
   });
 
   it('has no sector to aim at when there is nothing on the ring', () => {
@@ -59,19 +65,54 @@ describe('aiming at a sector', () => {
   });
 });
 
-describe('where the labels sit', () => {
-  it('puts the first label directly above the centre', () => {
-    const at = sectorPosition(0, 8, 100);
-    expect(at.x).toBeCloseTo(0, 6);
-    expect(at.y).toBeCloseTo(-100, 6);
+describe('where the pills hang', () => {
+  it('centres the first pill directly above the click point', () => {
+    const at = sectorAnchor(0, 8, 100);
+    expect(at).toEqual({ x: 0, y: -100, align: 'center' });
   });
 
-  it('places labels where the aim for that sector points', () => {
-    // The two have to agree, or the menu shows one thing and picks another.
-    for (let index = 0; index < 8; index += 1) {
-      const at = sectorPosition(index, 8, 120);
-      expect(sectorForVector(at.x, at.y, 8)).toBe(index);
+  it('centres the pill straight below too', () => {
+    expect(sectorAnchor(4, 8, 100)).toEqual({ x: 0, y: 100, align: 'center' });
+  });
+
+  it('hangs pills off the vertical outward from their anchor', () => {
+    // Right of centre the pill's left edge sits on the anchor and the pill
+    // grows rightward; mirrored on the left. Neighbours never grow toward
+    // each other, whatever their labels.
+    expect(sectorAnchor(2, 8, 100).align).toBe('start');
+    expect(sectorAnchor(1, 8, 100).align).toBe('start');
+    expect(sectorAnchor(6, 8, 100).align).toBe('end');
+    expect(sectorAnchor(7, 8, 100).align).toBe('end');
+  });
+
+  it('stretches the ring sideways so the diagonals get their own row', () => {
+    const at = sectorAnchor(2, 8, 100);
+    expect(at.x).toBeCloseTo(100 * RING_ASPECT, 6);
+    expect(at.y).toBe(0);
+  });
+
+  it('keeps a ring without diagonals round', () => {
+    // Four pills have no diagonal row to make room for, so the side pills
+    // sit as near the centre as the top and bottom ones.
+    expect(sectorAnchor(1, 4, 100)).toEqual({ x: 100, y: 0, align: 'start' });
+    expect(sectorAnchor(3, 4, 100)).toEqual({ x: -100, y: 0, align: 'end' });
+  });
+
+  it('anchors every pill inside the sector its aim points at', () => {
+    // The stretch bends the anchor away from the sector's direction; it must
+    // never bend it into the neighbour's, or the menu would show one thing
+    // and pick another.
+    for (const count of [3, 4, 5, 6, 7, 8]) {
+      for (let index = 0; index < count; index += 1) {
+        const at = sectorAnchor(index, count, 120);
+        expect(sectorForVector(at.x, at.y, count)).toBe(index);
+      }
     }
+  });
+
+  it('spaces the sectors evenly from straight up', () => {
+    expect(sectorAngle(2, 8)).toBe(90);
+    expect(sectorAngle(3, 4)).toBe(270);
   });
 });
 
@@ -92,37 +133,20 @@ describe('keeping the ring on screen', () => {
     });
   });
 
+  it('keeps a different amount clear on each side when asked', () => {
+    // A pill hanging rightward needs more room on the right than the dial
+    // needs on the left.
+    expect(
+      clampMenuOrigin(1150, 20, 1200, 800, {
+        left: 60,
+        right: 200,
+        top: 50,
+        bottom: 120
+      })
+    ).toEqual({ x: 1000, y: 50 });
+  });
+
   it('centres itself when the window is too small for the ring', () => {
     expect(clampMenuOrigin(90, 40, 200, 100, 140)).toEqual({ x: 100, y: 50 });
-  });
-});
-
-describe('clearing slots off the hub pill', () => {
-  it('leaves a slot outside the band alone', () => {
-    const at = { x: 0, y: -96 };
-    expect(slotPositionClearOfHub(at, 42)).toEqual(at);
-  });
-
-  it('lifts both horizontal slots above the band, mirroring each other', () => {
-    const east = slotPositionClearOfHub({ x: 96, y: 0 }, 42);
-    const west = slotPositionClearOfHub({ x: -96, y: 1.2e-16 }, 42);
-    expect(east).toEqual({ x: 96, y: -42 });
-    expect(west).toEqual({ x: -96, y: -42 });
-  });
-
-  it('settles a leaning slot on the side it was leaning toward', () => {
-    expect(slotPositionClearOfHub({ x: 90, y: 30 }, 42)).toEqual({
-      x: 90,
-      y: 42
-    });
-    expect(slotPositionClearOfHub({ x: -90, y: -30 }, 42)).toEqual({
-      x: -90,
-      y: -42
-    });
-  });
-
-  it('keeps x untouched, so the ring width never grows', () => {
-    const cleared = slotPositionClearOfHub({ x: 96, y: 10 }, 42);
-    expect(cleared.x).toBe(96);
   });
 });

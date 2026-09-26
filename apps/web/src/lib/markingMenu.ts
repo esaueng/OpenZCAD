@@ -2,18 +2,15 @@
  * Radial layout for the viewport's action menu.
  *
  * A marking menu is worth having because direction is easier to remember
- * than position in a list: after a few uses the hand learns "up-left is
- * fillet" and stops reading. Holding that up asks the ring to read as one
- * instrument rather than a scatter of boxes, so the slots carry icons only
- * and the hub in the middle names whatever is being aimed at.
+ * than position in a list: after a few uses the hand learns "up is fillet"
+ * and stops reading. The actions are labelled pills around the click point,
+ * one per sector, so the name is read where the hand is headed rather than
+ * looked up somewhere else. Within the dead zone around the click point
+ * nothing is chosen; past it, the aim's sector is what a release takes.
  *
- * That readout is also why every action can stay on the ring. Aiming one
- * slot wide used to be silent; now the hub says which action a release would
- * run, so an overshoot is caught before the button comes up and a list
- * hanging off the ring for the leftovers buys nothing. The ring is still
- * only as legible as it is small — callers should keep a selection's set to
- * roughly eight, not because the layout breaks past that but because
- * direction stops being memorable.
+ * Sectors are evenly spaced, index 0 straight up and running clockwise.
+ * Callers should keep a selection's set to roughly eight: the layout holds
+ * past that, but direction stops being memorable.
  */
 
 /**
@@ -21,97 +18,63 @@
  *
  * The menu opens under the pointer, so without this the tiny drift between
  * pressing and releasing would pick whichever sector the hand happened to
- * wobble toward. The hub is drawn at exactly this radius, which is what
- * makes the rule visible: while the pointer is still on the readout, nothing
- * is chosen.
+ * wobble toward.
  */
 export const MARKING_DEAD_ZONE_PX = 40;
 
 /**
- * Degrees around the horizontal that the ring keeps empty on each side.
+ * How much wider than tall a ring with diagonal pills is.
  *
- * The hub pill grows sideways with its label, so the ring's equator is the
- * one place a slot can always be collided with. Excluding a band around it
- * gathers the slots into a crown above and a cradle below the pill — the
- * ring reads as two symmetric arcs — while every slot keeps a direction
- * close to its evenly-spaced one.
+ * Pills are wide and short, so a round ring crowds them vertically at the
+ * diagonals while leaving the sides empty. Stretching the anchors sideways
+ * gives the diagonal pills a row of their own; the flick still commits by
+ * angle alone, so the stretch never changes what a gesture picks. A ring of
+ * four or fewer has no diagonals and stays round, so its side pills sit as
+ * close to the centre as the top and bottom ones.
  */
-export const HORIZONTAL_EXCLUSION_DEG = 30;
+export const RING_ASPECT = 1.3;
 
-/**
- * A sector's home direction in degrees clockwise from straight up, with the
- * horizontal band squeezed out.
- *
- * Each quadrant compresses linearly toward its pole, so ordering is kept
- * and no two sectors collapse together. The two dead-horizontal sectors of
- * an even ring both resolve upward, framing the pill symmetrically rather
- * than one hanging on each side.
- */
-export function clusteredAngle(
-  index: number,
-  count: number,
-  exclusionDeg = HORIZONTAL_EXCLUSION_DEG
-): number {
-  const angle = (index / Math.max(count, 1)) * 360;
-  const squeeze = (90 - exclusionDeg) / 90;
-  if (angle <= 90) {
-    return angle * squeeze;
-  }
-  if (angle <= 180) {
-    return 180 - (180 - angle) * squeeze;
-  }
-  if (angle < 270) {
-    return 180 + (angle - 180) * squeeze;
-  }
-  return 360 - (360 - angle) * squeeze;
+/** The sideways stretch a ring of `count` pills is laid out with. */
+export function ringAspect(count: number): number {
+  return count > 4 ? RING_ASPECT : 1;
+}
+
+/** A sector's direction in degrees clockwise from straight up. */
+export function sectorAngle(index: number, count: number): number {
+  return (index / Math.max(count, 1)) * 360;
 }
 
 /**
- * Where a sector's label sits, in pixels from the menu's centre.
+ * Where a sector's pill is anchored, in pixels from the menu's centre, and
+ * which edge of the pill sits on that anchor.
  *
- * Index 0 is straight up and the ring runs clockwise. Positions follow the
- * clustered angles, so the label sits exactly where the aim for that
- * sector points.
+ * Pills near the vertical are centred on their anchor. Every other pill
+ * hangs outward from it — left edge on the anchor to the right of centre,
+ * right edge to the left — so the space between the anchor and the centre
+ * stays clear whatever the label's length, and neighbouring pills never
+ * grow toward each other.
  */
-export function sectorPosition(
+export function sectorAnchor(
   index: number,
   count: number,
   radius: number
-): { x: number; y: number } {
-  const angle = ((clusteredAngle(index, count) - 90) * Math.PI) / 180;
-  return { x: Math.cos(angle) * radius, y: Math.sin(angle) * radius };
-}
-
-/**
- * Moves a slot out of the hub pill's horizontal band.
- *
- * The pill grows sideways with its label, so a slot sharing its horizontal
- * line is always one long name away from being collided with or crowded.
- * Rather than racing the pill outward, any slot whose disc would enter the
- * band (`halfHeight` already includes the slot's radius and a margin) keeps
- * its x and settles just above or below the band, on whichever side it was
- * already leaning. Slots dead on the horizontal all go above, so the pair
- * of them frames the pill symmetrically instead of one dangling on each
- * side. The flick never reads these positions; it commits by direction
- * alone, so the sector under a practised gesture is unchanged.
- */
-export function slotPositionClearOfHub(
-  at: { x: number; y: number },
-  halfHeight: number
-): { x: number; y: number } {
-  if (Math.abs(at.y) >= halfHeight) {
-    return at;
-  }
-  // sectorPosition's sin() leaves ±1e-16 noise on horizontal slots; treat
-  // anything sub-pixel as "no lean" so mirrored slots resolve identically.
-  const lean = Math.abs(at.y) < 1 ? 0 : Math.sign(at.y);
-  return { x: at.x, y: (lean !== 0 ? lean : -1) * halfHeight };
+): { x: number; y: number; align: 'center' | 'start' | 'end' } {
+  const angle = (sectorAngle(index, count) * Math.PI) / 180;
+  const sin = Math.sin(angle);
+  const x = sin * radius * ringAspect(count);
+  const y = -Math.cos(angle) * radius;
+  // sin() leaves ±1e-16 noise on the vertical; anything sub-pixel is
+  // "straight up or down" so mirrored rings lay out identically.
+  const align = Math.abs(sin) < 0.35 ? 'center' : sin > 0 ? 'start' : 'end';
+  return { x: Math.abs(x) < 1 ? 0 : x, y: Math.abs(y) < 1 ? 0 : y, align };
 }
 
 /**
  * The sector a drag is aiming at, or null while it is still in the dead zone.
  *
- * `dx`/`dy` are in screen pixels, so `dy` grows downward.
+ * `dx`/`dy` are in screen pixels, so `dy` grows downward. An aim exactly on
+ * a boundary resolves to the earlier sector; picking neither would read as
+ * a dead spot in the ring.
  */
 export function sectorForVector(
   dx: number,
@@ -123,23 +86,19 @@ export function sectorForVector(
     return null;
   }
   // Rotate so straight up is 0 and the ring runs clockwise, then land on
-  // the nearest sector's clustered direction — the same angles the slots
-  // are drawn at, or the menu would show one thing and pick another. An
-  // aim equidistant between two sectors resolves to the earlier one;
-  // picking neither would read as a dead spot in the ring.
+  // the nearest sector's direction.
   const degrees =
     ((((Math.atan2(dy, dx) * 180) / Math.PI + 90) % 360) + 360) % 360;
-  let best = 0;
-  let bestDistance = Infinity;
-  for (let index = 0; index < count; index += 1) {
-    const offset = Math.abs(degrees - clusteredAngle(index, count));
-    const distance = Math.min(offset, 360 - offset);
-    if (distance < bestDistance - 1e-9) {
-      best = index;
-      bestDistance = distance;
-    }
-  }
-  return best;
+  const step = 360 / count;
+  return Math.floor((degrees + step / 2 - 1e-9) / step) % count;
+}
+
+/** How far the menu extends from its centre on each side, in pixels. */
+export interface MenuExtents {
+  left: number;
+  right: number;
+  top: number;
+  bottom: number;
 }
 
 /**
@@ -147,19 +106,27 @@ export function sectorForVector(
  *
  * A sector that falls off the edge is worse than a menu that opens slightly
  * away from the pointer: the direction it stands for still exists, so the
- * flick would land on something the user cannot see. `reach` should cover
- * the ring plus the widest label it carries.
+ * flick would land on something the user cannot see. A single `reach`
+ * keeps that much clear on every side; extents keep a different amount on
+ * each, which is what a ring of pills hanging outward needs.
  */
 export function clampMenuOrigin(
   x: number,
   y: number,
   viewportWidth: number,
   viewportHeight: number,
-  reach: number
+  reach: number | MenuExtents
 ): { x: number; y: number } {
-  const clamp = (value: number, extent: number) =>
-    extent < reach * 2
+  const extents =
+    typeof reach === 'number'
+      ? { left: reach, right: reach, top: reach, bottom: reach }
+      : reach;
+  const clamp = (value: number, extent: number, before: number, after: number) =>
+    extent < before + after
       ? extent / 2
-      : Math.min(Math.max(value, reach), extent - reach);
-  return { x: clamp(x, viewportWidth), y: clamp(y, viewportHeight) };
+      : Math.min(Math.max(value, before), extent - after);
+  return {
+    x: clamp(x, viewportWidth, extents.left, extents.right),
+    y: clamp(y, viewportHeight, extents.top, extents.bottom)
+  };
 }
