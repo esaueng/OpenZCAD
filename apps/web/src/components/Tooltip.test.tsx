@@ -130,7 +130,7 @@ describe('Tooltip', () => {
     it('drops the description beside an open flyout', () => {
       boxes.Rail = box(20, 300, 40, 120);
       boxes.Parts = box(25, 305, 30, 30);
-      boxes.Flyout = box(68, 100, 320, 500);
+      boxes.Flyout = box(70, 100, 320, 500);
       render(
         <>
           <div
@@ -159,7 +159,7 @@ describe('Tooltip', () => {
     it('re-measures when its own click opens and closes the flyout', () => {
       boxes.Rail = box(20, 300, 40, 120);
       boxes.Parts = box(25, 305, 30, 30);
-      boxes.Flyout = box(68, 100, 320, 500);
+      boxes.Flyout = box(70, 100, 320, 500);
       const renderWith = (flyoutOpen: boolean) => (
         <>
           <div
@@ -235,6 +235,40 @@ describe('Tooltip', () => {
         window.innerWidth - 58,
         6
       );
+    });
+
+    it('steps over a neighbouring rail instead of covering it', () => {
+      const right = window.innerWidth;
+      boxes.Rail = box(right - 50, 300, 40, 120);
+      boxes.Parts = box(right - 45, 305, 30, 30);
+      // The sketch relations stand one island gap (10 px) left of the rail.
+      boxes.Relations = box(right - 104, 300, 44, 200);
+      render(
+        <>
+          <div
+            role="toolbar"
+            aria-label="Relations"
+            aria-orientation="vertical"
+          />
+          <div
+            role="toolbar"
+            aria-label="Rail"
+            style={{ flexDirection: 'column' }}
+          >
+            <Tooltip label="Parts" description="Show the parts list">
+              <button type="button" aria-label="Parts">
+                P
+              </button>
+            </Tooltip>
+          </div>
+        </>
+      );
+
+      fireEvent.focus(screen.getByRole('button', { name: 'Parts' }));
+      const tooltip = screen.getByRole('tooltip');
+      expect(tooltip).toHaveAttribute('data-placement', 'left');
+      expect(parseFloat(tooltip.style.left)).toBeCloseTo(right - 112, 6);
+      expect(tooltip).toHaveTextContent('PartsShow the parts list');
     });
 
     it('keeps the below placement on a horizontal toolbar', () => {
