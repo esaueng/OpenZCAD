@@ -133,3 +133,44 @@ test('search bar and toast clear the column at phone width', async ({
   );
   expect(covered).toEqual([]);
 });
+
+for (const width of [1440, 1024]) {
+  test(`sketch readout keeps its segments on one row at ${width}px`, async ({
+    page
+  }) => {
+    await page.setViewportSize({ width, height: 900 });
+    await stubApi(page);
+    await seedDismissedWorkspaceTour(page);
+    await createProject(page, 'Readout row');
+    await page.getByRole('button', { name: /^Sketch \(S\)/ }).click();
+    await page.getByRole('button', { name: 'Top (XY)' }).click();
+    await expect(page.locator('.sketch-rail')).toBeVisible();
+
+    const readout = page.locator('.viewport-readout');
+    const grid = readout.locator('.viewport-dock-grid');
+    await expect(grid).toBeVisible();
+    await expect(grid).not.toHaveText('');
+
+    // Filter, snap and grid used to outgrow the width a sketch reserves and
+    // wrap the grid onto a second row, led by a stray separator.
+    const tops = await readout.evaluate((el) =>
+      [
+        ...el.querySelectorAll(
+          '.viewport-dock-filter, .viewport-dock-snap, .viewport-dock-grid'
+        )
+      ].map((segment) => segment.getBoundingClientRect().top)
+    );
+    expect(tops).toHaveLength(3);
+    for (const top of tops) {
+      expect(Math.abs(top - tops[0]!)).toBeLessThan(1);
+    }
+
+    // The reserve that keeps it on one row also moves the search lane, so
+    // the wider readout still ends before the search bar starts.
+    const readoutBox = await readout.boundingBox();
+    const barBox = await page.locator('.command-bar').boundingBox();
+    expect(readoutBox).not.toBeNull();
+    expect(barBox).not.toBeNull();
+    expect(readoutBox!.x + readoutBox!.width).toBeLessThanOrEqual(barBox!.x);
+  });
+}

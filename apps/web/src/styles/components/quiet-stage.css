@@ -255,14 +255,22 @@
 }
 
 /* The island is the only frame: its segments are flat text, so a chip
-   inside it never draws a second box. A hairline centred in the space
-   before the snap and grid segments tells them apart in a sketch; only
-   the filter, which is a button, answers the pointer. */
+   inside it never draws a second box. A hairline centred in the gap before
+   the snap and grid segments tells them apart in a sketch; only the filter,
+   which is a button, answers the pointer. */
+.viewport-readout:has(.viewport-dock-snap) {
+  column-gap: 9px;
+  /* A segment that wraps to the start of a row puts its hairline 1px past
+     the island's left border, so clipping to the padding box drops it;
+     focus rings (2px + 1px offset) stay inside the 3px padding. */
+  overflow: clip;
+}
+
 .viewport-readout .viewport-dock-filter,
 .viewport-readout .viewport-dock-snap,
 .viewport-readout .viewport-dock-grid {
   height: 24px;
-  padding: 0 7px;
+  padding: 0 5px;
   background: transparent;
   border: 0;
 }
@@ -270,17 +278,16 @@
 .viewport-readout .viewport-dock-snap,
 .viewport-readout .viewport-dock-grid {
   position: relative;
-  margin-left: 4px;
 }
 
-/* 4px margin + the island's 4px gap: -4.5px centres the 1px line. */
+/* -5px centres the 1px line in the 9px gap. */
 .viewport-readout .viewport-dock-snap::before,
 .viewport-readout .viewport-dock-grid::before {
   content: '';
   position: absolute;
   top: 5px;
   bottom: 5px;
-  left: -4.5px;
+  left: -5px;
   width: 1px;
   background: var(--color-border);
 }
@@ -752,9 +759,12 @@
   --readout-min-w: 96px;
 }
 
-/* Sketching adds the snap and grid segments: room for all three on a row. */
+/* Sketching adds the snap and grid segments: room for all three on one
+   row with four-character values in both ("Snap 0.25 mm", "Grid 1000 mm").
+   The grid label follows the zoom, so sizing for the defaults wrapped as
+   soon as it read "Grid 10 mm". Anything longer wraps to a second row. */
 .workspace.column-layout:has(.workspace-column-float .sketch-rail) {
-  --readout-min-w: 264px;
+  --readout-min-w: 300px;
 }
 
 .workspace.column-layout:has(
