@@ -135,11 +135,13 @@ test('search bar and toast clear the column at phone width', async ({
 });
 
 // Below 1160px the sketch readout trades its words for glyphs, so the search
-// row beside it keeps its full width instead of the readout wrapping or
-// squeezing it.
-for (const { width, compact } of [
-  { width: 1440, compact: false },
-  { width: 1024, compact: true }
+// row beside it keeps its full width (520px: the bar and Ask) instead of the
+// readout wrapping or squeezing it. Narrower still, the lane only clears the
+// cube on the right rather than mirroring the readout, so it stays usable.
+for (const { width, compact, minLane } of [
+  { width: 1440, compact: false, minLane: 520 },
+  { width: 1024, compact: true, minLane: 520 },
+  { width: 600, compact: true, minLane: 170 }
 ]) {
   test(`sketch readout keeps its segments on one row at ${width}px`, async ({
     page
@@ -197,5 +199,8 @@ for (const { width, compact } of [
     expect(readoutBox).not.toBeNull();
     expect(barBox).not.toBeNull();
     expect(readoutBox!.x + readoutBox!.width).toBeLessThanOrEqual(barBox!.x);
+    const laneBox = await page.locator('.command-bar-lane').boundingBox();
+    expect(laneBox).not.toBeNull();
+    expect(laneBox!.width).toBeGreaterThanOrEqual(minLane);
   });
 }
