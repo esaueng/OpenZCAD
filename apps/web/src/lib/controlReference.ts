@@ -33,8 +33,9 @@ export const KEYBOARD_CONTROL_GROUPS = [
       {
         id: 'command-palette',
         keys: ['Ctrl/Cmd+K', '/'],
-        action: 'Open the command palette',
-        detail: 'Search tools, views, file actions, and workspace commands.'
+        action: 'Focus the command bar',
+        detail:
+          'Search tools, views, file actions, and workspace commands, or ask the assistant.'
       },
       {
         id: 'save-revision',
@@ -308,8 +309,9 @@ export const KEYBOARD_CONTROL_GROUPS = [
       {
         id: 'palette-navigation',
         keys: ['↑', '↓'],
-        action: 'Move through palette results',
-        detail: 'Press Enter to run the highlighted command.'
+        action: 'Move through command bar results',
+        detail:
+          'Press Enter to run the highlighted command, or Tab to ask the assistant instead.'
       },
       {
         id: 'dialog-focus',
@@ -321,7 +323,7 @@ export const KEYBOARD_CONTROL_GROUPS = [
         id: 'close-dialog',
         keys: ['Esc'],
         action: 'Close the active dialog',
-        detail: 'Closes the palette, shortcut reference, or context menu.'
+        detail: 'Closes the command bar, shortcut reference, or context menu.'
       }
     ]
   }

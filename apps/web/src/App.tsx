@@ -496,7 +496,7 @@ import type {
 import { resolveFace } from './lib/topologyResolution';
 import { objectPolylines } from './lib/objectPolyline';
 import type { RegionPickData } from './components/viewer/regionOverlay';
-import type { PaletteCommand } from './components/CommandPalette';
+import { CommandBar, type PaletteCommand } from './components/CommandBar';
 import { ShortcutsOverlay } from './components/ShortcutsOverlay';
 import { DISPLAY_MODE_LABELS } from './lib/displayMode';
 import { ContextMenu, type ContextMenuState } from './components/ContextMenu';
@@ -736,12 +736,6 @@ const LazyExportDialog = lazyWithStaleChunkNotice(() =>
 const LazyActivityPill = lazyWithStaleChunkNotice(() =>
   import('./components/ActivityPill').then((module) => ({
     default: module.ActivityPill
-  }))
-);
-// Opened by ⌘K, never at boot; the entry chunk has no room for it.
-const LazyCommandPalette = lazyWithStaleChunkNotice(() =>
-  import('./components/CommandPalette').then((module) => ({
-    default: module.CommandPalette
   }))
 );
 const LazyShaprImportDialog = lazyWithStaleChunkNotice(() =>
@@ -2088,6 +2082,7 @@ export function App() {
     direction: 'cw' | 'ccw';
     nonce: number;
   } | null>(null);
+  // The command bar has focus and its list is up.
   const [paletteOpen, setPaletteOpen] = useState(false);
   // A question typed into command search, handed to the assistant with a
   // fresh id so the same words asked twice still send twice.
@@ -2095,7 +2090,7 @@ export function App() {
     id: number;
     text: string;
   } | null>(null);
-  // The slot at the end of the search bar where the Ask launcher sits.
+  // The slot inside the command bar where the Ask launcher sits.
   const [askSlot, setAskSlot] = useState<HTMLElement | null>(null);
   const [shortcutsOpen, setShortcutsOpen] = useState(false);
   const [contextMenu, setContextMenu] = useState<ContextMenuState | null>(null);
@@ -14887,7 +14882,8 @@ export function App() {
         return;
       }
       if (paletteOpen || shortcutsOpen) {
-        // Modals own their keys; Escape is handled here as a safety net.
+        // The command bar and the overlay own their keys; Escape is handled
+        // here as a safety net.
         if (event.key === 'Escape') {
           setPaletteOpen(false);
           setShortcutsOpen(false);
@@ -17883,9 +17879,26 @@ export function App() {
             warningCount={diagnostics.length}
             documentVersion={doc.version}
             saveState={presentedSaveState}
-            onOpenSearch={() => setPaletteOpen(true)}
-            searchKey={commandPaletteKey}
-            onSearchSlot={setAskSlot}
+            searchBar={
+              <CommandBar
+                commands={paletteCommands}
+                open={paletteOpen}
+                onOpenChange={setPaletteOpen}
+                onAsk={
+                  assistantAvailable
+                    ? (question) => {
+                        setAssistantCollapsed(false);
+                        setAssistantRequest((current) => ({
+                          id: (current?.id ?? 0) + 1,
+                          text: question
+                        }));
+                      }
+                    : undefined
+                }
+                searchKey={commandPaletteKey}
+                onAssistantSlot={setAskSlot}
+              />
+            }
           />
           <StatusActivityLog
             id={activityLogId}
@@ -17956,25 +17969,6 @@ export function App() {
               }
             }}
           />
-          {paletteOpen && (
-            <Suspense fallback={null}>
-              <LazyCommandPalette
-                commands={paletteCommands}
-                onClose={() => setPaletteOpen(false)}
-                onAsk={
-                  assistantAvailable
-                    ? (question) => {
-                        setAssistantCollapsed(false);
-                        setAssistantRequest((current) => ({
-                          id: (current?.id ?? 0) + 1,
-                          text: question
-                        }));
-                      }
-                    : undefined
-                }
-              />
-            </Suspense>
-          )}
           {shortcutsOpen && (
             <ShortcutsOverlay onClose={() => setShortcutsOpen(false)} />
           )}
