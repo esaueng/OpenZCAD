@@ -363,6 +363,12 @@
   color: var(--color-accent-hi);
 }
 
+/* The verb recedes so the filter's value reads first. */
+.viewport-dock-filter-label {
+  margin-right: 0.5em;
+  color: var(--color-text-dim);
+}
+
 .viewport-dock-filter:hover {
   color: var(--color-text);
   border-color: var(--color-border-strong);
@@ -429,6 +435,13 @@
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
+}
+
+/* How many messages a burst passed over; the activity log holds them. */
+.workspace-toast-body > .workspace-toast-more {
+  flex: 0 0 auto;
+  color: var(--color-text-subtle);
+  font-variant-numeric: tabular-nums;
 }
 
 .workspace-toast-body > i {

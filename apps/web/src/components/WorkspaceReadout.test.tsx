@@ -1,7 +1,8 @@
-import { render, screen } from '@testing-library/react';
+import { act, render, screen } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { createRef } from 'react';
 import { describe, expect, it, vi } from 'vitest';
+import { STATUS_MIN_DWELL_MS } from '../hooks/usePacedStatus';
 import {
   ActivityLogButton,
   ViewportDockExtras,
@@ -105,6 +106,52 @@ describe('WorkspaceReadout', () => {
       />
     );
     expect(screen.getByRole('contentinfo')).toHaveClass('hidden');
+  });
+});
+
+describe('WorkspaceReadout pacing', () => {
+  it('holds a message through a burst, then shows the latest with a count', () => {
+    vi.useFakeTimers();
+    try {
+      const readout = (status: string) => (
+        <WorkspaceReadout
+          status={status}
+          statusAt={Date.now()}
+          tone="ready"
+          logOpen={false}
+          onToggleLog={vi.fn()}
+          {...SUMMARY}
+        />
+      );
+      const { container, rerender } = render(readout('Opening Bracket'));
+      for (const step of ['Loading', 'Rebuilding', 'Tessellating']) {
+        act(() => {
+          vi.advanceTimersByTime(40);
+        });
+        rerender(readout(step));
+      }
+      rerender(readout('Reopened Bracket.'));
+      expect(screen.getByRole('status')).toHaveTextContent('Opening Bracket');
+      expect(container.querySelector('.workspace-toast-more')).toBeNull();
+      act(() => {
+        vi.advanceTimersByTime(STATUS_MIN_DWELL_MS);
+      });
+      expect(screen.getByRole('status')).toHaveTextContent('Reopened Bracket.');
+      expect(
+        container.querySelector('.workspace-toast-more')
+      ).toHaveTextContent('+3');
+      // The button still names the live message for assistive tech.
+      expect(
+        screen.getByRole('button', {
+          name: 'Open activity log. Current status: Reopened Bracket.'
+        })
+      ).toHaveAttribute(
+        'title',
+        'Reopened Bracket. — 3 more in the activity log'
+      );
+    } finally {
+      vi.useRealTimers();
+    }
   });
 });
 

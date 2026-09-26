@@ -6,6 +6,7 @@ import {
   type SelectionFilter
 } from '@openzcad/viewport/types';
 import type { WorkspaceSaveState } from '../lib/cloudProjectAutosave';
+import { usePacedStatus } from '../hooks/usePacedStatus';
 import { statusExpiresAt } from '../lib/statusLifetime';
 import { WORKSPACE_SAVE_STATE_PRESENTATION } from '../lib/workspaceSaveStatePresentation';
 import type { StatusTone } from './StatusActivityLog';
@@ -84,8 +85,10 @@ export function WorkspaceReadout({
   }, [expiresAt]);
   const quiet = expiresAt !== null && now >= expiresAt;
   const shown = !quiet && !muted && status !== '';
+  // The log keeps every message; the toast holds each long enough to read.
+  const paced = usePacedStatus(status, tone, shown);
   // A retired or expired message leaves the bar reading as nothing happening.
-  const shownStatus = quiet ? '' : status;
+  const shownStatus = quiet ? '' : paced.status;
   const featureLabel = `${featureCount} ${featureCount === 1 ? 'feature' : 'features'}`;
   const bodyLabel = `${bodyCount} ${bodyCount === 1 ? 'body' : 'bodies'}`;
   const workspaceSummary = `${projectName ?? 'Project'} · ${featureLabel} · ${bodyLabel}`;
@@ -108,13 +111,19 @@ export function WorkspaceReadout({
         {searchBar}
       </div>
       <footer
-        className={`workspace-toast ${tone}${shown ? '' : ' hidden'}`}
+        className={`workspace-toast ${paced.tone}${shown ? '' : ' hidden'}`}
         role="contentinfo"
       >
         <button
           type="button"
           className={`workspace-toast-body${quiet ? ' quiet' : ''}`}
-          title={quiet ? 'View activity log' : `${status} — View activity log`}
+          title={
+            quiet
+              ? 'View activity log'
+              : paced.skipped > 0
+                ? `${paced.status} — ${paced.skipped} more in the activity log`
+                : `${paced.status} — View activity log`
+          }
           aria-label={
             quiet || status === ''
               ? `${logOpen ? 'Close' : 'Open'} activity log.`
@@ -127,6 +136,11 @@ export function WorkspaceReadout({
           <span role="status" aria-live="polite" aria-atomic="true">
             {shownStatus}
           </span>
+          {shown && paced.skipped > 0 ? (
+            <span className="workspace-toast-more" aria-hidden="true">
+              +{paced.skipped}
+            </span>
+          ) : null}
         </button>
         <div
           className="workspace-status-summary"
@@ -223,7 +237,8 @@ export function ViewportDockExtras({
         aria-label={`Selection filter: ${SELECTION_FILTER_LABELS[selectionFilter]}. Cycle.`}
         onClick={() => onSelectionFilter(handsBack ? null : nextFilter)}
       >
-        select {SELECTION_FILTER_LABELS[selectionFilter]}
+        <span className="viewport-dock-filter-label">select</span>
+        {SELECTION_FILTER_LABELS[selectionFilter]}
       </button>
       {snap && (
         <span className="viewport-dock-snap mono">
