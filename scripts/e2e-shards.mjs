@@ -117,8 +117,10 @@ export function partitionSpecs(specs, weights, total) {
 /**
  * The `playwright test` file filters for one shard. Playwright treats each
  * positional argument as a case-insensitive regular expression over the
- * file path, so the filter carries the directory: a bare basename such as
- * `cloud-sync.spec.ts` would also select `import-cloud-sync.spec.ts`.
+ * file path, so each filter is the escaped, end-anchored path with its
+ * directory: a bare `cloud-sync.spec.ts` would also select
+ * `import-cloud-sync.spec.ts`, and an unescaped `foo.spec.ts` would also
+ * select a `fooXspecYts.spec.ts`.
  */
 export function shardFilters(shard, total, specs, weights) {
   const unsafe = specs.filter((spec) => !SAFE_SPEC_PATH.test(spec));
@@ -128,7 +130,12 @@ export function shardFilters(shard, total, specs, weights) {
     );
   }
   const partition = partitionSpecs(specs, weights, total);
-  return partition[shard - 1].files.map((spec) => `${SPEC_DIR}/${spec}`);
+  return partition[shard - 1].files.map((spec) => specFilter(spec));
+}
+
+/** The regular expression Playwright should match one spec path with. */
+export function specFilter(spec) {
+  return `${SPEC_DIR}/${spec}`.replace(/[.*+?^${}()|[\]\\]/g, '\\$&') + '$';
 }
 
 /**
