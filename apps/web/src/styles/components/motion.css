@@ -225,8 +225,8 @@ textarea {
 }
 
 /* Popovers open from the control that owns them: a dropdown drops, a panel
-   above its button rises, the drawer slides in from its edge, and the
-   marking menu blooms out of the pointer. Centred panels carry
+   above its button rises, and the drawer slides in from its edge. Centred
+   panels carry
    translateX(-50%) in their own transform, so they use oz-pop, which keeps
    it. */
 .file-menu[open] > .topbar-menu-panel,
@@ -247,10 +247,6 @@ textarea {
 
 .model-drawer-float {
   animation: oz-enter-left var(--dur-base) var(--ease-out);
-}
-
-.marking-menu {
-  animation: oz-bloom var(--dur-fast) var(--ease-out);
 }
 
 /* The verb rail's groups are keyed by selection, so a new pick swaps
@@ -297,17 +293,6 @@ textarea {
   to {
     opacity: 1;
     transform: translateX(0);
-  }
-}
-
-@keyframes oz-bloom {
-  from {
-    opacity: 0;
-    transform: scale(0.92);
-  }
-  to {
-    opacity: 1;
-    transform: scale(1);
   }
 }
 

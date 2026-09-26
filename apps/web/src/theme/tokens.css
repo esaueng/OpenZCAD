@@ -100,7 +100,7 @@
 
   /* ── Radii ────────────────────────────────────────────── */
   /* Near-square on purpose: keys and chips 2px, controls 3px, panels 4px.
-     Only true dots and the round marking-menu hub stay round. */
+     Only true dots stay round. */
   --radius-sm: 2px;
   --radius-md: 3px;
   --radius-lg: 4px;
