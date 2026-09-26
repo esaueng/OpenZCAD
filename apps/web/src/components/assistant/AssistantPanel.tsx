@@ -35,9 +35,9 @@ import {
   collectedAnswers,
   EMPTY_CONVERSATION,
   historyForRequest,
+  openProposal as findOpenProposal,
   type AssistantAttachmentPreview,
   type AssistantEntry,
-  type AssistantProposalEntry,
   type AssistantQuestionsEntry
 } from '../../lib/assistant/conversation';
 import {
@@ -395,18 +395,14 @@ export function AssistantPanel({
     return null;
   }, [entries]);
   /**
-   * The proposal the prompt's keys act on: the newest one still open. Older
-   * open proposals keep their own buttons.
+   * The proposal the prompt's keys act on: the newest one still open, even
+   * when a later proposal has already been decided. Older open proposals
+   * keep their own buttons.
    */
-  const openProposal = useMemo<AssistantProposalEntry | null>(() => {
-    for (let index = entries.length - 1; index >= 0; index -= 1) {
-      const entry = entries[index];
-      if (entry?.kind === 'proposal') {
-        return entry.status === 'open' ? entry : null;
-      }
-    }
-    return null;
-  }, [entries]);
+  const openProposal = useMemo(
+    () => findOpenProposal(conversation),
+    [conversation]
+  );
 
   useEffect(() => () => abortRef.current?.abort(), []);
 

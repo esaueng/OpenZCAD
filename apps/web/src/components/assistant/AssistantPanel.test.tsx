@@ -515,6 +515,38 @@ describe('prompt keys on the open proposal', () => {
     expect(props.onApply).toHaveBeenCalledTimes(1);
   });
 
+  it('acts on the newest proposal still open once a later one is decided', async () => {
+    const { card, props, rerender } = await renderWithOpenProposal();
+    await act(async () => {
+      rerender(
+        <AssistantPanel
+          {...props}
+          request={{ id: 2, text: 'Add another cube' }}
+        />
+      );
+    });
+    await waitFor(() =>
+      expect(
+        document.querySelectorAll('.assistant-card.proposal')
+      ).toHaveLength(2)
+    );
+    const later = document.querySelectorAll('.assistant-card.proposal')[1]!;
+    expect(later).toHaveClass('open');
+
+    // Escape rejects the newest; Enter then applies the one before it.
+    await act(async () => {
+      sendAssistantPromptKey('reject');
+    });
+    await waitFor(() => expect(later).toHaveClass('rejected'));
+    let taken = false;
+    await act(async () => {
+      taken = sendAssistantPromptKey('apply');
+    });
+    expect(taken).toBe(true);
+    await waitFor(() => expect(card).toHaveClass('applied'));
+    expect(props.onApply).toHaveBeenCalledTimes(1);
+  });
+
   it('opens scrollback on the history key, even from a tucked-away stream', async () => {
     const onCollapsedChange = vi.fn();
     render(
