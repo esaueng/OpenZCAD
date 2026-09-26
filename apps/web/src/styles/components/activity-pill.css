@@ -299,6 +299,7 @@
 }
 
 [data-reduced-motion='true'] .activity-pill-sweep::after {
+  animation: none;
   display: none;
 }
 
@@ -318,6 +319,7 @@
   }
 
   .activity-pill-sweep::after {
+    animation: none;
     display: none;
   }
 
