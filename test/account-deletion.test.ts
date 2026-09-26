@@ -45,7 +45,8 @@ function database(
             storage_assets_table: 1,
             document_objects_index: 1,
             storage_assets_index: 1,
-            pointer_indexes: 2
+            pointer_indexes: 2,
+            quota_triggers: 11
           };
         }
         if (query.includes('collaborator_count')) {

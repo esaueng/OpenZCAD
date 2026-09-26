@@ -41,6 +41,7 @@ interface ProjectObjectStorageReadinessRow {
   document_objects_index: number;
   storage_assets_index: number;
   pointer_indexes: number;
+  quota_triggers: number;
 }
 
 interface ProjectMeasurementReadinessRow {
@@ -53,9 +54,9 @@ interface ProjectMeasurementReadinessRow {
 const READY_ARTIFACT_UPLOAD_ACCOUNTING_SCHEMA = {
   usage_table: 1,
   parts_table: 1,
-  session_columns: 5,
+  session_columns: 7,
   indexes: 2,
-  triggers: 14
+  triggers: 15
 };
 
 const READY_STORAGE_ACCOUNTING_SCHEMA: StorageAccountingReadinessRow = {
@@ -71,7 +72,8 @@ const READY_PROJECT_OBJECT_STORAGE_SCHEMA: ProjectObjectStorageReadinessRow = {
   storage_assets_table: 1,
   document_objects_index: 1,
   storage_assets_index: 1,
-  pointer_indexes: 2
+  pointer_indexes: 2,
+  quota_triggers: 11
 };
 
 const READY_PROJECT_MEASUREMENT_SCHEMA: ProjectMeasurementReadinessRow = {
@@ -91,7 +93,8 @@ function storageAccountingDb(
   row: StorageAccountingReadinessRow | null = READY_STORAGE_ACCOUNTING_SCHEMA,
   failure?: Error,
   projectObjectRow: ProjectObjectStorageReadinessRow | null = READY_PROJECT_OBJECT_STORAGE_SCHEMA,
-  projectMeasurementRow: ProjectMeasurementReadinessRow | null = READY_PROJECT_MEASUREMENT_SCHEMA
+  projectMeasurementRow: ProjectMeasurementReadinessRow | null = READY_PROJECT_MEASUREMENT_SCHEMA,
+  artifactUploadRow: typeof READY_ARTIFACT_UPLOAD_ACCOUNTING_SCHEMA | null = READY_ARTIFACT_UPLOAD_ACCOUNTING_SCHEMA
 ) {
   const prepare = vi.fn((query: string) => ({
     first: vi.fn(async () => {
@@ -102,7 +105,7 @@ function storageAccountingDb(
         return projectObjectRow;
       }
       if (query.includes('artifact_account_usage')) {
-        return READY_ARTIFACT_UPLOAD_ACCOUNTING_SCHEMA;
+        return artifactUploadRow;
       }
       if (query.includes("pragma_table_info('project_measurements')")) {
         return projectMeasurementRow;
@@ -638,6 +641,34 @@ describe('worker api routes', () => {
       code: 'FEATURE_DISABLED'
     });
     expect(prepare).not.toHaveBeenCalled();
+  });
+
+  it('gates upload mutations until migration 0020 is ready and caches success', async () => {
+    const before = storageAccountingDb(
+      undefined,
+      undefined,
+      undefined,
+      undefined,
+      { ...READY_ARTIFACT_UPLOAD_ACCOUNTING_SCHEMA, session_columns: 6, triggers: 14 }
+    );
+    const beforeEnv = { ...env, DB: before.db };
+    const refused = await worker.fetch(post('/api/uploads', {}), beforeEnv);
+    expect(refused.status).toBe(503);
+    await expect(refused.json()).resolves.toEqual({
+      error: 'Artifact upload storage is temporarily unavailable.'
+    });
+
+    const after = storageAccountingDb();
+    const afterEnv = { ...env, DB: after.db };
+    const malformed = await worker.fetch(post('/api/uploads', {}), afterEnv);
+    expect(malformed.status).toBe(400);
+    const second = await worker.fetch(post('/api/uploads', {}), afterEnv);
+    expect(second.status).toBe(400);
+    expect(
+      after.prepare.mock.calls.filter(([query]) =>
+        query.includes('artifact_account_usage')
+      )
+    ).toHaveLength(1);
   });
 
   it('exposes public email-auth readiness without exposing secrets', async () => {
@@ -2630,7 +2661,8 @@ describe('worker api routes', () => {
         storage_assets_table: 0,
         document_objects_index: 0,
         storage_assets_index: 0,
-        pointer_indexes: 0
+        pointer_indexes: 0,
+        quota_triggers: 0
       }
     );
     const response = await worker.fetch(

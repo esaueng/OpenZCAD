@@ -102,26 +102,36 @@ interface ProjectMeasurementRow {
 
 async function currentRevision(
   db: D1Database,
-  projectId: string
+  projectId: string,
+  actorUserId: string
 ): Promise<number> {
   const row = await db
-    .prepare(`SELECT revision FROM project_measurements WHERE project_id = ?`)
-    .bind(projectId)
+    .prepare(
+      `SELECT revision FROM project_measurements WHERE project_id = ?
+       AND EXISTS (
+         SELECT 1 FROM projects WHERE id = ? AND (user_id = ? OR status != 'deleted')
+       )`
+    )
+    .bind(projectId, projectId, actorUserId)
     .first<{ revision: number }>();
   return row?.revision ?? 0;
 }
 
 export async function loadProjectMeasurements(
   db: D1Database,
-  projectId: string
+  projectId: string,
+  actorUserId: string
 ): Promise<ProjectMeasurementSnapshot> {
   const row = await db
     .prepare(
       `SELECT payload_json, revision
        FROM project_measurements
-       WHERE project_id = ?`
+       WHERE project_id = ?
+         AND EXISTS (
+           SELECT 1 FROM projects WHERE id = ? AND (user_id = ? OR status != 'deleted')
+         )`
     )
-    .bind(projectId)
+    .bind(projectId, projectId, actorUserId)
     .first<ProjectMeasurementRow>();
   if (!row) {
     return { revision: 0, record: null };
@@ -138,6 +148,7 @@ export async function loadProjectMeasurements(
 export async function saveProjectMeasurements(
   db: D1Database,
   projectId: string,
+  actorUserId: string,
   input: SaveProjectMeasurementsInput
 ): Promise<ProjectMeasurementSnapshot> {
   const payload = measurementJson(input.record);
@@ -148,21 +159,30 @@ export async function saveProjectMeasurements(
           .prepare(
             `INSERT INTO project_measurements
                (project_id, record_version, revision, payload_json, updated_at)
-             VALUES (?, ?, 1, ?, ?)
+             SELECT ?, ?, 1, ?, ? WHERE EXISTS (
+               SELECT 1 FROM projects WHERE id = ?
+                 AND (user_id = ? OR status != 'deleted')
+             )
              ON CONFLICT(project_id) DO NOTHING`
           )
           .bind(
             projectId,
             input.record.version,
             payload,
-            input.record.updatedAt
+            input.record.updatedAt,
+            projectId,
+            actorUserId
           )
           .run()
       : await db
           .prepare(
             `UPDATE project_measurements
              SET record_version = ?, revision = ?, payload_json = ?, updated_at = ?
-             WHERE project_id = ? AND revision = ?`
+             WHERE project_id = ? AND revision = ?
+               AND EXISTS (
+                 SELECT 1 FROM projects WHERE id = ?
+                   AND (user_id = ? OR status != 'deleted')
+               )`
           )
           .bind(
             input.record.version,
@@ -170,12 +190,14 @@ export async function saveProjectMeasurements(
             payload,
             input.record.updatedAt,
             projectId,
-            input.expectedRevision
+            input.expectedRevision,
+            projectId,
+            actorUserId
           )
           .run();
   if (result.meta?.changes !== 1) {
     throw new ProjectMeasurementRevisionConflictError(
-      await currentRevision(db, projectId)
+      await currentRevision(db, projectId, actorUserId)
     );
   }
   return { revision: nextRevision, record: input.record };
@@ -184,26 +206,31 @@ export async function saveProjectMeasurements(
 export async function deleteProjectMeasurements(
   db: D1Database,
   projectId: string,
+  actorUserId: string,
   expectedRevision: number
 ): Promise<void> {
   if (expectedRevision === 0) {
-    if ((await currentRevision(db, projectId)) === 0) {
+    if ((await currentRevision(db, projectId, actorUserId)) === 0) {
       return;
     }
     throw new ProjectMeasurementRevisionConflictError(
-      await currentRevision(db, projectId)
+      await currentRevision(db, projectId, actorUserId)
     );
   }
   const result = await db
     .prepare(
       `DELETE FROM project_measurements
-       WHERE project_id = ? AND revision = ?`
+       WHERE project_id = ? AND revision = ?
+         AND EXISTS (
+           SELECT 1 FROM projects WHERE id = ?
+             AND (user_id = ? OR status != 'deleted')
+         )`
     )
-    .bind(projectId, expectedRevision)
+    .bind(projectId, expectedRevision, projectId, actorUserId)
     .run();
   if (result.meta?.changes !== 1) {
     throw new ProjectMeasurementRevisionConflictError(
-      await currentRevision(db, projectId)
+      await currentRevision(db, projectId, actorUserId)
     );
   }
 }

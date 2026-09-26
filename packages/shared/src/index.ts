@@ -3022,6 +3022,11 @@ export const MAX_PERSISTED_DOCUMENT_BYTES = 1_500_000;
  */
 export const MAX_CLOUD_PROJECT_DOCUMENT_BYTES = 24 * 1024 * 1024;
 
+/** Account limits include projects in the recycle bin until hard deletion. */
+export const MAX_ACCOUNT_PROJECTS = 100;
+/** Stored R2 project documents and externalized source assets per owner. */
+export const MAX_ACCOUNT_PROJECT_STORAGE_BYTES = 2 * 1024 * 1024 * 1024;
+
 /** Serialized size of `document`, measured the way the store measures it. */
 export function persistedDocumentBytes(document: ProjectDocument): number {
   return new TextEncoder().encode(JSON.stringify(document)).byteLength;

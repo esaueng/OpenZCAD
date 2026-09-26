@@ -45,9 +45,9 @@ beforeEach(() => {
   sqlite = new DatabaseSync(':memory:');
   sqlite.exec(`PRAGMA foreign_keys=ON;
     CREATE TABLE users (id TEXT PRIMARY KEY);
-    CREATE TABLE projects (id TEXT PRIMARY KEY, document_version INTEGER);
+    CREATE TABLE projects (id TEXT PRIMARY KEY, user_id TEXT NOT NULL, status TEXT NOT NULL DEFAULT 'active', document_version INTEGER);
     INSERT INTO users VALUES ('user_a'), ('user_b');
-    INSERT INTO projects VALUES ('project_a', 2), ('project_b', 2);`);
+    INSERT INTO projects VALUES ('project_a', 'user_a', 'active', 2), ('project_b', 'user_a', 'active', 2);`);
   sqlite.exec(
     readFileSync(
       new URL(
@@ -85,6 +85,22 @@ beforeEach(() => {
 afterEach(() => sqlite.close());
 
 describe('private workspace sessions', () => {
+  it('hides trashed sessions from members while preserving owner restore access', async () => {
+    await saveWorkspaceSession(db, 'user_a', input());
+    await saveWorkspaceSession(db, 'user_b', input());
+    sqlite.exec("UPDATE projects SET status='deleted' WHERE id='project_a'");
+
+    expect(await loadWorkspaceSessions(db, 'user_a', 'project_a')).toHaveLength(1);
+    expect(await loadWorkspaceSessions(db, 'user_b', 'project_a')).toEqual([]);
+    await expect(
+      saveWorkspaceSession(db, 'user_b', input(2))
+    ).rejects.toThrow('Sync the project');
+    await saveWorkspaceSession(db, 'user_a', input(2));
+
+    sqlite.exec("UPDATE projects SET status='archived' WHERE id='project_a'");
+    expect(await loadWorkspaceSessions(db, 'user_b', 'project_a')).toHaveLength(1);
+  });
+
   it('isolates accounts and projects and ignores retries and out-of-order updates', async () => {
     await saveWorkspaceSession(db, 'user_a', input(2));
     await saveWorkspaceSession(db, 'user_a', input(1));

@@ -2,7 +2,7 @@ import { readFileSync, readdirSync } from 'node:fs';
 import { DatabaseSync } from 'node:sqlite';
 import { beforeEach, describe, expect, it } from 'vitest';
 import { D1R2PersistenceService } from '@openzcad/cloudflare-adapters';
-import { ArtifactQuotaError } from '@openzcad/persistence';
+import { ArtifactQuotaError, ProjectNotFoundError } from '@openzcad/persistence';
 import {
   MAX_ACCOUNT_ARTIFACT_BYTES,
   MAX_ACTIVE_ARTIFACT_UPLOAD_SESSIONS,
@@ -27,6 +27,7 @@ interface SqliteStatement extends D1PreparedStatement {
 class SqliteD1 {
   failNextBatch = false;
   failAfterRun: RegExp | null = null;
+  beforeRun: ((query: string) => void) | null = null;
 
   constructor(readonly sqlite: DatabaseSync) {}
 
@@ -43,6 +44,7 @@ class SqliteD1 {
         results: this.sqlite.prepare(query).all(...(bindings as never[]))
       }),
       run: async () => {
+        this.beforeRun?.(query);
         const result = execute();
         const response = {
           success: true,
@@ -93,6 +95,9 @@ class FakeR2 {
   failUploadBeforeR2 = false;
   failDeleteCount = 0;
   throwAfterComplete = false;
+  beforePartCommit: (() => Promise<void>) | null = null;
+  beforeCompleteCommit: (() => Promise<void>) | null = null;
+  beforeCreate: (() => Promise<void>) | null = null;
   private nextUpload = 0;
   private nextEtag = 0;
 
@@ -121,6 +126,7 @@ class FakeR2 {
       key,
       uploadId,
       uploadPart: async (partNumber: number, body: unknown) => {
+        await this.beforePartCommit?.();
         if (this.failUploadBeforeR2) {
           this.failUploadBeforeR2 = false;
           throw new Error('Worker stopped before the R2 part write');
@@ -135,6 +141,7 @@ class FakeR2 {
       complete: async (
         requested: Array<{ partNumber: number; etag: string }>
       ) => {
+        await this.beforeCompleteCommit?.();
         const upload = this.multipart.get(uploadId);
         if (!upload || upload.key !== key) throw this.missing();
         const chunks = requested.map((part) => {
@@ -169,6 +176,7 @@ class FakeR2 {
 
   readonly bucket = {
     createMultipartUpload: async (key: string) => {
+      await this.beforeCreate?.();
       const uploadId = `multipart-${++this.nextUpload}`;
       this.multipart.set(uploadId, { key, parts: new Map() });
       return this.resumed(key, uploadId);
@@ -178,6 +186,12 @@ class FakeR2 {
     head: async (key: string) => {
       const body = this.objects.get(key);
       return body ? { key, size: body.byteLength } : null;
+    },
+    get: async (key: string) => {
+      const body = this.objects.get(key);
+      return body
+        ? { key, size: body.byteLength, arrayBuffer: async () => body.slice().buffer }
+        : null;
     },
     put: async (key: string, body: unknown) => {
       const bytes = this.bytes(body);
@@ -194,7 +208,7 @@ class FakeR2 {
   } as unknown as R2Bucket;
 }
 
-function migrationFiles(through = 17, after = 0): string[] {
+function migrationFiles(through = 20, after = 0): string[] {
   return readdirSync(MIGRATIONS)
     .filter((name) => {
       const number = Number.parseInt(name.slice(0, 4), 10);
@@ -203,7 +217,7 @@ function migrationFiles(through = 17, after = 0): string[] {
     .sort();
 }
 
-function applyMigrations(db: DatabaseSync, through = 17, after = 0): void {
+function applyMigrations(db: DatabaseSync, through = 20, after = 0): void {
   for (const file of migrationFiles(through, after)) {
     db.exec('BEGIN');
     try {
@@ -258,6 +272,14 @@ function uploadRow(db: DatabaseSync, sessionId: string) {
     | undefined;
 }
 
+function deferred() {
+  let resolve!: () => void;
+  const promise = new Promise<void>((done) => {
+    resolve = done;
+  });
+  return { promise, resolve };
+}
+
 async function createMultipart(
   service: D1R2PersistenceService,
   owner = OWNER,
@@ -295,6 +317,351 @@ beforeEach(() => {
 });
 
 describe('durable multipart quota accounting', () => {
+  it('rechecks project trash state when an editor inserts a session', async () => {
+    sqlite.prepare(
+      `INSERT INTO project_members
+       (project_id, user_id, role, added_by_user_id, created_at, updated_at)
+       VALUES (?, ?, 'editor', ?, 1, 1)`
+    ).run(PROJECT, OTHER_OWNER, OWNER);
+    const sharingService = new D1R2PersistenceService({
+      DB: d1.database,
+      ARTIFACTS: r2.bucket,
+      PROJECT_SHARING_ENABLED: 'true'
+    });
+    d1.beforeRun = (query) => {
+      if (query.includes('INSERT INTO upload_sessions')) {
+        d1.beforeRun = null;
+        sqlite.prepare(`UPDATE projects SET status = 'deleted' WHERE id = ?`).run(PROJECT);
+      }
+    };
+    await expect(
+      sharingService.createUploadSession(OTHER_OWNER, {
+        projectId: PROJECT,
+        fileName: 'blocked.step',
+        contentType: 'model/step',
+        kind: 'snapshot'
+      })
+    ).rejects.toThrow(ProjectNotFoundError);
+    expect(
+      sqlite.prepare(`SELECT COUNT(*) AS count FROM upload_sessions`).get()
+    ).toMatchObject({ count: 0 });
+    await expect(
+      sharingService.createUploadSession(OWNER, {
+        projectId: PROJECT,
+        fileName: 'owner.step',
+        contentType: 'model/step',
+        kind: 'snapshot'
+      })
+    ).resolves.toHaveProperty('session');
+  });
+
+  it('resumes a single PUT after a transient R2 part failure without double reservation', async () => {
+    const { session } = await service.createUploadSession(OWNER, {
+      projectId: PROJECT,
+      fileName: 'retry.step',
+      contentType: 'model/step',
+      kind: 'snapshot'
+    });
+    r2.failUploadBeforeR2 = true;
+    await expect(
+      service.putUpload(OWNER, session.uploadSessionId, new ArrayBuffer(6))
+    ).rejects.toThrow('before the R2 part write');
+    expect(uploadRow(sqlite, session.uploadSessionId)).toMatchObject({
+      reservation_state: 'uploading',
+      reserved_bytes: 6
+    });
+    await expect(
+      service.putUpload(OWNER, session.uploadSessionId, new ArrayBuffer(6))
+    ).resolves.toBeUndefined();
+    expect(uploadRow(sqlite, session.uploadSessionId)).toMatchObject({
+      reservation_state: 'completed',
+      reserved_bytes: 6
+    });
+    expect(usage(sqlite)?.reserved_bytes).toBe(6);
+  });
+
+  it('resumes a single PUT after the part ETag response is lost', async () => {
+    const { session } = await service.createUploadSession(OWNER, {
+      projectId: PROJECT,
+      fileName: 'retry.step',
+      contentType: 'model/step',
+      kind: 'snapshot'
+    });
+    d1.failAfterRun = /SET etag = \?/;
+    await expect(
+      service.putUpload(OWNER, session.uploadSessionId, new ArrayBuffer(6))
+    ).rejects.toThrow('D1 response was lost after commit');
+    expect(uploadRow(sqlite, session.uploadSessionId)).toMatchObject({
+      reservation_state: 'uploading',
+      reserved_bytes: 6
+    });
+    await expect(
+      service.putUpload(OWNER, session.uploadSessionId, new ArrayBuffer(6))
+    ).resolves.toBeUndefined();
+    expect(usage(sqlite)?.reserved_bytes).toBe(6);
+  });
+
+  it('reconciles a lost single-PUT completion response on retry', async () => {
+    const { session } = await service.createUploadSession(OWNER, {
+      projectId: PROJECT,
+      fileName: 'retry.step',
+      contentType: 'model/step',
+      kind: 'snapshot'
+    });
+    d1.failAfterRun = /SET reservation_state = 'completed'/;
+    await expect(
+      service.putUpload(OWNER, session.uploadSessionId, new ArrayBuffer(7))
+    ).rejects.toThrow('D1 response was lost after commit');
+    expect(uploadRow(sqlite, session.uploadSessionId)).toMatchObject({
+      reservation_state: 'completed',
+      reserved_bytes: 7
+    });
+    await expect(
+      service.putUpload(OWNER, session.uploadSessionId, new ArrayBuffer(7))
+    ).resolves.toBeUndefined();
+    expect(usage(sqlite)?.reserved_bytes).toBe(7);
+  });
+
+  it('refuses to finalize an unreserved object on an open session', async () => {
+    const { session } = await service.createUploadSession(OWNER, {
+      projectId: PROJECT,
+      fileName: 'old.step',
+      contentType: 'model/step',
+      kind: 'snapshot'
+    });
+    r2.objects.set(session.objectKey, new Uint8Array(5));
+    await expect(
+      service.finalizeArtifact(OWNER, {
+        projectId: PROJECT,
+        uploadSessionId: session.uploadSessionId,
+        artifactId: session.artifactId
+      })
+    ).resolves.toBeNull();
+    expect(
+      sqlite.prepare(`SELECT COUNT(*) AS count FROM artifacts`).get()
+    ).toMatchObject({ count: 0 });
+    expect(usage(sqlite)).toMatchObject({
+      finalized_bytes: 0,
+      reserved_bytes: 0,
+      active_sessions: 1
+    });
+  });
+
+  it('lets only one upload mode claim an open session', async () => {
+    const { session } = await service.createUploadSession(OWNER, {
+      projectId: PROJECT,
+      fileName: 'assembly.step',
+      contentType: 'model/step',
+      kind: 'snapshot'
+    });
+    const entered = deferred();
+    const release = deferred();
+    r2.beforeCreate = async () => {
+      entered.resolve();
+      await release.promise;
+    };
+    const single = service.putUpload(OWNER, session.uploadSessionId, new ArrayBuffer(6));
+    await entered.promise;
+    r2.beforeCreate = null;
+    const { uploadId } = await service.createMultipartUpload(
+      OWNER,
+      session.uploadSessionId
+    );
+    release.resolve();
+    await expect(single).rejects.toThrow('changed during upload');
+    expect(r2.multipart.size).toBe(1);
+    expect(uploadRow(sqlite, session.uploadSessionId)).toMatchObject({
+      reservation_state: 'uploading',
+      multipart_upload_id: uploadId,
+      reserved_bytes: 0
+    });
+    await service.abortMultipartUpload(OWNER, session.uploadSessionId, uploadId);
+    expect(r2.multipart.size).toBe(0);
+  });
+
+  it('reserves a single PUT before R2 and fences a stale concurrent retry', async () => {
+    const { session } = await service.createUploadSession(OWNER, {
+      projectId: PROJECT,
+      fileName: 'small.step',
+      contentType: 'model/step',
+      kind: 'snapshot'
+    });
+    const entered = deferred();
+    const release = deferred();
+    let partCalls = 0;
+    r2.beforePartCommit = async () => {
+      partCalls += 1;
+      if (partCalls === 1) {
+        entered.resolve();
+        await release.promise;
+      }
+    };
+    const pending = service.putUpload(OWNER, session.uploadSessionId, new ArrayBuffer(9));
+    await entered.promise;
+    expect(uploadRow(sqlite, session.uploadSessionId)).toMatchObject({
+      reservation_state: 'uploading',
+      reserved_bytes: 9
+    });
+    expect(usage(sqlite)?.reserved_bytes).toBe(9);
+    const internalUploadId = uploadRow(sqlite, session.uploadSessionId)?.multipart_upload_id;
+    expect(internalUploadId).toBeTruthy();
+    await expect(
+      service.createMultipartUpload(OWNER, session.uploadSessionId)
+    ).rejects.toThrow('single upload storage');
+    await expect(
+      service.putUploadPart(
+        OWNER,
+        session.uploadSessionId,
+        internalUploadId!,
+        1,
+        new ArrayBuffer(9)
+      )
+    ).rejects.toThrow('Multipart upload was not found');
+    await expect(
+      service.completeMultipartUpload(OWNER, session.uploadSessionId, {
+        uploadId: internalUploadId!,
+        parts: []
+      })
+    ).rejects.toThrow('Multipart upload was not found');
+    await expect(
+      service.abortMultipartUpload(OWNER, session.uploadSessionId, internalUploadId!)
+    ).rejects.toThrow('single upload storage');
+    const request = {
+      projectId: PROJECT,
+      uploadSessionId: session.uploadSessionId,
+      artifactId: session.artifactId
+    };
+    await expect(service.finalizeArtifact(OWNER, request)).resolves.toBeNull();
+    await expect(
+      service.putUpload(OWNER, session.uploadSessionId, new ArrayBuffer(9))
+    ).resolves.toBeUndefined();
+    release.resolve();
+    await expect(pending).rejects.toThrow('NoSuchUpload');
+    expect(uploadRow(sqlite, session.uploadSessionId)).toMatchObject({
+      reservation_state: 'completed',
+      reserved_bytes: 9
+    });
+    await expect(
+      service.createMultipartUpload(OWNER, session.uploadSessionId)
+    ).rejects.toThrow('single upload storage');
+    await expect(
+      service.putUploadPart(
+        OWNER,
+        session.uploadSessionId,
+        internalUploadId!,
+        1,
+        new ArrayBuffer(9)
+      )
+    ).rejects.toThrow('Multipart upload was not found');
+    await expect(
+      service.completeMultipartUpload(OWNER, session.uploadSessionId, {
+        uploadId: internalUploadId!,
+        parts: []
+      })
+    ).rejects.toThrow('Multipart upload was not found');
+    await expect(
+      service.abortMultipartUpload(OWNER, session.uploadSessionId, internalUploadId!)
+    ).rejects.toThrow('single upload storage');
+    await expect(
+      service.putUpload(OWNER, session.uploadSessionId, new ArrayBuffer(9))
+    ).resolves.toBeUndefined();
+    await expect(
+      service.putUpload(OWNER, session.uploadSessionId, new Uint8Array(9).fill(1).buffer)
+    ).rejects.toThrow('already in use');
+    expect((await service.finalizeArtifact(OWNER, request))?.bytes).toBe(9);
+    expect(usage(sqlite)).toMatchObject({
+      finalized_bytes: 9,
+      reserved_bytes: 0,
+      active_sessions: 0
+    });
+  });
+
+  it('aborts a delayed single part before expiry releases its reservation', async () => {
+    const { session } = await service.createUploadSession(OWNER, {
+      projectId: PROJECT,
+      fileName: 'small.step',
+      contentType: 'model/step',
+      kind: 'snapshot'
+    });
+    const entered = deferred();
+    const release = deferred();
+    r2.beforePartCommit = async () => {
+      entered.resolve();
+      await release.promise;
+    };
+    const pending = service.putUpload(OWNER, session.uploadSessionId, new ArrayBuffer(8));
+    await entered.promise;
+    sqlite
+      .prepare(`UPDATE upload_sessions SET expires_at = ? WHERE id = ?`)
+      .run('2020-01-01T00:00:00.000Z', session.uploadSessionId);
+    await expect(service.purgeExpiredUploadSessions()).resolves.toBe(1);
+    release.resolve();
+    await expect(pending).rejects.toThrow('NoSuchUpload');
+    expect(r2.objects.size).toBe(0);
+    expect(r2.multipart.size).toBe(0);
+    expect(uploadRow(sqlite, session.uploadSessionId)).toBeUndefined();
+    expect(usage(sqlite)).toMatchObject({ reserved_bytes: 0, active_sessions: 0 });
+  });
+
+  it('keeps a completing single PUT indexed until R2 completion settles', async () => {
+    const { session } = await service.createUploadSession(OWNER, {
+      projectId: PROJECT,
+      fileName: 'thumbnail.webp',
+      contentType: 'image/webp',
+      kind: 'thumbnail'
+    });
+    const entered = deferred();
+    const release = deferred();
+    r2.beforeCompleteCommit = async () => {
+      entered.resolve();
+      await release.promise;
+    };
+    const pending = service.putUpload(OWNER, session.uploadSessionId, new ArrayBuffer(7));
+    await entered.promise;
+    sqlite
+      .prepare(`UPDATE upload_sessions SET expires_at = ? WHERE id = ?`)
+      .run('2020-01-01T00:00:00.000Z', session.uploadSessionId);
+    await expect(service.purgeExpiredUploadSessions()).resolves.toBe(0);
+    expect(uploadRow(sqlite, session.uploadSessionId)).toMatchObject({
+      reservation_state: 'completing',
+      reserved_bytes: 7
+    });
+    release.resolve();
+    await pending;
+    expect(r2.objects.size).toBe(1);
+    await expect(service.purgeExpiredUploadSessions()).resolves.toBe(1);
+    expect(r2.objects.size).toBe(0);
+    expect(usage(sqlite)).toMatchObject({ reserved_bytes: 0, active_sessions: 0 });
+  });
+
+  it('aborts a stale completion before deleting its R2 index', async () => {
+    const { session } = await service.createUploadSession(OWNER, {
+      projectId: PROJECT,
+      fileName: 'small.step',
+      contentType: 'model/step',
+      kind: 'snapshot'
+    });
+    const entered = deferred();
+    const release = deferred();
+    r2.beforeCompleteCommit = async () => {
+      entered.resolve();
+      await release.promise;
+    };
+    const pending = service.putUpload(OWNER, session.uploadSessionId, new ArrayBuffer(6));
+    await entered.promise;
+    sqlite
+      .prepare(
+        `UPDATE upload_sessions
+         SET expires_at = ?, completion_started_at = 0 WHERE id = ?`
+      )
+      .run('2020-01-01T00:00:00.000Z', session.uploadSessionId);
+    await expect(service.purgeExpiredUploadSessions()).resolves.toBe(1);
+    release.resolve();
+    await expect(pending).rejects.toThrow('NoSuchUpload');
+    expect(r2.objects.size).toBe(0);
+    expect(r2.multipart.size).toBe(0);
+    expect(usage(sqlite)).toMatchObject({ reserved_bytes: 0, active_sessions: 0 });
+  });
   it('atomically admits only one concurrent session near quota and isolates accounts', async () => {
     sqlite
       .prepare(
@@ -772,6 +1139,25 @@ describe('durable multipart quota accounting', () => {
       active_sessions: 0
     });
   });
+
+  it('allows fenced account erasure to clean a single-part reservation', async () => {
+    const { session } = await service.createUploadSession(OWNER, {
+      projectId: PROJECT,
+      fileName: 'thumbnail.webp',
+      contentType: 'image/webp',
+      kind: 'thumbnail'
+    });
+    await service.putUpload(OWNER, session.uploadSessionId, new ArrayBuffer(5));
+    sqlite
+      .prepare(
+        `INSERT INTO account_erasure_requests
+         (user_id, scope, started_at, updated_at) VALUES (?, 'projects', 1, 1)`
+      )
+      .run(OWNER);
+    await expect(service.deleteOwnedProjects(OWNER)).resolves.toEqual([PROJECT]);
+    expect(r2.objects.size).toBe(0);
+    expect(usage(sqlite)).toMatchObject({ reserved_bytes: 0, active_sessions: 0 });
+  });
 });
 
 describe('migration 0017 legacy handling', () => {
@@ -826,6 +1212,7 @@ describe('migration 0017 legacy handling', () => {
         .run(PROJECT)
     ).toThrow('artifact_upload_owner_required');
 
+    applyMigrations(db, 20, 17);
     const adapter = new SqliteD1(db);
     const bucket = new FakeR2();
     const legacyService = new D1R2PersistenceService({
@@ -860,5 +1247,51 @@ describe('migration 0017 legacy handling', () => {
     expect(
       db.prepare(`SELECT id FROM upload_sessions WHERE id = 'bad_upload'`).get()
     ).toMatchObject({ id: 'bad_upload' });
+  });
+});
+
+describe('migration 0020 single-part compatibility', () => {
+  it('retires old open sessions without shortening their cleanup window', async () => {
+    const db = new DatabaseSync(':memory:');
+    applyMigrations(db, 19);
+    seedAccount(db, OWNER, PROJECT);
+    const expiry = '2030-01-01T00:00:00.000Z';
+    db.prepare(
+      `INSERT INTO upload_sessions
+       (id, artifact_id, project_id, object_key, file_name, content_type,
+        expires_at, kind, metadata_json, owner_user_id, reservation_state)
+       VALUES ('old_open', 'old_artifact', ?, 'old/key', 'old.step',
+        'model/step', ?, 'snapshot', '{}', ?, 'open')`
+    ).run(PROJECT, expiry, OWNER);
+
+    applyMigrations(db, 20, 19);
+    expect(
+      db.prepare(
+        `SELECT reservation_state, expires_at, single_part
+         FROM upload_sessions WHERE id = 'old_open'`
+      ).get()
+    ).toMatchObject({
+      reservation_state: 'legacy',
+      expires_at: expiry,
+      single_part: 0
+    });
+    const migrated = new D1R2PersistenceService({
+      DB: new SqliteD1(db).database,
+      ARTIFACTS: new FakeR2().bucket
+    });
+    await expect(migrated.purgeExpiredUploadSessions()).resolves.toBe(0);
+    expect(
+      db.prepare(`SELECT id FROM upload_sessions WHERE id = 'old_open'`).get()
+    ).toMatchObject({ id: 'old_open' });
+    expect(() =>
+      db.prepare(
+        `INSERT INTO upload_sessions
+         (id, artifact_id, project_id, object_key, file_name, content_type,
+          expires_at, kind, metadata_json, owner_user_id, reservation_state)
+         VALUES ('old_worker_new', 'old_worker_artifact', ?, 'old/new', 'old.step',
+          'model/step', ?, 'snapshot', '{}', ?, 'open')`
+      ).run(PROJECT, expiry, OWNER)
+    ).toThrow('artifact_upload_protocol_version_required');
+    db.close();
   });
 });

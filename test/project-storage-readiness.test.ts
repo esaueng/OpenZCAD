@@ -13,7 +13,8 @@ const readyRow = {
   storage_assets_table: 1,
   document_objects_index: 1,
   storage_assets_index: 1,
-  pointer_indexes: 2
+  pointer_indexes: 2,
+  quota_triggers: 11
 };
 
 function database(row: typeof readyRow | null = readyRow) {
@@ -43,6 +44,13 @@ describe('R2 project storage readiness', () => {
 
   it('fails closed for a partial migration', async () => {
     const { db } = database({ ...readyRow, storage_assets_table: 0 });
+    await expect(isProjectObjectStorageReady(db, bucket())).resolves.toBe(
+      false
+    );
+  });
+
+  it('fails closed before the account quota triggers are installed', async () => {
+    const { db } = database({ ...readyRow, quota_triggers: 10 });
     await expect(isProjectObjectStorageReady(db, bucket())).resolves.toBe(
       false
     );
@@ -85,9 +93,9 @@ describe('artifact upload accounting readiness', () => {
   const ready = {
     usage_table: 1,
     parts_table: 1,
-    session_columns: 5,
+    session_columns: 7,
     indexes: 2,
-    triggers: 14
+    triggers: 15
   };
 
   it('requires every reservation table, column, index, and trigger', async () => {
@@ -101,12 +109,24 @@ describe('artifact upload accounting readiness', () => {
     expect(query).toContain('artifact_account_usage');
     expect(query).toContain('artifact_upload_metadata_before_update');
     expect(query).toContain('artifact_upload_part_after_delete');
+    expect(query).toContain('single_part');
+    expect(query).toContain('upload_protocol_version');
+    expect(query).toContain('artifact_upload_protocol_before_insert');
   });
 
   it('fails closed for incomplete upload accounting', async () => {
     const db = {
       prepare: vi.fn(() => ({
-        first: vi.fn(async () => ({ ...ready, triggers: 13 }))
+        first: vi.fn(async () => ({ ...ready, triggers: 14 }))
+      }))
+    } as unknown as D1Database;
+    await expect(isArtifactUploadAccountingReady(db)).resolves.toBe(false);
+  });
+
+  it('fails closed before the single-part marker is installed', async () => {
+    const db = {
+      prepare: vi.fn(() => ({
+        first: vi.fn(async () => ({ ...ready, session_columns: 6 }))
       }))
     } as unknown as D1Database;
     await expect(isArtifactUploadAccountingReady(db)).resolves.toBe(false);
