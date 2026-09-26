@@ -1,15 +1,20 @@
 import { expect, test } from '@playwright/test';
-import { createProject, stubApi, stubAssistant } from './openzcad-fixtures';
+import {
+  askAssistant,
+  createProject,
+  promptField,
+  stubApi,
+  stubAssistant
+} from './openzcad-fixtures';
 
 /*
-  Search and the assistant are one entry point on the quiet stage: the search
-  bar is the command palette's own field, the Ask button sits inside it, a
-  question typed into it goes to the conversation, and both the command list
-  and the conversation stand on the bar instead of covering or taking a
-  column from the model. Search also names what the model is made
-  of, so a feature can be reached by name.
+  Search and the assistant are one prompt line on the quiet stage: plain
+  words typed into it are a question for the assistant, a leading slash
+  lists the commands, and both the command list and the conversation stand
+  on the bar instead of covering or taking a column from the model. Search
+  also names what the model is made of, so a feature can be reached by name.
 */
-test('a question typed into search goes to the floating assistant', async ({
+test('a question typed into the prompt goes to the stream standing on it', async ({
   page
 }) => {
   await page.setViewportSize({ width: 1440, height: 900 });
@@ -17,24 +22,22 @@ test('a question typed into search goes to the floating assistant', async ({
   await stubAssistant(page);
   await createProject(page, 'Ask Part');
 
-  // Closed, the assistant is the Ask button inside the search bar.
-  const ask = page.locator('.command-bar-row .assistant-launcher');
-  await expect(ask).toBeVisible({ timeout: 30_000 });
-  await expect(ask).toHaveText(/Ask/);
+  // Tucked away, the assistant is nothing but the prompt line.
+  const search = promptField(page);
+  await expect(search).toBeVisible({ timeout: 30_000 });
+  await expect(search).toHaveAttribute(
+    'placeholder',
+    'Ask about the model, or / for a command'
+  );
+  await expect(page.locator('.assistant-panel')).toHaveCount(0);
   const viewerBefore = await page.locator('.viewer-area').boundingBox();
 
-  const search = page.getByRole('combobox', { name: 'Search commands' });
+  // Plain words never list commands; nothing modal covers the model.
   await search.fill('Add a 10 mm cube');
-  // The list rises from the bar itself; nothing modal covers the model.
-  const list = page.getByRole('listbox', { name: 'Commands' });
-  await expect(list).toBeVisible();
+  await expect(page.getByRole('listbox', { name: 'Commands' })).toHaveCount(0);
   await expect(page.getByRole('dialog')).toHaveCount(0);
-  const listBox = await list.boundingBox();
-  const barBeforeAsk = await page.locator('.command-bar').boundingBox();
-  expect(listBox!.y + listBox!.height).toBeLessThanOrEqual(barBeforeAsk!.y);
-  await page.getByRole('option', { name: /Ask the assistant/ }).click();
+  await search.press('Enter');
   await expect(search).toHaveValue('');
-  await expect(search).toHaveAttribute('aria-expanded', 'false');
 
   const panel = page.locator('.assistant-panel');
   await expect(panel).toBeVisible();
@@ -44,21 +47,30 @@ test('a question typed into search goes to the floating assistant', async ({
   await expect(page.locator('.assistant-card.proposal')).toContainText(
     'Add a 10 mm cube.'
   );
-  // Sent, not left waiting in the composer.
-  await expect(page.getByLabel('CAD change request')).toHaveValue('');
 
-  // It floats: the model keeps its width, and the conversation stands on the
-  // search bar, whose Ask button it replaces while open.
+  // It floats: the model keeps its width, and the stream stands on the
+  // prompt line with no second field of its own.
   const viewerAfter = await page.locator('.viewer-area').boundingBox();
   expect(Math.abs(viewerAfter!.width - viewerBefore!.width)).toBeLessThan(1);
   const panelBox = await panel.boundingBox();
   const barBox = await page.locator('.command-bar').boundingBox();
-  expect(panelBox!.y + panelBox!.height).toBeLessThanOrEqual(barBox!.y);
-  await expect(ask).toHaveCount(0);
+  expect(panelBox!.y + panelBox!.height).toBeLessThanOrEqual(barBox!.y + 0.5);
+  await expect(panel.locator('textarea')).toHaveCount(0);
+
+  // The proposal waiting at the foot of the stream is driven from the
+  // empty prompt: Enter applies it.
+  await expect(
+    page.getByRole('button', { name: 'Apply', exact: true })
+  ).toBeVisible();
+  await search.focus();
+  await search.press('Enter');
+  await expect(page.locator('.assistant-card.proposal.applied')).toContainText(
+    'Add a 10 mm cube.'
+  );
 
   await page.getByRole('button', { name: 'Collapse the assistant' }).click();
   await expect(panel).toHaveCount(0);
-  await expect(ask).toBeVisible();
+  await expect(search).toBeVisible();
 });
 
 test('search names a feature and opens it in the drawer', async ({ page }) => {
@@ -73,7 +85,7 @@ test('search names a feature and opens it in the drawer', async ({ page }) => {
   await expect(page.getByRole('button', { name: /^Fillet/ })).toBeEnabled();
   await expect(page.locator('.model-drawer-float')).toHaveCount(0);
 
-  await page.getByRole('combobox', { name: 'Search commands' }).fill('base');
+  await promptField(page).fill('/base');
   await page
     .getByRole('option')
     .filter({ hasText: 'Base plate' })
@@ -91,7 +103,7 @@ test('search names a feature and opens it in the drawer', async ({ page }) => {
   ).toBeVisible();
 });
 
-test('Tab turns the search bar into a question for the assistant', async ({
+test('a slash lists commands with ghost completion, and Tab accepts it', async ({
   page
 }) => {
   await page.setViewportSize({ width: 1440, height: 900 });
@@ -99,27 +111,32 @@ test('Tab turns the search bar into a question for the assistant', async ({
   await stubAssistant(page);
   await createProject(page, 'Tab Part');
 
-  const search = page.getByRole('combobox', { name: 'Search commands' });
-  await expect(
-    page.locator('.command-bar-row .assistant-launcher')
-  ).toBeVisible({ timeout: 30_000 });
+  const search = promptField(page);
+  await expect(search).toBeVisible({ timeout: 30_000 });
   // ⌘K focuses the bar in place rather than opening a dialog over the model.
   await page.locator('.viewer-area').hover();
   await page.keyboard.press('Control+k');
   await expect(search).toBeFocused();
-  await expect(page.getByRole('listbox', { name: 'Commands' })).toBeVisible();
+  await expect(page.getByRole('listbox', { name: 'Commands' })).toHaveCount(0);
 
-  // "box" names a command, so Enter would run it; Tab makes it a question.
-  await search.fill('box');
+  // "/bo" is the start of Box: the rest shows as a ghost, Tab takes it.
+  await search.pressSequentially('/bo');
+  await expect(page.getByRole('listbox', { name: 'Commands' })).toBeVisible();
+  await expect(page.locator('.command-bar-ghost')).toContainText('/box', {
+    ignoreCase: true
+  });
   await page.keyboard.press('Tab');
   await expect(search).toBeFocused();
-  await expect(page.getByRole('listbox', { name: 'Commands' })).toHaveCount(0);
-  await search.fill('Add a 10 mm cube');
+  await expect(search).toHaveValue('/Box');
   await page.keyboard.press('Enter');
+  await expect(
+    page.getByRole('region', { name: 'Box operation' })
+  ).toBeVisible();
+  await page.keyboard.press('Escape');
 
-  await expect(page.locator('.assistant-thread')).toContainText(
-    'Add a 10 mm cube'
-  );
+  // The same words without the slash are a question.
+  await askAssistant(page, 'box');
+  await expect(page.locator('.assistant-thread')).toContainText('box');
   await expect(page.getByRole('region', { name: 'Box operation' })).toHaveCount(
     0
   );

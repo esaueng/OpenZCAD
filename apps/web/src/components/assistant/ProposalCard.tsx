@@ -22,6 +22,12 @@ interface ProposalCardProps {
   busy: boolean;
   /** This card's own patch is going through the kernel right now. */
   applying?: boolean;
+  /**
+   * The prompt line's keys act on this card: Enter applies, `p` previews,
+   * Escape rejects. Only the newest open proposal is keyed, and its actions
+   * say so.
+   */
+  keyed?: boolean;
   onPreview(): void;
   onApply(): void;
   onReject(): void;
@@ -33,11 +39,18 @@ const CONFIDENCE_LABEL = {
   unreadable: 'unreadable'
 } as const;
 
+/**
+ * A proposal as a block in the stream: its state as a label, the summary,
+ * what was read from a drawing, the operations behind a disclosure, and
+ * three text actions. The same preview, apply and reject path as before;
+ * only the chrome is gone.
+ */
 export function ProposalCard({
   entry,
   previewing,
   busy,
   applying = false,
+  keyed = false,
   onPreview,
   onApply,
   onReject
@@ -63,7 +76,7 @@ export function ProposalCard({
           ? 'Applied'
           : entry.status === 'rejected'
             ? 'Rejected'
-            : 'Proposed change'}
+            : 'Proposal'}
         {previewing && (
           <span className="assistant-live-pill">
             <Eye size={10} aria-hidden="true" />
@@ -78,7 +91,7 @@ export function ProposalCard({
         // card stops competing with the live turn below it.
         <span className="assistant-card-note">
           {entry.status === 'applied'
-            ? 'This change is in the document history — undo reverses it.'
+            ? 'In the document history — undo reverses it.'
             : 'Nothing was changed.'}
         </span>
       )}
@@ -182,25 +195,11 @@ export function ProposalCard({
         <div className="assistant-card-actions">
           <button
             type="button"
-            className={previewing ? 'active' : ''}
-            disabled={busy}
-            onClick={onPreview}
-          >
-            {previewing ? (
-              <EyeOff size={13} aria-hidden="true" />
-            ) : (
-              <Eye size={13} aria-hidden="true" />
-            )}
-            <StableLabel reserve={['Hide preview', 'Preview']}>
-              {previewing ? 'Hide preview' : 'Preview'}
-            </StableLabel>
-          </button>
-          <button
-            type="button"
             className="assistant-primary"
             disabled={busy}
             onClick={onApply}
           >
+            {keyed && <kbd aria-hidden="true">⏎</kbd>}
             {applying ? (
               <LoaderCircle size={13} aria-hidden="true" className="spin" />
             ) : (
@@ -210,7 +209,24 @@ export function ProposalCard({
               {applying ? 'Applying…' : 'Apply'}
             </StableLabel>
           </button>
+          <button
+            type="button"
+            className={previewing ? 'active' : ''}
+            disabled={busy}
+            onClick={onPreview}
+          >
+            {keyed && <kbd aria-hidden="true">p</kbd>}
+            {previewing ? (
+              <EyeOff size={13} aria-hidden="true" />
+            ) : (
+              <Eye size={13} aria-hidden="true" />
+            )}
+            <StableLabel reserve={['Hide preview', 'Preview']}>
+              {previewing ? 'Hide preview' : 'Preview'}
+            </StableLabel>
+          </button>
           <button type="button" disabled={busy} onClick={onReject}>
+            {keyed && <kbd aria-hidden="true">esc</kbd>}
             <X size={13} aria-hidden="true" />
             Reject
           </button>

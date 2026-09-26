@@ -976,9 +976,28 @@ export async function createProject(page: Page, name: string) {
   await expect(page.getByRole('button', { name: /^Box \(B\)/ })).toBeVisible();
 }
 
+/** The one text field on the stage: the prompt line at its foot. */
+export function promptField(page: Page) {
+  return page.getByRole('combobox', { name: 'Search commands' });
+}
+
+/**
+ * Brings the assistant's stream up over the prompt line. It is tucked away
+ * by default and ⌘J toggles it, so this only presses the key while it is
+ * down.
+ */
 export async function openAssistant(page: Page) {
-  const launcher = page.locator('.assistant-launcher');
-  await expect(launcher).toBeVisible();
-  await launcher.click();
-  await expect(page.locator('.assistant-panel')).toBeVisible();
+  const panel = page.locator('.assistant-panel');
+  await expect(promptField(page)).toBeVisible();
+  if (!(await panel.isVisible())) {
+    await page.keyboard.press('Control+j');
+  }
+  await expect(panel).toBeVisible();
+}
+
+/** Types a question into the prompt line and sends it with Enter. */
+export async function askAssistant(page: Page, text: string) {
+  const field = promptField(page);
+  await field.fill(text);
+  await field.press('Enter');
 }

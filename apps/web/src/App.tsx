@@ -985,7 +985,10 @@ import {
 import { splitRefusal } from './lib/featureValidation';
 import { useCollaboration } from './lib/useCollaboration';
 import { preflightCadPatch } from './lib/aiPatchPreflight';
-import type { AssistantPreviewOutcome } from './components/assistant/AssistantPanel';
+import type {
+  AssistantActivity,
+  AssistantPreviewOutcome
+} from './components/assistant/AssistantPanel';
 import {
   clearUnresolvedConflict,
   conflictFromDocuments,
@@ -2090,8 +2093,25 @@ export function App() {
     id: number;
     text: string;
   } | null>(null);
-  // The slot inside the command bar where the Ask launcher sits.
-  const [askSlot, setAskSlot] = useState<HTMLElement | null>(null);
+  // Words the assistant puts into the prompt line: a suggestion picked to
+  // edit before sending, or a question it could not take yet. A fresh id
+  // writes the field even when the words repeat.
+  const [promptDraft, setPromptDraft] = useState<{
+    id: number;
+    text: string;
+  } | null>(null);
+  const draftPrompt = useCallback((text: string) => {
+    setPromptDraft((current) => ({ id: (current?.id ?? 0) + 1, text }));
+  }, []);
+  // What the assistant reports about itself, for the prompt's glyph and
+  // placeholder: a reply streaming, replies unread behind a tucked-away
+  // stream, and what the selection lets an ask see.
+  const [assistantActivity, setAssistantActivity] =
+    useState<AssistantActivity>({
+      thinking: false,
+      unread: 0,
+      context: null
+    });
   const [shortcutsOpen, setShortcutsOpen] = useState(false);
   const [contextMenu, setContextMenu] = useState<ContextMenuState | null>(null);
   // The list menu fades out; the radial one is a pointer gesture and goes
@@ -15167,8 +15187,10 @@ export function App() {
           setShortcutsOpen(true);
           return;
         case '/':
+          // The slash is the command grammar: the field opens with it typed,
+          // listing every command.
           event.preventDefault();
-          setPaletteOpen(true);
+          draftPrompt('/');
           return;
         case '1':
           requestView('front');
@@ -17840,8 +17862,10 @@ export function App() {
               onCollapsedChange={setAssistantCollapsed}
               confirmDestructive={appSettings.general.confirmDestructiveActions}
               hidden={assistantHidden}
-              launcherSlot={askSlot}
+              prompting={paletteOpen}
               request={assistantRequest}
+              onDraft={draftPrompt}
+              onActivity={setAssistantActivity}
             />
           </ErrorBoundary>
         ) : null
@@ -17896,7 +17920,14 @@ export function App() {
                     : undefined
                 }
                 searchKey={commandPaletteKey}
-                onAssistantSlot={setAskSlot}
+                busy={assistantAvailable && assistantActivity.thinking}
+                unread={
+                  assistantAvailable &&
+                  assistantCollapsed &&
+                  assistantActivity.unread > 0
+                }
+                context={assistantAvailable ? assistantActivity.context : null}
+                draft={promptDraft}
               />
             }
           />

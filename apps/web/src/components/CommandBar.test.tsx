@@ -1,7 +1,8 @@
 import { render, screen, within } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { useState } from 'react';
-import { describe, expect, it, vi } from 'vitest';
+import { afterEach, describe, expect, it, vi } from 'vitest';
+import { ASSISTANT_PROMPT_KEY_EVENT } from '../lib/assistant/promptKeys';
 import { CommandBar, type PaletteCommand } from './CommandBar';
 
 function command(
@@ -24,12 +25,16 @@ function Bar({
   commands,
   onAsk,
   onOpenChange,
-  initialOpen = false
+  initialOpen = false,
+  draft = null,
+  context = null
 }: {
   commands: PaletteCommand[];
   onAsk?(question: string): void;
   onOpenChange?(open: boolean): void;
   initialOpen?: boolean;
+  draft?: { id: number; text: string } | null;
+  context?: string | null;
 }) {
   const [open, setOpen] = useState(initialOpen);
   return (
@@ -42,6 +47,8 @@ function Bar({
       }}
       {...(onAsk ? { onAsk } : {})}
       searchKey={{ glyph: '⌘K', accessible: 'Cmd+K' }}
+      draft={draft}
+      context={context}
     />
   );
 }
@@ -58,21 +65,32 @@ function visibleLabels(): string[] {
   });
 }
 
+afterEach(() => {
+  vi.restoreAllMocks();
+});
+
 describe('CommandBar', () => {
-  it('ranks label matches above group matches for fil', async () => {
+  it('lists commands only after a slash, ranking label matches above group matches', async () => {
     const commands = [
       command('save', 'Save revision', 'File'),
       command('import', 'Import STEP', 'File'),
       command('fillet', 'Fillet', 'Modify')
     ];
     render(<Bar commands={commands} />);
+    const search = searchField();
 
-    await userEvent.type(searchField(), 'fil');
+    await userEvent.type(search, 'fil');
+    // Plain words are a question, not a search: nothing lists.
+    expect(screen.queryAllByRole('option')).toHaveLength(0);
+    expect(search).toHaveAttribute('aria-expanded', 'false');
 
+    await userEvent.clear(search);
+    await userEvent.type(search, '/fil');
     expect(visibleLabels()).toEqual(['Fillet']);
+    expect(search).toHaveAttribute('aria-expanded', 'true');
   });
 
-  it('keeps equally ranked exp label matches in source order', async () => {
+  it('keeps equally ranked label matches in source order', async () => {
     const commands = [
       command('export-step', 'Export STEP', 'File'),
       command('export-mesh', 'Export mesh', 'File'),
@@ -80,7 +98,7 @@ describe('CommandBar', () => {
     ];
     render(<Bar commands={commands} />);
 
-    await userEvent.type(searchField(), 'exp');
+    await userEvent.type(searchField(), '/exp');
 
     expect(visibleLabels()).toEqual(['Export STEP', 'Export mesh']);
   });
@@ -98,12 +116,49 @@ describe('CommandBar', () => {
     render(<Bar commands={commands} />);
     const search = searchField();
 
-    await userEvent.type(search, 'laser');
+    await userEvent.type(search, '/laser');
     expect(visibleLabels()).toEqual(['Export face outline as DXF']);
 
     await userEvent.clear(search);
-    await userEvent.type(search, 'step');
+    await userEvent.type(search, '/step');
     expect(visibleLabels()).toEqual(['Export STEP', 'Import CAD files…']);
+  });
+
+  it('completes the highlighted command in ghost text and accepts it on Tab', async () => {
+    const run = vi.fn();
+    const commands = [
+      command('cylinder', 'Cylinder', 'Create', { run }),
+      command('cone', 'Cone', 'Create')
+    ];
+    render(<Bar commands={commands} />);
+    const search = searchField();
+
+    await userEvent.type(search, '/cy');
+    const ghost = document.querySelector('.command-bar-ghost');
+    expect(ghost).toHaveTextContent('/cylinder');
+    // Only the rest of the name shows; the typed part is invisible under
+    // the field's own text.
+    expect(ghost?.querySelector('.command-bar-ghost-typed')).toHaveTextContent(
+      '/cy'
+    );
+
+    await userEvent.tab();
+    expect(search).toHaveFocus();
+    expect(search).toHaveValue('/Cylinder');
+    await userEvent.type(search, '{Enter}');
+    expect(run).toHaveBeenCalledTimes(1);
+    expect(search).toHaveValue('');
+  });
+
+  it('offers no ghost when the typed text is not the start of a name', async () => {
+    render(
+      <Bar
+        commands={[command('export-dxf', 'Export face outline as DXF', 'File')]}
+      />
+    );
+    await userEvent.type(searchField(), '/dxf');
+    expect(visibleLabels()).toEqual(['Export face outline as DXF']);
+    expect(document.querySelector('.command-bar-ghost')).toBeNull();
   });
 
   it('does not run a disabled result by click or Enter', async () => {
@@ -120,7 +175,7 @@ describe('CommandBar', () => {
     );
 
     const search = searchField();
-    await userEvent.type(search, 'exp');
+    await userEvent.type(search, '/exp');
     const result = screen.getByRole('option');
     expect(within(result).getByText('Create a body first')).toBeTruthy();
 
@@ -132,94 +187,71 @@ describe('CommandBar', () => {
     expect(search).toHaveFocus();
   });
 
-  it('ends the list with an Ask row that sends the typed words to the assistant', async () => {
-    const onAsk = vi.fn();
-    const commands = [
-      command('fillet', 'Fillet', 'Modify'),
-      command('front', 'Front view', 'View')
-    ];
-    render(<Bar commands={commands} onAsk={onAsk} />);
-
-    const search = searchField();
-    expect(search).toHaveAttribute(
-      'placeholder',
-      'Search commands or ask the assistant'
-    );
-    await userEvent.click(search);
-    expect(search).toHaveAttribute(
-      'placeholder',
-      expect.stringContaining('or a question')
-    );
-    // Nothing typed, nothing to ask: the Ask row waits for words.
-    expect(visibleLabels()).not.toContain(
-      expect.stringContaining('Ask the assistant')
-    );
-
-    await userEvent.type(search, 'fil');
-    // A command match still comes first, so Enter runs it, not the question.
-    expect(visibleLabels()).toEqual(['Fillet', 'Ask the assistant: “fil”']);
-    await userEvent.click(
-      screen.getByRole('option', { name: /Ask the assistant/ })
-    );
-    expect(onAsk).toHaveBeenCalledWith('fil');
-    expect(search).toHaveAttribute('aria-expanded', 'false');
-    expect(search).toHaveValue('');
-  });
-
-  it('asks on Enter when no command matches', async () => {
+  it('sends plain words to the assistant on Enter', async () => {
     const onAsk = vi.fn();
     render(
       <Bar commands={[command('fillet', 'Fillet', 'Modify')]} onAsk={onAsk} />
     );
 
     const search = searchField();
-    await userEvent.type(search, '  round the top edges 2 mm  ');
-    expect(
-      screen.getByText('No matching command. Enter asks the assistant.')
-    ).toBeTruthy();
-    await userEvent.type(search, '{Enter}');
-    expect(onAsk).toHaveBeenCalledWith('round the top edges 2 mm');
-  });
-
-  it('offers no Ask row without an assistant', async () => {
-    render(<Bar commands={[command('fillet', 'Fillet', 'Modify')]} />);
-
-    await userEvent.type(searchField(), 'round');
-    expect(screen.queryAllByRole('option')).toHaveLength(0);
-    expect(screen.getByText('No matching command.')).toBeTruthy();
-  });
-
-  it('turns the whole bar into a question on Tab, and Shift+Tab still leaves it', async () => {
-    const onAsk = vi.fn();
-    render(
-      <>
-        <Bar commands={[command('fillet', 'Fillet', 'Modify')]} onAsk={onAsk} />
-        <button type="button">Next</button>
-      </>
+    expect(search).toHaveAttribute(
+      'placeholder',
+      'Ask about the model, or / for a command'
     );
-    const search = searchField();
-
-    await userEvent.type(search, 'fillet');
-    // A command matches, so Enter would run it; Tab makes it a question.
-    expect(visibleLabels()[0]).toBe('Fillet');
-    await userEvent.tab();
-    expect(search).toHaveFocus();
-    expect(search).toHaveAttribute('placeholder', 'Ask the assistant…');
-    expect(search).toHaveAttribute('aria-expanded', 'false');
+    // Words that name a command are still a question: the slash decides.
+    await userEvent.type(search, '  fillet the top edges 2 mm  ');
     expect(screen.queryAllByRole('option')).toHaveLength(0);
-    expect(search).toHaveAccessibleDescription(
-      'Enter sends this to the assistant · Tab goes back to commands'
-    );
-
-    await userEvent.tab();
-    expect(visibleLabels()).toContain('Fillet');
-    await userEvent.tab();
     await userEvent.type(search, '{Enter}');
-    expect(onAsk).toHaveBeenCalledWith('fillet');
+    expect(onAsk).toHaveBeenCalledWith('fillet the top edges 2 mm');
+    expect(search).toHaveValue('');
     expect(search).not.toHaveFocus();
+  });
+
+  it('names the selection in its placeholder', () => {
+    render(<Bar commands={[]} onAsk={vi.fn()} context="12 selected edges" />);
+    expect(searchField()).toHaveAttribute(
+      'placeholder',
+      'Ask about 12 selected edges…'
+    );
+  });
+
+  it('keeps plain words in place without an assistant', async () => {
+    render(<Bar commands={[command('fillet', 'Fillet', 'Modify')]} />);
+    const search = searchField();
+    expect(search).toHaveAttribute('placeholder', 'Type / for a command');
+
+    await userEvent.type(search, 'round{Enter}');
+    expect(search).toHaveValue('round');
+    expect(screen.queryAllByRole('option')).toHaveLength(0);
+  });
+
+  it('hands the empty prompt keys to the conversation, and keeps them when nothing takes them', async () => {
+    render(<Bar commands={[]} onAsk={vi.fn()} />);
+    const search = searchField();
+    const keys: string[] = [];
+    const take = (event: Event) => {
+      keys.push((event as CustomEvent<{ key: string }>).detail.key);
+      event.preventDefault();
+    };
+    window.addEventListener(ASSISTANT_PROMPT_KEY_EVENT, take);
 
     await userEvent.click(search);
-    await userEvent.tab({ shift: true });
+    await userEvent.keyboard('{Enter}p{Escape}');
+    expect(keys).toEqual(['apply', 'preview', 'reject']);
+    // Taken: the letter was not typed and Escape did not drop focus.
+    expect(search).toHaveValue('');
+    expect(search).toHaveFocus();
+    await userEvent.keyboard('{Control>}{ArrowUp}{/Control}');
+    expect(keys).toEqual(['apply', 'preview', 'reject', 'history']);
+
+    window.removeEventListener(ASSISTANT_PROMPT_KEY_EVENT, take);
+    // Nothing listening: `p` is a letter and Escape leaves the field.
+    await userEvent.keyboard('p');
+    expect(search).toHaveValue('p');
+    await userEvent.keyboard('{Escape}');
+    expect(search).toHaveValue('');
+    expect(search).toHaveFocus();
+    await userEvent.keyboard('{Escape}');
     expect(search).not.toHaveFocus();
   });
 
@@ -241,15 +273,19 @@ describe('CommandBar', () => {
 
     await userEvent.click(search);
     expect(onOpenChange).toHaveBeenLastCalledWith(true);
+    await userEvent.type(search, '/');
     await userEvent.click(screen.getByRole('option', { name: /Fillet/ }));
     expect(run).toHaveBeenCalledTimes(1);
     expect(onOpenChange).toHaveBeenLastCalledWith(false);
 
     canvas.focus();
-    await userEvent.type(search, 'fil');
+    await userEvent.type(search, '/fil');
+    // Escape clears first, then leaves.
+    await userEvent.keyboard('{Escape}');
+    expect(search).toHaveValue('');
+    expect(search).toHaveFocus();
     await userEvent.keyboard('{Escape}');
     expect(canvas).toHaveFocus();
-    expect(search).toHaveValue('');
     expect(search).toHaveAttribute('aria-expanded', 'false');
   });
 
@@ -259,28 +295,28 @@ describe('CommandBar', () => {
     );
     const search = searchField();
     expect(search).toHaveFocus();
-    expect(search).toHaveAttribute('aria-expanded', 'true');
-    expect(search).toHaveAttribute(
-      'aria-activedescendant',
-      'command-palette-option-0'
-    );
+    expect(search).toHaveAttribute('aria-keyshortcuts', 'Meta+K');
   });
 
-  it('hands the assistant a slot inside the bar, before the key glyph', () => {
-    const onAssistantSlot = vi.fn();
-    render(
-      <CommandBar
-        commands={[]}
-        open={false}
-        onOpenChange={vi.fn()}
-        searchKey={{ glyph: '⌘K', accessible: 'Cmd+K' }}
-        onAssistantSlot={onAssistantSlot}
-      />
+  it('takes a draft from its host, once per draft id', async () => {
+    const onAsk = vi.fn();
+    const { rerender } = render(
+      <Bar commands={[]} onAsk={onAsk} draft={{ id: 1, text: 'Grow it' }} />
     );
-    const slot = onAssistantSlot.mock.calls[0]?.[0] as HTMLElement;
-    expect(slot).toHaveClass('command-bar-slot');
-    expect(slot.parentElement).toHaveClass('command-bar');
-    expect(slot.nextElementSibling).toHaveTextContent('⌘K');
-    expect(searchField()).toHaveAttribute('aria-keyshortcuts', 'Meta+K');
+    const search = searchField();
+    expect(search).toHaveValue('Grow it');
+    expect(search).toHaveFocus();
+
+    await userEvent.type(search, ' by 2 mm{Enter}');
+    expect(onAsk).toHaveBeenCalledWith('Grow it by 2 mm');
+    expect(search).toHaveValue('');
+
+    rerender(
+      <Bar commands={[]} onAsk={onAsk} draft={{ id: 1, text: 'Grow it' }} />
+    );
+    expect(search).toHaveValue('');
+    rerender(<Bar commands={[]} onAsk={onAsk} draft={{ id: 2, text: '/' }} />);
+    expect(search).toHaveValue('/');
+    expect(search).toHaveAttribute('aria-expanded', 'true');
   });
 });
