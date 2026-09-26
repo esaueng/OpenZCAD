@@ -18,6 +18,7 @@ import {
   shardFilters,
   SPEC_DIR,
   SPEC_PATTERN,
+  specFilter,
   weightsFromReports
 } from '../scripts/e2e-shards.mjs';
 
@@ -39,7 +40,7 @@ describe('balanced e2e shards', () => {
     ).flat();
     expect(assigned.length).toBeGreaterThan(0);
     expect([...assigned].sort()).toEqual(
-      specs.map((spec) => `${SPEC_DIR}/${spec}`).sort()
+      specs.map((spec) => specFilter(spec)).sort()
     );
     expect(new Set(assigned).size).toBe(assigned.length);
   });
@@ -47,12 +48,17 @@ describe('balanced e2e shards', () => {
   it('emits filters Playwright resolves to one file each', () => {
     // Positional arguments become case-insensitive regular expressions over
     // the absolute path; the directory prefix keeps `cloud-sync.spec.ts` from
-    // also selecting `import-cloud-sync.spec.ts`.
+    // also selecting `import-cloud-sync.spec.ts`, and escaping keeps the dots
+    // literal so `foo.spec.ts` cannot also select `fooXspecYts.spec.ts`.
     const paths = specs.map((spec) => `/repo/${SPEC_DIR}/${spec}`);
     for (const filter of shardFilters(1, 1, specs, weights)) {
       const matcher = new RegExp(filter, 'i');
       expect(paths.filter((path) => matcher.test(path))).toHaveLength(1);
     }
+    const foo = new RegExp(specFilter('foo.spec.ts'), 'i');
+    expect(foo.test(`/repo/${SPEC_DIR}/foo.spec.ts`)).toBe(true);
+    expect(foo.test(`/repo/${SPEC_DIR}/fooXspecYts.spec.ts`)).toBe(false);
+    expect(foo.test(`/repo/${SPEC_DIR}/foo.spec.ts.bak`)).toBe(false);
   });
 
   it('discovers exactly what Playwright is configured to collect', () => {
@@ -77,7 +83,7 @@ describe('balanced e2e shards', () => {
       expect(() => shardFilters(1, 1, ['ok.spec.ts', name], {})).toThrow(name);
     }
     expect(shardFilters(1, 1, ['a-b_c.1/d.spec.ts'], {})).toEqual([
-      `${SPEC_DIR}/a-b_c.1/d.spec.ts`
+      `${SPEC_DIR}/a-b_c\\.1/d\\.spec\\.ts$`
     ]);
   });
 
