@@ -521,7 +521,7 @@ interface ModelViewerProps {
     ((scale: ViewportScale | null) => void) | null
   >;
   /**
-   * Imperative sink for the sketch grid spacing ("Grid 5 mm"), or null when no
+   * Imperative sink for the sketch grid spacing ("5 mm"), or null when no
    * grid is shown. When a host renders one (the viewport dock), the readout
    * lives there and the floating HUD label stays hidden.
    */
@@ -7197,12 +7197,12 @@ export function ModelViewer({
         );
         const gridSink = sketchGridReadoutRef?.current ?? null;
         if (activeSketchMode.gridVisible) {
-          const gridLabel = `Grid ${formatNumber(spacing)} ${unitsRef.current}`;
+          const gridSpacing = `${formatNumber(spacing)} ${unitsRef.current}`;
           if (gridSink) {
-            gridSink(gridLabel);
+            gridSink(gridSpacing);
             sketchGridIndicator.hidden = true;
           } else {
-            sketchGridIndicator.textContent = `${gridLabel} · adaptive`;
+            sketchGridIndicator.textContent = `Grid ${gridSpacing} · adaptive`;
             sketchGridIndicator.hidden = false;
           }
         } else {

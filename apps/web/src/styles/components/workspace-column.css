@@ -369,6 +369,25 @@
   color: var(--color-text-dim);
 }
 
+/* "Snap" and "Grid": a flex item drops its trailing space, so the margin
+   stands in for it (1ch is one monospace advance). */
+.viewport-readout-word {
+  margin-right: 1ch;
+}
+
+/* The compact readout's glyphs (quiet-stage.css); the full one spells the
+   words out. The filter's pointer takes the filter's colour. */
+.viewport-readout-icon {
+  display: none;
+  flex: none;
+  margin-right: 4px;
+}
+
+.viewport-dock-snap .viewport-readout-icon,
+.viewport-dock-grid .viewport-readout-icon {
+  color: var(--color-text-dim);
+}
+
 .viewport-dock-filter:hover {
   color: var(--color-text);
   border-color: var(--color-border-strong);
