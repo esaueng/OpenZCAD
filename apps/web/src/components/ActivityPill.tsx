@@ -1,5 +1,5 @@
 import { useEffect, useRef, useState } from 'react';
-import { X } from 'lucide-react';
+import { Ban, Check, TriangleAlert, X } from 'lucide-react';
 import {
   IMPORT_CARD_DELAY_MS,
   IMPORT_CARD_SUCCESS_LINGER_MS,
@@ -7,6 +7,8 @@ import {
   JOB_WORDS,
   importOutcomeIsQuiet,
   importOverallFraction,
+  importPhaseSpans,
+  type ImportOutcomeTone,
   type ImportRunState
 } from '../lib/importProgress';
 import { StableLabel } from './StableLabel';
@@ -50,10 +52,17 @@ export function elapsedLabel(ms: number): string {
     : `${minutes}:${String(seconds).padStart(2, '0')}`;
 }
 
+const OUTCOME_ICON: Record<ImportOutcomeTone, typeof Check> = {
+  ok: Check,
+  warning: TriangleAlert,
+  error: X,
+  cancelled: Ban
+};
+
 /**
- * One line, in the lane above the viewport dock, for any job that moves a
+ * A card, in the lane above the viewport dock, for any job that moves a
  * file in or out: what it is doing, to which file, for how long, and the one
- * control that matters. The progress bar is the pill's bottom edge.
+ * control that matters. The progress bar sits under the text.
  *
  * It shares the lane with the status toast and takes it over while it is
  * up, so a running import never has two notices describing it in two
@@ -159,32 +168,57 @@ export function ActivityPill({
       : IMPORT_PHASE_LABEL[run.progress.phase];
   const toneClass = outcome ? ` ${outcome.tone}` : '';
   const jobLabel = `${words.running.toLowerCase()} ${run.fileName}`;
+  // Only the phase the run is parked in gets the sweep; everything before it
+  // is done and everything after it has not started.
+  const parkedIn = indeterminate
+    ? importPhaseSpans(run.phases).find(
+        (span) => span.phase === run.progress.phase
+      )
+    : undefined;
+  const OutcomeIcon = outcome ? OUTCOME_ICON[outcome.tone] : null;
 
   return (
     <section
       className={`activity-pill${toneClass}`}
       aria-label={`File ${run.kind}`}
     >
-      <span className="activity-pill-glyph" aria-hidden="true">
-        {outcome ? (
-          <i className={`activity-dot ${outcome.tone}`} />
+      <span className={`activity-pill-glyph${toneClass}`} aria-hidden="true">
+        {OutcomeIcon ? (
+          <OutcomeIcon size={14} strokeWidth={2.25} />
         ) : (
           <i className="activity-spin spin" />
         )}
       </span>
-      {/* Only the verb, name and detail are announced. The clock is a sibling
-          because a live region containing it would be read aloud ten times a
-          second. */}
-      <span className="activity-pill-text" aria-live="polite">
-        <span className="activity-pill-verb">{verb} </span>
-        <span className="activity-pill-name" title={run.fileName}>
-          {run.fileName}
+      <span className="activity-pill-main">
+        {/* Only the verb, name and detail are announced. The clock is a
+            sibling because a live region containing it would be read aloud
+            ten times a second. */}
+        <span className="activity-pill-text" aria-live="polite">
+          <span className="activity-pill-verb">{verb} </span>
+          <span className="activity-pill-name" title={run.fileName}>
+            {run.fileName}
+          </span>
+          <span className={`activity-pill-detail${toneClass}`}>{detail}</span>
         </span>
-        <span className={`activity-pill-detail${toneClass}`}>{detail}</span>
+        {outcome === null && (
+          <span className="activity-pill-time">{elapsedLabel(elapsed)}</span>
+        )}
+        <span
+          className={`activity-pill-bar${indeterminate ? ' indeterminate' : ''}${toneClass}`}
+          aria-hidden="true"
+        >
+          <i style={{ width: `${Math.round(fraction * 100)}%` }} />
+          {parkedIn && (
+            <b
+              className="activity-pill-sweep"
+              style={{
+                left: `${parkedIn.start * 100}%`,
+                width: `${(parkedIn.end - parkedIn.start) * 100}%`
+              }}
+            />
+          )}
+        </span>
       </span>
-      {outcome === null && (
-        <span className="activity-pill-time">{elapsedLabel(elapsed)}</span>
-      )}
       {outcome?.action === 'archive' && (
         <>
           <span className="activity-pill-sep" aria-hidden="true" />
@@ -225,15 +259,9 @@ export function ActivityPill({
           aria-label={`Dismiss ${run.kind} status`}
           onClick={() => onDismiss(true)}
         >
-          <X size={12} aria-hidden="true" />
+          <X size={14} aria-hidden="true" />
         </button>
       )}
-      <span
-        className={`activity-pill-bar${indeterminate ? ' indeterminate' : ''}${toneClass}`}
-        aria-hidden="true"
-      >
-        <i style={{ width: `${Math.round(fraction * 100)}%` }} />
-      </span>
     </section>
   );
 }
