@@ -68,6 +68,19 @@ describe('balanced e2e shards', () => {
     }
   });
 
+  it('refuses a spec name the filters could not carry literally', () => {
+    // Playwright reads each positional filter as a regular expression and the
+    // workflow splits the script's output on whitespace, so such a name would
+    // select nothing or the wrong file; refusing it keeps the shard red
+    // instead of silently skipping the spec.
+    for (const name of ['name[1].spec.ts', 'two words.spec.ts', '-x.spec.ts']) {
+      expect(() => shardFilters(1, 1, ['ok.spec.ts', name], {})).toThrow(name);
+    }
+    expect(shardFilters(1, 1, ['a-b_c.1/d.spec.ts'], {})).toEqual([
+      `${SPEC_DIR}/a-b_c.1/d.spec.ts`
+    ]);
+  });
+
   it('finds specs in subdirectories, as Playwright collects testDir', () => {
     // A nested spec that only Playwright's recursive collection saw would be
     // in no shard's file list, and `e2e` would go green without running it.
