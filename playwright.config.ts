@@ -15,6 +15,11 @@ const PORT = portForCheckout();
 
 export default defineConfig({
   testDir: './test/e2e',
+  // Playwright's default also collects `*.test.ts` and `*.spec.tsx`, which
+  // `scripts/e2e-shards.mjs` would not assign to a CI shard (and a `.test.ts`
+  // here is already a root Vitest file). Pinning the pattern keeps the two
+  // in step by construction; `test/e2e-shards.test.ts` checks this line.
+  testMatch: '**/*.spec.ts',
   // Tests in one file run on different workers, so a long file such as
   // modeling.spec.ts (53 tests) does not serialise a CI shard onto one
   // worker. CI assigns whole files to shards by recorded duration through
