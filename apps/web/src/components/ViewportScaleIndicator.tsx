@@ -1,3 +1,4 @@
+import { Grid3x3 } from 'lucide-react';
 import { useEffect, useRef, type MutableRefObject } from 'react';
 import { formatViewportScale, type ViewportScale } from '@openzcad/viewport';
 
@@ -143,13 +144,16 @@ export function ViewportScaleIndicator({
   );
 }
 
-export type SketchGridReadoutSink = (label: string | null) => void;
+/** Receives the grid spacing with its unit ("5 mm"), or null for no grid. */
+export type SketchGridReadoutSink = (spacing: string | null) => void;
 
 /**
  * The sketch grid spacing as a segment of the bottom-left viewport readout.
  * Floating on its own it sat on whatever shared the bottom edge (the old
  * dock, then the search bar at narrower windows). The render loop pushes the
- * label every frame; the node is only touched when it changes.
+ * spacing every frame; the node is only touched when it changes. The word
+ * and the icon are markup, so the compact readout can trade one for the
+ * other.
  */
 export function ViewportGridReadout({
   sinkRef
@@ -157,16 +161,18 @@ export function ViewportGridReadout({
   sinkRef: MutableRefObject<SketchGridReadoutSink | null>;
 }) {
   const nodeRef = useRef<HTMLSpanElement | null>(null);
+  const valueRef = useRef<HTMLSpanElement | null>(null);
   useEffect(() => {
     let shown: string | null = null;
-    const update: SketchGridReadoutSink = (label) => {
+    const update: SketchGridReadoutSink = (spacing) => {
       const node = nodeRef.current;
-      if (!node || label === shown) {
+      const value = valueRef.current;
+      if (!node || !value || spacing === shown) {
         return;
       }
-      shown = label;
-      node.textContent = label ?? '';
-      node.hidden = label === null;
+      shown = spacing;
+      value.textContent = spacing ?? '';
+      node.hidden = spacing === null;
     };
     sinkRef.current = update;
     return () => {
@@ -181,6 +187,10 @@ export function ViewportGridReadout({
       className="viewport-dock-grid mono"
       title="Sketch grid spacing — it adapts as you zoom"
       hidden
-    />
+    >
+      <Grid3x3 className="viewport-readout-icon" size={12} aria-hidden="true" />
+      <span className="viewport-readout-word">Grid </span>
+      <span ref={valueRef} />
+    </span>
   );
 }
