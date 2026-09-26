@@ -128,11 +128,19 @@
   min-height: 0;
   overflow-y: auto;
   padding: var(--assistant-fade) 14px 10px 10px;
-  display: grid;
+  display: flex;
+  flex-direction: column;
   gap: 12px;
-  align-content: end;
   scroll-behavior: smooth;
   transition: opacity var(--dur-base) var(--ease-out);
+}
+
+/* Stands the stream on the prompt line. Not `align-content: end`: in a scroll
+   container that pushes overflow above the scroll origin, where no wheel or
+   scrollbar can reach it, and scrollback shows only what fits. An auto margin
+   collapses to zero once the turns overflow, so they overflow downward. */
+.assistant-thread > :first-child {
+  margin-top: auto;
 }
 
 .assistant-panel.quiet .assistant-thread {
