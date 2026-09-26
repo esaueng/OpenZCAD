@@ -10,6 +10,8 @@ import {
 } from '../apps/web/worker/projectMeasurements';
 import type { StoredMeasurementRecord } from '../apps/web/src/lib/measurementRecord';
 
+const ACTOR = 'user_measurements';
+
 function record(
   updatedAt = '2026-08-07T12:00:00.000Z'
 ): StoredMeasurementRecord {
@@ -87,17 +89,18 @@ function database() {
   });
   return {
     db: { prepare } as unknown as D1Database,
-    revision: () => row?.revision ?? 0
+    revision: () => row?.revision ?? 0,
+    prepared: prepare
   };
 }
 
 describe('project measurement D1 storage', () => {
   it('creates, reads, and conditionally updates one project snapshot', async () => {
-    const { db } = database();
+    const { db, prepared } = database();
     await expect(
-      loadProjectMeasurements(db, record().projectId)
+      loadProjectMeasurements(db, record().projectId, ACTOR)
     ).resolves.toEqual({ revision: 0, record: null });
-    const created = await saveProjectMeasurements(db, record().projectId, {
+    const created = await saveProjectMeasurements(db, record().projectId, ACTOR, {
       expectedRevision: 0,
       record: record()
     });
@@ -105,7 +108,7 @@ describe('project measurement D1 storage', () => {
     const changed = record('2026-08-07T13:00:00.000Z');
     changed.measurements[0]!.label = 'Renamed';
     await expect(
-      saveProjectMeasurements(db, changed.projectId, {
+      saveProjectMeasurements(db, changed.projectId, ACTOR, {
         expectedRevision: 1,
         record: changed
       })
@@ -114,21 +117,24 @@ describe('project measurement D1 storage', () => {
       record: { updatedAt: changed.updatedAt }
     });
     await expect(
-      loadProjectMeasurements(db, changed.projectId)
+      loadProjectMeasurements(db, changed.projectId, ACTOR)
     ).resolves.toEqual({
       revision: 2,
       record: changed
     });
+    for (const [query] of prepared.mock.calls) {
+      expect(query).toContain("status != 'deleted'");
+    }
   });
 
   it('returns the current revision instead of overwriting a stale write', async () => {
     const { db } = database();
-    await saveProjectMeasurements(db, record().projectId, {
+    await saveProjectMeasurements(db, record().projectId, ACTOR, {
       expectedRevision: 0,
       record: record()
     });
     await expect(
-      saveProjectMeasurements(db, record().projectId, {
+      saveProjectMeasurements(db, record().projectId, ACTOR, {
         expectedRevision: 0,
         record: record('2026-08-07T14:00:00.000Z')
       })
@@ -136,17 +142,22 @@ describe('project measurement D1 storage', () => {
   });
 
   it('deletes only the revision the caller read', async () => {
-    const { db, revision } = database();
-    await saveProjectMeasurements(db, record().projectId, {
+    const { db, revision, prepared } = database();
+    await saveProjectMeasurements(db, record().projectId, ACTOR, {
       expectedRevision: 0,
       record: record()
     });
     await expect(
-      deleteProjectMeasurements(db, record().projectId, 2)
+      deleteProjectMeasurements(db, record().projectId, ACTOR, 2)
     ).rejects.toEqual(new ProjectMeasurementRevisionConflictError(1));
     expect(revision()).toBe(1);
-    await deleteProjectMeasurements(db, record().projectId, 1);
+    await deleteProjectMeasurements(db, record().projectId, ACTOR, 1);
     expect(revision()).toBe(0);
+    expect(
+      prepared.mock.calls.find(([query]) =>
+        query.includes('DELETE FROM project_measurements')
+      )?.[0]
+    ).toContain("status != 'deleted'");
   });
 
   it('validates project identity and the narrow row-size ceiling', () => {

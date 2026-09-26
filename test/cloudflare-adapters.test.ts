@@ -162,6 +162,7 @@ describe('cloudflare adapters', () => {
         first: vi.fn(async () => {
           expect(query).toContain('LEFT JOIN user_settings owner_settings');
           expect(query).toContain("'$.collaboration.enabled'");
+          expect(query).toContain("WHEN p.status = 'deleted' THEN NULL");
           return null;
         })
       }))
@@ -186,6 +187,7 @@ describe('cloudflare adapters', () => {
         first: vi.fn(async () => {
           expect(query).toContain('LEFT JOIN user_settings owner_settings');
           expect(query).toContain("'$.collaboration.enabled'");
+          expect(query).toContain("p.status != 'deleted'");
           return null;
         })
       }))
@@ -204,6 +206,44 @@ describe('cloudflare adapters', () => {
       )
     ).rejects.toMatchObject({ code: 'INVITATION_NOT_FOUND' });
     expect(batch).not.toHaveBeenCalled();
+  });
+
+  it('rechecks trash status when an invitation is accepted', async () => {
+    const statements: string[] = [];
+    const prepare = vi.fn((query: string) => ({
+      sql: query,
+      bind: () => ({
+        sql: query,
+        first: async () =>
+          query.includes('FROM project_invitations i')
+            ? {
+                id: 'invite_trash_race',
+                project_id: 'project_trash_race',
+                role: 'viewer',
+                owner_user_id: 'user_owner'
+              }
+            : { count: 0 }
+      })
+    }));
+    const batch = vi.fn(async (prepared: Array<{ sql: string }>) => {
+      statements.push(...prepared.map((statement) => statement.sql));
+      return [{ meta: { changes: 0 } }];
+    });
+    const service = new D1R2PersistenceService({
+      DB: { prepare, batch } as unknown as D1Database,
+      PROJECT_SHARING_ENABLED: 'true'
+    });
+
+    await expect(
+      service.acceptProjectInvitation(
+        toUserId('user_invitee'),
+        'invitee@example.com',
+        'token-hash',
+        1_800_000_000
+      )
+    ).rejects.toMatchObject({ code: 'INVITATION_NOT_FOUND' });
+    expect(prepare.mock.calls[0]?.[0]).toContain("p.status != 'deleted'");
+    expect(statements[0]).toContain("p.status != 'deleted'");
   });
 
   it('rejects stale R2 saves before writing project objects', async () => {
@@ -676,6 +716,7 @@ describe('cloudflare adapters', () => {
       'ORDER BY p.pinned DESC, p.sort_order ASC, p.updated_at DESC'
     );
     expect(prepare.mock.calls[0]?.[0]).toContain('project_members');
+    expect(prepare.mock.calls[0]?.[0]).toContain("p.status != 'deleted'");
   });
 
   it('replaces a finalized D1 thumbnail and deletes its superseded object', async () => {
@@ -707,9 +748,11 @@ describe('cloudflare adapters', () => {
                 metadata_json: '{}',
                 expires_at: '2099-01-01T00:00:00.000Z',
                 owner_user_id: owner,
-                reserved_bytes: 0,
-                reservation_state: 'open',
-                multipart_upload_id: null,
+                reserved_bytes: 123,
+                reservation_state: 'completed',
+                multipart_upload_id: 'r2_thumbnail',
+                single_part: 1,
+                upload_protocol_version: 1,
                 completion_started_at: null
               };
             }

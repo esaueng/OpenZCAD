@@ -19,6 +19,7 @@ interface ProjectObjectStorageSchema {
   document_objects_index: number;
   storage_assets_index: number;
   pointer_indexes: number;
+  quota_triggers: number;
 }
 
 interface DesktopAuthSchema {
@@ -47,7 +48,7 @@ interface ArtifactUploadAccountingSchema {
   triggers: number;
 }
 
-/** Whether migration 0017 installed every durable upload-accounting guard. */
+/** Whether durable upload accounting and the current upload protocol are installed. */
 export async function isArtifactUploadAccountingReady(
   db: D1Database | undefined
 ): Promise<boolean> {
@@ -68,7 +69,8 @@ export async function isArtifactUploadAccountingReady(
             SELECT COUNT(*) FROM pragma_table_info('upload_sessions')
             WHERE name IN (
               'owner_user_id', 'reserved_bytes', 'reservation_state',
-              'multipart_upload_id', 'completion_started_at'
+              'multipart_upload_id', 'completion_started_at', 'single_part',
+              'upload_protocol_version'
             )
           ) AS session_columns,
           (
@@ -94,7 +96,8 @@ export async function isArtifactUploadAccountingReady(
               'artifact_upload_part_after_insert',
               'artifact_upload_part_before_update',
               'artifact_upload_part_after_update_bytes',
-              'artifact_upload_part_after_delete'
+              'artifact_upload_part_after_delete',
+              'artifact_upload_protocol_before_insert'
             )
           ) AS triggers`
       )
@@ -102,9 +105,9 @@ export async function isArtifactUploadAccountingReady(
     return (
       schema?.usage_table === 1 &&
       schema.parts_table === 1 &&
-      schema.session_columns === 5 &&
+      schema.session_columns === 7 &&
       schema.indexes === 2 &&
-      schema.triggers === 14
+      schema.triggers === 15
     );
   } catch {
     return false;
@@ -301,7 +304,7 @@ export async function isDocumentStorageAccountingReady(
   }
 }
 
-/** Whether migration 0011 and a writable private R2 binding are present. */
+/** Whether R2 storage and the atomic account quota guards are present. */
 export async function isProjectObjectStorageReady(
   db: D1Database | undefined,
   bucket: R2Bucket | undefined
@@ -355,7 +358,23 @@ export async function isProjectObjectStorageReady(
               'idx_projects_document_object',
               'idx_revisions_document_object'
             )
-          ) AS pointer_indexes`
+          ) AS pointer_indexes,
+          (
+            SELECT COUNT(*) FROM sqlite_schema
+            WHERE type = 'trigger' AND name IN (
+              'project_account_count_before_insert',
+              'project_account_owner_immutable',
+              'project_account_d1_project_bytes_before_insert',
+              'project_account_d1_project_bytes_before_update',
+              'project_account_d1_revision_bytes_before_insert',
+              'project_account_d1_revision_bytes_before_update',
+              'project_account_revision_owner_immutable',
+              'project_account_object_bytes_before_insert',
+              'project_account_asset_bytes_before_insert',
+              'project_account_object_bytes_immutable',
+              'project_account_asset_bytes_immutable'
+            )
+          ) AS quota_triggers`
       )
       .first<ProjectObjectStorageSchema>();
 
@@ -366,7 +385,8 @@ export async function isProjectObjectStorageReady(
       schema.storage_assets_table === 1 &&
       schema.document_objects_index === 1 &&
       schema.storage_assets_index === 1 &&
-      schema.pointer_indexes === 2
+      schema.pointer_indexes === 2 &&
+      schema.quota_triggers === 11
     );
   } catch {
     return false;

@@ -46,6 +46,7 @@ interface SessionRow {
   reservation_state: string;
   multipart_upload_id: string | null;
   completion_started_at: number | null;
+  upload_protocol_version: number;
 }
 
 /** A session row in the one shape the insert guard accepts. */
@@ -65,14 +66,16 @@ function insertSession(overrides: Partial<SessionRow> = {}): void {
     reservation_state: 'open',
     multipart_upload_id: null,
     completion_started_at: null,
+    upload_protocol_version: 1,
     ...overrides
   };
   db.prepare(
     `INSERT INTO upload_sessions (
        id, artifact_id, project_id, object_key, file_name, content_type,
        expires_at, kind, metadata_json, owner_user_id, reserved_bytes,
-       reservation_state, multipart_upload_id, completion_started_at
-     ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
+       reservation_state, multipart_upload_id, completion_started_at,
+       upload_protocol_version
+     ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
   ).run(
     row.id,
     row.artifact_id,
@@ -87,7 +90,8 @@ function insertSession(overrides: Partial<SessionRow> = {}): void {
     row.reserved_bytes,
     row.reservation_state,
     row.multipart_upload_id,
-    row.completion_started_at
+    row.completion_started_at,
+    row.upload_protocol_version
   );
 }
 
@@ -166,6 +170,12 @@ beforeEach(() => {
 describe('upload session insert guards', () => {
   it('admits a well-formed session', () => {
     expect(() => insertSession()).not.toThrow();
+  });
+
+  it('refuses an old Worker session insert without the current protocol marker', () => {
+    expect(() => insertSession({ upload_protocol_version: 0 })).toThrow(
+      /artifact_upload_protocol_version_required/
+    );
   });
 
   it('refuses a session with no owner', () => {

@@ -7,6 +7,7 @@ import {
   isPurgeDue,
   MAX_ACTIVE_ARTIFACT_UPLOAD_SESSIONS,
   MAX_ACCOUNT_ARTIFACT_BYTES,
+  MAX_ACCOUNT_PROJECTS,
   MAX_ACCOUNT_RESERVED_ARTIFACT_BYTES,
   MAX_ARTIFACT_PART_BYTES,
   MAX_ARTIFACT_UPLOAD_BYTES,
@@ -220,6 +221,20 @@ export class ArtifactQuotaError extends Error {
     super('Account artifact storage limit reached.');
     this.name = 'ArtifactQuotaError';
     this.limitBytes = limitBytes;
+  }
+}
+
+export class ProjectQuotaError extends Error {
+  constructor(
+    readonly kind: 'count' | 'storage',
+    readonly limit: number
+  ) {
+    super(
+      kind === 'count'
+        ? `Account project limit of ${limit} reached.`
+        : `Account project storage limit of ${limit} bytes reached.`
+    );
+    this.name = 'ProjectQuotaError';
   }
 }
 
@@ -661,6 +676,9 @@ export class InMemoryPersistenceService implements PersistenceService {
     input: CreateProjectInvitationInput
   ): Promise<ProjectInvitationSummary> {
     await this.requireProjectOwner(ownerUserId, projectId);
+    if (this.organizationOf(projectId).status === 'deleted') {
+      throw new ProjectNotFoundError(projectId);
+    }
     const rateKey = ownerUserId;
     const windowStart =
       input.createdAt - PROJECT_INVITATION_RATE_WINDOW_SECONDS;
@@ -792,6 +810,12 @@ export class InMemoryPersistenceService implements PersistenceService {
       invitation.invitedByUserId,
       invitation.projectId
     );
+    if (this.organizationOf(invitation.projectId).status === 'deleted') {
+      throw new ProjectSharingError(
+        'INVITATION_NOT_FOUND',
+        'Project invitation is invalid or expired.'
+      );
+    }
     if (access.ownerUserId === userId) {
       throw new ProjectSharingError(
         'OWNER_IMMUTABLE',
@@ -941,7 +965,8 @@ export class InMemoryPersistenceService implements PersistenceService {
         .filter(
           (document) =>
             document.ownerUserId === userId ||
-            this.projectMembers.get(document.projectId)?.has(userId) === true
+            (this.organizationOf(document.projectId).status !== 'deleted' &&
+              this.projectMembers.get(document.projectId)?.has(userId) === true)
         )
         .map((document) => this.summarize(document))
         .sort(compareProjectSummaries)
@@ -955,6 +980,7 @@ export class InMemoryPersistenceService implements PersistenceService {
     const document = request.document
       ? this.prepareAdoption(userId, request.document, request.name)
       : createProjectDocument(request.name, userId, request.units);
+    this.assertProjectCount(userId);
     this.projects.set(document.projectId, document);
     return {
       project: this.summarize(document),
@@ -1012,6 +1038,7 @@ export class InMemoryPersistenceService implements PersistenceService {
       userId,
       branch?.origin
     );
+    this.assertProjectCount(userId);
     this.projects.set(document.projectId, document);
     // A copy lands next to its original rather than at the top of the shelf,
     // which is where you go looking for it. It starts unpinned and active: the
@@ -1025,6 +1052,12 @@ export class InMemoryPersistenceService implements PersistenceService {
           : 0
     });
     return { project: this.summarize(document), document };
+  }
+
+  private assertProjectCount(userId: UserId): void {
+    if (this.ownedProjects(userId).length >= MAX_ACCOUNT_PROJECTS) {
+      throw new ProjectQuotaError('count', MAX_ACCOUNT_PROJECTS);
+    }
   }
 
   private branchPointFor(
@@ -1710,6 +1743,9 @@ export class InMemoryPersistenceService implements PersistenceService {
         ownerUserId: document.ownerUserId,
         role: 'owner'
       };
+    }
+    if (this.organizationOf(projectId).status === 'deleted') {
+      throw new ProjectNotFoundError(projectId);
     }
     const member = this.projectMembers.get(projectId)?.get(userId);
     if (!member) {
