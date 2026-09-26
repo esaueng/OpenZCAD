@@ -156,6 +156,44 @@ describe('Tooltip', () => {
       expect(tooltip).toHaveTextContent(/^Parts$/);
     });
 
+    it('re-measures when its own click opens and closes the flyout', () => {
+      boxes.Rail = box(20, 300, 40, 120);
+      boxes.Parts = box(25, 305, 30, 30);
+      boxes.Flyout = box(68, 100, 320, 500);
+      const renderWith = (flyoutOpen: boolean) => (
+        <>
+          <div
+            role="toolbar"
+            aria-label="Rail"
+            style={{ flexDirection: 'column' }}
+          >
+            <Tooltip label="Parts" description="Toggle the parts list">
+              <button type="button" aria-label="Parts">
+                P
+              </button>
+            </Tooltip>
+          </div>
+          <div data-rail-flyouts="">
+            {flyoutOpen && <aside aria-label="Flyout" />}
+          </div>
+        </>
+      );
+      const { rerender } = render(renderWith(false));
+
+      fireEvent.focus(screen.getByRole('button', { name: 'Parts' }));
+      expect(screen.getByRole('tooltip')).toHaveTextContent(
+        'PartsToggle the parts list'
+      );
+
+      rerender(renderWith(true));
+      expect(screen.getByRole('tooltip')).toHaveTextContent(/^Parts$/);
+
+      rerender(renderWith(false));
+      expect(screen.getByRole('tooltip')).toHaveTextContent(
+        'PartsToggle the parts list'
+      );
+    });
+
     it('keeps the description when the flyout is elsewhere', () => {
       boxes.Rail = box(20, 300, 40, 120);
       boxes.Parts = box(25, 305, 30, 30);
