@@ -33,6 +33,10 @@ Single-request artifact uploads use a durable byte reservation before the
 object is completed. Finalization requires a completed upload whose stored
 size matches that reservation.
 
+Revision IDs remain bound to their owning project. Migration 0021 enforces
+this for D1 and R2 save paths; same-project updates remain allowed. Project
+routes require the guards before serving writes.
+
 ## What shipped, against what was planned
 
 Two things came out differently from the plan above, both for the better:
