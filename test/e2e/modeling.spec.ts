@@ -2239,6 +2239,8 @@ test('rejects a disconnected Union proposed by the assistant before commit', asy
     .click();
   await inspector.getByLabel('Move Z').fill('24');
   await inspector.getByRole('button', { name: /^Apply/ }).click();
+  // Editing the move tucked the stream away; the prompt brings it back.
+  await promptField(page).click();
   await failure.getByRole('button', { name: 'Try again' }).click();
   const proposal = page.locator('.assistant-card.proposal.open');
   await expect(proposal).toContainText('Union the two separated bodies.');

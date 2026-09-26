@@ -73,6 +73,40 @@ test('a question typed into the prompt goes to the stream standing on it', async
   await expect(search).toBeVisible();
 });
 
+test('a press off the stream tucks it away, and the prompt brings it back', async ({
+  page
+}) => {
+  await page.setViewportSize({ width: 1440, height: 900 });
+  await stubApi(page, { assistantEnabled: true });
+  await stubAssistant(page);
+  await createProject(page, 'Click Off Part');
+
+  const search = promptField(page);
+  await expect(search).toBeVisible({ timeout: 30_000 });
+  await askAssistant(page, 'Add a 10 mm cube');
+  const panel = page.locator('.assistant-panel');
+  await expect(page.locator('.assistant-card.proposal')).toContainText(
+    'Add a 10 mm cube.'
+  );
+
+  // A press inside the stream keeps it up.
+  await page.locator('.assistant-thread').click({ position: { x: 4, y: 4 } });
+  await expect(panel).toBeVisible();
+
+  // A press on the model tucks it away, conversation intact.
+  const viewer = await page.locator('.viewer-area').boundingBox();
+  await page.mouse.click(viewer!.x + viewer!.width / 2, viewer!.y + 80);
+  await expect(panel).toHaveCount(0);
+
+  // Focusing the empty prompt brings it back without asking anything.
+  await search.click();
+  await expect(panel).toBeVisible();
+  await expect(search).toHaveValue('');
+  await expect(page.locator('.assistant-thread')).toContainText(
+    'Add a 10 mm cube'
+  );
+});
+
 test('search names a feature and opens it in the drawer', async ({ page }) => {
   await page.setViewportSize({ width: 1440, height: 900 });
   await stubApi(page, { modelDrawer: false });

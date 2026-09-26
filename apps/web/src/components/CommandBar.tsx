@@ -263,7 +263,8 @@ export function CommandBar({
   const empty = query.length === 0;
 
   return (
-    <div className="command-bar-row">
+    // Marked for the stream's click-off check (ASSISTANT_PROMPT_SELECTOR).
+    <div className="command-bar-row" data-assistant-prompt="">
       <div
         className={`command-bar${open ? ' open' : ''}${
           commandMode ? ' command' : ''
