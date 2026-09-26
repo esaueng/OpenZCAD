@@ -21,6 +21,7 @@ import {
   ProjectNotFoundError,
   ProjectSharingError,
   RevisionConflictError,
+  RevisionIdCollisionError,
   RevisionNotFoundError
 } from '@openzcad/persistence';
 import {
@@ -99,7 +100,8 @@ import {
   isArtifactUploadAccountingReady,
   isDocumentStorageAccountingReady,
   isProjectMeasurementStorageReady,
-  isProjectObjectStorageReady
+  isProjectObjectStorageReady,
+  isD1ProjectStorageReady
 } from './readiness';
 import {
   deleteProjectMeasurements,
@@ -126,6 +128,7 @@ const MAX_JSON_BODY_BYTES = 25 * 1024 * 1024;
 const MAX_ARTIFACT_BODY_BYTES = 25 * 1024 * 1024;
 /** Cache only a proven-ready schema; failures stay retryable without a deploy. */
 const projectStorageReadyEnvironments = new WeakSet<Env>();
+const d1ProjectStorageReadyEnvironments = new WeakSet<Env>();
 const projectMeasurementStorageReadyEnvironments = new WeakSet<Env>();
 const artifactUploadReadyEnvironments = new WeakSet<Env>();
 const HEALTH_READINESS_TTL_MS = 60_000;
@@ -230,6 +233,17 @@ async function projectStorageIsReady(
   const ready = await isProjectObjectStorageReady(env.DB, bucket);
   if (ready) {
     projectStorageReadyEnvironments.add(env);
+  }
+  return ready;
+}
+
+async function d1ProjectStorageIsReady(env: Env): Promise<boolean> {
+  if (d1ProjectStorageReadyEnvironments.has(env)) {
+    return true;
+  }
+  const ready = await isD1ProjectStorageReady(env.DB);
+  if (ready) {
+    d1ProjectStorageReadyEnvironments.add(env);
   }
   return ready;
 }
@@ -750,8 +764,9 @@ async function handleApiRequest(request: Request, env: Env): Promise<Response> {
   if (
     requiresProjectStorage &&
     env.DB &&
-    projectStorageBucket &&
-    !(await projectStorageIsReady(env, projectStorageBucket))
+    !(projectStorageBucket
+      ? await projectStorageIsReady(env, projectStorageBucket)
+      : await d1ProjectStorageIsReady(env))
   ) {
     return json(
       {
@@ -1826,6 +1841,9 @@ async function dispatchApiRequest(
         },
         409
       );
+    }
+    if (error instanceof RevisionIdCollisionError) {
+      return json({ error: error.message, code: 'REVISION_ID_CONFLICT' }, 409);
     }
     if (error instanceof ProjectMeasurementRequestError) {
       return json({ error: error.message }, error.status);

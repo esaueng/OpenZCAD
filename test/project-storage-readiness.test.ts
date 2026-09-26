@@ -3,7 +3,8 @@ import {
   isAccountErasureReady,
   isArtifactUploadAccountingReady,
   isProjectMeasurementStorageReady,
-  isProjectObjectStorageReady
+  isProjectObjectStorageReady,
+  isD1ProjectStorageReady
 } from '../apps/web/worker/readiness';
 
 const readyRow = {
@@ -14,7 +15,8 @@ const readyRow = {
   document_objects_index: 1,
   storage_assets_index: 1,
   pointer_indexes: 2,
-  quota_triggers: 11
+  quota_triggers: 11,
+  revision_owner_trigger: 1
 };
 
 function database(row: typeof readyRow | null = readyRow) {
@@ -49,6 +51,13 @@ describe('R2 project storage readiness', () => {
     );
   });
 
+  it('fails closed before the revision ownership trigger is installed', async () => {
+    const { db } = database({ ...readyRow, revision_owner_trigger: 0 });
+    await expect(isProjectObjectStorageReady(db, bucket())).resolves.toBe(
+      false
+    );
+  });
+
   it('fails closed before the account quota triggers are installed', async () => {
     const { db } = database({ ...readyRow, quota_triggers: 10 });
     await expect(isProjectObjectStorageReady(db, bucket())).resolves.toBe(
@@ -62,6 +71,36 @@ describe('R2 project storage readiness', () => {
       false
     );
     expect(first).not.toHaveBeenCalled();
+  });
+});
+
+describe('D1 project storage readiness', () => {
+  it('requires both account quota and revision ownership triggers', async () => {
+    const first = vi.fn(async () => ({
+      trigger_count: 7,
+      revision_owner_trigger: 1
+    }));
+    const prepare = vi.fn((_sql: string) => ({ first }));
+    await expect(
+      isD1ProjectStorageReady({ prepare } as unknown as D1Database)
+    ).resolves.toBe(true);
+    expect(prepare.mock.calls[0]?.[0]).toContain(
+      'project_revision_id_owner_before_insert'
+    );
+    first.mockResolvedValueOnce({
+      trigger_count: 7,
+      revision_owner_trigger: 0
+    });
+    await expect(
+      isD1ProjectStorageReady({ prepare } as unknown as D1Database)
+    ).resolves.toBe(false);
+    first.mockResolvedValueOnce({
+      trigger_count: 6,
+      revision_owner_trigger: 1
+    });
+    await expect(
+      isD1ProjectStorageReady({ prepare } as unknown as D1Database)
+    ).resolves.toBe(false);
   });
 });
 

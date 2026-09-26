@@ -248,6 +248,13 @@ export class RevisionConflictError extends Error {
   }
 }
 
+export class RevisionIdCollisionError extends Error {
+  constructor() {
+    super('Revision ID conflicts with an existing save state.');
+    this.name = 'RevisionIdCollisionError';
+  }
+}
+
 /**
  * Adoption refused. The two codes are kept apart because they mean opposite
  * things to the device holding the document: `ALREADY_ADOPTED` says the account
