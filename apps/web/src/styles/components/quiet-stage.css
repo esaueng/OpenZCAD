@@ -254,11 +254,39 @@
   display: none;
 }
 
+/* The island is the only frame: its segments are flat text, so a chip
+   inside it never draws a second box. A hairline centred in the space
+   before the snap and grid segments tells them apart in a sketch; only
+   the filter, which is a button, answers the pointer. */
 .viewport-readout .viewport-dock-filter,
 .viewport-readout .viewport-dock-snap,
 .viewport-readout .viewport-dock-grid {
   height: 24px;
   padding: 0 7px;
+  background: transparent;
+  border: 0;
+}
+
+.viewport-readout .viewport-dock-snap,
+.viewport-readout .viewport-dock-grid {
+  position: relative;
+  margin-left: 4px;
+}
+
+/* 4px margin + the island's 4px gap: -4.5px centres the 1px line. */
+.viewport-readout .viewport-dock-snap::before,
+.viewport-readout .viewport-dock-grid::before {
+  content: '';
+  position: absolute;
+  top: 5px;
+  bottom: 5px;
+  left: -4.5px;
+  width: 1px;
+  background: var(--color-border);
+}
+
+.viewport-readout .viewport-dock-filter:hover {
+  background: var(--color-surface-hover);
 }
 
 /* The scale bar reads beside the orientation cube, bottom-right. */
