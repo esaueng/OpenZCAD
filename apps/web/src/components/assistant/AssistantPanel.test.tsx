@@ -335,9 +335,9 @@ describe('asking from the prompt line', () => {
     );
     // Waiting, not sent: no turn carries it, and the reason is on screen.
     expect(screen.queryAllByText('Why is the wall so thin?')).toHaveLength(0);
-    // The draft is handed back on mount; the status line only follows once
-    // the model-status request has failed, so it is awaited, not read.
-    expect((await screen.findAllByRole('status')).length).toBeGreaterThan(0);
+    // The hand-back fires on mount, before the status load settles, so the
+    // reason arrives later than the draft does.
+    expect(await screen.findAllByRole('status')).not.toHaveLength(0);
   });
 
   it('offers its openers as drafts for the prompt line', async () => {
