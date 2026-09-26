@@ -107,6 +107,44 @@ test('a press off the stream tucks it away, and the prompt brings it back', asyn
   );
 });
 
+test('the stream scrolls back to turns older than it can show', async ({
+  page
+}) => {
+  await page.setViewportSize({ width: 1440, height: 900 });
+  await stubApi(page, { assistantEnabled: true });
+  await stubAssistant(page);
+  await createProject(page, 'Scrollback Part');
+
+  await expect(promptField(page)).toBeVisible({ timeout: 30_000 });
+  for (let turn = 0; turn < 6; turn += 1) {
+    await askAssistant(page, `Question ${turn}`);
+    await expect(page.locator('.assistant-card.proposal')).toHaveCount(
+      turn + 1
+    );
+  }
+
+  // It stands on the prompt, newest turn in view, and the oldest one is
+  // off the top — but reachable, not stranded above the scroll origin.
+  const thread = page.locator('.assistant-thread');
+  const first = thread.getByText('Question 0', { exact: true });
+  await expect(
+    thread.getByText('Question 5', { exact: true })
+  ).toBeInViewport();
+  await expect(first).not.toBeInViewport({ ratio: 1 });
+  const metrics = await thread.evaluate((el) => ({
+    overflow: el.scrollHeight - el.clientHeight,
+    fromBottom: el.scrollHeight - el.scrollTop - el.clientHeight
+  }));
+  expect(metrics.overflow).toBeGreaterThan(0);
+  expect(metrics.fromBottom).toBeLessThan(2);
+
+  const box = await thread.boundingBox();
+  await page.mouse.move(box!.x + box!.width / 2, box!.y + box!.height / 2);
+  await page.mouse.wheel(0, -metrics.overflow - 200);
+  await expect.poll(() => thread.evaluate((el) => el.scrollTop)).toBe(0);
+  await expect(first).toBeInViewport();
+});
+
 test('search names a feature and opens it in the drawer', async ({ page }) => {
   await page.setViewportSize({ width: 1440, height: 900 });
   await stubApi(page, { modelDrawer: false });
