@@ -1,5 +1,5 @@
 import { readdirSync, readFileSync, writeFileSync } from 'node:fs';
-import { basename } from 'node:path';
+import { join, relative, sep } from 'node:path';
 import { pathToFileURL } from 'node:url';
 
 /**
@@ -34,11 +34,26 @@ export const SPEC_PATTERN = /\.spec\.ts$/;
 /** Seconds assumed for a spec with no recorded weight. */
 export const DEFAULT_WEIGHT_SECONDS = 60;
 
-/** @returns {string[]} spec basenames, sorted the way Playwright collects them */
+/**
+ * Every spec under the directory, as `/`-separated paths relative to it,
+ * sorted. Playwright collects `testDir` recursively, so a spec in a
+ * subdirectory has to be found here too or no shard would ever run it.
+ *
+ * @returns {string[]}
+ */
 export function listSpecs(dir = SPEC_DIR) {
-  return readdirSync(dir)
-    .filter((name) => SPEC_PATTERN.test(name))
-    .sort((a, b) => a.localeCompare(b));
+  const specs = [];
+  const visit = (current) => {
+    for (const entry of readdirSync(current, { withFileTypes: true })) {
+      const path = join(current, entry.name);
+      if (entry.isDirectory()) visit(path);
+      else if (entry.isFile() && SPEC_PATTERN.test(entry.name)) {
+        specs.push(relative(dir, path).split(sep).join('/'));
+      }
+    }
+  };
+  visit(dir);
+  return specs.sort((a, b) => a.localeCompare(b));
 }
 
 /** @param {string} value like `3/6` */
@@ -103,20 +118,21 @@ export function shardFilters(shard, total, specs, weights) {
 
 /**
  * Seconds per spec file from Playwright JSON reports (`--reporter=json`),
- * summing every attempt so a retried test counts what it really cost.
+ * summing every attempt so a retried test counts what it really cost. The
+ * report names files relative to `testDir`, the same key `listSpecs` uses.
  *
  * @param {unknown[]} reports parsed reports
  * @returns {Record<string, number>}
  */
 export function weightsFromReports(reports) {
   const totals = {};
+  const reportFile = (value) =>
+    typeof value === 'string' ? value.split('\\').join('/') : undefined;
   const visit = (suite, inherited) => {
     if (!suite || typeof suite !== 'object') return;
-    const file =
-      typeof suite.file === 'string' ? basename(suite.file) : inherited;
+    const file = reportFile(suite.file) ?? inherited;
     for (const spec of suite.specs ?? []) {
-      const specFile =
-        typeof spec.file === 'string' ? basename(spec.file) : file;
+      const specFile = reportFile(spec.file) ?? file;
       if (!specFile) continue;
       for (const test of spec.tests ?? []) {
         for (const result of test.results ?? []) {
