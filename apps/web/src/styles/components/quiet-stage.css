@@ -669,6 +669,12 @@
   display: none;
 }
 
+/* The assistant stream stands on the bar where the hint would be, and its
+   foot line reads there; the hint would sit on top of it. */
+.workspace.with-assistant .workspace-hint {
+  display: none;
+}
+
 /* ── The notice lane ──
    Everything that talks above the search bar shares one centred lane,
    stacked from the bar up: the selection chip, then the status row (the
@@ -699,7 +705,8 @@
    one-line hint. The hint only draws while no status is live, and the chip,
    which names the selection where the hint would be, hides it. */
 .viewer-area:has(.workspace-toast:not(.hidden)),
-.viewer-area:not(:has(.selection-chip)):has(.workspace-hint) {
+:where(.workspace:not(.with-assistant))
+  .viewer-area:not(:has(.selection-chip)):has(.workspace-hint) {
   --lane-status: 40px;
 }
 
