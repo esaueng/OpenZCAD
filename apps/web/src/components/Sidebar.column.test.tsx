@@ -112,4 +112,24 @@ describe('Sidebar', () => {
     await user.click(screen.getByTitle('Expand History'));
     expect(props.onToggleSection).toHaveBeenCalledWith('history');
   });
+
+  it('closes on a double-click in its empty space', async () => {
+    const user = userEvent.setup();
+    const onClose = vi.fn();
+    renderSidebar({ onClose });
+    await user.dblClick(
+      screen.getByRole('complementary', { name: 'Model browser' })
+    );
+    expect(onClose).toHaveBeenCalledTimes(1);
+  });
+
+  it('stays open when the double-click lands on a header or row', async () => {
+    const user = userEvent.setup();
+    const onClose = vi.fn();
+    const panelState = defaultPanelState();
+    renderSidebar({ onClose, panelState });
+    await user.dblClick(screen.getByTitle('Collapse History'));
+    await user.dblClick(screen.getByText('Feature 2'));
+    expect(onClose).not.toHaveBeenCalled();
+  });
 });
