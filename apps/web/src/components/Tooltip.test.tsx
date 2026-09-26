@@ -194,6 +194,32 @@ describe('Tooltip', () => {
       );
     });
 
+    it('treats a popover the rail mounts itself as a flyout', () => {
+      const right = window.innerWidth;
+      boxes.Rail = box(right - 50, 300, 40, 120);
+      boxes.Parts = box(right - 45, 305, 30, 30);
+      boxes.Flyout = box(right - 260, 290, 200, 80);
+      render(
+        <div
+          role="toolbar"
+          aria-label="Rail"
+          style={{ flexDirection: 'column' }}
+        >
+          <Tooltip label="Parts" description="Show the parts list">
+            <button type="button" aria-label="Parts">
+              P
+            </button>
+          </Tooltip>
+          <div data-rail-flyout="" aria-label="Flyout" />
+        </div>
+      );
+
+      fireEvent.focus(screen.getByRole('button', { name: 'Parts' }));
+      const tooltip = screen.getByRole('tooltip');
+      expect(tooltip).toHaveAttribute('data-placement', 'left');
+      expect(tooltip).toHaveTextContent(/^Parts$/);
+    });
+
     it('keeps the description when the flyout is elsewhere', () => {
       boxes.Rail = box(20, 300, 40, 120);
       boxes.Parts = box(25, 305, 30, 30);

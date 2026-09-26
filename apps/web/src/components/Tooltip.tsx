@@ -42,8 +42,12 @@ interface TooltipPosition {
   compact?: boolean;
 }
 
-/** Marks a rail's flyout container; its children are the open flyouts. */
-const RAIL_FLYOUTS_ATTRIBUTE = 'data-rail-flyouts';
+/**
+ * Open rail flyouts: the children of a rail's flyout container
+ * (`data-rail-flyouts`), or a popover the rail mounts itself
+ * (`data-rail-flyout`, the viewer rail's section and views panels).
+ */
+const RAIL_FLYOUT_SELECTOR = '[data-rail-flyouts] > *, [data-rail-flyout]';
 
 /**
  * How far from a rail's edge a flyout or another rail still counts as beside
@@ -328,7 +332,7 @@ export function Tooltip({
               side,
               rowTop,
               rowBottom,
-              document.querySelectorAll(`[${RAIL_FLYOUTS_ATTRIBUTE}] > *`)
+              document.querySelectorAll(RAIL_FLYOUT_SELECTOR)
             ) !== null
         });
         return;
