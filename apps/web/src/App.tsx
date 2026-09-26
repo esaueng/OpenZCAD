@@ -16387,6 +16387,9 @@ export function App() {
           return next;
         })
       }
+      onClose={() =>
+        setPanelState((current) => ({ ...current, drawerOpen: false }))
+      }
     />
   );
   const commandPaletteKey = commandPaletteShortcut();
