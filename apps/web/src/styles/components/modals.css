@@ -559,41 +559,6 @@
   }
 }
 
-.palette {
-  width: min(520px, 100%);
-  display: flex;
-  flex-direction: column;
-  max-height: 60vh;
-  background: var(--color-surface);
-  border: var(--border-strong);
-  border-radius: var(--radius-lg);
-  box-shadow: var(--shadow-3);
-  overflow: hidden;
-}
-
-.palette-input-row {
-  display: flex;
-  align-items: center;
-  gap: var(--sp-2);
-  padding: var(--sp-2) var(--sp-3);
-  color: var(--color-text-subtle);
-  border-bottom: var(--border-thin);
-}
-
-.palette-input-row input {
-  flex: 1;
-  height: 32px;
-  border: none;
-  background: transparent;
-  font-size: var(--fs-md);
-}
-
-.palette-input-row input:focus {
-  outline: none;
-  box-shadow: none;
-  border: none;
-}
-
 .palette-list {
   overflow-y: auto;
   padding: var(--sp-1);

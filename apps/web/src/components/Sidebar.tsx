@@ -176,7 +176,17 @@ interface SidebarProps {
   onBranchCheckpoint(checkpoint: ProjectCheckpoint): void;
   panelState: PanelState;
   onToggleSection(id: SidebarSectionId): void;
+  /** Closes the drawer; a double-click on its empty space calls it. */
+  onClose?(): void;
 }
+
+/**
+ * Double-clicks that belong to something inside the drawer — a row, a field,
+ * a header — rather than to the drawer itself. Rows are listed as well as
+ * controls so a fast double-select on a feature never closes the drawer.
+ */
+const DOUBLE_CLICK_OWNERS =
+  'button, a, input, textarea, select, label, summary, [contenteditable], [role="listitem"], [role="button"], .feature-row, .body-row, .revision-row, .diagnostic-row, .param-row';
 
 /** Body kind icons mirror the feature icons so the two lists read as one. */
 function bodyIcon(body: BodyRepresentation) {
@@ -238,7 +248,8 @@ export function Sidebar({
   onRestoreCheckpoint,
   onBranchCheckpoint,
   panelState,
-  onToggleSection
+  onToggleSection,
+  onClose
 }: SidebarProps) {
   // Drag-to-reorder state for the history timeline (StartScreen's pattern).
   const [dragFeatureId, setDragFeatureId] = useState<string | null>(null);
@@ -367,7 +378,19 @@ export function Sidebar({
     </>
   ) : undefined;
   return (
-    <aside className="sidebar" aria-label="Model browser">
+    <aside
+      className="sidebar"
+      aria-label="Model browser"
+      onDoubleClick={(event) => {
+        if (
+          onClose &&
+          event.target instanceof Element &&
+          !event.target.closest(DOUBLE_CLICK_OWNERS)
+        ) {
+          onClose();
+        }
+      }}
+    >
       <SidebarSection
         id="parameters"
         title="Parameters"
