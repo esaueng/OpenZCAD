@@ -1,14 +1,16 @@
 import { readFile } from 'node:fs/promises';
 import { fileURLToPath } from 'node:url';
 import {
-  test,
-  expect,
+  askAssistant,
   bareCanvasDrags,
+  expect,
   expectBodyCount,
   expectConsumedBodyCount,
   openAssistant,
+  promptField,
   shiftSelectTwoVisibleBoxEdges,
-  stubApi
+  stubApi,
+  test
 } from './openzcad-fixtures';
 
 test('suppresses features and rolls the timeline back as one undoable edit', async ({
@@ -1807,10 +1809,10 @@ test('applies an assistant-created sketch and same-proposal extrude', async ({
   await page.getByLabel('Project name').fill('AI Sketch Part');
   await page.getByRole('button', { name: 'Create project' }).click();
   await openAssistant(page);
-  await page
-    .getByLabel('CAD change request')
-    .fill('Create a 36 by 24 by 6 millimetre plate from a sketch');
-  await page.getByLabel('CAD change request').press('Enter');
+  await askAssistant(
+    page,
+    'Create a 36 by 24 by 6 millimetre plate from a sketch'
+  );
 
   const proposal = page.locator('.assistant-card.proposal.open');
   await expect(proposal).toContainText(
@@ -1941,10 +1943,7 @@ test('resumes a clarified request from an OpenRouter Responses stream', async ({
   await page.getByLabel('Project name').fill('Assistant Clarification');
   await page.getByRole('button', { name: 'Create project' }).click();
   await openAssistant(page);
-  await page
-    .getByLabel('CAD change request')
-    .fill('Parameterize the selected imported body');
-  await page.getByLabel('CAD change request').press('Enter');
+  await askAssistant(page, 'Parameterize the selected imported body');
 
   const questions = page.locator('.assistant-card.questions');
   await expect(questions).toContainText(
@@ -2012,10 +2011,7 @@ test('shows a stable failure when the assistant completes with invalid structure
   await page.getByLabel('Project name').fill('AI Failure Handling');
   await page.getByRole('button', { name: 'Create project' }).click();
   await openAssistant(page);
-  await page
-    .getByLabel('CAD change request')
-    .fill('Create a simple bottle bumper');
-  await page.getByLabel('CAD change request').press('Enter');
+  await askAssistant(page, 'Create a simple bottle bumper');
 
   const failure = page.locator('.assistant-card.message.error');
   await expect(failure).toContainText(
@@ -2116,14 +2112,11 @@ test('grounds an AI fillet request onto every selected edge', async ({
   await page.getByRole('button', { name: /^Fillet/ }).click();
   const inspector = page.getByRole('region', { name: 'Feature inspector' });
   await inspector.getByRole('button', { name: 'Select all 12 edges' }).click();
-  await expect(page.getByLabel('CAD change request')).toHaveAttribute(
+  await expect(promptField(page)).toHaveAttribute(
     'placeholder',
     'Ask about 12 selected edges…'
   );
-  await page
-    .getByLabel('CAD change request')
-    .fill('Add fillets of 1 mm on the selected edges');
-  await page.getByLabel('CAD change request').press('Enter');
+  await askAssistant(page, 'Add fillets of 1 mm on the selected edges');
 
   await expect(page.locator('.assistant-card.proposal.open')).toContainText(
     'Fillet every selected edge by 1 mm.'
@@ -2140,9 +2133,9 @@ test('grounds an AI fillet request onto every selected edge', async ({
   await expect(fillet).toBeVisible();
   await expect(fillet.getByTitle('Feature failed to build')).toHaveCount(0);
   await expect(page.getByRole('contentinfo')).toContainText('warnings0');
-  await expect(page.getByLabel('CAD change request')).toHaveAttribute(
+  await expect(promptField(page)).toHaveAttribute(
     'placeholder',
-    'Describe a part, or attach a drawing…'
+    'Ask about the model, or / for a command'
   );
   await expect(page.getByRole('button', { name: 'Deselect all' })).toHaveCount(
     0
@@ -2226,8 +2219,7 @@ test('rejects a disconnected Union proposed by the assistant before commit', asy
   await separateMove.getByLabel('Move Z in mm').fill('32');
   await separateMove.getByRole('button', { name: /Apply move/ }).click();
 
-  await page.getByLabel('CAD change request').fill('Union the two bodies');
-  await page.getByLabel('CAD change request').press('Enter');
+  await askAssistant(page, 'Union the two bodies');
   const failure = page.locator('.assistant-card.message.error');
   await expect(failure).toContainText('did not pass exact geometry preflight');
   await expect(failure).toContainText(
@@ -2299,7 +2291,7 @@ test('preflights and applies the verified chamfered-shaft suggestion without an 
       name: /Make a Ø30 × 60 mm shaft with a 1 mm chamfer on both ends/
     })
     .click();
-  const request = page.getByLabel('CAD change request');
+  const request = promptField(page);
   await expect(request).toHaveValue(
     'Make a Ø30 × 60 mm shaft with a 1 mm chamfer on both ends'
   );
@@ -2423,10 +2415,7 @@ test('grounds all cylinder edges onto its two visible rims', async ({
   // is ready, especially on a slower single-worker CI runner.
   await expect(page.getByRole('button', { name: /^Fillet/ })).toBeEnabled();
 
-  await page
-    .getByLabel('CAD change request')
-    .fill('Round every outside edge by 2 mm');
-  await page.getByLabel('CAD change request').press('Enter');
+  await askAssistant(page, 'Round every outside edge by 2 mm');
 
   const assistantRequest = await assistantRequestPromise;
   expect(assistantRequest.digest?.selection?.topologies).toHaveLength(0);

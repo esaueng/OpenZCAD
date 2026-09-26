@@ -90,12 +90,6 @@ export const UNSTYLED_ALLOWANCES = [
     classes: ['grow'],
     reason:
       'Same SidebarSection composition: .sidebar-section.grow is satisfied by the base class the component adds.'
-  },
-  {
-    file: 'apps/web/src/components/assistant/AssistantPanel.tsx',
-    classes: ['assistant-turn-who'],
-    reason:
-      'Inherits font, size and colour from .assistant-turn-meta on its parent header.'
   }
 ];
 

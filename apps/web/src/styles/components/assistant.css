@@ -1,31 +1,54 @@
-/* ── Assistant dock: launcher, thread, cards, questions, composer ──
+/* ── Assistant stream: the conversation standing on the prompt line ──
    Split out of app.css; the cascade still depends on the import order
    in app.css, so this file is not free to move. ── */
 
-/* ── The conversation, floating above the search bar ─────────
-   Search and the assistant are one entry point (U04 slice 5), so the
-   conversation opens where it is asked from: centred over the bottom lane,
-   standing on the search bar. It floats over the viewport like every other
-   island, so opening it costs the model no width. */
+/* ── The stream ──────────────────────────────────────────────
+   Search and the assistant are one prompt line (U04 slice 5), and the
+   conversation is a stream of text standing on it: no panel, no header,
+   no second field. It sits on the stage colour at full opacity so nothing
+   read competes with geometry, and that ground dies out over its top edge,
+   so the stream dissolves into the viewer instead of ending at a border.
+   Unfocused it goes quiet; the model wins by default. */
 
 .assistant-panel {
-  --assistant-bottom: calc(var(--island-gap) + var(--command-bar-h) + 8px);
+  --assistant-bottom: calc(var(--island-gap) + var(--command-bar-h));
+  /* How much of the top edge dissolves. The thread pads itself by the same
+     amount so its first visible line sits on solid ground. */
+  --assistant-fade: 72px;
   position: absolute;
   z-index: var(--z-assistant-float);
   left: var(--lane-inset);
   right: var(--lane-right);
   bottom: var(--assistant-bottom);
-  max-width: 560px;
-  height: min(560px, calc(100% - var(--stage-top) - var(--assistant-bottom)));
+  /* Left and right set the lane; the stream is the prompt line's width,
+     centred in it, and never wider than the lane on a phone. */
+  max-width: 520px;
+  max-height: min(
+    46vh,
+    calc(100% - var(--stage-top) - var(--assistant-bottom))
+  );
   min-width: 0;
   margin-inline: auto;
   display: grid;
-  grid-template-rows: auto minmax(0, 1fr) auto;
-  background: var(--color-surface);
-  border: var(--border-thin);
-  border-radius: var(--radius-lg);
-  box-shadow: var(--shadow-2);
+  grid-template-rows: minmax(0, 1fr) auto;
+  color: var(--color-text);
+  background: var(--color-bg);
+  border-radius: var(--radius-lg) var(--radius-lg) 0 0;
+  -webkit-backdrop-filter: blur(10px);
+  backdrop-filter: blur(10px);
+  -webkit-mask-image: linear-gradient(
+    to bottom,
+    transparent 0,
+    #000 var(--assistant-fade)
+  );
+  mask-image: linear-gradient(
+    to bottom,
+    transparent 0,
+    #000 var(--assistant-fade)
+  );
+  font-size: var(--fs-base);
   animation: assistant-dock-in var(--dur-base) var(--ease-out);
+  transition: max-height var(--dur-slow) var(--ease-out);
 }
 
 @keyframes assistant-dock-in {
@@ -39,22 +62,45 @@
   }
 }
 
+[data-reduced-motion='true'] .assistant-panel {
+  animation: none;
+  transition: none;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .assistant-panel {
+    animation: none;
+    transition: none;
+  }
+}
+
+/* Scrollback: the stream takes the stage and stops fading. */
+.assistant-panel.scrollback {
+  max-height: calc(100% - var(--stage-top) - var(--assistant-bottom));
+}
+
 /* A phone's bottom lane starts beside the column, which leaves a sliver;
    the conversation takes the stage's width instead. */
 @media (max-width: 520px) {
   .assistant-panel {
     left: var(--island-gap);
+    max-height: calc(100% - var(--stage-top) - var(--assistant-bottom));
   }
 }
 
 /*
-  A direct-manipulation mode hides the dock without unmounting it — the panel
-  holds the conversation and any request still streaming. `display: none` takes
-  it out of the grid entirely, so the workspace lays out as if it were absent.
+  A direct-manipulation mode hides the stream without unmounting it — the
+  panel holds the conversation and any request still streaming.
 */
-.assistant-panel.assistant-off-screen,
-.assistant-launcher.assistant-off-screen {
+.assistant-panel.assistant-off-screen {
   display: none;
+}
+
+/* The prompt line is the stream's foot: while the conversation stands on
+   it, the bar squares its top corners so the two read as one surface. */
+.workspace.with-assistant .command-bar {
+  border-top-left-radius: 0;
+  border-top-right-radius: 0;
 }
 
 .assistant-panel.dragging {
@@ -65,7 +111,7 @@
 .assistant-panel.dragging::after {
   content: 'Drop the drawing to attach it';
   position: absolute;
-  inset: auto 10px 84px;
+  inset: auto 10px 56px;
   padding: 7px 10px;
   color: var(--color-accent);
   background: var(--color-surface-2);
@@ -76,308 +122,46 @@
   pointer-events: none;
 }
 
-.assistant-header {
-  display: flex;
-  align-items: center;
-  gap: var(--sp-2);
-  padding: 7px 8px 7px 10px;
-  color: var(--color-accent);
-  border-bottom: var(--border-thin);
-}
-
-.assistant-heading {
-  min-width: 0;
-  flex: 1;
-  display: flex;
-  align-items: center;
-  gap: 6px;
-}
-
-.assistant-title {
-  flex: 0 0 auto;
-  color: var(--color-text-subtle);
-  font-family: var(--font-mono);
-  font-size: var(--fs-mini);
-  letter-spacing: 0.08em;
-}
-
-.assistant-model,
-.assistant-turn-count {
-  color: var(--color-text-subtle);
-  font-family: var(--font-mono);
-  font-size: var(--fs-mini);
-}
-
-.assistant-model {
-  min-width: 0;
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-}
-
-.assistant-icon-button {
-  width: 24px;
-  height: 24px;
-  display: grid;
-  place-items: center;
-  color: var(--color-text-muted);
-  border: 1px solid transparent;
-  border-radius: var(--radius-sm);
-}
-
-.assistant-icon-button:hover:not(:disabled) {
-  color: var(--color-text);
-  background: var(--color-surface-hover);
-  border-color: var(--color-border-strong);
-}
-
-/* ── Collapsed: the Ask button inside the command bar ─────────
-   The command bar hands the assistant a slot before its key glyph, and the
-   closed conversation waits there as a quiet button in the field: the same
-   place a question typed into the bar goes. */
-.assistant-launcher {
-  position: relative;
-  height: 28px;
-  display: inline-flex;
-  align-items: center;
-  gap: 6px;
-  padding: 0 8px;
-  color: var(--color-text-muted);
-  background: transparent;
-  border: 1px solid transparent;
-  border-radius: var(--radius-md);
-  font-size: var(--fs-base);
-  cursor: pointer;
-  animation: assistant-launcher-in var(--dur-base) var(--ease-out);
-  transition:
-    color var(--dur-fast) var(--ease-out),
-    background-color var(--dur-fast) var(--ease-out),
-    border-color var(--dur-fast) var(--ease-out);
-}
-
-@keyframes assistant-launcher-in {
-  from {
-    opacity: 0;
-  }
-  to {
-    opacity: 1;
-  }
-}
-
-.assistant-launcher:hover,
-.assistant-launcher:focus-visible {
-  color: var(--color-text);
-  background: var(--color-surface-hover);
-  border-color: var(--color-border-strong);
-}
-
-.assistant-launcher-word {
-  font-weight: 500;
-  white-space: nowrap;
-}
-
-/* Replies that landed behind the closed dock: one dot, the count in the name. */
-.assistant-launcher-badge {
-  width: 7px;
-  height: 7px;
-  border-radius: 999px;
-  background: var(--color-accent);
-  box-shadow: 0 0 0 2px var(--color-accent-dim);
-}
-
-.assistant-launcher.unread {
-  border-color: var(--color-accent-border);
-}
-
-/* The dock arrives with a short slide; closing is a cut, as with every
-   other panel here. */
-.assistant-panel {
-  animation: assistant-dock-in var(--dur-base) var(--ease-out);
-}
-
-@keyframes assistant-dock-in {
-  from {
-    opacity: 0;
-    transform: translateX(16px);
-  }
-  to {
-    opacity: 1;
-    transform: none;
-  }
-}
-
-[data-reduced-motion='true'] .assistant-panel,
-[data-reduced-motion='true'] .assistant-launcher {
-  animation: none;
-}
-
-/* Something is still streaming behind the closed conversation. */
-.assistant-launcher.working::before {
-  content: '';
-  position: absolute;
-  inset: -3px;
-  border: 1px solid var(--color-accent-hi);
-  border-radius: calc(var(--radius-md) + 3px);
-  pointer-events: none;
-  animation: assistant-pulse 1.8s var(--ease-out) infinite;
-}
-
-/* The pulse ends fully transparent, so collapsing it for reduced motion left
-   the launcher looking idle while a reply streamed. Hold the outline still. */
-[data-reduced-motion='true'] .assistant-launcher.working::before {
-  animation: none;
-  opacity: 0.75;
-}
-
-@media (prefers-reduced-motion: reduce) {
-  .assistant-launcher.working::before {
-    animation: none;
-    opacity: 0.75;
-  }
-}
-
-@keyframes assistant-pulse {
-  0% {
-    opacity: 0.75;
-    transform: scale(0.98);
-  }
-  70% {
-    opacity: 0;
-    transform: scale(1.12);
-  }
-  100% {
-    opacity: 0;
-    transform: scale(1.12);
-  }
-}
-
-/* ── Thread ─────────────────────────────────────────────── */
+/* ── The thread ─────────────────────────────────────────── */
 
 .assistant-thread {
   min-height: 0;
-  display: flex;
-  flex-direction: column;
-  gap: var(--sp-3);
-  padding: var(--sp-3) 10px;
   overflow-y: auto;
+  padding: var(--assistant-fade) 14px 10px 10px;
+  display: grid;
+  gap: 12px;
+  align-content: end;
   scroll-behavior: smooth;
-  scrollbar-gutter: stable;
+  transition: opacity var(--dur-base) var(--ease-out);
+}
+
+.assistant-panel.quiet .assistant-thread {
+  opacity: 0.8;
 }
 
 .assistant-day {
-  display: flex;
-  flex-direction: column;
-  gap: var(--sp-2);
+  display: grid;
+  gap: 12px;
 }
 
-/* Scrollback that spans weeks needs landmarks to read as a record. */
+/* An older day's landmark; today needs none. */
 .assistant-day-rule {
-  display: flex;
-  align-items: center;
-  gap: var(--sp-2);
-  color: var(--color-text-subtle);
+  padding-left: 28px;
+  color: var(--color-text-dim);
   font-family: var(--font-mono);
   font-size: var(--fs-mini);
-  letter-spacing: 0.06em;
+  letter-spacing: 0.08em;
   text-transform: uppercase;
 }
 
-.assistant-day-rule::before,
-.assistant-day-rule::after {
-  content: '';
-  flex: 1;
-  height: 1px;
-  background: var(--color-border);
-}
-
-.assistant-empty {
-  margin: auto 0;
-  display: grid;
-  gap: var(--sp-2);
-  color: var(--color-text-muted);
-  font-size: var(--fs-xs);
-  line-height: 1.55;
-}
-
-.assistant-empty p {
-  margin: 0;
-}
-
-.assistant-empty-lead {
-  color: var(--color-text);
-  font-size: var(--fs-sm);
-}
-
-.assistant-empty-hint {
-  color: var(--color-text-subtle);
-}
-
-.assistant-suggestions {
-  margin: var(--sp-1) 0 0;
-  padding: 0;
-  display: grid;
-  gap: 5px;
-  list-style: none;
-}
-
-/* Openers, not commands: clicking loads the prompt so it can be edited. */
-.assistant-suggestion {
-  width: 100%;
-  padding: 7px 9px;
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  gap: var(--sp-2);
-  color: var(--color-text);
-  background: var(--color-surface-2);
-  border: var(--border-thin);
-  border-radius: var(--radius-md);
-  font-size: var(--fs-xs);
-  line-height: 1.4;
-  text-align: left;
-  cursor: pointer;
-  transition:
-    background-color var(--dur-fast) var(--ease-out),
-    border-color var(--dur-fast) var(--ease-out),
-    transform var(--dur-fast) var(--ease-out);
-}
-
-.assistant-suggestion:hover:not(:disabled) {
-  background: var(--color-surface-hover);
-  border-color: var(--color-accent-border);
-  transform: translateX(2px);
-}
-
-.assistant-suggestion:disabled {
-  opacity: 0.5;
-}
-
-.assistant-suggestion-badge {
-  flex: 0 0 auto;
-  padding: 1px 5px;
-  color: var(--color-accent);
-  background: var(--color-accent-dim);
-  border: 1px solid var(--color-accent-border);
-  border-radius: var(--radius-md);
-  font-size: var(--fs-mini);
-  font-weight: var(--fw-medium);
-  letter-spacing: 0.02em;
-}
-
-/* ── Turns ──────────────────────────────────────────────── */
-
+/* One line: the glyph in the margin, the body, the time. */
 .assistant-turn {
-  position: relative;
-  display: flex;
-  flex-direction: column;
-  gap: 4px;
-  min-width: 0;
+  display: grid;
+  grid-template-columns: 18px minmax(0, 1fr) auto;
+  gap: 10px;
+  align-items: start;
   animation: assistant-turn-in var(--dur-base) var(--ease-out);
-}
-
-/* A second turn from the same speaker belongs to the one above it. */
-.assistant-turn.continues {
-  margin-top: -4px;
+  transition: opacity var(--dur-base) var(--ease-out);
 }
 
 @keyframes assistant-turn-in {
@@ -391,310 +175,254 @@
   }
 }
 
-.assistant-turn.user {
-  align-items: flex-end;
+[data-reduced-motion='true'] .assistant-turn {
+  animation: none;
 }
 
-.assistant-turn-meta {
-  display: inline-flex;
-  align-items: center;
-  gap: 5px;
-  color: var(--color-text-subtle);
-  font-family: var(--font-mono);
-  font-size: var(--fs-mini);
-  letter-spacing: 0.05em;
+@media (prefers-reduced-motion: reduce) {
+  .assistant-turn {
+    animation: none;
+  }
+}
+
+/* Age fades the stream on top of the top-edge dissolve: the further a line
+   is from the prompt, the quieter. Hovering lifts it for a read-back. */
+.assistant-thread:not(:hover)
+  .assistant-day
+  .assistant-turn:nth-last-child(n + 4) {
+  opacity: 0.86;
+}
+
+.assistant-thread:not(:hover)
+  .assistant-day
+  .assistant-turn:nth-last-child(n + 7) {
+  opacity: 0.68;
+}
+
+.assistant-thread:not(:hover)
+  .assistant-day
+  .assistant-turn:nth-last-child(n + 10) {
+  opacity: 0.5;
+}
+
+.assistant-panel.scrollback .assistant-turn {
+  opacity: 1;
 }
 
 .assistant-turn-mark {
+  height: 21px;
   display: grid;
   place-items: center;
-  width: 15px;
-  height: 15px;
+  color: var(--color-text-subtle);
+  font-size: 15px;
+  line-height: 21px;
+}
+
+.assistant-turn.user .assistant-turn-mark {
   color: var(--color-accent);
-  background: var(--color-accent-dim);
-  border-radius: 50%;
-}
-
-.assistant-turn-time {
-  font-variant-numeric: tabular-nums;
-  opacity: 0;
-  transition: opacity var(--dur-fast) var(--ease-out);
-}
-
-.assistant-turn:hover .assistant-turn-time,
-.assistant-turn:focus-within .assistant-turn-time {
-  opacity: 1;
 }
 
 .assistant-turn-body {
   min-width: 0;
-  max-width: 100%;
-  display: flex;
-  flex-direction: column;
+  display: grid;
+  gap: 5px;
 }
 
-.assistant-turn.user .assistant-turn-body {
-  align-items: flex-end;
+.assistant-turn-time {
+  color: var(--color-text-dim);
+  font-family: var(--font-mono);
+  font-size: var(--fs-mini);
+  line-height: 21px;
+  opacity: 0;
+  transition: opacity var(--dur-fast) var(--ease-out);
 }
 
-/*
-  The user's own words, set against the assistant's cards.
-  Blue-tinted and right-aligned rather than boxed like a panel: the tail corner
-  points back at the speaker, and a run of turns from one side squares the
-  corners that face each other so the run reads as one block.
-*/
-.assistant-bubble {
-  max-width: 90%;
-  padding: 8px 11px;
-  color: var(--color-text);
-  background: linear-gradient(
-    180deg,
-    color-mix(in srgb, var(--color-accent) 16%, transparent),
-    color-mix(in srgb, var(--color-accent) 9%, transparent)
-  );
-  border: 1px solid var(--color-accent-border);
-  border-radius: var(--radius-lg);
-  box-shadow: 0 1px 2px rgba(0, 0, 0, 0.25);
-  font-size: var(--fs-sm);
-  line-height: 1.5;
-  transition: border-color var(--dur-fast) var(--ease-out);
+.assistant-thread:hover .assistant-turn-time,
+.assistant-panel.scrollback .assistant-turn-time {
+  opacity: 1;
 }
 
-.assistant-turn.continues .assistant-bubble {
-  border-radius: var(--radius-lg);
-}
-
-.assistant-turn.user:hover .assistant-bubble {
-  border-color: var(--color-accent-hi);
-}
-
-.assistant-bubble p {
+/* The user's own words: the full ink, a touch heavier. */
+.assistant-ask {
   margin: 0;
-  white-space: pre-wrap;
+  color: var(--color-text);
+  font-weight: 500;
+  line-height: 1.5;
   overflow-wrap: anywhere;
 }
 
-/* Answers sent back to a question card: the question quiet, the value not. */
 .assistant-answer-list {
   margin: 0;
   display: grid;
-  gap: 6px;
-}
-
-.assistant-answer-list > div + div {
-  padding-top: 6px;
-  border-top: 1px solid color-mix(in srgb, var(--color-accent) 18%, transparent);
+  gap: 3px;
 }
 
 .assistant-answer-list dt {
-  color: var(--color-text-muted);
+  color: var(--color-text-subtle);
   font-size: var(--fs-mini);
-  line-height: 1.35;
 }
 
 .assistant-answer-list dd {
-  margin: 2px 0 0;
+  margin: 0;
   color: var(--color-text);
-  font-family: var(--font-mono);
-  font-size: var(--fs-xs);
+  font-weight: 500;
 }
 
 .assistant-thumbs {
-  margin-top: 7px;
   display: flex;
   flex-wrap: wrap;
   gap: 5px;
 }
 
 .assistant-thumbs img {
-  width: 62px;
-  height: 62px;
-  object-fit: cover;
-  background: #fff;
+  max-width: 120px;
+  max-height: 80px;
   border: var(--border-thin);
-  border-radius: var(--radius-md);
-  transition:
-    transform var(--dur-fast) var(--ease-out),
-    border-color var(--dur-fast) var(--ease-out);
+  border-radius: var(--radius-sm);
+  object-fit: cover;
 }
 
-.assistant-thumbs img:hover {
-  transform: scale(1.04);
-  border-color: var(--color-accent-border);
-}
-
-/* The drawing's bytes aged out of storage; the record of it did not. */
 .assistant-thumb-gone {
   display: inline-flex;
   align-items: center;
   gap: 4px;
-  padding: 4px 7px;
+  padding: 3px 7px;
   color: var(--color-text-subtle);
-  background: var(--color-surface);
-  border: 1px dashed var(--color-border-strong);
+  border: 1px dashed var(--color-border);
   border-radius: var(--radius-sm);
   font-size: var(--fs-mini);
 }
 
-/* ── Working indicator ──────────────────────────────────── */
+/* ── Empty stream ───────────────────────────────────────── */
 
-.assistant-working {
-  flex-direction: row;
-  align-items: flex-start;
-  gap: 7px;
-  color: var(--color-accent);
-  font-size: var(--fs-xs);
-  line-height: 1.45;
+.assistant-empty {
+  display: grid;
+  gap: 8px;
+  padding-left: 28px;
 }
 
-.assistant-typing {
-  display: inline-flex;
+.assistant-empty-lead {
+  margin: 0;
+  max-width: 52ch;
+  color: var(--color-text-muted);
+  line-height: 1.5;
+}
+
+.assistant-suggestions {
+  margin: 0 0 0 -28px;
+  padding: 0;
+  display: grid;
+  gap: 4px;
+  list-style: none;
+}
+
+/* An opener reads as a line already in the stream, in the quiet ink. */
+.assistant-suggestion {
+  width: 100%;
+  display: grid;
+  grid-template-columns: 18px minmax(0, 1fr) auto;
+  gap: 10px;
   align-items: center;
-  gap: 3px;
-  padding-top: 6px;
+  padding: 0;
+  color: var(--color-text-subtle);
+  border: 0;
+  border-radius: var(--radius-sm);
+  font-size: var(--fs-base);
+  text-align: left;
+  cursor: pointer;
 }
 
-.assistant-typing i {
-  width: 4px;
-  height: 4px;
-  background: var(--color-accent);
-  border-radius: 50%;
-  animation: assistant-typing 1.1s var(--ease-out) infinite;
+.assistant-suggestion .assistant-turn-mark {
+  color: var(--color-text-dim);
 }
 
-.assistant-typing i:nth-child(2) {
-  animation-delay: 0.15s;
+.assistant-suggestion:hover:not(:disabled),
+.assistant-suggestion:focus-visible {
+  color: var(--color-text);
 }
 
-.assistant-typing i:nth-child(3) {
-  animation-delay: 0.3s;
+.assistant-suggestion:hover:not(:disabled) .assistant-turn-mark {
+  color: var(--color-accent);
 }
 
-/* Still dots at the bounce's resting 0.25 read as disabled; hold them at a
-   legible middle instead. */
-[data-reduced-motion='true'] .assistant-typing i {
-  animation: none;
-  opacity: 0.6;
+.assistant-suggestion:disabled {
+  opacity: 0.5;
+  cursor: not-allowed;
 }
 
-@media (prefers-reduced-motion: reduce) {
-  .assistant-typing i {
-    animation: none;
-    opacity: 0.6;
-  }
+.assistant-suggestion-badge {
+  padding: 1px 5px;
+  color: var(--color-success);
+  border: 1px solid color-mix(in srgb, var(--color-success) 45%, transparent);
+  border-radius: var(--radius-sm);
+  font-family: var(--font-mono);
+  font-size: var(--fs-mini);
+  letter-spacing: 0.04em;
 }
 
-@keyframes assistant-typing {
-  0%,
-  60%,
-  100% {
-    opacity: 0.25;
-    transform: translateY(0);
-  }
-  30% {
-    opacity: 1;
-    transform: translateY(-3px);
-  }
+/* ── Working ────────────────────────────────────────────── */
+
+.assistant-working .assistant-turn-body {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: baseline;
+  gap: 8px;
 }
 
 .assistant-working-copy {
-  display: grid;
-  gap: 2px;
-  min-width: 0;
-}
-
-/* The sentence the model is writing, shown as it arrives. */
-.assistant-working-text {
   color: var(--color-text-muted);
-  font-style: normal;
-  overflow-wrap: anywhere;
 }
 
-/* ── Jump to latest ─────────────────────────────────────── */
+.assistant-working-text {
+  margin-left: 6px;
+  color: var(--color-text-subtle);
+  font-style: normal;
+}
 
-/* Sits against the right edge: centred, it landed on a proposal's Apply row. */
 .assistant-jump {
   position: absolute;
   right: 14px;
-  bottom: 104px;
-  z-index: 2;
+  bottom: 48px;
   display: inline-flex;
   align-items: center;
-  gap: 5px;
-  padding: 5px 10px;
-  color: var(--color-on-accent);
-  background: var(--color-accent);
-  border: 1px solid var(--color-accent-hi);
+  gap: 4px;
+  padding: 4px 8px;
+  color: var(--color-text);
+  background: var(--color-surface);
+  border: var(--border-strong);
   border-radius: var(--radius-md);
   font-size: var(--fs-mini);
-  box-shadow: 0 4px 14px rgba(0, 0, 0, 0.45);
-  cursor: pointer;
-  animation: assistant-turn-in var(--dur-fast) var(--ease-out);
+  box-shadow: var(--shadow-2);
 }
 
-.assistant-jump:hover {
-  background: var(--color-accent-hi);
-}
-
-/* ── Cards ──────────────────────────────────────────────── */
+/* ── Blocks: proposals, questions, replies ──────────────────
+   No cards. A block is a label, its copy and its actions on the stream's
+   own ground; the label's colour is the state. */
 
 .assistant-card {
   min-width: 0;
   display: grid;
-  gap: 7px;
-  padding: 9px 11px;
-  background: var(--color-surface-2);
-  border: var(--border-thin);
-  border-radius: var(--radius-lg);
-  box-shadow: 0 1px 2px rgba(0, 0, 0, 0.25);
-  font-size: var(--fs-xs);
+  gap: 5px;
 }
 
-.assistant-turn.continues .assistant-card {
-  border-radius: var(--radius-lg);
+.assistant-card.proposal.rejected .assistant-card-copy,
+.assistant-card.questions.sent .assistant-card-copy {
+  color: var(--color-text-subtle);
 }
 
-.assistant-card.questions {
-  border-color: var(--color-accent-border);
-}
-
-.assistant-card.proposal.open {
-  border-color: var(--color-accent-border);
-  box-shadow: inset 2px 0 0 var(--color-accent);
-}
-
-.assistant-card.proposal.previewing {
-  box-shadow:
-    inset 2px 0 0 var(--color-preview),
-    0 0 0 1px var(--color-preview);
-}
-
-.assistant-card.proposal.applied {
-  box-shadow: inset 2px 0 0 var(--color-success);
-}
-
-.assistant-card.proposal.rejected,
-.assistant-card.questions.sent {
-  opacity: 0.62;
-}
-
-.assistant-card.proposal.rejected:hover,
-.assistant-card.questions.sent:hover {
-  opacity: 1;
-}
-
-.assistant-card.message.error {
-  border-color: color-mix(in srgb, var(--color-error) 55%, transparent);
+.assistant-card.proposal.rejected .assistant-card-copy {
+  text-decoration: line-through;
 }
 
 .assistant-card-label {
   display: inline-flex;
   align-items: center;
-  gap: 5px;
+  gap: 6px;
+  min-height: 21px;
   color: var(--color-text-subtle);
   font-family: var(--font-mono);
   font-size: var(--fs-mini);
-  letter-spacing: 0.08em;
+  letter-spacing: 0.1em;
   text-transform: uppercase;
 }
 
@@ -705,6 +433,15 @@
 
 .assistant-card.proposal.applied .assistant-card-label {
   color: var(--color-success);
+}
+
+.assistant-card.proposal.rejected .assistant-card-label,
+.assistant-card.questions.sent .assistant-card-label {
+  color: var(--color-text-dim);
+}
+
+.assistant-card.message.error .assistant-card-label {
+  color: var(--color-error-text);
 }
 
 .assistant-card-note {
@@ -771,7 +508,7 @@
 .assistant-prose code {
   padding: 1px 4px;
   color: var(--color-accent-hi);
-  background: var(--color-bg);
+  background: var(--color-surface);
   border-radius: var(--radius-sm);
   font-family: var(--font-mono);
   font-size: 0.94em;
@@ -780,7 +517,7 @@
 .assistant-prose pre {
   margin: 0;
   padding: 7px 8px;
-  background: var(--color-bg);
+  background: var(--color-surface);
   border: var(--border-thin);
   border-radius: var(--radius-sm);
   overflow-x: auto;
@@ -795,40 +532,41 @@
 .assistant-card-copy {
   margin: 0;
   color: var(--color-text);
-  line-height: 1.45;
-}
-
-/* A plain reply is prose, so it is set at reading size like the user's own. */
-.assistant-card.message .assistant-card-copy {
-  font-size: var(--fs-sm);
   line-height: 1.5;
 }
 
+/* Text actions: the key that drives each, then the verb. */
 .assistant-card-actions {
   display: flex;
   flex-wrap: wrap;
   align-items: center;
-  gap: 4px;
+  gap: 4px 14px;
   margin-top: 2px;
 }
 
 .assistant-card-actions button {
-  min-height: 27px;
+  min-height: 24px;
   display: inline-flex;
   align-items: center;
   gap: 5px;
-  padding: 0 9px;
+  padding: 0;
   color: var(--color-text-muted);
   border: 1px solid transparent;
   border-radius: var(--radius-sm);
-  font-size: var(--fs-xs);
+  font-size: var(--fs-sm);
 }
 
 .assistant-card-actions button:hover:not(:disabled),
-.assistant-card-actions button.active {
+.assistant-card-actions button:focus-visible {
   color: var(--color-text);
-  background: var(--color-surface-hover);
-  border-color: var(--color-border-strong);
+}
+
+.assistant-card-actions button.active {
+  color: var(--color-preview);
+}
+
+.assistant-card-actions button kbd {
+  margin-right: 2px;
 }
 
 .assistant-action-hint {
@@ -838,15 +576,12 @@
 
 .assistant-primary,
 .assistant-card-actions .assistant-primary {
-  color: var(--color-on-accent);
-  background: var(--color-accent);
+  color: var(--color-accent);
 }
 
 .assistant-primary:hover:not(:disabled),
 .assistant-card-actions .assistant-primary:hover:not(:disabled) {
-  color: var(--color-on-accent);
-  background: var(--color-accent-hi);
-  border-color: var(--color-accent);
+  color: var(--color-accent-hi);
 }
 
 /* ── Questions ──────────────────────────────────────────── */
@@ -895,29 +630,24 @@
   align-items: center;
 }
 
+/* An option: a quiet outline that the accent picks up on hover. */
 .assistant-chip {
   min-height: 25px;
   padding: 0 9px;
-  color: var(--color-accent);
-  background: var(--color-accent-dim);
-  border: 1px solid var(--color-accent-border);
+  color: var(--color-text-muted);
+  background: transparent;
+  border: 1px solid var(--color-border-strong);
   border-radius: var(--radius-md);
-  font-size: var(--fs-mini);
+  font-size: var(--fs-sm);
   cursor: pointer;
   transition:
-    background-color var(--dur-fast) var(--ease-out),
-    color var(--dur-fast) var(--ease-out),
-    transform var(--dur-fast) var(--ease-out);
+    border-color var(--dur-fast) var(--ease-out),
+    color var(--dur-fast) var(--ease-out);
 }
 
 .assistant-chip:hover:not(:disabled) {
-  color: var(--color-on-accent);
-  background: var(--color-accent);
-  transform: translateY(-1px);
-}
-
-.assistant-chip:active:not(:disabled) {
-  transform: translateY(0);
+  color: var(--color-text);
+  border-color: var(--color-accent);
 }
 
 .assistant-chip-input {
@@ -964,11 +694,11 @@
 
 .assistant-assumptions {
   margin: 0;
-  padding-left: 15px;
+  padding-left: 17px;
   display: grid;
   gap: 3px;
   color: var(--color-text-muted);
-  font-size: var(--fs-mini);
+  font-size: var(--fs-sm);
   line-height: 1.45;
 }
 
@@ -1058,199 +788,173 @@
   color: var(--color-accent);
 }
 
-/* ── Composer ───────────────────────────────────────────── */
+/* ── Between the stream and the prompt ───────────────────── */
 
-.assistant-composer {
+.assistant-actions {
   display: grid;
-  gap: 5px;
-  padding: 8px 10px 9px;
-  border-top: var(--border-thin);
+  gap: 6px;
+  padding: 4px 10px 6px;
 }
 
 .assistant-notice {
   margin: 0;
-  color: var(--color-error-text);
-  font-size: var(--fs-mini);
+  padding-left: 28px;
+  color: var(--color-warning);
+  font-size: var(--fs-sm);
   line-height: 1.4;
 }
 
 .assistant-pending {
   display: flex;
   flex-wrap: wrap;
-  gap: 4px;
+  align-items: center;
+  gap: 6px;
+  padding-left: 28px;
 }
 
 .assistant-pending-item {
   display: inline-flex;
   align-items: center;
   gap: 5px;
-  padding: 3px 5px 3px 3px;
-  background: var(--color-surface-2);
+  padding: 2px 4px 2px 2px;
   border: var(--border-thin);
   border-radius: var(--radius-sm);
   font-size: var(--fs-mini);
 }
 
 .assistant-pending-item img {
-  width: 22px;
-  height: 22px;
+  width: 28px;
+  height: 20px;
+  border-radius: 2px;
   object-fit: cover;
-  background: #fff;
-  border-radius: var(--radius-sm);
 }
 
 .assistant-pending-label {
-  max-width: 116px;
+  max-width: 140px;
   overflow: hidden;
-  color: var(--color-text-muted);
   text-overflow: ellipsis;
   white-space: nowrap;
+  color: var(--color-text-muted);
 }
 
 .assistant-pending-item button {
   display: grid;
   place-items: center;
-  padding: 2px;
+  width: 16px;
+  height: 16px;
+  padding: 0;
   color: var(--color-text-subtle);
   border: 0;
+  border-radius: var(--radius-sm);
 }
 
 .assistant-pending-item button:hover {
   color: var(--color-text);
+  background: var(--color-surface-hover);
 }
 
-.assistant-verified-action {
-  min-width: 0;
-  padding: 5px 7px;
-  display: flex;
-  align-items: center;
-  gap: 5px;
-  color: var(--color-text-muted);
-  background: var(--color-surface-2);
-  border: var(--border-thin);
-  border-radius: var(--radius-sm);
+.assistant-pending-hint {
+  color: var(--color-text-dim);
+  font-family: var(--font-mono);
   font-size: var(--fs-mini);
+}
+
+.assistant-actions-row {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 2px 14px;
+  padding-left: 28px;
+}
+
+/* A verified recipe is a text action, its badge saying it never leaves
+   the app. */
+.assistant-verified-action {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  min-height: 24px;
+  padding: 0;
+  color: var(--color-text-muted);
+  border: 0;
+  font-size: var(--fs-sm);
   text-align: left;
+  cursor: pointer;
+}
+
+.assistant-verified-action:hover:not(:disabled),
+.assistant-verified-action:focus-visible {
+  color: var(--color-text);
+}
+
+.assistant-verified-action:disabled {
+  opacity: 0.5;
+  cursor: not-allowed;
+}
+
+.assistant-verified-action > span:first-child:not(.assistant-suggestion-badge) {
+  min-width: 0;
 }
 
 .assistant-edit-catalog {
-  max-height: 220px;
-  overflow-y: auto;
-  padding: 6px 0;
-  font-size: 12px;
+  padding-left: 28px;
+  color: var(--color-text-muted);
+  font-size: var(--fs-sm);
 }
 
 .assistant-edit-catalog summary {
   cursor: pointer;
-  padding: 4px;
+  color: var(--color-text-subtle);
+  font-family: var(--font-mono);
+  font-size: var(--fs-mini);
 }
 
 .assistant-edit-catalog p {
-  padding: 4px;
-  line-height: 1.5;
+  margin: 4px 0 0;
+  color: var(--color-text-subtle);
+  font-size: var(--fs-mini);
 }
 
-.assistant-edit-catalog .assistant-verified-action > span:first-child {
-  min-width: 0;
-  overflow: hidden;
-  text-overflow: ellipsis;
+.assistant-edit-catalog .assistant-verified-action {
+  display: flex;
+  margin-top: 4px;
 }
 
-.assistant-verified-action > span:nth-child(2) {
+/* The foot line: the model, then the quiet verbs. */
+.assistant-foot {
+  display: flex;
+  align-items: center;
+  justify-content: flex-end;
+  gap: 12px;
+  padding-top: 2px;
+  color: var(--color-text-dim);
+  font-family: var(--font-mono);
+  font-size: var(--fs-mini);
+}
+
+.assistant-model {
   min-width: 0;
+  margin-right: auto;
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
 }
 
-.assistant-verified-action .assistant-suggestion-badge {
-  margin-left: auto;
-}
-
-.assistant-verified-action:hover:not(:disabled) {
-  color: var(--color-text);
-  background: var(--color-surface-hover);
-  border-color: var(--color-accent-border);
-}
-
-.assistant-verified-action:disabled {
-  opacity: 0.5;
-}
-
-.assistant-prompt {
-  display: grid;
-  grid-template-columns: auto minmax(0, 1fr) auto;
-  align-items: end;
-  gap: 6px;
-  padding: 5px 5px 5px 6px;
-  background: var(--color-bg);
-  border: 1px solid var(--color-border-strong);
-  border-radius: var(--radius-md);
-  transition:
-    border-color var(--dur-fast) var(--ease-out),
-    box-shadow var(--dur-fast) var(--ease-out);
-}
-
-.assistant-prompt:focus-within {
-  border-color: var(--color-accent-border);
-  box-shadow: 0 0 0 2px var(--color-accent-dim);
-}
-
-.assistant-prompt textarea {
-  width: 100%;
-  min-height: 64px;
-  max-height: 180px;
+.assistant-foot-action {
   padding: 2px 0;
-  resize: none;
-  overflow-y: auto;
-  color: var(--color-text);
-  background: transparent;
+  color: var(--color-text-dim);
   border: 0;
-  box-shadow: none;
-  line-height: 20px;
-}
-
-.assistant-prompt textarea:focus {
-  box-shadow: none;
-}
-
-.assistant-submit {
-  width: 26px;
-  height: 26px;
-  display: grid;
-  place-items: center;
-  color: var(--color-on-accent);
-  background: var(--color-accent);
   border-radius: var(--radius-sm);
-  transition:
-    background-color var(--dur-fast) var(--ease-out),
-    opacity var(--dur-fast) var(--ease-out);
+  font: inherit;
+  cursor: pointer;
 }
 
-.assistant-submit:hover:not(:disabled) {
-  background: var(--color-accent-hi);
+.assistant-foot-action:hover:not(:disabled),
+.assistant-foot-action:focus-visible,
+.assistant-foot-action.active {
+  color: var(--color-text-muted);
 }
 
-/* Stopping a turn is a different act from sending one, and reads like it. */
-.assistant-submit.stop {
-  color: var(--color-text);
-  background: var(--color-surface-hover);
-  border: 1px solid var(--color-border-strong);
-}
-
-.assistant-submit.stop:hover {
-  color: var(--color-error-text);
-  border-color: color-mix(in srgb, var(--color-error) 55%, transparent);
-  background: var(--color-surface-2);
-}
-
-.assistant-submit:disabled {
-  opacity: 0.45;
-}
-
-.assistant-foot {
-  margin: 0;
-  color: var(--color-text-subtle);
-  font-family: var(--font-mono);
-  font-size: var(--fs-mini);
+.assistant-foot-action:disabled {
+  opacity: 0.5;
+  cursor: not-allowed;
 }

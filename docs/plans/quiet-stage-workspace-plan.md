@@ -55,7 +55,8 @@ Values ride the model at the point of action.
   `CONSTRAINT_TOOL_SPECS`; icons never move, relations that do not fit the
   selection grey out, and a name label appears only beside the ones that fit.
 - **History, Items, Parameters:** one drawer on the right, closed by default.
-- **Assistant:** merged into the ⌘K bar; the conversation grows up out of it.
+- **Assistant:** merged into the ⌘K bar; the conversation grows up out of it
+  as a stream of text fading into the viewer (the console assistant).
 - **Face offset preview ("B refined"):** only the change is coloured. The moved
   face is neutral with a signal outline; added material is a shaded green band
   on the side walls with a crisp seam at the old level; a cut shows the removed
@@ -142,6 +143,16 @@ Each slice is one PR against `main`, recorded on the U04 row when it merges.
    feature result opens the drawer on History and selects it; a parameter
    result opens it on Parameters and focuses the expression. The stored
    assistant width is no longer read; removing it is a follow-up.
+   Refined as the **console assistant**: the conversation is a stream of
+   text standing on the ⌘K bar, which is the one prompt line — plain words
+   ask, `/` lists commands with ghost completion, and the empty prompt
+   applies, previews or rejects the newest open proposal (Enter, `p`, Esc).
+   The stream sits on the stage colour at full opacity and dissolves over
+   its top edge, goes quiet while the prompt is unfocused, and keeps its
+   foot line (model, attach, history, clear, hide). No launcher: ⌘J tucks
+   the stream away and brings it back, and the bar's glyph carries the
+   working spark and the unread dot. Open: number keys for a question's
+   options, and `/attach` as a command for keyboard users.
 6. **Sketch card and relations rail.** Draw and modify tools in the left card,
    Finish at its foot; the relations rail on the right. Acceptance: every
    constraint kind reachable in rail order; greyed kinds carry the refusal

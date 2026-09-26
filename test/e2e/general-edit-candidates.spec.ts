@@ -1,9 +1,11 @@
 import {
-  test,
+  askAssistant,
   expect,
-  stubApi,
+  expectBodyCount,
   openAssistant,
-  expectBodyCount
+  promptField,
+  stubApi,
+  test
 } from './openzcad-fixtures';
 import {
   RemusKernel,
@@ -103,10 +105,7 @@ test('natural language selects a measured dimension, previews, applies and survi
   await expectBodyCount(page, 1);
   await expect(page.getByRole('contentinfo')).toContainText('warnings0');
   await openAssistant(page);
-  await page
-    .getByLabel('CAD change request')
-    .fill('Make the plate thickness editable as wall_thickness.');
-  await page.getByRole('button', { name: 'Send to the assistant' }).click();
+  await askAssistant(page, 'Make the plate thickness editable as wall_thickness.');
   const proposal = page.locator('.assistant-card.proposal.open').last();
   await expect(proposal).toBeVisible({ timeout: 60_000 });
   await proposal.getByRole('button', { name: 'Apply', exact: true }).click();
@@ -181,7 +180,7 @@ test('analyzes independent raised features and runs their direct action without 
   ).toBeVisible({ timeout: 60_000 });
   await page.locator('.assistant-edit-catalog summary').click();
   await page.getByRole('button', { name: /raised-feature visibility/ }).click();
-  await page.getByRole('button', { name: 'Send to the assistant' }).click();
+  await promptField(page).press('Enter');
   const proposal = page.locator('.assistant-card.proposal.open').last();
   await expect(proposal).toContainText('show_details', { timeout: 60_000 });
   await proposal.getByRole('button', { name: 'Apply', exact: true }).click();

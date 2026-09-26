@@ -3,11 +3,17 @@ import {
   platformShortcutLabel,
   type PlatformShortcutCopy
 } from '../lib/platformShortcut';
-import { MessageSquare, Search } from 'lucide-react';
+import { Sparkles } from 'lucide-react';
+import {
+  sendAssistantPromptFiles,
+  sendAssistantPromptKey
+} from '../lib/assistant/promptKeys';
 
 const LIST_ID = 'command-palette-list';
-const ASK_HINT_ID = 'command-bar-ask-hint';
 const optionId = (index: number) => `command-palette-option-${index}`;
+
+/** The grammar: a leading slash means a command, anything else is an ask. */
+export const COMMAND_PREFIX = '/';
 
 export interface PaletteCommand {
   id: string;
@@ -26,24 +32,34 @@ export interface PaletteCommand {
 interface CommandBarProps {
   commands: PaletteCommand[];
   /**
-   * The bar has focus and its list is up. The host owns it so ⌘K, "/" and
-   * Settings can open or close the bar; a click or focus opens it too.
+   * The bar has focus. The host owns it so ⌘K, "/" and Settings can take or
+   * drop focus; a click or focus opens it too.
    */
   open: boolean;
   onOpenChange(open: boolean): void;
   /**
-   * Sends the typed text to the assistant. Present, the list ends with an
-   * Ask row for whatever is typed and Tab turns the whole bar into a
-   * question, so search and asking are one entry point.
+   * Sends the typed text to the assistant. Present, anything typed without
+   * the slash is a question that Enter sends, so search and asking are one
+   * prompt line.
    */
   onAsk?(question: string): void;
   /** The platform's shortcut for the bar: ⌘K or Ctrl+K. */
   searchKey: PlatformShortcutCopy;
+  /** The assistant is answering: the prompt's glyph turns while it does. */
+  busy?: boolean;
+  /** A reply landed while the conversation was tucked away. */
+  unread?: boolean;
   /**
-   * The slot inside the bar, before the shortcut, that the assistant renders
-   * its Ask launcher into while the conversation is closed.
+   * What an ask can see, for the placeholder: "12 selected edges". The
+   * conversation reports it, since it owns the selection summary.
    */
-  onAssistantSlot?(slot: HTMLElement | null): void;
+  context?: string | null;
+  /**
+   * Words put into the field from outside: a suggestion the conversation
+   * offers, or a question it could not take yet. A fresh id sets the field
+   * and focuses it, even to the same words twice.
+   */
+  draft?: { id: number; text: string } | null;
 }
 
 function wordStartsWith(value: string, token: string): boolean {
@@ -105,11 +121,28 @@ function rankedCommands(
 }
 
 /**
- * The search field at the foot of the stage. It is the command palette
- * itself: focusing it (a click, ⌘K or "/") lists every workspace command
- * above the bar, anchored to it rather than over the model in a modal.
- * Type to filter, arrows to move, Enter to run; Tab turns the bar into a
- * question for the assistant, and Escape hands focus back.
+ * The rest of the highlighted command's name, when what is typed is its
+ * start: "/cy" shows "linder" after it, and Tab accepts.
+ */
+function completionOf(typed: string, command: PaletteCommand | undefined) {
+  if (!command || typed.length === 0) {
+    return '';
+  }
+  const label = command.label;
+  return label.toLowerCase().startsWith(typed.toLowerCase())
+    ? label.slice(typed.length)
+    : '';
+}
+
+/**
+ * The prompt line at the foot of the stage, the one text field on it.
+ *
+ * Plain words are a question for the assistant, and Enter sends them. A
+ * leading slash is a command: the list of matches stands on the bar, the
+ * highlighted one completes in ghost text, Tab accepts it, arrows move and
+ * Enter runs it. Empty, Enter applies the proposal waiting in the stream, `p`
+ * previews it and Escape rejects it; Escape otherwise clears the field, then
+ * hands focus back to where it was.
  */
 export function CommandBar({
   commands,
@@ -117,10 +150,12 @@ export function CommandBar({
   onOpenChange,
   onAsk,
   searchKey,
-  onAssistantSlot
+  busy = false,
+  unread = false,
+  context = null,
+  draft = null
 }: CommandBarProps) {
   const [query, setQuery] = useState('');
-  const [asking, setAsking] = useState(false);
   const [activeIndex, setActiveIndex] = useState(0);
   const inputRef = useRef<HTMLInputElement | null>(null);
   const listRef = useRef<HTMLDivElement | null>(null);
@@ -128,37 +163,20 @@ export function CommandBar({
   // that has run: the canvas keeps its keys instead of landing on <body>.
   const returnFocusRef = useRef<HTMLElement | null>(null);
 
-  const askMode = asking && onAsk !== undefined;
+  const commandMode = query.startsWith(COMMAND_PREFIX);
+  const typed = commandMode ? query.slice(COMMAND_PREFIX.length) : '';
   // The host rebuilds the command list every render; only rank it while
   // the list is up.
   const matches = useMemo(
-    () => (open ? rankedCommands(commands, query) : []),
-    [commands, open, query]
+    () => (open && commandMode ? rankedCommands(commands, typed) : []),
+    [commands, open, commandMode, typed]
   );
-  const question = query.trim();
-  const visible = useMemo<PaletteCommand[]>(
-    () =>
-      onAsk && question
-        ? [
-            ...matches,
-            {
-              id: 'ask-assistant',
-              label: `Ask the assistant: “${question}”`,
-              group: 'Ask',
-              icon: <MessageSquare size={14} aria-hidden="true" />,
-              run: () => onAsk(question)
-            }
-          ]
-        : matches,
-    [matches, onAsk, question]
-  );
-  // View mode hands the bar no modeling commands, so the examples have to
-  // follow — a hint naming tools the list does not contain reads as a bug.
-  const examples = commands.some((command) => command.id.startsWith('tool-'))
-    ? 'box, extrude, front view, export'
-    : 'front view, fit, export';
-  const clampedIndex = Math.min(activeIndex, Math.max(visible.length - 1, 0));
-  const listShown = open && !askMode;
+  const question = commandMode ? '' : query.trim();
+  const clampedIndex = Math.min(activeIndex, Math.max(matches.length - 1, 0));
+  const listShown = open && commandMode;
+  const completion = listShown
+    ? completionOf(typed, matches[clampedIndex])
+    : '';
 
   useEffect(() => {
     setActiveIndex(0);
@@ -176,6 +194,26 @@ export function CommandBar({
     }
   }, [open]);
 
+  const handledDraftId = useRef<number | null>(null);
+  useEffect(() => {
+    if (!draft || handledDraftId.current === draft.id) {
+      return;
+    }
+    handledDraftId.current = draft.id;
+    setQuery(draft.text);
+    onOpenChange(true);
+    const input = inputRef.current;
+    if (input) {
+      input.focus();
+      // Focus alone keeps the caret where it last was; a suggestion is
+      // edited from its end.
+      const end = draft.text.length;
+      requestAnimationFrame(() => input.setSelectionRange(end, end));
+    }
+    // Only a new draft id writes the field; onOpenChange is stable enough.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [draft]);
+
   useEffect(() => {
     if (!listShown) {
       return;
@@ -188,7 +226,6 @@ export function CommandBar({
 
   function reset() {
     setQuery('');
-    setAsking(false);
     setActiveIndex(0);
   }
 
@@ -214,24 +251,26 @@ export function CommandBar({
   }
 
   function placeholder(): string {
-    if (askMode) {
-      return 'Ask the assistant…';
+    if (!onAsk) {
+      return 'Type / for a command';
     }
-    if (open) {
-      return onAsk
-        ? `Type a command or a question… (${examples})`
-        : `Type a command… (${examples})`;
+    if (context) {
+      return `Ask about ${context}…`;
     }
-    return onAsk ? 'Search commands or ask the assistant' : 'Search commands';
+    return 'Ask about the model, or / for a command';
   }
+
+  const empty = query.length === 0;
 
   return (
     <div className="command-bar-row">
       <div
-        className={`command-bar${open ? ' open' : ''}${askMode ? ' asking' : ''}`}
+        className={`command-bar${open ? ' open' : ''}${
+          commandMode ? ' command' : ''
+        }${busy ? ' busy' : ''}${unread ? ' unread' : ''}`}
         onMouseDown={(event) => {
-          // The icon, the chip and the key glyph are part of the field: a
-          // press on them focuses it rather than whatever lies behind.
+          // The glyph and the key badge are part of the field: a press on
+          // them focuses it rather than whatever lies behind.
           const target = event.target as HTMLElement;
           if (!target.closest('button, input, .command-bar-float')) {
             event.preventDefault();
@@ -239,137 +278,159 @@ export function CommandBar({
           }
         }}
       >
-        {open && (
+        {listShown && (
           <div
             className="command-bar-float"
             // Rows are pressed with the mouse while focus stays in the field.
             onMouseDown={(event) => event.preventDefault()}
           >
-            {askMode ? (
-              <p className="command-bar-keys" id={ASK_HINT_ID}>
-                Enter sends this to the assistant · Tab goes back to commands
-              </p>
-            ) : (
-              <>
-                <div
-                  className="palette-list"
-                  id={LIST_ID}
-                  role="listbox"
-                  aria-label="Commands"
-                  ref={listRef}
+            <div
+              className="palette-list"
+              id={LIST_ID}
+              role="listbox"
+              aria-label="Commands"
+              ref={listRef}
+            >
+              {matches.length === 0 && (
+                <p className="palette-empty">No matching command.</p>
+              )}
+              {matches.map((command, index) => (
+                <button
+                  key={command.id}
+                  type="button"
+                  id={optionId(index)}
+                  role="option"
+                  aria-selected={index === clampedIndex}
+                  aria-disabled={command.disabledReason ? true : undefined}
+                  // Focus stays in the field; the rows are described
+                  // through aria-activedescendant instead.
+                  tabIndex={-1}
+                  className={`palette-row ${index === clampedIndex ? 'active' : ''} ${
+                    command.disabledReason ? 'disabled' : ''
+                  }`}
+                  title={command.disabledReason ?? undefined}
+                  onMouseEnter={() => setActiveIndex(index)}
+                  onClick={() => runCommand(command)}
                 >
-                  {matches.length === 0 && (
-                    <p className="palette-empty">
-                      {onAsk && question
-                        ? 'No matching command. Enter asks the assistant.'
-                        : 'No matching command.'}
-                    </p>
+                  <span className="palette-icon">{command.icon}</span>
+                  <span className="palette-label">{command.label}</span>
+                  {command.disabledReason ? (
+                    <small className="palette-reason">
+                      {command.disabledReason}
+                    </small>
+                  ) : (
+                    <small className="palette-group">{command.group}</small>
                   )}
-                  {visible.map((command, index) => (
-                    <button
-                      key={command.id}
-                      type="button"
-                      id={optionId(index)}
-                      role="option"
-                      aria-selected={index === clampedIndex}
-                      aria-disabled={command.disabledReason ? true : undefined}
-                      // Focus stays in the field; the rows are described
-                      // through aria-activedescendant instead.
-                      tabIndex={-1}
-                      className={`palette-row ${index === clampedIndex ? 'active' : ''} ${
-                        command.disabledReason ? 'disabled' : ''
-                      }`}
-                      title={command.disabledReason ?? undefined}
-                      onMouseEnter={() => setActiveIndex(index)}
-                      onClick={() => runCommand(command)}
-                    >
-                      <span className="palette-icon">{command.icon}</span>
-                      <span className="palette-label">{command.label}</span>
-                      {command.disabledReason ? (
-                        <small className="palette-reason">
-                          {command.disabledReason}
-                        </small>
-                      ) : (
-                        <small className="palette-group">{command.group}</small>
-                      )}
-                      {command.shortcut && (
-                        <kbd>{platformShortcutLabel(command.shortcut)}</kbd>
-                      )}
-                    </button>
-                  ))}
-                </div>
-                <p className="command-bar-keys" aria-hidden="true">
-                  ↑↓ move · Enter runs
-                  {onAsk ? ' · Tab asks the assistant' : ''} · Esc closes
-                </p>
-              </>
-            )}
+                  {command.shortcut && (
+                    <kbd>{platformShortcutLabel(command.shortcut)}</kbd>
+                  )}
+                </button>
+              ))}
+            </div>
+            <p className="command-bar-keys" aria-hidden="true">
+              ↑↓ move · Tab completes · Enter runs · Esc clears
+            </p>
           </div>
         )}
         <span className="command-bar-lead" aria-hidden="true">
-          {askMode ? <MessageSquare size={15} /> : <Search size={15} />}
+          <span className="command-bar-glyph">›</span>
+          <span className="command-bar-spark">
+            <Sparkles size={13} />
+          </span>
         </span>
-        <input
-          ref={inputRef}
-          className="command-bar-input"
-          value={query}
-          placeholder={placeholder()}
-          spellCheck={false}
-          autoComplete="off"
-          role="combobox"
-          aria-label="Search commands"
-          aria-keyshortcuts={searchKey.accessible.replace('Cmd', 'Meta')}
-          aria-autocomplete="list"
-          aria-expanded={listShown}
-          aria-controls={listShown ? LIST_ID : undefined}
-          aria-activedescendant={
-            listShown && visible.length > 0 ? optionId(clampedIndex) : undefined
-          }
-          aria-describedby={askMode ? ASK_HINT_ID : undefined}
-          onFocus={(event) => {
-            const from = event.relatedTarget;
-            returnFocusRef.current = from instanceof HTMLElement ? from : null;
-            if (!open) {
-              onOpenChange(true);
+        <span className="command-bar-field">
+          {completion && (
+            // The ghost sits under the field in the same type: the typed
+            // text is invisible so the completion lands after it.
+            <span className="command-bar-ghost" aria-hidden="true">
+              <span className="command-bar-ghost-typed">{query}</span>
+              {completion}
+            </span>
+          )}
+          <input
+            ref={inputRef}
+            className="command-bar-input"
+            value={query}
+            placeholder={placeholder()}
+            spellCheck={false}
+            autoComplete="off"
+            role="combobox"
+            aria-label="Search commands"
+            aria-keyshortcuts={searchKey.accessible.replace('Cmd', 'Meta')}
+            aria-autocomplete="list"
+            aria-expanded={listShown}
+            aria-controls={listShown ? LIST_ID : undefined}
+            aria-activedescendant={
+              listShown && matches.length > 0
+                ? optionId(clampedIndex)
+                : undefined
             }
-          }}
-          onBlur={() => {
-            reset();
-            onOpenChange(false);
-          }}
-          onChange={(event) => setQuery(event.target.value)}
-          onKeyDown={(event) => {
-            if (event.key === 'Escape') {
-              event.preventDefault();
-              dismiss();
-            } else if (event.key === 'Tab' && !event.shiftKey && onAsk) {
-              // Shift+Tab still leaves the field, so Tab never traps focus.
-              event.preventDefault();
-              setAsking((current) => !current);
-            } else if (askMode) {
-              if (event.key === 'Enter') {
+            onFocus={(event) => {
+              const from = event.relatedTarget;
+              returnFocusRef.current =
+                from instanceof HTMLElement ? from : null;
+              if (!open) {
+                onOpenChange(true);
+              }
+            }}
+            onBlur={() => {
+              reset();
+              onOpenChange(false);
+            }}
+            onChange={(event) => setQuery(event.target.value)}
+            onPaste={(event) => {
+              // A pasted screenshot or drawing attaches to the next ask;
+              // pasted text is typed as usual.
+              const files = Array.from(event.clipboardData?.files ?? []);
+              if (files.length > 0 && sendAssistantPromptFiles(files)) {
                 event.preventDefault();
-                if (question) {
+              }
+            }}
+            onKeyDown={(event) => {
+              const meta = event.metaKey || event.ctrlKey;
+              if (event.key === 'Escape') {
+                event.preventDefault();
+                if (!empty) {
+                  reset();
+                } else if (!sendAssistantPromptKey('reject')) {
                   dismiss();
-                  onAsk?.(question);
+                }
+              } else if (meta && event.key === 'ArrowUp') {
+                event.preventDefault();
+                sendAssistantPromptKey('history');
+              } else if (event.key === 'Tab' && !event.shiftKey && completion) {
+                // Shift+Tab still leaves the field, so Tab never traps focus.
+                event.preventDefault();
+                // The command's own spelling, not the typed case.
+                setQuery(`${COMMAND_PREFIX}${matches[clampedIndex]!.label}`);
+              } else if (listShown && event.key === 'ArrowDown') {
+                event.preventDefault();
+                setActiveIndex((index) =>
+                  Math.min(index + 1, matches.length - 1)
+                );
+              } else if (listShown && event.key === 'ArrowUp') {
+                event.preventDefault();
+                setActiveIndex((index) => Math.max(index - 1, 0));
+              } else if (event.key === 'Enter') {
+                event.preventDefault();
+                if (commandMode) {
+                  runCommand(matches[clampedIndex]);
+                } else if (question) {
+                  if (onAsk) {
+                    dismiss();
+                    onAsk(question);
+                  }
+                } else {
+                  sendAssistantPromptKey('apply');
+                }
+              } else if (empty && event.key === 'p' && !meta) {
+                if (sendAssistantPromptKey('preview')) {
+                  event.preventDefault();
                 }
               }
-            } else if (event.key === 'ArrowDown') {
-              event.preventDefault();
-              setActiveIndex((index) =>
-                Math.min(index + 1, visible.length - 1)
-              );
-            } else if (event.key === 'ArrowUp') {
-              event.preventDefault();
-              setActiveIndex((index) => Math.max(index - 1, 0));
-            } else if (event.key === 'Enter') {
-              event.preventDefault();
-              runCommand(visible[clampedIndex]);
-            }
-          }}
-        />
-        {askMode && <span className="command-bar-mode">Ask</span>}
-        <div className="command-bar-slot" ref={onAssistantSlot} />
+            }}
+          />
+        </span>
         <kbd>{searchKey.glyph}</kbd>
       </div>
     </div>

@@ -1,7 +1,12 @@
 import { mkdir, readFile, writeFile } from 'node:fs/promises';
 import { fileURLToPath } from 'node:url';
 import { expect, test, type Page } from '@playwright/test';
-import { expectBodyCount, openAssistant, stubApi } from './openzcad-fixtures';
+import {
+  expectBodyCount,
+  openAssistant,
+  promptField,
+  stubApi
+} from './openzcad-fixtures';
 import {
   RemusKernel,
   loadRemusTranslators
@@ -183,8 +188,8 @@ async function applyVerified(page: Page, label: string) {
     page.getByRole('button', { name: 'Stop the assistant' })
   ).toHaveCount(0, { timeout: 180_000 });
   await chip.click();
-  await expect(page.getByLabel('CAD change request')).toHaveValue(label);
-  await page.getByRole('button', { name: 'Send to the assistant' }).click();
+  await expect(promptField(page)).toHaveValue(label);
+  await promptField(page).press('Enter');
   const proposal = page.locator('.assistant-card.proposal.open').last();
   await expect(proposal).toBeVisible({ timeout: 180_000 });
   // Counted, not `.last()`: with one recipe already applied, the previous

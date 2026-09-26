@@ -83,8 +83,8 @@ interface AppShellProps {
    */
   assistantHidden?: boolean;
   /**
-   * A deliberate collapse: the panel renders its Ask launcher on the search
-   * bar instead of the conversation.
+   * A deliberate collapse: the stream is tucked away behind the prompt line,
+   * which keeps the conversation and shows a dot for replies that land.
    */
   assistantCollapsed?: boolean;
   /** The user's panel widths, in CSS pixels, published to the layout. */
