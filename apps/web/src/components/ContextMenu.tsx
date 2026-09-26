@@ -23,12 +23,12 @@ export interface ContextMenuState {
   y: number;
   items: ContextMenuItem[];
   /**
-   * Where the menu was summoned from. The viewport gets the radial layout,
-   * because a right-click there is already a pointer gesture and direction
-   * is what a hand can learn. A row in the sidebar tree is a list, and a
-   * list's actions belong in a list.
+   * What the actions apply to, named above them. A right-click on the
+   * model picks whatever is under the pointer, which may not be what the
+   * eye had settled on, so the menu says which body and face it took
+   * before offering to act on it.
    */
-  origin?: 'viewport' | 'list';
+  heading?: string;
 }
 
 interface ContextMenuProps {
@@ -39,7 +39,11 @@ interface ContextMenuProps {
   onClose(): void;
 }
 
-/** Positioned right-click menu; closes on outside pointer, Esc, or selection. */
+/**
+ * Positioned right-click menu; closes on outside pointer, Esc, or selection.
+ * The sidebar's rows and the viewport share it, so an action is found the
+ * same way wherever it was summoned from.
+ */
 export function ContextMenu({
   menu,
   closing = false,
@@ -94,6 +98,11 @@ export function ContextMenu({
       tabIndex={-1}
       style={{ left: position.x, top: position.y }}
     >
+      {menu.heading && (
+        <div className="context-menu-heading" aria-hidden="true">
+          {menu.heading}
+        </div>
+      )}
       {menu.items.map((item) => (
         <div
           key={item.id}
