@@ -909,12 +909,40 @@
 }
 
 /* In the same range the search lane stops mirroring the readout's reserve on
-   the right, which left it W − 520px wide (80px at a 600px window): it only
-   has to clear the orientation cube, the 144px the scale bar also steps
-   around. A phone keeps its own edge-to-edge lane. */
-@media (min-width: 521px) and (max-width: 1159px) {
+   the right, which left it W − 520px wide (80px at a 600px window). Above
+   960px it only has to clear the orientation cube in the corner, the 144px
+   the scale bar also steps around; at 960px and below the cube already
+   stands above the search row (workspace-column.css), so the lane runs to
+   the island gap as on a phone and is W − 270px wide. */
+@media (min-width: 961px) and (max-width: 1159px) {
   .workspace.column-layout:has(.workspace-column-float .sketch-rail) {
     --lane-right: calc(var(--island-gap) * 2 + 144px);
+  }
+}
+
+@media (min-width: 521px) and (max-width: 960px) {
+  .workspace.column-layout:has(.workspace-column-float .sketch-rail) {
+    --lane-right: var(--island-gap);
+  }
+}
+
+/* Below 664px that lane (W − 270px) is no wider than the widest phone lane,
+   394px, so the bar takes the phone's treatment there too: no ⌘K glyph,
+   and Ask as its icon (the button keeps its name). */
+@media (min-width: 521px) and (max-width: 663px) {
+  .workspace.column-layout:has(.workspace-column-float .sketch-rail)
+    .command-bar-slot
+    .assistant-launcher {
+    padding-inline: 7px;
+  }
+
+  .workspace.column-layout:has(.workspace-column-float .sketch-rail)
+    .command-bar
+    > kbd,
+  .workspace.column-layout:has(.workspace-column-float .sketch-rail)
+    .command-bar-slot
+    .assistant-launcher-word {
+    display: none;
   }
 }
 
