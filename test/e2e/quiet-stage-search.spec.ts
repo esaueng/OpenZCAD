@@ -129,15 +129,16 @@ test('a slash lists commands with ghost completion, and Tab accepts it', async (
   await expect(search).toBeFocused();
   await expect(search).toHaveValue('/Box');
   await page.keyboard.press('Enter');
-  await expect(
-    page.getByRole('region', { name: 'Box operation' })
-  ).toBeVisible();
-  await page.keyboard.press('Escape');
+  // The command ran: the Box tool's inspector is up and the field is clear.
+  const inspector = page.getByRole('region', { name: 'Feature inspector' });
+  await expect(inspector).toBeVisible();
+  await expect(search).toHaveValue('');
+  await inspector.getByRole('button', { name: /^Create/ }).click();
 
-  // The same words without the slash are a question.
+  // The same words without the slash are a question, not the command.
   await askAssistant(page, 'box');
   await expect(page.locator('.assistant-thread')).toContainText('box');
-  await expect(page.getByRole('region', { name: 'Box operation' })).toHaveCount(
-    0
+  await expect(page.locator('.assistant-card.proposal')).toContainText(
+    'Add a 10 mm cube.'
   );
 });
