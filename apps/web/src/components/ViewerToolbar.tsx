@@ -238,6 +238,7 @@ export function ViewerToolbar({
         {settings.sectionView && sectionRange && (
           <div
             className="rail-section-panel"
+            data-rail-flyout=""
             role="group"
             aria-label="Section plane offset"
           >
@@ -320,6 +321,7 @@ export function ViewerToolbar({
         {viewsOpen && (
           <div
             className="rail-views-panel"
+            data-rail-flyout=""
             id={panelId}
             role="group"
             aria-label="Standard views"

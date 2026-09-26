@@ -552,7 +552,7 @@ export function SketchToolRail({
           </>
         )}
       </div>
-      <div className="sketch-flyouts">
+      <div className="sketch-flyouts" data-rail-flyouts="">
         {entityEditor}
         {palette}
       </div>
