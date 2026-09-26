@@ -68,9 +68,20 @@ test('a question typed into the prompt goes to the stream standing on it', async
     'Add a 10 mm cube.'
   );
 
+  // Once the status goes quiet the guidance hint takes the bar's lane, but
+  // the stream's foot line stands there: the hint waits until it is tucked
+  // away rather than drawing over it.
+  const hint = page.locator('.workspace-hint');
+  await expect(page.locator('.workspace-toast')).toHaveClass(/\bhidden\b/, {
+    timeout: 15_000
+  });
+  await expect(hint).toHaveCount(1);
+  await expect(hint).toBeHidden();
+
   await page.getByRole('button', { name: 'Collapse the assistant' }).click();
   await expect(panel).toHaveCount(0);
   await expect(search).toBeVisible();
+  await expect(hint).toBeVisible();
 });
 
 test('a press off the stream tucks it away, and the prompt brings it back', async ({
