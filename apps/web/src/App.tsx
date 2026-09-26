@@ -485,6 +485,7 @@ import {
   edgeLengthMeasurement,
   faceLabel,
   textLabelSegments,
+  topologySelectionLabel,
   topologySelectionLabelSegments,
   type LabelSegment
 } from './lib/topologyLabels';
@@ -500,7 +501,6 @@ import { CommandBar, type PaletteCommand } from './components/CommandBar';
 import { ShortcutsOverlay } from './components/ShortcutsOverlay';
 import { DISPLAY_MODE_LABELS } from './lib/displayMode';
 import { ContextMenu, type ContextMenuState } from './components/ContextMenu';
-import { MarkingMenu } from './components/MarkingMenu';
 import type { BodyFeatureIds } from '@openzcad/document-core';
 import {
   resolveExtrudeOperation,
@@ -2115,12 +2115,7 @@ export function App() {
   );
   const [shortcutsOpen, setShortcutsOpen] = useState(false);
   const [contextMenu, setContextMenu] = useState<ContextMenuState | null>(null);
-  // The list menu fades out; the radial one is a pointer gesture and goes
-  // with the pointer.
-  const listMenuExit = useDelayedUnmount(
-    contextMenu?.origin === 'viewport' ? null : contextMenu,
-    OVERLAY_EXIT_MS
-  );
+  const contextMenuExit = useDelayedUnmount(contextMenu, OVERLAY_EXIT_MS);
   const orientationRef = useRef<((axes: AxisProjection) => void) | null>(null);
   /** Click point + normal of the latest topology pick (drag-handle anchor). */
   const lastPickDetailRef = useRef<PickDetail | null>(null);
@@ -14479,7 +14474,7 @@ export function App() {
     x: number,
     y: number,
     entries: { item: ContextMenuState['items'][number]; run(): void }[],
-    origin: 'viewport' | 'list' = 'list'
+    heading?: string
   ) {
     contextMenuActionsRef.current = Object.fromEntries(
       entries.map((entry) => [entry.item.id, entry.run])
@@ -14487,8 +14482,8 @@ export function App() {
     setContextMenu({
       x,
       y,
-      origin,
-      items: entries.map((entry) => entry.item)
+      items: entries.map((entry) => entry.item),
+      ...(heading ? { heading } : {})
     });
   }
 
@@ -14504,53 +14499,48 @@ export function App() {
     // menu is entirely modeling actions, and an empty one would be worse than
     // the viewport controls someone reading a model actually wants.
     if (!selection || modelingLocked) {
-      openContextMenu(
-        x,
-        y,
-        [
-          {
-            item: {
-              id: 'fit',
-              label: 'Fit View',
-              icon: <Maximize2 size={13} aria-hidden="true" />,
-              shortcut: 'F'
-            },
-            run: () => setFitSignal((value) => value + 1)
+      openContextMenu(x, y, [
+        {
+          item: {
+            id: 'fit',
+            label: 'Fit View',
+            icon: <Maximize2 size={13} aria-hidden="true" />,
+            shortcut: 'F'
           },
-          {
-            item: {
-              id: 'grid',
-              label: viewerSettings.showGrid ? 'Hide Grid' : 'Show Grid',
-              icon: <Grid3x3 size={13} aria-hidden="true" />,
-              shortcut: 'G'
-            },
-            run: () =>
-              setViewerSettings((current) => ({
-                ...current,
-                showGrid: !current.showGrid
-              }))
+          run: () => setFitSignal((value) => value + 1)
+        },
+        {
+          item: {
+            id: 'grid',
+            label: viewerSettings.showGrid ? 'Hide Grid' : 'Show Grid',
+            icon: <Grid3x3 size={13} aria-hidden="true" />,
+            shortcut: 'G'
           },
-          {
-            item: {
-              id: 'projection',
-              label: `Projection: ${projection === 'perspective' ? 'Orthographic' : 'Perspective'}`,
-              icon: <Camera size={13} aria-hidden="true" />,
-              shortcut: 'P'
-            },
-            run: toggleProjection
+          run: () =>
+            setViewerSettings((current) => ({
+              ...current,
+              showGrid: !current.showGrid
+            }))
+        },
+        {
+          item: {
+            id: 'projection',
+            label: `Projection: ${projection === 'perspective' ? 'Orthographic' : 'Perspective'}`,
+            icon: <Camera size={13} aria-hidden="true" />,
+            shortcut: 'P'
           },
-          {
-            item: {
-              id: 'showAll',
-              label: 'Show All Bodies',
-              icon: <Eye size={13} aria-hidden="true" />,
-              disabled: hiddenBodyIds.size === 0
-            },
-            run: showAllBodies
-          }
-        ],
-        'viewport'
-      );
+          run: toggleProjection
+        },
+        {
+          item: {
+            id: 'showAll',
+            label: 'Show All Bodies',
+            icon: <Eye size={13} aria-hidden="true" />,
+            disabled: hiddenBodyIds.size === 0
+          },
+          run: showAllBodies
+        }
+      ]);
       return;
     }
     // Adopt the clicked geometry as the selection so actions target it.
@@ -14652,7 +14642,7 @@ export function App() {
             ]
           : [])
       ],
-      'viewport'
+      topologySelectionLabel(representations[selection.bodyId], selection)
     );
   }
 
@@ -18005,18 +17995,10 @@ export function App() {
           {shortcutsOpen && (
             <ShortcutsOverlay onClose={() => setShortcutsOpen(false)} />
           )}
-          {contextMenu?.origin === 'viewport' ? (
-            <MarkingMenu
-              x={contextMenu.x}
-              y={contextMenu.y}
-              items={contextMenu.items}
-              onSelect={(itemId) => contextMenuActionsRef.current[itemId]?.()}
-              onClose={() => setContextMenu(null)}
-            />
-          ) : listMenuExit.rendered ? (
+          {contextMenuExit.rendered ? (
             <ContextMenu
-              menu={listMenuExit.rendered}
-              closing={listMenuExit.closing}
+              menu={contextMenuExit.rendered}
+              closing={contextMenuExit.closing}
               onSelect={(itemId) => contextMenuActionsRef.current[itemId]?.()}
               onClose={() => setContextMenu(null)}
             />
