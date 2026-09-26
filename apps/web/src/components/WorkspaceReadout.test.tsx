@@ -17,14 +17,11 @@ const SUMMARY = {
   warningCount: 0,
   documentVersion: 3,
   saveState: 'synced' as const,
-  onOpenSearch: () => {},
-  searchKey: { glyph: '⌘K', accessible: 'Cmd+K' }
+  searchBar: <input role="combobox" aria-label="Search commands" />
 };
 
 describe('WorkspaceReadout', () => {
-  it('puts the guidance over the search bar while the toast is quiet, and the bar opens search', async () => {
-    const user = userEvent.setup();
-    const onOpenSearch = vi.fn();
+  it('puts the guidance over the search bar while the toast is quiet', () => {
     const { container, rerender } = render(
       <WorkspaceReadout
         status=""
@@ -32,17 +29,18 @@ describe('WorkspaceReadout', () => {
         logOpen={false}
         onToggleLog={vi.fn()}
         {...SUMMARY}
-        onOpenSearch={onOpenSearch}
       />
     );
     // Drawn for sighted users only: the summary already speaks the prompt.
     const hint = container.querySelector('.workspace-hint');
     expect(hint).toHaveTextContent('Click a body, face, or edge');
     expect(hint).toHaveAttribute('aria-hidden', 'true');
-    await user.click(
-      screen.getByRole('button', { name: 'Search commands (Cmd+K)' })
+    // The lane stacks the guidance over the bar the host hands in.
+    const bar = screen.getByRole('combobox', { name: 'Search commands' });
+    expect(hint?.parentElement).toBe(
+      container.querySelector('.command-bar-lane')
     );
-    expect(onOpenSearch).toHaveBeenCalledTimes(1);
+    expect(hint?.nextElementSibling).toBe(bar);
     // A live message takes the guidance's place.
     rerender(
       <WorkspaceReadout
@@ -55,27 +53,6 @@ describe('WorkspaceReadout', () => {
       />
     );
     expect(container.querySelector('.workspace-hint')).toBeNull();
-  });
-
-  it('hands the assistant a slot at the end of the search bar', () => {
-    const onSearchSlot = vi.fn();
-    render(
-      <WorkspaceReadout
-        status=""
-        tone="ready"
-        logOpen={false}
-        onToggleLog={vi.fn()}
-        {...SUMMARY}
-        onSearchSlot={onSearchSlot}
-      />
-    );
-    const bar = screen.getByRole('button', {
-      name: 'Search commands (Cmd+K)'
-    });
-    expect(bar).toHaveTextContent('Search commands or ask the assistant');
-    const slot = onSearchSlot.mock.calls[0]?.[0] as HTMLElement;
-    expect(slot).toHaveClass('command-bar-slot');
-    expect(slot.previousElementSibling).toBe(bar);
   });
 
   it('shows the live status as a toast that opens the activity log', async () => {
