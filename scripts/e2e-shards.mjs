@@ -32,6 +32,14 @@ export const SPEC_DIR = 'test/e2e';
 export const WEIGHTS_PATH = 'test/e2e/shard-weights.json';
 /** Mirrors `testMatch` in `playwright.config.ts`; the test keeps them equal. */
 export const SPEC_PATTERN = /\.spec\.ts$/;
+/**
+ * Spec paths the filters can carry literally: Playwright reads a positional
+ * argument as a regular expression and the workflow splits the script's
+ * output on whitespace, so a name with a space, a bracket or another
+ * metacharacter would select nothing or something else. Such a spec is
+ * refused outright rather than silently left out of every shard.
+ */
+export const SAFE_SPEC_PATH = /^[A-Za-z0-9][A-Za-z0-9._/-]*$/;
 /** Seconds assumed for a spec with no recorded weight. */
 export const DEFAULT_WEIGHT_SECONDS = 60;
 
@@ -113,6 +121,12 @@ export function partitionSpecs(specs, weights, total) {
  * `cloud-sync.spec.ts` would also select `import-cloud-sync.spec.ts`.
  */
 export function shardFilters(shard, total, specs, weights) {
+  const unsafe = specs.filter((spec) => !SAFE_SPEC_PATH.test(spec));
+  if (unsafe.length > 0) {
+    throw new Error(
+      `Spec paths must match ${SAFE_SPEC_PATH} to be passed to playwright test literally: ${unsafe.join(', ')}`
+    );
+  }
   const partition = partitionSpecs(specs, weights, total);
   return partition[shard - 1].files.map((spec) => `${SPEC_DIR}/${spec}`);
 }
