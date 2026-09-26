@@ -25,6 +25,8 @@ export function shardFilters(
   weights: Record<string, number>
 ): string[];
 
+export function specFilter(spec: string): string;
+
 export function weightsFromReports(reports: unknown[]): Record<string, number>;
 
 export function mergeWeights(
