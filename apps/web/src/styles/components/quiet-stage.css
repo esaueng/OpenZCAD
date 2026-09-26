@@ -926,6 +926,18 @@
   }
 }
 
+/* Across the compact range the search row reaches the scale bar's spot left
+   of the cube (it already did at 1024px), so the ruler takes its phone
+   place: bottom-left, above the readout and the search row. */
+@media (min-width: 521px) and (max-width: 1159px) {
+  .workspace.column-layout:has(.workspace-column-float .sketch-rail)
+    .viewport-scale-indicator {
+    left: var(--island-gap);
+    right: auto;
+    bottom: calc(var(--island-gap) * 2 + var(--command-bar-h));
+  }
+}
+
 /* Below 664px that lane (W − 270px) is no wider than the widest phone lane,
    394px, so the bar takes the phone's treatment there too: no ⌘K glyph,
    and Ask as its icon (the button keeps its name). */
