@@ -55,11 +55,12 @@ for (const width of [1440, 390]) {
     await expect
       .poll(async () => (await column.boundingBox())!.x)
       .toBeCloseTo(ISLAND_GAP, 1);
-    // Search lives in the bar at the foot of the stage now.
+    // Search lives in the bar at the foot of the stage now: a slash lists
+    // the commands on it.
     await page.locator('.command-bar').click();
-    await expect(
-      page.getByRole('combobox', { name: 'Search commands' })
-    ).toBeFocused();
+    const search = page.getByRole('combobox', { name: 'Search commands' });
+    await expect(search).toBeFocused();
+    await search.fill('/');
     await expect(page.getByRole('listbox', { name: 'Commands' })).toBeVisible();
     await page.keyboard.press('Escape');
     await expect(page.getByRole('listbox', { name: 'Commands' })).toBeHidden();

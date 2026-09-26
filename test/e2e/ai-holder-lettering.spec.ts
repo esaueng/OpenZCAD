@@ -1,9 +1,10 @@
 import {
-  test,
   expect,
-  stubApi,
+  expectBodyCount,
   openAssistant,
-  expectBodyCount
+  promptField,
+  stubApi,
+  test
 } from './openzcad-fixtures';
 import {
   RemusKernel,
@@ -58,7 +59,7 @@ test('imports a normal STEP and uses the assistant to keep text together with an
     .first();
   await expect(suggestion).toBeVisible({ timeout: 60_000 });
   await suggestion.click();
-  await page.getByRole('button', { name: 'Send to the assistant' }).click();
+  await promptField(page).press('Enter');
   const proposal = page.locator('.assistant-card.proposal.open').last();
   await expect(proposal).toContainText('show_text', { timeout: 120_000 });
   await proposal.getByRole('button', { name: 'Apply', exact: true }).click();

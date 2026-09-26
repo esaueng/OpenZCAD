@@ -1,11 +1,12 @@
 import {
-  test,
-  expect,
+  askAssistant,
   createProject,
+  expect,
   expectBodyCount,
   openAssistant,
   stubApi,
   stubAssistant,
+  test,
   waitForSurfacesToSettle
 } from './openzcad-fixtures';
 
@@ -64,12 +65,13 @@ test('keeps command names visible at the compact desktop breakpoint', async ({
   await page.getByRole('button', { name: 'Create project' }).click();
 
   const search = page.getByRole('combobox', { name: 'Search commands' });
-  await search.click();
+  // A slash lists every command; more letters narrow it.
+  await search.fill('/');
   const palette = page.getByRole('listbox', { name: 'Commands' });
   await expect(
     palette.locator('.palette-label', { hasText: 'Box' })
   ).toBeVisible();
-  await search.fill('box');
+  await search.fill('/box');
   await expect(
     palette.locator('.palette-label', { hasText: 'Box' })
   ).toBeVisible();
@@ -211,7 +213,7 @@ test('opens new projects blank with the assistant collapsed', async ({
   await expect(page.locator('.viewer-notice')).toHaveCount(0);
   await expect(page.getByText('No geometry yet')).toHaveCount(0);
   await expect(page.locator('.assistant-panel')).toHaveCount(0);
-  await expect(page.locator('.assistant-launcher')).toBeVisible();
+  await expect(page.locator('.command-bar')).toBeVisible();
   await expect(workspace).not.toHaveClass(/with-assistant/);
 
   await openAssistant(page);
@@ -225,7 +227,7 @@ test('opens new projects blank with the assistant collapsed', async ({
   await page.getByRole('button', { name: 'Create project' }).click();
 
   await expect(page.locator('.assistant-panel')).toHaveCount(0);
-  await expect(page.locator('.assistant-launcher')).toBeVisible();
+  await expect(page.locator('.command-bar')).toBeVisible();
   await expect(workspace).not.toHaveClass(/with-assistant/);
   await expect(page.locator('.viewer-notice')).toHaveCount(0);
 });
@@ -557,7 +559,7 @@ test('command palette and shortcut overlay behave as modal dialogs', async ({
   await expect(page.getByRole('button', { name: /^Box \(B\)/ })).toBeVisible();
 
   const paletteInput = page.getByRole('combobox', { name: 'Search commands' });
-  await paletteInput.click();
+  await paletteInput.fill('/');
   const palette = page.getByRole('listbox', { name: 'Commands' });
   await expect(paletteInput).toHaveAttribute('aria-expanded', 'true');
   await expect(paletteInput).toHaveAttribute(
@@ -574,9 +576,12 @@ test('command palette and shortcut overlay behave as modal dialogs', async ({
     /command-palette-option-\d+/
   );
   await expect(paletteInput).toBeFocused();
+  // Escape clears the field first, then leaves it.
+  await page.keyboard.press('Escape');
+  await expect(paletteInput).toHaveValue('');
+  await expect(palette).toHaveCount(0);
   await page.keyboard.press('Escape');
   await expect(paletteInput).not.toBeFocused();
-  await expect(palette).toHaveCount(0);
 
   await page.keyboard.press('?');
   const shortcuts = page.getByRole('dialog', { name: 'Keyboard shortcuts' });
@@ -643,8 +648,7 @@ test('settings leave the conversation and its in-flight reply intact', async ({
   await createProject(page, 'Shell State Part');
   await openAssistant(page);
 
-  await page.getByLabel('CAD change request').fill('Add a 10 mm cube');
-  await page.getByLabel('CAD change request').press('Enter');
+  await askAssistant(page, 'Add a 10 mm cube');
   const thread = page.locator('.assistant-thread');
   await expect(thread).toContainText('Add a 10 mm cube');
 
@@ -673,8 +677,7 @@ test('disabling the assistant takes its live preview with it', async ({
   await createProject(page, 'Orphan Preview Part');
   await openAssistant(page);
 
-  await page.getByLabel('CAD change request').fill('Add a 10 mm cube');
-  await page.getByLabel('CAD change request').press('Enter');
+  await askAssistant(page, 'Add a 10 mm cube');
   await expect(page.locator('.assistant-card.proposal')).toContainText(
     'Add a 10 mm cube.'
   );
@@ -752,8 +755,7 @@ test('a direct mode hides the assistant without ending the conversation', async 
   await createProject(page, 'Direct Mode Part');
   await openAssistant(page);
 
-  await page.getByLabel('CAD change request').fill('Add a 10 mm cube');
-  await page.getByLabel('CAD change request').press('Enter');
+  await askAssistant(page, 'Add a 10 mm cube');
   const thread = page.locator('.assistant-thread');
   await expect(thread).toContainText('Add a 10 mm cube');
   await expect(page.locator('.assistant-card.proposal')).toContainText(
@@ -784,7 +786,7 @@ test('a direct mode hides the assistant without ending the conversation', async 
   );
 });
 
-test('collapsing the assistant folds it into Ask and keeps the thread', async ({
+test('collapsing the assistant tucks it behind the prompt and keeps the thread', async ({
   page
 }) => {
   await stubApi(page, { assistantEnabled: true });
@@ -792,23 +794,19 @@ test('collapsing the assistant folds it into Ask and keeps the thread', async ({
   await createProject(page, 'Collapse Part');
   await openAssistant(page);
 
-  await page.getByLabel('CAD change request').fill('Add a 10 mm cube');
-  await page.getByLabel('CAD change request').press('Enter');
+  await askAssistant(page, 'Add a 10 mm cube');
   await expect(page.locator('.assistant-card.proposal')).toContainText(
     'Add a 10 mm cube.'
   );
 
   await page.getByRole('button', { name: 'Collapse the assistant' }).click();
 
-  // The conversation folds back into the Ask button in the search bar.
+  // The conversation tucks away behind the prompt line, which stays.
   await expect(page.locator('.assistant-panel')).toHaveCount(0);
   await expect(page.locator('.workspace.with-assistant')).toHaveCount(0);
-  const launcher = page
-    .locator('.command-bar-row')
-    .getByRole('button', { name: /Open the modeling assistant/ });
-  await expect(launcher).toBeVisible();
+  await expect(page.locator('.command-bar')).toBeVisible();
 
-  await launcher.click();
+  await openAssistant(page);
   await expect(page.locator('.assistant-thread')).toContainText(
     'Add a 10 mm cube'
   );
