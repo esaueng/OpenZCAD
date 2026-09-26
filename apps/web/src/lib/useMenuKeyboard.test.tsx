@@ -132,3 +132,29 @@ describe('the context menu keyboard contract', () => {
     elsewhere.remove();
   });
 });
+
+describe('the context menu heading', () => {
+  it('names the menu after the pick it applies to', () => {
+    render(
+      <ContextMenu
+        menu={{ x: 40, y: 40, items: ITEMS, heading: 'Box Body · Front face' }}
+        onSelect={vi.fn()}
+        onClose={vi.fn()}
+      />
+    );
+    expect(
+      screen.getByRole('menu', { name: 'Box Body · Front face' })
+    ).toBeInTheDocument();
+  });
+
+  it('has no name when nothing was picked', () => {
+    render(
+      <ContextMenu
+        menu={{ x: 40, y: 40, items: ITEMS }}
+        onSelect={vi.fn()}
+        onClose={vi.fn()}
+      />
+    );
+    expect(screen.getByRole('menu')).not.toHaveAttribute('aria-labelledby');
+  });
+});

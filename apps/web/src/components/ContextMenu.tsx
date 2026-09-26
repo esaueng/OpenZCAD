@@ -1,5 +1,6 @@
 import {
   useEffect,
+  useId,
   useLayoutEffect,
   useRef,
   useState,
@@ -51,6 +52,7 @@ export function ContextMenu({
   onClose
 }: ContextMenuProps) {
   const ref = useRef<HTMLDivElement | null>(null);
+  const headingId = useId();
   const [position, setPosition] = useState({ x: menu.x, y: menu.y });
   useMenuKeyboard(ref);
 
@@ -95,11 +97,14 @@ export function ContextMenu({
       ref={ref}
       className={`context-menu${closing ? ' closing' : ''}`}
       role="menu"
+      // The heading is the only statement of which body or face the generic
+      // actions will touch, so it names the menu rather than being decoration.
+      aria-labelledby={menu.heading ? headingId : undefined}
       tabIndex={-1}
       style={{ left: position.x, top: position.y }}
     >
       {menu.heading && (
-        <div className="context-menu-heading" aria-hidden="true">
+        <div id={headingId} className="context-menu-heading">
           {menu.heading}
         </div>
       )}
