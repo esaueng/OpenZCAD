@@ -360,8 +360,10 @@
     0 0 0 3px var(--color-accent-dim);
 }
 
-/* The glyph: the ask chevron in the accent, the add green while a slash
-   command is typed, and the assistant's spark turning while it answers. */
+/* The glyph: the ask chevron in the accent, turned down in the add green
+   while a slash command is typed. While the assistant answers, the chevron
+   is re-sketched: its lines clear, its three points drop in, the lines
+   connect them, and the points clear again. */
 .command-bar-lead {
   position: relative;
   display: grid;
@@ -373,11 +375,10 @@
 }
 
 .command-bar-glyph {
-  font-size: 16px;
-  line-height: 1;
+  display: block;
+  overflow: visible;
   transition:
     color var(--dur-fast) var(--ease-out),
-    opacity var(--dur-fast) var(--ease-out),
     transform var(--dur-base) var(--ease-out);
 }
 
@@ -386,39 +387,134 @@
   transform: rotate(90deg);
 }
 
-.command-bar-spark {
-  position: absolute;
-  inset: 0;
-  display: grid;
-  place-items: center;
+/* pathLength is 100 and the dash 100 on a 110 gap: offset 0 draws the whole
+   line and ±105 hides it. Exactly 100 would leave the round cap of the
+   zero-length dash on the line's end showing as a dot. */
+.command-bar-stroke {
+  fill: none;
+  stroke: currentColor;
+  stroke-width: 1.5;
+  stroke-linecap: round;
+  stroke-dasharray: 100 110;
+}
+
+.command-bar-point {
+  fill: currentColor;
   opacity: 0;
-  transform: scale(0.4);
-  transition:
-    opacity var(--dur-fast) var(--ease-out),
-    transform var(--dur-base) var(--ease-out);
+  transform-box: fill-box;
+  transform-origin: center;
 }
 
-.command-bar.busy .command-bar-glyph {
-  opacity: 0;
-  transform: scale(0.4);
+/* The tip is the open point, as the sketcher draws a selected vertex. */
+.command-bar-point-tip {
+  fill: var(--color-surface);
+  stroke: currentColor;
+  stroke-width: 1;
 }
 
-.command-bar.busy .command-bar-spark {
-  opacity: 1;
-  transform: none;
+.command-bar.busy .command-bar-stroke-in {
+  animation: command-bar-place-in 2.6s cubic-bezier(0.45, 0, 0.55, 1) infinite;
 }
 
-.command-bar.busy .command-bar-spark svg {
-  animation: oz-spin 1.6s linear infinite;
+.command-bar.busy .command-bar-stroke-out {
+  animation: command-bar-place-out 2.6s cubic-bezier(0.45, 0, 0.55, 1) infinite;
 }
 
-[data-reduced-motion='true'] .command-bar.busy .command-bar-spark svg {
+.command-bar.busy .command-bar-point {
+  animation: command-bar-place-point 2.6s cubic-bezier(0.34, 1.56, 0.64, 1)
+    infinite;
+}
+
+/* The points land start, tip, end; one period keeps them in step after the
+   first cycle. */
+.command-bar.busy .command-bar-point-tip {
+  animation-delay: 0.21s;
+}
+
+.command-bar.busy .command-bar-point-end {
+  animation-delay: 0.42s;
+}
+
+/* Reduced motion rests on the chevron with its three points shown. */
+[data-reduced-motion='true'] .command-bar.busy .command-bar-stroke-in,
+[data-reduced-motion='true'] .command-bar.busy .command-bar-stroke-out {
   animation: none;
 }
 
+[data-reduced-motion='true'] .command-bar.busy .command-bar-point {
+  animation: none;
+  opacity: 1;
+}
+
 @media (prefers-reduced-motion: reduce) {
-  .command-bar.busy .command-bar-spark svg {
+  .command-bar.busy .command-bar-stroke-in,
+  .command-bar.busy .command-bar-stroke-out {
     animation: none;
+  }
+
+  .command-bar.busy .command-bar-point {
+    animation: none;
+    opacity: 1;
+  }
+}
+
+@keyframes command-bar-place-in {
+  0% {
+    stroke-dashoffset: 0;
+    opacity: 1;
+  }
+  10% {
+    stroke-dashoffset: 0;
+    opacity: 0;
+  }
+  10.01%,
+  44% {
+    stroke-dashoffset: 105;
+    opacity: 1;
+  }
+  58%,
+  100% {
+    stroke-dashoffset: 0;
+    opacity: 1;
+  }
+}
+
+@keyframes command-bar-place-out {
+  0% {
+    stroke-dashoffset: 0;
+    opacity: 1;
+  }
+  10% {
+    stroke-dashoffset: 0;
+    opacity: 0;
+  }
+  10.01%,
+  58% {
+    stroke-dashoffset: 105;
+    opacity: 1;
+  }
+  72%,
+  100% {
+    stroke-dashoffset: 0;
+    opacity: 1;
+  }
+}
+
+@keyframes command-bar-place-point {
+  0%,
+  12% {
+    opacity: 0;
+    transform: scale(0);
+  }
+  20%,
+  78% {
+    opacity: 1;
+    transform: scale(1);
+  }
+  88%,
+  100% {
+    opacity: 0;
+    transform: scale(0);
   }
 }
 
