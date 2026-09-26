@@ -4,6 +4,7 @@ import {
   expect,
   expectBodyCount,
   openAssistant,
+  promptField,
   stubApi,
   stubAssistant,
   test,
@@ -662,6 +663,10 @@ test('settings leave the conversation and its in-flight reply intact', async ({
   await page.getByRole('button', { name: 'Back to workspace' }).click();
   await expect(settings).toHaveCount(0);
 
+  // The press on Settings tucked the stream away; the reply that landed
+  // behind it lights the prompt's dot, and focusing the prompt brings it up.
+  await expect(page.locator('.command-bar.unread')).toBeVisible();
+  await promptField(page).click();
   await expect(thread).toContainText('Add a 10 mm cube');
   // The reply that landed while Settings was up survived the round trip.
   await expect(page.locator('.assistant-card.proposal')).toContainText(
@@ -768,6 +773,8 @@ test('a direct mode hides the assistant without ending the conversation', async 
     .getByRole('button', { name: /^Create/ })
     .click();
   await expect(page.getByRole('button', { name: /^Fillet/ })).toBeEnabled();
+  // Pressing the Box tool tucked the stream away; bring it back up.
+  await openAssistant(page);
 
   const panel = page.locator('.assistant-panel');
   await page.keyboard.press('m');
