@@ -2,6 +2,7 @@ import { describe, expect, it, vi } from 'vitest';
 import {
   coalesceImportProgress,
   importOverallFraction,
+  importPhaseSpans,
   type ImportPhase,
   type ImportRunProgress
 } from './importProgress';
@@ -101,6 +102,33 @@ describe('importOverallFraction', () => {
     expect(
       importOverallFraction(['building'], { phase: 'archiving', fraction: 0.5 })
     ).toBe(0);
+  });
+});
+
+describe('importPhaseSpans', () => {
+  it('tiles the bar in run order with no gaps or overlaps', () => {
+    const spans = importPhaseSpans(ALL_PHASES);
+    expect(spans.map((span) => span.phase)).toEqual(ALL_PHASES);
+    expect(spans[0]?.start).toBe(0);
+    expect(spans.at(-1)?.end).toBeCloseTo(1, 12);
+    spans.slice(1).forEach((span, i) => {
+      expect(span.start).toBeCloseTo(spans[i]?.end ?? Number.NaN, 12);
+    });
+  });
+
+  it('agrees with the bar at every phase boundary', () => {
+    for (const span of importPhaseSpans(ALL_PHASES)) {
+      expect(
+        importOverallFraction(ALL_PHASES, { phase: span.phase, fraction: 0 })
+      ).toBeCloseTo(span.start, 12);
+      expect(
+        importOverallFraction(ALL_PHASES, { phase: span.phase, fraction: 1 })
+      ).toBeCloseTo(span.end, 12);
+    }
+  });
+
+  it('is empty for a run with no phases', () => {
+    expect(importPhaseSpans([])).toEqual([]);
   });
 });
 
