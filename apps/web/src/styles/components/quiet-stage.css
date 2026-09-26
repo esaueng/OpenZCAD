@@ -701,14 +701,20 @@
   --lane-chip: 36px;
 }
 
-/* The status row holds a 28px toast, a 32px pill or the one-line hint.
-   The hint only draws while no status is live, and the chip, which names
-   the selection where the hint would be, hides it. */
+/* The status row holds a 28px toast, the 58px activity pill or the
+   one-line hint. The hint only draws while no status is live, and the chip,
+   which names the selection where the hint would be, hides it. */
 .viewer-area:has(.workspace-toast:not(.hidden)),
-.viewer-area:has(.activity-pill),
-.workspace:not(.with-assistant)
+:where(.workspace:not(.with-assistant))
   .viewer-area:not(:has(.selection-chip)):has(.workspace-hint) {
   --lane-status: 40px;
+}
+
+/* Tracks --activity-pill-h in activity-pill.css, plus the 12px row gap.
+   The lane in the selector matches the specificity of the two rules above,
+   which stay in the DOM while the pill is up; source order then wins. */
+.viewer-area:has(.activity-lane > .activity-pill) {
+  --lane-status: 70px;
 }
 
 /* The pill has the status row while it is up; the hint waits. */

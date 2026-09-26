@@ -138,7 +138,7 @@ export function TweakPanel({
           </Tooltip>
         )}
       </div>
-      <div className="tweak-flyouts">
+      <div className="tweak-flyouts" data-rail-flyouts="">
         {parts?.list}
         {panelOpen && (
           <aside className="sidebar tweak-panel" aria-label="Parameters">

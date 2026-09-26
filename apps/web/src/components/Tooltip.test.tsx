@@ -79,4 +79,234 @@ describe('Tooltip', () => {
     fireEvent.pointerEnter(redo);
     expect(screen.getByRole('tooltip')).toHaveTextContent('Redo');
   });
+
+  describe('on a vertical rail', () => {
+    const boxes: Record<string, DOMRect> = {};
+    const box = (left: number, top: number, width: number, height: number) =>
+      new DOMRect(left, top, width, height);
+
+    beforeEach(() => {
+      vi.spyOn(
+        HTMLElement.prototype,
+        'getBoundingClientRect'
+      ).mockImplementation(function (this: HTMLElement) {
+        const key =
+          this.getAttribute('role') === 'tooltip'
+            ? 'tooltip'
+            : (this.getAttribute('aria-label') ?? '');
+        return boxes[key] ?? box(0, 0, 0, 0);
+      });
+      boxes.tooltip = box(0, 0, 200, 24);
+    });
+
+    afterEach(() => {
+      vi.restoreAllMocks();
+    });
+
+    const renderRail = (style?: { flexDirection: 'column' | 'row' }) =>
+      render(
+        <div role="toolbar" aria-label="Rail" style={style}>
+          <Tooltip label="Parts" description="Show the parts list">
+            <button type="button" aria-label="Parts">
+              P
+            </button>
+          </Tooltip>
+        </div>
+      );
+
+    it('opens beside the rail instead of over its next buttons', () => {
+      boxes.Rail = box(20, 300, 40, 120);
+      boxes.Parts = box(25, 305, 30, 30);
+      renderRail({ flexDirection: 'column' });
+
+      fireEvent.focus(screen.getByRole('button', { name: 'Parts' }));
+      const tooltip = screen.getByRole('tooltip');
+      expect(tooltip).toHaveAttribute('data-placement', 'right');
+      // Rail's right edge plus the 8 px gap, centred on the button.
+      expect(parseFloat(tooltip.style.left)).toBeCloseTo(68, 6);
+      expect(parseFloat(tooltip.style.top)).toBeCloseTo(320, 6);
+    });
+
+    it('drops the description beside an open flyout', () => {
+      boxes.Rail = box(20, 300, 40, 120);
+      boxes.Parts = box(25, 305, 30, 30);
+      boxes.Flyout = box(70, 100, 320, 500);
+      render(
+        <>
+          <div
+            role="toolbar"
+            aria-label="Rail"
+            style={{ flexDirection: 'column' }}
+          >
+            <Tooltip label="Parts" description="Show the parts list">
+              <button type="button" aria-label="Parts">
+                P
+              </button>
+            </Tooltip>
+          </div>
+          <div data-rail-flyouts="">
+            <aside aria-label="Flyout" />
+          </div>
+        </>
+      );
+
+      fireEvent.focus(screen.getByRole('button', { name: 'Parts' }));
+      const tooltip = screen.getByRole('tooltip');
+      expect(tooltip).toHaveAttribute('data-placement', 'right');
+      expect(tooltip).toHaveTextContent(/^Parts$/);
+    });
+
+    it('re-measures when its own click opens and closes the flyout', () => {
+      boxes.Rail = box(20, 300, 40, 120);
+      boxes.Parts = box(25, 305, 30, 30);
+      boxes.Flyout = box(70, 100, 320, 500);
+      const renderWith = (flyoutOpen: boolean) => (
+        <>
+          <div
+            role="toolbar"
+            aria-label="Rail"
+            style={{ flexDirection: 'column' }}
+          >
+            <Tooltip label="Parts" description="Toggle the parts list">
+              <button type="button" aria-label="Parts">
+                P
+              </button>
+            </Tooltip>
+          </div>
+          <div data-rail-flyouts="">
+            {flyoutOpen && <aside aria-label="Flyout" />}
+          </div>
+        </>
+      );
+      const { rerender } = render(renderWith(false));
+
+      fireEvent.focus(screen.getByRole('button', { name: 'Parts' }));
+      expect(screen.getByRole('tooltip')).toHaveTextContent(
+        'PartsToggle the parts list'
+      );
+
+      rerender(renderWith(true));
+      expect(screen.getByRole('tooltip')).toHaveTextContent(/^Parts$/);
+
+      rerender(renderWith(false));
+      expect(screen.getByRole('tooltip')).toHaveTextContent(
+        'PartsToggle the parts list'
+      );
+    });
+
+    it('treats a popover the rail mounts itself as a flyout', () => {
+      const right = window.innerWidth;
+      boxes.Rail = box(right - 50, 300, 40, 120);
+      boxes.Parts = box(right - 45, 305, 30, 30);
+      boxes.Flyout = box(right - 260, 290, 200, 80);
+      render(
+        <div
+          role="toolbar"
+          aria-label="Rail"
+          style={{ flexDirection: 'column' }}
+        >
+          <Tooltip label="Parts" description="Show the parts list">
+            <button type="button" aria-label="Parts">
+              P
+            </button>
+          </Tooltip>
+          <div data-rail-flyout="" aria-label="Flyout" />
+        </div>
+      );
+
+      fireEvent.focus(screen.getByRole('button', { name: 'Parts' }));
+      const tooltip = screen.getByRole('tooltip');
+      expect(tooltip).toHaveAttribute('data-placement', 'left');
+      expect(tooltip).toHaveTextContent(/^Parts$/);
+    });
+
+    it('keeps the description when the flyout is elsewhere', () => {
+      boxes.Rail = box(20, 300, 40, 120);
+      boxes.Parts = box(25, 305, 30, 30);
+      boxes.Flyout = box(600, 100, 320, 500);
+      render(
+        <>
+          <div
+            role="toolbar"
+            aria-label="Rail"
+            style={{ flexDirection: 'column' }}
+          >
+            <Tooltip label="Parts" description="Show the parts list">
+              <button type="button" aria-label="Parts">
+                P
+              </button>
+            </Tooltip>
+          </div>
+          <div data-rail-flyouts="">
+            <aside aria-label="Flyout" />
+          </div>
+        </>
+      );
+
+      fireEvent.focus(screen.getByRole('button', { name: 'Parts' }));
+      expect(screen.getByRole('tooltip')).toHaveTextContent(
+        'PartsShow the parts list'
+      );
+    });
+
+    it('opens to the left of a rail on the right edge', () => {
+      boxes.Rail = box(window.innerWidth - 50, 300, 40, 120);
+      boxes.Parts = box(window.innerWidth - 45, 305, 30, 30);
+      renderRail({ flexDirection: 'column' });
+
+      fireEvent.focus(screen.getByRole('button', { name: 'Parts' }));
+      const tooltip = screen.getByRole('tooltip');
+      expect(tooltip).toHaveAttribute('data-placement', 'left');
+      expect(parseFloat(tooltip.style.left)).toBeCloseTo(
+        window.innerWidth - 58,
+        6
+      );
+    });
+
+    it('steps over a neighbouring rail instead of covering it', () => {
+      const right = window.innerWidth;
+      boxes.Rail = box(right - 50, 300, 40, 120);
+      boxes.Parts = box(right - 45, 305, 30, 30);
+      // The sketch relations stand one island gap (10 px) left of the rail.
+      boxes.Relations = box(right - 104, 300, 44, 200);
+      render(
+        <>
+          <div
+            role="toolbar"
+            aria-label="Relations"
+            aria-orientation="vertical"
+          />
+          <div
+            role="toolbar"
+            aria-label="Rail"
+            style={{ flexDirection: 'column' }}
+          >
+            <Tooltip label="Parts" description="Show the parts list">
+              <button type="button" aria-label="Parts">
+                P
+              </button>
+            </Tooltip>
+          </div>
+        </>
+      );
+
+      fireEvent.focus(screen.getByRole('button', { name: 'Parts' }));
+      const tooltip = screen.getByRole('tooltip');
+      expect(tooltip).toHaveAttribute('data-placement', 'left');
+      expect(parseFloat(tooltip.style.left)).toBeCloseTo(right - 112, 6);
+      expect(tooltip).toHaveTextContent('PartsShow the parts list');
+    });
+
+    it('keeps the below placement on a horizontal toolbar', () => {
+      boxes.Rail = box(20, 300, 120, 40);
+      boxes.Parts = box(25, 305, 30, 30);
+      renderRail({ flexDirection: 'row' });
+
+      fireEvent.focus(screen.getByRole('button', { name: 'Parts' }));
+      expect(screen.getByRole('tooltip')).toHaveAttribute(
+        'data-placement',
+        'below'
+      );
+    });
+  });
 });
