@@ -1,5 +1,5 @@
 import { useEffect, useState, type ReactNode, type RefObject } from 'react';
-import { History } from 'lucide-react';
+import { History, Magnet, MousePointer2 } from 'lucide-react';
 import {
   SELECTION_FILTERS,
   SELECTION_FILTER_LABELS,
@@ -237,12 +237,30 @@ export function ViewportDockExtras({
         aria-label={`Selection filter: ${SELECTION_FILTER_LABELS[selectionFilter]}. Cycle.`}
         onClick={() => onSelectionFilter(handsBack ? null : nextFilter)}
       >
+        <MousePointer2
+          className="viewport-readout-icon"
+          size={12}
+          aria-hidden="true"
+        />
         <span className="viewport-dock-filter-label">select</span>
         {SELECTION_FILTER_LABELS[selectionFilter]}
       </button>
       {snap && (
-        <span className="viewport-dock-snap mono">
-          {snap.enabled ? `Snap ${snap.spacing} ${snap.units}` : 'Snap off'}
+        <span
+          className="viewport-dock-snap mono"
+          title={
+            snap.enabled
+              ? `Sketch snap: ${snap.spacing} ${snap.units}`
+              : 'Sketch snap: off'
+          }
+        >
+          <Magnet
+            className="viewport-readout-icon"
+            size={12}
+            aria-hidden="true"
+          />
+          <span className="viewport-readout-word">Snap </span>
+          {snap.enabled ? `${snap.spacing} ${snap.units}` : 'off'}
         </span>
       )}
       <span className="viewport-dock-divider" aria-hidden="true" />

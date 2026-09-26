@@ -172,7 +172,11 @@ describe('ViewportDockExtras', () => {
     );
     expect(onSelectionFilter).toHaveBeenCalledTimes(1);
     expect(onSelectionFilter.mock.calls[0]?.[0]).not.toBe('any');
-    expect(screen.getByText('Snap 1 mm')).toBeInTheDocument();
+    // The word and the value are separate nodes, so the compact readout can
+    // swap the word for a glyph; together they still read "Snap 1 mm".
+    expect(screen.getByTitle('Sketch snap: 1 mm')).toHaveTextContent(
+      'Snap 1 mm'
+    );
     // The log's button left the readout for the instrument rail.
     expect(screen.queryByRole('button', { name: /activity log/ })).toBeNull();
   });
