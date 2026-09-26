@@ -48,6 +48,7 @@ async function verificationD1(
   let attempts = 0;
   let consumedAt: number | null = null;
   let incorrectUpdates = 0;
+  const expiresAt = Math.floor(Date.now() / 1000) + 600;
   let releaseLegacyIncorrectUpdates!: () => void;
   const legacyIncorrectUpdateGate = new Promise<void>((resolve) => {
     releaseLegacyIncorrectUpdates = resolve;
@@ -68,7 +69,7 @@ async function verificationD1(
             email,
             code_hash: codeHash,
             attempts,
-            expires_at: Math.floor(Date.now() / 1000) + 600,
+            expires_at: expiresAt,
             consumed_at: consumedAt
           } as T;
         }
@@ -83,7 +84,7 @@ async function verificationD1(
           if (
             consumedAt !== null ||
             attempts >= Number(values[4]) ||
-            Math.floor(Date.now() / 1000) > Number(values[5])
+            expiresAt < Number(values[5])
           ) {
             return { success: true, meta: { changes: 0 } };
           }
@@ -469,6 +470,38 @@ describe('worker authentication', () => {
         env
       )
     ).rejects.toThrow('invalid or expired');
+  });
+
+  it('consumes an email code whose verification straddles a second boundary', async () => {
+    const fixture = await verificationD1('123456');
+    const env = {
+      ENVIRONMENT: 'beta' as const,
+      AUTH_MODE: 'email-code' as const,
+      DB: fixture.db,
+      EMAIL: { send: async () => ({ messageId: 'message-test' }) },
+      AUTH_EMAIL_FROM: 'login@auth.example.com',
+      AUTH_OTP_PEPPER: fixture.secret,
+      TURNSTILE_SITE_KEY: 'site-key',
+      TURNSTILE_SECRET_KEY: 'secret-key'
+    };
+    // The request's timestamp is read at x.999 s and everything after it at
+    // the next second, as when hashing runs across a boundary on a loaded
+    // runner. The unexpired challenge must still be consumed.
+    const second = Math.floor(Date.now() / 1000) * 1000;
+    let reads = 0;
+    const now = vi
+      .spyOn(Date, 'now')
+      .mockImplementation(() => second + (reads++ === 0 ? 999 : 1001));
+    try {
+      const result = await verifyEmailLogin(
+        { challengeId: fixture.challengeId, code: '123456' },
+        env
+      );
+      expect(result.session).toMatchObject({ email: fixture.email });
+    } finally {
+      now.mockRestore();
+    }
+    expect(fixture.consumedAt()).not.toBeNull();
   });
 
   it('serializes OTP failures with successful consumption at the attempt limit', async () => {
