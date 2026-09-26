@@ -114,10 +114,13 @@ test('viewport context menu hides a body and the sidebar eye restores it', async
     button: 'right',
     position: { x: bounds.width / 2, y: bounds.height / 2 }
   });
-  // The viewport's menu is radial: the actions ring the click point rather
-  // than stacking under it, and clicking one still works without flicking.
-  const menu = page.locator('.marking-menu');
+  // The viewport's menu is the same list the sidebar rows get, headed by
+  // the pick it applies to.
+  const menu = page.locator('.context-menu');
   await expect(menu).toBeVisible();
+  await expect(menu.locator('.context-menu-heading')).toHaveText(
+    /Box Body · .+ face/
+  );
   await expect(
     menu.getByRole('menuitem', { name: /Move \/ Rotate/ })
   ).toBeVisible();
@@ -156,7 +159,7 @@ test('choosing Move from an edge right-click disarms the fillet handle it just a
   const edge = await locateEdge(page);
   await page.mouse.click(edge.x, edge.y, { button: 'right' });
 
-  const menu = page.locator('.marking-menu');
+  const menu = page.locator('.context-menu');
   await expect(menu).toBeVisible();
   // Edge actions prove the right-click armed the edge handle underneath.
   await expect(
@@ -1662,65 +1665,6 @@ test('the status bar names the rung of the Esc ladder you are on', async ({
   // And the next press takes the rung it now names.
   await page.keyboard.press('Escape');
   await expect(status).not.toContainText('Esc clears the selection');
-});
-
-test('flicking a direction in the marking menu picks that action', async ({
-  page
-}) => {
-  await stubApi(page);
-  await page.goto('/');
-  await page.getByLabel('Project name').fill('Marking Part');
-  await page.getByRole('button', { name: 'Create project' }).click();
-
-  await page.getByRole('button', { name: /^Box \(B\)/ }).click();
-  await page
-    .getByRole('region', { name: 'Feature inspector' })
-    .getByRole('button', { name: /^Create/ })
-    .click();
-  await expect(page.getByRole('button', { name: /^Fillet/ })).toBeEnabled();
-  await page.keyboard.press('Escape');
-
-  const canvas = page.locator('.viewer-host canvas');
-  const bounds = await canvas.boundingBox();
-  if (!bounds) {
-    throw new Error('viewer canvas not laid out');
-  }
-  // Right-click opens the ring; holding the right button pans instead, which
-  // is why the menu arrives on release rather than on press.
-  await canvas.click({
-    button: 'right',
-    position: { x: bounds.width * 0.45, y: bounds.height * 0.5 }
-  });
-  const menu = page.locator('.marking-menu');
-  await expect(menu).toBeVisible();
-
-  const hideBody = menu.getByRole('menuitem', { name: 'Hide Body' });
-  const target = await hideBody.boundingBox();
-  if (!target) {
-    throw new Error('the ring did not lay out');
-  }
-  const origin = await menu.boundingBox();
-  if (!origin) {
-    throw new Error('the menu has no anchor');
-  }
-  // Aim at the sector's direction but stop well short of the slot, so only
-  // the direction can be what chose it.
-  const dx = target.x + target.width / 2 - origin.x;
-  const dy = target.y + target.height / 2 - origin.y;
-  const length = Math.hypot(dx, dy);
-  // Press at the hub and flick outward: past the dead zone the hub draws,
-  // but nowhere near the slot the direction commits to.
-  await page.mouse.move(origin.x, origin.y);
-  await page.mouse.down();
-  await page.mouse.move(
-    origin.x + (dx / length) * 60,
-    origin.y + (dy / length) * 60
-  );
-  await page.mouse.up();
-
-  await expect(menu).toBeHidden();
-  await expect(page.locator('.viewer-notice')).toHaveCount(0);
-  await expect(page.getByRole('button', { name: /^Show Box/ })).toBeVisible();
 });
 
 test('releasing an orbit eases out instead of stopping dead', async ({
