@@ -91,10 +91,12 @@ in a small area that adapts to the selection.
 verb per pick), the ⌘K bar is command search with an "ask the assistant" tail,
 the cube, orthographic/perspective toggle and a right-click marking menu exist,
 and nine tools carry a single-key shortcut (`apps/web/src/lib/tools.tsx`).
-Missing: hotkeys for most tools and all constraints, customization, the
-hotkey-versus-search setting, fuzzy/abbreviation matching and recent commands
-in search, selection-aware search results, saved views, navigation presets,
-the FOV slider, view hotkeys. → **U05** (keyboard and command contract),
+Keys 1–4 already open front, top, right and isometric views
+(`apps/web/src/App.tsx`). Missing: hotkeys for most tools and all constraints,
+customization, the hotkey-versus-search setting, fuzzy/abbreviation matching
+and recent commands in search, selection-aware search results, saved views,
+navigation presets, the FOV slider and the proposed additional view keys.
+→ **U05** (keyboard and command contract),
 **U07** (viewing depth).
 
 ### 2.2 Selection
