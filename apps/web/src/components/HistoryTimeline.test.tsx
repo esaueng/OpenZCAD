@@ -203,6 +203,46 @@ describe('HistoryTimeline', () => {
     );
   });
 
+  it('drops a pending keyboard commit when a row is reordered', () => {
+    vi.useFakeTimers();
+    const { props } = renderTimeline();
+    fireEvent.keyDown(screen.getByRole('slider', { name: 'End of history' }), {
+      key: 'ArrowUp'
+    });
+    fireEvent.keyDown(
+      screen.getByRole('button', {
+        name: 'Reorder Feature 2. Use the arrow keys to move it.'
+      }),
+      { key: 'ArrowDown' }
+    );
+    act(() => {
+      vi.runAllTimers();
+    });
+    expect(props.onReorderFeature).toHaveBeenCalledWith('feature-2', 2);
+    expect(props.onRollbackAfterFeature).not.toHaveBeenCalled();
+  });
+
+  it('drops a pending keyboard commit when the history changes under it', () => {
+    vi.useFakeTimers();
+    const features = [feature(1), feature(2), feature(3)];
+    const { props, rerender } = renderTimeline({ features });
+    fireEvent.keyDown(screen.getByRole('slider', { name: 'End of history' }), {
+      key: 'ArrowUp'
+    });
+    // An undo or a collaborator reorders the history before the step lands.
+    rerender(
+      <HistoryTimeline
+        {...props}
+        features={[features[2]!, features[0]!, features[1]!]}
+      />
+    );
+    act(() => {
+      vi.runAllTimers();
+    });
+    expect(props.onRollbackAfterFeature).not.toHaveBeenCalled();
+    expect(props.onResumeHistory).not.toHaveBeenCalled();
+  });
+
   it('resumes when the handle is moved back to the end', () => {
     vi.useFakeTimers();
     const { props } = renderTimeline({

@@ -220,6 +220,24 @@ export function HistoryTimeline({
     []
   );
 
+  // A keyboard step waiting to commit names a position in the history as it
+  // stood when the key was pressed. Once the order or the rollback changes
+  // (a reorder, a delete, an undo), that position means something else, so
+  // the step is dropped rather than applied to the new history.
+  const historyShape = features
+    .map(
+      (feature) =>
+        `${feature.id}:${isFeatureRollbackSuppressed(feature) ? 1 : 0}`
+    )
+    .join('|');
+  useEffect(() => {
+    if (commitTimer.current !== null) {
+      window.clearTimeout(commitTimer.current);
+      commitTimer.current = null;
+    }
+    setPreviewEnd(null);
+  }, [historyShape]);
+
   // A selection made anywhere else (the viewport, the command palette) brings
   // its row into view.
   useEffect(() => {
@@ -598,6 +616,7 @@ export function HistoryTimeline({
                     // gives no clue which row is being moved.
                     event.dataTransfer.setDragImage(row, 16, 16);
                   }
+                  cancelPendingCommit();
                   setDragFeatureId(feature.featureId);
                 }}
                 onDragEnd={() => {
@@ -624,6 +643,7 @@ export function HistoryTimeline({
                   if (target < 0 || target > last) {
                     return;
                   }
+                  cancelPendingCommit();
                   onReorderFeature(feature.featureId, target);
                 }}
               >
