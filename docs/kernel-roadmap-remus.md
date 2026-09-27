@@ -342,6 +342,37 @@ start now: decide how a non-solid body fits `ProjectDocument` (body types,
 selection, rendering) so the kernel work has a consumer the day it lands
 ("not done until JS can call it" cuts both ways).
 
+
+### C8. Consumer asks from the 2026-09-26 reference-CAD comparison
+
+The [reference-CAD comparison](reviews/reference-cad-comparison-2026-09-26.md) added product rows
+to the master roadmap; the ones that need kernel work are mapped here and
+mirrored in the Remus roadmap as a dated consumer overlay (P-Class scope notes
+on 7.1, 7.2, 7.4, 7.5, 4.3, 6.1, 6.6 and bridge rows B72–B75, landed by
+remus#721 with source-backed corrections, in
+[the Remus master roadmap](https://github.com/esaueng/remus/blob/main/docs/kernel-maturity/roadmap.md)). "Bound today" is read from the
+`remus-wasm` bindings on the current pin, not from a qualification claim.
+
+| Product row | Bound today | Kernel owner | Until it lands |
+| --- | --- | --- | --- |
+| M04 sweep depth: twist, scale law, profile position, orientation, mitre/round corners | `sweepWithOptions` carries a contact mode, a mitre/round corner mode, a sampled scale law and a segment count, none qualified; the native `SweepOptions.aux_spine` is not bound there (`guidedSweep` is a separate two-rail path) and there is no twist | P-Class 7.1 | Expose nothing beyond the guide rail already shipped (#339) |
+| M04 loft depth: guide curves, vertex correspondence, periodic, G1/G2 end tangency | `loftWithOptions` parses only `ruled`, `startPoint`, `endPoint` | P-Class 7.2 | Loft to an apex stays the only option |
+| M03 blend slices: chord-width sizing, G2 section, tangent-edge chain, overflow policy | Radius, variable laws, two-setback chamfers, cliff verdicts | Remus B72 (sizing, continuity, chain query); 5.4/5.5/5.8 (corners, cliffs, rollover) | Keep the maturity gate; refuse unqualified stored configurations by name |
+| M07 Replace Face | `replaceSurface` for one planar support or one coaxial bore | P-Class 6.1 plus 7.4 extension | Not offered |
+| M11 split by sketch profile, another body's face, own face; several tools per step | `splitSolid` by plane; `splitBySheetBody` for one cylindrical sheet | P-Class 4.3 | Plane split only; keep-originals is app-side (copy first) |
+| I01 sketch projection and edge imprint; M12 wrap/emboss | `projectEdges` (view projection), `imprintJs` for a planar tool | P-Class 4.5, 7.4; Remus B73 for wrap | I01 projection slices wait on 7.4; M12 stays deferred |
+| I01 ellipse and spline entities; S07 entity symmetry | GCS has points/lines/arcs/circles with `Symmetric`, `SymmetricAboutPoint`, `FixX`/`FixY`, `Midpoint`; no ellipse or spline entity | Remus B75 (entities); S07 symmetry and lock compose from existing constraints app-side | Draw-only ellipse/spline is refused by the sketch contract, so the tools wait |
+| M08/M09 section overlap highlight, clash, zebra/draft overlays | `sectionSolid` at any plane; `getFaceCurvature`; no clash, silhouette or draft map | P-Class 7.5 | M08 gizmo/section-only/2D slices are display work and proceed; M09's first slice is display-only overlap of cut fills |
+| M13 measure depth: entity-pair min/max distance with witnesses, axis/center distance | `pointToEdge/Face/SolidDistance`, `solidToSolidDistance` with witnesses; no edge–edge, edge–face, face–face or maximum distance | P-Class 7.5 | Notable-point picks and 3-point angle are app-side and proceed; point-to-point X/Y/Z deltas already ship |
+| M10 non-uniform scale | `transformSolid` accepts finite affine matrices above a collapse guard and, under anisotropic scale, rewrites cylinders, cones, tori and whole-hemisphere spheres as exact rational NURBS but fits other sphere trims from a 33×17 sample grid, none of it disclosed | Remus B74 (qualification and disclosure) | Uniform scale only; a body whose carriers became NURBS would land every later boolean in 2.5 |
+| D01–D04 drawings | `section` (face handles with boundary wires), `projectEdges` (visible/hidden polylines) | Consumer scope by Remus decision row; 7.5 silhouettes improve curved-face views later | Build the sheet/view/annotation model on HLR polylines now |
+
+Consumer-only, recorded in the Remus decisions so they are not re-asked:
+datum planes and axes (R01), keep-originals (M11), hotkeys, saved views, item
+groups and history actions (U05–U07), expression units and typed variables
+(F05), reference images (I05), DXF/SVG/PDF readers and writers (D04, I04) and
+auto-boolean inference (F01).
+
 ---
 
 ## 4. Track W — Web platform (the "best web-based" claim)
@@ -447,6 +478,7 @@ their P-Class issue where one exists.
 | 12    | Parallel tessellation + threading ADR (W2)                                                            | W     | kernel + app     | M                  | 9 guarding                   |
 | 13    | Publish Remus + release cadence (O1–O2)                                                               | O     | kernel           | M                  | maintainer decision          |
 | 14    | Direct modeling (M6) and body taxonomy (M4) per product pull (C7)                                     | C     | kernel + app     | XL                 | 6, 7                         |
+| 15    | Consumer overlay rows (C8): 7.1/7.2 sweep and loft options, B72 blend variants, B75 GCS entities, 7.5 interrogation, B74 transform contract, 4.3/6.1/7.4 split, replace-face and imprint, B73 wrap | C     | kernel           | M–L each           | 6 for anything on NURBS carriers; product pull per OpenZCAD rows |
 
 The first five rows are the stability program and are deliberately in front of
 every capability row: the single-kernel architecture means a silent kernel
