@@ -629,11 +629,27 @@ function ToolCard(props: ComponentProps<typeof LazyToolCard>) {
 }
 // The model browser only renders inside the drawer, which starts closed; its
 // History timeline took the entry chunk past its budget.
+const loadSidebar = () => import('./components/Sidebar');
 const LazySidebar = lazyWithStaleChunkNotice(() =>
-  import('./components/Sidebar').then((module) => ({
+  loadSidebar().then((module) => ({
     default: module.Sidebar
   }))
 );
+/**
+ * Focuses a field inside the drawer once it exists. The drawer's browser is
+ * lazy: on its first open the chunk loads and the panel mounts some frames
+ * later, so one tick is not enough. Gives up quietly after about a second.
+ */
+function focusInDrawerWhenMounted(selector: string, frames = 60) {
+  const field = document.querySelector<HTMLElement>(selector);
+  if (field) {
+    field.focus();
+  } else if (frames > 0) {
+    window.requestAnimationFrame(() =>
+      focusInDrawerWhenMounted(selector, frames - 1)
+    );
+  }
+}
 function Sidebar(props: ComponentProps<typeof LazySidebar>) {
   return (
     <Suspense fallback={null}>
@@ -15784,14 +15800,16 @@ export function App() {
                       parameters: true
                     }
                   }));
-                  // The drawer renders on the next commit; focus follows it.
-                  window.setTimeout(() => {
-                    document
-                      .querySelector<HTMLInputElement>(
+                  // The drawer's browser may still be loading; focus follows
+                  // it once the field has mounted. A failed load is already
+                  // reported by the lazy panel's stale-chunk notice.
+                  void loadSidebar()
+                    .then(() =>
+                      focusInDrawerWhenMounted(
                         `[aria-label="Expression for ${CSS.escape(parameter.name)}"]`
                       )
-                      ?.focus();
-                  }, 0);
+                    )
+                    .catch(() => undefined);
                 }
               }) satisfies PaletteCommand
           )
