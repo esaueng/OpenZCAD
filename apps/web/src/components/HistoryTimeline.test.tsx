@@ -121,6 +121,48 @@ describe('HistoryTimeline', () => {
     );
   });
 
+  it('keeps a paused feature paused after it is reordered above the handle', () => {
+    // moveFeature changes only the order, so a rollback-paused feature can sit
+    // before the last feature still in the build; its metadata still pauses it.
+    renderTimeline({
+      features: [
+        feature(1),
+        feature(2, undefined, rolledBack),
+        feature(3),
+        feature(4, undefined, rolledBack)
+      ]
+    });
+    expect(row('Feature 2')).toHaveTextContent('paused');
+    expect(row('Feature 2')).toHaveClass('paused');
+    expect(row('Feature 3')).not.toHaveClass('paused');
+  });
+
+  it('drops a pending keyboard commit when a drag takes over', () => {
+    vi.useFakeTimers();
+    const capture = vi
+      .spyOn(HTMLElement.prototype, 'setPointerCapture')
+      .mockImplementation(() => {});
+    const release = vi
+      .spyOn(HTMLElement.prototype, 'releasePointerCapture')
+      .mockImplementation(() => {});
+    const { props } = renderTimeline();
+    const handle = screen.getByRole('slider', { name: 'End of history' });
+    fireEvent.keyDown(handle, { key: 'ArrowUp' });
+    fireEvent.pointerDown(handle, { button: 0, pointerId: 1 });
+    fireEvent.pointerUp(handle, { button: 0, pointerId: 1 });
+    act(() => {
+      vi.runAllTimers();
+    });
+    // One transaction, where the drag was released; not a second one later.
+    expect(props.onRollbackAfterFeature).toHaveBeenCalledTimes(1);
+    expect(props.onRollbackAfterFeature).toHaveBeenCalledWith(
+      'feature-3',
+      'Feature 3'
+    );
+    capture.mockRestore();
+    release.mockRestore();
+  });
+
   it('resumes when the handle is moved back to the end', () => {
     vi.useFakeTimers();
     const { props } = renderTimeline({

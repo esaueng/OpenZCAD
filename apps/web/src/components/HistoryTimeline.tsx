@@ -272,7 +272,16 @@ export function HistoryTimeline({
     }
   });
 
+  function cancelPendingCommit() {
+    if (commitTimer.current !== null) {
+      window.clearTimeout(commitTimer.current);
+      commitTimer.current = null;
+    }
+  }
+
   function commitEnd(index: number) {
+    // A keyboard step still waiting to commit must not land after this one.
+    cancelPendingCommit();
     setPreviewEnd(null);
     if (index === committedEnd) {
       return;
@@ -290,9 +299,7 @@ export function HistoryTimeline({
   function moveEndTo(target: number) {
     const next = Math.max(0, Math.min(last, target));
     setPreviewEnd(next);
-    if (commitTimer.current !== null) {
-      window.clearTimeout(commitTimer.current);
-    }
+    cancelPendingCommit();
     commitTimer.current = window.setTimeout(() => {
       commitTimer.current = null;
       commitEnd(next);
@@ -327,6 +334,7 @@ export function HistoryTimeline({
     }
     event.preventDefault();
     event.currentTarget.setPointerCapture(event.pointerId);
+    cancelPendingCommit();
     setDraggingHandle(true);
     setPreviewEnd(end);
   }
@@ -490,7 +498,13 @@ export function HistoryTimeline({
         )}
         {visible.map(({ feature, index }) => {
           const manual = isFeatureManuallySuppressed(feature);
-          const paused = index > end;
+          // At rest a row is paused by its own metadata, not its position:
+          // a paused feature reordered above the handle stays paused. While
+          // the handle is moving, the preview decides.
+          const paused =
+            previewEnd === null
+              ? isFeatureRollbackSuppressed(feature)
+              : index > end;
           const suppressed = isFeatureSuppressed(feature);
           const body = feature.bodyId
             ? representations[feature.bodyId]
