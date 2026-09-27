@@ -7,6 +7,7 @@ import {
   DocumentTooLargeError,
   getInMemoryPersistence,
   ProjectAdoptionError,
+  ProjectQuotaError,
   PROJECT_ACTIVE_INVITATION_CAP,
   PROJECT_INVITATION_RATE_LIMIT,
   PROJECT_INVITATION_RATE_WINDOW_SECONDS,
@@ -14,6 +15,7 @@ import {
   ProjectNotFoundError,
   ProjectSharingError,
   RevisionConflictError,
+  RevisionIdCollisionError,
   RevisionNotFoundError,
   sharedDocumentReferencesImport,
   UPLOAD_SESSION_TTL_MS,
@@ -34,6 +36,8 @@ import {
   MAX_ACTIVE_ARTIFACT_UPLOAD_SESSIONS,
   MAX_CLOUD_PROJECT_DOCUMENT_BYTES,
   MAX_ACCOUNT_ARTIFACT_BYTES,
+  MAX_ACCOUNT_PROJECTS,
+  MAX_ACCOUNT_PROJECT_STORAGE_BYTES,
   MAX_ARTIFACT_PART_BYTES,
   MAX_ARTIFACT_UPLOAD_BYTES,
   MAX_ARTIFACT_UPLOAD_PARTS,
@@ -304,6 +308,8 @@ interface DurableUploadSession {
   reservedBytes: number;
   reservationState: UploadReservationState;
   multipartUploadId: string | null;
+  singlePart: boolean;
+  uploadProtocolVersion: number;
   completionStartedAt: number | null;
   expiresAt: string;
 }
@@ -475,7 +481,11 @@ export class D1R2PersistenceService implements PersistenceService {
          SELECT COUNT(*) FROM project_invitations
          WHERE project_id = ?
            AND accepted_at IS NULL AND revoked_at IS NULL AND expires_at >= ?
-       ) < ?`
+       ) < ?
+       AND EXISTS (
+         SELECT 1 FROM projects
+         WHERE id = ? AND user_id = ? AND status != 'deleted'
+       )`
     )
       .bind(
         input.invitationId,
@@ -491,10 +501,20 @@ export class D1R2PersistenceService implements PersistenceService {
         input.createdAt,
         projectId,
         input.createdAt,
-        PROJECT_ACTIVE_INVITATION_CAP
+        PROJECT_ACTIVE_INVITATION_CAP,
+        projectId,
+        ownerUserId
       )
       .run();
     if (inserted.meta?.changes !== 1) {
+      const project = await this.env.DB.prepare(
+        `SELECT status FROM projects WHERE id = ? AND user_id = ?`
+      )
+        .bind(projectId, ownerUserId)
+        .first<{ status: string }>();
+      if (!project || project.status === 'deleted') {
+        throw new ProjectNotFoundError(projectId);
+      }
       const duplicate = await this.env.DB.prepare(
         `SELECT id FROM project_invitations
          WHERE project_id = ? AND email = ?
@@ -686,6 +706,7 @@ export class D1R2PersistenceService implements PersistenceService {
        WHERE i.token_hash = ? AND i.email = ?
          AND i.accepted_at IS NULL AND i.revoked_at IS NULL
          AND i.expires_at >= ?
+         AND p.status != 'deleted'
          AND COALESCE(
            CASE WHEN json_valid(owner_settings.settings_json)
              THEN json_extract(
@@ -727,6 +748,7 @@ export class D1R2PersistenceService implements PersistenceService {
              LEFT JOIN user_settings owner_settings
                ON owner_settings.user_id = p.user_id
              WHERE p.id = project_invitations.project_id
+               AND p.status != 'deleted'
                AND COALESCE(
                  CASE WHEN json_valid(owner_settings.settings_json)
                    THEN json_extract(
@@ -1121,6 +1143,7 @@ export class D1R2PersistenceService implements PersistenceService {
              ON owner_settings.user_id = p.user_id
            WHERE p.user_id = ? OR (
              pm.user_id IS NOT NULL
+             AND p.status != 'deleted'
              AND COALESCE(
                CASE WHEN json_valid(owner_settings.settings_json)
                  THEN json_extract(
@@ -1399,9 +1422,10 @@ export class D1R2PersistenceService implements PersistenceService {
       throw error;
     }
     const row = await this.env.DB.prepare(
-      `SELECT document_json, document_object_id FROM projects WHERE id = ?`
+      `SELECT document_json, document_object_id FROM projects
+       WHERE id = ? AND (user_id = ? OR status != 'deleted')`
     )
-      .bind(projectId)
+      .bind(projectId, userId)
       .first<{ document_json: string; document_object_id: string | null }>();
     if (!row) {
       return null;
@@ -1524,7 +1548,8 @@ export class D1R2PersistenceService implements PersistenceService {
            SET document_json = ?, document_object_id = ?, document_version = ?,
                document_bytes = ?, updated_at = ?, name = ?,
                last_revision_id = ?, revision_count = ?
-           WHERE id = ? AND user_id = ? AND document_version = ?`
+           WHERE id = ? AND user_id = ? AND document_version = ?
+             AND (user_id = ? OR status != 'deleted')`
         ).bind(
           envelope,
           write.objectId,
@@ -1536,7 +1561,8 @@ export class D1R2PersistenceService implements PersistenceService {
           document.revisions.length,
           request.projectId,
           access.ownerUserId,
-          request.expectedVersion
+          request.expectedVersion,
+          userId
         ),
         this.env.DB.prepare(
           `UPDATE project_document_objects
@@ -1588,12 +1614,13 @@ export class D1R2PersistenceService implements PersistenceService {
             if (resolution.currentVersion === null) {
               throw new ProjectNotFoundError(request.projectId);
             }
+            await this.requireProjectRead(userId, request.projectId);
             throw new RevisionConflictError(
               request.projectId,
               resolution.currentVersion
             );
           }
-          throw error;
+          throw revisionSaveError(error);
         }
       }
       const projectUpdate = results?.[1];
@@ -1616,6 +1643,7 @@ export class D1R2PersistenceService implements PersistenceService {
         if (resolution.currentVersion === null) {
           throw new ProjectNotFoundError(request.projectId);
         }
+        await this.requireProjectRead(userId, request.projectId);
         throw new RevisionConflictError(
           request.projectId,
           resolution.currentVersion
@@ -1625,32 +1653,39 @@ export class D1R2PersistenceService implements PersistenceService {
       await this.pruneUnreferencedProjectObjects(request.projectId);
       return document;
     }
-    const results = await this.env.DB.batch([
-      this.env.DB.prepare(
-        `UPDATE projects SET document_json = ?, document_version = ?, document_bytes = ?, updated_at = ?, name = ? WHERE id = ? AND user_id = ? AND document_version = ?`
-      ).bind(
-        documentJson,
-        document.version,
-        documentBytes,
-        nowIso(),
-        document.name,
-        request.projectId,
-        access.ownerUserId,
-        request.expectedVersion
-      ),
-      this.env.DB.prepare(
-        `INSERT OR REPLACE INTO revisions (id, project_id, reason, document_json, document_bytes, created_at, author_user_id) SELECT ?, ?, ?, ?, ?, ?, ? WHERE changes() > 0`
-      ).bind(
-        latestRevision.revisionId,
-        request.projectId,
-        request.reason,
-        documentJson,
-        documentBytes,
-        latestRevision.createdAt,
-        userId
-      )
-    ]);
+    let results: Awaited<ReturnType<D1Database['batch']>>;
+    try {
+      results = await this.env.DB.batch([
+        this.env.DB.prepare(
+          `UPDATE projects SET document_json = ?, document_version = ?, document_bytes = ?, updated_at = ?, name = ? WHERE id = ? AND user_id = ? AND document_version = ? AND (user_id = ? OR status != 'deleted')`
+        ).bind(
+          documentJson,
+          document.version,
+          documentBytes,
+          nowIso(),
+          document.name,
+          request.projectId,
+          access.ownerUserId,
+          request.expectedVersion,
+          userId
+        ),
+        this.env.DB.prepare(
+          `INSERT OR REPLACE INTO revisions (id, project_id, reason, document_json, document_bytes, created_at, author_user_id) SELECT ?, ?, ?, ?, ?, ?, ? WHERE changes() > 0`
+        ).bind(
+          latestRevision.revisionId,
+          request.projectId,
+          request.reason,
+          documentJson,
+          documentBytes,
+          latestRevision.createdAt,
+          userId
+        )
+      ]);
+    } catch (error) {
+      throw revisionSaveError(error);
+    }
     if (results[0]?.meta?.changes === 0) {
+      await this.requireProjectRead(userId, request.projectId);
       const current = await this.env.DB.prepare(
         `SELECT document_version FROM projects WHERE id = ? AND user_id = ?`
       )
@@ -1837,7 +1872,8 @@ export class D1R2PersistenceService implements PersistenceService {
            SET document_json = ?, document_object_id = ?, document_version = ?,
                document_bytes = ?, updated_at = ?, name = ?,
                last_revision_id = ?, revision_count = ?
-           WHERE id = ? AND user_id = ? AND document_version = ?`
+           WHERE id = ? AND user_id = ? AND document_version = ?
+             AND (user_id = ? OR status != 'deleted')`
         ).bind(
           envelope,
           write.objectId,
@@ -1849,7 +1885,8 @@ export class D1R2PersistenceService implements PersistenceService {
           normalized.revisions.length,
           request.projectId,
           access.ownerUserId,
-          request.expectedVersion
+          request.expectedVersion,
+          userId
         ),
         this.env.DB.prepare(
           `UPDATE project_document_objects
@@ -1880,12 +1917,13 @@ export class D1R2PersistenceService implements PersistenceService {
             if (resolution.currentVersion === null) {
               throw new ProjectNotFoundError(request.projectId);
             }
+            await this.requireProjectRead(userId, request.projectId);
             throw new RevisionConflictError(
               request.projectId,
               resolution.currentVersion
             );
           }
-          throw error;
+          throw projectQuotaError(error);
         }
       }
       const projectUpdate = results?.[1];
@@ -1911,6 +1949,7 @@ export class D1R2PersistenceService implements PersistenceService {
         if (resolution.currentVersion === null) {
           throw new ProjectNotFoundError(request.projectId);
         }
+        await this.requireProjectRead(userId, request.projectId);
         throw new RevisionConflictError(
           request.projectId,
           resolution.currentVersion
@@ -1923,21 +1962,28 @@ export class D1R2PersistenceService implements PersistenceService {
         updatedAt
       };
     }
-    const result = await this.env.DB.prepare(
-      `UPDATE projects SET document_json = ?, document_version = ?, document_bytes = ?, updated_at = ?, name = ? WHERE id = ? AND user_id = ? AND document_version = ?`
-    )
-      .bind(
-        JSON.stringify(normalized),
-        normalized.version,
-        persistedDocumentBytes(normalized),
-        updatedAt,
-        normalized.name,
-        request.projectId,
-        access.ownerUserId,
-        request.expectedVersion
+    let result: Awaited<ReturnType<D1PreparedStatement['run']>>;
+    try {
+      result = await this.env.DB.prepare(
+        `UPDATE projects SET document_json = ?, document_version = ?, document_bytes = ?, updated_at = ?, name = ? WHERE id = ? AND user_id = ? AND document_version = ? AND (user_id = ? OR status != 'deleted')`
       )
-      .run();
+        .bind(
+          JSON.stringify(normalized),
+          normalized.version,
+          persistedDocumentBytes(normalized),
+          updatedAt,
+          normalized.name,
+          request.projectId,
+          access.ownerUserId,
+          request.expectedVersion,
+          userId
+        )
+        .run();
+    } catch (error) {
+      throw projectQuotaError(error);
+    }
     if (result.meta?.changes === 0) {
+      await this.requireProjectRead(userId, request.projectId);
       const current = await this.env.DB.prepare(
         `SELECT document_version FROM projects WHERE id = ? AND user_id = ?`
       )
@@ -1972,12 +2018,17 @@ export class D1R2PersistenceService implements PersistenceService {
     await this.purgeExpiredUploadSessions();
     const session = createUploadSessionRecord(request);
     try {
-      await this.env.DB.prepare(
+      const inserted = await this.env.DB.prepare(
         `INSERT INTO upload_sessions
          (id, artifact_id, project_id, object_key, file_name, content_type,
           kind, metadata_json, expires_at, owner_user_id, reserved_bytes,
-          reservation_state, multipart_upload_id, completion_started_at)
-         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 0, 'open', NULL, NULL)`
+          reservation_state, multipart_upload_id, completion_started_at,
+          upload_protocol_version)
+         SELECT ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 0, 'open', NULL, NULL, 1
+         WHERE EXISTS (
+           SELECT 1 FROM projects
+           WHERE id = ? AND (user_id = ? OR status != 'deleted')
+         )`
       )
         .bind(
           session.uploadSessionId,
@@ -1989,9 +2040,14 @@ export class D1R2PersistenceService implements PersistenceService {
           session.kind,
           JSON.stringify(session.metadata),
           session.expiresAt,
-          access.ownerUserId
+          access.ownerUserId,
+          request.projectId,
+          userId
         )
         .run();
+      if (inserted.meta?.changes === 0) {
+        throw new ProjectNotFoundError(request.projectId);
+      }
     } catch (error) {
       throwArtifactAccountingError(error);
     }
@@ -2006,19 +2062,107 @@ export class D1R2PersistenceService implements PersistenceService {
     if (!this.env.DB) {
       return getInMemoryPersistence().putUpload(userId, uploadSessionId, body);
     }
+    if (body.byteLength < 1 || body.byteLength > 25 * 1024 * 1024) {
+      throw new ArtifactStorageError('Artifact is empty or too large.');
+    }
     const upload = await this.requireUploadSession(userId, uploadSessionId);
     if (
-      upload.reservationState !== 'open' ||
-      upload.multipartUploadId !== null ||
-      upload.reservedBytes !== 0
+      upload.reservationState === 'completed' &&
+      upload.singlePart &&
+      upload.multipartUploadId !== null &&
+      upload.reservedBytes === body.byteLength
     ) {
-      throw new ArtifactStorageError(
-        'Upload session is already using multipart storage.'
-      );
+      const stored = await this.env.ARTIFACTS!.get(upload.objectKey);
+      if (stored?.size === body.byteLength) {
+        const storedBody = new Uint8Array(await stored.arrayBuffer());
+        const retriedBody = new Uint8Array(body);
+        if (storedBody.every((byte, index) => byte === retriedBody[index])) {
+          return;
+        }
+      }
     }
-    await this.env.ARTIFACTS!.put(upload.objectKey, body, {
-      httpMetadata: { contentType: upload.contentType }
-    });
+    if (
+      upload.reservationState === 'completing' &&
+      upload.singlePart &&
+      upload.multipartUploadId
+    ) {
+      const parts = await this.uploadParts(uploadSessionId);
+      if (
+        parts.length === 1 &&
+        parts[0]?.partNumber === 1 &&
+        parts[0]?.bytes === body.byteLength &&
+        parts[0]?.etag
+      ) {
+        await this.completeMultipartUploadInternal(
+          userId,
+          uploadSessionId,
+          {
+            uploadId: upload.multipartUploadId,
+            parts: [{ partNumber: 1, etag: parts[0].etag }]
+          },
+          true
+        );
+        return this.putUpload(userId, uploadSessionId, body);
+      }
+    }
+    let uploadId: string;
+    if (
+      upload.reservationState === 'uploading' &&
+      upload.singlePart &&
+      upload.multipartUploadId
+    ) {
+      uploadId = upload.multipartUploadId;
+    } else {
+      if (
+        upload.reservationState !== 'open' ||
+        upload.multipartUploadId !== null ||
+        upload.reservedBytes !== 0
+      ) {
+        throw new ArtifactStorageError('Upload session is already in use.');
+      }
+      const multipart = await this.env.ARTIFACTS!.createMultipartUpload(
+        upload.objectKey,
+        {
+          httpMetadata: { contentType: upload.contentType }
+        }
+      );
+      let claimed: number | undefined;
+      try {
+        const result = await this.env.DB.prepare(
+          `UPDATE upload_sessions
+         SET reservation_state = 'uploading', multipart_upload_id = ?,
+             single_part = 1
+         WHERE id = ? AND reservation_state = 'open'
+           AND multipart_upload_id IS NULL AND reserved_bytes = 0
+           AND single_part = 0`
+        )
+          .bind(multipart.uploadId, uploadSessionId)
+          .run();
+        claimed = result.meta?.changes;
+      } catch (error) {
+        await multipart.abort().catch(() => undefined);
+        throwArtifactAccountingError(error);
+      }
+      if (claimed !== 1) {
+        await multipart.abort().catch(() => undefined);
+        throw new ArtifactStorageError('Upload session changed during upload.');
+      }
+      uploadId = multipart.uploadId;
+    }
+    const part = await this.putUploadPartInternal(
+      userId,
+      uploadSessionId,
+      uploadId,
+      1,
+      body,
+      true
+    );
+    await this.completeMultipartUploadInternal(
+      userId,
+      uploadSessionId,
+      { uploadId, parts: [part] },
+      true
+    );
   }
 
   /**
@@ -2034,6 +2178,7 @@ export class D1R2PersistenceService implements PersistenceService {
         `SELECT id, artifact_id, project_id, object_key, file_name,
                 content_type, kind, metadata_json, expires_at, owner_user_id,
                 reserved_bytes, reservation_state, multipart_upload_id,
+                single_part, upload_protocol_version,
                 completion_started_at
          FROM upload_sessions WHERE id = ?`
       )
@@ -2052,6 +2197,8 @@ export class D1R2PersistenceService implements PersistenceService {
         reserved_bytes: number;
         reservation_state: string;
         multipart_upload_id: string | null;
+        single_part: number;
+        upload_protocol_version: number;
         completion_started_at: number | null;
       }>();
     if (!upload) return null;
@@ -2060,8 +2207,13 @@ export class D1R2PersistenceService implements PersistenceService {
       !isUploadReservationState(upload.reservation_state) ||
       !Number.isSafeInteger(upload.reserved_bytes) ||
       upload.reserved_bytes < 0 ||
+      ![0, 1].includes(upload.single_part) ||
+      ![0, 1].includes(upload.upload_protocol_version) ||
       (upload.reservation_state === 'open' &&
-        (upload.reserved_bytes !== 0 || upload.multipart_upload_id !== null)) ||
+        (upload.reserved_bytes !== 0 ||
+          upload.multipart_upload_id !== null ||
+          upload.single_part !== 0)) ||
+      (upload.single_part === 1 && upload.multipart_upload_id === null) ||
       (upload.reservation_state === 'legacy' && upload.reserved_bytes !== 0) ||
       (upload.reservation_state === 'completing' &&
         (!Number.isSafeInteger(upload.completion_started_at) ||
@@ -2090,6 +2242,8 @@ export class D1R2PersistenceService implements PersistenceService {
       reservedBytes: upload.reserved_bytes,
       reservationState: upload.reservation_state,
       multipartUploadId: upload.multipart_upload_id,
+      singlePart: upload.single_part === 1,
+      uploadProtocolVersion: upload.upload_protocol_version,
       completionStartedAt: upload.completion_started_at,
       expiresAt: upload.expires_at
     };
@@ -2116,6 +2270,11 @@ export class D1R2PersistenceService implements PersistenceService {
     if (upload.reservationState === 'legacy') {
       throw new ArtifactStorageError(
         'Upload session predates durable quota accounting; start a new upload.'
+      );
+    }
+    if (upload.uploadProtocolVersion !== 1) {
+      throw new ArtifactStorageError(
+        'Upload session predates the current upload protocol; start a new upload.'
       );
     }
     return upload;
@@ -2155,6 +2314,14 @@ export class D1R2PersistenceService implements PersistenceService {
     upload: DurableUploadSession
   ): Promise<boolean> {
     if (!this.env.ARTIFACTS) return false;
+    // An active R2 completion can still publish the object after deletion.
+    if (
+      upload.reservationState === 'completing' &&
+      Date.now() - (upload.completionStartedAt ?? Date.now()) <
+        MULTIPART_COMPLETION_LEASE_MS
+    ) {
+      return false;
+    }
     if (upload.reservationState !== 'aborting') {
       const claimed = await this.env
         .DB!.prepare(
@@ -2211,6 +2378,11 @@ export class D1R2PersistenceService implements PersistenceService {
       );
     }
     const session = await this.requireUploadSession(userId, uploadSessionId);
+    if (session.singlePart) {
+      throw new ArtifactStorageError(
+        'Upload session uses single upload storage.'
+      );
+    }
     if (session.kind === 'thumbnail') {
       throw new ArtifactStorageError(
         'Thumbnail artifacts must use single uploads.'
@@ -2255,6 +2427,7 @@ export class D1R2PersistenceService implements PersistenceService {
       await upload.abort().catch(() => undefined);
       const current = await this.requireUploadSession(userId, uploadSessionId);
       if (
+        !current.singlePart &&
         current.multipartUploadId &&
         ['uploading', 'completing', 'completed'].includes(
           current.reservationState
@@ -2274,6 +2447,24 @@ export class D1R2PersistenceService implements PersistenceService {
     partNumber: number,
     body: ArrayBuffer
   ): Promise<UploadedArtifactPart> {
+    return this.putUploadPartInternal(
+      userId,
+      uploadSessionId,
+      uploadId,
+      partNumber,
+      body,
+      false
+    );
+  }
+
+  private async putUploadPartInternal(
+    userId: UserId,
+    uploadSessionId: string,
+    uploadId: string,
+    partNumber: number,
+    body: ArrayBuffer,
+    allowSingle: boolean
+  ): Promise<UploadedArtifactPart> {
     if (!this.env.DB) {
       return getInMemoryPersistence().putUploadPart(
         userId,
@@ -2285,6 +2476,7 @@ export class D1R2PersistenceService implements PersistenceService {
     }
     const session = await this.requireUploadSession(userId, uploadSessionId);
     if (
+      (session.singlePart && !allowSingle) ||
       session.reservationState !== 'uploading' ||
       session.multipartUploadId !== uploadId
     ) {
@@ -2361,6 +2553,20 @@ export class D1R2PersistenceService implements PersistenceService {
     uploadSessionId: string,
     request: CompleteMultipartUploadRequest
   ): Promise<void> {
+    return this.completeMultipartUploadInternal(
+      userId,
+      uploadSessionId,
+      request,
+      false
+    );
+  }
+
+  private async completeMultipartUploadInternal(
+    userId: UserId,
+    uploadSessionId: string,
+    request: CompleteMultipartUploadRequest,
+    allowSingle: boolean
+  ): Promise<void> {
     if (!this.env.DB) {
       return getInMemoryPersistence().completeMultipartUpload(
         userId,
@@ -2370,6 +2576,7 @@ export class D1R2PersistenceService implements PersistenceService {
     }
     let session = await this.requireUploadSession(userId, uploadSessionId);
     if (
+      (session.singlePart && !allowSingle) ||
       session.multipartUploadId !== request.uploadId ||
       !['uploading', 'completing', 'completed'].includes(
         session.reservationState
@@ -2436,7 +2643,12 @@ export class D1R2PersistenceService implements PersistenceService {
           'Multipart completion is already being reconciled.'
         );
       }
-      return this.completeMultipartUpload(userId, uploadSessionId, request);
+      return this.completeMultipartUploadInternal(
+        userId,
+        uploadSessionId,
+        request,
+        allowSingle
+      );
     }
     const parts = await this.uploadParts(uploadSessionId);
     try {
@@ -2533,6 +2745,11 @@ export class D1R2PersistenceService implements PersistenceService {
     ) {
       throw new ArtifactStorageError('Upload reservation state is invalid.');
     }
+    if (session.singlePart) {
+      throw new ArtifactStorageError(
+        'Upload session uses single upload storage.'
+      );
+    }
     if (
       session.multipartUploadId !== uploadId ||
       !['uploading', 'completed', 'aborting'].includes(session.reservationState)
@@ -2592,12 +2809,9 @@ export class D1R2PersistenceService implements PersistenceService {
     if (
       upload.projectId !== request.projectId ||
       upload.artifactId !== request.artifactId ||
-      (upload.reservationState !== 'open' &&
-        upload.reservationState !== 'completed') ||
-      (upload.reservationState === 'open' &&
-        (upload.reservedBytes !== 0 || upload.multipartUploadId !== null)) ||
-      (upload.reservationState === 'completed' &&
-        (!upload.multipartUploadId || upload.reservedBytes < 1))
+      upload.reservationState !== 'completed' ||
+      !upload.multipartUploadId ||
+      upload.reservedBytes < 1
     ) {
       return null;
     }
@@ -2605,10 +2819,7 @@ export class D1R2PersistenceService implements PersistenceService {
     if (!stored) {
       return null;
     }
-    if (
-      upload.reservationState === 'completed' &&
-      stored.size !== upload.reservedBytes
-    ) {
+    if (stored.size !== upload.reservedBytes) {
       throw new ArtifactStorageError(
         'Completed multipart object does not match its reservation.'
       );
@@ -2648,30 +2859,30 @@ export class D1R2PersistenceService implements PersistenceService {
       SELECT 1 FROM upload_sessions
       WHERE id = ? AND artifact_id = ? AND project_id = ?
         AND owner_user_id = ?
-        AND (
-          (reservation_state = 'open' AND reserved_bytes = 0
-            AND multipart_upload_id IS NULL
-            AND completion_started_at IS NULL)
-          OR
-          (reservation_state = 'completed' AND reserved_bytes = ?
-            AND multipart_upload_id IS NOT NULL
-            AND completion_started_at IS NULL)
-        )
+        AND reservation_state = 'completed' AND reserved_bytes = ?
+        AND multipart_upload_id IS NOT NULL
+        AND completion_started_at IS NULL
     )`;
     const statements =
       artifact.kind === 'thumbnail'
         ? [
-            this.env.DB.prepare(
+          this.env.DB.prepare(
               `DELETE FROM artifacts
              WHERE project_id = ? AND kind = 'thumbnail'
-               AND ${validSessionSql}`
+               AND ${validSessionSql}
+               AND EXISTS (
+                 SELECT 1 FROM projects
+                 WHERE id = ? AND (user_id = ? OR status != 'deleted')
+               )`
             ).bind(
               artifact.projectId,
               request.uploadSessionId,
               request.artifactId,
               request.projectId,
               upload.ownerUserId,
-              artifact.bytes
+              artifact.bytes,
+              request.projectId,
+              userId
             )
           ]
         : [];
@@ -2685,12 +2896,12 @@ export class D1R2PersistenceService implements PersistenceService {
          FROM upload_sessions
          WHERE id = ? AND artifact_id = ? AND project_id = ?
            AND owner_user_id = ?
-           AND (
-             (reservation_state = 'open' AND reserved_bytes = 0
-               AND multipart_upload_id IS NULL)
-             OR
-             (reservation_state = 'completed' AND reserved_bytes = ?
-               AND multipart_upload_id IS NOT NULL)
+           AND reservation_state = 'completed' AND reserved_bytes = ?
+           AND multipart_upload_id IS NOT NULL
+           AND EXISTS (
+             SELECT 1 FROM projects
+             WHERE id = upload_sessions.project_id
+               AND (user_id = ? OR status != 'deleted')
            )`
       ).bind(
         artifact.artifactId,
@@ -2703,7 +2914,8 @@ export class D1R2PersistenceService implements PersistenceService {
         request.artifactId,
         request.projectId,
         upload.ownerUserId,
-        artifact.bytes
+        artifact.bytes,
+        userId
       ),
       this.env.DB.prepare(
         `DELETE FROM artifact_upload_parts
@@ -2727,6 +2939,7 @@ export class D1R2PersistenceService implements PersistenceService {
       throw mapped;
     }
     if (results[artifactInsertIndex]?.meta?.changes !== 1) {
+      await this.requireProjectRead(userId, request.projectId);
       const existing = await this.env.DB.prepare(
         `SELECT id, project_id, kind, name, object_key, content_type, bytes,
                 metadata_json, created_at
@@ -2857,6 +3070,7 @@ export class D1R2PersistenceService implements PersistenceService {
     // issuing a new Class A R2 write; the metadata row is also what makes
     // project deletion able to sweep every object deterministically.
     const missingAssets: ProjectStorageAssetObject[] = [];
+    let newAssetBytes = 0;
     for (const asset of prepared.assets) {
       const existing = await this.env
         .DB!.prepare(
@@ -2871,7 +3085,15 @@ export class D1R2PersistenceService implements PersistenceService {
       if (!existing || !stored || stored.size !== existing.stored_bytes) {
         missingAssets.push(asset);
       }
+      if (!existing) {
+        newAssetBytes += asset.storedBytes;
+      }
     }
+
+    await this.assertAccountProjectStorageCapacity(
+      document.ownerUserId,
+      prepared.storedBytes + newAssetBytes
+    );
 
     await Promise.all(
       missingAssets.map((asset) =>
@@ -2895,6 +3117,60 @@ export class D1R2PersistenceService implements PersistenceService {
       prepared,
       missingAssets
     };
+  }
+
+  private async assertAccountProjectCount(userId: UserId): Promise<void> {
+    const row = await this.env
+      .DB!.prepare(
+        `SELECT COUNT(*) AS project_count FROM projects WHERE user_id = ?`
+      )
+      .bind(userId)
+      .first<{ project_count: number }>();
+    if (row && !Number.isSafeInteger(row.project_count)) {
+      throw new ProjectObjectStorageError('Project count is unavailable.');
+    }
+    if ((row?.project_count ?? 0) >= MAX_ACCOUNT_PROJECTS) {
+      throw new ProjectQuotaError('count', MAX_ACCOUNT_PROJECTS);
+    }
+  }
+
+  private async assertAccountProjectStorageCapacity(
+    userId: UserId,
+    incomingBytes: number
+  ): Promise<void> {
+    const row = await this.env
+      .DB!.prepare(
+        `SELECT
+         COALESCE((
+           SELECT SUM(objects.stored_bytes)
+           FROM project_document_objects objects
+           JOIN projects ON projects.id = objects.project_id
+           WHERE projects.user_id = ?
+         ), 0) AS object_bytes,
+         COALESCE((
+           SELECT SUM(assets.stored_bytes)
+           FROM project_storage_assets assets
+           JOIN projects ON projects.id = assets.project_id
+           WHERE projects.user_id = ?
+         ), 0) AS asset_bytes`
+      )
+      .bind(userId, userId)
+      .first<{ object_bytes: number; asset_bytes: number }>();
+    if (
+      (row && !Number.isSafeInteger(row.object_bytes)) ||
+      (row && !Number.isSafeInteger(row.asset_bytes)) ||
+      (row && row.object_bytes < 0) ||
+      (row && row.asset_bytes < 0) ||
+      !Number.isSafeInteger(incomingBytes)
+    ) {
+      throw new ProjectObjectStorageError('Project storage usage is invalid.');
+    }
+    if (
+      (row?.object_bytes ?? 0) + (row?.asset_bytes ?? 0) + incomingBytes >
+      MAX_ACCOUNT_PROJECT_STORAGE_BYTES
+    ) {
+      throw new ProjectQuotaError('storage', MAX_ACCOUNT_PROJECT_STORAGE_BYTES);
+    }
   }
 
   private projectAssetStatements(
@@ -3182,6 +3458,7 @@ export class D1R2PersistenceService implements PersistenceService {
     organization: ProjectOrganization = DEFAULT_PROJECT_ORGANIZATION
   ): Promise<ProjectSummary> {
     this.assertDocumentCanBeStored(document);
+    await this.assertAccountProjectCount(userId);
     // The row's edit time is the document's, not the insert's: a fresh document
     // carries "now" already, and an adopted one must keep its device edit time
     // or saving to the account reorders the shelf.
@@ -3229,7 +3506,7 @@ export class D1R2PersistenceService implements PersistenceService {
               'Cloud project save outcome could not be verified.'
             );
           }
-          throw error;
+          throw projectQuotaError(error);
         }
       }
       return {
@@ -3242,23 +3519,27 @@ export class D1R2PersistenceService implements PersistenceService {
         organization
       };
     }
-    await this.env
-      .DB!.prepare(
-        `INSERT INTO projects (id, user_id, name, document_json, document_version, document_bytes, updated_at, status, pinned, sort_order) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
-      )
-      .bind(
-        document.projectId,
-        userId,
-        document.name,
-        JSON.stringify(document),
-        document.version,
-        persistedDocumentBytes(document),
-        updatedAt,
-        organization.status,
-        organization.pinned ? 1 : 0,
-        organization.sortOrder
-      )
-      .run();
+    try {
+      await this.env
+        .DB!.prepare(
+          `INSERT INTO projects (id, user_id, name, document_json, document_version, document_bytes, updated_at, status, pinned, sort_order) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
+        )
+        .bind(
+          document.projectId,
+          userId,
+          document.name,
+          JSON.stringify(document),
+          document.version,
+          persistedDocumentBytes(document),
+          updatedAt,
+          organization.status,
+          organization.pinned ? 1 : 0,
+          organization.sortOrder
+        )
+        .run();
+    } catch (error) {
+      throw projectQuotaError(error);
+    }
     return {
       projectId: document.projectId,
       name: document.name,
@@ -3422,6 +3703,7 @@ export class D1R2PersistenceService implements PersistenceService {
         `SELECT p.user_id AS owner_user_id,
                 CASE
                   WHEN p.user_id = ? THEN 'owner'
+                  WHEN p.status = 'deleted' THEN NULL
                   WHEN COALESCE(
                     CASE WHEN json_valid(owner_settings.settings_json)
                       THEN json_extract(
@@ -3473,7 +3755,7 @@ export class D1R2PersistenceService implements PersistenceService {
     }
     const expired = await this.env.DB.prepare(
       `SELECT id FROM upload_sessions
-       WHERE expires_at < ? OR reservation_state = 'legacy'
+       WHERE expires_at < ?
        ORDER BY expires_at LIMIT 100`
     )
       .bind(nowIso())
@@ -3574,6 +3856,28 @@ function assertMultipartCompletionParts(
 const MULTIPART_UPLOAD_METADATA_KEY = '__openzcadMultipartUploadId';
 /** Prevents a concurrent retry from stealing completion from a live Worker. */
 const MULTIPART_COMPLETION_LEASE_MS = 60_000;
+
+function projectQuotaError(error: unknown): unknown {
+  const message = error instanceof Error ? error.message : String(error);
+  if (message.includes('project_account_count_quota')) {
+    return new ProjectQuotaError('count', MAX_ACCOUNT_PROJECTS);
+  }
+  if (
+    message.includes('project_account_storage_quota') ||
+    message.includes('project_account_document_quota')
+  ) {
+    return new ProjectQuotaError('storage', MAX_ACCOUNT_PROJECT_STORAGE_BYTES);
+  }
+  return error;
+}
+
+function revisionSaveError(error: unknown): unknown {
+  const message = error instanceof Error ? error.message : String(error);
+  if (message.includes('revision_project_collision')) {
+    return new RevisionIdCollisionError();
+  }
+  return projectQuotaError(error);
+}
 
 function artifactAccountingError(error: unknown): Error {
   const message = error instanceof Error ? error.message : String(error);
@@ -4378,7 +4682,8 @@ export class ProjectCollaborationRoom extends DurableObject {
        INNER JOIN projects p ON p.id = pm.project_id
        LEFT JOIN user_settings owner_settings
          ON owner_settings.user_id = p.user_id
-       WHERE pm.project_id = ? AND pm.user_id = ?`
+       WHERE pm.project_id = ? AND pm.user_id = ?
+         AND p.status != 'deleted'`
     )
       .bind(projectId, userId)
       .first<{ role: string; collaboration_enabled?: number | boolean }>();
