@@ -296,6 +296,22 @@ export function HistoryTimeline({
     }
   }
 
+  /**
+   * Buttons that set the end of history outright (Resume, a row's Roll back)
+   * drop any keyboard step still waiting, so it cannot land after them.
+   */
+  function resumeNow() {
+    cancelPendingCommit();
+    setPreviewEnd(null);
+    onResumeHistory();
+  }
+
+  function rollBackAfter(feature: FeatureNode) {
+    cancelPendingCommit();
+    setPreviewEnd(null);
+    onRollbackAfterFeature(feature.featureId, feature.name);
+  }
+
   function moveEndTo(target: number) {
     const next = Math.max(0, Math.min(last, target));
     setPreviewEnd(next);
@@ -439,7 +455,7 @@ export function HistoryTimeline({
             className="history-resume"
             aria-label="Resume full history"
             title="Resume every feature paused by rollback. Features you suppressed stay suppressed."
-            onClick={onResumeHistory}
+            onClick={resumeNow}
           >
             Resume
           </button>
@@ -667,9 +683,7 @@ export function HistoryTimeline({
                     title={`Roll back history after ${feature.name}`}
                     aria-label={`Roll back history after ${feature.name}`}
                     aria-pressed={index === committedEnd && committedEnd < last}
-                    onClick={() =>
-                      onRollbackAfterFeature(feature.featureId, feature.name)
-                    }
+                    onClick={() => rollBackAfter(feature)}
                   >
                     <History size={12} aria-hidden="true" />
                   </button>

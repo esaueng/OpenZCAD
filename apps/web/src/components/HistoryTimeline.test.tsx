@@ -163,6 +163,46 @@ describe('HistoryTimeline', () => {
     release.mockRestore();
   });
 
+  it('drops a pending keyboard commit when Resume is pressed', () => {
+    vi.useFakeTimers();
+    const { props } = renderTimeline({
+      features: [feature(1), feature(2), feature(3, undefined, rolledBack)]
+    });
+    fireEvent.keyDown(screen.getByRole('slider', { name: 'End of history' }), {
+      key: 'ArrowDown'
+    });
+    fireEvent.click(
+      screen.getByRole('button', { name: 'Resume full history' })
+    );
+    act(() => {
+      vi.runAllTimers();
+    });
+    // Resume's own transaction only; the keyboard step does not follow it.
+    expect(props.onResumeHistory).toHaveBeenCalledTimes(1);
+    expect(props.onRollbackAfterFeature).not.toHaveBeenCalled();
+  });
+
+  it('drops a pending keyboard commit when a row is rolled back to', () => {
+    vi.useFakeTimers();
+    const { props } = renderTimeline({
+      features: [feature(1), feature(2), feature(3)]
+    });
+    fireEvent.keyDown(screen.getByRole('slider', { name: 'End of history' }), {
+      key: 'ArrowUp'
+    });
+    fireEvent.click(
+      screen.getByRole('button', { name: 'Roll back history after Feature 1' })
+    );
+    act(() => {
+      vi.runAllTimers();
+    });
+    expect(props.onRollbackAfterFeature).toHaveBeenCalledTimes(1);
+    expect(props.onRollbackAfterFeature).toHaveBeenCalledWith(
+      'feature-1',
+      'Feature 1'
+    );
+  });
+
   it('resumes when the handle is moved back to the end', () => {
     vi.useFakeTimers();
     const { props } = renderTimeline({
