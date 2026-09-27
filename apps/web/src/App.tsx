@@ -14745,13 +14745,15 @@ export function App() {
   }
 
   function handleFeatureContextMenu(
-    event: React.MouseEvent,
+    at: { clientX: number; clientY: number },
     feature: FeatureNode
   ) {
     const bodyId = feature.bodyId ?? null;
     const body = bodyId ? representations[bodyId] : null;
     const repair = staleDirectEditFaceRepair(feature, warnings);
-    openContextMenu(event.clientX, event.clientY, [
+    const sketchId =
+      feature.data.featureKind === 'sketch' ? feature.data.sketchId : null;
+    openContextMenu(at.clientX, at.clientY, [
       {
         item: { id: 'edit', label: 'Edit Properties' },
         run: () => handleSelectFeatureFromTree(feature.id)
@@ -14777,6 +14779,22 @@ export function App() {
                 icon: <Eye size={13} aria-hidden="true" />
               },
               run: () => toggleBodyVisibility(bodyId)
+            }
+          ]
+        : []),
+      // The history row keeps only a Show button for a hidden sketch; hiding
+      // one lives here beside Hide Body.
+      ...(sketchId
+        ? [
+            {
+              item: {
+                id: 'sketch-visibility',
+                label: hiddenSketchIds.has(sketchId)
+                  ? 'Show Sketch'
+                  : 'Hide Sketch',
+                icon: <Eye size={13} aria-hidden="true" />
+              },
+              run: () => toggleSketchVisibility(sketchId)
             }
           ]
         : []),
@@ -16334,7 +16352,6 @@ export function App() {
               : null
           }
           onSelect={handleOpenHistoryFeature}
-          onResumeHistory={handleResumeHistory}
           onDismissFailure={() => setHistoryFailure(null)}
         />
       }
@@ -16349,6 +16366,8 @@ export function App() {
       onFeatureContextMenu={handleFeatureContextMenu}
       onToggleFeatureSuppression={handleToggleFeatureSuppression}
       onRollbackAfterFeature={handleRollbackAfterFeature}
+      onResumeHistory={handleResumeHistory}
+      units={doc?.units ?? 'mm'}
       onConfigureToggle={(name, bodyIds) => {
         if (ensureCanEdit('configure an on/off parameter')) {
           executeCommand(
@@ -16374,7 +16393,6 @@ export function App() {
         )
       }
       exposedParameterNames={exposedParameterNames}
-      onDeleteFeature={handleDeleteFeature}
       onReorderFeature={handleReorderFeature}
       onRestoreCheckpoint={(checkpoint) =>
         void handleRestoreSaveState(checkpoint)

@@ -104,16 +104,16 @@ test('resumes rollback without resuming manually suppressed features and support
     .getByRole('button', { name: 'Roll back history after Box', exact: true })
     .click();
   await expectBodyCount(page, 1);
-  const details = page.getByRole('region', { name: 'History details' });
-  await expect(details).toContainText('2 later features are paused');
-  await details.getByRole('button', { name: 'Resume full history' }).click();
+  const rollback = page.locator('.history-rollback');
+  await expect(rollback).toContainText('2 later features paused');
+  await rollback.getByRole('button', { name: 'Resume full history' }).click();
   await expectBodyCount(page, 2);
   await expect(
     page.locator('.feature-row', { hasText: /^Cylinder/ })
   ).toContainText('suppressed');
   await page.getByRole('button', { name: 'Undo', exact: true }).click();
   await expectBodyCount(page, 1);
-  await expect(details).toContainText('2 later features are paused');
+  await expect(rollback).toContainText('2 later features paused');
   await page.getByRole('button', { name: 'Redo', exact: true }).click();
   await expectBodyCount(page, 2);
 });
@@ -128,12 +128,14 @@ test('names a deleted sketch input and restores the dependent model with undo', 
   await page.locator('.feature-row-main', { hasText: 'Base profile' }).click();
   const details = page.getByRole('region', { name: 'History details' });
   await expect(details.getByText(/Affects [1-9]/)).toBeVisible();
-  // Load-bearing deletes confirm first (native confirm, accepted here).
+  // Delete is in the row's ⋯ menu. Load-bearing deletes confirm first
+  // (native confirm, accepted here).
+  await page
+    .getByRole('button', { name: 'More actions for Base profile' })
+    .click();
   await Promise.all([
     page.waitForEvent('dialog').then((dialog) => dialog.accept()),
-    page
-      .getByRole('button', { name: 'Delete Base profile', exact: true })
-      .click()
+    page.getByRole('menuitem', { name: /^Delete/ }).click()
   ]);
   await page.locator('.feature-row-main', { hasText: 'Extrude base' }).click();
   await expect(

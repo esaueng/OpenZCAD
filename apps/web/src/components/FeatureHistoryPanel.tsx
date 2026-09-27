@@ -16,7 +16,6 @@ interface Props {
   selectedId: string | null;
   failure: FeatureBuildError | null;
   onSelect(id: string): void;
-  onResumeHistory(): void;
   onDismissFailure(): void;
 }
 
@@ -25,7 +24,6 @@ export function FeatureHistoryPanel({
   selectedId,
   failure,
   onSelect,
-  onResumeHistory,
   onDismissFailure
 }: Props) {
   const graph = useMemo(() => featureHistory(document), [document]);
@@ -39,7 +37,6 @@ export function FeatureHistoryPanel({
   const missing = selected
     ? [...(graph.missing.get(selected.featureId) ?? [])]
     : [];
-  const rolledBack = graph.features.filter(isFeatureRollbackSuppressed);
   const culprit = failure?.featureId
     ? graph.features.find((feature) => feature.featureId === failure.featureId)
     : undefined;
@@ -64,7 +61,8 @@ export function FeatureHistoryPanel({
       {isFeatureSuppressed(feature) && <span> (inactive)</span>}
     </li>
   );
-  if (!selected && !failure && !rolledBack.length) return null;
+  // Rollback status and Resume live at the top of the History list itself.
+  if (!selected && !failure) return null;
   return (
     <section className="feature-history-panel" aria-label="History details">
       {failure && (
@@ -83,19 +81,6 @@ export function FeatureHistoryPanel({
           <button type="button" onClick={onDismissFailure}>
             Dismiss failure
           </button>
-        </div>
-      )}
-      {rolledBack.length > 0 && (
-        <div role="status">
-          <p>
-            {rolledBack.length} later{' '}
-            {rolledBack.length === 1 ? 'feature is' : 'features are'} paused by
-            rollback.
-          </p>
-          <button type="button" onClick={onResumeHistory}>
-            Resume full history
-          </button>
-          <p className="muted">Manually suppressed features stay suppressed.</p>
         </div>
       )}
       {selected && (

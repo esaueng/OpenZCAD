@@ -40,7 +40,6 @@ it('shows dependent history and routes a failed edit by feature identity', async
         )
       }
       onSelect={select}
-      onResumeHistory={vi.fn()}
       onDismissFailure={vi.fn()}
     />
   );
@@ -74,7 +73,6 @@ it('says a standalone feature has no dependencies once, not as an empty count', 
       selectedId={plate!.id}
       failure={null}
       onSelect={vi.fn()}
-      onResumeHistory={vi.fn()}
       onDismissFailure={vi.fn()}
     />
   );
