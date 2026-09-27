@@ -111,8 +111,9 @@ blue; selecting a sketch element highlights its constraints and dimensions.
 
 **OpenZCAD.** Direction-typed box selection (enclosed versus crossing), a
 selection filter, depth cycling, a topology pick list for ambiguous hits,
-face/edge double-click promotion to the owning body, on-top selection of the
-current pick and the concave-edge occlusion fix (PR #408) exist. The sketch
+face or isolated-edge double-click promotion to the owning body, on-top
+selection of the current pick and the concave-edge occlusion fix (PR #408)
+exist. Smooth-edge double-click selects the connected edge chain. The sketch
 solve state is a tone on the Solve control and per-entity highlighting follows
 residuals (S03). Missing: filter keys during box drag, select-through and
 double-click selection of a connected sketch group. → **U07**, with the
