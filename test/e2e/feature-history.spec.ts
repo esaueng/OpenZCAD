@@ -118,6 +118,41 @@ test('resumes rollback without resuming manually suppressed features and support
   await expectBodyCount(page, 2);
 });
 
+test.describe('on a touch screen', () => {
+  test.use({ hasTouch: true });
+
+  test("shows a history row's actions at rest, since nothing can hover", async ({
+    page
+  }) => {
+    await stubApi(page);
+    await page.goto('/');
+    await page.getByLabel('Project name').fill('Touch history');
+    await page.getByRole('button', { name: 'Create project' }).click();
+    await page.getByRole('button', { name: /^Box \(B\)/ }).click();
+    await page
+      .getByRole('region', { name: 'Feature inspector' })
+      .getByRole('button', { name: /^Create/ })
+      .click();
+    await expectBodyCount(page, 1);
+    expect(
+      await page.evaluate(() => window.matchMedia('(hover: none)').matches)
+    ).toBe(true);
+    // Deselect, so the row is at rest rather than showing its actions
+    // because it is selected.
+    await page.keyboard.press('Escape');
+    const row = page.locator('.feature-row', { hasText: /^Box/ });
+    await expect(row).not.toHaveClass(/selected/);
+    // Invisible but tappable controls were the hazard: they must be seen.
+    await expect
+      .poll(() =>
+        row
+          .locator('.history-row-actions')
+          .evaluate((el) => getComputedStyle(el).opacity)
+      )
+      .toBe('1');
+  });
+});
+
 test('names a deleted sketch input and restores the dependent model with undo', async ({
   page
 }) => {

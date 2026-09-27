@@ -476,14 +476,8 @@
 @media (hover: none) {
   .row-delete,
   .param-expose,
-  .history-row-actions,
   .feature-row-grip {
     opacity: 1;
-    transform: none;
-  }
-
-  .history-row-value {
-    opacity: 0;
   }
 }
 
@@ -845,6 +839,20 @@
 .history-handle.is-dragging .history-handle-label {
   opacity: 1;
   transform: translate(0, -50%);
+}
+
+/* Touch: nothing hovers, so a row's actions show at rest instead of its
+   value, for the reason in the row-controls note above. Declared after the
+   rules it overrides, and more specific than them. */
+@media (hover: none) {
+  .history-timeline .history-row-actions {
+    opacity: 1;
+    transform: none;
+  }
+
+  .history-timeline .history-row-value {
+    opacity: 0;
+  }
 }
 
 .feature-history-panel {
