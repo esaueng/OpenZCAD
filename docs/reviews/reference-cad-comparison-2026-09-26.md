@@ -47,8 +47,8 @@ unchanged. Two things move:
    thin or absent in OpenZCAD: a full single-key hotkey set, saved views,
    navigation presets, item folders and type filters, history step actions
    (zoom to, rename, duplicate, filter by selection, bake), notable-point
-   picks for measurement, X-ray and hidden-edge display, direction-typed box
-   selection and an overlapping-pick list. Individually small, together
+   picks for measurement, X-ray and hidden-edge display, box-drag filter keys
+   and select-through. Individually small, together
    they are what makes a tool feel complete to someone arriving from the
    mainstream. The roadmap revision adds them as U05–U07 and M13 so they can
    be scheduled deliberately instead of accreting.
@@ -109,12 +109,15 @@ hiding anything. Double-click selects a whole body, or a connected sketch
 group in a sketch. Fully defined sketch geometry draws green, under-defined
 blue; selecting a sketch element highlights its constraints and dimensions.
 
-**OpenZCAD.** Box select with a filter, depth cycling, on-top selection of the
-current pick and the concave-edge occlusion fix (PR #408) exist; the sketch
+**OpenZCAD.** Direction-typed box selection (enclosed versus crossing), a
+selection filter, depth cycling, a topology pick list for ambiguous hits,
+face or isolated-edge double-click promotion to the owning body, on-top
+selection of the current pick and the concave-edge occlusion fix (PR #408)
+exist. Smooth-edge double-click selects the connected edge chain. The sketch
 solve state is a tone on the Solve control and per-entity highlighting follows
-residuals (S03). Missing: direction-typed box select, filter keys during the
-drag, overlapping-pick list, select-through, body double-click. → **U07**,
-with the sketch colour states under **S03**.
+residuals (S03). Missing: filter keys during box drag, select-through and
+double-click selection of a connected sketch group. → **U07**, with the
+sketch colour states under **S03**.
 
 ### 2.3 Sketching
 
@@ -372,10 +375,10 @@ radians()), units inside expressions (5 mm + 2 cm, 3 in * 2, feet/inch
 fractional forms with documented parse traps), dimensional rules (an area
 divided by a length is a length; length plus angle is an error) and automatic
 conversion to the workspace unit. OpenZCAD: named parameters with expressions,
-the pi constant and a function set (abs, sqrt, floor, ceil, round, min, max
-and validation helpers) in `packages/document-core`; no units inside
-expressions, no parameter unit type, no trigonometry. → **F05** (new,
-expression depth), scoped as a Revalidate of the grammar first.
+the pi constant and a function set (abs, sqrt, floor, ceil, round, min, max,
+and degree-based sin/cos/tan) in `packages/document-core`; no units inside
+expressions, no parameter unit type or inverse trigonometric functions.
+→ **F05** (new, expression depth), scoped as a Revalidate of the grammar first.
 
 ### 2.9 Import and export
 
