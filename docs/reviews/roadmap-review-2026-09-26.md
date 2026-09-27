@@ -61,9 +61,9 @@ _Recommendation._ Split each milestone 0 row into a closed merged-scope row and 
 - K03 (census CI, fuzz corpus, real-model coverage) is "Revalidate"; the Remus O1 register shows the gauntlet pipeline, manifests and CI wiring Complete with a nightly scoreboard. The consumer question is whether OpenZCAD fixtures are in that corpus, which is a different row.
 - K05's remainder (unify-with-evolution, multi-operand booleans, edge and vertex provenance) is Remus B18, which landed pattern and offset history this week (#637, #682, #702). K05 still says "multi-operand booleans skip the probe" with no pointer to where that is being built.
 
-There is no ID crosswalk in either direction. The Remus consolidation map mentions OpenZCAD zero times. Consumer asks reach the kernel as one-off rows (B16, B27, B28, B54, the 26 September overlay).
+The C8 table in `docs/kernel-roadmap-remus.md` already maps selected product rows (including M04, M10, M11 and M13) to Remus owners. K01–K09 and W01–W05 still lack a complete row-by-row crosswalk, and the Remus consolidation map does not index OpenZCAD IDs. Consumer asks also reach the kernel as one-off rows (B16, B27, B28, B54, the 26 September overlay).
 
-_Recommendation._ Re-derive K01–K09 and W01–W05 from the Remus registers in one PR, with a two-column crosswalk (OpenZCAD ID to Remus ID) kept in `docs/kernel-roadmap-remus.md` and referenced from both roadmaps. K02 and K06 should become "adopt" rows with the adapter file named.
+_Recommendation._ Re-derive K01–K09 and W01–W05 from the Remus registers in one PR, extending the existing C8 mapping into a complete two-column crosswalk (OpenZCAD ID to Remus ID) referenced from both roadmaps. K02 and K06 should become "adopt" rows with the adapter file named.
 
 **O6. Real risks with no owner row.**
 
