@@ -5,72 +5,31 @@ import {
   AlertTriangle,
   Box,
   ChevronRight,
-  CirclePause,
-  CirclePlay,
   Combine,
-  Cone,
-  Cylinder,
   Eye,
   EyeOff,
   FileBox,
   GitBranch,
-  Globe,
-  GripVertical,
   History,
   Layers,
   Move3d,
   PenLine,
   RotateCw,
-  Torus,
-  Trash2
+  Search
 } from 'lucide-react';
-import {
-  isFeatureRollbackSuppressed,
-  isFeatureSuppressed
-} from '@openzcad/shared';
+import { isFeatureRollbackSuppressed } from '@openzcad/shared';
 import type {
   BodyId,
   BodyRepresentation,
   FeatureId,
   FeatureNode,
   ParameterNode,
-  ProjectCheckpoint
+  ProjectCheckpoint,
+  UnitSystem
 } from '@openzcad/shared';
-import { FEATURE_KIND_LABELS } from '../lib/model';
 import type { PanelState, SidebarSectionId } from '../lib/panelState';
+import { HistoryTimeline } from './HistoryTimeline';
 import { AddParameterRow, ParameterRow } from './ParameterRows';
-
-function featureIcon(feature: FeatureNode) {
-  const size = 13;
-  if (feature.data.featureKind === 'primitive') {
-    switch (feature.data.primitiveKind) {
-      case 'box':
-        return <Box size={size} aria-hidden="true" />;
-      case 'cylinder':
-        return <Cylinder size={size} aria-hidden="true" />;
-      case 'sphere':
-        return <Globe size={size} aria-hidden="true" />;
-      case 'cone':
-        return <Cone size={size} aria-hidden="true" />;
-      case 'torus':
-        return <Torus size={size} aria-hidden="true" />;
-    }
-  }
-  switch (feature.featureKind) {
-    case 'sketch':
-      return <PenLine size={size} aria-hidden="true" />;
-    case 'extrude':
-      return <Layers size={size} aria-hidden="true" />;
-    case 'revolve':
-      return <RotateCw size={size} aria-hidden="true" />;
-    case 'boolean':
-      return <Combine size={size} aria-hidden="true" />;
-    case 'transform':
-      return <Move3d size={size} aria-hidden="true" />;
-    default:
-      return <FileBox size={size} aria-hidden="true" />;
-  }
-}
 
 /**
  * One collapsible browser section. The count is on the header so a collapsed
@@ -84,6 +43,7 @@ function SidebarSection({
   open,
   className,
   summary,
+  actions,
   onToggle,
   children
 }: {
@@ -98,32 +58,44 @@ function SidebarSection({
    * not just how long the history is.
    */
   summary?: ReactNode;
+  /** Controls beside the header, outside its toggle button. */
+  actions?: ReactNode;
   onToggle(id: SidebarSectionId): void;
   children: ReactNode;
 }) {
   const showSummary = !open && summary !== undefined;
+  const header = (
+    <button
+      type="button"
+      className="section-title"
+      aria-expanded={open}
+      onClick={() => onToggle(id)}
+      title={open ? `Collapse ${title}` : `Expand ${title}`}
+    >
+      <ChevronRight
+        size={12}
+        className="disclosure-chevron"
+        aria-hidden="true"
+      />
+      <span>{title}</span>
+      {showSummary && summary}
+      {!showSummary && count !== null && count > 0 && (
+        <small className="section-count">{count}</small>
+      )}
+    </button>
+  );
   return (
     <section
       className={`sidebar-section${className ? ` ${className}` : ''}${open ? '' : ' collapsed'}`}
     >
-      <button
-        type="button"
-        className="section-title"
-        aria-expanded={open}
-        onClick={() => onToggle(id)}
-        title={open ? `Collapse ${title}` : `Expand ${title}`}
-      >
-        <ChevronRight
-          size={12}
-          className="disclosure-chevron"
-          aria-hidden="true"
-        />
-        <span>{title}</span>
-        {showSummary && summary}
-        {!showSummary && count !== null && count > 0 && (
-          <small className="section-count">{count}</small>
-        )}
-      </button>
+      {actions ? (
+        <div className="section-head">
+          {header}
+          {actions}
+        </div>
+      ) : (
+        header
+      )}
       {open && children}
     </section>
   );
@@ -153,9 +125,16 @@ interface SidebarProps {
   onSelectBody(bodyId: string, additive: boolean): void;
   onToggleBodyVisibility(bodyId: string): void;
   onToggleSketchVisibility(sketchId: string): void;
-  onFeatureContextMenu(event: React.MouseEvent, feature: FeatureNode): void;
+  /** Opens the feature menu at a point: a right-click, or a row's ⋯ button. */
+  onFeatureContextMenu(
+    at: { clientX: number; clientY: number },
+    feature: FeatureNode
+  ): void;
   onToggleFeatureSuppression(feature: FeatureNode): void;
   onRollbackAfterFeature(featureId: FeatureId, name: string): void;
+  onResumeHistory(): void;
+  /** The document's length unit, for the value each history row shows. */
+  units: UnitSystem;
   onConfigureToggle?: (name: string, bodyIds: BodyId[]) => void;
   onPreviewParameter?(name: string, expression: string | null): void;
   onSetParameter(
@@ -170,7 +149,6 @@ interface SidebarProps {
   onDescribeParameter(name: string, description: string): void;
   /** Names currently offered in Tweak, from `listExposedParameters`. */
   exposedParameterNames: ReadonlySet<string>;
-  onDeleteFeature(featureId: FeatureId, name: string): void;
   onReorderFeature(featureId: FeatureId, toIndex: number): void;
   onRestoreCheckpoint(checkpoint: ProjectCheckpoint): void;
   onBranchCheckpoint(checkpoint: ProjectCheckpoint): void;
@@ -186,7 +164,7 @@ interface SidebarProps {
  * controls so a fast double-select on a feature never closes the drawer.
  */
 const DOUBLE_CLICK_OWNERS =
-  'button, a, input, textarea, select, label, summary, [contenteditable], [role="listitem"], [role="button"], .feature-row, .body-row, .revision-row, .diagnostic-row, .param-row';
+  'button, a, input, textarea, select, label, summary, [contenteditable], [role="listitem"], [role="button"], [role="slider"], .feature-row, .body-row, .revision-row, .diagnostic-row, .param-row, .history-rollback';
 
 /** Body kind icons mirror the feature icons so the two lists read as one. */
 function bodyIcon(body: BodyRepresentation) {
@@ -234,6 +212,8 @@ export function Sidebar({
   onFeatureContextMenu,
   onToggleFeatureSuppression,
   onRollbackAfterFeature,
+  onResumeHistory,
+  units,
   onConfigureToggle,
   onSetParameter,
   onViewActivityLog,
@@ -243,7 +223,6 @@ export function Sidebar({
   onExposeParameter,
   onDescribeParameter,
   exposedParameterNames,
-  onDeleteFeature,
   onReorderFeature,
   onRestoreCheckpoint,
   onBranchCheckpoint,
@@ -251,9 +230,7 @@ export function Sidebar({
   onToggleSection,
   onClose
 }: SidebarProps) {
-  // Drag-to-reorder state for the history timeline (StartScreen's pattern).
-  const [dragFeatureId, setDragFeatureId] = useState<string | null>(null);
-  const [dropFeatureId, setDropFeatureId] = useState<string | null>(null);
+  const [findOpen, setFindOpen] = useState(false);
   const [showConsumed, setShowConsumed] = useState(false);
   // Bodies in feature-history order so the tree matches the timeline below.
   const bodies: BodyRepresentation[] = [];
@@ -276,10 +253,6 @@ export function Sidebar({
   // Consumed bodies live behind a disclosure row: in a model built from
   // booleans nearly every body is an input to a later feature, and a list
   // that is mostly dead entries buries the ones that still exist.
-  const featureArrivals = useArrivals(
-    features.map((feature) => feature.id),
-    ARRIVAL_MS
-  );
   const bodyArrivals = useArrivals(
     bodies.map((body) => body.bodyId),
     ARRIVAL_MS
@@ -479,227 +452,43 @@ export function Sidebar({
         open={panelState.sidebarSections.history}
         className="grow"
         {...(historyScrub !== undefined ? { summary: historyScrub } : {})}
+        actions={
+          panelState.sidebarSections.history && features.length > 0 ? (
+            <button
+              type="button"
+              className="history-find-toggle"
+              title="Find a step"
+              aria-label="Find a step"
+              aria-pressed={findOpen}
+              onClick={() => setFindOpen((open) => !open)}
+            >
+              <Search size={12} aria-hidden="true" />
+            </button>
+          ) : undefined
+        }
         onToggle={onToggleSection}
       >
+        <HistoryTimeline
+          features={features}
+          representations={representations}
+          selectedFeatureNodeId={selectedFeatureNodeId}
+          hiddenBodyIds={hiddenBodyIds}
+          hiddenSketchIds={hiddenSketchIds}
+          parameterValues={parameterValues}
+          units={units}
+          findOpen={findOpen}
+          onCloseFind={() => setFindOpen(false)}
+          onSelectFeature={onSelectFeature}
+          onToggleBodyVisibility={onToggleBodyVisibility}
+          onToggleSketchVisibility={onToggleSketchVisibility}
+          onFeatureContextMenu={onFeatureContextMenu}
+          onToggleFeatureSuppression={onToggleFeatureSuppression}
+          onRollbackAfterFeature={onRollbackAfterFeature}
+          onResumeHistory={onResumeHistory}
+          onReorderFeature={onReorderFeature}
+        />
+        {/* Below the list, so selecting a row never pushes the rows down. */}
         {historyDetails}
-        <div className="feature-list">
-          {features.length === 0 && (
-            <p className="muted sidebar-hint">
-              No features yet. Pick a tool from the command card to start.
-            </p>
-          )}
-          {features.map((feature, index) => {
-            const suppressed = isFeatureSuppressed(feature);
-            const body = feature.bodyId
-              ? representations[feature.bodyId]
-              : undefined;
-            const consumed = body?.consumed ?? false;
-            const hidden = feature.bodyId
-              ? hiddenBodyIds.has(feature.bodyId)
-              : false;
-            const failed =
-              !suppressed &&
-              feature.bodyId !== undefined &&
-              feature.featureKind !== 'sketch' &&
-              body === undefined;
-            return (
-              <div
-                key={feature.id}
-                className={`feature-row ${selectedFeatureNodeId === feature.id ? 'selected' : ''} ${consumed ? 'consumed' : ''} ${hidden ? 'hidden-body' : ''} ${suppressed ? 'suppressed' : ''} ${rollbackMarkerIndex === index ? 'rollback-marker' : ''} ${dragFeatureId === feature.featureId ? 'is-dragging' : ''} ${dropFeatureId === feature.featureId ? 'is-drop-target' : ''}${featureArrivals.has(feature.id) ? ' is-arrival' : ''}`}
-                onContextMenu={(event) => {
-                  event.preventDefault();
-                  onFeatureContextMenu(event, feature);
-                }}
-                onDragOver={(event) => {
-                  if (!dragFeatureId || dragFeatureId === feature.featureId) {
-                    return;
-                  }
-                  event.preventDefault();
-                  event.dataTransfer.dropEffect = 'move';
-                  setDropFeatureId(feature.featureId);
-                }}
-                onDragLeave={() => {
-                  setDropFeatureId((current) =>
-                    current === feature.featureId ? null : current
-                  );
-                }}
-                onDrop={(event) => {
-                  if (!dragFeatureId) {
-                    return;
-                  }
-                  event.preventDefault();
-                  onReorderFeature(dragFeatureId as FeatureId, index);
-                  setDragFeatureId(null);
-                  setDropFeatureId(null);
-                }}
-              >
-                <button
-                  type="button"
-                  className="row-action feature-row-grip"
-                  aria-label={`Reorder ${feature.name}. Use the arrow keys to move it.`}
-                  title="Drag to reorder"
-                  draggable
-                  onDragStart={(event) => {
-                    event.dataTransfer.effectAllowed = 'move';
-                    event.dataTransfer.setData('text/plain', feature.featureId);
-                    const row = event.currentTarget.closest('.feature-row');
-                    if (row instanceof HTMLElement) {
-                      // Without this the drag ghost is the grip alone, which
-                      // gives no clue which row is being moved.
-                      event.dataTransfer.setDragImage(row, 16, 16);
-                    }
-                    setDragFeatureId(feature.featureId);
-                  }}
-                  onDragEnd={() => {
-                    setDragFeatureId(null);
-                    setDropFeatureId(null);
-                  }}
-                  onKeyDown={(event) => {
-                    const offset =
-                      event.key === 'ArrowUp'
-                        ? -1
-                        : event.key === 'ArrowDown'
-                          ? 1
-                          : 0;
-                    if (offset === 0) {
-                      return;
-                    }
-                    event.preventDefault();
-                    // Clamped so the ends of the list are a no-op rather than
-                    // a move to -1 or past the end. The command layer refuses
-                    // those too, but a keypress that cannot do anything should
-                    // not travel that far to find out.
-                    const target = index + offset;
-                    if (target < 0 || target >= features.length) {
-                      return;
-                    }
-                    onReorderFeature(feature.featureId, target);
-                  }}
-                >
-                  <GripVertical size={12} aria-hidden="true" />
-                </button>
-                <button
-                  type="button"
-                  className="feature-row-main"
-                  onClick={() => onSelectFeature(feature.id)}
-                  // Every row used to announce the same generic kind label, so
-                  // a history read aloud was a list of identical items. The
-                  // feature's own name comes first, as on screen.
-                  title={`${feature.name} — ${FEATURE_KIND_LABELS[feature.featureKind]}${consumed ? ', combined into a later feature' : ''}, click to edit`}
-                >
-                  <span className="feature-icon">{featureIcon(feature)}</span>
-                  <span className="feature-name">{feature.name}</span>
-                  {failed && (
-                    <span
-                      className="feature-flag error"
-                      title="Feature failed to build"
-                    >
-                      <AlertTriangle size={11} aria-hidden="true" />
-                    </span>
-                  )}
-                  {suppressed && (
-                    <small className="feature-flag">suppressed</small>
-                  )}
-                </button>
-                <button
-                  type="button"
-                  className={`row-suppression ${suppressed ? 'is-suppressed' : ''}`}
-                  title={
-                    suppressed
-                      ? `Resume ${feature.name}`
-                      : `Suppress ${feature.name}`
-                  }
-                  aria-label={
-                    suppressed
-                      ? `Resume ${feature.name}`
-                      : `Suppress ${feature.name}`
-                  }
-                  aria-pressed={suppressed}
-                  onClick={() => onToggleFeatureSuppression(feature)}
-                >
-                  {suppressed ? (
-                    <CirclePlay size={12} aria-hidden="true" />
-                  ) : (
-                    <CirclePause size={12} aria-hidden="true" />
-                  )}
-                </button>
-                <button
-                  type="button"
-                  className={`row-rollback ${rollbackMarkerIndex === index ? 'is-active' : ''}`}
-                  title={`Roll back history after ${feature.name}`}
-                  aria-label={`Roll back history after ${feature.name}`}
-                  aria-pressed={rollbackMarkerIndex === index}
-                  onClick={() =>
-                    onRollbackAfterFeature(feature.featureId, feature.name)
-                  }
-                >
-                  <History size={12} aria-hidden="true" />
-                </button>
-                {feature.bodyId && body && !consumed && (
-                  <button
-                    type="button"
-                    className={`row-visibility ${hidden ? 'is-hidden' : ''}`}
-                    title={
-                      hidden ? `Show ${feature.name}` : `Hide ${feature.name}`
-                    }
-                    aria-label={
-                      hidden ? `Show ${feature.name}` : `Hide ${feature.name}`
-                    }
-                    aria-pressed={hidden}
-                    onClick={() => onToggleBodyVisibility(feature.bodyId!)}
-                  >
-                    {hidden ? (
-                      <EyeOff size={12} aria-hidden="true" />
-                    ) : (
-                      <Eye size={12} aria-hidden="true" />
-                    )}
-                  </button>
-                )}
-                {feature.featureKind === 'sketch' &&
-                  feature.data.featureKind === 'sketch' &&
-                  (() => {
-                    const sketchId = feature.data.sketchId as string;
-                    const sketchHidden = hiddenSketchIds.has(sketchId);
-                    return (
-                      <button
-                        type="button"
-                        className={`row-visibility ${sketchHidden ? 'is-hidden' : ''}`}
-                        title={
-                          sketchHidden
-                            ? `Show ${feature.name}`
-                            : `Hide ${feature.name}`
-                        }
-                        aria-label={
-                          sketchHidden
-                            ? `Show ${feature.name}`
-                            : `Hide ${feature.name}`
-                        }
-                        aria-pressed={sketchHidden}
-                        onClick={() => onToggleSketchVisibility(sketchId)}
-                      >
-                        {sketchHidden ? (
-                          <EyeOff size={12} aria-hidden="true" />
-                        ) : (
-                          <Eye size={12} aria-hidden="true" />
-                        )}
-                      </button>
-                    );
-                  })()}
-                <button
-                  type="button"
-                  className="row-delete"
-                  title={`Delete ${feature.name}`}
-                  aria-label={`Delete ${feature.name}`}
-                  onClick={() =>
-                    onDeleteFeature(feature.featureId, feature.name)
-                  }
-                >
-                  <Trash2 size={12} aria-hidden="true" />
-                </button>
-              </div>
-            );
-          })}
-        </div>
       </SidebarSection>
 
       {checkpoints.length > 0 && (

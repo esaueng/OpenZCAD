@@ -109,11 +109,15 @@ test('deleting a history feature raises an undoable toast that counts its depend
 
   const bossRow = page.locator('.feature-row', { hasText: 'Boss' }).first();
   await bossRow.hover();
-  // The load-bearing delete confirms first (native confirm, accepted here —
-  // Playwright would auto-dismiss it as cancel otherwise).
+  // Delete is in the row's ⋯ menu. The load-bearing delete confirms first
+  // (native confirm, accepted here — Playwright would auto-dismiss it as
+  // cancel otherwise).
+  await bossRow
+    .getByRole('button', { name: 'More actions for Boss', exact: true })
+    .click();
   await Promise.all([
     page.waitForEvent('dialog').then((dialog) => dialog.accept()),
-    page.getByRole('button', { name: 'Delete Boss', exact: true }).click()
+    page.getByRole('menuitem', { name: /^Delete/ }).click()
   ]);
 
   const toast = page.locator('.toast');
@@ -192,8 +196,8 @@ test('keeps every history row control inside a narrow sidebar', async ({
   for (const row of await rows.all()) {
     const box = await row.boundingBox();
     expect(box!.width).toBeLessThanOrEqual(list!.width + 0.5);
-    const del = await row.locator('.row-delete').boundingBox();
-    expect(del!.x + del!.width).toBeLessThanOrEqual(sidebarRight);
+    const more = await row.locator('.row-more').boundingBox();
+    expect(more!.x + more!.width).toBeLessThanOrEqual(sidebarRight);
   }
 
   // The controls themselves still show on hover, at this width, on the
@@ -203,7 +207,9 @@ test('keeps every history row control inside a narrow sidebar', async ({
   });
   await longest.hover();
   await expect(
-    longest.getByRole('button', { name: 'Delete Aim bore through boss' })
+    longest.getByRole('button', {
+      name: 'More actions for Aim bore through boss'
+    })
   ).toBeVisible();
   const name = longest.locator('.feature-name');
   const clipped = await name.evaluate((el) => el.scrollWidth > el.clientWidth);

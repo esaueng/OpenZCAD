@@ -2,6 +2,7 @@ import { expect, test } from '@playwright/test';
 import {
   askAssistant,
   createProject,
+  expectBodyCount,
   promptField,
   stubApi,
   stubAssistant
@@ -184,6 +185,35 @@ test('search names a feature and opens it in the drawer', async ({ page }) => {
   await expect(
     page.locator('.feature-row.selected', { hasText: 'Base plate' })
   ).toBeVisible();
+});
+
+test('search names a parameter and focuses it in a drawer that has not loaded yet', async ({
+  page
+}) => {
+  // The drawer's browser loads lazily, so on its first open the field mounts
+  // a few frames after the drawer does; focus has to wait for it.
+  await page.setViewportSize({ width: 1440, height: 900 });
+  await stubApi(page, { modelDrawer: false });
+  await page.goto('/');
+  await page
+    .getByRole('button', { name: /^Open demo: Mounting Bracket/ })
+    .click();
+  await expect(page.locator('.viewer-host canvas')).toBeVisible({
+    timeout: 120_000
+  });
+  await expectBodyCount(page, 1);
+  await expect(page.locator('.model-drawer-float')).toHaveCount(0);
+
+  await promptField(page).fill('/plate_t');
+  await page
+    .getByRole('option')
+    .filter({ hasText: 'plate_t' })
+    .filter({ hasText: 'Parameter' })
+    .click();
+
+  await expect(
+    page.getByRole('textbox', { name: 'Expression for plate_t' })
+  ).toBeFocused();
 });
 
 test('a slash lists commands with ghost completion, and Tab accepts it', async ({

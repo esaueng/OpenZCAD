@@ -104,18 +104,53 @@ test('resumes rollback without resuming manually suppressed features and support
     .getByRole('button', { name: 'Roll back history after Box', exact: true })
     .click();
   await expectBodyCount(page, 1);
-  const details = page.getByRole('region', { name: 'History details' });
-  await expect(details).toContainText('2 later features are paused');
-  await details.getByRole('button', { name: 'Resume full history' }).click();
+  const rollback = page.locator('.history-rollback');
+  await expect(rollback).toContainText('2 later features paused');
+  await rollback.getByRole('button', { name: 'Resume full history' }).click();
   await expectBodyCount(page, 2);
   await expect(
     page.locator('.feature-row', { hasText: /^Cylinder/ })
   ).toContainText('suppressed');
   await page.getByRole('button', { name: 'Undo', exact: true }).click();
   await expectBodyCount(page, 1);
-  await expect(details).toContainText('2 later features are paused');
+  await expect(rollback).toContainText('2 later features paused');
   await page.getByRole('button', { name: 'Redo', exact: true }).click();
   await expectBodyCount(page, 2);
+});
+
+test.describe('on a touch screen', () => {
+  test.use({ hasTouch: true });
+
+  test("shows a history row's actions at rest, since nothing can hover", async ({
+    page
+  }) => {
+    await stubApi(page);
+    await page.goto('/');
+    await page.getByLabel('Project name').fill('Touch history');
+    await page.getByRole('button', { name: 'Create project' }).click();
+    await page.getByRole('button', { name: /^Box \(B\)/ }).click();
+    await page
+      .getByRole('region', { name: 'Feature inspector' })
+      .getByRole('button', { name: /^Create/ })
+      .click();
+    await expectBodyCount(page, 1);
+    expect(
+      await page.evaluate(() => window.matchMedia('(hover: none)').matches)
+    ).toBe(true);
+    // Deselect, so the row is at rest rather than showing its actions
+    // because it is selected.
+    await page.keyboard.press('Escape');
+    const row = page.locator('.feature-row', { hasText: /^Box/ });
+    await expect(row).not.toHaveClass(/selected/);
+    // Invisible but tappable controls were the hazard: they must be seen.
+    await expect
+      .poll(() =>
+        row
+          .locator('.history-row-actions')
+          .evaluate((el) => getComputedStyle(el).opacity)
+      )
+      .toBe('1');
+  });
 });
 
 test('names a deleted sketch input and restores the dependent model with undo', async ({
@@ -128,12 +163,14 @@ test('names a deleted sketch input and restores the dependent model with undo', 
   await page.locator('.feature-row-main', { hasText: 'Base profile' }).click();
   const details = page.getByRole('region', { name: 'History details' });
   await expect(details.getByText(/Affects [1-9]/)).toBeVisible();
-  // Load-bearing deletes confirm first (native confirm, accepted here).
+  // Delete is in the row's ⋯ menu. Load-bearing deletes confirm first
+  // (native confirm, accepted here).
+  await page
+    .getByRole('button', { name: 'More actions for Base profile' })
+    .click();
   await Promise.all([
     page.waitForEvent('dialog').then((dialog) => dialog.accept()),
-    page
-      .getByRole('button', { name: 'Delete Base profile', exact: true })
-      .click()
+    page.getByRole('menuitem', { name: /^Delete/ }).click()
   ]);
   await page.locator('.feature-row-main', { hasText: 'Extrude base' }).click();
   await expect(
@@ -156,6 +193,9 @@ test('undo inside a text field edits the text, not the document', async ({
   await page.getByRole('button', { name: /Heat Sink/ }).click();
   await expectBodyCount(page, 1);
   const rows = page.locator('.feature-row');
+  // The drawer's browser loads as its own chunk, so its rows can land a
+  // moment after the model; a bare count() would read the empty drawer.
+  await expect(rows.first()).toBeVisible();
   const featureCount = await rows.count();
   expect(featureCount).toBeGreaterThan(0);
   const name = page.getByRole('textbox', { name: 'New parameter name' });

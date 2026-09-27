@@ -318,7 +318,6 @@ import {
   PartsRailButtons,
   ViewModeRail
 } from './components/ViewModeRail';
-import { Sidebar } from './components/Sidebar';
 import { TweakPanel } from './components/TweakPanel';
 import { StartScreen } from './components/StartScreen';
 import { StartupScreen } from './components/StartupScreen';
@@ -625,6 +624,36 @@ function ToolCard(props: ComponentProps<typeof LazyToolCard>) {
   return (
     <Suspense fallback={null}>
       <LazyToolCard {...props} />
+    </Suspense>
+  );
+}
+// The model browser only renders inside the drawer, which starts closed; its
+// History timeline took the entry chunk past its budget.
+const loadSidebar = () => import('./components/Sidebar');
+const LazySidebar = lazyWithStaleChunkNotice(() =>
+  loadSidebar().then((module) => ({
+    default: module.Sidebar
+  }))
+);
+/**
+ * Focuses a field inside the drawer once it exists. The drawer's browser is
+ * lazy: on its first open the chunk loads and the panel mounts some frames
+ * later, so one tick is not enough. Gives up quietly after about a second.
+ */
+function focusInDrawerWhenMounted(selector: string, frames = 60) {
+  const field = document.querySelector<HTMLElement>(selector);
+  if (field) {
+    field.focus();
+  } else if (frames > 0) {
+    window.requestAnimationFrame(() =>
+      focusInDrawerWhenMounted(selector, frames - 1)
+    );
+  }
+}
+function Sidebar(props: ComponentProps<typeof LazySidebar>) {
+  return (
+    <Suspense fallback={null}>
+      <LazySidebar {...props} />
     </Suspense>
   );
 }
@@ -14745,13 +14774,15 @@ export function App() {
   }
 
   function handleFeatureContextMenu(
-    event: React.MouseEvent,
+    at: { clientX: number; clientY: number },
     feature: FeatureNode
   ) {
     const bodyId = feature.bodyId ?? null;
     const body = bodyId ? representations[bodyId] : null;
     const repair = staleDirectEditFaceRepair(feature, warnings);
-    openContextMenu(event.clientX, event.clientY, [
+    const sketchId =
+      feature.data.featureKind === 'sketch' ? feature.data.sketchId : null;
+    openContextMenu(at.clientX, at.clientY, [
       {
         item: { id: 'edit', label: 'Edit Properties' },
         run: () => handleSelectFeatureFromTree(feature.id)
@@ -14777,6 +14808,22 @@ export function App() {
                 icon: <Eye size={13} aria-hidden="true" />
               },
               run: () => toggleBodyVisibility(bodyId)
+            }
+          ]
+        : []),
+      // The history row keeps only a Show button for a hidden sketch; hiding
+      // one lives here beside Hide Body.
+      ...(sketchId
+        ? [
+            {
+              item: {
+                id: 'sketch-visibility',
+                label: hiddenSketchIds.has(sketchId)
+                  ? 'Show Sketch'
+                  : 'Hide Sketch',
+                icon: <Eye size={13} aria-hidden="true" />
+              },
+              run: () => toggleSketchVisibility(sketchId)
             }
           ]
         : []),
@@ -15753,14 +15800,16 @@ export function App() {
                       parameters: true
                     }
                   }));
-                  // The drawer renders on the next commit; focus follows it.
-                  window.setTimeout(() => {
-                    document
-                      .querySelector<HTMLInputElement>(
+                  // The drawer's browser may still be loading; focus follows
+                  // it once the field has mounted. A failed load is already
+                  // reported by the lazy panel's stale-chunk notice.
+                  void loadSidebar()
+                    .then(() =>
+                      focusInDrawerWhenMounted(
                         `[aria-label="Expression for ${CSS.escape(parameter.name)}"]`
                       )
-                      ?.focus();
-                  }, 0);
+                    )
+                    .catch(() => undefined);
                 }
               }) satisfies PaletteCommand
           )
@@ -16334,7 +16383,6 @@ export function App() {
               : null
           }
           onSelect={handleOpenHistoryFeature}
-          onResumeHistory={handleResumeHistory}
           onDismissFailure={() => setHistoryFailure(null)}
         />
       }
@@ -16349,6 +16397,8 @@ export function App() {
       onFeatureContextMenu={handleFeatureContextMenu}
       onToggleFeatureSuppression={handleToggleFeatureSuppression}
       onRollbackAfterFeature={handleRollbackAfterFeature}
+      onResumeHistory={handleResumeHistory}
+      units={doc?.units ?? 'mm'}
       onConfigureToggle={(name, bodyIds) => {
         if (ensureCanEdit('configure an on/off parameter')) {
           executeCommand(
@@ -16374,7 +16424,6 @@ export function App() {
         )
       }
       exposedParameterNames={exposedParameterNames}
-      onDeleteFeature={handleDeleteFeature}
       onReorderFeature={handleReorderFeature}
       onRestoreCheckpoint={(checkpoint) =>
         void handleRestoreSaveState(checkpoint)
