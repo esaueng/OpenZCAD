@@ -51,14 +51,15 @@ test('suppresses features and rolls the timeline back as one undoable edit', asy
   });
   await rollback.click();
   await expect(rollback).toHaveAttribute('aria-pressed', 'true');
-  await expect(cylinder).toContainText('suppressed');
+  // Rolled back reads as paused; suppressed is kept for a manual toggle.
+  await expect(cylinder).toContainText('paused');
   await expectBodyCount(page, 1);
 
   await page.getByRole('button', { name: 'Undo' }).click();
-  await expect(cylinder).not.toContainText('suppressed');
+  await expect(cylinder).not.toContainText('paused');
   await expectBodyCount(page, 2);
   await page.getByRole('button', { name: 'Redo' }).click();
-  await expect(cylinder).toContainText('suppressed');
+  await expect(cylinder).toContainText('paused');
   await expectBodyCount(page, 1);
   expect(consoleErrors).toEqual([]);
 });

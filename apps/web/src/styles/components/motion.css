@@ -133,6 +133,7 @@ textarea {
 
 /* Opened content drops in beneath its header instead of appearing whole. */
 .sidebar-section:not(.collapsed) > .section-title ~ *,
+.sidebar-section:not(.collapsed) > .section-head ~ *,
 .sketch-palette-content,
 .assistant-readings > table,
 .assistant-operations {
