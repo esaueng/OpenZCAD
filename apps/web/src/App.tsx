@@ -318,7 +318,6 @@ import {
   PartsRailButtons,
   ViewModeRail
 } from './components/ViewModeRail';
-import { Sidebar } from './components/Sidebar';
 import { TweakPanel } from './components/TweakPanel';
 import { StartScreen } from './components/StartScreen';
 import { StartupScreen } from './components/StartupScreen';
@@ -625,6 +624,20 @@ function ToolCard(props: ComponentProps<typeof LazyToolCard>) {
   return (
     <Suspense fallback={null}>
       <LazyToolCard {...props} />
+    </Suspense>
+  );
+}
+// The model browser only renders inside the drawer, which starts closed; its
+// History timeline took the entry chunk past its budget.
+const LazySidebar = lazyWithStaleChunkNotice(() =>
+  import('./components/Sidebar').then((module) => ({
+    default: module.Sidebar
+  }))
+);
+function Sidebar(props: ComponentProps<typeof LazySidebar>) {
+  return (
+    <Suspense fallback={null}>
+      <LazySidebar {...props} />
     </Suspense>
   );
 }
