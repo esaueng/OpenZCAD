@@ -135,6 +135,74 @@ describe('project sharing invitations', () => {
     ).toBe(owner);
   });
 
+  it('withdraws member access in trash and restores it without deleting membership', async () => {
+    const service = new InMemoryPersistenceService();
+    const owner = toUserId('user_trash_owner');
+    const editor = toUserId('user_trash_editor');
+    const viewer = toUserId('user_trash_viewer');
+    const invited = toUserId('user_trash_invited');
+    const project = await service.createProject(owner, { name: 'Shared trash' });
+    const projectId = project.document.projectId;
+    await service.setProjectMemberRole(owner, projectId, editor, 'editor');
+    await service.setProjectMemberRole(owner, projectId, viewer, 'viewer');
+    await service.createProjectInvitation(owner, projectId, {
+      invitationId: 'invite_trash',
+      email: 'invited@example.com',
+      role: 'viewer',
+      tokenHash: 'hash_trash_invitation',
+      createdAt: 2_000_000_000,
+      expiresAt: 2_000_000_100
+    });
+
+    await service.updateProject(owner, { projectId, status: 'deleted' });
+    expect((await service.listProjects(owner)).projects).toEqual([
+      expect.objectContaining({ projectId })
+    ]);
+    await expect(service.requireProjectRead(owner, projectId)).resolves.toMatchObject({
+      role: 'owner'
+    });
+    await expect(service.requireProjectRead(viewer, projectId)).rejects.toMatchObject({
+      name: 'ProjectNotFoundError'
+    });
+    await expect(service.requireProjectEdit(editor, projectId)).rejects.toMatchObject({
+      name: 'ProjectNotFoundError'
+    });
+    await expect(service.loadProject(viewer, projectId)).resolves.toBeNull();
+    expect((await service.listProjects(editor)).projects).toEqual([]);
+    expect((await service.listProjects(viewer)).projects).toEqual([]);
+    await expect(
+      service.acceptProjectInvitation(
+        invited,
+        'invited@example.com',
+        'hash_trash_invitation',
+        2_000_000_001
+      )
+    ).rejects.toMatchObject({ code: 'INVITATION_NOT_FOUND' });
+
+    await service.updateProject(owner, { projectId, status: 'active' });
+    await expect(service.requireProjectEdit(editor, projectId)).resolves.toMatchObject({
+      role: 'editor'
+    });
+    await expect(service.requireProjectRead(viewer, projectId)).resolves.toMatchObject({
+      role: 'viewer'
+    });
+    expect((await service.listProjects(viewer)).projects).toEqual([
+      expect.objectContaining({ projectId })
+    ]);
+    await expect(
+      service.acceptProjectInvitation(
+        invited,
+        'invited@example.com',
+        'hash_trash_invitation',
+        2_000_000_001
+      )
+    ).resolves.toMatchObject({ projectId, role: 'viewer' });
+    await service.updateProject(owner, { projectId, status: 'archived' });
+    await expect(service.requireProjectRead(viewer, projectId)).resolves.toMatchObject({
+      role: 'viewer'
+    });
+  });
+
   it('rejects expired and revoked invitations', async () => {
     const service = new InMemoryPersistenceService();
     const owner = toUserId('user_expiring_owner');

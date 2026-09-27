@@ -1,6 +1,9 @@
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import worker from '../apps/web/worker/index';
-import { getInMemoryPersistence } from '@openzcad/persistence';
+import {
+  getInMemoryPersistence,
+  RevisionIdCollisionError
+} from '@openzcad/persistence';
 import {
   addPrimitiveFeature,
   createProjectDocument
@@ -41,6 +44,8 @@ interface ProjectObjectStorageReadinessRow {
   document_objects_index: number;
   storage_assets_index: number;
   pointer_indexes: number;
+  quota_triggers: number;
+  revision_owner_trigger: number;
 }
 
 interface ProjectMeasurementReadinessRow {
@@ -53,9 +58,9 @@ interface ProjectMeasurementReadinessRow {
 const READY_ARTIFACT_UPLOAD_ACCOUNTING_SCHEMA = {
   usage_table: 1,
   parts_table: 1,
-  session_columns: 5,
+  session_columns: 7,
   indexes: 2,
-  triggers: 14
+  triggers: 15
 };
 
 const READY_STORAGE_ACCOUNTING_SCHEMA: StorageAccountingReadinessRow = {
@@ -71,7 +76,9 @@ const READY_PROJECT_OBJECT_STORAGE_SCHEMA: ProjectObjectStorageReadinessRow = {
   storage_assets_table: 1,
   document_objects_index: 1,
   storage_assets_index: 1,
-  pointer_indexes: 2
+  pointer_indexes: 2,
+  quota_triggers: 11,
+  revision_owner_trigger: 1
 };
 
 const READY_PROJECT_MEASUREMENT_SCHEMA: ProjectMeasurementReadinessRow = {
@@ -91,7 +98,8 @@ function storageAccountingDb(
   row: StorageAccountingReadinessRow | null = READY_STORAGE_ACCOUNTING_SCHEMA,
   failure?: Error,
   projectObjectRow: ProjectObjectStorageReadinessRow | null = READY_PROJECT_OBJECT_STORAGE_SCHEMA,
-  projectMeasurementRow: ProjectMeasurementReadinessRow | null = READY_PROJECT_MEASUREMENT_SCHEMA
+  projectMeasurementRow: ProjectMeasurementReadinessRow | null = READY_PROJECT_MEASUREMENT_SCHEMA,
+  artifactUploadRow: typeof READY_ARTIFACT_UPLOAD_ACCOUNTING_SCHEMA | null = READY_ARTIFACT_UPLOAD_ACCOUNTING_SCHEMA
 ) {
   const prepare = vi.fn((query: string) => ({
     first: vi.fn(async () => {
@@ -102,7 +110,7 @@ function storageAccountingDb(
         return projectObjectRow;
       }
       if (query.includes('artifact_account_usage')) {
-        return READY_ARTIFACT_UPLOAD_ACCOUNTING_SCHEMA;
+        return artifactUploadRow;
       }
       if (query.includes("pragma_table_info('project_measurements')")) {
         return projectMeasurementRow;
@@ -638,6 +646,34 @@ describe('worker api routes', () => {
       code: 'FEATURE_DISABLED'
     });
     expect(prepare).not.toHaveBeenCalled();
+  });
+
+  it('gates upload mutations until migration 0020 is ready and caches success', async () => {
+    const before = storageAccountingDb(
+      undefined,
+      undefined,
+      undefined,
+      undefined,
+      { ...READY_ARTIFACT_UPLOAD_ACCOUNTING_SCHEMA, session_columns: 6, triggers: 14 }
+    );
+    const beforeEnv = { ...env, DB: before.db };
+    const refused = await worker.fetch(post('/api/uploads', {}), beforeEnv);
+    expect(refused.status).toBe(503);
+    await expect(refused.json()).resolves.toEqual({
+      error: 'Artifact upload storage is temporarily unavailable.'
+    });
+
+    const after = storageAccountingDb();
+    const afterEnv = { ...env, DB: after.db };
+    const malformed = await worker.fetch(post('/api/uploads', {}), afterEnv);
+    expect(malformed.status).toBe(400);
+    const second = await worker.fetch(post('/api/uploads', {}), afterEnv);
+    expect(second.status).toBe(400);
+    expect(
+      after.prepare.mock.calls.filter(([query]) =>
+        query.includes('artifact_account_usage')
+      )
+    ).toHaveLength(1);
   });
 
   it('exposes public email-auth readiness without exposing secrets', async () => {
@@ -2110,6 +2146,31 @@ describe('worker api routes', () => {
     });
   });
 
+  it('returns a typed 409 when a revision ID belongs to another project', async () => {
+    const created = await createProject('Revision ID conflict');
+    const save = vi
+      .spyOn(getInMemoryPersistence(), 'saveRevision')
+      .mockRejectedValueOnce(new RevisionIdCollisionError());
+    try {
+      const response = await worker.fetch(
+        post(`/api/projects/${created.document.projectId}/revisions`, {
+          projectId: created.document.projectId,
+          reason: 'Manual save',
+          expectedVersion: created.document.version,
+          document: created.document
+        }),
+        env
+      );
+      expect(response.status).toBe(409);
+      expect(await response.json()).toEqual({
+        error: 'Revision ID conflicts with an existing save state.',
+        code: 'REVISION_ID_CONFLICT'
+      });
+    } finally {
+      save.mockRestore();
+    }
+  });
+
   it('returns 404 when saving a revision for an unknown project', async () => {
     const created = await createProject('Orphan Revision');
     const ghostId = 'proj_ghost';
@@ -2630,7 +2691,9 @@ describe('worker api routes', () => {
         storage_assets_table: 0,
         document_objects_index: 0,
         storage_assets_index: 0,
-        pointer_indexes: 0
+        pointer_indexes: 0,
+        quota_triggers: 0,
+        revision_owner_trigger: 0
       }
     );
     const response = await worker.fetch(
@@ -2649,6 +2712,33 @@ describe('worker api routes', () => {
       code: 'PROJECT_STORAGE_UNAVAILABLE'
     });
   });
+
+  it.each([
+    { trigger_count: 6, revision_owner_trigger: 1 },
+    { trigger_count: 7, revision_owner_trigger: 0 }
+  ])(
+    'fails D1 project routes closed when a required guard is missing',
+    async (schema) => {
+      const first = vi.fn(async () => schema);
+      const prepare = vi.fn((_sql: string) => ({ first }));
+      const response = await worker.fetch(
+        new Request('https://example.com/api/projects'),
+        {
+          ...env,
+          ARTIFACTS: undefined,
+          DB: { prepare } as unknown as D1Database
+        }
+      );
+
+      expect(response.status).toBe(503);
+      expect(await response.json()).toMatchObject({
+        code: 'PROJECT_STORAGE_UNAVAILABLE'
+      });
+      expect(prepare.mock.calls[0]?.[0]).toContain(
+        'project_revision_id_owner_before_insert'
+      );
+    }
+  );
 
   it('reports an unreadable account document without exposing storage internals', async () => {
     const projectId = 'project_missing_object';
@@ -2753,9 +2843,16 @@ describe('worker api routes', () => {
         new Request('https://example.com/api/projects?status=active'),
         {
           ...env,
-          ARTIFACTS: undefined,
+          ARTIFACTS: readyProjectStorageBucket,
           DB: {
-            prepare() {
+            prepare(query: string) {
+              if (
+                query.includes('idx_project_document_objects_project_state')
+              ) {
+                return {
+                  first: async () => READY_PROJECT_OBJECT_STORAGE_SCHEMA
+                };
+              }
               throw failure;
             }
           }
