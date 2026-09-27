@@ -243,6 +243,22 @@ describe('HistoryTimeline', () => {
     expect(props.onResumeHistory).not.toHaveBeenCalled();
   });
 
+  it('re-measures the rows only when something it places changes', () => {
+    const setProperty = vi.spyOn(CSSStyleDeclaration.prototype, 'setProperty');
+    const { props, rerender } = renderTimeline();
+    setProperty.mockClear();
+    // The workspace re-renders the browser on every pointer move of a drag;
+    // a render that changes nothing on the line must not force a layout.
+    rerender(<HistoryTimeline {...props} hiddenBodyIds={new Set()} />);
+    expect(setProperty).not.toHaveBeenCalledWith(
+      '--spine-height',
+      expect.anything()
+    );
+    rerender(<HistoryTimeline {...props} selectedFeatureNodeId="node-2" />);
+    expect(setProperty).toHaveBeenCalledWith('--highlight-opacity', '1');
+    setProperty.mockRestore();
+  });
+
   it('resumes when the handle is moved back to the end', () => {
     vi.useFakeTimers();
     const { props } = renderTimeline({

@@ -136,6 +136,46 @@ function markedName(name: string, query: string): ReactNode {
 }
 
 /**
+ * Places the line, its fill, the handle and the selection highlight against
+ * the rows as laid out, through custom properties on the list. Reads the end
+ * of history and the last index from the list's data attributes, so it needs
+ * nothing from the render that scheduled it.
+ */
+function placeTimeline(list: HTMLElement) {
+  const end = Number(list.dataset.end);
+  const last = Number(list.dataset.last);
+  const rows = [...list.querySelectorAll<HTMLElement>(':scope > .feature-row')];
+  const first = rows[0];
+  const lastRow = rows[rows.length - 1];
+  const center = (row: HTMLElement) => row.offsetTop + row.offsetHeight / 2;
+  const style = list.style;
+  if (!first || !lastRow) {
+    style.setProperty('--spine-height', '0px');
+    style.setProperty('--highlight-opacity', '0');
+    return;
+  }
+  style.setProperty('--spine-top', `${center(first)}px`);
+  style.setProperty('--spine-height', `${center(lastRow) - center(first)}px`);
+  const endRow = rows.find((row) => Number(row.dataset.historyIndex) === end);
+  if (endRow) {
+    const boundary = endRow.offsetTop + endRow.offsetHeight;
+    style.setProperty('--handle-y', `${boundary}px`);
+    style.setProperty(
+      '--fill-height',
+      `${(end === last ? center(endRow) : boundary) - center(first)}px`
+    );
+  }
+  const selected = rows.find((row) => row.classList.contains('selected'));
+  if (selected) {
+    style.setProperty('--highlight-y', `${selected.offsetTop}px`);
+    style.setProperty('--highlight-height', `${selected.offsetHeight}px`);
+    style.setProperty('--highlight-opacity', '1');
+  } else {
+    style.setProperty('--highlight-opacity', '0');
+  }
+}
+
+/**
  * The History list: features on a vertical timeline, one short value per row,
  * and a single handle on the line that marks the end of history.
  *
@@ -252,43 +292,29 @@ export function HistoryTimeline({
 
   // Place the line, its fill, the handle and the selection highlight against
   // the rows as laid out. One style write per render, no state round-trip.
+  // What the line, handle and highlight are placed from. The browser
+  // re-renders with the workspace (every pointer move of a drag), and each
+  // placement reads row geometry, forcing a layout; so it runs only when
+  // this changes, plus on a resize of the list (fonts, zoom).
+  const layoutKey = [
+    visible.map(({ feature }) => feature.id).join(','),
+    end,
+    last,
+    selectedFeatureNodeId ?? ''
+  ].join('|');
   useLayoutEffect(() => {
     const list = listRef.current;
     if (!list) {
       return;
     }
-    const rows = [
-      ...list.querySelectorAll<HTMLElement>(':scope > .feature-row')
-    ];
-    const first = rows[0];
-    const lastRow = rows[rows.length - 1];
-    const center = (row: HTMLElement) => row.offsetTop + row.offsetHeight / 2;
-    const style = list.style;
-    if (!first || !lastRow) {
-      style.setProperty('--spine-height', '0px');
-      style.setProperty('--highlight-opacity', '0');
+    placeTimeline(list);
+    if (typeof ResizeObserver === 'undefined') {
       return;
     }
-    style.setProperty('--spine-top', `${center(first)}px`);
-    style.setProperty('--spine-height', `${center(lastRow) - center(first)}px`);
-    const endRow = rows.find((row) => Number(row.dataset.historyIndex) === end);
-    if (endRow) {
-      const boundary = endRow.offsetTop + endRow.offsetHeight;
-      style.setProperty('--handle-y', `${boundary}px`);
-      style.setProperty(
-        '--fill-height',
-        `${(end === last ? center(endRow) : boundary) - center(first)}px`
-      );
-    }
-    const selected = rows.find((row) => row.classList.contains('selected'));
-    if (selected) {
-      style.setProperty('--highlight-y', `${selected.offsetTop}px`);
-      style.setProperty('--highlight-height', `${selected.offsetHeight}px`);
-      style.setProperty('--highlight-opacity', '1');
-    } else {
-      style.setProperty('--highlight-opacity', '0');
-    }
-  });
+    const observer = new ResizeObserver(() => placeTimeline(list));
+    observer.observe(list);
+    return () => observer.disconnect();
+  }, [layoutKey]);
 
   function cancelPendingCommit() {
     if (commitTimer.current !== null) {
@@ -512,6 +538,8 @@ export function HistoryTimeline({
       )}
       <div
         ref={listRef}
+        data-end={end}
+        data-last={last}
         className={`feature-list${filtering ? ' is-filtering' : ''}${draggingHandle ? ' is-scrubbing' : ''}`}
         onKeyDown={onListKeyDown}
       >
