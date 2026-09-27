@@ -46,9 +46,9 @@ unchanged. Two things move:
    features that every mainstream tool shares and that need no kernel work is
    thin or absent in OpenZCAD: a full single-key hotkey set, saved views,
    navigation presets, item folders and type filters, history step actions
-   (zoom to, rename, duplicate, filter by selection, bake), a point-to-point
-   measure with axis deltas, X-ray and hidden-edge display, direction-typed
-   box selection and an overlapping-pick list. Individually small, together
+   (zoom to, rename, duplicate, filter by selection, bake), notable-point
+   picks for measurement, X-ray and hidden-edge display, direction-typed box
+   selection and an overlapping-pick list. Individually small, together
    they are what makes a tool feel complete to someone arriving from the
    mainstream. The roadmap revision adds them as U05–U07 and M13 so they can
    be scheduled deliberately instead of accreting.
@@ -315,10 +315,15 @@ measurement as a persistent annotation, with a "show pinned measurements"
 display toggle; hover to highlight the measured entity; the bottom-of-screen
 readout shows a selection's measurements without entering the mode. OpenZCAD:
 a measurement workbench with distance, angle, diameter, edge length/total,
-face area and body volume, each labelled with its exactness provenance
-(`apps/web/src/lib/measurements.ts`). Missing: point-to-point on notable
-points, 3-point angle, axis deltas, maximum/central/parallel distances,
-pinned annotations in the viewport. → **M13** (new, measure depth).
+face area and body volume, each labelled with its exactness provenance.
+Point-to-point distance already reports X/Y/Z deltas and creates a visible
+viewport annotation with a show/hide control
+(`apps/web/src/lib/measurements.ts`,
+`apps/web/src/components/MeasurementDock.tsx`).
+Missing: picks snapped to notable points, 3-point angle,
+maximum/central/parallel distances and hover highlighting of measured
+entities.
+→ **M13** (new, measure depth).
 
 **Isolate.** Reference: isolate the selection, exit to restore; the history
 filters to the isolated items. OpenZCAD: isolate one body from the parts list
