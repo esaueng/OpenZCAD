@@ -96,6 +96,7 @@ export const SETTINGS_SECTIONS: readonly SettingsSectionMeta[] = [
       'Cloud autosave delay',
       'Cloud revisions',
       'Account storage',
+      'Cloud file storage',
       'STEP and STL exports'
     ]
   },
@@ -103,7 +104,12 @@ export const SETTINGS_SECTIONS: readonly SettingsSectionMeta[] = [
     id: 'account',
     label: 'Account',
     detail: 'Identity and synchronization',
-    settings: ['Project sharing', 'Cloud profile', 'Preference synchronization']
+    settings: [
+      'Project sharing',
+      'Membership',
+      'Cloud profile',
+      'Preference synchronization'
+    ]
   },
   {
     id: 'assistant',

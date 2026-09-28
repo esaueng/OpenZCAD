@@ -21,20 +21,11 @@ import {
   unifyCopyChecked,
   unionSwallowedCurvature
 } from './boolean-result-validation';
-import {
-  type KernelUnifyReport,
-  validationReport
-} from './kernel-validation';
-import {
-  exactBooleanOutcome,
-  exactFuseAll
-} from './exact-boolean-refusal';
+import { type KernelUnifyReport, validationReport } from './kernel-validation';
+import { exactBooleanOutcome, exactFuseAll } from './exact-boolean-refusal';
 import type { UnionBounds } from './union-connectivity';
 import type { ExactShape } from './exact-types';
-import {
-  GEOMETRY_EPSILON,
-  transformMatrix
-} from './exact-math';
+import { GEOMETRY_EPSILON, transformMatrix } from './exact-math';
 
 export interface UnionFuseOperand {
   solid: number;
@@ -70,6 +61,14 @@ export interface UnionFuseOperand {
  * with the deflection the display pass picks for the body's own extents.
  */
 export function solidMeshIsClosed(kernel: RemusKernel, solid: number): boolean {
+  return tessellateAndCheckSolidMesh(kernel, solid, false).closed;
+}
+
+function tessellateAndCheckSolidMesh(
+  kernel: RemusKernel,
+  solid: number,
+  retainForMeasurement: boolean
+): { closed: boolean; displayMesh?: UnionDisplayMeshPayload } {
   try {
     const bounds = kernel.boundingBox(solid);
     const tessellation = displayTessellationForExtents(
@@ -83,15 +82,40 @@ export function solidMeshIsClosed(kernel: RemusKernel, solid: number): boolean {
       tessellation.angularDeflection
     );
     try {
-      return isClosedConsistentlyOrientedMesh(
-        inspectTriangleMeshClosure(mesh.positions, mesh.indices)
+      const positions = mesh.positions;
+      const indices = mesh.indices;
+      const closed = isClosedConsistentlyOrientedMesh(
+        inspectTriangleMeshClosure(positions, indices)
       );
+      if (!closed || !retainForMeasurement) return { closed };
+      try {
+        const faceOffsets = mesh.faceOffsets;
+        const bytes =
+          positions.byteLength + indices.byteLength + faceOffsets.byteLength;
+        if (bytes > MAX_RETAINED_UNION_DISPLAY_MESH_BYTES) return { closed };
+        return {
+          closed,
+          displayMesh: {
+            kernel,
+            solid,
+            linearDeflection: tessellation.linearDeflection,
+            angularDeflection: tessellation.angularDeflection,
+            positions: positions.slice(),
+            indices: indices.slice(),
+            faceOffsets: faceOffsets.slice(),
+            bytes
+          }
+        };
+      } catch {
+        // Reuse is optional; an allocation failure must not reject good geometry.
+        return { closed };
+      }
     } finally {
       mesh.free();
     }
   } catch {
     // A body that cannot even be tessellated is not one to offer a move for.
-    return false;
+    return { closed: false };
   }
 }
 
@@ -240,6 +264,116 @@ export interface StrictUnionVerdict {
   strictErrors: number;
   /** Whether its display projection was closed and consistently oriented. */
   meshClosed?: boolean;
+  /** Same-sync JS-owned projection from the closure check, when within budget. */
+  displayMesh?: UnionDisplayMeshPayload;
+}
+
+/** Copied grouped projection retained only until its same-sync measurement. */
+export interface UnionDisplayMeshPayload {
+  readonly kernel: RemusKernel;
+  readonly solid: number;
+  readonly linearDeflection: number;
+  readonly angularDeflection: number;
+  readonly positions: Float32Array;
+  readonly indices: Uint32Array;
+  readonly faceOffsets: Uint32Array;
+  readonly bytes: number;
+}
+
+/** A mesh-like view for measurement; its buffers are JS-owned. */
+export interface ReusableUnionDisplayMesh {
+  readonly positions: Float32Array;
+  readonly indices: Uint32Array;
+  readonly faceOffsets: Uint32Array;
+  free(): void;
+}
+
+const MAX_RETAINED_UNION_DISPLAY_MESH_BYTES = 8 * 1024 * 1024;
+
+interface UnionMeshBudget {
+  retainedBytes: number;
+}
+
+const verdictBudgets = new WeakMap<object, UnionMeshBudget>();
+const payloadBudgets = new WeakMap<UnionDisplayMeshPayload, UnionMeshBudget>();
+
+function releaseUnionDisplayMesh(
+  payload: UnionDisplayMeshPayload | undefined
+): void {
+  if (!payload) return;
+  const budget = payloadBudgets.get(payload);
+  if (!budget) return;
+  budget.retainedBytes -= payload.bytes;
+  payloadBudgets.delete(payload);
+}
+
+/** Per-sync verdict map with a single 8 MiB cap across all union projections. */
+export class UnionVerdictsWithMeshBudget extends Map<
+  number,
+  StrictUnionVerdict
+> {
+  constructor() {
+    super();
+    verdictBudgets.set(this, { retainedBytes: 0 });
+  }
+
+  override set(key: number, verdict: StrictUnionVerdict): this {
+    const budget = verdictBudgets.get(this)!;
+    releaseUnionDisplayMesh(this.get(key)?.displayMesh);
+    const payload = verdict.displayMesh;
+    if (payload) {
+      if (
+        budget.retainedBytes + payload.bytes >
+        MAX_RETAINED_UNION_DISPLAY_MESH_BYTES
+      ) {
+        verdict.displayMesh = undefined;
+      } else {
+        budget.retainedBytes += payload.bytes;
+        payloadBudgets.set(payload, budget);
+      }
+    }
+    return super.set(key, verdict);
+  }
+
+  override delete(key: number): boolean {
+    releaseUnionDisplayMesh(this.get(key)?.displayMesh);
+    return super.delete(key);
+  }
+
+  override clear(): void {
+    for (const verdict of this.values())
+      releaseUnionDisplayMesh(verdict.displayMesh);
+    super.clear();
+  }
+}
+
+/** Takes a matching same-sync projection and gives measurement a no-op-free view. */
+export function takeUnionDisplayMeshForMeasurement(
+  verdict: StrictUnionVerdict | undefined,
+  kernel: RemusKernel,
+  solid: number,
+  linearDeflection: number,
+  angularDeflection: number
+): ReusableUnionDisplayMesh | undefined {
+  const cached = verdict?.displayMesh;
+  if (
+    !cached ||
+    cached.kernel !== kernel ||
+    cached.solid !== solid ||
+    cached.linearDeflection !== linearDeflection ||
+    cached.angularDeflection !== angularDeflection ||
+    cached.bytes > MAX_RETAINED_UNION_DISPLAY_MESH_BYTES
+  ) {
+    return undefined;
+  }
+  verdict.displayMesh = undefined;
+  releaseUnionDisplayMesh(cached);
+  return {
+    positions: cached.positions,
+    indices: cached.indices,
+    faceOffsets: cached.faceOffsets,
+    free() {}
+  };
 }
 
 /** A union result together with the verdict its gate established. */
@@ -269,7 +403,8 @@ export interface UnifiedUnion {
 export function unifyUnionFacesChecked(
   kernel: RemusKernel,
   rawSolid: number,
-  onAccepted?: (solid: number) => void
+  onAccepted?: (solid: number) => void,
+  retainDisplayMesh = false
 ): UnifiedUnion {
   const unified = unifyCopyChecked(kernel, rawSolid);
   if (unified === null) {
@@ -279,7 +414,8 @@ export function unifyUnionFacesChecked(
     return rawUnionWithVerdict(
       kernel,
       rawSolid,
-      validationReport(kernel, rawSolid).errorCount
+      validationReport(kernel, rawSolid).errorCount,
+      retainDisplayMesh
     );
   }
   return unifyUnionFacesWithVerdict(
@@ -287,7 +423,8 @@ export function unifyUnionFacesChecked(
     rawSolid,
     unified.report,
     unified.candidate,
-    onAccepted
+    onAccepted,
+    retainDisplayMesh
   );
 }
 
@@ -302,34 +439,57 @@ export function unifyUnionFacesWithVerdict(
   rawSolid: number,
   report: KernelUnifyReport,
   healedCopy: number,
-  onAccepted?: (solid: number) => void
+  onAccepted?: (solid: number) => void,
+  retainDisplayMesh = false
 ): UnifiedUnion {
-  if (
-    !report.reverted &&
-    report.facesMerged > 0 &&
-    report.resultErrors === 0 &&
-    solidMeshIsClosed(kernel, healedCopy)
-  ) {
-    onAccepted?.(healedCopy);
-    return { solid: healedCopy, verdict: { strictErrors: 0, meshClosed: true } };
+  if (!report.reverted && report.facesMerged > 0 && report.resultErrors === 0) {
+    const closure = tessellateAndCheckSolidMesh(
+      kernel,
+      healedCopy,
+      retainDisplayMesh
+    );
+    if (closure.closed) {
+      onAccepted?.(healedCopy);
+      return {
+        solid: healedCopy,
+        verdict: {
+          strictErrors: 0,
+          meshClosed: true,
+          ...(closure.displayMesh ? { displayMesh: closure.displayMesh } : {})
+        }
+      };
+    }
   }
   // The merge was declined, reverted, not strict, or opened the projection:
   // the raw solid stands with the kernel's own verdict on it.
-  return rawUnionWithVerdict(kernel, rawSolid, report.inputErrors);
+  return rawUnionWithVerdict(
+    kernel,
+    rawSolid,
+    report.inputErrors,
+    retainDisplayMesh
+  );
 }
 
 /** The raw union kept, with its projection measured only when it is strict. */
 function rawUnionWithVerdict(
   kernel: RemusKernel,
   rawSolid: number,
-  strictErrors: number
+  strictErrors: number,
+  retainDisplayMesh: boolean
 ): UnifiedUnion {
+  const closure =
+    strictErrors === 0
+      ? tessellateAndCheckSolidMesh(kernel, rawSolid, retainDisplayMesh)
+      : undefined;
   return {
     solid: rawSolid,
     verdict: {
       strictErrors,
-      ...(strictErrors === 0
-        ? { meshClosed: solidMeshIsClosed(kernel, rawSolid) }
+      ...(closure
+        ? {
+            meshClosed: closure.closed,
+            ...(closure.displayMesh ? { displayMesh: closure.displayMesh } : {})
+          }
         : {})
     }
   };
@@ -340,14 +500,16 @@ export function fuseUniformSolidChecked(
   kernel: RemusKernel,
   solids: number[],
   labels?: readonly string[],
-  onAccepted?: (solid: number) => void
+  onAccepted?: (solid: number) => void,
+  retainDisplayMesh = false
 ): UnifiedUnion {
   return unifyUnionFacesChecked(
     kernel,
     // `exactFuseAll` refuses by name on a non-exact pair; only a fused
     // solid reaches the gate.
     exactFuseAll(kernel, solids, labels),
-    onAccepted
+    onAccepted,
+    retainDisplayMesh
   );
 }
 
@@ -478,7 +640,10 @@ function exactSharedSolidVolume(
  * This is the same dimensional mistake this project has now found in the
  * kernel five times, and it is not worth making again here.
  */
-export function sharedSolidVolume(kernel: RemusKernel, solids: number[]): number {
+export function sharedSolidVolume(
+  kernel: RemusKernel,
+  solids: number[]
+): number {
   if (solids.length < 2) {
     return 0;
   }
@@ -668,7 +833,10 @@ export function sharedShapeVolume(
   return total > extrudeVolumeTolerance(leftBody, rightBody) ? total : 0;
 }
 
-export function isFaceConnectedSolid(kernel: RemusKernel, solid: number): boolean {
+export function isFaceConnectedSolid(
+  kernel: RemusKernel,
+  solid: number
+): boolean {
   try {
     return (
       countFaceConnectedComponents(

@@ -76,7 +76,10 @@ describe('the union gate on unifyFacesChecked', () => {
     // The merged copy ships, with the verdict the measurement pass reuses.
     expect(unified.solid).not.toBe(raw);
     expect(accepted).toEqual([unified.solid]);
-    expect(unified.verdict).toEqual({ strictErrors: 0, meshClosed: true });
+    expect(unified.verdict).toMatchObject({
+      strictErrors: 0,
+      meshClosed: true
+    });
     expect(kernel.getSolidFaces(unified.solid).length).toBe(
       rawFaces - report.facesMerged
     );
@@ -111,7 +114,10 @@ describe('the union gate on unifyFacesChecked', () => {
     const unified = unifyUnionFacesChecked(kernel, raw);
 
     expect(unified.solid).toBe(raw);
-    expect(unified.verdict).toEqual({ strictErrors: 0, meshClosed: true });
+    expect(unified.verdict).toMatchObject({
+      strictErrors: 0,
+      meshClosed: true
+    });
     expect(spies.plain).not.toHaveBeenCalled();
     expect(spies.detailed).not.toHaveBeenCalled();
   });
@@ -133,7 +139,10 @@ describe('the union gate on unifyFacesChecked', () => {
       (solid) => accepted.push(solid)
     );
     expect(reverted.solid).toBe(raw);
-    expect(reverted.verdict).toEqual({ strictErrors: 0, meshClosed: true });
+    expect(reverted.verdict).toMatchObject({
+      strictErrors: 0,
+      meshClosed: true
+    });
 
     // A merge whose result is not strict leaves the raw union and its own
     // count, and a raw union that already failed is refused without being
@@ -170,9 +179,10 @@ describe('the union gate on unifyFacesChecked', () => {
     expect(
       JSON.parse(spies.checked.mock.results[0]!.value as string)
     ).toMatchObject({ facesMerged: 0, inputErrors: 0, resultErrors: 0 });
-    expect(unified).toEqual({
-      solid: raw,
-      verdict: { strictErrors: 0, meshClosed: true }
+    expect(unified.solid).toBe(raw);
+    expect(unified.verdict).toMatchObject({
+      strictErrors: 0,
+      meshClosed: true
     });
     expect(spies.plain).not.toHaveBeenCalled();
     expect(spies.detailed).not.toHaveBeenCalled();
@@ -213,7 +223,10 @@ describe('the union gate on unifyFacesChecked', () => {
     // No report means no verdict to reuse: the raw union stands and is
     // validated exactly once, through the detailed twin.
     expect(unified.solid).toBe(raw);
-    expect(unified.verdict).toEqual({ strictErrors: 0, meshClosed: true });
+    expect(unified.verdict).toMatchObject({
+      strictErrors: 0,
+      meshClosed: true
+    });
     expect(spies.detailed).toHaveBeenCalledTimes(1);
     expect(spies.plain).not.toHaveBeenCalled();
   });
