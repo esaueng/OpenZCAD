@@ -132,11 +132,13 @@ in `.github/workflows/macos-desktop.yml`.
 - `pnpm deploy:beta` is not a validation command. It applies remote D1
   migrations before deploying the Worker and therefore needs credentials and
   explicit deployment authorization.
-- `packages/kernel-adapter/package.json` follows the Remus branch, but frozen
-  installs use the one immutable commit in `pnpm-lock.yaml`. The manual
-  `.github/workflows/update-remus.yml` updater permits only a lockfile diff;
-  do not hand-edit the resolved SHA. Any kernel update still needs the full CI
-  matrix, especially `pnpm test:parity-corpus` and Playwright.
+- `packages/kernel-adapter/package.json` pins the paired Remus packages, and
+  frozen installs use their shared immutable commit in `pnpm-lock.yaml`.
+  `.github/workflows/update-remus.yml` checks for the latest paired package
+  release on a five-minute schedule and also supports manual dispatch. It opens a
+  review PR for a targeted manifest and lockfile update; do not hand-edit the
+  resolved SHA. Any kernel update still needs the full CI matrix, especially
+  `pnpm test:parity-corpus` and Playwright.
 
 ## Enforced boundaries
 
