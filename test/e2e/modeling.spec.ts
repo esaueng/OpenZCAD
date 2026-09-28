@@ -8,6 +8,7 @@ import {
   expectConsumedBodyCount,
   openAssistant,
   promptField,
+  revealModelDrawer,
   shiftSelectTwoVisibleBoxEdges,
   stubApi,
   test
@@ -329,6 +330,8 @@ test('a press-and-drag with the Line tool draws a segment instead of orbiting', 
     await page.mouse.move(start.x + step * 20, start.y - step * 10);
   }
   await page.mouse.up();
+  // The sketch has the stage, so the drawer asks for its rail button.
+  await revealModelDrawer(page);
   await expect(
     page.locator('.feature-row-main', { hasText: 'Sketch' })
   ).toBeVisible();
@@ -407,6 +410,8 @@ test('switches a planar-face selection into an editable arc sketch', async ({
   await page.mouse.click(center.x + 80, center.y);
   await page.mouse.click(center.x, center.y - 80);
 
+  // The sketch has the stage, so the drawer asks for its rail button.
+  await revealModelDrawer(page);
   await expect(
     page.locator('.feature-row-main', { hasText: 'Sketch' })
   ).toBeVisible();
@@ -498,6 +503,8 @@ test('shows and recovers a stale face-attached sketch when its source is suppres
   await page.mouse.down();
   await page.mouse.move(center.x + 45, center.y + 35, { steps: 4 });
   await page.mouse.up();
+  // The sketch has the stage, so the drawer asks for its rail button.
+  await revealModelDrawer(page);
   await expect(
     page.locator('.feature-row', { hasText: /^Sketch/ })
   ).toBeVisible();
@@ -638,6 +645,8 @@ test('keeps a source circle stable over its coincident extrude edge', async ({
   await page.mouse.down();
   await page.mouse.move(center.x + 64, center.y, { steps: 6 });
   await page.mouse.up();
+  // The sketch has the stage, so the drawer asks for its rail button.
+  await revealModelDrawer(page);
   await expect(
     page.locator('.feature-row-main', { hasText: 'Sketch 01' })
   ).toBeVisible();
@@ -1142,7 +1151,7 @@ test('radius drag resizes a cylinder after bottom adjustment and filleting', asy
   // rebuilds. Wait for the revision barrier so the e2e hook cannot select the
   // stale pre-fillet cylinder that topology actions must reject.
   await expect(page.getByRole('contentinfo')).not.toContainText(
-    /Starting geometry worker|Loading exact Remus kernel|Rebuilding exact geometry|Waiting for exact geometry|Exact geometry is still rebuilding/i,
+    /Starting geometry worker|Loading exact Remus kernel|Rebuilding exact geometry|Waiting for exact geometry|Rebuilding geometry|Exact geometry is still rebuilding/i,
     { timeout: 30_000 }
   );
   await selectCylinderSurface('wall');
@@ -3389,8 +3398,9 @@ test('each sketch plane label names the plane it actually opens', async ({
   const extrudeKeypad = page.getByRole('dialog', { name: 'Height value' });
   await extrudeKeypad.getByRole('textbox').fill('24');
   await extrudeKeypad.getByRole('button', { name: 'Apply height' }).click();
-  await expect(page.locator('.selection-chip')).toBeVisible();
-  const chip = (await page.locator('.selection-chip').textContent()) ?? '';
+  await expect(page.locator('.selection-callout-chip')).toBeVisible();
+  const chip =
+    (await page.locator('.selection-callout-chip').textContent()) ?? '';
   const triple = /([\d.]+)\s*×\s*([\d.]+)\s*×\s*([\d.]+)/.exec(chip);
   if (!triple) {
     throw new Error(`no size in selection chip: ${chip}`);
@@ -3497,8 +3507,9 @@ test('types an exact rectangle while drawing it', async ({ page }) => {
   await extrudeKeypad.getByRole('textbox').fill('24');
   await extrudeKeypad.getByRole('button', { name: 'Apply height' }).click();
 
-  await expect(page.locator('.selection-chip')).toBeVisible();
-  const chip = (await page.locator('.selection-chip').textContent()) ?? '';
+  await expect(page.locator('.selection-callout-chip')).toBeVisible();
+  const chip =
+    (await page.locator('.selection-callout-chip').textContent()) ?? '';
   const triple = /([\d.]+)\s*×\s*([\d.]+)\s*×\s*([\d.]+)/.exec(chip);
   if (!triple) {
     throw new Error(`no size in selection chip: ${chip}`);
@@ -4159,6 +4170,8 @@ test('an open sketch chain does not light the profile tools', async ({
     await page.mouse.move(start.x + step * 20, start.y - step * 10);
   }
   await page.mouse.up();
+  // The sketch has the stage, so the drawer asks for its rail button.
+  await revealModelDrawer(page);
   await expect(
     page.locator('.feature-row-main', { hasText: 'Sketch' })
   ).toBeVisible();

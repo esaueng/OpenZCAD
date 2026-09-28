@@ -365,7 +365,7 @@ test('Space centres and faces an exact planar selection head-on', async ({
   expect(Math.abs(direction[1]! / distance)).toBeLessThan(0.001);
 
   await expect(faceOperation).toBeVisible();
-  await expect(page.locator('.selection-chip')).toContainText(/face/i);
+  await expect(page.locator('.selection-callout-chip')).toContainText(/face/i);
   await expect(
     page.getByRole('button', { name: /projection \(P\).*perspective/i })
   ).toHaveAttribute('aria-pressed', 'false');
@@ -630,7 +630,7 @@ test('clicking geometry re-pivots the orbit without moving the view', async ({
     box!.y + box!.height * 0.58
   );
   // The pivot only moves for a real hit, so prove the click landed first.
-  await expect(page.locator('.selection-chip')).toBeVisible();
+  await expect(page.locator('.selection-callout-chip')).toBeVisible();
   const after = await readLiveCamera(canvas);
 
   // The camera itself must not have moved: re-pivoting is meant to be
@@ -1128,7 +1128,7 @@ test('repeated face clicks reach a body behind direct-edit handles', async ({
   const canvas = page.locator('.viewer-host canvas');
   const bounds = await canvas.boundingBox();
   expect(bounds).not.toBeNull();
-  const label = page.locator('.selection-chip-label');
+  const label = page.locator('.selection-callout-chip .selection-callout-name');
   let cycled = false;
 
   // The default box and cylinder overlap around the centre in the isometric
@@ -1190,7 +1190,7 @@ test('double-clicking a face selects its whole body', async ({ page }) => {
     x: bounds.x + bounds.width * 0.42,
     y: bounds.y + bounds.height * 0.55
   };
-  const label = page.locator('.selection-chip-label');
+  const label = page.locator('.selection-callout-chip .selection-callout-name');
 
   // A plain click keeps the active sub-element filter.
   await page.mouse.click(spot.x, spot.y);
@@ -1246,7 +1246,7 @@ test('double-clicking a filleted rim takes the whole run of edges', async ({
   // the viewport for an edge, otherwise the e2e hook can correctly locate a
   // stale box edge that topology actions must then reject.
   await expect(status).not.toContainText(
-    /Starting geometry worker|Loading exact Remus kernel|Rebuilding exact geometry|Waiting for exact geometry|Exact geometry is still rebuilding/i,
+    /Starting geometry worker|Loading exact Remus kernel|Rebuilding exact geometry|Waiting for exact geometry|Rebuilding geometry|Exact geometry is still rebuilding/i,
     { timeout: 30_000 }
   );
 
@@ -1306,7 +1306,9 @@ test('double-clicking a filleted rim takes the whole run of edges', async ({
   });
 
   await expect(status).toContainText('connected edges');
-  const chip = await page.locator('.selection-chip-label').textContent();
+  const chip = await page
+    .locator('.selection-callout-chip .selection-callout-name')
+    .textContent();
   const match = /^(\d+) edges$/.exec((chip ?? '').trim());
   // Exactly eight, not merely "more than one". The body is the app's default
   // 30 x 18 x 24 box with all twelve edges filleted at the default radius 2,
@@ -1346,7 +1348,7 @@ test('the selection filter changes what a click takes', async ({ page }) => {
     x: bounds.x + bounds.width * 0.42,
     y: bounds.y + bounds.height * 0.55
   };
-  const label = page.locator('.selection-chip-label');
+  const label = page.locator('.selection-callout-chip .selection-callout-name');
 
   // A plain click on the solid lands on a face.
   await page.mouse.click(spot.x, spot.y);
@@ -1483,7 +1485,7 @@ test('dragging a box selects several bodies at once', async ({ page }) => {
   // the sweep has to arrive after it to retire deterministically.
   await page.waitForTimeout(400);
   await sweep(0.6, 0.04, 0.72, 0.14);
-  await expect(page.locator('.selection-chip')).toHaveCount(0);
+  await expect(page.locator('.selection-callout-chip')).toHaveCount(0);
   await expect(status).not.toContainText('Nothing in the box');
   await expect(status).not.toContainText('2 bodies selected');
 });
@@ -1534,7 +1536,7 @@ test('box selection releases the previous direct-edit target', async ({
   }
   expect(facePoint).not.toBeNull();
   await page.mouse.click(facePoint!.x, facePoint!.y);
-  await expect(page.locator('.selection-chip')).toBeVisible();
+  await expect(page.locator('.selection-callout-chip')).toBeVisible();
   await expect(status).toContainText('resize the body');
   await expect(
     page.getByRole('region', { name: 'Feature inspector' })
@@ -1597,11 +1599,11 @@ test('box selection releases the previous direct-edit target', async ({
 
   // The empty sweep is silent; the released handle's hint going with the
   // chip is what proves the direct-edit target let go.
-  await expect(page.locator('.selection-chip')).toHaveCount(0);
+  await expect(page.locator('.selection-callout-chip')).toHaveCount(0);
   await expect(status).not.toContainText('resize the body');
 });
 
-test('the status bar names the rung of the Esc ladder you are on', async ({
+test('the status bar names the one Escape exit, and one press takes it', async ({
   page
 }) => {
   await stubApi(page);
@@ -1649,21 +1651,20 @@ test('the status bar names the rung of the Esc ladder you are on', async ({
   }
   expect(facePoint).not.toBeNull();
   await page.mouse.click(facePoint!.x, facePoint!.y);
-  await expect(page.locator('.selection-chip')).toBeVisible();
+  await expect(page.locator('.selection-callout-chip')).toBeVisible();
   await expect(status).toContainText('resize the body');
-  // Selecting the face also opened the edit panel, which takes Escape itself.
-  // The prompt has to name that rung, not the one behind it.
-  await expect(status).toContainText('Esc closes the panel');
+  // Selecting the face also opened the edit panel. Closing it and clearing
+  // the selection are one press now, so the prompt names that one exit.
+  await expect(status).toContainText('Esc clears the selection');
 
-  // Escape does what it promised: the panel goes, the selection stays.
+  // Escape does what it promised in a single press: the panel and the
+  // selection go together, and nothing is left promising another rung.
   await page.keyboard.press('Escape');
   await expect(
     page.getByRole('region', { name: 'Feature inspector' })
   ).toHaveCount(0);
-  await expect(status).toContainText('Esc clears the selection');
-
-  // And the next press takes the rung it now names.
-  await page.keyboard.press('Escape');
+  await expect(page.locator('.selection-callout-chip')).toHaveCount(0);
+  await expect(page.locator('.tool-card')).toHaveCount(0);
   await expect(status).not.toContainText('Esc clears the selection');
 });
 
@@ -2121,9 +2122,17 @@ test('the selection callout follows the body it names through a move', async ({
   await overlay.getByLabel('Rotate Y in degrees').fill('90');
   await expect.poll(placement).not.toBe(moved);
 
-  // Cancelling restores the resting pose for the callout, not just the mesh.
+  // Cancelling is one Escape back to nothing selected, so the callout goes
+  // with the Move. Selecting the body again finds it at its resting pose:
+  // the cancel restored the callout's anchor, not just the mesh.
   await page.keyboard.press('Escape');
   await expect(overlay).toBeHidden();
+  await expect(callout).toHaveCount(0);
+  await page
+    .getByRole('list', { name: 'Bodies' })
+    .getByRole('button', { name: /^Box/ })
+    .click();
+  await expect(callout).toHaveCount(1);
   await expect.poll(placement).toBe(resting);
 });
 

@@ -160,7 +160,7 @@ describe('Inspector feature provenance', () => {
       within(inspector).getByRole('heading', { level: 2 })
     ).toHaveTextContent('Front face');
     expect(inspector).toHaveTextContent(
-      'does not identify one editable history feature'
+      'Selected face. To change its shape, edit the feature that made it in History.'
     );
     expect(inspector).toHaveTextContent('120 mm³');
     expect(

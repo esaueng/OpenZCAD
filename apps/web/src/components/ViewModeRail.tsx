@@ -1,5 +1,5 @@
 import { Eye, EyeOff, Layers3, Scan } from 'lucide-react';
-import type { ReactNode } from 'react';
+import { createContext, useContext, type ReactNode } from 'react';
 import type { BodyRepresentation } from '@openzcad/shared';
 import { Tooltip } from './Tooltip';
 
@@ -16,6 +16,36 @@ interface PartsProps {
   onIsolate(bodyId: string): void;
   onShowAll(): void;
 }
+
+type PartsListMode = 'view' | 'tweak';
+
+/**
+ * Which mode's rail the parts list opens from. View and Tweak share the list
+ * but not its promise: View locks everything, while Tweak still changes
+ * parameter values, so "geometry is locked" was wrong there.
+ */
+const PartsListModeContext = createContext<PartsListMode>('view');
+
+/** Tells a parts list below it which mode it serves (View by default). */
+export function PartsListModeProvider({
+  mode,
+  children
+}: {
+  mode: PartsListMode;
+  children: ReactNode;
+}) {
+  return (
+    <PartsListModeContext.Provider value={mode}>
+      {children}
+    </PartsListModeContext.Provider>
+  );
+}
+
+const PARTS_LIST_FOOTNOTE: Record<PartsListMode, string> = {
+  view: 'Visibility only — geometry is locked in View mode.',
+  tweak:
+    'Visibility only — change values in Parameters; the design stays locked.'
+};
 
 /**
  * The rail's Parts button: opens the parts list beside the rail and wears
@@ -94,6 +124,7 @@ export function PartsList({
   onIsolate,
   onShowAll
 }: Omit<PartsProps, 'open' | 'onOpenChange'>) {
+  const mode = useContext(PartsListModeContext);
   const hiddenCount = bodies.filter((body) =>
     hiddenBodyIds.has(body.bodyId)
   ).length;
@@ -172,7 +203,7 @@ export function PartsList({
             Show all ({hiddenCount} hidden)
           </button>
         ) : (
-          <span>Visibility only — geometry is locked in View mode.</span>
+          <span>{PARTS_LIST_FOOTNOTE[mode]}</span>
         )}
       </footer>
     </aside>

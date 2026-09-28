@@ -206,6 +206,7 @@ export type InteractionEvent =
       value?: number;
     }
   | { type: 'recover' }
+  | { type: 'reset-value' }
   | { type: 'enter-sketch'; plane: SketchPlaneRef; sketchId?: string }
   | { type: 'sketch-tool'; tool: SketchToolId }
   | { type: 'sketch-circle-mode'; mode: SketchCircleMode }
@@ -243,13 +244,27 @@ export function isOperationState(
   return state.mode !== 'idle' && state.mode !== 'sketch';
 }
 
-/** What the next Escape press should do, innermost state first. */
+/**
+ * What the next Escape press does.
+ *
+ * Inside a sketch Escape climbs a ladder, innermost state first: the chain
+ * being drawn, a pick sequence, the drawing tool, the entity selection, and
+ * only then the sketch itself.
+ *
+ * Outside a sketch there is no ladder to count. One press from any direct
+ * edit or command returns to nothing selected — a refused value, its preview
+ * and its card go with it — so nobody has to learn how many presses reach a
+ * clean workspace. Two inner rungs survive because they own the keyboard
+ * while they are up: open exact entry closes first, and a drag still held by
+ * the pointer is cancelled in place (the viewport takes that key before the
+ * workspace sees it). A value being validated stays locked: the commit owns
+ * the model until it answers, except a region extrude, which can be dropped.
+ */
 export function escapeTarget(
   state: InteractionState
 ):
   | 'close-keypad'
   | 'cancel-drag'
-  | 'recover-failure'
   | 'end-drawing'
   | 'exit-drawing-tool'
   | 'cancel-constraint'
@@ -289,9 +304,7 @@ export function escapeTarget(
   if (state.phase === 'dragging') {
     return 'cancel-drag';
   }
-  if (state.phase === 'failed') {
-    return 'recover-failure';
-  }
+  // Armed or failed alike: a refusal is not a rung of its own.
   return 'clear-selection';
 }
 
@@ -441,6 +454,13 @@ export function interactionReducer(
       return isOperationState(state) && state.phase === 'failed'
         ? { ...state, phase: 'armed', error: null }
         : state;
+    case 'reset-value':
+      // A cancelled gesture forgets its value and any refusal of it, so the
+      // handle re-arms from the committed geometry rather than from the
+      // value that was just abandoned.
+      return isOperationState(state) && state.phase !== 'validating'
+        ? { ...state, ...ARMED }
+        : state;
     case 'enter-sketch':
       return {
         mode: 'sketch',
@@ -583,9 +603,7 @@ export function interactionReducer(
         case 'close-keypad':
           return interactionReducer(state, { type: 'keypad-close' });
         case 'cancel-drag':
-          return interactionReducer(state, { type: 'drag-release' });
-        case 'recover-failure':
-          return interactionReducer(state, { type: 'recover' });
+          return interactionReducer(state, { type: 'reset-value' });
         case 'end-drawing':
           return interactionReducer(state, {
             type: 'sketch-drawing',

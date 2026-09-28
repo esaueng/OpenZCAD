@@ -54,10 +54,7 @@ import type {
   MeasurementViewportAnnotation
 } from '../lib/measurements';
 import type { RegionPickData } from './viewer/regionOverlay';
-import { setLiveDiameter } from '../lib/liveLabels';
-import type { LabelSegment } from '../lib/topologyLabels';
-import { LabelSegments } from './LabelSegments';
-import { OVERLAY_EXIT_MS, useDelayedUnmount } from '../hooks/useDelayedUnmount';
+import type { SelectionCalloutContent } from '../lib/selectionCallout';
 import {
   MeasurementCloudSyncAgent,
   type MeasurementCloudSyncAgentProps
@@ -153,12 +150,14 @@ interface ViewerShellProps {
    * which is navigation rather than editing.
    */
   viewMode?: boolean;
-  /** Bottom-center summary of the current selection, with a measurement. */
-  selectionChip: {
-    label: readonly LabelSegment[];
-    detail?: string;
-  } | null;
-  onClearSelection(): void;
+  /**
+   * The selection chip anchored to the pick in the viewport: its name,
+   * measurement, verbs and clear action. The bottom-lane chip it replaced
+   * said the same things away from the pick.
+   */
+  selectionCallout: SelectionCalloutContent | null;
+  /** Consumed bodies a History row brings into focus, drawn as ghosts. */
+  focusGhostBodies?: readonly BodyRepresentation[];
   canUndo: boolean;
   canRedo: boolean;
   onUndo(): void;
@@ -226,7 +225,7 @@ interface ViewerShellProps {
   onEdgeCommit(size: number): void;
   onEdgeCancel(): void;
   onOpenEdgeKeypad(currentSize: number): boolean;
-  onDirectManipulationChange(dragging: boolean): void;
+  onDirectManipulationChange(dragging: boolean, source?: 'move'): void;
   sketchMode: SketchModeState | null;
   onSketchCommit(object: SketchObjectData): void;
   onEditSketchDimension(id: string, anchor: { x: number; y: number }): void;
@@ -318,8 +317,8 @@ export function ViewerShell({
   dockExtras = null,
   railExtras = null,
   viewMode = false,
-  selectionChip,
-  onClearSelection,
+  selectionCallout,
+  focusGhostBodies,
   canUndo,
   canRedo,
   onUndo,
@@ -409,9 +408,8 @@ export function ViewerShell({
   const orientationDragRef = useRef<OrientationDragControls | null>(null);
   const scaleIndicatorRef = useRef<ViewportScaleSink | null>(null);
   const sketchGridReadoutRef = useRef<SketchGridReadoutSink | null>(null);
-  const selectionChipLabelRef = useRef<HTMLSpanElement | null>(null);
-  const chipExit = useDelayedUnmount(selectionChip, OVERLAY_EXIT_MS);
-  const chip = chipExit.rendered;
+  // The selection chip is a viewport label now, and the viewer rewrites the
+  // live diameter in its own labels; nothing React-rendered carries one.
   const cylinderRadiusLabelSetterRef = useRef<
     ((radius: number | null) => void) | null
   >(null);
@@ -421,15 +419,6 @@ export function ViewerShell({
     measurementCloudSync[1] &&
     measurementCloudSync[2].has(cloudProjectId) &&
     measurementCloudSync[3] === cloudProjectId;
-  // Live drag value: only the chip's diameter node is rewritten, never its
-  // wording, and `null` puts the document value back.
-  cylinderRadiusLabelSetterRef.current = (radius) => {
-    const label = selectionChipLabelRef.current;
-    if (!label) {
-      return;
-    }
-    setLiveDiameter(label, radius === null ? null : radius * 2);
-  };
 
   const viewerToolbar = (
     <ViewerToolbar
@@ -492,6 +481,8 @@ export function ViewerShell({
         selectedBodyIds={selectedBodyIds}
         selectedTopology={selectedTopology}
         previewFaceHighlights={previewFaceHighlights}
+        selectionCallout={selectionCallout}
+        {...(focusGhostBodies ? { focusGhostBodies } : {})}
         selectedEdges={selectedEdges}
         pickListEnabled={pickListEnabled}
         settings={settings}
@@ -608,28 +599,6 @@ export function ViewerShell({
             <ViewportGridReadout sinkRef={sketchGridReadoutRef} />
           </div>
         </>
-      )}
-      {chip && (
-        <div
-          className={`selection-chip${chipExit.closing ? ' closing' : ''}`}
-          role="status"
-        >
-          <span ref={selectionChipLabelRef} className="selection-chip-label">
-            <LabelSegments segments={chip.label} />
-          </span>
-          {chip.detail && (
-            <span className="selection-chip-detail">{chip.detail}</span>
-          )}
-          <button
-            type="button"
-            className="selection-chip-clear"
-            title="Deselect all (Esc)"
-            aria-label="Deselect all"
-            onClick={onClearSelection}
-          >
-            ×
-          </button>
-        </div>
       )}
       {modeOverlay}
       {/* The scale sits beside the orientation cube in every layout. */}

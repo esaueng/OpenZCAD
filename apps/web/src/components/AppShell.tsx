@@ -64,6 +64,14 @@ interface AppShellProps {
    */
   sidebar: ReactNode | null;
   viewer: ReactNode;
+  /**
+   * The command card of the moment — the direct-manipulation tool card, or
+   * the closed-profile quick action — at the top of the right lane, over
+   * the inspector and the drawer. One anchor for every command card: it
+   * used to float over the viewport's top edge, where it covered the
+   * drawer's rows. Null gives the slot back.
+   */
+  command?: ReactNode | null;
   /** Contextual properties panel; null hides it and gives the space back. */
   inspector: ReactNode | null;
   /**
@@ -118,6 +126,7 @@ export function AppShell({
   toolBar,
   sidebar,
   viewer,
+  command = null,
   inspector,
   drawer = null,
   assistant,
@@ -160,8 +169,8 @@ export function AppShell({
       >
         <div
           className={`viewer-area${inspector ? ' has-inspector' : ''}${
-            drawer ? ' has-drawer' : ''
-          }`}
+            command ? ' has-command' : ''
+          }${drawer ? ' has-drawer' : ''}`}
         >
           {viewer}
           {columnExit.rendered && (
@@ -181,13 +190,18 @@ export function AppShell({
               {stripExit.rendered}
             </ExitingFloat>
           )}
-          {/* The right lane, beside the instrument rail: the inspector over
-              the drawer, one column, so neither pushes into the canvas. The
-              wrapper always renders, so opening the drawer never remounts
-              an inspector form mid-edit. */}
+          {/* The right lane, beside the instrument rail: the command card,
+              then the inspector, then the drawer, one column, so none of
+              them pushes into the canvas or paints over another. The
+              wrapper always renders and every slot keeps its place, so a
+              card arriving or the drawer opening never remounts an
+              inspector form mid-edit. */}
           <div className="stage-right">
+            {command && <div className="command-float">{command}</div>}
             {inspectorExit.rendered && (
               <ExitingFloat
+                // A panel reopened during its own exit is a fresh panel.
+                key={inspectorExit.generation}
                 className={`inspector-float${inspectorExit.closing ? ' closing' : ''}`}
                 closing={inspectorExit.closing}
               >

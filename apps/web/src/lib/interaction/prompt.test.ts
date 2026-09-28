@@ -209,15 +209,14 @@ describe('the step describes the operation actually armed', () => {
     expect(commandPrompt(refused)?.step).toContain('Offset removes the face.');
   });
 
-  it('defers to a feature form, which takes Escape before the machine', () => {
-    // The form stops the key itself, so while one is open it is the innermost
-    // rung and the prompt must not promise the machine's outermost one.
-    expect(commandPrompt(faceState('armed'), true)?.escape).toBe(
-      'closes the panel'
+  it('says the same thing whether or not a panel is open', () => {
+    // Closing a panel and clearing the selection are one press now, so a
+    // failed value promises the same single exit as an armed one.
+    expect(commandPrompt(faceState('failed'))?.escape).toBe(
+      'clears the selection'
     );
-    // An inner rung still outranks the form: the keypad is modal.
-    expect(commandPrompt(faceState('exact-entry'), true)?.escape).toBe(
-      'closes exact entry'
+    expect(commandPromptText(faceState('failed'))).toContain(
+      'Esc clears the selection'
     );
   });
 

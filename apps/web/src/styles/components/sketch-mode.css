@@ -269,22 +269,22 @@
 
 /* ── Closed-profile selection + direct extrusion ───────── */
 
+/* A command card like the others: the first card of the right lane
+   (quiet-stage.css), as wide as the lane, rather than a strip over the
+   viewport's top centre. */
 .profile-quick-action {
-  position: absolute;
-  top: 66px;
-  left: 50%;
-  z-index: calc(var(--z-viewer-overlay) + 2);
   display: flex;
   align-items: center;
   gap: 9px;
-  min-width: 370px;
+  box-sizing: border-box;
+  width: 100%;
+  min-width: 0;
   padding: 7px 8px 7px 10px;
   color: var(--color-viewport-text);
   background: rgba(21, 24, 29, 0.95);
   border: 1px solid var(--color-accent-border);
   border-radius: var(--radius-lg);
   box-shadow: 0 12px 30px rgba(0, 0, 0, 0.34);
-  transform: translateX(-50%);
   backdrop-filter: blur(10px);
 }
 
@@ -362,12 +362,10 @@
   color: var(--color-accent);
 }
 
+/* The Move panel. It rides the right lane's command slot (quiet-stage.css)
+   like every other command card, so it carries no position of its own. */
 .extrude-controller {
-  position: absolute;
-  top: 66px;
-  right: 14px;
-  z-index: calc(var(--z-viewer-overlay) + 2);
-  width: 250px;
+  box-sizing: border-box;
   padding: 12px;
   color: var(--color-viewport-text-muted);
   background: rgba(21, 24, 29, 0.95);

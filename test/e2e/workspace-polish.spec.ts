@@ -1,6 +1,7 @@
 import { test, expect, type Locator, type Page } from '@playwright/test';
 import {
   seedDismissedWorkspaceTour,
+  revealModelDrawer,
   seedOpenCommandFold,
   seedOpenModelDrawer
 } from './openzcad-fixtures';
@@ -184,7 +185,7 @@ test('lists bodies in the model browser and selects them from the tree', async (
   await expect(bodies.getByRole('button', { name: /^Box/ })).toBeVisible();
 
   await bodies.getByRole('button', { name: /^Box/ }).click();
-  const chip = page.locator('.selection-chip');
+  const chip = page.locator('.selection-callout-chip');
   await expect(chip).toContainText('Box');
   await expect(bodies.getByRole('button', { name: /^Box/ })).toHaveAttribute(
     'aria-pressed',
@@ -209,7 +210,7 @@ test('names picked faces and edges without raw fingerprints', async ({
     page.getByRole('region', { name: 'Resize Body operation' })
   ).toBeVisible();
 
-  const chip = page.locator('.selection-chip');
+  const chip = page.locator('.selection-callout-chip');
   await expect(chip).toContainText('Box');
   await expect(chip).not.toContainText('face:');
   await expect(chip).toContainText(/face/i);
@@ -355,6 +356,11 @@ test('opens long tool-card diagnostics in the Activity log', async ({
     card.setAttribute('aria-label', 'Edit Fillet operation');
     card.style.position = 'fixed';
     card.style.zIndex = '9999';
+    // Production anchors the card in the right lane at the lane's width;
+    // standing alone it needs a place and that width of its own.
+    card.style.top = '14px';
+    card.style.right = '14px';
+    card.style.width = '330px';
     card.innerHTML = `
       <span class="tool-card-icon" aria-hidden="true"></span>
       <span class="tool-card-copy">
@@ -548,6 +554,8 @@ test('places, retypes, solves, and undoes a driving angle dimension', async ({
   await expect(canvasDimension).toContainText('angle_target = 60°');
   expect(solved.objects).not.toEqual(baseline.objects);
 
+  // The sketch has the stage; the Parameters rail button brings the table.
+  await revealModelDrawer(page, 'Parameters');
   const parameter = page.getByLabel('Expression for angle_target');
   await parameter.fill('45');
   await parameter.press('Enter');
@@ -600,6 +608,12 @@ test('places, retypes, solves, and undoes a driving angle dimension', async ({
   ).not.toContainText('Saving', { timeout: 30_000 });
 
   await page.reload();
+  // The Parameters rail button that brought the table into the sketch
+  // folded History behind it, and the drawer remembers that.
+  await page
+    .getByRole('toolbar', { name: 'Model panels' })
+    .getByRole('button', { name: 'History panel' })
+    .click({ timeout: 30_000 });
   await expect(
     page.getByRole('button', { name: 'Sketch 01', exact: true })
   ).toBeVisible({
@@ -675,6 +689,8 @@ test('edits a canvas radius with expressions, refuses zero, and undoes the solve
   await page.mouse.down();
   await page.mouse.move(center.x + 72, center.y, { steps: 6 });
   await page.mouse.up();
+  // The sketch has the stage, so the drawer asks for its rail button.
+  await revealModelDrawer(page);
   await expect(
     page.locator('.feature-row-main', { hasText: 'Sketch 01' })
   ).toBeVisible();
@@ -698,6 +714,12 @@ test('edits a canvas radius with expressions, refuses zero, and undoes the solve
   expect(radial.objectKind).toBe('circle');
   if (radial.objectKind !== 'circle') throw new Error('Expected a circle');
   expect(Number(radial.radius)).toBeCloseTo(7, 8);
+  // The drawer came up on History for the row above; the table is a
+  // rail press away.
+  await page
+    .getByRole('toolbar', { name: 'Model panels' })
+    .getByRole('button', { name: 'Parameters panel' })
+    .click();
   const parameter = page.getByLabel('Expression for radius_target');
   await parameter.fill('9');
   await parameter.press('Enter');
@@ -814,6 +836,8 @@ test('snaps sketch drawing to existing endpoints', async ({ page }) => {
   await page.mouse.click(center.x - 60, center.y - 40);
   await page.mouse.click(center.x + 60, center.y - 40);
   await page.keyboard.press('Escape');
+  // The sketch has the stage, so the drawer asks for its rail button.
+  await revealModelDrawer(page);
   await expect(
     page.locator('.feature-row-main', { hasText: 'Sketch' })
   ).toBeVisible();
@@ -947,4 +971,120 @@ test('shows profile readiness and preserves exact entity edits through extrude a
     0
   );
   expect(pageErrors).toEqual([]);
+});
+
+async function openBracketDemo(page: Page) {
+  await stubApi(page);
+  await page.setViewportSize({ width: 1440, height: 900 });
+  await page.goto('/');
+  await page
+    .getByRole('button', { name: /^Open demo: Mounting Bracket/ })
+    .click();
+  const canvas = page.locator('.viewer-host canvas');
+  await expect(canvas).toBeVisible({ timeout: 120_000 });
+  await expect(page.getByRole('contentinfo')).not.toContainText(
+    /Starting geometry worker|Loading exact Remus kernel|Rebuilding exact geometry|Waiting for exact geometry|Exact geometry is still rebuilding/i,
+    { timeout: 60_000 }
+  );
+  await expect(page.locator('.sidebar .feature-row')).toHaveCount(17, {
+    timeout: 60_000
+  });
+  return canvas;
+}
+
+/**
+ * A face click with no tool running used to raise five surfaces: the tool
+ * card, the drag handle, a name-only label, a bottom-lane chip with the
+ * area, and an inspector that said no one feature owned the face. The name,
+ * the measurement and the verbs are one chip beside the pick now.
+ */
+test('a face click raises one selection chip with verbs and no other surface', async ({
+  page
+}) => {
+  test.setTimeout(150_000);
+  const canvas = await openBracketDemo(page);
+  const bounds = (await canvas.boundingBox())!;
+  const chip = page.locator('.selection-callout-chip');
+  // The demo frames the part in the middle of the canvas; walk a few spots
+  // until one lands on a face.
+  for (const [fx, fy] of [
+    [0.5, 0.5],
+    [0.45, 0.55],
+    [0.55, 0.45],
+    [0.5, 0.6]
+  ] as const) {
+    await page.mouse.click(
+      bounds.x + bounds.width * fx,
+      bounds.y + bounds.height * fy
+    );
+    if (
+      (await canvas.getAttribute('data-e2e-selected-face')) &&
+      (await chip.count()) === 1
+    ) {
+      break;
+    }
+  }
+  await expect(canvas).toHaveAttribute('data-e2e-selected-face', /.+/);
+  await expect(chip).toHaveCount(1);
+  await expect(chip.locator('.selection-callout-name')).toContainText(
+    'Mounting Bracket'
+  );
+  // The key measurement rides the chip: an area or a diameter.
+  await expect(chip.locator('.selection-callout-detail')).toContainText(
+    /mm²|Ø/
+  );
+  const verbs = chip.locator('.selection-callout-verb');
+  expect(await verbs.count()).toBeGreaterThanOrEqual(1);
+  expect(await verbs.count()).toBeLessThanOrEqual(3);
+  await expect(
+    chip.getByRole('button', { name: 'Deselect all' })
+  ).toBeVisible();
+  // Nothing in the bottom lane, and no inspector opened for the pick alone.
+  await expect(page.locator('.selection-chip')).toHaveCount(0);
+  await expect(
+    page.getByRole('region', { name: 'Feature inspector' })
+  ).toHaveCount(0);
+
+  await page.screenshot({
+    path: test.info().outputPath('selection-chip.png')
+  });
+  // The chip's clear is the deselect.
+  await chip.getByRole('button', { name: 'Deselect all' }).click();
+  await expect(chip).toHaveCount(0);
+  await expect(canvas).not.toHaveAttribute('data-e2e-selected-face', /.+/);
+});
+
+/**
+ * Picking a consumed feature in History used to select every body
+ * downstream of it, so the whole bracket lit up and the label named the
+ * bracket. The faces the feature made are lit instead, and the chip names
+ * the feature.
+ */
+test('a consumed History feature lights its own faces and is named on the chip', async ({
+  page
+}) => {
+  test.setTimeout(150_000);
+  const canvas = await openBracketDemo(page);
+  await page
+    .locator('.feature-row-main', { hasText: /^Boss$/ })
+    .first()
+    .click();
+  const chip = page.locator('.selection-callout-chip');
+  await expect(chip).toHaveCount(1);
+  await expect(chip.locator('.selection-callout-name')).toHaveText('Boss');
+  await page.screenshot({
+    path: test.info().outputPath('history-focus.png')
+  });
+  // No body is selected: the part is not lit whole.
+  await expect(canvas).not.toHaveAttribute('data-e2e-selected-bodies', /.+/);
+  // Its faces ride the face highlight, or its consumed body is a ghost.
+  await expect
+    .poll(async () =>
+      Number(
+        (await canvas.getAttribute('data-e2e-preview-blend-count')) ??
+          (await canvas.getAttribute('data-e2e-focus-ghosts')) ??
+          '0'
+      )
+    )
+    .toBeGreaterThan(0);
 });

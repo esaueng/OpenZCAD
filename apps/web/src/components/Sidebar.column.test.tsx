@@ -2,10 +2,11 @@ import { render, screen } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import type { ComponentProps } from 'react';
 import { describe, expect, it, vi } from 'vitest';
-import type {
-  BodyRepresentation,
-  FeatureNode,
-  FeatureId
+import {
+  FEATURE_ROLLBACK_SUPPRESSED_METADATA_KEY,
+  type BodyRepresentation,
+  type FeatureNode,
+  type FeatureId
 } from '@openzcad/shared';
 import { defaultPanelState } from '../lib/panelState';
 import { Sidebar } from './Sidebar';
@@ -71,28 +72,32 @@ function renderSidebar(
 }
 
 describe('Sidebar', () => {
-  it('collapses History into a scrub strip that names the newest feature', () => {
+  it('collapses History into one line that counts and names the newest feature', () => {
     const { container } = renderSidebar();
     const header = screen.getByTitle('Expand History');
-    expect(container.querySelectorAll('.history-scrub-dot')).toHaveLength(3);
-    expect(container.querySelector('.history-scrub-dot.active')).toBe(
-      container.querySelectorAll('.history-scrub-dot')[2]
+    expect(container.querySelector('.history-scrub-dot')).toBeNull();
+    expect(container.querySelector('.history-scrub-count')).toHaveTextContent(
+      '3 features'
     );
-    expect(header).toHaveTextContent('Feature 3');
-    expect(header).toHaveTextContent('3/3');
-    // The count badge would say the same as the position; the strip wins.
+    expect(container.querySelector('.history-scrub-name')).toHaveTextContent(
+      '· at Feature 3'
+    );
+    // The position is not drawn, but the tooltip and the name carry it.
+    expect(header).toHaveTextContent('step 3 of 3');
+    expect(screen.getByTitle('Step 3 of 3: Feature 3')).toBeInTheDocument();
+    // The count badge would say the same as the line; the line wins.
     expect(header.querySelector('.section-count')).toBeNull();
     // The column has its own header, so the docked caption goes.
     expect(container.querySelector('.sidebar-label')).toBeNull();
   });
 
-  it('points the strip at the selected feature and marks consumed bodies', () => {
+  it('points the line at the selected feature', () => {
     const consumed = {
       bodyId: 'body-1',
       name: 'Body 1',
       consumed: true
     } as unknown as BodyRepresentation;
-    const { container } = renderSidebar({
+    renderSidebar({
       features: [
         feature(1, { bodyId: 'body-1' } as Partial<FeatureNode>),
         feature(2),
@@ -101,13 +106,24 @@ describe('Sidebar', () => {
       representations: { 'body-1': consumed },
       selectedFeatureNodeId: 'node-2'
     });
-    const dots = container.querySelectorAll('.history-scrub-dot');
-    expect(dots[0]?.classList.contains('consumed')).toBe(true);
-    expect(dots[1]?.classList.contains('active')).toBe(true);
-    expect(screen.getByTitle('Expand History')).toHaveTextContent('Feature 2');
+    const header = screen.getByTitle('Expand History');
+    expect(header).toHaveTextContent('3 features · at Feature 2');
+    expect(header).toHaveTextContent('step 2 of 3');
   });
 
-  it('opens the list from the strip', async () => {
+  it('says where History is rolled back to', () => {
+    const paused = {
+      metadata: { [FEATURE_ROLLBACK_SUPPRESSED_METADATA_KEY]: true }
+    } as Partial<FeatureNode>;
+    renderSidebar({
+      features: [feature(1), feature(2, paused), feature(3, paused)]
+    });
+    const header = screen.getByTitle('Expand History');
+    expect(header).toHaveTextContent('3 features · rolled back to Feature 1');
+    expect(header).toHaveTextContent('step 1 of 3');
+  });
+
+  it('opens the list from the line', async () => {
     const user = userEvent.setup();
     const { props } = renderSidebar();
     await user.click(screen.getByTitle('Expand History'));
