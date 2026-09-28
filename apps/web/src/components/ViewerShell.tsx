@@ -225,7 +225,7 @@ interface ViewerShellProps {
   onEdgeCommit(size: number): void;
   onEdgeCancel(): void;
   onOpenEdgeKeypad(currentSize: number): boolean;
-  onDirectManipulationChange(dragging: boolean): void;
+  onDirectManipulationChange(dragging: boolean, source?: 'move'): void;
   sketchMode: SketchModeState | null;
   onSketchCommit(object: SketchObjectData): void;
   onEditSketchDimension(id: string, anchor: { x: number; y: number }): void;

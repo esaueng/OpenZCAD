@@ -634,7 +634,7 @@ interface ModelViewerProps {
   /** Edge value chip tapped: open exact entry for the radius/distance. */
   onOpenEdgeKeypad(currentSize: number): boolean;
   /** Semantic lifecycle signal for direct-manipulation drags. */
-  onDirectManipulationChange(dragging: boolean): void;
+  onDirectManipulationChange(dragging: boolean, source?: 'move'): void;
   /** Region-detected sketch rendering (curves + orange hover fills). */
   sketchViews: SketchViewData[];
   /** Stable ids of persistently selected bounded cells. */
@@ -6267,6 +6267,7 @@ export function ModelViewer({
         }
         moveDrag = drag;
         moveDragActiveRef.current = true;
+        onDirectManipulationChangeRef.current(true, 'move');
         const focus = { kind: data.kind, axis };
         updateMoveGizmoFocus(focus);
         positionMoveGizmoHud(event, focus, true);
@@ -6602,6 +6603,7 @@ export function ModelViewer({
         moveSnaps = [];
         hud.hide(snapGlyph);
         moveDragActiveRef.current = false;
+        onDirectManipulationChangeRef.current(false, 'move');
         gestures.release(event, null);
         const moveFocus = moveGizmoFocusFromHit(pickMoveGizmo(event));
         updateMoveGizmoFocus(moveFocus);
@@ -7009,6 +7011,7 @@ export function ModelViewer({
         moveSnaps = [];
         hud.hide(snapGlyph);
         moveDragActiveRef.current = false;
+        onDirectManipulationChangeRef.current(false, 'move');
         gestures.release(event);
         clearMoveGizmoHover();
       }

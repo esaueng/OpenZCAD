@@ -2201,6 +2201,7 @@ export function App() {
   // The viewer reports the gesture's pointer, which outlasts a refused
   // mid-drag value; it only counts while an operation is armed.
   const [directDragPointer, setDirectDragPointer] = useState(false);
+  const [moveDragPointer, setMoveDragPointer] = useState(false);
   if (directDragPointer && !isOperationState(interaction)) {
     // A cleared operation ends its gesture, whatever the viewer said last.
     setDirectDragPointer(false);
@@ -2208,7 +2209,8 @@ export function App() {
   const panels = usePanelSuspension(panelState, {
     sketching: interaction.mode === 'sketch',
     phase: isOperationState(interaction) ? interaction.phase : null,
-    pointerDown: directDragPointer && isOperationState(interaction)
+    pointerDown:
+      moveDragPointer || (directDragPointer && isOperationState(interaction))
   });
   const toolRef = useRef(tool);
   toolRef.current = tool;
@@ -17357,7 +17359,11 @@ export function App() {
             onEdgeCommit={handleEdgeCommit}
             onEdgeCancel={handleEdgeCancel}
             onOpenEdgeKeypad={handleOpenEdgeKeypad}
-            onDirectManipulationChange={(dragging) => {
+            onDirectManipulationChange={(dragging, source) => {
+              if (source === 'move') {
+                setMoveDragPointer(dragging);
+                return;
+              }
               setDirectDragPointer(dragging);
               dispatchInteraction({
                 type: dragging ? 'drag-engage' : 'drag-release'

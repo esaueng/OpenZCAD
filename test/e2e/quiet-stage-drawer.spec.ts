@@ -247,6 +247,41 @@ test('the Move panel heads the right lane over the drawer', async ({
     );
   }
 
+  const canvas = page.locator('.viewer-host canvas');
+  const bounds = await canvas.boundingBox();
+  expect(bounds).not.toBeNull();
+  let handle: { x: number; y: number } | null = null;
+  for (let radius = 0; radius <= 140 && !handle; radius += 10) {
+    for (const [dx, dy] of [
+      [1, 0],
+      [0.87, -0.5],
+      [0.5, -0.87],
+      [0, -1],
+      [-0.87, -0.5],
+      [-1, 0]
+    ] as const) {
+      const point = {
+        x: bounds!.x + bounds!.width / 2 + dx * radius,
+        y: bounds!.y + bounds!.height / 2 + dy * radius
+      };
+      await page.mouse.move(point.x, point.y);
+      if (
+        (await canvas.evaluate((element) => element.style.cursor)) === 'grab'
+      ) {
+        handle = point;
+        break;
+      }
+    }
+  }
+  expect(handle).not.toBeNull();
+  await page.mouse.move(handle!.x, handle!.y);
+  await page.mouse.down();
+  await page.mouse.move(handle!.x + 24, handle!.y, { steps: 3 });
+  await expect(drawer).toHaveCount(0);
+  await page.mouse.up();
+  await expect(drawer).toBeVisible();
+  expect(await storedDrawerOpen(page)).toBe(true);
+
   await move.getByRole('button', { name: 'Cancel', exact: true }).click();
   await expect(move).toHaveCount(0);
   await expect(page.locator('.stage-right > .command-float')).toHaveCount(0);
