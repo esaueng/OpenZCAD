@@ -1,5 +1,18 @@
 import type { ProjectDocument } from '@openzcad/shared';
 
+/** Only caller-owned projections may transfer; adapter/cache buffers stay live. */
+export function derivedMeshTransferables(
+  derived: ProjectDocument['derived']
+): ArrayBuffer[] {
+  const buffers = new Set<ArrayBuffer>();
+  for (const body of Object.values(derived.bodyRepresentations)) {
+    for (const view of [body.mesh.vertices, body.mesh.indices]) {
+      if (view.buffer instanceof ArrayBuffer) buffers.add(view.buffer);
+    }
+  }
+  return [...buffers];
+}
+
 /**
  * How an imported mesh crosses `postMessage`.
  *

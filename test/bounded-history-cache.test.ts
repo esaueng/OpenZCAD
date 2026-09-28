@@ -10,6 +10,7 @@ import {
   listFeaturesInOrder,
   setNodeMetadata,
   setParameter,
+  transformBody,
   updateFeature,
   updateSketchObject
 } from '@openzcad/document-core';
@@ -26,6 +27,7 @@ import {
   type ProjectDocument
 } from '@openzcad/shared';
 import { RemusKernel } from '../packages/kernel-adapter/src/remus-runtime';
+import { historyCheckpointIndices } from '../packages/kernel-adapter/src/exact-history-cache';
 
 // Same triangulation-layout normalization as incremental-rebuild-cache.test.
 // All topology, references, face ranges, edges, bounds, mass and warnings stay.
@@ -98,7 +100,118 @@ function ownership(adapter: ExactKernelAdapter, count: number) {
   return state.historyKernel;
 }
 
+function retained(count: number, limit = 32) {
+  return historyCheckpointIndices(count, limit);
+}
+
+function restoredBefore(count: number, changedIndex: number) {
+  return (
+    (retained(count)
+      .filter((index) => index < changedIndex)
+      .at(-1) ?? -1) + 1
+  );
+}
+
 describe('bounded history retention', { timeout: 120_000 }, () => {
+  it('rebuilds only the referenced primitive across an early parameter edit', async () => {
+    const events: RebuildCacheEvent[] = [];
+    const adapter = await createExactKernelAdapter({
+      onRebuildCacheEvent: (event) => events.push(event)
+    });
+    try {
+      let document = setParameter(boxes(100), { name: 'width', expression: '10' });
+      document = updateFeature(document, {
+        featureId: listFeaturesInOrder(document)[2]!.featureId,
+        data: { dimensions: { width: 'width', height: 8, depth: 6 } }
+      });
+      const before = await adapter.syncDocument(document);
+      const kernel = ownership(adapter, 26)!;
+      const makeBox = vi.spyOn(kernel, 'makeBox');
+      const changed = setParameter(document, { name: 'width', expression: '12' });
+      const actual = await adapter.syncDocument(changed);
+      expect(ownership(adapter, 26)).toBe(kernel);
+      expect(makeBox).toHaveBeenCalledOnce();
+      expect(events.at(-1)).toEqual({
+        kind: 'independent-reuse', restored: 2, replayed: 1,
+        reusedPrimitives: 97, remeasured: 1, reusedMeasurements: 99
+      });
+      expect(actual.bodyRepresentations[document.bodyOrder[99]!]!.mesh.vertices)
+        .toBe(before.bodyRepresentations[document.bodyOrder[99]!]!.mesh.vertices);
+      expect(actual.bodyRepresentations[document.bodyOrder[2]!]!.volume).toBe(576);
+      await equivalent(changed, actual);
+    } finally {
+      vi.restoreAllMocks();
+      adapter.dispose();
+    }
+  });
+
+  it('falls back to dependency replay when a modifier follows retained primitives', async () => {
+    const events: RebuildCacheEvent[] = [];
+    const adapter = await createExactKernelAdapter({
+      historyCheckpointLimit: 2,
+      onRebuildCacheEvent: (event) => events.push(event)
+    });
+    try {
+      let document = boxes(6);
+      await adapter.syncDocument(document);
+      document = edit(document, 3, 12);
+      await adapter.syncDocument(document);
+      expect(events.at(-1)?.kind).toBe('independent-reuse');
+      document = transformBody(document, {
+        name: 'Dependent move', targetBodyId: document.bodyOrder[3]!,
+        translation: { x: 7, y: 0, z: 0 }
+      }).document;
+      await equivalent(document, await adapter.syncDocument(document));
+      expect(events.at(-1)).toMatchObject({
+        kind: 'prefix-restore', restored: 2, replayed: 5
+      });
+      document = edit(document, 3, 14);
+      await equivalent(document, await adapter.syncDocument(document));
+      expect(events.at(-1)?.reusedPrimitives).toBeUndefined();
+    } finally {
+      adapter.dispose();
+    }
+  });
+
+  it('drops retained primitive handles if checkpoint discard fails', async () => {
+    const adapter = await createExactKernelAdapter();
+    try {
+      const document = boxes(33);
+      await adapter.syncDocument(document);
+      const old = ownership(adapter, retained(33).length)!;
+      const free = vi.spyOn(old, 'free');
+      vi.spyOn(old, 'discardCheckpoint').mockImplementationOnce(() => {
+        throw new Error('Injected discard failure');
+      });
+      const changed = edit(document, 0, 12);
+      await equivalent(changed, await adapter.syncDocument(changed));
+      expect(free).toHaveBeenCalledOnce();
+      expect(ownership(adapter, retained(33).length)).not.toBe(old);
+    } finally {
+      vi.restoreAllMocks();
+      adapter.dispose();
+    }
+  });
+
+  it('uses stable sparse positions under the default cap and dense unlimited opt-in', () => {
+    const firstHundred = historyCheckpointIndices(100, 32);
+    expect(firstHundred).toEqual([
+      ...Array.from({ length: 16 }, (_, index) => index),
+      17, 19, 21, 23, 27, 31, 39, 47, 63, 79
+    ]);
+    expect(historyCheckpointIndices(32, 32)).toEqual(
+      firstHundred.filter((index) => index < 32)
+    );
+    expect(historyCheckpointIndices(33, 32)).toEqual(
+      firstHundred.filter((index) => index < 33)
+    );
+    expect(historyCheckpointIndices(10_000, 32)).toHaveLength(32);
+    expect(historyCheckpointIndices(10_000, 32).at(-1)).toBe(527);
+    expect(historyCheckpointIndices(100, Number.POSITIVE_INFINITY)).toEqual(
+      Array.from({ length: 100 }, (_, index) => index)
+    );
+  });
+
   it.each([31, 32, 33, 48, 80])(
     'keeps exact early/middle/late edits and honest reuse at %i features',
     async (count) => {
@@ -109,7 +222,7 @@ describe('bounded history retention', { timeout: 120_000 }, () => {
       try {
         let document = boxes(count);
         await equivalent(document, await adapter.syncDocument(document));
-        ownership(adapter, Math.min(count, 32));
+        ownership(adapter, retained(count).length);
         for (const [step, index] of [
           count - 1,
           Math.floor(count / 2),
@@ -118,19 +231,26 @@ describe('bounded history retention', { timeout: 120_000 }, () => {
         ].entries()) {
           document = edit(document, index, 11 + step);
           const actual = await adapter.syncDocument(document);
-          const restored = Math.min(index, 32);
+          const restored = restoredBefore(count, index);
           expect(events.at(-1)).toEqual({
-            kind: restored ? 'prefix-restore' : 'full-rebuild',
+            kind: count - restored > 1 ? 'independent-reuse' : 'prefix-restore',
             restored,
-            replayed: count - restored,
-            reusedMeasurements: restored,
-            remeasured: count - restored
+            replayed: 1,
+            ...(count - restored > 1
+              ? { reusedPrimitives: count - restored - 1 }
+              : {}),
+            reusedMeasurements: count - 1,
+            remeasured: 1
           });
-          ownership(adapter, Math.min(count, 32));
+          ownership(adapter, retained(count).length);
           await equivalent(document, actual);
         }
         await equivalent(document, await adapter.syncDocument(document));
-        expect(events.at(-1)?.replayed).toBe(Math.max(0, count - 32));
+        expect(events.at(-1)?.replayed).toBe(0);
+        if (count === 80) {
+          expect(retained(count).at(-1)).toBe(79);
+          expect(events.at(-1)?.replayed).toBe(0);
+        }
       } finally {
         adapter.dispose();
         ownership(adapter, 0);
@@ -155,9 +275,9 @@ describe('bounded history retention', { timeout: 120_000 }, () => {
       });
       for (const [document, restored] of [
         [short, 0],
-        [long, 31],
-        [short, 31],
-        [long, 31],
+        [long, 28],
+        [short, 28],
+        [long, 28],
         [reordered, 10],
         [suppressed, 8],
         [reordered, 8],
@@ -165,15 +285,68 @@ describe('bounded history retention', { timeout: 120_000 }, () => {
       ] as const) {
         await equivalent(document, await adapter.syncDocument(document));
         expect(events.at(-1)?.restored).toBe(restored);
-        ownership(adapter, Math.min(document.featureOrder.length, 32));
+        ownership(adapter, retained(document.featureOrder.length).length);
       }
       for (let i = 0; i < 50; i++) {
         const document = edit(long, i % 2 ? 40 : 20, 11 + i);
         await equivalent(document, await adapter.syncDocument(document));
-        ownership(adapter, 32);
+        ownership(adapter, retained(long.featureOrder.length).length);
       }
     } finally {
       adapter.dispose();
+    }
+  });
+
+  it('retires a replayed kernel before export and sync without serving stale handles', async () => {
+    const events: RebuildCacheEvent[] = [];
+    const adapter = await createExactKernelAdapter({
+      onRebuildCacheEvent: (event) => events.push(event)
+    });
+    try {
+      const base = boxes(100);
+      const original = await adapter.syncDocument(base);
+      const originalMesh =
+        original.bodyRepresentations[base.bodyOrder[0]!]!.mesh;
+      let document = base;
+      for (let i = 0; i < 512; i++) {
+        document = edit(base, 99, 11 + (i % 2));
+        await adapter.syncDocument(document);
+        expect(events.at(-1)).toMatchObject({ restored: 80, replayed: 1, reusedPrimitives: 19 });
+      }
+      const old = ownership(adapter, 26)!;
+      const free = vi.spyOn(old, 'free');
+      const step = await adapter.exportStep(document, [document.bodyOrder[99]!]);
+      expect(step).toContain('MANIFOLD_SOLID_BREP');
+      expect(free).toHaveBeenCalledOnce();
+      expect(ownership(adapter, 26)).not.toBe(old);
+      expect(originalMesh.vertices.byteLength).toBeGreaterThan(0);
+      expect(originalMesh.indices.byteLength).toBeGreaterThan(0);
+      await equivalent(document, await adapter.syncDocument(document));
+
+      for (let i = 0; i < 492; i++) {
+        document = edit(base, 99, 13 + (i % 2));
+        await adapter.syncDocument(document);
+      }
+      const next = await adapter.syncDocument(document);
+      expect(events.at(-1)).toMatchObject({
+        kind: 'full-rebuild',
+        recycleReason: 'replay-budget',
+        restored: 0,
+        replayed: 100
+      });
+      await equivalent(document, next);
+      ownership(adapter, 26);
+      const manager = new CommandManager(base);
+      manager.applyDocumentEdit(document, 'Resize late box');
+      const undone = manager.undo();
+      await equivalent(undone, await adapter.syncDocument(undone));
+      const redone = manager.redo();
+      await equivalent(redone, await adapter.syncDocument(redone));
+      free.mockRestore();
+    } finally {
+      vi.restoreAllMocks();
+      adapter.dispose();
+      ownership(adapter, 0);
     }
   });
 
@@ -194,8 +367,8 @@ describe('bounded history retention', { timeout: 120_000 }, () => {
           : Math.min(5, Math.max(0, Math.floor(limit)));
         expect(events.at(-1)).toMatchObject({
           restored: retained,
-          replayed: 5 - retained,
-          reusedMeasurements: retained
+          replayed: retained > 0 ? 0 : 5,
+          reusedMeasurements: retained > 0 ? 5 : 0
         });
         ownership(adapter, retained);
       } finally {
@@ -213,7 +386,7 @@ describe('bounded history retention', { timeout: 120_000 }, () => {
       const empty = createProjectDocument('Empty', toUserId('cache-test'));
       const document = boxes(33, empty);
       await adapter.syncDocument(document);
-      const old = ownership(adapter, 32)!;
+      const old = ownership(adapter, retained(33).length)!;
       const free = vi.spyOn(old, 'free');
       await equivalent(empty, await adapter.syncDocument(empty));
       expect(free).toHaveBeenCalledOnce();
@@ -230,7 +403,7 @@ describe('bounded history retention', { timeout: 120_000 }, () => {
       ).toBe(0);
       await equivalent(document, await adapter.syncDocument(document));
       expect(events.at(-1)).toMatchObject({ restored: 0, replayed: 33 });
-      ownership(adapter, 32);
+      ownership(adapter, retained(33).length);
     } finally {
       vi.restoreAllMocks();
       adapter.dispose();
@@ -253,7 +426,7 @@ describe('bounded history retention', { timeout: 120_000 }, () => {
       for (let i = 0; i < 3; i++) {
         const actual = await adapter.syncDocument(changed);
         expect(actual.featureWarnings).toEqual(initial.featureWarnings);
-        expect(events.at(-1)).toMatchObject({ restored: 2, replayed: 3 });
+        expect(events.at(-1)).toMatchObject({ restored: 2, replayed: i === 0 ? 1 : 0 });
         ownership(adapter, 2);
         await equivalent(changed, actual);
       }
@@ -262,7 +435,7 @@ describe('bounded history retention', { timeout: 120_000 }, () => {
       expect(
         actual.featureWarnings?.some((w) => w.kind === 'build-failed')
       ).toBe(false);
-      expect(events.at(-1)).toMatchObject({ restored: 1, replayed: 4 });
+      expect(events.at(-1)).toMatchObject({ restored: 1, replayed: 1, reusedPrimitives: 3 });
       ownership(adapter, 2);
       await equivalent(repaired, actual);
     } finally {
@@ -350,8 +523,9 @@ describe('bounded history retention', { timeout: 120_000 }, () => {
       const changed = await adapter.syncDocument(document);
       expect(events.at(-1)).toMatchObject({
         restored: 2,
-        replayed: 4,
-        reusedMeasurements: 2
+        replayed: 1,
+        reusedPrimitives: 3,
+        reusedMeasurements: 5
       });
       const bodyId = document.bodyOrder[0]!;
       expect(changed.bodyRepresentations[bodyId]!.mesh).toEqual(
@@ -370,12 +544,12 @@ describe('bounded history retention', { timeout: 120_000 }, () => {
         undefined,
         analysis
       );
-      expect(events.at(-1)?.reusedMeasurements).toBe(1);
+      expect(events.at(-1)?.reusedMeasurements).toBe(5);
       await equivalent(document, analyzed, analysis);
       await adapter.syncDocument(document, undefined, undefined, analysis);
-      expect(events.at(-1)?.reusedMeasurements).toBe(2);
+      expect(events.at(-1)?.reusedMeasurements).toBe(6);
       await equivalent(document, await adapter.syncDocument(document));
-      expect(events.at(-1)?.reusedMeasurements).toBe(1);
+      expect(events.at(-1)?.reusedMeasurements).toBe(5);
       document = updateFeature(document, {
         featureId: listFeaturesInOrder(document)[0]!.featureId,
         data: { stepText: changedSource }
@@ -386,6 +560,57 @@ describe('bounded history retention', { timeout: 120_000 }, () => {
         reusedMeasurements: 0
       });
       ownership(adapter, 2);
+    } finally {
+      adapter.dispose();
+    }
+  });
+
+  it('reuses independent parametric features and invalidates transitive dependencies', async () => {
+    const events: RebuildCacheEvent[] = [];
+    const adapter = await createExactKernelAdapter({
+      onRebuildCacheEvent: (event) => events.push(event)
+    });
+    try {
+      let document = boxes(2);
+      document = setParameter(document, { name: 'width', expression: '10' });
+      document = setParameter(document, {
+        name: 'doubleWidth',
+        expression: 'width * 2'
+      });
+      document = setParameter(document, { name: 'height', expression: '8' });
+      document = updateFeature(document, {
+        featureId: listFeaturesInOrder(document)[0]!.featureId,
+        data: { dimensions: { width: 'doubleWidth', height: 8, depth: 6 } }
+      });
+      document = updateFeature(document, {
+        featureId: listFeaturesInOrder(document)[1]!.featureId,
+        data: { dimensions: { width: 10, height: 'height', depth: 6 } }
+      });
+      await equivalent(document, await adapter.syncDocument(document));
+
+      const unrelated = setParameter(document, {
+        name: 'unused',
+        expression: '99'
+      });
+      await equivalent(unrelated, await adapter.syncDocument(unrelated));
+      expect(events.at(-1)).toMatchObject({ restored: 2, replayed: 0 });
+
+      const changedHeight = setParameter(unrelated, {
+        name: 'height',
+        expression: '9'
+      });
+      await equivalent(
+        changedHeight,
+        await adapter.syncDocument(changedHeight)
+      );
+      expect(events.at(-1)).toMatchObject({ restored: 1, replayed: 1 });
+
+      const changedWidth = setParameter(changedHeight, {
+        name: 'width',
+        expression: '11'
+      });
+      await equivalent(changedWidth, await adapter.syncDocument(changedWidth));
+      expect(events.at(-1)).toMatchObject({ restored: 0, replayed: 1, reusedPrimitives: 1 });
     } finally {
       adapter.dispose();
     }
@@ -426,11 +651,12 @@ describe('bounded history retention', { timeout: 120_000 }, () => {
         ).toBeCloseTo(width * 2 * 8 * 6, 8);
         expect(events.at(-1)).toMatchObject({
           restored: 16,
-          replayed: 17,
-          reusedMeasurements: 16
+          replayed: 2,
+          reusedPrimitives: 15,
+          reusedMeasurements: 31
         });
         await equivalent(document, actual);
-        ownership(adapter, 32);
+        ownership(adapter, retained(33).length);
       }
     } finally {
       adapter.dispose();
@@ -461,7 +687,7 @@ describe('bounded history retention', { timeout: 120_000 }, () => {
       for (const next of [changed, manager.undo(), manager.redo()]) {
         const actual = await adapter.syncDocument(next);
         await equivalent(next, actual);
-        expect(events.at(-1)).toMatchObject({ restored: 2, replayed: 3 });
+        expect(events.at(-1)).toMatchObject({ restored: 2, replayed: 1 });
         const ids = actual.exportableBodyIds;
         const step = await adapter.exportStep(next, ids);
         ownership(adapter, 2);
@@ -532,25 +758,25 @@ describe('bounded history retention', { timeout: 120_000 }, () => {
 
   it('falls back exactly after a failed restore and releases the old kernel on reset', async () => {
     const adapter = await createExactKernelAdapter({
-      historyCheckpointLimit: 2
+      historyCheckpointLimit: Infinity
     });
     try {
       const document = boxes(5);
       await adapter.syncDocument(document);
-      const old = ownership(adapter, 2)!;
+      const old = ownership(adapter, 5)!;
       const free = vi.spyOn(old, 'free');
       const restore = vi.spyOn(old, 'restore').mockImplementationOnce(() => {
         throw new Error('Injected restore failure');
       });
       await equivalent(document, await adapter.syncDocument(document));
-      expect(ownership(adapter, 2)).not.toBe(old);
+      expect(ownership(adapter, 5)).not.toBe(old);
       expect(free).toHaveBeenCalledOnce();
       restore.mockRestore();
       free.mockRestore();
       adapter.dispose();
       expect(ownership(adapter, 0)).toBeNull();
       await equivalent(document, await adapter.syncDocument(document));
-      ownership(adapter, 2);
+      ownership(adapter, 5);
     } finally {
       adapter.dispose();
     }
