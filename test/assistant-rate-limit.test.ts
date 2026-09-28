@@ -9,7 +9,6 @@ import {
 
 interface Lease {
   accountBucket: string;
-  ipBucket: string;
   expiresAt: number;
 }
 
@@ -21,10 +20,6 @@ function assistantGuardD1(
   const usage = new Map<
     string,
     { windowStart: number; requestCount: number; costUnits: number }
-  >();
-  const globalUsage = new Map<
-    number,
-    { requestCount: number; costUnits: number }
   >();
   const leases = new Map<string, Lease>();
 
@@ -59,14 +54,11 @@ function assistantGuardD1(
           const [
             leaseId,
             accountBucket,
-            ipBucket,
+            ,
             expiresAt,
             ,
             nowSeconds,
-            accountLimit,
-            ,
-            ,
-            ipLimit
+            accountLimit
           ] = values;
           const active = [...leases.values()].filter(
             (lease) => lease.expiresAt > Number(nowSeconds)
@@ -74,15 +66,12 @@ function assistantGuardD1(
           if (
             active.filter(
               (lease) => lease.accountBucket === String(accountBucket)
-            ).length >= Number(accountLimit) ||
-            active.filter((lease) => lease.ipBucket === String(ipBucket))
-              .length >= Number(ipLimit)
+            ).length >= Number(accountLimit)
           ) {
             return null;
           }
           leases.set(String(leaseId), {
             accountBucket: String(accountBucket),
-            ipBucket: String(ipBucket),
             expiresAt: Number(expiresAt)
           });
           return { lease_id: leaseId } as T;
@@ -101,20 +90,6 @@ function assistantGuardD1(
                 }
               : { windowStart, requestCount: 1, costUnits: cost };
           usage.set(bucket, current);
-          return {
-            request_count: current.requestCount,
-            cost_units: current.costUnits
-          } as T;
-        }
-        if (query.includes('INSERT INTO ai_global_daily_usage')) {
-          const dayStart = Number(values[0]);
-          const cost = Number(values[1]);
-          const previous = globalUsage.get(dayStart);
-          const current = {
-            requestCount: (previous?.requestCount ?? 0) + 1,
-            costUnits: (previous?.costUnits ?? 0) + cost
-          };
-          globalUsage.set(dayStart, current);
           return {
             request_count: current.requestCount,
             cost_units: current.costUnits
@@ -177,9 +152,7 @@ describe('assistant provider usage guard', () => {
       AI_IDENTITY_PEPPER: 'rate-test-pepper',
       AI_RATE_LIMIT_WINDOW_SECONDS: '60',
       AI_ACCOUNT_RATE_LIMIT_REQUESTS: '2',
-      AI_IP_RATE_LIMIT_REQUESTS: '20',
-      AI_ACCOUNT_COST_LIMIT_UNITS: '100',
-      AI_IP_COST_LIMIT_UNITS: '100'
+      AI_ACCOUNT_COST_LIMIT_UNITS: '100'
     };
     const userId = toUserId('user_rate_test');
     const options = { cost: 1, leaseMs: 30_000, now: 1_000 };
@@ -248,9 +221,7 @@ describe('assistant provider usage guard', () => {
       AI_IDENTITY_PEPPER: 'personal-window-test-pepper',
       AI_RATE_LIMIT_WINDOW_SECONDS: '60',
       AI_ACCOUNT_RATE_LIMIT_REQUESTS: '2',
-      AI_IP_RATE_LIMIT_REQUESTS: '2',
-      AI_ACCOUNT_COST_LIMIT_UNITS: '5',
-      AI_IP_COST_LIMIT_UNITS: '5'
+      AI_ACCOUNT_COST_LIMIT_UNITS: '5'
     };
     const userId = toUserId('user_personal_window');
     const personal = {
@@ -275,10 +246,15 @@ describe('assistant provider usage guard', () => {
     }
 
     // Self-funded traffic must not consume the deployment-funded window.
-    const funded = await acquireAssistantPermit(assistantRequest(), userId, env, {
-      ...personal,
-      deploymentFunded: true
-    });
+    const funded = await acquireAssistantPermit(
+      assistantRequest(),
+      userId,
+      env,
+      {
+        ...personal,
+        deploymentFunded: true
+      }
+    );
     expect(funded.allowed).toBe(true);
     if (funded.allowed) {
       await funded.release();
@@ -310,57 +286,43 @@ describe('assistant provider usage guard', () => {
     }
   });
 
-  it('enforces one aggregate daily deployment budget across accounts', async () => {
+  it('lets each account use its own quota even when legacy shared caps are configured', async () => {
     const fixture = assistantGuardD1();
     const env = {
       ENVIRONMENT: 'beta' as const,
       DB: fixture.db,
-      AI_IDENTITY_PEPPER: 'global-budget-test-pepper',
-      AI_GLOBAL_DAILY_REQUEST_LIMIT: '2',
-      AI_GLOBAL_DAILY_COST_LIMIT_UNITS: '100',
-      AI_ACCOUNT_RATE_LIMIT_REQUESTS: '20',
-      AI_IP_RATE_LIMIT_REQUESTS: '20',
-      AI_ACCOUNT_COST_LIMIT_UNITS: '100',
-      AI_IP_COST_LIMIT_UNITS: '100'
+      AI_GLOBAL_DAILY_REQUEST_LIMIT: '1',
+      AI_GLOBAL_DAILY_COST_LIMIT_UNITS: '1',
+      AI_IP_RATE_LIMIT_REQUESTS: '1',
+      AI_IP_COST_LIMIT_UNITS: '1',
+      AI_IP_CONCURRENCY_LIMIT: '1',
+      AI_ACCOUNT_RATE_LIMIT_REQUESTS: '2',
+      AI_ACCOUNT_COST_LIMIT_UNITS: '2'
     };
     const options = { cost: 1, leaseMs: 30_000, now: 1_000 };
 
-    for (let attempt = 0; attempt < 2; attempt += 1) {
-      const permit = await acquireAssistantPermit(
-        assistantRequest(`203.0.113.${50 + attempt}`),
-        toUserId(`user_global_${attempt}`),
+    for (const user of ['first', 'second']) {
+      for (let attempt = 0; attempt < 2; attempt += 1) {
+        const permit = await acquireAssistantPermit(
+          assistantRequest(),
+          toUserId(user),
+          env,
+          options
+        );
+        expect(permit.allowed).toBe(true);
+        if (permit.allowed) await permit.release();
+      }
+      const denied = await acquireAssistantPermit(
+        assistantRequest(),
+        toUserId(user),
         env,
         options
       );
-      expect(permit.allowed).toBe(true);
-      if (permit.allowed) {
-        await permit.release();
-      }
-    }
-
-    const personalPermit = await acquireAssistantPermit(
-      assistantRequest('203.0.113.59'),
-      toUserId('user_personal_budget'),
-      env,
-      { ...options, deploymentFunded: false }
-    );
-    expect(personalPermit.allowed).toBe(true);
-    if (personalPermit.allowed) {
-      await personalPermit.release();
-    }
-
-    const denied = await acquireAssistantPermit(
-      assistantRequest('203.0.113.60'),
-      toUserId('user_global_2'),
-      env,
-      options
-    );
-    expect(denied.allowed).toBe(false);
-    if (!denied.allowed) {
-      expect(denied.response.status).toBe(429);
-      await expect(denied.response.json()).resolves.toMatchObject({
-        code: 'AI_GLOBAL_BUDGET_EXHAUSTED'
-      });
+      expect(denied.allowed).toBe(false);
+      if (!denied.allowed)
+        expect(await denied.response.json()).toMatchObject({
+          code: 'AI_RATE_LIMITED'
+        });
     }
   });
 
@@ -383,9 +345,7 @@ describe('assistant provider usage guard', () => {
       AI_API_KEY: 'test-key',
       AI_BASE_URL: 'https://models.example.test/v1/responses',
       AI_ACCOUNT_RATE_LIMIT_REQUESTS: '2',
-      AI_IP_RATE_LIMIT_REQUESTS: '2',
-      AI_ACCOUNT_COST_LIMIT_UNITS: '100',
-      AI_IP_COST_LIMIT_UNITS: '100'
+      AI_ACCOUNT_COST_LIMIT_UNITS: '100'
     };
     const request = () =>
       new Request('https://example.com/api/assistant/proposals', {
@@ -422,18 +382,15 @@ describe('assistant provider usage guard', () => {
     expect(providerFetch).toHaveBeenCalledTimes(2);
   });
 
-  it('limits concurrent work by account and opaque IP, then releases on cancellation', async () => {
+  it('limits concurrent work per account, then releases on cancellation', async () => {
     const fixture = assistantGuardD1();
     const env = {
       ENVIRONMENT: 'beta' as const,
       DB: fixture.db,
       AI_IDENTITY_PEPPER: 'concurrency-test-pepper',
       AI_ACCOUNT_CONCURRENCY_LIMIT: '1',
-      AI_IP_CONCURRENCY_LIMIT: '1',
       AI_ACCOUNT_RATE_LIMIT_REQUESTS: '20',
-      AI_IP_RATE_LIMIT_REQUESTS: '20',
-      AI_ACCOUNT_COST_LIMIT_UNITS: '100',
-      AI_IP_COST_LIMIT_UNITS: '100'
+      AI_ACCOUNT_COST_LIMIT_UNITS: '100'
     };
     const options = { cost: 1, leaseMs: 30_000, now: 1_000 };
     const firstUser = toUserId('user_concurrency_a');
@@ -458,7 +415,7 @@ describe('assistant provider usage guard', () => {
       env,
       options
     );
-    expect(sameIp.allowed).toBe(false);
+    expect(sameIp.allowed).toBe(true);
 
     if (active.allowed) {
       const response = active.track(
@@ -473,7 +430,8 @@ describe('assistant provider usage guard', () => {
       );
       await response.body?.cancel();
     }
-    expect(fixture.activeLeases()).toBe(0);
+    expect(fixture.activeLeases()).toBe(1);
+    if (sameIp.allowed) await sameIp.release();
 
     const afterCancel = await acquireAssistantPermit(
       assistantRequest(),
@@ -510,9 +468,7 @@ describe('assistant provider usage guard', () => {
         DB: fixture.db,
         AI_IDENTITY_PEPPER: 'stream-completion-test-pepper',
         AI_ACCOUNT_RATE_LIMIT_REQUESTS: '20',
-        AI_IP_RATE_LIMIT_REQUESTS: '20',
-        AI_ACCOUNT_COST_LIMIT_UNITS: '100',
-        AI_IP_COST_LIMIT_UNITS: '100'
+        AI_ACCOUNT_COST_LIMIT_UNITS: '100'
       },
       { cost: 1, leaseMs: 30_000, now: 1_000 }
     );
@@ -541,7 +497,7 @@ describe('assistant provider usage guard', () => {
     expect(fixture.activeLeases()).toBe(0);
   });
 
-  it('fails closed in beta without both D1 and a connecting IP, while preserving local development', async () => {
+  it('fails closed in beta without D1, while preserving local development', async () => {
     const userId = toUserId('user_guard_availability');
     const unavailable = await acquireAssistantPermit(
       assistantRequest(),
@@ -568,7 +524,8 @@ describe('assistant provider usage guard', () => {
       },
       { cost: 1, leaseMs: 30_000 }
     );
-    expect(noIp.allowed).toBe(false);
+    expect(noIp.allowed).toBe(true);
+    if (noIp.allowed) await noIp.release();
 
     const noPepper = await acquireAssistantPermit(
       assistantRequest(),
@@ -576,7 +533,8 @@ describe('assistant provider usage guard', () => {
       { ENVIRONMENT: 'beta', DB: fixture.db },
       { cost: 1, leaseMs: 30_000 }
     );
-    expect(noPepper.allowed).toBe(false);
+    expect(noPepper.allowed).toBe(true);
+    if (noPepper.allowed) await noPepper.release();
 
     const local = await acquireAssistantPermit(
       new Request('https://example.com/api/assistant/proposals'),
@@ -585,5 +543,152 @@ describe('assistant provider usage guard', () => {
       { cost: 1, leaseMs: 30_000 }
     );
     expect(local.allowed).toBe(true);
+  });
+});
+
+describe('premium assistant enforcement', () => {
+  const premiumEmail = 'premium@example.com';
+  function premiumEnv() {
+    const fixture = assistantGuardD1();
+    return {
+      DB: fixture.db,
+      AI_IDENTITY_PEPPER: 'test-pepper',
+      PREMIUM_USER_EMAILS: premiumEmail
+    };
+  }
+  const options = { cost: 1, leaseMs: 10_000, now: 1_800_000_000_000 };
+  it('uses premium quotas and preserves usage on downgrade', async () => {
+    const env = premiumEnv();
+    const user = toUserId('premium-account');
+    for (let i = 0; i < 7; i++) {
+      const permit = await acquireAssistantPermit(
+        assistantRequest(),
+        user,
+        env,
+        { ...options, email: premiumEmail }
+      );
+      expect(permit.allowed).toBe(true);
+      if (permit.allowed) await permit.release();
+    }
+    env.PREMIUM_USER_EMAILS = '';
+    const downgraded = await acquireAssistantPermit(
+      assistantRequest(),
+      user,
+      env,
+      { ...options, email: premiumEmail }
+    );
+    expect(downgraded.allowed).toBe(false);
+    if (!downgraded.allowed)
+      expect(await downgraded.response.json()).toMatchObject({
+        code: 'AI_RATE_LIMITED'
+      });
+  });
+  it('does not accept a premium tier or email from request headers', async () => {
+    const env = { ...premiumEnv(), AI_ACCOUNT_RATE_LIMIT_REQUESTS: '1' };
+    const request = assistantRequest();
+    request.headers.set('x-account-tier', 'premium');
+    request.headers.set('x-user-email', premiumEmail);
+    for (let i = 0; i < 2; i++) {
+      const permit = await acquireAssistantPermit(
+        request,
+        toUserId('free'),
+        env,
+        options
+      );
+      expect(permit.allowed).toBe(i === 0);
+      if (permit.allowed) await permit.release();
+    }
+  });
+  it('enforces Premium weighted usage independently of Free accounts', async () => {
+    const env = {
+      ...premiumEnv(),
+      AI_PREMIUM_ACCOUNT_COST_LIMIT_UNITS: '5',
+      AI_ACCOUNT_COST_LIMIT_UNITS: '2'
+    };
+    const first = await acquireAssistantPermit(
+      assistantRequest(),
+      toUserId('premium'),
+      env,
+      { ...options, email: premiumEmail, cost: 4 }
+    );
+    expect(first.allowed).toBe(true);
+    if (first.allowed) await first.release();
+    const free = await acquireAssistantPermit(
+      assistantRequest(),
+      toUserId('free'),
+      env,
+      { ...options, cost: 2 }
+    );
+    expect(free.allowed).toBe(true);
+    if (free.allowed) await free.release();
+    const overPremium = await acquireAssistantPermit(
+      assistantRequest(),
+      toUserId('premium'),
+      env,
+      { ...options, email: premiumEmail, cost: 2 }
+    );
+    expect(overPremium.allowed).toBe(false);
+    if (!overPremium.allowed)
+      expect(await overPremium.response.json()).toMatchObject({
+        code: 'AI_RATE_LIMITED'
+      });
+  });
+  it('returns the server-resolved membership in session responses', async () => {
+    const env = {
+      ...premiumEnv(),
+      PREMIUM_USER_EMAILS: 'allowed@example.com',
+      AUTH_MODE: 'email-code' as const
+    };
+    const response = await worker.fetch(
+      new Request('https://example.com/api/session', {
+        headers: { cookie: '__Host-openzcad_session=test-token' }
+      }),
+      env
+    );
+    expect(response.status).toBe(200);
+    expect(await response.json()).toMatchObject({
+      entitlements: { tier: 'premium', artifactLimitBytes: 100 * 1024 ** 3 }
+    });
+  });
+});
+
+describe('premium operational ceilings', () => {
+  it('bounds Premium concurrency and reclaims a released slot', async () => {
+    const fixture = assistantGuardD1();
+    const env = {
+      DB: fixture.db,
+      AI_IDENTITY_PEPPER: 'test-pepper',
+      PREMIUM_USER_EMAILS: 'premium@example.com'
+    };
+    const options = {
+      cost: 1,
+      leaseMs: 10_000,
+      email: 'premium@example.com',
+      now: 1_800_000_000_000
+    };
+    const permits = [];
+    for (let i = 0; i < 8; i++) {
+      const permit = await acquireAssistantPermit(
+        assistantRequest(),
+        toUserId('premium'),
+        env,
+        options
+      );
+      expect(permit.allowed).toBe(true);
+      permits.push(permit);
+    }
+    const ninth = await acquireAssistantPermit(
+      assistantRequest(),
+      toUserId('premium'),
+      env,
+      options
+    );
+    expect(ninth.allowed).toBe(false);
+    if (!ninth.allowed)
+      expect(await ninth.response.json()).toMatchObject({
+        code: 'AI_CONCURRENCY_LIMITED'
+      });
+    for (const permit of permits) if (permit.allowed) await permit.release();
+    expect(fixture.activeLeases()).toBe(0);
   });
 });

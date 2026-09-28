@@ -1,4 +1,5 @@
 import type { CollaborationServerMessage } from '@openzcad/shared';
+import { ProjectCollaborationRoom } from '@openzcad/cloudflare-adapters';
 
 /**
  * Fake Durable Object storage: one flat key/value map with the batch `put` and
@@ -7,6 +8,7 @@ import type { CollaborationServerMessage } from '@openzcad/shared';
  */
 export interface FakeRoomStorage {
   values: Map<string, unknown>;
+  reads: string[];
   context: {
     storage: {
       get<T>(key: string): Promise<T | undefined>;
@@ -15,17 +17,25 @@ export interface FakeRoomStorage {
       deleteAll(): Promise<void>;
     };
     blockConcurrencyWhile<T>(callback: () => Promise<T>): Promise<T>;
+    acceptWebSocket(socket: WebSocket): void;
+    getWebSockets(): WebSocket[];
+    activate(room: ProjectCollaborationRoom): void;
   };
 }
 
 export function createRoomContext(
   values = new Map<string, unknown>()
 ): FakeRoomStorage {
+  const sockets = new Set<FakeWebSocket>();
+  const reads: string[] = [];
+  let activeRoom: ProjectCollaborationRoom | null = null;
   return {
     values,
+    reads,
     context: {
       storage: {
         async get<T>(key: string) {
+          reads.push(key);
           return values.get(key) as T | undefined;
         },
         async put(keyOrEntries: unknown, value?: unknown) {
@@ -57,9 +67,33 @@ export function createRoomContext(
       },
       async blockConcurrencyWhile<T>(callback: () => Promise<T>) {
         return callback();
+      },
+      acceptWebSocket(socket: WebSocket) {
+        const fake = socket as unknown as FakeWebSocket;
+        sockets.add(fake);
+        if (activeRoom) fake.setRoom(activeRoom);
+      },
+      getWebSockets() {
+        return Array.from(sockets).filter(
+          (socket) => socket.readyState === FakeWebSocket.OPEN
+        ) as unknown as WebSocket[];
+      },
+      activate(room: ProjectCollaborationRoom) {
+        activeRoom = room;
+        for (const socket of sockets) socket.setRoom(room);
       }
     }
   };
+}
+
+/** Uses the same context across room reconstructions to simulate hibernation. */
+export function createTestRoom(
+  context: FakeRoomStorage['context'],
+  env: unknown
+): ProjectCollaborationRoom {
+  const room = new ProjectCollaborationRoom(context, env);
+  context.activate(room);
+  return room;
 }
 
 /**
@@ -75,10 +109,9 @@ export async function settleRoom(room: {
 }
 
 /** Serialized size of every stored value, keyed the same as storage. */
-export function storedValueBytes(values: Map<string, unknown>): Map<
-  string,
-  number
-> {
+export function storedValueBytes(
+  values: Map<string, unknown>
+): Map<string, number> {
   const encoder = new TextEncoder();
   return new Map(
     Array.from(values, ([key, value]) => [
@@ -100,12 +133,28 @@ export class FakeWebSocket {
   readyState: number = FakeWebSocket.OPEN;
   readonly sent: string[] = [];
   closed: { code: number; reason: string } | null = null;
+  attachmentWrites = 0;
+  private attachment: unknown;
+  private room: ProjectCollaborationRoom | null = null;
   private readonly listeners = new Map<
     string,
     Array<(event: unknown) => void>
   >();
 
   accept(): void {}
+
+  setRoom(room: ProjectCollaborationRoom): void {
+    this.room = room;
+  }
+
+  serializeAttachment(value: unknown): void {
+    this.attachment = structuredClone(value);
+    this.attachmentWrites += 1;
+  }
+
+  deserializeAttachment(): unknown {
+    return structuredClone(this.attachment);
+  }
 
   addEventListener(type: string, handler: (event: unknown) => void): void {
     const existing = this.listeners.get(type) ?? [];
@@ -128,6 +177,11 @@ export class FakeWebSocket {
    * settles rather than after `dispatch` returns.
    */
   async receive(data: string): Promise<void> {
+    if (this.room) {
+      void this.room.webSocketMessage(this as unknown as WebSocket, data);
+      await new Promise((resolve) => setTimeout(resolve, 0));
+      return;
+    }
     for (const handler of this.listeners.get('message') ?? []) {
       handler({ data });
     }
