@@ -33,6 +33,13 @@ const out = process.env.HISTORY_OUT ?? 'artifacts/history-cache';
 const samples = Number(process.env.HISTORY_SAMPLES ?? 5);
 const session = Number(process.env.HISTORY_SESSION ?? 0);
 const filter = process.env.HISTORY_FILTER ?? 'boxes';
+const counts = process.env.HISTORY_COUNTS
+  ? process.env.HISTORY_COUNTS.split(',').map(Number)
+  : session
+    ? [33]
+    : filter === 'towel'
+      ? [32, 33, 48]
+      : [31, 32, 33, 48, 80];
 import { createExactKernelAdapter as create } from '@openzcad/kernel-adapter/exact';
 mkdirSync(out, { recursive: true });
 const output = `${out}/${mode}-${filter}${session ? '-session' : ''}.jsonl`;
@@ -112,11 +119,7 @@ async function parity(
 it('sequential history-cache benchmark', async () => {
   if (filter === 'towel' && !process.env.HISTORY_TOWEL_STEP)
     throw new Error('Set HISTORY_TOWEL_STEP to a local STEP fixture.');
-  for (const count of session
-    ? [33]
-    : filter === 'towel'
-      ? [32, 33, 48]
-      : [31, 32, 33, 48, 80]) {
+  for (const count of counts) {
     const name = `${filter}-${count}`;
     let document = createProjectDocument(name, toUserId('perf'));
     if (filter === 'towel')
