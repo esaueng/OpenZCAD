@@ -341,7 +341,6 @@ export interface HistoryCheckpointEntry {
  */
 export interface MeasuredBodyCacheEntry {
   analysisKey?: string;
-  includeMassProperties: boolean;
   /** `shape.solids.join(',')` — the handle-identity key. */
   solidKey: string;
   /** Whether the cached measure ran with strict union validation. */
@@ -367,13 +366,15 @@ export function measuredShapeBytes(measured: MeasuredShape): number {
 
 /** Telemetry for tests and tuning; not part of the derived state. */
 export interface RebuildCacheEvent {
-  kind: 'full-rebuild' | 'prefix-restore';
+  kind: 'full-rebuild' | 'prefix-restore' | 'independent-reuse';
   /** The old history kernel was retired after exhausting its replay budget. */
   recycleReason?: 'replay-budget';
   /** Features replayed by this sync (total on a full rebuild). */
   replayed: number;
   /** Features restored from the cache (0 on a full rebuild). */
   restored: number;
+  /** Independent primitive features kept in the current kernel after the prefix. */
+  reusedPrimitives?: number;
   /** Bodies tessellated and measured by this sync. */
   remeasured: number;
   /** Bodies whose measurement was served from the per-body cache. */

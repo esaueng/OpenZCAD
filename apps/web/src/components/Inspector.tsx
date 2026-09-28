@@ -1,4 +1,5 @@
 import type { ExtrudeFormValue } from './forms/ExtrudeForm';
+import type { MassPropertiesRead } from '@openzcad/kernel-adapter/exact';
 import { Fragment, useEffect, useRef, useState, type ReactNode } from 'react';
 import { unitLabel } from '../lib/measurements';
 import { MoreHorizontal, Trash2, X } from 'lucide-react';
@@ -10,6 +11,7 @@ import type {
   ProjectDocument,
   UnitSystem,
   BodyId,
+  BodyMassProperties,
   BodyRepresentation,
   BooleanOperation,
   FaceGeometry,
@@ -186,6 +188,14 @@ export interface InspectorCallbacks {
       input: RecognizeImportedFaceInput
     ) => Promise<FaceRecognitionSummary>;
   };
+  /** The live document and worker used only when mass details are opened. */
+  massPropertiesDocument?: ProjectDocument | null;
+  massPropertiesWorker?: {
+    massProperties: (
+      document: ProjectDocument,
+      bodyId: BodyId
+    ) => Promise<MassPropertiesRead>;
+  };
   /**
    * Explicit recognition outcome, for tests only. When present (even null)
    * the panel renders it directly and never queries; when absent the panel
@@ -356,17 +366,82 @@ function TopologyMeasurements({
 
 function BodyStats({
   body,
-  units
+  units,
+  document,
+  worker
 }: {
   body: BodyRepresentation;
   units: UnitSystem;
+  document?: ProjectDocument | null;
+  worker?: InspectorProps['massPropertiesWorker'];
 }) {
+  const [massOpen, setMassOpen] = useState(false);
+  const [query, setQuery] = useState<{
+    document: ProjectDocument | null | undefined;
+    body: BodyRepresentation;
+    status: 'pending' | 'ready' | 'unavailable' | 'error';
+    properties?: BodyMassProperties;
+    message?: string;
+  } | null>(null);
+  const workerRef = useRef(worker);
+  workerRef.current = worker;
+  useEffect(() => {
+    if (!massOpen || body.massProperties) return;
+    let active = true;
+    if (!document || !workerRef.current) {
+      setQuery({
+        document,
+        body,
+        status: 'unavailable',
+        message: 'Mass properties are unavailable for this document.'
+      });
+      return;
+    }
+    setQuery({ document, body, status: 'pending' });
+    void workerRef.current
+      .massProperties(document, body.bodyId)
+      .then((result) => {
+        if (!active) return;
+        setQuery(
+          result.status === 'ready'
+            ? {
+                document,
+                body,
+                status: 'ready',
+                properties: result.properties
+              }
+            : {
+                document,
+                body,
+                status: 'unavailable',
+                message: result.reason
+              }
+        );
+      })
+      .catch((error: unknown) => {
+        if (!active) return;
+        setQuery({
+          document,
+          body,
+          status: 'error',
+          message:
+            error instanceof Error ? error.message : 'Mass measurement failed.'
+        });
+      });
+    return () => {
+      active = false;
+    };
+  }, [massOpen, document, body]);
   const size = {
     x: body.bbox.max.x - body.bbox.min.x,
     y: body.bbox.max.y - body.bbox.min.y,
     z: body.bbox.max.z - body.bbox.min.z
   };
-  const mass = body.massProperties;
+  const currentQuery =
+    query?.document === document && query?.body === body ? query : null;
+  const mass =
+    body.massProperties ??
+    (currentQuery?.status === 'ready' ? currentQuery.properties : undefined);
   return (
     <>
       <CollapsibleSection title="Measurements" defaultOpen>
@@ -388,13 +463,11 @@ function BodyStats({
           </span>
         </div>
       </CollapsibleSection>
-      {mass ? (
-        // Unit density: multiply by a material density for physical values.
-        // Rendered only when the kernel integrated this solid — the absence
-        // of the section is the honest reading of a failed integration.
-        // The heading says so explicitly: without it these read as physical
-        // mass, and length⁵ moments doubly so.
-        <CollapsibleSection title="Mass properties (at unit density)">
+      <CollapsibleSection
+        title="Mass properties (at unit density)"
+        onToggle={setMassOpen}
+      >
+        {mass ? (
           <div className="kv-grid">
             <b>center of mass</b>
             <span>
@@ -411,8 +484,18 @@ function BodyStats({
               physical values
             </span>
           </div>
-        </CollapsibleSection>
-      ) : null}
+        ) : (
+          <p role="status" aria-live="polite">
+            {currentQuery?.status === 'pending'
+              ? 'Measuring mass properties…'
+              : currentQuery?.status === 'error'
+                ? `Mass measurement failed: ${currentQuery.message}`
+                : currentQuery?.status === 'unavailable'
+                  ? currentQuery.message
+                  : 'Open this section to measure mass properties.'}
+          </p>
+        )}
+      </CollapsibleSection>
     </>
   );
 }
@@ -478,14 +561,20 @@ function PanelOverflow({ children }: { children: ReactNode }) {
 function CollapsibleSection({
   title,
   defaultOpen = false,
+  onToggle,
   children
 }: {
   title: string;
   defaultOpen?: boolean;
+  onToggle?: (open: boolean) => void;
   children: ReactNode;
 }) {
   return (
-    <details className="panel-section" open={defaultOpen}>
+    <details
+      className="panel-section"
+      open={defaultOpen}
+      onToggle={(event) => onToggle?.(event.currentTarget.open)}
+    >
       <summary className="section-title">{title}</summary>
       {children}
     </details>
@@ -1680,7 +1769,14 @@ export function Inspector(props: InspectorProps) {
             }
           />
         )}
-        {selectedBody && <BodyStats body={selectedBody} units={units} />}
+        {selectedBody && (
+          <BodyStats
+            body={selectedBody}
+            units={units}
+            document={props.massPropertiesDocument}
+            worker={props.massPropertiesWorker}
+          />
+        )}
         {selectedTopology?.kind !== 'body' && selectedTopology && (
           <div className="topology-selection">
             <b>{selectedTopology.kind}</b>
@@ -1716,7 +1812,14 @@ export function Inspector(props: InspectorProps) {
             units={units}
           />
         ) : null}
-        {selectedBody && <BodyStats body={selectedBody} units={units} />}
+        {selectedBody && (
+          <BodyStats
+            body={selectedBody}
+            units={units}
+            document={props.massPropertiesDocument}
+            worker={props.massPropertiesWorker}
+          />
+        )}
         <div className="object-definition-row">
           <span>
             <b>Defined by</b> {selectedFeature.name}
@@ -1788,7 +1891,12 @@ export function Inspector(props: InspectorProps) {
               recognitionWorker={props.recognitionWorker}
             />
           )}
-        <BodyStats body={selectedBody} units={units} />
+        <BodyStats
+          body={selectedBody}
+          units={units}
+          document={props.massPropertiesDocument}
+          worker={props.massPropertiesWorker}
+        />
       </>
     );
   }

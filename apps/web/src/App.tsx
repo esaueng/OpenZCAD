@@ -17701,6 +17701,8 @@ export function App() {
                 recognitionQuery={importedFaceRecognitionQuery}
                 recognitionCache={importedFaceRecognitionCache}
                 recognitionWorker={geometry}
+                massPropertiesDocument={doc}
+                massPropertiesWorker={geometry}
                 onLaunchTool={launchTool}
                 onSelectBodies={handleSelectBodiesFromPickList}
                 onPreviewBodyAppearance={previewBodyAppearance}

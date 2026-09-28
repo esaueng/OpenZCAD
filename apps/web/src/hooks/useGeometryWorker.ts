@@ -13,6 +13,7 @@ import { mark, measure, timed } from '../lib/perf';
 import type {
   ExactSectionPlane,
   MeshQualityReport,
+  MassPropertiesRead,
   SectionOutlineReport,
   SketchPlanarOperation,
   SketchPlanarResult,
@@ -157,6 +158,11 @@ export interface GeometryWorkerApi {
     deflection: number,
     options?: { onState?(state: GeometryWorkerState): void }
   ): Promise<MeshQualityReport>;
+  /** Queries live geometry; a stale derived-cache hit restores exact history first. */
+  massProperties(
+    document: ProjectDocument,
+    bodyId: BodyId
+  ): Promise<MassPropertiesRead>;
   /**
    * The exact, kernel-computed section at one plane — section curves, not the
    * viewport's clipped preview. Asked for when the plane comes to rest.
@@ -218,6 +224,9 @@ export function useGeometryWorker(host: GeometryWorkerHost): GeometryWorkerApi {
   );
   const meshQualityRequests = useRef(
     new Map<string, PendingRequest<MeshQualityReport>>()
+  );
+  const massPropertiesRequests = useRef(
+    new Map<string, PendingRequest<MassPropertiesRead>>()
   );
   const solveSketchRequests = useRef(
     new Map<string, PendingRequest<SketchSolveOutcome>>()
@@ -283,6 +292,10 @@ export function useGeometryWorker(host: GeometryWorkerHost): GeometryWorkerApi {
         request.reject(error);
       }
       meshQualityRequests.current.clear();
+      for (const request of massPropertiesRequests.current.values()) {
+        request.reject(error);
+      }
+      massPropertiesRequests.current.clear();
       for (const request of solveSketchRequests.current.values()) {
         request.reject(error);
       }
@@ -474,6 +487,16 @@ export function useGeometryWorker(host: GeometryWorkerHost): GeometryWorkerApi {
           } else {
             pending.reject(new Error(event.data.error));
           }
+          return;
+        }
+        if (event.data.type === 'mass-properties') {
+          const pending = massPropertiesRequests.current.get(
+            event.data.requestId
+          );
+          if (!pending) return;
+          massPropertiesRequests.current.delete(event.data.requestId);
+          if (event.data.ok) pending.resolve(event.data.result);
+          else pending.reject(new Error(event.data.error));
           return;
         }
         if (event.data.type === 'section') {
@@ -741,6 +764,16 @@ export function useGeometryWorker(host: GeometryWorkerHost): GeometryWorkerApi {
         stateSubscribers.current.set(posted.requestId, options.onState);
       }
       return posted.promise;
+    },
+    massProperties(document, bodyId) {
+      const posted = postRequest(massPropertiesRequests.current, {
+        type: 'mass-properties',
+        document: documentForWorker(document),
+        bodyId
+      });
+      return posted.ok
+        ? posted.promise
+        : Promise.reject(new Error('Geometry worker is unavailable.'));
     },
     sectionOutline(document, plane, bodyIds) {
       const worker = workerRef.current;

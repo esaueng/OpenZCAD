@@ -1,4 +1,4 @@
-import { fireEvent, render, screen, within } from '@testing-library/react';
+import { act, fireEvent, render, screen, waitFor, within } from '@testing-library/react';
 import type { ComponentProps } from 'react';
 import { describe, expect, it, vi } from 'vitest';
 import type {
@@ -7,6 +7,9 @@ import type {
   FeatureNode,
   TopologySelection
 } from '@openzcad/shared';
+import { createProjectDocument } from '@openzcad/document-core';
+import { toUserId } from '@openzcad/shared';
+import type { MassPropertiesRead } from '@openzcad/kernel-adapter/exact';
 import { Inspector } from './Inspector';
 
 const bodyId = 'body-1' as BodyId;
@@ -462,5 +465,74 @@ describe('body appearance color picker', () => {
     expect(props.onCancel).not.toHaveBeenCalled();
     fireEvent.keyDown(swatch, { key: 'Escape' });
     expect(props.onCancel).toHaveBeenCalledOnce();
+  });
+});
+
+describe('on-demand mass properties in Inspector', () => {
+  const lazyBody = { ...body, massProperties: undefined };
+
+  it('requests only when opened and shows pending then exact properties', async () => {
+    const document = createProjectDocument('Mass details', toUserId('mass-ui'));
+    let resolve!: (value: MassPropertiesRead) => void;
+    const worker = {
+      massProperties: vi.fn(() => new Promise<MassPropertiesRead>((done) => {
+        resolve = done;
+      }))
+    };
+    render(<Inspector {...makeProps({
+      selectedFeature: null,
+      commandSession: null,
+      selectedBody: lazyBody,
+      massPropertiesDocument: document,
+      massPropertiesWorker: worker
+    })} />);
+    expect(worker.massProperties).not.toHaveBeenCalled();
+    fireEvent.click(screen.getByText('Mass properties (at unit density)'));
+    await waitFor(() => expect(worker.massProperties).toHaveBeenCalledWith(document, bodyId));
+    expect(screen.getByText('Measuring mass properties…')).toBeInTheDocument();
+    await act(async () => {
+      resolve({ status: 'ready', properties: body.massProperties!, epoch: 1 });
+    });
+    expect(screen.getByText('center of mass')).toBeInTheDocument();
+    expect(worker.massProperties).toHaveBeenCalledTimes(1);
+  });
+
+  it('ignores a stale project result and distinguishes unavailable from errors', async () => {
+    const first = createProjectDocument('Old project', toUserId('mass-ui'));
+    const second = createProjectDocument('New project', toUserId('mass-ui'));
+    let resolveFirst!: (value: MassPropertiesRead) => void;
+    const worker = {
+      massProperties: vi.fn()
+        .mockImplementationOnce(() => new Promise<MassPropertiesRead>((done) => {
+          resolveFirst = done;
+        }))
+        .mockResolvedValueOnce({
+          status: 'unavailable',
+          code: 'unsupported',
+          reason: 'No live solid is available.',
+          epoch: 2
+        })
+        .mockRejectedValueOnce(new Error('Kernel request failed'))
+    };
+    const props = makeProps({
+      selectedFeature: null,
+      commandSession: null,
+      selectedBody: lazyBody,
+      massPropertiesDocument: first,
+      massPropertiesWorker: worker
+    });
+    const view = render(<Inspector {...props} />);
+    fireEvent.click(screen.getByText('Mass properties (at unit density)'));
+    await waitFor(() => expect(worker.massProperties).toHaveBeenCalledTimes(1));
+    view.rerender(<Inspector {...props} massPropertiesDocument={second} />);
+    await waitFor(() => expect(screen.getByText('No live solid is available.')).toBeInTheDocument());
+    await act(async () => {
+      resolveFirst({ status: 'ready', properties: body.massProperties!, epoch: 1 });
+    });
+    expect(screen.queryByText('center of mass')).not.toBeInTheDocument();
+
+    const changedBody = { ...lazyBody, name: 'Changed bracket' };
+    view.rerender(<Inspector {...props} selectedBody={changedBody} massPropertiesDocument={second} />);
+    await waitFor(() => expect(screen.getByText('Mass measurement failed: Kernel request failed')).toBeInTheDocument());
   });
 });
