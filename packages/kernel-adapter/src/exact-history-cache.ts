@@ -4,9 +4,9 @@
  *
  * `syncDocument` used to rebuild the whole history in a throwaway kernel on
  * every call. The adapter now keeps ONE long-lived history kernel and takes a
- * kernel checkpoint plus a JS-state snapshot after each of the earliest
- * features, up to the retention limit. The next sync digests the eligible
- * prefix, restores the longest prefix whose digests still match, and replays
+ * kernel checkpoint plus a JS-state snapshot at selected feature prefixes,
+ * up to the retention limit. The next sync digests the eligible prefix,
+ * restores the longest checkpoint whose entire prefix still matches, and replays
  * the remaining suffix. The kernel
  * guarantees this is sound: handles allocated before a checkpoint stay valid
  * after `restore`, and handles allocated after it are permanently retired,
@@ -36,11 +36,50 @@ import { bezierProfileEdgesEnabled } from './profile-bezier-edges';
  * Retained checkpoints are full `Topology` arena clones (the kernel
  * copy-on-writes the arena at the first mutation after each checkpoint), so
  * the cap bounds their COUNT, not their bytes or the kernel's lifetime arena
- * allocation. Longer histories retain this earliest prefix and replay the
- * remaining suffix on every sync. Suppressed and failed features also occupy
- * a prefix entry, preserving their build state and attributed warnings.
+ * allocation. Later checkpoints are spaced geometrically to cover longer
+ * histories within the same count. Suppressed and failed features participate
+ * in the digest spans, preserving their build state and attributed warnings.
  */
 export const MAX_HISTORY_CHECKPOINTS = 32;
+
+/** Rebuild the kernel before retired replay allocations grow without bound. */
+export const MAX_HISTORY_REPLAY_WORK = 512;
+
+/**
+ * Stable feature positions for retained checkpoints. A position cannot depend
+ * on document length: appending a feature must not invalidate earlier kernel
+ * checkpoints. Keep short histories dense, spend four slots at the first
+ * sparse spacing, then two at each doubling. This retains prefixes 32 and 80
+ * without spending 80 full snapshots. Any tail beyond the last slot replays.
+ */
+export function historyCheckpointIndices(
+  featureCount: number,
+  limit: number
+): number[] {
+  if (limit === Number.POSITIVE_INFINITY) {
+    return Array.from({ length: featureCount }, (_, index) => index);
+  }
+  const budget = Number.isNaN(limit)
+    ? 0
+    : Math.min(featureCount, Math.max(0, Math.floor(limit)));
+  const indices: number[] = [];
+  const dense = Math.min(16, budget);
+  for (let index = 0; index < dense; index += 1) indices.push(index);
+  let next = dense;
+  let spacing = 2;
+  let firstSparseBand = true;
+  while (indices.length < budget && next < featureCount) {
+    const slots = firstSparseBand ? 4 : 2;
+    for (let slot = 0; slot < slots && indices.length < budget; slot += 1) {
+      next += spacing;
+      if (next > featureCount) break;
+      indices.push(next - 1);
+    }
+    firstSparseBand = false;
+    spacing *= 2;
+  }
+  return indices;
+}
 
 /**
  * Deterministic serializer for history-cache digests: keys sorted,
@@ -130,12 +169,8 @@ export function historyFeatureDigest(
       data: keyableImportedNodeData(feature.data)
     },
     sketches,
-    // STEP imports read their payload, selection and document units, but
-    // never the parameter scope, and a split whose plane is all literals reads
-    // nothing from it either. Preserve those expensive checkpoints when a
-    // downstream dimension changes. A direct edit reads exactly the resolved
-    // values its own expressions name. All other builders conservatively
-    // depend on the entire resolved scope, including transitive parameters.
+    // Read only resolved values named by the explicitly audited expression
+    // fields. Other builders conservatively depend on the whole scope.
     scope: digestScope(feature, scope)
   });
 }
@@ -151,7 +186,7 @@ function digestScope(
   feature: FeatureNode,
   scope: Record<string, number>
 ): Record<string, number | null> | undefined {
-  const expressions = directEditExpressions(feature);
+  const expressions = featureExpressions(feature);
   if (expressions) {
     const names = [
       ...new Set(
@@ -165,16 +200,33 @@ function digestScope(
 }
 
 /**
- * Every string a direct edit stores, wherever it sits in the operation. Null
- * for any other feature kind. Enumerating the parametric fields by name was
- * tried first and missed one (`newRadius`), which silently served a stale
- * blend after its parameter moved; reading every string instead can only
- * over-include (a surface class such as "torus" digests as a parameter that
- * does not exist), never miss an expression.
+ * Every string in the payloads whose complete parameter-reading surface is
+ * audited in the exact builders. Direct edit walks the entire operation so
+ * fields such as `newRadius` cannot slip past an explicit list. Incidental
+ * strings can only add dependencies, never hide them.
  */
-function directEditExpressions(feature: FeatureNode): string[] | null {
+function featureExpressions(feature: FeatureNode): string[] | null {
   const { data } = feature;
-  if (data.featureKind !== 'direct-edit') return null;
+  let values: unknown;
+  switch (data.featureKind) {
+    case 'direct-edit':
+      values = data.operation;
+      break;
+    case 'primitive':
+      values = data.dimensions;
+      break;
+    case 'transform':
+      values = data.transform;
+      break;
+    case 'split':
+      values = data.plane;
+      break;
+    case 'boolean':
+      values = data.activeWhen;
+      break;
+    default:
+      return null;
+  }
   const strings: string[] = [];
   const visit = (value: unknown) => {
     if (typeof value === 'string') strings.push(value);
@@ -182,38 +234,20 @@ function directEditExpressions(feature: FeatureNode): string[] | null {
     else if (value && typeof value === 'object')
       Object.values(value as Record<string, unknown>).forEach(visit);
   };
-  visit(data.operation);
+  visit(values);
   return strings;
 }
 
 /**
- * Whether building this feature can read a parameter value. Only the kinds
- * whose every parametric field is visible right here are exempted when those
- * fields are all literals; anything touching a sketch, a face reference or a
- * derived profile stays conservative.
+ * Whether building an otherwise unenumerated feature can read a parameter.
+ * Anything touching a sketch, a face reference or a derived profile stays
+ * conservative until its complete parameter-reading surface is audited.
  */
 function readsParameterScope(feature: FeatureNode): boolean {
   const { data } = feature;
-  const literal = (value: unknown) => typeof value === 'number';
-  const literalVector = (value: { x: unknown; y: unknown; z: unknown }) =>
-    literal(value.x) && literal(value.y) && literal(value.z);
   switch (data.featureKind) {
     case 'imported-step':
       return false;
-    case 'split':
-      return (
-        !literalVector(data.plane.origin) || !literalVector(data.plane.normal)
-      );
-    case 'primitive':
-      return !Object.values(data.dimensions).every(literal);
-    case 'transform':
-      return (
-        !literalVector(data.transform.translation) ||
-        !literalVector(data.transform.rotationDeg) ||
-        !(data.transform.scale === undefined || literal(data.transform.scale))
-      );
-    case 'boolean':
-      return !(data.activeWhen === undefined || literal(data.activeWhen));
     default:
       return true;
   }
@@ -280,7 +314,10 @@ export function cloneBuildState(result: ExactBuildResult): ExactBuildResult {
 }
 
 export interface HistoryCheckpointEntry {
-  digest: string;
+  /** Completed feature index, including every suppressed or failed feature. */
+  featureIndex: number;
+  /** Digests since the previous checkpoint, including this feature. */
+  digests: string[];
   /** Kernel checkpoint index; equals this entry's position in the table. */
   checkpointId: number;
   /** Post-feature JS state, isolated from later in-place mutation. */
@@ -331,6 +368,8 @@ export function measuredShapeBytes(measured: MeasuredShape): number {
 /** Telemetry for tests and tuning; not part of the derived state. */
 export interface RebuildCacheEvent {
   kind: 'full-rebuild' | 'prefix-restore';
+  /** The old history kernel was retired after exhausting its replay budget. */
+  recycleReason?: 'replay-budget';
   /** Features replayed by this sync (total on a full rebuild). */
   replayed: number;
   /** Features restored from the cache (0 on a full rebuild). */

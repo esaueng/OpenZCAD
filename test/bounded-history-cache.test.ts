@@ -26,6 +26,7 @@ import {
   type ProjectDocument
 } from '@openzcad/shared';
 import { RemusKernel } from '../packages/kernel-adapter/src/remus-runtime';
+import { historyCheckpointIndices } from '../packages/kernel-adapter/src/exact-history-cache';
 
 // Same triangulation-layout normalization as incremental-rebuild-cache.test.
 // All topology, references, face ranges, edges, bounds, mass and warnings stay.
@@ -98,7 +99,38 @@ function ownership(adapter: ExactKernelAdapter, count: number) {
   return state.historyKernel;
 }
 
+function retained(count: number, limit = 32) {
+  return historyCheckpointIndices(count, limit);
+}
+
+function restoredBefore(count: number, changedIndex: number) {
+  return (
+    (retained(count)
+      .filter((index) => index < changedIndex)
+      .at(-1) ?? -1) + 1
+  );
+}
+
 describe('bounded history retention', { timeout: 120_000 }, () => {
+  it('uses stable sparse positions under the default cap and dense unlimited opt-in', () => {
+    const firstHundred = historyCheckpointIndices(100, 32);
+    expect(firstHundred).toEqual([
+      ...Array.from({ length: 16 }, (_, index) => index),
+      17, 19, 21, 23, 27, 31, 39, 47, 63, 79
+    ]);
+    expect(historyCheckpointIndices(32, 32)).toEqual(
+      firstHundred.filter((index) => index < 32)
+    );
+    expect(historyCheckpointIndices(33, 32)).toEqual(
+      firstHundred.filter((index) => index < 33)
+    );
+    expect(historyCheckpointIndices(10_000, 32)).toHaveLength(32);
+    expect(historyCheckpointIndices(10_000, 32).at(-1)).toBe(527);
+    expect(historyCheckpointIndices(100, Number.POSITIVE_INFINITY)).toEqual(
+      Array.from({ length: 100 }, (_, index) => index)
+    );
+  });
+
   it.each([31, 32, 33, 48, 80])(
     'keeps exact early/middle/late edits and honest reuse at %i features',
     async (count) => {
@@ -109,7 +141,7 @@ describe('bounded history retention', { timeout: 120_000 }, () => {
       try {
         let document = boxes(count);
         await equivalent(document, await adapter.syncDocument(document));
-        ownership(adapter, Math.min(count, 32));
+        ownership(adapter, retained(count).length);
         for (const [step, index] of [
           count - 1,
           Math.floor(count / 2),
@@ -118,7 +150,7 @@ describe('bounded history retention', { timeout: 120_000 }, () => {
         ].entries()) {
           document = edit(document, index, 11 + step);
           const actual = await adapter.syncDocument(document);
-          const restored = Math.min(index, 32);
+          const restored = restoredBefore(count, index);
           expect(events.at(-1)).toEqual({
             kind: restored ? 'prefix-restore' : 'full-rebuild',
             restored,
@@ -126,11 +158,17 @@ describe('bounded history retention', { timeout: 120_000 }, () => {
             reusedMeasurements: restored,
             remeasured: count - restored
           });
-          ownership(adapter, Math.min(count, 32));
+          ownership(adapter, retained(count).length);
           await equivalent(document, actual);
         }
         await equivalent(document, await adapter.syncDocument(document));
-        expect(events.at(-1)?.replayed).toBe(Math.max(0, count - 32));
+        expect(events.at(-1)?.replayed).toBe(
+          count - (retained(count).at(-1) ?? -1) - 1
+        );
+        if (count === 80) {
+          expect(retained(count).at(-1)).toBe(79);
+          expect(events.at(-1)?.replayed).toBe(0);
+        }
       } finally {
         adapter.dispose();
         ownership(adapter, 0);
@@ -155,9 +193,9 @@ describe('bounded history retention', { timeout: 120_000 }, () => {
       });
       for (const [document, restored] of [
         [short, 0],
-        [long, 31],
-        [short, 31],
-        [long, 31],
+        [long, 28],
+        [short, 28],
+        [long, 28],
         [reordered, 10],
         [suppressed, 8],
         [reordered, 8],
@@ -165,15 +203,68 @@ describe('bounded history retention', { timeout: 120_000 }, () => {
       ] as const) {
         await equivalent(document, await adapter.syncDocument(document));
         expect(events.at(-1)?.restored).toBe(restored);
-        ownership(adapter, Math.min(document.featureOrder.length, 32));
+        ownership(adapter, retained(document.featureOrder.length).length);
       }
       for (let i = 0; i < 50; i++) {
         const document = edit(long, i % 2 ? 40 : 20, 11 + i);
         await equivalent(document, await adapter.syncDocument(document));
-        ownership(adapter, 32);
+        ownership(adapter, retained(long.featureOrder.length).length);
       }
     } finally {
       adapter.dispose();
+    }
+  });
+
+  it('retires a replayed kernel before export and sync without serving stale handles', async () => {
+    const events: RebuildCacheEvent[] = [];
+    const adapter = await createExactKernelAdapter({
+      onRebuildCacheEvent: (event) => events.push(event)
+    });
+    try {
+      const base = boxes(100);
+      const original = await adapter.syncDocument(base);
+      const originalMesh =
+        original.bodyRepresentations[base.bodyOrder[0]!]!.mesh;
+      let document = base;
+      for (let i = 0; i < 26; i++) {
+        document = edit(base, 99, 11 + (i % 2));
+        await adapter.syncDocument(document);
+        expect(events.at(-1)).toMatchObject({ restored: 80, replayed: 20 });
+      }
+      const old = ownership(adapter, 26)!;
+      const free = vi.spyOn(old, 'free');
+      const step = await adapter.exportStep(document, [document.bodyOrder[99]!]);
+      expect(step).toContain('MANIFOLD_SOLID_BREP');
+      expect(free).toHaveBeenCalledOnce();
+      expect(ownership(adapter, 26)).not.toBe(old);
+      expect(originalMesh.vertices.byteLength).toBeGreaterThan(0);
+      expect(originalMesh.indices.byteLength).toBeGreaterThan(0);
+      await equivalent(document, await adapter.syncDocument(document));
+
+      for (let i = 0; i < 25; i++) {
+        document = edit(base, 99, 13 + (i % 2));
+        await adapter.syncDocument(document);
+      }
+      const next = await adapter.syncDocument(document);
+      expect(events.at(-1)).toMatchObject({
+        kind: 'full-rebuild',
+        recycleReason: 'replay-budget',
+        restored: 0,
+        replayed: 100
+      });
+      await equivalent(document, next);
+      ownership(adapter, 26);
+      const manager = new CommandManager(base);
+      manager.applyDocumentEdit(document, 'Resize late box');
+      const undone = manager.undo();
+      await equivalent(undone, await adapter.syncDocument(undone));
+      const redone = manager.redo();
+      await equivalent(redone, await adapter.syncDocument(redone));
+      free.mockRestore();
+    } finally {
+      vi.restoreAllMocks();
+      adapter.dispose();
+      ownership(adapter, 0);
     }
   });
 
@@ -213,7 +304,7 @@ describe('bounded history retention', { timeout: 120_000 }, () => {
       const empty = createProjectDocument('Empty', toUserId('cache-test'));
       const document = boxes(33, empty);
       await adapter.syncDocument(document);
-      const old = ownership(adapter, 32)!;
+      const old = ownership(adapter, retained(33).length)!;
       const free = vi.spyOn(old, 'free');
       await equivalent(empty, await adapter.syncDocument(empty));
       expect(free).toHaveBeenCalledOnce();
@@ -230,7 +321,7 @@ describe('bounded history retention', { timeout: 120_000 }, () => {
       ).toBe(0);
       await equivalent(document, await adapter.syncDocument(document));
       expect(events.at(-1)).toMatchObject({ restored: 0, replayed: 33 });
-      ownership(adapter, 32);
+      ownership(adapter, retained(33).length);
     } finally {
       vi.restoreAllMocks();
       adapter.dispose();
@@ -391,6 +482,57 @@ describe('bounded history retention', { timeout: 120_000 }, () => {
     }
   });
 
+  it('reuses independent parametric features and invalidates transitive dependencies', async () => {
+    const events: RebuildCacheEvent[] = [];
+    const adapter = await createExactKernelAdapter({
+      onRebuildCacheEvent: (event) => events.push(event)
+    });
+    try {
+      let document = boxes(2);
+      document = setParameter(document, { name: 'width', expression: '10' });
+      document = setParameter(document, {
+        name: 'doubleWidth',
+        expression: 'width * 2'
+      });
+      document = setParameter(document, { name: 'height', expression: '8' });
+      document = updateFeature(document, {
+        featureId: listFeaturesInOrder(document)[0]!.featureId,
+        data: { dimensions: { width: 'doubleWidth', height: 8, depth: 6 } }
+      });
+      document = updateFeature(document, {
+        featureId: listFeaturesInOrder(document)[1]!.featureId,
+        data: { dimensions: { width: 10, height: 'height', depth: 6 } }
+      });
+      await equivalent(document, await adapter.syncDocument(document));
+
+      const unrelated = setParameter(document, {
+        name: 'unused',
+        expression: '99'
+      });
+      await equivalent(unrelated, await adapter.syncDocument(unrelated));
+      expect(events.at(-1)).toMatchObject({ restored: 2, replayed: 0 });
+
+      const changedHeight = setParameter(unrelated, {
+        name: 'height',
+        expression: '9'
+      });
+      await equivalent(
+        changedHeight,
+        await adapter.syncDocument(changedHeight)
+      );
+      expect(events.at(-1)).toMatchObject({ restored: 1, replayed: 1 });
+
+      const changedWidth = setParameter(changedHeight, {
+        name: 'width',
+        expression: '11'
+      });
+      await equivalent(changedWidth, await adapter.syncDocument(changedWidth));
+      expect(events.at(-1)).toMatchObject({ restored: 0, replayed: 2 });
+    } finally {
+      adapter.dispose();
+    }
+  });
+
   it('replays transitive parameter-dependent dimensions on both sides of the budget', async () => {
     const events: RebuildCacheEvent[] = [];
     const adapter = await createExactKernelAdapter({
@@ -430,7 +572,7 @@ describe('bounded history retention', { timeout: 120_000 }, () => {
           reusedMeasurements: 16
         });
         await equivalent(document, actual);
-        ownership(adapter, 32);
+        ownership(adapter, retained(33).length);
       }
     } finally {
       adapter.dispose();
