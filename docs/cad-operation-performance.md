@@ -68,6 +68,10 @@ WASM identity, and records normalization and load caveats. The standalone
 retained. Raw progress-event streams stay in the local `/tmp` artifact
 directory rather than being committed.
 
+The follow-up [geometry latency comparison](geometry-latency.md) measures
+primitive reuse, on-demand mass properties, union mesh reuse and the paired
+Remus area integration optimization.
+
 ## Browser edit path
 
 The adapter benchmark excludes worker messaging and viewport work. This
