@@ -2,9 +2,11 @@ import { describe, expect, it, vi } from 'vitest';
 import { selectionCapabilities } from './interaction/capabilities';
 import { LIVE_DIAMETER_ATTRIBUTE } from './liveLabels';
 import {
+  HANDLE_KEEP_OUT_PX,
   MAX_SELECTION_VERBS,
   refreshSelectionCallout,
   renderSelectionCallout,
+  selectionCalloutClearance,
   selectionCalloutVerbs,
   type SelectionCalloutContent
 } from './selectionCallout';
@@ -155,6 +157,12 @@ describe('renderSelectionCallout', () => {
       'Hole'
     ]);
     expect(verbs[0]?.getAttribute('aria-pressed')).toBe('true');
+    // Never named like the rail's own Hole or the tool card's Sketch.
+    expect(verbs.map((verb) => verb.getAttribute('aria-label'))).toEqual([
+      'Selection: Offset',
+      'Selection: Sketch',
+      'Selection: Hole'
+    ]);
     verbs[2]?.click();
     expect(filled.onVerb).toHaveBeenCalledWith('tool:hole');
     element
@@ -189,5 +197,39 @@ describe('renderSelectionCallout', () => {
     expect(element.textContent).toContain('1 mm²');
     refreshSelectionCallout(element, null);
     expect(element.textContent).toBe('Box');
+  });
+});
+
+describe('selectionCalloutClearance', () => {
+  const viewport = { left: 0, top: 0, right: 1000, bottom: 800 };
+  const valueChip = { left: 500, top: 400, right: 600, bottom: 424 };
+
+  it('leaves a chip far from the handle where it is', () => {
+    expect(
+      selectionCalloutClearance(
+        { left: 100, top: 100, right: 300, bottom: 124 },
+        valueChip,
+        viewport
+      )
+    ).toBe(0);
+  });
+
+  it('lifts a chip over the handle clear of the arrow', () => {
+    const chip = { left: 450, top: 380, right: 700, bottom: 404 };
+    const shift = selectionCalloutClearance(chip, valueChip, viewport);
+    expect(shift).toBeLessThan(0);
+    expect(chip.bottom + shift).toBeLessThanOrEqual(
+      valueChip.top - HANDLE_KEEP_OUT_PX
+    );
+  });
+
+  it('drops below the handle when there is no room above', () => {
+    const high = { left: 500, top: 80, right: 600, bottom: 104 };
+    const chip = { left: 450, top: 90, right: 700, bottom: 114 };
+    const shift = selectionCalloutClearance(chip, high, viewport);
+    expect(shift).toBeGreaterThan(0);
+    expect(chip.top + shift).toBeGreaterThanOrEqual(
+      high.bottom + HANDLE_KEEP_OUT_PX
+    );
   });
 });

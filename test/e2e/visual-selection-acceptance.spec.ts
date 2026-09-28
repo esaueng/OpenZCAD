@@ -542,20 +542,19 @@ test('accepts exact visual selection and direct editing on the seeded boss', asy
   // The bore must not offer the unrelated lower-rim feature as its editor.
   // Deleting that fillet requires explicitly selecting its History entry.
   expect((await readBlend(canvas, 2))?.blendRadius).toBeCloseTo(2, 6);
+  // A native face no one feature owns opens no inspector: the selection
+  // chip beside it names the bore and its diameter, and it does not offer
+  // the unrelated lower-rim fillet either.
   const inspector = page.getByRole('region', { name: 'Feature inspector' });
-  await expect(
-    inspector.getByRole('heading', { name: 'Through hole Ø20' })
-  ).toBeVisible();
-  await expect(inspector.getByText('Measurements')).toBeVisible();
-  await expect(inspector).toContainText(
-    'does not identify one editable history feature'
+  await expect(inspector).toHaveCount(0);
+  const selectionChip = page.locator('.selection-callout-chip');
+  await expect(selectionChip.locator('.selection-callout-name')).toHaveText(
+    'Through hole'
   );
-  await expect(inspector.getByText('Lower rim fillet')).toHaveCount(0);
-  await expect(
-    inspector.getByRole('button', { name: 'Edit', exact: true })
-  ).toHaveCount(0);
-  await expect(inspector.getByLabel('Radius', { exact: true })).toHaveCount(0);
-  await expect(inspector.getByLabel('More actions')).toHaveCount(0);
+  await expect(selectionChip.locator('.selection-callout-detail')).toHaveText(
+    'Ø 20 mm'
+  );
+  await expect(selectionChip).not.toContainText('Lower rim fillet');
 
   await page.keyboard.press('Delete');
   expect((await readBlend(canvas, 2))?.blendRadius).toBeCloseTo(2, 6);

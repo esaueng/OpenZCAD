@@ -161,6 +161,7 @@ import type {
 import { formatNumber } from '../lib/model';
 import { setLiveDiameter } from '../lib/liveLabels';
 import {
+  keepSelectionCalloutClear,
   refreshSelectionCallout,
   renderSelectionCallout,
   type SelectionCalloutContent
@@ -8334,6 +8335,8 @@ export function ModelViewer({
       // value.
       renderSelectionCallout(label.element, fallback, callout);
       selectionCalloutElementRef.current = label.element;
+      // Placed every frame, so kept off the drag handle every frame too.
+      label.onAfterRender = () => keepSelectionCalloutClear(label.element);
       label.position.copy(top);
       if (bodyId) {
         // The callout lives in the overlay group, not under the body, so a

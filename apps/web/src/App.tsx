@@ -5325,8 +5325,10 @@ export function App() {
   // Verbs only while the pick is the whole story: a running tool has its own
   // card, and View and Tweak do not edit. Serialized (they are plain data)
   // so the content below changes only when the verbs themselves do.
+  const calloutInteractive =
+    !modelingLocked && tool === null && !parameterPreview;
   const calloutVerbsKey =
-    calloutKind && !modelingLocked && tool === null && !parameterPreview
+    calloutKind && calloutInteractive
       ? JSON.stringify(
           selectionCalloutVerbs({
             kind: calloutKind,
@@ -5343,7 +5345,7 @@ export function App() {
     const verbs = JSON.parse(
       calloutVerbsKey
     ) as SelectionCalloutContent['verbs'];
-    if (historyFocus) {
+    if (historyFocus && calloutInteractive) {
       return {
         label: textLabelSegments(historyFocus.feature.name),
         verbs: [],
@@ -5352,7 +5354,10 @@ export function App() {
         onClear: () => clearSelectionRef.current()
       };
     }
-    if (!selectionSummary) {
+    // A running tool has its own card and handles, and View and Tweak do
+    // not edit: the pick keeps its plain name label, which takes no input
+    // and so can never sit over a gizmo handle.
+    if (!selectionSummary || !calloutInteractive) {
       return null;
     }
     return {
@@ -5367,7 +5372,13 @@ export function App() {
       onVerb,
       onClear: () => clearSelectionRef.current()
     };
-  }, [historyFocus, selectionSummary, selectedBodyIds, calloutVerbsKey]);
+  }, [
+    historyFocus,
+    selectionSummary,
+    selectedBodyIds,
+    calloutVerbsKey,
+    calloutInteractive
+  ]);
 
   function hydrateDocument(
     nextDocument: ProjectDocument,
@@ -16043,8 +16054,13 @@ export function App() {
     !directMode &&
     // A face or edge alone is not an edit: its name, measurement and verbs
     // are on the selection chip beside it, and the inspector opened only to
-    // say no one feature owns the pick.
-    (tool !== null || selectedFeature !== null);
+    // say no one feature owns the pick. An imported STEP face is the
+    // exception: its direct edits (hole resize, blend removal) live there.
+    (tool !== null ||
+      selectedFeature !== null ||
+      (selectedTopology?.kind === 'face' &&
+        renderedRepresentations[selectedTopology.bodyId]?.source ===
+          'imported-step'));
   const modelingOperation: ModelingOperationKind | null =
     tool === 'mirror' ||
     tool === 'split' ||
