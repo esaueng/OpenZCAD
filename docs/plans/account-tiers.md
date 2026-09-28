@@ -30,6 +30,8 @@ requests already running on an older configuration may finish under that policy.
 | ----------------------------------------------- | ------------ | --------------- |
 | Hosted AI requests per 10 minutes               | 6            | 600             |
 | Weighted AI units per 10 minutes                | 24           | 2,400           |
+| Cloud projects                                  | 100          | 10,000          |
+| Cloud project document/asset storage            | 2 GiB        | 100 GiB         |
 | Concurrent AI requests                          | 2            | 8               |
 | Cloud artifacts, including pending reservations | 2 GiB        | 100 GiB         |
 | Requests per IP per window                      | 30           | 3,000           |
@@ -41,6 +43,8 @@ same across tier changes so an upgrade or downgrade cannot reset consumption.
 The existing `AI_RATE_LIMIT_WINDOW_SECONDS` controls both tiers' window length.
 Existing Free configuration names are retained. Premium overrides are:
 
+- `PREMIUM_PROJECT_LIMIT` (positive integer, at most 100,000)
+- `PREMIUM_PROJECT_STORAGE_LIMIT_BYTES` (positive integer, at most 1 TiB)
 - `PREMIUM_ARTIFACT_LIMIT_BYTES` (positive integer, at most 1 TiB)
 - `AI_PREMIUM_ACCOUNT_RATE_LIMIT_REQUESTS` (at most 1,000)
 - `AI_PREMIUM_ACCOUNT_COST_LIMIT_UNITS` (at most 10,000)
@@ -67,10 +71,10 @@ permitted hosted-AI spend; it is not a monetary budget. Self-hosted defaults sta
 
 ## Storage and downgrade behavior
 
-Migration `0022_account_tiers.sql` adds `users.artifact_limit_bytes`, defaulting
-to the existing Free ceiling. This is derived enforcement state, not a second
+Migration `0022_account_tiers.sql` adds derived `users.artifact_limit_bytes`, `project_limit`,
+and `project_storage_limit_bytes`, defaulting to the existing Free ceilings. This is derived enforcement state, not a second
 membership source. The Worker refreshes the owner's value on upload creation and
-each upload operation. Atomic SQLite triggers enforce the value across concurrent
+each upload operation, project creation and document/revision save. Atomic SQLite triggers enforce the value across concurrent
 Workers, single-part finalization and multipart reservations. Direct database
 writers must not treat a stale derived value as a current membership lookup.
 
@@ -90,7 +94,7 @@ Apply migration 0022 before routing traffic to the new Worker. Keep the previous
 migration intact; this is an additive migration with replacement quota triggers.
 Do not deploy the new upload code without the new column. An older Worker remains
 compatible with the migrated schema; when rolling back tier code, also reset
-`users.artifact_limit_bytes` to the Free ceiling if revoking all Premium storage
+the three derived quota columns to their Free ceilings if revoking all Premium storage
 allowances is intended. Never delete account data as part of rollback.
 
 Tests cover exact membership matching, hosted-AI eligibility, Free/Premium limits,

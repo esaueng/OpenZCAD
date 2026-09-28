@@ -33,6 +33,8 @@ describe('server account tier policy', () => {
   it('returns finite effective limits without disclosing the membership list', () => {
     expect(accountEntitlements(env, 'other@example.com')).toEqual({
       tier: 'free',
+      projectLimit: 100,
+      projectStorageLimitBytes: 2 * 1024 ** 3,
       artifactLimitBytes: 2 * 1024 ** 3,
       ai: {
         requestLimit: 6,
@@ -43,6 +45,8 @@ describe('server account tier policy', () => {
     });
     expect(accountEntitlements(env, 'first@example.com')).toEqual({
       tier: 'premium',
+      projectLimit: 10_000,
+      projectStorageLimitBytes: 100 * 1024 ** 3,
       artifactLimitBytes: 100 * 1024 ** 3,
       ai: {
         requestLimit: 600,

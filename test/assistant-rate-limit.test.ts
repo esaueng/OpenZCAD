@@ -709,3 +709,44 @@ describe('premium assistant enforcement', () => {
     });
   });
 });
+
+describe('premium operational ceilings', () => {
+  it('bounds Premium concurrency and reclaims a released slot', async () => {
+    const fixture = assistantGuardD1();
+    const env = {
+      DB: fixture.db,
+      AI_IDENTITY_PEPPER: 'test-pepper',
+      PREMIUM_USER_EMAILS: 'premium@example.com'
+    };
+    const options = {
+      cost: 1,
+      leaseMs: 10_000,
+      email: 'premium@example.com',
+      now: 1_800_000_000_000
+    };
+    const permits = [];
+    for (let i = 0; i < 8; i++) {
+      const permit = await acquireAssistantPermit(
+        assistantRequest(),
+        toUserId('premium'),
+        env,
+        options
+      );
+      expect(permit.allowed).toBe(true);
+      permits.push(permit);
+    }
+    const ninth = await acquireAssistantPermit(
+      assistantRequest(),
+      toUserId('premium'),
+      env,
+      options
+    );
+    expect(ninth.allowed).toBe(false);
+    if (!ninth.allowed)
+      expect(await ninth.response.json()).toMatchObject({
+        code: 'AI_CONCURRENCY_LIMITED'
+      });
+    for (const permit of permits) if (permit.allowed) await permit.release();
+    expect(fixture.activeLeases()).toBe(0);
+  });
+});

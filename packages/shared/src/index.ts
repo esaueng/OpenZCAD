@@ -2569,6 +2569,8 @@ export type AccountTier = 'free' | 'premium';
 
 export interface AccountEntitlements {
   tier: AccountTier;
+  projectLimit: number;
+  projectStorageLimitBytes: number;
   artifactLimitBytes: number;
   ai: {
     requestLimit: number;
