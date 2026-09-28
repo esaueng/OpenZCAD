@@ -1,7 +1,7 @@
 import { act, renderHook } from '@testing-library/react';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { createProjectDocument } from '@openzcad/document-core';
-import { toUserId } from '@openzcad/shared';
+import { toBodyId, toUserId } from '@openzcad/shared';
 import type { CommandManager } from '@openzcad/command-system';
 import type { GeometryWorkerResult } from '../worker/geometryWorker';
 import { useGeometryWorker } from './useGeometryWorker';
@@ -36,6 +36,33 @@ afterEach(() => {
 });
 
 describe('useGeometryWorker', () => {
+  it('routes a mass query by request ID without changing live derived state', async () => {
+    installWorker();
+    const document = createProjectDocument('Mass query', toUserId('user'));
+    const bodyId = toBodyId('body_mass');
+    const host = { manager: () => null, onDerived: vi.fn(), onError: vi.fn() };
+    const { result } = renderHook(() => useGeometryWorker(host));
+    const worker = FakeWorker.instances[0]!;
+    const pending = result.current.massProperties(document, bodyId);
+    const request = worker.postMessage.mock.calls.at(-1)![0] as {
+      requestId: string;
+    };
+    expect(request).toMatchObject({ type: 'mass-properties', bodyId });
+    const unavailable = {
+      status: 'unavailable' as const,
+      code: 'unsupported' as const,
+      reason: 'No live solid is available.',
+      epoch: 7
+    };
+    act(() => {
+      worker.emit({
+        type: 'mass-properties', ok: true,
+        requestId: request.requestId, result: unavailable
+      });
+    });
+    await expect(pending).resolves.toEqual(unavailable);
+    expect(host.onDerived).not.toHaveBeenCalled();
+  });
   it('preserves selected analysis on one-off sync requests', async () => {
     installWorker();
     const document = createProjectDocument('Analysis', toUserId('user'));
