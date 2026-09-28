@@ -362,12 +362,10 @@
   color: var(--color-accent);
 }
 
+/* The Move panel. It rides the right lane's command slot (quiet-stage.css)
+   like every other command card, so it carries no position of its own. */
 .extrude-controller {
-  position: absolute;
-  top: 66px;
-  right: 14px;
-  z-index: calc(var(--z-viewer-overlay) + 2);
-  width: 250px;
+  box-sizing: border-box;
   padding: 12px;
   color: var(--color-viewport-text-muted);
   background: rgba(21, 24, 29, 0.95);

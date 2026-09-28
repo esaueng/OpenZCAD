@@ -91,9 +91,72 @@ interface MoveOverlayProps {
       ) => void)
     | null
   >;
+  /**
+   * Where the viewport's instruction banner (`MoveInstruction`) listens for
+   * the snap a live drag is using. The panel owns the one drag sink above and
+   * forwards the snap, so the banner and the panel never disagree mid-drag.
+   */
+  liveSnapRef?: MutableRefObject<
+    ((snap: { move: number; rotate: number }) => void) | null
+  >;
 }
 
 const MOVE_AXES = ['x', 'y', 'z'] as const;
+
+interface MoveInstructionProps {
+  units: string;
+  /** Current gizmo snap increments; null until the first drag. */
+  snap: { move: number; rotate: number } | null;
+  /** Sketch moves translate only, so the copy names arrows alone. */
+  hideRotation?: boolean;
+  /** Filled by the banner; the Move panel forwards live drag snaps into it. */
+  liveSnapRef?: MoveOverlayProps['liveSnapRef'];
+}
+
+/**
+ * The Move instruction banner. It rides the viewport, over the model it
+ * describes, while the Move panel itself (`MoveOverlay`) anchors in the right
+ * lane with every other command card.
+ */
+export function MoveInstruction({
+  units,
+  snap: committedSnap,
+  hideRotation,
+  liveSnapRef
+}: MoveInstructionProps) {
+  const [snap, setSnap] = useState(committedSnap);
+  useEffect(() => {
+    setSnap(committedSnap);
+  }, [committedSnap]);
+  useEffect(() => {
+    if (!liveSnapRef) {
+      return;
+    }
+    liveSnapRef.current = setSnap;
+    return () => {
+      liveSnapRef.current = null;
+    };
+  }, [liveSnapRef]);
+  return (
+    <div className="extrude-instruction" role="status">
+      <span className="extrude-instruction-icon">
+        <MousePointer2 size={17} aria-hidden="true" />
+      </span>
+      <span>
+        <strong>
+          {hideRotation
+            ? 'Drag an arrow to move the sketch'
+            : 'Drag an arrow to move, a ring to rotate'}
+        </strong>
+        <small>
+          Snaps to{' '}
+          {snap ? `${snap.move} ${units} · ${snap.rotate}°` : 'whole steps'} —
+          zoom in for finer steps, hold Shift for free movement.
+        </small>
+      </span>
+    </div>
+  );
+}
 
 export function MoveOverlay({
   bodyName,
@@ -109,7 +172,8 @@ export function MoveOverlay({
   targets,
   targetBodyId,
   onTargetBody,
-  liveValuesRef
+  liveValuesRef,
+  liveSnapRef
 }: MoveOverlayProps) {
   // Mirrors `values` except while a drag is streaming, when it runs ahead of
   // workspace state. Keyed off the props so a typed value, a body switch, or a
@@ -127,11 +191,12 @@ export function MoveOverlay({
     }
     liveValuesRef.current = (translation, rotationDeg, nextSnap) => {
       setLive({ values: { translation, rotationDeg }, snap: nextSnap });
+      liveSnapRef?.current?.(nextSnap);
     };
     return () => {
       liveValuesRef.current = null;
     };
-  }, [liveValuesRef]);
+  }, [liveValuesRef, liveSnapRef]);
   const values = live.values;
   const snap = live.snap;
   const dirty =
@@ -152,134 +217,114 @@ export function MoveOverlay({
     });
   };
   return (
-    <>
-      <div className="extrude-instruction" role="status">
-        <span className="extrude-instruction-icon">
-          <MousePointer2 size={17} aria-hidden="true" />
-        </span>
-        <span>
-          <strong>
-            {hideRotation
-              ? 'Drag an arrow to move the sketch'
-              : 'Drag an arrow to move, a ring to rotate'}
-          </strong>
-          <small>
-            Snaps to{' '}
-            {snap ? `${snap.move} ${units} · ${snap.rotate}°` : 'whole steps'} —
-            zoom in for finer steps, hold Shift for free movement.
-          </small>
-        </span>
+    <form
+      className="extrude-controller move-controller"
+      aria-label="Move controls"
+      onSubmit={(event) => {
+        event.preventDefault();
+        if (dirty) {
+          onConfirm();
+        }
+      }}
+    >
+      <div className="panel-header">
+        <div className="panel-title-row">
+          <h2>
+            <Move3d size={16} aria-hidden="true" />
+            Move / Rotate
+          </h2>
+          <span className="panel-eyebrow">Direct edit</span>
+          <button
+            type="button"
+            className="icon-button panel-close"
+            aria-label="Cancel move"
+            onClick={onCancel}
+          >
+            <X size={14} aria-hidden="true" />
+          </button>
+        </div>
       </div>
-
-      <form
-        className="extrude-controller move-controller"
-        aria-label="Move controls"
-        onSubmit={(event) => {
-          event.preventDefault();
-          if (dirty) {
-            onConfirm();
-          }
-        }}
+      {name !== undefined && onName ? (
+        <label className="field move-name">
+          <span>Name</span>
+          <input
+            value={name}
+            onChange={(event) => onName(event.target.value)}
+          />
+        </label>
+      ) : null}
+      {targets && targets.length > 1 && onTargetBody ? (
+        <label className="field move-target">
+          <span>Body</span>
+          <select
+            value={targetBodyId ?? ''}
+            onChange={(event) => onTargetBody(event.target.value)}
+          >
+            {targets.map((target) => (
+              <option key={target.bodyId} value={target.bodyId}>
+                {target.name}
+              </option>
+            ))}
+          </select>
+        </label>
+      ) : (
+        <p>{bodyName}</p>
+      )}
+      <div className="move-grid" role="group" aria-label="Translation">
+        {MOVE_AXES.map((axis) => (
+          <label key={`t-${axis}`}>
+            <span className={`move-axis move-axis-${axis}`}>
+              d{axis.toUpperCase()}
+            </span>
+            <span className="extrude-distance-input">
+              <input
+                type="number"
+                step={snap?.move ?? 1}
+                value={values.translation[axis]}
+                aria-label={`Move ${axis.toUpperCase()} in ${units}`}
+                onChange={(event) =>
+                  setValue('translation', axis, event.target.value)
+                }
+              />
+              <b>{units}</b>
+            </span>
+          </label>
+        ))}
+      </div>
+      <div
+        className="move-grid"
+        role="group"
+        aria-label="Rotation"
+        hidden={hideRotation}
       >
-        <div className="panel-header">
-          <div className="panel-title-row">
-            <h2>
-              <Move3d size={16} aria-hidden="true" />
-              Move / Rotate
-            </h2>
-            <span className="panel-eyebrow">Direct edit</span>
-            <button
-              type="button"
-              className="icon-button panel-close"
-              aria-label="Cancel move"
-              onClick={onCancel}
-            >
-              <X size={14} aria-hidden="true" />
-            </button>
-          </div>
-        </div>
-        {name !== undefined && onName ? (
-          <label className="field move-name">
-            <span>Name</span>
-            <input
-              value={name}
-              onChange={(event) => onName(event.target.value)}
-            />
+        {MOVE_AXES.map((axis) => (
+          <label key={`r-${axis}`}>
+            <span className={`move-axis move-axis-${axis}`}>
+              r{axis.toUpperCase()}
+            </span>
+            <span className="extrude-distance-input">
+              <input
+                type="number"
+                step={snap?.rotate ?? 1}
+                value={values.rotationDeg[axis]}
+                aria-label={`Rotate ${axis.toUpperCase()} in degrees`}
+                onChange={(event) =>
+                  setValue('rotationDeg', axis, event.target.value)
+                }
+              />
+              <b>°</b>
+            </span>
           </label>
-        ) : null}
-        {targets && targets.length > 1 && onTargetBody ? (
-          <label className="field move-target">
-            <span>Body</span>
-            <select
-              value={targetBodyId ?? ''}
-              onChange={(event) => onTargetBody(event.target.value)}
-            >
-              {targets.map((target) => (
-                <option key={target.bodyId} value={target.bodyId}>
-                  {target.name}
-                </option>
-              ))}
-            </select>
-          </label>
-        ) : (
-          <p>{bodyName}</p>
-        )}
-        <div className="move-grid" role="group" aria-label="Translation">
-          {MOVE_AXES.map((axis) => (
-            <label key={`t-${axis}`}>
-              <span className={`move-axis move-axis-${axis}`}>
-                d{axis.toUpperCase()}
-              </span>
-              <span className="extrude-distance-input">
-                <input
-                  type="number"
-                  step={snap?.move ?? 1}
-                  value={values.translation[axis]}
-                  aria-label={`Move ${axis.toUpperCase()} in ${units}`}
-                  onChange={(event) =>
-                    setValue('translation', axis, event.target.value)
-                  }
-                />
-                <b>{units}</b>
-              </span>
-            </label>
-          ))}
-        </div>
-        <div
-          className="move-grid"
-          role="group"
-          aria-label="Rotation"
-          hidden={hideRotation}
-        >
-          {MOVE_AXES.map((axis) => (
-            <label key={`r-${axis}`}>
-              <span className={`move-axis move-axis-${axis}`}>
-                r{axis.toUpperCase()}
-              </span>
-              <span className="extrude-distance-input">
-                <input
-                  type="number"
-                  step={snap?.rotate ?? 1}
-                  value={values.rotationDeg[axis]}
-                  aria-label={`Rotate ${axis.toUpperCase()} in degrees`}
-                  onChange={(event) =>
-                    setValue('rotationDeg', axis, event.target.value)
-                  }
-                />
-                <b>°</b>
-              </span>
-            </label>
-          ))}
-        </div>
-        <div className="form-actions">
-          <button type="submit" className="primary" disabled={!dirty}>
-            Apply move
-          </button>
-          <button type="button" className="secondary" onClick={onCancel}>
-            Cancel
-          </button>
-        </div>
-      </form>
-    </>
+        ))}
+      </div>
+      <div className="form-actions">
+        <button type="submit" className="primary" disabled={!dirty}>
+          Apply move
+        </button>
+        <button type="button" className="secondary" onClick={onCancel}>
+          Cancel
+        </button>
+      </div>
+    </form>
   );
 }

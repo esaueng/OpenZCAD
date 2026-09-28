@@ -407,6 +407,7 @@ const MESH_EXPORT_FILE_INFO: Record<
   }
 };
 import {
+  MoveInstruction,
   MoveOverlay,
   ProfileQuickAction
 } from './components/DirectModelingOverlays';
@@ -2311,6 +2312,8 @@ export function App() {
       ) => void)
     | null
   >(null);
+  /** The Move banner's copy of the live drag snap, fed by the Move panel. */
+  const moveSnapSetterRef = useRef<((snap: MoveSnap) => void) | null>(null);
   /** Cancels the viewport's captured pointer session on keyboard Escape. */
   const cancelDirectManipulationRef = useRef<(() => boolean) | null>(null);
   /** Opens exact entry for the armed handle, as tapping its chip would. */
@@ -17448,68 +17451,13 @@ export function App() {
                   Edit Sketch
                 </button>
               ) : movePreview ? (
-                <MoveOverlay
-                  bodyName={
-                    movePreview.target === 'sketch'
-                      ? (findSketch(doc, movePreview.bodyId as SketchId)
-                          ?.name ?? 'Selected sketch')
-                      : (representations[movePreview.bodyId as BodyId]?.name ??
-                        'Selected body')
-                  }
-                  hideRotation={movePreview.target === 'sketch'}
-                  // A sketch move commits as a sketch translation, not a named
-                  // feature, so it gets neither a name nor a body picker.
-                  name={movePreview.target === 'sketch' ? undefined : moveName}
-                  onName={
-                    movePreview.target === 'sketch' ? undefined : setMoveName
-                  }
-                  targets={
-                    movePreview.target === 'sketch'
-                      ? undefined
-                      : viewerBodies.map((body) => ({
-                          bodyId: body.bodyId,
-                          name:
-                            representations[body.bodyId]?.name ?? body.bodyId
-                        }))
-                  }
-                  targetBodyId={movePreview.bodyId}
-                  onTargetBody={(bodyId) => {
-                    setSelectedBodyIds([bodyId as BodyId]);
-                    setMoveSnap(null);
-                    setMovePreview((current) =>
-                      current
-                        ? {
-                            ...current,
-                            bodyId,
-                            // Values are relative to the body's own centre, so
-                            // carrying them to a different body would apply a
-                            // move nobody asked for.
-                            translation: { x: 0, y: 0, z: 0 },
-                            rotationDeg: { x: 0, y: 0, z: 0 }
-                          }
-                        : current
-                    );
-                  }}
-                  values={{
-                    translation: movePreview.translation,
-                    rotationDeg: movePreview.rotationDeg
-                  }}
+                // The Move panel anchors in the right lane (`command` below);
+                // its instruction stays over the model it describes.
+                <MoveInstruction
                   units={doc.units}
                   snap={moveSnap}
-                  onChange={(values) =>
-                    setMovePreview((current) =>
-                      current
-                        ? {
-                            ...current,
-                            translation: values.translation,
-                            rotationDeg: values.rotationDeg
-                          }
-                        : current
-                    )
-                  }
-                  onConfirm={confirmMove}
-                  onCancel={cancelPanel}
-                  liveValuesRef={moveValuesSetterRef}
+                  hideRotation={movePreview.target === 'sketch'}
+                  liveSnapRef={moveSnapSetterRef}
                 />
               ) : tool === 'sketch' ? (
                 <div className="sketch-plane-prompt" role="status">
@@ -17623,8 +17571,9 @@ export function App() {
       }
       // Every command card anchors at the top of the right lane, the
       // drawer yielding below it. The same precedence as the viewport's
-      // mode overlays: a live operation first, and the closed-profile quick
-      // action only when no plane prompt, Move or revert pill is up.
+      // mode overlays: a live operation first, then the Move panel (unless
+      // the revert pill is up), and the closed-profile quick action only
+      // when no plane prompt, Move or revert pill is up.
       command={
         modelingLocked ? null : contextualToolCard ? (
           hideSketchToolCard ? null : (
@@ -17719,9 +17668,69 @@ export function App() {
               }}
             />
           )
-        ) : !revertPill &&
-          !movePreview &&
-          tool !== 'sketch' &&
+        ) : revertPill ? null : movePreview ? (
+          <MoveOverlay
+            bodyName={
+              movePreview.target === 'sketch'
+                ? (findSketch(doc, movePreview.bodyId as SketchId)?.name ??
+                  'Selected sketch')
+                : (representations[movePreview.bodyId as BodyId]?.name ??
+                  'Selected body')
+            }
+            hideRotation={movePreview.target === 'sketch'}
+            // A sketch move commits as a sketch translation, not a named
+            // feature, so it gets neither a name nor a body picker.
+            name={movePreview.target === 'sketch' ? undefined : moveName}
+            onName={movePreview.target === 'sketch' ? undefined : setMoveName}
+            targets={
+              movePreview.target === 'sketch'
+                ? undefined
+                : viewerBodies.map((body) => ({
+                    bodyId: body.bodyId,
+                    name: representations[body.bodyId]?.name ?? body.bodyId
+                  }))
+            }
+            targetBodyId={movePreview.bodyId}
+            onTargetBody={(bodyId) => {
+              setSelectedBodyIds([bodyId as BodyId]);
+              setMoveSnap(null);
+              setMovePreview((current) =>
+                current
+                  ? {
+                      ...current,
+                      bodyId,
+                      // Values are relative to the body's own centre, so
+                      // carrying them to a different body would apply a
+                      // move nobody asked for.
+                      translation: { x: 0, y: 0, z: 0 },
+                      rotationDeg: { x: 0, y: 0, z: 0 }
+                    }
+                  : current
+              );
+            }}
+            values={{
+              translation: movePreview.translation,
+              rotationDeg: movePreview.rotationDeg
+            }}
+            units={doc.units}
+            snap={moveSnap}
+            onChange={(values) =>
+              setMovePreview((current) =>
+                current
+                  ? {
+                      ...current,
+                      translation: values.translation,
+                      rotationDeg: values.rotationDeg
+                    }
+                  : current
+              )
+            }
+            onConfirm={confirmMove}
+            onCancel={cancelPanel}
+            liveValuesRef={moveValuesSetterRef}
+            liveSnapRef={moveSnapSetterRef}
+          />
+        ) : tool !== 'sketch' &&
           selectedProfiles.length > 0 &&
           selectedSketchProfileName ? (
           <ProfileQuickAction
