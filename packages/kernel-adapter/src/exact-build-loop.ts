@@ -11,6 +11,10 @@ import {
   type ProjectDocument
 } from '@openzcad/shared';
 import type { ExactBuildResult, ImportedStepDiagnostics } from './exact-types';
+import type {
+  StrictUnionVerdict as BooleanHelperStrictUnionVerdict,
+  UnionVerdictsWithMeshBudget
+} from './exact-boolean-helpers';
 import { buildFeature } from './exact-feature-builders';
 import { kernelRefusalRecordOf } from './kernel-refusal';
 
@@ -51,7 +55,7 @@ export interface ImportedStepStore {
  * not validate the same handle again. Scoped to one sync: handles are never
  * mutated in place after their feature ran, and the map dies with the sync.
  */
-export type StrictUnionVerdicts = Map<number, StrictUnionVerdict>;
+export type StrictUnionVerdicts = UnionVerdictsWithMeshBudget;
 
 /**
  * What the union gate learned about a solid while producing it, so the
@@ -61,12 +65,7 @@ export type StrictUnionVerdicts = Map<number, StrictUnionVerdict>;
  * solid whose strict validation already failed is refused without
  * tessellating it.
  */
-export interface StrictUnionVerdict {
-  /** Strict `validateSolid` error count of exactly this handle. */
-  strictErrors: number;
-  /** Whether its display projection was closed and consistently oriented. */
-  meshClosed?: boolean;
-}
+export type StrictUnionVerdict = BooleanHelperStrictUnionVerdict;
 
 /**
  * Everything a per-feature builder may touch: the kernel, the document and
@@ -95,6 +94,15 @@ export interface FeatureBuildContext {
 export type FeatureDataOf<K extends FeatureNode['data']['featureKind']> =
   Extract<FeatureNode['data'], { featureKind: K }>;
 
+export interface PrimitiveReuse {
+  restore(
+    index: number,
+    feature: FeatureNode,
+    result: ExactBuildResult
+  ): boolean;
+  store(index: number, feature: FeatureNode, result: ExactBuildResult): void;
+}
+
 export function buildDocumentHistory(
   kernel: RemusKernel,
   document: ProjectDocument,
@@ -115,7 +123,8 @@ export function buildDocumentHistory(
   /** Diagnostic hook before synchronous feature work begins. */
   onFeatureStart?: (index: number) => void,
   /** Receives the union gate's verdicts; see {@link FeatureBuildContext}. */
-  strictVerdicts?: StrictUnionVerdicts
+  strictVerdicts?: StrictUnionVerdicts,
+  primitiveReuse?: PrimitiveReuse
 ): ExactBuildResult {
   const { scope, errors } = getParameterScope(document);
   const result: ExactBuildResult = resume?.initial ?? {
@@ -156,7 +165,10 @@ export function buildDocumentHistory(
       continue;
     }
     try {
-      buildFeature(ctx, feature);
+      if (!primitiveReuse?.restore(index, feature, result)) {
+        buildFeature(ctx, feature);
+        primitiveReuse?.store(index, feature, result);
+      }
     } catch (error) {
       const reason =
         error instanceof Error ? error.message : 'exact geometry failed';
