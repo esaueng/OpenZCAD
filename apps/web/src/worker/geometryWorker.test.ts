@@ -4,6 +4,7 @@ import {
   createProjectDocument
 } from '@openzcad/document-core';
 import {
+  toBodyId,
   toSketchId,
   toUserId,
   type BodyId,
@@ -82,6 +83,63 @@ beforeEach(() => {
 });
 
 describe('geometry worker rebuild coordination', () => {
+  it('transfers each owned mesh buffer once without detaching adapter or cached meshes', async () => {
+    const bodyId = toBodyId('body_transfer');
+    const aliasId = toBodyId('body_alias');
+    const mesh = {
+      kind: 'mesh' as const,
+      vertices: new Float32Array([0, 0, 0, 1, 0, 0, 0, 1, 0]),
+      indices: new Uint32Array([0, 1, 2])
+    };
+    const body = {
+      bodyId,
+      name: 'Triangle',
+      source: 'primitive' as const,
+      mesh,
+      faceCount: 1,
+      color: '#ffffff',
+      exportableStep: true,
+      consumed: false,
+      volume: 0,
+      bbox: { min: { x: 0, y: 0, z: 0 }, max: { x: 1, y: 1, z: 0 } }
+    };
+    const projection: ProjectDocument['derived'] = {
+      ...derived('meshes'),
+      bodyRepresentations: {
+        [bodyId]: body,
+        [aliasId]: { ...body, bodyId: aliasId }
+      }
+    };
+    const syncDocument = vi.fn(async () => projection);
+    const { scope } = await installWorker(syncDocument);
+    const received: ProjectDocument['derived'][] = [];
+    scope.postMessage.mockImplementation((message, options) => {
+      if (message.type !== 'sync' || !message.ok) return;
+      expect(options?.transfer).toHaveLength(2);
+      const copy = structuredClone(message, options);
+      expect(message.derived.bodyRepresentations[bodyId]!.mesh.vertices.byteLength).toBe(0);
+      expect(message.derived.bodyRepresentations[bodyId]!.mesh.indices.byteLength).toBe(0);
+      received.push(copy.derived);
+    });
+    const document = addPrimitiveFeature(
+      createProjectDocument('Transport', toUserId('user')),
+      { name: 'Box', primitiveKind: 'box', dimensions: { width: 1, height: 1, depth: 1 } }
+    );
+    for (const requestId of ['first', 'cache-hit']) {
+      post(scope, { type: 'sync', document, requestId });
+    }
+    await vi.waitFor(() => expect(received).toHaveLength(2));
+    expect(syncDocument).toHaveBeenCalledOnce();
+    for (const result of received) {
+      expect(result.bodyRepresentations[bodyId]!.mesh).toEqual(mesh);
+      expect(result.bodyRepresentations[aliasId]!.mesh.vertices.buffer).toBe(
+        result.bodyRepresentations[bodyId]!.mesh.vertices.buffer
+      );
+    }
+    expect(mesh.vertices.byteLength).toBe(36);
+    expect(mesh.indices.byteLength).toBe(12);
+  });
+
   it('does not load the exact-kernel chunk for an empty project', async () => {
     const { scope, createExactKernelAdapter } = await installWorker(async () =>
       derived('unexpected')
