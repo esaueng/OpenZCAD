@@ -912,6 +912,8 @@ for (const tier of ['free', 'premium'] as const) {
           email: 'member@example.com',
           entitlements: {
             tier,
+            projectLimit: premium ? 10_000 : 100,
+            projectStorageLimitBytes: (premium ? 100 : 2) * 1024 ** 3,
             artifactLimitBytes: (premium ? 100 : 2) * 1024 ** 3,
             ai: {
               requestLimit: premium ? 600 : 6,

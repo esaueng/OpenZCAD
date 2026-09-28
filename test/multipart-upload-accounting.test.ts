@@ -1450,3 +1450,81 @@ describe('tier-aware durable artifact quotas', () => {
     ).toHaveLength(2);
   });
 });
+
+describe('tier-aware project quotas', () => {
+  it('raises cloud project count for Premium and stops new projects after downgrade', async () => {
+    for (let i = 1; i < 100; i++) {
+      sqlite
+        .prepare(
+          `INSERT INTO projects (id, user_id, name, document_json, updated_at)
+        VALUES (?, ?, 'Existing', '{}', '2026-01-01')`
+        )
+        .run(`existing-${i}`, OWNER);
+    }
+    const env = {
+      DB: d1.database,
+      PREMIUM_USER_EMAILS: `${OWNER}@example.com`,
+      PREMIUM_PROJECT_LIMIT: '101'
+    };
+    const premium = new D1R2PersistenceService(env);
+    await expect(
+      premium.createProject(OWNER, { name: 'Premium project' })
+    ).resolves.toHaveProperty('project');
+    await expect(
+      premium.createProject(OWNER, { name: 'Too many' })
+    ).rejects.toMatchObject({ kind: 'count', limit: 101 });
+    env.PREMIUM_USER_EMAILS = '';
+    await expect(
+      premium.createProject(OWNER, { name: 'Downgraded' })
+    ).rejects.toMatchObject({ kind: 'count', limit: 100 });
+    expect((await premium.getStorageUsage(OWNER)).projectCount).toBe(101);
+  });
+
+  it('applies the owner project storage allowance to atomic object and asset writes', async () => {
+    const premium = new D1R2PersistenceService({
+      DB: d1.database,
+      PREMIUM_USER_EMAILS: `${OWNER}@example.com`,
+      PREMIUM_PROJECT_STORAGE_LIMIT_BYTES: String(
+        MAX_ACCOUNT_ARTIFACT_BYTES + 8
+      )
+    });
+    await premium.createProject(OWNER, { name: 'Refresh owner policy' });
+    const insertObject = (id: string, bytes: number) =>
+      sqlite
+        .prepare(
+          `INSERT INTO project_document_objects
+      (id, project_id, object_key, checksum_sha256, logical_bytes, stored_bytes, content_encoding, state, created_at)
+      VALUES (?, ?, ?, 'checksum', ?, ?, 'gzip', 'committed', '2026-01-01')`
+        )
+        .run(id, PROJECT, id, bytes, bytes);
+    insertObject('premium-document', MAX_ACCOUNT_ARTIFACT_BYTES + 4);
+    sqlite
+      .prepare(
+        `INSERT INTO project_storage_assets
+      (id, project_id, kind, object_key, checksum_sha256, logical_bytes, stored_bytes, content_encoding, created_at)
+      VALUES ('premium-asset', ?, 'step-source', 'asset-key', 'checksum', 4, 4, 'gzip', '2026-01-01')`
+      )
+      .run(PROJECT);
+    expect(() => insertObject('overflow', 1)).toThrow(
+      'project_account_storage_quota'
+    );
+    expect(() =>
+      sqlite
+        .prepare(`UPDATE projects SET document_bytes = ? WHERE id = ?`)
+        .run(MAX_ACCOUNT_ARTIFACT_BYTES + 9, PROJECT)
+    ).toThrow('project_account_document_quota');
+    // A missing owner row must use the Free fallback rather than SQL NULL disabling a guard.
+    sqlite
+      .prepare(
+        `INSERT INTO projects (id, user_id, name, document_json, updated_at) VALUES ('legacy-owner', 'missing-user', 'Legacy', '{}', '2026-01-01')`
+      )
+      .run();
+    expect(() =>
+      sqlite
+        .prepare(
+          `UPDATE projects SET document_bytes = ? WHERE id = 'legacy-owner'`
+        )
+        .run(MAX_ACCOUNT_ARTIFACT_BYTES + 1)
+    ).toThrow('project_account_document_quota');
+  });
+});

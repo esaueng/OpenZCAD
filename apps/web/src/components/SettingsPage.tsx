@@ -1714,7 +1714,7 @@ export function SettingsPage({
                     title="Membership"
                     description={
                       session.entitlements
-                        ? `${formatBytes(session.entitlements.artifactLimitBytes)} cloud file storage · ${session.entitlements.ai.requestLimit} hosted AI requests per ${session.entitlements.ai.windowSeconds / 60} minutes · ${session.entitlements.ai.costLimitUnits} weighted AI units per window · ${session.entitlements.ai.concurrencyLimit} concurrent requests. Hosted AI remains subject to service availability and deployment budgets.`
+                        ? `${session.entitlements.projectLimit.toLocaleString()} cloud projects · ${formatBytes(session.entitlements.projectStorageLimitBytes)} cloud project storage · ${formatBytes(session.entitlements.artifactLimitBytes)} cloud file storage · ${session.entitlements.ai.requestLimit} hosted AI requests per ${session.entitlements.ai.windowSeconds / 60} minutes · ${session.entitlements.ai.costLimitUnits} weighted AI units per window · ${session.entitlements.ai.concurrencyLimit} concurrent requests. Hosted AI remains subject to service availability and deployment budgets.`
                         : 'Membership limits are available after refreshing your account connection.'
                     }
                     scope="Account"

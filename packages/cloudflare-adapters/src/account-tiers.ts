@@ -1,5 +1,7 @@
 import {
   MAX_ACCOUNT_ARTIFACT_BYTES,
+  MAX_ACCOUNT_PROJECTS,
+  MAX_ACCOUNT_PROJECT_STORAGE_BYTES,
   type AccountEntitlements,
   type AccountTier
 } from '@openzcad/shared';
@@ -88,6 +90,18 @@ export function accountEntitlements(
   const ai = accountAiLimits(env, email);
   return {
     tier,
+    projectLimit:
+      tier === 'premium'
+        ? positiveInteger(env.PREMIUM_PROJECT_LIMIT, 10_000, 100_000)
+        : MAX_ACCOUNT_PROJECTS,
+    projectStorageLimitBytes:
+      tier === 'premium'
+        ? positiveInteger(
+            env.PREMIUM_PROJECT_STORAGE_LIMIT_BYTES,
+            100 * 1024 ** 3,
+            1024 ** 4
+          )
+        : MAX_ACCOUNT_PROJECT_STORAGE_BYTES,
     artifactLimitBytes:
       tier === 'premium'
         ? positiveInteger(
