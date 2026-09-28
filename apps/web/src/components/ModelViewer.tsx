@@ -4913,13 +4913,12 @@ export function ModelViewer({
           x: screen.x + sideX * PIN_CHIP_GAP_PX,
           y: screen.y + sideY * PIN_CHIP_GAP_PX
         };
-        // The right lane's first panel (the inspector, or the model drawer
-        // alone) shares the lane's left edge with whatever is under it.
+        // The right lane's first panel (the command card, the inspector, or
+        // the model drawer alone) shares the lane's left edge with whatever
+        // is under it.
         const inspector = renderer.domElement
           .closest('.viewer-area')
-          ?.querySelector<HTMLElement>(
-            '.stage-right > *, .tool-card:has(.extrude-form)'
-          );
+          ?.querySelector<HTMLElement>('.stage-right > *');
         if (inspector) {
           const hostRect = renderer.domElement.getBoundingClientRect();
           const inspectorLeft =
@@ -5156,9 +5155,7 @@ export function ModelViewer({
             // when that side is under the lane too.
             const lane = renderer.domElement
               .closest('.viewer-area')
-              ?.querySelector<HTMLElement>(
-                '.stage-right > *, .tool-card:has(.extrude-form)'
-              );
+              ?.querySelector<HTMLElement>('.stage-right > *');
             const limit = lane
               ? lane.getBoundingClientRect().left -
                 renderer.domElement.getBoundingClientRect().left -
