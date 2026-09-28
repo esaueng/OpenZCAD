@@ -159,7 +159,12 @@ import type {
   TopologySelection
 } from '@openzcad/shared';
 import { formatNumber } from '../lib/model';
-import { renderLabelSegments, setLiveDiameter } from '../lib/liveLabels';
+import { setLiveDiameter } from '../lib/liveLabels';
+import {
+  refreshSelectionCallout,
+  renderSelectionCallout,
+  type SelectionCalloutContent
+} from '../lib/selectionCallout';
 import type { DimensionMode } from '../lib/keypad';
 import type { ViewportCameraState } from '../lib/workspaceSession';
 import type { MeasurementViewportAnnotation } from '../lib/measurements';
@@ -450,6 +455,13 @@ interface ModelViewerProps {
   selectedTopology: TopologySelection | null;
   /** Exact blend faces created only in the currently published preview. */
   previewFaceHighlights: TopologySelection[];
+  /**
+   * What the selection chip anchored to the pick carries besides its name:
+   * measurement, verbs, clear. Null leaves the name-only label.
+   */
+  selectionCallout?: SelectionCalloutContent | null;
+  /** Consumed bodies a History row brings into focus, drawn as ghosts. */
+  focusGhostBodies?: readonly BodyRepresentation[];
   /** Exact edges highlighted for a single edge-modifier operation. */
   selectedEdges: TopologySelection[];
   /** Select-other popup follows the direct-manipulation experiment gate. */
@@ -1335,6 +1347,8 @@ export function ModelViewer({
   selectedBodyIds,
   selectedTopology,
   previewFaceHighlights,
+  selectionCallout = null,
+  focusGhostBodies,
   selectedEdges,
   pickListEnabled,
   settings,
@@ -1428,6 +1442,21 @@ export function ModelViewer({
   onBoxSelectRef.current = onBoxSelect;
   const onResizePrimitiveFaceRef = useRef(onResizePrimitiveFace);
   onResizePrimitiveFaceRef.current = onResizePrimitiveFace;
+  // Read by the bodies pass, which re-runs on every selection change. When
+  // only the chip's content moves (a verb became available, the armed op
+  // changed), the effect below refills the chip alone rather than rebuilding
+  // every overlay and replaying their fades.
+  const selectionCalloutRef = useRef(selectionCallout);
+  selectionCalloutRef.current = selectionCallout;
+  const focusGhostBodiesRef = useRef(focusGhostBodies);
+  focusGhostBodiesRef.current = focusGhostBodies;
+  const selectionCalloutElementRef = useRef<HTMLElement | null>(null);
+  useEffect(() => {
+    const element = selectionCalloutElementRef.current;
+    if (element?.isConnected) {
+      refreshSelectionCallout(element, selectionCallout);
+    }
+  }, [selectionCallout]);
   /** Hover hysteresis; shared by the pointer frame and the body rebuild that clears hover. */
   const hoverDwellRef = useRef(new HoverDwell<PickCandidate>(hoverKeyOf));
   const onSelectSketchProfileRef = useRef(onSelectSketchProfile);
@@ -8229,12 +8258,102 @@ export function ModelViewer({
       context.renderedBodies = bodies;
     }
 
+    // A History row whose feature a later one consumed: the faces it made
+    // are lit above (the preview-face path), and when none survived its
+    // consumed body is drawn as a ghost where it was. The selection chip
+    // then hangs over whichever of the two is showing.
+    const callout = selectionCalloutRef.current ?? null;
+    const focusBox = new THREE.Box3();
+    for (const ghost of focusGhostBodiesRef.current ?? []) {
+      const geometry = new THREE.BufferGeometry();
+      geometry.setAttribute(
+        'position',
+        new THREE.BufferAttribute(ghost.mesh.vertices, 3)
+      );
+      geometry.setIndex(new THREE.BufferAttribute(ghost.mesh.indices, 1));
+      geometry.computeBoundingBox();
+      const material = keepProgram(
+        new THREE.MeshBasicMaterial({
+          color: SELECTION_SEMANTICS.preview.added,
+          toneMapped: false,
+          transparent: true,
+          opacity: 0.2,
+          side: THREE.DoubleSide,
+          depthWrite: false,
+          // Seen through the part: the consumed body sits inside or on the
+          // surface of what replaced it, where a depth-tested ghost would
+          // only z-fight.
+          depthTest: false
+        })
+      );
+      const mesh = new THREE.Mesh(geometry, material);
+      mesh.name = 'history-focus-ghost';
+      mesh.renderOrder = VIEWPORT_RENDER_ORDER.SELECTED_GEOMETRY;
+      mesh.raycast = () => undefined;
+      context.overlayGroup.add(mesh);
+      if (geometry.boundingBox) {
+        focusBox.union(geometry.boundingBox);
+      }
+    }
+    if (callout?.anchor === 'focus') {
+      for (const object of context.objectsByBodyId.values()) {
+        const overlay = object.getObjectByName('body-preview-face-overlay');
+        if (overlay) {
+          overlay.updateMatrixWorld(true);
+          focusBox.union(new THREE.Box3().setFromObject(overlay));
+        }
+      }
+    }
+    if (E2E_CANVAS_HOOKS_ENABLED) {
+      const ghosts = focusGhostBodiesRef.current?.length ?? 0;
+      if (ghosts > 0) {
+        context.renderer.domElement.dataset.e2eFocusGhosts = String(ghosts);
+      } else {
+        delete context.renderer.domElement.dataset.e2eFocusGhosts;
+      }
+    }
+    /**
+     * The selection chip: the name label of old, now also carrying the
+     * pick's measurement, its verbs and the clear action when the caller
+     * supplies them (lib/selectionCallout). It stays one CSS2D label so the
+     * move preview, the edge clamp and the e2e readiness wait all still find
+     * it where they always did.
+     */
+    const addSelectionCallout = (
+      box: THREE.Box3,
+      fallback: readonly LabelSegment[],
+      bodyId: string | null,
+      extraClass = ''
+    ) => {
+      const top = box.getCenter(new THREE.Vector3());
+      top.z =
+        box.max.z + Math.max(box.getSize(new THREE.Vector3()).z * 0.12, 5);
+      const label = makeLabel(`selection-callout${extraClass}`, '');
+      // Segmented rather than one text run: a cylinder radius drag rewrites
+      // the diameter node in place while the document still holds the old
+      // value.
+      renderSelectionCallout(label.element, fallback, callout);
+      selectionCalloutElementRef.current = label.element;
+      label.position.copy(top);
+      if (bodyId) {
+        // The callout lives in the overlay group, not under the body, so a
+        // move preview would leave the name behind while its body slid out
+        // from under it. Record which body it names and where it rests, and
+        // `applyMovePreview` carries it along under the same transform.
+        label.userData.calloutBodyId = bodyId;
+        label.userData.calloutRestingPosition = top.clone();
+      }
+      context.overlayGroup.add(label);
+    };
+    selectionCalloutElementRef.current = null;
+
     // One body: a name callout. Several: every body wears its pick number,
     // the same number the boolean form's pick list shows, so "which of these
     // is body 1, the base a subtract cuts from" is answered in the viewport.
     // The name alone with a "+2" told the user how many were picked, but not
-    // which ones.
+    // which ones. The chip for the whole pick hangs over all of them.
     if (selectedBodyIds.length > 1) {
+      const pickBox = new THREE.Box3();
       selectedBodyIds.forEach((bodyId, index) => {
         const target = context.objectsByBodyId.get(bodyId);
         const body = bodies.find((candidate) => candidate.bodyId === bodyId);
@@ -8245,6 +8364,7 @@ export function ModelViewer({
         if (box.isEmpty()) {
           return;
         }
+        pickBox.union(box);
         const top = box.getCenter(new THREE.Vector3());
         top.z =
           box.max.z + Math.max(box.getSize(new THREE.Vector3()).z * 0.12, 5);
@@ -8258,6 +8378,14 @@ export function ModelViewer({
         label.userData.calloutRestingPosition = top.clone();
         context.overlayGroup.add(label);
       });
+      if (callout && !pickBox.isEmpty()) {
+        addSelectionCallout(
+          pickBox,
+          textLabelSegments(`${selectedBodyIds.length} bodies`),
+          null,
+          ' selection-callout-over-picks'
+        );
+      }
     }
     const primaryId =
       selectedBodyIds.length === 1 ? selectedBodyIds[0] : undefined;
@@ -8267,9 +8395,6 @@ export function ModelViewer({
       if (target && body) {
         const box = new THREE.Box3().setFromObject(target);
         if (!box.isEmpty()) {
-          const top = box.getCenter(new THREE.Vector3());
-          top.z =
-            box.max.z + Math.max(box.getSize(new THREE.Vector3()).z * 0.12, 5);
           const suffix: readonly LabelSegment[] =
             selectedTopology?.bodyId === primaryId &&
             selectedTopology.topologyId
@@ -8290,24 +8415,19 @@ export function ModelViewer({
                       ))
                 ]
               : [];
-          const label = makeLabel('selection-callout', '');
-          // Segmented rather than one text run: a cylinder radius drag rewrites
-          // the diameter node in place while the document still holds the old
-          // value.
-          renderLabelSegments(label.element, [
-            { kind: 'text', text: body.name },
-            ...suffix
-          ]);
-          label.position.copy(top);
-          // The callout lives in the overlay group, not under the body, so a
-          // move preview would leave the name behind while its body slid out
-          // from under it. Record which body it names and where it rests, and
-          // `applyMovePreview` carries it along under the same transform.
-          label.userData.calloutBodyId = primaryId;
-          label.userData.calloutRestingPosition = top.clone();
-          context.overlayGroup.add(label);
+          addSelectionCallout(
+            box,
+            [{ kind: 'text', text: body.name }, ...suffix],
+            primaryId
+          );
         }
       }
+    } else if (
+      selectedBodyIds.length === 0 &&
+      callout?.anchor === 'focus' &&
+      !focusBox.isEmpty()
+    ) {
+      addSelectionCallout(focusBox, callout.label ?? [], null);
     }
 
     if (!context.hasFitCamera && context.bodyGroup.children.length > 0) {

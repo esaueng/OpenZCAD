@@ -2,10 +2,11 @@ import type { Page } from '@playwright/test';
 import { expect, stubApi, test } from './openzcad-fixtures';
 
 /**
- * The Undo toast, the status toast, the selection chip and the search bar
- * share one lane. Each notice used to carry a fixed offset of its own, so the
- * Undo toast was drawn over the status toast ("Deleted … Undo" across
- * "Measuring … as stale"), over the chip, and over the chrome under the lane.
+ * The Undo toast, the status toast and the search bar share one lane. Each
+ * notice used to carry a fixed offset of its own, so the Undo toast was drawn
+ * over the status toast ("Deleted … Undo" across "Measuring … as stale"),
+ * over the selection chip that then lived in the lane, and over the chrome
+ * under the lane.
  * Every visible notice now has pixels of its own, and the toast stands clear
  * above the search bar and beside the readout.
  */
@@ -15,7 +16,6 @@ async function expectNoticeLaneClear(page: Page) {
       '.toast',
       '.workspace-toast',
       '.workspace-toast-body',
-      '.selection-chip',
       '.activity-pill'
     ];
     // Past the pop-in and the status fade: the pop-in's transform nudges the
@@ -38,7 +38,7 @@ async function expectNoticeLaneClear(page: Page) {
       }
       const { top, bottom, left, right, width } =
         element.getBoundingClientRect();
-      // `display: none` (the hint while the chip names the selection).
+      // `display: none` (a hint with nothing to say).
       if (width === 0) return null;
       return { top, bottom, left, right };
     };
@@ -48,7 +48,6 @@ async function expectNoticeLaneClear(page: Page) {
       readout: box('.viewport-readout'),
       rows: {
         status: box('.workspace-toast-body'),
-        chip: box('.selection-chip'),
         pill: box('.activity-pill'),
         hint: box('.workspace-hint')
       }
@@ -66,8 +65,8 @@ async function expectNoticeLaneClear(page: Page) {
       lane.toast!.bottom <= lane.readout!.top
   ).toBe(true);
   // A running or warning status keeps its own row under the toast (a
-  // settled one steps aside rather than repeat it), as do the chip, the
-  // activity pill and the guidance hint.
+  // settled one steps aside rather than repeat it), as do the activity pill
+  // and the guidance hint.
   for (const [name, row] of Object.entries(lane.rows)) {
     if (!row) continue;
     expect(lane.toast!.bottom, `toast clears the ${name}`).toBeLessThanOrEqual(
@@ -129,8 +128,9 @@ test('deleting a history feature raises an undoable toast that counts its depend
   await expect(summary.getByLabel(/ · 16 features · /)).toBeVisible();
   await expectNoticeLaneClear(page);
 
-  // The full stack: a selection chip, a rebuild still running and the Undo
-  // toast at once. Holding the toast under the pointer keeps it up while the
+  // The full stack: a selection, a rebuild still running and the Undo
+  // toast at once. The selection is named beside the pick now, not in the
+  // lane, and the lane must still stack cleanly with it. Holding the toast under the pointer keeps it up while the
   // pick lands. The running tone is set directly: a real rebuild is over
   // before a spec could measure it, and the lane keys on the tone alone.
   await toast.hover();
@@ -140,7 +140,7 @@ test('deleting a history feature raises an undoable toast that counts its depend
     canvasBox.x + canvasBox.width / 2,
     canvasBox.y + canvasBox.height / 2
   );
-  await expect(page.locator('.selection-chip')).toBeVisible();
+  await expect(page.locator('.selection-callout-chip')).toBeVisible();
   await toast.hover();
   await status.evaluate((footer) => {
     footer.classList.remove('ready', 'hidden');

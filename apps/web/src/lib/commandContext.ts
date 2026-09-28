@@ -1,31 +1,66 @@
 import { TOOL_GROUPS, type ToolId } from './tools';
 
 /**
- * What the command card offers for the current selection.
+ * The verb rail's fixed composition, and which of its tools act on the
+ * current pick.
  *
- * The card answers one question: what can I do with what I picked? Each
- * context lists the tools that act on that kind of pick, in the order they
- * are usually reached for, with at most one primary tool. Every other tool
- * stays one click away behind the card's "More tools" fold, so a context
- * never loses a command; it only decides which ones get a named row.
+ * The rail never changes shape with the selection: its buttons and the
+ * fold's tiles are one fixed, ordered set so a tool is always in the same
+ * place and the hand can learn it. What the selection changes is emphasis
+ * only — a tool that does not act on the current kind of pick is dimmed in
+ * place (still clickable: launching it arms its own picking), and the
+ * context's primary verb is lit.
  *
  * The face and edge verbs that act on the pick itself (Offset Face, Adjust
- * Radius, Edit Fillet…) are not tools and live in the floating tool card;
- * this list is tools only, so no command appears twice.
+ * Radius, Edit Fillet…) are not tools; they live on the selection callout
+ * and the tool card, so no command appears twice.
  */
 export type CommandContextKind =
   'idle' | 'body' | 'bodies' | 'face' | 'edges' | 'region';
 
-export interface CommandContextGroup {
+export interface CommandRailGroup {
   label: string;
   tools: readonly ToolId[];
 }
+
+/**
+ * The rail's primary verbs, in a fixed order that follows the common flow:
+ * sketch then extrude it, or drop a box or cylinder; finish edges and faces
+ * with a fillet or a hole; move bodies and union them. Every other tool is
+ * in the fold, in palette order.
+ */
+export const RAIL_GROUPS: readonly CommandRailGroup[] = [
+  { label: 'Sketch', tools: ['sketch', 'extrude'] },
+  { label: 'Create', tools: ['box', 'cylinder'] },
+  { label: 'Finish', tools: ['fillet', 'hole'] },
+  { label: 'Bodies', tools: ['transform', 'union'] }
+];
+
+export const RAIL_TOOLS: readonly ToolId[] = RAIL_GROUPS.flatMap(
+  (group) => group.tools
+);
+
+/**
+ * Every tool the rail does not carry, under the palette's own group
+ * headings and in palette order. Fixed: the selection never re-sorts it.
+ */
+export const FOLD_GROUPS: readonly CommandRailGroup[] = TOOL_GROUPS.map(
+  (group) => ({
+    label: group.label,
+    tools: group.tools.filter((tool) => !RAIL_TOOLS.includes(tool))
+  })
+).filter((group) => group.tools.length > 0);
 
 export interface CommandContext {
   kind: CommandContextKind;
   /** The tool drawn as the context's primary verb, or none. */
   primary: ToolId | null;
-  groups: readonly CommandContextGroup[];
+  /**
+   * The tools that act on this kind of pick; every other tool is dimmed in
+   * place. `null` means nothing is picked, so nothing is dimmed: any tool
+   * may start from an empty selection and pick its own input.
+   */
+  applies: ReadonlySet<ToolId> | null;
 }
 
 export interface CommandSelection {
@@ -35,53 +70,40 @@ export interface CommandSelection {
   regionCount: number;
 }
 
-const CONTEXTS: Record<CommandContextKind, Omit<CommandContext, 'kind'>> = {
-  idle: {
-    primary: 'sketch',
-    groups: [
-      {
-        label: 'Start',
-        tools: ['sketch', 'box', 'cylinder', 'sphere', 'cone', 'torus']
-      }
-    ]
-  },
+const CONTEXTS: Record<
+  CommandContextKind,
+  { primary: ToolId | null; applies: readonly ToolId[] | null }
+> = {
+  idle: { primary: 'sketch', applies: null },
   body: {
     primary: 'transform',
-    groups: [
-      { label: 'Transform', tools: ['transform', 'scale', 'mirror'] },
-      { label: 'Modify', tools: ['shell', 'split', 'solid-offset'] },
-      {
-        label: 'Pattern',
-        tools: ['linear-pattern', 'circular-pattern', 'grid-pattern']
-      }
+    applies: [
+      'transform',
+      'scale',
+      'mirror',
+      'shell',
+      'split',
+      'solid-offset',
+      'linear-pattern',
+      'circular-pattern',
+      'grid-pattern'
     ]
   },
   bodies: {
     primary: 'union',
-    groups: [
-      { label: 'Combine', tools: ['union', 'subtract', 'intersect'] },
-      { label: 'Transform', tools: ['transform', 'mirror'] }
-    ]
+    applies: ['union', 'subtract', 'intersect', 'transform', 'mirror']
   },
   face: {
-    // The face's own verbs (Offset Face first) are in the tool card, which
-    // already marks the preferred one; the card adds the feature tools that
-    // start from a face.
+    // The face's own verbs (Offset Face first) are on the selection
+    // callout, which already offers the preferred one; the rail lights no
+    // second primary beside it.
     primary: null,
-    groups: [{ label: 'From this face', tools: ['hole', 'draft', 'thicken'] }]
+    applies: ['sketch', 'hole', 'draft', 'thicken', 'shell']
   },
-  edges: {
-    primary: 'fillet',
-    groups: [{ label: 'Round off', tools: ['fillet', 'chamfer'] }]
-  },
+  edges: { primary: 'fillet', applies: ['fillet', 'chamfer'] },
   region: {
     primary: 'extrude',
-    groups: [
-      {
-        label: 'From sketch',
-        tools: ['extrude', 'revolve', 'sweep', 'loft', 'helical-sweep']
-      }
-    ]
+    applies: ['extrude', 'revolve', 'sweep', 'loft', 'helical-sweep']
   }
 };
 
@@ -98,13 +120,16 @@ export function commandContextKind(
 
 export function commandContextFor(selection: CommandSelection): CommandContext {
   const kind = commandContextKind(selection);
-  return { kind, ...CONTEXTS[kind] };
+  const { primary, applies } = CONTEXTS[kind];
+  return { kind, primary, applies: applies ? new Set(applies) : null };
 }
 
-/** Every tool the context did not give a row, in palette order. */
-export function remainingTools(context: CommandContext): ToolId[] {
-  const listed = new Set(context.groups.flatMap((group) => group.tools));
-  return TOOL_GROUPS.flatMap((group) => group.tools).filter(
-    (tool) => !listed.has(tool)
-  );
+/** Whether a tool acts on the context's pick (drives dimming, not layout). */
+export function toolApplies(context: CommandContext, tool: ToolId): boolean {
+  return context.applies === null || context.applies.has(tool);
+}
+
+/** Every tool the rail does not carry, in the fold's fixed order. */
+export function remainingTools(): ToolId[] {
+  return FOLD_GROUPS.flatMap((group) => group.tools);
 }

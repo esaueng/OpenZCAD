@@ -1,7 +1,13 @@
 import { fireEvent, render, screen, within } from '@testing-library/react';
 import { useState } from 'react';
 import { describe, expect, it, vi } from 'vitest';
-import type { CommandSelection } from '../lib/commandContext';
+import {
+  FOLD_GROUPS,
+  RAIL_GROUPS,
+  RAIL_TOOLS,
+  remainingTools,
+  type CommandSelection
+} from '../lib/commandContext';
 import { textLabelSegments } from '../lib/topologyLabels';
 import { TOOL_META, toolTitle, type ToolAvailability } from '../lib/tools';
 import { CommandCard } from './CommandCard';
@@ -55,8 +61,25 @@ function renderCard(
   return { ...view, onLaunchTool };
 }
 
-const railButtons = (container: HTMLElement) =>
-  container.querySelectorAll('button.command-rail:not(.command-more-toggle)');
+const TOOL_BY_LABEL = new Map(
+  Object.entries(TOOL_META).map(([tool, meta]) => [meta.label, tool])
+);
+
+/** The tool ids the buttons stand for, in document order. */
+const toolsOf = (buttons: NodeListOf<Element>) =>
+  Array.from(buttons).map((button) =>
+    TOOL_BY_LABEL.get(
+      (button.getAttribute('aria-label') ?? '').replace(/ (\(.\) )?— .*$/, '')
+    )
+  );
+
+const railTools = (container: HTMLElement) =>
+  toolsOf(
+    container.querySelectorAll('button.command-rail:not(.command-more-toggle)')
+  );
+
+const foldTools = (container: HTMLElement) =>
+  toolsOf(container.querySelectorAll('.command-tile'));
 
 describe('CommandCard', () => {
   it('keeps the palette’s composed accessible names without native titles', () => {
@@ -66,36 +89,67 @@ describe('CommandCard', () => {
     });
     expect(box).not.toHaveAttribute('title');
     expect(box).toHaveClass('command-rail');
-    // Not in the idle rail, so it waits behind the fold, still by name.
-    expect(
-      screen.queryByRole('button', {
-        name: 'Extrude (E) — Create a sketch first'
-      })
-    ).toBeNull();
-    fireEvent.click(screen.getByRole('button', { name: /^More tools/ }));
+    // Extrude is on the rail too, greyed with the reason it cannot run.
     const extrude = screen.getByRole('button', {
       name: 'Extrude (E) — Create a sketch first'
     });
     expect(extrude).toBeDisabled();
-    expect(extrude).toHaveClass('command-tile');
-    expect(extrude).toHaveTextContent('Extrude');
+    expect(extrude).toHaveClass('command-rail');
+    // Revolve waits behind the fold, still by name.
+    expect(
+      screen.queryByRole('button', {
+        name: 'Revolve (R) — Create a sketch first'
+      })
+    ).toBeNull();
+    fireEvent.click(screen.getByRole('button', { name: /^More tools/ }));
+    const revolve = screen.getByRole('button', {
+      name: 'Revolve (R) — Create a sketch first'
+    });
+    expect(revolve).toBeDisabled();
+    expect(revolve).toHaveClass('command-tile');
+    expect(revolve).toHaveTextContent('Revolve');
   });
 
-  it('is the Start tools alone while nothing is picked, Sketch lit', () => {
+  it('is one fixed set of verbs while nothing is picked, Sketch lit', () => {
     const { container } = renderCard();
-    // Nothing names the pick here: the selection chip in the bottom lane
-    // does that, and the bottom lane says what a click takes.
+    // Nothing names the pick here: the selection callout does that.
     expect(container.querySelector('.command-card-head')).toBeNull();
-    expect(railButtons(container)).toHaveLength(6);
-    const start = screen.getByRole('group', { name: 'Start' });
-    const sketch = within(start).getByRole('button', { name: /^Sketch \(S\)/ });
+    expect(railTools(container)).toEqual(RAIL_TOOLS);
+    const group = screen.getByRole('group', { name: 'Sketch' });
+    const sketch = within(group).getByRole('button', {
+      name: /^Sketch \(S\)/
+    });
     expect(sketch).toHaveClass('is-primary');
     // Icon only: the name and key ride the tooltip.
     expect(sketch).toHaveTextContent('');
     expect(sketch.querySelector('svg')).not.toBeNull();
+    // Nothing is picked, so nothing is dimmed.
+    expect(container.querySelectorAll('.is-dim')).toHaveLength(0);
   });
 
-  it('follows the pick: edges put Fillet first, in one group', () => {
+  it.each([
+    ['body', { ...NOTHING, bodyCount: 1 }],
+    ['bodies', { ...NOTHING, bodyCount: 2 }],
+    ['face', { ...NOTHING, faceSelected: true, bodyCount: 1 }],
+    ['edges', { ...NOTHING, edgeCount: 3, bodyCount: 1 }],
+    ['region', { ...NOTHING, regionCount: 1 }]
+  ] as const)(
+    'keeps every rail button in place when a %s is picked',
+    (kind, selection) => {
+      const { container } = renderCard(selection);
+      fireEvent.click(screen.getByRole('button', { name: /^More tools/ }));
+      expect(
+        screen.getByRole('navigation', { name: 'Feature tools' })
+      ).toHaveAttribute('data-context', kind);
+      expect(railTools(container)).toEqual(RAIL_TOOLS);
+      expect(foldTools(container)).toEqual(remainingTools());
+      expect(container.querySelectorAll('.command-rail-divider')).toHaveLength(
+        RAIL_GROUPS.length
+      );
+    }
+  );
+
+  it('dims the tools that do not act on the pick, without removing them', () => {
     const { container } = renderCard(
       { ...NOTHING, edgeCount: 3, bodyCount: 1 },
       {
@@ -103,24 +157,21 @@ describe('CommandCard', () => {
         onClear: vi.fn()
       }
     );
-    const card = screen.getByRole('navigation', { name: 'Feature tools' });
-    expect(card).toHaveAttribute('data-context', 'edges');
-    const round = screen.getByRole('group', { name: 'Round off' });
-    expect(within(round).getByRole('button', { name: /^Fillet/ })).toHaveClass(
-      'is-primary'
+    const fillet = screen.getByRole('button', { name: /^Fillet/ });
+    expect(fillet).toHaveClass('is-primary');
+    expect(fillet).not.toHaveClass('is-dim');
+    const box = screen.getByRole('button', { name: /^Box \(B\)/ });
+    expect(box).toHaveClass('is-dim');
+    expect(box).toHaveAttribute('data-applies', 'false');
+    // Dimmed is not disabled: the tool still launches and picks its input.
+    expect(box).toBeEnabled();
+    fireEvent.click(screen.getByRole('button', { name: /^More tools/ }));
+    const chamfer = screen.getByRole('button', { name: /^Chamfer/ });
+    expect(chamfer).toHaveClass('command-tile');
+    expect(chamfer).not.toHaveClass('is-dim');
+    expect(container.querySelectorAll('.command-tile.is-dim').length).toBe(
+      remainingTools().length - 1
     );
-    expect(railButtons(container)).toHaveLength(2);
-    // Groups are separated by a divider; one group draws none of its own.
-    expect(container.querySelectorAll('.command-rail-divider')).toHaveLength(1);
-  });
-
-  it('separates several groups with dividers', () => {
-    const { container } = renderCard({ ...NOTHING, bodyCount: 1 });
-    for (const label of ['Transform', 'Modify', 'Pattern']) {
-      expect(screen.getByRole('group', { name: label })).toBeInTheDocument();
-    }
-    // Two between the three groups, one before the fold.
-    expect(container.querySelectorAll('.command-rail-divider')).toHaveLength(3);
   });
 
   it('folds every other tool away by default and counts them', () => {
@@ -129,12 +180,17 @@ describe('CommandCard', () => {
     const toggle = within(fold).getByRole('button', { name: /^More tools/ });
     expect(toggle).toHaveAttribute('aria-expanded', 'false');
     expect(container.querySelector('.command-flyout')).toBeNull();
-    // Six idle tools; the rest are behind the fold, and the name says so.
-    const rest = Object.keys(TOOL_META).length - 6;
+    const rest = Object.keys(TOOL_META).length - RAIL_TOOLS.length;
     expect(toggle).toHaveAccessibleName(`More tools (${rest})`);
     fireEvent.click(toggle);
     expect(toggle).toHaveAttribute('aria-expanded', 'true');
     expect(container.querySelectorAll('.command-tile')).toHaveLength(rest);
+    // Fixed headings from the palette's own groups.
+    expect(
+      Array.from(container.querySelectorAll('.command-flyout-heading')).map(
+        (node) => node.textContent
+      )
+    ).toEqual(FOLD_GROUPS.map((group) => group.label));
     fireEvent.click(toggle);
     expect(container.querySelector('.command-flyout')).toBeNull();
   });
@@ -143,9 +199,9 @@ describe('CommandCard', () => {
     const { onLaunchTool } = renderCard({ ...NOTHING, bodyCount: 1 });
     fireEvent.click(screen.getByRole('button', { name: /^Move \(M\)/ }));
     fireEvent.click(screen.getByRole('button', { name: /^More tools/ }));
-    fireEvent.click(screen.getByRole('button', { name: /^Box \(B\)/ }));
+    fireEvent.click(screen.getByRole('button', { name: /^Sphere/ }));
     expect(onLaunchTool).toHaveBeenNthCalledWith(1, 'transform');
-    expect(onLaunchTool).toHaveBeenNthCalledWith(2, 'box');
+    expect(onLaunchTool).toHaveBeenNthCalledWith(2, 'sphere');
   });
 
   it.each([

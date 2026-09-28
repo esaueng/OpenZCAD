@@ -95,7 +95,7 @@ test('measuring in View leaves the Build selection untouched', async ({
   await page.mouse.click(buildEdge.x, buildEdge.y);
   await expect(status).toContainText('1 exact edge selected');
   const selectedBefore = await page
-    .locator('.selection-chip-label')
+    .locator('.selection-callout-chip .selection-callout-name')
     .textContent();
   expect(selectedBefore).toBeTruthy();
 
@@ -114,9 +114,9 @@ test('measuring in View leaves the Build selection untouched', async ({
   // bar's transient line, which by now reports the mode switch — the newest
   // thing that happened, not the state that survived it.
   await switchWorkspace(page, 'Build');
-  await expect(page.locator('.selection-chip-label')).toHaveText(
-    selectedBefore!
-  );
+  await expect(
+    page.locator('.selection-callout-chip .selection-callout-name')
+  ).toHaveText(selectedBefore!);
   await expect(status).toContainText('Edge selected');
 });
 
@@ -144,7 +144,9 @@ test('a measured pick arms no sketch and no drag handle', async ({ page }) => {
   ).toBeHidden();
   await expect(page.getByRole('form', { name: 'Move controls' })).toBeHidden();
   // And no selection was made to produce the measurement.
-  await expect(page.locator('.selection-chip-label')).toBeHidden();
+  await expect(
+    page.locator('.selection-callout-chip .selection-callout-name')
+  ).toBeHidden();
   await expect(page.getByRole('contentinfo')).toContainText('measured');
 });
 
@@ -165,10 +167,14 @@ test('measuring an edge records it without selecting it', async ({ page }) => {
   await expect(workbench.getByRole('listitem')).toContainText('mm');
   // The running edge set is the measure tool's own state now, so recording a
   // length leaves the workspace selection empty.
-  await expect(page.locator('.selection-chip-label')).toBeHidden();
+  await expect(
+    page.locator('.selection-callout-chip .selection-callout-name')
+  ).toBeHidden();
 
   await switchWorkspace(page, 'Build');
-  await expect(page.locator('.selection-chip-label')).toBeHidden();
+  await expect(
+    page.locator('.selection-callout-chip .selection-callout-name')
+  ).toBeHidden();
 });
 
 test('the preview names exactly what the click then measures', async ({

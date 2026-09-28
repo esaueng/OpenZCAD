@@ -275,6 +275,95 @@
   pointer-events: none;
 }
 
+/* The selection chip: the name label grown into the one surface for the
+   pick — name, key measurement, the verbs for that kind of pick, clear. It
+   keeps the label's placement. Only its buttons take input: the chip floats
+   over the model, and a click on its name still reaches the geometry under
+   it, as it always did through the plain label. */
+.selection-callout.selection-callout-chip {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  padding: 2px 2px 2px 8px;
+  user-select: none;
+}
+
+.selection-callout-chip :is(.selection-callout-verb, .selection-callout-clear) {
+  pointer-events: auto;
+}
+
+/* Over several picks it rises above their numbered labels. */
+.selection-callout.selection-callout-over-picks {
+  margin-top: -28px;
+}
+
+.selection-callout-name {
+  max-width: 260px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  font-weight: var(--fw-medium);
+}
+
+.selection-callout-detail {
+  color: var(--color-viewport-text-muted);
+  font-variant-numeric: tabular-nums;
+}
+
+.selection-callout-verbs {
+  display: inline-flex;
+  align-items: center;
+  gap: 2px;
+  padding-left: 6px;
+  border-left: 1px solid rgba(129, 169, 255, 0.28);
+}
+
+.selection-callout-verb {
+  min-height: 0;
+  height: 20px;
+  padding: 0 7px;
+  color: inherit;
+  background: transparent;
+  border: 1px solid transparent;
+  border-radius: var(--radius-sm);
+  font-family: var(--font-ui);
+  font-size: var(--fs-mini);
+  line-height: 1;
+}
+
+.selection-callout-verb:hover:not(:disabled) {
+  background: rgba(129, 169, 255, 0.18);
+}
+
+.selection-callout-verb[aria-pressed='true'] {
+  color: var(--color-accent);
+  border-color: var(--color-accent-border);
+}
+
+.selection-callout-verb:disabled {
+  opacity: 0.45;
+  cursor: default;
+}
+
+.selection-callout-clear {
+  display: inline-grid;
+  place-items: center;
+  width: 18px;
+  height: 18px;
+  min-height: 0;
+  padding: 0;
+  color: inherit;
+  opacity: 0.7;
+  background: transparent;
+  border-radius: var(--radius-sm);
+  font-size: var(--fs-md);
+  line-height: 1;
+}
+
+.selection-callout-clear:hover {
+  opacity: 1;
+  background: rgba(129, 169, 255, 0.18);
+}
+
 .selection-callout.body-order-callout {
   display: inline-flex;
   align-items: center;
@@ -423,37 +512,13 @@
   box-shadow: inset 0 0 0 1px var(--color-accent);
 }
 
-/* Bottom-center selection summary with a quick measurement. */
-.selection-chip {
-  position: absolute;
-  bottom: 12px;
-  left: 50%;
-  transform: translateX(-50%);
-  z-index: var(--z-viewer-overlay);
-  display: inline-flex;
-  align-items: center;
-  gap: 8px;
-  min-height: 24px;
-  padding: 2px 4px 2px 10px;
-  color: var(--color-accent);
-  background: var(--color-surface);
-  border: 1px solid var(--color-accent-border);
-  border-radius: var(--radius-sm);
-  font-family: var(--font-mono);
-  font-size: var(--fs-mini);
-  text-transform: uppercase;
-  white-space: nowrap;
-}
-
 /* Transient notice at the top of the notice lane (quiet-stage.css): one at
    a time, short-lived, raised only by actions the viewport itself does not
    show the result of (a delete, an export). It sits in the viewer area
    rather than the shell so it clears the shell's overflow clip. */
 .toast {
   position: absolute;
-  bottom: calc(
-    var(--lane-base, 48px) + var(--lane-chip, 0px) + var(--lane-status, 0px)
-  );
+  bottom: calc(var(--lane-base, 48px) + var(--lane-status, 0px));
   /* Centred on the lane, which is the viewer's centre unless the first-run
      tour or a phone width narrows one side of it. */
   left: calc((var(--notice-start, 12px) + 100% - var(--notice-end, 12px)) / 2);
@@ -504,32 +569,6 @@
 }
 
 .toast-dismiss:hover {
-  color: var(--color-text);
-  background: var(--color-surface-hover);
-}
-
-.selection-chip-label {
-  font-weight: var(--fw-medium);
-}
-
-.selection-chip-detail {
-  color: var(--color-text-subtle);
-  font-family: var(--font-mono);
-  font-size: var(--fs-mini);
-}
-
-.selection-chip-clear {
-  width: 18px;
-  height: 18px;
-  display: inline-grid;
-  place-items: center;
-  color: var(--color-text-subtle);
-  border-radius: var(--radius-sm);
-  font-size: var(--fs-md);
-  line-height: 1;
-}
-
-.selection-chip-clear:hover {
   color: var(--color-text);
   background: var(--color-surface-hover);
 }
