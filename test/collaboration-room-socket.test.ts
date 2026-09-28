@@ -1,5 +1,5 @@
 import { afterAll, beforeAll, describe, expect, it, vi } from 'vitest';
-import { ProjectCollaborationRoom } from '@openzcad/cloudflare-adapters';
+import type { ProjectCollaborationRoom } from '@openzcad/cloudflare-adapters';
 import { toUserId, type ProjectDocument } from '@openzcad/shared';
 import {
   addPrimitiveFeature,
@@ -7,6 +7,7 @@ import {
 } from '@openzcad/document-core';
 import {
   createRoomContext,
+  createTestRoom,
   installWorkerSocketGlobals,
   type FakeWebSocket
 } from './collaboration-room-harness';
@@ -108,10 +109,129 @@ function deeplyNestedDocumentFrame(depth: number, clientId = 'client_ws') {
 }
 
 describe('collaboration room socket handling', () => {
+  it('restores open sockets and presence after hibernation', async () => {
+    const { context } = createRoomContext();
+    const base = createProjectDocument('Sleeping room', toUserId('user_room'));
+    const original = createTestRoom(context, {});
+    const owner = await openSocket(original, base.projectId);
+    await owner.receive(hello(base, 'owner'));
+    const viewer = await openSocket(original, base.projectId, {
+      userId: 'viewer',
+      displayName: 'Viewer',
+      role: 'viewer'
+    });
+    await viewer.receive(hello(null, 'viewer-client'));
+    await viewer.receive(
+      JSON.stringify({
+        type: 'presence',
+        clientId: 'viewer-client',
+        status: 'idle'
+      })
+    );
+    const attachmentWrites = viewer.attachmentWrites;
+    await viewer.receive(
+      JSON.stringify({
+        type: 'presence',
+        clientId: 'viewer-client',
+        status: 'idle'
+      })
+    );
+    expect(viewer.attachmentWrites).toBe(attachmentWrites);
+
+    const restored = createTestRoom(context, {});
+    expect((await restored.snapshot()).members).toContainEqual([
+      'viewer-client',
+      'idle'
+    ]);
+    viewer.sent.length = 0;
+    const edited = addPrimitiveFeature(base, {
+      name: 'After wake',
+      primitiveKind: 'box',
+      dimensions: { width: 1, height: 1, depth: 1 }
+    });
+    await owner.receive(documentFrame(edited, base.version, 'owner'));
+    expect(viewer.frames()).toContainEqual({
+      type: 'document',
+      clientId: 'owner',
+      document: edited
+    });
+
+    restored.webSocketClose(viewer as unknown as WebSocket);
+    expect((await restored.snapshot()).members).not.toContainEqual([
+      'viewer-client',
+      'idle'
+    ]);
+  });
+
+  it('accepts hello after hibernating before the first message', async () => {
+    const { context } = createRoomContext();
+    const base = createProjectDocument('Pending hello', toUserId('user_room'));
+    const original = createTestRoom(context, {});
+    const socket = await openSocket(original, base.projectId);
+    createTestRoom(context, {});
+
+    await socket.receive(hello(base));
+    expect(socket.frames()).toContainEqual(
+      expect.objectContaining({ type: 'state', role: 'owner' })
+    );
+  });
+
+  it('loads document history only when a woken room receives an edit', async () => {
+    const storage = createRoomContext();
+    const base = createProjectDocument(
+      'History on demand',
+      toUserId('user_room')
+    );
+    const original = createTestRoom(storage.context, {});
+    const socket = await openSocket(original, base.projectId);
+    await socket.receive(hello(base));
+    storage.reads.length = 0;
+    createTestRoom(storage.context, {});
+
+    await socket.receive(
+      JSON.stringify({
+        type: 'presence',
+        clientId: 'client_ws',
+        status: 'idle'
+      })
+    );
+    expect(storage.reads.some((key) => key.startsWith('room:history:'))).toBe(
+      false
+    );
+
+    const edited = addPrimitiveFeature(base, {
+      name: 'History after wake',
+      primitiveKind: 'box',
+      dimensions: { width: 1, height: 1, depth: 1 }
+    });
+    await socket.receive(documentFrame(edited, base.version));
+    expect(storage.reads.some((key) => key.startsWith('room:history:'))).toBe(
+      true
+    );
+    expect(socket.lastFrame()).toMatchObject({ type: 'ack' });
+  });
+
+  it('closes a restored socket with missing identity', async () => {
+    const { context } = createRoomContext();
+    const base = createProjectDocument(
+      'Missing identity',
+      toUserId('user_room')
+    );
+    const original = createTestRoom(context, {});
+    const socket = await openSocket(original, base.projectId);
+    socket.serializeAttachment({ schema: 0 });
+    createTestRoom(context, {});
+
+    expect(socket.closed).toEqual({
+      code: 1008,
+      reason: 'Collaboration identity is unavailable.'
+    });
+  });
+
   it('broadcasts an accepted reconnect document to existing peers', async () => {
     const { context, values } = createRoomContext();
     const base = createProjectDocument('Reconnect room', toUserId('user_room'));
-    const room = new ProjectCollaborationRoom(context, {});
+    const room = createTestRoom(context, {});
     const existing = await openSocket(room, base.projectId);
     await existing.receive(hello(base, 'existing'));
     existing.sent.length = 0;
@@ -147,7 +267,7 @@ describe('collaboration room socket handling', () => {
   it('closes sockets and deletes every stored value during internal erasure', async () => {
     const { context, values } = createRoomContext();
     const base = createProjectDocument('Erased room', toUserId('user_room'));
-    const room = new ProjectCollaborationRoom(context, {
+    const room = createTestRoom(context, {
       ENVIRONMENT: 'development',
       AUTH_MODE: 'development'
     });
@@ -179,7 +299,7 @@ describe('collaboration room socket handling', () => {
       PRODUCTION_GUARD: 'enabled',
       PROJECT_COLLABORATION_CANARY_EMAILS: 'allowed@example.com'
     };
-    const room = new ProjectCollaborationRoom(context, roomEnv);
+    const room = createTestRoom(context, roomEnv);
     const request = (email: string) =>
       new Request(`https://room.test/?projectId=${base.projectId}`, {
         headers: {
@@ -217,7 +337,7 @@ describe('collaboration room socket handling', () => {
       toUserId('user_room')
     );
     let memberRole: 'editor' | null = 'editor';
-    const room = new ProjectCollaborationRoom(context, {
+    const roomEnv = {
       DB: {
         prepare: () => ({
           bind: () => ({
@@ -226,7 +346,8 @@ describe('collaboration room socket handling', () => {
           })
         })
       }
-    });
+    };
+    const room = createTestRoom(context, roomEnv);
     const owner = await openSocket(room, base.projectId);
     await owner.receive(hello(base, 'client_owner'));
     const member = await openSocket(room, base.projectId, {
@@ -237,6 +358,7 @@ describe('collaboration room socket handling', () => {
     await member.receive(hello(null, 'client_member'));
     memberRole = null;
     member.sent.length = 0;
+    createTestRoom(context, roomEnv);
 
     const next = addPrimitiveFeature(base, {
       name: 'Private after removal',
@@ -258,7 +380,7 @@ describe('collaboration room socket handling', () => {
     const { context } = createRoomContext();
     const base = createProjectDocument('Trashed room', toUserId('user_room'));
     let trashed = false;
-    const room = new ProjectCollaborationRoom(context, {
+    const room = createTestRoom(context, {
       ENVIRONMENT: 'development',
       AUTH_MODE: 'development',
       DB: {
@@ -320,7 +442,7 @@ describe('collaboration room socket handling', () => {
     );
     let delayBlocker = false;
     let releaseBlocker: (() => void) | undefined;
-    const room = new ProjectCollaborationRoom(context, {
+    const room = createTestRoom(context, {
       DB: {
         prepare: () => ({
           bind: (_projectId: string, userId: string) => ({
@@ -381,7 +503,7 @@ describe('collaboration room socket handling', () => {
       toUserId('user_room')
     );
     let memberPresent = true;
-    const room = new ProjectCollaborationRoom(context, {
+    const room = createTestRoom(context, {
       DB: {
         prepare: () => ({
           bind: () => ({
@@ -418,7 +540,7 @@ describe('collaboration room socket handling', () => {
       'Disabled collaboration room',
       toUserId('user_room')
     );
-    const room = new ProjectCollaborationRoom(context, {});
+    const room = createTestRoom(context, {});
     const owner = await openSocket(room, base.projectId);
     await owner.receive(hello(base, 'client_owner'));
     const viewer = await openSocket(room, base.projectId, {
@@ -459,7 +581,7 @@ describe('collaboration room socket handling', () => {
       toUserId('user_room')
     );
     const roomEnv = { PROJECT_EDIT_LEASES_ENFORCED: 'true' };
-    const room = new ProjectCollaborationRoom(context, roomEnv);
+    const room = createTestRoom(context, roomEnv);
     const editor = await openSocket(room, base.projectId, {
       userId: 'user_disconnected_editor',
       displayName: 'Disconnected editor',
@@ -471,7 +593,7 @@ describe('collaboration room socket handling', () => {
     );
     expect(values.has('room:edit-lease')).toBe(true);
 
-    const restarted = new ProjectCollaborationRoom(context, roomEnv);
+    const restarted = createTestRoom(context, roomEnv);
     const response = await restarted.fetch(
       new Request(
         `https://project-room.internal/?projectId=${base.projectId}`,
@@ -495,7 +617,7 @@ describe('collaboration room socket handling', () => {
       toUserId('user_room')
     );
     let collaborationEnabled = true;
-    const room = new ProjectCollaborationRoom(context, {
+    const room = createTestRoom(context, {
       ENVIRONMENT: 'development',
       AUTH_MODE: 'development',
       DB: {
@@ -537,7 +659,7 @@ describe('collaboration room socket handling', () => {
   it('stores only a hash and consumes a native socket ticket once', async () => {
     const { context, values } = createRoomContext();
     const base = createProjectDocument('Ticket room', toUserId('user_room'));
-    const room = new ProjectCollaborationRoom(context, {
+    const room = createTestRoom(context, {
       ENVIRONMENT: 'development',
       AUTH_MODE: 'development'
     });
@@ -550,7 +672,7 @@ describe('collaboration room socket handling', () => {
     );
 
     // Recreate the object to prove pending tickets survive normal DO eviction.
-    const restored = new ProjectCollaborationRoom(context, {
+    const restored = createTestRoom(context, {
       ENVIRONMENT: 'development',
       AUTH_MODE: 'development'
     });
@@ -569,7 +691,7 @@ describe('collaboration room socket handling', () => {
   it('rejects expired and forged native socket tickets before opening a socket', async () => {
     const { context, values } = createRoomContext();
     const base = createProjectDocument('Expired ticket', toUserId('user_room'));
-    const room = new ProjectCollaborationRoom(context, {
+    const room = createTestRoom(context, {
       ENVIRONMENT: 'development',
       AUTH_MODE: 'development'
     });
@@ -604,7 +726,7 @@ describe('collaboration room socket handling', () => {
   it('serves room state over an accepted socket', async () => {
     const { context } = createRoomContext();
     const base = createProjectDocument('Socket Room', toUserId('user_room'));
-    const room = new ProjectCollaborationRoom(context, {});
+    const room = createTestRoom(context, {});
     const socket = await openSocket(room, base.projectId);
 
     await socket.receive(hello(base));
@@ -618,7 +740,7 @@ describe('collaboration room socket handling', () => {
   it('answers a hostile payload with an error frame and stays live', async () => {
     const { context } = createRoomContext();
     const base = createProjectDocument('Hostile Room', toUserId('user_room'));
-    const room = new ProjectCollaborationRoom(context, {});
+    const room = createTestRoom(context, {});
     const socket = await openSocket(room, base.projectId);
     await socket.receive(hello(base));
     socket.sent.length = 0;
@@ -663,7 +785,7 @@ describe('collaboration room socket handling', () => {
       dimensions: { radius: 1 }
     });
 
-    const room = new ProjectCollaborationRoom(context, {});
+    const room = createTestRoom(context, {});
     const socket = await openSocket(room, base.projectId);
     await socket.receive(hello(base));
     await socket.receive(documentFrame(fromA, base.version));
@@ -687,7 +809,7 @@ describe('collaboration room socket handling', () => {
   it('reports a failed write instead of leaving the sender unanswered', async () => {
     const { context, values } = createRoomContext();
     const base = createProjectDocument('Broken Room', toUserId('user_room'));
-    const room = new ProjectCollaborationRoom(context, {});
+    const room = createTestRoom(context, {});
     const socket = await openSocket(room, base.projectId);
     await socket.receive(hello(base));
     socket.sent.length = 0;
@@ -731,7 +853,7 @@ describe('collaboration room socket handling', () => {
   it('closes a socket whose raw message exceeds the frame ceiling', async () => {
     const { context } = createRoomContext();
     const base = createProjectDocument('Flood Room', toUserId('user_room'));
-    const room = new ProjectCollaborationRoom(context, {});
+    const room = createTestRoom(context, {});
     const socket = await openSocket(room, base.projectId);
 
     await socket.receive('x'.repeat(950_001));

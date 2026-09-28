@@ -1311,6 +1311,17 @@ export function SettingsPage({
                 </span>
               </SettingRow>
               <SettingRow
+                title="Cloud file storage"
+                description="Stored imports and exports count toward the project owner's allowance. Existing files remain available if the account exceeds its allowance."
+                scope="Account"
+              >
+                <span className="settings-state">
+                  {storageUsage
+                    ? `${formatBytes(storageUsage.artifactBytes)} of ${formatBytes(storageUsage.artifactLimitBytes)}`
+                    : '—'}
+                </span>
+              </SettingRow>
+              <SettingRow
                 title="STEP and STL exports"
                 description="Exports are generated and validated by the same browser geometry worker as the viewport."
                 scope="Exact pipeline"
@@ -1698,6 +1709,21 @@ export function SettingsPage({
                       <LogOut size={14} aria-hidden="true" />
                       Sign out
                     </button>
+                  </SettingRow>
+                  <SettingRow
+                    title="Membership"
+                    description={
+                      session.entitlements
+                        ? `${session.entitlements.projectLimit.toLocaleString()} cloud projects · ${formatBytes(session.entitlements.projectStorageLimitBytes)} cloud project storage · ${formatBytes(session.entitlements.artifactLimitBytes)} cloud file storage · ${session.entitlements.ai.requestLimit} hosted AI requests per ${session.entitlements.ai.windowSeconds / 60} minutes · ${session.entitlements.ai.costLimitUnits} weighted AI units per window · ${session.entitlements.ai.concurrencyLimit} concurrent requests. Hosted AI remains subject to service availability and deployment budgets.`
+                        : 'Membership limits are available after refreshing your account connection.'
+                    }
+                    scope="Account"
+                  >
+                    <span className="settings-state">
+                      {session.entitlements?.tier === 'premium'
+                        ? 'Premium'
+                        : 'Free'}
+                    </span>
                   </SettingRow>
                   {desktopAuthorizationAttempt ? (
                     <div
