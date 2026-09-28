@@ -213,78 +213,38 @@
   flex: 1;
 }
 
-/* Collapsed History: the scrub strip in the header, name and position after it. */
+/* Collapsed History: one line of plain text in the header — the feature
+   count, then where the history is at. The name truncates; the count keeps
+   its width. */
 .sidebar .sidebar-section.collapsed .section-title {
   gap: 8px;
 }
 
 .history-scrub {
-  position: relative;
   flex: 1 1 auto;
-  min-width: 48px;
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  gap: 2px;
-  padding: 0 2px;
-}
-
-/* One connector behind the whole strip rather than one per gap: the dots
-   squash together as the history grows and per-dot connectors would not. */
-.history-scrub::before {
-  content: '';
-  position: absolute;
-  left: 4px;
-  right: 4px;
-  top: 50%;
-  height: 1px;
-  background: var(--color-border-strong);
-}
-
-.history-scrub-dot {
-  position: relative;
-  flex: 0 1 7px;
-  min-width: 3px;
-  height: 7px;
-  border-radius: 999px;
-  background: var(--color-text-muted);
-  border: 1.5px solid var(--color-text-muted);
-  box-sizing: border-box;
-}
-
-.history-scrub-dot.consumed {
-  background: var(--color-surface);
-  border-color: var(--color-text-subtle);
-}
-
-.history-scrub-dot.active {
-  flex-basis: 9px;
-  min-width: 9px;
-  height: 9px;
-  background: var(--color-accent);
-  border-color: var(--color-accent);
-  box-shadow: 0 0 0 2px var(--color-accent-dim);
-}
-
-.history-scrub-name {
-  flex: 0 1 auto;
   min-width: 0;
-  max-width: 45%;
-  color: var(--color-text);
+  display: flex;
+  align-items: baseline;
+  overflow: hidden;
+  color: var(--color-text-muted);
   font-family: var(--font-ui);
   font-size: var(--fs-xs);
   font-weight: var(--fw-regular);
   letter-spacing: 0;
   text-transform: none;
-  overflow: hidden;
-  text-overflow: ellipsis;
   white-space: nowrap;
 }
 
-.history-scrub-position {
+.history-scrub-count {
   flex: 0 0 auto;
-  color: var(--color-text-subtle);
-  font-size: var(--fs-mini);
+  color: var(--color-text);
+}
+
+.history-scrub-name {
+  flex: 0 1 auto;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
 }
 
 /* ── Viewport furniture in the column layout ── */

@@ -696,11 +696,6 @@
   white-space: nowrap;
 }
 
-/* The chip names the selection where the hint would be; it wins. */
-.viewer-area:has(.selection-chip) .workspace-hint {
-  display: none;
-}
-
 /* The assistant stream stands on the bar where the hint would be, and its
    foot line reads there; the hint would sit on top of it. */
 .workspace.with-assistant .workspace-hint {
@@ -709,12 +704,12 @@
 
 /* ── The notice lane ──
    Everything that talks above the search bar shares one centred lane,
-   stacked from the bar up: the selection chip, then the status row (the
-   status toast, the activity pill or, failing both, the guidance hint),
-   then the action toast (Undo). Each row that is showing lifts the rows
-   above it. The rows used to carry fixed offsets of their own, so the Undo
-   toast, the status toast and the chip landed on the same pixels whenever
-   two of them were up at once. */
+   stacked from the bar up: the status row (the status toast, the activity
+   pill or, failing both, the guidance hint), then the action toast (Undo).
+   Each row that is showing lifts the rows above it. The rows used to carry
+   fixed offsets of their own, so the Undo toast and the status toast landed
+   on the same pixels whenever both were up at once. The selection is named
+   by its chip in the viewport, beside the pick, not in this lane. */
 .workspace.column-layout {
   /* The lane's foot, 8px over the search bar, and its sides: the bottom
      lanes' own insets, which the tour card below can narrow. */
@@ -724,21 +719,13 @@
 }
 
 .viewer-area {
-  --lane-chip: 0px;
   --lane-status: 0px;
 }
 
-/* The chip is 24px tall: its row leaves 12px under the row above. */
-.workspace.column-layout .viewer-area:has(.selection-chip) {
-  --lane-chip: 36px;
-}
-
 /* The status row holds a 28px toast, the 58px activity pill or the
-   one-line hint. The hint only draws while no status is live, and the chip,
-   which names the selection where the hint would be, hides it. */
+   one-line hint. The hint only draws while no status is live. */
 .viewer-area:has(.workspace-toast:not(.hidden)),
-:where(.workspace:not(.with-assistant))
-  .viewer-area:not(:has(.selection-chip)):has(.workspace-hint) {
+:where(.workspace:not(.with-assistant)) .viewer-area:has(.workspace-hint) {
   --lane-status: 40px;
 }
 
@@ -772,29 +759,24 @@
   pointer-events: none;
 }
 
-/* The status toast and the activity lane span the lane; the chip and the
-   Undo toast (viewer.css) centre on it. */
+/* The status toast and the activity lane span the lane; the Undo toast
+   (viewer.css) centres on it. */
 .workspace-toast,
 .activity-lane {
   left: var(--notice-start);
   right: var(--notice-end);
-  bottom: calc(var(--lane-base) + var(--lane-chip));
-}
-
-.workspace.column-layout .selection-chip {
   bottom: var(--lane-base);
-  left: calc((var(--notice-start) + 100% - var(--notice-end)) / 2);
 }
 
 /* The first-run tour card sits in the lane's bottom-left corner, 296px wide,
-   and hid the chip, the status toast and the Undo toast's start behind it.
-   Where the viewport has the room, the notice rows start after the card;
-   where it does not, the card lifts above the tallest stack the lane can
-   build (56 base + 36 chip + 40 status + 34 toast, and 14 to spare). */
+   and hid the status toast and the Undo toast's start behind it. Where the
+   viewport has the room, the notice rows start after the card; where it
+   does not, the card lifts above the tallest stack the lane can build (56
+   base + 70 activity pill + 34 toast, and 20 to spare). */
 @container viewer-area (min-width: 1240px) {
   .workspace.column-layout
     .viewer-area:has(.workspace-tour)
-    :is(.workspace-toast, .activity-lane, .toast, .selection-chip) {
+    :is(.workspace-toast, .activity-lane, .toast) {
     --notice-start: calc(var(--lane-inset) + 296px + 12px);
   }
 }
@@ -1253,6 +1235,19 @@ button.command-rail.active {
   border-color: var(--color-accent-border);
 }
 
+/* A tool that does not act on the current pick is dimmed in place, never
+   moved: the rail is one fixed set, and a hover restores it fully since it
+   is still a working button that arms its own picking. */
+button.command-rail.is-dim:not(:disabled),
+.command-tile.is-dim:not(:disabled) {
+  opacity: 0.55;
+}
+
+button.command-rail.is-dim:hover:not(:disabled),
+.command-tile.is-dim:hover:not(:disabled) {
+  opacity: 1;
+}
+
 /* Greyed, not hidden: the icons never move, and the reason is the
    button's description. */
 button.command-rail:disabled {
@@ -1261,8 +1256,8 @@ button.command-rail:disabled {
   cursor: default;
 }
 
-/* Every tool the context did not name, by name, beside the rail. Two
-   columns keep the panel shorter than the rail at every context. */
+/* Every tool the rail does not carry, by name, beside the rail, under
+   fixed group headings. Two columns keep the panel compact. */
 .command-flyout {
   position: absolute;
   top: 0;
@@ -1277,6 +1272,20 @@ button.command-rail:disabled {
   border-radius: var(--radius-lg);
   box-shadow: var(--shadow-2);
   animation: oz-fade var(--dur-fast) var(--ease-out);
+}
+
+.command-flyout-heading {
+  grid-column: 1 / -1;
+  padding: 6px 7px 2px;
+  color: var(--color-text-dim);
+  font-size: var(--fs-xs);
+  font-weight: 600;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+}
+
+.command-flyout-heading:first-child {
+  padding-top: 2px;
 }
 
 .command-tile {

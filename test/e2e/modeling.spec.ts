@@ -3398,8 +3398,9 @@ test('each sketch plane label names the plane it actually opens', async ({
   const extrudeKeypad = page.getByRole('dialog', { name: 'Height value' });
   await extrudeKeypad.getByRole('textbox').fill('24');
   await extrudeKeypad.getByRole('button', { name: 'Apply height' }).click();
-  await expect(page.locator('.selection-chip')).toBeVisible();
-  const chip = (await page.locator('.selection-chip').textContent()) ?? '';
+  await expect(page.locator('.selection-callout-chip')).toBeVisible();
+  const chip =
+    (await page.locator('.selection-callout-chip').textContent()) ?? '';
   const triple = /([\d.]+)\s*×\s*([\d.]+)\s*×\s*([\d.]+)/.exec(chip);
   if (!triple) {
     throw new Error(`no size in selection chip: ${chip}`);
@@ -3506,8 +3507,9 @@ test('types an exact rectangle while drawing it', async ({ page }) => {
   await extrudeKeypad.getByRole('textbox').fill('24');
   await extrudeKeypad.getByRole('button', { name: 'Apply height' }).click();
 
-  await expect(page.locator('.selection-chip')).toBeVisible();
-  const chip = (await page.locator('.selection-chip').textContent()) ?? '';
+  await expect(page.locator('.selection-callout-chip')).toBeVisible();
+  const chip =
+    (await page.locator('.selection-callout-chip').textContent()) ?? '';
   const triple = /([\d.]+)\s*×\s*([\d.]+)\s*×\s*([\d.]+)/.exec(chip);
   if (!triple) {
     throw new Error(`no size in selection chip: ${chip}`);

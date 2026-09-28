@@ -37,7 +37,7 @@ export const WORKSPACE_TOUR_STEPS: readonly WorkspaceTourStep[] = [
   {
     id: 'create',
     title: 'Create your first feature',
-    body: 'Pick a tool from the Feature tools list — click Box, or press B, then press Enter to create it. The list shows the tools for what you have picked; More tools at its foot opens the rest.',
+    body: 'Pick a tool from the Feature tools list — click Box, or press B, then press Enter to create it. Its tools stay in place whatever you pick; More tools at its foot opens the rest.',
     targetSelector: '.tool-palette',
     isComplete: (signals) => signals.featureCount > 0
   },

@@ -481,7 +481,9 @@ export async function shiftSelectTwoVisibleBoxEdges(page: Page) {
   }
 
   await expect(status).toContainText('2 exact edges selected');
-  await expect(page.locator('.selection-chip-label')).toHaveText('2 edges');
+  await expect(
+    page.locator('.selection-callout-chip .selection-callout-name')
+  ).toHaveText('2 edges');
 }
 
 /** A pointer-down anchor for a horizontal drag across bare viewport canvas. */
