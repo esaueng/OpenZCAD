@@ -133,10 +133,13 @@ const CLOUD_SAVE_LABEL_RESERVE = saveStateLabels([
   'offline'
 ]);
 const DEVICE_SAVE_LABEL_RESERVE = saveStateLabels(['saving', 'local']);
-const COLLABORATION_LABEL_RESERVE = ['9 live', 'Offline'];
+// "Joining…" rather than "Connecting…": the room is joined for the opening
+// frames of every cloud project, and the longer word would either resize the
+// chip on the way in or cost the bar four characters for good.
+const COLLABORATION_LABEL_RESERVE = ['9 live', 'Offline', 'Joining…'];
 /** Every room status as words, so no raw identifier ever reaches the bar. */
 const COLLABORATION_LABELS: Record<CollaborationStatus, string> = {
-  connecting: 'Connecting…',
+  connecting: 'Joining…',
   live: 'Live',
   offline: 'Offline',
   conflict: 'Conflict',

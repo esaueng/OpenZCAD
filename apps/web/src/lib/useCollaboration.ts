@@ -228,7 +228,16 @@ export function useCollaboration({
   onRemoteDocument,
   onConflict
 }: CollaborationOptions): CollaborationClientState {
-  const [status, setStatus] = useState<CollaborationStatus>('offline');
+  // The status is stamped with the project it describes. The connect effect
+  // runs after the workspace has painted, so a bare status would show the
+  // previous project's (or the launcher's) "Offline" for the opening frame
+  // and flip to "Connecting" one commit later; deriving the first frame here
+  // keeps the chip from announcing a state the room was never in.
+  const [statusEntry, setStatusEntry] = useState<{
+    projectId: string | null;
+    wanted: boolean;
+    status: CollaborationStatus;
+  }>({ projectId: null, wanted: false, status: 'offline' });
   const [members, setMembers] = useState<CollaborationMember[]>([]);
   const [role, setRole] = useState<ProjectAccessRole | null>(null);
   const [lease, setLease] = useState<ProjectEditLease | null>(null);
@@ -264,6 +273,16 @@ export function useCollaboration({
   const projectId = document?.projectId ?? null;
   const userId = session?.userId ?? null;
   const displayName = session?.displayName ?? null;
+  const roomWanted = Boolean(enabled && projectId && userId && displayName);
+  const stampRef = useRef({ projectId, wanted: roomWanted });
+  stampRef.current = { projectId, wanted: roomWanted };
+  const setStatus = useCallback((next: CollaborationStatus) => {
+    setStatusEntry({ ...stampRef.current, status: next });
+  }, []);
+  const status: CollaborationStatus =
+    roomWanted && (statusEntry.projectId !== projectId || !statusEntry.wanted)
+      ? 'connecting'
+      : statusEntry.status;
 
   const reconcileMatchingRoomDocument = useCallback(
     (remote: ProjectDocument): boolean => {
@@ -297,7 +316,7 @@ export function useCollaboration({
       );
       return true;
     },
-    []
+    [setStatus]
   );
 
   useEffect(() => {
@@ -787,7 +806,14 @@ export function useCollaboration({
       setRole(null);
       setMembers([]);
     };
-  }, [displayName, enabled, projectId, userId, reconcileMatchingRoomDocument]);
+  }, [
+    displayName,
+    enabled,
+    projectId,
+    userId,
+    reconcileMatchingRoomDocument,
+    setStatus
+  ]);
 
   useEffect(() => {
     if (
@@ -833,7 +859,7 @@ export function useCollaboration({
       setStatus(roleRef.current === 'viewer' ? 'read-only' : 'live');
       return true;
     },
-    [projectId]
+    [projectId, setStatus]
   );
 
   const keepLocalVersion = useCallback(
@@ -946,7 +972,7 @@ export function useCollaboration({
         keepMinePendingRef.current = false;
       }
     },
-    [projectId, reconcileMatchingRoomDocument]
+    [projectId, reconcileMatchingRoomDocument, setStatus]
   );
 
   return {

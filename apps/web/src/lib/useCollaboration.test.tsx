@@ -475,6 +475,63 @@ describe('useCollaboration lease ordering', () => {
     unmount();
     localStorage.clear();
   });
+  it('reports the room as joining from the first render, never offline first', () => {
+    vi.stubGlobal('WebSocket', FakeWebSocket);
+    const owner = toUserId('user_first_frame_owner');
+    const first = createProjectDocument('First part', owner);
+    const second = createProjectDocument('Second part', owner);
+    const onRemoteDocument = vi.fn();
+    const onConflict = vi.fn();
+    const statuses: string[] = [];
+
+    const { result, rerender } = renderHook(
+      ({
+        document,
+        enabled
+      }: {
+        document: ProjectDocument;
+        enabled: boolean;
+      }) => {
+        const state = useCollaboration({
+          enabled,
+          document,
+          session: session(owner),
+          onRemoteDocument,
+          onConflict
+        });
+        statuses.push(state.status);
+        return state;
+      },
+      { initialProps: { document: first, enabled: true } }
+    );
+    // The very first frame already says "connecting": the effect that opens
+    // the socket has not run yet, and "offline" would be a state the room was
+    // never in.
+    expect(statuses[0]).toBe('connecting');
+    act(() => FakeWebSocket.instances[0]!.open());
+    act(() =>
+      FakeWebSocket.instances[0]!.receive({
+        type: 'state',
+        members: [],
+        document: first,
+        role: 'owner',
+        lease: null
+      })
+    );
+    expect(result.current.status).not.toBe('offline');
+
+    // Switching projects re-joins; the previous room's status must not show
+    // against the new project for the frame before its effect runs.
+    statuses.length = 0;
+    rerender({ document: second, enabled: true });
+    expect(statuses[0]).toBe('connecting');
+    expect(statuses).not.toContain('offline');
+
+    // Without a room wanted, the status is plainly offline.
+    rerender({ document: second, enabled: false });
+    expect(result.current.status).toBe('offline');
+  });
+
   it('does not open a room while cloud functions are disabled', () => {
     vi.stubGlobal('WebSocket', FakeWebSocket);
     const owner = toUserId('user_offline_owner');

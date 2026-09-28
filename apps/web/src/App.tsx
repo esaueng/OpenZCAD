@@ -4302,31 +4302,40 @@ export function App() {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [doc?.projectId, doc?.checkpoints.length, session, cloudProjectIds]);
 
+  /**
+   * Every stored file the File menu counts: this device's backups, plus the
+   * account's artifacts for a cloud project. A failed read counts nothing
+   * rather than failing the open.
+   */
+  async function listProjectArtifacts(
+    projectId: string,
+    cloud: boolean
+  ): Promise<ArtifactRecord[]> {
+    try {
+      const [local, response] = await Promise.all([
+        loadProjectBackupFiles(projectId),
+        cloud ? api.listArtifacts(projectId) : { artifacts: [] }
+      ]);
+      return [...local.map((file) => file.artifact), ...response.artifacts];
+    } catch {
+      return [];
+    }
+  }
+
   useEffect(() => {
     if (!doc) {
       setArtifacts([]);
       return;
     }
     let cancelled = false;
-    void Promise.all([
-      loadProjectBackupFiles(doc.projectId),
-      session && cloudProjectIds.has(doc.projectId)
-        ? api.listArtifacts(doc.projectId)
-        : Promise.resolve({ artifacts: [] })
-    ])
-      .then(([local, response]) => {
-        if (!cancelled) {
-          setArtifacts([
-            ...local.map((file) => file.artifact),
-            ...response.artifacts
-          ]);
-        }
-      })
-      .catch(() => {
-        if (!cancelled) {
-          setArtifacts([]);
-        }
-      });
+    void listProjectArtifacts(
+      doc.projectId,
+      Boolean(session && cloudProjectIds.has(doc.projectId))
+    ).then((artifactList) => {
+      if (!cancelled) {
+        setArtifacts(artifactList);
+      }
+    });
     return () => {
       cancelled = true;
     };
@@ -5273,6 +5282,12 @@ export function App() {
       session?.userId ?? normalized.ownerUserId
     );
     geometry.invalidate();
+    // The document effect below writes every hydrated document to this
+    // device and reports 'saving' while it does; saying so from the first
+    // frame keeps the chip from showing the previous project's "Saved" and
+    // flipping to a spinner one commit later. Callers that know better
+    // (repair, offline, conflict, a shared link) override it right after.
+    setSaveState('saving');
     setDoc(normalized);
     setPreviewDoc(null);
     setSelectedFeatureNode(null);
@@ -6965,7 +6980,9 @@ export function App() {
           ...current
         ]);
         setCloudAvailable(false);
-        setSaveState('local');
+        // The document effect's flush lands on 'local' once the device write
+        // is done; forcing it here would show "Local only" for a frame and
+        // then the spinner the effect reports anyway.
         setStatus(`Created ${localDocument.name} locally.`);
         return;
       }
@@ -7016,7 +7033,6 @@ export function App() {
         ...current
       ]);
       setCloudAvailable(false);
-      setSaveState('local');
       setStatus(
         `${errorMessage(error, 'Cloud unavailable')} Working locally · save it to your account later.`
       );
@@ -7511,7 +7527,7 @@ export function App() {
       ) {
         accountDocumentUnavailableProjectIdRef.current = null;
       }
-      const [localDocument, remoteResult, lastSyncedVersion] =
+      const [localDocument, remoteResult, lastSyncedVersion, artifactList] =
         await Promise.all([
           loadLocalProject(projectId),
           session
@@ -7519,9 +7535,16 @@ export function App() {
             : Promise.resolve<AccountProjectLoadResult>({
                 document: null
               }),
-          loadLastSyncedVersion(projectId)
+          loadLastSyncedVersion(projectId),
+          // Read alongside the document so the File menu's count is on the
+          // bar from the workspace's first frame, not a round-trip later.
+          listProjectArtifacts(
+            projectId,
+            Boolean(session && cloudProjectIds.has(projectId))
+          )
         ]);
       const remoteDocument = remoteResult.document;
+      setArtifacts(artifactList);
       if (remoteResult.error && localDocument) {
         const needsRepair = isProjectDocumentUnavailableError(
           remoteResult.error
