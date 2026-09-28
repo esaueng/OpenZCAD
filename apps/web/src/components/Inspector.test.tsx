@@ -472,6 +472,52 @@ describe('body appearance color picker', () => {
 describe('on-demand mass properties in Inspector', () => {
   const lazyBody = { ...body, massProperties: undefined };
 
+  it('replaces a committed measurement with the matching preview document', async () => {
+    const committed = createProjectDocument('Mass preview', toUserId('mass-ui'));
+    const preview = { ...committed, derived: { ...committed.derived } };
+    const previewBody = { ...lazyBody, volume: lazyBody.volume + 1 };
+    let resolveCommitted!: (value: MassPropertiesRead) => void;
+    const worker = {
+      massProperties: vi.fn()
+        .mockImplementationOnce(() => new Promise<MassPropertiesRead>((done) => {
+          resolveCommitted = done;
+        }))
+        .mockResolvedValueOnce({
+          status: 'ready',
+          properties: {
+            ...body.massProperties!,
+            centerOfMass: { x: 9, y: 6, z: 3 }
+          },
+          epoch: 2
+        })
+    };
+    const props = makeProps({
+      selectedFeature: null,
+      commandSession: null,
+      selectedBody: lazyBody,
+      massPropertiesDocument: committed,
+      massPropertiesWorker: worker
+    });
+    const view = render(<Inspector {...props} />);
+    fireEvent.click(screen.getByText('Mass properties (at unit density)'));
+    await waitFor(() => expect(worker.massProperties).toHaveBeenCalledTimes(1));
+    const oldSignal = (worker.massProperties.mock.calls[0] as unknown as [
+      ProjectDocument,
+      BodyId,
+      { signal: AbortSignal }
+    ])[2].signal;
+
+    view.rerender(<Inspector {...props} selectedBody={previewBody} massPropertiesDocument={preview} />);
+    expect(oldSignal.aborted).toBe(true);
+    await waitFor(() => expect(worker.massProperties).toHaveBeenCalledTimes(2));
+    expect(worker.massProperties.mock.calls[1]?.[0]).toBe(preview);
+    await waitFor(() => expect(screen.getByText('9, 6, 3 mm')).toBeInTheDocument());
+    await act(async () => {
+      resolveCommitted({ status: 'ready', properties: body.massProperties!, epoch: 1 });
+    });
+    expect(screen.getByText('9, 6, 3 mm')).toBeInTheDocument();
+  });
+
   it('requests only when opened and shows pending then exact properties', async () => {
     const document = createProjectDocument('Mass details', toUserId('mass-ui'));
     let resolve!: (value: MassPropertiesRead) => void;
