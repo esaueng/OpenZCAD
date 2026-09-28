@@ -184,7 +184,7 @@ test('lists bodies in the model browser and selects them from the tree', async (
   await expect(bodies.getByRole('button', { name: /^Box/ })).toBeVisible();
 
   await bodies.getByRole('button', { name: /^Box/ }).click();
-  const chip = page.locator('.selection-chip');
+  const chip = page.locator('.selection-callout-chip');
   await expect(chip).toContainText('Box');
   await expect(bodies.getByRole('button', { name: /^Box/ })).toHaveAttribute(
     'aria-pressed',
@@ -209,7 +209,7 @@ test('names picked faces and edges without raw fingerprints', async ({
     page.getByRole('region', { name: 'Resize Body operation' })
   ).toBeVisible();
 
-  const chip = page.locator('.selection-chip');
+  const chip = page.locator('.selection-callout-chip');
   await expect(chip).toContainText('Box');
   await expect(chip).not.toContainText('face:');
   await expect(chip).toContainText(/face/i);
@@ -947,4 +947,120 @@ test('shows profile readiness and preserves exact entity edits through extrude a
     0
   );
   expect(pageErrors).toEqual([]);
+});
+
+async function openBracketDemo(page: Page) {
+  await stubApi(page);
+  await page.setViewportSize({ width: 1440, height: 900 });
+  await page.goto('/');
+  await page
+    .getByRole('button', { name: /^Open demo: Mounting Bracket/ })
+    .click();
+  const canvas = page.locator('.viewer-host canvas');
+  await expect(canvas).toBeVisible({ timeout: 120_000 });
+  await expect(page.getByRole('contentinfo')).not.toContainText(
+    /Starting geometry worker|Loading exact Remus kernel|Rebuilding exact geometry|Waiting for exact geometry|Exact geometry is still rebuilding/i,
+    { timeout: 60_000 }
+  );
+  await expect(page.locator('.sidebar .feature-row')).toHaveCount(17, {
+    timeout: 60_000
+  });
+  return canvas;
+}
+
+/**
+ * A face click with no tool running used to raise five surfaces: the tool
+ * card, the drag handle, a name-only label, a bottom-lane chip with the
+ * area, and an inspector that said no one feature owned the face. The name,
+ * the measurement and the verbs are one chip beside the pick now.
+ */
+test('a face click raises one selection chip with verbs and no other surface', async ({
+  page
+}) => {
+  test.setTimeout(150_000);
+  const canvas = await openBracketDemo(page);
+  const bounds = (await canvas.boundingBox())!;
+  const chip = page.locator('.selection-callout-chip');
+  // The demo frames the part in the middle of the canvas; walk a few spots
+  // until one lands on a face.
+  for (const [fx, fy] of [
+    [0.5, 0.5],
+    [0.45, 0.55],
+    [0.55, 0.45],
+    [0.5, 0.6]
+  ] as const) {
+    await page.mouse.click(
+      bounds.x + bounds.width * fx,
+      bounds.y + bounds.height * fy
+    );
+    if (
+      (await canvas.getAttribute('data-e2e-selected-face')) &&
+      (await chip.count()) === 1
+    ) {
+      break;
+    }
+  }
+  await expect(canvas).toHaveAttribute('data-e2e-selected-face', /.+/);
+  await expect(chip).toHaveCount(1);
+  await expect(chip.locator('.selection-callout-name')).toContainText(
+    'Mounting Bracket'
+  );
+  // The key measurement rides the chip: an area or a diameter.
+  await expect(chip.locator('.selection-callout-detail')).toContainText(
+    /mm²|Ø/
+  );
+  const verbs = chip.locator('.selection-callout-verb');
+  expect(await verbs.count()).toBeGreaterThanOrEqual(1);
+  expect(await verbs.count()).toBeLessThanOrEqual(3);
+  await expect(
+    chip.getByRole('button', { name: 'Deselect all' })
+  ).toBeVisible();
+  // Nothing in the bottom lane, and no inspector opened for the pick alone.
+  await expect(page.locator('.selection-chip')).toHaveCount(0);
+  await expect(
+    page.getByRole('region', { name: 'Feature inspector' })
+  ).toHaveCount(0);
+
+  await page.screenshot({
+    path: test.info().outputPath('selection-chip.png')
+  });
+  // The chip's clear is the deselect.
+  await chip.getByRole('button', { name: 'Deselect all' }).click();
+  await expect(chip).toHaveCount(0);
+  await expect(canvas).not.toHaveAttribute('data-e2e-selected-face', /.+/);
+});
+
+/**
+ * Picking a consumed feature in History used to select every body
+ * downstream of it, so the whole bracket lit up and the label named the
+ * bracket. The faces the feature made are lit instead, and the chip names
+ * the feature.
+ */
+test('a consumed History feature lights its own faces and is named on the chip', async ({
+  page
+}) => {
+  test.setTimeout(150_000);
+  const canvas = await openBracketDemo(page);
+  await page
+    .locator('.feature-row-main', { hasText: /^Boss$/ })
+    .first()
+    .click();
+  const chip = page.locator('.selection-callout-chip');
+  await expect(chip).toHaveCount(1);
+  await expect(chip.locator('.selection-callout-name')).toHaveText('Boss');
+  await page.screenshot({
+    path: test.info().outputPath('history-focus.png')
+  });
+  // No body is selected: the part is not lit whole.
+  await expect(canvas).not.toHaveAttribute('data-e2e-selected-bodies', /.+/);
+  // Its faces ride the face highlight, or its consumed body is a ghost.
+  await expect
+    .poll(async () =>
+      Number(
+        (await canvas.getAttribute('data-e2e-preview-blend-count')) ??
+          (await canvas.getAttribute('data-e2e-focus-ghosts')) ??
+          '0'
+      )
+    )
+    .toBeGreaterThan(0);
 });

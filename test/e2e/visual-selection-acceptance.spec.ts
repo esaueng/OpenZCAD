@@ -784,7 +784,7 @@ test('accepts exact visual selection and direct editing on the seeded boss', asy
     'data-e2e-selected-face',
     rimBlend!.topologyId
   );
-  const selectionReadout = page.locator('.selection-chip');
+  const selectionReadout = page.locator('.selection-callout-chip');
   await expect(selectionReadout).toContainText('Blend face R1.5');
 
   // 10. A second oblique angle keeps the rim selection and chip world anchor.

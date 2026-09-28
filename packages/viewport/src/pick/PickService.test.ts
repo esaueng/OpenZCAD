@@ -482,6 +482,29 @@ describe('inside-corner edge picking', () => {
     }
   });
 
+  it('answers an edge 6 CSS px away at any device pixel ratio', () => {
+    // The band is Line2's screen-space threshold, measured against the fat
+    // line's resolution — the canvas's CSS size — and the pointer maps
+    // through the element's CSS rect, so a dense display neither halves nor
+    // doubles it. 6 px is the floor a design review asked for.
+    const scope = globalThis as { devicePixelRatio?: number };
+    const previous = scope.devicePixelRatio;
+    try {
+      for (const ratio of [1, 2, 3]) {
+        scope.devicePixelRatio = ratio;
+        const bodyGroup = new THREE.Group();
+        bodyGroup.add(insideCornerBody([11, 12]));
+        const { service } = makeService({ bodyGroup });
+        for (const dy of [-6, 6]) {
+          const pick = service.pick(offsetEvent(dy));
+          expect(pick?.kind, `DPR ${ratio}, ${dy} px off`).toBe('edge');
+        }
+      }
+    } finally {
+      scope.devicePixelRatio = previous;
+    }
+  });
+
   it('still gives the face a pointer outside the edge band', () => {
     const bodyGroup = new THREE.Group();
     bodyGroup.add(insideCornerBody([11, 12]));

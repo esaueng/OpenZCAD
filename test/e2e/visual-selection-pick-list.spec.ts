@@ -168,7 +168,9 @@ test('lists stacked faces without disturbing selection or click cycling', async 
   // A click establishes the cycle at the front candidate. Opening and
   // dismissing the list must leave that state alone, so the next click still
   // advances exactly one row deeper.
-  const selectionLabel = page.locator('.selection-chip-label');
+  const selectionLabel = page.locator(
+    '.selection-callout-chip .selection-callout-name'
+  );
   await page.mouse.click(probe!.x, probe!.y);
   await expect(selectionLabel).toHaveText(probe!.labels[0]!);
   await page.mouse.click(probe!.x, probe!.y, { button: 'right' });

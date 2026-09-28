@@ -43,7 +43,8 @@
 .row-suppression,
 .row-rollback,
 .row-visibility,
-.selection-chip-clear,
+.selection-callout-verb,
+.selection-callout-clear,
 .toast-action,
 .toast-dismiss,
 .save-state {
@@ -197,10 +198,6 @@ textarea {
   animation: oz-fade var(--dur-base) var(--ease-out);
 }
 
-.selection-chip {
-  animation: oz-pop var(--dur-base) var(--ease-out);
-}
-
 .inspector-float > * {
   animation: oz-rise var(--dur-base) var(--ease-out);
 }
@@ -218,7 +215,6 @@ textarea {
    component keeps each mounted for the fade (useDelayedUnmount, EXIT_MS), and
    a closing overlay takes no input: the click that dismissed it must not land
    on the ghost. */
-.selection-chip.closing,
 .context-menu.closing,
 .inspector-float.closing {
   animation: oz-fade-out var(--dur-fast) var(--ease-out) forwards;
@@ -248,13 +244,6 @@ textarea {
 
 .model-drawer-float {
   animation: oz-enter-left var(--dur-base) var(--ease-out);
-}
-
-/* The verb rail's groups are keyed by selection, so a new pick swaps
-   them; the fresh buttons settle in rather than replacing the old ones in
-   a single frame. The fold at the foot never remounts. */
-.command-rail-group {
-  animation: oz-rise var(--dur-fast) var(--ease-out);
 }
 
 /* A feature or body that just joined the model announces itself once: it
