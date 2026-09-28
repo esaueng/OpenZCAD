@@ -1,19 +1,13 @@
-import type { CloudflareEnv } from '@openzcad/cloudflare-adapters';
+import {
+  accountAiLimits,
+  accountTier,
+  type CloudflareEnv
+} from '@openzcad/cloudflare-adapters';
 import type { UserId } from '@openzcad/shared';
 
-const DEFAULT_ACCOUNT_REQUEST_LIMIT = 6;
-const DEFAULT_IP_REQUEST_LIMIT = 30;
-const DEFAULT_ACCOUNT_COST_LIMIT = 24;
-const DEFAULT_IP_COST_LIMIT = 120;
 const DEFAULT_GLOBAL_DAILY_REQUEST_LIMIT = 100;
 const DEFAULT_GLOBAL_DAILY_COST_LIMIT = 400;
-const DEFAULT_WINDOW_SECONDS = 10 * 60;
-const DEFAULT_ACCOUNT_CONCURRENCY_LIMIT = 2;
-const DEFAULT_IP_CONCURRENCY_LIMIT = 8;
-const MAX_REQUEST_LIMIT = 1_000;
 const MAX_COST_LIMIT = 10_000;
-const MAX_WINDOW_SECONDS = 24 * 60 * 60;
-const MAX_CONCURRENCY_LIMIT = 100;
 const OUTPUT_TOKEN_COST_UNIT = 8_000;
 const ATTACHMENT_COST_UNITS = 2;
 const LEASE_GRACE_SECONDS = 30;
@@ -59,52 +53,21 @@ function boundedInteger(
     : fallback;
 }
 
-function guardSettings(env: CloudflareEnv): AssistantGuardSettings {
+function guardSettings(
+  env: CloudflareEnv,
+  email?: string
+): AssistantGuardSettings {
   return {
+    ...accountAiLimits(env, email),
     globalDailyRequestLimit: boundedInteger(
       env.AI_GLOBAL_DAILY_REQUEST_LIMIT,
       DEFAULT_GLOBAL_DAILY_REQUEST_LIMIT,
-      MAX_REQUEST_LIMIT
+      1_000_000
     ),
     globalDailyCostLimit: boundedInteger(
       env.AI_GLOBAL_DAILY_COST_LIMIT_UNITS,
       DEFAULT_GLOBAL_DAILY_COST_LIMIT,
-      MAX_COST_LIMIT
-    ),
-    accountRequestLimit: boundedInteger(
-      env.AI_ACCOUNT_RATE_LIMIT_REQUESTS,
-      DEFAULT_ACCOUNT_REQUEST_LIMIT,
-      MAX_REQUEST_LIMIT
-    ),
-    ipRequestLimit: boundedInteger(
-      env.AI_IP_RATE_LIMIT_REQUESTS,
-      DEFAULT_IP_REQUEST_LIMIT,
-      MAX_REQUEST_LIMIT
-    ),
-    accountCostLimit: boundedInteger(
-      env.AI_ACCOUNT_COST_LIMIT_UNITS,
-      DEFAULT_ACCOUNT_COST_LIMIT,
-      MAX_COST_LIMIT
-    ),
-    ipCostLimit: boundedInteger(
-      env.AI_IP_COST_LIMIT_UNITS,
-      DEFAULT_IP_COST_LIMIT,
-      MAX_COST_LIMIT
-    ),
-    windowSeconds: boundedInteger(
-      env.AI_RATE_LIMIT_WINDOW_SECONDS,
-      DEFAULT_WINDOW_SECONDS,
-      MAX_WINDOW_SECONDS
-    ),
-    accountConcurrencyLimit: boundedInteger(
-      env.AI_ACCOUNT_CONCURRENCY_LIMIT,
-      DEFAULT_ACCOUNT_CONCURRENCY_LIMIT,
-      MAX_CONCURRENCY_LIMIT
-    ),
-    ipConcurrencyLimit: boundedInteger(
-      env.AI_IP_CONCURRENCY_LIMIT,
-      DEFAULT_IP_CONCURRENCY_LIMIT,
-      MAX_CONCURRENCY_LIMIT
+      10_000_000
     )
   };
 }
@@ -300,6 +263,8 @@ export async function acquireAssistantPermit(
     cost: number;
     leaseMs: number;
     deploymentFunded?: boolean;
+    /** Verified server identity, never a request payload field. */
+    email?: string;
     now?: number;
   }
 ): Promise<AssistantPermitResult> {
@@ -327,7 +292,11 @@ export async function acquireAssistantPermit(
       'AI_GUARD_UNAVAILABLE'
     );
   }
-  const ipBucket = await opaqueIpBucket(request, identityPepper);
+  const rawIpBucket = await opaqueIpBucket(request, identityPepper);
+  const ipBucket =
+    rawIpBucket && accountTier(env, options.email) === 'premium'
+      ? `${rawIpBucket}:premium`
+      : rawIpBucket;
   if (!ipBucket) {
     return jsonError(
       503,
@@ -336,7 +305,7 @@ export async function acquireAssistantPermit(
     );
   }
 
-  const settings = guardSettings(env);
+  const settings = guardSettings(env, options.email);
   const now = options.now ?? Date.now();
   const nowSeconds = Math.floor(now / 1_000);
   const windowMs = settings.windowSeconds * 1_000;

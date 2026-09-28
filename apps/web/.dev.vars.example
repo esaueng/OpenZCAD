@@ -36,3 +36,8 @@ AI_MODEL=openai/gpt-5.6-sol
 # noreply@zcad.esau.app and https://zcad.app.
 # AUTH_LEGACY_OWNER_EMAIL can map historical user_beta_dev projects to one
 # verified owner email without rewriting document ownership.
+
+# Manual Premium grants (server only; use example addresses here).
+# PREMIUM_USER_EMAILS=member@example.com
+# Premium grants hosted AI eligibility and 100 GiB artifact storage by default.
+# See docs/plans/account-tiers.md for overrides and deployment budget settings.

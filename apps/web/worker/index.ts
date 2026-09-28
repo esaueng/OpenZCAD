@@ -1,3 +1,4 @@
+import { accountEntitlements } from '@openzcad/cloudflare-adapters';
 import {
   loadWorkspaceSessions,
   parseWorkspaceSession,
@@ -886,9 +887,16 @@ async function handleApiRequest(request: Request, env: Env): Promise<Response> {
       },
       env
     );
-    return json(authenticated.session, 200, {
-      'set-cookie': authenticated.cookie
-    });
+    return json(
+      {
+        ...authenticated.session,
+        entitlements: accountEntitlements(env, authenticated.session.email)
+      },
+      200,
+      {
+        'set-cookie': authenticated.cookie
+      }
+    );
   }
 
   if (request.method === 'POST' && pathname === '/api/auth/logout') {
@@ -941,7 +949,8 @@ async function handleApiRequest(request: Request, env: Env): Promise<Response> {
     const permit = await acquireAssistantPermit(request, userId, env, {
       cost: assistantQuotaCost(payload.attachments.length, maxOutputTokens),
       leaseMs: assistant.runtime?.timeoutMs ?? timeoutFor(env),
-      deploymentFunded: assistant.effective.source === 'deployment'
+      deploymentFunded: assistant.effective.source === 'deployment',
+      email: identity.email
     });
     if (!permit.allowed) {
       return permit.response;
@@ -1007,7 +1016,10 @@ async function handleApiRequest(request: Request, env: Env): Promise<Response> {
   }
 
   if (request.method === 'GET' && pathname === '/api/session') {
-    return json(session);
+    return json({
+      ...session,
+      entitlements: accountEntitlements(env, session.email)
+    });
   }
 
   if (request.method === 'GET' && pathname === '/api/collaboration/config') {
