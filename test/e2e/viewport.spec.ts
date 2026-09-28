@@ -1246,7 +1246,7 @@ test('double-clicking a filleted rim takes the whole run of edges', async ({
   // the viewport for an edge, otherwise the e2e hook can correctly locate a
   // stale box edge that topology actions must then reject.
   await expect(status).not.toContainText(
-    /Starting geometry worker|Loading exact Remus kernel|Rebuilding exact geometry|Waiting for exact geometry|Exact geometry is still rebuilding/i,
+    /Starting geometry worker|Loading exact Remus kernel|Rebuilding exact geometry|Waiting for exact geometry|Rebuilding geometry|Exact geometry is still rebuilding/i,
     { timeout: 30_000 }
   );
 

@@ -155,6 +155,10 @@
   /* Above the floating assistant dock, so the seam between the panels stays
      grabbable whichever way they are laid out. */
   --z-panel-resizer: 7;
+  /* Control help: over every stage surface and island, but under anything
+     a control opens (popovers, dialogs, context menus), so a trigger's own
+     tooltip never paints over the first rows of the menu it just opened. */
+  --z-tooltip: 30;
   /* Menus that open from a panel (the inspector overflow): over every
      workspace surface, under a dialog's scrim. */
   --z-popover: 40;

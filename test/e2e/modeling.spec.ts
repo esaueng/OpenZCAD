@@ -1142,7 +1142,7 @@ test('radius drag resizes a cylinder after bottom adjustment and filleting', asy
   // rebuilds. Wait for the revision barrier so the e2e hook cannot select the
   // stale pre-fillet cylinder that topology actions must reject.
   await expect(page.getByRole('contentinfo')).not.toContainText(
-    /Starting geometry worker|Loading exact Remus kernel|Rebuilding exact geometry|Waiting for exact geometry|Exact geometry is still rebuilding/i,
+    /Starting geometry worker|Loading exact Remus kernel|Rebuilding exact geometry|Waiting for exact geometry|Rebuilding geometry|Exact geometry is still rebuilding/i,
     { timeout: 30_000 }
   );
   await selectCylinderSurface('wall');

@@ -15446,7 +15446,7 @@ export function App() {
   const staleProjectionLabel = parameterPreview
     ? 'Parameter preview · exact geometry pending'
     : Object.keys(representations).length > 0
-      ? 'showing the last valid projection as stale'
+      ? 'showing the previous result until it finishes'
       : 'no exact projection is available yet';
   const visibleStatus = parameterPreview
     ? `Parameter preview · ${parameterEditPending ? status : parameterDraftActive ? 'Press Enter to apply; Escape to cancel' : 'exact geometry rebuilding'}`
@@ -15454,7 +15454,7 @@ export function App() {
       ? status
       : `${
           geometry.state.phase === 'ready'
-            ? 'Waiting for exact geometry for this revision'
+            ? 'Rebuilding geometry…'
             : geometry.state.phase === 'failed' && geometry.state.error
               ? `Exact geometry failed: ${geometry.state.error}`
               : (progressLabel ?? geometryPhaseLabel[geometry.state.phase])

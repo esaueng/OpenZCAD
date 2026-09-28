@@ -3,6 +3,7 @@ import type { ReactNode } from 'react';
 import type { ParameterNode } from '@openzcad/shared';
 import { ParameterRow } from './ParameterRows';
 import { Tooltip } from './Tooltip';
+import { PartsListModeProvider } from './ViewModeRail';
 
 interface TweakPanelProps {
   parameters: ParameterNode[];
@@ -139,7 +140,11 @@ export function TweakPanel({
         )}
       </div>
       <div className="tweak-flyouts" data-rail-flyouts="">
-        {parts?.list}
+        {parts?.list && (
+          <PartsListModeProvider mode="tweak">
+            {parts.list}
+          </PartsListModeProvider>
+        )}
         {panelOpen && (
           <aside className="sidebar tweak-panel" aria-label="Parameters">
             <div className="sidebar-label">Parameters</div>

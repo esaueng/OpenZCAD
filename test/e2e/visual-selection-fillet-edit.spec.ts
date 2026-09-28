@@ -93,7 +93,7 @@ test('creates, re-edits twice, and removes a selected history fillet', async ({
   const status = page.getByRole('contentinfo');
   await expect(canvas).toBeVisible({ timeout: 120_000 });
   await expect(status).not.toContainText(
-    /Starting geometry worker|Loading exact Remus kernel|Rebuilding exact geometry|Waiting for exact geometry|Exact geometry is still rebuilding/i,
+    /Starting geometry worker|Loading exact Remus kernel|Rebuilding exact geometry|Waiting for exact geometry|Rebuilding geometry|Exact geometry is still rebuilding/i,
     { timeout: 30_000 }
   );
 
@@ -134,7 +134,7 @@ test('creates, re-edits twice, and removes a selected history fillet', async ({
   await expect(status).toContainText('Filleted 1 edge at 1 mm.');
   await expect(page.getByRole('button', { name: 'History 2' })).toBeVisible();
   await expect(status).not.toContainText(
-    /Starting geometry worker|Loading exact Remus kernel|Rebuilding exact geometry|Waiting for exact geometry|Exact geometry is still rebuilding/i,
+    /Starting geometry worker|Loading exact Remus kernel|Rebuilding exact geometry|Waiting for exact geometry|Rebuilding geometry|Exact geometry is still rebuilding/i,
     { timeout: 30_000 }
   );
 
@@ -250,7 +250,7 @@ test('previews and reverses a box fillet backed by verified evolution lineage', 
   const status = page.getByRole('contentinfo');
   await expect(canvas).toBeVisible({ timeout: 120_000 });
   await expect(status).not.toContainText(
-    /Starting geometry worker|Loading exact Remus kernel|Rebuilding exact geometry|Waiting for exact geometry|Exact geometry is still rebuilding/i,
+    /Starting geometry worker|Loading exact Remus kernel|Rebuilding exact geometry|Waiting for exact geometry|Rebuilding geometry|Exact geometry is still rebuilding/i,
     { timeout: 30_000 }
   );
   await expect

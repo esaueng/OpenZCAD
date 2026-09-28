@@ -84,7 +84,7 @@ interface ChipAnchor {
 const REPUBLISH = { timeout: 30_000 } as const;
 
 const REBUILDING =
-  /Starting geometry worker|Loading exact Remus kernel|Rebuilding exact geometry|Waiting for exact geometry|Exact geometry is still rebuilding/i;
+  /Starting geometry worker|Loading exact Remus kernel|Rebuilding exact geometry|Waiting for exact geometry|Rebuilding geometry|Exact geometry is still rebuilding/i;
 
 async function probeFace(
   canvas: Locator,
@@ -548,7 +548,7 @@ test('accepts exact visual selection and direct editing on the seeded boss', asy
   ).toBeVisible();
   await expect(inspector.getByText('Measurements')).toBeVisible();
   await expect(inspector).toContainText(
-    'does not identify one editable history feature'
+    'To change its shape, edit the feature that made it in History.'
   );
   await expect(inspector.getByText('Lower rim fillet')).toHaveCount(0);
   await expect(
