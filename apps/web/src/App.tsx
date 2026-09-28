@@ -1169,6 +1169,8 @@ interface OffsetPreviewCandidate {
   baseProjectId: ProjectDocument['projectId'];
   baseVersion: number;
   validationTargets?: AffectedFeatureTarget[];
+  /** A refusal known before any rebuild; the preview reports it unbuilt. */
+  preflightRejection?: string;
 }
 
 type RadiusPreviewCandidate = Omit<
@@ -2652,11 +2654,17 @@ export function App() {
               baseVersion: base.version,
               ...(plan.validationTargets
                 ? { validationTargets: plan.validationTargets }
+                : {}),
+              ...(plan.preflightRejection
+                ? { preflightRejection: plan.preflightRejection }
                 : {})
             }
           : null;
       },
       derive: async (candidate) => {
+        if (candidate.preflightRejection) {
+          throw new Error(candidate.preflightRejection);
+        }
         const derived = await geometry.syncOnce(candidate.document);
         const live = managerRef.current;
         const documentMoved =
@@ -13927,7 +13935,10 @@ export function App() {
     return {
       command: plan.command,
       bodyId,
-      successMessage: `Offset face by ${Math.round(offset * 100) / 100} ${base.units}.`
+      successMessage: `Offset face by ${Math.round(offset * 100) / 100} ${base.units}.`,
+      ...(plan.preflightRejection
+        ? { preflightRejection: plan.preflightRejection }
+        : {})
     };
   }
 

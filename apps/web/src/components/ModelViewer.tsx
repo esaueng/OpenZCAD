@@ -51,6 +51,9 @@ import {
   edgeRunSelections,
   edgeHandlePlacement,
   offsetHandlePlacement,
+  screenDragAxis,
+  screenDragValue,
+  type ScreenDragAxis,
   GestureRouter,
   HudLayer,
   TopologyPickList,
@@ -4697,22 +4700,8 @@ export function ModelViewer({
     function screenDirectionFor(
       point: THREE.Vector3,
       direction: THREE.Vector3
-    ): {
-      directionX: number;
-      directionY: number;
-      pixelsPerUnit: number;
-      fallbackPixelsPerUnit: number;
-    } {
+    ): ScreenDragAxis {
       const rect = renderer.domElement.getBoundingClientRect();
-      const projectedStart = point.clone().project(context.activeCamera);
-      const projectedEnd = point
-        .clone()
-        .add(direction)
-        .project(context.activeCamera);
-      const projectedX = ((projectedEnd.x - projectedStart.x) * rect.width) / 2;
-      const projectedY =
-        (-(projectedEnd.y - projectedStart.y) * rect.height) / 2;
-      const projectedLength = Math.hypot(projectedX, projectedY);
       const distance = Math.max(camera.position.distanceTo(point), 1);
       const fallbackPixelsPerUnit =
         context.projection === 'orthographic'
@@ -4720,19 +4709,13 @@ export function ModelViewer({
             Math.max(orthographic.top - orthographic.bottom, 0.0001)
           : rect.height /
             (2 * Math.tan(THREE.MathUtils.degToRad(camera.fov / 2)) * distance);
-      const usable = projectedLength >= fallbackPixelsPerUnit * 0.15;
-      return {
-        directionX: usable ? projectedX / projectedLength : 0,
-        directionY: usable ? projectedY / projectedLength : -1,
-        // A foreshortened direction must not make tiny pixel motions huge
-        // values: never drop below 60% of the head-on scale.
-        pixelsPerUnit: Math.max(
-          usable ? projectedLength : fallbackPixelsPerUnit,
-          fallbackPixelsPerUnit * 0.6,
-          0.1
-        ),
+      return screenDragAxis(
+        point,
+        direction,
+        context.activeCamera,
+        rect,
         fallbackPixelsPerUnit
-      };
+      );
     }
 
     function updateOffsetChip() {
@@ -6028,10 +6011,8 @@ export function ModelViewer({
         if (rig) {
           const dx = event.clientX - offsetDrag.startX;
           const dy = event.clientY - offsetDrag.startY;
-          const projected =
-            dx * offsetDrag.directionX + dy * offsetDrag.directionY;
           const raw =
-            offsetDrag.initialOffset + projected / offsetDrag.pixelsPerUnit;
+            offsetDrag.initialOffset + screenDragValue(offsetDrag, dx, dy);
           // Zoom-adaptive snapping, matching the move gizmo; Shift = free.
           const snap = chooseMoveSnapStep(1 / offsetDrag.pixelsPerUnit);
           const value = event.shiftKey
