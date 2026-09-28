@@ -200,6 +200,8 @@ export function AppShell({
             {command && <div className="command-float">{command}</div>}
             {inspectorExit.rendered && (
               <ExitingFloat
+                // A panel reopened during its own exit is a fresh panel.
+                key={inspectorExit.generation}
                 className={`inspector-float${inspectorExit.closing ? ' closing' : ''}`}
                 closing={inspectorExit.closing}
               >

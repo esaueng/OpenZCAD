@@ -1601,7 +1601,7 @@ test('box selection releases the previous direct-edit target', async ({
   await expect(status).not.toContainText('resize the body');
 });
 
-test('the status bar names the rung of the Esc ladder you are on', async ({
+test('the status bar names the one Escape exit, and one press takes it', async ({
   page
 }) => {
   await stubApi(page);
@@ -1651,19 +1651,18 @@ test('the status bar names the rung of the Esc ladder you are on', async ({
   await page.mouse.click(facePoint!.x, facePoint!.y);
   await expect(page.locator('.selection-chip')).toBeVisible();
   await expect(status).toContainText('resize the body');
-  // Selecting the face also opened the edit panel, which takes Escape itself.
-  // The prompt has to name that rung, not the one behind it.
-  await expect(status).toContainText('Esc closes the panel');
+  // Selecting the face also opened the edit panel. Closing it and clearing
+  // the selection are one press now, so the prompt names that one exit.
+  await expect(status).toContainText('Esc clears the selection');
 
-  // Escape does what it promised: the panel goes, the selection stays.
+  // Escape does what it promised in a single press: the panel and the
+  // selection go together, and nothing is left promising another rung.
   await page.keyboard.press('Escape');
   await expect(
     page.getByRole('region', { name: 'Feature inspector' })
   ).toHaveCount(0);
-  await expect(status).toContainText('Esc clears the selection');
-
-  // And the next press takes the rung it now names.
-  await page.keyboard.press('Escape');
+  await expect(page.locator('.selection-chip')).toHaveCount(0);
+  await expect(page.locator('.tool-card')).toHaveCount(0);
   await expect(status).not.toContainText('Esc clears the selection');
 });
 
@@ -2121,9 +2120,17 @@ test('the selection callout follows the body it names through a move', async ({
   await overlay.getByLabel('Rotate Y in degrees').fill('90');
   await expect.poll(placement).not.toBe(moved);
 
-  // Cancelling restores the resting pose for the callout, not just the mesh.
+  // Cancelling is one Escape back to nothing selected, so the callout goes
+  // with the Move. Selecting the body again finds it at its resting pose:
+  // the cancel restored the callout's anchor, not just the mesh.
   await page.keyboard.press('Escape');
   await expect(overlay).toBeHidden();
+  await expect(callout).toHaveCount(0);
+  await page
+    .getByRole('list', { name: 'Bodies' })
+    .getByRole('button', { name: /^Box/ })
+    .click();
+  await expect(callout).toHaveCount(1);
   await expect.poll(placement).toBe(resting);
 });
 

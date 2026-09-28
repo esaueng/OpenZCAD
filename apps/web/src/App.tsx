@@ -5575,11 +5575,6 @@ export function App() {
     });
   }
 
-  const extrudeSelectionReturnRef = useRef<{
-    profiles: RegionPickData[];
-    sketchId: SketchId | null;
-  } | null>(null);
-
   /**
    * True for a sketch entity whose profiles must be referenced as a whole.
    *
@@ -5598,12 +5593,6 @@ export function App() {
   );
 
   function startExtrude(sketchId: SketchId) {
-    if (tool !== 'extrude') {
-      extrudeSelectionReturnRef.current = {
-        profiles: [...selectedProfiles],
-        sketchId: selectedSketchProfileId
-      };
-    }
     const view = sketchViews.find(
       (candidate) => candidate.sketchId === sketchId
     );
@@ -5844,7 +5833,25 @@ export function App() {
     return [...live].reverse().find(suits) ?? live.at(-1) ?? null;
   }
 
+  /**
+   * Escape's one rung outside a sketch, and every panel's Cancel: back to
+   * nothing selected in a single step. The panel closes, any direct edit it
+   * was driving drops its gesture, preview, handle value and refusal, a
+   * region's profiles are released, and the selection clears — so a refused
+   * preview can never outlive the card that made it, and nobody has to count
+   * presses to reach a clean workspace.
+   */
   function cancelPanel() {
+    cancelPendingRegionExtrusion();
+    cancelDirectManipulationRef.current?.();
+    clearDirectEditPreviews();
+    setKeypad(null);
+    closeFeaturePanel();
+    clearSelection();
+  }
+
+  /** Closes the feature panel alone, leaving the selection where it is. */
+  function closeFeaturePanel() {
     extrudeEditRequest.current += 1;
     // The mode hint the panel set ("Move/Rotate: drag the arrows…") describes
     // a state the user has just left; it must not outlive the panel.
@@ -5856,17 +5863,15 @@ export function App() {
     setModelingEditFeature(null);
     setFormFacePickTarget(null);
     setViewportFormFacePick(null);
-    const selectionReturn = extrudeSelectionReturnRef.current;
     setPreviewDoc(null);
-    setSelectedProfiles(selectionReturn?.profiles ?? []);
-    setSelectedSketchProfileId(selectionReturn?.sketchId ?? null);
+    // A cancelled extrude releases its profiles rather than restoring the
+    // selection it started from: Escape lands on nothing selected, not on a
+    // "profile selected · Extrude" prompt one press short of it.
+    setSelectedProfiles([]);
+    setSelectedSketchProfileId(null);
     setMovePreview(null);
     setTool(null);
     setSelectedFeatureNode(null);
-    extrudeSelectionReturnRef.current = null;
-    if (selectionReturn) {
-      setStatus('Extrude canceled · prior profile selection restored.');
-    }
   }
 
   /**
@@ -5882,7 +5887,7 @@ export function App() {
       edgePreview.clear();
       setKeypad(null);
       dispatchInteraction({ type: 'clear' });
-      cancelPanel();
+      closeFeaturePanel();
       setStatus(
         mode === 'view'
           ? 'View mode · the model is read-only here.'
@@ -13072,6 +13077,12 @@ export function App() {
 
   function handleCylinderRadiusCancel() {
     cylinderRadiusPreview.clear();
+    reusableRadiusPreview.current = null;
+    setPreviewDeferred(false);
+    setLastValidPreview(null);
+    // A cancelled radius gesture forgets its value and any refusal of it, the
+    // same clean armed state the offset cancel returns to.
+    dispatchInteraction({ type: 'reset-value' });
   }
 
   function handleCylinderRadiusCommit(radius: number, exact?: ParamValue) {
@@ -13440,6 +13451,10 @@ export function App() {
     // late preview too — the same latch the offset cancel already releases.
     setPreviewDeferred(false);
     setLastValidPreview(null);
+    setPreviewBlendFaces([]);
+    // A refusal belongs to the value that was cancelled: leaving the phase
+    // at `failed` kept the card reading "Failed" over a restored handle.
+    dispatchInteraction({ type: 'reset-value' });
   }
 
   function filletRemovalTargets(
@@ -13799,6 +13814,77 @@ export function App() {
     } else if (current.mode === 'region') {
       dispatchInteraction({ type: 'select-region', target: current.target });
     }
+  }
+
+  /**
+   * Drops every direct-edit preview and everything that remembers its value:
+   * the published geometry, the reusable exact results, the slow-frame latch,
+   * the handle's last dragged or rendered value and the "keep last valid"
+   * offer. Without these a rig re-armed from `initialValue` came back at the
+   * refused value with its change band still drawn.
+   */
+  const clearDirectEditPreviews = useCallback(() => {
+    regionExtrudePreview.clear();
+    offsetPreview.clear();
+    cylinderRadiusPreview.clear();
+    edgePreview.clear();
+    setPreviewDeferred(false);
+    offsetPreviewValueRef.current = null;
+    reusableOffsetPreviewRef.current = null;
+    reusableRadiusPreview.current = null;
+    setRenderedOffsetPreview(null);
+    setLastValidPreview(null);
+    setPreviewBlendFaces([]);
+  }, [regionExtrudePreview, offsetPreview, cylinderRadiusPreview, edgePreview]);
+
+  // A preview must never outlive the command that made it. Whatever returns
+  // a command to idle — Escape, the card's ×, a toolbar command, a click on
+  // empty space, a commit — its previews and remembered values go with it,
+  // and a region's profiles are released so the card is not replaced by a
+  // "profile selected · Extrude" prompt one step short of nothing selected.
+  const interactionBeforeIdleRef = useRef(interaction);
+  useEffect(() => {
+    const previous = interactionBeforeIdleRef.current;
+    interactionBeforeIdleRef.current = interaction;
+    if (interaction.mode !== 'idle' || !isOperationState(previous)) {
+      return;
+    }
+    clearDirectEditPreviews();
+    if (previous.mode === 'region') {
+      setSelectedProfiles([]);
+      setSelectedSketchProfileId(null);
+    }
+  }, [interaction, clearDirectEditPreviews]);
+
+  /**
+   * Closes open exact entry and nothing else: the typed value is dropped and
+   * the handle returns to its baseline, but the command stays armed. This is
+   * the one rung Escape keeps outside a sketch — the next press clears.
+   */
+  function cancelOpenKeypad(): boolean {
+    const open = keypadRef.current;
+    if (!open) {
+      return false;
+    }
+    if (open.kind === 'sketch-dimension') {
+      setSketchDimensionDraft(null);
+      setStatus('Dimension entry canceled.');
+    } else if (open.kind === 'sketch-edit') {
+      setSketchEditDraft(null);
+      setStatus('Modify tool canceled.');
+    } else {
+      offsetSetterRef.current?.(open.baseline ?? 0);
+      if (open.kind === 'radius') {
+        handleCylinderRadiusCancel();
+      } else if (open.kind === 'edge') {
+        handleEdgeCancel();
+      } else {
+        handleOffsetCancel();
+      }
+    }
+    dispatchInteraction({ type: 'keypad-close' });
+    setKeypad(null);
+    return true;
   }
 
   function handleSelectionAction(action: SelectionActionId) {
@@ -15085,7 +15171,8 @@ export function App() {
       // yield to a focused field, but a panel that autofocuses an input is
       // exactly the situation someone presses Escape to get out of, and
       // swallowing it there breaks the one key the workspace promises is
-      // always a way back.
+      // always a way back. Outside a sketch its first press from a field only
+      // gives up the focus; see the Escape case below.
       if ((typing && event.key !== 'Escape') || meta || event.altKey) {
         return;
       }
@@ -15176,10 +15263,11 @@ export function App() {
             setStatus('Face re-pick canceled · the feature is unchanged.');
             return;
           }
-          if (interaction.mode !== 'idle') {
+          if (interaction.mode === 'sketch') {
+            // Inside a sketch Escape still climbs its ladder one rung per
+            // press: chain, pick sequence, tool, selection, then the sketch.
             event.preventDefault();
             if (
-              interaction.mode === 'sketch' &&
               !interaction.session.drawing &&
               interaction.session.tool === 'select' &&
               !interaction.session.selectedObjectId &&
@@ -15189,31 +15277,58 @@ export function App() {
               setStatus('Sketch profile selection cleared.');
               return;
             }
-            const cancelledPointer =
-              interaction.mode !== 'sketch' &&
-              cancelDirectManipulationRef.current?.() === true;
-            if (
-              cancelledPointer &&
-              (interaction.mode === 'edges' ||
-                (interaction.mode === 'face' &&
-                  interaction.op === 'edit-fillet'))
-            ) {
-              handleEdgeCancel();
+            // Read the rung before climbing it. Escape out of a sketch left
+            // the "Sketching on ..." message standing over a workspace the
+            // sketch had already been left — only Finish Sketch said
+            // anything. Both dispatch the same exit, so both can say so.
+            const leftSketch = escapeTarget(interaction) === 'exit-sketch';
+            dispatchInteraction({ type: 'escape' });
+            if (leftSketch) {
+              setStatus('Sketch closed · sketch edits preserved.');
             }
-            if (!cancelledPointer) {
-              // Read the rung before climbing it. Escape out of a sketch left
-              // the "Sketching on ..." message standing over a workspace the
-              // sketch had already been left — only Finish Sketch said
-              // anything. Both dispatch the same exit, so both can say so.
-              const leftSketch = escapeTarget(interaction) === 'exit-sketch';
-              dispatchInteraction({ type: 'escape' });
-              if (leftSketch) {
-                setStatus('Sketch closed · sketch edits preserved.');
-              }
-            }
-          } else if (tool || selectedFeatureNodeId) {
+            return;
+          }
+          // Outside a sketch one press returns to nothing selected. Only
+          // what holds the keyboard keeps a rung of its own: a focused field
+          // gives up focus (the next press clears), open exact entry closes
+          // back to the armed command, and a value being validated stays
+          // locked until the kernel answers. A key a control already handled
+          // (the prompt bar clearing its text) is that control's, not ours.
+          if (event.defaultPrevented) {
+            return;
+          }
+          if (typing && target) {
+            event.preventDefault();
+            target.blur();
+            return;
+          }
+          if (cancelOpenKeypad()) {
+            event.preventDefault();
+            return;
+          }
+          if (
+            interaction.mode !== 'idle' &&
+            escapeTarget(interaction) === 'none'
+          ) {
+            event.preventDefault();
+            return;
+          }
+          if (
+            escapeTarget(interaction) === 'cancel-drag' &&
+            cancelDirectManipulationRef.current?.() === true
+          ) {
+            // A drag the viewport did not already take (it normally retires
+            // the captured pointer before this handler runs): cancel it in
+            // place, as the viewport would have.
+            event.preventDefault();
+            return;
+          }
+          event.preventDefault();
+          if (tool || selectedFeatureNodeId || interaction.mode !== 'idle') {
             cancelPanel();
           } else {
+            // A bare selection: nothing of a panel's to close, so leave any
+            // preview that is not a panel's (an assistant proposal) alone.
             clearSelection();
           }
           return;
@@ -15898,10 +16013,7 @@ export function App() {
     ? viewModeHint
     : tweakMode
       ? tweakModeHint
-      : (commandPromptText(
-          interaction,
-          tool !== null || selectedFeatureNodeId !== null
-        ) ??
+      : (commandPromptText(interaction) ??
         (tool === 'sketch'
           ? 'Drag to draw · R rectangle · C circle · P polygon · Enter finishes'
           : tool === 'fillet' || tool === 'chamfer'
@@ -17145,32 +17257,7 @@ export function App() {
                           );
                         }
                       }}
-                      onCancel={() => {
-                        if (keypad.kind === 'sketch-dimension') {
-                          setSketchDimensionDraft(null);
-                          dispatchInteraction({ type: 'keypad-close' });
-                          setKeypad(null);
-                          setStatus('Dimension entry canceled.');
-                          return;
-                        }
-                        if (keypad.kind === 'sketch-edit') {
-                          setSketchEditDraft(null);
-                          dispatchInteraction({ type: 'keypad-close' });
-                          setKeypad(null);
-                          setStatus('Modify tool canceled.');
-                          return;
-                        }
-                        offsetSetterRef.current?.(keypad.baseline ?? 0);
-                        if (keypad.kind === 'radius') {
-                          handleCylinderRadiusCancel();
-                        } else if (keypad.kind === 'edge') {
-                          handleEdgeCancel();
-                        } else {
-                          handleOffsetCancel();
-                        }
-                        dispatchInteraction({ type: 'keypad-close' });
-                        setKeypad(null);
-                      }}
+                      onCancel={cancelOpenKeypad}
                     />
                   )}
                 </>
@@ -17519,9 +17606,11 @@ export function App() {
                     <button
                       type="button"
                       className="icon-button panel-close"
-                      title="Close (Esc)"
+                      // Closes the panel and keeps the pick; Escape (and the
+                      // form's Cancel) return to nothing selected.
+                      title="Close"
                       aria-label="Close panel"
-                      onClick={cancelPanel}
+                      onClick={closeFeaturePanel}
                     >
                       <X size={14} aria-hidden="true" />
                     </button>
@@ -17630,6 +17719,7 @@ export function App() {
                 onPreviewBodyAppearance={previewBodyAppearance}
                 onCommitBodyAppearance={commitBodyAppearance}
                 onCancel={cancelPanel}
+                onClose={closeFeaturePanel}
                 onSelectAllEdges={handleSelectAllEdges}
                 onClearSelectedEdges={handleClearSelectedEdges}
                 onCreatePrimitive={(kind, name, dimensions) =>

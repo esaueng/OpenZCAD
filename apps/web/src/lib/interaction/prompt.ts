@@ -30,7 +30,6 @@ export interface CommandPrompt {
 const ESCAPE_LABELS: Record<ReturnType<typeof escapeTarget>, string | null> = {
   'close-keypad': 'closes exact entry',
   'cancel-drag': 'cancels the drag',
-  'recover-failure': 'dismisses the error',
   'end-drawing': 'ends the chain',
   'cancel-constraint': 'cancels the constraint',
   'cancel-edit': 'cancels the modify tool',
@@ -94,21 +93,12 @@ function draggingStep(state: InteractionState): string {
  * workspace's own tool hint is the better thing to be showing, and this
  * should not push it aside to say nothing.
  *
- * `panelOpen` closes a gap the machine cannot see. A feature form handles
- * Escape itself and stops it there, so while one is open it is the innermost
- * rung — inside even the machine's outermost one. Saying "Esc clears the
- * selection" then would be a promise the next press does not keep, which is
- * worse than saying nothing.
+ * An open feature form no longer changes the Escape line: closing the form
+ * and clearing the selection are one press, so "clears the selection" is
+ * true whether or not a panel is up.
  */
-export function commandPrompt(
-  state: InteractionState,
-  panelOpen = false
-): CommandPrompt | null {
-  const target = escapeTarget(state);
-  const escape =
-    panelOpen && target === 'clear-selection'
-      ? 'closes the panel'
-      : ESCAPE_LABELS[target];
+export function commandPrompt(state: InteractionState): CommandPrompt | null {
+  const escape = ESCAPE_LABELS[escapeTarget(state)];
   if (state.mode === 'idle') {
     return null;
   }
@@ -149,11 +139,8 @@ export function commandPrompt(
 }
 
 /** The prompt as one line, ready for the status bar. */
-export function commandPromptText(
-  state: InteractionState,
-  panelOpen = false
-): string | null {
-  const prompt = commandPrompt(state, panelOpen);
+export function commandPromptText(state: InteractionState): string | null {
+  const prompt = commandPrompt(state);
   if (!prompt) {
     return null;
   }
