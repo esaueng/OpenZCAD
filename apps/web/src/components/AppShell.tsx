@@ -188,6 +188,8 @@ export function AppShell({
           <div className="stage-right">
             {inspectorExit.rendered && (
               <ExitingFloat
+                // A panel reopened during its own exit is a fresh panel.
+                key={inspectorExit.generation}
                 className={`inspector-float${inspectorExit.closing ? ' closing' : ''}`}
                 closing={inspectorExit.closing}
               >
