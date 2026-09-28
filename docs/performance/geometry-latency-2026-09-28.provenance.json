@@ -1,0 +1,39 @@
+{
+  "method": "Sequential before/after with seven alternating warm edits per fixture and edit phase; fresh-adapter oracle after every sample. This shared host had other geometry jobs active. No wall-clock acceptance threshold; timing excludes worker and rendering.",
+  "sessions": {
+    "before": {
+      "provenance": {
+        "sourceSha": "24f1d66e441ec343aa933230edec603856ec0f5c",
+        "adapterSourceSha256": "90534a80723760dd5e4126bd7910c987eccdff3cb58649627da19b0d95850cf0",
+        "wasmSha256": "a3e7c9b7d77362fb9d95e172957069c64e41575082c185aa0f43520e0b270dfc",
+        "wasmBytes": 9221904,
+        "remusLockLine": "  remus-wasm@https://codeload.github.com/esaueng/remus/tar.gz/fe3c8efaef2d041fbc3303ac6a1ac6841aa7ac62#path:/crates/wasm/pkg:",
+        "node": "v24.14.0",
+        "platform": "linux",
+        "arch": "x64"
+      },
+      "parityComparisons": 294,
+      "warmSampleCount": 294
+    },
+    "after": {
+      "provenance": {
+        "sourceSha": "7c7d75bd29da814692e3edc7b8c79c733d3384e3",
+        "adapterSourceSha256": "60ebfa891cbb48fce47dfa1f60620ca9703dcf0b20dcfe556efddafb0cd1c105",
+        "wasmSha256": "e65c11adc38149d6d74b98551fc2c65fc144820e5d4c997807e2ade581522e97",
+        "wasmBytes": 9276335,
+        "remusLockLine": "  remus-wasm@https://codeload.github.com/esaueng/remus/tar.gz/96acaccf0eb058ee9c631a31015d5d3618950989#path:/crates/wasm/pkg:",
+        "node": "v24.14.0",
+        "platform": "linux",
+        "arch": "x64"
+      },
+      "parityComparisons": 294,
+      "warmSampleCount": 294
+    }
+  },
+  "kernelBuildSource": "584dc208d66c432562c5c7864cfbcef360a3406e",
+  "pairedPackageVersion": "2026.1.4",
+  "translatorWasmSha256": "44230c6d7799017c227775a93d5e97aa8923b27f6d553377369e57fb85c252e2",
+  "hardware": "AMD Ryzen 9 5900XT, Linux x86_64; other geometry jobs active on shared host",
+  "comparison": "Combined app and kernel change; no per-optimization causal attribution. Area-only native getter benchmark is documented separately in Remus.",
+  "harnessChange": "Candidate resolves installed WASM identity from the declaring kernel-adapter package, making provenance work with strict pnpm layouts; measured fixtures and timing/oracle boundaries are unchanged."
+}
