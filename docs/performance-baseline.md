@@ -695,3 +695,33 @@ reversal, cancel, zero worker requests during drag, delayed exact release, fixed
 opposite ends and undo. Existing compound-offset and unsupported-face preview
 regressions continue to cover the fallback. Instant previews do not make exact
 release validation instantaneous or extend the kernel's supported edit families.
+
+## Split-rim imported cylinder preview (2026-09-28)
+
+An imported cylindrical end could fail terminal-cap preview recognition while
+its opposite end remained responsive. The affected wall had two semicircle
+edges on each rim and a shared seam. Remus derived its periodic integration
+bounds from the edge vertices alone; half-turn jumps unwrapped into a 3π range
+instead of one 2π revolution. The wall area was therefore reported 50% too large,
+and the complete-cylinder area guard in `capPreviewProfile.ts` correctly refused
+that inconsistent measurement.
+
+The kernel fix derives curved cylinder boundary bounds from sampled edge paths,
+so the angular winding is determined by the actual arcs. Integration still uses
+the analytic surface. OpenZCAD keeps its existing area, topology, holes, partial
+wall and moving-span guards; exact edit validation remains authoritative on
+release. The regression uses an independently authored split-rim STEP cylinder;
+the supplied model and recording are not stored in this repository.
+
+The observable performance change is eligibility for the existing bounded
+visual preview on both ends. This removes repeated exact rebuilds from the
+recognized drag path; it does not promise faster exact commit validation. Broader
+history-cache, measurement-cache and optional-analysis changes are outside this
+fix.
+
+Coverage includes the split-rim wall at two sizes and axis orientations, both
+cap recognitions, exact offsets and STEP export. The browser regression drives
+both imported caps through reversal, cancel, delayed exact release and undo,
+and asserts zero geometry-worker rebuild requests during the drag. The generic
+fixture reproduced the 1.5× area error with the previous kernel and passes with
+the paired fix from [Remus #807](https://github.com/esaueng/remus/pull/807).
