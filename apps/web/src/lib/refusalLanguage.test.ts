@@ -70,6 +70,11 @@ describe('plainRefusal', () => {
       [
         'exact geometry failed',
         'The exact kernel could not build this feature.'
+      ],
+      [
+        // The demo bracket's plate top pushed past the boss above it.
+        'offset: move-face would change topology at face Some(Id(338)), edge None: swept face reaches nonadjacent face 340 before completing the move',
+        'The face would run into another part of the body before it got that far.'
       ]
     ];
     for (const [raw, sentence] of cases) {

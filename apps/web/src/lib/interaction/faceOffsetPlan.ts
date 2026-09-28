@@ -21,6 +21,7 @@ import {
   primitiveCylinderCapAncestor
 } from './cylinderPrimitiveAncestry';
 import { extrudeCapAncestor } from './extrudeCapAncestry';
+import { planarFaceTravel } from './planarFaceTravel';
 
 /**
  * What a planar face offset turns into.
@@ -52,7 +53,16 @@ export type FaceOffsetPlan =
       value: number;
       preflightRejection?: string;
     }
-  | { kind: 'direct-edit'; command: AnyCommand };
+  | {
+      kind: 'direct-edit';
+      command: AnyCommand;
+      /**
+       * Set when the face would run into another part of its own body
+       * before reaching the offset, which the exact kernel refuses as a
+       * face move; the sentence says how far it can go instead.
+       */
+      preflightRejection?: string;
+    };
 
 /** What the handle's "Total" readout adds the drag to, and in which sense. */
 export interface FaceOffsetTotal {
@@ -204,6 +214,49 @@ function shiftPrimitiveBase(
   return composeCommands(label, commands);
 }
 
+function roundedLength(value: number): string {
+  return String(Math.round(value * 100) / 100);
+}
+
+/**
+ * The refusal for a local face move that would reach another part of the
+ * body, measured before the kernel is asked. The kernel's own words for this
+ * ("swept face reaches nonadjacent face") never said how far was possible.
+ */
+function faceTravelRejection(
+  document: ProjectDocument,
+  bodyId: BodyId,
+  face: FaceTopology,
+  offset: number
+): string | undefined {
+  const representation = document.derived.bodyRepresentations[bodyId];
+  // Measured on the body the plan edits, never on a stale copy of the face.
+  const current = representation?.topology?.faces.find(
+    (candidate) =>
+      candidate.topologyId === face.topologyId && candidate.hash === face.hash
+  );
+  if (!representation || !current) return undefined;
+  const travel = planarFaceTravel(representation, current);
+  const units = document.units;
+  // Only past the mesh's own allowance: at the limit itself the kernel is
+  // the judge, and its refusal reads the same way.
+  if (
+    offset < 0 &&
+    travel.inward !== null &&
+    -offset > travel.inward + travel.tolerance
+  ) {
+    return `Only ${roundedLength(travel.inward)} ${units} of material lies behind this face, so it cannot move ${roundedLength(-offset)} ${units} inward.`;
+  }
+  if (
+    offset > 0 &&
+    travel.outward !== null &&
+    offset > travel.outward + travel.tolerance
+  ) {
+    return `Another part of the body is ${roundedLength(travel.outward)} ${units} in front of this face, so it cannot move ${roundedLength(offset)} ${units} outward.`;
+  }
+  return undefined;
+}
+
 /** Pure. Null when the face is not an exact plane or the offset is a no-op. */
 export function planFaceOffset(
   input: FaceOffsetPlanInput
@@ -329,8 +382,10 @@ export function planFaceOffset(
     return null;
   }
 
+  const travelRejection = faceTravelRejection(document, bodyId, face, offset);
   return {
     kind: 'direct-edit',
+    ...(travelRejection ? { preflightRejection: travelRejection } : {}),
     command: commandFactories.directEditBody({
       name: DIRECT_EDIT_NAME,
       targetBodyId: bodyId,
