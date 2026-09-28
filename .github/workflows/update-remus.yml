@@ -2,6 +2,10 @@ name: Update Remus
 
 on:
   workflow_dispatch:
+  schedule:
+    # GitHub's shortest interval is five minutes. Offset from the hour to
+    # reduce the chance of a delayed or dropped scheduled run.
+    - cron: '2-59/5 * * * *'
 
 permissions:
   contents: read
@@ -45,24 +49,56 @@ jobs:
           ref: ${{ github.event.repository.default_branch }}
           persist-credentials: false
 
-      - name: Set up pnpm
+      - name: Find the latest paired Remus package release
         if: steps.existing-pr.outputs.skip != 'true'
+        id: release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          # Remus main can advance before its generated package PR merges.
+          # Follow the commit that last published both package manifests.
+          kernel_sha="$(gh api 'repos/esaueng/remus/commits?path=crates%2Fwasm%2Fpkg%2Fpackage.json&sha=main&per_page=1' --jq '.[0].sha')"
+          io_sha="$(gh api 'repos/esaueng/remus/commits?path=crates%2Fwasm-io%2Fpkg%2Fpackage.json&sha=main&per_page=1' --jq '.[0].sha')"
+          if [[ ! "$kernel_sha" =~ ^[0-9a-f]{40}$ || "$kernel_sha" != "$io_sha" ]]; then
+            echo "::error title=Split Remus release::The latest kernel and translator package manifests are not from the same commit."
+            exit 1
+          fi
+          echo "sha=$kernel_sha" >> "$GITHUB_OUTPUT"
+
+          pinned_shas="$(
+            sed -n 's|.*codeload\.github\.com/esaueng/remus/tar\.gz/\([0-9a-f]\{40\}\).*|\1|p' pnpm-lock.yaml \
+              | sort -u
+          )"
+          if [[ ! "$pinned_shas" =~ ^[0-9a-f]{40}$ ]]; then
+            echo "::error title=Split kernel pin::Expected one immutable Remus SHA in pnpm-lock.yaml."
+            exit 1
+          fi
+          if [[ "$pinned_shas" == "$kernel_sha" ]]; then
+            echo "needs_update=false" >> "$GITHUB_OUTPUT"
+            echo "Remus packages are current at $kernel_sha; no branch or PR was created." >> "$GITHUB_STEP_SUMMARY"
+          else
+            echo "needs_update=true" >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: Set up pnpm
+        if: steps.release.outputs.needs_update == 'true'
         uses: pnpm/action-setup@0977fd99725f1db4007ccb2928dbb4e90d06cc86 # v6
         with:
           version: 10.8.0
 
       - name: Set up Node.js
-        if: steps.existing-pr.outputs.skip != 'true'
+        if: steps.release.outputs.needs_update == 'true'
         uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7
         with:
           node-version: 22
           cache: pnpm
 
       - name: Resolve the newest Remus commit
-        if: steps.existing-pr.outputs.skip != 'true'
+        if: steps.release.outputs.needs_update == 'true'
         id: update
         env:
           GH_TOKEN: ${{ github.token }}
+          RELEASE_SHA: ${{ steps.release.outputs.sha }}
         run: |
           extract_remus_sha() {
             node --input-type=module <<'NODE'
@@ -85,13 +121,13 @@ jobs:
 
           old_sha="$(extract_remus_sha)"
 
-          upstream_sha="$(gh api repos/esaueng/remus/commits/main --jq .sha)"
+          upstream_sha="$RELEASE_SHA"
           # A consumer may pin an upstream PR fix before it reaches main.
           # Never replace that fix with a main commit that does not contain it.
           comparison="$(gh api "repos/esaueng/remus/compare/$old_sha...$upstream_sha" --jq .status)"
           case "$comparison" in
             ahead|identical) ;;
-            *) echo "::error title=Kernel fix not on main::Current Remus pin is not an ancestor of upstream main. Merge the upstream fix before updating."; exit 1 ;;
+            *) echo "::error title=Kernel fix not in release::Current Remus pin is not an ancestor of the latest paired package release. Merge the upstream fix before updating."; exit 1 ;;
           esac
           node scripts/pin-remus.mjs "$upstream_sha"
           pnpm update remus-wasm remus-wasm-io --filter @openzcad/kernel-adapter --lockfile-only
@@ -99,7 +135,14 @@ jobs:
           new_sha="$(extract_remus_sha)"
 
           if [[ "$new_sha" != "$upstream_sha" ]]; then
-            echo "::error title=Stale Remus resolution::pnpm resolved $new_sha but esaueng/remus main is $upstream_sha. Refusing to open a PR."
+            echo "::error title=Stale Remus resolution::pnpm resolved $new_sha but the latest paired package release is $upstream_sha. Refusing to open a PR."
+            exit 1
+          fi
+
+          latest_kernel_sha="$(gh api 'repos/esaueng/remus/commits?path=crates%2Fwasm%2Fpkg%2Fpackage.json&sha=main&per_page=1' --jq '.[0].sha')"
+          latest_io_sha="$(gh api 'repos/esaueng/remus/commits?path=crates%2Fwasm-io%2Fpkg%2Fpackage.json&sha=main&per_page=1' --jq '.[0].sha')"
+          if [[ "$latest_kernel_sha" != "$upstream_sha" || "$latest_io_sha" != "$upstream_sha" ]]; then
+            echo "::error title=Newer Remus release::The paired package release changed while the update was prepared. The next run will pick it up."
             exit 1
           fi
 
@@ -337,7 +380,7 @@ jobs:
             echo
             echo '## Automation and verification'
             echo
-            echo '- Detected by the manual Remus updater with a targeted manifest pin and lockfile-only pnpm update.'
+            echo '- Detected by the scheduled or manual Remus updater at the latest paired package release, using a targeted manifest pin and lockfile-only pnpm update.'
             echo '- Duplicate update PRs are prevented by the workflow concurrency group and the open `automation/remus-*` PR check.'
             echo '- This GitHub App-authored PR triggers the repository pull-request CI, including lint, typecheck, web tests, parity corpus, build, and Playwright.'
             echo '- No deployment, publication, merge, or auto-merge was performed.'
