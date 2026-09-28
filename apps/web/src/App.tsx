@@ -14,7 +14,7 @@ import type {
 } from './lib/parameterVisualPreview';
 import { LatestTask } from './lib/latestTask';
 import { rebuildProgressLabel } from './lib/rebuildProgressLabel';
-import { featureHistory, featureResultBodyIds } from './lib/featureHistory';
+import { featureHistory } from './lib/featureHistory';
 import { FeatureBuildError } from './lib/featureValidation';
 import { edgeModifierCommand } from './lib/edgeModifierEdit';
 import type { EdgeModifierFormValue } from './components/forms/FeatureForms';
@@ -407,6 +407,7 @@ const MESH_EXPORT_FILE_INFO: Record<
   }
 };
 import {
+  MoveInstruction,
   MoveOverlay,
   ProfileQuickAction
 } from './components/DirectModelingOverlays';
@@ -467,7 +468,8 @@ import {
 import type { SketchEditHost } from './lib/sketch/edits';
 import {
   faceOffsetBaseline,
-  planFaceOffset
+  planFaceOffset,
+  withFaceTravelHint
 } from './lib/interaction/faceOffsetPlan';
 import { extrudeCapAncestor } from './lib/interaction/extrudeCapAncestry';
 import { updateProfileSelection } from './lib/profileSelection';
@@ -475,7 +477,17 @@ import {
   isEntityWideProfileSource,
   profileReferencesForSelection
 } from './lib/profileReferences';
-import type { SelectionActionId } from './lib/interaction/capabilities';
+import {
+  selectionCapabilities,
+  type SelectionActionId
+} from './lib/interaction/capabilities';
+import {
+  selectionCalloutVerbs,
+  type SelectionCalloutContent,
+  type SelectionCalloutKind,
+  type SelectionCalloutVerbId
+} from './lib/selectionCallout';
+import { ghostBodiesFor, historyFeatureFocus } from './lib/historyFocus';
 import {
   faceSketchAttachment,
   fixedPlaneRefForLegacyAttachment
@@ -1064,10 +1076,11 @@ import {
   saveLocalAppSettings,
   shouldAdoptAccountSettings
 } from './lib/appSettings';
+import { usePanelSuspension } from './hooks/usePanelSuspension';
 import {
   loadPanelState,
   savePanelState,
-  toggleDrawerSection,
+  toggleDrawerSectionAsShown,
   toggleSidebarSection,
   type PanelState,
   type SidebarSectionId,
@@ -1165,6 +1178,7 @@ interface OffsetEditPlan {
   successMessage: string;
   validationTargets?: AffectedFeatureTarget[];
   preflightRejection?: string;
+  travelHint?: string;
 }
 
 interface OffsetPreviewCandidate {
@@ -1179,6 +1193,10 @@ interface OffsetPreviewCandidate {
   baseProjectId: ProjectDocument['projectId'];
   baseVersion: number;
   validationTargets?: AffectedFeatureTarget[];
+  /** A refusal known before any rebuild; the preview reports it unbuilt. */
+  preflightRejection?: string;
+  /** Mesh estimate used only after an exact collision refusal. */
+  travelHint?: string;
 }
 
 type RadiusPreviewCandidate = Omit<
@@ -2178,6 +2196,22 @@ export function App() {
   // `idle` render it was constructed during.
   const interactionRef = useRef(interaction);
   interactionRef.current = interaction;
+  // A sketch or a drag takes the stage: the drawer and the "More tools" fold
+  // step aside for it and return when it ends, the preference untouched.
+  // The viewer reports the gesture's pointer, which outlasts a refused
+  // mid-drag value; it only counts while an operation is armed.
+  const [directDragPointer, setDirectDragPointer] = useState(false);
+  const [moveDragPointer, setMoveDragPointer] = useState(false);
+  if (directDragPointer && !isOperationState(interaction)) {
+    // A cleared operation ends its gesture, whatever the viewer said last.
+    setDirectDragPointer(false);
+  }
+  const panels = usePanelSuspension(panelState, {
+    sketching: interaction.mode === 'sketch',
+    phase: isOperationState(interaction) ? interaction.phase : null,
+    pointerDown:
+      moveDragPointer || (directDragPointer && isOperationState(interaction))
+  });
   const toolRef = useRef(tool);
   toolRef.current = tool;
   /** Open exact-value entry (anchored keypad) for the armed handle. */
@@ -2304,6 +2338,8 @@ export function App() {
       ) => void)
     | null
   >(null);
+  /** The Move banner's copy of the live drag snap, fed by the Move panel. */
+  const moveSnapSetterRef = useRef<((snap: MoveSnap) => void) | null>(null);
   /** Cancels the viewport's captured pointer session on keyboard Escape. */
   const cancelDirectManipulationRef = useRef<(() => boolean) | null>(null);
   /** Opens exact entry for the armed handle, as tapping its chip would. */
@@ -2672,11 +2708,18 @@ export function App() {
               baseVersion: base.version,
               ...(plan.validationTargets
                 ? { validationTargets: plan.validationTargets }
-                : {})
+                : {}),
+              ...(plan.preflightRejection
+                ? { preflightRejection: plan.preflightRejection }
+                : {}),
+              ...(plan.travelHint ? { travelHint: plan.travelHint } : {})
             }
           : null;
       },
       derive: async (candidate) => {
+        if (candidate.preflightRejection) {
+          throw new Error(candidate.preflightRejection);
+        }
         const derived = await geometry.syncOnce(candidate.document);
         const live = managerRef.current;
         const documentMoved =
@@ -2692,7 +2735,11 @@ export function App() {
           derived,
           documentMoved
         });
-        if (rejection) throw new Error(rejection.message);
+        if (rejection) {
+          throw new Error(
+            withFaceTravelHint(rejection.message, candidate.travelHint)
+          );
+        }
         return { derived, rejection };
       },
       isCurrent: previewSelectionIsCurrent,
@@ -5088,14 +5135,6 @@ export function App() {
     renderedRepresentations
   ]);
 
-  const selectionChip = useMemo(
-    () =>
-      selectionSummary
-        ? { label: selectionSummary.label, detail: selectionSummary.detail }
-        : null,
-    [selectionSummary]
-  );
-
   const {
     measuring,
     setMeasuring,
@@ -5286,6 +5325,156 @@ export function App() {
     exactGeometryReady,
     hasEdgeSelected: selectedEdges.length > 0
   };
+
+  /**
+   * A History row whose feature a later one consumed, brought into focus:
+   * the faces it produced on the final part, or its consumed body as a
+   * ghost when none survived. Derived rather than stored, so any other pick
+   * ends it. See lib/historyFocus.
+   */
+  const historyFocus = useMemo(() => {
+    if (
+      !doc ||
+      tool !== null ||
+      featureSelectionSource !== 'pinned' ||
+      !selectedFeature ||
+      selectedBodyIds.length > 0 ||
+      selectedTopology !== null ||
+      selectedEdges.length > 0
+    ) {
+      return null;
+    }
+    const focus = historyFeatureFocus(doc, selectedFeature, (bodyId) => {
+      const body = doc.derived.bodyRepresentations[bodyId];
+      return Boolean(body && !body.consumed && !hiddenBodyIds.has(bodyId));
+    });
+    return focus.kind === 'focus' ? { feature: selectedFeature, focus } : null;
+  }, [
+    doc,
+    tool,
+    featureSelectionSource,
+    selectedFeature,
+    selectedBodyIds,
+    selectedTopology,
+    selectedEdges,
+    hiddenBodyIds
+  ]);
+  const focusGhostBodies = useMemo(
+    () => (doc && historyFocus ? ghostBodiesFor(doc, historyFocus.focus) : []),
+    [doc, historyFocus]
+  );
+  // The focus faces ride the preview-face highlight, beside any live blend
+  // preview; a new array whenever the focus changes, so the viewer redraws.
+  const viewerPreviewFaces = useMemo(
+    () =>
+      historyFocus && historyFocus.focus.kind === 'focus'
+        ? [...previewBlendFaces, ...historyFocus.focus.faces]
+        : previewBlendFaces,
+    [previewBlendFaces, historyFocus]
+  );
+
+  /**
+   * The selection chip anchored to the pick: name, key measurement, the
+   * verbs for that kind of pick and the clear action (lib/selectionCallout).
+   * Verbs run through the handlers the rail and the tool card use, read
+   * through a ref so the chip's content only changes when what it says does.
+   */
+  const selectionCalloutVerbRef = useRef<(id: SelectionCalloutVerbId) => void>(
+    () => undefined
+  );
+  selectionCalloutVerbRef.current = (id) => {
+    if (id.startsWith('action:')) {
+      handleSelectionAction(id.slice('action:'.length) as SelectionActionId);
+    } else {
+      launchTool(id.slice('tool:'.length) as ToolId);
+    }
+  };
+  const clearSelectionRef = useRef<() => void>(() => undefined);
+  clearSelectionRef.current = clearSelection;
+  const calloutKind: SelectionCalloutKind | null =
+    selectedEdges.length > 0 || renderedSelectedTopology?.kind === 'edge'
+      ? 'edges'
+      : renderedSelectedTopology?.kind === 'face'
+        ? 'face'
+        : selectedBodyIds.length > 1
+          ? 'bodies'
+          : selectedBodyIds.length === 1
+            ? 'body'
+            : null;
+  const calloutFaceCapabilities =
+    interaction.mode === 'face'
+      ? selectionCapabilities({ kind: 'face', target: interaction.target })
+      : null;
+  const calloutPressedAction: SelectionActionId | null =
+    interaction.mode === 'edges'
+      ? interaction.op
+      : interaction.mode !== 'face'
+        ? null
+        : interaction.op === 'offset-face'
+          ? !interaction.target.resizeBodyFeatureId ||
+            interaction.target.localFaceOffset === true
+            ? 'offset-face'
+            : 'resize-body'
+          : interaction.op === 'resize-cylinder-radius'
+            ? 'resize-radial-face'
+            : interaction.op;
+  // Verbs only while the pick is the whole story: a running tool has its own
+  // card, and View and Tweak do not edit. Serialized (they are plain data)
+  // so the content below changes only when the verbs themselves do.
+  const calloutInteractive =
+    !modelingLocked && tool === null && !parameterPreview;
+  const calloutVerbsKey =
+    calloutKind && calloutInteractive
+      ? JSON.stringify(
+          selectionCalloutVerbs({
+            kind: calloutKind,
+            faceCapabilities: calloutFaceCapabilities,
+            edgesArmed: interaction.mode === 'edges',
+            pressedAction: calloutPressedAction,
+            availability
+          })
+        )
+      : '[]';
+  const selectionCallout = useMemo<SelectionCalloutContent | null>(() => {
+    const onVerb = (id: SelectionCalloutVerbId) =>
+      selectionCalloutVerbRef.current(id);
+    const verbs = JSON.parse(
+      calloutVerbsKey
+    ) as SelectionCalloutContent['verbs'];
+    if (historyFocus && calloutInteractive) {
+      return {
+        label: textLabelSegments(historyFocus.feature.name),
+        verbs: [],
+        anchor: 'focus',
+        onVerb,
+        onClear: () => clearSelectionRef.current()
+      };
+    }
+    // A running tool has its own card and handles, and View and Tweak do
+    // not edit: the pick keeps its plain name label, which takes no input
+    // and so can never sit over a gizmo handle.
+    if (!selectionSummary || !calloutInteractive) {
+      return null;
+    }
+    return {
+      label: selectionSummary.label,
+      // Several bodies are counted in the name; the verbs say what they
+      // are for.
+      ...(selectionSummary.detail && selectedBodyIds.length < 2
+        ? { detail: selectionSummary.detail }
+        : {}),
+      verbs,
+      anchor: 'selection',
+      onVerb,
+      onClear: () => clearSelectionRef.current()
+    };
+  }, [
+    historyFocus,
+    selectionSummary,
+    selectedBodyIds,
+    calloutVerbsKey,
+    calloutInteractive
+  ]);
 
   function hydrateDocument(
     nextDocument: ProjectDocument,
@@ -5617,11 +5806,6 @@ export function App() {
     });
   }
 
-  const extrudeSelectionReturnRef = useRef<{
-    profiles: RegionPickData[];
-    sketchId: SketchId | null;
-  } | null>(null);
-
   /**
    * True for a sketch entity whose profiles must be referenced as a whole.
    *
@@ -5640,12 +5824,6 @@ export function App() {
   );
 
   function startExtrude(sketchId: SketchId) {
-    if (tool !== 'extrude') {
-      extrudeSelectionReturnRef.current = {
-        profiles: [...selectedProfiles],
-        sketchId: selectedSketchProfileId
-      };
-    }
     const view = sketchViews.find(
       (candidate) => candidate.sketchId === sketchId
     );
@@ -5886,7 +6064,25 @@ export function App() {
     return [...live].reverse().find(suits) ?? live.at(-1) ?? null;
   }
 
+  /**
+   * Escape's one rung outside a sketch, and every panel's Cancel: back to
+   * nothing selected in a single step. The panel closes, any direct edit it
+   * was driving drops its gesture, preview, handle value and refusal, a
+   * region's profiles are released, and the selection clears — so a refused
+   * preview can never outlive the card that made it, and nobody has to count
+   * presses to reach a clean workspace.
+   */
   function cancelPanel() {
+    cancelPendingRegionExtrusion();
+    cancelDirectManipulationRef.current?.();
+    clearDirectEditPreviews();
+    setKeypad(null);
+    closeFeaturePanel();
+    clearSelection();
+  }
+
+  /** Closes the feature panel alone, leaving the selection where it is. */
+  function closeFeaturePanel() {
     extrudeEditRequest.current += 1;
     // The mode hint the panel set ("Move/Rotate: drag the arrows…") describes
     // a state the user has just left; it must not outlive the panel.
@@ -5898,17 +6094,15 @@ export function App() {
     setModelingEditFeature(null);
     setFormFacePickTarget(null);
     setViewportFormFacePick(null);
-    const selectionReturn = extrudeSelectionReturnRef.current;
     setPreviewDoc(null);
-    setSelectedProfiles(selectionReturn?.profiles ?? []);
-    setSelectedSketchProfileId(selectionReturn?.sketchId ?? null);
+    // A cancelled extrude releases its profiles rather than restoring the
+    // selection it started from: Escape lands on nothing selected, not on a
+    // "profile selected · Extrude" prompt one press short of it.
+    setSelectedProfiles([]);
+    setSelectedSketchProfileId(null);
     setMovePreview(null);
     setTool(null);
     setSelectedFeatureNode(null);
-    extrudeSelectionReturnRef.current = null;
-    if (selectionReturn) {
-      setStatus('Extrude canceled · prior profile selection restored.');
-    }
   }
 
   /**
@@ -5924,7 +6118,7 @@ export function App() {
       edgePreview.clear();
       setKeypad(null);
       dispatchInteraction({ type: 'clear' });
-      cancelPanel();
+      closeFeaturePanel();
       setStatus(
         mode === 'view'
           ? 'View mode · the model is read-only here.'
@@ -13128,6 +13322,12 @@ export function App() {
 
   function handleCylinderRadiusCancel() {
     cylinderRadiusPreview.clear();
+    reusableRadiusPreview.current = null;
+    setPreviewDeferred(false);
+    setLastValidPreview(null);
+    // A cancelled radius gesture forgets its value and any refusal of it, the
+    // same clean armed state the offset cancel returns to.
+    dispatchInteraction({ type: 'reset-value' });
   }
 
   function handleCylinderRadiusCommit(radius: number, exact?: ParamValue) {
@@ -13540,6 +13740,10 @@ export function App() {
     // late preview too — the same latch the offset cancel already releases.
     setPreviewDeferred(false);
     setLastValidPreview(null);
+    setPreviewBlendFaces([]);
+    // A refusal belongs to the value that was cancelled: leaving the phase
+    // at `failed` kept the card reading "Failed" over a restored handle.
+    dispatchInteraction({ type: 'reset-value' });
   }
 
   function filletRemovalTargets(
@@ -13916,6 +14120,77 @@ export function App() {
     }
   }
 
+  /**
+   * Drops every direct-edit preview and everything that remembers its value:
+   * the published geometry, the reusable exact results, the slow-frame latch,
+   * the handle's last dragged or rendered value and the "keep last valid"
+   * offer. Without these a rig re-armed from `initialValue` came back at the
+   * refused value with its change band still drawn.
+   */
+  const clearDirectEditPreviews = useCallback(() => {
+    regionExtrudePreview.clear();
+    offsetPreview.clear();
+    cylinderRadiusPreview.clear();
+    edgePreview.clear();
+    setPreviewDeferred(false);
+    offsetPreviewValueRef.current = null;
+    reusableOffsetPreviewRef.current = null;
+    reusableRadiusPreview.current = null;
+    setRenderedOffsetPreview(null);
+    setLastValidPreview(null);
+    setPreviewBlendFaces([]);
+  }, [regionExtrudePreview, offsetPreview, cylinderRadiusPreview, edgePreview]);
+
+  // A preview must never outlive the command that made it. Whatever returns
+  // a command to idle — Escape, the card's ×, a toolbar command, a click on
+  // empty space, a commit — its previews and remembered values go with it,
+  // and a region's profiles are released so the card is not replaced by a
+  // "profile selected · Extrude" prompt one step short of nothing selected.
+  const interactionBeforeIdleRef = useRef(interaction);
+  useEffect(() => {
+    const previous = interactionBeforeIdleRef.current;
+    interactionBeforeIdleRef.current = interaction;
+    if (interaction.mode !== 'idle' || !isOperationState(previous)) {
+      return;
+    }
+    clearDirectEditPreviews();
+    if (previous.mode === 'region') {
+      setSelectedProfiles([]);
+      setSelectedSketchProfileId(null);
+    }
+  }, [interaction, clearDirectEditPreviews]);
+
+  /**
+   * Closes open exact entry and nothing else: the typed value is dropped and
+   * the handle returns to its baseline, but the command stays armed. This is
+   * the one rung Escape keeps outside a sketch — the next press clears.
+   */
+  function cancelOpenKeypad(): boolean {
+    const open = keypadRef.current;
+    if (!open) {
+      return false;
+    }
+    if (open.kind === 'sketch-dimension') {
+      setSketchDimensionDraft(null);
+      setStatus('Dimension entry canceled.');
+    } else if (open.kind === 'sketch-edit') {
+      setSketchEditDraft(null);
+      setStatus('Modify tool canceled.');
+    } else {
+      offsetSetterRef.current?.(open.baseline ?? 0);
+      if (open.kind === 'radius') {
+        handleCylinderRadiusCancel();
+      } else if (open.kind === 'edge') {
+        handleEdgeCancel();
+      } else {
+        handleOffsetCancel();
+      }
+    }
+    dispatchInteraction({ type: 'keypad-close' });
+    setKeypad(null);
+    return true;
+  }
+
   function handleSelectionAction(action: SelectionActionId) {
     if (
       (action === 'resize-body' || action === 'offset-face') &&
@@ -14065,7 +14340,10 @@ export function App() {
     return {
       command: plan.command,
       bodyId,
-      successMessage: `Offset face by ${Math.round(offset * 100) / 100} ${base.units}.`
+      successMessage: `Offset face by ${Math.round(offset * 100) / 100} ${base.units}.`,
+      ...(plan.travelHint
+        ? { travelHint: plan.travelHint }
+        : {})
     };
   }
 
@@ -14434,20 +14712,16 @@ export function App() {
     }
     const visible = (id: BodyId) => {
       const result = doc?.derived.bodyRepresentations[id];
-      return result && !result.consumed && !hiddenBodyIds.has(id);
+      return Boolean(result && !result.consumed && !hiddenBodyIds.has(id));
     };
-    const direct =
-      node?.kind === 'feature'
-        ? featureResultBodyIds(node).filter(visible)
-        : [];
-    const descendants =
+    // A feature still on screen selects its body. One a later feature
+    // consumed selects nothing: `historyFocus` lights the faces it made on
+    // the final part (or ghosts its body) instead of the whole part.
+    const focus =
       node?.kind === 'feature' && doc
-        ? featureHistory(doc)
-            .downstream(node.featureId)
-            .flatMap(featureResultBodyIds)
-            .filter(visible)
-        : [];
-    setSelectedBodyIds([...new Set(direct.length ? direct : descendants)]);
+        ? historyFeatureFocus(doc, node, visible)
+        : null;
+    setSelectedBodyIds(focus?.kind === 'bodies' ? focus.bodyIds : []);
   }
 
   function handleSelectBodyFromTree(bodyId: BodyId, additive: boolean) {
@@ -15197,7 +15471,8 @@ export function App() {
       // yield to a focused field, but a panel that autofocuses an input is
       // exactly the situation someone presses Escape to get out of, and
       // swallowing it there breaks the one key the workspace promises is
-      // always a way back.
+      // always a way back. Outside a sketch its first press from a field only
+      // gives up the focus; see the Escape case below.
       if ((typing && event.key !== 'Escape') || meta || event.altKey) {
         return;
       }
@@ -15288,10 +15563,11 @@ export function App() {
             setStatus('Face re-pick canceled · the feature is unchanged.');
             return;
           }
-          if (interaction.mode !== 'idle') {
+          if (interaction.mode === 'sketch') {
+            // Inside a sketch Escape still climbs its ladder one rung per
+            // press: chain, pick sequence, tool, selection, then the sketch.
             event.preventDefault();
             if (
-              interaction.mode === 'sketch' &&
               !interaction.session.drawing &&
               interaction.session.tool === 'select' &&
               !interaction.session.selectedObjectId &&
@@ -15301,31 +15577,58 @@ export function App() {
               setStatus('Sketch profile selection cleared.');
               return;
             }
-            const cancelledPointer =
-              interaction.mode !== 'sketch' &&
-              cancelDirectManipulationRef.current?.() === true;
-            if (
-              cancelledPointer &&
-              (interaction.mode === 'edges' ||
-                (interaction.mode === 'face' &&
-                  interaction.op === 'edit-fillet'))
-            ) {
-              handleEdgeCancel();
+            // Read the rung before climbing it. Escape out of a sketch left
+            // the "Sketching on ..." message standing over a workspace the
+            // sketch had already been left — only Finish Sketch said
+            // anything. Both dispatch the same exit, so both can say so.
+            const leftSketch = escapeTarget(interaction) === 'exit-sketch';
+            dispatchInteraction({ type: 'escape' });
+            if (leftSketch) {
+              setStatus('Sketch closed · sketch edits preserved.');
             }
-            if (!cancelledPointer) {
-              // Read the rung before climbing it. Escape out of a sketch left
-              // the "Sketching on ..." message standing over a workspace the
-              // sketch had already been left — only Finish Sketch said
-              // anything. Both dispatch the same exit, so both can say so.
-              const leftSketch = escapeTarget(interaction) === 'exit-sketch';
-              dispatchInteraction({ type: 'escape' });
-              if (leftSketch) {
-                setStatus('Sketch closed · sketch edits preserved.');
-              }
-            }
-          } else if (tool || selectedFeatureNodeId) {
+            return;
+          }
+          // Outside a sketch one press returns to nothing selected. Only
+          // what holds the keyboard keeps a rung of its own: a focused field
+          // gives up focus (the next press clears), open exact entry closes
+          // back to the armed command, and a value being validated stays
+          // locked until the kernel answers. A key a control already handled
+          // (the prompt bar clearing its text) is that control's, not ours.
+          if (event.defaultPrevented) {
+            return;
+          }
+          if (typing && target) {
+            event.preventDefault();
+            target.blur();
+            return;
+          }
+          if (cancelOpenKeypad()) {
+            event.preventDefault();
+            return;
+          }
+          if (
+            interaction.mode !== 'idle' &&
+            escapeTarget(interaction) === 'none'
+          ) {
+            event.preventDefault();
+            return;
+          }
+          if (
+            escapeTarget(interaction) === 'cancel-drag' &&
+            cancelDirectManipulationRef.current?.() === true
+          ) {
+            // A drag the viewport did not already take (it normally retires
+            // the captured pointer before this handler runs): cancel it in
+            // place, as the viewport would have.
+            event.preventDefault();
+            return;
+          }
+          event.preventDefault();
+          if (tool || selectedFeatureNodeId || interaction.mode !== 'idle') {
             cancelPanel();
           } else {
+            // A bare selection: nothing of a panel's to close, so leave any
+            // preview that is not a panel's (an assistant proposal) alone.
             clearSelection();
           }
           return;
@@ -15584,7 +15887,7 @@ export function App() {
   const staleProjectionLabel = parameterPreview
     ? 'Parameter preview · exact geometry pending'
     : Object.keys(representations).length > 0
-      ? 'showing the last valid projection as stale'
+      ? 'showing the previous result until it finishes'
       : 'no exact projection is available yet';
   const visibleStatus = parameterPreview
     ? `Parameter preview · ${parameterEditPending ? status : parameterDraftActive ? 'Press Enter to apply; Escape to cancel' : 'exact geometry rebuilding'}`
@@ -15592,7 +15895,7 @@ export function App() {
       ? status
       : `${
           geometry.state.phase === 'ready'
-            ? 'Waiting for exact geometry for this revision'
+            ? 'Rebuilding geometry…'
             : geometry.state.phase === 'failed' && geometry.state.error
               ? `Exact geometry failed: ${geometry.state.error}`
               : (progressLabel ?? geometryPhaseLabel[geometry.state.phase])
@@ -15612,6 +15915,21 @@ export function App() {
   // View mode writes its own hints rather than filtering the build chain below.
   // Selecting a cylinder still arms the radius interaction even with its handle
   // disarmed, and "drag the radial handle" is a promise View mode cannot keep.
+  /**
+   * Opens the drawer on a section by name, as the palette's feature and
+   * parameter results do. Asking for it by name mid-sketch or mid-drag is the
+   * user wanting it back: like a rail press, it releases the suspension for
+   * the rest of that mode instead of setting a preference nobody can see.
+   */
+  const showDrawerSection = (section: 'history' | 'parameters') => {
+    const hidden = panels.drawerHidden;
+    setPanelState((current) => ({
+      ...current,
+      drawerOpen: true,
+      sidebarSections: { ...current.sidebarSections, [section]: true }
+    }));
+    if (hidden) panels.release('drawer');
+  };
   const paletteCommands: PaletteCommand[] = [
     // Modeling tools leave the palette entirely in the reading workspaces
     // rather than appearing greyed out: a list of things you cannot do is
@@ -15910,14 +16228,7 @@ export function App() {
                 group: 'Feature',
                 icon: <ListOrdered size={16} aria-hidden="true" />,
                 run: () => {
-                  setPanelState((current) => ({
-                    ...current,
-                    drawerOpen: true,
-                    sidebarSections: {
-                      ...current.sidebarSections,
-                      history: true
-                    }
-                  }));
+                  showDrawerSection('history');
                   handleOpenHistoryFeature(feature.id);
                 }
               }) satisfies PaletteCommand
@@ -15930,14 +16241,7 @@ export function App() {
                 group: 'Parameter',
                 icon: <SlidersHorizontal size={16} aria-hidden="true" />,
                 run: () => {
-                  setPanelState((current) => ({
-                    ...current,
-                    drawerOpen: true,
-                    sidebarSections: {
-                      ...current.sidebarSections,
-                      parameters: true
-                    }
-                  }));
+                  showDrawerSection('parameters');
                   // The drawer's browser may still be loading; focus follows
                   // it once the field has mounted. A failed load is already
                   // reported by the lazy panel's stale-chunk notice.
@@ -16010,10 +16314,7 @@ export function App() {
     ? viewModeHint
     : tweakMode
       ? tweakModeHint
-      : (commandPromptText(
-          interaction,
-          tool !== null || selectedFeatureNodeId !== null
-        ) ??
+      : (commandPromptText(interaction) ??
         (tool === 'sketch'
           ? 'Drag to draw · R rectangle · C circle · P polygon · Enter finishes'
           : tool === 'fillet' || tool === 'chamfer'
@@ -16042,7 +16343,15 @@ export function App() {
   const inspectorActive =
     !modelingLocked &&
     !directMode &&
-    (tool !== null || selectedFeature !== null || selectedTopology !== null);
+    // A face or edge alone is not an edit: its name, measurement and verbs
+    // are on the selection chip beside it, and the inspector opened only to
+    // say no one feature owns the pick. An imported STEP face is the
+    // exception: its direct edits (hole resize, blend removal) live there.
+    (tool !== null ||
+      selectedFeature !== null ||
+      (selectedTopology?.kind === 'face' &&
+        renderedRepresentations[selectedTopology.bodyId]?.source ===
+          'imported-step'));
   const modelingOperation: ModelingOperationKind | null =
     tool === 'mirror' ||
     tool === 'split' ||
@@ -16641,13 +16950,17 @@ export function App() {
         activeTool={tool}
         availability={availability}
         onLaunchTool={launchTool}
-        moreOpen={panelState.commandFoldOpen}
-        onToggleMore={() =>
+        moreOpen={panels.commandFoldOpen}
+        onToggleMore={() => {
+          // Suspended, the fold shows closed, so a press opens it — and
+          // keeps it open for the rest of the drag.
+          const hidden = panels.foldHidden;
           setPanelState((current) => ({
             ...current,
-            commandFoldOpen: !current.commandFoldOpen
-          }))
-        }
+            commandFoldOpen: hidden || !current.commandFoldOpen
+          }));
+          if (hidden) panels.release('fold');
+        }}
       />
     );
   // The parts list is View's panel and Tweak's too; both rails share it.
@@ -16894,7 +17207,7 @@ export function App() {
             selectedTopology={
               parameterPreview ? null : renderedSelectedTopology
             }
-            previewFaceHighlights={previewBlendFaces}
+            previewFaceHighlights={viewerPreviewFaces}
             selectedEdges={parameterPreview ? [] : selectedEdges}
             pickListEnabled={appSettings.experiments.directManipulation}
             settings={viewerSettings}
@@ -16930,8 +17243,7 @@ export function App() {
                     ] as const
                   ).map(([section, label, Icon]) => {
                     const showing =
-                      panelState.drawerOpen &&
-                      panelState.sidebarSections[section];
+                      panels.drawerOpen && panelState.sidebarSections[section];
                     return (
                       <button
                         key={section}
@@ -16940,11 +17252,16 @@ export function App() {
                         aria-label={`${label} panel`}
                         aria-pressed={showing}
                         title={label}
-                        onClick={() =>
+                        onClick={() => {
+                          // A press while a sketch or drag has the drawer
+                          // stepped aside is the user asking for it back:
+                          // it opens, and stays for the rest of the mode.
+                          const hidden = panels.drawerHidden;
                           setPanelState((current) =>
-                            toggleDrawerSection(current, section)
-                          )
-                        }
+                            toggleDrawerSectionAsShown(current, section, hidden)
+                          );
+                          if (hidden) panels.release('drawer');
+                        }}
                       >
                         <Icon size={16} aria-hidden="true" />
                       </button>
@@ -16977,8 +17294,8 @@ export function App() {
               ) : null
             }
             viewMode={modelingLocked}
-            selectionChip={selectionChip}
-            onClearSelection={clearSelection}
+            selectionCallout={selectionCallout}
+            focusGhostBodies={focusGhostBodies}
             canUndo={
               !viewMode &&
               (tweakMode
@@ -17042,11 +17359,16 @@ export function App() {
             onEdgeCommit={handleEdgeCommit}
             onEdgeCancel={handleEdgeCancel}
             onOpenEdgeKeypad={handleOpenEdgeKeypad}
-            onDirectManipulationChange={(dragging) =>
+            onDirectManipulationChange={(dragging, source) => {
+              if (source === 'move') {
+                setMoveDragPointer(dragging);
+                return;
+              }
+              setDirectDragPointer(dragging);
               dispatchInteraction({
                 type: dragging ? 'drag-engage' : 'drag-release'
-              })
-            }
+              });
+            }}
             sketchMode={modelingLocked ? null : sketchModeState}
             onSketchCommit={handleSketchCommit}
             onEditSketchDimension={handleEditSketchDimension}
@@ -17168,108 +17490,8 @@ export function App() {
                 </>
               ) : contextualToolCard ? (
                 <>
-                  {!hideSketchToolCard && (
-                    <ToolCard
-                      model={contextualToolCard}
-                      cancelableWhileValidating={interaction.mode === 'region'}
-                      children={
-                        interaction.mode === 'region' ? (
-                          <ExtrudeForm
-                            key={`extrude-${interaction.target.sketchId}`}
-                            creating
-                            initial={{
-                              name: 'Extrude',
-                              sketchId: interaction.target.sketchId as SketchId,
-                              distance: 0
-                            }}
-                            sketches={sketchOptions}
-                            scope={parameterScope.scope}
-                            profileCount={Math.max(1, selectedProfiles.length)}
-                            bodies={doc.bodyOrder.flatMap((bodyId) => {
-                              const body =
-                                doc.derived.bodyRepresentations[bodyId];
-                              return body && !body.consumed
-                                ? [{ bodyId, name: body.name }]
-                                : [];
-                            })}
-                            disabled={
-                              geometryBusy || interaction.phase === 'validating'
-                            }
-                            submitLabel="Create"
-                            distanceSetterRef={regionDistanceSetter}
-                            onDraft={(value) => {
-                              regionExtrudeSettings.current = value;
-                              dispatchInteraction({
-                                type: 'set-extrude-choice',
-                                choice: value.choice
-                              });
-                            }}
-                            onPreview={(value) => {
-                              regionExtrudePreview.clear();
-                              setLastValidPreview(null);
-                              if (!value) return;
-                              offsetSetterRef.current?.(
-                                resolveParamValue(
-                                  value.distance,
-                                  parameterScope.scope
-                                )
-                              );
-                              dispatchInteraction({
-                                type: 'set-extrude-choice',
-                                choice: value.choice
-                              });
-                              regionExtrudePreview.request(
-                                resolveParamValue(
-                                  value.distance,
-                                  parameterScope.scope
-                                )
-                              );
-                            }}
-                            onSubmit={(value) => {
-                              regionExtrudeSettings.current = value;
-                              handleRegionExtrudeCommit(
-                                resolveParamValue(
-                                  value.distance,
-                                  parameterScope.scope
-                                ),
-                                value.distance
-                              );
-                            }}
-                            onCancel={() => {
-                              if (cancelPendingRegionExtrusion()) return;
-                              regionExtrudePreview.clear();
-                              dispatchInteraction({ type: 'clear' });
-                              cancelPanel();
-                            }}
-                            onDistance={(value) =>
-                              handleOpenOffsetKeypad(
-                                resolveParamValue(value, parameterScope.scope)
-                              )
-                            }
-                          />
-                        ) : undefined
-                      }
-                      onAction={handleSelectionAction}
-                      onEditCulprit={handleEditCulpritFeature}
-                      onViewDetails={() => setActivityLogOpen(true)}
-                      {...(keepLastValid ? { keepLastValid } : {})}
-                      // Never up in sketch mode (the column header names the
-                      // sketch), so a close is always a clear.
-                      onClose={() => {
-                        if (cancelPendingRegionExtrusion()) return;
-                        if (
-                          interaction.mode !== 'idle' &&
-                          interaction.phase === 'dragging'
-                        ) {
-                          cancelDirectManipulationRef.current?.();
-                          if (interaction.mode === 'edges') {
-                            handleEdgeCancel();
-                          }
-                        }
-                        dispatchInteraction({ type: 'clear' });
-                      }}
-                    />
-                  )}
+                  {/* The tool card itself rides the right lane (`command` below);
+                      the keypad stays anchored to its value on the viewport. */}
                   {keypad && (
                     <NumericKeypad
                       request={keypad}
@@ -17348,32 +17570,7 @@ export function App() {
                           );
                         }
                       }}
-                      onCancel={() => {
-                        if (keypad.kind === 'sketch-dimension') {
-                          setSketchDimensionDraft(null);
-                          dispatchInteraction({ type: 'keypad-close' });
-                          setKeypad(null);
-                          setStatus('Dimension entry canceled.');
-                          return;
-                        }
-                        if (keypad.kind === 'sketch-edit') {
-                          setSketchEditDraft(null);
-                          dispatchInteraction({ type: 'keypad-close' });
-                          setKeypad(null);
-                          setStatus('Modify tool canceled.');
-                          return;
-                        }
-                        offsetSetterRef.current?.(keypad.baseline ?? 0);
-                        if (keypad.kind === 'radius') {
-                          handleCylinderRadiusCancel();
-                        } else if (keypad.kind === 'edge') {
-                          handleEdgeCancel();
-                        } else {
-                          handleOffsetCancel();
-                        }
-                        dispatchInteraction({ type: 'keypad-close' });
-                        setKeypad(null);
-                      }}
+                      onCancel={cancelOpenKeypad}
                     />
                   )}
                 </>
@@ -17408,68 +17605,13 @@ export function App() {
                   Edit Sketch
                 </button>
               ) : movePreview ? (
-                <MoveOverlay
-                  bodyName={
-                    movePreview.target === 'sketch'
-                      ? (findSketch(doc, movePreview.bodyId as SketchId)
-                          ?.name ?? 'Selected sketch')
-                      : (representations[movePreview.bodyId as BodyId]?.name ??
-                        'Selected body')
-                  }
-                  hideRotation={movePreview.target === 'sketch'}
-                  // A sketch move commits as a sketch translation, not a named
-                  // feature, so it gets neither a name nor a body picker.
-                  name={movePreview.target === 'sketch' ? undefined : moveName}
-                  onName={
-                    movePreview.target === 'sketch' ? undefined : setMoveName
-                  }
-                  targets={
-                    movePreview.target === 'sketch'
-                      ? undefined
-                      : viewerBodies.map((body) => ({
-                          bodyId: body.bodyId,
-                          name:
-                            representations[body.bodyId]?.name ?? body.bodyId
-                        }))
-                  }
-                  targetBodyId={movePreview.bodyId}
-                  onTargetBody={(bodyId) => {
-                    setSelectedBodyIds([bodyId as BodyId]);
-                    setMoveSnap(null);
-                    setMovePreview((current) =>
-                      current
-                        ? {
-                            ...current,
-                            bodyId,
-                            // Values are relative to the body's own centre, so
-                            // carrying them to a different body would apply a
-                            // move nobody asked for.
-                            translation: { x: 0, y: 0, z: 0 },
-                            rotationDeg: { x: 0, y: 0, z: 0 }
-                          }
-                        : current
-                    );
-                  }}
-                  values={{
-                    translation: movePreview.translation,
-                    rotationDeg: movePreview.rotationDeg
-                  }}
+                // The Move panel anchors in the right lane (`command` below);
+                // its instruction stays over the model it describes.
+                <MoveInstruction
                   units={doc.units}
                   snap={moveSnap}
-                  onChange={(values) =>
-                    setMovePreview((current) =>
-                      current
-                        ? {
-                            ...current,
-                            translation: values.translation,
-                            rotationDeg: values.rotationDeg
-                          }
-                        : current
-                    )
-                  }
-                  onConfirm={confirmMove}
-                  onCancel={cancelPanel}
-                  liveValuesRef={moveValuesSetterRef}
+                  hideRotation={movePreview.target === 'sketch'}
+                  liveSnapRef={moveSnapSetterRef}
                 />
               ) : tool === 'sketch' ? (
                 <div className="sketch-plane-prompt" role="status">
@@ -17519,18 +17661,6 @@ export function App() {
                     </button>
                   </span>
                 </div>
-              ) : selectedProfiles.length > 0 && selectedSketchProfileName ? (
-                <ProfileQuickAction
-                  profileName={selectedSketchProfileName}
-                  profileCount={selectedProfiles.length}
-                  onExtrude={() =>
-                    startExtrude(selectedProfiles[0]!.sketchId as SketchId)
-                  }
-                  onDismiss={() => {
-                    setSelectedProfiles([]);
-                    setSelectedSketchProfileId(null);
-                  }}
-                />
               ) : null
             }
             projection={projection}
@@ -17591,7 +17721,184 @@ export function App() {
         </ErrorBoundary>
       }
       drawer={
-        !viewMode && !tweakMode && panelState.drawerOpen ? modelBrowser : null
+        !viewMode && !tweakMode && panels.drawerOpen ? modelBrowser : null
+      }
+      // Every command card anchors at the top of the right lane, the
+      // drawer yielding below it. The same precedence as the viewport's
+      // mode overlays: a live operation first, then the Move panel (unless
+      // the revert pill is up), and the closed-profile quick action only
+      // when no plane prompt, Move or revert pill is up.
+      command={
+        modelingLocked ? null : contextualToolCard ? (
+          hideSketchToolCard ? null : (
+            <ToolCard
+              model={contextualToolCard}
+              cancelableWhileValidating={interaction.mode === 'region'}
+              children={
+                interaction.mode === 'region' ? (
+                  <ExtrudeForm
+                    key={`extrude-${interaction.target.sketchId}`}
+                    creating
+                    initial={{
+                      name: 'Extrude',
+                      sketchId: interaction.target.sketchId as SketchId,
+                      distance: 0
+                    }}
+                    sketches={sketchOptions}
+                    scope={parameterScope.scope}
+                    profileCount={Math.max(1, selectedProfiles.length)}
+                    bodies={doc.bodyOrder.flatMap((bodyId) => {
+                      const body = doc.derived.bodyRepresentations[bodyId];
+                      return body && !body.consumed
+                        ? [{ bodyId, name: body.name }]
+                        : [];
+                    })}
+                    disabled={
+                      geometryBusy || interaction.phase === 'validating'
+                    }
+                    submitLabel="Create"
+                    distanceSetterRef={regionDistanceSetter}
+                    onDraft={(value) => {
+                      regionExtrudeSettings.current = value;
+                      dispatchInteraction({
+                        type: 'set-extrude-choice',
+                        choice: value.choice
+                      });
+                    }}
+                    onPreview={(value) => {
+                      regionExtrudePreview.clear();
+                      setLastValidPreview(null);
+                      if (!value) return;
+                      offsetSetterRef.current?.(
+                        resolveParamValue(value.distance, parameterScope.scope)
+                      );
+                      dispatchInteraction({
+                        type: 'set-extrude-choice',
+                        choice: value.choice
+                      });
+                      regionExtrudePreview.request(
+                        resolveParamValue(value.distance, parameterScope.scope)
+                      );
+                    }}
+                    onSubmit={(value) => {
+                      regionExtrudeSettings.current = value;
+                      handleRegionExtrudeCommit(
+                        resolveParamValue(value.distance, parameterScope.scope),
+                        value.distance
+                      );
+                    }}
+                    onCancel={() => {
+                      if (cancelPendingRegionExtrusion()) return;
+                      regionExtrudePreview.clear();
+                      dispatchInteraction({ type: 'clear' });
+                      cancelPanel();
+                    }}
+                    onDistance={(value) =>
+                      handleOpenOffsetKeypad(
+                        resolveParamValue(value, parameterScope.scope)
+                      )
+                    }
+                  />
+                ) : undefined
+              }
+              onAction={handleSelectionAction}
+              onEditCulprit={handleEditCulpritFeature}
+              onViewDetails={() => setActivityLogOpen(true)}
+              {...(keepLastValid ? { keepLastValid } : {})}
+              // Never up in sketch mode (the column header names the
+              // sketch), so a close is always a clear.
+              onClose={() => {
+                if (cancelPendingRegionExtrusion()) return;
+                if (
+                  interaction.mode !== 'idle' &&
+                  interaction.phase === 'dragging'
+                ) {
+                  cancelDirectManipulationRef.current?.();
+                  if (interaction.mode === 'edges') {
+                    handleEdgeCancel();
+                  }
+                }
+                dispatchInteraction({ type: 'clear' });
+              }}
+            />
+          )
+        ) : revertPill ? null : movePreview ? (
+          <MoveOverlay
+            bodyName={
+              movePreview.target === 'sketch'
+                ? (findSketch(doc, movePreview.bodyId as SketchId)?.name ??
+                  'Selected sketch')
+                : (representations[movePreview.bodyId as BodyId]?.name ??
+                  'Selected body')
+            }
+            hideRotation={movePreview.target === 'sketch'}
+            // A sketch move commits as a sketch translation, not a named
+            // feature, so it gets neither a name nor a body picker.
+            name={movePreview.target === 'sketch' ? undefined : moveName}
+            onName={movePreview.target === 'sketch' ? undefined : setMoveName}
+            targets={
+              movePreview.target === 'sketch'
+                ? undefined
+                : viewerBodies.map((body) => ({
+                    bodyId: body.bodyId,
+                    name: representations[body.bodyId]?.name ?? body.bodyId
+                  }))
+            }
+            targetBodyId={movePreview.bodyId}
+            onTargetBody={(bodyId) => {
+              setSelectedBodyIds([bodyId as BodyId]);
+              setMoveSnap(null);
+              setMovePreview((current) =>
+                current
+                  ? {
+                      ...current,
+                      bodyId,
+                      // Values are relative to the body's own centre, so
+                      // carrying them to a different body would apply a
+                      // move nobody asked for.
+                      translation: { x: 0, y: 0, z: 0 },
+                      rotationDeg: { x: 0, y: 0, z: 0 }
+                    }
+                  : current
+              );
+            }}
+            values={{
+              translation: movePreview.translation,
+              rotationDeg: movePreview.rotationDeg
+            }}
+            units={doc.units}
+            snap={moveSnap}
+            onChange={(values) =>
+              setMovePreview((current) =>
+                current
+                  ? {
+                      ...current,
+                      translation: values.translation,
+                      rotationDeg: values.rotationDeg
+                    }
+                  : current
+              )
+            }
+            onConfirm={confirmMove}
+            onCancel={cancelPanel}
+            liveValuesRef={moveValuesSetterRef}
+            liveSnapRef={moveSnapSetterRef}
+          />
+        ) : tool !== 'sketch' &&
+          selectedProfiles.length > 0 &&
+          selectedSketchProfileName ? (
+          <ProfileQuickAction
+            profileName={selectedSketchProfileName}
+            profileCount={selectedProfiles.length}
+            onExtrude={() =>
+              startExtrude(selectedProfiles[0]!.sketchId as SketchId)
+            }
+            onDismiss={() => {
+              setSelectedProfiles([]);
+              setSelectedSketchProfileId(null);
+            }}
+          />
+        ) : null
       }
       inspector={
         inspectorActive ? (
@@ -17618,9 +17925,11 @@ export function App() {
                     <button
                       type="button"
                       className="icon-button panel-close"
-                      title="Close (Esc)"
+                      // Closes the panel and keeps the pick; Escape (and the
+                      // form's Cancel) return to nothing selected.
+                      title="Close"
                       aria-label="Close panel"
-                      onClick={cancelPanel}
+                      onClick={closeFeaturePanel}
                     >
                       <X size={14} aria-hidden="true" />
                     </button>
@@ -17731,6 +18040,7 @@ export function App() {
                 onPreviewBodyAppearance={previewBodyAppearance}
                 onCommitBodyAppearance={commitBodyAppearance}
                 onCancel={cancelPanel}
+                onClose={closeFeaturePanel}
                 onSelectAllEdges={handleSelectAllEdges}
                 onClearSelectedEdges={handleClearSelectedEdges}
                 onCreatePrimitive={(kind, name, dimensions) =>

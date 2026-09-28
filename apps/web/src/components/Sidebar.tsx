@@ -54,8 +54,8 @@ function SidebarSection({
   className?: string;
   /**
    * What the header shows instead of the count while collapsed — the
-   * history scrub strip, which says where in the history the model sits and
-   * not just how long the history is.
+   * History line, which says where in the history the model sits and not
+   * just how long the history is.
    */
   summary?: ReactNode;
   /** Controls beside the header, outside its toggle button. */
@@ -327,28 +327,31 @@ export function Sidebar({
           : features.length - 1;
   const activeFeature =
     activeFeatureIndex >= 0 ? features[activeFeatureIndex] : undefined;
-  // Collapsed, History reads as a scrub strip: one dot per feature, the
-  // current one lit, its name and position beside it.
+  // Collapsed, History reads as one line of plain text: how many features
+  // there are and which one the history is at — the selected one, the
+  // rollback marker, or the newest. The name takes the ellipsis; the count
+  // never does. The position rides the tooltip and the accessible name.
+  const rolledBack =
+    rollbackMarkerIndex >= 0 &&
+    activeFeatureIndex === rollbackMarkerIndex &&
+    selectedFeatureNodeId !== activeFeature?.id;
   const historyScrub = activeFeature ? (
-    <>
-      <span className="history-scrub" aria-hidden="true">
-        {features.map((feature, index) => {
-          const body = feature.bodyId
-            ? representations[feature.bodyId]
-            : undefined;
-          return (
-            <i
-              key={feature.id}
-              className={`history-scrub-dot${index === activeFeatureIndex ? ' active' : ''}${body?.consumed ? ' consumed' : ''}`}
-            />
-          );
-        })}
+    <span
+      className="history-scrub"
+      title={`Step ${activeFeatureIndex + 1} of ${features.length}: ${activeFeature.name}`}
+    >
+      <span className="history-scrub-count">
+        {features.length} {features.length === 1 ? 'feature' : 'features'}
       </span>
-      <span className="history-scrub-name">{activeFeature.name}</span>
-      <small className="history-scrub-position mono">
-        {activeFeatureIndex + 1}/{features.length}
-      </small>
-    </>
+      <span className="history-scrub-name">
+        {' · '}
+        {rolledBack ? 'rolled back to ' : 'at '}
+        {activeFeature.name}
+      </span>
+      <span className="visually-hidden">
+        {`, step ${activeFeatureIndex + 1} of ${features.length}`}
+      </span>
+    </span>
   ) : undefined;
   return (
     <aside

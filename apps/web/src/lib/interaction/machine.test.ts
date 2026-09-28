@@ -5,6 +5,7 @@ import {
   radialFaceOperationName,
   escapeTarget,
   interactionReducer,
+  isOperationState,
   toolCardFor,
   type FaceTarget,
   type InteractionState,
@@ -336,7 +337,7 @@ describe('interactionReducer', () => {
 });
 
 describe('escape chain', () => {
-  it('closes exact entry before clearing the selection', () => {
+  it('closes exact entry, then clears everything in one more press', () => {
     let state: InteractionState = interactionReducer(IDLE, {
       type: 'select-face',
       target: face()
@@ -352,6 +353,105 @@ describe('escape chain', () => {
     state = interactionReducer(state, { type: 'escape' });
     expect(state).toEqual(IDLE);
     expect(escapeTarget(state)).toBe('none');
+  });
+
+  it('returns to idle in one press from any settled operation phase', () => {
+    // Outside a sketch there is no ladder to count: armed and failed alike
+    // go straight to nothing selected, for every kind of command.
+    const settled: InteractionState[] = [];
+    const armedFace = interactionReducer(IDLE, {
+      type: 'select-face',
+      target: face()
+    });
+    settled.push(armedFace);
+    settled.push(
+      interactionReducer(
+        interactionReducer(armedFace, { type: 'validation-start', value: -10 }),
+        {
+          type: 'validation-failed',
+          diagnostic: { message: 'Offset removes the face.' }
+        }
+      )
+    );
+    const armedEdges = interactionReducer(IDLE, {
+      type: 'select-edge',
+      selection: edge(1),
+      additive: false
+    });
+    settled.push(armedEdges);
+    settled.push(
+      interactionReducer(armedEdges, {
+        type: 'validation-failed',
+        diagnostic: { message: 'Radius too large.' },
+        value: 40
+      })
+    );
+    const armedRegion = interactionReducer(IDLE, {
+      type: 'select-region',
+      target: region
+    });
+    settled.push(armedRegion);
+    for (const state of settled) {
+      expect(isOperationState(state), JSON.stringify(state)).toBe(true);
+      expect(escapeTarget(state), JSON.stringify(state)).toBe(
+        'clear-selection'
+      );
+      expect(interactionReducer(state, { type: 'escape' })).toEqual(IDLE);
+    }
+  });
+
+  it('cancels a held drag in place, forgetting its value and refusal', () => {
+    let state = interactionReducer(IDLE, {
+      type: 'select-face',
+      target: face()
+    });
+    state = interactionReducer(state, { type: 'drag-engage' });
+    state = interactionReducer(state, {
+      type: 'validation-failed',
+      diagnostic: { message: 'Offset removes the face.' },
+      value: -10
+    });
+    state = interactionReducer(state, { type: 'recover' });
+    state = interactionReducer(state, { type: 'drag-engage' });
+    expect(state.mode === 'face' && state.lastValue).toBe(-10);
+
+    expect(escapeTarget(state)).toBe('cancel-drag');
+    state = interactionReducer(state, { type: 'escape' });
+    // Clean armed: no value to re-arm the handle at, no error on the card.
+    expect(state).toMatchObject({
+      mode: 'face',
+      phase: 'armed',
+      lastValue: null,
+      error: null
+    });
+  });
+
+  it('resets a cancelled value without touching a validation in flight', () => {
+    let state = interactionReducer(IDLE, {
+      type: 'select-edge',
+      selection: edge(1),
+      additive: false
+    });
+    state = interactionReducer(state, {
+      type: 'validation-failed',
+      diagnostic: { message: 'Radius too large.' },
+      value: 40
+    });
+    state = interactionReducer(state, { type: 'reset-value' });
+    expect(state).toMatchObject({
+      mode: 'edges',
+      phase: 'armed',
+      lastValue: null,
+      error: null
+    });
+    const validating = interactionReducer(state, {
+      type: 'validation-start',
+      value: 3
+    });
+    expect(interactionReducer(validating, { type: 'reset-value' })).toBe(
+      validating
+    );
+    expect(interactionReducer(IDLE, { type: 'reset-value' })).toBe(IDLE);
   });
 
   it('ends the drawing chain before exiting sketch mode', () => {
@@ -431,7 +531,7 @@ describe('escape chain', () => {
     expect(escapeTarget(state)).toBe('exit-sketch');
   });
 
-  it('keeps validating face operations locked and recovers failed values first', () => {
+  it('keeps validating face operations locked, then clears a refusal in one press', () => {
     let state = interactionReducer(IDLE, {
       type: 'select-face',
       target: face()
@@ -446,10 +546,20 @@ describe('escape chain', () => {
       type: 'validation-failed',
       diagnostic: { message: 'Self-intersection.' }
     });
-    expect(escapeTarget(state)).toBe('recover-failure');
-    state = interactionReducer(state, { type: 'escape' });
-    expect(state.mode === 'face' && state.phase).toBe('armed');
-    expect(state.mode === 'face' && state.lastValue).toBe(24);
+    // A refusal is not a rung of its own: the failed card, its value and
+    // the selection all go with the one press.
+    expect(escapeTarget(state)).toBe('clear-selection');
+    expect(interactionReducer(state, { type: 'escape' })).toEqual(IDLE);
+  });
+
+  it('lets a region extrude be dropped mid-validation', () => {
+    let state = interactionReducer(IDLE, {
+      type: 'select-region',
+      target: region
+    });
+    state = interactionReducer(state, { type: 'validation-start', value: 5 });
+    expect(escapeTarget(state)).toBe('clear-selection');
+    expect(interactionReducer(state, { type: 'escape' })).toEqual(IDLE);
   });
 });
 

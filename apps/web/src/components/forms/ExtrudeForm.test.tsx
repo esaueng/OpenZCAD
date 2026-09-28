@@ -155,4 +155,51 @@ describe('shared extrusion editor', () => {
       expect.objectContaining({ distance: 12.5 })
     );
   });
+
+  it('holds the zero-distance error until the distance is edited', async () => {
+    const user = userEvent.setup();
+    const onSubmit = vi.fn();
+    render(
+      <ExtrudeForm
+        {...base}
+        creating
+        submitLabel="Create"
+        initial={{ ...initial, distance: 0 }}
+        onSubmit={onSubmit}
+        onCancel={vi.fn()}
+      />
+    );
+    // A fresh card opens at zero: nothing typed yet, so nothing in red.
+    expect(screen.queryByText(/Distance cannot be zero/)).toBeNull();
+    expect(screen.getByRole('button', { name: 'Create' })).toBeDisabled();
+
+    const input = screen.getByRole('textbox', { name: 'Distance' });
+    await user.clear(input);
+    await user.type(input, '5');
+    expect(screen.queryByText(/Distance cannot be zero/)).toBeNull();
+    await user.clear(input);
+    await user.type(input, '0');
+    expect(screen.getByText(/Distance cannot be zero/)).toBeTruthy();
+    expect(screen.getByRole('button', { name: 'Create' })).toBeDisabled();
+  });
+
+  it('shows the zero-distance error on an attempt to submit', async () => {
+    const user = userEvent.setup();
+    const onSubmit = vi.fn();
+    render(
+      <ExtrudeForm
+        {...base}
+        creating
+        submitLabel="Create"
+        initial={{ ...initial, distance: 0 }}
+        onSubmit={onSubmit}
+        onCancel={vi.fn()}
+      />
+    );
+    expect(screen.queryByText(/Distance cannot be zero/)).toBeNull();
+    await user.click(screen.getByRole('textbox', { name: 'Name' }));
+    await user.keyboard('{Enter}');
+    expect(onSubmit).not.toHaveBeenCalled();
+    expect(screen.getByText(/Distance cannot be zero/)).toBeTruthy();
+  });
 });

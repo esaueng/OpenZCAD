@@ -19,13 +19,13 @@ describe('useDelayedUnmount', () => {
       ({ value }) => useDelayedUnmount(value, 100),
       { initialProps: props<{ label: string }>({ label: 'Top face' }) }
     );
-    expect(result.current).toEqual({
+    expect(result.current).toMatchObject({
       rendered: { label: 'Top face' },
       closing: false
     });
 
     rerender({ value: null });
-    expect(result.current).toEqual({
+    expect(result.current).toMatchObject({
       rendered: { label: 'Top face' },
       closing: true
     });
@@ -33,7 +33,7 @@ describe('useDelayedUnmount', () => {
     act(() => {
       vi.advanceTimersByTime(100);
     });
-    expect(result.current).toEqual({ rendered: null, closing: false });
+    expect(result.current).toMatchObject({ rendered: null, closing: false });
   });
 
   it('renders the newest value as it changes, without extra renders', () => {
@@ -59,12 +59,32 @@ describe('useDelayedUnmount', () => {
     );
     rerender({ value: null });
     expect(result.current.closing).toBe(true);
+    const opened = result.current.generation;
     rerender({ value: 'second' });
-    expect(result.current).toEqual({ rendered: 'second', closing: false });
+    expect(result.current).toMatchObject({
+      rendered: 'second',
+      closing: false
+    });
+    // A return mid-fade is a new opening, so a keyed panel remounts rather
+    // than resuming the state of the one that was just closed.
+    expect(result.current.generation).toBe(opened + 1);
     act(() => {
       vi.advanceTimersByTime(200);
     });
-    expect(result.current).toEqual({ rendered: 'second', closing: false });
+    expect(result.current).toMatchObject({
+      rendered: 'second',
+      closing: false
+    });
+  });
+
+  it('keeps one generation while a present value is replaced', () => {
+    const { result, rerender } = renderHook(
+      ({ value }) => useDelayedUnmount(value, 100),
+      { initialProps: props<string>('a') }
+    );
+    const opened = result.current.generation;
+    rerender({ value: 'b' });
+    expect(result.current.generation).toBe(opened);
   });
 
   it('never shows an exit for a value that was never there', () => {
@@ -73,6 +93,6 @@ describe('useDelayedUnmount', () => {
       { initialProps: props<string>(null) }
     );
     rerender({ value: null });
-    expect(result.current).toEqual({ rendered: null, closing: false });
+    expect(result.current).toMatchObject({ rendered: null, closing: false });
   });
 });

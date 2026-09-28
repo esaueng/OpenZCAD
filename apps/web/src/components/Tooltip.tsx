@@ -23,6 +23,7 @@ interface TooltipTriggerProps {
   'aria-describedby'?: string;
   onPointerEnter?: PointerEventHandler<HTMLElement>;
   onPointerLeave?: PointerEventHandler<HTMLElement>;
+  onPointerDown?: PointerEventHandler<HTMLElement>;
   onFocus?: FocusEventHandler<HTMLElement>;
   onBlur?: FocusEventHandler<HTMLElement>;
 }
@@ -66,6 +67,30 @@ function setRef(ref: Ref<HTMLElement> | undefined, node: HTMLElement | null) {
     ref(node);
   } else if (ref) {
     ref.current = node;
+  }
+}
+
+/**
+ * Whether a focus event came from the keyboard rather than a pointer press.
+ * A press on the trigger moves focus onto it, and help opened by that focus
+ * outlived the click: "Rectangle R" stayed up through the next several
+ * actions. `:focus-visible` is the browser's own answer; a press the trigger
+ * saw itself settles it where that selector over-reports (test DOMs match it
+ * for any focused element), and a focus event the element did not actually
+ * take (a synthetic one) counts as the keyboard's, as before.
+ */
+function isKeyboardFocus(target: HTMLElement, pressed: boolean): boolean {
+  if (pressed) {
+    return false;
+  }
+  if (target.ownerDocument.activeElement !== target) {
+    return true;
+  }
+  try {
+    return target.matches(':focus-visible');
+  } catch {
+    // An engine without the selector: keep the old focus-opens behaviour.
+    return true;
   }
 }
 
@@ -146,6 +171,8 @@ export function Tooltip({
   const hoveredRef = useRef(false);
   const focusedRef = useRef(false);
   const dismissedRef = useRef(false);
+  /** A pointer press on the trigger that has not yet moved focus onto it. */
+  const pressedRef = useRef(false);
   const [open, setOpen] = useState(false);
   const [position, setPosition] = useState<TooltipPosition | null>(null);
 
@@ -162,15 +189,18 @@ export function Tooltip({
     setOpen(true);
   }, [clearOpenTimer]);
 
-  const closeTooltip = useCallback(() => {
-    clearOpenTimer();
-    if (openRef.current) {
-      lastClosedTooltip = { id: tooltipId, at: Date.now() };
-    }
-    openRef.current = false;
-    setOpen(false);
-    setPosition(null);
-  }, [clearOpenTimer, tooltipId]);
+  const closeTooltip = useCallback(
+    (handoff = true) => {
+      clearOpenTimer();
+      if (openRef.current && handoff) {
+        lastClosedTooltip = { id: tooltipId, at: Date.now() };
+      }
+      openRef.current = false;
+      setOpen(false);
+      setPosition(null);
+    },
+    [clearOpenTimer, tooltipId]
+  );
 
   const schedulePointerOpen = useCallback(() => {
     if (dismissedRef.current || openRef.current) {
@@ -203,15 +233,33 @@ export function Tooltip({
   const onPointerLeave: PointerEventHandler<HTMLElement> = (event) => {
     trigger.props.onPointerLeave?.(event);
     hoveredRef.current = false;
+    pressedRef.current = false;
     if (!focusedRef.current) {
       dismissedRef.current = false;
       closeTooltip();
     }
   };
 
+  // Pressing the trigger is using it: its help closes at once and stays shut
+  // until the pointer leaves. Otherwise the help of a button that opens a
+  // fold or popover ("More tools", "Standard views") covered that popover's
+  // first rows, since the tooltip layers over the stage the popover lives in.
+  const onPointerDown: PointerEventHandler<HTMLElement> = (event) => {
+    trigger.props.onPointerDown?.(event);
+    pressedRef.current = true;
+    dismissedRef.current = true;
+    closeTooltip(false);
+  };
+
   const onFocus: FocusEventHandler<HTMLElement> = (event) => {
     trigger.props.onFocus?.(event);
+    const pressed = pressedRef.current;
+    pressedRef.current = false;
     if (event.defaultPrevented) {
+      return;
+    }
+    // Only keyboard focus opens help; focus a click leaves behind does not.
+    if (!isKeyboardFocus(event.currentTarget, pressed)) {
       return;
     }
     focusedRef.current = true;
@@ -222,6 +270,7 @@ export function Tooltip({
   const onBlur: FocusEventHandler<HTMLElement> = (event) => {
     trigger.props.onBlur?.(event);
     focusedRef.current = false;
+    pressedRef.current = false;
     if (!hoveredRef.current) {
       dismissedRef.current = false;
       closeTooltip();
@@ -360,8 +409,9 @@ export function Tooltip({
   }, [applyPosition]);
 
   // Re-measured after every render while open, not only on opening: the
-  // trigger's own click can mount or unmount the flyout beside the rail (and
-  // change the description) while the tooltip stays up.
+  // trigger's own keyboard activation can mount or unmount the flyout beside
+  // the rail (and change the description) while the tooltip stays up. A
+  // pointer press closes it instead (onPointerDown).
   useLayoutEffect(() => {
     if (open) {
       updatePosition();
@@ -394,6 +444,7 @@ export function Tooltip({
     'aria-describedby': describedBy || undefined,
     onPointerEnter,
     onPointerLeave,
+    onPointerDown,
     onFocus,
     onBlur
   });

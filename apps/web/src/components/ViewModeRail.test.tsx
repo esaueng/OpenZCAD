@@ -1,7 +1,7 @@
 import { fireEvent, render, screen, within } from '@testing-library/react';
 import { describe, expect, it, vi } from 'vitest';
 import type { BodyRepresentation } from '@openzcad/shared';
-import { ViewModeRail } from './ViewModeRail';
+import { PartsList, PartsListModeProvider, ViewModeRail } from './ViewModeRail';
 
 const body = (bodyId: string, name: string): BodyRepresentation =>
   ({ bodyId, name, color: '#c9a55a' }) as unknown as BodyRepresentation;
@@ -67,5 +67,33 @@ describe('ViewModeRail', () => {
     expect(screen.getAllByRole('button', { name: /^Show all/ })).toHaveLength(
       1
     );
+  });
+
+  it("words the list's footnote for the mode it opens in", () => {
+    renderRail(true);
+    expect(
+      screen.getByText('Visibility only — geometry is locked in View mode.')
+    ).toBeTruthy();
+  });
+
+  it('does not call the geometry locked in Tweak, where values change', () => {
+    render(
+      <PartsListModeProvider mode="tweak">
+        <PartsList
+          bodies={[body('b1', 'Plate')]}
+          hiddenBodyIds={new Set()}
+          selectedBodyIds={[]}
+          onSelectBody={vi.fn()}
+          onToggleVisibility={vi.fn()}
+          onIsolate={vi.fn()}
+          onShowAll={vi.fn()}
+        />
+      </PartsListModeProvider>
+    );
+    const list = screen.getByRole('complementary', { name: 'Parts' });
+    expect(list.querySelector('.view-mode-rail-foot')).toHaveTextContent(
+      'Visibility only — change values in Parameters; the design stays locked.'
+    );
+    expect(list).not.toHaveTextContent(/View mode/);
   });
 });

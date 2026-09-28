@@ -16,17 +16,25 @@ export const OVERLAY_EXIT_MS = 100;
 export function useDelayedUnmount<T>(
   value: T | null,
   ms: number
-): { rendered: T | null; closing: boolean } {
+): { rendered: T | null; closing: boolean; generation: number } {
   const present = value !== null;
   const last = useRef<T | null>(value);
   const [wasPresent, setWasPresent] = useState(present);
   const [closing, setClosing] = useState(false);
+  // Counts openings. A value that returns during its own exit is a new
+  // opening, not the old one resumed: keyed on this, the caller remounts it,
+  // so a form cancelled and reopened inside the fade starts from its stored
+  // values instead of the draft that was just thrown away.
+  const [generation, setGeneration] = useState(0);
 
   // Derived during render, so the closing frame is the same frame the value
   // left in; an effect would paint one frame with nothing mounted first.
   if (present !== wasPresent) {
     setWasPresent(present);
     setClosing(!present && last.current !== null);
+    if (present) {
+      setGeneration((current) => current + 1);
+    }
   }
 
   useEffect(() => {
@@ -48,6 +56,7 @@ export function useDelayedUnmount<T>(
 
   return {
     rendered: present ? value : closing ? last.current : null,
-    closing: !present && closing
+    closing: !present && closing,
+    generation
   };
 }

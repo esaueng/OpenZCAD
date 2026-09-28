@@ -21,6 +21,7 @@ import {
   primitiveCylinderCapAncestor
 } from './cylinderPrimitiveAncestry';
 import { extrudeCapAncestor } from './extrudeCapAncestry';
+import { planarFaceTravel } from './planarFaceTravel';
 
 /**
  * What a planar face offset turns into.
@@ -52,7 +53,12 @@ export type FaceOffsetPlan =
       value: number;
       preflightRejection?: string;
     }
-  | { kind: 'direct-edit'; command: AnyCommand };
+  | {
+      kind: 'direct-edit';
+      command: AnyCommand;
+      /** Mesh estimate shown only after the exact kernel refuses the move. */
+      travelHint?: string;
+    };
 
 /** What the handle's "Total" readout adds the drag to, and in which sense. */
 export interface FaceOffsetTotal {
@@ -204,6 +210,60 @@ function shiftPrimitiveBase(
   return composeCommands(label, commands);
 }
 
+function roundedLength(value: number): string {
+  return String(Math.round(value * 100) / 100);
+}
+
+/**
+ * An approximate distance hint for a local face move. The display mesh
+ * cannot decide whether the exact kernel will accept an offset.
+ */
+function faceTravelHint(
+  document: ProjectDocument,
+  bodyId: BodyId,
+  face: FaceTopology,
+  offset: number
+): string | undefined {
+  const representation = document.derived.bodyRepresentations[bodyId];
+  // Measured on the body the plan edits, never on a stale copy of the face.
+  const current = representation?.topology?.faces.find(
+    (candidate) =>
+      candidate.topologyId === face.topologyId && candidate.hash === face.hash
+  );
+  if (!representation || !current) return undefined;
+  const travel = planarFaceTravel(representation, current);
+  const units = document.units;
+  // Only past the mesh's own allowance: at the limit itself the kernel is
+  // the judge, and its refusal reads the same way.
+  if (
+    offset < 0 &&
+    travel.inward !== null &&
+    -offset > travel.inward + travel.tolerance
+  ) {
+    return `The display mesh suggests about ${roundedLength(travel.inward)} ${units} of material behind this face.`;
+  }
+  if (
+    offset > 0 &&
+    travel.outward !== null &&
+    offset > travel.outward + travel.tolerance
+  ) {
+    return `The display mesh suggests another part of the body about ${roundedLength(travel.outward)} ${units} in front of this face.`;
+  }
+  return undefined;
+}
+
+/** Add the mesh estimate only to an exact nonadjacent-face refusal. */
+export function withFaceTravelHint(
+  message: string,
+  hint?: string
+): string {
+  return hint &&
+    message ===
+      'The face would run into another part of the body before it got that far.'
+    ? `${message}\n${hint}`
+    : message;
+}
+
 /** Pure. Null when the face is not an exact plane or the offset is a no-op. */
 export function planFaceOffset(
   input: FaceOffsetPlanInput
@@ -329,8 +389,10 @@ export function planFaceOffset(
     return null;
   }
 
+  const travelHint = faceTravelHint(document, bodyId, face, offset);
   return {
     kind: 'direct-edit',
+    ...(travelHint ? { travelHint } : {}),
     command: commandFactories.directEditBody({
       name: DIRECT_EDIT_NAME,
       targetBodyId: bodyId,

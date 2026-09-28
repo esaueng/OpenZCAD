@@ -67,6 +67,10 @@ export function ExtrudeForm({
       ...(initial.targetBodyId ? { targetBodyId: initial.targetBodyId } : {})
     }
   }));
+  // A new extrude opens at zero until the user drags or types a distance, so
+  // the zero-distance error waits for that edit (or an attempt to submit)
+  // rather than greeting the card in red. Create stays disabled either way.
+  const [distanceEdited, setDistanceEdited] = useState(false);
   const distance = previewExpression(draft.distance, scope);
   const back = previewExpression(draft.backDistance, scope);
   const valid = valueFor(draft) !== null;
@@ -98,6 +102,7 @@ export function ExtrudeForm({
 
   function change(patch: Partial<typeof draft>) {
     const next = { ...draft, ...patch };
+    if (patch.distance !== undefined) setDistanceEdited(true);
     setDraft(next);
     onDraft?.({
       name: next.name.trim(),
@@ -123,6 +128,7 @@ export function ExtrudeForm({
   }, [distanceSetterRef]);
 
   function submit() {
+    setDistanceEdited(true);
     const value = valueFor(draft);
     if (value && !disabled) onSubmit(value);
   }
@@ -178,7 +184,7 @@ export function ExtrudeForm({
           scope={scope}
           onChange={(distance) => change({ distance })}
           error={
-            distance.ok && distance.value === 0
+            distanceEdited && distance.ok && distance.value === 0
               ? 'Distance cannot be zero — a zero-distance extrude builds no solid.'
               : undefined
           }

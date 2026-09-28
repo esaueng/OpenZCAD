@@ -55,6 +55,86 @@ describe('Tooltip', () => {
     expect(onKeyDown).toHaveBeenCalledOnce();
   });
 
+  it('opens when the keyboard moves focus onto the trigger', () => {
+    render(
+      <Tooltip label="Rectangle" shortcut="R">
+        <button type="button">Rectangle</button>
+      </Tooltip>
+    );
+    const trigger = screen.getByRole('button', { name: 'Rectangle' });
+
+    act(() => {
+      trigger.focus();
+    });
+    expect(screen.getByRole('tooltip')).toHaveTextContent('RectangleR');
+  });
+
+  it('does not leave help open behind a mouse click', () => {
+    render(
+      <Tooltip label="Rectangle" shortcut="R">
+        <button type="button">Rectangle</button>
+      </Tooltip>
+    );
+    const trigger = screen.getByRole('button', { name: 'Rectangle' });
+
+    // Hover opens it; the press closes it at once.
+    fireEvent.pointerEnter(trigger);
+    act(() => {
+      vi.advanceTimersByTime(TOOLTIP_OPEN_DELAY_MS);
+    });
+    expect(screen.getByRole('tooltip')).toBeTruthy();
+    fireEvent.pointerDown(trigger);
+    expect(screen.queryByRole('tooltip')).toBeNull();
+
+    // The focus the press leaves behind does not reopen it, and neither does
+    // lingering over the button.
+    act(() => {
+      trigger.focus();
+    });
+    fireEvent.pointerUp(trigger);
+    fireEvent.click(trigger);
+    act(() => {
+      vi.advanceTimersByTime(TOOLTIP_OPEN_DELAY_MS * 3);
+    });
+    expect(screen.queryByRole('tooltip')).toBeNull();
+    expect(trigger).not.toHaveAttribute('aria-describedby');
+
+    // Leaving and coming back is a fresh hover, even with focus still there.
+    fireEvent.pointerLeave(trigger);
+    fireEvent.pointerEnter(trigger);
+    act(() => {
+      vi.advanceTimersByTime(TOOLTIP_OPEN_DELAY_MS);
+    });
+    expect(screen.getByRole('tooltip')).toHaveTextContent('RectangleR');
+
+    // Leaving closes it even though the button kept focus.
+    fireEvent.pointerLeave(trigger);
+    expect(screen.queryByRole('tooltip')).toBeNull();
+  });
+
+  it('cancels a pending hover open when the trigger is pressed', () => {
+    const onPointerDown = vi.fn();
+    render(
+      <Tooltip label="More tools">
+        <button type="button" onPointerDown={onPointerDown}>
+          More
+        </button>
+      </Tooltip>
+    );
+    const trigger = screen.getByRole('button', { name: 'More' });
+
+    fireEvent.pointerEnter(trigger);
+    act(() => {
+      vi.advanceTimersByTime(TOOLTIP_OPEN_DELAY_MS - 50);
+    });
+    fireEvent.pointerDown(trigger);
+    act(() => {
+      vi.advanceTimersByTime(TOOLTIP_OPEN_DELAY_MS);
+    });
+    expect(screen.queryByRole('tooltip')).toBeNull();
+    expect(onPointerDown).toHaveBeenCalledOnce();
+  });
+
   it('opens a sibling instantly during the 200 ms hand-off window', () => {
     render(
       <>

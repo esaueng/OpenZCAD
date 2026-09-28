@@ -2,12 +2,15 @@ import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import {
   DEFAULT_PANEL_STATE,
   defaultPanelState,
+  effectivePanels,
   loadPanelState,
+  nextDragSuspension,
   normalizePanelState,
   PANEL_STATE_STORAGE_KEY,
   savePanelState,
   SIDEBAR_SECTION_IDS,
   toggleDrawerSection,
+  toggleDrawerSectionAsShown,
   toggleSidebarSection,
   toggleToolGroup
 } from '../apps/web/src/lib/panelState';
@@ -231,6 +234,80 @@ describe('workspace panel state', () => {
     expect(normalized.sidebarSections.parameters).toBe(true);
     expect(Object.keys(normalized.sidebarSections).sort()).toEqual(
       [...SIDEBAR_SECTION_IDS].sort()
+    );
+  });
+});
+
+describe('panel suspension while a mode has the stage', () => {
+  const open = { drawerOpen: true, commandFoldOpen: true };
+  const closed = { drawerOpen: false, commandFoldOpen: false };
+  const idle = { suspended: false, drawerReleased: false, foldReleased: false };
+  const suspended = { ...idle, suspended: true };
+
+  it('shows what the user chose while no mode suspends the panels', () => {
+    expect(effectivePanels(open, idle)).toEqual(open);
+    expect(effectivePanels(closed, idle)).toEqual(closed);
+  });
+
+  it('hides the drawer and the fold while suspended, preference untouched', () => {
+    const state = { ...defaultPanelState(), ...open };
+    expect(effectivePanels(state, suspended)).toEqual(closed);
+    // Suspension is not a write: the stored choice is what comes back.
+    expect(state.drawerOpen).toBe(true);
+    expect(state.commandFoldOpen).toBe(true);
+    expect(effectivePanels(state, idle)).toEqual(open);
+    savePanelState(state);
+    expect(loadPanelState().drawerOpen).toBe(true);
+  });
+
+  it('never opens a panel the user left closed', () => {
+    expect(
+      effectivePanels(closed, {
+        suspended: true,
+        drawerReleased: true,
+        foldReleased: true
+      })
+    ).toEqual(closed);
+  });
+
+  it('lets a released panel show during the mode, each on its own', () => {
+    expect(
+      effectivePanels(open, { ...suspended, drawerReleased: true })
+    ).toEqual({ drawerOpen: true, commandFoldOpen: false });
+    expect(effectivePanels(open, { ...suspended, foldReleased: true })).toEqual(
+      { drawerOpen: false, commandFoldOpen: true }
+    );
+  });
+
+  it('holds a drag from engage through its validation, and no longer', () => {
+    expect(nextDragSuspension(false, null)).toBe(false);
+    expect(nextDragSuspension(false, 'armed')).toBe(false);
+    expect(nextDragSuspension(false, 'dragging')).toBe(true);
+    // Released and validating: the drawer must not flash back mid-commit.
+    expect(nextDragSuspension(true, 'validating')).toBe(true);
+    // Committed (idle), refused, cancelled back to armed, or typed exactly.
+    expect(nextDragSuspension(true, null)).toBe(false);
+    expect(nextDragSuspension(true, 'failed')).toBe(false);
+    expect(nextDragSuspension(true, 'armed')).toBe(false);
+    expect(nextDragSuspension(true, 'exact-entry')).toBe(false);
+    // Validation no drag started never takes the stage.
+    expect(nextDragSuspension(false, 'validating')).toBe(false);
+    // A value refused mid-gesture fails the phase, but the pointer is still
+    // down: the drag has not ended, so the drawer must not flicker back.
+    expect(nextDragSuspension(true, 'failed', true)).toBe(true);
+    expect(nextDragSuspension(true, 'failed', false)).toBe(false);
+  });
+
+  it('opens a suspended drawer on the section pressed instead of closing it', () => {
+    const state = toggleDrawerSection(defaultPanelState(), 'history');
+    // Shown closed, so a press on History opens it rather than toggling the
+    // hidden drawer shut.
+    const reopened = toggleDrawerSectionAsShown(state, 'history', true);
+    expect(reopened.drawerOpen).toBe(true);
+    expect(reopened.sidebarSections.history).toBe(true);
+    // Not suspended, the rail button behaves exactly as before.
+    expect(toggleDrawerSectionAsShown(state, 'history', false)).toEqual(
+      toggleDrawerSection(state, 'history')
     );
   });
 });

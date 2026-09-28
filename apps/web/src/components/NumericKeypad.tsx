@@ -101,9 +101,11 @@ function dockedPanelBands(host: HTMLElement): KeypadExclusion[] {
     return [];
   }
   const hostRect = host.getBoundingClientRect();
-  // The column on the left, the inspector and the model drawer on the right,
-  // and any direct-mode strip; the keypad keeps clear of all of them.
+  // The column on the left, the command card, the inspector and the model
+  // drawer on the right, and any direct-mode strip; the keypad keeps clear
+  // of all of them.
   return [
+    '.command-float',
     '.inspector-float',
     '.model-drawer-float',
     '.palette-float',

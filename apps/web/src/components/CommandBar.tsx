@@ -9,6 +9,7 @@ import {
 } from '../lib/assistant/promptKeys';
 
 const LIST_ID = 'command-palette-list';
+const ASK_HINT_ID = 'command-bar-ask-hint';
 const optionId = (index: number) => `command-palette-option-${index}`;
 
 /** The grammar: a leading slash means a command, anything else is an ask. */
@@ -173,6 +174,9 @@ export function CommandBar({
   const question = commandMode ? '' : query.trim();
   const clampedIndex = Math.min(activeIndex, Math.max(matches.length - 1, 0));
   const listShown = open && commandMode;
+  // Plain words list nothing, so "fil" looked like a search that found
+  // nothing. Say what Enter will do with them, and where commands are.
+  const askHintShown = open && question.length > 0;
   const completion = listShown
     ? completionOf(typed, matches[clampedIndex])
     : '';
@@ -332,6 +336,18 @@ export function CommandBar({
             </p>
           </div>
         )}
+        {askHintShown && (
+          <div
+            className="command-bar-float"
+            onMouseDown={(event) => event.preventDefault()}
+          >
+            <p className="command-bar-keys" id={ASK_HINT_ID}>
+              {onAsk
+                ? 'Enter asks the assistant · type / for commands'
+                : 'Type / for commands'}
+            </p>
+          </div>
+        )}
         <span className="command-bar-lead" aria-hidden="true">
           {/* The chevron as a two-line sketch with its three points, so the
               assistant's working state can redraw it point by point. */}
@@ -401,6 +417,7 @@ export function CommandBar({
             aria-keyshortcuts={searchKey.accessible.replace('Cmd', 'Meta')}
             aria-autocomplete="list"
             aria-expanded={listShown}
+            aria-describedby={askHintShown ? ASK_HINT_ID : undefined}
             aria-controls={listShown ? LIST_ID : undefined}
             aria-activedescendant={
               listShown && matches.length > 0
