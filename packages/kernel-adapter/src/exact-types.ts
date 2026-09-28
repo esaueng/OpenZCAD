@@ -7,7 +7,6 @@
 import type { PlaneBasis, Vec3 } from '@openzcad/geometry';
 import type {
   BodyId,
-  BodyMassProperties,
   FaceTopologyReferenceV5,
   BodyTopology,
   EdgeReferenceRepair,
@@ -83,7 +82,6 @@ export interface MeasuredShape {
   topology: BodyTopology;
   faceCount: number;
   volume: number;
-  massProperties?: BodyMassProperties;
   valid: boolean;
   strictValid: boolean;
   meshClosure: TriangleMeshClosure | null;

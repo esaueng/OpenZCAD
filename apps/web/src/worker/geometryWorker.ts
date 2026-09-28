@@ -11,6 +11,7 @@ import type {
   DxfFaceSelector,
   ExactSectionPlane,
   MeshQualityReport,
+  MassPropertiesRead,
   RebuildProgress,
   SectionOutlineReport,
   SketchPlanarOperation,
@@ -90,6 +91,13 @@ export type GeometryWorkerRequest =
       document: ProjectDocument;
       bodyIds: BodyId[];
       deflection: number;
+    }
+  | {
+      /** Reads live mass data, restoring exact history for a stale cache hit. */
+      type: 'mass-properties';
+      requestId: string;
+      document: ProjectDocument;
+      bodyId: BodyId;
     }
   | {
       type: 'solve-sketch';
@@ -205,6 +213,15 @@ export type GeometryMeshQualityResult =
     }
   | { type: 'mesh-quality'; ok: false; requestId: string; error: string };
 
+export type GeometryMassPropertiesResult =
+  | {
+      type: 'mass-properties';
+      ok: true;
+      requestId: string;
+      result: MassPropertiesRead;
+    }
+  | { type: 'mass-properties'; ok: false; requestId: string; error: string };
+
 export type GeometrySectionResult =
   | {
       type: 'section';
@@ -265,6 +282,7 @@ export type GeometryWorkerResult =
   | GeometrySyncResult
   | GeometryExportResult
   | GeometryMeshQualityResult
+  | GeometryMassPropertiesResult
   | GeometrySectionResult
   | GeometrySolveSketchResult
   | GeometrySketch2dOpResult
@@ -332,6 +350,8 @@ const rebuildCache = new ExactRebuildCache<ProjectDocument['derived']>({
   maxInFlight: 4
 });
 const broadcastGate = new LatestBroadcastGate();
+let lastExactSyncKey: string | null = null;
+let lastExactSyncEpoch: number | null = null;
 
 /** Every request that carries work; `cancel` is handled before the queue. */
 type GeometryWorkerWorkRequest = Exclude<
@@ -406,6 +426,69 @@ async function execute(job: GeometryWorkerJob): Promise<void> {
   };
   try {
     post(stateFor('starting', request, { stale: true }));
+
+    if (request.type === 'mass-properties') {
+      let result: MassPropertiesRead;
+      if (
+        !document.bodyOrder.includes(request.bodyId) ||
+        isGeometryEmpty(document)
+      ) {
+        result = {
+          status: 'unavailable',
+          code: 'unsupported',
+          reason: 'Mass properties are unavailable for this body.',
+          epoch: null
+        };
+      } else {
+        const key = canonicalProjectContentKey(document);
+        const exact = await loadExactKernel();
+        if (!exact) {
+          throw exactKernelError instanceof Error
+            ? exactKernelError
+            : new Error('The exact Remus kernel failed to load.');
+        }
+        const prepare = async () => {
+          await preloadDocumentFonts(document);
+          const nextEpoch = await exact.prepareMassPropertiesForDocument(
+            document
+          );
+          lastExactSyncKey = key;
+          lastExactSyncEpoch = nextEpoch;
+          return nextEpoch;
+        };
+        let epoch = exact.currentMassPropertiesEpoch();
+        if (
+          key !== lastExactSyncKey ||
+          epoch === null ||
+          epoch !== lastExactSyncEpoch
+        ) {
+          epoch = await prepare();
+        }
+        result = exact.readCurrentMassProperties({
+          projectId: document.projectId,
+          version: document.version,
+          bodyId: request.bodyId,
+          epoch
+        });
+        if (result.status === 'unavailable' && result.code === 'stale') {
+          epoch = await prepare();
+          result = exact.readCurrentMassProperties({
+            projectId: document.projectId,
+            version: document.version,
+            bodyId: request.bodyId,
+            epoch
+          });
+        }
+      }
+      post({
+        type: 'mass-properties',
+        ok: true,
+        requestId: request.requestId,
+        result
+      });
+      post(stateFor('ready', request, { stale: false }));
+      return;
+    }
 
     // The text fast path resolves faces synchronously, so every face this
     // document names has to be parsed before the rebuild reads it. A miss is
@@ -577,49 +660,56 @@ async function execute(job: GeometryWorkerJob): Promise<void> {
       return;
     }
 
-    const derived = isGeometryEmpty(document)
-      ? emptyDerived(document)
-      : await rebuildCache.get(
-          `${canonicalProjectContentKey(document)}${request.type === 'sync' && request.analysis ? `:analysis:${JSON.stringify(request.analysis)}` : ''}`,
-          async () => {
-            // 'failed' retries on the next load call, so it counts as a
-            // loading state here too.
-            if (exactKernelStatus !== 'ready') {
-              post(stateFor('loading-remus', request, { stale: true }));
+    const contentKey = isGeometryEmpty(document)
+      ? null
+      : canonicalProjectContentKey(document);
+    const derived =
+      contentKey === null
+        ? emptyDerived(document)
+        : await rebuildCache.get(
+            `${contentKey}${request.type === 'sync' && request.analysis ? `:analysis:${JSON.stringify(request.analysis)}` : ''}`,
+            async () => {
+              // 'failed' retries on the next load call, so it counts as a
+              // loading state here too.
+              if (exactKernelStatus !== 'ready') {
+                post(stateFor('loading-remus', request, { stale: true }));
+              }
+              const exact = await loadExactKernel();
+              if (!exact) {
+                throw exactKernelError instanceof Error
+                  ? exactKernelError
+                  : new Error('The exact Remus kernel failed to load.');
+              }
+              if (!broadcastGate.isCurrent(job.broadcastToken)) {
+                throw new Error('Superseded geometry broadcast.');
+              }
+              post(stateFor('rebuilding', request, { stale: true }));
+              const result = await exact.syncDocument(
+                document,
+                (progress) => {
+                  if (!broadcastGate.isCurrent(job.broadcastToken)) return;
+                  post({
+                    ...stateFor('rebuilding', request, { stale: true }),
+                    progress
+                  });
+                },
+                request.requestId
+                  ? undefined
+                  : (projection) => {
+                      post({
+                        type: 'projection',
+                        projectId: document.projectId,
+                        version: document.version,
+                        derived: projection
+                      });
+                    },
+                request.type === 'sync' ? request.analysis : undefined
+              );
+              lastExactSyncKey = contentKey;
+              lastExactSyncEpoch = exact.currentMassPropertiesEpoch();
+              return result;
             }
-            const exact = await loadExactKernel();
-            if (!exact) {
-              throw exactKernelError instanceof Error
-                ? exactKernelError
-                : new Error('The exact Remus kernel failed to load.');
-            }
-            if (!broadcastGate.isCurrent(job.broadcastToken)) {
-              throw new Error('Superseded geometry broadcast.');
-            }
-            post(stateFor('rebuilding', request, { stale: true }));
-            return exact.syncDocument(
-              document,
-              (progress) => {
-                if (!broadcastGate.isCurrent(job.broadcastToken)) return;
-                post({
-                  ...stateFor('rebuilding', request, { stale: true }),
-                  progress
-                });
-              },
-              request.requestId
-                ? undefined
-                : (projection) => {
-                    post({
-                      type: 'projection',
-                      projectId: document.projectId,
-                      version: document.version,
-                      derived: projection
-                    });
-                  },
-              request.type === 'sync' ? request.analysis : undefined
-            );
-          }
-        );
+          );
     if (!broadcastGate.isCurrent(job.broadcastToken)) {
       return;
     }
@@ -647,6 +737,13 @@ async function execute(job: GeometryWorkerJob): Promise<void> {
         error: message
       };
       post(result);
+    } else if (request.type === 'mass-properties') {
+      post({
+        type: 'mass-properties',
+        ok: false,
+        requestId: request.requestId,
+        error: message
+      });
     } else if (request.type === 'mesh-quality') {
       post({
         type: 'mesh-quality',

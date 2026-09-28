@@ -1,7 +1,10 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import {
   addPrimitiveFeature,
-  createProjectDocument
+  addSketchFeature,
+  createProjectDocument,
+  listFeaturesInOrder,
+  updateFeature
 } from '@openzcad/document-core';
 import {
   toBodyId,
@@ -56,6 +59,11 @@ async function installWorker(
   };
   const createExactKernelAdapter = vi.fn(async () => ({
     syncDocument,
+    currentMassPropertiesEpoch: vi.fn(() => 1),
+    prepareMassPropertiesForDocument: vi.fn(async () => 2),
+    readCurrentMassProperties: vi.fn(() => ({
+      status: 'unavailable', reason: 'No live solid is available.', epoch: 1
+    })),
     exportStep: vi.fn(),
     exportStl: vi.fn(),
     exportMesh: vi.fn(),
@@ -83,6 +91,120 @@ beforeEach(() => {
 });
 
 describe('geometry worker rebuild coordination', () => {
+  it('preloads text fonts before a mass query must restore exact history', async () => {
+    const preloadDocumentFonts = vi.fn(async () => undefined);
+    vi.doMock('../lib/textFonts', () => ({ preloadDocumentFonts }));
+    try {
+      const prepareMassPropertiesForDocument = vi.fn(async () => 3);
+      const { scope } = await installWorker(async () => derived('exact'), {
+        currentMassPropertiesEpoch: () => null,
+        prepareMassPropertiesForDocument
+      });
+      const box = addPrimitiveFeature(
+        createProjectDocument('Text mass', toUserId('user')),
+        { name: 'Box', primitiveKind: 'box', dimensions: { width: 1, height: 1, depth: 1 } }
+      );
+      const document = addSketchFeature(box, {
+        name: 'Label',
+        planeRef: { type: 'canonical', plane: 'XY', offset: 0 },
+        objects: [{
+          objectKind: 'text', text: 'A', fontFamily: 'open-sans',
+          fontStyle: 'regular', size: 10, x: 0, y: 0
+        }]
+      }).document;
+      post(scope, {
+        type: 'mass-properties', document,
+        bodyId: document.bodyOrder[0]!, requestId: 'text-mass'
+      });
+      await vi.waitFor(() => expect(prepareMassPropertiesForDocument).toHaveBeenCalledWith(document));
+      expect(preloadDocumentFonts).toHaveBeenCalledWith(document);
+      expect(preloadDocumentFonts.mock.invocationCallOrder[0]).toBeLessThan(
+        prepareMassPropertiesForDocument.mock.invocationCallOrder[0]!
+      );
+    } finally {
+      vi.doUnmock('../lib/textFonts');
+    }
+  });
+  it('reads current mass without replay and prepares exact history after a cached undo or export', async () => {
+    let epoch: number | null = 1;
+    const syncDocument = vi.fn(async () => derived('exact'));
+    const prepareMassPropertiesForDocument = vi.fn(async () => {
+      epoch = (epoch ?? 1) + 1;
+      return epoch;
+    });
+    const readCurrentMassProperties = vi.fn(() => ({
+      status: 'unavailable', reason: 'No live solid is available.', epoch
+    }));
+    const { scope } = await installWorker(syncDocument, {
+      currentMassPropertiesEpoch: () => epoch,
+      prepareMassPropertiesForDocument,
+      readCurrentMassProperties
+    });
+    const first = addPrimitiveFeature(
+      createProjectDocument('Mass cache', toUserId('user')),
+      { name: 'Box', primitiveKind: 'box', dimensions: { width: 1, height: 1, depth: 1 } }
+    );
+    const bodyId = first.bodyOrder[0]!;
+    const edited = updateFeature(first, {
+      featureId: listFeaturesInOrder(first)[0]!.featureId,
+      data: { dimensions: { width: 2, height: 1, depth: 1 } }
+    });
+    post(scope, { type: 'sync', document: first, requestId: 'first' });
+    await vi.waitFor(() => expect(syncDocument).toHaveBeenCalledTimes(1));
+    post(scope, { type: 'mass-properties', document: first, bodyId, requestId: 'mass-current' });
+    await vi.waitFor(() => expect(readCurrentMassProperties).toHaveBeenCalledTimes(1));
+    expect(prepareMassPropertiesForDocument).not.toHaveBeenCalled();
+
+    post(scope, { type: 'sync', document: edited, requestId: 'edited' });
+    await vi.waitFor(() => expect(syncDocument).toHaveBeenCalledTimes(2));
+    post(scope, { type: 'sync', document: first, requestId: 'cached-undo' });
+    await vi.waitFor(() => expect(
+      scope.postMessage.mock.calls.some(([message]) =>
+        message.type === 'sync' && message.ok && message.requestId === 'cached-undo'
+      )
+    ).toBe(true));
+    expect(syncDocument).toHaveBeenCalledTimes(2);
+    post(scope, { type: 'mass-properties', document: first, bodyId, requestId: 'mass-undo' });
+    await vi.waitFor(() => expect(prepareMassPropertiesForDocument).toHaveBeenCalledTimes(1));
+    expect(prepareMassPropertiesForDocument).toHaveBeenCalledWith(first);
+
+    epoch = null; // An export retires the exact handles even when the derived LRU still hits.
+    post(scope, { type: 'mass-properties', document: first, bodyId, requestId: 'mass-after-export' });
+    await vi.waitFor(() => expect(prepareMassPropertiesForDocument).toHaveBeenCalledTimes(2));
+    expect(readCurrentMassProperties).toHaveBeenCalledTimes(3);
+  });
+
+  it('recovers a version-only cache hit using the typed stale result', async () => {
+    const readCurrentMassProperties = vi.fn()
+      .mockReturnValueOnce({
+        status: 'unavailable', code: 'stale',
+        reason: 'The body geometry changed.', epoch: 1
+      })
+      .mockReturnValueOnce({
+        status: 'unavailable', code: 'unsupported',
+        reason: 'No live solid is available.', epoch: 2
+      });
+    const prepareMassPropertiesForDocument = vi.fn(async () => 2);
+    const { scope } = await installWorker(
+      async () => derived('exact'),
+      { readCurrentMassProperties, prepareMassPropertiesForDocument }
+    );
+    const document = addPrimitiveFeature(
+      createProjectDocument('Version-only mass', toUserId('user')),
+      { name: 'Box', primitiveKind: 'box', dimensions: { width: 1, height: 1, depth: 1 } }
+    );
+    post(scope, { type: 'sync', document, requestId: 'initial' });
+    await vi.waitFor(() => expect(scope.postMessage.mock.calls.some(([message]) =>
+      message.type === 'sync' && message.ok && message.requestId === 'initial'
+    )).toBe(true));
+    const later = { ...document, version: document.version + 1 };
+    post(scope, {
+      type: 'mass-properties', document: later,
+      bodyId: later.bodyOrder[0]!, requestId: 'version-only'
+    });
+    await vi.waitFor(() => expect(prepareMassPropertiesForDocument).toHaveBeenCalledWith(later));
+    expect(readCurrentMassProperties).toHaveBeenCalledTimes(2);
+  });
   it('transfers each owned mesh buffer once without detaching adapter or cached meshes', async () => {
     const bodyId = toBodyId('body_transfer');
     const aliasId = toBodyId('body_alias');
@@ -285,6 +407,7 @@ describe('geometry worker rebuild coordination', () => {
       .mockRejectedValueOnce(new Error('WASM chunk fetch failed'))
       .mockResolvedValue({
         syncDocument,
+        currentMassPropertiesEpoch: vi.fn(() => 1),
         exportStep: vi.fn(),
         exportStl: vi.fn(),
         inspectStep: vi.fn(),
