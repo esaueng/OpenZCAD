@@ -11,7 +11,10 @@ import {
   type ProjectDocument
 } from '@openzcad/shared';
 import { buildDemoDocument, DEMO_DEFINITIONS } from '../apps/web/src/lib/demos';
-import { planFaceOffset } from '../apps/web/src/lib/interaction/faceOffsetPlan';
+import {
+  planFaceOffset,
+  withFaceTravelHint
+} from '../apps/web/src/lib/interaction/faceOffsetPlan';
 import { plainRefusal } from '../apps/web/src/lib/refusalLanguage';
 
 /**
@@ -20,9 +23,8 @@ import { plainRefusal } from '../apps/web/src/lib/refusalLanguage';
  * refusals are real geometry, not an identity or lineage fault — the plate is
  * 8 mm thick, and the boss's underside hangs 6 mm above the plate — and the
  * kernel refuses a face move whose sweep reaches any face it does not share an
- * edge with. The offset plan now measures both limits first and says so; these
- * pin the limits against the kernel itself, through the same plan the UI
- * commits, so the preflight can never refuse an offset the kernel builds.
+ * edge with. The display mesh suggests a distance, but only the exact kernel
+ * can refuse the edit.
  */
 describe('demo bracket base-plate top face offset', () => {
   let adapter: ExactKernelAdapter;
@@ -86,7 +88,7 @@ describe('demo bracket base-plate top face offset', () => {
       const candidate = plan(offset);
       expect(candidate?.kind).toBe('direct-edit');
       expect(
-        (candidate as { preflightRejection?: string }).preflightRejection
+        (candidate as { travelHint?: string }).travelHint
       ).toBeUndefined();
       const derived = await build(offset);
       expect(derived.warnings).toEqual([]);
@@ -98,29 +100,27 @@ describe('demo bracket base-plate top face offset', () => {
     60_000
   );
 
-  it('explains an inward offset through the 8 mm plate before the kernel is asked', async () => {
+  it('adds an approximate inward distance after the exact collision refusal', async () => {
     const candidate = plan(-10);
     expect(candidate?.kind).toBe('direct-edit');
-    const rejection = (candidate as { preflightRejection?: string })
-      .preflightRejection;
-    expect(rejection).toBe(
-      'Only 8 mm of material lies behind this face, so it cannot move 10 mm inward.'
+    const hint = (candidate as { travelHint?: string }).travelHint;
+    expect(hint).toBe(
+      'The display mesh suggests about 8 mm of material behind this face.'
     );
-    // Adapter-written, so the card shows it as is.
-    expect(plainRefusal(rejection!).message).toBe(rejection);
-    // And the kernel agrees: this is a real refusal.
-    expect((await build(-10)).warnings.join('\n')).toMatch(
-      /swept face reaches nonadjacent face/
+    const warnings = (await build(-10)).warnings;
+    expect(warnings.join('\n')).toMatch(/swept face reaches nonadjacent face/);
+    const exact = plainRefusal(warnings[0]!.replace(/^Feature "[^"]+":\s*/, ''));
+    expect(withFaceTravelHint(exact.message, hint)).toBe(
+      `${exact.message}\n${hint}`
     );
   }, 60_000);
 
-  it('explains an outward offset into the boss 6 mm above before the kernel is asked', async () => {
+  it('adds an approximate outward distance after the exact collision refusal', async () => {
     const candidate = plan(10);
     expect(candidate?.kind).toBe('direct-edit');
-    expect(
-      (candidate as { preflightRejection?: string }).preflightRejection
-    ).toBe(
-      'Another part of the body is 6 mm in front of this face, so it cannot move 10 mm outward.'
+    const hint = (candidate as { travelHint?: string }).travelHint;
+    expect(hint).toBe(
+      'The display mesh suggests another part of the body about 6 mm in front of this face.'
     );
     const warnings = (await build(10)).warnings;
     expect(warnings.join('\n')).toMatch(/swept face reaches nonadjacent face/);
@@ -131,12 +131,15 @@ describe('demo bracket base-plate top face offset', () => {
     ).toBe(
       'The face would run into another part of the body before it got that far.'
     );
+    expect(
+      withFaceTravelHint('The resulting body came back invalid.', hint)
+    ).toBe('The resulting body came back invalid.');
   }, 60_000);
 
   it('never refuses an offset just inside a limit that the kernel builds', async () => {
     for (const offset of [5.9, -7.9]) {
       expect(
-        (plan(offset) as { preflightRejection?: string }).preflightRejection
+        (plan(offset) as { travelHint?: string }).travelHint
       ).toBeUndefined();
       expect((await build(offset)).warnings).toEqual([]);
     }
@@ -144,11 +147,75 @@ describe('demo bracket base-plate top face offset', () => {
     expect((await build(-8)).warnings.join('\n')).toMatch(
       /swept face reaches nonadjacent face/
     );
-    // Just past it, so does the preflight.
+    // Just past it, the mesh suggests a distance; the kernel still decides.
     expect(
-      (plan(-8.1) as { preflightRejection?: string }).preflightRejection
+      (plan(-8.1) as { travelHint?: string }).travelHint
     ).toBe(
-      'Only 8 mm of material lies behind this face, so it cannot move 8.1 mm inward.'
+      'The display mesh suggests about 8 mm of material behind this face.'
     );
   }, 120_000);
+
+  it('keeps an exact build available when the display mesh suggests a false obstacle', async () => {
+    const withMeshArtifact = structuredClone(bracket);
+    const representation = withMeshArtifact.derived.bodyRepresentations[bodyId]!;
+    const mesh = representation.mesh;
+    const first = mesh.indices[top.triangleStart * 3]!;
+    const second = mesh.indices[top.triangleStart * 3 + 1]!;
+    const third = mesh.indices[top.triangleStart * 3 + 2]!;
+    const x =
+      (mesh.vertices[first * 3]! +
+        mesh.vertices[second * 3]! +
+        mesh.vertices[third * 3]!) /
+      3;
+    const y =
+      (mesh.vertices[first * 3 + 1]! +
+        mesh.vertices[second * 3 + 1]! +
+        mesh.vertices[third * 3 + 1]!) /
+      3;
+    const triangleStart = mesh.indices.length / 3;
+    const vertexStart = mesh.vertices.length / 3;
+    representation.mesh = {
+      ...mesh,
+      vertices: Float32Array.from([
+        ...mesh.vertices,
+        x,
+        y,
+        9,
+        x + 0.01,
+        y,
+        9,
+        x,
+        y + 0.01,
+        9
+      ]),
+      indices: Uint32Array.from([
+        ...mesh.indices,
+        vertexStart,
+        vertexStart + 1,
+        vertexStart + 2
+      ])
+    };
+    representation.topology!.faces.push({
+      topologyId: 'mesh-artifact',
+      hash: 999_999,
+      triangleStart,
+      triangleCount: 1
+    });
+
+    const candidate = planFaceOffset({
+      document: withMeshArtifact,
+      bodyId,
+      face: top,
+      faceHash: top.hash,
+      offset: 5
+    });
+    expect(candidate?.kind).toBe('direct-edit');
+    expect((candidate as { travelHint?: string }).travelHint).toContain(
+      'about 1 mm'
+    );
+    const document = new CommandManager(withMeshArtifact).runTransaction('Offset', [
+      candidate!.command
+    ]);
+    expect((await adapter.syncDocument(document)).warnings).toEqual([]);
+  }, 60_000);
 });

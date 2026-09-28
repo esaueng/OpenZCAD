@@ -56,12 +56,8 @@ export type FaceOffsetPlan =
   | {
       kind: 'direct-edit';
       command: AnyCommand;
-      /**
-       * Set when the face would run into another part of its own body
-       * before reaching the offset, which the exact kernel refuses as a
-       * face move; the sentence says how far it can go instead.
-       */
-      preflightRejection?: string;
+      /** Mesh estimate shown only after the exact kernel refuses the move. */
+      travelHint?: string;
     };
 
 /** What the handle's "Total" readout adds the drag to, and in which sense. */
@@ -219,11 +215,10 @@ function roundedLength(value: number): string {
 }
 
 /**
- * The refusal for a local face move that would reach another part of the
- * body, measured before the kernel is asked. The kernel's own words for this
- * ("swept face reaches nonadjacent face") never said how far was possible.
+ * An approximate distance hint for a local face move. The display mesh
+ * cannot decide whether the exact kernel will accept an offset.
  */
-function faceTravelRejection(
+function faceTravelHint(
   document: ProjectDocument,
   bodyId: BodyId,
   face: FaceTopology,
@@ -245,16 +240,28 @@ function faceTravelRejection(
     travel.inward !== null &&
     -offset > travel.inward + travel.tolerance
   ) {
-    return `Only ${roundedLength(travel.inward)} ${units} of material lies behind this face, so it cannot move ${roundedLength(-offset)} ${units} inward.`;
+    return `The display mesh suggests about ${roundedLength(travel.inward)} ${units} of material behind this face.`;
   }
   if (
     offset > 0 &&
     travel.outward !== null &&
     offset > travel.outward + travel.tolerance
   ) {
-    return `Another part of the body is ${roundedLength(travel.outward)} ${units} in front of this face, so it cannot move ${roundedLength(offset)} ${units} outward.`;
+    return `The display mesh suggests another part of the body about ${roundedLength(travel.outward)} ${units} in front of this face.`;
   }
   return undefined;
+}
+
+/** Add the mesh estimate only to an exact nonadjacent-face refusal. */
+export function withFaceTravelHint(
+  message: string,
+  hint?: string
+): string {
+  return hint &&
+    message ===
+      'The face would run into another part of the body before it got that far.'
+    ? `${message}\n${hint}`
+    : message;
 }
 
 /** Pure. Null when the face is not an exact plane or the offset is a no-op. */
@@ -382,10 +389,10 @@ export function planFaceOffset(
     return null;
   }
 
-  const travelRejection = faceTravelRejection(document, bodyId, face, offset);
+  const travelHint = faceTravelHint(document, bodyId, face, offset);
   return {
     kind: 'direct-edit',
-    ...(travelRejection ? { preflightRejection: travelRejection } : {}),
+    ...(travelHint ? { travelHint } : {}),
     command: commandFactories.directEditBody({
       name: DIRECT_EDIT_NAME,
       targetBodyId: bodyId,

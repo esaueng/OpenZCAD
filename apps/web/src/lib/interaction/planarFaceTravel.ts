@@ -5,8 +5,8 @@ import type {
 } from '@openzcad/shared';
 
 /**
- * How far a planar face can move along its outward normal before it meets
- * another part of its own body.
+ * Approximate distance from a planar face to other parts of its own body,
+ * measured along its outward normal on the display mesh.
  *
  * The exact kernel moves a face by sweeping it and letting only the faces it
  * shares an edge with stretch or shrink; the moment the swept face reaches
@@ -15,25 +15,21 @@ import type {
  * outward one past the boss 6 mm above it — both legitimate refusals that the
  * card used to report as a generic kernel failure.
  *
- * This measures those two distances on the display mesh, so the gesture can
- * say what is in the way before the kernel is asked. It is an approximation:
- * a limit read off chords can differ from the exact one by the tessellation's
- * chord error, which `tolerance` bounds. A caller that refuses only offsets
- * past `limit + tolerance` therefore never refuses one the kernel would build,
- * and leaves the band at the limit itself to the kernel's own refusal.
+ * This measures those two distances on the display mesh for an explanation
+ * after the exact kernel refuses a move. The mesh and its deflection setting
+ * do not certify the exact collision distance.
  *
  * Faces sharing an edge with the picked face are ignored, as the kernel
  * ignores them: they are the ones that stretch.
  */
 export interface PlanarFaceTravel {
-  /** Material depth behind the face; null when nothing is measured. */
+  /** Estimated material depth behind the face; null when nothing is measured. */
   inward: number | null;
-  /** Free space in front of the face; null when nothing is in the way. */
+  /** Estimated free space in front; null when nothing is measured. */
   outward: number | null;
   /**
-   * How far the mesh may sit from the exact surfaces, so from either limit.
-   * A chord across a concave obstacle lies nearer the face than the surface
-   * it approximates, so a limit is only certain once exceeded by this much.
+   * Heuristic allowance around a mesh-derived distance. It is not a bound
+   * on the distance to the exact surfaces.
    */
   tolerance: number;
 }
@@ -62,9 +58,8 @@ interface Triangle2 {
 const WORK_BUDGET = 4_000_000;
 
 /**
- * Twice the display tessellation's size-relative chord allowance
- * (`DISPLAY_LINEAR_DEFLECTION_RATIO` in the kernel adapter), so a limit read
- * off chords is never trusted closer than the chords are to the surface.
+ * Twice the requested display deflection ratio
+ * (`DISPLAY_LINEAR_DEFLECTION_RATIO` in the kernel adapter).
  */
 const CHORD_ALLOWANCE_RATIO = 4e-4;
 
@@ -156,8 +151,8 @@ function segmentCrossing(
 }
 
 /**
- * Pure. The inward and outward travel of a planar face on its own body, read
- * from the display mesh. Null limits mean "not measured", never zero.
+ * Pure. Mesh-derived inward and outward distance estimates for a planar face.
+ * Null means "not measured", never zero.
  *
  * The minimum height of a triangulated obstacle over the face's footprint is
  * reached at a vertex of their overlap, so three candidate sets cover it

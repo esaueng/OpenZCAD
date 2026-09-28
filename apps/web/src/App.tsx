@@ -468,7 +468,8 @@ import {
 import type { SketchEditHost } from './lib/sketch/edits';
 import {
   faceOffsetBaseline,
-  planFaceOffset
+  planFaceOffset,
+  withFaceTravelHint
 } from './lib/interaction/faceOffsetPlan';
 import { extrudeCapAncestor } from './lib/interaction/extrudeCapAncestry';
 import { updateProfileSelection } from './lib/profileSelection';
@@ -1167,6 +1168,7 @@ interface OffsetEditPlan {
   successMessage: string;
   validationTargets?: AffectedFeatureTarget[];
   preflightRejection?: string;
+  travelHint?: string;
 }
 
 interface OffsetPreviewCandidate {
@@ -1183,6 +1185,8 @@ interface OffsetPreviewCandidate {
   validationTargets?: AffectedFeatureTarget[];
   /** A refusal known before any rebuild; the preview reports it unbuilt. */
   preflightRejection?: string;
+  /** Mesh estimate used only after an exact collision refusal. */
+  travelHint?: string;
 }
 
 type RadiusPreviewCandidate = Omit<
@@ -2685,7 +2689,8 @@ export function App() {
                 : {}),
               ...(plan.preflightRejection
                 ? { preflightRejection: plan.preflightRejection }
-                : {})
+                : {}),
+              ...(plan.travelHint ? { travelHint: plan.travelHint } : {})
             }
           : null;
       },
@@ -2708,7 +2713,11 @@ export function App() {
           derived,
           documentMoved
         });
-        if (rejection) throw new Error(rejection.message);
+        if (rejection) {
+          throw new Error(
+            withFaceTravelHint(rejection.message, candidate.travelHint)
+          );
+        }
         return { derived, rejection };
       },
       isCurrent: previewSelectionIsCurrent,
@@ -14192,8 +14201,8 @@ export function App() {
       command: plan.command,
       bodyId,
       successMessage: `Offset face by ${Math.round(offset * 100) / 100} ${base.units}.`,
-      ...(plan.preflightRejection
-        ? { preflightRejection: plan.preflightRejection }
+      ...(plan.travelHint
+        ? { travelHint: plan.travelHint }
         : {})
     };
   }
