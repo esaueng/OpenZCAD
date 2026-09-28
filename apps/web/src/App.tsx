@@ -14,7 +14,7 @@ import type {
 } from './lib/parameterVisualPreview';
 import { LatestTask } from './lib/latestTask';
 import { rebuildProgressLabel } from './lib/rebuildProgressLabel';
-import { featureHistory, featureResultBodyIds } from './lib/featureHistory';
+import { featureHistory } from './lib/featureHistory';
 import { FeatureBuildError } from './lib/featureValidation';
 import { edgeModifierCommand } from './lib/edgeModifierEdit';
 import type { EdgeModifierFormValue } from './components/forms/FeatureForms';
@@ -475,7 +475,17 @@ import {
   isEntityWideProfileSource,
   profileReferencesForSelection
 } from './lib/profileReferences';
-import type { SelectionActionId } from './lib/interaction/capabilities';
+import {
+  selectionCapabilities,
+  type SelectionActionId
+} from './lib/interaction/capabilities';
+import {
+  selectionCalloutVerbs,
+  type SelectionCalloutContent,
+  type SelectionCalloutKind,
+  type SelectionCalloutVerbId
+} from './lib/selectionCallout';
+import { ghostBodiesFor, historyFeatureFocus } from './lib/historyFocus';
 import {
   faceSketchAttachment,
   fixedPlaneRefForLegacyAttachment
@@ -5052,14 +5062,6 @@ export function App() {
     renderedRepresentations
   ]);
 
-  const selectionChip = useMemo(
-    () =>
-      selectionSummary
-        ? { label: selectionSummary.label, detail: selectionSummary.detail }
-        : null,
-    [selectionSummary]
-  );
-
   const {
     measuring,
     setMeasuring,
@@ -5250,6 +5252,156 @@ export function App() {
     exactGeometryReady,
     hasEdgeSelected: selectedEdges.length > 0
   };
+
+  /**
+   * A History row whose feature a later one consumed, brought into focus:
+   * the faces it produced on the final part, or its consumed body as a
+   * ghost when none survived. Derived rather than stored, so any other pick
+   * ends it. See lib/historyFocus.
+   */
+  const historyFocus = useMemo(() => {
+    if (
+      !doc ||
+      tool !== null ||
+      featureSelectionSource !== 'pinned' ||
+      !selectedFeature ||
+      selectedBodyIds.length > 0 ||
+      selectedTopology !== null ||
+      selectedEdges.length > 0
+    ) {
+      return null;
+    }
+    const focus = historyFeatureFocus(doc, selectedFeature, (bodyId) => {
+      const body = doc.derived.bodyRepresentations[bodyId];
+      return Boolean(body && !body.consumed && !hiddenBodyIds.has(bodyId));
+    });
+    return focus.kind === 'focus' ? { feature: selectedFeature, focus } : null;
+  }, [
+    doc,
+    tool,
+    featureSelectionSource,
+    selectedFeature,
+    selectedBodyIds,
+    selectedTopology,
+    selectedEdges,
+    hiddenBodyIds
+  ]);
+  const focusGhostBodies = useMemo(
+    () => (doc && historyFocus ? ghostBodiesFor(doc, historyFocus.focus) : []),
+    [doc, historyFocus]
+  );
+  // The focus faces ride the preview-face highlight, beside any live blend
+  // preview; a new array whenever the focus changes, so the viewer redraws.
+  const viewerPreviewFaces = useMemo(
+    () =>
+      historyFocus && historyFocus.focus.kind === 'focus'
+        ? [...previewBlendFaces, ...historyFocus.focus.faces]
+        : previewBlendFaces,
+    [previewBlendFaces, historyFocus]
+  );
+
+  /**
+   * The selection chip anchored to the pick: name, key measurement, the
+   * verbs for that kind of pick and the clear action (lib/selectionCallout).
+   * Verbs run through the handlers the rail and the tool card use, read
+   * through a ref so the chip's content only changes when what it says does.
+   */
+  const selectionCalloutVerbRef = useRef<(id: SelectionCalloutVerbId) => void>(
+    () => undefined
+  );
+  selectionCalloutVerbRef.current = (id) => {
+    if (id.startsWith('action:')) {
+      handleSelectionAction(id.slice('action:'.length) as SelectionActionId);
+    } else {
+      launchTool(id.slice('tool:'.length) as ToolId);
+    }
+  };
+  const clearSelectionRef = useRef<() => void>(() => undefined);
+  clearSelectionRef.current = clearSelection;
+  const calloutKind: SelectionCalloutKind | null =
+    selectedEdges.length > 0 || renderedSelectedTopology?.kind === 'edge'
+      ? 'edges'
+      : renderedSelectedTopology?.kind === 'face'
+        ? 'face'
+        : selectedBodyIds.length > 1
+          ? 'bodies'
+          : selectedBodyIds.length === 1
+            ? 'body'
+            : null;
+  const calloutFaceCapabilities =
+    interaction.mode === 'face'
+      ? selectionCapabilities({ kind: 'face', target: interaction.target })
+      : null;
+  const calloutPressedAction: SelectionActionId | null =
+    interaction.mode === 'edges'
+      ? interaction.op
+      : interaction.mode !== 'face'
+        ? null
+        : interaction.op === 'offset-face'
+          ? !interaction.target.resizeBodyFeatureId ||
+            interaction.target.localFaceOffset === true
+            ? 'offset-face'
+            : 'resize-body'
+          : interaction.op === 'resize-cylinder-radius'
+            ? 'resize-radial-face'
+            : interaction.op;
+  // Verbs only while the pick is the whole story: a running tool has its own
+  // card, and View and Tweak do not edit. Serialized (they are plain data)
+  // so the content below changes only when the verbs themselves do.
+  const calloutInteractive =
+    !modelingLocked && tool === null && !parameterPreview;
+  const calloutVerbsKey =
+    calloutKind && calloutInteractive
+      ? JSON.stringify(
+          selectionCalloutVerbs({
+            kind: calloutKind,
+            faceCapabilities: calloutFaceCapabilities,
+            edgesArmed: interaction.mode === 'edges',
+            pressedAction: calloutPressedAction,
+            availability
+          })
+        )
+      : '[]';
+  const selectionCallout = useMemo<SelectionCalloutContent | null>(() => {
+    const onVerb = (id: SelectionCalloutVerbId) =>
+      selectionCalloutVerbRef.current(id);
+    const verbs = JSON.parse(
+      calloutVerbsKey
+    ) as SelectionCalloutContent['verbs'];
+    if (historyFocus && calloutInteractive) {
+      return {
+        label: textLabelSegments(historyFocus.feature.name),
+        verbs: [],
+        anchor: 'focus',
+        onVerb,
+        onClear: () => clearSelectionRef.current()
+      };
+    }
+    // A running tool has its own card and handles, and View and Tweak do
+    // not edit: the pick keeps its plain name label, which takes no input
+    // and so can never sit over a gizmo handle.
+    if (!selectionSummary || !calloutInteractive) {
+      return null;
+    }
+    return {
+      label: selectionSummary.label,
+      // Several bodies are counted in the name; the verbs say what they
+      // are for.
+      ...(selectionSummary.detail && selectedBodyIds.length < 2
+        ? { detail: selectionSummary.detail }
+        : {}),
+      verbs,
+      anchor: 'selection',
+      onVerb,
+      onClear: () => clearSelectionRef.current()
+    };
+  }, [
+    historyFocus,
+    selectionSummary,
+    selectedBodyIds,
+    calloutVerbsKey,
+    calloutInteractive
+  ]);
 
   function hydrateDocument(
     nextDocument: ProjectDocument,
@@ -14408,20 +14560,16 @@ export function App() {
     }
     const visible = (id: BodyId) => {
       const result = doc?.derived.bodyRepresentations[id];
-      return result && !result.consumed && !hiddenBodyIds.has(id);
+      return Boolean(result && !result.consumed && !hiddenBodyIds.has(id));
     };
-    const direct =
-      node?.kind === 'feature'
-        ? featureResultBodyIds(node).filter(visible)
-        : [];
-    const descendants =
+    // A feature still on screen selects its body. One a later feature
+    // consumed selects nothing: `historyFocus` lights the faces it made on
+    // the final part (or ghosts its body) instead of the whole part.
+    const focus =
       node?.kind === 'feature' && doc
-        ? featureHistory(doc)
-            .downstream(node.featureId)
-            .flatMap(featureResultBodyIds)
-            .filter(visible)
-        : [];
-    setSelectedBodyIds([...new Set(direct.length ? direct : descendants)]);
+        ? historyFeatureFocus(doc, node, visible)
+        : null;
+    setSelectedBodyIds(focus?.kind === 'bodies' ? focus.bodyIds : []);
   }
 
   function handleSelectBodyFromTree(bodyId: BodyId, additive: boolean) {
@@ -16042,7 +16190,15 @@ export function App() {
   const inspectorActive =
     !modelingLocked &&
     !directMode &&
-    (tool !== null || selectedFeature !== null || selectedTopology !== null);
+    // A face or edge alone is not an edit: its name, measurement and verbs
+    // are on the selection chip beside it, and the inspector opened only to
+    // say no one feature owns the pick. An imported STEP face is the
+    // exception: its direct edits (hole resize, blend removal) live there.
+    (tool !== null ||
+      selectedFeature !== null ||
+      (selectedTopology?.kind === 'face' &&
+        renderedRepresentations[selectedTopology.bodyId]?.source ===
+          'imported-step'));
   const modelingOperation: ModelingOperationKind | null =
     tool === 'mirror' ||
     tool === 'split' ||
@@ -16898,7 +17054,7 @@ export function App() {
             selectedTopology={
               parameterPreview ? null : renderedSelectedTopology
             }
-            previewFaceHighlights={previewBlendFaces}
+            previewFaceHighlights={viewerPreviewFaces}
             selectedEdges={parameterPreview ? [] : selectedEdges}
             pickListEnabled={appSettings.experiments.directManipulation}
             settings={viewerSettings}
@@ -16985,8 +17141,8 @@ export function App() {
               ) : null
             }
             viewMode={modelingLocked}
-            selectionChip={selectionChip}
-            onClearSelection={clearSelection}
+            selectionCallout={selectionCallout}
+            focusGhostBodies={focusGhostBodies}
             canUndo={
               !viewMode &&
               (tweakMode
