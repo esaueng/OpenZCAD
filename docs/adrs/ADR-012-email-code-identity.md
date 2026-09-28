@@ -24,11 +24,11 @@ uses the explicit `development` mode and isolated `user_beta_dev` identity; the
 Worker refuses that mode in guarded or non-development environments.
 
 Deployment-funded AI is a separate authorization decision: an authenticated
-email must appear in `AI_DEPLOYMENT_ALLOWED_EMAILS`. That secret is optional
-and fails closed — a deployment that never sets it funds no AI at all, which
-is why it is not among the secrets a deploy requires. Public assistant identity
-and IP quota buckets use domain-separated HMAC values keyed by the Worker-only
-`AI_IDENTITY_PEPPER`.
+email must have Premium membership or appear in `AI_DEPLOYMENT_ALLOWED_EMAILS`.
+That allowlist is optional; without either grant, the deployment funds no AI.
+Public assistant identities use HMAC values keyed by the Worker-only
+`AI_IDENTITY_PEPPER`. The later account-tier policy limits AI usage per account
+without an IP or deployment-wide quota.
 
 ## Consequences
 

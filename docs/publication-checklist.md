@@ -41,13 +41,13 @@ discard project history.
 - Provision stable Worker secrets: authentication peppers, Turnstile secret,
   settings encryption key, and `AI_IDENTITY_PEPPER`. These four are the ones a
   deploy refuses to publish without.
-- Funding AI from the deployment is opt-in and needs two further secrets, the
-  provider key and `AI_DEPLOYMENT_ALLOWED_EMAILS`. Neither blocks a deploy:
-  with the allowlist unset no account can spend the deployment key, and the
-  assistant runs on personal provider tokens alone.
-- Set provider-side billing limits independently of the in-app D1 budget.
-- Verify Turnstile hostname/action validation, allowlisted and denied AI
-  accounts, daily-budget exhaustion, personal provider credentials, login,
+- Funding AI from the deployment needs a provider key. Premium accounts are
+  eligible; `AI_DEPLOYMENT_ALLOWED_EMAILS` optionally grants Free accounts.
+  Neither secret blocks a deploy. Without a provider key, the assistant runs
+  on personal provider tokens alone.
+- Set provider-side billing limits independently of per-account AI quotas.
+- Verify Turnstile hostname/action validation, eligible and denied AI
+  accounts, Free/Premium account exhaustion, personal provider credentials, login,
   project isolation, and collaboration against the intended beta host.
 
 Repository publication, D1 migration, Worker deployment, and production-domain

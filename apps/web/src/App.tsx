@@ -515,9 +515,15 @@ import { ContextMenu, type ContextMenuState } from './components/ContextMenu';
 import type { BodyFeatureIds } from '@openzcad/document-core';
 import {
   resolveExtrudeOperation,
-  resolveCurrentExtrude
+  resolveCurrentExtrude,
+  type ResolvedExtrude
 } from './lib/extrudeInference';
 import { isExtrudeSessionCurrent } from './lib/extrudeSession';
+import {
+  resolvedExtrudePreviewKey,
+  reuseResolvedExtrudePreview,
+  type ResolvedExtrudePreview
+} from './lib/resolvedExtrudePreview';
 import {
   ExtrudeForm,
   type ExtrudeFormValue
@@ -1004,6 +1010,10 @@ import {
 } from './lib/projectShelf';
 import { sharedThumbnailCapture } from './lib/projectThumbnailCapture';
 import { LivePreview } from './lib/livePreview';
+import {
+  blendPreviewSelectionKey,
+  canReuseBlendPreview
+} from './lib/interaction/blendPreview';
 import { errorMessage } from './lib/errors';
 import { describeSyncFailure, type SyncEntry } from './lib/syncRun';
 import { useGeometryWorker } from './hooks/useGeometryWorker';
@@ -1194,8 +1204,18 @@ type RadiusPreviewCandidate = Omit<
   'offset' | 'successMessage'
 > & { radius: number };
 
+type BlendCommand = ReturnType<
+  | typeof commandFactories.filletEdges
+  | typeof commandFactories.chamferEdges
+  | typeof commandFactories.updateFeature
+  | typeof commandFactories.deleteFeature
+  | typeof commandFactories.directEditBody
+>;
+
 /** An edge blend rebuilt for preview, with the feature its verdict judges. */
 interface EdgePreviewCandidate {
+  command: BlendCommand;
+  selectionKey: string;
   document: ProjectDocument;
   size: number;
   label: string;
@@ -2787,12 +2807,17 @@ export function App() {
     null
   );
   const extrudeEditRequest = useRef(0);
+  const reusableRegionExtrudePreview = useRef<ResolvedExtrudePreview | null>(
+    null
+  );
   const regionExtrudePreview = useRef(
     new LivePreview<
       RegionExtrudePreviewCandidate,
-      OffsetPreviewResult & { document: ProjectDocument }
+      OffsetPreviewResult & { resolved: ResolvedExtrude }
     >({
-      build: (distance) => {
+      build: (requestedDistance) => {
+        const distance = Math.round(requestedDistance * 1000) / 1000;
+        if (distance === 0) return null;
         const base = managerRef.current?.document;
         const current = interactionRef.current;
         if (!base || current.mode !== 'region') {
@@ -2853,22 +2878,30 @@ export function App() {
           derived,
           documentMoved
         });
-        return { derived, rejection, document: resolved.document };
+        return { derived, rejection, resolved };
       },
       publish: (preview) => {
         if (!preview) {
+          reusableRegionExtrudePreview.current = null;
           setPreviewDoc(null);
           return;
         }
         if (preview.derived.rejection) {
+          reusableRegionExtrudePreview.current = null;
           reportPreviewFailure(
             preview.derived.rejection.message,
             preview.document.distance
           );
           return;
         }
+        reusableRegionExtrudePreview.current = {
+          baseProjectId: preview.document.baseProjectId,
+          baseVersion: preview.document.baseVersion,
+          key: resolvedExtrudePreviewKey(preview.document),
+          resolved: preview.derived.resolved
+        };
         setPreviewDoc({
-          ...preview.derived.document,
+          ...preview.derived.resolved.document,
           derived: preview.derived.derived
         });
         setLastValidPreview(preview.document.distance);
@@ -2877,11 +2910,28 @@ export function App() {
           regionExtrudePreview.degraded && regionExtrudePreview.lagging
         );
       },
-      onFailure: ({ error, value }) =>
+      onFailure: ({ error, value }) => {
+        reusableRegionExtrudePreview.current = null;
         reportPreviewFailure(
           errorMessage(error, 'Exact extrude preview failed.'),
           value
-        ),
+        );
+      },
+      isCurrent: (candidate) => {
+        const base = managerRef.current?.document;
+        const current = interactionRef.current;
+        return (
+          base?.projectId === candidate.baseProjectId &&
+          base.version === candidate.baseVersion &&
+          current.mode === 'region' &&
+          resolvedExtrudePreviewKey(candidate) === resolvedExtrudePreviewKey({
+            input: regionExtrudeInputFor(current.target, candidate.distance),
+            choice: regionExtrudeSettings.current?.choice ??
+              current.extrudeChoice ?? { operation: 'automatic' },
+            faceAttachment: candidate.faceAttachment
+          })
+        );
+      },
       acceptValue: (distance) =>
         Number.isFinite(distance) && Math.abs(distance) > 1e-9,
       continueAfterSlow: true,
@@ -4347,31 +4397,40 @@ export function App() {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [doc?.projectId, doc?.checkpoints.length, session, cloudProjectIds]);
 
+  /**
+   * Every stored file the File menu counts: this device's backups, plus the
+   * account's artifacts for a cloud project. A failed read counts nothing
+   * rather than failing the open.
+   */
+  async function listProjectArtifacts(
+    projectId: string,
+    cloud: boolean
+  ): Promise<ArtifactRecord[]> {
+    try {
+      const [local, response] = await Promise.all([
+        loadProjectBackupFiles(projectId),
+        cloud ? api.listArtifacts(projectId) : { artifacts: [] }
+      ]);
+      return [...local.map((file) => file.artifact), ...response.artifacts];
+    } catch {
+      return [];
+    }
+  }
+
   useEffect(() => {
     if (!doc) {
       setArtifacts([]);
       return;
     }
     let cancelled = false;
-    void Promise.all([
-      loadProjectBackupFiles(doc.projectId),
-      session && cloudProjectIds.has(doc.projectId)
-        ? api.listArtifacts(doc.projectId)
-        : Promise.resolve({ artifacts: [] })
-    ])
-      .then(([local, response]) => {
-        if (!cancelled) {
-          setArtifacts([
-            ...local.map((file) => file.artifact),
-            ...response.artifacts
-          ]);
-        }
-      })
-      .catch(() => {
-        if (!cancelled) {
-          setArtifacts([]);
-        }
-      });
+    void listProjectArtifacts(
+      doc.projectId,
+      Boolean(session && cloudProjectIds.has(doc.projectId))
+    ).then((artifactList) => {
+      if (!cancelled) {
+        setArtifacts(artifactList);
+      }
+    });
     return () => {
       cancelled = true;
     };
@@ -5460,6 +5519,12 @@ export function App() {
       session?.userId ?? normalized.ownerUserId
     );
     geometry.invalidate();
+    // The document effect below writes every hydrated document to this
+    // device and reports 'saving' while it does; saying so from the first
+    // frame keeps the chip from showing the previous project's "Saved" and
+    // flipping to a spinner one commit later. Callers that know better
+    // (repair, offline, conflict, a shared link) override it right after.
+    setSaveState('saving');
     setDoc(normalized);
     setPreviewDoc(null);
     setSelectedFeatureNode(null);
@@ -7157,7 +7222,9 @@ export function App() {
           ...current
         ]);
         setCloudAvailable(false);
-        setSaveState('local');
+        // The document effect's flush lands on 'local' once the device write
+        // is done; forcing it here would show "Local only" for a frame and
+        // then the spinner the effect reports anyway.
         setStatus(`Created ${localDocument.name} locally.`);
         return;
       }
@@ -7208,7 +7275,6 @@ export function App() {
         ...current
       ]);
       setCloudAvailable(false);
-      setSaveState('local');
       setStatus(
         `${errorMessage(error, 'Cloud unavailable')} Working locally · save it to your account later.`
       );
@@ -7703,7 +7769,7 @@ export function App() {
       ) {
         accountDocumentUnavailableProjectIdRef.current = null;
       }
-      const [localDocument, remoteResult, lastSyncedVersion] =
+      const [localDocument, remoteResult, lastSyncedVersion, artifactList] =
         await Promise.all([
           loadLocalProject(projectId),
           session
@@ -7711,9 +7777,16 @@ export function App() {
             : Promise.resolve<AccountProjectLoadResult>({
                 document: null
               }),
-          loadLastSyncedVersion(projectId)
+          loadLastSyncedVersion(projectId),
+          // Read alongside the document so the File menu's count is on the
+          // bar from the workspace's first frame, not a round-trip later.
+          listProjectArtifacts(
+            projectId,
+            Boolean(session && cloudProjectIds.has(projectId))
+          )
         ]);
       const remoteDocument = remoteResult.document;
+      setArtifacts(artifactList);
       if (remoteResult.error && localDocument) {
         const needsRepair = isProjectDocumentUnavailableError(
           remoteResult.error
@@ -12743,6 +12816,7 @@ export function App() {
     if (rounded === 0) {
       return;
     }
+    const preview = reusableRegionExtrudePreview.current;
     regionExtrudePreview.clear();
     setPreviewDeferred(false);
     const input = regionExtrudeInputFor(target, exact ?? rounded);
@@ -12786,17 +12860,22 @@ export function App() {
           : 'Checking the selected extrusion…'
       );
       try {
-        const resolved = await resolveCurrentExtrude(
-          {
-            base,
-            input,
-            choice,
-            derive: (document) => geometry.syncOnce(document),
-            ...(faceAttachment ? { faceAttachment } : {})
-          },
-          isCurrent
-        );
-        if (!resolved) return;
+        const options = {
+          base,
+          input,
+          choice,
+          ...(faceAttachment ? { faceAttachment } : {})
+        };
+        const resolved =
+          reuseResolvedExtrudePreview(preview, options) ??
+          (await resolveCurrentExtrude(
+            {
+              ...options,
+              derive: (document) => geometry.syncOnce(document)
+            },
+            isCurrent
+          ));
+        if (!resolved || !isCurrent()) return;
         const command = resolved.command;
         const resultBodyId = command.payload.ids?.bodyId;
         if (!resultBodyId)
@@ -13304,6 +13383,10 @@ export function App() {
    * frame, which also swallowed every later value — including the oversize
    * radius whose refusal the card was waiting to show.
    */
+  const reusableEdgePreview = useRef<{
+    candidate: EdgePreviewCandidate;
+    derived: ProjectDocument['derived'];
+  } | null>(null);
   const edgePreview = useRef(
     new LivePreview<EdgePreviewCandidate, OffsetPreviewResult>({
       build: (size) => {
@@ -13313,6 +13396,8 @@ export function App() {
           return null;
         }
         const current = interactionRef.current;
+        const selectionKey = blendPreviewSelectionKey(current);
+        if (selectionKey === null) return null;
         // Removing a fillet consumes its body on purpose; only a blend that
         // is meant to produce a body is judged on producing one.
         let target: AffectedFeatureTarget | null = null;
@@ -13342,6 +13427,8 @@ export function App() {
           }
         }
         return {
+          command,
+          selectionKey,
           document: command.apply(base),
           size,
           label: command.label,
@@ -13372,17 +13459,23 @@ export function App() {
       },
       publish: (preview) => {
         if (!preview) {
+          reusableEdgePreview.current = null;
           setPreviewDoc(null);
           setPreviewBlendFaces([]);
           return;
         }
         if (preview.derived.rejection) {
+          reusableEdgePreview.current = null;
           reportPreviewFailure(
             preview.derived.rejection.message,
             preview.document.size
           );
           return;
         }
+        reusableEdgePreview.current = {
+          candidate: preview.document,
+          derived: preview.derived.derived
+        };
         setPreviewDoc({
           ...preview.document.document,
           derived: preview.derived.derived
@@ -13398,10 +13491,19 @@ export function App() {
         recoverPreviewInteraction();
         setPreviewDeferred(edgePreview.degraded && edgePreview.lagging);
       },
-      onFailure: ({ error, value }) =>
+      onFailure: ({ error, value }) => {
+        reusableEdgePreview.current = null;
         reportPreviewFailure(
           errorMessage(error, 'Exact blend preview failed.'),
           value
+        );
+      },
+      isCurrent: (candidate) =>
+        canReuseBlendPreview(
+          candidate,
+          managerRef.current?.document,
+          interactionRef.current,
+          candidate.size
         ),
       acceptValue: (size) => {
         const current = interactionRef.current;
@@ -13445,7 +13547,7 @@ export function App() {
   function buildEdgeModifierCommand(
     size: ParamValue,
     baseDocument?: ProjectDocument
-  ): AnyCommand | null {
+  ): BlendCommand | null {
     const currentInteraction = interactionRef.current;
     if (
       currentInteraction.mode === 'face' &&
@@ -13555,9 +13657,22 @@ export function App() {
     if (interaction.mode !== 'edges') {
       return;
     }
-    edgePreview.clear();
     const rounded = Math.round(size * 1000) / 1000;
-    const command = buildEdgeModifierCommand(exact ?? rounded);
+    const cached = reusableEdgePreview.current;
+    const reuse =
+      exact === undefined &&
+      cached &&
+      canReuseBlendPreview(
+        cached.candidate,
+        managerRef.current?.document,
+        interactionRef.current,
+        rounded
+      )
+        ? cached
+        : null;
+    const command =
+      reuse?.candidate.command ?? buildEdgeModifierCommand(exact ?? rounded);
+    edgePreview.clear();
     if (
       !command ||
       rounded <= 0 ||
@@ -13582,6 +13697,14 @@ export function App() {
               bodyId: resultBodyId,
               before: facesBefore
             };
+          }
+        : undefined,
+      undefined,
+      reuse
+        ? {
+            baseProjectId: reuse.candidate.baseProjectId,
+            baseVersion: reuse.candidate.baseVersion,
+            derived: reuse.derived
           }
         : undefined
     );
@@ -13672,7 +13795,15 @@ export function App() {
     if (!imported && feature?.data.featureKind !== 'fillet') {
       return;
     }
-    const command = buildEdgeModifierCommand(exact ?? size, base);
+    const cached = reusableEdgePreview.current;
+    const reuse =
+      exact === undefined &&
+      cached &&
+      canReuseBlendPreview(cached.candidate, base, current, size)
+        ? cached
+        : null;
+    const command =
+      reuse?.candidate.command ?? buildEdgeModifierCommand(exact ?? size, base);
     if (!command) {
       return;
     }
@@ -13821,7 +13952,14 @@ export function App() {
             );
             dispatchInteraction({ type: 'select-face', target: nextTarget });
           },
-      validationTargets
+      validationTargets,
+      reuse
+        ? {
+            baseProjectId: reuse.candidate.baseProjectId,
+            baseVersion: reuse.candidate.baseVersion,
+            derived: reuse.derived
+          }
+        : undefined
     );
   }
 
@@ -17889,6 +18027,8 @@ export function App() {
                 recognitionQuery={importedFaceRecognitionQuery}
                 recognitionCache={importedFaceRecognitionCache}
                 recognitionWorker={geometry}
+                massPropertiesDocument={doc}
+                massPropertiesWorker={geometry}
                 onLaunchTool={launchTool}
                 onSelectBodies={handleSelectBodiesFromPickList}
                 onPreviewBodyAppearance={previewBodyAppearance}
