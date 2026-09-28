@@ -83,7 +83,13 @@ export interface InspectorCallbacks {
   onLaunchTool(tool: ToolId): void;
   /** The boolean pick list edits the viewport's body selection in place. */
   onSelectBodies(bodyIds: BodyId[]): void;
+  /** Escape and the forms' Cancel: back to nothing selected. */
   onCancel(): void;
+  /**
+   * The header's close button: closes the panel and keeps the selection.
+   * Falls back to `onCancel` when absent.
+   */
+  onClose?(): void;
   /** Verbatim reason the last exact rebuild refused this form's operation. */
   commitError?: string | null;
   onCreatePrimitive(
@@ -1840,9 +1846,9 @@ export function Inspector(props: InspectorProps) {
           <button
             type="button"
             className="icon-button panel-close"
-            title="Close (Esc)"
+            title="Close"
             aria-label="Close panel"
-            onClick={props.onCancel}
+            onClick={props.onClose ?? props.onCancel}
           >
             <X size={14} aria-hidden="true" />
           </button>

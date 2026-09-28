@@ -154,10 +154,16 @@ Closes P0-2 and P0-3 and the real content of §8. Assumes phase 1.
 - The chip and the keypad are two renderings of `CommandSession.value`; nothing
   else offers an editable copy of it.
 - One commit contract everywhere: `Enter` and the commit control commit, `Esc`
-  and cancel revert, and the existing innermost-first Escape ladder
-  (`escapeTarget()`) is extended rather than paralleled. Release-to-commit
-  survives only where the command has no options to set, and stays behind
-  validate-before-commit per D6.
+  and cancel revert, and `escapeTarget()` stays the one source for what
+  Escape does rather than being paralleled. Outside a sketch one press from
+  any direct edit or command returns to nothing selected — card, preview,
+  handle value, refusal, a region's profiles and the selection together —
+  keeping only the rungs that hold the keyboard: open exact entry (or a
+  focused field) closes first, a drag still held by the pointer cancels in
+  place, and the command bar keeps its own clear-then-dismiss. Inside a
+  sketch the innermost-first ladder (chain, pick sequence, tool, selection,
+  sketch) is unchanged. Release-to-commit survives only where the command
+  has no options to set, and stays behind validate-before-commit per D6.
 - Label the commit control (`Apply`, or the operation's verb). Keep `Enter`.
 - Collision-aware placement for the chip and keypad so exact entry stops
   covering the geometry it edits, including near the inspector edge.
