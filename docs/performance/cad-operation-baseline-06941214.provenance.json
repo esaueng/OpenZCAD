@@ -1,0 +1,21 @@
+{
+  "session": "main-06941214",
+  "provenance": {
+    "sourceSha": "06941214bb4907bcdbb848c9d5de0267f0765bbc",
+    "adapterSourceSha256": "99a2ffc3439985ad557a3fb5fac081ecd84c0cab37b8c14b358b47ea4d75ccaa",
+    "wasmSha256": "c5d8ccb26bff7cdc2ccff5c09fc0bd8ed3ccad07af1aa6cfd4d5da5926ddcdda",
+    "wasmBytes": 9220373,
+    "remusLockLine": "  remus-wasm@https://codeload.github.com/esaueng/remus/tar.gz/bf46fdc0af611d480bf0830ff1da6c475d8b96c9#path:/crates/wasm/pkg:",
+    "node": "v24.14.0",
+    "platform": "linux",
+    "arch": "x64"
+  },
+  "historyNormalization": "Warm adapter output compared with fresh adapter checkpointing disabled; omitted volatile update timestamp and rebuild-local blendRegionKey; tessellation summarized by triangle count.",
+  "caveats": [
+    "Installed WASM SHA-256 is c5d8ccb26bff7cdc2ccff5c09fc0bd8ed3ccad07af1aa6cfd4d5da5926ddcdda (bf46fdc0 package).",
+    "Five edited samples: nearest-rank p95 equals the maximum sample and is descriptive only.",
+    "Shared host had unrelated native jobs during the run; latency is machine-load sensitive and is not a guarantee.",
+    "Adapter timing excludes worker messaging, React scheduling, mesh projection, and viewport rendering.",
+    "Baseline adapter source was read from immutable source SHA 06941214bb4907bcdbb848c9d5de0267f0765bbc; raw rows and progress events remain in local /tmp output."
+  ]
+}

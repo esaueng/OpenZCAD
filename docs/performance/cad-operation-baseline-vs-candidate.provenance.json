@@ -1,0 +1,37 @@
+{
+  "baseline": {
+    "session": "main-06941214",
+    "sourceSha": "06941214bb4907bcdbb848c9d5de0267f0765bbc",
+    "adapterSourceSha256": "99a2ffc3439985ad557a3fb5fac081ecd84c0cab37b8c14b358b47ea4d75ccaa",
+    "wasmSha256": "c5d8ccb26bff7cdc2ccff5c09fc0bd8ed3ccad07af1aa6cfd4d5da5926ddcdda",
+    "wasmBytes": 9220373,
+    "remusLockLine": "  remus-wasm@https://codeload.github.com/esaueng/remus/tar.gz/bf46fdc0af611d480bf0830ff1da6c475d8b96c9#path:/crates/wasm/pkg:",
+    "node": "v24.14.0",
+    "platform": "linux",
+    "arch": "x64"
+  },
+  "candidate": {
+    "session": "main-b90a7c3b",
+    "sourceSha": "b90a7c3be1a51bc1ef7c655eb0e9847c2aa38ff7",
+    "adapterSourceSha256": "90534a80723760dd5e4126bd7910c987eccdff3cb58649627da19b0d95850cf0",
+    "wasmSha256": "c5d8ccb26bff7cdc2ccff5c09fc0bd8ed3ccad07af1aa6cfd4d5da5926ddcdda",
+    "wasmBytes": 9220373,
+    "remusLockLine": "  remus-wasm@https://codeload.github.com/esaueng/remus/tar.gz/bf46fdc0af611d480bf0830ff1da6c475d8b96c9#path:/crates/wasm/pkg:",
+    "node": "v24.14.0",
+    "platform": "linux",
+    "arch": "x64"
+  },
+  "comparison": {
+    "sameInstalledWasm": true,
+    "sampleCount": 5,
+    "join": "family + history feature count + warm phase",
+    "parity": "all candidate warm edit samples matched fresh adapter with checkpointing disabled",
+    "limitations": [
+      "Runs shared a host with unrelated native jobs; wall-time deltas are load-sensitive observations, not guarantees or causal attribution.",
+      "Five-sample nearest-rank p95 is the maximum observation, not a stable tail estimate.",
+      "Adapter timings exclude worker messaging, React scheduling, mesh projection, and viewport rendering.",
+      "Baseline source is immutable 06941214; candidate checkout HEAD is b90a7c3b and contains adapter source ae75a23c plus other committed frontend changes. Adapter-source SHA-256 separately identifies the measured adapter files.",
+      "Cold phase is adapter/history cold after WASM module loading; it excludes WASM download, compilation, and instantiation."
+    ]
+  }
+}
