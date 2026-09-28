@@ -2582,9 +2582,11 @@ export function ModelViewer({
         event.key === 'Escape' &&
         cancelDirectManipulationRef.current?.() === true
       ) {
-        // The viewport owns an active captured pointer. Retire it before the
-        // workspace's normal Esc ladder can interpret the same key as
-        // "clear the armed selection".
+        // The viewport owns an active captured pointer. Retiring it is the
+        // one Escape rung a held drag keeps outside a sketch: the cancel
+        // callbacks put the command back to a clean armed state (preview,
+        // handle value and any refusal dropped), and the workspace must not
+        // also read this press as "return to nothing selected".
         event.preventDefault();
         event.stopPropagation();
       }
