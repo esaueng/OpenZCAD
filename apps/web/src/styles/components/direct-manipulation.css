@@ -12,33 +12,27 @@
    it. Rows cannot collide. The single flex row this replaces could not
    survive a narrow viewport: the action tabs do not shrink, so the copy was
    squeezed to two characters ("R…", "Dr…") and the tabs still overflowed
-   across the pill. */
+   across the pill.
+   It is the first card of the right lane (AppShell's command slot,
+   quiet-stage.css), as wide as the lane, so the drawer yields below it
+   rather than being painted over. The width never follows the content:
+   the hint and the phase pill change on every phase, and the copy
+   truncates inside a stable box instead. */
 .tool-card {
-  position: absolute;
-  top: 14px;
-  left: 50%;
-  z-index: calc(var(--z-inspector-float) + 1);
+  position: relative;
   display: grid;
   grid-template-columns: auto minmax(0, 1fr) auto;
   align-items: start;
   column-gap: 10px;
   row-gap: 8px;
   box-sizing: border-box;
-  /* Centred on the viewport, so the width may not follow the content: the
-     hint and the phase pill change on every phase and both edges would move
-     with them. The copy truncates inside a stable box instead. The room the
-     layout leaves is set where the shell knows it (workspace-column.css and
-     the docked-panel rule below). */
-  --tool-card-room: calc(100% - 20px);
-  width: clamp(280px, var(--tool-card-room), 460px);
-  max-width: calc(100% - 20px);
+  width: 100%;
   padding: 8px 8px 8px 10px;
   color: var(--color-text);
   background: var(--color-surface-2);
   border: 1px solid var(--color-border-strong);
   border-radius: var(--radius-md);
   box-shadow: 0 14px 34px rgba(0, 0, 0, 0.4);
-  transform: translateX(-50%);
   animation: tool-card-in 140ms ease-out;
 }
 
@@ -64,24 +58,14 @@
   grid-row: 1;
 }
 
-/* A face pick opens the inspector at the same moment it raises this card, so
-   centring on the whole shell put the card's close button over the panel
-   title at every width under ~1600px. With a panel docked, the card centres
-   on the room between the tool palette and the panel. 170px is the palette's
-   footprint incl. its gap. */
-.viewer-area.has-inspector .tool-card {
-  --tool-card-room: calc(100% - 170px - var(--context-w) - 30px);
-  left: max(170px, calc(170px + var(--tool-card-room) / 2));
-}
-
 @keyframes tool-card-in {
   from {
     opacity: 0;
-    transform: translateX(-50%) translateY(-6px);
+    transform: translateY(-6px);
   }
   to {
     opacity: 1;
-    transform: translateX(-50%) translateY(0);
+    transform: translateY(0);
   }
 }
 
@@ -1601,13 +1585,11 @@
   width: auto;
 }
 
+/* The Extrude editor is the tallest card: it scrolls inside the lane's
+   command slot rather than running under the drawer. */
 .tool-card:has(.extrude-form) {
-  left: auto;
-  right: 14px;
-  transform: none;
   animation: none;
-  width: 310px;
-  max-height: calc(100% - 100px);
+  max-height: 100%;
   overflow-y: auto;
 }
 

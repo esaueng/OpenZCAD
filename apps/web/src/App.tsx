@@ -1054,10 +1054,11 @@ import {
   saveLocalAppSettings,
   shouldAdoptAccountSettings
 } from './lib/appSettings';
+import { usePanelSuspension } from './hooks/usePanelSuspension';
 import {
   loadPanelState,
   savePanelState,
-  toggleDrawerSection,
+  toggleDrawerSectionAsShown,
   toggleSidebarSection,
   type PanelState,
   type SidebarSectionId,
@@ -2158,6 +2159,20 @@ export function App() {
   // `idle` render it was constructed during.
   const interactionRef = useRef(interaction);
   interactionRef.current = interaction;
+  // A sketch or a drag takes the stage: the drawer and the "More tools" fold
+  // step aside for it and return when it ends, the preference untouched.
+  // The viewer reports the gesture's pointer, which outlasts a refused
+  // mid-drag value; it only counts while an operation is armed.
+  const [directDragPointer, setDirectDragPointer] = useState(false);
+  if (directDragPointer && !isOperationState(interaction)) {
+    // A cleared operation ends its gesture, whatever the viewer said last.
+    setDirectDragPointer(false);
+  }
+  const panels = usePanelSuspension(panelState, {
+    sketching: interaction.mode === 'sketch',
+    phase: isOperationState(interaction) ? interaction.phase : null,
+    pointerDown: directDragPointer && isOperationState(interaction)
+  });
   const toolRef = useRef(tool);
   toolRef.current = tool;
   /** Open exact-value entry (anchored keypad) for the armed handle. */
@@ -16503,13 +16518,17 @@ export function App() {
         activeTool={tool}
         availability={availability}
         onLaunchTool={launchTool}
-        moreOpen={panelState.commandFoldOpen}
-        onToggleMore={() =>
+        moreOpen={panels.commandFoldOpen}
+        onToggleMore={() => {
+          // Suspended, the fold shows closed, so a press opens it — and
+          // keeps it open for the rest of the drag.
+          const hidden = panels.foldHidden;
           setPanelState((current) => ({
             ...current,
-            commandFoldOpen: !current.commandFoldOpen
-          }))
-        }
+            commandFoldOpen: hidden || !current.commandFoldOpen
+          }));
+          if (hidden) panels.release('fold');
+        }}
       />
     );
   // The parts list is View's panel and Tweak's too; both rails share it.
@@ -16792,8 +16811,7 @@ export function App() {
                     ] as const
                   ).map(([section, label, Icon]) => {
                     const showing =
-                      panelState.drawerOpen &&
-                      panelState.sidebarSections[section];
+                      panels.drawerOpen && panelState.sidebarSections[section];
                     return (
                       <button
                         key={section}
@@ -16802,11 +16820,16 @@ export function App() {
                         aria-label={`${label} panel`}
                         aria-pressed={showing}
                         title={label}
-                        onClick={() =>
+                        onClick={() => {
+                          // A press while a sketch or drag has the drawer
+                          // stepped aside is the user asking for it back:
+                          // it opens, and stays for the rest of the mode.
+                          const hidden = panels.drawerHidden;
                           setPanelState((current) =>
-                            toggleDrawerSection(current, section)
-                          )
-                        }
+                            toggleDrawerSectionAsShown(current, section, hidden)
+                          );
+                          if (hidden) panels.release('drawer');
+                        }}
                       >
                         <Icon size={16} aria-hidden="true" />
                       </button>
@@ -16904,11 +16927,12 @@ export function App() {
             onEdgeCommit={handleEdgeCommit}
             onEdgeCancel={handleEdgeCancel}
             onOpenEdgeKeypad={handleOpenEdgeKeypad}
-            onDirectManipulationChange={(dragging) =>
+            onDirectManipulationChange={(dragging) => {
+              setDirectDragPointer(dragging);
               dispatchInteraction({
                 type: dragging ? 'drag-engage' : 'drag-release'
-              })
-            }
+              });
+            }}
             sketchMode={modelingLocked ? null : sketchModeState}
             onSketchCommit={handleSketchCommit}
             onEditSketchDimension={handleEditSketchDimension}
@@ -17030,108 +17054,8 @@ export function App() {
                 </>
               ) : contextualToolCard ? (
                 <>
-                  {!hideSketchToolCard && (
-                    <ToolCard
-                      model={contextualToolCard}
-                      cancelableWhileValidating={interaction.mode === 'region'}
-                      children={
-                        interaction.mode === 'region' ? (
-                          <ExtrudeForm
-                            key={`extrude-${interaction.target.sketchId}`}
-                            creating
-                            initial={{
-                              name: 'Extrude',
-                              sketchId: interaction.target.sketchId as SketchId,
-                              distance: 0
-                            }}
-                            sketches={sketchOptions}
-                            scope={parameterScope.scope}
-                            profileCount={Math.max(1, selectedProfiles.length)}
-                            bodies={doc.bodyOrder.flatMap((bodyId) => {
-                              const body =
-                                doc.derived.bodyRepresentations[bodyId];
-                              return body && !body.consumed
-                                ? [{ bodyId, name: body.name }]
-                                : [];
-                            })}
-                            disabled={
-                              geometryBusy || interaction.phase === 'validating'
-                            }
-                            submitLabel="Create"
-                            distanceSetterRef={regionDistanceSetter}
-                            onDraft={(value) => {
-                              regionExtrudeSettings.current = value;
-                              dispatchInteraction({
-                                type: 'set-extrude-choice',
-                                choice: value.choice
-                              });
-                            }}
-                            onPreview={(value) => {
-                              regionExtrudePreview.clear();
-                              setLastValidPreview(null);
-                              if (!value) return;
-                              offsetSetterRef.current?.(
-                                resolveParamValue(
-                                  value.distance,
-                                  parameterScope.scope
-                                )
-                              );
-                              dispatchInteraction({
-                                type: 'set-extrude-choice',
-                                choice: value.choice
-                              });
-                              regionExtrudePreview.request(
-                                resolveParamValue(
-                                  value.distance,
-                                  parameterScope.scope
-                                )
-                              );
-                            }}
-                            onSubmit={(value) => {
-                              regionExtrudeSettings.current = value;
-                              handleRegionExtrudeCommit(
-                                resolveParamValue(
-                                  value.distance,
-                                  parameterScope.scope
-                                ),
-                                value.distance
-                              );
-                            }}
-                            onCancel={() => {
-                              if (cancelPendingRegionExtrusion()) return;
-                              regionExtrudePreview.clear();
-                              dispatchInteraction({ type: 'clear' });
-                              cancelPanel();
-                            }}
-                            onDistance={(value) =>
-                              handleOpenOffsetKeypad(
-                                resolveParamValue(value, parameterScope.scope)
-                              )
-                            }
-                          />
-                        ) : undefined
-                      }
-                      onAction={handleSelectionAction}
-                      onEditCulprit={handleEditCulpritFeature}
-                      onViewDetails={() => setActivityLogOpen(true)}
-                      {...(keepLastValid ? { keepLastValid } : {})}
-                      // Never up in sketch mode (the column header names the
-                      // sketch), so a close is always a clear.
-                      onClose={() => {
-                        if (cancelPendingRegionExtrusion()) return;
-                        if (
-                          interaction.mode !== 'idle' &&
-                          interaction.phase === 'dragging'
-                        ) {
-                          cancelDirectManipulationRef.current?.();
-                          if (interaction.mode === 'edges') {
-                            handleEdgeCancel();
-                          }
-                        }
-                        dispatchInteraction({ type: 'clear' });
-                      }}
-                    />
-                  )}
+                  {/* The tool card itself rides the right lane (`command` below);
+                      the keypad stays anchored to its value on the viewport. */}
                   {keypad && (
                     <NumericKeypad
                       request={keypad}
@@ -17381,18 +17305,6 @@ export function App() {
                     </button>
                   </span>
                 </div>
-              ) : selectedProfiles.length > 0 && selectedSketchProfileName ? (
-                <ProfileQuickAction
-                  profileName={selectedSketchProfileName}
-                  profileCount={selectedProfiles.length}
-                  onExtrude={() =>
-                    startExtrude(selectedProfiles[0]!.sketchId as SketchId)
-                  }
-                  onDismiss={() => {
-                    setSelectedProfiles([]);
-                    setSelectedSketchProfileId(null);
-                  }}
-                />
               ) : null
             }
             projection={projection}
@@ -17453,7 +17365,123 @@ export function App() {
         </ErrorBoundary>
       }
       drawer={
-        !viewMode && !tweakMode && panelState.drawerOpen ? modelBrowser : null
+        !viewMode && !tweakMode && panels.drawerOpen ? modelBrowser : null
+      }
+      // Every command card anchors at the top of the right lane, the
+      // drawer yielding below it. The same precedence as the viewport's
+      // mode overlays: a live operation first, and the closed-profile quick
+      // action only when no plane prompt, Move or revert pill is up.
+      command={
+        modelingLocked ? null : contextualToolCard ? (
+          hideSketchToolCard ? null : (
+            <ToolCard
+              model={contextualToolCard}
+              cancelableWhileValidating={interaction.mode === 'region'}
+              children={
+                interaction.mode === 'region' ? (
+                  <ExtrudeForm
+                    key={`extrude-${interaction.target.sketchId}`}
+                    creating
+                    initial={{
+                      name: 'Extrude',
+                      sketchId: interaction.target.sketchId as SketchId,
+                      distance: 0
+                    }}
+                    sketches={sketchOptions}
+                    scope={parameterScope.scope}
+                    profileCount={Math.max(1, selectedProfiles.length)}
+                    bodies={doc.bodyOrder.flatMap((bodyId) => {
+                      const body = doc.derived.bodyRepresentations[bodyId];
+                      return body && !body.consumed
+                        ? [{ bodyId, name: body.name }]
+                        : [];
+                    })}
+                    disabled={
+                      geometryBusy || interaction.phase === 'validating'
+                    }
+                    submitLabel="Create"
+                    distanceSetterRef={regionDistanceSetter}
+                    onDraft={(value) => {
+                      regionExtrudeSettings.current = value;
+                      dispatchInteraction({
+                        type: 'set-extrude-choice',
+                        choice: value.choice
+                      });
+                    }}
+                    onPreview={(value) => {
+                      regionExtrudePreview.clear();
+                      setLastValidPreview(null);
+                      if (!value) return;
+                      offsetSetterRef.current?.(
+                        resolveParamValue(value.distance, parameterScope.scope)
+                      );
+                      dispatchInteraction({
+                        type: 'set-extrude-choice',
+                        choice: value.choice
+                      });
+                      regionExtrudePreview.request(
+                        resolveParamValue(value.distance, parameterScope.scope)
+                      );
+                    }}
+                    onSubmit={(value) => {
+                      regionExtrudeSettings.current = value;
+                      handleRegionExtrudeCommit(
+                        resolveParamValue(value.distance, parameterScope.scope),
+                        value.distance
+                      );
+                    }}
+                    onCancel={() => {
+                      if (cancelPendingRegionExtrusion()) return;
+                      regionExtrudePreview.clear();
+                      dispatchInteraction({ type: 'clear' });
+                      cancelPanel();
+                    }}
+                    onDistance={(value) =>
+                      handleOpenOffsetKeypad(
+                        resolveParamValue(value, parameterScope.scope)
+                      )
+                    }
+                  />
+                ) : undefined
+              }
+              onAction={handleSelectionAction}
+              onEditCulprit={handleEditCulpritFeature}
+              onViewDetails={() => setActivityLogOpen(true)}
+              {...(keepLastValid ? { keepLastValid } : {})}
+              // Never up in sketch mode (the column header names the
+              // sketch), so a close is always a clear.
+              onClose={() => {
+                if (cancelPendingRegionExtrusion()) return;
+                if (
+                  interaction.mode !== 'idle' &&
+                  interaction.phase === 'dragging'
+                ) {
+                  cancelDirectManipulationRef.current?.();
+                  if (interaction.mode === 'edges') {
+                    handleEdgeCancel();
+                  }
+                }
+                dispatchInteraction({ type: 'clear' });
+              }}
+            />
+          )
+        ) : !revertPill &&
+          !movePreview &&
+          tool !== 'sketch' &&
+          selectedProfiles.length > 0 &&
+          selectedSketchProfileName ? (
+          <ProfileQuickAction
+            profileName={selectedSketchProfileName}
+            profileCount={selectedProfiles.length}
+            onExtrude={() =>
+              startExtrude(selectedProfiles[0]!.sketchId as SketchId)
+            }
+            onDismiss={() => {
+              setSelectedProfiles([]);
+              setSelectedSketchProfileId(null);
+            }}
+          />
+        ) : null
       }
       inspector={
         inspectorActive ? (

@@ -969,6 +969,27 @@ export async function seedOpenCommandFold(page: Page) {
   });
 }
 
+/**
+ * A sketch (like a drag) takes the stage: the model drawer steps aside while
+ * it lasts, whatever the suite seeded. A spec that reads the drawer from
+ * inside a sketch asks for it the way a user would — the rail button — which
+ * keeps it up for the rest of that sketch. A no-op when it already shows.
+ */
+export async function revealModelDrawer(
+  page: Page,
+  section: 'History' | 'Parameters' | 'Items' = 'History'
+) {
+  const drawer = page.locator('.model-drawer-float');
+  if ((await drawer.count()) > 0) {
+    return;
+  }
+  await page
+    .getByRole('toolbar', { name: 'Model panels' })
+    .getByRole('button', { name: `${section} panel` })
+    .click();
+  await expect(drawer).toBeVisible();
+}
+
 export async function createProject(page: Page, name: string) {
   await page.goto('/');
   await page.getByLabel('Project name').fill(name);

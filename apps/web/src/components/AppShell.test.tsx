@@ -69,6 +69,43 @@ describe('AppShell', () => {
     }
   });
 
+  it('anchors the command card at the top of the right lane, over the inspector and drawer', () => {
+    const props = {
+      topBar: <header>top</header>,
+      toolBar: null,
+      sidebar: null,
+      viewer: <div className="viewer-shell">viewer</div>,
+      inspector: <section>panel</section>,
+      drawer: <aside>drawer</aside>,
+      assistant: null,
+      sidebarWidth: 252,
+      assistantWidth: 360
+    };
+    const { container, rerender } = render(
+      <AppShell {...props} command={<div className="tool-card">card</div>} />
+    );
+    const area = container.querySelector('.viewer-area');
+    expect(area?.classList.contains('has-command')).toBe(true);
+    const lane = [
+      ...(container.querySelector('.stage-right')?.children ?? [])
+    ].map((child) => child.className);
+    // One lane, the card first and the drawer yielding below it.
+    expect(lane).toEqual([
+      'command-float',
+      'inspector-float',
+      'model-drawer-float'
+    ]);
+    // The card is never a viewport overlay.
+    expect(container.querySelector('.viewer-shell .tool-card')).toBeNull();
+
+    const inspector = container.querySelector('.inspector-float section');
+    rerender(<AppShell {...props} command={null} />);
+    expect(area?.classList.contains('has-command')).toBe(false);
+    expect(container.querySelector('.command-float')).toBeNull();
+    // The card leaving does not remount the inspector's form.
+    expect(container.querySelector('.inspector-float section')).toBe(inspector);
+  });
+
   it('floats the column and its splitter over the viewport, with no status row', () => {
     const { container } = renderShell(null);
     expect(
