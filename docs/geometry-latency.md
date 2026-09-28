@@ -16,7 +16,7 @@ This change removes redundant work from four measured paths:
   Copies are JS-owned, keyed by kernel/solid/tessellation settings, consumed once
   and capped at 8 MiB total. Allocation or budget failure falls back to normal
   tessellation without changing the union verdict. Validation remains intact.
-- Remus 2026.1.4 computes curved face area without discarded positional moments.
+- The integrated Remus 2026.1.5 pin computes curved face area without discarded positional moments.
   Quadrature, trim domain and errors are unchanged. The native area getter's
   Criterion estimate is 1.9670 → 0.79225 ms on a representative fillet face;
   this alone is not a whole-operation speedup claim.
@@ -38,7 +38,7 @@ geometry jobs were active on the shared host. Small differences are noise-sensit
 The baseline is OpenZCAD `24f1d66e` with Remus `fe3c8efa` (2026.1.3). The
 candidate is OpenZCAD `7c7d75bd` with Remus `96acaccf` (2026.1.4). This compares
 the combined changes; it does not isolate each optimization's contribution.
-The final integrated pin `48ccbe84` also includes the split-rim area fix; these
+The final integrated pin `6d1d9c6c` also includes the split-rim area fix; these
 earlier timings do not measure that final binary.
 The [provenance](performance/geometry-latency-2026-09-28.provenance.json)
 records full source identities and installed binary hashes. The harness's
