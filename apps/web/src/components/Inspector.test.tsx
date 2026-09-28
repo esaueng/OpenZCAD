@@ -5,6 +5,7 @@ import type {
   BodyId,
   BodyRepresentation,
   FeatureNode,
+  ProjectDocument,
   TopologySelection
 } from '@openzcad/shared';
 import { createProjectDocument } from '@openzcad/document-core';
@@ -488,7 +489,15 @@ describe('on-demand mass properties in Inspector', () => {
     })} />);
     expect(worker.massProperties).not.toHaveBeenCalled();
     fireEvent.click(screen.getByText('Mass properties (at unit density)'));
-    await waitFor(() => expect(worker.massProperties).toHaveBeenCalledWith(document, bodyId));
+    await waitFor(() => expect(worker.massProperties).toHaveBeenCalledOnce());
+    const massCall = worker.massProperties.mock.calls[0] as unknown as [
+      ProjectDocument,
+      BodyId,
+      { signal: AbortSignal }
+    ];
+    expect(massCall[0]).toBe(document);
+    expect(massCall[1]).toBe(bodyId);
+    expect(massCall[2].signal).toBeInstanceOf(AbortSignal);
     expect(screen.getByText('Measuring mass properties…')).toBeInTheDocument();
     await act(async () => {
       resolve({ status: 'ready', properties: body.massProperties!, epoch: 1 });
@@ -524,7 +533,13 @@ describe('on-demand mass properties in Inspector', () => {
     const view = render(<Inspector {...props} />);
     fireEvent.click(screen.getByText('Mass properties (at unit density)'));
     await waitFor(() => expect(worker.massProperties).toHaveBeenCalledTimes(1));
+    const firstSignal = (worker.massProperties.mock.calls[0] as unknown as [
+      ProjectDocument,
+      BodyId,
+      { signal: AbortSignal }
+    ])[2].signal;
     view.rerender(<Inspector {...props} massPropertiesDocument={second} />);
+    expect(firstSignal.aborted).toBe(true);
     await waitFor(() => expect(screen.getByText('No live solid is available.')).toBeInTheDocument());
     await act(async () => {
       resolveFirst({ status: 'ready', properties: body.massProperties!, epoch: 1 });
@@ -533,6 +548,12 @@ describe('on-demand mass properties in Inspector', () => {
 
     const changedBody = { ...lazyBody, name: 'Changed bracket' };
     view.rerender(<Inspector {...props} selectedBody={changedBody} massPropertiesDocument={second} />);
+    const secondSignal = (worker.massProperties.mock.calls[1] as unknown as [
+      ProjectDocument,
+      BodyId,
+      { signal: AbortSignal }
+    ])[2].signal;
+    expect(secondSignal.aborted).toBe(true);
     await waitFor(() => expect(screen.getByText('Mass measurement failed: Kernel request failed')).toBeInTheDocument());
   });
 });

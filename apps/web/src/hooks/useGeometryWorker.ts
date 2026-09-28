@@ -88,8 +88,8 @@ function postSync(
 }
 
 /** Cancellation rejection, named so callers can tell it from a failure. */
-function abortError(): Error {
-  const error = new Error('Export cancelled.');
+function abortError(message = 'Export cancelled.'): Error {
+  const error = new Error(message);
   error.name = 'AbortError';
   return error;
 }
@@ -161,7 +161,8 @@ export interface GeometryWorkerApi {
   /** Queries live geometry; a stale derived-cache hit restores exact history first. */
   massProperties(
     document: ProjectDocument,
-    bodyId: BodyId
+    bodyId: BodyId,
+    options?: { signal?: AbortSignal }
   ): Promise<MassPropertiesRead>;
   /**
    * The exact, kernel-computed section at one plane — section curves, not the
@@ -765,15 +766,35 @@ export function useGeometryWorker(host: GeometryWorkerHost): GeometryWorkerApi {
       }
       return posted.promise;
     },
-    massProperties(document, bodyId) {
+    massProperties(document, bodyId, options) {
+      if (options?.signal?.aborted) {
+        return Promise.reject(abortError('Mass measurement cancelled.'));
+      }
       const posted = postRequest(massPropertiesRequests.current, {
         type: 'mass-properties',
         document: documentForWorker(document),
         bodyId
       });
-      return posted.ok
-        ? posted.promise
-        : Promise.reject(new Error('Geometry worker is unavailable.'));
+      if (!posted.ok) {
+        return Promise.reject(new Error('Geometry worker is unavailable.'));
+      }
+      const signal = options?.signal;
+      if (!signal) return posted.promise;
+      const onAbort = () => {
+        const pending = massPropertiesRequests.current.get(posted.requestId);
+        if (!pending) return;
+        massPropertiesRequests.current.delete(posted.requestId);
+        armedRef.current = true;
+        workerRef.current?.postMessage({
+          type: 'cancel',
+          requestId: posted.requestId
+        });
+        pending.reject(abortError('Mass measurement cancelled.'));
+      };
+      signal.addEventListener('abort', onAbort, { once: true });
+      return posted.promise.finally(() => {
+        signal.removeEventListener('abort', onAbort);
+      });
     },
     sectionOutline(document, plane, bodyIds) {
       const worker = workerRef.current;

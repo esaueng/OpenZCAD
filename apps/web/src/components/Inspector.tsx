@@ -193,7 +193,8 @@ export interface InspectorCallbacks {
   massPropertiesWorker?: {
     massProperties: (
       document: ProjectDocument,
-      bodyId: BodyId
+      bodyId: BodyId,
+      options?: { signal?: AbortSignal }
     ) => Promise<MassPropertiesRead>;
   };
   /**
@@ -388,6 +389,7 @@ function BodyStats({
   useEffect(() => {
     if (!massOpen || body.massProperties) return;
     let active = true;
+    const controller = new AbortController();
     if (!document || !workerRef.current) {
       setQuery({
         document,
@@ -399,7 +401,7 @@ function BodyStats({
     }
     setQuery({ document, body, status: 'pending' });
     void workerRef.current
-      .massProperties(document, body.bodyId)
+      .massProperties(document, body.bodyId, { signal: controller.signal })
       .then((result) => {
         if (!active) return;
         setQuery(
@@ -430,6 +432,7 @@ function BodyStats({
       });
     return () => {
       active = false;
+      controller.abort();
     };
   }, [massOpen, document, body]);
   const size = {

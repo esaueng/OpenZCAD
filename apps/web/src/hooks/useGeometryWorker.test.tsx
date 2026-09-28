@@ -63,6 +63,36 @@ describe('useGeometryWorker', () => {
     await expect(pending).resolves.toEqual(unavailable);
     expect(host.onDerived).not.toHaveBeenCalled();
   });
+
+  it('cancels an obsolete queued mass query and discards its late reply', async () => {
+    installWorker();
+    const document = createProjectDocument('Mass query', toUserId('user'));
+    const bodyId = toBodyId('body_mass');
+    const host = { manager: () => null, onDerived: vi.fn(), onError: vi.fn() };
+    const { result } = renderHook(() => useGeometryWorker(host));
+    const worker = FakeWorker.instances[0]!;
+    const controller = new AbortController();
+    const pending = result.current.massProperties(document, bodyId, {
+      signal: controller.signal
+    });
+    const request = worker.postMessage.mock.calls.at(-1)![0] as {
+      requestId: string;
+    };
+    controller.abort();
+    await expect(pending).rejects.toMatchObject({ name: 'AbortError' });
+    expect(worker.postMessage).toHaveBeenLastCalledWith({
+      type: 'cancel',
+      requestId: request.requestId
+    });
+    act(() => {
+      worker.emit({
+        type: 'mass-properties', ok: true,
+        requestId: request.requestId,
+        result: { status: 'unavailable', code: 'unsupported', reason: 'stale', epoch: 1 }
+      });
+    });
+    expect(host.onDerived).not.toHaveBeenCalled();
+  });
   it('preserves selected analysis on one-off sync requests', async () => {
     installWorker();
     const document = createProjectDocument('Analysis', toUserId('user'));
