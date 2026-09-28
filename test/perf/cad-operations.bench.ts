@@ -375,7 +375,9 @@ async function fixtureFor(
 }
 
 function identity() {
-  const require = createRequire(import.meta.url);
+  const require = createRequire(
+    resolve('packages/kernel-adapter/package.json')
+  );
   const wasmPath = require.resolve('remus-wasm/remus_wasm_bg.wasm');
   const lock = readFileSync('pnpm-lock.yaml', 'utf8');
   const remusLockLine = lock
