@@ -153,7 +153,9 @@ import { dot, length, subtract, uniformScaleMatrix } from './exact-math';
 import { displayTessellationForExtents } from './display-tessellation';
 import {
   MAX_HISTORY_CHECKPOINTS,
+  MAX_HISTORY_REPLAY_WORK,
   cloneBuildState,
+  historyCheckpointIndices,
   historyFeatureDigest,
   historyScopeDigest,
   measuredShapeBytes,
@@ -747,14 +749,16 @@ export class RemusKernelAdapter implements ExactKernelAdapter {
    * The adapter-owned history kernel and its retained prefix table, shared by
    * sync, export, mesh-quality and imported-face recognition. Operations that
    * allocate scratch restore the last retained prefix before returning.
-   * Invariant: `historyCheckpoints[i].checkpointId === i`,
-   * because checkpoints are taken in feature order and `restore(k)` truncates
-   * the kernel's stack to `k + 1` while the table is sliced in lockstep.
+   * Invariant: `historyCheckpoints[i].checkpointId === i`. Each entry owns
+   * digests for every feature since the preceding checkpoint, so a changed
+   * feature between sparse checkpoints cannot leave a later snapshot valid.
+   * `restore(k)` truncates the kernel stack and table in lockstep.
    */
   private historyKernel: RemusKernel | null = null;
   private historyCheckpoints: HistoryCheckpointEntry[] = [];
   private historyScopeKey: string | null = null;
   private historyProjectId: ProjectDocument['projectId'] | null = null;
+  private historyReplayWork = 0;
 
   /**
    * Per-body measure-pass cache; see {@link MeasuredBodyCacheEntry} for the
@@ -783,6 +787,7 @@ export class RemusKernelAdapter implements ExactKernelAdapter {
     this.historyCheckpoints = [];
     this.historyScopeKey = null;
     this.historyProjectId = null;
+    this.historyReplayWork = 0;
     this.measuredShapeCache.clear();
     this.measuredShapeCacheBytes = 0;
     if (this.historyKernel) {
@@ -840,24 +845,29 @@ export class RemusKernelAdapter implements ExactKernelAdapter {
     restored: number;
     /** Strict verdicts the union gate established, keyed by kernel handle. */
     strictVerdicts: StrictUnionVerdicts;
+    recycleReason?: 'replay-budget';
   } {
     const features = listFeaturesInOrder(document);
-    // Slice keeps the established integer-count meaning of the option: a
-    // fractional budget retains only complete prefixes; nonpositive/NaN
-    // budgets retain none. Never digest or advertise an uncached suffix.
-    const retainedFeatures = features.slice(
-      0,
-      Math.max(0, this.maxHistoryCheckpoints)
+    const recycled =
+      this.historyKernel !== null &&
+      this.historyReplayWork >= MAX_HISTORY_REPLAY_WORK;
+    if (recycled) this.invalidateHistoryCache();
+    const checkpointIndices = historyCheckpointIndices(
+      features.length,
+      this.maxHistoryCheckpoints
     );
-    const cachingEnabled = retainedFeatures.length > 0;
+    const checkpointIndexSet = new Set(checkpointIndices);
+    const cachingEnabled = checkpointIndices.length > 0;
     const scopeKey = cachingEnabled ? historyScopeDigest(document) : null;
     const scope = cachingEnabled
       ? getParameterScope(document).scope
       : undefined;
     const digests = cachingEnabled
-      ? retainedFeatures.map((feature, index) =>
-          historyFeatureDigest(document, feature, index, scope)
-        )
+      ? features
+          .slice(0, checkpointIndices.at(-1)! + 1)
+          .map((feature, index) =>
+            historyFeatureDigest(document, feature, index, scope)
+          )
       : [];
 
     let kernel = this.historyKernel;
@@ -872,9 +882,23 @@ export class RemusKernelAdapter implements ExactKernelAdapter {
       this.historyScopeKey === scopeKey
     ) {
       let prefix = -1;
-      const limit = Math.min(this.historyCheckpoints.length, digests.length);
+      const limit = Math.min(
+        this.historyCheckpoints.length,
+        checkpointIndices.length
+      );
       for (let index = 0; index < limit; index += 1) {
-        if (this.historyCheckpoints[index]!.digest !== digests[index]) {
+        const entry = this.historyCheckpoints[index]!;
+        const from =
+          index === 0
+            ? 0
+            : this.historyCheckpoints[index - 1]!.featureIndex + 1;
+        if (
+          entry.featureIndex !== checkpointIndices[index] ||
+          entry.digests.length !== entry.featureIndex - from + 1 ||
+          entry.digests.some(
+            (digest, offset) => digest !== digests[from + offset]
+          )
+        ) {
           break;
         }
         prefix = index;
@@ -886,7 +910,7 @@ export class RemusKernelAdapter implements ExactKernelAdapter {
             0,
             prefix + 1
           );
-          startIndex = prefix + 1;
+          startIndex = this.historyCheckpoints[prefix]!.featureIndex + 1;
           // Two copies deep: the snapshot must survive this replay's in-place
           // mutation, and the replay must not share containers with it.
           initial = cloneBuildState(this.historyCheckpoints[prefix]!.snapshot);
@@ -973,7 +997,7 @@ export class RemusKernelAdapter implements ExactKernelAdapter {
           /* Display observers cannot change exact acceptance. */
         }
       }
-      if (index >= digests.length) return;
+      if (!checkpointIndexSet.has(index)) return;
       const done = report(
         'checkpoint',
         features[index]!.name,
@@ -981,8 +1005,10 @@ export class RemusKernelAdapter implements ExactKernelAdapter {
         features.length
       );
       const checkpointId = activeKernel.checkpoint();
+      const previous = this.historyCheckpoints.at(-1);
       this.historyCheckpoints.push({
-        digest: digests[index]!,
+        featureIndex: index,
+        digests: digests.slice((previous?.featureIndex ?? -1) + 1, index + 1),
         checkpointId,
         snapshot: cloneBuildState(result)
       });
@@ -1014,6 +1040,9 @@ export class RemusKernelAdapter implements ExactKernelAdapter {
       this.invalidateHistoryCache();
       throw error;
     }
+    if (startIndex > 0) {
+      this.historyReplayWork += features.length - startIndex;
+    }
     // The cache event is emitted by syncDocument AFTER the measure pass, so
     // it can carry the measure-reuse counts alongside the replay counts.
     return {
@@ -1021,6 +1050,7 @@ export class RemusKernelAdapter implements ExactKernelAdapter {
       build,
       replayed: features.length - startIndex,
       restored: startIndex,
+      ...(recycled ? { recycleReason: 'replay-budget' as const } : {}),
       strictVerdicts
     };
   }
@@ -1530,7 +1560,7 @@ export class RemusKernelAdapter implements ExactKernelAdapter {
     // a failed sync must never leave a table the next sync would trust.
     try {
       const historyDone = report('history', 'Building history');
-      const { kernel, build, replayed, restored, strictVerdicts } =
+      const { kernel, build, replayed, restored, strictVerdicts, recycleReason } =
         this.buildWithHistoryCache(document, sources, pinned, onProgress, onProjection);
       historyDone();
       const bodies = listNodesByKind(document, 'body');
@@ -1711,6 +1741,7 @@ export class RemusKernelAdapter implements ExactKernelAdapter {
 
       this.options.onRebuildCacheEvent?.({
         kind: restored > 0 ? 'prefix-restore' : 'full-rebuild',
+        ...(recycleReason ? { recycleReason } : {}),
         replayed,
         restored,
         remeasured,
