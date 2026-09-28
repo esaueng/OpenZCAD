@@ -389,7 +389,7 @@ test('resize hole: Enter commits the chip value, Escape leaves history alone', a
 async function expectNothingSelected(page: Page, canvas: Locator) {
   await expect(page.locator('.tool-card')).toHaveCount(0);
   await expect(page.getByTestId('direct-manipulation-value')).toBeHidden();
-  await expect(page.locator('.selection-chip')).toHaveCount(0);
+  await expect(page.locator('.selection-callout-chip')).toHaveCount(0);
   await expect(page.locator('.profile-quick-action')).toHaveCount(0);
   await expect(canvas).not.toHaveAttribute('data-e2e-handle-x');
   await expect(canvas).not.toHaveAttribute('data-e2e-offset-change-visible');

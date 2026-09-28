@@ -1663,7 +1663,7 @@ test('the status bar names the one Escape exit, and one press takes it', async (
   await expect(
     page.getByRole('region', { name: 'Feature inspector' })
   ).toHaveCount(0);
-  await expect(page.locator('.selection-chip')).toHaveCount(0);
+  await expect(page.locator('.selection-callout-chip')).toHaveCount(0);
   await expect(page.locator('.tool-card')).toHaveCount(0);
   await expect(status).not.toContainText('Esc clears the selection');
 });

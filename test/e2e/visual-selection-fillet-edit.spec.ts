@@ -398,7 +398,7 @@ test('resizes an imported analytic blend twice without reselection', async ({
   await expect(inspector.getByRole('heading')).toHaveText('Blend face R3');
   await expect(inspector).toContainText('Measurements');
   await expect(inspector).toContainText(
-    'does not identify one editable history feature'
+    'Selected face. To change its shape, edit the feature that made it in History.'
   );
   await expect(
     inspector.getByRole('button', { name: 'Edit', exact: true })
