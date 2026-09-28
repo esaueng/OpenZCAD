@@ -9,7 +9,8 @@ This change removes redundant work from four measured paths:
 - Optional center-of-mass and inertia integration runs when the Inspector's mass
   section is opened. Area, volume and validation still run during normal sync.
   The existing single-solid, 64-face query limit remains. Epoch and document
-  checks prevent stale handles; cached undo and export recovery rebuild exact
+  checks prevent stale handles; obsolete queued requests are cancelled when the
+  selection or document changes. Cached undo and export recovery rebuild exact
   history without running another mesh/area pass. Text fonts preload on recovery.
 - Accepted union closure-check meshes can supply the same sync's display pass.
   Copies are JS-owned, keyed by kernel/solid/tessellation settings, consumed once
@@ -37,6 +38,8 @@ geometry jobs were active on the shared host. Small differences are noise-sensit
 The baseline is OpenZCAD `24f1d66e` with Remus `fe3c8efa` (2026.1.3). The
 candidate is OpenZCAD `7c7d75bd` with Remus `96acaccf` (2026.1.4). This compares
 the combined changes; it does not isolate each optimization's contribution.
+The final integrated pin `48ccbe84` also includes the split-rim area fix; these
+earlier timings do not measure that final binary.
 The [provenance](performance/geometry-latency-2026-09-28.provenance.json)
 records full source identities and installed binary hashes. The harness's
 identity lookup was corrected to resolve the package from its declaring
