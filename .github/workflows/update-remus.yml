@@ -2,6 +2,8 @@ name: Update Remus
 
 on:
   workflow_dispatch:
+  repository_dispatch:
+    types: [remus_packages_published]
   schedule:
     # GitHub's shortest interval is five minutes. Offset from the hour to
     # reduce the chance of a delayed or dropped scheduled run.
