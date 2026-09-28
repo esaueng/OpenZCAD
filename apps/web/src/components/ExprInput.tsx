@@ -37,10 +37,12 @@ export function ExprInput({
   const id = useId();
   const mayAutoFocus = useFieldAutoFocus(autoFocus);
   const preview = previewExpression(value, scope);
-  const showError =
-    Boolean(error) || (!preview.ok && !(optional && value.trim().length === 0));
+  // A blank optional field is a valid choice, not a missing value: its
+  // preview said "required" under "End radius (blank = constant)".
+  const blankOptional = Boolean(optional) && value.trim().length === 0;
+  const showError = Boolean(error) || (!preview.ok && !blankOptional);
   const isPlainNumber = /^\s*-?(?:\d+\.?\d*|\.\d+)\s*$/.test(value);
-  const showPreview = !isPlainNumber || showError;
+  const showPreview = showError || (!isPlainNumber && !blankOptional);
 
   return (
     <label className="field expr-field" htmlFor={id}>

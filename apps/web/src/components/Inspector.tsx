@@ -1763,11 +1763,19 @@ export function Inspector(props: InspectorProps) {
               selectedTopology.topologyId
             )
           : 'Body';
+    // Information, not an error: the geometry is inspectable here, and its
+    // shape belongs to whichever history feature made it.
+    const selectionNoun =
+      selectedTopology.kind === 'face'
+        ? 'face'
+        : selectedTopology.kind === 'edge'
+          ? 'edge'
+          : 'body';
     body = (
       <>
         <p>
-          This selection does not identify one editable history feature. Select
-          a feature in History to edit it.
+          Selected {selectionNoun}. To change its shape, edit the feature that
+          made it in History.
         </p>
         {!commandSession &&
           selectedTopology.kind === 'face' &&

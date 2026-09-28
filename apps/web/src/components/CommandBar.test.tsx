@@ -210,6 +210,40 @@ describe('CommandBar', () => {
     expect(search).not.toHaveFocus();
   });
 
+  it('says what Enter does with plain words, and where commands are', async () => {
+    render(
+      <Bar commands={[command('fillet', 'Fillet', 'Modify')]} onAsk={vi.fn()} />
+    );
+    const search = searchField();
+    const hint = 'Enter asks the assistant · type / for commands';
+
+    await userEvent.click(search);
+    expect(screen.queryByText(hint)).toBeNull();
+
+    // "fil" lists nothing; the hint says why instead of an empty silence.
+    await userEvent.type(search, 'fil');
+    expect(screen.queryAllByRole('option')).toHaveLength(0);
+    expect(screen.getByText(hint)).toHaveClass('command-bar-keys');
+    expect(search).toHaveAccessibleDescription(hint);
+
+    // The slash swaps it for the command list and its own key row.
+    await userEvent.clear(search);
+    await userEvent.type(search, '/fil');
+    expect(screen.queryByText(hint)).toBeNull();
+    expect(visibleLabels()).toEqual(['Fillet']);
+    expect(
+      screen.getByText('↑↓ move · Tab completes · Enter runs · Esc clears')
+    ).toBeTruthy();
+    expect(search).not.toHaveAttribute('aria-describedby');
+  });
+
+  it('points plain words at the slash when there is no assistant', async () => {
+    render(<Bar commands={[command('fillet', 'Fillet', 'Modify')]} />);
+    await userEvent.type(searchField(), 'fil');
+    expect(screen.getByText('Type / for commands')).toBeTruthy();
+    expect(screen.queryByText(/asks the assistant/)).toBeNull();
+  });
+
   it('names the selection in its placeholder', () => {
     render(<Bar commands={[]} onAsk={vi.fn()} context="12 selected edges" />);
     expect(searchField()).toHaveAttribute(
