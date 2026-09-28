@@ -436,18 +436,14 @@ describe('incremental prefix rebuild cache', { timeout: 120_000 }, () => {
     }
   });
 
-  it('restores current mass properties to a boolean operand revealed by suppression', async () => {
+  it('reads current mass properties on demand after a boolean operand is revealed', async () => {
     const events: RebuildCacheEvent[] = [];
     const adapter = await createExactKernelAdapter({
       onRebuildCacheEvent: (event) => events.push(event)
     });
     try {
-      // Union consume → suppress → visible. While consumed, an operand's
-      // cached measurement carries no mass properties (consumed bodies
-      // publish no moments). Suppressing the union must re-measure the
-      // revealed operand instead of serving that mass-less entry back: the
-      // per-body cache keys on `includeMassProperties`, so the
-      // consumed↔visible flip is a miss by construction.
+      // Union consume → suppress → visible. A consumed operand has no mass
+      // query target; revealing it must expose its own current exact handle.
       let document = addPrimitiveFeature(
         createProjectDocument('Union suppress', toUserId('user_cache')),
         {
@@ -482,7 +478,24 @@ describe('incremental prefix rebuild cache', { timeout: 120_000 }, () => {
       ).toBeUndefined();
       expect(
         united.bodyRepresentations[union.bodyId]!.massProperties
-      ).toBeDefined();
+      ).toBeUndefined();
+      const unitedEpoch = adapter.currentMassPropertiesEpoch()!;
+      expect(
+        adapter.readCurrentMassProperties({
+          projectId: document.projectId,
+          version: document.version,
+          bodyId: bodyA!,
+          epoch: unitedEpoch
+        }).status
+      ).toBe('unavailable');
+      expect(
+        adapter.readCurrentMassProperties({
+          projectId: document.projectId,
+          version: document.version,
+          bodyId: union.bodyId,
+          epoch: unitedEpoch
+        }).status
+      ).toBe('ready');
 
       const booleanFeature = listFeaturesInOrder(document).find(
         (feature) => feature.data.featureKind === 'boolean'
@@ -493,32 +506,48 @@ describe('incremental prefix rebuild cache', { timeout: 120_000 }, () => {
       });
       const revealed = await adapter.syncDocument(suppressed);
       const fresh = await freshDerived(suppressed);
+      const freshAdapter = await createExactKernelAdapter();
+      await freshAdapter.syncDocument(suppressed);
 
-      // The revealed operand is live with CURRENT mass properties — equal to
-      // a cold rebuild's, never the retained undefined from its consumed
-      // pass. The union result has no shape while suppressed.
+      // The revealed operands resolve to the same properties as a fresh
+      // adapter, while the suppressed union has no query target.
+      const revealedEpoch = adapter.currentMassPropertiesEpoch()!;
       for (const bodyId of [bodyA!, bodyB!]) {
-        const body = revealed.bodyRepresentations[bodyId]!;
-        expect(body.consumed).toBe(false);
-        expect(body.massProperties).toBeDefined();
-        expect(body.massProperties).toEqual(
-          fresh.bodyRepresentations[bodyId]!.massProperties
-        );
+        expect(revealed.bodyRepresentations[bodyId]!.consumed).toBe(false);
+        expect(revealed.bodyRepresentations[bodyId]!.massProperties).toBeUndefined();
+        const cachedMass = adapter.readCurrentMassProperties({
+          projectId: suppressed.projectId,
+          version: suppressed.version,
+          bodyId,
+          epoch: revealedEpoch
+        });
+        const freshMass = freshAdapter.readCurrentMassProperties({
+          projectId: suppressed.projectId,
+          version: suppressed.version,
+          bodyId,
+          epoch: freshAdapter.currentMassPropertiesEpoch()!
+        });
+        expect(cachedMass.status).toBe('ready');
+        expect(freshMass.status).toBe('ready');
+        if (cachedMass.status === 'ready' && freshMass.status === 'ready') {
+          expect(cachedMass.properties).toEqual(freshMass.properties);
+        }
       }
+      freshAdapter.dispose();
       expect(revealed.bodyRepresentations[union.bodyId]).toBeUndefined();
 
-      // The visibility flip re-measured exactly the two operands; nothing
-      // was served stale from the consumed pass.
+      // Revealing the operands may reuse their unchanged mesh/area data;
+      // their separate mass queries must still use current live solids.
       expect(events.at(-1)).toMatchObject({
         kind: 'prefix-restore',
         restored: 3,
         replayed: 1,
-        remeasured: 2,
-        reusedMeasurements: 0
+        remeasured: 0,
+        reusedMeasurements: 2
       });
 
-      // An identical resync reuses every measurement AND keeps the mass, so
-      // the transition preserves the cache for unaffected bodies.
+      // An identical resync reuses measurements, but retires the previous
+      // query epoch; the new epoch resolves against live handles.
       const again = await adapter.syncDocument(suppressed);
       expect(events.at(-1)).toMatchObject({
         kind: 'prefix-restore',
@@ -528,9 +557,23 @@ describe('incremental prefix rebuild cache', { timeout: 120_000 }, () => {
         reusedMeasurements: 2
       });
       for (const bodyId of [bodyA!, bodyB!]) {
-        expect(again.bodyRepresentations[bodyId]!.massProperties).toEqual(
-          fresh.bodyRepresentations[bodyId]!.massProperties
-        );
+        expect(again.bodyRepresentations[bodyId]!.massProperties).toBeUndefined();
+        expect(
+          adapter.readCurrentMassProperties({
+            projectId: suppressed.projectId,
+            version: suppressed.version,
+            bodyId,
+            epoch: revealedEpoch
+          }).status
+        ).toBe('unavailable');
+        expect(
+          adapter.readCurrentMassProperties({
+            projectId: suppressed.projectId,
+            version: suppressed.version,
+            bodyId,
+            epoch: adapter.currentMassPropertiesEpoch()!
+          }).status
+        ).toBe('ready');
       }
       expect(normalized(again)).toEqual(normalized(fresh));
     } finally {

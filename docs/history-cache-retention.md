@@ -8,8 +8,7 @@ feature 32 was replayed on every sync. The current adapter retains the first
 feature between checkpoints contributes to the next checkpoint's digest.
 After 512 features have actually been replayed against a retained kernel, the
 next operation retires that kernel and rebuilds exactly. This is a replay-work
-and checkpoint-count bound, not a byte limit. No kernel algorithms, geometry
-tolerances, dependency pins or measurement validity conditions change.
+and checkpoint-count bound, not a byte limit.
 
 ## Ownership and invalidation
 
@@ -22,9 +21,16 @@ tolerances, dependency pins or measurement validity conditions change.
   units, scope errors and Bezier profile mode guard global reuse.
 - Restore selects the longest matching retained prefix. Remus `restore(k)` keeps
   checkpoints 0 through k and discards later checkpoints; the adapter truncates
-  its table in lockstep. Every feature after that prefix is replayed, even when
-  unchanged. A change in a gap invalidates the next checkpoint. Telemetry never
-  advertises the uncached suffix as restored.
+  its table in lockstep. A change in a gap invalidates the next checkpoint.
+- When the entire suffix contains only primitive features, unchanged primitives
+  can retain their current exact handles. The adapter discards later checkpoints
+  without restoring topology, clones the prefix's JS state, and reconstructs the
+  suffix from cached primitive results and changed builders. Each cache entry is
+  guarded by the complete feature/order/suppression/resolved-parameter digest.
+  Unknown or dependent feature kinds in the suffix use ordinary prefix replay.
+  Telemetry reports `independent-reuse` and `reusedPrimitives` separately from
+  restored prefixes and executed builders; cached shapes remain within one
+  kernel lifetime and are pruned after any actual restore.
 - The adapter counts features replayed after a restore across sync, export and
   recognition. At 512, the following operation frees the history kernel and
   its measurement cache before a cold rebuild. Zero-replay hits do not advance
@@ -32,22 +38,25 @@ tolerances, dependency pins or measurement validity conditions change.
   Prior derived results own their buffers, so the retired kernel has no live
   result alias. This limits lifetime arena growth between rebuilds but does
   not cap one large operation or linear-memory high water already reached.
-- With no matching prefix, disabled retention, a project/scope change or failed
-  restore, the old kernel and measurements are released before an exact rebuild.
+- With no matching prefix or reusable primitive-only suffix, disabled retention,
+  a project/scope change or failed restore/discard, the old kernel and
+  measurements are released before an exact rebuild.
   Thrown replay/checkpoint failures invalidate both owners for sync, export and
   recognition. A measurement failure also invalidates both owners.
 - Exports, mesh-quality queries and imported-face recognition share the history
   kernel. Their cleanup restores the last retained prefix, retiring suffix and
   scratch geometry. If cleanup fails or no prefix exists, the kernel is freed.
 - Measurements still require matching solid handles, analysis key, strict-union
-  mode, mass-property inclusion, imported recognition mode and face count.
+  mode, imported recognition mode and face count.
   Remus does not reuse retired entity handles. Measurement byte accounting and
-  dead-body eviction remain unchanged. Disposal clears both cache owners.
+  dead-body eviction remain unchanged. Disposal clears all cache owners. Optional
+  mass properties are queried separately when requested by the Inspector; they
+  are guarded by document identity and the current exact-build epoch.
 - Zero, negative and NaN limits disable retention. Fractional budgets retain
   only complete checkpoints. Explicit Infinity preserves dense, unlimited
   retention. The default count remains 32; it is **not a strict byte limit**.
 
-The inspected kernel contract is Remus `b13ff97b16c405eafd6707ad9098297d867a385f`,
+The inspected kernel contract is Remus `fe3c8efaef2d041fbc3303ac6a1ac6841aa7ac62`,
 `crates/wasm/src/bindings/checkpoint.rs`. `discardCheckpoint(k)` also discards
 all descendants, without changing current topology. Temporary measurement
 checkpoints are restored and discarded before returning. No kernel transaction

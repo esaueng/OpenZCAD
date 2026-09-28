@@ -1279,7 +1279,8 @@ function buildBooleanFeature(
       unionOperands.map((operand) => operand.name),
       (accepted) => {
         acceptedUnionSolid = accepted;
-      }
+      },
+      ctx.strictVerdicts !== undefined
     );
     solid = unified.solid;
     unionVerdict = unified.verdict;

@@ -12,7 +12,7 @@ import {
 } from '@openzcad/kernel-adapter/exact';
 
 /**
- * Mass properties as the app actually publishes them, against closed forms.
+ * Mass properties as the app queries them on demand, against closed forms.
  *
  * Every expectation here is written out from the geometry rather than read
  * back from the kernel, for the same reason `filleted-body-volume.test.ts`
@@ -30,7 +30,18 @@ afterAll(() => {
 async function bodyOf(document: ProjectDocument): Promise<BodyRepresentation> {
   adapter ??= await createExactKernelAdapter();
   const derived = await adapter.syncDocument(document);
-  return derived.bodyRepresentations[document.bodyOrder.at(-1)!]!;
+  const bodyId = document.bodyOrder.at(-1)!;
+  const body = derived.bodyRepresentations[bodyId]!;
+  expect(body.massProperties).toBeUndefined();
+  const result = adapter.readCurrentMassProperties({
+    projectId: document.projectId,
+    version: document.version,
+    bodyId,
+    epoch: adapter.currentMassPropertiesEpoch()!
+  });
+  expect(result.status).toBe('ready');
+  if (result.status !== 'ready') throw new Error(result.reason);
+  return { ...body, massProperties: result.properties };
 }
 
 function primitive(
