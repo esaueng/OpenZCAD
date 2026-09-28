@@ -34,12 +34,9 @@ requests already running on an older configuration may finish under that policy.
 | Cloud project document/asset storage            | 2 GiB        | 100 GiB         |
 | Concurrent AI requests                          | 2            | 8               |
 | Cloud artifacts, including pending reservations | 2 GiB        | 100 GiB         |
-| Requests per IP per window                      | 30           | 3,000           |
-| Weighted units per IP per window                | 120          | 12,000          |
-| Concurrent requests per IP                      | 8            | 32              |
 
-Premium IP buckets are separate from Free buckets. Account buckets remain the
-same across tier changes so an upgrade or downgrade cannot reset consumption.
+Account buckets remain the same across tier changes so an upgrade or downgrade
+cannot reset consumption. Accounts sharing an IP have independent allowances.
 The existing `AI_RATE_LIMIT_WINDOW_SECONDS` controls both tiers' window length.
 Existing Free configuration names are retained. Premium overrides are:
 
@@ -49,9 +46,6 @@ Existing Free configuration names are retained. Premium overrides are:
 - `AI_PREMIUM_ACCOUNT_RATE_LIMIT_REQUESTS` (at most 1,000)
 - `AI_PREMIUM_ACCOUNT_COST_LIMIT_UNITS` (at most 10,000)
 - `AI_PREMIUM_ACCOUNT_CONCURRENCY_LIMIT` (at most 100)
-- `AI_PREMIUM_IP_RATE_LIMIT_REQUESTS` (at most 10,000)
-- `AI_PREMIUM_IP_COST_LIMIT_UNITS` (at most 100,000)
-- `AI_PREMIUM_IP_CONCURRENCY_LIMIT` (at most 100)
 
 Invalid or nonpositive overrides use the tier default. Limits are finite
 operational ceilings; the UI does not promise unlimited provider availability.
@@ -59,15 +53,15 @@ Weights use configured output-token budgets and attachments, not token invoices.
 
 Premium grants hosted-AI eligibility alongside `AI_DEPLOYMENT_ALLOWED_EMAILS`.
 Free membership does not newly enable deployment-funded AI for all signups.
-Personal credentials still bypass deployment-funded window and daily quotas,
+Personal credentials still bypass deployment-funded window quotas,
 while retaining concurrency guards. Local modeling and local export remain
 unchanged. File size, upload-session, revision retention, geometry, authentication,
 and timeout protections are unchanged.
 
-The official deployment daily budget becomes 10,000 requests / 40,000 weighted
-units, shared across tiers, instead of 100 / 400. This increases the maximum
-permitted hosted-AI spend; it is not a monetary budget. Self-hosted defaults stay
-100 / 400 unless configured. Budget exhaustion still stops Premium requests.
+There is no shared deployment or IP usage cap. Each authenticated account has
+its own request, weighted-unit and concurrency limits. With the deployment
+provider key, total spend can grow with the number of eligible accounts;
+provider-side billing controls remain separate.
 
 ## Storage and downgrade behavior
 
@@ -98,7 +92,7 @@ the three derived quota columns to their Free ceilings if revoking all Premium s
 allowances is intended. Never delete account data as part of rollback.
 
 Tests cover exact membership matching, hosted-AI eligibility, Free/Premium limits,
-shared IP isolation, global budgets, forged headers, downgrade usage retention,
+independent accounts behind one IP, forged headers, downgrade usage retention,
 owner attribution, concurrent reservations, quota errors and downgrade cleanup.
 Migration tests exercise both SQLite execution and Wrangler's statement splitter.
 Browser tests cover both badges and effective allowance text. Run the repository

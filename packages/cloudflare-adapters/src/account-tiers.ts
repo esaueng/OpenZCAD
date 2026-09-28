@@ -55,25 +55,6 @@ export function accountAiLimits(env: CloudflareEnv, email?: string) {
       premium ? 8 : 2,
       100
     ),
-    ipRequestLimit: positiveInteger(
-      premium
-        ? env.AI_PREMIUM_IP_RATE_LIMIT_REQUESTS
-        : env.AI_IP_RATE_LIMIT_REQUESTS,
-      premium ? 3_000 : 30,
-      10_000
-    ),
-    ipCostLimit: positiveInteger(
-      premium ? env.AI_PREMIUM_IP_COST_LIMIT_UNITS : env.AI_IP_COST_LIMIT_UNITS,
-      premium ? 12_000 : 120,
-      100_000
-    ),
-    ipConcurrencyLimit: positiveInteger(
-      premium
-        ? env.AI_PREMIUM_IP_CONCURRENCY_LIMIT
-        : env.AI_IP_CONCURRENCY_LIMIT,
-      premium ? 32 : 8,
-      100
-    ),
     windowSeconds: positiveInteger(
       env.AI_RATE_LIMIT_WINDOW_SECONDS,
       600,

@@ -197,7 +197,7 @@ export interface CloudflareEnv {
    */
   AI_MAX_OUTPUT_TOKENS?: string;
   AI_TIMEOUT_MS?: string;
-  /** Secret used to HMAC public assistant identities and IP quota buckets. */
+  /** Secret used to HMAC public assistant identities. */
   AI_IDENTITY_PEPPER?: string;
   /** Comma-separated authenticated emails allowed to use deployment AI spend. */
   AI_DEPLOYMENT_ALLOWED_EMAILS?: string;
@@ -209,20 +209,12 @@ export interface CloudflareEnv {
   AI_PREMIUM_ACCOUNT_RATE_LIMIT_REQUESTS?: string;
   AI_PREMIUM_ACCOUNT_COST_LIMIT_UNITS?: string;
   AI_PREMIUM_ACCOUNT_CONCURRENCY_LIMIT?: string;
-  AI_PREMIUM_IP_RATE_LIMIT_REQUESTS?: string;
-  AI_PREMIUM_IP_COST_LIMIT_UNITS?: string;
-  AI_PREMIUM_IP_CONCURRENCY_LIMIT?: string;
   /** Comma-separated exact hostnames allowed for custom Responses endpoints. */
   AI_ALLOWED_BASE_URL_HOSTS?: string;
-  AI_GLOBAL_DAILY_REQUEST_LIMIT?: string;
-  AI_GLOBAL_DAILY_COST_LIMIT_UNITS?: string;
   AI_ACCOUNT_RATE_LIMIT_REQUESTS?: string;
-  AI_IP_RATE_LIMIT_REQUESTS?: string;
   AI_ACCOUNT_COST_LIMIT_UNITS?: string;
-  AI_IP_COST_LIMIT_UNITS?: string;
   AI_RATE_LIMIT_WINDOW_SECONDS?: string;
   AI_ACCOUNT_CONCURRENCY_LIMIT?: string;
-  AI_IP_CONCURRENCY_LIMIT?: string;
   /** Base64-encoded 32-byte AES key for owner-scoped AI credentials. */
   SETTINGS_ENCRYPTION_KEY?: string;
   DB?: D1Database;

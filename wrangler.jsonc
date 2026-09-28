@@ -41,9 +41,7 @@
     // require the persisted project-wide lease.
     "PROJECT_SHARING_ENABLED": "true",
     "PROJECT_EDIT_LEASES_ENFORCED": "true",
-    "PROJECT_PERSONAL_SYNC_ENABLED": "true",
-    "AI_GLOBAL_DAILY_REQUEST_LIMIT": "10000",
-    "AI_GLOBAL_DAILY_COST_LIMIT_UNITS": "40000"
+    "PROJECT_PERSONAL_SYNC_ENABLED": "true"
   },
   // Secrets a deployment cannot run without (set with `wrangler secret put`;
   // wrangler has no schema key to declare them, so this is documentation only):
@@ -51,9 +49,9 @@
   //   AI_IDENTITY_PEPPER
   // PREMIUM_USER_EMAILS is a server secret listing manually granted Premium accounts.
   // AI_DEPLOYMENT_ALLOWED_EMAILS is deliberately absent: it is the allowlist
-  // for spending the deployment's own provider key, and
-  // `deploymentAssistantAllowed` fails closed when it is unset, so a
-  // deployment without either allowlist offers no deployment-funded AI.
+  // for Free accounts spending the deployment's own provider key.
+  // Without either an allowlist or Premium membership, deployment-funded AI
+  // is unavailable.
   // Premium membership also grants deployment-funded AI eligibility.
   // PROJECT_COLLABORATION_CANARY_EMAILS is not required while the global beta
   // rollout above is enabled. It remains an optional scoped fallback if those
