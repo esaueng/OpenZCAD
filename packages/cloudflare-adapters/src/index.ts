@@ -4243,6 +4243,62 @@ interface CollaborationSocketTicket {
   expiresAt: number;
 }
 
+/** Socket identity survives Durable Object hibernation; access is rechecked on use. */
+interface CollaborationSocketAttachment {
+  schema: 1;
+  userId: UserId;
+  displayName: string;
+  role: SharedProjectAccessRole;
+  email?: string;
+  clientId?: string;
+  presence?: 'active' | 'idle';
+}
+
+type RoomWebSocket = WebSocket & {
+  serializeAttachment(value: unknown): void;
+  deserializeAttachment(): unknown;
+};
+
+function roomWebSocket(socket: WebSocket): RoomWebSocket {
+  return socket as RoomWebSocket;
+}
+
+interface CollaborationSocketConnection {
+  clientId: string;
+  userId: UserId;
+  displayName: string;
+  email?: string;
+  role: SharedProjectAccessRole;
+}
+
+function socketAttachment(
+  value: unknown
+): CollaborationSocketAttachment | null {
+  if (!value || typeof value !== 'object') return null;
+  const item = value as Partial<CollaborationSocketAttachment>;
+  if (
+    item.schema !== 1 ||
+    typeof item.userId !== 'string' ||
+    !item.userId ||
+    item.userId.length > 256 ||
+    typeof item.displayName !== 'string' ||
+    !item.displayName ||
+    item.displayName.length > 256 ||
+    (item.role !== 'owner' &&
+      item.role !== 'editor' &&
+      item.role !== 'viewer') ||
+    (item.email !== undefined && typeof item.email !== 'string') ||
+    (item.email !== undefined && item.email.length > 256) ||
+    (item.clientId !== undefined && typeof item.clientId !== 'string') ||
+    (item.clientId !== undefined && item.clientId.length > 256) ||
+    (item.presence !== undefined &&
+      item.presence !== 'active' &&
+      item.presence !== 'idle')
+  )
+    return null;
+  return item as CollaborationSocketAttachment;
+}
+
 type CollaborationSocketTickets = Record<string, CollaborationSocketTicket>;
 
 function randomSocketTicket(): string {
@@ -4340,25 +4396,21 @@ export class ProjectCollaborationRoom extends DurableObject {
   private readonly roomContext: {
     storage: RoomStorage;
     blockConcurrencyWhile<T>(callback: () => Promise<T>): Promise<T>;
+    acceptWebSocket(socket: WebSocket): void;
+    getWebSockets(): WebSocket[];
   };
   private readonly ready: Promise<void>;
   private readonly roomEnv: CloudflareEnv;
   private presence = new Map<string, string>();
-  private sockets = new Map<
-    WebSocket,
-    {
-      clientId: string;
-      userId: UserId;
-      displayName: string;
-      email?: string;
-      role: SharedProjectAccessRole;
-    }
-  >();
+  private sockets = new Map<WebSocket, CollaborationSocketConnection>();
   private editLeases: ProjectEditLease[] = [];
   private leaseQueue: Promise<void> = Promise.resolve();
   private ticketQueue: Promise<void> = Promise.resolve();
   private latestDocument: ProjectDocument | null = null;
   private documentHistory = new Map<number, ProjectDocument>();
+  private historyVersions: number[] = [];
+  private historyLoaded = false;
+  private historyLoad: Promise<void> | null = null;
   private projectId: string | null = null;
   private erasing = false;
 
@@ -4366,6 +4418,25 @@ export class ProjectCollaborationRoom extends DurableObject {
     super(ctx, env);
     this.roomEnv = env as CloudflareEnv;
     this.roomContext = ctx as typeof this.roomContext;
+    for (const socket of this.roomContext.getWebSockets()) {
+      const attachment = socketAttachment(
+        roomWebSocket(socket).deserializeAttachment()
+      );
+      if (!attachment) {
+        socket.close(1008, 'Collaboration identity is unavailable.');
+        continue;
+      }
+      if (attachment.clientId) {
+        this.sockets.set(socket, {
+          clientId: attachment.clientId,
+          userId: attachment.userId,
+          displayName: attachment.displayName,
+          role: attachment.role,
+          email: attachment.email
+        });
+        this.presence.set(attachment.clientId, attachment.presence ?? 'active');
+      }
+    }
     this.ready = this.roomContext.blockConcurrencyWhile(async () => {
       await this.migrateLegacyRoomState();
       const meta = await this.roomContext.storage.get<RoomMeta>(ROOM_META_KEY);
@@ -4373,6 +4444,7 @@ export class ProjectCollaborationRoom extends DurableObject {
         return;
       }
       this.projectId = meta.projectId ?? null;
+      this.historyVersions = meta.historyVersions ?? [];
       this.latestDocument =
         (await this.roomContext.storage.get<ProjectDocument>(
           ROOM_LATEST_KEY
@@ -4389,19 +4461,33 @@ export class ProjectCollaborationRoom extends DurableObject {
             lease.userId === first.userId &&
             lease.expiresAt > Date.now()
         );
-        await this.persistEditLeases(active);
+        // A hibernating room wakes for each heartbeat. Avoid rewriting an
+        // unchanged lease on every wake; only persist expired/invalid cleanup.
+        if (active.length === 1 + additionalLeases.length) {
+          this.editLeases = active;
+        } else {
+          await this.persistEditLeases(active);
+        }
       }
+    });
+  }
+
+  private async ensureDocumentHistory(): Promise<void> {
+    if (this.historyLoaded) return;
+    this.historyLoad ??= (async () => {
       const history = await Promise.all(
-        (meta.historyVersions ?? []).map((version) =>
+        this.historyVersions.map((version) =>
           this.roomContext.storage.get<ProjectDocument>(historyKey(version))
         )
       );
       for (const document of history) {
-        if (document) {
-          this.documentHistory.set(document.version, document);
-        }
+        if (document) this.documentHistory.set(document.version, document);
       }
+      this.historyLoaded = true;
+    })().finally(() => {
+      this.historyLoad = null;
     });
+    await this.historyLoad;
   }
 
   /**
@@ -4484,7 +4570,15 @@ export class ProjectCollaborationRoom extends DurableObject {
       email = claim.email;
       role = claim.role;
     }
-    if (!userId || !displayName || !projectId || !role) {
+    if (
+      !userId ||
+      !displayName ||
+      !projectId ||
+      !role ||
+      userId.length > 256 ||
+      displayName.length > 256 ||
+      (email !== undefined && email.length > 256)
+    ) {
       return new Response('Missing collaboration identity.', { status: 400 });
     }
     if (!this.collaborationAccessAllowed(role, email)) {
@@ -4501,33 +4595,59 @@ export class ProjectCollaborationRoom extends DurableObject {
     const pair = new WebSocketPair();
     const client = pair[0];
     const server = pair[1];
-    server.accept();
-    server.addEventListener(
-      'message',
-      (event: MessageEvent<string | ArrayBuffer>) => {
-        // Nothing awaits this handler, so a rejection here would surface as an
-        // unhandled rejection and the sender would wait forever for an ack.
-        void this.handleSocketMessage(
-          server,
-          event.data,
-          userId,
-          displayName,
-          role,
-          email
-        ).catch(() => {
-          console.error('Collaboration message handling failed.');
-          this.send(server, {
-            type: 'error',
-            code: 'internal',
-            message: 'The collaboration room could not process that message.'
-          });
-        });
-      }
-    );
-    const close = () => this.removeSocket(server);
-    server.addEventListener('close', close);
-    server.addEventListener('error', close);
+    this.roomContext.acceptWebSocket(server);
+    roomWebSocket(server).serializeAttachment({
+      schema: 1,
+      userId,
+      displayName,
+      role,
+      email
+    } satisfies CollaborationSocketAttachment);
     return new Response(null, { status: 101, webSocket: client });
+  }
+
+  async webSocketMessage(
+    socket: WebSocket,
+    raw: string | ArrayBuffer
+  ): Promise<void> {
+    await this.ready;
+    const identity = socketAttachment(
+      roomWebSocket(socket).deserializeAttachment()
+    );
+    if (!identity) {
+      socket.close(1008, 'Collaboration identity is unavailable.');
+      return;
+    }
+    try {
+      await this.handleSocketMessage(
+        socket,
+        raw,
+        identity.userId,
+        identity.displayName,
+        identity.role,
+        identity.email
+      );
+    } catch {
+      console.error('Collaboration message handling failed.');
+      this.send(socket, {
+        type: 'error',
+        code: 'internal',
+        message: 'The collaboration room could not process that message.'
+      });
+    } finally {
+      const connection = this.sockets.get(socket);
+      if (connection && connection.role !== identity.role) {
+        this.rememberSocket(socket, connection);
+      }
+    }
+  }
+
+  webSocketClose(socket: WebSocket): void {
+    this.removeSocket(socket);
+  }
+
+  webSocketError(socket: WebSocket): void {
+    this.removeSocket(socket);
   }
 
   /** Internal-only hard deletion used by the account erasure coordinator. */
@@ -4761,7 +4881,11 @@ export class ProjectCollaborationRoom extends DurableObject {
       socket.close(1003, 'Invalid collaboration message.');
       return;
     }
-    if (!message.clientId) {
+    if (
+      typeof message.clientId !== 'string' ||
+      !message.clientId ||
+      message.clientId.length > 256
+    ) {
       return;
     }
 
@@ -4782,14 +4906,17 @@ export class ProjectCollaborationRoom extends DurableObject {
         return;
       }
       role = currentRole;
-      this.sockets.set(socket, {
-        clientId: message.clientId,
-        userId,
-        displayName,
-        role,
-        email
-      });
-      this.presence.set(message.clientId, 'active');
+      this.rememberSocket(
+        socket,
+        {
+          clientId: message.clientId,
+          userId,
+          displayName,
+          role,
+          email
+        },
+        'active'
+      );
       if (message.document) {
         await this.acceptDocument(
           socket,
@@ -4820,6 +4947,7 @@ export class ProjectCollaborationRoom extends DurableObject {
       return;
     }
     if (message.type === 'presence') {
+      if (message.status !== 'active' && message.status !== 'idle') return;
       const currentRole = await this.currentConnectionRole(connection);
       if (!currentRole) {
         socket.close(
@@ -4831,8 +4959,13 @@ export class ProjectCollaborationRoom extends DurableObject {
         this.removeSocket(socket);
         return;
       }
+      const statusChanged =
+        this.presence.get(message.clientId) !== message.status;
+      const roleChanged = connection.role !== currentRole;
       connection.role = currentRole;
-      this.presence.set(message.clientId, message.status);
+      if (statusChanged || roleChanged) {
+        this.rememberSocket(socket, connection, message.status);
+      }
       await this.broadcastPresence();
       return;
     }
@@ -4908,6 +5041,7 @@ export class ProjectCollaborationRoom extends DurableObject {
       socket.close(1008, 'Document project does not match this room.');
       return;
     }
+    await this.ensureDocumentHistory();
     const latest = this.latestDocument;
     const base =
       baseVersion === null ? undefined : this.documentHistory.get(baseVersion);
@@ -5272,7 +5406,10 @@ export class ProjectCollaborationRoom extends DurableObject {
           continue;
         }
         if (role) {
-          connection.role = role;
+          if (connection.role !== role) {
+            connection.role = role;
+            this.rememberSocket(socket, connection);
+          }
         } else {
           this.send(socket, { type: 'lease-lost', reason: 'role-changed' });
           socket.close(1008, 'Project access was removed.');
@@ -5406,6 +5543,7 @@ export class ProjectCollaborationRoom extends DurableObject {
     if (document.projectId !== projectId) {
       return new Response('Document project mismatch.', { status: 400 });
     }
+    await this.ensureDocumentHistory();
     const resolution = resolveCollaborationDocument(
       this.latestDocument,
       document,
@@ -5442,6 +5580,9 @@ export class ProjectCollaborationRoom extends DurableObject {
   private async persistRoomState(
     dirtyHistoryVersions: ReadonlySet<number> = new Set()
   ): Promise<void> {
+    if (this.historyVersions.length && !this.historyLoaded) {
+      await this.ensureDocumentHistory();
+    }
     const evicted = this.trimHistory();
     const entries: Record<string, unknown> = {};
     for (const version of dirtyHistoryVersions) {
@@ -5494,6 +5635,23 @@ export class ProjectCollaborationRoom extends DurableObject {
     }));
   }
 
+  private rememberSocket(
+    socket: WebSocket,
+    connection: CollaborationSocketConnection,
+    status: 'active' | 'idle' = this.presence.get(connection.clientId) ===
+    'idle'
+      ? 'idle'
+      : 'active'
+  ): void {
+    this.sockets.set(socket, connection);
+    this.presence.set(connection.clientId, status);
+    roomWebSocket(socket).serializeAttachment({
+      schema: 1,
+      ...connection,
+      presence: status
+    } satisfies CollaborationSocketAttachment);
+  }
+
   private send(socket: WebSocket, message: CollaborationServerMessage): void {
     if (socket.readyState === WebSocket.OPEN) {
       socket.send(JSON.stringify(message));
@@ -5516,7 +5674,10 @@ export class ProjectCollaborationRoom extends DurableObject {
         removed = true;
         continue;
       }
-      connection.role = role;
+      if (connection.role !== role) {
+        connection.role = role;
+        this.rememberSocket(socket, connection);
+      }
       if (socket !== except) {
         const outgoing =
           message.type === 'presence'

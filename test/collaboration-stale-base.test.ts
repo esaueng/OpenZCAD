@@ -1,13 +1,11 @@
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
-import {
-  ProjectCollaborationRoom,
-  resolveCollaborationDocument
-} from '@openzcad/cloudflare-adapters';
+import { resolveCollaborationDocument } from '@openzcad/cloudflare-adapters';
 import { CommandManager, commandFactories } from '@openzcad/command-system';
 import { createProjectDocument } from '@openzcad/document-core';
 import { toUserId, type ProjectDocument } from '@openzcad/shared';
 import {
   createRoomContext,
+  createTestRoom,
   installWorkerSocketGlobals,
   type FakeWebSocket
 } from './collaboration-room-harness';
@@ -128,7 +126,9 @@ describe('a collaboration submission that shares no history with the room', () =
     );
 
     const b = new CommandManager(shared);
-    b.execute(commandFactories.setParameter({ name: 'width', expression: '30' }));
+    b.execute(
+      commandFactories.setParameter({ name: 'width', expression: '30' })
+    );
     const incoming = b.execute(
       commandFactories.setParameter({ name: 'depth', expression: '5' })
     );
@@ -144,7 +144,7 @@ describe('a collaboration submission that shares no history with the room', () =
 
   it('keeps the committed feature when a reconnecting client submits', async () => {
     const context = createRoomContext();
-    const room = new ProjectCollaborationRoom(context.context, {});
+    const room = createTestRoom(context.context, {});
     const a = session('Reconnect');
     const shared = a.box('Common');
     const projectId = shared.projectId;

@@ -7,7 +7,7 @@ import {
   it,
   vi
 } from 'vitest';
-import { ProjectCollaborationRoom } from '@openzcad/cloudflare-adapters';
+import type { ProjectCollaborationRoom } from '@openzcad/cloudflare-adapters';
 import {
   toUserId,
   type CollaborationServerMessage,
@@ -20,6 +20,7 @@ import {
 } from '@openzcad/document-core';
 import {
   createRoomContext,
+  createTestRoom,
   installWorkerSocketGlobals,
   type FakeWebSocket
 } from './collaboration-room-harness';
@@ -99,13 +100,59 @@ function documentFrame(
 }
 
 describe('project edit lease', () => {
+  it('renews an existing socket lease after room hibernation', async () => {
+    const storage = createRoomContext();
+    const document = createProjectDocument(
+      'Sleeping lease',
+      toUserId('user_owner')
+    );
+    const original = createTestRoom(storage.context, leaseEnv);
+    const socket = await openSocket(
+      original,
+      document.projectId,
+      'user_owner',
+      'owner',
+      'client_owner'
+    );
+    const lease = await acquire(socket, 'client_owner');
+    const storedBeforeWake = storage.values.get('room:edit-lease');
+    const restored = createTestRoom(storage.context, leaseEnv);
+    await restored.snapshot();
+    expect(storage.values.get('room:edit-lease')).toBe(storedBeforeWake);
+
+    await socket.receive(
+      JSON.stringify({
+        type: 'lease-renew',
+        clientId: 'client_owner',
+        leaseId: lease.leaseId
+      })
+    );
+    expect(socket.lastFrame()).toMatchObject({
+      type: 'lease-granted',
+      lease: { leaseId: lease.leaseId }
+    });
+    const edited = addPrimitiveFeature(document, {
+      name: 'After wake',
+      primitiveKind: 'box',
+      dimensions: { width: 1, height: 1, depth: 1 }
+    });
+    await socket.receive(documentFrame(edited, 'client_owner', lease.leaseId));
+    expect(socket.lastFrame()).toMatchObject({
+      type: 'ack',
+      version: edited.version
+    });
+    expect((await restored.snapshot()).lease).toMatchObject({
+      leaseId: lease.leaseId
+    });
+  });
+
   async function twoBrowsers(role: 'owner' | 'editor' = 'owner') {
     const storage = createRoomContext();
     const document = createProjectDocument(
       'Concurrent project',
       toUserId('user_owner')
     );
-    const room = new ProjectCollaborationRoom(storage.context, leaseEnv);
+    const room = createTestRoom(storage.context, leaseEnv);
     const first = await openSocket(
       room,
       document.projectId,
@@ -268,7 +315,7 @@ describe('project edit lease', () => {
 
   it('restores both leases after eviction and releases only the requesting browser', async () => {
     const { document, context, firstLease, secondLease } = await twoBrowsers();
-    const restarted = new ProjectCollaborationRoom(context, leaseEnv);
+    const restarted = createTestRoom(context, leaseEnv);
     const first = await openSocket(
       restarted,
       document.projectId,
@@ -401,7 +448,7 @@ describe('project edit lease', () => {
       'Two browsers',
       toUserId('user_owner')
     );
-    const room = new ProjectCollaborationRoom(context, leaseEnv);
+    const room = createTestRoom(context, leaseEnv);
     const first = await openSocket(
       room,
       document.projectId,
@@ -456,7 +503,7 @@ describe('project edit lease', () => {
       'Persisted lease',
       toUserId('user_lease_owner')
     );
-    const firstRoom = new ProjectCollaborationRoom(context, leaseEnv);
+    const firstRoom = createTestRoom(context, leaseEnv);
     const first = await openSocket(
       firstRoom,
       document.projectId,
@@ -467,7 +514,7 @@ describe('project edit lease', () => {
     const lease = await acquire(first, 'client_first');
     expect(values.get('room:edit-lease')).toEqual(lease);
 
-    const restarted = new ProjectCollaborationRoom(context, leaseEnv);
+    const restarted = createTestRoom(context, leaseEnv);
     const second = await openSocket(
       restarted,
       document.projectId,
@@ -484,7 +531,7 @@ describe('project edit lease', () => {
     });
 
     values.set('room:edit-lease', { ...lease, expiresAt: Date.now() - 1 });
-    const afterExpiry = new ProjectCollaborationRoom(context, leaseEnv);
+    const afterExpiry = createTestRoom(context, leaseEnv);
     const third = await openSocket(
       afterExpiry,
       document.projectId,
@@ -504,7 +551,7 @@ describe('project edit lease', () => {
       'Heartbeat lease',
       toUserId('user_heartbeat_owner')
     );
-    const room = new ProjectCollaborationRoom(context, leaseEnv);
+    const room = createTestRoom(context, leaseEnv);
     const owner = await openSocket(
       room,
       document.projectId,
@@ -534,7 +581,7 @@ describe('project edit lease', () => {
     expect(values.get('room:edit-lease')).toEqual(renewed);
 
     now.mockReturnValue(startedAt + 30_001);
-    const beforeExpiry = new ProjectCollaborationRoom(context, leaseEnv);
+    const beforeExpiry = createTestRoom(context, leaseEnv);
     const waiting = await openSocket(
       beforeExpiry,
       document.projectId,
@@ -551,7 +598,7 @@ describe('project edit lease', () => {
     });
 
     now.mockReturnValue(startedAt + 40_001);
-    const afterExpiry = new ProjectCollaborationRoom(context, leaseEnv);
+    const afterExpiry = createTestRoom(context, leaseEnv);
     const takeover = await openSocket(
       afterExpiry,
       document.projectId,
@@ -568,7 +615,7 @@ describe('project edit lease', () => {
       'Bound lease',
       toUserId('user_bound_owner')
     );
-    const room = new ProjectCollaborationRoom(context, leaseEnv);
+    const room = createTestRoom(context, leaseEnv);
     const owner = await openSocket(
       room,
       document.projectId,
@@ -611,7 +658,7 @@ describe('project edit lease', () => {
       projectId: 'project_other',
       expiresAt: Date.now() + 30_000
     });
-    const restarted = new ProjectCollaborationRoom(context, leaseEnv);
+    const restarted = createTestRoom(context, leaseEnv);
     const replacement = await openSocket(
       restarted,
       document.projectId,
@@ -633,7 +680,7 @@ describe('project edit lease', () => {
       primitiveKind: 'sphere',
       dimensions: { radius: 1 }
     });
-    const room = new ProjectCollaborationRoom(context, leaseEnv);
+    const room = createTestRoom(context, leaseEnv);
     const viewer = await openSocket(
       room,
       document.projectId,
@@ -710,7 +757,7 @@ describe('project edit lease', () => {
       'HTTP lease',
       toUserId('user_http_owner')
     );
-    const room = new ProjectCollaborationRoom(context, leaseEnv);
+    const room = createTestRoom(context, leaseEnv);
     const socket = await openSocket(
       room,
       document.projectId,
@@ -768,7 +815,7 @@ describe('project edit lease', () => {
         })
       }
     };
-    const room = new ProjectCollaborationRoom(context, env);
+    const room = createTestRoom(context, env);
     const editor = await openSocket(
       room,
       document.projectId,
@@ -820,7 +867,7 @@ describe('project edit lease', () => {
         })
       }
     };
-    const room = new ProjectCollaborationRoom(context, env);
+    const room = createTestRoom(context, env);
     const editor = await openSocket(
       room,
       document.projectId,
@@ -887,7 +934,7 @@ describe('project edit lease', () => {
       'Missing role',
       toUserId('user_missing_role')
     );
-    const room = new ProjectCollaborationRoom(context, {});
+    const room = createTestRoom(context, {});
     const missingRole = {
       'x-openzcad-user-id': 'user_missing_role',
       'x-openzcad-display-name': 'Missing role'
