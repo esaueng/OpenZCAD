@@ -451,7 +451,8 @@ for (const sense of [1, -1]) {
         );
       }
       expect(await syncs()).toBe(count);
-      await expect(page.locator('.feature-row')).toHaveCount(1);
+      // The drag has the stage: the drawer steps aside until it ends.
+      await expect(page.locator('.model-drawer-float')).toHaveCount(0);
       await expect(
         page.getByText('Preview · exact on release', { exact: true })
       ).toBeVisible();
@@ -464,6 +465,8 @@ for (const sense of [1, -1]) {
         );
         expect(await rendered(canvas)).toEqual(before);
         expect(await syncs()).toBe(count);
+        // Nothing was committed, and the drawer is back to say so.
+        await expect(page.locator('.feature-row')).toHaveCount(1);
       } else {
         const held = await rendered(canvas);
         await page.evaluate(() => {

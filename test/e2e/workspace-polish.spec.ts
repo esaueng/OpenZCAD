@@ -1,6 +1,7 @@
 import { test, expect, type Locator, type Page } from '@playwright/test';
 import {
   seedDismissedWorkspaceTour,
+  revealModelDrawer,
   seedOpenCommandFold,
   seedOpenModelDrawer
 } from './openzcad-fixtures';
@@ -355,6 +356,11 @@ test('opens long tool-card diagnostics in the Activity log', async ({
     card.setAttribute('aria-label', 'Edit Fillet operation');
     card.style.position = 'fixed';
     card.style.zIndex = '9999';
+    // Production anchors the card in the right lane at the lane's width;
+    // standing alone it needs a place and that width of its own.
+    card.style.top = '14px';
+    card.style.right = '14px';
+    card.style.width = '330px';
     card.innerHTML = `
       <span class="tool-card-icon" aria-hidden="true"></span>
       <span class="tool-card-copy">
@@ -548,6 +554,8 @@ test('places, retypes, solves, and undoes a driving angle dimension', async ({
   await expect(canvasDimension).toContainText('angle_target = 60°');
   expect(solved.objects).not.toEqual(baseline.objects);
 
+  // The sketch has the stage; the Parameters rail button brings the table.
+  await revealModelDrawer(page, 'Parameters');
   const parameter = page.getByLabel('Expression for angle_target');
   await parameter.fill('45');
   await parameter.press('Enter');
@@ -600,6 +608,12 @@ test('places, retypes, solves, and undoes a driving angle dimension', async ({
   ).not.toContainText('Saving', { timeout: 30_000 });
 
   await page.reload();
+  // The Parameters rail button that brought the table into the sketch
+  // folded History behind it, and the drawer remembers that.
+  await page
+    .getByRole('toolbar', { name: 'Model panels' })
+    .getByRole('button', { name: 'History panel' })
+    .click({ timeout: 30_000 });
   await expect(
     page.getByRole('button', { name: 'Sketch 01', exact: true })
   ).toBeVisible({
@@ -675,6 +689,8 @@ test('edits a canvas radius with expressions, refuses zero, and undoes the solve
   await page.mouse.down();
   await page.mouse.move(center.x + 72, center.y, { steps: 6 });
   await page.mouse.up();
+  // The sketch has the stage, so the drawer asks for its rail button.
+  await revealModelDrawer(page);
   await expect(
     page.locator('.feature-row-main', { hasText: 'Sketch 01' })
   ).toBeVisible();
@@ -698,6 +714,12 @@ test('edits a canvas radius with expressions, refuses zero, and undoes the solve
   expect(radial.objectKind).toBe('circle');
   if (radial.objectKind !== 'circle') throw new Error('Expected a circle');
   expect(Number(radial.radius)).toBeCloseTo(7, 8);
+  // The drawer came up on History for the row above; the table is a
+  // rail press away.
+  await page
+    .getByRole('toolbar', { name: 'Model panels' })
+    .getByRole('button', { name: 'Parameters panel' })
+    .click();
   const parameter = page.getByLabel('Expression for radius_target');
   await parameter.fill('9');
   await parameter.press('Enter');
@@ -814,6 +836,8 @@ test('snaps sketch drawing to existing endpoints', async ({ page }) => {
   await page.mouse.click(center.x - 60, center.y - 40);
   await page.mouse.click(center.x + 60, center.y - 40);
   await page.keyboard.press('Escape');
+  // The sketch has the stage, so the drawer asks for its rail button.
+  await revealModelDrawer(page);
   await expect(
     page.locator('.feature-row-main', { hasText: 'Sketch' })
   ).toBeVisible();

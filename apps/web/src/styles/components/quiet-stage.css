@@ -194,15 +194,47 @@
   pointer-events: none;
 }
 
-.viewer-area.has-inspector .stage-right {
+.viewer-area.has-inspector .stage-right,
+.viewer-area.has-command .stage-right {
   width: min(
     var(--context-w),
     calc(100% - var(--lane-end) - var(--island-gap))
   );
 }
 
-/* shell.css draws the inspector as its own overlay; in the lane it is the
-   column's first item, shrinking (and scrolling) before the drawer does. */
+/* The command slot: every command card — the direct-manipulation tool card,
+   the region Extrude editor, the closed-profile quick action — anchors at
+   the top of the lane, over the inspector and the drawer, in every state.
+   It keeps its full height — the inspector and then the drawer give way
+   under it — and only a card taller than the whole lane (the Extrude
+   editor in a short window) scrolls. */
+.stage-right > .command-float {
+  flex: 0 0 auto;
+  min-height: 0;
+  max-height: 100%;
+  display: flex;
+  flex-direction: column;
+  pointer-events: none;
+}
+
+.command-float > * {
+  flex: 0 0 auto;
+  pointer-events: auto;
+}
+
+.command-float > .tool-card:has(.extrude-form) {
+  flex-shrink: 1;
+  min-height: 0;
+}
+
+/* The drawer yields to a command card all the way down, rather than
+   holding its floor and squeezing the card's form out of reach. */
+.viewer-area.has-command .stage-right > .model-drawer-float {
+  min-height: 0;
+}
+
+/* shell.css draws the inspector as its own overlay; in the lane it follows
+   the command card, shrinking (and scrolling) before the drawer does. */
 .stage-right > .inspector-float {
   position: static;
   flex: 0 1 auto;
@@ -773,21 +805,6 @@
   }
 }
 
-/* ── Floating cards under the top islands ────────────────── */
-
-.workspace.column-layout .tool-card {
-  --tool-card-room: calc(100% - var(--lane-inset) - var(--lane-end));
-  top: var(--stage-top);
-  left: calc(var(--lane-inset) + var(--tool-card-room) / 2);
-}
-
-.workspace.column-layout .viewer-area.has-inspector .tool-card {
-  --tool-card-room: calc(
-    100% - var(--lane-inset) - var(--lane-end) - var(--context-w) -
-      var(--island-gap)
-  );
-}
-
 .workspace.column-layout .sketch-grid-indicator {
   left: var(--lane-inset);
   bottom: var(--island-gap);
@@ -1008,7 +1025,8 @@
   /* There is no second column on a phone: the right lane, when something
      is in it, is the stage beside the rail, over the command card. */
   .viewer-area .stage-right,
-  .viewer-area.has-inspector .stage-right {
+  .viewer-area.has-inspector .stage-right,
+  .viewer-area.has-command .stage-right {
     left: var(--island-gap);
     width: auto;
   }
@@ -1472,17 +1490,6 @@ button.command-rail:disabled {
   flex: 1 1 auto;
   overflow-y: auto;
   border-bottom: 0;
-}
-
-/* A drawer alone narrows the right lane to its own width; with the
-   inspector the lane is the inspector's, which the rule above covers. */
-.workspace.column-layout
-  .viewer-area.has-drawer:not(.has-inspector)
-  .tool-card {
-  --tool-card-room: calc(
-    100% - var(--lane-inset) - var(--lane-end) - var(--drawer-w) -
-      var(--island-gap)
-  );
 }
 
 /* ── The sketch rail and the relations rail (U04 slice 6, streamlined) ── */

@@ -278,3 +278,69 @@ export function toggleToolGroup(state: PanelState, id: ToolGroup): PanelState {
 export function defaultPanelState(): PanelState {
   return copyDefaults();
 }
+
+/**
+ * A mode that wants the stage to itself — a sketch, or a direct-manipulation
+ * drag — suspends the model drawer and the command card's "More tools" fold,
+ * and gives them back when it ends. Suspension is not a preference: the
+ * stored `drawerOpen` and `commandFoldOpen` keep what the user chose, and
+ * what shows is `preference && !suspended`. A panel the user toggles while
+ * suspended is released for the rest of that mode: their intent wins.
+ */
+export interface PanelSuspension {
+  suspended: boolean;
+  drawerReleased: boolean;
+  foldReleased: boolean;
+}
+
+export type SuspendablePanel = 'drawer' | 'fold';
+
+/** The panels as they show, given what the user chose and the mode. */
+export function effectivePanels(
+  state: Pick<PanelState, 'drawerOpen' | 'commandFoldOpen'>,
+  suspension: PanelSuspension
+): { drawerOpen: boolean; commandFoldOpen: boolean } {
+  return {
+    drawerOpen:
+      state.drawerOpen && (!suspension.suspended || suspension.drawerReleased),
+    commandFoldOpen:
+      state.commandFoldOpen &&
+      (!suspension.suspended || suspension.foldReleased)
+  };
+}
+
+/**
+ * Whether a drag still holds the stage. It takes it when a gesture engages
+ * and keeps it while the pointer stays down — a value the kernel refuses
+ * mid-gesture is not the end of the drag — and while that gesture's release
+ * is validated, so the drawer does not flash back between letting go and
+ * the result landing. A commit, a cancel, a refusal at release or a cleared
+ * selection ends it. Validation no drag started (a typed value, the Extrude
+ * form's Create) never takes it.
+ */
+export function nextDragSuspension(
+  held: boolean,
+  phase: string | null,
+  pointerDown = false
+): boolean {
+  if (pointerDown || phase === 'dragging') {
+    return true;
+  }
+  return held && phase === 'validating';
+}
+
+/**
+ * A rail button pressed while the drawer is suspended acts on the drawer as
+ * it shows — closed — so it opens on the section it names instead of
+ * closing a drawer nobody can see.
+ */
+export function toggleDrawerSectionAsShown(
+  state: PanelState,
+  id: DrawerSectionId,
+  hidden: boolean
+): PanelState {
+  return toggleDrawerSection(
+    hidden ? { ...state, drawerOpen: false } : state,
+    id
+  );
+}
