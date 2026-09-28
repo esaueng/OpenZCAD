@@ -23,7 +23,10 @@ import {
   canonicalProjectContentKey
 } from './exactRebuildCache';
 import { GeometryWorkerQueue } from './geometryWorkerQueue';
-import { unpackWorkerRequest } from '../lib/meshTransport';
+import {
+  derivedMeshTransferables,
+  unpackWorkerRequest
+} from '../lib/meshTransport';
 import { resolveExactSourceBytes } from '../lib/exactSourceResolver';
 import { preloadDocumentFonts } from '../lib/textFonts';
 
@@ -628,7 +631,7 @@ async function execute(job: GeometryWorkerJob): Promise<void> {
       ...(request.requestId ? { requestId: request.requestId } : {}),
       derived
     };
-    post(result);
+    post(result, derivedMeshTransferables(derived));
     post(stateFor('ready', request, { stale: false }));
   } catch (error) {
     if (!broadcastGate.isCurrent(job.broadcastToken)) {

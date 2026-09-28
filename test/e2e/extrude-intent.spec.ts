@@ -113,12 +113,12 @@ test('cuts two native profiles with explicit intent and retains it through undo 
       .selectOption('cut');
     await page.getByRole('button', { name: 'Distance…' }).click();
     const pendingKeypad = page.getByRole('dialog', { name: 'Height value' });
-    await pendingKeypad.getByRole('textbox').fill('-8');
     await page.evaluate(() => {
       (
         Reflect.get(window, '__extrudeValidationGate') as ExtrudeValidationGate
       ).hold = true;
     });
+    await pendingKeypad.getByRole('textbox').fill('-8');
     await pendingKeypad.getByRole('button', { name: 'Apply height' }).click();
     await expect
       .poll(() =>
@@ -321,6 +321,7 @@ test('uses the shared editor for preview, cancel, create and operation changes i
     timeout: 30_000
   });
   await editor.getByRole('button', { name: 'Cancel', exact: true }).click();
+  await expect(editor).toHaveCount(0);
   await expectBodyCount(page, 1);
   await extrusion.click();
   await expect(editor.getByLabel('Stored extrude operation')).toHaveValue(
@@ -383,6 +384,7 @@ test('refuses an extrusion edit that invalidates a downstream fillet without sav
     page.getByRole('button', { name: 'Undo', exact: true })
   ).toBeDisabled();
   await inspector.getByRole('button', { name: 'Cancel', exact: true }).click();
+  await expect(inspector).toHaveCount(0);
   await feature.click();
   await expect(distance).toHaveValue('base_t');
   await expect(page.getByTitle('Feature failed to build')).toHaveCount(0);
