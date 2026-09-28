@@ -5,7 +5,6 @@ import {
   D1R2PersistenceService,
   isCloudflareFeatureEnabled,
   projectCollaborationRollout,
-  ProjectCollaborationRoom,
   resolveCollaborationDocument,
   type CloudflareEnv
 } from '@openzcad/cloudflare-adapters';
@@ -23,6 +22,7 @@ import { CommandManager, commandFactories } from '@openzcad/command-system';
 import type { ProjectDocument } from '@openzcad/shared';
 import {
   createRoomContext,
+  createTestRoom,
   settleRoom,
   storedValueBytes
 } from './collaboration-room-harness';
@@ -905,9 +905,7 @@ describe('cloudflare adapters', () => {
     });
 
     expect(created.project.updatedAt).toBe('2026-01-01T00:00:00.000Z');
-    expect(created.document.derived.updatedAt).toBe(
-      '2026-01-01T00:00:00.000Z'
-    );
+    expect(created.document.derived.updatedAt).toBe('2026-01-01T00:00:00.000Z');
     expect(inserts).toHaveLength(1);
     expect(inserts[0]).toContain('2026-01-01T00:00:00.000Z');
   });
@@ -1057,7 +1055,7 @@ describe('cloudflare adapters', () => {
       ...base,
       schemaVersion: 999
     } as unknown as ProjectDocument;
-    const room = new ProjectCollaborationRoom(context, {});
+    const room = createTestRoom(context, {});
 
     const response = await room.fetch(
       roomRequest(future, {
@@ -1110,10 +1108,10 @@ describe('cloudflare adapters', () => {
     const request = (document: typeof first) =>
       roomRequest(document, { clientId: 'client_test', document });
 
-    const original = new ProjectCollaborationRoom(context, {});
+    const original = createTestRoom(context, {});
     expect((await original.fetch(request(first))).status).toBe(200);
 
-    const restored = new ProjectCollaborationRoom(context, {});
+    const restored = createTestRoom(context, {});
     const conflict = await restored.fetch(request(divergent));
     expect(conflict.status).toBe(409);
     await expect(conflict.json()).resolves.toMatchObject({
@@ -1142,7 +1140,7 @@ describe('cloudflare adapters', () => {
       baseVersion: number | null
     ) => roomRequest(document, { clientId, document, baseVersion });
 
-    const room = new ProjectCollaborationRoom(context, {});
+    const room = createTestRoom(context, {});
 
     // Both clients join on the shared base first; this is what puts the common
     // ancestor into room history so a three-way merge is possible at all.
@@ -1172,7 +1170,7 @@ describe('cloudflare adapters', () => {
     expect(merged.featureOrder).toHaveLength(2);
     expect(merged.bodyOrder).toHaveLength(2);
 
-    const restored = new ProjectCollaborationRoom(context, {});
+    const restored = createTestRoom(context, {});
     const ackC = (await (
       await restored.fetch(submit('client_b', merged, merged.version))
     ).json()) as { type: string; version: number; document?: typeof fromA };
@@ -1195,7 +1193,7 @@ describe('cloudflare adapters', () => {
       version
     });
 
-    const room = new ProjectCollaborationRoom(context, {});
+    const room = createTestRoom(context, {});
     for (let offset = 0; offset < 4; offset += 1) {
       const document = at(heavy.version + offset);
       const response = await room.fetch(
@@ -1236,7 +1234,7 @@ describe('cloudflare adapters', () => {
       primitiveKind: 'box',
       dimensions: { width: 1, height: 1, depth: 1 }
     });
-    const room = new ProjectCollaborationRoom(context, {});
+    const room = createTestRoom(context, {});
     expect(
       (
         await room.fetch(
@@ -1273,7 +1271,7 @@ describe('cloudflare adapters', () => {
     expect((values.get('room:latest') as ProjectDocument).version).toBe(
       accepted.version
     );
-    const restored = new ProjectCollaborationRoom(context, {});
+    const restored = createTestRoom(context, {});
     const state = await restored.fetch(
       roomRequest(accepted, {
         clientId: 'client_ok',
@@ -1290,7 +1288,7 @@ describe('cloudflare adapters', () => {
   it('rejects an over-long snapshot body before parsing it', async () => {
     const { context } = createRoomContext();
     const base = createProjectDocument('Flood Room', toUserId('user_room'));
-    const room = new ProjectCollaborationRoom(context, {});
+    const room = createTestRoom(context, {});
     const response = await room.fetch(
       roomRequest(base, {
         clientId: 'client_flood',
@@ -1314,7 +1312,7 @@ describe('cloudflare adapters', () => {
       'Stream Flood Room',
       toUserId('user_room')
     );
-    const room = new ProjectCollaborationRoom(context, {});
+    const room = createTestRoom(context, {});
     const chunk = new TextEncoder().encode('😀'.repeat(250_000));
     let pulls = 0;
     let cancelled = false;
@@ -1388,7 +1386,7 @@ describe('cloudflare adapters', () => {
     ]);
     const { context } = createRoomContext(values);
 
-    const room = new ProjectCollaborationRoom(context, {});
+    const room = createTestRoom(context, {});
     await settleRoom(room);
 
     expect(values.has('room-state')).toBe(false);
@@ -1439,7 +1437,7 @@ describe('cloudflare adapters', () => {
     ]);
     const { context } = createRoomContext(values);
 
-    const room = new ProjectCollaborationRoom(context, {});
+    const room = createTestRoom(context, {});
     await settleRoom(room);
 
     expect(values.has('room-state')).toBe(false);
@@ -1468,7 +1466,7 @@ describe('cloudflare adapters', () => {
       primitiveKind: 'box',
       dimensions: { width: 1, height: 1, depth: 1 }
     });
-    const room = new ProjectCollaborationRoom(context, {});
+    const room = createTestRoom(context, {});
     for (let step = 0; step < 30; step += 1) {
       const next: ProjectDocument = {
         ...document,
