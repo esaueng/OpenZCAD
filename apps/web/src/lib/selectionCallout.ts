@@ -249,6 +249,9 @@ function fill(
       button.className = 'selection-callout-verb';
       button.textContent = verb.label;
       button.title = verb.title;
+      // Named for what it acts on, so it never shares a name with the rail
+      // button or tool-card action of the same verb.
+      button.setAttribute('aria-label', `Selection: ${verb.label}`);
       button.disabled = verb.disabled;
       button.setAttribute('aria-pressed', String(verb.pressed));
       button.addEventListener('click', (event) => {
@@ -274,4 +277,94 @@ function fill(
     children.push(clear);
   }
   element.replaceChildren(...children);
+}
+
+export interface ScreenRect {
+  left: number;
+  top: number;
+  right: number;
+  bottom: number;
+}
+
+/**
+ * How far the drag handle's arrow can reach from its value chip: the chip
+ * sits 44 px from the arrow's pin and the shaft runs back from the pin, so
+ * this much margin around the value chip covers the whole arrow.
+ */
+export const HANDLE_KEEP_OUT_PX = 100;
+
+/**
+ * The vertical shift that keeps the selection chip off a drag handle.
+ *
+ * The chip hangs over the pick and the handle grows out of it, so in some
+ * views they land on the same pixels — and a verb button over the arrow
+ * takes the press meant for the drag. `chip` is the chip's box without any
+ * shift, `valueChip` the handle's value chip. The chip moves above the
+ * keep-out zone, or below it when above would leave the viewport; zero when
+ * they do not meet.
+ */
+export function selectionCalloutClearance(
+  chip: ScreenRect,
+  valueChip: ScreenRect,
+  viewport: ScreenRect,
+  keepOut = HANDLE_KEEP_OUT_PX
+): number {
+  const zone = {
+    left: valueChip.left - keepOut,
+    top: valueChip.top - keepOut,
+    right: valueChip.right + keepOut,
+    bottom: valueChip.bottom + keepOut
+  };
+  const meets =
+    chip.left < zone.right &&
+    chip.right > zone.left &&
+    chip.top < zone.bottom &&
+    chip.bottom > zone.top;
+  if (!meets) {
+    return 0;
+  }
+  const gap = 4;
+  const up = zone.top - gap - chip.bottom;
+  if (chip.top + up >= viewport.top + gap) {
+    return up;
+  }
+  return zone.bottom + gap - chip.top;
+}
+
+/**
+ * Applies {@link selectionCalloutClearance} to a chip on screen. Run after
+ * the label renderer places the chip each frame; the shift rides the CSS
+ * `translate` property, which composes with the renderer's inline transform
+ * and the edge clamp's margins instead of fighting them.
+ */
+export function keepSelectionCalloutClear(element: HTMLElement): void {
+  if (!element.classList.contains(SELECTION_CALLOUT_CHIP_CLASS)) {
+    return;
+  }
+  const scope = element.closest('.viewer-shell') ?? element.ownerDocument;
+  const valueChip = scope.querySelector<HTMLElement>(
+    '.handle-value-chip:not([hidden])'
+  );
+  const current = Number.parseFloat(
+    element.style.translate.split(' ')[1] ?? '0'
+  );
+  const shift = Number.isFinite(current) ? current : 0;
+  let next = 0;
+  const container = element.parentElement;
+  if (valueChip && container) {
+    const rect = element.getBoundingClientRect();
+    next = selectionCalloutClearance(
+      {
+        left: rect.left,
+        right: rect.right,
+        top: rect.top - shift,
+        bottom: rect.bottom - shift
+      },
+      valueChip.getBoundingClientRect(),
+      container.getBoundingClientRect()
+    );
+  }
+  if (Math.abs(next - shift) > 0.5) {
+    element.style.translate = next ? `0 ${next}px` : '';
+  }
 }
