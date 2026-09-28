@@ -2565,7 +2565,22 @@ export interface ProjectCollaborationCapabilitiesResponse {
   canary: boolean;
 }
 
+export type AccountTier = 'free' | 'premium';
+
+export interface AccountEntitlements {
+  tier: AccountTier;
+  artifactLimitBytes: number;
+  ai: {
+    requestLimit: number;
+    costLimitUnits: number;
+    windowSeconds: number;
+    concurrencyLimit: number;
+  };
+}
+
 export interface AuthSession {
+  /** Computed by the server; optional for older servers and local sessions. */
+  entitlements?: AccountEntitlements;
   userId: UserId;
   displayName: string;
   email?: string;
@@ -3055,6 +3070,7 @@ export const MAX_LOCAL_CHECKPOINT_DOCUMENTS = 25;
 
 /** What an account is currently storing, for the settings panel. */
 export interface AccountStorageUsage {
+  entitlements?: AccountEntitlements;
   projectCount: number;
   /** Bytes held by the current copy of each project. */
   documentBytes: number;

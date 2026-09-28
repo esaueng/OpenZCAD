@@ -1,3 +1,4 @@
+import { accountEntitlements } from '@openzcad/cloudflare-adapters';
 import { toUserId, type AuthSession } from '@openzcad/shared';
 import {
   isCloudflareFeatureEnabled,
@@ -801,11 +802,15 @@ function desktopUserCode(): string {
   return code;
 }
 
-function desktopSession(row: { user_id: string; email: string }): AuthSession {
+function desktopSession(
+  row: { user_id: string; email: string },
+  env: CloudflareEnv
+): AuthSession {
   return {
     userId: toUserId(row.user_id),
     displayName: row.email.split('@')[0] || row.email,
     email: row.email,
+    entitlements: accountEntitlements(env, row.email),
     mode: 'email-code'
   };
 }
@@ -961,7 +966,7 @@ function issueDesktopTokens(
   const maxAgeSeconds = configuredSessionDays(env) * 24 * 60 * 60;
   return {
     status: 'authorized',
-    session: desktopSession(row),
+    session: desktopSession(row, env),
     sessionId: crypto.randomUUID(),
     accessToken: randomToken(),
     accessExpiresAt: timestamp + DESKTOP_ACCESS_TOKEN_TTL_SECONDS,
@@ -1245,7 +1250,7 @@ async function authenticateDesktopBearer(
       'invalid'
     );
   }
-  return desktopSession({ user_id: row.user_id, email: row.email });
+  return desktopSession({ user_id: row.user_id, email: row.email }, env);
 }
 
 export async function destroyDesktopAuthorization(

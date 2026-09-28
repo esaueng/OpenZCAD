@@ -1,3 +1,4 @@
+import { accountTier } from '@openzcad/cloudflare-adapters';
 import {
   CLOUD_AUTOSAVE_DELAY_BOUNDS,
   DEFAULT_APP_SETTINGS,
@@ -599,10 +600,12 @@ export function deploymentAssistantAllowed(
   }
   const normalizedEmail = email.trim().toLowerCase();
   return (
-    env.AI_DEPLOYMENT_ALLOWED_EMAILS?.split(',')
+    accountTier(env, email) === 'premium' ||
+    (env.AI_DEPLOYMENT_ALLOWED_EMAILS?.split(',')
       .map((entry) => entry.trim().toLowerCase())
       .filter(Boolean)
-      .includes(normalizedEmail) ?? false
+      .includes(normalizedEmail) ??
+      false)
   );
 }
 

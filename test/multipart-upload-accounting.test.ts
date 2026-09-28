@@ -305,7 +305,7 @@ let service: D1R2PersistenceService;
 
 beforeEach(() => {
   sqlite = new DatabaseSync(':memory:');
-  applyMigrations(sqlite);
+  applyMigrations(sqlite, 22);
   seedAccount(sqlite, OWNER, PROJECT);
   seedAccount(sqlite, OTHER_OWNER, OTHER_PROJECT);
   d1 = new SqliteD1(sqlite);
@@ -1293,5 +1293,160 @@ describe('migration 0020 single-part compatibility', () => {
       ).run(PROJECT, expiry, OWNER)
     ).toThrow('artifact_upload_protocol_version_required');
     db.close();
+  });
+});
+
+describe('tier-aware durable artifact quotas', () => {
+  function premiumService() {
+    const env = {
+      DB: d1.database,
+      ARTIFACTS: r2.bucket,
+      PROJECT_SHARING_ENABLED: 'true',
+      PREMIUM_USER_EMAILS: `${OWNER}@example.com`,
+      PREMIUM_ARTIFACT_LIMIT_BYTES: String(MAX_ACCOUNT_ARTIFACT_BYTES + 8)
+    };
+    return { env, premium: new D1R2PersistenceService(env) };
+  }
+  function seedArtifact(bytes: number) {
+    sqlite
+      .prepare(
+        `INSERT INTO artifacts
+      (id, project_id, kind, name, object_key, content_type, bytes, metadata_json, created_at)
+      VALUES ('tier-existing', ?, 'snapshot', 'existing.step', 'tier/existing', 'model/step', ?, '{}', '2026-01-01')`
+      )
+      .run(PROJECT, bytes);
+  }
+
+  it('allows Premium beyond the Free ceiling and reports the effective allowance', async () => {
+    const { premium } = premiumService();
+    const upload = await createMultipart(premium);
+    seedArtifact(MAX_ACCOUNT_ARTIFACT_BYTES);
+    await premium.putUploadPart(
+      OWNER,
+      upload.session.uploadSessionId,
+      upload.uploadId,
+      1,
+      new ArrayBuffer(8)
+    );
+    await expect(
+      premium.putUploadPart(
+        OWNER,
+        upload.session.uploadSessionId,
+        upload.uploadId,
+        2,
+        new ArrayBuffer(1)
+      )
+    ).rejects.toMatchObject({ limitBytes: MAX_ACCOUNT_ARTIFACT_BYTES + 8 });
+    expect(await premium.getStorageUsage(OWNER)).toMatchObject({
+      artifactBytes: MAX_ACCOUNT_ARTIFACT_BYTES,
+      artifactLimitBytes: MAX_ACCOUNT_ARTIFACT_BYTES + 8,
+      entitlements: { tier: 'premium' }
+    });
+  });
+
+  it('atomically enforces the Premium ceiling across competing sessions', async () => {
+    const { premium } = premiumService();
+    const first = await createMultipart(premium);
+    const second = await createMultipart(premium);
+    seedArtifact(MAX_ACCOUNT_ARTIFACT_BYTES + 4);
+    const attempts = await Promise.allSettled(
+      [first, second].map((upload) =>
+        premium.putUploadPart(
+          OWNER,
+          upload.session.uploadSessionId,
+          upload.uploadId,
+          1,
+          new ArrayBuffer(4)
+        )
+      )
+    );
+    expect(
+      attempts.filter((result) => result.status === 'fulfilled')
+    ).toHaveLength(1);
+    expect(usage(sqlite)?.reserved_bytes).toBe(4);
+  });
+
+  it('charges collaborators against the owner tier, including after owner downgrade', async () => {
+    const { premium, env } = premiumService();
+    sqlite
+      .prepare(
+        `INSERT INTO project_members (project_id, user_id, role, added_by_user_id, created_at, updated_at)
+      VALUES (?, ?, 'editor', ?, 1, 1)`
+      )
+      .run(PROJECT, OTHER_OWNER, OWNER);
+    const upload = await createMultipart(premium, OTHER_OWNER, PROJECT);
+    seedArtifact(MAX_ACCOUNT_ARTIFACT_BYTES);
+    await premium.putUploadPart(
+      OTHER_OWNER,
+      upload.session.uploadSessionId,
+      upload.uploadId,
+      1,
+      new ArrayBuffer(4)
+    );
+    // Giving Premium to the editor must not upgrade the now-Free owner.
+    env.PREMIUM_USER_EMAILS = `${OTHER_OWNER}@example.com`;
+    await expect(
+      premium.putUploadPart(
+        OTHER_OWNER,
+        upload.session.uploadSessionId,
+        upload.uploadId,
+        2,
+        new ArrayBuffer(1)
+      )
+    ).rejects.toMatchObject({ limitBytes: MAX_ACCOUNT_ARTIFACT_BYTES });
+    expect((await premium.getStorageUsage(OWNER)).entitlements?.tier).toBe(
+      'free'
+    );
+    expect(
+      (await premium.listArtifacts(OWNER, PROJECT)).artifacts
+    ).toHaveLength(1);
+    await premium.abortMultipartUpload(
+      OTHER_OWNER,
+      upload.session.uploadSessionId,
+      upload.uploadId
+    );
+    expect(usage(sqlite)?.reserved_bytes).toBe(0);
+  });
+
+  it('allows reserved uploads to shrink and finalize after a downgrade without deleting files', async () => {
+    const { premium, env } = premiumService();
+    const upload = await createMultipart(premium);
+    seedArtifact(MAX_ACCOUNT_ARTIFACT_BYTES + 1);
+    await premium.putUploadPart(
+      OWNER,
+      upload.session.uploadSessionId,
+      upload.uploadId,
+      1,
+      new ArrayBuffer(4)
+    );
+    env.PREMIUM_USER_EMAILS = '';
+    const part = await premium.putUploadPart(
+      OWNER,
+      upload.session.uploadSessionId,
+      upload.uploadId,
+      1,
+      new ArrayBuffer(2)
+    );
+    await premium.completeMultipartUpload(
+      OWNER,
+      upload.session.uploadSessionId,
+      { uploadId: upload.uploadId, parts: [part] }
+    );
+    const artifact = await premium.finalizeArtifact(OWNER, {
+      projectId: PROJECT,
+      uploadSessionId: upload.session.uploadSessionId,
+      artifactId: upload.session.artifactId
+    });
+    expect(artifact?.bytes).toBe(2);
+    expect(usage(sqlite)).toMatchObject({
+      finalized_bytes: MAX_ACCOUNT_ARTIFACT_BYTES + 3,
+      reserved_bytes: 0
+    });
+    await expect(createMultipart(premium)).rejects.toBeInstanceOf(
+      ArtifactQuotaError
+    );
+    expect(
+      (await premium.listArtifacts(OWNER, PROJECT)).artifacts
+    ).toHaveLength(2);
   });
 });

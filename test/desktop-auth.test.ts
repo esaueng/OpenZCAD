@@ -315,7 +315,19 @@ describe('desktop authorization', () => {
         }),
         env
       )
-    ).resolves.toEqual(session);
+    ).resolves.toEqual({
+      ...session,
+      entitlements: {
+        tier: 'free',
+        artifactLimitBytes: 2 * 1024 ** 3,
+        ai: {
+          requestLimit: 6,
+          costLimitUnits: 24,
+          windowSeconds: 600,
+          concurrencyLimit: 2
+        }
+      }
+    });
     await expect(
       exchangeDesktopAuthorization(
         {
@@ -343,7 +355,19 @@ describe('desktop authorization', () => {
         }),
         env
       )
-    ).resolves.toEqual(session);
+    ).resolves.toEqual({
+      ...session,
+      entitlements: {
+        tier: 'free',
+        artifactLimitBytes: 2 * 1024 ** 3,
+        ai: {
+          requestLimit: 6,
+          costLimitUnits: 24,
+          windowSeconds: 600,
+          concurrencyLimit: 2
+        }
+      }
+    });
 
     await expect(
       refreshDesktopAuthorization(

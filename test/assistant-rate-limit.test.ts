@@ -275,10 +275,15 @@ describe('assistant provider usage guard', () => {
     }
 
     // Self-funded traffic must not consume the deployment-funded window.
-    const funded = await acquireAssistantPermit(assistantRequest(), userId, env, {
-      ...personal,
-      deploymentFunded: true
-    });
+    const funded = await acquireAssistantPermit(
+      assistantRequest(),
+      userId,
+      env,
+      {
+        ...personal,
+        deploymentFunded: true
+      }
+    );
     expect(funded.allowed).toBe(true);
     if (funded.allowed) {
       await funded.release();
@@ -585,5 +590,122 @@ describe('assistant provider usage guard', () => {
       { cost: 1, leaseMs: 30_000 }
     );
     expect(local.allowed).toBe(true);
+  });
+});
+
+describe('premium assistant enforcement', () => {
+  const premiumEmail = 'premium@example.com';
+  function premiumEnv() {
+    const fixture = assistantGuardD1();
+    return {
+      DB: fixture.db,
+      AI_IDENTITY_PEPPER: 'test-pepper',
+      PREMIUM_USER_EMAILS: premiumEmail,
+      AI_GLOBAL_DAILY_REQUEST_LIMIT: '10000',
+      AI_GLOBAL_DAILY_COST_LIMIT_UNITS: '40000'
+    };
+  }
+  const options = { cost: 1, leaseMs: 10_000, now: 1_800_000_000_000 };
+  it('uses premium quotas and preserves usage on downgrade', async () => {
+    const env = premiumEnv();
+    const user = toUserId('premium-account');
+    for (let i = 0; i < 7; i++) {
+      const permit = await acquireAssistantPermit(
+        assistantRequest(),
+        user,
+        env,
+        { ...options, email: premiumEmail }
+      );
+      expect(permit.allowed).toBe(true);
+      if (permit.allowed) await permit.release();
+    }
+    env.PREMIUM_USER_EMAILS = '';
+    const downgraded = await acquireAssistantPermit(
+      assistantRequest(),
+      user,
+      env,
+      { ...options, email: premiumEmail }
+    );
+    expect(downgraded.allowed).toBe(false);
+    if (!downgraded.allowed)
+      expect(await downgraded.response.json()).toMatchObject({
+        code: 'AI_RATE_LIMITED'
+      });
+  });
+  it('isolates premium IP usage from exhausted Free IP quotas', async () => {
+    const env = { ...premiumEnv(), AI_IP_RATE_LIMIT_REQUESTS: '1' };
+    for (let i = 0; i < 2; i++) {
+      const permit = await acquireAssistantPermit(
+        assistantRequest(),
+        toUserId(`free-${i}`),
+        env,
+        options
+      );
+      expect(permit.allowed).toBe(i === 0);
+      if (permit.allowed) await permit.release();
+    }
+    const premium = await acquireAssistantPermit(
+      assistantRequest(),
+      toUserId('premium'),
+      env,
+      { ...options, email: premiumEmail }
+    );
+    expect(premium.allowed).toBe(true);
+    if (premium.allowed) await premium.release();
+  });
+  it('does not accept a premium tier or email from request headers', async () => {
+    const env = { ...premiumEnv(), AI_ACCOUNT_RATE_LIMIT_REQUESTS: '1' };
+    const request = assistantRequest();
+    request.headers.set('x-account-tier', 'premium');
+    request.headers.set('x-user-email', premiumEmail);
+    for (let i = 0; i < 2; i++) {
+      const permit = await acquireAssistantPermit(
+        request,
+        toUserId('free'),
+        env,
+        options
+      );
+      expect(permit.allowed).toBe(i === 0);
+      if (permit.allowed) await permit.release();
+    }
+  });
+  it('retains the global daily spend ceiling for premium requests', async () => {
+    const env = { ...premiumEnv(), AI_GLOBAL_DAILY_REQUEST_LIMIT: '1' };
+    const first = await acquireAssistantPermit(
+      assistantRequest(),
+      toUserId('premium'),
+      env,
+      { ...options, email: premiumEmail }
+    );
+    expect(first.allowed).toBe(true);
+    if (first.allowed) await first.release();
+    const second = await acquireAssistantPermit(
+      assistantRequest(),
+      toUserId('premium'),
+      env,
+      { ...options, email: premiumEmail }
+    );
+    expect(second.allowed).toBe(false);
+    if (!second.allowed)
+      expect(await second.response.json()).toMatchObject({
+        code: 'AI_GLOBAL_BUDGET_EXHAUSTED'
+      });
+  });
+  it('returns the server-resolved membership in session responses', async () => {
+    const env = {
+      ...premiumEnv(),
+      PREMIUM_USER_EMAILS: 'allowed@example.com',
+      AUTH_MODE: 'email-code' as const
+    };
+    const response = await worker.fetch(
+      new Request('https://example.com/api/session', {
+        headers: { cookie: '__Host-openzcad_session=test-token' }
+      }),
+      env
+    );
+    expect(response.status).toBe(200);
+    expect(await response.json()).toMatchObject({
+      entitlements: { tier: 'premium', artifactLimitBytes: 100 * 1024 ** 3 }
+    });
   });
 });
