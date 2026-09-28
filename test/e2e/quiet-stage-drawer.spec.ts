@@ -195,3 +195,60 @@ test('the tool card heads the right lane and a drag suspends the drawer', async 
   await expect(drawer).toBeVisible({ timeout: 15_000 });
   expect(await storedDrawerOpen(page)).toBe(true);
 });
+
+/** The right lane's children in order, with their vertical extents. */
+function laneChildren(page: Page) {
+  return page.locator('.stage-right').evaluate((element) =>
+    [...element.children].map((child) => {
+      const box = child.getBoundingClientRect();
+      return { name: child.className, top: box.top, bottom: box.bottom };
+    })
+  );
+}
+
+/*
+  The Move panel is a command card like the others: it heads the right lane
+  with the drawer yielding below it, where it used to float over the
+  drawer's top rows. Its instruction stays over the model.
+*/
+test('the Move panel heads the right lane over the drawer', async ({
+  page
+}) => {
+  await page.setViewportSize({ width: 1440, height: 900 });
+  await stubApi(page);
+  await createProject(page, 'Drawer move check');
+  await page.getByRole('button', { name: /^Box \(B\)/ }).click();
+  await page
+    .getByRole('region', { name: 'Feature inspector' })
+    .getByRole('button', { name: /^Create/ })
+    .click();
+  await expect(page.getByRole('button', { name: /^Fillet/ })).toBeEnabled();
+  const drawer = page.locator('.model-drawer-float');
+  await expect(drawer).toBeVisible();
+
+  await page.keyboard.press('m');
+  const move = page.getByRole('form', { name: 'Move controls' });
+  await expect(move).toBeVisible();
+  await expect(
+    page
+      .locator('.stage-right > .command-float')
+      .getByRole('form', { name: 'Move controls' })
+  ).toBeVisible();
+  await expect(page.getByText(/Drag an arrow to move/)).toBeVisible();
+  await expect(page.locator('.stage-right .extrude-instruction')).toHaveCount(
+    0
+  );
+  await expect(drawer).toBeVisible();
+  const lane = await laneChildren(page);
+  expect(lane[0]?.name).toBe('command-float');
+  for (let index = 1; index < lane.length; index += 1) {
+    expect(lane[index]!.top, JSON.stringify(lane)).toBeGreaterThanOrEqual(
+      lane[index - 1]!.bottom
+    );
+  }
+
+  await move.getByRole('button', { name: 'Cancel', exact: true }).click();
+  await expect(move).toHaveCount(0);
+  await expect(page.locator('.stage-right > .command-float')).toHaveCount(0);
+  await expect(drawer).toBeVisible();
+});

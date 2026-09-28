@@ -203,11 +203,11 @@
 }
 
 /* The command slot: every command card — the direct-manipulation tool card,
-   the region Extrude editor, the closed-profile quick action — anchors at
-   the top of the lane, over the inspector and the drawer, in every state.
-   It keeps its full height — the inspector and then the drawer give way
-   under it — and only a card taller than the whole lane (the Extrude
-   editor in a short window) scrolls. */
+   the region Extrude editor, the Move panel, the closed-profile quick
+   action — anchors at the top of the lane, over the inspector and the
+   drawer, in every state. It keeps its full height — the inspector and then
+   the drawer give way under it — and only a card taller than the whole lane
+   (the Extrude editor or the Move panel in a short window) scrolls. */
 .stage-right > .command-float {
   flex: 0 0 auto;
   min-height: 0;
@@ -222,9 +222,17 @@
   pointer-events: auto;
 }
 
-.command-float > .tool-card:has(.extrude-form) {
+.command-float > .tool-card:has(.extrude-form),
+.command-float > .move-controller {
   flex-shrink: 1;
   min-height: 0;
+}
+
+/* The Move panel is as tall as its axis grids; in a short window it scrolls
+   inside the slot, like the Extrude editor, instead of running off it. */
+.command-float > .move-controller {
+  max-height: 100%;
+  overflow-y: auto;
 }
 
 /* The drawer yields to a command card all the way down, rather than
@@ -240,14 +248,6 @@
   flex: 0 1 auto;
   min-height: 0;
   width: auto;
-}
-
-/* Direct-edit controls (Move, the extrude value) are the operation of the
-   moment: top of the right lane, over the drawer, clear of the rail. */
-.workspace.column-layout .extrude-controller {
-  top: var(--stage-top);
-  right: var(--lane-end);
-  z-index: calc(var(--z-inspector-float) + 1);
 }
 
 /* ── The bottom-left readout and the corner ──────────────── */
