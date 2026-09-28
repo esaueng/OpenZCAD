@@ -1,5 +1,6 @@
 import type { Page } from '@playwright/test';
 import { steppedCylinderDocument } from '../support/stepped-cylinder';
+import { splitRimCylinderDocument } from '../support/split-rim-cylinder';
 import {
   test,
   expect,
@@ -331,8 +332,11 @@ const rendered = (canvas: ReturnType<Page['locator']>) =>
       })
   );
 
-for (const sense of [1, -1]) {
-  test(`stepped rounded cap ${sense} previews without worker work and keeps the other end fixed`, async ({
+for (const { name, build, sense } of [
+  { name: 'stepped rounded', build: steppedCylinderDocument },
+  { name: 'split-rim imported', build: splitRimCylinderDocument }
+].flatMap((fixture) => [1, -1].map((sense) => ({ ...fixture, sense })))) {
+  test(`${name} cap ${sense} previews without worker work and keeps the other end fixed`, async ({
     page
   }) => {
     test.setTimeout(90_000);
@@ -366,12 +370,12 @@ for (const sense of [1, -1]) {
     });
     const errors: string[] = [];
     page.on('pageerror', (error) => errors.push(error.message));
-    const { document } = await steppedCylinderDocument();
+    const { document } = await build();
     await page.goto('/');
     await page.getByRole('button', { name: 'Import project…' }).click();
     // The chooser is driven through the same input used by the File menu.
     await page.getByLabel('Import project backup').setInputFiles({
-      name: 'stepped.openzcad',
+      name: 'terminal-cap.openzcad',
       mimeType: 'application/json',
       buffer: Buffer.from(
         JSON.stringify({
