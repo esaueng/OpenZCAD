@@ -82,6 +82,14 @@ const TRANSLATIONS: ReadonlyArray<{ pattern: RegExp; sentence: string }> = [
     sentence: 'The exact kernel could not build this result.'
   },
   {
+    // A local face move sweeps the face and lets only its edge neighbours
+    // stretch; anything else in the path refuses the move.
+    pattern:
+      /swept face reaches nonadjacent face|sweep may contact a nonadjacent|crosses a nonadjacent source boundary/i,
+    sentence:
+      'The face would run into another part of the body before it got that far.'
+  },
+  {
     pattern: /self-intersect/i,
     sentence: 'The resulting body would intersect itself.'
   },
