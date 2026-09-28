@@ -8,7 +8,7 @@ AI_MODEL=openai/gpt-5.6-sol
 # base64-encoded 32-byte key, keep it secret, and use the same key after restarts.
 # SETTINGS_ENCRYPTION_KEY=
 # Hosted email-code environments also require a stable AI_IDENTITY_PEPPER for
-# public assistant identity and quota HMACs. Local development bypasses hosted
+# public assistant identity HMACs. Local development bypasses hosted
 # assistant guards.
 # AI_IDENTITY_PEPPER=
 
@@ -18,8 +18,6 @@ AI_MODEL=openai/gpt-5.6-sol
 # Hosted deployment-key access: AI_DEPLOYMENT_ALLOWED_EMAILS=owner@example.com
 # Scoped collaboration fallback when global flags are off: PROJECT_COLLABORATION_CANARY_EMAILS=owner@example.com,collaborator@example.com
 # Hosted custom endpoints: AI_ALLOWED_BASE_URL_HOSTS=models.example.com
-# Optional daily ceilings: AI_GLOBAL_DAILY_REQUEST_LIMIT=100
-# Optional weighted ceiling: AI_GLOBAL_DAILY_COST_LIMIT_UNITS=400
 
 # Direct OpenAI alternative: AI_PROVIDER=openai and OPENAI_API_KEY=
 # For another Responses-compatible provider, set AI_PROVIDER=responses-compatible
@@ -40,4 +38,4 @@ AI_MODEL=openai/gpt-5.6-sol
 # Manual Premium grants (server only; use example addresses here).
 # PREMIUM_USER_EMAILS=member@example.com
 # Premium grants hosted AI eligibility and 100 GiB artifact storage by default.
-# See docs/plans/account-tiers.md for overrides and deployment budget settings.
+# See docs/plans/account-tiers.md for Free and Premium account limits.
