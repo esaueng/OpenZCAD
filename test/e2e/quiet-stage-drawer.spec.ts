@@ -1,5 +1,5 @@
 import { expect, test, type Page } from '@playwright/test';
-import { createProject, stubApi } from './openzcad-fixtures';
+import { createProject, promptField, stubApi } from './openzcad-fixtures';
 
 /*
   The quiet stage keeps the model browser (parameters, bodies, history) in a
@@ -251,4 +251,49 @@ test('the Move panel heads the right lane over the drawer', async ({
   await expect(move).toHaveCount(0);
   await expect(page.locator('.stage-right > .command-float')).toHaveCount(0);
   await expect(drawer).toBeVisible();
+});
+
+/*
+  Naming a feature in the search bar mid-sketch opens the drawer on it, as a
+  rail press would: it used to set the stored preference only, so nothing
+  appeared until the sketch ended.
+*/
+test('search opens the suspended drawer mid-sketch', async ({ page }) => {
+  await page.setViewportSize({ width: 1440, height: 900 });
+  await stubApi(page);
+  await createProject(page, 'Drawer search check');
+  const inspector = page.getByRole('region', { name: 'Feature inspector' });
+  await page.getByRole('button', { name: /^Box \(B\)/ }).click();
+  await inspector.getByLabel('Name').fill('Base plate');
+  await inspector.getByRole('button', { name: /^Create/ }).click();
+  await expect(page.getByRole('button', { name: /^Fillet/ })).toBeEnabled();
+  const drawer = page.locator('.model-drawer-float');
+  await expect(drawer).toBeVisible();
+
+  await page.getByRole('button', { name: /^Sketch \(S\)/ }).click();
+  await page.getByRole('button', { name: 'Top (XY)' }).click();
+  const sketchTools = page.getByRole('toolbar', { name: 'Sketch tools' });
+  await expect(sketchTools).toBeVisible();
+  await expect(drawer).toHaveCount(0);
+
+  await promptField(page).fill('/base');
+  await page
+    .getByRole('option')
+    .filter({ hasText: 'Base plate' })
+    .filter({ hasText: 'Feature' })
+    .click();
+  await expect(drawer).toBeVisible();
+  await expect(
+    page
+      .getByRole('toolbar', { name: 'Model panels' })
+      .getByRole('button', { name: 'History panel' })
+  ).toHaveAttribute('aria-pressed', 'true');
+  await expect(sketchTools).toBeVisible();
+
+  await page
+    .getByRole('button', { name: 'Finish Sketch', exact: true })
+    .click();
+  await expect(sketchTools).toHaveCount(0);
+  await expect(drawer).toBeVisible();
+  expect(await storedDrawerOpen(page)).toBe(true);
 });

@@ -15766,6 +15766,21 @@ export function App() {
   // View mode writes its own hints rather than filtering the build chain below.
   // Selecting a cylinder still arms the radius interaction even with its handle
   // disarmed, and "drag the radial handle" is a promise View mode cannot keep.
+  /**
+   * Opens the drawer on a section by name, as the palette's feature and
+   * parameter results do. Asking for it by name mid-sketch or mid-drag is the
+   * user wanting it back: like a rail press, it releases the suspension for
+   * the rest of that mode instead of setting a preference nobody can see.
+   */
+  const showDrawerSection = (section: 'history' | 'parameters') => {
+    const hidden = panels.drawerHidden;
+    setPanelState((current) => ({
+      ...current,
+      drawerOpen: true,
+      sidebarSections: { ...current.sidebarSections, [section]: true }
+    }));
+    if (hidden) panels.release('drawer');
+  };
   const paletteCommands: PaletteCommand[] = [
     // Modeling tools leave the palette entirely in the reading workspaces
     // rather than appearing greyed out: a list of things you cannot do is
@@ -16064,14 +16079,7 @@ export function App() {
                 group: 'Feature',
                 icon: <ListOrdered size={16} aria-hidden="true" />,
                 run: () => {
-                  setPanelState((current) => ({
-                    ...current,
-                    drawerOpen: true,
-                    sidebarSections: {
-                      ...current.sidebarSections,
-                      history: true
-                    }
-                  }));
+                  showDrawerSection('history');
                   handleOpenHistoryFeature(feature.id);
                 }
               }) satisfies PaletteCommand
@@ -16084,14 +16092,7 @@ export function App() {
                 group: 'Parameter',
                 icon: <SlidersHorizontal size={16} aria-hidden="true" />,
                 run: () => {
-                  setPanelState((current) => ({
-                    ...current,
-                    drawerOpen: true,
-                    sidebarSections: {
-                      ...current.sidebarSections,
-                      parameters: true
-                    }
-                  }));
+                  showDrawerSection('parameters');
                   // The drawer's browser may still be loading; focus follows
                   // it once the field has mounted. A failed load is already
                   // reported by the lazy panel's stale-chunk notice.
