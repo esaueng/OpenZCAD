@@ -732,6 +732,7 @@ describe('cloudflare adapters', () => {
       bind: (..._values: unknown[]) => {
         queries.push(query);
         return {
+          run: async () => ({ success: true, meta: { changes: 1 } }),
           first: async () => {
             if (query.includes('SELECT user_id AS owner_user_id')) {
               return { owner_user_id: owner };

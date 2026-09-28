@@ -1,3 +1,9 @@
+import { accountEntitlements } from './account-tiers';
+export {
+  accountEntitlements,
+  accountTier,
+  accountAiLimits
+} from './account-tiers';
 import { isDocumentHistory } from '@openzcad/shared';
 import { DurableObject } from 'cloudflare:workers';
 import {
@@ -191,21 +197,24 @@ export interface CloudflareEnv {
    */
   AI_MAX_OUTPUT_TOKENS?: string;
   AI_TIMEOUT_MS?: string;
-  /** Secret used to HMAC public assistant identities and IP quota buckets. */
+  /** Secret used to HMAC public assistant identities. */
   AI_IDENTITY_PEPPER?: string;
   /** Comma-separated authenticated emails allowed to use deployment AI spend. */
   AI_DEPLOYMENT_ALLOWED_EMAILS?: string;
+  /** Server-only comma-separated verified account emails with Premium access. */
+  PREMIUM_USER_EMAILS?: string;
+  PREMIUM_ARTIFACT_LIMIT_BYTES?: string;
+  PREMIUM_PROJECT_LIMIT?: string;
+  PREMIUM_PROJECT_STORAGE_LIMIT_BYTES?: string;
+  AI_PREMIUM_ACCOUNT_RATE_LIMIT_REQUESTS?: string;
+  AI_PREMIUM_ACCOUNT_COST_LIMIT_UNITS?: string;
+  AI_PREMIUM_ACCOUNT_CONCURRENCY_LIMIT?: string;
   /** Comma-separated exact hostnames allowed for custom Responses endpoints. */
   AI_ALLOWED_BASE_URL_HOSTS?: string;
-  AI_GLOBAL_DAILY_REQUEST_LIMIT?: string;
-  AI_GLOBAL_DAILY_COST_LIMIT_UNITS?: string;
   AI_ACCOUNT_RATE_LIMIT_REQUESTS?: string;
-  AI_IP_RATE_LIMIT_REQUESTS?: string;
   AI_ACCOUNT_COST_LIMIT_UNITS?: string;
-  AI_IP_COST_LIMIT_UNITS?: string;
   AI_RATE_LIMIT_WINDOW_SECONDS?: string;
   AI_ACCOUNT_CONCURRENCY_LIMIT?: string;
-  AI_IP_CONCURRENCY_LIMIT?: string;
   /** Base64-encoded 32-byte AES key for owner-scoped AI credentials. */
   SETTINGS_ENCRYPTION_KEY?: string;
   DB?: D1Database;
@@ -1520,6 +1529,7 @@ export class D1R2PersistenceService implements PersistenceService {
     ) {
       throw new ProjectNotFoundError(request.projectId);
     }
+    await this.refreshAccountQuota(access.ownerUserId);
     const document = createCheckpoint(normalized, request.reason);
     this.assertDocumentCanBeStored(document);
     const documentJson = JSON.stringify(document);
@@ -1620,7 +1630,10 @@ export class D1R2PersistenceService implements PersistenceService {
               resolution.currentVersion
             );
           }
-          throw revisionSaveError(error);
+          throw revisionSaveError(
+            error,
+            await this.ownerEntitlements(access.ownerUserId)
+          );
         }
       }
       const projectUpdate = results?.[1];
@@ -1682,7 +1695,10 @@ export class D1R2PersistenceService implements PersistenceService {
         )
       ]);
     } catch (error) {
-      throw revisionSaveError(error);
+      throw revisionSaveError(
+        error,
+        await this.ownerEntitlements(access.ownerUserId)
+      );
     }
     if (results[0]?.meta?.changes === 0) {
       await this.requireProjectRead(userId, request.projectId);
@@ -1790,6 +1806,40 @@ export class D1R2PersistenceService implements PersistenceService {
     return { bytes: row.accounted_total, count: row.count };
   }
 
+  private async ownerEntitlements(ownerUserId: UserId) {
+    const owner = await this.env
+      .DB!.prepare('SELECT email FROM users WHERE id = ?')
+      .bind(ownerUserId)
+      .first<{ email: string | null }>();
+    return accountEntitlements(this.env, owner?.email ?? undefined);
+  }
+
+  /** Refresh derived enforcement state before each owner's storage write. */
+  private async refreshAccountQuota(ownerUserId: UserId): Promise<void> {
+    const owner = await this.env
+      .DB!.prepare('SELECT email FROM users WHERE id = ?')
+      .bind(ownerUserId)
+      .first<{ email: string | null }>();
+    // Legacy rows without an account use the database's Free fallback.
+    if (!owner) return;
+    const limits = accountEntitlements(this.env, owner.email ?? undefined);
+    await this.env
+      .DB!.prepare(
+        `UPDATE users SET artifact_limit_bytes = ?, project_limit = ?, project_storage_limit_bytes = ?
+       WHERE id = ? AND (artifact_limit_bytes <> ? OR project_limit <> ? OR project_storage_limit_bytes <> ?)`
+      )
+      .bind(
+        limits.artifactLimitBytes,
+        limits.projectLimit,
+        limits.projectStorageLimitBytes,
+        ownerUserId,
+        limits.artifactLimitBytes,
+        limits.projectLimit,
+        limits.projectStorageLimitBytes
+      )
+      .run();
+  }
+
   async getStorageUsage(userId: UserId): Promise<AccountStorageUsage> {
     if (!this.env.DB) {
       return getInMemoryPersistence().getStorageUsage(userId);
@@ -1809,6 +1859,7 @@ export class D1R2PersistenceService implements PersistenceService {
       .bind(userId)
       .first<{ revision_count: number; revision_bytes: number }>();
     const artifacts = await this.accountArtifactUsage(userId);
+    const entitlements = await this.ownerEntitlements(userId);
     return {
       projectCount: totals?.project_count ?? 0,
       documentBytes: totals?.document_bytes ?? 0,
@@ -1820,7 +1871,8 @@ export class D1R2PersistenceService implements PersistenceService {
       maxRevisionsPerProject: MAX_PROJECT_REVISIONS,
       artifactBytes: artifacts.bytes,
       artifactCount: artifacts.count,
-      artifactLimitBytes: MAX_ACCOUNT_ARTIFACT_BYTES
+      artifactLimitBytes: entitlements.artifactLimitBytes,
+      entitlements
     };
   }
 
@@ -1851,6 +1903,7 @@ export class D1R2PersistenceService implements PersistenceService {
     ) {
       throw new ProjectNotFoundError(request.projectId);
     }
+    await this.refreshAccountQuota(access.ownerUserId);
     this.assertDocumentCanBeStored(normalized);
     const updatedAt = nowIso();
     if (this.projectStorageBucket()) {
@@ -1923,7 +1976,10 @@ export class D1R2PersistenceService implements PersistenceService {
               resolution.currentVersion
             );
           }
-          throw projectQuotaError(error);
+          throw projectQuotaError(
+            error,
+            await this.ownerEntitlements(access.ownerUserId)
+          );
         }
       }
       const projectUpdate = results?.[1];
@@ -1980,7 +2036,10 @@ export class D1R2PersistenceService implements PersistenceService {
         )
         .run();
     } catch (error) {
-      throw projectQuotaError(error);
+      throw projectQuotaError(
+        error,
+        await this.ownerEntitlements(access.ownerUserId)
+      );
     }
     if (result.meta?.changes === 0) {
       await this.requireProjectRead(userId, request.projectId);
@@ -2016,6 +2075,7 @@ export class D1R2PersistenceService implements PersistenceService {
       throw new ArtifactStorageError();
     }
     await this.purgeExpiredUploadSessions();
+    await this.refreshAccountQuota(access.ownerUserId);
     const session = createUploadSessionRecord(request);
     try {
       const inserted = await this.env.DB.prepare(
@@ -2049,7 +2109,10 @@ export class D1R2PersistenceService implements PersistenceService {
         throw new ProjectNotFoundError(request.projectId);
       }
     } catch (error) {
-      throwArtifactAccountingError(error);
+      throw artifactAccountingError(
+        error,
+        (await this.ownerEntitlements(access.ownerUserId)).artifactLimitBytes
+      );
     }
     return { session };
   }
@@ -2141,7 +2204,10 @@ export class D1R2PersistenceService implements PersistenceService {
         claimed = result.meta?.changes;
       } catch (error) {
         await multipart.abort().catch(() => undefined);
-        throwArtifactAccountingError(error);
+        throw artifactAccountingError(
+          error,
+          (await this.ownerEntitlements(upload.ownerUserId)).artifactLimitBytes
+        );
       }
       if (claimed !== 1) {
         await multipart.abort().catch(() => undefined);
@@ -2277,6 +2343,7 @@ export class D1R2PersistenceService implements PersistenceService {
         'Upload session predates the current upload protocol; start a new upload.'
       );
     }
+    await this.refreshAccountQuota(access.ownerUserId);
     return upload;
   }
 
@@ -2421,7 +2488,10 @@ export class D1R2PersistenceService implements PersistenceService {
       changes = result.meta?.changes;
     } catch (error) {
       await upload.abort().catch(() => undefined);
-      throwArtifactAccountingError(error);
+      throw artifactAccountingError(
+        error,
+        (await this.ownerEntitlements(session.ownerUserId)).artifactLimitBytes
+      );
     }
     if (changes === 0) {
       await upload.abort().catch(() => undefined);
@@ -2506,7 +2576,10 @@ export class D1R2PersistenceService implements PersistenceService {
         .bind(uploadSessionId, partNumber, body.byteLength, reservationToken)
         .run();
     } catch (error) {
-      throwArtifactAccountingError(error);
+      throw artifactAccountingError(
+        error,
+        (await this.ownerEntitlements(session.ownerUserId)).artifactLimitBytes
+      );
     }
     const upload = this.env.ARTIFACTS!.resumeMultipartUpload(
       session.objectKey,
@@ -2538,7 +2611,10 @@ export class D1R2PersistenceService implements PersistenceService {
         .run();
       recorded = result.meta?.changes;
     } catch (error) {
-      throwArtifactAccountingError(error);
+      throw artifactAccountingError(
+        error,
+        (await this.ownerEntitlements(session.ownerUserId)).artifactLimitBytes
+      );
     }
     if (recorded !== 1) {
       throw new ArtifactStorageError(
@@ -2866,7 +2942,7 @@ export class D1R2PersistenceService implements PersistenceService {
     const statements =
       artifact.kind === 'thumbnail'
         ? [
-          this.env.DB.prepare(
+            this.env.DB.prepare(
               `DELETE FROM artifacts
              WHERE project_id = ? AND kind = 'thumbnail'
                AND ${validSessionSql}
@@ -2932,7 +3008,10 @@ export class D1R2PersistenceService implements PersistenceService {
     try {
       results = await this.env.DB.batch(statements);
     } catch (error) {
-      const mapped = artifactAccountingError(error);
+      const mapped = artifactAccountingError(
+        error,
+        (await this.ownerEntitlements(upload.ownerUserId)).artifactLimitBytes
+      );
       if (mapped instanceof ArtifactQuotaError) {
         await this.cleanupUploadSession(upload);
       }
@@ -3129,8 +3208,9 @@ export class D1R2PersistenceService implements PersistenceService {
     if (row && !Number.isSafeInteger(row.project_count)) {
       throw new ProjectObjectStorageError('Project count is unavailable.');
     }
-    if ((row?.project_count ?? 0) >= MAX_ACCOUNT_PROJECTS) {
-      throw new ProjectQuotaError('count', MAX_ACCOUNT_PROJECTS);
+    const limits = await this.ownerEntitlements(userId);
+    if ((row?.project_count ?? 0) >= limits.projectLimit) {
+      throw new ProjectQuotaError('count', limits.projectLimit);
     }
   }
 
@@ -3165,11 +3245,12 @@ export class D1R2PersistenceService implements PersistenceService {
     ) {
       throw new ProjectObjectStorageError('Project storage usage is invalid.');
     }
+    const limits = await this.ownerEntitlements(userId);
     if (
       (row?.object_bytes ?? 0) + (row?.asset_bytes ?? 0) + incomingBytes >
-      MAX_ACCOUNT_PROJECT_STORAGE_BYTES
+      limits.projectStorageLimitBytes
     ) {
-      throw new ProjectQuotaError('storage', MAX_ACCOUNT_PROJECT_STORAGE_BYTES);
+      throw new ProjectQuotaError('storage', limits.projectStorageLimitBytes);
     }
   }
 
@@ -3459,6 +3540,7 @@ export class D1R2PersistenceService implements PersistenceService {
   ): Promise<ProjectSummary> {
     this.assertDocumentCanBeStored(document);
     await this.assertAccountProjectCount(userId);
+    await this.refreshAccountQuota(userId);
     // The row's edit time is the document's, not the insert's: a fresh document
     // carries "now" already, and an adopted one must keep its device edit time
     // or saving to the account reorders the shelf.
@@ -3506,7 +3588,7 @@ export class D1R2PersistenceService implements PersistenceService {
               'Cloud project save outcome could not be verified.'
             );
           }
-          throw projectQuotaError(error);
+          throw projectQuotaError(error, await this.ownerEntitlements(userId));
         }
       }
       return {
@@ -3538,7 +3620,7 @@ export class D1R2PersistenceService implements PersistenceService {
         )
         .run();
     } catch (error) {
-      throw projectQuotaError(error);
+      throw projectQuotaError(error, await this.ownerEntitlements(userId));
     }
     return {
       projectId: document.projectId,
@@ -3857,35 +3939,50 @@ const MULTIPART_UPLOAD_METADATA_KEY = '__openzcadMultipartUploadId';
 /** Prevents a concurrent retry from stealing completion from a live Worker. */
 const MULTIPART_COMPLETION_LEASE_MS = 60_000;
 
-function projectQuotaError(error: unknown): unknown {
+function projectQuotaError(
+  error: unknown,
+  limits?: { projectLimit: number; projectStorageLimitBytes: number }
+): unknown {
   const message = error instanceof Error ? error.message : String(error);
   if (message.includes('project_account_count_quota')) {
-    return new ProjectQuotaError('count', MAX_ACCOUNT_PROJECTS);
+    return new ProjectQuotaError(
+      'count',
+      limits?.projectLimit ?? MAX_ACCOUNT_PROJECTS
+    );
   }
   if (
     message.includes('project_account_storage_quota') ||
     message.includes('project_account_document_quota')
   ) {
-    return new ProjectQuotaError('storage', MAX_ACCOUNT_PROJECT_STORAGE_BYTES);
+    return new ProjectQuotaError(
+      'storage',
+      limits?.projectStorageLimitBytes ?? MAX_ACCOUNT_PROJECT_STORAGE_BYTES
+    );
   }
   return error;
 }
 
-function revisionSaveError(error: unknown): unknown {
+function revisionSaveError(
+  error: unknown,
+  limits?: { projectLimit: number; projectStorageLimitBytes: number }
+): unknown {
   const message = error instanceof Error ? error.message : String(error);
   if (message.includes('revision_project_collision')) {
     return new RevisionIdCollisionError();
   }
-  return projectQuotaError(error);
+  return projectQuotaError(error, limits);
 }
 
-function artifactAccountingError(error: unknown): Error {
+function artifactAccountingError(
+  error: unknown,
+  limitBytes = MAX_ACCOUNT_ARTIFACT_BYTES
+): Error {
   const message = error instanceof Error ? error.message : String(error);
   if (
     message.includes('artifact_account_quota') ||
     message.includes('artifact_reserved_byte_limit')
   ) {
-    return new ArtifactQuotaError(MAX_ACCOUNT_ARTIFACT_BYTES);
+    return new ArtifactQuotaError(limitBytes);
   }
   if (message.includes('artifact_upload_session_limit')) {
     return new ArtifactStorageError(
@@ -3912,10 +4009,6 @@ function artifactAccountingError(error: unknown): Error {
     return new ArtifactStorageError('Artifact upload accounting was refused.');
   }
   return error instanceof Error ? error : new Error(message);
-}
-
-function throwArtifactAccountingError(error: unknown): never {
-  throw artifactAccountingError(error);
 }
 
 function isMissingMultipartUploadError(error: unknown): boolean {

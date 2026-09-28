@@ -106,10 +106,11 @@ pnpm --filter @openzcad/web exec wrangler secret put SETTINGS_ENCRYPTION_KEY --c
 pnpm --filter @openzcad/web exec wrangler secret put AI_IDENTITY_PEPPER --config ../../wrangler.selfhost.jsonc
 ```
 
-Deployment-funded AI is optional. Without both a provider key and an allowlist,
-it fails closed; signed-in users may instead store their own provider token.
-To enable it, set the provider secret selected by `AI_PROVIDER` and an explicit
-email allowlist:
+Deployment-funded AI is optional. It needs the provider key selected by
+`AI_PROVIDER` and an authenticated Premium account or a Free account in
+`AI_DEPLOYMENT_ALLOWED_EMAILS`. Without a provider key, signed-in users may
+instead store their own provider token. To enable hosted AI for selected Free
+accounts, set the provider secret and an explicit email allowlist:
 
 ```bash
 pnpm --filter @openzcad/web exec wrangler secret put OPENAI_API_KEY --config ../../wrangler.selfhost.jsonc

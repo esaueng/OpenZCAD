@@ -896,3 +896,46 @@ test('forcing mouse navigation makes a trackpad-style scroll zoom again', async 
     })
     .toBeGreaterThan(0.01);
 });
+
+for (const tier of ['free', 'premium'] as const) {
+  test(`shows ${tier} membership and effective account limits`, async ({
+    page
+  }) => {
+    await stubApi(page);
+    const premium = tier === 'premium';
+    await page.route('**/api/session', (route) =>
+      route.fulfill({
+        json: {
+          userId: 'user_e2e',
+          displayName: 'E2E user',
+          mode: 'email-code',
+          email: 'member@example.com',
+          entitlements: {
+            tier,
+            projectLimit: premium ? 10_000 : 100,
+            projectStorageLimitBytes: (premium ? 100 : 2) * 1024 ** 3,
+            artifactLimitBytes: (premium ? 100 : 2) * 1024 ** 3,
+            ai: {
+              requestLimit: premium ? 600 : 6,
+              costLimitUnits: premium ? 2400 : 24,
+              windowSeconds: 600,
+              concurrencyLimit: premium ? 8 : 2
+            }
+          }
+        }
+      })
+    );
+    await page.goto('/');
+    await page.getByRole('button', { name: 'Open settings' }).click();
+    await page.getByLabel('Find a setting').fill('Membership');
+    await page.getByRole('button', { name: 'Account', exact: true }).click();
+    const membership = page
+      .locator('.setting-row')
+      .filter({ hasText: 'Membership' });
+    await expect(membership).toContainText(premium ? 'Premium' : 'Free');
+    await expect(membership).toContainText(
+      `${premium ? 600 : 6} hosted AI requests per 10 minutes`
+    );
+    await expect(membership).toContainText('cloud file storage');
+  });
+}
