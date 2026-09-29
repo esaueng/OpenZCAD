@@ -1,4 +1,13 @@
-import { useCallback, useEffect, useRef, useState } from 'react';
+import {
+  useCallback,
+  useEffect,
+  useLayoutEffect,
+  useMemo,
+  useRef,
+  useState
+} from 'react';
+import type { CSSProperties } from 'react';
+import { Link2, Plus } from 'lucide-react';
 import type {
   CollaborationMember,
   ProjectAccessRole,
@@ -8,6 +17,7 @@ import type {
   ProjectSharingResponse,
   UserId
 } from '@openzcad/shared';
+import { COLLABORATION_LABELS } from '../lib/collaborationLabels';
 import {
   buildShareLinkUrl,
   createProjectShareLinkClient,
@@ -36,11 +46,35 @@ export interface ProjectSharingDialogProps {
   lease: ProjectEditLease | null;
   liveMembers?: readonly CollaborationMember[];
   currentUserId?: UserId | null;
+  /** The signed-in account's name, for the self row when no session is live. */
+  currentUserName?: string | null;
   client?: ProjectSharingClient;
   shareLinkClient?: ProjectShareLinkClient;
   editorInvitationsEnabled?: boolean;
   onClose(): void;
 }
+
+type Presence = CollaborationMember['status'] | null;
+
+/**
+ * One row of the people list: a person, not a session. Two tabs of the same
+ * account collapse into one row whose presence is its most active session.
+ */
+interface PersonRow {
+  key: string;
+  userId: UserId;
+  initial: string;
+  name: string;
+  you: boolean;
+  presence: Presence;
+  kind: 'self' | 'member' | 'guest' | 'invitation';
+}
+
+const ROLE_LABELS: Record<ProjectAccessRole, string> = {
+  owner: 'Owner',
+  editor: 'Editor',
+  viewer: 'Viewer'
+};
 
 function errorMessage(error: unknown): string {
   return error instanceof Error ? error.message : 'The sharing request failed.';
@@ -54,6 +88,7 @@ function createdLabel(createdAt: number): string {
   return new Date(createdAt * 1000).toLocaleDateString();
 }
 
+/** Compact time left on an invitation: `6d`, `3h`, or `expired`. */
 function expiryLabel(expiresAt: number): string {
   const remaining = expiresAt - Date.now();
   if (remaining <= 0) {
@@ -61,9 +96,9 @@ function expiryLabel(expiresAt: number): string {
   }
   const days = Math.floor(remaining / 86_400_000);
   if (days >= 1) {
-    return `expires in ${days}d`;
+    return `${days}d`;
   }
-  return `expires in ${Math.ceil(remaining / 3_600_000)}h`;
+  return `${Math.ceil(remaining / 3_600_000)}h`;
 }
 
 function activeLease(
@@ -76,10 +111,48 @@ function activeLease(
 }
 
 /**
- * Owner sharing controls and live role/lease state. Deliberately not where a
- * divergence gets resolved: that is `ProjectConflictDialog`, whichever side
- * raised it — a menu about who can see a project is the wrong place to be
- * asked which copy of it to keep.
+ * The top bar control this popover hangs from. Measured rather than passed
+ * down: the dialog mounts from App while the chip lives in TopBar, and the
+ * chip's position moves as the action row's responsive controls collapse.
+ */
+const ANCHOR_SELECTOR = '.collaboration-state';
+
+interface PopoverAnchor {
+  /** Gap from the viewport's right edge to the chip's right edge. */
+  right: number;
+  /** Distance from the chip's right edge to its centre, for the spring origin. */
+  centre: number;
+}
+
+function measureAnchor(minGap: number): PopoverAnchor | null {
+  const trigger = document.querySelector<HTMLElement>(ANCHOR_SELECTOR);
+  if (!trigger) {
+    return null;
+  }
+  const rect = trigger.getBoundingClientRect();
+  if (rect.width === 0) {
+    return null;
+  }
+  return {
+    right: Math.max(minGap, Math.round(window.innerWidth - rect.right)),
+    centre: Math.round(rect.width / 2)
+  };
+}
+
+function strongerPresence(a: Presence, b: Presence): Presence {
+  if (a === 'active' || b === 'active') {
+    return 'active';
+  }
+  return a ?? b;
+}
+
+/**
+ * Owner sharing controls and live role/lease state, as a popover under the
+ * top bar's sharing chip: the link first, then one list of people (members,
+ * live guests and pending invitations alike) with the invite composer as its
+ * last row. Deliberately not where a divergence gets resolved: that is
+ * `ProjectConflictDialog`, whichever side raised it — a menu about who can
+ * see a project is the wrong place to be asked which copy of it to keep.
  */
 export function ProjectSharingDialog({
   projectId,
@@ -93,6 +166,7 @@ export function ProjectSharingDialog({
   lease,
   liveMembers = [],
   currentUserId = null,
+  currentUserName = null,
   client = defaultClient,
   shareLinkClient = defaultShareLinkClient,
   editorInvitationsEnabled = true,
@@ -112,7 +186,15 @@ export function ProjectSharingDialog({
   const [hydrating, setHydrating] = useState(role === 'owner');
   const [busy, setBusy] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
+  const [anchor, setAnchor] = useState<PopoverAnchor | null>(null);
   useModalFocus(dialogRef, { autoFocus: true });
+
+  useLayoutEffect(() => {
+    const measure = () => setAnchor(measureAnchor(12));
+    measure();
+    window.addEventListener('resize', measure);
+    return () => window.removeEventListener('resize', measure);
+  }, []);
 
   const refresh = useCallback(
     async (source: 'hydrate' | 'action' = 'action') => {
@@ -181,10 +263,109 @@ export function ProjectSharingDialog({
 
   const leaseIsActive = activeLease(lease, projectId);
   const interactionBusy = hydrating || busy !== null;
+  const isOwner = !localProject && role === 'owner';
+
+  const people = useMemo(() => {
+    const presenceByUser = new Map<UserId, Presence>();
+    const nameByUser = new Map<UserId, string>();
+    for (const member of liveMembers) {
+      presenceByUser.set(
+        member.userId,
+        strongerPresence(
+          presenceByUser.get(member.userId) ?? null,
+          member.status
+        )
+      );
+      if (!nameByUser.has(member.userId)) {
+        nameByUser.set(member.userId, member.displayName);
+      }
+    }
+    const rows: PersonRow[] = [];
+    const seen = new Set<UserId>();
+    if (currentUserId !== null) {
+      const name =
+        nameByUser.get(currentUserId) ?? currentUserName?.trim() ?? '';
+      rows.push({
+        key: `self:${currentUserId}`,
+        userId: currentUserId,
+        initial: name ? initialOf(name) : 'Y',
+        name: name || 'You',
+        // A bare "You" needs no "(you)" after it.
+        you: name !== '',
+        presence: presenceByUser.get(currentUserId) ?? null,
+        kind: 'self'
+      });
+      seen.add(currentUserId);
+    }
+    for (const member of sharing?.members ?? []) {
+      if (seen.has(member.userId)) {
+        continue;
+      }
+      const name = member.email ?? member.userId;
+      rows.push({
+        key: `member:${member.userId}`,
+        userId: member.userId,
+        initial: initialOf(name),
+        name,
+        you: false,
+        presence: presenceByUser.get(member.userId) ?? null,
+        kind: 'member'
+      });
+      seen.add(member.userId);
+    }
+    for (const member of liveMembers) {
+      if (seen.has(member.userId)) {
+        continue;
+      }
+      rows.push({
+        key: `guest:${member.userId}`,
+        userId: member.userId,
+        initial: initialOf(member.displayName),
+        name: member.displayName,
+        you: false,
+        presence: presenceByUser.get(member.userId) ?? null,
+        kind: 'guest'
+      });
+      seen.add(member.userId);
+    }
+    return rows;
+  }, [liveMembers, sharing, currentUserId, currentUserName]);
+
+  const memberByUser = useMemo(
+    () => new Map((sharing?.members ?? []).map((m) => [m.userId, m])),
+    [sharing]
+  );
+
+  const onlineCount = useMemo(
+    () => new Set(liveMembers.map((member) => member.userId)).size,
+    [liveMembers]
+  );
+
+  const footerParts: string[] = [COLLABORATION_LABELS[collaborationStatus]];
+  if (collaborationStatus === 'live') {
+    footerParts.push(onlineCount <= 1 ? 'only you' : `${onlineCount} online`);
+  }
+  if (role === null) {
+    footerParts.push('access not confirmed');
+  } else if (role === 'viewer') {
+    footerParts.push('you are a viewer');
+  } else {
+    footerParts.push(
+      leaseIsActive ? 'you hold the edit lease' : 'edit lease not held'
+    );
+  }
 
   return (
     <div
-      className="modal-backdrop"
+      className="modal-backdrop sharing-backdrop"
+      style={
+        anchor
+          ? ({
+              '--sharing-anchor-right': `${anchor.right}px`,
+              '--sharing-anchor-centre': `${anchor.centre}px`
+            } as CSSProperties)
+          : undefined
+      }
       onMouseDown={(event) => {
         if (event.target === event.currentTarget) {
           onClose();
@@ -193,7 +374,7 @@ export function ProjectSharingDialog({
     >
       <div
         ref={dialogRef}
-        className="shortcuts-card sharing-card"
+        className="sharing-popover"
         role="dialog"
         aria-modal="true"
         aria-labelledby="project-sharing-title"
@@ -206,36 +387,8 @@ export function ProjectSharingDialog({
           }
         }}
       >
-        <header className="shortcuts-header sharing-header">
-          <div className="sharing-header-text">
-            <h2 id="project-sharing-title">Project sharing</h2>
-            <p className="sharing-meta">
-              <span className="sharing-meta-item">
-                Your role:{' '}
-                <strong>
-                  {localProject ? 'Local project' : (role ?? 'Not connected')}
-                </strong>
-              </span>
-              <span className="sharing-meta-item">
-                <span
-                  className="sharing-room-dot"
-                  data-state={collaborationStatus}
-                  aria-hidden="true"
-                />
-                Room: <strong>{collaborationStatus}</strong>
-              </span>
-              <span className="sharing-meta-item">
-                Edit lease:{' '}
-                <strong>
-                  {role === 'viewer'
-                    ? 'Not available to viewers'
-                    : leaseIsActive
-                      ? 'Active'
-                      : 'Not held'}
-                </strong>
-              </span>
-            </p>
-          </div>
+        <header className="sharing-header">
+          <h2 id="project-sharing-title">Project sharing</h2>
           <button
             type="button"
             className="icon-button"
@@ -256,105 +409,8 @@ export function ProjectSharingDialog({
             {error ?? (busy ? 'Working…' : null)}
           </p>
 
-          {!localProject && role === 'owner' ? (
-            <>
-              <section
-                className="sharing-invite"
-                aria-label="Invite a collaborator"
-              >
-                <form
-                  className="sharing-cmd-bar"
-                  onSubmit={(event) => {
-                    event.preventDefault();
-                    void mutate('invite', async () => {
-                      setInvitationSentTo(null);
-                      const created = await client.createInvitation(
-                        projectId,
-                        email,
-                        inviteRole
-                      );
-                      setInvitationSentTo(created.invitation.email);
-                      setEmail('');
-                      await refresh();
-                    });
-                  }}
-                >
-                  <span className="sharing-cmd-icon" aria-hidden="true">
-                    ✉
-                  </span>
-                  <input
-                    type="email"
-                    required
-                    aria-label="Email"
-                    placeholder="Invite by email…"
-                    value={email}
-                    onChange={(event) => setEmail(event.target.value)}
-                  />
-                  <select
-                    aria-label="Role"
-                    value={inviteRole}
-                    onChange={(event) =>
-                      setInviteRole(event.target.value as ProjectMemberRole)
-                    }
-                  >
-                    <option value="viewer">Viewer</option>
-                    <option value="editor" disabled={!editorInvitationsEnabled}>
-                      Editor
-                    </option>
-                  </select>
-                  <button
-                    type="submit"
-                    className="primary"
-                    disabled={interactionBusy}
-                  >
-                    Send invite
-                  </button>
-                </form>
-                {invitationSentTo && (
-                  <p className="sharing-invite-sent" role="status">
-                    Invitation sent to {invitationSentTo}.
-                  </p>
-                )}
-              </section>
-            </>
-          ) : null}
-
-          {liveMembers.length > 0 && (
-            <section
-              className="sharing-section"
-              aria-labelledby="active-collaborators-title"
-            >
-              <h3
-                id="active-collaborators-title"
-                className="sharing-group-label"
-              >
-                <span>Active collaborators</span>
-                <span className="sharing-count">{liveMembers.length}</span>
-              </h3>
-              <ul className="sharing-list">
-                {liveMembers.map((member) => (
-                  <li key={member.clientId}>
-                    <span className="sharing-avatar" aria-hidden="true">
-                      {initialOf(member.displayName)}
-                    </span>
-                    <span className="sharing-member-id">
-                      {member.displayName}
-                      {member.userId === currentUserId ? ' (you)' : ''}
-                    </span>
-                    <span
-                      className="sharing-presence"
-                      data-status={member.status}
-                    >
-                      {member.status}
-                    </span>
-                  </li>
-                ))}
-              </ul>
-            </section>
-          )}
-
           {localProject ? (
-            <section className="sharing-section">
+            <section className="sharing-section sharing-local">
               <h3>Save this project to your account</h3>
               <p className="sharing-empty">
                 This imported copy is saved on this device. Save it to your
@@ -375,151 +431,20 @@ export function ProjectSharingDialog({
                   : 'Save to my account'}
               </button>
             </section>
-          ) : role === 'owner' ? (
-            <>
-              <section
-                className="sharing-section"
-                aria-labelledby="project-members-title"
-              >
-                <h3 id="project-members-title" className="sharing-group-label">
-                  <span>Members</span>
-                  <span className="sharing-count">
-                    {sharing?.members.length ?? 0}
-                  </span>
-                </h3>
-                {sharing?.members.length ? (
-                  <ul className="sharing-list">
-                    {sharing.members.map((member) => (
-                      <li key={member.userId}>
-                        <span className="sharing-avatar" aria-hidden="true">
-                          {initialOf(member.email ?? member.userId)}
-                        </span>
-                        <span className="sharing-member-id">
-                          {member.email ?? member.userId}
-                        </span>
-                        <select
-                          className="sharing-role-select"
-                          aria-label={`Role for ${member.email ?? member.userId}`}
-                          value={member.role}
-                          disabled={interactionBusy}
-                          onChange={(event) =>
-                            void mutate(`member:${member.userId}`, async () => {
-                              await client.updateMemberRole(
-                                projectId,
-                                member.userId,
-                                event.target.value as ProjectMemberRole
-                              );
-                              await refresh();
-                            })
-                          }
-                        >
-                          <option value="viewer">Viewer</option>
-                          <option
-                            value="editor"
-                            disabled={!editorInvitationsEnabled}
-                          >
-                            Editor
-                          </option>
-                        </select>
-                        <button
-                          type="button"
-                          className="sharing-row-action"
-                          aria-label={`Remove ${member.email ?? member.userId}`}
-                          disabled={interactionBusy}
-                          onClick={() =>
-                            void mutate(`remove:${member.userId}`, async () => {
-                              await client.removeMember(
-                                projectId,
-                                member.userId
-                              );
-                              await refresh();
-                            })
-                          }
-                        >
-                          Remove
-                        </button>
-                      </li>
-                    ))}
-                  </ul>
-                ) : (
-                  <p className="sharing-empty">No project members.</p>
-                )}
-              </section>
+          ) : null}
 
-              <section
-                className="sharing-section"
-                aria-labelledby="pending-invitations-title"
-              >
-                <h3
-                  id="pending-invitations-title"
-                  className="sharing-group-label"
-                >
-                  <span>Pending invitations</span>
-                  <span className="sharing-count">
-                    {sharing?.invitations.length ?? 0}
+          {isOwner ? (
+            <section className="sharing-section sharing-link" aria-label="Link">
+              <div className="sharing-link-head">
+                <Link2 size={16} aria-hidden="true" />
+                <div className="sharing-link-text">
+                  <span className="sharing-link-title">
+                    Anyone with the link
                   </span>
-                </h3>
-                {sharing?.invitations.length ? (
-                  <ul className="sharing-list">
-                    {sharing.invitations.map((invitation) => (
-                      <li key={invitation.invitationId}>
-                        <span className="sharing-avatar" aria-hidden="true">
-                          {initialOf(invitation.email)}
-                        </span>
-                        <span className="sharing-member-id">
-                          {invitation.email}
-                        </span>
-                        <span className="sharing-kind">
-                          {invitation.role} ·{' '}
-                          {expiryLabel(invitation.expiresAt)}
-                        </span>
-                        <button
-                          type="button"
-                          className="sharing-row-action"
-                          aria-label={`Revoke invitation for ${invitation.email}`}
-                          disabled={interactionBusy}
-                          onClick={() =>
-                            void mutate(
-                              `revoke:${invitation.invitationId}`,
-                              async () => {
-                                await client.revokeInvitation(
-                                  projectId,
-                                  invitation.invitationId
-                                );
-                                await refresh();
-                              }
-                            )
-                          }
-                        >
-                          Revoke
-                        </button>
-                      </li>
-                    ))}
-                  </ul>
-                ) : (
-                  <p className="sharing-empty">No pending invitations.</p>
-                )}
-              </section>
-
-              <section
-                className="sharing-section"
-                aria-labelledby="share-links-title"
-              >
-                <h3 id="share-links-title" className="sharing-group-label">
-                  <span>Share link</span>
-                  <span className="sharing-count">{shareLinks.length}</span>
-                </h3>
-                <p className="sharing-share-hint">
-                  Anyone with the link can open this model, adjust its
-                  parameters and export — without an account.
-                </p>
-                {localImportSourceNames.length > 0 && (
-                  <p className="sharing-share-hint" role="alert">
-                    Save the source files for{' '}
-                    {localImportSourceNames.join(', ')} to your account with
-                    File → Save before creating a link.
-                  </p>
-                )}
+                  <span className="sharing-tag">
+                    Opens in Tweak: parameters and export, no account needed.
+                  </span>
+                </div>
                 <button
                   type="button"
                   className="primary sharing-share-create"
@@ -543,83 +468,283 @@ export function ProjectSharingDialog({
                 >
                   Create link
                 </button>
-                {createdShareLinkUrl && (
-                  <div className="sharing-share-output" role="status">
-                    <input
-                      ref={shareLinkUrlRef}
-                      className="sharing-share-url"
-                      type="text"
-                      readOnly
-                      aria-label="Share link"
-                      value={createdShareLinkUrl}
-                      onFocus={(event) => event.target.select()}
-                    />
+              </div>
+              {localImportSourceNames.length > 0 && (
+                <p className="sharing-share-hint" role="alert">
+                  Save the source files for {localImportSourceNames.join(', ')}{' '}
+                  to your account with File → Save before creating a link.
+                </p>
+              )}
+              {createdShareLinkUrl && (
+                <div className="sharing-share-output" role="status">
+                  <input
+                    ref={shareLinkUrlRef}
+                    className="sharing-share-url"
+                    type="text"
+                    readOnly
+                    aria-label="Share link"
+                    value={createdShareLinkUrl}
+                    onFocus={(event) => event.target.select()}
+                  />
+                  <button
+                    type="button"
+                    className="sharing-share-copy"
+                    onClick={() => void copyShareLink(createdShareLinkUrl)}
+                  >
+                    <StableLabel reserve={['Copied', 'Copy']} align="center">
+                      {shareLinkCopied ? 'Copied' : 'Copy'}
+                    </StableLabel>
+                  </button>
+                  <p className="sharing-share-once">
+                    Shown once — copy it now.
+                  </p>
+                </div>
+              )}
+              {shareLinks.length > 0 && (
+                <ul className="sharing-list">
+                  {shareLinks.map((shareLink) => (
+                    <li key={shareLink.shareLinkId}>
+                      <span
+                        className="sharing-avatar sharing-avatar-link"
+                        aria-hidden="true"
+                      >
+                        <Link2 size={12} />
+                      </span>
+                      <span className="sharing-member-id">
+                        Link created {createdLabel(shareLink.createdAt)}
+                      </span>
+                      <span className="sharing-kind">{shareLink.mode}</span>
+                      <button
+                        type="button"
+                        className="sharing-row-action"
+                        aria-label={`Revoke share link created ${createdLabel(
+                          shareLink.createdAt
+                        )}`}
+                        disabled={interactionBusy}
+                        onClick={() =>
+                          void mutate(
+                            `share-link:revoke:${shareLink.shareLinkId}`,
+                            async () => {
+                              await shareLinkClient.revokeProjectShareLink(
+                                projectId,
+                                shareLink.shareLinkId
+                              );
+                              setCreatedShareLinkUrl(null);
+                              await refresh();
+                            }
+                          )
+                        }
+                      >
+                        Revoke
+                      </button>
+                    </li>
+                  ))}
+                </ul>
+              )}
+            </section>
+          ) : null}
+
+          {!localProject && (people.length > 0 || isOwner) ? (
+            <section
+              className="sharing-section sharing-people"
+              aria-label="People"
+            >
+              <ul className="sharing-list">
+                {people.map((person) => {
+                  const member =
+                    person.kind === 'member'
+                      ? memberByUser.get(person.userId)
+                      : undefined;
+                  return (
+                    <li key={person.key}>
+                      <span
+                        className="sharing-avatar"
+                        data-presence={person.presence ?? undefined}
+                        aria-hidden="true"
+                      >
+                        {person.initial}
+                      </span>
+                      <span className="sharing-member-id">
+                        {person.name}
+                        {person.you ? ' (you)' : ''}
+                      </span>
+                      {person.kind === 'self' && role ? (
+                        <span className="sharing-kind">
+                          {ROLE_LABELS[role]}
+                        </span>
+                      ) : null}
+                      {person.kind === 'guest' ? (
+                        <span
+                          className="sharing-presence"
+                          data-status={person.presence ?? 'idle'}
+                        >
+                          {person.presence ?? 'idle'}
+                        </span>
+                      ) : null}
+                      {member ? (
+                        <>
+                          <select
+                            className="sharing-role-select"
+                            aria-label={`Role for ${person.name}`}
+                            value={member.role}
+                            disabled={interactionBusy}
+                            onChange={(event) =>
+                              void mutate(
+                                `member:${member.userId}`,
+                                async () => {
+                                  await client.updateMemberRole(
+                                    projectId,
+                                    member.userId,
+                                    event.target.value as ProjectMemberRole
+                                  );
+                                  await refresh();
+                                }
+                              )
+                            }
+                          >
+                            <option value="viewer">Viewer</option>
+                            <option
+                              value="editor"
+                              disabled={!editorInvitationsEnabled}
+                            >
+                              Editor
+                            </option>
+                          </select>
+                          <button
+                            type="button"
+                            className="sharing-row-action"
+                            aria-label={`Remove ${person.name}`}
+                            disabled={interactionBusy}
+                            onClick={() =>
+                              void mutate(
+                                `remove:${member.userId}`,
+                                async () => {
+                                  await client.removeMember(
+                                    projectId,
+                                    member.userId
+                                  );
+                                  await refresh();
+                                }
+                              )
+                            }
+                          >
+                            Remove
+                          </button>
+                        </>
+                      ) : null}
+                    </li>
+                  );
+                })}
+                {(sharing?.invitations ?? []).map((invitation) => (
+                  <li key={invitation.invitationId} className="sharing-pending">
+                    <span
+                      className="sharing-avatar sharing-avatar-pending"
+                      aria-hidden="true"
+                    >
+                      {initialOf(invitation.email)}
+                    </span>
+                    <span className="sharing-member-id">
+                      {invitation.email}
+                    </span>
+                    <span className="sharing-kind">
+                      Invited · {invitation.role} ·{' '}
+                      {expiryLabel(invitation.expiresAt)}
+                    </span>
                     <button
                       type="button"
-                      className="sharing-share-copy"
-                      onClick={() => void copyShareLink(createdShareLinkUrl)}
-                    >
-                      <StableLabel reserve={['Copied', 'Copy']} align="center">
-                        {shareLinkCopied ? 'Copied' : 'Copy'}
-                      </StableLabel>
-                    </button>
-                    <p className="sharing-share-once">
-                      Copy it now — this link is shown only once.
-                    </p>
-                  </div>
-                )}
-                {shareLinks.length ? (
-                  <ul className="sharing-list">
-                    {shareLinks.map((shareLink) => (
-                      <li key={shareLink.shareLinkId}>
-                        <span className="sharing-avatar" aria-hidden="true">
-                          ⚲
-                        </span>
-                        <span className="sharing-member-id">
-                          Anyone with the link
-                        </span>
-                        <span className="sharing-kind">
-                          {shareLink.mode} · {createdLabel(shareLink.createdAt)}
-                        </span>
-                        <button
-                          type="button"
-                          className="sharing-row-action"
-                          aria-label={`Revoke share link created ${createdLabel(
-                            shareLink.createdAt
-                          )}`}
-                          disabled={interactionBusy}
-                          onClick={() =>
-                            void mutate(
-                              `share-link:revoke:${shareLink.shareLinkId}`,
-                              async () => {
-                                await shareLinkClient.revokeProjectShareLink(
-                                  projectId,
-                                  shareLink.shareLinkId
-                                );
-                                setCreatedShareLinkUrl(null);
-                                await refresh();
-                              }
-                            )
+                      className="sharing-row-action"
+                      aria-label={`Revoke invitation for ${invitation.email}`}
+                      disabled={interactionBusy}
+                      onClick={() =>
+                        void mutate(
+                          `revoke:${invitation.invitationId}`,
+                          async () => {
+                            await client.revokeInvitation(
+                              projectId,
+                              invitation.invitationId
+                            );
+                            await refresh();
                           }
-                        >
-                          Revoke
-                        </button>
-                      </li>
-                    ))}
-                  </ul>
-                ) : (
-                  <p className="sharing-empty">No active share links.</p>
-                )}
-              </section>
-            </>
-          ) : (
+                        )
+                      }
+                    >
+                      Revoke
+                    </button>
+                  </li>
+                ))}
+              </ul>
+              {isOwner ? (
+                <form
+                  className="sharing-invite"
+                  aria-label="Invite a collaborator"
+                  onSubmit={(event) => {
+                    event.preventDefault();
+                    void mutate('invite', async () => {
+                      setInvitationSentTo(null);
+                      const created = await client.createInvitation(
+                        projectId,
+                        email,
+                        inviteRole
+                      );
+                      setInvitationSentTo(created.invitation.email);
+                      setEmail('');
+                      await refresh();
+                    });
+                  }}
+                >
+                  <Plus size={14} aria-hidden="true" />
+                  <input
+                    type="email"
+                    required
+                    aria-label="Email"
+                    placeholder="Add people by email"
+                    value={email}
+                    onChange={(event) => setEmail(event.target.value)}
+                  />
+                  <select
+                    aria-label="Role"
+                    value={inviteRole}
+                    onChange={(event) =>
+                      setInviteRole(event.target.value as ProjectMemberRole)
+                    }
+                  >
+                    <option value="viewer">Viewer</option>
+                    <option value="editor" disabled={!editorInvitationsEnabled}>
+                      Editor
+                    </option>
+                  </select>
+                  <button type="submit" disabled={interactionBusy}>
+                    Invite
+                  </button>
+                </form>
+              ) : null}
+              {invitationSentTo && (
+                <p className="sharing-invite-sent" role="status">
+                  Invitation sent to {invitationSentTo}.
+                </p>
+              )}
+            </section>
+          ) : null}
+
+          {!localProject && !isOwner ? (
             <p className="sharing-empty">
               {role === null
                 ? 'Connecting to project sharing. Your cloud access has not been confirmed yet.'
                 : 'Only the project owner can manage members and invitations.'}
             </p>
-          )}
+          ) : null}
         </div>
+
+        {!localProject ? (
+          <footer className="sharing-footer">
+            <span
+              className="sharing-room-dot"
+              data-state={collaborationStatus}
+              aria-hidden="true"
+            />
+            <span className="sharing-tag">{footerParts.join(' · ')}</span>
+          </footer>
+        ) : null}
       </div>
     </div>
   );

@@ -234,8 +234,7 @@ test('keeps a shared-project viewer visibly read-only', async ({ page }) => {
 
   await sharingButton.click();
   const dialog = page.getByRole('dialog', { name: 'Project sharing' });
-  await expect(dialog).toContainText('Your role: viewer');
-  await expect(dialog).toContainText('Not available to viewers');
+  await expect(dialog).toContainText('you are a viewer');
   await expect(dialog).toContainText(
     'Only the project owner can manage members and invitations.'
   );
