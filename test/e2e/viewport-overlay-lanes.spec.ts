@@ -223,3 +223,52 @@ for (const { width, compact, minLane, phoneBar } of [
       : expect(searchKey).toBeVisible());
   });
 }
+
+// The prompt line is a share of the window, 38vw between 520px and 760px,
+// not the fixed 520px that read as a sliver on a wide monitor. From 1600px
+// it also stands taller with larger type, and the hint above it keeps to the
+// bar's column; every lane offset reads the bar's height, so the stack
+// follows it.
+for (const { width, bar, height, type } of [
+  { width: 1280, bar: 520, height: 38, type: '13px' },
+  { width: 1920, bar: 730, height: 42, type: '14px' },
+  { width: 2560, bar: 760, height: 42, type: '14px' }
+]) {
+  test(`search bar scales with the window at ${width}px`, async ({ page }) => {
+    await page.setViewportSize({ width, height: 900 });
+    await stubApi(page);
+    await seedDismissedWorkspaceTour(page);
+    await createProject(page, 'Bar width');
+
+    const searchBar = page.locator('.command-bar');
+    await expect(searchBar).toBeVisible();
+    const barBox = await searchBar.boundingBox();
+    expect(barBox).not.toBeNull();
+    expect(Math.round(barBox!.width)).toBe(bar);
+    expect(Math.round(barBox!.height)).toBe(height);
+    await expect(page.locator('.command-bar-input')).toHaveCSS(
+      'font-size',
+      type
+    );
+
+    // Centred on the lane, whatever its width.
+    const laneBox = await page.locator('.command-bar-lane').boundingBox();
+    expect(laneBox).not.toBeNull();
+    const barMid = barBox!.x + barBox!.width / 2;
+    const laneMid = laneBox!.x + laneBox!.width / 2;
+    expect(Math.abs(barMid - laneMid)).toBeLessThan(1);
+
+    // The status row above the bar (the hint, or the status toast that
+    // takes its place while a message is live) keeps to the bar's column.
+    const row = page
+      .locator(
+        '.workspace-hint, .workspace-toast:not(.hidden) .workspace-toast-body'
+      )
+      .first();
+    await expect(row).toBeVisible();
+    const rowBox = await row.boundingBox();
+    expect(rowBox).not.toBeNull();
+    expect(rowBox!.width).toBeLessThanOrEqual(bar + 40);
+    expect(rowBox!.y + rowBox!.height).toBeLessThanOrEqual(barBox!.y);
+  });
+}
