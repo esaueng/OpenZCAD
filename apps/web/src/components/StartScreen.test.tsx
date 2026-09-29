@@ -80,6 +80,50 @@ describe('StartScreen new part suggestion', () => {
   });
 });
 
+describe('StartScreen library discovery', () => {
+  it('keeps unknown parts and account state out of the first-run layout', () => {
+    const { container } = renderStartScreen({
+      projects: [],
+      signedIn: false,
+      accountProjectListReached: false,
+      loading: true,
+      busy: true
+    });
+
+    expect(
+      screen.getByRole('status', { name: 'Loading library' })
+    ).toBeVisible();
+    expect(container.querySelector('.start-screen')).not.toHaveClass(
+      'is-fresh'
+    );
+    expect(screen.queryByText('No parts yet')).not.toBeInTheDocument();
+    expect(screen.queryByText('Signed out')).not.toBeInTheDocument();
+    expect(screen.getByText('Checking…')).toBeVisible();
+    expect(screen.getByRole('tab', { name: 'Parts …' })).toBeVisible();
+    expect(
+      screen.getByRole('button', { name: 'Create project' })
+    ).toBeDisabled();
+    expect(screen.getByLabelText('Search parts')).toBeVisible();
+  });
+
+  it('shows first-run guidance only once discovery confirms an empty library', () => {
+    const { container } = renderStartScreen({
+      projects: [],
+      signedIn: false
+    });
+
+    expect(container.querySelector('.start-screen')).toHaveClass('is-fresh');
+    expect(screen.getByText('No parts yet')).toBeVisible();
+    expect(screen.getByText('Signed out')).toBeVisible();
+    expect(
+      screen.queryByRole('status', { name: 'Loading library' })
+    ).not.toBeInTheDocument();
+    expect(
+      screen.getByRole('button', { name: 'Create project' })
+    ).toBeEnabled();
+  });
+});
+
 describe('StartScreen project timestamps', () => {
   it('shows the local date for a project edited more than a week ago', () => {
     renderStartScreen();

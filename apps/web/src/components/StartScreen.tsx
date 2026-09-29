@@ -47,6 +47,8 @@ interface StartScreenProps {
   projects: ProjectSummary[];
   status: string;
   busy: boolean;
+  /** Discovery is pending; an empty array and absent session are not results. */
+  loading?: boolean;
   demos: DemoDefinition[];
   defaultUnits: UnitSystem;
   onImportProject?(file: File): void;
@@ -188,6 +190,7 @@ export function StartScreen({
   projects,
   status,
   busy,
+  loading = false,
   demos,
   defaultUnits,
   onImportProject,
@@ -716,7 +719,7 @@ export function StartScreen({
 
   // With nothing saved yet the demos are the most useful thing on the page,
   // so they take the stage as full cards instead of a list in the column.
-  const fresh = userProjects.length === 0;
+  const fresh = !loading && userProjects.length === 0;
 
   return (
     <div
@@ -836,7 +839,7 @@ export function StartScreen({
               <entry.Icon size={15} aria-hidden="true" />
               {entry.label}
               <span className="start-shelf-count">
-                {shelfCount(entry.status)}
+                {loading ? '…' : shelfCount(entry.status)}
               </span>
             </button>
           ))}
@@ -844,22 +847,28 @@ export function StartScreen({
       </nav>
 
       <div className="start-body">
-        <section className="start-section" aria-labelledby="start-parts-title">
+        <section
+          className="start-section"
+          aria-labelledby="start-parts-title"
+          aria-busy={loading}
+        >
           <div className="start-toolbar">
             <div className="start-toolbar-title">
               <h2 id="start-parts-title">{shelfLabel.label}</h2>
               <span className="start-section-note">
-                {shelfProjects.length === 0
-                  ? shelfLabel.empty
-                  : search
-                    ? `${matchingProjects.length} of ${shelfProjects.length} match`
-                    : `${shelfProjects.length} ${
-                        shelfProjects.length === 1 ? 'part' : 'parts'
-                      }`}
+                {loading
+                  ? 'Loading parts…'
+                  : shelfProjects.length === 0
+                    ? shelfLabel.empty
+                    : search
+                      ? `${matchingProjects.length} of ${shelfProjects.length} match`
+                      : `${shelfProjects.length} ${
+                          shelfProjects.length === 1 ? 'part' : 'parts'
+                        }`}
               </span>
             </div>
 
-            {userProjects.length > 0 && (
+            {(loading || userProjects.length > 0) && (
               <div className="start-search">
                 <Search size={13} aria-hidden="true" />
                 <input
@@ -1027,7 +1036,32 @@ export function StartScreen({
             )
           )}
 
-          {visibleProjects.length > 0 && (
+          {loading && (
+            <>
+              <div
+                className="start-loading"
+                role="status"
+                aria-label="Loading library"
+              >
+                Loading your parts and account…
+              </div>
+              <div className="start-tile-grid" aria-hidden="true">
+                {Array.from({ length: COLLAPSED_PROJECT_LIMIT }, (_, index) => (
+                  <div
+                    className="start-tile start-tile-placeholder"
+                    key={index}
+                  >
+                    <span className="start-tile-thumb" />
+                    <span className="start-tile-body">
+                      <span />
+                    </span>
+                  </div>
+                ))}
+              </div>
+            </>
+          )}
+
+          {!loading && visibleProjects.length > 0 && (
             <div className="start-tile-grid">
               {visibleProjects.map((project, index) =>
                 renderProjectTile(project, index)
@@ -1035,7 +1069,7 @@ export function StartScreen({
             </div>
           )}
 
-          {shelfProjects.length === 0 && (
+          {!loading && shelfProjects.length === 0 && (
             <div className="start-empty" role="status">
               <span className="start-empty-mark" aria-hidden="true">
                 <BrandMark />
@@ -1154,7 +1188,13 @@ export function StartScreen({
       {/* The column's account card is a readout, not a control: the offer
           to save device-only parts stays with the parts it is about. */}
       <div className="start-account" role="status">
-        {signedIn ? (
+        {loading ? (
+          <div className="start-account-head">
+            <Cloud size={14} aria-hidden="true" />
+            <strong>Account</strong>
+            <span className="start-account-count">Checking…</span>
+          </div>
+        ) : signedIn ? (
           <>
             <div className="start-account-head">
               <Cloud size={14} aria-hidden="true" className="is-synced" />
@@ -1191,7 +1231,9 @@ export function StartScreen({
       </div>
 
       <footer className="start-foot">
-        <span className="start-status">{status}</span>
+        <span className="start-status">
+          {loading ? 'Loading library…' : status}
+        </span>
       </footer>
     </div>
   );

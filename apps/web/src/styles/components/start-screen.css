@@ -1051,6 +1051,25 @@
   font-size: var(--fs-xs);
 }
 
+/* Discovery keeps the library layout; unknown data is never an empty shelf
+   or a signed-out account. Static placeholders also respect reduced motion. */
+.start-loading {
+  color: var(--color-text-subtle);
+  font-size: var(--fs-sm);
+}
+
+.start-tile-placeholder .start-tile-thumb {
+  background: var(--color-surface);
+}
+
+.start-tile-placeholder .start-tile-body > span {
+  width: 55%;
+  height: 12px;
+  margin: 5px 0;
+  background: var(--color-surface-2);
+  border-radius: var(--radius-sm);
+}
+
 /* ── First run ───────────────────────────────────────────── */
 
 /* With nothing saved yet the demos take the stage under the empty shelf as
