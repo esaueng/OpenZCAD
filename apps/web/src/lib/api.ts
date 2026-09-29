@@ -36,7 +36,11 @@ import type {
   UpdateProjectResponse,
   VerifyEmailLoginRequest
 } from '@openzcad/shared';
-import { withoutDerivedProjection } from '@openzcad/document-core';
+import {
+  normalizeDocument,
+  normalizeDocumentHistory,
+  withoutDerivedProjection
+} from '@openzcad/document-core';
 import { desktopFetch } from './desktopBridge';
 
 /**
@@ -194,14 +198,22 @@ export const api = {
    * The derived projection is dropped on the way out: it is rebuilt from
    * canonical history on load, and for a dense import it is most of the bytes.
    */
-  adoptProject: (document: ProjectDocument) =>
-    requestJson<CreateProjectResponse>('/api/projects', {
+  adoptProject: (document: ProjectDocument) => {
+    // Shelf saves read IndexedDB without opening the project. Upgrade that
+    // snapshot before the Worker checks its schema, keeping undo/redo endpoints
+    // consistent with any migrated nodes. Reloading alone never rewrites it.
+    const prepared = normalizeDocumentHistory(
+      document,
+      normalizeDocument(document)
+    );
+    return requestJson<CreateProjectResponse>('/api/projects', {
       method: 'POST',
       body: JSON.stringify({
-        name: document.name,
-        document: withoutDerivedProjection(document)
+        name: prepared.name,
+        document: withoutDerivedProjection(prepared)
       })
-    }),
+    });
+  },
   loadProject: (projectId: string) =>
     requestJson<ProjectDocument>(`/api/projects/${projectId}`),
   /**
