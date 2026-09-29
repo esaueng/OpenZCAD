@@ -188,6 +188,14 @@
     transform: none;
   }
 
+  /* The card form's focus ring is its lift and shadow, which the list form
+     gives up; the keyboard still needs to see which entry it is on, so the
+     list draws the workspace's accent ring inside the row. */
+  .start-screen:not(.is-fresh) .demo-card:focus-visible {
+    outline: 1px solid var(--color-accent);
+    outline-offset: -1px;
+  }
+
   .start-screen:not(.is-fresh) .demo-card-head {
     align-items: flex-start;
     gap: 9px;
