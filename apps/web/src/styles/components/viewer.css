@@ -529,7 +529,7 @@
   gap: 10px;
   min-height: 30px;
   max-width: min(
-    calc(var(--command-bar-w, 520px) + 40px),
+    max(calc(var(--command-bar-w, 520px) + 40px), 440px),
     calc(100% - var(--notice-start, 12px) - var(--notice-end, 12px))
   );
   padding: 4px 4px 4px 12px;

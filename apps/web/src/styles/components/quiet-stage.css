@@ -15,12 +15,22 @@
   /* The readout under the column, and what the column leaves it. */
   --readout-h: 32px;
   --readout-reserve: var(--readout-h);
+  /* The bottom-right corner: the cube and, beside it, the ruler at up to
+     200px, then 12px of clearance. The bar is centred on the window, so it
+     can be the window less twice this before its ends run under the ruler. */
+  --stage-corner-w: calc(var(--island-gap) + 144px + 200px + 12px);
+  /* The bar gives way before anything else moves: it narrows from 520px at
+     a 1252px window to 280px at 1012px, and only past that does the ruler
+     leave the corner (the narrow-window rules below lift the cap). A text
+     field has no need of the width; the ruler and the cube have no other
+     place. */
+  --command-bar-cap: max(280px, calc(100vw - var(--stage-corner-w) * 2));
   /* The prompt line's width, which the stream, the hint and the notice rows
      standing on it all follow. A fixed 520px read as a sliver on a wide
      monitor and filled a laptop's lane; it is a share of the window now,
-     520px up to a 1368px window and 760px from 2000px. The window, not the
-     viewer area: the stream stands outside that container. */
-  --command-bar-w: clamp(520px, 38vw, 760px);
+     520px from a 1252px window up to 1368px and 760px from 2000px. The
+     window, not the viewer area: the stream stands outside that container. */
+  --command-bar-w: min(clamp(520px, 38vw, 760px), var(--command-bar-cap));
   --command-bar-fs: var(--fs-base);
 }
 
@@ -375,6 +385,18 @@
   width: min(var(--command-bar-w), 100%);
   display: flex;
   pointer-events: auto;
+  /* Sized by the window and the lane, the row is the one measure of the
+     room the field has; the key badge reads it below. */
+  container-type: inline-size;
+}
+
+/* Narrower than 360px the badge would take the field's last words: the
+   placeholder alone is some 290px. The badge is a hint, not a control; ⌘K
+   still works without it. */
+@container (max-width: 359px) {
+  .command-bar > kbd {
+    display: none;
+  }
 }
 
 .command-bar {
@@ -669,6 +691,20 @@
   animation: none;
 }
 
+/* The list is a popover, not a field: where the bar has narrowed for the
+   ruler it keeps the 520px it has at every wider window, centred on the
+   bar. That bar is centred on the window (the lanes mirror), so at the
+   1012px windows and up where the cap applies the list still clears both
+   edges; on a phone the bar is the lane and the list stays its width. */
+@media (min-width: 1012px) {
+  @container (max-width: 519px) {
+    .command-bar-float {
+      left: calc(50% - 260px);
+      right: calc(50% - 260px);
+    }
+  }
+}
+
 @media (prefers-reduced-motion: reduce) {
   .command-bar-float {
     animation: none;
@@ -724,9 +760,11 @@
 }
 
 /* The hint and the notice rows above the bar read 40px wider than it, so
-   the stack tapers to the line at its foot. */
+   the stack tapers to the line at its foot; 440px at least, since a bar
+   narrowed for the ruler is no reason to cut the guidance short, and the
+   rows stand above the ruler, never beside it. */
 .workspace-hint {
-  max-width: min(calc(var(--command-bar-w) + 40px), 100%);
+  max-width: min(max(calc(var(--command-bar-w) + 40px), 440px), 100%);
   margin: 0;
   padding: 4px 10px;
   overflow: hidden;
@@ -1125,28 +1163,58 @@
    960px it only has to clear the orientation cube in the corner, the 144px
    the scale bar also steps around; at 960px and below the cube already
    stands above the search row (workspace-column.css), so the lane runs to
-   the island gap as on a phone and is W − 270px wide. */
+   the island gap as on a phone and is W − 270px wide (the rule for every
+   mode, below). */
 @media (min-width: 961px) and (max-width: 1159px) {
   .workspace.column-layout:has(.workspace-column-float .sketch-rail) {
     --lane-right: calc(var(--island-gap) * 2 + 144px);
   }
 }
 
-@media (min-width: 521px) and (max-width: 960px) {
-  .workspace.column-layout:has(.workspace-column-float .sketch-rail) {
-    --lane-right: var(--island-gap);
-  }
-}
-
 /* Across the compact range the search row reaches the scale bar's spot left
    of the cube (it already did at 1024px), so the ruler takes its phone
-   place: bottom-left, above the readout and the search row. */
+   place: bottom-left, above the readout and the search row, and the bar
+   no longer narrows for it. */
 @media (min-width: 521px) and (max-width: 1159px) {
+  .workspace.column-layout:has(.workspace-column-float .sketch-rail) {
+    --command-bar-cap: 100vw;
+  }
+
   .workspace.column-layout:has(.workspace-column-float .sketch-rail)
     .viewport-scale-indicator {
     left: var(--island-gap);
     right: auto;
     bottom: calc(var(--island-gap) * 2 + var(--command-bar-h));
+  }
+}
+
+/* Every other mode keeps the ruler in the corner longer, since the bar
+   narrows for it first (--command-bar-cap): at 1012px the bar is down to
+   its 280px floor, so below that the ruler takes the same phone place and
+   the bar has the lane again. Down to 961px the lane's right end still
+   clears the cube; at 960px and below the cube stands above the search row
+   (workspace-column.css) and the lane runs to the island gap. */
+@media (max-width: 1011px) {
+  .workspace.column-layout {
+    --command-bar-cap: 100vw;
+  }
+
+  .workspace.column-layout .viewport-scale-indicator {
+    left: var(--island-gap);
+    right: auto;
+    bottom: calc(var(--island-gap) * 2 + var(--command-bar-h));
+  }
+}
+
+@media (min-width: 961px) and (max-width: 1011px) {
+  .workspace.column-layout {
+    --lane-right: calc(var(--island-gap) * 2 + 144px);
+  }
+}
+
+@media (min-width: 521px) and (max-width: 960px) {
+  .workspace.column-layout {
+    --lane-right: var(--island-gap);
   }
 }
 
