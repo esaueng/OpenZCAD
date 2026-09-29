@@ -22,7 +22,7 @@
   bottom: var(--assistant-bottom);
   /* Left and right set the lane; the stream is the prompt line's width,
      centred in it, and never wider than the lane on a phone. */
-  max-width: 520px;
+  max-width: var(--command-bar-w, 520px);
   max-height: min(
     46vh,
     calc(100% - var(--stage-top) - var(--assistant-bottom))

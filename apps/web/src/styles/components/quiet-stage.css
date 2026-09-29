@@ -15,6 +15,23 @@
   /* The readout under the column, and what the column leaves it. */
   --readout-h: 32px;
   --readout-reserve: var(--readout-h);
+  /* The prompt line's width, which the stream, the hint and the notice rows
+     standing on it all follow. A fixed 520px read as a sliver on a wide
+     monitor and filled a laptop's lane; it is a share of the window now,
+     520px up to a 1368px window and 760px from 2000px. The window, not the
+     viewer area: the stream stands outside that container. */
+  --command-bar-w: clamp(520px, 38vw, 760px);
+  --command-bar-fs: var(--fs-base);
+}
+
+/* A wide stage gives the line more height and a size more type to fill
+   it, so the bar grows with the window rather than only stretching. Every
+   offset in the bottom lanes reads --command-bar-h, so the stack follows. */
+@media (min-width: 1600px) {
+  .workspace.column-layout {
+    --command-bar-h: 42px;
+    --command-bar-fs: var(--fs-md);
+  }
 }
 
 /* Sketching adds the snap and grid spacing to the readout. The island hugs
@@ -355,7 +372,7 @@
    ask the assistant, whose stream stands on the bar; a leading slash lists
    the commands above it while it has focus. */
 .command-bar-row {
-  width: min(520px, 100%);
+  width: min(var(--command-bar-w), 100%);
   display: flex;
   pointer-events: auto;
 }
@@ -374,7 +391,7 @@
   border: var(--border-thin);
   border-radius: var(--radius-lg);
   box-shadow: var(--shadow-2);
-  font-size: var(--fs-base);
+  font-size: var(--command-bar-fs);
   cursor: text;
   transition:
     border-color var(--dur-fast) var(--ease-out),
@@ -579,7 +596,7 @@
   display: flex;
   align-items: center;
   color: var(--color-text-subtle);
-  font-size: var(--fs-base);
+  font-size: var(--command-bar-fs);
   white-space: pre;
   overflow: hidden;
   pointer-events: none;
@@ -599,7 +616,7 @@
   border: none;
   border-radius: 0;
   box-shadow: none;
-  font-size: var(--fs-base);
+  font-size: var(--command-bar-fs);
 }
 
 .command-bar .command-bar-input:focus,
@@ -683,8 +700,10 @@
   z-index: var(--z-popover);
 }
 
+/* The hint and the notice rows above the bar read 40px wider than it, so
+   the stack tapers to the line at its foot. */
 .workspace-hint {
-  max-width: min(560px, 100%);
+  max-width: min(calc(var(--command-bar-w) + 40px), 100%);
   margin: 0;
   padding: 4px 10px;
   overflow: hidden;
@@ -1053,7 +1072,7 @@
 }
 
 /* Narrower than 2 × (300 + 2 × 10) + 520 = 1160px, the full sketch readout
-   would squeeze the search row beside it (the bar and Ask, 520px at most).
+   would squeeze the search row beside it (the bar and Ask, 520px at least).
    The readout trades its words for glyphs instead and reserves 240px, which
    still fits four-character snap and grid values on one row. The words stay
    for screen readers, and each segment's tooltip names it. */
