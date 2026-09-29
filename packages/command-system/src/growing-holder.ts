@@ -699,6 +699,16 @@ export function growingHolderCommand(
         metadata: { [TEXT_BODY_METADATA_KEY]: text.bodyId }
       })
     );
+    // The exact text source reads only fixed import inputs. Keep it ahead of
+    // the parameter-dependent suffix so the existing history checkpoints
+    // restore it after reload. Reorder only the feature: body order stays
+    // intact and the parameter-driven text placement still runs last.
+    commands.push(
+      commandFactories.moveFeature({
+        featureId: text.featureId,
+        toIndex: listFeaturesInOrder(document).length
+      })
+    );
     bodies.text = text.bodyId;
   }
   return {
