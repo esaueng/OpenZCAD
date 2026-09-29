@@ -40,10 +40,14 @@
 
 /* ── StartScreen ─────────────────────────────────────────── */
 
-/* A full application surface, not a centred card: a slim chrome header, a
-   scrolling body of sections, and a status footer. The header and footer are
-   fixed rows so only the body scrolls. */
+/* A library shell: a fixed column on the left (identity, the launch form, the
+   shelves, the demos, the account readout), the shelf you are looking at
+   filling the rest, and a status footer. Every block is a direct grid item
+   placed by name, so the same markup re-flows for the three layouts below —
+   the column, the first run (demos take the stage) and a narrow window (one
+   scrolling column) — without any block existing twice. */
 .start-screen {
+  --start-column-w: 256px;
   position: absolute;
   inset: 0;
   z-index: var(--z-start-screen);
@@ -51,59 +55,53 @@
   /* minmax(0, …) so the body can shrink below its content's natural width:
      a grid track defaults to min-content, which on a phone let the toolbar
      hold the whole page wider than the screen. */
-  grid-template-columns: minmax(0, 1fr);
-  grid-template-rows: var(--topbar-h) 1fr var(--statusbar-h);
+  grid-template-columns: var(--start-column-w) minmax(0, 1fr);
+  grid-template-rows: auto auto auto minmax(0, 1fr) auto var(--statusbar-h);
+  grid-template-areas:
+    'header  body'
+    'launch  body'
+    'library body'
+    'learn   body'
+    'account body'
+    'foot    foot';
   background: var(--color-bg);
   overflow: hidden;
 }
 
-/* Blueprint drafting-sheet atmosphere: a fine grid under a wide accent wash.
-   Both are anchored to the top, where the launch panel is, so the glow reads
-   as light falling across the sheet rather than a blob hovering in the empty
-   middle, and the grid fades out before the status footer. */
+/* The column's surface, drawn once behind its blocks so each block can be a
+   separate grid item. Stops above the footer, which has its own surface. */
 .start-screen::before {
   content: '';
   position: absolute;
-  inset: 0;
+  top: 0;
+  bottom: var(--statusbar-h);
+  left: 0;
+  width: var(--start-column-w);
+  background: var(--color-surface);
+  border-right: var(--border-thin);
   pointer-events: none;
-  background:
-    radial-gradient(
-      90% 50% at 50% 0%,
-      var(--color-accent-dim),
-      transparent 70%
-    ),
-    linear-gradient(
-        color-mix(in srgb, var(--color-accent) 5%, transparent) 1px,
-        transparent 1px
-      )
-      0 0 / 42px 42px,
-    linear-gradient(
-        90deg,
-        color-mix(in srgb, var(--color-accent) 5%, transparent) 1px,
-        transparent 1px
-      )
-      0 0 / 42px 42px;
-  -webkit-mask-image: linear-gradient(#000, #000 40%, transparent 90%);
-  mask-image: linear-gradient(#000, #000 40%, transparent 90%);
 }
 
-.start-header,
-.start-foot {
+.start-screen > * {
   position: relative;
-  z-index: 1;
-  display: flex;
-  align-items: center;
-  gap: var(--sp-3);
-  padding: 0 var(--sp-4);
-  background: var(--color-surface);
+  min-width: 0;
 }
+
+/* ── Column: identity ────────────────────────────────────── */
 
 .start-header {
-  border-bottom: var(--border-thin);
+  grid-area: header;
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  align-items: center;
+  gap: 2px var(--sp-2);
+  padding: 12px 12px 10px 18px;
 }
 
-.start-foot {
-  border-top: var(--border-thin);
+.start-tagline {
+  grid-column: 1 / -1;
+  color: var(--color-text-subtle);
+  font-size: var(--fs-sm);
 }
 
 /* Mirrors the workspace top bar's identity cluster so leaving a part and
@@ -112,6 +110,7 @@
   display: inline-flex;
   align-items: center;
   gap: 8px;
+  min-width: 0;
 }
 
 .start-brand > svg {
@@ -143,85 +142,55 @@
   text-transform: uppercase;
 }
 
-.start-tagline {
-  padding-left: var(--sp-3);
-  border-left: var(--border-thin);
-  color: var(--color-text-subtle);
-  font-size: var(--fs-sm);
-}
-
 .start-settings-button {
   margin-left: auto;
   background: var(--color-surface-2);
   border: var(--border-thin);
 }
 
-.start-body {
-  position: relative;
-  z-index: 1;
-  display: grid;
-  align-content: start;
-  gap: var(--sp-6);
-  /* The body is the scroll container, so it has to span the full width or
-     the scrollbar sits at the edge of the column instead of the window. The
-     column is centred by padding: wide enough for five tiles, narrow enough
-     that they never stretch into billboards on a 4K display. */
-  width: 100%;
-  min-width: 0;
-  padding: var(--sp-5) max(var(--sp-5), calc((100% - 1180px) / 2 + var(--sp-5)))
-    var(--sp-6);
-  overflow-x: hidden;
-  overflow-y: auto;
-}
-
-/* ── Launch panel ────────────────────────────────────────── */
-
-/* The one thing a visitor most often came to do sits first and full width:
-   a name, its units, and a single button, rather than a form squeezed into a
-   tile-shaped slot in the grid it then had to share space with. */
-.start-launch {
-  display: grid;
-  grid-template-columns: minmax(200px, 1fr) minmax(0, 2fr);
-  gap: var(--sp-5);
-  align-items: center;
-  padding: var(--sp-4) var(--sp-5);
-  background: color-mix(in srgb, var(--color-surface) 88%, transparent);
-  border: 1px solid var(--color-accent-border);
-  border-radius: var(--radius-lg);
-  box-shadow: 0 12px 40px -20px rgba(0, 0, 0, 0.6);
-}
-
-.start-launch-copy {
-  display: grid;
-  gap: 4px;
-}
-
-.start-launch-copy h2 {
-  display: inline-flex;
-  align-items: center;
-  gap: 7px;
-  margin: 0;
-  color: var(--color-text);
-  font-size: var(--fs-lg);
-  font-weight: var(--fw-medium);
-}
-
-.start-launch-copy h2 svg {
-  color: var(--color-accent);
-}
-
-.start-launch-copy p {
-  margin: 0;
+/* Section labels in the column: the same mono eyebrow the workspace uses. */
+.start-eyebrow {
+  display: block;
+  padding: 0 8px 6px;
   color: var(--color-text-subtle);
-  font-size: var(--fs-sm);
-  line-height: 1.45;
+  font-family: var(--font-mono);
+  font-size: var(--fs-mini);
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+}
+
+/* ── Column: launch form ─────────────────────────────────── */
+
+/* The one thing a visitor most often came to do sits first in the column as
+   a single card: a name, its units, one button. Creating stays one step. */
+.start-launch {
+  grid-area: launch;
+  display: grid;
+  gap: var(--sp-2);
+  padding: 0 12px 14px;
 }
 
 .start-launch-form {
   display: grid;
-  grid-template-columns: minmax(0, 1fr) 150px auto;
-  gap: var(--sp-3);
-  align-items: end;
+  gap: var(--sp-2);
+  padding: 10px;
+  background: var(--color-surface-2);
+  border: 1px solid var(--color-accent-border);
+  border-radius: var(--radius-lg);
+}
+
+.start-launch-form h2 {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  margin: 0 0 2px;
+  color: var(--color-text);
+  font-size: var(--fs-base);
+  font-weight: var(--fw-medium);
+}
+
+.start-launch-form h2 svg {
+  color: var(--color-accent);
 }
 
 .start-field {
@@ -242,7 +211,7 @@
 .start-field select {
   width: 100%;
   min-height: 32px;
-  background: var(--color-surface-2);
+  background: var(--color-bg);
 }
 
 .start-field-name input {
@@ -251,12 +220,191 @@
 
 .start-launch-submit {
   min-height: 32px;
-  padding: 0 var(--sp-4);
-  white-space: nowrap;
+  margin-top: 2px;
 }
 
-.start-launch-error {
-  grid-column: 1 / -1;
+.start-launch-hint {
+  color: var(--color-text-subtle);
+  font-size: var(--fs-xs);
+  line-height: 1.4;
+}
+
+.start-import {
+  width: 100%;
+  justify-content: flex-start;
+}
+
+/* ── Column: shelves ─────────────────────────────────────── */
+
+.start-library {
+  grid-area: library;
+  padding: 0 12px 14px;
+}
+
+/* The shelves are the column's navigation: icon, name, count. */
+.start-shelf-tabs {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+
+.start-shelf-tabs button {
+  display: flex;
+  align-items: center;
+  gap: 9px;
+  min-height: 30px;
+  padding: 0 8px;
+  color: var(--color-text-muted);
+  border-radius: var(--radius-md);
+  font-size: var(--fs-base);
+  text-align: left;
+}
+
+.start-shelf-tabs button:hover {
+  color: var(--color-text);
+  background: var(--color-surface-2);
+}
+
+.start-shelf-tabs button.is-active {
+  color: var(--color-text);
+  background: var(--color-surface-hover);
+}
+
+.start-shelf-tabs button.is-active > svg {
+  color: var(--color-accent);
+}
+
+.start-shelf-count {
+  margin-left: auto;
+  min-width: 18px;
+  padding: 0 5px;
+  color: var(--color-text-subtle);
+  background: var(--color-surface-2);
+  border-radius: var(--radius-md);
+  font-family: var(--font-mono);
+  font-size: var(--fs-mini);
+  font-variant-numeric: tabular-nums;
+  text-align: center;
+}
+
+.start-shelf-tabs button.is-active .start-shelf-count {
+  color: var(--color-accent);
+  background: var(--color-accent-dim);
+}
+
+/* ── Column: demos ───────────────────────────────────────── */
+
+/* In the column the demos are a list; the card treatment they take on the
+   first run and on narrow screens lives in start-screen-demos.css. */
+.start-learn {
+  grid-area: learn;
+  display: grid;
+  align-content: start;
+  gap: 2px;
+  min-height: 0;
+  padding: 0 12px 18px;
+  overflow-y: auto;
+}
+
+.start-learn-head {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: baseline;
+  gap: var(--sp-1) var(--sp-2);
+  min-width: 0;
+}
+
+.start-learn-head h2 {
+  margin: 0;
+  color: var(--color-text);
+  font-size: var(--fs-md);
+  font-weight: var(--fw-medium);
+}
+
+/* As a list in the column, the demos' heading is the column's eyebrow. */
+@media (min-width: 901px) {
+  .start-screen:not(.is-fresh) .start-learn-head h2 {
+    color: var(--color-text-subtle);
+    font-family: var(--font-mono);
+    font-size: var(--fs-mini);
+    font-weight: var(--fw-regular);
+    letter-spacing: 0.08em;
+    text-transform: uppercase;
+  }
+
+  .start-screen:not(.is-fresh) .start-learn-head .start-section-note {
+    display: none;
+  }
+}
+
+/* ── Column: account readout ─────────────────────────────── */
+
+.start-account {
+  grid-area: account;
+  align-self: end;
+  display: grid;
+  gap: var(--sp-2);
+  margin: 0 12px 12px;
+  padding: 10px;
+  color: var(--color-text-subtle);
+  background: var(--color-surface-2);
+  border: var(--border-thin);
+  border-radius: var(--radius-lg);
+  font-size: var(--fs-sm);
+}
+
+.start-account-head {
+  display: flex;
+  align-items: center;
+  gap: var(--sp-2);
+}
+
+.start-account-head strong {
+  color: var(--color-text);
+  font-weight: var(--fw-medium);
+}
+
+.start-account-head svg.is-synced {
+  color: var(--color-success);
+}
+
+.start-account-count {
+  margin-left: auto;
+  font-family: var(--font-mono);
+  font-size: var(--fs-mini);
+  font-variant-numeric: tabular-nums;
+}
+
+.start-account-track {
+  height: 3px;
+  background: var(--color-border);
+  border-radius: var(--radius-sm);
+  overflow: hidden;
+}
+
+.start-account-fill {
+  display: block;
+  height: 100%;
+  background: var(--color-success);
+  transition: width var(--dur-base) var(--ease-out);
+}
+
+.start-account-note {
+  line-height: 1.4;
+}
+
+/* ── Body: the shelf ─────────────────────────────────────── */
+
+/* The body is the only thing that scrolls in the wide layout, so the column
+   stays put while a long shelf goes by. */
+.start-body {
+  grid-area: body;
+  display: grid;
+  align-content: start;
+  gap: var(--sp-4);
+  padding: 22px var(--sp-5) var(--sp-5);
+  overflow-x: hidden;
+  overflow-y: auto;
 }
 
 /* ── Section toolbar ─────────────────────────────────────── */
@@ -288,8 +436,9 @@
 .start-toolbar h2 {
   margin: 0;
   color: var(--color-text);
-  font-size: var(--fs-lg);
+  font-size: 18px;
   font-weight: var(--fw-medium);
+  letter-spacing: -0.01em;
   white-space: nowrap;
 }
 
@@ -392,53 +541,7 @@
   font-weight: var(--fw-medium);
 }
 
-/* ── Shelf tabs ──────────────────────────────────────────── */
-
-.start-shelf-tabs {
-  display: flex;
-  gap: 2px;
-  padding: 2px;
-  background: var(--color-surface);
-  border: var(--border-thin);
-  border-radius: var(--radius-md);
-}
-
-.start-shelf-tabs button {
-  display: flex;
-  align-items: center;
-  gap: 6px;
-  min-height: 26px;
-  padding: 0 10px;
-  color: var(--color-text-muted);
-  border-radius: var(--radius-sm);
-  font-size: var(--fs-sm);
-}
-
-.start-shelf-tabs button:hover {
-  color: var(--color-text);
-}
-
-.start-shelf-tabs button.is-active {
-  color: var(--color-text);
-  background: var(--color-surface-hover);
-}
-
-.start-shelf-count {
-  min-width: 18px;
-  padding: 0 5px;
-  color: var(--color-text-subtle);
-  background: var(--color-surface-2);
-  border-radius: var(--radius-md);
-  font-family: var(--font-mono);
-  font-size: var(--fs-mini);
-  font-variant-numeric: tabular-nums;
-  text-align: center;
-}
-
-.start-shelf-tabs button.is-active .start-shelf-count {
-  color: var(--color-accent);
-  background: var(--color-accent-dim);
-}
+/* ── Shelf bar ───────────────────────────────────────────── */
 
 .start-shelf-bar {
   display: flex;
@@ -613,8 +716,8 @@
 
 .start-tile-grid {
   display: grid;
-  grid-template-columns: repeat(auto-fill, minmax(208px, 1fr));
-  gap: var(--sp-3);
+  grid-template-columns: repeat(auto-fill, minmax(236px, 1fr));
+  gap: var(--sp-4);
 }
 
 .start-tile {
@@ -932,24 +1035,206 @@
   transform: rotate(180deg);
 }
 
+.start-foot {
+  grid-area: foot;
+  display: flex;
+  align-items: center;
+  gap: var(--sp-3);
+  padding: 0 var(--sp-4);
+  background: var(--color-surface);
+  border-top: var(--border-thin);
+}
+
 .start-status {
   color: var(--color-text-subtle);
   font-family: var(--font-mono);
   font-size: var(--fs-xs);
 }
 
+/* ── First run ───────────────────────────────────────────── */
+
+/* With nothing saved yet the demos take the stage under the empty shelf as
+   full cards, and the account readout closes the column on its own. */
+@media (min-width: 901px) {
+  .start-screen.is-fresh {
+    /* The empty shelf stretches to fill the stage above the demo cards, so
+       the page reads as an empty stage with the demos anchored under it;
+       the account readout closes the column on its own. */
+    grid-template-rows: auto auto minmax(0, 1fr) auto var(--statusbar-h);
+    grid-template-areas:
+      'header  body'
+      'launch  body'
+      'library body'
+      'account learn'
+      'foot    foot';
+  }
+
+  .start-screen.is-fresh .start-library {
+    align-self: start;
+  }
+
+  .start-screen.is-fresh .start-body {
+    padding-bottom: 0;
+  }
+
+  .start-screen.is-fresh .start-body > .start-section {
+    grid-template-rows: auto minmax(0, 1fr);
+    min-height: 100%;
+  }
+
+  .start-screen.is-fresh .start-empty {
+    align-content: center;
+  }
+
+  .start-screen.is-fresh .start-learn {
+    gap: var(--sp-3);
+    padding: var(--sp-4) var(--sp-5) var(--sp-5);
+    overflow: visible;
+  }
+}
+
 /* ── Narrow layouts ──────────────────────────────────────── */
 
-@media (max-width: 860px) {
-  .start-launch {
+/* One column that scrolls as a page: identity, the launch card, the shelves
+   as a tab strip, the shelf itself, the demos as cards, the account readout. */
+@media (max-width: 900px) {
+  .start-screen,
+  .start-screen.is-fresh {
     grid-template-columns: minmax(0, 1fr);
+    /* The shelf never shrinks below its content here: the page scrolls as
+       a whole, and a track that could collapse would let the shelf spill
+       over the demos beneath it. */
+    grid-template-rows: auto auto auto minmax(max-content, 1fr) auto auto var(
+        --statusbar-h
+      );
+    grid-template-areas:
+      'header'
+      'launch'
+      'library'
+      'body'
+      'learn'
+      'account'
+      'foot';
+    overflow-x: hidden;
+    overflow-y: auto;
+  }
+
+  .start-screen::before {
+    display: none;
+  }
+
+  .start-header {
+    grid-template-columns: auto minmax(0, 1fr) auto;
+    padding: 10px var(--sp-4);
+    background: var(--color-surface);
+    border-bottom: var(--border-thin);
+  }
+
+  /* One row: brand, tagline, settings. */
+  .start-tagline {
+    grid-column: auto;
+    padding-left: var(--sp-3);
+    border-left: var(--border-thin);
+  }
+
+  .start-settings-button {
+    order: 1;
+    margin-left: 0;
+  }
+
+  .start-launch {
+    grid-template-columns: minmax(0, 1fr) auto;
+    align-items: start;
+    padding: var(--sp-4) var(--sp-4) 0;
+  }
+
+  .start-launch-form {
+    grid-template-columns: minmax(0, 1fr) 150px auto;
+    align-items: end;
+  }
+
+  .start-launch-form h2,
+  .start-launch-form .start-launch-hint,
+  .start-launch-form .start-launch-error {
+    grid-column: 1 / -1;
+  }
+
+  .start-launch-submit {
+    margin-top: 0;
+  }
+
+  .start-import {
+    width: auto;
+    margin-top: 28px;
+  }
+
+  .start-library {
+    padding: var(--sp-4) var(--sp-4) 0;
+  }
+
+  .start-eyebrow {
+    display: none;
+  }
+
+  .start-shelf-tabs {
+    flex-direction: row;
+    gap: 2px;
+    width: fit-content;
+    max-width: 100%;
+    padding: 2px;
+    background: var(--color-surface);
+    border: var(--border-thin);
+    border-radius: var(--radius-md);
+  }
+
+  .start-shelf-tabs button {
+    min-height: 26px;
+    padding: 0 10px;
+    border-radius: var(--radius-sm);
+    font-size: var(--fs-sm);
+  }
+
+  .start-shelf-tabs button > svg {
+    display: none;
+  }
+
+  .start-body {
+    padding: var(--sp-4);
+    overflow: visible;
+  }
+
+  .start-learn {
     gap: var(--sp-3);
+    /* The column form's min-height: 0 would let this auto row collapse when
+       the page is taller than the window; here the cards size the row. */
+    min-height: auto;
+    padding: 0 var(--sp-4) var(--sp-4);
+    overflow: visible;
+  }
+
+  .start-account {
+    align-self: start;
+    margin: 0 var(--sp-4) var(--sp-4);
+  }
+}
+
+/* A short window keeps the account readout to its headline so the demo list
+   above it is not the thing that gives way. */
+@media (min-width: 901px) and (max-height: 760px) {
+  .start-account-note {
+    display: none;
   }
 }
 
 @media (max-width: 560px) {
+  .start-launch,
   .start-launch-form {
     grid-template-columns: minmax(0, 1fr);
+  }
+
+  .start-import {
+    width: 100%;
+    margin-top: 0;
   }
 
   .start-tagline {

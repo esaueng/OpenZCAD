@@ -159,6 +159,66 @@ describe('StartScreen cloud project status', () => {
   });
 });
 
+describe('StartScreen library shell', () => {
+  it('takes the first-run layout until a part exists', () => {
+    const { container, rerender, unmount } = renderStartScreen({
+      projects: []
+    });
+
+    expect(container.querySelector('.start-screen.is-fresh')).not.toBeNull();
+    expect(screen.getByText('No parts yet')).toBeInTheDocument();
+    unmount();
+
+    renderStartScreen();
+    expect(
+      document.querySelector('.start-screen:not(.is-fresh)')
+    ).not.toBeNull();
+    void rerender;
+  });
+
+  it('names each shelf with its count in the column', () => {
+    renderStartScreen();
+
+    expect(screen.getByRole('tab', { name: 'Parts 1' })).toHaveAttribute(
+      'aria-selected',
+      'true'
+    );
+    expect(screen.getByRole('tab', { name: 'Archive 0' })).toBeInTheDocument();
+    expect(screen.getByRole('tab', { name: 'Trash 0' })).toBeInTheDocument();
+    expect(
+      screen.getByRole('heading', { level: 2, name: 'Parts' })
+    ).toBeInTheDocument();
+  });
+
+  it('reads the account balance in the column without repeating the offer', () => {
+    renderStartScreen({
+      projects: [
+        localProject,
+        {
+          projectId: toProjectId('project_cloud'),
+          name: 'Cloud flange',
+          revisionCount: 3,
+          updatedAt: '2026-08-05T12:00:00.000Z'
+        }
+      ],
+      cloudProjectIds: new Set([toProjectId('project_cloud')])
+    });
+
+    expect(screen.getByText('1 / 2 saved')).toBeInTheDocument();
+    // One offer, with the parts it is about; the readout is not a second one.
+    expect(
+      screen.getAllByRole('button', { name: /to my account/ })
+    ).toHaveLength(1);
+  });
+
+  it('says so when signed out instead of counting', () => {
+    renderStartScreen({ signedIn: false });
+
+    expect(screen.getByText('Signed out')).toBeInTheDocument();
+    expect(screen.queryByText(/saved$/)).toBeNull();
+  });
+});
+
 describe('StartScreen collapsed project grid', () => {
   it('shows ten saved projects before moving the rest behind the expand control', () => {
     const projects = Array.from({ length: 26 }, (_, index) => ({
