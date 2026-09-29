@@ -2511,6 +2511,18 @@ export function App() {
     cloudProjectIds
   };
   const thumbnailAccountUserId = session?.userId;
+  const loadProperties = useCallback(
+    async (project: ProjectSummary) => {
+      const { loadProjectProperties } = await import('./lib/projectProperties');
+      return loadProjectProperties(project, {
+        loadLocal: loadLocalProject,
+        ...(thumbnailAccountUserId && cloudProjectIds.has(project.projectId)
+          ? { loadAccount: api.loadProject }
+          : {})
+      });
+    },
+    [thumbnailAccountUserId, cloudProjectIds]
+  );
   /**
    * Publishes a device-cached preview when the account has no artifact. A cache
    * miss stays a placeholder so the recovery shelf never loads project data.
@@ -15846,6 +15858,7 @@ export function App() {
           onOpenDemo={(definition) => void handleOpenDemo(definition)}
           onOpenSettings={openSettings}
           onDuplicate={(project) => void handleDuplicateProject(project)}
+          loadProperties={loadProperties}
           cloudProjectIds={cloudProjectIds}
           accountProjectListReached={accountProjectListReached}
           conflictedProjectIds={conflictedProjectIds}
