@@ -228,11 +228,16 @@ for (const { width, compact, minLane, phoneBar } of [
 // not the fixed 520px that read as a sliver on a wide monitor. From 1600px
 // it also stands taller with larger type, and the hint above it keeps to the
 // bar's column; every lane offset reads the bar's height, so the stack
-// follows it.
-for (const { width, bar, height, type } of [
-  { width: 1280, bar: 520, height: 38, type: '13px' },
-  { width: 1920, bar: 730, height: 42, type: '14px' },
-  { width: 2560, bar: 760, height: 42, type: '14px' }
+// follows it. Narrower than 1252px the bar gives way before anything else:
+// it shrinks (to 292px at 1024px, dropping its ⌘K badge under 360px) rather
+// than run under the ruler in the corner, and only from 1011px down does the
+// ruler take the phone's bottom-left place and the bar the lane again.
+for (const { width, bar, height, type, key } of [
+  { width: 900, bar: 520, height: 38, type: '13px', key: true },
+  { width: 1024, bar: 292, height: 38, type: '13px', key: false },
+  { width: 1280, bar: 520, height: 38, type: '13px', key: true },
+  { width: 1920, bar: 730, height: 42, type: '14px', key: true },
+  { width: 2560, bar: 760, height: 42, type: '14px', key: true }
 ]) {
   test(`search bar scales with the window at ${width}px`, async ({ page }) => {
     await page.setViewportSize({ width, height: 900 });
@@ -268,7 +273,25 @@ for (const { width, bar, height, type } of [
     await expect(row).toBeVisible();
     const rowBox = await row.boundingBox();
     expect(rowBox).not.toBeNull();
-    expect(rowBox!.width).toBeLessThanOrEqual(bar + 40);
+    expect(rowBox!.width).toBeLessThanOrEqual(Math.max(bar + 40, 440));
     expect(rowBox!.y + rowBox!.height).toBeLessThanOrEqual(barBox!.y);
+
+    const searchKey = page.locator('.command-bar > kbd');
+    await (key
+      ? expect(searchKey).toBeVisible()
+      : expect(searchKey).toBeHidden());
+
+    // The ruler is never under the bar: the bar narrows for it first, and
+    // the ruler moves only once the bar has nothing left to give.
+    const ruler = page.getByTestId('viewport-scale-indicator');
+    await expect(ruler).toBeVisible();
+    const rulerBox = await ruler.boundingBox();
+    expect(rulerBox).not.toBeNull();
+    const overlaps =
+      rulerBox!.x < barBox!.x + barBox!.width &&
+      barBox!.x < rulerBox!.x + rulerBox!.width &&
+      rulerBox!.y < barBox!.y + barBox!.height &&
+      barBox!.y < rulerBox!.y + rulerBox!.height;
+    expect(overlaps).toBe(false);
   });
 }

@@ -5,7 +5,10 @@ test('resizes a rounded box from its minimum side with exact entry, drag, cancel
 }, testInfo) => {
   // This multi-edit flow rebuilds exact fillets for entry, drag, undo and redo.
   // Hosted CI reached the final UI checks but exhausted the 120 s total budget.
-  test.setTimeout(process.env.CI ? 180000 : 120000);
+  // #479: three attempts on 2-core runners each timed out at 180 s on the
+  // final steps (Offset tab click, result screenshot) with no assertion
+  // failure; locally the same flow takes ~60 s. Give CI runners more room.
+  test.setTimeout(process.env.CI ? 300000 : 120000);
   await stubApi(page);
   await page.setViewportSize({ width: 1440, height: 1000 });
   const errors: string[] = [];
