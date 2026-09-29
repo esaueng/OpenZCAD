@@ -18539,6 +18539,7 @@ export function App() {
                 lease={collaboration.lease}
                 liveMembers={collaboration.members}
                 currentUserId={session?.userId}
+                currentUserName={session?.displayName}
                 editorInvitationsEnabled={
                   collaborationRollout.editLeasesEnforced
                 }

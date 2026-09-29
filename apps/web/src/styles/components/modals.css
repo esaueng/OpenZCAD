@@ -647,92 +647,63 @@
   font-weight: var(--fw-medium);
 }
 
-/* ── Project sharing dialog ────────────────────────────────
-   Compact "command bar" treatment: a palette-style invite bar
-   pinned to the top of the body, grouped compact rows below. ── */
+/* ── Project sharing popover ───────────────────────────────
+   Anchored under the top bar's sharing chip rather than centred:
+   the link block first, one people list with the invite composer
+   as its last row, one status line as the footer. ── */
 
-.sharing-card {
-  width: min(460px, 100%);
-  border-radius: var(--radius-md);
+.sharing-backdrop {
+  justify-content: flex-end;
+  align-items: flex-start;
+  padding: calc(var(--topbar-h) + var(--sp-1)) var(--sp-3) var(--sp-4);
+  background: rgba(6, 7, 9, 0.35);
+  backdrop-filter: none;
+}
+
+.sharing-popover {
+  width: min(380px, 100%);
+  max-height: calc(100vh - var(--topbar-h) - var(--sp-5));
+  display: flex;
+  flex-direction: column;
+  background: var(--color-surface);
+  border: var(--border-strong);
+  border-radius: var(--radius-lg);
+  box-shadow: var(--shadow-3);
+  overflow: hidden;
+}
+
+/* The spring grows out of the chip it hangs from, not the screen centre. */
+.sharing-backdrop > .sharing-popover {
+  transform-origin: calc(100% - 48px) 0;
 }
 
 .sharing-header {
-  padding: 10px var(--sp-3);
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 6px var(--sp-2) 6px var(--sp-3);
+  border-bottom: var(--border-thin);
 }
 
 .sharing-header h2 {
-  font-size: var(--fs-base);
-}
-
-.sharing-header-text {
-  display: grid;
-  gap: 2px;
-}
-
-.sharing-meta {
   margin: 0;
-  display: flex;
-  flex-wrap: wrap;
-  align-items: center;
-  color: var(--color-text-muted);
-  font-size: var(--fs-xs);
-}
-
-.sharing-meta strong {
-  color: var(--color-text);
+  font-size: var(--fs-sm);
   font-weight: var(--fw-medium);
-}
-
-.sharing-meta-item {
-  display: inline-flex;
-  align-items: center;
-  gap: 6px;
-}
-
-.sharing-meta-item + .sharing-meta-item::before {
-  content: '';
-  width: 3px;
-  height: 3px;
-  margin: 0 var(--sp-2);
-  border-radius: 50%;
-  background: var(--color-border-strong);
-}
-
-.sharing-room-dot {
-  width: 7px;
-  height: 7px;
-  border-radius: 50%;
-  background: var(--color-text-subtle);
-}
-
-.sharing-room-dot[data-state='live'] {
-  background: var(--color-success);
-  box-shadow: 0 0 6px color-mix(in srgb, var(--color-success) 45%, transparent);
-}
-
-.sharing-room-dot[data-state='connecting'] {
-  background: var(--color-warning);
-}
-
-.sharing-room-dot[data-state='conflict'],
-.sharing-room-dot[data-state='oversize'],
-.sharing-room-dot[data-state='rejected'] {
-  background: var(--color-error);
 }
 
 /* No flex gap here: the empty status line must take no space, so
    separation comes from sibling margins it can opt out of. */
 .sharing-body {
-  padding: 0 var(--sp-3) var(--sp-3);
+  padding: 0 0 var(--sp-2);
   overflow-y: auto;
 }
 
 .sharing-body > * + * {
-  margin-top: var(--sp-3);
+  margin-top: var(--sp-2);
 }
 
 .sharing-status-line {
-  margin: 0;
+  margin: 0 var(--sp-3);
   border-radius: var(--radius-sm);
   font-size: var(--fs-xs);
 }
@@ -746,6 +717,7 @@
 }
 
 .sharing-status-line:not(:empty) {
+  margin-top: var(--sp-2);
   padding: 6px var(--sp-2);
 }
 
@@ -759,83 +731,92 @@
   background: var(--color-surface-2);
 }
 
-/* The invite bar sits flush against the body's top edge and spans its
-   full width, so it reads as part of the dialog chrome, not a form. */
-.sharing-cmd-bar {
-  display: flex;
-  align-items: center;
-  gap: var(--sp-2);
-  margin: 0 calc(-1 * var(--sp-3));
-  padding: 2px var(--sp-3);
+.sharing-tag {
+  color: var(--color-text-subtle);
+  font-family: var(--font-mono);
+  font-size: var(--fs-mini);
+}
+
+/* Link block: the reason most people open this popover, so it is first. */
+.sharing-link {
+  padding: var(--sp-2) var(--sp-3) var(--sp-3);
   border-bottom: var(--border-thin);
 }
 
-.sharing-cmd-icon {
-  color: var(--color-text-subtle);
+.sharing-link-head {
+  display: flex;
+  align-items: center;
+  gap: var(--sp-2);
+  color: var(--color-accent-hi);
+}
+
+.sharing-link-text {
+  flex: 1;
+  min-width: 0;
+  display: grid;
+  gap: 1px;
+  color: var(--color-text);
+}
+
+.sharing-link-title {
   font-size: var(--fs-sm);
 }
 
-.sharing-cmd-bar input {
-  flex: 1;
-  min-width: 0;
-  height: 34px;
-  padding: 0;
-  border: none;
-  background: transparent;
-  font-size: var(--fs-md);
-}
-
-.sharing-cmd-bar input:focus {
-  outline: none;
-  box-shadow: none;
-  border: none;
-}
-
-.sharing-cmd-bar select {
-  height: 24px;
-  padding: 1px 4px;
+.sharing-share-hint {
+  margin: var(--sp-2) 0 0;
+  color: var(--color-text-muted);
   font-size: var(--fs-xs);
-  background: transparent;
-  border-color: transparent;
+  line-height: 1.5;
 }
 
-.sharing-cmd-bar select:hover,
-.sharing-cmd-bar select:focus {
-  border-color: var(--color-border);
-}
-
-.sharing-cmd-bar .primary {
+.sharing-share-create {
+  flex: 0 0 auto;
   min-height: 26px;
   padding: 2px 10px;
   font-size: var(--fs-xs);
 }
 
-.sharing-invite-sent {
-  color: var(--color-text-muted);
-  font-size: var(--fs-xs);
+/* The minted link appears exactly once; the row keeps it selectable next to
+   its copy affordance without pretending to be part of the link list. */
+.sharing-share-output {
+  display: grid;
+  grid-template-columns: 1fr auto;
+  gap: var(--sp-1) var(--sp-2);
+  align-items: center;
   margin-top: var(--sp-2);
-  padding: var(--sp-2);
-  border: 1px dashed var(--color-accent-border);
-  border-radius: var(--radius-md);
-  background: var(--color-accent-dim);
 }
 
-.sharing-group-label {
+.sharing-share-url {
+  min-width: 0;
+  height: 26px;
+  padding: 0 var(--sp-2);
+  border: var(--border-thin);
+  border-radius: var(--radius-sm);
+  background: var(--color-surface-2);
+  font-family: var(--font-mono);
+  font-size: var(--fs-xs);
+}
+
+.sharing-share-copy {
+  min-height: 26px;
+  padding: 2px 10px;
+  font-size: var(--fs-xs);
+}
+
+.sharing-share-once {
+  grid-column: 1 / -1;
   margin: 0;
-  display: flex;
-  justify-content: space-between;
-  align-items: baseline;
-  padding: 0 var(--sp-1);
-  color: var(--color-text-subtle);
+  color: var(--color-success);
   font-family: var(--font-mono);
   font-size: var(--fs-mini);
-  font-weight: var(--fw-regular);
-  letter-spacing: var(--ls-eyebrow);
-  text-transform: uppercase;
 }
 
-.sharing-count {
-  letter-spacing: normal;
+.sharing-link .sharing-list {
+  margin-top: var(--sp-1);
+}
+
+.sharing-people {
+  padding: 0 var(--sp-2);
 }
 
 .sharing-list {
@@ -847,8 +828,8 @@
 .sharing-list > li {
   display: flex;
   align-items: center;
-  gap: var(--sp-2);
-  min-height: 28px;
+  gap: 10px;
+  min-height: 32px;
   padding: 0 var(--sp-1);
   border-radius: var(--radius-md);
 }
@@ -857,10 +838,15 @@
   background: var(--color-surface-hover);
 }
 
+.sharing-list > li.sharing-pending .sharing-member-id {
+  color: var(--color-text-muted);
+}
+
 .sharing-avatar {
+  position: relative;
   flex: 0 0 auto;
-  width: 20px;
-  height: 20px;
+  width: 22px;
+  height: 22px;
   display: inline-grid;
   place-items: center;
   border-radius: 50%;
@@ -869,6 +855,33 @@
   font-size: var(--fs-mini);
   font-weight: var(--fw-medium);
   text-transform: uppercase;
+}
+
+/* Presence rides the avatar: one green dot says who is in the room now. */
+.sharing-avatar[data-presence]::after {
+  content: '';
+  position: absolute;
+  right: -1px;
+  bottom: -1px;
+  width: 7px;
+  height: 7px;
+  border-radius: 50%;
+  background: var(--color-text-subtle);
+  border: 2px solid var(--color-surface);
+}
+
+.sharing-avatar[data-presence='active']::after {
+  background: var(--color-success);
+}
+
+.sharing-avatar-link {
+  color: var(--color-accent-hi);
+}
+
+.sharing-avatar-pending {
+  background: var(--color-surface-2);
+  color: var(--color-text-subtle);
+  border: 1px dashed var(--color-border-strong);
 }
 
 .sharing-member-id {
@@ -947,63 +960,115 @@
   background: color-mix(in srgb, var(--color-error) 8%, transparent);
 }
 
-.sharing-empty {
-  margin: 0;
-  padding: 0 var(--sp-1);
+/* The invite composer is the people list's last row, not a form above it. */
+.sharing-invite {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  margin: var(--sp-1) var(--sp-1) 0;
+  padding: var(--sp-2) 0 0 var(--sp-1);
+  border-top: var(--border-thin);
   color: var(--color-text-subtle);
-  font-size: var(--fs-xs);
 }
 
-.sharing-share-hint {
-  margin: var(--sp-1) 0 var(--sp-2);
-  padding: 0 var(--sp-1);
-  color: var(--color-text-muted);
-  font-size: var(--fs-xs);
-  line-height: 1.5;
+.sharing-invite input {
+  flex: 1;
+  min-width: 0;
+  height: 28px;
+  padding: 0;
+  border: none;
+  background: transparent;
+  color: var(--color-text);
+  font-size: var(--fs-sm);
 }
 
-.sharing-share-create {
+.sharing-invite input:focus {
+  outline: none;
+  box-shadow: none;
+  border: none;
+}
+
+.sharing-invite select {
+  height: 24px;
+  padding: 1px 4px;
+  font-size: var(--fs-xs);
+  background: transparent;
+  border-color: transparent;
+}
+
+.sharing-invite select:hover,
+.sharing-invite select:focus {
+  border-color: var(--color-border);
+}
+
+.sharing-invite button {
   min-height: 26px;
   padding: 2px 10px;
   font-size: var(--fs-xs);
 }
 
-/* The minted link appears exactly once; the row keeps it selectable next to
-   its copy affordance without pretending to be part of the link list. */
-.sharing-share-output {
-  display: grid;
-  grid-template-columns: 1fr auto;
-  gap: var(--sp-2);
-  align-items: center;
-  margin-top: var(--sp-2);
+.sharing-invite-sent {
+  color: var(--color-text-muted);
+  font-size: var(--fs-xs);
+  margin: var(--sp-2) var(--sp-1) 0;
   padding: var(--sp-2);
   border: 1px dashed var(--color-accent-border);
   border-radius: var(--radius-md);
   background: var(--color-accent-dim);
 }
 
-.sharing-share-url {
-  min-width: 0;
-  height: 26px;
-  padding: 0 var(--sp-1);
-  border: var(--border-thin);
-  border-radius: var(--radius-sm);
-  background: var(--color-surface-2);
-  font-family: var(--font-mono);
-  font-size: var(--fs-xs);
-}
-
-.sharing-share-copy {
-  min-height: 26px;
-  padding: 2px 10px;
-  font-size: var(--fs-xs);
-}
-
-.sharing-share-once {
-  grid-column: 1 / -1;
+.sharing-empty {
   margin: 0;
-  color: var(--color-text-muted);
-  font-size: var(--fs-mini);
+  padding: 0 var(--sp-3);
+  color: var(--color-text-subtle);
+  font-size: var(--fs-xs);
+}
+
+.sharing-local {
+  padding: 0 var(--sp-3);
+}
+
+.sharing-local h3 {
+  margin: 0 0 var(--sp-1);
+  font-size: var(--fs-sm);
+  font-weight: var(--fw-medium);
+}
+
+.sharing-local .sharing-empty {
+  padding: 0;
+  margin-bottom: var(--sp-2);
+  line-height: 1.5;
+}
+
+.sharing-footer {
+  display: flex;
+  align-items: center;
+  gap: var(--sp-2);
+  padding: 6px var(--sp-3) 8px;
+  border-top: var(--border-thin);
+}
+
+.sharing-room-dot {
+  flex: 0 0 auto;
+  width: 7px;
+  height: 7px;
+  border-radius: 50%;
+  background: var(--color-text-subtle);
+}
+
+.sharing-room-dot[data-state='live'] {
+  background: var(--color-success);
+  box-shadow: 0 0 6px color-mix(in srgb, var(--color-success) 45%, transparent);
+}
+
+.sharing-room-dot[data-state='connecting'] {
+  background: var(--color-warning);
+}
+
+.sharing-room-dot[data-state='conflict'],
+.sharing-room-dot[data-state='oversize'],
+.sharing-room-dot[data-state='rejected'] {
+  background: var(--color-error);
 }
 
 .shortcuts-grid {
