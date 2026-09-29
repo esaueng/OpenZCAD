@@ -2,10 +2,13 @@ import { expect, it } from 'vitest';
 import {
   createProjectDocument,
   importStepBody,
+  listFeaturesInOrder,
   listParameters,
+  moveFeature,
   normalizeDocument,
   setParameter,
-  transformBody
+  transformBody,
+  updateFeature
 } from '@openzcad/document-core';
 import {
   createCadDocumentDigest,
@@ -19,7 +22,7 @@ import {
   commandsForCadPatch
 } from '@openzcad/command-system';
 import { createExactKernelAdapter } from '@openzcad/kernel-adapter/exact';
-import { toUserId } from '@openzcad/shared';
+import { toUserId, type BodyTopology } from '@openzcad/shared';
 import {
   RemusKernel,
   loadRemusTranslators
@@ -28,6 +31,23 @@ import { letteredHolder } from './support/lettered-holder';
 import { preflightCadPatch } from '../apps/web/src/lib/aiPatchPreflight';
 import { growingHolderPreview } from '../apps/web/src/lib/growingHolderPreview';
 import { assistantSuggestions } from '../apps/web/src/lib/assistant/suggestions';
+
+function topologyWithoutArenaHandles(topology: BodyTopology | undefined) {
+  const copy = structuredClone(topology);
+  const recognition = copy?.recognizedOpening;
+  if (recognition?.status === 'recognized') {
+    // These two diagnostic handles address different kernel arenas. Keep
+    // every published witness, lineage reference and recognition proof.
+    for (const key of ['faceA', 'faceB'] as const) {
+      expect(Number.isSafeInteger(recognition.evidence.candidate[key])).toBe(
+        true
+      );
+      expect(recognition.evidence.candidate[key]).toBeGreaterThanOrEqual(0);
+      recognition.evidence.candidate[key] = 0;
+    }
+  }
+  return copy;
+}
 
 async function checkLetteredHolder(moved: boolean) {
   const kernel = new RemusKernel();
@@ -87,6 +107,18 @@ async function checkLetteredHolder(moved: boolean) {
     const history = growingHolderHistories(candidate)[0]!;
     expect(history).toBeDefined();
     expect(history.text?.bodyId).toBe(textId);
+    const ordered = listFeaturesInOrder(candidate);
+    const textImport = ordered.find(
+      (feature) =>
+        feature.bodyId === textId &&
+        feature.data.featureKind === 'imported-step'
+    )!;
+    expect(ordered.indexOf(textImport)).toBe(
+      listFeaturesInOrder(imported).length
+    );
+    expect(ordered.indexOf(textImport)).toBeLessThan(
+      ordered.indexOf(history.sketch)
+    );
     const first = candidate.derived.bodyRepresentations[textId]!;
     if (moved) {
       expect(history.source.data.featureKind).toBe('imported-step');
@@ -108,6 +140,92 @@ async function checkLetteredHolder(moved: boolean) {
     const exact = await adapter.syncDocument(grown);
     expect(exact.warnings).toEqual([]);
     expect(exact.bodyRepresentations[textId]!.bbox).toEqual(textPreview.bbox);
+    // Reload starts with a cold adapter. Its own rebuild must checkpoint the
+    // fixed text import, then the FIRST height edit must restore it while
+    // replaying the exact union and the parameter-driven text placement.
+    const reloaded = await createExactKernelAdapter();
+    const legacy = await createExactKernelAdapter({
+      historyCheckpointLimit: 0
+    });
+    try {
+      const reopened = normalizeDocument(
+        JSON.parse(JSON.stringify(candidate)) as typeof candidate
+      );
+      const replayed: string[] = [];
+      await reloaded.syncDocument(reopened, (progress) => {
+        if (progress.stage === 'feature' && progress.status === 'completed')
+          replayed.push(progress.name);
+      });
+      expect(replayed).toContain('Text');
+      replayed.length = 0;
+      const firstEdit = await reloaded.syncDocument(grown, (progress) => {
+        if (progress.stage === 'feature' && progress.status === 'completed')
+          replayed.push(progress.name);
+      });
+      expect(replayed).not.toContain('Text');
+      expect(replayed).toContain('Keep text together');
+      expect(replayed).toContain(history.union.name);
+      expect(firstEdit.warnings).toEqual([]);
+      expect(firstEdit.featureWarnings).toEqual([]);
+      // Same IDs and body order, with the old text-import position restored.
+      const oldOrder = moveFeature(grown, {
+        featureId: textImport.featureId,
+        toIndex: ordered.indexOf(history.union)
+      });
+      expect(oldOrder.bodyOrder).toEqual(grown.bodyOrder);
+      const oracle = await legacy.syncDocument(oldOrder);
+      expect(firstEdit.warnings).toEqual(oracle.warnings);
+      expect(firstEdit.featureWarnings).toEqual(oracle.featureWarnings);
+      expect(firstEdit.exportableBodyIds).toEqual(oracle.exportableBodyIds);
+      for (const bodyId of grown.bodyOrder) {
+        const actual = firstEdit.bodyRepresentations[bodyId]!;
+        const expected = oracle.bodyRepresentations[bodyId]!;
+        expect(actual.bbox).toEqual(expected.bbox);
+        expect(actual.volume).toBe(expected.volume);
+        expect(actual.faceCount).toBe(expected.faceCount);
+        expect(topologyWithoutArenaHandles(actual.topology)).toEqual(
+          topologyWithoutArenaHandles(expected.topology)
+        );
+        expect(actual.mesh.indices.length).toBe(expected.mesh.indices.length);
+        expect(actual.consumed).toBe(expected.consumed);
+        expect(actual.exportableStep).toBe(expected.exportableStep);
+      }
+      if (textImport.data.featureKind !== 'imported-step')
+        throw new Error('Expected the fixed text import.');
+      const emboss = textImport.data.planarEmboss!;
+      const changedSelection = updateFeature(grown, {
+        featureId: textImport.featureId,
+        data: {
+          planarEmboss: {
+            ...emboss,
+            selection: {
+              ...emboss.selection,
+              depth: emboss.selection.depth + 0.1
+            }
+          }
+        }
+      });
+      replayed.length = 0;
+      const refused = await reloaded.syncDocument(
+        changedSelection,
+        (progress) => {
+          if (progress.stage === 'feature' && progress.status === 'completed')
+            replayed.push(progress.name);
+        }
+      );
+      expect(replayed).toContain('Text');
+      expect(
+        refused.warnings.some((warning) =>
+          warning.includes('raised lettering no longer matches')
+        )
+      ).toBe(true);
+      const refusedOracle = await legacy.syncDocument(changedSelection);
+      expect(refused.warnings).toEqual(refusedOracle.warnings);
+      expect(refused.featureWarnings).toEqual(refusedOracle.featureWarnings);
+    } finally {
+      reloaded.dispose();
+      legacy.dispose();
+    }
     const visible = await adapter.exportStep(grown, exact.exportableBodyIds);
     expect(
       kernel.deserializeSolids(io.importStep(new TextEncoder().encode(visible)))
@@ -207,8 +325,7 @@ it('keeps a rotated moved holder at its world placement while the height grows, 
     }).document;
     imported = { ...imported, derived: await adapter.syncDocument(imported) };
     const recognition =
-      imported.derived.bodyRepresentations[bodyId]!.topology!
-        .recognizedOpening;
+      imported.derived.bodyRepresentations[bodyId]!.topology!.recognizedOpening;
     expect(recognition?.status).toBe('recognized');
     if (recognition?.status !== 'recognized')
       throw new Error('rotated holder was not recognized');
@@ -229,8 +346,7 @@ it('keeps a rotated moved holder at its world placement while the height grows, 
     expect(history).toBeDefined();
     const textId = history.text?.bodyId;
     expect(textId).toBeDefined();
-    const sourceBBox =
-      imported.derived.bodyRepresentations[bodyId]!.bbox;
+    const sourceBBox = imported.derived.bodyRepresentations[bodyId]!.bbox;
     const holderBBox =
       candidate.derived.bodyRepresentations[history.resultBodyId]!.bbox;
     for (const axis of ['x', 'y', 'z'] as const) {
@@ -243,16 +359,14 @@ it('keeps a rotated moved holder at its world placement while the height grows, 
       (axis) => axis !== heightAxis
     );
     for (const delta of [8, -4]) {
-      const height =
-        history.recipe.height!.sourceHeight + delta;
+      const height = history.recipe.height!.sourceHeight + delta;
       const grown = setParameter(candidate, {
         name: history.recipe.height!.parameter,
         expression: String(height)
       });
       const exact = await adapter.syncDocument(grown);
       expect(exact.warnings).toEqual([]);
-      const grownHolder =
-        exact.bodyRepresentations[history.resultBodyId]!;
+      const grownHolder = exact.bodyRepresentations[history.resultBodyId]!;
       const grownText = exact.bodyRepresentations[textId!]!;
       expect(grownHolder.bbox.min[heightAxis]).toBeCloseTo(
         holderBBox.min[heightAxis],
@@ -263,14 +377,8 @@ it('keeps a rotated moved holder at its world placement while the height grows, 
         6
       );
       for (const axis of otherAxes) {
-        expect(grownHolder.bbox.min[axis]).toBeCloseTo(
-          holderBBox.min[axis],
-          6
-        );
-        expect(grownHolder.bbox.max[axis]).toBeCloseTo(
-          holderBBox.max[axis],
-          6
-        );
+        expect(grownHolder.bbox.min[axis]).toBeCloseTo(holderBBox.min[axis], 6);
+        expect(grownHolder.bbox.max[axis]).toBeCloseTo(holderBBox.max[axis], 6);
         expect(grownText.bbox.min[axis]).toBeCloseTo(baseText.min[axis], 6);
         expect(grownText.bbox.max[axis]).toBeCloseTo(baseText.max[axis], 6);
       }
