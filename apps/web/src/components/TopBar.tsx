@@ -22,6 +22,7 @@ import type { ArtifactRecord, AuthSession, UnitSystem } from '@openzcad/shared';
 import { BrandMark } from './BrandMark';
 import type { WorkspaceMode } from '../lib/panelState';
 import type { CollaborationStatus } from '../lib/useCollaboration';
+import { COLLABORATION_LABELS } from '../lib/collaborationLabels';
 import type { WorkspaceSaveState } from '../lib/cloudProjectAutosave';
 import { WORKSPACE_SAVE_STATE_PRESENTATION } from '../lib/workspaceSaveStatePresentation';
 import { StableLabel } from './StableLabel';
@@ -137,18 +138,6 @@ const DEVICE_SAVE_LABEL_RESERVE = saveStateLabels(['saving', 'local']);
 // frames of every cloud project, and the longer word would either resize the
 // chip on the way in or cost the bar four characters for good.
 const COLLABORATION_LABEL_RESERVE = ['9 live', 'Offline', 'Joining…'];
-/** Every room status as words, so no raw identifier ever reaches the bar. */
-const COLLABORATION_LABELS: Record<CollaborationStatus, string> = {
-  connecting: 'Joining…',
-  live: 'Live',
-  offline: 'Offline',
-  conflict: 'Conflict',
-  oversize: 'Local only',
-  rejected: 'Not shared',
-  'read-only': 'Read-only',
-  'lease-denied': 'Edit locked',
-  'update-required': 'Update required'
-};
 const ACCOUNT_LABEL_RESERVE = ['Checking', 'Signed out'];
 
 type SaveGlyph = 'busy' | 'warning' | 'saved' | 'idle';
