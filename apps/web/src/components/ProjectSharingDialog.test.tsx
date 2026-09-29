@@ -1,4 +1,4 @@
-import { render, screen, waitFor } from '@testing-library/react';
+import { act, render, screen, waitFor } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { describe, expect, it, vi } from 'vitest';
 import { createProjectDocument } from '@openzcad/document-core';
@@ -143,7 +143,7 @@ describe('ProjectSharingDialog', () => {
     expect(
       screen.getByRole('dialog', { name: 'Project sharing' })
     ).toHaveAttribute('aria-busy', 'true');
-    expect(screen.getByRole('button', { name: 'Send invite' })).toBeDisabled();
+    expect(screen.getByRole('button', { name: 'Invite' })).toBeDisabled();
   });
 
   it('shows progress for an explicit sharing action', async () => {
@@ -167,7 +167,7 @@ describe('ProjectSharingDialog', () => {
 
     await screen.findByText('member@example.com');
     await user.type(screen.getByLabelText('Email'), 'new@example.com');
-    await user.click(screen.getByRole('button', { name: 'Send invite' }));
+    await user.click(screen.getByRole('button', { name: 'Invite' }));
 
     expect(await screen.findByText('Working…')).toBeVisible();
     expect(
@@ -209,9 +209,12 @@ describe('ProjectSharingDialog', () => {
       />
     );
 
-    expect(screen.getAllByText('test-user (you)')).toHaveLength(2);
+    // Two sessions of one account are one person, so one row.
+    expect(screen.getAllByText('test-user (you)')).toHaveLength(1);
     expect(screen.getByText('alex')).toBeVisible();
     expect(screen.queryByText('alex (you)')).not.toBeInTheDocument();
+    expect(screen.getByText('Viewer')).toBeVisible();
+    expect(screen.getByText('idle')).toBeVisible();
   });
 
   it('exposes an accessible owner dialog and typed invitation/member controls', async () => {
@@ -233,8 +236,12 @@ describe('ProjectSharingDialog', () => {
     expect(
       screen.getByRole('dialog', { name: 'Project sharing' })
     ).toHaveAttribute('aria-modal', 'true');
-    expect(screen.getByText(/Your role:/)).toHaveTextContent('owner');
+    expect(screen.getByRole('contentinfo')).toHaveTextContent(
+      'Live · only you · edit lease not held'
+    );
     expect(await screen.findByText('member@example.com')).toBeVisible();
+    expect(screen.getByText('pending@example.com')).toBeVisible();
+    expect(screen.getByText('Invited · editor · expired')).toBeVisible();
     expect(screen.getByLabelText('Role for member@example.com')).toHaveValue(
       'viewer'
     );
@@ -249,7 +256,7 @@ describe('ProjectSharingDialog', () => {
       screen.getByLabelText('Role', { selector: 'select' }),
       'editor'
     );
-    await user.click(screen.getByRole('button', { name: 'Send invite' }));
+    await user.click(screen.getByRole('button', { name: 'Invite' }));
 
     await waitFor(() =>
       expect(sharingClient.createInvitation).toHaveBeenCalledWith(
@@ -287,12 +294,18 @@ describe('ProjectSharingDialog', () => {
       />
     );
 
-    expect(await screen.findByText('No active share links.')).toBeVisible();
+    expect(
+      await screen.findByRole('button', { name: 'Create link' })
+    ).toBeEnabled();
+    expect(screen.getByText('Anyone with the link')).toBeVisible();
     expect(
       screen.getByText(
-        'Anyone with the link can open this model, adjust its parameters and export — without an account.'
+        'Opens in Tweak: parameters and export, no account needed.'
       )
     ).toBeVisible();
+    expect(
+      screen.queryByRole('button', { name: /Revoke share link/ })
+    ).not.toBeInTheDocument();
 
     await user.click(screen.getByRole('button', { name: 'Create link' }));
     await waitFor(() =>
@@ -311,7 +324,8 @@ describe('ProjectSharingDialog', () => {
       )
     );
     expect(screen.getByRole('button', { name: 'Copied' })).toBeVisible();
-    expect(screen.getByText('Anyone with the link')).toBeVisible();
+    expect(screen.getByText('Shown once — copy it now.')).toBeVisible();
+    expect(screen.getByText(/^Link created /)).toBeVisible();
 
     await user.click(
       screen.getByRole('button', { name: /Revoke share link created/ })
@@ -322,7 +336,11 @@ describe('ProjectSharingDialog', () => {
         'share_1'
       )
     );
-    expect(await screen.findByText('No active share links.')).toBeVisible();
+    await waitFor(() =>
+      expect(
+        screen.queryByRole('button', { name: /Revoke share link/ })
+      ).not.toBeInTheDocument()
+    );
     expect(screen.queryByLabelText('Share link')).not.toBeInTheDocument();
   });
 
@@ -422,6 +440,83 @@ it('offers account storage for a local import instead of an ownership error', as
     screen.getByRole('button', { name: 'Save to my account' })
   );
   expect(save).toHaveBeenCalledTimes(1);
+});
+
+it('hangs from the top bar sharing chip and follows it on resize', async () => {
+  const chip = document.createElement('button');
+  chip.className = 'collaboration-state';
+  document.body.append(chip);
+  let right = 1000;
+  vi.spyOn(chip, 'getBoundingClientRect').mockImplementation(
+    () => ({ right, width: 80 }) as DOMRect
+  );
+  const width = window.innerWidth;
+  try {
+    render(
+      <ProjectSharingDialog
+        projectId="anchored"
+        role="owner"
+        collaborationStatus="live"
+        lease={null}
+        client={client()}
+        shareLinkClient={shareLinkClient()}
+        onClose={vi.fn()}
+      />
+    );
+    const backdrop = screen.getByRole('dialog', { name: 'Project sharing' })
+      .parentElement as HTMLElement;
+    expect(backdrop.style.getPropertyValue('--sharing-anchor-right')).toBe(
+      `${width - 1000}px`
+    );
+    expect(backdrop.style.getPropertyValue('--sharing-anchor-centre')).toBe(
+      '40px'
+    );
+
+    right = width - 5;
+    act(() => {
+      window.dispatchEvent(new Event('resize'));
+    });
+    // Never closer to the viewport edge than the modal gutter.
+    expect(backdrop.style.getPropertyValue('--sharing-anchor-right')).toBe(
+      '12px'
+    );
+  } finally {
+    chip.remove();
+  }
+});
+
+it('names the self row from the account when no session is live', async () => {
+  const base = createProjectDocument('Named self', owner);
+  const { rerender } = render(
+    <ProjectSharingDialog
+      projectId={base.projectId}
+      role="owner"
+      collaborationStatus="offline"
+      lease={null}
+      currentUserId={owner}
+      currentUserName="peter"
+      client={client()}
+      shareLinkClient={shareLinkClient()}
+      onClose={vi.fn()}
+    />
+  );
+  expect(await screen.findByText('peter (you)')).toBeVisible();
+  expect(screen.getByText('Owner')).toBeVisible();
+
+  rerender(
+    <ProjectSharingDialog
+      projectId={base.projectId}
+      role="owner"
+      collaborationStatus="offline"
+      lease={null}
+      currentUserId={owner}
+      client={client()}
+      shareLinkClient={shareLinkClient()}
+      onClose={vi.fn()}
+    />
+  );
+  expect(screen.getByText('You')).toBeVisible();
+  expect(screen.queryByText(/\(you\)/)).not.toBeInTheDocument();
 });
 
 it('distinguishes an unresolved account role from a non-owner role', () => {

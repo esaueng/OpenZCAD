@@ -56,18 +56,6 @@ export const UNSTYLED_ALLOWANCES = [
       'Bare wrapper. Its kv-grid and muted children carry every rule that lays this block out.'
   },
   {
-    file: 'apps/web/src/components/ProjectSharingDialog.tsx',
-    classes: ['sharing-invite'],
-    reason:
-      'Spaced positionally by `.sharing-body > * + *` in modals.css; the name is an aria-label anchor.'
-  },
-  {
-    file: 'apps/web/src/components/ProjectSharingDialog.tsx',
-    classes: ['sharing-section'],
-    reason:
-      'Spaced positionally by `.sharing-body > * + *` in modals.css; three sections share the name.'
-  },
-  {
     file: 'apps/web/src/components/SettingsPage.tsx',
     classes: ['settings-turnstile-shell'],
     reason:
