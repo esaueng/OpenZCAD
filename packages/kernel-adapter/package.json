@@ -19,7 +19,7 @@
     "@openzcad/io-stl": "workspace:*",
     "@openzcad/shared": "workspace:*",
     "fflate": "0.8.3",
-    "remus-wasm": "github:esaueng/remus#639ac3e7b74fca32f2eca3599f8e7a5c6a960208&path:/crates/wasm/pkg",
-    "remus-wasm-io": "github:esaueng/remus#639ac3e7b74fca32f2eca3599f8e7a5c6a960208&path:/crates/wasm-io/pkg"
+    "remus-wasm": "github:esaueng/remus#960e777cb1c47b24abe85c78d6a5599c11e00c15&path:/crates/wasm/pkg",
+    "remus-wasm-io": "github:esaueng/remus#960e777cb1c47b24abe85c78d6a5599c11e00c15&path:/crates/wasm-io/pkg"
   }
 }
