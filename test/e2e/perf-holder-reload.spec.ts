@@ -214,6 +214,16 @@ async function expectExactReady(page: Page) {
     .waitFor({ timeout: 5_000 })
     .catch(() => undefined);
   await expect(status).not.toHaveText(busy, { timeout: 180_000 });
+  await expect
+    .poll(
+      async () => {
+        const states = await workerLog(page);
+        const live = states.filter((state) => !state.requestId).at(-1);
+        return live?.phase === 'ready' && !live.stale;
+      },
+      { timeout: 180_000 }
+    )
+    .toBe(true);
   await expect(page.getByRole('contentinfo')).toContainText('warnings0');
 }
 
@@ -244,19 +254,28 @@ async function measureEdit(
   const inputAt = await pageNow(page);
   await field.press('Enter');
   await expect(field).toHaveValue(value);
+  await expect(page.getByRole('contentinfo').getByRole('status')).toHaveText(
+    `Parameter ${name} updated.`,
+    { timeout: 180_000 }
+  );
+  const statusText =
+    (await page.getByRole('contentinfo').getByRole('status').textContent()) ??
+    '';
   await expectExactReady(page);
   const log = (await workerLog(page)).slice(logStart);
   const readyStates = log.filter((s) => s.phase === 'ready' && !s.stale);
   const preflightReady = readyStates.find((s) => s.requestId);
   const liveReady = [...readyStates].reverse().find((s) => !s.requestId);
-  const exactEnd =
-    liveReady?.t ?? readyStates.at(-1)?.t ?? (await pageNow(page));
-  const statusText =
-    (await page
-      .getByRole('contentinfo')
-      .getByRole('status')
-      .first()
-      .textContent()) ?? '';
+  expect(
+    preflightReady,
+    'The edit must complete exact preflight'
+  ).toBeDefined();
+  expect(
+    liveReady,
+    'The committed edit must complete a fresh live sync'
+  ).toBeDefined();
+  expect(liveReady!.version).toBeGreaterThan(preflightReady!.version!);
+  const exactEnd = liveReady!.t;
   const previewInstallMs = await page.evaluate(
     () =>
       performance
@@ -461,17 +480,13 @@ for (const scenario of scenarios) {
         async () => (await storedCopies()).some((c) => c.parameterValue === v1),
         { timeout: 30_000 }
       )
-      .toBe(true)
-      .catch(() => undefined);
+      .toBe(true);
     const copiesBeforeReload = await storedCopies();
     const reloadStart = Date.now();
     stages.length = 0;
     await page.reload();
     const reloadNav = await page.evaluate(() => performance.timeOrigin);
-    await expect(field()).toHaveValue(
-      new RegExp(`^(${initial}|${v0}|${v1})$`),
-      { timeout: 60_000 }
-    );
+    await expect(field()).toHaveValue(v1, { timeout: 60_000 });
     const valueAfterReload = await field().inputValue();
     await expect(page.getByRole('contentinfo')).toContainText('warnings0', {
       timeout: 180_000
@@ -509,13 +524,16 @@ for (const scenario of scenarios) {
     // cold rebuild has finished — the way a user who reloads and immediately
     // edits experiences it. Its exact time includes whatever the reload still
     // had to do.
+    await expect
+      .poll(
+        async () => (await storedCopies()).some((c) => c.parameterValue === v3),
+        { timeout: 30_000 }
+      )
+      .toBe(true);
     const secondReloadStart = Date.now();
     stages.length = 0;
     await page.reload();
-    await expect(field()).toHaveValue(
-      new RegExp(`^(${initial}|${v0}|${v1}|${v2}|${v3})$`),
-      { timeout: 60_000 }
-    );
+    await expect(field()).toHaveValue(v3, { timeout: 60_000 });
     const fieldVisibleAt = await pageNow(page);
     offset = await clockOffset(page);
     const immediate = await measureEdit(
@@ -566,6 +584,14 @@ for (const scenario of scenarios) {
       expect(immediate.exactMs).toBeLessThanOrEqual(
         (secondReload.firstReadyAt ?? reloadReadyAt) + warmBefore.exactMs + 250
       );
+      if (scenario.parameter === 'holder_height') {
+        expect(
+          first.preflight.stages.filter(
+            (stage) => stage.stage === 'feature' && stage.name === 'Text'
+          ),
+          'The settled reload must restore the fixed text import'
+        ).toHaveLength(0);
+      }
     }
     const out =
       process.env.OZ_PERF_OUT ?? 'perf-results/perf-holder-reload.jsonl';
