@@ -38,7 +38,9 @@ for (const viewport of [
   test(`properties reports a saved model without opening or modifying it at ${viewport.width}px`, async ({
     page
   }) => {
-    await page.setViewportSize(viewport);
+    // Build the fixture at desktop size; the narrow case exercises the library
+    // and properties dialog rather than the workspace's modeling controls.
+    await page.setViewportSize({ width: 1280, height: 900 });
     const errors: string[] = [];
     page.on('pageerror', (error) => errors.push(error.message));
     await stubApi(page);
@@ -50,6 +52,7 @@ for (const viewport of [
       .click();
     await expectBodyCount(page, 1);
     await page.getByTitle('Back to projects').click();
+    await page.setViewportSize(viewport);
     const before = await savedDocument(page);
     const actions = page.getByRole('button', {
       name: 'Actions for Properties bracket'
