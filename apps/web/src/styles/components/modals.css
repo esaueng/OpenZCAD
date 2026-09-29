@@ -655,7 +655,11 @@
 .sharing-backdrop {
   justify-content: flex-end;
   align-items: flex-start;
-  padding: calc(var(--topbar-h) + var(--sp-1)) var(--sp-3) var(--sp-4);
+  /* The right gap is the measured distance to the sharing chip's right
+     edge, so the popover's edge lines up with the control it hangs from
+     wherever the responsive action row has put it. */
+  padding: calc(var(--topbar-h) + var(--sp-1))
+    var(--sharing-anchor-right, var(--sp-3)) var(--sp-4) var(--sp-3);
   background: rgba(6, 7, 9, 0.35);
   backdrop-filter: none;
 }
@@ -674,7 +678,7 @@
 
 /* The spring grows out of the chip it hangs from, not the screen centre. */
 .sharing-backdrop > .sharing-popover {
-  transform-origin: calc(100% - 48px) 0;
+  transform-origin: calc(100% - var(--sharing-anchor-centre, 48px)) 0;
 }
 
 .sharing-header {

@@ -1,4 +1,4 @@
-import { render, screen, waitFor } from '@testing-library/react';
+import { act, render, screen, waitFor } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { describe, expect, it, vi } from 'vitest';
 import { createProjectDocument } from '@openzcad/document-core';
@@ -440,6 +440,49 @@ it('offers account storage for a local import instead of an ownership error', as
     screen.getByRole('button', { name: 'Save to my account' })
   );
   expect(save).toHaveBeenCalledTimes(1);
+});
+
+it('hangs from the top bar sharing chip and follows it on resize', async () => {
+  const chip = document.createElement('button');
+  chip.className = 'collaboration-state';
+  document.body.append(chip);
+  let right = 1000;
+  vi.spyOn(chip, 'getBoundingClientRect').mockImplementation(
+    () => ({ right, width: 80 }) as DOMRect
+  );
+  const width = window.innerWidth;
+  try {
+    render(
+      <ProjectSharingDialog
+        projectId="anchored"
+        role="owner"
+        collaborationStatus="live"
+        lease={null}
+        client={client()}
+        shareLinkClient={shareLinkClient()}
+        onClose={vi.fn()}
+      />
+    );
+    const backdrop = screen.getByRole('dialog', { name: 'Project sharing' })
+      .parentElement as HTMLElement;
+    expect(backdrop.style.getPropertyValue('--sharing-anchor-right')).toBe(
+      `${width - 1000}px`
+    );
+    expect(backdrop.style.getPropertyValue('--sharing-anchor-centre')).toBe(
+      '40px'
+    );
+
+    right = width - 5;
+    act(() => {
+      window.dispatchEvent(new Event('resize'));
+    });
+    // Never closer to the viewport edge than the modal gutter.
+    expect(backdrop.style.getPropertyValue('--sharing-anchor-right')).toBe(
+      '12px'
+    );
+  } finally {
+    chip.remove();
+  }
 });
 
 it('names the self row from the account when no session is live', async () => {

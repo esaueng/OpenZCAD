@@ -1,4 +1,12 @@
-import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
+import {
+  useCallback,
+  useEffect,
+  useLayoutEffect,
+  useMemo,
+  useRef,
+  useState
+} from 'react';
+import type { CSSProperties } from 'react';
 import { Link2, Plus } from 'lucide-react';
 import type {
   CollaborationMember,
@@ -102,6 +110,35 @@ function activeLease(
   );
 }
 
+/**
+ * The top bar control this popover hangs from. Measured rather than passed
+ * down: the dialog mounts from App while the chip lives in TopBar, and the
+ * chip's position moves as the action row's responsive controls collapse.
+ */
+const ANCHOR_SELECTOR = '.collaboration-state';
+
+interface PopoverAnchor {
+  /** Gap from the viewport's right edge to the chip's right edge. */
+  right: number;
+  /** Distance from the chip's right edge to its centre, for the spring origin. */
+  centre: number;
+}
+
+function measureAnchor(minGap: number): PopoverAnchor | null {
+  const trigger = document.querySelector<HTMLElement>(ANCHOR_SELECTOR);
+  if (!trigger) {
+    return null;
+  }
+  const rect = trigger.getBoundingClientRect();
+  if (rect.width === 0) {
+    return null;
+  }
+  return {
+    right: Math.max(minGap, Math.round(window.innerWidth - rect.right)),
+    centre: Math.round(rect.width / 2)
+  };
+}
+
 function strongerPresence(a: Presence, b: Presence): Presence {
   if (a === 'active' || b === 'active') {
     return 'active';
@@ -149,7 +186,15 @@ export function ProjectSharingDialog({
   const [hydrating, setHydrating] = useState(role === 'owner');
   const [busy, setBusy] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
+  const [anchor, setAnchor] = useState<PopoverAnchor | null>(null);
   useModalFocus(dialogRef, { autoFocus: true });
+
+  useLayoutEffect(() => {
+    const measure = () => setAnchor(measureAnchor(12));
+    measure();
+    window.addEventListener('resize', measure);
+    return () => window.removeEventListener('resize', measure);
+  }, []);
 
   const refresh = useCallback(
     async (source: 'hydrate' | 'action' = 'action') => {
@@ -313,6 +358,14 @@ export function ProjectSharingDialog({
   return (
     <div
       className="modal-backdrop sharing-backdrop"
+      style={
+        anchor
+          ? ({
+              '--sharing-anchor-right': `${anchor.right}px`,
+              '--sharing-anchor-centre': `${anchor.centre}px`
+            } as CSSProperties)
+          : undefined
+      }
       onMouseDown={(event) => {
         if (event.target === event.currentTarget) {
           onClose();
