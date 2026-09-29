@@ -1574,9 +1574,9 @@ export function App() {
       ? loadActiveProjectId()
       : null
   );
-  const [startupState, setStartupState] = useState<'restoring' | 'ready'>(() =>
-    startupProjectId ? 'restoring' : 'ready'
-  );
+  const [startupState, setStartupState] = useState<
+    'restoring' | 'loading-library' | 'ready'
+  >(() => (startupProjectId ? 'restoring' : 'loading-library'));
   const shellMarkedRef = useRef(false);
   useLayoutEffect(() => {
     if (shellMarkedRef.current) {
@@ -15833,11 +15833,12 @@ export function App() {
           onImportProject={(file) => void handleImportProject(file)}
           projects={projects}
           status={status}
-          // The shelf navigates between projects, and a validated import
-          // answers a mid-run switch at commit — so it never reads the
-          // import lock's busy state. Passing `busy` here is what stranded
-          // the shelf disabled behind an in-progress import.
-          busy={false}
+          // Discovery must finish before a new/opened part can commit: the
+          // startup result would otherwise replace its session and listing.
+          // Keep import locks out of this; validated imports fence switches
+          // at commit and must not strand the shelf disabled mid-import.
+          busy={startupState !== 'ready'}
+          loading={startupState === 'loading-library'}
           demos={START_SCREEN_DEMOS}
           defaultUnits={appSettings.general.defaultUnits}
           onCreate={(name, units) => void handleCreateProject(name, units)}
