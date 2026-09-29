@@ -69,6 +69,31 @@ test('a question typed into the prompt goes to the stream standing on it', async
     'Add a 10 mm cube.'
   );
 
+  // A slash typed with the stream up replaces it with the command list:
+  // the conversation is hidden rather than showing through around the
+  // list, and the list stands on the bar where the stream stood. Clearing
+  // the slash brings the stream straight back, thread intact.
+  await search.focus();
+  await search.fill('/');
+  const list = page.getByRole('listbox', { name: 'Commands' });
+  await expect(list).toBeVisible();
+  await expect(panel).toBeHidden();
+  await expect(panel).toHaveCount(1);
+  // Polled: the list rises into place over a short animation.
+  await expect
+    .poll(async () => {
+      const listBox = await page.locator('.command-bar-float').boundingBox();
+      const barBoxWithList = await page.locator('.command-bar').boundingBox();
+      return Math.abs(listBox!.y + listBox!.height - barBoxWithList!.y);
+    })
+    .toBeLessThan(1);
+  await search.fill('');
+  await expect(list).toHaveCount(0);
+  await expect(panel).toBeVisible();
+  await expect(page.locator('.assistant-thread')).toContainText(
+    'Add a 10 mm cube'
+  );
+
   // Once the status goes quiet the guidance hint takes the bar's lane, but
   // the stream's foot line stands there: the hint waits until it is tucked
   // away rather than drawing over it.
