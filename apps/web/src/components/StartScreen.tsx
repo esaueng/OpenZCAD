@@ -6,8 +6,10 @@ import {
   Archive,
   ArchiveRestore,
   ArrowRight,
+  Box,
   Check,
   ChevronDown,
+  Cloud,
   CloudOff,
   CloudUpload,
   Copy,
@@ -104,8 +106,8 @@ interface StartScreenProps {
 
 /**
  * How many saved parts a shelf shows before it has to be expanded. Ten parts
- * fills two five-column rows at the wide desktop layout, which is enough to
- * recognise recent work without the demos below being pushed too far down.
+ * is enough to recognise recent work at a glance; beyond that the shelf is a
+ * library, and a library is searched rather than scrolled.
  */
 const COLLAPSED_PROJECT_LIMIT = 10;
 
@@ -162,10 +164,21 @@ const SHELVES: ReadonlyArray<{
   status: ProjectStatus;
   label: string;
   empty: string;
+  Icon: typeof Box;
 }> = [
-  { status: 'active', label: 'Parts', empty: 'nothing saved yet' },
-  { status: 'archived', label: 'Archive', empty: 'nothing archived' },
-  { status: 'deleted', label: 'Trash', empty: 'the recycle bin is empty' }
+  { status: 'active', label: 'Parts', empty: 'nothing saved yet', Icon: Box },
+  {
+    status: 'archived',
+    label: 'Archive',
+    empty: 'nothing archived',
+    Icon: Archive
+  },
+  {
+    status: 'deleted',
+    label: 'Trash',
+    empty: 'the recycle bin is empty',
+    Icon: Trash2
+  }
 ];
 
 /** The start screen's crossfade into the workspace. */
@@ -692,22 +705,30 @@ export function StartScreen({
     }
   }
 
+  // The account's view of the shelf, for the column's status card. Deleted
+  // parts are left out on both sides: they are on their way out, not work to
+  // account for.
+  const accountableProjects = userProjects.filter(
+    (project) => projectOrganization(project).status !== 'deleted'
+  );
+  const savedToAccountCount =
+    accountableProjects.length - localOnlyProjects.length;
+
+  // With nothing saved yet the demos are the most useful thing on the page,
+  // so they take the stage as full cards instead of a list in the column.
+  const fresh = userProjects.length === 0;
+
   return (
-    <div ref={screenRef} className="start-screen">
+    <div
+      ref={screenRef}
+      className={fresh ? 'start-screen is-fresh' : 'start-screen'}
+    >
       <header className="start-header">
         <div className="start-brand">
           <BrandMark />
           <h1 className="start-header-name">OpenZCAD</h1>
           <span className="start-beta">beta</span>
         </div>
-        {onImportProject && (
-          <ProjectImportButton
-            onImport={onImportProject}
-            disabled={busy}
-            className="secondary"
-          />
-        )}
-        <span className="start-tagline">Parametric CAD in the browser</span>
         <button
           className="start-settings-button icon-button"
           type="button"
@@ -717,118 +738,125 @@ export function StartScreen({
         >
           <Settings size={16} aria-hidden="true" />
         </button>
+        <span className="start-tagline">Parametric CAD in the browser</span>
       </header>
 
-      <div className="start-body">
-        <section className="start-launch" aria-labelledby="start-launch-title">
-          <div className="start-launch-copy">
-            <h2 id="start-launch-title">
-              <Plus size={16} aria-hidden="true" />
-              New project
-            </h2>
-            <p>
-              Name it, choose its units, and start modelling. The name and units
-              can be changed later.
-            </p>
-          </div>
-          <form
-            className="start-launch-form"
-            onSubmit={(event) => {
+      <section className="start-launch" aria-labelledby="start-launch-title">
+        <form
+          className="start-launch-form"
+          onSubmit={(event) => {
+            event.preventDefault();
+            createPart();
+          }}
+          onKeyDown={(event) => {
+            // Enter creates from any field, including the units select.
+            if (
+              event.key === 'Enter' &&
+              !(event.target instanceof HTMLButtonElement)
+            ) {
               event.preventDefault();
               createPart();
-            }}
-            onKeyDown={(event) => {
-              // Enter creates from any field, including the units select.
-              if (
-                event.key === 'Enter' &&
-                !(event.target instanceof HTMLButtonElement)
-              ) {
-                event.preventDefault();
-                createPart();
-              }
-            }}
-          >
-            <label className="start-field start-field-name">
-              <span className="start-field-label">Name</span>
-              <input
-                value={name}
-                aria-label="Project name"
-                autoFocus
-                aria-invalid={nameTooLong || undefined}
-                aria-describedby={
-                  nameTooLong ? 'project-name-error' : undefined
-                }
-                onChange={(event) => setName(event.target.value)}
-              />
-            </label>
-            <label className="start-field start-field-units">
-              <span className="start-field-label">Units</span>
-              <select
-                value={units}
-                aria-label="Unit system"
-                onChange={(event) => setUnits(event.target.value as UnitSystem)}
-              >
-                <option value="mm">Millimeters</option>
-                <option value="cm">Centimeters</option>
-                <option value="m">Meters</option>
-                <option value="inch">Inches</option>
-              </select>
-            </label>
-            <button
-              type="submit"
-              className="primary start-launch-submit"
-              disabled={!canCreate}
+            }
+          }}
+        >
+          <h2 id="start-launch-title">
+            <Plus size={15} aria-hidden="true" />
+            New part
+          </h2>
+          <label className="start-field start-field-name">
+            <span className="start-field-label">Name</span>
+            <input
+              value={name}
+              aria-label="Project name"
+              autoFocus
+              aria-invalid={nameTooLong || undefined}
+              aria-describedby={nameTooLong ? 'project-name-error' : undefined}
+              onChange={(event) => setName(event.target.value)}
+            />
+          </label>
+          <label className="start-field start-field-units">
+            <span className="start-field-label">Units</span>
+            <select
+              value={units}
+              aria-label="Unit system"
+              onChange={(event) => setUnits(event.target.value as UnitSystem)}
             >
-              Create project
-            </button>
-            {nameTooLong && (
-              <small
-                id="project-name-error"
-                className="field-error start-launch-error"
-                role="alert"
-              >
-                Project name must be at most {MAX_PROJECT_NAME_LENGTH}{' '}
-                characters.
-              </small>
-            )}
-          </form>
-        </section>
+              <option value="mm">Millimeters</option>
+              <option value="cm">Centimeters</option>
+              <option value="m">Meters</option>
+              <option value="inch">Inches</option>
+            </select>
+          </label>
+          <button
+            type="submit"
+            className="primary start-launch-submit"
+            disabled={!canCreate}
+          >
+            Create project
+          </button>
+          {nameTooLong ? (
+            <small
+              id="project-name-error"
+              className="field-error start-launch-error"
+              role="alert"
+            >
+              Project name must be at most {MAX_PROJECT_NAME_LENGTH} characters.
+            </small>
+          ) : (
+            <small className="start-launch-hint">
+              Name and units can be changed later.
+            </small>
+          )}
+        </form>
+        {onImportProject && (
+          <ProjectImportButton
+            onImport={onImportProject}
+            disabled={busy}
+            className="secondary start-import"
+          />
+        )}
+      </section>
 
+      <nav className="start-library" aria-label="Library">
+        <span className="start-eyebrow">Library</span>
+        <div className="start-shelf-tabs" role="tablist">
+          {SHELVES.map((entry) => (
+            <button
+              key={entry.status}
+              type="button"
+              role="tab"
+              aria-selected={shelf === entry.status}
+              className={shelf === entry.status ? 'is-active' : undefined}
+              onClick={() => {
+                setShelf(entry.status);
+                setExpanded(false);
+                setOpenMenu(null);
+              }}
+            >
+              <entry.Icon size={15} aria-hidden="true" />
+              {entry.label}
+              <span className="start-shelf-count">
+                {shelfCount(entry.status)}
+              </span>
+            </button>
+          ))}
+        </div>
+      </nav>
+
+      <div className="start-body">
         <section className="start-section" aria-labelledby="start-parts-title">
           <div className="start-toolbar">
             <div className="start-toolbar-title">
-              <h2 id="start-parts-title">Your parts</h2>
+              <h2 id="start-parts-title">{shelfLabel.label}</h2>
               <span className="start-section-note">
                 {shelfProjects.length === 0
                   ? shelfLabel.empty
                   : search
                     ? `${matchingProjects.length} of ${shelfProjects.length} match`
                     : `${shelfProjects.length} ${
-                        shelfProjects.length === 1 ? 'project' : 'projects'
+                        shelfProjects.length === 1 ? 'part' : 'parts'
                       }`}
               </span>
-            </div>
-
-            <div className="start-shelf-tabs" role="tablist">
-              {SHELVES.map((entry) => (
-                <button
-                  key={entry.status}
-                  type="button"
-                  role="tab"
-                  aria-selected={shelf === entry.status}
-                  className={shelf === entry.status ? 'is-active' : undefined}
-                  onClick={() => {
-                    setShelf(entry.status);
-                    setExpanded(false);
-                    setOpenMenu(null);
-                  }}
-                >
-                  {entry.label}
-                  <span className="start-shelf-count">
-                    {shelfCount(entry.status)}
-                  </span>
-                </button>
-              ))}
             </div>
 
             {userProjects.length > 0 && (
@@ -1016,7 +1044,7 @@ export function StartScreen({
                 <>
                   <strong>No parts yet</strong>
                   <span>
-                    Create one above, or open a demo below to see a part walk
+                    Name one and press Create, or open a demo to see a part walk
                     through its revisions.
                   </span>
                 </>
@@ -1070,59 +1098,96 @@ export function StartScreen({
             </button>
           )}
         </section>
+      </div>
 
-        <section className="start-section" aria-labelledby="start-demos-title">
-          <div className="start-toolbar">
-            <div className="start-toolbar-title">
-              <h2 id="start-demos-title">Learn by example</h2>
-              <span className="start-section-note">
-                each demo walks a part through revisions A → C
+      <section className="start-learn" aria-labelledby="start-demos-title">
+        <div className="start-learn-head">
+          <h2 id="start-demos-title">Learn by example</h2>
+          <span className="start-section-note">
+            each demo walks a part through revisions A → C
+          </span>
+        </div>
+        <div className="demo-list">
+          {demos.map((demo) => (
+            <button
+              key={demo.key}
+              type="button"
+              className="demo-card"
+              disabled={busy}
+              // Named as one thing, because that is what it is: a card whose
+              // name was otherwise assembled from its heading, its tagline
+              // and three loose revision chips read in sequence.
+              aria-label={`Open demo: ${demo.name.replace('Demo · ', '')} — ${demo.tagline}`}
+              onClick={() => onOpenDemo(demo)}
+            >
+              <span className="demo-card-head">
+                <span className="demo-card-icon">
+                  <GraduationCap size={15} aria-hidden="true" />
+                </span>
+                <span className="demo-card-title">
+                  <strong>{demo.name.replace('Demo · ', '')}</strong>
+                  <span className="demo-card-tagline">{demo.tagline}</span>
+                </span>
+              </span>
+              <span className="demo-card-revs">
+                {demo.revisions.map((revision) => {
+                  const [letter, ...rest] = revision.split(' — ');
+                  return (
+                    <span key={revision} className="demo-rev">
+                      <span className="demo-rev-letter">{letter}</span>
+                      <span className="demo-rev-label">
+                        {rest.join(' — ') || revision}
+                      </span>
+                    </span>
+                  );
+                })}
+              </span>
+              <span className="demo-card-cta">
+                Open demo
+                <ArrowRight size={13} aria-hidden="true" />
+              </span>
+            </button>
+          ))}
+        </div>
+      </section>
+
+      {/* The column's account card is a readout, not a control: the offer
+          to save device-only parts stays with the parts it is about. */}
+      <div className="start-account" role="status">
+        {signedIn ? (
+          <>
+            <div className="start-account-head">
+              <Cloud size={14} aria-hidden="true" className="is-synced" />
+              <strong>Account</strong>
+              <span className="start-account-count">
+                {accountProjectListReached
+                  ? `${savedToAccountCount} / ${accountableProjects.length} saved`
+                  : 'status unavailable'}
               </span>
             </div>
-          </div>
-          <div className="demo-list">
-            {demos.map((demo) => (
-              <button
-                key={demo.key}
-                type="button"
-                className="demo-card"
-                disabled={busy}
-                // Named as one thing, because that is what it is: a card whose
-                // name was otherwise assembled from its heading, its tagline
-                // and three loose revision chips read in sequence.
-                aria-label={`Open demo: ${demo.name.replace('Demo · ', '')} — ${demo.tagline}`}
-                onClick={() => onOpenDemo(demo)}
-              >
-                <span className="demo-card-head">
-                  <span className="demo-card-icon">
-                    <GraduationCap size={15} aria-hidden="true" />
-                  </span>
-                  <span className="demo-card-title">
-                    <strong>{demo.name.replace('Demo · ', '')}</strong>
-                    <span className="demo-card-tagline">{demo.tagline}</span>
-                  </span>
-                </span>
-                <span className="demo-card-revs">
-                  {demo.revisions.map((revision) => {
-                    const [letter, ...rest] = revision.split(' — ');
-                    return (
-                      <span key={revision} className="demo-rev">
-                        <span className="demo-rev-letter">{letter}</span>
-                        <span className="demo-rev-label">
-                          {rest.join(' — ') || revision}
-                        </span>
-                      </span>
-                    );
-                  })}
-                </span>
-                <span className="demo-card-cta">
-                  Open demo
-                  <ArrowRight size={13} aria-hidden="true" />
-                </span>
-              </button>
-            ))}
-          </div>
-        </section>
+            {accountProjectListReached && accountableProjects.length > 0 && (
+              <div className="start-account-track" aria-hidden="true">
+                <span
+                  className="start-account-fill"
+                  style={{
+                    width: `${(savedToAccountCount / accountableProjects.length) * 100}%`
+                  }}
+                />
+              </div>
+            )}
+          </>
+        ) : (
+          <>
+            <div className="start-account-head">
+              <CloudOff size={14} aria-hidden="true" />
+              <strong>Signed out</strong>
+            </div>
+            <span className="start-account-note">
+              Parts stay on this device. Sign in from Settings to keep them
+              across devices.
+            </span>
+          </>
+        )}
       </div>
 
       <footer className="start-foot">
