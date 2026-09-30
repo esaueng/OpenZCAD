@@ -69,24 +69,33 @@ benchmark's warm/fresh oracle had to strip it too.
 
 ## Local verification
 
-Linux x64, Node v24.14.0, frozen install, Remus pin `594cd308` unchanged.
+Linux x64, Node v24.14.0, frozen install. The fix was developed and first
+validated on a `d7ebb8e9` base at Remus pin `594cd308` (root 3178 passed /
+6 skipped, web 1524 passed, parity 178 / 1, lint 0 errors, typecheck clean,
+build exit 0). Main then merged PR #488 and the Remus `475a2c2` bump
+(PR #489); after merging main into this branch, every gate was rerun on the
+merged state at pin `475a2c2`:
 
 - `pnpm lint`: 0 errors (19 pre-existing warnings); `pnpm typecheck`: clean.
-- `pnpm test`: root 3178 passed / 6 skipped, web 1524 passed.
+- `pnpm test`: root 3201 passed / 7 skipped (including PR #488's
+  `test/h02-measurement-cache.test.ts`; its opt-in private oracle stays
+  skipped without `OZ_PERF_HOLDER_STEP`), web 1525 passed.
 - `pnpm test:parity-corpus`: 178 passed / 1 skipped.
 - `pnpm build`: exit 0 (bundle policy: the pre-existing kernel size-review
   warning only, no failures).
 - Cad-operations benchmark, fillet family, history 30, one sample
-  (`CAD_PERF_RUN=1`): operation/early/late warm-versus-fresh parity all
-  `equal`, zero mismatches, with `blendRegionKey` compared.
+  (`CAD_PERF_RUN=1`), run on both pins: operation/early/late
+  warm-versus-fresh parity all `equal`, zero mismatches, with
+  `blendRegionKey` compared.
 
 ## What remains for the private oracle
 
-The private run itself needs the maintainer's STEP source
+PR #488 has merged, so its opt-in test is in the tree; the private run
+itself still needs the maintainer's STEP source
 (`OZ_PERF_HOLDER_STEP=/path/to/source.step pnpm exec vitest run
-test/h02-private-holder-cache.test.ts` on a branch carrying PR #488's test,
-rebased on this fix). Both field families it reported are deterministic at
-the source now, so its remaining difference paths should be empty; the rerun
-is the confirmation. Serialized raw B-rep byte equivalence across arenas
-remains unproven and stays an acceptance blocker for any future detached
-Text-branch cache, as does the separate 20% p95 performance target.
+test/h02-private-holder-cache.test.ts` on main carrying this fix). Both
+field families it reported are deterministic at the source now, so its
+remaining difference paths should be empty; the rerun is the confirmation.
+Serialized raw B-rep byte equivalence across arenas remains unproven and
+stays an acceptance blocker for any future detached Text-branch cache, as
+does the separate 20% p95 performance target.
