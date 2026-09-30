@@ -40,7 +40,7 @@ async function importHolder(page: Page, project: string) {
   await page.getByRole('button', { name: 'Create project' }).click();
   await expect(page.getByRole('region', { name: '3D viewport' })).toBeVisible();
   await page
-    .getByLabel(/^Import STEP or /)
+    .getByLabel(/^Import FreeCAD, STEP or /)
     .setInputFiles(fixture('synthetic-holder-open.step'));
   await expect(page.locator('.feature-row').first()).toBeVisible({
     timeout: 60_000

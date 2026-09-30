@@ -154,7 +154,7 @@ async function importHolder(page: Page, source: HolderSource, project: string) {
   await page.getByLabel('Project name').fill(project);
   await page.getByRole('button', { name: 'Create project' }).click();
   await expect(page.getByRole('region', { name: '3D viewport' })).toBeVisible();
-  await page.getByLabel(/^Import STEP or /).setInputFiles(
+  await page.getByLabel(/^Import FreeCAD, STEP or /).setInputFiles(
     'file' in source
       ? fixture(source.file)
       : {

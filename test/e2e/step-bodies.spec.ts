@@ -32,7 +32,7 @@ test('imports two STEP solids as independently visible bodies with atomic undo a
   await page.goto('/');
   await page.getByLabel('Project name').fill('Separate STEP bodies');
   await page.getByRole('button', { name: 'Create project' }).click();
-  await page.getByLabel('Import STEP or a mesh file…').setInputFiles({
+  await page.getByLabel('Import FreeCAD, STEP or a mesh file…').setInputFiles({
     name: 'components.step',
     mimeType: 'application/step',
     buffer: bytes
