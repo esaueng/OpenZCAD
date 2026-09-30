@@ -12,6 +12,7 @@ import {
   loadRemusTranslators
 } from '../../packages/kernel-adapter/src/remus-runtime';
 import { letteredHolder } from '../support/lettered-holder';
+import type { RebuildCacheEvent } from '../../packages/kernel-adapter/src/exact';
 
 /**
  * H02 measurement probe (ROADMAP.md): the first parameter edit after a reload
@@ -121,9 +122,26 @@ async function installWorkerLog(page: Page) {
   });
 }
 
-function collectStages(page: Page, into: StageLog[]) {
+function collectStages(
+  page: Page,
+  into: StageLog[],
+  caches: (RebuildCacheEvent & { t: number })[]
+) {
   page.on('console', (message) => {
     const text = message.text();
+    if (text.startsWith('[geometry cache] ')) {
+      try {
+        caches.push({
+          t: Date.now(),
+          ...(JSON.parse(
+            text.slice('[geometry cache] '.length)
+          ) as RebuildCacheEvent)
+        });
+      } catch {
+        /* Not a cache record. */
+      }
+      return;
+    }
     if (!text.startsWith('[geometry rebuild] ')) return;
     try {
       const parsed = JSON.parse(
@@ -393,8 +411,9 @@ for (const scenario of scenarios) {
   }, testInfo) => {
     test.setTimeout(600_000);
     const stages: StageLog[] = [];
+    const caches: (RebuildCacheEvent & { t: number })[] = [];
     await installWorkerLog(page);
-    collectStages(page, stages);
+    collectStages(page, stages, caches);
 
     const name = scenario.parameter;
     const field = () => page.getByLabel(`Expression for ${name}`);
@@ -575,7 +594,8 @@ for (const scenario of scenarios) {
       copiesBeforeReload,
       valueAfterReload,
       secondReload,
-      edits: [afterApply, warmBefore, first, second, immediate]
+      edits: [afterApply, warmBefore, first, second, immediate],
+      cacheEvents: caches
     };
     if (process.env.OZ_PERF_BUDGET) {
       // H02 budgets: the first edit after a settled reload is a warm edit, and
