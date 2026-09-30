@@ -509,7 +509,7 @@ export function deriveRemusPatternInstanceLineage(input: {
           lineageName: reference.lineageName,
           sourceHandle: handle,
           resultHandles: [claimed, match.handle],
-          message: `Pattern journal claimed face ${claimed} for ${reference.lineageName} where the witness matched ${match.handle}.`
+          message: `The pattern journal claimed a different result face for ${reference.lineageName} than its exact witness matched.`
         });
         continue;
       }
@@ -838,7 +838,7 @@ export function deriveRemusMoveFacesDirectEditLineage(input: {
           topologyKind: 'face',
           lineageName: journal.reference.lineageName,
           resultHandles: [handle],
-          message: `Direct-edit construction history named result face ${handle} ${journal.reference.lineageName} where the measured witnesses named it ${unchanged.reference.lineageName}; neither is published.`
+          message: `Direct-edit construction history named a result face ${journal.reference.lineageName} where the measured witnesses named it ${unchanged.reference.lineageName}; neither is published.`
         });
         continue;
       }
@@ -1598,14 +1598,14 @@ export function propagateRemusRigidTransformLineage(
     claimed.set(resultKey, claims);
   }
 
-  for (const [resultKey, claims] of claimed) {
+  for (const claims of claimed.values()) {
     if (claims.length !== 1) {
       output.diagnostics.push({
         code: 'transform-merge',
         operation: 'rigid-transform',
         topologyKind: claims[0]!.reference.kind,
         resultHandles: [claims[0]!.handle],
-        message: `Multiple source lineages merged into transform result ${resultKey}.`
+        message: `Multiple source lineages merged into one transform result ${claims[0]!.reference.kind}.`
       });
       continue;
     }
@@ -2076,7 +2076,7 @@ export function deriveRemusBooleanEvolutionLineage(input: {
         lineageName: reference.lineageName,
         sourceHandle,
         resultHandles: [resultHandle],
-        message: `Boolean evolution claimed ${reference.lineageName} for result face ${resultHandle}, which does not share its exact analytic carrier.`
+        message: `Boolean evolution claimed ${reference.lineageName} for a result face that does not share its exact analytic carrier.`
       });
       continue;
     }
@@ -2155,7 +2155,7 @@ export function deriveRemusBooleanEvolutionLineage(input: {
             lineageName: reference.lineageName,
             sourceHandle,
             resultHandles: [resultHandle],
-            message: `Boolean evolution called edge ${resultHandle} preserved from ${reference.lineageName}, but its exact witness changed.`
+            message: `Boolean evolution called an edge preserved from ${reference.lineageName}, but its exact witness changed.`
           });
         }
         return;
@@ -2225,7 +2225,7 @@ export function reconcileRemusBooleanLineage(
         topologyKind: 'face',
         lineageName: reference.lineageName,
         resultHandles: [handle],
-        message: `Boolean evolution named result face ${handle} ${reference.lineageName} where the analytic carrier rule named it ${witnessed.lineageName}; neither is published.`
+        message: `Boolean evolution named a result face ${reference.lineageName} where the analytic carrier rule named it ${witnessed.lineageName}; neither is published.`
       });
       continue;
     }
@@ -2241,7 +2241,7 @@ export function reconcileRemusBooleanLineage(
         topologyKind: 'edge',
         lineageName: reference.lineageName,
         resultHandles: [handle],
-        message: `Boolean evolution named result edge ${handle} ${reference.lineageName} where the analytic carrier rule named it ${witnessed.lineageName}; neither is published.`
+        message: `Boolean evolution named a result edge ${reference.lineageName} where the analytic carrier rule named it ${witnessed.lineageName}; neither is published.`
       });
       continue;
     }
