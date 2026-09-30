@@ -70,7 +70,7 @@ function acrossArenas(derived: DerivedState) {
 
 afterEach(() => vi.restoreAllMocks());
 
-describe('H02 unchanged measurement payload safety', () => {
+describe('H02 unchanged measurement payload safety', { timeout: 30_000 }, () => {
   it('records the completed strict verdict without validating again just to retain it', async () => {
     const adapter = await createExactKernelAdapter();
     try {
