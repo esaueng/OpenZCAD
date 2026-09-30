@@ -13,7 +13,7 @@ import {
 
 test('selects all edges from the fillet card, previews joined corners, and survives undo, redo and reload', async ({
   page
-}) => {
+}, testInfo) => {
   test.setTimeout(120_000);
   await stubApi(page);
   await page.setViewportSize({ width: 1440, height: 1000 });
@@ -59,7 +59,7 @@ test('selects all edges from the fillet card, previews joined corners, and survi
   await page.setViewportSize({ width: 390, height: 844 });
   const selectAll = card.getByRole('button', { name: 'Select all 12 edges' });
   await expect(selectAll).toBeVisible();
-  await page.screenshot({ path: '/private/tmp/zcad-all-edge-mobile.png' });
+  await page.screenshot({ path: testInfo.outputPath('zcad-all-edge-mobile.png') });
   await selectAll.click();
   await expect(
     card.getByRole('tab', { name: 'Chamfer', exact: true })
@@ -80,7 +80,7 @@ test('selects all edges from the fillet card, previews joined corners, and survi
       { timeout: 30_000 }
     )
     .toBe(12);
-  await page.screenshot({ path: '/private/tmp/zcad-all-edge-manual.png' });
+  await page.screenshot({ path: testInfo.outputPath('zcad-all-edge-manual.png') });
   await keypad.getByRole('button', { name: 'Apply radius' }).click();
   await expect(page.getByRole('contentinfo')).toContainText(
     'Filleted 12 edges at 1 mm.'
@@ -102,7 +102,7 @@ test('selects all edges from the fillet card, previews joined corners, and survi
 
 test('plain-language all-edge fillets work without a provider and require exact preview before Apply', async ({
   page
-}) => {
+}, testInfo) => {
   test.setTimeout(120_000);
   await stubApi(page, { assistantEnabled: true });
   await page.route('**/api/assistant/status', (route) =>
@@ -143,7 +143,7 @@ test('plain-language all-edge fillets work without a provider and require exact 
   const proposal = page.locator('.assistant-card.proposal.open').last();
   await expect(proposal).toContainText('12 edges', { timeout: 30_000 });
   await expect(page.getByRole('button', { name: 'History 1' })).toBeVisible();
-  await page.screenshot({ path: '/private/tmp/zcad-all-edge-assistant.png' });
+  await page.screenshot({ path: testInfo.outputPath('zcad-all-edge-assistant.png') });
   await proposal.getByRole('button', { name: 'Apply', exact: true }).click();
   await expect(
     page.locator('.assistant-card.proposal.applied').last()
