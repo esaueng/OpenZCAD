@@ -152,7 +152,7 @@ function importedBlendDocument(): ProjectDocument {
                 axialLength: 10,
                 featureType: 'blend',
                 blendRadius: 3,
-                blendRegionKey: '9:31',
+                blendRegionKey: 'blend:701',
                 blendRegionFaceCount: 1,
                 editableDimension: 'blendRadius'
               }
