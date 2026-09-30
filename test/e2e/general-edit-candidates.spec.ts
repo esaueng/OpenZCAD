@@ -96,7 +96,7 @@ test('natural language selects a measured dimension, previews, applies and survi
   await page.getByRole('button', { name: 'Create project' }).click();
   await expect(page.locator('.save-state')).toHaveClass(/is-synced/);
   await page
-    .getByLabel(/^Import STEP or /)
+    .getByLabel(/^Import FreeCAD, STEP or /)
     .setInputFiles({
       name: 'plate.step',
       mimeType: 'application/step',
@@ -163,7 +163,7 @@ test('analyzes independent raised features and runs their direct action without 
   await page.getByRole('button', { name: 'Create project' }).click();
   await expect(page.locator('.save-state')).toHaveClass(/is-synced/);
   await page
-    .getByLabel(/^Import STEP or /)
+    .getByLabel(/^Import FreeCAD, STEP or /)
     .setInputFiles({
       name: 'embossed-plate.step',
       mimeType: 'application/step',

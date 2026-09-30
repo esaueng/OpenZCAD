@@ -11,13 +11,16 @@ authoritative dependency inventory.
   as declared by the pinned package. OpenZCAD installs the committed WASM
   package from an immutable Remus commit recorded in `pnpm-lock.yaml`.
   Source and license text: <https://github.com/esaueng/remus>.
-- **`occt-wasm` 3.8.1 build tooling and TypeScript wrapper** — Copyright its
+- **`occt-wasm` 3.8.4 build tooling and TypeScript wrapper** — Copyright its
   contributors; MIT OR Apache-2.0. Source:
   <https://github.com/andymai/occt-wasm>.
 - **Open CASCADE Technology compiled WebAssembly output** — LGPL-2.1-only as
   identified by `occt-wasm`; OCCT is distributed under LGPL-2.1 with the OCCT
-  additional exception. It is used by the development parity corpus and is
-  not emitted in the production OpenZCAD bundle. License and source information:
+  additional exception. It is used by the development parity corpus and by
+  the disposable FreeCAD BREP-to-STEP import worker. Its separately loaded WASM
+  asset is emitted in the production bundle; Remus remains the modeling kernel.
+  Wrapper and WASM build source: <https://github.com/andymai/occt-wasm/tree/v3.8.4>.
+  License and source information:
   <https://dev.opencascade.org/resources/download/occt-public-license> and
   <https://github.com/Open-Cascade-SAS/OCCT>.
 
@@ -44,7 +47,10 @@ authoritative dependency inventory.
   Shapr3D workspace databases. Source and terms:
   <https://github.com/sqlite/sqlite-wasm> and
   <https://www.sqlite.org/copyright.html>.
-- **`fflate` 0.8.2** — Copyright Arjun Barrett; MIT. Used for bounded streaming
+- **`fast-xml-parser` 5.11.2** — Copyright its contributors; MIT. Parses
+  bounded FreeCAD XML with document types/entities refused. Source and license:
+  <https://github.com/NaturalIntelligence/fast-xml-parser>.
+- **`fflate` 0.8.3** — Copyright Arjun Barrett; MIT. Used for bounded streaming
   ZIP decompression after independent central-directory validation. Source and
   license: <https://github.com/101arrowz/fflate>.
 
