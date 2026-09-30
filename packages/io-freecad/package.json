@@ -1,0 +1,14 @@
+{
+  "name": "@openzcad/io-freecad",
+  "version": "0.1.0",
+  "private": true,
+  "license": "Apache-2.0",
+  "type": "module",
+  "exports": "./src/index.ts",
+  "dependencies": {
+    "@openzcad/io-step": "workspace:*",
+    "fast-xml-parser": "5.11.2",
+    "fflate": "0.8.3",
+    "occt-wasm": "3.8.4"
+  }
+}

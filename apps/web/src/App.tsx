@@ -2511,6 +2511,18 @@ export function App() {
     cloudProjectIds
   };
   const thumbnailAccountUserId = session?.userId;
+  const loadProperties = useCallback(
+    async (project: ProjectSummary) => {
+      const { loadProjectProperties } = await import('./lib/projectProperties');
+      return loadProjectProperties(project, {
+        loadLocal: loadLocalProject,
+        ...(thumbnailAccountUserId && cloudProjectIds.has(project.projectId)
+          ? { loadAccount: api.loadProject }
+          : {})
+      });
+    },
+    [thumbnailAccountUserId, cloudProjectIds]
+  );
   /**
    * Publishes a device-cached preview when the account has no artifact. A cache
    * miss stays a placeholder so the recovery shelf never loads project data.
@@ -9201,6 +9213,69 @@ export function App() {
     const contentType = file.type || inferContentType(file.name);
     const lowerName = file.name.toLowerCase();
 
+    if (lowerName.endsWith('.fcstd')) {
+      const abort = startImportAbort();
+      const progress = createImportProgressSink();
+      progress.start({ fileName: file.name, phases: ['reading', 'building'], cancellable: true });
+      try {
+        const { convertFreecadFile } = await import('./lib/freecadImportWorkerClient');
+        const converted = await convertFreecadFile(file, {
+          units: doc.units,
+          signal: abort.signal,
+          onProgress: (message) => {
+            progress.update({ phase: 'building', fraction: null });
+            setStatus(message);
+          }
+        });
+        if (managerRef.current !== importManager) {
+          progress.finish({ tone: 'warning', message: 'the project changed during conversion' });
+          setStatus('The project changed while the FreeCAD import finished.');
+          return;
+        }
+        const { runStepImport } = await stepImportRun();
+        const result = await runStepImport({
+          file: converted.stepFile,
+          inspectSolids: async (source, signal) => {
+            const { inspectStepSolidsInWorker } = await import('./lib/stepImportWorkerClient');
+            const indices = await inspectStepSolidsInWorker(source, signal);
+            if (indices.length !== converted.solidCount) {
+              throw new Error('ZCAD could not validate every saved FreeCAD solid. No bodies were imported.');
+            }
+            if (managerRef.current !== importManager) {
+              throw new Error('The project changed while the FreeCAD import finished.');
+            }
+            return indices;
+          },
+          contentType: 'model/step',
+          archive: archiveArtifact,
+          validatedFeature,
+          signal: abort.signal,
+          status: { setStatus, setFeatureFormError },
+          progress,
+          marks: {
+            inFlight: inFlightImportChecksums.current,
+            abandoned: abandonedImportChecksums.current
+          },
+          currentDocument: () => managerRef.current?.document ?? null,
+          editDisabledReason: () => editDisabledReasonRef.current,
+          newId: () => crypto.randomUUID(),
+          validatingMessage: 'Validating the saved FreeCAD solids…',
+          successMessage: ({ archived }) =>
+            `Imported ${file.name}: ${converted.solidCount} saved solid${converted.solidCount === 1 ? '' : 's'}. FreeCAD sketches and feature history were not transferred.` +
+            (archived ? '' : ' Converted geometry saved on this device only.')
+        });
+        if (result.outcome === 'declined') progress.finish({ tone: 'warning', message: 'nothing was added' });
+      } catch (error) {
+        const cancelled = abort.signal.aborted;
+        const message = cancelled ? 'FreeCAD import cancelled; nothing was added.' : errorMessage(error, 'FreeCAD import failed.');
+        progress.finish({ tone: cancelled ? 'cancelled' : 'error', message });
+        setStatus(message);
+        if (!cancelled) setFeatureFormError(message);
+      } finally {
+        finishImportAbort(abort);
+      }
+      return;
+    }
     if (lowerName.endsWith('.shapr')) {
       setStatus(
         'Shapr3D migration requires selecting one .shapr project and its companion .step file together.'
@@ -9616,7 +9691,7 @@ export function App() {
     const shaprFiles = files.filter((file) => /\.shapr$/i.test(file.name));
     if (shaprFiles.length === 0) {
       if (files.length !== 1) {
-        setStatus('Select one STEP or mesh file, or one .shapr + STEP pair.');
+        setStatus('Select one FreeCAD, STEP or mesh file, or one .shapr + STEP pair.');
         return;
       }
       await handleImportFile(files[0]!);
@@ -15846,6 +15921,7 @@ export function App() {
           onOpenDemo={(definition) => void handleOpenDemo(definition)}
           onOpenSettings={openSettings}
           onDuplicate={(project) => void handleDuplicateProject(project)}
+          loadProperties={loadProperties}
           cloudProjectIds={cloudProjectIds}
           accountProjectListReached={accountProjectListReached}
           conflictedProjectIds={conflictedProjectIds}
@@ -18481,7 +18557,7 @@ export function App() {
           <input
             ref={importInputRef}
             type="file"
-            accept=".shapr,.stl,.step,.stp,.3mf,.obj,.glb,.ply"
+            accept=".fcstd,.shapr,.stl,.step,.stp,.3mf,.obj,.glb,.ply"
             multiple
             style={{ display: 'none' }}
             onChange={(event: ChangeEvent<HTMLInputElement>) => {

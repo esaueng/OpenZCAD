@@ -11,6 +11,7 @@ const WORKSPACE_PACKAGES = [
   'viewport',
   'io-step',
   'io-shapr',
+  'io-freecad',
   'io-stl',
   'persistence',
   'cloudflare-adapters'
