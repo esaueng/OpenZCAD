@@ -41,6 +41,10 @@ import type {
   Vector3
 } from '@openzcad/shared';
 import { isSketchDimensionField } from './sketch-dimensions';
+export {
+  createAllEdgesFilletProposal,
+  parseAllEdgesFilletRequest
+} from './all-edge-fillets';
 import {
   createEditCandidateCatalog,
   type EditCandidateCatalog

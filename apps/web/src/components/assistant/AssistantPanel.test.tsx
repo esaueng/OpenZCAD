@@ -2,7 +2,10 @@ import { act, render, screen, waitFor } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import type { ComponentProps } from 'react';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
-import { createProjectDocument } from '@openzcad/document-core';
+import {
+  addPrimitiveFeature,
+  createProjectDocument
+} from '@openzcad/document-core';
 import { toBodyId, toUserId } from '@openzcad/shared';
 import {
   loadAssistantThread,
@@ -15,6 +18,43 @@ import {
 import { AssistantPanel } from './AssistantPanel';
 
 const doc = createProjectDocument('Bracket', toUserId('user_a'));
+
+function allEdgeDocument() {
+  const document = addPrimitiveFeature(
+    createProjectDocument('Block', toUserId('user_a')),
+    {
+      name: 'Block',
+      primitiveKind: 'box',
+      dimensions: { width: 40, height: 30, depth: 20 }
+    }
+  );
+  const bodyId = document.bodyOrder[0]!;
+  document.derived.bodyRepresentations[bodyId] = {
+    bodyId,
+    name: 'Block Body',
+    source: 'primitive',
+    consumed: false,
+    mesh: {
+      kind: 'mesh',
+      vertices: new Float32Array(),
+      indices: new Uint32Array()
+    },
+    faceCount: 6,
+    color: '#ffffff',
+    exportableStep: true,
+    volume: 24000,
+    bbox: { min: { x: 0, y: 0, z: 0 }, max: { x: 40, y: 30, z: 20 } },
+    topology: {
+      faces: [],
+      edges: Array.from({ length: 12 }, (_, index) => ({
+        topologyId: `edge:${index + 1}`,
+        hash: index + 1,
+        points: []
+      }))
+    }
+  };
+  return document;
+}
 
 function seedThread() {
   saveAssistantThread(
@@ -178,6 +218,60 @@ describe('selected geometry analysis', () => {
     expect(
       screen.getByRole('button', { name: 'Analyze selected geometry' })
     ).toBeEnabled();
+  });
+});
+
+describe('local whole-part fillets', () => {
+  it('previews a typed all-edge request without a configured provider, then applies the complete proposal', async () => {
+    const document = allEdgeDocument();
+    const onPreview = vi
+      .fn<ComponentProps<typeof AssistantPanel>['onPreview']>()
+      .mockResolvedValue({ ok: true });
+    const onApply = vi.fn().mockResolvedValue(true);
+    const { user } = await renderPanel({
+      document,
+      onPreview,
+      onApply,
+      request: { id: 1, text: 'add a filet on all edges by 1 mm' }
+    });
+    const apply = await screen.findByRole('button', {
+      name: /^Apply$/
+    });
+    const proposal = onPreview.mock.calls.find(([value]) => value != null)?.[0];
+    expect(proposal?.operations).toHaveLength(1);
+    expect(proposal?.operations[0]).toMatchObject({
+      targetBodyId: document.bodyOrder[0],
+      size: 1,
+      edgeHashes: Array.from({ length: 12 }, (_, index) => index + 1)
+    });
+    expect(onApply).not.toHaveBeenCalled();
+    await user.click(apply);
+    expect(onApply).toHaveBeenCalledWith(proposal);
+    expect(
+      vi
+        .mocked(fetch)
+        .mock.calls.some(
+          ([url]) =>
+            typeof url === 'string' && url.includes('/api/assistant/proposals')
+        )
+    ).toBe(false);
+  });
+
+  it('keeps a refused whole-part preview out of the apply path', async () => {
+    const onApply = vi.fn();
+    await renderPanel({
+      document: allEdgeDocument(),
+      onApply,
+      onPreview: vi
+        .fn()
+        .mockResolvedValue({ ok: false, reason: 'Unsupported corner blend.' }),
+      request: { id: 2, text: 'Fillet all edges' }
+    });
+    expect(
+      await screen.findByText(/Unsupported corner blend/)
+    ).toBeInTheDocument();
+    expect(screen.queryByRole('button', { name: /^Apply$/ })).toBeNull();
+    expect(onApply).not.toHaveBeenCalled();
   });
 });
 

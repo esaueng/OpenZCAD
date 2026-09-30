@@ -17,6 +17,8 @@ import {
   createEditCandidateCatalog,
   proposalForEditCandidate,
   createCadDocumentDigest,
+  createAllEdgesFilletProposal,
+  parseAllEdgesFilletRequest,
   MAX_ASSISTANT_ATTACHMENTS,
   parseCadPatchProposal,
   type CadPatchProposal,
@@ -341,6 +343,12 @@ export function AssistantPanel({
     () => createGrowingHolderHoleProposal(doc, selection),
     [doc, selection]
   );
+  const allEdgesFilletProposal = useMemo(
+    () =>
+      createAllEdgesFilletProposal(doc, selection, 'Fillet all edges')
+        ?.proposal,
+    [doc, selection]
+  );
   const suggestions = useMemo(
     () =>
       assistantSuggestions({
@@ -349,10 +357,12 @@ export function AssistantPanel({
         selectedBodyCount: selection.bodyIds.length,
         autoParameterizeProposal,
         growingHolderProposal,
-        growingHolderHoleProposal
+        growingHolderHoleProposal,
+        allEdgesFilletProposal
       }),
     [
       autoParameterizeProposal,
+      allEdgesFilletProposal,
       doc.bodyOrder.length,
       growingHolderHoleProposal,
       growingHolderProposal,
@@ -629,11 +639,18 @@ export function AssistantPanel({
       });
 
       try {
+        const allEdgesFillet =
+          attachments.length === 0 && !answers
+            ? createAllEdgesFilletProposal(doc, selection, text)
+            : null;
+        if (allEdgesFillet?.error) throw new Error(allEdgesFillet.error);
         const verifiedSuggestion =
           attachments.length === 0 ? findDirectSuggestion(text) : undefined;
-        if (verifiedSuggestion?.proposal) {
+        const localProposal =
+          allEdgesFillet?.proposal ?? verifiedSuggestion?.proposal;
+        if (localProposal) {
           const proposal = parseCadPatchProposal(
-            structuredClone(verifiedSuggestion.proposal)
+            structuredClone(localProposal)
           );
           const preview = await onPreview(proposal);
           if (!preview.ok) {
@@ -724,7 +741,9 @@ export function AssistantPanel({
     if (!text) {
       return;
     }
-    const verified = Boolean(findDirectSuggestion(text));
+    const verified = Boolean(
+      findDirectSuggestion(text) || parseAllEdgesFilletRequest(text)
+    );
     if (thinking || (!configured && !verified)) {
       // Handed back to the prompt line rather than lost. An unconfigured
       // assistant already says so in its own status line.
@@ -1181,7 +1200,7 @@ export function AssistantPanel({
                     <span>{suggestion.label}</span>
                     {suggestion.proposal && (
                       <span className="assistant-suggestion-badge">
-                        Verified
+                        {suggestion.previewOnly ? 'Preview' : 'Verified'}
                       </span>
                     )}
                   </button>
@@ -1314,7 +1333,9 @@ export function AssistantPanel({
                 >
                   <Sparkles size={12} aria-hidden="true" />
                   <span>{suggestion.label}</span>
-                  <span className="assistant-suggestion-badge">Verified</span>
+                  <span className="assistant-suggestion-badge">
+                    {suggestion.previewOnly ? 'Preview' : 'Verified'}
+                  </span>
                 </button>
               ))}
           </div>
