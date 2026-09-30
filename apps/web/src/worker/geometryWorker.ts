@@ -308,7 +308,14 @@ function loadExactKernel(): Promise<ExactKernel | null> {
   const attempt = import('@openzcad/kernel-adapter/exact').then(
     ({ createExactKernelAdapter }) =>
       createExactKernelAdapter({
-        resolveSourceBytes: resolveExactSourceBytes
+        resolveSourceBytes: resolveExactSourceBytes,
+        ...(import.meta.env.VITE_E2E === '1'
+          ? {
+              measurementCacheDiagnostics: true,
+              onRebuildCacheEvent: (event) =>
+                console.debug('[geometry cache]', JSON.stringify(event))
+            }
+          : {})
       })
   );
   // The budget losing the race leaves `attempt` pending; keep its eventual

@@ -46,21 +46,38 @@ and checkpoint-count bound, not a byte limit.
 - Exports, mesh-quality queries and imported-face recognition share the history
   kernel. Their cleanup restores the last retained prefix, retiring suffix and
   scratch geometry. If cleanup fails or no prefix exists, the kernel is freed.
-- Measurements still require matching solid handles, analysis key, strict-union
-  mode, imported recognition mode and face count.
-  Remus does not reuse retired entity handles. Measurement byte accounting and
-  dead-body eviction remain unchanged. Disposal clears all cache owners. Optional
+- Measurements require matching solid handles, analysis key, strict-union
+  mode, imported recognition mode, lineage and import diagnostics. Exact
+  face/edge/vertex handle sets and validation verdicts are recounted before a
+  hit. A failed probe clears all arena-bound owners and retries once in an
+  empty kernel. Checkpoint IDs and counts are reconciled before reuse; restored
+  prefix solids are probed before suffix builders can read them.
+  Retained measurements and returned hits own separate structured clones.
+  Byte estimates include owned buffers, serialized payload metadata and
+  key/witness records. Oversized and invalid measurements are not retained;
+  dead-body eviction remains. Disposal clears all cache owners. Optional
   mass properties are queried separately when requested by the Inspector; they
   are guarded by document identity and the current exact-build epoch.
 - Zero, negative and NaN limits disable retention. Fractional budgets retain
   only complete checkpoints. Explicit Infinity preserves dense, unlimited
   retention. The default count remains 32; it is **not a strict byte limit**.
 
-The inspected kernel contract is Remus `273e168247a3ec1ed32b49c90a52b57b43328102`,
-`crates/wasm/src/bindings/checkpoint.rs`. `discardCheckpoint(k)` also discards
+The current audited pin is Remus `960e777cb1c47b24abe85c78d6a5599c11e00c15`,
+`crates/wasm/src/bindings/checkpoint.rs` and `crates/topology/src/arena.rs`.
+Restore retains ancestor checkpoints and retires later handles without slot
+reuse. Already-retired slots stay retired across the checkpoint barrier;
+restore is not a general entity-resurrection API. The installed WASM contract
+is exercised in `test/h02-measurement-cache.test.ts` for solids, faces, edges
+and vertices. `discardCheckpoint(k)` also discards
 all descendants, without changing current topology. Temporary measurement
 checkpoints are restored and discarded before returning. No kernel transaction
 or adaptive scheduling redesign is included here.
+
+The proposed H02 Text-branch cache remains blocked: restoring its old
+post-interval checkpoint cannot preserve a separately edited holder branch.
+See [the design](plans/h02-private-holder-cache-design.md) and
+[current evidence](qa/2026-09-29/h02-cache-safety.md). Measurement hardening
+adds no branch record; the 8 MiB proposed branch cap has zero allocations.
 
 ## Historical qualification: fixed-prefix policy
 
