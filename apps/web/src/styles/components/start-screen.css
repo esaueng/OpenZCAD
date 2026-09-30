@@ -1005,35 +1005,7 @@
   border: var(--border-thin);
 }
 
-/* ── Expand and footer ───────────────────────────────────── */
-
-.start-expand {
-  justify-self: start;
-  display: inline-flex;
-  align-items: center;
-  gap: 7px;
-  min-height: 28px;
-  padding: 0 10px;
-  color: var(--color-text-muted);
-  background: transparent;
-  border: var(--border-thin);
-  border-radius: var(--radius-md);
-  font-size: var(--fs-sm);
-}
-
-.start-expand:hover {
-  color: var(--color-text);
-  background: var(--color-surface-hover);
-  border-color: var(--color-border-strong);
-}
-
-.start-expand svg {
-  transition: transform var(--dur-fast) var(--ease-out);
-}
-
-.start-expand svg.is-open {
-  transform: rotate(180deg);
-}
+/* ── Footer ──────────────────────────────────────────────── */
 
 .start-foot {
   grid-area: foot;
