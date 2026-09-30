@@ -4,6 +4,93 @@
 
 /* ── Modals (command palette, shortcuts) ─────────────────── */
 
+.project-properties-dialog {
+  width: min(560px, 100%);
+  max-height: calc(100dvh - 12vh - 32px);
+  overflow-y: auto;
+  display: grid;
+  gap: var(--sp-3);
+  padding: var(--sp-4);
+  color: var(--color-text);
+  background: var(--color-surface);
+  border: var(--border-strong);
+  border-radius: var(--radius-lg);
+  box-shadow: var(--shadow-3);
+}
+
+.project-properties-header,
+.project-properties-header h2,
+.project-properties-dialog > p {
+  display: flex;
+  align-items: center;
+  gap: var(--sp-2);
+}
+
+.project-properties-header {
+  justify-content: space-between;
+}
+
+.project-properties-header h2 {
+  margin: 0;
+  font-size: var(--fs-lg);
+}
+
+.project-properties-list {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  column-gap: var(--sp-4);
+  margin: 0;
+  font-size: var(--fs-sm);
+}
+
+.project-properties-list > div {
+  display: grid;
+  gap: var(--sp-1);
+  padding: var(--sp-2) 0;
+  border-bottom: var(--border-thin);
+}
+
+.project-properties-list > div:first-child,
+.project-properties-list > div:last-child {
+  grid-column: 1 / -1;
+}
+
+@media (max-width: 480px) {
+  .project-properties-list {
+    display: block;
+  }
+
+  .project-properties-list > div {
+    grid-template-columns: minmax(0, 1fr) minmax(0, 1.5fr);
+    gap: var(--sp-3);
+  }
+}
+
+.project-properties-list dt,
+.project-properties-dialog > p {
+  color: var(--color-text-muted);
+}
+
+.project-properties-list dd {
+  margin: 0;
+  overflow-wrap: anywhere;
+}
+
+.project-properties-dialog > p {
+  margin: 0;
+  font-size: var(--fs-sm);
+  line-height: 1.5;
+}
+
+.project-properties-actions {
+  display: flex;
+  justify-content: flex-end;
+}
+
+.project-properties-note {
+  padding-top: var(--sp-2);
+}
+
 .modal-backdrop {
   position: fixed;
   inset: 0;
