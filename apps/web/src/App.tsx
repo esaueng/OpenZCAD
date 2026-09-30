@@ -10908,10 +10908,15 @@ export function App() {
         hash: edge.hash,
         reference: edge.reference
       }));
-    setSelectedEdges(edges);
-    setSelectedBodyIds([body.bodyId]);
-    setSelectedTopology(edges.at(-1) ?? { bodyId: body.bodyId, kind: 'body' });
-    inferFeatureNodeFor(body.bodyId);
+    handleSelectEdgeChainFromViewer(edges);
+    if (
+      tool === 'chamfer' ||
+      (tool === null &&
+        interaction.mode === 'edges' &&
+        interaction.op === 'chamfer')
+    ) {
+      dispatchInteraction({ type: 'set-edge-op', op: 'chamfer' });
+    }
     setStatus(`Selected all ${edges.length} exact edges on ${body.name}.`);
   }
 
@@ -14341,9 +14346,7 @@ export function App() {
       command: plan.command,
       bodyId,
       successMessage: `Offset face by ${Math.round(offset * 100) / 100} ${base.units}.`,
-      ...(plan.travelHint
-        ? { travelHint: plan.travelHint }
-        : {})
+      ...(plan.travelHint ? { travelHint: plan.travelHint } : {})
     };
   }
 
@@ -17734,6 +17737,21 @@ export function App() {
           hideSketchToolCard ? null : (
             <ToolCard
               model={contextualToolCard}
+              selectAllEdges={
+                interaction.mode === 'edges' &&
+                edgeModifierBody?.topology &&
+                interaction.edges.length <
+                  edgeModifierBody.topology.edges.filter(
+                    (edge) => edge.displayRole !== 'seam'
+                  ).length
+                  ? {
+                      count: edgeModifierBody.topology.edges.filter(
+                        (edge) => edge.displayRole !== 'seam'
+                      ).length,
+                      select: () => handleSelectAllEdges(edgeModifierBody)
+                    }
+                  : undefined
+              }
               cancelableWhileValidating={interaction.mode === 'region'}
               children={
                 interaction.mode === 'region' ? (
