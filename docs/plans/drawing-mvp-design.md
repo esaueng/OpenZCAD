@@ -14,6 +14,18 @@ whose line geometry comes from the same view records. Dimensions, centerlines,
 notes, title blocks, associative annotations, section/detail views, DXF, and
 model-edit update/invalidation belong to D02–D04.
 
+Roadmap reconciliation (2026-09-30, [FreeCAD comparison](../reviews/freecad-comparison-2026-09-30.md)):
+this initial D01 slice uses the shared sheet scale shown below. The broader D01
+catalogue (additional view orientations, aligned projection groups and per-view
+scale overrides) remains later design/implementation acceptance, not covered by
+the qualification evidence here. A per-view override needs a reviewed persisted
+field, shared preview/PDF effective-scale transform and unit/reopen tests before
+exposure; an absent override must retain the sheet scale. D02 owns title-block
+layouts and automatically filled title, units, scale, projection-angle,
+sheet-size and date fields until edited. The drawing product milestone combines
+D01 with a bounded D02 dimension/update-or-invalidation/reopen/PDF handoff; D01
+can still be implemented independently of annotations and assemblies.
+
 The sheet is canonical user content. A projected polyline set is derived from
 the referenced model revision and is disposable: it must be recomputed after
 load and must never be used as the model source of truth. A view that cannot be
