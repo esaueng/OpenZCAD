@@ -86,7 +86,10 @@ import type {
 } from './exact-types';
 export type { DxfFaceSelector } from './exact-types';
 import { diagnoseImportedSolid } from './exact-lineage-builders';
-import { measureOwnedFaceGeometry } from './exact-measure';
+import {
+  blendRegionKeyOfHashes,
+  measureOwnedFaceGeometry
+} from './exact-measure';
 import {
   hasRefusingFeatureWarning,
   raiseFeatureWarning
@@ -1403,6 +1406,8 @@ export class RemusKernelAdapter implements ExactKernelAdapter {
       // contracted to be.
       const faceHashByHandle = new Map<number, number>();
       const faceTopologyByHandle = new Map<number, FaceTopology>();
+      // Blend-region member handles per face, for the stable-key pass below.
+      const blendRegionMembersByHandle = new Map<number, readonly number[]>();
       const recognitionIdentities = new Map<
         number,
         ImportedRecognitionFaceIdentity
@@ -1491,13 +1496,40 @@ export class RemusKernelAdapter implements ExactKernelAdapter {
             reference: verifiedReference,
             triangleStart: (indexOffset + start) / 3,
             triangleCount: (end - start) / 3,
-            geometry: measureOwnedFaceGeometry(kernel, solid, handle)
+            geometry: measureOwnedFaceGeometry(kernel, solid, handle, (region) =>
+              blendRegionMembersByHandle.set(handle, region.faces)
+            )
           };
           faceTopologyByHandle.set(handle, publishedFace);
           topology.faces.push(publishedFace);
         }
       } finally {
         mesh.free();
+      }
+      // Publish each blend region under its stable hash-derived key. Every
+      // member is a face of this same solid and was measured by the loop
+      // above; a member without a hash withdraws the editable-blend proof
+      // rather than publishing an under-proved key (fail closed).
+      for (const [handle, members] of blendRegionMembersByHandle) {
+        const geometry = faceTopologyByHandle.get(handle)?.geometry;
+        if (!geometry) {
+          continue;
+        }
+        const hashes: number[] = [];
+        for (const member of members) {
+          const hash = faceHashByHandle.get(member);
+          if (hash === undefined) {
+            hashes.length = 0;
+            break;
+          }
+          hashes.push(hash);
+        }
+        if (hashes.length !== members.length) {
+          delete geometry.editableDimension;
+          delete geometry.blendRegionFaceCount;
+          continue;
+        }
+        geometry.blendRegionKey = blendRegionKeyOfHashes(hashes);
       }
       meshDone?.();
       const recognitionDone = onStage?.('Imported feature recognition');

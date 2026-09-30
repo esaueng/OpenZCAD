@@ -130,14 +130,9 @@ function normalized(state: DerivedState) {
       ])
     )
   };
-  // Remus kernel handles are rebuild-local; this one diagnostic label is
-  // explicitly not persistent topology identity. Keep face count and all
-  // measured geometry/topology so the oracle still catches shape drift.
-  return JSON.parse(
-    JSON.stringify(serializable, (key, value: unknown) =>
-      key === 'blendRegionKey' ? undefined : value
-    )
-  ) as typeof serializable;
+  // Nothing is stripped: `blendRegionKey` derives from the members' ADR-011
+  // hashes, so the warm/fresh oracle compares every published field.
+  return JSON.parse(JSON.stringify(serializable)) as typeof serializable;
 }
 
 function featureAt(document: ProjectDocument, index: number) {
