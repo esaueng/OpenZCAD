@@ -74,7 +74,21 @@ export interface ExactBuildResult {
   faceReferenceRepairs?: FaceReferenceRepair[];
 }
 
+/** Same-kernel measurement handles and the verdicts established for them. */
+export interface MeasurementWitness {
+  solids: {
+    solid: number;
+    faces: number[];
+    edges: number[];
+    vertices: number[];
+    relaxedErrors: number;
+    strictErrors: number | null;
+  }[];
+}
+
 export interface MeasuredShape {
+  /** Internal proof from the completed measure pass; never published. */
+  witness: MeasurementWitness;
   /** Flat xyz triples; owned copy, detached from the WASM heap. */
   vertices: Float32Array;
   /** Body-scoped triangle indices (per-solid offsets already applied). */
