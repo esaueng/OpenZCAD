@@ -1,4 +1,14 @@
-import { fireEvent, render, screen, waitFor } from '@testing-library/react';
+import {
+  act,
+  fireEvent,
+  render,
+  screen,
+  waitFor,
+  within
+} from '@testing-library/react';
+import { createProjectDocument } from '@openzcad/document-core';
+import { toUserId } from '@openzcad/shared';
+import { describeProject } from '../lib/projectProperties';
 import type { ComponentProps } from 'react';
 import { describe, expect, it, vi } from 'vitest';
 import { toProjectId, type ProjectSummary } from '@openzcad/shared';
@@ -26,6 +36,7 @@ function renderStartScreen(
       onOpenDemo={vi.fn()}
       onOpenSettings={vi.fn()}
       onDuplicate={vi.fn()}
+      loadProperties={vi.fn().mockResolvedValue(null)}
       cloudProjectIds={new Set()}
       accountProjectListReached={true}
       conflictedProjectIds={new Set()}
@@ -46,6 +57,135 @@ function renderStartScreen(
     />
   );
 }
+
+describe('StartScreen properties', () => {
+  it('loads details only on demand and returns focus to the card action button', async () => {
+    const onOpen = vi.fn();
+    const doc = createProjectDocument(localProject.name, toUserId('user_test'));
+    const loadProperties = vi
+      .fn()
+      .mockResolvedValue(describeProject(doc, 'device'));
+    renderStartScreen({ loadProperties, onOpen });
+    const actions = screen.getByRole('button', {
+      name: `Actions for ${localProject.name}`
+    });
+    fireEvent.click(actions);
+    expect(loadProperties).not.toHaveBeenCalled();
+    fireEvent.click(screen.getByRole('menuitem', { name: 'Properties' }));
+    const dialog = await screen.findByRole('dialog', {
+      name: 'Project properties'
+    });
+    await waitFor(() =>
+      expect(within(dialog).getByText('Document size')).toBeInTheDocument()
+    );
+    expect(loadProperties).toHaveBeenCalledTimes(1);
+    expect(onOpen).not.toHaveBeenCalled();
+    expect(screen.queryByRole('menu')).toBeNull();
+    expect(within(dialog).getByText(localProject.name)).toBeInTheDocument();
+    expect(within(dialog).getByText('This device only')).toBeInTheDocument();
+    expect(within(dialog).getByText('Millimeters (mm)')).toBeInTheDocument();
+    fireEvent.keyDown(dialog, { key: 'Escape' });
+    expect(screen.queryByRole('dialog')).toBeNull();
+    expect(actions).toHaveFocus();
+  });
+
+  it('keeps summary details and a retry action available after a failed load', async () => {
+    const loadProperties = vi
+      .fn()
+      .mockRejectedValueOnce(new Error('Offline'))
+      .mockResolvedValueOnce(
+        describeProject(
+          createProjectDocument(localProject.name, toUserId('user_test')),
+          'device'
+        )
+      );
+    renderStartScreen({ loadProperties, accountProjectListReached: false });
+    fireEvent.click(
+      screen.getByRole('button', { name: `Actions for ${localProject.name}` })
+    );
+    fireEvent.click(screen.getByRole('menuitem', { name: 'Properties' }));
+    await screen.findByRole('alert');
+    expect(
+      screen.getByText('Unknown — account listing unavailable')
+    ).toBeInTheDocument();
+    fireEvent.click(screen.getByRole('button', { name: 'Retry' }));
+    await screen.findByText('Document size');
+    expect(screen.queryByRole('alert')).toBeNull();
+  });
+
+  it.each(['archived', 'deleted'] as const)(
+    'offers properties on the %s shelf',
+    async (status) => {
+      renderStartScreen({
+        projects: [
+          {
+            ...localProject,
+            organization: { status, pinned: false, sortOrder: 0 }
+          }
+        ]
+      });
+      fireEvent.click(
+        screen.getByRole('tab', {
+          name: status === 'archived' ? /Archive/ : /Trash/
+        })
+      );
+      fireEvent.click(
+        screen.getByRole('button', { name: `Actions for ${localProject.name}` })
+      );
+      fireEvent.click(screen.getByRole('menuitem', { name: 'Properties' }));
+      expect(
+        await screen.findByRole('dialog', { name: 'Project properties' })
+      ).toBeInTheDocument();
+      await screen.findByRole('alert');
+    }
+  );
+
+  it('ignores a late response after closing and opening another project', async () => {
+    let finishFirst!: (value: ReturnType<typeof describeProject>) => void;
+    const second = {
+      ...localProject,
+      projectId: toProjectId('second'),
+      name: 'Second part'
+    };
+    const loadProperties = vi
+      .fn()
+      .mockImplementationOnce(
+        () =>
+          new Promise((resolve) => {
+            finishFirst = resolve;
+          })
+      )
+      .mockResolvedValueOnce(
+        describeProject(
+          createProjectDocument(second.name, toUserId('user_test'), 'inch'),
+          'account'
+        )
+      );
+    renderStartScreen({ projects: [localProject, second], loadProperties });
+    fireEvent.click(
+      screen.getByRole('button', { name: `Actions for ${localProject.name}` })
+    );
+    fireEvent.click(screen.getByRole('menuitem', { name: 'Properties' }));
+    fireEvent.click(
+      await screen.findByRole('button', { name: 'Close project properties' })
+    );
+    fireEvent.click(
+      screen.getByRole('button', { name: `Actions for ${second.name}` })
+    );
+    fireEvent.click(screen.getByRole('menuitem', { name: 'Properties' }));
+    await screen.findByText('Inches (in)');
+    await act(async () =>
+      finishFirst(
+        describeProject(
+          createProjectDocument(localProject.name, toUserId('user_test')),
+          'device'
+        )
+      )
+    );
+    expect(screen.getByText('Inches (in)')).toBeInTheDocument();
+    expect(screen.queryByText('Millimeters (mm)')).toBeNull();
+  });
+});
 
 describe('StartScreen new part suggestion', () => {
   it('focuses the generated name without selecting its text', () => {
