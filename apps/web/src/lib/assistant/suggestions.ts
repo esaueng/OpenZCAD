@@ -11,6 +11,8 @@ export interface AssistantSuggestion {
   id: string;
   label: string;
   proposal?: CadPatchProposal;
+  /** Exact targets are known, but this body's operation still needs preflight. */
+  previewOnly?: boolean;
 }
 
 export interface AssistantSuggestionContext {
@@ -23,6 +25,7 @@ export interface AssistantSuggestionContext {
   growingHolderProposal?: CadPatchProposal | null;
   /** The app's measured mounting-bore control for a grown holder, if any. */
   growingHolderHoleProposal?: CadPatchProposal | null;
+  allEdgesFilletProposal?: CadPatchProposal | null;
 }
 
 export const GROWING_HOLDER_SUGGESTION_LABEL = 'Parameterize the opening';
@@ -197,7 +200,17 @@ const prompt = (id: string, label: string): AssistantSuggestion => ({
 export function assistantSuggestions(
   context: AssistantSuggestionContext
 ): AssistantSuggestion[] {
-  const autoParameterize = [
+  const localRecipes = [
+    ...(context.allEdgesFilletProposal
+      ? [
+          {
+            id: 'all-edges-fillet',
+            label: 'Fillet all edges',
+            proposal: context.allEdgesFilletProposal,
+            previewOnly: true
+          }
+        ]
+      : []),
     ...(context.growingHolderProposal
       ? [
           {
@@ -239,7 +252,7 @@ export function assistantSuggestions(
         'selected-edge-explain',
         'What would rounding these edges do to the part?'
       ),
-      ...autoParameterize
+      ...localRecipes
     ];
   }
   if (context.topologyKind === 'face') {
@@ -250,7 +263,7 @@ export function assistantSuggestions(
         'selected-face-sketch',
         'Sketch a 20 mm slot on the selected face'
       ),
-      ...autoParameterize
+      ...localRecipes
     ];
   }
   if (context.selectedBodyCount > 0) {
@@ -267,7 +280,7 @@ export function assistantSuggestions(
         'selected-body-parameter',
         'Add a parameter for the wall thickness and drive the selection from it'
       ),
-      ...autoParameterize
+      ...localRecipes
     ];
   }
   if (context.bodyCount === 0) {
@@ -296,6 +309,6 @@ export function assistantSuggestions(
       'feature-history-explain',
       'What is this model made of, feature by feature?'
     ),
-    ...autoParameterize
+    ...localRecipes
   ];
 }

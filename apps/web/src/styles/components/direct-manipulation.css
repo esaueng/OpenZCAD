@@ -199,6 +199,7 @@
 .tool-card.phase-dragging .tool-card-copy > small,
 .tool-card.phase-dragging .tool-card-badge,
 .tool-card.phase-dragging .tool-card-submode,
+.tool-card.phase-dragging .tool-card-actions,
 .tool-card.phase-dragging .tool-card-close {
   display: none;
 }
@@ -285,6 +286,22 @@
   to {
     stroke-dashoffset: -1;
   }
+}
+
+.tool-card-actions {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
+
+.tool-card-actions .tool-card-submode {
+  flex: 1;
+  min-width: 0;
+}
+
+.tool-card-actions > .tool-card-recovery {
+  flex: 0 0 auto;
+  align-self: center;
 }
 
 /* The actions read as one segmented control across the foot of the card
