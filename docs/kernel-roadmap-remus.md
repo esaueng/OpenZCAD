@@ -370,8 +370,36 @@ remus#721 with source-backed corrections, in
 Consumer-only, recorded in the Remus decisions so they are not re-asked:
 datum planes and axes (R01), keep-originals (M11), hotkeys, saved views, item
 groups and history actions (U05–U07), expression units and typed variables
-(F05), reference images (I05), DXF/SVG/PDF readers and writers (D04, I04) and
+(F05), reference images (I05), DXF/SVG/PDF readers and writers (D04, I04, I07) and
 auto-boolean inference (F01).
+
+### C9. File interoperability requirements (2026-09-29)
+
+The [format specification](plans/file-format-interoperability.md) and master
+rows I06–I20 define the consumer scope. The corresponding kernel planning
+update is [Remus PR #883](https://github.com/esaueng/remus/pull/883): O5.6 owns
+native-format translation-boundary design/qualification and O5.7 owns the IGES
+qualification/scope decision. These are planned requirements, not promoted
+geometry or a new independent queue. Refresh the Remus ledger before selecting
+an implementation slice.
+
+| Consumer scope | Kernel requirement / owner | Boundary |
+| --- | --- | --- |
+| I02/I04 STEP names/colors, hierarchy and protocol choice | O5.1 reader/writer/bindings, O5.2 attributes, O5.3a AP242 writer and O5.4 occurrences | Existing owners; separate solids do not prove names/colors or assembly fidelity. |
+| I10 translator evaluation; I11 XT/XB, I12 SAT/SAB, I13 3DM | O5.6 design and direction/version qualification; O4.6 serialization and the existing authoritative-boundary/scale contracts | Compare an independent reader, optional external SDK and STEP/arena bridge; no current native reader or default proprietary dependency is promised. |
+| I14 SolidWorks, I15 Inventor, I16 JT, I17 Creo, I18 NX, I19 CATIA, I20 Solid Edge | O5.6 translated geometry, O5.1/O5.4 assembly identity, O5.5 external-reference responsibility | Parts can precede assembly support; preserve mesh-only versus precise input and disclose approximation/healing. Source feature-history recovery is not implied. |
+| I06 IGES | O5.7 independent reader/writer qualification and a bounded scope decision | The kernel currently declares IGES lossy preview. API presence does not establish exact exchange; retain that disclosure until evidence and a decision justify a precise subset. |
+| I08 PLY | Existing native/IO writer; O1.5/O4.2a source-to-package evidence | Consumer export controls and fixture parity; send only demonstrated translator defects upstream. |
+| D04 DXF, I07 SVG, D01 PDF, I09 USDZ | Consumer readers/writers and packaging; B75 or existing sheet/wire owners only when the consumer needs those representations | No duplicate kernel format queue; PDF drawings and USDZ visualization are distinct from manufacturing geometry. |
+
+The manifest/lockfile pin inspected here is `594cd308`, whose `RemusIo` API
+exposes IGES read/write and PLY writing but no XT/SAT/3DM methods. The older pin
+paragraphs above remain dated history. Native and installed-WASM qualification
+must preserve analytic/NURBS carriers, trim/coedge and shared-edge consistency,
+shell/cavity orientation, units/placements and typed transactional refusals;
+external translation is never allowed to turn a mesh into an exact claim.
+Execution location, private-file upload consent, vendor purchase and service
+deployment remain separate consumer decisions.
 
 ---
 
@@ -490,7 +518,9 @@ harness demotes to a debug assertion because nothing feeds it.
 ## 7. What not to do
 
 Carried from both repos' standing decisions, so this plan cannot quietly
-reopen them: no IGES growth (decided 2026-08-21; STEP is the exchange path);
+reopen them: no unqualified IGES growth (decided 2026-08-21; STEP is the exchange
+path and IGES remains lossy preview). C9 now records O5.7 evidence gathering
+and a bounded scope decision; it does not authorize runtime growth by itself;
 no mesh bodies as first-class boolean operands; no re-attempting the chases
 marked TERMINAL in the kernel roadmap; no feature-count parity with
 commercial kernels as a goal — the P-Class D1–D4 properties are the target;

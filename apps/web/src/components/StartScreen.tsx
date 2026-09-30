@@ -1,6 +1,6 @@
 import { ProjectImportButton } from './ProjectImportButton';
 import { platformShortcutLabel } from '../lib/platformShortcut';
-import { useEffect, useRef, useState } from 'react';
+import { lazy, Suspense, useEffect, useRef, useState } from 'react';
 import { useDissolveOnUnmount } from '../hooks/useDissolveOnUnmount';
 import {
   Archive,
@@ -8,13 +8,13 @@ import {
   ArrowRight,
   Box,
   Check,
-  ChevronDown,
   Cloud,
   CloudOff,
   CloudUpload,
   Copy,
   GraduationCap,
   GripVertical,
+  Info,
   LoaderCircle,
   MoreHorizontal,
   Pin,
@@ -42,6 +42,11 @@ import { syncRunTotals, type SyncEntry } from '../lib/syncRun';
 import type { DemoDefinition } from '../lib/demoDefinitions';
 import { BrandMark } from './BrandMark';
 import { PartThumbnail } from './PartThumbnail';
+import type { ProjectProperties } from '../lib/projectProperties';
+
+const ProjectPropertiesDialog = lazy(async () => ({
+  default: (await import('./ProjectPropertiesDialog')).ProjectPropertiesDialog
+}));
 
 interface StartScreenProps {
   projects: ProjectSummary[];
@@ -57,6 +62,7 @@ interface StartScreenProps {
   onOpenDemo(definition: DemoDefinition): void;
   onOpenSettings(): void;
   onDuplicate(project: ProjectSummary): void;
+  loadProperties(project: ProjectSummary): Promise<ProjectProperties | null>;
   /**
    * Projects the account holds. Anything absent lives on this device alone —
    * but only meaningfully so when `signedIn`, because a signed-out session has
@@ -99,19 +105,13 @@ interface StartScreenProps {
    */
   loadThumbnail(project: ProjectSummary): Promise<string | null | undefined>;
   /**
-   * Renders the preview for a tile the cache could not answer for. Called only
-   * for the tiles on screen, so an unexpanded shelf pays for nine parts rather
-   * than every part the device holds.
+   * Answers a cache miss and publishes an existing preview to the account.
+   * Called as tiles approach the viewport, without rebuilding documents.
    */
   publishThumbnail(project: ProjectSummary): Promise<string | null | undefined>;
 }
 
-/**
- * How many saved parts a shelf shows before it has to be expanded. Ten parts
- * is enough to recognise recent work at a glance; beyond that the shelf is a
- * library, and a library is searched rather than scrolled.
- */
-const COLLAPSED_PROJECT_LIMIT = 10;
+const LOADING_PROJECT_TILES = 10;
 
 const DAY_MS = 24 * 60 * 60 * 1000;
 
@@ -199,6 +199,7 @@ export function StartScreen({
   onOpenDemo,
   onOpenSettings,
   onDuplicate,
+  loadProperties,
   cloudProjectIds,
   accountProjectListReached,
   conflictedProjectIds,
@@ -218,10 +219,11 @@ export function StartScreen({
 }: StartScreenProps) {
   const [name, setName] = useState(generateCutePartName);
   const [units, setUnits] = useState<UnitSystem>(defaultUnits);
-  const [expanded, setExpanded] = useState(false);
   const [query, setQuery] = useState('');
   const [shelf, setShelf] = useState<ProjectStatus>('active');
   const [openMenu, setOpenMenu] = useState<string | null>(null);
+  const [propertiesProject, setPropertiesProject] =
+    useState<ProjectSummary | null>(null);
   const [dragId, setDragId] = useState<string | null>(null);
   const [dropId, setDropId] = useState<string | null>(null);
   const tileRefs = useRef(new Map<string, HTMLDivElement>());
@@ -281,17 +283,6 @@ export function StartScreen({
         project.name.toLowerCase().includes(search)
       )
     : shelfProjects;
-
-  // A query is already a narrowing, so it shows every match and retires the
-  // expand toggle — being told "3 of 40 match" and *still* having to expand to
-  // see the third one would be absurd.
-  const overflowCount = search
-    ? 0
-    : matchingProjects.length - COLLAPSED_PROJECT_LIMIT;
-  const visibleProjects =
-    expanded || overflowCount <= 0
-      ? matchingProjects
-      : matchingProjects.slice(0, COLLAPSED_PROJECT_LIMIT);
 
   // Dragging reorders positions within a shelf, which only means anything when
   // every position is on screen and in its stored order.
@@ -580,6 +571,22 @@ export function StartScreen({
 
         {menuOpen && (
           <div className="start-tile-menu" role="menu">
+            <button
+              type="button"
+              role="menuitem"
+              onClick={() => {
+                // Keep a mounted opener for the modal's focus restoration.
+                tileRefs.current
+                  .get(project.projectId)
+                  ?.querySelector<HTMLButtonElement>('.start-tile-menu-button')
+                  ?.focus();
+                setOpenMenu(null);
+                setPropertiesProject(project);
+              }}
+            >
+              <Info size={13} aria-hidden="true" />
+              Properties
+            </button>
             {trashed ? (
               <>
                 <button
@@ -832,7 +839,6 @@ export function StartScreen({
               className={shelf === entry.status ? 'is-active' : undefined}
               onClick={() => {
                 setShelf(entry.status);
-                setExpanded(false);
                 setOpenMenu(null);
               }}
             >
@@ -1046,7 +1052,7 @@ export function StartScreen({
                 Loading your parts and account…
               </div>
               <div className="start-tile-grid" aria-hidden="true">
-                {Array.from({ length: COLLAPSED_PROJECT_LIMIT }, (_, index) => (
+                {Array.from({ length: LOADING_PROJECT_TILES }, (_, index) => (
                   <div
                     className="start-tile start-tile-placeholder"
                     key={index}
@@ -1061,9 +1067,9 @@ export function StartScreen({
             </>
           )}
 
-          {!loading && visibleProjects.length > 0 && (
+          {!loading && matchingProjects.length > 0 && (
             <div className="start-tile-grid">
-              {visibleProjects.map((project, index) =>
+              {matchingProjects.map((project, index) =>
                 renderProjectTile(project, index)
               )}
             </div>
@@ -1111,26 +1117,6 @@ export function StartScreen({
                 </button>
               </p>
             )}
-
-          {overflowCount > 0 && (
-            <button
-              type="button"
-              className="start-expand"
-              aria-expanded={expanded}
-              onClick={() => setExpanded((open) => !open)}
-            >
-              <ChevronDown
-                size={14}
-                aria-hidden="true"
-                className={expanded ? 'is-open' : undefined}
-              />
-              {expanded
-                ? 'Show fewer parts'
-                : `Show ${overflowCount} more ${
-                    overflowCount === 1 ? 'part' : 'parts'
-                  }`}
-            </button>
-          )}
         </section>
       </div>
 
@@ -1235,6 +1221,24 @@ export function StartScreen({
           {loading ? 'Loading library…' : status}
         </span>
       </footer>
+      {propertiesProject && (
+        <Suspense fallback={null}>
+          <ProjectPropertiesDialog
+            project={propertiesProject}
+            loadProperties={loadProperties}
+            accountStatus={
+              !signedIn
+                ? 'Sign in to check'
+                : cloudProjectIds.has(propertiesProject.projectId)
+                  ? 'Saved to my account'
+                  : accountProjectListReached
+                    ? 'This device only'
+                    : 'Unknown — account listing unavailable'
+            }
+            onClose={() => setPropertiesProject(null)}
+          />
+        </Suspense>
+      )}
     </div>
   );
 }

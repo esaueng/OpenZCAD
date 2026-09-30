@@ -2526,7 +2526,7 @@ test('imports a STEP solid, fillets it, and re-exports it', async ({
   // The import affordance is a hidden <input type=file> the File menu clicks.
   // a-export-box is the corpus's 10x20x30 box: 6000 mm3, twelve edges.
   await page
-    .getByLabel(/^Import STEP or /)
+    .getByLabel(/^Import FreeCAD, STEP or /)
     .setInputFiles(
       fileURLToPath(
         new URL('../parity/corpus/a-export-box.step', import.meta.url)
@@ -2627,7 +2627,7 @@ test('refuses an unparseable STEP file without leaving a feature behind', async 
   // A well-formed box whose z-max face points at an entity id that does not
   // exist: the parser rejects it, the geometry never runs.
   await page
-    .getByLabel(/^Import STEP or /)
+    .getByLabel(/^Import FreeCAD, STEP or /)
     .setInputFiles(
       fileURLToPath(
         new URL(
@@ -3665,7 +3665,7 @@ test('imports an STL mesh and measures the body the worker rebuilt', async ({
   await expect(page.getByRole('region', { name: '3D viewport' })).toBeVisible();
 
   await page
-    .getByLabel(/^Import STEP or /)
+    .getByLabel(/^Import FreeCAD, STEP or /)
     .setInputFiles(
       fileURLToPath(new URL('../../samples/simple-block.stl', import.meta.url))
     );
@@ -3729,7 +3729,7 @@ test('an STL import that outlives its project does not land in the next one', as
   await expect(page.getByRole('region', { name: '3D viewport' })).toBeVisible();
 
   await page
-    .getByLabel(/^Import STEP or /)
+    .getByLabel(/^Import FreeCAD, STEP or /)
     .setInputFiles(
       fileURLToPath(new URL('../../samples/simple-block.stl', import.meta.url))
     );
@@ -3965,7 +3965,7 @@ test('an archive that outlives its project stays out of the next project’s Fil
   await expect(page.getByRole('region', { name: '3D viewport' })).toBeVisible();
 
   await page
-    .getByLabel(/^Import STEP or /)
+    .getByLabel(/^Import FreeCAD, STEP or /)
     .setInputFiles(
       fileURLToPath(new URL('../../samples/simple-block.stl', import.meta.url))
     );

@@ -34,6 +34,11 @@ const CHECK = process.argv.includes('--check');
 const DEFAULT_RAW_BUDGET = 500 * 1024;
 const APPROVED_LAZY_ASSETS = [
   {
+    pattern: /^assets\/occt-wasm-.*\.wasm$/,
+    maxBytes: 24 * 1024 * 1024,
+    reason: 'OCCT BREP-to-STEP converter, loaded only in the disposable FreeCAD import worker'
+  },
+  {
     pattern: /^assets\/three-.*\.js$/,
     maxBytes: 600 * 1024,
     reason: '3D engine, loaded only for a workspace or non-empty thumbnail'
