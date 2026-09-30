@@ -48,7 +48,10 @@ export default defineConfig({
   test: {
     root: fileURLToPath(REPO_ROOT),
     environment: 'node',
-    include: ['test/parity/**/*.spec.ts'],
+    include: [
+      'test/parity/**/*.spec.ts',
+      'packages/io-freecad/src/conversion.spec.ts'
+    ],
     setupFiles: ['test/setup.ts'],
     // One worker: two kernel WASM instances per file is already the memory
     // ceiling worth spending, and the corpus is measurement, not throughput.
