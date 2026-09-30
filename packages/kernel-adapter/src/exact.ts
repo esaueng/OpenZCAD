@@ -167,6 +167,8 @@ import {
   historyFeatureDigest,
   historyScopeDigest,
   measuredShapeBytes,
+  measurementWitness,
+  measurementProvenanceKey,
   type HistoryCheckpointEntry,
   type MeasuredBodyCacheEntry,
   type RebuildCacheEvent
@@ -692,6 +694,8 @@ export interface ExactKernelAdapterOptions {
    * happen — correctness alone cannot distinguish a hit from a rebuild.
    */
   onRebuildCacheEvent?: (event: RebuildCacheEvent) => void;
+  /** Session-local H02 benchmark counters; disabled for ordinary workers. */
+  measurementCacheDiagnostics?: boolean;
 }
 
 /** Bodies whose exact geometry descends from an imported STEP feature. */
@@ -729,6 +733,9 @@ function importedExactBodyIds(document: ProjectDocument): Set<BodyId> {
  * the oldest entries, which then simply re-measure on their next sync.
  */
 const MAX_MEASURED_SHAPE_CACHE_BYTES = 128 * 1024 * 1024;
+
+/** A cache proof failed; retry once in an empty kernel, never publish the hit. */
+class HistoryCacheIntegrityError extends Error {}
 
 export class RemusKernelAdapter implements ExactKernelAdapter {
   readonly kind = 'remus' as const;
@@ -948,10 +955,22 @@ export class RemusKernelAdapter implements ExactKernelAdapter {
     entry: MeasuredBodyCacheEntry
   ): void {
     this.evictMeasuredShape(bodyId);
-    if (entry.bytes > this.maxMeasuredShapeCacheBytes) {
+    if (
+      entry.bytes > this.maxMeasuredShapeCacheBytes ||
+      !entry.measured.valid ||
+      (entry.strict &&
+        (!entry.measured.strictValid ||
+          entry.measured.meshClosure === null ||
+          !isClosedConsistentlyOrientedMesh(entry.measured.meshClosure)))
+    ) {
       return;
     }
-    this.measuredShapeCache.set(bodyId, entry);
+    // Derived states are caller-owned and may be mutated or transferred.
+    // Retention must never alias their mesh buffers or topology/provenance.
+    this.measuredShapeCache.set(bodyId, {
+      ...entry,
+      measured: structuredClone(entry.measured)
+    });
     this.measuredShapeCacheBytes += entry.bytes;
     for (const [key, existing] of this.measuredShapeCache) {
       if (this.measuredShapeCacheBytes <= this.maxMeasuredShapeCacheBytes) {
@@ -987,6 +1006,7 @@ export class RemusKernelAdapter implements ExactKernelAdapter {
     /** Strict verdicts the union gate established, keyed by kernel handle. */
     strictVerdicts: StrictUnionVerdicts;
     recycleReason?: 'replay-budget';
+    cacheResetReason?: 'checkpoint-ownership' | 'checkpoint-restore';
   } {
     this.clearCurrentMassSnapshot();
     const features = listFeaturesInOrder(document);
@@ -1015,7 +1035,32 @@ export class RemusKernelAdapter implements ExactKernelAdapter {
     let initial: ExactBuildResult | null = null;
     let reusePrimitiveTail = false;
     let reusedPrimitives = 0;
+    let cacheResetReason:
+      | 'checkpoint-ownership'
+      | 'checkpoint-restore'
+      | undefined;
     this.primitiveBuildCache.prune(features);
+
+    // A valid numeric checkpoint ID alone cannot prove table ownership: IDs
+    // are reused after truncation. Reconcile both owners before any reuse.
+    if (kernel) {
+      try {
+        if (
+          kernel.checkpointCount() !== this.historyCheckpoints.length ||
+          this.historyCheckpoints.some(
+            (entry, index) => entry.checkpointId !== index
+          )
+        ) {
+          throw new HistoryCacheIntegrityError(
+            'History checkpoint ownership disagrees.'
+          );
+        }
+      } catch {
+        cacheResetReason = 'checkpoint-ownership';
+        this.invalidateHistoryCache();
+        kernel = null;
+      }
+    }
 
     if (
       kernel &&
@@ -1069,6 +1114,11 @@ export class RemusKernelAdapter implements ExactKernelAdapter {
             0,
             prefix + 1
           );
+          if (kernel.checkpointCount() !== this.historyCheckpoints.length) {
+            throw new HistoryCacheIntegrityError(
+              'History restore did not truncate checkpoints.'
+            );
+          }
           startIndex = restoredFeatures;
           // Two copies deep: the snapshot must survive this replay's in-place
           // mutation, and the replay must not share containers with it.
@@ -1076,7 +1126,13 @@ export class RemusKernelAdapter implements ExactKernelAdapter {
             prefix >= 0
               ? cloneBuildState(this.historyCheckpoints[prefix]!.snapshot)
               : null;
+          // Restore may succeed even when an entity was retired before the
+          // checkpoint barrier. Never replay builders from stale JS handles.
+          for (const shape of initial?.shapes.values() ?? []) {
+            for (const solid of shape.solids) kernel.boundingBox(solid);
+          }
         } catch {
+          cacheResetReason = 'checkpoint-restore';
           this.invalidateHistoryCache();
           kernel = null;
           reusePrimitiveTail = false;
@@ -1170,6 +1226,14 @@ export class RemusKernelAdapter implements ExactKernelAdapter {
         features.length
       );
       const checkpointId = activeKernel.checkpoint();
+      if (
+        checkpointId !== this.historyCheckpoints.length ||
+        activeKernel.checkpointCount() !== checkpointId + 1
+      ) {
+        throw new HistoryCacheIntegrityError(
+          'History checkpoint allocation disagrees.'
+        );
+      }
       const previous = this.historyCheckpoints.at(-1);
       this.historyCheckpoints.push({
         featureIndex: index,
@@ -1239,6 +1303,7 @@ export class RemusKernelAdapter implements ExactKernelAdapter {
       replayed: features.length - startIndex - reusedPrimitives,
       restored: startIndex,
       reusedPrimitives,
+      ...(cacheResetReason ? { cacheResetReason } : {}),
       ...(recycled ? { recycleReason: 'replay-budget' as const } : {}),
       strictVerdicts
     };
@@ -1375,6 +1440,7 @@ export class RemusKernelAdapter implements ExactKernelAdapter {
     const lineageDiagnostics =
       shape.lineage?.diagnostics.map(projectRemusLineageDiagnostic) ?? [];
     const topology: BodyTopology = { faces: [], edges: [] };
+    const witness: MeasuredShape['witness'] = { solids: [] };
     const bbox = {
       min: { x: Infinity, y: Infinity, z: Infinity },
       max: { x: -Infinity, y: -Infinity, z: -Infinity }
@@ -1418,7 +1484,8 @@ export class RemusKernelAdapter implements ExactKernelAdapter {
       // the kernel's own vertex list rather than from the order edges happen
       // to name them, so the ids do not depend on the edge loop below.
       const vertexIdByHandle = new Map<number, number>();
-      for (const vertex of kernel.getSolidVertices(solid)) {
+      const vertexHandles = Array.from(kernel.getSolidVertices(solid));
+      for (const vertex of vertexHandles) {
         if (!vertexIdByHandle.has(vertex)) {
           vertexIdByHandle.set(vertex, nextVertexId);
           nextVertexId += 1;
@@ -1692,18 +1759,30 @@ export class RemusKernelAdapter implements ExactKernelAdapter {
       bbox.max.y = Math.max(bbox.max.y, bounds[4]!);
       bbox.max.z = Math.max(bbox.max.z, bounds[5]!);
       volume += kernel.volume(solid, MEASUREMENT_DEFLECTION);
-      valid = valid && kernel.validateSolidRelaxed(solid) === 0;
+      const relaxedErrors = kernel.validateSolidRelaxed(solid);
+      valid = relaxedErrors === 0 && valid;
+      let strictErrors: number | null = null;
       if (strictBooleanValidation) {
         // The union gate validated this very handle moments ago; nothing
         // mutates a handle in place after its feature ran, so its verdict is
         // the verdict. Anything without one is validated here as before.
         const verdict = strictVerdicts?.get(solid);
-        const strictErrors =
+        strictErrors =
           verdict !== undefined
             ? verdict.strictErrors
             : kernel.validateSolid(solid);
         strictValid = strictErrors === 0 && strictValid;
       }
+      // Preserve the completed gates instead of repeating expensive validation
+      // just to write the cache. Hits independently recount and revalidate.
+      witness.solids.push({
+        solid,
+        faces: [...faceHandles].sort((a, b) => a - b),
+        edges: [...edgeHandles].sort((a, b) => a - b),
+        vertices: [...vertexHandles].sort((a, b) => a - b),
+        relaxedErrors,
+        strictErrors
+      });
       volumeDone?.();
     }
 
@@ -1728,6 +1807,7 @@ export class RemusKernelAdapter implements ExactKernelAdapter {
       ? inspectTriangleMeshClosure(vertices, indices)
       : null;
     return {
+      witness,
       vertices,
       indices,
       topology,
@@ -1745,6 +1825,21 @@ export class RemusKernelAdapter implements ExactKernelAdapter {
     onProgress?: RebuildProgressListener,
     onProjection?: (derived: DerivedState) => void,
     analysis?: EditAnalysisRequest
+  ): Promise<DerivedState> {
+    return this.syncMeasuredDocument(
+      document,
+      onProgress,
+      onProjection,
+      analysis
+    );
+  }
+
+  private async syncMeasuredDocument(
+    document: ProjectDocument,
+    onProgress?: RebuildProgressListener,
+    onProjection?: (derived: DerivedState) => void,
+    analysis?: EditAnalysisRequest,
+    allowRecovery = true
   ): Promise<DerivedState> {
     if (
       analysis &&
@@ -1778,7 +1873,8 @@ export class RemusKernelAdapter implements ExactKernelAdapter {
         restored,
         reusedPrimitives,
         strictVerdicts,
-        recycleReason
+        recycleReason,
+        cacheResetReason
       } = this.buildWithHistoryCache(
         document,
         sources,
@@ -1811,6 +1907,7 @@ export class RemusKernelAdapter implements ExactKernelAdapter {
       }
       let remeasured = 0;
       let reusedMeasurements = 0;
+      const measurementMisses: Record<string, number> = {};
 
       for (const bodyId of document.bodyOrder) {
         const body = bodies.find((candidate) => candidate.bodyId === bodyId);
@@ -1835,8 +1932,8 @@ export class RemusKernelAdapter implements ExactKernelAdapter {
         // Tessellation dominates a sync once the prefix cache removed the
         // replay cost, so an unchanged body serves its previous measurement.
         // Handle identity is the key (see MeasuredBodyCacheEntry); the
-        // face-handle recount is a cheap probe that turns any violation of
-        // that invariant into a re-measure instead of a stale mesh.
+        // live handle/validation recount turns a violated lifetime proof into
+        // an empty-kernel rebuild before any cached payload is published.
         const solidKey = shape.solids.join(',');
         const analysisHashes =
           analysis?.bodyId === bodyId ? analysis.faceHashes : undefined;
@@ -1844,18 +1941,59 @@ export class RemusKernelAdapter implements ExactKernelAdapter {
           ? JSON.stringify(analysisHashes)
           : undefined;
         const cached = this.measuredShapeCache.get(bodyId);
+        const provenanceKey = measurementProvenanceKey(
+          shape,
+          build.importedStepDiagnostics.get(bodyId)
+        );
         let measured: MeasuredShape;
         if (
           cached &&
           cached.analysisKey === analysisKey &&
+          cached.provenanceKey === provenanceKey &&
           cached.solidKey === solidKey &&
           cached.strict === requiresStrictUnionValidation &&
-          cached.recognizedImportedFeatures === recognizeImportedFeatures &&
-          countFaceHandles(kernel, shape.solids) === cached.faceHandleCount
+          cached.recognizedImportedFeatures === recognizeImportedFeatures
         ) {
-          measured = cached.measured;
+          // A matching key is only a candidate. A stale handle, changed face/
+          // edge/vertex set or validation verdict abandons the entire arena.
+          try {
+            const witness = measurementWitness(
+              kernel,
+              shape,
+              requiresStrictUnionValidation
+            );
+            if (
+              witness.solids.reduce(
+                (count, solid) => count + solid.faces.length,
+                0
+              ) !== cached.faceHandleCount ||
+              JSON.stringify(witness) !== JSON.stringify(cached.witness)
+            ) {
+              throw new HistoryCacheIntegrityError(
+                'Measurement witness disagrees.'
+              );
+            }
+          } catch {
+            throw new HistoryCacheIntegrityError(
+              'Measurement handle or validation probe failed.'
+            );
+          }
+          measured = structuredClone(cached.measured);
           reusedMeasurements += 1;
         } else {
+          const reason = !cached
+            ? 'no-entry'
+            : cached.solidKey !== solidKey
+              ? 'solid-handles'
+              : cached.analysisKey !== analysisKey
+                ? 'analysis'
+                : cached.strict !== requiresStrictUnionValidation
+                  ? 'strictness'
+                  : cached.recognizedImportedFeatures !==
+                      recognizeImportedFeatures
+                    ? 'recognition'
+                    : 'provenance';
+          measurementMisses[reason] = (measurementMisses[reason] ?? 0) + 1;
           measured = this.measureShape(
             kernel,
             shape,
@@ -1873,15 +2011,35 @@ export class RemusKernelAdapter implements ExactKernelAdapter {
             strictVerdicts
           );
           remeasured += 1;
+          const witness = measured.witness;
           this.storeMeasuredShape(bodyId, {
             ...(analysisKey ? { analysisKey } : {}),
             solidKey,
+            provenanceKey,
+            witness,
             strict: requiresStrictUnionValidation,
             recognizedImportedFeatures: recognizeImportedFeatures,
-            faceHandleCount: countFaceHandles(kernel, shape.solids),
-            bytes: measuredShapeBytes(measured),
+            faceHandleCount: witness.solids.reduce(
+              (count, solid) => count + solid.faces.length,
+              0
+            ),
+            bytes:
+              measuredShapeBytes(measured) +
+              new TextEncoder().encode(
+                JSON.stringify(witness) +
+                  provenanceKey +
+                  solidKey +
+                  (analysisKey ?? '')
+              ).byteLength,
             measured
           });
+          // Measurement may publish lineage leaves read from a retained
+          // build snapshot. The mesh buffers and bounds are already owned;
+          // detach topology too so a caller cannot mutate that snapshot.
+          measured = {
+            ...measured,
+            topology: structuredClone(measured.topology)
+          };
         }
         measurementDone();
         if (
@@ -1979,7 +2137,19 @@ export class RemusKernelAdapter implements ExactKernelAdapter {
         replayed,
         restored,
         remeasured,
-        reusedMeasurements
+        reusedMeasurements,
+        ...(this.options.measurementCacheDiagnostics
+          ? {
+              measurementCache: {
+                hits: reusedMeasurements,
+                misses: measurementMisses,
+                retainedBytes: this.measuredShapeCacheBytes,
+                resetReason: !allowRecovery
+                  ? 'measurement-proof'
+                  : cacheResetReason ?? null
+              }
+            }
+          : {})
       });
       this.currentMassSnapshot = {
         projectId: document.projectId,
@@ -2005,6 +2175,15 @@ export class RemusKernelAdapter implements ExactKernelAdapter {
       };
     } catch (error) {
       this.invalidateHistoryCache();
+      if (allowRecovery && error instanceof HistoryCacheIntegrityError) {
+        return this.syncMeasuredDocument(
+          document,
+          onProgress,
+          onProjection,
+          analysis,
+          false
+        );
+      }
       throw error;
     }
   }
