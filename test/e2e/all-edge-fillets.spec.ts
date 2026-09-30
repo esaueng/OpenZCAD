@@ -190,7 +190,7 @@ test('a concave-bracket all-edge refusal preserves its original geometry and his
   await expect(page.locator('vite-error-overlay')).toHaveCount(0);
   await page.getByLabel('Project name').fill('Concave bracket');
   await page.getByRole('button', { name: 'Create project' }).click();
-  await page.getByLabel(/^Import STEP or /).setInputFiles({
+  await page.getByLabel(/^Import FreeCAD, STEP or /).setInputFiles({
     name: 'bracket.step',
     mimeType: 'application/step',
     buffer: Buffer.from(bytes)
