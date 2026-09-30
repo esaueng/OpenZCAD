@@ -403,52 +403,35 @@ describe('StartScreen library shell', () => {
   });
 });
 
-describe('StartScreen collapsed project grid', () => {
-  it('shows ten saved projects before moving the rest behind the expand control', () => {
-    const projects = Array.from({ length: 26 }, (_, index) => ({
-      projectId: toProjectId(`project_${index + 1}`),
-      name: `Part ${index + 1}`,
-      revisionCount: index + 1,
-      updatedAt: '2026-08-04T12:00:00.000Z'
-    }));
+describe('StartScreen scrolling project grid', () => {
+  const projects = Array.from({ length: 96 }, (_, index) => ({
+    projectId: toProjectId(`scroll_project_${index + 1}`),
+    name: `Part ${index + 1}`,
+    revisionCount: index + 1,
+    updatedAt: '2026-08-04T12:00:00.000Z'
+  }));
 
-    renderStartScreen({ projects, signedIn: false });
+  it('shows every project without an expand control and opens the last one', () => {
+    const onOpen = vi.fn();
+    renderStartScreen({ projects, signedIn: false, onOpen });
 
-    expect(screen.getByText('Part 10')).toBeInTheDocument();
-    expect(screen.queryByText('Part 11')).toBeNull();
-
-    fireEvent.click(screen.getByRole('button', { name: 'Show 16 more parts' }));
-
-    expect(screen.getByText('Part 26')).toBeInTheDocument();
-    expect(
-      screen.getByRole('button', { name: 'Show fewer parts' })
-    ).toBeInTheDocument();
+    expect(screen.getByText('Part 11')).toBeInTheDocument();
+    expect(screen.getByText('Part 96')).toBeInTheDocument();
+    expect(screen.queryByRole('button', { name: /Show .*parts/ })).toBeNull();
+    fireEvent.click(screen.getByRole('button', { name: /^Part 96/ }));
+    expect(onOpen).toHaveBeenCalledWith(toProjectId('scroll_project_96'));
   });
 
-  it('bounds cold-cache thumbnail backfill to the visible ten tiles', async () => {
-    const projects = Array.from({ length: 26 }, (_, index) => ({
-      projectId: toProjectId(`bounded_project_${index + 1}`),
-      name: `Part ${index + 1}`,
-      revisionCount: index + 1,
-      updatedAt: '2026-08-04T12:00:00.000Z'
-    }));
-    const publishThumbnail = vi
-      .fn<(project: ProjectSummary) => Promise<string | null | undefined>>()
-      .mockResolvedValue(undefined);
+  it('searches the full list and restores every project after clearing', () => {
+    renderStartScreen({ projects, signedIn: false });
 
-    renderStartScreen({
-      projects,
-      signedIn: false,
-      publishThumbnail
+    fireEvent.change(screen.getByLabelText('Search parts'), {
+      target: { value: 'Part 96' }
     });
-
-    await waitFor(() => expect(publishThumbnail).toHaveBeenCalledTimes(10));
-    expect(
-      publishThumbnail.mock.calls.map(([project]) => project.name)
-    ).toEqual(projects.slice(0, 10).map((project) => project.name));
-
-    fireEvent.click(screen.getByRole('button', { name: 'Show 16 more parts' }));
-
-    await waitFor(() => expect(publishThumbnail).toHaveBeenCalledTimes(26));
+    expect(screen.getByText('Part 96')).toBeInTheDocument();
+    expect(screen.queryByText('Part 1')).toBeNull();
+    fireEvent.click(screen.getByRole('button', { name: 'Clear search' }));
+    expect(screen.getByText('Part 1')).toBeInTheDocument();
+    expect(screen.getByText('Part 96')).toBeInTheDocument();
   });
 });
