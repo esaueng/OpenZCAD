@@ -17,7 +17,7 @@ the native-CAD families. Existing support is retained rather than reopened.
 | PDF `.pdf` | Scaled drawing export, then dimensioned/annotated sheets. PDF reference-image import remains I05; this is not 3D PDF support. | [D01](../../ROADMAP.md#d01), annotations in D02 |
 | STL, 3MF, OBJ, GLB | Existing import/export; retain format-specific fixture coverage and improve controls/appearance under existing owners. | [F04](../../ROADMAP.md#f04), [I04](../../ROADMAP.md#i04) |
 | SVG `.svg` | Sketch/profile import/export, initially bounded paths and basic shapes with explicit scale. | [I07](../../ROADMAP.md#i07) |
-| IGES `.igs`/`.iges` | Precise geometry import/export for qualified solid/surface families. | [I06](../../ROADMAP.md#i06) |
+| IGES `.igs`/`.iges` | Import/export qualification; the existing kernel path remains lossy preview until a scoped decision and evidence prove a precise subset. | [I06](../../ROADMAP.md#i06) |
 | PLY `.ply` | Existing import plus binary mesh export. | [I08](../../ROADMAP.md#i08), import remains F04 |
 | USDZ `.usdz` | Visualization export for Apple AR Quick Look; manufacturing exactness is not a claim. | [I09](../../ROADMAP.md#i09) |
 | Parasolid `.x_t`/`.x_b` | Precise geometry import/export. | [I11](../../ROADMAP.md#i11) |
@@ -102,8 +102,13 @@ default local browser workflow.
 At the consumer manifest/lockfile pin inspected for this scope,
 [`594cd308` Remus IO declarations](https://github.com/esaueng/remus/blob/66ea8d6f6e526756e2f4be6983d1865fb2593fb8/crates/wasm-io/pkg/remus_wasm_io.d.ts)
 expose IGES read/write and PLY writing, but no Parasolid, ACIS or Rhino API.
-This is API inventory, not runtime qualification; refresh the actual manifest
-and lockfile before implementation rather than relying on a roadmap header.
+The kernel roadmap still declares IGES lossy preview; do not advertise precise
+support from these API declarations. [Remus PR #883](https://github.com/esaueng/remus/pull/883)
+adds O5.7 for IGES qualification/scope review and O5.6 for native translation.
+The [consumer kernel crosswalk](../kernel-roadmap-remus.md#c9-file-interoperability-requirements-2026-09-29)
+maps all format dependencies. This is API inventory, not runtime qualification;
+refresh the actual manifest and lockfile before implementation rather than
+relying on a roadmap header.
 
 - [Whole-sketch DXF contract](sketch-dxf-export-plan.md) defines the existing
   first-slice geometry, completeness and unit rules; SVG should reuse the
