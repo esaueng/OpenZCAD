@@ -137,6 +137,7 @@ it('sequential history-cache benchmark', async () => {
       });
     let cache: RebuildCacheEvent | undefined;
     const adapter = await create({
+      measurementCacheDiagnostics: true,
       onRebuildCacheEvent: (event) => {
         cache = event;
       }
