@@ -833,10 +833,10 @@ describe('assistant auto-parameterization', () => {
       }
     });
     const blendFaces = [
-      blendFace(601, 1, '7:41,42,43,44', 4, 3),
-      blendFace(602, 2, '7:41,42,43,44', 4, 3),
-      blendFace(603, 3, '7:41,42,43,44', 4, 3),
-      blendFace(701, 4, '7:51', 1, 1.5)
+      blendFace(601, 1, 'blend:601,602,603,604', 4, 3),
+      blendFace(602, 2, 'blend:601,602,603,604', 4, 3),
+      blendFace(603, 3, 'blend:601,602,603,604', 4, 3),
+      blendFace(701, 4, 'blend:701', 1, 1.5)
     ];
     imported.document.derived = {
       bodyRepresentations: {
