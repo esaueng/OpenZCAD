@@ -15,23 +15,22 @@ import { parameterBuildError } from '../apps/web/src/lib/parameterEdit';
 import { steppedBore } from './helpers/stepped-bore';
 
 function geometry(body: BodyRepresentation): unknown {
+  // `blendRegionKey` is compared like every other published field: it derives
+  // from the members' ADR-011 hashes, so it must survive a rebuild unchanged.
   return JSON.parse(
-    JSON.stringify(
-      {
-        volume: body.volume,
-        faceCount: body.faceCount,
-        bbox: body.bbox,
-        faces: body.topology!.faces.map((f) => ({
-          hash: f.hash,
-          geometry: f.geometry
-        })),
-        edges: body.topology!.edges.map((e) => ({
-          hash: e.hash,
-          curve: e.curve
-        }))
-      },
-      (key, value: unknown) => (key === 'blendRegionKey' ? undefined : value)
-    )
+    JSON.stringify({
+      volume: body.volume,
+      faceCount: body.faceCount,
+      bbox: body.bbox,
+      faces: body.topology!.faces.map((f) => ({
+        hash: f.hash,
+        geometry: f.geometry
+      })),
+      edges: body.topology!.edges.map((e) => ({
+        hash: e.hash,
+        curve: e.curve
+      }))
+    })
   );
 }
 

@@ -8,9 +8,10 @@
 import type { RemusKernel } from './remus-runtime';
 import type { Vec3 } from '@openzcad/geometry';
 import type { FaceAreaProvenance, FaceGeometry } from '@openzcad/shared';
-import { MEASUREMENT_DEFLECTION } from './exact-witnesses';
+import { MEASUREMENT_DEFLECTION, faceWitnessOf } from './exact-witnesses';
 import { faceVertexCentroid, isBlendFace } from './exact-brep';
 import { planarFaceCentroid } from './exact-face-centroid';
+import { topologyHashOfWitness } from './topology-lineage';
 import {
   DIRECT_EDIT_TOLERANCE,
   FULL_REVOLUTION,
@@ -395,7 +396,8 @@ export function classifyThroughHoleFace(
 export function measureOwnedFaceGeometry(
   kernel: RemusKernel,
   solid: number,
-  face: number
+  face: number,
+  onBlendRegion?: (region: BlendRegionMeasurement) => void
 ): FaceGeometry | undefined {
   const geometry = measureFaceGeometry(kernel, face);
   if (!geometry) {
@@ -418,8 +420,15 @@ export function measureOwnedFaceGeometry(
           Math.max(blendRadius * 1e-5, 1e-9)
       ) {
         geometry.editableDimension = 'blendRadius';
-        geometry.blendRegionKey = region.key;
         geometry.blendRegionFaceCount = region.faces.length;
+        // The published `blendRegionKey` names the region by its members'
+        // ADR-011 hashes, never by their kernel arena handles: a checkpoint
+        // restore plus suffix replay allocates different handles than a cold
+        // rebuild of identical geometry, and the fresh-build publication
+        // oracle (H02) compares the two. Callers that publish or re-prove
+        // the geometry own the key, because only they know every member's
+        // stable hash; the region's member handles are handed back here.
+        onBlendRegion?.(region);
       }
     }
   } else if (
@@ -443,7 +452,40 @@ export interface BlendCarrierSnapshot {
 export interface BlendRegionMeasurement {
   faces: number[];
   radius: number;
-  key: string;
+}
+
+/**
+ * The published identity of a blend region: its member faces' ADR-011
+ * hashes, sorted. Hashes are functions of the exact witnesses, so the key
+ * is identical in every arena and every rebuild of the same geometry —
+ * unlike kernel handles, which a checkpoint restore renumbers.
+ */
+export function blendRegionKeyOfHashes(hashes: readonly number[]): string {
+  return `blend:${[...hashes].sort((left, right) => left - right).join(',')}`;
+}
+
+/**
+ * Compute a region key straight from the kernel by measuring each member's
+ * witness. The cold path (direct-edit reproof) uses this; the publication
+ * path reuses the hashes the measurement loop already computed. Fails closed
+ * to `null` when any member has no exact witness.
+ */
+export function blendRegionKeyOfFaces(
+  kernel: RemusKernel,
+  members: readonly number[]
+): string | null {
+  if (members.length === 0) {
+    return null;
+  }
+  const hashes: number[] = [];
+  for (const member of members) {
+    try {
+      hashes.push(topologyHashOfWitness('face', faceWitnessOf(kernel, member)));
+    } catch {
+      return null;
+    }
+  }
+  return blendRegionKeyOfHashes(hashes);
 }
 
 /** Read one exact kernel grouping proof without trusting JS-side adjacency. */
@@ -482,11 +524,7 @@ export function measureBlendRegion(
       return null;
     }
     faces.sort((left, right) => left - right);
-    return {
-      faces,
-      radius: candidate.radius,
-      key: `${solid}:${faces.join(',')}`
-    };
+    return { faces, radius: candidate.radius };
   } catch {
     // Older pins and unsupported analytic regions both fail closed here.
     return null;
@@ -548,13 +586,20 @@ export function requireBlendRegion(
   face: number,
   sourceRadius?: number
 ): BlendRegionSnapshot {
-  const geometry = measureOwnedFaceGeometry(kernel, solid, face);
+  let members: readonly number[] | null = null;
+  const geometry = measureOwnedFaceGeometry(kernel, solid, face, (region) => {
+    members = region.faces;
+  });
   const carrier = blendCarrierSnapshot(geometry);
+  // The key is recomputed from the members' exact witnesses, so a reproof in
+  // any arena names the region exactly as the publication pass did.
+  const regionKey = members ? blendRegionKeyOfFaces(kernel, members) : null;
   if (
     !carrier ||
     geometry?.editableDimension !== 'blendRadius' ||
-    !geometry.blendRegionKey ||
-    geometry.blendRegionFaceCount === undefined
+    geometry.blendRegionFaceCount === undefined ||
+    !regionKey ||
+    members!.length !== geometry.blendRegionFaceCount
   ) {
     throw new Error(
       'Selected face is not a proven constant-radius analytic blend region.'
@@ -571,7 +616,7 @@ export function requireBlendRegion(
   }
   return {
     ...carrier,
-    regionKey: geometry.blendRegionKey,
+    regionKey,
     faceCount: geometry.blendRegionFaceCount
   };
 }
