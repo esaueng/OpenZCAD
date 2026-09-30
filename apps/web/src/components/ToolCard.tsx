@@ -51,6 +51,7 @@ interface ToolCardProps {
    * than sending the hand back to find it.
    */
   keepLastValid?: { label: string; keep(): void };
+  selectAllEdges?: { count: number; select(): void };
   onClose(): void;
 }
 
@@ -67,6 +68,7 @@ export function ToolCard({
   onEditCulprit,
   onViewDetails,
   keepLastValid,
+  selectAllEdges,
   onClose
 }: ToolCardProps) {
   const Icon = ICONS[model.icon];
@@ -156,30 +158,45 @@ export function ToolCard({
             same thing a second time ("adjust the value") on every refusal. */}
         {model.error ? null : <small aria-live="polite">{model.hint}</small>}
       </span>
-      {model.actions && model.actions.length > 1 ? (
-        <span className="tool-card-submode" role="tablist">
-          {model.actions.map((action) => (
+      {(model.actions && model.actions.length > 1) || selectAllEdges ? (
+        <div className="tool-card-actions">
+          {model.actions && model.actions.length > 1 ? (
+            <span className="tool-card-submode" role="tablist">
+              {model.actions.map((action) => (
+                <button
+                  key={action.id}
+                  type="button"
+                  role="tab"
+                  aria-selected={action.active}
+                  aria-label={
+                    action.disabledReason
+                      ? `${action.label}: ${action.disabledReason}`
+                      : action.note
+                        ? `${action.label}: ${action.note}`
+                        : action.label
+                  }
+                  title={action.disabledReason ?? action.note}
+                  className={action.active ? 'active' : undefined}
+                  disabled={!action.enabled || model.phase === 'validating'}
+                  onClick={() => onAction?.(action.id)}
+                >
+                  {action.label}
+                </button>
+              ))}
+            </span>
+          ) : null}
+          {selectAllEdges ? (
             <button
-              key={action.id}
               type="button"
-              role="tab"
-              aria-selected={action.active}
-              aria-label={
-                action.disabledReason
-                  ? `${action.label}: ${action.disabledReason}`
-                  : action.note
-                    ? `${action.label}: ${action.note}`
-                    : action.label
-              }
-              title={action.disabledReason ?? action.note}
-              className={action.active ? 'active' : undefined}
-              disabled={!action.enabled || model.phase === 'validating'}
-              onClick={() => onAction?.(action.id)}
+              className="tool-card-recovery"
+              aria-label={`Select all ${selectAllEdges.count} edges`}
+              disabled={model.phase === 'validating'}
+              onClick={selectAllEdges.select}
             >
-              {action.label}
+              All {selectAllEdges.count} edges
             </button>
-          ))}
-        </span>
+          ) : null}
+        </div>
       ) : null}
       <button
         type="button"

@@ -4,6 +4,36 @@ import { describe, expect, it, vi } from 'vitest';
 import { ToolCard } from './ToolCard';
 
 describe('ToolCard', () => {
+  it('offers all-edge selection beside the active fillet and locks it during validation', async () => {
+    const select = vi.fn();
+    const model = {
+      icon: 'fillet' as const,
+      title: 'Fillet',
+      hint: 'Drag the handle.',
+      phase: 'armed' as const
+    };
+    const { rerender } = render(
+      <ToolCard
+        model={model}
+        selectAllEdges={{ count: 12, select }}
+        onClose={vi.fn()}
+      />
+    );
+    await userEvent.click(
+      screen.getByRole('button', { name: 'Select all 12 edges' })
+    );
+    expect(select).toHaveBeenCalledOnce();
+    rerender(
+      <ToolCard
+        model={{ ...model, phase: 'validating' }}
+        selectAllEdges={{ count: 12, select }}
+        onClose={vi.fn()}
+      />
+    );
+    expect(
+      screen.getByRole('button', { name: 'Select all 12 edges' })
+    ).toBeDisabled();
+  });
   it('keeps a geometry caveat out of the hint and exposes it from a badge', () => {
     render(
       <ToolCard
