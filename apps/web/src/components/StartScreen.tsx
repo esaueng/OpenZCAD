@@ -1,6 +1,6 @@
 import { ProjectImportButton } from './ProjectImportButton';
 import { platformShortcutLabel } from '../lib/platformShortcut';
-import { useEffect, useRef, useState } from 'react';
+import { lazy, Suspense, useEffect, useRef, useState } from 'react';
 import { useDissolveOnUnmount } from '../hooks/useDissolveOnUnmount';
 import {
   Archive,
@@ -15,6 +15,7 @@ import {
   Copy,
   GraduationCap,
   GripVertical,
+  Info,
   LoaderCircle,
   MoreHorizontal,
   Pin,
@@ -42,6 +43,11 @@ import { syncRunTotals, type SyncEntry } from '../lib/syncRun';
 import type { DemoDefinition } from '../lib/demoDefinitions';
 import { BrandMark } from './BrandMark';
 import { PartThumbnail } from './PartThumbnail';
+import type { ProjectProperties } from '../lib/projectProperties';
+
+const ProjectPropertiesDialog = lazy(async () => ({
+  default: (await import('./ProjectPropertiesDialog')).ProjectPropertiesDialog
+}));
 
 interface StartScreenProps {
   projects: ProjectSummary[];
@@ -57,6 +63,7 @@ interface StartScreenProps {
   onOpenDemo(definition: DemoDefinition): void;
   onOpenSettings(): void;
   onDuplicate(project: ProjectSummary): void;
+  loadProperties(project: ProjectSummary): Promise<ProjectProperties | null>;
   /**
    * Projects the account holds. Anything absent lives on this device alone —
    * but only meaningfully so when `signedIn`, because a signed-out session has
@@ -199,6 +206,7 @@ export function StartScreen({
   onOpenDemo,
   onOpenSettings,
   onDuplicate,
+  loadProperties,
   cloudProjectIds,
   accountProjectListReached,
   conflictedProjectIds,
@@ -222,6 +230,8 @@ export function StartScreen({
   const [query, setQuery] = useState('');
   const [shelf, setShelf] = useState<ProjectStatus>('active');
   const [openMenu, setOpenMenu] = useState<string | null>(null);
+  const [propertiesProject, setPropertiesProject] =
+    useState<ProjectSummary | null>(null);
   const [dragId, setDragId] = useState<string | null>(null);
   const [dropId, setDropId] = useState<string | null>(null);
   const tileRefs = useRef(new Map<string, HTMLDivElement>());
@@ -580,6 +590,22 @@ export function StartScreen({
 
         {menuOpen && (
           <div className="start-tile-menu" role="menu">
+            <button
+              type="button"
+              role="menuitem"
+              onClick={() => {
+                // Keep a mounted opener for the modal's focus restoration.
+                tileRefs.current
+                  .get(project.projectId)
+                  ?.querySelector<HTMLButtonElement>('.start-tile-menu-button')
+                  ?.focus();
+                setOpenMenu(null);
+                setPropertiesProject(project);
+              }}
+            >
+              <Info size={13} aria-hidden="true" />
+              Properties
+            </button>
             {trashed ? (
               <>
                 <button
@@ -1235,6 +1261,24 @@ export function StartScreen({
           {loading ? 'Loading library…' : status}
         </span>
       </footer>
+      {propertiesProject && (
+        <Suspense fallback={null}>
+          <ProjectPropertiesDialog
+            project={propertiesProject}
+            loadProperties={loadProperties}
+            accountStatus={
+              !signedIn
+                ? 'Sign in to check'
+                : cloudProjectIds.has(propertiesProject.projectId)
+                  ? 'Saved to my account'
+                  : accountProjectListReached
+                    ? 'This device only'
+                    : 'Unknown — account listing unavailable'
+            }
+            onClose={() => setPropertiesProject(null)}
+          />
+        </Suspense>
+      )}
     </div>
   );
 }
