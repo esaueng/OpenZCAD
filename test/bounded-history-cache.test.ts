@@ -136,7 +136,9 @@ describe('bounded history retention', { timeout: 120_000 }, () => {
         reusedPrimitives: 97, remeasured: 1, reusedMeasurements: 99
       });
       expect(actual.bodyRepresentations[document.bodyOrder[99]!]!.mesh.vertices)
-        .toBe(before.bodyRepresentations[document.bodyOrder[99]!]!.mesh.vertices);
+        .toEqual(before.bodyRepresentations[document.bodyOrder[99]!]!.mesh.vertices);
+      expect(actual.bodyRepresentations[document.bodyOrder[99]!]!.mesh.vertices)
+        .not.toBe(before.bodyRepresentations[document.bodyOrder[99]!]!.mesh.vertices);
       expect(actual.bodyRepresentations[document.bodyOrder[2]!]!.volume).toBe(576);
       await equivalent(changed, actual);
     } finally {

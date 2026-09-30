@@ -8,9 +8,10 @@
  * up to the retention limit. The next sync digests the eligible prefix,
  * restores the longest checkpoint whose entire prefix still matches, and replays
  * the remaining suffix. The kernel
- * guarantees this is sound: handles allocated before a checkpoint stay valid
- * after `restore`, and handles allocated after it are permanently retired,
- * never reused for a different entity.
+ * preserves still-live prefix handles after `restore`; handles allocated
+ * after it are permanently retired, never reused for a different entity.
+ * Retirement before the checkpoint barrier is not undone, so prefix handles
+ * are probed before replay and every measurement hit needs a live witness.
  *
  * Export, mesh-quality and imported-face recognition share this history
  * kernel and restore its last retained prefix after operating. Sketch solves
@@ -28,9 +29,12 @@ import type { BodyId } from '@openzcad/shared';
 import type {
   ExactBuildResult,
   ExactShape,
-  MeasuredShape
+  ImportedStepDiagnostics,
+  MeasuredShape,
+  MeasurementWitness
 } from './exact-types';
 import { bezierProfileEdgesEnabled } from './profile-bezier-edges';
+import type { RemusKernel } from './remus-runtime';
 
 /**
  * Retained checkpoints are full `Topology` arena clones (the kernel
@@ -341,6 +345,10 @@ export interface HistoryCheckpointEntry {
  */
 export interface MeasuredBodyCacheEntry {
   analysisKey?: string;
+  /** Exact lineage and import diagnostics, independent of display metadata. */
+  provenanceKey: string;
+  /** Recounted handles and validation verdicts in the owning live kernel. */
+  witness: MeasurementWitness;
   /** `shape.solids.join(',')` — the handle-identity key. */
   solidKey: string;
   /** Whether the cached measure ran with strict union validation. */
@@ -348,24 +356,73 @@ export interface MeasuredBodyCacheEntry {
   /** Whether exact imported-feature proofs were collected with the topology. */
   recognizedImportedFeatures: boolean;
   /**
-   * Total face-handle count across the body's solids at cache time. A cheap
-   * paranoia probe re-checks it before serving a hit, so an in-place kernel
-   * mutation (which the invariant above forbids) fails loudly as a miss
-   * instead of silently serving a stale mesh.
+   * Total face-handle count at cache time. Recounted with exact handle sets
+   * and validation verdicts before a hit; disagreement retires the arena.
    */
   faceHandleCount: number;
-  /** Approximate retained bytes (mesh buffers), for the byte budget. */
+  /** Owned buffers plus serialized metadata/key/witness estimate. */
   bytes: number;
   measured: MeasuredShape;
 }
 
-/** Approximate retained bytes of one measurement's dominant buffers. */
+/** No hash or traversal-position substitution: compare the complete record. */
+export function measurementWitness(
+  kernel: RemusKernel,
+  shape: ExactShape,
+  strict: boolean
+): MeasurementWitness {
+  const handles = (values: Uint32Array) =>
+    Array.from(values).sort((a, b) => a - b);
+  return {
+    solids: shape.solids.map((solid) => ({
+      solid,
+      faces: handles(kernel.getSolidFaces(solid)),
+      edges: handles(kernel.getSolidEdges(solid)),
+      vertices: handles(kernel.getSolidVertices(solid)),
+      relaxedErrors: kernel.validateSolidRelaxed(solid),
+      strictErrors: strict ? kernel.validateSolid(solid) : null
+    }))
+  };
+}
+
+export function measurementProvenanceKey(
+  shape: ExactShape,
+  importedDiagnostics: ImportedStepDiagnostics | undefined
+): string {
+  const lineage = shape.lineage;
+  return stableJson({
+    importedDiagnostics,
+    lineage: lineage && {
+      faces: [...lineage.faceReferences].sort(([a], [b]) => a - b),
+      edges: [...lineage.edgeReferences].sort(([a], [b]) => a - b),
+      diagnostics: lineage.diagnostics
+    }
+  });
+}
+
+/** Serialized metadata estimate plus owned buffers; not a JS heap guarantee. */
 export function measuredShapeBytes(measured: MeasuredShape): number {
-  return measured.vertices.byteLength + measured.indices.byteLength;
+  const { vertices, indices, ...metadata } = measured;
+  return (
+    vertices.byteLength +
+    indices.byteLength +
+    new TextEncoder().encode(JSON.stringify(metadata)).byteLength
+  );
 }
 
 /** Telemetry for tests and tuning; not part of the derived state. */
 export interface RebuildCacheEvent {
+  /** Opt-in session-local diagnostics; byte estimate includes payload metadata. */
+  measurementCache?: {
+    hits: number;
+    misses: Record<string, number>;
+    retainedBytes: number;
+    resetReason:
+      | 'measurement-proof'
+      | 'checkpoint-ownership'
+      | 'checkpoint-restore'
+      | null;
+  };
   kind: 'full-rebuild' | 'prefix-restore' | 'independent-reuse';
   /** The old history kernel was retired after exhausting its replay budget. */
   recycleReason?: 'replay-budget';

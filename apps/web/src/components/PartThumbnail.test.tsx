@@ -1,5 +1,5 @@
-import { render, screen, waitFor } from '@testing-library/react';
-import { describe, expect, it, vi } from 'vitest';
+import { act, render, screen, waitFor } from '@testing-library/react';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { toArtifactId, type ProjectSummary } from '@openzcad/shared';
 import { PartThumbnail } from './PartThumbnail';
 
@@ -13,6 +13,65 @@ function summary(overrides: Partial<ProjectSummary> = {}): ProjectSummary {
 }
 
 describe('PartThumbnail', () => {
+  beforeEach(() => vi.stubGlobal('IntersectionObserver', undefined));
+  afterEach(() => vi.unstubAllGlobals());
+
+  it('defers offscreen previews until they approach the viewport and disconnects on unmount', async () => {
+    const observers: Array<{
+      callback: IntersectionObserverCallback;
+      observe: ReturnType<typeof vi.fn>;
+      disconnect: ReturnType<typeof vi.fn>;
+    }> = [];
+    vi.stubGlobal(
+      'IntersectionObserver',
+      class {
+        observe = vi.fn();
+        disconnect = vi.fn();
+        constructor(callback: IntersectionObserverCallback) {
+          observers.push({
+            callback,
+            observe: this.observe,
+            disconnect: this.disconnect
+          });
+        }
+      }
+    );
+    const project = summary();
+    const loadThumbnail = vi.fn().mockResolvedValue(undefined);
+    const publishThumbnail = vi.fn().mockResolvedValue(undefined);
+    const view = render(
+      <PartThumbnail
+        project={project}
+        loadThumbnail={loadThumbnail}
+        publishThumbnail={publishThumbnail}
+      />
+    );
+    const observer = observers[0];
+    if (!observer) throw new Error('Preview observer was not created');
+    expect(observer.observe).toHaveBeenCalledWith(
+      view.container.querySelector('svg')
+    );
+    expect(loadThumbnail).not.toHaveBeenCalled();
+    act(() =>
+      observer.callback(
+        [{ isIntersecting: false }] as IntersectionObserverEntry[],
+        {} as IntersectionObserver
+      )
+    );
+    expect(loadThumbnail).not.toHaveBeenCalled();
+    act(() =>
+      observer.callback(
+        [{ isIntersecting: true }] as IntersectionObserverEntry[],
+        {} as IntersectionObserver
+      )
+    );
+    await waitFor(() => expect(publishThumbnail).toHaveBeenCalledWith(project));
+    expect(loadThumbnail).toHaveBeenCalledTimes(1);
+    expect(observer.disconnect).toHaveBeenCalled();
+    view.unmount();
+    expect(observer.disconnect).toHaveBeenCalledTimes(2);
+  });
+
   it('renders the cached image without asking for anything else', async () => {
     const project = summary({
       thumbnailArtifactId: toArtifactId('artifact_cached')
