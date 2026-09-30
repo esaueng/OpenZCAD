@@ -1,4 +1,4 @@
-import { useEffect, useState } from 'react';
+import { useEffect, useRef, useState, type Ref } from 'react';
 import type { ProjectSummary } from '@openzcad/shared';
 
 interface PartThumbnailProps {
@@ -75,12 +75,18 @@ function thumbnailFor(
   return pending;
 }
 
-function ThumbnailPlaceholder({ empty }: { empty: boolean }) {
+function ThumbnailPlaceholder({
+  empty,
+  previewRef
+}: {
+  empty: boolean;
+  previewRef?: Ref<SVGSVGElement>;
+}) {
   if (empty) {
     return <span className="start-tile-thumb-empty">No geometry</span>;
   }
   return (
-    <svg viewBox="0 0 120 80" aria-hidden="true">
+    <svg ref={previewRef} viewBox="0 0 120 80" aria-hidden="true">
       <g
         fill="none"
         stroke="currentColor"
@@ -101,19 +107,47 @@ export function PartThumbnail({
   publishThumbnail
 }: PartThumbnailProps) {
   const cacheKey = `${project.projectId}:${project.updatedAt}:${project.thumbnailArtifactId ?? ''}`;
+  const previewRef = useRef<SVGSVGElement>(null);
   const [result, setResult] = useState<ThumbnailResult | null>(null);
 
   useEffect(() => {
     let active = true;
-    void thumbnailFor(cacheKey, project, loadThumbnail, publishThumbnail).then(
-      (source) => {
+    let started = false;
+    const load = () => {
+      if (!active || started) return;
+      started = true;
+      void thumbnailFor(
+        cacheKey,
+        project,
+        loadThumbnail,
+        publishThumbnail
+      ).then((source) => {
         if (active) {
           setResult({ key: cacheKey, source });
         }
-      }
-    );
+      });
+    };
+    // All project cards remain searchable and keyboard-accessible, while
+    // offscreen previews wait until scrolling brings them near the viewport.
+    const preview = previewRef.current;
+    let observer: IntersectionObserver | undefined;
+    if (preview && typeof IntersectionObserver !== 'undefined') {
+      observer = new IntersectionObserver(
+        (entries) => {
+          if (entries.some((entry) => entry.isIntersecting)) {
+            observer?.disconnect();
+            load();
+          }
+        },
+        { rootMargin: '200px' }
+      );
+      observer.observe(preview);
+    } else {
+      load();
+    }
     return () => {
       active = false;
+      observer?.disconnect();
     };
   }, [publishThumbnail, cacheKey, loadThumbnail, project]);
 
@@ -124,5 +158,5 @@ export function PartThumbnail({
     return <ThumbnailPlaceholder empty={result.source === null} />;
   }
 
-  return <ThumbnailPlaceholder empty={false} />;
+  return <ThumbnailPlaceholder empty={false} previewRef={previewRef} />;
 }
