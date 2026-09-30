@@ -1388,8 +1388,10 @@ export interface FaceGeometry {
    */
   recognition?: FaceRecognitionSummary;
   /**
-   * Rebuild-local identity of the exact tangency-connected blend region.
-   * Kernel handles are intentionally not persisted beyond derived state.
+   * Identity of the exact tangency-connected blend region, derived from the
+   * ADR-011 hashes of its member faces: identical in every arena and every
+   * rebuild of the same geometry. Not a durable reference — it changes
+   * whenever the region's geometry does.
    */
   blendRegionKey?: string;
   /** Number of exact analytic faces in {@link blendRegionKey}. */

@@ -49,9 +49,10 @@ primitive's width. Operation edits change the representative feature input
 (for booleans, union to subtraction). Parameter edits change an expression
 referenced by the base feature. Every warm edited result is compared against a
 fresh adapter with history checkpointing disabled after omitting the volatile
-update timestamp and rebuild-local `blendRegionKey`, and normalizing
-tessellation to triangle count. `blendRegionKey` contains temporary kernel
-handles; its accompanying face count and all measured topology remain checked.
+update timestamp and normalizing tessellation to triangle count.
+`blendRegionKey` derives from the member faces' ADR-011 hashes, so it is
+compared like every other published field; all measured topology remains
+checked.
 Warnings fail the run. No wall-time assertion is used because machine load,
 WASM compilation, and operation geometry make such thresholds unreliable.
 
