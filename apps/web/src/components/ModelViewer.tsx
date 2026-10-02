@@ -60,6 +60,7 @@ import {
   TopologyPickList,
   PickService,
   SelectionManager,
+  animationStepSeconds,
   applyMoveGizmoFocus,
   buildMoveGizmoParts,
   chooseMoveSnapStep,
@@ -7213,6 +7214,11 @@ export function ModelViewer({
      * rest of the session with nothing on screen to show for it.
      */
     let framesDrawn = 0;
+    /**
+     * Whether the previous frame kept the loop awake. A frame that follows a
+     * sleep sees the whole idle gap on the clock, which is not animation time.
+     */
+    let loopWasAnimating = false;
     function animate(now: number) {
       animationFrame = null;
       if (e2eCanvasHooksEnabled) {
@@ -7302,7 +7308,10 @@ export function ModelViewer({
       // Preselection and selection overlays ease toward their targets.
       // Timer separates advancing time from reading it, so update once here.
       context.timer.update(now);
-      const dt = Math.min(context.timer.getDelta(), 0.05);
+      const dt = animationStepSeconds(
+        context.timer.getDelta(),
+        loopWasAnimating
+      );
 
       selection.step(dt);
       // Edge highlight tiers ease on the overlays themselves, so each body
@@ -7515,7 +7524,7 @@ export function ModelViewer({
         }
       }
       const hoverAnimating = selection.isSettling;
-      if (
+      loopWasAnimating =
         tweening ||
         zooming ||
         controlsChanged ||
@@ -7524,8 +7533,8 @@ export function ModelViewer({
         rigsAnimating ||
         retiringOverlaysRef.current.length > 0 ||
         inferenceAnimating ||
-        context.fadeIns.size > 0
-      ) {
+        context.fadeIns.size > 0;
+      if (loopWasAnimating) {
         requestRender();
       }
     }
