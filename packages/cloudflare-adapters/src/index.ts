@@ -108,6 +108,7 @@ import {
 } from '@openzcad/shared';
 import {
   adoptProjectDocument,
+  reidentifyProjectDocument,
   createCheckpoint,
   createProjectDocument,
   duplicateProjectDocument,
@@ -1199,40 +1200,70 @@ export class D1R2PersistenceService implements PersistenceService {
     const document = request.document
       ? await this.prepareAdoption(userId, request.document, request.name)
       : createProjectDocument(request.name, userId, request.units);
-    return {
-      project: await this.insertProject(userId, document),
-      document
-    };
+    try {
+      return {
+        project: await this.insertProject(
+          userId,
+          document,
+          DEFAULT_PROJECT_ORGANIZATION,
+          request.document?.projectId
+        ),
+        document
+      };
+    } catch (error) {
+      // A concurrent request or a lost commit acknowledgement may have won.
+      // Only this account's binding is consulted for recovery.
+      if (request.document) {
+        const mappedId = await this.adoptedProjectId(
+          userId,
+          request.document.projectId
+        );
+        if (mappedId) throw this.alreadyAdopted(mappedId);
+      }
+      throw error;
+    }
   }
 
-  /**
-   * Validates a device-local document on its way into the account. The id check
-   * is a pre-flight rather than the guard: the primary key would refuse a
-   * duplicate anyway, but a bare constraint violation cannot tell the device
-   * whether it should sync this project or upload it as a new one.
-   */
+  private alreadyAdopted(projectId: string): ProjectAdoptionError {
+    return new ProjectAdoptionError(
+      'ALREADY_ADOPTED',
+      'This project is already saved to your account.',
+      projectId
+    );
+  }
+
+  private async adoptedProjectId(
+    userId: UserId,
+    localProjectId: string
+  ): Promise<string | null> {
+    const row = await this.env
+      .DB!.prepare(
+        'SELECT cloud_project_id FROM project_adoptions WHERE user_id = ? AND local_project_id = ?'
+      )
+      .bind(userId, localProjectId)
+      .first<{ cloud_project_id: string }>();
+    return row?.cloud_project_id ?? null;
+  }
+
   private async prepareAdoption(
     userId: UserId,
     source: ProjectDocument,
     name: string
   ): Promise<ProjectDocument> {
-    const existing = await this.env
-      .DB!.prepare(`SELECT user_id FROM projects WHERE id = ?`)
-      .bind(source.projectId)
-      .first<{ user_id: string }>();
-    if (existing) {
-      throw existing.user_id === userId
-        ? new ProjectAdoptionError(
-            'ALREADY_ADOPTED',
-            'This project is already saved to your account.'
-          )
-        : new ProjectAdoptionError(
-            'PROJECT_ID_TAKEN',
-            'That project id is already in use.'
-          );
-    }
+    const owned = await this.env
+      .DB!.prepare('SELECT id FROM projects WHERE id = ? AND user_id = ?')
+      .bind(source.projectId, userId)
+      .first<{ id: string }>();
+    if (owned) throw this.alreadyAdopted(owned.id);
+    const mappedId = await this.adoptedProjectId(userId, source.projectId);
+    if (mappedId) throw this.alreadyAdopted(mappedId);
+    const projectId = toProjectId(`proj_${crypto.randomUUID()}`);
     const document = withoutDerivedProjection(
-      adoptProjectDocument(source, userId, name)
+      adoptProjectDocument(
+        reidentifyProjectDocument(source, projectId),
+        userId,
+        name
+      )
     );
     this.assertDocumentCanBeStored(document);
     return document;
@@ -3536,7 +3567,8 @@ export class D1R2PersistenceService implements PersistenceService {
   private async insertProject(
     userId: UserId,
     document: ProjectDocument,
-    organization: ProjectOrganization = DEFAULT_PROJECT_ORGANIZATION
+    organization: ProjectOrganization = DEFAULT_PROJECT_ORGANIZATION,
+    localProjectId?: string
   ): Promise<ProjectSummary> {
     this.assertDocumentCanBeStored(document);
     await this.assertAccountProjectCount(userId);
@@ -3545,6 +3577,15 @@ export class D1R2PersistenceService implements PersistenceService {
     // carries "now" already, and an adopted one must keep its device edit time
     // or saving to the account reorders the shelf.
     const updatedAt = document.derived.updatedAt;
+    const adoptionStatements = localProjectId
+      ? [
+          this.env
+            .DB!.prepare(
+              'INSERT INTO project_adoptions (user_id, local_project_id, cloud_project_id) VALUES (?, ?, ?)'
+            )
+            .bind(userId, localProjectId, document.projectId)
+        ]
+      : [];
     if (this.projectStorageBucket()) {
       const write = await this.putProjectStorageObjects(document);
       const envelope = projectObjectEnvelope(document, write.objectId);
@@ -3574,7 +3615,8 @@ export class D1R2PersistenceService implements PersistenceService {
               document.revisions.length
             ),
           this.documentObjectInsert(document.projectId, write, 'committed'),
-          ...this.projectAssetStatements(document.projectId, write)
+          ...this.projectAssetStatements(document.projectId, write),
+          ...adoptionStatements
         ]);
       } catch (error) {
         const resolution = await this.reconcileProjectStorageWrite(
@@ -3602,7 +3644,7 @@ export class D1R2PersistenceService implements PersistenceService {
       };
     }
     try {
-      await this.env
+      const insert = this.env
         .DB!.prepare(
           `INSERT INTO projects (id, user_id, name, document_json, document_version, document_bytes, updated_at, status, pinned, sort_order) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
         )
@@ -3617,8 +3659,12 @@ export class D1R2PersistenceService implements PersistenceService {
           organization.status,
           organization.pinned ? 1 : 0,
           organization.sortOrder
-        )
-        .run();
+        );
+      if (adoptionStatements.length) {
+        await this.env.DB!.batch([insert, ...adoptionStatements]);
+      } else {
+        await insert.run();
+      }
     } catch (error) {
       throw projectQuotaError(error, await this.ownerEntitlements(userId));
     }
@@ -3736,7 +3782,8 @@ export class D1R2PersistenceService implements PersistenceService {
         'DELETE FROM project_measurements WHERE project_id IN',
         'DELETE FROM revisions WHERE project_id IN',
         'DELETE FROM project_document_objects WHERE project_id IN',
-        'DELETE FROM project_storage_assets WHERE project_id IN'
+        'DELETE FROM project_storage_assets WHERE project_id IN',
+        'DELETE FROM project_adoptions WHERE cloud_project_id IN'
       ]
         .map((statement) =>
           this.env

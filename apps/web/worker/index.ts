@@ -1817,7 +1817,10 @@ async function dispatchApiRequest(
       return json({ error: error.message, code: error.code }, status);
     }
     if (error instanceof ProjectAdoptionError) {
-      return json({ error: error.message, code: error.code }, 409);
+      return json(
+        { error: error.message, code: error.code, projectId: error.projectId },
+        409
+      );
     }
     if (error instanceof ProjectQuotaError) {
       return json(

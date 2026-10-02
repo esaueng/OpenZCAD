@@ -70,9 +70,7 @@ function isProjectionMode(value: unknown): value is ProjectionMode {
 
 function isDisplayMode(value: unknown): value is DisplayMode {
   return (
-    value === 'shaded-edges' ||
-    value === 'shaded' ||
-    value === 'wireframe'
+    value === 'shaded-edges' || value === 'shaded' || value === 'wireframe'
   );
 }
 
@@ -187,6 +185,32 @@ export function clearActiveProject(
 ): boolean {
   const session = readSession(storage);
   return writeSession({ ...session, activeProjectId: null }, storage);
+}
+
+/** Transfers device view state without changing its recorded camera or time. */
+export function rekeyWorkspaceProject(
+  sourceProjectId: string,
+  targetProjectId: string,
+  storage: StorageLike | null = defaultStorage(),
+  preserveSource = false
+): boolean {
+  const session = readSession(storage);
+  const views = { ...session.views };
+  if (views[sourceProjectId]) {
+    views[targetProjectId] = views[sourceProjectId];
+    if (!preserveSource) delete views[sourceProjectId];
+  }
+  return writeSession(
+    {
+      ...session,
+      views,
+      activeProjectId:
+        session.activeProjectId === sourceProjectId
+          ? targetProjectId
+          : session.activeProjectId
+    },
+    storage
+  );
 }
 
 export function loadProjectView(

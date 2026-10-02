@@ -11,6 +11,8 @@ export {
 import { assertDocumentHistory } from '@openzcad/shared';
 import {
   MAX_CHECKPOINT_REASON_LENGTH,
+  documentNodesWithHistory,
+  type ProjectId,
   createId,
   deepClone,
   featureColor,
@@ -818,17 +820,25 @@ export function restoreFromSaveState(
   );
 }
 
-/**
- * `source` prepared to become an account record under `ownerUserId`, keeping
- * its project id.
- *
- * This is deliberately not `duplicateProjectDocument`: a duplicate is a new
- * project that happens to start from an old one, whereas adoption is the same
- * project gaining an account home. Keeping the id is the whole point — the
- * device already has this document in IndexedDB and shelf metadata filed under
- * it, and minting a new id would strand both and leave the user looking at what
- * appears to be a second copy of their part.
- */
+/** Changes only the identity of this document and its undo/redo snapshots. */
+export function reidentifyProjectDocument(
+  source: ProjectDocument,
+  projectId: ProjectId
+): ProjectDocument {
+  if (source.projectId === projectId) return source;
+  const copy = cloneDocument(source);
+  copy.projectId = projectId;
+  if (copy.editHistory) {
+    copy.editHistory = deepClone(copy.editHistory);
+    copy.editHistory.projectId = projectId;
+  }
+  for (const node of documentNodesWithHistory(copy)) {
+    if (node.kind === 'project') node.projectId = projectId;
+  }
+  return copy;
+}
+
+/** Prepares the existing model and history for its account owner. */
 export function adoptProjectDocument(
   source: ProjectDocument,
   ownerUserId: UserId,
