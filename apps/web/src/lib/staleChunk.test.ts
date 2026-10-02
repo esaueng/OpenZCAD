@@ -2,7 +2,8 @@ import { describe, expect, it, vi } from 'vitest';
 import {
   isChunkLoadError,
   lazyWithStaleChunkNotice,
-  onStaleChunk
+  onStaleChunk,
+  watchPreloadErrors
 } from './staleChunk';
 
 function loaderOf(component: unknown): () => Promise<unknown> {
@@ -51,5 +52,33 @@ describe('stale chunk handling', () => {
     await expect(loaderOf(Lazy)()).rejects.toThrow('module threw');
     expect(listener).not.toHaveBeenCalled();
     stop();
+  });
+});
+
+describe('preload errors', () => {
+  it('reports a chunk the preload helper could not load, and only that', () => {
+    const listener = vi.fn();
+    const stopListening = onStaleChunk(listener);
+    const stopWatching = watchPreloadErrors(window);
+    const fire = (payload: unknown) => {
+      const event = new Event('vite:preloadError', { cancelable: true });
+      Object.assign(event, { payload });
+      window.dispatchEvent(event);
+      return event;
+    };
+    const event = fire(
+      new TypeError(
+        'Failed to fetch dynamically imported module: https://zcad.app/assets/demos-BLYQ4WoN.js'
+      )
+    );
+    expect(listener).toHaveBeenCalledOnce();
+    // The caller still gets its own rejection.
+    expect(event.defaultPrevented).toBe(false);
+    fire(new Error('Cannot read properties of null'));
+    expect(listener).toHaveBeenCalledOnce();
+    stopWatching();
+    fire(new TypeError('Importing a module script failed.'));
+    expect(listener).toHaveBeenCalledOnce();
+    stopListening();
   });
 });

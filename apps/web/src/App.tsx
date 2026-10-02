@@ -201,6 +201,7 @@ import {
 import {
   lazyWithStaleChunkNotice,
   onStaleChunk,
+  watchPreloadErrors,
   STALE_CHUNK_MESSAGE
 } from './lib/staleChunk';
 import { watchBuildVersion } from './lib/buildVersionWatch';
@@ -1903,6 +1904,11 @@ export function App() {
   // The status line is the log; a toast is the notice. Only actions whose
   // outcome is otherwise invisible in the viewport raise one.
   const [toast, setToast] = useState<ToastModel | null>(null);
+  /**
+   * A newer build is out. The workspace says so in a toast; the start screen
+   * has no toast lane, so it keeps a Reload offer in its footer.
+   */
+  const [newBuildAvailable, setNewBuildAvailable] = useState(false);
   const toastIdRef = useRef(0);
   const announce = useCallback((message: string, action?: ToastAction) => {
     toastIdRef.current += 1;
@@ -1931,15 +1937,20 @@ export function App() {
       run: () => window.location.reload()
     };
     const stopWatch = watchBuildVersion({
-      onNewVersion: () =>
-        announce('A newer OpenZCAD build is available.', reloadNotice)
+      onNewVersion: () => {
+        setNewBuildAvailable(true);
+        announce('A newer OpenZCAD build is available.', reloadNotice);
+      }
     });
-    const stopStale = onStaleChunk(() =>
-      announce(STALE_CHUNK_MESSAGE, reloadNotice)
-    );
+    const stopStale = onStaleChunk(() => {
+      setNewBuildAvailable(true);
+      announce(STALE_CHUNK_MESSAGE, reloadNotice);
+    });
+    const stopPreload = watchPreloadErrors();
     return () => {
       stopWatch();
       stopStale();
+      stopPreload();
     };
   }, [announce]);
   /** A change of selection or command retires the message it interrupts. */
@@ -15983,6 +15994,9 @@ export function App() {
           onImportProject={(file) => void handleImportProject(file)}
           projects={projects}
           status={status}
+          onReloadForUpdate={
+            newBuildAvailable ? () => window.location.reload() : undefined
+          }
           // Discovery must finish before a new/opened part can commit: the
           // startup result would otherwise replace its session and listing.
           // Keep import locks out of this; validated imports fence switches
