@@ -407,6 +407,13 @@ const MESH_EXPORT_FILE_INFO: Record<
     label: 'glTF',
     kind: 'gltf-export',
     binaryFormat: 'glb'
+  },
+  ply: {
+    extension: 'ply',
+    contentType: 'application/octet-stream',
+    label: 'PLY',
+    kind: 'ply-export',
+    binaryFormat: 'ply'
   }
 };
 import {
@@ -1045,6 +1052,8 @@ import {
   affectedFeatureTargets,
   type AffectedFeatureTarget
 } from './lib/affectedFeatureTargets';
+import { holePreview, type HolePreview } from './lib/holeGhost';
+import type { HoleDraft } from './components/forms/ModelingOperationsForm';
 import { extrudeSketchGuidance } from './lib/extrudeGuidance';
 import {
   countLabel,
@@ -1828,10 +1837,28 @@ export function App() {
    * history row rather than a tool tile. Null while creating. The form is
    * the same one; only the command it commits differs.
    */
+  /** The open Hole card's values, for the bore the viewport draws. */
+  const [holeDraft, setHoleDraft] = useState<HoleDraft | null>(null);
+  /**
+   * The last ghost and what it was computed from. A through hole scans the
+   * body's mesh for its depth, which is not work to redo on every render.
+   */
+  const holeGhostCache = useRef<{
+    key: string;
+    body: unknown;
+    preview: HolePreview;
+  } | null>(null);
   const [modelingEditFeature, setModelingEditFeature] =
     useState<FeatureNode | null>(null);
   /** The fillet/chamfer form's current size, mirrored onto the edge handle. */
   const [edgeFormSize, setEdgeFormSize] = useState<number | null>(null);
+  /**
+   * The card's typed fillet/chamfer size did not build in preview. The handle
+   * on the edge kept showing "R 5 mm" like any good value while the only word
+   * of the refusal was in the lane, so it is carried to the handle's warning
+   * state and to the card.
+   */
+  const [edgeFormPreviewRefused, setEdgeFormPreviewRefused] = useState(false);
   /**
    * A fillet that just landed from an edge drag: its new blend face is picked
    * on the next topology so the radius stays live instead of the gesture
@@ -3154,6 +3181,13 @@ export function App() {
               warning ??
                 (valid ? null : 'This extrusion did not produce a valid body.')
             );
+          } else if (edgeFormCandidate.current) {
+            setEdgeFormPreviewRefused(!valid);
+            setFeatureFormError(
+              valid
+                ? null
+                : (warning ?? 'This size did not produce a valid body.')
+            );
           }
           setStatus(
             warning ??
@@ -3166,7 +3200,12 @@ export function App() {
       onFailure: ({ error }) => {
         setPreviewDoc(null);
         const message = errorMessage(error, 'Unable to preview this size.');
-        if (edgeFormCandidate.current?.extrude) setFeatureFormError(message);
+        if (edgeFormCandidate.current?.extrude) {
+          setFeatureFormError(message);
+        } else if (edgeFormCandidate.current) {
+          setEdgeFormPreviewRefused(true);
+          setFeatureFormError(message);
+        }
         setStatus(message);
       },
       // The form stays open after release, so its latest value must catch up.
@@ -3177,6 +3216,7 @@ export function App() {
   useEffect(() => {
     edgeFormPreview.clear();
     edgeFormCandidate.current = null;
+    setEdgeFormPreviewRefused(false);
     return () => edgeFormPreview.clear();
   }, [
     edgeFormPreview,
@@ -3191,6 +3231,8 @@ export function App() {
     kind: 'fillet' | 'chamfer',
     value: EdgeModifierFormValue | null
   ) {
+    // A new value has not been refused yet.
+    setEdgeFormPreviewRefused(false);
     if (!value || geometryBusy) {
       edgeFormPreview.clear();
       setEdgeFormSize(null);
@@ -7043,10 +7085,10 @@ export function App() {
       : 0;
     setSettingsMessage(
       !listed.remoteReached
-        ? `Signed in as ${activeSession.email ?? activeSession.displayName} · cloud projects are temporarily unavailable.`
+        ? 'Signed in · cloud projects are temporarily unavailable.'
         : localOnly === 0
-          ? `Signed in as ${activeSession.email ?? activeSession.displayName}.`
-          : `Signed in as ${activeSession.email ?? activeSession.displayName} · ${countLabel(localOnly, 'project', 'projects')} on this device only.`
+          ? 'Signed in.'
+          : `Signed in · ${countLabel(localOnly, 'project', 'projects')} on this device only.`
     );
   }
 
@@ -16072,22 +16114,30 @@ export function App() {
     geometry.state.phase === 'rebuilding'
       ? rebuildProgressLabel(geometry.state.progress)
       : null;
-  const staleProjectionLabel = parameterPreview
-    ? 'Parameter preview · exact geometry pending'
-    : Object.keys(representations).length > 0
-      ? 'showing the previous result until it finishes'
-      : 'no exact projection is available yet';
+  // The exact-geometry line while the model is not ready. It is a state, not
+  // a message, so it never expires; and it is handed over beside the message
+  // rather than in its place. Standing in for the message, it swallowed
+  // whatever the user's action said meanwhile — "Opened …", a refused
+  // shortcut — which then expired behind a slow worker start unseen and
+  // unlogged.
+  const geometryStatus =
+    parameterPreview || exactGeometryReady
+      ? null
+      : {
+          phase:
+            geometry.state.phase === 'ready'
+              ? 'Rebuilding geometry…'
+              : geometry.state.phase === 'failed' && geometry.state.error
+                ? `Exact geometry failed: ${geometry.state.error}`
+                : (progressLabel ?? geometryPhaseLabel[geometry.state.phase]),
+          projection:
+            Object.keys(representations).length > 0
+              ? 'showing the previous result until it finishes'
+              : 'no exact projection is available yet'
+        };
   const visibleStatus = parameterPreview
     ? `Parameter preview · ${parameterEditPending ? status : parameterDraftActive ? 'Press Enter to apply; Escape to cancel' : 'exact geometry rebuilding'}`
-    : exactGeometryReady
-      ? status
-      : `${
-          geometry.state.phase === 'ready'
-            ? 'Rebuilding geometry…'
-            : geometry.state.phase === 'failed' && geometry.state.error
-              ? `Exact geometry failed: ${geometry.state.error}`
-              : (progressLabel ?? geometryPhaseLabel[geometry.state.phase])
-        } · ${staleProjectionLabel}`;
+    : status;
   const tone: 'ready' | 'warning' | 'running' =
     geometry.state.phase === 'failed'
       ? 'warning'
@@ -16672,6 +16722,48 @@ export function App() {
     modelingTargetBody?.topology,
     modelingTargetBody
   );
+  const holePreviewState = ((): HolePreview | null => {
+    if (modelingOperation !== 'hole' || !holeDraft) return null;
+    const body = representations[holeDraft.targetBodyId];
+    const key = JSON.stringify(holeDraft);
+    const cached = holeGhostCache.current;
+    if (cached && cached.key === key && cached.body === body) {
+      return cached.preview;
+    }
+    const face = body?.topology?.faces.find(
+      (candidate) => candidate.hash === holeDraft.faceHash
+    );
+    const editedAnchor =
+      modelingEditFeature?.data.featureKind === 'hole'
+        ? modelingEditFeature.data.positionAnchor
+        : undefined;
+    // No representation yet (a rebuild in flight) is not a refusal: wait.
+    const preview: HolePreview | null = body
+      ? holePreview({
+          // A face the body no longer has is said so; one without measured
+          // geometry is refused as not a planar entry face.
+          face: face ? (face.geometry ?? {}) : null,
+          // The anchor the submission will carry: a new hole measures from
+          // the area centroid when the face reports one; an edited hole
+          // keeps the anchor it was drilled against.
+          anchor: modelingEditFeature
+            ? editedAnchor === 'centroid'
+              ? 'centroid'
+              : 'center'
+            : face?.geometry?.centroid
+              ? 'centroid'
+              : 'center',
+          u: holeDraft.u,
+          v: holeDraft.v,
+          diameter: holeDraft.diameter,
+          outerDiameter: holeDraft.outerDiameter,
+          depth: holeDraft.depth,
+          bodyPositions: body.mesh.vertices
+        })
+      : null;
+    if (preview) holeGhostCache.current = { key, body, preview };
+    return preview;
+  })();
   const modelingOperationFaces =
     modelingOperation === 'draft' || modelingOperation === 'hole'
       ? modelingFaces.filter((face) => face.surfaceType === 'plane')
@@ -17528,7 +17620,9 @@ export function App() {
             }}
             onOffsetCancel={handleOffsetCancel}
             offsetPreviewInvalid={
-              isOperationState(interaction) && interaction.phase === 'failed'
+              (isOperationState(interaction) &&
+                interaction.phase === 'failed') ||
+              edgeFormPreviewRefused
             }
             previewDeferred={previewDeferred}
             onOpenOffsetKeypad={handleOpenOffsetKeypad}
@@ -17590,6 +17684,7 @@ export function App() {
             onHoverRegion={handleHoverRegion}
             planePickerArmed={!modelingLocked && tool === 'sketch'}
             planePickerOffset={sketchPlaneOffset}
+            holeGhost={holePreviewState?.ghost ?? null}
             onPickPlane={startSketchOnPlane}
             onMeasurePreview={
               modelingLocked && measuring ? previewMeasurement : null
@@ -18162,6 +18257,8 @@ export function App() {
                       unsupportedReason={modelingUnsupportedReason ?? undefined}
                       onPreflight={preflightModelingSubmission}
                       onSubmit={submitModelingOperation}
+                      onHoleDraftChange={setHoleDraft}
+                      holePreviewNotice={holePreviewState?.notice ?? null}
                       onCancel={cancelPanel}
                       onTargetBodyChange={(bodyId) => {
                         modelingPreflightRef.current = null;
@@ -18588,7 +18685,11 @@ export function App() {
           <WorkspaceReadout
             status={visibleStatus}
             statusAt={statusEntry.at}
-            statusSticky={statusEntry.sticky || !exactGeometryReady}
+            statusSticky={
+              statusEntry.sticky ||
+              (parameterPreview !== null && !exactGeometryReady)
+            }
+            geometryStatus={geometryStatus}
             tone={tone}
             muted={contextualToolCard !== null && !hideSketchToolCard}
             logOpen={activityLogOpen}
@@ -18635,6 +18736,10 @@ export function App() {
             {...(visibleStatus === status && statusEntry.detail
               ? { detail: statusEntry.detail }
               : {})}
+            geometryStatus={
+              geometryStatus &&
+              `${geometryStatus.phase} · ${geometryStatus.projection}`
+            }
             tone={tone}
             triggerRef={activityLogTriggerRef}
             onClose={(restoreFocus) => {
