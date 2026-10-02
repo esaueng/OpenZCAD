@@ -350,6 +350,33 @@ describe('settings privacy and data section', () => {
     projectErasureReady: true
   };
 
+  it('starts profile details hidden and re-hides them when settings reopen', async () => {
+    const user = userEvent.setup();
+    const view = renderSettings(null, { initialSection: 'account', session });
+    expect(view.container.innerHTML).not.toContain(session.email);
+    expect(screen.getByText('Name hidden')).toBeVisible();
+    expect(screen.getByText('Email hidden')).toBeVisible();
+    const show = screen.getByRole('button', { name: 'Show personal info' });
+    expect(show).toHaveAttribute('aria-pressed', 'false');
+    await user.click(show);
+    expect(screen.getByText(session.displayName)).toBeVisible();
+    expect(screen.getByText(session.email)).toBeVisible();
+    const hide = screen.getByRole('button', { name: 'Hide personal info' });
+    expect(hide).toHaveAttribute('aria-pressed', 'true');
+    await user.click(hide);
+    expect(view.container.innerHTML).not.toContain(session.email);
+    await user.click(
+      screen.getByRole('button', { name: 'Show personal info' })
+    );
+    view.unmount();
+    const reopened = renderSettings(null, {
+      initialSection: 'account',
+      session
+    });
+    expect(reopened.container.innerHTML).not.toContain(session.email);
+    expect(screen.getByText('Name hidden')).toBeVisible();
+  });
+
   it('keeps all cloud deletion functions together on Privacy & data', () => {
     renderSettings(readyHealth, { initialSection: 'privacy', session });
 
@@ -404,6 +431,19 @@ describe('settings privacy and data section', () => {
       name: 'Delete all cloud data'
     });
     expect(confirm).toBeDisabled();
+    expect(dialog.innerHTML).not.toContain(session.email);
+    const confirmation = within(dialog).getByLabelText('Deletion confirmation');
+    expect(confirmation).toHaveAttribute('type', 'password');
+    await user.click(
+      within(dialog).getByRole('button', { name: 'Show personal info' })
+    );
+    expect(within(dialog).getByText(session.email)).toBeVisible();
+    expect(confirmation).toHaveAttribute('type', 'text');
+    await user.click(
+      within(dialog).getByRole('button', { name: 'Hide personal info' })
+    );
+    expect(dialog.innerHTML).not.toContain(session.email);
+    expect(confirmation).toHaveAttribute('type', 'password');
     expect(
       within(dialog).getByText(/Local projects and settings/)
     ).toBeVisible();

@@ -28,6 +28,7 @@ import type {
   SketchToolId
 } from '../lib/interaction/machine';
 import { CONSTRAINT_TOOL_SPECS } from '../lib/sketch/constraints';
+import type { SketchDefinedState } from '../lib/sketch/constraints';
 import { SKETCH_EDIT_TOOL_SPECS } from '../lib/sketch/edits';
 import { CONSTRAINT_ICONS } from './constraintIcons';
 import { Tooltip } from './Tooltip';
@@ -38,14 +39,25 @@ export interface SketchConstraintListItem {
   label: string;
   editable: boolean;
   conflicted?: boolean;
+  /**
+   * True while the last solve proved the whole sketch fully defined. Rows
+   * never claim an under-defined state per entity — the kernel reports no
+   * per-entity freedom — so this is sketch-wide agreement with the pill and
+   * the viewport, not a second signal on its own.
+   */
+  defined?: boolean;
 }
 
 /** What the solve-status pill shows; null until a solve has run. */
 export interface SketchSolveStatus {
   label: string;
   tone: 'ok' | 'info' | 'warn';
+  /** Sketch-wide defined state behind the pill text, if a solve ran. */
+  definedState?: SketchDefinedState;
   /** Entities named by constraints with measurable residuals, if any. */
   diagnosticObjectIds?: string[];
+  /** Entities proved fully defined by a zero-DOF solve, if any. */
+  definedObjectIds?: string[];
   /** Constraints with measurable residuals, if the solver named any. */
   conflictingConstraintIds?: string[];
 }
@@ -502,14 +514,17 @@ export function SketchToolRail({
               <legend>Constraints</legend>
               <ul className="sketch-constraint-list">
                 {constraints.map(
-                  ({ constraintId, label, editable, conflicted }) => (
+                  ({ constraintId, label, editable, conflicted, defined }) => (
                     <li
                       key={constraintId}
                       data-conflicted={conflicted ? 'true' : undefined}
+                      data-defined={defined ? 'true' : undefined}
                       aria-label={
                         conflicted
                           ? `${label} · solver residual; edit or delete this constraint`
-                          : label
+                          : defined
+                            ? `${label} · fully defined`
+                            : label
                       }
                     >
                       {editable ? (
@@ -524,6 +539,7 @@ export function SketchToolRail({
                             type="button"
                             className="sketch-constraint-edit"
                             data-conflicted={conflicted ? 'true' : undefined}
+                            data-defined={defined ? 'true' : undefined}
                             aria-label={`Edit constraint: ${label}`}
                             onClick={(event) =>
                               onEditConstraint(constraintId, {

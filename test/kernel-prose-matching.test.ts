@@ -40,12 +40,14 @@ interface ProseAllowance {
  * Every remaining place the adapter reads a kernel sentence.
  *
  * All three belong to the blend family. `fillet`, `chamfer` and
- * `filletVariable` have no `*Detailed` twin on this pin: they throw a bare
- * Error and the only machine-readable thing in it is the prefix the kernel's
- * blend failure code writes into the prose. Until that family gains a typed
- * result, relaying the counts it names is better than dropping them — the
- * kernel is the only thing that knows which edges its blend engines gave up
- * on — and it is recorded here rather than pretended away.
+ * `filletVariable` answer as typed data on this pin, but the counts the
+ * subset remedy and the probe ladder need — how many edges were refused, how
+ * many would round on their own, the measured blend ceiling — still arrive
+ * only inside the refusal prose, so those two readers stay recorded here.
+ * The shared-corner cause used to be a fourth entry: it now reads the
+ * typed refusal's stable `unsupported-vertex-blend` code
+ * (`blendReportIsVertexBlend`), and the stale-allowance test below is what
+ * would fail if that reader ever went back to the sentence.
  */
 const ALLOWANCES: readonly ProseAllowance[] = [
   {
@@ -59,13 +61,6 @@ const ALLOWANCES: readonly ProseAllowance[] = [
     file: 'exact-edge-modifiers.ts',
     fragment: 'would round on their own',
     reason: 'blend family: the matching half of the refused-edge count above.'
-  },
-  {
-    file: 'exact-edge-modifiers.ts',
-    fragment: 'unsupported vertex blend',
-    reason:
-      'blend family: the kernel names the shared-corner case only in its ' +
-      'prose, and this cause is claimed only when it actually reported it.'
   },
   {
     file: 'exact-edge-modifiers.ts',

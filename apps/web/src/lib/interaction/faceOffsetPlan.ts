@@ -103,7 +103,8 @@ function dimensionEdit(
     evaluated = resolveParamValue(
       current,
       getParameterScope(document).scope,
-      dimension
+      dimension,
+      document.units
     );
   } catch {
     return null;
@@ -253,10 +254,7 @@ function faceTravelHint(
 }
 
 /** Add the mesh estimate only to an exact nonadjacent-face refusal. */
-export function withFaceTravelHint(
-  message: string,
-  hint?: string
-): string {
+export function withFaceTravelHint(message: string, hint?: string): string {
   return hint &&
     message ===
       'The face would run into another part of the body before it got that far.'
@@ -463,7 +461,8 @@ export function faceOffsetBaseline(
       resolveParamValue(
         value,
         getParameterScope(document).scope,
-        primitive.dimension
+        primitive.dimension,
+        document.units
       ) * primitive.scale;
     return Number.isFinite(total) ? { total, sense: 1 } : undefined;
   } catch {
