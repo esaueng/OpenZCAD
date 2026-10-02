@@ -67,8 +67,56 @@ async function reloadSettled(page: Page) {
   await expectSettled(page);
 }
 
-/** Starts the verified suggestion and returns once its exact preflight is running. */
-async function startVerified(page: Page, label: string) {
+/**
+ * How long the next flagged exact check holds its commit open for an
+ * interruption test. The natural check lasts ~200 ms — shorter than one
+ * `STATUS_MIN_DWELL_MS` toast dwell, so the "Checking…" phase is never drawn
+ * — while the reload needs only milliseconds once the in-flight flag is up.
+ */
+const EXACT_CHECK_HOLD_MS = 10_000;
+
+/** Arms the one-shot e2e hold consumed by the next flagged exact check. */
+async function armExactCheckHold(page: Page) {
+  await page.evaluate((holdMs: number) => {
+    (
+      window as unknown as { __openzcadE2EDelayNextExactCheckMs?: number }
+    ).__openzcadE2EDelayNextExactCheckMs = holdMs;
+  }, EXACT_CHECK_HOLD_MS);
+}
+
+/**
+ * Waits for the Apply's exact preflight to be in flight. The paced status
+ * toast can skip the short "Checking…" phase and never draw it, so the flag
+ * — set before the first worker post and cleared before the commit — is the
+ * signal a reload gated on it provably lands mid-flight.
+ */
+async function expectApplyCheckInFlight(page: Page) {
+  await page.waitForFunction(
+    () =>
+      (window as unknown as { __openzcadE2EApplyCheckInFlight?: boolean })
+        .__openzcadE2EApplyCheckInFlight === true,
+    undefined,
+    { timeout: 60_000 }
+  );
+}
+
+/**
+ * Waits for the parameter edit's exact check to be in flight. Same pacing
+ * reason as above: the flag, not the toast, proves the reload lands before
+ * the commit.
+ */
+async function expectParameterCheckInFlight(page: Page) {
+  await page.waitForFunction(
+    () =>
+      (window as unknown as { __openzcadE2EParameterCheckInFlight?: boolean })
+        .__openzcadE2EParameterCheckInFlight === true,
+    undefined,
+    { timeout: 60_000 }
+  );
+}
+
+/** Opens the verified suggestion's proposal card. */
+async function openProposal(page: Page, label: string) {
   const chip = page
     .locator('.assistant-suggestion, .assistant-verified-action', {
       hasText: label
@@ -79,6 +127,12 @@ async function startVerified(page: Page, label: string) {
   await promptField(page).press('Enter');
   const proposal = page.locator('.assistant-card.proposal.open').last();
   await expect(proposal).toBeVisible({ timeout: 60_000 });
+  return proposal;
+}
+
+/** Starts the verified suggestion and returns once its exact preflight is running. */
+async function startVerified(page: Page, label: string) {
+  const proposal = await openProposal(page, label);
   await proposal.getByRole('button', { name: 'Apply', exact: true }).click();
 }
 
@@ -96,12 +150,12 @@ test('a reload during the verified Apply leaves the document whole, before or af
   test.setTimeout(420_000);
   await importHolder(page, 'Holder interrupted apply');
   await openAssistant(page);
-  await startVerified(page, 'Parameterize the opening');
-  // The Apply's exact check is the long run; reload the moment it starts.
-  await expect(page.getByRole('contentinfo').getByRole('status')).toHaveText(
-    /Checking|Building|Rebuilding|Measuring/i,
-    { timeout: 60_000 }
-  );
+  const proposal = await openProposal(page, 'Parameterize the opening');
+  // Hold the Apply's exact preflight open and reload the moment its
+  // in-flight flag is up, so the reload provably lands before the commit.
+  await armExactCheckHold(page);
+  await proposal.getByRole('button', { name: 'Apply', exact: true }).click();
+  await expectApplyCheckInFlight(page);
   await reloadSettled(page);
 
   const width = page.getByLabel('Expression for opening_width');
@@ -141,13 +195,12 @@ test('a reload during a parameter edit keeps the last valid model or the new one
   const width = page.getByLabel('Expression for opening_width');
   await expect(width).toHaveValue('44');
 
+  // Hold the edit's exact check open and reload the moment its in-flight
+  // flag is up, so the reload provably lands before the commit.
   await width.fill('60');
+  await armExactCheckHold(page);
   await width.press('Enter');
-  // The edit's exact preflight is running; pull the page out from under it.
-  await expect(page.getByRole('contentinfo').getByRole('status')).toHaveText(
-    /Checking|Building|Rebuilding|Measuring|Waiting for exact/i,
-    { timeout: 60_000 }
-  );
+  await expectParameterCheckInFlight(page);
   await reloadSettled(page);
   await expect(page.getByLabel('Expression for opening_width')).toHaveValue(
     /^(44|60)$/
