@@ -148,7 +148,8 @@ export async function sketchEntityEditCommands(
       // resolve to the requested result remain valid driving inputs.
       if (
         Math.abs(
-          resolveParamValue(requested, scope) - resolveParamValue(actual, scope)
+          resolveParamValue(requested, scope, undefined, prospective.units) -
+            resolveParamValue(actual, scope, undefined, prospective.units)
         ) > 1e-9
       ) {
         throw new Error(
