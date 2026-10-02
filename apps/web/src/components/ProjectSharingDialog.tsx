@@ -30,6 +30,7 @@ import {
 import type { CollaborationStatus } from '../lib/useCollaboration';
 import { useModalFocus } from '../lib/useModalFocus';
 import { StableLabel } from './StableLabel';
+import { PersonalInfoToggle, PrivateEmailInput } from './PersonalInfoToggle';
 
 const defaultClient = createProjectSharingClient();
 const defaultShareLinkClient = createProjectShareLinkClient();
@@ -181,6 +182,7 @@ export function ProjectSharingDialog({
   );
   const [shareLinkCopied, setShareLinkCopied] = useState(false);
   const [email, setEmail] = useState('');
+  const [personalInfoVisible, setPersonalInfoVisible] = useState(false);
   const [inviteRole, setInviteRole] = useState<ProjectMemberRole>('viewer');
   const [invitationSentTo, setInvitationSentTo] = useState<string | null>(null);
   const [hydrating, setHydrating] = useState(role === 'owner');
@@ -400,6 +402,10 @@ export function ProjectSharingDialog({
         </header>
 
         <div className="sharing-body">
+          <PersonalInfoToggle
+            visible={personalInfoVisible}
+            onChange={setPersonalInfoVisible}
+          />
           <p
             className="sharing-status-line"
             data-tone={error ? 'error' : busy ? 'busy' : undefined}
@@ -550,7 +556,12 @@ export function ProjectSharingDialog({
               aria-label="People"
             >
               <ul className="sharing-list">
-                {people.map((person) => {
+                {people.map((person, index) => {
+                  const name = personalInfoVisible
+                    ? person.name
+                    : person.kind === 'self'
+                      ? 'You'
+                      : `Collaborator ${index + 1}`;
                   const member =
                     person.kind === 'member'
                       ? memberByUser.get(person.userId)
@@ -562,11 +573,11 @@ export function ProjectSharingDialog({
                         data-presence={person.presence ?? undefined}
                         aria-hidden="true"
                       >
-                        {person.initial}
+                        {personalInfoVisible ? person.initial : '?'}
                       </span>
                       <span className="sharing-member-id">
-                        {person.name}
-                        {person.you ? ' (you)' : ''}
+                        {name}
+                        {personalInfoVisible && person.you ? ' (you)' : ''}
                       </span>
                       {person.kind === 'self' && role ? (
                         <span className="sharing-kind">
@@ -585,7 +596,7 @@ export function ProjectSharingDialog({
                         <>
                           <select
                             className="sharing-role-select"
-                            aria-label={`Role for ${person.name}`}
+                            aria-label={`Role for ${name}`}
                             value={member.role}
                             disabled={interactionBusy}
                             onChange={(event) =>
@@ -613,7 +624,7 @@ export function ProjectSharingDialog({
                           <button
                             type="button"
                             className="sharing-row-action"
-                            aria-label={`Remove ${person.name}`}
+                            aria-label={`Remove ${name}`}
                             disabled={interactionBusy}
                             onClick={() =>
                               void mutate(
@@ -635,16 +646,18 @@ export function ProjectSharingDialog({
                     </li>
                   );
                 })}
-                {(sharing?.invitations ?? []).map((invitation) => (
+                {(sharing?.invitations ?? []).map((invitation, index) => (
                   <li key={invitation.invitationId} className="sharing-pending">
                     <span
                       className="sharing-avatar sharing-avatar-pending"
                       aria-hidden="true"
                     >
-                      {initialOf(invitation.email)}
+                      {personalInfoVisible ? initialOf(invitation.email) : '?'}
                     </span>
                     <span className="sharing-member-id">
-                      {invitation.email}
+                      {personalInfoVisible
+                        ? invitation.email
+                        : `Invitation ${index + 1}`}
                     </span>
                     <span className="sharing-kind">
                       Invited · {invitation.role} ·{' '}
@@ -653,7 +666,7 @@ export function ProjectSharingDialog({
                     <button
                       type="button"
                       className="sharing-row-action"
-                      aria-label={`Revoke invitation for ${invitation.email}`}
+                      aria-label={`Revoke invitation for ${personalInfoVisible ? invitation.email : `Invitation ${index + 1}`}`}
                       disabled={interactionBusy}
                       onClick={() =>
                         void mutate(
@@ -693,8 +706,8 @@ export function ProjectSharingDialog({
                   }}
                 >
                   <Plus size={14} aria-hidden="true" />
-                  <input
-                    type="email"
+                  <PrivateEmailInput
+                    visible={personalInfoVisible}
                     required
                     aria-label="Email"
                     placeholder="Add people by email"
@@ -720,7 +733,9 @@ export function ProjectSharingDialog({
               ) : null}
               {invitationSentTo && (
                 <p className="sharing-invite-sent" role="status">
-                  Invitation sent to {invitationSentTo}.
+                  {personalInfoVisible
+                    ? `Invitation sent to ${invitationSentTo}.`
+                    : 'Invitation sent.'}
                 </p>
               )}
             </section>

@@ -11,6 +11,52 @@ import {
   waitForSurfacesToSettle
 } from './openzcad-fixtures';
 
+test('hides profile details by default and resets disclosure on reopen and reload', async ({
+  page
+}) => {
+  await stubApi(page);
+  await page.route('**/api/session', (route) =>
+    route.fulfill({
+      json: {
+        userId: 'user_screenshot',
+        displayName: 'Screenshot Person',
+        email: 'screenshot@example.com',
+        mode: 'email-code'
+      }
+    })
+  );
+  await page.goto('/');
+  await page.getByRole('button', { name: 'Open settings' }).click();
+  await page.getByRole('button', { name: 'Account', exact: true }).click();
+  const settings = page.getByRole('dialog', { name: 'Settings' });
+  await expect(
+    settings.getByText('Name hidden', { exact: true })
+  ).toBeVisible();
+  await expect(settings).not.toContainText('Screenshot Person');
+  await expect(settings).not.toContainText('screenshot@example.com');
+  await settings.getByRole('button', { name: 'Show personal info' }).click();
+  await expect(
+    settings.getByText('Screenshot Person', { exact: true })
+  ).toBeVisible();
+  await expect(
+    settings.getByText('screenshot@example.com', { exact: true })
+  ).toBeVisible();
+  await settings.getByRole('button', { name: 'Hide personal info' }).click();
+  await expect(settings).not.toContainText('Screenshot Person');
+  await expect(settings).not.toContainText('screenshot@example.com');
+  await settings.getByRole('button', { name: 'Show personal info' }).click();
+  await page.getByRole('button', { name: 'Back to workspace' }).click();
+  await page.getByRole('button', { name: 'Open settings' }).click();
+  await expect(
+    settings.getByText('Name hidden', { exact: true })
+  ).toBeVisible();
+  await settings.getByRole('button', { name: 'Show personal info' }).click();
+  await page.reload();
+  await expect(
+    settings.getByText('Name hidden', { exact: true })
+  ).toBeVisible();
+});
+
 test('suggests a fresh part name without selecting it', async ({ page }) => {
   await page.addInitScript(() => {
     const storageKey = '__openzcad_e2e_cute_name_seed';

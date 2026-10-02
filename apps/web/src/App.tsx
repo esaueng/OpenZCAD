@@ -7076,10 +7076,10 @@ export function App() {
       : 0;
     setSettingsMessage(
       !listed.remoteReached
-        ? `Signed in as ${activeSession.email ?? activeSession.displayName} · cloud projects are temporarily unavailable.`
+        ? 'Signed in · cloud projects are temporarily unavailable.'
         : localOnly === 0
-          ? `Signed in as ${activeSession.email ?? activeSession.displayName}.`
-          : `Signed in as ${activeSession.email ?? activeSession.displayName} · ${countLabel(localOnly, 'project', 'projects')} on this device only.`
+          ? 'Signed in.'
+          : `Signed in · ${countLabel(localOnly, 'project', 'projects')} on this device only.`
     );
   }
 
