@@ -98,11 +98,12 @@ import {
   uniformScaleMatrix
 } from './exact-math';
 import { droppedUnionOperandWarning } from './boolean-result-validation';
+import { exactBooleanOutcome } from './exact-boolean-refusal';
 import {
-  exactBooleanOutcome,
-  exactCut,
-  exactIntersect
-} from './exact-boolean-refusal';
+  exactCutWithCancellation,
+  exactIntersectWithCancellation,
+  throwIfBuildCancelled
+} from './exact-cancellation';
 import { importedMeshStl, meshBooleanUnsupportedError } from './imported-mesh';
 import {
   extrudeVolumeTolerance,
@@ -481,11 +482,12 @@ function buildExtrudeFeature(
     ];
     const targetSolid = collapseShape(kernel, target);
     const extrusionSolid = collapseShape(kernel, extrusion);
-    // GEOMETRY COMES FROM THE TYPED DETAILED ENTRY POINTS, unchanged. They are
-    // the ones that carry the kernel's exact-only policy: a boolean the exact
-    // pipeline cannot do refuses here by its named reason instead of shipping
-    // an approximate body. Provenance is read afterwards, from a separate probe
-    // that cannot touch this result — see `exact-boolean-evolution.ts`.
+    // GEOMETRY COMES FROM THE TYPED DETAILED ENTRY POINTS, through the
+    // cancellable twin when this rebuild carries a token. It keeps the
+    // kernel's exact-only policy: a boolean the exact pipeline cannot do
+    // refuses here by its named reason instead of shipping an approximate
+    // body. Provenance is read afterwards, from a separate probe that cannot
+    // touch this result — see `exact-boolean-evolution.ts`.
     const operandNames = [targetBody.name, extrusionBody.name];
     const coaxial =
       operation === 'cut'
@@ -504,7 +506,13 @@ function buildExtrudeFeature(
         : unifyBooleanFaces(
             kernel,
             coaxial ??
-              exactCut(kernel, targetSolid, extrusionSolid, operandNames)
+              exactCutWithCancellation(
+                kernel,
+                targetSolid,
+                extrusionSolid,
+                ctx.cancellation,
+                operandNames
+              )
           );
     // An add only needs the two to meet. Shared volume cannot answer that —
     // a boss grown off the face it was sketched on meets its target exactly
@@ -1371,6 +1379,9 @@ function buildBooleanFeature(
     let sharedWithTools = 0;
     const targetName = bodyName(document, data.targetBodyIds[0]!);
     for (let index = 1; index < operands.length; index += 1) {
+      // A multi-tool boolean is one feature with many kernel calls; a
+      // superseded rebuild stops between tools rather than after all of them.
+      throwIfBuildCancelled(ctx.cancellation?.signal);
       const tool = collapseShape(kernel, operands[index]!);
       const operandNames = [
         targetName,
@@ -1397,10 +1408,11 @@ function buildBooleanFeature(
           // Neither does a kernel that throws instead of answering.
         }
       }
-      // The typed detailed entry points, unchanged: they are the ones that
-      // apply the kernel's exact-only policy and refuse by its named reason.
-      // `target` holds the accumulator this step consumed, so the probe can
-      // rerun the very same pair on copies afterwards.
+      // The typed detailed entry points, through the cancellable twin when
+      // this rebuild carries a token: they are the ones that apply the
+      // kernel's exact-only policy and refuse by its named reason. `target`
+      // holds the accumulator this step consumed, so the probe can rerun the
+      // very same pair on copies afterwards.
       const target = solid;
       const coaxial = subtracting
         ? tryExactCoaxialCylinderCut(kernel, target, tool)
@@ -1408,8 +1420,20 @@ function buildBooleanFeature(
       solid =
         coaxial ??
         (subtracting
-          ? exactCut(kernel, target, tool, operandNames)
-          : exactIntersect(kernel, target, tool, operandNames));
+          ? exactCutWithCancellation(
+              kernel,
+              target,
+              tool,
+              ctx.cancellation,
+              operandNames
+            )
+          : exactIntersectWithCancellation(
+              kernel,
+              target,
+              tool,
+              ctx.cancellation,
+              operandNames
+            ));
       if (!pairwiseOperands) {
         probeDeclined = `The ${data.operation} reduced ${operands.length} operands in sequence; the entity-evolution entry points are pairwise.`;
       } else if (coaxial !== null) {
