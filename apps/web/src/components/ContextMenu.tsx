@@ -56,17 +56,24 @@ export function ContextMenu({
   const [position, setPosition] = useState({ x: menu.x, y: menu.y });
   useMenuKeyboard(ref);
 
-  // Keep the menu inside the window.
+  // Keep the menu inside the window, and inside it again when the window
+  // changes: an open menu used to stay where it opened, wholly outside a
+  // window narrowed under it, until it was dismissed and reopened.
   useLayoutEffect(() => {
     const element = ref.current;
     if (!element) {
       return;
     }
-    const rect = element.getBoundingClientRect();
-    setPosition({
-      x: Math.min(menu.x, window.innerWidth - rect.width - 8),
-      y: Math.min(menu.y, window.innerHeight - rect.height - 8)
-    });
+    const place = () => {
+      const rect = element.getBoundingClientRect();
+      setPosition({
+        x: Math.max(8, Math.min(menu.x, window.innerWidth - rect.width - 8)),
+        y: Math.max(8, Math.min(menu.y, window.innerHeight - rect.height - 8))
+      });
+    };
+    place();
+    window.addEventListener('resize', place);
+    return () => window.removeEventListener('resize', place);
   }, [menu]);
 
   useEffect(() => {

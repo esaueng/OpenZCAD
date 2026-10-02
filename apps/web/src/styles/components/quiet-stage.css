@@ -1864,6 +1864,22 @@ button.command-rail:disabled {
   left: calc(100% + var(--island-gap));
 }
 
+/* The menu's rows sit inside the rail, so the rail's 30px icon-button rule
+   (and its zero font size) reached them and squeezed each name and
+   description into a 30px column that spilled over the next row. They are
+   the full-width rows direct-manipulation.css lays out. */
+.workspace-column .sketch-rail .sketch-circle-menu button {
+  display: grid;
+  grid-template-columns: 20px minmax(0, 1fr);
+  place-items: center start;
+  gap: 8px;
+  width: 100%;
+  height: auto;
+  padding: 7px 8px;
+  font-size: var(--fs-xs);
+  text-align: left;
+}
+
 /* Finish is the column's foot, lit like the primary verb. */
 .workspace-column-footer {
   display: flex;

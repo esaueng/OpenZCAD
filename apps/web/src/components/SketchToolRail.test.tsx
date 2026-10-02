@@ -85,6 +85,44 @@ describe('SketchToolRail', () => {
     ).not.toBeInTheDocument();
   });
 
+  /**
+   * Production QA UI-09: Escape switched the drawing tool to Select but left
+   * the circle menu open, and opening the palette left it covering the
+   * palette's controls.
+   */
+  it('dismisses the circle menu predictably', async () => {
+    const user = userEvent.setup();
+    const { props, rerender } = renderRail();
+    const open = () =>
+      user.click(screen.getByRole('button', { name: 'Choose circle type' }));
+    const menu = () => screen.queryByRole('menu');
+
+    // Escape closes the menu alone: the sketch's own Escape never sees it.
+    const sketchEscape = vi.fn();
+    document.addEventListener('keydown', sketchEscape, true);
+    await open();
+    expect(menu()).toBeInTheDocument();
+    await user.keyboard('{Escape}');
+    expect(menu()).not.toBeInTheDocument();
+    expect(sketchEscape).not.toHaveBeenCalled();
+    await user.keyboard('{Escape}');
+    expect(sketchEscape).toHaveBeenCalledOnce();
+    document.removeEventListener('keydown', sketchEscape, true);
+
+    // A press anywhere else closes it.
+    await open();
+    await user.click(screen.getByRole('button', { name: 'Select' }));
+    expect(menu()).not.toBeInTheDocument();
+
+    // So do the palette opening and a tool change made by a key.
+    await open();
+    await user.click(screen.getByRole('button', { name: /Sketch palette/ }));
+    expect(menu()).not.toBeInTheDocument();
+    await open();
+    rerender(<SketchToolRail {...props} tool="line" />);
+    expect(menu()).not.toBeInTheDocument();
+  });
+
   it('keeps geometry and grid snapping independent', async () => {
     const user = userEvent.setup();
     const onSettings = vi.fn();
