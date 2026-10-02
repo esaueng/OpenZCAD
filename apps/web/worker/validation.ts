@@ -1,4 +1,8 @@
-import { assertDocumentHistory } from '@openzcad/shared';
+import {
+  assertDocumentHistory,
+  assertDocumentTextBudget,
+  hasValidImportedStepSources
+} from '@openzcad/shared';
 import {
   MAX_ARTIFACT_UPLOAD_PARTS,
   MAX_CHECKPOINT_REASON_LENGTH,
@@ -131,12 +135,18 @@ export function parseCreateProjectRequest(body: unknown): CreateProjectRequest {
     request.units = record.units as UnitSystem;
   }
   if (record.document !== undefined) {
-    // Adoption. The id comes from the document rather than the URL, which is
-    // the point — the device is asking to keep the id it already filed this
-    // project under.
+    // The device identity is a retry key; the client must understand how to
+    // transfer its local records to the returned account identity.
     const document = parseProjectDocument(record.document);
     assertDocumentWithinCeiling(document);
+    if (record.adoptionProtocolVersion !== 1) {
+      throw new HttpError(
+        409,
+        'Reload to update before saving this project to your account.'
+      );
+    }
     request.document = document;
+    request.adoptionProtocolVersion = 1;
   }
   return request;
 }
@@ -302,6 +312,18 @@ function parseProjectDocument(
     assertDocumentHistory(value as ProjectDocument);
   } catch {
     throw badRequest('Invalid or unsupported project undo history.');
+  }
+  try {
+    assertDocumentTextBudget(value as ProjectDocument);
+  } catch (error) {
+    throw badRequest(
+      error instanceof Error ? error.message : 'Invalid project text budget.'
+    );
+  }
+  // Undo and redo can restore imports that are absent from current nodes.
+  // Validate every copy before the document can be saved or shared.
+  if (!hasValidImportedStepSources(value as ProjectDocument)) {
+    throw badRequest('"document" has invalid imported STEP source data.');
   }
   return value as ProjectDocument;
 }

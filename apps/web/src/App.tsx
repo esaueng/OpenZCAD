@@ -12,13 +12,17 @@ import type {
   ParameterPreviewBody,
   parameterVisualPreview
 } from './lib/parameterVisualPreview';
+import type { AdoptLocalProjectResult } from './lib/projectIdentityTransfer';
 import { LatestTask } from './lib/latestTask';
 import { rebuildProgressLabel } from './lib/rebuildProgressLabel';
 import { featureHistory } from './lib/featureHistory';
 import { FeatureBuildError } from './lib/featureValidation';
 import { edgeModifierCommand } from './lib/edgeModifierEdit';
 import type { EdgeModifierFormValue } from './components/forms/FeatureForms';
-import { documentNodesWithHistory } from '@openzcad/shared';
+import {
+  documentNodesWithHistory,
+  documentTextBudgetError
+} from '@openzcad/shared';
 import { useWorkspaceResume } from './hooks/useWorkspaceResume';
 import { buildMeasurementRecord } from './lib/measurementRecord';
 import {
@@ -217,7 +221,6 @@ import type { SketchSolveStatus } from './components/SketchToolRail';
 import { ApiError, api, isProjectDocumentUnavailableError } from './lib/api';
 import {
   applyAccountSourceArchives,
-  archiveAccountImportSources,
   sourceUploadMessage
 } from './lib/accountImportSources';
 import {
@@ -515,11 +518,17 @@ import type {
   CommandDiagnostic,
   InteractionState
 } from './lib/interaction/machine';
-import { resolveFace } from './lib/topologyResolution';
-import { objectPolylines } from './lib/objectPolyline';
+import {
+  refreshEdgeFormReferencesForCommit,
+  resolveFace
+} from './lib/topologyResolution';
+import { useLineageDemand } from './lib/lineageDemand';
+import {
+  objectPolylines,
+  displayObjectsWithTextBudget
+} from './lib/objectPolyline';
 import type { RegionPickData } from './components/viewer/regionOverlay';
 import { CommandBar, type PaletteCommand } from './components/CommandBar';
-import { ShortcutsOverlay } from './components/ShortcutsOverlay';
 import { DISPLAY_MODE_LABELS } from './lib/displayMode';
 import { ContextMenu, type ContextMenuState } from './components/ContextMenu';
 import type { BodyFeatureIds } from '@openzcad/document-core';
@@ -642,6 +651,22 @@ const LazyMeasurementDock = lazyWithStaleChunkNotice(() =>
     default: module.MeasurementDock
   }))
 );
+// The "?" control reference opens only on request; lazy, it also takes its
+// keyboard/pointer reference tables off the entry chunk.
+const LazyShortcutsOverlay = lazyWithStaleChunkNotice(() =>
+  import('./components/ShortcutsOverlay').then((module) => ({
+    default: module.ShortcutsOverlay
+  }))
+);
+function ShortcutsOverlay(
+  props: ComponentProps<typeof LazyShortcutsOverlay>
+) {
+  return (
+    <Suspense fallback={null}>
+      <LazyShortcutsOverlay {...props} />
+    </Suspense>
+  );
+}
 // Operation help is only needed after the user starts a modeling action.
 const LazyToolCard = lazyWithStaleChunkNotice(() =>
   import('./components/ToolCard').then((module) => ({
@@ -1199,10 +1224,6 @@ const DISPLAY_MODE_ORDER: DisplayMode[] = [
   'wireframe'
 ];
 
-type AdoptLocalProjectResult =
-  | { state: 'adopted' | 'already-adopted' | 'missing'; sourceWarning?: string }
-  | { state: 'conflict'; conflict: ProjectConflict };
-
 interface OffsetEditPlan {
   command: AnyCommand;
   bodyId: BodyId;
@@ -1745,6 +1766,10 @@ export function App() {
   } | null>(null);
   // Named `doc` (not `document`) so the global DOM document is never shadowed.
   const [doc, setDoc] = useState<ProjectDocument | null>(null);
+  const textOutlineBudgetError = useMemo(
+    () => (doc ? documentTextBudgetError(doc) : null),
+    [doc]
+  );
   /** History pins a feature; viewport ownership is re-resolved after rebuilds. */
   const [selectedFeatureNode, setSelectedFeatureNode] = useState<{
     id: string;
@@ -3307,7 +3332,24 @@ export function App() {
     value: EdgeModifierFormValue
   ) {
     if (geometryBusy) return;
-    const command = edgeModifierCommand(feature, kind, value);
+    // K05 on-demand probe: a pick made before the demanded rebuild arrived
+    // carries no lineage name, so the form holds no `edgeReferences` at all
+    // (they are all-or-nothing). Re-read CURRENT lineage by hash at commit
+    // time and use it only when every picked edge resolves to a named
+    // reference for that same hash; otherwise commit exactly what the form
+    // holds.
+    const formBody =
+      representations[value.targetBodyId] ??
+      renderedRepresentations[value.targetBodyId];
+    const namedReferences = refreshEdgeFormReferencesForCommit(
+      formBody,
+      value.edgeHashes,
+      value.edgeReferences
+    );
+    const refreshedValue = namedReferences
+      ? { ...value, edgeReferences: namedReferences }
+      : value;
+    const command = edgeModifierCommand(feature, kind, refreshedValue);
     const bodyId =
       feature?.bodyId ??
       ('ids' in command.payload ? command.payload.ids?.bodyId : undefined);
@@ -4534,9 +4576,27 @@ export function App() {
     };
   }, [cloudProjectIds, doc?.projectId, session]);
 
+  // K05 on-demand boolean probe: sticky per open document, cleared on
+  // project switch. A face/edge/vertex pick on B — or a command started on
+  // B — demands lineage for B, so the next rebuild probes its producing
+  // boolean. Minimal App plumbing by design (other PRs edit this file):
+  // the sticky set lives in `useLineageDemand`, the sync carries it like
+  // `analysis`, and it never enters the document.
+  const lineageDemandSelections: TopologySelection[] = useMemo(
+    () => [...(selectedTopology ? [selectedTopology] : []), ...selectedEdges],
+    [selectedTopology, selectedEdges]
+  );
+  const { demand: lineageDemand } = useLineageDemand({
+    projectId: doc?.projectId,
+    selections: lineageDemandSelections,
+    interaction
+  });
   useEffect(() => {
-    geometry.sync(doc);
-  }, [doc]);
+    geometry.sync(doc, lineageDemand);
+    // `geometry` is stable across renders; re-sync when the demanded set
+    // grows so the probe runs without waiting for the next edit.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [doc, lineageDemand]);
 
   const features = useMemo<FeatureNode[]>(
     () => (doc ? listFeaturesInOrder(doc) : []),
@@ -7324,7 +7384,10 @@ export function App() {
     setViewerSettings({
       showGrid: appSettings.viewport.showGrid,
       displayMode: appSettings.viewport.displayMode,
-      reducedMotion: appSettings.appearance.reducedMotion
+      reducedMotion: appSettings.appearance.reducedMotion,
+      zoomToCursor: appSettings.viewport.zoomToCursor,
+      middleDrag: appSettings.viewport.middleDrag,
+      pointerNavigation: appSettings.viewport.pointerNavigation
     });
     setSettingsMessage('Viewport defaults applied to the current view.');
   }
@@ -7449,14 +7512,22 @@ export function App() {
     // lose the baseline (which forces conservative reconciliation), never put
     // the baseline ahead of the device copy.
     const currentManager = managerRef.current;
-    const current = currentManager?.document;
+    const live = currentManager?.document;
+    const current =
+      live?.projectId === merged.projectId
+        ? live
+        : await loadLocalProject(merged.projectId);
     const editedDuringSave =
       current?.projectId === merged.projectId &&
       current.version !== local.version;
     const durable = editedDuringSave
       ? applyAccountSourceArchives(current, merged)
       : merged;
-    if (editedDuringSave && currentManager && durable !== current) {
+    if (
+      editedDuringSave &&
+      currentManager?.document === current &&
+      durable !== current
+    ) {
       currentManager.document = durable;
       setDoc(durable);
     }
@@ -7493,151 +7564,26 @@ export function App() {
     return merged;
   }
 
-  async function finishAccountSourceSave(
-    document: ProjectDocument,
-    local: ProjectDocument,
-    summary: ProjectSummary = summarizeLocalDocument(document)
-  ): Promise<string | undefined> {
-    const projectId = document.projectId;
-    // Account creation establishes the upload destination. Source bytes must
-    // follow before the new account copy can be rebuilt on another device.
-    setStatus('Saving project source files to your account…');
-    const prepared = await archiveAccountImportSources(document, {
-      loadSourceBytes: loadSourceBlob,
-      archive: (input) =>
-        archiveArtifactBody(api, document.projectId, input, (artifact) => {
-          if (managerRef.current?.document.projectId === projectId)
-            setArtifacts((current) => [
-              artifact,
-              ...current.filter(
-                (item) => item.artifactId !== artifact.artifactId
-              )
-            ]);
-        })
-    });
-    let saved = document;
-    let localForAcceptance = local;
-    if (prepared.document !== document) {
-      // Keep completed upload metadata if the account write fails. Never
-      // replace edits made while the source transfers were in flight.
-      const current = managerRef.current;
-      if (
-        current?.document.projectId !== projectId ||
-        current.document.version === local.version
-      ) {
-        await saveLocalProject(prepared.document);
-        if (
-          managerRef.current === current &&
-          !cloudProjectIds.has(projectId) &&
-          current?.document.projectId === projectId &&
-          current.document.version === local.version
-        ) {
-          current.document = prepared.document;
-          localForAcceptance = prepared.document;
-          setDoc(prepared.document);
-        }
-      }
-      const stored = await api.saveProjectDocument({
-        projectId: prepared.document.projectId,
-        expectedVersion: document.version,
-        document: withoutDerivedProjection(prepared.document)
-      });
-      saved = { ...prepared.document, version: stored.version };
-    }
-    await acceptAccountDocument(saved, localForAcceptance, {
-      ...summary,
-      documentVersion: saved.version
-    });
-    return sourceUploadMessage(prepared.result) ?? undefined;
-  }
-
-  /**
-   * Gives one device-local project an account record, keeping its id so the
-   * device's own copy and shelf state stay pointed at the same project.
-   *
-   * Returns whether anything changed rather than reporting status itself: the
-   * bulk path has to summarize many of these, and one line per project would
-   * bury the result.
-   */
+  /** Saves one device project and reconciles retry responses against its account ID. */
   async function adoptLocalProject(
     projectId: string
   ): Promise<AdoptLocalProjectResult> {
-    const local = await loadLocalProject(projectId);
-    if (!local) {
-      return { state: 'missing' };
-    }
-    try {
-      const response = await api.adoptProject(local);
-      return {
-        state: 'adopted',
-        sourceWarning: await finishAccountSourceSave(
-          response.document,
-          local,
-          response.project
-        )
-      };
-    } catch (error) {
-      if (error instanceof ApiError && error.code === 'ALREADY_ADOPTED') {
-        // A lost adoption response and a genuinely pre-existing account copy
-        // produce the same 409. Fetch the actual document and reconcile it;
-        // merely painting the cloud badge here would claim agreement without
-        // ever comparing the work.
-        const [remote, lastSyncedVersion] = await Promise.all([
-          api.loadProject(projectId),
-          loadLastSyncedVersion(projectId)
-        ]);
-        remoteVersionsRef.current.set(projectId, remote.version);
-        setCloudProjectIds((current) => new Set(current).add(projectId));
-        const outcome = chooseProjectDocument(local, remote, lastSyncedVersion);
-        if (outcome.choice === 'diverged') {
-          return {
-            state: 'conflict',
-            conflict: conflictFromDocuments(
-              outcome.local,
-              outcome.remote,
-              'account'
-            )
-          };
-        }
-        if (outcome.choice === 'remote') {
-          return {
-            state: 'already-adopted',
-            sourceWarning: await finishAccountSourceSave(
-              outcome.document,
-              local
-            )
-          };
-        }
-        if (outcome.choice === 'local') {
-          // The baseline proves only this device moved. Complete the interrupted
-          // sync with a fenced document write rather than asking the user to
-          // resolve a conflict that does not exist.
-          const candidate = {
-            ...outcome.document,
-            ownerUserId: remote.ownerUserId
-          };
-          const saved = await api.saveProjectDocument({
-            projectId: candidate.projectId,
-            expectedVersion: remote.version,
-            document: withoutDerivedProjection(candidate)
-          });
-          const sourceWarning = await finishAccountSourceSave(
-            {
-              ...candidate,
-              version: saved.version,
-              derived: {
-                ...candidate.derived,
-                updatedAt: saved.updatedAt
-              }
-            },
-            local
-          );
-          return { state: 'already-adopted', sourceWarning };
-        }
-        return { state: 'missing' };
-      }
-      throw error;
-    }
+    // Loaded on demand: only saving a device project to the account gets here.
+    const { adoptLocalProject: adopt } =
+      await import('./lib/projectIdentityTransfer');
+    return adopt(projectId, {
+      localUserId,
+      manager: () => managerRef.current,
+      setDoc,
+      remoteVersions: remoteVersionsRef.current,
+      setProjects,
+      setArtifacts,
+      setCloudProjectIds,
+      cloudProjectIds,
+      setStatus,
+      summarize: summarizeLocalDocument,
+      acceptAccountDocument
+    });
   }
 
   async function handleSaveToAccount(
@@ -11362,7 +11308,10 @@ export function App() {
       holes: { x: number; y: number }[][];
     }[] = [];
     try {
-      profiles = computeSketchRegions(objects, resolve).map((profile) => ({
+      profiles = computeSketchRegions(
+        displayObjectsWithTextBudget(objects, textOutlineBudgetError),
+        resolve
+      ).map((profile) => ({
         outer: profile.outer.polyline,
         holes: profile.holes.map((hole) => hole.polyline)
       }));
@@ -11406,6 +11355,7 @@ export function App() {
       selectedObjectId: session.selectedObjectId,
       parameterScope: parameterScope.scope,
       constraintDiagnosticObjectIds: sketchSolveDiagnosticObjectIds,
+      textOutlineBudgetError,
       definedObjectIds: sketchDefinedObjectIds,
       dimensions: sketchDimensionAnnotations(
         objects,
@@ -11424,6 +11374,7 @@ export function App() {
     parameterScope.scope,
     sketchDiagnosticPoints,
     sketchSolveDiagnosticObjectIds,
+    textOutlineBudgetError,
     sketchDefinedObjectIds
   ]);
 
@@ -12750,18 +12701,22 @@ export function App() {
       }
       const curves = active
         ? []
-        : objects.flatMap((object) => {
-            try {
-              // A text object draws one run per glyph region plus one per
-              // counter, so this is many runs from one object.
-              return objectPolylines(object.data, resolve).map((polyline) => ({
-                ...polyline,
-                construction: object.data.construction === true
-              }));
-            } catch {
-              return [];
+        : displayObjectsWithTextBudget(objects, textOutlineBudgetError).flatMap(
+            (object) => {
+              try {
+                // A text object draws one run per glyph region plus one per
+                // counter, so this is many runs from one object.
+                return objectPolylines(object.data, resolve).map(
+                  (polyline) => ({
+                    ...polyline,
+                    construction: object.data.construction === true
+                  })
+                );
+              } catch {
+                return [];
+              }
             }
-          });
+          );
       let regions: {
         profileId: string;
         regionFingerprint: number;
@@ -12777,19 +12732,20 @@ export function App() {
         holes: { x: number; y: number }[][];
       }[] = [];
       try {
-        regions = computeSketchRegions(objects, (value) => resolve(value)).map(
-          (region) => ({
-            profileId: region.profileId,
-            regionFingerprint: region.regionFingerprint,
-            samplePoint: region.samplePoint,
-            centroid: region.centroid,
-            boundingBox: region.boundingBox,
-            sourceEntityIds: region.sourceEntityIds,
-            area: region.area,
-            outer: region.outer.polyline,
-            holes: region.holes.map((hole) => hole.polyline)
-          })
-        );
+        regions = computeSketchRegions(
+          displayObjectsWithTextBudget(objects, textOutlineBudgetError),
+          (value) => resolve(value)
+        ).map((region) => ({
+          profileId: region.profileId,
+          regionFingerprint: region.regionFingerprint,
+          samplePoint: region.samplePoint,
+          centroid: region.centroid,
+          boundingBox: region.boundingBox,
+          sourceEntityIds: region.sourceEntityIds,
+          area: region.area,
+          outer: region.outer.polyline,
+          holes: region.holes.map((hole) => hole.polyline)
+        }));
       } catch {
         // Unresolvable sketches simply render without pickable regions.
       }
@@ -12814,6 +12770,7 @@ export function App() {
     // after this memo last ran has to re-run it or the glyph stays a
     // diagnostic until something unrelated invalidates the memo.
     textFontsVersion,
+    textOutlineBudgetError,
     hiddenSketchIds,
     modelingEditFeature
   ]);
@@ -13842,9 +13799,22 @@ export function App() {
     const edgeHashes = edges
       .map((edge) => edge.hash)
       .filter((hash): hash is number => hash !== undefined);
-    const edgeReferences = edges.flatMap((edge) =>
+    // K05 on-demand probe: a pick made before the demanded rebuild arrives
+    // carries a hash-only reference. Re-read the CURRENT published topology
+    // at commit time by hash/topology id; fail closed to the stale
+    // reference when the name is not unambiguous.
+    const currentBody = bodyId
+      ? (representations[bodyId] ?? renderedRepresentations[bodyId])
+      : undefined;
+    const pickedReferences = edges.flatMap((edge) =>
       edge.reference?.kind === 'edge' ? [edge.reference] : []
     );
+    const edgeReferences =
+      refreshEdgeFormReferencesForCommit(
+        currentBody,
+        edgeHashes,
+        pickedReferences
+      ) ?? pickedReferences;
     if (!bodyId || edgeHashes.length === 0) {
       return null;
     }
@@ -15505,7 +15475,11 @@ export function App() {
    * they need to reach.
    */
   const workspaceInputEnabled =
-    !settingsOpen && !sharingOpen && !pendingShaprImport && !meshExportOpen;
+    !settingsOpen &&
+    !sharingOpen &&
+    !pendingShaprImport &&
+    !meshExportOpen &&
+    !pendingFeatureDelete;
   exactEntryInputEnabledRef.current =
     workspaceInputEnabled && !paletteOpen && !shortcutsOpen && !namingSave;
 
@@ -16137,11 +16111,13 @@ export function App() {
               ? 'showing the previous result until it finishes'
               : 'no exact projection is available yet'
         };
-  const visibleStatus = parameterPreview
-    ? `Parameter preview · ${parameterEditPending ? status : parameterDraftActive ? 'Press Enter to apply; Escape to cancel' : 'exact geometry rebuilding'}`
-    : status;
+  const visibleStatus = textOutlineBudgetError
+    ? `Text outlines refused: ${textOutlineBudgetError}`
+    : parameterPreview
+      ? `Parameter preview · ${parameterEditPending ? status : parameterDraftActive ? 'Press Enter to apply; Escape to cancel' : 'exact geometry rebuilding'}`
+      : status;
   const tone: 'ready' | 'warning' | 'running' =
-    geometry.state.phase === 'failed'
+    textOutlineBudgetError || geometry.state.phase === 'failed'
       ? 'warning'
       : !exactGeometryReady
         ? 'running'

@@ -113,7 +113,7 @@ function blindHoleGraph(sweepRadians = Math.PI * 2): ExactGraph {
     .add(cylinder('wall', 2, 0, 5, 'toward-axis', sweepRadians))
     .add(plane('opening', 0, 100))
     .add(plane('bottom', 5, Math.PI * 4))
-    .link('wall', 'opening', 'concave', 'circle', true)
+    .link('wall', 'opening', 'convex', 'circle', true)
     .link('wall', 'bottom', 'concave', 'circle', true);
 }
 
@@ -138,9 +138,9 @@ describe('recognizeImportedFeature', () => {
       .add(plane('opening', 0, 200))
       .add(plane('step', 2, Math.PI * 12))
       .add(plane('bottom', 8, Math.PI * 4))
-      .link('outer', 'opening', 'concave', 'circle', true)
+      .link('outer', 'opening', 'convex', 'circle', true)
       .link('outer', 'step', 'concave', 'circle', true)
-      .link('inner', 'step', 'concave', 'circle', true)
+      .link('inner', 'step', 'convex', 'circle', true)
       .link('inner', 'bottom', 'concave', 'circle', true);
 
     for (const seed of ['outer', 'inner']) {
@@ -178,10 +178,10 @@ describe('recognizeImportedFeature', () => {
       .add(plane('opening', 0, 200))
       .add(plane('step', 3, Math.PI * 12))
       .add(plane('bottom', 8, Math.PI * 4))
-      .link('entry-chamfer', 'opening', 'concave', 'circle', true)
-      .link('entry-chamfer', 'outer', 'concave', 'circle', true)
+      .link('entry-chamfer', 'opening', 'convex', 'circle', true)
+      .link('entry-chamfer', 'outer', 'convex', 'circle', true)
       .link('outer', 'step', 'concave', 'circle', true)
-      .link('inner', 'step', 'concave', 'circle', true)
+      .link('inner', 'step', 'convex', 'circle', true)
       .link('inner', 'bottom', 'concave', 'circle', true);
 
     for (const seed of ['outer', 'inner']) {
@@ -224,8 +224,8 @@ describe('recognizeImportedFeature', () => {
       .add(cylinder('hole', 2, 2, 8, 'toward-axis'))
       .add(plane('opening', 0, 200))
       .add(plane('bottom', 8, Math.PI * 4))
-      .link('sink', 'opening', 'concave', 'circle', true)
-      .link('sink', 'hole', 'concave', 'circle', true)
+      .link('sink', 'opening', 'convex', 'circle', true)
+      .link('sink', 'hole', 'convex', 'circle', true)
       .link('hole', 'bottom', 'concave', 'circle', true);
 
     for (const seed of ['sink', 'hole']) {
@@ -247,7 +247,7 @@ describe('recognizeImportedFeature', () => {
       .add(cylinder('wall', 3, 0, 4, 'away-from-axis'))
       .add(plane('support', 0, 100))
       .add(plane('cap', 4, Math.PI * 9))
-      .link('wall', 'support', 'convex', 'circle', true)
+      .link('wall', 'support', 'concave', 'circle', true)
       .link('wall', 'cap', 'convex', 'circle', true);
 
     expect(expectRecognized(graph, 'wall').proof).toMatchObject({
@@ -418,7 +418,7 @@ describe('recognizeImportedFeature', () => {
     const incomplete = new ExactGraph()
       .add(cylinder('wall', 2, 0, 5, 'toward-axis'))
       .add(plane('opening', 0, 100))
-      .link('wall', 'opening', 'concave', 'circle', true);
+      .link('wall', 'opening', 'convex', 'circle', true);
     expect(recognizeImportedFeature(incomplete, 'wall')).toMatchObject({
       status: 'unsupported',
       reason: 'incomplete-proof'

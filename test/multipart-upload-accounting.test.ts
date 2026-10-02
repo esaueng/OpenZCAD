@@ -305,7 +305,7 @@ let service: D1R2PersistenceService;
 
 beforeEach(() => {
   sqlite = new DatabaseSync(':memory:');
-  applyMigrations(sqlite, 22);
+  applyMigrations(sqlite, 23);
   seedAccount(sqlite, OWNER, PROJECT);
   seedAccount(sqlite, OTHER_OWNER, OTHER_PROJECT);
   d1 = new SqliteD1(sqlite);
