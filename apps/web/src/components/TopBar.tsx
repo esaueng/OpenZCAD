@@ -213,14 +213,44 @@ export function TopBar({
       }
     }
 
+    // Escape closes it like any other menu, handing focus back to its
+    // button. It used to ignore the key and stay open.
+    function closeFileMenuOnEscape(event: KeyboardEvent) {
+      const fileMenu = fileMenuRef.current;
+      if (event.key !== 'Escape' || !fileMenu?.open) {
+        return;
+      }
+      event.stopPropagation();
+      fileMenu.open = false;
+      if (fileMenu.contains(document.activeElement)) {
+        fileMenu.querySelector('summary')?.focus();
+      }
+    }
+
     document.addEventListener('pointerdown', closeFileMenuOnOutsidePointer);
+    // Capture, so the workspace's own Escape (clear the selection) waits for
+    // the next press rather than doing both at once.
+    document.addEventListener('keydown', closeFileMenuOnEscape, true);
     return () => {
       document.removeEventListener(
         'pointerdown',
         closeFileMenuOnOutsidePointer
       );
+      document.removeEventListener('keydown', closeFileMenuOnEscape, true);
     };
   }, []);
+
+  /**
+   * Export Mesh… opens a dialog, and the menu stayed open underneath it,
+   * still showing when the dialog closed. Items that act in place (a STEP
+   * download, the stored-file list) keep the menu open as before.
+   */
+  function openMeshExportFromMenu() {
+    if (fileMenuRef.current) {
+      fileMenuRef.current.open = false;
+    }
+    onOpenMeshExport();
+  }
 
   function beginProjectRename() {
     if (!projectName || !canRenameProject) {
@@ -522,7 +552,7 @@ export function TopBar({
                 className="topbar-menu-item"
                 disabled={!canExport}
                 title={exportTitle('3MF, STL, OBJ or glTF')}
-                onClick={onOpenMeshExport}
+                onClick={openMeshExportFromMenu}
               >
                 <Download size={13} aria-hidden="true" />
                 <span>Export Mesh…</span>

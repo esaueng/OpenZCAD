@@ -198,6 +198,17 @@
   transform: none;
 }
 
+/* The section controls open to the rail's left, over the lane. A command
+   card or a tool's create card there is what the user is working in, so the
+   section panel steps aside while one is up and returns when it closes; the
+   cut itself stays on. It used to draw over the Shell, Mirror and Pattern
+   cards opened after it. */
+.viewer-area:is(.has-command, .inspector-owns-lane)
+  .instrument-rail
+  .rail-section-panel {
+  display: none;
+}
+
 .instrument-rail .rail-views-panel {
   top: -4px;
   bottom: auto;
@@ -266,6 +277,16 @@
    holding its floor and squeezing the card's form out of reach. */
 .viewer-area.has-command .stage-right > .model-drawer-float {
   min-height: 0;
+}
+
+/* A tool's create card in the inspector is a command too: it keeps its full
+   height and the drawer gives way under it, down to nothing, instead of
+   holding a 180px floor and squeezing the card's Create button and its
+   refusal below the fold. */
+.viewer-area.inspector-owns-lane .stage-right > .model-drawer-float {
+  min-height: 0;
+  margin-bottom: 0;
+  overflow: hidden;
 }
 
 /* shell.css draws the inspector as its own overlay; in the lane it follows
