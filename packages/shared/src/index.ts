@@ -1,5 +1,6 @@
 export * from './workspace-resume';
 export * from './document-history';
+export * from './sketch-reference-dimensions';
 import type { DocumentHistory } from './document-history';
 export type Brand<T, Name extends string> = T & { readonly __brand: Name };
 
@@ -15,6 +16,10 @@ export type RevisionId = Brand<string, 'RevisionId'>;
 export type UploadSessionId = Brand<string, 'UploadSessionId'>;
 export type AssetId = Brand<string, 'AssetId'>;
 export type SketchConstraintId = Brand<string, 'SketchConstraintId'>;
+export type SketchReferenceAnnotationId = Brand<
+  string,
+  'SketchReferenceAnnotationId'
+>;
 export type ShaprImportId = Brand<string, 'ShaprImportId'>;
 
 export const PROJECT_DOCUMENT_SCHEMA_VERSION = 15 as const;
@@ -501,8 +506,24 @@ export interface SketchNode extends BaseNode {
    * Plane-local offsets for driving-dimension labels. The offset is relative
    * to the derived geometric anchor, so parameter edits move the label with
    * its dimension while preserving the user's decluttering choice.
+   *
+   * The map is string-keyed presentation state shared by S01 driving rows
+   * (keyed by `constraintId`) and S02 reference rows (keyed by
+   * `annotationId`). Callers must use an explicit {@link SketchDimensionIdentity};
+   * a bare string must never be resolved by searching both arrays.
    */
   dimensionLabelPositions?: Record<string, SketchDimensionLabelPosition>;
+  /**
+   * Saved reference (driven) dimensions. Schema v15, additive: absent means
+   * no reference dimensions, so every earlier document replays untouched and
+   * a document without reference dimensions serializes byte-identically.
+   *
+   * A reference row owns an `annotationId`, stores only target identity, and
+   * derives its measured value from current sketch geometry. It never enters
+   * GCS, never changes a `SketchObjectData` field, and never becomes a
+   * constraint through a click or a label drag.
+   */
+  referenceDimensions?: SketchReferenceDimension[];
 }
 
 export interface SketchDimensionLabelPosition {
@@ -572,6 +593,44 @@ export interface SketchConstraint {
   constraintId: SketchConstraintId;
   data: SketchConstraintData;
 }
+
+/**
+ * Target identity for an S02 reference (driven) dimension. The first slice
+ * supports primitive sketch identities only: line endpoints, circle/arc
+ * centers, and arc start/end points for distance; circles and arcs for
+ * radius; line objects only for angle. Rectangle and polygon composite refs
+ * wait for S04; datum/world-space targets wait for R01.
+ */
+export type SketchReferenceDimensionData =
+  | { dimensionKind: 'distance'; a: SketchPointRef; b: SketchPointRef }
+  | { dimensionKind: 'radius'; objectId: EntityId }
+  | { dimensionKind: 'angle'; a: EntityId; b: EntityId };
+
+/**
+ * A saved sketch annotation. It owns an `annotationId`, stores only target
+ * identity, and derives a measured value from the current sketch geometry.
+ * It carries no authored numeric value and no `ParamValue` field, so a stale
+ * saved number can never be mistaken for current geometry and the record is
+ * incapable of constraining the model by deserialization alone.
+ *
+ * The id is created once, retained when the target's parameters move, and
+ * supplied again on command replay. It is never derived from target order or
+ * the current numeric result.
+ */
+export interface SketchReferenceDimension {
+  annotationId: SketchReferenceAnnotationId;
+  data: SketchReferenceDimensionData;
+}
+
+/**
+ * Explicit tagged identity for a dimension label or list row when driving
+ * constraints and reference annotations appear together. `constraintId`
+ * remains reserved for `SketchConstraint`; `annotationId` is reserved for
+ * `SketchReferenceDimension`.
+ */
+export type SketchDimensionIdentity =
+  | { kind: 'constraint'; constraintId: SketchConstraintId }
+  | { kind: 'reference'; annotationId: SketchReferenceAnnotationId };
 
 export type SketchObjectData = (
   | {
@@ -3154,6 +3213,9 @@ export const toUserId = (value: string): UserId => value as UserId;
 export const toAssetId = (value: string): AssetId => value as AssetId;
 export const toSketchConstraintId = (value: string): SketchConstraintId =>
   value as SketchConstraintId;
+export const toSketchReferenceAnnotationId = (
+  value: string
+): SketchReferenceAnnotationId => value as SketchReferenceAnnotationId;
 export const toShaprImportId = (value: string): ShaprImportId =>
   value as ShaprImportId;
 
