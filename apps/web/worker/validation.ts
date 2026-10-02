@@ -1,4 +1,8 @@
-import { assertDocumentHistory } from '@openzcad/shared';
+import {
+  assertDocumentHistory,
+  assertDocumentTextBudget,
+  hasValidImportedStepSources
+} from '@openzcad/shared';
 import {
   MAX_ARTIFACT_UPLOAD_PARTS,
   MAX_CHECKPOINT_REASON_LENGTH,
@@ -308,6 +312,18 @@ function parseProjectDocument(
     assertDocumentHistory(value as ProjectDocument);
   } catch {
     throw badRequest('Invalid or unsupported project undo history.');
+  }
+  try {
+    assertDocumentTextBudget(value as ProjectDocument);
+  } catch (error) {
+    throw badRequest(
+      error instanceof Error ? error.message : 'Invalid project text budget.'
+    );
+  }
+  // Undo and redo can restore imports that are absent from current nodes.
+  // Validate every copy before the document can be saved or shared.
+  if (!hasValidImportedStepSources(value as ProjectDocument)) {
+    throw badRequest('"document" has invalid imported STEP source data.');
   }
   return value as ProjectDocument;
 }

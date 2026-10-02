@@ -1,5 +1,7 @@
 export * from './workspace-resume';
 export * from './document-history';
+export * from './textLimits';
+export * from './imported-step-source';
 export * from './sketch-reference-dimensions';
 export * from './mass-density';
 import type { DocumentHistory } from './document-history';
