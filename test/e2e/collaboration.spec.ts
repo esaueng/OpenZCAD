@@ -713,6 +713,10 @@ test('signs in with an email code only when cloud profile access is requested', 
   await page.getByRole('button', { name: 'Account', exact: true }).click();
   await expect(page.getByText('Email sign-in', { exact: true })).toBeVisible();
   await expect(page.getByText('Security check complete.')).toBeVisible();
+  await expect(page.getByLabel('Email address')).toHaveAttribute(
+    'type',
+    'password'
+  );
   await page.getByLabel('Email address').fill('maker@example.com');
   await expect(
     page.getByRole('button', { name: 'Email me a code' })
@@ -720,6 +724,14 @@ test('signs in with an email code only when cloud profile access is requested', 
   await page.getByRole('button', { name: 'Email me a code' }).click();
 
   await expect(page.getByText('Enter the email code')).toBeVisible();
+  await expect(
+    page.getByRole('dialog', { name: 'Settings' })
+  ).not.toContainText('maker@example.com');
+  await page.getByRole('button', { name: 'Show personal info' }).click();
+  await expect(page.getByRole('dialog', { name: 'Settings' })).toContainText(
+    'maker@example.com'
+  );
+  await page.getByRole('button', { name: 'Hide personal info' }).click();
   await page.getByLabel('Email sign-in code').fill('000000');
   await page.getByRole('button', { name: 'Sign in' }).click();
   await expect(page.locator('.settings-save-message')).toContainText(
@@ -747,7 +759,10 @@ test('signs in with an email code only when cloud profile access is requested', 
     page
       .locator('.setting-row', { has: signOut })
       .locator('.setting-title strong')
-  ).toHaveText('maker@example.com');
+  ).toHaveText('Name hidden');
+  await expect(page.locator('.settings-save-message')).not.toContainText(
+    'maker@example.com'
+  );
   // The fixture advertises an unsynced account copy, so sign-in first uploads
   // the device settings before the explicit preference change below.
   await expect.poll(emailApi.settingsUpdateCount).toBe(1);
