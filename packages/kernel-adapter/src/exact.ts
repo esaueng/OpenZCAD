@@ -197,6 +197,12 @@ import {
 } from './exact-history-cache';
 import { PrimitiveBuildCache } from './exact-primitive-cache';
 export type { RebuildCacheEvent };
+export {
+  booleanEvolutionProbeNeeded,
+  booleanLineageDemandKey,
+  normalizeBooleanLineageDemand,
+  type BooleanLineageDemand
+} from './exact-boolean-evolution';
 import { readBodyMassProperties } from './body-properties';
 import {
   inspectTriangleMeshClosure,
@@ -534,11 +540,17 @@ export interface ExactKernelAdapter {
     onProjection?: (derived: DerivedState) => void,
     analysis?: EditAnalysisRequest,
     /**
-     * Cooperative cancel for a superseded rebuild. Checked after the
-     * pre-build awaits and at each feature boundary; a fired signal rejects
-     * with the typed `cancelled` refusal and commits nothing.
+     * Per-sync options. `cancellation` is a cooperative cancel for a
+     * superseded rebuild: checked after the pre-build awaits and at each
+     * feature boundary; a fired signal rejects with the typed `cancelled`
+     * refusal and commits nothing. `lineageDemand` is the transient set of
+     * bodies whose producing booleans must run the evolution probe; it keys
+     * the history digest and never reaches the document.
      */
-    options?: { cancellation?: BuildCancellationSignal }
+    options?: {
+      cancellation?: BuildCancellationSignal;
+      lineageDemand?: readonly BodyId[] | ReadonlySet<BodyId>;
+    }
   ): Promise<DerivedState>;
   /** Epoch of the most recent live sync, or null after its handles were retired. */
   currentMassPropertiesEpoch(): number | null;
@@ -1005,6 +1017,7 @@ export class RemusKernelAdapter implements ExactKernelAdapter {
     pinnedImports: ReadonlySet<string>,
     onProgress?: RebuildProgressListener,
     onProjection?: (derived: DerivedState) => void,
+    lineageDemand?: readonly BodyId[] | ReadonlySet<BodyId>,
     cancellation?: BuildCancellationSignal
   ): {
     kernel: RemusKernel;
@@ -1033,9 +1046,21 @@ export class RemusKernelAdapter implements ExactKernelAdapter {
     const scope = cachingEnabled
       ? getParameterScope(document).scope
       : undefined;
+    const normalizedDemand =
+      lineageDemand === undefined
+        ? undefined
+        : lineageDemand instanceof Set
+          ? lineageDemand
+          : new Set(lineageDemand);
     const digests = cachingEnabled
       ? features.map((feature, index) =>
-          historyFeatureDigest(document, feature, index, scope)
+          historyFeatureDigest(
+            document,
+            feature,
+            index,
+            scope,
+            normalizedDemand
+          )
         )
       : [];
 
@@ -1294,7 +1319,8 @@ export class RemusKernelAdapter implements ExactKernelAdapter {
                 )
             }
           : undefined,
-        cancellation
+        cancellation,
+        normalizedDemand
       );
     } catch (error) {
       // A cancelled build keeps the retained prefix: the checkpoints pushed
@@ -1799,7 +1825,10 @@ export class RemusKernelAdapter implements ExactKernelAdapter {
     onProgress?: RebuildProgressListener,
     onProjection?: (derived: DerivedState) => void,
     analysis?: EditAnalysisRequest,
-    options?: { cancellation?: BuildCancellationSignal }
+    options?: {
+      cancellation?: BuildCancellationSignal;
+      lineageDemand?: readonly BodyId[] | ReadonlySet<BodyId>;
+    }
   ): Promise<DerivedState> {
     return this.syncMeasuredDocument(
       document,
@@ -1807,6 +1836,7 @@ export class RemusKernelAdapter implements ExactKernelAdapter {
       onProjection,
       analysis,
       true,
+      options?.lineageDemand,
       options?.cancellation
     );
   }
@@ -1817,6 +1847,7 @@ export class RemusKernelAdapter implements ExactKernelAdapter {
     onProjection?: (derived: DerivedState) => void,
     analysis?: EditAnalysisRequest,
     allowRecovery = true,
+    lineageDemand?: readonly BodyId[] | ReadonlySet<BodyId>,
     cancellation?: BuildCancellationSignal
   ): Promise<DerivedState> {
     if (
@@ -1862,6 +1893,7 @@ export class RemusKernelAdapter implements ExactKernelAdapter {
         pinned,
         onProgress,
         onProjection,
+        lineageDemand,
         cancellation
       );
       historyDone();
@@ -2171,6 +2203,7 @@ export class RemusKernelAdapter implements ExactKernelAdapter {
           onProjection,
           analysis,
           false,
+          lineageDemand,
           cancellation
         );
       }
