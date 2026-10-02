@@ -69,32 +69,19 @@ function respawnBudget(phase: GeometryWorkerPhase): number | null {
 
 /**
  * Shared posting discipline for broadcast syncs: dedupe per project/version
- * (+ lineage demand) so a rebuild storm cannot loop, and record the key so
- * a respawn can tell what the replacement worker still owes. Every post
- * also re-arms the watchdog. Lineage demand is UI state that forces a
- * boolean probe; it rides the sync request like `analysis` and never enters
- * the document.
+ * (+ lineage demand) so a rebuild storm cannot loop, and record the key so a
+ * respawn can tell what the replacement worker still owes. Every post also
+ * re-arms the watchdog.
  */
-export function lineageDemandSyncKey(
-  demand: readonly BodyId[] | ReadonlySet<BodyId> | undefined
-): string {
-  if (!demand) {
-    return '';
-  }
-  const ids = Array.isArray(demand) ? demand : [...demand];
-  const normalized = [...new Set(ids)].sort();
-  return normalized.length > 0 ? `:demand:${JSON.stringify(normalized)}` : '';
-}
-
 function postSync(
   worker: Worker,
   document: ProjectDocument,
   lastSyncedKey: { current: string | null },
   armed: { current: boolean },
-  lineageDemand?: readonly BodyId[] | ReadonlySet<BodyId>
+  // Sorted and unique, as `useLineageDemand` hands it over.
+  lineageDemand: readonly BodyId[] = []
 ): void {
-  const demandKey = lineageDemandSyncKey(lineageDemand);
-  const syncKey = `${document.projectId}:${document.version}${demandKey}`;
+  const syncKey = `${document.projectId}:${document.version}:${lineageDemand.join()}`;
   if (lastSyncedKey.current === syncKey) {
     return;
   }
@@ -105,11 +92,7 @@ function postSync(
   worker.postMessage({
     type: 'sync',
     document: documentForWorker(document),
-    lineageDemand: [
-      ...(lineageDemand instanceof Set
-        ? lineageDemand
-        : new Set(lineageDemand ?? []))
-    ].sort()
+    lineageDemand: [...lineageDemand]
   });
 }
 
@@ -148,7 +131,7 @@ export interface GeometryWorkerApi {
    */
   sync(
     document: ProjectDocument | null,
-    lineageDemand?: readonly BodyId[] | ReadonlySet<BodyId>
+    lineageDemand?: readonly BodyId[]
   ): void;
   /**
    * One-off exact rebuild resolved by request id — used for seeding demo
@@ -158,7 +141,7 @@ export interface GeometryWorkerApi {
   syncOnce(
     document: ProjectDocument,
     analysis?: EditAnalysisRequest,
-    lineageDemand?: readonly BodyId[] | ReadonlySet<BodyId>
+    lineageDemand?: readonly BodyId[]
   ): Promise<DerivedState>;
   /**
    * `onState` receives this request's own lifecycle states (kernel load,
@@ -728,9 +711,7 @@ export function useGeometryWorker(host: GeometryWorkerHost): GeometryWorkerApi {
         return;
       }
       if (lineageDemand !== undefined) {
-        const normalized =
-          lineageDemand instanceof Set ? [...lineageDemand] : [...lineageDemand];
-        lastDemandRef.current = [...new Set(normalized)].sort() as BodyId[];
+        lastDemandRef.current = lineageDemand;
       }
       postSync(
         worker,
@@ -744,21 +725,11 @@ export function useGeometryWorker(host: GeometryWorkerHost): GeometryWorkerApi {
       // One-off rebuilds (previews, preflights, demo seeding, AI proposals)
       // read lineage straight from the result, so they get full lineage by
       // default. Only an explicit demand opts one into the idle skip.
-      const explicit: BodyId[] | undefined =
-        lineageDemand === undefined
-          ? undefined
-          : [
-              ...new Set<BodyId>(
-                lineageDemand instanceof Set
-                  ? [...lineageDemand]
-                  : [...lineageDemand]
-              )
-            ].sort();
       const posted = postRequest(syncRequests.current, {
         type: 'sync',
         document: documentForWorker(document),
         ...(analysis ? { analysis } : {}),
-        ...(explicit ? { lineageDemand: explicit } : {})
+        ...(lineageDemand ? { lineageDemand: [...lineageDemand] } : {})
       });
       return posted.ok
         ? posted.promise

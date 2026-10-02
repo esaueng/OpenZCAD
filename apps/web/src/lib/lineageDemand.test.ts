@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { renderHook, act } from '@testing-library/react';
+import { renderHook } from '@testing-library/react';
 import { toBodyId } from '@openzcad/shared';
 import type { TopologySelection } from '@openzcad/shared';
 import {
@@ -41,10 +41,7 @@ describe('lineageDemand helpers', () => {
     expect(demandedBodiesForSelections(edgeOn(bodyA))).toEqual([bodyA]);
     expect(demandedBodiesForSelections(faceOn(bodyB))).toEqual([bodyB]);
     expect(
-      demandedBodiesForSelections([
-        edgeOn(bodyA, 11),
-        faceOn(bodyA, 21)
-      ])
+      demandedBodiesForSelections([edgeOn(bodyA, 11), faceOn(bodyA, 21)])
     ).toEqual([bodyA]);
     expect(
       demandedBodiesForSelections({ bodyId: bodyA, kind: 'body' })
@@ -108,9 +105,8 @@ describe('useLineageDemand', () => {
     rerender({ projectId: 'project-2', selections: [] });
     expect(result.current.demand).toEqual([]);
 
-    act(() => {
-      result.current.addBodies([bodyB]);
-    });
+    // And grows again from empty in the new document.
+    rerender({ projectId: 'project-2', selections: [edgeOn(bodyB)] });
     expect(result.current.demand).toEqual([bodyB]);
   });
 });

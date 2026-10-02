@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useRef, useState } from 'react';
+import { useEffect, useState } from 'react';
 import type { BodyId, TopologySelection } from '@openzcad/shared';
 import type { InteractionState } from './interaction/machine';
 
@@ -39,7 +39,8 @@ export function lineageDemandKey(
 
 /** Bodies a selection demands lineage for: face/edge picks on B demand B. */
 export function demandedBodiesForSelections(
-  selections: readonly TopologySelection[] | TopologySelection | null | undefined
+  selections:
+    readonly TopologySelection[] | TopologySelection | null | undefined
 ): BodyId[] {
   if (!selections) {
     return [];
@@ -63,25 +64,12 @@ export function demandedBodiesForSelections(
 export function demandedBodiesForInteraction(
   interaction: InteractionState | null | undefined
 ): BodyId[] {
-  if (!interaction || interaction.mode === 'idle' || interaction.mode === 'sketch') {
-    return [];
-  }
-  if (interaction.mode === 'edges') {
+  if (interaction?.mode === 'edges') {
     return demandedBodiesForSelections(interaction.edges);
   }
-  if (interaction.mode === 'face') {
-    const bodyId: unknown = interaction.target.bodyId;
-    if (typeof bodyId === 'string' && bodyId.length > 0) {
-      return [bodyId as BodyId];
-    }
-    return [];
-  }
-  if (interaction.mode === 'region') {
-    // A sketch region names no body; its extrude will consume bodies later,
-    // but the region pick itself demands no boolean lineage.
-    return [];
-  }
-  return [];
+  const bodyId: unknown =
+    interaction?.mode === 'face' ? interaction.target.bodyId : undefined;
+  return typeof bodyId === 'string' && bodyId ? [bodyId as BodyId] : [];
 }
 
 /** Merge new bodies into a sticky demand set; never shrinks. */
@@ -108,59 +96,32 @@ export function mergeLineageDemand(
  * through the selection state (hole face pick, face-attached sketch, direct
  * edit, dimension).
  */
+const NO_DEMAND: readonly BodyId[] = [];
+
 export function useLineageDemand(input: {
   projectId: string | undefined;
   selections: readonly TopologySelection[];
   interaction: InteractionState | null | undefined;
-}): { demand: BodyId[]; addBodies: (bodyIds: readonly BodyId[]) => void } {
+}): { demand: readonly BodyId[] } {
   const { projectId, selections, interaction } = input;
-  const [demanded, setDemanded] = useState<ReadonlySet<BodyId>>(new Set());
-  const projectRef = useRef(projectId);
-
+  const [held, setHeld] = useState<{
+    projectId: string | undefined;
+    demand: readonly BodyId[];
+  }>({ projectId, demand: NO_DEMAND });
   useEffect(() => {
-    if (projectRef.current !== projectId) {
-      projectRef.current = projectId;
-      setDemanded(new Set());
-    }
-  }, [projectId]);
-
-  const fresh = useMemo(() => {
-    const bodies = new Set<BodyId>();
-    for (const bodyId of demandedBodiesForSelections(selections)) {
-      bodies.add(bodyId);
-    }
-    for (const bodyId of demandedBodiesForInteraction(interaction)) {
-      bodies.add(bodyId);
-    }
-    return [...bodies];
-  }, [selections, interaction]);
-
-  useEffect(() => {
-    if (fresh.length === 0) {
-      return;
-    }
-    setDemanded((current) => {
-      let changed = false;
-      const next = new Set(current);
-      for (const bodyId of fresh) {
-        if (!next.has(bodyId)) {
-          next.add(bodyId);
-          changed = true;
-        }
-      }
-      return changed ? next : current;
+    const fresh = [
+      ...demandedBodiesForSelections(selections),
+      ...demandedBodiesForInteraction(interaction)
+    ];
+    setHeld((previous) => {
+      const base = previous.projectId === projectId ? previous.demand : [];
+      const missing = fresh.filter((bodyId) => !base.includes(bodyId));
+      return missing.length === 0 && previous.projectId === projectId
+        ? previous
+        : { projectId, demand: normalizeLineageDemand([...base, ...missing]) };
     });
-  }, [fresh]);
-
-  const demand = useMemo(() => [...demanded].sort(), [demanded]);
-
-  return {
-    demand,
-    addBodies: (bodyIds: readonly BodyId[]) => {
-      if (bodyIds.length === 0) {
-        return;
-      }
-      setDemanded((current) => mergeLineageDemand(current, bodyIds));
-    }
-  };
+  }, [projectId, selections, interaction]);
+  // A project switch clears the demand on this very render, before the
+  // effect above records the new project.
+  return { demand: held.projectId === projectId ? held.demand : NO_DEMAND };
 }

@@ -520,7 +520,6 @@ import type {
 } from './lib/interaction/machine';
 import {
   refreshEdgeFormReferencesForCommit,
-  refreshEdgeReferencesForCommit,
   resolveFace
 } from './lib/topologyResolution';
 import { useLineageDemand } from './lib/lineageDemand';
@@ -530,7 +529,6 @@ import {
 } from './lib/objectPolyline';
 import type { RegionPickData } from './components/viewer/regionOverlay';
 import { CommandBar, type PaletteCommand } from './components/CommandBar';
-import { ShortcutsOverlay } from './components/ShortcutsOverlay';
 import { DISPLAY_MODE_LABELS } from './lib/displayMode';
 import { ContextMenu, type ContextMenuState } from './components/ContextMenu';
 import type { BodyFeatureIds } from '@openzcad/document-core';
@@ -653,6 +651,22 @@ const LazyMeasurementDock = lazyWithStaleChunkNotice(() =>
     default: module.MeasurementDock
   }))
 );
+// The "?" control reference opens only on request; lazy, it also takes its
+// keyboard/pointer reference tables off the entry chunk.
+const LazyShortcutsOverlay = lazyWithStaleChunkNotice(() =>
+  import('./components/ShortcutsOverlay').then((module) => ({
+    default: module.ShortcutsOverlay
+  }))
+);
+function ShortcutsOverlay(
+  props: ComponentProps<typeof LazyShortcutsOverlay>
+) {
+  return (
+    <Suspense fallback={null}>
+      <LazyShortcutsOverlay {...props} />
+    </Suspense>
+  );
+}
 // Operation help is only needed after the user starts a modeling action.
 const LazyToolCard = lazyWithStaleChunkNotice(() =>
   import('./components/ToolCard').then((module) => ({
@@ -13913,10 +13927,15 @@ export function App() {
     const currentBody = bodyId
       ? (representations[bodyId] ?? renderedRepresentations[bodyId])
       : undefined;
-    const refreshed = refreshEdgeReferencesForCommit(currentBody, edges);
-    const edgeReferences = refreshed.flatMap((reference) =>
-      reference?.kind === 'edge' ? [reference] : []
+    const pickedReferences = edges.flatMap((edge) =>
+      edge.reference?.kind === 'edge' ? [edge.reference] : []
     );
+    const edgeReferences =
+      refreshEdgeFormReferencesForCommit(
+        currentBody,
+        edgeHashes,
+        pickedReferences
+      ) ?? pickedReferences;
     if (!bodyId || edgeHashes.length === 0) {
       return null;
     }

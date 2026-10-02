@@ -287,23 +287,17 @@ export function refreshEdgeFormReferencesForCommit(
   if (!body || edgeHashes.length === 0) {
     return undefined;
   }
-  const refreshed = refreshEdgeReferencesForCommit(
-    body,
-    edgeHashes.map((hash) => {
-      const stale = edgeReferences?.find(
-        (reference) => reference.currentHash === hash
-      );
-      return {
-        topologyId: undefined,
-        hash,
-        ...(stale ? { reference: stale } : {})
-      };
-    })
-  );
-  const named = refreshed.flatMap((reference, index) =>
-    reference?.kind === 'edge' && reference.currentHash === edgeHashes[index]
-      ? [reference]
-      : []
-  );
-  return named.length === edgeHashes.length ? named : undefined;
+  const named: EdgeTopologyReferenceV5[] = [];
+  for (const hash of edgeHashes) {
+    const reference = refreshEdgeReferenceForCommit(body, {
+      topologyId: undefined,
+      hash,
+      reference: edgeReferences?.find((stale) => stale.currentHash === hash)
+    });
+    if (reference?.kind !== 'edge' || reference.currentHash !== hash) {
+      return undefined;
+    }
+    named.push(reference);
+  }
+  return named;
 }
