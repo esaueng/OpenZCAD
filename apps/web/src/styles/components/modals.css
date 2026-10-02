@@ -303,6 +303,11 @@
 
 .export-dialog {
   width: min(480px, 100%);
+  /* Bounded like Project properties: in a short window the Custom field and
+     a printability report pushed Cancel and Export below the screen, and
+     nothing scrolled to them. */
+  max-height: calc(100dvh - 12vh - 32px);
+  overflow-y: auto;
   display: flex;
   flex-direction: column;
   gap: var(--sp-3);
@@ -311,6 +316,11 @@
   border: var(--border-strong);
   border-radius: var(--radius-lg);
   box-shadow: var(--shadow-3);
+}
+
+/* Scrolling the dialog, not squeezing its rows. */
+.export-dialog > * {
+  flex-shrink: 0;
 }
 
 .export-dialog h2 {
