@@ -1768,9 +1768,34 @@ test('Escape backs out of the sketch plane prompt', async ({ page }) => {
   ).toBeVisible();
   await page.keyboard.press('Escape');
 
-  // The close button is the same exit for the pointer.
+  // The close button is the same exit for the pointer — and it is reachable:
+  // the prompt used to float over the stage's top edge, where the mode
+  // toggle and, at 1024 px, the project name drew over its title and its ×.
+  // It is a command card in the right lane now, clear of the top bar.
+  await page.setViewportSize({ width: 1024, height: 768 });
   await page.keyboard.press('s');
   await expect(prompt).toBeVisible();
+  const reachable = await page.evaluate(() => {
+    const card = document.querySelector('.sketch-plane-prompt')!;
+    const bar = document.querySelector('.topbar')!;
+    const hit = (element: Element) => {
+      const box = element.getBoundingClientRect();
+      const top = document.elementFromPoint(
+        box.left + box.width / 2,
+        box.top + box.height / 2
+      );
+      return Boolean(top && (top === element || element.contains(top)));
+    };
+    const islands = [...bar.querySelectorAll('.topbar-island')].map(
+      (island) => island.getBoundingClientRect().bottom
+    );
+    return {
+      below: card.getBoundingClientRect().top >= Math.max(0, ...islands) - 0.5,
+      title: hit(card.querySelector('strong')!),
+      close: hit(card.querySelector('.sketch-plane-dismiss')!)
+    };
+  });
+  expect(reachable).toEqual({ below: true, title: true, close: true });
   await page.getByRole('button', { name: 'Cancel sketch' }).click();
   await expect(prompt).toBeHidden();
   await expect(status).toContainText('Sketch canceled');

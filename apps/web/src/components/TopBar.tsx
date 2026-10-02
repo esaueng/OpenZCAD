@@ -1,6 +1,12 @@
 import { ProjectImportButton } from './ProjectImportButton';
 import { platformShortcutLabel } from '../lib/platformShortcut';
-import { type ChangeEvent, useEffect, useRef, useState } from 'react';
+import {
+  type ChangeEvent,
+  type MouseEvent,
+  useEffect,
+  useRef,
+  useState
+} from 'react';
 import {
   Box,
   Check,
@@ -213,14 +219,52 @@ export function TopBar({
       }
     }
 
+    // Escape closes it like any other menu, handing focus back to its
+    // button. It used to ignore the key and stay open.
+    function closeFileMenuOnEscape(event: KeyboardEvent) {
+      const fileMenu = fileMenuRef.current;
+      if (event.key !== 'Escape' || !fileMenu?.open) {
+        return;
+      }
+      event.stopPropagation();
+      fileMenu.open = false;
+      if (fileMenu.contains(document.activeElement)) {
+        fileMenu.querySelector('summary')?.focus();
+      }
+    }
+
     document.addEventListener('pointerdown', closeFileMenuOnOutsidePointer);
+    // Capture, so the workspace's own Escape (clear the selection) waits for
+    // the next press rather than doing both at once.
+    document.addEventListener('keydown', closeFileMenuOnEscape, true);
     return () => {
       document.removeEventListener(
         'pointerdown',
         closeFileMenuOnOutsidePointer
       );
+      document.removeEventListener('keydown', closeFileMenuOnEscape, true);
     };
   }, []);
+
+  /**
+   * A chosen item closes the menu. Export opens its dialog from here, and the
+   * menu stayed open underneath it, still showing when the dialog closed.
+   * Deferred a task so a label's click can still reach its file input.
+   */
+  function closeFileMenuAfterChoice(event: MouseEvent<HTMLDivElement>) {
+    const item =
+      event.target instanceof Element
+        ? event.target.closest('.topbar-menu-item')
+        : null;
+    if (!item || (item instanceof HTMLButtonElement && item.disabled)) {
+      return;
+    }
+    window.setTimeout(() => {
+      if (fileMenuRef.current) {
+        fileMenuRef.current.open = false;
+      }
+    }, 0);
+  }
 
   function beginProjectRename() {
     if (!projectName || !canRenameProject) {
@@ -474,7 +518,10 @@ export function TopBar({
                 </>
               ) : null}
             </summary>
-            <div className="topbar-menu-panel">
+            <div
+              className="topbar-menu-panel"
+              onClick={closeFileMenuAfterChoice}
+            >
               <strong className="topbar-menu-label">Import</strong>
               <label
                 className="topbar-menu-item"
