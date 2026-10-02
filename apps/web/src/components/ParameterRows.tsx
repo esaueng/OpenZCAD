@@ -13,6 +13,20 @@ interface ToggleBody {
   bodyId: BodyId;
   name: string;
 }
+/**
+ * The refusing feature's sentence, short enough for a parameter row: the
+ * feature named plainly and the first sentence of why. A width change that a
+ * fillet refused used to read only "No change applied", with the reason one
+ * click away in the activity log, so the row said that something failed but
+ * not what; "View details" keeps the full diagnostic.
+ */
+export function parameterRefusalSummary(message: string): string {
+  const named = /^Feature "([^"]+)":\s*(.*)$/s.exec(message.trim());
+  const body = (named ? named[2]! : message).trim();
+  const firstSentence = /^.*?[.!?](?=\s|$)/s.exec(body)?.[0] ?? body;
+  return named ? `${named[1]}: ${firstSentence}` : firstSentence;
+}
+
 interface ToggleBindingProps {
   bodies?: ToggleBody[];
   onConfigureToggle?: (name: string, bodyIds: BodyId[]) => void;
@@ -76,9 +90,11 @@ export function ParameterRow({
   const latestParameter = useRef(parameter);
   latestParameter.current = parameter;
   const submission = useRef(0);
-  const [error, setError] = useState<{ detailsAvailable: boolean } | null>(
-    null
-  );
+  const [error, setError] = useState<{
+    detailsAvailable: boolean;
+    /** The refusing feature's first sentence, shown under the row. */
+    reason?: string;
+  } | null>(null);
   const [renameError, setRenameError] = useState<string | null>(null);
   const [renaming, setRenaming] = useState(false);
   const [nameDraft, setNameDraft] = useState(parameter.name);
@@ -141,7 +157,10 @@ export function ParameterRow({
       const refusal = await onSet(parameter.name, trimmed);
       if (token !== submission.current) return;
       if (refusal) {
-        setError({ detailsAvailable: true });
+        setError({
+          detailsAvailable: true,
+          reason: parameterRefusalSummary(refusal)
+        });
         setExpression(latestParameter.current.expression);
       }
     } catch {
@@ -317,7 +336,11 @@ export function ParameterRow({
             renameError
           ) : error ? (
             <>
-              <span>No change applied.</span>
+              <span>
+                {error.reason
+                  ? `No change applied — ${error.reason}`
+                  : 'No change applied.'}
+              </span>
               {error.detailsAvailable && onViewDetails ? (
                 <button
                   type="button"

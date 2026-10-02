@@ -7,7 +7,7 @@ import {
   setParameter
 } from '@openzcad/document-core';
 import { toUserId } from '@openzcad/shared';
-import { ParameterRow } from './ParameterRows';
+import { ParameterRow, parameterRefusalSummary } from './ParameterRows';
 const parameter = () =>
   listParameters(
     setParameter(createProjectDocument('Test', toUserId('local')), {
@@ -41,12 +41,11 @@ it('shows pending validation, explains refusal, and restores the committed value
   expect(screen.getByText('Checking geometry…')).toBeTruthy();
   finish('holder_height must be at least 56.910504 mm.');
   await waitFor(() => expect(input).toHaveValue('58'));
+  // The reason is on the row, not only behind the link: the row used to say
+  // that something failed without saying what.
   expect(screen.getByRole('alert')).toHaveTextContent(
-    'No change applied.View details'
+    'No change applied — holder_height must be at least 56.910504 mm.View details'
   );
-  expect(
-    screen.queryByText('holder_height must be at least 56.910504 mm.')
-  ).toBeNull();
   await user.click(screen.getByRole('button', { name: 'View details' }));
   expect(onViewDetails).toHaveBeenCalledOnce();
   expect(input).toHaveAttribute('aria-invalid', 'true');
@@ -99,4 +98,21 @@ it('previews drafts before committing and cancels the display on Escape', async 
   expect(onPreview).toHaveBeenLastCalledWith('holder_height', null);
   expect(input).toHaveValue('58');
   expect(onSet).not.toHaveBeenCalled();
+});
+
+it('names the refusing feature and its first sentence', () => {
+  expect(
+    parameterRefusalSummary(
+      'Feature "Fillet": A selected edge no longer exists. Re-select the edges and re-create this feature.'
+    )
+  ).toBe('Fillet: A selected edge no longer exists.');
+  expect(parameterRefusalSummary('Parameter editing is unavailable.')).toBe(
+    'Parameter editing is unavailable.'
+  );
+  // A sentence with a decimal point is not cut at the decimal.
+  expect(
+    parameterRefusalSummary(
+      'Feature "Hole 1": Hole diameter 6.5 is wider than the face. Pick a smaller one.'
+    )
+  ).toBe('Hole 1: Hole diameter 6.5 is wider than the face.');
 });

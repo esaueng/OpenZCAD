@@ -289,8 +289,9 @@ test('offers and grows the arm height on a holder whose arms are solid', async (
   ).toBeVisible();
   await height.fill('1');
   await height.press('Enter');
+  // The row names why, and still links the full diagnostic.
   await expect(page.getByRole('alert')).toHaveText(
-    'No change applied.View details'
+    /^No change applied — .+View details$/
   );
   await expect(height).toHaveValue('32');
   await page.getByRole('button', { name: 'Build', exact: true }).click();

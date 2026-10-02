@@ -10,7 +10,9 @@ import type {
 import type { FaceEvolutionPayloadV1 } from './remus-runtime';
 import { GEOMETRY_LINEAR_TOLERANCE } from '@openzcad/geometry';
 import {
+  edgeLiesOnFaceCarriers,
   importedStepLineageName,
+  straightEdgePositionOnSource,
   inspectTopologyWitness,
   topologyHashOfWitness,
   topologyWitnessesEqual,
@@ -2146,6 +2148,23 @@ export function deriveRemusBooleanEvolutionLineage(input: {
         resultWitness: result.witness,
         relation: { kind: 'unchanged' }
       });
+      if (verification.status !== 'verified' && event === 'modified') {
+        // Trimmed, not unchanged: the remainder of a straight source edge
+        // (the plate's top side edge, cut back to the flange) keeps the
+        // source's name when it still lies on the source's line.
+        if (
+          straightEdgePositionOnSource(
+            result.witness as EdgeWitnessV1,
+            reference.witness
+          ) !== null
+        ) {
+          assignments.push({
+            ...result,
+            lineageName: `boolean.edge.${origin!.slot}.${reference.lineageName}`
+          });
+        }
+        return;
+      }
       if (verification.status !== 'verified') {
         if (event === 'preserved') {
           diagnostics.push({
@@ -2170,6 +2189,105 @@ export function deriveRemusBooleanEvolutionLineage(input: {
     }
     for (const [resultHandle, sourceHandle] of evolution.edges.modified) {
       carry(resultHandle, sourceHandle, 'modified');
+    }
+    // A straight source edge the boolean split into pieces (a plate's bottom
+    // side edge, broken where a fused flange's corner lands on it) names
+    // each piece by its order along the source's line AND the number of
+    // pieces: `….piece.1.of.2`. No piece claims to be the original. The
+    // count is what keeps it from rebinding silently: if a later edit splits
+    // the source differently, the old name stops resolving instead of
+    // landing on a different segment. Every piece must lie on the source's
+    // line and every event for the source must be a `modified` piece, or
+    // none is named.
+    const piecesBySource = new Map<number, number[]>();
+    for (const events of [
+      evolution.edges.preserved,
+      evolution.edges.modified
+    ]) {
+      for (const [resultHandle, sourceHandle] of events) {
+        if ((sourceUse.get(sourceHandle) ?? 0) < 2) continue;
+        const pieces = piecesBySource.get(sourceHandle) ?? [];
+        pieces.push(
+          events === evolution.edges.modified ? resultHandle : -1 - resultHandle
+        );
+        piecesBySource.set(sourceHandle, pieces);
+      }
+    }
+    for (const [sourceHandle, pieces] of piecesBySource) {
+      const origin = operandEdges.get(sourceHandle);
+      const reference = origin?.reference;
+      if (
+        reference?.kind !== 'edge' ||
+        !edgeReferenceMatchesCandidate(reference, origin?.candidate) ||
+        pieces.some((handle) => handle < 0)
+      ) {
+        continue;
+      }
+      const placed = pieces.map((handle) => ({
+        handle,
+        at: straightEdgePositionOnSource(
+          resultEdges.get(handle)!.witness as EdgeWitnessV1,
+          reference.witness
+        )
+      }));
+      if (placed.some((piece) => piece.at === null)) {
+        continue;
+      }
+      placed.sort((left, right) => left.at! - right.at!);
+      placed.forEach((piece, index) => {
+        assignments.push({
+          ...resultEdges.get(piece.handle)!,
+          lineageName: `boolean.edge.${origin!.slot}.${reference.lineageName}.piece.${index}.of.${placed.length}`
+        });
+      });
+    }
+    // A `generated` edge is new — the seam where two operand faces now meet,
+    // the inside corner of a plate fused to a flange — so it has no source
+    // edge to inherit a name from. The kernel names the two operand faces
+    // whose intersection made it, and when both carry names the edge is
+    // named after that pair: "the edge between the plate's top and the
+    // flange's front" survives a resize that moves every coordinate of it.
+    // Held to the same standard as the carried names: both face references
+    // re-verify against their operands, the measured edge lies on both
+    // faces' exact carriers, and a pair that made more than one edge (a
+    // slot's two walls meeting one floor) names none of them.
+    const generatedPair = new Map<number, string>();
+    const pairUse = new Map<string, number>();
+    for (const [resultHandle, [faceA, faceB]] of evolution.edges.generated) {
+      const result = resultEdges.get(resultHandle);
+      const sides = [faceA, faceB].map((handle) => {
+        const origin = operandFaces.get(handle);
+        const reference = origin?.reference;
+        return reference?.kind === 'face' &&
+          referenceMatchesCandidate(reference, origin!.candidate)
+          ? { name: `${origin!.slot}.${reference.lineageName}`, reference }
+          : null;
+      });
+      if (
+        !result ||
+        result.kind !== 'edge' ||
+        !sides[0] ||
+        !sides[1] ||
+        sides[0].name === sides[1].name ||
+        !edgeLiesOnFaceCarriers(result.witness as EdgeWitnessV1, [
+          sides[0].reference.witness,
+          sides[1].reference.witness
+        ])
+      ) {
+        continue;
+      }
+      const pair = [sides[0].name, sides[1].name].sort().join('|');
+      generatedPair.set(resultHandle, pair);
+      pairUse.set(pair, (pairUse.get(pair) ?? 0) + 1);
+    }
+    for (const [resultHandle, pair] of generatedPair) {
+      if (pairUse.get(pair) !== 1) {
+        continue;
+      }
+      assignments.push({
+        ...resultEdges.get(resultHandle)!,
+        lineageName: `boolean.edge.between.${pair}`
+      });
     }
     if (evolution.edges.unresolved.size > 0) {
       diagnostics.push({
