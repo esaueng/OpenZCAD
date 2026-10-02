@@ -162,6 +162,62 @@ fn api_url(path: &str) -> Result<Url, String> {
     Ok(url)
 }
 
+struct RendererApiDestination {
+    url: Url,
+    public: bool,
+    logout: bool,
+}
+
+fn renderer_lifecycle_path(path: &str) -> bool {
+    (path == "/api/auth/desktop" || path.starts_with("/api/auth/desktop/"))
+        && !matches!(
+            path,
+            "/api/auth/desktop/config" | "/api/auth/desktop/logout"
+        )
+}
+
+fn renderer_api_destination(path: &str) -> Result<RendererApiDestination, String> {
+    let mut url = api_url(path)?;
+    // Classify the parsed destination before reading or refreshing native credentials.
+    // Percent decoding is only a conservative deny check; it never rewrites a cloud request.
+    if renderer_lifecycle_path(url.path()) {
+        return Err("The desktop API path is not allowed.".to_string());
+    }
+    let mut decoded = Vec::with_capacity(url.path().len());
+    for byte in url.path().bytes() {
+        decoded.push(byte);
+        // Collapse nested escapes as they arrive, in linear time even for deeply encoded input.
+        while let Some(index) = decoded.len().checked_sub(3) {
+            if decoded[index] != b'%' {
+                break;
+            }
+            let hex = |byte: u8| (byte as char).to_digit(16).map(|value| value as u8);
+            let (Some(high), Some(low)) = (hex(decoded[index + 1]), hex(decoded[index + 2])) else {
+                break;
+            };
+            decoded.truncate(index);
+            decoded.push(high * 16 + low);
+        }
+    }
+    if let Ok(decoded) = String::from_utf8(decoded) {
+        if let Ok(normalized) = Url::parse(&format!("{API_ORIGIN}{decoded}")) {
+            if renderer_lifecycle_path(normalized.path()) {
+                return Err("The desktop API path is not allowed.".to_string());
+            }
+        }
+    }
+    match url.path() {
+        "/api/auth/config" => url.set_path("/api/auth/desktop/config"),
+        "/api/auth/logout" => url.set_path("/api/auth/desktop/logout"),
+        _ => {}
+    }
+    Ok(RendererApiDestination {
+        public: matches!(url.path(), "/api/health" | "/api/auth/desktop/config"),
+        logout: url.path() == "/api/auth/desktop/logout",
+        url,
+    })
+}
+
 fn collaboration_api_url(project_id: &str, ticket_endpoint: bool) -> Result<Url, String> {
     if project_id.is_empty()
         || project_id.len() > 256
@@ -522,7 +578,7 @@ async fn buffer_api_response(mut response: reqwest::Response) -> Result<NativeAp
 async fn send_api_request(
     state: &DesktopAuthState,
     request: &NativeApiRequest,
-    path: &str,
+    url: &Url,
     access_token: Option<&str>,
 ) -> Result<reqwest::Response, String> {
     let method = Method::from_bytes(request.method.as_bytes())
@@ -533,7 +589,7 @@ async fn send_api_request(
     ) {
         return Err("The desktop API method is not allowed.".to_string());
     }
-    let mut builder = state.client.request(method, api_url(path)?);
+    let mut builder = state.client.request(method, url.clone());
     if let Some(token) = access_token {
         builder = builder.bearer_auth(token);
     }
@@ -578,14 +634,18 @@ pub async fn desktop_api_request(
     state: State<'_, DesktopAuthState>,
     request: NativeApiRequest,
 ) -> Result<NativeApiResponse, String> {
-    let path = match request.path.as_str() {
-        "/api/auth/config" => "/api/auth/desktop/config",
-        "/api/auth/logout" => "/api/auth/desktop/logout",
-        other => other,
-    };
-    if request.path == "/api/auth/logout" {
-        let response = match current_access(&state).await {
-            Ok(Some(token)) => send_api_request(&state, &request, path, Some(&token))
+    renderer_api_request(&state, request).await
+}
+
+async fn renderer_api_request(
+    state: &DesktopAuthState,
+    request: NativeApiRequest,
+) -> Result<NativeApiResponse, String> {
+    let destination = renderer_api_destination(&request.path)?;
+    let url = &destination.url;
+    if destination.logout {
+        let response = match current_access(state).await {
+            Ok(Some(token)) => send_api_request(state, &request, url, Some(&token))
                 .await
                 .ok(),
             Ok(None) | Err(_) => None,
@@ -600,24 +660,24 @@ pub async fn desktop_api_request(
             None => Ok(local_signed_out_response()),
         };
     }
-    let public = matches!(path, "/api/health" | "/api/auth/desktop/config");
+    let public = destination.public;
     let mut access = if public {
         None
     } else {
-        current_access(&state).await?
+        current_access(state).await?
     };
     if !public && access.is_none() {
         return Ok(local_unauthorized_response());
     }
-    let mut response = send_api_request(&state, &request, path, access.as_deref()).await?;
+    let mut response = send_api_request(state, &request, url, access.as_deref()).await?;
     if !public && response.status() == StatusCode::UNAUTHORIZED {
         *state
             .access
             .lock()
             .map_err(|_| "Desktop auth state is unavailable.")? = None;
-        access = refresh_access(&state).await?;
+        access = refresh_access(state).await?;
         if let Some(token) = access.as_deref() {
-            response = send_api_request(&state, &request, path, Some(token)).await?;
+            response = send_api_request(state, &request, url, Some(token)).await?;
         }
     }
     if response.status().is_success() && request_deletes_cloud_profile(&request) {
@@ -645,8 +705,7 @@ pub async fn desktop_collaboration_url(
     let mut access = current_access(&state)
         .await?
         .ok_or_else(|| "Sign in before starting live collaboration.".to_string())?;
-    let mut response =
-        send_api_request(&state, &request, request.path.as_str(), Some(&access)).await?;
+    let mut response = send_api_request(&state, &request, &ticket_path, Some(&access)).await?;
     if response.status() == StatusCode::UNAUTHORIZED {
         *state
             .access
@@ -655,7 +714,7 @@ pub async fn desktop_collaboration_url(
         access = refresh_access(&state)
             .await?
             .ok_or_else(|| "Sign in before starting live collaboration.".to_string())?;
-        response = send_api_request(&state, &request, request.path.as_str(), Some(&access)).await?;
+        response = send_api_request(&state, &request, &ticket_path, Some(&access)).await?;
     }
     if !response.status().is_success() {
         return Err(server_error(response, "Live collaboration is unavailable.").await);
@@ -677,8 +736,136 @@ pub async fn desktop_collaboration_url(
 mod tests {
     use super::{
         api_url, approved_browser_url, collaboration_api_url, collaboration_socket_url,
-        pkce_challenge, request_deletes_cloud_profile, NativeApiRequest,
+        pkce_challenge, renderer_api_destination, renderer_api_request,
+        request_deletes_cloud_profile, DesktopAuthState, NativeApiRequest,
     };
+
+    #[test]
+    fn rejects_renderer_lifecycle_requests_before_native_credentials() {
+        let state = DesktopAuthState::new();
+        // Any attempt to read cached credentials would now fail with the auth-state error.
+        let _ = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+            let _access = state.access.lock().unwrap();
+            panic!("poison the synthetic credential state");
+        }));
+        let runtime = tokio::runtime::Builder::new_current_thread()
+            .enable_all()
+            .build()
+            .unwrap();
+        for path in [
+            "/api/auth/desktop/start",
+            "/api/auth/desktop/approve",
+            "/api/auth/desktop/exchange",
+            "/api/auth/desktop/refresh",
+            "/api/auth/desktop/exchange?query=1",
+            "/api/auth/desktop/exchange#fragment",
+            "/api/auth/desktop/config/../exchange",
+            "/api/auth/desktop/config/%2e%2e/exchange",
+            "/api/session/../auth/desktop/exchange",
+            "/api/auth/desktop\\exchange",
+            "/api/auth/desktop/ex\tchange",
+            "/api/auth/desktop/ex\r\nchange",
+            "/api/%61uth/desktop/exchange",
+            "/api/%2561uth/desktop/exchange",
+            "/api/%25%36%31uth/desktop/exchange",
+            "/api/auth/%64esktop/exchange",
+            "/api/auth/desktop/%65xchange",
+            "/api/auth%2fdesktop%2fexchange",
+            "/api/auth%5cdesktop%5cexchange",
+            "/api/auth/desktop/ex%09change",
+            "/api/auth/desktop/%2565xchange",
+            "/api/auth/desktop/unknown-lifecycle",
+        ] {
+            let result = runtime.block_on(renderer_api_request(
+                &state,
+                NativeApiRequest {
+                    method: "POST".to_string(),
+                    path: path.to_string(),
+                    content_type: None,
+                    body: None,
+                },
+            ));
+            assert_eq!(
+                result.err().as_deref(),
+                Some("The desktop API path is not allowed."),
+                "{path:?}"
+            );
+        }
+        assert!(renderer_api_destination(&format!(
+            "/api/%{}61uth/desktop/exchange",
+            "25".repeat(8192)
+        ))
+        .is_err());
+        let result = runtime.block_on(renderer_api_request(
+            &state,
+            NativeApiRequest {
+                method: "GET".to_string(),
+                path: "/api/session".to_string(),
+                content_type: None,
+                body: None,
+            },
+        ));
+        assert_eq!(
+            result.err().as_deref(),
+            Some("Desktop auth state is unavailable.")
+        );
+    }
+
+    #[test]
+    fn classifies_public_and_logout_routes_after_url_normalization() {
+        for path in [
+            "/api/auth/config?query=1#fragment",
+            "/api/auth/desktop/config?query=1#fragment",
+            "/api/auth/desktop/../config?query=1#fragment",
+            "/api/auth/desktop/config?query=1#fragment/../exchange",
+        ] {
+            let destination = renderer_api_destination(path).unwrap();
+            assert!(destination.public);
+            assert!(!destination.logout);
+            assert_eq!(destination.url.query(), Some("query=1"));
+        }
+        for path in [
+            "/api/auth/logout?query=1#fragment",
+            "/api/auth/desktop/logout?query=1#fragment",
+            "/api/auth/desktop/../logout?query=1#fragment",
+            "/api/auth\\logout?query=1#fragment",
+            "/api/auth/log\tout?query=1#fragment",
+        ] {
+            let destination = renderer_api_destination(path).unwrap();
+            assert_eq!(destination.url.path(), "/api/auth/desktop/logout");
+            assert!(destination.logout);
+            assert!(!destination.public);
+            assert_eq!(destination.url.query(), Some("query=1"));
+            assert_eq!(destination.url.fragment(), Some("fragment"));
+        }
+    }
+
+    #[test]
+    fn preserves_cloud_routes_and_trusted_native_lifecycle_urls() {
+        for path in [
+            "/api/session",
+            "/api/settings",
+            "/api/projects",
+            "/api/assistant/status",
+            "/api/projects/proj_1/collaboration/ticket",
+            "/api/projects/proj_1/assets/file%20name?download=1",
+            "/api/projects/proj_1/assets/file%FFname?download=1",
+            "/api/session?next=/api/auth/desktop/exchange",
+        ] {
+            let destination = renderer_api_destination(path).unwrap();
+            assert_eq!(destination.url, api_url(path).unwrap());
+            assert!(!destination.logout);
+            assert!(!destination.public);
+        }
+        assert!(
+            renderer_api_destination("/api/health?query=1")
+                .unwrap()
+                .public
+        );
+        for lifecycle in ["start", "approve", "exchange", "refresh"] {
+            assert!(api_url(&format!("/api/auth/desktop/{lifecycle}")).is_ok());
+        }
+    }
 
     #[test]
     fn pins_native_requests_to_the_beta_api() {

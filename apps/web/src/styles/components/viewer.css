@@ -23,6 +23,20 @@
   inset: 0;
 }
 
+.sketch-snap-refusal {
+  position: absolute;
+  bottom: 76px;
+  left: 18px;
+  max-width: min(360px, calc(100% - 36px));
+  z-index: var(--z-viewer-overlay);
+  padding: 8px 12px;
+  border-radius: 6px;
+  background: var(--color-viewport-bg);
+  color: var(--color-viewport-text);
+  font-size: 12px;
+  pointer-events: none;
+}
+
 /* HudLayer owns imperative canvas overlays whose class styles may select a
    layout display mode. The hidden state always wins so transient markers and
    labels cannot survive after their interaction mode exits. */

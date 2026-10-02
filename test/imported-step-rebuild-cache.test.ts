@@ -1,6 +1,6 @@
 import { createHash } from 'node:crypto';
 import { readFileSync } from 'node:fs';
-import { describe, expect, it } from 'vitest';
+import { describe, expect, it, vi } from 'vitest';
 import { CommandManager, commandFactories } from '@openzcad/command-system';
 import {
   createBodyFeatureIds,
@@ -14,6 +14,11 @@ import {
   type ImportedSourceReference,
   type ProjectDocument
 } from '@openzcad/shared';
+import {
+  RemusKernel,
+  loadRemusTranslators
+} from '../packages/kernel-adapter/src/remus-runtime';
+import { importStepWithOwnBudget } from '../packages/kernel-adapter/src/kernel-step-import';
 
 /**
  * Editing a document used to re-read and re-parse every imported STEP source
@@ -123,6 +128,207 @@ function adapterWithCountedSource(importedStepCacheBytes?: number) {
 }
 
 describe('imported STEP rebuild cache', () => {
+  it('preserves valid multi-root subset selection and units on an arena hit', async () => {
+    const source = new Uint8Array(
+      readFileSync('test/parity/corpus/d-multi-two-boxes.step')
+    );
+    const reference: ImportedSourceReference = {
+      ...REFERENCE,
+      checksumSha256: createHash('sha256').update(source).digest('hex'),
+      logicalBytes: source.byteLength
+    };
+    let reads = 0;
+    const kernel = await createExactKernelAdapter({
+      historyCheckpointLimit: 0,
+      resolveSourceBytes: async () => {
+        reads += 1;
+        return source;
+      }
+    });
+    const cold = await createExactKernelAdapter({
+      importedStepCacheBytes: 0,
+      historyCheckpointLimit: 0,
+      resolveSourceBytes: async () => source
+    });
+    const manager = new CommandManager({
+      ...createProjectDocument('Subset', toUserId('user_rebuild_cache')),
+      units: 'inch'
+    });
+    manager.execute(
+      commandFactories.importStep({
+        name: 'Second root',
+        artifactId: 'artifact_subset',
+        sourceName: 'subset.step',
+        stepSourceRef: reference,
+        solidIndices: [1]
+      })
+    );
+    try {
+      const first = await kernel.syncDocument(manager.document);
+      const second = await kernel.syncDocument(manager.document);
+      const fromSource = await cold.syncDocument(manager.document);
+      expect(reads).toBe(1);
+      expect(Object.keys(second.bodyRepresentations)).toHaveLength(1);
+      expect(geometrySignatures(second)).toEqual(geometrySignatures(first));
+      expect(geometrySignatures(second)).toEqual(
+        geometrySignatures(fromSource)
+      );
+      expect(second.warnings).toEqual(fromSource.warnings);
+      expect(second.exportableBodyIds).toEqual(fromSource.exportableBodyIds);
+    } finally {
+      kernel.dispose();
+      cold.dispose();
+    }
+  }, 60_000);
+
+  it('never serializes imported solids again for cache admission', async () => {
+    const serialize = vi.spyOn(RemusKernel.prototype, 'serializeSolid');
+    const kernel = await createExactKernelAdapter({
+      historyCheckpointLimit: 0,
+      resolveSourceBytes: async () => SOURCE
+    });
+    try {
+      const first = await kernel.syncDocument(documentWithImport());
+      const second = await kernel.syncDocument(documentWithImport());
+      expect(Object.keys(first.bodyRepresentations)).toHaveLength(1);
+      expect(second.warnings).toEqual([]);
+      expect(serialize).not.toHaveBeenCalled();
+    } finally {
+      serialize.mockRestore();
+      kernel.dispose();
+    }
+  }, 60_000);
+
+  it('keeps prefetched cache hits when a second active import cannot fit', async () => {
+    await loadRemusTranslators();
+    const scratch = new RemusKernel();
+    const budget = importStepWithOwnBudget(scratch, SOURCE).document.byteLength;
+    scratch.free();
+    const secondSource = new Uint8Array(
+      readFileSync('test/parity/corpus/a-export-box.step')
+    );
+    const secondReference: ImportedSourceReference = {
+      ...REFERENCE,
+      checksumSha256: createHash('sha256').update(secondSource).digest('hex'),
+      logicalBytes: secondSource.byteLength
+    };
+    let reads = 0;
+    const kernel = await createExactKernelAdapter({
+      importedStepCacheBytes: budget,
+      historyCheckpointLimit: 0,
+      resolveSourceBytes: async (ref) => {
+        reads += 1;
+        return ref.checksumSha256 === REFERENCE.checksumSha256
+          ? SOURCE
+          : secondSource;
+      }
+    });
+    const manager = new CommandManager(documentWithImport());
+    try {
+      const first = await kernel.syncDocument(manager.document);
+      expect(reads).toBe(1);
+      manager.execute(
+        commandFactories.importStep({
+          name: 'Box',
+          artifactId: 'artifact_box',
+          sourceName: 'box.step',
+          stepSourceRef: secondReference
+        })
+      );
+      const combined = await kernel.syncDocument(manager.document);
+      expect(reads).toBe(2);
+      expect(Object.keys(combined.bodyRepresentations)).toHaveLength(2);
+      const rebuilt = await kernel.syncDocument(manager.document);
+      expect(reads).toBe(3);
+      expect(rebuilt.warnings).toEqual([]);
+      expect(geometrySignatures(rebuilt)).toEqual(geometrySignatures(combined));
+      for (const [id, signature] of Object.entries(geometrySignatures(first))) {
+        expect(geometrySignatures(rebuilt)[id]).toEqual(signature);
+      }
+    } finally {
+      kernel.dispose();
+    }
+  }, 60_000);
+
+  it('preserves rejected root indices, subset selection and units after cache refusal', async () => {
+    const scratch = new RemusKernel();
+    const io = await loadRemusTranslators();
+    let shell = 0;
+    const text = new TextDecoder()
+      .decode(
+        io.exportStep(
+          scratch.serializeSolids(
+            Uint32Array.from([
+              scratch.makeBox(10, 10, 10),
+              scratch.makeBox(20, 20, 20),
+              scratch.makeBox(30, 30, 30)
+            ])
+          )
+        )
+      )
+      .replace(
+        /CLOSED_SHELL\('',\s*\(([^)]+)\)\)/g,
+        (record, faces: string) => {
+          shell += 1;
+          return shell === 2
+            ? `CLOSED_SHELL('',(${faces.split(',').slice(1).join(',')}))`
+            : record;
+        }
+      );
+    scratch.free();
+    expect(shell).toBe(3);
+    const source = new TextEncoder().encode(text);
+    const reference: ImportedSourceReference = {
+      ...REFERENCE,
+      checksumSha256: createHash('sha256').update(source).digest('hex'),
+      logicalBytes: source.byteLength
+    };
+    let reads = 0;
+    const kernel = await createExactKernelAdapter({
+      historyCheckpointLimit: 0,
+      resolveSourceBytes: async () => {
+        reads += 1;
+        return source;
+      }
+    });
+    const cold = await createExactKernelAdapter({
+      importedStepCacheBytes: 0,
+      historyCheckpointLimit: 0,
+      resolveSourceBytes: async () => source
+    });
+    const document = {
+      ...createProjectDocument('Subset', toUserId('user_rebuild_cache')),
+      units: 'inch' as const
+    };
+    const manager = new CommandManager(document);
+    manager.execute(
+      commandFactories.importStep({
+        name: 'Last readable',
+        artifactId: 'artifact_subset',
+        sourceName: 'subset.step',
+        stepSourceRef: reference,
+        solidIndices: [2]
+      })
+    );
+    try {
+      const first = await kernel.syncDocument(manager.document);
+      const second = await kernel.syncDocument(manager.document);
+      const fromSource = await cold.syncDocument(manager.document);
+      expect(reads).toBe(2);
+      expect(Object.keys(second.bodyRepresentations)).toHaveLength(1);
+      expect(geometrySignatures(second)).toEqual(geometrySignatures(first));
+      expect(geometrySignatures(second)).toEqual(
+        geometrySignatures(fromSource)
+      );
+      expect(second.warnings).toEqual(fromSource.warnings);
+      expect(JSON.stringify(second.warnings)).toMatch(/open shell/i);
+      expect(second.exportableBodyIds).toEqual(fromSource.exportableBodyIds);
+    } finally {
+      kernel.dispose();
+      cold.dispose();
+    }
+  }, 60_000);
+
   it('does not cache embedded text under an unrelated source reference', async () => {
     const { adapter, reads } = adapterWithCountedSource();
     const kernel = await adapter;
@@ -285,10 +491,9 @@ describe('imported STEP rebuild cache', () => {
    */
   const TINY_CACHE_BUDGET = 1024;
 
-  it('reads an over-budget source once across the pre-flight and the commit', async () => {
-    // Refusing to cache an import larger than the whole budget re-parsed
-    // exactly the largest files on every rebuild — the regression the cache
-    // exists to prevent, aimed at the documents that motivated it.
+  it('recovers an uncached over-budget source exactly for commit and reopen', async () => {
+    // Cache admission must refuse oversized arena bytes. The source remains
+    // recoverable, so both committing and reopening keep the exact geometry.
     const { adapter, reads } = adapterWithCountedSource(TINY_CACHE_BUDGET);
     const kernel = await adapter;
     const manager = new CommandManager(
@@ -319,18 +524,24 @@ describe('imported STEP rebuild cache', () => {
       })
     );
     const rebuilt = await kernel.syncDocument(committed);
-    expect(reads()).toBe(1);
+    expect(reads()).toBe(2);
     expect(
       bodyGeometrySignature(rebuilt.bodyRepresentations[ids.bodyId]!)
     ).toEqual(
       bodyGeometrySignature(preflight.bodyRepresentations[ids.bodyId]!)
     );
+    const reopened = await adapterWithCountedSource(TINY_CACHE_BUDGET).adapter;
+    const reopenedState = await reopened.syncDocument(committed);
+    expect(geometrySignatures(reopenedState)).toEqual(
+      geometrySignatures(rebuilt)
+    );
+    expect(reopenedState.warnings).toEqual(rebuilt.warnings);
+    expect(reopenedState.exportableBodyIds).toEqual(rebuilt.exportableBodyIds);
   }, 60_000);
 
-  it('does not evict an import the build in progress still needs', async () => {
-    // Two over-budget imports in one document. Whichever is parsed second used
-    // to push the first out, so the next rebuild had to read and re-parse a
-    // source the prefetch had already skipped as cached.
+  it('recovers multiple over-budget imports without dropping their geometry', async () => {
+    // Both oversized entries are refused rather than retained above budget.
+    // Every later rebuild can recover them from their saved source references.
     const secondSource = new Uint8Array(
       readFileSync('test/parity/corpus/a-export-box.step')
     );
@@ -381,7 +592,7 @@ describe('imported STEP rebuild cache', () => {
     expect(built.bodyRepresentations[second.bodyId]).toBeDefined();
 
     const rebuilt = await kernel.syncDocument(manager.document);
-    expect(reads).toBe(2);
+    expect(reads).toBe(4);
     expect(geometrySignatures(rebuilt)).toEqual(geometrySignatures(built));
   }, 60_000);
 

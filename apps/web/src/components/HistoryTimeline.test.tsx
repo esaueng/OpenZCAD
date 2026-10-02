@@ -7,7 +7,7 @@ import {
   FEATURE_SUPPRESSED_METADATA_KEY
 } from '@openzcad/shared';
 import type { FeatureId, FeatureNode } from '@openzcad/shared';
-import { HistoryTimeline } from './HistoryTimeline';
+import { findRollbackMarkerIndex, HistoryTimeline } from './HistoryTimeline';
 
 function feature(
   index: number,
@@ -62,6 +62,38 @@ afterEach(() => {
 });
 
 describe('HistoryTimeline', () => {
+  it('marks only the last feature before a rollback-suppressed suffix', () => {
+    expect(
+      findRollbackMarkerIndex([
+        feature(1),
+        feature(2, undefined, rolledBack),
+        feature(3, undefined, rolledBack)
+      ])
+    ).toBe(0);
+    expect(
+      findRollbackMarkerIndex([
+        feature(1, undefined, rolledBack),
+        feature(2, undefined, rolledBack)
+      ])
+    ).toBe(-1);
+  });
+
+  it('finds a rollback marker with linear feature reads when no marker exists', () => {
+    const items = Array.from({ length: 512 }, (_, index) => feature(index));
+    let featureReads = 0;
+    const measuredItems = new Proxy(items, {
+      get(target, property, receiver) {
+        if (typeof property === 'string' && /^(0|[1-9]\d*)$/.test(property)) {
+          featureReads += 1;
+        }
+        return Reflect.get(target, property, receiver) as unknown;
+      }
+    });
+
+    expect(findRollbackMarkerIndex(measuredItems)).toBe(-1);
+    expect(featureReads).toBeLessThanOrEqual(items.length);
+  });
+
   it('shows one value per row in document units', () => {
     renderTimeline({ units: 'inch' });
     expect(row('Feature 3')).toHaveTextContent('3 in');

@@ -40,6 +40,7 @@ export {
 import {
   createId,
   assertDocumentHistory,
+  assertDocumentTextBudget,
   isVariableFilletLaw,
   VARIABLE_FILLET_LAWS,
   type UserId,
@@ -2964,15 +2965,18 @@ export class CommandManager {
     if (next === this.document) {
       return this.document;
     }
+    assertDocumentTextBudget(next);
     next.commandLog.push(...serializedLeaves(command));
     next = appendRevision(next, command.label);
-    this.document = recordDocumentEdit(
+    const recorded = recordDocumentEdit(
       previous,
       next,
       command.label,
       this.actorUserId,
       serializedLeaves(command).map((entry) => entry.kind)
     );
+    assertDocumentTextBudget(recorded);
+    this.document = recorded;
     return this.document;
   }
 
@@ -2991,9 +2995,12 @@ export class CommandManager {
   normalize(command: AnyCommand): ProjectDocument {
     command.validate(this.document);
     let next = command.apply(this.document);
+    assertDocumentTextBudget(next);
     next.commandLog.push(...serializedLeaves(command));
     next = appendRevision(next, command.label);
-    this.document = normalizeDocumentHistory(this.document, next);
+    const normalized = normalizeDocumentHistory(this.document, next);
+    assertDocumentTextBudget(normalized);
+    this.document = normalized;
     return this.document;
   }
 
@@ -3022,6 +3029,8 @@ export class CommandManager {
       ];
     if (!history || !entry) return this.document;
     const next = applyDocumentChanges(this.document, entry.changes, direction);
+    // Validate before advancing the cursor or publishing a restored state.
+    assertDocumentTextBudget(next);
     this.document = appendRevision(
       {
         ...next,
@@ -3047,15 +3056,18 @@ export class CommandManager {
     if (next === this.document) {
       return this.document;
     }
+    assertDocumentTextBudget(next);
     next.commandLog.push(...serialized);
     next = appendRevision(next, label);
-    this.document = recordDocumentEdit(
+    const recorded = recordDocumentEdit(
       previous,
       next,
       label,
       this.actorUserId,
       serialized.map((entry) => entry.kind)
     );
+    assertDocumentTextBudget(recorded);
+    this.document = recorded;
     return this.document;
   }
 
@@ -3078,12 +3090,15 @@ export class CommandManager {
     if (next === this.document) {
       return this.document;
     }
-    this.document = recordDocumentEdit(
+    assertDocumentTextBudget(next);
+    const recorded = recordDocumentEdit(
       this.document,
       next,
       label,
       this.actorUserId
     );
+    assertDocumentTextBudget(recorded);
+    this.document = recorded;
     return this.document;
   }
 }

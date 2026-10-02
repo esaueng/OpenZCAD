@@ -6,6 +6,7 @@ import {
   addPrimitiveFeature,
   createProjectDocument
 } from '@openzcad/document-core';
+import type { CadPatchProposal } from '@openzcad/ai-contracts';
 import { toBodyId, toUserId } from '@openzcad/shared';
 import {
   loadAssistantThread,
@@ -471,6 +472,131 @@ describe('asking from the prompt line', () => {
       thinking: false,
       unread: 0,
       context: '2 selected edges'
+    });
+  });
+});
+
+describe('selection grounding for assistant follow-ups', () => {
+  it('carries the originating selection intent through a clarification answer', async () => {
+    window.localStorage.clear();
+    const document = allEdgeDocument();
+    const bodyId = document.bodyOrder[0]!;
+    saveAssistantThread(
+      document.projectId,
+      [
+        {
+          kind: 'user',
+          id: 'initial_request',
+          text: 'Fillet all selected edges',
+          attachments: [],
+          answers: [],
+          at: 1
+        },
+        {
+          kind: 'questions',
+          id: 'clarification',
+          preamble: 'How large should the fillet be?',
+          questions: [
+            {
+              id: 'radius',
+              prompt: 'Fillet size',
+              options: [{ label: '5 mm', value: '5 mm' }],
+              allowFreeText: true,
+              unit: 'mm'
+            }
+          ],
+          answers: {},
+          sent: false,
+          at: 2
+        }
+      ],
+      2
+    );
+
+    const proposal = {
+      proposalId: 'followup_wrong_edge_guess',
+      summary: 'Fillet the selected edges.',
+      assumptions: [],
+      operations: [
+        {
+          kind: 'add_edge_modifier',
+          name: 'Selected edge fillets',
+          localId: null,
+          modifier: 'fillet',
+          targetBodyId: 'body_other',
+          edgeHashes: [999],
+          size: 5
+        }
+      ]
+    };
+    const streamBody = `data: ${JSON.stringify({
+      type: 'response.output_text.done',
+      text: JSON.stringify({
+        replyKind: 'patch',
+        proposal,
+        questions: null,
+        message: null,
+        readings: null
+      })
+    })}\n\ndata: ${JSON.stringify({ type: 'response.completed' })}\n\n`;
+    vi.stubGlobal(
+      'fetch',
+      vi.fn(async (input: RequestInfo | URL) =>
+        (input instanceof Request
+          ? input.url
+          : input instanceof URL
+            ? input.href
+            : input
+        ).includes('/api/assistant/proposals')
+          ? new Response(streamBody, {
+              status: 200,
+              headers: { 'content-type': 'text/event-stream' }
+            })
+          : new Response(JSON.stringify({ configured: true }))
+      )
+    );
+    const user = userEvent.setup();
+    const onPreview = vi.fn(
+      async (_proposal: CadPatchProposal | null) => ({ ok: true as const })
+    );
+    render(
+      <AssistantPanel
+        document={document}
+        selection={{
+          bodyIds: [bodyId],
+          featureIds: [],
+          topologies: [
+            { bodyId, kind: 'edge', topologyId: 'edge:1', hash: 1 },
+            { bodyId, kind: 'edge', topologyId: 'edge:2', hash: 2 }
+          ]
+        }}
+        onApply={vi.fn().mockResolvedValue(true)}
+        onPreview={onPreview}
+        collapsed={false}
+        onCollapsedChange={vi.fn()}
+        confirmDestructive
+        effectiveAssistant={{
+          configured: true,
+          provider: 'openai',
+          model: 'gpt-5.6-sol',
+          reasoningEffort: 'medium'
+        }}
+      />
+    );
+
+    await user.click(await screen.findByRole('button', { name: '5 mm' }));
+    await user.click(screen.getByRole('button', { name: 'Build it' }));
+
+    await waitFor(() => expect(onPreview).toHaveBeenCalledTimes(2));
+    expect(onPreview.mock.calls.at(-1)?.[0]).toMatchObject({
+      operations: [
+        expect.objectContaining({
+          kind: 'add_edge_modifier',
+          targetBodyId: bodyId,
+          edgeHashes: [1, 2],
+          size: 5
+        })
+      ]
     });
   });
 });

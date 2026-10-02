@@ -23,7 +23,7 @@ function imported() {
           marker: 'openzcad-source-ref',
           version: 1,
           hashAlgorithm: 'sha256',
-          checksumSha256: name,
+          checksumSha256: (name === 'holder' ? 'a' : 'b').repeat(64),
           logicalBytes: 4
         }
       })
@@ -119,14 +119,14 @@ it('does not relabel a replaced source as the old uploaded bytes', async () => {
       node.data.featureKind === 'imported-step' &&
       node.data.sourceName === 'holder.step'
     ) {
-      node.data.stepSourceRef!.checksumSha256 = 'replacement';
+      node.data.stepSourceRef!.checksumSha256 = 'c'.repeat(64);
       node.data.artifactId = toArtifactId('artifact_local_replacement');
     }
   }
   const merged = applyAccountSourceArchives(changed, uploaded.document);
   expect(
     listLocalOnlyImportSources(merged).some(
-      (s) => s.checksumSha256 === 'replacement'
+      (s) => s.checksumSha256 === 'c'.repeat(64)
     )
   ).toBe(true);
 });

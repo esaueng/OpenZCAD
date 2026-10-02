@@ -1,4 +1,7 @@
-import { documentNodesWithHistory } from '@openzcad/shared';
+import {
+  documentNodesWithHistory,
+  isImportedStepSourceData
+} from '@openzcad/shared';
 import type { FeatureId, ProjectDocument } from '@openzcad/shared';
 import { importSourceChecksums } from './sourceBlobClaims';
 
@@ -46,17 +49,20 @@ export function listLocalOnlyImportSources(
 ): LocalOnlyImportSource[] {
   const sources: LocalOnlyImportSource[] = [];
   for (const feature of documentNodesWithHistory(document)) {
-    if (feature.kind !== 'feature') continue;
-    if (feature.data.featureKind !== 'imported-step') {
+    // Stored documents and undo snapshots can predate ingress validation.
+    // Only well-formed reference imports can name bytes to archive.
+    if (!feature || feature.kind !== 'feature' || !feature.data) continue;
+    if (!isImportedStepSourceData(feature.data)) {
       continue;
     }
-    if (!feature.data.artifactId.startsWith(LOCAL_ARTIFACT_ID_PREFIX)) {
+    if (
+      !feature.data.artifactId.startsWith(LOCAL_ARTIFACT_ID_PREFIX) ||
+      feature.data.stepText !== undefined ||
+      feature.data.stepSourceRef === undefined
+    ) {
       continue;
     }
-    const checksumSha256 = feature.data.stepSourceRef?.checksumSha256;
-    if (checksumSha256 === undefined) {
-      continue;
-    }
+    const checksumSha256 = feature.data.stepSourceRef.checksumSha256;
     sources.push({
       featureId: feature.featureId,
       sourceName: feature.data.sourceName,
