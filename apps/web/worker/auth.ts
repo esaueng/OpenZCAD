@@ -486,26 +486,69 @@ async function cleanExpiredAuthRows(
   ]);
 }
 
-function loginEmail(code: string): {
+const EMAIL_FONT =
+  "-apple-system,BlinkMacSystemFont,'Segoe UI',Helvetica,Arial,sans-serif";
+const EMAIL_MONO_FONT =
+  "ui-monospace,'SF Mono',Menlo,Consolas,'Liberation Mono',monospace";
+
+// The sign-in email has to read in light and dark mail apps alike. It is
+// light by default, which clients that invert for dark mode (Gmail, Outlook)
+// recolour cleanly because it carries no images and no tinted text; clients
+// that honour prefers-color-scheme (Apple Mail, iOS Mail) get the dark
+// overrides instead. The code is one unbroken run of digits — spacing comes
+// from letter-spacing, never from characters — so a copy, a double-click or
+// the user-select:all click always yields exactly the six digits.
+export function loginEmail(code: string): {
   subject: string;
   text: string;
   html: string;
 } {
+  const minutes = Math.round(LOGIN_CODE_TTL_SECONDS / 60);
+  const validity = `It expires in ${minutes} minutes and works once.`;
   const subject = `${code} is your OpenZCAD sign-in code`;
   const text = [
-    'Sign in to your OpenZCAD cloud profile',
+    'Your OpenZCAD sign-in code:',
     '',
-    `Your code is: ${code}`,
+    code,
     '',
-    'This code expires in 10 minutes and can be used once.',
-    'If you did not request it, you can ignore this email.'
+    `Enter it in OpenZCAD to sign in. ${validity}`,
+    '',
+    'Didn’t request this? You can ignore this email.'
   ].join('\n');
   const html = [
-    '<h1>Sign in to OpenZCAD</h1>',
-    '<p>Enter this code to open your cloud profile:</p>',
-    `<p style="font:700 32px/1.2 monospace;letter-spacing:0.18em">${code}</p>`,
-    '<p>This code expires in 10 minutes and can be used once.</p>',
-    '<p>If you did not request it, you can ignore this email.</p>'
+    '<!doctype html><html lang="en"><head>',
+    '<meta charset="utf-8">',
+    '<meta name="viewport" content="width=device-width,initial-scale=1">',
+    '<meta name="color-scheme" content="light dark">',
+    '<meta name="supported-color-schemes" content="light dark">',
+    '<meta name="format-detection" content="telephone=no,date=no,address=no,email=no">',
+    `<title>${subject}</title>`,
+    '<style>',
+    ':root{color-scheme:light dark;supported-color-schemes:light dark}',
+    '@media (prefers-color-scheme:dark){',
+    '.oz-page{background:#16181b!important}',
+    '.oz-ink{color:#ebedef!important}',
+    '.oz-muted{color:#a3aab3!important}',
+    '.oz-code{background:#22262b!important;border-color:#3a4048!important;color:#ffffff!important}',
+    '.oz-rule{border-color:#2e3339!important}',
+    '}',
+    '</style></head>',
+    '<body class="oz-page" style="margin:0;padding:0;background:#ffffff">',
+    // Inbox preview text, padded so the preview stops there instead of
+    // running on into the body copy.
+    `<div style="display:none;max-height:0;overflow:hidden;opacity:0;mso-hide:all">${validity}${'&#847;&zwnj;&nbsp;'.repeat(40)}</div>`,
+    '<table role="presentation" class="oz-page" width="100%" cellpadding="0" cellspacing="0" border="0" style="background:#ffffff">',
+    '<tr><td align="center" style="padding:40px 24px">',
+    '<table role="presentation" width="100%" cellpadding="0" cellspacing="0" border="0" style="max-width:440px">',
+    `<tr><td class="oz-ink" style="font:600 15px/1.4 ${EMAIL_FONT};color:#101215">OpenZCAD</td></tr>`,
+    `<tr><td class="oz-muted" style="padding-top:32px;font:15px/1.5 ${EMAIL_FONT};color:#4c535d">Your sign-in code</td></tr>`,
+    '<tr><td style="padding-top:10px">',
+    `<div class="oz-code" style="display:inline-block;padding:14px 14px 14px 20px;background:#f2f4f7;border:1px solid #d9dde3;border-radius:6px;font:600 36px/1 ${EMAIL_MONO_FONT};letter-spacing:0.18em;color:#101215;-webkit-user-select:all;user-select:all">${code}</div>`,
+    '</td></tr>',
+    `<tr><td class="oz-muted" style="padding-top:16px;font:15px/1.5 ${EMAIL_FONT};color:#4c535d">Enter it in OpenZCAD to sign in. ${validity}</td></tr>`,
+    '<tr><td class="oz-rule" style="padding-top:32px;border-bottom:1px solid #e3e6ea;font-size:0;line-height:0">&nbsp;</td></tr>',
+    `<tr><td class="oz-muted" style="padding-top:16px;font:13px/1.5 ${EMAIL_FONT};color:#5d6570">Didn’t request this? You can ignore this email.</td></tr>`,
+    '</table></td></tr></table></body></html>'
   ].join('');
   return { subject, text, html };
 }
@@ -560,9 +603,7 @@ export async function startEmailLogin(
     await env.EMAIL.send({
       to: email,
       from: { email: env.AUTH_EMAIL_FROM, name: 'OpenZCAD' },
-      subject: loginEmail(code).subject,
-      text: loginEmail(code).text,
-      html: loginEmail(code).html
+      ...loginEmail(code)
     });
   } catch (error) {
     await env.DB.prepare(`DELETE FROM auth_email_challenges WHERE id = ?`)
@@ -1320,6 +1361,20 @@ export async function authenticateRequest(
   if (bearerToken) {
     return authenticateDesktopBearer(bearerToken, env);
   }
+  return authenticateBrowserSession(request, env);
+}
+
+/** Browser authorization requires the hosted session cookie, even when a bearer is present. */
+export async function authenticateBrowserSession(
+  request: Request,
+  env: CloudflareEnv
+): Promise<AuthSession> {
+  if (env.AUTH_MODE !== 'email-code' || !env.DB) {
+    throw new AuthenticationError(
+      'Authentication mode is not configured.',
+      'configuration'
+    );
+  }
   const token = readCookie(request, SESSION_COOKIE_NAME);
   if (!token) {
     throw new AuthenticationError();
@@ -1349,7 +1404,7 @@ export async function authenticateRequest(
     userId: toUserId(session.user_id),
     displayName: session.email.split('@')[0] || session.email,
     email: session.email,
-    mode
+    mode: 'email-code'
   };
 }
 

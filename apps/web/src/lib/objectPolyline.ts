@@ -3,7 +3,7 @@ import {
   boundedPolygonSides,
   textDisplayLoops
 } from '@openzcad/geometry';
-import type { SketchObjectData } from '@openzcad/shared';
+import { textSketchBudgetError, type SketchObjectData } from '@openzcad/shared';
 import type { SketchPoint } from './sketch/session';
 
 const CIRCLE_SEGMENTS = 96;
@@ -11,6 +11,24 @@ const CIRCLE_SEGMENTS = 96;
 export interface SketchObjectPolyline {
   points: SketchPoint[];
   closed: boolean;
+}
+
+/** Preflight a collection before expanding even its first text outline. */
+export function displayObjectsWithTextBudget<
+  T extends { data: SketchObjectData }
+>(objects: T[], documentBudgetError: string | null = null): T[] {
+  const error =
+    documentBudgetError ??
+    textSketchBudgetError(
+      (function* () {
+        for (const object of objects) {
+          if (object.data.objectKind === 'text') yield object.data.text;
+        }
+      })()
+    );
+  return error
+    ? objects.filter((object) => object.data.objectKind !== 'text')
+    : objects;
 }
 
 /**

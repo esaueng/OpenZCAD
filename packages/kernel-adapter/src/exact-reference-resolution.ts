@@ -137,9 +137,9 @@ export function resolveEdgeModifierEdges(
 
   // Collapsing a multi-solid body can fuse and post-process its topology. The
   // source handles and semantic references no longer describe that result, so
-  // preserve the existing unique-hash resolver for this deliberately
-  // unsupported lineage boundary.
-  if (shape.solids.length !== 1) {
+  // preserve unique-hash resolution for legacy picks. A v5 pick below still
+  // needs a unique complete witness on the collapsed result.
+  if (shape.solids.length !== 1 && references === undefined) {
     return {
       handles: requested.map((hash) => {
         const matches = legacyHandles.get(hash) ?? [];
@@ -155,9 +155,11 @@ export function resolveEdgeModifierEdges(
     };
   }
 
+  const lineage = shape.solids.length === 1 ? shape.lineage : undefined;
+
   const candidates: TopologyResolutionCandidate[] = handles.map((handle) => {
     const witness = edgeWitnessOf(kernel, handle);
-    const lineageReference = shape.lineage?.edgeReferences.get(handle);
+    const lineageReference = lineage?.edgeReferences.get(handle);
     return {
       kind: 'edge',
       currentHash: topologyHashOfWitness('edge', witness),
@@ -200,7 +202,13 @@ export function resolveEdgeModifierEdges(
     }
     const reference = storedReferences[0];
     if (reference) {
-      const resolution = resolveTopologyReference(reference, candidates);
+      const resolution = resolveTopologyReference(
+        reference,
+        candidates,
+        shape.solids.length === 1
+          ? { status: 'available' }
+          : { status: 'unsupported', operation: 'fillet' }
+      );
       if (resolution.status === 'failed') {
         throw new Error(`Edge modifier edge is stale: ${resolution.message}`);
       }

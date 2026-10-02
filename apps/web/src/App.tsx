@@ -12,13 +12,17 @@ import type {
   ParameterPreviewBody,
   parameterVisualPreview
 } from './lib/parameterVisualPreview';
+import type { AdoptLocalProjectResult } from './lib/projectIdentityTransfer';
 import { LatestTask } from './lib/latestTask';
 import { rebuildProgressLabel } from './lib/rebuildProgressLabel';
 import { featureHistory } from './lib/featureHistory';
 import { FeatureBuildError } from './lib/featureValidation';
 import { edgeModifierCommand } from './lib/edgeModifierEdit';
 import type { EdgeModifierFormValue } from './components/forms/FeatureForms';
-import { documentNodesWithHistory } from '@openzcad/shared';
+import {
+  documentNodesWithHistory,
+  documentTextBudgetError
+} from '@openzcad/shared';
 import { useWorkspaceResume } from './hooks/useWorkspaceResume';
 import { buildMeasurementRecord } from './lib/measurementRecord';
 import {
@@ -217,7 +221,6 @@ import type { SketchSolveStatus } from './components/SketchToolRail';
 import { ApiError, api, isProjectDocumentUnavailableError } from './lib/api';
 import {
   applyAccountSourceArchives,
-  archiveAccountImportSources,
   sourceUploadMessage
 } from './lib/accountImportSources';
 import {
@@ -515,11 +518,17 @@ import type {
   CommandDiagnostic,
   InteractionState
 } from './lib/interaction/machine';
-import { resolveFace } from './lib/topologyResolution';
-import { objectPolylines } from './lib/objectPolyline';
+import {
+  refreshEdgeFormReferencesForCommit,
+  resolveFace
+} from './lib/topologyResolution';
+import { useLineageDemand } from './lib/lineageDemand';
+import {
+  objectPolylines,
+  displayObjectsWithTextBudget
+} from './lib/objectPolyline';
 import type { RegionPickData } from './components/viewer/regionOverlay';
 import { CommandBar, type PaletteCommand } from './components/CommandBar';
-import { ShortcutsOverlay } from './components/ShortcutsOverlay';
 import { DISPLAY_MODE_LABELS } from './lib/displayMode';
 import { ContextMenu, type ContextMenuState } from './components/ContextMenu';
 import type { BodyFeatureIds } from '@openzcad/document-core';
@@ -642,6 +651,22 @@ const LazyMeasurementDock = lazyWithStaleChunkNotice(() =>
     default: module.MeasurementDock
   }))
 );
+// The "?" control reference opens only on request; lazy, it also takes its
+// keyboard/pointer reference tables off the entry chunk.
+const LazyShortcutsOverlay = lazyWithStaleChunkNotice(() =>
+  import('./components/ShortcutsOverlay').then((module) => ({
+    default: module.ShortcutsOverlay
+  }))
+);
+function ShortcutsOverlay(
+  props: ComponentProps<typeof LazyShortcutsOverlay>
+) {
+  return (
+    <Suspense fallback={null}>
+      <LazyShortcutsOverlay {...props} />
+    </Suspense>
+  );
+}
 // Operation help is only needed after the user starts a modeling action.
 const LazyToolCard = lazyWithStaleChunkNotice(() =>
   import('./components/ToolCard').then((module) => ({
@@ -1154,7 +1179,43 @@ declare global {
      * down; setting this to 0 makes the deferred-preview path deterministic.
      */
     __openzcadE2ESlowFrameMs?: number;
+    /**
+     * E2E-only interruption-test hooks, honoured only in `VITE_E2E=1` builds.
+     * The in-flight flag is true exactly while the verified Apply's exact
+     * preflight has started and its transaction has not committed, so a spec
+     * that reloads after observing the flag provably lands mid-flight. The
+     * paced status toast cannot serve as that signal: it holds each message
+     * for `STATUS_MIN_DWELL_MS` and a burst ends on the latest message, so a
+     * ~200 ms "Checking…" phase is never drawn. `__openzcadE2EDelayNextExactCheckMs`
+     * is a one-shot hold (consumed back to 0) that keeps the next flagged
+     * check's commit waiting, so the ~200 ms natural window stays open long
+     * enough for the spec's reload to land inside it.
+     */
+    __openzcadE2EApplyCheckInFlight?: boolean;
+    __openzcadE2EDelayNextExactCheckMs?: number;
   }
+}
+
+/**
+ * E2E-only hold for the interruption tests: sleeps for the one-shot
+ * `__openzcadE2EDelayNextExactCheckMs` a spec armed, then resolves at once
+ * when no hold is armed. Called concurrently with the flagged exact check so
+ * the worker is engaged while the commit waits, never before it starts.
+ * Production builds never arm the knob, so this is always a no-op there.
+ */
+async function holdNextExactCheckForE2E(): Promise<void> {
+  if (
+    (import.meta.env as unknown as { VITE_E2E?: string }).VITE_E2E !== '1' ||
+    typeof window === 'undefined'
+  ) {
+    return;
+  }
+  const delayMs = window.__openzcadE2EDelayNextExactCheckMs;
+  if (typeof delayMs !== 'number' || !(delayMs > 0)) {
+    return;
+  }
+  window.__openzcadE2EDelayNextExactCheckMs = 0;
+  await new Promise<void>((resolve) => setTimeout(resolve, delayMs));
 }
 
 const E2E_SLOW_FRAME_MS =
@@ -1198,10 +1259,6 @@ const DISPLAY_MODE_ORDER: DisplayMode[] = [
   'shaded',
   'wireframe'
 ];
-
-type AdoptLocalProjectResult =
-  | { state: 'adopted' | 'already-adopted' | 'missing'; sourceWarning?: string }
-  | { state: 'conflict'; conflict: ProjectConflict };
 
 interface OffsetEditPlan {
   command: AnyCommand;
@@ -1745,6 +1802,10 @@ export function App() {
   } | null>(null);
   // Named `doc` (not `document`) so the global DOM document is never shadowed.
   const [doc, setDoc] = useState<ProjectDocument | null>(null);
+  const textOutlineBudgetError = useMemo(
+    () => (doc ? documentTextBudgetError(doc) : null),
+    [doc]
+  );
   /** History pins a feature; viewport ownership is re-resolved after rebuilds. */
   const [selectedFeatureNode, setSelectedFeatureNode] = useState<{
     id: string;
@@ -3307,7 +3368,24 @@ export function App() {
     value: EdgeModifierFormValue
   ) {
     if (geometryBusy) return;
-    const command = edgeModifierCommand(feature, kind, value);
+    // K05 on-demand probe: a pick made before the demanded rebuild arrived
+    // carries no lineage name, so the form holds no `edgeReferences` at all
+    // (they are all-or-nothing). Re-read CURRENT lineage by hash at commit
+    // time and use it only when every picked edge resolves to a named
+    // reference for that same hash; otherwise commit exactly what the form
+    // holds.
+    const formBody =
+      representations[value.targetBodyId] ??
+      renderedRepresentations[value.targetBodyId];
+    const namedReferences = refreshEdgeFormReferencesForCommit(
+      formBody,
+      value.edgeHashes,
+      value.edgeReferences
+    );
+    const refreshedValue = namedReferences
+      ? { ...value, edgeReferences: namedReferences }
+      : value;
+    const command = edgeModifierCommand(feature, kind, refreshedValue);
     const bodyId =
       feature?.bodyId ??
       ('ids' in command.payload ? command.payload.ids?.bodyId : undefined);
@@ -4534,9 +4612,27 @@ export function App() {
     };
   }, [cloudProjectIds, doc?.projectId, session]);
 
+  // K05 on-demand boolean probe: sticky per open document, cleared on
+  // project switch. A face/edge/vertex pick on B — or a command started on
+  // B — demands lineage for B, so the next rebuild probes its producing
+  // boolean. Minimal App plumbing by design (other PRs edit this file):
+  // the sticky set lives in `useLineageDemand`, the sync carries it like
+  // `analysis`, and it never enters the document.
+  const lineageDemandSelections: TopologySelection[] = useMemo(
+    () => [...(selectedTopology ? [selectedTopology] : []), ...selectedEdges],
+    [selectedTopology, selectedEdges]
+  );
+  const { demand: lineageDemand } = useLineageDemand({
+    projectId: doc?.projectId,
+    selections: lineageDemandSelections,
+    interaction
+  });
   useEffect(() => {
-    geometry.sync(doc);
-  }, [doc]);
+    geometry.sync(doc, lineageDemand);
+    // `geometry` is stable across renders; re-sync when the demanded set
+    // grows so the probe runs without waiting for the next edit.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [doc, lineageDemand]);
 
   const features = useMemo<FeatureNode[]>(
     () => (doc ? listFeaturesInOrder(doc) : []),
@@ -7324,7 +7420,10 @@ export function App() {
     setViewerSettings({
       showGrid: appSettings.viewport.showGrid,
       displayMode: appSettings.viewport.displayMode,
-      reducedMotion: appSettings.appearance.reducedMotion
+      reducedMotion: appSettings.appearance.reducedMotion,
+      zoomToCursor: appSettings.viewport.zoomToCursor,
+      middleDrag: appSettings.viewport.middleDrag,
+      pointerNavigation: appSettings.viewport.pointerNavigation
     });
     setSettingsMessage('Viewport defaults applied to the current view.');
   }
@@ -7449,14 +7548,22 @@ export function App() {
     // lose the baseline (which forces conservative reconciliation), never put
     // the baseline ahead of the device copy.
     const currentManager = managerRef.current;
-    const current = currentManager?.document;
+    const live = currentManager?.document;
+    const current =
+      live?.projectId === merged.projectId
+        ? live
+        : await loadLocalProject(merged.projectId);
     const editedDuringSave =
       current?.projectId === merged.projectId &&
       current.version !== local.version;
     const durable = editedDuringSave
       ? applyAccountSourceArchives(current, merged)
       : merged;
-    if (editedDuringSave && currentManager && durable !== current) {
+    if (
+      editedDuringSave &&
+      currentManager?.document === current &&
+      durable !== current
+    ) {
       currentManager.document = durable;
       setDoc(durable);
     }
@@ -7493,151 +7600,26 @@ export function App() {
     return merged;
   }
 
-  async function finishAccountSourceSave(
-    document: ProjectDocument,
-    local: ProjectDocument,
-    summary: ProjectSummary = summarizeLocalDocument(document)
-  ): Promise<string | undefined> {
-    const projectId = document.projectId;
-    // Account creation establishes the upload destination. Source bytes must
-    // follow before the new account copy can be rebuilt on another device.
-    setStatus('Saving project source files to your account…');
-    const prepared = await archiveAccountImportSources(document, {
-      loadSourceBytes: loadSourceBlob,
-      archive: (input) =>
-        archiveArtifactBody(api, document.projectId, input, (artifact) => {
-          if (managerRef.current?.document.projectId === projectId)
-            setArtifacts((current) => [
-              artifact,
-              ...current.filter(
-                (item) => item.artifactId !== artifact.artifactId
-              )
-            ]);
-        })
-    });
-    let saved = document;
-    let localForAcceptance = local;
-    if (prepared.document !== document) {
-      // Keep completed upload metadata if the account write fails. Never
-      // replace edits made while the source transfers were in flight.
-      const current = managerRef.current;
-      if (
-        current?.document.projectId !== projectId ||
-        current.document.version === local.version
-      ) {
-        await saveLocalProject(prepared.document);
-        if (
-          managerRef.current === current &&
-          !cloudProjectIds.has(projectId) &&
-          current?.document.projectId === projectId &&
-          current.document.version === local.version
-        ) {
-          current.document = prepared.document;
-          localForAcceptance = prepared.document;
-          setDoc(prepared.document);
-        }
-      }
-      const stored = await api.saveProjectDocument({
-        projectId: prepared.document.projectId,
-        expectedVersion: document.version,
-        document: withoutDerivedProjection(prepared.document)
-      });
-      saved = { ...prepared.document, version: stored.version };
-    }
-    await acceptAccountDocument(saved, localForAcceptance, {
-      ...summary,
-      documentVersion: saved.version
-    });
-    return sourceUploadMessage(prepared.result) ?? undefined;
-  }
-
-  /**
-   * Gives one device-local project an account record, keeping its id so the
-   * device's own copy and shelf state stay pointed at the same project.
-   *
-   * Returns whether anything changed rather than reporting status itself: the
-   * bulk path has to summarize many of these, and one line per project would
-   * bury the result.
-   */
+  /** Saves one device project and reconciles retry responses against its account ID. */
   async function adoptLocalProject(
     projectId: string
   ): Promise<AdoptLocalProjectResult> {
-    const local = await loadLocalProject(projectId);
-    if (!local) {
-      return { state: 'missing' };
-    }
-    try {
-      const response = await api.adoptProject(local);
-      return {
-        state: 'adopted',
-        sourceWarning: await finishAccountSourceSave(
-          response.document,
-          local,
-          response.project
-        )
-      };
-    } catch (error) {
-      if (error instanceof ApiError && error.code === 'ALREADY_ADOPTED') {
-        // A lost adoption response and a genuinely pre-existing account copy
-        // produce the same 409. Fetch the actual document and reconcile it;
-        // merely painting the cloud badge here would claim agreement without
-        // ever comparing the work.
-        const [remote, lastSyncedVersion] = await Promise.all([
-          api.loadProject(projectId),
-          loadLastSyncedVersion(projectId)
-        ]);
-        remoteVersionsRef.current.set(projectId, remote.version);
-        setCloudProjectIds((current) => new Set(current).add(projectId));
-        const outcome = chooseProjectDocument(local, remote, lastSyncedVersion);
-        if (outcome.choice === 'diverged') {
-          return {
-            state: 'conflict',
-            conflict: conflictFromDocuments(
-              outcome.local,
-              outcome.remote,
-              'account'
-            )
-          };
-        }
-        if (outcome.choice === 'remote') {
-          return {
-            state: 'already-adopted',
-            sourceWarning: await finishAccountSourceSave(
-              outcome.document,
-              local
-            )
-          };
-        }
-        if (outcome.choice === 'local') {
-          // The baseline proves only this device moved. Complete the interrupted
-          // sync with a fenced document write rather than asking the user to
-          // resolve a conflict that does not exist.
-          const candidate = {
-            ...outcome.document,
-            ownerUserId: remote.ownerUserId
-          };
-          const saved = await api.saveProjectDocument({
-            projectId: candidate.projectId,
-            expectedVersion: remote.version,
-            document: withoutDerivedProjection(candidate)
-          });
-          const sourceWarning = await finishAccountSourceSave(
-            {
-              ...candidate,
-              version: saved.version,
-              derived: {
-                ...candidate.derived,
-                updatedAt: saved.updatedAt
-              }
-            },
-            local
-          );
-          return { state: 'already-adopted', sourceWarning };
-        }
-        return { state: 'missing' };
-      }
-      throw error;
-    }
+    // Loaded on demand: only saving a device project to the account gets here.
+    const { adoptLocalProject: adopt } =
+      await import('./lib/projectIdentityTransfer');
+    return adopt(projectId, {
+      localUserId,
+      manager: () => managerRef.current,
+      setDoc,
+      remoteVersions: remoteVersionsRef.current,
+      setProjects,
+      setArtifacts,
+      setCloudProjectIds,
+      cloudProjectIds,
+      setStatus,
+      summarize: summarizeLocalDocument,
+      acceptAccountDocument
+    });
   }
 
   async function handleSaveToAccount(
@@ -9245,13 +9227,31 @@ export function App() {
       return false;
     }
     setBusy(true);
+    // E2E-only interruption gate: while the flag is true the preflight has
+    // started and the transaction below has not committed. The flag is
+    // cleared before the version check, so observing it provably means a
+    // reload lands mid-flight. Honoured only in `VITE_E2E=1` builds.
+    const e2eApplyGate =
+      (import.meta.env as unknown as { VITE_E2E?: string }).VITE_E2E === '1' &&
+      typeof window !== 'undefined';
+    if (e2eApplyGate) window.__openzcadE2EApplyCheckInFlight = true;
     try {
       setStatus('Checking the AI change against exact geometry…');
-      const preflight = await preflightCadPatch(
-        current,
-        proposal,
-        (candidate, analysis) => geometry.syncOnce(candidate, analysis)
-      );
+      let preflight: Awaited<ReturnType<typeof preflightCadPatch>>;
+      if (e2eApplyGate) {
+        const pending = preflightCadPatch(
+          current,
+          proposal,
+          (candidate, analysis) => geometry.syncOnce(candidate, analysis)
+        );
+        [preflight] = await Promise.all([pending, holdNextExactCheckForE2E()]);
+      } else {
+        preflight = await preflightCadPatch(
+          current,
+          proposal,
+          (candidate, analysis) => geometry.syncOnce(candidate, analysis)
+        );
+      }
       const live = managerRef.current?.document;
       if (
         !live ||
@@ -9275,6 +9275,7 @@ export function App() {
       setStatus(errorMessage(error, 'Patch could not be applied.'));
       return false;
     } finally {
+      if (e2eApplyGate) window.__openzcadE2EApplyCheckInFlight = false;
       setBusy(false);
     }
   }
@@ -9653,11 +9654,11 @@ export function App() {
       // and `doc` is the same render's value throughout.
       return;
     }
-    // The triangles arrive in millimetres — a 3MF's declared unit is applied
-    // by the importer, and the formats that declare none follow the STL
-    // interchange convention. The mesh exports multiply by UNIT_TO_MM on the
-    // way out, so adopting the vertices at 1/UNIT_TO_MM keeps a non-mm
-    // document's round trip at the same physical size.
+    // The triangles arrive in millimetres — a 3MF's declared unit and glTF's
+    // metres are applied by the importer, and the formats that declare none
+    // follow the STL interchange convention. The mesh exports multiply by
+    // UNIT_TO_MM on the way out, so adopting the vertices at 1/UNIT_TO_MM
+    // keeps a non-mm document's round trip at the same physical size.
     const meshScale = 1 / UNIT_TO_MM[doc.units];
     const vertices =
       meshScale === 1
@@ -11362,7 +11363,10 @@ export function App() {
       holes: { x: number; y: number }[][];
     }[] = [];
     try {
-      profiles = computeSketchRegions(objects, resolve).map((profile) => ({
+      profiles = computeSketchRegions(
+        displayObjectsWithTextBudget(objects, textOutlineBudgetError),
+        resolve
+      ).map((profile) => ({
         outer: profile.outer.polyline,
         holes: profile.holes.map((hole) => hole.polyline)
       }));
@@ -11406,6 +11410,7 @@ export function App() {
       selectedObjectId: session.selectedObjectId,
       parameterScope: parameterScope.scope,
       constraintDiagnosticObjectIds: sketchSolveDiagnosticObjectIds,
+      textOutlineBudgetError,
       definedObjectIds: sketchDefinedObjectIds,
       dimensions: sketchDimensionAnnotations(
         objects,
@@ -11424,6 +11429,7 @@ export function App() {
     parameterScope.scope,
     sketchDiagnosticPoints,
     sketchSolveDiagnosticObjectIds,
+    textOutlineBudgetError,
     sketchDefinedObjectIds
   ]);
 
@@ -12750,18 +12756,22 @@ export function App() {
       }
       const curves = active
         ? []
-        : objects.flatMap((object) => {
-            try {
-              // A text object draws one run per glyph region plus one per
-              // counter, so this is many runs from one object.
-              return objectPolylines(object.data, resolve).map((polyline) => ({
-                ...polyline,
-                construction: object.data.construction === true
-              }));
-            } catch {
-              return [];
+        : displayObjectsWithTextBudget(objects, textOutlineBudgetError).flatMap(
+            (object) => {
+              try {
+                // A text object draws one run per glyph region plus one per
+                // counter, so this is many runs from one object.
+                return objectPolylines(object.data, resolve).map(
+                  (polyline) => ({
+                    ...polyline,
+                    construction: object.data.construction === true
+                  })
+                );
+              } catch {
+                return [];
+              }
             }
-          });
+          );
       let regions: {
         profileId: string;
         regionFingerprint: number;
@@ -12777,19 +12787,20 @@ export function App() {
         holes: { x: number; y: number }[][];
       }[] = [];
       try {
-        regions = computeSketchRegions(objects, (value) => resolve(value)).map(
-          (region) => ({
-            profileId: region.profileId,
-            regionFingerprint: region.regionFingerprint,
-            samplePoint: region.samplePoint,
-            centroid: region.centroid,
-            boundingBox: region.boundingBox,
-            sourceEntityIds: region.sourceEntityIds,
-            area: region.area,
-            outer: region.outer.polyline,
-            holes: region.holes.map((hole) => hole.polyline)
-          })
-        );
+        regions = computeSketchRegions(
+          displayObjectsWithTextBudget(objects, textOutlineBudgetError),
+          (value) => resolve(value)
+        ).map((region) => ({
+          profileId: region.profileId,
+          regionFingerprint: region.regionFingerprint,
+          samplePoint: region.samplePoint,
+          centroid: region.centroid,
+          boundingBox: region.boundingBox,
+          sourceEntityIds: region.sourceEntityIds,
+          area: region.area,
+          outer: region.outer.polyline,
+          holes: region.holes.map((hole) => hole.polyline)
+        }));
       } catch {
         // Unresolvable sketches simply render without pickable regions.
       }
@@ -12814,6 +12825,7 @@ export function App() {
     // after this memo last ran has to re-run it or the glyph stays a
     // diagnostic until something unrelated invalidates the memo.
     textFontsVersion,
+    textOutlineBudgetError,
     hiddenSketchIds,
     modelingEditFeature
   ]);
@@ -13842,9 +13854,22 @@ export function App() {
     const edgeHashes = edges
       .map((edge) => edge.hash)
       .filter((hash): hash is number => hash !== undefined);
-    const edgeReferences = edges.flatMap((edge) =>
+    // K05 on-demand probe: a pick made before the demanded rebuild arrives
+    // carries a hash-only reference. Re-read the CURRENT published topology
+    // at commit time by hash/topology id; fail closed to the stale
+    // reference when the name is not unambiguous.
+    const currentBody = bodyId
+      ? (representations[bodyId] ?? renderedRepresentations[bodyId])
+      : undefined;
+    const pickedReferences = edges.flatMap((edge) =>
       edge.reference?.kind === 'edge' ? [edge.reference] : []
     );
+    const edgeReferences =
+      refreshEdgeFormReferencesForCommit(
+        currentBody,
+        edgeHashes,
+        pickedReferences
+      ) ?? pickedReferences;
     if (!bodyId || edgeHashes.length === 0) {
       return null;
     }
@@ -15505,7 +15530,11 @@ export function App() {
    * they need to reach.
    */
   const workspaceInputEnabled =
-    !settingsOpen && !sharingOpen && !pendingShaprImport && !meshExportOpen;
+    !settingsOpen &&
+    !sharingOpen &&
+    !pendingShaprImport &&
+    !meshExportOpen &&
+    !pendingFeatureDelete;
   exactEntryInputEnabledRef.current =
     workspaceInputEnabled && !paletteOpen && !shortcutsOpen && !namingSave;
 
@@ -15575,6 +15604,9 @@ export function App() {
       if (meta && event.key.toLowerCase() === 'k') {
         event.preventDefault();
         setShortcutsOpen(false);
+        // The log is a sheet over the prompt's lane: left open, it kept
+        // covering the field this focuses, so typing went somewhere unseen.
+        setActivityLogOpen(false);
         setPaletteOpen((open) => !open);
         return;
       }
@@ -16137,11 +16169,13 @@ export function App() {
               ? 'showing the previous result until it finishes'
               : 'no exact projection is available yet'
         };
-  const visibleStatus = parameterPreview
-    ? `Parameter preview · ${parameterEditPending ? status : parameterDraftActive ? 'Press Enter to apply; Escape to cancel' : 'exact geometry rebuilding'}`
-    : status;
+  const visibleStatus = textOutlineBudgetError
+    ? `Text outlines refused: ${textOutlineBudgetError}`
+    : parameterPreview
+      ? `Parameter preview · ${parameterEditPending ? status : parameterDraftActive ? 'Press Enter to apply; Escape to cancel' : 'exact geometry rebuilding'}`
+      : status;
   const tone: 'ready' | 'warning' | 'running' =
-    geometry.state.phase === 'failed'
+    textOutlineBudgetError || geometry.state.phase === 'failed'
       ? 'warning'
       : !exactGeometryReady
         ? 'running'
