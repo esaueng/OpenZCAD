@@ -59,7 +59,7 @@ describe('Modeling operations form', () => {
     fireEvent.change(screen.getByLabelText('Countersink diameter'), {
       target: { value: '9' }
     });
-    fireEvent.click(screen.getByRole('button', { name: 'Check exact result' }));
+    fireEvent.click(screen.getByRole('button', { name: 'Create hole' }));
     expect(screen.getByRole('status')).toHaveTextContent(
       'Checking the exact kernel result'
     );
@@ -79,13 +79,12 @@ describe('Modeling operations form', () => {
     await act(async () => {
       resolvePreflight?.({ status: 'ready' });
     });
+    // The older check answered for the old face: it creates nothing.
     await waitFor(() =>
-      expect(
-        screen.getByRole('button', { name: 'Check exact result' })
-      ).toBeEnabled()
+      expect(screen.getByRole('button', { name: 'Create hole' })).toBeEnabled()
     );
-    expect(screen.queryByRole('button', { name: 'Create hole' })).toBeNull();
-    fireEvent.click(screen.getByRole('button', { name: 'Check exact result' }));
+    expect(props.onSubmit).not.toHaveBeenCalled();
+    fireEvent.click(screen.getByRole('button', { name: 'Create hole' }));
     expect(onPreflight.mock.calls[1]?.[0]).toMatchObject({
       operation: 'hole',
       input: {
@@ -124,9 +123,7 @@ describe('Modeling operations form', () => {
     expect(
       screen.getByRole('button', { name: faces[0]!.label })
     ).toHaveAttribute('aria-pressed', 'false');
-    expect(
-      screen.getByRole('button', { name: 'Check exact result' })
-    ).toBeDisabled();
+    expect(screen.getByRole('button', { name: 'Create hole' })).toBeDisabled();
   });
 
   it('toggles shell opening faces from viewport picks and replaces a thicken face', () => {
@@ -253,7 +250,7 @@ describe('Modeling operations form', () => {
     ).toHaveClass('field-error');
   });
 
-  it('announces pending and ready preflight before submitting a typed shell', async () => {
+  it('checks the exact result and creates a typed shell in one press', async () => {
     let resolvePreflight: ((value: { status: 'ready' }) => void) | undefined;
     const onPreflight = vi.fn(
       (_submission: ModelingOperationSubmission) =>
@@ -277,11 +274,12 @@ describe('Modeling operations form', () => {
     fireEvent.change(screen.getByRole('textbox', { name: 'Wall thickness' }), {
       target: { value: 'wall / 2' }
     });
-    fireEvent.click(screen.getByRole('button', { name: 'Check exact result' }));
+    fireEvent.click(screen.getByRole('button', { name: 'Create shell' }));
 
     expect(screen.getByRole('status')).toHaveTextContent(
       'Checking the exact kernel result'
     );
+    expect(onSubmit).not.toHaveBeenCalled();
     expect(onPreflight).toHaveBeenCalledWith({
       operation: 'shell',
       input: {
@@ -292,14 +290,13 @@ describe('Modeling operations form', () => {
       }
     });
 
-    resolvePreflight?.({ status: 'ready' });
-    await waitFor(() =>
-      expect(screen.getByRole('status')).toHaveTextContent(
-        'Exact preflight passed'
-      )
+    await act(async () => {
+      resolvePreflight?.({ status: 'ready' });
+    });
+    // No second press: the checked values are the ones created.
+    expect(onSubmit).toHaveBeenCalledExactlyOnceWith(
+      onPreflight.mock.calls[0]![0]
     );
-    fireEvent.click(screen.getByRole('button', { name: 'Create shell' }));
-    expect(onSubmit).toHaveBeenCalledWith(onPreflight.mock.calls[0]![0]);
   });
 
   it('shows an exact refusal as an alert and does not submit', async () => {
@@ -317,9 +314,9 @@ describe('Modeling operations form', () => {
       />
     );
 
-    fireEvent.click(screen.getByRole('button', { name: 'Check exact result' }));
+    fireEvent.click(screen.getByRole('button', { name: 'Create mirror' }));
     expect(await screen.findByRole('alert')).toHaveTextContent(
-      'Exact preflight refused: The mirror plane intersects unsupported imported topology.'
+      'Not created — The mirror plane intersects unsupported imported topology.'
     );
     expect(onSubmit).not.toHaveBeenCalled();
   });
@@ -344,7 +341,7 @@ describe('Modeling operations form', () => {
       'curved, non-convex, or unproven topology cannot be proven correct'
     );
     expect(
-      screen.getByRole('button', { name: 'Recheck exact result' })
+      screen.getByRole('button', { name: 'Create solid offset' })
     ).toBeDisabled();
     expect(onPreflight).not.toHaveBeenCalled();
   });
@@ -378,7 +375,7 @@ describe('Modeling operations form', () => {
     fireEvent.change(screen.getByLabelText('Surface mode'), {
       target: { value: 'smooth' }
     });
-    fireEvent.click(screen.getByRole('button', { name: 'Check exact result' }));
+    fireEvent.click(screen.getByRole('button', { name: 'Create loft' }));
     await waitFor(() => expect(onPreflight).toHaveBeenCalledTimes(1));
     expect(onPreflight).toHaveBeenCalledWith({
       operation: 'loft',
@@ -404,10 +401,7 @@ describe('Modeling operations form', () => {
       />
     );
     fireEvent.click(screen.getByRole('button', { name: faces[0]!.label }));
-    fireEvent.click(screen.getByRole('button', { name: 'Check exact result' }));
-    await waitFor(() =>
-      expect(screen.getByRole('button', { name: 'Apply hole' })).toBeVisible()
-    );
+    expect(screen.getByRole('button', { name: 'Apply hole' })).toBeVisible();
     expect(screen.queryByRole('button', { name: 'Create hole' })).toBeNull();
   });
 });
@@ -438,8 +432,11 @@ it.each(['removed', 'changed'] as const)(
       onSubmit: vi.fn()
     };
     const view = render(<ModelingOperationsForm {...props} />);
-    fireEvent.click(screen.getByRole('button', { name: 'Check exact result' }));
-    await screen.findByRole('button', { name: 'Apply helical sweep' });
+    // The first press checks and applies the values it checked.
+    fireEvent.click(
+      screen.getByRole('button', { name: 'Apply helical sweep' })
+    );
+    await waitFor(() => expect(props.onSubmit).toHaveBeenCalledOnce());
     view.rerender(
       <ModelingOperationsForm
         {...props}
@@ -461,10 +458,11 @@ it.each(['removed', 'changed'] as const)(
         }
       />
     );
+    // A second press with references changed since the check refuses.
     fireEvent.click(
       screen.getByRole('button', { name: 'Apply helical sweep' })
     );
-    expect(props.onSubmit).not.toHaveBeenCalled();
+    expect(props.onSubmit).toHaveBeenCalledOnce();
     expect(await screen.findByRole('alert')).toHaveTextContent(
       change === 'removed'
         ? 'Selected profile no longer resolves uniquely'
@@ -472,3 +470,61 @@ it.each(['removed', 'changed'] as const)(
     );
   }
 );
+
+describe('Hole position', () => {
+  const topFace: ModelingFaceOption = {
+    hash: 7,
+    topologyId: 'face:7',
+    label: 'Top face',
+    surfaceType: 'plane',
+    normal: { x: 0, y: 0, z: 1 }
+  };
+
+  it('names the world axis U and V run along on the picked face', () => {
+    render(
+      <ModelingOperationsForm
+        operation="hole"
+        scope={{}}
+        bodies={bodies}
+        faceOptions={[topFace]}
+        onPreflight={vi.fn()}
+        onSubmit={vi.fn()}
+      />
+    );
+    fireEvent.click(screen.getByRole('button', { name: 'Top face' }));
+    expect(screen.getByLabelText('U · along −Y')).toHaveValue('0');
+    expect(screen.getByLabelText('V · along +X')).toHaveValue('0');
+  });
+
+  it('puts a refusal about where the hole sits under its position', async () => {
+    const onSubmit = vi.fn();
+    render(
+      <ModelingOperationsForm
+        operation="hole"
+        scope={{}}
+        bodies={bodies}
+        faceOptions={[topFace]}
+        onPreflight={async () => ({
+          status: 'refused',
+          reason:
+            'Feature "Hole": The hole removed no material — it misses the body.'
+        })}
+        onSubmit={onSubmit}
+      />
+    );
+    fireEvent.click(screen.getByRole('button', { name: 'Top face' }));
+    fireEvent.change(screen.getByLabelText('U · along −Y'), {
+      target: { value: '-40' }
+    });
+    fireEvent.click(screen.getByRole('button', { name: 'Create hole' }));
+    const alert = await screen.findByRole('alert');
+    expect(alert).toHaveTextContent(
+      'Not created — The hole removed no material — it misses the body.'
+    );
+    expect(alert.closest('fieldset')).toHaveTextContent(
+      'Position on face (from centre)'
+    );
+    expect(screen.getAllByRole('alert')).toHaveLength(1);
+    expect(onSubmit).not.toHaveBeenCalled();
+  });
+});

@@ -356,7 +356,7 @@ test('a tool card owns the lane and keeps its actions in view', async ({
 
   await page.getByRole('button', { name: /^Hole/ }).click();
   const inspector = page.getByRole('region', { name: 'Feature inspector' });
-  const submit = inspector.getByRole('button', { name: /exact result/ });
+  const submit = inspector.getByRole('button', { name: 'Create hole' });
   await expect(submit).toBeVisible();
 
   const layout = await page.evaluate(() => {

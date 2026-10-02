@@ -354,11 +354,10 @@ test('resize hole: Enter commits the chip value, Escape leaves history alone', a
   await expect
     .poll(topFace, READ_TIMEOUT)
     .toMatchObject({ lineageName: 'primitive.box.face.z-max' });
-  await page.getByRole('button', { name: 'Check exact result' }).click();
   await page.getByRole('button', { name: 'Create hole' }).click();
   await expect(
     page.locator('.feature-row-main', { hasText: 'Hole' })
-  ).toBeVisible();
+  ).toBeVisible({ timeout: 20_000 });
   await expect(page.getByRole('button', { name: 'History 2' })).toBeVisible();
   const { select, wall } = cylinderHooks(canvas);
   await proveContract(page, canvas, {
