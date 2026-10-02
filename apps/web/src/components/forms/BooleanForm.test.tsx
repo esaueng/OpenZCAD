@@ -99,3 +99,34 @@ describe('Boolean form pick list', () => {
     ).toContain('selected');
   });
 });
+
+describe('Boolean form Enter key', () => {
+  it('creates from a focused pick-list row instead of toggling it', () => {
+    const onSubmit = vi.fn();
+    render(
+      <BooleanForm
+        bodies={bodies}
+        presetOperation="union"
+        submitLabel="Create"
+        onSubmit={onSubmit}
+      />
+    );
+    fireEvent.click(screen.getByRole('button', { name: /Left/ }));
+    const right = screen.getByRole('button', { name: /Right/ });
+    fireEvent.click(right);
+    right.focus();
+    expect(right.getAttribute('aria-pressed')).toBe('true');
+
+    // The browser would activate the focused row on Enter and un-pick it;
+    // the form claims the key and creates instead.
+    const notCancelled = fireEvent.keyDown(right, { key: 'Enter' });
+    expect(notCancelled).toBe(false);
+    expect(onSubmit).toHaveBeenCalledWith(
+      expect.objectContaining({
+        operation: 'union',
+        targetBodyIds: [bodies[0]!.bodyId, bodies[1]!.bodyId]
+      })
+    );
+    expect(right.getAttribute('aria-pressed')).toBe('true');
+  });
+});

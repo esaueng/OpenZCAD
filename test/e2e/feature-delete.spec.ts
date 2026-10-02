@@ -108,16 +108,30 @@ test('deleting a history feature raises an undoable toast that counts its depend
 
   const bossRow = page.locator('.feature-row', { hasText: 'Boss' }).first();
   await bossRow.hover();
-  // Delete is in the row's ⋯ menu. The load-bearing delete confirms first
-  // (native confirm, accepted here — Playwright would auto-dismiss it as
-  // cancel otherwise).
+  // Delete is in the row's ⋯ menu. The load-bearing delete confirms first,
+  // in-page, naming what builds on the feature. It was a native confirm,
+  // which embedded browsers answer with Cancel unseen: every delete of a
+  // load-bearing feature did nothing and said nothing.
   await bossRow
     .getByRole('button', { name: 'More actions for Boss', exact: true })
     .click();
-  await Promise.all([
-    page.waitForEvent('dialog').then((dialog) => dialog.accept()),
-    page.getByRole('menuitem', { name: /^Delete/ }).click()
-  ]);
+  await page.getByRole('menuitem', { name: /^Delete/ }).click();
+  const confirm = page.getByRole('alertdialog', { name: 'Delete “Boss”?' });
+  await expect(confirm).toBeVisible();
+  await expect(confirm).toContainText(/\d+ later features build on it/);
+  await expect(confirm.getByRole('listitem').first()).toBeVisible();
+  // Cancel keeps the feature.
+  await confirm.getByRole('button', { name: 'Cancel' }).click();
+  await expect(confirm).toHaveCount(0);
+  await expect(
+    summary.getByLabel(/ · 17 features · 1 body\. Sync /)
+  ).toBeVisible();
+  // The Del key reaches the same dialog from a selected history row.
+  await page.locator('.feature-row-main', { hasText: /^Boss/ }).first().click();
+  await page.keyboard.press('Delete');
+  await expect(confirm).toBeVisible();
+  await expect(confirm.getByRole('button', { name: 'Delete' })).toBeFocused();
+  await confirm.getByRole('button', { name: 'Delete' }).click();
 
   const toast = page.locator('.toast');
   await expect(toast).toHaveText(/Deleted Boss · \d+ features depended on it/);
