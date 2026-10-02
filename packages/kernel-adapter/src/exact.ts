@@ -94,7 +94,6 @@ import type {
   DxfFaceSelector,
   ExactBuildResult,
   ExactShape,
-  ImportedStepDiagnostics,
   MeasuredShape
 } from './exact-types';
 export type { DxfFaceSelector } from './exact-types';
@@ -132,11 +131,10 @@ import {
 } from './kernel-step-import';
 import {
   buildDocumentHistory,
-  type CachedImportedStep,
-  type ImportedStepStore,
   type StrictUnionVerdict,
   type StrictUnionVerdicts
 } from './exact-build-loop';
+import { ImportedStepCache } from './exact-imported-step-cache';
 import {
   isBuildCancelled,
   throwIfBuildCancelled,
@@ -168,6 +166,8 @@ import {
   sanitizeBinaryStl,
   sanitizeThreeMf
 } from './mesh-export-sanitize';
+import { orientGlbForGltf } from './glb-scene';
+import { tightenBoundsToMesh } from './exact-bounds';
 import {
   readMeshQuality,
   type BodyMeshQuality,
@@ -198,6 +198,12 @@ import {
 } from './exact-history-cache';
 import { PrimitiveBuildCache } from './exact-primitive-cache';
 export type { RebuildCacheEvent };
+export {
+  booleanEvolutionProbeNeeded,
+  booleanLineageDemandKey,
+  normalizeBooleanLineageDemand,
+  type BooleanLineageDemand
+} from './exact-boolean-evolution';
 import { readBodyMassProperties } from './body-properties';
 import {
   inspectTriangleMeshClosure,
@@ -535,11 +541,17 @@ export interface ExactKernelAdapter {
     onProjection?: (derived: DerivedState) => void,
     analysis?: EditAnalysisRequest,
     /**
-     * Cooperative cancel for a superseded rebuild. Checked after the
-     * pre-build awaits and at each feature boundary; a fired signal rejects
-     * with the typed `cancelled` refusal and commits nothing.
+     * Per-sync options. `cancellation` is a cooperative cancel for a
+     * superseded rebuild: checked after the pre-build awaits and at each
+     * feature boundary; a fired signal rejects with the typed `cancelled`
+     * refusal and commits nothing. `lineageDemand` is the transient set of
+     * bodies whose producing booleans must run the evolution probe; it keys
+     * the history digest and never reaches the document.
      */
-    options?: { cancellation?: BuildCancellationSignal }
+    options?: {
+      cancellation?: BuildCancellationSignal;
+      lineageDemand?: readonly BodyId[] | ReadonlySet<BodyId>;
+    }
   ): Promise<DerivedState>;
   /** Epoch of the most recent live sync, or null after its handles were retired. */
   currentMassPropertiesEpoch(): number | null;
@@ -690,15 +702,8 @@ export type MassPropertiesRead =
     };
 
 /**
- * Ceiling on retained import geometry. Serialised solids run well under half
- * the STEP text they came from, so this holds a couple of very large imports —
- * enough for the documents that motivated the cache — while staying bounded,
- * unlike the WASM heap that repeated parsing grows and never returns.
- *
- * It is a ceiling on what is retained for documents that are NOT being rebuilt.
- * The imports the build in progress needs are pinned and exempt: dropping one
- * mid-sequence would re-read and re-parse a source the same build already
- * parsed, which is the cost the cache exists to remove.
+ * Ceiling on retained exact import arena bytes, including the active document.
+ * Oversized imports still build exactly but do not enter this optional cache.
  */
 export const MAX_IMPORTED_STEP_CACHE_BYTES = 64 * 1024 * 1024;
 
@@ -713,9 +718,8 @@ export interface ExactKernelAdapterOptions {
     context: { artifactId: ArtifactId; sourceName: string }
   ) => Promise<Uint8Array>;
   /**
-   * Overrides {@link MAX_IMPORTED_STEP_CACHE_BYTES}. A test pins the parse-once
-   * contract at a budget a corpus file can actually exceed; nothing in the app
-   * sets it.
+   * Overrides {@link MAX_IMPORTED_STEP_CACHE_BYTES}. Zero disables import
+   * caching; nothing in the app sets it.
    */
   importedStepCacheBytes?: number;
   /**
@@ -780,46 +784,23 @@ class HistoryCacheIntegrityError extends Error {}
 export class RemusKernelAdapter implements ExactKernelAdapter {
   readonly kind = 'remus' as const;
 
-  constructor(private readonly options: ExactKernelAdapterOptions = {}) {}
+  constructor(private readonly options: ExactKernelAdapterOptions = {}) {
+    this.importedSteps = new ImportedStepCache(
+      options.importedStepCacheBytes ?? MAX_IMPORTED_STEP_CACHE_BYTES
+    );
+  }
 
   /**
    * Imported STEP results, keyed by the source checksum that fully determines
    * them. An import's geometry depends on nothing else in the document, so a
    * hit is exact by construction — the checksum names the bytes.
    *
-   * Entries hold the kernel's own serialised solids, which restore without
-   * re-derivation or tolerance normalisation. That matters twice over: a
-   * rebuild skips parsing the STEP text, and skips reading the source at all,
-   * so editing a document that carries a few-hundred-megabyte import no longer
-   * re-reads and re-parses it on every keystroke.
+   * Entries hold the translator's original exact arena bytes, which restore
+   * without re-derivation or tolerance normalisation. Admitted entries skip
+   * both STEP parsing and source reads on later rebuilds; refused entries
+   * recover their source bytes normally.
    */
-  private readonly importedStepCache = new Map<string, CachedImportedStep>();
-
-  /** The build loop's read/write seam onto {@link importedStepCache}. */
-  private readonly importedSteps: ImportedStepStore = {
-    lookup: (checksum) => this.importedStepCache.get(checksum),
-    store: (
-      checksum,
-      kernel,
-      solids,
-      acceptedDeclaredIndices,
-      diagnostics,
-      pinned
-    ) =>
-      this.storeImportedStep(
-        checksum,
-        kernel,
-        solids,
-        acceptedDeclaredIndices,
-        diagnostics,
-        pinned
-      )
-  };
-  private importedStepCacheBytes = 0;
-
-  private get maxImportedStepCacheBytes(): number {
-    return this.options.importedStepCacheBytes ?? MAX_IMPORTED_STEP_CACHE_BYTES;
-  }
+  private readonly importedSteps: ImportedStepCache;
 
   /**
    * The adapter-owned history kernel and its retained prefix table, shared by
@@ -1037,6 +1018,7 @@ export class RemusKernelAdapter implements ExactKernelAdapter {
     pinnedImports: ReadonlySet<string>,
     onProgress?: RebuildProgressListener,
     onProjection?: (derived: DerivedState) => void,
+    lineageDemand?: readonly BodyId[] | ReadonlySet<BodyId>,
     cancellation?: BuildCancellationSignal
   ): {
     kernel: RemusKernel;
@@ -1065,9 +1047,21 @@ export class RemusKernelAdapter implements ExactKernelAdapter {
     const scope = cachingEnabled
       ? getParameterScope(document).scope
       : undefined;
+    const normalizedDemand =
+      lineageDemand === undefined
+        ? undefined
+        : lineageDemand instanceof Set
+          ? lineageDemand
+          : new Set(lineageDemand);
     const digests = cachingEnabled
       ? features.map((feature, index) =>
-          historyFeatureDigest(document, feature, index, scope)
+          historyFeatureDigest(
+            document,
+            feature,
+            index,
+            scope,
+            normalizedDemand
+          )
         )
       : [];
 
@@ -1326,7 +1320,8 @@ export class RemusKernelAdapter implements ExactKernelAdapter {
                 )
             }
           : undefined,
-        cancellation
+        cancellation,
+        normalizedDemand
       );
     } catch (error) {
       // A cancelled build keeps the retained prefix: the checkpoints pushed
@@ -1363,11 +1358,11 @@ export class RemusKernelAdapter implements ExactKernelAdapter {
    * the local blob store and every fallback failed, which each import case
    * reports per-feature rather than failing the whole document.
    *
-   * A checksum already in {@link importedStepCache} is skipped: its bytes
+   * A checksum already in {@link importedSteps} is skipped: its bytes
    * would only be parsed into a result the cache already holds, and reading
    * them is the single largest allocation a rebuild makes. That skip is only
    * sound because every checksum walked here is returned as `pinned` and
-   * exempt from eviction for the whole build — otherwise a later import in the
+   * protected from eviction for the whole build — otherwise a later import in the
    * same document could evict the entry whose bytes were never read.
    */
   private async prefetchImportSources(document: ProjectDocument): Promise<{
@@ -1389,7 +1384,7 @@ export class RemusKernelAdapter implements ExactKernelAdapter {
         continue;
       }
       pinned.add(ref.checksumSha256);
-      if (this.importedStepCache.has(ref.checksumSha256)) {
+      if (this.importedSteps.lookup(ref.checksumSha256)) {
         continue;
       }
       if (!this.options.resolveSourceBytes) {
@@ -1408,56 +1403,6 @@ export class RemusKernelAdapter implements ExactKernelAdapter {
       }
     }
     return { sources, pinned };
-  }
-
-  /**
-   * Records a parsed import against its checksum, evicting older entries to
-   * stay inside the byte budget. Serialisation failure is not fatal: the
-   * rebuild already has its solids, and an uncached import merely costs what
-   * it cost before.
-   *
-   * Two entries are never evicted: the one just stored, and any checksum
-   * `pinned` for the build in progress. So an import larger than the whole
-   * budget is still cached — refusing it, as this once did, re-parsed exactly
-   * the largest files on every rebuild — and it survives until a build of some
-   * OTHER document needs the room. Retention is therefore the budget plus what
-   * the open document's own imports come to, which is what parsing each of
-   * them once costs by definition.
-   */
-  private storeImportedStep(
-    checksum: string,
-    kernel: RemusKernel,
-    solids: number[],
-    acceptedDeclaredIndices: number[],
-    diagnostics: ImportedStepDiagnostics,
-    pinned: ReadonlySet<string>
-  ): void {
-    let serialized: Uint8Array[];
-    try {
-      serialized = solids.map((solid) => kernel.serializeSolid(solid));
-    } catch {
-      return;
-    }
-    const bytes = serialized.reduce((sum, blob) => sum + blob.byteLength, 0);
-    this.importedStepCache.set(checksum, {
-      solids: serialized,
-      acceptedDeclaredIndices,
-      diagnostics
-    });
-    this.importedStepCacheBytes += bytes;
-    for (const [key, entry] of this.importedStepCache) {
-      if (this.importedStepCacheBytes <= this.maxImportedStepCacheBytes) {
-        break;
-      }
-      if (key === checksum || pinned.has(key)) {
-        continue;
-      }
-      this.importedStepCache.delete(key);
-      this.importedStepCacheBytes -= entry.solids.reduce(
-        (sum, blob) => sum + blob.byteLength,
-        0
-      );
-    }
   }
 
   private measureShape(
@@ -1503,6 +1448,9 @@ export class RemusKernelAdapter implements ExactKernelAdapter {
 
     for (const solid of shape.solids) {
       const bounds = kernel.boundingBox(solid);
+      // What the body publishes: the kernel's box, tightened to its display
+      // mesh where that proves it loose (see exact-bounds.ts).
+      let publishedBounds: readonly number[];
       const displayTessellation = displayTessellationForExtents(
         bounds[3]! - bounds[0]!,
         bounds[4]! - bounds[1]!,
@@ -1561,6 +1509,11 @@ export class RemusKernelAdapter implements ExactKernelAdapter {
         // the shifted index copy applies the body-scoped vertex offset in the
         // same pass.
         const positions = mesh.positions.slice();
+        publishedBounds = tightenBoundsToMesh(
+          bounds,
+          positions,
+          displayTessellation.linearDeflection
+        );
         const meshIndices = mesh.indices;
         const shifted = new Uint32Array(meshIndices.length);
         for (let i = 0; i < meshIndices.length; i += 1) {
@@ -1800,12 +1753,12 @@ export class RemusKernelAdapter implements ExactKernelAdapter {
 
       edgesDone?.();
       const volumeDone = onStage?.('Volume and validation');
-      bbox.min.x = Math.min(bbox.min.x, bounds[0]!);
-      bbox.min.y = Math.min(bbox.min.y, bounds[1]!);
-      bbox.min.z = Math.min(bbox.min.z, bounds[2]!);
-      bbox.max.x = Math.max(bbox.max.x, bounds[3]!);
-      bbox.max.y = Math.max(bbox.max.y, bounds[4]!);
-      bbox.max.z = Math.max(bbox.max.z, bounds[5]!);
+      bbox.min.x = Math.min(bbox.min.x, publishedBounds[0]!);
+      bbox.min.y = Math.min(bbox.min.y, publishedBounds[1]!);
+      bbox.min.z = Math.min(bbox.min.z, publishedBounds[2]!);
+      bbox.max.x = Math.max(bbox.max.x, publishedBounds[3]!);
+      bbox.max.y = Math.max(bbox.max.y, publishedBounds[4]!);
+      bbox.max.z = Math.max(bbox.max.z, publishedBounds[5]!);
       volume += kernel.volume(solid, MEASUREMENT_DEFLECTION);
       const relaxedErrors = kernel.validateSolidRelaxed(solid);
       valid = relaxedErrors === 0 && valid;
@@ -1873,7 +1826,10 @@ export class RemusKernelAdapter implements ExactKernelAdapter {
     onProgress?: RebuildProgressListener,
     onProjection?: (derived: DerivedState) => void,
     analysis?: EditAnalysisRequest,
-    options?: { cancellation?: BuildCancellationSignal }
+    options?: {
+      cancellation?: BuildCancellationSignal;
+      lineageDemand?: readonly BodyId[] | ReadonlySet<BodyId>;
+    }
   ): Promise<DerivedState> {
     return this.syncMeasuredDocument(
       document,
@@ -1881,6 +1837,7 @@ export class RemusKernelAdapter implements ExactKernelAdapter {
       onProjection,
       analysis,
       true,
+      options?.lineageDemand,
       options?.cancellation
     );
   }
@@ -1891,6 +1848,7 @@ export class RemusKernelAdapter implements ExactKernelAdapter {
     onProjection?: (derived: DerivedState) => void,
     analysis?: EditAnalysisRequest,
     allowRecovery = true,
+    lineageDemand?: readonly BodyId[] | ReadonlySet<BodyId>,
     cancellation?: BuildCancellationSignal
   ): Promise<DerivedState> {
     if (
@@ -1936,6 +1894,7 @@ export class RemusKernelAdapter implements ExactKernelAdapter {
         pinned,
         onProgress,
         onProjection,
+        lineageDemand,
         cancellation
       );
       historyDone();
@@ -2245,6 +2204,7 @@ export class RemusKernelAdapter implements ExactKernelAdapter {
           onProjection,
           analysis,
           false,
+          lineageDemand,
           cancellation
         );
       }
@@ -2675,13 +2635,17 @@ export class RemusKernelAdapter implements ExactKernelAdapter {
               : format === 'ply'
                 ? io.exportPly(bodies, deflection)
                 : io.exportStl(bodies, deflection);
+      // glTF is metres and +Y up; the tessellation is model millimetres,
+      // +Z up, which the GLB states through its root node (glb-scene.ts).
       return format === '3mf'
         ? sanitizeThreeMf(bytes)
         : format === 'stl-binary'
           ? sanitizeBinaryStl(bytes)
           : format === 'ply'
             ? sanitizeBinaryPly(bytes)
-            : (bytes as Uint8Array<ArrayBuffer>);
+            : format === 'glb'
+              ? orientGlbForGltf(bytes)
+              : (bytes as Uint8Array<ArrayBuffer>);
     });
   }
 
@@ -2929,6 +2893,7 @@ export class RemusKernelAdapter implements ExactKernelAdapter {
     // Export and solve methods own short-lived kernels, but the history
     // kernel and its checkpoints are adapter-scoped and must be released.
     this.invalidateHistoryCache();
+    this.importedSteps.clear();
   }
 
   /**

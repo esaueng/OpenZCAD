@@ -238,11 +238,13 @@ pub fn run() {
         .plugin(tauri_plugin_window_state::Builder::default().build())
         .setup(|app| {
             install_menu(app)?;
+            if let Some(window) = app.get_webview_window("main") {
+                window.show()?;
+            }
             #[cfg(all(debug_assertions, feature = "webdriver"))]
             if std::env::var_os("TAURI_WEBDRIVER_PORT").is_some() {
                 if let Some(window) = app.get_webview_window("main") {
                     window.set_title("OpenZCAD")?;
-                    window.show()?;
                     window.set_focus()?;
                 }
             }

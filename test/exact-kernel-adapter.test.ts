@@ -1234,25 +1234,48 @@ describe('exact kernel adapter', { timeout: 30_000 }, () => {
     // bottom edges and the wall's four top edges survive as `preserved`. The
     // base's two front vertical corners and its top front edge come back as
     // `modified` — the side faces next to them were re-trimmed — with their
-    // geometry untouched, so they carry too. Everything the fuse actually
-    // changed, and everything it declined to trace, stays hash-only.
+    // geometry untouched, so they carry too.
+    //
+    // Since the 1 October 2026 review (F1) the edges the fuse changed are
+    // named as well, each by what it provably is, so a fillet on them
+    // survives a resize: the inside corner it generated after the two named
+    // faces it lies between, and each piece of an edge it split by its place
+    // along the source and the number of pieces (`.piece.0.of.2`), so a
+    // different split later stops resolving instead of moving. Every edge of
+    // this bracket is named.
     const namedEdges = (body?.topology?.edges ?? [])
       .map((edge) => edge.reference?.lineageName)
       .filter((name): name is string => name !== undefined)
       .sort();
     expect(namedEdges).toEqual([
+      'boolean.edge.between.operand.0.primitive.box.face.z-max|operand.1.primitive.box.face.y-min',
       'boolean.edge.operand.0.primitive.box.edge.x.y-max.z-min',
       'boolean.edge.operand.0.primitive.box.edge.x.y-min.z-max',
       'boolean.edge.operand.0.primitive.box.edge.x.y-min.z-min',
+      'boolean.edge.operand.0.primitive.box.edge.y.x-max.z-max.piece.0.of.2',
       'boolean.edge.operand.0.primitive.box.edge.y.x-max.z-min',
+      'boolean.edge.operand.0.primitive.box.edge.y.x-min.z-max.piece.0.of.2',
       'boolean.edge.operand.0.primitive.box.edge.y.x-min.z-min',
+      'boolean.edge.operand.0.primitive.box.edge.z.x-max.y-max.piece.0.of.2',
+      'boolean.edge.operand.0.primitive.box.edge.z.x-max.y-max.piece.1.of.2',
       'boolean.edge.operand.0.primitive.box.edge.z.x-max.y-min',
+      'boolean.edge.operand.0.primitive.box.edge.z.x-min.y-max.piece.0.of.2',
+      'boolean.edge.operand.0.primitive.box.edge.z.x-min.y-max.piece.1.of.2',
       'boolean.edge.operand.0.primitive.box.edge.z.x-min.y-min',
       'boolean.edge.operand.1.primitive.box.edge.x.y-max.z-max',
       'boolean.edge.operand.1.primitive.box.edge.x.y-min.z-max',
       'boolean.edge.operand.1.primitive.box.edge.y.x-max.z-max',
-      'boolean.edge.operand.1.primitive.box.edge.y.x-min.z-max'
+      'boolean.edge.operand.1.primitive.box.edge.y.x-min.z-max',
+      'boolean.edge.operand.1.primitive.box.edge.z.x-max.y-max',
+      'boolean.edge.operand.1.primitive.box.edge.z.x-max.y-min',
+      'boolean.edge.operand.1.primitive.box.edge.z.x-min.y-max',
+      'boolean.edge.operand.1.primitive.box.edge.z.x-min.y-min'
     ]);
+    expect(namedEdges).toHaveLength(
+      (body?.topology?.edges ?? []).filter(
+        (edge) => edge.displayRole !== 'seam'
+      ).length
+    );
     for (const edge of body?.topology?.edges ?? []) {
       if (edge.reference) {
         expect(edge.reference.currentHash).toBe(edge.hash);
@@ -1627,12 +1650,12 @@ describe('exact kernel adapter', { timeout: 30_000 }, () => {
     // gate and the strict pass both ask.
     expect(verdictRefusesUnion({ strictErrors: 1 })).toBe(true);
     expect(verdictRefusesUnion({ strictErrors: 0 })).toBe(true);
-    expect(
-      verdictRefusesUnion({ strictErrors: 0, meshClosed: false })
-    ).toBe(true);
-    expect(
-      verdictRefusesUnion({ strictErrors: 0, meshClosed: true })
-    ).toBe(false);
+    expect(verdictRefusesUnion({ strictErrors: 0, meshClosed: false })).toBe(
+      true
+    );
+    expect(verdictRefusesUnion({ strictErrors: 0, meshClosed: true })).toBe(
+      false
+    );
   });
 
   it('keeps checked unification acceptance identical to the plain gate', () => {

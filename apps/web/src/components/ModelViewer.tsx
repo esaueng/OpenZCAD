@@ -1,6 +1,6 @@
 import type { ParameterVisualPreview } from '../lib/parameterVisualPreview';
 import { ParameterPreviewController } from './viewer/parameterPreviewController';
-import { useEffect, useRef, type MutableRefObject } from 'react';
+import { useEffect, useRef, useState, type MutableRefObject } from 'react';
 import { axisDimensionLabel } from '../lib/primitiveDimensionLabel';
 import * as THREE from 'three';
 import type { HoleGhost } from '../lib/holeGhost';
@@ -157,10 +157,12 @@ import {
   type HandleVec3,
   type WheelDevice
 } from '@openzcad/viewport';
-import type {
-  BodyRepresentation,
-  FaceGeometry,
-  TopologySelection
+import {
+  UNIT_TO_MM,
+  type BodyRepresentation,
+  type FaceGeometry,
+  type TopologySelection,
+  type UnitSystem
 } from '@openzcad/shared';
 import { formatNumber } from '../lib/model';
 import { setLiveDiameter } from '../lib/liveLabels';
@@ -199,6 +201,7 @@ import {
   circlePreviewPoints,
   centerInferenceSegments,
   collectSketchSnapTargets,
+  SketchSnapLimitError,
   angleForInProgress,
   dimensionForInProgress,
   lineObjectFromPoints,
@@ -340,6 +343,7 @@ export interface SketchModeState {
    * DOF scalar, no per-entity freedom).
    */
   definedObjectIds: string[];
+  textOutlineBudgetError?: string | null;
   dimensions: SketchDimensionAnnotation[];
 }
 
@@ -837,6 +841,20 @@ interface DimensionLabelBinding {
 }
 
 /**
+ * How far above a body its name callout hangs: an eighth of its height, and
+ * never less than 5 mm so a flat part's chip clears it. The floor is in
+ * millimetres, not document units: as a bare 5 it lifted an inch part's
+ * chip five inches, off the top of the window and under the top bar.
+ */
+function calloutLift(box: THREE.Box3, units: string): number {
+  const millimetresPerUnit = UNIT_TO_MM[units as UnitSystem] ?? 1;
+  return Math.max(
+    box.getSize(new THREE.Vector3()).z * 0.12,
+    5 / millimetresPerUnit
+  );
+}
+
+/**
  * Keeps name callouts readable when their anchor sits at the viewport's
  * edge. CSS2DRenderer centres each label on its projected point and rewrites
  * the transform every frame, so the correction rides on the margins instead:
@@ -854,6 +872,14 @@ function clampNameCallouts(container: HTMLElement) {
   }
   const bounds = container.getBoundingClientRect();
   const pad = 4;
+  // The top islands float over the viewport, so its top edge is not the
+  // usable one: a chip clamped to it sat under the mode switch, and a click
+  // on its Move landed on Tweak.
+  const topbar = container.ownerDocument.querySelector('.app-shell > .topbar');
+  const top = Math.max(
+    bounds.top,
+    topbar?.getBoundingClientRect().bottom ?? bounds.top
+  );
   // Every rect is read before any margin is written. Interleaving them made
   // each write invalidate layout for the next read, so a frame with N
   // callouts forced N reflows instead of one.
@@ -875,8 +901,8 @@ function clampNameCallouts(container: HTMLElement) {
       marginLeft = bounds.right - pad - baseRight;
     }
     let marginTop = 0;
-    if (baseTop < bounds.top + pad) {
-      marginTop = bounds.top + pad - baseTop;
+    if (baseTop < top + pad) {
+      marginTop = top + pad - baseTop;
     } else if (baseBottom > bounds.bottom - pad) {
       marginTop = bounds.bottom - pad - baseBottom;
     }
@@ -1720,6 +1746,9 @@ export function ModelViewer({
   const sketchDimLabelRef = useRef<HTMLDivElement | null>(null);
   /** Entity-snap candidates from committed sketch objects + cursor marker. */
   const snapTargetsRef = useRef<SnapTarget[]>([]);
+  const [sketchSnapRefusal, setSketchSnapRefusal] = useState<string | null>(
+    null
+  );
   const sketchSnapMarkerRef = useRef<HTMLDivElement | null>(null);
   const sketchCenterTargetRef = useRef<HTMLDivElement | null>(null);
   /** Camera pose + projection to restore when leaving sketch mode. */
@@ -8349,8 +8378,7 @@ export function ModelViewer({
       extraClass = ''
     ) => {
       const top = box.getCenter(new THREE.Vector3());
-      top.z =
-        box.max.z + Math.max(box.getSize(new THREE.Vector3()).z * 0.12, 5);
+      top.z = box.max.z + calloutLift(box, unitsRef.current);
       const label = makeLabel(`selection-callout${extraClass}`, '');
       // Segmented rather than one text run: a cylinder radius drag rewrites
       // the diameter node in place while the document still holds the old
@@ -8391,8 +8419,7 @@ export function ModelViewer({
         }
         pickBox.union(box);
         const top = box.getCenter(new THREE.Vector3());
-        top.z =
-          box.max.z + Math.max(box.getSize(new THREE.Vector3()).z * 0.12, 5);
+        top.z = box.max.z + calloutLift(box, unitsRef.current);
         const label = makeLabel('selection-callout body-order-callout', '');
         const order = document.createElement('span');
         order.className = 'callout-order';
@@ -9578,6 +9605,7 @@ export function ModelViewer({
     const rig = sketchRigRef.current;
     if (!context || !rig || !sketchMode) {
       snapTargetsRef.current = [];
+      setSketchSnapRefusal(null);
       return;
     }
     const resolve = (value: unknown) =>
@@ -9587,7 +9615,8 @@ export function ModelViewer({
       sketchMode.selectedObjectId,
       resolve,
       sketchMode.constraintDiagnosticObjectIds,
-      sketchMode.definedObjectIds
+      sketchMode.definedObjectIds,
+      sketchMode.textOutlineBudgetError
     );
     rig.setProfiles(sketchMode.profiles, true);
     rig.setDiagnostics(sketchMode.diagnosticPoints);
@@ -9596,10 +9625,14 @@ export function ModelViewer({
         sketchMode.objects,
         resolve
       );
-    } catch {
+      setSketchSnapRefusal(null);
+    } catch (error) {
       snapTargetsRef.current = [
         { id: 'sketch-origin', x: 0, y: 0, kind: 'origin' }
       ];
+      setSketchSnapRefusal(
+        error instanceof SketchSnapLimitError ? error.message : null
+      );
     }
     context.requestRender();
   }, [sketchMode]);
@@ -9906,5 +9939,13 @@ export function ModelViewer({
     );
   }, [rotateRequest]);
 
-  return <div className="viewer-host" ref={hostRef} />;
+  return (
+    <div className="viewer-host" ref={hostRef}>
+      {sketchSnapRefusal && (
+        <div className="sketch-snap-refusal" role="status">
+          {sketchSnapRefusal}
+        </div>
+      )}
+    </div>
+  );
 }

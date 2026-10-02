@@ -945,7 +945,7 @@ export const KERNEL_DELTAS: KernelDeltaPin[] = [
   {
     subject: 'boolean-on-nurbs-import',
     metric: 'witnessedEdges',
-    remus: 16,
+    remus: 22,
     occt: 0,
     owner: 'K0.6',
     note:
@@ -953,18 +953,22 @@ export const KERNEL_DELTAS: KernelDeltaPin[] = [
       ' Sixteen edges of the imported body stand clear of the bore and are ' +
       'preserved unchanged, including the ones bounding its B-spline ' +
       'corners: an edge needs no analytic carrier to be recognised as ' +
-      'untouched.'
+      'untouched. Four more are straight edges the bore trims, which keep ' +
+      'their source names because they still lie on the source lines, and ' +
+      'the last two are the bore rims the subtract generated, each named ' +
+      'after the pair of named faces it lies on (the plate face and the ' +
+      'bore wall).'
   },
   {
     subject: 'boolean-on-nurbs-import',
     metric: 'lineageNames',
-    remus: '23 names · 3b748afa',
+    remus: '29 names · e07bbc9b',
     occt: 'none',
     owner: 'K0.6',
     note:
       BOOLEAN_CARRIER_NOTE +
       ' The name set behind the witnessedFaces and witnessedEdges pins ' +
-      'above: seven face names and sixteen edge names. Digested rather than ' +
+      'above: seven face names and twenty-two edge names. Digested rather than ' +
       'spelled out because the set is past the readable limit; the full ' +
       'list is in baselines/import-modeling.json.'
   }

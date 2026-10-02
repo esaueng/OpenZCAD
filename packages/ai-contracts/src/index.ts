@@ -1131,7 +1131,11 @@ export function groundCadPatchProposalToSelection(
   let changed = false;
 
   const operations = proposal.operations.map((operation): CadPatchOperation => {
-    if (operation.kind === 'add_edge_modifier' && referencesAllEdges) {
+    if (
+      operation.kind === 'add_edge_modifier' &&
+      referencesAllEdges &&
+      !referencesSelectedEdges
+    ) {
       const selectedBodyIds = [...new Set(selection.bodyIds)].filter((bodyId) =>
         liveBodies.some((body) => body.bodyId === bodyId)
       );
@@ -1181,10 +1185,11 @@ export function groundCadPatchProposalToSelection(
 
     if (
       operation.kind === 'add_edge_modifier' &&
-      referencesSelectedEdges &&
-      edgesShareBody &&
-      selectedEdgeHashes.length > 0
+      referencesSelectedEdges
     ) {
+      if (!edgesShareBody || selectedEdgeHashes.length === 0) {
+        throw new Error('AI selected edge target is ambiguous.');
+      }
       if (
         operation.targetBodyId === selectedEdgeBodyId &&
         sameStrings(
