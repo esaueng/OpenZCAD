@@ -11,6 +11,7 @@ export {
 import { assertDocumentHistory } from '@openzcad/shared';
 import {
   MAX_CHECKPOINT_REASON_LENGTH,
+  UNIT_TO_MM,
   documentNodesWithHistory,
   type ProjectId,
   createId,
@@ -1170,7 +1171,12 @@ export function translateSketch(
     sketch.planeRef = {
       ...sketch.planeRef,
       offset:
-        resolveParamValue(sketch.planeRef.offset, scope, 'sketch offset') + dn
+        resolveParamValue(
+          sketch.planeRef.offset,
+          scope,
+          'sketch offset',
+          next.units
+        ) + dn
     };
   }
   if (du !== 0 || dv !== 0) {
@@ -1180,7 +1186,9 @@ export function translateSketch(
       delta: number,
       label: string
     ): ParamValue =>
-      delta === 0 ? value : resolveParamValue(value, scope, label) + delta;
+      delta === 0
+        ? value
+        : resolveParamValue(value, scope, label, next.units) + delta;
     for (const objectId of sketch.objectIds) {
       const node = next.nodes[objectId];
       if (node?.kind !== 'sketch-object') {
@@ -2541,7 +2549,7 @@ export function renameParameter(
   }
   const { scope } = getParameterScope(next);
   const rewrite = (candidate: string): string =>
-    readsParameter(candidate, input.name, scope)
+    readsParameter(candidate, input.name, scope, next.units)
       ? renameIdentifierInExpression(candidate, input.name, newName)
       : candidate;
   for (const node of Object.values(next.nodes)) {
@@ -2694,7 +2702,9 @@ export function getParameterScope(
     progressed = false;
     for (const [name, parameter] of [...pending]) {
       try {
-        scope[name] = evaluateExpression(parameter.expression, scope);
+        scope[name] = evaluateExpression(parameter.expression, scope, {
+          documentUnits: document.units
+        });
         pending.delete(name);
         progressed = true;
       } catch {
@@ -2705,7 +2715,9 @@ export function getParameterScope(
 
   for (const [name, parameter] of pending) {
     try {
-      evaluateExpression(parameter.expression, scope);
+      evaluateExpression(parameter.expression, scope, {
+        documentUnits: document.units
+      });
     } catch (error) {
       errors.push(
         `Parameter "${name}": ${error instanceof Error ? error.message : 'evaluation failed.'}`
@@ -2730,11 +2742,16 @@ function refreshParameterValues(document: ProjectDocument): void {
  * Resolves a parametric scalar to a number: literals pass through, strings
  * are evaluated against the parameter scope. Throws with a labelled message
  * on failure so the kernel can attribute errors to a feature input.
+ * Length-suffixed quantities convert into `documentUnits`; a caller that
+ * does not pass them refuses a length suffix rather than guessing a unit,
+ * so every legacy call keeps its meaning and no call site can silently
+ * read `5 mm` in an inch document as millimetres.
  */
 export function resolveParamValue(
   value: ParamValue,
   scope: Record<string, number>,
-  label?: string
+  label?: string,
+  documentUnits?: UnitSystem
 ): number {
   try {
     if (typeof value === 'number') {
@@ -2743,7 +2760,7 @@ export function resolveParamValue(
       }
       return value;
     }
-    return evaluateExpression(value, scope);
+    return evaluateExpression(value, scope, { documentUnits });
   } catch (error) {
     const reason =
       error instanceof Error ? error.message : 'evaluation failed.';
@@ -3435,21 +3452,136 @@ export function getLatestBodyId(document: ProjectDocument): BodyId | undefined {
 
 const DEG_TO_RAD = Math.PI / 180;
 
+/**
+ * A value moving through the expression parser: a plain number plus integer
+ * exponents of length and angle. Plain numbers, scope parameters and `pi`
+ * are dimensionless; unit suffixes introduce length (`mm`, `cm`, `m`,
+ * `in`/`inch`, `ft`/`foot`/`feet`, `'`/`"` and their long/plural spellings)
+ * or angle (`deg`, `rad` and their long/plural spellings). Dimensions exist
+ * only to refuse incoherent arithmetic through the evaluator's usual thrown
+ * errors — the public result is always a plain number in document units
+ * (angles in degrees, matching every `angleDeg` field in the app).
+ */
+interface ExpressionQuantity {
+  value: number;
+  length: number;
+  angle: number;
+}
+
+const quantity = (
+  value: number,
+  length = 0,
+  angle = 0
+): ExpressionQuantity => ({ value, length, angle });
+
+/** Human-readable dimension for refusal messages. */
+function describeDimension(value: ExpressionQuantity): string {
+  if (value.length === 0 && value.angle === 0) return 'number';
+  if (value.length === 1 && value.angle === 0) return 'length';
+  if (value.length === 2 && value.angle === 0) return 'area';
+  if (value.length === 0 && value.angle === 1) return 'angle';
+  const parts: string[] = [];
+  if (value.length !== 0) parts.push(`length^${value.length}`);
+  if (value.angle !== 0) parts.push(`angle^${value.angle}`);
+  return parts.join(' * ');
+}
+
+/**
+ * Refuses incoherent arithmetic on the evaluator's existing thrown-error
+ * path: `length ± angle`, `number ± length`, `length * angle`, dimensioned
+ * exponents and the like. Inputs that evaluated successfully before
+ * dimensions existed are all dimensionless, so they never reach this.
+ */
+function incompatibleDimensions(
+  what: string,
+  left: ExpressionQuantity,
+  right?: ExpressionQuantity
+): Error {
+  const detail =
+    right === undefined
+      ? `${describeDimension(left)}.`
+      : `${describeDimension(left)} and ${describeDimension(right)}.`;
+  return new Error(`Incompatible dimensions in expression: ${what} ${detail}`);
+}
+
+/** Millimetres per length suffix (lowercase; lookup lowercases first). */
+const EXPRESSION_LENGTH_UNITS: Record<string, number> = {
+  mm: 1,
+  millimeter: 1,
+  millimetre: 1,
+  millimeters: 1,
+  millimetres: 1,
+  cm: 10,
+  centimeter: 10,
+  centimetre: 10,
+  centimeters: 10,
+  centimetres: 10,
+  m: 1000,
+  meter: 1000,
+  metre: 1000,
+  meters: 1000,
+  metres: 1000,
+  in: 25.4,
+  inch: 25.4,
+  inches: 25.4,
+  ft: 304.8,
+  foot: 304.8,
+  feet: 304.8
+};
+
+/** Degrees per angle suffix (lowercase; lookup lowercases first). */
+const EXPRESSION_ANGLE_UNITS: Record<string, number> = {
+  deg: 1,
+  degree: 1,
+  degrees: 1,
+  rad: 180 / Math.PI,
+  radian: 180 / Math.PI,
+  radians: 180 / Math.PI
+};
+
+/**
+ * Whether an identifier token in unit position names a unit. Used both when
+ * evaluating (`5 mm` is a quantity) and when renaming (`5 mm` keeps its
+ * suffix while a bare `mm` parameter read is rewritten). Unit names are
+ * deliberately NOT reserved parameter names, so a parameter called `m` still
+ * resolves bare — only the number-adjacent suffix position reads as a unit.
+ */
+function isUnitSuffix(name: string): boolean {
+  const suffix = name.toLowerCase();
+  return suffix in EXPRESSION_LENGTH_UNITS || suffix in EXPRESSION_ANGLE_UNITS;
+}
+
 /** Trigonometry takes degrees — the conventional unit in CAD parameter tables. */
 const EXPRESSION_FUNCTIONS: Record<
   string,
-  { arity: 'unary' | 'variadic'; apply: (args: number[]) => number }
+  {
+    arity: 'unary' | 'binary' | 'variadic' | 'nullary';
+    apply: (args: ExpressionQuantity[]) => ExpressionQuantity;
+  }
 > = {
   require_min: {
     arity: 'variadic',
     apply: (args) => {
       const [value, minimum] = args;
-      if (args.length !== 2 || !args.every(Number.isFinite)) {
+      if (
+        args.length !== 2 ||
+        !args.every((arg) => Number.isFinite(arg.value))
+      ) {
         throw new Error('require_min needs a finite value and minimum.');
       }
-      if (value! < minimum!) {
+      if (
+        value!.length !== minimum!.length ||
+        value!.angle !== minimum!.angle
+      ) {
+        throw incompatibleDimensions(
+          'require_min needs matching dimensions',
+          value!,
+          minimum
+        );
+      }
+      if (value!.value < minimum!.value) {
         throw new Error(
-          `Parameter value ${value} must be at least ${minimum}.`
+          `Parameter value ${value!.value} must be at least ${minimum!.value}.`
         );
       }
       return value!;
@@ -3459,30 +3591,215 @@ const EXPRESSION_FUNCTIONS: Record<
     arity: 'variadic',
     apply: (args) => {
       const [value, ...supported] = args;
-      if (supported.length === 0 || !args.every(Number.isFinite)) {
+      if (
+        supported.length === 0 ||
+        !args.every((arg) => Number.isFinite(arg.value))
+      ) {
         throw new Error(
           'require_one_of needs a finite value and at least one supported value.'
         );
       }
-      if (!supported.includes(value!)) {
+      for (const option of supported) {
+        if (option.length !== value!.length || option.angle !== value!.angle) {
+          throw incompatibleDimensions(
+            'require_one_of needs matching dimensions',
+            value!,
+            option
+          );
+        }
+      }
+      if (!supported.some((option) => option.value === value!.value)) {
         throw new Error(
-          `Parameter value ${value} is unsupported; supported values: ${supported.join(', ')}.`
+          `Parameter value ${value!.value} is unsupported; supported values: ${supported.map((option) => option.value).join(', ')}.`
         );
       }
       return value!;
     }
   },
-  abs: { arity: 'unary', apply: ([a]) => Math.abs(a!) },
-  sqrt: { arity: 'unary', apply: ([a]) => Math.sqrt(a!) },
-  floor: { arity: 'unary', apply: ([a]) => Math.floor(a!) },
-  ceil: { arity: 'unary', apply: ([a]) => Math.ceil(a!) },
-  round: { arity: 'unary', apply: ([a]) => Math.round(a!) },
-  sin: { arity: 'unary', apply: ([a]) => Math.sin(a! * DEG_TO_RAD) },
-  cos: { arity: 'unary', apply: ([a]) => Math.cos(a! * DEG_TO_RAD) },
-  tan: { arity: 'unary', apply: ([a]) => Math.tan(a! * DEG_TO_RAD) },
-  min: { arity: 'variadic', apply: (args) => Math.min(...args) },
-  max: { arity: 'variadic', apply: (args) => Math.max(...args) }
+  abs: {
+    arity: 'unary',
+    apply: ([a]) => quantity(Math.abs(a!.value), a!.length, a!.angle)
+  },
+  sqrt: {
+    arity: 'unary',
+    apply: ([a]) => {
+      // Plain numbers keep the legacy path exactly (sqrt(-1) still fails on
+      // the finite-result check); only even length powers narrow further.
+      if (a!.angle !== 0 || a!.length % 2 !== 0) {
+        throw incompatibleDimensions('cannot take the square root of', a!);
+      }
+      return quantity(Math.sqrt(a!.value), a!.length / 2, 0);
+    }
+  },
+  floor: {
+    arity: 'unary',
+    apply: ([a]) => quantity(Math.floor(a!.value), a!.length, a!.angle)
+  },
+  ceil: {
+    arity: 'unary',
+    apply: ([a]) => quantity(Math.ceil(a!.value), a!.length, a!.angle)
+  },
+  round: {
+    arity: 'unary',
+    apply: ([a]) => quantity(Math.round(a!.value), a!.length, a!.angle)
+  },
+  sin: {
+    arity: 'unary',
+    apply: ([a]) => quantity(Math.sin(toDegrees('sin', a!)))
+  },
+  cos: {
+    arity: 'unary',
+    apply: ([a]) => quantity(Math.cos(toDegrees('cos', a!)))
+  },
+  tan: {
+    arity: 'unary',
+    apply: ([a]) => quantity(Math.tan(toDegrees('tan', a!)))
+  },
+  asin: {
+    arity: 'unary',
+    apply: ([a]) => quantity(degreesFromUnitInterval('asin', a!))
+  },
+  acos: {
+    arity: 'unary',
+    apply: ([a]) => quantity(degreesFromUnitInterval('acos', a!))
+  },
+  atan: {
+    arity: 'unary',
+    apply: ([a]) => {
+      rejectDimensioned('atan', a!);
+      return quantity(Math.atan(a!.value) / DEG_TO_RAD);
+    }
+  },
+  atan2: {
+    arity: 'binary',
+    apply: ([y, x]) => {
+      if (y!.length !== x!.length || y!.angle !== x!.angle) {
+        throw incompatibleDimensions(
+          'atan2() needs both coordinates with matching dimensions',
+          y!,
+          x
+        );
+      }
+      return quantity(Math.atan2(y!.value, x!.value) / DEG_TO_RAD);
+    }
+  },
+  mod: {
+    arity: 'binary',
+    apply: ([a, b]) => {
+      if (a!.length !== b!.length || a!.angle !== b!.angle) {
+        throw incompatibleDimensions('mod() needs matching dimensions', a!, b);
+      }
+      if (b!.value === 0) {
+        throw new Error('mod() divisor must not be zero.');
+      }
+      // Floored (sign-of-divisor) remainder, so negative dividends wrap
+      // instead of going negative the way a truncated remainder would.
+      return quantity(
+        a!.value - b!.value * Math.floor(a!.value / b!.value),
+        a!.length,
+        a!.angle
+      );
+    }
+  },
+  avg: {
+    arity: 'variadic',
+    apply: (args) => {
+      if (args.length === 0) {
+        throw new Error('avg() expects at least one argument.');
+      }
+      const [first, ...rest] = args;
+      for (const other of rest) {
+        if (other.length !== first!.length || other.angle !== first!.angle) {
+          throw incompatibleDimensions(
+            'avg() needs matching dimensions',
+            first!,
+            other
+          );
+        }
+      }
+      const total = args.reduce((sum, arg) => sum + arg.value, 0);
+      return quantity(total / args.length, first!.length, first!.angle);
+    }
+  },
+  sign: {
+    arity: 'unary',
+    apply: ([a]) => quantity(Math.sign(a!.value))
+  },
+  pi: {
+    arity: 'nullary',
+    apply: () => quantity(Math.PI)
+  },
+  min: {
+    arity: 'variadic',
+    apply: (args) =>
+      requireMatchingDimensions(
+        'min',
+        args,
+        Math.min(...args.map((arg) => arg.value))
+      )
+  },
+  max: {
+    arity: 'variadic',
+    apply: (args) =>
+      requireMatchingDimensions(
+        'max',
+        args,
+        Math.max(...args.map((arg) => arg.value))
+      )
+  }
 };
+
+/** Reads a trig argument as degrees: angles convert, plain numbers keep the legacy degree meaning. */
+function toDegrees(name: string, arg: ExpressionQuantity): number {
+  if (arg.length !== 0) {
+    throw incompatibleDimensions(
+      `${name}() expects an angle or a number in degrees, not`,
+      arg
+    );
+  }
+  // An angle quantity already stores degrees; a plain number IS degrees.
+  return arg.value * DEG_TO_RAD;
+}
+
+/** Inverse trig takes a plain unit-interval number and returns degrees. */
+function degreesFromUnitInterval(
+  name: 'asin' | 'acos',
+  arg: ExpressionQuantity
+): number {
+  rejectDimensioned(name, arg);
+  if (!(arg.value >= -1 && arg.value <= 1)) {
+    throw new Error(`${name}() expects an argument between -1 and 1.`);
+  }
+  const radians = name === 'asin' ? Math.asin(arg.value) : Math.acos(arg.value);
+  return radians / DEG_TO_RAD;
+}
+
+function rejectDimensioned(name: string, arg: ExpressionQuantity): void {
+  if (arg.length !== 0 || arg.angle !== 0) {
+    throw incompatibleDimensions(`${name}() expects a plain number, not`, arg);
+  }
+}
+
+/** Shared min/max tail: every argument must share one dimension. */
+function requireMatchingDimensions(
+  name: string,
+  args: ExpressionQuantity[],
+  value: number
+): ExpressionQuantity {
+  const [first, ...rest] = args;
+  for (const other of rest) {
+    if (other.length !== first!.length || other.angle !== first!.angle) {
+      throw incompatibleDimensions(
+        `${name}() needs matching dimensions`,
+        first!,
+        other
+      );
+    }
+  }
+  // With no arguments Math.min/max yields ±Infinity, which the top-level
+  // finite-result check refuses exactly as it did before dimensions existed.
+  return quantity(value, first?.length ?? 0, first?.angle ?? 0);
+}
 
 const EXPRESSION_CONSTANTS: Record<string, number> = {
   pi: Math.PI,
@@ -3499,6 +3816,8 @@ type ExpressionToken =
   | { type: 'identifier'; name: string }
   | { type: 'operator'; value: '+' | '-' | '*' | '/' | '^' }
   | { type: 'comma' }
+  /** A feet/inch symbol directly after a number: `'`/`′` is foot, `"`/`″` is inch. */
+  | { type: 'quote'; value: "'" | '"' }
   | { type: 'paren'; value: '(' | ')' };
 
 function tokenizeExpression(expression: string): ExpressionToken[] {
@@ -3527,6 +3846,21 @@ function tokenizeExpression(expression: string): ExpressionToken[] {
 
     if (char === ',') {
       tokens.push({ type: 'comma' });
+      index += 1;
+      continue;
+    }
+
+    // A feet/inch mark is a unit only directly after a number; anywhere else
+    // it is not expression text at all and is refused like any other
+    // unexpected character, as it was before units existed.
+    if (
+      (char === "'" || char === '′' || char === '"' || char === '″') &&
+      tokens.at(-1)?.type === 'number'
+    ) {
+      tokens.push({
+        type: 'quote',
+        value: char === "'" || char === '′' ? "'" : '"'
+      });
       index += 1;
       continue;
     }
@@ -3562,17 +3896,29 @@ function tokenizeExpression(expression: string): ExpressionToken[] {
 }
 
 /**
- * Evaluates a parameter expression supporting numbers, scope variables, the
- * `pi` constant, function calls (abs, sqrt, floor, ceil, round, min, max, require_min, require_one_of,
- * and degree-based sin/cos/tan), `+ - * / ^`, unary minus, and parentheses.
- * Implemented as a small recursive-descent parser so untrusted expressions
- * are never executed as JavaScript. Throws on syntax errors and unknown
- * identifiers.
+ * Options for {@link evaluateExpression}. Everything is optional so every
+ * existing two-argument call keeps its meaning: unit-free expressions never
+ * consult `documentUnits`, and without it a length suffix is refused (as
+ * every suffix was before) instead of being read in an assumed unit.
  */
-export function evaluateExpression(
+export interface ExpressionOptions {
+  /**
+   * Document units that unit-suffixed quantities convert into. Scope values
+   * are already document-unit numbers and pass through untouched.
+   */
+  documentUnits?: UnitSystem;
+}
+
+/**
+ * Parses and evaluates an expression to a dimensioned quantity. Shared by
+ * {@link evaluateExpression} and {@link getExpressionDimensions} so the
+ * value and its dimensions always agree and throw on the same path.
+ */
+function parseExpressionQuantity(
   expression: string,
-  scope: Record<string, number>
-): number {
+  scope: Record<string, number>,
+  documentUnits: UnitSystem | undefined
+): ExpressionQuantity {
   const tokens = tokenizeExpression(expression);
   let position = 0;
 
@@ -3586,35 +3932,110 @@ export function evaluateExpression(
     return token;
   };
 
-  function parseCall(name: string): number {
+  /** Converts a raw suffixed number into document units with its dimension. */
+  function applyUnitSuffix(raw: number, suffix: string): ExpressionQuantity {
+    const lowered = suffix.toLowerCase();
+    const millimeters = EXPRESSION_LENGTH_UNITS[lowered];
+    if (millimeters !== undefined) {
+      if (documentUnits === undefined) {
+        throw new Error(
+          `A "${suffix}" length needs the document's units, which this field does not know; enter the value in document units.`
+        );
+      }
+      return quantity((raw * millimeters) / UNIT_TO_MM[documentUnits], 1, 0);
+    }
+    const degrees = EXPRESSION_ANGLE_UNITS[lowered];
+    if (degrees !== undefined) {
+      return quantity(raw * degrees, 0, 1);
+    }
+    // Unreachable: callers check isUnitSuffix first.
+    throw new Error(`Unknown unit "${suffix}" in expression.`);
+  }
+
+  /**
+   * Reads the optional unit after a numeric literal. A bare identifier keeps
+   * its legacy meaning (scope parameter or a throw), so a parameter called
+   * `m` still resolves bare while `5 m` is five metres — an input that
+   * previously threw either way.
+   */
+  function parseQuantitySuffix(raw: number): ExpressionQuantity {
+    const following = peek();
+    if (following?.type === 'identifier' && isUnitSuffix(following.name)) {
+      position += 1;
+      return applyUnitSuffix(raw, following.name);
+    }
+    if (following?.type === 'quote') {
+      position += 1;
+      return applyUnitSuffix(raw, following.value === "'" ? 'ft' : 'in');
+    }
+    return quantity(raw);
+  }
+
+  function parseCall(name: string): ExpressionQuantity {
     const fn = EXPRESSION_FUNCTIONS[name];
     if (!fn) {
       throw new Error(`Unknown function "${name}" in expression.`);
     }
-    const args: number[] = [parseAdditive()];
-    for (;;) {
-      const token = peek();
-      if (token?.type === 'comma') {
-        position += 1;
-        args.push(parseAdditive());
-        continue;
+    const args: ExpressionQuantity[] = [];
+    const closing = peek();
+    if (closing?.type !== 'paren' || closing.value !== ')') {
+      args.push(parseAdditive());
+      for (;;) {
+        const token = peek();
+        if (token?.type === 'comma') {
+          position += 1;
+          args.push(parseAdditive());
+          continue;
+        }
+        break;
       }
-      break;
     }
-    const closing = next();
-    if (closing.type !== 'paren' || closing.value !== ')') {
+    const end = next();
+    if (end.type !== 'paren' || end.value !== ')') {
       throw new Error(`Expected ")" after arguments to ${name}().`);
     }
     if (fn.arity === 'unary' && args.length !== 1) {
       throw new Error(`${name}() expects exactly one argument.`);
     }
+    if (fn.arity === 'binary' && args.length !== 2) {
+      throw new Error(`${name}() expects exactly two arguments.`);
+    }
+    if (fn.arity === 'nullary' && args.length !== 0) {
+      throw new Error(`${name}() takes no arguments.`);
+    }
     return fn.apply(args);
   }
 
-  function parsePrimary(): number {
+  function parsePrimary(): ExpressionQuantity {
     const token = next();
     if (token.type === 'number') {
-      return token.value;
+      let result = parseQuantitySuffix(token.value);
+      // Juxtaposed quantities add: `1' 2"` reads as one foot plus two inches.
+      // Only dimensioned quantities juxtapose (`5 3` still throws), and
+      // juxtaposition never means multiplication (`2 (3)` still throws).
+      while (result.length !== 0 || result.angle !== 0) {
+        const juxtaposed = peek();
+        if (juxtaposed?.type !== 'number') {
+          break;
+        }
+        position += 1;
+        const following = parseQuantitySuffix(juxtaposed.value);
+        if (following.length === 0 && following.angle === 0) {
+          throw new Error('Unexpected trailing tokens in expression.');
+        }
+        if (
+          result.length !== following.length ||
+          result.angle !== following.angle
+        ) {
+          throw incompatibleDimensions('cannot add', result, following);
+        }
+        result = quantity(
+          result.value + following.value,
+          result.length,
+          result.angle
+        );
+      }
+      return result;
     }
     if (token.type === 'identifier') {
       const following = peek();
@@ -3624,13 +4045,13 @@ export function evaluateExpression(
       }
       const constant = EXPRESSION_CONSTANTS[token.name];
       if (constant !== undefined) {
-        return constant;
+        return quantity(constant);
       }
       const value = scope[token.name];
       if (value === undefined) {
         throw new Error(`Unknown identifier "${token.name}" in expression.`);
       }
-      return value;
+      return quantity(value);
     }
     if (token.type === 'paren' && token.value === '(') {
       const value = parseAdditive();
@@ -3643,18 +4064,41 @@ export function evaluateExpression(
     throw new Error('Unexpected token in expression.');
   }
 
-  function parsePower(): number {
+  function parsePower(): ExpressionQuantity {
     const base = parsePrimary();
     const token = peek();
     if (token?.type === 'operator' && token.value === '^') {
       position += 1;
       // Right-associative: 2^3^2 = 2^(3^2).
-      return Math.pow(base, parseUnary());
+      const exponent = parseUnary();
+      if (exponent.length !== 0 || exponent.angle !== 0) {
+        throw incompatibleDimensions(
+          'the exponent must be a plain number, not',
+          exponent
+        );
+      }
+      if (base.length === 0 && base.angle === 0) {
+        return quantity(Math.pow(base.value, exponent.value));
+      }
+      if (base.angle !== 0) {
+        throw incompatibleDimensions('cannot raise an angle to a power', base);
+      }
+      if (!Number.isInteger(exponent.value)) {
+        throw incompatibleDimensions(
+          `cannot raise ${describeDimension(base)} to a non-integer power`,
+          base
+        );
+      }
+      return quantity(
+        Math.pow(base.value, exponent.value),
+        base.length * exponent.value,
+        0
+      );
     }
     return base;
   }
 
-  function parseUnary(): number {
+  function parseUnary(): ExpressionQuantity {
     const token = peek();
     if (
       token?.type === 'operator' &&
@@ -3662,12 +4106,14 @@ export function evaluateExpression(
     ) {
       position += 1;
       const operand = parseUnary();
-      return token.value === '-' ? -operand : operand;
+      return token.value === '-'
+        ? quantity(-operand.value, operand.length, operand.angle)
+        : operand;
     }
     return parsePower();
   }
 
-  function parseMultiplicative(): number {
+  function parseMultiplicative(): ExpressionQuantity {
     let value = parseUnary();
     for (;;) {
       const token = peek();
@@ -3679,11 +4125,32 @@ export function evaluateExpression(
       }
       position += 1;
       const right = parseUnary();
-      value = token.value === '*' ? value * right : value / right;
+      const scaled =
+        (value.angle !== 0 && (right.length !== 0 || right.angle !== 0)) ||
+        (right.angle !== 0 && (value.length !== 0 || value.angle !== 0));
+      if (scaled) {
+        throw incompatibleDimensions(
+          token.value === '*' ? 'cannot multiply' : 'cannot divide',
+          value,
+          right
+        );
+      }
+      value =
+        token.value === '*'
+          ? quantity(
+              value.value * right.value,
+              value.length + right.length,
+              value.angle + right.angle
+            )
+          : quantity(
+              value.value / right.value,
+              value.length - right.length,
+              value.angle - right.angle
+            );
     }
   }
 
-  function parseAdditive(): number {
+  function parseAdditive(): ExpressionQuantity {
     let value = parseMultiplicative();
     for (;;) {
       const token = peek();
@@ -3695,7 +4162,20 @@ export function evaluateExpression(
       }
       position += 1;
       const right = parseMultiplicative();
-      value = token.value === '+' ? value + right : value - right;
+      if (value.length !== right.length || value.angle !== right.angle) {
+        throw incompatibleDimensions(
+          token.value === '+' ? 'cannot add' : 'cannot subtract',
+          value,
+          right
+        );
+      }
+      value = quantity(
+        token.value === '+'
+          ? value.value + right.value
+          : value.value - right.value,
+        value.length,
+        value.angle
+      );
     }
   }
 
@@ -3703,10 +4183,64 @@ export function evaluateExpression(
   if (position < tokens.length) {
     throw new Error('Unexpected trailing tokens in expression.');
   }
-  if (!Number.isFinite(result)) {
+  return result;
+}
+
+/**
+ * Evaluates a parameter expression supporting numbers, scope variables, the
+ * `pi` constant (and `pi()`), unit-suffixed quantities (`5 mm`, `2 cm`,
+ * `3 in`, `1 ft`, `1' 2"`, `90deg`, `1.5rad`), function calls (abs, sqrt,
+ * floor, ceil, round, min, max, avg, mod, sign, degree-based sin/cos/tan,
+ * degree-returning asin/acos/atan/atan2, plus require_min and
+ * require_one_of), `+ - * / ^`, juxtaposed-quantity addition (`1' 2"`),
+ * unary minus, and parentheses.
+ * Implemented as a small recursive-descent parser so untrusted expressions
+ * are never executed as JavaScript. Throws on syntax errors, unknown
+ * identifiers, and incompatible dimensions.
+ */
+export function evaluateExpression(
+  expression: string,
+  scope: Record<string, number>,
+  options?: ExpressionOptions
+): number {
+  const result = parseExpressionQuantity(
+    expression,
+    scope,
+    options?.documentUnits
+  );
+  if (!Number.isFinite(result.value)) {
     throw new Error('Expression did not evaluate to a finite number.');
   }
-  return result;
+  return result.value;
+}
+
+/** The dimension exponents of an evaluated expression (length, angle). */
+export interface ExpressionDimensions {
+  length: number;
+  angle: number;
+}
+
+/**
+ * Reports the dimensions {@link evaluateExpression} computed for an
+ * expression, throwing identically on anything it would refuse. Field
+ * owners (e.g. the keypad) use this to refuse a length in an angle field
+ * and vice versa; the evaluator itself stays a plain number so every
+ * existing two-argument call keeps its meaning.
+ */
+export function getExpressionDimensions(
+  expression: string,
+  scope: Record<string, number>,
+  options?: ExpressionOptions
+): ExpressionDimensions {
+  const result = parseExpressionQuantity(
+    expression,
+    scope,
+    options?.documentUnits
+  );
+  if (!Number.isFinite(result.value)) {
+    throw new Error('Expression did not evaluate to a finite number.');
+  }
+  return { length: result.length, angle: result.angle };
 }
 
 /**
@@ -3799,7 +4333,9 @@ function rewritePayloadStrings(
  * Replaces identifier tokens equal to `oldName` with `newName`, leaving
  * everything else — whitespace, operators, number literals — byte-identical.
  * Scans numbers before identifiers in the same order as `tokenizeExpression`,
- * so the `e5` inside `1e5` is an exponent, never a rename candidate.
+ * so the `e5` inside `1e5` is an exponent, never a rename candidate. A unit
+ * suffix (`5 mm`) is grammar rather than a parameter read, so it is never
+ * renamed even when a parameter shares the unit's name; a bare `mm` still is.
  */
 function renameIdentifierInExpression(
   expression: string,
@@ -3808,22 +4344,32 @@ function renameIdentifierInExpression(
 ): string {
   let out = '';
   let index = 0;
+  let previousWasNumber = false;
   while (index < expression.length) {
     const rest = expression.slice(index);
     const numberMatch = /^(?:(?:\d+\.?\d*|\.\d+)(?:[eE][+-]?\d+)?)/.exec(rest);
     if (numberMatch) {
       out += numberMatch[0];
       index += numberMatch[0].length;
+      previousWasNumber = true;
       continue;
     }
     const identifierMatch = /^[a-zA-Z_][a-zA-Z0-9_]*/.exec(rest);
     if (identifierMatch) {
-      out += identifierMatch[0] === oldName ? newName : identifierMatch[0];
-      index += identifierMatch[0].length;
+      const name = identifierMatch[0];
+      const isUnitPosition = previousWasNumber && isUnitSuffix(name);
+      out += name === oldName && !isUnitPosition ? newName : name;
+      index += name.length;
+      previousWasNumber = false;
       continue;
     }
     out += expression[index];
     index += 1;
+    // Whitespace between a number and its suffix still reads as a quantity
+    // (`5 mm`), so only a non-space token ends the unit position.
+    if (!/\s/.test(expression[index - 1]!)) {
+      previousWasNumber = false;
+    }
   }
   return out;
 }
@@ -3841,13 +4387,14 @@ function renameIdentifierInExpression(
 function readsParameter(
   candidate: string,
   name: string,
-  scope: Record<string, number>
+  scope: Record<string, number>,
+  documentUnits?: UnitSystem
 ): boolean {
   if (!expressionIdentifiers(candidate).includes(name)) {
     return false;
   }
   try {
-    evaluateExpression(candidate, scope);
+    evaluateExpression(candidate, scope, { documentUnits });
     return true;
   } catch {
     return false;
@@ -3901,7 +4448,7 @@ export function findParameterReferences(
     for (const candidate of candidates) {
       if (
         !expressions.includes(candidate) &&
-        readsParameter(candidate, name, scope)
+        readsParameter(candidate, name, scope, document.units)
       ) {
         expressions.push(candidate);
       }

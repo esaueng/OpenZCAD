@@ -183,6 +183,8 @@ describe('through createAngleMeasurement', () => {
               surfaceType: 'plane',
               area: 100,
               center: v(5, 5, 0),
+              centroid: v(5, 5, 0),
+              centroidProvenance: 'exact' as const,
               normal: v(0, 0, 1)
             }
           },
@@ -195,6 +197,8 @@ describe('through createAngleMeasurement', () => {
               surfaceType: 'plane',
               area: 100,
               center: v(5, 0, 5),
+              centroid: v(5, 0, 5),
+              centroidProvenance: 'exact' as const,
               // 150 degrees away from +Z, so the material meets at 30.
               normal: v(
                 Math.sin((150 * Math.PI) / 180),

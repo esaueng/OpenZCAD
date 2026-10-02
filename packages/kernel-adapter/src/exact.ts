@@ -37,6 +37,19 @@ import { writeDxf } from '@openzcad/io-dxf';
 import { writeAsciiStl } from '@openzcad/io-stl';
 import { faceDxfEntities } from './exact-dxf';
 import {
+  sketchDxfEntities,
+  SketchDxfExportError
+} from './exact-sketch-dxf';
+export { SketchDxfExportError } from './exact-sketch-dxf';
+export type {
+  SketchDxfInput,
+  SketchDxfInputObject,
+  SketchDxfOutcome,
+  SketchDxfRefusal,
+  SketchDxfRefusalReason,
+  SketchDxfSuccess
+} from './exact-sketch-dxf';
+import {
   exactSolidSection,
   sectionDxfEntities,
   type ExactSectionPlane,
@@ -125,6 +138,12 @@ import {
   type StrictUnionVerdicts
 } from './exact-build-loop';
 import {
+  isBuildCancelled,
+  throwIfBuildCancelled,
+  type BuildCancellationSignal
+} from './exact-cancellation';
+export type { BuildCancellationSignal } from './exact-cancellation';
+import {
   countFaceHandles,
   resolveDirectEditFace
 } from './exact-direct-edit-ops';
@@ -144,7 +163,12 @@ export {
   importMeshFile,
   type ImportedMeshTriangles
 } from './mesh-file-import';
-import { sanitizeBinaryStl, sanitizeThreeMf } from './mesh-export-sanitize';
+import {
+  sanitizeBinaryPly,
+  sanitizeBinaryStl,
+  sanitizeThreeMf
+} from './mesh-export-sanitize';
+import { tightenBoundsToMesh } from './exact-bounds';
 import {
   readMeshQuality,
   type BodyMeshQuality,
@@ -510,7 +534,13 @@ export interface ExactKernelAdapter {
     document: ProjectDocument,
     onProgress?: RebuildProgressListener,
     onProjection?: (derived: DerivedState) => void,
-    analysis?: EditAnalysisRequest
+    analysis?: EditAnalysisRequest,
+    /**
+     * Cooperative cancel for a superseded rebuild. Checked after the
+     * pre-build awaits and at each feature boundary; a fired signal rejects
+     * with the typed `cancelled` refusal and commits nothing.
+     */
+    options?: { cancellation?: BuildCancellationSignal }
   ): Promise<DerivedState>;
   /** Epoch of the most recent live sync, or null after its handles were retired. */
   currentMassPropertiesEpoch(): number | null;
@@ -595,6 +625,17 @@ export interface ExactKernelAdapter {
     document: ProjectDocument,
     plane: ExactSectionPlane,
     bodyIds?: BodyId[]
+  ): Promise<string>;
+  /**
+   * One saved sketch's own 2D geometry as a DXF R12 drawing in millimetres —
+   * the manufacturing export. Exact local-plane LINE/CIRCLE/ARC output, with
+   * rectangles and polygons lowered to their authored edge lines, construction
+   * geometry excluded, and every other case refused by name rather than
+   * silently dropped. See `docs/plans/sketch-dxf-export-plan.md`.
+   */
+  exportSketchDxf(
+    document: ProjectDocument,
+    sketchId: SketchId
   ): Promise<string>;
   /**
    * One planar sketch edit on the kernel's 2D operations: a corner fillet, a
@@ -996,7 +1037,8 @@ export class RemusKernelAdapter implements ExactKernelAdapter {
     importSources: ReadonlyMap<string, Uint8Array>,
     pinnedImports: ReadonlySet<string>,
     onProgress?: RebuildProgressListener,
-    onProjection?: (derived: DerivedState) => void
+    onProjection?: (derived: DerivedState) => void,
+    cancellation?: BuildCancellationSignal
   ): {
     kernel: RemusKernel;
     build: ExactBuildResult;
@@ -1284,11 +1326,18 @@ export class RemusKernelAdapter implements ExactKernelAdapter {
                   result
                 )
             }
-          : undefined
+          : undefined,
+        cancellation
       );
     } catch (error) {
-      // All callers (including export and recognition) must abandon both
-      // halves of a partially built cache if checkpointing or replay throws.
+      // A cancelled build keeps the retained prefix: the checkpoints pushed
+      // before the throw are a consistent longer prefix for the next sync,
+      // and the partial result is discarded with the throw. All callers
+      // (including export and recognition) must abandon both halves of a
+      // partially built cache if checkpointing or replay throws otherwise.
+      if (isBuildCancelled(error)) {
+        throw error;
+      }
       this.invalidateHistoryCache();
       throw error;
     }
@@ -1455,6 +1504,9 @@ export class RemusKernelAdapter implements ExactKernelAdapter {
 
     for (const solid of shape.solids) {
       const bounds = kernel.boundingBox(solid);
+      // What the body publishes: the kernel's box, tightened to its display
+      // mesh where that proves it loose (see exact-bounds.ts).
+      let publishedBounds: readonly number[];
       const displayTessellation = displayTessellationForExtents(
         bounds[3]! - bounds[0]!,
         bounds[4]! - bounds[1]!,
@@ -1513,6 +1565,11 @@ export class RemusKernelAdapter implements ExactKernelAdapter {
         // the shifted index copy applies the body-scoped vertex offset in the
         // same pass.
         const positions = mesh.positions.slice();
+        publishedBounds = tightenBoundsToMesh(
+          bounds,
+          positions,
+          displayTessellation.linearDeflection
+        );
         const meshIndices = mesh.indices;
         const shifted = new Uint32Array(meshIndices.length);
         for (let i = 0; i < meshIndices.length; i += 1) {
@@ -1752,12 +1809,12 @@ export class RemusKernelAdapter implements ExactKernelAdapter {
 
       edgesDone?.();
       const volumeDone = onStage?.('Volume and validation');
-      bbox.min.x = Math.min(bbox.min.x, bounds[0]!);
-      bbox.min.y = Math.min(bbox.min.y, bounds[1]!);
-      bbox.min.z = Math.min(bbox.min.z, bounds[2]!);
-      bbox.max.x = Math.max(bbox.max.x, bounds[3]!);
-      bbox.max.y = Math.max(bbox.max.y, bounds[4]!);
-      bbox.max.z = Math.max(bbox.max.z, bounds[5]!);
+      bbox.min.x = Math.min(bbox.min.x, publishedBounds[0]!);
+      bbox.min.y = Math.min(bbox.min.y, publishedBounds[1]!);
+      bbox.min.z = Math.min(bbox.min.z, publishedBounds[2]!);
+      bbox.max.x = Math.max(bbox.max.x, publishedBounds[3]!);
+      bbox.max.y = Math.max(bbox.max.y, publishedBounds[4]!);
+      bbox.max.z = Math.max(bbox.max.z, publishedBounds[5]!);
       volume += kernel.volume(solid, MEASUREMENT_DEFLECTION);
       const relaxedErrors = kernel.validateSolidRelaxed(solid);
       valid = relaxedErrors === 0 && valid;
@@ -1824,13 +1881,16 @@ export class RemusKernelAdapter implements ExactKernelAdapter {
     document: ProjectDocument,
     onProgress?: RebuildProgressListener,
     onProjection?: (derived: DerivedState) => void,
-    analysis?: EditAnalysisRequest
+    analysis?: EditAnalysisRequest,
+    options?: { cancellation?: BuildCancellationSignal }
   ): Promise<DerivedState> {
     return this.syncMeasuredDocument(
       document,
       onProgress,
       onProjection,
-      analysis
+      analysis,
+      true,
+      options?.cancellation
     );
   }
 
@@ -1839,7 +1899,8 @@ export class RemusKernelAdapter implements ExactKernelAdapter {
     onProgress?: RebuildProgressListener,
     onProjection?: (derived: DerivedState) => void,
     analysis?: EditAnalysisRequest,
-    allowRecovery = true
+    allowRecovery = true,
+    cancellation?: BuildCancellationSignal
   ): Promise<DerivedState> {
     if (
       analysis &&
@@ -1861,6 +1922,9 @@ export class RemusKernelAdapter implements ExactKernelAdapter {
       await loadRemusTranslators();
     }
     sourcesDone();
+    // A newer edit may have arrived while the awaits above yielded: stop a
+    // superseded rebuild before it burns worker time, with the typed cancel.
+    throwIfBuildCancelled(cancellation);
     // The history kernel outlives this call on purpose — its checkpoints are
     // what the next sync restores. On ANY throw the whole cache is dropped:
     // a failed sync must never leave a table the next sync would trust.
@@ -1880,7 +1944,8 @@ export class RemusKernelAdapter implements ExactKernelAdapter {
         sources,
         pinned,
         onProgress,
-        onProjection
+        onProjection,
+        cancellation
       );
       historyDone();
       const bodies = listNodesByKind(document, 'body');
@@ -2174,6 +2239,13 @@ export class RemusKernelAdapter implements ExactKernelAdapter {
         featureWarnings: build.featureWarnings
       };
     } catch (error) {
+      // Cancellation is not a failure to recover from: it commits nothing —
+      // no measured shapes, no mass snapshot, no cache event — and rethrows
+      // typed, so the last valid model stays and a stale result can never
+      // overwrite a newer one.
+      if (isBuildCancelled(error)) {
+        throw error;
+      }
       this.invalidateHistoryCache();
       if (allowRecovery && error instanceof HistoryCacheIntegrityError) {
         return this.syncMeasuredDocument(
@@ -2181,7 +2253,8 @@ export class RemusKernelAdapter implements ExactKernelAdapter {
           onProgress,
           onProjection,
           analysis,
-          false
+          false,
+          cancellation
         );
       }
       throw error;
@@ -2457,6 +2530,83 @@ export class RemusKernelAdapter implements ExactKernelAdapter {
     });
   }
 
+  async exportSketchDxf(
+    document: ProjectDocument,
+    sketchId: SketchId
+  ): Promise<string> {
+    const sketch = findSketch(document, sketchId);
+    if (!sketch) {
+      throw new SketchDxfExportError(
+        'sketch-not-found',
+        `Sketch ${sketchId} is not in this document.`
+      );
+    }
+    const { scope, errors } = getParameterScope(document);
+    if (errors.length > 0) {
+      throw new SketchDxfExportError(
+        'parameters-invalid',
+        `Parameters failed to evaluate: ${errors.join('; ')}`
+      );
+    }
+    try {
+      return await this.withExportBuild(document, (_kernel, build) => {
+        // The sketch feature resolves this same basis at its history position
+        // during the build — canonical offsets, arbitrary frames, and
+        // face-attached lineage alike — so reading it here is exact without a
+        // second resolution pass. It is still validated before anything emits.
+        const basis = build.sketchBases.get(sketchId);
+        if (!basis) {
+          throw new SketchDxfExportError(
+            'stale-plane-attachment',
+            `Sketch "${sketch.name}" has no plane resolved at its history position; its attachment cannot be placed exactly.`
+          );
+        }
+        const outcome = sketchDxfEntities({
+          objects: sketch.objectIds.map((id) => {
+            const node = document.nodes[id];
+            return {
+              id,
+              data:
+                node?.kind === 'sketch-object' ? node.data : undefined
+            };
+          }),
+          scope,
+          basis,
+          millimeterScale: UNIT_TO_MM[document.units]
+        });
+        if (outcome.status === 'refused') {
+          throw new SketchDxfExportError(outcome.reason, outcome.message);
+        }
+        try {
+          return writeDxf(outcome.entities);
+        } catch (error) {
+          throw new SketchDxfExportError(
+            'writer-refused',
+            error instanceof Error
+              ? error.message
+              : 'The DXF writer could not assemble the document.'
+          );
+        }
+      });
+    } catch (error) {
+      if (error instanceof SketchDxfExportError) {
+        throw error;
+      }
+      // A face-attached sketch resolves its plane through history-position
+      // face lineage inside the build, so a build failure on such a sketch is
+      // dominated by attachment resolution: missing, deleted, ambiguous, or
+      // non-planar. The original text is kept, so nothing is hidden by the
+      // stable reason.
+      if (sketch.planeRef.type === 'face') {
+        throw new SketchDxfExportError(
+          'stale-plane-attachment',
+          `Sketch "${sketch.name}" cannot attach to its face exactly (${error instanceof Error ? error.message : 'face lineage failed'}).`
+        );
+      }
+      throw error;
+    }
+  }
+
   async exportStl(
     document: ProjectDocument,
     bodyIds: BodyId[],
@@ -2531,12 +2681,16 @@ export class RemusKernelAdapter implements ExactKernelAdapter {
             ? io.exportObj(bodies, deflection)
             : format === 'glb'
               ? io.exportGlb(bodies, deflection)
-              : io.exportStl(bodies, deflection);
+              : format === 'ply'
+                ? io.exportPly(bodies, deflection)
+                : io.exportStl(bodies, deflection);
       return format === '3mf'
         ? sanitizeThreeMf(bytes)
         : format === 'stl-binary'
           ? sanitizeBinaryStl(bytes)
-          : (bytes as Uint8Array<ArrayBuffer>);
+          : format === 'ply'
+            ? sanitizeBinaryPly(bytes)
+            : (bytes as Uint8Array<ArrayBuffer>);
     });
   }
 
@@ -2615,32 +2769,58 @@ export class RemusKernelAdapter implements ExactKernelAdapter {
         objects.push({
           objectId,
           kind: 'line',
-          x1: resolveParamValue(data.x1, scope, 'x1'),
-          y1: resolveParamValue(data.y1, scope, 'y1'),
-          x2: resolveParamValue(data.x2, scope, 'x2'),
-          y2: resolveParamValue(data.y2, scope, 'y2')
+          x1: resolveParamValue(data.x1, scope, 'x1', document.units),
+          y1: resolveParamValue(data.y1, scope, 'y1', document.units),
+          x2: resolveParamValue(data.x2, scope, 'x2', document.units),
+          y2: resolveParamValue(data.y2, scope, 'y2', document.units)
         });
       } else if (data.objectKind === 'circle') {
         objects.push({
           objectId,
           kind: 'circle',
-          centerX: resolveParamValue(data.centerX, scope, 'centerX'),
-          centerY: resolveParamValue(data.centerY, scope, 'centerY'),
-          radius: resolveParamValue(data.radius, scope, 'radius')
+          centerX: resolveParamValue(
+            data.centerX,
+            scope,
+            'centerX',
+            document.units
+          ),
+          centerY: resolveParamValue(
+            data.centerY,
+            scope,
+            'centerY',
+            document.units
+          ),
+          radius: resolveParamValue(data.radius, scope, 'radius', document.units)
         });
       } else if (data.objectKind === 'arc') {
         objects.push({
           objectId,
           kind: 'arc',
-          centerX: resolveParamValue(data.centerX, scope, 'centerX'),
-          centerY: resolveParamValue(data.centerY, scope, 'centerY'),
-          radius: resolveParamValue(data.radius, scope, 'radius'),
+          centerX: resolveParamValue(
+            data.centerX,
+            scope,
+            'centerX',
+            document.units
+          ),
+          centerY: resolveParamValue(
+            data.centerY,
+            scope,
+            'centerY',
+            document.units
+          ),
+          radius: resolveParamValue(data.radius, scope, 'radius', document.units),
           startAngleDeg: resolveParamValue(
             data.startAngleDeg,
             scope,
-            'startAngleDeg'
+            'startAngleDeg',
+            document.units
           ),
-          endAngleDeg: resolveParamValue(data.endAngleDeg, scope, 'endAngleDeg')
+          endAngleDeg: resolveParamValue(
+            data.endAngleDeg,
+            scope,
+            'endAngleDeg',
+            document.units
+          )
         });
       }
     }
@@ -2650,7 +2830,7 @@ export class RemusKernelAdapter implements ExactKernelAdapter {
         kernel,
         objects,
         sketch.constraints ?? [],
-        (value, label) => resolveParamValue(value, scope, label)
+        (value, label) => resolveParamValue(value, scope, label, document.units)
       );
     } finally {
       kernel.free();
