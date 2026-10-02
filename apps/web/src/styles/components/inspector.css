@@ -257,6 +257,27 @@
   flex: 1;
 }
 
+/* A card taller than the lane scrolls, and its actions stay on screen at the
+   bottom of the scroll instead of riding away under the fold. The footer
+   carries the actions with the message that answers them (an exact
+   preflight's refusal), which were found only by scrolling the card. */
+.inspector .panel-body .form-footer,
+.inspector .panel-body .form-actions:not(.form-footer .form-actions) {
+  position: sticky;
+  /* Down over the body's 14px bottom padding, which the scroll shows
+     content through otherwise. */
+  bottom: -14px;
+  z-index: 1;
+  margin-bottom: -14px;
+  padding-block: 6px 20px;
+  background: var(--color-surface);
+}
+
+.form-footer {
+  display: grid;
+  gap: var(--sp-2);
+}
+
 .kbd-inline {
   /* Always a lightened chip with dark text, whatever the theme: the primary
      button behind it is accent-filled in both. */

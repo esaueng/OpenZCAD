@@ -75,6 +75,13 @@ interface AppShellProps {
   /** Contextual properties panel; null hides it and gives the space back. */
   inspector: ReactNode | null;
   /**
+   * The inspector holds a command's form (a tool's create card) rather than
+   * a selection's properties. It then owns the lane's height and the drawer
+   * gives way under it: a Hole card got 304 px of its 817 at 1280×720, with
+   * its Create button and its refusal below the fold.
+   */
+  inspectorOwnsLane?: boolean;
+  /**
    * The model drawer (parameters, bodies, history), floating beside the
    * instrument rail on the right; null while it is closed.
    */
@@ -127,6 +134,7 @@ export function AppShell({
   sidebar,
   viewer,
   command = null,
+  inspectorOwnsLane = false,
   inspector,
   drawer = null,
   assistant,
@@ -169,8 +177,8 @@ export function AppShell({
       >
         <div
           className={`viewer-area${inspector ? ' has-inspector' : ''}${
-            command ? ' has-command' : ''
-          }${drawer ? ' has-drawer' : ''}`}
+            inspector && inspectorOwnsLane ? ' inspector-owns-lane' : ''
+          }${command ? ' has-command' : ''}${drawer ? ' has-drawer' : ''}`}
         >
           {viewer}
           {columnExit.rendered && (
