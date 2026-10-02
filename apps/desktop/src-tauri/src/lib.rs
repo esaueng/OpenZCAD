@@ -68,6 +68,7 @@ fn export_path(path: &Path, format: &str) -> Result<PathBuf, String> {
         "3mf" => &["3mf"][..],
         "obj" => &["obj"][..],
         "glb" => &["glb"][..],
+        "ply" => &["ply"][..],
         _ => &["stl"][..],
     };
     let extension = path
@@ -129,7 +130,7 @@ async fn save_cad_binary_file(
     format: String,
     contents: Vec<u8>,
 ) -> Result<bool, String> {
-    if !matches!(format.as_str(), "stl" | "3mf" | "obj" | "glb") {
+    if !matches!(format.as_str(), "stl" | "3mf" | "obj" | "glb" | "ply") {
         return Err("Unsupported export format.".to_string());
     }
     if suggested_name.is_empty()
@@ -145,6 +146,7 @@ async fn save_cad_binary_file(
         "3mf" => "Export 3MF",
         "obj" => "Export OBJ",
         "glb" => "Export glTF",
+        "ply" => "Export PLY",
         _ => "Export STL",
     };
     let handle = rfd::AsyncFileDialog::new()
@@ -321,11 +323,21 @@ mod tests {
             export_path(Path::new("part"), "glb").unwrap(),
             Path::new("part.glb")
         );
+        assert_eq!(
+            export_path(Path::new("part"), "ply").unwrap(),
+            Path::new("part.ply")
+        );
+        assert_eq!(
+            export_path(Path::new("part.PLY"), "ply").unwrap(),
+            Path::new("part.PLY")
+        );
         // One format's export must not silently claim another's name.
         assert!(export_path(Path::new("part.3mf"), "stl").is_err());
         assert!(export_path(Path::new("part.stl"), "3mf").is_err());
         assert!(export_path(Path::new("part.obj"), "glb").is_err());
         assert!(export_path(Path::new("part.glb"), "obj").is_err());
+        assert!(export_path(Path::new("part.ply"), "stl").is_err());
+        assert!(export_path(Path::new("part.stl"), "ply").is_err());
     }
 
     #[test]

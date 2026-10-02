@@ -337,10 +337,11 @@ export function decodeText(bytes: Uint8Array): string {
  * compatibility with consumers that diff or parse the text; `stl-binary` is
  * the same facets at 5–10× smaller; `3mf` is the zipped package modern
  * slicers prefer; `obj` and `glb` serve DCC and web/AR consumers, each as
- * one merged mesh.
+ * one merged mesh; `ply` is the binary little-endian mesh with vertex
+ * normals for mesh and point-cloud tools, one merged mesh like `stl-binary`.
  */
 export type MeshExportFormat =
-  'stl-ascii' | 'stl-binary' | '3mf' | 'obj' | 'glb';
+  'stl-ascii' | 'stl-binary' | '3mf' | 'obj' | 'glb' | 'ply';
 
 /** Per-body watertightness verdict from the kernel's welded-mesh counter. */
 export interface BodyMeshQuality {

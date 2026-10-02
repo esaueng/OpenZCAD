@@ -11,14 +11,15 @@ import { StableLabel } from './StableLabel';
 
 /** Worker export formats this dialog can request; `stl` is ASCII. */
 export type MeshExportDialogFormat =
-  '3mf' | 'stl-binary' | 'stl' | 'obj' | 'glb';
+  '3mf' | 'stl-binary' | 'stl' | 'obj' | 'glb' | 'ply';
 
 const FORMAT_LABELS: Record<MeshExportDialogFormat, string> = {
   '3mf': '3MF',
   'stl-binary': 'STL',
   stl: 'STL',
   obj: 'OBJ',
-  glb: 'glTF'
+  glb: 'glTF',
+  ply: 'PLY'
 };
 
 export interface ExportDialogBody {
@@ -87,6 +88,11 @@ const FORMAT_OPTIONS: {
     format: 'glb',
     label: 'glTF (GLB)',
     hint: 'One merged mesh for web and AR viewers'
+  },
+  {
+    format: 'ply',
+    label: 'PLY (binary)',
+    hint: 'One merged mesh with vertex normals for mesh tools'
   }
 ];
 
