@@ -135,6 +135,8 @@ test('UI-04: a Settings filter can be cleared at every width', async ({
   const sections = page.getByRole('complementary', {
     name: 'Settings sections'
   });
+  // Settings loads its panel on demand; count its sections once they are in.
+  await expect(sections.locator('nav button').first()).toBeVisible();
   const all = await sections.locator('nav button').count();
   await page.getByLabel('Find a setting').fill('snap');
   await expect
