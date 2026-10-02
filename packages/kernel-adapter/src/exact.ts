@@ -144,7 +144,11 @@ export {
   importMeshFile,
   type ImportedMeshTriangles
 } from './mesh-file-import';
-import { sanitizeBinaryStl, sanitizeThreeMf } from './mesh-export-sanitize';
+import {
+  sanitizeBinaryPly,
+  sanitizeBinaryStl,
+  sanitizeThreeMf
+} from './mesh-export-sanitize';
 import {
   readMeshQuality,
   type BodyMeshQuality,
@@ -2531,12 +2535,16 @@ export class RemusKernelAdapter implements ExactKernelAdapter {
             ? io.exportObj(bodies, deflection)
             : format === 'glb'
               ? io.exportGlb(bodies, deflection)
-              : io.exportStl(bodies, deflection);
+              : format === 'ply'
+                ? io.exportPly(bodies, deflection)
+                : io.exportStl(bodies, deflection);
       return format === '3mf'
         ? sanitizeThreeMf(bytes)
         : format === 'stl-binary'
           ? sanitizeBinaryStl(bytes)
-          : (bytes as Uint8Array<ArrayBuffer>);
+          : format === 'ply'
+            ? sanitizeBinaryPly(bytes)
+            : (bytes as Uint8Array<ArrayBuffer>);
     });
   }
 
@@ -2615,32 +2623,58 @@ export class RemusKernelAdapter implements ExactKernelAdapter {
         objects.push({
           objectId,
           kind: 'line',
-          x1: resolveParamValue(data.x1, scope, 'x1'),
-          y1: resolveParamValue(data.y1, scope, 'y1'),
-          x2: resolveParamValue(data.x2, scope, 'x2'),
-          y2: resolveParamValue(data.y2, scope, 'y2')
+          x1: resolveParamValue(data.x1, scope, 'x1', document.units),
+          y1: resolveParamValue(data.y1, scope, 'y1', document.units),
+          x2: resolveParamValue(data.x2, scope, 'x2', document.units),
+          y2: resolveParamValue(data.y2, scope, 'y2', document.units)
         });
       } else if (data.objectKind === 'circle') {
         objects.push({
           objectId,
           kind: 'circle',
-          centerX: resolveParamValue(data.centerX, scope, 'centerX'),
-          centerY: resolveParamValue(data.centerY, scope, 'centerY'),
-          radius: resolveParamValue(data.radius, scope, 'radius')
+          centerX: resolveParamValue(
+            data.centerX,
+            scope,
+            'centerX',
+            document.units
+          ),
+          centerY: resolveParamValue(
+            data.centerY,
+            scope,
+            'centerY',
+            document.units
+          ),
+          radius: resolveParamValue(data.radius, scope, 'radius', document.units)
         });
       } else if (data.objectKind === 'arc') {
         objects.push({
           objectId,
           kind: 'arc',
-          centerX: resolveParamValue(data.centerX, scope, 'centerX'),
-          centerY: resolveParamValue(data.centerY, scope, 'centerY'),
-          radius: resolveParamValue(data.radius, scope, 'radius'),
+          centerX: resolveParamValue(
+            data.centerX,
+            scope,
+            'centerX',
+            document.units
+          ),
+          centerY: resolveParamValue(
+            data.centerY,
+            scope,
+            'centerY',
+            document.units
+          ),
+          radius: resolveParamValue(data.radius, scope, 'radius', document.units),
           startAngleDeg: resolveParamValue(
             data.startAngleDeg,
             scope,
-            'startAngleDeg'
+            'startAngleDeg',
+            document.units
           ),
-          endAngleDeg: resolveParamValue(data.endAngleDeg, scope, 'endAngleDeg')
+          endAngleDeg: resolveParamValue(
+            data.endAngleDeg,
+            scope,
+            'endAngleDeg',
+            document.units
+          )
         });
       }
     }
@@ -2650,7 +2684,7 @@ export class RemusKernelAdapter implements ExactKernelAdapter {
         kernel,
         objects,
         sketch.constraints ?? [],
-        (value, label) => resolveParamValue(value, scope, label)
+        (value, label) => resolveParamValue(value, scope, label, document.units)
       );
     } finally {
       kernel.free();

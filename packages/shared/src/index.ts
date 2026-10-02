@@ -2071,7 +2071,7 @@ export interface FeatureWarning {
    * a second one beside it.
    */
   kernelRefusal?: {
-    family: 'boolean' | 'validation' | 'healing' | 'import';
+    family: 'boolean' | 'validation' | 'healing' | 'import' | 'blend';
     operation?: string;
     category: string;
     code: string;
@@ -2169,6 +2169,7 @@ export interface ArtifactRecord {
     | '3mf-export'
     | 'obj-export'
     | 'gltf-export'
+    | 'ply-export'
     | 'snapshot'
     | 'thumbnail';
   name: string;

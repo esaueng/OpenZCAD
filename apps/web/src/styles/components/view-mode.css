@@ -430,11 +430,6 @@
   text-decoration: underline;
 }
 
-.view-mode-rail-launcher:hover {
-  color: var(--color-text);
-  background: var(--color-surface-hover);
-}
-
 /* ── The measurement dock ────────────────────────────────── */
 
 /*
@@ -836,11 +831,6 @@
     left: 6px;
     width: 168px;
     max-height: 44%;
-  }
-
-  .view-mode-rail-launcher {
-    top: 6px;
-    left: 6px;
   }
 
   /* Narrow enough that the dock and the parts rail cannot both own the width:
