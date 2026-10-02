@@ -22,7 +22,9 @@ export function ShortcutsOverlay({ onClose }: ShortcutsOverlayProps) {
   const dialogRef = useRef<HTMLDivElement | null>(null);
 
   // Opened by "?" from the workspace, so nothing inside has focus yet.
-  useModalFocus(dialogRef, { autoFocus: true });
+  // The workspace keymap toggles and closes this sheet, so it must still
+  // reach the map while the sheet is up.
+  useModalFocus(dialogRef, { autoFocus: true, workspaceKeys: true });
 
   return (
     <div

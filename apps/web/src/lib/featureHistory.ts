@@ -72,6 +72,7 @@ export function featureHistory(document: ProjectDocument) {
       case 'boolean':
         data.targetBodyIds.forEach(body);
         break;
+      case 'hole':
       case 'split':
       case 'transform':
       case 'mirror':
@@ -89,6 +90,11 @@ export function featureHistory(document: ProjectDocument) {
       case 'imported-mesh':
       case 'imported-step':
         break;
+      default:
+        // A new feature kind must declare its inputs here; one that falls
+        // through silently reads as "nothing depends on it" everywhere the
+        // graph is consulted, including the dependent-delete confirmation.
+        data satisfies never;
     }
     parents.set(feature.featureId, inputs);
     missing.set(feature.featureId, missingInputs);

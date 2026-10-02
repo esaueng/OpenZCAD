@@ -20,6 +20,7 @@ import {
 import { ExprInput } from '../ExprInput';
 import { edgeModifierSliderRange } from '../../lib/edgeModifierEdit';
 import { useFieldAutoFocus } from './fieldAutoFocus';
+import { isPickListRow } from './pickListRow';
 import { TextObjectFields, type TextAttributes } from '../TextObjectFields';
 import {
   PLANE_LABELS,
@@ -74,10 +75,12 @@ function FormShell({
           event.stopPropagation();
           onCancel();
         }
-        // Enter submits from any field, including selects.
+        // Enter submits from any field, including selects, and from a pick
+        // list row (see `isPickListRow`).
         if (
           event.key === 'Enter' &&
-          !(event.target instanceof HTMLButtonElement)
+          (!(event.target instanceof HTMLButtonElement) ||
+            isPickListRow(event.target))
         ) {
           event.preventDefault();
           if (canSubmit) {
@@ -940,6 +943,7 @@ export function BooleanForm({
                 key={body.bodyId}
                 type="button"
                 className={`pick-row ${index >= 0 ? 'selected' : ''}`}
+                aria-pressed={index >= 0}
                 onClick={() => toggle(body.bodyId)}
               >
                 <span className="pick-order mono">

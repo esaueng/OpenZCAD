@@ -113,7 +113,8 @@ export function resolveRegionProfiles(
     .map((node) => ({ id: node.id, data: node.data }));
   const analysis = computeSketchProfileAnalysis(
     objects,
-    (value) => resolveParamValue(value, scope, 'sketch dimension'),
+    (value) =>
+      resolveParamValue(value, scope, 'sketch dimension', document.units),
     undefined,
     options
   );
