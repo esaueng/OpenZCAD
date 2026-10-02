@@ -748,6 +748,47 @@ describe('geometry worker rebuild coordination', () => {
     );
   });
 
+  it('routes a DXF export with a sketch to the sketch exporter', async () => {
+    const exportSketchDxf = vi.fn(async () => '0\r\nSECTION\r\n');
+    const exportSectionDxf = vi.fn(async () => 'section');
+    const exportFaceDxf = vi.fn(async () => 'face');
+    const { scope } = await installWorker(async () => derived('unused'), {
+      exportSketchDxf,
+      exportSectionDxf,
+      exportFaceDxf
+    });
+    const root = createProjectDocument('Sketch DXF', toUserId('user'));
+    const { document, sketchId } = addSketchFeature(root, {
+      name: 'Sketch',
+      plane: 'XY',
+      offset: 0,
+      object: { objectKind: 'line', x1: 0, y1: 0, x2: 10, y2: 0 }
+    });
+    post(scope, {
+      type: 'export',
+      requestId: 'dxf-sketch-1',
+      document,
+      bodyIds: [],
+      format: 'dxf',
+      sketchId
+    });
+
+    await vi.waitFor(() =>
+      expect(scope.postMessage).toHaveBeenCalledWith(
+        expect.objectContaining({
+          type: 'export',
+          ok: true,
+          format: 'dxf',
+          requestId: 'dxf-sketch-1',
+          text: '0\r\nSECTION\r\n'
+        })
+      )
+    );
+    expect(exportSketchDxf).toHaveBeenCalledWith(document, sketchId);
+    expect(exportSectionDxf).not.toHaveBeenCalled();
+    expect(exportFaceDxf).not.toHaveBeenCalled();
+  });
+
   it('drops a sync cancelled while running without reporting a failure', async () => {
     const gate = deferred<void>();
     const syncDocument = vi.fn(async () => {

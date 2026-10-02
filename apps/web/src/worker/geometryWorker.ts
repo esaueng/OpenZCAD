@@ -67,6 +67,8 @@ export type GeometryWorkerRequest =
       face?: DxfFaceSelector;
       /** The other 'dxf' source: the plane whose exact section to export. */
       section?: ExactSectionPlane;
+      /** The third 'dxf' source: the saved sketch whose geometry to export. */
+      sketchId?: SketchId;
     }
   | {
       /**
@@ -604,19 +606,23 @@ async function execute(job: GeometryWorkerJob): Promise<void> {
         return;
       }
       if (request.format === 'dxf') {
-        if (!request.face && !request.section) {
-          throw new Error('DXF export needs a face selection or a section plane.');
+        if (!request.face && !request.section && !request.sketchId) {
+          throw new Error(
+            'DXF export needs a face selection, a section plane, or a sketch.'
+          );
         }
-        const text = request.section
-          ? await exact.exportSectionDxf(
-              document,
-              request.section,
-              // Same bodies as the section on screen. An empty selection
-              // means the caller has nothing to narrow it by, so the
-              // adapter's own document visibility stands.
-              request.bodyIds.length > 0 ? request.bodyIds : undefined
-            )
-          : await exact.exportFaceDxf(document, request.face!);
+        const text = request.sketchId
+          ? await exact.exportSketchDxf(document, request.sketchId)
+          : request.section
+            ? await exact.exportSectionDxf(
+                document,
+                request.section,
+                // Same bodies as the section on screen. An empty selection
+                // means the caller has nothing to narrow it by, so the
+                // adapter's own document visibility stands.
+                request.bodyIds.length > 0 ? request.bodyIds : undefined
+              )
+            : await exact.exportFaceDxf(document, request.face!);
         post({
           type: 'export',
           ok: true,
