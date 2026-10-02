@@ -10,7 +10,8 @@ import {
   type BodyId,
   type BodyRepresentation,
   type ParamValue,
-  type ProjectDocument
+  type ProjectDocument,
+  type UnitSystem
 } from '@openzcad/shared';
 
 /** Viewport-owned instances. They never enter document.derived or an export. */
@@ -24,8 +25,14 @@ export interface ParameterPreviewBody {
 export type ParameterVisualPreview = ParameterPreviewBody[];
 const axes = ['x', 'y', 'z'] as const;
 const identity = () => [1, 0, 0, 0, 0, 1, 0, 0, 0, 0, 1, 0, 0, 0, 0, 1];
-const evaluate = (value: ParamValue, scope: Record<string, number>) =>
-  typeof value === 'number' ? value : evaluateExpression(value, scope);
+const evaluate = (
+  value: ParamValue,
+  scope: Record<string, number>,
+  documentUnits: UnitSystem = 'mm'
+): number =>
+  typeof value === 'number'
+    ? value
+    : evaluateExpression(value, scope, { documentUnits });
 
 /** Unknown warnings fail closed; attributed suppression/advisories do not. */
 export function previewWarningsAllow(
@@ -327,21 +334,25 @@ export function parameterVisualPreview(
         const matrix = identity();
         axes.forEach((axis, i) => {
           matrix[12 + i] =
-            evaluate(part.move[axis], after.scope) -
-            evaluate(part.move[axis], before.scope);
+            evaluate(part.move[axis], after.scope, base.units) -
+            evaluate(part.move[axis], before.scope, base.units);
         });
         if (part.stretch) {
           const i = axes.indexOf(part.stretch.axis);
           const ratio =
-            evaluate(part.stretch.distance, after.scope) /
-            evaluate(part.stretch.distance, before.scope);
+            evaluate(part.stretch.distance, after.scope, base.units) /
+            evaluate(part.stretch.distance, before.scope, base.units);
           if (!(ratio > 0)) return null;
           matrix[i * 5] = ratio;
           matrix[12 + i] =
-            evaluate(part.stretch.offset, after.scope) +
-            evaluate(part.move[part.stretch.axis], after.scope) -
-            (evaluate(part.stretch.offset, before.scope) +
-              evaluate(part.move[part.stretch.axis], before.scope)) *
+            evaluate(part.stretch.offset, after.scope, base.units) +
+            evaluate(part.move[part.stretch.axis], after.scope, base.units) -
+            (evaluate(part.stretch.offset, before.scope, base.units) +
+              evaluate(
+                part.move[part.stretch.axis],
+                before.scope,
+                base.units
+              )) *
               ratio;
         }
         if (!matrix.every(Number.isFinite)) return null;
@@ -374,13 +385,13 @@ export function parameterVisualPreview(
           d.direction
         )
           return null;
-        const count = Math.round(evaluate(d.count, after.scope));
+        const count = Math.round(evaluate(d.count, after.scope, base.units));
         const count2 =
           d.patternKind === 'grid'
-            ? Math.round(evaluate(d.count2 ?? d.count, after.scope))
+            ? Math.round(evaluate(d.count2 ?? d.count, after.scope, base.units))
             : 1;
-        const spacing = evaluate(d.spacing, after.scope),
-          spacing2 = evaluate(d.spacing2 ?? d.spacing, after.scope);
+        const spacing = evaluate(d.spacing, after.scope, base.units),
+          spacing2 = evaluate(d.spacing2 ?? d.spacing, after.scope, base.units);
         if (
           count < 2 ||
           count > 100 ||

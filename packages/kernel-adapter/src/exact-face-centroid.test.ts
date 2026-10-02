@@ -97,6 +97,38 @@ describe('planarFaceCentroid', () => {
     expect(measured!.provenance).toBe('exact');
   });
 
+  it('walks a notched outer wire in stored order', () => {
+    const kernel = new RemusKernel();
+    const solid = kernel.cut(
+      kernel.makeBox(20, 20, 5),
+      kernel.copyAndTransformSolid(
+        kernel.makeBox(6, 10, 20),
+        translation(7, 10, -5)
+      )
+    );
+    // The notch mouth corners turn the boundary back on itself, which is the
+    // class endpoint matching had to search through: two distinct edges meet
+    // at each mouth corner, and the stored order plus orientation flags walk
+    // all eight without a search. Outer 20x20 less the 6x10 notch: x by
+    // symmetry, y from (400·10 − 60·15) / 340.
+    const { measured } = measure(kernel, solid, (centre) => centre.z === 5);
+    expectClose(measured!.centroid, { x: 10, y: 155 / 17, z: 5 });
+    expect(measured!.provenance).toBe('exact');
+  });
+
+  it('returns null for a wire with a repeated edge handle', () => {
+    const kernel = new RemusKernel();
+    const solid = kernel.makeCylinder(10, 18);
+    const lateral = Array.from(kernel.getSolidFaces(solid)).find(
+      (face) => kernel.getSurfaceType(face) === 'cylinder'
+    )!;
+    // The lateral wire uses its seam edge twice, and the kernel reports only
+    // the first use's orientation — the loop refuses rather than guesses.
+    expect(
+      planarFaceCentroid(kernel, lateral, { x: 0, y: 0, z: 1 })
+    ).toBeNull();
+  });
+
   it('subtracts a hole the same way from both ends of a drilled block', () => {
     const kernel = new RemusKernel();
     const solid = kernel.cut(

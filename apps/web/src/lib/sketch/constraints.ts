@@ -12,6 +12,9 @@ import type {
   SketchPointRef
 } from '@openzcad/shared';
 import type { ProjectDocument } from '@openzcad/shared';
+// Type-only on purpose: a value import would pull the WASM-bearing module
+// into the main bundle and fail the build's bundle-size check.
+import type { SketchSolveOutcome } from '@openzcad/kernel-adapter/exact';
 
 /** Constraint tools exposed by the sketch rail. */
 export type PendingConstraintKind =
@@ -697,6 +700,101 @@ export function residualConstraintObjectIds(
     }
   }
   return [...ids];
+}
+
+/**
+ * Sketch-wide defined state, derived from the solver's own evidence.
+ *
+ * The pinned GCS kernel reports one DOF scalar, one classification and
+ * per-constraint residuals for the whole sketch (`GcsSolveDiagnostics` /
+ * `GcsDofResult` in `remus-wasm`'s `.d.ts`): it never names a per-entity or
+ * per-parameter freedom. So this state is all-or-nothing on purpose —
+ * `fully-defined` paints every entity and every snap point, anything weaker
+ * leaves geometry in its normal style rather than guessing which entity is
+ * still free. `unknown` is "no solve has run yet", also normal style.
+ */
+export type SketchDefinedState =
+  | 'fully-defined'
+  | 'under-defined'
+  | 'over-constrained'
+  | 'conflict'
+  | 'unknown';
+
+export interface SketchDefinedSummary {
+  state: SketchDefinedState;
+  /** Sketch-wide DOF read from the outcome, or null when no solve ran. */
+  dof: number | null;
+  /**
+   * True only when the solver proved the whole sketch fixed: converged, not
+   * rolled back, classified solved, zero DOF. The only state that may paint
+   * geometry in the fully-defined colour.
+   */
+  fullyDefined: boolean;
+}
+
+type DefinedStateOutcome = Pick<
+  SketchSolveOutcome,
+  'classification' | 'converged' | 'rolledBack' | 'dof'
+>;
+
+/** Reduces one solve outcome to the sketch-wide defined state. Pure. */
+export function sketchDefinedState(
+  outcome: DefinedStateOutcome | null | undefined
+): SketchDefinedSummary {
+  if (!outcome) {
+    return { state: 'unknown', dof: null, fullyDefined: false };
+  }
+  if (
+    !outcome.converged ||
+    outcome.rolledBack ||
+    outcome.classification === 'unsatisfied'
+  ) {
+    return {
+      state: 'conflict',
+      dof: outcome.dof.dof,
+      fullyDefined: false
+    };
+  }
+  if (outcome.classification === 'redundant') {
+    return {
+      state: 'over-constrained',
+      dof: outcome.dof.dof,
+      fullyDefined: false
+    };
+  }
+  if (outcome.classification === 'solved' && outcome.dof.dof === 0) {
+    return { state: 'fully-defined', dof: 0, fullyDefined: true };
+  }
+  // `underConstrained`, or a `solved` that still reports freedom: the sketch
+  // is free somewhere, but the kernel will not say where, so no entity may
+  // claim the under-defined colour either.
+  return {
+    state: 'under-defined',
+    dof: outcome.dof.dof,
+    fullyDefined: false
+  };
+}
+
+/**
+ * The entity (or snap-point) ids that may wear the fully-defined colour.
+ * All-or-nothing by solver-evidence design: every id when the sketch proved
+ * fully defined, none otherwise — so a caller can pass object ids, point
+ * keys, or both, and agreement between the pill, the geometry and the
+ * constraint list holds by construction.
+ */
+export function fullyDefinedIds(
+  ids: readonly string[],
+  summary: SketchDefinedSummary
+): string[] {
+  return summary.fullyDefined ? [...ids] : [];
+}
+
+/** Stable key for a constraint-schema snap point (`objectId.point`). */
+export function definedPointKey(
+  objectId: string,
+  point: 'start' | 'end' | 'center'
+): string {
+  return `${objectId}.${point}`;
 }
 
 export type SelectionConstraintPlan =
