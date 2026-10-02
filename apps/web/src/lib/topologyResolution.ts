@@ -1,6 +1,7 @@
 import type {
   BodyRepresentation,
   EdgeTopology,
+  EdgeTopologyReferenceV5,
   FaceTopology,
   TopologyReferenceV5,
   TopologySelection
@@ -192,4 +193,111 @@ export function resolveEdge(
     return { ok: false, reason: 'body-missing' };
   }
   return resolve(body.topology?.edges, identity, 'edge');
+}
+
+/**
+ * Commit-time reference refresh (K05 on-demand probe).
+ *
+ * A pick made before the demanded rebuild arrives carries a hash-only
+ * identity while the current topology may already publish a
+ * `boolean.edge.*` / carrier name for the same sub-shape. Commits must read
+ * the name from the CURRENT published topology at commit time,
+ * re-resolving by the selection's hash/topology id.
+ *
+ * Fail-closed: when the current topology does not name the sub-shape
+ * unambiguously (zero or several matches, or the match carries no lineage
+ * name), the stale reference is returned unchanged — exactly what is
+ * persisted today (hash-only). Never guesses, never rebinds by proximity.
+ */
+export function refreshEdgeReferenceForCommit(
+  body: BodyRepresentation | undefined,
+  selection: Pick<TopologySelection, 'topologyId' | 'hash' | 'reference'>
+): TopologyReferenceV5 | undefined {
+  const stale = selection.reference;
+  const lookup = resolveEdge(body, selection);
+  if (!lookup.ok) {
+    return stale;
+  }
+  const current = lookup.entry.reference;
+  if (!current || current.kind !== 'edge') {
+    return stale;
+  }
+  // The CURRENT name wins only when `resolve` found it unambiguously and it
+  // still describes the picked sub-shape: the command contract requires each
+  // reference's `currentHash` to match its legacy hash, so a lineage-only
+  // move to a different hash keeps the stale reference instead.
+  if (!current.lineageName || current.currentHash !== selection.hash) {
+    return stale;
+  }
+  return current;
+}
+
+/** Face half of {@link refreshEdgeReferenceForCommit}. */
+export function refreshFaceReferenceForCommit(
+  body: BodyRepresentation | undefined,
+  selection: Pick<TopologySelection, 'topologyId' | 'hash' | 'reference'>
+): TopologyReferenceV5 | undefined {
+  const stale = selection.reference;
+  const lookup = resolveFace(body, selection);
+  if (!lookup.ok) {
+    return stale;
+  }
+  const current = lookup.entry.reference;
+  if (!current || current.kind !== 'face') {
+    return stale;
+  }
+  if (!current.lineageName || current.currentHash !== selection.hash) {
+    return stale;
+  }
+  return current;
+}
+
+/**
+ * Refresh a whole edge pick list for a fillet/chamfer commit. Hashes are
+ * preserved verbatim; only the references are re-read from the current
+ * topology. Fail-closed per entry: an unresolvable edge keeps its stale
+ * reference (usually hash-only).
+ */
+export function refreshEdgeReferencesForCommit(
+  body: BodyRepresentation | undefined,
+  selections: readonly Pick<
+    TopologySelection,
+    'topologyId' | 'hash' | 'reference'
+  >[]
+): (TopologyReferenceV5 | undefined)[] {
+  return selections.map((selection) =>
+    refreshEdgeReferenceForCommit(body, selection)
+  );
+}
+
+/**
+ * The edge-modifier form's half of the commit-time refresh. The form holds
+ * `edgeReferences` only when every pick already had a name (the command
+ * contract is all-or-nothing, one reference per hash), so a pick made on a
+ * carrier-only body reaches commit with none. Re-resolve every hash against
+ * the current topology and return a complete named list only when each hash
+ * resolves to a named reference for that same hash; otherwise return
+ * `undefined` so the caller commits exactly what the form holds.
+ */
+export function refreshEdgeFormReferencesForCommit(
+  body: BodyRepresentation | undefined,
+  edgeHashes: readonly number[],
+  edgeReferences: readonly EdgeTopologyReferenceV5[] | undefined
+): EdgeTopologyReferenceV5[] | undefined {
+  if (!body || edgeHashes.length === 0) {
+    return undefined;
+  }
+  const named: EdgeTopologyReferenceV5[] = [];
+  for (const hash of edgeHashes) {
+    const reference = refreshEdgeReferenceForCommit(body, {
+      topologyId: undefined,
+      hash,
+      reference: edgeReferences?.find((stale) => stale.currentHash === hash)
+    });
+    if (reference?.kind !== 'edge' || reference.currentHash !== hash) {
+      return undefined;
+    }
+    named.push(reference);
+  }
+  return named;
 }
