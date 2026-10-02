@@ -278,7 +278,7 @@ import {
 } from './lib/projectTabOwnership';
 
 import { countReactCommit, mark, measure, timed, timedAsync } from './lib/perf';
-import { useModalFocus } from './lib/useModalFocus';
+import { modalHoldsKeyboard, useModalFocus } from './lib/useModalFocus';
 import {
   PLANE_LABELS,
   downloadText,
@@ -15547,11 +15547,13 @@ export function App() {
    * Whether the workspace still owns the keyboard. A surface layered over it
    * takes the keys with it: Settings sits on top of a live document, so
    * Backspace deleting a feature or Ctrl+Z rewinding history behind it would
-   * edit a model the user cannot see. The palette and the shortcut overlay are
-   * not listed — they are handled inside the map, which they need to reach.
+   * edit a model the user cannot see. Any other modal dialog holds the keys
+   * the same way (`modalHoldsKeyboard`, checked per key). The palette and the
+   * shortcut overlay are not listed — they are handled inside the map, which
+   * they need to reach.
    */
   const workspaceInputEnabled =
-    !settingsOpen && !sharingOpen && !pendingShaprImport;
+    !settingsOpen && !sharingOpen && !pendingShaprImport && !meshExportOpen;
   exactEntryInputEnabledRef.current =
     workspaceInputEnabled && !paletteOpen && !shortcutsOpen && !namingSave;
 
@@ -15562,7 +15564,7 @@ export function App() {
   const workspaceKeyDownRef = useRef<(event: KeyboardEvent) => void>(() => {});
   useLayoutEffect(() => {
     workspaceKeyDownRef.current = function onKeyDown(event: KeyboardEvent) {
-      if (!workspaceInputEnabled) {
+      if (!workspaceInputEnabled || modalHoldsKeyboard()) {
         return;
       }
       const meta = event.ctrlKey || event.metaKey;
@@ -18977,6 +18979,7 @@ export function App() {
                 bodyId,
                 name: doc.derived.bodyRepresentations[bodyId]?.name ?? bodyId
               }))}
+              revision={doc.version}
               onClose={() => setMeshExportOpen(false)}
               onExport={handleExportMesh}
               onCheckQuality={handleCheckMeshQuality}
