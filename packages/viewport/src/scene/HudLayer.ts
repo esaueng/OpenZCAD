@@ -101,6 +101,28 @@ export class HudLayer {
     return true;
   }
 
+  /**
+   * Pulls an open popup placed by {@link showAtPointerClamped} back inside
+   * the host after the host changed size. It is placed once, so a window
+   * narrowed under an open menu otherwise left the menu outside it.
+   */
+  reclamp(element: HTMLElement, padding = 8): void {
+    if (element.hidden) {
+      return;
+    }
+    const hostRect = this.host.getBoundingClientRect();
+    const elementRect = element.getBoundingClientRect();
+    const maxX = Math.max(padding, hostRect.width - elementRect.width - padding);
+    const maxY = Math.max(
+      padding,
+      hostRect.height - elementRect.height - padding
+    );
+    const x = parseFloat(element.style.left) || 0;
+    const y = parseFloat(element.style.top) || 0;
+    element.style.left = `${Math.min(maxX, Math.max(padding, x))}px`;
+    element.style.top = `${Math.min(maxY, Math.max(padding, y))}px`;
+  }
+
   /** Positions an overlay at host-local pixels and reveals it. */
   showAt(element: HTMLElement, x: number, y: number) {
     element.style.left = `${x}px`;

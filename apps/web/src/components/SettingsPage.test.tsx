@@ -208,6 +208,39 @@ describe('settings advanced section', () => {
     expect(screen.getByText('Kernel version')).toBeInTheDocument();
   });
 
+  /**
+   * Production QA UI-04: below 580px the field is hidden, so a filter typed
+   * in a wider window left the rail on its matches with no way out.
+   */
+  it('offers a way out of an active filter that does not need the field', async () => {
+    const user = userEvent.setup();
+    // Start unfiltered: Settings restores the last search it was left on.
+    window.localStorage.clear();
+    renderSettings();
+    const sectionsBefore = within(
+      screen.getByRole('complementary', { name: 'Settings sections' })
+    ).getAllByRole('button').length;
+    expect(
+      screen.queryByRole('button', { name: /^Clear the filter/ })
+    ).not.toBeInTheDocument();
+
+    await user.type(screen.getByLabelText('Find a setting'), 'snap');
+    const clear = screen.getByRole('button', {
+      name: 'Clear the filter “snap”'
+    });
+    await user.click(clear);
+
+    expect(screen.getByLabelText('Find a setting')).toHaveValue('');
+    expect(
+      screen.queryByRole('button', { name: /^Clear the filter/ })
+    ).not.toBeInTheDocument();
+    expect(
+      within(
+        screen.getByRole('complementary', { name: 'Settings sections' })
+      ).getAllByRole('button')
+    ).toHaveLength(sectionsBefore);
+  });
+
   it('reports cloud project storage as not ready when health fails closed', async () => {
     const user = userEvent.setup();
     renderSettings({
