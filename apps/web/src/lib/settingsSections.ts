@@ -106,10 +106,12 @@ export const SETTINGS_SECTIONS: readonly SettingsSectionMeta[] = [
     detail: 'Identity and synchronization',
     settings: [
       'Project sharing',
+      'Personal information',
       'Membership',
       'Cloud profile',
       'Preference synchronization'
-    ]
+    ],
+    searchTerms: ['hide name', 'hide email', 'screenshot', 'show personal info']
   },
   {
     id: 'assistant',

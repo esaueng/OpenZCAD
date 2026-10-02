@@ -124,9 +124,6 @@ for (const guarded of [true, false])
     await input.press('Enter');
     await expect(page.getByRole('alert')).toContainText('No change applied');
     await expect(input).toHaveValue('58');
-    // The row says why (F1, 1 October 2026 review): the refusing feature
-    // and the first sentence of its reason. The full diagnostic stays one
-    // click away in the activity log.
     await expect(page.getByRole('alert')).toContainText(
       guarded ? '56.910504' : 'positive'
     );

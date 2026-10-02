@@ -176,6 +176,34 @@ describe('desktop bridge', () => {
     expect(invoke).not.toHaveBeenCalled();
   });
 
+  it('downloads PLY exports with the generic mesh content type', async () => {
+    const createObjectURL = vi.fn<(blob: Blob) => string>(() => 'blob:ply');
+    const revokeObjectURL = vi.fn();
+    vi.stubGlobal('URL', {
+      ...URL,
+      createObjectURL,
+      revokeObjectURL
+    });
+    const click = vi
+      .spyOn(HTMLAnchorElement.prototype, 'click')
+      .mockImplementation(() => undefined);
+
+    // PLY has no registered media type, so it keeps the generic one — the
+    // same mapping `inferContentType` uses for `.ply` files.
+    const saved = await saveCadBinaryFile(
+      'bracket.ply',
+      'ply',
+      new Uint8Array([0x70, 0x6c, 0x79, 0x0a])
+    );
+
+    expect(saved).toBe(true);
+    const blob = createObjectURL.mock.calls[0]![0];
+    expect(blob.type).toBe('application/octet-stream');
+    expect(blob.size).toBe(4);
+    expect(click).toHaveBeenCalledOnce();
+    expect(invoke).not.toHaveBeenCalled();
+  });
+
   it('converts native bytes into a browser File with CAD content type', async () => {
     const file = nativeCadFile({
       name: 'bracket.STEP',

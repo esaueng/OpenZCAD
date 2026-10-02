@@ -7,7 +7,7 @@ import {
   setParameter
 } from '@openzcad/document-core';
 import { toUserId } from '@openzcad/shared';
-import { ParameterRow, parameterRefusalSummary } from './ParameterRows';
+import { ParameterRow } from './ParameterRows';
 const parameter = () =>
   listParameters(
     setParameter(createProjectDocument('Test', toUserId('local')), {
@@ -41,10 +41,8 @@ it('shows pending validation, explains refusal, and restores the committed value
   expect(screen.getByText('Checking geometry…')).toBeTruthy();
   finish('holder_height must be at least 56.910504 mm.');
   await waitFor(() => expect(input).toHaveValue('58'));
-  // The reason is on the row, not only behind the link: the row used to say
-  // that something failed without saying what.
   expect(screen.getByRole('alert')).toHaveTextContent(
-    'No change applied — holder_height must be at least 56.910504 mm.View details'
+    'holder_height must be at least 56.910504 mm. No change applied.'
   );
   await user.click(screen.getByRole('button', { name: 'View details' }));
   expect(onViewDetails).toHaveBeenCalledOnce();
@@ -100,19 +98,23 @@ it('previews drafts before committing and cancels the display on Escape', async 
   expect(onSet).not.toHaveBeenCalled();
 });
 
-it('names the refusing feature and its first sentence', () => {
-  expect(
-    parameterRefusalSummary(
-      'Feature "Fillet": A selected edge no longer exists. Re-select the edges and re-create this feature.'
-    )
-  ).toBe('Fillet: A selected edge no longer exists.');
-  expect(parameterRefusalSummary('Parameter editing is unavailable.')).toBe(
-    'Parameter editing is unavailable.'
+it('shows the refusing feature inline without requiring the activity log', async () => {
+  const user = userEvent.setup();
+  const refusal =
+    'Feature "Round": The selected edge lineage resolves to multiple compatible candidates.';
+  render(
+    <ParameterRow
+      parameter={parameter()}
+      value={58}
+      onSet={async () => refusal}
+    />
   );
-  // A sentence with a decimal point is not cut at the decimal.
-  expect(
-    parameterRefusalSummary(
-      'Feature "Hole 1": Hole diameter 6.5 is wider than the face. Pick a smaller one.'
-    )
-  ).toBe('Hole 1: Hole diameter 6.5 is wider than the face.');
+  const input = screen.getByLabelText('Expression for holder_height');
+  await user.clear(input);
+  await user.type(input, '60{Enter}');
+  await waitFor(() =>
+    expect(screen.getByRole('alert')).toHaveTextContent(refusal)
+  );
+  expect(input).toHaveValue('58');
+  expect(screen.queryByRole('button', { name: 'View details' })).toBeNull();
 });

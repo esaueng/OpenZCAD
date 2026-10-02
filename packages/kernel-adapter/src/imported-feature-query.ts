@@ -63,44 +63,6 @@ function surfacePoint(
   }
 }
 
-function radialSense(
-  kernel: RemusKernel,
-  face: number,
-  axisOrigin: Vec3,
-  axisDirection: Vec3,
-  domain: readonly number[]
-): 'toward-axis' | 'away-from-axis' | null {
-  const u = (domain[0]! + domain[1]!) / 2;
-  const v = (domain[2]! + domain[3]!) / 2;
-  const point = surfacePoint(kernel, face, u, v);
-  let normal: Vec3 | null;
-  try {
-    normal = vectorFrom(kernel.evaluateSurfaceNormal(face, u, v));
-  } catch {
-    return null;
-  }
-  if (!point || !normal) {
-    return null;
-  }
-  const along = dot(subtract(point, axisOrigin), axisDirection);
-  const radial = normalized(
-    subtract(point, {
-      x: axisOrigin.x + axisDirection.x * along,
-      y: axisOrigin.y + axisDirection.y * along,
-      z: axisOrigin.z + axisDirection.z * along
-    })
-  );
-  const outward = normalized(normal);
-  if (!radial || !outward) {
-    return null;
-  }
-  const alignment = dot(outward, radial);
-  if (Math.abs(alignment) <= 1e-8) {
-    return null;
-  }
-  return alignment > 0 ? 'away-from-axis' : 'toward-axis';
-}
-
 function exactCircularPlanarArea(
   kernel: RemusKernel,
   face: number,
@@ -298,7 +260,12 @@ function revolutionEndpoints(
     ) {
       return [];
     }
-    const edgeDomain = Array.from(kernel.getEdgeCurveParameters(edge));
+    // The trimmed span, not the raw curve domain: for a partial arc the raw
+    // domain covers the whole underlying circle, while the span covers the
+    // edge's own trim. This site is gated to closed circle edges, where both
+    // cover one full period and the four-sample mean below is identical, so
+    // the switch is correctness-by-contract (Remus B16 trimmed-domain exit).
+    const edgeDomain = Array.from(kernel.getEdgeParamSpan(edge));
     if (edgeDomain.length !== 2 || !edgeDomain.every(Number.isFinite)) {
       return [];
     }
@@ -349,6 +316,10 @@ export class RemusImportedFeatureQuery implements ExactFaceAdjacencyQuery {
   private readonly edgeToFaces: Record<string, number[]>;
   private readonly faces = new Map<number, ExactRecognitionFace>();
   private readonly adjacency = new Map<number, ExactFaceAdjacency[]>();
+  private readonly edgeRelations = new Map<
+    number,
+    'convex' | 'concave' | 'tangent' | 'unknown'
+  >();
 
   constructor(
     private readonly kernel: RemusKernel,
@@ -359,6 +330,48 @@ export class RemusImportedFeatureQuery implements ExactFaceAdjacencyQuery {
       string,
       number[]
     >;
+    // One bulk query per solid: a per-edge loop rebuilds adjacency per edge
+    // (the quadratic trap on a 2 000-edge import). Fail closed to an empty
+    // map — every missing edge then reads as `unknown` → `intersection`.
+    try {
+      const raw = kernel.solidEdgeRelations(solid) as unknown as string;
+      const rows = JSON.parse(raw) as Array<{
+        edge: number;
+        relation: string;
+      }>;
+      for (const row of rows) {
+        if (
+          typeof row.edge === 'number' &&
+          (row.relation === 'convex' ||
+            row.relation === 'concave' ||
+            row.relation === 'tangent' ||
+            row.relation === 'unknown')
+        ) {
+          this.edgeRelations.set(row.edge, row.relation);
+        }
+      }
+    } catch {
+      // Empty map: fail closed.
+    }
+  }
+
+  private faceRadialSense(
+    face: number
+  ): 'toward-axis' | 'away-from-axis' | null {
+    // Edge convexity and face material sense are different questions: a
+    // bore's top rim is convex while its wall is inward. Never collapse them.
+    try {
+      const sense: unknown = this.kernel.faceMaterialSense(this.solid, face);
+      if (sense === 'inward') {
+        return 'toward-axis';
+      }
+      if (sense === 'outward') {
+        return 'away-from-axis';
+      }
+      return null;
+    } catch {
+      return null;
+    }
   }
 
   getFace(faceId: string): ExactRecognitionFace | undefined {
@@ -422,7 +435,7 @@ export class RemusImportedFeatureQuery implements ExactFaceAdjacencyQuery {
         faceId: String(neighbor),
         relation: entry.nonManifold
           ? ('non-manifold' as const)
-          : this.adjacencyRelation(handle, neighbor, entry.edges),
+          : this.adjacencyRelation(entry.edges),
         boundary,
         closed
       };
@@ -432,150 +445,37 @@ export class RemusImportedFeatureQuery implements ExactFaceAdjacencyQuery {
     return adjacent;
   }
 
+  /**
+   * Pure function of the kernel's per-edge convexity verdicts (bulk
+   * `solidEdgeRelations`, built once per solid): `tangent` → `smooth`,
+   * `unknown` (or missing) → `intersection`, never `convex`; `convex` and
+   * `concave` pass through. No `classifyPoint` probes, no `radialSense`
+   * inference. Multiple shared edges must agree; mixed verdicts fail closed
+   * to `intersection`. Self-seams never reach here (no neighbour entry).
+   */
   private adjacencyRelation(
-    leftHandle: number,
-    rightHandle: number,
     sharedEdges: readonly number[] = []
   ): ExactFaceAdjacency['relation'] {
-    const left = this.getFace(String(leftHandle))?.surface;
-    const right = this.getFace(String(rightHandle))?.surface;
-    if (left?.kind === 'blend' || right?.kind === 'blend') {
-      return 'smooth';
-    }
-    if (
-      left?.kind === 'plane' &&
-      right?.kind === 'plane' &&
-      sharedEdges.length > 0
-    ) {
-      return this.planePlaneRelation(left.normal, right.normal, sharedEdges[0]!);
-    }
-    const senses = [left, right].flatMap((surface) =>
-      surface?.kind === 'cylinder' || surface?.kind === 'cone'
-        ? [surface.radialSense]
-        : []
-    );
-    if (senses.length > 0 && senses.every((sense) => sense === senses[0])) {
-      return senses[0] === 'toward-axis' ? 'concave' : 'convex';
-    }
-    return senses.length > 0 ? 'intersection' : 'convex';
-  }
-
-  /**
-   * Concave/convex for two planar faces sharing a straight edge, proved by
-   * sampling the solid on both sides of the edge's diagonal wedge.
-   *
-   * A convex outer edge leaves both diagonal neighbours outside the solid
-   * while a concave pocket edge keeps both inside; anything else (a
-   * boundary hit, a mixed answer, a non-straight or skewed edge) is not a
-   * simple two-plane junction and fails closed as `intersection`. Coplanar
-   * neighbours stay `convex`: they never satisfy the pocket proof's
-   * perpendicularity check, so this label cannot promote them into a wall.
-   */
-  private planePlaneRelation(
-    leftNormal: ExactPoint3,
-    rightNormal: ExactPoint3,
-    sharedEdge: number
-  ): ExactFaceAdjacency['relation'] {
-    try {
-      const cross: ExactPoint3 = [
-        leftNormal[1] * rightNormal[2] - leftNormal[2] * rightNormal[1],
-        leftNormal[2] * rightNormal[0] - leftNormal[0] * rightNormal[2],
-        leftNormal[0] * rightNormal[1] - leftNormal[1] * rightNormal[0]
-      ];
-      const crossLength = Math.hypot(cross[0], cross[1], cross[2]);
-      if (!(crossLength > 1e-10)) {
-        return 'convex';
-      }
-      if (this.kernel.getEdgeCurveType(sharedEdge) !== 'LINE') {
-        return 'intersection';
-      }
-      const handles = Array.from(this.kernel.getEdgeVertexHandles(sharedEdge));
-      if (handles.length !== 2 || handles[0] === handles[1]) {
-        return 'intersection';
-      }
-      const start = Array.from(this.kernel.getVertexPosition(handles[0]!));
-      const end = Array.from(this.kernel.getVertexPosition(handles[1]!));
-      if (
-        start.length !== 3 ||
-        end.length !== 3 ||
-        ![...start, ...end].every((coordinate) => Number.isFinite(coordinate))
-      ) {
-        return 'intersection';
-      }
-      const tangent: ExactPoint3 = [
-        end[0]! - start[0]!,
-        end[1]! - start[1]!,
-        end[2]! - start[2]!
-      ];
-      const tangentLength = Math.hypot(tangent[0], tangent[1], tangent[2]);
-      if (!(tangentLength > 0)) {
-        return 'intersection';
-      }
-      const alignment =
-        Math.abs(
-          (tangent[0] * cross[0] + tangent[1] * cross[1] + tangent[2] * cross[2]) /
-            (tangentLength * crossLength)
-        );
-      if (!(alignment > 1 - 1e-9)) {
-        return 'intersection';
-      }
-      const diagonal: ExactPoint3 = [
-        leftNormal[0] - rightNormal[0],
-        leftNormal[1] - rightNormal[1],
-        leftNormal[2] - rightNormal[2]
-      ];
-      const diagonalLength = Math.hypot(
-        diagonal[0],
-        diagonal[1],
-        diagonal[2]
-      );
-      if (!(diagonalLength > 1e-10)) {
-        return 'convex';
-      }
-      let edgeLength = 0;
-      try {
-        edgeLength = this.kernel.edgeLength(sharedEdge);
-      } catch {
-        return 'intersection';
-      }
-      if (!Number.isFinite(edgeLength) || !(edgeLength > 0)) {
-        return 'intersection';
-      }
-      const step = Math.min(0.25, Math.max(1e-4, edgeLength * 0.05));
-      const midpoint = [
-        (start[0]! + end[0]!) / 2,
-        (start[1]! + end[1]!) / 2,
-        (start[2]! + end[2]!) / 2
-      ];
-      const offset = [
-        (diagonal[0] / diagonalLength) * step,
-        (diagonal[1] / diagonalLength) * step,
-        (diagonal[2] / diagonalLength) * step
-      ];
-      const first = this.kernel.classifyPoint(
-        this.solid,
-        midpoint[0]! + offset[0]!,
-        midpoint[1]! + offset[1]!,
-        midpoint[2]! + offset[2]!,
-        1e-7
-      );
-      const second = this.kernel.classifyPoint(
-        this.solid,
-        midpoint[0]! - offset[0]!,
-        midpoint[1]! - offset[1]!,
-        midpoint[2]! - offset[2]!,
-        1e-7
-      );
-      if (first === 'inside' && second === 'inside') {
-        return 'concave';
-      }
-      if (first === 'outside' && second === 'outside') {
-        return 'convex';
-      }
-      return 'intersection';
-    } catch {
+    if (sharedEdges.length === 0) {
       return 'intersection';
     }
+    const mapped = sharedEdges.map((edge) => {
+      const relation = this.edgeRelations.get(edge);
+      if (relation === 'tangent') {
+        return 'smooth' as const;
+      }
+      if (relation === 'convex') {
+        return 'convex' as const;
+      }
+      if (relation === 'concave') {
+        return 'concave' as const;
+      }
+      return 'intersection' as const;
+    });
+    const first = mapped[0]!;
+    return mapped.every((relation) => relation === first)
+      ? first
+      : 'intersection';
   }
 
   private readSurface(handle: number): ExactRecognitionFace['surface'] {
@@ -618,13 +518,7 @@ export class RemusImportedFeatureQuery implements ExactFaceAdjacencyQuery {
         typeof radius === 'number' &&
         Number.isFinite(radius)
       ) {
-        const sense = radialSense(
-          this.kernel,
-          handle,
-          axisOrigin,
-          axisDirection,
-          domain
-        );
+        const sense = this.faceRadialSense(handle);
         const endpoints = revolutionEndpoints(
           this.kernel,
           handle,
@@ -660,13 +554,7 @@ export class RemusImportedFeatureQuery implements ExactFaceAdjacencyQuery {
         typeof semiAngle === 'number' &&
         Number.isFinite(semiAngle)
       ) {
-        const sense = radialSense(
-          this.kernel,
-          handle,
-          axisOrigin,
-          axisDirection,
-          domain
-        );
+        const sense = this.faceRadialSense(handle);
         const endpoints = revolutionEndpoints(
           this.kernel,
           handle,
