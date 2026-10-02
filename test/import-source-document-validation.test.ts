@@ -99,7 +99,11 @@ const parsers = [
   {
     name: 'adoption',
     parse: (document: ProjectDocument) =>
-      parseCreateProjectRequest({ name: document.name, document })
+      parseCreateProjectRequest({
+        name: document.name,
+        document,
+        adoptionProtocolVersion: 1
+      })
   },
   {
     name: 'autosave',

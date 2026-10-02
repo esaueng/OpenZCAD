@@ -152,13 +152,13 @@ describe('adoption through persistence', () => {
       document: local
     });
 
-    expect(created.document.projectId).toBe(local.projectId);
+    expect(created.document.projectId).not.toBe(local.projectId);
     expect(created.document.ownerUserId).toBe(owner);
-    const loaded = await service.loadProject(owner, local.projectId);
+    const loaded = await service.loadProject(owner, created.document.projectId);
     expect(loaded?.name).toBe('Offline Part');
     const listed = await service.listProjects(owner);
     expect(listed.projects.map((project) => project.projectId)).toContain(
-      local.projectId
+      created.document.projectId
     );
   });
 
@@ -194,37 +194,60 @@ describe('adoption through persistence', () => {
     await expect(retry).rejects.toMatchObject({ code: 'ALREADY_ADOPTED' });
   });
 
-  it('refuses an id that belongs to somebody else, without saying whose', async () => {
+  it('assigns separate identities when two accounts save the same device project', async () => {
     const service = new InMemoryPersistenceService();
-    const local = localDocument();
-    await service.createProject(owner, { name: local.name, document: local });
-
-    const collision = service.createProject(stranger, {
+    const local = localDocument('Mine');
+    const first = await service.createProject(owner, {
       name: local.name,
       document: local
     });
-    await expect(collision).rejects.toMatchObject({
-      code: 'PROJECT_ID_TAKEN'
+    const second = await service.createProject(stranger, {
+      name: 'Theirs',
+      document: local
     });
-    await expect(collision).rejects.toThrow(/already in use/);
-    // The refusal must not leak the owner it collided with.
-    await expect(collision).rejects.not.toThrow(new RegExp(owner));
+    expect(first.document.projectId).not.toBe(second.document.projectId);
+    expect(first.document.projectId).not.toBe(local.projectId);
+    expect(second.document.projectId).not.toBe(local.projectId);
+    expect(
+      (await service.loadProject(owner, first.document.projectId))?.name
+    ).toBe('Mine');
+    await expect(
+      service.loadProject(stranger, first.document.projectId)
+    ).resolves.toBeNull();
+    await expect(
+      service.createProject(stranger, { name: local.name, document: local })
+    ).rejects.toMatchObject({
+      code: 'ALREADY_ADOPTED',
+      projectId: second.document.projectId
+    });
   });
 
-  it('leaves the original owner in possession after a refused collision', async () => {
+  it('saves a supplied document with an existing foreign identity under a fresh identity', async () => {
     const service = new InMemoryPersistenceService();
-    const local = localDocument('Mine');
-    await service.createProject(owner, { name: local.name, document: local });
-    await service
-      .createProject(stranger, { name: 'Theirs', document: local })
-      .catch(() => undefined);
+    const first = await service.createProject(owner, { name: 'Original' });
+    const second = await service.createProject(stranger, {
+      name: 'Device part',
+      document: first.document
+    });
+    expect(second.document.projectId).not.toBe(first.document.projectId);
+    expect(
+      (await service.loadProject(owner, first.document.projectId))?.name
+    ).toBe('Original');
+  });
 
-    const loaded = await service.loadProject(owner, local.projectId);
-    expect(loaded?.name).toBe('Mine');
-    expect(loaded?.ownerUserId).toBe(owner);
+  it('keeps existing account identities and returns them for retry recovery', async () => {
+    const service = new InMemoryPersistenceService();
+    const existing = await service.createProject(owner, { name: 'Existing' });
     await expect(
-      service.loadProject(stranger, local.projectId)
-    ).resolves.toBeNull();
+      service.createProject(owner, {
+        name: 'Existing',
+        document: existing.document
+      })
+    ).rejects.toMatchObject({
+      code: 'ALREADY_ADOPTED',
+      projectId: existing.document.projectId
+    });
+    expect((await service.listProjects(owner)).projects).toHaveLength(1);
   });
 
   it('still mints a fresh project when no document is supplied', async () => {
@@ -268,7 +291,8 @@ describe('create-project request validation', () => {
     const local = localDocument();
     const request = parseCreateProjectRequest({
       name: local.name,
-      document: local
+      document: local,
+      adoptionProtocolVersion: 1
     });
     expect(request.document?.projectId).toBe(local.projectId);
   });
@@ -276,7 +300,11 @@ describe('create-project request validation', () => {
   it('requires the document to carry a project id of its own', () => {
     const local = { ...localDocument(), projectId: '' };
     expect(() =>
-      parseCreateProjectRequest({ name: 'Nameless', document: local })
+      parseCreateProjectRequest({
+        name: 'Nameless',
+        document: local,
+        adoptionProtocolVersion: 1
+      })
     ).toThrow(HttpError);
   });
 
@@ -286,14 +314,22 @@ describe('create-project request validation', () => {
       schemaVersion: PROJECT_DOCUMENT_SCHEMA_VERSION + 1
     };
     expect(() =>
-      parseCreateProjectRequest({ name: local.name, document: local })
+      parseCreateProjectRequest({
+        name: local.name,
+        document: local,
+        adoptionProtocolVersion: 1
+      })
     ).toThrow(/newer than this deployment supports/);
   });
 
   it('accepts a document from an older client, which normalization migrates', () => {
     const local = { ...localDocument(), schemaVersion: 1 };
     expect(() =>
-      parseCreateProjectRequest({ name: local.name, document: local })
+      parseCreateProjectRequest({
+        name: local.name,
+        document: local,
+        adoptionProtocolVersion: 1
+      })
     ).not.toThrow();
   });
 
@@ -307,7 +343,11 @@ describe('create-project request validation', () => {
       }
     };
     expect(() =>
-      parseCreateProjectRequest({ name: local.name, document: local })
+      parseCreateProjectRequest({
+        name: local.name,
+        document: local,
+        adoptionProtocolVersion: 1
+      })
     ).not.toThrow();
   });
 
@@ -322,7 +362,11 @@ describe('create-project request validation', () => {
     };
     let thrown: unknown;
     try {
-      parseCreateProjectRequest({ name: local.name, document: local });
+      parseCreateProjectRequest({
+        name: local.name,
+        document: local,
+        adoptionProtocolVersion: 1
+      });
     } catch (error) {
       thrown = error;
     }
@@ -339,7 +383,25 @@ describe('create-project request validation', () => {
   it('refuses a document missing its collections', () => {
     const { commandLog: _dropped, ...local } = localDocument();
     expect(() =>
-      parseCreateProjectRequest({ name: local.name, document: local })
+      parseCreateProjectRequest({
+        name: local.name,
+        document: local,
+        adoptionProtocolVersion: 1
+      })
     ).toThrow(/missing required collections/);
   });
 });
+
+it.each([undefined, 0, 2])(
+  'requires a supported account identity transfer protocol (%s)',
+  (adoptionProtocolVersion) => {
+    const document = localDocument();
+    expect(() =>
+      parseCreateProjectRequest({
+        name: document.name,
+        document,
+        adoptionProtocolVersion
+      })
+    ).toThrow('Reload to update before saving this project to your account.');
+  }
+);

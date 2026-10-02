@@ -10,6 +10,7 @@ import {
 import { RemusKernel, loadRemusTranslators } from './remus-runtime';
 import { MEASUREMENT_DEFLECTION } from './exact-witnesses';
 import { importMeshSolid } from './exact-shape-utils';
+import { glbPlacement } from './glb-scene';
 import {
   applyThreeMfTransform,
   readThreeMfPackage,
@@ -56,13 +57,14 @@ interface MeshPlacement {
  * welded vertices with its volume intact — so nothing is refined, decimated or
  * re-meshed on the way in.
  *
- * Coordinates come out in millimetres. OBJ, PLY and glTF binary declare no
- * length unit, so their numbers are adopted as written — the STL convention. A
- * 3MF declares one, and also declares in its `<build>` section which of its
- * objects are placed, how often, and with what matrix; the pinned translator
- * reads neither, so both are read from the package here and applied. Anything
- * the package states that this import cannot carry out faithfully is refused
- * by name rather than dropped.
+ * Coordinates come out in millimetres. OBJ and PLY declare no length unit, so
+ * their numbers are adopted as written — the STL convention. A 3MF declares
+ * one, and also declares in its `<build>` section which of its objects are
+ * placed, how often, and with what matrix; glTF is metres and +Y up by
+ * definition, and places its meshes through a node graph. The pinned
+ * translators read none of that, so it is read from the file here and
+ * applied. Anything a file states that this import cannot carry out
+ * faithfully is refused by name rather than dropped.
  *
  * One file becomes one mesh body, and whether a file can is decided by trying,
  * not by counting: the triangles are put through the very rebuild the document
@@ -119,6 +121,9 @@ export async function importMeshFile(
   if (document.length === 0) {
     throw new Error(`This ${policy.label} file contains no mesh.`);
   }
+  // After the translator, whose refusals name what is wrong with a file that
+  // is not a readable GLB at all; this reads only what it accepted.
+  const glbTransform = format === 'glb' ? glbPlacement(data) : null;
 
   const kernel = new RemusKernel();
   let vertices: number[];
@@ -127,7 +132,11 @@ export async function importMeshFile(
     const solids = Array.from(kernel.deserializeSolids(document));
     ({ vertices, indices } = tessellatePlacements(
       kernel,
-      pkg ? threeMfPlacements(pkg, solids) : solids.map(identityPlacement)
+      pkg
+        ? threeMfPlacements(pkg, solids)
+        : glbTransform
+          ? solids.map((solid) => ({ solid, transform: glbTransform }))
+          : solids.map(identityPlacement)
     ));
 
     const triangleCount = indices.length / 3;
@@ -153,7 +162,11 @@ export async function importMeshFile(
     vertices,
     indices,
     triangleCount: indices.length / 3,
-    ...(pkg ? { sourceUnit: pkg.unit.name } : {})
+    ...(pkg
+      ? { sourceUnit: pkg.unit.name }
+      : glbTransform
+        ? { sourceUnit: 'meter' }
+        : {})
   };
 }
 
