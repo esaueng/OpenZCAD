@@ -114,6 +114,8 @@ import {
   disconnectedUnionWarning
 } from './union-connectivity';
 import {
+  BOOLEAN_EVOLUTION_SKIPPED_NO_REFERENCE,
+  booleanEvolutionProbeNeeded,
   declinedBooleanEvidence,
   deriveBooleanLineage,
   probeBooleanEntityEvolution,
@@ -1526,20 +1528,26 @@ function buildBooleanFeature(
   result.shapes.set(feature.bodyId, {
     solids: [solid],
     lineage: deriveBooleanLineage({
-      evidence: evolutionProbe
-        ? probeBooleanEntityEvolution({
-            kernel,
-            operation: evolutionProbe.operation,
-            a: evolutionProbe.a,
-            b: evolutionProbe.b,
-            shipped: solid,
-            unify: (candidate) =>
-              evolutionProbe.operation === 'fuse'
-                ? unifyUnionFaces(kernel, candidate)
-                : unifyBooleanFaces(kernel, candidate),
-            operands: operandLineage
-          })
-        : declinedBooleanEvidence(probeDeclined),
+      evidence:
+        evolutionProbe !== null &&
+        booleanEvolutionProbeNeeded(document, feature)
+          ? probeBooleanEntityEvolution({
+              kernel,
+              operation: evolutionProbe.operation,
+              a: evolutionProbe.a,
+              b: evolutionProbe.b,
+              shipped: solid,
+              unify: (candidate) =>
+                evolutionProbe.operation === 'fuse'
+                  ? unifyUnionFaces(kernel, candidate)
+                  : unifyBooleanFaces(kernel, candidate),
+              operands: operandLineage
+            })
+          : declinedBooleanEvidence(
+              evolutionProbe === null
+                ? probeDeclined
+                : BOOLEAN_EVOLUTION_SKIPPED_NO_REFERENCE
+            ),
       producingFeatureId: feature.featureId,
       operands: operandLineage,
       resultCandidates: topologyCandidatesForSolid(kernel, solid)
