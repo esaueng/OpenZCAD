@@ -56,10 +56,11 @@ it('measures an accepted boolean from its closure tessellation and matches a fre
 
   const tessellatedMeshes: {
     solid: number;
+    linearDeflection: number;
+    angularDeflection: number | null | undefined;
     positions: number[];
     indices: number[];
     groups: number;
-    closureChecked: boolean;
   }[] = [];
   const original = RemusKernel.prototype.tessellateSolidGroupedBinary;
   vi.spyOn(
@@ -69,15 +70,22 @@ it('measures an accepted boolean from its closure tessellation and matches a fre
     const mesh = original.call(this, solid, ...args);
     tessellatedMeshes.push({
       solid,
+      linearDeflection: args[0],
+      angularDeflection: args[1],
       positions: Array.from(mesh.positions),
       indices: Array.from(mesh.indices),
-      groups: mesh.faceOffsets.length - 1,
-      closureChecked: (new Error('trace').stack ?? '').includes(
-        'tessellateAndCheckSolidMesh'
-      )
+      groups: mesh.faceOffsets.length - 1
     });
     return mesh;
   });
+  // One kernel call per solid handle and deflection. "Tessellated once" is
+  // a statement about calls on a handle, and this is the key that names one.
+  const callKey = (call: {
+    solid: number;
+    linearDeflection: number;
+    angularDeflection: number | null | undefined;
+  }) =>
+    `solid ${call.solid} @ ${call.linearDeflection}/${call.angularDeflection ?? 'default'}`;
 
   let adapter: ExactKernelAdapter | undefined;
   try {
@@ -100,10 +108,20 @@ it('measures an accepted boolean from its closure tessellation and matches a fre
     ).toBe(true);
 
     // Identify the final measured group's exact vertex stream among the
-    // kernel calls. Every byte-identical twin must be closure-checked bytes:
-    // the deterministic kernel emits the same mesh from the union gate and
-    // the evolution probe, so uniqueness no longer holds — but measurement
-    // must still contribute no fresh (non-closure) tessellation of it.
+    // kernel calls. It must have been tessellated once, by closure checking.
+    //
+    // A matching stream does not identify a kernel call. Since Remus
+    // 2026.1.28 (esaueng/remus#922, the PERF-D03 deterministic boundary
+    // plan) the grouped stream is a pure function of the geometry: the same
+    // body tessellates byte-identically whichever arena handles built it.
+    // The entity-evolution probe fuses the operands a second time on copies
+    // and unifies its own result, whose closure check produces this very
+    // stream on another handle — one more call, one more body, not a cache
+    // miss. Before 2026.1.28 the copy's stream merely happened to differ
+    // (measured: handle 4 `eb9b41ee…`, handle 8 `2991e1ef…` at 2026.1.23;
+    // both `b6302028…` at 2026.1.28), which is what let the old
+    // `toHaveLength(1)` pass. So the stream finds the body, and the call
+    // count is taken per solid handle and deflection.
     const matchingMeshes = tessellatedMeshes.filter(
       (mesh) =>
         mesh.positions.length === body!.mesh.vertices.length &&
@@ -116,8 +134,28 @@ it('measures an accepted boolean from its closure tessellation and matches a fre
         ) &&
         mesh.groups === body!.faceCount
     );
-    expect(matchingMeshes.length).toBeGreaterThanOrEqual(1);
-    expect(matchingMeshes.every((mesh) => mesh.closureChecked)).toBe(true);
+    expect(matchingMeshes.length).toBeGreaterThan(0);
+    // Every handle that produced the measured stream was tessellated exactly
+    // once at the display deflection: the accepted union's closure-check mesh
+    // IS the mesh measurement reads, and the probe's copy is checked once too.
+    const callsPerHandle = new Map<string, number>();
+    for (const call of tessellatedMeshes) {
+      callsPerHandle.set(
+        callKey(call),
+        (callsPerHandle.get(callKey(call)) ?? 0) + 1
+      );
+    }
+    expect(
+      matchingMeshes.map((mesh) => [
+        callKey(mesh),
+        callsPerHandle.get(callKey(mesh))
+      ])
+    ).toEqual(matchingMeshes.map((mesh) => [callKey(mesh), 1]));
+    // And no handle at all — operand, union, or probe copy — was tessellated
+    // twice at one deflection during the sync.
+    expect(
+      [...callsPerHandle.entries()].filter(([, count]) => count !== 1)
+    ).toEqual([]);
 
     const oracle = new RemusKernel();
     try {

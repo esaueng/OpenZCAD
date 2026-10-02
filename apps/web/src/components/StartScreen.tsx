@@ -51,6 +51,11 @@ const ProjectPropertiesDialog = lazy(async () => ({
 interface StartScreenProps {
   projects: ProjectSummary[];
   status: string;
+  /**
+   * Present once a newer build is out (a chunk this tab asked for is gone,
+   * or the version watch saw a new commit): the footer offers the reload.
+   */
+  onReloadForUpdate?: () => void;
   busy: boolean;
   /** Discovery is pending; an empty array and absent session are not results. */
   loading?: boolean;
@@ -189,6 +194,7 @@ const START_SCREEN_DISSOLVE_MS = 240;
 export function StartScreen({
   projects,
   status,
+  onReloadForUpdate,
   busy,
   loading = false,
   demos,
@@ -1217,6 +1223,22 @@ export function StartScreen({
       </div>
 
       <footer className="start-foot">
+        {onReloadForUpdate ? (
+          // A deploy renamed the chunks this tab loads lazily, so the next
+          // demo, import or panel would fail. The failure used to surface as
+          // "Failed to fetch dynamically imported module" in the status text
+          // beside this, with nothing happening on the card that was clicked.
+          <span className="start-update" role="alert">
+            <span>A new version of OpenZCAD is available.</span>
+            <button
+              type="button"
+              className="primary"
+              onClick={onReloadForUpdate}
+            >
+              Reload
+            </button>
+          </span>
+        ) : null}
         <span className="start-status">
           {loading ? 'Loading library…' : status}
         </span>
