@@ -15428,7 +15428,10 @@ export function App() {
    * not listed — they are handled inside the map, which they need to reach.
    */
   const workspaceInputEnabled =
-    !settingsOpen && !sharingOpen && !pendingShaprImport;
+    !settingsOpen &&
+    !sharingOpen &&
+    !pendingShaprImport &&
+    !pendingFeatureDelete;
   exactEntryInputEnabledRef.current =
     workspaceInputEnabled && !paletteOpen && !shortcutsOpen && !namingSave;
 
