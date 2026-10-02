@@ -1,4 +1,5 @@
 import type { ParameterPreviewBody } from '../lib/parameterVisualPreview';
+import type { HoleGhost } from '../lib/holeGhost';
 import { useRef, type MutableRefObject, type ReactNode } from 'react';
 import {
   ModelViewer,
@@ -249,6 +250,8 @@ interface ViewerShellProps {
   onHoverRegion(region: RegionPickData | null): void;
   planePickerArmed: boolean;
   planePickerOffset: number;
+  /** The open Hole card's bore, drawn before it exists. */
+  holeGhost?: HoleGhost | null;
   onPickPlane(plane: PlaneId): void;
   /** What measuring the hovered target would report; null when measure is off. */
   onMeasurePreview?:
@@ -374,6 +377,7 @@ export function ViewerShell({
   onHoverRegion,
   planePickerArmed,
   planePickerOffset,
+  holeGhost = null,
   onPickPlane,
   onMeasurePreview,
   regionHandle,
@@ -551,6 +555,7 @@ export function ViewerShell({
         onHoverRegion={onHoverRegion}
         planePickerArmed={planePickerArmed}
         planePickerOffset={planePickerOffset}
+        holeGhost={holeGhost}
         onPickPlane={onPickPlane}
         onMeasurePreview={onMeasurePreview}
         regionHandle={regionHandle}

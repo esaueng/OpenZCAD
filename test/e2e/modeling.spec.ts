@@ -6,9 +6,11 @@ import {
   expect,
   expectBodyCount,
   expectConsumedBodyCount,
+  locateEdge,
   openAssistant,
   promptField,
   revealModelDrawer,
+  setSelectionFilter,
   shiftSelectTwoVisibleBoxEdges,
   stubApi,
   test
@@ -1460,11 +1462,11 @@ test('preflights and splits a box into two live half bodies', async ({
     .getByRole('group', { name: 'Plane origin' })
     .getByLabel('X')
     .fill('5');
-  await page.getByRole('button', { name: 'Check exact result' }).click();
-  await expect(
-    page.getByRole('status').filter({ hasText: 'Exact preflight passed' })
-  ).toBeVisible({ timeout: 20_000 });
+  // One press checks the exact result and, when it builds, commits it.
   await page.getByRole('button', { name: 'Create split body' }).click();
+  await expect(
+    page.getByRole('button', { name: /^Checking exact result/ })
+  ).toHaveCount(0, { timeout: 20_000 });
 
   await expect(
     page.locator('.feature-row-main', { hasText: 'Split' })
@@ -1544,11 +1546,11 @@ test('preflights and drills a through hole into the top face', async ({
   await expect(
     page.getByRole('textbox', { name: 'Diameter', exact: true })
   ).toHaveValue('5');
-  await page.getByRole('button', { name: 'Check exact result' }).click();
-  await expect(
-    page.getByRole('status').filter({ hasText: 'Exact preflight passed' })
-  ).toBeVisible({ timeout: 20_000 });
+  // One press checks the exact result and, when it builds, commits it.
   await page.getByRole('button', { name: 'Create hole' }).click();
+  await expect(
+    page.getByRole('button', { name: /^Checking exact result/ })
+  ).toHaveCount(0, { timeout: 20_000 });
 
   await expect(
     page.locator('.feature-row-main', { hasText: 'Hole' })
@@ -1573,11 +1575,11 @@ test('preflights and drills a through hole into the top face', async ({
     'true'
   );
   await page.getByRole('textbox', { name: 'Diameter', exact: true }).fill('8');
-  await page.getByRole('button', { name: 'Check exact result' }).click();
-  await expect(
-    page.getByRole('status').filter({ hasText: 'Exact preflight passed' })
-  ).toBeVisible({ timeout: 20_000 });
+  // One press checks the exact result and, when it builds, commits it.
   await page.getByRole('button', { name: 'Apply hole' }).click();
+  await expect(
+    page.getByRole('button', { name: /^Checking exact result/ })
+  ).toHaveCount(0, { timeout: 20_000 });
   await expect(page.getByRole('contentinfo')).toContainText('Edited Hole.');
   await expect(page.locator('.feature-row', { hasText: /^Hole/ })).toHaveCount(
     1
@@ -1611,11 +1613,11 @@ test('preflights and creates an exact open-top shell', async ({ page }) => {
   await page.getByRole('button', { name: /^Shell/ }).click();
   const openings = page.getByRole('group', { name: 'Opening faces' });
   await openings.getByRole('button', { name: /Top face/ }).click();
-  await page.getByRole('button', { name: 'Check exact result' }).click();
-  await expect(
-    page.getByRole('status').filter({ hasText: 'Exact preflight passed' })
-  ).toBeVisible({ timeout: 20_000 });
+  // One press checks the exact result and, when it builds, commits it.
   await page.getByRole('button', { name: 'Create shell' }).click();
+  await expect(
+    page.getByRole('button', { name: /^Checking exact result/ })
+  ).toHaveCount(0, { timeout: 20_000 });
 
   await expect(
     page.locator('.feature-row-main', { hasText: 'Shell' })
@@ -1640,11 +1642,11 @@ test('preflights and creates an exact open-top shell', async ({ page }) => {
     openings.getByRole('button', { name: /Top face/ })
   ).toHaveAttribute('aria-pressed', 'true');
   await thickness.fill('3');
-  await page.getByRole('button', { name: 'Check exact result' }).click();
-  await expect(
-    page.getByRole('status').filter({ hasText: 'Exact preflight passed' })
-  ).toBeVisible({ timeout: 20_000 });
+  // One press checks the exact result and, when it builds, commits it.
   await page.getByRole('button', { name: 'Apply shell' }).click();
+  await expect(
+    page.getByRole('button', { name: /^Checking exact result/ })
+  ).toHaveCount(0, { timeout: 20_000 });
   await expect(page.getByRole('contentinfo')).toContainText('Edited Shell.');
   await expect(page.locator('.feature-row', { hasText: /^Shell/ })).toHaveCount(
     1
@@ -1696,6 +1698,11 @@ for (const modifier of [
     await expect(inspector.locator('.selection-summary')).toContainText(
       '2 exact edges selected'
     );
+    // The tool's card is the one surface for the command: the edge
+    // operation's "Ready" chip no longer stands above it saying the same.
+    await expect(
+      page.getByRole('region', { name: /^(Fillet|Chamfer) operation$/ })
+    ).toHaveCount(0);
     await inspector.getByRole('button', { name: /^Create/ }).click();
 
     const feature = page.locator('.feature-row', {
@@ -1703,10 +1710,68 @@ for (const modifier of [
     });
     await expect(feature).toBeVisible();
     await expect(feature.getByTitle('Feature failed to build')).toHaveCount(0);
+    // The pick armed an edge operation; creating the feature disarms it.
+    // Its "Ready" card and its lane instructions used to stay up over the
+    // finished edge, and even follow the user into their next project.
+    await expect(
+      page.getByRole('region', { name: /^(Fillet|Chamfer) operation$/ })
+    ).toHaveCount(0);
+    await expect(page.getByRole('contentinfo')).not.toContainText(
+      /Drag the handle to set the (fillet|chamfer)/
+    );
     await expect(page.getByRole('contentinfo')).toContainText('warnings0');
     expect(consoleErrors).toEqual([]);
   });
 }
+
+/**
+ * A radius typed into the Fillet card that the kernel refuses used to leave
+ * the handle on the edge reading a plain "R 80 mm", as if the preview were
+ * good, while the refusal went only to the lane. The handle turns to its
+ * warning state and the card says why; a size that builds clears both.
+ */
+test('a refused fillet size marks the handle and says why in the card', async ({
+  page
+}) => {
+  await stubApi(page);
+  await page.goto('/');
+  await page.getByLabel('Project name').fill('Refused fillet');
+  await page.getByRole('button', { name: 'Create project' }).click();
+  await page.getByRole('button', { name: /^Box \(B\)/ }).click();
+  const inspector = page.getByRole('region', { name: 'Feature inspector' });
+  await inspector.getByRole('button', { name: /^Create/ }).click();
+  await expect(page.getByRole('button', { name: /^Fillet/ })).toBeEnabled({
+    timeout: 30_000
+  });
+
+  await page.getByRole('button', { name: /^Fillet/ }).click();
+  await setSelectionFilter(page, 'Edge');
+  const edge = await locateEdge(page);
+  await page.mouse.click(edge.x, edge.y);
+  await expect(inspector.locator('.selection-summary')).toContainText(
+    '1 exact edge selected'
+  );
+
+  const radius = inspector.getByRole('textbox', {
+    name: 'Radius',
+    exact: true
+  });
+  const chip = page.getByTestId('direct-manipulation-value');
+  // The default box is 30 × 18 × 24: no edge of it carries r80.
+  await radius.fill('80');
+  await expect(inspector.getByRole('alert')).toContainText(
+    'could not be created',
+    { timeout: 30_000 }
+  );
+  await expect(chip).toHaveAttribute('data-state', 'warning');
+  await expect(chip).toContainText('80');
+
+  await radius.fill('1');
+  await expect(inspector.getByRole('alert')).toHaveCount(0, {
+    timeout: 30_000
+  });
+  await expect(chip).toHaveAttribute('data-state', 'ready');
+});
 
 test('the armed fillet handle rounds every shift-selected edge, not just the last', async ({
   page
@@ -3053,11 +3118,18 @@ test('exports a 3MF package through the mesh export dialog', async ({
   });
 
   const fileMenu = page.locator('details.file-menu');
+  // Escape closes the File menu like any other menu.
+  await fileMenu.locator('summary').click();
+  await expect(fileMenu).toHaveAttribute('open', '');
+  await page.keyboard.press('Escape');
+  await expect(fileMenu).not.toHaveAttribute('open', '');
   await fileMenu.locator('summary').click();
   await fileMenu.getByRole('button', { name: /Export Mesh/ }).click();
 
   const dialog = page.getByRole('dialog', { name: /Export mesh/ });
   await expect(dialog).toBeVisible();
+  // Choosing an item closes the menu: it stayed open under the dialog.
+  await expect(fileMenu).not.toHaveAttribute('open', '');
 
   // The printability check runs the real kernel and names the body.
   await dialog.getByRole('button', { name: /Check watertightness/ }).click();
@@ -3080,6 +3152,85 @@ test('exports a 3MF package through the mesh export dialog', async ({
   // The export closes the dialog and reports success.
   await expect(dialog).toHaveCount(0);
   await expect(page.getByRole('contentinfo')).toContainText('Print-Part.3mf');
+});
+
+/**
+ * Production QA UI-13: the check button disabled itself while focused, focus
+ * fell to the body, and Escape then went to the workspace — clearing the
+ * selection, so the dialog's scope flipped to every body while it still showed
+ * the one-body verdict. Undo reached the model behind the modal the same way.
+ */
+test('mesh export keeps the keyboard, its scope and its verdict together', async ({
+  page
+}) => {
+  await stubApi(page);
+  await page.setViewportSize({ width: 1366, height: 900 });
+  await page.goto('/');
+  await page.getByLabel('Project name').fill('Export Scope');
+  await page.getByRole('button', { name: 'Create project' }).click();
+  const inspector = page.getByRole('region', { name: 'Feature inspector' });
+  for (const name of ['Base', 'Boss']) {
+    await page.getByRole('button', { name: /^Box \(B\)/ }).click();
+    await inspector.getByLabel('Name').fill(name);
+    await inspector.getByRole('button', { name: /^Create/ }).click();
+    await expect(
+      page.locator('.feature-row-main', { hasText: name })
+    ).toBeVisible();
+  }
+  const featureRows = page.locator('.feature-row-main');
+  await expect(featureRows).toHaveCount(2);
+  await page.locator('.feature-row-main', { hasText: 'Base' }).click();
+  await expect(page.locator('.panel-body')).toContainText('volume', {
+    ignoreCase: true
+  });
+
+  const fileMenu = page.locator('details.file-menu');
+  const openExport = async () => {
+    await fileMenu.locator('summary').click();
+    await fileMenu.getByRole('button', { name: /Export Mesh/ }).click();
+  };
+  await openExport();
+  const dialog = page.getByRole('dialog', { name: /Export mesh/ });
+  const scope = dialog.locator('.export-dialog-scope');
+  await expect(scope).toContainText('Exports Base ');
+
+  await dialog.getByRole('button', { name: /Check watertightness/ }).click();
+  await expect(dialog.locator('.export-dialog-report')).toContainText(
+    'watertight'
+  );
+  expect(
+    await dialog.evaluate((element) => element.contains(document.activeElement))
+  ).toBe(true);
+
+  // Undo behind the open dialog must not rewind the model.
+  await page.keyboard.press('ControlOrMeta+z');
+  await expect(featureRows).toHaveCount(2);
+  await expect(scope).toContainText('Exports Base ');
+
+  await page.keyboard.press('Escape');
+  await expect(dialog).toHaveCount(0);
+
+  // The same key closed the dialog and nothing else: Base is still the scope.
+  await openExport();
+  await expect(scope).toContainText('Exports Base ');
+  // Focus lost to the page (a backdrop click) still closes on Escape.
+  await page.evaluate(() => (document.activeElement as HTMLElement).blur());
+  await page.keyboard.press('Escape');
+  await expect(dialog).toHaveCount(0);
+  await expect(featureRows).toHaveCount(2);
+
+  // Every modal holds the keys, not just this one: the named-save dialog
+  // let Ctrl+Z through from its buttons too.
+  await page.keyboard.press('ControlOrMeta+Shift+s');
+  const namedSave = page.getByRole('dialog', { name: /Name this save/ });
+  await expect(namedSave).toBeVisible();
+  await namedSave.getByRole('button', { name: /Cancel/ }).focus();
+  await page.keyboard.press('ControlOrMeta+z');
+  await expect(featureRows).toHaveCount(2);
+  await namedSave.getByRole('button', { name: /Cancel/ }).click();
+  await expect(namedSave).toHaveCount(0);
+  await page.keyboard.press('ControlOrMeta+z');
+  await expect(featureRows).toHaveCount(1);
 });
 
 test('rejects a disconnected Union and succeeds after the gap is closed', async ({

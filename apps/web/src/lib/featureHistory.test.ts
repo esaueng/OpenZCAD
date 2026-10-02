@@ -201,3 +201,53 @@ it('makes a guide rail sketch a parent of the sweep it steers', () => {
     graph.downstream(named('Rail')).map((feature) => feature.name)
   ).toEqual(['Guided sweep']);
 });
+
+it('makes the drilled body a dependent of the body a hole consumes', () => {
+  // Without a hole case, Box read "Nothing later depends on it" and deleting
+  // it skipped the dependent-delete confirmation.
+  const manager = new CommandManager(
+    createProjectDocument('Drilled', toUserId('user_drilled'))
+  );
+  manager.execute(
+    commandFactories.addPrimitive({
+      name: 'Box',
+      primitiveKind: 'box',
+      dimensions: { width: 40, height: 20, depth: 10 }
+    })
+  );
+  manager.execute(
+    commandFactories.holeBody({
+      name: 'Hole',
+      targetBodyId: manager.document.bodyOrder.at(-1)!,
+      faceHash: 1,
+      style: 'simple',
+      diameter: 5,
+      depthMode: 'through',
+      position: { u: 0, v: 0 }
+    })
+  );
+  manager.execute(
+    commandFactories.filletEdges({
+      name: 'Fillet',
+      targetBodyId: manager.document.bodyOrder.at(-1)!,
+      edgeHashes: [123],
+      size: 1
+    })
+  );
+  manager.execute(
+    commandFactories.addPrimitive({
+      name: 'Unrelated',
+      primitiveKind: 'box',
+      dimensions: { width: 5, height: 5, depth: 5 }
+    })
+  );
+  const graph = featureHistory(manager.document);
+  const [box, hole, fillet] = graph.features;
+  expect(graph.downstream(box!.featureId).map((f) => f.name)).toEqual([
+    'Hole',
+    'Fillet'
+  ]);
+  expect([...graph.parents.get(hole!.featureId)!]).toEqual([box!.featureId]);
+  expect([...graph.parents.get(fillet!.featureId)!]).toEqual([hole!.featureId]);
+  expect([...graph.missing.get(hole!.featureId)!]).toEqual([]);
+});
