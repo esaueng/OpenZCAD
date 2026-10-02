@@ -954,15 +954,6 @@
   pointer-events: none;
 }
 
-.sketch-rail-group-label {
-  padding: 0 4px 0 2px;
-  color: var(--color-text-subtle);
-  font-size: var(--fs-mini);
-  font-weight: var(--fw-medium);
-  letter-spacing: 0.08em;
-  text-transform: uppercase;
-}
-
 .sketch-rail button {
   display: flex;
   gap: 6px;
@@ -1226,10 +1217,6 @@
   .sketch-rail button kbd {
     display: none;
   }
-
-  .sketch-rail-group-label {
-    display: none;
-  }
 }
 
 /* The editor and its constraints card stack in the top-right; the stack
@@ -1311,33 +1298,6 @@
   color: var(--color-text-dim);
   font-size: var(--fs-mini);
   text-transform: uppercase;
-}
-
-.sketch-entity-constraint-tools {
-  display: flex;
-  flex-wrap: wrap;
-  gap: 2px;
-}
-
-.sketch-entity-constraint-tools button {
-  width: 28px;
-  height: 26px;
-  display: grid;
-  place-items: center;
-  color: var(--color-text-muted);
-  border: 1px solid transparent;
-  border-radius: var(--radius-sm);
-}
-
-.sketch-entity-constraint-tools button:hover {
-  color: var(--color-text);
-  background: var(--color-surface-hover);
-}
-
-.sketch-entity-constraint-tools button.active {
-  color: var(--color-accent-hi);
-  background: var(--color-accent-dim);
-  border-color: var(--color-accent-border);
 }
 
 .sketch-entity-constraints .sketch-constraint-list li > svg {
