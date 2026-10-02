@@ -258,7 +258,14 @@ describe('a filleted body', () => {
         targetBodyIds: [outer, bore]
       }).document;
       const { volume, faces, surfaces, warnings } = await measure(doc);
-      expect(volume).toBe(8000 - Math.PI * 16 * 20);
+      // The closed form and the kernel's exact volume are computed
+      // independently, so agreement — not bit identity — is the point. On the
+      // ead584c Remus pin the kernel reads 1 ulp below the JS value at every
+      // deflection, i.e. still on the analytic path with different float
+      // rounding than the previous pin's bit-identical answer. A tight
+      // relative tolerance holds the exactness without pinning that rounding.
+      const boreExact = 8000 - Math.PI * 16 * 20;
+      expect(Math.abs(volume - boreExact) / boreExact).toBeLessThan(1e-12);
       expect(faces).toBe(7);
       expect(surfaces).toEqual(new Set(['cylinder', 'plane']));
       expect(warnings).toEqual([]);

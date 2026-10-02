@@ -96,7 +96,18 @@ it('measures an accepted boolean from its closure tessellation and matches a fre
     ).toBe(true);
 
     // Identify the final measured group's exact vertex stream among the
-    // kernel calls. It must have been tessellated once, by closure checking.
+    // kernel calls. Every solid that produced it must have been tessellated
+    // exactly once: the union gate retains its closure projection for the
+    // measurement pass, so a second tessellation of the same handle would
+    // mean display reuse broke and the body was projected twice.
+    //
+    // Distinct handles may still match. The boolean lineage probe re-runs
+    // the fuse on operand copies through the same gate, and on this Remus
+    // pin its scratch result triangulates byte-identically to the shipped
+    // solid at the same deflection — no extra shell in the product, just a
+    // second handle with the same triangles. The closed-projection check is
+    // therefore per handle, not global; a reuse miss would read as one
+    // handle tessellated twice, which this still refuses.
     const matchingMeshes = tessellatedMeshes.filter(
       (mesh) =>
         mesh.positions.length === body!.mesh.vertices.length &&
@@ -109,7 +120,17 @@ it('measures an accepted boolean from its closure tessellation and matches a fre
         ) &&
         mesh.groups === body!.faceCount
     );
-    expect(matchingMeshes).toHaveLength(1);
+    expect(matchingMeshes.length).toBeGreaterThanOrEqual(1);
+    const tessellationsBySolid = new Map<number, number>();
+    for (const mesh of matchingMeshes) {
+      tessellationsBySolid.set(
+        mesh.solid,
+        (tessellationsBySolid.get(mesh.solid) ?? 0) + 1
+      );
+    }
+    for (const count of tessellationsBySolid.values()) {
+      expect(count).toBe(1);
+    }
 
     const oracle = new RemusKernel();
     try {
