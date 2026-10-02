@@ -1541,6 +1541,8 @@ export function ModelViewer({
   onOffsetCancelRef.current = onOffsetCancel;
   const offsetPreviewInvalidRef = useRef(offsetPreviewInvalid);
   offsetPreviewInvalidRef.current = offsetPreviewInvalid;
+  const edgeHandleValueRef = useRef(edgeHandleValue);
+  edgeHandleValueRef.current = edgeHandleValue;
   const previewDeferredRef = useRef(previewDeferred);
   previewDeferredRef.current = previewDeferred;
   const onOpenOffsetKeypadRef = useRef(onOpenOffsetKeypad);
@@ -8813,7 +8815,10 @@ export function ModelViewer({
       return;
     }
     const rig = buildEdgeRadiusHandle(placement);
-    rig.setValue(edgeHandle.initialValue ?? 0);
+    // A rebuild (the preview body came or went) keeps the value the card has
+    // typed: its effect below only runs when that value changes, so a rig
+    // rebuilt after a refused preview used to read "R 0".
+    rig.setValue(edgeHandleValueRef.current ?? edgeHandle.initialValue ?? 0);
     rig.setWarning?.(offsetPreviewInvalidRef.current);
     context.scene.add(rig.group);
     edgeRigRef.current = rig;
