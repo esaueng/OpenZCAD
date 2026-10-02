@@ -1293,32 +1293,30 @@
 .workspace.column-layout .instrument-rail {
   top: var(--stage-middle);
   transform: translateY(-50%);
-  /* The stage's height at most: in a short window Undo slid under Settings
-     and the drawer buttons fell off the bottom. The viewer bar scrolls;
-     its panels hang from the rail itself, outside that scroller. */
-  max-height: calc(100% - var(--stage-top) - var(--island-gap));
 }
 
-.instrument-rail .viewer-rail {
-  flex: 0 1 auto;
-  min-height: 0;
-  overflow-x: hidden;
-  overflow-y: auto;
-  scrollbar-width: none;
-}
+/* A window too short for the viewer bar and the drawer's buttons in one
+   column (Undo slid under Settings and the activity log fell off the
+   bottom at 390px) stands the two islands side by side, the viewer bar at
+   the edge. Not a scroller: the bar's panels hang from anchors inside it,
+   and a scrolling bar clipped them to its own 40px. The right lane steps
+   left by the second island. */
+@media (max-height: 500px) {
+  .workspace.column-layout .instrument-rail {
+    flex-direction: row-reverse;
+    align-items: flex-start;
+  }
 
-.instrument-rail .viewer-rail::-webkit-scrollbar {
-  display: none;
-}
+  .workspace.column-layout {
+    --lane-end: calc(var(--rail-w) * 2 + var(--island-gap) * 3);
+  }
 
-/* Scrolled, not squeezed: the buttons keep their 30px. */
-.instrument-rail .viewer-rail > * {
-  flex-shrink: 0;
-}
-
-/* The drawer's four buttons stay whole; only the viewer bar above scrolls. */
-.instrument-rail > :is(.rail-panels, :not(.viewer-rail)) {
-  flex-shrink: 0;
+  /* The views button is the bar's last; its panel rises from it rather
+     than hanging past the window's foot. */
+  .instrument-rail .rail-views-panel {
+    top: auto;
+    bottom: -4px;
+  }
 }
 
 /* The flyouts open beside the rail, outside the column's box, while the
@@ -2043,6 +2041,13 @@ button.command-rail:disabled {
 @media (max-height: 540px) {
   .workspace.column-layout .viewer-area:has(.sketch-relations) {
     --lane-end: calc(var(--rail-w) + 78px + var(--island-gap) * 3);
+  }
+}
+
+/* Shorter still, the instrument rail stands two islands wide as well. */
+@media (max-height: 500px) {
+  .workspace.column-layout .viewer-area:has(.sketch-relations) {
+    --lane-end: calc(var(--rail-w) * 2 + 78px + var(--island-gap) * 4);
   }
 }
 

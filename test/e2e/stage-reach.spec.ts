@@ -86,22 +86,24 @@ test('UI-08: every instrument rail control keeps its own click in a short window
 
   const viewerBar = page.getByRole('toolbar', { name: 'Viewer bar' });
   const panels = page.getByRole('toolbar', { name: 'Model panels' });
-  // Unscrolled: Undo stands clear of Settings, and the drawer's buttons —
-  // the activity log last — are inside the window.
-  await expectReachable(viewerBar.getByRole('button', { name: 'Undo' }));
-  for (const name of [
-    'Items panel',
-    'History panel',
-    'Parameters panel',
-    'Open activity log'
+  // Every control as drawn: Undo stands clear of Settings, and the drawer's
+  // buttons — the activity log last — are inside the window.
+  for (const button of [
+    ...(await viewerBar.getByRole('button').all()),
+    ...(await panels.getByRole('button').all())
   ]) {
-    await expectReachable(panels.getByRole('button', { name }));
+    await expectReachable(button);
   }
-  // The viewer bar scrolls to its last control.
-  const views = viewerBar.getByRole('button', { name: 'Standard views' });
-  await views.scrollIntoViewIfNeeded();
-  await expectReachable(views);
-  await viewerBar.evaluate((element) => element.scrollTo({ top: 0 }));
+  await expectReachable(
+    panels.getByRole('button', { name: 'Open activity log' })
+  );
+  // The bar's panels still open where they can be used.
+  await clickCentre(
+    page,
+    viewerBar.getByRole('button', { name: 'Standard views' })
+  );
+  await expectReachable(page.getByRole('button', { name: /^Isometric view/ }));
+  await page.keyboard.press('Escape');
 
   // Undo, clicked where it is drawn, undoes and opens nothing else.
   await clickCentre(page, viewerBar.getByRole('button', { name: 'Undo' }));
