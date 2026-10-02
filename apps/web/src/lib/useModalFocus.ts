@@ -16,6 +16,11 @@ interface ModalFocusOptions {
   autoFocus?: boolean;
   /** Preferred initial target. Falls back to the first focusable control. */
   initialFocusRef?: RefObject<HTMLElement | null>;
+  /**
+   * Let the workspace keymap keep handling keys while this dialog is on top.
+   * Only for an overlay the map itself drives (the shortcut sheet).
+   */
+  workspaceKeys?: boolean;
 }
 
 interface InertState {
@@ -28,6 +33,7 @@ interface ModalRegistration {
   dialog: HTMLElement;
   autoFocus: boolean;
   initialFocusRef?: RefObject<HTMLElement | null>;
+  workspaceKeys: boolean;
   restoreBackground?: () => void;
   removeKeyListener?: () => void;
   stopWaitingForContent?: () => void;
@@ -202,13 +208,30 @@ function refreshActiveModal(): void {
 }
 
 /**
+ * Whether the dialog on top keeps the keyboard from the workspace behind it.
+ *
+ * `inert` stops pointer and focus reaching the background, but the workspace
+ * keymap listens on the window, so a key pressed on a dialog button — or with
+ * focus dropped on the body — still reached it: Ctrl+Z rewound the model
+ * behind an open export or named-save dialog.
+ */
+export function modalHoldsKeyboard(): boolean {
+  return activeModal !== null && !activeModal.workspaceKeys;
+}
+
+/**
  * Gives a modal dialog the focus behaviour its `aria-modal` promises: focus
  * starts inside, Tab cannot escape to the workspace behind it, and whatever was
  * focused before the dialog opened gets focus back on close.
  */
 export function useModalFocus(
   ref: RefObject<HTMLElement | null>,
-  { enabled = true, autoFocus = false, initialFocusRef }: ModalFocusOptions = {}
+  {
+    enabled = true,
+    autoFocus = false,
+    initialFocusRef,
+    workspaceKeys = false
+  }: ModalFocusOptions = {}
 ): void {
   useLayoutEffect(() => {
     if (!enabled) {
@@ -224,7 +247,8 @@ export function useModalFocus(
     const registration: ModalRegistration = {
       dialog,
       autoFocus,
-      initialFocusRef
+      initialFocusRef,
+      workspaceKeys
     };
     modalStack.push(registration);
     refreshActiveModal();
@@ -236,5 +260,5 @@ export function useModalFocus(
       }
       refreshActiveModal();
     };
-  }, [autoFocus, enabled, initialFocusRef, ref]);
+  }, [autoFocus, enabled, initialFocusRef, ref, workspaceKeys]);
 }
