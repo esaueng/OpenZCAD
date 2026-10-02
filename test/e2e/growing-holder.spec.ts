@@ -289,8 +289,9 @@ test('offers and grows the arm height on a holder whose arms are solid', async (
   ).toBeVisible();
   await height.fill('1');
   await height.press('Enter');
+  // The refusal names the reason inline, under the parameter row (F1).
   await expect(page.getByRole('alert')).toHaveText(
-    'No change applied.View details'
+    'holder_height must be at least 21.3 mm. No change applied.View details'
   );
   await expect(height).toHaveValue('32');
   await page.getByRole('button', { name: 'Build', exact: true }).click();

@@ -124,7 +124,7 @@ for (const guarded of [true, false])
     await input.press('Enter');
     await expect(page.getByRole('alert')).toContainText('No change applied');
     await expect(input).toHaveValue('58');
-    await expect(page.getByRole('alert')).not.toContainText(
+    await expect(page.getByRole('alert')).toContainText(
       guarded ? '56.910504' : 'positive'
     );
     await page.getByRole('button', { name: 'View details' }).click();

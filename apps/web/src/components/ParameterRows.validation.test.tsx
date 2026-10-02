@@ -42,11 +42,8 @@ it('shows pending validation, explains refusal, and restores the committed value
   finish('holder_height must be at least 56.910504 mm.');
   await waitFor(() => expect(input).toHaveValue('58'));
   expect(screen.getByRole('alert')).toHaveTextContent(
-    'No change applied.View details'
+    'holder_height must be at least 56.910504 mm. No change applied.'
   );
-  expect(
-    screen.queryByText('holder_height must be at least 56.910504 mm.')
-  ).toBeNull();
   await user.click(screen.getByRole('button', { name: 'View details' }));
   expect(onViewDetails).toHaveBeenCalledOnce();
   expect(input).toHaveAttribute('aria-invalid', 'true');
@@ -99,4 +96,25 @@ it('previews drafts before committing and cancels the display on Escape', async 
   expect(onPreview).toHaveBeenLastCalledWith('holder_height', null);
   expect(input).toHaveValue('58');
   expect(onSet).not.toHaveBeenCalled();
+});
+
+it('shows the refusing feature inline without requiring the activity log', async () => {
+  const user = userEvent.setup();
+  const refusal =
+    'Feature "Round": The selected edge lineage resolves to multiple compatible candidates.';
+  render(
+    <ParameterRow
+      parameter={parameter()}
+      value={58}
+      onSet={async () => refusal}
+    />
+  );
+  const input = screen.getByLabelText('Expression for holder_height');
+  await user.clear(input);
+  await user.type(input, '60{Enter}');
+  await waitFor(() =>
+    expect(screen.getByRole('alert')).toHaveTextContent(refusal)
+  );
+  expect(input).toHaveValue('58');
+  expect(screen.queryByRole('button', { name: 'View details' })).toBeNull();
 });

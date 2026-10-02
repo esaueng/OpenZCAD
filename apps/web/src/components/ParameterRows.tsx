@@ -76,9 +76,10 @@ export function ParameterRow({
   const latestParameter = useRef(parameter);
   latestParameter.current = parameter;
   const submission = useRef(0);
-  const [error, setError] = useState<{ detailsAvailable: boolean } | null>(
-    null
-  );
+  const [error, setError] = useState<{
+    message: string;
+    detailsAvailable: boolean;
+  } | null>(null);
   const [renameError, setRenameError] = useState<string | null>(null);
   const [renaming, setRenaming] = useState(false);
   const [nameDraft, setNameDraft] = useState(parameter.name);
@@ -141,12 +142,15 @@ export function ParameterRow({
       const refusal = await onSet(parameter.name, trimmed);
       if (token !== submission.current) return;
       if (refusal) {
-        setError({ detailsAvailable: true });
+        setError({ message: refusal, detailsAvailable: true });
         setExpression(latestParameter.current.expression);
       }
     } catch {
       if (token !== submission.current) return;
-      setError({ detailsAvailable: false });
+      setError({
+        message: 'The parameter could not be updated.',
+        detailsAvailable: false
+      });
       setExpression(latestParameter.current.expression);
     } finally {
       if (token === submission.current) setPending(false);
@@ -317,7 +321,7 @@ export function ParameterRow({
             renameError
           ) : error ? (
             <>
-              <span>No change applied.</span>
+              <span>{error.message} No change applied.</span>
               {error.detailsAvailable && onViewDetails ? (
                 <button
                   type="button"
