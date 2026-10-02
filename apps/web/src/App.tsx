@@ -1043,6 +1043,8 @@ import {
   affectedFeatureTargets,
   type AffectedFeatureTarget
 } from './lib/affectedFeatureTargets';
+import { holeGhost, type HoleGhost } from './lib/holeGhost';
+import type { HoleDraft } from './components/forms/ModelingOperationsForm';
 import { extrudeSketchGuidance } from './lib/extrudeGuidance';
 import {
   countLabel,
@@ -1826,6 +1828,17 @@ export function App() {
    * history row rather than a tool tile. Null while creating. The form is
    * the same one; only the command it commits differs.
    */
+  /** The open Hole card's values, for the bore the viewport draws. */
+  const [holeDraft, setHoleDraft] = useState<HoleDraft | null>(null);
+  /**
+   * The last ghost and what it was computed from. A through hole scans the
+   * body's mesh for its depth, which is not work to redo on every render.
+   */
+  const holeGhostCache = useRef<{
+    key: string;
+    body: unknown;
+    ghost: HoleGhost | null;
+  } | null>(null);
   const [modelingEditFeature, setModelingEditFeature] =
     useState<FeatureNode | null>(null);
   /** The fillet/chamfer form's current size, mirrored onto the edge handle. */
@@ -16658,6 +16671,45 @@ export function App() {
     modelingTargetBody?.topology,
     modelingTargetBody
   );
+  const holeGhostShape = ((): HoleGhost | null => {
+    if (modelingOperation !== 'hole' || !holeDraft) return null;
+    const body = representations[holeDraft.targetBodyId];
+    const key = JSON.stringify(holeDraft);
+    const cached = holeGhostCache.current;
+    if (cached && cached.key === key && cached.body === body) {
+      return cached.ghost;
+    }
+    const face = body?.topology?.faces.find(
+      (candidate) => candidate.hash === holeDraft.faceHash
+    );
+    const editedAnchor =
+      modelingEditFeature?.data.featureKind === 'hole'
+        ? modelingEditFeature.data.positionAnchor
+        : undefined;
+    const ghost =
+      body && face?.geometry
+        ? holeGhost({
+            face: face.geometry,
+            // The anchor the submission will carry: a new hole measures from
+            // the area centroid when the face reports one; an edited hole
+            // keeps the anchor it was drilled against.
+            anchor: modelingEditFeature
+              ? editedAnchor === 'centroid'
+                ? 'centroid'
+                : 'center'
+              : face.geometry.centroid
+                ? 'centroid'
+                : 'center',
+            u: holeDraft.u,
+            v: holeDraft.v,
+            diameter: holeDraft.diameter,
+            depth: holeDraft.depth,
+            bodyPositions: body.mesh.vertices
+          })
+        : null;
+    holeGhostCache.current = { key, body, ghost };
+    return ghost;
+  })();
   const modelingOperationFaces =
     modelingOperation === 'draft' || modelingOperation === 'hole'
       ? modelingFaces.filter((face) => face.surfaceType === 'plane')
@@ -17576,6 +17628,7 @@ export function App() {
             onHoverRegion={handleHoverRegion}
             planePickerArmed={!modelingLocked && tool === 'sketch'}
             planePickerOffset={sketchPlaneOffset}
+            holeGhost={holeGhostShape}
             onPickPlane={startSketchOnPlane}
             onMeasurePreview={
               modelingLocked && measuring ? previewMeasurement : null
@@ -18148,6 +18201,7 @@ export function App() {
                       unsupportedReason={modelingUnsupportedReason ?? undefined}
                       onPreflight={preflightModelingSubmission}
                       onSubmit={submitModelingOperation}
+                      onHoleDraftChange={setHoleDraft}
                       onCancel={cancelPanel}
                       onTargetBodyChange={(bodyId) => {
                         modelingPreflightRef.current = null;
