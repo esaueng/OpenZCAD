@@ -537,12 +537,25 @@ export function verifyKernelFilletBandClaim(
       return null;
     }
   }
+  let sense: 'concave' | 'convex';
+  try {
+    const material: unknown = kernel.faceMaterialSense(solid, claim.faceId);
+    if (material === 'inward') {
+      sense = 'concave';
+    } else if (material === 'outward') {
+      sense = 'convex';
+    } else {
+      return null;
+    }
+  } catch {
+    return null;
+  }
   return length === null
     ? null
     : {
         faceId: claim.faceId,
         radius: band.radius,
         length,
-        sense: band.radialSense === 'toward-axis' ? 'concave' : 'convex'
+        sense
       };
 }
