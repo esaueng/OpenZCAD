@@ -6,6 +6,7 @@ describe('workflow runner policy', () => {
     const workflowDirectory = '.github/workflows';
     const expectedRunners: Record<string, string[]> = {
       'ci.yml': [],
+      'public-commit-metadata.yml': ['ubuntu-24.04'],
       'fleet-ci.yml': Array(5).fill('*fleet-runner'),
       'cloudflare.yml': ['ubuntu-latest', 'ubuntu-latest'],
       'macos-desktop.yml': ['macos-26'],
@@ -43,6 +44,18 @@ describe('workflow runner policy', () => {
         expect(workflow).toContain('workflow_dispatch:');
         expect(workflow).not.toMatch(
           /ci-trusted-main|self-hosted|actions\/checkout|workflow_call|workflow_run|pull_request|secrets\./
+        );
+      }
+      if (workflowPath === 'public-commit-metadata.yml') {
+        expect(workflow).toContain('pull_request:');
+        expect(workflow).toContain('workflow_dispatch:');
+        expect(workflow).toContain('fetch-depth: 0');
+        expect(workflow).toContain('persist-credentials: false');
+        expect(workflow).toContain('PR_BASE: ${{ github.event.pull_request.base.sha }}');
+        expect(workflow).toContain('PR_HEAD: ${{ github.event.pull_request.head.sha }}');
+        expect(workflow).toContain('contents: read');
+        expect(workflow).not.toMatch(
+          /pull_request_target|workflow_run|secrets(?:\.|:)|id-token: write|contents: write/
         );
       }
     }

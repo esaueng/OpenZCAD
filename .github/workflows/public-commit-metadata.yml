@@ -1,0 +1,45 @@
+name: Public commit metadata
+
+on:
+  pull_request:
+  workflow_dispatch:
+    inputs:
+      base_ref:
+        description: Compare this branch with the selected base ref
+        required: true
+        default: main
+        type: string
+
+permissions:
+  contents: read
+
+jobs:
+  public-commit-metadata:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 5
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+      - name: Check commit metadata
+        env:
+          EVENT_NAME: ${{ github.event_name }}
+          PR_BASE: ${{ github.event.pull_request.base.sha }}
+          PR_HEAD: ${{ github.event.pull_request.head.sha }}
+          DISPATCH_BASE: origin/${{ inputs.base_ref }}
+          HEAD_SHA: ${{ github.sha }}
+        run: |
+          set -euo pipefail
+          if [[ "$EVENT_NAME" == pull_request ]]; then
+            base="$PR_BASE"
+            head="$PR_HEAD"
+          else
+            base="$DISPATCH_BASE"
+            head="$HEAD_SHA"
+          fi
+          node scripts/check-public-commit-metadata.mjs --base "$base" --head "$head"
+      - name: Test metadata policy with synthetic identities
+        run: node --test scripts/check-public-commit-metadata.test.mjs
