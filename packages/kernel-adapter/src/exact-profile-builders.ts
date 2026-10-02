@@ -239,7 +239,7 @@ export function resolveSketchBasisAtHistory(
       );
     }
     return frameForPlaneRef(planeRef, (value) =>
-      resolveParamValue(value, scope, 'sketch offset')
+      resolveParamValue(value, scope, 'sketch offset', document.units)
     );
   }
 
@@ -715,7 +715,12 @@ export function buildRegionExtrude(
   warn: (message: string) => void
 ): ExactShape {
   const regions = resolveRegionProfiles(document, sketch, data, scope);
-  const distance = resolveParamValue(data.distance, scope, 'distance');
+  const distance = resolveParamValue(
+    data.distance,
+    scope,
+    'distance',
+    document.units
+  );
   // Symmetric and two-sided region extrudes shift the basis behind the
   // sketch plane, exactly like the single-profile path.
   const { extrudeBasis, totalDistance } = resolveExtrudeSpan(
@@ -1223,12 +1228,12 @@ export function sweepPathEdges(
     const data = node.data;
     if (data.objectKind === 'line') {
       const start = planePoint3(basis, {
-        x: resolveParamValue(data.x1, scope, 'path start X'),
-        y: resolveParamValue(data.y1, scope, 'path start Y')
+        x: resolveParamValue(data.x1, scope, 'path start X', document.units),
+        y: resolveParamValue(data.y1, scope, 'path start Y', document.units)
       });
       const end = planePoint3(basis, {
-        x: resolveParamValue(data.x2, scope, 'path end X'),
-        y: resolveParamValue(data.y2, scope, 'path end Y')
+        x: resolveParamValue(data.x2, scope, 'path end X', document.units),
+        y: resolveParamValue(data.y2, scope, 'path end Y', document.units)
       });
       return [
         kernel.makeLineEdge(start.x, start.y, start.z, end.x, end.y, end.z)
@@ -1238,16 +1243,37 @@ export function sweepPathEdges(
       throw new Error('Sweep paths currently support line and arc entities.');
     }
     const center2 = {
-      x: resolveParamValue(data.centerX, scope, 'path center X'),
-      y: resolveParamValue(data.centerY, scope, 'path center Y')
+      x: resolveParamValue(
+        data.centerX,
+        scope,
+        'path center X',
+        document.units
+      ),
+      y: resolveParamValue(data.centerY, scope, 'path center Y', document.units)
     };
-    const radius = resolveParamValue(data.radius, scope, 'path radius');
+    const radius = resolveParamValue(
+      data.radius,
+      scope,
+      'path radius',
+      document.units
+    );
     const start =
-      (resolveParamValue(data.startAngleDeg, scope, 'path start angle') *
+      (resolveParamValue(
+        data.startAngleDeg,
+        scope,
+        'path start angle',
+        document.units
+      ) *
         Math.PI) /
       180;
     const end =
-      (resolveParamValue(data.endAngleDeg, scope, 'path end angle') * Math.PI) /
+      (resolveParamValue(
+        data.endAngleDeg,
+        scope,
+        'path end angle',
+        document.units
+      ) *
+        Math.PI) /
       180;
     const wrap = Math.PI * 2;
     const sweep = (((end - start) % wrap) + wrap) % wrap;
@@ -1596,9 +1622,24 @@ export function buildHelicalSweep(
   if (!direction) {
     throw new Error('Helical sweep axis direction must be non-zero.');
   }
-  const radius = resolveParamValue(feature.data.radius, scope, 'radius');
-  const pitch = resolveParamValue(feature.data.pitch, scope, 'pitch');
-  const turns = resolveParamValue(feature.data.turns, scope, 'turns');
+  const radius = resolveParamValue(
+    feature.data.radius,
+    scope,
+    'radius',
+    document.units
+  );
+  const pitch = resolveParamValue(
+    feature.data.pitch,
+    scope,
+    'pitch',
+    document.units
+  );
+  const turns = resolveParamValue(
+    feature.data.turns,
+    scope,
+    'turns',
+    document.units
+  );
   if (
     !(radius > 0) ||
     pitch === 0 ||
@@ -1686,7 +1727,8 @@ export function buildSweep(
     const distance = resolveParamValue(
       feature.data.distance,
       scope,
-      'distance'
+      'distance',
+      document.units
     );
     // Symmetric and two-sided extrudes start behind the sketch plane;
     // the shifted basis carries that offset into the profile face and

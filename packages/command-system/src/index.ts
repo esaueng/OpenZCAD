@@ -55,7 +55,8 @@ import {
   toSketchConstraintId,
   type SketchId,
   type SketchObjectData,
-  type SketchProfileReference
+  type SketchProfileReference,
+  type UnitSystem
 } from '@openzcad/shared';
 import {
   archiveHistorySources,
@@ -624,7 +625,10 @@ function validateEdgeModifierBlend(
     if (input.endRadius === undefined) {
       return;
     }
-    if (input.radiusLaw !== undefined && !isVariableFilletLaw(input.radiusLaw)) {
+    if (
+      input.radiusLaw !== undefined &&
+      !isVariableFilletLaw(input.radiusLaw)
+    ) {
       throw new Error(
         `Variable-radius fillet law "${String(input.radiusLaw)}" is not one of the radius laws this kernel qualifies (${VARIABLE_FILLET_LAWS.join(', ')}).`
       );
@@ -662,7 +666,12 @@ function resolvedModelingValue(
   label: string,
   value: ParamValue
 ): number {
-  return resolveParamValue(value, getParameterScope(document).scope, label);
+  return resolveParamValue(
+    value,
+    getParameterScope(document).scope,
+    label,
+    document.units
+  );
 }
 
 function validateMirrorInput(
@@ -1717,7 +1726,9 @@ function projectedParameterScope(
     progressed = false;
     for (const [name, expression] of [...pending]) {
       try {
-        scope[name] = evaluateExpression(expression, scope);
+        scope[name] = evaluateExpression(expression, scope, {
+          documentUnits: document.units
+        });
         pending.delete(name);
         progressed = true;
       } catch {
@@ -1729,7 +1740,9 @@ function projectedParameterScope(
   for (const [name, expression] of pending) {
     let reason = 'evaluation failed.';
     try {
-      evaluateExpression(expression, scope);
+      evaluateExpression(expression, scope, {
+        documentUnits: document.units
+      });
     } catch (error) {
       reason = error instanceof Error ? error.message : reason;
     }
@@ -1756,10 +1769,11 @@ function projectedParameterScope(
 function assertEvaluableExpression(
   scope: Record<string, number>,
   label: string,
-  value: ParamValue
+  value: ParamValue,
+  documentUnits: UnitSystem = 'mm'
 ): void {
   try {
-    resolveParamValue(value, scope, label);
+    resolveParamValue(value, scope, label, documentUnits);
   } catch (error) {
     throw new Error(
       `${label} has an invalid expression "${String(value)}": ${
@@ -1777,15 +1791,16 @@ function assertEvaluableExpression(
  */
 function assertOperationExpressions(
   operation: CadPatchProposal['operations'][number],
-  scope: Record<string, number>
+  scope: Record<string, number>,
+  documentUnits: UnitSystem = 'mm'
 ): void {
   const vector = (
     label: string,
     value: { x: ParamValue; y: ParamValue; z: ParamValue }
   ) => {
-    assertEvaluableExpression(scope, `${label}.x`, value.x);
-    assertEvaluableExpression(scope, `${label}.y`, value.y);
-    assertEvaluableExpression(scope, `${label}.z`, value.z);
+    assertEvaluableExpression(scope, `${label}.x`, value.x, documentUnits);
+    assertEvaluableExpression(scope, `${label}.y`, value.y, documentUnits);
+    assertEvaluableExpression(scope, `${label}.z`, value.z, documentUnits);
   };
   // Text carries fields that are text, not dimensions — the string itself, a
   // font family id, a style, an alignment. Feeding those to the expression
@@ -1806,7 +1821,8 @@ function assertOperationExpressions(
           assertEvaluableExpression(
             scope,
             `${name} objects[${index}].${key}`,
-            value
+            value,
+            documentUnits
           );
         }
       });
@@ -1816,30 +1832,43 @@ function assertOperationExpressions(
   switch (operation.kind) {
     // set_parameter is already resolved and checked by projectedParameterScope.
     case 'add_imported_opening_recipe':
-      assertEvaluableExpression(scope, 'opening width', operation.width);
+      assertEvaluableExpression(
+        scope,
+        'opening width',
+        operation.width,
+        documentUnits
+      );
       evaluateExpression(
         `require_one_of((${operation.width}), ${operation.sourceWidth}, ${operation.editedWidth})`,
-        scope
+        scope,
+        { documentUnits }
       );
       break;
     case 'set_feature_dimension':
       assertEvaluableExpression(
         scope,
         `${operation.field} on ${operation.featureId}`,
-        operation.value
+        operation.value,
+        documentUnits
       );
       break;
     case 'set_sketch_dimension':
       assertEvaluableExpression(
         scope,
         `${operation.field} on ${operation.objectId}`,
-        operation.value
+        operation.value,
+        documentUnits
       );
       break;
     case 'add_primitive':
       for (const [field, value] of Object.entries(operation.dimensions)) {
         if (value !== null) {
-          assertEvaluableExpression(scope, `${operation.name} ${field}`, value);
+          assertEvaluableExpression(
+            scope,
+            `${operation.name} ${field}`,
+            value,
+            documentUnits
+          );
         }
       }
       break;
@@ -1847,7 +1876,8 @@ function assertOperationExpressions(
       assertEvaluableExpression(
         scope,
         `${operation.name} offset`,
-        operation.offset
+        operation.offset,
+        documentUnits
       );
       sketchObjects(operation.name, operation.objects);
       break;
@@ -1855,7 +1885,8 @@ function assertOperationExpressions(
       assertEvaluableExpression(
         scope,
         `${operation.name} distance`,
-        operation.distance
+        operation.distance,
+        documentUnits
       );
       break;
     case 'add_revolve':
@@ -1864,7 +1895,8 @@ function assertOperationExpressions(
         assertEvaluableExpression(
           scope,
           `${operation.name} angleDeg`,
-          operation.angleDeg
+          operation.angleDeg,
+          documentUnits
         );
       }
       break;
@@ -1877,68 +1909,80 @@ function assertOperationExpressions(
         assertEvaluableExpression(
           scope,
           `${operation.name} diameter`,
-          operation.operation.diameter
+          operation.operation.diameter,
+          documentUnits
         );
       } else if (operation.operation.kind === 'resize-imported-blind-hole') {
         assertEvaluableExpression(
           scope,
           `${operation.name} diameter`,
-          operation.operation.diameter
+          operation.operation.diameter,
+          documentUnits
         );
         assertEvaluableExpression(
           scope,
           `${operation.name} depth`,
-          operation.operation.depth
+          operation.operation.depth,
+          documentUnits
         );
       } else if (operation.operation.kind === 'resize-imported-counterbore') {
         assertEvaluableExpression(
           scope,
           `${operation.name} bore diameter`,
-          operation.operation.boreDiameter
+          operation.operation.boreDiameter,
+          documentUnits
         );
         assertEvaluableExpression(
           scope,
           `${operation.name} counterbore diameter`,
-          operation.operation.counterboreDiameter
+          operation.operation.counterboreDiameter,
+          documentUnits
         );
         assertEvaluableExpression(
           scope,
           `${operation.name} counterbore depth`,
-          operation.operation.counterboreDepth
+          operation.operation.counterboreDepth,
+          documentUnits
         );
       } else if (operation.operation.kind === 'resize-imported-countersink') {
         assertEvaluableExpression(
           scope,
           `${operation.name} bore diameter`,
-          operation.operation.boreDiameter
+          operation.operation.boreDiameter,
+          documentUnits
         );
         assertEvaluableExpression(
           scope,
           `${operation.name} sink diameter`,
-          operation.operation.sinkDiameter
+          operation.operation.sinkDiameter,
+          documentUnits
         );
         assertEvaluableExpression(
           scope,
           `${operation.name} included angle`,
-          operation.operation.angleRadians
+          operation.operation.angleRadians,
+          documentUnits
         );
       } else if (operation.operation.kind === 'offset-face') {
         assertEvaluableExpression(
           scope,
           `${operation.name} offset`,
-          operation.operation.offset
+          operation.operation.offset,
+          documentUnits
         );
       } else if (operation.operation.kind === 'set-face-distance') {
         assertEvaluableExpression(
           scope,
           `${operation.name} distance`,
-          operation.operation.distance
+          operation.operation.distance,
+          documentUnits
         );
       } else if (operation.operation.kind === 'resize-cylindrical-face') {
         assertEvaluableExpression(
           scope,
           `${operation.name} radius`,
-          operation.operation.radius
+          operation.operation.radius,
+          documentUnits
         );
       }
       break;
@@ -1949,7 +1993,8 @@ function assertOperationExpressions(
       assertEvaluableExpression(
         scope,
         `${operation.name} distance`,
-        operation.distance
+        operation.distance,
+        documentUnits
       );
       break;
     case 'add_mirror':
@@ -1960,38 +2005,44 @@ function assertOperationExpressions(
       assertEvaluableExpression(
         scope,
         `${operation.name} thickness`,
-        operation.thickness
+        operation.thickness,
+        documentUnits
       );
       break;
     case 'add_solid_offset':
       assertEvaluableExpression(
         scope,
         `${operation.name} distance`,
-        operation.distance
+        operation.distance,
+        documentUnits
       );
       break;
     case 'add_edge_modifier':
       assertEvaluableExpression(
         scope,
         `${operation.name} size`,
-        operation.size
+        operation.size,
+        documentUnits
       );
       break;
     case 'add_pattern':
       assertEvaluableExpression(
         scope,
         `${operation.name} count`,
-        operation.count
+        operation.count,
+        documentUnits
       );
       assertEvaluableExpression(
         scope,
         `${operation.name} spacing`,
-        operation.spacing
+        operation.spacing,
+        documentUnits
       );
       assertEvaluableExpression(
         scope,
         `${operation.name} angleDeg`,
-        operation.angleDeg
+        operation.angleDeg,
+        documentUnits
       );
       break;
     default:
@@ -2161,7 +2212,7 @@ export function commandsForCadPatch(
   let projectedDocument = document;
   const parameterScope = projectedParameterScope(document, proposal);
   proposal.operations.forEach((operation) =>
-    assertOperationExpressions(operation, parameterScope)
+    assertOperationExpressions(operation, parameterScope, document.units)
   );
 
   const resolveBody = (reference: string): BodyId => {
@@ -2380,7 +2431,12 @@ export function commandsForCadPatch(
             data
           })),
           (value) =>
-            resolveParamValue(value, parameterScope, 'sketch dimension')
+            resolveParamValue(
+              value,
+              parameterScope,
+              'sketch dimension',
+              document.units
+            )
         );
         const blockingDiagnostic = analysis.diagnostics.find(
           (diagnostic) =>
@@ -2426,7 +2482,12 @@ export function commandsForCadPatch(
               data
             })),
             (value) =>
-              resolveParamValue(value, parameterScope, 'sketch dimension')
+              resolveParamValue(
+                value,
+                parameterScope,
+                'sketch dimension',
+                document.units
+              )
           );
           const region = regionAtPoint(regions, operation.samplePoint);
           if (!region) {
@@ -2582,7 +2643,12 @@ export function commandsForCadPatch(
             data
           })),
           (value) =>
-            resolveParamValue(value, parameterScope, 'sketch dimension')
+            resolveParamValue(
+              value,
+              parameterScope,
+              'sketch dimension',
+              document.units
+            )
         );
         const selected = operation.samplePoints.map((samplePoint) => {
           const region = regionAtPoint(regions, samplePoint);

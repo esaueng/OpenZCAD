@@ -7,13 +7,20 @@ import { evaluateExpression, getParameterScope } from '@openzcad/document-core';
 import type {
   BodyRepresentation,
   ParamValue,
-  ProjectDocument
+  ProjectDocument,
+  UnitSystem
 } from '@openzcad/shared';
 
 const AXES = ['x', 'y', 'z'] as const;
 
-const evaluate = (value: ParamValue, scope: Record<string, number>): number =>
-  typeof value === 'number' ? value : evaluateExpression(value, scope);
+const evaluate = (
+  value: ParamValue,
+  scope: Record<string, number>,
+  documentUnits: UnitSystem = 'mm'
+): number =>
+  typeof value === 'number'
+    ? value
+    : evaluateExpression(value, scope, { documentUnits });
 
 /** Disposable display only. Never attach this to a document or export it.
  * Covers every intact growing-holder recipe the compiler wrote into the
@@ -119,20 +126,28 @@ export function growingHolderPreview(
           GrowingHolderPiece | GrowingHolderBridge;
         const delta = AXES.map(
           (axis) =>
-            evaluate(spec.move[axis], after.scope) -
-            evaluate(spec.move[axis], before.scope)
+            evaluate(spec.move[axis], after.scope, base.units) -
+            evaluate(spec.move[axis], before.scope, base.units)
         ) as [number, number, number];
         let stretch = null;
         if (part.bridge) {
-          const oldLength = evaluate(part.bridge.distance, before.scope);
-          const newLength = evaluate(part.bridge.distance, after.scope);
+          const oldLength = evaluate(
+            part.bridge.distance,
+            before.scope,
+            base.units
+          );
+          const newLength = evaluate(
+            part.bridge.distance,
+            after.scope,
+            base.units
+          );
           const ratio = newLength / oldLength;
           if (!Number.isFinite(ratio) || ratio <= 0)
             throw new Error('bridge vanished');
           stretch = {
             axis: { x: 0, y: 1, z: 2 }[part.bridge.axis] as 0 | 1 | 2,
-            oldStart: evaluate(part.bridge.offset, before.scope),
-            newStart: evaluate(part.bridge.offset, after.scope),
+            oldStart: evaluate(part.bridge.offset, before.scope, base.units),
+            newStart: evaluate(part.bridge.offset, after.scope, base.units),
             ratio
           };
         }
@@ -192,8 +207,8 @@ export function growingHolderPreview(
       if (!text || text.consumed) return null;
       const delta = AXES.map(
         (axis) =>
-          evaluate(history.text!.move[axis], after.scope) -
-          evaluate(history.text!.move[axis], before.scope)
+          evaluate(history.text!.move[axis], after.scope, base.units) -
+          evaluate(history.text!.move[axis], before.scope, base.units)
       );
       if (!delta.every(Number.isFinite)) return null;
       const vertices = new Float32Array(text.mesh.vertices);

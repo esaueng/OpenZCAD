@@ -28,8 +28,7 @@ describe('keypadClampPosition', () => {
   it('clamps horizontally at both edges', () => {
     expect(keypadClampPosition({ x: 4, y: 100 }, SIZE, VIEWPORT).x).toBe(8);
     expect(
-      keypadClampPosition({ x: 996, y: 100 }, SIZE, VIEWPORT).x +
-        SIZE.width
+      keypadClampPosition({ x: 996, y: 100 }, SIZE, VIEWPORT).x + SIZE.width
     ).toBeLessThanOrEqual(VIEWPORT.width - 8);
   });
 
@@ -165,6 +164,32 @@ describe('evaluateKeypadInput with a typed unit', () => {
     expect(evaluateKeypadInput('45 in', 'deg', 'mm', {}).ok).toBe(false);
   });
 
+  it('refuses dimensioned expressions in the wrong kind of field (F05)', () => {
+    // Lengths (and compound length expressions) never land in angle fields.
+    expect(evaluateKeypadInput('45 in', 'deg', 'mm', {}).ok).toBe(false);
+    expect(evaluateKeypadInput('1 ft + 2 in', 'deg', 'mm', {}).ok).toBe(false);
+    expect(evaluateKeypadInput('(2 mm) * (3 mm)', 'deg', 'mm', {}).ok).toBe(
+      false
+    );
+    // Angles never land in length fields, but angle-suffixed input is fine
+    // where angles belong, converting nothing (degrees are native).
+    expect(evaluateKeypadInput('90deg', 'mm', 'mm', {}).ok).toBe(false);
+    expect(evaluateKeypadInput('90deg', 'deg', 'mm', {}).value).toBe(90);
+    // Dimensionless legacy expressions still pass in either kind of field.
+    expect(evaluateKeypadInput('w + 1', 'deg', 'mm', { w: 30 }).value).toBe(31);
+    expect(evaluateKeypadInput('sin(30)', 'deg', 'mm', {}).ok).toBe(true);
+  });
+
+  it('evaluates unit-suffixed expressions into document units (F05)', () => {
+    expect(evaluateKeypadInput('5 mm + 2 cm', 'mm', 'mm', {}).value).toBe(25);
+    expect(
+      evaluateKeypadInput('5 mm + 2 cm', 'mm', 'inch', {}).value
+    ).toBeCloseTo(25 / 25.4, 12);
+    expect(
+      evaluateKeypadInput('1 ft + 2 in', 'mm', 'mm', {}).value
+    ).toBeCloseTo(355.6, 9);
+  });
+
   it('still evaluates expressions against the parameter scope', () => {
     const result = evaluateKeypadInput('hole_d / 2', 'mm', 'mm', {
       hole_d: 15
@@ -219,21 +244,43 @@ describe('keypadClampPosition around docked panels', () => {
   });
 });
 
-
 describe('radial notation and parameter names', () => {
-  it.each(['radius_target', 'radius', 'r', 'r2', 'R2'])('preserves the parameter %s', (name) => {
-    const scope = { [name]: 7 };
-    expect(dimensionModeForInput(name, scope)).toBeUndefined();
-    expect(evaluateKeypadInput(name, 'mm', 'mm', scope)).toMatchObject({ ok: true, value: 7, normalizedRaw: name });
-    expect(evaluateKeypadInput(`${name} + 1`, 'mm', 'mm', scope, 'diameter')).toMatchObject({ ok: true, value: 4, normalizedRaw: `(${name} + 1) / 2` });
-    expect(convertDimensionInput(name, 'radius', 'diameter', scope)).toBe(`2 * (${name})`);
-  });
-  it.each(['R7', 'r7', 'R 7', 'R (3 + 4)'])('retains explicit radius notation %s', (raw) => {
-    expect(dimensionModeForInput(raw)).toBe('radius');
-    expect(evaluateKeypadInput(raw, 'mm', 'mm', {})).toMatchObject({ ok: true, value: 7 });
-  });
+  it.each(['radius_target', 'radius', 'r', 'r2', 'R2'])(
+    'preserves the parameter %s',
+    (name) => {
+      const scope = { [name]: 7 };
+      expect(dimensionModeForInput(name, scope)).toBeUndefined();
+      expect(evaluateKeypadInput(name, 'mm', 'mm', scope)).toMatchObject({
+        ok: true,
+        value: 7,
+        normalizedRaw: name
+      });
+      expect(
+        evaluateKeypadInput(`${name} + 1`, 'mm', 'mm', scope, 'diameter')
+      ).toMatchObject({
+        ok: true,
+        value: 4,
+        normalizedRaw: `(${name} + 1) / 2`
+      });
+      expect(convertDimensionInput(name, 'radius', 'diameter', scope)).toBe(
+        `2 * (${name})`
+      );
+    }
+  );
+  it.each(['R7', 'r7', 'R 7', 'R (3 + 4)'])(
+    'retains explicit radius notation %s',
+    (raw) => {
+      expect(dimensionModeForInput(raw)).toBe('radius');
+      expect(evaluateKeypadInput(raw, 'mm', 'mm', {})).toMatchObject({
+        ok: true,
+        value: 7
+      });
+    }
+  );
   it('does not switch an unknown identifier to radius mode', () => {
     expect(dimensionModeForInput('radius_target')).toBeUndefined();
-    expect(evaluateKeypadInput('radius_target', 'mm', 'mm', {}).error).toContain('radius_target');
+    expect(
+      evaluateKeypadInput('radius_target', 'mm', 'mm', {}).error
+    ).toContain('radius_target');
   });
 });
