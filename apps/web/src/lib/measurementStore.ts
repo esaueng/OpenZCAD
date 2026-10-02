@@ -49,7 +49,8 @@ const KINDS: readonly MeasurementKind[] = [
   'face-area',
   'body',
   'distance',
-  'angle'
+  'angle',
+  'point-angle'
 ];
 const QUALITIES: readonly MeasurementQuality[] = [
   'exact-analytic',
@@ -79,6 +80,8 @@ const TARGET_SEMANTICS: readonly MeasurementTarget['semantic'][] = [
   'face-center',
   'circle-center',
   'edge-midpoint',
+  'vertex-start',
+  'vertex-end',
   'pick'
 ];
 const REASONS = ['body-missing', 'not-found', 'ambiguous'] as const;
