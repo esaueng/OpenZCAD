@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import type { FaceWitnessV1, FeatureId } from '@openzcad/shared';
+import type { EdgeWitnessV1, FaceWitnessV1, FeatureId } from '@openzcad/shared';
 
 import { RemusKernel } from './remus-runtime';
 import { topologyCandidatesForSolid } from './exact-lineage-builders';
@@ -13,6 +13,7 @@ import {
   type RemusLineageState,
   type RemusTopologyCandidate
 } from './remus-lineage';
+import { edgeLiesOnFaceCarriers } from './topology-lineage';
 
 const FEATURE_ID = 'feature_boolean_evolution' as FeatureId;
 
@@ -431,11 +432,24 @@ describe('boolean entity evolution against the pinned kernel', () => {
       );
     }
     // The back corners are split at z = 7.5 where the wall seats: two result
-    // edges each, neither the original.
+    // edges each, neither the original. Each piece is named by its place
+    // along the corner and the number of pieces, so neither claims to be
+    // the corner, and a different split later stops resolving rather than
+    // moving to another segment.
     const backLeftLower = edgeAt([0, 40, 0], [0, 40, 7.5]);
     const backLeftUpper = edgeAt([0, 40, 7.5], [0, 40, 8]);
-    expect(derived.edgeReferences.has(backLeftLower.handle)).toBe(false);
-    expect(derived.edgeReferences.has(backLeftUpper.handle)).toBe(false);
+    const lower = derived.edgeReferences.get(backLeftLower.handle)?.lineageName;
+    const upper = derived.edgeReferences.get(backLeftUpper.handle)?.lineageName;
+    expect(lower).toMatch(
+      /^boolean\.edge\.operand\.0\.base\..*\.piece\.\d\.of\.2$/
+    );
+    expect(upper).toMatch(
+      /^boolean\.edge\.operand\.0\.base\..*\.piece\.\d\.of\.2$/
+    );
+    expect(lower!.replace(/\.piece\..*$/, '')).toBe(
+      upper!.replace(/\.piece\..*$/, '')
+    );
+    expect(lower).not.toBe(upper);
     // Every carried edge still passes the unchanged-witness relation.
     for (const [handle, reference] of derived.edgeReferences) {
       expect(reference.witness).toEqual(
@@ -445,5 +459,186 @@ describe('boolean entity evolution against the pinned kernel', () => {
         )?.witness
       );
     }
+  });
+});
+
+describe('generated boolean edges', () => {
+  /** Fuses two operands with every face and edge named, as the adapter would. */
+  function fuseNamed(
+    kernel: RemusKernel,
+    target: number,
+    tool: number
+  ): {
+    derived: RemusLineageState;
+    resultCandidates: RemusTopologyCandidate[];
+  } {
+    const targetCandidates = topologyCandidatesForSolid(kernel, target);
+    const toolCandidates = topologyCandidatesForSolid(kernel, tool);
+    const evolution = decodeRemusBooleanEntityEvolution(
+      kernel.fuseWithEntityEvolution(target, tool)
+    );
+    const resultCandidates = topologyCandidatesForSolid(
+      kernel,
+      evolution.solid
+    );
+    const derived = deriveRemusBooleanEvolutionLineage({
+      producingFeatureId: FEATURE_ID,
+      evolution,
+      resultSolid: evolution.solid,
+      operands: [
+        {
+          lineage: nameEverything(targetCandidates, 'target'),
+          candidates: targetCandidates
+        },
+        {
+          lineage: nameEverything(toolCandidates, 'tool'),
+          candidates: toolCandidates
+        }
+      ],
+      resultCandidates
+    });
+    return { derived, resultCandidates };
+  }
+
+  const betweenNames = (state: RemusLineageState) =>
+    [...state.edgeReferences.values()]
+      .map((reference) => reference.lineageName)
+      .filter((name) => name.startsWith('boolean.edge.between.'));
+
+  it('names the seam a union makes after the two faces that meet there', () => {
+    // A plate and a flange that overlap along one long edge: the union's
+    // inside corner is a new edge with no operand edge to inherit from.
+    const kernel = new RemusKernel();
+    const plate = kernel.makeBox(80, 40, 5);
+    const flange = kernel.makeBox(80, 5, 40);
+    const { derived } = fuseNamed(kernel, plate, flange);
+    const names = betweenNames(derived);
+    expect(names.length).toBeGreaterThan(0);
+    // Every such name pairs one target face with one tool face.
+    for (const name of names) {
+      const [left, right] = name
+        .slice('boolean.edge.between.'.length)
+        .split('|');
+      expect([left!.split('.')[0], right!.split('.')[0]].sort()).toEqual([
+        'operand',
+        'operand'
+      ]);
+      expect(left).not.toBe(right);
+    }
+  });
+
+  it('names no edge when one face pair meets in more than one place', () => {
+    // A bored plate with a box fused over half of it: the box's left side
+    // crosses the plate's top on both sides of the bore, so that one face
+    // pair makes two separate edges, and neither is "the" edge between them.
+    const kernel = new RemusKernel();
+    const blank = kernel.makeBox(40, 40, 10);
+    const bore = kernel.makeCylinder(5, 30);
+    kernel.transformSolid(bore, rowMajor(20, 20, -10));
+    const plate = (
+      JSON.parse(kernel.cutWithEntityEvolution(blank, bore)) as {
+        solid: number;
+      }
+    ).solid;
+    const cover = kernel.makeBox(20, 40, 20);
+    kernel.transformSolid(cover, rowMajor(20, 0, 5));
+    const { derived, resultCandidates } = fuseNamed(kernel, plate, cover);
+
+    // The cover's left side is the plane x = 20; the plate's top is z = 10.
+    // Find their name pair among what was published, if anything.
+    const names = betweenNames(derived);
+    const edgesOnSeam = resultCandidates.filter((candidate) => {
+      if (candidate.kind !== 'edge') return false;
+      const witness = candidate.witness as {
+        closed: boolean;
+        endpoints?: number[][];
+      };
+      return (
+        !witness.closed &&
+        witness.endpoints!.every(
+          (point) => point[0] === 20_000_000 && point[2] === 10_000_000
+        )
+      );
+    });
+    // The premise: separate seam segments either side of the bore (the
+    // kernel may split one of them further).
+    expect(edgesOnSeam.length).toBeGreaterThanOrEqual(2);
+    for (const candidate of edgesOnSeam) {
+      expect(derived.edgeReferences.get(candidate.handle)).toBeUndefined();
+    }
+    // Seams that are a unique pair (the cover's front meeting the plate's
+    // top, say) are still named.
+    expect(names.length).toBeGreaterThan(0);
+  });
+});
+
+describe('edgeLiesOnFaceCarriers', () => {
+  const plane = (
+    normal: [number, number, number],
+    offset: number
+  ): FaceWitnessV1 => ({
+    surfaceType: 'plane',
+    perimeter: 0,
+    centroid: null,
+    analytic: {
+      kind: 'plane',
+      normal: normal.map((component) => component * 1_000_000_000) as [
+        number,
+        number,
+        number
+      ],
+      offset: offset * 1_000_000
+    },
+    closure: { u: 'open', v: 'open' }
+  });
+  const line = (
+    from: [number, number, number],
+    to: [number, number, number]
+  ): EdgeWitnessV1 => ({
+    curveType: 'line',
+    length: 0,
+    closed: false,
+    endpoints: [
+      from.map((value) => value * 1_000_000) as [number, number, number],
+      to.map((value) => value * 1_000_000) as [number, number, number]
+    ],
+    midpoint: from.map(
+      (value, index) => ((value + to[index]!) / 2) * 1_000_000
+    ) as [number, number, number]
+  });
+  const top = plane([0, 0, 1], 5);
+  const front = plane([0, 1, 0], 5);
+
+  it('accepts the line where two planes meet and nothing else', () => {
+    expect(
+      edgeLiesOnFaceCarriers(line([0, 5, 5], [80, 5, 5]), [top, front])
+    ).toBe(true);
+    // On the top but a millimetre behind the front face.
+    expect(
+      edgeLiesOnFaceCarriers(line([0, 6, 5], [80, 6, 5]), [top, front])
+    ).toBe(false);
+    // A flipped normal is the same carrier.
+    expect(
+      edgeLiesOnFaceCarriers(line([0, 5, 5], [80, 5, 5]), [
+        plane([0, 0, -1], -5),
+        front
+      ])
+    ).toBe(true);
+  });
+
+  it('fails closed for a closed edge and for no faces', () => {
+    expect(edgeLiesOnFaceCarriers(line([0, 5, 5], [80, 5, 5]), [])).toBe(false);
+    expect(
+      edgeLiesOnFaceCarriers(
+        {
+          curveType: 'circle',
+          length: 0,
+          closed: true,
+          center: [0, 0, 5_000_000],
+          axis: [0, 0, 1_000_000_000]
+        },
+        [top]
+      )
+    ).toBe(false);
   });
 });
