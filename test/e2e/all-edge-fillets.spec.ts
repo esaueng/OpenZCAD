@@ -160,51 +160,86 @@ test('plain-language all-edge fillets work without a provider and require exact 
   expect(errors).toEqual([]);
 });
 
-test('a concave-bracket all-edge refusal preserves its original geometry and history', async ({
-  page
-}) => {
-  test.setTimeout(120_000);
-  const kernel = new RemusKernel();
-  const io = await loadRemusTranslators();
-  let bytes: Uint8Array;
-  try {
-    const profile = kernel.makePolygon(
-      new Float64Array([
-        0, 0, 0, 40, 0, 0, 40, 8, 0, 8, 8, 0, 8, 50, 0, 0, 50, 0
-      ])
+for (const radius of [1, 10]) {
+  test(`a concave-bracket fillet at ${radius} mm preserves preview and history boundaries`, async ({
+    page
+  }) => {
+    test.setTimeout(120_000);
+    const kernel = new RemusKernel();
+    const io = await loadRemusTranslators();
+    let bytes: Uint8Array;
+    try {
+      const profile = kernel.makePolygon(
+        new Float64Array([
+          0, 0, 0, 40, 0, 0, 40, 8, 0, 8, 8, 0, 8, 50, 0, 0, 50, 0
+        ])
+      );
+      bytes = io.exportStep(
+        kernel.serializeSolids(
+          Uint32Array.of(kernel.extrude(profile, 0, 0, 1, 20))
+        )
+      );
+    } finally {
+      kernel.free();
+    }
+    await stubApi(page, { assistantEnabled: true });
+    await page.route('**/api/assistant/status', (route) =>
+      route.fulfill({ json: { configured: false } })
     );
-    bytes = io.exportStep(
-      kernel.serializeSolids(
-        Uint32Array.of(kernel.extrude(profile, 0, 0, 1, 20))
-      )
-    );
-  } finally {
-    kernel.free();
-  }
-  await stubApi(page, { assistantEnabled: true });
-  await page.route('**/api/assistant/status', (route) =>
-    route.fulfill({ json: { configured: false } })
-  );
-  await page.goto('/');
-  await expect(page).toHaveTitle('OpenZCAD');
-  await expect(page.locator('vite-error-overlay')).toHaveCount(0);
-  await page.getByLabel('Project name').fill('Concave bracket');
-  await page.getByRole('button', { name: 'Create project' }).click();
-  await page.getByLabel(/^Import FreeCAD, STEP or /).setInputFiles({
-    name: 'bracket.step',
-    mimeType: 'application/step',
-    buffer: Buffer.from(bytes)
+    await page.goto('/');
+    await expect(page).toHaveTitle('OpenZCAD');
+    await expect(page.locator('vite-error-overlay')).toHaveCount(0);
+    await page.getByLabel('Project name').fill('Concave bracket');
+    await page.getByRole('button', { name: 'Create project' }).click();
+    await page.getByLabel(/^Import FreeCAD, STEP or /).setInputFiles({
+      name: 'bracket.step',
+      mimeType: 'application/step',
+      buffer: Buffer.from(bytes)
+    });
+    await expectBodyCount(page, 1);
+    await openAssistant(page);
+    await promptField(page).fill(`Fillet all edges by ${radius} mm`);
+    await promptField(page).press('Enter');
+    if (radius === 10) {
+      await expect(page.locator('.assistant-panel')).toContainText(
+        'Nothing was changed',
+        { timeout: 30_000 }
+      );
+      await expect(page.locator('.assistant-card.proposal.open')).toHaveCount(
+        0
+      );
+      await expect(
+        page.getByRole('button', { name: 'History 1' })
+      ).toBeVisible();
+    } else {
+      const proposal = page.locator('.assistant-card.proposal.open');
+      await expect(proposal).toBeVisible({ timeout: 30_000 });
+      await expect(
+        page.getByRole('button', { name: 'History 1' })
+      ).toBeVisible();
+      await expectBodyCount(page, 1);
+      await proposal
+        .getByRole('button', { name: 'Apply', exact: true })
+        .click();
+      await expect(
+        page.getByRole('button', { name: 'History 2' })
+      ).toBeVisible();
+      await expectBodyCount(page, 1);
+      await page.getByRole('button', { name: 'Undo', exact: true }).click();
+      await expect(
+        page.getByRole('button', { name: 'History 1' })
+      ).toBeVisible();
+      await page.getByRole('button', { name: 'Redo', exact: true }).click();
+      await expect(
+        page.getByRole('button', { name: 'History 2' })
+      ).toBeVisible();
+      await expect(page.locator('.save-state')).not.toHaveClass(/is-saving/);
+      await page.reload();
+      await expect(page.getByRole('button', { name: 'History 2' })).toBeVisible(
+        { timeout: 30_000 }
+      );
+    }
+    await expect(page.getByRole('contentinfo')).toContainText('warnings0');
+    await expectBodyCount(page, 1);
   });
-  await expectBodyCount(page, 1);
-  await openAssistant(page);
-  await promptField(page).fill('Fillet all edges by 1 mm');
-  await promptField(page).press('Enter');
-  await expect(page.locator('.assistant-panel')).toContainText(
-    'Nothing was changed',
-    { timeout: 30_000 }
-  );
-  await expect(page.locator('.assistant-card.proposal.open')).toHaveCount(0);
-  await expect(page.getByRole('button', { name: 'History 1' })).toBeVisible();
-  await expect(page.getByRole('contentinfo')).toContainText('warnings0');
-  await expectBodyCount(page, 1);
-});
+}
