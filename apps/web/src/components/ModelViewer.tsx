@@ -333,6 +333,12 @@ export interface SketchModeState {
   diagnosticPoints: { x: number; y: number }[];
   /** Solver-named entities with a measured non-zero residual. */
   constraintDiagnosticObjectIds: string[];
+  /**
+   * Entities proved fully defined by a zero-DOF solve: every object id, or
+   * empty. Sketch-wide by solver-evidence design (the kernel reports one
+   * DOF scalar, no per-entity freedom).
+   */
+  definedObjectIds: string[];
   dimensions: SketchDimensionAnnotation[];
 }
 
@@ -9479,7 +9485,8 @@ export function ModelViewer({
       sketchMode.objects,
       sketchMode.selectedObjectId,
       resolve,
-      sketchMode.constraintDiagnosticObjectIds
+      sketchMode.constraintDiagnosticObjectIds,
+      sketchMode.definedObjectIds
     );
     rig.setProfiles(sketchMode.profiles, true);
     rig.setDiagnostics(sketchMode.diagnosticPoints);

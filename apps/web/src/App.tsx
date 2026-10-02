@@ -177,10 +177,12 @@ import {
   constraintToolsForObject,
   constraintToolSpec,
   describeConstraint,
+  fullyDefinedIds,
   measureDrivingDimension,
   planConstraintFromSelection,
   refusePick,
   residualConstraintObjectIds,
+  sketchDefinedState,
   topResidualConstraints,
   type ConstraintPick,
   type DrivingDimensionKind
@@ -11192,8 +11194,13 @@ export function App() {
   parameterScopeRef.current = parameterScope;
   // Solver diagnostics are transient UI state. Keep the entity ids beside
   // the solve snapshot so the viewport can colour only solver-named objects.
+  // The fully-defined ids ride alongside: every object id when the last
+  // solve proved the whole sketch defined, else empty.
   const [sketchSolveDiagnosticObjectIds, setSketchSolveDiagnosticObjectIds] =
     useState<string[]>([]);
+  const [sketchDefinedObjectIds, setSketchDefinedObjectIds] = useState<
+    string[]
+  >([]);
   const sketchDocumentRef = useRef(doc);
   sketchDocumentRef.current = doc;
   const sketchSessionNameRef = useRef(sketchSessionName);
@@ -11284,6 +11291,7 @@ export function App() {
       selectedObjectId: session.selectedObjectId,
       parameterScope: parameterScope.scope,
       constraintDiagnosticObjectIds: sketchSolveDiagnosticObjectIds,
+      definedObjectIds: sketchDefinedObjectIds,
       dimensions: sketchDimensionAnnotations(
         objects,
         sketch?.constraints ?? [],
@@ -11300,7 +11308,8 @@ export function App() {
     appSettings.sketching,
     parameterScope.scope,
     sketchDiagnosticPoints,
-    sketchSolveDiagnosticObjectIds
+    sketchSolveDiagnosticObjectIds,
+    sketchDefinedObjectIds
   ]);
 
   const selectedSketchEntity = useMemo(() => {
@@ -11567,6 +11576,7 @@ export function App() {
   } | null>(null);
   function setSketchSolveStatus(status: SketchSolveStatus | null) {
     setSketchSolveDiagnosticObjectIds(status?.diagnosticObjectIds ?? []);
+    setSketchDefinedObjectIds(status?.definedObjectIds ?? []);
     setSketchSolveSnapshot(
       status
         ? {
@@ -11600,6 +11610,10 @@ export function App() {
           )
           .map(({ constraintId }) => String(constraintId))
       : [];
+    // Sketch-wide defined state: the kernel reports one DOF scalar for the
+    // whole sketch and no per-entity freedom, so either every object paints
+    // fully-defined or none does. Conflict keeps the residual highlighting.
+    const defined = sketchDefinedState(outcome);
     return {
       label: solveStatusLabel(outcome),
       tone:
@@ -11608,10 +11622,15 @@ export function App() {
           : outcome.classification === 'underConstrained'
             ? 'info'
             : 'warn',
+      definedState: defined.state,
       conflictingConstraintIds,
       diagnosticObjectIds: failedSolve
         ? residualConstraintObjectIds(sketch, outcome.constraintResiduals)
-        : []
+        : [],
+      definedObjectIds: fullyDefinedIds(
+        sketch?.objectIds.map(String) ?? [],
+        defined
+      )
     };
   }
   const [sketchSolving, setSketchSolving] = useState(false);
@@ -11677,6 +11696,7 @@ export function App() {
   useEffect(() => {
     setSketchDiagnosticPoints([]);
     setSketchSolveDiagnosticObjectIds([]);
+    setSketchDefinedObjectIds([]);
     setSketchEditError(null);
   }, [doc?.version, editingSketchNode?.sketchId]);
 
@@ -11693,11 +11713,13 @@ export function App() {
     const conflicting = new Set(
       sketchSolveStatus?.conflictingConstraintIds ?? []
     );
+    const fullyDefined = sketchSolveStatus?.definedState === 'fully-defined';
     return (editingSketchNode.constraints ?? []).map(
       ({ constraintId, data }) => ({
         constraintId: String(constraintId),
         label: describeConstraint(data, nameOf),
         conflicted: conflicting.has(String(constraintId)),
+        defined: fullyDefined,
         editable:
           data.constraintKind === 'distance' ||
           data.constraintKind === 'angle' ||
