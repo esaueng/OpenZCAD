@@ -55,7 +55,7 @@ if (!rootElement) {
 
 createRoot(rootElement).render(
   <StrictMode>
-    <ErrorBoundary label="OpenZCAD workspace">
+    <ErrorBoundary label="OpenZCAD workspace" scope="page">
       <App />
     </ErrorBoundary>
   </StrictMode>
