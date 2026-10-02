@@ -194,7 +194,7 @@ export const api = {
       body: JSON.stringify(payload)
     }),
   /**
-   * Gives an existing device-local project an account record, keeping its id.
+   * Gives an existing device-local project an account record and its cloud identity.
    * The derived projection is dropped on the way out: it is rebuilt from
    * canonical history on load, and for a dense import it is most of the bytes.
    */
@@ -210,6 +210,7 @@ export const api = {
       method: 'POST',
       body: JSON.stringify({
         name: prepared.name,
+        adoptionProtocolVersion: 1,
         document: withoutDerivedProjection(prepared)
       })
     });
