@@ -8,6 +8,7 @@ import {
   getAuthConfig,
   hashLoginCode,
   identifyAssistantRequest,
+  loginEmail,
   normalizeEmail,
   startEmailLogin,
   verifyEmailLogin
@@ -553,6 +554,29 @@ describe('worker authentication', () => {
     expect(failures.every((result) => result.status === 'rejected')).toBe(true);
     expect(fixture.attempts()).toBe(5);
     expect(fixture.consumedAt()).toBeNull();
+  });
+});
+
+describe('sign-in code email', () => {
+  it('keeps the code one copyable run of digits in every part', () => {
+    const message = loginEmail('730418');
+
+    expect(message.subject).toBe('730418 is your OpenZCAD sign-in code');
+    expect(message.text.split('\n')).toContain('730418');
+    // Spacing comes from letter-spacing, so a copy yields only the digits;
+    // one click selects the whole code where user-select is honoured.
+    expect(message.html).toMatch(/user-select:all[^>]*>730418<\/div>/);
+    expect(message.text).toContain('expires in 10 minutes and works once');
+  });
+
+  it('declares both colour schemes and overrides for dark mode', () => {
+    const { html } = loginEmail('730418');
+
+    expect(html).toContain('<meta name="color-scheme" content="light dark">');
+    expect(html).toMatch(
+      /@media \(prefers-color-scheme:dark\)\{[^}]*\.oz-page\{background:#16181b/
+    );
+    expect(html).not.toMatch(/<img|<svg/);
   });
 });
 
