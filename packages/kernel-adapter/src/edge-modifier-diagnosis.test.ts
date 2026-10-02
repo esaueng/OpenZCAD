@@ -15,8 +15,10 @@ import {
   blendCliffLimit,
   chamferLadderAim,
   edgeModifierFailureMessage,
-  EDGE_MODIFIER_PROBE_RATIOS
+  EDGE_MODIFIER_PROBE_RATIOS,
+  refineAcceptedEdgeModifierSize
 } from './exact-edge-modifiers';
+import { edgeSampleOf } from './exact-witnesses';
 
 /**
  * A kernel whose `fillet` returns what its `chamfer` returns: a real, valid,
@@ -577,5 +579,80 @@ describe('edge modifier failure diagnosis', { timeout: 60_000 }, () => {
     } finally {
       adapter.dispose();
     }
+  });
+});
+
+/**
+ * The 1 October 2026 design review: a 100 × 60 × 6 plate refused r5 on its
+ * front top edge and the message said "radius 2.5 builds here" — half the
+ * request, the ladder's first rung — while r3 built. The quote is now raised
+ * toward the refused size by bisection, so it is never the coarse rung when a
+ * larger size is proved.
+ */
+describe('fillet suggestion on a thin plate', () => {
+  it('quotes the largest proved size between the ladder rung and the refused one', () => {
+    const kernel = new RemusKernel();
+    const plate = kernel.makeBox(100, 60, 6);
+    // The front top edge: along X, at y = 0, z = 6.
+    const edge = Array.from(kernel.getSolidEdges(plate)).find((candidate) => {
+      const sample = edgeSampleOf(kernel, candidate);
+      if (sample.closed) return false;
+      const [start, end] = sample.endpoints;
+      return (
+        Math.abs(start.y) < 1e-6 &&
+        Math.abs(end.y) < 1e-6 &&
+        Math.abs(start.z - 6) < 1e-6 &&
+        Math.abs(end.z - 6) < 1e-6
+      );
+    })!;
+    expect(edge).toBeDefined();
+
+    let reported: string | null = null;
+    const refused = applyEdgeModifier(
+      kernel,
+      plate,
+      [edge],
+      'fillet',
+      5,
+      (m) => {
+        reported = m;
+      }
+    );
+    // The premise of the finding: 5 is refused and 3 builds.
+    expect(refused).toBeNull();
+    expect(
+      applyEdgeModifier(kernel, plate, [edge], 'fillet', 3)
+    ).not.toBeNull();
+
+    const message = edgeModifierFailureMessage(
+      kernel,
+      plate,
+      [edge],
+      'fillet',
+      5,
+      false,
+      reported
+    );
+    const quoted = Number(/radius ([\d.]+) builds here/.exec(message)?.[1]);
+    expect(quoted).toBeGreaterThanOrEqual(3);
+    expect(quoted).toBeLessThan(5);
+    // And it is a size that was built, not an estimate.
+    expect(
+      applyEdgeModifier(kernel, plate, [edge], 'fillet', quoted)
+    ).not.toBeNull();
+  });
+
+  it('spends no kernel calls when there is no gap to close', () => {
+    const untouchable = new Proxy({} as RemusKernel, {
+      get() {
+        throw new Error('the kernel must not be asked');
+      }
+    });
+    expect(
+      refineAcceptedEdgeModifierSize(untouchable, 1, [2], 'fillet', 4, 4)
+    ).toBe(4);
+    expect(
+      refineAcceptedEdgeModifierSize(untouchable, 1, [2], 'fillet', 4, 3)
+    ).toBe(4);
   });
 });
