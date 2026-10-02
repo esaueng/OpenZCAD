@@ -1708,6 +1708,15 @@ for (const modifier of [
     });
     await expect(feature).toBeVisible();
     await expect(feature.getByTitle('Feature failed to build')).toHaveCount(0);
+    // The pick armed an edge operation; creating the feature disarms it.
+    // Its "Ready" card and its lane instructions used to stay up over the
+    // finished edge, and even follow the user into their next project.
+    await expect(
+      page.getByRole('region', { name: /^(Fillet|Chamfer) operation$/ })
+    ).toHaveCount(0);
+    await expect(page.getByRole('contentinfo')).not.toContainText(
+      /Drag the handle to set the (fillet|chamfer)/
+    );
     await expect(page.getByRole('contentinfo')).toContainText('warnings0');
     expect(consoleErrors).toEqual([]);
   });
