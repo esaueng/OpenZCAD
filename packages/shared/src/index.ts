@@ -2070,7 +2070,7 @@ export interface FeatureWarning {
    * a second one beside it.
    */
   kernelRefusal?: {
-    family: 'boolean' | 'validation' | 'healing' | 'import';
+    family: 'boolean' | 'validation' | 'healing' | 'import' | 'blend';
     operation?: string;
     category: string;
     code: string;

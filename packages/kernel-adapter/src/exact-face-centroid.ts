@@ -29,8 +29,8 @@ import { cross, normalized, subtract } from './exact-math';
  */
 const CURVE_SAMPLE_RATIO = 1e-5;
 
-/** Endpoint match for chaining a wire's edges, relative to the loop's extent. */
-const CHAIN_TOLERANCE_RATIO = 1e-7;
+/** Join check for walking a wire in stored order, relative to the loop's extent. */
+const WIRE_JOIN_TOLERANCE_RATIO = 1e-7;
 
 export interface PlanarFaceCentroid {
   readonly centroid: Vec3;
@@ -108,10 +108,12 @@ function extentOf(points: readonly Vec3[]): number {
 /**
  * Walks a wire's edges into one closed loop of points.
  *
- * `getWireEdges` returns a set, not a traversal — measured, a box face comes
- * back as edges 3, 6, 5, 4 — so the loop has to be rebuilt by matching
- * endpoints, and an edge whose stored direction runs against the loop has to be
- * reversed. Returns null rather than a guess if the edges do not close.
+ * `getWireEdges` returns the wire in traversal order — one entry per use —
+ * so each edge's polyline is oriented with `isEdgeForwardInWire` (reversed
+ * when false) and joined at the shared point (Remus esaueng/remus#921).
+ * Returns null rather than a guess where the kernel contract stops: a
+ * repeated edge handle (seam), polylines that do not meet, or a loop that
+ * does not close.
  */
 function chainWireLoop(
   kernel: RemusKernel,
@@ -119,6 +121,12 @@ function chainWireLoop(
 ): { loop: Vec3[]; curved: boolean } | null {
   const edges = Array.from(kernel.getWireEdges(wire));
   if (edges.length === 0) {
+    return null;
+  }
+  // A repeated handle is a seam edge used twice in one wire (cylinder
+  // lateral). `isEdgeForwardInWire` reports only the first use, so the
+  // second use cannot be oriented — refuse rather than guess.
+  if (new Set(edges).size !== edges.length) {
     return null;
   }
   const segments: Vec3[][] = [];
@@ -129,12 +137,16 @@ function chainWireLoop(
       return null;
     }
     curved ||= polyline.curved;
-    segments.push(polyline.points);
+    segments.push(
+      kernel.isEdgeForwardInWire(edge, wire)
+        ? polyline.points
+        : [...polyline.points].reverse()
+    );
   }
 
   const tolerance = Math.max(
     1e-12,
-    extentOf(segments.flat()) * CHAIN_TOLERANCE_RATIO
+    extentOf(segments.flat()) * WIRE_JOIN_TOLERANCE_RATIO
   );
   // A closed edge is a whole loop on its own, so sharing a WIRE with other
   // edges is malformed — it would chain against itself, and a made-up boundary
@@ -152,34 +164,13 @@ function chainWireLoop(
   ) {
     return null;
   }
-  const used = new Array<boolean>(segments.length).fill(false);
   const loop = [...segments[0]!];
-  used[0] = true;
-  for (let joined = 1; joined < segments.length; joined += 1) {
-    const tail = loop[loop.length - 1]!;
-    let next = -1;
-    let reversed = false;
-    for (let index = 0; index < segments.length; index += 1) {
-      if (used[index]) {
-        continue;
-      }
-      const candidate = segments[index]!;
-      if (distance(tail, candidate[0]!) <= tolerance) {
-        next = index;
-        reversed = false;
-        break;
-      }
-      if (distance(tail, candidate[candidate.length - 1]!) <= tolerance) {
-        next = index;
-        reversed = true;
-        break;
-      }
-    }
-    if (next < 0) {
+  for (const points of segments.slice(1)) {
+    // A mismatch here is a contract violation, not a reason to search: the
+    // kernel promises consecutive stored edges connect head-to-tail.
+    if (distance(loop[loop.length - 1]!, points[0]!) > tolerance) {
       return null;
     }
-    used[next] = true;
-    const points = reversed ? [...segments[next]!].reverse() : segments[next]!;
     // The joint point is already the loop's tail.
     loop.push(...points.slice(1));
   }

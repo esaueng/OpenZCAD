@@ -89,6 +89,7 @@ import {
 } from '../lib/controlReference';
 import { BrandMark } from './BrandMark';
 import { CloudDataDeletionDialog } from './CloudDataDeletionDialog';
+import { PersonalInfoToggle, PrivateEmailInput } from './PersonalInfoToggle';
 
 function formatBytes(bytes: number): string {
   if (bytes < 1024) {
@@ -527,6 +528,7 @@ export function SettingsPage({
   const [token, setToken] = useState('');
   const [showToken, setShowToken] = useState(false);
   const [loginEmail, setLoginEmail] = useState('');
+  const [personalInfoVisible, setPersonalInfoVisible] = useState(false);
   const [loginCode, setLoginCode] = useState('');
   const [loginChallengeId, setLoginChallengeId] = useState<string | null>(null);
   const [turnstileToken, setTurnstileToken] = useState('');
@@ -1689,11 +1691,27 @@ export function SettingsPage({
                   onChange={(enabled) => patchCollaboration({ enabled })}
                 />
               </SettingRow>
+              <SettingRow
+                title="Personal information"
+                description="Names and emails start hidden for screenshots. Showing them lasts only while this panel is open."
+                scope="This panel"
+              >
+                <PersonalInfoToggle
+                  visible={personalInfoVisible}
+                  onChange={setPersonalInfoVisible}
+                />
+              </SettingRow>
               {session ? (
                 <>
                   <SettingRow
-                    title={session.displayName}
-                    description={session.email ?? session.userId}
+                    title={
+                      personalInfoVisible ? session.displayName : 'Name hidden'
+                    }
+                    description={
+                      personalInfoVisible
+                        ? (session.email ?? session.userId)
+                        : 'Email hidden'
+                    }
                     scope={
                       session.mode === 'email-code'
                         ? 'Email profile'
@@ -1857,8 +1875,11 @@ export function SettingsPage({
                         <span>
                           <strong>Enter the email code</strong>
                           <small>
-                            We sent a six-digit code to {loginEmail}. It expires
-                            in 10 minutes.
+                            We sent a six-digit code to{' '}
+                            {personalInfoVisible
+                              ? loginEmail
+                              : 'your email address'}
+                            . It expires in 10 minutes.
                           </small>
                         </span>
                         <div className="settings-auth-controls">
@@ -1929,8 +1950,8 @@ export function SettingsPage({
                         <div className="settings-auth-controls">
                           <label>
                             <span>Email</span>
-                            <input
-                              type="email"
+                            <PrivateEmailInput
+                              visible={personalInfoVisible}
                               value={loginEmail}
                               autoComplete="email"
                               aria-label="Email address"

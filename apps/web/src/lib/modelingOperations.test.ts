@@ -458,3 +458,45 @@ describe('modeling operation form contracts', () => {
     expect(submission.input).not.toHaveProperty('positionAnchor');
   });
 });
+
+describe('face option order', () => {
+  const plane = (
+    hash: number,
+    normal: { x: number; y: number; z: number },
+    center: { x: number; y: number; z: number }
+  ): BodyTopology['faces'][number] => ({
+    topologyId: `face:${hash}`,
+    hash,
+    triangleStart: 0,
+    triangleCount: 2,
+    geometry: { surfaceType: 'plane', area: 10, center, normal }
+  });
+  // A stepped part: two top faces at different heights, a bottom and a front.
+  const faces = [
+    plane(1, { x: 0, y: 0, z: 1 }, { x: 0, y: 0, z: 5 }),
+    plane(2, { x: 0, y: 0, z: -1 }, { x: 0, y: 0, z: 0 }),
+    plane(3, { x: 0, y: 0, z: 1 }, { x: 0, y: 0, z: 40 }),
+    plane(4, { x: 0, y: -1, z: 0 }, { x: 0, y: 0, z: 2 })
+  ];
+  const optionsFor = (ordered: BodyTopology['faces']) => {
+    const topology: BodyTopology = { faces: ordered, edges: [] };
+    return modelingFaceOptions(topology, {
+      topology
+    } as unknown as BodyRepresentation).map((face) => [face.label, face.hash]);
+  };
+
+  it('keeps one order and one numbering whatever order the kernel reports', () => {
+    const expected = [
+      // Same-named faces numbered highest first.
+      ['Top face (1)', 3],
+      ['Top face (2)', 1],
+      ['Bottom face', 2],
+      ['Front face', 4]
+    ];
+    expect(optionsFor(faces)).toEqual(expected);
+    expect(optionsFor([...faces].reverse())).toEqual(expected);
+    expect(optionsFor([faces[2]!, faces[0]!, faces[3]!, faces[1]!])).toEqual(
+      expected
+    );
+  });
+});

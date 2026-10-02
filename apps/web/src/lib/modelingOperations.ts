@@ -588,6 +588,11 @@ export interface ModelingFaceOption {
    * position would go stale the moment an upstream feature moved the body.
    */
   hasCentroid?: boolean;
+  /**
+   * Outward normal of a planar face, which fixes the frame a hole's U and V
+   * run in — the form names the world axis each field moves along.
+   */
+  normal?: { x: number; y: number; z: number };
 }
 
 export interface ModelingOperationCapability {
@@ -637,20 +642,66 @@ export function topologyFaceLabel(
  * resolve against, the viewport's name leads and the lineage moves to the
  * tooltip; two faces that share a name get an ordinal so they stay apart.
  */
+const FACE_NAME_ORDER = [
+  'Top face',
+  'Bottom face',
+  'Front face',
+  'Back face',
+  'Left face',
+  'Right face'
+];
+
+function compareFaceNames(a: string, b: string): number {
+  const rank = (name: string) => {
+    const index = FACE_NAME_ORDER.indexOf(name);
+    return index < 0 ? FACE_NAME_ORDER.length : index;
+  };
+  return rank(a) - rank(b) || a.localeCompare(b);
+}
+
+/** Highest first, then front-most (lowest Y), then left-most (lowest X). */
+function compareFacePlaces(
+  a: BodyTopology['faces'][number],
+  b: BodyTopology['faces'][number]
+): number {
+  const place = (face: BodyTopology['faces'][number]) =>
+    face.geometry?.centroid ?? face.geometry?.center;
+  const pa = place(a);
+  const pb = place(b);
+  if (!pa || !pb) return 0;
+  const tolerance = 1e-6;
+  const delta = (x: number, y: number) =>
+    Math.abs(x - y) <= tolerance ? 0 : x - y;
+  return delta(pb.z, pa.z) || delta(pa.y, pb.y) || delta(pa.x, pb.x);
+}
+
 export function modelingFaceOptions(
   topology: BodyTopology | undefined,
   body?: BodyRepresentation
 ): ModelingFaceOption[] {
-  const faces = topology?.faces ?? [];
+  const topologyFaces = topology?.faces ?? [];
   const names = body
-    ? faces.map((face) => faceLabel(body, face.hash, face.topologyId))
+    ? topologyFaces.map((face) => faceLabel(body, face.hash, face.topologyId))
     : null;
+  // The kernel's face order is not stable across rebuilds, and the list (and
+  // the "(1)", "(2)" that tell same-named faces apart) used to follow it:
+  // "Top face" moved from second to sixth between two holes, and "Top face
+  // (1)" became "(2)". With names to go by, the list is in a fixed order —
+  // the box directions first, then the rest by name — and same-named faces
+  // are numbered by where they sit (highest, then front-most, then left-most).
+  const order = topologyFaces.map((face, index) => ({ face, index }));
+  if (names) {
+    order.sort((a, b) => {
+      const byName = compareFaceNames(names[a.index]!, names[b.index]!);
+      return byName !== 0 ? byName : compareFacePlaces(a.face, b.face);
+    });
+  }
   const counts = new Map<string, number>();
   for (const name of names ?? []) {
     counts.set(name, (counts.get(name) ?? 0) + 1);
   }
   const seen = new Map<string, number>();
-  return faces.map((face, index) => {
+  return order.map(({ face, index }) => {
     const detail = topologyFaceLabel(face, index);
     let label = detail;
     if (names) {
@@ -670,7 +721,8 @@ export function modelingFaceOptions(
       ...(names ? { detail } : {}),
       surfaceType: face.geometry?.surfaceType,
       reference: face.reference,
-      hasCentroid: face.geometry?.centroid !== undefined
+      hasCentroid: face.geometry?.centroid !== undefined,
+      ...(face.geometry?.normal ? { normal: face.geometry.normal } : {})
     };
   });
 }

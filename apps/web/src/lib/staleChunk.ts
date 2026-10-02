@@ -58,3 +58,21 @@ export function lazyWithStaleChunkNotice<T extends ComponentType<any>>(
     })
   );
 }
+
+/**
+ * Reports chunks that fail to load through Vite's preload helper, which wraps
+ * every `import()` in the build and announces a failure as
+ * `vite:preloadError`. The lazy panels above already report theirs; this
+ * covers the plain `await import()` calls — the demo builders, the import
+ * workers — whose failures otherwise reached only a status line. The event
+ * is not cancelled: each caller still sees its own rejection.
+ */
+export function watchPreloadErrors(target: Window = window): () => void {
+  const listener = (event: Event) => {
+    if (isChunkLoadError((event as Event & { payload?: unknown }).payload)) {
+      reportStaleChunk();
+    }
+  };
+  target.addEventListener('vite:preloadError', listener);
+  return () => target.removeEventListener('vite:preloadError', listener);
+}

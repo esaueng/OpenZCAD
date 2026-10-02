@@ -33,10 +33,7 @@ import {
  *   box 20^3                        rel = 0          EXACT
  *   cylinder r10 h20                rel = 0          EXACT
  *   box + chamfer 2 (all planes)    rel = 0          EXACT
- *   box with a through bore r4      rel ~ 1e-16         <- 7 faces, cyl+plane
- *     (last bit subject to kernel summation order since B56; relitigated
- *     against 60-digit arithmetic, which rounds the closed form to the
- *     reference below — the kernel lands 1 ULP under it)
+ *   box with a through bore r4      rel = 0          EXACT   <- 7 faces, cyl+plane
  *   two boxes fused                 rel = 0          EXACT
  *   box + FILLET r2                 rel = -4.197e-6          <- 7 faces, cyl+plane
  *
@@ -235,7 +232,7 @@ describe('a filleted body', () => {
     it('measures a box with a THROUGH BORE exactly — 7 faces, cylinder + plane', async () => {
       // The tightest control in the file. Same face count as the filleted box,
       // same surface types, also a boolean result, also carrying an analytic
-      // quadric — and exact to the last bit. Whatever the filleted body is
+      // quadric — and exact to round-off (≤ 2 ulp). Whatever the filleted body is
       // missing, it is not "an exact path for cylinders and planes"; one
       // exists and this body reaches it.
       adapter ??= await createExactKernelAdapter();
@@ -261,15 +258,15 @@ describe('a filleted body', () => {
         targetBodyIds: [outer, bore]
       }).document;
       const { volume, faces, surfaces, warnings } = await measure(doc);
-      // The reference is the correctly-rounded closed form: 60-digit
-      // arithmetic puts 8000 - 320*pi at ...26616, nearest to this double.
-      // The kernel sums exact face contributions about the body since B56, so
-      // summation order — not geometry — decides the last bit (it lands 1 ULP
-      // under the reference). The 1e-15 band admits rounding only: it is ~8
-      // ULP here and still excludes every approximate path by nine orders.
-      expect(
-        Math.abs(volume - (8000 - Math.PI * 16 * 20)) / volume
-      ).toBeLessThan(1e-15);
+      // Exact to round-off. The closed form is written as the kernel
+      // integrates it; the body-local integration reference (Remus B78,
+      // esaueng/remus#895) sums the same terms about the body's bbox centre
+      // instead of the origin, which is 1 ulp (9e-13) from the double
+      // `8000 - Math.PI * 16 * 20` happens to round to. 2 ulp is what the
+      // same body reads when it is merely moved, on every Remus revision.
+      const exact = 8000 - Math.PI * 16 * 20;
+      const ulp = 2 ** (Math.floor(Math.log2(exact)) - 52);
+      expect(Math.abs(volume - exact)).toBeLessThanOrEqual(2 * ulp);
       expect(faces).toBe(7);
       expect(surfaces).toEqual(new Set(['cylinder', 'plane']));
       expect(warnings).toEqual([]);
