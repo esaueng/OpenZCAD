@@ -7,7 +7,12 @@ import {
 } from '@openzcad/viewport/types';
 import type { WorkspaceSaveState } from '../lib/cloudProjectAutosave';
 import { usePacedStatus } from '../hooks/usePacedStatus';
-import { statusExpiresAt } from '../lib/statusLifetime';
+import {
+  advanceStatusClock,
+  STATUS_CLOCK_STEP_MS,
+  STATUS_LIFETIME_MS,
+  statusExpiresAt
+} from '../lib/statusLifetime';
 import { WORKSPACE_SAVE_STATE_PRESENTATION } from '../lib/workspaceSaveStatePresentation';
 import type { StatusTone } from './StatusActivityLog';
 
@@ -15,6 +20,14 @@ interface WorkspaceReadoutProps {
   status: string;
   statusAt?: number;
   statusSticky?: boolean;
+  /**
+   * The exact-geometry line while the model is not ready: the worker phase
+   * and what the viewport shows meanwhile. A state rather than a message, it
+   * never expires. A live message is drawn in front of it, never hidden
+   * behind it: a project open or a refused shortcut during a slow worker
+   * start used to expire unseen behind this line.
+   */
+  geometryStatus?: { phase: string; projection: string } | null;
   tone: StatusTone;
   /** A tool card is up and carries the message itself. */
   muted?: boolean;
@@ -53,6 +66,7 @@ export function WorkspaceReadout({
   status,
   statusAt,
   statusSticky,
+  geometryStatus = null,
   tone,
   muted = false,
   logOpen,
@@ -66,27 +80,65 @@ export function WorkspaceReadout({
   saveState,
   searchBar
 }: WorkspaceReadoutProps) {
-  const expiresAt =
-    statusAt === undefined
-      ? null
-      : statusExpiresAt({ at: statusAt, sticky: statusSticky ?? false });
-  const [now, setNow] = useState(() => Date.now());
+  const sticky = statusSticky ?? false;
+  // A message already past its lifetime when the readout mounts — entering
+  // the workspace long after it was set — is not news, and stays gone.
+  const [expiredAtMount] = useState(() => {
+    if (statusAt === undefined) {
+      return null;
+    }
+    const expiry = statusExpiresAt({ at: statusAt, sticky });
+    return expiry !== null && Date.now() >= expiry ? statusAt : null;
+  });
+  // The lifetime is counted in steps on the page's own timers, so time the
+  // page could not draw — a viewer frame holding the main thread — does not
+  // use it up (lib/statusLifetime).
+  const [expiredAt, setExpiredAt] = useState<number | null>(null);
   useEffect(() => {
-    if (expiresAt === null) {
+    if (
+      statusAt === undefined ||
+      statusAt === 0 ||
+      statusAt === expiredAtMount ||
+      sticky
+    ) {
       return;
     }
-    const remaining = expiresAt - Date.now();
-    if (remaining <= 0) {
-      setNow(Date.now());
+    let elapsed = 0;
+    let countedAt = statusAt;
+    const count = () => {
+      const now = Date.now();
+      elapsed = advanceStatusClock(elapsed, now - countedAt);
+      countedAt = now;
+      return elapsed >= STATUS_LIFETIME_MS;
+    };
+    if (count()) {
+      setExpiredAt(statusAt);
       return;
     }
-    const timer = window.setTimeout(() => setNow(Date.now()), remaining);
-    return () => window.clearTimeout(timer);
-  }, [expiresAt]);
-  const quiet = expiresAt !== null && now >= expiresAt;
-  const shown = !quiet && !muted && status !== '';
+    const timer = window.setInterval(() => {
+      if (count()) {
+        window.clearInterval(timer);
+        setExpiredAt(statusAt);
+      }
+    }, STATUS_CLOCK_STEP_MS);
+    return () => window.clearInterval(timer);
+  }, [statusAt, sticky, expiredAtMount]);
+  const expired =
+    statusAt !== undefined &&
+    !sticky &&
+    (statusAt === 0 || statusAt === expiredAtMount || statusAt === expiredAt);
+  const messageLive = !expired && status !== '';
+  // The geometry line is the floor under the message: it carries the live
+  // message ahead of the phase, and the projection note once it has gone.
+  const line = geometryStatus
+    ? messageLive
+      ? `${status} · ${geometryStatus.phase}`
+      : `${geometryStatus.phase} · ${geometryStatus.projection}`
+    : status;
+  const quiet = geometryStatus === null && expired;
+  const shown = !quiet && !muted && line !== '';
   // The log keeps every message; the toast holds each long enough to read.
-  const paced = usePacedStatus(status, tone, shown);
+  const paced = usePacedStatus(line, tone, shown);
   // A retired or expired message leaves the bar reading as nothing happening.
   const shownStatus = quiet ? '' : paced.status;
   const featureLabel = `${featureCount} ${featureCount === 1 ? 'feature' : 'features'}`;
@@ -125,9 +177,9 @@ export function WorkspaceReadout({
                 : `${paced.status} — View activity log`
           }
           aria-label={
-            quiet || status === ''
+            quiet || line === ''
               ? `${logOpen ? 'Close' : 'Open'} activity log.`
-              : `${logOpen ? 'Close' : 'Open'} activity log. Current status: ${status}`
+              : `${logOpen ? 'Close' : 'Open'} activity log. Current status: ${line}`
           }
           aria-expanded={logOpen}
           onClick={onToggleLog}

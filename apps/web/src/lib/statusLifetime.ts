@@ -9,6 +9,25 @@
 export const STATUS_LIFETIME_MS = 8000;
 
 /**
+ * How often the bar counts a live message's lifetime. The lifetime is time
+ * the page could draw the message, not wall time: opening a project mounts
+ * the viewer, whose first frame can hold the main thread for seconds while
+ * its shaders compile (a slow GPU, software GL in CI), and a message set
+ * around it — "Opened …", a refused shortcut — used to spend its whole
+ * lifetime frozen and expire the moment the page could paint again.
+ */
+export const STATUS_CLOCK_STEP_MS = 250;
+
+/**
+ * Adds the time since the last count to a message's lifetime. A gap longer
+ * than a late step is the page unable to draw, so it counts as one late step
+ * and no more.
+ */
+export function advanceStatusClock(elapsed: number, gap: number): number {
+  return elapsed + Math.min(Math.max(gap, 0), 2 * STATUS_CLOCK_STEP_MS);
+}
+
+/**
  * A message younger than this survives a selection change. Pick handlers
  * retire the previous message and then set their own in the same tick, and
  * the order those two land in must not decide whether the new one shows.
