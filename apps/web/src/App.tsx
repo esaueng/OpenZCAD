@@ -506,7 +506,11 @@ import type {
   CommandDiagnostic,
   InteractionState
 } from './lib/interaction/machine';
-import { resolveFace } from './lib/topologyResolution';
+import {
+  refreshEdgeReferencesForCommit,
+  resolveFace
+} from './lib/topologyResolution';
+import { useLineageDemand } from './lib/lineageDemand';
 import { objectPolylines } from './lib/objectPolyline';
 import type { RegionPickData } from './components/viewer/regionOverlay';
 import { CommandBar, type PaletteCommand } from './components/CommandBar';
@@ -3276,7 +3280,33 @@ export function App() {
     value: EdgeModifierFormValue
   ) {
     if (geometryBusy) return;
-    const command = edgeModifierCommand(feature, kind, value);
+    // K05 on-demand probe: the form's edgeReferences were captured when the
+    // edges were picked. Re-read CURRENT lineage at commit time so a name
+    // that arrived with the demanded rebuild is persisted; fail closed to
+    // the stale (hash-only) set when a name is ambiguous.
+    const formBody =
+      representations[value.targetBodyId] ??
+      renderedRepresentations[value.targetBodyId];
+    const refreshedValue =
+      formBody && value.edgeReferences
+        ? {
+            ...value,
+            edgeReferences: value.edgeHashes.flatMap((hash, index) => {
+              const stale = value.edgeReferences?.[index];
+              // The form carries hashes only; re-resolve by hash against the
+              // current topology. Fail-closed on ambiguity inside the helper.
+              const refreshed = refreshEdgeReferencesForCommit(formBody, [
+                {
+                  topologyId: undefined,
+                  hash,
+                  ...(stale ? { reference: stale } : {})
+                }
+              ])[0];
+              return refreshed?.kind === 'edge' ? [refreshed] : stale ? [stale] : [];
+            })
+          }
+        : value;
+    const command = edgeModifierCommand(feature, kind, refreshedValue);
     const bodyId =
       feature?.bodyId ??
       ('ids' in command.payload ? command.payload.ids?.bodyId : undefined);
@@ -4503,9 +4533,27 @@ export function App() {
     };
   }, [cloudProjectIds, doc?.projectId, session]);
 
+  // K05 on-demand boolean probe: sticky per open document, cleared on
+  // project switch. A face/edge/vertex pick on B — or a command started on
+  // B — demands lineage for B, so the next rebuild probes its producing
+  // boolean. Minimal App plumbing by design (other PRs edit this file):
+  // the sticky set lives in `useLineageDemand`, the sync carries it like
+  // `analysis`, and it never enters the document.
+  const lineageDemandSelections: TopologySelection[] = useMemo(
+    () => [...(selectedTopology ? [selectedTopology] : []), ...selectedEdges],
+    [selectedTopology, selectedEdges]
+  );
+  const { demand: lineageDemand } = useLineageDemand({
+    projectId: doc?.projectId,
+    selections: lineageDemandSelections,
+    interaction
+  });
   useEffect(() => {
-    geometry.sync(doc);
-  }, [doc]);
+    geometry.sync(doc, lineageDemand);
+    // `geometry` is stable across renders; re-sync when the demanded set
+    // grows so the probe runs without waiting for the next edit.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [doc, lineageDemand]);
 
   const features = useMemo<FeatureNode[]>(
     () => (doc ? listFeaturesInOrder(doc) : []),
@@ -13791,8 +13839,16 @@ export function App() {
     const edgeHashes = edges
       .map((edge) => edge.hash)
       .filter((hash): hash is number => hash !== undefined);
-    const edgeReferences = edges.flatMap((edge) =>
-      edge.reference?.kind === 'edge' ? [edge.reference] : []
+    // K05 on-demand probe: a pick made before the demanded rebuild arrives
+    // carries a hash-only reference. Re-read the CURRENT published topology
+    // at commit time by hash/topology id; fail closed to the stale
+    // reference when the name is not unambiguous.
+    const currentBody = bodyId
+      ? (representations[bodyId] ?? renderedRepresentations[bodyId])
+      : undefined;
+    const refreshed = refreshEdgeReferencesForCommit(currentBody, edges);
+    const edgeReferences = refreshed.flatMap((reference) =>
+      reference?.kind === 'edge' ? [reference] : []
     );
     if (!bodyId || edgeHashes.length === 0) {
       return null;

@@ -68,23 +68,47 @@ function respawnBudget(phase: GeometryWorkerPhase): number | null {
 }
 
 /**
- * Shared posting discipline for broadcast syncs: dedupe per project/version so
- * a rebuild storm cannot loop, and record the key so a respawn can tell what
- * the replacement worker still owes. Every post also re-arms the watchdog.
+ * Shared posting discipline for broadcast syncs: dedupe per project/version
+ * (+ lineage demand) so a rebuild storm cannot loop, and record the key so
+ * a respawn can tell what the replacement worker still owes. Every post
+ * also re-arms the watchdog. Lineage demand is UI state that forces a
+ * boolean probe; it rides the sync request like `analysis` and never enters
+ * the document.
  */
+export function lineageDemandSyncKey(
+  demand: readonly BodyId[] | ReadonlySet<BodyId> | undefined
+): string {
+  if (!demand) {
+    return '';
+  }
+  const ids = Array.isArray(demand) ? demand : [...demand];
+  const normalized = [...new Set(ids)].sort();
+  return normalized.length > 0 ? `:demand:${JSON.stringify(normalized)}` : '';
+}
+
 function postSync(
   worker: Worker,
   document: ProjectDocument,
   lastSyncedKey: { current: string | null },
-  armed: { current: boolean }
+  armed: { current: boolean },
+  lineageDemand?: readonly BodyId[] | ReadonlySet<BodyId>
 ): void {
-  const syncKey = `${document.projectId}:${document.version}`;
+  const demandKey = lineageDemandSyncKey(lineageDemand);
+  const syncKey = `${document.projectId}:${document.version}${demandKey}`;
   if (lastSyncedKey.current === syncKey) {
     return;
   }
   lastSyncedKey.current = syncKey;
   armed.current = true;
-  worker.postMessage({ type: 'sync', document: documentForWorker(document) });
+  worker.postMessage({
+    type: 'sync',
+    document: documentForWorker(document),
+    ...(demandKey
+      ? {
+          lineageDemand: [...(lineageDemand instanceof Set ? lineageDemand : new Set(lineageDemand ?? []))].sort()
+        }
+      : {})
+  });
 }
 
 /** Cancellation rejection, named so callers can tell it from a failure. */
@@ -114,11 +138,16 @@ export interface GeometryWorkerApi {
   state: GeometryWorkerState;
   isReadyFor(document: ProjectDocument | null): boolean;
   /**
-   * Posts a rebuild for the live document, at most once per model version.
-   * Derived-state commits keep the same version, which is what breaks the
-   * otherwise infinite post -> derive -> commit -> post cycle.
+   * Posts a rebuild for the live document, at most once per model version
+   * (+ lineage demand). Derived-state commits keep the same version, which
+   * is what breaks the otherwise infinite post -> derive -> commit -> post
+   * cycle. `lineageDemand` is transient UI state: body ids whose producing
+   * booleans must probe. It never enters the document.
    */
-  sync(document: ProjectDocument | null): void;
+  sync(
+    document: ProjectDocument | null,
+    lineageDemand?: readonly BodyId[] | ReadonlySet<BodyId>
+  ): void;
   /**
    * One-off exact rebuild resolved by request id — used for seeding demo
    * documents, whose finishing features need exact edge ordinals before the
@@ -126,7 +155,8 @@ export interface GeometryWorkerApi {
    */
   syncOnce(
     document: ProjectDocument,
-    analysis?: EditAnalysisRequest
+    analysis?: EditAnalysisRequest,
+    lineageDemand?: readonly BodyId[] | ReadonlySet<BodyId>
   ): Promise<DerivedState>;
   /**
    * `onState` receives this request's own lifecycle states (kernel load,
@@ -247,6 +277,7 @@ export function useGeometryWorker(host: GeometryWorkerHost): GeometryWorkerApi {
     new Map<string, (state: GeometryWorkerState) => void>()
   );
   const lastSyncedKey = useRef<string | null>(null);
+  const lastDemandRef = useRef<readonly BodyId[] | null>(null);
   const firstReadyMarkedRef = useRef(false);
   // True while work has been posted whose terminal state has not arrived.
   // An unarmed worker is legitimately idle and must never be judged silent
@@ -345,7 +376,13 @@ export function useGeometryWorker(host: GeometryWorkerHost): GeometryWorkerApi {
         const manager = hostRef.current.manager();
         const replacement = workerRef.current;
         if (manager && replacement) {
-          postSync(replacement, manager.document, lastSyncedKey, armedRef);
+          postSync(
+            replacement,
+            manager.document,
+            lastSyncedKey,
+            armedRef,
+            lastDemandRef.current ?? undefined
+          );
         }
       } else {
         armedRef.current = false;
@@ -681,18 +718,42 @@ export function useGeometryWorker(host: GeometryWorkerHost): GeometryWorkerApi {
         state.version === document.version
       );
     },
-    sync(document) {
+    sync(document, lineageDemand) {
       const worker = workerRef.current;
       if (!document || !worker) {
         return;
       }
-      postSync(worker, document, lastSyncedKey, armedRef);
+      if (lineageDemand !== undefined) {
+        const normalized =
+          lineageDemand instanceof Set ? [...lineageDemand] : [...lineageDemand];
+        lastDemandRef.current = [...new Set(normalized)].sort() as BodyId[];
+      }
+      postSync(
+        worker,
+        document,
+        lastSyncedKey,
+        armedRef,
+        lastDemandRef.current ?? undefined
+      );
     },
-    syncOnce(document, analysis) {
+    syncOnce(document, analysis, lineageDemand) {
+      // Sticky demand rides every one-off rebuild for the open document too:
+      // the broadcast `sync` owns the sticky set, and a preview/preflight
+      // without it would otherwise serve a carrier-only result for a body
+      // the viewport already demanded.
+      const sticky: readonly BodyId[] = lastDemandRef.current ?? [];
+      const explicit: readonly BodyId[] =
+        lineageDemand === undefined
+          ? []
+          : lineageDemand instanceof Set
+            ? [...lineageDemand]
+            : [...lineageDemand];
+      const merged: BodyId[] = [...new Set<BodyId>([...sticky, ...explicit])].sort();
       const posted = postRequest(syncRequests.current, {
         type: 'sync',
         document: documentForWorker(document),
-        ...(analysis ? { analysis } : {})
+        ...(analysis ? { analysis } : {}),
+        ...(merged.length > 0 ? { lineageDemand: merged } : {})
       });
       return posted.ok
         ? posted.promise

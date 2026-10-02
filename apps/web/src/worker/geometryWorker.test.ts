@@ -352,7 +352,8 @@ describe('geometry worker rebuild coordination', () => {
       expect.anything(),
       expect.any(Function),
       undefined,
-      analysis
+      analysis,
+      undefined
     );
   });
 

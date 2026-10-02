@@ -36,7 +36,8 @@ import type {
 import { bezierProfileEdgesEnabled } from './profile-bezier-edges';
 import {
   booleanEvolutionProbeNeeded,
-  isBooleanEvolutionProbeEligible
+  isBooleanEvolutionProbeEligible,
+  type BooleanLineageDemand
 } from './exact-boolean-evolution';
 import type { RemusKernel } from './remus-runtime';
 
@@ -146,7 +147,8 @@ export function historyFeatureDigest(
   document: ProjectDocument,
   feature: FeatureNode,
   index: number,
-  scope: Record<string, number> = getParameterScope(document).scope
+  scope: Record<string, number> = getParameterScope(document).scope,
+  lineageDemand?: BooleanLineageDemand
 ): string {
   const sketchIds = new Set<string>();
   collectSketchIds(feature.data, sketchIds);
@@ -184,8 +186,17 @@ export function historyFeatureDigest(
     // features AFTER it, so appending a referencing feature changes this
     // boolean's own digest and the prefix cache rebuilds it with the probe
     // instead of serving the carrier-only snapshot to the new consumer.
+    // A transient lineage demand flips the same bit: a cached carrier-only
+    // checkpoint is never reused once its body (or a descendant) is demanded,
+    // and the rebuild re-runs only that boolean and what follows it.
     ...(isBooleanEvolutionProbeEligible(feature)
-      ? { booleanEvolutionProbe: booleanEvolutionProbeNeeded(document, feature) }
+      ? {
+          booleanEvolutionProbe: booleanEvolutionProbeNeeded(
+            document,
+            feature,
+            lineageDemand
+          )
+        }
       : {})
   });
 }

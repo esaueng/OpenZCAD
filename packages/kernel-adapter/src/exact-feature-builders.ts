@@ -1530,7 +1530,7 @@ function buildBooleanFeature(
     lineage: deriveBooleanLineage({
       evidence:
         evolutionProbe !== null &&
-        booleanEvolutionProbeNeeded(document, feature)
+        booleanEvolutionProbeNeeded(document, feature, ctx.lineageDemand)
           ? probeBooleanEntityEvolution({
               kernel,
               operation: evolutionProbe.operation,

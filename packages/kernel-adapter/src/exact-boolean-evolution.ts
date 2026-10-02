@@ -479,6 +479,44 @@ function persistedReferenceNamesProducer(
 }
 
 /**
+ * Transient, non-persisted lineage demand: body ids whose producing booleans
+ * must probe. UI state only — never stored on the document, never part of
+ * the canonical content, never synced. Sticky per open document on the
+ * caller side; this module only reads the set it is handed.
+ */
+export type BooleanLineageDemand =
+  | ReadonlySet<BodyId>
+  | readonly BodyId[]
+  | null
+  | undefined;
+
+/** Sorted, deduplicated demand as a set; unhashable input yields empty. */
+export function normalizeBooleanLineageDemand(
+  demand: BooleanLineageDemand
+): ReadonlySet<BodyId> {
+  if (!demand) {
+    return new Set();
+  }
+  const ids = Array.isArray(demand) ? demand : [...demand];
+  const normalized = new Set<BodyId>();
+  for (const id of ids) {
+    if (typeof id === 'string' && id.length > 0) {
+      normalized.add(id as BodyId);
+    }
+  }
+  return normalized;
+}
+
+/** Stable cache/digest key for a demand set: sorted JSON, `[]` when empty. */
+export function booleanLineageDemandKey(demand: BooleanLineageDemand): string {
+  const normalized = normalizeBooleanLineageDemand(demand);
+  if (normalized.size === 0) {
+    return '[]';
+  }
+  return JSON.stringify([...normalized].sort());
+}
+
+/**
  * Whether the entity-evolution probe for this boolean feature may be
  * skipped.
  *
@@ -492,6 +530,11 @@ function persistedReferenceNamesProducer(
  * extends the descendant closure without forcing the probe; the probe runs
  * only where the chain ends in an explicit consumer.
  *
+ * A transient lineage demand forces the probe when the boolean's own result
+ * body, or any body descended from it through the same descendant chain the
+ * gate already tracks, is demanded. Idle rebuilds still skip; a demanded
+ * rebuild probes only that boolean and what follows it (via the digest).
+ *
  * Fail-closed: an unlisted feature or node kind, a missing body, a feature
  * absent from the order, or a suppressed downstream selection all run the
  * probe. Suppressed features are treated as live because unsuppressing one
@@ -501,7 +544,8 @@ function persistedReferenceNamesProducer(
  */
 export function booleanEvolutionProbeNeeded(
   document: ProjectDocument,
-  feature: FeatureNode
+  feature: FeatureNode,
+  demand?: BooleanLineageDemand
 ): boolean {
   if (!isBooleanEvolutionProbeEligible(feature)) {
     return false;
@@ -552,6 +596,14 @@ export function booleanEvolutionProbeNeeded(
       descendants.has(node.planeRef.bodyId)
     ) {
       return true;
+    }
+  }
+  const demanded = normalizeBooleanLineageDemand(demand);
+  if (demanded.size > 0) {
+    for (const bodyId of demanded) {
+      if (descendants.has(bodyId)) {
+        return true;
+      }
     }
   }
   return false;

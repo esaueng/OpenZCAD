@@ -54,6 +54,13 @@ export type GeometryWorkerRequest =
       document: ProjectDocument;
       requestId?: string;
       analysis?: EditAnalysisRequest;
+      /**
+       * Transient lineage demand: body ids whose producing booleans must
+       * probe. UI state only — never part of the document, never part of
+       * `canonicalProjectContentKey`, only of the rebuild cache key and the
+       * adapter's history digest.
+       */
+      lineageDemand?: BodyId[];
     }
   | {
       type: 'export';
@@ -670,11 +677,15 @@ async function execute(job: GeometryWorkerJob): Promise<void> {
     const contentKey = isGeometryEmpty(document)
       ? null
       : canonicalProjectContentKey(document);
+    const lineageDemandKey =
+      request.type === 'sync' && request.lineageDemand?.length
+        ? `:demand:${JSON.stringify([...new Set(request.lineageDemand)].sort())}`
+        : '';
     const derived =
       contentKey === null
         ? emptyDerived(document)
         : await rebuildCache.get(
-            `${contentKey}${request.type === 'sync' && request.analysis ? `:analysis:${JSON.stringify(request.analysis)}` : ''}`,
+            `${contentKey}${request.type === 'sync' && request.analysis ? `:analysis:${JSON.stringify(request.analysis)}` : ''}${lineageDemandKey}`,
             async () => {
               // 'failed' retries on the next load call, so it counts as a
               // loading state here too.
@@ -710,7 +721,8 @@ async function execute(job: GeometryWorkerJob): Promise<void> {
                         derived: projection
                       });
                     },
-                request.type === 'sync' ? request.analysis : undefined
+                request.type === 'sync' ? request.analysis : undefined,
+                request.type === 'sync' ? request.lineageDemand : undefined
               );
               lastExactSyncKey = contentKey;
               lastExactSyncEpoch = exact.currentMassPropertiesEpoch();

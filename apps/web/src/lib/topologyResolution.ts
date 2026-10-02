@@ -193,3 +193,75 @@ export function resolveEdge(
   }
   return resolve(body.topology?.edges, identity, 'edge');
 }
+
+/**
+ * Commit-time reference refresh (K05 on-demand probe).
+ *
+ * A pick made before the demanded rebuild arrives carries a hash-only
+ * identity while the current topology may already publish a
+ * `boolean.edge.*` / carrier name for the same sub-shape. Commits must read
+ * the name from the CURRENT published topology at commit time,
+ * re-resolving by the selection's hash/topology id.
+ *
+ * Fail-closed: when the current topology does not name the sub-shape
+ * unambiguously (zero or several matches, or the match carries no lineage
+ * name), the stale reference is returned unchanged — exactly what is
+ * persisted today (hash-only). Never guesses, never rebinds by proximity.
+ */
+export function refreshEdgeReferenceForCommit(
+  body: BodyRepresentation | undefined,
+  selection: Pick<TopologySelection, 'topologyId' | 'hash' | 'reference'>
+): TopologyReferenceV5 | undefined {
+  const stale = selection.reference;
+  const lookup = resolveEdge(body, selection);
+  if (!lookup.ok) {
+    return stale;
+  }
+  const current = lookup.entry.reference;
+  if (!current || current.kind !== 'edge') {
+    return stale;
+  }
+  // The hash rung proves the geometry is where it was; a lineage-only move
+  // (via === 'lineage') still names the same feature, which is what a
+  // persisted v5 reference needs. Either way the CURRENT name wins when it
+  // is unambiguous — `resolve` already failed closed on ambiguity.
+  if (!current.lineageName) {
+    return stale;
+  }
+  return current;
+}
+
+/** Face half of {@link refreshEdgeReferenceForCommit}. */
+export function refreshFaceReferenceForCommit(
+  body: BodyRepresentation | undefined,
+  selection: Pick<TopologySelection, 'topologyId' | 'hash' | 'reference'>
+): TopologyReferenceV5 | undefined {
+  const stale = selection.reference;
+  const lookup = resolveFace(body, selection);
+  if (!lookup.ok) {
+    return stale;
+  }
+  const current = lookup.entry.reference;
+  if (!current || current.kind !== 'face') {
+    return stale;
+  }
+  if (!current.lineageName) {
+    return stale;
+  }
+  return current;
+}
+
+/**
+ * Refresh a whole edge pick list for a fillet/chamfer commit. Hashes are
+ * preserved verbatim; only the references are re-read from the current
+ * topology. Fail-closed per entry: an unresolvable edge keeps its stale
+ * reference (usually hash-only).
+ */
+export function refreshEdgeReferencesForCommit(
+  body: BodyRepresentation | undefined,
+  selections: readonly Pick<TopologySelection, 'topologyId' | 'hash' | 'reference'>[]
+): (TopologyReferenceV5 | undefined)[] {
+  return selections.map((selection) =>
+    refreshEdgeReferenceForCommit(body, selection)
+  );
+}

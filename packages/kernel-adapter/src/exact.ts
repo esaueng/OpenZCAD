@@ -175,6 +175,12 @@ import {
 } from './exact-history-cache';
 import { PrimitiveBuildCache } from './exact-primitive-cache';
 export type { RebuildCacheEvent };
+export {
+  booleanEvolutionProbeNeeded,
+  booleanLineageDemandKey,
+  normalizeBooleanLineageDemand,
+  type BooleanLineageDemand
+} from './exact-boolean-evolution';
 import { readBodyMassProperties } from './body-properties';
 import {
   inspectTriangleMeshClosure,
@@ -510,7 +516,8 @@ export interface ExactKernelAdapter {
     document: ProjectDocument,
     onProgress?: RebuildProgressListener,
     onProjection?: (derived: DerivedState) => void,
-    analysis?: EditAnalysisRequest
+    analysis?: EditAnalysisRequest,
+    lineageDemand?: readonly BodyId[] | ReadonlySet<BodyId>
   ): Promise<DerivedState>;
   /** Epoch of the most recent live sync, or null after its handles were retired. */
   currentMassPropertiesEpoch(): number | null;
@@ -996,7 +1003,8 @@ export class RemusKernelAdapter implements ExactKernelAdapter {
     importSources: ReadonlyMap<string, Uint8Array>,
     pinnedImports: ReadonlySet<string>,
     onProgress?: RebuildProgressListener,
-    onProjection?: (derived: DerivedState) => void
+    onProjection?: (derived: DerivedState) => void,
+    lineageDemand?: readonly BodyId[] | ReadonlySet<BodyId>
   ): {
     kernel: RemusKernel;
     build: ExactBuildResult;
@@ -1024,9 +1032,21 @@ export class RemusKernelAdapter implements ExactKernelAdapter {
     const scope = cachingEnabled
       ? getParameterScope(document).scope
       : undefined;
+    const normalizedDemand =
+      lineageDemand === undefined
+        ? undefined
+        : lineageDemand instanceof Set
+          ? lineageDemand
+          : new Set(lineageDemand);
     const digests = cachingEnabled
       ? features.map((feature, index) =>
-          historyFeatureDigest(document, feature, index, scope)
+          historyFeatureDigest(
+            document,
+            feature,
+            index,
+            scope,
+            normalizedDemand
+          )
         )
       : [];
 
@@ -1284,7 +1304,8 @@ export class RemusKernelAdapter implements ExactKernelAdapter {
                   result
                 )
             }
-          : undefined
+          : undefined,
+        normalizedDemand
       );
     } catch (error) {
       // All callers (including export and recognition) must abandon both
@@ -1824,13 +1845,16 @@ export class RemusKernelAdapter implements ExactKernelAdapter {
     document: ProjectDocument,
     onProgress?: RebuildProgressListener,
     onProjection?: (derived: DerivedState) => void,
-    analysis?: EditAnalysisRequest
+    analysis?: EditAnalysisRequest,
+    lineageDemand?: readonly BodyId[] | ReadonlySet<BodyId>
   ): Promise<DerivedState> {
     return this.syncMeasuredDocument(
       document,
       onProgress,
       onProjection,
-      analysis
+      analysis,
+      true,
+      lineageDemand
     );
   }
 
@@ -1839,7 +1863,8 @@ export class RemusKernelAdapter implements ExactKernelAdapter {
     onProgress?: RebuildProgressListener,
     onProjection?: (derived: DerivedState) => void,
     analysis?: EditAnalysisRequest,
-    allowRecovery = true
+    allowRecovery = true,
+    lineageDemand?: readonly BodyId[] | ReadonlySet<BodyId>
   ): Promise<DerivedState> {
     if (
       analysis &&
@@ -1880,7 +1905,8 @@ export class RemusKernelAdapter implements ExactKernelAdapter {
         sources,
         pinned,
         onProgress,
-        onProjection
+        onProjection,
+        lineageDemand
       );
       historyDone();
       const bodies = listNodesByKind(document, 'body');
@@ -2181,7 +2207,8 @@ export class RemusKernelAdapter implements ExactKernelAdapter {
           onProgress,
           onProjection,
           analysis,
-          false
+          false,
+          lineageDemand
         );
       }
       throw error;
