@@ -1460,11 +1460,11 @@ test('preflights and splits a box into two live half bodies', async ({
     .getByRole('group', { name: 'Plane origin' })
     .getByLabel('X')
     .fill('5');
-  await page.getByRole('button', { name: 'Check exact result' }).click();
-  await expect(
-    page.getByRole('status').filter({ hasText: 'Exact preflight passed' })
-  ).toBeVisible({ timeout: 20_000 });
+  // One press checks the exact result and, when it builds, commits it.
   await page.getByRole('button', { name: 'Create split body' }).click();
+  await expect(
+    page.getByRole('button', { name: /^Checking exact result/ })
+  ).toHaveCount(0, { timeout: 20_000 });
 
   await expect(
     page.locator('.feature-row-main', { hasText: 'Split' })
@@ -1544,11 +1544,11 @@ test('preflights and drills a through hole into the top face', async ({
   await expect(
     page.getByRole('textbox', { name: 'Diameter', exact: true })
   ).toHaveValue('5');
-  await page.getByRole('button', { name: 'Check exact result' }).click();
-  await expect(
-    page.getByRole('status').filter({ hasText: 'Exact preflight passed' })
-  ).toBeVisible({ timeout: 20_000 });
+  // One press checks the exact result and, when it builds, commits it.
   await page.getByRole('button', { name: 'Create hole' }).click();
+  await expect(
+    page.getByRole('button', { name: /^Checking exact result/ })
+  ).toHaveCount(0, { timeout: 20_000 });
 
   await expect(
     page.locator('.feature-row-main', { hasText: 'Hole' })
@@ -1573,11 +1573,11 @@ test('preflights and drills a through hole into the top face', async ({
     'true'
   );
   await page.getByRole('textbox', { name: 'Diameter', exact: true }).fill('8');
-  await page.getByRole('button', { name: 'Check exact result' }).click();
-  await expect(
-    page.getByRole('status').filter({ hasText: 'Exact preflight passed' })
-  ).toBeVisible({ timeout: 20_000 });
+  // One press checks the exact result and, when it builds, commits it.
   await page.getByRole('button', { name: 'Apply hole' }).click();
+  await expect(
+    page.getByRole('button', { name: /^Checking exact result/ })
+  ).toHaveCount(0, { timeout: 20_000 });
   await expect(page.getByRole('contentinfo')).toContainText('Edited Hole.');
   await expect(page.locator('.feature-row', { hasText: /^Hole/ })).toHaveCount(
     1
@@ -1611,11 +1611,11 @@ test('preflights and creates an exact open-top shell', async ({ page }) => {
   await page.getByRole('button', { name: /^Shell/ }).click();
   const openings = page.getByRole('group', { name: 'Opening faces' });
   await openings.getByRole('button', { name: /Top face/ }).click();
-  await page.getByRole('button', { name: 'Check exact result' }).click();
-  await expect(
-    page.getByRole('status').filter({ hasText: 'Exact preflight passed' })
-  ).toBeVisible({ timeout: 20_000 });
+  // One press checks the exact result and, when it builds, commits it.
   await page.getByRole('button', { name: 'Create shell' }).click();
+  await expect(
+    page.getByRole('button', { name: /^Checking exact result/ })
+  ).toHaveCount(0, { timeout: 20_000 });
 
   await expect(
     page.locator('.feature-row-main', { hasText: 'Shell' })
@@ -1640,11 +1640,11 @@ test('preflights and creates an exact open-top shell', async ({ page }) => {
     openings.getByRole('button', { name: /Top face/ })
   ).toHaveAttribute('aria-pressed', 'true');
   await thickness.fill('3');
-  await page.getByRole('button', { name: 'Check exact result' }).click();
-  await expect(
-    page.getByRole('status').filter({ hasText: 'Exact preflight passed' })
-  ).toBeVisible({ timeout: 20_000 });
+  // One press checks the exact result and, when it builds, commits it.
   await page.getByRole('button', { name: 'Apply shell' }).click();
+  await expect(
+    page.getByRole('button', { name: /^Checking exact result/ })
+  ).toHaveCount(0, { timeout: 20_000 });
   await expect(page.getByRole('contentinfo')).toContainText('Edited Shell.');
   await expect(page.locator('.feature-row', { hasText: /^Shell/ })).toHaveCount(
     1
