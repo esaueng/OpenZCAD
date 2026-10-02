@@ -1401,27 +1401,29 @@ export function ModelingOperationsForm({
           {validation.reason}
         </p>
       ) : null}
-      <div className="form-actions">
-        <button
-          type="submit"
-          className="primary"
-          disabled={
-            !canCheck ||
-            effectivePreflight.status === 'pending' ||
-            unsupportedReason !== undefined
-          }
-        >
-          {buttonLabel}
-        </button>
-        {onCancel ? (
-          <button type="button" className="secondary" onClick={onCancel}>
-            Cancel
+      <div className="form-footer">
+        <div className="form-actions">
+          <button
+            type="submit"
+            className="primary"
+            disabled={
+              !canCheck ||
+              effectivePreflight.status === 'pending' ||
+              unsupportedReason !== undefined
+            }
+          >
+            {buttonLabel}
           </button>
-        ) : null}
+          {onCancel ? (
+            <button type="button" className="secondary" onClick={onCancel}>
+              Cancel
+            </button>
+          ) : null}
+        </div>
+        {/* Below the actions on purpose: it appears in answer to the button,
+            and above it the button moved under the pointer that pressed it. */}
+        {positionRefusal ? null : preflightMessage(effectivePreflight, editing)}
       </div>
-      {/* Below the actions on purpose: it appears in answer to the button,
-          and above it the button moved under the pointer that pressed it. */}
-      {positionRefusal ? null : preflightMessage(effectivePreflight, editing)}
     </form>
   );
 }
