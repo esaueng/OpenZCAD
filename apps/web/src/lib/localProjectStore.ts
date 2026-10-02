@@ -22,7 +22,12 @@ import {
   LOCAL_PROJECT_DOCUMENT_STORE
 } from './localProjectSchema';
 
-const BACKUP_STORE_NAME = 'projectBackupFiles';
+// The store names and transaction helpers marked `export` below exist for
+// `projectIdentityTransfer.ts`, which holds the account identity transfer.
+// That rare path is loaded on demand so it stays out of the entry chunk.
+export const BACKUP_STORE_NAME = 'projectBackupFiles';
+export const ALIAS_STORE_NAME = 'projectIdentityAliases';
+export const ACCOUNT_IDENTITY_STORE_NAME = 'accountProjectIdentities';
 
 const DATABASE_NAME = LOCAL_PROJECT_DATABASE_NAME;
 const STORE_NAME = LOCAL_PROJECT_DOCUMENT_STORE;
@@ -32,7 +37,7 @@ const STORE_NAME = LOCAL_PROJECT_DOCUMENT_STORE;
  * document synced from another device must not drag this device's arrangement
  * along with it.
  */
-const META_STORE_NAME = 'projectMeta';
+export const META_STORE_NAME = 'projectMeta';
 /**
  * The version this device and the account last agreed on, per project. Kept in
  * its own store rather than beside the shelf state: the two answer different
@@ -40,7 +45,7 @@ const META_STORE_NAME = 'projectMeta';
  * the account's copy of the shelf would let one device's baseline travel to
  * another, where it would be a lie.
  */
-const SYNC_STORE_NAME = 'projectSync';
+export const SYNC_STORE_NAME = 'projectSync';
 /**
  * Import source bytes (STEP text today), keyed by content checksum rather than
  * by project: the same uploaded file referenced from two projects is stored
@@ -66,7 +71,7 @@ const CLAIM_STORE_NAME = LOCAL_PROJECT_CLAIM_STORE;
  * (and the machine) down and leave the user unable to reach their own projects.
  * Written while the project is open, where the meshes are already in memory.
  */
-const THUMBNAIL_STORE_NAME = 'projectThumbnails';
+export const THUMBNAIL_STORE_NAME = 'projectThumbnails';
 /**
  * The handful of document fields the shelf actually draws, projected out of
  * each document when it is saved.
@@ -84,7 +89,7 @@ const THUMBNAIL_STORE_NAME = 'projectThumbnails';
  * document projection into a record that travels would make it a lie on the
  * other side, exactly as it would for the sync baseline.
  */
-const SUMMARY_STORE_NAME = 'projectSummaries';
+export const SUMMARY_STORE_NAME = 'projectSummaries';
 /**
  * Measurements taken in View mode, per project.
  *
@@ -100,7 +105,7 @@ const SUMMARY_STORE_NAME = 'projectSummaries';
  * shelf state is this device's arrangement and gets merged with the account's
  * copy, while this is work the user did to the part.
  */
-const MEASUREMENT_STORE_NAME = 'projectMeasurements';
+export const MEASUREMENT_STORE_NAME = 'projectMeasurements';
 /**
  * Save-state documents, so restoring one does not require the account.
  *
@@ -179,7 +184,7 @@ interface ProjectSyncRecord {
  * metadata is copied from that checkpoint so the row can describe itself
  * without opening the document it holds.
  */
-interface ProjectCheckpointDocumentRecord {
+export interface ProjectCheckpointDocumentRecord {
   projectId: string;
   checkpointId: string;
   revisionId: RevisionId;
@@ -207,7 +212,26 @@ export function isLocalStorageBlockedError(
   return error instanceof LocalStorageBlockedError;
 }
 
-function createExpectedStores(database: IDBDatabase): void {
+function createExpectedStores(
+  database: IDBDatabase,
+  upgrade?: IDBTransaction
+): void {
+  if (!database.objectStoreNames.contains(ACCOUNT_IDENTITY_STORE_NAME)) {
+    const identities = database.createObjectStore(ACCOUNT_IDENTITY_STORE_NAME, {
+      keyPath: 'projectId'
+    });
+    // Existing sync baselines identify legacy cloud copies even after logout
+    // clears those baselines. This reads small metadata records, not models.
+    if (upgrade && database.objectStoreNames.contains(SYNC_STORE_NAME)) {
+      const keys = upgrade.objectStore(SYNC_STORE_NAME).getAllKeys();
+      keys.onsuccess = () => {
+        for (const projectId of keys.result) identities.put({ projectId });
+      };
+    }
+  }
+  if (!database.objectStoreNames.contains(ALIAS_STORE_NAME)) {
+    database.createObjectStore(ALIAS_STORE_NAME, { keyPath: 'projectId' });
+  }
   if (!database.objectStoreNames.contains(BACKUP_STORE_NAME))
     database.createObjectStore(BACKUP_STORE_NAME);
   if (!database.objectStoreNames.contains(STORE_NAME)) {
@@ -334,7 +358,8 @@ function ensureDatabaseSchema(): Promise<void> {
         }
       }, DATABASE_BLOCKED_TIMEOUT_MS);
     };
-    request.onupgradeneeded = () => createExpectedStores(request.result);
+    request.onupgradeneeded = () =>
+      createExpectedStores(request.result, request.transaction ?? undefined);
     request.onsuccess = () => {
       const database = request.result;
       database.onversionchange = () => database.close();
@@ -413,7 +438,7 @@ export function ensureLocalProjectStorage(): Promise<LocalStorageReadiness> {
 }
 
 /** Settles when one request inside an open transaction has its result. */
-function settled<T>(request: IDBRequest<T>): Promise<T> {
+export function settled<T>(request: IDBRequest<T>): Promise<T> {
   return new Promise((resolve, reject) => {
     request.onsuccess = () => resolve(request.result);
     request.onerror = () =>
@@ -446,7 +471,7 @@ function settled<T>(request: IDBRequest<T>): Promise<T> {
  *   per transaction is one leaked per autosave and one per shelf read, and it
  *   stays invisible until some future schema version cannot upgrade past it.
  */
-function scopedTransaction<T>(
+export function scopedTransaction<T>(
   mode: IDBTransactionMode,
   storeNames: readonly string[],
   action: (store: (name: string) => IDBObjectStore) => Promise<T>
@@ -821,6 +846,61 @@ export function summarizeProjectDocument(
   };
 }
 
+/** An older tab must reopen the moved project before it can write again. */
+export class LocalProjectIdentityChangedError extends Error {
+  constructor(readonly projectId: string) {
+    super(
+      'This project moved to its account identity. Reopen it before saving.'
+    );
+    this.name = 'LocalProjectIdentityChangedError';
+  }
+}
+
+export async function resolvedProjectId(
+  aliases: IDBObjectStore,
+  projectId: string
+): Promise<string> {
+  const seen = new Set<string>();
+  while (!seen.has(projectId)) {
+    seen.add(projectId);
+    const alias = (await settled(aliases.get(projectId))) as
+      { projectId: string; targetProjectId: string } | undefined;
+    if (!alias) return projectId;
+    projectId = alias.targetProjectId;
+  }
+  throw new Error('Stored project identities contain a cycle.');
+}
+
+async function assertCurrentProjectId(
+  aliases: IDBObjectStore,
+  projectId: string
+): Promise<void> {
+  const resolved = await resolvedProjectId(aliases, projectId);
+  if (resolved !== projectId)
+    throw new LocalProjectIdentityChangedError(resolved);
+}
+
+function projectTransaction<T>(
+  mode: IDBTransactionMode,
+  projectId: string,
+  storeName: string,
+  action: (store: IDBObjectStore, projectId: string) => IDBRequest<T>
+): Promise<T> {
+  return scopedTransaction(
+    mode,
+    [storeName, ALIAS_STORE_NAME],
+    async (store) => {
+      const resolved = await resolvedProjectId(
+        store(ALIAS_STORE_NAME),
+        projectId
+      );
+      if (mode === 'readwrite' && resolved !== projectId)
+        throw new LocalProjectIdentityChangedError(resolved);
+      return settled(action(store(storeName), resolved));
+    }
+  );
+}
+
 /**
  * Stores a document and refreshes its shelf projection in the same
  * transaction. Split across two, a crash between them leaves the start screen
@@ -831,8 +911,9 @@ export function summarizeProjectDocument(
 export function saveLocalProject(document: ProjectDocument): Promise<void> {
   return scopedTransaction(
     'readwrite',
-    [STORE_NAME, SUMMARY_STORE_NAME, CHECKPOINT_STORE_NAME],
+    [STORE_NAME, SUMMARY_STORE_NAME, CHECKPOINT_STORE_NAME, ALIAS_STORE_NAME],
     async (store) => {
+      await assertCurrentProjectId(store(ALIAS_STORE_NAME), document.projectId);
       store(STORE_NAME).put(document);
       store(SUMMARY_STORE_NAME).put(summarizeProjectDocument(document));
       // Inspected here rather than before the transaction opens, so a document
@@ -863,9 +944,13 @@ export function saveLocalSaveStates(
 ): Promise<void> {
   return scopedTransaction(
     'readwrite',
-    [CHECKPOINT_STORE_NAME],
+    [CHECKPOINT_STORE_NAME, ALIAS_STORE_NAME],
     async (store) => {
       for (const document of documents) {
+        await assertCurrentProjectId(
+          store(ALIAS_STORE_NAME),
+          document.projectId
+        );
         const saveState = unstoredSaveState(document);
         if (saveState) {
           await putSaveState(store(CHECKPOINT_STORE_NAME), document, saveState);
@@ -948,7 +1033,7 @@ async function pruneSaveStates(
  * string, so the pair spans exactly this project's rows whichever of the two
  * the second component holds.
  */
-function checkpointKeyRange(projectId: string): IDBKeyRange {
+export function checkpointKeyRange(projectId: string): IDBKeyRange {
   return IDBKeyRange.bound([projectId], [projectId, []]);
 }
 
@@ -964,13 +1049,14 @@ export function loadLocalSaveState(
   projectId: string,
   checkpointId: string
 ): Promise<ProjectDocument | null> {
-  return transaction<ProjectCheckpointDocumentRecord | undefined>(
+  return projectTransaction<ProjectCheckpointDocumentRecord | undefined>(
     'readonly',
-    (store) =>
+    projectId,
+    CHECKPOINT_STORE_NAME,
+    (store, projectId) =>
       store.get([projectId, checkpointId]) as IDBRequest<
         ProjectCheckpointDocumentRecord | undefined
-      >,
-    CHECKPOINT_STORE_NAME
+      >
   ).then((record) => record?.document ?? null);
 }
 
@@ -980,31 +1066,35 @@ export function loadLocalSaveState(
  * other to ask about.
  */
 export function listLocalSaveStateIds(projectId: string): Promise<Set<string>> {
-  return transactionScope(
+  return scopedTransaction(
     'readonly',
+    [CHECKPOINT_STORE_NAME, ALIAS_STORE_NAME],
     async (store) => {
+      const resolved = await resolvedProjectId(
+        store(ALIAS_STORE_NAME),
+        projectId
+      );
       const keys = await settled(
-        store.getAllKeys(checkpointKeyRange(projectId))
+        store(CHECKPOINT_STORE_NAME).getAllKeys(checkpointKeyRange(resolved))
       );
       return new Set(
         keys
           .map((key) => (Array.isArray(key) ? key[1] : undefined))
-          .filter(
-            (checkpointId): checkpointId is string =>
-              typeof checkpointId === 'string'
-          )
+          .filter((id): id is string => typeof id === 'string')
       );
-    },
-    CHECKPOINT_STORE_NAME
+    }
   );
 }
 
 export function loadLocalProject(
   projectId: string
 ): Promise<ProjectDocument | null> {
-  return transaction<ProjectDocument | undefined>(
+  return projectTransaction<ProjectDocument | undefined>(
     'readonly',
-    (store) => store.get(projectId) as IDBRequest<ProjectDocument | undefined>
+    projectId,
+    STORE_NAME,
+    (store, projectId) =>
+      store.get(projectId) as IDBRequest<ProjectDocument | undefined>
   ).then((document) => document ?? null);
 }
 
@@ -1050,10 +1140,8 @@ export function saveLocalProjectOrganization(
     projectId,
     ...(options.mirrorPending ? { mirrorPending: true } : {})
   };
-  return transaction(
-    'readwrite',
-    (store) => store.put(record),
-    META_STORE_NAME
+  return projectTransaction('readwrite', projectId, META_STORE_NAME, (store) =>
+    store.put(record)
   ).then(() => undefined);
 }
 
@@ -1103,10 +1191,11 @@ export function saveProjectThumbnail(
   }
 ): Promise<void> {
   const record: ProjectThumbnailRecord = { projectId, ...thumbnail };
-  return transaction(
+  return projectTransaction(
     'readwrite',
-    (store) => store.put(record),
-    THUMBNAIL_STORE_NAME
+    projectId,
+    THUMBNAIL_STORE_NAME,
+    (store) => store.put(record)
   ).then(() => undefined);
 }
 
@@ -1118,11 +1207,12 @@ export function saveProjectThumbnail(
 export function loadProjectThumbnail(
   projectId: string
 ): Promise<ProjectThumbnailRecord | null> {
-  return transaction<ProjectThumbnailRecord | undefined>(
+  return projectTransaction<ProjectThumbnailRecord | undefined>(
     'readonly',
-    (store) =>
-      store.get(projectId) as IDBRequest<ProjectThumbnailRecord | undefined>,
-    THUMBNAIL_STORE_NAME
+    projectId,
+    THUMBNAIL_STORE_NAME,
+    (store, projectId) =>
+      store.get(projectId) as IDBRequest<ProjectThumbnailRecord | undefined>
   ).then((record) => record ?? null);
 }
 
@@ -1136,10 +1226,11 @@ export function loadProjectThumbnail(
 export function saveProjectMeasurements(
   record: StoredMeasurementRecord
 ): Promise<void> {
-  return transaction(
+  return projectTransaction(
     'readwrite',
-    (store) => store.put(record),
-    MEASUREMENT_STORE_NAME
+    record.projectId,
+    MEASUREMENT_STORE_NAME,
+    (store) => store.put(record)
   ).then(() => undefined);
 }
 
@@ -1154,10 +1245,11 @@ export function saveProjectMeasurements(
 export function loadProjectMeasurements(
   projectId: string
 ): Promise<StoredMeasurementRecord | null> {
-  return transaction<unknown>(
+  return projectTransaction<unknown>(
     'readonly',
-    (store) => store.get(projectId) as IDBRequest<unknown>,
-    MEASUREMENT_STORE_NAME
+    projectId,
+    MEASUREMENT_STORE_NAME,
+    (store, projectId) => store.get(projectId) as IDBRequest<unknown>
   ).then(async (value) => {
     if (value === undefined) {
       return null;
@@ -1187,22 +1279,27 @@ export function saveLastSyncedVersion(
   projectId: string,
   lastSyncedVersion: number
 ): Promise<void> {
-  return transaction(
+  return scopedTransaction(
     'readwrite',
-    (store) => store.put({ projectId, lastSyncedVersion }),
-    SYNC_STORE_NAME
-  ).then(() => undefined);
+    [SYNC_STORE_NAME, ALIAS_STORE_NAME, ACCOUNT_IDENTITY_STORE_NAME],
+    async (store) => {
+      await assertCurrentProjectId(store(ALIAS_STORE_NAME), projectId);
+      store(SYNC_STORE_NAME).put({ projectId, lastSyncedVersion });
+      store(ACCOUNT_IDENTITY_STORE_NAME).put({ projectId });
+    }
+  );
 }
 
 /** Null when this device has no record — which is not the same as zero. */
 export function loadLastSyncedVersion(
   projectId: string
 ): Promise<number | null> {
-  return transaction<ProjectSyncRecord | undefined>(
+  return projectTransaction<ProjectSyncRecord | undefined>(
     'readonly',
-    (store) =>
-      store.get(projectId) as IDBRequest<ProjectSyncRecord | undefined>,
-    SYNC_STORE_NAME
+    projectId,
+    SYNC_STORE_NAME,
+    (store, projectId) =>
+      store.get(projectId) as IDBRequest<ProjectSyncRecord | undefined>
   )
     .then((record) => record?.lastSyncedVersion ?? null)
     .catch(() => null);
@@ -1214,10 +1311,8 @@ export function loadLastSyncedVersion(
  * this device — signing out of an account that held it, say.
  */
 export function clearLastSyncedVersion(projectId: string): Promise<void> {
-  return transaction(
-    'readwrite',
-    (store) => store.delete(projectId),
-    SYNC_STORE_NAME
+  return projectTransaction('readwrite', projectId, SYNC_STORE_NAME, (store) =>
+    store.delete(projectId)
   ).then(() => undefined);
 }
 
@@ -1252,10 +1347,6 @@ export function clearAllLastSyncedVersions(): Promise<void> {
  * for a project that cannot be opened.
  */
 export function deleteLocalProject(projectId: string): Promise<void> {
-  // Every per-project store, in one transaction. A store missing from this
-  // list is not merely untidy: `adoptProjectDocument` reuses a project id, so
-  // an orphaned record would surface under a DIFFERENT project that later
-  // claimed the same id.
   const storeNames = [
     BACKUP_STORE_NAME,
     STORE_NAME,
@@ -1263,20 +1354,17 @@ export function deleteLocalProject(projectId: string): Promise<void> {
     SYNC_STORE_NAME,
     THUMBNAIL_STORE_NAME,
     SUMMARY_STORE_NAME,
-    MEASUREMENT_STORE_NAME
+    MEASUREMENT_STORE_NAME,
+    ACCOUNT_IDENTITY_STORE_NAME
   ];
-  return multiStoreTransaction(
-    [...storeNames, CHECKPOINT_STORE_NAME],
+  return scopedTransaction(
     'readwrite',
-    (stores) => {
-      for (const storeName of storeNames) {
-        stores[storeName]?.delete(projectId);
-      }
-      // Keyed by project *and* checkpoint, so this one takes a range rather
-      // than the bare id — and it matters for the reason above: adoption
-      // reuses project ids, and a left-behind save state would offer one
-      // project's model as another's history.
-      stores[CHECKPOINT_STORE_NAME]?.delete(checkpointKeyRange(projectId));
+    [...storeNames, CHECKPOINT_STORE_NAME, ALIAS_STORE_NAME],
+    async (store) => {
+      await assertCurrentProjectId(store(ALIAS_STORE_NAME), projectId);
+      for (const name of storeNames) store(name).delete(projectId);
+      store(CHECKPOINT_STORE_NAME).delete(checkpointKeyRange(projectId));
+      // Aliases remain as fences: an older tab must never resurrect the removed ID.
     }
   );
 }
@@ -1717,10 +1805,12 @@ export function selectProjectDocument(
 export function loadProjectBackupFiles(
   projectId: string
 ): Promise<BackupFile[]> {
-  return transaction<BackupFile[] | undefined>(
+  return projectTransaction<BackupFile[] | undefined>(
     'readonly',
-    (store) => store.get(projectId) as IDBRequest<BackupFile[] | undefined>,
-    BACKUP_STORE_NAME
+    projectId,
+    BACKUP_STORE_NAME,
+    (store, projectId) =>
+      store.get(projectId) as IDBRequest<BackupFile[] | undefined>
   ).then((files) => files ?? []);
 }
 
@@ -1743,10 +1833,12 @@ export async function saveImportedProject(
       CHECKPOINT_STORE_NAME,
       BLOB_STORE_NAME,
       BACKUP_STORE_NAME,
-      MEASUREMENT_STORE_NAME
+      MEASUREMENT_STORE_NAME,
+      ALIAS_STORE_NAME
     ],
     async (store) => {
       const document = backup.document;
+      await assertCurrentProjectId(store(ALIAS_STORE_NAME), document.projectId);
       if (await settled(store(STORE_NAME).count(document.projectId)))
         throw new Error('Imported project already exists.');
       store(STORE_NAME).put(document);

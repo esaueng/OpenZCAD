@@ -5,6 +5,7 @@ import {
   loadActiveProjectId,
   loadProjectView,
   rememberActiveProject,
+  rekeyWorkspaceProject,
   saveProjectView
 } from './workspaceSession';
 
@@ -101,4 +102,24 @@ describe('workspace session persistence', () => {
     expect(loadProjectView('project-1', storage)).toBeNull();
     expect(loadProjectView('project-2', storage)).toBeNull();
   });
+});
+
+it('moves the active project and saved view without changing the viewport', () => {
+  const storage = new MemoryStorage();
+  rememberActiveProject('device-id', storage);
+  saveProjectView('device-id', view, storage);
+  rekeyWorkspaceProject('device-id', 'account-id', storage);
+  expect(loadActiveProjectId(storage)).toBe('account-id');
+  expect(loadProjectView('account-id', storage)).toEqual(view);
+  expect(loadProjectView('device-id', storage)).toBeNull();
+});
+
+it('retains an existing account view while another account gets its own view', () => {
+  const storage = new MemoryStorage();
+  rememberActiveProject('account-a', storage);
+  saveProjectView('account-a', view, storage);
+  rekeyWorkspaceProject('account-a', 'account-b', storage, true);
+  expect(loadActiveProjectId(storage)).toBe('account-b');
+  expect(loadProjectView('account-a', storage)).toEqual(view);
+  expect(loadProjectView('account-b', storage)).toEqual(view);
 });

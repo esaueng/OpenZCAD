@@ -152,13 +152,19 @@ describe('account storage accounting', () => {
 
   it('answers the storage route with the account totals', async () => {
     const document = createProjectDocument('Routed', toUserId('user_local'));
-    await worker.fetch(
+    const created = await worker.fetch(
       new Request('https://example.com/api/projects', {
         method: 'POST',
-        body: JSON.stringify({ name: document.name, document })
+        body: JSON.stringify({
+          name: document.name,
+          document,
+          adoptionProtocolVersion: 1
+        })
       }),
       env
     );
+
+    expect(created.status).toBe(201);
 
     const response = await worker.fetch(
       new Request('https://example.com/api/account/storage'),

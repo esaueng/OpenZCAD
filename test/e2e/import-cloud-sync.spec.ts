@@ -1,8 +1,14 @@
 import { createHash } from 'node:crypto';
 import { readFileSync } from 'node:fs';
-import { createProjectDocument, importStepBody } from '@openzcad/document-core';
+import {
+  adoptProjectDocument,
+  createProjectDocument,
+  importStepBody,
+  reidentifyProjectDocument
+} from '@openzcad/document-core';
 import {
   toUserId,
+  toProjectId,
   type ProjectDocument,
   type CreateUploadSessionRequest,
   type FinalizeArtifactRequest,
@@ -43,17 +49,82 @@ function backup() {
   };
 }
 
-for (const { failFirstUpload, editDuringUpload } of [
-  { failFirstUpload: false, editDuringUpload: false },
-  { failFirstUpload: true, editDuringUpload: false },
-  { failFirstUpload: false, editDuringUpload: true }
+for (const { failFirstUpload, editDuringUpload, lostAdoptionResponse } of [
+  {
+    failFirstUpload: false,
+    editDuringUpload: false,
+    lostAdoptionResponse: false
+  },
+  {
+    failFirstUpload: true,
+    editDuringUpload: false,
+    lostAdoptionResponse: false
+  },
+  {
+    failFirstUpload: false,
+    editDuringUpload: true,
+    lostAdoptionResponse: false
+  },
+  {
+    failFirstUpload: false,
+    editDuringUpload: false,
+    lostAdoptionResponse: true
+  }
 ])
-  test(`import stays editable and account save includes sources${failFirstUpload ? ' with retry' : editDuringUpload ? ' while editing' : ''}`, async ({
+  test(`import stays editable and account save includes sources${failFirstUpload ? ' with retry' : editDuringUpload ? ' while editing' : lostAdoptionResponse ? ' after an interrupted adoption' : ''}`, async ({
     page
   }, testInfo) => {
     const errors: string[] = [];
     page.on('pageerror', (error) => errors.push(error.message));
     await stubApi(page, { collaborationRole: 'owner' });
+    const accountProjectId = toProjectId('proj_account_import');
+    let deviceProjectId: string | undefined;
+    let adopted: ProjectDocument | undefined;
+    let adoptionAttempts = 0;
+    await page.route('**/api/projects', (route) => {
+      if (route.request().method() !== 'POST') return route.fallback();
+      const payload = route.request().postDataJSON() as {
+        name: string;
+        document?: ProjectDocument;
+      };
+      if (!payload.document) return route.fallback();
+      adoptionAttempts++;
+      deviceProjectId = payload.document.projectId;
+      if (adopted)
+        return route.fulfill({
+          status: 409,
+          json: {
+            code: 'ALREADY_ADOPTED',
+            projectId: accountProjectId,
+            error: 'Already saved to account.'
+          }
+        });
+      adopted = adoptProjectDocument(
+        reidentifyProjectDocument(payload.document, accountProjectId),
+        toUserId('user_e2e'),
+        payload.name
+      );
+      if (lostAdoptionResponse)
+        return route.fulfill({
+          status: 503,
+          json: { error: 'Connection interrupted.' }
+        });
+      return route.fulfill({
+        status: 201,
+        json: {
+          document: adopted,
+          project: {
+            projectId: accountProjectId,
+            name: adopted.name,
+            revisionCount: adopted.revisions.length,
+            updatedAt: adopted.derived.updatedAt
+          }
+        }
+      });
+    });
+    await page.route('**/api/projects/proj_account_import', (route) =>
+      route.fulfill({ json: adopted })
+    );
     await page.setViewportSize({ width: 1440, height: 1000 });
     // Focus this flow on project access; the lease protocol has separate coverage.
     await page.route('**/api/collaboration/config', (route) =>
@@ -99,6 +170,7 @@ for (const { failFirstUpload, editDuringUpload } of [
         .postDataJSON() as CreateUploadSessionRequest;
       if (input.kind !== 'step-import') return route.fallback();
       uploadAttempts++;
+      artifact.projectId = input.projectId;
       if (failFirstUpload && uploadAttempts === 1)
         return route.fulfill({
           status: 503,
@@ -181,7 +253,42 @@ for (const { failFirstUpload, editDuringUpload } of [
       )
     ).toHaveCount(0);
     await dialog.getByRole('button', { name: 'Save to my account' }).click();
+    if (lostAdoptionResponse) {
+      await expect.poll(() => adoptionAttempts).toBe(1);
+      // Another opened cloud view can cache the acknowledged identity before
+      // the original device entry retries its interrupted adoption.
+      await page.evaluate(async (document) => {
+        const db = await new Promise<IDBDatabase>((resolve, reject) => {
+          const open = indexedDB.open('openzcad-v2');
+          open.onsuccess = () => resolve(open.result);
+          open.onerror = () => reject(new Error('Account cache open failed'));
+        });
+        await new Promise<void>((resolve, reject) => {
+          const transaction = db.transaction(
+            ['projects', 'accountProjectIdentities'],
+            'readwrite'
+          );
+          transaction.objectStore('projects').put(document);
+          transaction
+            .objectStore('accountProjectIdentities')
+            .put({ projectId: document!.projectId });
+          transaction.oncomplete = () => {
+            db.close();
+            resolve();
+          };
+          transaction.onabort = () => {
+            db.close();
+            reject(new Error('Account cache write failed'));
+          };
+        });
+      }, adopted);
+      await expect(
+        dialog.getByRole('button', { name: 'Save to my account' })
+      ).toBeEnabled();
+      await dialog.getByRole('button', { name: 'Save to my account' }).click();
+    }
     await expect.poll(() => uploadAttempts).toBe(1);
+    expect(artifact.projectId).toBe(accountProjectId);
     await dialog.getByRole('button', { name: 'Close sharing' }).click();
     if (editDuringUpload) {
       await page.getByRole('button', { name: 'Rename project' }).click();
@@ -225,6 +332,45 @@ for (const { failFirstUpload, editDuringUpload } of [
     ).toHaveText(
       editDuringUpload ? 'Edited during upload' : 'Editable imported cube'
     );
+    expect(
+      writes.every((document) => document.projectId === accountProjectId)
+    ).toBe(true);
+    const persisted = await page.evaluate(
+      async ({ deviceProjectId, accountProjectId }) => {
+        const db = await new Promise<IDBDatabase>((resolve, reject) => {
+          const open = indexedDB.open('openzcad-v2');
+          open.onsuccess = () => resolve(open.result);
+          open.onerror = () =>
+            reject(
+              new Error('Local storage open failed', { cause: open.error })
+            );
+        });
+        const read = (id: string) =>
+          new Promise<unknown>((resolve, reject) => {
+            const get = db
+              .transaction('projects')
+              .objectStore('projects')
+              .get(id);
+            get.onsuccess = () => resolve(get.result);
+            get.onerror = () =>
+              reject(
+                new Error('Local storage read failed', { cause: get.error })
+              );
+          });
+        const result = {
+          old: await read(deviceProjectId!),
+          current: await read(accountProjectId)
+        };
+        db.close();
+        return result;
+      },
+      { deviceProjectId, accountProjectId }
+    );
+    expect(persisted.old).toBeUndefined();
+    expect(persisted.current).toMatchObject({
+      projectId: accountProjectId,
+      name: editDuringUpload ? 'Edited during upload' : 'Editable imported cube'
+    });
     expect(errors).toEqual([]);
     await expect(page).toHaveTitle(/OpenZCAD/);
     await expect(page.locator('vite-error-overlay')).toHaveCount(0);

@@ -99,7 +99,9 @@ function storageAccountingDb(
   failure?: Error,
   projectObjectRow: ProjectObjectStorageReadinessRow | null = READY_PROJECT_OBJECT_STORAGE_SCHEMA,
   projectMeasurementRow: ProjectMeasurementReadinessRow | null = READY_PROJECT_MEASUREMENT_SCHEMA,
-  artifactUploadRow: typeof READY_ARTIFACT_UPLOAD_ACCOUNTING_SCHEMA | null = READY_ARTIFACT_UPLOAD_ACCOUNTING_SCHEMA
+  artifactUploadRow:
+    | typeof READY_ARTIFACT_UPLOAD_ACCOUNTING_SCHEMA
+    | null = READY_ARTIFACT_UPLOAD_ACCOUNTING_SCHEMA
 ) {
   const prepare = vi.fn((query: string) => ({
     first: vi.fn(async () => {
@@ -654,7 +656,11 @@ describe('worker api routes', () => {
       undefined,
       undefined,
       undefined,
-      { ...READY_ARTIFACT_UPLOAD_ACCOUNTING_SCHEMA, session_columns: 6, triggers: 14 }
+      {
+        ...READY_ARTIFACT_UPLOAD_ACCOUNTING_SCHEMA,
+        session_columns: 6,
+        triggers: 14
+      }
     );
     const beforeEnv = { ...env, DB: before.db };
     const refused = await worker.fetch(post('/api/uploads', {}), beforeEnv);
@@ -2477,18 +2483,18 @@ describe('worker api routes', () => {
     );
   });
 
-  it('adopts a device-local document under its own project id', async () => {
+  it('adopts a device-local document under its account identity', async () => {
     const local = createProjectDocument('Adopted', toUserId('user_local'));
     const response = await worker.fetch(
-      post('/api/projects', { name: local.name, document: local }),
+      post('/api/projects', { name: local.name, document: local, adoptionProtocolVersion: 1 }),
       env
     );
     expect(response.status).toBe(201);
     const created = (await response.json()) as CreateProjectResponse;
-    expect(created.document.projectId).toBe(local.projectId);
+    expect(created.document.projectId).not.toBe(local.projectId);
 
     const loaded = await worker.fetch(
-      new Request(`https://example.com/api/projects/${local.projectId}`),
+      new Request(`https://example.com/api/projects/${created.document.projectId}`),
       env
     );
     expect(loaded.status).toBe(200);
@@ -2498,11 +2504,11 @@ describe('worker api routes', () => {
   it('answers a second adoption of the same project with 409 ALREADY_ADOPTED', async () => {
     const local = createProjectDocument('Twice', toUserId('user_local'));
     await worker.fetch(
-      post('/api/projects', { name: local.name, document: local }),
+      post('/api/projects', { name: local.name, document: local, adoptionProtocolVersion: 1 }),
       env
     );
     const again = await worker.fetch(
-      post('/api/projects', { name: local.name, document: local }),
+      post('/api/projects', { name: local.name, document: local, adoptionProtocolVersion: 1 }),
       env
     );
     expect(again.status).toBe(409);

@@ -896,7 +896,11 @@ describe('cloudflare adapters', () => {
       })
     }));
     const service = new D1R2PersistenceService({
-      DB: { prepare } as unknown as D1Database
+      DB: {
+        prepare,
+        batch: async (statements: { run(): Promise<unknown> }[]) =>
+          Promise.all(statements.map((statement) => statement.run()))
+      } as unknown as D1Database
     });
 
     const created = await service.createProject(userId, {

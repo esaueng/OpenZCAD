@@ -59,6 +59,7 @@ import {
 } from '@openzcad/shared';
 import {
   adoptProjectDocument,
+  reidentifyProjectDocument,
   createCheckpoint,
   createProjectDocument,
   duplicateProjectDocument,
@@ -255,17 +256,12 @@ export class RevisionIdCollisionError extends Error {
   }
 }
 
-/**
- * Adoption refused. The two codes are kept apart because they mean opposite
- * things to the device holding the document: `ALREADY_ADOPTED` says the account
- * already has this project and the device should sync rather than upload, while
- * `PROJECT_ID_TAKEN` says the id belongs to someone else and the document can
- * only enter the account as a new project.
- */
+/** An account already holds the requested model; reconcile using its ID. */
 export class ProjectAdoptionError extends Error {
   constructor(
     readonly code: 'ALREADY_ADOPTED' | 'PROJECT_ID_TAKEN',
-    message: string
+    message: string,
+    readonly projectId?: string
   ) {
     super(message);
     this.name = 'ProjectAdoptionError';
@@ -539,6 +535,7 @@ export class InMemoryPersistenceService implements PersistenceService {
   }
 
   private readonly projects = new Map<string, ProjectDocument>();
+  private readonly projectAdoptions = new Map<UserId, Map<string, string>>();
   private readonly projectMembers = new Map<
     string,
     Map<
@@ -989,6 +986,11 @@ export class InMemoryPersistenceService implements PersistenceService {
       : createProjectDocument(request.name, userId, request.units);
     this.assertProjectCount(userId);
     this.projects.set(document.projectId, document);
+    if (request.document) {
+      let mappings = this.projectAdoptions.get(userId);
+      if (!mappings) this.projectAdoptions.set(userId, (mappings = new Map<string, string>()));
+      mappings.set(request.document.projectId, document.projectId);
+    }
     return {
       project: this.summarize(document),
       document
@@ -1000,20 +1002,24 @@ export class InMemoryPersistenceService implements PersistenceService {
     source: ProjectDocument,
     name: string
   ): ProjectDocument {
-    const existing = this.projects.get(source.projectId);
-    if (existing) {
-      throw existing.ownerUserId === userId
-        ? new ProjectAdoptionError(
-            'ALREADY_ADOPTED',
-            'This project is already saved to your account.'
-          )
-        : new ProjectAdoptionError(
-            'PROJECT_ID_TAKEN',
-            'That project id is already in use.'
-          );
+    const owned = this.projects.get(source.projectId);
+    const mappedId = this.projectAdoptions.get(userId)?.get(source.projectId);
+    const existingId =
+      owned?.ownerUserId === userId ? source.projectId : mappedId;
+    if (existingId) {
+      throw new ProjectAdoptionError(
+        'ALREADY_ADOPTED',
+        'This project is already saved to your account.',
+        existingId
+      );
     }
+    const projectId = createProjectDocument(name, userId).projectId;
     const document = withoutDerivedProjection(
-      adoptProjectDocument(source, userId, name)
+      adoptProjectDocument(
+        reidentifyProjectDocument(source, projectId),
+        userId,
+        name
+      )
     );
     assertPersistableDocument(document);
     return document;
@@ -1693,6 +1699,11 @@ export class InMemoryPersistenceService implements PersistenceService {
   }
 
   private destroyProject(projectId: string): void {
+    for (const mappings of this.projectAdoptions.values()) {
+      for (const [localId, cloudId] of mappings) {
+        if (cloudId === projectId) mappings.delete(localId);
+      }
+    }
     this.projects.delete(projectId);
     this.revisions.delete(projectId);
     this.organization.delete(projectId);

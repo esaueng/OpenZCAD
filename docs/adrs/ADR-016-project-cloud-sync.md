@@ -110,8 +110,16 @@ device has never organised. It describes a desk, not a part.
 ## Consequences
 
 - Work reaches the account continuously without a user action, and a project
-  created offline can be adopted into the account later while keeping its
-  `projectId`, so the device's local copy and shelf metadata stay linked.
+  created offline can be adopted into the account later. New adoptions receive
+  an opaque account project ID and an account-scoped durable device-ID binding
+  for retry recovery. Existing account IDs are preserved. The device atomically
+  transfers the model, undo/redo endpoints and companion records to the returned
+  ID without changing entity IDs, revisions, versions or edit times. IndexedDB
+  schema 11 records aliases for device identities and refuses stale old-ID writes.
+  Existing account identities keep separate local copies and view state, so
+  switching accounts cannot redirect one account project into another. Persisted
+  ownership retains older account copies after logout cleared their baseline.
+  Adoption protocol version 1 requires old running clients to reload before adopting. Migration 0023 must precede the Worker rollout.
 - Stored bytes scale with the number of projects and explicit checkpoints, not
   with the edit rate. Retention is bounded and R2 project objects remove the
   former 1.5 MB D1 row ceiling. Request parsing remains bounded, and live
@@ -132,7 +140,7 @@ device has never organised. It describes a desk, not a part.
 
 Unit tests cover the truth table case by case, recovery-copy ordering before
 every resolution, autosave debounce and single-flight behaviour, fenced-write
-handling, adoption round trips including re-adoption and cross-owner refusal,
+handling, adoption round trips including retry recovery and independent account bindings,
 and the size ceiling refusing before the D1 write. The Playwright flow in
 `test/e2e/cloud-sync.spec.ts` covers create, autosave, reload, cross-device
 pull, two-device divergence, and confirmation that the losing side survives as
