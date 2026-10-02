@@ -66,6 +66,7 @@ const ARTIFACT_KINDS: readonly ArtifactKind[] = [
   '3mf-export',
   'obj-export',
   'gltf-export',
+  'ply-export',
   'snapshot',
   'thumbnail'
 ];

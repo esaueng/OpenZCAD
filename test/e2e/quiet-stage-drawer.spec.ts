@@ -332,3 +332,68 @@ test('search opens the suspended drawer mid-sketch', async ({ page }) => {
   await expect(drawer).toBeVisible();
   expect(await storedDrawerOpen(page)).toBe(true);
 });
+
+/*
+  A tool's create card in the inspector used to share the lane with the
+  drawer's 180px floor: at 1280×720 a Hole card got 304px of its 817, its
+  Create button and its preflight refusal below the fold, found only by
+  scrolling the card. The card owns the lane now — the drawer gives way under
+  it — and its actions stay pinned to the bottom of its scroll.
+*/
+test('a tool card owns the lane and keeps its actions in view', async ({
+  page
+}) => {
+  await page.setViewportSize({ width: 1280, height: 720 });
+  await stubApi(page);
+  await page.goto('/');
+  await page
+    .getByRole('button', { name: /^Open demo: Mounting Bracket/ })
+    .click();
+  await expect(page.locator('.viewer-host canvas')).toBeVisible({
+    timeout: 120_000
+  });
+  await expect(page.locator('.model-drawer-float')).toBeVisible();
+
+  await page.getByRole('button', { name: /^Hole/ }).click();
+  const inspector = page.getByRole('region', { name: 'Feature inspector' });
+  const submit = inspector.getByRole('button', { name: 'Create hole' });
+  await expect(submit).toBeVisible();
+
+  const layout = await page.evaluate(() => {
+    const lane = document
+      .querySelector('.stage-right')!
+      .getBoundingClientRect();
+    const card = document
+      .querySelector('.stage-right > .inspector-float')!
+      .getBoundingClientRect();
+    const body = document
+      .querySelector('.stage-right .inspector .panel-body')!
+      .getBoundingClientRect();
+    const actions = document
+      .querySelector('.stage-right .inspector .form-actions')!
+      .getBoundingClientRect();
+    return {
+      laneHeight: lane.height,
+      cardHeight: card.height,
+      actionsInside: actions.top >= body.top && actions.bottom <= body.bottom
+    };
+  });
+  // The card has the lane to itself, less the gap the empty drawer keeps.
+  expect(layout.cardHeight).toBeGreaterThan(layout.laneHeight - 40);
+  expect(layout.actionsInside).toBe(true);
+
+  // The card's actions are on screen without scrolling it.
+  const box = (await submit.boundingBox())!;
+  expect(box.y + box.height).toBeLessThanOrEqual(720);
+  await expect(submit).toBeInViewport();
+
+  // Cancel gives the lane back to the drawer.
+  await inspector.getByRole('button', { name: 'Cancel' }).click();
+  await expect(page.locator('.viewer-area')).not.toHaveClass(
+    /inspector-owns-lane/
+  );
+  const drawerHeight = await page
+    .locator('.model-drawer-float')
+    .evaluate((element) => element.getBoundingClientRect().height);
+  expect(drawerHeight).toBeGreaterThan(150);
+});

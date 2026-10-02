@@ -165,7 +165,7 @@ describe('ProjectSharingDialog', () => {
       />
     );
 
-    await screen.findByText('member@example.com');
+    await screen.findByText('Collaborator 1');
     await user.type(screen.getByLabelText('Email'), 'new@example.com');
     await user.click(screen.getByRole('button', { name: 'Invite' }));
 
@@ -175,7 +175,8 @@ describe('ProjectSharingDialog', () => {
     ).toHaveAttribute('aria-busy', 'true');
   });
 
-  it('labels every live session belonging to the signed-in user', () => {
+  it('hides live names and initials until revealed, while identifying your sessions', async () => {
+    const user = userEvent.setup();
     const base = createProjectDocument('Shared sessions', owner);
     render(
       <ProjectSharingDialog
@@ -209,12 +210,19 @@ describe('ProjectSharingDialog', () => {
       />
     );
 
+    expect(screen.getByText('You')).toBeVisible();
+    expect(screen.getByText('Collaborator 2')).toBeVisible();
+    expect(screen.queryByText('alex')).not.toBeInTheDocument();
+    expect(screen.getAllByText('?')).toHaveLength(2);
+    await user.click(screen.getByRole('button', { name: 'Show personal info' }));
     // Two sessions of one account are one person, so one row.
     expect(screen.getAllByText('test-user (you)')).toHaveLength(1);
     expect(screen.getByText('alex')).toBeVisible();
     expect(screen.queryByText('alex (you)')).not.toBeInTheDocument();
     expect(screen.getByText('Viewer')).toBeVisible();
     expect(screen.getByText('idle')).toBeVisible();
+    await user.click(screen.getByRole('button', { name: 'Hide personal info' }));
+    expect(screen.queryByText('alex')).not.toBeInTheDocument();
   });
 
   it('exposes an accessible owner dialog and typed invitation/member controls', async () => {
@@ -239,6 +247,12 @@ describe('ProjectSharingDialog', () => {
     expect(screen.getByRole('contentinfo')).toHaveTextContent(
       'Live · only you · edit lease not held'
     );
+    expect(await screen.findByText('Collaborator 1')).toBeVisible();
+    const dialog = screen.getByRole('dialog');
+    expect(dialog.innerHTML).not.toContain('member@example.com');
+    expect(dialog.innerHTML).not.toContain('pending@example.com');
+    expect(screen.getByLabelText('Role for Collaborator 1')).toHaveValue('viewer');
+    await user.click(screen.getByRole('button', { name: 'Show personal info' }));
     expect(await screen.findByText('member@example.com')).toBeVisible();
     expect(screen.getByText('pending@example.com')).toBeVisible();
     expect(screen.getByText('Invited · editor · expired')).toBeVisible();
@@ -268,6 +282,11 @@ describe('ProjectSharingDialog', () => {
     expect(
       screen.getByText('Invitation sent to new@example.com.')
     ).toBeVisible();
+    await user.click(screen.getByRole('button', { name: 'Hide personal info' }));
+    expect(screen.getByText('Invitation sent.')).toBeVisible();
+    expect(dialog.innerHTML).not.toContain('new@example.com');
+    expect(dialog.innerHTML).not.toContain('member@example.com');
+    expect(dialog.innerHTML).not.toContain('pending@example.com');
     expect(screen.queryByText('one-time-token')).not.toBeInTheDocument();
     expect(
       screen.queryByRole('button', { name: /copy invitation/i })
@@ -308,8 +327,9 @@ describe('ProjectSharingDialog', () => {
       />
     );
 
-    const invitationEmail = await screen.findByText('future@example.com');
-    expect(invitationEmail.closest('li')).toHaveTextContent(
+    // Personal info starts hidden, so the row carries its redacted label.
+    const invitation = await screen.findByText('Invitation 1');
+    expect(invitation.closest('li')).toHaveTextContent(
       /Invited · editor · [1-9]\d*d/
     );
   });
@@ -526,6 +546,7 @@ it('hangs from the top bar sharing chip and follows it on resize', async () => {
 });
 
 it('names the self row from the account when no session is live', async () => {
+  const user = userEvent.setup();
   const base = createProjectDocument('Named self', owner);
   const { rerender } = render(
     <ProjectSharingDialog
@@ -540,6 +561,9 @@ it('names the self row from the account when no session is live', async () => {
       onClose={vi.fn()}
     />
   );
+  expect(screen.getByText('You')).toBeVisible();
+  expect(screen.queryByText('peter (you)')).not.toBeInTheDocument();
+  await user.click(screen.getByRole('button', { name: 'Show personal info' }));
   expect(await screen.findByText('peter (you)')).toBeVisible();
   expect(screen.getByText('Owner')).toBeVisible();
 

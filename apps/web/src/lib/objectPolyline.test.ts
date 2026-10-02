@@ -94,6 +94,7 @@ describe('bounded viewport text collections', () => {
         null,
         resolve,
         [],
+        [],
         'Project text exceeds the outline limit.'
       );
       expect(provider).not.toHaveBeenCalled();
