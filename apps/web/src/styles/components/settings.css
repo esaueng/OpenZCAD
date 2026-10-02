@@ -149,6 +149,11 @@
   box-shadow: 0 0 0 2px var(--color-accent-dim);
 }
 
+.settings-search-clear {
+  /* The wide layout shows the field itself; see the narrow rule below. */
+  display: none;
+}
+
 .settings-search input {
   min-width: 0;
   flex: 1;
@@ -792,6 +797,20 @@
   .settings-search,
   .settings-nav nav button span {
     display: none;
+  }
+
+  /* The rail's way out of a filter it cannot show: the sections it is
+     hiding come back on one press. */
+  .settings-search-clear {
+    display: grid;
+    place-items: center;
+    width: 100%;
+    min-height: 40px;
+    margin-bottom: var(--sp-2);
+    color: var(--color-accent);
+    background: var(--color-accent-dim);
+    border: 1px solid var(--color-accent-border);
+    border-radius: var(--radius-md);
   }
 
   .settings-nav nav button {
