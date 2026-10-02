@@ -3840,14 +3840,17 @@ function tokenizeExpression(expression: string): ExpressionToken[] {
       continue;
     }
 
-    if (char === "'" || char === '′') {
-      tokens.push({ type: 'quote', value: "'" });
-      index += 1;
-      continue;
-    }
-
-    if (char === '"' || char === '″') {
-      tokens.push({ type: 'quote', value: '"' });
+    // A feet/inch mark is a unit only directly after a number; anywhere else
+    // it is not expression text at all and is refused like any other
+    // unexpected character, as it was before units existed.
+    if (
+      (char === "'" || char === '′' || char === '"' || char === '″') &&
+      tokens.at(-1)?.type === 'number'
+    ) {
+      tokens.push({
+        type: 'quote',
+        value: char === "'" || char === '′' ? "'" : '"'
+      });
       index += 1;
       continue;
     }
