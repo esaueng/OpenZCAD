@@ -9599,11 +9599,11 @@ export function App() {
       // and `doc` is the same render's value throughout.
       return;
     }
-    // The triangles arrive in millimetres — a 3MF's declared unit is applied
-    // by the importer, and the formats that declare none follow the STL
-    // interchange convention. The mesh exports multiply by UNIT_TO_MM on the
-    // way out, so adopting the vertices at 1/UNIT_TO_MM keeps a non-mm
-    // document's round trip at the same physical size.
+    // The triangles arrive in millimetres — a 3MF's declared unit and glTF's
+    // metres are applied by the importer, and the formats that declare none
+    // follow the STL interchange convention. The mesh exports multiply by
+    // UNIT_TO_MM on the way out, so adopting the vertices at 1/UNIT_TO_MM
+    // keeps a non-mm document's round trip at the same physical size.
     const meshScale = 1 / UNIT_TO_MM[doc.units];
     const vertices =
       meshScale === 1
