@@ -120,9 +120,17 @@ test('deleting a history feature raises an undoable toast that counts its depend
   await expect(confirm).toBeVisible();
   await expect(confirm).toContainText(/\d+ later features build on it/);
   await expect(confirm.getByRole('listitem').first()).toBeVisible();
+  // The dialog owns the keyboard as well as pointer input. A tool shortcut
+  // must not open a workspace form behind the confirmation.
+  await page.keyboard.press('b');
   // Cancel keeps the feature.
   await confirm.getByRole('button', { name: 'Cancel' }).click();
   await expect(confirm).toHaveCount(0);
+  await expect(
+    page
+      .getByRole('region', { name: 'Feature inspector' })
+      .getByRole('textbox', { name: /^Width/ })
+  ).toHaveCount(0);
   await expect(
     summary.getByLabel(/ · 17 features · 1 body\. Sync /)
   ).toBeVisible();

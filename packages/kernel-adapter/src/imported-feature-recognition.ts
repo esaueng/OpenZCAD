@@ -497,7 +497,10 @@ function recognizeBlindHole(
       'A blind hole needs one opening and one planar bottom.'
     );
   }
-  const roles = classifyCylinderEndPlanes(context, wall, planes, 'concave');
+  const roles = classifyCylinderEndPlanes(context, wall, planes, {
+    cap: 'concave',
+    reference: 'convex'
+  });
   if (roles.caps.length !== 1 || roles.references.length !== 1) {
     refuse(
       roles.caps.length === 2 || roles.references.length === 2
@@ -552,7 +555,10 @@ function recognizeBoss(
       'A cylindrical boss needs one support plane and one cap.'
     );
   }
-  const roles = classifyCylinderEndPlanes(context, wall, planes, 'convex');
+  const roles = classifyCylinderEndPlanes(context, wall, planes, {
+    cap: 'convex',
+    reference: 'concave'
+  });
   if (roles.caps.length !== 1 || roles.references.length !== 1) {
     refuse(
       roles.caps.length === 2 || roles.references.length === 2
@@ -615,7 +621,7 @@ function recognizeCounterbore(
   }
   const step = sharedPlanes[0]!;
   requireLink(context, outer.id, step.id, 'concave', 'circle', true);
-  requireLink(context, inner.id, step.id, 'concave', 'circle', true);
+  requireLink(context, inner.id, step.id, 'convex', 'circle', true);
   const stepSurface = asPlane(step);
   const annulusArea =
     Math.PI * (outer.surface.radius ** 2 - inner.surface.radius ** 2);
@@ -654,7 +660,7 @@ function recognizeCounterbore(
     (ExactRecognitionFace & { surface: ExactConeSurface }) | undefined;
   if (outerOtherPlanes.length === 1) {
     opening = outerOtherPlanes[0]!;
-    requireCylinderEndPlane(context, outer, opening, 'concave');
+    requireCylinderEndPlane(context, outer, opening, 'convex');
     if (isDiskCap(context, opening, outer.surface.radius)) {
       refuse(
         'incomplete-proof',
@@ -673,7 +679,7 @@ function recognizeCounterbore(
         'The counterbore entry chamfer is not an internal coaxial cone.'
       );
     }
-    requireLink(context, entryChamfer.id, outer.id, 'concave', 'circle', true);
+    requireLink(context, entryChamfer.id, outer.id, 'convex', 'circle', true);
     const openings = directFacesOfKind(context, entryChamfer.id, 'plane');
     if (openings.length !== 1) {
       refuse(
@@ -682,7 +688,7 @@ function recognizeCounterbore(
       );
     }
     opening = openings[0]!;
-    requireConeEndPlane(context, entryChamfer, opening, 'concave');
+    requireConeEndPlane(context, entryChamfer, opening, 'convex');
     const openingOnCone = planeAxisCoordinate(
       context,
       opening.surface,
@@ -808,7 +814,7 @@ function recognizeCountersink(
       'Countersink cone and hole wall are not coaxial internal faces.'
     );
   }
-  requireLink(context, coneFace.id, cylinder.id, 'concave', 'circle', true);
+  requireLink(context, coneFace.id, cylinder.id, 'convex', 'circle', true);
   const sharedCoordinate = sharedEndpoint(
     context,
     coneFace.surface,
@@ -824,7 +830,7 @@ function recognizeCountersink(
   }
   const opening = coneOtherPlanes[0]!;
   const bottom = cylinderOtherPlanes[0]!;
-  requireConeEndPlane(context, coneFace, opening, 'concave');
+  requireConeEndPlane(context, coneFace, opening, 'convex');
   requireCylinderEndPlane(context, cylinder, bottom, 'concave');
   const openingCoordinate = planeAxisCoordinate(
     context,
@@ -1108,7 +1114,7 @@ function classifyCylinderEndPlanes(
   context: RecognitionContext,
   cylinder: ExactRecognitionFace & { surface: ExactCylinderSurface },
   planes: readonly (ExactRecognitionFace & { surface: ExactPlaneSurface })[],
-  relation: 'concave' | 'convex'
+  relations: { cap: 'concave' | 'convex'; reference: 'concave' | 'convex' }
 ): {
   caps: Array<ExactRecognitionFace & { surface: ExactPlaneSurface }>;
   references: Array<ExactRecognitionFace & { surface: ExactPlaneSurface }>;
@@ -1118,11 +1124,19 @@ function classifyCylinderEndPlanes(
     ExactRecognitionFace & { surface: ExactPlaneSurface }
   > = [];
   for (const plane of planes) {
-    requireCylinderEndPlane(context, cylinder, plane, relation);
-    (isDiskCap(context, plane, cylinder.surface.radius)
-      ? caps
-      : references
-    ).push(plane);
+    // Split by disk-cap first (no relation yet): the cap is the exact disk,
+    // the reference is the exterior/support plane. The kernel's edge verdicts
+    // then prove each side separately — a bore's opening rim is convex while
+    // its floor rim is concave, and a boss foot is concave while its cap is
+    // convex. Collapsing them to one relation was the proxy's error.
+    const isCap = isDiskCap(context, plane, cylinder.surface.radius);
+    requireCylinderEndPlane(
+      context,
+      cylinder,
+      plane,
+      isCap ? relations.cap : relations.reference
+    );
+    (isCap ? caps : references).push(plane);
   }
   return { caps, references };
 }

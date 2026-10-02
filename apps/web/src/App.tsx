@@ -15529,7 +15529,11 @@ export function App() {
    * they need to reach.
    */
   const workspaceInputEnabled =
-    !settingsOpen && !sharingOpen && !pendingShaprImport && !meshExportOpen;
+    !settingsOpen &&
+    !sharingOpen &&
+    !pendingShaprImport &&
+    !meshExportOpen &&
+    !pendingFeatureDelete;
   exactEntryInputEnabledRef.current =
     workspaceInputEnabled && !paletteOpen && !shortcutsOpen && !namingSave;
 
