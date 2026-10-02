@@ -1767,10 +1767,6 @@ button.command-rail:disabled {
   border: 0;
 }
 
-.workspace-column .sketch-rail-group-label {
-  display: none;
-}
-
 .sketch-rail-divider {
   width: 22px;
   height: 1px;

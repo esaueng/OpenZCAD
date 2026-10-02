@@ -4,6 +4,10 @@ import { createRef } from 'react';
 import { describe, expect, it, vi } from 'vitest';
 import { STATUS_MIN_DWELL_MS } from '../hooks/usePacedStatus';
 import {
+  STATUS_CLOCK_STEP_MS,
+  STATUS_LIFETIME_MS
+} from '../lib/statusLifetime';
+import {
   ActivityLogButton,
   ViewportDockExtras,
   WorkspaceReadout
@@ -149,6 +153,165 @@ describe('WorkspaceReadout pacing', () => {
         'title',
         'Reopened Bracket. — 3 more in the activity log'
       );
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+});
+
+/**
+ * Holds the main thread for `ms`, as the viewer's first frame does while its
+ * shaders compile: time passes, and timers that came due fire once, late.
+ * Vitest does not expose the fake clock's jump, but the faked `setTimeout`
+ * carries the clock it was installed by.
+ */
+function blockMainThread(ms: number) {
+  const clock = (
+    globalThis.setTimeout as unknown as { clock?: { jump(ms: number): void } }
+  ).clock;
+  if (!clock) {
+    throw new Error('blockMainThread needs vi.useFakeTimers().');
+  }
+  act(() => {
+    clock.jump(ms);
+  });
+}
+
+describe('WorkspaceReadout message lifetime', () => {
+  const STARTING = {
+    phase: 'Starting geometry worker',
+    projection: 'no exact projection is available yet'
+  };
+  const REFUSAL = 'Cannot use Box: This shared project is read-only.';
+
+  function readout(
+    status: string,
+    statusAt: number,
+    geometryStatus: typeof STARTING | null = null
+  ) {
+    return (
+      <WorkspaceReadout
+        status={status}
+        statusAt={statusAt}
+        geometryStatus={geometryStatus}
+        tone={geometryStatus ? 'running' : 'ready'}
+        logOpen={false}
+        onToggleLog={vi.fn()}
+        {...SUMMARY}
+      />
+    );
+  }
+
+  it('counts only the time the page could draw toward the lifetime', () => {
+    vi.useFakeTimers();
+    try {
+      render(readout(REFUSAL, Date.now()));
+      const toast = screen.getByRole('contentinfo');
+      act(() => {
+        vi.advanceTimersByTime(1000);
+      });
+      // Opening a project mounts the viewer, whose first frame held the main
+      // thread for longer than a message lives. The refusal used to come out
+      // of that already expired, never drawn.
+      blockMainThread(STATUS_LIFETIME_MS + 2000);
+      expect(screen.getByRole('status')).toHaveTextContent(REFUSAL);
+      expect(toast).not.toHaveClass('hidden');
+      // The stall counted as one late step; the rest of the lifetime is the
+      // reader's, and no more.
+      const left = STATUS_LIFETIME_MS - 1000 - 2 * STATUS_CLOCK_STEP_MS;
+      act(() => {
+        vi.advanceTimersByTime(left - STATUS_CLOCK_STEP_MS);
+      });
+      expect(toast).not.toHaveClass('hidden');
+      act(() => {
+        vi.advanceTimersByTime(2 * STATUS_CLOCK_STEP_MS);
+      });
+      expect(toast).toHaveClass('hidden');
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it('does not bring back a message that had expired before the readout mounted', () => {
+    vi.useFakeTimers();
+    try {
+      render(readout('Offline workspace', Date.now() - 60_000));
+      expect(screen.getByRole('contentinfo')).toHaveClass('hidden');
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it('draws a message set behind a slow worker start in front of the phase', () => {
+    vi.useFakeTimers();
+    try {
+      // An old message under the boot line: only the line, and it holds.
+      const { rerender } = render(
+        readout('Offline workspace', Date.now() - 60_000, STARTING)
+      );
+      const toast = screen.getByRole('contentinfo');
+      expect(screen.getByRole('status')).toHaveTextContent(
+        'Starting geometry worker · no exact projection is available yet'
+      );
+      expect(toast).not.toHaveClass('hidden');
+
+      // The user's action answers at once, ahead of the phase, rather than
+      // waiting behind the boot line for a worker that may take longer than
+      // the message's whole lifetime.
+      const refusedAt = Date.now();
+      rerender(readout(REFUSAL, refusedAt, STARTING));
+      act(() => {
+        vi.advanceTimersByTime(STATUS_MIN_DWELL_MS);
+      });
+      expect(screen.getByRole('status')).toHaveTextContent(
+        `${REFUSAL} · Starting geometry worker`
+      );
+      expect(
+        screen.getByRole('button', {
+          name: `Open activity log. Current status: ${REFUSAL} · Starting geometry worker`
+        })
+      ).toBeInTheDocument();
+
+      // The message expires on its own clock; the boot line, a state rather
+      // than a message, stays up on its own.
+      act(() => {
+        vi.advanceTimersByTime(STATUS_LIFETIME_MS);
+      });
+      expect(screen.getByRole('status')).toHaveTextContent(
+        'Starting geometry worker · no exact projection is available yet'
+      );
+      expect(screen.getByRole('status')).not.toHaveTextContent('Cannot use');
+      expect(toast).not.toHaveClass('hidden');
+
+      // Geometry ready with the message long gone: the toast goes quiet.
+      rerender(readout(REFUSAL, refusedAt));
+      expect(toast).toHaveClass('hidden');
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it('leaves a live message alone once the geometry is ready', () => {
+    vi.useFakeTimers();
+    try {
+      const openedAt = Date.now();
+      const { rerender } = render(
+        readout('Opened Invited Link Part.', openedAt, STARTING)
+      );
+      expect(screen.getByRole('status')).toHaveTextContent(
+        'Opened Invited Link Part. · Starting geometry worker'
+      );
+      act(() => {
+        vi.advanceTimersByTime(STATUS_MIN_DWELL_MS);
+      });
+      rerender(readout('Opened Invited Link Part.', openedAt));
+      expect(screen.getByRole('status')).toHaveTextContent(
+        /^Opened Invited Link Part\.$/
+      );
+      act(() => {
+        vi.advanceTimersByTime(STATUS_LIFETIME_MS);
+      });
+      expect(screen.getByRole('contentinfo')).toHaveClass('hidden');
     } finally {
       vi.useRealTimers();
     }
