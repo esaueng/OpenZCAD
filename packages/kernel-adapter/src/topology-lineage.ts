@@ -17,6 +17,7 @@ export type {
   TopologyReferenceV5
 } from '@openzcad/shared';
 
+import { GEOMETRY_LINEAR_TOLERANCE } from '@openzcad/geometry';
 import { fingerprintOfSignature } from './topology-fingerprint';
 
 /**
@@ -786,6 +787,128 @@ function analyticCarriersEqual(
     );
   }
   return false;
+}
+
+/**
+ * Quanta (of the linear tolerance) a measured point may sit off a carrier and
+ * still be on it: the point and the carrier are rounded independently.
+ */
+const CARRIER_POINT_SLACK = 4;
+/** Direction components are quantized this much finer than coordinates. */
+const DIRECTION_QUANTUM_SCALE = 1000;
+
+function pointOnAnalyticCarrier(
+  point: QuantizedTopologyPoint,
+  analytic: FaceAnalyticWitnessV1
+): boolean {
+  const tolerance = GEOMETRY_LINEAR_TOLERANCE;
+  const slack = CARRIER_POINT_SLACK * tolerance;
+  const p = point.map((component) => component * tolerance);
+  if (analytic.kind === 'plane') {
+    const n = analytic.normal.map(
+      (component) => (component * tolerance) / DIRECTION_QUANTUM_SCALE
+    );
+    const length = Math.hypot(n[0]!, n[1]!, n[2]!);
+    if (!(length > 0)) return false;
+    const signed = (n[0]! * p[0]! + n[1]! * p[1]! + n[2]! * p[2]!) / length;
+    return Math.abs(signed - analytic.offset * tolerance) <= slack;
+  }
+  if (analytic.kind === 'cylinder') {
+    const a = analytic.axis.map(
+      (component) => (component * tolerance) / DIRECTION_QUANTUM_SCALE
+    );
+    const length = Math.hypot(a[0]!, a[1]!, a[2]!);
+    if (!(length > 0)) return false;
+    const foot = analytic.axisFoot.map((component) => component * tolerance);
+    const v = [p[0]! - foot[0]!, p[1]! - foot[1]!, p[2]! - foot[2]!];
+    const along = (v[0]! * a[0]! + v[1]! * a[1]! + v[2]! * a[2]!) / length;
+    const radial = Math.sqrt(
+      Math.max(0, v[0]! ** 2 + v[1]! ** 2 + v[2]! ** 2 - along ** 2)
+    );
+    return Math.abs(radial - analytic.radius * tolerance) <= slack;
+  }
+  return false;
+}
+
+/**
+ * Whether an open edge lies on the exact analytic carriers of every given
+ * face: both endpoints and the midpoint, within rounding.
+ *
+ * This is the evidence a boolean's `generated` edge is held to before it is
+ * named after the two operand faces whose intersection the kernel says made
+ * it. The edge has no source edge to compare with, so the relation is to its
+ * faces: an edge that does not sit on both carriers is not their
+ * intersection, whatever the payload claims. A closed edge (a full circle)
+ * and a free-form carrier cannot be checked this way and fail closed.
+ */
+export function edgeLiesOnFaceCarriers(
+  edge: EdgeWitnessV1,
+  faces: readonly FaceWitnessV1[]
+): boolean {
+  if (edge.closed || faces.length === 0) {
+    return false;
+  }
+  const points = [edge.endpoints[0], edge.endpoints[1], edge.midpoint];
+  return faces.every((face) =>
+    points.every((point) => pointOnAnalyticCarrier(point, face.analytic))
+  );
+}
+
+/**
+ * Where an open straight edge sits along a source straight edge's line, as
+ * the parameter of its midpoint (0 at the source's first endpoint, 1 at its
+ * second), or null when it does not lie on that line.
+ *
+ * A boolean that trims an edge — the top edge of a plate's side, cut back to
+ * where a fused flange now stands — reports it as `modified` with a changed
+ * witness, and one it splits reports several pieces from one source. Lying
+ * on the source's line, both ends and the middle, is the evidence that a
+ * result edge is a remainder of that source rather than some other edge the
+ * payload mislabelled; the parameter orders the pieces of a split.
+ */
+export function straightEdgePositionOnSource(
+  result: EdgeWitnessV1,
+  source: EdgeWitnessV1
+): number | null {
+  if (
+    result.closed ||
+    source.closed ||
+    result.curveType !== 'LINE' ||
+    source.curveType !== 'LINE'
+  ) {
+    return null;
+  }
+  const tolerance = GEOMETRY_LINEAR_TOLERANCE;
+  const slack = CARRIER_POINT_SLACK * tolerance;
+  const real = (point: QuantizedTopologyPoint) =>
+    point.map((component) => component * tolerance);
+  const start = real(source.endpoints[0]);
+  const end = real(source.endpoints[1]);
+  const direction = [end[0]! - start[0]!, end[1]! - start[1]!, end[2]! - start[2]!];
+  const length = Math.hypot(direction[0]!, direction[1]!, direction[2]!);
+  if (!(length > slack)) return null;
+  const unit = direction.map((component) => component / length);
+  const along = (point: number[]) =>
+    (point[0]! - start[0]!) * unit[0]! +
+    (point[1]! - start[1]!) * unit[1]! +
+    (point[2]! - start[2]!) * unit[2]!;
+  const offLine = (point: number[]) => {
+    const t = along(point);
+    return Math.hypot(
+      point[0]! - (start[0]! + unit[0]! * t),
+      point[1]! - (start[1]! + unit[1]! * t),
+      point[2]! - (start[2]! + unit[2]! * t)
+    );
+  };
+  const points = [
+    real(result.endpoints[0]),
+    real(result.endpoints[1]),
+    real(result.midpoint)
+  ];
+  if (points.some((point) => offLine(point) > slack)) {
+    return null;
+  }
+  return along(points[2]!) / length;
 }
 
 export function verifyTopologyEvolution(
