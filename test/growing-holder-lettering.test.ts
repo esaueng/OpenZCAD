@@ -49,6 +49,63 @@ function topologyWithoutArenaHandles(topology: BodyTopology | undefined) {
   return copy;
 }
 
+/**
+ * The published topology with its enumeration order factored out, and
+ * nothing else dropped.
+ *
+ * The kernel's `fuseAll` emits disjoint lumps in `HashMap` order (Remus
+ * `partition_touching` returns `groups.into_values()`), and std's per-map
+ * hash keys advance with every map the wasm instance has ever built. So
+ * identical operands in a fresh kernel enumerate their lumps differently
+ * after unrelated earlier kernel calls, and a checkpoint replay can list the
+ * same faces in another order than a cold oracle. Publication order is not
+ * contracted; the face, edge and diagnostic multisets and the vertex
+ * incidence are, and those are compared in full.
+ */
+function canonicalTopology(topology: BodyTopology | undefined) {
+  const copy = topologyWithoutArenaHandles(topology);
+  if (!copy) return copy;
+  // Triangle ranges are order-derived; prove they still tile the mesh with
+  // no gap or overlap before setting them aside.
+  const ranges = copy.faces
+    .map((face) => [face.triangleStart, face.triangleCount] as const)
+    .sort((left, right) => left[0] - right[0]);
+  let next = 0;
+  for (const [start, count] of ranges) {
+    expect(start).toBe(next);
+    next += count;
+  }
+  const sorted = <T>(
+    items: readonly T[],
+    key: (item: T) => unknown = (x) => x
+  ) =>
+    items
+      .map((item) => [JSON.stringify(key(item)), item] as const)
+      .sort(([left], [right]) => (left < right ? -1 : left > right ? 1 : 0))
+      .map(([, item]) => item);
+  // Vertex ids number the body's vertices in enumeration order; relabel them
+  // by first use over the sorted edges so shared incidence is still compared.
+  const edges = sorted(
+    copy.edges.map(({ vertexIds, ...edge }) => ({ edge, vertexIds })),
+    ({ edge }) => edge
+  );
+  const labels = new Map<number, number>();
+  const label = (id: number) => {
+    if (!labels.has(id)) labels.set(id, labels.size);
+    return labels.get(id)!;
+  };
+  return {
+    ...copy,
+    faces: sorted(copy.faces.map(({ triangleStart: _, ...face }) => face)),
+    edges: edges.map(({ edge, vertexIds }) =>
+      vertexIds ? { ...edge, vertexIds: vertexIds.map(label) } : { ...edge }
+    ),
+    ...(copy.lineageDiagnostics
+      ? { lineageDiagnostics: sorted(copy.lineageDiagnostics) }
+      : {})
+  };
+}
+
 async function checkLetteredHolder(moved: boolean) {
   const kernel = new RemusKernel();
   const io = await loadRemusTranslators();
@@ -183,8 +240,8 @@ async function checkLetteredHolder(moved: boolean) {
         expect(actual.bbox).toEqual(expected.bbox);
         expect(actual.volume).toBe(expected.volume);
         expect(actual.faceCount).toBe(expected.faceCount);
-        expect(topologyWithoutArenaHandles(actual.topology)).toEqual(
-          topologyWithoutArenaHandles(expected.topology)
+        expect(canonicalTopology(actual.topology)).toEqual(
+          canonicalTopology(expected.topology)
         );
         expect(actual.mesh.indices.length).toBe(expected.mesh.indices.length);
         expect(actual.consumed).toBe(expected.consumed);
