@@ -34,19 +34,19 @@ import { preloadDocumentFonts } from '../lib/textFonts';
 
 /**
  * `step`, `stl`, and `dxf` produce text (STEP data, ASCII STL, DXF R12);
- * `stl-binary`, `3mf`, `obj`, and `glb` produce bytes. Mesh formats accept
- * a deflection in millimetres — chordal tolerance after unit scaling —
- * defaulting to the adapter's standard export tessellation when omitted.
- * `dxf` exports a 2D outline and requires either a `face` (one planar
- * face's outline) or a `section` plane (the exact cross-section).
+ * `stl-binary`, `3mf`, `obj`, `glb`, and `ply` produce bytes. Mesh formats
+ * accept a deflection in millimetres — chordal tolerance after unit
+ * scaling — defaulting to the adapter's standard export tessellation when
+ * omitted. `dxf` exports a 2D outline and requires either a `face` (one
+ * planar face's outline) or a `section` plane (the exact cross-section).
  */
 export type GeometryExportFormat =
-  'step' | 'stl' | 'dxf' | 'stl-binary' | '3mf' | 'obj' | 'glb';
+  'step' | 'stl' | 'dxf' | 'stl-binary' | '3mf' | 'obj' | 'glb' | 'ply';
 
 /** The export formats whose payload crosses back as transferred bytes. */
 export type GeometryBinaryExportFormat = Extract<
   GeometryExportFormat,
-  'stl-binary' | '3mf' | 'obj' | 'glb'
+  'stl-binary' | '3mf' | 'obj' | 'glb' | 'ply'
 >;
 
 export type GeometryWorkerRequest =

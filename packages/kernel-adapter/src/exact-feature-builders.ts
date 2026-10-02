@@ -694,7 +694,12 @@ function buildTransformFeature(
   const rotation = data.transform.rotationDeg;
   const scaleFactor =
     data.transform.scale !== undefined
-      ? resolveParamValue(data.transform.scale, scope, 'scale')
+      ? resolveParamValue(
+          data.transform.scale,
+          scope,
+          'scale',
+          document.units
+        )
       : 1;
   if (!Number.isFinite(scaleFactor) || scaleFactor <= 0) {
     throw new Error('Transform scale must resolve to a positive number.');
@@ -706,14 +711,14 @@ function buildTransformFeature(
       target,
       transformMatrix(
         {
-          x: resolveParamValue(translation.x, scope, 'X'),
-          y: resolveParamValue(translation.y, scope, 'Y'),
-          z: resolveParamValue(translation.z, scope, 'Z')
+          x: resolveParamValue(translation.x, scope, 'X', document.units),
+          y: resolveParamValue(translation.y, scope, 'Y', document.units),
+          z: resolveParamValue(translation.z, scope, 'Z', document.units)
         },
         {
-          x: resolveParamValue(rotation.x, scope, 'rotate X'),
-          y: resolveParamValue(rotation.y, scope, 'rotate Y'),
-          z: resolveParamValue(rotation.z, scope, 'rotate Z')
+          x: resolveParamValue(rotation.x, scope, 'rotate X', document.units),
+          y: resolveParamValue(rotation.y, scope, 'rotate Y', document.units),
+          z: resolveParamValue(rotation.z, scope, 'rotate Z', document.units)
         },
         scaleFactor
       ),
@@ -741,14 +746,29 @@ function buildMirrorFeature(
   const origin = data.plane.origin;
   const rawNormal = data.plane.normal;
   const planePoint = {
-    x: resolveParamValue(origin.x, scope, 'mirror origin X'),
-    y: resolveParamValue(origin.y, scope, 'mirror origin Y'),
-    z: resolveParamValue(origin.z, scope, 'mirror origin Z')
+    x: resolveParamValue(origin.x, scope, 'mirror origin X', ctx.document.units),
+    y: resolveParamValue(origin.y, scope, 'mirror origin Y', ctx.document.units),
+    z: resolveParamValue(origin.z, scope, 'mirror origin Z', ctx.document.units)
   };
   const planeNormal = normalized({
-    x: resolveParamValue(rawNormal.x, scope, 'mirror normal X'),
-    y: resolveParamValue(rawNormal.y, scope, 'mirror normal Y'),
-    z: resolveParamValue(rawNormal.z, scope, 'mirror normal Z')
+    x: resolveParamValue(
+      rawNormal.x,
+      scope,
+      'mirror normal X',
+      ctx.document.units
+    ),
+    y: resolveParamValue(
+      rawNormal.y,
+      scope,
+      'mirror normal Y',
+      ctx.document.units
+    ),
+    z: resolveParamValue(
+      rawNormal.z,
+      scope,
+      'mirror normal Z',
+      ctx.document.units
+    )
   });
   if (!planeNormal) {
     throw new Error('Mirror plane normal must be finite and non-zero.');
@@ -810,8 +830,18 @@ function buildHoleFeature(
     Math.abs(zAxis.z) < 0.9 ? { x: 0, y: 0, z: 1 } : { x: 1, y: 0, z: 0 };
   const xAxis = normalized(cross(reference, zAxis))!;
   const yAxis = cross(zAxis, xAxis);
-  const u = resolveParamValue(data.position.u, scope, 'hole position U');
-  const v = resolveParamValue(data.position.v, scope, 'hole position V');
+  const u = resolveParamValue(
+    data.position.u,
+    scope,
+    'hole position U',
+    ctx.document.units
+  );
+  const v = resolveParamValue(
+    data.position.v,
+    scope,
+    'hole position V',
+    ctx.document.units
+  );
   // Which point (u, v) is measured from is versioned by the marker's
   // presence, never by what this build can compute: `center` is the mean of
   // the face's VERTICES, so on a face bounded by one closed circular edge it
@@ -834,7 +864,12 @@ function buildHoleFeature(
     y: -zAxis.y,
     z: -zAxis.z
   };
-  const diameter = resolveParamValue(data.diameter, scope, 'hole diameter');
+  const diameter = resolveParamValue(
+    data.diameter,
+    scope,
+    'hole diameter',
+    ctx.document.units
+  );
   if (!(diameter > 0)) {
     throw new Error('Hole diameter must be greater than zero.');
   }
@@ -864,7 +899,12 @@ function buildHoleFeature(
     if (data.depth === undefined) {
       throw new Error('A blind hole needs a depth.');
     }
-    depth = resolveParamValue(data.depth, scope, 'hole depth');
+    depth = resolveParamValue(
+      data.depth,
+      scope,
+      'hole depth',
+      ctx.document.units
+    );
     if (!(depth > 0)) {
       throw new Error('Hole depth must be greater than zero.');
     }
@@ -881,7 +921,9 @@ function buildHoleFeature(
     value: ParamValue | undefined,
     label: string
   ): number | undefined =>
-    value === undefined ? undefined : resolveParamValue(value, scope, label);
+    value === undefined
+      ? undefined
+      : resolveParamValue(value, scope, label, ctx.document.units);
   const countersinkAngleDeg = resolveOptional(
     data.countersinkAngleDeg,
     'countersink angle'
@@ -948,14 +990,29 @@ function buildSplitFeature(
   const origin = data.plane.origin;
   const rawNormal = data.plane.normal;
   const planePoint = {
-    x: resolveParamValue(origin.x, scope, 'split origin X'),
-    y: resolveParamValue(origin.y, scope, 'split origin Y'),
-    z: resolveParamValue(origin.z, scope, 'split origin Z')
+    x: resolveParamValue(origin.x, scope, 'split origin X', ctx.document.units),
+    y: resolveParamValue(origin.y, scope, 'split origin Y', ctx.document.units),
+    z: resolveParamValue(origin.z, scope, 'split origin Z', ctx.document.units)
   };
   const planeNormal = normalized({
-    x: resolveParamValue(rawNormal.x, scope, 'split normal X'),
-    y: resolveParamValue(rawNormal.y, scope, 'split normal Y'),
-    z: resolveParamValue(rawNormal.z, scope, 'split normal Z')
+    x: resolveParamValue(
+      rawNormal.x,
+      scope,
+      'split normal X',
+      ctx.document.units
+    ),
+    y: resolveParamValue(
+      rawNormal.y,
+      scope,
+      'split normal Y',
+      ctx.document.units
+    ),
+    z: resolveParamValue(
+      rawNormal.z,
+      scope,
+      'split normal Z',
+      ctx.document.units
+    )
   });
   if (!planeNormal) {
     throw new Error('Split plane normal must be finite and non-zero.');
@@ -1015,7 +1072,12 @@ function buildShellFeature(
     data.openingFaceReferences,
     'Shell opening'
   );
-  const thickness = resolveParamValue(data.thickness, scope, 'shell thickness');
+  const thickness = resolveParamValue(
+    data.thickness,
+    scope,
+    'shell thickness',
+    ctx.document.units
+  );
   const solid = createRemusModelingOperations(kernel).shell({
     targetSolid: target.solids[0]!,
     thickness,
@@ -1048,7 +1110,8 @@ function buildSolidOffsetFeature(
   const distance = resolveParamValue(
     data.distance,
     scope,
-    'solid offset distance'
+    'solid offset distance',
+    ctx.document.units
   );
   const operations = createRemusModelingOperations(kernel);
   const solids = target.solids.map((targetSolid) =>
@@ -1095,7 +1158,12 @@ function buildDraftFeature(
     scope,
     'draft neutral point'
   );
-  const angleDegrees = resolveParamValue(data.angleDeg, scope, 'draft angle');
+  const angleDegrees = resolveParamValue(
+    data.angleDeg,
+    scope,
+    'draft angle',
+    ctx.document.units
+  );
   const solid = createRemusModelingOperations(kernel).draft({
     targetSolid: target.solids[0]!,
     faces,
@@ -1137,7 +1205,8 @@ function buildThickenFeature(
   const thickness = resolveParamValue(
     data.thickness,
     scope,
-    'thicken distance'
+    'thicken distance',
+    ctx.document.units
   );
   const solid = createRemusModelingOperations(kernel).thicken({
     sourceSolid: target.solids[0]!,
@@ -1178,7 +1247,12 @@ function buildBooleanFeature(
   });
   if (
     data.activeWhen !== undefined &&
-    resolveParamValue(data.activeWhen, ctx.scope, 'boolean activation') === 0
+    resolveParamValue(
+      data.activeWhen,
+      ctx.scope,
+      'boolean activation',
+      ctx.document.units
+    ) === 0
   ) {
     result.shapes.set(feature.bodyId, operands[0]!);
     data.targetBodyIds.forEach((bodyId) => result.consumed.add(bodyId));
@@ -1595,14 +1669,20 @@ function buildEdgeModifierFeature(
   const size = resolveParamValue(
     data.featureKind === 'fillet' ? data.radius : data.distance,
     scope,
-    data.featureKind === 'fillet' ? 'radius' : 'distance'
+    data.featureKind === 'fillet' ? 'radius' : 'distance',
+    document.units
   );
   if (size <= GEOMETRY_EPSILON) {
     throw new Error('Edge modifier size must be greater than zero.');
   }
   let chamferAngleRadians: number | undefined;
   if (data.featureKind === 'chamfer' && data.angleDeg !== undefined) {
-    const angleDeg = resolveParamValue(data.angleDeg, scope, 'angle');
+    const angleDeg = resolveParamValue(
+      data.angleDeg,
+      scope,
+      'angle',
+      document.units
+    );
     // The kernel rejects angles at or past 90°; 45° exactly is the
     // symmetric chamfer, but an explicit 45 is honored as stored.
     if (!(angleDeg > 0 && angleDeg < 90)) {
@@ -1617,7 +1697,12 @@ function buildEdgeModifierFeature(
   // constant/symmetric path it always ran.
   let variableRadius: Omit<VariableFilletSpec, 'startRadius'> | undefined;
   if (data.featureKind === 'fillet' && data.endRadius !== undefined) {
-    const endRadius = resolveParamValue(data.endRadius, scope, 'end radius');
+    const endRadius = resolveParamValue(
+      data.endRadius,
+      scope,
+      'end radius',
+      document.units
+    );
     // `radiusLaw` is a union in the schema, but a document is untrusted input
     // — a hand-written or generated one can carry any string here, and the
     // kernel would answer an unqualified law with a silent constant blend
@@ -1636,7 +1721,8 @@ function buildEdgeModifierFeature(
     chamferSecondDistance = resolveParamValue(
       data.distance2,
       scope,
-      'second distance'
+      'second distance',
+      document.units
     );
     if (chamferSecondDistance <= GEOMETRY_EPSILON) {
       throw new Error(
@@ -2140,7 +2226,9 @@ function buildPatternFeature(
   if (!target) {
     throw new Error('Pattern target is unavailable.');
   }
-  const count = Math.round(resolveParamValue(data.count, scope, 'count'));
+  const count = Math.round(
+    resolveParamValue(data.count, scope, 'count', ctx.document.units)
+  );
   if (count < 2 || count > 100) {
     throw new Error('Pattern count must be between 2 and 100.');
   }
@@ -2149,7 +2237,12 @@ function buildPatternFeature(
   const count2 =
     data.patternKind === 'grid'
       ? Math.round(
-          resolveParamValue(data.count2 ?? data.count, scope, 'count 2')
+          resolveParamValue(
+            data.count2 ?? data.count,
+            scope,
+            'count 2',
+            ctx.document.units
+          )
         )
       : 1;
   if (data.patternKind === 'grid' && (count2 < 2 || count2 > 100)) {
@@ -2165,17 +2258,28 @@ function buildPatternFeature(
       : axisDirection(data.axis);
   let arm: PatternArm;
   if (data.patternKind === 'linear') {
-    const spacing = resolveParamValue(data.spacing, scope, 'spacing');
+    const spacing = resolveParamValue(
+      data.spacing,
+      scope,
+      'spacing',
+      ctx.document.units
+    );
     if (Math.abs(spacing) <= GEOMETRY_EPSILON) {
       throw new Error('Pattern spacing cannot be zero.');
     }
     arm = linearPatternArm(kernel, direction, spacing, count);
   } else if (data.patternKind === 'grid') {
-    const spacing = resolveParamValue(data.spacing, scope, 'spacing');
+    const spacing = resolveParamValue(
+      data.spacing,
+      scope,
+      'spacing',
+      ctx.document.units
+    );
     const spacing2 = resolveParamValue(
       data.spacing2 ?? data.spacing,
       scope,
-      'spacing 2'
+      'spacing 2',
+      ctx.document.units
     );
     if (
       Math.abs(spacing) <= GEOMETRY_EPSILON ||
@@ -2197,7 +2301,12 @@ function buildPatternFeature(
       { direction: direction2, spacing: spacing2, count: count2 }
     );
   } else {
-    const angle = resolveParamValue(data.angleDeg, scope, 'pattern angle');
+    const angle = resolveParamValue(
+      data.angleDeg,
+      scope,
+      'pattern angle',
+      ctx.document.units
+    );
     if (Math.abs(angle) <= GEOMETRY_EPSILON) {
       throw new Error('Pattern angle cannot be zero.');
     }

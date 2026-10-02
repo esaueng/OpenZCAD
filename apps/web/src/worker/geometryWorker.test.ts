@@ -544,6 +544,48 @@ describe('geometry worker rebuild coordination', () => {
     });
   });
 
+  it('routes binary PLY exports through the mesh job with transferred bytes', async () => {
+    const exportMesh = vi.fn(
+      async () => new Uint8Array([0x70, 0x6c, 0x79, 0x0a])
+    );
+    const { scope } = await installWorker(async () => derived('unused'), {
+      exportMesh
+    });
+    const document = addPrimitiveFeature(
+      createProjectDocument('PLY Export', toUserId('user')),
+      {
+        name: 'Box',
+        primitiveKind: 'box',
+        dimensions: { width: 10, height: 20, depth: 30 }
+      }
+    );
+    post(scope, {
+      type: 'export',
+      requestId: 'mesh-ply',
+      document,
+      bodyIds: document.bodyOrder,
+      format: 'ply',
+      deflection: 0.05
+    });
+
+    await vi.waitFor(() =>
+      expect(scope.postMessage).toHaveBeenCalledWith(
+        expect.objectContaining({
+          type: 'export',
+          ok: true,
+          format: 'ply',
+          requestId: 'mesh-ply',
+          data: new Uint8Array([0x70, 0x6c, 0x79, 0x0a])
+        }),
+        expect.objectContaining({ transfer: [expect.any(ArrayBuffer)] })
+      )
+    );
+    expect(exportMesh).toHaveBeenCalledWith(document, document.bodyOrder, {
+      format: 'ply',
+      deflection: 0.05
+    });
+  });
+
   it('answers a section request with the adapter\'s exact outline', async () => {
     const report = {
       plane: { origin: [0, 0, 3], normal: [0, 0, 1] },
