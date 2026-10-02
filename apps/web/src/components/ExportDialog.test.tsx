@@ -95,6 +95,18 @@ describe('ExportDialog', () => {
     expect(screen.queryByRole('radio', { name: /OBJ/ })).not.toBeNull();
   });
 
+  it('offers binary PLY at the standard preset', async () => {
+    const user = userEvent.setup();
+    const props = renderDialog();
+
+    await user.click(screen.getByRole('radio', { name: /PLY \(binary\)/ }));
+    await user.click(screen.getByRole('button', { name: /Export PLY/ }));
+
+    await waitFor(() =>
+      expect(props.onExport).toHaveBeenCalledWith('ply', 0.08)
+    );
+  });
+
   it('blocks export while a custom deviation is out of range', async () => {
     const user = userEvent.setup();
     const props = renderDialog();

@@ -334,6 +334,12 @@ export interface SketchModeState {
   diagnosticPoints: { x: number; y: number }[];
   /** Solver-named entities with a measured non-zero residual. */
   constraintDiagnosticObjectIds: string[];
+  /**
+   * Entities proved fully defined by a zero-DOF solve: every object id, or
+   * empty. Sketch-wide by solver-evidence design (the kernel reports one
+   * DOF scalar, no per-entity freedom).
+   */
+  definedObjectIds: string[];
   dimensions: SketchDimensionAnnotation[];
 }
 
@@ -1308,6 +1314,20 @@ const SKETCH_SELECTED_COLOR = 0x9eb8ff;
  */
 const SKETCH_CURVE_WIDTH = 1.4;
 const RIGHT_PAN_TARGET_EPSILON = 1e-9;
+
+/**
+ * A control the keyboard is moving through (focus the browser would ring),
+ * as opposed to a button that merely kept focus after a click. Tab belongs
+ * to focus navigation there, not to the sketch's snap cycling.
+ */
+function keyboardFocusInUi(): boolean {
+  const focused = document.activeElement;
+  return (
+    focused instanceof HTMLElement &&
+    focused !== document.body &&
+    focused.matches(':focus-visible')
+  );
+}
 
 function isTextEntryTarget(target: EventTarget | null): boolean {
   return (
@@ -2524,6 +2544,12 @@ export function ModelViewer({
     let activeSketchSnap: SnapTarget | null = null;
     let sketchSnapCycle = 0;
     let latestSketchPointerEvent: PointerEvent | null = null;
+    /**
+     * Whether the pointer is over the canvas now. Tab cycles snaps only then:
+     * once it had crossed the canvas, Tab was taken for good, and the
+     * keyboard could not reach Finish or any rail control.
+     */
+    let sketchPointerOnCanvas = false;
     let latestSketchPoint: SketchPoint | null = null;
     let sketchNumericRaw: string | null = null;
     let sketchNumericKind:
@@ -2608,7 +2634,9 @@ export function ModelViewer({
       if (
         event.key === 'Tab' &&
         sketchModeRef.current &&
-        latestSketchPointerEvent
+        latestSketchPointerEvent &&
+        sketchPointerOnCanvas &&
+        !keyboardFocusInUi()
       ) {
         activeSketchSnap = null;
         sketchSnapCycle += 1;
@@ -5247,6 +5275,7 @@ export function ModelViewer({
         return null;
       }
       latestSketchPointerEvent = event;
+      sketchPointerOnCanvas = true;
       if (event.shiftKey) {
         activeSketchSnap = null;
         sketchSnapCycle = 0;
@@ -7034,6 +7063,7 @@ export function ModelViewer({
     };
     const handlePointerLeave = () => {
       pendingHoverEvent = null;
+      sketchPointerOnCanvas = false;
       sketchRigRef.current?.setInference(null);
       sketchCenterTarget.hidden = true;
       if (moveDrag) {
@@ -9556,7 +9586,8 @@ export function ModelViewer({
       sketchMode.objects,
       sketchMode.selectedObjectId,
       resolve,
-      sketchMode.constraintDiagnosticObjectIds
+      sketchMode.constraintDiagnosticObjectIds,
+      sketchMode.definedObjectIds
     );
     rig.setProfiles(sketchMode.profiles, true);
     rig.setDiagnostics(sketchMode.diagnosticPoints);
