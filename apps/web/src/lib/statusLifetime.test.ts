@@ -1,6 +1,8 @@
 import { describe, expect, it } from 'vitest';
 import {
+  advanceStatusClock,
   retireStatus,
+  STATUS_CLOCK_STEP_MS,
   statusExpiresAt,
   STATUS_LIFETIME_MS,
   STATUS_SETTLE_MS
@@ -24,5 +26,20 @@ describe('status lifetime', () => {
     expect(retireStatus(fresh, 1000 + STATUS_SETTLE_MS - 1)).toBe(fresh);
     const mode = { text: 'Sketching on the XY plane', at: 1000, sticky: true };
     expect(retireStatus(mode, 10_000)).toBe(mode);
+  });
+
+  it('counts a stalled page as one late step, not the length of the stall', () => {
+    expect(advanceStatusClock(1000, STATUS_CLOCK_STEP_MS)).toBe(
+      1000 + STATUS_CLOCK_STEP_MS
+    );
+    // A step that ran a little late still counts in full.
+    expect(advanceStatusClock(1000, 400)).toBe(1400);
+    // The viewer's first frame held the main thread for nine seconds: the
+    // message could not be drawn, so it did not age by nine seconds.
+    expect(advanceStatusClock(1000, 9000)).toBe(
+      1000 + 2 * STATUS_CLOCK_STEP_MS
+    );
+    // A clock that went backwards takes nothing away.
+    expect(advanceStatusClock(1000, -50)).toBe(1000);
   });
 });

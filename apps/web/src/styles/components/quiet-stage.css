@@ -1095,6 +1095,29 @@
     top: auto;
     bottom: calc(var(--island-gap) * 3 + var(--command-bar-h) + 36px);
   }
+
+  /* With the workbench across the bottom, the parts rail keeps the top (the
+     contract view-mode.css states): centred on the stage, the dock covered
+     the list and the rail's own button, and a click on a part chose a
+     measurement instead. The list stops above the dock's tallest (40%). */
+  .workspace.column-layout:has(.measurement-dock) .view-rail {
+    top: var(--stage-top);
+    transform: none;
+  }
+
+  .workspace.column-layout:has(.measurement-dock) .view-flyouts {
+    top: 0;
+    transform: none;
+  }
+
+  .workspace.column-layout:has(.measurement-dock)
+    .view-flyouts
+    > .view-mode-rail {
+    max-height: calc(
+      60vh - var(--stage-top) - var(--island-gap) * 4 - var(--command-bar-h) -
+        36px
+    );
+  }
 }
 
 /* A phone keeps the column over the left edge, so the bottom lanes run from
@@ -1273,7 +1296,19 @@
   .workspace-column-float {
   top: var(--stage-middle);
   bottom: auto;
-  transform: translateY(-50%);
+  /* Centred, a rail taller than the stage ran under the top bar and off the
+     bottom (the sketch rail's Finish, at 390px). It stays centred while it
+     fits above the readout; past that the lift grows so its foot stands on
+     the readout (the translate's percentages are its own height), and past
+     the band's height the tools scroll while the footer (Finish) stays. */
+  --column-band-room: calc(
+    (100vh - var(--stage-top) - var(--island-gap)) / 2 -
+      var(--readout-reserve) - var(--island-gap)
+  );
+  transform: translateY(min(-50%, calc(var(--column-band-room) - 100%)));
+  max-height: calc(
+    100% - var(--stage-top) - var(--island-gap) * 2 - var(--readout-reserve)
+  );
 }
 
 .workspace.column-layout .instrument-rail {
@@ -1281,15 +1316,67 @@
   transform: translateY(-50%);
 }
 
-/* The flyout opens beside the rail, outside the column's box. (The rail
-   is only ever the Build column's content, so :has(.command-rail) alone
-   identifies that column; :has() cannot nest.) */
+/* A window too short for the viewer bar and the drawer's buttons in one
+   column (Undo slid under Settings and the activity log fell off the
+   bottom at 390px) stands the two islands side by side, the viewer bar at
+   the edge. Not a scroller: the bar's panels hang from anchors inside it,
+   and a scrolling bar clipped them to its own 40px. The right lane steps
+   left by the second island. */
+@media (max-height: 500px) {
+  .workspace.column-layout .instrument-rail {
+    flex-direction: row-reverse;
+    align-items: flex-start;
+  }
+
+  .workspace.column-layout {
+    --lane-end: calc(var(--rail-w) * 2 + var(--island-gap) * 3);
+  }
+
+  /* The views button is the bar's last; its panel rises from it rather
+     than hanging past the window's foot. */
+  .instrument-rail .rail-views-panel {
+    top: auto;
+    bottom: -4px;
+  }
+}
+
+/* The flyouts open beside the rail, outside the column's box, while the
+   rail scrolls inside it when the stage is short. Overflow clips only what
+   is laid out against the scroller or inside it, so every flyout takes the
+   float as its containing block: the rail and the tools wrapper (whose
+   container query type would make it one) step aside, and the circle menu
+   is fixed, which the transformed float contains (the circle tool keeps
+   anchoring its corner badge).
+   (The rail is only ever the Build column's content, so :has(.command-rail)
+   alone identifies that column; :has() cannot nest.) */
 .viewer-area
   .workspace-column-float:has(:is(.command-rail, .sketch-rail))
-  :is(.workspace-column, .workspace-column-tools) {
-  /* Outranks the drawer-era rule below that makes the tools a scroller;
-     the rail is short and never needs one. */
-  overflow: visible;
+  .workspace-column-tools {
+  container-type: normal;
+}
+
+.viewer-area
+  .workspace-column-float:has(:is(.command-rail, .sketch-rail))
+  nav.command-rail {
+  position: static;
+}
+
+.viewer-area .workspace-column-float:has(.sketch-rail) .sketch-circle-menu {
+  position: fixed;
+  /* Level with the circle tool: its static position. */
+  top: auto;
+  left: calc(100% + var(--island-gap));
+}
+
+/* Whatever room the stage leaves under the flyout's top, which is the
+   float's (its height is the flyout's 100%): half the stage plus half the
+   float while the float is centred, more once it has lifted off the
+   readout. */
+.viewer-area .workspace-column-float :is(.command-flyout, .sketch-flyouts) {
+  max-height: max(
+    calc((100vh - var(--stage-top) - var(--island-gap) + 100%) / 2),
+    calc(var(--readout-reserve) + var(--island-gap) + 100%)
+  );
 }
 
 /* The rail is not resizable; the splitter belongs to the sketch card and
@@ -1398,7 +1485,22 @@ button.command-rail:disabled {
   grid-template-columns: repeat(2, minmax(0, 1fr));
   gap: 1px;
   padding: 4px;
-  background: var(--color-surface);
+  /* Capped to the stage (with the rail rule above); the list scrolls on the
+     wheel and to a focused tile, its bar hidden and its edges shaded the
+     way the column's tools are. */
+  overflow-y: auto;
+  overscroll-behavior: contain;
+  scrollbar-width: none;
+  background:
+    linear-gradient(var(--color-surface) 30%, transparent) top / 100% 14px
+      no-repeat local,
+    linear-gradient(transparent, var(--color-surface) 70%) bottom / 100% 14px
+      no-repeat local,
+    linear-gradient(rgba(0, 0, 0, 0.35), transparent) top / 100% 10px no-repeat
+      scroll,
+    linear-gradient(transparent, rgba(0, 0, 0, 0.35)) bottom / 100% 10px
+      no-repeat scroll,
+    var(--color-surface);
   border: var(--border-thin);
   border-radius: var(--radius-lg);
   box-shadow: var(--shadow-2);
@@ -1547,7 +1649,9 @@ button.command-rail:disabled {
   position: absolute;
   top: 50%;
   left: calc(100% + var(--island-gap));
-  width: 300px;
+  /* At most the room between this rail and the view bar on the right: a
+     fixed 300px put Hide (and Show only) past a 320px window's edge. */
+  width: min(300px, calc(100vw - var(--rail-w) * 2 - var(--island-gap) * 4));
   display: flex;
   flex-direction: column;
   transform: translateY(-50%);
@@ -1663,10 +1767,6 @@ button.command-rail:disabled {
   border: 0;
 }
 
-.workspace-column .sketch-rail-group-label {
-  display: none;
-}
-
 .sketch-rail-divider {
   width: 22px;
   height: 1px;
@@ -1764,6 +1864,22 @@ button.command-rail:disabled {
   left: calc(100% + var(--island-gap));
 }
 
+/* The menu's rows sit inside the rail, so the rail's 30px icon-button rule
+   (and its zero font size) reached them and squeezed each name and
+   description into a 30px column that spilled over the next row. They are
+   the full-width rows direct-manipulation.css lays out. */
+.workspace-column .sketch-rail .sketch-circle-menu button {
+  display: grid;
+  grid-template-columns: 20px minmax(0, 1fr);
+  place-items: center start;
+  gap: 8px;
+  width: 100%;
+  height: auto;
+  padding: 7px 8px;
+  font-size: var(--fs-xs);
+  text-align: left;
+}
+
 /* Finish is the column's foot, lit like the primary verb. */
 .workspace-column-footer {
   display: flex;
@@ -1795,7 +1911,13 @@ button.command-rail:disabled {
   position: absolute;
   top: 0;
   left: calc(100% + var(--island-gap));
-  width: 272px;
+  /* At most the room between the rail and the right lane (the relations and
+     the instrument rail): a fixed 272px ran under both on a phone, where the
+     editor's Apply took Equal's clicks. */
+  width: min(
+    272px,
+    calc(100vw - var(--lane-end) - var(--rail-w) - var(--island-gap) * 2)
+  );
   display: flex;
   flex-direction: column;
   gap: var(--island-gap);
@@ -1804,11 +1926,23 @@ button.command-rail:disabled {
 
 .sketch-flyouts > * {
   pointer-events: auto;
+  /* The islands give way to the stage's cap and scroll: the palette first,
+     down to its header and a few rows, so the editor keeps its Apply in
+     view; only a window too short for both squeezes the editor too. */
+  flex: 0 1 auto;
+  min-height: 0;
+}
+
+.sketch-flyouts > .sketch-palette {
+  flex-shrink: 1000;
+  min-height: min(120px, 100%);
 }
 
 .sketch-flyouts .sketch-entity-dock {
   position: static;
   width: auto;
+  overflow-y: auto;
+  scrollbar-width: none;
   padding: 6px;
   background: var(--color-surface);
   border: var(--border-thin);
@@ -1820,6 +1954,18 @@ button.command-rail:disabled {
 .sketch-flyouts .sketch-entity-editor,
 .sketch-flyouts .sketch-entity-constraints {
   box-shadow: none;
+}
+
+/* The dock is the scroller here; the drawer-era phone rule's own 44vh
+   scroll box nested a second one inside it. */
+.sketch-flyouts .sketch-entity-editor {
+  max-height: none;
+  overflow: visible;
+}
+
+/* A phone-width flyout puts Apply under Delete rather than past the edge. */
+.sketch-flyouts .sketch-entity-editor footer {
+  flex-wrap: wrap;
 }
 
 .sketch-flyouts .sketch-palette {
@@ -1852,7 +1998,20 @@ button.command-rail:disabled {
 }
 
 .sketch-flyouts .sketch-palette-content {
+  /* No wider than the flyout: a fieldset's default min-content width held
+     the column at its widest row in a phone-width flyout. */
+  grid-template-columns: minmax(0, 1fr);
   padding: 8px 10px 10px;
+}
+
+.sketch-flyouts .sketch-palette-content fieldset {
+  grid-template-columns: minmax(0, 1fr);
+  min-inline-size: 0;
+}
+
+/* Snap spacing's value drops under its name rather than past the edge. */
+.sketch-flyouts .sketch-palette-number {
+  flex-wrap: wrap;
 }
 
 /* While sketching the relations stand beside the instrument rail, so the
@@ -1880,6 +2039,49 @@ button.command-rail:disabled {
 
 .sketch-relation-slot {
   display: contents;
+}
+
+/* A window too short for the relations in one column (Angle fell off the
+   bottom at 390px) packs them a little tighter and, if they still do not
+   fit, wraps them into a second column, outboard of the first so the order
+   still starts beside the instrument rail. A scroller would clip the names
+   that stand outside the rail's edge; wrapping keeps every relation in
+   view. Under 540px the second column is certain, so the right lane steps
+   left by it. */
+@media (max-height: 600px) {
+  .instrument-rail > .sketch-relations {
+    display: grid;
+    grid-auto-flow: column;
+    grid-template-rows: repeat(auto-fill, 32px);
+    grid-auto-columns: 34px;
+    gap: 2px;
+    width: auto;
+    padding: 5px 4px;
+    direction: rtl;
+    max-height: calc((100vh - var(--stage-top) - var(--island-gap) + 100%) / 2);
+  }
+
+  .instrument-rail > .sketch-relations .sketch-relation {
+    height: 32px;
+    direction: ltr;
+  }
+
+  .instrument-rail > .sketch-relations .sketch-relations-divider {
+    display: none;
+  }
+}
+
+@media (max-height: 540px) {
+  .workspace.column-layout .viewer-area:has(.sketch-relations) {
+    --lane-end: calc(var(--rail-w) + 78px + var(--island-gap) * 3);
+  }
+}
+
+/* Shorter still, the instrument rail stands two islands wide as well. */
+@media (max-height: 500px) {
+  .workspace.column-layout .viewer-area:has(.sketch-relations) {
+    --lane-end: calc(var(--rail-w) * 2 + 78px + var(--island-gap) * 4);
+  }
 }
 
 .sketch-relations-divider {

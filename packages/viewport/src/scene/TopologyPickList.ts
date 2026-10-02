@@ -33,6 +33,11 @@ export class TopologyPickList {
    */
   private focusReturn: HTMLElement | null = null;
 
+  /** Keeps an open list inside a window resized under it. */
+  private readonly onResize = () => {
+    this.options.hud.reclamp(this.element);
+  };
+
   constructor(options: TopologyPickListOptions) {
     this.options = options;
     this.element = options.hud.create('topology-pick-list');
@@ -129,6 +134,7 @@ export class TopologyPickList {
       this.hide();
       return false;
     }
+    window.addEventListener('resize', this.onResize);
     if (focusFirst) {
       const active = document.activeElement;
       this.focusReturn =
@@ -141,6 +147,7 @@ export class TopologyPickList {
   }
 
   hide(): void {
+    window.removeEventListener('resize', this.onResize);
     if (!this.element.hidden) {
       this.options.onHover(null);
     }

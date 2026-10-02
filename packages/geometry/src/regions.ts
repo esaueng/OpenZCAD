@@ -1,6 +1,7 @@
 import {
   MAX_SKETCH_ARC_SWEEP_DEGREES,
   MAX_SKETCH_POLYGON_SIDES,
+  textSketchBudgetError,
   type ParamValue,
   type SketchObjectData
 } from '@openzcad/shared';
@@ -1953,11 +1954,24 @@ function sourcedProfiles(
   profileSource: SketchProfileSource | undefined
 ): SketchProfile[] {
   const profiles: SketchProfile[] = [];
+  // Preflight the entire text collection before any supplied/built-in source
+  // runs. Otherwise many small objects (or repeated ids) bypass the per-object
+  // budget. Keep other sketch geometry and attach refusals to every text id.
+  const textBudgetError = textSketchBudgetError(
+    (function* () {
+      for (const object of objects) {
+        if (object.data.objectKind === 'text') yield object.data.text;
+      }
+    })()
+  );
   for (const object of objects) {
-    if (object.data.construction === true) {
-      continue;
-    }
     try {
+      if (object.data.objectKind === 'text' && textBudgetError) {
+        throw new Error(textBudgetError);
+      }
+      if (object.data.construction === true) {
+        continue;
+      }
       // Inside the try, not before it: a caller-supplied source is as capable
       // of throwing as the built-in expansion, and one unresolvable object
       // must not take the whole sketch's regions with it.

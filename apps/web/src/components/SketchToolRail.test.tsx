@@ -85,6 +85,44 @@ describe('SketchToolRail', () => {
     ).not.toBeInTheDocument();
   });
 
+  /**
+   * Production QA UI-09: Escape switched the drawing tool to Select but left
+   * the circle menu open, and opening the palette left it covering the
+   * palette's controls.
+   */
+  it('dismisses the circle menu predictably', async () => {
+    const user = userEvent.setup();
+    const { props, rerender } = renderRail();
+    const open = () =>
+      user.click(screen.getByRole('button', { name: 'Choose circle type' }));
+    const menu = () => screen.queryByRole('menu');
+
+    // Escape closes the menu alone: the sketch's own Escape never sees it.
+    const sketchEscape = vi.fn();
+    document.addEventListener('keydown', sketchEscape, true);
+    await open();
+    expect(menu()).toBeInTheDocument();
+    await user.keyboard('{Escape}');
+    expect(menu()).not.toBeInTheDocument();
+    expect(sketchEscape).not.toHaveBeenCalled();
+    await user.keyboard('{Escape}');
+    expect(sketchEscape).toHaveBeenCalledOnce();
+    document.removeEventListener('keydown', sketchEscape, true);
+
+    // A press anywhere else closes it.
+    await open();
+    await user.click(screen.getByRole('button', { name: 'Select' }));
+    expect(menu()).not.toBeInTheDocument();
+
+    // So do the palette opening and a tool change made by a key.
+    await open();
+    await user.click(screen.getByRole('button', { name: /Sketch palette/ }));
+    expect(menu()).not.toBeInTheDocument();
+    await open();
+    rerender(<SketchToolRail {...props} tool="line" />);
+    expect(menu()).not.toBeInTheDocument();
+  });
+
   it('keeps geometry and grid snapping independent', async () => {
     const user = userEvent.setup();
     const onSettings = vi.fn();
@@ -314,6 +352,71 @@ describe('SketchToolRail', () => {
     expect(
       screen.getByText('Vertical · Line 2').closest('li')
     ).not.toHaveAttribute('data-conflicted');
+  });
+
+  it('marks every row defined exactly when the pill says Fully constrained', async () => {
+    const user = userEvent.setup();
+    renderRail({
+      constraints: [
+        {
+          constraintId: 'scon_1',
+          label: 'Horizontal · Line 1',
+          editable: false,
+          defined: true
+        },
+        {
+          constraintId: 'scon_2',
+          label: 'Distance 10 · Line 1 ↔ Line 2',
+          editable: true,
+          defined: true
+        }
+      ],
+      solveStatus: {
+        label: 'Fully constrained',
+        tone: 'ok',
+        definedState: 'fully-defined',
+        definedObjectIds: ['ent_1', 'ent_2'],
+        conflictingConstraintIds: []
+      }
+    });
+    // The pill text stays the authoritative signal; the rows only repeat it
+    // in words as well as colour.
+    expect(screen.getByRole('status')).toHaveTextContent('Fully constrained');
+    await user.click(screen.getByRole('button', { name: /Sketch palette/ }));
+    for (const label of [
+      'Horizontal · Line 1',
+      'Distance 10 · Line 1 ↔ Line 2'
+    ]) {
+      const row = screen.getByText(label).closest('li');
+      expect(row).toHaveAttribute('data-defined', 'true');
+      expect(row).toHaveAttribute('aria-label', `${label} · fully defined`);
+      expect(row).not.toHaveAttribute('data-conflicted');
+    }
+  });
+
+  it('leaves rows unmarked while the sketch still has freedom', async () => {
+    const user = userEvent.setup();
+    renderRail({
+      constraints: [
+        {
+          constraintId: 'scon_1',
+          label: 'Horizontal · Line 1',
+          editable: false
+        }
+      ],
+      solveStatus: {
+        label: '2 DOF remaining',
+        tone: 'info',
+        definedState: 'under-defined',
+        definedObjectIds: [],
+        conflictingConstraintIds: []
+      }
+    });
+    expect(screen.getByRole('status')).toHaveTextContent('2 DOF remaining');
+    await user.click(screen.getByRole('button', { name: /Sketch palette/ }));
+    const row = screen.getByText('Horizontal · Line 1').closest('li');
+    expect(row).not.toHaveAttribute('data-defined');
+    expect(row).toHaveAttribute('aria-label', 'Horizontal · Line 1');
   });
 });
 

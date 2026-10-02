@@ -1,4 +1,4 @@
-import { useId, useState, type ReactNode } from 'react';
+import { useEffect, useId, useRef, useState, type ReactNode } from 'react';
 import {
   ChevronDown,
   Circle,
@@ -28,6 +28,7 @@ import type {
   SketchToolId
 } from '../lib/interaction/machine';
 import { CONSTRAINT_TOOL_SPECS } from '../lib/sketch/constraints';
+import type { SketchDefinedState } from '../lib/sketch/constraints';
 import { SKETCH_EDIT_TOOL_SPECS } from '../lib/sketch/edits';
 import { CONSTRAINT_ICONS } from './constraintIcons';
 import { Tooltip } from './Tooltip';
@@ -38,14 +39,25 @@ export interface SketchConstraintListItem {
   label: string;
   editable: boolean;
   conflicted?: boolean;
+  /**
+   * True while the last solve proved the whole sketch fully defined. Rows
+   * never claim an under-defined state per entity — the kernel reports no
+   * per-entity freedom — so this is sketch-wide agreement with the pill and
+   * the viewport, not a second signal on its own.
+   */
+  defined?: boolean;
 }
 
 /** What the solve-status pill shows; null until a solve has run. */
 export interface SketchSolveStatus {
   label: string;
   tone: 'ok' | 'info' | 'warn';
+  /** Sketch-wide defined state behind the pill text, if a solve ran. */
+  definedState?: SketchDefinedState;
   /** Entities named by constraints with measurable residuals, if any. */
   diagnosticObjectIds?: string[];
+  /** Entities proved fully defined by a zero-DOF solve, if any. */
+  definedObjectIds?: string[];
   /** Constraints with measurable residuals, if the solver named any. */
   conflictingConstraintIds?: string[];
 }
@@ -173,10 +185,45 @@ export function SketchToolRail({
   onDiagnostics,
   onExtrude
 }: SketchToolRailProps) {
-  const [circleMenuOpen, setCircleMenuOpen] = useState(false);
   // The sketch's overview and settings open beside the rail; closed until asked.
   const [paletteOpenState, setPaletteOpenState] = useState(false);
   const paletteOpen = paletteOpenProp ?? paletteOpenState;
+  // The circle-type menu is temporary: it belongs to the tool and palette
+  // state it opened under, so a tool change (a click or a key) or the palette
+  // opening closes it rather than leaving it over the palette's controls.
+  const circleMenuKey = `${tool}|${paletteOpen}`;
+  const [circleMenuOpenFor, setCircleMenuOpenFor] = useState<string | null>(
+    null
+  );
+  const circleMenuOpen = circleMenuOpenFor === circleMenuKey;
+  const setCircleMenuOpen = (open: boolean) =>
+    setCircleMenuOpenFor(open ? circleMenuKey : null);
+  const circleToolRef = useRef<HTMLSpanElement | null>(null);
+  useEffect(() => {
+    if (!circleMenuOpen) {
+      return;
+    }
+    // Escape closes the menu and nothing else; the next one is the sketch's.
+    // Window capture runs ahead of the sketch's own capture listener.
+    const onKeyDown = (event: KeyboardEvent) => {
+      if (event.key === 'Escape') {
+        event.preventDefault();
+        event.stopPropagation();
+        setCircleMenuOpenFor(null);
+      }
+    };
+    const onPointerDown = (event: PointerEvent) => {
+      if (!circleToolRef.current?.contains(event.target as Node)) {
+        setCircleMenuOpenFor(null);
+      }
+    };
+    window.addEventListener('keydown', onKeyDown, true);
+    window.addEventListener('pointerdown', onPointerDown, true);
+    return () => {
+      window.removeEventListener('keydown', onKeyDown, true);
+      window.removeEventListener('pointerdown', onPointerDown, true);
+    };
+  }, [circleMenuOpen]);
   const togglePalette = () =>
     onTogglePalette ? onTogglePalette() : setPaletteOpenState((open) => !open);
   const patchSettings = (patch: Partial<AppSettings['sketching']>) =>
@@ -205,7 +252,7 @@ export function SketchToolRail({
   const drawTools = (
     <>
       {TOOLS.slice(0, 3).map(drawTool)}
-      <span className="sketch-circle-tool">
+      <span className="sketch-circle-tool" ref={circleToolRef}>
         <Tooltip
           label={CIRCLE_LABELS[circleMode]}
           shortcut="C"
@@ -226,7 +273,7 @@ export function SketchToolRail({
           className="sketch-circle-chevron"
           aria-label="Choose circle type"
           aria-expanded={circleMenuOpen}
-          onClick={() => setCircleMenuOpen((open) => !open)}
+          onClick={() => setCircleMenuOpen(!circleMenuOpen)}
         >
           <ChevronDown size={10} aria-hidden="true" />
         </button>
@@ -467,14 +514,17 @@ export function SketchToolRail({
               <legend>Constraints</legend>
               <ul className="sketch-constraint-list">
                 {constraints.map(
-                  ({ constraintId, label, editable, conflicted }) => (
+                  ({ constraintId, label, editable, conflicted, defined }) => (
                     <li
                       key={constraintId}
                       data-conflicted={conflicted ? 'true' : undefined}
+                      data-defined={defined ? 'true' : undefined}
                       aria-label={
                         conflicted
                           ? `${label} · solver residual; edit or delete this constraint`
-                          : label
+                          : defined
+                            ? `${label} · fully defined`
+                            : label
                       }
                     >
                       {editable ? (
@@ -489,6 +539,7 @@ export function SketchToolRail({
                             type="button"
                             className="sketch-constraint-edit"
                             data-conflicted={conflicted ? 'true' : undefined}
+                            data-defined={defined ? 'true' : undefined}
                             aria-label={`Edit constraint: ${label}`}
                             onClick={(event) =>
                               onEditConstraint(constraintId, {

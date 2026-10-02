@@ -7,6 +7,7 @@ import type {
   SketchId
 } from '@openzcad/shared';
 import type {
+  BuildCancellationSignal,
   createExactKernelAdapter,
   DxfFaceSelector,
   ExactSectionPlane,
@@ -33,19 +34,19 @@ import { preloadDocumentFonts } from '../lib/textFonts';
 
 /**
  * `step`, `stl`, and `dxf` produce text (STEP data, ASCII STL, DXF R12);
- * `stl-binary`, `3mf`, `obj`, and `glb` produce bytes. Mesh formats accept
- * a deflection in millimetres — chordal tolerance after unit scaling —
- * defaulting to the adapter's standard export tessellation when omitted.
- * `dxf` exports a 2D outline and requires either a `face` (one planar
- * face's outline) or a `section` plane (the exact cross-section).
+ * `stl-binary`, `3mf`, `obj`, `glb`, and `ply` produce bytes. Mesh formats
+ * accept a deflection in millimetres — chordal tolerance after unit
+ * scaling — defaulting to the adapter's standard export tessellation when
+ * omitted. `dxf` exports a 2D outline and requires either a `face` (one
+ * planar face's outline) or a `section` plane (the exact cross-section).
  */
 export type GeometryExportFormat =
-  'step' | 'stl' | 'dxf' | 'stl-binary' | '3mf' | 'obj' | 'glb';
+  'step' | 'stl' | 'dxf' | 'stl-binary' | '3mf' | 'obj' | 'glb' | 'ply';
 
 /** The export formats whose payload crosses back as transferred bytes. */
 export type GeometryBinaryExportFormat = Extract<
   GeometryExportFormat,
-  'stl-binary' | '3mf' | 'obj' | 'glb'
+  'stl-binary' | '3mf' | 'obj' | 'glb' | 'ply'
 >;
 
 export type GeometryWorkerRequest =
@@ -54,6 +55,15 @@ export type GeometryWorkerRequest =
       document: ProjectDocument;
       requestId?: string;
       analysis?: EditAnalysisRequest;
+      /**
+       * Transient lineage demand: body ids whose producing booleans must
+       * probe. Present (even empty) only on the viewport's idle broadcast,
+       * which opts into skipping the probe for unreferenced booleans; absent
+       * means full lineage. UI state only — never part of the document, never
+       * part of `canonicalProjectContentKey`, only of the rebuild cache key
+       * and the adapter's history digest.
+       */
+      lineageDemand?: BodyId[];
     }
   | {
       type: 'export';
@@ -66,6 +76,8 @@ export type GeometryWorkerRequest =
       face?: DxfFaceSelector;
       /** The other 'dxf' source: the plane whose exact section to export. */
       section?: ExactSectionPlane;
+      /** The third 'dxf' source: the saved sketch whose geometry to export. */
+      sketchId?: SketchId;
     }
   | {
       /**
@@ -603,19 +615,23 @@ async function execute(job: GeometryWorkerJob): Promise<void> {
         return;
       }
       if (request.format === 'dxf') {
-        if (!request.face && !request.section) {
-          throw new Error('DXF export needs a face selection or a section plane.');
+        if (!request.face && !request.section && !request.sketchId) {
+          throw new Error(
+            'DXF export needs a face selection, a section plane, or a sketch.'
+          );
         }
-        const text = request.section
-          ? await exact.exportSectionDxf(
-              document,
-              request.section,
-              // Same bodies as the section on screen. An empty selection
-              // means the caller has nothing to narrow it by, so the
-              // adapter's own document visibility stands.
-              request.bodyIds.length > 0 ? request.bodyIds : undefined
-            )
-          : await exact.exportFaceDxf(document, request.face!);
+        const text = request.sketchId
+          ? await exact.exportSketchDxf(document, request.sketchId)
+          : request.section
+            ? await exact.exportSectionDxf(
+                document,
+                request.section,
+                // Same bodies as the section on screen. An empty selection
+                // means the caller has nothing to narrow it by, so the
+                // adapter's own document visibility stands.
+                request.bodyIds.length > 0 ? request.bodyIds : undefined
+              )
+            : await exact.exportFaceDxf(document, request.face!);
         post({
           type: 'export',
           ok: true,
@@ -670,11 +686,18 @@ async function execute(job: GeometryWorkerJob): Promise<void> {
     const contentKey = isGeometryEmpty(document)
       ? null
       : canonicalProjectContentKey(document);
+    const lineageDemandKey =
+      // A request carrying a demand (even an empty one) opted into the idle
+      // probe skip, so it must never share a cache entry with a full-lineage
+      // request that carries none.
+      request.type === 'sync' && request.lineageDemand !== undefined
+        ? `:lazy:${JSON.stringify([...new Set(request.lineageDemand)].sort())}`
+        : '';
     const derived =
       contentKey === null
         ? emptyDerived(document)
         : await rebuildCache.get(
-            `${contentKey}${request.type === 'sync' && request.analysis ? `:analysis:${JSON.stringify(request.analysis)}` : ''}`,
+            `${contentKey}${request.type === 'sync' && request.analysis ? `:analysis:${JSON.stringify(request.analysis)}` : ''}${lineageDemandKey}`,
             async () => {
               // 'failed' retries on the next load call, so it counts as a
               // loading state here too.
@@ -691,6 +714,15 @@ async function execute(job: GeometryWorkerJob): Promise<void> {
                 throw new Error('Superseded geometry broadcast.');
               }
               post(stateFor('rebuilding', request, { stale: true }));
+              // A superseded rebuild stops at the next feature boundary (a
+              // running WASM call still completes); the adapter rejects typed
+              // and commits nothing, and the gate below drops anything stale.
+              const cancellation: BuildCancellationSignal = {
+                isCancelled: () =>
+                  (job.requestId
+                    ? cancelledRequests.has(job.requestId)
+                    : false) || !broadcastGate.isCurrent(job.broadcastToken)
+              };
               const result = await exact.syncDocument(
                 document,
                 (progress) => {
@@ -710,7 +742,13 @@ async function execute(job: GeometryWorkerJob): Promise<void> {
                         derived: projection
                       });
                     },
-                request.type === 'sync' ? request.analysis : undefined
+                request.type === 'sync' ? request.analysis : undefined,
+                {
+                  cancellation,
+                  ...(request.type === 'sync' && request.lineageDemand
+                    ? { lineageDemand: request.lineageDemand }
+                    : {})
+                }
               );
               lastExactSyncKey = contentKey;
               lastExactSyncEpoch = exact.currentMassPropertiesEpoch();
@@ -732,6 +770,16 @@ async function execute(job: GeometryWorkerJob): Promise<void> {
     post(stateFor('ready', request, { stale: false }));
   } catch (error) {
     if (!broadcastGate.isCurrent(job.broadcastToken)) {
+      return;
+    }
+    // Cancelled while running: the caller already dropped its promise and
+    // the job that superseded it reports its own state, so a typed
+    // cancellation is not a failure to surface.
+    if (
+      job.requestId &&
+      cancelledRequests.has(job.requestId) &&
+      (error as { category?: unknown } | null)?.category === 'cancelled'
+    ) {
       return;
     }
     const message = errorMessage(error);

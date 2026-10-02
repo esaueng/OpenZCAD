@@ -102,6 +102,8 @@ function measuredBody(): BodyRepresentation {
             surfaceType: 'plane',
             area: 200,
             center: { x: 5, y: 10, z: 30 },
+            centroid: { x: 5, y: 10, z: 30 },
+            centroidProvenance: 'exact' as const,
             normal: { x: 0, y: 0, z: 1 }
           }
         },
@@ -264,10 +266,41 @@ describe('measurement workbench records', () => {
   it('neutralizes spreadsheet formulas in copied and CSV labels', () => {
     const measurement = { ...edge(1, 84), label: '=WEBSERVICE("bad")' };
     expect(measurementsToText([measurement], DISPLAY)).toContain(
-      '\'=WEBSERVICE("bad")'
+      '"\'=WEBSERVICE(""bad"")"'
     );
     expect(measurementsToCsv([measurement], DISPLAY)).toContain(
       '"\'=WEBSERVICE(""bad"")"'
+    );
+    const linePrefixed = {
+      ...edge(1, 84),
+      label: '\n=WEBSERVICE("bad")'
+    };
+    expect(measurementsToCsv([linePrefixed], DISPLAY)).toContain(
+      '"\'\n=WEBSERVICE(""bad"")"'
+    );
+    const spacePrefixed = {
+      ...edge(1, 84),
+      label: '  =WEBSERVICE("bad")'
+    };
+    expect(measurementsToCsv([spacePrefixed], DISPLAY)).toContain(
+      '"\'  =WEBSERVICE(""bad"")"'
+    );
+  });
+
+  it('frames TSV delimiters and quotes CSV carriage returns', () => {
+    const tabbed = {
+      ...edge(1, 84),
+      label: 'Plate\t=WEBSERVICE("bad")'
+    };
+    const copied = measurementsToText([tabbed], DISPLAY);
+    expect(copied).toContain('"Plate\t=WEBSERVICE(""bad"")"\t');
+
+    const carriageReturn = {
+      ...edge(1, 84),
+      label: 'Plate\rRear'
+    };
+    expect(measurementsToCsv([carriageReturn], DISPLAY)).toContain(
+      '"Plate\rRear"'
     );
   });
 

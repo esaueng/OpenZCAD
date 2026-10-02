@@ -208,6 +208,39 @@ describe('settings advanced section', () => {
     expect(screen.getByText('Kernel version')).toBeInTheDocument();
   });
 
+  /**
+   * Production QA UI-04: below 580px the field is hidden, so a filter typed
+   * in a wider window left the rail on its matches with no way out.
+   */
+  it('offers a way out of an active filter that does not need the field', async () => {
+    const user = userEvent.setup();
+    // Start unfiltered: Settings restores the last search it was left on.
+    window.localStorage.clear();
+    renderSettings();
+    const sectionsBefore = within(
+      screen.getByRole('complementary', { name: 'Settings sections' })
+    ).getAllByRole('button').length;
+    expect(
+      screen.queryByRole('button', { name: /^Clear the filter/ })
+    ).not.toBeInTheDocument();
+
+    await user.type(screen.getByLabelText('Find a setting'), 'snap');
+    const clear = screen.getByRole('button', {
+      name: 'Clear the filter “snap”'
+    });
+    await user.click(clear);
+
+    expect(screen.getByLabelText('Find a setting')).toHaveValue('');
+    expect(
+      screen.queryByRole('button', { name: /^Clear the filter/ })
+    ).not.toBeInTheDocument();
+    expect(
+      within(
+        screen.getByRole('complementary', { name: 'Settings sections' })
+      ).getAllByRole('button')
+    ).toHaveLength(sectionsBefore);
+  });
+
   it('reports cloud project storage as not ready when health fails closed', async () => {
     const user = userEvent.setup();
     renderSettings({
@@ -378,6 +411,33 @@ describe('settings privacy and data section', () => {
     projectErasureReady: true
   };
 
+  it('starts profile details hidden and re-hides them when settings reopen', async () => {
+    const user = userEvent.setup();
+    const view = renderSettings(null, { initialSection: 'account', session });
+    expect(view.container.innerHTML).not.toContain(session.email);
+    expect(screen.getByText('Name hidden')).toBeVisible();
+    expect(screen.getByText('Email hidden')).toBeVisible();
+    const show = screen.getByRole('button', { name: 'Show personal info' });
+    expect(show).toHaveAttribute('aria-pressed', 'false');
+    await user.click(show);
+    expect(screen.getByText(session.displayName)).toBeVisible();
+    expect(screen.getByText(session.email)).toBeVisible();
+    const hide = screen.getByRole('button', { name: 'Hide personal info' });
+    expect(hide).toHaveAttribute('aria-pressed', 'true');
+    await user.click(hide);
+    expect(view.container.innerHTML).not.toContain(session.email);
+    await user.click(
+      screen.getByRole('button', { name: 'Show personal info' })
+    );
+    view.unmount();
+    const reopened = renderSettings(null, {
+      initialSection: 'account',
+      session
+    });
+    expect(reopened.container.innerHTML).not.toContain(session.email);
+    expect(screen.getByText('Name hidden')).toBeVisible();
+  });
+
   it('keeps all cloud deletion functions together on Privacy & data', () => {
     renderSettings(readyHealth, { initialSection: 'privacy', session });
 
@@ -432,6 +492,19 @@ describe('settings privacy and data section', () => {
       name: 'Delete all cloud data'
     });
     expect(confirm).toBeDisabled();
+    expect(dialog.innerHTML).not.toContain(session.email);
+    const confirmation = within(dialog).getByLabelText('Deletion confirmation');
+    expect(confirmation).toHaveAttribute('type', 'password');
+    await user.click(
+      within(dialog).getByRole('button', { name: 'Show personal info' })
+    );
+    expect(within(dialog).getByText(session.email)).toBeVisible();
+    expect(confirmation).toHaveAttribute('type', 'text');
+    await user.click(
+      within(dialog).getByRole('button', { name: 'Hide personal info' })
+    );
+    expect(dialog.innerHTML).not.toContain(session.email);
+    expect(confirmation).toHaveAttribute('type', 'password');
     expect(
       within(dialog).getByText(/Local projects and settings/)
     ).toBeVisible();

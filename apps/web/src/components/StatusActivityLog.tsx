@@ -16,6 +16,12 @@ interface StatusActivityLogProps {
   open: boolean;
   status: string;
   detail?: string;
+  /**
+   * The exact-geometry line while the model is not ready. Logged as entries
+   * of its own: when it stood in for the status, a message set meanwhile
+   * never reached the log at all.
+   */
+  geometryStatus?: string | null;
   tone: StatusTone;
   triggerRef: RefObject<HTMLButtonElement | null>;
   onClose(restoreFocus: boolean): void;
@@ -37,12 +43,13 @@ export function StatusActivityLog({
   open,
   status,
   detail,
+  geometryStatus = null,
   tone,
   triggerRef,
   onClose
 }: StatusActivityLogProps) {
-  const nextEntryIdRef = useRef(1);
-  const previousStatusRef = useRef({ status, detail, tone });
+  const nextEntryIdRef = useRef(geometryStatus ? 2 : 1);
+  const previousStatusRef = useRef({ status, detail, tone, geometryStatus });
   const panelRef = useRef<HTMLElement | null>(null);
   const listRef = useRef<HTMLOListElement | null>(null);
   const [entries, setEntries] = useState<StatusLogEntry[]>(() => [
@@ -52,32 +59,47 @@ export function StatusActivityLog({
       ...(detail ? { detail } : {}),
       timestamp: Date.now(),
       tone
-    }
+    },
+    ...(geometryStatus
+      ? [{ id: 1, message: geometryStatus, timestamp: Date.now(), tone }]
+      : [])
   ]);
 
   useEffect(() => {
     const previous = previousStatusRef.current;
+    previousStatusRef.current = { status, detail, tone, geometryStatus };
+    const added: StatusLogEntry[] = [];
+    // A tone change alone is news only for the message it colours; while the
+    // geometry line comes or goes, the tone is following that instead.
     if (
-      previous.status === status &&
-      previous.detail === detail &&
-      previous.tone === tone
+      previous.status !== status ||
+      previous.detail !== detail ||
+      (previous.tone !== tone &&
+        geometryStatus === null &&
+        previous.geometryStatus === null)
     ) {
-      return;
+      added.push({
+        id: nextEntryIdRef.current++,
+        message: status,
+        ...(detail ? { detail } : {}),
+        timestamp: Date.now(),
+        tone
+      });
     }
-    previousStatusRef.current = { status, detail, tone };
-    setEntries((current) =>
-      [
-        ...current,
-        {
-          id: nextEntryIdRef.current++,
-          message: status,
-          ...(detail ? { detail } : {}),
-          timestamp: Date.now(),
-          tone
-        }
-      ].slice(-MAX_STATUS_LOG_ENTRIES)
-    );
-  }, [detail, status, tone]);
+    if (geometryStatus && geometryStatus !== previous.geometryStatus) {
+      added.push({
+        id: nextEntryIdRef.current++,
+        message: geometryStatus,
+        timestamp: Date.now(),
+        tone
+      });
+    }
+    if (added.length > 0) {
+      setEntries((current) =>
+        [...current, ...added].slice(-MAX_STATUS_LOG_ENTRIES)
+      );
+    }
+  }, [detail, geometryStatus, status, tone]);
 
   useEffect(() => {
     if (!open) {

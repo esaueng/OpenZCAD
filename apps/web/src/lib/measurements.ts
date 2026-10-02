@@ -20,6 +20,7 @@ import {
 } from './topologyResolution';
 import {
   ANGLE_CONVENTION_LABELS,
+  angleBetweenDirections,
   angleBetweenEdges,
   angleBetweenFaces,
   angleBetweenLineAndPlane,
@@ -36,7 +37,12 @@ export type MeasurementKind =
   | 'face-area'
   | 'body'
   | 'distance'
-  | 'angle';
+  | 'angle'
+  /**
+   * A 3-point angle with the vertex at the middle pick. Three targets, unlike
+   * `angle`, which always carries exactly two.
+   */
+  | 'point-angle';
 
 /**
  * Where a figure came from, and therefore how far it can be trusted.
@@ -90,7 +96,20 @@ export interface MeasurementTarget {
    */
   endpoints?: readonly [Vector3, Vector3];
   semantic:
-    'body-center' | 'face-center' | 'circle-center' | 'edge-midpoint' | 'pick';
+    | 'body-center'
+    | 'face-center'
+    | 'circle-center'
+    | 'edge-midpoint'
+    /**
+     * One end of an edge, in the edge's own direction — the same direction its
+     * display polyline is sampled in. Start and end are kernel traversal
+     * order, not a geometric ranking, which is why both ends are nameable:
+     * re-deriving "the nearer one" from a stored point would be proximity
+     * rebinding, which ADR-011 forbids.
+     */
+    | 'vertex-start'
+    | 'vertex-end'
+    | 'pick';
   quality: MeasurementQuality;
 }
 
@@ -145,6 +164,7 @@ function annotationGraphic(
     case 'edge-total':
       return 'span';
     case 'angle':
+    case 'point-angle':
       return 'arms';
     // A diameter, an area and a body have a point to label but no span to
     // draw between: the figure describes a whole face or solid, not a gap.
@@ -173,9 +193,11 @@ export interface Measurement {
    */
   reason?: TopologyResolutionReason;
   /**
-   * Which angle was measured, for `kind: 'angle'`. Shown beside the figure
-   * because a bare "30°" between two faces does not say whether it describes
-   * the material or its normals, and those differ by 120.
+   * Which angle was measured, for `kind: 'angle'` or `'point-angle'`. Shown
+   * beside the figure because a bare "30°" between two faces does not say
+   * whether it describes the material or its normals, and those differ by 120.
+   * A 3-point angle always reports `included`: both arms are oriented away
+   * from the vertex pick, so the corner is well defined over the full 0-180.
    */
   angleConvention?: AngleConvention;
   sourceRevision: number;
@@ -252,6 +274,22 @@ function normalized(direction: Vector3): Vector3 | null {
 
 function distance(first: Vector3, second: Vector3): number {
   return Math.hypot(second.x - first.x, second.y - first.y, second.z - first.z);
+}
+
+function subtractVectors(from: Vector3, to: Vector3): Vector3 {
+  return vector(from.x - to.x, from.y - to.y, from.z - to.z);
+}
+
+function dotVectors(first: Vector3, second: Vector3): number {
+  return first.x * second.x + first.y * second.y + first.z * second.z;
+}
+
+function crossVectors(first: Vector3, second: Vector3): Vector3 {
+  return vector(
+    first.y * second.z - first.z * second.y,
+    first.z * second.x - first.x * second.z,
+    first.x * second.y - first.y * second.x
+  );
 }
 
 /**
@@ -384,6 +422,343 @@ function selectionForTarget(target: MeasurementTarget): TopologySelection {
   };
 }
 
+type TargetBase = Pick<
+  MeasurementTarget,
+  'bodyId' | 'bodyName' | 'kind' | 'topologyId' | 'hash' | 'reference'
+>;
+
+/**
+ * How far a face centroid can be trusted. The adapter publishes the
+ * integrator's own verdict beside the point: `exact` only when every boundary
+ * edge is straight, `sampled` once any curved boundary is inscribed. Absent on
+ * older projections, which read as approximate — absence of evidence is not a
+ * promise.
+ */
+function faceCentroidQuality(geometry: {
+  centroidProvenance?: FaceAreaProvenance;
+}): MeasurementQuality {
+  return geometry.centroidProvenance === 'exact'
+    ? 'exact-analytic'
+    : 'tessellated';
+}
+
+function edgeCircleCenterTarget(
+  base: TargetBase,
+  edge: EdgeTopology,
+  label: string
+): MeasurementTarget | null {
+  if (!edge.curve?.circle) {
+    return null;
+  }
+  return {
+    ...base,
+    topologyId: edge.topologyId,
+    hash: edge.hash,
+    reference: edge.reference,
+    label: `${label} center`,
+    point: edge.curve.circle.center,
+    direction: edge.curve.circle.axis,
+    semantic: 'circle-center',
+    quality: 'exact-analytic'
+  };
+}
+
+function lineMidpointTarget(
+  base: TargetBase,
+  edge: EdgeTopology,
+  label: string
+): MeasurementTarget | null {
+  const endpoints = edgeEndpoints(edge);
+  const lineDirection =
+    edge.curve?.type.toUpperCase() === 'LINE' && endpoints
+      ? normalized(
+          vector(
+            endpoints[1].x - endpoints[0].x,
+            endpoints[1].y - endpoints[0].y,
+            endpoints[1].z - endpoints[0].z
+          )
+        )
+      : null;
+  if (!lineDirection || !endpoints) {
+    return null;
+  }
+  return {
+    ...base,
+    topologyId: edge.topologyId,
+    hash: edge.hash,
+    reference: edge.reference,
+    label: `${label} midpoint`,
+    point: midpoint(endpoints[0], endpoints[1]),
+    direction: lineDirection,
+    endpoints,
+    semantic: 'edge-midpoint',
+    quality: 'exact-analytic'
+  };
+}
+
+function cylinderCenterTarget(
+  base: TargetBase,
+  face: FaceTopology,
+  geometry: NonNullable<FaceTopology['geometry']>,
+  label: string
+): MeasurementTarget | null {
+  if (
+    geometry.surfaceType !== 'cylinder' ||
+    !geometry.axisStart ||
+    !geometry.axisEnd
+  ) {
+    return null;
+  }
+  return {
+    ...base,
+    topologyId: face.topologyId,
+    hash: face.hash,
+    reference: face.reference,
+    label: `${label} center`,
+    point: midpoint(geometry.axisStart, geometry.axisEnd),
+    direction:
+      normalized(
+        vector(
+          geometry.axisEnd.x - geometry.axisStart.x,
+          geometry.axisEnd.y - geometry.axisStart.y,
+          geometry.axisEnd.z - geometry.axisStart.z
+        )
+      ) ?? undefined,
+    semantic: 'circle-center',
+    quality: 'exact-analytic'
+  };
+}
+
+/** A closed edge repeats its first point, so any smaller gap is an open arc. */
+const ARC_MIDPOINT_CLOSED_TOLERANCE = 1e-9;
+
+/**
+ * The middle sample of the edge's display polyline. Used only to choose which
+ * side of the circle the trimmed arc runs on — a discrete choice the sampled
+ * data answers reliably — never as the measured point itself.
+ */
+function polylineInteriorPoint(edge: EdgeTopology): Vector3 | null {
+  const count = Math.floor(edge.points.length / 3);
+  if (count < 2) {
+    return null;
+  }
+  const at = Math.floor(count / 2) * 3;
+  return vector(edge.points[at]!, edge.points[at + 1]!, edge.points[at + 2]!);
+}
+
+/**
+ * Midpoint of a circular arc's TRIMMED range, on the arc itself.
+ *
+ * This is not the chord midpoint: for a 90-degree arc of radius 4 the chord
+ * midpoint sits ~1.17 inside the arc, and the error grows with the subtended
+ * angle. The trimmed range is recovered from the published full circle plus
+ * the edge's own endpoints: both ends give radii, and the sampled polyline's
+ * middle says which way round the interior runs, which fixes the signed sweep
+ * and its half. The kernel's exact edge length then checks the answer and the
+ * function fails closed when the three sources disagree.
+ *
+ * Closed edges (a full rim) have no single midpoint and return null; their
+ * centre remains available as `circle-center`.
+ */
+function edgeArcMidpoint(edge: EdgeTopology): Vector3 | null {
+  const circle = edge.curve?.circle;
+  if (
+    !circle ||
+    !Number.isFinite(circle.radius) ||
+    circle.radius <= 0 ||
+    edge.curve?.type.toUpperCase() !== 'CIRCLE'
+  ) {
+    return null;
+  }
+  const ends = edgeEndpoints(edge);
+  if (!ends) {
+    return null;
+  }
+  if (distance(ends[0], ends[1]) <= ARC_MIDPOINT_CLOSED_TOLERANCE) {
+    return null;
+  }
+  const axis = normalized(circle.axis);
+  if (!axis) {
+    return null;
+  }
+  const radial = (point: Vector3): Vector3 | null => {
+    const offset = subtractVectors(point, circle.center);
+    const axial = dotVectors(offset, axis);
+    return normalized(
+      vector(
+        offset.x - axis.x * axial,
+        offset.y - axis.y * axial,
+        offset.z - axis.z * axial
+      )
+    );
+  };
+  const startRadius = radial(ends[0]);
+  const endRadius = radial(ends[1]);
+  const interior = polylineInteriorPoint(edge);
+  const middleRadius = interior ? radial(interior) : null;
+  if (!startRadius || !endRadius || !middleRadius) {
+    return null;
+  }
+  // In-plane frame from the start radius. (u, v, axis) is right-handed, so the
+  // measured angle grows counter-clockwise about the published axis.
+  const side = normalized(crossVectors(axis, startRadius));
+  if (!side) {
+    return null;
+  }
+  const angleOf = (unit: Vector3): number =>
+    Math.atan2(dotVectors(unit, side), dotVectors(unit, startRadius));
+  const TAU = Math.PI * 2;
+  const positive = (turn: number): number => ((turn % TAU) + TAU) % TAU;
+  const sweepToEnd = positive(angleOf(endRadius) - angleOf(startRadius));
+  const sweepToMiddle = positive(angleOf(middleRadius) - angleOf(startRadius));
+  const sweep = sweepToMiddle <= sweepToEnd ? sweepToEnd : sweepToEnd - TAU;
+  if (edge.length !== undefined && Number.isFinite(edge.length)) {
+    if (edge.length <= 0) {
+      return null;
+    }
+    const swept = Math.abs(sweep) * circle.radius;
+    if (Math.abs(swept - edge.length) > Math.max(edge.length * 1e-6, 1e-9)) {
+      return null;
+    }
+  }
+  const half = angleOf(startRadius) + sweep / 2;
+  return vector(
+    circle.center.x +
+      circle.radius *
+        (Math.cos(half) * startRadius.x + Math.sin(half) * side.x),
+    circle.center.y +
+      circle.radius *
+        (Math.cos(half) * startRadius.y + Math.sin(half) * side.y),
+    circle.center.z +
+      circle.radius * (Math.cos(half) * startRadius.z + Math.sin(half) * side.z)
+  );
+}
+
+/**
+ * A point on picked topology with an exact derivation, for point-to-point
+ * distance and 3-point angle. Every kind resolves from the published exact
+ * record — kernel vertices, the proven circle, the axis endpoints, the area
+ * centroid — never from where the pointer landed or from the vertex mean that
+ * `FaceGeometry.center` publishes for fingerprinting.
+ *
+ * Which kinds apply depends on the pick: vertices and midpoints on edges
+ * (midpoints exact for lines and circular arcs), circle centres on circular
+ * edges, hole centres and face centroids on faces. Anything else returns null
+ * rather than an approximate substitute; the raw pick path stays available
+ * for those through `measurementTargetFromSelection`.
+ */
+export type NotablePointKind =
+  | 'vertex-start'
+  | 'vertex-end'
+  | 'edge-midpoint'
+  | 'circle-center'
+  | 'face-centroid';
+
+export function notablePointTarget(
+  body: BodyRepresentation,
+  selection: TopologySelection,
+  kind: NotablePointKind
+): MeasurementTarget | null {
+  const base: TargetBase = {
+    bodyId: body.bodyId,
+    bodyName: body.name,
+    kind: selection.kind,
+    topologyId: selection.topologyId,
+    hash: selection.hash,
+    reference: selection.reference
+  };
+  if (selection.kind === 'edge') {
+    const edge = findEdge(body, selection);
+    if (!edge) {
+      return null;
+    }
+    const label = topologySelectionLabel(body, {
+      kind: 'edge',
+      hash: edge.hash,
+      topologyId: edge.topologyId
+    });
+    if (kind === 'vertex-start' || kind === 'vertex-end') {
+      const ends = edgeEndpoints(edge);
+      if (!ends) {
+        return null;
+      }
+      // Edge ends are the kernel's own vertices, reported through the
+      // polyline's first and last samples; the sampler starts and ends at
+      // the vertices rather than interpolating them.
+      return {
+        ...base,
+        topologyId: edge.topologyId,
+        hash: edge.hash,
+        reference: edge.reference,
+        label: `${label} ${kind === 'vertex-start' ? 'start' : 'end'}`,
+        point: kind === 'vertex-start' ? ends[0] : ends[1],
+        semantic: kind,
+        quality: 'exact-analytic'
+      };
+    }
+    if (kind === 'circle-center') {
+      return edgeCircleCenterTarget(base, edge, label);
+    }
+    if (kind === 'edge-midpoint') {
+      if (edge.curve?.circle) {
+        const arc = edgeArcMidpoint(edge);
+        if (!arc) {
+          return null;
+        }
+        return {
+          ...base,
+          topologyId: edge.topologyId,
+          hash: edge.hash,
+          reference: edge.reference,
+          label: `${label} midpoint`,
+          point: arc,
+          semantic: 'edge-midpoint',
+          quality: 'exact-analytic'
+        };
+      }
+      // A straight edge's chord midpoint IS its trimmed midpoint.
+      return lineMidpointTarget(base, edge, label);
+    }
+    return null;
+  }
+  if (selection.kind === 'face') {
+    const face = findFace(body, selection);
+    const geometry = face?.geometry;
+    if (!face || !geometry) {
+      return null;
+    }
+    const label = topologySelectionLabel(body, {
+      kind: 'face',
+      hash: face.hash,
+      topologyId: face.topologyId
+    });
+    if (kind === 'circle-center') {
+      return cylinderCenterTarget(base, face, geometry, label);
+    }
+    if (kind === 'face-centroid') {
+      // Never `geometry.center`: the vertex mean of the rim, which sits on
+      // the rim itself for a disc face with a single seam vertex. Absent on
+      // faces whose boundary cannot be walked — "cannot answer", never a
+      // substitution.
+      if (!geometry.centroid) {
+        return null;
+      }
+      return {
+        ...base,
+        topologyId: face.topologyId,
+        hash: face.hash,
+        reference: face.reference,
+        label: `${label} centroid`,
+        point: geometry.centroid,
+        semantic: 'face-center',
+        quality: faceCentroidQuality(geometry)
+      };
+    }
+    return null;
+  }
+  return null;
+}
+
 export function measurementTargetFromSelection(
   body: BodyRepresentation,
   selection: TopologySelection,
@@ -419,43 +794,13 @@ export function measurementTargetFromSelection(
       hash: edge.hash,
       topologyId: edge.topologyId
     });
-    if (edge.curve?.circle) {
-      return {
-        ...base,
-        topologyId: edge.topologyId,
-        hash: edge.hash,
-        reference: edge.reference,
-        label: `${label} center`,
-        point: edge.curve.circle.center,
-        direction: edge.curve.circle.axis,
-        semantic: 'circle-center',
-        quality: 'exact-analytic'
-      };
+    const center = edgeCircleCenterTarget(base, edge, label);
+    if (center) {
+      return center;
     }
-    const endpoints = edgeEndpoints(edge);
-    const lineDirection =
-      edge.curve?.type.toUpperCase() === 'LINE' && endpoints
-        ? normalized(
-            vector(
-              endpoints[1].x - endpoints[0].x,
-              endpoints[1].y - endpoints[0].y,
-              endpoints[1].z - endpoints[0].z
-            )
-          )
-        : null;
-    if (lineDirection) {
-      return {
-        ...base,
-        topologyId: edge.topologyId,
-        hash: edge.hash,
-        reference: edge.reference,
-        label: `${label} midpoint`,
-        point: midpoint(endpoints![0], endpoints![1]),
-        direction: lineDirection,
-        endpoints: endpoints!,
-        semantic: 'edge-midpoint',
-        quality: 'exact-analytic'
-      };
+    const lineMidpoint = lineMidpointTarget(base, edge, label);
+    if (lineMidpoint) {
+      return lineMidpoint;
     }
     return {
       ...base,
@@ -483,24 +828,10 @@ export function measurementTargetFromSelection(
     geometry.axisStart &&
     geometry.axisEnd
   ) {
-    return {
-      ...base,
-      topologyId: face.topologyId,
-      hash: face.hash,
-      reference: face.reference,
-      label: `${label} center`,
-      point: midpoint(geometry.axisStart, geometry.axisEnd),
-      direction:
-        normalized(
-          vector(
-            geometry.axisEnd.x - geometry.axisStart.x,
-            geometry.axisEnd.y - geometry.axisStart.y,
-            geometry.axisEnd.z - geometry.axisStart.z
-          )
-        ) ?? undefined,
-      semantic: 'circle-center',
-      quality: 'exact-analytic'
-    };
+    const center = cylinderCenterTarget(base, face, geometry, label);
+    if (center) {
+      return center;
+    }
   }
   if (purpose === 'angle' && geometry?.normal) {
     return {
@@ -527,7 +858,8 @@ export function measurementTargetFromSelection(
       // `FaceGeometry.center` is a mean of the face's VERTEX positions, not an
       // area centroid — exactly reproducible, but not the centre of the face
       // for anything L-shaped or trimmed. Reproducible is what a measurement
-      // anchor needs, so this is honest rather than exact.
+      // anchor needs, so this is honest rather than exact. The area centroid
+      // is the explicit `face-centroid` notable point instead.
       quality: 'tessellated'
     };
   }
@@ -837,6 +1169,71 @@ export function createAngleMeasurement(
   };
 }
 
+/**
+ * The angle at `vertex` between the arms to `first` and `third`, in degrees
+ * over the full 0-180.
+ *
+ * Unlike the two-pick angle, which measures between stored directions, this
+ * orients both arms away from the vertex pick itself — the same construction
+ * as the `included` corner convention, but with the corner supplied by three
+ * points rather than by two edges that share one. A coincident arm (first or
+ * third on the vertex) has no angle and returns null rather than 0.
+ *
+ * Provenance follows the existing rule: exact only when every input point is
+ * exact, via the same worst-of-inputs combination the distance row uses.
+ */
+export function createThreePointAngle(
+  first: MeasurementTarget,
+  vertex: MeasurementTarget,
+  third: MeasurementTarget,
+  sourceRevision: number,
+  sourceUnit: UnitSystem
+): Measurement | null {
+  if (!first.point || !vertex.point || !third.point) {
+    return null;
+  }
+  const toFirst = normalized(subtractVectors(first.point, vertex.point));
+  const toThird = normalized(subtractVectors(third.point, vertex.point));
+  if (!toFirst || !toThird) {
+    return null;
+  }
+  const degrees = angleBetweenDirections(toFirst, toThird);
+  if (degrees === null) {
+    return null;
+  }
+  const reach = Math.max(
+    distance(vertex.point, first.point),
+    distance(vertex.point, third.point)
+  );
+  const armLength = reach > 1e-9 ? reach * 0.45 : 10;
+  return {
+    id: `point-angle:${targetKey(first)}:${targetKey(vertex)}:${targetKey(third)}`,
+    kind: 'point-angle',
+    label: `${first.label} ∠ ${vertex.label} ∠ ${third.label}`,
+    angleConvention: 'included',
+    targets: [first, vertex, third],
+    result: { value: degrees, dimension: 'angle' },
+    quality: worstQuality([first.quality, vertex.quality, third.quality]),
+    status: 'current',
+    sourceRevision,
+    sourceUnit,
+    visible: true,
+    annotation: {
+      anchor: vertex.point,
+      segments: [
+        {
+          start: vertex.point,
+          end: addScaled(vertex.point, toFirst, armLength)
+        },
+        {
+          start: vertex.point,
+          end: addScaled(vertex.point, toThird, armLength)
+        }
+      ]
+    }
+  };
+}
+
 export function appendMeasurement(
   list: readonly Measurement[],
   next: Measurement
@@ -899,6 +1296,35 @@ export function canAppendMeasurement(
 /** What to tell someone whose measurement did not fit. */
 export const MEASUREMENT_LIMIT_MESSAGE = `Measurement list is full at ${MEASUREMENT_LIMIT}. Delete a row to record another.`;
 
+/** Re-derive a notable-point target from freshly resolved topology. */
+function resolveNotableTarget(
+  target: MeasurementTarget,
+  body: BodyRepresentation
+): MeasurementTarget | null {
+  const selection = selectionForTarget(target);
+  if (
+    target.kind === 'edge' &&
+    (target.semantic === 'vertex-start' ||
+      target.semantic === 'vertex-end' ||
+      target.semantic === 'edge-midpoint')
+  ) {
+    const found = resolveEdge(body, selection);
+    if (!found.ok) {
+      return null;
+    }
+    const kind: NotablePointKind = target.semantic;
+    return notablePointTarget(body, selection, kind);
+  }
+  if (target.kind === 'face' && target.semantic === 'face-center') {
+    const found = resolveFace(body, selection);
+    if (!found.ok) {
+      return null;
+    }
+    return notablePointTarget(body, selection, 'face-centroid');
+  }
+  return null;
+}
+
 function resolvedTarget(
   target: MeasurementTarget,
   bodies: readonly BodyRepresentation[],
@@ -923,6 +1349,20 @@ function resolvedTarget(
       : resolveFace(body, selection);
   if (!found.ok) {
     return null;
+  }
+  // Notable-point targets re-derive from the stored KIND, not from the generic
+  // pick derivation, which cannot name a vertex, an arc midpoint, or a face
+  // centroid: an arc-midpoint row refreshed through the generic path would
+  // silently become its own circle's centre, and a vertex row its edge's
+  // midpoint. The stored point is never carried — every coordinate is
+  // recomputed from the freshly resolved topology.
+  if (
+    target.semantic === 'vertex-start' ||
+    target.semantic === 'vertex-end' ||
+    (target.semantic === 'edge-midpoint' && target.kind === 'edge') ||
+    (target.semantic === 'face-center' && purpose === 'distance')
+  ) {
+    return resolveNotableTarget(target, body);
   }
   // A target anchored to a raw surface pick rather than to a derived centre
   // used to be discarded outright outside smart mode, which meant a distance
@@ -989,6 +1429,9 @@ function hasValidTargetArity(measurement: Measurement): boolean {
   if (measurement.kind === 'distance' || measurement.kind === 'angle') {
     return measurement.targets.length === 2;
   }
+  if (measurement.kind === 'point-angle') {
+    return measurement.targets.length === 3;
+  }
   if (measurement.kind === 'edge-total') {
     return measurement.targets.length >= 2;
   }
@@ -1024,7 +1467,7 @@ export function refreshMeasurements(
       };
     }
     const purpose: MeasurementMode =
-      measurement.kind === 'distance'
+      measurement.kind === 'distance' || measurement.kind === 'point-angle'
         ? 'distance'
         : measurement.kind === 'angle'
           ? 'angle'
@@ -1070,6 +1513,14 @@ export function refreshMeasurements(
       refreshed = createAngleMeasurement(
         resolved[0]!,
         resolved[1]!,
+        sourceRevision,
+        measurement.sourceUnit
+      );
+    } else if (measurement.kind === 'point-angle') {
+      refreshed = createThreePointAngle(
+        resolved[0]!,
+        resolved[1]!,
+        resolved[2]!,
         sourceRevision,
         measurement.sourceUnit
       );
@@ -1242,7 +1693,10 @@ export function formatMeasurement(
     options.precision
   )} ${unitLabel(result.dimension, options.unit)}`;
   let detail: string | undefined;
-  if (measurement.kind === 'angle' && measurement.angleConvention) {
+  if (
+    (measurement.kind === 'angle' || measurement.kind === 'point-angle') &&
+    measurement.angleConvention
+  ) {
     // Never show an angle without naming which one it is: the dihedral of a
     // 30 degree wedge and the angle between its normals are both true, and
     // they differ by 120.
@@ -1304,20 +1758,22 @@ export function measurementsToText(
         entry.status,
         entry.note ?? ''
       ]
-        .map(spreadsheetCell)
+        .map((value) => delimitedCell(value, '\t'))
         .join('\t');
     })
     .join('\n');
 }
 
-function csvCell(value: string | number): string {
+function delimitedCell(value: string | number, delimiter: ',' | '\t'): string {
   const text = spreadsheetCell(value);
-  return /[",\n]/.test(text) ? `"${text.replaceAll('"', '""')}"` : text;
+  const needsQuotes = text.includes(delimiter) || /["\r\n]/.test(text);
+  return needsQuotes ? `"${text.replaceAll('"', '""')}"` : text;
 }
 
 function spreadsheetCell(value: string | number): string {
   const text = String(value);
-  return typeof value === 'string' && /^[=+\-@\t\r]/.test(text)
+  const formulaLike = /^[=+\-@\t\r]/.test(text) || /^\s+[=+\-@]/.test(text);
+  return typeof value === 'string' && formulaLike
     ? `'${text}`
     : text;
 }
@@ -1366,7 +1822,7 @@ export function measurementsToCsv(
       entry.sourceRevision,
       entry.note ?? ''
     ]
-      .map(csvCell)
+      .map((value) => delimitedCell(value, ','))
       .join(',');
   });
   return [

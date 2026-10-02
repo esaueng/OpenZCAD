@@ -1361,6 +1361,20 @@ export async function authenticateRequest(
   if (bearerToken) {
     return authenticateDesktopBearer(bearerToken, env);
   }
+  return authenticateBrowserSession(request, env);
+}
+
+/** Browser authorization requires the hosted session cookie, even when a bearer is present. */
+export async function authenticateBrowserSession(
+  request: Request,
+  env: CloudflareEnv
+): Promise<AuthSession> {
+  if (env.AUTH_MODE !== 'email-code' || !env.DB) {
+    throw new AuthenticationError(
+      'Authentication mode is not configured.',
+      'configuration'
+    );
+  }
   const token = readCookie(request, SESSION_COOKIE_NAME);
   if (!token) {
     throw new AuthenticationError();
@@ -1390,7 +1404,7 @@ export async function authenticateRequest(
     userId: toUserId(session.user_id),
     displayName: session.email.split('@')[0] || session.email,
     email: session.email,
-    mode
+    mode: 'email-code'
   };
 }
 

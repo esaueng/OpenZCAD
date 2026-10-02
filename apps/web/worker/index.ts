@@ -58,6 +58,7 @@ import {
   assistantQuotaCost
 } from './assistantRateLimit';
 import {
+  authenticateBrowserSession,
   authenticateRequest,
   approveDesktopAuthorization,
   AuthFlowError,
@@ -824,7 +825,7 @@ async function handleApiRequest(request: Request, env: Env): Promise<Response> {
       payload && typeof payload === 'object'
         ? (payload as Record<string, unknown>)
         : {};
-    const session = await authenticateRequest(request, env);
+    const session = await authenticateBrowserSession(request, env);
     return json(
       await approveDesktopAuthorization(
         { attemptId: input.attemptId, userCode: input.userCode },
@@ -1817,7 +1818,10 @@ async function dispatchApiRequest(
       return json({ error: error.message, code: error.code }, status);
     }
     if (error instanceof ProjectAdoptionError) {
-      return json({ error: error.message, code: error.code }, 409);
+      return json(
+        { error: error.message, code: error.code, projectId: error.projectId },
+        409
+      );
     }
     if (error instanceof ProjectQuotaError) {
       return json(

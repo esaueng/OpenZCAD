@@ -1,5 +1,8 @@
 export {
   BrepKernel as RemusKernel,
+  OperationCancellationToken,
+  type CancellableBooleanResult,
+  type CancellableOperationStatus,
   type FaceEvolutionPayloadV1,
   // The typed boolean verdict. Re-exported so the adapter's refusal taxonomy
   // is derived from the pinned kernel's own union rather than restated.

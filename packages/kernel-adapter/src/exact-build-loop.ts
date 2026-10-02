@@ -1,10 +1,17 @@
-import type { RemusKernel } from './remus-runtime';
+import { OperationCancellationToken, type RemusKernel } from './remus-runtime';
+import {
+  isBuildCancelled,
+  throwIfBuildCancelled,
+  type BuildCancellation,
+  type BuildCancellationSignal
+} from './exact-cancellation';
 import {
   getParameterScope,
   listFeaturesInOrder
 } from '@openzcad/document-core';
 import {
   isFeatureSuppressed,
+  type BodyId,
   type FeatureId,
   type FeatureNode,
   type FeatureWarning,
@@ -19,15 +26,15 @@ import { buildFeature } from './exact-feature-builders';
 import { kernelRefusalRecordOf } from './kernel-refusal';
 
 /**
- * A parsed STEP import held for reuse: the kernel's serialised solids plus the
- * diagnostics the parse produced, so a cache hit reports exactly what the
+ * A parsed STEP import held for reuse: the translator's exact arena document
+ * plus the diagnostics the parse produced, so a cache hit reports what the
  * original parse reported rather than a silently emptier set.
  */
 export interface CachedImportedStep {
-  solids: Uint8Array[];
+  document: Uint8Array;
   /**
-   * Each cached solid's zero-based index in the file's declared order, so a
-   * feature that selects a subset can filter a file-level cache entry.
+   * Accepted roots' zero-based indices in the file's declared order, so a
+   * cache restore excludes rejected roots before applying subset selection.
    */
   acceptedDeclaredIndices: number[];
   diagnostics: ImportedStepDiagnostics;
@@ -41,12 +48,11 @@ export interface ImportedStepStore {
   lookup(checksum: string): CachedImportedStep | undefined;
   store(
     checksum: string,
-    kernel: RemusKernel,
-    solids: number[],
+    document: Uint8Array,
     acceptedDeclaredIndices: number[],
     diagnostics: ImportedStepDiagnostics,
     pinned: ReadonlySet<string>
-  ): void;
+  ): 'cached' | 'budget-exceeded' | 'rejected-roots';
 }
 
 /**
@@ -79,6 +85,12 @@ export interface FeatureBuildContext {
   result: ExactBuildResult;
   importSources: ReadonlyMap<string, Uint8Array>;
   pinnedImports: ReadonlySet<string>;
+  /**
+   * Transient lineage demand for this rebuild: body ids whose producing
+   * booleans must probe. UI state only, never persisted; threaded into
+   * `booleanEvolutionProbeNeeded` alongside the persisted gate.
+   */
+  lineageDemand?: ReadonlySet<BodyId>;
   importedSteps?: ImportedStepStore;
   /**
    * Strict verdicts the union gate established on the solids it produced,
@@ -88,6 +100,13 @@ export interface FeatureBuildContext {
    * anything.
    */
   strictVerdicts?: StrictUnionVerdicts;
+  /**
+   * This rebuild's cancellation state. Always set by the loop itself (one
+   * shared kernel token per build); builders read the token for the
+   * cancellable booleans and the signal for their own probes. Optional only
+   * so a directly constructed context still compiles.
+   */
+  cancellation?: BuildCancellation;
 }
 
 /** The narrowed data payload for one feature kind (or a union of kinds). */
@@ -124,7 +143,20 @@ export function buildDocumentHistory(
   onFeatureStart?: (index: number) => void,
   /** Receives the union gate's verdicts; see {@link FeatureBuildContext}. */
   strictVerdicts?: StrictUnionVerdicts,
-  primitiveReuse?: PrimitiveReuse
+  primitiveReuse?: PrimitiveReuse,
+  /**
+   * Cooperative cancel for a superseded rebuild. Checked at each feature
+   * boundary; a fired signal throws the typed `cancelled` refusal instead of
+   * returning, so a cancelled build commits nothing. Absent, the loop runs
+   * exactly as before.
+   */
+  signal?: BuildCancellationSignal,
+  /**
+   * Transient lineage demand for this rebuild. Threaded into the context so
+   * `buildBooleanFeature` probes demanded bodies; the history digest carries
+   * the same bit so a carrier-only checkpoint is never reused once demanded.
+   */
+  lineageDemand?: ReadonlySet<BodyId> | readonly BodyId[]
 ): ExactBuildResult {
   const { scope, errors } = getParameterScope(document);
   const result: ExactBuildResult = resume?.initial ?? {
@@ -140,6 +172,18 @@ export function buildDocumentHistory(
   };
   const startIndex = resume?.startIndex ?? 0;
   const features = listFeaturesInOrder(document);
+  const normalizedDemand =
+    lineageDemand === undefined
+      ? undefined
+      : lineageDemand instanceof Set
+        ? lineageDemand
+        : new Set(lineageDemand);
+  // One shared token per build: it latches on the first observed cancel, so
+  // every later boolean in the same superseded build refuses at the kernel.
+  const cancellation: BuildCancellation | undefined =
+    signal === undefined
+      ? undefined
+      : { signal, token: new OperationCancellationToken() };
   const ctx: FeatureBuildContext = {
     kernel,
     document,
@@ -147,48 +191,64 @@ export function buildDocumentHistory(
     result,
     importSources,
     pinnedImports,
+    ...(normalizedDemand !== undefined ? { lineageDemand: normalizedDemand } : {}),
     importedSteps,
-    strictVerdicts
+    strictVerdicts,
+    ...(cancellation === undefined ? {} : { cancellation })
   };
 
-  for (let index = startIndex; index < features.length; index += 1) {
-    const feature = features[index]!;
-    onFeatureStart?.(index);
-    if (isFeatureSuppressed(feature)) {
-      const message = `Feature "${feature.name}": Suppressed; skipped during exact rebuild.`;
-      result.warnings.push(message);
-      // Suppression is a status, not a failure. It reads identically to the
-      // catch below once it is a string, which is why the attribution has to
-      // be recorded rather than parsed back out.
-      attribute(result, feature, message, 'suppressed');
-      onFeature?.(index, result);
-      continue;
-    }
-    try {
-      if (!primitiveReuse?.restore(index, feature, result)) {
-        buildFeature(ctx, feature);
-        primitiveReuse?.store(index, feature, result);
+  try {
+    for (let index = startIndex; index < features.length; index += 1) {
+      const feature = features[index]!;
+      // A superseded rebuild stops at the next feature boundary: the
+      // in-flight WASM call still runs to completion, everything after it
+      // does not start.
+      throwIfBuildCancelled(signal);
+      onFeatureStart?.(index);
+      if (isFeatureSuppressed(feature)) {
+        const message = `Feature "${feature.name}": Suppressed; skipped during exact rebuild.`;
+        result.warnings.push(message);
+        // Suppression is a status, not a failure. It reads identically to the
+        // catch below once it is a string, which is why the attribution has to
+        // be recorded rather than parsed back out.
+        attribute(result, feature, message, 'suppressed');
+        onFeature?.(index, result);
+        continue;
       }
-    } catch (error) {
-      const reason =
-        error instanceof Error ? error.message : 'exact geometry failed';
-      const message = `Feature "${feature.name}": ${reason}`;
-      result.warnings.push(message);
-      // A refused kernel operation carries its category with it, however
-      // deeply the builder wrapped the error. Recording it here is what lets
-      // downstream code tell "the engine will not do this pair" from "the
-      // body came back malformed" without matching on the sentence.
-      attribute(
-        result,
-        feature,
-        message,
-        'build-failed',
-        kernelRefusalRecordOf(error)
-      );
+      try {
+        if (!primitiveReuse?.restore(index, feature, result)) {
+          buildFeature(ctx, feature);
+          primitiveReuse?.store(index, feature, result);
+        }
+      } catch (error) {
+        // Cancellation is not a feature verdict: recording it as a warning
+        // would continue the build it exists to stop, and commit a partial
+        // result as if the remaining features had run.
+        if (isBuildCancelled(error)) {
+          throw error;
+        }
+        const reason =
+          error instanceof Error ? error.message : 'exact geometry failed';
+        const message = `Feature "${feature.name}": ${reason}`;
+        result.warnings.push(message);
+        // A refused kernel operation carries its category with it, however
+        // deeply the builder wrapped the error. Recording it here is what lets
+        // downstream code tell "the engine will not do this pair" from "the
+        // body came back malformed" without matching on the sentence.
+        attribute(
+          result,
+          feature,
+          message,
+          'build-failed',
+          kernelRefusalRecordOf(error)
+        );
+      }
+      onFeature?.(index, result);
     }
-    onFeature?.(index, result);
+    return result;
+  } finally {
+    cancellation?.token.free();
   }
-  return result;
 }
 
 /**

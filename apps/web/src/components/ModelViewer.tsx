@@ -1,6 +1,6 @@
 import type { ParameterVisualPreview } from '../lib/parameterVisualPreview';
 import { ParameterPreviewController } from './viewer/parameterPreviewController';
-import { useEffect, useRef, type MutableRefObject } from 'react';
+import { useEffect, useRef, useState, type MutableRefObject } from 'react';
 import { axisDimensionLabel } from '../lib/primitiveDimensionLabel';
 import * as THREE from 'three';
 import type { HoleGhost } from '../lib/holeGhost';
@@ -157,10 +157,12 @@ import {
   type HandleVec3,
   type WheelDevice
 } from '@openzcad/viewport';
-import type {
-  BodyRepresentation,
-  FaceGeometry,
-  TopologySelection
+import {
+  UNIT_TO_MM,
+  type BodyRepresentation,
+  type FaceGeometry,
+  type TopologySelection,
+  type UnitSystem
 } from '@openzcad/shared';
 import { formatNumber } from '../lib/model';
 import { setLiveDiameter } from '../lib/liveLabels';
@@ -199,6 +201,7 @@ import {
   circlePreviewPoints,
   centerInferenceSegments,
   collectSketchSnapTargets,
+  SketchSnapLimitError,
   angleForInProgress,
   dimensionForInProgress,
   lineObjectFromPoints,
@@ -334,6 +337,13 @@ export interface SketchModeState {
   diagnosticPoints: { x: number; y: number }[];
   /** Solver-named entities with a measured non-zero residual. */
   constraintDiagnosticObjectIds: string[];
+  /**
+   * Entities proved fully defined by a zero-DOF solve: every object id, or
+   * empty. Sketch-wide by solver-evidence design (the kernel reports one
+   * DOF scalar, no per-entity freedom).
+   */
+  definedObjectIds: string[];
+  textOutlineBudgetError?: string | null;
   dimensions: SketchDimensionAnnotation[];
 }
 
@@ -831,6 +841,20 @@ interface DimensionLabelBinding {
 }
 
 /**
+ * How far above a body its name callout hangs: an eighth of its height, and
+ * never less than 5 mm so a flat part's chip clears it. The floor is in
+ * millimetres, not document units: as a bare 5 it lifted an inch part's
+ * chip five inches, off the top of the window and under the top bar.
+ */
+function calloutLift(box: THREE.Box3, units: string): number {
+  const millimetresPerUnit = UNIT_TO_MM[units as UnitSystem] ?? 1;
+  return Math.max(
+    box.getSize(new THREE.Vector3()).z * 0.12,
+    5 / millimetresPerUnit
+  );
+}
+
+/**
  * Keeps name callouts readable when their anchor sits at the viewport's
  * edge. CSS2DRenderer centres each label on its projected point and rewrites
  * the transform every frame, so the correction rides on the margins instead:
@@ -848,6 +872,14 @@ function clampNameCallouts(container: HTMLElement) {
   }
   const bounds = container.getBoundingClientRect();
   const pad = 4;
+  // The top islands float over the viewport, so its top edge is not the
+  // usable one: a chip clamped to it sat under the mode switch, and a click
+  // on its Move landed on Tweak.
+  const topbar = container.ownerDocument.querySelector('.app-shell > .topbar');
+  const top = Math.max(
+    bounds.top,
+    topbar?.getBoundingClientRect().bottom ?? bounds.top
+  );
   // Every rect is read before any margin is written. Interleaving them made
   // each write invalidate layout for the next read, so a frame with N
   // callouts forced N reflows instead of one.
@@ -869,8 +901,8 @@ function clampNameCallouts(container: HTMLElement) {
       marginLeft = bounds.right - pad - baseRight;
     }
     let marginTop = 0;
-    if (baseTop < bounds.top + pad) {
-      marginTop = bounds.top + pad - baseTop;
+    if (baseTop < top + pad) {
+      marginTop = top + pad - baseTop;
     } else if (baseBottom > bounds.bottom - pad) {
       marginTop = bounds.bottom - pad - baseBottom;
     }
@@ -1309,6 +1341,20 @@ const SKETCH_SELECTED_COLOR = 0x9eb8ff;
 const SKETCH_CURVE_WIDTH = 1.4;
 const RIGHT_PAN_TARGET_EPSILON = 1e-9;
 
+/**
+ * A control the keyboard is moving through (focus the browser would ring),
+ * as opposed to a button that merely kept focus after a click. Tab belongs
+ * to focus navigation there, not to the sketch's snap cycling.
+ */
+function keyboardFocusInUi(): boolean {
+  const focused = document.activeElement;
+  return (
+    focused instanceof HTMLElement &&
+    focused !== document.body &&
+    focused.matches(':focus-visible')
+  );
+}
+
 function isTextEntryTarget(target: EventTarget | null): boolean {
   return (
     target instanceof HTMLElement &&
@@ -1700,6 +1746,9 @@ export function ModelViewer({
   const sketchDimLabelRef = useRef<HTMLDivElement | null>(null);
   /** Entity-snap candidates from committed sketch objects + cursor marker. */
   const snapTargetsRef = useRef<SnapTarget[]>([]);
+  const [sketchSnapRefusal, setSketchSnapRefusal] = useState<string | null>(
+    null
+  );
   const sketchSnapMarkerRef = useRef<HTMLDivElement | null>(null);
   const sketchCenterTargetRef = useRef<HTMLDivElement | null>(null);
   /** Camera pose + projection to restore when leaving sketch mode. */
@@ -2524,6 +2573,12 @@ export function ModelViewer({
     let activeSketchSnap: SnapTarget | null = null;
     let sketchSnapCycle = 0;
     let latestSketchPointerEvent: PointerEvent | null = null;
+    /**
+     * Whether the pointer is over the canvas now. Tab cycles snaps only then:
+     * once it had crossed the canvas, Tab was taken for good, and the
+     * keyboard could not reach Finish or any rail control.
+     */
+    let sketchPointerOnCanvas = false;
     let latestSketchPoint: SketchPoint | null = null;
     let sketchNumericRaw: string | null = null;
     let sketchNumericKind:
@@ -2608,7 +2663,9 @@ export function ModelViewer({
       if (
         event.key === 'Tab' &&
         sketchModeRef.current &&
-        latestSketchPointerEvent
+        latestSketchPointerEvent &&
+        sketchPointerOnCanvas &&
+        !keyboardFocusInUi()
       ) {
         activeSketchSnap = null;
         sketchSnapCycle += 1;
@@ -5247,6 +5304,7 @@ export function ModelViewer({
         return null;
       }
       latestSketchPointerEvent = event;
+      sketchPointerOnCanvas = true;
       if (event.shiftKey) {
         activeSketchSnap = null;
         sketchSnapCycle = 0;
@@ -7034,6 +7092,7 @@ export function ModelViewer({
     };
     const handlePointerLeave = () => {
       pendingHoverEvent = null;
+      sketchPointerOnCanvas = false;
       sketchRigRef.current?.setInference(null);
       sketchCenterTarget.hidden = true;
       if (moveDrag) {
@@ -8319,8 +8378,7 @@ export function ModelViewer({
       extraClass = ''
     ) => {
       const top = box.getCenter(new THREE.Vector3());
-      top.z =
-        box.max.z + Math.max(box.getSize(new THREE.Vector3()).z * 0.12, 5);
+      top.z = box.max.z + calloutLift(box, unitsRef.current);
       const label = makeLabel(`selection-callout${extraClass}`, '');
       // Segmented rather than one text run: a cylinder radius drag rewrites
       // the diameter node in place while the document still holds the old
@@ -8361,8 +8419,7 @@ export function ModelViewer({
         }
         pickBox.union(box);
         const top = box.getCenter(new THREE.Vector3());
-        top.z =
-          box.max.z + Math.max(box.getSize(new THREE.Vector3()).z * 0.12, 5);
+        top.z = box.max.z + calloutLift(box, unitsRef.current);
         const label = makeLabel('selection-callout body-order-callout', '');
         const order = document.createElement('span');
         order.className = 'callout-order';
@@ -9548,6 +9605,7 @@ export function ModelViewer({
     const rig = sketchRigRef.current;
     if (!context || !rig || !sketchMode) {
       snapTargetsRef.current = [];
+      setSketchSnapRefusal(null);
       return;
     }
     const resolve = (value: unknown) =>
@@ -9556,7 +9614,9 @@ export function ModelViewer({
       sketchMode.objects,
       sketchMode.selectedObjectId,
       resolve,
-      sketchMode.constraintDiagnosticObjectIds
+      sketchMode.constraintDiagnosticObjectIds,
+      sketchMode.definedObjectIds,
+      sketchMode.textOutlineBudgetError
     );
     rig.setProfiles(sketchMode.profiles, true);
     rig.setDiagnostics(sketchMode.diagnosticPoints);
@@ -9565,10 +9625,14 @@ export function ModelViewer({
         sketchMode.objects,
         resolve
       );
-    } catch {
+      setSketchSnapRefusal(null);
+    } catch (error) {
       snapTargetsRef.current = [
         { id: 'sketch-origin', x: 0, y: 0, kind: 'origin' }
       ];
+      setSketchSnapRefusal(
+        error instanceof SketchSnapLimitError ? error.message : null
+      );
     }
     context.requestRender();
   }, [sketchMode]);
@@ -9875,5 +9939,13 @@ export function ModelViewer({
     );
   }, [rotateRequest]);
 
-  return <div className="viewer-host" ref={hostRef} />;
+  return (
+    <div className="viewer-host" ref={hostRef}>
+      {sketchSnapRefusal && (
+        <div className="sketch-snap-refusal" role="status">
+          {sketchSnapRefusal}
+        </div>
+      )}
+    </div>
+  );
 }
