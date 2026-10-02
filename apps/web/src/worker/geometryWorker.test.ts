@@ -352,7 +352,10 @@ describe('geometry worker rebuild coordination', () => {
       expect.anything(),
       expect.any(Function),
       undefined,
-      analysis
+      analysis,
+      // Every sync rebuild carries a cancellation signal (queued-cancel set
+      // plus broadcast gate); the analysis still travels as its own argument.
+      expect.any(Object)
     );
   });
 
@@ -743,6 +746,40 @@ describe('geometry worker rebuild coordination', () => {
     await vi.waitFor(() =>
       expect(exportSectionDxf).toHaveBeenCalledWith(document, plane, undefined)
     );
+  });
+
+  it('drops a sync cancelled while running without reporting a failure', async () => {
+    const gate = deferred<void>();
+    const syncDocument = vi.fn(async () => {
+      await gate.promise;
+      throw Object.assign(new Error('Rebuild cancelled.'), {
+        category: 'cancelled'
+      });
+    });
+    const { scope } = await installWorker(syncDocument);
+    const document = addPrimitiveFeature(
+      createProjectDocument('Cancelled Sync', toUserId('user')),
+      {
+        name: 'Box',
+        primitiveKind: 'box',
+        dimensions: { width: 10, height: 20, depth: 30 }
+      }
+    );
+    post(scope, { type: 'sync', document, requestId: 'running' });
+    await vi.waitFor(() => expect(syncDocument).toHaveBeenCalledOnce());
+    // The cancel lands while the rebuild is already running.
+    post(scope, { type: 'cancel', requestId: 'running' });
+    gate.resolve();
+    await new Promise((resolve) => setTimeout(resolve, 0));
+
+    const failures = scope.postMessage.mock.calls
+      .map(([message]) => message)
+      .filter(
+        (message) =>
+          (message.type === 'sync' && !message.ok) ||
+          (message.type === 'state' && message.phase === 'failed')
+      );
+    expect(failures).toHaveLength(0);
   });
 
   it('skips a queued export cancelled before it started', async () => {
