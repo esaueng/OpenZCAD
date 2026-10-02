@@ -127,6 +127,7 @@ export function measureFaceGeometry(
       const measured = planarFaceCentroid(kernel, face, geometry.normal);
       if (measured) {
         geometry.centroid = measured.centroid;
+        geometry.centroidProvenance = measured.provenance;
       }
     } catch {
       // NURBS-backed planes have no analytic normal; leave both unset. These
