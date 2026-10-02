@@ -7,7 +7,9 @@ import {
 } from 'react';
 import type { BodyId } from '@openzcad/shared';
 import { ExprInput } from '../ExprInput';
+import { previewExpression } from '../../lib/model';
 import type { BodyOption } from './FeatureForms';
+import { holePositionLabels } from '../../lib/holePositionAxes';
 import type { FormFacePick } from '../../lib/holeFacePick';
 import {
   buildModelingOperationSubmission,
@@ -61,6 +63,57 @@ export interface ModelingOperationsFormProps {
   onTargetBodyChange?: (bodyId: BodyId) => void;
   onOpeningFaceSelectionChange?: (hashes: number[]) => void;
   onRequestOpeningFaceSelection?: () => void;
+  /**
+   * The Hole card's values as numbers, on every change, so the viewport can
+   * draw the bore before it exists; null once nothing can be placed (no
+   * face, an unresolved expression) and when the card closes.
+   */
+  onHoleDraftChange?: (draft: HoleDraft | null) => void;
+}
+
+/** A Hole card's values, resolved: what the viewport ghost is drawn from. */
+export interface HoleDraft {
+  targetBodyId: BodyId;
+  faceHash: number;
+  u: number;
+  v: number;
+  diameter: number;
+  depth: number | 'through';
+}
+
+function holeDraftFor(
+  state: ModelingOperationFormState,
+  scope: Record<string, number>
+): HoleDraft | null {
+  if (
+    state.operation !== 'hole' ||
+    state.value.faceHash === null ||
+    !state.value.targetBodyId
+  ) {
+    return null;
+  }
+  const number = (text: string): number | null => {
+    const preview = previewExpression(text, scope);
+    return preview.ok && preview.value !== undefined ? preview.value : null;
+  };
+  const u = number(state.value.position.u);
+  const v = number(state.value.position.v);
+  const diameter = number(state.value.diameter);
+  const depth =
+    state.value.depthMode === 'through'
+      ? ('through' as const)
+      : number(state.value.depth);
+  if (u === null || v === null || diameter === null || depth === null) {
+    return null;
+  }
+  return {
+    targetBodyId: state.value.targetBodyId,
+    faceHash: state.value.faceHash,
+    u,
+    v,
+    diameter,
+    depth
+  };
 }
 
 function initialState(
@@ -186,15 +239,19 @@ function initialState(
 
 function FieldGroup({
   legend,
-  children
+  children,
+  message
 }: {
   legend: string;
   children: ReactNode;
+  /** Below the fields, across the group: a refusal about these values. */
+  message?: ReactNode;
 }) {
   return (
     <fieldset className="field">
       <legend>{legend}</legend>
       <div className="field-triple">{children}</div>
+      {message}
     </fieldset>
   );
 }
@@ -379,9 +436,34 @@ function FacePicker({
   );
 }
 
-function preflightMessage(state: ExactPreflightState): ReactNode {
+/** "Not created — the hole misses the body." rather than kernel jargon. */
+function refusalSentence(reason: string, editing: boolean): string {
+  const plain = reason.replace(/^Feature "[^"]*":\s*/, '');
+  return `${editing ? 'Not applied' : 'Not created'} — ${plain}`;
+}
+
+/**
+ * A refusal about where a hole sits, shown under its U and V fields. The
+ * builder's own sentences: the bore misses the body, or points out of it.
+ */
+function holePositionRefusal(
+  state: ModelingOperationFormState,
+  preflight: ExactPreflightState
+): string | null {
+  return state.operation === 'hole' &&
+    preflight.status === 'refused' &&
+    /misses the body|points away from the body/i.test(preflight.reason)
+    ? preflight.reason
+    : null;
+}
+
+function preflightMessage(
+  state: ExactPreflightState,
+  editing: boolean
+): ReactNode {
   switch (state.status) {
     case 'idle':
+    case 'ready':
       return null;
     case 'pending':
       return (
@@ -389,16 +471,10 @@ function preflightMessage(state: ExactPreflightState): ReactNode {
           Checking the exact kernel result…
         </p>
       );
-    case 'ready':
-      return (
-        <p className="muted" role="status">
-          Exact preflight passed. Review the values, then create the feature.
-        </p>
-      );
     case 'refused':
       return (
         <p className="field-error" role="alert">
-          Exact preflight refused: {state.reason}
+          {refusalSentence(state.reason, editing)}
         </p>
       );
   }
@@ -421,7 +497,8 @@ export function ModelingOperationsForm({
   onCancel,
   onTargetBodyChange,
   onOpeningFaceSelectionChange,
-  onRequestOpeningFaceSelection
+  onRequestOpeningFaceSelection,
+  onHoleDraftChange
 }: ModelingOperationsFormProps) {
   const defaultTarget =
     initialTarget ?? bodies.find((body) => !body.consumed)?.bodyId ?? '';
@@ -432,7 +509,27 @@ export function ModelingOperationsForm({
     status: 'idle'
   });
   const preflightEpoch = useRef(0);
+  // A check still running when the card closes must not create the feature
+  // after the user cancelled it: leaving retires its epoch.
+  useEffect(
+    () => () => {
+      preflightEpoch.current += 1;
+    },
+    []
+  );
   const checkedSubmission = useRef<string | null>(null);
+  // Keyed on the resolved numbers, so typing a character that leaves the
+  // value unchanged does not redraw the ghost.
+  const holeDraft = holeDraftFor(state, scope);
+  const holeDraftKey = holeDraft ? JSON.stringify(holeDraft) : null;
+  const holeDraftCallback = useRef(onHoleDraftChange);
+  holeDraftCallback.current = onHoleDraftChange;
+  useEffect(() => {
+    holeDraftCallback.current?.(
+      holeDraftKey ? (JSON.parse(holeDraftKey) as HoleDraft) : null
+    );
+  }, [holeDraftKey]);
+  useEffect(() => () => holeDraftCallback.current?.(null), []);
   const consumedFacePick = useRef<FormFacePick | null>(null);
   const pickTarget =
     state.operation === 'hole' ||
@@ -561,6 +658,13 @@ export function ModelingOperationsForm({
       profileOptions,
       pathOptions
     );
+  /**
+   * Create is one press: it checks the exact result and, when that builds,
+   * creates the feature with the values it checked. It used to stop half-way
+   * ("Check exact result", then "Exact preflight passed. Review the values,
+   * then create the feature.", then a second press) with nothing new to
+   * review in between — the check draws no preview.
+   */
   const runPreflight = async () => {
     if (!canCheck) return;
     const epoch = ++preflightEpoch.current;
@@ -572,6 +676,9 @@ export function ModelingOperationsForm({
         checkedSubmission.current =
           result.status === 'ready' ? JSON.stringify(candidate) : null;
         setPreflight(result);
+        if (result.status === 'ready') {
+          onSubmit(candidate);
+        }
       }
     } catch (error) {
       if (preflightEpoch.current === epoch) {
@@ -611,11 +718,13 @@ export function ModelingOperationsForm({
   const buttonLabel =
     effectivePreflight.status === 'pending'
       ? 'Checking exact result…'
-      : effectivePreflight.status === 'ready'
-        ? `${editing ? 'Apply' : 'Create'} ${OPERATION_LABELS[operation].toLowerCase()}`
-        : effectivePreflight.status === 'refused'
-          ? 'Recheck exact result'
-          : 'Check exact result';
+      : `${editing ? 'Apply' : 'Create'} ${OPERATION_LABELS[operation].toLowerCase()}`;
+  const positionRefusal = holePositionRefusal(state, effectivePreflight);
+  const selectedFace =
+    state.operation === 'hole'
+      ? faceOptions.find((face) => face.hash === state.value.faceHash)
+      : undefined;
+  const positionLabels = holePositionLabels(selectedFace?.normal);
   const profileOperation =
     state.operation === 'loft' ||
     state.operation === 'sweep' ||
@@ -1170,11 +1279,24 @@ export function ModelingOperationsForm({
               />
             </>
           ) : null}
-          <FieldGroup legend="Position on face (from centre)">
+          <FieldGroup
+            legend="Position on face (from centre)"
+            message={
+              positionRefusal ? (
+                // The refusal belongs to the position it is about, not to a
+                // line below the buttons.
+                <p className="field-error" role="alert">
+                  {refusalSentence(positionRefusal, editing)}
+                </p>
+              ) : null
+            }
+          >
             {(['u', 'v'] as const).map((axis) => (
               <ExprInput
                 key={axis}
-                label={axis.toUpperCase()}
+                // The face's frame decides which world axis U and V run
+                // along; "U" alone sent a −40 off the plate's short side.
+                label={positionLabels[axis]}
                 value={state.value.position[axis]}
                 scope={scope}
                 onChange={(component) =>
@@ -1254,7 +1376,7 @@ export function ModelingOperationsForm({
       </div>
       {/* Below the actions on purpose: it appears in answer to the button,
           and above it the button moved under the pointer that pressed it. */}
-      {preflightMessage(effectivePreflight)}
+      {positionRefusal ? null : preflightMessage(effectivePreflight, editing)}
     </form>
   );
 }
