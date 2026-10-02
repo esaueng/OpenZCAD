@@ -39,6 +39,40 @@ describe('AppShell', () => {
     expect(container.querySelector('.inspector-float')).not.toBeNull();
   });
 
+  // A tool's create card owns the lane's height; the drawer gives way.
+  it('marks a command form in the inspector as owning the lane', () => {
+    const { container, rerender } = render(
+      <AppShell
+        topBar={<header>top</header>}
+        toolBar={null}
+        sidebar={null}
+        viewer={<div className="viewer-shell">viewer</div>}
+        inspector={<section>Hole</section>}
+        inspectorOwnsLane
+        assistant={null}
+        sidebarWidth={252}
+        assistantWidth={360}
+      />
+    );
+    const area = () => container.querySelector('.viewer-area')!;
+    expect(area().classList.contains('inspector-owns-lane')).toBe(true);
+    // Without a panel there is nothing to own the lane.
+    rerender(
+      <AppShell
+        topBar={<header>top</header>}
+        toolBar={null}
+        sidebar={null}
+        viewer={<div className="viewer-shell">viewer</div>}
+        inspector={null}
+        inspectorOwnsLane
+        assistant={null}
+        sidebarWidth={252}
+        assistantWidth={360}
+      />
+    );
+    expect(area().classList.contains('inspector-owns-lane')).toBe(false);
+  });
+
   it('drops the flag with the panel', () => {
     const { container } = renderShell(null);
     const area = container.querySelector('.viewer-area');

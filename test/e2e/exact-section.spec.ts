@@ -321,10 +321,14 @@ test('keeps a section hole in the exact DXF and shuts export during a posed prev
   await expect(page.locator('.rail-section-state-kind')).toContainText(
     'Clipping preview'
   );
-  await expect(exportButton).toBeDisabled();
+  // The section controls step aside while the Move panel holds the lane, and
+  // the export under them is disabled all the same.
+  await expect(page.locator('.rail-section-panel')).toBeHidden();
+  await expect(page.locator('.rail-section-export')).toBeDisabled();
 
   await page.keyboard.press('Escape');
   await expect(move).toBeHidden();
+  await expect(page.locator('.rail-section-panel')).toBeVisible();
   // Cancelling the preview leaves the old exact result invalidated. Cycling
   // the display off and on requests a fresh exact section of the restored
   // document pose, which proves the refusal is recoverable.
