@@ -170,23 +170,4 @@
   .viewer-rail {
     right: 6px;
   }
-
-  .status-bar {
-    gap: 6px;
-    padding-inline: 6px;
-  }
-
-  .status-state {
-    flex: 1 1 auto;
-  }
-
-  .status-hint,
-  .status-groups,
-  .status-filters > b {
-    display: none;
-  }
-
-  .status-filters {
-    margin-left: 0;
-  }
 }

@@ -64,7 +64,7 @@ export function solvedSketchCommands(
   const { scope } = getParameterScope(document);
   const resolve = (value: ParamValue) => {
     try {
-      return resolveParamValue(value, scope, 'sketch value');
+      return resolveParamValue(value, scope, 'sketch value', document.units);
     } catch {
       // An expression that no longer resolves (deleted parameter, typo)
       // compares as NaN, which counts as moved — the solved number is the
