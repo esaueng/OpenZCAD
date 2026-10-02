@@ -26,15 +26,15 @@ import { buildFeature } from './exact-feature-builders';
 import { kernelRefusalRecordOf } from './kernel-refusal';
 
 /**
- * A parsed STEP import held for reuse: the kernel's serialised solids plus the
- * diagnostics the parse produced, so a cache hit reports exactly what the
+ * A parsed STEP import held for reuse: the translator's exact arena document
+ * plus the diagnostics the parse produced, so a cache hit reports what the
  * original parse reported rather than a silently emptier set.
  */
 export interface CachedImportedStep {
-  solids: Uint8Array[];
+  document: Uint8Array;
   /**
-   * Each cached solid's zero-based index in the file's declared order, so a
-   * feature that selects a subset can filter a file-level cache entry.
+   * Accepted roots' zero-based indices in the file's declared order, so a
+   * cache restore excludes rejected roots before applying subset selection.
    */
   acceptedDeclaredIndices: number[];
   diagnostics: ImportedStepDiagnostics;
@@ -48,12 +48,11 @@ export interface ImportedStepStore {
   lookup(checksum: string): CachedImportedStep | undefined;
   store(
     checksum: string,
-    kernel: RemusKernel,
-    solids: number[],
+    document: Uint8Array,
     acceptedDeclaredIndices: number[],
     diagnostics: ImportedStepDiagnostics,
     pinned: ReadonlySet<string>
-  ): void;
+  ): 'cached' | 'budget-exceeded' | 'rejected-roots';
 }
 
 /**

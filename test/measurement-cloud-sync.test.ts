@@ -141,6 +141,31 @@ describe('measurement cloud reconciliation', () => {
     expect(harness.save).not.toHaveBeenCalled();
   });
 
+  it('keeps a stale hydrated local list from winning on a watcher retry', async () => {
+    const local = record('2026-08-07T13:00:00.000Z', 'Old local');
+    const remote = record('2026-08-07T14:00:00.000Z', 'New cloud');
+    const harness = api({ revision: 2, record: remote });
+    const saveLocal = vi.fn(async () => undefined);
+    const results: string[] = [];
+    const watcher = watchProjectMeasurements({
+      api: harness.api,
+      projectId: local.projectId,
+      loadLocal: async () => local,
+      saveLocal,
+      onResult: (result) => results.push(result.source)
+    });
+
+    await vi.waitFor(() => expect(results).toHaveLength(1));
+    window.dispatchEvent(new Event('focus'));
+    await vi.waitFor(() => expect(results).toHaveLength(2));
+    watcher.stop();
+
+    expect(results).toEqual(['cloud', 'cloud']);
+    expect(saveLocal).toHaveBeenCalledTimes(2);
+    expect(saveLocal).toHaveBeenCalledWith(remote);
+    expect(harness.save).not.toHaveBeenCalled();
+  });
+
   it('retries after another device wins the optimistic write', async () => {
     const local = record('2026-08-07T15:00:00.000Z', 'Local');
     let snapshot: ProjectMeasurementSnapshot = {
