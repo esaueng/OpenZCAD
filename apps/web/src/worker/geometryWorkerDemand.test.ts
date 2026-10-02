@@ -86,9 +86,11 @@ describe('geometry worker lineage demand', () => {
       )
     );
     expect(syncDocument).toHaveBeenCalledOnce();
-    // document, onProgress, onProjection, analysis, lineageDemand.
+    // document, onProgress, onProjection, analysis, { cancellation, lineageDemand }.
     const calls = syncDocument.mock.calls as unknown[][];
-    expect(calls[0]?.[4]).toEqual([bodyId]);
+    expect(calls[0]?.[4]).toEqual(
+      expect.objectContaining({ lineageDemand: [bodyId] })
+    );
   });
 
   it('changes the worker rebuild cache key', async () => {

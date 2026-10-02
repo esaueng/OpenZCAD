@@ -231,7 +231,7 @@ describe('on-demand probe rebuild behaviour', { timeout: 120_000 }, () => {
         undefined,
         undefined,
         undefined,
-        [bodyId]
+        { lineageDemand: [bodyId] }
       );
       expect(demanded.warnings).toEqual([]);
       expect(spy.mock.calls.length).toBeGreaterThan(0);
@@ -263,7 +263,7 @@ describe('on-demand probe rebuild behaviour', { timeout: 120_000 }, () => {
           undefined,
           undefined,
           undefined,
-          [bodyId]
+          { lineageDemand: [bodyId] }
         );
         expect(demanded.warnings).toEqual([]);
         expect(spy.mock.calls.length).toBeGreaterThan(0);
@@ -284,7 +284,7 @@ describe('on-demand probe rebuild behaviour', { timeout: 120_000 }, () => {
             undefined,
             undefined,
             undefined,
-            [bodyId]
+            { lineageDemand: [bodyId] }
           );
           expect(lineageKey(forced, bodyId)).toBe(demandedKey);
         } finally {
@@ -314,7 +314,7 @@ describe('on-demand probe rebuild behaviour', { timeout: 120_000 }, () => {
       undefined,
       undefined,
       undefined,
-      [bodyId]
+      { lineageDemand: [bodyId] }
     );
     const demandedEdges = edgesOf(demanded, bodyId);
     const picked =
@@ -363,7 +363,7 @@ describe('on-demand probe rebuild behaviour', { timeout: 120_000 }, () => {
       undefined,
       undefined,
       undefined,
-      [bodyId]
+      { lineageDemand: [bodyId] }
     );
     expect(JSON.stringify(withoutDerivedProjection(document))).toBe(before);
     expect(JSON.stringify(derived)).not.toContain(`${bodyId}demand`);

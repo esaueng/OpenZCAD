@@ -353,7 +353,9 @@ describe('geometry worker rebuild coordination', () => {
       expect.any(Function),
       undefined,
       analysis,
-      undefined
+      // Every sync rebuild carries a cancellation signal (queued-cancel set
+      // plus broadcast gate); the analysis still travels as its own argument.
+      expect.any(Object)
     );
   });
 
@@ -542,6 +544,48 @@ describe('geometry worker rebuild coordination', () => {
     });
   });
 
+  it('routes binary PLY exports through the mesh job with transferred bytes', async () => {
+    const exportMesh = vi.fn(
+      async () => new Uint8Array([0x70, 0x6c, 0x79, 0x0a])
+    );
+    const { scope } = await installWorker(async () => derived('unused'), {
+      exportMesh
+    });
+    const document = addPrimitiveFeature(
+      createProjectDocument('PLY Export', toUserId('user')),
+      {
+        name: 'Box',
+        primitiveKind: 'box',
+        dimensions: { width: 10, height: 20, depth: 30 }
+      }
+    );
+    post(scope, {
+      type: 'export',
+      requestId: 'mesh-ply',
+      document,
+      bodyIds: document.bodyOrder,
+      format: 'ply',
+      deflection: 0.05
+    });
+
+    await vi.waitFor(() =>
+      expect(scope.postMessage).toHaveBeenCalledWith(
+        expect.objectContaining({
+          type: 'export',
+          ok: true,
+          format: 'ply',
+          requestId: 'mesh-ply',
+          data: new Uint8Array([0x70, 0x6c, 0x79, 0x0a])
+        }),
+        expect.objectContaining({ transfer: [expect.any(ArrayBuffer)] })
+      )
+    );
+    expect(exportMesh).toHaveBeenCalledWith(document, document.bodyOrder, {
+      format: 'ply',
+      deflection: 0.05
+    });
+  });
+
   it('answers a section request with the adapter\'s exact outline', async () => {
     const report = {
       plane: { origin: [0, 0, 3], normal: [0, 0, 1] },
@@ -702,6 +746,40 @@ describe('geometry worker rebuild coordination', () => {
     await vi.waitFor(() =>
       expect(exportSectionDxf).toHaveBeenCalledWith(document, plane, undefined)
     );
+  });
+
+  it('drops a sync cancelled while running without reporting a failure', async () => {
+    const gate = deferred<void>();
+    const syncDocument = vi.fn(async () => {
+      await gate.promise;
+      throw Object.assign(new Error('Rebuild cancelled.'), {
+        category: 'cancelled'
+      });
+    });
+    const { scope } = await installWorker(syncDocument);
+    const document = addPrimitiveFeature(
+      createProjectDocument('Cancelled Sync', toUserId('user')),
+      {
+        name: 'Box',
+        primitiveKind: 'box',
+        dimensions: { width: 10, height: 20, depth: 30 }
+      }
+    );
+    post(scope, { type: 'sync', document, requestId: 'running' });
+    await vi.waitFor(() => expect(syncDocument).toHaveBeenCalledOnce());
+    // The cancel lands while the rebuild is already running.
+    post(scope, { type: 'cancel', requestId: 'running' });
+    gate.resolve();
+    await new Promise((resolve) => setTimeout(resolve, 0));
+
+    const failures = scope.postMessage.mock.calls
+      .map(([message]) => message)
+      .filter(
+        (message) =>
+          (message.type === 'sync' && !message.ok) ||
+          (message.type === 'state' && message.phase === 'failed')
+      );
+    expect(failures).toHaveLength(0);
   });
 
   it('skips a queued export cancelled before it started', async () => {
