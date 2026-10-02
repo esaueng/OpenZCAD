@@ -151,3 +151,119 @@
 .error-boundary button {
   justify-self: center;
 }
+
+/* The whole-app boundary: when it trips nothing else is on screen, so the
+   fallback owns the viewport instead of leaving a strip above a blank page. */
+.error-page {
+  position: fixed;
+  inset: 0;
+  display: grid;
+  place-items: center;
+  padding: var(--sp-4);
+  overflow-y: auto;
+  background:
+    radial-gradient(
+      60rem 30rem at 50% 0%,
+      color-mix(in srgb, var(--color-accent) 7%, transparent),
+      transparent 70%
+    ),
+    var(--color-bg);
+  color: var(--color-text-muted);
+  font-family: var(--font-ui);
+}
+
+.error-page-card {
+  display: grid;
+  justify-items: center;
+  gap: var(--sp-3);
+  width: min(100%, 26rem);
+  padding: var(--sp-6) var(--sp-5);
+  text-align: center;
+  background: var(--color-surface);
+  border: 1px solid var(--color-border);
+  border-radius: var(--radius-lg);
+  box-shadow: var(--shadow-2);
+}
+
+.error-page-mark {
+  display: grid;
+  place-items: center;
+  width: 48px;
+  height: 48px;
+  margin-bottom: var(--sp-1);
+  color: var(--color-accent);
+  background: var(--color-accent-dim);
+  border: 1px solid var(--color-accent-border);
+  border-radius: var(--radius-lg);
+}
+
+.error-page-mark svg {
+  width: 28px;
+  height: 28px;
+}
+
+.error-page[data-variant='crash'] .error-page-mark {
+  color: var(--color-warning);
+  background: color-mix(in srgb, var(--color-warning) 10%, transparent);
+  border-color: color-mix(in srgb, var(--color-warning) 35%, transparent);
+}
+
+.error-page-eyebrow {
+  color: var(--color-text-subtle);
+  font-family: var(--font-mono);
+  font-size: var(--fs-xs);
+  letter-spacing: var(--ls-eyebrow);
+  text-transform: uppercase;
+}
+
+.error-page h1 {
+  margin: 0;
+  color: var(--color-text);
+  font-size: var(--fs-xl);
+  font-weight: var(--fw-semibold);
+  line-height: var(--lh-tight);
+}
+
+.error-page p {
+  margin: 0;
+  font-size: var(--fs-base);
+  line-height: var(--lh-normal);
+}
+
+.error-page .error-page-note {
+  color: var(--color-text-subtle);
+  font-size: var(--fs-sm);
+}
+
+.error-page-action {
+  min-width: 12rem;
+  min-height: 36px;
+  margin-top: var(--sp-2);
+}
+
+.error-page-details {
+  justify-self: stretch;
+  color: var(--color-text-subtle);
+  font-size: var(--fs-sm);
+  text-align: left;
+}
+
+.error-page-details summary {
+  cursor: pointer;
+  text-align: center;
+}
+
+.error-page-details code {
+  display: block;
+  margin-top: var(--sp-2);
+  padding: var(--sp-2) var(--sp-3);
+  max-height: 8rem;
+  overflow: auto;
+  color: var(--color-text-muted);
+  font-family: var(--font-mono);
+  font-size: var(--fs-xs);
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+  background: var(--color-surface-2);
+  border-radius: var(--radius-md);
+}
