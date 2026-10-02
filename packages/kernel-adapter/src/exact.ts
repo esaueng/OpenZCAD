@@ -37,6 +37,19 @@ import { writeDxf } from '@openzcad/io-dxf';
 import { writeAsciiStl } from '@openzcad/io-stl';
 import { faceDxfEntities } from './exact-dxf';
 import {
+  sketchDxfEntities,
+  SketchDxfExportError
+} from './exact-sketch-dxf';
+export { SketchDxfExportError } from './exact-sketch-dxf';
+export type {
+  SketchDxfInput,
+  SketchDxfInputObject,
+  SketchDxfOutcome,
+  SketchDxfRefusal,
+  SketchDxfRefusalReason,
+  SketchDxfSuccess
+} from './exact-sketch-dxf';
+import {
   exactSolidSection,
   sectionDxfEntities,
   type ExactSectionPlane,
@@ -595,6 +608,17 @@ export interface ExactKernelAdapter {
     document: ProjectDocument,
     plane: ExactSectionPlane,
     bodyIds?: BodyId[]
+  ): Promise<string>;
+  /**
+   * One saved sketch's own 2D geometry as a DXF R12 drawing in millimetres —
+   * the manufacturing export. Exact local-plane LINE/CIRCLE/ARC output, with
+   * rectangles and polygons lowered to their authored edge lines, construction
+   * geometry excluded, and every other case refused by name rather than
+   * silently dropped. See `docs/plans/sketch-dxf-export-plan.md`.
+   */
+  exportSketchDxf(
+    document: ProjectDocument,
+    sketchId: SketchId
   ): Promise<string>;
   /**
    * One planar sketch edit on the kernel's 2D operations: a corner fillet, a
@@ -2455,6 +2479,83 @@ export class RemusKernelAdapter implements ExactKernelAdapter {
         sectionDxfEntities(kernel, faces, plane, UNIT_TO_MM[document.units])
       );
     });
+  }
+
+  async exportSketchDxf(
+    document: ProjectDocument,
+    sketchId: SketchId
+  ): Promise<string> {
+    const sketch = findSketch(document, sketchId);
+    if (!sketch) {
+      throw new SketchDxfExportError(
+        'sketch-not-found',
+        `Sketch ${sketchId} is not in this document.`
+      );
+    }
+    const { scope, errors } = getParameterScope(document);
+    if (errors.length > 0) {
+      throw new SketchDxfExportError(
+        'parameters-invalid',
+        `Parameters failed to evaluate: ${errors.join('; ')}`
+      );
+    }
+    try {
+      return await this.withExportBuild(document, (_kernel, build) => {
+        // The sketch feature resolves this same basis at its history position
+        // during the build — canonical offsets, arbitrary frames, and
+        // face-attached lineage alike — so reading it here is exact without a
+        // second resolution pass. It is still validated before anything emits.
+        const basis = build.sketchBases.get(sketchId);
+        if (!basis) {
+          throw new SketchDxfExportError(
+            'stale-plane-attachment',
+            `Sketch "${sketch.name}" has no plane resolved at its history position; its attachment cannot be placed exactly.`
+          );
+        }
+        const outcome = sketchDxfEntities({
+          objects: sketch.objectIds.map((id) => {
+            const node = document.nodes[id];
+            return {
+              id,
+              data:
+                node?.kind === 'sketch-object' ? node.data : undefined
+            };
+          }),
+          scope,
+          basis,
+          millimeterScale: UNIT_TO_MM[document.units]
+        });
+        if (outcome.status === 'refused') {
+          throw new SketchDxfExportError(outcome.reason, outcome.message);
+        }
+        try {
+          return writeDxf(outcome.entities);
+        } catch (error) {
+          throw new SketchDxfExportError(
+            'writer-refused',
+            error instanceof Error
+              ? error.message
+              : 'The DXF writer could not assemble the document.'
+          );
+        }
+      });
+    } catch (error) {
+      if (error instanceof SketchDxfExportError) {
+        throw error;
+      }
+      // A face-attached sketch resolves its plane through history-position
+      // face lineage inside the build, so a build failure on such a sketch is
+      // dominated by attachment resolution: missing, deleted, ambiguous, or
+      // non-planar. The original text is kept, so nothing is hidden by the
+      // stable reason.
+      if (sketch.planeRef.type === 'face') {
+        throw new SketchDxfExportError(
+          'stale-plane-attachment',
+          `Sketch "${sketch.name}" cannot attach to its face exactly (${error instanceof Error ? error.message : 'face lineage failed'}).`
+        );
+      }
+      throw error;
+    }
   }
 
   async exportStl(
