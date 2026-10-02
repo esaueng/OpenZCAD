@@ -4,7 +4,7 @@ import {
   type BodyTopology,
   type TopologySelection
 } from '@openzcad/shared';
-import { resolveFormFacePick, resolveHoleFacePick } from './holeFacePick';
+import { resolveFormFacePick } from './holeFacePick';
 
 const bodyId = toBodyId('plate');
 const selection: TopologySelection = {
@@ -32,7 +32,7 @@ const topology: BodyTopology = {
 
 describe('Hole viewport face picking', () => {
   it('accepts the current planar face and keeps its exact identity', () => {
-    expect(resolveHoleFacePick(bodyId, selection, topology)).toEqual({
+    expect(resolveFormFacePick('hole', bodyId, selection, topology)).toEqual({
       ok: true,
       selection,
       pick: { bodyId, hash: 42 }
@@ -69,7 +69,7 @@ describe('Hole viewport face picking', () => {
   ])(
     'refuses an unsuitable pick without substituting a different face',
     (pick, currentTopology, reason) => {
-      const result = resolveHoleFacePick(bodyId, pick, currentTopology);
+      const result = resolveFormFacePick('hole', bodyId, pick, currentTopology);
       expect(result.ok).toBe(false);
       if (!result.ok) expect(result.reason).toContain(reason);
     }
