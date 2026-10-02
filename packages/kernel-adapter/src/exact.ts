@@ -144,7 +144,11 @@ export {
   importMeshFile,
   type ImportedMeshTriangles
 } from './mesh-file-import';
-import { sanitizeBinaryStl, sanitizeThreeMf } from './mesh-export-sanitize';
+import {
+  sanitizeBinaryPly,
+  sanitizeBinaryStl,
+  sanitizeThreeMf
+} from './mesh-export-sanitize';
 import {
   readMeshQuality,
   type BodyMeshQuality,
@@ -2531,12 +2535,16 @@ export class RemusKernelAdapter implements ExactKernelAdapter {
             ? io.exportObj(bodies, deflection)
             : format === 'glb'
               ? io.exportGlb(bodies, deflection)
-              : io.exportStl(bodies, deflection);
+              : format === 'ply'
+                ? io.exportPly(bodies, deflection)
+                : io.exportStl(bodies, deflection);
       return format === '3mf'
         ? sanitizeThreeMf(bytes)
         : format === 'stl-binary'
           ? sanitizeBinaryStl(bytes)
-          : (bytes as Uint8Array<ArrayBuffer>);
+          : format === 'ply'
+            ? sanitizeBinaryPly(bytes)
+            : (bytes as Uint8Array<ArrayBuffer>);
     });
   }
 
