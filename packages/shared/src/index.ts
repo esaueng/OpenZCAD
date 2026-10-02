@@ -1,5 +1,6 @@
 export * from './workspace-resume';
 export * from './document-history';
+export * from './mass-density';
 import type { DocumentHistory } from './document-history';
 export type Brand<T, Name extends string> = T & { readonly __brand: Name };
 
