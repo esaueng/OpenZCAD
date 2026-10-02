@@ -95,6 +95,16 @@ describe('ExportDialog', () => {
     expect(screen.queryByRole('radio', { name: /OBJ/ })).not.toBeNull();
   });
 
+  it('names glTF’s own unit rather than the slicers’ millimetres', async () => {
+    const user = userEvent.setup();
+    renderDialog();
+    expect(screen.getByText(/in millimetres, ready for slicing/)).toBeVisible();
+
+    await user.click(screen.getByLabelText(/glTF \(GLB\)/));
+
+    expect(screen.getByText(/in metres, the unit glTF defines/)).toBeVisible();
+  });
+
   it('offers binary PLY at the standard preset', async () => {
     const user = userEvent.setup();
     const props = renderDialog();
