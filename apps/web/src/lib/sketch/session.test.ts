@@ -1,4 +1,5 @@
-import { describe, expect, it } from 'vitest';
+import { describe, expect, it, vi } from 'vitest';
+import type { SketchObjectData } from '@openzcad/shared';
 import { PLANE_BASES } from '@openzcad/geometry';
 import {
   arcDimension,
@@ -11,6 +12,8 @@ import {
   circlePreviewPoints,
   centerInferenceSegments,
   collectSketchSnapTargets,
+  SKETCH_SNAP_LIMITS,
+  SketchSnapLimitError,
   angleForInProgress,
   dimensionForInProgress,
   frameFromFace,
@@ -396,6 +399,121 @@ describe('sketch entity snapping', () => {
     });
     expect(targets).toContainEqual(
       expect.objectContaining({ x: 2, y: 0, kind: 'intersection' })
+    );
+  });
+
+  type SnapObject = { id: string; data: SketchObjectData };
+
+  const parallelLines = (count: number) =>
+    Array.from({ length: count }, (_, index): SnapObject => ({
+      id: `line-${index}`,
+      data: {
+        objectKind: 'line',
+        x1: -10,
+        y1: index,
+        x2: 10,
+        y2: index
+      }
+    }));
+
+  it('refuses oversized inputs before evaluating any parameters', () => {
+    const resolve = vi.fn(identity);
+    const cases = [
+      {
+        objects: Array.from(
+          { length: SKETCH_SNAP_LIMITS.objects + 1 },
+          (_, i): SnapObject => ({
+            id: `circle-${i}`,
+            data: {
+              objectKind: 'circle',
+              radius: 1,
+              centerX: 0,
+              centerY: 0
+            }
+          })
+        ),
+        budget: 'objects'
+      },
+      {
+        objects: parallelLines(SKETCH_SNAP_LIMITS.segments + 1),
+        budget: 'segments'
+      },
+      // 363 segments make 65,703 visited pairs, even when all are parallel.
+      { objects: parallelLines(363), budget: 'pairs' },
+      {
+        objects: [
+          {
+            ...parallelLines(1)[0]!,
+            id: 'x'.repeat(SKETCH_SNAP_LIMITS.objectIdLength + 1)
+          }
+        ],
+        budget: 'objectIdLength'
+      }
+    ];
+    for (const { objects, budget } of cases) {
+      expect(() => collectSketchSnapTargets(objects, resolve)).toThrow(
+        expect.objectContaining({ name: 'SketchSnapLimitError', budget })
+      );
+      expect(resolve).not.toHaveBeenCalled();
+    }
+  });
+
+  it('counts rectangle edges and skipped same-source pairs in the work budget', () => {
+    const resolve = vi.fn(identity);
+    const rectangles = Array.from({ length: 91 }, (): SnapObject => ({
+      id: 'same-source',
+      data: {
+        objectKind: 'rectangle',
+        width: 10,
+        height: 10,
+        centerX: 0,
+        centerY: 0
+      }
+    }));
+    expect(() => collectSketchSnapTargets(rectangles, resolve)).toThrow(
+      expect.objectContaining({ budget: 'pairs' })
+    );
+    expect(resolve).not.toHaveBeenCalled();
+  });
+
+  it('retains normal snap points at the input and pair budget boundaries', () => {
+    const circles = Array.from(
+      { length: SKETCH_SNAP_LIMITS.objects },
+      (_, i): SnapObject => ({
+        id: `circle-${i}`,
+        data: {
+          objectKind: 'circle',
+          radius: 2,
+          centerX: i,
+          centerY: 0
+        }
+      })
+    );
+    expect(collectSketchSnapTargets(circles, identity)).toHaveLength(5121);
+    const lines = parallelLines(362);
+    lines[0]!.id = 'x'.repeat(SKETCH_SNAP_LIMITS.objectIdLength);
+    expect(collectSketchSnapTargets(lines, identity)).toHaveLength(1087);
+  });
+
+  it('refuses dense crossing output atomically instead of returning a partial snap set', () => {
+    const crossings = parallelLines(128).map((object, index): SnapObject => ({
+      ...object,
+      data: {
+        objectKind: 'line',
+        x1: -10,
+        y1: -(index + 1),
+        x2: 10,
+        y2: index + 1
+      }
+    }));
+    expect(
+      collectSketchSnapTargets(crossings.slice(0, 125), identity)
+    ).toHaveLength(8126);
+    expect(() => collectSketchSnapTargets(crossings, identity)).toThrow(
+      expect.objectContaining({ budget: 'targets' })
+    );
+    expect(() => collectSketchSnapTargets(crossings, identity)).toThrow(
+      SketchSnapLimitError
     );
   });
 

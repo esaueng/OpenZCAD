@@ -17,6 +17,8 @@
  * bundle of anything that merely computes sketch regions.
  */
 import { flattenLoop } from './loops';
+import { textObjectBudgetError } from '@openzcad/shared';
+import { requireTextBudget } from './budget';
 import { textFontProvider } from './fontProvider';
 import { textProfileSet } from './profiles';
 import { findFontFamily, resolveFontStyle } from './registry';
@@ -318,6 +320,9 @@ export function textDisplayLoops(
   parameters: TextObjectParameters,
   toleranceRatio = DISPLAY_TOLERANCE_RATIO
 ): Vec2Like[][] | null {
+  // Sketch analysis surfaces the same refusal as an unresolved-outline error.
+  // The display path contributes no partial/truncated glyph geometry.
+  if (textObjectBudgetError(parameters.text)) return null;
   const provider = textFontProvider();
   const font = provider
     ? loadedFace(provider, parameters.fontFamily, parameters.fontStyle)
@@ -354,6 +359,7 @@ export function textSketchProfiles(
   parameters: TextObjectParameters,
   options?: TextProfileOptions
 ): SketchProfile[] {
+  requireTextBudget(parameters.text);
   const provider = textFontProvider();
   if (!provider) {
     throw new TextGeometryError(

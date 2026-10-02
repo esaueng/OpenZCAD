@@ -125,6 +125,14 @@ describe('importStepWithReport against the pinned reader', () => {
       Array.from(imported.solids).forEach((solid, index) => {
         expect(kernel.volume(solid, 0.01)).toBeCloseTo(volumes[index]!, 3);
       });
+      // Cache reuse restores the original exact arena, without serializing
+      // every solid a second time or changing their order/geometry.
+      const restored = kernel.deserializeSolids(imported.document);
+      Array.from(restored).forEach((solid, index) => {
+        expect(kernel.serializeSolid(solid)).toEqual(
+          kernel.serializeSolid(imported.solids[index]!)
+        );
+      });
     } finally {
       kernel.free();
     }

@@ -18,7 +18,10 @@ import { featureHistory } from './lib/featureHistory';
 import { FeatureBuildError } from './lib/featureValidation';
 import { edgeModifierCommand } from './lib/edgeModifierEdit';
 import type { EdgeModifierFormValue } from './components/forms/FeatureForms';
-import { documentNodesWithHistory } from '@openzcad/shared';
+import {
+  documentNodesWithHistory,
+  documentTextBudgetError
+} from '@openzcad/shared';
 import { useWorkspaceResume } from './hooks/useWorkspaceResume';
 import { buildMeasurementRecord } from './lib/measurementRecord';
 import {
@@ -516,7 +519,10 @@ import type {
   InteractionState
 } from './lib/interaction/machine';
 import { resolveFace } from './lib/topologyResolution';
-import { objectPolylines } from './lib/objectPolyline';
+import {
+  objectPolylines,
+  displayObjectsWithTextBudget
+} from './lib/objectPolyline';
 import type { RegionPickData } from './components/viewer/regionOverlay';
 import { CommandBar, type PaletteCommand } from './components/CommandBar';
 import { ShortcutsOverlay } from './components/ShortcutsOverlay';
@@ -1745,6 +1751,10 @@ export function App() {
   } | null>(null);
   // Named `doc` (not `document`) so the global DOM document is never shadowed.
   const [doc, setDoc] = useState<ProjectDocument | null>(null);
+  const textOutlineBudgetError = useMemo(
+    () => (doc ? documentTextBudgetError(doc) : null),
+    [doc]
+  );
   /** History pins a feature; viewport ownership is re-resolved after rebuilds. */
   const [selectedFeatureNode, setSelectedFeatureNode] = useState<{
     id: string;
@@ -7324,7 +7334,10 @@ export function App() {
     setViewerSettings({
       showGrid: appSettings.viewport.showGrid,
       displayMode: appSettings.viewport.displayMode,
-      reducedMotion: appSettings.appearance.reducedMotion
+      reducedMotion: appSettings.appearance.reducedMotion,
+      zoomToCursor: appSettings.viewport.zoomToCursor,
+      middleDrag: appSettings.viewport.middleDrag,
+      pointerNavigation: appSettings.viewport.pointerNavigation
     });
     setSettingsMessage('Viewport defaults applied to the current view.');
   }
@@ -11362,7 +11375,10 @@ export function App() {
       holes: { x: number; y: number }[][];
     }[] = [];
     try {
-      profiles = computeSketchRegions(objects, resolve).map((profile) => ({
+      profiles = computeSketchRegions(
+        displayObjectsWithTextBudget(objects, textOutlineBudgetError),
+        resolve
+      ).map((profile) => ({
         outer: profile.outer.polyline,
         holes: profile.holes.map((hole) => hole.polyline)
       }));
@@ -11406,6 +11422,7 @@ export function App() {
       selectedObjectId: session.selectedObjectId,
       parameterScope: parameterScope.scope,
       constraintDiagnosticObjectIds: sketchSolveDiagnosticObjectIds,
+      textOutlineBudgetError,
       definedObjectIds: sketchDefinedObjectIds,
       dimensions: sketchDimensionAnnotations(
         objects,
@@ -11424,6 +11441,7 @@ export function App() {
     parameterScope.scope,
     sketchDiagnosticPoints,
     sketchSolveDiagnosticObjectIds,
+    textOutlineBudgetError,
     sketchDefinedObjectIds
   ]);
 
@@ -12750,18 +12768,22 @@ export function App() {
       }
       const curves = active
         ? []
-        : objects.flatMap((object) => {
-            try {
-              // A text object draws one run per glyph region plus one per
-              // counter, so this is many runs from one object.
-              return objectPolylines(object.data, resolve).map((polyline) => ({
-                ...polyline,
-                construction: object.data.construction === true
-              }));
-            } catch {
-              return [];
+        : displayObjectsWithTextBudget(objects, textOutlineBudgetError).flatMap(
+            (object) => {
+              try {
+                // A text object draws one run per glyph region plus one per
+                // counter, so this is many runs from one object.
+                return objectPolylines(object.data, resolve).map(
+                  (polyline) => ({
+                    ...polyline,
+                    construction: object.data.construction === true
+                  })
+                );
+              } catch {
+                return [];
+              }
             }
-          });
+          );
       let regions: {
         profileId: string;
         regionFingerprint: number;
@@ -12777,19 +12799,20 @@ export function App() {
         holes: { x: number; y: number }[][];
       }[] = [];
       try {
-        regions = computeSketchRegions(objects, (value) => resolve(value)).map(
-          (region) => ({
-            profileId: region.profileId,
-            regionFingerprint: region.regionFingerprint,
-            samplePoint: region.samplePoint,
-            centroid: region.centroid,
-            boundingBox: region.boundingBox,
-            sourceEntityIds: region.sourceEntityIds,
-            area: region.area,
-            outer: region.outer.polyline,
-            holes: region.holes.map((hole) => hole.polyline)
-          })
-        );
+        regions = computeSketchRegions(
+          displayObjectsWithTextBudget(objects, textOutlineBudgetError),
+          (value) => resolve(value)
+        ).map((region) => ({
+          profileId: region.profileId,
+          regionFingerprint: region.regionFingerprint,
+          samplePoint: region.samplePoint,
+          centroid: region.centroid,
+          boundingBox: region.boundingBox,
+          sourceEntityIds: region.sourceEntityIds,
+          area: region.area,
+          outer: region.outer.polyline,
+          holes: region.holes.map((hole) => hole.polyline)
+        }));
       } catch {
         // Unresolvable sketches simply render without pickable regions.
       }
@@ -12814,6 +12837,7 @@ export function App() {
     // after this memo last ran has to re-run it or the glyph stays a
     // diagnostic until something unrelated invalidates the memo.
     textFontsVersion,
+    textOutlineBudgetError,
     hiddenSketchIds,
     modelingEditFeature
   ]);
@@ -16141,11 +16165,13 @@ export function App() {
               ? 'showing the previous result until it finishes'
               : 'no exact projection is available yet'
         };
-  const visibleStatus = parameterPreview
-    ? `Parameter preview · ${parameterEditPending ? status : parameterDraftActive ? 'Press Enter to apply; Escape to cancel' : 'exact geometry rebuilding'}`
-    : status;
+  const visibleStatus = textOutlineBudgetError
+    ? `Text outlines refused: ${textOutlineBudgetError}`
+    : parameterPreview
+      ? `Parameter preview · ${parameterEditPending ? status : parameterDraftActive ? 'Press Enter to apply; Escape to cancel' : 'exact geometry rebuilding'}`
+      : status;
   const tone: 'ready' | 'warning' | 'running' =
-    geometry.state.phase === 'failed'
+    textOutlineBudgetError || geometry.state.phase === 'failed'
       ? 'warning'
       : !exactGeometryReady
         ? 'running'

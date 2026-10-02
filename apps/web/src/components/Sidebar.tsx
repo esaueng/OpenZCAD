@@ -17,7 +17,6 @@ import {
   RotateCw,
   Search
 } from 'lucide-react';
-import { isFeatureRollbackSuppressed } from '@openzcad/shared';
 import type {
   BodyId,
   BodyRepresentation,
@@ -28,7 +27,7 @@ import type {
   UnitSystem
 } from '@openzcad/shared';
 import type { PanelState, SidebarSectionId } from '../lib/panelState';
-import { HistoryTimeline } from './HistoryTimeline';
+import { findRollbackMarkerIndex, HistoryTimeline } from './HistoryTimeline';
 import { AddParameterRow, ParameterRow } from './ParameterRows';
 
 /**
@@ -306,14 +305,7 @@ export function Sidebar({
     );
   }
 
-  const rollbackMarkerIndex = features.findIndex(
-    (feature, index) =>
-      index < features.length - 1 &&
-      !isFeatureRollbackSuppressed(feature) &&
-      features
-        .slice(index + 1)
-        .every((candidate) => isFeatureRollbackSuppressed(candidate))
-  );
+  const rollbackMarkerIndex = findRollbackMarkerIndex(features);
   // The feature the scrub strip points at: the selected one, else the last
   // one still in the build (the rollback marker), else the newest.
   const activeFeatureIndex =

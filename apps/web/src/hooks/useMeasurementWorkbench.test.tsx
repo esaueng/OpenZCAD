@@ -199,6 +199,54 @@ describe('measurement workbench persistence', () => {
       display: { unit: 'mm', precision: 2, radialDisplay: 'diameter' }
     });
   });
+
+  it('preserves a hydrated timestamp until measurement content changes', async () => {
+    vi.useFakeTimers();
+    const doc = createProjectDocument(
+      'Measure timestamp',
+      toUserId('user_measure_timestamp')
+    );
+    const stored = record(doc.projectId, [
+      measurement('measurement-stored', false)
+    ]);
+    load.mockResolvedValue(stored);
+
+    const { result } = renderHook(() =>
+      useMeasurementWorkbench(input({ doc, modelingLocked: true }))
+    );
+
+    await act(async () => {
+      await Promise.resolve();
+      await vi.advanceTimersByTimeAsync(0);
+    });
+    expect(result.current.measurementHydratedProjectId).toBe(doc.projectId);
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(500);
+    });
+    expect(save).not.toHaveBeenCalled();
+
+    const remoteMeasurement = measurement('measurement-cloud', false);
+    act(() => {
+      result.current.applyStoredMeasurements([remoteMeasurement]);
+      result.current.setMeasurementUnit('cm');
+    });
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(500);
+    });
+    expect(save).not.toHaveBeenCalled();
+
+    const changed = { ...remoteMeasurement, note: 'edited note' };
+    act(() => result.current.setMeasurements([changed]));
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(500);
+    });
+    expect(save).toHaveBeenCalledTimes(1);
+    expect(save.mock.calls[0]![0]).toMatchObject({
+      projectId: doc.projectId,
+      measurements: [changed]
+    });
+    expect(save.mock.calls[0]![0].updatedAt).not.toBe(stored.updatedAt);
+  });
 });
 
 describe('measurement picks', () => {

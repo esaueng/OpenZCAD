@@ -675,7 +675,7 @@ describe('AI patch contracts', () => {
 
     expect(
       groundCadPatchProposalToSelection(
-        'Add fillets of 5 mm on the selected edges',
+        'Add fillets of 5 mm on all selected edges',
         digest,
         proposal
       ).operations[0]
@@ -684,6 +684,44 @@ describe('AI patch contracts', () => {
       edgeHashes: [109, 212],
       size: 5
     });
+  });
+
+  it('refuses selected edges across bodies when one modifier cannot preserve them', () => {
+    const document = createProjectDocument('Selected edges', toUserId('user_ai'));
+    const bodyA = toBodyId('body_a');
+    const bodyB = toBodyId('body_b');
+    const digest = createCadDocumentDigest(document, {
+      featureIds: [],
+      bodyIds: [bodyA, bodyB],
+      topologies: [
+        { bodyId: bodyA, kind: 'edge', topologyId: 'edge:a', hash: 101 },
+        { bodyId: bodyB, kind: 'edge', topologyId: 'edge:b', hash: 202 }
+      ]
+    });
+    const proposal = parseCadPatchProposal({
+      proposalId: 'proposal_multi_body_selected_edges',
+      summary: 'Fillet all selected edges.',
+      assumptions: [],
+      operations: [
+        {
+          kind: 'add_edge_modifier',
+          name: 'Selected edge fillets',
+          localId: null,
+          modifier: 'fillet',
+          targetBodyId: 'body_other',
+          edgeHashes: [999],
+          size: 5
+        }
+      ]
+    });
+
+    expect(() =>
+      groundCadPatchProposalToSelection(
+        'Fillet all selected edges',
+        digest,
+        proposal
+      )
+    ).toThrow(/selected edge target is ambiguous/);
   });
 
   it('grounds all edges onto the complete topology of the sole live body', () => {

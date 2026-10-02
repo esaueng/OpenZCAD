@@ -90,6 +90,22 @@ const KEYBOARD_COMMIT_MS = 450;
 const CASCADE_STEP_MS = 14;
 const CASCADE_MAX_STEPS = 12;
 
+/**
+ * The last feature still in the build when every later one is paused by
+ * rollback. Scan from the end so both collapsed and expanded History views
+ * find the boundary in at most one pass.
+ */
+export function findRollbackMarkerIndex(
+  features: readonly FeatureNode[]
+): number {
+  for (let index = features.length - 1; index >= 0; index -= 1) {
+    if (!isFeatureRollbackSuppressed(features[index]!)) {
+      return index < features.length - 1 ? index : -1;
+    }
+  }
+  return -1;
+}
+
 export interface HistoryTimelineProps {
   features: FeatureNode[];
   representations: Record<string, BodyRepresentation>;
@@ -216,17 +232,10 @@ export function HistoryTimeline({
     ARRIVAL_MS
   );
 
-  const last = features.length - 1;
   // The last feature still in the build when every later one is paused by
   // rollback; otherwise the history runs to its end.
-  const rollbackIndex = features.findIndex(
-    (feature, index) =>
-      index < last &&
-      !isFeatureRollbackSuppressed(feature) &&
-      features
-        .slice(index + 1)
-        .every((candidate) => isFeatureRollbackSuppressed(candidate))
-  );
+  const rollbackIndex = findRollbackMarkerIndex(features);
+  const last = features.length - 1;
   const committedEnd = rollbackIndex >= 0 ? rollbackIndex : last;
   const end = Math.min(previewEnd ?? committedEnd, last);
   const pausedCount = features.filter(isFeatureRollbackSuppressed).length;

@@ -22,7 +22,11 @@ function referenceFor(text: string): ImportedSourceReference {
     marker: 'openzcad-source-ref',
     version: 1,
     hashAlgorithm: 'sha256',
-    checksumSha256: `checksum-${text}`,
+    checksumSha256: Array.from(text, (letter) =>
+      letter.charCodeAt(0).toString(16)
+    )
+      .join('')
+      .padEnd(64, '0'),
     logicalBytes: text.length
   };
 }
@@ -75,7 +79,74 @@ describe('listLocalOnlyImportSources', () => {
       'local.step',
       'local2.step'
     ]);
-    expect(sources[0]).toMatchObject({ checksumSha256: 'checksum-local' });
+    expect(sources[0]).toMatchObject({
+      checksumSha256: referenceFor('local').checksumSha256
+    });
+  });
+
+  it.each([
+    { artifactId: null },
+    { artifactId: {} },
+    { artifactId: 42 },
+    { sourceName: {} },
+    { stepSourceRef: null },
+    { stepSourceRef: 'checksum' },
+    { stepSourceRef: { checksumSha256: {} } },
+    { stepSourceRef: { ...referenceFor('local'), logicalBytes: -1 } },
+    { stepText: {} },
+    { stepText: 'ISO-10303-21;' }
+  ])(
+    'ignores malformed source fields without hiding valid imports: %j',
+    (data) => {
+      const document = structuredClone(managerWithImports().document);
+      delete document.editHistory;
+      const feature = Object.values(document.nodes).find(
+        (node) => node.kind === 'feature' && node.name === 'Local import'
+      );
+      if (!feature || feature.kind !== 'feature')
+        throw new Error('Missing fixture');
+      Object.assign(feature.data, data);
+      expect(
+        listLocalOnlyImportSources(document).map((source) => source.sourceName)
+      ).toEqual(['local2.step']);
+    }
+  );
+
+  it('ignores malformed import snapshots in undo and redo history', () => {
+    const document = structuredClone(managerWithImports().document);
+    const feature = Object.values(document.nodes).find(
+      (node) => node.kind === 'feature' && node.name === 'Local import'
+    );
+    if (!feature || !document.editHistory) throw new Error('Missing fixture');
+    document.editHistory.entries.push({
+      id: 'malformed-snapshot',
+      label: 'Historical import',
+      changes: [
+        {
+          kind: 'value',
+          field: 'nodes',
+          key: feature.id,
+          before: {
+            ...feature,
+            data: { featureKind: 'imported-step', artifactId: null }
+          },
+          after: { ...feature, data: null }
+        },
+        {
+          kind: 'value',
+          field: 'nodes',
+          after: {
+            [feature.id]: {
+              ...feature,
+              data: { featureKind: 'imported-step', artifactId: {} }
+            }
+          }
+        }
+      ]
+    });
+    expect(
+      listLocalOnlyImportSources(document).map((source) => source.sourceName)
+    ).toEqual(['local.step', 'local2.step']);
   });
 
   it('does not report an embedded-text import as local-only', () => {
@@ -151,7 +222,7 @@ describe('archiveLocalOnlyImportSources', () => {
     expect(rewired).toContainEqual(
       expect.objectContaining({
         artifactId: 'artifact_cloud_local.step',
-        checksum: 'checksum-local'
+        checksum: referenceFor('local').checksumSha256
       })
     );
   });

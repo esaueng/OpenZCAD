@@ -1,5 +1,6 @@
 import {
   groundCadPatchProposalToSelection,
+  parseCadPatchProposal,
   parseAssistantReply,
   type AssistantAttachment,
   type AssistantHistoryTurn,
@@ -62,6 +63,8 @@ export class AssistantStreamError extends Error {
 export interface AssistantTurnRequest {
   /** The current turn's text. */
   prompt: string;
+  /** The user request that led to the current answer, for local grounding. */
+  selectionPrompt?: string;
   /** Freshly captured for this turn; never a replay of an older snapshot. */
   digest: CadDocumentDigest;
   history?: readonly AssistantHistoryTurn[];
@@ -400,12 +403,7 @@ async function streamAssistantReplyAttempt(
   }
   let reply: AssistantReply;
   try {
-    // The digest the model was given, so the witness-binding checks in
-    // `parseCadPatchProposal` actually run. Without it they were dead outside
-    // the test suite: `validateCadPatchProposalAgainstDigest` is called only
-    // when a digest is present, so a proposal quoting a stale or invented
-    // topology witness reached the user's review card unchallenged.
-    reply = parseAssistantReply(decoded, request.digest);
+    reply = parseAssistantReply(decoded);
   } catch {
     throw new AssistantStreamError(
       'AI_INVALID_REPLY',
@@ -413,17 +411,26 @@ async function streamAssistantReplyAttempt(
       requestId
     );
   }
-  // Grounding replaces the model's guesses at which entities words like
-  // "these edges" mean with the actual UI selection, so it applies to the one
-  // branch that names entities.
-  return reply.kind === 'patch'
-    ? {
-        ...reply,
-        proposal: groundCadPatchProposalToSelection(
-          request.prompt,
-          request.digest,
-          reply.proposal
-        )
-      }
-    : reply;
+  if (reply.kind !== 'patch') return reply;
+
+  try {
+    // Ground first so stale or invented model references can be replaced by
+    // the current explicit selection. Then validate the resulting proposal
+    // against the same digest before it reaches preview.
+    const proposal = groundCadPatchProposalToSelection(
+      [request.selectionPrompt, request.prompt].filter(Boolean).join('\n'),
+      request.digest,
+      reply.proposal
+    );
+    return {
+      ...reply,
+      proposal: parseCadPatchProposal(proposal, request.digest)
+    };
+  } catch {
+    throw new AssistantStreamError(
+      'AI_INVALID_REPLY',
+      INVALID_STRUCTURED_OUTPUT_MESSAGE,
+      requestId
+    );
+  }
 }

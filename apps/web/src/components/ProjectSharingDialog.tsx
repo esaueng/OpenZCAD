@@ -91,7 +91,7 @@ function createdLabel(createdAt: number): string {
 
 /** Compact time left on an invitation: `6d`, `3h`, or `expired`. */
 function expiryLabel(expiresAt: number): string {
-  const remaining = expiresAt - Date.now();
+  const remaining = expiresAt * 1000 - Date.now();
   if (remaining <= 0) {
     return 'expired';
   }
