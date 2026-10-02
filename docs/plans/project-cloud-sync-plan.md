@@ -37,6 +37,32 @@ Revision IDs remain bound to their owning project. Migration 0021 enforces
 this for D1 and R2 save paths; same-project updates remain allowed. Project
 routes require the guards before serving writes.
 
+## Account identity transfer
+
+New account adoptions receive a server-assigned project ID. The device ID is an
+account-scoped retry key in `project_adoptions`; project creation and this mapping
+commit atomically. A retry reports the mapped ID so the client loads the actual
+account document and uses the existing conflict rules. Existing account IDs and
+legacy documents stay supported.
+
+The device transfers its project, undo/redo project-node endpoints, save-state
+snapshots, shelf state, pending mirrors, measurements, thumbnails and backup-file
+metadata in one IndexedDB transaction. Content-checksum source blobs and claims
+stay in place. Entity IDs, revisions, checkpoint IDs, versions and edit times do
+not change for this transfer. Workspace view state follows the returned ID. A
+durable alias resolves old device-ID reads and fences old writes, including
+another tab's pending autosave. Existing account identities retain separate local
+copies and view state; another account receives an independent copy. The original
+owner also identifies older account copies after logout cleared their sync baseline.
+A matching account cache can complete an interrupted transfer, while different work enters
+the existing conflict flow with both copies retained. Old running clients must
+reload before account adoption because they cannot perform this transfer.
+
+Local regression coverage: `test/project-adoption-bindings.test.ts`,
+`projectIdentityTransfer.test.ts`, `test/project-adoption-api.test.ts` and
+`test/e2e/import-cloud-sync.spec.ts`. Migration 0023 is source-only until separately
+authorized deployment; named-build and live cross-device evidence remain L01.
+
 ## What shipped, against what was planned
 
 Two things came out differently from the plan above, both for the better:
@@ -189,12 +215,14 @@ Closes gap 2. Independent of every later phase, and the one that makes "save to 
 profile" true at all.
 
 - `packages/shared`: extend `CreateProjectRequest` with an optional `document?:
-ProjectDocument`. Present means adoption: keep the client's `projectId` so the device's
-  local copy and its shelf metadata stay linked to the account record.
+ProjectDocument`. Present means adoption: preserve the model and transfer the
+  device's local records to the returned account project identity. Adoption
+  protocol version 1 advertises that transfer support.
 - `packages/cloudflare-adapters`: in `createProject`, when a document is supplied, run it
-  through `normalizeDocument`, re-stamp `ownerUserId`, and insert. Refuse when the
-  `projectId` already exists — under this owner (already adopted) or another (id
-  collision) — with distinguishable errors.
+  through `normalizeDocument`, re-stamp `ownerUserId`, and insert under an opaque
+  server-assigned project ID. Migration 0023 records the account-scoped device-ID
+  binding in the same D1 transaction. Retries return the bound account project
+  ID for reconciliation. Existing owned cloud IDs are preserved.
 - `apps/web/worker/validation.ts`: schema-version guard, the existing depth/value/byte
   caps, and the `MAX_PERSISTED_DOCUMENT_BYTES` ceiling applied before the insert.
 - `apps/web/src/App.tsx`: a per-project "Save to my account" action on the start screen for
@@ -203,7 +231,7 @@ ProjectDocument`. Present means adoption: keep the client's `projectId` so the d
   retryable rather than terminal.
 
 **Tests:** adoption round trip (create offline → sign in → adopt → load from a second
-client); re-adoption refused; adoption under a second account refused; oversize refused;
+client); retry recovery; independent account adoption; oversize refused;
 adoption while offline leaves the local project untouched and retryable.
 
 ### Phase 2 — Cloud document autosave

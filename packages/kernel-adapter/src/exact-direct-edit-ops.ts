@@ -97,8 +97,8 @@ import {
  * wall's radius), so only the lineage identity survives an upstream
  * parametric edit. Operations saved without a v5 reference keep the hash
  * resolver and its diagnostics byte-for-byte; a v5 lineage failure is
- * terminal rather than falling back, so a stale reference can never land
- * silently on a neighbouring face.
+ * terminal while lineage is available. Without lineage, fallback still
+ * requires a unique complete witness; a hash alone cannot vouch for a v5 pick.
  */
 export function resolveDirectEditFace(
   kernel: RemusKernel,
@@ -121,7 +121,7 @@ function resolveDirectEditFaceInSolids(
   lineage: RemusLineageState | undefined
 ): { face: number; viaLineage: boolean } {
   const reference = operation.faceReference;
-  if (!reference || !lineage) {
+  if (!reference) {
     // Include the legacy fingerprint aliases, and require uniqueness across
     // the entire body rather than taking the first solid with a match.
     const matches = solids.flatMap(
@@ -144,7 +144,7 @@ function resolveDirectEditFaceInSolids(
   const candidates: TopologyResolutionCandidate[] = solids.flatMap((solid) =>
     Array.from(kernel.getSolidFaces(solid), (handle) => {
       const witness = faceWitnessOf(kernel, handle);
-      const lineageReference = lineage.faceReferences.get(handle);
+      const lineageReference = lineage?.faceReferences.get(handle);
       return {
         kind: 'face' as const,
         currentHash: topologyHashOfWitness('face', witness),
@@ -165,7 +165,13 @@ function resolveDirectEditFaceInSolids(
       };
     })
   );
-  const resolution = resolveTopologyReference(reference, candidates);
+  const resolution = resolveTopologyReference(
+    reference,
+    candidates,
+    lineage
+      ? { status: 'available' }
+      : { status: 'unsupported', operation: 'direct-edit' }
+  );
   if (resolution.status === 'failed') {
     throw new Error(`Direct-edit face is stale: ${resolution.message}`);
   }
@@ -174,7 +180,10 @@ function resolveDirectEditFaceInSolids(
       'The selected face could not be found on the rebuilt body.'
     );
   }
-  return { face: resolution.candidate.value, viaLineage: true };
+  return {
+    face: resolution.candidate.value,
+    viaLineage: resolution.via === 'lineage'
+  };
 }
 
 /** Slice handle-bound references without re-matching untouched geometry. */

@@ -1,6 +1,6 @@
 import type { ParameterVisualPreview } from '../lib/parameterVisualPreview';
 import { ParameterPreviewController } from './viewer/parameterPreviewController';
-import { useEffect, useRef, type MutableRefObject } from 'react';
+import { useEffect, useRef, useState, type MutableRefObject } from 'react';
 import { axisDimensionLabel } from '../lib/primitiveDimensionLabel';
 import * as THREE from 'three';
 import type { HoleGhost } from '../lib/holeGhost';
@@ -201,6 +201,7 @@ import {
   circlePreviewPoints,
   centerInferenceSegments,
   collectSketchSnapTargets,
+  SketchSnapLimitError,
   angleForInProgress,
   dimensionForInProgress,
   lineObjectFromPoints,
@@ -342,6 +343,7 @@ export interface SketchModeState {
    * DOF scalar, no per-entity freedom).
    */
   definedObjectIds: string[];
+  textOutlineBudgetError?: string | null;
   dimensions: SketchDimensionAnnotation[];
 }
 
@@ -1744,6 +1746,9 @@ export function ModelViewer({
   const sketchDimLabelRef = useRef<HTMLDivElement | null>(null);
   /** Entity-snap candidates from committed sketch objects + cursor marker. */
   const snapTargetsRef = useRef<SnapTarget[]>([]);
+  const [sketchSnapRefusal, setSketchSnapRefusal] = useState<string | null>(
+    null
+  );
   const sketchSnapMarkerRef = useRef<HTMLDivElement | null>(null);
   const sketchCenterTargetRef = useRef<HTMLDivElement | null>(null);
   /** Camera pose + projection to restore when leaving sketch mode. */
@@ -9600,6 +9605,7 @@ export function ModelViewer({
     const rig = sketchRigRef.current;
     if (!context || !rig || !sketchMode) {
       snapTargetsRef.current = [];
+      setSketchSnapRefusal(null);
       return;
     }
     const resolve = (value: unknown) =>
@@ -9609,7 +9615,8 @@ export function ModelViewer({
       sketchMode.selectedObjectId,
       resolve,
       sketchMode.constraintDiagnosticObjectIds,
-      sketchMode.definedObjectIds
+      sketchMode.definedObjectIds,
+      sketchMode.textOutlineBudgetError
     );
     rig.setProfiles(sketchMode.profiles, true);
     rig.setDiagnostics(sketchMode.diagnosticPoints);
@@ -9618,10 +9625,14 @@ export function ModelViewer({
         sketchMode.objects,
         resolve
       );
-    } catch {
+      setSketchSnapRefusal(null);
+    } catch (error) {
       snapTargetsRef.current = [
         { id: 'sketch-origin', x: 0, y: 0, kind: 'origin' }
       ];
+      setSketchSnapRefusal(
+        error instanceof SketchSnapLimitError ? error.message : null
+      );
     }
     context.requestRender();
   }, [sketchMode]);
@@ -9928,5 +9939,13 @@ export function ModelViewer({
     );
   }, [rotateRequest]);
 
-  return <div className="viewer-host" ref={hostRef} />;
+  return (
+    <div className="viewer-host" ref={hostRef}>
+      {sketchSnapRefusal && (
+        <div className="sketch-snap-refusal" role="status">
+          {sketchSnapRefusal}
+        </div>
+      )}
+    </div>
+  );
 }

@@ -54,8 +54,28 @@ nearest-face matching is introduced. Unsupported topology still refuses.
 A legacy history whose original picks already fail cannot be repaired by this
 normalization and requires explicit feature reselection.
 
+## F1 follow-up: preserve proof at lineage boundaries
+
+The [F1 review comment on PR #503](https://github.com/esaueng/OpenZCAD/pull/503#discussion_r4162654503)
+requires verified lineage or complete witness correspondence, a unique match,
+and refusal on ambiguity. Same-normal/nearest-centre face matching and
+nearest-endpoint edge matching cannot recover a lost reference safely.
+
+Direct edits without lineage and edge modifiers on collapsed multi-solid
+bodies now retain the saved v5 witness requirement: only one complete exact
+witness match resolves. Legacy hash-only picks keep their unique-hash
+resolver. Available lineage failures remain terminal. Parameter rows show
+the refusing feature's reason inline and retain the committed value.
+This closes a verification bypass; it does not establish lineage through
+unsupported operations or make every unioned bracket survive a resize.
+
 ## Evidence
 
+- `exact-reference-boundaries.test.ts`: real kernel witnesses at absent-lineage
+  and collapsed-body boundaries; unique matches, same-hash witness mismatch,
+  invalid references, repeated candidates and no-match refusals.
+- `ParameterRows.validation.test.tsx`: inline refusal, committed-value restore
+  and stale validation suppression.
 - `test/stepped-bore-parameter-replay.test.ts`: synthetic native hole → offset
   → bore resize → four rounds; each of eight edits matches a freshly authored
   exact shape; normalization preserves geometry; cold JSON replay, undo/redo,

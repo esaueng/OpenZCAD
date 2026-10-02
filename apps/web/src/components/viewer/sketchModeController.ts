@@ -16,6 +16,7 @@ import {
 } from '../../lib/sketch/session';
 import {
   objectPolylines,
+  displayObjectsWithTextBudget,
   type SketchObjectPolyline
 } from '../../lib/objectPolyline';
 import { triangulateRegionGeometry } from './regionOverlay';
@@ -90,7 +91,8 @@ export interface SketchModeRig {
     selectedObjectId: string | null,
     resolve: (value: unknown) => number,
     diagnosticObjectIds?: readonly string[],
-    definedObjectIds?: readonly string[]
+    definedObjectIds?: readonly string[],
+    textBudgetError?: string | null
   ): void;
   /** Updates the adaptive sketch-local grid and returns its minor spacing. */
   setGrid(worldPerPixel: number, visible: boolean): number;
@@ -412,7 +414,8 @@ export function buildSketchModeRig(
       selectedObjectId,
       resolve,
       diagnosticObjectIds = [],
-      definedObjectIds = []
+      definedObjectIds = [],
+      textBudgetError = null
     ) {
       disposeChildren(committedGroup);
       const diagnosticIds = new Set(diagnosticObjectIds);
@@ -420,7 +423,10 @@ export function buildSketchModeRig(
       const dotPositions: number[] = [];
       const dotColors: number[] = [];
       const dotColor = new THREE.Color();
-      for (const object of objects) {
+      for (const object of displayObjectsWithTextBudget(
+        objects,
+        textBudgetError
+      )) {
         const diagnostic = diagnosticIds.has(object.id);
         const construction = object.data.construction === true;
         const color = committedSketchColor({

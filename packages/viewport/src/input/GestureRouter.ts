@@ -65,9 +65,13 @@ export class GestureRouter {
 
   /**
    * Records a press without claiming it. Use this for gestures that may turn
-   * out to be clicks — the press can still be promoted with `capture`.
+   * out to be clicks — the press can still be promoted with `capture`. A
+   * repeated begin for the active pointer returns its existing press state.
    */
   begin(event: PointerEvent): PointerPress {
+    if (this.tracked?.pointerId === event.pointerId) {
+      return this.tracked;
+    }
     const press: PointerPress = {
       pointerId: event.pointerId,
       startX: event.clientX,
