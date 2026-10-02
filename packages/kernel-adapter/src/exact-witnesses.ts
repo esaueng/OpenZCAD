@@ -38,7 +38,16 @@ import { topologyHashOfWitness } from './topology-lineage';
 /** Chord tolerance for identity sampling; mirrors the display default. */
 export const MEASUREMENT_DEFLECTION = 0.08;
 
-/** Sample the ADR-011 edge identity quantities from a Remus edge. */
+/**
+ * Sample the ADR-011 edge identity quantities from a Remus edge.
+ *
+ * The sampling below deliberately reads the RAW curve domain via
+ * `getEdgeCurveParameters`, not the trimmed `getEdgeParamSpan`. These
+ * samples feed the persisted FNV-1a edge identity, so switching domains
+ * would change stored hashes and break existing references. Pinned by
+ * `exact-witnesses.test.ts`; do not "fix" this call site without a
+ * persisted-format migration.
+ */
 export function edgeSampleOf(kernel: RemusKernel, edge: number): EdgeSample {
   const vertices = Array.from(kernel.getEdgeVertices(edge));
   const start = pointAt(vertices, 0);
@@ -97,6 +106,12 @@ export function edgeFingerprint(kernel: RemusKernel, edge: number): number {
  * phase. Persisted documents still hold these values, so resolution maps
  * register them alongside the kernel-neutral fingerprint. (For open edges the
  * two schemes produce identical signatures.)
+ *
+ * The midpoint below deliberately reads the RAW curve domain via
+ * `getEdgeCurveParameters`, not the trimmed `getEdgeParamSpan`, for the same
+ * reason: the signature is persisted, so the domain is frozen. Pinned by
+ * `exact-witnesses.test.ts`; do not "fix" this call site without a
+ * persisted-format migration.
  */
 export function legacyEdgeFingerprint(kernel: RemusKernel, edge: number): number {
   const vertices = Array.from(kernel.getEdgeVertices(edge));
