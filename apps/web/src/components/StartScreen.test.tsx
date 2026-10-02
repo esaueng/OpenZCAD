@@ -435,3 +435,47 @@ describe('StartScreen scrolling project grid', () => {
     expect(screen.getByText('Part 96')).toBeInTheDocument();
   });
 });
+
+describe('StartScreen update notice', () => {
+  it('offers a reload once a newer build is out, and not before', () => {
+    const { rerender } = renderStartScreen();
+    expect(screen.queryByRole('alert')).not.toBeInTheDocument();
+    const onReload = vi.fn();
+    rerender(
+      <StartScreen
+        projects={[localProject]}
+        status="OpenZCAD was updated while this tab was open. Reload to load the new version."
+        onReloadForUpdate={onReload}
+        busy={false}
+        demos={[]}
+        defaultUnits="mm"
+        onCreate={vi.fn()}
+        onOpen={vi.fn()}
+        onOpenDemo={vi.fn()}
+        onOpenSettings={vi.fn()}
+        onDuplicate={vi.fn()}
+        loadProperties={vi.fn().mockResolvedValue(null)}
+        cloudProjectIds={new Set()}
+        accountProjectListReached={true}
+        conflictedProjectIds={new Set()}
+        signedIn={true}
+        onSaveToAccount={vi.fn()}
+        onSaveAllToAccount={vi.fn()}
+        syncRun={null}
+        onRetrySync={vi.fn()}
+        onDismissSyncRun={vi.fn()}
+        onMoveToShelf={vi.fn()}
+        onTogglePin={vi.fn()}
+        onReorder={vi.fn()}
+        onDeleteForever={vi.fn()}
+        onEmptyTrash={vi.fn()}
+        loadThumbnail={vi.fn().mockResolvedValue(undefined)}
+        publishThumbnail={vi.fn().mockResolvedValue(undefined)}
+      />
+    );
+    const notice = screen.getByRole('alert');
+    expect(notice).toHaveTextContent('A new version of OpenZCAD is available.');
+    fireEvent.click(within(notice).getByRole('button', { name: 'Reload' }));
+    expect(onReload).toHaveBeenCalledOnce();
+  });
+});
