@@ -6,6 +6,7 @@
  * transform happens in exactly one place (`glyphTransform`).
  */
 import type { LoadedFont } from './loader';
+import { requireTextBudget } from './budget';
 import type { PlacedGlyph, TextRequest } from './types';
 
 export const DEFAULT_LINE_HEIGHT = 1.2;
@@ -40,6 +41,7 @@ export function layoutText(
   request: TextRequest,
   options: LayoutOptions = {}
 ): TextLayout {
+  requireTextBudget(request.text);
   const { font, unitsPerEm } = loaded;
   const useKerning = options.kerning !== false;
   const letterSpacingUnits = (request.letterSpacing ?? 0) * unitsPerEm;

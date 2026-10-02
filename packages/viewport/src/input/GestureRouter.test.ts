@@ -155,4 +155,21 @@ describe('click versus drag', () => {
     expect(press.startX).toBe(100);
     expect(press.captured).toBe(true);
   });
+
+  it('keeps a captured press when the same pointer begins again', () => {
+    const { router, controlsEnabled, captured } = makeRouter();
+    router.capture(at(100, 100));
+
+    const press = router.begin(at(110, 110));
+
+    expect(press).toBe(router.active);
+    expect(press.startX).toBe(100);
+    expect(press.startY).toBe(100);
+    expect(press.captured).toBe(true);
+    expect(captured.has(1)).toBe(true);
+    expect(controlsEnabled()).toBe(false);
+
+    router.release(at(110, 110));
+    expect(controlsEnabled()).toBe(true);
+  });
 });

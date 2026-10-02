@@ -68,23 +68,32 @@ function respawnBudget(phase: GeometryWorkerPhase): number | null {
 }
 
 /**
- * Shared posting discipline for broadcast syncs: dedupe per project/version so
- * a rebuild storm cannot loop, and record the key so a respawn can tell what
- * the replacement worker still owes. Every post also re-arms the watchdog.
+ * Shared posting discipline for broadcast syncs: dedupe per project/version
+ * (+ lineage demand) so a rebuild storm cannot loop, and record the key so a
+ * respawn can tell what the replacement worker still owes. Every post also
+ * re-arms the watchdog.
  */
 function postSync(
   worker: Worker,
   document: ProjectDocument,
   lastSyncedKey: { current: string | null },
-  armed: { current: boolean }
+  armed: { current: boolean },
+  // Sorted and unique, as `useLineageDemand` hands it over.
+  lineageDemand: readonly BodyId[] = []
 ): void {
-  const syncKey = `${document.projectId}:${document.version}`;
+  const syncKey = `${document.projectId}:${document.version}:${lineageDemand.join()}`;
   if (lastSyncedKey.current === syncKey) {
     return;
   }
   lastSyncedKey.current = syncKey;
   armed.current = true;
-  worker.postMessage({ type: 'sync', document: documentForWorker(document) });
+  // The idle broadcast always carries a demand (possibly empty): that is
+  // what opts it into skipping the probe for booleans nothing references.
+  worker.postMessage({
+    type: 'sync',
+    document: documentForWorker(document),
+    lineageDemand: [...lineageDemand]
+  });
 }
 
 /** Cancellation rejection, named so callers can tell it from a failure. */
@@ -114,11 +123,16 @@ export interface GeometryWorkerApi {
   state: GeometryWorkerState;
   isReadyFor(document: ProjectDocument | null): boolean;
   /**
-   * Posts a rebuild for the live document, at most once per model version.
-   * Derived-state commits keep the same version, which is what breaks the
-   * otherwise infinite post -> derive -> commit -> post cycle.
+   * Posts a rebuild for the live document, at most once per model version
+   * (+ lineage demand). Derived-state commits keep the same version, which
+   * is what breaks the otherwise infinite post -> derive -> commit -> post
+   * cycle. `lineageDemand` is transient UI state: body ids whose producing
+   * booleans must probe. It never enters the document.
    */
-  sync(document: ProjectDocument | null): void;
+  sync(
+    document: ProjectDocument | null,
+    lineageDemand?: readonly BodyId[]
+  ): void;
   /**
    * One-off exact rebuild resolved by request id — used for seeding demo
    * documents, whose finishing features need exact edge ordinals before the
@@ -126,7 +140,8 @@ export interface GeometryWorkerApi {
    */
   syncOnce(
     document: ProjectDocument,
-    analysis?: EditAnalysisRequest
+    analysis?: EditAnalysisRequest,
+    lineageDemand?: readonly BodyId[]
   ): Promise<DerivedState>;
   /**
    * `onState` receives this request's own lifecycle states (kernel load,
@@ -249,6 +264,7 @@ export function useGeometryWorker(host: GeometryWorkerHost): GeometryWorkerApi {
     new Map<string, (state: GeometryWorkerState) => void>()
   );
   const lastSyncedKey = useRef<string | null>(null);
+  const lastDemandRef = useRef<readonly BodyId[] | null>(null);
   const firstReadyMarkedRef = useRef(false);
   // True while work has been posted whose terminal state has not arrived.
   // An unarmed worker is legitimately idle and must never be judged silent
@@ -347,7 +363,13 @@ export function useGeometryWorker(host: GeometryWorkerHost): GeometryWorkerApi {
         const manager = hostRef.current.manager();
         const replacement = workerRef.current;
         if (manager && replacement) {
-          postSync(replacement, manager.document, lastSyncedKey, armedRef);
+          postSync(
+            replacement,
+            manager.document,
+            lastSyncedKey,
+            armedRef,
+            lastDemandRef.current ?? undefined
+          );
         }
       } else {
         armedRef.current = false;
@@ -683,18 +705,31 @@ export function useGeometryWorker(host: GeometryWorkerHost): GeometryWorkerApi {
         state.version === document.version
       );
     },
-    sync(document) {
+    sync(document, lineageDemand) {
       const worker = workerRef.current;
       if (!document || !worker) {
         return;
       }
-      postSync(worker, document, lastSyncedKey, armedRef);
+      if (lineageDemand !== undefined) {
+        lastDemandRef.current = lineageDemand;
+      }
+      postSync(
+        worker,
+        document,
+        lastSyncedKey,
+        armedRef,
+        lastDemandRef.current ?? undefined
+      );
     },
-    syncOnce(document, analysis) {
+    syncOnce(document, analysis, lineageDemand) {
+      // One-off rebuilds (previews, preflights, demo seeding, AI proposals)
+      // read lineage straight from the result, so they get full lineage by
+      // default. Only an explicit demand opts one into the idle skip.
       const posted = postRequest(syncRequests.current, {
         type: 'sync',
         document: documentForWorker(document),
-        ...(analysis ? { analysis } : {})
+        ...(analysis ? { analysis } : {}),
+        ...(lineageDemand ? { lineageDemand: [...lineageDemand] } : {})
       });
       return posted.ok
         ? posted.promise

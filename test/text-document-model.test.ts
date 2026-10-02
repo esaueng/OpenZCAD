@@ -46,6 +46,7 @@ import {
 } from '@openzcad/geometry';
 import {
   PROJECT_DOCUMENT_SCHEMA_VERSION,
+  MAX_TEXT_OBJECT_CODE_UNITS,
   toUserId,
   type EntityId,
   type FeatureNode,
@@ -752,6 +753,28 @@ describe('the same edit through the production expansion', () => {
 
   afterAll(() => {
     setTextFontProvider(null);
+  });
+
+  it('refuses an oversized text edit without changing the prior document or extrude', () => {
+    const scene = textScene('HI');
+    const before = resolveRegionProfiles(
+      scene.document,
+      scene.sketch,
+      scene.extrude,
+      {}
+    );
+    const stored = JSON.stringify(scene.document);
+    const { scene: edited } = editText(
+      scene,
+      textObject('A'.repeat(MAX_TEXT_OBJECT_CODE_UNITS + 1))
+    );
+    expect(() =>
+      resolveRegionProfiles(edited.document, edited.sketch, edited.extrude, {})
+    ).toThrow('outline limit');
+    expect(JSON.stringify(scene.document)).toBe(stored);
+    expect(
+      resolveRegionProfiles(scene.document, scene.sketch, scene.extrude, {})
+    ).toEqual(before);
   });
 
   it('resolves "HI" then "HELLO" with distinct production profile ids', () => {

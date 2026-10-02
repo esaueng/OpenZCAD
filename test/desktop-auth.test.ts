@@ -1,5 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import { toUserId, type AuthSession } from '@openzcad/shared';
+import worker from '../apps/web/worker/index';
 import {
   approveDesktopAuthorization,
   authenticateRequest,
@@ -38,6 +39,7 @@ function desktopAuthD1(user: AuthSession) {
   const refresh = new Map<string, TokenRow>();
   const rates = new Map<string, number>();
   const users = new Map<string, string>([[user.userId, user.email!]]);
+  const sessions = new Map<string, { user_id: string; expires_at: number }>();
 
   function prepare(query: string): D1PreparedStatement {
     let values: unknown[] = [];
@@ -51,6 +53,10 @@ function desktopAuthD1(user: AuthSession) {
           return {
             request_count: rates.get(String(values[0])) ?? 0
           } as T;
+        }
+        if (query.includes('FROM auth_sessions s')) {
+          const row = sessions.get(String(values[0]));
+          return (row ? { ...row, email: users.get(row.user_id) } : null) as T;
         }
         if (
           query.includes("name IN (\n              'desktop_auth_attempts'")
@@ -85,7 +91,9 @@ function desktopAuthD1(user: AuthSession) {
       },
       async run() {
         let changes = 0;
-        if (query.includes('INSERT INTO auth_rate_limits')) {
+        if (query.includes('DELETE FROM auth_sessions')) {
+          changes = Number(sessions.delete(String(values[0])));
+        } else if (query.includes('INSERT INTO auth_rate_limits')) {
           const bucket = String(values[0]);
           rates.set(bucket, (rates.get(bucket) ?? 0) + 1);
           changes = 1;
@@ -223,7 +231,30 @@ function desktopAuthD1(user: AuthSession) {
       return Promise.all(statements.map((statement) => statement.run()));
     }
   };
-  return { db };
+  return { db, attempts, access, refresh, users, sessions };
+}
+
+async function sessionTokenHash(token: string): Promise<string> {
+  const digest = new Uint8Array(
+    await crypto.subtle.digest('SHA-256', new TextEncoder().encode(token))
+  );
+  return Array.from(digest, (byte) => byte.toString(16).padStart(2, '0')).join(
+    ''
+  );
+}
+
+function desktopAuthEnv(db: D1Database) {
+  return {
+    ENVIRONMENT: 'beta' as const,
+    AUTH_MODE: 'email-code' as const,
+    DESKTOP_AUTH_ENABLED: 'true',
+    DB: db,
+    EMAIL: { send: async () => ({ messageId: 'unused' }) },
+    AUTH_EMAIL_FROM: 'login@auth.example.com',
+    AUTH_OTP_PEPPER: 'test-pepper',
+    TURNSTILE_SITE_KEY: 'site-key',
+    TURNSTILE_SECRET_KEY: 'turnstile-secret'
+  };
 }
 
 async function codeChallenge(verifier: string): Promise<string> {
@@ -239,6 +270,184 @@ async function codeChallenge(verifier: string): Promise<string> {
 }
 
 describe('desktop authorization', () => {
+  it.each([
+    'missing',
+    'bearer-only',
+    'invalid-cookie',
+    'expired-cookie',
+    'expired-cookie-with-bearer'
+  ])('requires browser approval with %s credentials', async (credentials) => {
+    const session: AuthSession = {
+      userId: toUserId('user_desktop_test'),
+      displayName: 'person',
+      email: 'person@example.com',
+      mode: 'email-code'
+    };
+    const fixture = desktopAuthD1(session);
+    const env = desktopAuthEnv(fixture.db);
+    const state = 's'.repeat(43);
+    const verifier = 'v'.repeat(43);
+    const start = async () => {
+      const response = await worker.fetch(
+        new Request('https://zcad.app/api/auth/desktop/start', {
+          method: 'POST',
+          body: JSON.stringify({
+            clientId: 'openzcad-macos',
+            state,
+            codeChallenge: await codeChallenge(verifier)
+          })
+        }),
+        env
+      );
+      expect(response.status).toBe(201);
+      return response.json() as Promise<{
+        attemptId: string;
+        userCode: string;
+      }>;
+    };
+    // An existing native session remains usable for ordinary authenticated APIs.
+    const existing = await start();
+    await approveDesktopAuthorization(existing, session, env);
+    const issued = await exchangeDesktopAuthorization(
+      { ...existing, clientId: 'openzcad-macos', state, verifier },
+      env
+    );
+    if (issued.status !== 'authorized') throw new Error('expected tokens');
+    const ordinary = await worker.fetch(
+      new Request('https://zcad.app/api/session', {
+        headers: { authorization: `Bearer ${issued.accessToken}` }
+      }),
+      env
+    );
+    expect(ordinary.status).toBe(200);
+    expect(await ordinary.json()).toMatchObject({ userId: session.userId });
+
+    const pending = await start();
+    const before = { ...fixture.attempts.get(pending.attemptId)! };
+    const headers = new Headers();
+    if (credentials.includes('bearer')) {
+      headers.set('authorization', `Bearer ${issued.accessToken}`);
+    }
+    if (credentials.includes('cookie')) {
+      const token = `browser-${credentials}`;
+      headers.set('cookie', `__Host-openzcad_session=${token}`);
+      if (credentials.startsWith('expired')) {
+        fixture.sessions.set(await sessionTokenHash(token), {
+          user_id: session.userId,
+          expires_at: Math.floor(Date.now() / 1000) - 60
+        });
+      }
+    }
+    const approval = await worker.fetch(
+      new Request('https://zcad.app/api/auth/desktop/approve', {
+        method: 'POST',
+        headers,
+        body: JSON.stringify(pending)
+      }),
+      env
+    );
+    expect(approval.status).toBe(401);
+    expect(await approval.json()).toMatchObject({ code: 'AUTH_REQUIRED' });
+    expect(fixture.attempts.get(pending.attemptId)).toEqual(before);
+    const exchange = await worker.fetch(
+      new Request('https://zcad.app/api/auth/desktop/exchange', {
+        method: 'POST',
+        body: JSON.stringify({
+          ...pending,
+          clientId: 'openzcad-macos',
+          state,
+          verifier
+        })
+      }),
+      env
+    );
+    expect(exchange.status).toBe(202);
+    expect(await exchange.json()).toEqual({ status: 'pending' });
+    expect(fixture.access.size).toBe(1);
+    expect(fixture.refresh.size).toBe(1);
+  });
+
+  it.each(['cookie-only', 'cookie-with-bearer'])(
+    'approves and exchanges only the browser identity with %s',
+    async (credentials) => {
+      const native: AuthSession = {
+        userId: toUserId('user_native_test'),
+        displayName: 'native',
+        email: 'native@example.com',
+        mode: 'email-code'
+      };
+      const browser: AuthSession = {
+        userId: toUserId('user_browser_test'),
+        displayName: 'browser',
+        email: 'browser@example.com',
+        mode: 'email-code'
+      };
+      const fixture = desktopAuthD1(native);
+      fixture.users.set(browser.userId, browser.email!);
+      fixture.sessions.set(await sessionTokenHash('browser-session'), {
+        user_id: browser.userId,
+        expires_at: Math.floor(Date.now() / 1000) + 600
+      });
+      const env = desktopAuthEnv(fixture.db);
+      const state = 's'.repeat(43);
+      const verifier = 'v'.repeat(43);
+      const start = async () =>
+        startDesktopAuthorization(
+          new Request('https://zcad.app/api/auth/desktop/start'),
+          {
+            clientId: 'openzcad-macos',
+            state,
+            codeChallenge: await codeChallenge(verifier)
+          },
+          env
+        );
+      const existing = await start();
+      await approveDesktopAuthorization(existing, native, env);
+      const issued = await exchangeDesktopAuthorization(
+        { ...existing, clientId: 'openzcad-macos', state, verifier },
+        env
+      );
+      if (issued.status !== 'authorized') throw new Error('expected tokens');
+      const pending = await start();
+      const headers = new Headers({
+        cookie: '__Host-openzcad_session=browser-session'
+      });
+      if (credentials.includes('bearer')) {
+        headers.set('authorization', `Bearer ${issued.accessToken}`);
+      }
+      const approval = await worker.fetch(
+        new Request('https://zcad.app/api/auth/desktop/approve', {
+          method: 'POST',
+          headers,
+          body: JSON.stringify(pending)
+        }),
+        env
+      );
+      expect(approval.status).toBe(200);
+      expect(await approval.json()).toEqual({ ok: true });
+      expect(fixture.attempts.get(pending.attemptId)?.user_id).toBe(
+        browser.userId
+      );
+      const exchange = await worker.fetch(
+        new Request('https://zcad.app/api/auth/desktop/exchange', {
+          method: 'POST',
+          body: JSON.stringify({
+            ...pending,
+            clientId: 'openzcad-macos',
+            state,
+            verifier
+          })
+        }),
+        env
+      );
+      expect(exchange.status).toBe(200);
+      expect(await exchange.json()).toMatchObject({
+        status: 'authorized',
+        session: browser
+      });
+    }
+  );
+
   it('binds a browser approval to PKCE and rotates refresh credentials', async () => {
     const session: AuthSession = {
       userId: toUserId('user_desktop_test'),

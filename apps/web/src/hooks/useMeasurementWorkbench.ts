@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useMemo, useState } from 'react';
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import type {
   BodyRepresentation,
   ProjectDocument,
@@ -21,7 +21,10 @@ import type {
  * so naming the module here does not pull it back into the eager chunk.
  */
 import type * as MeasurementModule from '../lib/measurements';
-import { buildMeasurementRecord } from '../lib/measurementRecord';
+import {
+  buildMeasurementRecord,
+  measurementRecordContentKey
+} from '../lib/measurementRecord';
 import {
   EMPTY_MEASURE_SESSION,
   edgeRunIsTotalable,
@@ -79,7 +82,9 @@ export function useMeasurementWorkbench({
   /** Advances whenever a persisted list replaces the in-memory measurement list. */
   const [measurementRestoreGeneration, setMeasurementRestoreGeneration] =
     useState(0);
+  const skipNextMeasurementPersistenceRef = useRef(false);
   const applyStoredMeasurements = useCallback((restored: Measurement[]) => {
+    skipNextMeasurementPersistenceRef.current = true;
     setMeasurements(restored);
     setMeasurementRestoreGeneration((current) => current + 1);
   }, []);
@@ -97,6 +102,10 @@ export function useMeasurementWorkbench({
    */
   const [measurementHydratedProjectId, setMeasurementHydratedProjectId] =
     useState<string | null>(null);
+  const measurementPersistedContentRef = useRef<{
+    projectId: string;
+    contentKey: string;
+  } | null>(null);
   const measurementDisplay = useMemo<MeasurementDisplayOptions>(
     () => ({
       unit: measurementUnit,
@@ -136,6 +145,12 @@ export function useMeasurementWorkbench({
           setMeasurementUnit(record.display.unit);
           setMeasurementPrecision(record.display.precision);
           setRadialDisplay(record.display.radialDisplay);
+          measurementPersistedContentRef.current = {
+            projectId,
+            contentKey: measurementRecordContentKey(record)
+          };
+        } else {
+          measurementPersistedContentRef.current = null;
         }
         setMeasurementHydratedProjectId(projectId);
       })
@@ -161,16 +176,34 @@ export function useMeasurementWorkbench({
     if (!doc || measurementHydratedProjectId !== doc.projectId) {
       return;
     }
+    if (skipNextMeasurementPersistenceRef.current) {
+      skipNextMeasurementPersistenceRef.current = false;
+      return;
+    }
     const projectId = doc.projectId;
     const timeout = window.setTimeout(() => {
-      void saveProjectMeasurements(
-        buildMeasurementRecord(
-          projectId,
-          measurements,
-          measurementDisplay,
-          new Date().toISOString()
-        )
-      ).catch(() => {
+      const record = buildMeasurementRecord(
+        projectId,
+        measurements,
+        measurementDisplay,
+        new Date().toISOString()
+      );
+      const contentKey = measurementRecordContentKey(record);
+      const previous = measurementPersistedContentRef.current;
+      if (
+        previous?.projectId === projectId &&
+        previous.contentKey === contentKey
+      ) {
+        return;
+      }
+      measurementPersistedContentRef.current = { projectId, contentKey };
+      void saveProjectMeasurements(record).catch(() => {
+        if (
+          measurementPersistedContentRef.current?.projectId === projectId &&
+          measurementPersistedContentRef.current.contentKey === contentKey
+        ) {
+          measurementPersistedContentRef.current = previous;
+        }
         // Same as the read: a device that cannot store them still measures.
       });
     }, 400);
@@ -180,6 +213,7 @@ export function useMeasurementWorkbench({
   }, [
     doc?.projectId,
     measurementHydratedProjectId,
+    measurementRestoreGeneration,
     measurements,
     measurementDisplay
   ]);
