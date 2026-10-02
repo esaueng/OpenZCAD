@@ -144,13 +144,17 @@ function primitiveChain(
           feature.data.transform.rotationDeg.x,
           feature.data.transform.rotationDeg.y,
           feature.data.transform.rotationDeg.z
-        ].some((value) => resolveParamValue(value, scope, 'rotation') !== 0)
+        ].some(
+          (value) =>
+            resolveParamValue(value, scope, 'rotation', document.units) !== 0
+        )
       )
         return null;
       scale *= resolveParamValue(
         feature.data.transform.scale ?? 1,
         scope,
-        'scale'
+        'scale',
+        document.units
       );
     } catch {
       return null;

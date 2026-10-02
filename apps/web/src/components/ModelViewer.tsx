@@ -3,6 +3,7 @@ import { ParameterPreviewController } from './viewer/parameterPreviewController'
 import { useEffect, useRef, type MutableRefObject } from 'react';
 import { axisDimensionLabel } from '../lib/primitiveDimensionLabel';
 import * as THREE from 'three';
+import type { HoleGhost } from '../lib/holeGhost';
 import { mark, measure, timed } from '../lib/perf';
 import {
   avoidSketchDimensionOverlays,
@@ -333,6 +334,12 @@ export interface SketchModeState {
   diagnosticPoints: { x: number; y: number }[];
   /** Solver-named entities with a measured non-zero residual. */
   constraintDiagnosticObjectIds: string[];
+  /**
+   * Entities proved fully defined by a zero-DOF solve: every object id, or
+   * empty. Sketch-wide by solver-evidence design (the kernel reports one
+   * DOF scalar, no per-entity freedom).
+   */
+  definedObjectIds: string[];
   dimensions: SketchDimensionAnnotation[];
 }
 
@@ -656,6 +663,11 @@ interface ModelViewerProps {
   planePickerOffset: number;
   /** A ghost plane was clicked. */
   onPickPlane(plane: PlaneId): void;
+  /**
+   * The bore the open Hole card would drill, drawn through the body before
+   * it exists. Null while no hole can be placed.
+   */
+  holeGhost?: HoleGhost | null;
   /**
    * What measuring the hovered target would report, for the preview chip.
    * Null when measuring is off or the pick has nothing honest to say.
@@ -1303,6 +1315,20 @@ const SKETCH_SELECTED_COLOR = 0x9eb8ff;
 const SKETCH_CURVE_WIDTH = 1.4;
 const RIGHT_PAN_TARGET_EPSILON = 1e-9;
 
+/**
+ * A control the keyboard is moving through (focus the browser would ring),
+ * as opposed to a button that merely kept focus after a click. Tab belongs
+ * to focus navigation there, not to the sketch's snap cycling.
+ */
+function keyboardFocusInUi(): boolean {
+  const focused = document.activeElement;
+  return (
+    focused instanceof HTMLElement &&
+    focused !== document.body &&
+    focused.matches(':focus-visible')
+  );
+}
+
 function isTextEntryTarget(target: EventTarget | null): boolean {
   return (
     target instanceof HTMLElement &&
@@ -1413,6 +1439,7 @@ export function ModelViewer({
   onSelectRegion,
   onHoverRegion,
   planePickerArmed,
+  holeGhost = null,
   planePickerOffset,
   onPickPlane,
   onMeasurePreview,
@@ -1534,6 +1561,8 @@ export function ModelViewer({
   onOffsetCancelRef.current = onOffsetCancel;
   const offsetPreviewInvalidRef = useRef(offsetPreviewInvalid);
   offsetPreviewInvalidRef.current = offsetPreviewInvalid;
+  const edgeHandleValueRef = useRef(edgeHandleValue);
+  edgeHandleValueRef.current = edgeHandleValue;
   const previewDeferredRef = useRef(previewDeferred);
   previewDeferredRef.current = previewDeferred;
   const onOpenOffsetKeypadRef = useRef(onOpenOffsetKeypad);
@@ -2515,6 +2544,12 @@ export function ModelViewer({
     let activeSketchSnap: SnapTarget | null = null;
     let sketchSnapCycle = 0;
     let latestSketchPointerEvent: PointerEvent | null = null;
+    /**
+     * Whether the pointer is over the canvas now. Tab cycles snaps only then:
+     * once it had crossed the canvas, Tab was taken for good, and the
+     * keyboard could not reach Finish or any rail control.
+     */
+    let sketchPointerOnCanvas = false;
     let latestSketchPoint: SketchPoint | null = null;
     let sketchNumericRaw: string | null = null;
     let sketchNumericKind:
@@ -2599,7 +2634,9 @@ export function ModelViewer({
       if (
         event.key === 'Tab' &&
         sketchModeRef.current &&
-        latestSketchPointerEvent
+        latestSketchPointerEvent &&
+        sketchPointerOnCanvas &&
+        !keyboardFocusInUi()
       ) {
         activeSketchSnap = null;
         sketchSnapCycle += 1;
@@ -5238,6 +5275,7 @@ export function ModelViewer({
         return null;
       }
       latestSketchPointerEvent = event;
+      sketchPointerOnCanvas = true;
       if (event.shiftKey) {
         activeSketchSnap = null;
         sketchSnapCycle = 0;
@@ -7025,6 +7063,7 @@ export function ModelViewer({
     };
     const handlePointerLeave = () => {
       pendingHoverEvent = null;
+      sketchPointerOnCanvas = false;
       sketchRigRef.current?.setInference(null);
       sketchCenterTarget.hidden = true;
       if (moveDrag) {
@@ -8806,7 +8845,10 @@ export function ModelViewer({
       return;
     }
     const rig = buildEdgeRadiusHandle(placement);
-    rig.setValue(edgeHandle.initialValue ?? 0);
+    // A rebuild (the preview body came or went) keeps the value the card has
+    // typed: its effect below only runs when that value changes, so a rig
+    // rebuilt after a refused preview used to read "R 0".
+    rig.setValue(edgeHandleValueRef.current ?? edgeHandle.initialValue ?? 0);
     rig.setWarning?.(offsetPreviewInvalidRef.current);
     context.scene.add(rig.group);
     edgeRigRef.current = rig;
@@ -9119,6 +9161,71 @@ export function ModelViewer({
       context.requestRender();
     };
   }, [planePickerArmed]);
+
+  // The open Hole card's bore, drawn through the body: a translucent
+  // cylinder with its entry and exit rims, over everything so a hole buried
+  // in the part (or missing it) is still seen. Rebuilt per value change; the
+  // viewport renders on demand, so each change asks for its frame.
+  useEffect(() => {
+    const context = contextRef.current;
+    if (!context || !holeGhost) {
+      return;
+    }
+    const group = new THREE.Group();
+    group.name = 'hole-ghost';
+    const { entry, axis, radius, depth } = holeGhost;
+    const direction = new THREE.Vector3(axis.x, axis.y, axis.z).normalize();
+    const body = new THREE.CylinderGeometry(radius, radius, depth, 40, 1, true);
+    const fill = new THREE.MeshBasicMaterial({
+      color: SKETCH_COLOR,
+      transparent: true,
+      opacity: 0.28,
+      side: THREE.DoubleSide,
+      depthTest: false,
+      depthWrite: false
+    });
+    const barrel = new THREE.Mesh(body, fill);
+    barrel.quaternion.setFromUnitVectors(new THREE.Vector3(0, 1, 0), direction);
+    barrel.position
+      .set(entry.x, entry.y, entry.z)
+      .addScaledVector(direction, depth / 2);
+    barrel.renderOrder = 20;
+    group.add(barrel);
+    const rimGeometry = new THREE.BufferGeometry().setFromPoints(
+      Array.from({ length: 64 }, (_, index) => {
+        const angle = (index / 64) * Math.PI * 2;
+        return new THREE.Vector3(
+          Math.cos(angle) * radius,
+          0,
+          Math.sin(angle) * radius
+        );
+      })
+    );
+    const rimMaterial = new THREE.LineBasicMaterial({
+      color: SKETCH_COLOR,
+      depthTest: false,
+      transparent: true
+    });
+    for (const along of [0, depth]) {
+      const rim = new THREE.LineLoop(rimGeometry, rimMaterial);
+      rim.quaternion.copy(barrel.quaternion);
+      rim.position
+        .set(entry.x, entry.y, entry.z)
+        .addScaledVector(direction, along);
+      rim.renderOrder = 21;
+      group.add(rim);
+    }
+    context.scene.add(group);
+    context.requestRender();
+    return () => {
+      context.scene.remove(group);
+      body.dispose();
+      fill.dispose();
+      rimGeometry.dispose();
+      rimMaterial.dispose();
+      context.requestRender();
+    };
+  }, [holeGhost]);
 
   // The viewport renders on demand, so a typed offset has to ask for the
   // frame that shows it; without this the ghosts only move on the next
@@ -9479,7 +9586,8 @@ export function ModelViewer({
       sketchMode.objects,
       sketchMode.selectedObjectId,
       resolve,
-      sketchMode.constraintDiagnosticObjectIds
+      sketchMode.constraintDiagnosticObjectIds,
+      sketchMode.definedObjectIds
     );
     rig.setProfiles(sketchMode.profiles, true);
     rig.setDiagnostics(sketchMode.diagnosticPoints);

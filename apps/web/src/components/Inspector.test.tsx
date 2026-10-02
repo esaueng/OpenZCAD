@@ -1,6 +1,6 @@
 import { act, fireEvent, render, screen, waitFor, within } from '@testing-library/react';
 import type { ComponentProps } from 'react';
-import { describe, expect, it, vi } from 'vitest';
+import { afterEach, describe, expect, it, vi } from 'vitest';
 import type {
   BodyId,
   BodyRepresentation,
@@ -11,6 +11,7 @@ import type {
 import { createProjectDocument } from '@openzcad/document-core';
 import { toUserId } from '@openzcad/shared';
 import type { MassPropertiesRead } from '@openzcad/kernel-adapter/exact';
+import { MASS_DENSITY_STORAGE_KEY } from '../lib/massDensityPreference';
 import { Inspector } from './Inspector';
 
 const bodyId = 'body-1' as BodyId;
@@ -601,5 +602,160 @@ describe('on-demand mass properties in Inspector', () => {
     ])[2].signal;
     expect(secondSignal.aborted).toBe(true);
     await waitFor(() => expect(screen.getByText('Mass measurement failed: Kernel request failed')).toBeInTheDocument());
+  });
+});
+
+describe('mass properties tensor, axes and density', () => {
+  afterEach(() => {
+    window.localStorage.removeItem(MASS_DENSITY_STORAGE_KEY);
+  });
+
+  function committedProps(
+    overrides: Partial<ComponentProps<typeof Inspector>> = {}
+  ): ComponentProps<typeof Inspector> {
+    return makeProps({
+      selectedFeature: null,
+      commandSession: null,
+      ...overrides
+    });
+  }
+
+  function openMassSection(): void {
+    fireEvent.click(screen.getByText('Mass properties (at unit density)'));
+  }
+
+  it('shows the tensor and axes at unit density beside the existing rows', () => {
+    render(<Inspector {...committedProps()} />);
+    openMassSection();
+    const inspector = screen.getByRole('region', { name: 'Feature inspector' });
+    // Existing rows are untouched: same labels, same unit-density honesty.
+    expect(within(inspector).getByText('center of mass')).toBeVisible();
+    expect(within(inspector).getByText('principal inertia')).toBeVisible();
+    expect(within(inspector).getByText('5, 6, 3 mm')).toBeVisible();
+    // The full tensor about the centre of mass, in model axes, in mm⁵.
+    expect(within(inspector).getByText('inertia tensor')).toBeVisible();
+    expect(within(inspector).getByText('1 0 0')).toBeVisible();
+    expect(within(inspector).getByText('0 2 0')).toBeVisible();
+    expect(within(inspector).getByText(/0 0 3 mm⁵/)).toBeVisible();
+    // Each principal direction, numbered to match its moment.
+    expect(within(inspector).getByText('principal axes')).toBeVisible();
+    expect(within(inspector).getByText('1 · (1, 0, 0)')).toBeVisible();
+    expect(within(inspector).getByText('2 · (0, 1, 0)')).toBeVisible();
+    expect(within(inspector).getByText('3 · (0, 0, 1)')).toBeVisible();
+    // Provenance states the method without claiming a verdict it has no
+    // evidence for.
+    expect(within(inspector).getByText(/no tessellation/)).toBeVisible();
+    expect(
+      within(inspector).queryByText(/Exact/)
+    ).not.toBeInTheDocument();
+  });
+
+  it('scales mass and inertia through a steel preset in grams and g·mm²', () => {
+    // 120 mm³ of steel: 7850 × 120e-9 m³ = 9.42e-4 kg = 0.942 g.
+    render(<Inspector {...committedProps()} />);
+    openMassSection();
+    fireEvent.change(screen.getByLabelText('Material density'), {
+      target: { value: 'preset:steel' }
+    });
+    const inspector = screen.getByRole('region', { name: 'Feature inspector' });
+    expect(
+      within(inspector).getByText('Mass properties (Steel · 7850 kg/m³)')
+    ).toBeVisible();
+    expect(within(inspector).getByText('0.942 g')).toBeVisible();
+    // Moments [1, 2, 3] mm⁵ × 7850 kg/m³ × 1e-6 (mm⁵→g·mm² at this density).
+    expect(
+      within(inspector).getByText('0.008 · 0.016 · 0.024 g·mm²')
+    ).toBeVisible();
+    // Directions do not move with density; the centre of mass neither.
+    expect(within(inspector).getByText('1 · (1, 0, 0)')).toBeVisible();
+    expect(within(inspector).getByText('5, 6, 3 mm')).toBeVisible();
+  });
+
+  it('remembers the material per project across mounts', () => {
+    const document = createProjectDocument('Heavy', toUserId('mass-ui'));
+    const first = render(
+      <Inspector {...committedProps({ massPropertiesDocument: document })} />
+    );
+    openMassSection();
+    fireEvent.change(screen.getByLabelText('Material density'), {
+      target: { value: 'preset:steel' }
+    });
+    expect(screen.getByText('0.942 g')).toBeVisible();
+    first.unmount();
+    render(
+      <Inspector {...committedProps({ massPropertiesDocument: document })} />
+    );
+    expect(
+      screen.getByLabelText('Material density')
+    ).toHaveValue('preset:steel');
+    // A project with no remembered choice still opens at unit density.
+    const other = createProjectDocument('Light', toUserId('mass-ui'));
+    const second = render(
+      <Inspector {...committedProps({ massPropertiesDocument: other })} />
+    );
+    expect(
+      (screen.getAllByLabelText('Material density').at(-1) as HTMLSelectElement)
+        .value
+    ).toBe('unit');
+    second.unmount();
+  });
+
+  it('takes a custom density and refuses text without losing the last valid one', () => {
+    render(<Inspector {...committedProps()} />);
+    openMassSection();
+    fireEvent.change(screen.getByLabelText('Material density'), {
+      target: { value: 'custom' }
+    });
+    const input = screen.getByLabelText(
+      'Custom density in kilograms per cubic metre'
+    );
+    expect(input).toHaveValue('1000');
+    fireEvent.change(input, { target: { value: '2700' } });
+    // 120 mm³ at 2700 kg/m³ = 3.24e-4 kg = 0.324 g.
+    expect(screen.getByText('0.324 g')).toBeVisible();
+    fireEvent.change(input, { target: { value: 'not a number' } });
+    expect(screen.getByRole('alert')).toHaveTextContent(/positive density/);
+    // The refused text publishes nothing: the last valid material stands.
+    expect(screen.getByText('0.324 g')).toBeVisible();
+  });
+
+  it('weighs an inch document in pounds and lb·in²', () => {
+    const document = createProjectDocument('Inch block', toUserId('mass-ui'), 'inch');
+    const inchBody = {
+      ...body,
+      volume: 6,
+      massProperties: {
+        centerOfMass: { x: 0.5, y: 1, z: 1.5 },
+        inertia: [6.5, 5, 2.5, 0, 0, 0] as [number, number, number, number, number, number],
+        principalMoments: [2.5, 5, 6.5] as [number, number, number],
+        principalAxes: [
+          { x: 0, y: 0, z: 1 },
+          { x: 0, y: 1, z: 0 },
+          { x: 1, y: 0, z: 0 }
+        ] as [{ x: number; y: number; z: number }, { x: number; y: number; z: number }, { x: number; y: number; z: number }]
+      }
+    };
+    render(
+      <Inspector
+        {...committedProps({
+          selectedBody: inchBody,
+          units: 'inch',
+          massPropertiesDocument: document
+        })}
+      />
+    );
+    // Unit density first: closed in⁵, unchanged shape of display.
+    openMassSection();
+    expect(screen.getByText(/0 0 2.5 in⁵/)).toBeVisible();
+    fireEvent.change(screen.getByLabelText('Material density'), {
+      target: { value: 'preset:steel' }
+    });
+    // 6 in³ of steel = 0.7718 kg = 1.702 lb.
+    expect(screen.getByText('1.702 lb')).toBeVisible();
+    expect(
+      screen.getByText('0.709 · 1.418 · 1.843 lb·in²')
+    ).toBeVisible();
+    expect(screen.getByText('0 0 0.709 lb·in²')).toBeVisible();
+    expect(screen.getByText('0.5, 1, 1.5 in')).toBeVisible();
   });
 });
