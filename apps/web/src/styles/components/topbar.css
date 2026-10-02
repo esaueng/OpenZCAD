@@ -189,12 +189,10 @@
   cursor: pointer;
 }
 
-.artifact-menu,
 .topbar-menu {
   position: relative;
 }
 
-.artifact-menu > summary,
 .topbar-menu > summary {
   display: inline-flex;
   align-items: center;
@@ -202,12 +200,10 @@
   list-style: none;
 }
 
-.artifact-menu > summary::-webkit-details-marker,
 .topbar-menu > summary::-webkit-details-marker {
   display: none;
 }
 
-.artifact-menu-panel,
 .topbar-menu-panel {
   position: absolute;
   z-index: var(--z-modal);
@@ -224,12 +220,6 @@
   background: var(--color-surface-2);
   border: var(--border-thin);
   border-radius: var(--radius-md);
-}
-
-.artifact-menu-panel > strong,
-.artifact-menu-panel > span {
-  display: block;
-  margin-bottom: var(--sp-2);
 }
 
 .topbar-menu-item {
@@ -327,34 +317,6 @@
   padding: 2px 8px 6px;
   color: var(--color-text-subtle);
   font-size: var(--fs-mini);
-}
-
-.artifact-menu-panel a {
-  display: grid;
-  grid-template-columns: auto minmax(0, 1fr);
-  gap: 2px 8px;
-  padding: 8px;
-  color: var(--color-text);
-  border-radius: var(--radius-sm);
-}
-
-.artifact-menu-panel a:hover {
-  background: var(--color-surface-hover);
-}
-
-.artifact-menu-panel a svg {
-  grid-row: 1 / span 2;
-  margin-top: 2px;
-}
-
-.artifact-menu-panel a span {
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-}
-
-.artifact-menu-panel a small {
-  color: var(--color-text-subtle);
 }
 
 .save-state {

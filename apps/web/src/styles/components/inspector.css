@@ -289,16 +289,6 @@
   font-size: var(--fs-mini);
 }
 
-.danger-zone {
-  margin-top: 18px;
-  padding-top: 12px;
-  border-top: var(--border-thin);
-}
-
-.danger-zone .secondary {
-  width: 100%;
-}
-
 .pick-list {
   display: grid;
   gap: 3px;
