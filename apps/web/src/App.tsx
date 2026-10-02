@@ -518,14 +518,17 @@ import type {
   CommandDiagnostic,
   InteractionState
 } from './lib/interaction/machine';
-import { resolveFace } from './lib/topologyResolution';
+import {
+  refreshEdgeFormReferencesForCommit,
+  resolveFace
+} from './lib/topologyResolution';
+import { useLineageDemand } from './lib/lineageDemand';
 import {
   objectPolylines,
   displayObjectsWithTextBudget
 } from './lib/objectPolyline';
 import type { RegionPickData } from './components/viewer/regionOverlay';
 import { CommandBar, type PaletteCommand } from './components/CommandBar';
-import { ShortcutsOverlay } from './components/ShortcutsOverlay';
 import { DISPLAY_MODE_LABELS } from './lib/displayMode';
 import { ContextMenu, type ContextMenuState } from './components/ContextMenu';
 import type { BodyFeatureIds } from '@openzcad/document-core';
@@ -648,6 +651,22 @@ const LazyMeasurementDock = lazyWithStaleChunkNotice(() =>
     default: module.MeasurementDock
   }))
 );
+// The "?" control reference opens only on request; lazy, it also takes its
+// keyboard/pointer reference tables off the entry chunk.
+const LazyShortcutsOverlay = lazyWithStaleChunkNotice(() =>
+  import('./components/ShortcutsOverlay').then((module) => ({
+    default: module.ShortcutsOverlay
+  }))
+);
+function ShortcutsOverlay(
+  props: ComponentProps<typeof LazyShortcutsOverlay>
+) {
+  return (
+    <Suspense fallback={null}>
+      <LazyShortcutsOverlay {...props} />
+    </Suspense>
+  );
+}
 // Operation help is only needed after the user starts a modeling action.
 const LazyToolCard = lazyWithStaleChunkNotice(() =>
   import('./components/ToolCard').then((module) => ({
@@ -3317,7 +3336,24 @@ export function App() {
     value: EdgeModifierFormValue
   ) {
     if (geometryBusy) return;
-    const command = edgeModifierCommand(feature, kind, value);
+    // K05 on-demand probe: a pick made before the demanded rebuild arrived
+    // carries no lineage name, so the form holds no `edgeReferences` at all
+    // (they are all-or-nothing). Re-read CURRENT lineage by hash at commit
+    // time and use it only when every picked edge resolves to a named
+    // reference for that same hash; otherwise commit exactly what the form
+    // holds.
+    const formBody =
+      representations[value.targetBodyId] ??
+      renderedRepresentations[value.targetBodyId];
+    const namedReferences = refreshEdgeFormReferencesForCommit(
+      formBody,
+      value.edgeHashes,
+      value.edgeReferences
+    );
+    const refreshedValue = namedReferences
+      ? { ...value, edgeReferences: namedReferences }
+      : value;
+    const command = edgeModifierCommand(feature, kind, refreshedValue);
     const bodyId =
       feature?.bodyId ??
       ('ids' in command.payload ? command.payload.ids?.bodyId : undefined);
@@ -4544,9 +4580,27 @@ export function App() {
     };
   }, [cloudProjectIds, doc?.projectId, session]);
 
+  // K05 on-demand boolean probe: sticky per open document, cleared on
+  // project switch. A face/edge/vertex pick on B — or a command started on
+  // B — demands lineage for B, so the next rebuild probes its producing
+  // boolean. Minimal App plumbing by design (other PRs edit this file):
+  // the sticky set lives in `useLineageDemand`, the sync carries it like
+  // `analysis`, and it never enters the document.
+  const lineageDemandSelections: TopologySelection[] = useMemo(
+    () => [...(selectedTopology ? [selectedTopology] : []), ...selectedEdges],
+    [selectedTopology, selectedEdges]
+  );
+  const { demand: lineageDemand } = useLineageDemand({
+    projectId: doc?.projectId,
+    selections: lineageDemandSelections,
+    interaction
+  });
   useEffect(() => {
-    geometry.sync(doc);
-  }, [doc]);
+    geometry.sync(doc, lineageDemand);
+    // `geometry` is stable across renders; re-sync when the demanded set
+    // grows so the probe runs without waiting for the next edit.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [doc, lineageDemand]);
 
   const features = useMemo<FeatureNode[]>(
     () => (doc ? listFeaturesInOrder(doc) : []),
@@ -13866,9 +13920,22 @@ export function App() {
     const edgeHashes = edges
       .map((edge) => edge.hash)
       .filter((hash): hash is number => hash !== undefined);
-    const edgeReferences = edges.flatMap((edge) =>
+    // K05 on-demand probe: a pick made before the demanded rebuild arrives
+    // carries a hash-only reference. Re-read the CURRENT published topology
+    // at commit time by hash/topology id; fail closed to the stale
+    // reference when the name is not unambiguous.
+    const currentBody = bodyId
+      ? (representations[bodyId] ?? renderedRepresentations[bodyId])
+      : undefined;
+    const pickedReferences = edges.flatMap((edge) =>
       edge.reference?.kind === 'edge' ? [edge.reference] : []
     );
+    const edgeReferences =
+      refreshEdgeFormReferencesForCommit(
+        currentBody,
+        edgeHashes,
+        pickedReferences
+      ) ?? pickedReferences;
     if (!bodyId || edgeHashes.length === 0) {
       return null;
     }

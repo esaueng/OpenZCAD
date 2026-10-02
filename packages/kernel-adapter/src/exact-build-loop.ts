@@ -11,6 +11,7 @@ import {
 } from '@openzcad/document-core';
 import {
   isFeatureSuppressed,
+  type BodyId,
   type FeatureId,
   type FeatureNode,
   type FeatureWarning,
@@ -84,6 +85,12 @@ export interface FeatureBuildContext {
   result: ExactBuildResult;
   importSources: ReadonlyMap<string, Uint8Array>;
   pinnedImports: ReadonlySet<string>;
+  /**
+   * Transient lineage demand for this rebuild: body ids whose producing
+   * booleans must probe. UI state only, never persisted; threaded into
+   * `booleanEvolutionProbeNeeded` alongside the persisted gate.
+   */
+  lineageDemand?: ReadonlySet<BodyId>;
   importedSteps?: ImportedStepStore;
   /**
    * Strict verdicts the union gate established on the solids it produced,
@@ -143,7 +150,13 @@ export function buildDocumentHistory(
    * returning, so a cancelled build commits nothing. Absent, the loop runs
    * exactly as before.
    */
-  signal?: BuildCancellationSignal
+  signal?: BuildCancellationSignal,
+  /**
+   * Transient lineage demand for this rebuild. Threaded into the context so
+   * `buildBooleanFeature` probes demanded bodies; the history digest carries
+   * the same bit so a carrier-only checkpoint is never reused once demanded.
+   */
+  lineageDemand?: ReadonlySet<BodyId> | readonly BodyId[]
 ): ExactBuildResult {
   const { scope, errors } = getParameterScope(document);
   const result: ExactBuildResult = resume?.initial ?? {
@@ -159,6 +172,12 @@ export function buildDocumentHistory(
   };
   const startIndex = resume?.startIndex ?? 0;
   const features = listFeaturesInOrder(document);
+  const normalizedDemand =
+    lineageDemand === undefined
+      ? undefined
+      : lineageDemand instanceof Set
+        ? lineageDemand
+        : new Set(lineageDemand);
   // One shared token per build: it latches on the first observed cancel, so
   // every later boolean in the same superseded build refuses at the kernel.
   const cancellation: BuildCancellation | undefined =
@@ -172,6 +191,7 @@ export function buildDocumentHistory(
     result,
     importSources,
     pinnedImports,
+    ...(normalizedDemand !== undefined ? { lineageDemand: normalizedDemand } : {}),
     importedSteps,
     strictVerdicts,
     ...(cancellation === undefined ? {} : { cancellation })
