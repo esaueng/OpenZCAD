@@ -315,6 +315,71 @@ describe('SketchToolRail', () => {
       screen.getByText('Vertical · Line 2').closest('li')
     ).not.toHaveAttribute('data-conflicted');
   });
+
+  it('marks every row defined exactly when the pill says Fully constrained', async () => {
+    const user = userEvent.setup();
+    renderRail({
+      constraints: [
+        {
+          constraintId: 'scon_1',
+          label: 'Horizontal · Line 1',
+          editable: false,
+          defined: true
+        },
+        {
+          constraintId: 'scon_2',
+          label: 'Distance 10 · Line 1 ↔ Line 2',
+          editable: true,
+          defined: true
+        }
+      ],
+      solveStatus: {
+        label: 'Fully constrained',
+        tone: 'ok',
+        definedState: 'fully-defined',
+        definedObjectIds: ['ent_1', 'ent_2'],
+        conflictingConstraintIds: []
+      }
+    });
+    // The pill text stays the authoritative signal; the rows only repeat it
+    // in words as well as colour.
+    expect(screen.getByRole('status')).toHaveTextContent('Fully constrained');
+    await user.click(screen.getByRole('button', { name: /Sketch palette/ }));
+    for (const label of [
+      'Horizontal · Line 1',
+      'Distance 10 · Line 1 ↔ Line 2'
+    ]) {
+      const row = screen.getByText(label).closest('li');
+      expect(row).toHaveAttribute('data-defined', 'true');
+      expect(row).toHaveAttribute('aria-label', `${label} · fully defined`);
+      expect(row).not.toHaveAttribute('data-conflicted');
+    }
+  });
+
+  it('leaves rows unmarked while the sketch still has freedom', async () => {
+    const user = userEvent.setup();
+    renderRail({
+      constraints: [
+        {
+          constraintId: 'scon_1',
+          label: 'Horizontal · Line 1',
+          editable: false
+        }
+      ],
+      solveStatus: {
+        label: '2 DOF remaining',
+        tone: 'info',
+        definedState: 'under-defined',
+        definedObjectIds: [],
+        conflictingConstraintIds: []
+      }
+    });
+    expect(screen.getByRole('status')).toHaveTextContent('2 DOF remaining');
+    await user.click(screen.getByRole('button', { name: /Sketch palette/ }));
+    const row = screen.getByText('Horizontal · Line 1').closest('li');
+    expect(row).not.toHaveAttribute('data-defined');
+    expect(row).toHaveAttribute('aria-label', 'Horizontal · Line 1');
+  });
 });
 
 describe('SketchRelationsRail', () => {

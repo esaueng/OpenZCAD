@@ -30,20 +30,67 @@ import { triangulateRegionGeometry } from './regionOverlay';
 const PLANE_EXTENT = 400;
 const TINT_COLOR = 0x10172e;
 const COMMITTED_COLOR = 0x6798ff;
+const CONSTRUCTION_COLOR = 0x7b8da3;
+const DIAGNOSTIC_COLOR = 0xff5d73;
 const SELECTED_COLOR = 0xf59e0b;
 const IN_PROGRESS_COLOR = 0xf59e0b;
 const INFERENCE_COLOR = 0x7da3fc;
+/**
+ * Fully-defined sketch geometry. Mirrors `--color-success` in
+ * `apps/web/src/theme/tokens.css` as a literal because WebGL materials
+ * cannot read CSS variables; the value is the dark-stage token, which the
+ * light theme keeps for the canvas too (it repaints the chrome, not the
+ * 3D stage), so this stays correct in both themes.
+ */
+export const DEFINED_COLOR = 0x48cd8f;
 /** Screen-space width in CSS pixels for the sketch polylines. */
 const SKETCH_LINE_WIDTH = 1.6;
+/** Screen-space diameter in CSS pixels for the snap-point dots. */
+const SKETCH_POINT_SIZE = 5;
+
+export interface CommittedSketchColorState {
+  /** Named by a solver residual: the conflict colour always wins. */
+  diagnostic: boolean;
+  selected: boolean;
+  /** In the sketch-wide fully-defined id set. */
+  defined: boolean;
+  construction: boolean;
+}
+
+/**
+ * One object's committed colour, precedence pinned: conflict red beats
+ * selection orange beats fully-defined green beats construction grey beats
+ * the normal blue. Construction keeps its grey even when the sketch is fully
+ * defined — the dashed grey is what says "reference, not profile" — while
+ * the solve pill's text carries the sketch-wide claim. Pure so tests pin it.
+ */
+export function committedSketchColor(state: CommittedSketchColorState): number {
+  if (state.diagnostic) {
+    return DIAGNOSTIC_COLOR;
+  }
+  if (state.selected) {
+    return SELECTED_COLOR;
+  }
+  if (state.defined && !state.construction) {
+    return DEFINED_COLOR;
+  }
+  return state.construction ? CONSTRUCTION_COLOR : COMMITTED_COLOR;
+}
 
 export interface SketchModeRig {
   group: THREE.Group;
-  /** Rebuilds the committed (blue) polylines from the sketch's objects. */
+  /**
+   * Rebuilds the committed polylines (and their snap-point dots) from the
+   * sketch's objects. `diagnosticObjectIds` paints the solver-named conflict
+   * red; `definedObjectIds` paints the sketch-wide fully-defined green —
+   * both default to empty so unsolved sketches render in the normal style.
+   */
   setObjects(
     objects: { id: string; data: SketchObjectData }[],
     selectedObjectId: string | null,
     resolve: (value: unknown) => number,
-    diagnosticObjectIds?: readonly string[]
+    diagnosticObjectIds?: readonly string[],
+    definedObjectIds?: readonly string[]
   ): void;
   /** Updates the adaptive sketch-local grid and returns its minor spacing. */
   setGrid(worldPerPixel: number, visible: boolean): number;
@@ -71,6 +118,47 @@ function liftPoint(basis: PlaneBasis, point: SketchPoint): THREE.Vector3 {
     basis.origin.y + basis.u.y * point.x + basis.v.y * point.y,
     basis.origin.z + basis.u.z * point.x + basis.v.z * point.y
   );
+}
+
+/**
+ * The constraint-schema snap points of one object — the same `start` / `end`
+ * / `center` identity the rail's coincident, midpoint and distance tools
+ * pick. Dots for these ride the object's own colour, so the defined-state
+ * tint covers points with no second code path. Throws on unresolvable
+ * values, like `objectPolylines` does; callers skip the object.
+ */
+export function sketchObjectMarkerPoints(
+  data: SketchObjectData,
+  resolve: (value: unknown) => number
+): SketchPoint[] {
+  if (data.objectKind === 'line') {
+    return [
+      { x: resolve(data.x1), y: resolve(data.y1) },
+      { x: resolve(data.x2), y: resolve(data.y2) }
+    ];
+  }
+  if (data.objectKind === 'circle') {
+    return [{ x: resolve(data.centerX), y: resolve(data.centerY) }];
+  }
+  if (data.objectKind === 'arc') {
+    const centerX = resolve(data.centerX);
+    const centerY = resolve(data.centerY);
+    const radius = resolve(data.radius);
+    const start = (resolve(data.startAngleDeg) * Math.PI) / 180;
+    const end = (resolve(data.endAngleDeg) * Math.PI) / 180;
+    return [
+      { x: centerX, y: centerY },
+      {
+        x: centerX + radius * Math.cos(start),
+        y: centerY + radius * Math.sin(start)
+      },
+      {
+        x: centerX + radius * Math.cos(end),
+        y: centerY + radius * Math.sin(end)
+      }
+    ];
+  }
+  return [];
 }
 
 /**
@@ -304,8 +392,13 @@ export function buildSketchModeRig(
   const disposeChildren = (container: THREE.Object3D) => {
     for (const child of [...container.children]) {
       container.remove(child);
-      // Line2 extends Mesh, so fat lines are covered by the Mesh branch.
-      if (child instanceof THREE.Line || child instanceof THREE.Mesh) {
+      // Line2 extends Mesh, so fat lines are covered by the Mesh branch;
+      // the snap-point dots are Points.
+      if (
+        child instanceof THREE.Line ||
+        child instanceof THREE.Mesh ||
+        child instanceof THREE.Points
+      ) {
         (child.geometry as THREE.BufferGeometry).dispose();
         (child.material as THREE.Material).dispose();
       }
@@ -314,10 +407,29 @@ export function buildSketchModeRig(
 
   return {
     group,
-    setObjects(objects, selectedObjectId, resolve, diagnosticObjectIds = []) {
+    setObjects(
+      objects,
+      selectedObjectId,
+      resolve,
+      diagnosticObjectIds = [],
+      definedObjectIds = []
+    ) {
       disposeChildren(committedGroup);
       const diagnosticIds = new Set(diagnosticObjectIds);
+      const definedIds = new Set(definedObjectIds);
+      const dotPositions: number[] = [];
+      const dotColors: number[] = [];
+      const dotColor = new THREE.Color();
       for (const object of objects) {
+        const diagnostic = diagnosticIds.has(object.id);
+        const construction = object.data.construction === true;
+        const color = committedSketchColor({
+          diagnostic,
+          selected: object.id === selectedObjectId,
+          defined: definedIds.has(object.id),
+          construction
+        });
+        const opacity = diagnostic ? 1 : construction ? 0.72 : 0.95;
         // One object can draw several runs — a text object is one loop per
         // glyph region plus one per counter.
         let polylines: SketchObjectPolyline[];
@@ -348,19 +460,9 @@ export function buildSketchModeRig(
           committedGroup.add(pickProxy);
 
           const visual = createFatLine(vertices, {
-            color: diagnosticIds.has(object.id)
-              ? 0xff5d73
-              : object.id === selectedObjectId
-                ? SELECTED_COLOR
-                : object.data.construction
-                  ? 0x7b8da3
-                  : COMMITTED_COLOR,
+            color,
             linewidth: SKETCH_LINE_WIDTH,
-            opacity: diagnosticIds.has(object.id)
-              ? 1
-              : object.data.construction
-                ? 0.72
-                : 0.95,
+            opacity,
             depthTest: true,
             closed: polyline.closed,
             resolution: resolution()
@@ -375,6 +477,48 @@ export function buildSketchModeRig(
           visual.raycast = () => undefined; // the proxy is the only pick target
           committedGroup.add(visual);
         }
+        // The constraint-schema snap points wear the object's own colour,
+        // so the defined-state tint covers points with no second code path.
+        // Dots never pick: the proxy lines above stay the only pick targets.
+        try {
+          dotColor.set(color);
+          for (const marker of sketchObjectMarkerPoints(object.data, resolve)) {
+            const lifted = liftPoint(basis, marker);
+            dotPositions.push(lifted.x, lifted.y, lifted.z);
+            dotColors.push(dotColor.r, dotColor.g, dotColor.b);
+          }
+        } catch {
+          // Unresolvable values: the polylines above already skipped the
+          // object, so its points stay out too.
+        }
+      }
+      if (dotPositions.length > 0) {
+        const dotsGeometry = new THREE.BufferGeometry();
+        dotsGeometry.setAttribute(
+          'position',
+          new THREE.Float32BufferAttribute(dotPositions, 3)
+        );
+        dotsGeometry.setAttribute(
+          'color',
+          new THREE.Float32BufferAttribute(dotColors, 3)
+        );
+        const dots = new THREE.Points(
+          dotsGeometry,
+          new THREE.PointsMaterial({
+            size: SKETCH_POINT_SIZE,
+            sizeAttenuation: false,
+            vertexColors: true,
+            depthTest: true,
+            depthWrite: false,
+            transparent: true,
+            opacity: 0.95
+          })
+        );
+        dots.name = 'sketch-snap-points';
+        dots.renderOrder = VIEWPORT_RENDER_ORDER.ACTIVE_SKETCH;
+        dots.frustumCulled = false;
+        dots.raycast = () => undefined;
+        committedGroup.add(dots);
       }
     },
     setGrid(worldPerPixel, visible) {

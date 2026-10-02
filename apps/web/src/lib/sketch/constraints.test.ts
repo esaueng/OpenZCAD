@@ -16,11 +16,14 @@ import {
   CONSTRAINT_TOOL_SPECS,
   constraintReferencesObject,
   constraintToolsForObject,
+  definedPointKey,
   describeConstraint,
+  fullyDefinedIds,
   measureDrivingDimension,
   planConstraintFromSelection,
   refusePick,
   residualConstraintObjectIds,
+  sketchDefinedState,
   topResidualConstraints,
   type PendingConstraintKind,
   type ConstraintPick
@@ -936,5 +939,118 @@ describe('topResidualConstraints', () => {
         { constraintId: idA!, maxResidual: 1e-9 }
       ])
     ).toEqual([lineA]);
+  });
+});
+
+describe('sketchDefinedState', () => {
+  const solved = (
+    overrides: Partial<{
+      classification:
+        'solved' | 'underConstrained' | 'redundant' | 'unsatisfied';
+      converged: boolean;
+      rolledBack: boolean;
+      dof: number;
+    }> = {}
+  ) => ({
+    classification: overrides.classification ?? ('solved' as const),
+    converged: overrides.converged ?? true,
+    rolledBack: overrides.rolledBack ?? false,
+    dof: {
+      dof: overrides.dof ?? 0,
+      rank: 4,
+      numParams: 4,
+      numEquations: 4
+    }
+  });
+
+  it('reports unknown before any solve runs', () => {
+    expect(sketchDefinedState(null)).toEqual({
+      state: 'unknown',
+      dof: null,
+      fullyDefined: false
+    });
+    expect(sketchDefinedState(undefined)).toEqual({
+      state: 'unknown',
+      dof: null,
+      fullyDefined: false
+    });
+  });
+
+  it('calls a converged zero-DOF solved sketch fully defined', () => {
+    expect(sketchDefinedState(solved())).toEqual({
+      state: 'fully-defined',
+      dof: 0,
+      fullyDefined: true
+    });
+  });
+
+  it('leaves under-constrained sketches in the normal style', () => {
+    // The kernel reports one sketch-wide DOF scalar and no per-entity
+    // freedom, so the state names the sketch without painting any entity
+    // as under-defined.
+    expect(sketchDefinedState(solved({ dof: 3 }))).toEqual({
+      state: 'under-defined',
+      dof: 3,
+      fullyDefined: false
+    });
+    expect(
+      sketchDefinedState(solved({ classification: 'underConstrained', dof: 2 }))
+    ).toEqual({ state: 'under-defined', dof: 2, fullyDefined: false });
+  });
+
+  it('never calls a sketch with remaining freedom fully defined', () => {
+    // Defensive: a `solved` label with DOF > 0 must not paint green.
+    expect(sketchDefinedState(solved({ dof: 1 })).fullyDefined).toBe(false);
+  });
+
+  it('keeps rank redundancy unattributed instead of fully defined', () => {
+    expect(sketchDefinedState(solved({ classification: 'redundant' }))).toEqual(
+      { state: 'over-constrained', dof: 0, fullyDefined: false }
+    );
+  });
+
+  it('treats failed solves as conflicts, never as defined', () => {
+    for (const outcome of [
+      solved({ classification: 'unsatisfied' }),
+      solved({ converged: false }),
+      solved({ rolledBack: true })
+    ]) {
+      expect(sketchDefinedState(outcome)).toMatchObject({
+        state: 'conflict',
+        fullyDefined: false
+      });
+    }
+  });
+});
+
+describe('fullyDefinedIds', () => {
+  it('paints every entity and point key, or nothing at all', () => {
+    const { lineA, lineB } = (() => {
+      const fixtureResult = fixture();
+      return { lineA: fixtureResult.lineA, lineB: fixtureResult.lineB };
+    })();
+    const ids = [lineA, lineB, definedPointKey(lineA, 'start')];
+    const defined = sketchDefinedState({
+      classification: 'solved',
+      converged: true,
+      rolledBack: false,
+      dof: { dof: 0, rank: 4, numParams: 4, numEquations: 4 }
+    });
+    expect(fullyDefinedIds(ids, defined)).toEqual(ids);
+    // Anything weaker than proved fully-defined paints nothing: per-entity
+    // under-defined claims would be guesses without solver evidence.
+    const free = sketchDefinedState({
+      classification: 'underConstrained',
+      converged: true,
+      rolledBack: false,
+      dof: { dof: 2, rank: 2, numParams: 4, numEquations: 2 }
+    });
+    expect(fullyDefinedIds(ids, free)).toEqual([]);
+    expect(fullyDefinedIds(ids, sketchDefinedState(null))).toEqual([]);
+  });
+
+  it('keys snap points as `objectId.point`', () => {
+    expect(definedPointKey('ent_1', 'start')).toBe('ent_1.start');
+    expect(definedPointKey('ent_1', 'center')).toBe('ent_1.center');
   });
 });
