@@ -179,6 +179,25 @@ function sharedTopologyKind(
     : null;
 }
 
+function selectionIntentForFollowup(
+  entries: readonly AssistantEntry[],
+  answeredEntryId: string
+): string | undefined {
+  const questionIndex = entries.findIndex(
+    (entry) => entry.id === answeredEntryId && entry.kind === 'questions'
+  );
+  if (questionIndex < 0) return undefined;
+
+  for (let index = questionIndex - 1; index >= 0; index -= 1) {
+    const entry = entries[index]!;
+    if (entry.kind === 'proposal') return undefined;
+    if (entry.kind === 'user' && entry.answers.length === 0) {
+      return entry.text.trim() || undefined;
+    }
+  }
+  return undefined;
+}
+
 type TurnRole = 'user' | 'assistant';
 
 /**
@@ -678,6 +697,15 @@ export function AssistantPanel({
         const reply = await streamAssistantReply(
           {
             prompt: text,
+            ...(answeredEntryId
+              ? {
+                  selectionPrompt:
+                    selectionIntentForFollowup(
+                      conversation.entries,
+                      answeredEntryId
+                    ) ?? ''
+                }
+              : {}),
             digest: createCadDocumentDigest(doc, selection),
             history: historyForRequest(conversation),
             attachments: attachments.map((attachment) => ({

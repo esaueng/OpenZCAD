@@ -1,6 +1,9 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import { CommandManager, commandFactories } from '@openzcad/command-system';
-import { createProjectDocument } from '@openzcad/document-core';
+import {
+  createProjectDocument,
+  reidentifyProjectDocument
+} from '@openzcad/document-core';
 import { InMemoryPersistenceService } from '@openzcad/persistence';
 import {
   PROJECT_DOCUMENT_SCHEMA_VERSION,
@@ -63,13 +66,13 @@ describe('account adoption from an unopened device snapshot', () => {
     expect(() =>
       parseCreateProjectRequest({ name: local.name, document: local })
     ).toThrow('Reload to update before saving a project with undo history.');
-    await api.adoptProject(local);
+    const adopted = await api.adoptProject(local);
     expect(local).toEqual(original);
-    const saved = (await store.loadProject(owner, local.projectId))!;
-    expect(saved.projectId).toBe(local.projectId);
+    const saved = (await store.loadProject(owner, adopted.document.projectId))!;
+    expect(saved.projectId).not.toBe(local.projectId);
     expect(saved.version).toBe(local.version);
     expect(saved.editHistory).toEqual({
-      ...local.editHistory,
+      ...reidentifyProjectDocument(local, saved.projectId).editHistory,
       actorUserId: owner
     });
     const reopened = new CommandManager(saved);
@@ -130,10 +133,10 @@ describe('account adoption from an unopened device snapshot', () => {
         )
       );
     });
-    await api.adoptProject(local);
+    const adopted = await api.adoptProject(local);
     expect(local).toEqual(original);
     const reopened = new CommandManager(
-      (await store.loadProject(owner, local.projectId))!
+      (await store.loadProject(owner, adopted.document.projectId))!
     );
     const sketch = Object.values(reopened.document.nodes).find(
       (node) => node.kind === 'sketch'

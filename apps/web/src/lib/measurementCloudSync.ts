@@ -1,4 +1,8 @@
-import type { StoredMeasurementRecord } from './measurementRecord';
+import {
+  measurementRecordContentKey,
+  type StoredMeasurementRecord
+} from './measurementRecord';
+export { measurementRecordContentKey } from './measurementRecord';
 import { desktopFetch } from './desktopBridge';
 
 export interface ProjectMeasurementSnapshot {
@@ -82,33 +86,6 @@ export const projectMeasurementCloudApi: ProjectMeasurementCloudApi = {
       }
     )
 };
-
-function stableJsonObjectOrder(_key: string, value: unknown): unknown {
-  if (value === null || typeof value !== 'object' || Array.isArray(value)) {
-    return value;
-  }
-  return Object.fromEntries(
-    Object.entries(value).sort(([left], [right]) =>
-      left < right ? -1 : left > right ? 1 : 0
-    )
-  );
-}
-
-export function measurementRecordContentKey(
-  record: StoredMeasurementRecord
-): string {
-  // The storage boundary rebuilds validated objects, so insertion order is not
-  // content and must not turn a server echo into a new device edit.
-  return JSON.stringify(
-    {
-      projectId: record.projectId,
-      version: record.version,
-      measurements: record.measurements,
-      display: record.display
-    },
-    stableJsonObjectOrder
-  );
-}
 
 /**
  * Reconciles one device snapshot with the account without involving CAD history.

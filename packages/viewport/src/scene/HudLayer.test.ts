@@ -150,6 +150,31 @@ describe('positioning against the host', () => {
     restore();
   });
 
+  it('pulls an open popup back inside a host that shrank under it', () => {
+    // An open Select other list stayed at x≈680 in a window narrowed to
+    // 360px; it was placed once, on open.
+    const rect = { left: 0, top: 0, width: 1280, height: 800 };
+    const { host, restore } = makeHost(rect);
+    const layer = new HudLayer(host);
+    const popup = layer.create('topology-pick-list');
+    layer.showAtPointerClamped(popup, { clientX: 680, clientY: 300 }, 12, 12);
+    expect(popup.style.left).toBe('692px');
+
+    rect.width = 360;
+    rect.height = 640;
+    layer.reclamp(popup);
+    expect(popup.style.left).toBe('192px');
+    expect(popup.style.top).toBe('312px');
+
+    // Smaller than the popup: it keeps the padding at the top-left.
+    rect.width = 100;
+    rect.height = 100;
+    layer.reclamp(popup);
+    expect(popup.style.left).toBe('8px');
+    expect(popup.style.top).toBe('8px');
+    restore();
+  });
+
   it('places an overlay at host pixels directly for world-anchored chips', () => {
     const { host, restore } = makeHost();
     const layer = new HudLayer(host);

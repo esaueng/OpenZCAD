@@ -1,5 +1,7 @@
 export * from './workspace-resume';
 export * from './document-history';
+export * from './textLimits';
+export * from './imported-step-source';
 export * from './sketch-reference-dimensions';
 export * from './mass-density';
 import type { DocumentHistory } from './document-history';
@@ -2431,13 +2433,14 @@ export interface CreateProjectRequest {
   name: string;
   units?: UnitSystem;
   /**
-   * An existing device-local document to adopt into the account rather than a
-   * fresh project to mint. The document keeps its `projectId`, so the device's
-   * local copy and the shelf metadata it has already accumulated stay pointed
-   * at the same project once it has an account record. `units` is ignored when
-   * this is present — the document already has them.
+   * An existing device-local document to adopt. The server assigns its cloud
+   * identity and remembers the account's original device ID for retry recovery.
+   * The client moves its local records to the returned ID. Units are taken from
+   * the document when present.
    */
   document?: ProjectDocument;
+  /** Client can transfer local records to the returned cloud identity. */
+  adoptionProtocolVersion?: 1;
 }
 
 export interface CreateProjectResponse {

@@ -34,6 +34,7 @@ import {
   PencilRuler,
   RefreshCcw,
   Search,
+  SearchX,
   Settings2,
   ShieldCheck,
   Trash2,
@@ -547,6 +548,11 @@ export function SettingsPage({
 
   activeRef.current = active;
   queryRef.current = query;
+  const changeQuery = (nextQuery: string) => {
+    queryRef.current = nextQuery;
+    setQuery(nextQuery);
+    updateSettingsViewState({ query: nextQuery });
+  };
 
   const persistCurrentView = () =>
     updateSettingsViewState({
@@ -697,14 +703,24 @@ export function SettingsPage({
               value={query}
               placeholder="Find a setting"
               aria-label="Find a setting"
-              onChange={(event) => {
-                const nextQuery = event.target.value;
-                queryRef.current = nextQuery;
-                setQuery(nextQuery);
-                updateSettingsViewState({ query: nextQuery });
-              }}
+              onChange={(event) => changeQuery(event.target.value)}
             />
           </label>
+          {/* The narrow layout has no room for the field, so while a filter
+              is narrowing the sections it shows this way out of it instead;
+              without it a filter typed in a wider window stranded the rail on
+              its matches. */}
+          {query.trim() !== '' && (
+            <button
+              type="button"
+              className="settings-search-clear"
+              aria-label={`Clear the filter “${query.trim()}”`}
+              title={`Clear the filter “${query.trim()}”`}
+              onClick={() => changeQuery('')}
+            >
+              <SearchX size={16} aria-hidden="true" />
+            </button>
+          )}
           <nav>
             {visibleSections.map((section) => (
               <button
@@ -1889,9 +1905,10 @@ export function SettingsPage({
                             inputMode="numeric"
                             autoComplete="one-time-code"
                             pattern="[0-9]{6}"
-                            maxLength={6}
                             aria-label="Email sign-in code"
                             placeholder="000000"
+                            // No maxLength: it cuts a pasted " 730418" before
+                            // the digit filter runs and drops the last digit.
                             onChange={(event) =>
                               setLoginCode(
                                 event.target.value
