@@ -404,6 +404,13 @@ const MESH_EXPORT_FILE_INFO: Record<
     label: 'glTF',
     kind: 'gltf-export',
     binaryFormat: 'glb'
+  },
+  ply: {
+    extension: 'ply',
+    contentType: 'application/octet-stream',
+    label: 'PLY',
+    kind: 'ply-export',
+    binaryFormat: 'ply'
   }
 };
 import {
