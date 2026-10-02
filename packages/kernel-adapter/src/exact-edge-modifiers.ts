@@ -497,6 +497,88 @@ export function acceptedEdgeModifierProbe(
   return null;
 }
 
+/** Most kernel calls spent raising a probed size toward the refused one. */
+export const EDGE_MODIFIER_REFINE_STEPS = 6;
+
+/**
+ * A round step for sizes between `accepted` and `refused`: half a power of
+ * ten under the gap (2.5 → 5 gives 0.5; 9 → 30 gives 5), so the sizes tried,
+ * and the one quoted, are numbers a person would type.
+ */
+function refineStep(accepted: number, refused: number): number {
+  const gap = refused - accepted;
+  return 10 ** Math.floor(Math.log10(gap)) / 2;
+}
+
+/**
+ * Raises a probed size that builds toward the refused one and returns the
+ * largest size proved to build.
+ *
+ * The ladder alone answers in coarse fractions of the request — a half, an
+ * eighth — so a 6 mm plate that refuses r5 was told "radius 2.5 builds
+ * here" while r3 built, which sent the user below a radius they already
+ * had. This bisects over round sizes between the two (on that plate: 3.5
+ * refuses, 3 builds, so 3 is quoted), at most six more kernel calls on a
+ * path that is already a refusal. Only a size that was built is returned;
+ * when nothing between builds, the probed size stands.
+ */
+export function refineAcceptedEdgeModifierSize(
+  kernel: RemusKernel,
+  target: number,
+  selected: number[],
+  featureKind: 'fillet' | 'chamfer',
+  accepted: number,
+  refused: number,
+  chamferAngleRadians?: number,
+  steps: number = EDGE_MODIFIER_REFINE_STEPS
+): number {
+  if (!(refused > accepted) || !Number.isFinite(refused)) {
+    return accepted;
+  }
+  const angle = featureKind === 'chamfer' ? chamferAngleRadians : undefined;
+  const step = refineStep(accepted, refused);
+  let low = Math.floor(accepted / step);
+  let high = Math.ceil(refused / step);
+  let best = accepted;
+  let calls = 0;
+  while (high - low > 1 && calls < steps) {
+    const middle = Math.floor((low + high) / 2);
+    const size = Number((middle * step).toPrecision(12));
+    if (size <= accepted + GEOMETRY_EPSILON) {
+      low = middle;
+      continue;
+    }
+    if (size >= refused - GEOMETRY_EPSILON) {
+      high = middle;
+      continue;
+    }
+    calls += 1;
+    let builds = false;
+    try {
+      builds =
+        applyEdgeModifier(
+          kernel,
+          target,
+          selected,
+          featureKind,
+          size,
+          undefined,
+          undefined,
+          angle
+        ) !== null;
+    } catch {
+      // A throw is a refusal like any other.
+    }
+    if (builds) {
+      low = middle;
+      best = size;
+    } else {
+      high = middle;
+    }
+  }
+  return best;
+}
+
 /**
  * Cause-aware failure message for an edge modifier the kernel refused.
  *
@@ -589,6 +671,15 @@ export function edgeModifierFailureMessage(
       chamferAngleRadians
     );
     if (accepted !== null) {
+      const quoted = refineAcceptedEdgeModifierSize(
+        kernel,
+        target,
+        selected,
+        featureKind,
+        accepted,
+        size,
+        chamferAngleRadians
+      );
       // Only the probed size is quoted, and the kernel's reported ceiling
       // never is. The ceiling is per-face and is NOT monotone in the
       // requested size, so it is not a bound on what works: on a 50x50x2
@@ -604,7 +695,7 @@ export function edgeModifierFailureMessage(
       // user asked for, angle and all. Quoting a size proved for a DIFFERENT
       // operation is the same defect wearing the kernel's clothes: distance
       // 10 builds symmetrically on a 30x18x24 box and is refused at 80°.
-      return `${prefix} Try a smaller ${dimension}: ${dimension} ${accepted} builds here.`;
+      return `${prefix} Try a smaller ${dimension}: ${dimension} ${quoted} builds here.`;
     }
     // Named before the topology causes because it explains the whole body
     // rather than one selection: measured on an r=2..3, h=1 annulus, a 90
