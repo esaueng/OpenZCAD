@@ -80,6 +80,16 @@ describe('ExportDialog', () => {
     expect(screen.queryByRole('radio', { name: /OBJ/ })).not.toBeNull();
   });
 
+  it('names glTF’s own unit rather than the slicers’ millimetres', async () => {
+    const user = userEvent.setup();
+    renderDialog();
+    expect(screen.getByText(/in millimetres, ready for slicing/)).toBeVisible();
+
+    await user.click(screen.getByLabelText(/glTF \(GLB\)/));
+
+    expect(screen.getByText(/in metres, the unit glTF defines/)).toBeVisible();
+  });
+
   it('blocks export while a custom deviation is out of range', async () => {
     const user = userEvent.setup();
     const props = renderDialog();

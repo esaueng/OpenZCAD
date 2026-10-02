@@ -145,6 +145,7 @@ export {
   type ImportedMeshTriangles
 } from './mesh-file-import';
 import { sanitizeBinaryStl, sanitizeThreeMf } from './mesh-export-sanitize';
+import { orientGlbForGltf } from './glb-scene';
 import {
   readMeshQuality,
   type BodyMeshQuality,
@@ -2532,11 +2533,15 @@ export class RemusKernelAdapter implements ExactKernelAdapter {
             : format === 'glb'
               ? io.exportGlb(bodies, deflection)
               : io.exportStl(bodies, deflection);
+      // glTF is metres and +Y up; the tessellation is model millimetres,
+      // +Z up, which the GLB states through its root node (glb-scene.ts).
       return format === '3mf'
         ? sanitizeThreeMf(bytes)
         : format === 'stl-binary'
           ? sanitizeBinaryStl(bytes)
-          : (bytes as Uint8Array<ArrayBuffer>);
+          : format === 'glb'
+            ? orientGlbForGltf(bytes)
+            : (bytes as Uint8Array<ArrayBuffer>);
     });
   }
 
