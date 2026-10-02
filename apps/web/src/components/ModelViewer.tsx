@@ -3,6 +3,7 @@ import { ParameterPreviewController } from './viewer/parameterPreviewController'
 import { useEffect, useRef, type MutableRefObject } from 'react';
 import { axisDimensionLabel } from '../lib/primitiveDimensionLabel';
 import * as THREE from 'three';
+import type { HoleGhost } from '../lib/holeGhost';
 import { mark, measure, timed } from '../lib/perf';
 import {
   avoidSketchDimensionOverlays,
@@ -656,6 +657,11 @@ interface ModelViewerProps {
   planePickerOffset: number;
   /** A ghost plane was clicked. */
   onPickPlane(plane: PlaneId): void;
+  /**
+   * The bore the open Hole card would drill, drawn through the body before
+   * it exists. Null while no hole can be placed.
+   */
+  holeGhost?: HoleGhost | null;
   /**
    * What measuring the hovered target would report, for the preview chip.
    * Null when measuring is off or the pick has nothing honest to say.
@@ -1413,6 +1419,7 @@ export function ModelViewer({
   onSelectRegion,
   onHoverRegion,
   planePickerArmed,
+  holeGhost = null,
   planePickerOffset,
   onPickPlane,
   onMeasurePreview,
@@ -9124,6 +9131,71 @@ export function ModelViewer({
       context.requestRender();
     };
   }, [planePickerArmed]);
+
+  // The open Hole card's bore, drawn through the body: a translucent
+  // cylinder with its entry and exit rims, over everything so a hole buried
+  // in the part (or missing it) is still seen. Rebuilt per value change; the
+  // viewport renders on demand, so each change asks for its frame.
+  useEffect(() => {
+    const context = contextRef.current;
+    if (!context || !holeGhost) {
+      return;
+    }
+    const group = new THREE.Group();
+    group.name = 'hole-ghost';
+    const { entry, axis, radius, depth } = holeGhost;
+    const direction = new THREE.Vector3(axis.x, axis.y, axis.z).normalize();
+    const body = new THREE.CylinderGeometry(radius, radius, depth, 40, 1, true);
+    const fill = new THREE.MeshBasicMaterial({
+      color: SKETCH_COLOR,
+      transparent: true,
+      opacity: 0.28,
+      side: THREE.DoubleSide,
+      depthTest: false,
+      depthWrite: false
+    });
+    const barrel = new THREE.Mesh(body, fill);
+    barrel.quaternion.setFromUnitVectors(new THREE.Vector3(0, 1, 0), direction);
+    barrel.position
+      .set(entry.x, entry.y, entry.z)
+      .addScaledVector(direction, depth / 2);
+    barrel.renderOrder = 20;
+    group.add(barrel);
+    const rimGeometry = new THREE.BufferGeometry().setFromPoints(
+      Array.from({ length: 64 }, (_, index) => {
+        const angle = (index / 64) * Math.PI * 2;
+        return new THREE.Vector3(
+          Math.cos(angle) * radius,
+          0,
+          Math.sin(angle) * radius
+        );
+      })
+    );
+    const rimMaterial = new THREE.LineBasicMaterial({
+      color: SKETCH_COLOR,
+      depthTest: false,
+      transparent: true
+    });
+    for (const along of [0, depth]) {
+      const rim = new THREE.LineLoop(rimGeometry, rimMaterial);
+      rim.quaternion.copy(barrel.quaternion);
+      rim.position
+        .set(entry.x, entry.y, entry.z)
+        .addScaledVector(direction, along);
+      rim.renderOrder = 21;
+      group.add(rim);
+    }
+    context.scene.add(group);
+    context.requestRender();
+    return () => {
+      context.scene.remove(group);
+      body.dispose();
+      fill.dispose();
+      rimGeometry.dispose();
+      rimMaterial.dispose();
+      context.requestRender();
+    };
+  }, [holeGhost]);
 
   // The viewport renders on demand, so a typed offset has to ask for the
   // frame that shows it; without this the ghosts only move on the next
