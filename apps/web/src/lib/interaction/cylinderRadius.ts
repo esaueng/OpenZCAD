@@ -184,22 +184,6 @@ export function cylinderRadialFrame(
   };
 }
 
-/** Signed world-space movement away from the cylinder axis. */
-export function signedRadialDelta(
-  initialHitPoint: Vector3,
-  currentPoint: Vector3,
-  initialRadialDirection: Vector3
-): number {
-  return dot(
-    {
-      x: currentPoint.x - initialHitPoint.x,
-      y: currentPoint.y - initialHitPoint.y,
-      z: currentPoint.z - initialHitPoint.z
-    },
-    initialRadialDirection
-  );
-}
-
 /** The smallest meaningful positive radius at the scale of this edit. */
 export function cylinderRadiusTolerance(scale: number): number {
   return Number.isFinite(scale) ? geometryTolerance(Math.abs(scale)) : Infinity;
@@ -260,14 +244,6 @@ export function cylinderRadiusSnapStep(worldPerPixel: number): number {
       (candidate) => candidate >= minimumStep
     ) ?? magnitude * 10
   );
-}
-
-export function radiusToDiameter(radius: number): number {
-  return radius * 2;
-}
-
-export function diameterToRadius(diameter: number): number {
-  return diameter / 2;
 }
 
 /** Recognized round-rim profile; history eligibility is checked by the caller. */

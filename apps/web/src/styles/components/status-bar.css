@@ -156,7 +156,3 @@
     gap: 8px;
   }
 }
-
-.status-warning {
-  color: var(--color-warning);
-}

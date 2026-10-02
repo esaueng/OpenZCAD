@@ -26,13 +26,6 @@ export function modelingOperationNeedsPlanarFaces(
   return operation === 'hole' || operation === 'draft';
 }
 
-/** Shell and draft collect several faces, so a viewport click toggles membership. */
-export function modelingOperationPicksManyFaces(
-  operation: FacePickOperation
-): boolean {
-  return operation === 'shell' || operation === 'draft';
-}
-
 const PICK_LABELS: Record<FacePickOperation, string> = {
   hole: 'Hole',
   shell: 'Shell',
@@ -44,9 +37,6 @@ export interface FormFacePick {
   bodyId: BodyId;
   hash: number;
 }
-
-/** @deprecated Use FormFacePick; kept for the Hole-era name. */
-export type HoleFacePick = FormFacePick;
 
 export function resolveFormFacePick(
   operation: FacePickOperation,
@@ -103,12 +93,4 @@ export function resolveFormFacePick(
       ...(face.reference ? { reference: face.reference } : {})
     }
   };
-}
-
-export function resolveHoleFacePick(
-  targetBodyId: BodyId,
-  selection: TopologySelection | null,
-  topology: BodyTopology | undefined
-): ReturnType<typeof resolveFormFacePick> {
-  return resolveFormFacePick('hole', targetBodyId, selection, topology);
 }
