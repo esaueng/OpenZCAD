@@ -47,12 +47,17 @@ describe('workflow runner policy', () => {
         );
       }
       if (workflowPath === 'public-commit-metadata.yml') {
+        expect(workflow).toContain('push:\n    branches: [main]');
+        expect(workflow).not.toMatch(/^[ \t]+merge_group:/m);
         expect(workflow).toContain('pull_request:');
         expect(workflow).toContain('workflow_dispatch:');
         expect(workflow).toContain('fetch-depth: 0');
         expect(workflow).toContain('persist-credentials: false');
         expect(workflow).toContain('PR_BASE: ${{ github.event.pull_request.base.sha }}');
         expect(workflow).toContain('PR_HEAD: ${{ github.event.pull_request.head.sha }}');
+        expect(workflow).toContain('BEFORE_SHA: ${{ github.event.before }}');
+        expect(workflow).toContain('elif [[ "$EVENT_NAME" == push ]]');
+        expect(workflow).toContain('Commit metadata range is unavailable.');
         expect(workflow).toContain('contents: read');
         expect(workflow).not.toMatch(
           /pull_request_target|workflow_run|secrets(?:\.|:)|id-token: write|contents: write/

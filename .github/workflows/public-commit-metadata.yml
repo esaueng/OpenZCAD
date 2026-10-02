@@ -1,6 +1,8 @@
 name: Public commit metadata
 
 on:
+  push:
+    branches: [main]
   pull_request:
   workflow_dispatch:
     inputs:
@@ -29,6 +31,7 @@ jobs:
           EVENT_NAME: ${{ github.event_name }}
           PR_BASE: ${{ github.event.pull_request.base.sha }}
           PR_HEAD: ${{ github.event.pull_request.head.sha }}
+          BEFORE_SHA: ${{ github.event.before }}
           DISPATCH_BASE: origin/${{ inputs.base_ref }}
           HEAD_SHA: ${{ github.sha }}
         run: |
@@ -36,9 +39,16 @@ jobs:
           if [[ "$EVENT_NAME" == pull_request ]]; then
             base="$PR_BASE"
             head="$PR_HEAD"
+          elif [[ "$EVENT_NAME" == push ]]; then
+            base="$BEFORE_SHA"
+            head="$HEAD_SHA"
           else
             base="$DISPATCH_BASE"
             head="$HEAD_SHA"
+          fi
+          if [[ -z "$base" || -z "$head" || "$base" =~ ^0+$ || "$head" =~ ^0+$ ]]; then
+            echo 'Commit metadata range is unavailable.' >&2
+            exit 1
           fi
           node scripts/check-public-commit-metadata.mjs --base "$base" --head "$head"
       - name: Test metadata policy with synthetic identities
