@@ -55,7 +55,7 @@ describe('useGeometryWorker lineage demand', () => {
     expect(worker.postMessage.mock.calls.length).toBe(calls);
   });
 
-  it('carries sticky demand on one-off syncs', async () => {
+  it('gives one-off syncs full lineage unless they ask for a demand', async () => {
     installWorker();
     const document = createProjectDocument('Demand once', toUserId('user'));
     const host = { manager: () => null, onDerived: vi.fn(), onError: vi.fn() };
@@ -64,12 +64,22 @@ describe('useGeometryWorker lineage demand', () => {
     const bodyId = toBodyId('body_demanded');
 
     result.current.sync(document, [bodyId]);
+    // A preview, preflight or demo seed reads lineage from the result, so it
+    // must not opt into the idle skip just because the viewport demanded.
     const pending = result.current.syncOnce(document);
     const request = worker.postMessage.mock.calls.at(-1)![0] as {
       requestId: string;
       lineageDemand?: unknown;
     };
-    expect(request.lineageDemand).toEqual([bodyId]);
+    expect(request.lineageDemand).toBeUndefined();
+    // Left unanswered; it rejects when the hook unmounts.
+    result.current
+      .syncOnce(document, undefined, [bodyId])
+      .catch(() => undefined);
+    const explicit = worker.postMessage.mock.calls.at(-1)![0] as {
+      lineageDemand?: unknown;
+    };
+    expect(explicit.lineageDemand).toEqual([bodyId]);
     act(() => {
       worker.emit({
         type: 'sync',

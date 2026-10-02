@@ -191,11 +191,9 @@ export function historyFeatureDigest(
     // and the rebuild re-runs only that boolean and what follows it.
     ...(isBooleanEvolutionProbeEligible(feature)
       ? {
-          booleanEvolutionProbe: booleanEvolutionProbeNeeded(
-            document,
-            feature,
-            lineageDemand
-          )
+          booleanEvolutionProbe:
+            lineageDemand === undefined ||
+            booleanEvolutionProbeNeeded(document, feature, lineageDemand)
         }
       : {})
   });

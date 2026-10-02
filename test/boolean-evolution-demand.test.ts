@@ -27,6 +27,11 @@ import {
 import * as evolutionModule from '../packages/kernel-adapter/src/exact-boolean-evolution';
 import { historyFeatureDigest } from '../packages/kernel-adapter/src/exact-history-cache';
 
+// The viewport's idle broadcast: it carries a (here empty) lineage demand,
+// which is what opts a sync into skipping the probe for unreferenced
+// booleans. A sync with no demand always probes.
+const IDLE_SYNC = { lineageDemand: [] as BodyId[] };
+
 /**
  * K05 on-demand boolean evolution probe.
  *
@@ -184,7 +189,9 @@ describe('booleanEvolutionProbeNeeded with lineage demand', () => {
     const index = listFeaturesInOrder(document).findIndex(
       (candidate) => candidate.featureId === feature.featureId
     );
-    const plain = historyFeatureDigest(document, feature, index);
+    // No demand at all means full lineage: the probe bit is always set.
+    const full = historyFeatureDigest(document, feature, index);
+    const plain = historyFeatureDigest(document, feature, index, undefined, []);
     const demanded = historyFeatureDigest(document, feature, index, undefined, [
       bodyId
     ]);
@@ -197,6 +204,7 @@ describe('booleanEvolutionProbeNeeded with lineage demand', () => {
     );
     expect(demanded).not.toBe(plain);
     expect(unrelated).toBe(plain);
+    expect(full).toBe(demanded);
   });
 });
 
@@ -216,7 +224,7 @@ describe('on-demand probe rebuild behaviour', { timeout: 120_000 }, () => {
     const spy = vi.spyOn(evolutionModule, 'probeBooleanEntityEvolution');
     try {
       spy.mockClear();
-      const skipped = await adapter.syncDocument(document);
+      const skipped = await adapter.syncDocument(document, undefined, undefined, undefined, IDLE_SYNC);
       expect(skipped.warnings).toEqual([]);
       expect(spy).not.toHaveBeenCalled();
       expect(
@@ -252,7 +260,7 @@ describe('on-demand probe rebuild behaviour', { timeout: 120_000 }, () => {
       const spy = vi.spyOn(evolutionModule, 'probeBooleanEntityEvolution');
       try {
         spy.mockClear();
-        const carrier = await caching.syncDocument(document);
+        const carrier = await caching.syncDocument(document, undefined, undefined, undefined, IDLE_SYNC);
         expect(carrier.warnings).toEqual([]);
         expect(spy).not.toHaveBeenCalled();
         const carrierKey = lineageKey(carrier, bodyId);
@@ -301,7 +309,7 @@ describe('on-demand probe rebuild behaviour', { timeout: 120_000 }, () => {
   it('product regression: demanded edge pick persists a boolean.edge.* reference', async () => {
     const { document, bodyId } = fusedPlateDocument();
     // Idle rebuild publishes carrier-only lineage (no boolean edge names).
-    const carrier = await adapter.syncDocument(document);
+    const carrier = await adapter.syncDocument(document, undefined, undefined, undefined, IDLE_SYNC);
     expect(
       edgesOf(carrier, bodyId).some(
         (edge) => edge.reference?.lineageName?.startsWith('boolean.edge.')
@@ -344,7 +352,7 @@ describe('on-demand probe rebuild behaviour', { timeout: 120_000 }, () => {
         filletData.edgeReferences![0]!.lineageName.startsWith('boolean.edge.')
       ).toBe(true);
     }
-    const finished = await adapter.syncDocument(rounded.document);
+    const finished = await adapter.syncDocument(rounded.document, undefined, undefined, undefined, IDLE_SYNC);
     expect(finished.warnings).toEqual([]);
 
     // A face reference on the same demanded body keeps its carrier name.

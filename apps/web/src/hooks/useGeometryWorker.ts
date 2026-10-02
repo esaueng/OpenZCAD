@@ -100,14 +100,16 @@ function postSync(
   }
   lastSyncedKey.current = syncKey;
   armed.current = true;
+  // The idle broadcast always carries a demand (possibly empty): that is
+  // what opts it into skipping the probe for booleans nothing references.
   worker.postMessage({
     type: 'sync',
     document: documentForWorker(document),
-    ...(demandKey
-      ? {
-          lineageDemand: [...(lineageDemand instanceof Set ? lineageDemand : new Set(lineageDemand ?? []))].sort()
-        }
-      : {})
+    lineageDemand: [
+      ...(lineageDemand instanceof Set
+        ? lineageDemand
+        : new Set(lineageDemand ?? []))
+    ].sort()
   });
 }
 
@@ -737,23 +739,24 @@ export function useGeometryWorker(host: GeometryWorkerHost): GeometryWorkerApi {
       );
     },
     syncOnce(document, analysis, lineageDemand) {
-      // Sticky demand rides every one-off rebuild for the open document too:
-      // the broadcast `sync` owns the sticky set, and a preview/preflight
-      // without it would otherwise serve a carrier-only result for a body
-      // the viewport already demanded.
-      const sticky: readonly BodyId[] = lastDemandRef.current ?? [];
-      const explicit: readonly BodyId[] =
+      // One-off rebuilds (previews, preflights, demo seeding, AI proposals)
+      // read lineage straight from the result, so they get full lineage by
+      // default. Only an explicit demand opts one into the idle skip.
+      const explicit: BodyId[] | undefined =
         lineageDemand === undefined
-          ? []
-          : lineageDemand instanceof Set
-            ? [...lineageDemand]
-            : [...lineageDemand];
-      const merged: BodyId[] = [...new Set<BodyId>([...sticky, ...explicit])].sort();
+          ? undefined
+          : [
+              ...new Set<BodyId>(
+                lineageDemand instanceof Set
+                  ? [...lineageDemand]
+                  : [...lineageDemand]
+              )
+            ].sort();
       const posted = postRequest(syncRequests.current, {
         type: 'sync',
         document: documentForWorker(document),
         ...(analysis ? { analysis } : {}),
-        ...(merged.length > 0 ? { lineageDemand: merged } : {})
+        ...(explicit ? { lineageDemand: explicit } : {})
       });
       return posted.ok
         ? posted.promise

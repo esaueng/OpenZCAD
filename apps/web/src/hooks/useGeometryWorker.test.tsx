@@ -473,9 +473,11 @@ describe('useGeometryWorker', () => {
       // The replacement owes the visible document a rebuild without waiting
       // for the next edit — the regression: a respawn used to sit idle.
       const second = FakeWorker.instances[1]!;
+      // The live broadcast always carries the (here empty) lineage demand.
       expect(second.postMessage).toHaveBeenCalledWith({
         type: 'sync',
-        document
+        document,
+        lineageDemand: []
       });
     });
 

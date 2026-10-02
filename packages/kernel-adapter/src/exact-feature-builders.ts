@@ -1628,7 +1628,10 @@ function buildBooleanFeature(
     lineage: deriveBooleanLineage({
       evidence:
         evolutionProbe !== null &&
-        booleanEvolutionProbeNeeded(document, feature, ctx.lineageDemand)
+        // No lineage demand means a caller that did not opt into the idle
+        // skip (exports, previews, seeding, tests): probe as always.
+        (ctx.lineageDemand === undefined ||
+          booleanEvolutionProbeNeeded(document, feature, ctx.lineageDemand))
           ? probeBooleanEntityEvolution({
               kernel,
               operation: evolutionProbe.operation,

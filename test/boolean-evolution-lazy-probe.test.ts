@@ -44,6 +44,11 @@ import {
   type RemusTopologyCandidate
 } from '../packages/kernel-adapter/src/remus-lineage';
 
+// The viewport's idle broadcast: it carries a (here empty) lineage demand,
+// which is what opts a sync into skipping the probe for unreferenced
+// booleans. A sync with no demand always probes.
+const IDLE_SYNC = { lineageDemand: [] as BodyId[] };
+
 /**
  * K05 follow-up: the two-operand boolean entity-evolution probe runs only
  * when something downstream could consume face/edge identity from the
@@ -293,7 +298,7 @@ describe('lazy boolean evolution probe', { timeout: 120_000 }, () => {
     const spy = vi.spyOn(evolutionModule, 'probeBooleanEntityEvolution');
     try {
       spy.mockClear();
-      const derived = await adapter.syncDocument(document);
+      const derived = await adapter.syncDocument(document, undefined, undefined, undefined, IDLE_SYNC);
       expect(derived.warnings).toEqual([]);
       expect(derived.bodyRepresentations[bodyId]).toBeDefined();
       expect(spy).not.toHaveBeenCalled();
@@ -311,7 +316,7 @@ describe('lazy boolean evolution probe', { timeout: 120_000 }, () => {
 
   it('runs the probe for a boolean followed by a fillet, unchanged', async () => {
     const { document, bodyId } = fusedPlateDocument();
-    const first = await adapter.syncDocument(document);
+    const first = await adapter.syncDocument(document, undefined, undefined, undefined, IDLE_SYNC);
     expect(first.warnings).toEqual([]);
     const { document: filleted, bodyId: roundedId } = filletOneEdge(
       document,
@@ -321,7 +326,7 @@ describe('lazy boolean evolution probe', { timeout: 120_000 }, () => {
     const spy = vi.spyOn(evolutionModule, 'probeBooleanEntityEvolution');
     try {
       spy.mockClear();
-      const derived = await adapter.syncDocument(filleted);
+      const derived = await adapter.syncDocument(filleted, undefined, undefined, undefined, IDLE_SYNC);
       expect(derived.warnings).toEqual([]);
       expect(derived.bodyRepresentations[roundedId]).toBeDefined();
       expect(spy.mock.calls.length).toBeGreaterThan(0);
@@ -348,7 +353,7 @@ describe('lazy boolean evolution probe', { timeout: 120_000 }, () => {
       const spy = vi.spyOn(evolutionModule, 'probeBooleanEntityEvolution');
       try {
         spy.mockClear();
-        const first = await caching.syncDocument(document);
+        const first = await caching.syncDocument(document, undefined, undefined, undefined, IDLE_SYNC);
         expect(first.warnings).toEqual([]);
         expect(spy).not.toHaveBeenCalled();
         const { document: filleted, bodyId: roundedId } = filletOneEdge(
@@ -357,7 +362,7 @@ describe('lazy boolean evolution probe', { timeout: 120_000 }, () => {
           bodyId
         );
         spy.mockClear();
-        const second = await caching.syncDocument(filleted);
+        const second = await caching.syncDocument(filleted, undefined, undefined, undefined, IDLE_SYNC);
         expect(second.warnings).toEqual([]);
         expect(second.bodyRepresentations[roundedId]).toBeDefined();
         expect(spy.mock.calls.length).toBeGreaterThan(0);
@@ -374,7 +379,7 @@ describe('lazy boolean evolution probe', { timeout: 120_000 }, () => {
     const spy = vi.spyOn(evolutionModule, 'probeBooleanEntityEvolution');
     try {
       spy.mockClear();
-      const carrierDerived = await adapter.syncDocument(document);
+      const carrierDerived = await adapter.syncDocument(document, undefined, undefined, undefined, IDLE_SYNC);
       expect(carrierDerived.warnings).toEqual([]);
       const carrierBody = carrierDerived.bodyRepresentations[bodyId]!;
       expect(carrierBody, 'pocket body').toBeDefined();
@@ -422,7 +427,7 @@ describe('lazy boolean evolution probe', { timeout: 120_000 }, () => {
         positionAnchor: 'centroid'
       });
       spy.mockClear();
-      const holed = await adapter.syncDocument(bored.document);
+      const holed = await adapter.syncDocument(bored.document, undefined, undefined, undefined, IDLE_SYNC);
       expect(holed.warnings).toEqual([]);
       expect(
         spy.mock.calls.length,
@@ -457,7 +462,7 @@ describe('lazy boolean evolution probe', { timeout: 120_000 }, () => {
         edgeHashes: [recordedEdgeHash],
         size: 1
       });
-      const finished = await adapter.syncDocument(rounded.document);
+      const finished = await adapter.syncDocument(rounded.document, undefined, undefined, undefined, IDLE_SYNC);
       expect(finished.warnings).toEqual([]);
       const eased = finished.bodyRepresentations[rounded.bodyId]!;
       expect(eased, 'fillet body').toBeDefined();

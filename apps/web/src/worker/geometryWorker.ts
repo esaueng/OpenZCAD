@@ -57,9 +57,11 @@ export type GeometryWorkerRequest =
       analysis?: EditAnalysisRequest;
       /**
        * Transient lineage demand: body ids whose producing booleans must
-       * probe. UI state only — never part of the document, never part of
-       * `canonicalProjectContentKey`, only of the rebuild cache key and the
-       * adapter's history digest.
+       * probe. Present (even empty) only on the viewport's idle broadcast,
+       * which opts into skipping the probe for unreferenced booleans; absent
+       * means full lineage. UI state only — never part of the document, never
+       * part of `canonicalProjectContentKey`, only of the rebuild cache key
+       * and the adapter's history digest.
        */
       lineageDemand?: BodyId[];
     }
@@ -679,8 +681,11 @@ async function execute(job: GeometryWorkerJob): Promise<void> {
       ? null
       : canonicalProjectContentKey(document);
     const lineageDemandKey =
-      request.type === 'sync' && request.lineageDemand?.length
-        ? `:demand:${JSON.stringify([...new Set(request.lineageDemand)].sort())}`
+      // A request carrying a demand (even an empty one) opted into the idle
+      // probe skip, so it must never share a cache entry with a full-lineage
+      // request that carries none.
+      request.type === 'sync' && request.lineageDemand !== undefined
+        ? `:lazy:${JSON.stringify([...new Set(request.lineageDemand)].sort())}`
         : '';
     const derived =
       contentKey === null
