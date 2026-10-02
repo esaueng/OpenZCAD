@@ -6,9 +6,11 @@ import {
   expect,
   expectBodyCount,
   expectConsumedBodyCount,
+  locateEdge,
   openAssistant,
   promptField,
   revealModelDrawer,
+  setSelectionFilter,
   shiftSelectTwoVisibleBoxEdges,
   stubApi,
   test
@@ -1721,6 +1723,55 @@ for (const modifier of [
     expect(consoleErrors).toEqual([]);
   });
 }
+
+/**
+ * A radius typed into the Fillet card that the kernel refuses used to leave
+ * the handle on the edge reading a plain "R 80 mm", as if the preview were
+ * good, while the refusal went only to the lane. The handle turns to its
+ * warning state and the card says why; a size that builds clears both.
+ */
+test('a refused fillet size marks the handle and says why in the card', async ({
+  page
+}) => {
+  await stubApi(page);
+  await page.goto('/');
+  await page.getByLabel('Project name').fill('Refused fillet');
+  await page.getByRole('button', { name: 'Create project' }).click();
+  await page.getByRole('button', { name: /^Box \(B\)/ }).click();
+  const inspector = page.getByRole('region', { name: 'Feature inspector' });
+  await inspector.getByRole('button', { name: /^Create/ }).click();
+  await expect(page.getByRole('button', { name: /^Fillet/ })).toBeEnabled({
+    timeout: 30_000
+  });
+
+  await page.getByRole('button', { name: /^Fillet/ }).click();
+  await setSelectionFilter(page, 'Edge');
+  const edge = await locateEdge(page);
+  await page.mouse.click(edge.x, edge.y);
+  await expect(inspector.locator('.selection-summary')).toContainText(
+    '1 exact edge selected'
+  );
+
+  const radius = inspector.getByRole('textbox', {
+    name: 'Radius',
+    exact: true
+  });
+  const chip = page.getByTestId('direct-manipulation-value');
+  // The default box is 30 × 18 × 24: no edge of it carries r80.
+  await radius.fill('80');
+  await expect(inspector.getByRole('alert')).toContainText(
+    'could not be created',
+    { timeout: 30_000 }
+  );
+  await expect(chip).toHaveAttribute('data-state', 'warning');
+  await expect(chip).toContainText('80');
+
+  await radius.fill('1');
+  await expect(inspector.getByRole('alert')).toHaveCount(0, {
+    timeout: 30_000
+  });
+  await expect(chip).toHaveAttribute('data-state', 'ready');
+});
 
 test('the armed fillet handle rounds every shift-selected edge, not just the last', async ({
   page
