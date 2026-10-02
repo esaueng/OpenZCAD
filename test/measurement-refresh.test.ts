@@ -80,6 +80,8 @@ function planarFace(
       surfaceType: 'plane',
       area: 100,
       center: { x: 5, y: 5, z },
+      centroid: { x: 5, y: 5, z },
+      centroidProvenance: 'exact' as const,
       normal: { x: 0, y: 0, z: 1 }
     }
   };

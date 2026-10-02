@@ -102,6 +102,8 @@ function measuredBody(): BodyRepresentation {
             surfaceType: 'plane',
             area: 200,
             center: { x: 5, y: 10, z: 30 },
+            centroid: { x: 5, y: 10, z: 30 },
+            centroidProvenance: 'exact' as const,
             normal: { x: 0, y: 0, z: 1 }
           }
         },
