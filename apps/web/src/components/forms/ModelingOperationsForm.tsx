@@ -10,6 +10,7 @@ import { ExprInput } from '../ExprInput';
 import { previewExpression } from '../../lib/model';
 import type { BodyOption } from './FeatureForms';
 import { holePositionLabels } from '../../lib/holePositionAxes';
+import { isPickListRow } from './pickListRow';
 import type { FormFacePick } from '../../lib/holeFacePick';
 import {
   buildModelingOperationSubmission,
@@ -759,7 +760,17 @@ export function ModelingOperationsForm({
     state.operation === 'helical-sweep';
 
   return (
-    <form className="feature-form" onSubmit={handleSubmit}>
+    <form
+      className="feature-form"
+      onSubmit={handleSubmit}
+      onKeyDown={(event) => {
+        // Enter on a face row submits (see `isPickListRow`).
+        if (event.key === 'Enter' && isPickListRow(event.target)) {
+          event.preventDefault();
+          event.currentTarget.requestSubmit();
+        }
+      }}
+    >
       <label className="field">
         <span>Name</span>
         <input
