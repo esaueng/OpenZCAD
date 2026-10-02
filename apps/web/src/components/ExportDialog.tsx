@@ -249,7 +249,11 @@ export function ExportDialog({
           Export mesh
         </h2>
         <p className="export-dialog-scope">
-          Exports {scopeLabel} in millimetres, ready for slicing.
+          {/* glTF fixes its own unit; the size is the same either way. */}
+          Exports {scopeLabel}{' '}
+          {format === 'glb'
+            ? 'in metres, the unit glTF defines.'
+            : 'in millimetres, ready for slicing.'}
         </p>
 
         <fieldset className="export-dialog-group">

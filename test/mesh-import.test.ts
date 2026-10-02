@@ -51,6 +51,54 @@ import {
 const user = toUserId('user_mesh_formats');
 const FORMATS: MeshImportFormat[] = ['3mf', 'obj', 'glb', 'ply'];
 
+/**
+ * A fixture point in model space. Every fixture describes the same box in its
+ * format's own convention; glTF's is metres with +Y up, which the import
+ * turns into millimetres with +Z up. The other formats declare no unit (or,
+ * for 3MF, millimetres) and are read as written.
+ */
+function toModel(
+  format: MeshImportFormat,
+  [x, y, z]: readonly [number, number, number]
+): [number, number, number] {
+  return format === 'glb' ? [x * 1000, -z * 1000, y * 1000] : [x, y, z];
+}
+
+/** The fixture's box from the origin to `max`, in model space, as bounds. */
+function modelBounds(
+  format: MeshImportFormat,
+  max: readonly [number, number, number]
+) {
+  const a = toModel(format, [0, 0, 0]);
+  const b = toModel(format, max);
+  const axis = (index: 0 | 1 | 2) => ({
+    min: Math.min(a[index], b[index]),
+    max: Math.max(a[index], b[index])
+  });
+  const [x, y, z] = [axis(0), axis(1), axis(2)];
+  return {
+    min: { x: x.min, y: y.min, z: z.min },
+    max: { x: x.max, y: y.max, z: z.max }
+  };
+}
+
+const volumeScale = (format: MeshImportFormat) =>
+  format === 'glb' ? 1000 ** 3 : 1;
+
+function expectBounds(
+  actual: {
+    min: { x: number; y: number; z: number };
+    max: { x: number; y: number; z: number };
+  },
+  expected: ReturnType<typeof modelBounds>
+) {
+  for (const corner of ['min', 'max'] as const) {
+    for (const axis of ['x', 'y', 'z'] as const) {
+      expect(actual[corner][axis]).toBeCloseTo(expected[corner][axis], 6);
+    }
+  }
+}
+
 function meshVolume(mesh: { vertices: number[]; indices: number[] }): number {
   return Math.abs(solidVolume(solidFromTriangles(mesh.vertices, mesh.indices)));
 }
@@ -119,7 +167,9 @@ describe('mesh file imports', { timeout: 30_000 }, () => {
       );
 
       expect(mesh.triangleCount).toBe(FIXTURE_BOX_TRIANGLES);
-      expect(mesh.sourceUnit).toBe(format === '3mf' ? 'millimeter' : undefined);
+      expect(mesh.sourceUnit).toBe(
+        format === '3mf' ? 'millimeter' : format === 'glb' ? 'meter' : undefined
+      );
       expect(mesh.indices.length).toBe(mesh.triangleCount * 3);
       expect(mesh.vertices.length % 3).toBe(0);
       expect(mesh.vertices.every(Number.isFinite)).toBe(true);
@@ -130,13 +180,27 @@ describe('mesh file imports', { timeout: 30_000 }, () => {
       ).toBe(true);
       // These expected values are the fixture contract, independent of the
       // generated variant builders in the support module.
-      expect(meshVolume(mesh)).toBeCloseTo(FIXTURE_BOX_VOLUME, 9);
-      expect(Math.min(...mesh.vertices.filter((_v, i) => i % 3 === 0))).toBe(0);
-      expect(Math.max(...mesh.vertices.filter((_v, i) => i % 3 === 0))).toBe(2);
-      expect(Math.min(...mesh.vertices.filter((_v, i) => i % 3 === 1))).toBe(0);
-      expect(Math.max(...mesh.vertices.filter((_v, i) => i % 3 === 1))).toBe(3);
-      expect(Math.min(...mesh.vertices.filter((_v, i) => i % 3 === 2))).toBe(0);
-      expect(Math.max(...mesh.vertices.filter((_v, i) => i % 3 === 2))).toBe(4);
+      expect(meshVolume(mesh) / volumeScale(format)).toBeCloseTo(
+        FIXTURE_BOX_VOLUME,
+        9
+      );
+      const along = (axis: number) =>
+        mesh.vertices.filter((_v, i) => i % 3 === axis);
+      expectBounds(
+        {
+          min: {
+            x: Math.min(...along(0)),
+            y: Math.min(...along(1)),
+            z: Math.min(...along(2))
+          },
+          max: {
+            x: Math.max(...along(0)),
+            y: Math.max(...along(1)),
+            z: Math.max(...along(2))
+          }
+        },
+        modelBounds(format, [FIXTURE_BOX.x, FIXTURE_BOX.y, FIXTURE_BOX.z])
+      );
     }
   );
 
@@ -188,13 +252,14 @@ describe('mesh file imports', { timeout: 30_000 }, () => {
       const derived = await adapter.syncDocument(reloaded!);
       expect(derived.warnings).toEqual([]);
       const body = derived.bodyRepresentations[imported.bodyId]!;
-      expect(body.volume).toBeCloseTo(FIXTURE_BOX_VOLUME, 6);
-      expect(body.bbox.min).toEqual({ x: 0, y: 0, z: 0 });
-      expect(body.bbox.max).toEqual({
-        x: FIXTURE_BOX.x,
-        y: FIXTURE_BOX.y,
-        z: FIXTURE_BOX.z
-      });
+      expect(body.volume / volumeScale(format)).toBeCloseTo(
+        FIXTURE_BOX_VOLUME,
+        6
+      );
+      expectBounds(
+        body.bbox,
+        modelBounds(format, [FIXTURE_BOX.x, FIXTURE_BOX.y, FIXTURE_BOX.z])
+      );
     }
   );
 
@@ -324,13 +389,18 @@ describe('mesh file imports', { timeout: 30_000 }, () => {
 
       const body = await rebuiltBody(adapter, `two ${format}`, mesh);
       expect(body.warnings).toEqual([]);
-      expect(body.volume).toBeCloseTo(FIXTURE_BOX_VOLUME * 2, 6);
-      expect(body.bbox!.min).toEqual({ x: 0, y: 0, z: 0 });
-      expect(body.bbox!.max).toEqual({
-        x: FIXTURE_OBJECT_PITCH + FIXTURE_BOX.x,
-        y: FIXTURE_BOX.y,
-        z: FIXTURE_BOX.z
-      });
+      expect(body.volume! / volumeScale(format)).toBeCloseTo(
+        FIXTURE_BOX_VOLUME * 2,
+        6
+      );
+      expectBounds(
+        body.bbox!,
+        modelBounds(format, [
+          FIXTURE_OBJECT_PITCH + FIXTURE_BOX.x,
+          FIXTURE_BOX.y,
+          FIXTURE_BOX.z
+        ])
+      );
     }
   );
 
