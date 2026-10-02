@@ -1039,6 +1039,18 @@
   color: var(--color-error);
 }
 
+/* Fully-defined rows agree with the "Fully constrained" pill and the green
+   viewport geometry. The pill text stays the authoritative signal; this tint
+   only repeats it. Never applied per entity on its own — App sets it for
+   every row exactly when the last solve proved the whole sketch defined. */
+.sketch-constraint-list li[data-defined='true'] {
+  color: var(--color-success);
+}
+
+.sketch-constraint-list li[data-defined='true'] .sketch-constraint-edit {
+  color: var(--color-success);
+}
+
 .sketch-constraint-edit {
   min-width: 0;
   flex: 1;
