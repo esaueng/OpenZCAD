@@ -168,6 +168,7 @@ import {
   sanitizeBinaryStl,
   sanitizeThreeMf
 } from './mesh-export-sanitize';
+import { tightenBoundsToMesh } from './exact-bounds';
 import {
   readMeshQuality,
   type BodyMeshQuality,
@@ -1503,6 +1504,9 @@ export class RemusKernelAdapter implements ExactKernelAdapter {
 
     for (const solid of shape.solids) {
       const bounds = kernel.boundingBox(solid);
+      // What the body publishes: the kernel's box, tightened to its display
+      // mesh where that proves it loose (see exact-bounds.ts).
+      let publishedBounds: readonly number[];
       const displayTessellation = displayTessellationForExtents(
         bounds[3]! - bounds[0]!,
         bounds[4]! - bounds[1]!,
@@ -1561,6 +1565,11 @@ export class RemusKernelAdapter implements ExactKernelAdapter {
         // the shifted index copy applies the body-scoped vertex offset in the
         // same pass.
         const positions = mesh.positions.slice();
+        publishedBounds = tightenBoundsToMesh(
+          bounds,
+          positions,
+          displayTessellation.linearDeflection
+        );
         const meshIndices = mesh.indices;
         const shifted = new Uint32Array(meshIndices.length);
         for (let i = 0; i < meshIndices.length; i += 1) {
@@ -1800,12 +1809,12 @@ export class RemusKernelAdapter implements ExactKernelAdapter {
 
       edgesDone?.();
       const volumeDone = onStage?.('Volume and validation');
-      bbox.min.x = Math.min(bbox.min.x, bounds[0]!);
-      bbox.min.y = Math.min(bbox.min.y, bounds[1]!);
-      bbox.min.z = Math.min(bbox.min.z, bounds[2]!);
-      bbox.max.x = Math.max(bbox.max.x, bounds[3]!);
-      bbox.max.y = Math.max(bbox.max.y, bounds[4]!);
-      bbox.max.z = Math.max(bbox.max.z, bounds[5]!);
+      bbox.min.x = Math.min(bbox.min.x, publishedBounds[0]!);
+      bbox.min.y = Math.min(bbox.min.y, publishedBounds[1]!);
+      bbox.min.z = Math.min(bbox.min.z, publishedBounds[2]!);
+      bbox.max.x = Math.max(bbox.max.x, publishedBounds[3]!);
+      bbox.max.y = Math.max(bbox.max.y, publishedBounds[4]!);
+      bbox.max.z = Math.max(bbox.max.z, publishedBounds[5]!);
       volume += kernel.volume(solid, MEASUREMENT_DEFLECTION);
       const relaxedErrors = kernel.validateSolidRelaxed(solid);
       valid = relaxedErrors === 0 && valid;

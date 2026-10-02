@@ -2,6 +2,7 @@ import type { BodyRepresentation } from '@openzcad/shared';
 import type { RemusKernel } from './remus-runtime';
 import type { ExactShape } from './exact-types';
 import { displayTessellationForExtents } from './display-tessellation';
+import { tightenBoundsToMesh } from './exact-bounds';
 
 /** A bounded, disposable upstream display. No topology, validation or exports. */
 export function projectShapeMesh(
@@ -18,7 +19,8 @@ export function projectShapeMesh(
     max: { x: -Infinity, y: -Infinity, z: -Infinity }
   };
   for (const solid of shape.solids) {
-    const b = kernel.boundingBox(solid);
+    const kernelBounds = kernel.boundingBox(solid);
+    let b: readonly number[] = Array.from(kernelBounds);
     const tess = displayTessellationForExtents(
       b[3]! - b[0]!,
       b[4]! - b[1]!,
@@ -43,6 +45,7 @@ export function projectShapeMesh(
       )
         throw new Error('Upstream display exceeds its memory budget.');
       const positions = sourcePositions.slice();
+      b = tightenBoundsToMesh(kernelBounds, positions, tess.linearDeflection);
       const shifted = new Uint32Array(sourceIndices.length);
       for (let i = 0; i < shifted.length; i++)
         shifted[i] = sourceIndices[i]! + vertexCount / 3;

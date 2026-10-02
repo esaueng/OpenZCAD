@@ -133,8 +133,12 @@ describe('growing-holder assistant proposal', { timeout: 300_000 }, () => {
       preflight.candidate.derived.bodyRepresentations[
         preflight.candidate.derived.exportableBodyIds[0]!
       ]!;
-    expect(holder.bbox.min.x).toBeCloseTo(-0.5, 6);
-    expect(holder.bbox.max.x).toBeCloseTo(60.5, 6);
+    // The holder's own extent, as its exported STL measures it. These read
+    // −0.5 and 60.5 while the published box took the kernel's, which bounds
+    // each rounded edge's partial cylinder face by its whole circle (QA
+    // CAD-02; exact-bounds.ts).
+    expect(holder.bbox.min.x).toBeCloseTo(0, 6);
+    expect(holder.bbox.max.x).toBeCloseTo(60, 6);
 
     // The applied recipe is ordinary history: the opening grows by parameter.
     const grown = setParameter(preflight.candidate, {
@@ -145,8 +149,8 @@ describe('growing-holder assistant proposal', { timeout: 300_000 }, () => {
     expect(derived.warnings).toEqual([]);
     const grownHolder =
       derived.bodyRepresentations[derived.exportableBodyIds[0]!]!;
-    expect(grownHolder.bbox.min.x).toBeCloseTo(-8.5, 6);
-    expect(grownHolder.bbox.max.x).toBeCloseTo(68.5, 6);
+    expect(grownHolder.bbox.min.x).toBeCloseTo(-8, 6);
+    expect(grownHolder.bbox.max.x).toBeCloseTo(68, 6);
   });
 
   it('refuses an opening the digest did not measure', () => {
@@ -270,8 +274,10 @@ describe('growing-holder assistant proposal', { timeout: 300_000 }, () => {
       const derived = await adapter.syncDocument(grown);
       expect(derived.warnings).toEqual([]);
       const result = derived.bodyRepresentations[history.resultBodyId]!;
-      expect(result.bbox.min.y).toBeCloseTo(34.5 - (width - 44) / 2, 6);
-      expect(result.bbox.max.y).toBeCloseTo(95.5 + (width - 44) / 2, 6);
+      // The geometry's extent; 34.5 and 95.5 were the kernel's loose box
+      // (see the first test).
+      expect(result.bbox.min.y).toBeCloseTo(35 - (width - 44) / 2, 6);
+      expect(result.bbox.max.y).toBeCloseTo(95 + (width - 44) / 2, 6);
       for (const axis of ['x', 'z'] as const) {
         expect(result.bbox.min[axis]).toBeCloseTo(initial.bbox.min[axis], 6);
         expect(result.bbox.max[axis]).toBeCloseTo(initial.bbox.max[axis], 6);
