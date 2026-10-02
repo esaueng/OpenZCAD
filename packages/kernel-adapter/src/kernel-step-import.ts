@@ -93,6 +93,8 @@ export function readStepImportReport(raw: unknown): StepImportReport {
 }
 
 export interface StepImportOutcome {
+  /** Exact arena bytes already produced by the translator, reusable without serialization. */
+  document: Uint8Array;
   /** Kernel solid handles, empty when the file declared no solid roots. */
   solids: Uint32Array;
   report: StepImportReport;
@@ -129,6 +131,7 @@ export function importStepWithOwnBudget(
     result.free();
   }
   return {
+    document,
     solids:
       document.length === 0
         ? new Uint32Array()

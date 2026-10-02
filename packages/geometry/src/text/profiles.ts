@@ -7,6 +7,7 @@
  * keyed by everything that can change the geometry.
  */
 import { glyphLoops } from './contours';
+import { requireTextBudget } from './budget';
 import { glyphTransform, layoutText } from './layout';
 import { mergeBounds, point } from './loops';
 import { assembleRegions } from './nesting';
@@ -40,6 +41,7 @@ export function buildTextProfileSet(
   request: TextRequest,
   options: TextProfileOptions = {}
 ): TextProfileSet {
+  requireTextBudget(request.text);
   const size = requireFiniteSize(request.size);
   const flattenTolerance =
     size * (options.flattenToleranceRatio ?? DEFAULT_FLATTEN_TOLERANCE_RATIO);
@@ -165,6 +167,8 @@ export function textProfileSet(
   request: TextRequest,
   options: TextProfileOptions = {}
 ): TextProfileSet {
+  // Reject before serializing a cache key or looking up any glyphs.
+  requireTextBudget(request.text);
   const cache = cacheFor(options.polygonUnion2d);
   const key = cacheKey(loaded, request, options);
   const hit = cache.get(key);

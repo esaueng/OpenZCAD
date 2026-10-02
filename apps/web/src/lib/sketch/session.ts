@@ -662,6 +662,62 @@ interface SnapSegment {
   b: SketchPoint;
 }
 
+/** Work and allocation bounds for synchronous, pointer-consumed snap data. */
+export const SKETCH_SNAP_LIMITS = {
+  objects: 1024,
+  segments: 512,
+  pairs: 65_536,
+  targets: 8192,
+  objectIdLength: 256
+} as const;
+
+export class SketchSnapLimitError extends RangeError {
+  readonly budget: keyof typeof SKETCH_SNAP_LIMITS;
+
+  constructor(budget: keyof typeof SKETCH_SNAP_LIMITS) {
+    const label = {
+      objects: 'sketch objects',
+      segments: 'line and rectangle segments',
+      pairs: 'segment pairs',
+      targets: 'snap targets',
+      objectIdLength: 'object ID characters'
+    }[budget];
+    super(
+      `Geometry snapping is unavailable: this sketch exceeds the limit of ${SKETCH_SNAP_LIMITS[budget]} ${label}. Origin and grid snapping remain available. Reduce sketch complexity to restore geometry snapping.`
+    );
+    this.budget = budget;
+    this.name = 'SketchSnapLimitError';
+  }
+}
+
+/** Refuse before parameter evaluation, allocation, or the quadratic pair loop. */
+function checkSketchSnapInput(
+  objects: readonly { id: string; data: SketchObjectData }[]
+): void {
+  if (objects.length > SKETCH_SNAP_LIMITS.objects) {
+    throw new SketchSnapLimitError('objects');
+  }
+  let segments = 0;
+  for (const object of objects) {
+    if (object.id.length > SKETCH_SNAP_LIMITS.objectIdLength) {
+      throw new SketchSnapLimitError('objectIdLength');
+    }
+    segments +=
+      object.data.objectKind === 'line'
+        ? 1
+        : object.data.objectKind === 'rectangle'
+          ? 4
+          : 0;
+    if (segments > SKETCH_SNAP_LIMITS.segments) {
+      throw new SketchSnapLimitError('segments');
+    }
+  }
+  // Include skipped same-object pairs: the loop still visits those pairs.
+  if ((segments * (segments - 1)) / 2 > SKETCH_SNAP_LIMITS.pairs) {
+    throw new SketchSnapLimitError('pairs');
+  }
+}
+
 function snapSegmentsForObject(
   id: string,
   data: SketchObjectData,
@@ -737,12 +793,20 @@ export function collectSketchSnapTargets(
   objects: readonly { id: string; data: SketchObjectData }[],
   resolve: (value: unknown) => number
 ): SnapTarget[] {
+  checkSketchSnapInput(objects);
   const targets: SnapTarget[] = [
     { id: 'sketch-origin', x: 0, y: 0, kind: 'origin' }
   ];
+  const appendTargets = (candidates: SnapTarget[]): void => {
+    if (targets.length + candidates.length > SKETCH_SNAP_LIMITS.targets) {
+      // Refuse the whole collection; a partial result changes snap semantics.
+      throw new SketchSnapLimitError('targets');
+    }
+    targets.push(...candidates);
+  };
   const segments: SnapSegment[] = [];
   for (const object of objects) {
-    targets.push(...snapTargetsForObject(object.data, resolve, object.id));
+    appendTargets(snapTargetsForObject(object.data, resolve, object.id));
     segments.push(...snapSegmentsForObject(object.id, object.data, resolve));
   }
   for (let first = 0; first < segments.length; first += 1) {
@@ -754,11 +818,13 @@ export function collectSketchSnapTargets(
       }
       const point = segmentIntersection(segments[first]!, segments[second]!);
       if (point) {
-        targets.push({
-          id: `intersection:${segments[first]!.id}:${segments[second]!.id}`,
-          ...point,
-          kind: 'intersection'
-        });
+        appendTargets([
+          {
+            id: `intersection:${segments[first]!.id}:${segments[second]!.id}`,
+            ...point,
+            kind: 'intersection'
+          }
+        ]);
       }
     }
   }
