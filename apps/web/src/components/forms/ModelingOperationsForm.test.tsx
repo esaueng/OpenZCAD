@@ -527,4 +527,93 @@ describe('Hole position', () => {
     expect(screen.getAllByRole('alert')).toHaveLength(1);
     expect(onSubmit).not.toHaveBeenCalled();
   });
+
+  it('says why the viewport draws no bore under the position fields', () => {
+    const props = {
+      operation: 'hole' as const,
+      scope: {},
+      bodies,
+      faceOptions: [topFace],
+      onPreflight: vi.fn(),
+      onSubmit: vi.fn()
+    };
+    const view = render(<ModelingOperationsForm {...props} />);
+    fireEvent.click(screen.getByRole('button', { name: 'Top face' }));
+    view.rerender(
+      <ModelingOperationsForm
+        {...props}
+        holePreviewNotice="No preview — the hole points away from the body."
+      />
+    );
+    const notice = screen.getByText(
+      'No preview — the hole points away from the body.'
+    );
+    expect(notice.closest('fieldset')).toHaveTextContent(
+      'Position on face (from centre)'
+    );
+    // Advisory: it does not stop the exact check from being asked.
+    expect(screen.getByRole('button', { name: 'Create hole' })).toBeEnabled();
+  });
+
+  it('lets the exact refusal replace the preview notice', async () => {
+    render(
+      <ModelingOperationsForm
+        operation="hole"
+        scope={{}}
+        bodies={bodies}
+        faceOptions={[topFace]}
+        holePreviewNotice="This position misses the body."
+        onPreflight={async () => ({
+          status: 'refused',
+          reason: 'The hole removed no material — it misses the body.'
+        })}
+        onSubmit={vi.fn()}
+      />
+    );
+    fireEvent.click(screen.getByRole('button', { name: 'Top face' }));
+    fireEvent.click(screen.getByRole('button', { name: 'Create hole' }));
+    expect(await screen.findByRole('alert')).toHaveTextContent(
+      'Not created — The hole removed no material — it misses the body.'
+    );
+    expect(
+      screen.queryByText('This position misses the body.')
+    ).not.toBeInTheDocument();
+  });
+
+  it('hands the viewport the widest tool and nothing for a size that cannot drill', () => {
+    const onHoleDraftChange = vi.fn();
+    render(
+      <ModelingOperationsForm
+        operation="hole"
+        scope={{}}
+        bodies={bodies}
+        faceOptions={[topFace]}
+        onPreflight={vi.fn()}
+        onSubmit={vi.fn()}
+        onHoleDraftChange={onHoleDraftChange}
+      />
+    );
+    fireEvent.click(screen.getByRole('button', { name: 'Top face' }));
+    fireEvent.change(screen.getByLabelText('Diameter'), {
+      target: { value: '5' }
+    });
+    fireEvent.change(screen.getByLabelText('Style'), {
+      target: { value: 'counterbore' }
+    });
+    fireEvent.change(screen.getByLabelText('Counterbore diameter'), {
+      target: { value: '11' }
+    });
+    expect(onHoleDraftChange).toHaveBeenLastCalledWith(
+      expect.objectContaining({ diameter: 5, outerDiameter: 11 })
+    );
+    // The form's own line refuses a zero diameter; the viewport stays empty
+    // rather than adding a second message.
+    fireEvent.change(screen.getByLabelText('Diameter'), {
+      target: { value: '0' }
+    });
+    expect(onHoleDraftChange).toHaveBeenLastCalledWith(null);
+    expect(
+      screen.getByText('Hole diameter must resolve to a positive value.')
+    ).toBeInTheDocument();
+  });
 });

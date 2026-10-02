@@ -1043,7 +1043,7 @@ import {
   affectedFeatureTargets,
   type AffectedFeatureTarget
 } from './lib/affectedFeatureTargets';
-import { holeGhost, type HoleGhost } from './lib/holeGhost';
+import { holePreview, type HolePreview } from './lib/holeGhost';
 import type { HoleDraft } from './components/forms/ModelingOperationsForm';
 import { extrudeSketchGuidance } from './lib/extrudeGuidance';
 import {
@@ -1837,7 +1837,7 @@ export function App() {
   const holeGhostCache = useRef<{
     key: string;
     body: unknown;
-    ghost: HoleGhost | null;
+    preview: HolePreview;
   } | null>(null);
   const [modelingEditFeature, setModelingEditFeature] =
     useState<FeatureNode | null>(null);
@@ -16685,13 +16685,13 @@ export function App() {
     modelingTargetBody?.topology,
     modelingTargetBody
   );
-  const holeGhostShape = ((): HoleGhost | null => {
+  const holePreviewState = ((): HolePreview | null => {
     if (modelingOperation !== 'hole' || !holeDraft) return null;
     const body = representations[holeDraft.targetBodyId];
     const key = JSON.stringify(holeDraft);
     const cached = holeGhostCache.current;
     if (cached && cached.key === key && cached.body === body) {
-      return cached.ghost;
+      return cached.preview;
     }
     const face = body?.topology?.faces.find(
       (candidate) => candidate.hash === holeDraft.faceHash
@@ -16700,29 +16700,32 @@ export function App() {
       modelingEditFeature?.data.featureKind === 'hole'
         ? modelingEditFeature.data.positionAnchor
         : undefined;
-    const ghost =
-      body && face?.geometry
-        ? holeGhost({
-            face: face.geometry,
-            // The anchor the submission will carry: a new hole measures from
-            // the area centroid when the face reports one; an edited hole
-            // keeps the anchor it was drilled against.
-            anchor: modelingEditFeature
-              ? editedAnchor === 'centroid'
-                ? 'centroid'
-                : 'center'
-              : face.geometry.centroid
-                ? 'centroid'
-                : 'center',
-            u: holeDraft.u,
-            v: holeDraft.v,
-            diameter: holeDraft.diameter,
-            depth: holeDraft.depth,
-            bodyPositions: body.mesh.vertices
-          })
-        : null;
-    holeGhostCache.current = { key, body, ghost };
-    return ghost;
+    // No representation yet (a rebuild in flight) is not a refusal: wait.
+    const preview: HolePreview | null = body
+      ? holePreview({
+          // A face the body no longer has is said so; one without measured
+          // geometry is refused as not a planar entry face.
+          face: face ? (face.geometry ?? {}) : null,
+          // The anchor the submission will carry: a new hole measures from
+          // the area centroid when the face reports one; an edited hole
+          // keeps the anchor it was drilled against.
+          anchor: modelingEditFeature
+            ? editedAnchor === 'centroid'
+              ? 'centroid'
+              : 'center'
+            : face?.geometry?.centroid
+              ? 'centroid'
+              : 'center',
+          u: holeDraft.u,
+          v: holeDraft.v,
+          diameter: holeDraft.diameter,
+          outerDiameter: holeDraft.outerDiameter,
+          depth: holeDraft.depth,
+          bodyPositions: body.mesh.vertices
+        })
+      : null;
+    if (preview) holeGhostCache.current = { key, body, preview };
+    return preview;
   })();
   const modelingOperationFaces =
     modelingOperation === 'draft' || modelingOperation === 'hole'
@@ -17644,7 +17647,7 @@ export function App() {
             onHoverRegion={handleHoverRegion}
             planePickerArmed={!modelingLocked && tool === 'sketch'}
             planePickerOffset={sketchPlaneOffset}
-            holeGhost={holeGhostShape}
+            holeGhost={holePreviewState?.ghost ?? null}
             onPickPlane={startSketchOnPlane}
             onMeasurePreview={
               modelingLocked && measuring ? previewMeasurement : null
@@ -18218,6 +18221,7 @@ export function App() {
                       onPreflight={preflightModelingSubmission}
                       onSubmit={submitModelingOperation}
                       onHoleDraftChange={setHoleDraft}
+                      holePreviewNotice={holePreviewState?.notice ?? null}
                       onCancel={cancelPanel}
                       onTargetBodyChange={(bodyId) => {
                         modelingPreflightRef.current = null;
