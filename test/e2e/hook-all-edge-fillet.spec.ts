@@ -218,9 +218,13 @@ test('manual All-edges fillet finishes the STEP-imported hook (49 physical edges
   );
 
   // Cancel an edit: reopen, change, then Escape; the committed 0.5 mm geometry
-  // and history survive.
+  // and history survive. Escape first so a still-open edit form cannot be
+  // toggled shut by the row click on slower machines.
+  await page.keyboard.press('Escape');
   await filletRow.locator('.feature-row-main').click();
-  await expect(inspector.getByLabel('Radius', { exact: true })).toHaveValue('0.5');
+  await expect(inspector.getByLabel('Radius', { exact: true })).toHaveValue('0.5', {
+    timeout: 30_000
+  });
   await inspector.getByLabel('Radius', { exact: true }).fill('0.7');
   await page.keyboard.press('Escape');
   await expect
@@ -233,7 +237,11 @@ test('manual All-edges fillet finishes the STEP-imported hook (49 physical edges
   // Oversized radius: typed refusal, geometry/history unchanged. The History
   // form keeps Apply enabled and reports the kernel refusal in place (the
   // chip path disables Apply instead); either way nothing commits.
+  await page.keyboard.press('Escape');
   await filletRow.locator('.feature-row-main').click();
+  await expect(inspector.getByLabel('Radius', { exact: true })).toHaveValue('0.5', {
+    timeout: 30_000
+  });
   await inspector.getByLabel('Radius', { exact: true }).fill('10');
   await expect(inspector).toContainText(/Try a smaller radius|Failed|refus/i, {
     timeout: 120_000
