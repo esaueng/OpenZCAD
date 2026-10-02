@@ -125,6 +125,12 @@ import {
   type StrictUnionVerdicts
 } from './exact-build-loop';
 import {
+  isBuildCancelled,
+  throwIfBuildCancelled,
+  type BuildCancellationSignal
+} from './exact-cancellation';
+export type { BuildCancellationSignal } from './exact-cancellation';
+import {
   countFaceHandles,
   resolveDirectEditFace
 } from './exact-direct-edit-ops';
@@ -514,7 +520,13 @@ export interface ExactKernelAdapter {
     document: ProjectDocument,
     onProgress?: RebuildProgressListener,
     onProjection?: (derived: DerivedState) => void,
-    analysis?: EditAnalysisRequest
+    analysis?: EditAnalysisRequest,
+    /**
+     * Cooperative cancel for a superseded rebuild. Checked after the
+     * pre-build awaits and at each feature boundary; a fired signal rejects
+     * with the typed `cancelled` refusal and commits nothing.
+     */
+    options?: { cancellation?: BuildCancellationSignal }
   ): Promise<DerivedState>;
   /** Epoch of the most recent live sync, or null after its handles were retired. */
   currentMassPropertiesEpoch(): number | null;
@@ -1000,7 +1012,8 @@ export class RemusKernelAdapter implements ExactKernelAdapter {
     importSources: ReadonlyMap<string, Uint8Array>,
     pinnedImports: ReadonlySet<string>,
     onProgress?: RebuildProgressListener,
-    onProjection?: (derived: DerivedState) => void
+    onProjection?: (derived: DerivedState) => void,
+    cancellation?: BuildCancellationSignal
   ): {
     kernel: RemusKernel;
     build: ExactBuildResult;
@@ -1288,11 +1301,18 @@ export class RemusKernelAdapter implements ExactKernelAdapter {
                   result
                 )
             }
-          : undefined
+          : undefined,
+        cancellation
       );
     } catch (error) {
-      // All callers (including export and recognition) must abandon both
-      // halves of a partially built cache if checkpointing or replay throws.
+      // A cancelled build keeps the retained prefix: the checkpoints pushed
+      // before the throw are a consistent longer prefix for the next sync,
+      // and the partial result is discarded with the throw. All callers
+      // (including export and recognition) must abandon both halves of a
+      // partially built cache if checkpointing or replay throws otherwise.
+      if (isBuildCancelled(error)) {
+        throw error;
+      }
       this.invalidateHistoryCache();
       throw error;
     }
@@ -1828,13 +1848,16 @@ export class RemusKernelAdapter implements ExactKernelAdapter {
     document: ProjectDocument,
     onProgress?: RebuildProgressListener,
     onProjection?: (derived: DerivedState) => void,
-    analysis?: EditAnalysisRequest
+    analysis?: EditAnalysisRequest,
+    options?: { cancellation?: BuildCancellationSignal }
   ): Promise<DerivedState> {
     return this.syncMeasuredDocument(
       document,
       onProgress,
       onProjection,
-      analysis
+      analysis,
+      true,
+      options?.cancellation
     );
   }
 
@@ -1843,7 +1866,8 @@ export class RemusKernelAdapter implements ExactKernelAdapter {
     onProgress?: RebuildProgressListener,
     onProjection?: (derived: DerivedState) => void,
     analysis?: EditAnalysisRequest,
-    allowRecovery = true
+    allowRecovery = true,
+    cancellation?: BuildCancellationSignal
   ): Promise<DerivedState> {
     if (
       analysis &&
@@ -1865,6 +1889,9 @@ export class RemusKernelAdapter implements ExactKernelAdapter {
       await loadRemusTranslators();
     }
     sourcesDone();
+    // A newer edit may have arrived while the awaits above yielded: stop a
+    // superseded rebuild before it burns worker time, with the typed cancel.
+    throwIfBuildCancelled(cancellation);
     // The history kernel outlives this call on purpose — its checkpoints are
     // what the next sync restores. On ANY throw the whole cache is dropped:
     // a failed sync must never leave a table the next sync would trust.
@@ -1884,7 +1911,8 @@ export class RemusKernelAdapter implements ExactKernelAdapter {
         sources,
         pinned,
         onProgress,
-        onProjection
+        onProjection,
+        cancellation
       );
       historyDone();
       const bodies = listNodesByKind(document, 'body');
@@ -2178,6 +2206,13 @@ export class RemusKernelAdapter implements ExactKernelAdapter {
         featureWarnings: build.featureWarnings
       };
     } catch (error) {
+      // Cancellation is not a failure to recover from: it commits nothing —
+      // no measured shapes, no mass snapshot, no cache event — and rethrows
+      // typed, so the last valid model stays and a stale result can never
+      // overwrite a newer one.
+      if (isBuildCancelled(error)) {
+        throw error;
+      }
       this.invalidateHistoryCache();
       if (allowRecovery && error instanceof HistoryCacheIntegrityError) {
         return this.syncMeasuredDocument(
@@ -2185,7 +2220,8 @@ export class RemusKernelAdapter implements ExactKernelAdapter {
           onProgress,
           onProjection,
           analysis,
-          false
+          false,
+          cancellation
         );
       }
       throw error;
