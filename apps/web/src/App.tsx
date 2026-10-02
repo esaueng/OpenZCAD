@@ -12,10 +12,7 @@ import type {
   ParameterPreviewBody,
   parameterVisualPreview
 } from './lib/parameterVisualPreview';
-import {
-  latestTransferredProjectDocument,
-  retainPreviousAccountProject
-} from './lib/projectIdentityTransfer';
+import type { AdoptLocalProjectResult } from './lib/projectIdentityTransfer';
 import { LatestTask } from './lib/latestTask';
 import { rebuildProgressLabel } from './lib/rebuildProgressLabel';
 import { featureHistory } from './lib/featureHistory';
@@ -97,7 +94,6 @@ import {
   normalizeDocument,
   normalizeDocumentHistory,
   repairedDirectEditOperation,
-  reidentifyProjectDocument,
   resolveParamValue,
   restoreFromSaveState,
   staleDirectEditFaceRepair,
@@ -222,7 +218,6 @@ import type { SketchSolveStatus } from './components/SketchToolRail';
 import { ApiError, api, isProjectDocumentUnavailableError } from './lib/api';
 import {
   applyAccountSourceArchives,
-  archiveAccountImportSources,
   sourceUploadMessage
 } from './lib/accountImportSources';
 import {
@@ -1017,8 +1012,6 @@ import {
   listLocalSaveStateIds,
   loadLastSyncedVersion,
   loadLocalProject,
-  LocalProjectIdentityConflictError,
-  rekeyLocalProject,
   loadLocalSaveState,
   loadProjectMeasurements,
   loadProjectThumbnail,
@@ -1104,7 +1097,6 @@ import {
   clearActiveProject,
   loadActiveProjectId,
   rememberActiveProject,
-  rekeyWorkspaceProject,
   type ViewportCameraState
 } from './lib/workspaceSession';
 import {
@@ -1206,10 +1198,6 @@ const DISPLAY_MODE_ORDER: DisplayMode[] = [
   'shaded',
   'wireframe'
 ];
-
-type AdoptLocalProjectResult =
-  | { state: 'adopted' | 'already-adopted' | 'missing'; sourceWarning?: string }
-  | { state: 'conflict'; conflict: ProjectConflict };
 
 interface OffsetEditPlan {
   command: AnyCommand;
@@ -7509,244 +7497,26 @@ export function App() {
     return merged;
   }
 
-  async function finishAccountSourceSave(
-    document: ProjectDocument,
-    local: ProjectDocument,
-    summary: ProjectSummary = summarizeLocalDocument(document)
-  ): Promise<string | undefined> {
-    const projectId = document.projectId;
-    // Account creation establishes the upload destination. Source bytes must
-    // follow before the new account copy can be rebuilt on another device.
-    setStatus('Saving project source files to your account…');
-    const prepared = await archiveAccountImportSources(document, {
-      loadSourceBytes: loadSourceBlob,
-      archive: (input) =>
-        archiveArtifactBody(api, document.projectId, input, (artifact) => {
-          if (managerRef.current?.document.projectId === projectId)
-            setArtifacts((current) => [
-              artifact,
-              ...current.filter(
-                (item) => item.artifactId !== artifact.artifactId
-              )
-            ]);
-        })
-    });
-    let saved = document;
-    let localForAcceptance = local;
-    if (prepared.document !== document) {
-      // Keep completed upload metadata if the account write fails. Never
-      // replace edits made while the source transfers were in flight.
-      const current = managerRef.current;
-      const live = current?.document;
-      const durable =
-        live?.projectId === projectId
-          ? live
-          : await loadLocalProject(projectId);
-      if (!durable || durable.version === local.version) {
-        await saveLocalProject(prepared.document);
-        if (
-          managerRef.current === current &&
-          !cloudProjectIds.has(projectId) &&
-          current?.document.projectId === projectId &&
-          current.document.version === local.version
-        ) {
-          current.document = prepared.document;
-          localForAcceptance = prepared.document;
-          setDoc(prepared.document);
-        }
-      }
-      const stored = await api.saveProjectDocument({
-        projectId: prepared.document.projectId,
-        expectedVersion: document.version,
-        document: withoutDerivedProjection(prepared.document)
-      });
-      saved = { ...prepared.document, version: stored.version };
-    }
-    await acceptAccountDocument(saved, localForAcceptance, {
-      ...summary,
-      documentVersion: saved.version
-    });
-    return sourceUploadMessage(prepared.result) ?? undefined;
-  }
-
-  /** Moves this device's existing work to the account's acknowledged identity. */
-  async function transferAdoptedProjectIdentity(
-    local: ProjectDocument,
-    remote: ProjectDocument
-  ): Promise<ProjectDocument> {
-    if (local.projectId === remote.projectId) return local;
-    const sourceId = local.projectId;
-    const withAccountOwner = (document: ProjectDocument): ProjectDocument => ({
-      ...document,
-      ownerUserId: remote.ownerUserId,
-      ...(document.editHistory
-        ? {
-            editHistory: {
-              ...document.editHistory,
-              actorUserId: remote.ownerUserId
-            }
-          }
-        : {})
-    });
-    const withAccountIdentity = (document: ProjectDocument): ProjectDocument =>
-      withAccountOwner(reidentifyProjectDocument(document, remote.projectId));
-    const current = managerRef.current?.document;
-    const transferred = await rekeyLocalProject(
-      withAccountOwner(current?.projectId === sourceId ? current : local),
-      remote.projectId,
-      {
-        retainSource: retainPreviousAccountProject(
-          local,
-          localUserId,
-          remote.ownerUserId
-        )
-      }
-    );
-    // The transaction's awaits may overlap another edit in this tab. Transfer
-    // the live manager after commit so those edits retain their exact history.
-    const latestManager = managerRef.current;
-    if (latestManager?.document.projectId === sourceId) {
-      const moved = latestTransferredProjectDocument(
-        transferred,
-        latestManager.document
-      );
-      latestManager.document = moved;
-      setDoc(moved);
-      await saveLocalProject(moved);
-    }
-    const retainedSource =
-      (await loadLocalProject(sourceId))?.projectId === sourceId;
-    rekeyWorkspaceProject(
-      sourceId,
-      remote.projectId,
-      undefined,
-      retainedSource
-    );
-    remoteVersionsRef.current.delete(sourceId);
-    setProjects((projects) =>
-      projects.map((project) =>
-        project.projectId === sourceId
-          ? { ...project, projectId: remote.projectId }
-          : project
-      )
-    );
-    setArtifacts((artifacts) =>
-      artifacts.map((artifact) =>
-        artifact.projectId === sourceId
-          ? { ...artifact, projectId: remote.projectId }
-          : artifact
-      )
-    );
-    return withAccountIdentity(local);
-  }
-
   /** Saves one device project and reconciles retry responses against its account ID. */
   async function adoptLocalProject(
     projectId: string
   ): Promise<AdoptLocalProjectResult> {
-    const local = await loadLocalProject(projectId);
-    if (!local) {
-      return { state: 'missing' };
-    }
-    try {
-      const response = await api.adoptProject(local);
-      const accountLocal = await transferAdoptedProjectIdentity(
-        local,
-        response.document
-      );
-      return {
-        state: 'adopted',
-        sourceWarning: await finishAccountSourceSave(
-          response.document,
-          accountLocal,
-          response.project
-        )
-      };
-    } catch (error) {
-      if (error instanceof LocalProjectIdentityConflictError) {
-        return {
-          state: 'conflict',
-          conflict: conflictFromDocuments(error.local, error.account, 'account')
-        };
-      }
-      if (error instanceof ApiError && error.code === 'ALREADY_ADOPTED') {
-        const accountProjectId =
-          typeof error.details?.projectId === 'string'
-            ? error.details.projectId
-            : projectId;
-        const remote = await api.loadProject(accountProjectId);
-        let accountLocal: ProjectDocument;
-        try {
-          accountLocal = await transferAdoptedProjectIdentity(local, remote);
-        } catch (transferError) {
-          if (transferError instanceof LocalProjectIdentityConflictError)
-            return {
-              state: 'conflict',
-              conflict: conflictFromDocuments(
-                transferError.local,
-                transferError.account,
-                'account'
-              )
-            };
-          throw transferError;
-        }
-        const lastSyncedVersion = await loadLastSyncedVersion(accountProjectId);
-        remoteVersionsRef.current.set(accountProjectId, remote.version);
-        setCloudProjectIds((current) => new Set(current).add(accountProjectId));
-        const outcome = chooseProjectDocument(
-          accountLocal,
-          remote,
-          lastSyncedVersion
-        );
-        if (outcome.choice === 'diverged') {
-          return {
-            state: 'conflict',
-            conflict: conflictFromDocuments(
-              outcome.local,
-              outcome.remote,
-              'account'
-            )
-          };
-        }
-        if (outcome.choice === 'remote') {
-          return {
-            state: 'already-adopted',
-            sourceWarning: await finishAccountSourceSave(
-              outcome.document,
-              accountLocal
-            )
-          };
-        }
-        if (outcome.choice === 'local') {
-          // The baseline proves only this device moved. Complete the interrupted
-          // sync with a fenced document write rather than asking the user to
-          // resolve a conflict that does not exist.
-          const candidate = {
-            ...outcome.document,
-            ownerUserId: remote.ownerUserId
-          };
-          const saved = await api.saveProjectDocument({
-            projectId: candidate.projectId,
-            expectedVersion: remote.version,
-            document: withoutDerivedProjection(candidate)
-          });
-          const sourceWarning = await finishAccountSourceSave(
-            {
-              ...candidate,
-              version: saved.version,
-              derived: {
-                ...candidate.derived,
-                updatedAt: saved.updatedAt
-              }
-            },
-            accountLocal
-          );
-          return { state: 'already-adopted', sourceWarning };
-        }
-        return { state: 'missing' };
-      }
-      throw error;
-    }
+    // Loaded on demand: only saving a device project to the account gets here.
+    const { adoptLocalProject: adopt } =
+      await import('./lib/projectIdentityTransfer');
+    return adopt(projectId, {
+      localUserId,
+      manager: () => managerRef.current,
+      setDoc,
+      remoteVersions: remoteVersionsRef.current,
+      setProjects,
+      setArtifacts,
+      setCloudProjectIds,
+      cloudProjectIds,
+      setStatus,
+      summarize: summarizeLocalDocument,
+      acceptAccountDocument
+    });
   }
 
   async function handleSaveToAccount(

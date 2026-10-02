@@ -8,13 +8,9 @@ import {
   type ProjectDocument,
   type ProjectOrganization,
   type ProjectSummary,
-  toProjectId,
   type RevisionId
 } from '@openzcad/shared';
-import {
-  reidentifyProjectDocument,
-  withoutDerivedProjection
-} from '@openzcad/document-core';
+import { withoutDerivedProjection } from '@openzcad/document-core';
 import type { StoredMeasurementRecord } from './measurementRecord';
 import type { SourceBlobClaim } from './sourceBlobClaims';
 import {
@@ -26,9 +22,12 @@ import {
   LOCAL_PROJECT_DOCUMENT_STORE
 } from './localProjectSchema';
 
-const BACKUP_STORE_NAME = 'projectBackupFiles';
-const ALIAS_STORE_NAME = 'projectIdentityAliases';
-const ACCOUNT_IDENTITY_STORE_NAME = 'accountProjectIdentities';
+// The store names and transaction helpers marked `export` below exist for
+// `projectIdentityTransfer.ts`, which holds the account identity transfer.
+// That rare path is loaded on demand so it stays out of the entry chunk.
+export const BACKUP_STORE_NAME = 'projectBackupFiles';
+export const ALIAS_STORE_NAME = 'projectIdentityAliases';
+export const ACCOUNT_IDENTITY_STORE_NAME = 'accountProjectIdentities';
 
 const DATABASE_NAME = LOCAL_PROJECT_DATABASE_NAME;
 const STORE_NAME = LOCAL_PROJECT_DOCUMENT_STORE;
@@ -38,7 +37,7 @@ const STORE_NAME = LOCAL_PROJECT_DOCUMENT_STORE;
  * document synced from another device must not drag this device's arrangement
  * along with it.
  */
-const META_STORE_NAME = 'projectMeta';
+export const META_STORE_NAME = 'projectMeta';
 /**
  * The version this device and the account last agreed on, per project. Kept in
  * its own store rather than beside the shelf state: the two answer different
@@ -46,7 +45,7 @@ const META_STORE_NAME = 'projectMeta';
  * the account's copy of the shelf would let one device's baseline travel to
  * another, where it would be a lie.
  */
-const SYNC_STORE_NAME = 'projectSync';
+export const SYNC_STORE_NAME = 'projectSync';
 /**
  * Import source bytes (STEP text today), keyed by content checksum rather than
  * by project: the same uploaded file referenced from two projects is stored
@@ -72,7 +71,7 @@ const CLAIM_STORE_NAME = LOCAL_PROJECT_CLAIM_STORE;
  * (and the machine) down and leave the user unable to reach their own projects.
  * Written while the project is open, where the meshes are already in memory.
  */
-const THUMBNAIL_STORE_NAME = 'projectThumbnails';
+export const THUMBNAIL_STORE_NAME = 'projectThumbnails';
 /**
  * The handful of document fields the shelf actually draws, projected out of
  * each document when it is saved.
@@ -90,7 +89,7 @@ const THUMBNAIL_STORE_NAME = 'projectThumbnails';
  * document projection into a record that travels would make it a lie on the
  * other side, exactly as it would for the sync baseline.
  */
-const SUMMARY_STORE_NAME = 'projectSummaries';
+export const SUMMARY_STORE_NAME = 'projectSummaries';
 /**
  * Measurements taken in View mode, per project.
  *
@@ -106,7 +105,7 @@ const SUMMARY_STORE_NAME = 'projectSummaries';
  * shelf state is this device's arrangement and gets merged with the account's
  * copy, while this is work the user did to the part.
  */
-const MEASUREMENT_STORE_NAME = 'projectMeasurements';
+export const MEASUREMENT_STORE_NAME = 'projectMeasurements';
 /**
  * Save-state documents, so restoring one does not require the account.
  *
@@ -185,7 +184,7 @@ interface ProjectSyncRecord {
  * metadata is copied from that checkpoint so the row can describe itself
  * without opening the document it holds.
  */
-interface ProjectCheckpointDocumentRecord {
+export interface ProjectCheckpointDocumentRecord {
   projectId: string;
   checkpointId: string;
   revisionId: RevisionId;
@@ -439,7 +438,7 @@ export function ensureLocalProjectStorage(): Promise<LocalStorageReadiness> {
 }
 
 /** Settles when one request inside an open transaction has its result. */
-function settled<T>(request: IDBRequest<T>): Promise<T> {
+export function settled<T>(request: IDBRequest<T>): Promise<T> {
   return new Promise((resolve, reject) => {
     request.onsuccess = () => resolve(request.result);
     request.onerror = () =>
@@ -472,7 +471,7 @@ function settled<T>(request: IDBRequest<T>): Promise<T> {
  *   per transaction is one leaked per autosave and one per shelf read, and it
  *   stays invisible until some future schema version cannot upgrade past it.
  */
-function scopedTransaction<T>(
+export function scopedTransaction<T>(
   mode: IDBTransactionMode,
   storeNames: readonly string[],
   action: (store: (name: string) => IDBObjectStore) => Promise<T>
@@ -857,18 +856,7 @@ export class LocalProjectIdentityChangedError extends Error {
   }
 }
 
-/** Both local copies survive until the existing conflict flow chooses a side. */
-export class LocalProjectIdentityConflictError extends Error {
-  constructor(
-    readonly local: ProjectDocument,
-    readonly account: ProjectDocument
-  ) {
-    super('This device has different work under the account project identity.');
-    this.name = 'LocalProjectIdentityConflictError';
-  }
-}
-
-async function resolvedProjectId(
+export async function resolvedProjectId(
   aliases: IDBObjectStore,
   projectId: string
 ): Promise<string> {
@@ -909,198 +897,6 @@ function projectTransaction<T>(
       if (mode === 'readwrite' && resolved !== projectId)
         throw new LocalProjectIdentityChangedError(resolved);
       return settled(action(store(storeName), resolved));
-    }
-  );
-}
-
-/** Moves the same local model and companion records in one durable transaction. */
-export function rekeyLocalProject(
-  source: ProjectDocument,
-  targetProjectId: string,
-  options: { retainSource?: boolean } = {}
-): Promise<ProjectDocument> {
-  if (source.projectId === targetProjectId) return Promise.resolve(source);
-  const singleStores = [
-    META_STORE_NAME,
-    SYNC_STORE_NAME,
-    THUMBNAIL_STORE_NAME,
-    MEASUREMENT_STORE_NAME,
-    ACCOUNT_IDENTITY_STORE_NAME
-  ];
-  return scopedTransaction(
-    'readwrite',
-    [
-      STORE_NAME,
-      SUMMARY_STORE_NAME,
-      BACKUP_STORE_NAME,
-      CHECKPOINT_STORE_NAME,
-      ALIAS_STORE_NAME,
-      ACCOUNT_IDENTITY_STORE_NAME,
-      ...singleStores
-    ],
-    async (store) => {
-      const sourceId = source.projectId;
-      const resolved = await resolvedProjectId(
-        store(ALIAS_STORE_NAME),
-        sourceId
-      );
-      if (resolved !== sourceId) {
-        if (resolved !== targetProjectId)
-          throw new LocalProjectIdentityChangedError(resolved);
-        const existing = (await settled(
-          store(STORE_NAME).get(targetProjectId)
-        )) as ProjectDocument | undefined;
-        if (!existing) throw new Error('Moved local project is unavailable.');
-        return existing;
-      }
-      const target = (await settled(store(STORE_NAME).get(targetProjectId))) as
-        ProjectDocument | undefined;
-      const preserveSource =
-        options.retainSource === true ||
-        Boolean(
-          await settled(store(ACCOUNT_IDENTITY_STORE_NAME).count(sourceId))
-        );
-      const stored = (await settled(store(STORE_NAME).get(sourceId))) as
-        ProjectDocument | undefined;
-      // The live manager may be ahead of its debounced autosave; an already
-      // durable later edit must win over an older network snapshot as well.
-      const latest =
-        stored && stored.version > source.version ? stored : source;
-      const reidentified = reidentifyProjectDocument(
-        latest,
-        toProjectId(targetProjectId)
-      );
-      const moved = {
-        ...reidentified,
-        ownerUserId: source.ownerUserId,
-        ...(reidentified.editHistory && source.editHistory
-          ? {
-              editHistory: {
-                ...reidentified.editHistory,
-                actorUserId: source.editHistory.actorUserId
-              }
-            }
-          : {})
-      };
-      if (
-        target &&
-        !projectMatchesInterruptedAdoption(moved, target) &&
-        !projectPreservesLocalWork(moved, target)
-      ) {
-        throw new LocalProjectIdentityConflictError(moved, target);
-      }
-      const durable = target ? withMatchingLocalDerived(target, moved) : moved;
-      store(STORE_NAME).put(durable);
-      if (preserveSource) {
-        const retained = {
-          ...latest,
-          ownerUserId: stored?.ownerUserId ?? latest.ownerUserId,
-          ...(latest.editHistory
-            ? {
-                editHistory: {
-                  ...latest.editHistory,
-                  actorUserId:
-                    stored?.editHistory?.actorUserId ??
-                    latest.editHistory.actorUserId
-                }
-              }
-            : {})
-        };
-        store(STORE_NAME).put(retained);
-        store(SUMMARY_STORE_NAME).put(summarizeProjectDocument(retained));
-      } else store(STORE_NAME).delete(sourceId);
-      store(SUMMARY_STORE_NAME).put(summarizeProjectDocument(durable));
-      if (!preserveSource) store(SUMMARY_STORE_NAME).delete(sourceId);
-      for (const name of singleStores) {
-        const record = (await settled(store(name).get(sourceId))) as
-          { projectId: string } | undefined;
-        const existing: unknown = target
-          ? await settled(store(name).get(targetProjectId))
-          : undefined;
-        if (record && !(preserveSource && name === SYNC_STORE_NAME)) {
-          let companion: unknown = { ...record, projectId: targetProjectId };
-          if (existing && name === MEASUREMENT_STORE_NAME) {
-            const sourceMeasurements = record as StoredMeasurementRecord;
-            const targetMeasurements = existing as StoredMeasurementRecord;
-            if (
-              sourceMeasurements.version !== 1 ||
-              targetMeasurements.version !== 1
-            )
-              throw new Error(
-                'Reload to update before transferring stored measurements.'
-              );
-            const sourceIsNewer =
-              sourceMeasurements.updatedAt > targetMeasurements.updatedAt;
-            const measurements = new Map<
-              string,
-              StoredMeasurementRecord['measurements'][number]
-            >();
-            for (const entry of (sourceIsNewer
-              ? targetMeasurements
-              : sourceMeasurements
-            ).measurements)
-              measurements.set(entry.id, entry);
-            for (const entry of (sourceIsNewer
-              ? sourceMeasurements
-              : targetMeasurements
-            ).measurements)
-              measurements.set(entry.id, entry);
-            companion = {
-              ...(sourceIsNewer ? sourceMeasurements : targetMeasurements),
-              projectId: targetProjectId,
-              measurements: [...measurements.values()]
-            };
-          } else if (existing && name !== META_STORE_NAME) companion = existing;
-          store(name).put(companion);
-        }
-        if (!preserveSource) store(name).delete(sourceId);
-      }
-      const files = (await settled(store(BACKUP_STORE_NAME).get(sourceId))) as
-        BackupFile[] | undefined;
-      if (files) {
-        const existing = (await settled(
-          store(BACKUP_STORE_NAME).get(targetProjectId)
-        )) as BackupFile[] | undefined;
-        const combined = new Map<string, BackupFile>();
-        for (const file of [...files, ...(existing ?? [])])
-          combined.set(`${file.artifact.artifactId}:${file.sha256}`, {
-            ...file,
-            artifact: {
-              ...file.artifact,
-              projectId: toProjectId(targetProjectId)
-            }
-          });
-        store(BACKUP_STORE_NAME).put([...combined.values()], targetProjectId);
-      }
-      if (!preserveSource) store(BACKUP_STORE_NAME).delete(sourceId);
-      const checkpoints = (await settled(
-        store(CHECKPOINT_STORE_NAME).getAll(checkpointKeyRange(sourceId))
-      )) as ProjectCheckpointDocumentRecord[];
-      for (const checkpoint of checkpoints) {
-        if (
-          await settled(
-            store(CHECKPOINT_STORE_NAME).count([
-              targetProjectId,
-              checkpoint.checkpointId
-            ])
-          )
-        )
-          continue;
-        store(CHECKPOINT_STORE_NAME).put({
-          ...checkpoint,
-          projectId: targetProjectId,
-          document: reidentifyProjectDocument(
-            checkpoint.document,
-            toProjectId(targetProjectId)
-          )
-        });
-      }
-      if (!preserveSource) {
-        store(CHECKPOINT_STORE_NAME).delete(checkpointKeyRange(sourceId));
-        store(ALIAS_STORE_NAME).put({ projectId: sourceId, targetProjectId });
-      }
-      store(ACCOUNT_IDENTITY_STORE_NAME).put({ projectId: targetProjectId });
-      return durable;
     }
   );
 }
@@ -1237,7 +1033,7 @@ async function pruneSaveStates(
  * string, so the pair spans exactly this project's rows whichever of the two
  * the second component holds.
  */
-function checkpointKeyRange(projectId: string): IDBKeyRange {
+export function checkpointKeyRange(projectId: string): IDBKeyRange {
   return IDBKeyRange.bound([projectId], [projectId, []]);
 }
 

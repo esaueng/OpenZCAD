@@ -12,7 +12,6 @@ import { toProjectId, toUserId } from '@openzcad/shared';
 import {
   ensureLocalProjectStorage,
   saveLocalProject,
-  rekeyLocalProject,
   loadLocalProject,
   listLocalProjects,
   saveLocalProjectOrganization,
@@ -31,11 +30,12 @@ import {
   putSourceBlobIfAbsent,
   loadSourceBlob,
   deleteLocalProject,
-  LocalProjectIdentityChangedError,
-  LocalProjectIdentityConflictError
+  LocalProjectIdentityChangedError
 } from './localProjectStore';
 import {
   latestTransferredProjectDocument,
+  LocalProjectIdentityConflictError,
+  rekeyLocalProject,
   retainPreviousAccountProject
 } from './projectIdentityTransfer';
 import {
