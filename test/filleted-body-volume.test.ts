@@ -232,7 +232,7 @@ describe('a filleted body', () => {
     it('measures a box with a THROUGH BORE exactly — 7 faces, cylinder + plane', async () => {
       // The tightest control in the file. Same face count as the filleted box,
       // same surface types, also a boolean result, also carrying an analytic
-      // quadric — and exact to the last bit. Whatever the filleted body is
+      // quadric — and exact to round-off (≤ 2 ulp). Whatever the filleted body is
       // missing, it is not "an exact path for cylinders and planes"; one
       // exists and this body reaches it.
       adapter ??= await createExactKernelAdapter();
@@ -258,7 +258,15 @@ describe('a filleted body', () => {
         targetBodyIds: [outer, bore]
       }).document;
       const { volume, faces, surfaces, warnings } = await measure(doc);
-      expect(volume).toBe(8000 - Math.PI * 16 * 20);
+      // Exact to round-off. The closed form is written as the kernel
+      // integrates it; the body-local integration reference (Remus B78,
+      // esaueng/remus#895) sums the same terms about the body's bbox centre
+      // instead of the origin, which is 1 ulp (9e-13) from the double
+      // `8000 - Math.PI * 16 * 20` happens to round to. 2 ulp is what the
+      // same body reads when it is merely moved, on every Remus revision.
+      const exact = 8000 - Math.PI * 16 * 20;
+      const ulp = 2 ** (Math.floor(Math.log2(exact)) - 52);
+      expect(Math.abs(volume - exact)).toBeLessThanOrEqual(2 * ulp);
       expect(faces).toBe(7);
       expect(surfaces).toEqual(new Set(['cylinder', 'plane']));
       expect(warnings).toEqual([]);
