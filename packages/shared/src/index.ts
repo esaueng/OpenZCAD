@@ -1,5 +1,6 @@
 export * from './workspace-resume';
 export * from './document-history';
+export * from './mass-density';
 import type { DocumentHistory } from './document-history';
 export type Brand<T, Name extends string> = T & { readonly __brand: Name };
 
@@ -2078,7 +2079,7 @@ export interface FeatureWarning {
    * a second one beside it.
    */
   kernelRefusal?: {
-    family: 'boolean' | 'validation' | 'healing' | 'import';
+    family: 'boolean' | 'validation' | 'healing' | 'import' | 'blend';
     operation?: string;
     category: string;
     code: string;
@@ -2176,6 +2177,7 @@ export interface ArtifactRecord {
     | '3mf-export'
     | 'obj-export'
     | 'gltf-export'
+    | 'ply-export'
     | 'snapshot'
     | 'thumbnail';
   name: string;
