@@ -260,7 +260,12 @@ function revolutionEndpoints(
     ) {
       return [];
     }
-    const edgeDomain = Array.from(kernel.getEdgeCurveParameters(edge));
+    // The trimmed span, not the raw curve domain: for a partial arc the raw
+    // domain covers the whole underlying circle, while the span covers the
+    // edge's own trim. This site is gated to closed circle edges, where both
+    // cover one full period and the four-sample mean below is identical, so
+    // the switch is correctness-by-contract (Remus B16 trimmed-domain exit).
+    const edgeDomain = Array.from(kernel.getEdgeParamSpan(edge));
     if (edgeDomain.length !== 2 || !edgeDomain.every(Number.isFinite)) {
       return [];
     }
