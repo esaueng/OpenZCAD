@@ -189,6 +189,15 @@ export function ExtrudeForm({
               : undefined
           }
         />
+        {!distanceEdited && distance.ok && distance.value === 0 ? (
+          // Before the first edit the zero is the starting value, not a
+          // mistake, so it is not shown in red; but a dim Create with no
+          // reason anywhere read as a broken button.
+          <p className="muted">
+            Enter a distance other than 0, or drag the arrow, to enable{' '}
+            {submitLabel}.
+          </p>
+        ) : null}
         <button
           type="button"
           onClick={() =>

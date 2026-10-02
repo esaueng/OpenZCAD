@@ -203,3 +203,33 @@ describe('shared extrusion editor', () => {
     expect(screen.getByText(/Distance cannot be zero/)).toBeTruthy();
   });
 });
+
+describe('zero-distance extrude', () => {
+  it('says why Create is disabled before the first edit, then turns red only after one', async () => {
+    const user = userEvent.setup();
+    render(
+      <ExtrudeForm
+        {...base}
+        creating
+        initial={{ name: 'Extrude', sketchId, distance: 0 }}
+        submitLabel="Create"
+        onSubmit={vi.fn()}
+        onCancel={vi.fn()}
+      />
+    );
+    expect(screen.getByRole('button', { name: 'Create' })).toBeDisabled();
+    expect(
+      screen.getByText(
+        'Enter a distance other than 0, or drag the arrow, to enable Create.'
+      )
+    ).toBeInTheDocument();
+
+    const input = screen.getByRole('textbox', { name: 'Distance' });
+    await user.clear(input);
+    await user.type(input, '12');
+    expect(
+      screen.queryByText(/Enter a distance other than 0/)
+    ).not.toBeInTheDocument();
+    expect(screen.getByRole('button', { name: 'Create' })).toBeEnabled();
+  });
+});
