@@ -1806,6 +1806,13 @@ export function App() {
   /** The fillet/chamfer form's current size, mirrored onto the edge handle. */
   const [edgeFormSize, setEdgeFormSize] = useState<number | null>(null);
   /**
+   * The card's typed fillet/chamfer size did not build in preview. The handle
+   * on the edge kept showing "R 5 mm" like any good value while the only word
+   * of the refusal was in the lane, so it is carried to the handle's warning
+   * state and to the card.
+   */
+  const [edgeFormPreviewRefused, setEdgeFormPreviewRefused] = useState(false);
+  /**
    * A fillet that just landed from an edge drag: its new blend face is picked
    * on the next topology so the radius stays live instead of the gesture
    * ending with nothing to grab.
@@ -3117,6 +3124,13 @@ export function App() {
               warning ??
                 (valid ? null : 'This extrusion did not produce a valid body.')
             );
+          } else if (edgeFormCandidate.current) {
+            setEdgeFormPreviewRefused(!valid);
+            setFeatureFormError(
+              valid
+                ? null
+                : (warning ?? 'This size did not produce a valid body.')
+            );
           }
           setStatus(
             warning ??
@@ -3129,7 +3143,12 @@ export function App() {
       onFailure: ({ error }) => {
         setPreviewDoc(null);
         const message = errorMessage(error, 'Unable to preview this size.');
-        if (edgeFormCandidate.current?.extrude) setFeatureFormError(message);
+        if (edgeFormCandidate.current?.extrude) {
+          setFeatureFormError(message);
+        } else if (edgeFormCandidate.current) {
+          setEdgeFormPreviewRefused(true);
+          setFeatureFormError(message);
+        }
         setStatus(message);
       },
       // The form stays open after release, so its latest value must catch up.
@@ -3140,6 +3159,7 @@ export function App() {
   useEffect(() => {
     edgeFormPreview.clear();
     edgeFormCandidate.current = null;
+    setEdgeFormPreviewRefused(false);
     return () => edgeFormPreview.clear();
   }, [
     edgeFormPreview,
@@ -3154,6 +3174,8 @@ export function App() {
     kind: 'fillet' | 'chamfer',
     value: EdgeModifierFormValue | null
   ) {
+    // A new value has not been refused yet.
+    setEdgeFormPreviewRefused(false);
     if (!value || geometryBusy) {
       edgeFormPreview.clear();
       setEdgeFormSize(null);
@@ -17416,7 +17438,9 @@ export function App() {
             }}
             onOffsetCancel={handleOffsetCancel}
             offsetPreviewInvalid={
-              isOperationState(interaction) && interaction.phase === 'failed'
+              (isOperationState(interaction) &&
+                interaction.phase === 'failed') ||
+              edgeFormPreviewRefused
             }
             previewDeferred={previewDeferred}
             onOpenOffsetKeypad={handleOpenOffsetKeypad}
