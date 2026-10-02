@@ -16456,6 +16456,12 @@ export function App() {
   // dropped: the entity editor, keypad and rail render in the same branch
   // and must stay.
   const hideSketchToolCard = interaction.mode === 'sketch';
+  // An edge picked for the Fillet or Chamfer tool arms the same operation the
+  // tool's own card is creating. Its "Fillet · Ready" chip above that card
+  // said the same thing twice, with a second set of verbs; the card and the
+  // handle on the edge are enough.
+  const toolFormOwnsEdgePick =
+    (tool === 'fillet' || tool === 'chamfer') && interaction.mode === 'edges';
 
   // View mode writes its own hints rather than filtering the build chain below.
   // Selecting a cylinder still arms the radius interaction even with its handle
@@ -17257,15 +17263,13 @@ export function App() {
             onCycleDisplayMode={cycleDisplayMode}
             onToggleProjection={toggleProjection}
           />
-        ) : interaction.mode === 'sketch' ? null : tool === 'sketch' ? ( // stayed mounted and live beside it once the plane was picked. // The sketch session brings its own tool rail; the modeling palette
-          <div className="direct-mode-strip">
-            <PenLine size={16} aria-hidden="true" />
-            <strong>Editing Sketch: {editingSketchName}</strong>
-            <span>
-              Closed profiles fill as they form · Finish Sketch preserves edits
-            </span>
-          </div>
-        ) : tool === 'extrude' ? (
+        ) : // The sketch session brings its own tool rail. Before it, while
+        // the plane is being picked, the plane chooser in the command slot
+        // is the only instruction: an "Editing Sketch: New Sketch" strip
+        // here named a sketch that did not exist yet (the old floating
+        // chooser had been drawn over it).
+        interaction.mode === 'sketch' || tool === 'sketch' ? null : tool ===
+          'extrude' ? (
           <div className="direct-mode-strip extrude-mode">
             <Layers3 size={16} aria-hidden="true" />
             <strong>Direct extrude</strong>
@@ -17781,54 +17785,6 @@ export function App() {
                   hideRotation={movePreview.target === 'sketch'}
                   liveSnapRef={moveSnapSetterRef}
                 />
-              ) : tool === 'sketch' ? (
-                <div className="sketch-plane-prompt" role="status">
-                  <span>
-                    <strong>Pick a sketch plane</strong>
-                    <small>
-                      Click a planar face on the model, or start on a principal
-                      plane.
-                    </small>
-                  </span>
-                  <label className="sketch-plane-offset">
-                    <span>Offset</span>
-                    <input
-                      type="number"
-                      step="any"
-                      value={sketchPlaneOffsetText}
-                      aria-label="Sketch plane offset"
-                      onChange={(event) =>
-                        setSketchPlaneOffsetText(event.target.value)
-                      }
-                    />
-                    <span className="sketch-plane-offset-units">
-                      {doc.units}
-                    </span>
-                  </label>
-                  <span className="sketch-plane-buttons">
-                    {(['XY', 'XZ', 'YZ'] as const).map((plane) => (
-                      <button
-                        key={plane}
-                        type="button"
-                        onClick={() => startSketchOnPlane(plane)}
-                      >
-                        {PLANE_LABELS[plane]}
-                      </button>
-                    ))}
-                    <button
-                      type="button"
-                      className="sketch-plane-dismiss"
-                      aria-label="Cancel sketch"
-                      title="Cancel sketch (Esc)"
-                      onClick={() => {
-                        cancelPanel();
-                        setStatus('Sketch canceled · no plane was chosen.');
-                      }}
-                    >
-                      ×
-                    </button>
-                  </span>
-                </div>
               ) : null
             }
             projection={projection}
@@ -17898,7 +17854,7 @@ export function App() {
       // when no plane prompt, Move or revert pill is up.
       command={
         modelingLocked ? null : contextualToolCard ? (
-          hideSketchToolCard ? null : (
+          hideSketchToolCard || toolFormOwnsEdgePick ? null : (
             <ToolCard
               model={contextualToolCard}
               selectAllEdges={
@@ -18067,9 +18023,55 @@ export function App() {
             liveValuesRef={moveValuesSetterRef}
             liveSnapRef={moveSnapSetterRef}
           />
-        ) : tool !== 'sketch' &&
-          selectedProfiles.length > 0 &&
-          selectedSketchProfileName ? (
+        ) : tool === 'sketch' ? (
+          // The plane chooser is a command card like any other. It floated
+          // over the viewport's top edge, where the mode toggle and, at
+          // 1024 px, the project name drew over its title and its ×.
+          <div className="sketch-plane-prompt" role="status">
+            <span>
+              <strong>Pick a sketch plane</strong>
+              <small>
+                Click a planar face on the model, or start on a principal plane.
+              </small>
+            </span>
+            <label className="sketch-plane-offset">
+              <span>Offset</span>
+              <input
+                type="number"
+                step="any"
+                value={sketchPlaneOffsetText}
+                aria-label="Sketch plane offset"
+                onChange={(event) =>
+                  setSketchPlaneOffsetText(event.target.value)
+                }
+              />
+              <span className="sketch-plane-offset-units">{doc.units}</span>
+            </label>
+            <span className="sketch-plane-buttons">
+              {(['XY', 'XZ', 'YZ'] as const).map((plane) => (
+                <button
+                  key={plane}
+                  type="button"
+                  onClick={() => startSketchOnPlane(plane)}
+                >
+                  {PLANE_LABELS[plane]}
+                </button>
+              ))}
+              <button
+                type="button"
+                className="sketch-plane-dismiss"
+                aria-label="Cancel sketch"
+                title="Cancel sketch (Esc)"
+                onClick={() => {
+                  cancelPanel();
+                  setStatus('Sketch canceled · no plane was chosen.');
+                }}
+              >
+                ×
+              </button>
+            </span>
+          </div>
+        ) : selectedProfiles.length > 0 && selectedSketchProfileName ? (
           <ProfileQuickAction
             profileName={selectedSketchProfileName}
             profileCount={selectedProfiles.length}
@@ -18083,6 +18085,7 @@ export function App() {
           />
         ) : null
       }
+      inspectorOwnsLane={tool !== null && tool !== 'sketch'}
       inspector={
         inspectorActive ? (
           <ErrorBoundary
