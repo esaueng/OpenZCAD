@@ -144,6 +144,8 @@ export interface GeometryWorkerApi {
       face?: DxfFaceSelector;
       /** The other 'dxf' source: the plane whose exact section to export. */
       section?: ExactSectionPlane;
+      /** The third 'dxf' source: the saved sketch whose geometry to export. */
+      sketchId?: SketchId;
       signal?: AbortSignal;
       onState?(state: GeometryWorkerState): void;
     }
@@ -747,6 +749,9 @@ export function useGeometryWorker(host: GeometryWorkerHost): GeometryWorkerApi {
           ...(options?.face !== undefined ? { face: options.face } : {}),
           ...(options?.section !== undefined
             ? { section: options.section }
+            : {}),
+          ...(options?.sketchId !== undefined
+            ? { sketchId: options.sketchId }
             : {})
         });
       });
