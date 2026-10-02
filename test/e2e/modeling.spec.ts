@@ -1696,6 +1696,11 @@ for (const modifier of [
     await expect(inspector.locator('.selection-summary')).toContainText(
       '2 exact edges selected'
     );
+    // The tool's card is the one surface for the command: the edge
+    // operation's "Ready" chip no longer stands above it saying the same.
+    await expect(
+      page.getByRole('region', { name: /^(Fillet|Chamfer) operation$/ })
+    ).toHaveCount(0);
     await inspector.getByRole('button', { name: /^Create/ }).click();
 
     const feature = page.locator('.feature-row', {
@@ -1703,6 +1708,15 @@ for (const modifier of [
     });
     await expect(feature).toBeVisible();
     await expect(feature.getByTitle('Feature failed to build')).toHaveCount(0);
+    // The pick armed an edge operation; creating the feature disarms it.
+    // Its "Ready" card and its lane instructions used to stay up over the
+    // finished edge, and even follow the user into their next project.
+    await expect(
+      page.getByRole('region', { name: /^(Fillet|Chamfer) operation$/ })
+    ).toHaveCount(0);
+    await expect(page.getByRole('contentinfo')).not.toContainText(
+      /Drag the handle to set the (fillet|chamfer)/
+    );
     await expect(page.getByRole('contentinfo')).toContainText('warnings0');
     expect(consoleErrors).toEqual([]);
   });
@@ -3053,11 +3067,18 @@ test('exports a 3MF package through the mesh export dialog', async ({
   });
 
   const fileMenu = page.locator('details.file-menu');
+  // Escape closes the File menu like any other menu.
+  await fileMenu.locator('summary').click();
+  await expect(fileMenu).toHaveAttribute('open', '');
+  await page.keyboard.press('Escape');
+  await expect(fileMenu).not.toHaveAttribute('open', '');
   await fileMenu.locator('summary').click();
   await fileMenu.getByRole('button', { name: /Export Mesh/ }).click();
 
   const dialog = page.getByRole('dialog', { name: /Export mesh/ });
   await expect(dialog).toBeVisible();
+  // Choosing an item closes the menu: it stayed open under the dialog.
+  await expect(fileMenu).not.toHaveAttribute('open', '');
 
   // The printability check runs the real kernel and names the body.
   await dialog.getByRole('button', { name: /Check watertightness/ }).click();

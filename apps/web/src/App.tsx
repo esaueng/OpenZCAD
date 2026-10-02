@@ -201,6 +201,7 @@ import {
 import {
   lazyWithStaleChunkNotice,
   onStaleChunk,
+  watchPreloadErrors,
   STALE_CHUNK_MESSAGE
 } from './lib/staleChunk';
 import { watchBuildVersion } from './lib/buildVersionWatch';
@@ -739,6 +740,11 @@ const LazySaveRevisionDialog = lazyWithStaleChunkNotice(() =>
     default: module.SaveRevisionDialog
   }))
 );
+const LazyDeleteFeatureDialog = lazyWithStaleChunkNotice(() =>
+  import('./components/DeleteFeatureDialog').then((module) => ({
+    default: module.DeleteFeatureDialog
+  }))
+);
 const LazyProjectConflictDialog = lazyWithStaleChunkNotice(() =>
   import('./components/ProjectConflictDialog').then((module) => ({
     default: module.ProjectConflictDialog
@@ -901,6 +907,16 @@ function SaveRevisionDialog(
   );
 }
 
+function DeleteFeatureDialog(
+  props: ComponentProps<typeof LazyDeleteFeatureDialog>
+) {
+  return (
+    <Suspense fallback={null}>
+      <LazyDeleteFeatureDialog {...props} />
+    </Suspense>
+  );
+}
+
 function ProjectConflictDialog(
   props: ComponentProps<typeof LazyProjectConflictDialog>
 ) {
@@ -1027,6 +1043,7 @@ import {
   affectedFeatureTargets,
   type AffectedFeatureTarget
 } from './lib/affectedFeatureTargets';
+import { extrudeSketchGuidance } from './lib/extrudeGuidance';
 import {
   countLabel,
   deleteFeatureToastMessage,
@@ -1153,6 +1170,9 @@ const BEFORE_RESTORE_REASON = 'Before restore';
  * one is its own gesture (Ctrl+Shift+S).
  */
 const DEFAULT_SAVE_REASON = 'Manual save';
+/** Said once per session after a selection box that caught nothing. */
+const EMPTY_BOX_SELECT_HINT =
+  'Nothing in the box. A plain drag selects bodies — Shift+drag orbits, right-drag pans.';
 const DISABLED_COLLABORATION_ROLLOUT: ProjectCollaborationCapabilitiesResponse =
   {
     sharingEnabled: false,
@@ -1707,6 +1727,11 @@ export function App() {
   >(new Set());
   /** Open while the user is naming a save point. */
   const [namingSave, setNamingSave] = useState(false);
+  const [pendingFeatureDelete, setPendingFeatureDelete] = useState<{
+    featureId: FeatureId;
+    name: string;
+    dependents: string[];
+  } | null>(null);
   // Named `doc` (not `document`) so the global DOM document is never shadowed.
   const [doc, setDoc] = useState<ProjectDocument | null>(null);
   /** History pins a feature; viewport ownership is re-resolved after rebuilds. */
@@ -1879,6 +1904,11 @@ export function App() {
   // The status line is the log; a toast is the notice. Only actions whose
   // outcome is otherwise invisible in the viewport raise one.
   const [toast, setToast] = useState<ToastModel | null>(null);
+  /**
+   * A newer build is out. The workspace says so in a toast; the start screen
+   * has no toast lane, so it keeps a Reload offer in its footer.
+   */
+  const [newBuildAvailable, setNewBuildAvailable] = useState(false);
   const toastIdRef = useRef(0);
   const announce = useCallback((message: string, action?: ToastAction) => {
     toastIdRef.current += 1;
@@ -1907,15 +1937,20 @@ export function App() {
       run: () => window.location.reload()
     };
     const stopWatch = watchBuildVersion({
-      onNewVersion: () =>
-        announce('A newer OpenZCAD build is available.', reloadNotice)
+      onNewVersion: () => {
+        setNewBuildAvailable(true);
+        announce('A newer OpenZCAD build is available.', reloadNotice);
+      }
     });
-    const stopStale = onStaleChunk(() =>
-      announce(STALE_CHUNK_MESSAGE, reloadNotice)
-    );
+    const stopStale = onStaleChunk(() => {
+      setNewBuildAvailable(true);
+      announce(STALE_CHUNK_MESSAGE, reloadNotice);
+    });
+    const stopPreload = watchPreloadErrors();
     return () => {
       stopWatch();
       stopStale();
+      stopPreload();
     };
   }, [announce]);
   /** A change of selection or command retires the message it interrupts. */
@@ -3906,6 +3941,11 @@ export function App() {
     // An armed face re-pick names a feature by id; a different project's
     // features must never satisfy it.
     setFaceRepair(null);
+    // Nor may an armed edge or face operation, or a delete awaiting its
+    // confirm: a "Fillet · Ready" chip from the last project read as a
+    // command the new, empty one was somehow in the middle of.
+    dispatchInteraction({ type: 'clear' });
+    setPendingFeatureDelete(null);
   }, [doc?.projectId]);
 
   useEffect(() => {
@@ -5754,7 +5794,11 @@ export function App() {
 
   function finishFeatureCreation(): void {
     // Back to an idle viewport so sequential adds stay one key away; the
-    // new feature is selectable from the history or the viewport.
+    // new feature is selectable from the history or the viewport. That
+    // includes the armed operation: an edge picked for the Fillet tool arms
+    // one, and leaving it armed kept its "Fillet · Ready" chip and its lane
+    // instructions up over the fillet they had just made.
+    dispatchInteraction({ type: 'commit-complete' });
     setTool(null);
     setSelectedFeatureNode(null);
     setSelectedTopology(null);
@@ -5852,7 +5896,14 @@ export function App() {
       })) ?? [];
     if (available.length === 0) {
       setStatus(
-        'Open profile — close the boundary or use Profile diagnostics.'
+        extrudeSketchGuidance([
+          {
+            name:
+              sketchOptions.find((option) => option.sketchId === sketchId)
+                ?.name ?? 'The sketch',
+            closed: false
+          }
+        ])
       );
       return;
     }
@@ -5956,8 +6007,20 @@ export function App() {
       } else {
         // No sketch to resolve, and there is no picking mode any more: a
         // click on any shaded closed profile arms the drag-arrow rig
-        // directly, so the hint is the whole flow.
-        setStatus('Extrude: click a shaded closed sketch profile to arm it.');
+        // directly, so the hint is the whole flow — and it names any sketch
+        // that has no closed profile to shade.
+        setStatus(
+          extrudeSketchGuidance(
+            sketchOptions.map((option) => ({
+              name: option.name,
+              closed: Boolean(
+                sketchViews.find(
+                  (candidate) => candidate.sketchId === option.sketchId
+                )?.regions.length
+              )
+            }))
+          )
+        );
       }
       return;
     }
@@ -11036,6 +11099,9 @@ export function App() {
    * make a second attempt at aiming impossible to distinguish from a
    * deliberate addition.
    */
+  /** Whether this session has explained an empty selection box yet. */
+  const emptyBoxSelectExplainedRef = useRef(false);
+
   function handleBoxSelectFromViewer(bodyIds: string[]) {
     if (!doc) {
       return;
@@ -11071,13 +11137,20 @@ export function App() {
         : null
     );
     inferFeatureNodeFor(bodyIds.length === 1 ? (bodyIds[0] as BodyId) : null);
-    // An empty sweep says nothing: the chip clearing is the feedback, and a
-    // message here outlived the gesture and read as a complaint about a click
-    // that had merely wobbled.
     if (bodyIds.length > 0) {
       setStatus(
         `${bodyIds.length} ${bodyIds.length === 1 ? 'body' : 'bodies'} selected.`
       );
+      return;
+    }
+    // An empty sweep is usually someone trying to orbit: a plain left-drag is
+    // a selection box here, and the camera chords live only in Settings, so
+    // the drag selected nothing and moved nothing and said nothing. It says
+    // so once per session. Only once: repeated, the line read as a complaint
+    // about every click that had merely wobbled.
+    if (!emptyBoxSelectExplainedRef.current) {
+      emptyBoxSelectExplainedRef.current = true;
+      setStatus(EMPTY_BOX_SELECT_HINT);
     }
   }
 
@@ -14871,28 +14944,38 @@ export function App() {
   function handleDeleteFeature(featureId: FeatureId, name: string) {
     // Counted before the delete: afterwards the source is gone and the walk
     // has nothing to start from. A load-bearing delete announces its blast
-    // radius up front — the confirm names the dependent count — while the
-    // toast's Undo survives either way, so a surprise rebuild of every
-    // dependent is a choice, not a discovery. Playwright auto-dismisses the
-    // native confirm, which reads as cancel: the e2e delete specs accept it
-    // explicitly, matching the cloud-sync repair specs' dialog handling.
+    // radius up front — the dialog names the dependents — while the toast's
+    // Undo survives either way, so a surprise rebuild of every dependent is
+    // a choice, not a discovery. The confirm is in-page, never a native
+    // `confirm()`: embedded and automated browsers answer that with Cancel
+    // unseen, which made every delete of a load-bearing feature silent.
     const dependents = doc ? featureHistory(doc).downstream(featureId) : [];
     if (
       dependents.length > 0 &&
-      appSettings.general.confirmDestructiveActions &&
-      !window.confirm(
-        `Delete “${name}”? ${dependents.length} ${dependents.length === 1 ? 'feature depends' : 'features depend'} on it and will rebuild without it.`
-      )
+      appSettings.general.confirmDestructiveActions
     ) {
+      setPendingFeatureDelete({
+        featureId,
+        name,
+        dependents: dependents.map((dependent) => dependent.name)
+      });
       return;
     }
+    commitDeleteFeature(featureId, name, dependents.length);
+  }
+
+  function commitDeleteFeature(
+    featureId: FeatureId,
+    name: string,
+    dependentCount: number
+  ) {
     if (
       executeCommand(
         commandFactories.deleteFeature({ featureId }, `Delete ${name}`)
       )
     ) {
       clearSelection();
-      announce(deleteFeatureToastMessage(name, dependents.length), {
+      announce(deleteFeatureToastMessage(name, dependentCount), {
         label: 'Undo',
         run: handleUndo
       });
@@ -15911,6 +15994,9 @@ export function App() {
           onImportProject={(file) => void handleImportProject(file)}
           projects={projects}
           status={status}
+          onReloadForUpdate={
+            newBuildAvailable ? () => window.location.reload() : undefined
+          }
           // Discovery must finish before a new/opened part can commit: the
           // startup result would otherwise replace its session and listing.
           // Keep import locks out of this; validated imports fence switches
@@ -16368,6 +16454,12 @@ export function App() {
   // dropped: the entity editor, keypad and rail render in the same branch
   // and must stay.
   const hideSketchToolCard = interaction.mode === 'sketch';
+  // An edge picked for the Fillet or Chamfer tool arms the same operation the
+  // tool's own card is creating. Its "Fillet · Ready" chip above that card
+  // said the same thing twice, with a second set of verbs; the card and the
+  // handle on the edge are enough.
+  const toolFormOwnsEdgePick =
+    (tool === 'fillet' || tool === 'chamfer') && interaction.mode === 'edges';
 
   // View mode writes its own hints rather than filtering the build chain below.
   // Selecting a cylinder still arms the radius interaction even with its handle
@@ -17169,15 +17261,13 @@ export function App() {
             onCycleDisplayMode={cycleDisplayMode}
             onToggleProjection={toggleProjection}
           />
-        ) : interaction.mode === 'sketch' ? null : tool === 'sketch' ? ( // stayed mounted and live beside it once the plane was picked. // The sketch session brings its own tool rail; the modeling palette
-          <div className="direct-mode-strip">
-            <PenLine size={16} aria-hidden="true" />
-            <strong>Editing Sketch: {editingSketchName}</strong>
-            <span>
-              Closed profiles fill as they form · Finish Sketch preserves edits
-            </span>
-          </div>
-        ) : tool === 'extrude' ? (
+        ) : // The sketch session brings its own tool rail. Before it, while
+        // the plane is being picked, the plane chooser in the command slot
+        // is the only instruction: an "Editing Sketch: New Sketch" strip
+        // here named a sketch that did not exist yet (the old floating
+        // chooser had been drawn over it).
+        interaction.mode === 'sketch' || tool === 'sketch' ? null : tool ===
+          'extrude' ? (
           <div className="direct-mode-strip extrude-mode">
             <Layers3 size={16} aria-hidden="true" />
             <strong>Direct extrude</strong>
@@ -17693,54 +17783,6 @@ export function App() {
                   hideRotation={movePreview.target === 'sketch'}
                   liveSnapRef={moveSnapSetterRef}
                 />
-              ) : tool === 'sketch' ? (
-                <div className="sketch-plane-prompt" role="status">
-                  <span>
-                    <strong>Pick a sketch plane</strong>
-                    <small>
-                      Click a planar face on the model, or start on a principal
-                      plane.
-                    </small>
-                  </span>
-                  <label className="sketch-plane-offset">
-                    <span>Offset</span>
-                    <input
-                      type="number"
-                      step="any"
-                      value={sketchPlaneOffsetText}
-                      aria-label="Sketch plane offset"
-                      onChange={(event) =>
-                        setSketchPlaneOffsetText(event.target.value)
-                      }
-                    />
-                    <span className="sketch-plane-offset-units">
-                      {doc.units}
-                    </span>
-                  </label>
-                  <span className="sketch-plane-buttons">
-                    {(['XY', 'XZ', 'YZ'] as const).map((plane) => (
-                      <button
-                        key={plane}
-                        type="button"
-                        onClick={() => startSketchOnPlane(plane)}
-                      >
-                        {PLANE_LABELS[plane]}
-                      </button>
-                    ))}
-                    <button
-                      type="button"
-                      className="sketch-plane-dismiss"
-                      aria-label="Cancel sketch"
-                      title="Cancel sketch (Esc)"
-                      onClick={() => {
-                        cancelPanel();
-                        setStatus('Sketch canceled · no plane was chosen.');
-                      }}
-                    >
-                      ×
-                    </button>
-                  </span>
-                </div>
               ) : null
             }
             projection={projection}
@@ -17810,7 +17852,7 @@ export function App() {
       // when no plane prompt, Move or revert pill is up.
       command={
         modelingLocked ? null : contextualToolCard ? (
-          hideSketchToolCard ? null : (
+          hideSketchToolCard || toolFormOwnsEdgePick ? null : (
             <ToolCard
               model={contextualToolCard}
               selectAllEdges={
@@ -17979,9 +18021,55 @@ export function App() {
             liveValuesRef={moveValuesSetterRef}
             liveSnapRef={moveSnapSetterRef}
           />
-        ) : tool !== 'sketch' &&
-          selectedProfiles.length > 0 &&
-          selectedSketchProfileName ? (
+        ) : tool === 'sketch' ? (
+          // The plane chooser is a command card like any other. It floated
+          // over the viewport's top edge, where the mode toggle and, at
+          // 1024 px, the project name drew over its title and its ×.
+          <div className="sketch-plane-prompt" role="status">
+            <span>
+              <strong>Pick a sketch plane</strong>
+              <small>
+                Click a planar face on the model, or start on a principal plane.
+              </small>
+            </span>
+            <label className="sketch-plane-offset">
+              <span>Offset</span>
+              <input
+                type="number"
+                step="any"
+                value={sketchPlaneOffsetText}
+                aria-label="Sketch plane offset"
+                onChange={(event) =>
+                  setSketchPlaneOffsetText(event.target.value)
+                }
+              />
+              <span className="sketch-plane-offset-units">{doc.units}</span>
+            </label>
+            <span className="sketch-plane-buttons">
+              {(['XY', 'XZ', 'YZ'] as const).map((plane) => (
+                <button
+                  key={plane}
+                  type="button"
+                  onClick={() => startSketchOnPlane(plane)}
+                >
+                  {PLANE_LABELS[plane]}
+                </button>
+              ))}
+              <button
+                type="button"
+                className="sketch-plane-dismiss"
+                aria-label="Cancel sketch"
+                title="Cancel sketch (Esc)"
+                onClick={() => {
+                  cancelPanel();
+                  setStatus('Sketch canceled · no plane was chosen.');
+                }}
+              >
+                ×
+              </button>
+            </span>
+          </div>
+        ) : selectedProfiles.length > 0 && selectedSketchProfileName ? (
           <ProfileQuickAction
             profileName={selectedSketchProfileName}
             profileCount={selectedProfiles.length}
@@ -17995,6 +18083,7 @@ export function App() {
           />
         ) : null
       }
+      inspectorOwnsLane={tool !== null && tool !== 'sketch'}
       inspector={
         inspectorActive ? (
           <ErrorBoundary
@@ -18641,6 +18730,18 @@ export function App() {
                 onClose={() => setSharingOpen(false)}
               />
             )}
+          {pendingFeatureDelete && doc && (
+            <DeleteFeatureDialog
+              name={pendingFeatureDelete.name}
+              dependents={pendingFeatureDelete.dependents}
+              onCancel={() => setPendingFeatureDelete(null)}
+              onDelete={() => {
+                const { featureId, name, dependents } = pendingFeatureDelete;
+                setPendingFeatureDelete(null);
+                commitDeleteFeature(featureId, name, dependents.length);
+              }}
+            />
+          )}
           {namingSave && doc && (
             <SaveRevisionDialog
               projectName={doc.name}
