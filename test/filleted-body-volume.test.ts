@@ -33,7 +33,10 @@ import {
  *   box 20^3                        rel = 0          EXACT
  *   cylinder r10 h20                rel = 0          EXACT
  *   box + chamfer 2 (all planes)    rel = 0          EXACT
- *   box with a through bore r4      rel = 0          EXACT   <- 7 faces, cyl+plane
+ *   box with a through bore r4      rel ~ 1e-16         <- 7 faces, cyl+plane
+ *     (last bit subject to kernel summation order since B56; relitigated
+ *     against 60-digit arithmetic, which rounds the closed form to the
+ *     reference below — the kernel lands 1 ULP under it)
  *   two boxes fused                 rel = 0          EXACT
  *   box + FILLET r2                 rel = -4.197e-6          <- 7 faces, cyl+plane
  *
@@ -258,7 +261,15 @@ describe('a filleted body', () => {
         targetBodyIds: [outer, bore]
       }).document;
       const { volume, faces, surfaces, warnings } = await measure(doc);
-      expect(volume).toBe(8000 - Math.PI * 16 * 20);
+      // The reference is the correctly-rounded closed form: 60-digit
+      // arithmetic puts 8000 - 320*pi at ...26616, nearest to this double.
+      // The kernel sums exact face contributions about the body since B56, so
+      // summation order — not geometry — decides the last bit (it lands 1 ULP
+      // under the reference). The 1e-15 band admits rounding only: it is ~8
+      // ULP here and still excludes every approximate path by nine orders.
+      expect(
+        Math.abs(volume - (8000 - Math.PI * 16 * 20)) / volume
+      ).toBeLessThan(1e-15);
       expect(faces).toBe(7);
       expect(surfaces).toEqual(new Set(['cylinder', 'plane']));
       expect(warnings).toEqual([]);
