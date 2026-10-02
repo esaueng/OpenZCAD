@@ -1,12 +1,6 @@
 import { ProjectImportButton } from './ProjectImportButton';
 import { platformShortcutLabel } from '../lib/platformShortcut';
-import {
-  type ChangeEvent,
-  type MouseEvent,
-  useEffect,
-  useRef,
-  useState
-} from 'react';
+import { type ChangeEvent, useEffect, useRef, useState } from 'react';
 import {
   Box,
   Check,
@@ -247,23 +241,15 @@ export function TopBar({
   }, []);
 
   /**
-   * A chosen item closes the menu. Export opens its dialog from here, and the
-   * menu stayed open underneath it, still showing when the dialog closed.
-   * Deferred a task so a label's click can still reach its file input.
+   * Export Mesh… opens a dialog, and the menu stayed open underneath it,
+   * still showing when the dialog closed. Items that act in place (a STEP
+   * download, the stored-file list) keep the menu open as before.
    */
-  function closeFileMenuAfterChoice(event: MouseEvent<HTMLDivElement>) {
-    const item =
-      event.target instanceof Element
-        ? event.target.closest('.topbar-menu-item')
-        : null;
-    if (!item || (item instanceof HTMLButtonElement && item.disabled)) {
-      return;
+  function openMeshExportFromMenu() {
+    if (fileMenuRef.current) {
+      fileMenuRef.current.open = false;
     }
-    window.setTimeout(() => {
-      if (fileMenuRef.current) {
-        fileMenuRef.current.open = false;
-      }
-    }, 0);
+    onOpenMeshExport();
   }
 
   function beginProjectRename() {
@@ -518,10 +504,7 @@ export function TopBar({
                 </>
               ) : null}
             </summary>
-            <div
-              className="topbar-menu-panel"
-              onClick={closeFileMenuAfterChoice}
-            >
+            <div className="topbar-menu-panel">
               <strong className="topbar-menu-label">Import</strong>
               <label
                 className="topbar-menu-item"
@@ -569,7 +552,7 @@ export function TopBar({
                 className="topbar-menu-item"
                 disabled={!canExport}
                 title={exportTitle('3MF, STL, OBJ or glTF')}
-                onClick={onOpenMeshExport}
+                onClick={openMeshExportFromMenu}
               >
                 <Download size={13} aria-hidden="true" />
                 <span>Export Mesh…</span>
