@@ -211,9 +211,7 @@ for (const kind of ['loft', 'sweep', 'helical-sweep'] as const) {
       ).toHaveCount(0);
     };
     const apply = async () => {
-      await inspector
-        .getByRole('button', { name: 'Check exact result', exact: true })
-        .click();
+      // One press checks the exact result and applies it.
       await inspector
         .getByRole('button', { name: `Apply ${label}`, exact: true })
         .click({ timeout: 30_000 });
@@ -346,7 +344,7 @@ test('refuses a saved section that cannot resolve to an upstream sketch', async 
     'Saved profile no longer resolves uniquely'
   );
   await expect(
-    inspector.getByRole('button', { name: /Apply|Check exact result/ })
+    inspector.getByRole('button', { name: /Apply|exact result/ })
   ).toHaveCount(0);
   expect(findFeature(await backup(page), data.featureId)?.data).toEqual(
     feature.data
