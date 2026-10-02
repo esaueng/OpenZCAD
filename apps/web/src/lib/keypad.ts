@@ -1,4 +1,7 @@
-import { evaluateExpression } from '@openzcad/document-core';
+import {
+  evaluateExpression,
+  getExpressionDimensions
+} from '@openzcad/document-core';
 import { UNIT_TO_MM, type UnitSystem } from '@openzcad/shared';
 
 /**
@@ -48,14 +51,23 @@ function horizontalRange(
 ): { min: number; max: number } {
   const full = {
     min: VIEWPORT_MARGIN,
-    max: Math.max(viewport.width - size.width - VIEWPORT_MARGIN, VIEWPORT_MARGIN)
+    max: Math.max(
+      viewport.width - size.width - VIEWPORT_MARGIN,
+      VIEWPORT_MARGIN
+    )
   };
   let best = full;
   let bestWidth = -1;
-  const edges = [0, ...exclusions.flatMap((band) => [band.x, band.x + band.width]), viewport.width];
+  const edges = [
+    0,
+    ...exclusions.flatMap((band) => [band.x, band.x + band.width]),
+    viewport.width
+  ];
   for (let index = 0; index < edges.length - 1; index += 1) {
     const gapStart = Math.max(edges[index] ?? 0, 0) + VIEWPORT_MARGIN;
-    const gapEnd = Math.min(edges[index + 1] ?? viewport.width, viewport.width) - VIEWPORT_MARGIN;
+    const gapEnd =
+      Math.min(edges[index + 1] ?? viewport.width, viewport.width) -
+      VIEWPORT_MARGIN;
     const usable = gapEnd - gapStart;
     // A gap that cannot hold the keypad is not a placement, it is a squeeze.
     if (usable >= size.width && usable > bestWidth) {
@@ -225,9 +237,38 @@ export function evaluateKeypadInput(
     return normalize(typed.value * factor, false, typed.unit);
   }
   try {
-    const value = evaluateExpression(trimmed, scope);
+    // Unit-suffixed quantities convert into document units here, exactly as
+    // the parameter table does; bare scope values already are document units.
+    const value = evaluateExpression(trimmed, scope, { documentUnits });
     if (!Number.isFinite(value)) {
       return { ok: false, isExpression: true, error: 'not finite' };
+    }
+    // A length in an angle field (or an angle/area in a length field) is a
+    // dimensional refusal, not a value: it previously threw as an unknown
+    // identifier, and the audit keeps it refused. Dimensionless legacy
+    // expressions (plain parameters, degree-based trig) still pass.
+    const dimensions = getExpressionDimensions(trimmed, scope, {
+      documentUnits
+    });
+    if (entryUnit === 'deg') {
+      if (dimensions.length !== 0) {
+        return {
+          ok: false,
+          isExpression: true,
+          error:
+            'Incompatible dimensions in expression: expected an angle, not a length.'
+        };
+      }
+    } else if (
+      dimensions.angle !== 0 ||
+      (dimensions.length !== 0 && dimensions.length !== 1)
+    ) {
+      return {
+        ok: false,
+        isExpression: true,
+        error:
+          'Incompatible dimensions in expression: expected a length, not an angle or area.'
+      };
     }
     return normalize(value, true);
   } catch (error) {

@@ -1,5 +1,6 @@
 import { fileURLToPath } from 'node:url';
 import { expect, test, type Page } from '@playwright/test';
+import type { ProjectDocument } from '@openzcad/shared';
 import {
   expectBodyCount,
   openAssistant,
@@ -100,21 +101,6 @@ async function expectApplyCheckInFlight(page: Page) {
   );
 }
 
-/**
- * Waits for the parameter edit's exact check to be in flight. Same pacing
- * reason as above: the flag, not the toast, proves the reload lands before
- * the commit.
- */
-async function expectParameterCheckInFlight(page: Page) {
-  await page.waitForFunction(
-    () =>
-      (window as unknown as { __openzcadE2EParameterCheckInFlight?: boolean })
-        .__openzcadE2EParameterCheckInFlight === true,
-    undefined,
-    { timeout: 60_000 }
-  );
-}
-
 /** Opens the verified suggestion's proposal card. */
 async function openProposal(page: Page, label: string) {
   const chip = page
@@ -189,18 +175,137 @@ test('a reload during a parameter edit keeps the last valid model or the new one
   page
 }) => {
   test.setTimeout(420_000);
+  // Keep the real exact result in flight until reload. A cached rebuild can
+  // otherwise finish before Playwright observes the transient Checking label.
+  await page.addInitScript(() => {
+    const flags = window as typeof window & {
+      holdOpeningResult?: boolean;
+      openingResultHeld?: boolean;
+    };
+    const blocked = new WeakMap<Worker, string>();
+    const NativeWorker = Worker;
+    window.Worker = class extends NativeWorker {
+      constructor(url: string | URL, options?: WorkerOptions) {
+        super(url, options);
+        // Register before the application's onmessage handler, so the exact
+        // result cannot commit while this test is preparing the interruption.
+        this.addEventListener(
+          'message',
+          (
+            event: MessageEvent<{
+              type?: string;
+              requestId?: string;
+            }>
+          ) => {
+            if (
+              blocked.has(this) &&
+              event.data.type === 'sync' &&
+              event.data.requestId === blocked.get(this)
+            ) {
+              event.stopImmediatePropagation();
+              flags.openingResultHeld = true;
+            }
+          }
+        );
+      }
+      override postMessage(
+        message: unknown,
+        options?: Transferable[] | StructuredSerializeOptions
+      ) {
+        const payload = message as {
+          type?: string;
+          requestId?: string;
+          document?: ProjectDocument;
+        };
+        if (
+          flags.holdOpeningResult &&
+          payload.type === 'sync' &&
+          payload.requestId &&
+          Object.values(payload.document?.nodes ?? {}).some(
+            (node) =>
+              node.kind === 'parameter' &&
+              node.name === 'opening_width' &&
+              node.expression === '60'
+          )
+        ) {
+          flags.holdOpeningResult = false;
+          blocked.set(this, payload.requestId);
+        }
+        super.postMessage(message, options as StructuredSerializeOptions);
+      }
+    };
+  });
   await importHolder(page, 'Holder interrupted edit');
   await openAssistant(page);
   await applyVerified(page, 'Parameterize the opening');
   const width = page.getByLabel('Expression for opening_width');
   await expect(width).toHaveValue('44');
 
-  // Hold the edit's exact check open and reload the moment its in-flight
-  // flag is up, so the reload provably lands before the commit.
+  // The preceding Apply must be durable before interrupting a later edit;
+  // its visible controls appear before the debounced device save lands.
+  await expect
+    .poll(() =>
+      page.evaluate(async () => {
+        const db = await new Promise<IDBDatabase>((resolve, reject) => {
+          const request = indexedDB.open('openzcad-v2');
+          request.onsuccess = () => resolve(request.result);
+          request.onerror = () =>
+            reject(
+              request.error ?? new Error('Could not open saved projects.')
+            );
+        });
+        try {
+          const docs = await new Promise<ProjectDocument[]>(
+            (resolve, reject) => {
+              const request = db
+                .transaction('projects')
+                .objectStore('projects')
+                .getAll();
+              request.onsuccess = () =>
+                resolve(request.result as ProjectDocument[]);
+              request.onerror = () =>
+                reject(
+                  request.error ?? new Error('Could not read saved projects.')
+                );
+            }
+          );
+          const document = docs.find(
+            (doc) => doc.name === 'Holder interrupted edit'
+          );
+          return Object.values(document?.nodes ?? {})
+            .filter((node) => node.kind === 'parameter')
+            .map((node) => `${node.name}=${node.expression}`)
+            .sort();
+        } finally {
+          db.close();
+        }
+      })
+    )
+    .toEqual(['holder_height=32', 'opening_width=44']);
+
   await width.fill('60');
-  await armExactCheckHold(page);
+  await page.evaluate(() => {
+    (
+      window as typeof window & { holdOpeningResult?: boolean }
+    ).holdOpeningResult = true;
+  });
   await width.press('Enter');
-  await expectParameterCheckInFlight(page);
+  await expect
+    .poll(
+      () =>
+        page.evaluate(
+          () =>
+            (window as typeof window & { openingResultHeld?: boolean })
+              .openingResultHeld
+        ),
+      { timeout: 180_000 }
+    )
+    .toBe(true);
+  // The edit's exact preflight is running; pull the page out from under it.
+  await expect(page.getByRole('contentinfo').getByRole('status')).toHaveText(
+    /Checking|Building|Rebuilding|Measuring|Waiting for exact/i,
+    { timeout: 60_000 }
+  );
   await reloadSettled(page);
   await expect(page.getByLabel('Expression for opening_width')).toHaveValue(
     /^(44|60)$/

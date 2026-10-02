@@ -543,6 +543,10 @@
 
 .sketch-workflow {
   display: grid;
+  /* One column no wider than the palette: the implicit auto track took the
+     widest row's width, so in a phone-width flyout every row ran out under
+     the rails instead of wrapping. */
+  grid-template-columns: minmax(0, 1fr);
   gap: 8px;
   padding: 12px;
   font-size: var(--fs-xs);
@@ -550,6 +554,16 @@
 }
 .sketch-workflow p {
   margin: 0;
+}
+/* The picker shares its row with the label while it fits and drops under
+   it when it does not, never wider than the palette. */
+.sketch-workflow .field {
+  flex-wrap: wrap;
+}
+.sketch-workflow .field select {
+  flex: 1 1 120px;
+  min-width: 0;
+  max-width: 100%;
 }
 .sketch-workflow-context,
 .sketch-workflow-snaps {
