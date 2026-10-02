@@ -1905,9 +1905,10 @@ export function SettingsPage({
                             inputMode="numeric"
                             autoComplete="one-time-code"
                             pattern="[0-9]{6}"
-                            maxLength={6}
                             aria-label="Email sign-in code"
                             placeholder="000000"
+                            // No maxLength: it cuts a pasted " 730418" before
+                            // the digit filter runs and drops the last digit.
                             onChange={(event) =>
                               setLoginCode(
                                 event.target.value
