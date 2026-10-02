@@ -1018,28 +1018,40 @@
 }
 
 /* A newer build is out: said in the accent, with the action beside it, not
-   in the footer's small grey status type. */
+   in the footer's small grey status type. The pill must stay shorter than
+   the 30px bar — at the shared button's 32px minimum it spilled over the
+   bar's top edge and was clipped at the window's bottom. */
 .start-update {
   display: inline-flex;
+  flex: none;
   align-items: center;
   gap: var(--sp-2);
-  padding: 3px 4px 3px 10px;
+  height: 22px;
+  padding: 0 2px 0 8px;
   color: var(--color-text);
-  font-size: var(--fs-sm);
+  font-size: var(--fs-xs);
+  white-space: nowrap;
   background: var(--color-accent-dim);
   border: 1px solid var(--color-accent-border);
   border-radius: var(--radius-md);
 }
 
 .start-update button {
-  min-height: 26px;
-  padding: 2px 10px;
+  min-height: 0;
+  height: 18px;
+  padding: 0 8px;
+  font-size: var(--fs-xs);
+  border-radius: var(--radius-sm);
 }
 
 .start-status {
+  min-width: 0;
+  overflow: hidden;
   color: var(--color-text-subtle);
   font-family: var(--font-mono);
   font-size: var(--fs-xs);
+  white-space: nowrap;
+  text-overflow: ellipsis;
 }
 
 /* Discovery keeps the library layout; unknown data is never an empty shelf
