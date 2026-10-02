@@ -70,6 +70,11 @@ export interface ModelingOperationsFormProps {
    * face, an unresolved expression) and when the card closes.
    */
   onHoleDraftChange?: (draft: HoleDraft | null) => void;
+  /**
+   * What the viewport has to say about the drawn bore: why there is none,
+   * or that it misses the body. Shown under the position it is about.
+   */
+  holePreviewNotice?: string | null;
 }
 
 /** A Hole card's values, resolved: what the viewport ghost is drawn from. */
@@ -79,6 +84,11 @@ export interface HoleDraft {
   u: number;
   v: number;
   diameter: number;
+  /**
+   * The widest cutting tool: the counterbore or countersink diameter when
+   * the style has one; null when that does not resolve.
+   */
+  outerDiameter: number | null;
   depth: number | 'through';
 }
 
@@ -104,15 +114,32 @@ function holeDraftFor(
     state.value.depthMode === 'through'
       ? ('through' as const)
       : number(state.value.depth);
-  if (u === null || v === null || diameter === null || depth === null) {
+  // A size that cannot drill is the form's own refusal, said above the
+  // buttons; the viewport then draws nothing rather than a second message.
+  if (
+    u === null ||
+    v === null ||
+    diameter === null ||
+    !(diameter > 0) ||
+    depth === null ||
+    (depth !== 'through' && !(depth > 0))
+  ) {
     return null;
   }
+  const styleDiameter =
+    state.value.style === 'counterbore'
+      ? number(state.value.counterboreDiameter)
+      : state.value.style === 'countersink'
+        ? number(state.value.countersinkDiameter)
+        : diameter;
   return {
     targetBodyId: state.value.targetBodyId,
     faceHash: state.value.faceHash,
     u,
     v,
     diameter,
+    outerDiameter:
+      styleDiameter === null ? null : Math.max(diameter, styleDiameter),
     depth
   };
 }
@@ -499,7 +526,8 @@ export function ModelingOperationsForm({
   onTargetBodyChange,
   onOpeningFaceSelectionChange,
   onRequestOpeningFaceSelection,
-  onHoleDraftChange
+  onHoleDraftChange,
+  holePreviewNotice = null
 }: ModelingOperationsFormProps) {
   const defaultTarget =
     initialTarget ?? bodies.find((body) => !body.consumed)?.bodyId ?? '';
@@ -1298,6 +1326,12 @@ export function ModelingOperationsForm({
                 // line below the buttons.
                 <p className="field-error" role="alert">
                   {refusalSentence(positionRefusal, editing)}
+                </p>
+              ) : holePreviewNotice ? (
+                // Before Create: why the viewport draws no bore, or that the
+                // one it draws misses. Advisory; the exact check decides.
+                <p className="field-error" aria-live="polite">
+                  {holePreviewNotice}
                 </p>
               ) : null
             }
