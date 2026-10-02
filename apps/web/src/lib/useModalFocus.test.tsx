@@ -2,7 +2,7 @@ import { StrictMode, useRef, useState } from 'react';
 import { render, screen, waitFor } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { describe, expect, it } from 'vitest';
-import { useModalFocus } from './useModalFocus';
+import { modalHoldsKeyboard, useModalFocus } from './useModalFocus';
 
 function Modal({
   label = 'Test dialog',
@@ -217,5 +217,22 @@ describe('useModalFocus', () => {
       expect(screen.getByRole('button', { name: 'Late action' })).toBeVisible();
     });
     expect(anchor).toHaveFocus();
+  });
+  it('holds the keyboard from the workspace unless the dialog hands it back', () => {
+    function Sheet({ workspaceKeys }: { workspaceKeys: boolean }) {
+      const dialogRef = useRef<HTMLDivElement | null>(null);
+      useModalFocus(dialogRef, { workspaceKeys });
+      return <div ref={dialogRef} role="dialog" aria-label="Sheet" />;
+    }
+    expect(modalHoldsKeyboard()).toBe(false);
+
+    const blocking = render(<Sheet workspaceKeys={false} />);
+    expect(modalHoldsKeyboard()).toBe(true);
+    blocking.unmount();
+    expect(modalHoldsKeyboard()).toBe(false);
+
+    const passing = render(<Sheet workspaceKeys />);
+    expect(modalHoldsKeyboard()).toBe(false);
+    passing.unmount();
   });
 });
