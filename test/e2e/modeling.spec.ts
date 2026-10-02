@@ -3082,6 +3082,85 @@ test('exports a 3MF package through the mesh export dialog', async ({
   await expect(page.getByRole('contentinfo')).toContainText('Print-Part.3mf');
 });
 
+/**
+ * Production QA UI-13: the check button disabled itself while focused, focus
+ * fell to the body, and Escape then went to the workspace — clearing the
+ * selection, so the dialog's scope flipped to every body while it still showed
+ * the one-body verdict. Undo reached the model behind the modal the same way.
+ */
+test('mesh export keeps the keyboard, its scope and its verdict together', async ({
+  page
+}) => {
+  await stubApi(page);
+  await page.setViewportSize({ width: 1366, height: 900 });
+  await page.goto('/');
+  await page.getByLabel('Project name').fill('Export Scope');
+  await page.getByRole('button', { name: 'Create project' }).click();
+  const inspector = page.getByRole('region', { name: 'Feature inspector' });
+  for (const name of ['Base', 'Boss']) {
+    await page.getByRole('button', { name: /^Box \(B\)/ }).click();
+    await inspector.getByLabel('Name').fill(name);
+    await inspector.getByRole('button', { name: /^Create/ }).click();
+    await expect(
+      page.locator('.feature-row-main', { hasText: name })
+    ).toBeVisible();
+  }
+  const featureRows = page.locator('.feature-row-main');
+  await expect(featureRows).toHaveCount(2);
+  await page.locator('.feature-row-main', { hasText: 'Base' }).click();
+  await expect(page.locator('.panel-body')).toContainText('volume', {
+    ignoreCase: true
+  });
+
+  const fileMenu = page.locator('details.file-menu');
+  const openExport = async () => {
+    await fileMenu.locator('summary').click();
+    await fileMenu.getByRole('button', { name: /Export Mesh/ }).click();
+  };
+  await openExport();
+  const dialog = page.getByRole('dialog', { name: /Export mesh/ });
+  const scope = dialog.locator('.export-dialog-scope');
+  await expect(scope).toContainText('Exports Base ');
+
+  await dialog.getByRole('button', { name: /Check watertightness/ }).click();
+  await expect(dialog.locator('.export-dialog-report')).toContainText(
+    'watertight'
+  );
+  expect(
+    await dialog.evaluate((element) => element.contains(document.activeElement))
+  ).toBe(true);
+
+  // Undo behind the open dialog must not rewind the model.
+  await page.keyboard.press('ControlOrMeta+z');
+  await expect(featureRows).toHaveCount(2);
+  await expect(scope).toContainText('Exports Base ');
+
+  await page.keyboard.press('Escape');
+  await expect(dialog).toHaveCount(0);
+
+  // The same key closed the dialog and nothing else: Base is still the scope.
+  await openExport();
+  await expect(scope).toContainText('Exports Base ');
+  // Focus lost to the page (a backdrop click) still closes on Escape.
+  await page.evaluate(() => (document.activeElement as HTMLElement).blur());
+  await page.keyboard.press('Escape');
+  await expect(dialog).toHaveCount(0);
+  await expect(featureRows).toHaveCount(2);
+
+  // Every modal holds the keys, not just this one: the named-save dialog
+  // let Ctrl+Z through from its buttons too.
+  await page.keyboard.press('ControlOrMeta+Shift+s');
+  const namedSave = page.getByRole('dialog', { name: /Name this save/ });
+  await expect(namedSave).toBeVisible();
+  await namedSave.getByRole('button', { name: /Cancel/ }).focus();
+  await page.keyboard.press('ControlOrMeta+z');
+  await expect(featureRows).toHaveCount(2);
+  await namedSave.getByRole('button', { name: /Cancel/ }).click();
+  await expect(namedSave).toHaveCount(0);
+  await page.keyboard.press('ControlOrMeta+z');
+  await expect(featureRows).toHaveCount(1);
+});
+
 test('rejects a disconnected Union and succeeds after the gap is closed', async ({
   page
 }) => {

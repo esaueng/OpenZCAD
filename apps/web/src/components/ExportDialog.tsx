@@ -1,4 +1,4 @@
-import { useRef, useState } from 'react';
+import { useEffect, useRef, useState } from 'react';
 import {
   CircleCheck,
   Download,
@@ -95,6 +95,11 @@ export interface ExportDialogProps {
   scopeLabel: string;
   /** Bodies in the export, for naming printability rows. */
   bodies: ExportDialogBody[];
+  /**
+   * The document version the bodies come from. A printability verdict
+   * describes one body set at one revision; either moving makes it stale.
+   */
+  revision: number;
   onClose(): void;
   /**
    * Starts the export. The dialog closes at once: progress, cancel and the
@@ -116,6 +121,7 @@ export interface ExportDialogProps {
 export function ExportDialog({
   scopeLabel,
   bodies,
+  revision,
   onClose,
   onExport,
   onCheckQuality
@@ -131,8 +137,28 @@ export function ExportDialog({
   const [error, setError] = useState<string | null>(null);
   const [report, setReport] = useState<{
     deflection: number;
+    scope: string;
     result: MeshQualityReport;
   } | null>(null);
+  const scope = `${revision}:${bodies.map((body) => body.bodyId).join(',')}`;
+
+  // Escape must still close the dialog when focus has fallen out of it (a
+  // click on the backdrop drops it on the body). The workspace keymap stands
+  // down while the dialog is open, so nothing else would take the key.
+  useEffect(() => {
+    const onKeyDown = (event: KeyboardEvent) => {
+      const dialog = dialogRef.current;
+      if (
+        event.key === 'Escape' &&
+        dialog &&
+        !dialog.contains(document.activeElement)
+      ) {
+        onClose();
+      }
+    };
+    window.addEventListener('keydown', onKeyDown);
+    return () => window.removeEventListener('keydown', onKeyDown);
+  }, [onClose]);
 
   const presetDeflection = QUALITY_PRESETS.find(
     (entry) => entry.id === preset
@@ -151,12 +177,23 @@ export function ExportDialog({
 
   const bodyName = (bodyId: string) =>
     bodies.find((body) => body.bodyId === bodyId)?.name ?? bodyId;
-  const staleReport = report !== null && report.deflection !== deflection;
+  const staleReason =
+    report === null
+      ? null
+      : report.scope !== scope
+        ? 'scope'
+        : report.deflection !== deflection
+          ? 'quality'
+          : null;
+  const staleReport = staleReason !== null;
 
   async function runQualityCheck() {
     if (deflection === null || phase !== 'idle') {
       return;
     }
+    // Bound to what was asked, not what is current when the answer lands:
+    // a verdict that arrives after the scope moved must read as stale.
+    const checkedScope = scope;
     setPhase('checking');
     setProgress('preparing');
     setError(null);
@@ -164,7 +201,7 @@ export function ExportDialog({
       const result = await onCheckQuality(deflection, {
         onProgress: setProgress
       });
-      setReport({ deflection, result });
+      setReport({ deflection, scope: checkedScope, result });
     } catch (checkError) {
       setReport(null);
       setError(
@@ -271,10 +308,14 @@ export function ExportDialog({
         <section className="export-dialog-group export-dialog-quality">
           <header>
             <strong>Printability</strong>
+            {/* aria-disabled, not disabled, while checking: disabling the
+                focused button drops focus out of the dialog, and Escape then
+                went to the workspace behind it. */}
             <button
               type="button"
               className="secondary"
-              disabled={deflection === null || phase !== 'idle'}
+              disabled={deflection === null}
+              aria-disabled={phase !== 'idle' ? true : undefined}
               onClick={() => void runQualityCheck()}
             >
               <span className="icon-slot" aria-hidden="true">
@@ -307,9 +348,11 @@ export function ExportDialog({
             </ul>
           ) : (
             <p className="export-dialog-hint">
-              {staleReport
-                ? 'Quality changed — re-check to see the new verdict.'
-                : 'Optional: verify every body meshes watertight before exporting.'}
+              {staleReason === 'scope'
+                ? 'The bodies being exported changed — re-check to see the new verdict.'
+                : staleReason === 'quality'
+                  ? 'Quality changed — re-check to see the new verdict.'
+                  : 'Optional: verify every body meshes watertight before exporting.'}
             </p>
           )}
         </section>
