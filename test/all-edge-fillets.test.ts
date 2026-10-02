@@ -253,49 +253,88 @@ describe('whole-part exact fillet proposals', { timeout: 120_000 }, () => {
     ).toContain('exact solid edges');
   });
 
-  it('preserves an imported concave bracket when the kernel cannot join all its corners', async () => {
-    const kernel = new RemusKernel();
-    const io = await loadRemusTranslators();
-    let step: string;
-    try {
-      const profile = kernel.makePolygon(
-        new Float64Array([
-          0, 0, 0, 40, 0, 0, 40, 8, 0, 8, 8, 0, 8, 50, 0, 0, 50, 0
-        ])
-      );
-      const solid = kernel.extrude(profile, 0, 0, 1, 20);
-      step = new TextDecoder().decode(
-        io.exportStep(kernel.serializeSolids(Uint32Array.of(solid)))
-      );
-    } finally {
-      kernel.free();
-    }
-    const imported = importStepBody(
-      createProjectDocument('Bracket', toUserId('user_fillet')),
-      {
-        name: 'Bracket',
-        artifactId: 'bracket',
-        sourceName: 'bracket.step',
-        stepText: step
+  it.each([1, 10])(
+    'preflights an imported concave bracket at radius %s without changing the source',
+    async (radius) => {
+      const kernel = new RemusKernel();
+      const io = await loadRemusTranslators();
+      let step: string;
+      try {
+        const profile = kernel.makePolygon(
+          new Float64Array([
+            0, 0, 0, 40, 0, 0, 40, 8, 0, 8, 8, 0, 8, 50, 0, 0, 50, 0
+          ])
+        );
+        const solid = kernel.extrude(profile, 0, 0, 1, 20);
+        step = new TextDecoder().decode(
+          io.exportStep(kernel.serializeSolids(Uint32Array.of(solid)))
+        );
+      } finally {
+        kernel.free();
       }
-    );
-    const base = {
-      ...imported.document,
-      derived: await adapter.syncDocument(imported.document)
-    };
-    const original = JSON.stringify(base);
-    const result = createAllEdgesFilletProposal(
-      base,
-      selection,
-      'Fillet all edges by 1 mm'
-    );
-    expect(result?.error).toBeUndefined();
-    await expect(
-      preflightCadPatch(base, result!.proposal!, (candidate) =>
-        adapter.syncDocument(candidate)
-      )
-    ).rejects.toThrow(/corner|blend|fillet/i);
-    expect(JSON.stringify(base)).toBe(original);
-    expect((await adapter.syncDocument(base)).warnings).toEqual([]);
-  });
+      const imported = importStepBody(
+        createProjectDocument('Bracket', toUserId('user_fillet')),
+        {
+          name: 'Bracket',
+          artifactId: 'bracket',
+          sourceName: 'bracket.step',
+          stepText: step
+        }
+      );
+      const base = {
+        ...imported.document,
+        derived: await adapter.syncDocument(imported.document)
+      };
+      const original = JSON.stringify(base);
+      const result = createAllEdgesFilletProposal(
+        base,
+        selection,
+        `Fillet all edges by ${radius} mm`
+      );
+      expect(result?.error).toBeUndefined();
+      const preflight = preflightCadPatch(
+        base,
+        result!.proposal!,
+        (candidate) => adapter.syncDocument(candidate)
+      );
+      if (radius === 10) {
+        await expect(preflight).rejects.toThrow(/corner|blend|fillet|radius/i);
+      } else {
+        const preview = await preflight;
+        expect(preview.candidate.derived.warnings).toEqual([]);
+        expect(preview.candidate.derived.exportableBodyIds).toHaveLength(1);
+        const bodyId = preview.candidate.derived.exportableBodyIds[0]!;
+        const rounded = preview.candidate.derived.bodyRepresentations[bodyId]!;
+        const surfaces = rounded.topology!.faces.map(
+          (face) => face.geometry?.surfaceType
+        );
+        expect(surfaces.filter((type) => type === 'plane')).toHaveLength(8);
+        expect(surfaces.filter((type) => type === 'cylinder')).toHaveLength(18);
+        expect(surfaces.filter((type) => type === 'sphere')).toHaveLength(10);
+        expect(surfaces.filter((type) => type === 'torus')).toHaveLength(2);
+        // The upstream mixed-notch qualification pins this closed-form volume.
+        expect(Math.abs(rounded.volume - 13027.2829)).toBeLessThan(2);
+        const step = await adapter.exportStep(preview.candidate, [bodyId]);
+        const roundTrip = importStepBody(
+          createProjectDocument('Rounded bracket', toUserId('user_fillet')),
+          {
+            name: 'Rounded bracket',
+            artifactId: 'rounded-bracket',
+            sourceName: 'rounded.step',
+            stepText: step
+          }
+        );
+        const rebuilt = await adapter.syncDocument(roundTrip.document);
+        expect(rebuilt.warnings).toEqual([]);
+        expect(
+          Math.abs(
+            rebuilt.bodyRepresentations[roundTrip.bodyId]!.volume -
+              rounded.volume
+          )
+        ).toBeLessThan(0.5);
+      }
+      expect(JSON.stringify(base)).toBe(original);
+      expect((await adapter.syncDocument(base)).warnings).toEqual([]);
+    }
+  );
 });

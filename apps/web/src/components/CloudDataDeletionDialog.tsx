@@ -7,6 +7,7 @@ import type {
 } from '@openzcad/shared';
 import { api } from '../lib/api';
 import { useModalFocus } from '../lib/useModalFocus';
+import { PersonalInfoToggle } from './PersonalInfoToggle';
 
 interface CloudDataDeletionDialogProps {
   scope: AccountDeletionScope;
@@ -68,6 +69,7 @@ export function CloudDataDeletionDialog({
   const inputRef = useRef<HTMLInputElement>(null);
   const [preview, setPreview] = useState<AccountDeletionPreview | null>(null);
   const [confirmation, setConfirmation] = useState('');
+  const [personalInfoVisible, setPersonalInfoVisible] = useState(false);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const copy = COPY[scope];
@@ -187,12 +189,20 @@ export function CloudDataDeletionDialog({
             <label className="cloud-deletion-confirmation">
               <span>
                 Type{' '}
-                <strong className="mono">{preview.confirmationText}</strong> to
-                confirm
+                <strong className="mono">
+                  {preview.confirmationKind === 'email' && !personalInfoVisible
+                    ? 'your email address'
+                    : preview.confirmationText}
+                </strong>{' '}
+                to confirm
               </span>
               <input
                 ref={inputRef}
-                type="text"
+                type={
+                  preview.confirmationKind === 'email' && !personalInfoVisible
+                    ? 'password'
+                    : 'text'
+                }
                 autoComplete="off"
                 autoCapitalize="none"
                 spellCheck={false}
@@ -202,6 +212,12 @@ export function CloudDataDeletionDialog({
                 onChange={(event) => setConfirmation(event.currentTarget.value)}
               />
             </label>
+            {preview.confirmationKind === 'email' ? (
+              <PersonalInfoToggle
+                visible={personalInfoVisible}
+                onChange={setPersonalInfoVisible}
+              />
+            ) : null}
           </>
         ) : error ? null : (
           <p className="cloud-deletion-loading" role="status">
