@@ -34,6 +34,10 @@ import type {
   MeasurementWitness
 } from './exact-types';
 import { bezierProfileEdgesEnabled } from './profile-bezier-edges';
+import {
+  booleanEvolutionProbeNeeded,
+  isBooleanEvolutionProbeEligible
+} from './exact-boolean-evolution';
 import type { RemusKernel } from './remus-runtime';
 
 /**
@@ -175,7 +179,14 @@ export function historyFeatureDigest(
     sketches,
     // Read only resolved values named by the explicitly audited expression
     // fields. Other builders conservatively depend on the whole scope.
-    scope: digestScope(feature, scope)
+    scope: digestScope(feature, scope),
+    // Whether this boolean ran the entity-evolution probe depends on the
+    // features AFTER it, so appending a referencing feature changes this
+    // boolean's own digest and the prefix cache rebuilds it with the probe
+    // instead of serving the carrier-only snapshot to the new consumer.
+    ...(isBooleanEvolutionProbeEligible(feature)
+      ? { booleanEvolutionProbe: booleanEvolutionProbeNeeded(document, feature) }
+      : {})
   });
 }
 

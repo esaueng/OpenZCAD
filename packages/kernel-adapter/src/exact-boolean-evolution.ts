@@ -1,4 +1,10 @@
-import type { FeatureId } from '@openzcad/shared';
+import type {
+  BodyId,
+  FeatureId,
+  FeatureNode,
+  ProjectDocument
+} from '@openzcad/shared';
+import { listFeaturesInOrder } from '@openzcad/document-core';
 import type { RemusKernel } from './remus-runtime';
 import {
   carryRemusUnchangedLineage,
@@ -287,4 +293,266 @@ export function deriveBooleanLineage(input: {
       'boolean-evidence-carry'
     ) ?? probed;
   return reconcileRemusBooleanLineage(carrier, carried);
+}
+
+/**
+ * Why a skipped probe was skipped, published through the usual
+ * `Boolean kernel evolution was not consumed` diagnostic by
+ * {@link deriveBooleanLineage}. A constant so the history-cache digest, the
+ * builder and the tests all name the same outcome.
+ */
+export const BOOLEAN_EVOLUTION_SKIPPED_NO_REFERENCE =
+  'The boolean evolution probe was skipped because no later feature references the result faces or edges.';
+
+/** Whether this feature is a boolean whose lineage the probe could enrich. */
+export function isBooleanEvolutionProbeEligible(
+  feature: FeatureNode
+): boolean {
+  return feature.data.featureKind === 'boolean';
+}
+
+/**
+ * Feature kinds whose selections resolve against the target body's lineage.
+ * A later feature of one of these kinds, aimed at a body descended from the
+ * boolean's result, may read a name the probe would have published — through
+ * a v5 reference, through the legacy-hash repair that vouches for one, or
+ * through the parameter-replay normalization that upgrades one — so the
+ * probe runs. Legacy hash-only picks count: the repair path reads the same
+ * lineage the probe enriches.
+ */
+const EXPLICIT_LINEAGE_CONSUMERS: ReadonlySet<string> = new Set([
+  'hole',
+  'shell',
+  'draft',
+  'thicken',
+  'fillet',
+  'chamfer',
+  'direct-edit'
+]);
+
+const KNOWN_FEATURE_KINDS: ReadonlySet<string> = new Set([
+  'primitive',
+  'sketch',
+  'extrude',
+  'revolve',
+  'loft',
+  'sweep',
+  'helical-sweep',
+  'boolean',
+  'transform',
+  'mirror',
+  'shell',
+  'solid-offset',
+  'draft',
+  'thicken',
+  'fillet',
+  'chamfer',
+  'pattern',
+  'split',
+  'hole',
+  'direct-edit',
+  'imported-step',
+  'imported-mesh'
+]);
+
+const KNOWN_NODE_KINDS: ReadonlySet<string> = new Set([
+  'project',
+  'assembly',
+  'part',
+  'parameter',
+  'sketch',
+  'sketch-object',
+  'feature',
+  'body'
+]);
+
+/** Bodies this feature reads: the booleans it reduces and the body it edits. */
+function consumedBodyIds(feature: FeatureNode): BodyId[] {
+  const data = feature.data;
+  if (data.featureKind === 'boolean') {
+    return [...data.targetBodyIds];
+  }
+  if (
+    data.featureKind === 'extrude' ||
+    data.featureKind === 'hole' ||
+    data.featureKind === 'split' ||
+    data.featureKind === 'shell' ||
+    data.featureKind === 'solid-offset' ||
+    data.featureKind === 'draft' ||
+    data.featureKind === 'thicken' ||
+    data.featureKind === 'fillet' ||
+    data.featureKind === 'chamfer' ||
+    data.featureKind === 'pattern' ||
+    data.featureKind === 'direct-edit' ||
+    data.featureKind === 'transform' ||
+    data.featureKind === 'mirror'
+  ) {
+    return data.targetBodyId !== undefined ? [data.targetBodyId] : [];
+  }
+  return [];
+}
+
+/** Bodies this feature (re)publishes under, for the descendant closure. */
+function producedBodyIds(feature: FeatureNode): BodyId[] {
+  const bodies: BodyId[] = [];
+  if (feature.bodyId !== undefined) {
+    bodies.push(feature.bodyId);
+  }
+  if (
+    feature.data.featureKind === 'split' &&
+    feature.data.secondBodyId !== undefined &&
+    feature.data.secondBodyId !== feature.bodyId
+  ) {
+    bodies.push(feature.data.secondBodyId);
+  }
+  return bodies;
+}
+
+/**
+ * Whether any persisted schema-v5 reference anywhere in the document names
+ * this boolean as its producer — in a later feature's face/edge selection,
+ * in a direct-edit operation, or in a sketch attachment. Such a reference
+ * resolves against the lineage the probe enriches, wherever its holder sits,
+ * so the probe runs regardless of body bookkeeping.
+ */
+function persistedReferenceNamesProducer(
+  document: ProjectDocument,
+  features: readonly FeatureNode[],
+  producer: FeatureId
+): boolean {
+  for (const feature of features) {
+    const data = feature.data;
+    switch (data.featureKind) {
+      case 'hole':
+        if (data.faceReference?.producingFeatureId === producer) return true;
+        break;
+      case 'shell':
+        if (
+          data.openingFaceReferences?.some(
+            (reference) => reference.producingFeatureId === producer
+          )
+        )
+          return true;
+        break;
+      case 'draft':
+        if (
+          data.faceReferences?.some(
+            (reference) => reference.producingFeatureId === producer
+          )
+        )
+          return true;
+        break;
+      case 'thicken':
+        if (data.faceReference?.producingFeatureId === producer) return true;
+        break;
+      case 'fillet':
+      case 'chamfer':
+        if (
+          data.edgeReferences?.some(
+            (reference) => reference.producingFeatureId === producer
+          )
+        )
+          return true;
+        break;
+      case 'direct-edit': {
+        const operation = data.operation;
+        if (operation.faceReference?.producingFeatureId === producer)
+          return true;
+        if (
+          operation.kind === 'set-face-distance' &&
+          operation.oppositeFaceReference?.producingFeatureId === producer
+        )
+          return true;
+        break;
+      }
+      default:
+        break;
+    }
+  }
+  for (const node of Object.values(document.nodes)) {
+    if (node.kind === 'sketch' && node.planeRef.type === 'face') {
+      if (node.planeRef.faceReference?.producingFeatureId === producer)
+        return true;
+    }
+  }
+  return false;
+}
+
+/**
+ * Whether the entity-evolution probe for this boolean feature may be
+ * skipped.
+ *
+ * Runs the probe unless it can PROVE nothing downstream consumes face/edge
+ * identity from the boolean's result body: a later hole, shell, draft,
+ * thicken, fillet, chamfer or direct edit aimed at the result or at any body
+ * derived from it; a face-attached sketch on any of those bodies; or any
+ * persisted v5 reference naming the boolean anywhere in the document.
+ * Lineage propagation alone — a later boolean, extrude, transform, mirror,
+ * pattern, split or solid offset that merely carries the names forward —
+ * extends the descendant closure without forcing the probe; the probe runs
+ * only where the chain ends in an explicit consumer.
+ *
+ * Fail-closed: an unlisted feature or node kind, a missing body, a feature
+ * absent from the order, or a suppressed downstream selection all run the
+ * probe. Suppressed features are treated as live because unsuppressing one
+ * must not serve a cached carrier-only result to a referencing feature.
+ * Extrude add/cut booleans are out of scope — they always probe, which is
+ * what the existing evolution lineage tests pin.
+ */
+export function booleanEvolutionProbeNeeded(
+  document: ProjectDocument,
+  feature: FeatureNode
+): boolean {
+  if (!isBooleanEvolutionProbeEligible(feature)) {
+    return false;
+  }
+  const resultBodyId = feature.bodyId;
+  if (resultBodyId === undefined) {
+    return true;
+  }
+  const features = listFeaturesInOrder(document);
+  const index = features.findIndex(
+    (candidate) => candidate.featureId === feature.featureId
+  );
+  if (index < 0) {
+    return true;
+  }
+  if (persistedReferenceNamesProducer(document, features, feature.featureId)) {
+    return true;
+  }
+  const descendants = new Set<BodyId>([resultBodyId]);
+  for (let later = index + 1; later < features.length; later += 1) {
+    const downstream = features[later]!;
+    if (!KNOWN_FEATURE_KINDS.has(downstream.data.featureKind)) {
+      return true;
+    }
+    if (downstream.data.featureKind === 'sketch') {
+      continue;
+    }
+    const touches = consumedBodyIds(downstream).some((bodyId) =>
+      descendants.has(bodyId)
+    );
+    if (!touches) {
+      continue;
+    }
+    for (const bodyId of producedBodyIds(downstream)) {
+      descendants.add(bodyId);
+    }
+    if (EXPLICIT_LINEAGE_CONSUMERS.has(downstream.data.featureKind)) {
+      return true;
+    }
+  }
+  for (const node of Object.values(document.nodes)) {
+    if (!KNOWN_NODE_KINDS.has(node.kind)) {
+      return true;
+    }
+    if (
+      node.kind === 'sketch' &&
+      node.planeRef.type === 'face' &&
+      descendants.has(node.planeRef.bodyId)
+    ) {
+      return true;
+    }
+  }
+  return false;
 }
