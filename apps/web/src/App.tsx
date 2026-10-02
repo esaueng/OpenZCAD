@@ -15509,6 +15509,9 @@ export function App() {
       if (meta && event.key.toLowerCase() === 'k') {
         event.preventDefault();
         setShortcutsOpen(false);
+        // The log is a sheet over the prompt's lane: left open, it kept
+        // covering the field this focuses, so typing went somewhere unseen.
+        setActivityLogOpen(false);
         setPaletteOpen((open) => !open);
         return;
       }
