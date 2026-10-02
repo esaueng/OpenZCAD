@@ -29,9 +29,14 @@ import { edgeSampleOf } from './exact-witnesses';
 function bevellingKernel(kernel: RemusKernel): RemusKernel {
   return new Proxy(kernel, {
     get(target, property) {
-      if (property === 'fillet') {
-        return (solid: number, edges: Uint32Array, size: number) =>
-          target.chamfer(solid, edges, size);
+      if (property === 'filletDetailed') {
+        return (solid: number, edges: Uint32Array, size: number) => ({
+          status: 'ok',
+          code: null,
+          category: null,
+          details: { engine: 'planarBevel', quality: 'exact' },
+          value: target.chamfer(solid, edges, size)
+        });
       }
       const value: unknown = Reflect.get(target, property, target);
       return typeof value === 'function'
@@ -41,14 +46,14 @@ function bevellingKernel(kernel: RemusKernel): RemusKernel {
   });
 }
 
-/** Records every size `fillet` is called at, to count kernel round-trips. */
+/** Records every size `filletDetailed` is called at, to count kernel round-trips. */
 function countingKernel(kernel: RemusKernel, sizes: number[]): RemusKernel {
   return new Proxy(kernel, {
     get(target, property) {
-      if (property === 'fillet') {
+      if (property === 'filletDetailed') {
         return (solid: number, edges: Uint32Array, size: number) => {
           sizes.push(size);
-          return target.fillet(solid, edges, size);
+          return target.filletDetailed(solid, edges, size);
         };
       }
       const value: unknown = Reflect.get(target, property, target);

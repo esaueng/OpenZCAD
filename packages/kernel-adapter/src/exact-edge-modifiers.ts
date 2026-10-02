@@ -6,6 +6,12 @@
 import type { FaceEvolutionPayloadV1, RemusKernel } from './remus-runtime';
 import { GEOMETRY_LINEAR_TOLERANCE } from '@openzcad/geometry';
 import { GEOMETRY_EPSILON, errorText } from './exact-math';
+import {
+  blendOutcome,
+  blendReportIsVertexBlend,
+  reportBlendRefusal,
+  type BlendOperation
+} from './exact-blend-refusal';
 import { MEASUREMENT_DEFLECTION, edgeSampleOf } from './exact-witnesses';
 import { countBlendFaces, selectionTouchesBlendFace } from './exact-brep';
 import {
@@ -65,6 +71,48 @@ export function blendCliffLimit(reported: string | null): number | null {
 }
 
 /**
+ * Run one constant blend through its typed twin and read the verdict as
+ * data, reporting the refusal the same way a bare throw was reported.
+ *
+ * Returns the solid, or `null` when the kernel refused or the call itself
+ * failed. The report string is the typed refusal's stable code ahead of the
+ * kernel's own detail sentence (see {@link reportBlendRefusal}) — the two
+ * still-allowlisted matchers read kernel-measured counts out of that
+ * sentence, and the failure KIND is never read out of it.
+ */
+function applyTypedBlend(
+  kernel: RemusKernel,
+  operation: BlendOperation,
+  target: number,
+  handles: Uint32Array,
+  size: number,
+  reportRefusal: ((message: string) => void) | undefined,
+  /** Distance-angle chamfer only: the bevel angle in radians. */
+  chamferAngleRadians?: number
+): number | null {
+  try {
+    const outcome = blendOutcome(
+      kernel,
+      operation,
+      target,
+      handles,
+      size,
+      chamferAngleRadians
+    );
+    if (outcome.status === 'refused') {
+      reportRefusal?.(reportBlendRefusal(outcome.refusal));
+      return null;
+    }
+    return outcome.solid;
+  } catch (error) {
+    // The typed twins answer as data, so a throw is the harness failing
+    // rather than a refusal. Relayed exactly as the bare calls' throws were.
+    reportRefusal?.(errorText(error));
+    return null;
+  }
+}
+
+/**
  * Run one edge modifier and apply every acceptance rule the adapter ships a
  * result under, returning `null` when the kernel refused or produced a body
  * this adapter will not accept.
@@ -81,7 +129,8 @@ export function applyEdgeModifier(
   featureKind: 'fillet' | 'chamfer',
   size: number,
   /**
-   * Receives the refusal text: the kernel's own when it threw one, and this
+   * Receives the refusal text: the typed refusal's stable code ahead of the
+   * kernel's own detail sentence when the kernel refused, and this
    * adapter's when it declined a result the kernel was willing to return.
    */
   reportRefusal?: (message: string) => void,
@@ -122,10 +171,26 @@ export function applyEdgeModifier(
           evolution = kernel.filletWithEvolution(target, handles, size);
           modified = evolution.result.solid;
         } catch {
-          modified = kernel.fillet(target, handles, size);
+          modified =
+            applyTypedBlend(
+              kernel,
+              'fillet',
+              target,
+              handles,
+              size,
+              reportRefusal
+            ) ?? target;
         }
       } else {
-        modified = kernel.fillet(target, handles, size);
+        modified =
+          applyTypedBlend(
+            kernel,
+            'fillet',
+            target,
+            handles,
+            size,
+            reportRefusal
+          ) ?? target;
       }
     } catch (error) {
       // Keep what the kernel said. It names the edges it could not blend, the
@@ -155,30 +220,66 @@ export function applyEdgeModifier(
             );
             modified = evolution.result.solid;
           } catch {
-            modified = kernel.chamferDistanceAngle(
+            const angled = applyTypedBlend(
+              kernel,
+              'chamferDistanceAngle',
               target,
               handles,
               size,
+              reportRefusal,
               chamferAngleRadians
             );
+            if (angled === null) {
+              return null;
+            }
+            modified = angled;
           }
         } else {
-          modified = kernel.chamferDistanceAngle(
+          const angled = applyTypedBlend(
+            kernel,
+            'chamferDistanceAngle',
             target,
             handles,
             size,
+            reportRefusal,
             chamferAngleRadians
           );
+          if (angled === null) {
+            return null;
+          }
+          modified = angled;
         }
       } else if (reportEvolution) {
         try {
           evolution = kernel.chamferWithEvolution(target, handles, size);
           modified = evolution.result.solid;
         } catch {
-          modified = kernel.chamfer(target, handles, size);
+          const bevelled = applyTypedBlend(
+            kernel,
+            'chamfer',
+            target,
+            handles,
+            size,
+            reportRefusal
+          );
+          if (bevelled === null) {
+            return null;
+          }
+          modified = bevelled;
         }
       } else {
-        modified = kernel.chamfer(target, handles, size);
+        const bevelled = applyTypedBlend(
+          kernel,
+          'chamfer',
+          target,
+          handles,
+          size,
+          reportRefusal
+        );
+        if (bevelled === null) {
+          return null;
+        }
+        modified = bevelled;
       }
     } catch (error) {
       reportRefusal?.(errorText(error));
@@ -609,12 +710,14 @@ export function edgeModifierFailureMessage(
     // Sharing a corner is NOT itself a refusal: all twelve edges of a plain
     // box meet at corners and round together at every radius tried. Only the
     // kernel knows which vertices its blend engines gave up on, so this cause
-    // is claimed only when the kernel actually reported it.
+    // is claimed only when the kernel actually reported it — read here from
+    // the stable `blend_failure_code` the typed refusal carries, not from
+    // the English around it.
     const subsetRemedy = blendSubsetRemedy(reported, featureKind);
     if (subsetRemedy) {
       return `${prefix} ${subsetRemedy}`;
     }
-    if (reported?.includes('unsupported vertex blend')) {
+    if (blendReportIsVertexBlend(reported)) {
       return `${prefix} Two of these rounds would run into each other at a shared corner, which the kernel cannot blend yet — ${featureKind} the edges in smaller groups that do not meet.`;
     }
     if (selectionTouchesBlendFace(kernel, target, selected)) {
