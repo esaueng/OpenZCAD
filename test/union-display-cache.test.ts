@@ -59,6 +59,7 @@ it('measures an accepted boolean from its closure tessellation and matches a fre
     positions: number[];
     indices: number[];
     groups: number;
+    closureChecked: boolean;
   }[] = [];
   const original = RemusKernel.prototype.tessellateSolidGroupedBinary;
   vi.spyOn(
@@ -70,7 +71,10 @@ it('measures an accepted boolean from its closure tessellation and matches a fre
       solid,
       positions: Array.from(mesh.positions),
       indices: Array.from(mesh.indices),
-      groups: mesh.faceOffsets.length - 1
+      groups: mesh.faceOffsets.length - 1,
+      closureChecked: (new Error('trace').stack ?? '').includes(
+        'tessellateAndCheckSolidMesh'
+      )
     });
     return mesh;
   });
@@ -96,7 +100,10 @@ it('measures an accepted boolean from its closure tessellation and matches a fre
     ).toBe(true);
 
     // Identify the final measured group's exact vertex stream among the
-    // kernel calls. It must have been tessellated once, by closure checking.
+    // kernel calls. Every byte-identical twin must be closure-checked bytes:
+    // the deterministic kernel emits the same mesh from the union gate and
+    // the evolution probe, so uniqueness no longer holds — but measurement
+    // must still contribute no fresh (non-closure) tessellation of it.
     const matchingMeshes = tessellatedMeshes.filter(
       (mesh) =>
         mesh.positions.length === body!.mesh.vertices.length &&
@@ -109,7 +116,8 @@ it('measures an accepted boolean from its closure tessellation and matches a fre
         ) &&
         mesh.groups === body!.faceCount
     );
-    expect(matchingMeshes).toHaveLength(1);
+    expect(matchingMeshes.length).toBeGreaterThanOrEqual(1);
+    expect(matchingMeshes.every((mesh) => mesh.closureChecked)).toBe(true);
 
     const oracle = new RemusKernel();
     try {
