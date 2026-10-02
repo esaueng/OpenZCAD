@@ -507,6 +507,7 @@ import type {
   InteractionState
 } from './lib/interaction/machine';
 import {
+  refreshEdgeFormReferencesForCommit,
   refreshEdgeReferencesForCommit,
   resolveFace
 } from './lib/topologyResolution';
@@ -3280,32 +3281,23 @@ export function App() {
     value: EdgeModifierFormValue
   ) {
     if (geometryBusy) return;
-    // K05 on-demand probe: the form's edgeReferences were captured when the
-    // edges were picked. Re-read CURRENT lineage at commit time so a name
-    // that arrived with the demanded rebuild is persisted; fail closed to
-    // the stale (hash-only) set when a name is ambiguous.
+    // K05 on-demand probe: a pick made before the demanded rebuild arrived
+    // carries no lineage name, so the form holds no `edgeReferences` at all
+    // (they are all-or-nothing). Re-read CURRENT lineage by hash at commit
+    // time and use it only when every picked edge resolves to a named
+    // reference for that same hash; otherwise commit exactly what the form
+    // holds.
     const formBody =
       representations[value.targetBodyId] ??
       renderedRepresentations[value.targetBodyId];
-    const refreshedValue =
-      formBody && value.edgeReferences
-        ? {
-            ...value,
-            edgeReferences: value.edgeHashes.flatMap((hash, index) => {
-              const stale = value.edgeReferences?.[index];
-              // The form carries hashes only; re-resolve by hash against the
-              // current topology. Fail-closed on ambiguity inside the helper.
-              const refreshed = refreshEdgeReferencesForCommit(formBody, [
-                {
-                  topologyId: undefined,
-                  hash,
-                  ...(stale ? { reference: stale } : {})
-                }
-              ])[0];
-              return refreshed?.kind === 'edge' ? [refreshed] : stale ? [stale] : [];
-            })
-          }
-        : value;
+    const namedReferences = refreshEdgeFormReferencesForCommit(
+      formBody,
+      value.edgeHashes,
+      value.edgeReferences
+    );
+    const refreshedValue = namedReferences
+      ? { ...value, edgeReferences: namedReferences }
+      : value;
     const command = edgeModifierCommand(feature, kind, refreshedValue);
     const bodyId =
       feature?.bodyId ??

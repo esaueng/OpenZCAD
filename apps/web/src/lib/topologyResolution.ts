@@ -1,6 +1,7 @@
 import type {
   BodyRepresentation,
   EdgeTopology,
+  EdgeTopologyReferenceV5,
   FaceTopology,
   TopologyReferenceV5,
   TopologySelection
@@ -221,11 +222,11 @@ export function refreshEdgeReferenceForCommit(
   if (!current || current.kind !== 'edge') {
     return stale;
   }
-  // The hash rung proves the geometry is where it was; a lineage-only move
-  // (via === 'lineage') still names the same feature, which is what a
-  // persisted v5 reference needs. Either way the CURRENT name wins when it
-  // is unambiguous — `resolve` already failed closed on ambiguity.
-  if (!current.lineageName) {
+  // The CURRENT name wins only when `resolve` found it unambiguously and it
+  // still describes the picked sub-shape: the command contract requires each
+  // reference's `currentHash` to match its legacy hash, so a lineage-only
+  // move to a different hash keeps the stale reference instead.
+  if (!current.lineageName || current.currentHash !== selection.hash) {
     return stale;
   }
   return current;
@@ -245,7 +246,7 @@ export function refreshFaceReferenceForCommit(
   if (!current || current.kind !== 'face') {
     return stale;
   }
-  if (!current.lineageName) {
+  if (!current.lineageName || current.currentHash !== selection.hash) {
     return stale;
   }
   return current;
@@ -259,9 +260,50 @@ export function refreshFaceReferenceForCommit(
  */
 export function refreshEdgeReferencesForCommit(
   body: BodyRepresentation | undefined,
-  selections: readonly Pick<TopologySelection, 'topologyId' | 'hash' | 'reference'>[]
+  selections: readonly Pick<
+    TopologySelection,
+    'topologyId' | 'hash' | 'reference'
+  >[]
 ): (TopologyReferenceV5 | undefined)[] {
   return selections.map((selection) =>
     refreshEdgeReferenceForCommit(body, selection)
   );
+}
+
+/**
+ * The edge-modifier form's half of the commit-time refresh. The form holds
+ * `edgeReferences` only when every pick already had a name (the command
+ * contract is all-or-nothing, one reference per hash), so a pick made on a
+ * carrier-only body reaches commit with none. Re-resolve every hash against
+ * the current topology and return a complete named list only when each hash
+ * resolves to a named reference for that same hash; otherwise return
+ * `undefined` so the caller commits exactly what the form holds.
+ */
+export function refreshEdgeFormReferencesForCommit(
+  body: BodyRepresentation | undefined,
+  edgeHashes: readonly number[],
+  edgeReferences: readonly EdgeTopologyReferenceV5[] | undefined
+): EdgeTopologyReferenceV5[] | undefined {
+  if (!body || edgeHashes.length === 0) {
+    return undefined;
+  }
+  const refreshed = refreshEdgeReferencesForCommit(
+    body,
+    edgeHashes.map((hash) => {
+      const stale = edgeReferences?.find(
+        (reference) => reference.currentHash === hash
+      );
+      return {
+        topologyId: undefined,
+        hash,
+        ...(stale ? { reference: stale } : {})
+      };
+    })
+  );
+  const named = refreshed.flatMap((reference, index) =>
+    reference?.kind === 'edge' && reference.currentHash === edgeHashes[index]
+      ? [reference]
+      : []
+  );
+  return named.length === edgeHashes.length ? named : undefined;
 }

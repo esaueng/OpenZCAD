@@ -2,6 +2,7 @@ import { describe, expect, it } from 'vitest';
 import { toBodyId, toFeatureId } from '@openzcad/shared';
 import type { BodyRepresentation } from '@openzcad/shared';
 import {
+  refreshEdgeFormReferencesForCommit,
   refreshEdgeReferenceForCommit,
   refreshFaceReferenceForCommit
 } from './topologyResolution';
@@ -80,13 +81,10 @@ describe('commit-time reference refresh', () => {
   it('fails closed to the stale reference on ambiguity', () => {
     const stale = edgeReference('boolean.edge.fuse.7', 77);
     // Two edges share the hash: choosing would be a guess.
-    const body = bodyWith(
-      [],
-      [
-        { topologyId: 'edge-7', hash: 77, reference: stale },
-        { topologyId: 'edge-8', hash: 77, reference: stale }
-      ] as never
-    );
+    const body = bodyWith([], [
+      { topologyId: 'edge-7', hash: 77, reference: stale },
+      { topologyId: 'edge-8', hash: 77, reference: stale }
+    ] as never);
     const refreshed = refreshEdgeReferenceForCommit(body, {
       topologyId: 'edge-7',
       hash: 77,
@@ -96,10 +94,7 @@ describe('commit-time reference refresh', () => {
   });
 
   it('keeps hash-only when the current topology names nothing', () => {
-    const body = bodyWith(
-      [],
-      [{ topologyId: 'edge-7', hash: 77 } as never]
-    );
+    const body = bodyWith([], [{ topologyId: 'edge-7', hash: 77 } as never]);
     const refreshed = refreshEdgeReferenceForCommit(body, {
       topologyId: 'edge-7',
       hash: 77
@@ -119,5 +114,65 @@ describe('commit-time reference refresh', () => {
       hash: 33
     });
     expect(refreshed?.lineageName).toBe('boolean.face.carrier.3');
+  });
+
+  it('keeps the stale reference when the current name moved to another hash', () => {
+    // Resolved through the lineage rung, but the named edge now carries a
+    // different hash: the command contract pins reference to legacy hash.
+    const stale = edgeReference('boolean.edge.fuse.7', 77);
+    const body = bodyWith([], [
+      {
+        topologyId: 'edge-9',
+        hash: 99,
+        reference: edgeReference('boolean.edge.fuse.7', 99)
+      }
+    ] as never);
+    const refreshed = refreshEdgeReferenceForCommit(body, {
+      topologyId: undefined,
+      hash: 77,
+      reference: stale
+    });
+    expect(refreshed).toBe(stale);
+  });
+
+  it('fills a form that reached commit with hash-only picks', () => {
+    const body = bodyWith([], [
+      {
+        topologyId: 'edge-7',
+        hash: 77,
+        reference: edgeReference('boolean.edge.fuse.7', 77)
+      },
+      {
+        topologyId: 'edge-8',
+        hash: 88,
+        reference: edgeReference('boolean.edge.fuse.8', 88)
+      }
+    ] as never);
+    const named = refreshEdgeFormReferencesForCommit(body, [77, 88], undefined);
+    expect(named?.map((reference) => reference.lineageName)).toEqual([
+      'boolean.edge.fuse.7',
+      'boolean.edge.fuse.8'
+    ]);
+    expect(named?.map((reference) => reference.currentHash)).toEqual([77, 88]);
+  });
+
+  it('leaves the form alone unless every pick resolves to a name', () => {
+    const body = bodyWith([], [
+      {
+        topologyId: 'edge-7',
+        hash: 77,
+        reference: edgeReference('boolean.edge.fuse.7', 77)
+      },
+      { topologyId: 'edge-8', hash: 88 }
+    ] as never);
+    expect(
+      refreshEdgeFormReferencesForCommit(body, [77, 88], undefined)
+    ).toBeUndefined();
+    expect(
+      refreshEdgeFormReferencesForCommit(undefined, [77], undefined)
+    ).toBeUndefined();
+    expect(
+      refreshEdgeFormReferencesForCommit(body, [], undefined)
+    ).toBeUndefined();
   });
 });
