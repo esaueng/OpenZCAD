@@ -2,10 +2,29 @@ import type { ExtrudeFormValue } from './forms/ExtrudeForm';
 import type { MassPropertiesRead } from '@openzcad/kernel-adapter/exact';
 import { Fragment, useEffect, useRef, useState, type ReactNode } from 'react';
 import { unitLabel } from '../lib/measurements';
+import {
+  loadMassDensitySelection,
+  saveMassDensitySelection
+} from '../lib/massDensityPreference';
 import { MoreHorizontal, Trash2, X } from 'lucide-react';
 import { coerceParamValue } from '@openzcad/document-core';
 import { findFontFace } from '@openzcad/geometry';
 import { FEATURE_COLORS, featureColor } from '@openzcad/shared';
+import {
+  MATERIAL_DENSITY_PRESETS,
+  MAX_CUSTOM_DENSITY_KG_PER_M3,
+  UNIT_MASS_DENSITY_SELECTION,
+  convertInertia,
+  convertMass,
+  describeMassDensitySelection,
+  displayInertiaUnit,
+  displayMassUnit,
+  inertiaSiKgM2,
+  massKg,
+  normalizeMassDensitySelection,
+  parseCustomDensityKgPerM3,
+  resolveDensityKgPerM3
+} from '@openzcad/shared';
 import type {
   FaceRecognitionSummary,
   ProjectDocument,
@@ -17,6 +36,7 @@ import type {
   FaceGeometry,
   FeatureId,
   FeatureNode,
+  MassDensitySelection,
   ParamValue,
   PrimitiveKind,
   RevolveAxis,
@@ -382,6 +402,7 @@ function BodyStats({
   document?: ProjectDocument | null;
   worker?: InspectorProps['massPropertiesWorker'];
 }) {
+  const projectId = document?.projectId ?? null;
   const [massOpen, setMassOpen] = useState(false);
   const [query, setQuery] = useState<{
     document: ProjectDocument | null | undefined;
@@ -390,6 +411,25 @@ function BodyStats({
     properties?: BodyMassProperties;
     message?: string;
   } | null>(null);
+  const [densitySelection, setDensitySelection] =
+    useState<MassDensitySelection>(() =>
+      projectId
+        ? loadMassDensitySelection(projectId)
+        : UNIT_MASS_DENSITY_SELECTION
+    );
+  const [customDraft, setCustomDraft] = useState('');
+  const [customError, setCustomError] = useState<string | null>(null);
+  // A different project brings its own remembered material; a panel without a
+  // document (committed properties in tests) stays session-local.
+  useEffect(() => {
+    setDensitySelection(
+      projectId
+        ? loadMassDensitySelection(projectId)
+        : UNIT_MASS_DENSITY_SELECTION
+    );
+    setCustomDraft('');
+    setCustomError(null);
+  }, [projectId]);
   const workerRef = useRef(worker);
   workerRef.current = worker;
   useEffect(() => {
@@ -451,6 +491,90 @@ function BodyStats({
   const mass =
     body.massProperties ??
     (currentQuery?.status === 'ready' ? currentQuery.properties : undefined);
+  const densityKgPerM3 = resolveDensityKgPerM3(densitySelection);
+  // Physical mass comes from the published exact volume, not from the
+  // kernel's own volume field, which the shared type deliberately withholds
+  // as the less accurate of the two.
+  const massKgValue =
+    densityKgPerM3 === null ? null : massKg(body.volume, units, densityKgPerM3);
+  const massUnit =
+    massKgValue === null ? null : displayMassUnit(massKgValue, units);
+  const inertiaUnit =
+    massUnit === null ? null : displayInertiaUnit(massUnit, units);
+  /** One kernel component in display units; only called with a material set. */
+  function scaledInertia(value: number): number {
+    return convertInertia(
+      inertiaSiKgM2(value, units, densityKgPerM3!),
+      massUnit!,
+      units
+    );
+  }
+  /** The symmetric tensor as three model-axis rows. */
+  function inertiaRows(
+    values: readonly [number, number, number, number, number, number]
+  ): Array<[number, number, number]> {
+    const [iXX, iYY, iZZ, iXY, iXZ, iYZ] = values;
+    return [
+      [iXX, iXY, iXZ],
+      [iXY, iYY, iYZ],
+      [iXZ, iYZ, iZZ]
+    ];
+  }
+  function applyDensitySelection(next: MassDensitySelection): void {
+    const normalized = normalizeMassDensitySelection(next);
+    setDensitySelection(normalized);
+    if (projectId) {
+      saveMassDensitySelection(projectId, normalized);
+    }
+    if (normalized.kind === 'custom') {
+      setCustomDraft(String(normalized.densityKgPerM3));
+      setCustomError(null);
+    }
+  }
+  const densityControlValue =
+    densitySelection.kind === 'unit'
+      ? 'unit'
+      : densitySelection.kind === 'preset'
+        ? `preset:${densitySelection.presetId}`
+        : 'custom';
+  function onDensityControlChange(value: string): void {
+    if (value === 'unit') {
+      applyDensitySelection({ kind: 'unit' });
+      return;
+    }
+    if (value === 'custom') {
+      const parsed = parseCustomDensityKgPerM3(Number(customDraft));
+      applyDensitySelection({
+        kind: 'custom',
+        densityKgPerM3: parsed ?? 1000
+      });
+      return;
+    }
+    if (value.startsWith('preset:')) {
+      applyDensitySelection({
+        kind: 'preset',
+        presetId: value.slice('preset:'.length)
+      });
+    }
+  }
+  function onCustomDraftChange(text: string): void {
+    setCustomDraft(text);
+    if (text.trim() === '') {
+      // Clearing the field is editing, not a zero density: keep the last
+      // valid material until a new number parses.
+      setCustomError(null);
+      return;
+    }
+    const parsed = parseCustomDensityKgPerM3(Number(text));
+    if (parsed === null) {
+      setCustomError(
+        `Enter a positive density in kg/m³ (at most ${MAX_CUSTOM_DENSITY_KG_PER_M3}).`
+      );
+      return;
+    }
+    setCustomError(null);
+    applyDensitySelection({ kind: 'custom', densityKgPerM3: parsed });
+  }
   return (
     <>
       <CollapsibleSection title="Measurements" defaultOpen>
@@ -473,11 +597,60 @@ function BodyStats({
         </div>
       </CollapsibleSection>
       <CollapsibleSection
-        title="Mass properties (at unit density)"
+        title={
+          densityKgPerM3 === null
+            ? 'Mass properties (at unit density)'
+            : `Mass properties (${describeMassDensitySelection(densitySelection)})`
+        }
         onToggle={setMassOpen}
       >
+        <div className="kv-grid">
+          <b>material</b>
+          <span>
+            <select
+              aria-label="Material density"
+              value={densityControlValue}
+              onChange={(event) => onDensityControlChange(event.target.value)}
+            >
+              <option value="unit">Unit density</option>
+              {MATERIAL_DENSITY_PRESETS.map((preset) => (
+                <option key={preset.id} value={`preset:${preset.id}`}>
+                  {preset.label} · {preset.densityKgPerM3} kg/m³
+                </option>
+              ))}
+              <option value="custom">Custom…</option>
+            </select>
+          </span>
+          {densitySelection.kind === 'custom' && (
+            <>
+              <b>custom density</b>
+              <span>
+                <input
+                  aria-label="Custom density in kilograms per cubic metre"
+                  inputMode="decimal"
+                  value={customDraft}
+                  onChange={(event) => onCustomDraftChange(event.target.value)}
+                />{' '}
+                kg/m³
+              </span>
+            </>
+          )}
+        </div>
+        {customError && (
+          <p className="form-error" role="alert">
+            {customError}
+          </p>
+        )}
         {mass ? (
           <div className="kv-grid">
+            {massKgValue !== null && massUnit !== null && (
+              <>
+                <b>mass</b>
+                <span>
+                  {formatNumber(convertMass(massKgValue, massUnit))} {massUnit}
+                </span>
+              </>
+            )}
             <b>center of mass</b>
             <span>
               {formatNumber(mass.centerOfMass.x)},{' '}
@@ -486,11 +659,55 @@ function BodyStats({
             </span>
             <b>principal inertia</b>
             <span>
-              {formatNumber(mass.principalMoments[0])} ·{' '}
-              {formatNumber(mass.principalMoments[1])} ·{' '}
-              {formatNumber(mass.principalMoments[2])}{' '}
-              {unitLabel('length', units)}⁵ · multiply by material density for
-              physical values
+              {densityKgPerM3 === null || inertiaUnit === null ? (
+                <>
+                  {formatNumber(mass.principalMoments[0])} ·{' '}
+                  {formatNumber(mass.principalMoments[1])} ·{' '}
+                  {formatNumber(mass.principalMoments[2])}{' '}
+                  {unitLabel('length', units)}⁵ · multiply by material density
+                  for physical values
+                </>
+              ) : (
+                <>
+                  {formatNumber(scaledInertia(mass.principalMoments[0]))} ·{' '}
+                  {formatNumber(scaledInertia(mass.principalMoments[1]))} ·{' '}
+                  {formatNumber(scaledInertia(mass.principalMoments[2]))}{' '}
+                  {inertiaUnit}
+                </>
+              )}
+            </span>
+            <b>inertia tensor</b>
+            <span style={{ fontVariantNumeric: 'tabular-nums' }}>
+              {inertiaRows(mass.inertia).map((row, index, rows) => (
+                <span key={index} style={{ display: 'block' }}>
+                  {formatNumber(
+                    densityKgPerM3 === null || inertiaUnit === null
+                      ? row[0]
+                      : scaledInertia(row[0])
+                  )}{' '}
+                  {formatNumber(
+                    densityKgPerM3 === null || inertiaUnit === null
+                      ? row[1]
+                      : scaledInertia(row[1])
+                  )}{' '}
+                  {formatNumber(
+                    densityKgPerM3 === null || inertiaUnit === null
+                      ? row[2]
+                      : scaledInertia(row[2])
+                  )}
+                  {index === rows.length - 1
+                    ? ` ${densityKgPerM3 === null || inertiaUnit === null ? `${unitLabel('length', units)}⁵` : inertiaUnit}`
+                    : null}
+                </span>
+              ))}
+            </span>
+            <b>principal axes</b>
+            <span style={{ fontVariantNumeric: 'tabular-nums' }}>
+              {mass.principalAxes.map((axis, index) => (
+                <span key={index} style={{ display: 'block' }}>
+                  {`${index + 1} · (${formatNumber(axis.x)}, ${formatNumber(axis.y)}, ${formatNumber(axis.z)})`}
+                </span>
+              ))}
             </span>
           </div>
         ) : (
@@ -504,6 +721,11 @@ function BodyStats({
                   : 'Open this section to measure mass properties.'}
           </p>
         )}
+        <p className="muted">
+          {densityKgPerM3 === null
+            ? 'Kernel-integrated over face geometry — no tessellation. Trim outlines on curved faces are sampled.'
+            : `${describeMassDensitySelection(densitySelection)} · kernel-integrated over face geometry — no tessellation. Trim outlines on curved faces are sampled.`}
+        </p>
       </CollapsibleSection>
     </>
   );
