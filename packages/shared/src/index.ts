@@ -1,6 +1,7 @@
 export * from './workspace-resume';
 export * from './document-history';
 export * from './sketch-reference-dimensions';
+export * from './mass-density';
 import type { DocumentHistory } from './document-history';
 export type Brand<T, Name extends string> = T & { readonly __brand: Name };
 
@@ -1406,6 +1407,14 @@ export interface FaceGeometry {
    * modelling tolerance but is not bit-stable across kernel versions.
    */
   centroid?: Vector3;
+  /**
+   * How far {@link centroid} can be trusted. Mirrors the provenance the area
+   * integrator reports: `exact` only when every boundary edge is a straight
+   * line, `sampled` once any curved boundary is inscribed. Present only with
+   * {@link centroid}; absent on older projections, which consumers must treat
+   * as "assume approximate" rather than as "exact".
+   */
+  centroidProvenance?: FaceAreaProvenance;
   /** Outward unit normal; present for exact planar surfaces. */
   normal?: Vector3;
   /**
@@ -2129,7 +2138,7 @@ export interface FeatureWarning {
    * a second one beside it.
    */
   kernelRefusal?: {
-    family: 'boolean' | 'validation' | 'healing' | 'import';
+    family: 'boolean' | 'validation' | 'healing' | 'import' | 'blend';
     operation?: string;
     category: string;
     code: string;
@@ -2227,6 +2236,7 @@ export interface ArtifactRecord {
     | '3mf-export'
     | 'obj-export'
     | 'gltf-export'
+    | 'ply-export'
     | 'snapshot'
     | 'thumbnail';
   name: string;

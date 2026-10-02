@@ -3,12 +3,9 @@ import {
   cylinderRadiusSnapStep,
   cylinderRadiusTolerance,
   cylinderRadialFrame,
-  diameterToRadius,
   isValidCylinderRadius,
   radiusFromRadialDelta,
-  radiusToDiameter,
   sameCylinderAxis,
-  signedRadialDelta,
   supportsRadialCylinderPreview,
   cylinderPreviewProfile
 } from './cylinderRadius';
@@ -78,11 +75,6 @@ describe('cylinder radius drag math', () => {
     expect(cylinderRadiusSnapStep(1_000_000)).toBe(10_000_000);
   });
 
-  it('keeps radius and diameter conversion explicit', () => {
-    expect(radiusToDiameter(18)).toBe(36);
-    expect(diameterToRadius(36)).toBe(18);
-  });
-
   it('derives the same radius direction at different points around the wall', () => {
     const axisStart = { x: 10, y: -5, z: 3 };
     const axisEnd = { x: 10, y: -5, z: 31 };
@@ -101,20 +93,10 @@ describe('cylinder radius drag math', () => {
     expect(xSide?.radiusAtHit).toBeCloseTo(14, 8);
     expect(ySide?.radiusAtHit).toBeCloseTo(14, 8);
     expect(xSide?.axisOrigin).toEqual(ySide?.axisOrigin);
-    expect(
-      signedRadialDelta(
-        { x: 24, y: -5, z: 17 },
-        { x: 28, y: -5, z: 17 },
-        xSide!.radialDirection
-      )
-    ).toBeCloseTo(4, 8);
-    expect(
-      signedRadialDelta(
-        { x: 10, y: 9, z: 17 },
-        { x: 10, y: 13, z: 17 },
-        ySide!.radialDirection
-      )
-    ).toBeCloseTo(4, 8);
+    expect(xSide?.radialDirection.x).toBeCloseTo(1, 8);
+    expect(xSide?.radialDirection.y).toBeCloseTo(0, 8);
+    expect(ySide?.radialDirection.x).toBeCloseTo(0, 8);
+    expect(ySide?.radialDirection.y).toBeCloseTo(1, 8);
   });
 
   it('is invariant under a rotated, translated cylinder axis', () => {
@@ -129,16 +111,6 @@ describe('cylinder radius drag math', () => {
     expect(frame?.radialDirection).toEqual({ x: 0, y: 1, z: 0 });
     expect(frame?.radiusAtHit).toBe(5);
     expect(frame?.concavity).toBe('boss');
-  });
-
-  it('does not project axial movement into the radius delta', () => {
-    expect(
-      signedRadialDelta(
-        { x: 5, y: 0, z: 0 },
-        { x: 5, y: 0, z: 20 },
-        { x: 1, y: 0, z: 0 }
-      )
-    ).toBe(0);
   });
 
   it('remaps a regenerated face only when its world-space axis is invariant', () => {

@@ -125,6 +125,12 @@ import {
   type StrictUnionVerdicts
 } from './exact-build-loop';
 import {
+  isBuildCancelled,
+  throwIfBuildCancelled,
+  type BuildCancellationSignal
+} from './exact-cancellation';
+export type { BuildCancellationSignal } from './exact-cancellation';
+import {
   countFaceHandles,
   resolveDirectEditFace
 } from './exact-direct-edit-ops';
@@ -144,7 +150,11 @@ export {
   importMeshFile,
   type ImportedMeshTriangles
 } from './mesh-file-import';
-import { sanitizeBinaryStl, sanitizeThreeMf } from './mesh-export-sanitize';
+import {
+  sanitizeBinaryPly,
+  sanitizeBinaryStl,
+  sanitizeThreeMf
+} from './mesh-export-sanitize';
 import {
   readMeshQuality,
   type BodyMeshQuality,
@@ -510,7 +520,13 @@ export interface ExactKernelAdapter {
     document: ProjectDocument,
     onProgress?: RebuildProgressListener,
     onProjection?: (derived: DerivedState) => void,
-    analysis?: EditAnalysisRequest
+    analysis?: EditAnalysisRequest,
+    /**
+     * Cooperative cancel for a superseded rebuild. Checked after the
+     * pre-build awaits and at each feature boundary; a fired signal rejects
+     * with the typed `cancelled` refusal and commits nothing.
+     */
+    options?: { cancellation?: BuildCancellationSignal }
   ): Promise<DerivedState>;
   /** Epoch of the most recent live sync, or null after its handles were retired. */
   currentMassPropertiesEpoch(): number | null;
@@ -996,7 +1012,8 @@ export class RemusKernelAdapter implements ExactKernelAdapter {
     importSources: ReadonlyMap<string, Uint8Array>,
     pinnedImports: ReadonlySet<string>,
     onProgress?: RebuildProgressListener,
-    onProjection?: (derived: DerivedState) => void
+    onProjection?: (derived: DerivedState) => void,
+    cancellation?: BuildCancellationSignal
   ): {
     kernel: RemusKernel;
     build: ExactBuildResult;
@@ -1284,11 +1301,18 @@ export class RemusKernelAdapter implements ExactKernelAdapter {
                   result
                 )
             }
-          : undefined
+          : undefined,
+        cancellation
       );
     } catch (error) {
-      // All callers (including export and recognition) must abandon both
-      // halves of a partially built cache if checkpointing or replay throws.
+      // A cancelled build keeps the retained prefix: the checkpoints pushed
+      // before the throw are a consistent longer prefix for the next sync,
+      // and the partial result is discarded with the throw. All callers
+      // (including export and recognition) must abandon both halves of a
+      // partially built cache if checkpointing or replay throws otherwise.
+      if (isBuildCancelled(error)) {
+        throw error;
+      }
       this.invalidateHistoryCache();
       throw error;
     }
@@ -1824,13 +1848,16 @@ export class RemusKernelAdapter implements ExactKernelAdapter {
     document: ProjectDocument,
     onProgress?: RebuildProgressListener,
     onProjection?: (derived: DerivedState) => void,
-    analysis?: EditAnalysisRequest
+    analysis?: EditAnalysisRequest,
+    options?: { cancellation?: BuildCancellationSignal }
   ): Promise<DerivedState> {
     return this.syncMeasuredDocument(
       document,
       onProgress,
       onProjection,
-      analysis
+      analysis,
+      true,
+      options?.cancellation
     );
   }
 
@@ -1839,7 +1866,8 @@ export class RemusKernelAdapter implements ExactKernelAdapter {
     onProgress?: RebuildProgressListener,
     onProjection?: (derived: DerivedState) => void,
     analysis?: EditAnalysisRequest,
-    allowRecovery = true
+    allowRecovery = true,
+    cancellation?: BuildCancellationSignal
   ): Promise<DerivedState> {
     if (
       analysis &&
@@ -1861,6 +1889,9 @@ export class RemusKernelAdapter implements ExactKernelAdapter {
       await loadRemusTranslators();
     }
     sourcesDone();
+    // A newer edit may have arrived while the awaits above yielded: stop a
+    // superseded rebuild before it burns worker time, with the typed cancel.
+    throwIfBuildCancelled(cancellation);
     // The history kernel outlives this call on purpose — its checkpoints are
     // what the next sync restores. On ANY throw the whole cache is dropped:
     // a failed sync must never leave a table the next sync would trust.
@@ -1880,7 +1911,8 @@ export class RemusKernelAdapter implements ExactKernelAdapter {
         sources,
         pinned,
         onProgress,
-        onProjection
+        onProjection,
+        cancellation
       );
       historyDone();
       const bodies = listNodesByKind(document, 'body');
@@ -2174,6 +2206,13 @@ export class RemusKernelAdapter implements ExactKernelAdapter {
         featureWarnings: build.featureWarnings
       };
     } catch (error) {
+      // Cancellation is not a failure to recover from: it commits nothing —
+      // no measured shapes, no mass snapshot, no cache event — and rethrows
+      // typed, so the last valid model stays and a stale result can never
+      // overwrite a newer one.
+      if (isBuildCancelled(error)) {
+        throw error;
+      }
       this.invalidateHistoryCache();
       if (allowRecovery && error instanceof HistoryCacheIntegrityError) {
         return this.syncMeasuredDocument(
@@ -2181,7 +2220,8 @@ export class RemusKernelAdapter implements ExactKernelAdapter {
           onProgress,
           onProjection,
           analysis,
-          false
+          false,
+          cancellation
         );
       }
       throw error;
@@ -2531,12 +2571,16 @@ export class RemusKernelAdapter implements ExactKernelAdapter {
             ? io.exportObj(bodies, deflection)
             : format === 'glb'
               ? io.exportGlb(bodies, deflection)
-              : io.exportStl(bodies, deflection);
+              : format === 'ply'
+                ? io.exportPly(bodies, deflection)
+                : io.exportStl(bodies, deflection);
       return format === '3mf'
         ? sanitizeThreeMf(bytes)
         : format === 'stl-binary'
           ? sanitizeBinaryStl(bytes)
-          : (bytes as Uint8Array<ArrayBuffer>);
+          : format === 'ply'
+            ? sanitizeBinaryPly(bytes)
+            : (bytes as Uint8Array<ArrayBuffer>);
     });
   }
 
@@ -2615,32 +2659,58 @@ export class RemusKernelAdapter implements ExactKernelAdapter {
         objects.push({
           objectId,
           kind: 'line',
-          x1: resolveParamValue(data.x1, scope, 'x1'),
-          y1: resolveParamValue(data.y1, scope, 'y1'),
-          x2: resolveParamValue(data.x2, scope, 'x2'),
-          y2: resolveParamValue(data.y2, scope, 'y2')
+          x1: resolveParamValue(data.x1, scope, 'x1', document.units),
+          y1: resolveParamValue(data.y1, scope, 'y1', document.units),
+          x2: resolveParamValue(data.x2, scope, 'x2', document.units),
+          y2: resolveParamValue(data.y2, scope, 'y2', document.units)
         });
       } else if (data.objectKind === 'circle') {
         objects.push({
           objectId,
           kind: 'circle',
-          centerX: resolveParamValue(data.centerX, scope, 'centerX'),
-          centerY: resolveParamValue(data.centerY, scope, 'centerY'),
-          radius: resolveParamValue(data.radius, scope, 'radius')
+          centerX: resolveParamValue(
+            data.centerX,
+            scope,
+            'centerX',
+            document.units
+          ),
+          centerY: resolveParamValue(
+            data.centerY,
+            scope,
+            'centerY',
+            document.units
+          ),
+          radius: resolveParamValue(data.radius, scope, 'radius', document.units)
         });
       } else if (data.objectKind === 'arc') {
         objects.push({
           objectId,
           kind: 'arc',
-          centerX: resolveParamValue(data.centerX, scope, 'centerX'),
-          centerY: resolveParamValue(data.centerY, scope, 'centerY'),
-          radius: resolveParamValue(data.radius, scope, 'radius'),
+          centerX: resolveParamValue(
+            data.centerX,
+            scope,
+            'centerX',
+            document.units
+          ),
+          centerY: resolveParamValue(
+            data.centerY,
+            scope,
+            'centerY',
+            document.units
+          ),
+          radius: resolveParamValue(data.radius, scope, 'radius', document.units),
           startAngleDeg: resolveParamValue(
             data.startAngleDeg,
             scope,
-            'startAngleDeg'
+            'startAngleDeg',
+            document.units
           ),
-          endAngleDeg: resolveParamValue(data.endAngleDeg, scope, 'endAngleDeg')
+          endAngleDeg: resolveParamValue(
+            data.endAngleDeg,
+            scope,
+            'endAngleDeg',
+            document.units
+          )
         });
       }
     }
@@ -2650,7 +2720,7 @@ export class RemusKernelAdapter implements ExactKernelAdapter {
         kernel,
         objects,
         sketch.constraints ?? [],
-        (value, label) => resolveParamValue(value, scope, label)
+        (value, label) => resolveParamValue(value, scope, label, document.units)
       );
     } finally {
       kernel.free();
