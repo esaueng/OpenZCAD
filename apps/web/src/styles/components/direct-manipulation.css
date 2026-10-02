@@ -1444,22 +1444,22 @@
   }
 }
 
-/* Plane picker shown while the Sketch tool waits for a target. */
+/* Plane picker shown while the Sketch tool waits for a target. A command
+   card in the right lane's command slot: it used to float over the
+   viewport's top edge, under the mode toggle and the project name. */
 .sketch-plane-prompt {
-  position: absolute;
-  top: 14px;
-  left: 50%;
-  z-index: calc(var(--z-viewer-overlay) + 2);
+  box-sizing: border-box;
+  width: 100%;
   display: flex;
-  gap: 14px;
+  flex-wrap: wrap;
+  gap: 10px 14px;
   align-items: center;
-  padding: 9px 12px;
+  padding: 10px 12px;
   color: var(--color-text);
   background: var(--color-surface-2);
   border: 1px solid var(--color-border-strong);
-  border-radius: var(--radius-md);
+  border-radius: var(--radius-lg);
   box-shadow: 0 14px 34px rgba(0, 0, 0, 0.4);
-  transform: translateX(-50%);
 }
 
 .sketch-plane-prompt span:first-child {
@@ -1542,10 +1542,11 @@
   background: var(--color-surface-hover);
 }
 
-/* One-click return to the source sketch after a region extrude. */
+/* One-click return to the source sketch after a region extrude. Below the
+   top bar's islands, which float over the same stage. */
 .revert-sketch-pill {
   position: absolute;
-  top: 14px;
+  top: var(--stage-top);
   left: 50%;
   z-index: calc(var(--z-viewer-overlay) + 2);
   display: flex;

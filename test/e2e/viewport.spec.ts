@@ -1477,12 +1477,23 @@ test('dragging a box selects several bodies at once', async ({ page }) => {
   await expect(status).toContainText('2 bodies selected');
 
   // A window sweep over empty sky takes nothing: the selection goes, its chip
-  // with it, and the status line does not complain about the gesture. The
-  // sweep is also a change of selection, which retires the message that
-  // described the two bodies — the composed contract is silence, not the
-  // stale count. The pause matters: a retire inside the 300 ms settle window
-  // is read as a pick handler's retire-then-set and deliberately ignored, so
-  // the sweep has to arrive after it to retire deterministically.
+  // with it. The first such sweep of a session says once what a plain drag
+  // does and where orbit went: someone dragging to orbit got a selection box
+  // that caught nothing and no word about it.
+  await sweep(0.6, 0.04, 0.72, 0.14);
+  await expect(page.locator('.selection-callout-chip')).toHaveCount(0);
+  await expect(status).toContainText(
+    'Nothing in the box. A plain drag selects bodies — Shift+drag orbits, right-drag pans.'
+  );
+
+  // Only once: after that an empty sweep is silent again. The sweep is also
+  // a change of selection, which retires the message that described the two
+  // bodies — the composed contract is silence, not the stale count. The
+  // pause matters: a retire inside the 300 ms settle window is read as a pick
+  // handler's retire-then-set and deliberately ignored, so the sweep has to
+  // arrive after it to retire deterministically.
+  await sweep(0.85, 0.05, 0.01, 0.95);
+  await expect(status).toContainText('2 bodies selected');
   await page.waitForTimeout(400);
   await sweep(0.6, 0.04, 0.72, 0.14);
   await expect(page.locator('.selection-callout-chip')).toHaveCount(0);
@@ -1768,9 +1779,34 @@ test('Escape backs out of the sketch plane prompt', async ({ page }) => {
   ).toBeVisible();
   await page.keyboard.press('Escape');
 
-  // The close button is the same exit for the pointer.
+  // The close button is the same exit for the pointer — and it is reachable:
+  // the prompt used to float over the stage's top edge, where the mode
+  // toggle and, at 1024 px, the project name drew over its title and its ×.
+  // It is a command card in the right lane now, clear of the top bar.
+  await page.setViewportSize({ width: 1024, height: 768 });
   await page.keyboard.press('s');
   await expect(prompt).toBeVisible();
+  const reachable = await page.evaluate(() => {
+    const card = document.querySelector('.sketch-plane-prompt')!;
+    const bar = document.querySelector('.topbar')!;
+    const hit = (element: Element) => {
+      const box = element.getBoundingClientRect();
+      const top = document.elementFromPoint(
+        box.left + box.width / 2,
+        box.top + box.height / 2
+      );
+      return Boolean(top && (top === element || element.contains(top)));
+    };
+    const islands = [...bar.querySelectorAll('.topbar-island')].map(
+      (island) => island.getBoundingClientRect().bottom
+    );
+    return {
+      below: card.getBoundingClientRect().top >= Math.max(0, ...islands) - 0.5,
+      title: hit(card.querySelector('strong')!),
+      close: hit(card.querySelector('.sketch-plane-dismiss')!)
+    };
+  });
+  expect(reachable).toEqual({ below: true, title: true, close: true });
   await page.getByRole('button', { name: 'Cancel sketch' }).click();
   await expect(prompt).toBeHidden();
   await expect(status).toContainText('Sketch canceled');
