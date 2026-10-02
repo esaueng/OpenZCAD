@@ -12,6 +12,7 @@ import type {
   ParameterPreviewBody,
   parameterVisualPreview
 } from './lib/parameterVisualPreview';
+import type { AdoptLocalProjectResult } from './lib/projectIdentityTransfer';
 import { LatestTask } from './lib/latestTask';
 import { rebuildProgressLabel } from './lib/rebuildProgressLabel';
 import { featureHistory } from './lib/featureHistory';
@@ -220,7 +221,6 @@ import type { SketchSolveStatus } from './components/SketchToolRail';
 import { ApiError, api, isProjectDocumentUnavailableError } from './lib/api';
 import {
   applyAccountSourceArchives,
-  archiveAccountImportSources,
   sourceUploadMessage
 } from './lib/accountImportSources';
 import {
@@ -1223,10 +1223,6 @@ const DISPLAY_MODE_ORDER: DisplayMode[] = [
   'shaded',
   'wireframe'
 ];
-
-type AdoptLocalProjectResult =
-  | { state: 'adopted' | 'already-adopted' | 'missing'; sourceWarning?: string }
-  | { state: 'conflict'; conflict: ProjectConflict };
 
 interface OffsetEditPlan {
   command: AnyCommand;
@@ -7516,14 +7512,22 @@ export function App() {
     // lose the baseline (which forces conservative reconciliation), never put
     // the baseline ahead of the device copy.
     const currentManager = managerRef.current;
-    const current = currentManager?.document;
+    const live = currentManager?.document;
+    const current =
+      live?.projectId === merged.projectId
+        ? live
+        : await loadLocalProject(merged.projectId);
     const editedDuringSave =
       current?.projectId === merged.projectId &&
       current.version !== local.version;
     const durable = editedDuringSave
       ? applyAccountSourceArchives(current, merged)
       : merged;
-    if (editedDuringSave && currentManager && durable !== current) {
+    if (
+      editedDuringSave &&
+      currentManager?.document === current &&
+      durable !== current
+    ) {
       currentManager.document = durable;
       setDoc(durable);
     }
@@ -7560,151 +7564,26 @@ export function App() {
     return merged;
   }
 
-  async function finishAccountSourceSave(
-    document: ProjectDocument,
-    local: ProjectDocument,
-    summary: ProjectSummary = summarizeLocalDocument(document)
-  ): Promise<string | undefined> {
-    const projectId = document.projectId;
-    // Account creation establishes the upload destination. Source bytes must
-    // follow before the new account copy can be rebuilt on another device.
-    setStatus('Saving project source files to your account…');
-    const prepared = await archiveAccountImportSources(document, {
-      loadSourceBytes: loadSourceBlob,
-      archive: (input) =>
-        archiveArtifactBody(api, document.projectId, input, (artifact) => {
-          if (managerRef.current?.document.projectId === projectId)
-            setArtifacts((current) => [
-              artifact,
-              ...current.filter(
-                (item) => item.artifactId !== artifact.artifactId
-              )
-            ]);
-        })
-    });
-    let saved = document;
-    let localForAcceptance = local;
-    if (prepared.document !== document) {
-      // Keep completed upload metadata if the account write fails. Never
-      // replace edits made while the source transfers were in flight.
-      const current = managerRef.current;
-      if (
-        current?.document.projectId !== projectId ||
-        current.document.version === local.version
-      ) {
-        await saveLocalProject(prepared.document);
-        if (
-          managerRef.current === current &&
-          !cloudProjectIds.has(projectId) &&
-          current?.document.projectId === projectId &&
-          current.document.version === local.version
-        ) {
-          current.document = prepared.document;
-          localForAcceptance = prepared.document;
-          setDoc(prepared.document);
-        }
-      }
-      const stored = await api.saveProjectDocument({
-        projectId: prepared.document.projectId,
-        expectedVersion: document.version,
-        document: withoutDerivedProjection(prepared.document)
-      });
-      saved = { ...prepared.document, version: stored.version };
-    }
-    await acceptAccountDocument(saved, localForAcceptance, {
-      ...summary,
-      documentVersion: saved.version
-    });
-    return sourceUploadMessage(prepared.result) ?? undefined;
-  }
-
-  /**
-   * Gives one device-local project an account record, keeping its id so the
-   * device's own copy and shelf state stay pointed at the same project.
-   *
-   * Returns whether anything changed rather than reporting status itself: the
-   * bulk path has to summarize many of these, and one line per project would
-   * bury the result.
-   */
+  /** Saves one device project and reconciles retry responses against its account ID. */
   async function adoptLocalProject(
     projectId: string
   ): Promise<AdoptLocalProjectResult> {
-    const local = await loadLocalProject(projectId);
-    if (!local) {
-      return { state: 'missing' };
-    }
-    try {
-      const response = await api.adoptProject(local);
-      return {
-        state: 'adopted',
-        sourceWarning: await finishAccountSourceSave(
-          response.document,
-          local,
-          response.project
-        )
-      };
-    } catch (error) {
-      if (error instanceof ApiError && error.code === 'ALREADY_ADOPTED') {
-        // A lost adoption response and a genuinely pre-existing account copy
-        // produce the same 409. Fetch the actual document and reconcile it;
-        // merely painting the cloud badge here would claim agreement without
-        // ever comparing the work.
-        const [remote, lastSyncedVersion] = await Promise.all([
-          api.loadProject(projectId),
-          loadLastSyncedVersion(projectId)
-        ]);
-        remoteVersionsRef.current.set(projectId, remote.version);
-        setCloudProjectIds((current) => new Set(current).add(projectId));
-        const outcome = chooseProjectDocument(local, remote, lastSyncedVersion);
-        if (outcome.choice === 'diverged') {
-          return {
-            state: 'conflict',
-            conflict: conflictFromDocuments(
-              outcome.local,
-              outcome.remote,
-              'account'
-            )
-          };
-        }
-        if (outcome.choice === 'remote') {
-          return {
-            state: 'already-adopted',
-            sourceWarning: await finishAccountSourceSave(
-              outcome.document,
-              local
-            )
-          };
-        }
-        if (outcome.choice === 'local') {
-          // The baseline proves only this device moved. Complete the interrupted
-          // sync with a fenced document write rather than asking the user to
-          // resolve a conflict that does not exist.
-          const candidate = {
-            ...outcome.document,
-            ownerUserId: remote.ownerUserId
-          };
-          const saved = await api.saveProjectDocument({
-            projectId: candidate.projectId,
-            expectedVersion: remote.version,
-            document: withoutDerivedProjection(candidate)
-          });
-          const sourceWarning = await finishAccountSourceSave(
-            {
-              ...candidate,
-              version: saved.version,
-              derived: {
-                ...candidate.derived,
-                updatedAt: saved.updatedAt
-              }
-            },
-            local
-          );
-          return { state: 'already-adopted', sourceWarning };
-        }
-        return { state: 'missing' };
-      }
-      throw error;
-    }
+    // Loaded on demand: only saving a device project to the account gets here.
+    const { adoptLocalProject: adopt } =
+      await import('./lib/projectIdentityTransfer');
+    return adopt(projectId, {
+      localUserId,
+      manager: () => managerRef.current,
+      setDoc,
+      remoteVersions: remoteVersionsRef.current,
+      setProjects,
+      setArtifacts,
+      setCloudProjectIds,
+      cloudProjectIds,
+      setStatus,
+      summarize: summarizeLocalDocument,
+      acceptAccountDocument
+    });
   }
 
   async function handleSaveToAccount(
