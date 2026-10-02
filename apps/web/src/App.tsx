@@ -16050,22 +16050,30 @@ export function App() {
     geometry.state.phase === 'rebuilding'
       ? rebuildProgressLabel(geometry.state.progress)
       : null;
-  const staleProjectionLabel = parameterPreview
-    ? 'Parameter preview · exact geometry pending'
-    : Object.keys(representations).length > 0
-      ? 'showing the previous result until it finishes'
-      : 'no exact projection is available yet';
+  // The exact-geometry line while the model is not ready. It is a state, not
+  // a message, so it never expires; and it is handed over beside the message
+  // rather than in its place. Standing in for the message, it swallowed
+  // whatever the user's action said meanwhile — "Opened …", a refused
+  // shortcut — which then expired behind a slow worker start unseen and
+  // unlogged.
+  const geometryStatus =
+    parameterPreview || exactGeometryReady
+      ? null
+      : {
+          phase:
+            geometry.state.phase === 'ready'
+              ? 'Rebuilding geometry…'
+              : geometry.state.phase === 'failed' && geometry.state.error
+                ? `Exact geometry failed: ${geometry.state.error}`
+                : (progressLabel ?? geometryPhaseLabel[geometry.state.phase]),
+          projection:
+            Object.keys(representations).length > 0
+              ? 'showing the previous result until it finishes'
+              : 'no exact projection is available yet'
+        };
   const visibleStatus = parameterPreview
     ? `Parameter preview · ${parameterEditPending ? status : parameterDraftActive ? 'Press Enter to apply; Escape to cancel' : 'exact geometry rebuilding'}`
-    : exactGeometryReady
-      ? status
-      : `${
-          geometry.state.phase === 'ready'
-            ? 'Rebuilding geometry…'
-            : geometry.state.phase === 'failed' && geometry.state.error
-              ? `Exact geometry failed: ${geometry.state.error}`
-              : (progressLabel ?? geometryPhaseLabel[geometry.state.phase])
-        } · ${staleProjectionLabel}`;
+    : status;
   const tone: 'ready' | 'warning' | 'running' =
     geometry.state.phase === 'failed'
       ? 'warning'
@@ -18563,7 +18571,11 @@ export function App() {
           <WorkspaceReadout
             status={visibleStatus}
             statusAt={statusEntry.at}
-            statusSticky={statusEntry.sticky || !exactGeometryReady}
+            statusSticky={
+              statusEntry.sticky ||
+              (parameterPreview !== null && !exactGeometryReady)
+            }
+            geometryStatus={geometryStatus}
             tone={tone}
             muted={contextualToolCard !== null && !hideSketchToolCard}
             logOpen={activityLogOpen}
@@ -18610,6 +18622,10 @@ export function App() {
             {...(visibleStatus === status && statusEntry.detail
               ? { detail: statusEntry.detail }
               : {})}
+            geometryStatus={
+              geometryStatus &&
+              `${geometryStatus.phase} · ${geometryStatus.projection}`
+            }
             tone={tone}
             triggerRef={activityLogTriggerRef}
             onClose={(restoreFocus) => {
