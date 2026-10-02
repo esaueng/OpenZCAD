@@ -1179,7 +1179,43 @@ declare global {
      * down; setting this to 0 makes the deferred-preview path deterministic.
      */
     __openzcadE2ESlowFrameMs?: number;
+    /**
+     * E2E-only interruption-test hooks, honoured only in `VITE_E2E=1` builds.
+     * The in-flight flag is true exactly while the verified Apply's exact
+     * preflight has started and its transaction has not committed, so a spec
+     * that reloads after observing the flag provably lands mid-flight. The
+     * paced status toast cannot serve as that signal: it holds each message
+     * for `STATUS_MIN_DWELL_MS` and a burst ends on the latest message, so a
+     * ~200 ms "Checking…" phase is never drawn. `__openzcadE2EDelayNextExactCheckMs`
+     * is a one-shot hold (consumed back to 0) that keeps the next flagged
+     * check's commit waiting, so the ~200 ms natural window stays open long
+     * enough for the spec's reload to land inside it.
+     */
+    __openzcadE2EApplyCheckInFlight?: boolean;
+    __openzcadE2EDelayNextExactCheckMs?: number;
   }
+}
+
+/**
+ * E2E-only hold for the interruption tests: sleeps for the one-shot
+ * `__openzcadE2EDelayNextExactCheckMs` a spec armed, then resolves at once
+ * when no hold is armed. Called concurrently with the flagged exact check so
+ * the worker is engaged while the commit waits, never before it starts.
+ * Production builds never arm the knob, so this is always a no-op there.
+ */
+async function holdNextExactCheckForE2E(): Promise<void> {
+  if (
+    (import.meta.env as unknown as { VITE_E2E?: string }).VITE_E2E !== '1' ||
+    typeof window === 'undefined'
+  ) {
+    return;
+  }
+  const delayMs = window.__openzcadE2EDelayNextExactCheckMs;
+  if (typeof delayMs !== 'number' || !(delayMs > 0)) {
+    return;
+  }
+  window.__openzcadE2EDelayNextExactCheckMs = 0;
+  await new Promise<void>((resolve) => setTimeout(resolve, delayMs));
 }
 
 const E2E_SLOW_FRAME_MS =
@@ -9191,13 +9227,31 @@ export function App() {
       return false;
     }
     setBusy(true);
+    // E2E-only interruption gate: while the flag is true the preflight has
+    // started and the transaction below has not committed. The flag is
+    // cleared before the version check, so observing it provably means a
+    // reload lands mid-flight. Honoured only in `VITE_E2E=1` builds.
+    const e2eApplyGate =
+      (import.meta.env as unknown as { VITE_E2E?: string }).VITE_E2E === '1' &&
+      typeof window !== 'undefined';
+    if (e2eApplyGate) window.__openzcadE2EApplyCheckInFlight = true;
     try {
       setStatus('Checking the AI change against exact geometry…');
-      const preflight = await preflightCadPatch(
-        current,
-        proposal,
-        (candidate, analysis) => geometry.syncOnce(candidate, analysis)
-      );
+      let preflight: Awaited<ReturnType<typeof preflightCadPatch>>;
+      if (e2eApplyGate) {
+        const pending = preflightCadPatch(
+          current,
+          proposal,
+          (candidate, analysis) => geometry.syncOnce(candidate, analysis)
+        );
+        [preflight] = await Promise.all([pending, holdNextExactCheckForE2E()]);
+      } else {
+        preflight = await preflightCadPatch(
+          current,
+          proposal,
+          (candidate, analysis) => geometry.syncOnce(candidate, analysis)
+        );
+      }
       const live = managerRef.current?.document;
       if (
         !live ||
@@ -9221,6 +9275,7 @@ export function App() {
       setStatus(errorMessage(error, 'Patch could not be applied.'));
       return false;
     } finally {
+      if (e2eApplyGate) window.__openzcadE2EApplyCheckInFlight = false;
       setBusy(false);
     }
   }
