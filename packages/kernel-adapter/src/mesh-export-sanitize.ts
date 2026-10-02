@@ -147,7 +147,9 @@ export function sanitizeBinaryPly(bytes: Uint8Array): Uint8Array<ArrayBuffer> {
   let inFaces = false;
   let seenElements = 0;
   for (const line of lines.slice(2)) {
-    if (line === '' || line.startsWith('comment ') || line === 'end_header')
+    // Header lines are keyword-led PLY tokens, compared whole.
+    const keyword = line.split(' ', 1)[0];
+    if (keyword === '' || keyword === 'comment' || keyword === 'end_header')
       continue;
     const element = line.match(/^element (\S+) (\d+)$/);
     if (element) {
