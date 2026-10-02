@@ -4,7 +4,11 @@ export {
   accountTier,
   accountAiLimits
 } from './account-tiers';
-import { isDocumentHistory } from '@openzcad/shared';
+import {
+  assertDocumentTextBudget,
+  hasValidImportedStepSources,
+  isDocumentHistory
+} from '@openzcad/shared';
 import { DurableObject } from 'cloudflare:workers';
 import {
   ArtifactQuotaError,
@@ -5907,6 +5911,21 @@ function checkClientDocument(value: unknown): CollaborationRejection | null {
     return {
       code: 'document-invalid',
       message: 'Collaboration document history or schema version is invalid.'
+    };
+  }
+  try {
+    assertDocumentTextBudget(value as unknown as ProjectDocument);
+  } catch (error) {
+    return {
+      code: 'document-invalid',
+      message:
+        error instanceof Error ? error.message : 'Invalid project text budget.'
+    };
+  }
+  if (!hasValidImportedStepSources(value as unknown as ProjectDocument)) {
+    return {
+      code: 'document-invalid',
+      message: 'Collaboration document has invalid imported STEP source data.'
     };
   }
   return null;

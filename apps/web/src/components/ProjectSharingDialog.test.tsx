@@ -274,6 +274,46 @@ describe('ProjectSharingDialog', () => {
     ).not.toBeInTheDocument();
   });
 
+  it('shows an active invitation as time remaining when expiry is in seconds', async () => {
+    const sharingClient = client();
+    const nowSeconds = Math.floor(Date.now() / 1000);
+    vi.mocked(sharingClient.getProjectSharing).mockImplementation(
+      async (projectId) => ({
+        projectId,
+        ownerUserId: owner,
+        members: [],
+        invitations: [
+          {
+            invitationId: 'invite_future',
+            projectId,
+            email: 'future@example.com',
+            role: 'editor',
+            createdAt: nowSeconds,
+            expiresAt: nowSeconds + 3 * 86_400
+          }
+        ]
+      })
+    );
+    const base = createProjectDocument('Active invitation', owner);
+
+    render(
+      <ProjectSharingDialog
+        projectId={base.projectId}
+        role="owner"
+        collaborationStatus="live"
+        lease={null}
+        client={sharingClient}
+        shareLinkClient={shareLinkClient()}
+        onClose={vi.fn()}
+      />
+    );
+
+    const invitationEmail = await screen.findByText('future@example.com');
+    expect(invitationEmail.closest('li')).toHaveTextContent(
+      /Invited · editor · [1-9]\d*d/
+    );
+  });
+
   it('mints a share link shown once, copies it, and revokes active links', async () => {
     const base = createProjectDocument('Share links', owner);
     const links = shareLinkClient();

@@ -1,6 +1,7 @@
 import { afterEach, describe, expect, it, vi } from 'vitest';
 
 import {
+  authenticateBrowserSession,
   authenticateRequest,
   clearSessionCookie,
   createSessionCookie,
@@ -203,6 +204,22 @@ afterEach(() => {
 });
 
 describe('worker authentication', () => {
+  it('requires email-code configuration for browser session authorization', async () => {
+    for (const env of [
+      {
+        ENVIRONMENT: 'development' as const,
+        AUTH_MODE: 'development' as const
+      },
+      { ENVIRONMENT: 'beta' as const, AUTH_MODE: 'development' as const },
+      { ENVIRONMENT: 'beta' as const, AUTH_MODE: 'email-code' as const },
+      { ENVIRONMENT: 'beta' as const }
+    ]) {
+      await expect(
+        authenticateBrowserSession(new Request('https://example.com'), env)
+      ).rejects.toMatchObject({ failure: 'configuration' });
+    }
+  });
+
   it('allows explicit development authentication only in development', async () => {
     await expect(
       authenticateRequest(new Request('https://example.com'), {

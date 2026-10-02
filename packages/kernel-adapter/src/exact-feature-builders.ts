@@ -280,7 +280,8 @@ function buildImportedStepFeature(
     if (cached) {
       // The checksum determines the result, so restoring is exact.
       // Only the handles are new — they belong to this kernel.
-      solids = cached.solids.map((blob) => kernel.deserializeSolid(blob));
+      const declared = kernel.deserializeSolids(cached.document);
+      solids = cached.acceptedDeclaredIndices.map((index) => declared[index]!);
       acceptedDeclaredIndices = cached.acceptedDeclaredIndices;
       diagnostics = cached.diagnostics;
     } else {
@@ -337,12 +338,14 @@ function buildImportedStepFeature(
       if (checksum) {
         importedSteps?.store(
           checksum,
-          kernel,
-          solids,
+          imported.document,
           acceptedDeclaredIndices,
           diagnostics,
           pinnedImports
         );
+        // Cache admission can explicitly refuse an oversized or rejected-root
+        // arena. Exact accepted solids remain valid; future misses recover source
+        // bytes through the same resolver used by a fresh/saved project.
       }
     }
     // Partial import: the selection names DECLARED indices — the

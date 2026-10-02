@@ -1304,20 +1304,22 @@ export function measurementsToText(
         entry.status,
         entry.note ?? ''
       ]
-        .map(spreadsheetCell)
+        .map((value) => delimitedCell(value, '\t'))
         .join('\t');
     })
     .join('\n');
 }
 
-function csvCell(value: string | number): string {
+function delimitedCell(value: string | number, delimiter: ',' | '\t'): string {
   const text = spreadsheetCell(value);
-  return /[",\n]/.test(text) ? `"${text.replaceAll('"', '""')}"` : text;
+  const needsQuotes = text.includes(delimiter) || /["\r\n]/.test(text);
+  return needsQuotes ? `"${text.replaceAll('"', '""')}"` : text;
 }
 
 function spreadsheetCell(value: string | number): string {
   const text = String(value);
-  return typeof value === 'string' && /^[=+\-@\t\r]/.test(text)
+  const formulaLike = /^[=+\-@\t\r]/.test(text) || /^\s+[=+\-@]/.test(text);
+  return typeof value === 'string' && formulaLike
     ? `'${text}`
     : text;
 }
@@ -1366,7 +1368,7 @@ export function measurementsToCsv(
       entry.sourceRevision,
       entry.note ?? ''
     ]
-      .map(csvCell)
+      .map((value) => delimitedCell(value, ','))
       .join(',');
   });
   return [

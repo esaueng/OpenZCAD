@@ -16,6 +16,7 @@ import {
 } from '../../lib/sketch/session';
 import {
   objectPolylines,
+  displayObjectsWithTextBudget,
   type SketchObjectPolyline
 } from '../../lib/objectPolyline';
 import { triangulateRegionGeometry } from './regionOverlay';
@@ -43,7 +44,8 @@ export interface SketchModeRig {
     objects: { id: string; data: SketchObjectData }[],
     selectedObjectId: string | null,
     resolve: (value: unknown) => number,
-    diagnosticObjectIds?: readonly string[]
+    diagnosticObjectIds?: readonly string[],
+    textBudgetError?: string | null
   ): void;
   /** Updates the adaptive sketch-local grid and returns its minor spacing. */
   setGrid(worldPerPixel: number, visible: boolean): number;
@@ -314,10 +316,19 @@ export function buildSketchModeRig(
 
   return {
     group,
-    setObjects(objects, selectedObjectId, resolve, diagnosticObjectIds = []) {
+    setObjects(
+      objects,
+      selectedObjectId,
+      resolve,
+      diagnosticObjectIds = [],
+      textBudgetError = null
+    ) {
       disposeChildren(committedGroup);
       const diagnosticIds = new Set(diagnosticObjectIds);
-      for (const object of objects) {
+      for (const object of displayObjectsWithTextBudget(
+        objects,
+        textBudgetError
+      )) {
         // One object can draw several runs — a text object is one loop per
         // glyph region plus one per counter.
         let polylines: SketchObjectPolyline[];
