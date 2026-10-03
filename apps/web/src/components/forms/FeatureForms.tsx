@@ -21,6 +21,7 @@ import { ExprInput } from '../ExprInput';
 import { edgeModifierSliderRange } from '../../lib/edgeModifierEdit';
 import { useFieldAutoFocus } from './fieldAutoFocus';
 import { isPickListRow } from './pickListRow';
+import { PRIMITIVE_ANCHORS } from '../../lib/primitivePlacement';
 import { TextObjectFields, type TextAttributes } from '../TextObjectFields';
 import {
   PLANE_LABELS,
@@ -181,21 +182,31 @@ interface PrimitiveFormProps {
   scope: Record<string, number>;
   initialName: string;
   initialDimensions?: Record<string, ParamValue>;
+  /** Where the anchor point sits now; absent means the origin. */
+  initialPosition?: ParametricVector3;
   submitLabel: string;
-  onSubmit(name: string, dimensions: Record<string, ParamValue>): void;
+  onSubmit(
+    name: string,
+    dimensions: Record<string, ParamValue>,
+    position: ParametricVector3
+  ): void;
   onCancel?: () => void;
 }
+
+const POSITION_AXES = ['x', 'y', 'z'] as const;
 
 export function PrimitiveForm({
   kind,
   scope,
   initialName,
   initialDimensions,
+  initialPosition,
   submitLabel,
   onSubmit,
   onCancel
 }: PrimitiveFormProps) {
   const fields = PRIMITIVE_FIELDS[kind];
+  const anchor = PRIMITIVE_ANCHORS[kind];
   const [name, setName] = useState(initialName);
   const documentValues = Object.fromEntries(
     fields.map((field) => [
@@ -205,9 +216,16 @@ export function PrimitiveForm({
         : field.initial
     ])
   );
+  const documentPosition = Object.fromEntries(
+    POSITION_AXES.map((axis) => [
+      axis,
+      paramValueText(initialPosition?.[axis] ?? 0)
+    ])
+  ) as Record<(typeof POSITION_AXES)[number], string>;
   const [values, setValues] = useState<Record<string, string>>(
     () => documentValues
   );
+  const [position, setPosition] = useState(() => documentPosition);
 
   /**
    * Follow the document when it moves underneath the open form.
@@ -217,13 +235,15 @@ export function PrimitiveForm({
    * refresh these fields. Comparing the document's own text means typing is
    * never clobbered: local edits do not change what the document says.
    */
-  const documentSignature = fields
-    .map((field) => documentValues[field.key])
-    .join('\u0000');
+  const documentSignature = [
+    ...fields.map((field) => documentValues[field.key]),
+    ...POSITION_AXES.map((axis) => documentPosition[axis])
+  ].join('\u0000');
   const lastDocumentSignature = useRef(documentSignature);
   if (lastDocumentSignature.current !== documentSignature) {
     lastDocumentSignature.current = documentSignature;
     setValues(documentValues);
+    setPosition(documentPosition);
   }
 
   const dimensionErrors = Object.fromEntries(
@@ -260,11 +280,17 @@ export function PrimitiveForm({
     name.trim() === initialName.trim() &&
     fields.every(
       (field) => (values[field.key] ?? '').trim() === documentValues[field.key]
+    ) &&
+    POSITION_AXES.every(
+      (axis) => position[axis].trim() === documentPosition[axis]
     );
   const canSubmit =
     !unchanged &&
     name.trim().length > 0 &&
-    fieldsValid(scope, Object.values(values)) &&
+    fieldsValid(scope, [
+      ...Object.values(values),
+      ...Object.values(position)
+    ]) &&
     Object.values(dimensionErrors).every((error) => !error);
 
   return (
@@ -281,7 +307,12 @@ export function PrimitiveForm({
               field.key,
               coerceParamValue(values[field.key] ?? '')
             ])
-          )
+          ),
+          {
+            x: coerceParamValue(position.x),
+            y: coerceParamValue(position.y),
+            z: coerceParamValue(position.z)
+          }
         )
       }
       onCancel={onCancel}
@@ -299,6 +330,28 @@ export function PrimitiveForm({
           }
         />
       ))}
+      {/*
+        Which point the numbers place differs by primitive (a box from its
+        corner, a cylinder from its base center), so the row names it rather
+        than leaving two primitives at 0, 0, 0 to land on different points.
+      */}
+      <fieldset className="primitive-position">
+        <legend>Position</legend>
+        <div className="field-triple">
+          {POSITION_AXES.map((axis) => (
+            <ExprInput
+              key={axis}
+              label={`${anchor.label} ${axis.toUpperCase()}`}
+              value={position[axis]}
+              scope={scope}
+              onChange={(value) =>
+                setPosition((current) => ({ ...current, [axis]: value }))
+              }
+            />
+          ))}
+        </div>
+        <p className="field-hint">{anchor.hint}</p>
+      </fieldset>
     </FormShell>
   );
 }
