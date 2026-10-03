@@ -1041,6 +1041,8 @@ test('infers and stores an additive extrude from exact overlap', async ({
   await inspector.getByRole('textbox', { name: /^Distance/ }).fill('32');
   await inspector.getByRole('button', { name: /^Apply/ }).click();
   await expect(page.getByRole('contentinfo')).toContainText('Edit Extrude');
+  await expect(inspector).toHaveCount(0);
+  await extrudeFeature.click();
   await expect(inspector.getByLabel('Stored extrude operation')).toHaveValue(
     'add'
   );
@@ -1242,9 +1244,11 @@ test('keeps a two-rim fillet while editing a cylinder from 4.6 to 6.4 mm', async
   await expect(fillet.getByTitle('Feature failed to build')).toHaveCount(0);
   await expectBodyCount(page, 1);
   await expect(page.getByText('Diagnostics', { exact: true })).toHaveCount(0);
+  await expect(inspector).toHaveCount(0);
 
   // A radius smaller than the stored 1 mm fillet is invalid. Exact preflight
   // must refuse it without adding an undo entry or changing the live document.
+  await cylinder.locator('.feature-row-main').click();
   await inspector.getByLabel('Radius', { exact: true }).fill('0.5');
   await inspector.getByRole('button', { name: /^Apply/ }).click();
   await expect(page.getByRole('contentinfo')).toContainText(
@@ -1562,11 +1566,18 @@ test('preflights and drills a through hole into the top face', async ({
   await expect(page.getByRole('contentinfo')).toContainText('warnings0');
 
   // A hole is editable after creation: its row reopens the same form,
-  // prefilled, and Apply patches the feature instead of adding another.
-  await page.locator('.feature-row-main', { hasText: 'Hole' }).click();
+  // prefilled — with no "Edit hole" step in front of it (F19) — and Apply
+  // patches the feature instead of adding another, then closes the card.
   const inspector = page.getByRole('region', { name: 'Feature inspector' });
-  const volumeBefore = await inspector.getByText(/mm³/).first().textContent();
-  await inspector.getByRole('button', { name: 'Edit hole' }).click();
+  const liveVolume = async () => {
+    await page.locator('.body-row:not(.consumed) .body-row-main').click();
+    const volume = await inspector.getByText(/mm³/).first().textContent();
+    await page.keyboard.press('Escape');
+    await expect(inspector).toHaveCount(0);
+    return volume;
+  };
+  const volumeBefore = await liveVolume();
+  await page.locator('.feature-row-main', { hasText: 'Hole' }).click();
   await expect(
     page.getByRole('textbox', { name: 'Diameter', exact: true })
   ).toHaveValue('5');
@@ -1585,8 +1596,8 @@ test('preflights and drills a through hole into the top face', async ({
     1
   );
   await expectBodyCount(page, 1);
-  await page.locator('.feature-row-main', { hasText: 'Hole' }).click();
-  const volumeAfter = await inspector.getByText(/mm³/).first().textContent();
+  await expect(inspector).toHaveCount(0);
+  const volumeAfter = await liveVolume();
   expect(volumeAfter).not.toEqual(volumeBefore);
   await expect(page.getByRole('contentinfo')).toContainText('warnings0');
   expect(consoleErrors).toEqual([]);
@@ -1628,11 +1639,18 @@ test('preflights and creates an exact open-top shell', async ({ page }) => {
   await expectBodyCount(page, 1);
   await expect(page.getByRole('contentinfo')).toContainText('warnings0');
 
-  // The shell is editable afterwards through the same form, prefilled.
-  await page.locator('.feature-row-main', { hasText: 'Shell' }).click();
+  // The shell is editable afterwards through the same form, prefilled, which
+  // its row opens directly (F19).
   const inspector = page.getByRole('region', { name: 'Feature inspector' });
-  const volumeBefore = await inspector.getByText(/mm³/).first().textContent();
-  await inspector.getByRole('button', { name: 'Edit shell' }).click();
+  const liveVolume = async () => {
+    await page.locator('.body-row:not(.consumed) .body-row-main').click();
+    const volume = await inspector.getByText(/mm³/).first().textContent();
+    await page.keyboard.press('Escape');
+    await expect(inspector).toHaveCount(0);
+    return volume;
+  };
+  const volumeBefore = await liveVolume();
+  await page.locator('.feature-row-main', { hasText: 'Shell' }).click();
   const thickness = page.getByRole('textbox', {
     name: 'Wall thickness',
     exact: true
@@ -1651,8 +1669,8 @@ test('preflights and creates an exact open-top shell', async ({ page }) => {
   await expect(page.locator('.feature-row', { hasText: /^Shell/ })).toHaveCount(
     1
   );
-  await page.locator('.feature-row-main', { hasText: 'Shell' }).click();
-  const volumeAfter = await inspector.getByText(/mm³/).first().textContent();
+  await expect(inspector).toHaveCount(0);
+  const volumeAfter = await liveVolume();
   expect(volumeAfter).not.toEqual(volumeBefore);
   await expect(page.getByRole('contentinfo')).toContainText('warnings0');
   expect(consoleErrors).toEqual([]);

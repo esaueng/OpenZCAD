@@ -1118,6 +1118,8 @@ import {
   type ModelingPathOption,
   type ModelingProfileOption
 } from './lib/modelingOperations';
+import { editCardFeatureId } from './lib/editCardLifecycle';
+import { PanelOverflow } from './components/PanelOverflow';
 import {
   clearActiveProject,
   loadActiveProjectId,
@@ -3358,6 +3360,7 @@ export function App() {
           index === 0 ? { ...target, featureName: value.name } : target
       ),
       successMessage: `Edit ${value.name}`,
+      onSuccess: () => finishFeatureEdit(feature),
       cancelled: () => request !== extrudeEditRequest.current
     });
   }
@@ -3404,7 +3407,9 @@ export function App() {
           }
         : {}),
       successMessage: `${value.name} applied.`,
-      ...(!feature ? { onSuccess: finishFeatureCreation } : {})
+      onSuccess: feature
+        ? () => finishFeatureEdit(feature)
+        : finishFeatureCreation
     });
   }
 
@@ -5047,6 +5052,17 @@ export function App() {
     selectedTopology
   ]);
   const selectedFeatureNodeId = selectedFeature?.id ?? null;
+  /**
+   * The feature whose edit card is on screen, read when an Apply that was
+   * still validating lands. A user who moved to another feature or tool in
+   * the meantime keeps what they moved to.
+   */
+  const editCardFeatureIdRef = useRef<string | null>(null);
+  editCardFeatureIdRef.current = editCardFeatureId({
+    tool,
+    inspectorFeatureId: selectedFeatureNodeId,
+    modelingEditFeatureId: modelingEditFeature?.id ?? null
+  });
   function validateSelectionEdit(): boolean {
     if (
       managerRef.current?.document.version !== doc?.version ||
@@ -5947,6 +5963,32 @@ export function App() {
     setSelectedSketchProfileId(null);
   }
 
+  /**
+   * F19: an edit card closes after a successful Apply as a create card does,
+   * whatever feature it edits. A refused Apply never gets here — the card
+   * stays open with the reason — and neither does an Apply whose card the
+   * user already left for another feature or tool.
+   *
+   * An Inspector card keeps the bodies its history row selected, so the next
+   * command still pre-fills from the body just edited. A reopened modeling
+   * form selected its consumed source body to target it, so it clears
+   * everything, as it always has.
+   */
+  function finishFeatureEdit(feature: FeatureNode): void {
+    if (editCardFeatureIdRef.current !== feature.id) return;
+    if (tool !== null) {
+      setModelingEditFeature(null);
+      finishFeatureCreation();
+      return;
+    }
+    dispatchInteraction({ type: 'commit-complete' });
+    setSelectedFeatureNode(null);
+    setSelectedTopology(null);
+    setSelectedEdges([]);
+    setSelectedProfiles([]);
+    setSelectedSketchProfileId(null);
+  }
+
   function createFeature(command: AnyCommand): boolean {
     if (executeCommand(command)) {
       finishFeatureCreation();
@@ -5981,7 +6023,10 @@ export function App() {
     });
   }
 
-  /** The edit counterpart of {@link createValidatedFeature}. */
+  /**
+   * The edit counterpart of {@link createValidatedFeature}: on success the
+   * edit card closes, as the create card does.
+   */
   function applyValidatedFeature(
     command: AnyCommand,
     feature: FeatureNode,
@@ -5989,7 +6034,7 @@ export function App() {
     resultBodyId: BodyId | undefined = feature.bodyId
   ): void {
     if (!doc || !resultBodyId) {
-      executeCommand(command);
+      if (executeCommand(command)) finishFeatureEdit(feature);
       return;
     }
     void executeValidatedFeature(command, {
@@ -5998,7 +6043,8 @@ export function App() {
       targets: affectedFeatureTargets(doc, feature.featureId).map(
         (target, index) => (index === 0 ? { ...target, featureName } : target)
       ),
-      successMessage: commandOutcomeMessage(command.label)
+      successMessage: commandOutcomeMessage(command.label),
+      onSuccess: () => finishFeatureEdit(feature)
     });
   }
 
@@ -6103,6 +6149,9 @@ export function App() {
       return;
     }
     setFeatureFormError(null);
+    // A tool opens its create card; openModelingFeatureEditor sets the
+    // feature back afterwards when it is reopening one instead.
+    setModelingEditFeature(null);
     setFormFacePickTarget(null);
     setViewportFormFacePick(null);
     setRevertPill(null);
@@ -6255,6 +6304,14 @@ export function App() {
   function openModelingFeatureEditor(feature: FeatureNode) {
     if (!modelingFeatureIsEditable(feature.data.featureKind)) return;
     const data = feature.data as EditableModelingFeatureData;
+    const reason = toolDisabledReason(data.featureKind, availability);
+    if (reason) {
+      // The Inspector keeps its "Edit …" button for exactly this case, so
+      // the edit can be retried once the reason (exact geometry still
+      // loading, a read-only project) has gone.
+      setStatus(`${TOOL_META[data.featureKind].label}: ${reason}.`);
+      return;
+    }
     launchTool(data.featureKind);
     // launchTool seeds the target from the selection; the edit targets the
     // feature's own (consumed) source body and its stored entry face.
@@ -14856,6 +14913,9 @@ export function App() {
   function handleSelectFeatureFromTree(nodeId: string, toggle = true) {
     extrudeEditRequest.current += 1;
     setTool(null);
+    // A reopened modeling form belongs to the feature that was selected; the
+    // next one opens its own below, and nothing must inherit this one.
+    setModelingEditFeature(null);
     setSelectedTopology(null);
     setSelectedEdges([]);
     // Picking in the tree is a selection change like any other. Dropping the
@@ -14962,6 +15022,16 @@ export function App() {
         ? historyFeatureFocus(doc, node, visible)
         : null;
     setSelectedBodyIds(focus?.kind === 'bodies' ? focus.bodyIds : []);
+    // F19: an edit card opens already editable. The Inspector's own forms do;
+    // a modeling feature's card is its creation form, so selecting the
+    // feature opens that form rather than a panel with an "Edit hole" button
+    // in front of it. Last, so the form's target body wins the selection.
+    if (
+      node?.kind === 'feature' &&
+      modelingFeatureIsEditable(node.data.featureKind)
+    ) {
+      openModelingFeatureEditor(node);
+    }
   }
 
   function handleSelectBodyFromTree(bodyId: BodyId, additive: boolean) {
@@ -15063,6 +15133,9 @@ export function App() {
         commandFactories.deleteFeature({ featureId }, `Delete ${name}`)
       )
     ) {
+      // A reopened modeling form outlives the selection (its tool is still
+      // running), so it has to be closed with the feature it was editing.
+      if (modelingEditFeature?.featureId === featureId) closeFeaturePanel();
       clearSelection();
       announce(deleteFeatureToastMessage(name, dependentCount), {
         label: 'Undo',
@@ -16963,6 +17036,10 @@ export function App() {
         : {}),
       successMessage: commandOutcomeMessage(approved.command.label),
       onSuccess: () => {
+        if (editing) {
+          finishFeatureEdit(editing);
+          return;
+        }
         setModelingEditFeature(null);
         finishFeatureCreation();
       }
@@ -18247,7 +18324,18 @@ export function App() {
               // The same panel chrome the Inspector draws for its own forms:
               // bare in `.inspector-float`, this form sat straight on the
               // viewport under the orientation widget and the utility rail.
-              <section className="inspector" aria-label="Feature inspector">
+              <section
+                className="inspector"
+                aria-label="Feature inspector"
+                // One Escape cancels this card from anywhere in it, as it
+                // does every Inspector card (F19). Face picking keeps its own
+                // rung: that press only stops picking (the workspace keys).
+                onKeyDown={(event) => {
+                  if (event.key !== 'Escape' || formFacePickTarget) return;
+                  event.stopPropagation();
+                  cancelPanel();
+                }}
+              >
                 <div className="panel-header">
                   <div className="panel-title-row">
                     <h2>
@@ -18259,6 +18347,28 @@ export function App() {
                         ? TOOL_META[modelingOperation].label
                         : 'New feature'}
                     </span>
+                    {modelingEditFeature ? (
+                      // The same overflow every Inspector edit card has: now
+                      // that selecting the feature opens this form (F19),
+                      // this is where its delete is.
+                      <PanelOverflow>
+                        <button
+                          type="button"
+                          className="panel-overflow-item danger"
+                          title="Delete feature (Del)"
+                          onClick={() => {
+                            if (validateSelectionEdit())
+                              handleDeleteFeature(
+                                modelingEditFeature.featureId,
+                                modelingEditFeature.name
+                              );
+                          }}
+                        >
+                          <Trash2 size={13} aria-hidden="true" />
+                          Delete feature
+                        </button>
+                      </PanelOverflow>
+                    ) : null}
                     <button
                       type="button"
                       className="icon-button panel-close"
@@ -18444,19 +18554,7 @@ export function App() {
                     },
                     `Edit ${name}`
                   );
-                  if (!doc || !feature.bodyId) {
-                    executeCommand(command);
-                    return;
-                  }
-                  void executeValidatedFeature(command, {
-                    featureName: name,
-                    resultBodyId: feature.bodyId,
-                    targets: affectedFeatureTargets(doc, feature.featureId).map(
-                      (target, index) =>
-                        index === 0 ? { ...target, featureName: name } : target
-                    ),
-                    successMessage: commandOutcomeMessage(command.label)
-                  });
+                  applyValidatedFeature(command, feature, name);
                 }}
                 onApplySketch={(feature, value) => {
                   if (
@@ -18488,7 +18586,9 @@ export function App() {
                       })
                     );
                   }
-                  executeTransaction(`Edit ${value.name}`, commands);
+                  if (executeTransaction(`Edit ${value.name}`, commands)) {
+                    finishFeatureEdit(feature);
+                  }
                 }}
                 onConvertSketchToFixedPlane={(sketch) => {
                   const planeRef = fixedPlaneRefForLegacyAttachment(
@@ -18540,7 +18640,9 @@ export function App() {
                       })
                     );
                   }
-                  executeTransaction(`Edit ${value.name}`, commands);
+                  if (executeTransaction(`Edit ${value.name}`, commands)) {
+                    finishFeatureEdit(feature);
+                  }
                 }}
                 onEditModelingFeature={openModelingFeatureEditor}
                 onEditSketchInViewport={(feature) => {
