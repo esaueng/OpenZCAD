@@ -536,6 +536,74 @@ describe('face hover overlay', () => {
   });
 });
 
+describe('face hover cross-fade on slow frames', () => {
+  it('lets a face entered mid-fade begin visibly on a 400 ms frame', () => {
+    const { manager, objectsByBodyId, setBodies } = makeManager();
+    const bodyId = toBodyId('body-crossfade');
+    const sourceGeometry = new THREE.BufferGeometry();
+    sourceGeometry.setAttribute(
+      'position',
+      new THREE.Float32BufferAttribute(
+        [0, 0, 0, 1, 0, 0, 0, 1, 0, 1, 1, 0, 0, 1, 0, 1, 0, 0],
+        3
+      )
+    );
+    sourceGeometry.setAttribute(
+      'normal',
+      new THREE.Float32BufferAttribute(
+        [0, 0, 1, 0, 0, 1, 0, 0, 1, 0, 0, 1, 0, 0, 1, 0, 0, 1],
+        3
+      )
+    );
+    sourceGeometry.setIndex([0, 1, 2, 3, 4, 5]);
+    objectsByBodyId.set(
+      bodyId,
+      new THREE.Mesh(sourceGeometry, new THREE.MeshPhongMaterial())
+    );
+    setBodies([
+      {
+        bodyId,
+        topology: {
+          faces: [
+            {
+              topologyId: 'face-a',
+              hash: 1,
+              triangleStart: 0,
+              triangleCount: 1
+            },
+            {
+              topologyId: 'face-b',
+              hash: 2,
+              triangleStart: 1,
+              triangleCount: 1
+            }
+          ],
+          edges: []
+        }
+      } as unknown as BodyRepresentation
+    ]);
+
+    // face-a starts fading in, so the render loop is already running on real
+    // elapsed time when the pointer moves on to face-b.
+    manager.setHoverFace({ bodyId, kind: 'face', topologyId: 'face-a' });
+    manager.step(0.4);
+    const outgoing = manager.hoverFaceMesh.material;
+    manager.setHoverFace({ bodyId, kind: 'face', topologyId: 'face-b' });
+    const incoming = manager.hoverFaceMesh.material;
+    expect(incoming).not.toBe(outgoing);
+    expect(incoming.opacity).toBe(0);
+
+    manager.step(0.4);
+    // Both films are mid-fade after the first slow frame, so the cross-fade
+    // is seen; the next frame advances by the real gap and lands it.
+    expect(incoming.opacity).toBeGreaterThan(0);
+    expect(manager.isSettling).toBe(true);
+    manager.step(0.4);
+    manager.step(0.4);
+    expect(manager.isSettling).toBe(false);
+  });
+});
+
 describe('region hover fades', () => {
   function regionMesh(selected = false) {
     const mesh = new THREE.Mesh(

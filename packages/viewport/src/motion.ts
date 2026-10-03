@@ -89,6 +89,17 @@ export function animationStepSeconds(
 }
 
 /**
+ * The step, in milliseconds, for one eased value this frame. A fade that was
+ * just created or retargeted takes at most the wake step on its first frame,
+ * however long that frame was, so it is seen to begin even while an older
+ * animation keeps the loop running on real elapsed time. Every later frame
+ * of the same fade advances by the full step.
+ */
+export function fadeStepMs(dtMs: number, firstStep: boolean): number {
+  return firstStep ? Math.min(dtMs, WAKE_STEP_S * 1000) : dtMs;
+}
+
+/**
  * Whether an eased value has arrived, for callers that must decide to stop
  * stepping or hide an overlay.
  */
