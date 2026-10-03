@@ -884,4 +884,32 @@ describe('the edge list of an edited fillet', () => {
     rerender(<Inspector {...pinned({ onRemoveSelectedEdge })} />);
     expect(rowCount()).toBe(1);
   });
+
+  it('forgets a removal once the edit session ends', () => {
+    // Removing an edge, opening another feature and coming back without
+    // Apply used to reuse the old removal, so a later Apply dropped an edge
+    // the list had just shown restored.
+    const other: FeatureNode = {
+      ...twoEdges,
+      id: 'feature-node-2' as FeatureNode['id'],
+      featureId: 'feature-2' as FeatureNode['featureId'],
+      name: 'Other fillet'
+    };
+    const props = pinned({});
+    const { rerender } = render(<Inspector {...props} />);
+    fireEvent.click(screen.getByRole('button', { name: /^Remove 2 / }));
+    expect(rowCount()).toBe(1);
+    rerender(<Inspector {...pinned({ selectedFeature: other })} />);
+    rerender(<Inspector {...pinned({ selectedFeature: null })} />);
+    rerender(<Inspector {...props} />);
+    expect(rowCount()).toBe(2);
+    fireEvent.submit(
+      screen.getByRole('button', { name: /Apply/ }).closest('form')!
+    );
+    expect(props.onApplyEdgeModifier).toHaveBeenCalledWith(
+      twoEdges,
+      'fillet',
+      expect.objectContaining({ edgeHashes: [11, 12] })
+    );
+  });
 });

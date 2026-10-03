@@ -1340,13 +1340,29 @@ export function Inspector(props: InspectorProps) {
   );
   /**
    * Stored edges taken off the fillet or chamfer being edited, until Apply.
-   * Keyed by the edit, so another feature or a new document version starts
-   * from the stored set again.
+   * Keyed by the edit (feature and document version), and dropped the moment
+   * the edit session ends: a tool opens, the feature is deselected or another
+   * one is picked. The panel outlives its subject, so a key alone repeated
+   * when the same feature was reopened, and a stale removal rode the next
+   * Apply.
    */
   const [removedEdges, setRemovedEdges] = useState<{
     edit: string;
     hashes: readonly number[];
   }>({ edit: '', hashes: [] });
+  const editSession =
+    tool === null && selectedFeature
+      ? `${selectedFeature.featureId}:${featureSelectionSource ?? ''}`
+      : null;
+  const [edgeEditSession, setEdgeEditSession] = useState(editSession);
+  if (edgeEditSession !== editSession) {
+    // Reset while rendering, not in an effect: the reopened card must never
+    // draw one frame with the old removal applied.
+    setEdgeEditSession(editSession);
+    if (removedEdges.hashes.length > 0) {
+      setRemovedEdges({ edit: '', hashes: [] });
+    }
+  }
 
   /**
    * Hand an edit panel the keyboard without handing it a field.
