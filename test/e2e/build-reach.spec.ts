@@ -214,9 +214,11 @@ test('F30: an opened fillet lists its edges by name, lights them, and drops one'
     /^1\s*Back · Top edge/,
     /^2\s*Top · Front edge/
   ]);
-  // The two blend faces are lit; the body is not selected whole.
+  // History lights the two stored blend faces as focus, separately from a
+  // selection-first operation's live blend preview; the body is not lit whole.
   await expect(canvas).not.toHaveAttribute('data-e2e-selected-bodies', /.+/);
-  await expect(canvas).toHaveAttribute('data-e2e-preview-blend-count', '2');
+  await expect(canvas).toHaveAttribute('data-e2e-focus-faces', '2');
+  await expect(canvas).not.toHaveAttribute('data-e2e-preview-blend-count');
 
   // Taking one off previews the blend without it, and the light follows.
   await inspector
@@ -226,9 +228,10 @@ test('F30: an opened fillet lists its edges by name, lights them, and drops one'
   await expect(inspector.locator('.selection-summary')).toContainText(
     '1 exact edge selected'
   );
-  await expect(canvas).toHaveAttribute('data-e2e-preview-blend-count', '1', {
+  await expect(canvas).toHaveAttribute('data-e2e-focus-faces', '1', {
     timeout: 30_000
   });
+  await expect(canvas).not.toHaveAttribute('data-e2e-preview-blend-count');
   // The last edge cannot be removed: a fillet needs one.
   await expect(
     inspector.getByRole('button', { name: 'Remove 1 Back · Top edge' })
@@ -248,5 +251,6 @@ test('F30: an opened fillet lists its edges by name, lights them, and drops one'
   await expect(edges.getByRole('listitem')).toHaveText([
     /^1\s*Back · Top edge/
   ]);
-  await expect(canvas).toHaveAttribute('data-e2e-preview-blend-count', '1');
+  await expect(canvas).toHaveAttribute('data-e2e-focus-faces', '1');
+  await expect(canvas).not.toHaveAttribute('data-e2e-preview-blend-count');
 });
