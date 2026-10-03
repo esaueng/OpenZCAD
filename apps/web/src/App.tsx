@@ -1118,7 +1118,11 @@ import {
   type ModelingPathOption,
   type ModelingProfileOption
 } from './lib/modelingOperations';
-import { editCardFeatureId } from './lib/editCardLifecycle';
+import {
+  editCardFeatureId,
+  EditCardSessions,
+  type EditCardSession
+} from './lib/editCardLifecycle';
 import { PanelOverflow } from './components/PanelOverflow';
 import {
   clearActiveProject,
@@ -3360,7 +3364,7 @@ export function App() {
           index === 0 ? { ...target, featureName: value.name } : target
       ),
       successMessage: `Edit ${value.name}`,
-      onSuccess: () => finishFeatureEdit(feature),
+      onSuccess: closeEditCardOnSuccess(feature),
       cancelled: () => request !== extrudeEditRequest.current
     });
   }
@@ -3408,7 +3412,7 @@ export function App() {
         : {}),
       successMessage: `${value.name} applied.`,
       onSuccess: feature
-        ? () => finishFeatureEdit(feature)
+        ? closeEditCardOnSuccess(feature)
         : finishFeatureCreation
     });
   }
@@ -5053,16 +5057,22 @@ export function App() {
   ]);
   const selectedFeatureNodeId = selectedFeature?.id ?? null;
   /**
-   * The feature whose edit card is on screen, read when an Apply that was
-   * still validating lands. A user who moved to another feature or tool in
-   * the meantime keeps what they moved to.
+   * The edit card on screen, as a session: a new one every time the card
+   * changes, including closing and reopening the same feature. An Apply
+   * captures the session it was pressed in and, when it lands, closes the
+   * card only if that session is still open — a user who moved on, or
+   * reopened the same feature with new input, keeps what is on screen.
    */
-  const editCardFeatureIdRef = useRef<string | null>(null);
-  editCardFeatureIdRef.current = editCardFeatureId({
-    tool,
-    inspectorFeatureId: selectedFeatureNodeId,
-    modelingEditFeatureId: modelingEditFeature?.id ?? null
-  });
+  const editCardSessionsRef = useRef<EditCardSessions | null>(null);
+  editCardSessionsRef.current ??= new EditCardSessions();
+  const editCardSessions = editCardSessionsRef.current;
+  const editCardSession = editCardSessions.observe(
+    editCardFeatureId({
+      tool,
+      inspectorFeatureId: selectedFeatureNodeId,
+      modelingEditFeatureId: modelingEditFeature?.id ?? null
+    })
+  );
   function validateSelectionEdit(): boolean {
     if (
       managerRef.current?.document.version !== doc?.version ||
@@ -5974,8 +5984,12 @@ export function App() {
    * form selected its consumed source body to target it, so it clears
    * everything, as it always has.
    */
-  function finishFeatureEdit(feature: FeatureNode): void {
-    if (editCardFeatureIdRef.current !== feature.id) return;
+  function finishFeatureEdit(
+    feature: FeatureNode,
+    session: EditCardSession | null
+  ): void {
+    if (session?.featureId !== feature.id || !editCardSessions.isOpen(session))
+      return;
     if (tool !== null) {
       setModelingEditFeature(null);
       finishFeatureCreation();
@@ -5987,6 +6001,15 @@ export function App() {
     setSelectedEdges([]);
     setSelectedProfiles([]);
     setSelectedSketchProfileId(null);
+  }
+
+  /**
+   * The success callback for an edit Apply pressed now: it closes this
+   * render's card session, never a later one (see `editCardSession`).
+   */
+  function closeEditCardOnSuccess(feature: FeatureNode): () => void {
+    const session = editCardSession;
+    return () => finishFeatureEdit(feature, session);
   }
 
   function createFeature(command: AnyCommand): boolean {
@@ -6034,7 +6057,7 @@ export function App() {
     resultBodyId: BodyId | undefined = feature.bodyId
   ): void {
     if (!doc || !resultBodyId) {
-      if (executeCommand(command)) finishFeatureEdit(feature);
+      if (executeCommand(command)) finishFeatureEdit(feature, editCardSession);
       return;
     }
     void executeValidatedFeature(command, {
@@ -6044,7 +6067,7 @@ export function App() {
         (target, index) => (index === 0 ? { ...target, featureName } : target)
       ),
       successMessage: commandOutcomeMessage(command.label),
-      onSuccess: () => finishFeatureEdit(feature)
+      onSuccess: closeEditCardOnSuccess(feature)
     });
   }
 
@@ -17021,6 +17044,7 @@ export function App() {
       return;
     }
     const editing = modelingEditFeature;
+    const closeEdit = editing ? closeEditCardOnSuccess(editing) : null;
     void executeValidatedFeature(approved.command, {
       featureName: approved.featureName,
       resultBodyId: approved.resultBodyId,
@@ -17036,8 +17060,8 @@ export function App() {
         : {}),
       successMessage: commandOutcomeMessage(approved.command.label),
       onSuccess: () => {
-        if (editing) {
-          finishFeatureEdit(editing);
+        if (closeEdit) {
+          closeEdit();
           return;
         }
         setModelingEditFeature(null);
@@ -18587,7 +18611,7 @@ export function App() {
                     );
                   }
                   if (executeTransaction(`Edit ${value.name}`, commands)) {
-                    finishFeatureEdit(feature);
+                    finishFeatureEdit(feature, editCardSession);
                   }
                 }}
                 onConvertSketchToFixedPlane={(sketch) => {
@@ -18641,7 +18665,7 @@ export function App() {
                     );
                   }
                   if (executeTransaction(`Edit ${value.name}`, commands)) {
-                    finishFeatureEdit(feature);
+                    finishFeatureEdit(feature, editCardSession);
                   }
                 }}
                 onEditModelingFeature={openModelingFeatureEditor}
