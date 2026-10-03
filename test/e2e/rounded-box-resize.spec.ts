@@ -196,7 +196,9 @@ test('resizes a rounded box from its minimum side with exact entry, drag, cancel
   }
   await selectSide();
   const card = page.getByRole('region', { name: 'Resize Body operation' });
-  await card.getByRole('tab', { name: 'Offset Face', exact: true }).click();
+  await card
+    .getByRole('button', { name: 'Selection: Offset', exact: true })
+    .click();
   await expect(
     page.getByRole('region', { name: 'Offset Face operation' })
   ).toBeVisible();
@@ -225,7 +227,7 @@ test('resizes a rounded box from its minimum side with exact entry, drag, cancel
   await page.keyboard.press('Escape');
   await page
     .getByRole('region', { name: 'Offset Face operation' })
-    .getByRole('tab', { name: 'Resize body', exact: true })
+    .getByRole('button', { name: 'Selection: Resize', exact: true })
     .click();
   await expect(
     page.getByRole('region', { name: 'Resize Body operation' })

@@ -322,7 +322,7 @@ test('Space centres and faces an exact planar selection head-on', async ({
   });
   await expect(faceOperation).toBeVisible();
   await expect(
-    faceOperation.getByRole('tab', { name: 'Sketch' })
+    faceOperation.getByRole('button', { name: 'Selection: Sketch' })
   ).toBeVisible();
   // The viewport pick demotes its inferred feature to an object readout. Space
   // still belongs to the selected face without an editable field retaining it.
@@ -1951,6 +1951,14 @@ test('section view cycles planes, cuts exactly at rest, and cuts nothing from th
   await expect(
     page.locator('.feature-row-main', { hasText: 'Box' })
   ).toBeVisible();
+  // The plane starts at the centre of the drawn model. The History row lands
+  // ~300 ms before the box is drawn, and a cycle in that gap starts the cut
+  // at 0 — the box's bottom face, where nothing is cut — so the spec failed
+  // whenever the click won the race (most runs, on main too).
+  await expect(page.locator('.viewer-host canvas')).toHaveAttribute(
+    'data-e2e-rendered-bodies',
+    '1'
+  );
 
   interface SectionGeometry {
     triangles: number;

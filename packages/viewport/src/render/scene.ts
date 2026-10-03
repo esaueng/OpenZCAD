@@ -291,6 +291,11 @@ export interface FatLineOptions {
  */
 export const VIEWPORT_RENDER_ORDER = {
   BODY_FACE: 0,
+  /**
+   * A selected face's own-colour fill. Under the edges, so the rim that
+   * carries the selection and the face's own edges draw over it.
+   */
+  SELECTED_FACE_FILL: 7,
   BODY_EDGE: 8,
   SKETCH_FILL: 9,
   SKETCH_CURVE: 10,

@@ -215,10 +215,9 @@ test('resizes a cylinder wall concentrically with one undoable radius edit', asy
     'Ø 40 mm'
   );
   // Dragging collapses the card to its accessible status marker (778d539e).
-  await expect(radiusOperation.locator('.tool-card-phase-dot')).toHaveAttribute(
-    'aria-label',
-    'Dragging'
-  );
+  await expect(
+    radiusOperation.locator('.selection-callout-phase-dot')
+  ).toHaveAttribute('aria-label', 'Dragging');
   await page.keyboard.press('Escape');
   await expect(page.getByTestId('direct-manipulation-value')).toHaveText(
     'Ø 36 mm'
@@ -389,9 +388,9 @@ test('switches a planar-face selection into an editable arc sketch', async ({
   });
   await expect(offsetCard).toBeVisible();
   await expect(
-    offsetCard.getByRole('tab', { name: 'Resize body' })
-  ).toHaveAttribute('aria-selected', 'true');
-  await offsetCard.getByRole('tab', { name: 'Sketch' }).click();
+    offsetCard.getByRole('button', { name: 'Selection: Resize' })
+  ).toHaveAttribute('aria-pressed', 'true');
+  await offsetCard.getByRole('button', { name: 'Selection: Sketch' }).click();
 
   const sketchTools = page.getByRole('toolbar', { name: 'Sketch tools' });
   await expect(sketchTools).toBeVisible();
@@ -490,7 +489,7 @@ test('shows and recovers a stale face-attached sketch when its source is suppres
   await page.mouse.click(facePoint!.x, facePoint!.y);
   await page
     .getByRole('region', { name: 'Resize Body operation' })
-    .getByRole('tab', { name: 'Sketch' })
+    .getByRole('button', { name: 'Selection: Sketch' })
     .click();
 
   const sketchTools = page.getByRole('toolbar', { name: 'Sketch tools' });
@@ -582,7 +581,7 @@ test('keeps face sketching available after a primitive direct edit', async ({
   await selectOffsetFace();
   await page
     .getByRole('region', { name: 'Resize Body operation' })
-    .getByRole('tab', { name: 'Offset Face', exact: true })
+    .getByRole('button', { name: 'Selection: Offset', exact: true })
     .click();
   // Moving a face reads the change by default (Resize body read the total);
   // the tag beside the value is the switch to the whole span.
@@ -600,13 +599,15 @@ test('keeps face sketching available after a primitive direct edit', async ({
   await selectOffsetFace();
   await page
     .getByRole('region', { name: 'Resize Body operation' })
-    .getByRole('tab', { name: 'Offset Face', exact: true })
+    .getByRole('button', { name: 'Selection: Offset', exact: true })
     .click();
   const offsetCard = page.getByRole('region', {
     name: 'Offset Face operation'
   });
   await expect(offsetCard).toBeVisible();
-  const sketchAction = offsetCard.getByRole('tab', { name: 'Sketch' });
+  const sketchAction = offsetCard.getByRole('button', {
+    name: 'Selection: Sketch'
+  });
   await expect(sketchAction).toBeEnabled();
   await sketchAction.click();
   await expect(

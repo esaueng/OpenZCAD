@@ -136,12 +136,12 @@ async function findFacePoint(page: Page) {
 }
 
 /*
-  Every command card anchors at the top of the right lane with the drawer
-  yielding below it. The face tool card used to float over the viewport's
-  top edge, over the drawer's History rows; a drag hides the drawer until
-  the gesture ends.
+  A face pick's operation rides the selection chip on the pick (design
+  review F11); it used to be a second card at the top of the right lane,
+  and before that a float over the drawer's History rows. The lane keeps
+  only what it holds, and a drag hides the drawer until the gesture ends.
 */
-test('the tool card heads the right lane and a drag suspends the drawer', async ({
+test('a face pick keeps its operation on the chip and a drag suspends the drawer', async ({
   page
 }) => {
   await page.setViewportSize({ width: 1440, height: 900 });
@@ -161,20 +161,25 @@ test('the tool card heads the right lane and a drag suspends the drawer', async 
   const card = page.getByRole('region', { name: 'Resize Body operation' });
   await expect(card).toBeVisible();
 
-  // In the lane, first, and nothing in the lane paints over another.
+  // On the pick, not in the lane: one surface for one pick.
   await expect(
     page
-      .locator('.stage-right > .command-float')
-      .getByRole('region', { name: 'Resize Body operation' })
+      .locator('.viewer-shell .selection-callout-chip')
+      .and(page.getByRole('region', { name: 'Resize Body operation' }))
   ).toBeVisible();
-  await expect(page.locator('.viewer-shell .tool-card')).toHaveCount(0);
+  await expect(page.locator('.tool-card')).toHaveCount(0);
+  await expect(
+    page
+      .locator('.stage-right')
+      .getByRole('region', { name: 'Resize Body operation' })
+  ).toHaveCount(0);
+  // Nothing in the lane paints over another.
   const lane = await page.locator('.stage-right').evaluate((element) =>
     [...element.children].map((child) => {
       const box = child.getBoundingClientRect();
       return { name: child.className, top: box.top, bottom: box.bottom };
     })
   );
-  expect(lane[0]?.name).toBe('command-float');
   for (let index = 1; index < lane.length; index += 1) {
     expect(lane[index]!.top, JSON.stringify(lane)).toBeGreaterThanOrEqual(
       lane[index - 1]!.bottom
@@ -185,7 +190,7 @@ test('the tool card heads the right lane and a drag suspends the drawer', async 
   await page.mouse.move(facePoint.x, facePoint.y);
   await page.mouse.down();
   await page.mouse.move(facePoint.x + 30, facePoint.y - 20, { steps: 3 });
-  await expect(card.locator('.tool-card-phase-dot')).toHaveAttribute(
+  await expect(card.locator('.selection-callout-phase-dot')).toHaveAttribute(
     'aria-label',
     'Dragging'
   );
