@@ -246,6 +246,24 @@ function move(
 }
 
 describe('certified curved union connectivity', () => {
+  it('keeps the installed SDK carrier-scope distance refusal unknown', () => {
+    const kernel = new RemusKernel();
+    try {
+      const cylinder = kernel.makeCylinder(2, 2);
+      const sphere = kernel.makeSphere(1, 32);
+      const before = serialized(kernel, [cylinder, sphere]);
+      // No injected diagnostic: this calls the real released WASM distance.
+      expect(() => kernel.solidToSolidDistance(cylinder, sphere)).toThrow();
+      expect(certifiedSolidDistance(kernel, cylinder, sphere)).toBeNull();
+      expect(() =>
+        certifiedSolidDistance(kernel, 0xffffffff, sphere)
+      ).toThrow();
+      expect(serialized(kernel, [cylinder, sphere])).toEqual(before);
+    } finally {
+      kernel.free();
+    }
+  });
+
   it.each([
     { cap: 'lower', centerZ: 8 },
     { cap: 'upper', centerZ: 12 }
