@@ -342,7 +342,7 @@ export interface HistoryCheckpointEntry {
   featureIndex: number;
   /** Digests since the previous checkpoint, including this feature. */
   digests: string[];
-  /** Kernel checkpoint index; equals this entry's position in the table. */
+  /** Opaque kernel checkpoint handle returned for this entry. */
   checkpointId: number;
   /** Post-feature JS state, isolated from later in-place mutation. */
   snapshot: ExactBuildResult;

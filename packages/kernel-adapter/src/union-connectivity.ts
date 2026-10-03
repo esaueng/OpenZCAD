@@ -12,6 +12,8 @@ export interface UnionSolid<T> {
 
 export interface UnionConnectivity {
   connected: boolean;
+  /** Some potentially touching components have no certified distance. */
+  uncertain: boolean;
   componentCount: number;
   closestGap: number | null;
   contactTolerance: number;
@@ -21,7 +23,7 @@ interface CandidatePair {
   left: number;
   right: number;
   lowerBound: number;
-  distance?: number;
+  distance?: number | null;
 }
 
 export const MAX_UNION_CONNECTIVITY_PAIRS = 50_000;
@@ -93,17 +95,18 @@ function contactTolerance<T>(solids: readonly UnionSolid<T>[]): number {
  * Finds whether every solid lump participates in one touching/overlapping
  * graph. Bounding-box lower bounds prune exact kernel distance calls, which
  * keeps patterned bodies bounded while preserving exact contact decisions.
- * `exactOverlap` covers kernels whose distance query reports penetration
- * depth instead of zero for intersecting solids.
+ * A null distance is unknown, never zero. `exactOverlap` can independently
+ * prove shared material when distance is unsupported or reports penetration.
  */
 export function analyzeUnionConnectivity<T>(
   solids: readonly UnionSolid<T>[],
-  exactDistance: (left: T, right: T) => number,
+  exactDistance: (left: T, right: T) => number | null,
   exactOverlap?: (left: T, right: T) => boolean
 ): UnionConnectivity {
   if (solids.length <= 1) {
     return {
       connected: true,
+      uncertain: false,
       componentCount: solids.length,
       closestGap: null,
       contactTolerance: contactTolerance(solids)
@@ -146,13 +149,13 @@ export function analyzeUnionConnectivity<T>(
       rank[leftRoot] = rank[leftRoot]! + 1;
     }
   };
-  const distanceFor = (pair: CandidatePair): number => {
+  const distanceFor = (pair: CandidatePair): number | null => {
     if (pair.distance === undefined) {
       const distance = exactDistance(
         solids[pair.left]!.solid,
         solids[pair.right]!.solid
       );
-      if (!Number.isFinite(distance) || distance < 0) {
+      if (distance !== null && (!Number.isFinite(distance) || distance < 0)) {
         throw new Error(
           'The geometry kernel returned an invalid solid distance.'
         );
@@ -178,8 +181,9 @@ export function analyzeUnionConnectivity<T>(
     if (pair.lowerBound > tolerance) {
       break;
     }
+    const distance = distanceFor(pair);
     if (
-      distanceFor(pair) <= tolerance ||
+      (distance !== null && distance <= tolerance) ||
       exactOverlap?.(solids[pair.left]!.solid, solids[pair.right]!.solid) ===
         true
     ) {
@@ -191,6 +195,7 @@ export function analyzeUnionConnectivity<T>(
   if (componentCount === 1) {
     return {
       connected: true,
+      uncertain: false,
       componentCount,
       closestGap: null,
       contactTolerance: tolerance
@@ -198,6 +203,13 @@ export function analyzeUnionConnectivity<T>(
   }
 
   let closestGap = Infinity;
+  let unknownDistance = false;
+  const possibleParent = parent.slice();
+  const possibleRoot = (index: number): number => {
+    let root = index;
+    while (possibleParent[root] !== root) root = possibleParent[root]!;
+    return root;
+  };
   for (const pair of pairs) {
     if (pair.lowerBound >= closestGap) {
       break;
@@ -205,13 +217,27 @@ export function analyzeUnionConnectivity<T>(
     if (find(pair.left) === find(pair.right)) {
       continue;
     }
-    closestGap = Math.min(closestGap, distanceFor(pair));
+    const distance = distanceFor(pair);
+    if (distance === null) {
+      unknownDistance = true;
+      // A positive whole-geometry box gap already proves separation.
+      if (pair.lowerBound <= tolerance) {
+        possibleParent[possibleRoot(pair.right)] = possibleRoot(pair.left);
+      }
+    } else {
+      closestGap = Math.min(closestGap, distance);
+    }
   }
 
   return {
     connected: false,
+    // Unknown edges can defer to the actual fuse only if they could connect
+    // every component. A separately proven gap remains a refusal.
+    uncertain:
+      new Set(solids.map((_, index) => possibleRoot(index))).size === 1,
     componentCount,
-    closestGap: Number.isFinite(closestGap) ? closestGap : null,
+    closestGap:
+      !unknownDistance && Number.isFinite(closestGap) ? closestGap : null,
     contactTolerance: tolerance
   };
 }

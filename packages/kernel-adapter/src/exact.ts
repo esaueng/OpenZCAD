@@ -788,6 +788,10 @@ const MAX_MEASURED_SHAPE_CACHE_BYTES = 128 * 1024 * 1024;
 /** A cache proof failed; retry once in an empty kernel, never publish the hit. */
 class HistoryCacheIntegrityError extends Error {}
 
+function isCheckpointHandle(handle: number): boolean {
+  return Number.isSafeInteger(handle) && handle >= 0 && handle <= 0xffff_ffff;
+}
+
 export class RemusKernelAdapter implements ExactKernelAdapter {
   readonly kind = 'remus' as const;
 
@@ -813,13 +817,17 @@ export class RemusKernelAdapter implements ExactKernelAdapter {
    * The adapter-owned history kernel and its retained prefix table, shared by
    * sync, export, mesh-quality and imported-face recognition. Operations that
    * allocate scratch restore the last retained prefix before returning.
-   * Invariant: `historyCheckpoints[i].checkpointId === i`. Each entry owns
-   * digests for every feature since the preceding checkpoint, so a changed
-   * feature between sparse checkpoints cannot leave a later snapshot valid.
-   * `restore(k)` truncates the kernel stack and table in lockstep.
+   * Checkpoint handles are opaque. Each entry retains the handle returned by
+   * its kernel and digests for every feature since the preceding checkpoint,
+   * so a changed feature between sparse checkpoints cannot leave a later
+   * snapshot valid. Restore truncates the kernel stack and table in lockstep.
    */
   private historyKernel: RemusKernel | null = null;
   private historyCheckpoints: HistoryCheckpointEntry[] = [];
+  private readonly historyCheckpointOwners = new Map<
+    number,
+    HistoryCheckpointEntry
+  >();
   private historyScopeKey: string | null = null;
   private historyProjectId: ProjectDocument['projectId'] | null = null;
   private historyReplayWork = 0;
@@ -958,6 +966,7 @@ export class RemusKernelAdapter implements ExactKernelAdapter {
   private invalidateHistoryCache(): void {
     this.clearCurrentMassSnapshot();
     this.historyCheckpoints = [];
+    this.historyCheckpointOwners.clear();
     this.historyScopeKey = null;
     this.historyProjectId = null;
     this.historyReplayWork = 0;
@@ -1083,14 +1092,21 @@ export class RemusKernelAdapter implements ExactKernelAdapter {
       | undefined;
     this.primitiveBuildCache.prune(features);
 
-    // A valid numeric checkpoint ID alone cannot prove table ownership: IDs
-    // are reused after truncation. Reconcile both owners before any reuse.
+    // Counts alone cannot prove ownership. Retain the exact association of
+    // each opaque handle with its adapter-created entry in this kernel's
+    // lifetime; actual restore/discard still verifies kernel membership.
     if (kernel) {
       try {
         if (
           kernel.checkpointCount() !== this.historyCheckpoints.length ||
+          this.historyCheckpointOwners.size !==
+            this.historyCheckpoints.length ||
+          new Set(this.historyCheckpoints.map((entry) => entry.checkpointId))
+            .size !== this.historyCheckpoints.length ||
           this.historyCheckpoints.some(
-            (entry, index) => entry.checkpointId !== index
+            (entry) =>
+              !isCheckpointHandle(entry.checkpointId) ||
+              this.historyCheckpointOwners.get(entry.checkpointId) !== entry
           )
         ) {
           throw new HistoryCacheIntegrityError(
@@ -1146,11 +1162,16 @@ export class RemusKernelAdapter implements ExactKernelAdapter {
             // Preserve independent tail handles. Dropping checkpoints frees
             // snapshots without rolling the current topology back.
             if (this.historyCheckpoints.length > prefix + 1) {
-              kernel.discardCheckpoint(prefix + 1);
+              kernel.discardCheckpoint(
+                this.historyCheckpoints[prefix + 1]!.checkpointId
+              );
             }
           } else {
             kernel.restore(this.historyCheckpoints[prefix]!.checkpointId);
             this.primitiveBuildCache.restoredThrough(restoredFeatures - 1);
+          }
+          for (const entry of this.historyCheckpoints.slice(prefix + 1)) {
+            this.historyCheckpointOwners.delete(entry.checkpointId);
           }
           this.historyCheckpoints = this.historyCheckpoints.slice(
             0,
@@ -1269,20 +1290,23 @@ export class RemusKernelAdapter implements ExactKernelAdapter {
       );
       const checkpointId = activeKernel.checkpoint();
       if (
-        checkpointId !== this.historyCheckpoints.length ||
-        activeKernel.checkpointCount() !== checkpointId + 1
+        !isCheckpointHandle(checkpointId) ||
+        this.historyCheckpointOwners.has(checkpointId) ||
+        activeKernel.checkpointCount() !== this.historyCheckpoints.length + 1
       ) {
         throw new HistoryCacheIntegrityError(
           'History checkpoint allocation disagrees.'
         );
       }
       const previous = this.historyCheckpoints.at(-1);
-      this.historyCheckpoints.push({
+      const entry = {
         featureIndex: index,
         digests: digests.slice((previous?.featureIndex ?? -1) + 1, index + 1),
         checkpointId,
         snapshot: cloneBuildState(result)
-      });
+      };
+      this.historyCheckpoints.push(entry);
+      this.historyCheckpointOwners.set(checkpointId, entry);
       done();
     };
 
