@@ -19,10 +19,12 @@ gesture. Resuming an individual row clears both keys on that row, which gives
 the explicit per-feature control precedence over the current marker.
 
 The browser exact rebuild reports every skipped feature through the normal
-feature warning channel and emits no body or sketch basis for it. Downstream
-unsuppressed features therefore fail visibly if they depend on a skipped
-feature. OpenZCAD now has one production Remus build loop; the historical
-legacy mesh loop named in the expansion brief no longer exists.
+feature warning channel and emits no sketch basis for it. It emits no body
+for it either, except where the October 2026 amendment below passes the
+feature's input body through. Downstream unsuppressed features otherwise fail
+visibly if they depend on a skipped feature. OpenZCAD now has one production
+Remus build loop; the historical legacy mesh loop named in the expansion brief
+no longer exists.
 
 The compact AI digest includes each feature's effective `suppressed` state.
 No schema-version bump is required because metadata and its command/replay
@@ -40,5 +42,46 @@ shape already exist.
   one undoable transaction and one collaboration broadcast even when many
   feature metadata commands change.
 - A manually suppressed source with unsuppressed dependants produces explicit
-  dependant warnings. A normal rollback suppresses the whole later suffix and
-  avoids those dependency failures.
+  dependant warnings, unless the amendment below gives them its input body. A
+  normal rollback suppresses the whole later suffix and avoids those
+  dependency failures.
+
+## Amendment (October 2026): a suppressed feature passes its body through
+
+Design review F1 follow-up. Suppressing the fillet of a bracket made both
+holes drilled on it fail with "Hole target is unavailable", which read as the
+holes being broken rather than paused around.
+
+A **manually** suppressed feature that replaces one input body now records
+itself as the identity on that body: the input's solids appear under the
+feature's result body id and the input is consumed, as if the feature had run
+and changed nothing. `exact-build-loop.ts` applies it at the one place
+suppression is applied, through `exact-suppression.ts`, so the history cache,
+measurement and display all see the same bodies. Per kind:
+
+- Hole, shell, solid offset, draft, fillet, chamfer, pattern and add/cut
+  extrude pass `targetBodyId` through (a suppressed pattern leaves its seed).
+- A boolean passes its first operand through and leaves its tool operands
+  unconsumed, so they are back on screen as before it ran. This differs on
+  purpose from `activeWhen = 0`, a modelled configuration that also consumes
+  the tools.
+- Transform and direct edit already edit in place under the target's id.
+- Mirror and thicken add a body and leave their input live, and split yields
+  two halves; standing the input in for any of those would show material
+  twice, so they pass nothing through.
+- Body-creating features have no input to pass.
+
+A rollback pause passes nothing through: every dependent is paused with it.
+
+Pass-through supplies a body, never a reference. Dependents resolve faces and
+edges through the passed body's verified lineage exactly as before (ADR-011),
+so a reference to topology the suppressed feature created still refuses with
+its existing message. Lineage names that a later boolean nests by operand
+slot change when an upstream boolean is suppressed, so those references
+refuse too; that is the honest outcome, not a regression.
+
+While any feature is manually suppressed, the build withholds reference
+repairs from the features after it: a legacy hash-only selection resolved on
+a passed-through body would otherwise be rewritten to names that stop
+resolving when the step is resumed. The repair is offered again on the first
+build with nothing suppressed. No stored document format changes.

@@ -134,6 +134,7 @@ import {
   type StrictUnionVerdict,
   type StrictUnionVerdicts
 } from './exact-build-loop';
+import { suppressedPassThroughBody } from './exact-suppression';
 import { ImportedStepCache } from './exact-imported-step-cache';
 import {
   isBuildCancelled,
@@ -747,6 +748,12 @@ function importedExactBodyIds(document: ProjectDocument): Set<BodyId> {
   const imported = new Set<BodyId>();
   for (const feature of listFeaturesInOrder(document)) {
     if (isFeatureSuppressed(feature)) {
+      // A suppressed feature that passes its input through hands on the
+      // input's imported geometry under its own result id.
+      const source = suppressedPassThroughBody(feature);
+      if (source !== null && imported.has(source) && feature.bodyId) {
+        imported.add(feature.bodyId);
+      }
       continue;
     }
     const data = feature.data;
@@ -1938,9 +1945,13 @@ export class RemusKernelAdapter implements ExactKernelAdapter {
         );
         const feature = features.get(body.featureId);
         const consumed = build.consumed.has(bodyId);
+        // A suppressed union never ran: a body under its id is the first
+        // operand passed through, which is not a union result to vouch for.
         const requiresStrictUnionValidation =
           !consumed &&
-          feature?.data.featureKind === 'boolean' &&
+          feature !== undefined &&
+          !isFeatureSuppressed(feature) &&
+          feature.data.featureKind === 'boolean' &&
           feature.data.operation === 'union';
         const recognizeImportedFeatures =
           !consumed && importedBodyIds.has(bodyId);
