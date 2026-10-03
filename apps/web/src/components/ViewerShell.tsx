@@ -159,6 +159,8 @@ interface ViewerShellProps {
   selectionCallout: SelectionCalloutContent | null;
   /** Consumed bodies a History row brings into focus, drawn as ghosts. */
   focusGhostBodies?: readonly BodyRepresentation[];
+  /** The surviving faces a History row brings into focus, lit as selected. */
+  focusFaces?: readonly TopologySelection[];
   canUndo: boolean;
   canRedo: boolean;
   onUndo(): void;
@@ -322,6 +324,7 @@ export function ViewerShell({
   viewMode = false,
   selectionCallout,
   focusGhostBodies,
+  focusFaces,
   canUndo,
   canRedo,
   onUndo,
@@ -487,6 +490,7 @@ export function ViewerShell({
         previewFaceHighlights={previewFaceHighlights}
         selectionCallout={selectionCallout}
         {...(focusGhostBodies ? { focusGhostBodies } : {})}
+        {...(focusFaces ? { focusFaces } : {})}
         selectedEdges={selectedEdges}
         pickListEnabled={pickListEnabled}
         settings={settings}

@@ -18,7 +18,7 @@ import {
 } from '../pick/edges';
 import { shouldRenderTopologyEdge } from '../scene/objects';
 import { easeToward, fadeStepMs, hasSettled } from '../motion';
-import { boundaryEdgesOfFace } from '../selection/boundaryEdgesOfFace';
+import { boundaryEdgesOfFaces } from '../selection/boundaryEdgesOfFace';
 import type { DisplayMode } from '../types';
 import {
   createFatLineSegments,
@@ -543,11 +543,20 @@ export class BodyEdgeOverlay extends THREE.Group {
     return true;
   }
 
-  /** Highlights only physical edges that bound the selected exact face. */
-  setSelectedFaceBoundary(faceHash: number | null) {
+  /**
+   * Highlights only physical edges that bound the selected exact face, or
+   * the outline of several faces lit together (a History row's faces).
+   */
+  setSelectedFaceBoundary(faceHash: number | readonly number[] | null) {
+    const hashes =
+      faceHash === null
+        ? []
+        : typeof faceHash === 'number'
+          ? [faceHash]
+          : faceHash;
     const nextKeys = new Set(
-      faceHash !== null && this.topology
-        ? boundaryEdgesOfFace(this.topology, faceHash)
+      hashes.length > 0 && this.topology
+        ? boundaryEdgesOfFaces(this.topology, hashes)
             .map((edge) =>
               edgeKey({ bodyId: this.bodyId, topologyId: edge.topologyId })
             )
