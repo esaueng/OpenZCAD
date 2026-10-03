@@ -123,4 +123,35 @@ test('rail and row icons take a 24 px pointer target', async ({ page }) => {
     return failures;
   }, selectors);
   expect(misses).toEqual([]);
+
+  // The grip's target must not reach over the feature button beside it: a
+  // hit area overhanging the row's leading edge turned a click or drag
+  // there into a reorder. The row's first pixel is the feature's, and the
+  // grip's centre is still the grip's.
+  const edges = await page.evaluate(() =>
+    [...document.querySelectorAll('.history-timeline .feature-row')].map(
+      (row) => {
+        const main = row.querySelector('.feature-row-main')!;
+        const grip = row.querySelector('.feature-row-grip')!;
+        const box = main.getBoundingClientRect();
+        const gripBox = grip.getBoundingClientRect();
+        const lead = document.elementFromPoint(
+          box.left + 1,
+          box.top + box.height / 2
+        );
+        const centre = document.elementFromPoint(
+          gripBox.left + gripBox.width / 2,
+          gripBox.top + gripBox.height / 2
+        );
+        return {
+          leadIsFeature: lead !== null && main.contains(lead),
+          centreIsGrip: centre !== null && grip.contains(centre)
+        };
+      }
+    )
+  );
+  expect(edges.length).toBeGreaterThan(0);
+  for (const edge of edges) {
+    expect(edge).toEqual({ leadIsFeature: true, centreIsGrip: true });
+  }
 });
