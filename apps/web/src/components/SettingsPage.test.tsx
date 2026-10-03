@@ -426,7 +426,7 @@ describe('settings privacy and data section', () => {
     projectErasureReady: true
   };
 
-  it('starts profile details hidden and re-hides them when settings reopen', async () => {
+  it('starts profile details hidden and keeps the choice when settings reopen', async () => {
     const user = userEvent.setup();
     const view = renderSettings(null, { initialSection: 'account', session });
     expect(view.container.innerHTML).not.toContain(session.email);
@@ -445,12 +445,12 @@ describe('settings privacy and data section', () => {
       screen.getByRole('button', { name: 'Show personal info' })
     );
     view.unmount();
-    const reopened = renderSettings(null, {
-      initialSection: 'account',
-      session
-    });
-    expect(reopened.container.innerHTML).not.toContain(session.email);
-    expect(screen.getByText('Name hidden')).toBeVisible();
+    // The switch is session state shared with project sharing, not panel state.
+    renderSettings(null, { initialSection: 'account', session });
+    expect(screen.getByText(session.displayName)).toBeVisible();
+    expect(
+      screen.getByRole('button', { name: 'Hide personal info' })
+    ).toHaveAttribute('aria-pressed', 'true');
   });
 
   it('keeps all cloud deletion functions together on Privacy & data', () => {

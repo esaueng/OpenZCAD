@@ -90,7 +90,12 @@ import {
 } from '../lib/controlReference';
 import { BrandMark } from './BrandMark';
 import { CloudDataDeletionDialog } from './CloudDataDeletionDialog';
-import { PersonalInfoToggle, PrivateEmailInput } from './PersonalInfoToggle';
+import {
+  PersonalInfoToggle,
+  PrivateEmailInput,
+  setPersonalInfoVisible,
+  usePersonalInfoVisible
+} from './PersonalInfoToggle';
 
 function formatBytes(bytes: number): string {
   if (bytes < 1024) {
@@ -529,7 +534,7 @@ export function SettingsPage({
   const [token, setToken] = useState('');
   const [showToken, setShowToken] = useState(false);
   const [loginEmail, setLoginEmail] = useState('');
-  const [personalInfoVisible, setPersonalInfoVisible] = useState(false);
+  const personalInfoVisible = usePersonalInfoVisible();
   const [loginCode, setLoginCode] = useState('');
   const [loginChallengeId, setLoginChallengeId] = useState<string | null>(null);
   const [turnstileToken, setTurnstileToken] = useState('');
@@ -1709,8 +1714,8 @@ export function SettingsPage({
               </SettingRow>
               <SettingRow
                 title="Personal information"
-                description="Names and emails start hidden for screenshots. Showing them lasts only while this panel is open."
-                scope="This panel"
+                description="Names and emails start hidden for screenshots. Showing them here also shows them in project sharing until the page reloads."
+                scope="This session"
               >
                 <PersonalInfoToggle
                   visible={personalInfoVisible}
