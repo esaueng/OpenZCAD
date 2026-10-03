@@ -1,5 +1,12 @@
 import type { Page } from '@playwright/test';
 import {
+  addPrimitiveFeature,
+  addSketchFeature,
+  createProjectDocument,
+  findFeature
+} from '@openzcad/document-core';
+import { toUserId, type ProjectDocument } from '@openzcad/shared';
+import {
   expect,
   expectBodyCount,
   locateEdge,
@@ -42,6 +49,40 @@ async function startMove(page: Page) {
   const target = move.locator('p').first();
   await expect(target).not.toHaveText('');
   return target.innerText();
+}
+
+/** Use the manual Q route, including while the Move card owns selection. */
+async function cycleSelectionFilter(page: Page, mode: 'Face' | 'Sketch') {
+  const filter = page.getByRole('button', { name: /^Selection filter:/ });
+  await filter.focus();
+  for (let step = 0; step < 8; step += 1) {
+    const label = (await filter.getAttribute('aria-label'))!;
+    if (label.includes(`: ${mode}.`)) break;
+    await page.keyboard.press('q');
+    await expect(filter).not.toHaveAttribute('aria-label', label);
+  }
+  await expect(filter).toHaveAttribute(
+    'aria-label',
+    new RegExp(`: ${mode}\\.`)
+  );
+}
+
+async function backupProject(page: Page): Promise<ProjectDocument> {
+  const menu = page.locator('details.file-menu');
+  await menu.locator('summary').click();
+  const pending = page.waitForEvent('download');
+  await menu.getByRole('button', { name: /Export project/ }).click();
+  const download = await pending;
+  if ((await menu.getAttribute('open')) !== null)
+    await menu.locator('summary').click();
+  const stream = await download.createReadStream();
+  const chunks: Buffer[] = [];
+  for await (const chunk of stream) chunks.push(chunk as Buffer);
+  return (
+    JSON.parse(Buffer.concat(chunks).toString('utf8')) as {
+      document: ProjectDocument;
+    }
+  ).document;
 }
 
 /** Observe every layout update, including a transient second card. */
@@ -462,4 +503,322 @@ test('applying a Move requires a fresh pick instead of arming a face at its old 
   await expect(page.getByTestId('direct-manipulation-value')).toBeVisible();
   await expect(ask).toHaveCount(0);
   await expect(moveRows).toHaveCount(1);
+});
+
+test('a manual Sketch-filter profile pick settles the body Move before taking its card', async ({
+  page
+}) => {
+  const sketch = addSketchFeature(
+    createProjectDocument('Sketch pick over Move', toUserId('user_e2e')),
+    {
+      name: 'Source profile',
+      plane: 'XY',
+      offset: 0,
+      object: {
+        objectKind: 'rectangle',
+        width: 100,
+        height: 100,
+        centerX: 15,
+        centerY: 9
+      }
+    }
+  );
+  const document = addPrimitiveFeature(sketch.document, {
+    name: 'Box',
+    primitiveKind: 'box',
+    dimensions: { width: 30, height: 18, depth: 24 }
+  });
+  const bodyId = document.bodyOrder[0]!;
+  await stubApi(page);
+  await page.route('**/api/projects', (route) =>
+    route.request().method() === 'POST'
+      ? route.fulfill({
+          status: 201,
+          json: {
+            project: {
+              projectId: document.projectId,
+              name: document.name,
+              revisionCount: 1,
+              updatedAt: new Date().toISOString()
+            },
+            document
+          }
+        })
+      : route.fulfill({ json: { projects: [] } })
+  );
+  await page.setViewportSize({ width: 1440, height: 900 });
+  await page.goto('/');
+  await page.getByLabel('Project name').fill(document.name);
+  await page.getByRole('button', { name: 'Create project' }).click();
+  await expectBodyCount(page, 1);
+  await expect(page.getByRole('button', { name: /^Fillet/ })).toBeEnabled();
+  await page.keyboard.press('Escape');
+  const canvas = page.locator('.viewer-host canvas');
+  const move = page.getByRole('form', { name: 'Move controls' });
+  const ask = page.getByRole('alertdialog', { name: 'Apply the Move first?' });
+  const profileCard = page.getByRole('region', { name: 'Extrude operation' });
+  const inspector = page.getByRole('region', { name: 'Feature inspector' });
+  const moveRows = page.locator('.feature-row', { hasText: /^Move/ });
+  const maxCards = await watchCardCount(page);
+  const target = await startMove(page);
+  await cycleSelectionFilter(page, 'Sketch');
+  const area = (await canvas.boundingBox())!;
+  // Q deliberately makes the real canonical sketch behind the solid pickable.
+  const pickProfile = () =>
+    page.mouse.click(area.x + area.width * 0.5, area.y + area.height * 0.3);
+
+  await pickProfile();
+  await expect(ask).toBeVisible();
+  await expect(profileCard).toHaveCount(0);
+  await ask.getByRole('button', { name: 'Cancel' }).click();
+  await expect(move.getByLabel('Move X in mm')).toHaveValue('5');
+  await expect(move.locator('p').first()).toHaveText(target);
+  await expect(canvas).toHaveAttribute('data-e2e-selected-bodies', bodyId);
+  await expect(canvas).toHaveAttribute('data-e2e-move-gizmo-x', /.+/);
+  await expect(profileCard).toHaveCount(0);
+  await expect(inspector).toHaveCount(0);
+  await expect(moveRows).toHaveCount(0);
+
+  await pickProfile();
+  await ask.getByRole('button', { name: 'Discard' }).click();
+  await expect(move).toHaveCount(0);
+  await expect(profileCard).toBeVisible();
+  await expect(canvas).not.toHaveAttribute('data-e2e-selected-bodies', /.+/);
+  await expect(moveRows).toHaveCount(0);
+  await page.keyboard.press('Escape');
+
+  await startMove(page);
+  await cycleSelectionFilter(page, 'Sketch');
+  await pickProfile();
+  await ask.getByRole('button', { name: 'Apply' }).click();
+  await expect(ask).toHaveCount(0);
+  await expect(move).toHaveCount(0);
+  await expect(profileCard).toBeVisible();
+  await expect(moveRows).toHaveCount(1);
+  await expect(page.locator('.feature-row')).toHaveCount(3);
+  await expectBodyCount(page, 1);
+  const applied = await backupProject(page);
+  const moved = findFeature(applied, applied.featureOrder.at(-1)!);
+  expect(moved).toMatchObject({
+    kind: 'feature',
+    data: {
+      featureKind: 'transform',
+      targetBodyId: bodyId,
+      transform: { translation: { x: 5, y: 0, z: 0 } }
+    }
+  });
+  await page
+    .getByRole('toolbar', { name: 'Viewer bar' })
+    .getByRole('button', { name: 'Undo' })
+    .click();
+  await expect(moveRows).toHaveCount(0);
+  await expect(page.locator('.feature-row')).toHaveCount(2);
+  await expectBodyCount(page, 1);
+  expect(await maxCards()).toBe(1);
+});
+
+test('an Items body pick settles the original Move and preserves Shift selection', async ({
+  page
+}) => {
+  const { canvas, inspector, move, ask, moveRows } = await makePart(
+    page,
+    'Items Move guard'
+  );
+  await page.getByRole('button', { name: /^Box \(B\)/ }).click();
+  await inspector.getByLabel('Name').fill('Other');
+  for (const label of ['Width (X)', 'Depth (Y)', 'Height (Z)']) {
+    await inspector.getByLabel(label).fill('60');
+  }
+  await inspector.getByRole('button', { name: /^Create/ }).click();
+  await expectBodyCount(page, 2);
+  await expect(inspector).toHaveCount(0);
+  await expect(page.getByRole('button', { name: /^Fillet/ })).toBeEnabled();
+  await page.keyboard.press('Escape');
+  const bodyRows = page.locator('.body-row-main');
+  await expect(bodyRows).toHaveCount(2);
+  await bodyRows.last().click();
+  const otherId = (await canvas.getAttribute('data-e2e-selected-bodies'))!;
+  await bodyRows.first().click();
+  const originalId = (await canvas.getAttribute('data-e2e-selected-bodies'))!;
+  expect(originalId).not.toBe(otherId);
+  const maxCards = await watchCardCount(page);
+  const startOriginalMove = async () => {
+    await page.getByRole('button', { name: /^Move \(M\)/ }).click();
+    await expect(
+      move.getByRole('combobox', { name: 'Body', exact: true })
+    ).toHaveValue(originalId);
+    await move.getByLabel('Move X in mm').fill('5');
+  };
+  await startOriginalMove();
+  await bodyRows.last().click({ modifiers: ['Shift'] });
+  await expect(ask).toBeVisible();
+  await ask.getByRole('button', { name: 'Cancel' }).click();
+  await expect(move.getByLabel('Move X in mm')).toHaveValue('5');
+  await expect(
+    move.getByRole('combobox', { name: 'Body', exact: true })
+  ).toHaveValue(originalId);
+  await expect(canvas).toHaveAttribute('data-e2e-selected-bodies', originalId);
+  await expect(canvas).toHaveAttribute('data-e2e-move-gizmo-x', /.+/);
+  await expect(inspector).toHaveCount(0);
+  await expect(moveRows).toHaveCount(0);
+
+  await bodyRows.last().click({ modifiers: ['Shift'] });
+  await ask.getByRole('button', { name: 'Discard' }).click();
+  await expect(move).toHaveCount(0);
+  await expect(moveRows).toHaveCount(0);
+  await expect(canvas).toHaveAttribute(
+    'data-e2e-selected-bodies',
+    `${originalId},${otherId}`
+  );
+  await bodyRows.first().click();
+  await startOriginalMove();
+  await bodyRows.last().click();
+  await ask.getByRole('button', { name: 'Apply' }).click();
+  await expect(ask).toHaveCount(0);
+  await expect(move).toHaveCount(0);
+  await expect(canvas).toHaveAttribute('data-e2e-selected-bodies', otherId);
+  await expect(moveRows).toHaveCount(1);
+  await expect(page.locator('.feature-row')).toHaveCount(3);
+  const applied = await backupProject(page);
+  expect(findFeature(applied, applied.featureOrder.at(-1)!)).toMatchObject({
+    kind: 'feature',
+    data: {
+      featureKind: 'transform',
+      targetBodyId: originalId,
+      transform: { translation: { x: 5, y: 0, z: 0 } }
+    }
+  });
+  await page
+    .getByRole('toolbar', { name: 'Viewer bar' })
+    .getByRole('button', { name: 'Undo' })
+    .click();
+  await expect(moveRows).toHaveCount(0);
+  await expect(page.locator('.feature-row')).toHaveCount(2);
+  await expectBodyCount(page, 2);
+  expect(await maxCards()).toBe(1);
+});
+
+test('a manual Face-filter drag cannot resize the primitive beneath an open Move', async ({
+  page
+}) => {
+  const { canvas, inspector, move, ask, moveRows } = await makePart(
+    page,
+    'Face drag Move ownership'
+  );
+  await expect(page.getByRole('button', { name: /^Fillet/ })).toBeEnabled();
+  const maxCards = await watchCardCount(page);
+  const target = await startMove(page);
+  const selected = (await canvas.getAttribute('data-e2e-selected-bodies'))!;
+  await cycleSelectionFilter(page, 'Face');
+  const area = (await canvas.boundingBox())!;
+  // This upper face enabled the legacy resize cursor before the guard. The
+  // press and drag stay above the Move gizmo and use the actual pointer path.
+  const point = {
+    x: area.x + area.width * 0.5,
+    y: area.y + area.height * 0.3
+  };
+  expect(
+    await page.evaluate(
+      (p) => document.elementFromPoint(p.x, p.y)?.tagName,
+      point
+    )
+  ).toBe('CANVAS');
+  await page.mouse.move(point.x, point.y);
+  await page.mouse.down();
+  await page.mouse.move(point.x + 72, point.y - 54, { steps: 6 });
+  await page.mouse.up();
+  await expect(move.getByLabel('Move X in mm')).toHaveValue('5');
+  await expect(move.locator('p').first()).toHaveText(target);
+  await expect(canvas).toHaveAttribute('data-e2e-selected-bodies', selected);
+  await expect(canvas).toHaveAttribute('data-e2e-move-gizmo-x', /.+/);
+  await expect(ask).toHaveCount(0);
+  await expect(inspector).toHaveCount(0);
+  await expect(moveRows).toHaveCount(0);
+  await expect(page.locator('.feature-row')).toHaveCount(1);
+  const unchanged = await backupProject(page);
+  expect(findFeature(unchanged, unchanged.featureOrder[0]!)).toMatchObject({
+    kind: 'feature',
+    data: {
+      featureKind: 'primitive',
+      dimensions: { width: 60, height: 60, depth: 60 }
+    }
+  });
+  await move.getByRole('button', { name: 'Cancel', exact: true }).click();
+  await expect(move).toHaveCount(0);
+  await expect(moveRows).toHaveCount(0);
+  await expectBodyCount(page, 1);
+
+  // The reverse transition must cancel the *preview*, too. A legacy resize
+  // does not arm the interaction reducer, so pressing M while still holding
+  // the pointer used to leave its captured face drag running under the Move.
+  const worldBounds = () =>
+    canvas.evaluate(
+      (element) =>
+        new Promise<{ min: number[]; max: number[] }[]>((resolve) => {
+          element.dispatchEvent(
+            new CustomEvent('openzcad:e2e-render-policy', {
+              detail: {
+                resolve: (scene: {
+                  bodyFaces: {
+                    worldBounds: { min: number[]; max: number[] };
+                  }[];
+                }) => resolve(scene.bodyFaces.map((face) => face.worldBounds))
+              }
+            })
+          );
+        })
+    );
+  const baseline = [{ min: [0, 0, 0], max: [60, 60, 60] }];
+  await expect.poll(worldBounds).toEqual(baseline);
+  let facePoint: { x: number; y: number } | null = null;
+  for (const [xRatio, yRatio] of [
+    [0.5, 0.3],
+    [0.5, 0.4],
+    [0.4, 0.4],
+    [0.6, 0.4],
+    [0.5, 0.6]
+  ]) {
+    const candidate = {
+      x: area.x + area.width * xRatio!,
+      y: area.y + area.height * yRatio!
+    };
+    await page.mouse.move(candidate.x, candidate.y);
+    if ((await canvas.evaluate((element) => element.style.cursor)) === 'grab') {
+      facePoint = candidate;
+      break;
+    }
+  }
+  expect(facePoint).not.toBeNull();
+  await page.mouse.down();
+  await page.mouse.move(facePoint!.x + 24, facePoint!.y - 18, { steps: 2 });
+  expect(await worldBounds()).not.toEqual(baseline);
+  await page.keyboard.press('m');
+  await expect(move).toBeVisible();
+  await move.getByLabel('Move X in mm').fill('5');
+  const movedBounds = [{ min: [5, 0, 0], max: [65, 60, 60] }];
+  await expect.poll(worldBounds).toEqual(movedBounds);
+  await page.mouse.move(facePoint!.x + 96, facePoint!.y - 72, { steps: 6 });
+  expect(await worldBounds()).toEqual(movedBounds);
+  await page.mouse.up();
+  await expect.poll(worldBounds).toEqual(movedBounds);
+  await expect(move.getByLabel('Move X in mm')).toHaveValue('5');
+  await expect(move.locator('p').first()).toHaveText(target);
+  await expect(canvas).toHaveAttribute('data-e2e-selected-bodies', selected);
+  await expect(ask).toHaveCount(0);
+  await expect(inspector).toHaveCount(0);
+  await expect(moveRows).toHaveCount(0);
+  const afterRelease = await backupProject(page);
+  expect(
+    findFeature(afterRelease, afterRelease.featureOrder[0]!)
+  ).toMatchObject({
+    kind: 'feature',
+    data: {
+      featureKind: 'primitive',
+      dimensions: { width: 60, height: 60, depth: 60 }
+    }
+  });
+  await move.getByRole('button', { name: 'Cancel', exact: true }).click();
+  await expect(move).toHaveCount(0);
+  await expect.poll(worldBounds).toEqual(baseline);
+  expect(await maxCards()).toBe(1);
 });

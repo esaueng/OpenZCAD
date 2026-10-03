@@ -1109,6 +1109,7 @@ import { moveHasUnappliedChange } from './lib/moveCard';
 import {
   currentMoveSelectionDocument,
   movePickNeedsFreshTopology,
+  resolveMoveSketchRegion,
   type MoveSelectionPick,
   type MoveSelectionRequest
 } from './lib/moveSelectionTransition';
@@ -5597,8 +5598,9 @@ export function App() {
     [appSettings.experiments.directManipulation, sketchOverlays]
   );
   const viewerEditableBodyIds = useMemo(
-    () => (modelingLocked ? EMPTY_BODY_IDS : directEditableBodyIds),
-    [modelingLocked, directEditableBodyIds]
+    () =>
+      modelingLocked || movePreview ? EMPTY_BODY_IDS : directEditableBodyIds,
+    [modelingLocked, movePreview, directEditableBodyIds]
   );
   const viewerSelectedProfileIds = useMemo(
     () => selectedProfiles.map((profile) => profile.profileId),
@@ -6360,9 +6362,23 @@ export function App() {
           : pick?.kind === 'viewport'
             ? [pick.selection]
             : [];
+      const sketchRegions =
+        current && (pick?.kind === 'region' || pick?.kind === 'sketch-profile')
+          ? currentMoveSketchRegions(current, pick)
+          : null;
+      const sketchRegion =
+        pick?.kind === 'region' && sketchRegions
+          ? resolveMoveSketchRegion(pick, sketchRegions)
+          : null;
       if (
         !pick ||
         !current ||
+        (pick.kind === 'region' && !sketchRegion) ||
+        ((pick.kind === 'region' || pick.kind === 'sketch-profile') &&
+          (sketchRegions === null ||
+            hiddenSketchIds.has(
+              pick.kind === 'region' ? pick.region.sketchId : pick.sketchId
+            ))) ||
         topologyPicks.some(
           (selection) =>
             selection.kind !== 'body' &&
@@ -6374,20 +6390,32 @@ export function App() {
         );
         return;
       }
-      const needsFreshTopology = movePickNeedsFreshTopology(movePreview, pick);
+      const needsFreshTopology = movePickNeedsFreshTopology(
+        movePreview,
+        pick,
+        current
+      );
       if (applyMove && !confirmMove()) return;
       setMovePreview(null);
       setTool(null);
       if (pick.kind === 'box') {
         boxSelectFromViewer(pick.bodyIds);
+      } else if (pick.kind === 'body-tree') {
+        selectBodyFromTree(pick.bodyId, pick.additive);
       } else if (applyMove && needsFreshTopology) {
         // Its point and normal described the body's old pose. Keep the
         // committed Move, then require a fresh pick at the new position.
         setStatus(
-          'Move applied · pick the face or edge again where it is now.'
+          pick.kind === 'region' || pick.kind === 'sketch-profile'
+            ? 'Move applied · pick the sketch profile again where it is now.'
+            : 'Move applied · pick the face or edge again where it is now.'
         );
       } else if (pick.kind === 'edge-chain') {
         selectEdgeChainFromViewer(pick.selections);
+      } else if (pick.kind === 'region') {
+        selectRegionFromViewer(sketchRegion!, pick.modifiers);
+      } else if (pick.kind === 'sketch-profile') {
+        selectSketchProfileFromViewer(pick.sketchId);
       } else {
         selectTopologyFromViewer(pick.selection, pick.additive, pick.detail);
         if (pick.contextMenu) {
@@ -6493,8 +6521,8 @@ export function App() {
     // A toolbar command owns the next gesture. Preserve the body selection
     // that pre-fills Move/boolean forms, but disarm any selection-first face or
     // edge handle so two manipulators can never claim the same pointer.
+    cancelDirectManipulationRef.current?.();
     if (liveInteraction.mode !== 'idle') {
-      cancelDirectManipulationRef.current?.();
       cylinderRadiusPreview.clear();
       edgePreview.clear();
       dispatchInteraction({ type: 'clear' });
@@ -10986,6 +11014,24 @@ export function App() {
   }
 
   function handleSelectSketchProfile(sketchId: string) {
+    if (interactionRef.current.mode !== 'sketch') {
+      if (
+        deferMoveSelection({
+          kind: 'sketch-profile',
+          sketchId: sketchId as SketchId
+        })
+      ) {
+        return;
+      }
+      if (movePreview) {
+        setMovePreview(null);
+        setTool(null);
+      }
+    }
+    selectSketchProfileFromViewer(sketchId);
+  }
+
+  function selectSketchProfileFromViewer(sketchId: string) {
     const typedSketchId = sketchId as SketchId;
     setTool(null);
     setSelectedFeatureNode(null);
@@ -13438,6 +13484,65 @@ export function App() {
     region: RegionPickData,
     modifiers: { additive: boolean; toggle: boolean }
   ) {
+    if (interactionRef.current.mode !== 'sketch') {
+      if (
+        deferMoveSelection({
+          kind: 'region',
+          region: structuredClone(region),
+          modifiers: { ...modifiers }
+        })
+      ) {
+        return;
+      }
+      if (movePreview) {
+        setMovePreview(null);
+        setTool(null);
+      }
+    }
+    selectRegionFromViewer(region, modifiers);
+  }
+
+  /** Resolve the live plane, and closed-region identity when the pick carries one. */
+  function currentMoveSketchRegions(
+    current: ProjectDocument,
+    pick: Extract<MoveSelectionPick, { kind: 'region' | 'sketch-profile' }>
+  ): RegionPickData[] | null {
+    const sketchId =
+      pick.kind === 'region' ? pick.region.sketchId : pick.sketchId;
+    const sketch = findSketch(current, sketchId as SketchId);
+    if (!sketch) return null;
+    const scope = getParameterScope(current).scope;
+    const resolve = (value: ParamValue) => evalParamValue(value, scope) ?? 0;
+    try {
+      resolvedSketchPlaneBasis(current, sketch.planeRef, resolve, sketch.name);
+      // A curve pick carries only SketchId; open sketches are valid selections.
+      if (pick.kind === 'sketch-profile') return [];
+      const objects = sketch.objectIds.flatMap((id) => {
+        const node = current.nodes[id];
+        return node?.kind === 'sketch-object' ? [{ id, data: node.data }] : [];
+      });
+      return computeSketchRegions(
+        displayObjectsWithTextBudget(objects, documentTextBudgetError(current)),
+        resolve
+      ).map((region) => ({
+        sketchId,
+        profileId: region.profileId,
+        regionFingerprint: region.regionFingerprint,
+        samplePoint: region.samplePoint,
+        centroid: region.centroid,
+        boundingBox: region.boundingBox,
+        sourceEntityIds: region.sourceEntityIds,
+        area: region.area
+      }));
+    } catch {
+      return null;
+    }
+  }
+
+  function selectRegionFromViewer(
+    region: RegionPickData,
+    modifiers: { additive: boolean; toggle: boolean }
+  ) {
     const nextProfiles = updateProfileSelection(
       selectedProfiles,
       region,
@@ -15259,6 +15364,9 @@ export function App() {
   }
 
   function handleResizePrimitiveFace(commit: FaceResizeCommit) {
+    if (movePreview) {
+      return;
+    }
     if (!requireExactGeometryReady()) {
       return;
     }
@@ -15625,6 +15733,15 @@ export function App() {
   }
 
   function handleSelectBodyFromTree(bodyId: BodyId, additive: boolean) {
+    if (deferMoveSelection({ kind: 'body-tree', bodyId, additive })) return;
+    if (movePreview) {
+      setMovePreview(null);
+      setTool(null);
+    }
+    selectBodyFromTree(bodyId, additive);
+  }
+
+  function selectBodyFromTree(bodyId: BodyId, additive: boolean) {
     if (interaction.mode !== 'idle') {
       dispatchInteraction({ type: 'clear' });
     }
