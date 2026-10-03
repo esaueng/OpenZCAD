@@ -18,7 +18,7 @@ import {
   EDGE_MODIFIER_PROBE_RATIOS,
   refineAcceptedEdgeModifierSize
 } from './exact-edge-modifiers';
-import { edgeSampleOf } from './exact-witnesses';
+import { edgeSampleOf, MEASUREMENT_DEFLECTION } from './exact-witnesses';
 
 /**
  * A kernel whose `fillet` returns what its `chamfer` returns: a real, valid,
@@ -186,15 +186,33 @@ describe('edge modifier failure diagnosis', { timeout: 60_000 }, () => {
     expect(kernel.edgeLength(edge)).toBe(30);
 
     // The ceiling is a bound, not a radius to repeat back: the kernel refuses
-    // 18 itself, and the r17.999 it does build is a body 2x the height of its
-    // input, which the bounds guard rejects. So the message may quote it as a
-    // limit but must quote a probed size as the thing that works.
+    // 18 itself — the 18-wide support face would round away entirely — so the
+    // message may quote it as a limit but must quote a probed size as the
+    // thing that works. Just under it the round is real: r17.999 is a valid
+    // closed solid inside the input's box that removes exactly
+    // (1 - pi/4) r^2 x 30. Before Remus #926 the bounds guard refused it,
+    // because the round's cylinder face reported a full-circle box reaching
+    // 36 across an 18 x 24 section; that refusal was false.
     expect(() =>
       kernel.fillet(box, Uint32Array.from([edge]), limit!)
     ).toThrow();
+    const nearCeiling = limit! - 1e-3;
+    const rounded = applyEdgeModifier(
+      kernel,
+      box,
+      [edge],
+      'fillet',
+      nearCeiling
+    );
+    expect(rounded).not.toBeNull();
+    expect(kernel.validateSolid(rounded!)).toBe(0);
+    expect(Array.from(kernel.boundingBox(rounded!))).toEqual(
+      Array.from(kernel.boundingBox(box))
+    );
     expect(
-      applyEdgeModifier(kernel, box, [edge], 'fillet', limit! - 1e-3)
-    ).toBeNull();
+      kernel.volume(box, MEASUREMENT_DEFLECTION) -
+        kernel.volume(rounded!, MEASUREMENT_DEFLECTION)
+    ).toBeCloseTo((1 - Math.PI / 4) * nearCeiling ** 2 * 30, 6);
     expect(
       acceptedEdgeModifierProbe(kernel, box, [edge], 'fillet', 30, limit)
     ).toBe(9);
@@ -211,7 +229,9 @@ describe('edge modifier failure diagnosis', { timeout: 60_000 }, () => {
     expect(message).toContain(
       'Fillet could not be created on 1 selected edge with radius 30.'
     );
-    expect(message).toContain('Try a smaller radius: radius 9 builds here.');
+    // The ladder's rung (9) is raised toward the request over round sizes:
+    // 15 builds and 20 refuses, so 15 is the size quoted.
+    expect(message).toContain('Try a smaller radius: radius 15 builds here.');
     // The ceiling aimed the ladder but must not be quoted: it is not a size
     // that works, and on other bodies it is not even a bound — see the plate
     // test below.
@@ -322,9 +342,16 @@ describe('edge modifier failure diagnosis', { timeout: 60_000 }, () => {
       return [...calls];
     };
 
+    // The 18-wide support face makes 18 the real limit on this edge. A
+    // request of 40 halves to 20, still past it, so the blind ladder needs a
+    // second rung; the kernel's ceiling of 18 lands the first one inside.
     const box = kernel.makeBox(30, 18, 24);
     const boxEdge = Array.from(kernel.getSolidEdges(box))[0]!;
-    expect(ladderCalls(box, boxEdge, 30, false)).toEqual([15, 3.75]);
+    expect(ladderCalls(box, boxEdge, 40, false)).toEqual([20, 5]);
+    expect(ladderCalls(box, boxEdge, 40, true)).toEqual([9]);
+    // A request of 30 halves to 15, which builds, so there the ceiling saves
+    // nothing — and costs nothing either.
+    expect(ladderCalls(box, boxEdge, 30, false)).toEqual([15]);
     expect(ladderCalls(box, boxEdge, 30, true)).toEqual([9]);
 
     const plate = kernel.makeBox(50, 50, 2);
@@ -593,6 +620,12 @@ describe('edge modifier failure diagnosis', { timeout: 60_000 }, () => {
  * request, the ladder's first rung — while r3 built. The quote is now raised
  * toward the refused size by bisection, so it is never the coarse rung when a
  * larger size is proved.
+ *
+ * That r5 refusal was itself false: the bounds guard read the round's
+ * cylinder face as a full circle reaching below the plate, so every radius
+ * over half the thickness was refused. Since Remus #926 bounds the face by
+ * its arc, r5 builds, and the real limit is the 6 mm front face. The case
+ * below is the same finding at a request that is genuinely too big.
  */
 describe('fillet suggestion on a thin plate', () => {
   it('quotes the largest proved size between the ladder rung and the refused one', () => {
@@ -618,29 +651,43 @@ describe('fillet suggestion on a thin plate', () => {
       plate,
       [edge],
       'fillet',
-      5,
+      8,
       (m) => {
         reported = m;
       }
     );
-    // The premise of the finding: 5 is refused and 3 builds.
+    // The premise: 8 is refused, and so is 6 — the round would consume the
+    // whole front face — while 5 builds, so the ladder's first rung (half the
+    // kernel's ceiling of 6) is well short of what works.
     expect(refused).toBeNull();
+    expect(blendCliffLimit(reported)).toBe(6);
+    expect(applyEdgeModifier(kernel, plate, [edge], 'fillet', 6)).toBeNull();
     expect(
-      applyEdgeModifier(kernel, plate, [edge], 'fillet', 3)
+      applyEdgeModifier(kernel, plate, [edge], 'fillet', 5)
     ).not.toBeNull();
+    expect(
+      acceptedEdgeModifierProbe(
+        kernel,
+        plate,
+        [edge],
+        'fillet',
+        8,
+        blendCliffLimit(reported)
+      )
+    ).toBe(3);
 
     const message = edgeModifierFailureMessage(
       kernel,
       plate,
       [edge],
       'fillet',
-      5,
+      8,
       false,
       reported
     );
     const quoted = Number(/radius ([\d.]+) builds here/.exec(message)?.[1]);
-    expect(quoted).toBeGreaterThanOrEqual(3);
-    expect(quoted).toBeLessThan(5);
+    expect(quoted).toBeGreaterThan(5);
+    expect(quoted).toBeLessThan(6);
     // And it is a size that was built, not an estimate.
     expect(
       applyEdgeModifier(kernel, plate, [edge], 'fillet', quoted)
