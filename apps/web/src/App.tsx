@@ -15,7 +15,11 @@ import type {
 import type { AdoptLocalProjectResult } from './lib/projectIdentityTransfer';
 import { LatestTask } from './lib/latestTask';
 import { rebuildProgressLabel } from './lib/rebuildProgressLabel';
-import { featureHistory, selectionRebuiltByMove } from './lib/featureHistory';
+import { featureHistory } from './lib/featureHistory';
+import {
+  selectionRebuiltByMove,
+  type PendingSelectionSwitch
+} from './lib/moveSelectionReplay';
 import { FeatureBuildError } from './lib/featureValidation';
 import { edgeModifierCommand } from './lib/edgeModifierEdit';
 import type { EdgeModifierFormValue } from './components/forms/FeatureForms';
@@ -1624,23 +1628,6 @@ class ParameterCheckStale extends Error {
 }
 
 /**
- * A viewport selection held back by the unapplied-Move question (F15): a
- * pick, a double-clicked edge run, or a box selection that would replace
- * the Move card. A pick made by right-clicking carries the menu's screen
- * point, so the menu opens there once the selection has landed.
- */
-type PendingSelectionSwitch =
-  | {
-      kind: 'pick';
-      selection: TopologySelection;
-      additive: boolean;
-      detail?: PickDetail;
-      contextMenu?: { x: number; y: number };
-    }
-  | { kind: 'edge-chain'; selections: TopologySelection[] }
-  | { kind: 'box'; bodyIds: string[] };
-
-/**
  * The tool, editor or selection change waiting on the unapplied-Move
  * question: a tool to open, Measure, a history feature's editor, or (with
  * `selection`) a viewport selection.
@@ -1939,13 +1926,13 @@ export function App() {
   const [pendingToolSwitch, setPendingToolSwitch] =
     useState<PendingToolSwitch | null>(null);
   /**
-   * A right-click the unapplied-Move question held back, opened once the
-   * Move is settled and its card has gone (see `completeSelectionSwitch`).
+   * A selection the unapplied-Move question held back, landed once the Move
+   * is settled and its card has gone (see `completeSelectionSwitch`), with
+   * what the status line should say about anything it dropped.
    */
-  const [contextMenuAfterMove, setContextMenuAfterMove] = useState<{
-    x: number;
-    y: number;
-    selection: TopologySelection;
+  const [selectionAfterMove, setSelectionAfterMove] = useState<{
+    pending: PendingSelectionSwitch;
+    note: string | null;
   } | null>(null);
   /**
    * Name for the Move feature the gizmo is about to create. The gizmo is now
@@ -6382,58 +6369,40 @@ export function App() {
     pending: PendingSelectionSwitch | undefined,
     applyMove: boolean
   ) {
-    // Anything on the moved body, or on a body downstream of what moved (an
-    // extrude of a moved sketch, a feature built on a moved body), was
-    // picked against topology the rebuild the Apply starts replaces. Read
-    // from the history before the Apply adds its Move.
-    const pickedBodyIds = !pending
-      ? []
-      : pending.kind === 'box'
-        ? pending.bodyIds
-        : pending.kind === 'pick'
-          ? [pending.selection.bodyId]
-          : pending.selections.map((selection) => selection.bodyId);
-    const pickRebuilt = Boolean(
-      applyMove &&
-      movePreview &&
-      doc &&
-      selectionRebuiltByMove(doc, movePreview, pickedBodyIds)
-    );
+    // Which parts survive is decided against the history before the Apply
+    // adds its Move: faces and edges on a body the Move rebuilds are
+    // dropped, bodies always land (the rule and its table are at
+    // `selectionRebuiltByMove`).
+    const settled =
+      pending && movePreview && doc
+        ? selectionRebuiltByMove(
+            doc,
+            movePreview,
+            pending,
+            applyMove ? 'apply' : 'discard'
+          )
+        : { replay: pending ?? null, dropped: 0 };
     if (applyMove && !confirmMove()) return;
     setMovePreview(null);
     setTool(null);
-    if (!pending) return;
-    if (applyMove) {
-      // Pick it again where it is now; the context menu it asked for waits
-      // for that pick too.
-      if (pickRebuilt) {
-        setStatus(
-          pending.kind === 'pick' && pending.contextMenu
+    const rightClick = pending?.kind === 'pick' && pending.contextMenu;
+    const note =
+      settled.dropped === 0
+        ? null
+        : !settled.replay
+          ? rightClick
             ? 'Move applied · right-click it again where it is now for its menu.'
             : 'Move applied · select it again where it is now.'
-        );
-        return;
-      }
+          : `Move applied · ${settled.dropped} picked edge${settled.dropped === 1 ? '' : 's'} on what moved dropped; select ${settled.dropped === 1 ? 'it' : 'them'} again where ${settled.dropped === 1 ? 'it is' : 'they are'} now.`;
+    if (!settled.replay) {
+      if (note) setStatus(note);
+      return;
     }
-    if (pending.kind === 'box') {
-      boxSelectFromViewer(pending.bodyIds);
-    } else if (pending.kind === 'edge-chain') {
-      selectEdgeChainFromViewer(pending.selections);
-    } else {
-      selectTopologyFromViewer(
-        pending.selection,
-        pending.additive,
-        pending.detail
-      );
-      if (pending.contextMenu) {
-        // Opened from the next render, once the Move card has gone: this
-        // render's menu actions would still see the Move it held back.
-        setContextMenuAfterMove({
-          ...pending.contextMenu,
-          selection: pending.selection
-        });
-      }
-    }
+    // Landed from the next render, once the Move card has gone and an
+    // applied Move is in the document: this render's selection handlers
+    // would infer the feature the Move replaced, and a menu's actions would
+    // still see the Move held back.
+    setSelectionAfterMove({ pending: settled.replay, note });
   }
 
   function completeToolSwitch(request: PendingToolSwitch, applyMove = false) {
@@ -15949,19 +15918,39 @@ export function App() {
     openSelectionContextMenu(x, y, selection);
   }
 
-  // A right-click held back by the unapplied-Move question opens here, from
-  // a render that no longer has the Move card, so its actions see the
+  // A selection held back by the unapplied-Move question lands here, from a
+  // render that no longer has the Move card and, after Apply, has the Move
+  // in the document: the selection infers the feature as it now stands, and
+  // a right-click's menu opens at its point with actions that see the
   // settled workspace rather than the Move they would otherwise ask about.
   useEffect(() => {
-    if (!contextMenuAfterMove || movePreview || pendingToolSwitch) return;
-    const request = contextMenuAfterMove;
-    setContextMenuAfterMove(null);
-    if (!doc || modelingLocked) return;
-    openSelectionContextMenu(request.x, request.y, request.selection);
-    // openSelectionContextMenu is a per-render closure; this render's is the
-    // one wanted, and the request is consumed once.
+    if (!selectionAfterMove || movePreview || pendingToolSwitch) return;
+    const { pending, note } = selectionAfterMove;
+    setSelectionAfterMove(null);
+    if (!doc) return;
+    if (pending.kind === 'box') {
+      boxSelectFromViewer(pending.bodyIds);
+    } else if (pending.kind === 'edge-chain') {
+      selectEdgeChainFromViewer(pending.selections);
+    } else {
+      selectTopologyFromViewer(
+        pending.selection,
+        pending.additive,
+        pending.detail
+      );
+      if (pending.contextMenu && !modelingLocked) {
+        openSelectionContextMenu(
+          pending.contextMenu.x,
+          pending.contextMenu.y,
+          pending.selection
+        );
+      }
+    }
+    if (note) setStatus(note);
+    // The selection handlers are per-render closures; this render's are the
+    // ones wanted, and the request is consumed once.
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [contextMenuAfterMove, movePreview, pendingToolSwitch]);
+  }, [selectionAfterMove, movePreview, pendingToolSwitch]);
 
   /** The menu of actions on a picked body, face or edge. */
   function openSelectionContextMenu(
