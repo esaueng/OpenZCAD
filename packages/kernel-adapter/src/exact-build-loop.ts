@@ -24,6 +24,11 @@ import type {
 } from './exact-boolean-helpers';
 import { buildFeature } from './exact-feature-builders';
 import { kernelRefusalRecordOf } from './kernel-refusal';
+import {
+  firstManualSuppressionIndex,
+  passSuppressedFeatureThrough,
+  withholdReferenceRepairs
+} from './exact-suppression';
 
 /**
  * A parsed STEP import held for reuse: the translator's exact arena document
@@ -172,6 +177,10 @@ export function buildDocumentHistory(
   };
   const startIndex = resume?.startIndex ?? 0;
   const features = listFeaturesInOrder(document);
+  // Features after this index build on a model with a step left out; see
+  // `withholdReferenceRepairs`. Read from the document, not from this run, so
+  // a prefix-restored build draws the same line as a full one.
+  const firstSuppressed = firstManualSuppressionIndex(features);
   const normalizedDemand =
     lineageDemand === undefined
       ? undefined
@@ -212,6 +221,9 @@ export function buildDocumentHistory(
         // catch below once it is a string, which is why the attribution has to
         // be recorded rather than parsed back out.
         attribute(result, feature, message, 'suppressed');
+        // A skipped step that replaced one body leaves that body, unchanged,
+        // where its dependents look for the result (F1 follow-up).
+        passSuppressedFeatureThrough(result, feature);
         onFeature?.(index, result);
         continue;
       }
@@ -219,6 +231,9 @@ export function buildDocumentHistory(
         if (!primitiveReuse?.restore(index, feature, result)) {
           buildFeature(ctx, feature);
           primitiveReuse?.store(index, feature, result);
+        }
+        if (firstSuppressed >= 0 && index > firstSuppressed) {
+          withholdReferenceRepairs(result, feature);
         }
       } catch (error) {
         // Cancellation is not a feature verdict: recording it as a warning
