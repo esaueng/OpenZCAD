@@ -3943,6 +3943,108 @@ test('a viewport pick or box selection over an unapplied Move asks first, and ne
 });
 
 /**
+ * A right-click is a pick that also asks for the selection's menu. Over an
+ * unapplied Move it asks first like any pick, and the menu it asked for
+ * opens where it was clicked once the answer lands — it used to be dropped,
+ * leaving the selection made and no menu.
+ */
+test('a right-click over an unapplied Move asks first, then opens its menu where it was clicked', async ({
+  page
+}) => {
+  test.setTimeout(150_000);
+  await stubApi(page);
+  await page.setViewportSize({ width: 1440, height: 900 });
+  await page.goto('/');
+  await page.getByLabel('Project name').fill('Menu Over Move');
+  await page.getByRole('button', { name: 'Create project' }).click();
+  const inspector = page.getByRole('region', { name: 'Feature inspector' });
+  await page.getByRole('button', { name: /^Box \(B\)/ }).click();
+  await inspector.getByLabel('Width (X)').fill('180');
+  await inspector.getByLabel('Depth (Y)').fill('60');
+  await inspector.getByLabel('Height (Z)').fill('60');
+  await inspector.getByRole('button', { name: /^Create/ }).click();
+  await expect(page.locator('.feature-row')).toHaveCount(1);
+  await expect(page.getByRole('button', { name: /^Fillet/ })).toBeEnabled({
+    timeout: 30_000
+  });
+  await page.keyboard.press('Escape');
+  await expect(inspector).toHaveCount(0);
+  await page.getByRole('button', { name: 'Fit' }).click();
+  await page.waitForTimeout(700);
+
+  const canvas = page.locator('.viewer-host canvas');
+  const move = page.getByRole('form', { name: 'Move controls' });
+  const moveX = move.getByLabel('Move X in mm');
+  const ask = page.getByRole('alertdialog', { name: 'Apply the Move first?' });
+  const moveRows = page.locator('.feature-row', { hasText: /^Move/ });
+  const status = page.getByRole('contentinfo');
+  const menu = page.locator('.context-menu');
+  const openMove = async () => {
+    await page.getByRole('button', { name: /^Move \(M\)/ }).click();
+    await expect(move).toBeVisible();
+    await expect(canvas).toHaveAttribute('data-e2e-move-gizmo-x', /.+/);
+    await moveX.fill('60');
+  };
+
+  await openMove();
+  const point = await modelPointClearOfMoveGizmo(page);
+  await page.mouse.click(point.x, point.y, { button: 'right' });
+  await expect(ask).toBeVisible();
+  await expect(ask).toContainText('before the selection changes');
+  await expect(menu).toHaveCount(0);
+
+  // Cancel: the Move stays, and no menu opens for a selection never made.
+  await ask.getByRole('button', { name: 'Cancel' }).click();
+  await expect(ask).toHaveCount(0);
+  await expect(moveX).toHaveValue('60');
+  await page.waitForTimeout(400);
+  await expect(menu).toHaveCount(0);
+
+  // Discard: the Move goes, the pick lands and its menu opens at the click.
+  await page.mouse.click(point.x, point.y, { button: 'right' });
+  await ask.getByRole('button', { name: 'Discard' }).click();
+  await expect(move).toHaveCount(0);
+  await expect(moveRows).toHaveCount(0);
+  await expect(menu).toBeVisible();
+  await expect(menu.locator('.context-menu-heading')).toHaveText(/Box 1/);
+  await expect(canvas).toHaveAttribute('data-e2e-selected-bodies', /.+/);
+  const placed = await menu.evaluate((element, click) => {
+    const rect = element.getBoundingClientRect();
+    return {
+      left: parseFloat(element.style.left),
+      top: parseFloat(element.style.top),
+      // The menu keeps inside the window, so a click near the bottom edge
+      // opens it as low as it fits.
+      expectedTop: Math.max(
+        8,
+        Math.min(click.y, window.innerHeight - rect.height - 8)
+      )
+    };
+  }, point);
+  expect(Math.abs(placed.left - point.x)).toBeLessThanOrEqual(1);
+  expect(Math.abs(placed.top - placed.expectedTop)).toBeLessThanOrEqual(1);
+  // Its actions belong to the settled workspace: Move opens straight away,
+  // with no question about the Move that was discarded.
+  await menu.getByRole('menuitem', { name: /Move \/ Rotate/ }).click();
+  await expect(move).toBeVisible();
+  await expect(ask).toHaveCount(0);
+  await page.keyboard.press('Escape');
+  await expect(move).toHaveCount(0);
+
+  // Apply on the body that moved: the pick was made on the preview, so no
+  // menu opens and the status says to right-click it again.
+  await openMove();
+  const again = await modelPointClearOfMoveGizmo(page);
+  await page.mouse.click(again.x, again.y, { button: 'right' });
+  await ask.getByRole('button', { name: 'Apply' }).click();
+  await expect(move).toHaveCount(0);
+  await expect(moveRows).toHaveCount(1);
+  await expect(status).toContainText('right-click it again where it is now');
+  await page.waitForTimeout(400);
+  await expect(menu).toHaveCount(0);
+});
+
+/**
  * A History row over a Move: over unapplied values it asks (the tests above
  * cover each answer), and either way the row's card replaces the Move's
  * rather than showing beside it. A Move at zero gives way without asking.
