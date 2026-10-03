@@ -326,3 +326,59 @@ test('marks a named save point with no account behind it', async ({ page }) => {
   await named.getByRole('button', { name: 'Restore Local milestone' }).click();
   await expectBodyCount(page, 1);
 });
+
+/**
+ * F21: two top-bar chips were secretly buttons. "Local only" saved a "Manual
+ * save" revision when clicked, and signed out, "Open project sharing ·
+ * Offline" offered sharing it could not open. The save chip is a readout now
+ * (saving is File › Save revision and the shortcut), and the sharing chip
+ * says to sign in.
+ */
+test('the top-bar status chips only report, and saving lives on File', async ({
+  page
+}) => {
+  await stubAnonymousApi(page);
+  await page.goto('/');
+  await page.getByLabel('Project name').fill('Honest Chips Part');
+  await page.getByRole('button', { name: 'Create project' }).click();
+  await addPrimitive(page, /^Box \(B\)/);
+  await expectBodyCount(page, 1);
+  await expectSaveSettled(page);
+  await expect(revisions(page)).toHaveCount(1);
+
+  const actions = page
+    .locator('.topbar')
+    .getByRole('group', { name: 'Workspace actions' });
+  await expect(actions.getByRole('button', { name: 'Local only' })).toHaveCount(
+    0
+  );
+  const chip = actions.getByRole('status', { name: 'Local only' });
+  await expect(chip).toHaveAttribute('title', /Save a revision from File/);
+  await chip.click();
+
+  const sharing = actions.getByRole('button', {
+    name: 'Project sharing · Sign in to share'
+  });
+  await expect(sharing).toHaveAttribute('aria-disabled', 'true');
+  await expect(sharing).toHaveAttribute('title', 'Sign in to share');
+  // Focusable for its tooltip; a click (forced past Playwright's own
+  // aria-disabled check) opens nothing.
+  await sharing.focus();
+  await expect(sharing).toBeFocused();
+  await sharing.click({ force: true });
+  await expect(page.getByRole('dialog')).toHaveCount(0);
+
+  // Neither click saved anything; File › Save revision does.
+  await expect(revisionRow(page, 'Manual save')).toHaveCount(0);
+  await actions.getByLabel('Import and export').click();
+  await page.getByRole('button', { name: /^Save revision(?! as)/ }).click();
+  await expect(revisionRow(page, 'Manual save')).toBeVisible();
+  await expect(revisions(page)).toHaveCount(2);
+
+  // And naming one is on the same menu.
+  await actions.getByLabel('Import and export').click();
+  await page.getByRole('button', { name: /^Save revision as…/ }).click();
+  await expect(
+    page.getByRole('dialog', { name: 'Name this save' })
+  ).toBeVisible();
+});

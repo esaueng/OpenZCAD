@@ -12,7 +12,6 @@ import {
   loadLocalAppSettings,
   loadLocalAppSettingsRecord,
   normalizeAppSettings,
-  resolvedAppTheme,
   saveLocalAppSettings,
   shouldAdoptAccountSettings
 } from '../apps/web/src/lib/appSettings';
@@ -93,13 +92,6 @@ describe('application settings', () => {
       'development'
     );
     expect(parsed.settings.appearance.theme).toBe('light');
-  });
-
-  it('resolves the painted palette from the setting and the OS preference', () => {
-    expect(resolvedAppTheme('dark', true)).toBe('dark');
-    expect(resolvedAppTheme('light', false)).toBe('light');
-    expect(resolvedAppTheme('system', true)).toBe('light');
-    expect(resolvedAppTheme('system', false)).toBe('dark');
   });
 
   it('returns independent default objects', () => {

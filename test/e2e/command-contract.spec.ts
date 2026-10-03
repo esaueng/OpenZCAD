@@ -445,9 +445,12 @@ test('one Escape clears a refused offset: card, preview, handle and selection', 
   await page.mouse.move(at(-40).x, at(-40).y, { steps: 1 });
   await expect(chip).toHaveAttribute('data-state', 'warning', READ_TIMEOUT);
   await page.mouse.up();
-  await expect(page.locator('.tool-card')).toContainText('Failed');
+  // The refusal is on the selection chip, which carries the operation (F11).
+  const operationChip = page.locator('.selection-callout-chip[role="region"]');
+  await expect(operationChip).toContainText('Failed');
+  await expect(operationChip.getByRole('alert')).toBeVisible();
 
-  // One press: the card, its refusal, the kept preview, the handle and its
+  // One press: the chip's operation, its refusal, the kept preview, the handle and its
   // change band and the selection all go. Nothing re-arms at the refused
   // value, and the model reads its committed height again.
   await page.keyboard.press('Escape');
@@ -464,7 +467,8 @@ test('one Escape clears a refused offset: card, preview, handle and selection', 
     .not.toBeNull();
   await expect(chip).toHaveText('28 mm');
   await expect(chip).toHaveAttribute('data-state', 'ready');
-  await expect(page.locator('.tool-card')).not.toContainText('Failed');
+  await expect(operationChip).toBeVisible();
+  await expect(operationChip).not.toContainText('Failed');
   expect(consoleErrors).toEqual([]);
 });
 
@@ -559,10 +563,12 @@ test('exact entry keeps one rung: Escape closes the keypad, the next clears', as
   await keypad.getByRole('textbox').fill('36');
 
   // First press: the keypad closes and the typed value is dropped, but the
-  // command stays armed with its card.
+  // command stays armed, its operation still on the selection chip.
   await keypad.getByRole('textbox').press('Escape');
   await expect(keypad).toBeHidden();
-  await expect(page.locator('.tool-card')).toBeVisible();
+  await expect(
+    page.getByRole('region', { name: 'Resize Cylinder operation' })
+  ).toBeVisible();
   await expect(chip).toBeVisible();
 
   // Second press: nothing selected.

@@ -119,7 +119,7 @@ test('viewport context menu hides a body and the sidebar eye restores it', async
   const menu = page.locator('.context-menu');
   await expect(menu).toBeVisible();
   await expect(menu.locator('.context-menu-heading')).toHaveText(
-    /Box Body · .+ face/
+    /Box 1 · .+ face/
   );
   await expect(
     menu.getByRole('menuitem', { name: /Move \/ Rotate/ })
@@ -322,7 +322,7 @@ test('Space centres and faces an exact planar selection head-on', async ({
   });
   await expect(faceOperation).toBeVisible();
   await expect(
-    faceOperation.getByRole('tab', { name: 'Sketch' })
+    faceOperation.getByRole('button', { name: 'Selection: Sketch' })
   ).toBeVisible();
   // The viewport pick demotes its inferred feature to an object readout. Space
   // still belongs to the selected face without an editable field retaining it.
@@ -1149,8 +1149,8 @@ test('repeated face clicks reach a body behind direct-edit handles', async ({
       const second = (await label.textContent()) ?? '';
       cycled =
         first !== second &&
-        [first, second].some((value) => value.includes('Box Body')) &&
-        [first, second].some((value) => value.includes('Cylinder Body'));
+        [first, second].some((value) => value.includes('Box 1')) &&
+        [first, second].some((value) => value.includes('Cylinder 1'));
     }
   }
 
@@ -1203,7 +1203,7 @@ test('double-clicking a face selects its whole body', async ({ page }) => {
     clientX: spot.x,
     clientY: spot.y
   });
-  await expect(label).toHaveText('Box Body');
+  await expect(label).toHaveText('Box 1');
   await expect(filterChip).toHaveAttribute('aria-label', /: Face/);
 });
 
@@ -1366,7 +1366,7 @@ test('the selection filter changes what a click takes', async ({ page }) => {
   };
   await cycleTo(': Body');
   await page.mouse.click(spot.x, spot.y);
-  await expect(label).toHaveText('Box Body');
+  await expect(label).toHaveText('Box 1');
 
   // Round again to Any before the keyboard check below.
   await cycleTo(': Any');
@@ -1831,7 +1831,7 @@ test('a shortcut still fires when a panel opened because you selected something'
 
   // A body pick shows its definition first; opening that feature's editor
   // must preserve workspace shortcuts instead of focusing a dimension field.
-  await page.getByRole('button', { name: /^Box Body/ }).click();
+  await page.getByRole('button', { name: /^Box 1/ }).click();
   await expect(inspector.getByLabel('Width (X)')).toHaveCount(0);
   await expect(inspector.getByText('Defined by')).toBeVisible();
   await inspector.getByRole('button', { name: 'Edit', exact: true }).click();
@@ -1951,6 +1951,14 @@ test('section view cycles planes, cuts exactly at rest, and cuts nothing from th
   await expect(
     page.locator('.feature-row-main', { hasText: 'Box' })
   ).toBeVisible();
+  // The plane starts at the centre of the drawn model. The History row lands
+  // ~300 ms before the box is drawn, and a cycle in that gap starts the cut
+  // at 0 — the box's bottom face, where nothing is cut — so the spec failed
+  // whenever the click won the race (most runs, on main too).
+  await expect(page.locator('.viewer-host canvas')).toHaveAttribute(
+    'data-e2e-rendered-bodies',
+    '1'
+  );
 
   interface SectionGeometry {
     triangles: number;
@@ -1982,7 +1990,7 @@ test('section view cycles planes, cuts exactly at rest, and cuts nothing from th
   const caps = async () => (await sectionState()).sectionCaps;
   const exact = async () => (await sectionState()).exactSections;
   expect(await caps()).toEqual([]);
-  const sectionButton = page.getByRole('button', { name: /^Section display/ });
+  const sectionButton = page.getByRole('button', { name: /^Section view/ });
   await expect(sectionButton).toHaveAttribute('aria-pressed', 'false');
 
   // Off → XY, with the offset slider sliding out beside the rail.

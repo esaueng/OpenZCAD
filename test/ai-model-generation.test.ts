@@ -173,8 +173,8 @@ describe('AI-generated box with a lid', () => {
     const derived = await adapter.syncDocument(manager.document);
     expect(derived.warnings).toEqual([]);
 
-    // Features carry the names the patch chose; document-core derives each
-    // body's name from its feature by appending " Body".
+    // Features carry the names the patch chose; each new body is numbered
+    // after its feature ("Box Outer 1") and a boolean keeps its base's name.
     expect(
       listFeaturesInOrder(manager.document)
         .filter((feature) => feature.featureKind === 'boolean')
@@ -185,12 +185,12 @@ describe('AI-generated box with a lid', () => {
       (body) => !body.consumed
     );
     expect(live.map((body) => body.name).sort()).toEqual([
-      'Box Outer Body',
-      'Lid Blank Body'
+      'Box Outer 1',
+      'Lid Blank 1'
     ]);
 
-    const box = live.find((body) => body.name === 'Box Outer Body')!;
-    const lid = live.find((body) => body.name === 'Lid Blank Body')!;
+    const box = live.find((body) => body.name === 'Box Outer 1')!;
+    const lid = live.find((body) => body.name === 'Lid Blank 1')!;
 
     // Hollow: the box is its walls and floor, not a solid block.
     const solidBlock = BOX_LEN * BOX_WID * BOX_HT;
@@ -228,8 +228,8 @@ describe('AI-generated box with a lid', () => {
     const live = Object.values(derived.bodyRepresentations).filter(
       (body) => !body.consumed
     );
-    const box = live.find((body) => body.name === 'Box Outer Body')!;
-    const lid = live.find((body) => body.name === 'Lid Blank Body')!;
+    const box = live.find((body) => body.name === 'Box Outer 1')!;
+    const lid = live.find((body) => body.name === 'Lid Blank 1')!;
 
     // The lid's outer envelope is one rim wall plus one clearance larger than
     // the box on each side. Equal sizes would be an interference fit.
@@ -258,12 +258,12 @@ describe('AI-generated box with a lid', () => {
     const bodies = digest.bodies ?? [];
     const live = bodies.filter((body) => !body.consumed);
     expect(live.map((body) => body.name).sort()).toEqual([
-      'Box Outer Body',
-      'Lid Blank Body'
+      'Box Outer 1',
+      'Lid Blank 1'
     ]);
     expect(bodies.filter((body) => body.consumed)).toHaveLength(4);
 
-    const lid = live.find((body) => body.name === 'Lid Blank Body')!;
+    const lid = live.find((body) => body.name === 'Lid Blank 1')!;
     expect(lid.bbox.min.x).toBeGreaterThan(0);
   });
 

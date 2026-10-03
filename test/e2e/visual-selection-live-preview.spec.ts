@@ -56,7 +56,7 @@ async function armChamferedTopCapOffset(page: Page) {
   await inspector.getByRole('button', { name: /^Create/ }).click();
   await expectConsumedBodyCount(page, 1);
   await expect(
-    page.locator('.body-row', { hasText: 'Cylinder Body' })
+    page.locator('.body-row', { hasText: 'Cylinder 1' })
   ).toBeVisible();
 
   const canvas = page.locator('.viewer-host canvas');
@@ -224,7 +224,7 @@ test('streams exact planar previews and restores invalid or canceled offsets', a
   await expect(
     page
       .getByRole('region', { name: 'Offset Face operation' })
-      .locator('.tool-card-phase-dot')
+      .locator('.selection-callout-phase-dot')
   ).toHaveAttribute('aria-label', 'Dragging');
   // The drag has the stage: the drawer (and its History count) steps aside
   // until the gesture ends; the count is checked again once it has.
@@ -261,7 +261,7 @@ test('streams exact planar previews and restores invalid or canceled offsets', a
   await expect(
     page
       .getByRole('region', { name: 'Offset Face operation' })
-      .locator('.tool-card-phase-dot')
+      .locator('.selection-callout-phase-dot')
   ).toHaveAttribute('aria-label', 'Dragging');
 
   await page.keyboard.press('Escape');

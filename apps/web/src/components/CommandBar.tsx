@@ -7,6 +7,7 @@ import {
   sendAssistantPromptFiles,
   sendAssistantPromptKey
 } from '../lib/assistant/promptKeys';
+import { ShortcutKeys } from './ShortcutKeys';
 
 const LIST_ID = 'command-palette-list';
 const ASK_HINT_ID = 'command-bar-ask-hint';
@@ -141,8 +142,9 @@ function completionOf(typed: string, command: PaletteCommand | undefined) {
  * leading slash is a command: the list of matches stands on the bar, the
  * highlighted one completes in ghost text, Tab accepts it, arrows move and
  * Enter runs it. Empty, Enter applies the proposal waiting in the stream, `p`
- * previews it and Escape rejects it; Escape otherwise clears the field, then
- * hands focus back to where it was.
+ * previews it and Escape rejects it; Escape otherwise clears the field and
+ * hands focus back to where it was in the same press, so the next key ("?"
+ * for the shortcuts) reaches the workspace instead of the field.
  */
 export function CommandBar({
   commands,
@@ -326,7 +328,11 @@ export function CommandBar({
                     <small className="palette-group">{command.group}</small>
                   )}
                   {command.shortcut && (
-                    <kbd>{platformShortcutLabel(command.shortcut)}</kbd>
+                    <kbd>
+                      <ShortcutKeys
+                        label={platformShortcutLabel(command.shortcut)}
+                      />
+                    </kbd>
                   )}
                 </button>
               ))}
@@ -449,9 +455,11 @@ export function CommandBar({
               const meta = event.metaKey || event.ctrlKey;
               if (event.key === 'Escape') {
                 event.preventDefault();
-                if (!empty) {
-                  reset();
-                } else if (!sendAssistantPromptKey('reject')) {
+                // One press leaves. Clearing the text but keeping the focus
+                // made the next "?" type into the field rather than open the
+                // shortcuts. Only an empty field offers the press to the
+                // stream first, whose proposal it rejects and nothing else.
+                if (!empty || !sendAssistantPromptKey('reject')) {
                   dismiss();
                 }
               } else if (meta && event.key === 'ArrowUp') {
@@ -490,7 +498,9 @@ export function CommandBar({
             }}
           />
         </span>
-        <kbd>{searchKey.glyph}</kbd>
+        <kbd>
+          <ShortcutKeys label={searchKey.glyph} />
+        </kbd>
       </div>
     </div>
   );

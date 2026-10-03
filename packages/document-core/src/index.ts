@@ -183,6 +183,13 @@ export function createParameterIds(): ParameterIds {
 
 export interface PrimitiveInput {
   name: string;
+  /**
+   * The new body's name, resolved by the caller from the document it is
+   * created in (see `numberedBodyName`) and stored in the command so a replay
+   * reproduces it. Absent is the legacy naming every command recorded before
+   * numbering replays to.
+   */
+  bodyName?: string;
   primitiveKind: PrimitiveKind;
   dimensions: Record<string, ParamValue>;
   ids?: BodyFeatureIds;
@@ -262,6 +269,13 @@ export interface SketchDimensionLabelPositionInput {
 
 export interface ExtrudeInput {
   name: string;
+  /**
+   * The new body's name, resolved by the caller from the document it is
+   * created in (see `numberedBodyName`) and stored in the command so a replay
+   * reproduces it. Absent is the legacy naming every command recorded before
+   * numbering replays to.
+   */
+  bodyName?: string;
   sketchId: SketchId;
   distance: ParamValue;
   /** Half the distance to each side of the sketch plane; absent = one-sided. */
@@ -284,6 +298,13 @@ export interface ExtrudeInput {
 
 export interface RevolveInput {
   name: string;
+  /**
+   * The new body's name, resolved by the caller from the document it is
+   * created in (see `numberedBodyName`) and stored in the command so a replay
+   * reproduces it. Absent is the legacy naming every command recorded before
+   * numbering replays to.
+   */
+  bodyName?: string;
   sketchId: SketchId;
   axis: RevolveAxis;
   /** Sweep angle in degrees, `(0, 360]`. Omitted means a full turn. */
@@ -293,6 +314,13 @@ export interface RevolveInput {
 
 export interface LoftInput {
   name: string;
+  /**
+   * The new body's name, resolved by the caller from the document it is
+   * created in (see `numberedBodyName`) and stored in the command so a replay
+   * reproduces it. Absent is the legacy naming every command recorded before
+   * numbering replays to.
+   */
+  bodyName?: string;
   sections: SketchSectionReference[];
   mode: 'ruled' | 'smooth';
   /** Apex point closing the loft after its last section; omitted by default. */
@@ -302,6 +330,13 @@ export interface LoftInput {
 
 export interface SweepInput {
   name: string;
+  /**
+   * The new body's name, resolved by the caller from the document it is
+   * created in (see `numberedBodyName`) and stored in the command so a replay
+   * reproduces it. Absent is the legacy naming every command recorded before
+   * numbering replays to.
+   */
+  bodyName?: string;
   profile: SketchSectionReference;
   path: SketchPathReference;
   mode: 'standard' | 'smooth';
@@ -312,6 +347,13 @@ export interface SweepInput {
 
 export interface HelicalSweepInput {
   name: string;
+  /**
+   * The new body's name, resolved by the caller from the document it is
+   * created in (see `numberedBodyName`) and stored in the command so a replay
+   * reproduces it. Absent is the legacy naming every command recorded before
+   * numbering replays to.
+   */
+  bodyName?: string;
   profile: SketchSectionReference;
   axisOrigin: ParametricVector3;
   axisDirection: ParametricVector3;
@@ -948,6 +990,55 @@ export function derivedBodyName(
   return source?.name ?? fallback;
 }
 
+/**
+ * The name a newly made body takes: its feature's name and the next number
+ * no body in the document carries — "Box 1", "Box 2", "Extrude 1". Two boxes
+ * both called "Box Body" could not be told apart in the body list, the
+ * Union card or a face name. Consumed bodies keep their numbers, so a number
+ * is never handed out twice while its body is still in history.
+ *
+ * Only for bodies being made now: the caller stores the result in the
+ * command (`bodyName`), and nothing renames a body already in a document.
+ * A name that already ends in a free number ("Bracket 2") is used as is.
+ */
+export function numberedBodyName(
+  document: ProjectDocument,
+  featureName: string
+): string {
+  const stem = featureName.trim() || 'Body';
+  const names = listNodesByKind(document, 'body').map((body) => body.name);
+  if (/\s[1-9]\d*$/.test(stem) && !names.includes(stem)) {
+    return stem;
+  }
+  const prefix = `${stem} `;
+  let highest = 0;
+  for (const name of names) {
+    const suffix = name.startsWith(prefix) ? name.slice(prefix.length) : '';
+    if (/^[1-9]\d*$/.test(suffix)) {
+      highest = Math.max(highest, Number(suffix));
+    }
+  }
+  return `${stem} ${highest + 1}`;
+}
+
+/**
+ * An extrude that joins or cuts a target is still that body, so with a
+ * numbered command it keeps the target's name, as a boolean does; a new body
+ * takes the command's numbered name. A command without one keeps the legacy
+ * "<feature> Body" whatever its operation, so old logs replay unchanged.
+ */
+function extrudeBodyName(
+  document: ProjectDocument,
+  input: ExtrudeInput
+): string {
+  if (input.bodyName === undefined) {
+    return `${input.name} Body`;
+  }
+  return input.targetBodyId !== undefined && input.operation !== 'new-body'
+    ? derivedBodyName(document, input.targetBodyId, input.bodyName)
+    : input.bodyName;
+}
+
 export function listFeaturesInOrder(document: ProjectDocument): FeatureNode[] {
   const features = listNodesByKind(document, 'feature');
   const byId = new Map(features.map((feature) => [feature.featureId, feature]));
@@ -1002,7 +1093,7 @@ export function addPrimitiveFeature(
   const body: BodyNode = {
     id: bodyNodeId,
     kind: 'body',
-    name: `${input.name} Body`,
+    name: input.bodyName ?? `${input.name} Body`,
     parentId: next.activePartId,
     revisionId: null,
     bodyId,
@@ -1642,7 +1733,7 @@ export function extrudeSketch(
   next.nodes[bodyNodeId] = {
     id: bodyNodeId,
     kind: 'body',
-    name: `${input.name} Body`,
+    name: extrudeBodyName(document, input),
     parentId: next.activePartId,
     revisionId: null,
     bodyId,
@@ -1691,7 +1782,7 @@ export function revolveSketch(
   next.nodes[bodyNodeId] = {
     id: bodyNodeId,
     kind: 'body',
-    name: `${input.name} Body`,
+    name: input.bodyName ?? `${input.name} Body`,
     parentId: next.activePartId,
     revisionId: null,
     bodyId,
@@ -1727,7 +1818,8 @@ export function loftSections(
         ? {}
         : { endPoint: deepClone(input.endPoint) })
     },
-    input.ids
+    input.ids,
+    input.bodyName
   );
 }
 
@@ -1748,7 +1840,8 @@ export function sweepProfile(
       // frame every sweep authored before guide rails existed swept with.
       ...(input.guide === undefined ? {} : { guide: deepClone(input.guide) })
     },
-    input.ids
+    input.ids,
+    input.bodyName
   );
 }
 
@@ -1769,7 +1862,8 @@ export function helicalSweepProfile(
       pitch: input.pitch,
       turns: input.turns
     },
-    input.ids
+    input.ids,
+    input.bodyName
   );
 }
 
@@ -1932,7 +2026,8 @@ function addBodyResultFeature(
         | 'thicken';
     }
   >,
-  ids?: BodyFeatureIds
+  ids?: BodyFeatureIds,
+  bodyName?: string
 ): { document: ProjectDocument; bodyId: BodyId } {
   const next = cloneDocument(document);
   const { featureId, featureNodeId, bodyId, bodyNodeId } =
@@ -1954,10 +2049,12 @@ function addBodyResultFeature(
     kind: 'body',
     // A mirror leaves its source in place, so the copy needs a name of its
     // own; every other kind replaces its source and keeps the source's name.
+    // A body with no source (a loft, a sweep) takes the numbered name its
+    // command carries, when it carries one.
     name:
       featureKind === 'mirror'
         ? `${derivedBodyName(document, sourceBodyId, name)} mirror`
-        : derivedBodyName(document, sourceBodyId, name),
+        : derivedBodyName(document, sourceBodyId, bodyName ?? name),
     parentId: next.activePartId,
     revisionId: null,
     bodyId,

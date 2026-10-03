@@ -141,9 +141,10 @@ describe('WorkspaceReadout pacing', () => {
         vi.advanceTimersByTime(STATUS_MIN_DWELL_MS);
       });
       expect(screen.getByRole('status')).toHaveTextContent('Reopened Bracket.');
+      // The counter says what it counts, not a bare "+3".
       expect(
         container.querySelector('.workspace-toast-more')
-      ).toHaveTextContent('+3');
+      ).toHaveTextContent(/^3 more in log$/);
       // The button still names the live message for assistive tech.
       expect(
         screen.getByRole('button', {
@@ -180,7 +181,7 @@ function blockMainThread(ms: number) {
 describe('WorkspaceReadout message lifetime', () => {
   const STARTING = {
     phase: 'Starting geometry worker',
-    projection: 'no exact projection is available yet'
+    projection: 'the model appears when it is ready'
   };
   const REFUSAL = 'Cannot use Box: This shared project is read-only.';
 
@@ -251,7 +252,7 @@ describe('WorkspaceReadout message lifetime', () => {
       );
       const toast = screen.getByRole('contentinfo');
       expect(screen.getByRole('status')).toHaveTextContent(
-        'Starting geometry worker · no exact projection is available yet'
+        'Starting geometry worker · the model appears when it is ready'
       );
       expect(toast).not.toHaveClass('hidden');
 
@@ -278,7 +279,7 @@ describe('WorkspaceReadout message lifetime', () => {
         vi.advanceTimersByTime(STATUS_LIFETIME_MS);
       });
       expect(screen.getByRole('status')).toHaveTextContent(
-        'Starting geometry worker · no exact projection is available yet'
+        'Starting geometry worker · the model appears when it is ready'
       );
       expect(screen.getByRole('status')).not.toHaveTextContent('Cannot use');
       expect(toast).not.toHaveClass('hidden');

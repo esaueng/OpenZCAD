@@ -181,7 +181,6 @@ test('measures an applied edit through worker response and viewport frame', asyn
     .locator('.feature-row-main')
     .filter({ hasText: /^Box/ })
     .first();
-  await row.click();
   const width = inspector.getByRole('textbox', { name: 'Width (X)' });
   const sampleCount = Math.max(
     5,
@@ -190,6 +189,8 @@ test('measures an applied edit through worker response and viewport frame', asyn
   const edits: EditSample[] = [];
   for (let sample = 0; sample < sampleCount; sample += 1) {
     const expectedWidth = 12 + (sample % 2);
+    // An applied edit closes its card (F19), so each sample reopens it.
+    await row.click();
     await width.fill(String(expectedWidth));
     const applyButton = inspector.getByRole('button', {
       name: 'Apply',

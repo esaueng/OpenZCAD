@@ -141,7 +141,8 @@ test('manual All-edges fillet finishes the STEP-imported hook (49 physical edges
       { timeout: 60_000 }
     )
     .toBe(true);
-  const card = page.locator('.tool-card');
+  // The edge pick's operation rides the selection chip (F11).
+  const card = page.locator('.selection-callout-chip');
   await expect(card).toHaveAttribute('aria-label', 'Fillet operation');
 
   // Narrow viewport: the All-edges control differs here; prove it is reachable.

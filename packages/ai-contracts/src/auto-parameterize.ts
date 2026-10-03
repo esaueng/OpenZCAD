@@ -1,4 +1,6 @@
 import {
+  isFeatureManuallySuppressed,
+  isFeatureRollbackSuppressed,
   isFeatureSuppressed,
   isReadOnlyRecognizedImportedFeature,
   type BodyId,
@@ -205,6 +207,62 @@ function blendCarrier(geometry: FaceGeometry): {
   return null;
 }
 
+/**
+ * The input a manually suppressed replacing feature passes through (ADR-017).
+ * Keep this structural relation aligned with exact-suppression.ts: it supplies
+ * a body, not the suppressed feature's dimensions or topology. Exact preflight
+ * remains responsible for whether that input actually builds.
+ */
+function suppressedScopeSource(feature: FeatureNode): BodyId | null {
+  if (
+    !isFeatureManuallySuppressed(feature) ||
+    isFeatureRollbackSuppressed(feature) ||
+    !feature.bodyId
+  ) {
+    return null;
+  }
+  const data = feature.data;
+  let source: BodyId | null;
+  switch (data.featureKind) {
+    case 'hole':
+    case 'shell':
+    case 'solid-offset':
+    case 'draft':
+    case 'fillet':
+    case 'chamfer':
+    case 'pattern':
+      source = data.targetBodyId;
+      break;
+    case 'extrude':
+      source =
+        (data.operation ?? 'new-body') === 'new-body'
+          ? null
+          : (data.targetBodyId ?? null);
+      break;
+    case 'boolean':
+      source = data.targetBodyIds[0] ?? null;
+      break;
+    case 'transform':
+    case 'direct-edit':
+    case 'mirror':
+    case 'thicken':
+    case 'split':
+    case 'primitive':
+    case 'sketch':
+    case 'revolve':
+    case 'loft':
+    case 'sweep':
+    case 'helical-sweep':
+    case 'imported-mesh':
+    case 'imported-step':
+      return null;
+    default:
+      data satisfies never;
+      return null;
+  }
+  return source === feature.bodyId ? null : source;
+}
+
 /** Walks the canonical history backwards from one or more result bodies. */
 function featureScopeForBodies(
   document: ProjectDocument,
@@ -214,10 +272,33 @@ function featureScopeForBodies(
   const neededBodies = new Set(bodyIds);
   const neededSketches = new Set<string>();
   const included = new Set<FeatureId>();
+  const producerIndices = new Map<BodyId, number>();
+  features.forEach((feature, index) => {
+    const produced = [feature.bodyId];
+    if (feature.data.featureKind === 'split')
+      produced.push(feature.data.secondBodyId);
+    for (const bodyId of produced) {
+      if (bodyId !== undefined && !producerIndices.has(bodyId))
+        producerIndices.set(bodyId, index);
+    }
+  });
 
   for (let index = features.length - 1; index >= 0; index -= 1) {
     const feature = features[index]!;
     if (isFeatureSuppressed(feature)) {
+      if (feature.bodyId && neededBodies.has(feature.bodyId)) {
+        const source = suppressedScopeSource(feature);
+        const producerIndex =
+          source === null ? undefined : producerIndices.get(source);
+        if (
+          source !== null &&
+          producerIndex !== undefined &&
+          producerIndex < index
+        )
+          neededBodies.add(source);
+      }
+      // A passed-through result still reaches its input, but the paused
+      // feature itself never contributes a parameter candidate.
       continue;
     }
     const data = feature.data;

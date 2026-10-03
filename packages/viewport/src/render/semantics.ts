@@ -36,6 +36,11 @@ export const SELECTION_SEMANTICS = {
   },
   /** Picked, and what a command will act on. */
   selected: {
+    /**
+     * The accent a selected face's hidden half (seen through the part) and
+     * a face picked while sketching are filled with. A visible selected face
+     * is not filled with it: see `faceTint`.
+     */
     face: 0x6798ff,
     /**
      * Lowered from 0.5. A large selected face was hiding its own edges and the
@@ -44,6 +49,21 @@ export const SELECTION_SEMANTICS = {
      */
     faceOpacity: 0.38,
     hiddenFaceOpacity: 0.16,
+    /**
+     * What a selected face is tinted toward. The face keeps its own feature
+     * colour and leans this far toward a light accent, so it always comes
+     * out brighter than it was. The accent blue laid over it instead (the
+     * old fill) is near-complementary to the gold and coral feature colours
+     * and mixed them to grey-tan: the picked face looked switched off.
+     */
+    faceTint: 0xc7d6ff,
+    faceTintAmount: 0.2,
+    /**
+     * How much of its brightness everything outside the selection gives up
+     * while something is selected: the rest of a picked face's body, and
+     * every other body. The selection reads first because the rest recedes.
+     */
+    contextDim: 0.3,
     /** Whole-body tint. See `bodyEmissive` below before reaching for it. */
     bodyEmissive: 0x17295e,
     /**

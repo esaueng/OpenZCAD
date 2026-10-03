@@ -260,14 +260,22 @@ export function ExportDialog({
           <legend>Format</legend>
           {FORMAT_OPTIONS.map((option) => (
             <label key={option.format} className="export-dialog-option">
+              {/* Named by the format alone, with the hint as its description,
+                  and a value of its own: without one every radio's value was
+                  the browser default "on", which is what assistive tech read. */}
               <input
                 type="radio"
                 name="export-format"
+                value={option.format}
+                aria-label={option.label}
+                aria-describedby={`export-format-hint-${option.format}`}
                 checked={format === option.format}
                 onChange={() => setFormat(option.format)}
               />
-              <span>{option.label}</span>
-              <small>{option.hint}</small>
+              <span aria-hidden="true">{option.label}</span>
+              <small id={`export-format-hint-${option.format}`}>
+                {option.hint}
+              </small>
             </label>
           ))}
         </fieldset>
@@ -326,6 +334,14 @@ export function ExportDialog({
               className="secondary"
               disabled={deflection === null}
               aria-disabled={phase !== 'idle' ? true : undefined}
+              // Named outright: the visible words sit in a width-reserving
+              // grid beside an icon slot, and a reader that did not descend
+              // into it announced the button with no name.
+              aria-label={
+                report && !staleReport
+                  ? 'Re-check watertightness'
+                  : 'Check watertightness'
+              }
               onClick={() => void runQualityCheck()}
             >
               <span className="icon-slot" aria-hidden="true">
