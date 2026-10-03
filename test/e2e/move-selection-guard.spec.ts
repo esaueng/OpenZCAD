@@ -68,6 +68,14 @@ async function cycleSelectionFilter(page: Page, mode: 'Face' | 'Sketch') {
 }
 
 async function backupProject(page: Page): Promise<ProjectDocument> {
+  // This static fixture has no account-side archives or stored revisions.
+  // Match the routes used by the other complete-project export suites.
+  await page.route('**/api/projects/*/artifacts', (route) =>
+    route.fulfill({ json: { artifacts: [] } })
+  );
+  await page.route('**/api/projects/*/revisions/*', (route) =>
+    route.fulfill({ status: 404, json: { error: 'Revision not stored' } })
+  );
   const menu = page.locator('details.file-menu');
   await menu.locator('summary').click();
   const pending = page.waitForEvent('download');
