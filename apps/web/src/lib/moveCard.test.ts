@@ -1,5 +1,9 @@
 import { describe, expect, it } from 'vitest';
-import { moveHasUnappliedChange } from './moveCard';
+import {
+  moveHasUnappliedChange,
+  movingSketchId,
+  sketchViewShown
+} from './moveCard';
 
 const zero = { x: 0, y: 0, z: 0 };
 
@@ -24,5 +28,27 @@ describe('moveHasUnappliedChange', () => {
         rotationDeg: { ...zero, z: -15 }
       })
     ).toBe(true);
+  });
+});
+
+describe('movingSketchId / sketchViewShown', () => {
+  const sketchMove = {
+    bodyId: 'sketch_profile',
+    target: 'sketch' as const
+  };
+
+  it('names the sketch only for a sketch Move', () => {
+    expect(movingSketchId(null)).toBeNull();
+    expect(movingSketchId({ bodyId: 'body_plate' })).toBeNull();
+    expect(movingSketchId(sketchMove)).toBe('sketch_profile');
+  });
+
+  it('shows a hidden (consumed) sketch while a Move carries it', () => {
+    const hidden = new Set(['sketch_profile', 'sketch_other']);
+    const moving = movingSketchId(sketchMove);
+    expect(sketchViewShown('sketch_profile', hidden, null)).toBe(false);
+    expect(sketchViewShown('sketch_profile', hidden, moving)).toBe(true);
+    expect(sketchViewShown('sketch_other', hidden, moving)).toBe(false);
+    expect(sketchViewShown('sketch_visible', hidden, null)).toBe(true);
   });
 });

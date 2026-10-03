@@ -1105,7 +1105,11 @@ import {
   suppressionRepairSnapshot,
   type SuppressionNotice
 } from './lib/suppressionFeedback';
-import { moveHasUnappliedChange } from './lib/moveCard';
+import {
+  moveHasUnappliedChange,
+  movingSketchId,
+  sketchViewShown
+} from './lib/moveCard';
 import {
   resolveHistoryEditorFeature,
   resolveHistoryFeature,
@@ -6716,7 +6720,15 @@ export function App() {
     );
     const sketch = findSketch(doc, preview.bodyId as SketchId);
     if (!view || !sketch) {
+      // Never drop the Move silently: say why and close the command, so no
+      // empty Move card is left behind.
       setMovePreview(null);
+      setTool(null);
+      setStatus(
+        sketch
+          ? `Could not move ${sketch.name}: its plane cannot be placed right now.`
+          : 'Could not move the sketch: it is no longer in the model.'
+      );
       return false;
     }
     const basis = view.basis;
@@ -6749,6 +6761,9 @@ export function App() {
       );
       return true;
     }
+    // The command reported its own failure; the Move it carried is gone, so
+    // the card closes with it rather than staying open empty.
+    setTool(null);
     return false;
   }
 
@@ -13075,6 +13090,9 @@ export function App() {
     }
   }
 
+  // A Move shows the hidden sketch it carries (see `movingSketchId`).
+  const movingSketch = movingSketchId(movePreview);
+
   /**
    * Region-detected sketch rendering data: every sketch's curves plus its
    * detected closed regions, lifted by the shared plane resolution. The
@@ -13094,7 +13112,7 @@ export function App() {
       // Consumed sketches auto-hide (Shapr-style); the history row's eye
       // overrides either way. The in-session sketch always renders its rig.
       if (
-        hiddenSketchIds.has(sketch.sketchId) &&
+        !sketchViewShown(sketch.sketchId, hiddenSketchIds, movingSketch) &&
         !active &&
         !modelingEditFeature
       ) {
@@ -13196,15 +13214,18 @@ export function App() {
     textFontsVersion,
     textOutlineBudgetError,
     hiddenSketchIds,
+    movingSketch,
     modelingEditFeature
   ]);
   // Editing needs hidden source profiles; visibility remains a viewport concern.
   const sketchViews = useMemo(
     () =>
       availableSketchViews.filter(
-        (view) => view.active || !hiddenSketchIds.has(view.sketchId)
+        (view) =>
+          view.active ||
+          sketchViewShown(view.sketchId, hiddenSketchIds, movingSketch)
       ),
-    [availableSketchViews, hiddenSketchIds]
+    [availableSketchViews, hiddenSketchIds, movingSketch]
   );
 
   useEffect(() => {
