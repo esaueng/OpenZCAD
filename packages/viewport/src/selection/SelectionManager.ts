@@ -21,7 +21,7 @@ import {
 import { VIEWPORT_RENDER_ORDER } from '../render/scene';
 import { SELECTION_SEMANTICS } from '../render/semantics';
 import { createFaceHighlightGeometry } from './faceHighlightGeometry';
-import { easeToward, SETTLE_EPSILON } from '../motion';
+import { easeToward, fadeStepMs, SETTLE_EPSILON } from '../motion';
 
 const HOVER_EMISSIVE = SELECTION_SEMANTICS.hover.faceEmissive;
 const HOVER_FACE_COLOR = SELECTION_SEMANTICS.hover.face;
@@ -114,6 +114,14 @@ class HoverFaceMeshSlot {
     );
   }
 
+  /**
+   * The targets each film was last stepped toward. A target that differs is
+   * new — installed, retired, or an x-ray change — so that step is the fade's
+   * first and takes the wake step (see fadeStepMs).
+   */
+  private steppedFaceTarget = Number.NaN;
+  private steppedHiddenFaceTarget = Number.NaN;
+
   install(
     parent: THREE.Object3D,
     key: string,
@@ -131,6 +139,8 @@ class HoverFaceMeshSlot {
     this.hiddenFaceMesh.visible = xrayEnabled;
     this.faceTarget = HOVER_FACE_OPACITY;
     this.hiddenFaceTarget = xrayEnabled ? HOVER_FACE_HIDDEN_OPACITY : 0;
+    this.steppedFaceTarget = Number.NaN;
+    this.steppedHiddenFaceTarget = Number.NaN;
     this.faceMesh.userData.hoverFaceKey = key;
     this.hiddenFaceMesh.userData.hoverFaceKey = key;
     parent.add(this.faceMesh);
@@ -150,19 +160,24 @@ class HoverFaceMeshSlot {
       (active || this.hiddenFaceMesh.material.opacity >= SETTLE_EPSILON);
   }
 
-  step(dtMs: number) {
+  step(frameMs: number) {
     if (this.key === null) {
       return;
     }
+    const faceFirstStep = this.faceTarget !== this.steppedFaceTarget;
+    const hiddenFirstStep =
+      this.hiddenFaceTarget !== this.steppedHiddenFaceTarget;
+    this.steppedFaceTarget = this.faceTarget;
+    this.steppedHiddenFaceTarget = this.hiddenFaceTarget;
     this.faceMesh.material.opacity = easeToward(
       this.faceMesh.material.opacity,
       this.faceTarget,
-      dtMs
+      fadeStepMs(frameMs, faceFirstStep)
     );
     this.hiddenFaceMesh.material.opacity = easeToward(
       this.hiddenFaceMesh.material.opacity,
       this.hiddenFaceTarget,
-      dtMs
+      fadeStepMs(frameMs, hiddenFirstStep)
     );
     if (
       this.hiddenFaceTarget === 0 &&
@@ -257,6 +272,11 @@ export interface SelectionManagerOptions {
 export class SelectionManager {
   /** Overlay materials easing toward their resting opacity. */
   readonly fadeIns = new Set<THREE.Material>();
+  /**
+   * The target each fading material was last stepped toward. A material that
+   * is new to `fadeIns`, or whose target changed since, is on its first step.
+   */
+  private readonly fadeTargets = new WeakMap<THREE.Material, number>();
 
   hoveredBodyId: string | null = null;
   /** Legacy per-edge visual, retained while ModelViewer adopts edge batches. */
@@ -595,7 +615,13 @@ export class SelectionManager {
       const target =
         (material.userData.targetOpacity as number | undefined) ??
         DEFAULT_FADE_TARGET;
-      material.opacity = easeToward(material.opacity, target, dtMs);
+      const firstStep = this.fadeTargets.get(material) !== target;
+      this.fadeTargets.set(material, target);
+      material.opacity = easeToward(
+        material.opacity,
+        target,
+        fadeStepMs(dtMs, firstStep)
+      );
       if (material.opacity === target) {
         // A material faded back to full opacity goes back to the opaque pass
         // once it settles: leaving `transparent` set keeps it in depth-sorted
@@ -610,6 +636,7 @@ export class SelectionManager {
           material.needsUpdate = true;
         }
         this.fadeIns.delete(material);
+        this.fadeTargets.delete(material);
       }
     }
   }
