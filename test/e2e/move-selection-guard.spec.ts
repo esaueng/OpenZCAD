@@ -401,6 +401,8 @@ test('applying a Move requires a fresh pick instead of arming a face at its old 
   await expect(canvas).not.toHaveAttribute('data-e2e-selected-face', /.+/);
   await expect(inspector).toHaveCount(0);
 
+  // Tool availability proves the current document's exact rebuild is published.
+  await expect(page.getByRole('button', { name: /^Fillet/ })).toBeEnabled();
   // A fresh pick resolves against the rebuilt body's current pose and re-arms it.
   await expect.poll(pickFace).toBe(true);
   await expect(canvas).toHaveAttribute('data-e2e-selected-face', /.+/);
