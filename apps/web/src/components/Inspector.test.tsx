@@ -1,9 +1,17 @@
-import { act, fireEvent, render, screen, waitFor, within } from '@testing-library/react';
-import type { ComponentProps } from 'react';
+import {
+  act,
+  fireEvent,
+  render,
+  screen,
+  waitFor,
+  within
+} from '@testing-library/react';
+import { useState, type ComponentProps } from 'react';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import type {
   BodyId,
   BodyRepresentation,
+  EdgeTopologyReferenceV5,
   FeatureNode,
   ProjectDocument,
   TopologySelection
@@ -258,6 +266,57 @@ describe('Inspector feature provenance', () => {
 });
 
 describe('primitive card position', () => {
+  it.each([0, 10])(
+    'numbers a body from the document when creating at X=%s',
+    (x) => {
+      const manager = new CommandManager(
+        createProjectDocument('Numbered', toUserId('user_inspector_number'))
+      );
+      manager.execute(
+        createPrimitiveCommand(
+          'box',
+          'Box',
+          { width: 30, height: 18, depth: 24 },
+          { x: 0, y: 0, z: 0 },
+          manager.document
+        )
+      );
+      const onCreatePrimitive = vi.fn<(command: AnyCommand) => void>();
+      render(
+        <Inspector
+          {...makeProps({
+            tool: 'box',
+            selectedFeature: null,
+            selectedBody: null,
+            selectedTopology: null,
+            commandSession: null,
+            document: manager.document,
+            onCreatePrimitive
+          })}
+        />
+      );
+      fireEvent.change(screen.getByRole('textbox', { name: 'Corner X' }), {
+        target: { value: String(x) }
+      });
+      fireEvent.click(screen.getByRole('button', { name: 'Create' }));
+      expect(onCreatePrimitive).toHaveBeenCalledTimes(1);
+      const command = onCreatePrimitive.mock.calls[0]![0];
+      expect(command.commands?.[0] ?? command).toMatchObject({
+        kind: 'primitive.add',
+        payload: { bodyName: 'Box 2' }
+      });
+      manager.execute(command);
+      expect(
+        Object.values(manager.document.nodes)
+          .filter((node) => node.kind === 'body')
+          .map((node) => node.name)
+      ).toEqual(['Box 1', 'Box 2']);
+      expect(listFeaturesInOrder(manager.document)).toHaveLength(
+        x === 0 ? 2 : 3
+      );
+    }
+  );
+
   it('reads a placed box from the document and applies a move with its dimensions', () => {
     const manager = new CommandManager(
       createProjectDocument('Placed', toUserId('user_inspector_place'))
@@ -272,7 +331,9 @@ describe('primitive card position', () => {
     );
     const primitive = listFeaturesInOrder(manager.document)[0]!;
     const onApplyPrimitive =
-      vi.fn<(feature: FeatureNode, name: string, command: AnyCommand) => void>();
+      vi.fn<
+        (feature: FeatureNode, name: string, command: AnyCommand) => void
+      >();
     render(
       <Inspector
         {...makeProps({
@@ -293,9 +354,11 @@ describe('primitive card position', () => {
     expect(feature).toBe(primitive);
     expect(name).toBe('Box');
     manager.execute(command);
-    expect(
-      primitivePlacement(manager.document, primitive).position
-    ).toEqual({ x: 4, y: 0, z: 0 });
+    expect(primitivePlacement(manager.document, primitive).position).toEqual({
+      x: 4,
+      y: 0,
+      z: 0
+    });
     expect(listFeaturesInOrder(manager.document)).toHaveLength(2);
   });
 });
@@ -365,6 +428,191 @@ describe('fillet radius slider', () => {
       null
     );
     expect(screen.getByRole('button', { name: /Apply/ })).toBeDisabled();
+  });
+});
+
+describe('editing an edge modifier set', () => {
+  const references: EdgeTopologyReferenceV5[] = [11, 12].map((hash) => ({
+    kind: 'edge',
+    producingFeatureId: feature.featureId,
+    lineageName: `primitive.edge.${hash}`,
+    currentHash: hash,
+    witnessVersion: 1,
+    witness: {
+      curveType: 'LINE',
+      length: 10,
+      closed: false,
+      endpoints: [
+        [0, 0, 0],
+        [10, 0, 0]
+      ],
+      midpoint: [5, 0, 0]
+    }
+  }));
+  const picked = (hash: number): TopologySelection => ({
+    bodyId,
+    kind: 'edge',
+    topologyId: `edge:${hash}`,
+    hash
+  });
+  const editFeature = (kind: 'fillet' | 'chamfer'): FeatureNode => ({
+    ...feature,
+    featureKind: kind,
+    data:
+      kind === 'fillet'
+        ? {
+            featureKind: kind,
+            targetBodyId: bodyId,
+            edgeHashes: [11, 12],
+            edgeReferences: references,
+            radius: 2
+          }
+        : {
+            featureKind: kind,
+            targetBodyId: bodyId,
+            edgeHashes: [11, 12],
+            edgeReferences: references,
+            distance: 2
+          }
+  });
+
+  it.each(['fillet', 'chamfer'] as const)(
+    'restores a removed stored %s edge on a new pick, preserving values and references',
+    (kind) => {
+      const selectedFeature = editFeature(kind);
+      const props = makeProps({
+        selectedFeature,
+        featureSelectionSource: 'pinned',
+        commandSession: null
+      });
+      const { rerender } = render(<Inspector {...props} />);
+      const size = screen.getByRole('textbox', {
+        name: kind === 'fillet' ? 'Radius' : 'Distance'
+      });
+      fireEvent.change(size, { target: { value: '4' } });
+      fireEvent.click(screen.getByRole('button', { name: /^Remove 2 / }));
+      const list = screen.getByRole('list', {
+        name: kind === 'fillet' ? 'Filleted edges' : 'Chamfered edges'
+      });
+      expect(within(list).getAllByRole('listitem')).toHaveLength(1);
+      expect(props.onPreviewEdgeModifier).toHaveBeenLastCalledWith(
+        selectedFeature,
+        kind,
+        expect.objectContaining({
+          size: 4,
+          edgeHashes: [11],
+          edgeReferences: [references[0]]
+        })
+      );
+
+      rerender(<Inspector {...props} selectedEdges={[picked(12)]} />);
+      expect(within(list).getAllByRole('listitem')).toHaveLength(2);
+      expect(size).toHaveValue('4');
+      expect(props.onPreviewEdgeModifier).toHaveBeenLastCalledWith(
+        selectedFeature,
+        kind,
+        expect.objectContaining({
+          size: 4,
+          edgeHashes: [11, 12],
+          edgeReferences: references
+        })
+      );
+      fireEvent.submit(
+        screen.getByRole('button', { name: /Apply/ }).closest('form')!
+      );
+      expect(props.onApplyEdgeModifier).toHaveBeenLastCalledWith(
+        selectedFeature,
+        kind,
+        expect.objectContaining({
+          size: 4,
+          edgeHashes: [11, 12],
+          edgeReferences: references
+        })
+      );
+    }
+  );
+
+  it('retains stored references after dropping an added edge, and lets it be picked again', () => {
+    const selectedFeature = editFeature('fillet');
+    const props = makeProps({
+      selectedFeature,
+      featureSelectionSource: 'pinned',
+      commandSession: null
+    });
+    const onRemoveSelectedEdge = vi.fn();
+    function EditHarness() {
+      const [selectedEdges, setSelectedEdges] = useState([picked(13)]);
+      return (
+        <>
+          <Inspector
+            {...props}
+            selectedEdges={selectedEdges}
+            onRemoveSelectedEdge={(edge) => {
+              onRemoveSelectedEdge(edge);
+              setSelectedEdges((current) =>
+                current.filter((pick) => pick.hash !== edge.hash)
+              );
+            }}
+          />
+          <button
+            type="button"
+            onClick={() =>
+              setSelectedEdges((current) =>
+                current.some((edge) => edge.hash === 13)
+                  ? current.filter((edge) => edge.hash !== 13)
+                  : [...current, picked(13)]
+              )
+            }
+          >
+            Shift pick extra edge
+          </button>
+        </>
+      );
+    }
+    render(<EditHarness />);
+    const radius = screen.getByRole('textbox', { name: 'Radius' });
+    fireEvent.change(radius, { target: { value: '4' } });
+    const list = screen.getByRole('list', { name: 'Filleted edges' });
+    fireEvent.click(screen.getByRole('button', { name: /^Remove 3 / }));
+    expect(onRemoveSelectedEdge).toHaveBeenCalledExactlyOnceWith(picked(13));
+    expect(within(list).getAllByRole('listitem')).toHaveLength(2);
+    expect(props.onPreviewEdgeModifier).toHaveBeenLastCalledWith(
+      selectedFeature,
+      'fillet',
+      expect.objectContaining({
+        size: 4,
+        edgeHashes: [11, 12],
+        edgeReferences: references
+      })
+    );
+    fireEvent.submit(
+      screen.getByRole('button', { name: /Apply/ }).closest('form')!
+    );
+    expect(props.onApplyEdgeModifier).toHaveBeenLastCalledWith(
+      selectedFeature,
+      'fillet',
+      expect.objectContaining({
+        edgeHashes: [11, 12],
+        edgeReferences: references
+      })
+    );
+
+    // Removing from the list released the viewport pick. The very next
+    // Shift+Click restores the edge, without a separate deselection first.
+    fireEvent.click(
+      screen.getByRole('button', { name: 'Shift pick extra edge' })
+    );
+    expect(within(list).getAllByRole('listitem')).toHaveLength(3);
+    expect(radius).toHaveValue('4');
+    expect(props.onPreviewEdgeModifier).toHaveBeenLastCalledWith(
+      selectedFeature,
+      'fillet',
+      expect.objectContaining({ size: 4, edgeHashes: [11, 12, 13] })
+    );
+    const preview = vi
+      .mocked(props.onPreviewEdgeModifier)
+      .mock.calls.at(-1)?.[2];
+    expect(preview?.edgeReferences).toBeUndefined();
   });
 });
 
@@ -525,15 +773,22 @@ describe('on-demand mass properties in Inspector', () => {
   const lazyBody = { ...body, massProperties: undefined };
 
   it('replaces a committed measurement with the matching preview document', async () => {
-    const committed = createProjectDocument('Mass preview', toUserId('mass-ui'));
+    const committed = createProjectDocument(
+      'Mass preview',
+      toUserId('mass-ui')
+    );
     const preview = { ...committed, derived: { ...committed.derived } };
     const previewBody = { ...lazyBody, volume: lazyBody.volume + 1 };
     let resolveCommitted!: (value: MassPropertiesRead) => void;
     const worker = {
-      massProperties: vi.fn()
-        .mockImplementationOnce(() => new Promise<MassPropertiesRead>((done) => {
-          resolveCommitted = done;
-        }))
+      massProperties: vi
+        .fn()
+        .mockImplementationOnce(
+          () =>
+            new Promise<MassPropertiesRead>((done) => {
+              resolveCommitted = done;
+            })
+        )
         .mockResolvedValueOnce({
           status: 'ready',
           properties: {
@@ -553,19 +808,33 @@ describe('on-demand mass properties in Inspector', () => {
     const view = render(<Inspector {...props} />);
     fireEvent.click(screen.getByText('Mass properties (at unit density)'));
     await waitFor(() => expect(worker.massProperties).toHaveBeenCalledTimes(1));
-    const oldSignal = (worker.massProperties.mock.calls[0] as unknown as [
-      ProjectDocument,
-      BodyId,
-      { signal: AbortSignal }
-    ])[2].signal;
+    const oldSignal = (
+      worker.massProperties.mock.calls[0] as unknown as [
+        ProjectDocument,
+        BodyId,
+        { signal: AbortSignal }
+      ]
+    )[2].signal;
 
-    view.rerender(<Inspector {...props} selectedBody={previewBody} massPropertiesDocument={preview} />);
+    view.rerender(
+      <Inspector
+        {...props}
+        selectedBody={previewBody}
+        massPropertiesDocument={preview}
+      />
+    );
     expect(oldSignal.aborted).toBe(true);
     await waitFor(() => expect(worker.massProperties).toHaveBeenCalledTimes(2));
     expect(worker.massProperties.mock.calls[1]?.[0]).toBe(preview);
-    await waitFor(() => expect(screen.getByText('9, 6, 3 mm')).toBeInTheDocument());
+    await waitFor(() =>
+      expect(screen.getByText('9, 6, 3 mm')).toBeInTheDocument()
+    );
     await act(async () => {
-      resolveCommitted({ status: 'ready', properties: body.massProperties!, epoch: 1 });
+      resolveCommitted({
+        status: 'ready',
+        properties: body.massProperties!,
+        epoch: 1
+      });
     });
     expect(screen.getByText('9, 6, 3 mm')).toBeInTheDocument();
   });
@@ -574,17 +843,24 @@ describe('on-demand mass properties in Inspector', () => {
     const document = createProjectDocument('Mass details', toUserId('mass-ui'));
     let resolve!: (value: MassPropertiesRead) => void;
     const worker = {
-      massProperties: vi.fn(() => new Promise<MassPropertiesRead>((done) => {
-        resolve = done;
-      }))
+      massProperties: vi.fn(
+        () =>
+          new Promise<MassPropertiesRead>((done) => {
+            resolve = done;
+          })
+      )
     };
-    render(<Inspector {...makeProps({
-      selectedFeature: null,
-      commandSession: null,
-      selectedBody: lazyBody,
-      massPropertiesDocument: document,
-      massPropertiesWorker: worker
-    })} />);
+    render(
+      <Inspector
+        {...makeProps({
+          selectedFeature: null,
+          commandSession: null,
+          selectedBody: lazyBody,
+          massPropertiesDocument: document,
+          massPropertiesWorker: worker
+        })}
+      />
+    );
     expect(worker.massProperties).not.toHaveBeenCalled();
     fireEvent.click(screen.getByText('Mass properties (at unit density)'));
     await waitFor(() => expect(worker.massProperties).toHaveBeenCalledOnce());
@@ -609,10 +885,14 @@ describe('on-demand mass properties in Inspector', () => {
     const second = createProjectDocument('New project', toUserId('mass-ui'));
     let resolveFirst!: (value: MassPropertiesRead) => void;
     const worker = {
-      massProperties: vi.fn()
-        .mockImplementationOnce(() => new Promise<MassPropertiesRead>((done) => {
-          resolveFirst = done;
-        }))
+      massProperties: vi
+        .fn()
+        .mockImplementationOnce(
+          () =>
+            new Promise<MassPropertiesRead>((done) => {
+              resolveFirst = done;
+            })
+        )
         .mockResolvedValueOnce({
           status: 'unavailable',
           code: 'unsupported',
@@ -631,28 +911,50 @@ describe('on-demand mass properties in Inspector', () => {
     const view = render(<Inspector {...props} />);
     fireEvent.click(screen.getByText('Mass properties (at unit density)'));
     await waitFor(() => expect(worker.massProperties).toHaveBeenCalledTimes(1));
-    const firstSignal = (worker.massProperties.mock.calls[0] as unknown as [
-      ProjectDocument,
-      BodyId,
-      { signal: AbortSignal }
-    ])[2].signal;
+    const firstSignal = (
+      worker.massProperties.mock.calls[0] as unknown as [
+        ProjectDocument,
+        BodyId,
+        { signal: AbortSignal }
+      ]
+    )[2].signal;
     view.rerender(<Inspector {...props} massPropertiesDocument={second} />);
     expect(firstSignal.aborted).toBe(true);
-    await waitFor(() => expect(screen.getByText('No live solid is available.')).toBeInTheDocument());
+    await waitFor(() =>
+      expect(
+        screen.getByText('No live solid is available.')
+      ).toBeInTheDocument()
+    );
     await act(async () => {
-      resolveFirst({ status: 'ready', properties: body.massProperties!, epoch: 1 });
+      resolveFirst({
+        status: 'ready',
+        properties: body.massProperties!,
+        epoch: 1
+      });
     });
     expect(screen.queryByText('center of mass')).not.toBeInTheDocument();
 
     const changedBody = { ...lazyBody, name: 'Changed bracket' };
-    view.rerender(<Inspector {...props} selectedBody={changedBody} massPropertiesDocument={second} />);
-    const secondSignal = (worker.massProperties.mock.calls[1] as unknown as [
-      ProjectDocument,
-      BodyId,
-      { signal: AbortSignal }
-    ])[2].signal;
+    view.rerender(
+      <Inspector
+        {...props}
+        selectedBody={changedBody}
+        massPropertiesDocument={second}
+      />
+    );
+    const secondSignal = (
+      worker.massProperties.mock.calls[1] as unknown as [
+        ProjectDocument,
+        BodyId,
+        { signal: AbortSignal }
+      ]
+    )[2].signal;
     expect(secondSignal.aborted).toBe(true);
-    await waitFor(() => expect(screen.getByText('Mass measurement failed: Kernel request failed')).toBeInTheDocument());
+    await waitFor(() =>
+      expect(
+        screen.getByText('Mass measurement failed: Kernel request failed')
+      ).toBeInTheDocument()
+    );
   });
 });
 
@@ -696,9 +998,7 @@ describe('mass properties tensor, axes and density', () => {
     // Provenance states the method without claiming a verdict it has no
     // evidence for.
     expect(within(inspector).getByText(/no tessellation/)).toBeVisible();
-    expect(
-      within(inspector).queryByText(/Exact/)
-    ).not.toBeInTheDocument();
+    expect(within(inspector).queryByText(/Exact/)).not.toBeInTheDocument();
   });
 
   it('scales mass and inertia through a steel preset in grams and g·mm²', () => {
@@ -736,9 +1036,9 @@ describe('mass properties tensor, axes and density', () => {
     render(
       <Inspector {...committedProps({ massPropertiesDocument: document })} />
     );
-    expect(
-      screen.getByLabelText('Material density')
-    ).toHaveValue('preset:steel');
+    expect(screen.getByLabelText('Material density')).toHaveValue(
+      'preset:steel'
+    );
     // A project with no remembered choice still opens at unit density.
     const other = createProjectDocument('Light', toUserId('mass-ui'));
     const second = render(
@@ -771,19 +1071,34 @@ describe('mass properties tensor, axes and density', () => {
   });
 
   it('weighs an inch document in pounds and lb·in²', () => {
-    const document = createProjectDocument('Inch block', toUserId('mass-ui'), 'inch');
+    const document = createProjectDocument(
+      'Inch block',
+      toUserId('mass-ui'),
+      'inch'
+    );
     const inchBody = {
       ...body,
       volume: 6,
       massProperties: {
         centerOfMass: { x: 0.5, y: 1, z: 1.5 },
-        inertia: [6.5, 5, 2.5, 0, 0, 0] as [number, number, number, number, number, number],
+        inertia: [6.5, 5, 2.5, 0, 0, 0] as [
+          number,
+          number,
+          number,
+          number,
+          number,
+          number
+        ],
         principalMoments: [2.5, 5, 6.5] as [number, number, number],
         principalAxes: [
           { x: 0, y: 0, z: 1 },
           { x: 0, y: 1, z: 0 },
           { x: 1, y: 0, z: 0 }
-        ] as [{ x: number; y: number; z: number }, { x: number; y: number; z: number }, { x: number; y: number; z: number }]
+        ] as [
+          { x: number; y: number; z: number },
+          { x: number; y: number; z: number },
+          { x: number; y: number; z: number }
+        ]
       }
     };
     render(
@@ -803,9 +1118,7 @@ describe('mass properties tensor, axes and density', () => {
     });
     // 6 in³ of steel = 0.7718 kg = 1.702 lb.
     expect(screen.getByText('1.702 lb')).toBeVisible();
-    expect(
-      screen.getByText('0.709 · 1.418 · 1.843 lb·in²')
-    ).toBeVisible();
+    expect(screen.getByText('0.709 · 1.418 · 1.843 lb·in²')).toBeVisible();
     expect(screen.getByText('0 0 0.709 lb·in²')).toBeVisible();
     expect(screen.getByText('0.5, 1, 1.5 in')).toBeVisible();
   });

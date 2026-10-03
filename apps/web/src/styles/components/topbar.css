@@ -94,6 +94,9 @@
 
 .project-title-button {
   min-width: 0;
+  /* The minimum pointer target. Its breadcrumb clips overflow for the
+     name's ellipsis, so the height is real rather than a reaching ::after. */
+  min-height: 24px;
   display: inline-flex;
   align-items: center;
   gap: 5px;
@@ -335,9 +338,9 @@
   justify-content: center;
 }
 
-.save-state:hover:not(:disabled),
-.save-state:focus-visible,
-.collaboration-state:hover:not(:disabled),
+button.save-state:hover:not(:disabled),
+button.save-state:focus-visible,
+.collaboration-state:hover:not(:disabled, [aria-disabled='true']),
 .collaboration-state:focus-visible {
   color: var(--color-text);
   background: var(--color-surface-hover);
@@ -345,8 +348,8 @@
   outline: none;
 }
 
-.save-state:active:not(:disabled),
-.collaboration-state:active:not(:disabled) {
+button.save-state:active:not(:disabled),
+.collaboration-state:active:not(:disabled, [aria-disabled='true']) {
   transform: translateY(1px);
 }
 
@@ -397,9 +400,16 @@
   cursor: pointer;
 }
 
-.collaboration-state:disabled {
+.collaboration-state:disabled,
+.collaboration-state[aria-disabled='true'] {
   cursor: default;
   opacity: 0.55;
+}
+
+/* The save chip as a readout (F21): it shows state and takes no click, so it
+   draws no pointer and no hover surface. */
+.save-state.is-readout {
+  cursor: default;
 }
 
 .collaboration-state.live {
@@ -450,9 +460,9 @@
   color: var(--color-text);
 }
 
-.save-state:hover:not(:disabled),
-.save-state:focus-visible,
-.collaboration-state:hover:not(:disabled),
+button.save-state:hover:not(:disabled),
+button.save-state:focus-visible,
+.collaboration-state:hover:not(:disabled, [aria-disabled='true']),
 .collaboration-state:focus-visible,
 .file-menu > summary:hover,
 .file-menu[open] > summary,

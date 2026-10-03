@@ -13,7 +13,9 @@ import { featureHistory, featureResultBodyIds } from './featureHistory';
 /**
  * What the viewport shows for a feature picked in History.
  *
- * A feature whose own body is still on screen selects that body. A feature
+ * A feature whose own body is still on screen selects that body — except a
+ * fillet or chamfer, which lights the blend faces it made, so its edge set
+ * reads on the part instead of the whole body tinting. A feature
  * a later one consumed (a Boss unioned into the bracket) used to select
  * every body downstream of it, so the whole part lit up and the callout
  * named the part rather than the feature. Now the faces that came from the
@@ -40,7 +42,10 @@ export function historyFeatureFocus(
   const own = featureResultBodyIds(feature);
   const direct = own.filter(isVisible);
   if (direct.length > 0) {
-    return { kind: 'bodies', bodyIds: direct };
+    const blends = blendFacesOf(document, feature, direct);
+    return blends.length > 0
+      ? { kind: 'focus', faces: blends, ghostBodyIds: [] }
+      : { kind: 'bodies', bodyIds: direct };
   }
   const descendants = [
     ...new Set(
@@ -80,6 +85,53 @@ export function historyFeatureFocus(
     return { kind: 'focus', faces: [], ghostBodyIds };
   }
   return { kind: 'bodies', bodyIds: descendants };
+}
+
+/**
+ * The faces a fillet or chamfer made on its own result: where its edges were.
+ * Lighting them, rather than tinting the whole body, is what shows which
+ * edges the blend runs along — the edges themselves are gone from the solid
+ * the viewport draws. A face counts when its lineage names this feature's
+ * blend band, or — for a hash-only result — when it is a recognised blend;
+ * either way only if the input body did not already have it. Any other
+ * feature lights nothing here.
+ */
+function blendFacesOf(
+  document: ProjectDocument,
+  feature: FeatureNode,
+  bodyIds: readonly BodyId[]
+): TopologySelection[] {
+  const data = feature.data;
+  if (data.featureKind !== 'fillet' && data.featureKind !== 'chamfer') {
+    return [];
+  }
+  const representations = document.derived.bodyRepresentations;
+  const band = `modifier.${data.featureKind}.face.`;
+  const inputHashes = new Set(
+    (representations[data.targetBodyId]?.topology?.faces ?? []).map(
+      (face) => face.hash
+    )
+  );
+  return bodyIds.flatMap((bodyId) =>
+    (representations[bodyId]?.topology?.faces ?? [])
+      .filter(
+        (face) =>
+          // An earlier blend carried through unchanged keeps its hash.
+          !inputHashes.has(face.hash) &&
+          (face.reference
+            ? face.reference.producingFeatureId === feature.featureId &&
+              face.reference.lineageName.startsWith(band)
+            : data.featureKind === 'fillet' &&
+              face.geometry?.featureType === 'blend')
+      )
+      .map((face): TopologySelection => ({
+        bodyId,
+        kind: 'face',
+        topologyId: face.topologyId,
+        hash: face.hash,
+        ...(face.reference ? { reference: face.reference } : {})
+      }))
+  );
 }
 
 /** The consumed bodies a focus draws as ghosts, resolved for the viewer. */

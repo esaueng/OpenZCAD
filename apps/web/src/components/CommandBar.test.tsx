@@ -282,14 +282,21 @@ describe('CommandBar', () => {
     expect(keys).toEqual(['apply', 'preview', 'reject', 'history']);
 
     window.removeEventListener(ASSISTANT_PROMPT_KEY_EVENT, take);
-    // Nothing listening: `p` is a letter and Escape leaves the field.
+    // Nothing listening: `p` is a letter, and one Escape clears it and
+    // leaves the field, so the next key is the workspace's.
     await userEvent.keyboard('p');
     expect(search).toHaveValue('p');
     await userEvent.keyboard('{Escape}');
     expect(search).toHaveValue('');
-    expect(search).toHaveFocus();
-    await userEvent.keyboard('{Escape}');
     expect(search).not.toHaveFocus();
+    // A typed field never offers its Escape to the stream.
+    window.addEventListener(ASSISTANT_PROMPT_KEY_EVENT, take);
+    await userEvent.click(search);
+    await userEvent.keyboard('q{Escape}');
+    expect(search).toHaveValue('');
+    expect(search).not.toHaveFocus();
+    expect(keys).toEqual(['apply', 'preview', 'reject', 'history']);
+    window.removeEventListener(ASSISTANT_PROMPT_KEY_EVENT, take);
   });
 
   it('hands pasted files to the conversation and keeps pasted text', () => {
@@ -343,13 +350,13 @@ describe('CommandBar', () => {
 
     canvas.focus();
     await userEvent.type(search, '/fil');
-    // Escape clears first, then leaves.
+    // One Escape clears the field, closes the list and hands focus back: a
+    // second press used to be needed, and "?" typed into the field between.
     await userEvent.keyboard('{Escape}');
     expect(search).toHaveValue('');
-    expect(search).toHaveFocus();
-    await userEvent.keyboard('{Escape}');
     expect(canvas).toHaveFocus();
     expect(search).toHaveAttribute('aria-expanded', 'false');
+    expect(screen.queryByRole('listbox')).toBeNull();
   });
 
   it('takes focus when its host opens it, as ⌘K does', () => {

@@ -12,6 +12,7 @@ import {
   FolderOpen,
   LoaderCircle,
   Pencil,
+  Save,
   Settings as SettingsIcon,
   SlidersHorizontal,
   TriangleAlert,
@@ -67,7 +68,10 @@ interface TopBarProps {
   tweakModeDisabledReason: string | null;
   onWorkspaceMode(mode: WorkspaceMode): void;
   saveToAccount?: boolean;
+  /** Saves a revision: File › Save revision and the save chip's actions. */
   onSave(): void;
+  /** Opens the naming dialog: File › Save revision as…. */
+  onSaveAs(): void;
   onImportFiles(files: File[]): void;
   projectTransferBusy?: boolean;
   onImportProject?(file: File): void;
@@ -174,6 +178,7 @@ export function TopBar({
   onWorkspaceMode,
   saveToAccount = false,
   onSave,
+  onSaveAs,
   onImportFiles,
   projectTransferBusy,
   onImportProject,
@@ -268,6 +273,57 @@ export function TopBar({
       return;
     }
     setProjectNameDraft(projectName ?? '');
+  }
+
+  // The chip takes a click only where its label names an action: saving a
+  // local project to the account, restoring a broken account copy, or
+  // uploading a source that exists only here. Elsewhere it is a readout.
+  const saveChipActs =
+    saveToAccount || saveState === 'repair' || saveState === 'local-source';
+  const presentation = WORKSPACE_SAVE_STATE_PRESENTATION[saveState];
+  const saveLabel = saveToAccount
+    ? 'Save to my account'
+    : presentation.topBarLabel;
+  const saveChipContent = (
+    <>
+      {/* Keyed by the glyph, not the state: saving → syncing keeps the
+          same ring turning, and only a change of kind pops. */}
+      <span key={saveGlyph} className="save-state-icon" aria-hidden="true">
+        {saveGlyph === 'busy' ? (
+          <LoaderCircle className="spin" size={14} />
+        ) : saveGlyph === 'warning' ? (
+          <TriangleAlert size={14} />
+        ) : saveGlyph === 'saved' ? (
+          <Check size={14} />
+        ) : (
+          <CloudOff size={14} />
+        )}
+      </span>
+      <StableLabel
+        reserve={
+          saveToAccount
+            ? ['Save to my account']
+            : accountState === 'signed-in'
+              ? CLOUD_SAVE_LABEL_RESERVE
+              : DEVICE_SAVE_LABEL_RESERVE
+        }
+        align="center"
+      >
+        {saveLabel}
+      </StableLabel>
+    </>
+  );
+
+  /** Save items close the menu: Save as… opens a dialog over it. */
+  function saveFromMenu(name: boolean) {
+    if (fileMenuRef.current) {
+      fileMenuRef.current.open = false;
+    }
+    if (name) {
+      onSaveAs();
+    } else {
+      onSave();
+    }
   }
 
   const exportTitle = (format: string) =>
@@ -412,58 +468,53 @@ export function TopBar({
               </StableLabel>
             </span>
           )}
-          <button
-            className={`save-state topbar-action is-${saveState}`}
-            type="button"
-            disabled={!projectName}
-            onClick={onSave}
-            aria-label={
-              saveToAccount
-                ? 'Save to my account'
-                : WORKSPACE_SAVE_STATE_PRESENTATION[saveState].topBarLabel
-            }
-            title={`${saveToAccount ? 'Save this local project and its source files to your account.' : WORKSPACE_SAVE_STATE_PRESENTATION[saveState].title} Click to save a revision (${platformShortcutLabel('Ctrl+S')}), or ${platformShortcutLabel('Ctrl+Shift+S')} to name it.`}
-          >
-            {/* Keyed by the glyph, not the state: saving → syncing keeps the
-                same ring turning, and only a change of kind pops. */}
-            <span
-              key={saveGlyph}
-              className="save-state-icon"
-              aria-hidden="true"
-            >
-              {saveGlyph === 'busy' ? (
-                <LoaderCircle className="spin" size={14} />
-              ) : saveGlyph === 'warning' ? (
-                <TriangleAlert size={14} />
-              ) : saveGlyph === 'saved' ? (
-                <Check size={14} />
-              ) : (
-                <CloudOff size={14} />
-              )}
-            </span>
-            <StableLabel
-              reserve={
+          {saveChipActs ? (
+            <button
+              className={`save-state topbar-action is-${saveState}`}
+              type="button"
+              disabled={!projectName}
+              onClick={onSave}
+              aria-label={saveLabel}
+              title={
                 saveToAccount
-                  ? ['Save to my account']
-                  : accountState === 'signed-in'
-                    ? CLOUD_SAVE_LABEL_RESERVE
-                    : DEVICE_SAVE_LABEL_RESERVE
+                  ? 'Save this local project and its source files to your account.'
+                  : presentation.title
               }
-              align="center"
             >
-              {saveToAccount
-                ? 'Save to my account'
-                : WORKSPACE_SAVE_STATE_PRESENTATION[saveState].topBarLabel}
-            </StableLabel>
-          </button>
+              {saveChipContent}
+            </button>
+          ) : (
+            // A readout, not a control: clicking "Local only" or "Saved" used
+            // to save a revision unasked. Saving is on File and the shortcut.
+            <span
+              className={`save-state topbar-action is-readout is-${saveState}`}
+              role="status"
+              aria-label={saveLabel}
+              title={`${presentation.title} Save a revision from File or with ${platformShortcutLabel('Ctrl+S')}.`}
+            >
+              {saveChipContent}
+            </span>
+          )}
           {projectSharingEnabled ? (
+            // Signed out there is nothing to share into, so the chip says so.
+            // aria-disabled rather than disabled keeps it focusable, and so
+            // keeps the tooltip that explains why it is unavailable.
             <button
               type="button"
               className={`collaboration-state ${collaborationStatus}`}
-              title={`Project sharing · ${collaborationLabel}`}
-              aria-label={`Open project sharing · ${collaborationLabel}`}
-              disabled={!projectName || !session}
-              onClick={onOpenSharing}
+              title={
+                session
+                  ? `Project sharing · ${collaborationLabel}`
+                  : 'Sign in to share'
+              }
+              aria-label={
+                session
+                  ? `Open project sharing · ${collaborationLabel}`
+                  : 'Project sharing · Sign in to share'
+              }
+              aria-disabled={session ? undefined : true}
+              disabled={!projectName}
+              onClick={session ? onOpenSharing : undefined}
             >
               <Users size={13} aria-hidden="true" />
               {collaborationStatus === 'live' ? (
@@ -505,6 +556,30 @@ export function TopBar({
               ) : null}
             </summary>
             <div className="topbar-menu-panel">
+              <strong className="topbar-menu-label">Save</strong>
+              <button
+                type="button"
+                className="topbar-menu-item"
+                disabled={!projectName}
+                title="Save a revision of this project"
+                onClick={() => saveFromMenu(false)}
+              >
+                <Save size={13} aria-hidden="true" />
+                <span>Save revision</span>
+                <small>{platformShortcutLabel('Ctrl+S')}</small>
+              </button>
+              <button
+                type="button"
+                className="topbar-menu-item"
+                disabled={!projectName}
+                title="Save a revision under a name of your choosing"
+                onClick={() => saveFromMenu(true)}
+              >
+                <Save size={13} aria-hidden="true" />
+                <span>Save revision as…</span>
+                <small>{platformShortcutLabel('Ctrl+Shift+S')}</small>
+              </button>
+              <div className="topbar-menu-sep" />
               <strong className="topbar-menu-label">Import</strong>
               <label
                 className="topbar-menu-item"

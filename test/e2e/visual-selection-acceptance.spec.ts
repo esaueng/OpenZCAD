@@ -626,7 +626,7 @@ test('accepts exact visual selection and direct editing on the seeded boss', asy
   await expect(
     page
       .getByRole('region', { name: 'Resize Hole operation' })
-      .locator('.tool-card-phase-dot')
+      .locator('.selection-callout-phase-dot')
   ).toHaveAttribute('aria-label', 'Dragging');
   // Keep the probe the poll accepted. Re-reading it is a second round trip
   // into a viewport that may already have moved on, and every round trip is

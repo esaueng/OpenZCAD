@@ -340,7 +340,7 @@ for (const action of ['edit', 'leave', 'switch'] as const) {
     await page.getByLabel('Project name').fill('Pending save');
     await page.getByRole('button', { name: 'Create project' }).click();
     await expect(
-      page.getByRole('button', { name: 'Saved', exact: true })
+      page.getByRole('status', { name: 'Saved', exact: true })
     ).toBeVisible();
 
     let release!: () => void;
@@ -562,7 +562,7 @@ test('restores an unreadable account document from the confirmed device copy', a
   await page.goto('/');
   await page.getByLabel('Project name').fill('Repair Fixture');
   await page.getByRole('button', { name: 'Create project' }).click();
-  await expect(page.getByRole('button', { name: 'Saved' })).toBeVisible({
+  await expect(page.getByRole('status', { name: 'Saved' })).toBeVisible({
     timeout: SYNC_BUDGET_MS
   });
 
@@ -615,7 +615,7 @@ test('restores an unreadable account document from the confirmed device copy', a
     .poll(() => api.project?.name, { timeout: SYNC_BUDGET_MS })
     .toBe('Repair Fixture edited locally');
   expect(api.documentUnavailable).toBe(false);
-  await expect(page.getByRole('button', { name: 'Saved' })).toBeVisible({
+  await expect(page.getByRole('status', { name: 'Saved' })).toBeVisible({
     timeout: SYNC_BUDGET_MS
   });
 });
@@ -637,7 +637,7 @@ test('does not restore an unreadable account document from an older device copy'
   await page.goto('/');
   await page.getByLabel('Project name').fill('Older Repair Fixture');
   await page.getByRole('button', { name: 'Create project' }).click();
-  await expect(page.getByRole('button', { name: 'Saved' })).toBeVisible({
+  await expect(page.getByRole('status', { name: 'Saved' })).toBeVisible({
     timeout: SYNC_BUDGET_MS
   });
 
@@ -686,7 +686,7 @@ test('syncs View measurements to a second device without changing the CAD docume
       .getByRole('region', { name: 'Feature inspector' })
       .getByRole('button', { name: /^Create/ })
       .click();
-    await expect(pageA.getByRole('button', { name: 'Saved' })).toBeVisible({
+    await expect(pageA.getByRole('status', { name: 'Saved' })).toBeVisible({
       timeout: SYNC_BUDGET_MS
     });
     const canonicalBeforeMeasurement = structuredClone(api.project);
@@ -751,7 +751,7 @@ test('syncs across two devices and preserves the losing side of a conflict', asy
     await pageA.goto('/');
     await pageA.getByLabel('Project name').fill('Shared Bracket');
     await pageA.getByRole('button', { name: 'Create project' }).click();
-    await expect(pageA.getByRole('button', { name: 'Saved' })).toBeVisible({
+    await expect(pageA.getByRole('status', { name: 'Saved' })).toBeVisible({
       timeout: SYNC_BUDGET_MS
     });
     await expect(
@@ -766,7 +766,7 @@ test('syncs across two devices and preserves the losing side of a conflict', asy
     // "Saving" before it settles — the same allowance the first open above
     // already takes. It does not excuse a save that never lands: a document
     // that never reaches the account stays on "Saving" and still fails here.
-    await expect(pageA.getByRole('button', { name: 'Saved' })).toBeVisible({
+    await expect(pageA.getByRole('status', { name: 'Saved' })).toBeVisible({
       timeout: SYNC_BUDGET_MS
     });
 
@@ -777,7 +777,7 @@ test('syncs across two devices and preserves the losing side of a conflict', asy
     await expect(
       pageB.getByRole('button', { name: 'Rename project' })
     ).toContainText('Shared Bracket');
-    await expect(pageB.getByRole('button', { name: 'Saved' })).toBeVisible({
+    await expect(pageB.getByRole('status', { name: 'Saved' })).toBeVisible({
       timeout: SYNC_BUDGET_MS
     });
 
@@ -824,7 +824,7 @@ test('syncs across two devices and preserves the losing side of a conflict', asy
     await expect(
       pageB.getByRole('button', { name: 'Rename project' })
     ).toContainText('Device A account edit');
-    await expect(pageB.getByRole('button', { name: 'Saved' })).toBeVisible();
+    await expect(pageB.getByRole('status', { name: 'Saved' })).toBeVisible();
 
     await pageB.getByTitle('Back to projects').click();
     await expect(

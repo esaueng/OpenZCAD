@@ -1,5 +1,9 @@
 import { describe, expect, it } from 'vitest';
-import { CommandManager, commandFactories } from '@openzcad/command-system';
+import {
+  CommandManager,
+  commandFactories,
+  replayCommands
+} from '@openzcad/command-system';
 import {
   createProjectDocument,
   listFeaturesInOrder
@@ -39,6 +43,55 @@ describe('primitive placement', () => {
     expect(PRIMITIVE_ANCHORS.box.label).toBe('Corner');
     expect(PRIMITIVE_ANCHORS.cylinder.label).toBe('Base center');
   });
+
+  it.each([0, 10])(
+    'stores the body number before creating a primitive at X=%s',
+    (x) => {
+      const initial = createProjectDocument(
+        'Numbered placement',
+        toUserId('user_numbered_placement')
+      );
+      const manager = new CommandManager(initial);
+      manager.execute(
+        createPrimitiveCommand(
+          'box',
+          'Box',
+          box,
+          { x: 0, y: 0, z: 0 },
+          manager.document
+        )
+      );
+      const command = createPrimitiveCommand(
+        'box',
+        'Box',
+        box,
+        { x, y: 0, z: 0 },
+        manager.document
+      );
+      const add = command.commands?.[0] ?? command;
+      expect(add).toMatchObject({
+        kind: 'primitive.add',
+        payload: { bodyName: 'Box 2' }
+      });
+      manager.execute(command);
+      const names = () =>
+        Object.values(manager.document.nodes)
+          .filter((node) => node.kind === 'body')
+          .map((node) => node.name);
+      expect(names()).toEqual(['Box 1', 'Box 2']);
+      manager.undo();
+      expect(names()).toEqual(['Box 1']);
+      manager.redo();
+      expect(names()).toEqual(['Box 1', 'Box 2']);
+      const replayed = replayCommands(initial, manager.document.commandLog);
+      expect(
+        Object.values(replayed.nodes)
+          .filter((node) => node.kind === 'body')
+          .map((node) => node.name)
+      ).toEqual(['Box 1', 'Box 2']);
+      expect(features(manager)).toHaveLength(x === 0 ? 2 : 3);
+    }
+  );
 
   it('creates a placed primitive as the primitive plus its placement Move', () => {
     const manager = boxManager({ x: 10, y: 0, z: '2 * 3' });

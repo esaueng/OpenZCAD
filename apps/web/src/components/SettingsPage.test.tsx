@@ -90,6 +90,21 @@ describe('settings offline mode', () => {
   });
 });
 
+describe('settings viewport copy', () => {
+  it('describes navigation as desktop CAD does, without naming products', async () => {
+    const user = userEvent.setup();
+    renderSettings();
+
+    await user.click(screen.getByRole('button', { name: 'Viewport' }));
+    expect(
+      screen.getByText(
+        /toward whatever is under the cursor, as desktop CAD does/
+      )
+    ).toBeInTheDocument();
+    expect(screen.getByText(/Pan matches desktop CAD;/)).toBeInTheDocument();
+  });
+});
+
 describe('settings assistant section', () => {
   it('keeps the master toggle on the AI Assistant page while disabled', async () => {
     const user = userEvent.setup();

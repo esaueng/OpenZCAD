@@ -667,7 +667,7 @@ test('keeps anonymous CAD creation local without calling cloud projects', async 
   // above waits for that write; it does not excuse one that never happens,
   // because a project that never reaches storage stays on "Saving" forever and
   // still fails here.
-  await expect(page.getByRole('button', { name: 'Local only' })).toBeVisible({
+  await expect(page.getByRole('status', { name: 'Local only' })).toBeVisible({
     timeout: 15_000
   });
   await expect(

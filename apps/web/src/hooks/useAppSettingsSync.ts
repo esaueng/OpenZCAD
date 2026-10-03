@@ -1,9 +1,14 @@
-import { useCallback, useEffect, useRef, useState } from 'react';
+import {
+  useCallback,
+  useEffect,
+  useLayoutEffect,
+  useRef,
+  useState
+} from 'react';
 import type { AppSettings, AppSettingsResponse } from '@openzcad/shared';
 import {
   defaultAppSettings,
   loadLocalAppSettingsRecord,
-  resolvedAppTheme,
   saveLocalAppSettings
 } from '../lib/appSettings';
 import {
@@ -83,29 +88,19 @@ export function useAppSettingsSync({
       : 'false';
   }, [appSettings]);
 
-  useEffect(() => {
-    // Resolves the theme setting to the palette actually painted. 'system'
-    // tracks the host's preference live, so an OS appearance change mid-
-    // session re-themes the chrome without a reload; an explicit choice
-    // needs no listener. The 3D viewport keeps its dark stage either way —
-    // only the chrome tokens switch (see theme/tokens.css).
-    const root = globalThis.document.documentElement;
-    const theme = appSettings.appearance.theme;
-    if (theme !== 'system') {
-      root.dataset.theme = theme;
-      return;
-    }
-    const media = globalThis.matchMedia?.('(prefers-color-scheme: light)');
-    if (!media) {
-      root.dataset.theme = 'dark';
-      return;
-    }
-    const apply = () => {
-      root.dataset.theme = resolvedAppTheme('system', media.matches);
-    };
-    apply();
-    media.addEventListener('change', apply);
-    return () => media.removeEventListener('change', apply);
+  useLayoutEffect(() => {
+    // The root carries the setting itself, and the stylesheet resolves it:
+    // 'system' paints the light palette under `prefers-color-scheme: light`
+    // (theme/tokens.css). A script-side resolver with a change listener used
+    // to stand here, so the palette waited for the listener: a page that was
+    // hidden when the OS appearance changed painted its old palette until the
+    // event caught up. The browser re-evaluates the media query as it paints,
+    // so every screen follows the OS on the frame it changes. Set before
+    // paint, so an explicit choice never flashes the default first. The 3D
+    // viewport keeps its dark stage either way — only the chrome tokens
+    // switch.
+    globalThis.document.documentElement.dataset.theme =
+      appSettings.appearance.theme;
   }, [appSettings.appearance.theme]);
 
   useEffect(() => {

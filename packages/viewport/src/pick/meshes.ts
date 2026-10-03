@@ -17,12 +17,14 @@ export interface DirectEditDirection {
  * Authoritative body meshes only; display-only section caps and kernel
  * section geometry have no topology. Overlay meshes (hover fills, region
  * shading, gizmo handles) use basic materials and must never pick up
- * emissive highlighting.
+ * emissive highlighting. A selected face's own-colour fill is the one
+ * overlay drawn in the body's own material, so it is excluded by its tag.
  */
 export function isViewerMesh(object: THREE.Object3D): object is ViewerMesh {
   return (
     object.userData.sectionCap !== true &&
     object.userData.exactSection !== true &&
+    object.userData.selectionOverlay !== true &&
     object instanceof THREE.Mesh &&
     (object.material instanceof THREE.MeshStandardMaterial ||
       object.material instanceof THREE.MeshPhongMaterial)

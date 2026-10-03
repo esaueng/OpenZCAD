@@ -969,7 +969,7 @@ export function SettingsPage({
               </SettingRow>
               <SettingRow
                 title="Zoom toward the pointer"
-                description="Wheel zoom moves toward whatever is under the cursor, the way Fusion and SolidWorks do. Turn this off to zoom toward the middle of the view instead."
+                description="Wheel zoom moves toward whatever is under the cursor, as desktop CAD does. Turn this off to zoom toward the middle of the view instead."
                 scope="Navigation"
               >
                 <Toggle
@@ -984,7 +984,7 @@ export function SettingsPage({
               </SettingRow>
               <SettingRow
                 title="Middle-button drag"
-                description="What dragging with the middle mouse button does. Pan matches Fusion, SolidWorks, and Onshape; zoom is the three.js default."
+                description="What dragging with the middle mouse button does. Pan matches desktop CAD; zoom is the three.js default."
                 scope="Navigation"
               >
                 <select

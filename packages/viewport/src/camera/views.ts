@@ -261,6 +261,43 @@ export function projectToScreen(
 }
 
 /**
+ * Whether all of a world box is on screen: every corner projects inside the
+ * view, inset by `margin` in normalized device units on each side (0.05 keeps
+ * a 2.5% band clear at every edge), and between the near and far planes. A
+ * corner behind the camera is off screen. Works for either projection; an
+ * empty box is trivially in view.
+ */
+export function boxFullyInView(
+  box: THREE.Box3,
+  camera: THREE.Camera,
+  margin = 0
+): boolean {
+  if (box.isEmpty()) {
+    return true;
+  }
+  camera.updateMatrixWorld();
+  const limit = 1 - margin;
+  const corner = new THREE.Vector3();
+  for (let index = 0; index < 8; index += 1) {
+    corner
+      .set(
+        index & 1 ? box.max.x : box.min.x,
+        index & 2 ? box.max.y : box.min.y,
+        index & 4 ? box.max.z : box.min.z
+      )
+      .project(camera);
+    if (
+      !(Math.abs(corner.x) <= limit) ||
+      !(Math.abs(corner.y) <= limit) ||
+      !(corner.z >= -1 && corner.z <= 1)
+    ) {
+      return false;
+    }
+  }
+  return true;
+}
+
+/**
  * The orbit pivot that puts a picked point at the centre of rotation without
  * reframing the view.
  *

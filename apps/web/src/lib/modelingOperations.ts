@@ -26,6 +26,7 @@ import {
   type SketchSectionReference
 } from '@openzcad/shared';
 import { evalParamValue, previewExpression } from './model';
+import type { FaceNamer } from './faceProducerName';
 import { faceLabel } from './topologyLabels';
 
 export type ModelingOperationKind =
@@ -575,7 +576,11 @@ export function modelingFeatureUpdate(
 export interface ModelingFaceOption {
   hash: number;
   topologyId: string;
-  /** What the viewport calls the face: "Top face", "Through hole ⌀6". */
+  /**
+   * The feature that made the face and its role, "Box 2 · top", when the
+   * face's lineage says; otherwise what the viewport calls it: "Top face",
+   * "Through hole ⌀6".
+   */
   label: string;
   /** The carrier, lineage and fingerprint, for a tooltip. */
   detail?: string;
@@ -651,12 +656,9 @@ const FACE_NAME_ORDER = [
   'Right face'
 ];
 
-function compareFaceNames(a: string, b: string): number {
-  const rank = (name: string) => {
-    const index = FACE_NAME_ORDER.indexOf(name);
-    return index < 0 ? FACE_NAME_ORDER.length : index;
-  };
-  return rank(a) - rank(b) || a.localeCompare(b);
+function faceNameRank(name: string): number {
+  const index = FACE_NAME_ORDER.indexOf(name);
+  return index < 0 ? FACE_NAME_ORDER.length : index;
 }
 
 /** Highest first, then front-most (lowest Y), then left-most (lowest X). */
@@ -677,22 +679,44 @@ function compareFacePlaces(
 
 export function modelingFaceOptions(
   topology: BodyTopology | undefined,
-  body?: BodyRepresentation
+  body?: BodyRepresentation,
+  nameFaces?: FaceNamer
 ): ModelingFaceOption[] {
   const topologyFaces = topology?.faces ?? [];
+  // With a namer, a face named by lineage reads "Box 2 · top": on a union
+  // of two boxes, "Top face (1)" and "(2)" said nothing about which box each
+  // was. Faces the lineage cannot place keep the viewport's name. The namer
+  // is passed in rather than imported so it stays out of the entry chunk.
+  const produced =
+    body && nameFaces
+      ? nameFaces(body, topologyFaces)
+      : topologyFaces.map(() => null);
   const names = body
-    ? topologyFaces.map((face) => faceLabel(body, face.hash, face.topologyId))
+    ? topologyFaces.map(
+        (face, index) =>
+          produced[index]?.name ?? faceLabel(body, face.hash, face.topologyId)
+      )
     : null;
   // The kernel's face order is not stable across rebuilds, and the list (and
   // the "(1)", "(2)" that tell same-named faces apart) used to follow it:
   // "Top face" moved from second to sixth between two holes, and "Top face
   // (1)" became "(2)". With names to go by, the list is in a fixed order —
-  // the box directions first, then the rest by name — and same-named faces
-  // are numbered by where they sit (highest, then front-most, then left-most).
+  // faces grouped by the feature that made them, in history order, then the
+  // box directions first, then the rest by name — and same-named faces are
+  // numbered by where they sit (highest, then front-most, then left-most).
   const order = topologyFaces.map((face, index) => ({ face, index }));
   if (names) {
+    const group = (index: number) =>
+      produced[index]?.featureIndex ?? Number.POSITIVE_INFINITY;
+    const rank = (index: number) =>
+      produced[index]?.roleRank ?? faceNameRank(names[index]!);
     order.sort((a, b) => {
-      const byName = compareFaceNames(names[a.index]!, names[b.index]!);
+      const groupA = group(a.index);
+      const groupB = group(b.index);
+      if (groupA !== groupB) return groupA < groupB ? -1 : 1;
+      const byName =
+        rank(a.index) - rank(b.index) ||
+        names[a.index]!.localeCompare(names[b.index]!);
       return byName !== 0 ? byName : compareFacePlaces(a.face, b.face);
     });
   }

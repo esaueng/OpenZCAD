@@ -16,18 +16,6 @@ const THEMES: AppSettings['appearance']['theme'][] = [
   'light'
 ];
 
-/**
- * The palette a theme setting actually paints. 'system' follows the host's
- * `prefers-color-scheme`; an explicit choice ignores it. Kept pure — the App
- * effect owns the media query and its change listener — so the resolution
- * itself is testable without a DOM.
- */
-export function resolvedAppTheme(
-  theme: AppSettings['appearance']['theme'],
-  prefersLight: boolean
-): 'dark' | 'light' {
-  return theme === 'system' ? (prefersLight ? 'light' : 'dark') : theme;
-}
 const DENSITIES: AppSettings['appearance']['density'][] = [
   'compact',
   'comfortable'

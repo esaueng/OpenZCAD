@@ -188,9 +188,11 @@ export function WorkspaceReadout({
           <span role="status" aria-live="polite" aria-atomic="true">
             {shownStatus}
           </span>
+          {/* Says what it counts: a bare "+11" after every status read as
+              jargon. The title above carries the same for the tooltip. */}
           {shown && paced.skipped > 0 ? (
             <span className="workspace-toast-more" aria-hidden="true">
-              +{paced.skipped}
+              {paced.skipped} more in log
             </span>
           ) : null}
         </button>
