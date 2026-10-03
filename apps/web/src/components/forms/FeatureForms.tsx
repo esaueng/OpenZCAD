@@ -37,6 +37,31 @@ export interface BodyOption {
   consumed: boolean;
 }
 
+/**
+ * Names a body pick list can tell apart. New bodies are numbered at creation
+ * ("Box 1", "Box 2"), but a document made before that can hold two bodies
+ * both called "Box Body" — the Union card showed two identical rows. Shared
+ * names get "(1)", "(2)" in list order, which does not move as rows are
+ * picked; the stored names are left alone.
+ */
+export function distinctBodyNames(
+  bodies: readonly Pick<BodyOption, 'bodyId' | 'name'>[]
+): Map<BodyId, string> {
+  const counts = new Map<string, number>();
+  for (const body of bodies) {
+    counts.set(body.name, (counts.get(body.name) ?? 0) + 1);
+  }
+  const seen = new Map<string, number>();
+  return new Map(
+    bodies.map((body) => {
+      if ((counts.get(body.name) ?? 0) < 2) return [body.bodyId, body.name];
+      const ordinal = (seen.get(body.name) ?? 0) + 1;
+      seen.set(body.name, ordinal);
+      return [body.bodyId, `${body.name} (${ordinal})`];
+    })
+  );
+}
+
 export interface SketchOption {
   sketchId: SketchId;
   name: string;
@@ -921,6 +946,7 @@ export function BooleanForm({
       bodies.filter((body) => !body.consumed || selected.includes(body.bodyId)),
     [bodies, selected]
   );
+  const bodyNames = useMemo(() => distinctBodyNames(selectable), [selectable]);
 
   function toggle(bodyId: BodyId) {
     const next = selected.includes(bodyId)
@@ -1002,7 +1028,9 @@ export function BooleanForm({
                 <span className="pick-order mono">
                   {index >= 0 ? index + 1 : ''}
                 </span>
-                <span className="body-name">{body.name}</span>
+                <span className="body-name">
+                  {bodyNames.get(body.bodyId) ?? body.name}
+                </span>
                 {index === 0 && operation === 'subtract' && <small>base</small>}
               </button>
             );

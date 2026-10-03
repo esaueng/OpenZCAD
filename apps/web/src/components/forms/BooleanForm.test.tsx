@@ -2,7 +2,11 @@ import { renderToStaticMarkup } from 'react-dom/server';
 import { fireEvent, render, screen } from '@testing-library/react';
 import { describe, expect, it, vi } from 'vitest';
 import { toBodyId } from '@openzcad/shared';
-import { BooleanForm, type BodyOption } from './FeatureForms';
+import {
+  BooleanForm,
+  distinctBodyNames,
+  type BodyOption
+} from './FeatureForms';
 
 const bodies: BodyOption[] = [
   { bodyId: toBodyId('body_left'), name: 'Left', consumed: false },
@@ -128,5 +132,46 @@ describe('Boolean form Enter key', () => {
       })
     );
     expect(right.getAttribute('aria-pressed')).toBe('true');
+  });
+});
+
+describe('Boolean form body names', () => {
+  it('tells two bodies of one stored name apart, by name and by role', () => {
+    // A document made before bodies were numbered: two "Box Body" rows.
+    const twins: BodyOption[] = [
+      { bodyId: toBodyId('body_a'), name: 'Box Body', consumed: false },
+      { bodyId: toBodyId('body_b'), name: 'Box Body', consumed: false },
+      { bodyId: toBodyId('body_c'), name: 'Cylinder Body', consumed: false }
+    ];
+    const { container } = render(
+      <BooleanForm
+        bodies={twins}
+        presetOperation="union"
+        selection={[twins[1]!.bodyId]}
+        submitLabel="Create"
+        onSubmit={() => undefined}
+      />
+    );
+    expect(
+      [...container.querySelectorAll('.pick-row .body-name')].map(
+        (name) => name.textContent
+      )
+    ).toEqual(['Box Body (1)', 'Box Body (2)', 'Cylinder Body']);
+    // The accessible name keeps the pick-order prefix: "1 Box Body (2)".
+    expect(
+      screen.getByRole('button', { name: '1 Box Body (2)' }).className
+    ).toContain('selected');
+    expect(
+      screen.getByRole('button', { name: 'Box Body (1)' }).className
+    ).not.toContain('selected');
+  });
+
+  it('leaves distinct names exactly as stored', () => {
+    expect([
+      ...distinctBodyNames([
+        { bodyId: toBodyId('body_a'), name: 'Box 1' },
+        { bodyId: toBodyId('body_b'), name: 'Box 2' }
+      ]).values()
+    ]).toEqual(['Box 1', 'Box 2']);
   });
 });

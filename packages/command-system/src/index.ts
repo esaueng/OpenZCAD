@@ -118,6 +118,7 @@ import {
   moveFeature,
   type NodeMetadataInput,
   type NodeRenameInput,
+  numberedBodyName,
   offsetSolidBody,
   type ParameterDeleteInput,
   type ParameterDescribeInput,
@@ -2405,6 +2406,7 @@ export function commandsForCadPatch(
         scope.declare(operation.localId, ids.bodyId);
         return commandFactories.addPrimitive({
           name: operation.name,
+          bodyName: numberedBodyName(projectedDocument, operation.name),
           primitiveKind: operation.primitiveKind,
           dimensions,
           ids
@@ -2507,6 +2509,7 @@ export function commandsForCadPatch(
         scope.declare(operation.localId, ids.bodyId);
         return commandFactories.extrudeSketch({
           name: operation.name,
+          bodyName: numberedBodyName(projectedDocument, operation.name),
           sketchId: sketch.sketchId,
           distance: operation.distance,
           profile,
@@ -2518,6 +2521,7 @@ export function commandsForCadPatch(
         scope.declare(operation.localId, ids.bodyId);
         return commandFactories.revolveSketch({
           name: operation.name,
+          bodyName: numberedBodyName(projectedDocument, operation.name),
           sketchId: resolveSketch(operation.sketchId).sketchId,
           axis: operation.axis,
           // Null is the schema's way of saying "omitted"; a full turn.
@@ -2672,6 +2676,7 @@ export function commandsForCadPatch(
         scope.declare(operation.localId, ids.bodyId);
         return commandFactories.extrudeSketch({
           name: operation.name,
+          bodyName: numberedBodyName(projectedDocument, operation.name),
           sketchId: sketch.sketchId,
           distance: operation.distance,
           profiles: dedupeProfileReferences(

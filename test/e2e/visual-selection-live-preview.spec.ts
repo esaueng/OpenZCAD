@@ -56,7 +56,7 @@ async function armChamferedTopCapOffset(page: Page) {
   await inspector.getByRole('button', { name: /^Create/ }).click();
   await expectConsumedBodyCount(page, 1);
   await expect(
-    page.locator('.body-row', { hasText: 'Cylinder Body' })
+    page.locator('.body-row', { hasText: 'Cylinder 1' })
   ).toBeVisible();
 
   const canvas = page.locator('.viewer-host canvas');
