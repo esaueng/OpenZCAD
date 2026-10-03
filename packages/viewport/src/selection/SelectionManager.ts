@@ -114,8 +114,13 @@ class HoverFaceMeshSlot {
     );
   }
 
-  /** Set when the targets change; the next step is this fade's first. */
-  private firstStep = false;
+  /**
+   * The targets each film was last stepped toward. A target that differs is
+   * new — installed, retired, or an x-ray change — so that step is the fade's
+   * first and takes the wake step (see fadeStepMs).
+   */
+  private steppedFaceTarget = Number.NaN;
+  private steppedHiddenFaceTarget = Number.NaN;
 
   install(
     parent: THREE.Object3D,
@@ -134,7 +139,8 @@ class HoverFaceMeshSlot {
     this.hiddenFaceMesh.visible = xrayEnabled;
     this.faceTarget = HOVER_FACE_OPACITY;
     this.hiddenFaceTarget = xrayEnabled ? HOVER_FACE_HIDDEN_OPACITY : 0;
-    this.firstStep = true;
+    this.steppedFaceTarget = Number.NaN;
+    this.steppedHiddenFaceTarget = Number.NaN;
     this.faceMesh.userData.hoverFaceKey = key;
     this.hiddenFaceMesh.userData.hoverFaceKey = key;
     parent.add(this.faceMesh);
@@ -144,7 +150,6 @@ class HoverFaceMeshSlot {
   retire() {
     this.faceTarget = 0;
     this.hiddenFaceTarget = 0;
-    this.firstStep = true;
   }
 
   setXrayEnabled(enabled: boolean, active: boolean) {
@@ -159,17 +164,20 @@ class HoverFaceMeshSlot {
     if (this.key === null) {
       return;
     }
-    const dtMs = fadeStepMs(frameMs, this.firstStep);
-    this.firstStep = false;
+    const faceFirstStep = this.faceTarget !== this.steppedFaceTarget;
+    const hiddenFirstStep =
+      this.hiddenFaceTarget !== this.steppedHiddenFaceTarget;
+    this.steppedFaceTarget = this.faceTarget;
+    this.steppedHiddenFaceTarget = this.hiddenFaceTarget;
     this.faceMesh.material.opacity = easeToward(
       this.faceMesh.material.opacity,
       this.faceTarget,
-      dtMs
+      fadeStepMs(frameMs, faceFirstStep)
     );
     this.hiddenFaceMesh.material.opacity = easeToward(
       this.hiddenFaceMesh.material.opacity,
       this.hiddenFaceTarget,
-      dtMs
+      fadeStepMs(frameMs, hiddenFirstStep)
     );
     if (
       this.hiddenFaceTarget === 0 &&
