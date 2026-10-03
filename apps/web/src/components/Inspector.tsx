@@ -1291,14 +1291,28 @@ export function Inspector(props: InspectorProps) {
   );
   /**
    * Stored edges taken off the fillet or chamfer being edited, until Apply.
-   * Keyed by the edit, so another feature or a new document version starts
-   * from the stored set again.
+   * Keyed by the feature/version and reset when the edit session ends. The
+   * panel outlives its subject, so returning to the same feature/version must
+   * not reuse a removal from an abandoned edit.
    */
   const [removedEdges, setRemovedEdges] = useState<{
     edit: string;
     hashes: readonly number[];
     picked: readonly number[];
   }>({ edit: '', hashes: [], picked: [] });
+  const editSession =
+    tool === null && selectedFeature
+      ? `${selectedFeature.featureId}:${featureSelectionSource ?? ''}`
+      : null;
+  const [edgeEditSession, setEdgeEditSession] = useState(editSession);
+  if (edgeEditSession !== editSession) {
+    // Reset before rendering the reopened form, so its first preview and
+    // eventual Apply both start with the stored edges and references.
+    setEdgeEditSession(editSession);
+    if (removedEdges.hashes.length > 0) {
+      setRemovedEdges({ edit: '', hashes: [], picked: [] });
+    }
+  }
   const edgeEditKey = selectedFeature
     ? `edit-${selectedFeature.id}-${props.documentVersion ?? 0}`
     : null;

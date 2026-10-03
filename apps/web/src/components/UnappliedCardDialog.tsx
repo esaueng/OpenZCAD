@@ -5,8 +5,8 @@ import { useModalFocus } from '../lib/useModalFocus';
 export interface UnappliedCardDialogProps {
   /** The open command card holding the unapplied change, e.g. "Move". */
   card: string;
-  /** The tool the user asked for, e.g. "Union". */
-  next: string;
+  /** What happens once it is settled, e.g. "Union opens". */
+  outcome: string;
   onApply(): void;
   onDiscard(): void;
   onCancel(): void;
@@ -23,7 +23,7 @@ export interface UnappliedCardDialogProps {
  */
 export function UnappliedCardDialog({
   card,
-  next,
+  outcome,
   onApply,
   onDiscard,
   onCancel
@@ -54,7 +54,7 @@ export function UnappliedCardDialog({
         </h2>
         <p id="unapplied-card-dialog-body">
           The {card} card has changes that are not applied yet. Apply them or
-          discard them before {next} opens.
+          discard them before {outcome}.
         </p>
         <div className="unapplied-card-actions">
           <button type="button" onClick={onCancel}>
