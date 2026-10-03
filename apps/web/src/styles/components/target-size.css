@@ -1,31 +1,35 @@
 /* ─────────────────────────────────────────────────────────────
    Pointer targets of at least 24 × 24 px (WCAG 2.2, 2.5.8).
 
-   Controls drawn side by side (history-row and revision icons, parameter
-   row icons) are simply 24 px (sidebar.css, revisions.css), and the rename
-   button is 24 px tall (topbar.css): a reaching hit area there would only
-   take room from a neighbour. The controls below sit alone — the brand,
-   the view-roll buttons, 14 px section headers and an 8 px timeline thumb.
-   Each keeps its drawn size; an invisible ::after
-   reaches out to 24 px on any axis that is shorter, centred on the control,
-   so nothing in the layout moves. An axis already 24 px or longer gets an
-   inset of 0 and is hit-tested exactly as before.
+   Controls drawn beside other controls are simply 24 px: the history-row
+   and revision icons, the parameter-row icons and the history reorder grip
+   (sidebar.css, revisions.css), and the rename button is 24 px tall
+   (topbar.css). A hit area reaching past a control there only takes pixels
+   from its neighbour: the grip's once took the feature button's leading
+   edge, and a reaching end-of-history handle took the grip's.
 
-   The zero-specificity selector keeps `position: relative` from overriding
-   a control that is already positioned (the timeline thumb is absolute);
-   either way the control is the containing block for its ::after. None of
-   these controls draws an ::after of its own. Section titles and the brand
-   are matched as controls only: the same classes also style plain
-   headings, which must not grow a hit area over their neighbours. Each
-   reach lands in margin or padding, not on another small target.
+   The controls below have room around them: the brand, the view-roll
+   buttons and the 14 px section headers. Each keeps its drawn size; an
+   invisible ::after reaches out to 24 px on any axis that is shorter,
+   centred on the control, so nothing in the layout moves. An axis already
+   24 px or longer gets an inset of 0 and is hit-tested exactly as before.
+   Section titles and the brand are matched as controls only: the same
+   classes also style plain headings, which must not grow a hit area over
+   their neighbours. Every reach lands in margin or padding, never on
+   another control (control-names.spec.ts hit-tests each corner and edge).
+
+   The end-of-history handle stays 20 × 8: it lies across the timeline
+   between two rows, so any larger target covers their grips. It falls
+   under 2.5.8's equivalent-control exception — every row's 24 px "Roll
+   back history after …" button, and the handle's own arrow keys, set the
+   same end of history.
    ───────────────────────────────────────────────────────────── */
 
 :where(
   button.brand,
   .orientation-roll,
   button.section-title,
-  summary.section-title,
-  .history-handle
+  summary.section-title
 ) {
   position: relative;
 }
@@ -34,8 +38,7 @@
   button.brand,
   .orientation-roll,
   button.section-title,
-  summary.section-title,
-  .history-handle
+  summary.section-title
 )::after {
   content: '';
   position: absolute;

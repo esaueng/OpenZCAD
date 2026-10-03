@@ -213,6 +213,18 @@ describe('edge modifier failure diagnosis', { timeout: 60_000 }, () => {
       kernel.volume(box, MEASUREMENT_DEFLECTION) -
         kernel.volume(rounded!, MEASUREMENT_DEFLECTION)
     ).toBeCloseTo((1 - Math.PI / 4) * nearCeiling ** 2 * 30, 6);
+    for (const radius of [nearCeiling, 15]) {
+      const accepted = applyEdgeModifier(kernel, box, [edge], 'fillet', radius);
+      expect(accepted).not.toBeNull();
+      expect(kernel.validateSolid(accepted!)).toBe(0);
+      expect(Array.from(kernel.boundingBox(accepted!))).toEqual([
+        0, 0, 0, 30, 18, 24
+      ]);
+      const expected = 30 * 18 * 24 - 30 * (1 - Math.PI / 4) * radius ** 2;
+      expect(
+        Math.abs(kernel.volume(accepted!, MEASUREMENT_DEFLECTION) - expected)
+      ).toBeLessThan(1e-9);
+    }
     expect(
       acceptedEdgeModifierProbe(kernel, box, [edge], 'fillet', 30, limit)
     ).toBe(9);
@@ -689,9 +701,16 @@ describe('fillet suggestion on a thin plate', () => {
     expect(quoted).toBeGreaterThan(5);
     expect(quoted).toBeLessThan(6);
     // And it is a size that was built, not an estimate.
+    const rounded = applyEdgeModifier(kernel, plate, [edge], 'fillet', quoted);
+    expect(rounded).not.toBeNull();
+    expect(kernel.validateSolid(rounded!)).toBe(0);
+    expect(Array.from(kernel.boundingBox(rounded!))).toEqual([
+      0, 0, 0, 100, 60, 6
+    ]);
+    const expected = 100 * 60 * 6 - 100 * (1 - Math.PI / 4) * quoted ** 2;
     expect(
-      applyEdgeModifier(kernel, plate, [edge], 'fillet', quoted)
-    ).not.toBeNull();
+      Math.abs(kernel.volume(rounded!, MEASUREMENT_DEFLECTION) - expected)
+    ).toBeLessThan(1e-9);
   });
 
   it('spends no kernel calls when there is no gap to close', () => {

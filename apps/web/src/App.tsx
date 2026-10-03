@@ -1107,6 +1107,12 @@ import {
 } from './lib/suppressionFeedback';
 import { moveHasUnappliedChange } from './lib/moveCard';
 import {
+  currentMoveSelectionDocument,
+  movePickNeedsFreshTopology,
+  type MoveSelectionPick,
+  type MoveSelectionRequest
+} from './lib/moveSelectionTransition';
+import {
   resolveHistoryEditorFeature,
   resolveHistoryFeature,
   type HistoryEditorRequest
@@ -1908,10 +1914,13 @@ export function App() {
   const [movePreview, setMovePreview] = useState<MovePreview | null>(null);
   /** The entire tool/editor transition waiting on an unapplied Move. */
   const [pendingToolSwitch, setPendingToolSwitch] = useState<{
-    tool: ToolId | 'measure' | 'history';
+    tool: ToolId | 'measure' | 'history' | 'selection';
     historyFeature?: HistoryEditorRequest;
     clearHistorySelection?: boolean;
+    moveSelection?: MoveSelectionRequest;
   } | null>(null);
+  const pendingToolSwitchRef = useRef(pendingToolSwitch);
+  pendingToolSwitchRef.current = pendingToolSwitch;
   /**
    * Name for the Move feature the gizmo is about to create. The gizmo is now
    * the only way to make one (WF-07), so the name it commits under has to be
@@ -6312,7 +6321,8 @@ export function App() {
 
   /** Settles the unapplied-card question, then opens the tool it held. */
   function resolvePendingToolSwitch(choice: 'apply' | 'discard' | 'cancel') {
-    const request = pendingToolSwitch;
+    const request = pendingToolSwitchRef.current;
+    pendingToolSwitchRef.current = null;
     setPendingToolSwitch(null);
     if (!request || choice === 'cancel') return;
     completeToolSwitch(request, choice === 'apply');
@@ -6320,12 +6330,47 @@ export function App() {
 
   function completeToolSwitch(
     request: {
-      tool: ToolId | 'measure' | 'history';
+      tool: ToolId | 'measure' | 'history' | 'selection';
       historyFeature?: HistoryEditorRequest;
       clearHistorySelection?: boolean;
+      moveSelection?: MoveSelectionRequest;
     },
     applyMove = false
   ) {
+    if (request.tool === 'selection') {
+      const pick = request.moveSelection;
+      const current = pick
+        ? currentMoveSelectionDocument(managerRef.current, pick)
+        : null;
+      if (
+        !pick ||
+        !current ||
+        (pick.kind === 'viewport' &&
+          pick.selection.kind !== 'body' &&
+          !selectionResolvesInDerived(current, pick.selection))
+      ) {
+        setStatus(
+          'This selection changed while the Move was waiting. Pick it again.'
+        );
+        return;
+      }
+      const needsFreshTopology = movePickNeedsFreshTopology(movePreview, pick);
+      if (applyMove && !confirmMove()) return;
+      setMovePreview(null);
+      setTool(null);
+      if (pick.kind === 'box') {
+        boxSelectFromViewer(pick.bodyIds);
+      } else if (applyMove && needsFreshTopology) {
+        // Its point and normal described the body's old pose. Keep the
+        // committed Move, then require a fresh pick at the new position.
+        setStatus(
+          'Move applied · pick the face or edge again where it is now.'
+        );
+      } else {
+        selectTopologyFromViewer(pick.selection, pick.additive, pick.detail);
+      }
+      return;
+    }
     if (request.tool === 'history') {
       const current = managerRef.current?.document;
       const feature = request.historyFeature
@@ -11093,6 +11138,54 @@ export function App() {
     additive: boolean,
     detail?: PickDetail
   ) {
+    if (movePreview) {
+      // An empty click, like an empty box sweep, costs the Move nothing.
+      if (!selection) return;
+      if (
+        deferMoveSelection({
+          kind: 'viewport',
+          selection: { ...selection },
+          additive,
+          ...(detail
+            ? {
+                detail: {
+                  point: { ...detail.point },
+                  ...(detail.normal ? { normal: { ...detail.normal } } : {})
+                }
+              }
+            : {})
+        })
+      ) {
+        return;
+      }
+      setMovePreview(null);
+      setTool(null);
+    }
+    selectTopologyFromViewer(selection, additive, detail);
+  }
+
+  /** Hold the pick before it can replace selection or close the Move. */
+  function deferMoveSelection(pick: MoveSelectionPick): boolean {
+    if (!moveHasUnappliedChange(movePreview)) return false;
+    const manager = managerRef.current;
+    if (!manager) return true;
+    setPendingToolSwitch({
+      tool: 'selection',
+      moveSelection: {
+        ...pick,
+        manager,
+        projectId: manager.document.projectId,
+        version: manager.document.version
+      }
+    });
+    return true;
+  }
+
+  function selectTopologyFromViewer(
+    selection: TopologySelection | null,
+    additive: boolean,
+    detail?: PickDetail
+  ) {
     if (!doc) {
       return;
     }
@@ -11517,6 +11610,16 @@ export function App() {
   const emptyBoxSelectExplainedRef = useRef(false);
 
   function handleBoxSelectFromViewer(bodyIds: string[]) {
+    if (
+      bodyIds.length > 0 &&
+      deferMoveSelection({ kind: 'box', bodyIds: [...bodyIds] as BodyId[] })
+    ) {
+      return;
+    }
+    boxSelectFromViewer(bodyIds);
+  }
+
+  function boxSelectFromViewer(bodyIds: string[]) {
     if (!doc) {
       return;
     }
@@ -17246,6 +17349,7 @@ export function App() {
   const inspectorActive =
     !modelingLocked &&
     !directMode &&
+    movePreview === null &&
     // A face or edge alone is not an edit: its name, measurement and verbs
     // are on the selection chip beside it, and the inspector opened only to
     // say no one feature owns the pick. An imported STEP face is the
@@ -19508,17 +19612,21 @@ export function App() {
           {pendingToolSwitch && doc && (
             <UnappliedCardDialog
               card="Move"
-              next={
-                pendingToolSwitch.tool === 'measure'
-                  ? 'Measure'
-                  : pendingToolSwitch.tool === 'history'
-                    ? (pendingToolSwitch.historyFeature &&
-                        resolveHistoryFeature(
-                          doc,
-                          pendingToolSwitch.historyFeature
-                        )?.name) ||
-                      'History'
-                    : TOOL_META[pendingToolSwitch.tool].label
+              outcome={
+                pendingToolSwitch.tool === 'selection'
+                  ? 'the selection changes'
+                  : `${
+                      pendingToolSwitch.tool === 'measure'
+                        ? 'Measure'
+                        : pendingToolSwitch.tool === 'history'
+                          ? (pendingToolSwitch.historyFeature &&
+                              resolveHistoryFeature(
+                                doc,
+                                pendingToolSwitch.historyFeature
+                              )?.name) ||
+                            'History'
+                          : TOOL_META[pendingToolSwitch.tool].label
+                    } opens`
               }
               onApply={() => resolvePendingToolSwitch('apply')}
               onDiscard={() => resolvePendingToolSwitch('discard')}
