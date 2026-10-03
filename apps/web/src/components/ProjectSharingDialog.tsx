@@ -30,7 +30,10 @@ import {
 import type { CollaborationStatus } from '../lib/useCollaboration';
 import { useModalFocus } from '../lib/useModalFocus';
 import { StableLabel } from './StableLabel';
-import { PersonalInfoToggle, PrivateEmailInput } from './PersonalInfoToggle';
+import {
+  PrivateEmailInput,
+  usePersonalInfoVisible
+} from './PersonalInfoToggle';
 
 const defaultClient = createProjectSharingClient();
 const defaultShareLinkClient = createProjectShareLinkClient();
@@ -182,7 +185,7 @@ export function ProjectSharingDialog({
   );
   const [shareLinkCopied, setShareLinkCopied] = useState(false);
   const [email, setEmail] = useState('');
-  const [personalInfoVisible, setPersonalInfoVisible] = useState(false);
+  const personalInfoVisible = usePersonalInfoVisible();
   const [inviteRole, setInviteRole] = useState<ProjectMemberRole>('viewer');
   const [invitationSentTo, setInvitationSentTo] = useState<string | null>(null);
   const [hydrating, setHydrating] = useState(role === 'owner');
@@ -402,10 +405,6 @@ export function ProjectSharingDialog({
         </header>
 
         <div className="sharing-body">
-          <PersonalInfoToggle
-            visible={personalInfoVisible}
-            onChange={setPersonalInfoVisible}
-          />
           <p
             className="sharing-status-line"
             data-tone={error ? 'error' : busy ? 'busy' : undefined}

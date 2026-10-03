@@ -1,5 +1,31 @@
 import { Eye, EyeOff } from 'lucide-react';
-import type { InputHTMLAttributes } from 'react';
+import { useSyncExternalStore, type InputHTMLAttributes } from 'react';
+
+// Settings owns the only switch; project sharing follows it. Memory only, so
+// every page load starts hidden for screenshots.
+let personalInfoVisible = false;
+const listeners = new Set<() => void>();
+
+export function setPersonalInfoVisible(visible: boolean) {
+  if (visible === personalInfoVisible) return;
+  personalInfoVisible = visible;
+  for (const listener of listeners) listener();
+}
+
+function subscribe(listener: () => void) {
+  listeners.add(listener);
+  return () => {
+    listeners.delete(listener);
+  };
+}
+
+export function usePersonalInfoVisible() {
+  return useSyncExternalStore(
+    subscribe,
+    () => personalInfoVisible,
+    () => false
+  );
+}
 
 export function PersonalInfoToggle({
   visible,

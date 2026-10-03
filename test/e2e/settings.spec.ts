@@ -12,7 +12,7 @@ import {
   waitForSurfacesToSettle
 } from './openzcad-fixtures';
 
-test('hides profile details by default and resets disclosure on reopen and reload', async ({
+test('hides profile details by default, keeps disclosure across reopen and resets it on reload', async ({
   page
 }) => {
   await stubApi(page);
@@ -48,10 +48,10 @@ test('hides profile details by default and resets disclosure on reopen and reloa
   await settings.getByRole('button', { name: 'Show personal info' }).click();
   await page.getByRole('button', { name: 'Back to workspace' }).click();
   await page.getByRole('button', { name: 'Open settings' }).click();
+  // The choice lasts the session (project sharing follows it) but not a reload.
   await expect(
-    settings.getByText('Name hidden', { exact: true })
+    settings.getByText('Screenshot Person', { exact: true })
   ).toBeVisible();
-  await settings.getByRole('button', { name: 'Show personal info' }).click();
   await page.reload();
   await expect(
     settings.getByText('Name hidden', { exact: true })
