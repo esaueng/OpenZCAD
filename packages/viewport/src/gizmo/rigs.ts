@@ -13,7 +13,7 @@ import {
 import { createDimensionGraphic } from '../annotation/dimensionGraphic';
 import { ANALYTIC_GHOST_COLOR } from '../selection/analyticCylinderGhost';
 import { createChangeBand, createLevelRing } from './changeBand';
-import { easeToward, hasSettled } from '../motion';
+import { easeToward, fadeStepMs, hasSettled } from '../motion';
 import { SELECTION_SEMANTICS } from '../render/semantics';
 
 const ARROW_HEAD_LENGTH = 0.22;
@@ -53,6 +53,10 @@ function createRigPresence(roots: readonly THREE.Object3D[]) {
   let presenceTarget = 1;
   let hot = 0;
   let hotTarget = 0;
+  // Each ramp's first step after a new target is capped (see fadeStepMs), so
+  // an entrance or a hover change is seen to begin on a slow frame.
+  let presenceFirstStep = true;
+  let hotFirstStep = false;
   const apply = () => {
     for (const [material, baseOpacity] of materials) {
       material.opacity = baseOpacity * presence;
@@ -67,13 +71,21 @@ function createRigPresence(roots: readonly THREE.Object3D[]) {
       if (!moving) {
         return false;
       }
-      presence = easeToward(presence, presenceTarget, dtMs);
-      hot = easeToward(hot, hotTarget, dtMs);
+      presence = easeToward(
+        presence,
+        presenceTarget,
+        fadeStepMs(dtMs, presenceFirstStep)
+      );
+      hot = easeToward(hot, hotTarget, fadeStepMs(dtMs, hotFirstStep));
+      presenceFirstStep = false;
+      hotFirstStep = false;
       apply();
       return true;
     },
     /** Starts the rig leaving; it stops being hot on the way out. */
     beginExit() {
+      presenceFirstStep ||= presenceTarget !== 0;
+      hotFirstStep ||= hotTarget !== 0;
       presenceTarget = 0;
       hotTarget = 0;
     },
@@ -82,7 +94,9 @@ function createRigPresence(roots: readonly THREE.Object3D[]) {
       return presenceTarget === 0 && hasSettled(presence, 0);
     },
     setHot(next: boolean) {
-      hotTarget = next ? 1 : 0;
+      const target = next ? 1 : 0;
+      hotFirstStep ||= target !== hotTarget;
+      hotTarget = target;
     },
     hotness(): number {
       return hot;

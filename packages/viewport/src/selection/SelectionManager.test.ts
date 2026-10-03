@@ -534,6 +534,136 @@ describe('face hover overlay', () => {
     expect(manager.hoverFaceMesh.visible).toBe(true);
     expect(manager.hoverHiddenFaceMesh.visible).toBe(false);
   });
+
+  it('fades the restored hidden pass in while another animation is running', () => {
+    const { manager, objectsByBodyId, setBodies } = makeManager();
+    const bodyId = toBodyId('body-face-xray');
+    const sourceGeometry = new THREE.BufferGeometry();
+    sourceGeometry.setAttribute(
+      'position',
+      new THREE.Float32BufferAttribute([0, 0, 0, 1, 0, 0, 0, 1, 0], 3)
+    );
+    sourceGeometry.setAttribute(
+      'normal',
+      new THREE.Float32BufferAttribute([0, 0, 1, 0, 0, 1, 0, 0, 1], 3)
+    );
+    sourceGeometry.setIndex([0, 1, 2]);
+    objectsByBodyId.set(
+      bodyId,
+      new THREE.Mesh(sourceGeometry, new THREE.MeshPhongMaterial())
+    );
+    setBodies([
+      {
+        bodyId,
+        topology: {
+          faces: [
+            {
+              topologyId: 'face-a',
+              hash: 101,
+              triangleStart: 0,
+              triangleCount: 1
+            }
+          ],
+          edges: []
+        }
+      } as unknown as BodyRepresentation
+    ]);
+
+    manager.setXrayEnabled(false);
+    manager.setHoverFace({ bodyId, kind: 'face', topologyId: 'face-a' });
+    manager.step(0.35);
+    manager.step(0.35);
+    expect(manager.isSettling).toBe(false);
+    expect(manager.hoverHiddenFaceMesh.material.opacity).toBe(0);
+
+    // A body fade keeps the loop awake when leaving sketch mode restores
+    // the established hover's hidden pass on a slow renderer.
+    const bodyMaterial = new THREE.MeshBasicMaterial({ opacity: 0 });
+    bodyMaterial.userData.targetOpacity = 1;
+    manager.fadeIns.add(bodyMaterial);
+    manager.step(0.35);
+    expect(manager.isSettling).toBe(true);
+    manager.setXrayEnabled(true);
+    manager.step(0.35);
+    expect(manager.hoverHiddenFaceMesh.visible).toBe(true);
+    expect(manager.hoverHiddenFaceMesh.material.opacity).toBeGreaterThan(0);
+    expect(manager.hoverHiddenFaceMesh.material.opacity).toBeLessThan(0.1);
+    expect(manager.isSettling).toBe(true);
+
+    // Reapplying the same mode does not restart the fade's first step.
+    manager.setXrayEnabled(true);
+    manager.step(0.35);
+    expect(manager.hoverHiddenFaceMesh.material.opacity).toBe(0.1);
+    expect(manager.isSettling).toBe(false);
+  });
+});
+
+describe('face hover cross-fade on slow frames', () => {
+  it('lets a face entered mid-fade begin visibly on a 400 ms frame', () => {
+    const { manager, objectsByBodyId, setBodies } = makeManager();
+    const bodyId = toBodyId('body-crossfade');
+    const sourceGeometry = new THREE.BufferGeometry();
+    sourceGeometry.setAttribute(
+      'position',
+      new THREE.Float32BufferAttribute(
+        [0, 0, 0, 1, 0, 0, 0, 1, 0, 1, 1, 0, 0, 1, 0, 1, 0, 0],
+        3
+      )
+    );
+    sourceGeometry.setAttribute(
+      'normal',
+      new THREE.Float32BufferAttribute(
+        [0, 0, 1, 0, 0, 1, 0, 0, 1, 0, 0, 1, 0, 0, 1, 0, 0, 1],
+        3
+      )
+    );
+    sourceGeometry.setIndex([0, 1, 2, 3, 4, 5]);
+    objectsByBodyId.set(
+      bodyId,
+      new THREE.Mesh(sourceGeometry, new THREE.MeshPhongMaterial())
+    );
+    setBodies([
+      {
+        bodyId,
+        topology: {
+          faces: [
+            {
+              topologyId: 'face-a',
+              hash: 1,
+              triangleStart: 0,
+              triangleCount: 1
+            },
+            {
+              topologyId: 'face-b',
+              hash: 2,
+              triangleStart: 1,
+              triangleCount: 1
+            }
+          ],
+          edges: []
+        }
+      } as unknown as BodyRepresentation
+    ]);
+
+    // face-a starts fading in, so the render loop is already running on real
+    // elapsed time when the pointer moves on to face-b.
+    manager.setHoverFace({ bodyId, kind: 'face', topologyId: 'face-a' });
+    manager.step(0.4);
+    const outgoing = manager.hoverFaceMesh.material;
+    manager.setHoverFace({ bodyId, kind: 'face', topologyId: 'face-b' });
+    const incoming = manager.hoverFaceMesh.material;
+    expect(incoming).not.toBe(outgoing);
+    expect(incoming.opacity).toBe(0);
+
+    manager.step(0.4);
+    // Both films are mid-fade after the first slow frame, so the cross-fade
+    // is seen; the next frame advances by the real gap and lands it.
+    expect(incoming.opacity).toBeGreaterThan(0);
+    expect(manager.isSettling).toBe(true);
+    manager.step(0.4);
+    manager.step(0.4);
+    expect(manager.isSettling).toBe(false);
+  });
 });
 
 describe('region hover fades', () => {

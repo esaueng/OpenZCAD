@@ -17,7 +17,7 @@ import {
   EDGE_WIREFRAME_COLOR
 } from '../pick/edges';
 import { shouldRenderTopologyEdge } from '../scene/objects';
-import { easeToward, hasSettled } from '../motion';
+import { easeToward, fadeStepMs, hasSettled } from '../motion';
 import { boundaryEdgesOfFace } from '../selection/boundaryEdgesOfFace';
 import type { DisplayMode } from '../types';
 import {
@@ -140,6 +140,8 @@ function sameKeys(left: ReadonlySet<string>, right: ReadonlySet<string>) {
 class PresenceTier {
   private presence = 0;
   private target = 0;
+  /** Set on a new target; that step is the fade's first (see fadeStepMs). */
+  private firstStep = false;
   /** Whether the batch is holding geometry only to finish fading it out. */
   private clearing = false;
 
@@ -175,7 +177,11 @@ class PresenceTier {
    * travelling rather than a stutter of fades.
    */
   retarget(hasContent: boolean) {
-    this.target = hasContent ? 1 : 0;
+    const target = hasContent ? 1 : 0;
+    if (target !== this.target) {
+      this.firstStep = true;
+    }
+    this.target = target;
     this.clearing = !hasContent;
     if (hasContent) {
       this.refreshPositions();
@@ -202,7 +208,12 @@ class PresenceTier {
     if (hasSettled(this.presence, this.target)) {
       return false;
     }
-    this.presence = easeToward(this.presence, this.target, dtMs);
+    this.presence = easeToward(
+      this.presence,
+      this.target,
+      fadeStepMs(dtMs, this.firstStep)
+    );
+    this.firstStep = false;
     if (this.presence === 0 && this.clearing) {
       this.clearing = false;
       this.refreshPositions();
