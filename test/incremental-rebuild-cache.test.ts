@@ -509,10 +509,22 @@ describe('incremental prefix rebuild cache', { timeout: 120_000 }, () => {
       const freshAdapter = await createExactKernelAdapter();
       await freshAdapter.syncDocument(suppressed);
 
-      // The revealed operands resolve to the same properties as a fresh
-      // adapter, while the suppressed union has no query target.
+      // A suppressed union passes its first operand through under its own
+      // result id (ADR-017 amendment) and reveals the tool. Both live bodies
+      // resolve to the same properties as a fresh adapter; the passed-through
+      // operand itself is consumed and has no query target.
       const revealedEpoch = adapter.currentMassPropertiesEpoch()!;
-      for (const bodyId of [bodyA!, bodyB!]) {
+      const live = [union.bodyId, bodyB!];
+      expect(revealed.bodyRepresentations[bodyA!]!.consumed).toBe(true);
+      expect(
+        adapter.readCurrentMassProperties({
+          projectId: suppressed.projectId,
+          version: suppressed.version,
+          bodyId: bodyA!,
+          epoch: revealedEpoch
+        }).status
+      ).toBe('unavailable');
+      for (const bodyId of live) {
         expect(revealed.bodyRepresentations[bodyId]!.consumed).toBe(false);
         expect(revealed.bodyRepresentations[bodyId]!.massProperties).toBeUndefined();
         const cachedMass = adapter.readCurrentMassProperties({
@@ -534,29 +546,35 @@ describe('incremental prefix rebuild cache', { timeout: 120_000 }, () => {
         }
       }
       freshAdapter.dispose();
-      expect(revealed.bodyRepresentations[union.bodyId]).toBeUndefined();
+      expect(revealed.bodyRepresentations[union.bodyId]!.volume).toBeCloseTo(
+        1000,
+        6
+      );
 
       // Revealing the operands may reuse their unchanged mesh/area data;
-      // their separate mass queries must still use current live solids.
+      // their separate mass queries must still use current live solids. The
+      // union's id now holds operand A's solid, a handle set it has not been
+      // measured with, so that one body is measured afresh.
       expect(events.at(-1)).toMatchObject({
         kind: 'prefix-restore',
         restored: 3,
         replayed: 1,
-        remeasured: 0,
+        remeasured: 1,
         reusedMeasurements: 2
       });
 
       // An identical resync reuses measurements, but retires the previous
-      // query epoch; the new epoch resolves against live handles.
+      // query epoch; the new epoch resolves against live handles. Three
+      // bodies now: A, B and the union's passed-through copy of A.
       const again = await adapter.syncDocument(suppressed);
       expect(events.at(-1)).toMatchObject({
         kind: 'prefix-restore',
         restored: 4,
         replayed: 0,
         remeasured: 0,
-        reusedMeasurements: 2
+        reusedMeasurements: 3
       });
-      for (const bodyId of [bodyA!, bodyB!]) {
+      for (const bodyId of live) {
         expect(again.bodyRepresentations[bodyId]!.massProperties).toBeUndefined();
         expect(
           adapter.readCurrentMassProperties({
