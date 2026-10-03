@@ -8495,6 +8495,7 @@ export function App() {
     clearActiveProject();
     forgetProjectView();
     managerRef.current = null;
+    clearAutoFrame();
     setDoc(null);
     setArtifacts([]);
     setSelectedFeatureNode(null);
@@ -8846,6 +8847,7 @@ export function App() {
         reason
       );
       manager.applyDocumentEdit(restored, reason);
+      clearAutoFrame();
       // The meshes on screen belong to the document being left, and the
       // restored history has to be rebuilt from scratch to replace them.
       geometry.invalidate();

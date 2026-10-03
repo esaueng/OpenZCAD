@@ -2,9 +2,12 @@ import { act, renderHook } from '@testing-library/react';
 import { describe, expect, it } from 'vitest';
 import { CommandManager, commandFactories } from '@openzcad/command-system';
 import {
+  appendRevision,
+  createCheckpoint,
   createProjectDocument,
   listFeaturesInOrder,
-  normalizeDocument
+  normalizeDocument,
+  restoreFromSaveState
 } from '@openzcad/document-core';
 import {
   toUserId,
@@ -65,7 +68,7 @@ function widen(manager: CommandManager, width = 200) {
   );
 }
 
-function framing(document: ProjectDocument) {
+function framing(document: ProjectDocument | null) {
   return renderHook(
     ({ document, ready, previewing }) =>
       useLocalAutoFrame(document, ready, previewing),
@@ -162,7 +165,66 @@ describe('useLocalAutoFrame', () => {
         expect(hook.result.current.autoFrame).toBeNull();
       }
     );
+
+    it(`cancels ${queued ? 'queued' : 'pending'} local framing after restoring a save state`, () => {
+      const manager = boxManager();
+      const saved = createCheckpoint(manager.document, 'Saved Box');
+      const hook = framing(saved);
+      const before = saved.derived.bodyRepresentations;
+      const committed = widen(manager);
+      act(() => hook.result.current.recordLocalCommit(committed, before));
+      hook.rerender({ document: committed, ready: false, previewing: false });
+      if (queued) {
+        hook.rerender({
+          document: rebuild(manager, 200),
+          ready: true,
+          previewing: false
+        });
+        expect(hook.result.current.autoFrame).not.toBeNull();
+      }
+      const guarded = createCheckpoint(
+        appendRevision(manager.document, 'Before restore'),
+        'Before restore'
+      );
+      const restored = createCheckpoint(
+        restoreFromSaveState(guarded, saved, 'Restored Saved Box'),
+        'Restored Saved Box'
+      );
+      manager.applyDocumentEdit(restored, 'Restored Saved Box');
+      expect(manager.document.version).toBeGreaterThan(committed.version);
+      expect(listFeaturesInOrder(manager.document)[0]!.data).toMatchObject({
+        dimensions: { width: 20 }
+      });
+      act(() => hook.result.current.clearAutoFrame());
+      hook.rerender({ document: restored, ready: false, previewing: false });
+      hook.rerender({
+        document: rebuild(manager, 20),
+        ready: true,
+        previewing: false
+      });
+      expect(hook.result.current.autoFrame).toBeNull();
+      manager.undo();
+      expect(listFeaturesInOrder(manager.document)[0]!.data).toMatchObject({
+        dimensions: { width: 200 }
+      });
+    });
   }
+
+  it('drops a queued fit when the workspace leaves its document', () => {
+    const manager = boxManager();
+    const hook = framing(manager.document);
+    const before = manager.document.derived.bodyRepresentations;
+    act(() => hook.result.current.recordLocalCommit(widen(manager), before));
+    hook.rerender({
+      document: rebuild(manager, 200),
+      ready: true,
+      previewing: false
+    });
+    expect(hook.result.current.autoFrame).not.toBeNull();
+    act(() => hook.result.current.clearAutoFrame());
+    hook.rerender({ document: null, ready: false, previewing: false });
+    expect(hook.result.current.autoFrame).toBeNull();
+  });
 
   it('keeps a local fit through a geometry-preserving normalization version bump', () => {
     const manager = boxManager();
