@@ -27,23 +27,28 @@ test('numbers the picked bodies in the viewport as the boolean form does', async
 
   await page.getByRole('button', { name: /^Subtract \(X\)/ }).click();
   const callouts = page.locator('.body-order-callout');
-  await inspector.locator('.pick-row', { hasText: 'Upper Body' }).click();
-  await inspector.locator('.pick-row', { hasText: 'Lower Body' }).click();
+  await inspector.locator('.pick-row', { hasText: 'Upper 1' }).click();
+  await inspector.locator('.pick-row', { hasText: 'Lower 1' }).click();
 
   // Both bodies carry their number, base first, and the canvas agrees on the
   // order the form will submit.
   await expect(callouts).toHaveCount(2);
-  await expect(callouts.filter({ hasText: 'Upper Body' })).toContainText('1');
-  await expect(callouts.filter({ hasText: 'Lower Body' })).toContainText('2');
+  // Bodies are numbered at creation, so the order is read from its own span.
   await expect(
-    inspector.locator('.pick-row', { hasText: 'Upper Body' })
+    callouts.filter({ hasText: 'Upper 1' }).locator('.callout-order')
+  ).toHaveText('1');
+  await expect(
+    callouts.filter({ hasText: 'Lower 1' }).locator('.callout-order')
+  ).toHaveText('2');
+  await expect(
+    inspector.locator('.pick-row', { hasText: 'Upper 1' })
   ).toContainText('base');
   const order = await canvas.getAttribute('data-e2e-selected-bodies');
   expect(order?.split(',')).toHaveLength(2);
 
   // Dropping a body from the list clears its number in the scene too; the
   // one left keeps the plain name callout of a single selection.
-  await inspector.locator('.pick-row', { hasText: 'Lower Body' }).click();
+  await inspector.locator('.pick-row', { hasText: 'Lower 1' }).click();
   await expect(callouts).toHaveCount(0);
   await expect(canvas).toHaveAttribute(
     'data-e2e-selected-bodies',

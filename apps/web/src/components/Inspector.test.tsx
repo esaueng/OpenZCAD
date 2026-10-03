@@ -300,6 +300,48 @@ describe('primitive card position', () => {
   });
 });
 
+describe('primitive card naming', () => {
+  it('numbers a placed box and leaves its placement Move without a body', () => {
+    const manager = new CommandManager(
+      createProjectDocument('Numbered', toUserId('user_inspector_number'))
+    );
+    manager.execute(
+      createPrimitiveCommand(
+        'box',
+        'Box',
+        { width: 10, height: 10, depth: 10 },
+        { x: 0, y: 0, z: 0 },
+        'Box 1'
+      )
+    );
+    const onCreatePrimitive = vi.fn<(command: AnyCommand) => void>();
+    render(
+      <Inspector
+        {...makeProps({
+          tool: 'box',
+          selectedFeature: null,
+          document: manager.document,
+          onCreatePrimitive
+        })}
+      />
+    );
+    fireEvent.change(screen.getByRole('textbox', { name: 'Corner X' }), {
+      target: { value: '40' }
+    });
+    fireEvent.click(screen.getByRole('button', { name: /^Create/ }));
+    expect(onCreatePrimitive).toHaveBeenCalledTimes(1);
+    manager.execute(onCreatePrimitive.mock.calls[0]![0]);
+    const bodies = Object.values(manager.document.nodes).filter(
+      (node) => node.kind === 'body'
+    );
+    // The second box is numbered; "Place Box" is a Move and makes no body.
+    expect(bodies.map((node) => node.name)).toEqual(['Box 1', 'Box 2']);
+    expect(
+      listFeaturesInOrder(manager.document).map((node) => node.name)
+    ).toEqual(['Box', 'Box', 'Place Box']);
+  });
+});
+
 describe('fillet radius slider', () => {
   it('previews the latest size without applying until submitted', () => {
     const props = makeProps({

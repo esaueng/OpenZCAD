@@ -127,10 +127,16 @@ export function createPrimitiveCommand(
   kind: PrimitiveKind,
   name: string,
   dimensions: Record<string, ParamValue>,
-  position: ParametricVector3
+  position: ParametricVector3,
+  /**
+   * The new body's numbered name ("Box 2"), resolved from the document it is
+   * created in. The placement Move makes no body, so it takes none.
+   */
+  bodyName?: string
 ): AnyCommand {
   const add = commandFactories.addPrimitive({
     name,
+    ...(bodyName === undefined ? {} : { bodyName }),
     primitiveKind: kind,
     dimensions
   });

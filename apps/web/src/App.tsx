@@ -19,6 +19,7 @@ import { featureHistory } from './lib/featureHistory';
 import { FeatureBuildError } from './lib/featureValidation';
 import { edgeModifierCommand } from './lib/edgeModifierEdit';
 import type { EdgeModifierFormValue } from './components/forms/FeatureForms';
+import type { FaceNamer } from './lib/faceProducerName';
 import {
   documentNodesWithHistory,
   documentTextBudgetError
@@ -96,6 +97,7 @@ import {
   listParameters,
   normalizeDocument,
   normalizeDocumentHistory,
+  numberedBodyName,
   repairedDirectEditOperation,
   resolveParamValue,
   restoreFromSaveState,
@@ -4669,6 +4671,31 @@ export function App() {
   // worker, so the faces this document names have to be parsed here too.
   const textFontsVersion = useDocumentFonts(doc ?? null);
 
+  /**
+   * Face lists name a face after the feature that made it ("Box 2 · top").
+   * The namer is its own chunk, kept out of the entry: it starts loading as
+   * the app comes up, long before any face list opens, and until it lands
+   * (or if it never does) a list keeps the viewport's names.
+   */
+  const [faceNamerFor, setFaceNamerFor] = useState<
+    ((document: ProjectDocument) => FaceNamer) | null
+  >(null);
+  useEffect(() => {
+    let live = true;
+    import('./lib/faceProducerName')
+      .then((module) => {
+        if (live) setFaceNamerFor(() => module.faceNamerFor);
+      })
+      .catch(() => undefined);
+    return () => {
+      live = false;
+    };
+  }, []);
+  const faceNamer = useMemo(
+    () => (doc && faceNamerFor ? faceNamerFor(doc) : undefined),
+    [doc, faceNamerFor]
+  );
+
   const representations = useMemo(
     () => doc?.derived.bodyRepresentations ?? {},
     [doc?.derived.bodyRepresentations]
@@ -5945,6 +5972,18 @@ export function App() {
     setSelectedEdges([]);
     setSelectedBodyIds([]);
     setSelectedSketchProfileId(null);
+  }
+
+  /**
+   * "Box 1", "Box 2": the name a body made now takes, numbered against the
+   * document it is made in. Resolved here and stored in the command, so undo,
+   * redo and replay reproduce it; bodies already in a document keep theirs.
+   */
+  function newBodyName(featureName: string): string {
+    const current = managerRef.current?.document;
+    return current
+      ? numberedBodyName(current, featureName)
+      : `${featureName.trim()} 1`;
   }
 
   function createFeature(command: AnyCommand): boolean {
@@ -13009,8 +13048,11 @@ export function App() {
               area: target.area
             }
           ];
+    const name = regionExtrudeSettings.current?.name ?? 'Extrude';
     return {
-      name: regionExtrudeSettings.current?.name ?? 'Extrude',
+      name,
+      // The new-body name; an add or cut keeps its target's name instead.
+      bodyName: newBodyName(name),
       sketchId: target.sketchId as SketchId,
       distance,
       symmetric: regionExtrudeSettings.current?.symmetric ?? false,
@@ -16756,7 +16798,8 @@ export function App() {
     : undefined;
   const modelingFaces = modelingFaceOptions(
     modelingTargetBody?.topology,
-    modelingTargetBody
+    modelingTargetBody,
+    faceNamer
   );
   const holePreviewState = ((): HolePreview | null => {
     if (modelingOperation !== 'hole' || !holeDraft) return null;
@@ -16835,11 +16878,20 @@ export function App() {
       case 'solid-offset':
         return commandFactories.offsetSolidBody(submission.input);
       case 'loft':
-        return commandFactories.loftSections(submission.input);
+        return commandFactories.loftSections({
+          ...submission.input,
+          bodyName: newBodyName(submission.input.name)
+        });
       case 'sweep':
-        return commandFactories.sweepProfile(submission.input);
+        return commandFactories.sweepProfile({
+          ...submission.input,
+          bodyName: newBodyName(submission.input.name)
+        });
       case 'helical-sweep':
-        return commandFactories.helicalSweepProfile(submission.input);
+        return commandFactories.helicalSweepProfile({
+          ...submission.input,
+          bodyName: newBodyName(submission.input.name)
+        });
       case 'draft':
         return commandFactories.draftBody(submission.input);
       case 'thicken':
@@ -18385,7 +18437,10 @@ export function App() {
                 document={doc}
                 onCreatePrimitive={createFeature}
                 onCreateRevolve={(value) => {
-                  const command = commandFactories.revolveSketch(value);
+                  const command = commandFactories.revolveSketch({
+                    ...value,
+                    bodyName: newBodyName(value.name)
+                  });
                   createValidatedFeature(
                     command,
                     value.name,

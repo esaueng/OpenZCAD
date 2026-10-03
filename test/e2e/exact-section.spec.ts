@@ -267,8 +267,8 @@ test('keeps a section hole in the exact DXF and shuts export during a posed prev
   await expect(page.locator('.feature-row', { hasText: 'Move' })).toBeVisible();
 
   await page.getByRole('button', { name: /^Subtract \(X\)/ }).click();
-  await inspector.locator('.pick-row', { hasText: 'Plate Body' }).click();
-  await inspector.locator('.pick-row', { hasText: 'Bore tool Body' }).click();
+  await inspector.locator('.pick-row', { hasText: 'Plate 1' }).click();
+  await inspector.locator('.pick-row', { hasText: 'Bore tool 1' }).click();
   await inspector.getByRole('button', { name: /^Create/ }).click();
   const subtract = page.locator('.feature-row', { hasText: 'Subtract' });
   await expect(subtract).toBeVisible();

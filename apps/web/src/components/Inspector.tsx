@@ -7,7 +7,7 @@ import {
   saveMassDensitySelection
 } from '../lib/massDensityPreference';
 import { MoreHorizontal, Trash2, X } from 'lucide-react';
-import { coerceParamValue } from '@openzcad/document-core';
+import { coerceParamValue, numberedBodyName } from '@openzcad/document-core';
 import { findFontFace } from '@openzcad/geometry';
 import { FEATURE_COLORS, featureColor } from '@openzcad/shared';
 import {
@@ -1382,7 +1382,16 @@ export function Inspector(props: InspectorProps) {
           submitLabel="Create"
           onSubmit={(name, dimensions, position) =>
             props.onCreatePrimitive(
-              createPrimitiveCommand(kind, name, dimensions, position)
+              createPrimitiveCommand(
+                kind,
+                name,
+                dimensions,
+                position,
+                // "Box 1", "Box 2": numbered against the document it joins.
+                props.document
+                  ? numberedBodyName(props.document, name)
+                  : undefined
+              )
             )
           }
           onCancel={props.onCancel}
