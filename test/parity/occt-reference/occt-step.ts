@@ -113,6 +113,7 @@ import {
   type FaceAttachmentCandidate
 } from '../../../packages/kernel-adapter/src/face-attachment';
 import { importedStepValidationWarning } from '../../../packages/kernel-adapter/src/imported-step-validation';
+import { indexOcctDisplayGroups } from './occt-display-groups';
 
 const TESSELLATION_DEFLECTION = 0.08;
 const GEOMETRY_EPSILON = 1e-9;
@@ -2007,18 +2008,20 @@ export class OcctStepKernelAdapter {
       faceTypesByHash.set(hash, types);
     }
     const faceGroups = mesh.faceGroups ?? new Int32Array();
-    // Tessellation groups and getSubShapes iterate the same underlying shell,
-    // so face handle i owns triangle range i. Guarded because the persisted
-    // ADR-011 fingerprint below silently depends on it.
-    if (faceShapes.length !== faceGroups.length / 3) {
+    const faceRanges = indexOcctDisplayGroups(
+      this.kernel,
+      faceShapes,
+      faceGroups,
+      mesh.indices.length,
+      'face'
+    );
+    if (faceShapes.length !== faceRanges.size) {
       throw new Error(
         `Face handle count ${faceShapes.length} does not match tessellation groups ${faceGroups.length / 3}.`
       );
     }
-    for (let index = 0; index + 2 < faceGroups.length; index += 3) {
-      const indexStart = faceGroups[index]!;
-      const indexCount = faceGroups[index + 1]!;
-      const face = faceShapes[index / 3]!;
+    for (const face of faceShapes) {
+      const { start: indexStart, count: indexCount } = faceRanges.get(face)!;
       const candidate = faceTopologyCandidate(this.kernel, face);
       const hash = candidate.currentHash;
       const reference = referenceForOcctCandidate(lineage, candidate);
@@ -2037,16 +2040,24 @@ export class OcctStepKernelAdapter {
       displayTessellation.linearDeflection
     );
     const edgeShapes = this.kernel.getSubShapes(shape, 'edge');
-    if (edgeShapes.length !== wireframe.edgeGroups.length / 3) {
-      throw new Error(
-        `Edge handle count ${edgeShapes.length} does not match wireframe groups ${wireframe.edgeGroups.length / 3}.`
-      );
-    }
+    const edgeRanges = indexOcctDisplayGroups(
+      this.kernel,
+      edgeShapes,
+      wireframe.edgeGroups,
+      wireframe.points.length,
+      'edge'
+    );
     const edges: BodyTopology['edges'] = [];
-    for (let index = 0; index + 2 < wireframe.edgeGroups.length; index += 3) {
-      const pointStart = wireframe.edgeGroups[index]!;
-      const pointCount = wireframe.edgeGroups[index + 1]!;
-      const edgeShape = edgeShapes[index / 3]!;
+    for (const edgeShape of edgeShapes) {
+      const range = edgeRanges.get(edgeShape);
+      // OCCT 5 omits degenerate apex/pole edges from display polylines. They
+      // remain real topology and must retain their witnesses and lineage.
+      if (!range) {
+        const length = this.kernel.curveLength(edgeShape);
+        if (!Number.isFinite(length) || length < 0 || length > GEOMETRY_EPSILON) {
+          throw new Error('OCCT omitted a non-degenerate edge display group.');
+        }
+      }
       const candidate = edgeTopologyCandidate(this.kernel, edgeShape);
       const hash = candidate.currentHash;
       const reference = referenceForOcctCandidate(lineage, candidate);
@@ -2059,9 +2070,11 @@ export class OcctStepKernelAdapter {
           edgeToFaces,
           faceTypesByHash
         ),
-        points: Array.from(
-          wireframe.points.slice(pointStart, pointStart + pointCount)
-        ),
+        points: range
+          ? Array.from(
+              wireframe.points.slice(range.start, range.start + range.count)
+            )
+          : [],
         ...(reference?.kind === 'edge' ? { reference } : {})
       });
     }
