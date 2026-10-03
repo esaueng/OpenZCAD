@@ -305,8 +305,11 @@ test('previews and reverses a box fillet backed by verified evolution lineage', 
   // A radius the kernel cannot build on this box is refused at the handle:
   // the cause lands in the tool card in the kernel's plain words, the chip
   // turns to its warning state, and the last radius that built stays on
-  // screen instead of the blend vanishing.
-  await keypad.getByRole('textbox').fill('12');
+  // screen instead of the blend vanishing. 25 is wider than the narrower of
+  // the two faces beside any edge of the default 30 × 18 × 24 box, so no
+  // round fits. (This used to be 12, which does fit: it was refused only
+  // while the round's cylinder face reported a full-circle bounding box.)
+  await keypad.getByRole('textbox').fill('25');
   await expect(editFillet).toContainText('Try a smaller radius', {
     timeout: 30_000
   });
@@ -517,7 +520,8 @@ test('still refuses an oversize radius after a slow blend preview', async ({
 
   // The gesture is degraded now. Before the fix nothing after this line could
   // pass: the next value was dropped and no refusal ever reached the card.
-  await keypad.getByRole('textbox').fill('12');
+  // 25 is genuinely oversize for this box; see the first test.
+  await keypad.getByRole('textbox').fill('25');
   await expect(editFillet).toContainText('Try a smaller radius', {
     timeout: 30_000
   });
