@@ -111,7 +111,11 @@ test('resumes rollback without resuming manually suppressed features and support
   await expect(
     page.locator('.feature-row', { hasText: /^Cylinder/ })
   ).toContainText('suppressed');
-  await page.getByRole('button', { name: 'Undo', exact: true }).click();
+  // The viewer bar's Undo: the suppress toast carries an Undo of its own.
+  await page
+    .getByRole('toolbar', { name: 'Viewer bar' })
+    .getByRole('button', { name: 'Undo', exact: true })
+    .click();
   await expectBodyCount(page, 1);
   await expect(rollback).toContainText('2 later features paused');
   await page.getByRole('button', { name: 'Redo', exact: true }).click();

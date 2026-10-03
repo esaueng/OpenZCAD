@@ -237,3 +237,71 @@ test('keeps every history row control inside a narrow sidebar', async ({
   const clipped = await name.evaluate((el) => el.scrollWidth > el.clientWidth);
   expect(clipped).toBe(true);
 });
+
+/**
+ * F20: suppressing Boss on the demo turned six later rows "needs repair" and
+ * the warning count to 7 with no message at all. The toggle now says what it
+ * broke — counting only rows it broke — and offers the undo.
+ */
+test('suppressing a feature raises an undoable toast that counts what now needs repair', async ({
+  page
+}) => {
+  test.setTimeout(120_000);
+  await stubApi(page);
+  await page.setViewportSize({ width: 1440, height: 900 });
+  await page.goto('/');
+  await page
+    .getByRole('button', { name: /^Open demo: Mounting Bracket/ })
+    .click();
+  const status = page.getByRole('contentinfo');
+  await expect(page.locator('.viewer-host canvas')).toBeVisible({
+    timeout: 120_000
+  });
+  await expect(status).not.toContainText(
+    /Starting geometry worker|Loading exact Remus kernel|Rebuilding exact geometry|Waiting for exact geometry|Rebuilding geometry|Exact geometry is still rebuilding/i,
+    { timeout: 60_000 }
+  );
+  const failedRows = page.locator('.feature-row.failed');
+  await expect(failedRows).toHaveCount(0);
+
+  const bossRow = page.locator('.feature-row', { hasText: 'Boss' }).first();
+  await bossRow.hover();
+  await bossRow
+    .getByRole('button', { name: 'Suppress Boss', exact: true })
+    .click();
+  const toast = page.locator('.toast');
+  const message = toast.locator('.toast-message');
+  await expect(message).toHaveText(
+    /^Suppressed Boss · \d+ later features? now needs? repair$/,
+    { timeout: 60_000 }
+  );
+  const count = Number(
+    (await message.textContent())?.match(/(\d+) later/)?.[1] ?? '0'
+  );
+  expect(count).toBeGreaterThan(0);
+  // The count is the tree's own: every row the toggle turned "needs repair".
+  await expect(failedRows).toHaveCount(count);
+
+  await toast.getByRole('button', { name: 'Undo' }).click();
+  await expect(toast).toHaveCount(0);
+  await expect(failedRows).toHaveCount(0, { timeout: 60_000 });
+
+  // With nothing resting on it, the toast names the feature alone, and
+  // resuming it says so too.
+  const lastRow = page.locator('.feature-row').last();
+  await lastRow.hover();
+  const suppress = lastRow.getByRole('button', { name: /^Suppress / });
+  const name = (await suppress.getAttribute('aria-label'))!.replace(
+    /^Suppress /,
+    ''
+  );
+  await suppress.click();
+  await expect(message).toHaveText(`Suppressed ${name}`, { timeout: 60_000 });
+  await expect(toast.getByRole('button', { name: 'Undo' })).toBeVisible();
+  await lastRow.hover();
+  await lastRow
+    .getByRole('button', { name: `Resume ${name}`, exact: true })
+    .click();
+  await expect(message).toHaveText(`Resumed ${name}`, { timeout: 60_000 });
+  await expect(failedRows).toHaveCount(0);
+});

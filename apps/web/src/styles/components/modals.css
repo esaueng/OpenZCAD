@@ -300,8 +300,10 @@
 }
 
 /* ── Delete a feature other features build on ── */
+/* The unapplied-card question (F15) is the same small alertdialog. */
 
-.delete-feature-dialog {
+.delete-feature-dialog,
+.unapplied-card-dialog {
   width: min(420px, 100%);
   display: grid;
   gap: var(--sp-3);
@@ -313,7 +315,8 @@
   box-shadow: var(--shadow-3);
 }
 
-.delete-feature-dialog h2 {
+.delete-feature-dialog h2,
+.unapplied-card-dialog h2 {
   display: flex;
   align-items: center;
   gap: var(--sp-2);
@@ -322,7 +325,8 @@
   overflow-wrap: anywhere;
 }
 
-.delete-feature-dialog p {
+.delete-feature-dialog p,
+.unapplied-card-dialog p {
   margin: 0;
   color: var(--color-text-muted);
   font-size: var(--fs-sm);
@@ -342,7 +346,8 @@
   overflow-wrap: anywhere;
 }
 
-.delete-feature-actions {
+.delete-feature-actions,
+.unapplied-card-actions {
   display: flex;
   justify-content: flex-end;
   gap: var(--sp-2);

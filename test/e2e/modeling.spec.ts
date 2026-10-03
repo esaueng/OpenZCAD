@@ -58,7 +58,11 @@ test('suppresses features and rolls the timeline back as one undoable edit', asy
   await expect(cylinder).toContainText('paused');
   await expectBodyCount(page, 1);
 
-  await page.getByRole('button', { name: 'Undo' }).click();
+  // The viewer bar's Undo: the suppress toast carries an Undo of its own.
+  await page
+    .getByRole('toolbar', { name: 'Viewer bar' })
+    .getByRole('button', { name: 'Undo' })
+    .click();
   await expect(cylinder).not.toContainText('paused');
   await expectBodyCount(page, 2);
   await page.getByRole('button', { name: 'Redo' }).click();
@@ -3339,6 +3343,78 @@ test('M opens the move gizmo overlay and applies an exact move', async ({
   await expect(page.locator('.feature-row', { hasText: 'Move' })).toHaveCount(
     1
   );
+});
+
+/**
+ * F15: opening Union over a Move card holding dX 60 left both cards open and
+ * the move uncommitted. One command card holds the lane: an unapplied Move is
+ * applied or discarded first (asked once, in-page — a native confirm is
+ * answered Cancel unseen in embedded browsers), and a Move still at zero
+ * simply closes.
+ */
+test('opening a tool over an unapplied Move asks once and never stacks two cards', async ({
+  page
+}) => {
+  await stubApi(page);
+  await page.goto('/');
+  await page.getByLabel('Project name').fill('One Card Part');
+  await page.getByRole('button', { name: 'Create project' }).click();
+  const inspector = page.getByRole('region', { name: 'Feature inspector' });
+  for (const name of ['Lower', 'Upper']) {
+    await page.getByRole('button', { name: /^Box \(B\)/ }).click();
+    await inspector.getByLabel('Name').fill(name);
+    await inspector.getByRole('button', { name: /^Create/ }).click();
+  }
+  await expect(page.locator('.feature-row')).toHaveCount(2);
+
+  const move = page.getByRole('form', { name: 'Move controls' });
+  const ask = page.getByRole('alertdialog', { name: 'Apply the Move first?' });
+  const unionCard = inspector.getByText(
+    'Union joins solids that touch or overlap.'
+  );
+  const moveRows = page.locator('.feature-row', { hasText: 'Move' });
+  const openPendingMove = async () => {
+    await page.getByRole('button', { name: /^Move \(M\)/ }).click();
+    await move.getByLabel('Move X in mm').fill('60');
+    await page.getByRole('button', { name: /^Union \(U\)/ }).click();
+    await expect(ask).toBeVisible();
+    await expect(ask).toContainText('before Union opens');
+  };
+
+  // Cancel keeps the Move card, its value and nothing else.
+  await openPendingMove();
+  await ask.getByRole('button', { name: 'Cancel' }).click();
+  await expect(ask).toHaveCount(0);
+  await expect(move).toBeVisible();
+  await expect(move.getByLabel('Move X in mm')).toHaveValue('60');
+  await expect(inspector).toHaveCount(0);
+
+  // Discard closes the Move uncommitted and Union opens alone.
+  await page.getByRole('button', { name: /^Union \(U\)/ }).click();
+  await ask.getByRole('button', { name: 'Discard' }).click();
+  await expect(move).toHaveCount(0);
+  await expect(unionCard).toBeVisible();
+  await expect(moveRows).toHaveCount(0);
+  await page.keyboard.press('Escape');
+  await expect(inspector).toHaveCount(0);
+
+  // Apply commits the move first, then Union opens alone.
+  await openPendingMove();
+  await ask.getByRole('button', { name: 'Apply' }).click();
+  await expect(move).toHaveCount(0);
+  await expect(moveRows).toHaveCount(1);
+  await expect(unionCard).toBeVisible();
+  await page.keyboard.press('Escape');
+  await expect(inspector).toHaveCount(0);
+
+  // A Move with nothing to apply asks nothing: it just gives way.
+  await page.getByRole('button', { name: /^Move \(M\)/ }).click();
+  await expect(move).toBeVisible();
+  await page.getByRole('button', { name: /^Union \(U\)/ }).click();
+  await expect(unionCard).toBeVisible();
+  await expect(move).toHaveCount(0);
+  await expect(ask).toHaveCount(0);
+  await expect(moveRows).toHaveCount(1);
 });
 
 test('Remus resolves the former face-plane tangent-union refusal', async ({
