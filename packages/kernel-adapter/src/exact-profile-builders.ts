@@ -996,6 +996,24 @@ function loftApexPoint(
   return [point.x, point.y, point.z];
 }
 
+/** Keep construction refusals in the same context as validation failures. */
+function validatedLoft(
+  kernel: RemusKernel,
+  build: () => number,
+  label: string
+): number {
+  let solid: number;
+  try {
+    solid = build();
+  } catch (error) {
+    throw new Error(
+      `${label} did not produce a valid closed solid. ${errorText(error)}`,
+      { cause: error }
+    );
+  }
+  return validateGeneratedSolid(kernel, solid, label);
+}
+
 /**
  * The same section run lofted *without* the apex point, or null when that run
  * does not loft into a valid solid at all.
@@ -1010,7 +1028,7 @@ function unapexedLoft(
   handles: Uint32Array
 ): { readonly solid: number; readonly volume: number } | null {
   try {
-    const solid = validateGeneratedSolid(kernel, kernel.loft(handles), 'Loft');
+    const solid = validatedLoft(kernel, () => kernel.loft(handles), 'Loft');
     return { solid, volume: kernel.volume(solid, MEASUREMENT_DEFLECTION) };
   } catch {
     return null;
@@ -1045,8 +1063,8 @@ function apexVolumeSlack(unapexed: number, apexed: number): number {
  * | sections | apex | no apex | with apex |
  * | --- | --- | --- | --- |
  * | z = 0, 10 | z = 5 | 373.3333 | 266.6667 |
- * | z = 0, 10, 10 | z = 5 | 373.3333 | 313.3334 |
- * | z = 0, 20, 10 | z = 5 | 253.3333 | 193.3334 |
+ * | z = 0, 10, 10 | z = 5 | 373.3333 | 313.3333 |
+ * | z = 0, 20, 10 | z = 5 | 253.3333 | 193.3333 |
  * | XZ at y = -20, XY at z = 10 | (0, 25, 0) | 2000.0000 | 1666.6667 |
  *
  * Which side "the wrong side" is cannot be read off the sketch planes. Two
@@ -1100,14 +1118,15 @@ export function buildLoft(
   const handles = Uint32Array.from(faces);
   const endPoint = feature.data.endPoint;
   if (endPoint === undefined) {
-    // Unchanged: a loft authored without an apex point takes exactly the call
-    // it has always taken, so its geometry replays bit-identically.
-    const solid =
-      feature.data.mode === 'smooth'
-        ? kernel.loftSmooth(handles)
-        : kernel.loft(handles);
+    const mode = feature.data.mode;
+    const solid = validatedLoft(
+      kernel,
+      () =>
+        mode === 'smooth' ? kernel.loftSmooth(handles) : kernel.loft(handles),
+      'Loft'
+    );
     return {
-      solids: [validateGeneratedSolid(kernel, solid, 'Loft')],
+      solids: [solid],
       lineage: remusHashOnlyLineage(
         'sweep',
         'Loft section topology has no verified output evolution relation.'
@@ -1134,11 +1153,14 @@ export function buildLoft(
       'The loft apex point'
     )
   };
-  const solid = kernel.loftWithOptions(handles, JSON.stringify(options));
   let validated: number | null = null;
   let invalid: unknown = null;
   try {
-    validated = validateGeneratedSolid(kernel, solid, 'Loft to an apex point');
+    validated = validatedLoft(
+      kernel,
+      () => kernel.loftWithOptions(handles, JSON.stringify(options)),
+      'Loft to an apex point'
+    );
   } catch (error) {
     invalid = error;
   }
@@ -1153,7 +1175,7 @@ export function buildLoft(
     throw new Error(
       plain !== null
         ? `${errorText(invalid)} The same sections do loft into a valid solid without the apex point, so the apex is what this loft cannot take: move it, or clear it.`
-        : `${errorText(invalid)} The same sections do not loft into a valid solid without the apex point either, so the section run itself is what the kernel cannot take; the apex is not what to change.`,
+        : `${errorText(invalid)} The loft apex point cannot be checked on this loft: the same sections do not loft into a valid solid without it, so the section run itself is what the kernel cannot take; the apex is not what to change. Change the section run so it lofts on its own.`,
       { cause: invalid }
     );
   }

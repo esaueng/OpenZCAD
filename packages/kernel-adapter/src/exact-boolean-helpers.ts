@@ -23,7 +23,7 @@ import {
 } from './boolean-result-validation';
 import { type KernelUnifyReport, validationReport } from './kernel-validation';
 import { exactBooleanOutcome, exactFuseAll } from './exact-boolean-refusal';
-import type { UnionBounds } from './union-connectivity';
+import { analyzeUnionConnectivity, type UnionBounds } from './union-connectivity';
 import type { ExactShape } from './exact-types';
 import { GEOMETRY_EPSILON, transformMatrix } from './exact-math';
 
@@ -724,55 +724,110 @@ export function inferenceBodyForShape(
 }
 
 /**
- * Whether two solids share material or meet exactly.
- *
- * Shared volume alone cannot answer this: two solids meeting at a face — a
- * boss grown off the face it was sketched on — have none, and read as
- * disjoint by volume while being perfectly joinable. Exact distance is what
- * separates that from a solid sitting apart in space.
- *
- * The tolerance matches `union-connectivity`'s contact rule, and is
- * deliberately numerical rather than a modeling tolerance: touching must
- * never be stretched to bridge a real empty gap. A bounding-box test is not
- * enough here — two solids can share an overlapping box and still be well
- * clear of each other.
+ * The legacy distance API has no typed refusal twin. Only its explicit
+ * certified-family refusal means unknown; malformed values and other errors
+ * retain their failure behavior.
+ */
+export function certifiedSolidDistance(
+  kernel: RemusKernel,
+  left: number,
+  right: number
+): number | null {
+  let distance: number | undefined;
+  try {
+    distance = kernel.solidToSolidDistance(left, right)[0];
+  } catch (error) {
+    if (
+      error instanceof Error &&
+      error.message ===
+        'check: distance computation failed: a certified solid boundary minimum requires complete sphere pairs or straight-edged planar faces (including certified affine NURBS planes)'
+    ) {
+      return null;
+    }
+    throw error;
+  }
+  if (distance === undefined || !Number.isFinite(distance) || distance < 0) {
+    throw new Error('The geometry kernel returned an invalid solid distance.');
+  }
+  return distance;
+}
+
+/** A positive exact intersection proves shared material, never box overlap. */
+export function solidsHavePositiveExactIntersection(
+  kernel: RemusKernel,
+  left: number,
+  right: number
+): boolean {
+  let commonSolid: number | undefined;
+  try {
+    const common = exactBooleanOutcome(kernel, 'intersect', left, right);
+    if (common.status !== 'ok') return false;
+    commonSolid = common.solid;
+    const volume = kernel.volume(commonSolid, MEASUREMENT_DEFLECTION);
+    return Number.isFinite(volume) && volume > 0;
+  } catch {
+    return false;
+  } finally {
+    if (commonSolid !== undefined && commonSolid !== left && commonSolid !== right) {
+      kernel.deleteSolid(commonSolid);
+    }
+  }
+}
+
+/**
+ * Whether two solids share material or meet exactly. Unsupported distance
+ * stays unknown until exact intersection or validated fused topology proves
+ * contact. The unchanged numerical tolerance cannot bridge a real box gap.
  */
 export function solidsShareMaterialOrTouch(
   kernel: RemusKernel,
   left: number,
   right: number
 ): boolean {
+  const operands = [left, right].map((solid) => {
+    const box = kernel.boundingBox(solid);
+    return {
+      solid,
+      bounds: {
+        min: { x: box[0]!, y: box[1]!, z: box[2]! },
+        max: { x: box[3]!, y: box[4]!, z: box[5]! }
+      }
+    };
+  });
+  const connectivity = analyzeUnionConnectivity(
+    operands,
+    (a, b) => certifiedSolidDistance(kernel, a, b),
+    (a, b) => solidsHavePositiveExactIntersection(kernel, a, b)
+  );
+  if (connectivity.connected) return true;
+  if (!connectivity.uncertain) return false;
+
+  // Unsupported distance and no shared volume can still be exact face
+  // contact. The actual exact fuse must be valid, closed, connected and
+  // preserve both operands' extents before it can establish that contact.
+  let fusedSolid: number | undefined;
   try {
-    // A refused intersection is not evidence of separation, which is why the
-    // typed outcome is read rather than thrown: the distance query below
-    // answers contact directly. It is also the path for kernels that report
-    // penetration depth instead of zero for intersecting solids.
-    const common = exactBooleanOutcome(kernel, 'intersect', left, right);
+    const fused = exactBooleanOutcome(kernel, 'fuse', left, right);
+    if (fused.status !== 'ok') return false;
+    fusedSolid = fused.solid;
     if (
-      common.status === 'ok' &&
-      kernel.volume(common.solid, MEASUREMENT_DEFLECTION) > 0
-    ) {
-      return true;
-    }
-  } catch {
-    // A kernel that throws instead of answering says nothing either way.
-  }
-  try {
-    const distance = kernel.solidToSolidDistance(left, right)[0];
-    if (distance === undefined || !Number.isFinite(distance) || distance < 0) {
-      return false;
-    }
-    const boxes = [kernel.boundingBox(left), kernel.boundingBox(right)];
-    const scale = Math.max(
-      1,
-      ...boxes.flatMap((box) => [
-        Math.hypot(box[3]! - box[0]!, box[4]! - box[1]!, box[5]! - box[2]!),
-        ...Array.from(box, Math.abs)
-      ])
+      validationReport(kernel, fusedSolid).errorCount !== 0 ||
+      !isFaceConnectedSolid(kernel, fusedSolid) ||
+      !solidMeshIsClosed(kernel, fusedSolid)
+    ) return false;
+    const box = kernel.boundingBox(fusedSolid);
+    return operands.every(({ bounds }) =>
+      (['x', 'y', 'z'] as const).every((axis, index) =>
+        box[index]! <= bounds.min[axis] + connectivity.contactTolerance &&
+        box[index + 3]! >= bounds.max[axis] - connectivity.contactTolerance
+      )
     );
-    return distance <= Number.EPSILON * scale * 128;
   } catch {
     return false;
+  } finally {
+    if (fusedSolid !== undefined && fusedSolid !== left && fusedSolid !== right) {
+      kernel.deleteSolid(fusedSolid);
+    }
   }
 }
 
