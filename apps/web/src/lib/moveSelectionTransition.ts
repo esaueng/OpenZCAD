@@ -15,8 +15,10 @@ export type MoveSelectionPick =
       selection: TopologySelection;
       additive: boolean;
       detail?: PickDetail;
+      contextMenu?: { x: number; y: number };
     }
-  | { kind: 'box'; bodyIds: BodyId[] };
+  | { kind: 'box'; bodyIds: BodyId[] }
+  | { kind: 'edge-chain'; selections: TopologySelection[] };
 
 export type MoveSelectionRequest = MoveSelectionPick & {
   manager: MoveSelectionOwner;
@@ -31,11 +33,14 @@ export function movePickNeedsFreshTopology(
 ): boolean {
   return (
     preview !== null &&
-    pick.kind === 'viewport' &&
-    pick.selection.kind !== 'body' &&
+    pick.kind !== 'box' &&
     // Moving a sketch can rebuild several downstream bodies; its ID is not
     // a BodyId, so equality with the picked body cannot establish safety.
-    (preview.target === 'sketch' || pick.selection.bodyId === preview.bodyId)
+    (pick.kind === 'edge-chain' ? pick.selections : [pick.selection]).some(
+      (selection) =>
+        selection.kind !== 'body' &&
+        (preview.target === 'sketch' || selection.bodyId === preview.bodyId)
+    )
   );
 }
 
@@ -53,8 +58,18 @@ export function currentMoveSelectionDocument(
   ) {
     return null;
   }
+  if (
+    request.kind === 'edge-chain' &&
+    request.selections.some((selection) => selection.kind !== 'edge')
+  ) {
+    return null;
+  }
   const bodyIds =
-    request.kind === 'box' ? request.bodyIds : [request.selection.bodyId];
+    request.kind === 'box'
+      ? request.bodyIds
+      : request.kind === 'edge-chain'
+        ? request.selections.map((selection) => selection.bodyId)
+        : [request.selection.bodyId];
   return bodyIds.length > 0 &&
     bodyIds.every((id) => findBodyNode(document, id) !== undefined)
     ? document

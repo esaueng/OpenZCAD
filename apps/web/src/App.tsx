@@ -6342,12 +6342,20 @@ export function App() {
       const current = pick
         ? currentMoveSelectionDocument(managerRef.current, pick)
         : null;
+      const topologyPicks =
+        pick?.kind === 'edge-chain'
+          ? pick.selections
+          : pick?.kind === 'viewport'
+            ? [pick.selection]
+            : [];
       if (
         !pick ||
         !current ||
-        (pick.kind === 'viewport' &&
-          pick.selection.kind !== 'body' &&
-          !selectionResolvesInDerived(current, pick.selection))
+        topologyPicks.some(
+          (selection) =>
+            selection.kind !== 'body' &&
+            !selectionResolvesInDerived(current, selection)
+        )
       ) {
         setStatus(
           'This selection changed while the Move was waiting. Pick it again.'
@@ -6366,8 +6374,17 @@ export function App() {
         setStatus(
           'Move applied · pick the face or edge again where it is now.'
         );
+      } else if (pick.kind === 'edge-chain') {
+        selectEdgeChainFromViewer(pick.selections);
       } else {
         selectTopologyFromViewer(pick.selection, pick.additive, pick.detail);
+        if (pick.contextMenu) {
+          openViewportSelectionContextMenu(
+            pick.contextMenu.x,
+            pick.contextMenu.y,
+            pick.selection
+          );
+        }
       }
       return;
     }
@@ -11058,18 +11075,21 @@ export function App() {
     const faces = representations[pending.bodyId]?.topology?.faces;
     if (!faces || faces === pending.before) return;
     pendingBlendRearmRef.current = null;
+    // A later Move owns the lane. An automatic re-pick must neither ask a
+    // user-selection question nor replace the values that card now holds.
+    if (movePreview) return;
     const pick = newBlendFacePick(pending.bodyId, pending.before, faces);
     if (pick) {
       // The pick is the app's, not the user's: it must not retire the
       // commit's own message ("Filleted 2 edges at 1 mm.") the way a real
       // pick retires whatever it interrupts.
       const outcome = statusEntry;
-      handleSelectTopologyFromViewer(pick.selection, false, pick.detail);
+      selectTopologyFromViewer(pick.selection, false, pick.detail);
       if (!outcome.sticky) {
         setStatusEntry(outcome);
       }
     }
-    // handleSelectTopologyFromViewer is a per-render closure over the same
+    // selectTopologyFromViewer is a per-render closure over the same
     // state this effect already lists.
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [representations, exactGeometryReady]);
@@ -11136,16 +11156,18 @@ export function App() {
   function handleSelectTopologyFromViewer(
     selection: TopologySelection | null,
     additive: boolean,
-    detail?: PickDetail
-  ) {
+    detail?: PickDetail,
+    contextMenu?: { x: number; y: number }
+  ): boolean {
     if (movePreview) {
       // An empty click, like an empty box sweep, costs the Move nothing.
-      if (!selection) return;
+      if (!selection) return false;
       if (
         deferMoveSelection({
           kind: 'viewport',
           selection: { ...selection },
           additive,
+          ...(contextMenu ? { contextMenu: { ...contextMenu } } : {}),
           ...(detail
             ? {
                 detail: {
@@ -11156,12 +11178,13 @@ export function App() {
             : {})
         })
       ) {
-        return;
+        return true;
       }
       setMovePreview(null);
       setTool(null);
     }
     selectTopologyFromViewer(selection, additive, detail);
+    return false;
   }
 
   /** Hold the pick before it can replace selection or close the Move. */
@@ -11575,6 +11598,23 @@ export function App() {
    * handle is still armed edge by edge.
    */
   function handleSelectEdgeChainFromViewer(selections: TopologySelection[]) {
+    if (selections.length === 0) return;
+    if (
+      deferMoveSelection({
+        kind: 'edge-chain',
+        selections: selections.map((selection) => ({ ...selection }))
+      })
+    ) {
+      return;
+    }
+    if (movePreview) {
+      setMovePreview(null);
+      setTool(null);
+    }
+    selectEdgeChainFromViewer(selections);
+  }
+
+  function selectEdgeChainFromViewer(selections: TopologySelection[]) {
     const first = selections[0];
     if (!doc || !first) {
       return;
@@ -15869,13 +15909,24 @@ export function App() {
       ]);
       return;
     }
-    // Adopt the clicked geometry as the selection so actions target it.
-    handleSelectTopologyFromViewer(selection, false);
-    const feature = selectionFeature(
-      doc,
-      representations[selection.bodyId],
-      selection
-    );
+    // Actions wait for the clicked selection to land. An unapplied Move
+    // owns the question first; a menu here would act on the old selection.
+    if (handleSelectTopologyFromViewer(selection, false, undefined, { x, y })) {
+      setContextMenu(null);
+      return;
+    }
+    openViewportSelectionContextMenu(x, y, selection);
+  }
+
+  function openViewportSelectionContextMenu(
+    x: number,
+    y: number,
+    selection: TopologySelection
+  ) {
+    const current = managerRef.current?.document;
+    if (!current) return;
+    const body = current.derived.bodyRepresentations[selection.bodyId];
+    const feature = selectionFeature(current, body, selection);
     const edge = selection.kind === 'edge';
     openContextMenu(
       x,
@@ -15968,7 +16019,7 @@ export function App() {
             ]
           : [])
       ],
-      topologySelectionLabel(representations[selection.bodyId], selection)
+      topologySelectionLabel(body, selection)
     );
   }
 

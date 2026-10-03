@@ -77,7 +77,8 @@ const REACHING_TARGETS = [
   'button.brand',
   '.orientation-roll',
   'button.section-title',
-  'summary.section-title'
+  'summary.section-title',
+  '.history-handle'
 ];
 
 /**
@@ -91,6 +92,48 @@ async function targetConflicts(page: Page) {
       const CONTROLS =
         'button, a[href], input, select, textarea, summary, [role="slider"], [role="button"], [tabindex]:not([tabindex="-1"]), [draggable="true"], svg [aria-label]';
       const controlOf = (node: Element | null) => node?.closest(CONTROLS);
+      const inPointerBounds = (element: Element, x: number, y: number) => {
+        const box = element.getBoundingClientRect();
+        let { left, right, top, bottom } = box;
+        const after = getComputedStyle(element, '::after');
+        if (
+          after.content !== 'none' &&
+          after.content !== 'normal' &&
+          after.position === 'absolute' &&
+          after.pointerEvents !== 'none'
+        ) {
+          const inset = [after.left, after.right, after.top, after.bottom].map(
+            Number.parseFloat
+          );
+          if (inset.every(Number.isFinite)) {
+            const style = getComputedStyle(element);
+            // An absolute ::after uses the control's padding box. Include
+            // its own reach, so overlapping expanded targets still fail.
+            left = Math.min(
+              left,
+              box.left + Number.parseFloat(style.borderLeftWidth) + inset[0]!
+            );
+            right = Math.max(
+              right,
+              box.right - Number.parseFloat(style.borderRightWidth) - inset[1]!
+            );
+            top = Math.min(
+              top,
+              box.top + Number.parseFloat(style.borderTopWidth) + inset[2]!
+            );
+            bottom = Math.max(
+              bottom,
+              box.bottom -
+                Number.parseFloat(style.borderBottomWidth) -
+                inset[3]!
+            );
+          }
+        }
+        // Native hit testing can report the next control just outside its
+        // edge during a fractional layout transition. Such a point takes
+        // none of that control's actual pointer area.
+        return x >= left && x < right && y >= top && y < bottom;
+      };
       const failures: string[] = [];
       const audit = (selector: string, reaches: boolean) => {
         for (const element of document.querySelectorAll(selector)) {
@@ -134,7 +177,12 @@ async function targetConflicts(page: Page) {
             }
             for (const below of stack.slice(1)) {
               const other = controlOf(below);
-              if (other && other !== element && !other.contains(element)) {
+              if (
+                other &&
+                other !== element &&
+                !other.contains(element) &&
+                inPointerBounds(other, x, y)
+              ) {
                 failures.push(
                   `${selector} (${dx}, ${dy}) covers ${other.getAttribute('aria-label') ?? other.className}`
                 );

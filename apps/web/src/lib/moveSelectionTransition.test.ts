@@ -104,6 +104,55 @@ describe('pending Move selection ownership', () => {
       })
     ).toBeNull();
   });
+
+  it('checks every body in a delayed edge chain before applying a Move', () => {
+    const { manager, bodyId, request } = pendingPick();
+    manager.execute(
+      commandFactories.addPrimitive({
+        name: 'Second box',
+        primitiveKind: 'box',
+        dimensions: { width: 10, height: 10, depth: 10 }
+      })
+    );
+    const otherBodyId = manager.document.bodyOrder[1]!;
+    const chain: MoveSelectionRequest = {
+      ...request,
+      version: manager.document.version,
+      kind: 'edge-chain',
+      selections: [
+        { bodyId, kind: 'edge', topologyId: 'first-edge' },
+        { bodyId: otherBodyId, kind: 'edge', topologyId: 'second-edge' }
+      ]
+    };
+    expect(currentMoveSelectionDocument(manager, chain)).toBe(manager.document);
+    const otherFeature = listFeaturesInOrder(manager.document)[1]!;
+    manager.execute(
+      commandFactories.deleteFeature({ featureId: otherFeature.featureId })
+    );
+    expect(findBodyNode(manager.document, bodyId)).toBeDefined();
+    expect(findBodyNode(manager.document, otherBodyId)).toBeUndefined();
+    expect(
+      currentMoveSelectionDocument(manager, {
+        ...chain,
+        version: manager.document.version
+      })
+    ).toBeNull();
+  });
+
+  it('refuses empty chains and non-edge members without changing the owned document', () => {
+    const { manager, bodyId, request } = pendingPick();
+    const before = manager.document;
+    for (const selections of [[], [{ bodyId, kind: 'body' as const }]]) {
+      expect(
+        currentMoveSelectionDocument(manager, {
+          ...request,
+          kind: 'edge-chain',
+          selections
+        })
+      ).toBeNull();
+    }
+    expect(manager.document).toBe(before);
+  });
 });
 
 describe('picks following an applied Move', () => {
@@ -152,6 +201,32 @@ describe('picks following an applied Move', () => {
         kind: 'box',
         bodyIds: [bodyId, otherBodyId]
       })
+    ).toBe(false);
+  });
+
+  it('requires a fresh chain when any member moved, or a sketch can rebuild its bodies', () => {
+    const chain: MoveSelectionPick = {
+      kind: 'edge-chain',
+      selections: [
+        { bodyId: otherBodyId, kind: 'edge' },
+        { bodyId, kind: 'edge' }
+      ]
+    };
+    expect(movePickNeedsFreshTopology({ bodyId }, chain)).toBe(true);
+    expect(
+      movePickNeedsFreshTopology({ bodyId: 'unaffected-body' }, chain)
+    ).toBe(false);
+    expect(
+      movePickNeedsFreshTopology(
+        { bodyId: 'sketch_profile', target: 'sketch' },
+        chain
+      )
+    ).toBe(true);
+    expect(
+      movePickNeedsFreshTopology(
+        { bodyId },
+        { kind: 'edge-chain', selections: [] }
+      )
     ).toBe(false);
   });
 });

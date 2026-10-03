@@ -2,6 +2,7 @@ import type { Page } from '@playwright/test';
 import {
   expect,
   expectBodyCount,
+  locateEdge,
   setSelectionFilter,
   stubApi,
   test
@@ -133,6 +134,157 @@ test('a viewport body pick settles the typed Move once before changing selection
   expect(await maxCards()).toBe(1);
 });
 
+test('a connected edge run settles the typed Move before replacing its target', async ({
+  page
+}) => {
+  test.setTimeout(90_000);
+  const { canvas, inspector, move, ask, moveRows } = await makePart(
+    page,
+    'Edge run Move guard'
+  );
+  await page.getByRole('button', { name: /^Fillet/ }).click();
+  await inspector.getByRole('button', { name: 'Select all 12 edges' }).click();
+  await inspector.getByRole('button', { name: /^Create/ }).click();
+  await expect(page.locator('.feature-row')).toHaveCount(2);
+  await expect(inspector).toHaveCount(0);
+  await page.keyboard.press('Escape');
+  await setSelectionFilter(page, 'Edge');
+  const status = page.getByRole('contentinfo');
+  await expect(status).not.toContainText(
+    /Rebuilding|Waiting for exact geometry|Loading exact Remus kernel/i,
+    { timeout: 30_000 }
+  );
+  const maxCards = await watchCardCount(page);
+  const target = await startMove(page);
+  await expect(canvas).toHaveAttribute('data-e2e-selected-bodies', /.+/);
+  const selected = (await canvas.getAttribute('data-e2e-selected-bodies'))!;
+  const pickRun = async () => {
+    const edge = await locateEdge(page);
+    // The actual canvas double-click path measures its smooth topology run;
+    // no first click can open a chip that intercepts the second click.
+    await canvas.dispatchEvent('dblclick', {
+      button: 0,
+      clientX: edge.x,
+      clientY: edge.y
+    });
+  };
+
+  await pickRun();
+  await expect(ask).toBeVisible();
+  await ask.getByRole('button', { name: 'Cancel' }).click();
+  await expect(move.getByLabel('Move X in mm')).toHaveValue('5');
+  await expect(move.locator('p').first()).toHaveText(target);
+  await expect(canvas).toHaveAttribute('data-e2e-selected-bodies', selected);
+  await expect(canvas).toHaveAttribute('data-e2e-move-gizmo-x', /.+/);
+  await expect(inspector).toHaveCount(0);
+  await expect(moveRows).toHaveCount(0);
+
+  await pickRun();
+  await ask.getByRole('button', { name: 'Discard' }).click();
+  await expect(move).toHaveCount(0);
+  await expect(page.locator('.selection-callout-name')).toHaveText('8 edges');
+  await expect(moveRows).toHaveCount(0);
+
+  await startMove(page);
+  await pickRun();
+  await ask.getByRole('button', { name: 'Apply' }).click();
+  await expect(moveRows).toHaveCount(1);
+  await expect(move).toHaveCount(0);
+  await expect(status).toContainText(
+    'pick the face or edge again where it is now'
+  );
+  await expect(page.getByTestId('direct-manipulation-value')).toBeHidden();
+  await page
+    .getByRole('toolbar', { name: 'Viewer bar' })
+    .getByRole('button', { name: 'Undo' })
+    .click();
+  await expect(moveRows).toHaveCount(0);
+  await expect(page.locator('.feature-row')).toHaveCount(2);
+  await expect(status).not.toContainText(
+    /Rebuilding|Waiting for exact geometry/i,
+    { timeout: 30_000 }
+  );
+
+  // Zero Move closes, then the complete eight-edge run lands without a question.
+  await page.getByRole('button', { name: /^Move \(M\)/ }).click();
+  await pickRun();
+  await expect(ask).toHaveCount(0);
+  await expect(move).toHaveCount(0);
+  await expect(page.locator('.selection-callout-name')).toHaveText('8 edges');
+  expect(await maxCards()).toBe(1);
+});
+
+test('a right-click waits for the Move answer and retains its requested menu', async ({
+  page
+}) => {
+  const { canvas, inspector, move, ask, moveRows } = await makePart(
+    page,
+    'Menu Move guard'
+  );
+  await setSelectionFilter(page, 'Body');
+  const maxCards = await watchCardCount(page);
+  const target = await startMove(page);
+  await expect(canvas).toHaveAttribute('data-e2e-selected-bodies', /.+/);
+  const selected = (await canvas.getAttribute('data-e2e-selected-bodies'))!;
+  const area = (await canvas.boundingBox())!;
+  const rightClick = () =>
+    page.mouse.click(area.x + area.width * 0.5, area.y + area.height * 0.3, {
+      button: 'right'
+    });
+  const menu = page.locator('.context-menu');
+
+  await rightClick();
+  await expect(ask).toBeVisible();
+  await expect(menu).toHaveCount(0);
+  await ask.getByRole('button', { name: 'Cancel' }).click();
+  await expect(menu).toHaveCount(0);
+  await expect(move.getByLabel('Move X in mm')).toHaveValue('5');
+  await expect(move.locator('p').first()).toHaveText(target);
+  await expect(canvas).toHaveAttribute('data-e2e-selected-bodies', selected);
+  await expect(inspector).toHaveCount(0);
+
+  await rightClick();
+  await expect(menu).toHaveCount(0);
+  await ask.getByRole('button', { name: 'Discard' }).click();
+  await expect(move).toHaveCount(0);
+  // The original right-click opens its menu without requiring another click.
+  await expect(menu).toBeVisible();
+  await expect(menu.locator('.context-menu-heading')).toHaveText(target);
+  await expect(menu.getByRole('menuitem', { name: 'Hide Body' })).toBeVisible();
+  await expect(moveRows).toHaveCount(0);
+  await page.keyboard.press('Escape');
+
+  await startMove(page);
+  await rightClick();
+  await expect(menu).toBeHidden();
+  await ask.getByRole('button', { name: 'Apply' }).click();
+  await expect(move).toHaveCount(0);
+  await expect(moveRows).toHaveCount(1);
+  // Body IDs survive Move, so the requested body's menu is still safe.
+  await expect(menu).toBeVisible();
+  await expect(menu.locator('.context-menu-heading')).toHaveText(target);
+  await page
+    .getByRole('toolbar', { name: 'Viewer bar' })
+    .getByRole('button', { name: 'Undo' })
+    .click();
+  await expect(moveRows).toHaveCount(0);
+  await expect(page.locator('.feature-row')).toHaveCount(1);
+
+  // A face address on the moved body needs a new pick; its old menu waits too.
+  await setSelectionFilter(page, 'Face');
+  await startMove(page);
+  await rightClick();
+  await expect(ask).toBeVisible();
+  await expect(menu).toBeHidden();
+  await ask.getByRole('button', { name: 'Apply' }).click();
+  await expect(moveRows).toHaveCount(1);
+  await expect(menu).toBeHidden();
+  await expect(page.getByRole('contentinfo')).toContainText(
+    'pick the face or edge again where it is now'
+  );
+  expect(await maxCards()).toBe(1);
+});
+
 test('a nonempty box sweep asks before replacing a typed Move target', async ({
   page
 }) => {
@@ -245,5 +397,14 @@ test('applying a Move requires a fresh pick instead of arming a face at its old 
   await expect(page.getByRole('contentinfo')).toContainText(
     'pick the face or edge again where it is now'
   );
-  await expect(page.getByTestId('direct-manipulation-value')).toHaveCount(0);
+  await expect(page.getByTestId('direct-manipulation-value')).toBeHidden();
+  await expect(canvas).not.toHaveAttribute('data-e2e-selected-face', /.+/);
+  await expect(inspector).toHaveCount(0);
+
+  // A fresh pick resolves against the rebuilt body's current pose and re-arms it.
+  await expect.poll(pickFace).toBe(true);
+  await expect(canvas).toHaveAttribute('data-e2e-selected-face', /.+/);
+  await expect(page.getByTestId('direct-manipulation-value')).toBeVisible();
+  await expect(ask).toHaveCount(0);
+  await expect(moveRows).toHaveCount(1);
 });
