@@ -1626,7 +1626,8 @@ class ParameterCheckStale extends Error {
 /**
  * A viewport selection held back by the unapplied-Move question (F15): a
  * pick, a double-clicked edge run, or a box selection that would replace
- * the Move card.
+ * the Move card. A pick made by right-clicking carries the menu's screen
+ * point, so the menu opens there once the selection has landed.
  */
 type PendingSelectionSwitch =
   | {
@@ -1634,6 +1635,7 @@ type PendingSelectionSwitch =
       selection: TopologySelection;
       additive: boolean;
       detail?: PickDetail;
+      contextMenu?: { x: number; y: number };
     }
   | { kind: 'edge-chain'; selections: TopologySelection[] }
   | { kind: 'box'; bodyIds: string[] };
@@ -1936,6 +1938,15 @@ export function App() {
   /** The entire tool/editor transition waiting on an unapplied Move. */
   const [pendingToolSwitch, setPendingToolSwitch] =
     useState<PendingToolSwitch | null>(null);
+  /**
+   * A right-click the unapplied-Move question held back, opened once the
+   * Move is settled and its card has gone (see `completeSelectionSwitch`).
+   */
+  const [contextMenuAfterMove, setContextMenuAfterMove] = useState<{
+    x: number;
+    y: number;
+    selection: TopologySelection;
+  } | null>(null);
   /**
    * Name for the Move feature the gizmo is about to create. The gizmo is now
    * the only way to make one (WF-07), so the name it commits under has to be
@@ -6388,7 +6399,11 @@ export function App() {
                 (selection) => selection.bodyId === movedBodyId
               );
       if (touchesMoved) {
-        setStatus('Move applied · select it again where it is now.');
+        setStatus(
+          pending.kind === 'pick' && pending.contextMenu
+            ? 'Move applied · right-click it again where it is now for its menu.'
+            : 'Move applied · select it again where it is now.'
+        );
         return;
       }
     }
@@ -6402,6 +6417,14 @@ export function App() {
         pending.additive,
         pending.detail
       );
+      if (pending.contextMenu) {
+        // Opened from the next render, once the Move card has gone: this
+        // render's menu actions would still see the Move it held back.
+        setContextMenuAfterMove({
+          ...pending.contextMenu,
+          selection: pending.selection
+        });
+      }
     }
   }
 
@@ -11569,7 +11592,9 @@ export function App() {
         hash: edge.hash,
         reference: edge.reference
       }));
-    handleSelectEdgeChainFromViewer(edges);
+    // Over an unapplied Move the run waits for its answer, and so does what
+    // this says about it.
+    if (handleSelectEdgeChainFromViewer(edges)) return;
     if (
       tool === 'chamfer' ||
       (tool === null &&
@@ -11590,15 +11615,19 @@ export function App() {
    * only the last would survive. The reducer does accumulate, so the fillet
    * handle is still armed edge by edge.
    */
-  function handleSelectEdgeChainFromViewer(selections: TopologySelection[]) {
+  /** Returns true when the unapplied-Move question held the run back. */
+  function handleSelectEdgeChainFromViewer(
+    selections: TopologySelection[]
+  ): boolean {
     if (
       doc &&
       selections.length > 0 &&
       deferSelectionForUnappliedMove({ kind: 'edge-chain', selections })
     ) {
-      return;
+      return true;
     }
     selectEdgeChainFromViewer(selections);
+    return false;
   }
 
   function selectEdgeChainFromViewer(selections: TopologySelection[]) {
@@ -15895,11 +15924,44 @@ export function App() {
       return;
     }
     // Adopt the clicked geometry as the selection so actions target it. Over
-    // an unapplied Move that asks first (F15), and the menu waits for the
-    // answer rather than offering actions on a selection that never landed.
-    const asksFirst = moveHasUnappliedChange(movePreview);
-    handleSelectTopologyFromViewer(selection, false);
-    if (asksFirst) return;
+    // an unapplied Move that asks first (F15): the menu waits for the
+    // answer and opens at this point once the selection has landed, rather
+    // than offering actions on a selection that never did.
+    if (
+      deferSelectionForUnappliedMove({
+        kind: 'pick',
+        selection,
+        additive: false,
+        contextMenu: { x, y }
+      })
+    ) {
+      return;
+    }
+    selectTopologyFromViewer(selection, false);
+    openSelectionContextMenu(x, y, selection);
+  }
+
+  // A right-click held back by the unapplied-Move question opens here, from
+  // a render that no longer has the Move card, so its actions see the
+  // settled workspace rather than the Move they would otherwise ask about.
+  useEffect(() => {
+    if (!contextMenuAfterMove || movePreview || pendingToolSwitch) return;
+    const request = contextMenuAfterMove;
+    setContextMenuAfterMove(null);
+    if (!doc || modelingLocked) return;
+    openSelectionContextMenu(request.x, request.y, request.selection);
+    // openSelectionContextMenu is a per-render closure; this render's is the
+    // one wanted, and the request is consumed once.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [contextMenuAfterMove, movePreview, pendingToolSwitch]);
+
+  /** The menu of actions on a picked body, face or edge. */
+  function openSelectionContextMenu(
+    x: number,
+    y: number,
+    selection: TopologySelection
+  ) {
+    if (!doc) return;
     const feature = selectionFeature(
       doc,
       representations[selection.bodyId],
