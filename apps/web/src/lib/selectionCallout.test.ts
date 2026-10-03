@@ -309,6 +309,37 @@ describe('renderSelectionCallout', () => {
       expect(byLabel('Hole')?.disabled).toBe(false);
     });
 
+    it('cannot be dismissed while the exact check runs', () => {
+      // The commit owns the model until it answers (escapeTarget is 'none'
+      // then). A clear mid-check let the answer commit and reselect the
+      // body after the user had dismissed it.
+      const element = document.createElement('div');
+      const onClear = vi.fn();
+      renderSelectionCallout(
+        element,
+        textLabelSegments('Box'),
+        content({ onClear, operation: operation({ phase: 'validating' }) })
+      );
+      const clear = element.querySelector<HTMLButtonElement>(
+        '[aria-label="Deselect all"]'
+      );
+      expect(clear?.disabled).toBe(true);
+      clear?.click();
+      expect(onClear).not.toHaveBeenCalled();
+      // Once it answers, the way out is back.
+      for (const phase of ['armed', 'failed'] as const) {
+        refreshSelectionCallout(
+          element,
+          content({ onClear, operation: operation({ phase }) })
+        );
+        expect(
+          element.querySelector<HTMLButtonElement>(
+            '[aria-label="Deselect all"]'
+          )?.disabled
+        ).toBe(false);
+      }
+    });
+
     it('says why it refused, with each way out as a button', () => {
       const element = document.createElement('div');
       const filled = operation({
