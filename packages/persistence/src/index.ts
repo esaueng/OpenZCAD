@@ -12,6 +12,7 @@ import {
   MAX_ARTIFACT_PART_BYTES,
   MAX_ARTIFACT_UPLOAD_BYTES,
   MAX_PERSISTED_DOCUMENT_BYTES,
+  documentVersionCanAdvance,
   MAX_PROJECT_REVISIONS,
   MAX_ARTIFACT_UPLOAD_PARTS,
   MAX_THUMBNAIL_BYTES,
@@ -60,7 +61,7 @@ import {
 import {
   adoptProjectDocument,
   reidentifyProjectDocument,
-  createCheckpoint,
+  createSavedRevision,
   createProjectDocument,
   duplicateProjectDocument,
   normalizeDocument,
@@ -86,7 +87,8 @@ export type ProjectSharingErrorCode =
   | 'MEMBER_NOT_FOUND'
   | 'MEMBER_LIMIT'
   | 'OWNER_IMMUTABLE'
-  | 'SHARE_LINK_NOT_FOUND';
+  | 'SHARE_LINK_NOT_FOUND'
+  | 'SHARE_LINK_LIMIT';
 
 export class ProjectSharingError extends Error {
   constructor(
@@ -854,6 +856,14 @@ export class InMemoryPersistenceService implements PersistenceService {
     input: CreateProjectShareLinkInput
   ): Promise<ProjectShareLinkSummary> {
     await this.requireProjectOwner(ownerUserId, projectId);
+    const active = Array.from(this.projectShareLinks.values()).filter(
+      (link) => link.projectId === projectId && link.revokedAt === null
+    );
+    if (active.length >= 100)
+      throw new ProjectSharingError(
+        'SHARE_LINK_LIMIT',
+        'A project supports up to 100 active share links.'
+      );
     this.projectShareLinks.set(input.shareLinkId, {
       ...input,
       projectId,
@@ -901,6 +911,12 @@ export class InMemoryPersistenceService implements PersistenceService {
       );
     }
     link.revokedAt = revokedAt;
+    const revoked = Array.from(this.projectShareLinks.entries())
+      .filter(
+        ([, entry]) => entry.projectId === projectId && entry.revokedAt !== null
+      )
+      .sort((left, right) => right[1].revokedAt! - left[1].revokedAt!);
+    for (const [id] of revoked.slice(100)) this.projectShareLinks.delete(id);
   }
 
   async loadSharedProjectByTokenHash(
@@ -1186,6 +1202,11 @@ export class InMemoryPersistenceService implements PersistenceService {
     if (existing.version !== request.expectedVersion) {
       throw new RevisionConflictError(request.projectId, existing.version);
     }
+    if (
+      !documentVersionCanAdvance(request.document.version, existing.version)
+    ) {
+      throw new RevisionConflictError(request.projectId, existing.version);
+    }
     const normalized = normalizeDocument(request.document);
     if (
       normalized.projectId !== request.projectId ||
@@ -1193,7 +1214,7 @@ export class InMemoryPersistenceService implements PersistenceService {
     ) {
       throw new ProjectNotFoundError(request.projectId);
     }
-    const document = createCheckpoint(
+    const document = createSavedRevision(
       withoutDerivedProjection(normalized),
       request.reason
     );
@@ -1363,6 +1384,11 @@ export class InMemoryPersistenceService implements PersistenceService {
     }
     const access = await this.requireProjectEdit(userId, request.projectId);
     if (existing.version !== request.expectedVersion) {
+      throw new RevisionConflictError(request.projectId, existing.version);
+    }
+    if (
+      !documentVersionCanAdvance(request.document.version, existing.version)
+    ) {
       throw new RevisionConflictError(request.projectId, existing.version);
     }
     const normalized = withoutDerivedProjection(

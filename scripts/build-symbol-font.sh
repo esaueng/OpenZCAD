@@ -33,7 +33,16 @@ trap 'rm -rf "$work"' EXIT
 
 extract() {
   local package="$1" file="$2" dest="$3"
-  (cd "$work" && npm pack --silent "$package" >/dev/null)
+  local expected
+  case "$package" in
+    "$MATH_PACKAGE") expected='CzodkZ4R2VC73rqbNbVpiI94fXZJLFEMNBTAM3DFadjAKrjLQ2Fr+s2yM2c5uS+frBZ2IM+LyMo6COhAzV7hCA==' ;;
+    "$SYMBOL_PACKAGE") expected='hFnEnIXOIgLLJ61SO9icRXKoS+LSWoq7ZqKJQ/NaQR7ptdC6+7yW4ci6EuXgsS1S9JmWpciX6w0AFZkU1DKn1A==' ;;
+    *) return 1 ;;
+  esac
+  (cd "$work" && npm pack --registry=https://registry.npmjs.org --ignore-scripts --silent "$package" >/dev/null)
+  local actual
+  actual="$(openssl dgst -sha512 -binary "$work"/fontsource-*.tgz | openssl base64 -A)"
+  [[ "$actual" == "$expected" ]] || { echo 'Font package integrity mismatch.' >&2; return 1; }
   tar -xzf "$work"/fontsource-*.tgz -C "$work" "package/files/$file"
   mv "$work/package/files/$file" "$dest"
   rm -rf "$work"/fontsource-*.tgz "$work/package"

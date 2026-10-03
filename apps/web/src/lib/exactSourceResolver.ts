@@ -140,7 +140,7 @@ export async function resolveExactSourceBytes(
   }
   if (!context.artifactId.startsWith('artifact_local_')) {
     const response = await fetch(
-      `/api/artifacts/${context.artifactId}/download`
+      `/api/artifacts/${encodeURIComponent(context.artifactId)}/download`
     );
     if (response.ok) {
       const bytes = await readResponseBytes(

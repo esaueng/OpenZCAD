@@ -3483,6 +3483,15 @@ export function appendRevision(
   };
 }
 
+/** A persisted save owns a fresh revision ID; model version and undo stay unchanged. */
+export function createSavedRevision(
+  document: ProjectDocument,
+  reason: string
+): ProjectDocument {
+  const appended = appendRevision(document, reason);
+  return createCheckpoint({ ...appended, version: document.version }, reason);
+}
+
 /** Records a durable save point without changing model or undo semantics. */
 export function createCheckpoint(
   document: ProjectDocument,
@@ -3496,6 +3505,7 @@ export function createCheckpoint(
   const previous = document.checkpoints.at(-1);
   if (
     previous?.documentVersion === document.version &&
+    previous.revisionId === latestRevision.revisionId &&
     previous.reason === normalizedReason
   ) {
     return document;
@@ -3918,6 +3928,8 @@ type ExpressionToken =
   | { type: 'paren'; value: '(' | ')' };
 
 function tokenizeExpression(expression: string): ExpressionToken[] {
+  if (expression.length > 4_096)
+    throw new Error('Expression exceeds the 4096 character limit.');
   const tokens: ExpressionToken[] = [];
   let index = 0;
 
@@ -3989,6 +4001,10 @@ function tokenizeExpression(expression: string): ExpressionToken[] {
     throw new Error(`Unexpected character "${char}" in expression.`);
   }
 
+  // Every recursive grammar edge consumes a token; a token budget also bounds
+  // long unary/power chains that a parenthesis-only guard would miss.
+  if (tokens.length > 256)
+    throw new Error('Expression exceeds the 256 token limit.');
   return tokens;
 }
 

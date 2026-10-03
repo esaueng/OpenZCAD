@@ -222,21 +222,38 @@ export function glbPlacement(data: Uint8Array): readonly number[] {
   const nodes = json.nodes ?? [];
   const meshCount = json.meshes?.length ?? 0;
   const placed = new Map<number, Matrix4[]>();
-  const visit = (index: number, parent: Matrix4, depth: number): void => {
+  const visited = new Set<number>();
+  const pending = sceneRoots(json).map((index) => ({
+    index,
+    parent: IDENTITY
+  }));
+  const MAX_SCENE_NODES = 100_000;
+  if (nodes.length > MAX_SCENE_NODES || pending.length > MAX_SCENE_NODES) {
+    throw new Error('This GLB exceeds the scene node limit.');
+  }
+  while (pending.length) {
+    const { index, parent } = pending.pop()!;
     const node = nodes[index];
-    if (!node || depth > nodes.length) {
-      throw new Error('This GLB has a node tree that does not resolve.');
+    if (!Number.isInteger(index) || !node || visited.has(index)) {
+      throw new Error(
+        'This GLB has a node tree that does not resolve (cycle or repeated node).'
+      );
     }
+    visited.add(index);
     const world = multiply(parent, localMatrix(node));
     if (node.mesh !== undefined) {
-      placed.set(node.mesh, [...(placed.get(node.mesh) ?? []), world]);
+      if (placed.has(node.mesh))
+        throw new Error('This GLB places a mesh more than once.');
+      placed.set(node.mesh, [world]);
     }
-    for (const child of node.children ?? []) {
-      visit(child, world, depth + 1);
+    const children = node.children ?? [];
+    if (
+      !Array.isArray(children) ||
+      children.length + pending.length + visited.size > MAX_SCENE_NODES
+    ) {
+      throw new Error('This GLB exceeds the scene node limit.');
     }
-  };
-  for (const root of sceneRoots(json)) {
-    visit(root, IDENTITY, 0);
+    for (const child of children) pending.push({ index: child, parent: world });
   }
 
   let world: Matrix4 = IDENTITY;

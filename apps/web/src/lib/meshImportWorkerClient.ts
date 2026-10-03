@@ -74,10 +74,18 @@ export function importMeshFileInDisposableWorker(
         return;
       }
       settled = true;
+      clearTimeout(deadline);
       signal?.removeEventListener('abort', onAbort);
       worker.terminate();
       callback();
     };
+    const deadline = setTimeout(
+      () =>
+        finish(() =>
+          reject(new Error('Mesh import exceeded the 120 second time limit.'))
+        ),
+      120_000
+    );
     const onAbort = () => finish(() => reject(abortError()));
     signal?.addEventListener('abort', onAbort, { once: true });
     worker.onerror = () => {

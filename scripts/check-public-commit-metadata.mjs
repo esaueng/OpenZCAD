@@ -13,7 +13,7 @@ const DEFAULT_NAMES = new Set([
   'unknown',
   'user',
   'your name',
-  'your name here',
+  'your name here'
 ]);
 
 export function validateIdentity(name, email) {
@@ -48,23 +48,49 @@ function parseArgs(args) {
     }
     values[key.slice(2)] = args[++index];
   }
-  if (!values.base || !values.head) {
-    throw new Error('Usage: check-public-commit-metadata.mjs --base <ref> --head <ref>');
+  if (
+    !values.base ||
+    !values.head ||
+    values.base.startsWith('-') ||
+    values.head.startsWith('-')
+  ) {
+    throw new Error(
+      'Usage: check-public-commit-metadata.mjs --base <ref> --head <ref>'
+    );
   }
   return values;
 }
 
 function readCommits(base, head) {
   const format = '%H%x00%an%x00%ae%x00%cn%x00%ce%x00%x1e';
-  const output = execFileSync('git', ['log', `--format=${format}`, '--no-decorate', `${base}..${head}`], {
-    encoding: 'utf8',
-    stdio: ['ignore', 'pipe', 'pipe'],
-  });
-  return output.split('\x1e').filter((record) => record.trim()).map((record) => {
-    const fields = record.replace(/^\n/u, '').split('\x00');
-    if (fields.length < 5) throw new Error('could not parse commit metadata');
-    return { hash: fields[0], authorName: fields[1], authorEmail: fields[2], committerName: fields[3], committerEmail: fields[4] };
-  });
+  const output = execFileSync(
+    'git',
+    [
+      'log',
+      `--format=${format}`,
+      '--no-decorate',
+      '--end-of-options',
+      `${base}..${head}`
+    ],
+    {
+      encoding: 'utf8',
+      stdio: ['ignore', 'pipe', 'pipe']
+    }
+  );
+  return output
+    .split('\x1e')
+    .filter((record) => record.trim())
+    .map((record) => {
+      const fields = record.replace(/^\n/u, '').split('\x00');
+      if (fields.length < 5) throw new Error('could not parse commit metadata');
+      return {
+        hash: fields[0],
+        authorName: fields[1],
+        authorEmail: fields[2],
+        committerName: fields[3],
+        committerEmail: fields[4]
+      };
+    });
 }
 
 export function validateCommits(commits) {
@@ -72,7 +98,7 @@ export function validateCommits(commits) {
   for (const commit of commits) {
     for (const [label, name, email] of [
       ['author', commit.authorName, commit.authorEmail],
-      ['committer', commit.committerName, commit.committerEmail],
+      ['committer', commit.committerName, commit.committerEmail]
     ]) {
       for (const problem of validateIdentity(name, email)) {
         findings.push(`${commit.hash.slice(0, 12)}: ${label} ${problem}`);

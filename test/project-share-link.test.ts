@@ -4,14 +4,15 @@ import {
   shareTokenFromHash
 } from '../apps/web/src/lib/projectShareLink';
 
+const token = 'a'.repeat(43);
 describe('share link fragments', () => {
   it('reads the token out of a #share= fragment', () => {
-    expect(shareTokenFromHash('#share=abc123')).toBe('abc123');
-    expect(shareTokenFromHash('share=abc123')).toBe('abc123');
+    expect(shareTokenFromHash(`#share=${token}`)).toBe(token);
+    expect(shareTokenFromHash(`share=${token}`)).toBe(token);
   });
 
   it('trims whitespace a mail client or chat wrapped around the token', () => {
-    expect(shareTokenFromHash('#share= abc123 ')).toBe('abc123');
+    expect(shareTokenFromHash(`#share= ${token} `)).toBe(token);
   });
 
   it('rejects everything that is not a share fragment', () => {

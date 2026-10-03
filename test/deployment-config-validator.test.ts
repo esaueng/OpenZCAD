@@ -9,7 +9,7 @@ function hostedConfig() {
     account_id: '11111111111111111111111111111111',
     name: 'independent-openzcad',
     main: './apps/web/worker/index.ts',
-    assets: { binding: 'ASSETS' },
+    assets: { binding: 'ASSETS', run_worker_first: ['/api/*', '/healthz'] },
     triggers: { crons: ['17 * * * *'] },
     vars: {
       ENVIRONMENT: 'beta',

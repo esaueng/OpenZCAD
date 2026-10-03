@@ -25,14 +25,13 @@ host CI slice bounds combined execution to one CPU and 3 GiB memory.
 
 ## Owner PR quality checks
 
-`ci.yml` now calls `trusted-pr.yml` at a reviewed immutable commit. Only
+`ci.yml` now calls `fleet-ci.yml` at a reviewed immutable commit. Only
 `petergstfsn`-authored pull requests with a head branch in `esaueng/OpenZCAD`,
 triggered and rerun by that same account, can use the VPS. Forks, other authors,
 bot events, and manual CI dispatches run the same lint and typecheck commands on
-GitHub-hosted runners. The routing policy runs on a hosted runner before any
-checkout and accepts no caller inputs, checkout overrides, or deployment secrets.
+GitHub-hosted runners. The pinned workflow contains the routing policy and accepts no caller inputs, checkout overrides, or deployment secrets. The retired OIDC routing workflow has been removed.
 
-The runner-group allowlist must include the exact `trusted-pr.yml@<commit>` used
+The runner-group allowlist must include the exact `fleet-ci.yml@<commit>` used
 by `ci.yml`. Never grant access to PR merge refs or arbitrary branch versions of
 that workflow. Changing its policy requires a new reviewed commit, an explicit
 runner-group allowlist update, and an update to the caller pin. Editing the local

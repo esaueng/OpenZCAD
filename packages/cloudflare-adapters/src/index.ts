@@ -6,6 +6,8 @@ export {
 } from './account-tiers';
 import {
   assertDocumentTextBudget,
+  documentStructureError,
+  documentEnvelopeError,
   hasValidImportedStepSources,
   isDocumentHistory
 } from '@openzcad/shared';
@@ -54,6 +56,9 @@ import {
   MAX_THUMBNAIL_BYTES,
   MAX_PERSISTED_DOCUMENT_BYTES,
   MAX_PROJECT_REVISIONS,
+  MAX_PROJECT_REVISION_RECORDS,
+  MAX_DOCUMENT_VERSION_ADVANCE,
+  documentVersionCanAdvance,
   MAX_PROJECT_CHECKPOINTS,
   THUMBNAIL_CONTENT_TYPE,
   nowIso,
@@ -113,7 +118,7 @@ import {
 import {
   adoptProjectDocument,
   reidentifyProjectDocument,
-  createCheckpoint,
+  createSavedRevision,
   createProjectDocument,
   duplicateProjectDocument,
   normalizeDocument,
@@ -844,20 +849,33 @@ export class D1R2PersistenceService implements PersistenceService {
       );
     }
     await this.requireProjectOwner(ownerUserId, projectId);
-    await this.env.DB.prepare(
-      `INSERT INTO project_share_links
+    try {
+      await this.env.DB.prepare(
+        `INSERT INTO project_share_links
          (id, project_id, mode, token_hash, created_by_user_id, created_at)
        VALUES (?, ?, ?, ?, ?, ?)`
-    )
-      .bind(
-        input.shareLinkId,
-        projectId,
-        input.mode,
-        input.tokenHash,
-        ownerUserId,
-        input.createdAt
       )
-      .run();
+        .bind(
+          input.shareLinkId,
+          projectId,
+          input.mode,
+          input.tokenHash,
+          ownerUserId,
+          input.createdAt
+        )
+        .run();
+    } catch (error) {
+      if (
+        error instanceof Error &&
+        error.message.includes('SHARE_LINK_LIMIT_REACHED')
+      ) {
+        throw new ProjectSharingError(
+          'SHARE_LINK_LIMIT',
+          'A project supports up to 100 active share links.'
+        );
+      }
+      throw error;
+    }
     await this.env.DB.prepare(
       `INSERT INTO project_access_events
          (project_id, actor_user_id, share_link_id, event_type, created_at,
@@ -1060,7 +1078,8 @@ export class D1R2PersistenceService implements PersistenceService {
     }
     const body = await decodeProjectStorageBody(
       await stored.arrayBuffer(),
-      'gzip'
+      'gzip',
+      row.logical_bytes
     );
     if (
       body.byteLength !== row.logical_bytes ||
@@ -1555,6 +1574,18 @@ export class D1R2PersistenceService implements PersistenceService {
       userId,
       request.projectId
     );
+    // The UPDATE's expected-version predicate binds this bound to the stored head.
+    if (
+      !documentVersionCanAdvance(
+        request.document.version,
+        request.expectedVersion
+      )
+    ) {
+      throw new RevisionConflictError(
+        request.projectId,
+        request.expectedVersion
+      );
+    }
     const normalized = withoutDerivedProjection(
       normalizeDocument(request.document)
     );
@@ -1565,7 +1596,7 @@ export class D1R2PersistenceService implements PersistenceService {
       throw new ProjectNotFoundError(request.projectId);
     }
     await this.refreshAccountQuota(access.ownerUserId);
-    const document = createCheckpoint(normalized, request.reason);
+    const document = createSavedRevision(normalized, request.reason);
     this.assertDocumentCanBeStored(document);
     const documentJson = JSON.stringify(document);
     const documentBytes = persistedDocumentBytes(document);
@@ -1618,7 +1649,7 @@ export class D1R2PersistenceService implements PersistenceService {
            )`
         ).bind(write.objectId, request.projectId, write.objectId),
         this.env.DB.prepare(
-          `INSERT OR REPLACE INTO revisions
+          `INSERT INTO revisions
              (id, project_id, reason, document_json, document_object_id,
               document_bytes, created_at, author_user_id)
            SELECT ?, ?, ?, ?, ?, ?, ?, ?
@@ -1718,7 +1749,7 @@ export class D1R2PersistenceService implements PersistenceService {
           userId
         ),
         this.env.DB.prepare(
-          `INSERT OR REPLACE INTO revisions (id, project_id, reason, document_json, document_bytes, created_at, author_user_id) SELECT ?, ?, ?, ?, ?, ?, ? WHERE changes() > 0`
+          `INSERT INTO revisions (id, project_id, reason, document_json, document_bytes, created_at, author_user_id) SELECT ?, ?, ?, ?, ?, ?, ? WHERE changes() > 0`
         ).bind(
           latestRevision.revisionId,
           request.projectId,
@@ -1929,6 +1960,18 @@ export class D1R2PersistenceService implements PersistenceService {
       userId,
       request.projectId
     );
+    // The UPDATE's expected-version predicate binds this bound to the stored head.
+    if (
+      !documentVersionCanAdvance(
+        request.document.version,
+        request.expectedVersion
+      )
+    ) {
+      throw new RevisionConflictError(
+        request.projectId,
+        request.expectedVersion
+      );
+    }
     const normalized = withoutDerivedProjection(
       normalizeDocument(request.document)
     );
@@ -2109,7 +2152,7 @@ export class D1R2PersistenceService implements PersistenceService {
     if (!this.env.ARTIFACTS) {
       throw new ArtifactStorageError();
     }
-    await this.purgeExpiredUploadSessions();
+    // Expired cross-account uploads are reclaimed by the scheduled sweeper.
     await this.refreshAccountQuota(access.ownerUserId);
     const session = createUploadSessionRecord(request);
     try {
@@ -3396,7 +3439,8 @@ export class D1R2PersistenceService implements PersistenceService {
     }
     const logicalBody = await decodeProjectStorageBody(
       await stored.arrayBuffer(),
-      'gzip'
+      'gzip',
+      object.logical_bytes
     );
     if (
       logicalBody.byteLength !== object.logical_bytes ||
@@ -3421,7 +3465,8 @@ export class D1R2PersistenceService implements PersistenceService {
         }
         return decodeProjectStorageBody(
           await asset.arrayBuffer(),
-          reference.contentEncoding
+          reference.contentEncoding,
+          reference.logicalBytes
         );
       }
     );
@@ -3784,6 +3829,7 @@ export class D1R2PersistenceService implements PersistenceService {
         'DELETE FROM upload_sessions WHERE project_id IN',
         'DELETE FROM artifacts WHERE project_id IN',
         'DELETE FROM project_measurements WHERE project_id IN',
+        'DELETE FROM project_workspace_sessions WHERE project_id IN',
         'DELETE FROM revisions WHERE project_id IN',
         'DELETE FROM project_document_objects WHERE project_id IN',
         'DELETE FROM project_storage_assets WHERE project_id IN',
@@ -4367,8 +4413,6 @@ const SOCKET_TICKET_TTL_MS = 30_000;
  * Structural limits applied to client JSON before it reaches `normalizeDocument`
  * or the three-way merge, both of which recurse without a depth guard.
  */
-const MAX_CLIENT_DOCUMENT_DEPTH = 64;
-const MAX_CLIENT_DOCUMENT_VALUES = 500_000;
 
 /** Largest HTTP snapshot body accepted, sized to fit one storable document. */
 const MAX_SNAPSHOT_PAYLOAD_BYTES = 1_600_000;
@@ -4549,7 +4593,10 @@ export class ProjectCollaborationRoom extends DurableObject {
   private sockets = new Map<WebSocket, CollaborationSocketConnection>();
   private editLeases: ProjectEditLease[] = [];
   private leaseQueue: Promise<void> = Promise.resolve();
-  private ticketQueue: Promise<void> = Promise.resolve();
+  private socketFrameTimes = new WeakMap<
+    WebSocket,
+    { start: number; count: number }
+  >();
   private latestDocument: ProjectDocument | null = null;
   private documentHistory = new Map<number, ProjectDocument>();
   private historyVersions: number[] = [];
@@ -4728,26 +4775,41 @@ export class ProjectCollaborationRoom extends DurableObject {
     if (!this.collaborationAccessAllowed(role, email)) {
       return new Response('Collaboration access is disabled.', { status: 403 });
     }
-    if (this.projectId && this.projectId !== projectId) {
-      return new Response('Room project mismatch.', { status: 409 });
-    }
-    if (this.projectId !== projectId) {
-      this.projectId = projectId;
-      await this.persistRoomState();
-    }
+    return this.enqueueLeaseOperation(async () => {
+      if (this.erasing)
+        return new Response('Project was erased.', { status: 410 });
+      if (this.projectId && this.projectId !== projectId) {
+        return new Response('Room project mismatch.', { status: 409 });
+      }
+      if (this.projectId !== projectId) {
+        this.projectId = projectId;
+        await this.persistRoomState();
+      }
 
-    const pair = new WebSocketPair();
-    const client = pair[0];
-    const server = pair[1];
-    this.roomContext.acceptWebSocket(server);
-    roomWebSocket(server).serializeAttachment({
-      schema: 1,
-      userId,
-      displayName,
-      role,
-      email
-    } satisfies CollaborationSocketAttachment);
-    return new Response(null, { status: 101, webSocket: client });
+      const live = this.roomContext.getWebSockets();
+      const ownSockets = live.filter(
+        (socket) =>
+          socketAttachment(roomWebSocket(socket).deserializeAttachment())
+            ?.userId === userId
+      );
+      if (live.length >= 64 || ownSockets.length >= 8) {
+        return new Response('Collaboration connection limit reached.', {
+          status: 429
+        });
+      }
+      const pair = new WebSocketPair();
+      const client = pair[0];
+      const server = pair[1];
+      this.roomContext.acceptWebSocket(server);
+      roomWebSocket(server).serializeAttachment({
+        schema: 1,
+        userId,
+        displayName,
+        role,
+        email
+      } satisfies CollaborationSocketAttachment);
+      return new Response(null, { status: 101, webSocket: client });
+    });
   }
 
   async webSocketMessage(
@@ -4804,29 +4866,26 @@ export class ProjectCollaborationRoom extends DurableObject {
     ) {
       return new Response('Invalid project erasure request.', { status: 403 });
     }
-    return this.roomContext.blockConcurrencyWhile(async () => {
-      this.erasing = true;
-      for (const socket of this.sockets.keys()) {
-        socket.close(4001, 'Cloud project was permanently deleted.');
-      }
-      this.sockets.clear();
-      this.presence.clear();
-      this.editLeases = [];
-      this.latestDocument = null;
-      this.documentHistory.clear();
-      this.projectId = null;
-      await this.roomContext.storage.deleteAll();
-      return new Response(null, { status: 204 });
-    });
+    return this.roomContext.blockConcurrencyWhile(() =>
+      this.enqueueLeaseOperation(async () => {
+        this.erasing = true;
+        for (const socket of this.roomContext.getWebSockets()) {
+          socket.close(4001, 'Cloud project was permanently deleted.');
+        }
+        this.sockets.clear();
+        this.presence.clear();
+        this.editLeases = [];
+        this.latestDocument = null;
+        this.documentHistory.clear();
+        this.projectId = null;
+        await this.roomContext.storage.deleteAll();
+        return new Response(null, { status: 204 });
+      })
+    );
   }
 
   private enqueueTicketOperation<T>(operation: () => Promise<T>): Promise<T> {
-    const result = this.ticketQueue.then(operation, operation);
-    this.ticketQueue = result.then(
-      () => undefined,
-      () => undefined
-    );
-    return result;
+    return this.enqueueLeaseOperation(operation);
   }
 
   private async issueSocketTicket(request: Request): Promise<Response> {
@@ -4852,15 +4911,16 @@ export class ProjectCollaborationRoom extends DurableObject {
     if (!this.collaborationAccessAllowed(role, email)) {
       return new Response('Collaboration access is disabled.', { status: 403 });
     }
-    if (this.projectId && this.projectId !== projectId) {
-      return new Response('Room project mismatch.', { status: 409 });
-    }
-    if (this.projectId !== projectId) {
-      this.projectId = projectId;
-      await this.persistRoomState();
-    }
-
     return this.enqueueTicketOperation(async () => {
+      if (this.erasing)
+        return new Response('Project was erased.', { status: 410 });
+      if (this.projectId && this.projectId !== projectId) {
+        return new Response('Room project mismatch.', { status: 409 });
+      }
+      if (this.projectId !== projectId) {
+        this.projectId = projectId;
+        await this.persistRoomState();
+      }
       const now = Date.now();
       const ticket = randomSocketTicket();
       const ticketHash = await socketTicketHash(ticket);
@@ -4900,12 +4960,14 @@ export class ProjectCollaborationRoom extends DurableObject {
     }
     const ticketHash = await socketTicketHash(ticket);
     const claim = await this.enqueueTicketOperation(async () => {
+      if (this.erasing) return null;
       const now = Date.now();
       const stored =
         (await this.roomContext.storage.get<CollaborationSocketTickets>(
           ROOM_SOCKET_TICKETS_KEY
         )) ?? {};
       const found = stored[ticketHash];
+      if (!found) return null;
       const pending = Object.fromEntries(
         Object.entries(stored).filter(
           ([hash, candidate]) =>
@@ -5033,7 +5095,27 @@ export class ProjectCollaborationRoom extends DurableObject {
       return;
     }
 
+    const now = Date.now();
+    let frameWindow = this.socketFrameTimes.get(socket);
+    if (!frameWindow || now - frameWindow.start >= 1_000) {
+      frameWindow = { start: now, count: 0 };
+      this.socketFrameTimes.set(socket, frameWindow);
+    }
+    if (++frameWindow.count > 30) {
+      socket.close(1008, 'Collaboration message rate limit reached.');
+      this.removeSocket(socket);
+      return;
+    }
     if (message.type === 'hello') {
+      const existing = this.sockets.get(socket);
+      const collision = Array.from(this.sockets.entries()).find(
+        ([, entry]) => entry.clientId === message.clientId
+      );
+      if (existing || (collision && collision[1].userId !== userId)) {
+        socket.close(1008, 'Collaboration client identity is already in use.');
+        this.removeSocket(socket);
+        return;
+      }
       const currentRole = await this.currentConnectionRole({
         userId,
         role,
@@ -5050,6 +5132,12 @@ export class ProjectCollaborationRoom extends DurableObject {
         return;
       }
       role = currentRole;
+      // Reconnecting the same authenticated browser replaces its old transport.
+      // The lease remains bound to the account and client identity.
+      if (collision) {
+        this.removeSocket(collision[0], false);
+        collision[0].close(1000, 'Collaboration connection replaced.');
+      }
       this.rememberSocket(
         socket,
         {
@@ -5110,7 +5198,7 @@ export class ProjectCollaborationRoom extends DurableObject {
       if (statusChanged || roleChanged) {
         this.rememberSocket(socket, connection, message.status);
       }
-      await this.broadcastPresence();
+      if (statusChanged || roleChanged) await this.broadcastPresence();
       return;
     }
     if (message.type === 'lease-acquire') {
@@ -5180,6 +5268,14 @@ export class ProjectCollaborationRoom extends DurableObject {
       this.send(socket, { type: 'error', ...rejection });
       return;
     }
+    if (!(await this.documentOwnerMatches(rawDocument, connection))) {
+      this.send(socket, {
+        type: 'error',
+        code: 'document-invalid',
+        message: 'Document owner or version does not match the project.'
+      });
+      return;
+    }
     const document = normalizeDocument(rawDocument);
     if (document.projectId !== this.projectId) {
       socket.close(1008, 'Document project does not match this room.');
@@ -5231,7 +5327,8 @@ export class ProjectCollaborationRoom extends DurableObject {
     // Development rooms remain directly testable. Hosted beta always resolves
     // against global flags or the authenticated account allowlist.
     if (
-      this.roomEnv.ENVIRONMENT !== 'beta' &&
+      this.roomEnv.ENVIRONMENT === 'development' &&
+      this.roomEnv.AUTH_MODE === 'development' &&
       this.roomEnv.PRODUCTION_GUARD === undefined
     ) {
       return true;
@@ -5503,6 +5600,9 @@ export class ProjectCollaborationRoom extends DurableObject {
   }
 
   private async acceptInternalRoleUpdate(request: Request): Promise<Response> {
+    if (request.headers.get('x-openzcad-internal-role-update') !== 'v1') {
+      return new Response('Invalid project role update.', { status: 403 });
+    }
     const projectId = new URL(request.url).searchParams.get('projectId');
     const userId = request.headers.get('x-openzcad-internal-user-id');
     const roleValue = request.headers.get('x-openzcad-internal-project-role');
@@ -5596,6 +5696,38 @@ export class ProjectCollaborationRoom extends DurableObject {
     }
   }
 
+  private async documentOwnerMatches(
+    document: ProjectDocument,
+    connection: { userId: UserId; role: SharedProjectAccessRole }
+  ): Promise<boolean> {
+    if (this.roomEnv.DB) {
+      const owner = await this.roomEnv.DB.prepare(
+        "SELECT user_id, document_version FROM projects WHERE id = ? AND status != 'deleted'"
+      )
+        .bind(document.projectId)
+        .first<{ user_id: string; document_version?: number }>();
+      return (
+        !!owner &&
+        document.ownerUserId === owner.user_id &&
+        document.version <=
+          Math.max(
+            owner.document_version ?? 0,
+            this.latestDocument?.version ?? 0
+          ) +
+            MAX_DOCUMENT_VERSION_ADVANCE
+      );
+    }
+    const owner =
+      this.latestDocument?.ownerUserId ??
+      (connection.role === 'owner' ? connection.userId : null);
+    return (
+      owner !== null &&
+      document.ownerUserId === owner &&
+      document.version <=
+        (this.latestDocument?.version ?? 0) + MAX_DOCUMENT_VERSION_ADVANCE
+    );
+  }
+
   private async acceptHttpSnapshot(request: Request): Promise<Response> {
     const userId = request.headers.get('x-openzcad-user-id');
     const displayName = request.headers.get('x-openzcad-display-name');
@@ -5629,7 +5761,13 @@ export class ProjectCollaborationRoom extends DurableObject {
     } catch {
       return new Response('Invalid collaboration snapshot.', { status: 400 });
     }
-    if (!payload.clientId || !payload.document) {
+    if (
+      !isRecord(payload) ||
+      typeof payload.clientId !== 'string' ||
+      !payload.clientId ||
+      payload.clientId.length > 256 ||
+      !payload.document
+    ) {
       return new Response('Invalid collaboration snapshot.', { status: 400 });
     }
     return this.enqueueLeaseOperation(() =>
@@ -5660,6 +5798,8 @@ export class ProjectCollaborationRoom extends DurableObject {
       leaseId?: string;
     }
   ): Promise<Response> {
+    if (this.erasing)
+      return new Response('Project was erased.', { status: 410 });
     if (!(await this.membershipStillAllowsAuthoring({ userId, role, email }))) {
       return rejectionResponse({
         code: 'permission-denied',
@@ -5681,6 +5821,14 @@ export class ProjectCollaborationRoom extends DurableObject {
     const rejection = checkClientDocument(payload.document);
     if (rejection) {
       return rejectionResponse(rejection);
+    }
+    if (
+      !(await this.documentOwnerMatches(payload.document, { userId, role }))
+    ) {
+      return rejectionResponse({
+        code: 'document-invalid',
+        message: 'Document owner or version does not match the project.'
+      });
     }
     this.projectId = projectId;
     const document = normalizeDocument(payload.document);
@@ -5807,8 +5955,13 @@ export class ProjectCollaborationRoom extends DurableObject {
     except?: WebSocket
   ): Promise<void> {
     let removed = false;
+    const roles = new Map<UserId, SharedProjectAccessRole | null>();
     for (const [socket, connection] of Array.from(this.sockets.entries())) {
-      const role = await this.currentConnectionRole(connection);
+      let role = roles.get(connection.userId);
+      if (role === undefined) {
+        role = await this.currentConnectionRole(connection);
+        roles.set(connection.userId, role);
+      }
       if (!role) {
         socket.close(
           1008,
@@ -5913,36 +6066,10 @@ function checkClientDocument(value: unknown): CollaborationRejection | null {
       message: 'Collaboration document must be an object.'
     };
   }
-  let visited = 0;
-  const pending: Array<{ value: unknown; depth: number }> = [
-    { value, depth: 1 }
-  ];
-  while (pending.length > 0) {
-    const entry = pending.pop()!;
-    if (entry.depth > MAX_CLIENT_DOCUMENT_DEPTH) {
-      return {
-        code: 'document-too-complex',
-        message: `Collaboration document nests deeper than ${MAX_CLIENT_DOCUMENT_DEPTH} levels.`
-      };
-    }
-    visited += 1;
-    if (visited > MAX_CLIENT_DOCUMENT_VALUES) {
-      return {
-        code: 'document-too-complex',
-        message: `Collaboration document holds more than ${MAX_CLIENT_DOCUMENT_VALUES} values.`
-      };
-    }
-    const current = entry.value;
-    if (Array.isArray(current)) {
-      for (const item of current) {
-        pending.push({ value: item, depth: entry.depth + 1 });
-      }
-    } else if (isRecord(current)) {
-      for (const item of Object.values(current)) {
-        pending.push({ value: item, depth: entry.depth + 1 });
-      }
-    }
-  }
+  const complexity = documentStructureError(value);
+  if (complexity) return { code: 'document-too-complex', message: complexity };
+  const envelope = documentEnvelopeError(value);
+  if (envelope) return { code: 'document-invalid', message: envelope };
   if (
     typeof value.schemaVersion !== 'number' ||
     value.schemaVersion > PROJECT_DOCUMENT_SCHEMA_VERSION ||
@@ -6023,6 +6150,9 @@ export function resolveCollaborationDocument(
   if (!latest) {
     return { kind: 'accept', document: incoming };
   }
+  if (!documentVersionCanAdvance(incoming.version, latest.version)) {
+    return { kind: 'conflict', document: latest };
+  }
   const behindLatest =
     base !== undefined &&
     base.projectId === latest.projectId &&
@@ -6048,21 +6178,22 @@ export function resolveCollaborationDocument(
     // that client was away. `revisions` is append-only through edits, undo and
     // redo alike, so one list being a prefix of the other is the room's own
     // proof that the two documents are on the same line.
-    return sharesRevisionLineage(latest, incoming)
+    return sharesRevisionLineage(latest, incoming, base)
       ? { kind: 'accept', document: incoming }
       : { kind: 'conflict', document: latest };
   }
   const sameHistory =
     incoming.version === latest.version &&
-    JSON.stringify({
-      nodes: incoming.nodes,
-      featureOrder: incoming.featureOrder,
-      bodyOrder: incoming.bodyOrder,
-      sketchOrder: incoming.sketchOrder,
-      parameterOrder: incoming.parameterOrder,
-      commandLog: incoming.commandLog
-    }) ===
-      JSON.stringify({
+    sameJson(
+      {
+        nodes: incoming.nodes,
+        featureOrder: incoming.featureOrder,
+        bodyOrder: incoming.bodyOrder,
+        sketchOrder: incoming.sketchOrder,
+        parameterOrder: incoming.parameterOrder,
+        commandLog: incoming.commandLog
+      },
+      {
         nodes: latest.nodes,
         featureOrder: latest.featureOrder,
         bodyOrder: latest.bodyOrder,
@@ -6080,13 +6211,14 @@ export function resolveCollaborationDocument(
  *
  * `revisions` only ever grows — an undo appends its own revision rather than
  * dropping the one it reverses — so a shared line shows up as one id list being
- * a prefix of the other, in either direction. Documents built without revisions
- * carry no lineage to compare and are treated as compatible, which keeps the
- * check permissive exactly where it has nothing to say.
+ * a prefix of the incoming list. Missing or truncated lineage is not evidence
+ * of descent. A fresh project with no revisions can only be advanced using
+ * the room's exact base document.
  */
 function sharesRevisionLineage(
   latest: ProjectDocument,
-  incoming: ProjectDocument
+  incoming: ProjectDocument,
+  base?: ProjectDocument
 ): boolean {
   const latestIds = (latest.revisions ?? []).map(
     (revision) => revision.revisionId
@@ -6094,10 +6226,17 @@ function sharesRevisionLineage(
   const incomingIds = (incoming.revisions ?? []).map(
     (revision) => revision.revisionId
   );
-  return (
-    hasJsonPrefix(incomingIds, latestIds) ||
-    hasJsonPrefix(latestIds, incomingIds)
-  );
+  if (!latestIds.length || incomingIds.length < latestIds.length) return false;
+  if (hasJsonPrefix(incomingIds, latestIds)) return true;
+  // Command history evicts only its oldest records when the bounded log fills.
+  if (
+    incomingIds.length !== MAX_PROJECT_REVISION_RECORDS ||
+    !base ||
+    !sameJson(base, latest)
+  )
+    return false;
+  const start = latestIds.indexOf(incomingIds[0]!);
+  return start > 0 && hasJsonPrefix(incomingIds, latestIds.slice(start));
 }
 
 const MERGE_CONFLICT = Symbol('collaboration-merge-conflict');
@@ -6110,42 +6249,91 @@ type JsonMergeValue =
   | JsonMergeValue[]
   | { [key: string]: JsonMergeValue };
 
+function jsonComparison() {
+  let remaining = 2_000_000;
+  const memo = new WeakMap<object, WeakMap<object, boolean>>();
+  const charge = () => {
+    if (--remaining < 0)
+      throw new Error('Collaboration merge exceeds its work limit.');
+  };
+  const same = (left: unknown, right: unknown): boolean => {
+    charge();
+    if (left === right) return true;
+    if (Array.isArray(left) && Array.isArray(right)) {
+      if (left.length !== right.length) return false;
+      return left.every((value, index) =>
+        same(value ?? null, right[index] ?? null)
+      );
+    }
+    if (!isRecord(left) || !isRecord(right)) return false;
+    const cached = memo.get(left)?.get(right);
+    if (cached !== undefined) return cached;
+    const keys = Object.keys(left).filter((key) => left[key] !== undefined);
+    const rightKeys = Object.keys(right).filter(
+      (key) => right[key] !== undefined
+    );
+    const equal =
+      keys.length === rightKeys.length &&
+      keys.every(
+        (key) => Object.hasOwn(right, key) && same(left[key], right[key])
+      );
+    let pairs = memo.get(left);
+    if (!pairs) {
+      pairs = new WeakMap();
+      memo.set(left, pairs);
+    }
+    pairs.set(right, equal);
+    return equal;
+  };
+  return { same, charge };
+}
+
 function sameJson(left: unknown, right: unknown): boolean {
-  return JSON.stringify(left) === JSON.stringify(right);
+  return jsonComparison().same(left, right);
 }
 
 function isRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === 'object' && value !== null && !Array.isArray(value);
 }
 
-function hasJsonPrefix(values: unknown[], prefix: unknown[]): boolean {
+function hasJsonPrefix(
+  values: unknown[],
+  prefix: unknown[],
+  same = sameJson
+): boolean {
   return (
     values.length >= prefix.length &&
-    prefix.every((value, index) => sameJson(value, values[index]))
+    prefix.every((value, index) => same(value, values[index]))
   );
 }
 
 function mergeJsonValue(
   base: unknown,
   latest: unknown,
-  incoming: unknown
+  incoming: unknown,
+  comparison: ReturnType<typeof jsonComparison>
 ): JsonMergeValue | typeof MERGE_CONFLICT {
-  if (sameJson(latest, incoming)) {
+  comparison.charge();
+  const same = comparison.same;
+  if (same(latest, incoming)) {
     return structuredClone(latest) as JsonMergeValue;
   }
-  if (sameJson(base, latest)) {
+  if (same(base, latest)) {
     return structuredClone(incoming) as JsonMergeValue;
   }
-  if (sameJson(base, incoming)) {
+  if (same(base, incoming)) {
     return structuredClone(latest) as JsonMergeValue;
   }
   if (Array.isArray(base) && Array.isArray(latest) && Array.isArray(incoming)) {
-    if (!hasJsonPrefix(latest, base) || !hasJsonPrefix(incoming, base)) {
+    if (
+      !hasJsonPrefix(latest, base, same) ||
+      !hasJsonPrefix(incoming, base, same)
+    ) {
       return MERGE_CONFLICT;
     }
     const merged = structuredClone(latest) as JsonMergeValue[];
     for (const value of incoming.slice(base.length)) {
-      if (!merged.some((candidate) => sameJson(candidate, value))) {
+      if (!merged.some((candidate) => same(candidate, value))) {
         merged.push(structuredClone(value) as JsonMergeValue);
       }
     }
@@ -6159,7 +6347,12 @@ function mergeJsonValue(
       ...Object.keys(incoming)
     ]);
     for (const key of keys) {
-      const value = mergeJsonValue(base[key], latest[key], incoming[key]);
+      const value = mergeJsonValue(
+        base[key],
+        latest[key],
+        incoming[key],
+        comparison
+      );
       if (value === MERGE_CONFLICT) {
         return MERGE_CONFLICT;
       }
@@ -6181,11 +6374,23 @@ export function mergeCollaborationDocuments(
     const { version: _version, derived: _derived, ...stable } = document;
     return stable;
   };
-  const merged = mergeJsonValue(
-    withoutVolatileState(base),
-    withoutVolatileState(latest),
-    withoutVolatileState(incoming)
-  );
+  if (
+    !Number.isSafeInteger(latest.version) ||
+    !Number.isSafeInteger(incoming.version) ||
+    Math.max(latest.version, incoming.version) >= Number.MAX_SAFE_INTEGER
+  )
+    return null;
+  let merged: JsonMergeValue | typeof MERGE_CONFLICT;
+  try {
+    merged = mergeJsonValue(
+      withoutVolatileState(base),
+      withoutVolatileState(latest),
+      withoutVolatileState(incoming),
+      jsonComparison()
+    );
+  } catch {
+    return null;
+  }
   if (merged === MERGE_CONFLICT || !isRecord(merged)) {
     return null;
   }

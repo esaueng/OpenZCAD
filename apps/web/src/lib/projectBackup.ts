@@ -1,7 +1,8 @@
 import {
   documentNodesWithHistory,
   documentAssetsWithHistory,
-  assertDocumentHistory
+  assertDocumentHistory,
+  documentStructureError
 } from '@openzcad/shared';
 import {
   normalizeDocument,
@@ -44,6 +45,8 @@ function record(value: unknown): Record<string, unknown> {
 }
 
 function validateDocument(value: unknown): asserts value is ProjectDocument {
+  const complexity = documentStructureError(value);
+  if (complexity) throw new Error(complexity);
   const doc = record(value);
   assertDocumentHistory(value as ProjectDocument);
   if (
@@ -167,9 +170,25 @@ function validateDocument(value: unknown): asserts value is ProjectDocument {
 export function backupFileBytes(file: {
   base64: string;
 }): Uint8Array<ArrayBuffer> {
-  return Uint8Array.from(atob(file.base64), (character) =>
-    character.charCodeAt(0)
-  );
+  const encoded = file.base64;
+  if (
+    encoded.length > Math.ceil((128 * 1024 * 1024) / 3) * 4 ||
+    encoded.length % 4 !== 0 ||
+    !/^[A-Za-z0-9+/]*={0,2}$/.test(encoded)
+  ) {
+    throw new Error(
+      'Archived file exceeds its byte limit or has invalid base64.'
+    );
+  }
+  const padding = encoded.endsWith('==') ? 2 : encoded.endsWith('=') ? 1 : 0;
+  const out = new Uint8Array((encoded.length / 4) * 3 - padding);
+  let offset = 0;
+  for (let start = 0; start < encoded.length; start += 32_768) {
+    const chunk = atob(encoded.slice(start, start + 32_768));
+    for (let index = 0; index < chunk.length; index += 1)
+      out[offset++] = chunk.charCodeAt(index);
+  }
+  return out;
 }
 
 export async function checksum(bytes: Uint8Array): Promise<string> {
@@ -202,7 +221,7 @@ export async function parseProjectBackup(text: string): Promise<ProjectBackup> {
   if (parsed.format !== 'openzcad-project' || parsed.version !== 1)
     throw new Error('Not a supported OpenZCAD project backup.');
   validateDocument(parsed.document);
-  if (!Array.isArray(parsed.files))
+  if (!Array.isArray(parsed.files) || parsed.files.length > 1_000)
     throw new Error('Project backup is missing its files.');
   const ids = new Set<string>();
   for (const value of parsed.files) {
@@ -227,7 +246,10 @@ export async function parseProjectBackup(text: string): Promise<ProjectBackup> {
       throw new Error(`Archived file is damaged: ${artifact.name}`);
   }
   const sourceIds = new Set<string>();
-  if (parsed.sources !== undefined && !Array.isArray(parsed.sources))
+  if (
+    parsed.sources !== undefined &&
+    (!Array.isArray(parsed.sources) || parsed.sources.length > 1_000)
+  )
     throw new Error('Invalid source collection.');
   for (const value of (parsed.sources ?? []) as unknown[]) {
     const source = record(value);
@@ -246,7 +268,10 @@ export async function parseProjectBackup(text: string): Promise<ProjectBackup> {
     sourceIds.add(source.sha256);
   }
   const documents = [parsed.document];
-  if (parsed.saveStates !== undefined && !Array.isArray(parsed.saveStates))
+  if (
+    parsed.saveStates !== undefined &&
+    (!Array.isArray(parsed.saveStates) || parsed.saveStates.length > 100)
+  )
     throw new Error('Invalid save states.');
   const checkpoints = new Set<string>();
   for (const value of (parsed.saveStates ?? []) as unknown[]) {

@@ -61,7 +61,9 @@ export function rigidImportedSource(
     const data = feature.data;
     if (!(
       ('targetBodyId' in data && data.targetBodyId === bodyId) ||
-      ('targetBodyIds' in data && data.targetBodyIds.includes(bodyId))
+      ('targetBodyIds' in data &&
+        Array.isArray(data.targetBodyIds) &&
+        data.targetBodyIds.includes(bodyId))
     ))
       continue;
     if (

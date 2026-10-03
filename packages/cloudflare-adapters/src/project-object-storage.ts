@@ -1,3 +1,7 @@
+import {
+  MAX_CLOUD_PROJECT_DOCUMENT_BYTES,
+  MAX_ARTIFACT_UPLOAD_BYTES
+} from '@openzcad/shared';
 import type { ProjectDocument } from '@openzcad/shared';
 
 export const PROJECT_OBJECT_STORAGE_FORMAT = 'openzcad-project-object';
@@ -77,7 +81,8 @@ async function gzip(bytes: Uint8Array): Promise<Uint8Array> {
 
 export async function decodeProjectStorageBody(
   body: ArrayBuffer,
-  contentEncoding: 'gzip'
+  contentEncoding: 'gzip',
+  maxBytes = MAX_CLOUD_PROJECT_DOCUMENT_BYTES + MAX_ARTIFACT_UPLOAD_BYTES
 ): Promise<Uint8Array> {
   if (contentEncoding !== 'gzip') {
     throw new ProjectObjectStorageError(
@@ -91,7 +96,34 @@ export async function decodeProjectStorageBody(
     );
   }
   const decompressed = stream.pipeThrough(new DecompressionStream('gzip'));
-  return new Uint8Array(await new Response(decompressed).arrayBuffer());
+  if (!Number.isSafeInteger(maxBytes) || maxBytes < 0)
+    throw new ProjectObjectStorageError('Invalid project object length.');
+  const reader = decompressed.getReader();
+  const chunks: Uint8Array[] = [];
+  let total = 0;
+  try {
+    while (true) {
+      const { done, value } = await reader.read();
+      if (done) break;
+      total += value.byteLength;
+      if (total > maxBytes) {
+        await reader.cancel();
+        throw new ProjectObjectStorageError(
+          'Project object exceeds its decompression limit.'
+        );
+      }
+      chunks.push(value);
+    }
+  } finally {
+    reader.releaseLock();
+  }
+  const out = new Uint8Array(total);
+  let offset = 0;
+  for (const chunk of chunks) {
+    out.set(chunk, offset);
+    offset += chunk.byteLength;
+  }
+  return out;
 }
 
 export async function sha256Hex(bytes: Uint8Array): Promise<string> {

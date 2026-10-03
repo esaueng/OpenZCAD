@@ -29,6 +29,8 @@ jobs:
           node-version: 22
           cache: pnpm
       - run: pnpm install --frozen-lockfile
+      - run: node scripts/validate-deployment-config.mjs --config wrangler.jsonc --target official
+      - run: node scripts/validate-deployment-config.mjs --config apps/web/wrangler.jsonc --target dev
       - run: pnpm build
       - run: pnpm --filter @openzcad/web exec wrangler deploy --dry-run --config ../../wrangler.jsonc
 
@@ -52,6 +54,8 @@ jobs:
           node-version: 22
           cache: pnpm
       - run: pnpm install --frozen-lockfile
+      - run: node scripts/validate-deployment-config.mjs --config wrangler.jsonc --target official
+      - run: node scripts/validate-deployment-config.mjs --config apps/web/wrangler.jsonc --target dev
       - run: pnpm build
       - name: Upload preview version
         run: pnpm --filter @openzcad/web exec wrangler versions upload --config ../../wrangler.jsonc

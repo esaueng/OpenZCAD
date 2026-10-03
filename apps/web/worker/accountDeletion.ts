@@ -279,6 +279,9 @@ function profileCleanupStatements(
       .bind(userId),
     db.prepare(`DELETE FROM auth_sessions WHERE user_id = ?`).bind(userId),
     db
+      .prepare('DELETE FROM auth_rate_limits WHERE bucket = ?')
+      .bind(`api:${userId}`),
+    db
       .prepare(`DELETE FROM desktop_auth_attempts WHERE user_id = ?`)
       .bind(userId),
     db
@@ -296,6 +299,12 @@ function profileCleanupStatements(
   );
   if (scope === 'all') {
     statements.push(
+      db
+        .prepare('DELETE FROM project_workspace_sessions WHERE user_id = ?')
+        .bind(userId),
+      db
+        .prepare('DELETE FROM project_adoptions WHERE user_id = ?')
+        .bind(userId),
       db
         .prepare(`DELETE FROM artifact_account_usage WHERE owner_user_id = ?`)
         .bind(userId),

@@ -19,6 +19,7 @@
  * The script is intentionally not wired into `pnpm build` — font assets are
  * committed, and this only regenerates them.
  */
+import { createHash } from 'node:crypto';
 import { mkdir, readFile, writeFile } from 'node:fs/promises';
 import { fileURLToPath } from 'node:url';
 import path from 'node:path';
@@ -131,10 +132,36 @@ async function main() {
       if (!face) {
         throw new Error(`${entry.family}: no ${style} face in css2 response`);
       }
-      const bin = await fetch(face.url, { headers: { 'User-Agent': USER_AGENT } });
+      const source = new URL(face.url);
+      if (
+        source.origin !== 'https://fonts.gstatic.com' ||
+        source.username ||
+        source.password
+      )
+        throw new Error('Unapproved font asset source.');
+      const bin = await fetch(source, {
+        headers: { 'User-Agent': USER_AGENT },
+        redirect: 'error'
+      });
       if (!bin.ok) throw new Error(`${entry.family} ${style}: ${bin.status}`);
       const bytes = Buffer.from(await bin.arrayBuffer());
       const file = `${entry.slug}-${style.toLowerCase()}.ttf`;
+      const sha256 = createHash('sha256').update(bytes).digest('hex');
+      let previous;
+      try {
+        previous = await readFile(path.join(OUT_DIR, file));
+      } catch (error) {
+        if (error.code !== 'ENOENT') throw error;
+      }
+      if (
+        previous &&
+        createHash('sha256').update(previous).digest('hex') !== sha256 &&
+        !process.argv.includes('--force')
+      ) {
+        throw new Error(
+          `Font bytes changed for ${file}; inspect the source and use --force to approve replacement.`
+        );
+      }
       await writeFile(path.join(OUT_DIR, file), bytes);
 
       const parsed = opentype.parse(
@@ -164,6 +191,7 @@ async function main() {
         style,
         file,
         bytes: bytes.length,
+        sha256,
         unitsPerEm: parsed.unitsPerEm,
         licenseUrl: pick('licenseURL'),
         sourceUrl: face.url

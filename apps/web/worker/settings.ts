@@ -190,6 +190,9 @@ export function validateAssistantBaseUrl(
   if (url.protocol !== 'https:' && !localDevelopment) {
     throw new HttpError(400, 'The AI endpoint must use HTTPS.');
   }
+  if (url.port && !localDevelopment) {
+    throw new HttpError(400, 'Custom AI endpoint ports are not allowed.');
+  }
   if (isPrivateHostname(hostname) && !localDevelopment) {
     throw new HttpError(400, 'Private-network AI endpoints are not allowed.');
   }

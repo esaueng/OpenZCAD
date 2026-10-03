@@ -109,6 +109,13 @@ function validateCommon(config, { allowPlaceholders }) {
   }
   if (!config.main) errors.push('main is required');
   if (!config.assets?.binding) errors.push('assets.binding is required');
+  if (
+    !Array.isArray(config.assets?.run_worker_first) ||
+    !config.assets.run_worker_first.includes('/api/*') ||
+    !config.assets.run_worker_first.includes('/healthz')
+  ) {
+    errors.push('assets.run_worker_first must protect /api/* and /healthz');
+  }
 
   const db = binding(config, 'd1_databases', 'DB');
   if (!db?.database_name || !db?.database_id || !db?.migrations_dir) {
@@ -208,6 +215,34 @@ export function validateDeploymentConfig(
   config,
   { target, originUrl = '', environment = {} }
 ) {
+  if (target === 'dev') {
+    const errors = [];
+    const officialValues = [
+      OFFICIAL.workerName,
+      OFFICIAL.databaseName,
+      OFFICIAL.databaseId,
+      OFFICIAL.bucketName,
+      OFFICIAL.publicOrigin,
+      OFFICIAL.turnstileSiteKey,
+      OFFICIAL.sender
+    ];
+    const values = [
+      config.name,
+      ...(config.d1_databases ?? []).flatMap((db) => [
+        db.database_name,
+        db.database_id
+      ]),
+      ...(config.r2_buckets ?? []).map((bucket) => bucket.bucket_name),
+      ...Object.values(config.vars ?? {})
+    ];
+    if (values.some((value) => officialValues.includes(value)))
+      errors.push('Development configuration references an official resource.');
+    if (config.routes?.length || config.send_email?.length || config.account_id)
+      errors.push(
+        'Development configuration must not route or send mail on an account.'
+      );
+    return errors;
+  }
   const allowPlaceholders = target === 'example';
   const errors = validateCommon(config, { allowPlaceholders });
   const db = binding(config, 'd1_databases', 'DB');

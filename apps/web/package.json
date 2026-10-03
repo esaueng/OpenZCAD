@@ -17,7 +17,6 @@
     "lint": "eslint src worker vite.config.ts vitest.config.ts --ext .ts,.tsx"
   },
   "dependencies": {
-    "@cloudflare/vite-plugin": "^1.62.0",
     "@fontsource/geist-mono": "^5.3.0",
     "@fontsource/geist-sans": "^5.3.0",
     "@openzcad/ai-contracts": "workspace:*",
@@ -34,7 +33,6 @@
     "@openzcad/shared": "workspace:*",
     "@openzcad/viewport": "workspace:*",
     "@tauri-apps/api": "^2.12.0",
-    "@vitejs/plugin-react": "^6.0.5",
     "lucide-react": "^1.48.0",
     "pdfjs-dist": "^6.2.108",
     "react": "^19.3.0",
@@ -49,6 +47,8 @@
     "happy-dom": "^20.14.5",
     "vite": "^8.2.2",
     "vite-plugin-wasm": "3.6.0",
-    "wrangler": "^4.143.0"
+    "wrangler": "^4.143.0",
+    "@cloudflare/vite-plugin": "^1.62.0",
+    "@vitejs/plugin-react": "^6.0.5"
   }
 }

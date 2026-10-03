@@ -80,6 +80,8 @@ const RELATIONSHIP_BYTES = 64 * 1024;
  * accept meets it, and a package that inflates past it is refused rather than
  * read.
  */
+export const MAX_THREE_MF_PLACEMENTS = 200_000;
+const MAX_THREE_MF_OBJECTS = 10_000;
 const MODEL_SCAN_BYTES = 256 * 1024 * 1024;
 /**
  * The most text the scan will carry while waiting for a tag to close.
@@ -372,6 +374,14 @@ async function scanModelPart(
       refuseUnclosedTag(carry);
     }
     for (const match of scannable.matchAll(STRUCTURAL_TAG)) {
+      if (
+        model.objects.length >= MAX_THREE_MF_OBJECTS ||
+        model.items.length >= MAX_THREE_MF_PLACEMENTS
+      ) {
+        throw refuse(
+          'its object or placement count exceeds the browser import limit'
+        );
+      }
       const closing = match[1] === '/';
       const name = match[2]!;
       const selfClosing = (match[3] ?? '').trimEnd().endsWith('/');

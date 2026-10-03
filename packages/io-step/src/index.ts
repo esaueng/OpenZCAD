@@ -1,3 +1,4 @@
+import { boundedName } from '@openzcad/shared';
 /**
  * STEP (ISO 10303-21) import-side helpers.
  *
@@ -89,7 +90,7 @@ function collectMatches(
   for (const match of text.matchAll(pattern)) {
     const value = map(match);
     if (value) {
-      collected.push(value);
+      collected.push(boundedName(value));
     }
     if (collected.length >= MAX_METADATA_MATCHES) {
       break;
