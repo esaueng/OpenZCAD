@@ -6,11 +6,12 @@ import {
   waitFor,
   within
 } from '@testing-library/react';
-import type { ComponentProps } from 'react';
+import { useState, type ComponentProps } from 'react';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import type {
   BodyId,
   BodyRepresentation,
+  EdgeTopologyReferenceV5,
   FeatureNode,
   ProjectDocument,
   TopologySelection
@@ -427,6 +428,191 @@ describe('fillet radius slider', () => {
       null
     );
     expect(screen.getByRole('button', { name: /Apply/ })).toBeDisabled();
+  });
+});
+
+describe('editing an edge modifier set', () => {
+  const references: EdgeTopologyReferenceV5[] = [11, 12].map((hash) => ({
+    kind: 'edge',
+    producingFeatureId: feature.featureId,
+    lineageName: `primitive.edge.${hash}`,
+    currentHash: hash,
+    witnessVersion: 1,
+    witness: {
+      curveType: 'LINE',
+      length: 10,
+      closed: false,
+      endpoints: [
+        [0, 0, 0],
+        [10, 0, 0]
+      ],
+      midpoint: [5, 0, 0]
+    }
+  }));
+  const picked = (hash: number): TopologySelection => ({
+    bodyId,
+    kind: 'edge',
+    topologyId: `edge:${hash}`,
+    hash
+  });
+  const editFeature = (kind: 'fillet' | 'chamfer'): FeatureNode => ({
+    ...feature,
+    featureKind: kind,
+    data:
+      kind === 'fillet'
+        ? {
+            featureKind: kind,
+            targetBodyId: bodyId,
+            edgeHashes: [11, 12],
+            edgeReferences: references,
+            radius: 2
+          }
+        : {
+            featureKind: kind,
+            targetBodyId: bodyId,
+            edgeHashes: [11, 12],
+            edgeReferences: references,
+            distance: 2
+          }
+  });
+
+  it.each(['fillet', 'chamfer'] as const)(
+    'restores a removed stored %s edge on a new pick, preserving values and references',
+    (kind) => {
+      const selectedFeature = editFeature(kind);
+      const props = makeProps({
+        selectedFeature,
+        featureSelectionSource: 'pinned',
+        commandSession: null
+      });
+      const { rerender } = render(<Inspector {...props} />);
+      const size = screen.getByRole('textbox', {
+        name: kind === 'fillet' ? 'Radius' : 'Distance'
+      });
+      fireEvent.change(size, { target: { value: '4' } });
+      fireEvent.click(screen.getByRole('button', { name: /^Remove 2 / }));
+      const list = screen.getByRole('list', {
+        name: kind === 'fillet' ? 'Filleted edges' : 'Chamfered edges'
+      });
+      expect(within(list).getAllByRole('listitem')).toHaveLength(1);
+      expect(props.onPreviewEdgeModifier).toHaveBeenLastCalledWith(
+        selectedFeature,
+        kind,
+        expect.objectContaining({
+          size: 4,
+          edgeHashes: [11],
+          edgeReferences: [references[0]]
+        })
+      );
+
+      rerender(<Inspector {...props} selectedEdges={[picked(12)]} />);
+      expect(within(list).getAllByRole('listitem')).toHaveLength(2);
+      expect(size).toHaveValue('4');
+      expect(props.onPreviewEdgeModifier).toHaveBeenLastCalledWith(
+        selectedFeature,
+        kind,
+        expect.objectContaining({
+          size: 4,
+          edgeHashes: [11, 12],
+          edgeReferences: references
+        })
+      );
+      fireEvent.submit(
+        screen.getByRole('button', { name: /Apply/ }).closest('form')!
+      );
+      expect(props.onApplyEdgeModifier).toHaveBeenLastCalledWith(
+        selectedFeature,
+        kind,
+        expect.objectContaining({
+          size: 4,
+          edgeHashes: [11, 12],
+          edgeReferences: references
+        })
+      );
+    }
+  );
+
+  it('retains stored references after dropping an added edge, and lets it be picked again', () => {
+    const selectedFeature = editFeature('fillet');
+    const props = makeProps({
+      selectedFeature,
+      featureSelectionSource: 'pinned',
+      commandSession: null
+    });
+    const onRemoveSelectedEdge = vi.fn();
+    function EditHarness() {
+      const [selectedEdges, setSelectedEdges] = useState([picked(13)]);
+      return (
+        <>
+          <Inspector
+            {...props}
+            selectedEdges={selectedEdges}
+            onRemoveSelectedEdge={(edge) => {
+              onRemoveSelectedEdge(edge);
+              setSelectedEdges((current) =>
+                current.filter((pick) => pick.hash !== edge.hash)
+              );
+            }}
+          />
+          <button
+            type="button"
+            onClick={() =>
+              setSelectedEdges((current) =>
+                current.some((edge) => edge.hash === 13)
+                  ? current.filter((edge) => edge.hash !== 13)
+                  : [...current, picked(13)]
+              )
+            }
+          >
+            Shift pick extra edge
+          </button>
+        </>
+      );
+    }
+    render(<EditHarness />);
+    const radius = screen.getByRole('textbox', { name: 'Radius' });
+    fireEvent.change(radius, { target: { value: '4' } });
+    const list = screen.getByRole('list', { name: 'Filleted edges' });
+    fireEvent.click(screen.getByRole('button', { name: /^Remove 3 / }));
+    expect(onRemoveSelectedEdge).toHaveBeenCalledExactlyOnceWith(picked(13));
+    expect(within(list).getAllByRole('listitem')).toHaveLength(2);
+    expect(props.onPreviewEdgeModifier).toHaveBeenLastCalledWith(
+      selectedFeature,
+      'fillet',
+      expect.objectContaining({
+        size: 4,
+        edgeHashes: [11, 12],
+        edgeReferences: references
+      })
+    );
+    fireEvent.submit(
+      screen.getByRole('button', { name: /Apply/ }).closest('form')!
+    );
+    expect(props.onApplyEdgeModifier).toHaveBeenLastCalledWith(
+      selectedFeature,
+      'fillet',
+      expect.objectContaining({
+        edgeHashes: [11, 12],
+        edgeReferences: references
+      })
+    );
+
+    // Removing from the list released the viewport pick. The very next
+    // Shift+Click restores the edge, without a separate deselection first.
+    fireEvent.click(
+      screen.getByRole('button', { name: 'Shift pick extra edge' })
+    );
+    expect(within(list).getAllByRole('listitem')).toHaveLength(3);
+    expect(radius).toHaveValue('4');
+    expect(props.onPreviewEdgeModifier).toHaveBeenLastCalledWith(
+      selectedFeature,
+      'fillet',
+      expect.objectContaining({ size: 4, edgeHashes: [11, 12, 13] })
+    );
+    const preview = vi
+      .mocked(props.onPreviewEdgeModifier)
+      .mock.calls.at(-1)?.[2];
+    expect(preview?.edgeReferences).toBeUndefined();
   });
 });
 

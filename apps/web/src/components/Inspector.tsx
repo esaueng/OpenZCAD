@@ -1297,7 +1297,42 @@ export function Inspector(props: InspectorProps) {
   const [removedEdges, setRemovedEdges] = useState<{
     edit: string;
     hashes: readonly number[];
-  }>({ edit: '', hashes: [] });
+    picked: readonly number[];
+  }>({ edit: '', hashes: [], picked: [] });
+  const edgeEditKey = selectedFeature
+    ? `edit-${selectedFeature.id}-${props.documentVersion ?? 0}`
+    : null;
+  useEffect(() => {
+    setRemovedEdges((current) => {
+      if (current.edit !== edgeEditKey || current.hashes.length === 0)
+        return current;
+      const picked =
+        featureSelectionSource === 'pinned'
+          ? selectedEdges.flatMap((edge) =>
+              edge.bodyId === selectedFeature?.bodyId && edge.hash !== undefined
+                ? [edge.hash]
+                : []
+            )
+          : [];
+      const newlyPicked = picked.filter(
+        (hash) => !current.picked.includes(hash)
+      );
+      const hashes = current.hashes.filter(
+        (hash) => !newlyPicked.includes(hash)
+      );
+      if (
+        hashes.length === current.hashes.length &&
+        picked.join(',') === current.picked.join(',')
+      )
+        return current;
+      return { edit: current.edit, hashes, picked };
+    });
+  }, [
+    selectedEdges,
+    selectedFeature?.bodyId,
+    featureSelectionSource,
+    edgeEditKey
+  ]);
 
   /**
    * Hand an edit panel the keyboard without handing it a field.
@@ -1742,12 +1777,13 @@ export function Inspector(props: InspectorProps) {
       // Stored references only cover the stored hashes and a pick lands on
       // the blended result body, whose lineage the consumed source does not
       // carry, so a grown set goes hash-only and resolves by fingerprint.
-      const editEdgeReferences =
-        addedEdgeHashes.length > 0
-          ? undefined
-          : data.edgeReferences?.filter(
-              (reference) => !removed.includes(reference.currentHash)
-            );
+      const editEdgeReferences = addedEdgeHashes.some(
+        (hash) => !removed.includes(hash)
+      )
+        ? undefined
+        : data.edgeReferences?.filter(
+            (reference) => !removed.includes(reference.currentHash)
+          );
       // Stored edges are named on the input body the blend consumed; an edge
       // picked to grow the set, on the result it was picked on.
       const edgeSources = [data.targetBodyId, selectedFeature.bodyId].map(
@@ -1755,9 +1791,8 @@ export function Inspector(props: InspectorProps) {
       );
       form = (
         <EdgeModifierForm
-          // A removal keeps the card (and any radius typed into it); a pick
-          // that grows the set reseeds it, as it always has.
-          key={`${editKey}:${addedEdgeHashes.length}`}
+          // Edge-set changes keep the card and the values already typed.
+          key={editKey}
           kind={data.featureKind}
           scope={scope}
           targetBodyId={data.targetBodyId}
@@ -1772,9 +1807,20 @@ export function Inspector(props: InspectorProps) {
               hash
             )
           }))}
-          onRemoveEdge={(hash) =>
-            setRemovedEdges({ edit: editKey, hashes: [...removed, hash] })
-          }
+          onRemoveEdge={(hash) => {
+            setRemovedEdges({
+              edit: editKey,
+              hashes: [...removed, hash],
+              picked: pickedEdgeHashes
+            });
+            // A newly added edge is still a viewport pick. Release that pick
+            // too, so the next Shift+Click is a new selection that restores it.
+            const pick = selectedEdges.find(
+              (edge) =>
+                edge.bodyId === selectedFeature.bodyId && edge.hash === hash
+            );
+            if (pick) props.onRemoveSelectedEdge?.(pick);
+          }}
           initial={{
             name: selectedFeature.name,
             size: data.featureKind === 'fillet' ? data.radius : data.distance,

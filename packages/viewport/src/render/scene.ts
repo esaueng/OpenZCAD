@@ -1047,12 +1047,15 @@ export interface CameraPose {
  * home orientation by default, or — given a direction from the target toward
  * the camera — the same framing seen from where the user already looks, which
  * is what an automatic reframe wants: it recentres and backs off without
- * spinning the model.
+ * spinning the model. `margin` is the inset on each side in normalized
+ * device coordinates, as in `boxFullyInView`; the default leaves the existing
+ * padding unchanged whenever it already fits.
  */
 export function computeFitPose(
   camera: THREE.PerspectiveCamera,
   objects: THREE.Object3D[],
-  viewDirection?: THREE.Vector3
+  viewDirection?: THREE.Vector3,
+  margin = 0
 ): CameraPose {
   const box = new THREE.Box3();
   for (const object of objects) {
@@ -1070,13 +1073,50 @@ export function computeFitPose(
   const center = box.getCenter(new THREE.Vector3());
   const maxDim = Math.max(size.x, size.y, size.z) || 1;
   const halfFov = THREE.MathUtils.degToRad(camera.fov / 2);
-  const distance = (maxDim / 2 / Math.tan(halfFov)) * 2.1;
+  let distance = (maxDim / 2 / Math.tan(halfFov)) * 2.1;
   // Fit lands on the home orientation unless told otherwise: the same iso
   // direction the default camera pose and the ISO view preset use.
   const direction =
     viewDirection && viewDirection.lengthSq() > 1e-12
       ? viewDirection.clone().normalize()
       : VIEW_DIRECTIONS.iso.clone();
+  // Fit every corner against both projected spans, including its depth:
+  // a corner nearer the camera needs more distance than the centre plane.
+  // The lookAt basis matches the camera's roll/up convention even for a
+  // direction parallel to up. Keep the established padding as a lower bound.
+  const basis = new THREE.Matrix4().lookAt(
+    direction,
+    new THREE.Vector3(),
+    camera.up
+  );
+  const right = new THREE.Vector3().setFromMatrixColumn(basis, 0);
+  const up = new THREE.Vector3().setFromMatrixColumn(basis, 1);
+  const depth = new THREE.Vector3().setFromMatrixColumn(basis, 2);
+  const tanVertical = Math.tan(
+    THREE.MathUtils.degToRad(camera.getEffectiveFOV() / 2)
+  );
+  const limit = 1 - margin;
+  const offset = new THREE.Vector3();
+  let requiredDistance = 0;
+  for (let index = 0; index < 8; index += 1) {
+    offset
+      .set(
+        index & 1 ? box.max.x : box.min.x,
+        index & 2 ? box.max.y : box.min.y,
+        index & 4 ? box.max.z : box.min.z
+      )
+      .sub(center);
+    requiredDistance = Math.max(
+      requiredDistance,
+      offset.dot(depth) +
+        Math.max(
+          Math.abs(offset.dot(right)) / (tanVertical * camera.aspect * limit),
+          Math.abs(offset.dot(up)) / (tanVertical * limit)
+        )
+    );
+  }
+  // Stay just inside the requested margin despite floating-point projection.
+  distance = Math.max(distance, requiredDistance * (1 + 1e-6));
   return {
     position: center.clone().addScaledVector(direction, distance),
     target: center,

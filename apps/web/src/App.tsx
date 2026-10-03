@@ -1144,7 +1144,11 @@ import {
   type ModelingPathOption,
   type ModelingProfileOption
 } from './lib/modelingOperations';
-import { editCardFeatureId } from './lib/editCardLifecycle';
+import {
+  advanceEditCardSession,
+  editCardSessionMatches,
+  type EditCardSession
+} from './lib/editCardLifecycle';
 import { PanelOverflow } from './components/PanelOverflow';
 import {
   clearActiveProject,
@@ -1899,7 +1903,7 @@ export function App() {
   const [movePreview, setMovePreview] = useState<MovePreview | null>(null);
   /** The entire tool/editor transition waiting on an unapplied Move. */
   const [pendingToolSwitch, setPendingToolSwitch] = useState<{
-    tool: ToolId;
+    tool: ToolId | 'measure';
     historyFeature?: HistoryEditorRequest;
   } | null>(null);
   /**
@@ -3428,6 +3432,7 @@ export function App() {
 
   function applyExtrudeForm(feature: FeatureNode, value: ExtrudeFormValue) {
     if (geometryBusy || !feature.bodyId || !doc) return;
+    const editSession = editCardSessionRef.current;
     edgeFormPreview.clear();
     const request = ++extrudeEditRequest.current;
     void executeValidatedFeature(extrudeEditCommand(feature, value), {
@@ -3439,8 +3444,10 @@ export function App() {
           index === 0 ? { ...target, featureName: value.name } : target
       ),
       successMessage: `Edit ${value.name}`,
-      onSuccess: () => finishFeatureEdit(feature),
-      cancelled: () => request !== extrudeEditRequest.current
+      onSuccess: () => finishFeatureEdit(feature, editSession),
+      cancelled: () =>
+        request !== extrudeEditRequest.current ||
+        !editSessionIsCurrent(feature, editSession)
     });
   }
 
@@ -3450,6 +3457,7 @@ export function App() {
     value: EdgeModifierFormValue
   ) {
     if (geometryBusy) return;
+    const editSession = editCardSessionRef.current;
     // K05 on-demand probe: a pick made before the demanded rebuild arrived
     // carries no lineage name, so the form holds no `edgeReferences` at all
     // (they are all-or-nothing). Re-read CURRENT lineage by hash at commit
@@ -3487,8 +3495,11 @@ export function App() {
         : {}),
       successMessage: `${value.name} applied.`,
       onSuccess: feature
-        ? () => finishFeatureEdit(feature)
-        : finishFeatureCreation
+        ? () => finishFeatureEdit(feature, editSession)
+        : finishFeatureCreation,
+      ...(feature
+        ? { cancelled: () => !editSessionIsCurrent(feature, editSession) }
+        : {})
     });
   }
 
@@ -5178,16 +5189,18 @@ export function App() {
   ]);
   const selectedFeatureNodeId = selectedFeature?.id ?? null;
   /**
-   * The feature whose edit card is on screen, read when an Apply that was
-   * still validating lands. A user who moved to another feature or tool in
-   * the meantime keeps what they moved to.
+   * Each opening of an edit card gets its own session. A late Apply must
+   * leave a reopened card alone, even when it edits the same feature.
    */
-  const editCardFeatureIdRef = useRef<string | null>(null);
-  editCardFeatureIdRef.current = editCardFeatureId({
-    tool,
-    inspectorFeatureId: selectedFeatureNodeId,
-    modelingEditFeatureId: modelingEditFeature?.id ?? null
-  });
+  const editCardSessionRef = useRef<EditCardSession | null>(null);
+  editCardSessionRef.current = advanceEditCardSession(
+    editCardSessionRef.current,
+    {
+      tool,
+      inspectorFeatureId: selectedFeatureNodeId,
+      modelingEditFeatureId: modelingEditFeature?.id ?? null
+    }
+  );
   function validateSelectionEdit(): boolean {
     if (
       managerRef.current?.document.version !== doc?.version ||
@@ -6126,9 +6139,28 @@ export function App() {
    * form selected its consumed source body to target it, so it clears
    * everything, as it always has.
    */
-  function finishFeatureEdit(feature: FeatureNode): void {
-    if (editCardFeatureIdRef.current !== feature.id) return;
-    if (tool !== null) {
+  function editSessionIsCurrent(
+    feature: FeatureNode,
+    editSession: EditCardSession | null
+  ): boolean {
+    return editCardSessionMatches(
+      editCardSessionRef.current,
+      editSession,
+      feature.id
+    );
+  }
+
+  function finishFeatureEdit(
+    feature: FeatureNode,
+    editSession: EditCardSession | null
+  ): void {
+    if (
+      !editSession ||
+      !editSessionIsCurrent(feature, editSession)
+    ) {
+      return;
+    }
+    if (editSession.tool !== null) {
       setModelingEditFeature(null);
       finishFeatureCreation();
       return;
@@ -6185,8 +6217,9 @@ export function App() {
     featureName: string,
     resultBodyId: BodyId | undefined = feature.bodyId
   ): void {
+    const editSession = editCardSessionRef.current;
     if (!doc || !resultBodyId) {
-      if (executeCommand(command)) finishFeatureEdit(feature);
+      if (executeCommand(command)) finishFeatureEdit(feature, editSession);
       return;
     }
     void executeValidatedFeature(command, {
@@ -6196,7 +6229,8 @@ export function App() {
         (target, index) => (index === 0 ? { ...target, featureName } : target)
       ),
       successMessage: commandOutcomeMessage(command.label),
-      onSuccess: () => finishFeatureEdit(feature)
+      onSuccess: () => finishFeatureEdit(feature, editSession),
+      cancelled: () => !editSessionIsCurrent(feature, editSession)
     });
   }
 
@@ -6333,11 +6367,20 @@ export function App() {
 
   function completeToolSwitch(
     request: {
-      tool: ToolId;
+      tool: ToolId | 'measure';
       historyFeature?: HistoryEditorRequest;
     },
     applyMove = false
   ) {
+    if (request.tool === 'measure') {
+      if (!modelingLocked && interactionRef.current.mode === 'sketch') {
+        setStatus('Finish the sketch before measuring.');
+        return;
+      }
+      if (applyMove && !confirmMove()) return;
+      completeMeasureToggle(true);
+      return;
+    }
     const feature = request.historyFeature
       ? resolveHistoryEditorFeature(
           managerRef.current?.document,
@@ -6640,8 +6683,17 @@ export function App() {
         setStatus('Finish the sketch before measuring.');
         return;
       }
-      cancelPanel();
+      if (moveHasUnappliedChange(movePreview)) {
+        setPendingToolSwitch({ tool: 'measure' });
+        return;
+      }
     }
+    completeMeasureToggle(next);
+  }
+
+  /** Settled activation shares the rail/palette cleanup without asking again. */
+  function completeMeasureToggle(next: boolean) {
+    if (next && !modelingLocked) cancelPanel();
     setMeasuring(next);
     clearMeasurementPicks();
     setStatus(
@@ -17406,6 +17458,7 @@ export function App() {
       return;
     }
     const editing = modelingEditFeature;
+    const editSession = editCardSessionRef.current;
     void executeValidatedFeature(approved.command, {
       featureName: approved.featureName,
       resultBodyId: approved.resultBodyId,
@@ -17420,9 +17473,12 @@ export function App() {
           }
         : {}),
       successMessage: commandOutcomeMessage(approved.command.label),
+      ...(editing
+        ? { cancelled: () => !editSessionIsCurrent(editing, editSession) }
+        : {}),
       onSuccess: () => {
         if (editing) {
-          finishFeatureEdit(editing);
+          finishFeatureEdit(editing, editSession);
           return;
         }
         setModelingEditFeature(null);
@@ -18852,8 +18908,10 @@ export function App() {
                   );
                 }}
                 onApplyPrimitive={(feature, name, command) => {
+                  const editSession = editCardSessionRef.current;
                   if (!doc || !feature.bodyId) {
-                    if (executeCommand(command)) finishFeatureEdit(feature);
+                    if (executeCommand(command))
+                      finishFeatureEdit(feature, editSession);
                     return;
                   }
                   void executeValidatedFeature(command, {
@@ -18864,10 +18922,12 @@ export function App() {
                         index === 0 ? { ...target, featureName: name } : target
                     ),
                     successMessage: commandOutcomeMessage(command.label),
-                    onSuccess: () => finishFeatureEdit(feature)
+                    onSuccess: () => finishFeatureEdit(feature, editSession),
+                    cancelled: () => !editSessionIsCurrent(feature, editSession)
                   });
                 }}
                 onApplySketch={(feature, value) => {
+                  const editSession = editCardSessionRef.current;
                   if (
                     feature.data.featureKind !== 'sketch' ||
                     !selectedSketch
@@ -18898,7 +18958,7 @@ export function App() {
                     );
                   }
                   if (executeTransaction(`Edit ${value.name}`, commands)) {
-                    finishFeatureEdit(feature);
+                    finishFeatureEdit(feature, editSession);
                   }
                 }}
                 onConvertSketchToFixedPlane={(sketch) => {
@@ -18919,6 +18979,7 @@ export function App() {
                   );
                 }}
                 onApplyTextSketch={(feature, value) => {
+                  const editSession = editCardSessionRef.current;
                   if (
                     feature.data.featureKind !== 'sketch' ||
                     !selectedSketch ||
@@ -18952,7 +19013,7 @@ export function App() {
                     );
                   }
                   if (executeTransaction(`Edit ${value.name}`, commands)) {
-                    finishFeatureEdit(feature);
+                    finishFeatureEdit(feature, editSession);
                   }
                 }}
                 onEditModelingFeature={openModelingFeatureEditor}
@@ -19321,7 +19382,11 @@ export function App() {
           {pendingToolSwitch && doc && (
             <UnappliedCardDialog
               card="Move"
-              next={TOOL_META[pendingToolSwitch.tool].label}
+              next={
+                pendingToolSwitch.tool === 'measure'
+                  ? 'Measure'
+                  : TOOL_META[pendingToolSwitch.tool].label
+              }
               onApply={() => resolvePendingToolSwitch('apply')}
               onDiscard={() => resolvePendingToolSwitch('discard')}
               onCancel={() => resolvePendingToolSwitch('cancel')}

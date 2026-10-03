@@ -80,7 +80,7 @@ test('Hole: selecting the feature opens its form, and Apply closes it', async ({
   await createBox(page);
   await page.getByRole('button', { name: /^Hole/ }).click();
   const entry = page.getByRole('group', { name: 'Entry face' });
-  await entry.getByRole('button', { name: /Top face/ }).click();
+  await entry.getByRole('button', { name: /Box 1 · top/ }).click();
   await page.getByRole('textbox', { name: 'Diameter', exact: true }).fill('5');
   await page.getByRole('button', { name: 'Create hole' }).click();
   await expect(row(page, /^Hole/)).toBeVisible({ timeout: 20_000 });
@@ -95,10 +95,9 @@ test('Hole: selecting the feature opens its form, and Apply closes it', async ({
   await expect(
     inspector.getByRole('button', { name: 'Edit hole' })
   ).toHaveCount(0);
-  await expect(entry.getByRole('button', { name: /Top face/ })).toHaveAttribute(
-    'aria-pressed',
-    'true'
-  );
+  await expect(
+    entry.getByRole('button', { name: /Box 1 · top/ })
+  ).toHaveAttribute('aria-pressed', 'true');
   await diameter.fill('8');
   await page.getByRole('button', { name: 'Apply hole' }).click();
   await expect(page.getByRole('contentinfo')).toContainText('Edited Hole.', {

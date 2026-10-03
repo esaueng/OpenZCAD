@@ -1330,12 +1330,12 @@ export function EdgeModifierForm({
     () => () => previewCallback.current?.(null),
     [targetBodyId, edgeSelectionKey]
   );
-  // A removed edge previews the blend without it at once: the lit faces then
-  // follow the list instead of still showing the edge just taken off.
-  const removalPending = useRef(false);
+  // A removed or re-picked edge previews the current set with the values
+  // already typed into this card, so the lit faces follow the list.
+  const previousEdgeSelection = useRef(edgeSelectionKey);
   useEffect(() => {
-    if (removalPending.current) {
-      removalPending.current = false;
+    if (previousEdgeSelection.current !== edgeSelectionKey) {
+      previousEdgeSelection.current = edgeSelectionKey;
       previewFields(fieldsWith({}));
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps
@@ -1478,7 +1478,6 @@ export function EdgeModifierForm({
                   }
                   disabled={edgeRows.length === 1}
                   onClick={() => {
-                    removalPending.current = true;
                     onRemoveEdge(row.hash);
                   }}
                 >

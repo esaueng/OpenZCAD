@@ -3464,7 +3464,6 @@ test('opening a history editor preserves an unapplied Move until its choice is s
       .getByRole('combobox', { name: 'Body', exact: true })
       .inputValue();
     await row.click();
-    await edit.click();
     await expect(ask).toBeVisible();
     await expect(ask).toContainText('before Split opens');
     return target;
@@ -3517,6 +3516,71 @@ test('opening a history editor preserves an unapplied Move until its choice is s
     inspector.getByRole('button', { name: 'Apply split body' })
   ).toBeVisible();
   await expect(row).toBeVisible();
+});
+
+test('opening Measure over an unapplied Move settles the card from the ruler and palette', async ({
+  page
+}) => {
+  await stubApi(page);
+  await page.goto('/');
+  await page.getByLabel('Project name').fill('Deferred Measure');
+  await page.getByRole('button', { name: 'Create project' }).click();
+  const inspector = page.getByRole('region', { name: 'Feature inspector' });
+  for (let index = 0; index < 2; index += 1) {
+    await page.getByRole('button', { name: /^Box \(B\)/ }).click();
+    await inspector.getByRole('button', { name: /^Create/ }).click();
+  }
+  await expectBodyCount(page, 2);
+  const move = page.getByRole('form', { name: 'Move controls' });
+  const ask = page.getByRole('alertdialog', { name: 'Apply the Move first?' });
+  const workbench = page.getByLabel('Measurement workbench');
+  const ruler = page
+    .getByRole('toolbar', { name: 'Viewer bar' })
+    .getByRole('button', { name: 'Measure', exact: true });
+  const moveRows = page.locator('.feature-row', { hasText: /^Move/ });
+  const openMove = async () => {
+    await page.getByRole('button', { name: /^Move \(M\)/ }).click();
+    await move.getByLabel('Move X in mm').fill('7');
+  };
+  const measureFromPalette = async () => {
+    await page.keyboard.press('Control+k');
+    const prompt = page.getByRole('combobox', { name: 'Search commands' });
+    await prompt.fill('/measure');
+    await prompt.press('Enter');
+    await expect(ask).toBeVisible();
+    await expect(ask).toContainText('before Measure opens');
+  };
+
+  await openMove();
+  const target = await move
+    .getByRole('combobox', { name: 'Body', exact: true })
+    .inputValue();
+  await ruler.click();
+  await expect(ask).toBeVisible();
+  await ask.getByRole('button', { name: 'Cancel' }).click();
+  await expect(move.getByLabel('Move X in mm')).toHaveValue('7');
+  await expect(
+    move.getByRole('combobox', { name: 'Body', exact: true })
+  ).toHaveValue(target);
+  await expect(workbench).toHaveCount(0);
+  await expect(moveRows).toHaveCount(0);
+
+  await measureFromPalette();
+  await ask.getByRole('button', { name: 'Discard' }).click();
+  await expect(move).toHaveCount(0);
+  await expect(workbench).toBeVisible();
+  await expect(ruler).toHaveAttribute('aria-pressed', 'true');
+  await expect(moveRows).toHaveCount(0);
+  await ruler.click();
+  await expect(workbench).toHaveCount(0);
+
+  await openMove();
+  await measureFromPalette();
+  await ask.getByRole('button', { name: 'Apply' }).click();
+  await expect(move).toHaveCount(0);
+  await expect(moveRows).toHaveCount(1);
+  await expect(workbench).toBeVisible();
+  await expect(ruler).toHaveAttribute('aria-pressed', 'true');
 });
 
 test('Remus resolves the former face-plane tangent-union refusal', async ({

@@ -24,3 +24,41 @@ export function editCardFeatureId(input: {
     ? input.inspectorFeatureId
     : input.modelingEditFeatureId;
 }
+
+export interface EditCardSession {
+  featureId: string | null;
+  tool: ToolId | null;
+  generation: number;
+}
+
+/** A reopened card is a new session even when it edits the same feature. */
+export function advanceEditCardSession(
+  previous: EditCardSession | null,
+  input: Parameters<typeof editCardFeatureId>[0]
+): EditCardSession {
+  const featureId = editCardFeatureId(input);
+  if (previous?.featureId === featureId && previous.tool === input.tool) {
+    return previous;
+  }
+  return {
+    featureId,
+    tool: input.tool,
+    generation: (previous?.generation ?? 0) + 1
+  };
+}
+
+/** Only the card that started an Apply may close when that Apply succeeds. */
+export function editCardSessionMatches(
+  current: EditCardSession | null,
+  started: EditCardSession | null,
+  featureId: string
+): boolean {
+  return Boolean(
+    current &&
+    started &&
+    started.featureId === featureId &&
+    current.featureId === featureId &&
+    current.tool === started.tool &&
+    current.generation === started.generation
+  );
+}

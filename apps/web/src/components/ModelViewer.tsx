@@ -9925,7 +9925,8 @@ export function ModelViewer({
     const pose = computeFitPose(
       context.camera,
       context.bodyGroup.children.filter((child) => child.visible),
-      context.camera.position.clone().sub(context.controls.target)
+      context.camera.position.clone().sub(context.controls.target),
+      AUTO_FRAME_MARGIN_NDC
     );
     context.startCameraTween(
       pose,

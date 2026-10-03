@@ -215,6 +215,16 @@ describe('updateAxesGizmo', () => {
 });
 
 describe('computeFitPose', () => {
+  it('keeps the established padding when the default fit already fits', () => {
+    const camera = new THREE.PerspectiveCamera(45, 16 / 9, 0.1, 4000);
+    const mesh = new THREE.Mesh(new THREE.BoxGeometry(20, 20, 20));
+    const pose = computeFitPose(camera, [mesh]);
+    const distance = (10 / Math.tan(THREE.MathUtils.degToRad(22.5))) * 2.1;
+    expect(pose.position.distanceTo(pose.target)).toBeCloseTo(distance, 10);
+    expect(pose.near).toBeCloseTo(distance / 1000, 10);
+    expect(pose.far).toBeCloseTo(distance * 12 + 20 * 4, 10);
+  });
+
   it('lands on the shared iso home orientation', () => {
     const camera = new THREE.PerspectiveCamera(45, 1, 0.1, 4000);
     const mesh = new THREE.Mesh(new THREE.BoxGeometry(20, 20, 20));
@@ -258,6 +268,67 @@ describe('computeFitPose', () => {
     for (const object of objects) box.expandByObject(object);
     expect(boxFullyInView(box, camera, 0.05)).toBe(true);
   });
+
+  it.each([
+    {
+      name: 'portrait front',
+      aspect: 375 / 900,
+      direction: new THREE.Vector3(0, -1, 0)
+    },
+    {
+      name: 'narrow oblique',
+      aspect: 0.2,
+      direction: new THREE.Vector3(1, -2, 1)
+    },
+    {
+      name: 'portrait top',
+      aspect: 375 / 900,
+      direction: new THREE.Vector3(0, 0, 1)
+    }
+  ])(
+    'fits every corner with the requested margin from $name',
+    ({ aspect, direction }) => {
+      const camera = new THREE.PerspectiveCamera(45, aspect, 0.1, 4000);
+      camera.up.set(0, 0, 1);
+      const mesh = new THREE.Mesh(new THREE.BoxGeometry(80, 5, 40));
+      mesh.position.set(40, 2.5, 20);
+      mesh.updateMatrixWorld();
+      const pose = computeFitPose(camera, [mesh], direction, 0.04);
+      expect(
+        pose.position
+          .clone()
+          .sub(pose.target)
+          .normalize()
+          .distanceTo(direction.clone().normalize())
+      ).toBeLessThan(1e-6);
+      camera.position.copy(pose.position);
+      camera.near = pose.near;
+      camera.far = pose.far;
+      camera.lookAt(pose.target);
+      camera.updateProjectionMatrix();
+      const box = new THREE.Box3().setFromObject(mesh);
+      expect(boxFullyInView(box, camera, 0.04)).toBe(true);
+
+      // The controller mirrors this perspective pose into an orthographic
+      // frustum on a projection switch. The same fit must remain complete.
+      const halfHeight =
+        pose.position.distanceTo(pose.target) *
+        Math.tan(THREE.MathUtils.degToRad(camera.fov / 2));
+      const orthographic = new THREE.OrthographicCamera(
+        -halfHeight * aspect,
+        halfHeight * aspect,
+        halfHeight,
+        -halfHeight,
+        0.1,
+        pose.far
+      );
+      orthographic.position.copy(pose.position);
+      orthographic.up.copy(camera.up);
+      orthographic.lookAt(pose.target);
+      orthographic.updateProjectionMatrix();
+      expect(boxFullyInView(box, orthographic, 0.04)).toBe(true);
+    }
+  );
 });
 
 describe('boxFullyInView', () => {
