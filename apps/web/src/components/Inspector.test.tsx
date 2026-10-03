@@ -476,6 +476,67 @@ describe('editing an edge modifier set', () => {
           }
   });
 
+  it.each([
+    ['fillet', 'another feature'],
+    ['fillet', 'deselection'],
+    ['fillet', 'a create tool'],
+    ['chamfer', 'another feature'],
+    ['chamfer', 'deselection'],
+    ['chamfer', 'a create tool']
+  ] as const)(
+    'forgets a removed %s edge after %s ends its edit session',
+    (kind, ending) => {
+      const selectedFeature = editFeature(kind);
+      const props = makeProps({
+        selectedFeature,
+        featureSelectionSource: 'pinned',
+        commandSession: null
+      });
+      const { rerender } = render(<Inspector {...props} />);
+      fireEvent.click(screen.getByRole('button', { name: /^Remove 2 / }));
+      const listName = kind === 'fillet' ? 'Filleted edges' : 'Chamfered edges';
+      expect(
+        within(screen.getByRole('list', { name: listName })).getAllByRole(
+          'listitem'
+        )
+      ).toHaveLength(1);
+
+      if (ending === 'another feature') {
+        const other: FeatureNode = {
+          ...selectedFeature,
+          id: 'other-feature-node' as FeatureNode['id'],
+          featureId: 'other-feature' as FeatureNode['featureId'],
+          name: 'Other blend'
+        };
+        rerender(<Inspector {...props} selectedFeature={other} />);
+      } else if (ending === 'deselection') {
+        rerender(<Inspector {...props} selectedFeature={null} />);
+      } else {
+        rerender(<Inspector {...props} tool="box" />);
+      }
+      // The same feature/version may be reopened without a document edit.
+      // Its restored list and subsequent Apply must both use the stored set.
+      rerender(<Inspector {...props} />);
+      expect(
+        within(screen.getByRole('list', { name: listName })).getAllByRole(
+          'listitem'
+        )
+      ).toHaveLength(2);
+      expect(props.onApplyEdgeModifier).not.toHaveBeenCalled();
+      fireEvent.submit(
+        screen.getByRole('button', { name: /Apply/ }).closest('form')!
+      );
+      expect(props.onApplyEdgeModifier).toHaveBeenCalledExactlyOnceWith(
+        selectedFeature,
+        kind,
+        expect.objectContaining({
+          edgeHashes: [11, 12],
+          edgeReferences: references
+        })
+      );
+    }
+  );
+
   it.each(['fillet', 'chamfer'] as const)(
     'restores a removed stored %s edge on a new pick, preserving values and references',
     (kind) => {
