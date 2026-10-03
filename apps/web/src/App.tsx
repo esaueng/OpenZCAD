@@ -501,6 +501,7 @@ import {
   selectionCalloutVerbs,
   type SelectionCalloutContent,
   type SelectionCalloutKind,
+  type SelectionCalloutOperation,
   type SelectionCalloutVerbId
 } from './lib/selectionCallout';
 import { ghostBodiesFor, historyFeatureFocus } from './lib/historyFocus';
@@ -5686,15 +5687,9 @@ export function App() {
     () => (doc && historyFocus ? ghostBodiesFor(doc, historyFocus.focus) : []),
     [doc, historyFocus]
   );
-  // The focus faces ride the preview-face highlight, beside any live blend
-  // preview; a new array whenever the focus changes, so the viewer redraws.
-  const viewerPreviewFaces = useMemo(
-    () =>
-      historyFocus && historyFocus.focus.kind === 'focus'
-        ? [...previewBlendFaces, ...historyFocus.focus.faces]
-        : previewBlendFaces,
-    [previewBlendFaces, historyFocus]
-  );
+  // The focus faces are drawn as a selected face is, not with the accent
+  // fill of a blend preview that does not exist yet.
+  const focusFaces = historyFocus?.focus.faces;
 
   /**
    * The selection chip anchored to the pick: name, key measurement, the
@@ -5753,6 +5748,9 @@ export function App() {
             kind: calloutKind,
             faceCapabilities: calloutFaceCapabilities,
             edgesArmed: interaction.mode === 'edges',
+            resizeBody:
+              interaction.mode === 'face' &&
+              Boolean(interaction.target.resizeBodyFeatureId),
             pressedAction: calloutPressedAction,
             availability
           })
@@ -15182,6 +15180,84 @@ export function App() {
         }
       : null;
 
+  /**
+   * A selection-first pick's operation rides the selection chip: its phase,
+   * its refusal and the way out, with the chip's pressed verbs as its
+   * switch. The column-top chip that said the same was one more surface lit
+   * for one pick (design review F11). Not while a tool is open (the tool's
+   * card owns the pick) or the chip is not interactive.
+   */
+  const calloutOperationModel =
+    selectionCallout?.anchor === 'selection' &&
+    selectedBodyIds.length > 0 &&
+    (interaction.mode === 'face' || interaction.mode === 'edges')
+      ? toolCardFor(interaction)
+      : null;
+  const calloutEdgeCount =
+    interaction.mode === 'edges' && edgeModifierBody?.topology
+      ? edgeModifierBody.topology.edges.filter(
+          (edge) => edge.displayRole !== 'seam'
+        ).length
+      : 0;
+  // Read through a ref, like the verbs, so the handlers' identity never
+  // refills the chip.
+  const calloutOperationActions = {
+    onEditCulprit: handleEditCulpritFeature,
+    onViewDetails: () => setActivityLogOpen(true),
+    onKeepLastValid: () => keepLastValid?.keep(),
+    onSelectAllEdges: () => {
+      if (edgeModifierBody) handleSelectAllEdges(edgeModifierBody);
+    }
+  };
+  const calloutOperationHandlers = useRef(calloutOperationActions);
+  calloutOperationHandlers.current = calloutOperationActions;
+  // Plain data, serialized: the chip is refilled only when what it says
+  // changes, never on a render that changed nothing it shows.
+  const calloutOperationKey = calloutOperationModel
+    ? JSON.stringify([
+        calloutOperationModel.title,
+        calloutOperationModel.phase ?? null,
+        calloutOperationModel.badge ?? null,
+        calloutOperationModel.error ?? null,
+        keepLastValid?.label ?? null,
+        interaction.mode === 'edges' &&
+        interaction.edges.length < calloutEdgeCount
+          ? calloutEdgeCount
+          : null
+      ])
+    : '';
+  const calloutWithOperation = useMemo<SelectionCalloutContent | null>(() => {
+    if (!selectionCallout || !calloutOperationKey) {
+      return selectionCallout;
+    }
+    const [title, phase, badge, error, keepLabel, edgeCount] = JSON.parse(
+      calloutOperationKey
+    ) as [
+      string,
+      SelectionCalloutOperation['phase'] | null,
+      SelectionCalloutOperation['badge'] | null,
+      SelectionCalloutOperation['error'] | null,
+      string | null,
+      number | null
+    ];
+    const handlers = () => calloutOperationHandlers.current;
+    return {
+      ...selectionCallout,
+      operation: {
+        title,
+        phase: phase ?? undefined,
+        badge: badge ?? undefined,
+        error: error ?? undefined,
+        keepLastValidLabel: keepLabel ?? undefined,
+        selectAllEdgesCount: edgeCount ?? undefined,
+        onEditCulprit: (featureId) => handlers().onEditCulprit(featureId),
+        onViewDetails: () => handlers().onViewDetails(),
+        onKeepLastValid: () => handlers().onKeepLastValid(),
+        onSelectAllEdges: () => handlers().onSelectAllEdges()
+      }
+    };
+  }, [selectionCallout, calloutOperationKey]);
+
   function handleEditCulpritFeature(featureId: string) {
     const node = doc
       ? Object.values(doc.nodes).find(
@@ -18009,7 +18085,7 @@ export function App() {
             selectedTopology={
               parameterPreview ? null : renderedSelectedTopology
             }
-            previewFaceHighlights={viewerPreviewFaces}
+            previewFaceHighlights={previewBlendFaces}
             selectedEdges={parameterPreview ? [] : selectedEdges}
             pickListEnabled={appSettings.experiments.directManipulation}
             settings={viewerSettings}
@@ -18097,8 +18173,9 @@ export function App() {
               ) : null
             }
             viewMode={modelingLocked}
-            selectionCallout={selectionCallout}
+            selectionCallout={calloutWithOperation}
             focusGhostBodies={focusGhostBodies}
+            {...(focusFaces ? { focusFaces } : {})}
             canUndo={
               !viewMode &&
               (tweakMode
@@ -18411,7 +18488,9 @@ export function App() {
         modelingLocked ? null : measurementDock ? (
           measurementDock
         ) : contextualToolCard ? (
-          hideSketchToolCard || toolFormOwnsEdgePick ? null : (
+          hideSketchToolCard ||
+          toolFormOwnsEdgePick ||
+          calloutOperationModel ? null : (
             <ToolCard
               model={contextualToolCard}
               selectAllEdges={
