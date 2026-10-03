@@ -73,12 +73,12 @@ export function alignTranslationToCenters(
   return { translation: next, matches };
 }
 
-/** Readout for the snap glyph: "Box Body ⋅ centered X·Y". */
+/** Readout for the snap glyph: "Box Body · centered X·Y". */
 export function centerAlignLabel(matches: readonly CenterAlignMatch[]): string {
   if (matches.length === 0) {
     return '';
   }
   const axes = matches.map((match) => match.axis.toUpperCase()).join('·');
   const labels = [...new Set(matches.map((match) => match.target.label))];
-  return `${labels.join(', ')} ⋅ centered ${axes}`;
+  return `${labels.join(', ')} · centered ${axes}`;
 }

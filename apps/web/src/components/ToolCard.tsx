@@ -8,12 +8,9 @@ import {
   Spline,
   X
 } from 'lucide-react';
-import type {
-  OperationPhase,
-  ToolCardIcon,
-  ToolCardModel
-} from '../lib/interaction/machine';
+import type { ToolCardIcon, ToolCardModel } from '../lib/interaction/machine';
 import type { SelectionActionId } from '../lib/interaction/capabilities';
+import { OPERATION_PHASE_LABELS as PHASE_LABELS } from '../lib/selectionCalloutView';
 import { StableLabel } from './StableLabel';
 import { Tooltip } from './Tooltip';
 
@@ -25,13 +22,6 @@ const ICONS: Record<ToolCardIcon, typeof MoveUpRight> = {
   sketch: PenLine
 };
 
-const PHASE_LABELS: Record<OperationPhase, string> = {
-  armed: 'Ready',
-  dragging: 'Dragging',
-  'exact-entry': 'Exact entry',
-  validating: 'Validating',
-  failed: 'Failed'
-};
 // The card is centred on the viewport, so a pill that grew with its label
 // moved both of the card's edges on every phase change.
 const PHASE_LABEL_RESERVE = Object.values(PHASE_LABELS);

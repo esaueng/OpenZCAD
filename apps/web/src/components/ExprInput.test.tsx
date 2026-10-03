@@ -42,4 +42,20 @@ describe('ExprInput', () => {
     );
     expect(screen.getByText('= 6')).toHaveClass('expr-preview');
   });
+
+  it('takes an accessible name that says more than its visible label', () => {
+    render(
+      <ExprInput
+        label="dX"
+        ariaLabel="Move X in mm"
+        value="r * 2"
+        scope={{ r: 3 }}
+        onChange={vi.fn()}
+      />
+    );
+    const input = screen.getByRole('textbox', { name: 'Move X in mm' });
+    expect(screen.getByText('dX')).toBeVisible();
+    // The preview stays a description, never part of the name.
+    expect(input).toHaveAccessibleDescription('= 6');
+  });
 });

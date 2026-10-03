@@ -1,5 +1,9 @@
 import { describe, expect, it } from 'vitest';
-import { countLabel, deleteFeatureToastMessage } from './toasts';
+import {
+  countLabel,
+  deleteFeatureToastMessage,
+  suppressFeatureToastMessage
+} from './toasts';
 
 describe('deleteFeatureToastMessage', () => {
   it('names the feature and stays quiet when nothing depended on it', () => {
@@ -12,6 +16,24 @@ describe('deleteFeatureToastMessage', () => {
     );
     expect(deleteFeatureToastMessage('Boss', 5)).toBe(
       'Deleted Boss · 5 features depended on it'
+    );
+  });
+});
+
+describe('suppressFeatureToastMessage', () => {
+  it('names the feature alone when nothing newly needs repair', () => {
+    expect(suppressFeatureToastMessage('Boss', false, 0)).toBe(
+      'Suppressed Boss'
+    );
+    expect(suppressFeatureToastMessage('Boss', true, 0)).toBe('Resumed Boss');
+  });
+
+  it('counts the later features the toggle broke, pluralised', () => {
+    expect(suppressFeatureToastMessage('Boss', false, 6)).toBe(
+      'Suppressed Boss · 6 later features now need repair'
+    );
+    expect(suppressFeatureToastMessage('Boss', true, 1)).toBe(
+      'Resumed Boss · 1 later feature now needs repair'
     );
   });
 });

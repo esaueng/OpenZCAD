@@ -4,6 +4,10 @@ import { useEffect, useRef, useState, type MutableRefObject } from 'react';
 import { axisDimensionLabel } from '../lib/primitiveDimensionLabel';
 import * as THREE from 'three';
 import type { HoleGhost } from '../lib/holeGhost';
+import {
+  bodiesReachingNewSpace,
+  type AutoFrameRequest
+} from '../lib/autoFrame';
 import { mark, measure, timed } from '../lib/perf';
 import {
   avoidSketchDimensionOverlays,
@@ -69,6 +73,7 @@ import {
   clearGroup,
   closestAxisT,
   composeMoveTransform,
+  boxFullyInView,
   computeFitPose,
   computeNormalToFacePose,
   cylinderRadiusPreviewMatrix,
@@ -151,6 +156,8 @@ import {
   type CalloutLayoutItem,
   type DimensionGraphic,
   SELECTION_SEMANTICS,
+  contextBodyColor,
+  selectedFaceColor,
   SKETCH_GLIDE_MS,
   sketchGlideEase,
   viewJumpEase,
@@ -167,12 +174,15 @@ import {
 } from '@openzcad/shared';
 import { formatNumber } from '../lib/model';
 import { setLiveDiameter } from '../lib/liveLabels';
+import type { SelectionCalloutContent } from '../lib/selectionCallout';
 import {
   keepSelectionCalloutClear,
   refreshSelectionCallout,
   renderSelectionCallout,
-  type SelectionCalloutContent
-} from '../lib/selectionCallout';
+  SELECTION_CALLOUT_CHIP_CLASS,
+  SELECTION_CALLOUT_OBSTACLES,
+  selectionCalloutObstacleShift
+} from '../lib/selectionCalloutView';
 import type { DimensionMode } from '../lib/keypad';
 import type { ViewportCameraState } from '../lib/workspaceSession';
 import type { MeasurementViewportAnnotation } from '../lib/measurements';
@@ -472,6 +482,12 @@ interface ModelViewerProps {
   /** Exact blend faces created only in the currently published preview. */
   previewFaceHighlights: TopologySelection[];
   /**
+   * The faces a History row brings into focus. They are drawn as a selected
+   * face is — their own colour, lifted, with the rest receding — where the
+   * blend preview above keeps the accent fill of geometry not yet made.
+   */
+  focusFaces?: readonly TopologySelection[];
+  /**
    * What the selection chip anchored to the pick carries besides its name:
    * measurement, verbs, clear. Null leaves the name-only label.
    */
@@ -492,6 +508,12 @@ interface ModelViewerProps {
   exactSection: ExactSectionRegionDisplay[] | null;
   /** Increment to re-fit the camera to the current geometry. */
   fitSignal: number;
+  /**
+   * A local commit and the exact bodies it published. When a body it created
+   * or grew leaves the view, the camera glides back to frame the model from
+   * where the user already looks; when everything is in view, nothing moves.
+   */
+  autoFrame?: AutoFrameRequest | null;
   /** Set to move the camera to a view target; nonce forces re-runs. */
   viewRequest: { view: ViewTarget; nonce: number } | null;
   /** Set to centre and frame an exact planar face; nonce forces re-runs. */
@@ -890,6 +912,17 @@ function clampNameCallouts(container: HTMLElement) {
     currentTop: parseFloat(label.style.marginTop) || 0,
     rect: label.getBoundingClientRect()
   }));
+  // The selection chip carries verbs and its operation's way out, so it
+  // also keeps out from under the panels floating over the viewport.
+  const obstacles = measured.some(({ label }) =>
+    label.classList.contains(SELECTION_CALLOUT_CHIP_CLASS)
+  )
+    ? [
+        ...(container
+          .closest('.viewer-area')
+          ?.querySelectorAll<HTMLElement>(SELECTION_CALLOUT_OBSTACLES) ?? [])
+      ].map((element) => element.getBoundingClientRect())
+    : [];
   for (const { label, currentLeft, currentTop, rect } of measured) {
     const baseLeft = rect.left - currentLeft;
     const baseRight = rect.right - currentLeft;
@@ -906,6 +939,28 @@ function clampNameCallouts(container: HTMLElement) {
       marginTop = top + pad - baseTop;
     } else if (baseBottom > bounds.bottom - pad) {
       marginTop = bounds.bottom - pad - baseBottom;
+    }
+    if (
+      obstacles.length > 0 &&
+      label.classList.contains(SELECTION_CALLOUT_CHIP_CLASS)
+    ) {
+      const shift = selectionCalloutObstacleShift(
+        {
+          left: baseLeft + marginLeft,
+          right: baseRight + marginLeft,
+          top: baseTop + marginTop,
+          bottom: baseBottom + marginTop
+        },
+        obstacles,
+        {
+          left: bounds.left + pad,
+          right: bounds.right - pad,
+          top: top + pad,
+          bottom: bounds.bottom - pad
+        }
+      );
+      marginLeft += shift.dx;
+      marginTop += shift.dy;
     }
     if (marginLeft !== currentLeft) {
       label.style.marginLeft = marginLeft ? `${marginLeft}px` : '';
@@ -1143,6 +1198,8 @@ const SELECTED_FACE_COLOR = SELECTION_SEMANTICS.selected.face;
 const SELECTED_FACE_OPACITY = SELECTION_SEMANTICS.selected.faceOpacity;
 const SELECTED_FACE_HIDDEN_OPACITY =
   SELECTION_SEMANTICS.selected.hiddenFaceOpacity;
+/** Stable default, so an absent prop does not rerun the bodies pass. */
+const NO_FOCUS_FACES: readonly TopologySelection[] = [];
 /**
  * Scratch vector for the snap projectors. They run once per candidate — every
  * edge endpoint and face centre of every other body — on each frame of a move
@@ -1333,6 +1390,12 @@ const E2E_CANVAS_HOOKS_ENABLED =
     }
   ).VITE_E2E === '1';
 const SKETCH_COLOR = 0x6798ff;
+/**
+ * How far inside the canvas edge a new body must sit to count as on screen,
+ * in normalized device units per side: a body touching the edge reads as
+ * cut off.
+ */
+const AUTO_FRAME_MARGIN_NDC = 0.04;
 const SKETCH_SELECTED_COLOR = 0x9eb8ff;
 /**
  * Screen-space widths in CSS pixels for the non-body polylines. Native WebGL
@@ -1404,6 +1467,7 @@ export function ModelViewer({
   selectedBodyIds,
   selectedTopology,
   previewFaceHighlights,
+  focusFaces = NO_FOCUS_FACES,
   selectionCallout = null,
   focusGhostBodies,
   selectedEdges,
@@ -1411,6 +1475,7 @@ export function ModelViewer({
   settings,
   exactSection,
   fitSignal,
+  autoFrame = null,
   viewRequest,
   normalToFaceRequest,
   rotateRequest,
@@ -1513,6 +1578,9 @@ export function ModelViewer({
     const element = selectionCalloutElementRef.current;
     if (element?.isConnected) {
       refreshSelectionCallout(element, selectionCallout);
+      // A refilled chip changes size: one frame re-runs the clamp that
+      // keeps it inside the viewport and out from under the panels.
+      contextRef.current?.requestRender();
     }
   }, [selectionCallout]);
   /** Hover hysteresis; shared by the pointer frame and the body rebuild that clears hover. */
@@ -4131,6 +4199,27 @@ export function ModelViewer({
       requestRender();
     };
     /**
+     * Whether every drawn body is wholly on screen through the live camera,
+     * and where that camera stands, so a spec can tell a reframe from none.
+     */
+    const handleE2EBodiesInView = (event: Event) => {
+      if (!e2eCanvasHooksEnabled) {
+        return;
+      }
+      const box = new THREE.Box3();
+      for (const object of context.bodyGroup.children) {
+        if (object.visible) box.expandByObject(object);
+      }
+      (
+        event as CustomEvent<{
+          resolve?: (value: { inView: boolean; camera: number[] }) => void;
+        }>
+      ).detail?.resolve?.({
+        inView: !box.isEmpty() && boxFullyInView(box, context.activeCamera),
+        camera: context.activeCamera.position.toArray()
+      });
+    };
+    /**
      * Route a synthetic macOS pointer packet through OrbitControls itself.
      * The embedded WebDriver's W3C action endpoint emits MouseEvents, so it
      * cannot reach Three's PointerEvent-only control listener on WKWebView.
@@ -4387,6 +4476,10 @@ export function ModelViewer({
       renderer.domElement.addEventListener(
         'openzcad:e2e-pixel-ratio',
         handleE2EPixelRatio
+      );
+      renderer.domElement.addEventListener(
+        'openzcad:e2e-bodies-in-view',
+        handleE2EBodiesInView
       );
       renderer.domElement.addEventListener(
         'openzcad:e2e-control-pointer',
@@ -5166,7 +5259,7 @@ export function ModelViewer({
             : 'Radius';
       } else if (rig?.kind === 'offset-face' && lineAngle !== null) {
         tagText =
-          offsetChipModeRef.current === 'total' ? 'Total ⌄' : 'Offset ⌄';
+          offsetChipModeRef.current === 'total' ? 'Total ▾' : 'Offset ▾';
       }
       if (lineAngle !== null) {
         // Both pills ride the line, rotated to read along it: the tag first,
@@ -5220,8 +5313,8 @@ export function ModelViewer({
             rig.kind === 'cylinder-radius'
               ? (tagText ?? '')
               : offsetChipModeRef.current === 'total'
-                ? 'Total ⌄'
-                : 'Offset ⌄';
+                ? 'Total ▾'
+                : 'Offset ▾';
           if (rig.kind === 'offset-face' && pinScreenAt) {
             // The pair reads tag then value and stays clear of the pin: on
             // the pin's right it starts just past the pin, on its left it
@@ -7624,6 +7717,10 @@ export function ModelViewer({
         handleE2EPixelRatio
       );
       renderer.domElement.removeEventListener(
+        'openzcad:e2e-bodies-in-view',
+        handleE2EBodiesInView
+      );
+      renderer.domElement.removeEventListener(
         'openzcad:e2e-control-pointer',
         handleE2EControlPointer
       );
@@ -7860,6 +7957,16 @@ export function ModelViewer({
     const bodiesChanged = context.renderedBodies !== bodies;
     const xrayEnabled = sketchMode === null;
     context.selection.setXrayEnabled(xrayEnabled);
+    // While anything is selected, whatever is not the selection recedes and
+    // the selection keeps its own colour (design review F8). Not while
+    // sketching: the solids already recede there, and the plane leads.
+    const selectionRecedes =
+      sketchMode === null &&
+      (selectedBodyIds.length > 0 ||
+        selectedTopology !== null ||
+        selectedEdges.length > 0 ||
+        focusFaces.length > 0 ||
+        (focusGhostBodies?.length ?? 0) > 0);
     if (bodiesChanged) {
       // The exact worker result is authoritative. Forget the visual proxy
       // before its old Three object is disposed and replaced.
@@ -7976,12 +8083,36 @@ export function ModelViewer({
         clearGroup(previewGroup);
         object.remove(previewGroup);
       }
-      const isSelected = selectedBodyIds.includes(body.bodyId);
+      // A face, edges or a History row's faces on this body are the
+      // selection; the body around them is only their context, so it takes
+      // neither the whole-body tint nor the whole-body outline.
+      const bodyFocusFaces = (body.topology?.faces ?? []).filter((face) =>
+        focusFaces.some(
+          (focus) =>
+            focus.bodyId === body.bodyId && focus.topologyId === face.topologyId
+        )
+      );
+      const partPicked =
+        bodyFocusFaces.length > 0 ||
+        (selectedTopology !== null &&
+          selectedTopology.kind !== 'body' &&
+          selectedTopology.bodyId === body.bodyId) ||
+        selectedEdges.some((edge) => edge.bodyId === body.bodyId);
+      const isSelected =
+        selectedBodyIds.includes(body.bodyId) &&
+        !(selectionRecedes && partPicked);
 
       forEachMesh(object, (mesh) => {
         const baseEmissive = isSelected ? SELECTION_EMISSIVE : 0x000000;
         mesh.material.emissive.setHex(baseEmissive);
         mesh.userData.baseEmissive = baseEmissive;
+        // A colour write, not a new material: nothing recompiles when the
+        // selection changes.
+        contextBodyColor(
+          body.color,
+          !selectionRecedes || isSelected,
+          mesh.material.color
+        );
         if (bodiesChanged) {
           mesh.userData.bodyId = body.bodyId;
           mesh.userData.topology = body.topology;
@@ -8012,7 +8143,88 @@ export function ModelViewer({
               (face) => face.topologyId === selectedTopology.topologyId
             )
           : undefined;
-      edgeOverlay?.setSelectedFaceBoundary(selectedFace?.hash ?? null);
+      edgeOverlay?.setSelectedFaceBoundary(
+        selectedFace
+          ? selectedFace.hash
+          : bodyFocusFaces.length > 0
+            ? bodyFocusFaces.map((face) => face.hash)
+            : null
+      );
+      /**
+       * The visible fill of a selected face. While the rest recedes it is the
+       * face's own colour lifted toward a light accent, drawn under the edges
+       * so its rim and edges stay on top; it is what keeps the selection at
+       * full brightness while the body around it dims. While sketching, the
+       * old translucent accent film, since nothing recedes there.
+       */
+      const bodyMaterial =
+        object instanceof THREE.Mesh &&
+        object.material instanceof THREE.MeshPhongMaterial
+          ? object.material
+          : null;
+      const selectedFill = (geometry: THREE.BufferGeometry) => {
+        // Rebuilt for every body refresh and every new pick, usually after
+        // the previous one was disposed: kept, so it never relinks.
+        let material: THREE.Material;
+        let ownColour = false;
+        if (selectionRecedes && bodyMaterial) {
+          // The body's own material, so the face shades exactly as it does
+          // unselected (and shares its compiled program); only its colour
+          // is lifted.
+          const fill = keepProgram(bodyMaterial.clone());
+          selectedFaceColor(body.color, fill.color);
+          fill.emissive.setHex(0x000000);
+          fill.transparent = true;
+          fill.opacity = 0;
+          fill.depthWrite = false;
+          fill.stencilWrite = false;
+          fill.polygonOffset = true;
+          fill.polygonOffsetFactor = -3;
+          fill.polygonOffsetUnits = 0;
+          fill.userData.targetOpacity = body.opacity ?? 1;
+          material = fill;
+          ownColour = true;
+        } else {
+          material = keepProgram(
+            new THREE.MeshLambertMaterial({
+              color: SELECTED_FACE_COLOR,
+              toneMapped: false,
+              transparent: true,
+              opacity: 0,
+              side: THREE.DoubleSide,
+              depthWrite: false,
+              polygonOffset: true,
+              polygonOffsetFactor: -3
+            })
+          );
+          material.userData.targetOpacity = SELECTED_FACE_OPACITY;
+        }
+        const fill = new THREE.Mesh(geometry, material);
+        fill.renderOrder = ownColour
+          ? VIEWPORT_RENDER_ORDER.SELECTED_FACE_FILL
+          : VIEWPORT_RENDER_ORDER.SELECTED_GEOMETRY;
+        fill.userData.selectionOverlay = true;
+        // A shaded face in a wireframe would contradict the mode; the rim
+        // still carries the selection there (see applyDisplayMode).
+        fill.userData.ownColourFill = ownColour;
+        fill.visible = !ownColour || displayModeRef.current !== 'wireframe';
+        fill.raycast = () => undefined;
+        context.fadeIns.add(material);
+        return fill;
+      };
+      if (bodyFocusFaces.length > 0 && !selectedFace) {
+        const focusOverlay = new THREE.Group();
+        focusOverlay.name = 'body-selection-overlay';
+        for (const face of bodyFocusFaces) {
+          const geometry = createFaceHighlightGeometry(object, face);
+          if (geometry) {
+            const fill = selectedFill(geometry);
+            fill.name = 'body-face-focused';
+            focusOverlay.add(fill);
+          }
+        }
+        object.add(focusOverlay);
+      }
       if (selectedFace) {
         const geometry = createFaceHighlightGeometry(object, selectedFace);
         const hiddenGeometry = createFaceHighlightGeometry(
@@ -8031,30 +8243,11 @@ export function ModelViewer({
           context.renderer.domElement.dataset.e2eSelectedFace =
             selectedFace.topologyId;
         }
-        // Both halves are rebuilt for every body refresh and every new pick,
-        // usually after the previous pair was disposed: kept, so neither
-        // relinks its shader.
-        const highlightMaterial = keepProgram(
-          new THREE.MeshLambertMaterial({
-            color: SELECTED_FACE_COLOR,
-            toneMapped: false,
-            transparent: true,
-            opacity: 0,
-            side: THREE.DoubleSide,
-            depthWrite: false,
-            polygonOffset: true,
-            polygonOffsetFactor: -3
-          })
-        );
-        highlightMaterial.userData.targetOpacity = SELECTED_FACE_OPACITY;
-        const highlight = new THREE.Mesh(geometry, highlightMaterial);
+        const highlight = selectedFill(geometry);
         highlight.name = 'body-face-selected';
-        highlight.renderOrder = VIEWPORT_RENDER_ORDER.SELECTED_GEOMETRY;
-        highlight.userData.selectionOverlay = true;
-        highlight.raycast = () => undefined;
         selectionOverlay.add(highlight);
-        context.fadeIns.add(highlightMaterial);
 
+        // Kept, like the visible fill, so it never relinks its shader.
         const hiddenMaterial = keepProgram(
           new THREE.MeshBasicMaterial({
             color: SELECTED_FACE_COLOR,
@@ -8320,7 +8513,7 @@ export function ModelViewer({
     }
 
     // A History row whose feature a later one consumed: the faces it made
-    // are lit above (the preview-face path), and when none survived its
+    // are lit above (as a selected face is), and when none survived its
     // consumed body is drawn as a ghost where it was. The selection chip
     // then hangs over whichever of the two is showing.
     const callout = selectionCalloutRef.current ?? null;
@@ -8358,7 +8551,9 @@ export function ModelViewer({
     }
     if (callout?.anchor === 'focus') {
       for (const object of context.objectsByBodyId.values()) {
-        const overlay = object.getObjectByName('body-preview-face-overlay');
+        // The focused faces' fill; a live blend preview never shares a
+        // focus (it needs a running tool), so that is all this finds.
+        const overlay = object.getObjectByName('body-selection-overlay');
         if (overlay) {
           overlay.updateMatrixWorld(true);
           focusBox.union(new THREE.Box3().setFromObject(overlay));
@@ -8371,6 +8566,20 @@ export function ModelViewer({
         context.renderer.domElement.dataset.e2eFocusGhosts = String(ghosts);
       } else {
         delete context.renderer.domElement.dataset.e2eFocusGhosts;
+      }
+      if (focusFaces.length > 0) {
+        context.renderer.domElement.dataset.e2eFocusFaces = String(
+          focusFaces.length
+        );
+      } else {
+        delete context.renderer.domElement.dataset.e2eFocusFaces;
+      }
+      // Whether the rest of the scene is receding behind a selection, which
+      // a pixel probe would otherwise have to infer.
+      if (selectionRecedes) {
+        context.renderer.domElement.dataset.e2eSelectionRecedes = 'true';
+      } else {
+        delete context.renderer.domElement.dataset.e2eSelectionRecedes;
       }
     }
     /**
@@ -8518,6 +8727,8 @@ export function ModelViewer({
     selectedEdges,
     selectedTopology,
     previewFaceHighlights,
+    focusFaces,
+    focusGhostBodies,
     sketchMode,
     units
   ]);
@@ -9842,6 +10053,55 @@ export function ModelViewer({
       { ease: viewJumpEase }
     );
   }, [fitSignal]);
+
+  // A commit that put a body somewhere new — the bracket's second box, a
+  // width that grew, a body moved away — reframes only when that body is not
+  // already wholly on screen; a result the user can see never moves the
+  // camera. It glides along the user's own view direction rather than to the
+  // iso home Fit uses, and never under a drag: a gesture owns the camera.
+  useEffect(() => {
+    const context = contextRef.current;
+    if (
+      !context ||
+      !autoFrame ||
+      !context.hasFitCamera ||
+      moveDragActiveRef.current ||
+      edgeDragActiveRef.current ||
+      offsetDragActiveRef.current ||
+      cylinderRadiusDragActiveRef.current
+    ) {
+      return;
+    }
+    const reached = new THREE.Box3();
+    for (const bodyId of bodiesReachingNewSpace(
+      autoFrame.before,
+      autoFrame.after
+    )) {
+      const object = context.objectsByBodyId.get(bodyId);
+      if (object?.visible) reached.expandByObject(object);
+    }
+    if (
+      reached.isEmpty() ||
+      boxFullyInView(reached, context.activeCamera, AUTO_FRAME_MARGIN_NDC)
+    ) {
+      return;
+    }
+    const pose = computeFitPose(
+      context.camera,
+      context.bodyGroup.children.filter((child) => child.visible),
+      context.camera.position.clone().sub(context.controls.target),
+      AUTO_FRAME_MARGIN_NDC
+    );
+    context.startCameraTween(
+      pose,
+      () => {
+        if (context.projection === 'orthographic') {
+          context.syncOrthographic(true);
+        }
+      },
+      { ease: viewJumpEase }
+    );
+  }, [autoFrame]);
 
   // View requests keep the current zoom and glide the camera to the axis —
   // named standard views and the cube's corner diagonals alike.

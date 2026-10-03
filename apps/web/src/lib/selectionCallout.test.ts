@@ -2,14 +2,18 @@ import { describe, expect, it, vi } from 'vitest';
 import { selectionCapabilities } from './interaction/capabilities';
 import { LIVE_DIAMETER_ATTRIBUTE } from './liveLabels';
 import {
-  HANDLE_KEEP_OUT_PX,
   MAX_SELECTION_VERBS,
+  selectionCalloutVerbs,
+  type SelectionCalloutContent,
+  type SelectionCalloutOperation
+} from './selectionCallout';
+import {
+  HANDLE_KEEP_OUT_PX,
   refreshSelectionCallout,
   renderSelectionCallout,
   selectionCalloutClearance,
-  selectionCalloutVerbs,
-  type SelectionCalloutContent
-} from './selectionCallout';
+  selectionCalloutObstacleShift
+} from './selectionCalloutView';
 import { textLabelSegments } from './topologyLabels';
 import type { ToolAvailability } from './tools';
 
@@ -103,7 +107,35 @@ describe('selectionCalloutVerbs', () => {
     expect(union?.title).toContain('Needs at least two bodies');
   });
 
-  it('never offers more than three verbs', () => {
+  it('offers a primitive face Resize first, the switch the old chip held', () => {
+    const verbs = selectionCalloutVerbs({
+      kind: 'face',
+      faceCapabilities: planarFace,
+      resizeBody: true,
+      pressedAction: 'resize-body',
+      availability: READY
+    });
+    expect(verbs.map((verb) => [verb.id, verb.pressed])).toEqual([
+      ['action:resize-body', true],
+      ['action:offset-face', false],
+      ['action:sketch-on-face', false],
+      ['tool:hole', false]
+    ]);
+    expect(verbs[0]?.label).toBe('Resize');
+  });
+
+  it('never offers more than the cap', () => {
+    expect(
+      selectionCalloutVerbs({
+        kind: 'face',
+        faceCapabilities: planarFace,
+        resizeBody: true,
+        availability: READY
+      }).length
+    ).toBeLessThanOrEqual(MAX_SELECTION_VERBS);
+  });
+
+  it('never offers more than three verbs without a body to resize', () => {
     for (const kind of ['face', 'edges', 'body', 'bodies'] as const) {
       expect(
         selectionCalloutVerbs({
@@ -111,7 +143,7 @@ describe('selectionCalloutVerbs', () => {
           faceCapabilities: planarFace,
           availability: READY
         }).length
-      ).toBeLessThanOrEqual(MAX_SELECTION_VERBS);
+      ).toBeLessThanOrEqual(3);
     }
   });
 });
@@ -198,6 +230,235 @@ describe('renderSelectionCallout', () => {
     refreshSelectionCallout(element, null);
     expect(element.textContent).toBe('Box');
   });
+
+  describe('with the operation the pick armed (F11)', () => {
+    function operation(
+      overrides: Partial<SelectionCalloutOperation> = {}
+    ): SelectionCalloutOperation {
+      return {
+        title: 'Fillet',
+        phase: 'armed',
+        onEditCulprit: vi.fn(),
+        onViewDetails: vi.fn(),
+        onKeepLastValid: vi.fn(),
+        onSelectAllEdges: vi.fn(),
+        ...overrides
+      };
+    }
+    const edgeVerbs = selectionCalloutVerbs({
+      kind: 'edges',
+      edgesArmed: true,
+      pressedAction: 'fillet',
+      availability: READY
+    });
+
+    it('is announced as the operation and shows its phase', () => {
+      const element = document.createElement('div');
+      renderSelectionCallout(
+        element,
+        textLabelSegments('Box'),
+        content({ verbs: edgeVerbs, operation: operation() })
+      );
+      // The name the column-top chip had, so it is still one region.
+      expect(element.getAttribute('role')).toBe('region');
+      expect(element.getAttribute('aria-label')).toBe('Fillet operation');
+      expect(
+        element.querySelector('.selection-callout-phase')?.textContent
+      ).toBe('Ready');
+      // The Fillet/Chamfer switch is the chip's own pressed verbs.
+      expect(
+        [...element.querySelectorAll('.selection-callout-verb')].map((verb) => [
+          verb.textContent,
+          verb.getAttribute('aria-pressed')
+        ])
+      ).toEqual([
+        ['Fillet', 'true'],
+        ['Chamfer', 'false']
+      ]);
+    });
+
+    it('collapses the phase to a named mark while dragging', () => {
+      const element = document.createElement('div');
+      renderSelectionCallout(
+        element,
+        textLabelSegments('Box'),
+        content({ operation: operation({ phase: 'dragging' }) })
+      );
+      expect(element.querySelector('.selection-callout-phase')).toBeNull();
+      expect(
+        element
+          .querySelector('.selection-callout-phase-dot')
+          ?.getAttribute('aria-label')
+      ).toBe('Dragging');
+    });
+
+    it('holds its switch still while the exact check runs', () => {
+      const element = document.createElement('div');
+      renderSelectionCallout(
+        element,
+        textLabelSegments('Box'),
+        content({ operation: operation({ phase: 'validating' }) })
+      );
+      expect(element.getAttribute('aria-busy')).toBe('true');
+      const byLabel = (label: string) =>
+        element.querySelector<HTMLButtonElement>(
+          `[aria-label="Selection: ${label}"]`
+        );
+      // Actions and tools both wait: the exact check owns the pick.
+      expect(byLabel('Offset')?.disabled).toBe(true);
+      expect(byLabel('Hole')?.disabled).toBe(true);
+    });
+
+    it('locks deselection until the exact check answers', () => {
+      const element = document.createElement('div');
+      const onClear = vi.fn();
+      renderSelectionCallout(
+        element,
+        textLabelSegments('Box'),
+        content({
+          onClear,
+          operation: operation({ phase: 'validating' })
+        })
+      );
+      const clear = () =>
+        element.querySelector<HTMLButtonElement>(
+          '[aria-label="Deselect all"]'
+        )!;
+      expect(clear().disabled).toBe(true);
+      clear().click();
+      expect(onClear).not.toHaveBeenCalled();
+
+      refreshSelectionCallout(
+        element,
+        content({ onClear, operation: operation({ phase: 'failed' }) })
+      );
+      expect(clear().disabled).toBe(false);
+      clear().click();
+      expect(onClear).toHaveBeenCalledTimes(1);
+    });
+
+    it.each(['failed', 'armed', 'completed'] as const)(
+      'unlocks every chip control after validation becomes %s',
+      (phase) => {
+        const element = document.createElement('div');
+        const onVerb = vi.fn();
+        const onClear = vi.fn();
+        const actions = operation({
+          phase: 'validating',
+          selectAllEdgesCount: 12
+        });
+        const verbs = selectionCalloutVerbs({
+          kind: 'face',
+          faceCapabilities: planarFace,
+          availability: READY
+        });
+        renderSelectionCallout(
+          element,
+          textLabelSegments('Box'),
+          content({ verbs, onVerb, onClear, operation: actions })
+        );
+        for (const control of element.querySelectorAll<HTMLButtonElement>(
+          'button'
+        )) {
+          expect(control.disabled).toBe(true);
+          control.click();
+        }
+        expect(onVerb).not.toHaveBeenCalled();
+        expect(onClear).not.toHaveBeenCalled();
+        expect(actions.onSelectAllEdges).not.toHaveBeenCalled();
+
+        refreshSelectionCallout(
+          element,
+          content({
+            verbs,
+            onVerb,
+            onClear,
+            operation: phase === 'completed' ? undefined : { ...actions, phase }
+          })
+        );
+        for (const control of element.querySelectorAll<HTMLButtonElement>(
+          'button'
+        )) {
+          expect(control.disabled).toBe(false);
+          control.click();
+        }
+        expect(onVerb).toHaveBeenCalledTimes(verbs.length);
+        expect(onClear).toHaveBeenCalledTimes(1);
+        expect(actions.onSelectAllEdges).toHaveBeenCalledTimes(
+          phase === 'completed' ? 0 : 1
+        );
+      }
+    );
+
+    it('says why it refused, with each way out as a button', () => {
+      const element = document.createElement('div');
+      const filled = operation({
+        phase: 'failed',
+        error: {
+          message: 'Fillet could not be created with radius 30.',
+          detail: 'BRep_API: command not done',
+          culprit: { featureId: 'f-1', featureName: 'Fillet 1' }
+        },
+        keepLastValidLabel: 'Keep 2.5 mm'
+      });
+      renderSelectionCallout(
+        element,
+        textLabelSegments('Box'),
+        content({ verbs: edgeVerbs, operation: filled })
+      );
+      const refusal = element.querySelector('[role="alert"]');
+      expect(refusal?.textContent).toContain(
+        'Fillet could not be created with radius 30.'
+      );
+      expect(
+        element.querySelector('.selection-callout-phase')?.textContent
+      ).toBe('Failed');
+      const recovery = [
+        ...element.querySelectorAll<HTMLButtonElement>(
+          '.selection-callout-recovery'
+        )
+      ];
+      expect(recovery.map((button) => button.textContent)).toEqual([
+        'Edit Fillet 1',
+        'Keep 2.5 mm',
+        'View details'
+      ]);
+      recovery[0]?.click();
+      recovery[1]?.click();
+      recovery[2]?.click();
+      expect(filled.onEditCulprit).toHaveBeenCalledWith('f-1');
+      expect(filled.onKeepLastValid).toHaveBeenCalledTimes(1);
+      expect(filled.onViewDetails).toHaveBeenCalledTimes(1);
+    });
+
+    it('offers every edge of the body until all are picked', () => {
+      const element = document.createElement('div');
+      const filled = operation({ selectAllEdgesCount: 12 });
+      renderSelectionCallout(
+        element,
+        textLabelSegments('Box'),
+        content({ verbs: edgeVerbs, operation: filled })
+      );
+      element
+        .querySelector<HTMLButtonElement>('[aria-label="Select all 12 edges"]')
+        ?.click();
+      expect(filled.onSelectAllEdges).toHaveBeenCalledTimes(1);
+    });
+
+    it('goes back to a plain selection group when the operation ends', () => {
+      const element = document.createElement('div');
+      renderSelectionCallout(
+        element,
+        textLabelSegments('Box'),
+        content({ operation: operation({ phase: 'validating' }) })
+      );
+      refreshSelectionCallout(element, content());
+      expect(element.getAttribute('role')).toBe('group');
+      expect(element.getAttribute('aria-label')).toBe('Selection');
+      expect(element.hasAttribute('aria-busy')).toBe(false);
+      expect(element.querySelector('.selection-callout-phase')).toBeNull();
+    });
+  });
 });
 
 describe('selectionCalloutClearance', () => {
@@ -231,5 +492,52 @@ describe('selectionCalloutClearance', () => {
     expect(chip.top + shift).toBeGreaterThanOrEqual(
       high.bottom + HANDLE_KEEP_OUT_PX
     );
+  });
+});
+
+describe('selectionCalloutObstacleShift', () => {
+  const viewport = { left: 0, top: 50, right: 1100, bottom: 700 };
+  // The inspector in the right lane, as measured at 1100 px (F11).
+  const inspector = { left: 710, top: 60, right: 1040, bottom: 394 };
+
+  it('leaves a chip clear of every panel where it is', () => {
+    expect(
+      selectionCalloutObstacleShift(
+        { left: 100, top: 120, right: 500, bottom: 146 },
+        [inspector],
+        viewport
+      )
+    ).toEqual({ dx: 0, dy: 0 });
+  });
+
+  it('slides a chip out from under the inspector, not under another panel', () => {
+    const chip = { left: 307, top: 126, right: 793, bottom: 152 };
+    const shift = selectionCalloutObstacleShift(chip, [inspector], viewport);
+    expect(shift.dy).toBe(0);
+    expect(chip.right + shift.dx).toBeLessThanOrEqual(inspector.left);
+    expect(chip.left + shift.dx).toBeGreaterThanOrEqual(viewport.left);
+  });
+
+  it('rises above a drawer that spans the viewport', () => {
+    // A phone: the drawer covers the lower viewport edge to edge.
+    const phone = { left: 0, top: 50, right: 390, bottom: 844 };
+    const drawer = { left: 0, top: 500, right: 390, bottom: 844 };
+    const chip = { left: 60, top: 520, right: 330, bottom: 546 };
+    const shift = selectionCalloutObstacleShift(chip, [drawer], phone);
+    expect(shift.dx).toBe(0);
+    expect(chip.bottom + shift.dy).toBeLessThanOrEqual(drawer.top);
+  });
+
+  it('stays put rather than move under another panel', () => {
+    const lane = { left: 300, top: 0, right: 400, bottom: 800 };
+    const column = { left: 0, top: 0, right: 300, bottom: 800 };
+    const narrow = { left: 0, top: 0, right: 400, bottom: 800 };
+    expect(
+      selectionCalloutObstacleShift(
+        { left: 250, top: 100, right: 350, bottom: 120 },
+        [lane, column],
+        narrow
+      )
+    ).toEqual({ dx: 0, dy: 0 });
   });
 });

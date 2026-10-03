@@ -37,6 +37,35 @@ export interface BodyOption {
   consumed: boolean;
 }
 
+/**
+ * Names a body pick list can tell apart. New bodies are numbered at creation
+ * ("Box 1", "Box 2"), but a document made before that can hold two bodies
+ * both called "Box Body" — the Union card showed two identical rows. Shared
+ * names get "(1)", "(2)" in list order, which does not move as rows are
+ * picked; the stored names are left alone.
+ */
+export function distinctBodyNames(
+  bodies: readonly Pick<BodyOption, 'bodyId' | 'name'>[]
+): Map<BodyId, string> {
+  const counts = new Map<string, number>();
+  for (const body of bodies) {
+    counts.set(body.name, (counts.get(body.name) ?? 0) + 1);
+  }
+  const usedNames = new Set(bodies.map((body) => body.name));
+  const seen = new Map<string, number>();
+  return new Map(
+    bodies.map((body) => {
+      if ((counts.get(body.name) ?? 0) < 2) return [body.bodyId, body.name];
+      let ordinal = (seen.get(body.name) ?? 0) + 1;
+      while (usedNames.has(`${body.name} (${ordinal})`)) ordinal += 1;
+      seen.set(body.name, ordinal);
+      const name = `${body.name} (${ordinal})`;
+      usedNames.add(name);
+      return [body.bodyId, name];
+    })
+  );
+}
+
 export interface SketchOption {
   sketchId: SketchId;
   name: string;
@@ -100,13 +129,14 @@ function FormShell({
           type="submit"
           className="primary"
           disabled={!canSubmit}
-          title="Enter"
+          aria-keyshortcuts="Enter"
         >
           {submitLabel}
           {/*
             Decoration, not part of the name. Without this the button announced
-            itself as "Create ↵"; the hint stays visible and `title` already
-            carries it for anyone reading the tooltip.
+            itself as "Create ↵". The key is `aria-keyshortcuts`, not a `title`:
+            a title of "Enter" was what assistive tech read in place of the
+            verb, so every Create and Apply was announced as "Enter".
           */}
           <kbd className="kbd-inline" aria-hidden="true">
             ↵
@@ -921,6 +951,7 @@ export function BooleanForm({
       bodies.filter((body) => !body.consumed || selected.includes(body.bodyId)),
     [bodies, selected]
   );
+  const bodyNames = useMemo(() => distinctBodyNames(selectable), [selectable]);
 
   function toggle(bodyId: BodyId) {
     const next = selected.includes(bodyId)
@@ -991,19 +1022,28 @@ export function BooleanForm({
           )}
           {selectable.map((body) => {
             const index = selected.indexOf(body.bodyId);
+            const base = index === 0 && operation === 'subtract';
+            const bodyName = bodyNames.get(body.bodyId) ?? body.name;
             return (
               <button
                 key={body.bodyId}
                 type="button"
                 className={`pick-row ${index >= 0 ? 'selected' : ''}`}
                 aria-pressed={index >= 0}
+                // The body's name first, then the pick order the badge
+                // draws: the badge alone is a bare digit, or empty.
+                aria-label={
+                  index >= 0
+                    ? `${bodyName}, pick ${index + 1}${base ? ', base' : ''}`
+                    : bodyName
+                }
                 onClick={() => toggle(body.bodyId)}
               >
                 <span className="pick-order mono">
                   {index >= 0 ? index + 1 : ''}
                 </span>
-                <span className="body-name">{body.name}</span>
-                {index === 0 && operation === 'subtract' && <small>base</small>}
+                <span className="body-name">{bodyName}</span>
+                {base && <small>base</small>}
               </button>
             );
           })}
@@ -1052,10 +1092,14 @@ interface TransformFormProps {
   initialTarget?: BodyId;
   /** Name seeded for a new feature; edits carry `initial.name` instead. */
   defaultName?: string;
+  /** Document length units, named in the translation fields' labels. */
+  units?: string;
   submitLabel: string;
   onSubmit(value: TransformFormValue): void;
   onCancel?: () => void;
 }
+
+const TRANSFORM_AXES = ['x', 'y', 'z'] as const;
 
 export function TransformForm({
   scope,
@@ -1063,6 +1107,7 @@ export function TransformForm({
   initial,
   initialTarget,
   defaultName = 'Move',
+  units,
   submitLabel,
   onSubmit,
   onCancel
@@ -1131,46 +1176,33 @@ export function TransformForm({
           ))}
         </select>
       </label>
+      {/* The labels the Move gizmo's card uses (F19): a Move is created
+          there and edited here, and the two named the same fields
+          "dX" and "Move X". */}
       <div className="field-triple">
-        <ExprInput
-          label="Move X"
-          value={values.tx ?? ''}
-          scope={scope}
-          autoFocus
-          onChange={setValue('tx')}
-        />
-        <ExprInput
-          label="Move Y"
-          value={values.ty ?? ''}
-          scope={scope}
-          onChange={setValue('ty')}
-        />
-        <ExprInput
-          label="Move Z"
-          value={values.tz ?? ''}
-          scope={scope}
-          onChange={setValue('tz')}
-        />
+        {TRANSFORM_AXES.map((axis, index) => (
+          <ExprInput
+            key={`t${axis}`}
+            label={`d${axis.toUpperCase()}`}
+            ariaLabel={`Move ${axis.toUpperCase()}${units ? ` in ${units}` : ''}`}
+            value={values[`t${axis}`] ?? ''}
+            scope={scope}
+            autoFocus={index === 0}
+            onChange={setValue(`t${axis}`)}
+          />
+        ))}
       </div>
       <div className="field-triple">
-        <ExprInput
-          label="Rotate X°"
-          value={values.rx ?? ''}
-          scope={scope}
-          onChange={setValue('rx')}
-        />
-        <ExprInput
-          label="Rotate Y°"
-          value={values.ry ?? ''}
-          scope={scope}
-          onChange={setValue('ry')}
-        />
-        <ExprInput
-          label="Rotate Z°"
-          value={values.rz ?? ''}
-          scope={scope}
-          onChange={setValue('rz')}
-        />
+        {TRANSFORM_AXES.map((axis) => (
+          <ExprInput
+            key={`r${axis}`}
+            label={`r${axis.toUpperCase()}`}
+            ariaLabel={`Rotate ${axis.toUpperCase()} in degrees`}
+            value={values[`r${axis}`] ?? ''}
+            scope={scope}
+            onChange={setValue(`r${axis}`)}
+          />
+        ))}
       </div>
       <ExprInput
         label="Scale ×"
@@ -1204,7 +1236,7 @@ export interface EdgeModifierFormValue {
 
 const VARIABLE_FILLET_LAW_LABELS: Record<VariableFilletLaw, string> = {
   linear: 'Linear',
-  scurve: 'S-curve'
+  scurve: 'Eased at both ends'
 };
 
 interface EdgeModifierFormProps {
@@ -1216,6 +1248,13 @@ interface EdgeModifierFormProps {
   availableEdgeCount?: number;
   onSelectAllEdges?: () => void;
   onClearEdges?: () => void;
+  /**
+   * The edges in `edgeHashes`, named, in order. A count alone ("2 exact
+   * edges selected") left the user to guess which two.
+   */
+  edgeRows?: readonly { hash: number; label: string }[];
+  /** Takes one edge off; absent, the rows carry no remove button. */
+  onRemoveEdge?(hash: number): void;
   initial?: {
     name: string;
     size: ParamValue;
@@ -1245,6 +1284,8 @@ export function EdgeModifierForm({
   availableEdgeCount,
   onSelectAllEdges,
   onClearEdges,
+  edgeRows,
+  onRemoveEdge,
   initial,
   submitLabel,
   onSubmit,
@@ -1289,6 +1330,16 @@ export function EdgeModifierForm({
     () => () => previewCallback.current?.(null),
     [targetBodyId, edgeSelectionKey]
   );
+  // A removed or re-picked edge previews the current set with the values
+  // already typed into this card, so the lit faces follow the list.
+  const previousEdgeSelection = useRef(edgeSelectionKey);
+  useEffect(() => {
+    if (previousEdgeSelection.current !== edgeSelectionKey) {
+      previousEdgeSelection.current = edgeSelectionKey;
+      previewFields(fieldsWith({}));
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [edgeSelectionKey]);
   // The second value each blend can take: a fillet's far-end radius, a
   // chamfer's setback on the other face. Blank is not "zero" but "this blend
   // is the constant/symmetric one", so it is only checked when it is filled.
@@ -1406,6 +1457,37 @@ export function EdgeModifierForm({
               // the routes that work rather than the one the tool forbids.
               'Click an edge in the viewport, or pick the body in the model tree.'}
       </div>
+      {edgeRows && edgeRows.length > 0 && (
+        <ol
+          className="edge-pick-list"
+          aria-label={kind === 'fillet' ? 'Filleted edges' : 'Chamfered edges'}
+        >
+          {edgeRows.map((row, index) => (
+            <li key={row.hash} className="edge-pick-row">
+              <span className="pick-order mono">{index + 1}</span>
+              <span className="edge-pick-name">{row.label}</span>
+              {onRemoveEdge && (
+                <button
+                  type="button"
+                  className="edge-pick-remove"
+                  aria-label={`Remove ${index + 1} ${row.label}`}
+                  title={
+                    edgeRows.length === 1
+                      ? `A ${kind} needs at least one edge`
+                      : 'Remove this edge'
+                  }
+                  disabled={edgeRows.length === 1}
+                  onClick={() => {
+                    onRemoveEdge(row.hash);
+                  }}
+                >
+                  ×
+                </button>
+              )}
+            </li>
+          ))}
+        </ol>
+      )}
       {targetBodyId &&
         availableEdgeCount &&
         availableEdgeCount > 0 &&
@@ -1453,7 +1535,7 @@ export function EdgeModifierForm({
         <>
           <div className="field-pair">
             <ExprInput
-              label="End radius (blank = constant)"
+              label="End radius (blank keeps one radius)"
               value={endRadius}
               scope={scope}
               optional
@@ -1463,7 +1545,7 @@ export function EdgeModifierForm({
               }}
             />
             <label className="field">
-              <span>Radius law</span>
+              <span>Radius change</span>
               <select
                 value={radiusLaw}
                 disabled={endRadius.trim() === ''}

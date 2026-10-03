@@ -197,12 +197,13 @@ for (const kind of ['loft', 'sweep', 'helical-sweep'] as const) {
     const inspector = page.getByRole('region', { name: 'Feature inspector' });
     const label = kind.replaceAll('-', ' ');
     const openEditor = async () => {
+      // The row opens the editable form directly (F19).
       await page
         .locator('.feature-row-main', { hasText: 'Authored feature' })
         .click();
-      await inspector
-        .getByRole('button', { name: `Edit ${label}`, exact: true })
-        .click();
+      await expect(
+        inspector.getByRole('button', { name: `Edit ${label}`, exact: true })
+      ).toHaveCount(0);
       await expect(inspector.getByLabel('Name', { exact: true })).toHaveValue(
         'Authored feature'
       );
@@ -212,9 +213,15 @@ for (const kind of ['loft', 'sweep', 'helical-sweep'] as const) {
     };
     const apply = async () => {
       // One press checks the exact result and applies it.
-      await inspector
-        .getByRole('button', { name: `Apply ${label}`, exact: true })
-        .click({ timeout: 30_000 });
+      const applyButton = inspector.getByRole('button', {
+        name: `Apply ${label}`,
+        exact: true
+      });
+      await applyButton.click({ timeout: 30_000 });
+      // The card closes only once this Apply has committed (F19); the status
+      // below can still read the previous Apply's identical message, and the
+      // button is relabelled while the exact check runs.
+      await expect(inspector).toHaveCount(0, { timeout: 60_000 });
       await expect(page.getByRole('contentinfo')).toContainText(
         'Edited Authored feature.',
         { timeout: 30_000 }
@@ -337,9 +344,6 @@ test('refuses a saved section that cannot resolve to an upstream sketch', async 
     .locator('.feature-row-main', { hasText: 'Authored feature' })
     .click();
   const inspector = page.getByRole('region', { name: 'Feature inspector' });
-  await inspector
-    .getByRole('button', { name: 'Edit loft', exact: true })
-    .click();
   await expect(inspector.getByRole('alert')).toContainText(
     'Saved profile no longer resolves uniquely'
   );

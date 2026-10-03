@@ -34,7 +34,7 @@ describe('StatusActivityLog', () => {
       <StatusActivityLog
         {...props}
         status="Offline workspace"
-        geometryStatus="Starting geometry worker · no exact projection is available yet"
+        geometryStatus="Starting geometry worker · the model appears when it is ready"
         tone="running"
       />
     );
@@ -42,7 +42,7 @@ describe('StatusActivityLog', () => {
       <StatusActivityLog
         {...props}
         status="Cannot use Box: This shared project is read-only."
-        geometryStatus="Starting geometry worker · no exact projection is available yet"
+        geometryStatus="Starting geometry worker · the model appears when it is ready"
         tone="running"
       />
     );

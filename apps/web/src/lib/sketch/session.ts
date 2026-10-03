@@ -552,7 +552,7 @@ export const SKETCH_SNAP_GLYPHS: Record<SnapTargetKind, string> = {
   midpoint: '△',
   quadrant: '◇',
   horizontal: '—',
-  vertical: '│',
+  vertical: '|',
   grid: '•'
 };
 

@@ -189,6 +189,32 @@ describe('device persistence and chrome', () => {
     expect(document.documentElement.dataset.reducedMotion).toBe('true');
     expect(document.documentElement.dataset.theme).toBe('light');
   });
+
+  it('leaves System to the stylesheet instead of resolving it in script', () => {
+    // The setting itself reaches the root; tokens.css resolves it against
+    // the OS while it paints (theme/systemTheme.test.ts). A script resolver
+    // painted a dark workspace under a light OS until its listener fired.
+    const matchMedia = vi.fn(() => ({
+      matches: true,
+      addEventListener: vi.fn(),
+      removeEventListener: vi.fn()
+    }));
+    vi.stubGlobal('matchMedia', matchMedia);
+    try {
+      loadRecord.mockReturnValue({
+        settings: defaultAppSettings(),
+        syncedRevision: 7
+      });
+
+      render();
+
+      expect(defaultAppSettings().appearance.theme).toBe('system');
+      expect(document.documentElement.dataset.theme).toBe('system');
+      expect(matchMedia).not.toHaveBeenCalled();
+    } finally {
+      vi.unstubAllGlobals();
+    }
+  });
 });
 
 describe('settings changes', () => {

@@ -2,7 +2,7 @@ import type {
   SelectionActionId,
   SelectionCapability
 } from './interaction/capabilities';
-import { renderLabelSegments } from './liveLabels';
+import type { CommandDiagnostic, OperationPhase } from './interaction/machine';
 import type { LabelSegment } from './topologyLabels';
 import {
   TOOL_META,
@@ -20,9 +20,14 @@ import {
  * — a name-only viewport label, a bottom-lane chip with the measurement,
  * and an inspector fallback that only said nothing could be edited.
  *
- * The viewer builds the chip's element (it is a CSS2D label, positioned
- * every frame); this module fills it, so the markup and the verb choice are
- * testable without a WebGL context.
+ * A pick that arms an operation (a face's offset or resize, an edge's
+ * fillet) also carries that operation here: its phase, its refusal and the
+ * way out of it. That used to be a second chip at the top of the column,
+ * one more surface lit for the same pick (design review F11).
+ *
+ * This module chooses what the chip says; `selectionCalloutView` builds it
+ * (it is a CSS2D label the viewer positions every frame), so the markup is
+ * testable without a WebGL context and stays out of the entry chunk.
  */
 
 /** A verb is either a selection action the tool card also offers, or a tool. */
@@ -56,6 +61,30 @@ export interface SelectionCalloutContent {
   onVerb(id: SelectionCalloutVerbId): void;
   /** Clears the selection; absent where there is nothing to clear. */
   onClear?: (() => void) | undefined;
+  /** The operation the pick has armed, when it has armed one. */
+  operation?: SelectionCalloutOperation | undefined;
+}
+
+/**
+ * What the column-top operation chip used to say, said on the pick instead:
+ * which phase the operation is in, why it refused and how to recover. Its
+ * Fillet/Chamfer or Resize/Offset switch is the chip's own pressed verbs.
+ */
+export interface SelectionCalloutOperation {
+  /** "Resize Body": the chip is announced as the "Resize Body operation". */
+  title: string;
+  phase?: OperationPhase | undefined;
+  /** Context behind a named marker, such as a hash-anchored offset. */
+  badge?: { label: string; detail: string } | undefined;
+  error?: CommandDiagnostic | undefined;
+  /** "Keep 4 mm": commits the value the last passing preview showed. */
+  keepLastValidLabel?: string | undefined;
+  /** Edges on the body, when not all of them are picked yet. */
+  selectAllEdgesCount?: number | undefined;
+  onEditCulprit(featureId: string): void;
+  onViewDetails(): void;
+  onKeepLastValid(): void;
+  onSelectAllEdges(): void;
 }
 
 export type SelectionCalloutKind = 'face' | 'edges' | 'body' | 'bodies';
@@ -70,16 +99,26 @@ export interface SelectionCalloutVerbInput {
   faceCapabilities?: readonly SelectionCapability[] | null;
   /** The machine holds the picked edges, so Fillet/Chamfer switch its op. */
   edgesArmed?: boolean;
+  /**
+   * The face's body can be resized from it (a primitive's face), which is
+   * the edit a face drag makes first; Offset then moves the face alone.
+   */
+  resizeBody?: boolean;
   /** The selection action already armed, drawn pressed. */
   pressedAction?: SelectionActionId | null;
   availability: ToolAvailability;
 }
 
-/** Enough to act on the pick without turning the chip into a toolbar. */
-export const MAX_SELECTION_VERBS = 3;
+/**
+ * Enough to act on the pick without turning the chip into a toolbar: a
+ * primitive's face needs four (Resize, Offset, Sketch, Hole), every other
+ * pick three or fewer.
+ */
+export const MAX_SELECTION_VERBS = 4;
 
 /** Shorter names for actions whose tool-card label repeats the pick. */
 const ACTION_LABELS: Partial<Record<SelectionActionId, string>> = {
+  'resize-body': 'Resize',
   'offset-face': 'Offset',
   'sketch-on-face': 'Sketch',
   'resize-radial-face': 'Radius'
@@ -129,8 +168,9 @@ function edgeVerb(
 
 /**
  * The verbs for a pick, in the order they are usually reached for:
- * a face offers its own edit (Offset, or Radius on a cylinder), Sketch and
- * Hole; edges offer Fillet and Chamfer; a body Move and Mirror; several
+ * a face offers its own edit (Resize and Offset on a primitive, Offset, or
+ * Radius on a cylinder), Sketch and Hole; edges offer Fillet and Chamfer;
+ * a body Move and Mirror; several
  * bodies Union first. At most {@link MAX_SELECTION_VERBS}.
  */
 export function selectionCalloutVerbs(
@@ -151,6 +191,17 @@ export function selectionCalloutVerbs(
       verbs = capabilities.map((capability) =>
         actionVerb(capability, input.pressedAction)
       );
+      if (input.resizeBody) {
+        // The switch the column-top chip carried as "Resize body | Offset
+        // Face": pressed here, it is the one the drag will make.
+        verbs.unshift({
+          id: 'action:resize-body',
+          label: ACTION_LABELS['resize-body']!,
+          title: 'Resize the body from this face',
+          disabled: false,
+          pressed: input.pressedAction === 'resize-body'
+        });
+      }
       // A face that takes a sketch is planar, and a planar face takes a hole.
       if (
         capabilities.some(
@@ -179,192 +230,4 @@ export function selectionCalloutVerbs(
       break;
   }
   return verbs.slice(0, MAX_SELECTION_VERBS);
-}
-
-/** Class the viewer's name label takes while it carries the full chip. */
-export const SELECTION_CALLOUT_CHIP_CLASS = 'selection-callout-chip';
-
-const fallbackLabels = new WeakMap<HTMLElement, readonly LabelSegment[]>();
-
-/**
- * Fills a freshly built selection label. `fallbackLabel` is the viewer's own
- * name for the pick, used whenever the content does not name it.
- */
-export function renderSelectionCallout(
-  element: HTMLElement,
-  fallbackLabel: readonly LabelSegment[],
-  content: SelectionCalloutContent | null | undefined
-): void {
-  fallbackLabels.set(element, fallbackLabel);
-  fill(element, fallbackLabel, content);
-}
-
-/**
- * Refills a label already on screen when only the content changed — a verb
- * became available, or the armed one changed — without rebuilding the
- * viewport overlays around it.
- */
-export function refreshSelectionCallout(
-  element: HTMLElement,
-  content: SelectionCalloutContent | null | undefined
-): void {
-  const fallback = fallbackLabels.get(element);
-  if (fallback) {
-    fill(element, fallback, content);
-  }
-}
-
-function fill(
-  element: HTMLElement,
-  fallbackLabel: readonly LabelSegment[],
-  content: SelectionCalloutContent | null | undefined
-) {
-  const owner = element.ownerDocument;
-  const name = owner.createElement('span');
-  name.className = 'selection-callout-name';
-  renderLabelSegments(name, content?.label ?? fallbackLabel);
-  const children: HTMLElement[] = [name];
-  if (!content) {
-    element.classList.remove(SELECTION_CALLOUT_CHIP_CLASS);
-    element.removeAttribute('role');
-    element.removeAttribute('aria-label');
-    element.replaceChildren(...children);
-    return;
-  }
-  element.classList.add(SELECTION_CALLOUT_CHIP_CLASS);
-  element.setAttribute('role', 'group');
-  element.setAttribute('aria-label', 'Selection');
-  if (content.detail) {
-    const detail = owner.createElement('span');
-    detail.className = 'selection-callout-detail';
-    detail.textContent = content.detail;
-    children.push(detail);
-  }
-  if (content.verbs.length > 0) {
-    const verbs = owner.createElement('span');
-    verbs.className = 'selection-callout-verbs';
-    for (const verb of content.verbs) {
-      const button = owner.createElement('button');
-      button.type = 'button';
-      button.className = 'selection-callout-verb';
-      button.textContent = verb.label;
-      button.title = verb.title;
-      // Named for what it acts on, so it never shares a name with the rail
-      // button or tool-card action of the same verb.
-      button.setAttribute('aria-label', `Selection: ${verb.label}`);
-      button.disabled = verb.disabled;
-      button.setAttribute('aria-pressed', String(verb.pressed));
-      button.addEventListener('click', (event) => {
-        event.stopPropagation();
-        content.onVerb(verb.id);
-      });
-      verbs.append(button);
-    }
-    children.push(verbs);
-  }
-  if (content.onClear) {
-    const onClear = content.onClear;
-    const clear = owner.createElement('button');
-    clear.type = 'button';
-    clear.className = 'selection-callout-clear';
-    clear.title = 'Deselect all (Esc)';
-    clear.setAttribute('aria-label', 'Deselect all');
-    clear.textContent = '×';
-    clear.addEventListener('click', (event) => {
-      event.stopPropagation();
-      onClear();
-    });
-    children.push(clear);
-  }
-  element.replaceChildren(...children);
-}
-
-export interface ScreenRect {
-  left: number;
-  top: number;
-  right: number;
-  bottom: number;
-}
-
-/**
- * How far the drag handle's arrow can reach from its value chip: the chip
- * sits 44 px from the arrow's pin and the shaft runs back from the pin, so
- * this much margin around the value chip covers the whole arrow.
- */
-export const HANDLE_KEEP_OUT_PX = 100;
-
-/**
- * The vertical shift that keeps the selection chip off a drag handle.
- *
- * The chip hangs over the pick and the handle grows out of it, so in some
- * views they land on the same pixels — and a verb button over the arrow
- * takes the press meant for the drag. `chip` is the chip's box without any
- * shift, `valueChip` the handle's value chip. The chip moves above the
- * keep-out zone, or below it when above would leave the viewport; zero when
- * they do not meet.
- */
-export function selectionCalloutClearance(
-  chip: ScreenRect,
-  valueChip: ScreenRect,
-  viewport: ScreenRect,
-  keepOut = HANDLE_KEEP_OUT_PX
-): number {
-  const zone = {
-    left: valueChip.left - keepOut,
-    top: valueChip.top - keepOut,
-    right: valueChip.right + keepOut,
-    bottom: valueChip.bottom + keepOut
-  };
-  const meets =
-    chip.left < zone.right &&
-    chip.right > zone.left &&
-    chip.top < zone.bottom &&
-    chip.bottom > zone.top;
-  if (!meets) {
-    return 0;
-  }
-  const gap = 4;
-  const up = zone.top - gap - chip.bottom;
-  if (chip.top + up >= viewport.top + gap) {
-    return up;
-  }
-  return zone.bottom + gap - chip.top;
-}
-
-/**
- * Applies {@link selectionCalloutClearance} to a chip on screen. Run after
- * the label renderer places the chip each frame; the shift rides the CSS
- * `translate` property, which composes with the renderer's inline transform
- * and the edge clamp's margins instead of fighting them.
- */
-export function keepSelectionCalloutClear(element: HTMLElement): void {
-  if (!element.classList.contains(SELECTION_CALLOUT_CHIP_CLASS)) {
-    return;
-  }
-  const scope = element.closest('.viewer-shell') ?? element.ownerDocument;
-  const valueChip = scope.querySelector<HTMLElement>(
-    '.handle-value-chip:not([hidden])'
-  );
-  const current = Number.parseFloat(
-    element.style.translate.split(' ')[1] ?? '0'
-  );
-  const shift = Number.isFinite(current) ? current : 0;
-  let next = 0;
-  const container = element.parentElement;
-  if (valueChip && container) {
-    const rect = element.getBoundingClientRect();
-    next = selectionCalloutClearance(
-      {
-        left: rect.left,
-        right: rect.right,
-        top: rect.top - shift,
-        bottom: rect.bottom - shift
-      },
-      valueChip.getBoundingClientRect(),
-      container.getBoundingClientRect()
-    );
-  }
-  if (Math.abs(next - shift) > 0.5) {
-    element.style.translate = next ? `0 ${next}px` : '';
-  }
 }

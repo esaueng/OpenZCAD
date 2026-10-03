@@ -11,7 +11,7 @@ import {
   updateStudioGrid,
   VIEWPORT_RENDER_ORDER
 } from './scene';
-import { VIEW_DIRECTIONS } from '../camera/views';
+import { boxFullyInView, VIEW_DIRECTIONS } from '../camera/views';
 import { toBodyId, type BodyRepresentation } from '@openzcad/shared';
 
 function bodyFixture(
@@ -215,6 +215,16 @@ describe('updateAxesGizmo', () => {
 });
 
 describe('computeFitPose', () => {
+  it('keeps the established padding when the default fit already fits', () => {
+    const camera = new THREE.PerspectiveCamera(45, 16 / 9, 0.1, 4000);
+    const mesh = new THREE.Mesh(new THREE.BoxGeometry(20, 20, 20));
+    const pose = computeFitPose(camera, [mesh]);
+    const distance = (10 / Math.tan(THREE.MathUtils.degToRad(22.5))) * 2.1;
+    expect(pose.position.distanceTo(pose.target)).toBeCloseTo(distance, 10);
+    expect(pose.near).toBeCloseTo(distance / 1000, 10);
+    expect(pose.far).toBeCloseTo(distance * 12 + 20 * 4, 10);
+  });
+
   it('lands on the shared iso home orientation', () => {
     const camera = new THREE.PerspectiveCamera(45, 1, 0.1, 4000);
     const mesh = new THREE.Mesh(new THREE.BoxGeometry(20, 20, 20));
@@ -228,5 +238,149 @@ describe('computeFitPose', () => {
     const pose = computeFitPose(camera, []);
     const direction = pose.position.clone().normalize();
     expect(direction.distanceTo(VIEW_DIRECTIONS.iso)).toBeLessThan(1e-6);
+  });
+
+  it('keeps a given view direction, framing everything from there', () => {
+    // An automatic reframe backs off along the user's own view instead of
+    // spinning the model to iso, and the result has every body in frame.
+    const camera = new THREE.PerspectiveCamera(45, 16 / 9, 0.1, 4000);
+    const plate = new THREE.Mesh(new THREE.BoxGeometry(80, 40, 5));
+    plate.position.set(40, 20, 2.5);
+    const flange = new THREE.Mesh(new THREE.BoxGeometry(80, 5, 40));
+    flange.position.set(40, 2.5, 20);
+    const objects = [plate, flange];
+    for (const object of objects) object.updateMatrixWorld();
+    const looking = new THREE.Vector3(-1, -2, 0.6).normalize();
+    const pose = computeFitPose(
+      camera,
+      objects,
+      looking.clone().multiplyScalar(7)
+    );
+    const direction = pose.position.clone().sub(pose.target).normalize();
+    expect(direction.distanceTo(looking)).toBeLessThan(1e-6);
+
+    camera.position.copy(pose.position);
+    camera.near = pose.near;
+    camera.far = pose.far;
+    camera.lookAt(pose.target);
+    camera.updateProjectionMatrix();
+    const box = new THREE.Box3();
+    for (const object of objects) box.expandByObject(object);
+    expect(boxFullyInView(box, camera, 0.05)).toBe(true);
+  });
+
+  it.each([
+    {
+      name: 'portrait front',
+      aspect: 375 / 900,
+      direction: new THREE.Vector3(0, -1, 0)
+    },
+    {
+      name: 'narrow oblique',
+      aspect: 0.2,
+      direction: new THREE.Vector3(1, -2, 1)
+    },
+    {
+      name: 'portrait top',
+      aspect: 375 / 900,
+      direction: new THREE.Vector3(0, 0, 1)
+    }
+  ])(
+    'fits every corner with the requested margin from $name',
+    ({ aspect, direction }) => {
+      const camera = new THREE.PerspectiveCamera(45, aspect, 0.1, 4000);
+      camera.up.set(0, 0, 1);
+      const mesh = new THREE.Mesh(new THREE.BoxGeometry(80, 5, 40));
+      mesh.position.set(40, 2.5, 20);
+      mesh.updateMatrixWorld();
+      const pose = computeFitPose(camera, [mesh], direction, 0.04);
+      expect(
+        pose.position
+          .clone()
+          .sub(pose.target)
+          .normalize()
+          .distanceTo(direction.clone().normalize())
+      ).toBeLessThan(1e-6);
+      camera.position.copy(pose.position);
+      camera.near = pose.near;
+      camera.far = pose.far;
+      camera.lookAt(pose.target);
+      camera.updateProjectionMatrix();
+      const box = new THREE.Box3().setFromObject(mesh);
+      expect(boxFullyInView(box, camera, 0.04)).toBe(true);
+
+      // The controller mirrors this perspective pose into an orthographic
+      // frustum on a projection switch. The same fit must remain complete.
+      const halfHeight =
+        pose.position.distanceTo(pose.target) *
+        Math.tan(THREE.MathUtils.degToRad(camera.fov / 2));
+      const orthographic = new THREE.OrthographicCamera(
+        -halfHeight * aspect,
+        halfHeight * aspect,
+        halfHeight,
+        -halfHeight,
+        0.1,
+        pose.far
+      );
+      orthographic.position.copy(pose.position);
+      orthographic.up.copy(camera.up);
+      orthographic.lookAt(pose.target);
+      orthographic.updateProjectionMatrix();
+      expect(boxFullyInView(box, orthographic, 0.04)).toBe(true);
+    }
+  );
+});
+
+describe('boxFullyInView', () => {
+  function cameraAt(position: THREE.Vector3) {
+    const camera = new THREE.PerspectiveCamera(45, 1, 0.1, 4000);
+    camera.position.copy(position);
+    camera.up.set(0, 0, 1);
+    camera.lookAt(0, 0, 0);
+    camera.updateProjectionMatrix();
+    return camera;
+  }
+  const box = new THREE.Box3(
+    new THREE.Vector3(-5, -5, -5),
+    new THREE.Vector3(5, 5, 5)
+  );
+
+  it('accepts a box the camera sees whole', () => {
+    expect(boxFullyInView(box, cameraAt(new THREE.Vector3(0, -80, 0)))).toBe(
+      true
+    );
+  });
+
+  it('refuses a box that reaches past an edge of the view', () => {
+    const tall = box.clone().expandByPoint(new THREE.Vector3(0, 0, 60));
+    expect(boxFullyInView(tall, cameraAt(new THREE.Vector3(0, -80, 0)))).toBe(
+      false
+    );
+  });
+
+  it('refuses a box behind the camera', () => {
+    const camera = cameraAt(new THREE.Vector3(0, -80, 0));
+    const behind = box.clone().translate(new THREE.Vector3(0, -200, 0));
+    expect(boxFullyInView(behind, camera)).toBe(false);
+  });
+
+  it('counts the margin as off screen', () => {
+    // At this distance the box spans most of the view; a wide margin no
+    // longer leaves it room.
+    const camera = cameraAt(new THREE.Vector3(0, -30, 0));
+    expect(boxFullyInView(box, camera, 0)).toBe(true);
+    expect(boxFullyInView(box, camera, 0.6)).toBe(false);
+  });
+
+  it('works through an orthographic camera', () => {
+    const camera = new THREE.OrthographicCamera(-20, 20, 20, -20, 0.1, 500);
+    camera.position.set(0, -80, 0);
+    camera.up.set(0, 0, 1);
+    camera.lookAt(0, 0, 0);
+    camera.updateProjectionMatrix();
+    expect(boxFullyInView(box, camera)).toBe(true);
+    camera.zoom = 5;
+    camera.updateProjectionMatrix();
+    expect(boxFullyInView(box, camera)).toBe(false);
   });
 });

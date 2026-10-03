@@ -142,3 +142,60 @@ describe('the section panel', () => {
     expect(onSectionCommit).toHaveBeenCalledTimes(2);
   });
 });
+
+describe('Measure on the viewer bar', () => {
+  // F13: Measure was on View mode's rail only, so Build had no way to it.
+  function renderWithMeasure(
+    measuring: boolean,
+    onMeasure?: (next: boolean) => void
+  ) {
+    const noop = () => undefined;
+    render(
+      <ViewerToolbar
+        settings={{ ...settings, sectionView: undefined }}
+        projection="perspective"
+        canUndo={false}
+        canRedo={false}
+        sectionRange={null}
+        onUndo={noop}
+        onRedo={noop}
+        onToggleGrid={noop}
+        onFit={noop}
+        measuring={measuring}
+        {...(onMeasure ? { onMeasure } : {})}
+        onView={noop}
+        onCycleDisplayMode={noop}
+        onToggleProjection={noop}
+        onCycleSection={noop}
+        onSectionOffset={noop}
+        onSectionCommit={noop}
+        onExportSectionDxf={noop}
+        sectionOutline={{ kind: 'clipping' }}
+        units="mm"
+      />
+    );
+  }
+
+  it('toggles Measure and shows whether it is on', () => {
+    const onMeasure = vi.fn();
+    renderWithMeasure(false, onMeasure);
+    const button = screen.getByRole('button', { name: 'Measure' });
+    expect(button.getAttribute('aria-pressed')).toBe('false');
+    fireEvent.click(button);
+    expect(onMeasure).toHaveBeenCalledWith(true);
+  });
+
+  it('reads pressed while measuring and switches it off', () => {
+    const onMeasure = vi.fn();
+    renderWithMeasure(true, onMeasure);
+    const button = screen.getByRole('button', { name: 'Measure' });
+    expect(button.getAttribute('aria-pressed')).toBe('true');
+    fireEvent.click(button);
+    expect(onMeasure).toHaveBeenCalledWith(false);
+  });
+
+  it('draws no ruler without a handler', () => {
+    renderWithMeasure(false);
+    expect(screen.queryByRole('button', { name: 'Measure' })).toBeNull();
+  });
+});

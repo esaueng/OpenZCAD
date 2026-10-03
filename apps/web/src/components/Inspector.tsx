@@ -6,7 +6,7 @@ import {
   loadMassDensitySelection,
   saveMassDensitySelection
 } from '../lib/massDensityPreference';
-import { MoreHorizontal, Trash2, X } from 'lucide-react';
+import { Trash2, X } from 'lucide-react';
 import { coerceParamValue } from '@openzcad/document-core';
 import { findFontFace } from '@openzcad/geometry';
 import { FEATURE_COLORS, featureColor } from '@openzcad/shared';
@@ -85,6 +85,7 @@ import {
 } from '../lib/inspectorHeading';
 import { ExprInput } from './ExprInput';
 import { ColorPicker } from './ColorPicker';
+import { PanelOverflow } from './PanelOverflow';
 import { FieldAutoFocusProvider } from './forms/fieldAutoFocus';
 import type { BodyAppearancePreview } from './ModelViewer';
 import {
@@ -146,6 +147,11 @@ export interface InspectorCallbacks {
   onEdgeModifierSize?(size: number | null): void;
   onSelectAllEdges(body: BodyRepresentation): void;
   onClearSelectedEdges(): void;
+  /**
+   * Drops one edge from a create card's pick, as a Shift+Click on it would.
+   * Absent, the card's edge rows carry no remove button.
+   */
+  onRemoveSelectedEdge?(edge: TopologySelection): void;
   onCreatePattern(value: PatternFormValue): void;
   /** The primitive card's Apply: its dimensions and, if moved, placement. */
   onApplyPrimitive(
@@ -262,6 +268,11 @@ interface InspectorProps extends InspectorCallbacks {
   selectedTopology: TopologySelection | null;
   selectedEdges: TopologySelection[];
   edgeModifierBody: BodyRepresentation | null;
+  /**
+   * The committed body projections, so an edited fillet or chamfer can name
+   * the edges it stores: they live on its input body, which a blend consumes.
+   */
+  bodyRepresentations?: Readonly<Record<string, BodyRepresentation>>;
   scope: Record<string, number>;
   sketches: SketchOption[];
   bodies: BodyOption[];
@@ -734,56 +745,6 @@ function BodyStats({
         </p>
       </CollapsibleSection>
     </>
-  );
-}
-
-/**
- * The header's overflow menu.
- *
- * A native disclosure does not close when you click away from it, which for a
- * menu means it sits open over the panel until you click it again. The colour
- * picker in this file already solved that; this uses the same listener rather
- * than inventing a second behaviour for the same gesture.
- */
-function PanelOverflow({ children }: { children: ReactNode }) {
-  const ref = useRef<HTMLDetailsElement | null>(null);
-  useEffect(() => {
-    const close = (event: Event) => {
-      const menu = ref.current;
-      if (
-        menu?.open &&
-        event.target instanceof Node &&
-        !menu.contains(event.target)
-      ) {
-        menu.open = false;
-      }
-    };
-    const onKeyDown = (event: KeyboardEvent) => {
-      if (event.key === 'Escape' && ref.current?.open) {
-        // Stop here: the panel's own Escape handler closes the whole panel,
-        // and dismissing a menu should not also dismiss what it belongs to.
-        event.stopPropagation();
-        ref.current.open = false;
-      }
-    };
-    document.addEventListener('pointerdown', close);
-    document.addEventListener('keydown', onKeyDown, true);
-    return () => {
-      document.removeEventListener('pointerdown', close);
-      document.removeEventListener('keydown', onKeyDown, true);
-    };
-  }, []);
-  return (
-    <details className="panel-overflow" ref={ref}>
-      <summary
-        className="icon-button"
-        title="More actions"
-        aria-label="More actions"
-      >
-        <MoreHorizontal size={14} aria-hidden="true" />
-      </summary>
-      <div className="panel-overflow-menu">{children}</div>
-    </details>
   );
 }
 
@@ -1328,6 +1289,50 @@ export function Inspector(props: InspectorProps) {
   const selectedEdgeReferences = selectedEdges.flatMap((edge) =>
     edge.reference?.kind === 'edge' ? [edge.reference] : []
   );
+  /**
+   * Stored edges taken off the fillet or chamfer being edited, until Apply.
+   * Keyed by the edit, so another feature or a new document version starts
+   * from the stored set again.
+   */
+  const [removedEdges, setRemovedEdges] = useState<{
+    edit: string;
+    hashes: readonly number[];
+    picked: readonly number[];
+  }>({ edit: '', hashes: [], picked: [] });
+  const edgeEditKey = selectedFeature
+    ? `edit-${selectedFeature.id}-${props.documentVersion ?? 0}`
+    : null;
+  useEffect(() => {
+    setRemovedEdges((current) => {
+      if (current.edit !== edgeEditKey || current.hashes.length === 0)
+        return current;
+      const picked =
+        featureSelectionSource === 'pinned'
+          ? selectedEdges.flatMap((edge) =>
+              edge.bodyId === selectedFeature?.bodyId && edge.hash !== undefined
+                ? [edge.hash]
+                : []
+            )
+          : [];
+      const newlyPicked = picked.filter(
+        (hash) => !current.picked.includes(hash)
+      );
+      const hashes = current.hashes.filter(
+        (hash) => !newlyPicked.includes(hash)
+      );
+      if (
+        hashes.length === current.hashes.length &&
+        picked.join(',') === current.picked.join(',')
+      )
+        return current;
+      return { edit: current.edit, hashes, picked };
+    });
+  }, [
+    selectedEdges,
+    selectedFeature?.bodyId,
+    featureSelectionSource,
+    edgeEditKey
+  ]);
 
   /**
    * Hand an edit panel the keyboard without handing it a field.
@@ -1382,7 +1387,13 @@ export function Inspector(props: InspectorProps) {
           submitLabel="Create"
           onSubmit={(name, dimensions, position) =>
             props.onCreatePrimitive(
-              createPrimitiveCommand(kind, name, dimensions, position)
+              createPrimitiveCommand(
+                kind,
+                name,
+                dimensions,
+                position,
+                props.document
+              )
             )
           }
           onCancel={props.onCancel}
@@ -1429,6 +1440,7 @@ export function Inspector(props: InspectorProps) {
           key="create-scale"
           scope={scope}
           bodies={bodies}
+          units={units}
           initialTarget={
             selectedTopology?.bodyId ??
             selectedBodyIds.at(-1) ??
@@ -1467,6 +1479,31 @@ export function Inspector(props: InspectorProps) {
               : undefined
           }
           onClearEdges={props.onClearSelectedEdges}
+          edgeRows={selectedEdges.flatMap((edge) =>
+            edge.hash === undefined
+              ? []
+              : [
+                  {
+                    hash: edge.hash,
+                    label: edgeLabel(
+                      edgeModifierBody ??
+                        props.bodyRepresentations?.[edge.bodyId],
+                      edge.hash,
+                      edge.topologyId
+                    )
+                  }
+                ]
+          )}
+          {...(props.onRemoveSelectedEdge
+            ? {
+                onRemoveEdge: (hash: number) => {
+                  const edge = selectedEdges.find(
+                    (candidate) => candidate.hash === hash
+                  );
+                  if (edge) props.onRemoveSelectedEdge?.(edge);
+                }
+              }
+            : {})}
           submitLabel="Create"
           onSubmit={(value) => props.onCreateEdgeModifier(tool, value)}
           onPreview={(value) => props.onPreviewEdgeModifier(null, tool, value)}
@@ -1689,6 +1726,7 @@ export function Inspector(props: InspectorProps) {
           key={editKey}
           scope={scope}
           bodies={bodies}
+          units={units}
           initial={{
             name: selectedFeature.name,
             targetBodyId: data.targetBodyId,
@@ -1728,23 +1766,61 @@ export function Inspector(props: InspectorProps) {
       const addedEdgeHashes = pickedEdgeHashes.filter(
         (hash) => !data.edgeHashes.includes(hash)
       );
-      const editEdgeHashes =
+      // An edge taken off the list leaves both the hashes and the references
+      // naming it, so the two still match one for one.
+      const removed = removedEdges.edit === editKey ? removedEdges.hashes : [];
+      const editEdgeHashes = (
         addedEdgeHashes.length > 0
           ? [...data.edgeHashes, ...addedEdgeHashes]
-          : data.edgeHashes;
+          : data.edgeHashes
+      ).filter((hash) => !removed.includes(hash));
       // Stored references only cover the stored hashes and a pick lands on
       // the blended result body, whose lineage the consumed source does not
       // carry, so a grown set goes hash-only and resolves by fingerprint.
-      const editEdgeReferences =
-        addedEdgeHashes.length > 0 ? undefined : data.edgeReferences;
+      const editEdgeReferences = addedEdgeHashes.some(
+        (hash) => !removed.includes(hash)
+      )
+        ? undefined
+        : data.edgeReferences?.filter(
+            (reference) => !removed.includes(reference.currentHash)
+          );
+      // Stored edges are named on the input body the blend consumed; an edge
+      // picked to grow the set, on the result it was picked on.
+      const edgeSources = [data.targetBodyId, selectedFeature.bodyId].map(
+        (bodyId) => (bodyId ? props.bodyRepresentations?.[bodyId] : undefined)
+      );
       form = (
         <EdgeModifierForm
-          key={`${editKey}:${editEdgeHashes.length}`}
+          // Edge-set changes keep the card and the values already typed.
+          key={editKey}
           kind={data.featureKind}
           scope={scope}
           targetBodyId={data.targetBodyId}
           edgeHashes={editEdgeHashes}
           edgeReferences={editEdgeReferences}
+          edgeRows={editEdgeHashes.map((hash) => ({
+            hash,
+            label: edgeLabel(
+              edgeSources.find((body) =>
+                body?.topology?.edges.some((edge) => edge.hash === hash)
+              ),
+              hash
+            )
+          }))}
+          onRemoveEdge={(hash) => {
+            setRemovedEdges({
+              edit: editKey,
+              hashes: [...removed, hash],
+              picked: pickedEdgeHashes
+            });
+            // A newly added edge is still a viewport pick. Release that pick
+            // too, so the next Shift+Click is a new selection that restores it.
+            const pick = selectedEdges.find(
+              (edge) =>
+                edge.bodyId === selectedFeature.bodyId && edge.hash === hash
+            );
+            if (pick) props.onRemoveSelectedEdge?.(pick);
+          }}
           initial={{
             name: selectedFeature.name,
             size: data.featureKind === 'fillet' ? data.radius : data.distance,
@@ -1981,6 +2057,9 @@ export function Inspector(props: InspectorProps) {
               Edit sketch in viewport
             </button>
           )}
+        {/* Selecting a modeling feature opens its form directly (F19), so
+            this only shows when that was refused — exact geometry still
+            loading, say — and is the way to retry once it is ready. */}
         {modelingFeatureIsEditable(data.featureKind) &&
           props.onEditModelingFeature && (
             <button

@@ -3,6 +3,7 @@ import {
   addPrimitiveFeature,
   booleanBodies,
   createProjectDocument,
+  filletEdges,
   listFeaturesInOrder
 } from '@openzcad/document-core';
 import {
@@ -197,6 +198,125 @@ describe('historyFeatureFocus', () => {
     expect(historyFeatureFocus(stripped, boss, visible)).toEqual({
       kind: 'bodies',
       bodyIds: [bracketBodyId]
+    });
+  });
+});
+
+/** A plate and the fillet on two of its edges, with hand-made projections. */
+function filletedPlate(options: { lineage: boolean }) {
+  let doc = createProjectDocument('Fillet focus', toUserId('user_test'));
+  doc = addPrimitiveFeature(doc, {
+    name: 'Plate',
+    primitiveKind: 'box',
+    dimensions: { width: 40, height: 20, depth: 5 }
+  });
+  const plateId = doc.bodyOrder[0] as BodyId;
+  const fillet = filletEdges(doc, {
+    name: 'Edge break',
+    targetBodyId: plateId,
+    edgeHashes: [11, 12],
+    size: 1
+  });
+  doc = fillet.document;
+  const [plate, filletFeature] = listFeaturesInOrder(doc);
+  const blend = (topologyId: string, hash: number) => ({
+    ...(options.lineage
+      ? faceFrom(
+          filletFeature!.featureId,
+          topologyId,
+          hash,
+          `modifier.fillet.face.band-between.${topologyId}`
+        )
+      : { topologyId, hash }),
+    geometry: { featureType: 'blend' as const }
+  });
+  const representations: ProjectDocument['derived']['bodyRepresentations'] = {
+    [plateId]: body(plateId, true, [
+      { topologyId: 'top', hash: 1 },
+      { topologyId: 'side', hash: 2 }
+    ]),
+    [fillet.bodyId]: body(fillet.bodyId, false, [
+      // Carried through: the fillet republishes it, and it is not a blend.
+      faceFrom(filletFeature!.featureId, 'top', 1, 'primitive.box.face.z-max'),
+      { topologyId: 'side-trimmed', hash: 3 },
+      blend('blend-a', 21),
+      blend('blend-b', 22)
+    ])
+  };
+  doc = {
+    ...doc,
+    derived: { ...doc.derived, bodyRepresentations: representations }
+  };
+  const visible = (id: BodyId) =>
+    Boolean(representations[id] && !representations[id].consumed);
+  return {
+    doc,
+    plate: plate!,
+    fillet: filletFeature!,
+    visible,
+    resultBodyId: fillet.bodyId
+  };
+}
+
+describe('historyFeatureFocus on a fillet', () => {
+  it('lights the blend faces it made instead of tinting the whole body', () => {
+    // F30: an opened fillet used to select its result body, so the whole
+    // part tinted and nothing on it said which edges were filleted.
+    for (const lineage of [true, false]) {
+      const { doc, fillet, visible, resultBodyId } = filletedPlate({
+        lineage
+      });
+      const focus = historyFeatureFocus(doc, fillet, visible);
+      expect(focus.kind).toBe('focus');
+      if (focus.kind !== 'focus') return;
+      expect(focus.faces.map((face) => face.topologyId)).toEqual([
+        'blend-a',
+        'blend-b'
+      ]);
+      expect(focus.faces.every((face) => face.bodyId === resultBodyId)).toBe(
+        true
+      );
+      expect(focus.ghostBodyIds).toEqual([]);
+    }
+  });
+
+  it('keeps an earlier blend the fillet only carried through unlit', () => {
+    const { doc, fillet, visible, resultBodyId } = filletedPlate({
+      lineage: true
+    });
+    const plateId = doc.bodyOrder[0] as BodyId;
+    const representations = doc.derived.bodyRepresentations;
+    const earlier = representations[resultBodyId]!.topology!.faces.find(
+      (face) => face.topologyId === 'blend-b'
+    )!;
+    const withEarlierBlend = {
+      ...doc,
+      derived: {
+        ...doc.derived,
+        bodyRepresentations: {
+          ...representations,
+          [plateId]: {
+            ...representations[plateId]!,
+            topology: {
+              ...representations[plateId]!.topology!,
+              faces: [...representations[plateId]!.topology!.faces, earlier]
+            }
+          }
+        }
+      }
+    };
+    const focus = historyFeatureFocus(withEarlierBlend, fillet, visible);
+    expect(
+      focus.kind === 'focus' && focus.faces.map((face) => face.topologyId)
+    ).toEqual(['blend-a']);
+  });
+
+  it('still selects the body of a feature that is not a blend', () => {
+    const { doc, plate } = filletedPlate({ lineage: true });
+    const plateId = doc.bodyOrder[0] as BodyId;
+    expect(historyFeatureFocus(doc, plate, (id) => id === plateId)).toEqual({
+      kind: 'bodies',
+      bodyIds: [plateId]
     });
   });
 });
