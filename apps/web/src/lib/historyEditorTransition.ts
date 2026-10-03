@@ -8,7 +8,7 @@ export interface HistoryEditorRequest {
 }
 
 /** Resolve after the Move choice: a synced document may have changed the step. */
-export function resolveHistoryEditorFeature(
+export function resolveHistoryFeature(
   document: ProjectDocument | null | undefined,
   request: HistoryEditorRequest
 ): FeatureNode | null {
@@ -16,6 +16,15 @@ export function resolveHistoryEditorFeature(
   const feature = listFeaturesInOrder(document).find(
     (candidate) => candidate.featureId === request.featureId
   );
+  return feature ?? null;
+}
+
+/** Modeling cards accept only the live kinds supported by that editor host. */
+export function resolveHistoryEditorFeature(
+  document: ProjectDocument | null | undefined,
+  request: HistoryEditorRequest
+): FeatureNode | null {
+  const feature = resolveHistoryFeature(document, request);
   return feature && modelingFeatureIsEditable(feature.data.featureKind)
     ? feature
     : null;

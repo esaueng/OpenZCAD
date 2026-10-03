@@ -5,7 +5,10 @@ import {
   listFeaturesInOrder
 } from '@openzcad/document-core';
 import { toUserId } from '@openzcad/shared';
-import { resolveHistoryEditorFeature } from './historyEditorTransition';
+import {
+  resolveHistoryEditorFeature,
+  resolveHistoryFeature
+} from './historyEditorTransition';
 
 function pendingSplit() {
   const manager = new CommandManager(
@@ -65,6 +68,7 @@ describe('resolveHistoryEditorFeature', () => {
       commandFactories.deleteFeature({ featureId: request.featureId })
     );
     expect(resolveHistoryEditorFeature(manager.document, request)).toBeNull();
+    expect(resolveHistoryFeature(manager.document, request)).toBeNull();
   });
 
   it('refuses a current feature that cannot use a modeling editor', () => {
@@ -132,5 +136,39 @@ describe('resolveHistoryEditorFeature', () => {
       )
     ).toBeNull();
     expect(resolveHistoryEditorFeature(null, request)).toBeNull();
+    expect(resolveHistoryFeature(null, request)).toBeNull();
+    expect(
+      resolveHistoryFeature(
+        { ...manager.document, projectId: other.projectId },
+        request
+      )
+    ).toBeNull();
+  });
+});
+
+describe('resolveHistoryFeature', () => {
+  it('resolves saved primitive edits from the live document without a modeling host', () => {
+    const { manager } = pendingSplit();
+    const feature = listFeaturesInOrder(manager.document)[0]!;
+    const request = {
+      projectId: manager.document.projectId,
+      featureId: feature.featureId
+    };
+    manager.execute(
+      commandFactories.updateFeature({
+        featureId: feature.featureId,
+        name: 'Changed box',
+        data: { dimensions: { width: 30, depth: 20, height: 20 } }
+      })
+    );
+    expect(resolveHistoryFeature(manager.document, request)).toMatchObject({
+      name: 'Changed box',
+      data: {
+        featureKind: 'primitive',
+        dimensions: { width: 30, depth: 20, height: 20 }
+      }
+    });
+    expect(feature.name).toBe('Box');
+    expect(resolveHistoryEditorFeature(manager.document, request)).toBeNull();
   });
 });

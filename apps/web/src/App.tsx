@@ -1100,16 +1100,20 @@ import {
 import { holePreview, type HolePreview } from './lib/holeGhost';
 import type { HoleDraft } from './components/forms/ModelingOperationsForm';
 import { extrudeSketchGuidance } from './lib/extrudeGuidance';
-import { featuresNeedingRepair } from './lib/featureRepair';
+import {
+  settleSuppressionNotice,
+  suppressionRepairSnapshot,
+  type SuppressionNotice
+} from './lib/suppressionFeedback';
 import { moveHasUnappliedChange } from './lib/moveCard';
 import {
   resolveHistoryEditorFeature,
+  resolveHistoryFeature,
   type HistoryEditorRequest
 } from './lib/historyEditorTransition';
 import {
   countLabel,
   deleteFeatureToastMessage,
-  suppressFeatureToastMessage,
   type ToastAction,
   type ToastModel
 } from './lib/toasts';
@@ -1904,8 +1908,9 @@ export function App() {
   const [movePreview, setMovePreview] = useState<MovePreview | null>(null);
   /** The entire tool/editor transition waiting on an unapplied Move. */
   const [pendingToolSwitch, setPendingToolSwitch] = useState<{
-    tool: ToolId | 'measure';
+    tool: ToolId | 'measure' | 'history';
     historyFeature?: HistoryEditorRequest;
+    clearHistorySelection?: boolean;
   } | null>(null);
   /**
    * Name for the Move feature the gizmo is about to create. The gizmo is now
@@ -2591,36 +2596,19 @@ export function App() {
     };
   }, [parameterPreviewBase, makeParameterPreview]);
   // A suppress or resume waiting on its rebuild to say what it broke (F20).
-  const suppressionNoticeRef = useRef<{
-    projectId: string;
-    version: number;
-    featureId: FeatureId;
-    name: string;
-    resume: boolean;
-    before: ReadonlySet<FeatureId>;
-  } | null>(null);
+  const suppressionNoticeRef = useRef<SuppressionNotice | null>(null);
   const announceSuppression = (derived: ProjectDocument['derived'] | null) => {
     const notice = suppressionNoticeRef.current;
-    const live = managerRef.current?.document;
-    if (!notice || !live || live.projectId !== notice.projectId) {
-      suppressionNoticeRef.current = null;
-      return;
-    }
-    // A broadcast for an older version is not this toggle's answer, and a
-    // newer one means another edit has since spoken for itself.
-    if (live.version < notice.version) return;
+    if (!notice) return;
+    const feedback = settleSuppressionNotice(
+      notice,
+      managerRef.current,
+      derived
+    );
+    if (feedback.state === 'pending') return;
     suppressionNoticeRef.current = null;
-    if (live.version > notice.version) return;
-    const broken = derived
-      ? [
-          ...featuresNeedingRepair(
-            listFeaturesInOrder(live),
-            derived.bodyRepresentations
-          )
-        ].filter((id) => id !== notice.featureId && !notice.before.has(id))
-          .length
-      : 0;
-    announce(suppressFeatureToastMessage(notice.name, notice.resume, broken), {
+    if (feedback.state !== 'ready') return;
+    announce(feedback.message, {
       label: 'Undo',
       run: handleUndo
     });
@@ -6332,11 +6320,39 @@ export function App() {
 
   function completeToolSwitch(
     request: {
-      tool: ToolId | 'measure';
+      tool: ToolId | 'measure' | 'history';
       historyFeature?: HistoryEditorRequest;
+      clearHistorySelection?: boolean;
     },
     applyMove = false
   ) {
+    if (request.tool === 'history') {
+      const current = managerRef.current?.document;
+      const feature = request.historyFeature
+        ? resolveHistoryFeature(current, request.historyFeature)
+        : null;
+      if (!current || !feature) {
+        setStatus('This history feature is no longer available to edit.');
+        return;
+      }
+      if (modelingFeatureIsEditable(feature.data.featureKind)) {
+        const nextTool = (feature.data as EditableModelingFeatureData)
+          .featureKind;
+        const reason = toolDisabledReason(nextTool, availability);
+        if (reason) {
+          setStatus(`${TOOL_META[nextTool].label}: ${reason}.`);
+          return;
+        }
+      }
+      // Resolve/refuse before committing a Move. Only a settled navigation
+      // may disarm its tool, replace its selection or open another editor.
+      if (applyMove && !confirmMove()) return;
+      applyHistorySelection(
+        request.clearHistorySelection ? null : feature.id,
+        managerRef.current!.document
+      );
+      return;
+    }
     if (request.tool === 'measure') {
       if (!modelingLocked && interactionRef.current.mode === 'sketch') {
         setStatus('Finish the sketch before measuring.');
@@ -15282,13 +15298,53 @@ export function App() {
   }
 
   function handleOpenHistoryFeature(nodeId: string) {
-    setFeatureFormError(null);
-    setSketchEditError(null);
     handleSelectFeatureFromTree(nodeId, false);
   }
 
   function handleSelectFeatureFromTree(nodeId: string, toggle = true) {
+    const current = managerRef.current?.document;
+    if (!current) return;
+    const next =
+      toggle &&
+      featureSelectionSource === 'pinned' &&
+      selectedFeatureNodeId === nodeId
+        ? null
+        : nodeId;
+    const node = current.nodes[nodeId];
+    if (node?.kind !== 'feature') {
+      setStatus('This history feature is no longer available to edit.');
+      return;
+    }
+    if (moveHasUnappliedChange(movePreview)) {
+      if (modelingFeatureIsEditable(node.data.featureKind)) {
+        const nextTool = (node.data as EditableModelingFeatureData).featureKind;
+        const reason = toolDisabledReason(nextTool, availability);
+        if (reason) {
+          setStatus(`${TOOL_META[nextTool].label}: ${reason}.`);
+          return;
+        }
+      }
+      setPendingToolSwitch({
+        tool: 'history',
+        historyFeature: {
+          projectId: current.projectId,
+          featureId: node.featureId
+        },
+        clearHistorySelection: next === null
+      });
+      return;
+    }
+    applyHistorySelection(next, current);
+  }
+
+  function applyHistorySelection(
+    next: string | null,
+    current: ProjectDocument
+  ) {
     extrudeEditRequest.current += 1;
+    setFeatureFormError(null);
+    setSketchEditError(null);
+    setMovePreview(null);
     setTool(null);
     // A reopened modeling form belongs to the feature that was selected; the
     // next one opens its own below, and nothing must inherit this one.
@@ -15299,14 +15355,8 @@ export function App() {
     // topology selection while leaving the machine armed would leave a command
     // running against geometry the panel no longer shows.
     dispatchInteraction({ type: 'clear' });
-    const next =
-      toggle &&
-      featureSelectionSource === 'pinned' &&
-      selectedFeatureNodeId === nodeId
-        ? null
-        : nodeId;
     selectFeatureNode(next, 'pinned');
-    const node = next && doc ? doc.nodes[next] : undefined;
+    const node = next ? current.nodes[next] : undefined;
 
     const sourceSketchId =
       node?.kind === 'feature' &&
@@ -15388,15 +15438,15 @@ export function App() {
       setSelectedProfiles([]);
     }
     const visible = (id: BodyId) => {
-      const result = doc?.derived.bodyRepresentations[id];
+      const result = current.derived.bodyRepresentations[id];
       return Boolean(result && !result.consumed && !hiddenBodyIds.has(id));
     };
     // A feature still on screen selects its body. One a later feature
     // consumed selects nothing: `historyFocus` lights the faces it made on
     // the final part (or ghosts its body) instead of the whole part.
     const focus =
-      node?.kind === 'feature' && doc
-        ? historyFeatureFocus(doc, node, visible)
+      node?.kind === 'feature'
+        ? historyFeatureFocus(current, node, visible)
         : null;
     setSelectedBodyIds(focus?.kind === 'bodies' ? focus.bodyIds : []);
     // F19: an edit card opens already editable. The Inspector's own forms do;
@@ -15407,7 +15457,15 @@ export function App() {
       node?.kind === 'feature' &&
       modelingFeatureIsEditable(node.data.featureKind)
     ) {
-      openModelingFeatureEditor(node);
+      // This navigation has already settled its Move choice. Launch directly
+      // so the render's old preview cannot queue the same question again.
+      completeToolSwitch({
+        tool: (node.data as EditableModelingFeatureData).featureKind,
+        historyFeature: {
+          projectId: current.projectId,
+          featureId: node.featureId
+        }
+      });
     }
   }
 
@@ -15534,14 +15592,21 @@ export function App() {
   }
 
   function handleToggleFeatureSuppression(feature: FeatureNode) {
-    const resume = isFeatureSuppressed(feature);
-    // Read before the toggle: only features this toggle breaks are counted,
-    // not ones that already needed repair.
-    const before = featuresNeedingRepair(features, representations);
+    const owner = managerRef.current;
+    if (!owner) return;
+    const liveFeature = findFeature(owner.document, feature.featureId);
+    if (!liveFeature) return;
+    const resume = isFeatureSuppressed(liveFeature);
+    // Only a rebuild of this live version can establish what the toggle
+    // itself breaks. An earlier toggle may still own the rendered geometry.
+    const before = suppressionRepairSnapshot(
+      owner,
+      geometry.isReadyFor(owner.document)
+    );
     const toggled = executeCommand(
       commandFactories.setNodeMetadata(
         {
-          nodeId: feature.id,
+          nodeId: liveFeature.id,
           metadata: resume
             ? {
                 [FEATURE_SUPPRESSED_METADATA_KEY]: null,
@@ -15549,18 +15614,19 @@ export function App() {
               }
             : { [FEATURE_SUPPRESSED_METADATA_KEY]: true }
         },
-        resume ? `Resume ${feature.name}` : `Suppress ${feature.name}`
+        resume ? `Resume ${liveFeature.name}` : `Suppress ${liveFeature.name}`
       )
     );
     const after = managerRef.current?.document;
-    if (toggled && after) {
+    if (toggled && after && managerRef.current === owner) {
       // The cascade is only known once the rebuild of this exact version
       // lands, so the toast waits for it in `onDerived`.
       suppressionNoticeRef.current = {
+        manager: owner,
         projectId: after.projectId,
         version: after.version,
-        featureId: feature.featureId,
-        name: feature.name,
+        featureId: liveFeature.featureId,
+        name: liveFeature.name,
         resume,
         before
       };
@@ -19445,7 +19511,14 @@ export function App() {
               next={
                 pendingToolSwitch.tool === 'measure'
                   ? 'Measure'
-                  : TOOL_META[pendingToolSwitch.tool].label
+                  : pendingToolSwitch.tool === 'history'
+                    ? (pendingToolSwitch.historyFeature &&
+                        resolveHistoryFeature(
+                          doc,
+                          pendingToolSwitch.historyFeature
+                        )?.name) ||
+                      'History'
+                    : TOOL_META[pendingToolSwitch.tool].label
               }
               onApply={() => resolvePendingToolSwitch('apply')}
               onDiscard={() => resolvePendingToolSwitch('discard')}

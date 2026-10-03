@@ -3457,38 +3457,52 @@ test('opening a history editor preserves an unapplied Move until its choice is s
 
   const move = page.getByRole('form', { name: 'Move controls' });
   const ask = page.getByRole('alertdialog', { name: 'Apply the Move first?' });
-  const edit = inspector.getByRole('button', { name: 'Edit split' });
+  const moveTool = page.getByRole('button', { name: /^Move \(M\)/ });
+  const canvas = page.locator('.viewer-host canvas');
+  const selectedRows = page.locator('.feature-row-main[aria-pressed="true"]');
   const openPendingEdit = async () => {
-    await page.getByRole('button', { name: /^Move \(M\)/ }).click();
+    await moveTool.click();
     await move.getByLabel('Move X in mm').fill('3');
+    await expect(moveTool).toHaveAttribute('aria-pressed', 'true');
+    await expect(canvas).toHaveAttribute('data-e2e-move-gizmo-x', /.+/);
     const target = await move
       .getByRole('combobox', { name: 'Body', exact: true })
       .inputValue();
+    const history = await selectedRows.allTextContents();
+    const bodies = await canvas.getAttribute('data-e2e-selected-bodies');
+    expect(bodies).not.toBeNull();
     await row.click();
     await expect(ask).toBeVisible();
-    await expect(ask).toContainText('before Split opens');
-    return target;
+    await expect(ask).toContainText('before Existing split opens');
+    return { target, history, bodies: bodies! };
   };
   const moveRows = page.locator('.feature-row', { hasText: /^Move/ });
 
-  // Cancel keeps the preview, its target, the selected history row and the
-  // inspector that requested the edit; no edit form was opened underneath.
-  const target = await openPendingEdit();
+  // A row click must ask before tearing down the Move: Cancel leaves its
+  // armed tool, selection and editor exactly as they were before the click.
+  const before = await openPendingEdit();
   await ask.getByRole('button', { name: 'Cancel' }).click();
+  await expect(ask).toHaveCount(0);
+  await expect(moveTool).toHaveAttribute('aria-pressed', 'true', {
+    timeout: 5_000
+  });
   await expect(move.getByLabel('Move X in mm')).toHaveValue('3');
   await expect(
     move.getByRole('combobox', { name: 'Body', exact: true })
-  ).toHaveValue(target);
-  await expect(row).toHaveAttribute('aria-pressed', 'true');
-  await expect(edit).toBeVisible();
-  await expect(
-    inspector.getByRole('button', { name: 'Apply split body' })
-  ).toHaveCount(0);
+  ).toHaveValue(before.target);
+  await expect(selectedRows).toHaveText(before.history);
+  await expect(canvas).toHaveAttribute(
+    'data-e2e-selected-bodies',
+    before.bodies
+  );
+  await expect(canvas).toHaveAttribute('data-e2e-move-gizmo-x', /.+/);
+  await expect(inspector).toHaveCount(0);
   await expect(moveRows).toHaveCount(0);
 
   // Discard opens that existing feature with its saved parameters and does
   // not append a Move or accidentally open a new-feature form.
-  await edit.click();
+  await row.click();
+  await expect(ask).toBeVisible();
   await ask.getByRole('button', { name: 'Discard' }).click();
   await expect(move).toHaveCount(0);
   await expect(
@@ -3506,7 +3520,7 @@ test('opening a history editor preserves an unapplied Move until its choice is s
   await inspector.getByRole('button', { name: 'Cancel', exact: true }).click();
 
   // Apply commits exactly one Move, then opens the same saved history edit.
-  await openPendingEdit();
+  const applying = await openPendingEdit();
   await ask.getByRole('button', { name: 'Apply' }).click();
   await expect(move).toHaveCount(0);
   await expect(moveRows).toHaveCount(1);
@@ -3517,6 +3531,97 @@ test('opening a history editor preserves an unapplied Move until its choice is s
     inspector.getByRole('button', { name: 'Apply split body' })
   ).toBeVisible();
   await expect(row).toBeVisible();
+  await expect(row).toHaveAttribute('aria-pressed', 'true');
+  await inspector.getByRole('button', { name: 'Cancel', exact: true }).click();
+  await moveRows.locator('.feature-row-main').click();
+  await expect(
+    inspector.getByRole('combobox', { name: 'Body', exact: true })
+  ).toHaveValue(applying.target);
+  await expect(inspector.getByLabel('Move X in mm')).toHaveValue('3');
+});
+
+test('opening a primitive history editor settles an unapplied Move before changing selection', async ({
+  page
+}) => {
+  await stubApi(page);
+  await page.goto('/');
+  await page.getByLabel('Project name').fill('Deferred Primitive History Edit');
+  await page.getByRole('button', { name: 'Create project' }).click();
+  const inspector = page.getByRole('region', { name: 'Feature inspector' });
+  for (const name of ['Original box', 'Other box']) {
+    await page.getByRole('button', { name: /^Box \(B\)/ }).click();
+    await inspector.getByLabel('Name', { exact: true }).fill(name);
+    await inspector.getByLabel('Width (X)').fill('10');
+    await inspector.getByRole('button', { name: /^Create/ }).click();
+    await expect(inspector).toHaveCount(0);
+  }
+  await expectBodyCount(page, 2);
+  const row = page.locator('.feature-row-main', {
+    hasText: /^Original box$/
+  });
+  const moveTool = page.getByRole('button', { name: /^Move \(M\)/ });
+  const move = page.getByRole('form', { name: 'Move controls' });
+  const ask = page.getByRole('alertdialog', { name: 'Apply the Move first?' });
+  const canvas = page.locator('.viewer-host canvas');
+  const selectedRows = page.locator('.feature-row-main[aria-pressed="true"]');
+  const openPendingEdit = async () => {
+    await moveTool.click();
+    await move.getByLabel('Move X in mm').fill('4');
+    const target = await move
+      .getByRole('combobox', { name: 'Body', exact: true })
+      .inputValue();
+    await expect(canvas).toHaveAttribute('data-e2e-selected-bodies', /.+/);
+    const bodies = (await canvas.getAttribute('data-e2e-selected-bodies'))!;
+    const history = await selectedRows.allTextContents();
+    await row.click();
+    await expect(ask).toBeVisible({ timeout: 5_000 });
+    await expect(ask).toContainText('before Original box opens');
+    return { target, bodies, history };
+  };
+  const moveRows = page.locator('.feature-row', { hasText: /^Move/ });
+  const before = await openPendingEdit();
+  await ask.getByRole('button', { name: 'Cancel' }).click();
+  await expect(moveTool).toHaveAttribute('aria-pressed', 'true');
+  await expect(move.getByLabel('Move X in mm')).toHaveValue('4');
+  await expect(
+    move.getByRole('combobox', { name: 'Body', exact: true })
+  ).toHaveValue(before.target);
+  await expect(canvas).toHaveAttribute(
+    'data-e2e-selected-bodies',
+    before.bodies
+  );
+  await expect(canvas).toHaveAttribute('data-e2e-move-gizmo-x', /.+/);
+  await expect(selectedRows).toHaveText(before.history);
+  await expect(inspector).toHaveCount(0);
+  await expect(moveRows).toHaveCount(0);
+
+  await row.click();
+  await expect(ask).toBeVisible();
+  await ask.getByRole('button', { name: 'Discard' }).click();
+  await expect(move).toHaveCount(0);
+  await expect(row).toHaveAttribute('aria-pressed', 'true');
+  await expect(
+    inspector.getByRole('heading', { name: 'Original box' })
+  ).toBeVisible();
+  await expect(inspector.getByLabel('Width (X)')).toHaveValue('10');
+  await expect(moveRows).toHaveCount(0);
+  await page.keyboard.press('Escape');
+
+  const applying = await openPendingEdit();
+  await ask.getByRole('button', { name: 'Apply' }).click();
+  await expect(move).toHaveCount(0);
+  await expect(moveRows).toHaveCount(1);
+  await expect(row).toHaveAttribute('aria-pressed', 'true');
+  await expect(
+    inspector.getByRole('heading', { name: 'Original box' })
+  ).toBeVisible();
+  await expect(inspector.getByLabel('Width (X)')).toHaveValue('10');
+  await page.keyboard.press('Escape');
+  await moveRows.locator('.feature-row-main').click();
+  await expect(
+    inspector.getByRole('combobox', { name: 'Body', exact: true })
+  ).toHaveValue(applying.target);
+  await expect(inspector.getByLabel('Move X in mm')).toHaveValue('4');
 });
 
 test('opening Measure over an unapplied Move settles the card from the ruler and palette', async ({
