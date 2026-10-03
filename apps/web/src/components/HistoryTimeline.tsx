@@ -41,6 +41,7 @@ import type {
   UnitSystem
 } from '@openzcad/shared';
 import { useArrivals } from '../hooks/useArrivals';
+import { featureNeedsRepair } from '../lib/featureRepair';
 import { featureValueSummary } from '../lib/featureSummary';
 import { FEATURE_KIND_LABELS } from '../lib/model';
 
@@ -587,11 +588,7 @@ export function HistoryTimeline({
             : feature.bodyId
               ? hiddenBodyIds.has(feature.bodyId)
               : false;
-          const failed =
-            !suppressed &&
-            feature.bodyId !== undefined &&
-            feature.featureKind !== 'sketch' &&
-            body === undefined;
+          const failed = featureNeedsRepair(feature, representations);
           const selected = selectedFeatureNodeId === feature.id;
           const value = manual
             ? 'suppressed'

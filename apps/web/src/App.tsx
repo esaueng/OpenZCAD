@@ -779,6 +779,11 @@ const LazyDeleteFeatureDialog = lazyWithStaleChunkNotice(() =>
     default: module.DeleteFeatureDialog
   }))
 );
+const LazyUnappliedCardDialog = lazyWithStaleChunkNotice(() =>
+  import('./components/UnappliedCardDialog').then((module) => ({
+    default: module.UnappliedCardDialog
+  }))
+);
 const LazyProjectConflictDialog = lazyWithStaleChunkNotice(() =>
   import('./components/ProjectConflictDialog').then((module) => ({
     default: module.ProjectConflictDialog
@@ -951,6 +956,16 @@ function DeleteFeatureDialog(
   );
 }
 
+function UnappliedCardDialog(
+  props: ComponentProps<typeof LazyUnappliedCardDialog>
+) {
+  return (
+    <Suspense fallback={null}>
+      <LazyUnappliedCardDialog {...props} />
+    </Suspense>
+  );
+}
+
 function ProjectConflictDialog(
   props: ComponentProps<typeof LazyProjectConflictDialog>
 ) {
@@ -1080,9 +1095,12 @@ import {
 import { holePreview, type HolePreview } from './lib/holeGhost';
 import type { HoleDraft } from './components/forms/ModelingOperationsForm';
 import { extrudeSketchGuidance } from './lib/extrudeGuidance';
+import { featuresNeedingRepair } from './lib/featureRepair';
+import { moveHasUnappliedChange } from './lib/moveCard';
 import {
   countLabel,
   deleteFeatureToastMessage,
+  suppressFeatureToastMessage,
   type ToastAction,
   type ToastModel
 } from './lib/toasts';
@@ -1869,6 +1887,10 @@ export function App() {
   const selectedProfilesRef = useRef(selectedProfiles);
   selectedProfilesRef.current = selectedProfiles;
   const [movePreview, setMovePreview] = useState<MovePreview | null>(null);
+  /** A tool asked for over an unapplied Move, waiting on Apply/Discard. */
+  const [pendingToolSwitch, setPendingToolSwitch] = useState<ToolId | null>(
+    null
+  );
   /**
    * Name for the Move feature the gizmo is about to create. The gizmo is now
    * the only way to make one (WF-07), so the name it commits under has to be
@@ -2552,6 +2574,41 @@ export function App() {
       disposed = true;
     };
   }, [parameterPreviewBase, makeParameterPreview]);
+  // A suppress or resume waiting on its rebuild to say what it broke (F20).
+  const suppressionNoticeRef = useRef<{
+    projectId: string;
+    version: number;
+    featureId: FeatureId;
+    name: string;
+    resume: boolean;
+    before: ReadonlySet<FeatureId>;
+  } | null>(null);
+  const announceSuppression = (derived: ProjectDocument['derived'] | null) => {
+    const notice = suppressionNoticeRef.current;
+    const live = managerRef.current?.document;
+    if (!notice || !live || live.projectId !== notice.projectId) {
+      suppressionNoticeRef.current = null;
+      return;
+    }
+    // A broadcast for an older version is not this toggle's answer, and a
+    // newer one means another edit has since spoken for itself.
+    if (live.version < notice.version) return;
+    suppressionNoticeRef.current = null;
+    if (live.version > notice.version) return;
+    const broken = derived
+      ? [
+          ...featuresNeedingRepair(
+            listFeaturesInOrder(live),
+            derived.bodyRepresentations
+          )
+        ].filter((id) => id !== notice.featureId && !notice.before.has(id))
+          .length
+      : 0;
+    announce(suppressFeatureToastMessage(notice.name, notice.resume, broken), {
+      label: 'Undo',
+      run: handleUndo
+    });
+  };
   const geometry = useGeometryWorker({
     manager: () => managerRef.current,
     onProjection: (derived) => {
@@ -2581,12 +2638,14 @@ export function App() {
         // unless their version matches), so any held Move pose must release
         // in this same batch — one render later would double-transform.
         setMoveCommitHold(null);
+        announceSuppression(derived);
         applyTopologyReferenceRepairs(derived);
       }
     },
     onError: (message) => {
       // No rebuild is coming; render the stored geometry truthfully.
       setMoveCommitHold(null);
+      announceSuppression(null);
       setStatus(message);
     }
   });
@@ -4068,6 +4127,7 @@ export function App() {
     // command the new, empty one was somehow in the middle of.
     dispatchInteraction({ type: 'clear' });
     setPendingFeatureDelete(null);
+    setPendingToolSwitch(null);
   }, [doc?.projectId]);
 
   useEffect(() => {
@@ -6096,11 +6156,42 @@ export function App() {
     );
   }
 
+  /**
+   * Opens a tool. One command card holds the lane at a time: a Move whose
+   * values were never applied is not left open under the new tool's card
+   * (F15) — the user is asked once whether to apply or discard it.
+   */
   function launchTool(nextTool: ToolId) {
+    if (
+      nextTool !== 'transform' &&
+      moveHasUnappliedChange(movePreview) &&
+      !toolDisabledReason(nextTool, availability)
+    ) {
+      setPendingToolSwitch(nextTool);
+      return;
+    }
+    openTool(nextTool);
+  }
+
+  /** Settles the unapplied-card question, then opens the tool it held. */
+  function resolvePendingToolSwitch(choice: 'apply' | 'discard' | 'cancel') {
+    const nextTool = pendingToolSwitch;
+    setPendingToolSwitch(null);
+    if (!nextTool || choice === 'cancel') return;
+    if (choice === 'apply' && !confirmMove()) return;
+    openTool(nextTool);
+  }
+
+  function openTool(nextTool: ToolId) {
     const reason = toolDisabledReason(nextTool, availability);
     if (reason) {
       setStatus(`${TOOL_META[nextTool].label}: ${reason}.`);
       return;
+    }
+    // Any other tool takes the lane from the Move card; with nothing
+    // unapplied (or after the question above) it simply closes.
+    if (nextTool !== 'transform') {
+      setMovePreview(null);
     }
     setFeatureFormError(null);
     setFormFacePickTarget(null);
@@ -6255,8 +6346,8 @@ export function App() {
   function openModelingFeatureEditor(feature: FeatureNode) {
     if (!modelingFeatureIsEditable(feature.data.featureKind)) return;
     const data = feature.data as EditableModelingFeatureData;
-    launchTool(data.featureKind);
-    // launchTool seeds the target from the selection; the edit targets the
+    openTool(data.featureKind);
+    // openTool seeds the target from the selection; the edit targets the
     // feature's own (consumed) source body and its stored entry face.
     const targetBodyId = 'targetBodyId' in data ? data.targetBodyId : null;
     setModelingTargetBodyId(targetBodyId);
@@ -6355,9 +6446,9 @@ export function App() {
    * is bound to its surface, so any normal component of the drag is dropped
    * and said out loud rather than silently discarded.
    */
-  function confirmSketchMove(preview: MovePreview) {
+  function confirmSketchMove(preview: MovePreview): boolean {
     if (!doc) {
-      return;
+      return false;
     }
     const view = sketchViews.find(
       (candidate) => candidate.sketchId === preview.bodyId
@@ -6365,7 +6456,7 @@ export function App() {
     const sketch = findSketch(doc, preview.bodyId as SketchId);
     if (!view || !sketch) {
       setMovePreview(null);
-      return;
+      return false;
     }
     const basis = view.basis;
     const t = preview.translation;
@@ -6379,7 +6470,7 @@ export function App() {
     setMovePreview(null);
     if (du === 0 && dv === 0 && dn === 0) {
       setTool(null);
-      return;
+      return true;
     }
     if (
       executeCommand(
@@ -6395,7 +6486,9 @@ export function App() {
           ? `Moved ${sketch.name} in its plane · the out-of-plane part was dropped (a face sketch stays on its face).`
           : `Moved ${sketch.name}.`
       );
+      return true;
     }
+    return false;
   }
 
   /**
@@ -6416,18 +6509,18 @@ export function App() {
     []
   );
 
-  function confirmMove() {
+  /** Commits the Move card; true when the move landed. */
+  function confirmMove(): boolean {
     const preview = movePreview;
     if (!preview || !doc) {
-      return;
+      return false;
     }
     if (preview.target === 'sketch') {
-      confirmSketchMove(preview);
-      return;
+      return confirmSketchMove(preview);
     }
     const body = representations[preview.bodyId as BodyId];
     if (!body) {
-      return;
+      return false;
     }
     const center = {
       x: (body.bbox.min.x + body.bbox.max.x) / 2,
@@ -6466,6 +6559,7 @@ export function App() {
       // meshes; cleared by onDerived in the same batch as the new geometry.
       setMoveCommitHold(preview);
     }
+    return created;
   }
 
   function clearSelection() {
@@ -15085,7 +15179,10 @@ export function App() {
 
   function handleToggleFeatureSuppression(feature: FeatureNode) {
     const resume = isFeatureSuppressed(feature);
-    executeCommand(
+    // Read before the toggle: only features this toggle breaks are counted,
+    // not ones that already needed repair.
+    const before = featuresNeedingRepair(features, representations);
+    const toggled = executeCommand(
       commandFactories.setNodeMetadata(
         {
           nodeId: feature.id,
@@ -15099,6 +15196,19 @@ export function App() {
         resume ? `Resume ${feature.name}` : `Suppress ${feature.name}`
       )
     );
+    const after = managerRef.current?.document;
+    if (toggled && after) {
+      // The cascade is only known once the rebuild of this exact version
+      // lands, so the toast waits for it in `onDerived`.
+      suppressionNoticeRef.current = {
+        projectId: after.projectId,
+        version: after.version,
+        featureId: feature.featureId,
+        name: feature.name,
+        resume,
+        before
+      };
+    }
   }
 
   function handleResumeHistory() {
@@ -15534,7 +15644,8 @@ export function App() {
     !sharingOpen &&
     !pendingShaprImport &&
     !meshExportOpen &&
-    !pendingFeatureDelete;
+    !pendingFeatureDelete &&
+    !pendingToolSwitch;
   exactEntryInputEnabledRef.current =
     workspaceInputEnabled && !paletteOpen && !shortcutsOpen && !namingSave;
 
@@ -17367,6 +17478,7 @@ export function App() {
           tweakModeDisabledReason={tweakModeDisabledReason}
           onWorkspaceMode={handleWorkspaceMode}
           onSave={() => void handleSave()}
+          onSaveAs={openSaveNameDialog}
           onImportFiles={(files) => void handleImportFiles(files)}
           onExportStep={() => void handleExportStep()}
           onOpenMeshExport={() => setMeshExportOpen(true)}
@@ -18222,7 +18334,11 @@ export function App() {
               </button>
             </span>
           </div>
-        ) : selectedProfiles.length > 0 && selectedSketchProfileName ? (
+        ) : tool === null &&
+          selectedProfiles.length > 0 &&
+          selectedSketchProfileName ? (
+          // Only with no tool open: a tool keeps the selection to pre-fill
+          // its own card, and that card is the one command card in the lane.
           <ProfileQuickAction
             profileName={selectedSketchProfileName}
             profileCount={selectedProfiles.length}
@@ -18888,6 +19004,15 @@ export function App() {
                 setPendingFeatureDelete(null);
                 commitDeleteFeature(featureId, name, dependents.length);
               }}
+            />
+          )}
+          {pendingToolSwitch && doc && (
+            <UnappliedCardDialog
+              card="Move"
+              next={TOOL_META[pendingToolSwitch].label}
+              onApply={() => resolvePendingToolSwitch('apply')}
+              onDiscard={() => resolvePendingToolSwitch('discard')}
+              onCancel={() => resolvePendingToolSwitch('cancel')}
             />
           )}
           {namingSave && doc && (
