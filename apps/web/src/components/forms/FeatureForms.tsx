@@ -21,6 +21,7 @@ import { ExprInput } from '../ExprInput';
 import { edgeModifierSliderRange } from '../../lib/edgeModifierEdit';
 import { useFieldAutoFocus } from './fieldAutoFocus';
 import { isPickListRow } from './pickListRow';
+import { PRIMITIVE_ANCHORS } from '../../lib/primitivePlacement';
 import { TextObjectFields, type TextAttributes } from '../TextObjectFields';
 import {
   PLANE_LABELS,
@@ -34,6 +35,35 @@ export interface BodyOption {
   bodyId: BodyId;
   name: string;
   consumed: boolean;
+}
+
+/**
+ * Names a body pick list can tell apart. New bodies are numbered at creation
+ * ("Box 1", "Box 2"), but a document made before that can hold two bodies
+ * both called "Box Body" — the Union card showed two identical rows. Shared
+ * names get "(1)", "(2)" in list order, which does not move as rows are
+ * picked; the stored names are left alone.
+ */
+export function distinctBodyNames(
+  bodies: readonly Pick<BodyOption, 'bodyId' | 'name'>[]
+): Map<BodyId, string> {
+  const counts = new Map<string, number>();
+  for (const body of bodies) {
+    counts.set(body.name, (counts.get(body.name) ?? 0) + 1);
+  }
+  const usedNames = new Set(bodies.map((body) => body.name));
+  const seen = new Map<string, number>();
+  return new Map(
+    bodies.map((body) => {
+      if ((counts.get(body.name) ?? 0) < 2) return [body.bodyId, body.name];
+      let ordinal = (seen.get(body.name) ?? 0) + 1;
+      while (usedNames.has(`${body.name} (${ordinal})`)) ordinal += 1;
+      seen.set(body.name, ordinal);
+      const name = `${body.name} (${ordinal})`;
+      usedNames.add(name);
+      return [body.bodyId, name];
+    })
+  );
 }
 
 export interface SketchOption {
@@ -99,13 +129,14 @@ function FormShell({
           type="submit"
           className="primary"
           disabled={!canSubmit}
-          title="Enter"
+          aria-keyshortcuts="Enter"
         >
           {submitLabel}
           {/*
             Decoration, not part of the name. Without this the button announced
-            itself as "Create ↵"; the hint stays visible and `title` already
-            carries it for anyone reading the tooltip.
+            itself as "Create ↵". The key is `aria-keyshortcuts`, not a `title`:
+            a title of "Enter" was what assistive tech read in place of the
+            verb, so every Create and Apply was announced as "Enter".
           */}
           <kbd className="kbd-inline" aria-hidden="true">
             ↵
@@ -181,21 +212,31 @@ interface PrimitiveFormProps {
   scope: Record<string, number>;
   initialName: string;
   initialDimensions?: Record<string, ParamValue>;
+  /** Where the anchor point sits now; absent means the origin. */
+  initialPosition?: ParametricVector3;
   submitLabel: string;
-  onSubmit(name: string, dimensions: Record<string, ParamValue>): void;
+  onSubmit(
+    name: string,
+    dimensions: Record<string, ParamValue>,
+    position: ParametricVector3
+  ): void;
   onCancel?: () => void;
 }
+
+const POSITION_AXES = ['x', 'y', 'z'] as const;
 
 export function PrimitiveForm({
   kind,
   scope,
   initialName,
   initialDimensions,
+  initialPosition,
   submitLabel,
   onSubmit,
   onCancel
 }: PrimitiveFormProps) {
   const fields = PRIMITIVE_FIELDS[kind];
+  const anchor = PRIMITIVE_ANCHORS[kind];
   const [name, setName] = useState(initialName);
   const documentValues = Object.fromEntries(
     fields.map((field) => [
@@ -205,9 +246,16 @@ export function PrimitiveForm({
         : field.initial
     ])
   );
+  const documentPosition = Object.fromEntries(
+    POSITION_AXES.map((axis) => [
+      axis,
+      paramValueText(initialPosition?.[axis] ?? 0)
+    ])
+  ) as Record<(typeof POSITION_AXES)[number], string>;
   const [values, setValues] = useState<Record<string, string>>(
     () => documentValues
   );
+  const [position, setPosition] = useState(() => documentPosition);
 
   /**
    * Follow the document when it moves underneath the open form.
@@ -217,13 +265,15 @@ export function PrimitiveForm({
    * refresh these fields. Comparing the document's own text means typing is
    * never clobbered: local edits do not change what the document says.
    */
-  const documentSignature = fields
-    .map((field) => documentValues[field.key])
-    .join('\u0000');
+  const documentSignature = [
+    ...fields.map((field) => documentValues[field.key]),
+    ...POSITION_AXES.map((axis) => documentPosition[axis])
+  ].join('\u0000');
   const lastDocumentSignature = useRef(documentSignature);
   if (lastDocumentSignature.current !== documentSignature) {
     lastDocumentSignature.current = documentSignature;
     setValues(documentValues);
+    setPosition(documentPosition);
   }
 
   const dimensionErrors = Object.fromEntries(
@@ -260,11 +310,17 @@ export function PrimitiveForm({
     name.trim() === initialName.trim() &&
     fields.every(
       (field) => (values[field.key] ?? '').trim() === documentValues[field.key]
+    ) &&
+    POSITION_AXES.every(
+      (axis) => position[axis].trim() === documentPosition[axis]
     );
   const canSubmit =
     !unchanged &&
     name.trim().length > 0 &&
-    fieldsValid(scope, Object.values(values)) &&
+    fieldsValid(scope, [
+      ...Object.values(values),
+      ...Object.values(position)
+    ]) &&
     Object.values(dimensionErrors).every((error) => !error);
 
   return (
@@ -281,7 +337,12 @@ export function PrimitiveForm({
               field.key,
               coerceParamValue(values[field.key] ?? '')
             ])
-          )
+          ),
+          {
+            x: coerceParamValue(position.x),
+            y: coerceParamValue(position.y),
+            z: coerceParamValue(position.z)
+          }
         )
       }
       onCancel={onCancel}
@@ -299,6 +360,28 @@ export function PrimitiveForm({
           }
         />
       ))}
+      {/*
+        Which point the numbers place differs by primitive (a box from its
+        corner, a cylinder from its base center), so the row names it rather
+        than leaving two primitives at 0, 0, 0 to land on different points.
+      */}
+      <fieldset className="primitive-position">
+        <legend>Position</legend>
+        <div className="field-triple">
+          {POSITION_AXES.map((axis) => (
+            <ExprInput
+              key={axis}
+              label={`${anchor.label} ${axis.toUpperCase()}`}
+              value={position[axis]}
+              scope={scope}
+              onChange={(value) =>
+                setPosition((current) => ({ ...current, [axis]: value }))
+              }
+            />
+          ))}
+        </div>
+        <p className="field-hint">{anchor.hint}</p>
+      </fieldset>
     </FormShell>
   );
 }
@@ -868,6 +951,7 @@ export function BooleanForm({
       bodies.filter((body) => !body.consumed || selected.includes(body.bodyId)),
     [bodies, selected]
   );
+  const bodyNames = useMemo(() => distinctBodyNames(selectable), [selectable]);
 
   function toggle(bodyId: BodyId) {
     const next = selected.includes(bodyId)
@@ -938,19 +1022,28 @@ export function BooleanForm({
           )}
           {selectable.map((body) => {
             const index = selected.indexOf(body.bodyId);
+            const base = index === 0 && operation === 'subtract';
+            const bodyName = bodyNames.get(body.bodyId) ?? body.name;
             return (
               <button
                 key={body.bodyId}
                 type="button"
                 className={`pick-row ${index >= 0 ? 'selected' : ''}`}
                 aria-pressed={index >= 0}
+                // The body's name first, then the pick order the badge
+                // draws: the badge alone is a bare digit, or empty.
+                aria-label={
+                  index >= 0
+                    ? `${bodyName}, pick ${index + 1}${base ? ', base' : ''}`
+                    : bodyName
+                }
                 onClick={() => toggle(body.bodyId)}
               >
                 <span className="pick-order mono">
                   {index >= 0 ? index + 1 : ''}
                 </span>
-                <span className="body-name">{body.name}</span>
-                {index === 0 && operation === 'subtract' && <small>base</small>}
+                <span className="body-name">{bodyName}</span>
+                {base && <small>base</small>}
               </button>
             );
           })}
@@ -1151,7 +1244,7 @@ export interface EdgeModifierFormValue {
 
 const VARIABLE_FILLET_LAW_LABELS: Record<VariableFilletLaw, string> = {
   linear: 'Linear',
-  scurve: 'S-curve'
+  scurve: 'Eased at both ends'
 };
 
 interface EdgeModifierFormProps {
@@ -1400,7 +1493,7 @@ export function EdgeModifierForm({
         <>
           <div className="field-pair">
             <ExprInput
-              label="End radius (blank = constant)"
+              label="End radius (blank keeps one radius)"
               value={endRadius}
               scope={scope}
               optional
@@ -1410,7 +1503,7 @@ export function EdgeModifierForm({
               }}
             />
             <label className="field">
-              <span>Radius law</span>
+              <span>Radius change</span>
               <select
                 value={radiusLaw}
                 disabled={endRadius.trim() === ''}

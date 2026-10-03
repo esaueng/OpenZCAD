@@ -51,9 +51,9 @@
   --color-viewport-border: rgba(235, 237, 239, 0.18);
 
   /* ── Viewport selection & manipulation ────────────────── */
-  --color-select: #6798ff;      /* selected geometry */
-  --color-preselect: #81a9ff;   /* hover preselection */
-  --color-preview: #48cd8f;     /* ghost geometry during a command */
+  --color-select: #6798ff; /* selected geometry */
+  --color-preselect: #81a9ff; /* hover preselection */
+  --color-preview: #48cd8f; /* ghost geometry during a command */
   /* Reference geometry (sketch construction lines). Magenta, well away from
      the signal hue so a construction line never reads as a selection. */
   --color-construction: #ef91ef;
@@ -172,8 +172,13 @@
 /* ─────────────────────────────────────────────────────────────
    Light theme.
 
-   Applied via `data-theme` on the root element, which the App resolves
-   from the Appearance setting ('system' follows prefers-color-scheme).
+   Applied via `data-theme` on the root element, which carries the
+   Appearance setting itself: 'light' picks this palette, and 'system' picks
+   it through the media query below. The browser resolves 'system' while it
+   paints, so the start screen, the workspace and the boot screen (index.html
+   ships `data-theme="system"`) can never disagree with the OS or lag it.
+   The two blocks must stay identical; theme/systemTheme.test.ts checks.
+
    Only the CHROME re-themes: panels, text, borders, semantic hues. The
    3D viewport keeps its dark stage (--color-viewport-bg and every
    viewport-overlay color are deliberately not overridden) — a dark
@@ -215,6 +220,31 @@
   --color-error: #dc2626;
   --color-error-text: #b91c1c;
   --color-success: #137638;
+}
+
+/* 'system' under a light OS: the same palette, resolved by the browser. */
+@media (prefers-color-scheme: light) {
+  :root[data-theme='system'] {
+    --color-bg: #eef1f5;
+    --color-surface: #f7f9fb;
+    --color-surface-2: #e7ebf1;
+    --color-surface-hover: #dfe5ec;
+    --color-border: #cdd5de;
+    --color-border-strong: #aeb9c6;
+    --color-text: #1a2330;
+    --color-text-muted: #5b6572;
+    --color-text-subtle: #5e6773;
+    --color-text-dim: #7a8390;
+    --color-accent: #1c64c2;
+    --color-accent-hi: #1858ad;
+    --color-accent-dim: rgba(31, 111, 214, 0.1);
+    --color-accent-border: rgba(31, 111, 214, 0.45);
+    --color-on-accent: #ffffff;
+    --color-warning: #a64c08;
+    --color-error: #dc2626;
+    --color-error-text: #b91c1c;
+    --color-success: #137638;
+  }
 }
 
 kbd {

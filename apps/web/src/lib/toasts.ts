@@ -41,3 +41,20 @@ export function deleteFeatureToastMessage(
     ? `Deleted ${name}`
     : `Deleted ${name} · ${countLabel(dependentCount, 'feature', 'features')} depended on it`;
 }
+
+/**
+ * Suppressing a feature rebuilds everything after it, and a later feature
+ * that referenced its faces or body quietly drops to "needs repair". The
+ * toast says how many did — only those the toggle broke, not ones already
+ * broken — so the cascade is read here rather than discovered in the tree.
+ */
+export function suppressFeatureToastMessage(
+  name: string,
+  resumed: boolean,
+  newlyNeedingRepair: number
+): string {
+  const verb = resumed ? 'Resumed' : 'Suppressed';
+  return newlyNeedingRepair === 0
+    ? `${verb} ${name}`
+    : `${verb} ${name} · ${countLabel(newlyNeedingRepair, 'later feature', 'later features')} now ${newlyNeedingRepair === 1 ? 'needs' : 'need'} repair`;
+}

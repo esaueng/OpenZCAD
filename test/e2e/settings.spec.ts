@@ -1,3 +1,4 @@
+import type { Page } from '@playwright/test';
 import {
   askAssistant,
   createProject,
@@ -451,14 +452,26 @@ test('settings name their sections and search individual settings', async ({
   await expect(page.locator('.start-screen')).not.toHaveAttribute('inert', '');
 });
 
+// The page ground and an island surface in each palette (theme/tokens.css).
+const DARK_GROUND = 'rgb(16, 18, 21)';
+const LIGHT_GROUND = 'rgb(238, 241, 245)';
+const DARK_SURFACE = 'rgb(24, 27, 31)';
+const LIGHT_SURFACE = 'rgb(247, 249, 251)';
+
+function pageGround(page: Page) {
+  return page.evaluate(() => getComputedStyle(document.body).backgroundColor);
+}
+
 test('theme setting repaints the chrome and follows the system preference', async ({
   page
 }) => {
   await page.emulateMedia({ colorScheme: 'dark' });
   await stubApi(page);
   await page.goto('/');
+  // The root carries the setting; the stylesheet resolves 'system'.
   const root = page.locator('html');
-  await expect(root).toHaveAttribute('data-theme', 'dark');
+  await expect(root).toHaveAttribute('data-theme', 'system');
+  expect(await pageGround(page)).toBe(DARK_GROUND);
 
   await page.getByRole('button', { name: 'Open settings' }).click();
   await page.getByRole('button', { name: 'Appearance', exact: true }).click();
@@ -466,21 +479,49 @@ test('theme setting repaints the chrome and follows the system preference', asyn
   await theme.selectOption('light');
   await expect(root).toHaveAttribute('data-theme', 'light');
   // The tokens really repaint — the page ground leaves the dark ramp.
-  const background = await page.evaluate(
-    () => getComputedStyle(document.body).backgroundColor
-  );
-  expect(background).toBe('rgb(238, 241, 245)');
+  expect(await pageGround(page)).toBe(LIGHT_GROUND);
 
   // 'system' tracks a live OS appearance change without a reload.
   await theme.selectOption('system');
-  await expect(root).toHaveAttribute('data-theme', 'dark');
+  await expect(root).toHaveAttribute('data-theme', 'system');
+  expect(await pageGround(page)).toBe(DARK_GROUND);
   await page.emulateMedia({ colorScheme: 'light' });
-  await expect(root).toHaveAttribute('data-theme', 'light');
+  expect(await pageGround(page)).toBe(LIGHT_GROUND);
 
-  // The choice persists across a reload from device storage.
+  // The choice persists across a reload from device storage, and an
+  // explicit choice ignores the OS.
   await theme.selectOption('dark');
   await page.reload();
   await expect(root).toHaveAttribute('data-theme', 'dark');
+  expect(await pageGround(page)).toBe(DARK_GROUND);
+});
+
+test('System follows a light OS on the start screen and in the workspace alike', async ({
+  page
+}) => {
+  // The review's case: System under a light OS painted a light start screen
+  // and a dark workspace until Light was chosen explicitly.
+  await page.emulateMedia({ colorScheme: 'light' });
+  await stubApi(page);
+  await page.goto('/');
+  await expect(page.locator('.start-screen')).toBeVisible();
+  expect(await pageGround(page)).toBe(LIGHT_GROUND);
+
+  await page.getByLabel('Project name').fill('System Theme Part');
+  await page.getByRole('button', { name: 'Create project' }).click();
+  await expect(page.getByRole('button', { name: /^Box \(B\)/ })).toBeVisible();
+  const island = page.locator('.topbar-island').first();
+  const surface = () =>
+    island.evaluate((element) => getComputedStyle(element).backgroundColor);
+  expect(await surface()).toBe(LIGHT_SURFACE);
+  await expect(page.locator('html')).toHaveAttribute('data-theme', 'system');
+
+  // An OS change repaints the workspace on the frame it lands, with no
+  // listener to wait for: read straight after the switch, never polled.
+  await page.emulateMedia({ colorScheme: 'dark' });
+  expect(await surface()).toBe(DARK_SURFACE);
+  await page.emulateMedia({ colorScheme: 'light' });
+  expect(await surface()).toBe(LIGHT_SURFACE);
 });
 
 test('turns project sharing off without disabling cloud saves', async ({
@@ -623,14 +664,16 @@ test('command palette and shortcut overlay behave as modal dialogs', async ({
     /command-palette-option-\d+/
   );
   await expect(paletteInput).toBeFocused();
-  // Escape clears the field first, then leaves it.
+  // One Escape clears the field, closes the list and leaves it. It used to
+  // keep the focus, so the "?" the status bar advertises typed into the
+  // field instead of opening the shortcuts.
   await page.keyboard.press('Escape');
   await expect(paletteInput).toHaveValue('');
   await expect(palette).toHaveCount(0);
-  await page.keyboard.press('Escape');
   await expect(paletteInput).not.toBeFocused();
 
   await page.keyboard.press('?');
+  await expect(paletteInput).toHaveValue('');
   const shortcuts = page.getByRole('dialog', { name: 'Keyboard shortcuts' });
   await expect(shortcuts).toHaveAttribute('aria-modal', 'true');
   // Focus used to stay on BODY, leaving the dialog unreachable by keyboard.

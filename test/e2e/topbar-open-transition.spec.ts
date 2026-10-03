@@ -172,7 +172,7 @@ test('opens a cloud project without the action row flashing stale states or refl
   const actions = page
     .locator('.topbar')
     .getByRole('group', { name: 'Workspace actions' });
-  await expect(actions.getByRole('button', { name: 'Saved' })).toBeVisible({
+  await expect(actions.getByRole('status', { name: 'Saved' })).toBeVisible({
     timeout: 15_000
   });
   await expect(
@@ -208,7 +208,7 @@ test('opens a cloud project without the action row flashing stale states or refl
     });
   });
   await tile.click();
-  await expect(actions.getByRole('button', { name: 'Saved' })).toBeVisible({
+  await expect(actions.getByRole('status', { name: 'Saved' })).toBeVisible({
     timeout: 15_000
   });
   await expect(

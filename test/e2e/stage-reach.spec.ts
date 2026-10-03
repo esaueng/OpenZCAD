@@ -259,7 +259,7 @@ test('UI-11: Parts and Measure are usable together on a phone', async ({
   }
   // A part row clicked where it is drawn selects the part and leaves the
   // measurement type alone.
-  const row = partsList.getByRole('button', { name: /^Box Body/ }).first();
+  const row = partsList.getByRole('button', { name: /^Box 1/ }).first();
   await clickCentre(page, row);
   await expect(smart).toHaveAttribute('aria-pressed', smartPressed ?? 'true');
   await expect(
@@ -274,7 +274,7 @@ test('UI-12: Tweak body actions fit a 320px window', async ({ page }) => {
   const flyouts = page.locator('.tweak-flyouts');
   await expect(flyouts).toBeVisible();
   const showOnly = flyouts.getByRole('button', { name: /^Show only/ });
-  const hide = flyouts.getByRole('button', { name: /^Hide Box Body/ });
+  const hide = flyouts.getByRole('button', { name: /^Hide Box 1/ });
   await expectReachable(showOnly);
   await expectReachable(hide);
   expect(
@@ -285,7 +285,7 @@ test('UI-12: Tweak body actions fit a 320px window', async ({ page }) => {
   ).toBe(true);
   await clickCentre(page, hide);
   await expect(
-    flyouts.getByRole('button', { name: /^Show Box Body/ })
+    flyouts.getByRole('button', { name: /^Show Box 1/ })
   ).toBeVisible();
 });
 

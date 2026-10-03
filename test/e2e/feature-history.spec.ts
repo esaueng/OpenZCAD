@@ -111,11 +111,58 @@ test('resumes rollback without resuming manually suppressed features and support
   await expect(
     page.locator('.feature-row', { hasText: /^Cylinder/ })
   ).toContainText('suppressed');
-  await page.getByRole('button', { name: 'Undo', exact: true }).click();
+  // The viewer bar's Undo: the suppress toast carries an Undo of its own.
+  await page
+    .getByRole('toolbar', { name: 'Viewer bar' })
+    .getByRole('button', { name: 'Undo', exact: true })
+    .click();
   await expectBodyCount(page, 1);
   await expect(rollback).toContainText('2 later features paused');
   await page.getByRole('button', { name: 'Redo', exact: true }).click();
   await expectBodyCount(page, 2);
+});
+
+/**
+ * F1 follow-up from the 1 October 2026 design review: suppressing a feature
+ * that replaces its body used to take the body away from everything built on
+ * it, so every later row read "needs repair · … target is unavailable". A
+ * suppressed subtract now hands its target through: the flange rebuilds
+ * without its bolt holes, the chamfer after it keeps building, and the bolt
+ * tools the subtract no longer consumes are back on screen.
+ */
+test('a suppressed feature passes its body through to the features after it', async ({
+  page
+}) => {
+  test.setTimeout(90_000);
+  const errors: string[] = [];
+  page.on('pageerror', (error) => errors.push(error.message));
+  await stubApi(page);
+  await page.goto('/');
+  await page.getByRole('button', { name: /Pipe Flange/ }).click();
+  await expectBodyCount(page, 1);
+
+  const drill = page.locator('.feature-row', {
+    hasText: /^Drill bolt circle/
+  });
+  const chamfer = page.locator('.feature-row', { hasText: /^Rim chamfer/ });
+  await drill.hover();
+  await drill
+    .getByRole('button', { name: 'Suppress Drill bolt circle', exact: true })
+    .click();
+  await expect(drill).toContainText('suppressed');
+  // The flange and the bolt tools it no longer cuts: the rebuild has landed.
+  await expectBodyCount(page, 2);
+  await expect(chamfer).not.toContainText('needs repair');
+  await expect(chamfer).not.toHaveClass(/\bfailed\b/);
+
+  await drill.hover();
+  await drill
+    .getByRole('button', { name: 'Resume Drill bolt circle', exact: true })
+    .click();
+  await expect(drill).not.toContainText('suppressed');
+  await expectBodyCount(page, 1);
+  await expect(chamfer).not.toHaveClass(/\bfailed\b/);
+  expect(errors).toEqual([]);
 });
 
 test.describe('on a touch screen', () => {

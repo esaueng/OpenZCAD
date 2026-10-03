@@ -113,7 +113,8 @@
      track is 64px: at 76px a 290px column left an auto-parameterized
      `root_fillet_1_radius` 9px short, while the values it holds (87, 15.5)
      used a third of the box. A longer expression scrolls in place. */
-  grid-template-columns: minmax(0, 1fr) 64px minmax(0, max-content) 20px 20px;
+  /* The two icon columns are 24 px: the 24 px minimum pointer target. */
+  grid-template-columns: minmax(0, 1fr) 64px minmax(0, max-content) 24px 24px;
   align-items: center;
   gap: 6px;
 }
@@ -218,8 +219,8 @@
    Unlike `.row-delete` it stays visible when it is on, because "this one is
    published" is state worth seeing without hovering every row. */
 .param-expose {
-  width: 20px;
-  height: 20px;
+  width: 24px;
+  height: 24px;
   display: inline-grid;
   place-items: center;
   color: var(--color-text-subtle);
@@ -242,8 +243,8 @@
 }
 
 .row-delete {
-  width: 20px;
-  height: 20px;
+  width: 24px;
+  height: 24px;
   display: inline-grid;
   place-items: center;
   color: var(--color-text-subtle);
@@ -384,11 +385,13 @@
   place-items: center;
 }
 
+/* 24 px, the minimum pointer target: these sit side by side, so a hit area
+   reaching past a 20 px button would only take room from its neighbour. */
 .row-suppression,
 .row-rollback,
 .row-more {
-  width: 20px;
-  height: 20px;
+  width: 24px;
+  height: 24px;
   display: inline-grid;
   place-items: center;
   color: var(--color-text-subtle);
@@ -600,10 +603,10 @@
   border-left-color: transparent;
 }
 
-/* The grip only shows on hover; narrow, so a row at rest reads dot, icon,
-   name without a gap between the line and the name. */
+/* The grip only shows on hover, but reserves its whole pointer target so
+   reaching it never covers the adjacent feature-selection button. */
 .history-timeline .feature-row-grip {
-  width: 14px;
+  width: 24px;
   padding: 0;
   display: inline-grid;
   place-items: center;

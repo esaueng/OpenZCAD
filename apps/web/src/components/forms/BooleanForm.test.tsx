@@ -2,7 +2,11 @@ import { renderToStaticMarkup } from 'react-dom/server';
 import { fireEvent, render, screen } from '@testing-library/react';
 import { describe, expect, it, vi } from 'vitest';
 import { toBodyId } from '@openzcad/shared';
-import { BooleanForm, type BodyOption } from './FeatureForms';
+import {
+  BooleanForm,
+  distinctBodyNames,
+  type BodyOption
+} from './FeatureForms';
 
 const bodies: BodyOption[] = [
   { bodyId: toBodyId('body_left'), name: 'Left', consumed: false },
@@ -89,14 +93,14 @@ describe('Boolean form pick list', () => {
       />
     );
 
-    expect(
-      screen.getByRole('button', { name: /Left/ }).className
-    ).toContain('selected');
+    expect(screen.getByRole('button', { name: /Left/ }).className).toContain(
+      'selected'
+    );
     fireEvent.click(screen.getByRole('button', { name: /Right/ }));
     expect(onSelectionChange).not.toHaveBeenCalled();
-    expect(
-      screen.getByRole('button', { name: /Right/ }).className
-    ).toContain('selected');
+    expect(screen.getByRole('button', { name: /Right/ }).className).toContain(
+      'selected'
+    );
   });
 });
 
@@ -128,5 +132,95 @@ describe('Boolean form Enter key', () => {
       })
     );
     expect(right.getAttribute('aria-pressed')).toBe('true');
+  });
+});
+
+describe('Boolean form pick rows', () => {
+  it('names each row by its body, then its pick order', () => {
+    render(
+      <BooleanForm
+        bodies={bodies}
+        presetOperation="subtract"
+        selection={[bodies[1]!.bodyId]}
+        submitLabel="Create"
+        onSubmit={() => undefined}
+      />
+    );
+    // The badge alone is a bare digit (or nothing), which read as an
+    // unnamed row; the name leads, and the order and base follow.
+    expect(
+      screen.getByRole('button', { name: 'Right, pick 1, base' })
+    ).toHaveAttribute('aria-pressed', 'true');
+    expect(screen.getByRole('button', { name: 'Left' })).toHaveAttribute(
+      'aria-pressed',
+      'false'
+    );
+  });
+});
+
+describe('Boolean form body names', () => {
+  it('tells two bodies of one stored name apart, by name and by role', () => {
+    // A document made before bodies were numbered: two "Box Body" rows.
+    const twins: BodyOption[] = [
+      { bodyId: toBodyId('body_a'), name: 'Box Body', consumed: false },
+      { bodyId: toBodyId('body_b'), name: 'Box Body', consumed: false },
+      { bodyId: toBodyId('body_c'), name: 'Cylinder Body', consumed: false }
+    ];
+    const { container, rerender } = render(
+      <BooleanForm
+        bodies={twins}
+        presetOperation="subtract"
+        selection={[twins[1]!.bodyId]}
+        submitLabel="Create"
+        onSubmit={() => undefined}
+      />
+    );
+    expect(
+      [...container.querySelectorAll('.pick-row .body-name')].map(
+        (name) => name.textContent
+      )
+    ).toEqual(['Box Body (1)', 'Box Body (2)', 'Cylinder Body']);
+    expect(
+      screen.getByRole('button', { name: 'Box Body (2), pick 1, base' })
+    ).toHaveAttribute('aria-pressed', 'true');
+    expect(
+      screen.getByRole('button', { name: 'Box Body (1)' })
+    ).toHaveAttribute('aria-pressed', 'false');
+    rerender(
+      <BooleanForm
+        bodies={twins}
+        presetOperation="subtract"
+        selection={[twins[1]!.bodyId, twins[0]!.bodyId]}
+        submitLabel="Create"
+        onSubmit={() => undefined}
+      />
+    );
+    expect(
+      screen.getByRole('button', { name: 'Box Body (1), pick 2' })
+    ).toHaveAttribute('aria-pressed', 'true');
+    expect(twins.map((body) => body.name)).toEqual([
+      'Box Body',
+      'Box Body',
+      'Cylinder Body'
+    ]);
+  });
+
+  it('leaves distinct names exactly as stored', () => {
+    expect([
+      ...distinctBodyNames([
+        { bodyId: toBodyId('body_a'), name: 'Box 1' },
+        { bodyId: toBodyId('body_b'), name: 'Box 2' }
+      ]).values()
+    ]).toEqual(['Box 1', 'Box 2']);
+  });
+
+  it('keeps duplicate labels distinct from a stored ordinal name', () => {
+    expect([
+      ...distinctBodyNames([
+        { bodyId: toBodyId('body_a'), name: 'Box Body' },
+        { bodyId: toBodyId('body_b'), name: 'Box Body' },
+        { bodyId: toBodyId('body_c'), name: 'Box Body (1)' }
+      ]).values()
+    ]).toEqual(['Box Body (2)', 'Box Body (3)', 'Box Body (1)']);
   });
 });

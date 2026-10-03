@@ -24,6 +24,8 @@ import {
   type ExactKernelAdapter
 } from '@openzcad/kernel-adapter/exact';
 import {
+  FEATURE_ROLLBACK_SUPPRESSED_METADATA_KEY,
+  FEATURE_SUPPRESSED_METADATA_KEY,
   toUserId,
   type DirectEditOperation,
   type FaceTopologyReferenceV5,
@@ -537,6 +539,290 @@ describe('assistant auto-parameterization', () => {
       kind: 'set_parameter',
       name: 'profile_circle_1_radius',
       expression: '2'
+    });
+  });
+
+  it('reaches the box under a hole when scoping to the filleted body', () => {
+    // A Hole consumes its target body. Without a hole case the backwards
+    // walk stopped at the drilled body, so selecting the filleted result
+    // proposed the fillet radius but never the Box it was all cut from.
+    const manager = new CommandManager(
+      createProjectDocument('Drilled scope', toUserId('user_auto_drilled'))
+    );
+    manager.execute(
+      commandFactories.addPrimitive({
+        name: 'Box',
+        primitiveKind: 'box',
+        dimensions: { width: 40, height: 20, depth: 10 }
+      })
+    );
+    manager.execute(
+      commandFactories.holeBody({
+        name: 'Hole',
+        targetBodyId: manager.document.bodyOrder.at(-1)!,
+        faceHash: 1,
+        style: 'simple',
+        diameter: 5,
+        depthMode: 'through',
+        position: { u: 0, v: 0 }
+      })
+    );
+    manager.execute(
+      commandFactories.filletEdges({
+        name: 'Fillet',
+        targetBodyId: manager.document.bodyOrder.at(-1)!,
+        edgeHashes: [123],
+        size: 1
+      })
+    );
+    manager.execute(
+      commandFactories.addPrimitive({
+        name: 'Other',
+        primitiveKind: 'box',
+        dimensions: { width: 90, height: 80, depth: 7 }
+      })
+    );
+    const filletedBodyId = manager.document.bodyOrder.at(-2)!;
+
+    const proposal = createAutoParameterizeProposal(manager.document, {
+      featureIds: [],
+      bodyIds: [filletedBodyId],
+      topologies: []
+    });
+    expect(
+      parameterPatchOperations(proposal!).map((operation) => operation.name)
+    ).toEqual(expect.arrayContaining(['box_width', 'box_height', 'box_depth']));
+    expect(proposal?.operations).toContainEqual({
+      kind: 'set_parameter',
+      name: 'fillet_radius',
+      expression: '1'
+    });
+    expect(
+      parameterPatchOperations(proposal!).map((operation) => operation.name)
+    ).not.toEqual(expect.arrayContaining(['other_width']));
+  });
+
+  it.each([
+    ['positive', 'bodyId'],
+    ['negative', 'secondBodyId']
+  ] as const)(
+    'reaches the box under a split from its %s half',
+    (_half, idField) => {
+      // A Split consumes its target and owns two halves: the positive one is
+      // the feature's own body, the negative one rides in its data. Either
+      // half has to lead the walk back through the split to the Box.
+      const manager = new CommandManager(
+        createProjectDocument('Split scope', toUserId('user_auto_split'))
+      );
+      manager.execute(
+        commandFactories.addPrimitive({
+          name: 'Box',
+          primitiveKind: 'box',
+          dimensions: { width: 40, height: 20, depth: 10 }
+        })
+      );
+      manager.execute(
+        commandFactories.splitBody({
+          name: 'Split',
+          targetBodyId: manager.document.bodyOrder.at(-1)!,
+          plane: {
+            origin: { x: 20, y: 0, z: 0 },
+            normal: { x: 1, y: 0, z: 0 }
+          }
+        })
+      );
+      const split = listFeaturesInOrder(manager.document).at(-1)!;
+      if (split.data.featureKind !== 'split') {
+        throw new Error('expected split feature');
+      }
+      const halfBodyId =
+        idField === 'bodyId' ? split.bodyId! : split.data.secondBodyId;
+      manager.execute(
+        commandFactories.filletEdges({
+          name: 'Fillet',
+          targetBodyId: halfBodyId,
+          edgeHashes: [123],
+          size: 1
+        })
+      );
+      const filletedBodyId = manager.document.bodyOrder.at(-1)!;
+
+      const proposal = createAutoParameterizeProposal(manager.document, {
+        featureIds: [],
+        bodyIds: [filletedBodyId],
+        topologies: []
+      });
+      expect(
+        parameterPatchOperations(proposal!).map((operation) => operation.name)
+      ).toEqual(
+        expect.arrayContaining([
+          'box_width',
+          'box_height',
+          'box_depth',
+          'fillet_radius'
+        ])
+      );
+    }
+  );
+
+  describe('selected-body scope across suppression', () => {
+    function chain(kind: 'hole' | 'fillet' | 'mirror' | 'primitive') {
+      const manager = new CommandManager(
+        createProjectDocument(
+          'Suppressed scope',
+          toUserId('user_auto_suppressed')
+        )
+      );
+      manager.execute(
+        commandFactories.addPrimitive({
+          name: 'Box',
+          primitiveKind: 'box',
+          dimensions: { width: 40, height: 20, depth: 10 }
+        })
+      );
+      const targetBodyId = manager.document.bodyOrder.at(-1)!;
+      manager.execute(
+        kind === 'hole'
+          ? commandFactories.holeBody({
+              name: 'Paused',
+              targetBodyId,
+              faceHash: 1,
+              style: 'simple',
+              diameter: 5,
+              depthMode: 'through',
+              position: { u: 0, v: 0 }
+            })
+          : kind === 'fillet'
+            ? commandFactories.filletEdges({
+                name: 'Paused',
+                targetBodyId,
+                edgeHashes: [123],
+                size: 1
+              })
+            : kind === 'mirror'
+              ? commandFactories.mirrorBody({
+                  name: 'Paused',
+                  targetBodyId,
+                  plane: {
+                    origin: { x: 0, y: 0, z: 0 },
+                    normal: { x: 1, y: 0, z: 0 }
+                  }
+                })
+              : commandFactories.addPrimitive({
+                  name: 'Paused',
+                  primitiveKind: 'box',
+                  dimensions: { width: 90, height: 80, depth: 7 }
+                })
+      );
+      const paused = listFeaturesInOrder(manager.document).at(-1)!;
+      manager.execute(
+        commandFactories.setNodeMetadata({
+          nodeId: paused.id,
+          metadata: { [FEATURE_SUPPRESSED_METADATA_KEY]: true }
+        })
+      );
+      manager.execute(
+        commandFactories.filletEdges({
+          name: 'Finish',
+          targetBodyId: paused.bodyId!,
+          edgeHashes: [123],
+          size: 2
+        })
+      );
+      const propose = () =>
+        createAutoParameterizeProposal(manager.document, {
+          featureIds: [],
+          bodyIds: [manager.document.bodyOrder.at(-1)!],
+          topologies: []
+        })!;
+      return { manager, paused, propose };
+    }
+
+    it.each(['hole', 'fillet'] as const)(
+      'reaches Box through a manually suppressed %s without proposing its own dimensions',
+      (kind) => {
+        const { paused, propose } = chain(kind);
+        const proposal = propose();
+        expect(
+          parameterPatchOperations(proposal).map((operation) => operation.name)
+        ).toEqual(['box_width', 'box_height', 'box_depth', 'finish_radius']);
+        expect(proposal.operations).not.toContainEqual(
+          expect.objectContaining({ featureId: paused.featureId })
+        );
+      }
+    );
+
+    it('does not cross a rollback pause even when it is manually suppressed too', () => {
+      const { manager, paused, propose } = chain('fillet');
+      manager.execute(
+        commandFactories.setNodeMetadata({
+          nodeId: paused.id,
+          metadata: { [FEATURE_ROLLBACK_SUPPRESSED_METADATA_KEY]: true }
+        })
+      );
+      expect(
+        parameterPatchOperations(propose()).map((operation) => operation.name)
+      ).toEqual(['finish_radius']);
+    });
+
+    it.each(['mirror', 'primitive'] as const)(
+      'keeps the unavailable result of a suppressed %s out of upstream scope',
+      (kind) => {
+        expect(
+          parameterPatchOperations(chain(kind).propose()).map(
+            (operation) => operation.name
+          )
+        ).toEqual(['finish_radius']);
+      }
+    );
+
+    it('does not invent a source when the suppressed input producer is missing', () => {
+      const { manager, propose } = chain('fillet');
+      const box = listFeaturesInOrder(manager.document)[0]!;
+      delete manager.document.nodes[box.id];
+      expect(
+        parameterPatchOperations(propose()).map((operation) => operation.name)
+      ).toEqual(['finish_radius']);
+    });
+
+    it('follows only the first operand of a suppressed boolean', () => {
+      const manager = new CommandManager(
+        createProjectDocument(
+          'Suppressed boolean scope',
+          toUserId('user_auto_suppressed')
+        )
+      );
+      for (const name of ['Target', 'Tool']) {
+        manager.execute(
+          commandFactories.addPrimitive({
+            name,
+            primitiveKind: 'box',
+            dimensions: { width: 40, height: 20, depth: 10 }
+          })
+        );
+      }
+      manager.execute(
+        commandFactories.booleanBodies({
+          name: 'Paused union',
+          operation: 'union',
+          targetBodyIds: [...manager.document.bodyOrder]
+        })
+      );
+      const paused = listFeaturesInOrder(manager.document).at(-1)!;
+      manager.execute(
+        commandFactories.setNodeMetadata({
+          nodeId: paused.id,
+          metadata: { [FEATURE_SUPPRESSED_METADATA_KEY]: true }
+        })
+      );
+      const proposal = createAutoParameterizeProposal(manager.document, {
+        featureIds: [],
+        bodyIds: [paused.bodyId!],
+        topologies: []
+      })!;
+      expect(
+        parameterPatchOperations(proposal).map((operation) => operation.name)
+      ).toEqual(['target_width', 'target_height', 'target_depth']);
     });
   });
 

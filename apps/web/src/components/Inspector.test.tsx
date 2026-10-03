@@ -1,4 +1,11 @@
-import { act, fireEvent, render, screen, waitFor, within } from '@testing-library/react';
+import {
+  act,
+  fireEvent,
+  render,
+  screen,
+  waitFor,
+  within
+} from '@testing-library/react';
 import type { ComponentProps } from 'react';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import type {
@@ -8,11 +15,19 @@ import type {
   ProjectDocument,
   TopologySelection
 } from '@openzcad/shared';
-import { createProjectDocument } from '@openzcad/document-core';
+import {
+  createProjectDocument,
+  listFeaturesInOrder
+} from '@openzcad/document-core';
+import { CommandManager, type AnyCommand } from '@openzcad/command-system';
 import { toUserId } from '@openzcad/shared';
 import type { MassPropertiesRead } from '@openzcad/kernel-adapter/exact';
 import { MASS_DENSITY_STORAGE_KEY } from '../lib/massDensityPreference';
 import { Inspector } from './Inspector';
+import {
+  createPrimitiveCommand,
+  primitivePlacement
+} from '../lib/primitivePlacement';
 
 const bodyId = 'body-1' as BodyId;
 
@@ -249,6 +264,104 @@ describe('Inspector feature provenance', () => {
   });
 });
 
+describe('primitive card position', () => {
+  it.each([0, 10])(
+    'numbers a body from the document when creating at X=%s',
+    (x) => {
+      const manager = new CommandManager(
+        createProjectDocument('Numbered', toUserId('user_inspector_number'))
+      );
+      manager.execute(
+        createPrimitiveCommand(
+          'box',
+          'Box',
+          { width: 30, height: 18, depth: 24 },
+          { x: 0, y: 0, z: 0 },
+          manager.document
+        )
+      );
+      const onCreatePrimitive = vi.fn<(command: AnyCommand) => void>();
+      render(
+        <Inspector
+          {...makeProps({
+            tool: 'box',
+            selectedFeature: null,
+            selectedBody: null,
+            selectedTopology: null,
+            commandSession: null,
+            document: manager.document,
+            onCreatePrimitive
+          })}
+        />
+      );
+      fireEvent.change(screen.getByRole('textbox', { name: 'Corner X' }), {
+        target: { value: String(x) }
+      });
+      fireEvent.click(screen.getByRole('button', { name: 'Create' }));
+      expect(onCreatePrimitive).toHaveBeenCalledTimes(1);
+      const command = onCreatePrimitive.mock.calls[0]![0];
+      expect(command.commands?.[0] ?? command).toMatchObject({
+        kind: 'primitive.add',
+        payload: { bodyName: 'Box 2' }
+      });
+      manager.execute(command);
+      expect(
+        Object.values(manager.document.nodes)
+          .filter((node) => node.kind === 'body')
+          .map((node) => node.name)
+      ).toEqual(['Box 1', 'Box 2']);
+      expect(listFeaturesInOrder(manager.document)).toHaveLength(
+        x === 0 ? 2 : 3
+      );
+    }
+  );
+
+  it('reads a placed box from the document and applies a move with its dimensions', () => {
+    const manager = new CommandManager(
+      createProjectDocument('Placed', toUserId('user_inspector_place'))
+    );
+    manager.execute(
+      createPrimitiveCommand(
+        'box',
+        'Box',
+        { width: 30, height: 18, depth: 24 },
+        { x: 10, y: 0, z: 0 }
+      )
+    );
+    const primitive = listFeaturesInOrder(manager.document)[0]!;
+    const onApplyPrimitive =
+      vi.fn<
+        (feature: FeatureNode, name: string, command: AnyCommand) => void
+      >();
+    render(
+      <Inspector
+        {...makeProps({
+          selectedFeature: primitive,
+          commandSession: null,
+          featureSelectionSource: 'pinned',
+          document: manager.document,
+          onApplyPrimitive
+        })}
+      />
+    );
+    const cornerX = screen.getByRole('textbox', { name: 'Corner X' });
+    expect(cornerX).toHaveValue('10');
+    fireEvent.change(cornerX, { target: { value: '4' } });
+    fireEvent.click(screen.getByRole('button', { name: /Apply/ }));
+    expect(onApplyPrimitive).toHaveBeenCalledTimes(1);
+    const [feature, name, command] = onApplyPrimitive.mock.calls[0]!;
+    expect(feature).toBe(primitive);
+    expect(name).toBe('Box');
+    manager.execute(command);
+    expect(primitivePlacement(manager.document, primitive).position).toEqual({
+      x: 4,
+      y: 0,
+      z: 0
+    });
+    expect(listFeaturesInOrder(manager.document)).toHaveLength(2);
+  });
+});
+
 describe('fillet radius slider', () => {
   it('previews the latest size without applying until submitted', () => {
     const props = makeProps({
@@ -474,15 +587,22 @@ describe('on-demand mass properties in Inspector', () => {
   const lazyBody = { ...body, massProperties: undefined };
 
   it('replaces a committed measurement with the matching preview document', async () => {
-    const committed = createProjectDocument('Mass preview', toUserId('mass-ui'));
+    const committed = createProjectDocument(
+      'Mass preview',
+      toUserId('mass-ui')
+    );
     const preview = { ...committed, derived: { ...committed.derived } };
     const previewBody = { ...lazyBody, volume: lazyBody.volume + 1 };
     let resolveCommitted!: (value: MassPropertiesRead) => void;
     const worker = {
-      massProperties: vi.fn()
-        .mockImplementationOnce(() => new Promise<MassPropertiesRead>((done) => {
-          resolveCommitted = done;
-        }))
+      massProperties: vi
+        .fn()
+        .mockImplementationOnce(
+          () =>
+            new Promise<MassPropertiesRead>((done) => {
+              resolveCommitted = done;
+            })
+        )
         .mockResolvedValueOnce({
           status: 'ready',
           properties: {
@@ -502,19 +622,33 @@ describe('on-demand mass properties in Inspector', () => {
     const view = render(<Inspector {...props} />);
     fireEvent.click(screen.getByText('Mass properties (at unit density)'));
     await waitFor(() => expect(worker.massProperties).toHaveBeenCalledTimes(1));
-    const oldSignal = (worker.massProperties.mock.calls[0] as unknown as [
-      ProjectDocument,
-      BodyId,
-      { signal: AbortSignal }
-    ])[2].signal;
+    const oldSignal = (
+      worker.massProperties.mock.calls[0] as unknown as [
+        ProjectDocument,
+        BodyId,
+        { signal: AbortSignal }
+      ]
+    )[2].signal;
 
-    view.rerender(<Inspector {...props} selectedBody={previewBody} massPropertiesDocument={preview} />);
+    view.rerender(
+      <Inspector
+        {...props}
+        selectedBody={previewBody}
+        massPropertiesDocument={preview}
+      />
+    );
     expect(oldSignal.aborted).toBe(true);
     await waitFor(() => expect(worker.massProperties).toHaveBeenCalledTimes(2));
     expect(worker.massProperties.mock.calls[1]?.[0]).toBe(preview);
-    await waitFor(() => expect(screen.getByText('9, 6, 3 mm')).toBeInTheDocument());
+    await waitFor(() =>
+      expect(screen.getByText('9, 6, 3 mm')).toBeInTheDocument()
+    );
     await act(async () => {
-      resolveCommitted({ status: 'ready', properties: body.massProperties!, epoch: 1 });
+      resolveCommitted({
+        status: 'ready',
+        properties: body.massProperties!,
+        epoch: 1
+      });
     });
     expect(screen.getByText('9, 6, 3 mm')).toBeInTheDocument();
   });
@@ -523,17 +657,24 @@ describe('on-demand mass properties in Inspector', () => {
     const document = createProjectDocument('Mass details', toUserId('mass-ui'));
     let resolve!: (value: MassPropertiesRead) => void;
     const worker = {
-      massProperties: vi.fn(() => new Promise<MassPropertiesRead>((done) => {
-        resolve = done;
-      }))
+      massProperties: vi.fn(
+        () =>
+          new Promise<MassPropertiesRead>((done) => {
+            resolve = done;
+          })
+      )
     };
-    render(<Inspector {...makeProps({
-      selectedFeature: null,
-      commandSession: null,
-      selectedBody: lazyBody,
-      massPropertiesDocument: document,
-      massPropertiesWorker: worker
-    })} />);
+    render(
+      <Inspector
+        {...makeProps({
+          selectedFeature: null,
+          commandSession: null,
+          selectedBody: lazyBody,
+          massPropertiesDocument: document,
+          massPropertiesWorker: worker
+        })}
+      />
+    );
     expect(worker.massProperties).not.toHaveBeenCalled();
     fireEvent.click(screen.getByText('Mass properties (at unit density)'));
     await waitFor(() => expect(worker.massProperties).toHaveBeenCalledOnce());
@@ -558,10 +699,14 @@ describe('on-demand mass properties in Inspector', () => {
     const second = createProjectDocument('New project', toUserId('mass-ui'));
     let resolveFirst!: (value: MassPropertiesRead) => void;
     const worker = {
-      massProperties: vi.fn()
-        .mockImplementationOnce(() => new Promise<MassPropertiesRead>((done) => {
-          resolveFirst = done;
-        }))
+      massProperties: vi
+        .fn()
+        .mockImplementationOnce(
+          () =>
+            new Promise<MassPropertiesRead>((done) => {
+              resolveFirst = done;
+            })
+        )
         .mockResolvedValueOnce({
           status: 'unavailable',
           code: 'unsupported',
@@ -580,28 +725,50 @@ describe('on-demand mass properties in Inspector', () => {
     const view = render(<Inspector {...props} />);
     fireEvent.click(screen.getByText('Mass properties (at unit density)'));
     await waitFor(() => expect(worker.massProperties).toHaveBeenCalledTimes(1));
-    const firstSignal = (worker.massProperties.mock.calls[0] as unknown as [
-      ProjectDocument,
-      BodyId,
-      { signal: AbortSignal }
-    ])[2].signal;
+    const firstSignal = (
+      worker.massProperties.mock.calls[0] as unknown as [
+        ProjectDocument,
+        BodyId,
+        { signal: AbortSignal }
+      ]
+    )[2].signal;
     view.rerender(<Inspector {...props} massPropertiesDocument={second} />);
     expect(firstSignal.aborted).toBe(true);
-    await waitFor(() => expect(screen.getByText('No live solid is available.')).toBeInTheDocument());
+    await waitFor(() =>
+      expect(
+        screen.getByText('No live solid is available.')
+      ).toBeInTheDocument()
+    );
     await act(async () => {
-      resolveFirst({ status: 'ready', properties: body.massProperties!, epoch: 1 });
+      resolveFirst({
+        status: 'ready',
+        properties: body.massProperties!,
+        epoch: 1
+      });
     });
     expect(screen.queryByText('center of mass')).not.toBeInTheDocument();
 
     const changedBody = { ...lazyBody, name: 'Changed bracket' };
-    view.rerender(<Inspector {...props} selectedBody={changedBody} massPropertiesDocument={second} />);
-    const secondSignal = (worker.massProperties.mock.calls[1] as unknown as [
-      ProjectDocument,
-      BodyId,
-      { signal: AbortSignal }
-    ])[2].signal;
+    view.rerender(
+      <Inspector
+        {...props}
+        selectedBody={changedBody}
+        massPropertiesDocument={second}
+      />
+    );
+    const secondSignal = (
+      worker.massProperties.mock.calls[1] as unknown as [
+        ProjectDocument,
+        BodyId,
+        { signal: AbortSignal }
+      ]
+    )[2].signal;
     expect(secondSignal.aborted).toBe(true);
-    await waitFor(() => expect(screen.getByText('Mass measurement failed: Kernel request failed')).toBeInTheDocument());
+    await waitFor(() =>
+      expect(
+        screen.getByText('Mass measurement failed: Kernel request failed')
+      ).toBeInTheDocument()
+    );
   });
 });
 
@@ -645,9 +812,7 @@ describe('mass properties tensor, axes and density', () => {
     // Provenance states the method without claiming a verdict it has no
     // evidence for.
     expect(within(inspector).getByText(/no tessellation/)).toBeVisible();
-    expect(
-      within(inspector).queryByText(/Exact/)
-    ).not.toBeInTheDocument();
+    expect(within(inspector).queryByText(/Exact/)).not.toBeInTheDocument();
   });
 
   it('scales mass and inertia through a steel preset in grams and g·mm²', () => {
@@ -685,9 +850,9 @@ describe('mass properties tensor, axes and density', () => {
     render(
       <Inspector {...committedProps({ massPropertiesDocument: document })} />
     );
-    expect(
-      screen.getByLabelText('Material density')
-    ).toHaveValue('preset:steel');
+    expect(screen.getByLabelText('Material density')).toHaveValue(
+      'preset:steel'
+    );
     // A project with no remembered choice still opens at unit density.
     const other = createProjectDocument('Light', toUserId('mass-ui'));
     const second = render(
@@ -720,19 +885,34 @@ describe('mass properties tensor, axes and density', () => {
   });
 
   it('weighs an inch document in pounds and lb·in²', () => {
-    const document = createProjectDocument('Inch block', toUserId('mass-ui'), 'inch');
+    const document = createProjectDocument(
+      'Inch block',
+      toUserId('mass-ui'),
+      'inch'
+    );
     const inchBody = {
       ...body,
       volume: 6,
       massProperties: {
         centerOfMass: { x: 0.5, y: 1, z: 1.5 },
-        inertia: [6.5, 5, 2.5, 0, 0, 0] as [number, number, number, number, number, number],
+        inertia: [6.5, 5, 2.5, 0, 0, 0] as [
+          number,
+          number,
+          number,
+          number,
+          number,
+          number
+        ],
         principalMoments: [2.5, 5, 6.5] as [number, number, number],
         principalAxes: [
           { x: 0, y: 0, z: 1 },
           { x: 0, y: 1, z: 0 },
           { x: 1, y: 0, z: 0 }
-        ] as [{ x: number; y: number; z: number }, { x: number; y: number; z: number }, { x: number; y: number; z: number }]
+        ] as [
+          { x: number; y: number; z: number },
+          { x: number; y: number; z: number },
+          { x: number; y: number; z: number }
+        ]
       }
     };
     render(
@@ -752,9 +932,7 @@ describe('mass properties tensor, axes and density', () => {
     });
     // 6 in³ of steel = 0.7718 kg = 1.702 lb.
     expect(screen.getByText('1.702 lb')).toBeVisible();
-    expect(
-      screen.getByText('0.709 · 1.418 · 1.843 lb·in²')
-    ).toBeVisible();
+    expect(screen.getByText('0.709 · 1.418 · 1.843 lb·in²')).toBeVisible();
     expect(screen.getByText('0 0 0.709 lb·in²')).toBeVisible();
     expect(screen.getByText('0.5, 1, 1.5 in')).toBeVisible();
   });
