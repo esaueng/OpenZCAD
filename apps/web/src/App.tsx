@@ -1107,6 +1107,13 @@ import {
 } from './lib/suppressionFeedback';
 import { moveHasUnappliedChange } from './lib/moveCard';
 import {
+  currentMoveSelectionDocument,
+  movePickNeedsFreshTopology,
+  resolveMoveSketchRegion,
+  type MoveSelectionPick,
+  type MoveSelectionRequest
+} from './lib/moveSelectionTransition';
+import {
   resolveHistoryEditorFeature,
   resolveHistoryFeature,
   type HistoryEditorRequest
@@ -1908,10 +1915,13 @@ export function App() {
   const [movePreview, setMovePreview] = useState<MovePreview | null>(null);
   /** The entire tool/editor transition waiting on an unapplied Move. */
   const [pendingToolSwitch, setPendingToolSwitch] = useState<{
-    tool: ToolId | 'measure' | 'history';
+    tool: ToolId | 'measure' | 'history' | 'selection';
     historyFeature?: HistoryEditorRequest;
     clearHistorySelection?: boolean;
+    moveSelection?: MoveSelectionRequest;
   } | null>(null);
+  const pendingToolSwitchRef = useRef(pendingToolSwitch);
+  pendingToolSwitchRef.current = pendingToolSwitch;
   /**
    * Name for the Move feature the gizmo is about to create. The gizmo is now
    * the only way to make one (WF-07), so the name it commits under has to be
@@ -2513,6 +2523,18 @@ export function App() {
   /** Opens exact entry for the armed handle, as tapping its chip would. */
   const openExactEntryRef = useRef<(() => boolean) | null>(null);
   const contextMenuActionsRef = useRef<Record<string, () => void>>({});
+  const viewportMenuHandlersRef = useRef({
+    launchTool,
+    validateSelectionEdit,
+    handleDeleteFeature,
+    toggleBodyVisibility
+  });
+  viewportMenuHandlersRef.current = {
+    launchTool,
+    validateSelectionEdit,
+    handleDeleteFeature,
+    toggleBodyVisibility
+  };
   const managerRef = useRef<CommandManager | null>(null);
   const parameterEditRequest = useRef(0);
   /** The assistant patch currently landing, for edits that must follow it. */
@@ -5576,8 +5598,9 @@ export function App() {
     [appSettings.experiments.directManipulation, sketchOverlays]
   );
   const viewerEditableBodyIds = useMemo(
-    () => (modelingLocked ? EMPTY_BODY_IDS : directEditableBodyIds),
-    [modelingLocked, directEditableBodyIds]
+    () =>
+      modelingLocked || movePreview ? EMPTY_BODY_IDS : directEditableBodyIds,
+    [modelingLocked, movePreview, directEditableBodyIds]
   );
   const viewerSelectedProfileIds = useMemo(
     () => selectedProfiles.map((profile) => profile.profileId),
@@ -6312,7 +6335,8 @@ export function App() {
 
   /** Settles the unapplied-card question, then opens the tool it held. */
   function resolvePendingToolSwitch(choice: 'apply' | 'discard' | 'cancel') {
-    const request = pendingToolSwitch;
+    const request = pendingToolSwitchRef.current;
+    pendingToolSwitchRef.current = null;
     setPendingToolSwitch(null);
     if (!request || choice === 'cancel') return;
     completeToolSwitch(request, choice === 'apply');
@@ -6320,12 +6344,90 @@ export function App() {
 
   function completeToolSwitch(
     request: {
-      tool: ToolId | 'measure' | 'history';
+      tool: ToolId | 'measure' | 'history' | 'selection';
       historyFeature?: HistoryEditorRequest;
       clearHistorySelection?: boolean;
+      moveSelection?: MoveSelectionRequest;
     },
     applyMove = false
   ) {
+    if (request.tool === 'selection') {
+      const pick = request.moveSelection;
+      const current = pick
+        ? currentMoveSelectionDocument(managerRef.current, pick)
+        : null;
+      const topologyPicks =
+        pick?.kind === 'edge-chain'
+          ? pick.selections
+          : pick?.kind === 'viewport'
+            ? [pick.selection]
+            : [];
+      const sketchRegions =
+        current && (pick?.kind === 'region' || pick?.kind === 'sketch-profile')
+          ? currentMoveSketchRegions(current, pick)
+          : null;
+      const sketchRegion =
+        pick?.kind === 'region' && sketchRegions
+          ? resolveMoveSketchRegion(pick, sketchRegions)
+          : null;
+      if (
+        !pick ||
+        !current ||
+        (pick.kind === 'region' && !sketchRegion) ||
+        ((pick.kind === 'region' || pick.kind === 'sketch-profile') &&
+          (sketchRegions === null ||
+            hiddenSketchIds.has(
+              pick.kind === 'region' ? pick.region.sketchId : pick.sketchId
+            ))) ||
+        topologyPicks.some(
+          (selection) =>
+            selection.kind !== 'body' &&
+            !selectionResolvesInDerived(current, selection)
+        )
+      ) {
+        setStatus(
+          'This selection changed while the Move was waiting. Pick it again.'
+        );
+        return;
+      }
+      const needsFreshTopology = movePickNeedsFreshTopology(
+        movePreview,
+        pick,
+        current
+      );
+      if (applyMove && !confirmMove()) return;
+      setMovePreview(null);
+      setTool(null);
+      if (pick.kind === 'box') {
+        boxSelectFromViewer(pick.bodyIds);
+      } else if (pick.kind === 'body-tree') {
+        selectBodyFromTree(pick.bodyId, pick.additive);
+      } else if (applyMove && needsFreshTopology) {
+        // Its point and normal described the body's old pose. Keep the
+        // committed Move, then require a fresh pick at the new position.
+        setStatus(
+          pick.kind === 'region' || pick.kind === 'sketch-profile'
+            ? 'Move applied · pick the sketch profile again where it is now.'
+            : 'Move applied · pick the face or edge again where it is now.'
+        );
+      } else if (pick.kind === 'edge-chain') {
+        selectEdgeChainFromViewer(pick.selections);
+      } else if (pick.kind === 'region') {
+        selectRegionFromViewer(sketchRegion!, pick.modifiers);
+      } else if (pick.kind === 'sketch-profile') {
+        selectSketchProfileFromViewer(pick.sketchId);
+      } else {
+        selectTopologyFromViewer(pick.selection, pick.additive, pick.detail);
+        if (pick.contextMenu) {
+          openViewportSelectionContextMenu(
+            pick.contextMenu.x,
+            pick.contextMenu.y,
+            pick.selection
+          );
+        }
+      }
+      return;
+    }
     if (request.tool === 'history') {
       const current = managerRef.current?.document;
       const feature = request.historyFeature
@@ -6419,8 +6521,8 @@ export function App() {
     // A toolbar command owns the next gesture. Preserve the body selection
     // that pre-fills Move/boolean forms, but disarm any selection-first face or
     // edge handle so two manipulators can never claim the same pointer.
+    cancelDirectManipulationRef.current?.();
     if (liveInteraction.mode !== 'idle') {
-      cancelDirectManipulationRef.current?.();
       cylinderRadiusPreview.clear();
       edgePreview.clear();
       dispatchInteraction({ type: 'clear' });
@@ -10912,6 +11014,24 @@ export function App() {
   }
 
   function handleSelectSketchProfile(sketchId: string) {
+    if (interactionRef.current.mode !== 'sketch') {
+      if (
+        deferMoveSelection({
+          kind: 'sketch-profile',
+          sketchId: sketchId as SketchId
+        })
+      ) {
+        return;
+      }
+      if (movePreview) {
+        setMovePreview(null);
+        setTool(null);
+      }
+    }
+    selectSketchProfileFromViewer(sketchId);
+  }
+
+  function selectSketchProfileFromViewer(sketchId: string) {
     const typedSketchId = sketchId as SketchId;
     setTool(null);
     setSelectedFeatureNode(null);
@@ -11013,18 +11133,21 @@ export function App() {
     const faces = representations[pending.bodyId]?.topology?.faces;
     if (!faces || faces === pending.before) return;
     pendingBlendRearmRef.current = null;
+    // A later Move owns the lane. An automatic re-pick must neither ask a
+    // user-selection question nor replace the values that card now holds.
+    if (movePreview) return;
     const pick = newBlendFacePick(pending.bodyId, pending.before, faces);
     if (pick) {
       // The pick is the app's, not the user's: it must not retire the
       // commit's own message ("Filleted 2 edges at 1 mm.") the way a real
       // pick retires whatever it interrupts.
       const outcome = statusEntry;
-      handleSelectTopologyFromViewer(pick.selection, false, pick.detail);
+      selectTopologyFromViewer(pick.selection, false, pick.detail);
       if (!outcome.sticky) {
         setStatusEntry(outcome);
       }
     }
-    // handleSelectTopologyFromViewer is a per-render closure over the same
+    // selectTopologyFromViewer is a per-render closure over the same
     // state this effect already lists.
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [representations, exactGeometryReady]);
@@ -11089,6 +11212,57 @@ export function App() {
   }
 
   function handleSelectTopologyFromViewer(
+    selection: TopologySelection | null,
+    additive: boolean,
+    detail?: PickDetail,
+    contextMenu?: { x: number; y: number }
+  ): boolean {
+    if (movePreview) {
+      // An empty click, like an empty box sweep, costs the Move nothing.
+      if (!selection) return false;
+      if (
+        deferMoveSelection({
+          kind: 'viewport',
+          selection: { ...selection },
+          additive,
+          ...(contextMenu ? { contextMenu: { ...contextMenu } } : {}),
+          ...(detail
+            ? {
+                detail: {
+                  point: { ...detail.point },
+                  ...(detail.normal ? { normal: { ...detail.normal } } : {})
+                }
+              }
+            : {})
+        })
+      ) {
+        return true;
+      }
+      setMovePreview(null);
+      setTool(null);
+    }
+    selectTopologyFromViewer(selection, additive, detail);
+    return false;
+  }
+
+  /** Hold the pick before it can replace selection or close the Move. */
+  function deferMoveSelection(pick: MoveSelectionPick): boolean {
+    if (!moveHasUnappliedChange(movePreview)) return false;
+    const manager = managerRef.current;
+    if (!manager) return true;
+    setPendingToolSwitch({
+      tool: 'selection',
+      moveSelection: {
+        ...pick,
+        manager,
+        projectId: manager.document.projectId,
+        version: manager.document.version
+      }
+    });
+    return true;
+  }
+
+  function selectTopologyFromViewer(
     selection: TopologySelection | null,
     additive: boolean,
     detail?: PickDetail
@@ -11482,6 +11656,23 @@ export function App() {
    * handle is still armed edge by edge.
    */
   function handleSelectEdgeChainFromViewer(selections: TopologySelection[]) {
+    if (selections.length === 0) return;
+    if (
+      deferMoveSelection({
+        kind: 'edge-chain',
+        selections: selections.map((selection) => ({ ...selection }))
+      })
+    ) {
+      return;
+    }
+    if (movePreview) {
+      setMovePreview(null);
+      setTool(null);
+    }
+    selectEdgeChainFromViewer(selections);
+  }
+
+  function selectEdgeChainFromViewer(selections: TopologySelection[]) {
     const first = selections[0];
     if (!doc || !first) {
       return;
@@ -11517,6 +11708,16 @@ export function App() {
   const emptyBoxSelectExplainedRef = useRef(false);
 
   function handleBoxSelectFromViewer(bodyIds: string[]) {
+    if (
+      bodyIds.length > 0 &&
+      deferMoveSelection({ kind: 'box', bodyIds: [...bodyIds] as BodyId[] })
+    ) {
+      return;
+    }
+    boxSelectFromViewer(bodyIds);
+  }
+
+  function boxSelectFromViewer(bodyIds: string[]) {
     if (!doc) {
       return;
     }
@@ -13280,6 +13481,65 @@ export function App() {
 
   /** A detected bounded cell was clicked: update persistent profile selection. */
   function handleSelectRegion(
+    region: RegionPickData,
+    modifiers: { additive: boolean; toggle: boolean }
+  ) {
+    if (interactionRef.current.mode !== 'sketch') {
+      if (
+        deferMoveSelection({
+          kind: 'region',
+          region: structuredClone(region),
+          modifiers: { ...modifiers }
+        })
+      ) {
+        return;
+      }
+      if (movePreview) {
+        setMovePreview(null);
+        setTool(null);
+      }
+    }
+    selectRegionFromViewer(region, modifiers);
+  }
+
+  /** Resolve the live plane, and closed-region identity when the pick carries one. */
+  function currentMoveSketchRegions(
+    current: ProjectDocument,
+    pick: Extract<MoveSelectionPick, { kind: 'region' | 'sketch-profile' }>
+  ): RegionPickData[] | null {
+    const sketchId =
+      pick.kind === 'region' ? pick.region.sketchId : pick.sketchId;
+    const sketch = findSketch(current, sketchId as SketchId);
+    if (!sketch) return null;
+    const scope = getParameterScope(current).scope;
+    const resolve = (value: ParamValue) => evalParamValue(value, scope) ?? 0;
+    try {
+      resolvedSketchPlaneBasis(current, sketch.planeRef, resolve, sketch.name);
+      // A curve pick carries only SketchId; open sketches are valid selections.
+      if (pick.kind === 'sketch-profile') return [];
+      const objects = sketch.objectIds.flatMap((id) => {
+        const node = current.nodes[id];
+        return node?.kind === 'sketch-object' ? [{ id, data: node.data }] : [];
+      });
+      return computeSketchRegions(
+        displayObjectsWithTextBudget(objects, documentTextBudgetError(current)),
+        resolve
+      ).map((region) => ({
+        sketchId,
+        profileId: region.profileId,
+        regionFingerprint: region.regionFingerprint,
+        samplePoint: region.samplePoint,
+        centroid: region.centroid,
+        boundingBox: region.boundingBox,
+        sourceEntityIds: region.sourceEntityIds,
+        area: region.area
+      }));
+    } catch {
+      return null;
+    }
+  }
+
+  function selectRegionFromViewer(
     region: RegionPickData,
     modifiers: { additive: boolean; toggle: boolean }
   ) {
@@ -15104,6 +15364,9 @@ export function App() {
   }
 
   function handleResizePrimitiveFace(commit: FaceResizeCommit) {
+    if (movePreview) {
+      return;
+    }
     if (!requireExactGeometryReady()) {
       return;
     }
@@ -15470,6 +15733,15 @@ export function App() {
   }
 
   function handleSelectBodyFromTree(bodyId: BodyId, additive: boolean) {
+    if (deferMoveSelection({ kind: 'body-tree', bodyId, additive })) return;
+    if (movePreview) {
+      setMovePreview(null);
+      setTool(null);
+    }
+    selectBodyFromTree(bodyId, additive);
+  }
+
+  function selectBodyFromTree(bodyId: BodyId, additive: boolean) {
     if (interaction.mode !== 'idle') {
       dispatchInteraction({ type: 'clear' });
     }
@@ -15766,13 +16038,54 @@ export function App() {
       ]);
       return;
     }
-    // Adopt the clicked geometry as the selection so actions target it.
-    handleSelectTopologyFromViewer(selection, false);
-    const feature = selectionFeature(
-      doc,
-      representations[selection.bodyId],
-      selection
-    );
+    // Actions wait for the clicked selection to land. An unapplied Move
+    // owns the question first; a menu here would act on the old selection.
+    if (handleSelectTopologyFromViewer(selection, false, undefined, { x, y })) {
+      setContextMenu(null);
+      return;
+    }
+    openViewportSelectionContextMenu(x, y, selection);
+  }
+
+  function openViewportSelectionContextMenu(
+    x: number,
+    y: number,
+    selection: TopologySelection
+  ) {
+    const owner = managerRef.current;
+    const current = owner?.document;
+    if (!owner || !current) return;
+    const menuSelection: MoveSelectionRequest = {
+      kind: 'viewport',
+      selection: { ...selection },
+      additive: false,
+      manager: owner,
+      projectId: current.projectId,
+      version: current.version
+    };
+    // A resumed menu can be constructed by the render that still held the
+    // Move. Keep its target/version, but dispatch through current handlers.
+    const runCurrent =
+      (run: (handlers: typeof viewportMenuHandlersRef.current) => void) =>
+      () => {
+        const document = currentMoveSelectionDocument(
+          managerRef.current,
+          menuSelection
+        );
+        if (
+          !document ||
+          (menuSelection.selection.kind !== 'body' &&
+            !selectionResolvesInDerived(document, menuSelection.selection))
+        ) {
+          setStatus(
+            'This selection changed while the menu was open. Pick it again.'
+          );
+          return;
+        }
+        run(viewportMenuHandlersRef.current);
+      };
+    const body = current.derived.bodyRepresentations[selection.bodyId];
+    const feature = selectionFeature(current, body, selection);
     const edge = selection.kind === 'edge';
     openContextMenu(
       x,
@@ -15786,7 +16099,7 @@ export function App() {
                   label: 'Fillet Edge…',
                   icon: <Spline size={13} aria-hidden="true" />
                 },
-                run: () => launchTool('fillet')
+                run: runCurrent((handlers) => handlers.launchTool('fillet'))
               },
               {
                 item: {
@@ -15794,7 +16107,7 @@ export function App() {
                   label: 'Chamfer Edge…',
                   icon: <TriangleRight size={13} aria-hidden="true" />
                 },
-                run: () => launchTool('chamfer')
+                run: runCurrent((handlers) => handlers.launchTool('chamfer'))
               }
             ]
           : []),
@@ -15806,7 +16119,7 @@ export function App() {
             shortcut: 'M',
             section: edge
           },
-          run: () => launchTool('transform')
+          run: runCurrent((handlers) => handlers.launchTool('transform'))
         },
         {
           item: {
@@ -15816,7 +16129,7 @@ export function App() {
             shortcut: 'U',
             disabled: viewerBodies.length < 2
           },
-          run: () => launchTool('union')
+          run: runCurrent((handlers) => handlers.launchTool('union'))
         },
         {
           item: {
@@ -15826,7 +16139,7 @@ export function App() {
             shortcut: 'X',
             disabled: viewerBodies.length < 2
           },
-          run: () => launchTool('subtract')
+          run: runCurrent((handlers) => handlers.launchTool('subtract'))
         },
         {
           item: {
@@ -15835,7 +16148,9 @@ export function App() {
             icon: <Eye size={13} aria-hidden="true" />,
             section: true
           },
-          run: () => toggleBodyVisibility(selection.bodyId)
+          run: runCurrent((handlers) =>
+            handlers.toggleBodyVisibility(menuSelection.selection.bodyId)
+          )
         },
         {
           item: {
@@ -15857,15 +16172,18 @@ export function App() {
                   danger: true,
                   section: true
                 },
-                run: () => {
-                  if (validateSelectionEdit())
-                    handleDeleteFeature(feature.featureId, feature.name);
-                }
+                run: runCurrent((handlers) => {
+                  if (handlers.validateSelectionEdit())
+                    handlers.handleDeleteFeature(
+                      feature.featureId,
+                      feature.name
+                    );
+                })
               }
             ]
           : [])
       ],
-      topologySelectionLabel(representations[selection.bodyId], selection)
+      topologySelectionLabel(body, selection)
     );
   }
 
@@ -17246,6 +17564,7 @@ export function App() {
   const inspectorActive =
     !modelingLocked &&
     !directMode &&
+    movePreview === null &&
     // A face or edge alone is not an edit: its name, measurement and verbs
     // are on the selection chip beside it, and the inspector opened only to
     // say no one feature owns the pick. An imported STEP face is the
@@ -19508,17 +19827,21 @@ export function App() {
           {pendingToolSwitch && doc && (
             <UnappliedCardDialog
               card="Move"
-              next={
-                pendingToolSwitch.tool === 'measure'
-                  ? 'Measure'
-                  : pendingToolSwitch.tool === 'history'
-                    ? (pendingToolSwitch.historyFeature &&
-                        resolveHistoryFeature(
-                          doc,
-                          pendingToolSwitch.historyFeature
-                        )?.name) ||
-                      'History'
-                    : TOOL_META[pendingToolSwitch.tool].label
+              outcome={
+                pendingToolSwitch.tool === 'selection'
+                  ? 'the selection changes'
+                  : `${
+                      pendingToolSwitch.tool === 'measure'
+                        ? 'Measure'
+                        : pendingToolSwitch.tool === 'history'
+                          ? (pendingToolSwitch.historyFeature &&
+                              resolveHistoryFeature(
+                                doc,
+                                pendingToolSwitch.historyFeature
+                              )?.name) ||
+                            'History'
+                          : TOOL_META[pendingToolSwitch.tool].label
+                    } opens`
               }
               onApply={() => resolvePendingToolSwitch('apply')}
               onDiscard={() => resolvePendingToolSwitch('discard')}

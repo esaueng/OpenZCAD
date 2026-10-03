@@ -2690,6 +2690,11 @@ export function ModelViewer({
         onEdgeCancelRef.current();
         cancelled = true;
       }
+      if (faceDrag) {
+        restoreFaceDrag();
+        faceDrag = null;
+        cancelled = true;
+      }
       if (cancelled) {
         onDirectManipulationChangeRef.current(false);
       }

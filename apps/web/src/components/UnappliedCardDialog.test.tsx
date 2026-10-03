@@ -2,17 +2,27 @@ import { fireEvent, render, screen } from '@testing-library/react';
 import { describe, expect, it, vi } from 'vitest';
 import { UnappliedCardDialog } from './UnappliedCardDialog';
 
-function renderDialog() {
+function renderDialog(outcome = 'Union opens') {
   const handlers = {
     onApply: vi.fn(),
     onDiscard: vi.fn(),
     onCancel: vi.fn()
   };
-  render(<UnappliedCardDialog card="Move" next="Union" {...handlers} />);
+  render(<UnappliedCardDialog card="Move" outcome={outcome} {...handlers} />);
   return handlers;
 }
 
 describe('UnappliedCardDialog', () => {
+  it.each(['the selection changes', 'Measure opens', 'Shell opens'])(
+    'describes %s while keeping the same accessible Move question',
+    (outcome) => {
+      renderDialog(outcome);
+      expect(
+        screen.getByRole('alertdialog', { name: 'Apply the Move first?' })
+      ).toHaveTextContent(`discard them before ${outcome}.`);
+      expect(screen.getByRole('button', { name: 'Apply' })).toHaveFocus();
+    }
+  );
   it('names the pending card and the tool, and focuses Apply', () => {
     const { onApply, onDiscard, onCancel } = renderDialog();
     const dialog = screen.getByRole('alertdialog', {
