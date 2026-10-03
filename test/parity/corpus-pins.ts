@@ -233,8 +233,8 @@ const BOOLEAN_CARRIER_NOTE =
   'split carrier. The OpenCascade reference adapter still publishes every ' +
   'boolean result hash-only, so Remus is the better side of this pin. It ' +
   'retires when `occt-lineage.ts` derives the same carrier subset. ' +
-  'boss-crossing-a-wall carries the same divergence, subsumed by its status ' +
-  'pin.';
+  'boss-crossing-a-wall carries the same divergence after OCCT 5 repaired ' +
+  'its former tessellation refusal.';
 
 const BOOLEAN_EDGE_NOTE =
   'Remus now carries EDGE identity through a boolean as well (K05). The ' +
@@ -248,32 +248,69 @@ const BOOLEAN_EDGE_NOTE =
 export const KERNEL_DELTAS: KernelDeltaPin[] = [
   {
     subject: 'boss-crossing-a-wall',
-    metric: 'status',
-    remus: 'imported',
-    occt: 'threw',
-    owner: 'OCCT-defect',
+    metric: 'edgeCount',
+    remus: 26,
+    occt: 21,
+    owner: 'K0.6',
     note:
-      'A cylindrical boss fused across a planar wall of the plate. OCCT ' +
-      'builds a body whose face count and tessellation group count disagree ' +
-      '— 14 against 17 — and the adapter refuses it rather than publish ' +
-      'triangle ranges it cannot trust. ' +
-      'Remus no longer facets it: historical BrepKit #55 landed the analytic ' +
-      'curved-planar path, so the fuse now returns 9 planes and 2 cylinders ' +
-      'with a bounding box that reaches its exact extent, and the SOLID ' +
-      'matches the closed form to 6e-15. What survives is a measurement ' +
-      'defect rather than a geometry one — retired with the reference ' +
-      'deviation below when the integrator reached the closed form. ' +
-      'Closing the OCCT side still needs consistent groups. ' +
-      'The remus pin bump to 9e0f6c1 (v2.130) moved the body across the ' +
-      'd/R = 1/2 cliff recorded in the retired volume pin: the fuse now ' +
-      'leaves the boss wall unsplit — 8 planes + 1 cylinder, 9 faces — and ' +
-      'the round-trip volume delta dropped to 5e-16, so the app-facing ' +
-      'volume reads the closed form exactly. The retired pin also carried ' +
-      'the twice-wrong mechanism history and the warning that which side ' +
-      'of the cliff a platform lands on is architecture- and ' +
-      'scale-dependent (Linux at 1000x reproduced macOS at 1x); that ' +
-      'history lives in git, and mesh watertightness remains the only ' +
-      'witness on either side of the cliff.'
+      'OCCT 5 now publishes the wall-crossing union consistently: one valid ' +
+      'solid, 8 planes and 1 cylinder, matching the circular-segment volume ' +
+      'and surviving a STEP round trip. Remus has the same faces and volume ' +
+      'but retains five additional split edges. Retires when the boundary ' +
+      'representations agree; display-group omission must not discard topology.'
+  },
+  {
+    subject: 'boss-crossing-a-wall',
+    metric: 'witnessedFaces',
+    remus: 6,
+    occt: 0,
+    owner: 'K0.6',
+    note:
+      BOOLEAN_CARRIER_NOTE +
+      ' Six unique result face carriers keep their operand names on Remus.'
+  },
+  {
+    subject: 'boss-crossing-a-wall',
+    metric: 'witnessedEdges',
+    remus: 14,
+    occt: 0,
+    owner: 'K0.6',
+    note:
+      BOOLEAN_EDGE_NOTE +
+      ' Ten unchanged operand edges and four split pieces retain their source lineage on Remus.'
+  },
+  {
+    subject: 'boss-crossing-a-wall',
+    metric: 'lineageNames',
+    remus: '20 names · 2b128a84',
+    occt: 'none',
+    owner: 'K0.6',
+    note:
+      BOOLEAN_CARRIER_NOTE +
+      ' The six face and fourteen edge names are recorded in baselines/import-modeling.json.'
+  },
+  {
+    subject: 'boss-crossing-a-wall',
+    metric: 'faceHashDigest',
+    remus: '3c257c0f',
+    occt: 'd6b0bb14',
+    owner: 'K0.6',
+    note:
+      'Both kernels publish 8 planes and 1 cylinder, but the wall-crossing ' +
+      'union produces different exact face witnesses. Equal face counts ' +
+      'and closed-form volumes do not establish interchangeable stored picks; ' +
+      'retire this when the witness sets agree.'
+  },
+  {
+    subject: 'boss-crossing-a-wall',
+    metric: 'edgeHashDigest',
+    remus: '434320d1',
+    occt: '17a9b608',
+    owner: 'K0.6',
+    note:
+      'The boundary witness sets differ along with the 26-vs-21 edge count. ' +
+      'Pin the digest independently so equalising counts alone cannot hide ' +
+      'a stored edge selection changing identity.'
   },
   // --- (a) exports ---------------------------------------------------------
   {
@@ -983,29 +1020,6 @@ export const KERNEL_DELTAS: KernelDeltaPin[] = [
 // ---------------------------------------------------------------------------
 
 export const REFERENCE_DEVIATIONS: ReferenceDeviationPin[] = [
-  {
-    subject: 'boss-crossing-a-wall',
-    kernel: 'occt',
-    referenceMm3:
-      40 * 24 * 10 +
-      Math.PI * 36 * 20 -
-      (Math.PI * 36 - (36 * Math.acos(0.5) - 3 * Math.sqrt(27))) * 10,
-    // 0 is the literal measurement: the build threw, so no volume was
-    // produced. The refusal itself is pinned as a `status` divergence in
-    // KERNEL_DELTAS, which carries the error text; this entry exists so the
-    // nominal-volume check has something to compare against. `reported` is
-    // typed to allow 'threw', but the scenario assertion path requires a
-    // number, so the two pins split the fact between them.
-    reported: 0,
-    owner: 'OCCT-defect',
-    note:
-      'OCCT builds 14 faces but 17 tessellation groups for the same body, ' +
-      'and the adapter refuses that rather than publish face triangle ranges ' +
-      'it cannot trust — the same guard that protects the fingerprint hash. ' +
-      'Worth recording because it means this scenario has NO correct kernel ' +
-      'to defer to: the hand-computed nominal is the only truth available, ' +
-      'which is exactly why the corpus insists on one.'
-  },
   {
     subject: 'b-unit-no-global-context',
     kernel: 'remus',

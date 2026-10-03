@@ -295,23 +295,34 @@
       }
     },
     "occt": {
-      "bodyCount": 0,
-      "volume": 0,
-      "faceCount": 0,
-      "edgeCount": 0,
-      "seamEdgeCount": 0,
-      "surfaceTypes": {},
+      "status": "imported",
+      "warnings": [],
+      "bodyCount": 1,
+      "volume": 10952.079901041901,
+      "faceCount": 9,
+      "edgeCount": 21,
+      "seamEdgeCount": 1,
+      "surfaceTypes": {
+        "plane": 8,
+        "cylinder": 1
+      },
       "witnessedFaces": 0,
       "witnessedEdges": 0,
       "lineageNames": [],
-      "faceHashDigest": "empty",
-      "edgeHashDigest": "empty",
-      "bbox": null,
-      "status": "threw",
-      "warnings": [],
-      "error": "Face handle count 14 does not match tessellation groups 17.",
+      "faceHashDigest": "d6b0bb14",
+      "edgeHashDigest": "17a9b608",
+      "bbox": [
+        -3.000000100000004, -1e-7, -1.0000000355271367e-7, 40.0000001,
+        24.000000100000005, 20.000000100000005
+      ],
       "roundTrip": {
-        "status": "skipped-no-body"
+        "status": "ok",
+        "warnings": [],
+        "volumeRelativeDelta": 3.4878103355353562e-15,
+        "faceCountDelta": 0,
+        "edgeCountDelta": 0,
+        "exportedSolidCount": 1,
+        "exportedVoids": false
       }
     }
   },
