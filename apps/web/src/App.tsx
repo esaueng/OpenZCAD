@@ -2522,6 +2522,18 @@ export function App() {
   /** Opens exact entry for the armed handle, as tapping its chip would. */
   const openExactEntryRef = useRef<(() => boolean) | null>(null);
   const contextMenuActionsRef = useRef<Record<string, () => void>>({});
+  const viewportMenuHandlersRef = useRef({
+    launchTool,
+    validateSelectionEdit,
+    handleDeleteFeature,
+    toggleBodyVisibility
+  });
+  viewportMenuHandlersRef.current = {
+    launchTool,
+    validateSelectionEdit,
+    handleDeleteFeature,
+    toggleBodyVisibility
+  };
   const managerRef = useRef<CommandManager | null>(null);
   const parameterEditRequest = useRef(0);
   /** The assistant patch currently landing, for edits that must follow it. */
@@ -15923,8 +15935,38 @@ export function App() {
     y: number,
     selection: TopologySelection
   ) {
-    const current = managerRef.current?.document;
-    if (!current) return;
+    const owner = managerRef.current;
+    const current = owner?.document;
+    if (!owner || !current) return;
+    const menuSelection: MoveSelectionRequest = {
+      kind: 'viewport',
+      selection: { ...selection },
+      additive: false,
+      manager: owner,
+      projectId: current.projectId,
+      version: current.version
+    };
+    // A resumed menu can be constructed by the render that still held the
+    // Move. Keep its target/version, but dispatch through current handlers.
+    const runCurrent =
+      (run: (handlers: typeof viewportMenuHandlersRef.current) => void) =>
+      () => {
+        const document = currentMoveSelectionDocument(
+          managerRef.current,
+          menuSelection
+        );
+        if (
+          !document ||
+          (menuSelection.selection.kind !== 'body' &&
+            !selectionResolvesInDerived(document, menuSelection.selection))
+        ) {
+          setStatus(
+            'This selection changed while the menu was open. Pick it again.'
+          );
+          return;
+        }
+        run(viewportMenuHandlersRef.current);
+      };
     const body = current.derived.bodyRepresentations[selection.bodyId];
     const feature = selectionFeature(current, body, selection);
     const edge = selection.kind === 'edge';
@@ -15940,7 +15982,7 @@ export function App() {
                   label: 'Fillet Edge…',
                   icon: <Spline size={13} aria-hidden="true" />
                 },
-                run: () => launchTool('fillet')
+                run: runCurrent((handlers) => handlers.launchTool('fillet'))
               },
               {
                 item: {
@@ -15948,7 +15990,7 @@ export function App() {
                   label: 'Chamfer Edge…',
                   icon: <TriangleRight size={13} aria-hidden="true" />
                 },
-                run: () => launchTool('chamfer')
+                run: runCurrent((handlers) => handlers.launchTool('chamfer'))
               }
             ]
           : []),
@@ -15960,7 +16002,7 @@ export function App() {
             shortcut: 'M',
             section: edge
           },
-          run: () => launchTool('transform')
+          run: runCurrent((handlers) => handlers.launchTool('transform'))
         },
         {
           item: {
@@ -15970,7 +16012,7 @@ export function App() {
             shortcut: 'U',
             disabled: viewerBodies.length < 2
           },
-          run: () => launchTool('union')
+          run: runCurrent((handlers) => handlers.launchTool('union'))
         },
         {
           item: {
@@ -15980,7 +16022,7 @@ export function App() {
             shortcut: 'X',
             disabled: viewerBodies.length < 2
           },
-          run: () => launchTool('subtract')
+          run: runCurrent((handlers) => handlers.launchTool('subtract'))
         },
         {
           item: {
@@ -15989,7 +16031,9 @@ export function App() {
             icon: <Eye size={13} aria-hidden="true" />,
             section: true
           },
-          run: () => toggleBodyVisibility(selection.bodyId)
+          run: runCurrent((handlers) =>
+            handlers.toggleBodyVisibility(menuSelection.selection.bodyId)
+          )
         },
         {
           item: {
@@ -16011,10 +16055,13 @@ export function App() {
                   danger: true,
                   section: true
                 },
-                run: () => {
-                  if (validateSelectionEdit())
-                    handleDeleteFeature(feature.featureId, feature.name);
-                }
+                run: runCurrent((handlers) => {
+                  if (handlers.validateSelectionEdit())
+                    handlers.handleDeleteFeature(
+                      feature.featureId,
+                      feature.name
+                    );
+                })
               }
             ]
           : [])

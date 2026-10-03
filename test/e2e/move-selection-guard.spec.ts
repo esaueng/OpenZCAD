@@ -263,6 +263,26 @@ test('a right-click waits for the Move answer and retains its requested menu', a
   // Body IDs survive Move, so the requested body's menu is still safe.
   await expect(menu).toBeVisible();
   await expect(menu.locator('.context-menu-heading')).toHaveText(target);
+  // Once the current exact result is ready, the retained menu acts on its
+  // current publisher. Its old render must not refuse the newer document.
+  await expect(page.getByRole('button', { name: /^Fillet/ })).toBeEnabled();
+  await menu
+    .getByRole('menuitem', { name: 'Delete Move', exact: true })
+    .click();
+  await expect(ask).toHaveCount(0);
+  await expect(moveRows).toHaveCount(0);
+  await expect(page.locator('.feature-row')).toHaveCount(1);
+  await expect(
+    page.locator('.feature-row-main', { hasText: /^Box$/ })
+  ).toBeVisible();
+  await expectBodyCount(page, 1);
+  await page
+    .getByRole('toolbar', { name: 'Viewer bar' })
+    .getByRole('button', { name: 'Undo' })
+    .click();
+  await expect(moveRows).toHaveCount(1);
+  await expect(page.locator('.feature-row')).toHaveCount(2);
+  await expectBodyCount(page, 1);
   await page
     .getByRole('toolbar', { name: 'Viewer bar' })
     .getByRole('button', { name: 'Undo' })
@@ -282,6 +302,41 @@ test('a right-click waits for the Move answer and retains its requested menu', a
   await expect(page.getByRole('contentinfo')).toContainText(
     'pick the face or edge again where it is now'
   );
+  expect(await maxCards()).toBe(1);
+});
+
+test('a deferred edge menu opens Fillet after Discard without asking about the old Move', async ({
+  page
+}) => {
+  const { inspector, move, ask, moveRows } = await makePart(
+    page,
+    'Deferred edge menu action'
+  );
+  await expect(page.getByRole('button', { name: /^Fillet/ })).toBeEnabled();
+  await setSelectionFilter(page, 'Edge');
+  const maxCards = await watchCardCount(page);
+  await startMove(page);
+  const edge = await locateEdge(page);
+  await page.mouse.click(edge.x, edge.y, { button: 'right' });
+  const menu = page.locator('.context-menu');
+  await expect(ask).toBeVisible();
+  await expect(menu).toHaveCount(0);
+  await ask.getByRole('button', { name: 'Discard' }).click();
+  await expect(ask).toHaveCount(0);
+  await expect(move).toHaveCount(0);
+  await expect(menu).toBeVisible();
+  await expect(moveRows).toHaveCount(0);
+
+  await menu
+    .getByRole('menuitem', { name: 'Fillet Edge…', exact: true })
+    .click();
+  await expect(inspector).toBeVisible();
+  await expect(inspector.getByLabel('Radius', { exact: true })).toBeVisible();
+  await expect(ask).toHaveCount(0);
+  await expect(menu).toBeHidden();
+  await expect(move).toHaveCount(0);
+  await expect(moveRows).toHaveCount(0);
+  await expect(page.locator('.feature-row')).toHaveCount(1);
   expect(await maxCards()).toBe(1);
 });
 
