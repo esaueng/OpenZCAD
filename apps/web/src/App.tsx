@@ -1105,10 +1105,15 @@ import {
   suppressionRepairSnapshot,
   type SuppressionNotice
 } from './lib/suppressionFeedback';
-import { moveHasUnappliedChange } from './lib/moveCard';
+import {
+  moveHasUnappliedChange,
+  movingSketchId,
+  sketchViewShown
+} from './lib/moveCard';
 import {
   currentMoveSelectionDocument,
   movePickNeedsFreshTopology,
+  moveSketchPickVisibility,
   resolveMoveSketchRegion,
   type MoveSelectionPick,
   type MoveSelectionRequest
@@ -6370,15 +6375,15 @@ export function App() {
         pick?.kind === 'region' && sketchRegions
           ? resolveMoveSketchRegion(pick, sketchRegions)
           : null;
+      const sketchVisibility = pick
+        ? moveSketchPickVisibility(pick, movePreview, hiddenSketchIds)
+        : null;
       if (
         !pick ||
         !current ||
         (pick.kind === 'region' && !sketchRegion) ||
         ((pick.kind === 'region' || pick.kind === 'sketch-profile') &&
-          (sketchRegions === null ||
-            hiddenSketchIds.has(
-              pick.kind === 'region' ? pick.region.sketchId : pick.sketchId
-            ))) ||
+          (sketchRegions === null || sketchVisibility === 'hidden')) ||
         topologyPicks.some(
           (selection) =>
             selection.kind !== 'body' &&
@@ -6410,6 +6415,10 @@ export function App() {
             ? 'Move applied · pick the sketch profile again where it is now.'
             : 'Move applied · pick the face or edge again where it is now.'
         );
+      } else if (sketchVisibility === 'temporary') {
+        // Discard hides this consumed/hidden sketch again; no invisible
+        // region or curve pick may replace the settled Move's selection.
+        setStatus('Move discarded · the sketch is hidden again.');
       } else if (pick.kind === 'edge-chain') {
         selectEdgeChainFromViewer(pick.selections);
       } else if (pick.kind === 'region') {
@@ -6818,7 +6827,15 @@ export function App() {
     );
     const sketch = findSketch(doc, preview.bodyId as SketchId);
     if (!view || !sketch) {
+      // Never drop the Move silently: say why and close the command, so no
+      // empty Move card is left behind.
       setMovePreview(null);
+      setTool(null);
+      setStatus(
+        sketch
+          ? `Could not move ${sketch.name}: its plane cannot be placed right now.`
+          : 'Could not move the sketch: it is no longer in the model.'
+      );
       return false;
     }
     const basis = view.basis;
@@ -6851,6 +6868,9 @@ export function App() {
       );
       return true;
     }
+    // The command reported its own failure; the Move it carried is gone, so
+    // the card closes with it rather than staying open empty.
+    setTool(null);
     return false;
   }
 
@@ -11015,17 +11035,12 @@ export function App() {
 
   function handleSelectSketchProfile(sketchId: string) {
     if (interactionRef.current.mode !== 'sketch') {
-      if (
-        deferMoveSelection({
-          kind: 'sketch-profile',
-          sketchId: sketchId as SketchId
-        })
-      ) {
+      const pick: MoveSelectionPick = {
+        kind: 'sketch-profile',
+        sketchId: sketchId as SketchId
+      };
+      if (deferMoveSelection(pick) || settleZeroMoveSketchPick(pick)) {
         return;
-      }
-      if (movePreview) {
-        setMovePreview(null);
-        setTool(null);
       }
     }
     selectSketchProfileFromViewer(sketchId);
@@ -13276,6 +13291,9 @@ export function App() {
     }
   }
 
+  // A Move shows the hidden sketch it carries (see `movingSketchId`).
+  const movingSketch = movingSketchId(movePreview);
+
   /**
    * Region-detected sketch rendering data: every sketch's curves plus its
    * detected closed regions, lifted by the shared plane resolution. The
@@ -13295,7 +13313,7 @@ export function App() {
       // Consumed sketches auto-hide (Shapr-style); the history row's eye
       // overrides either way. The in-session sketch always renders its rig.
       if (
-        hiddenSketchIds.has(sketch.sketchId) &&
+        !sketchViewShown(sketch.sketchId, hiddenSketchIds, movingSketch) &&
         !active &&
         !modelingEditFeature
       ) {
@@ -13397,15 +13415,18 @@ export function App() {
     textFontsVersion,
     textOutlineBudgetError,
     hiddenSketchIds,
+    movingSketch,
     modelingEditFeature
   ]);
   // Editing needs hidden source profiles; visibility remains a viewport concern.
   const sketchViews = useMemo(
     () =>
       availableSketchViews.filter(
-        (view) => view.active || !hiddenSketchIds.has(view.sketchId)
+        (view) =>
+          view.active ||
+          sketchViewShown(view.sketchId, hiddenSketchIds, movingSketch)
       ),
-    [availableSketchViews, hiddenSketchIds]
+    [availableSketchViews, hiddenSketchIds, movingSketch]
   );
 
   useEffect(() => {
@@ -13485,21 +13506,27 @@ export function App() {
     modifiers: { additive: boolean; toggle: boolean }
   ) {
     if (interactionRef.current.mode !== 'sketch') {
-      if (
-        deferMoveSelection({
-          kind: 'region',
-          region: structuredClone(region),
-          modifiers: { ...modifiers }
-        })
-      ) {
+      const pick: MoveSelectionPick = {
+        kind: 'region',
+        region: structuredClone(region),
+        modifiers: { ...modifiers }
+      };
+      if (deferMoveSelection(pick) || settleZeroMoveSketchPick(pick)) {
         return;
-      }
-      if (movePreview) {
-        setMovePreview(null);
-        setTool(null);
       }
     }
     selectRegionFromViewer(region, modifiers);
+  }
+
+  /** A zero-valued Move ends before a new pick; its hidden sketch hides again. */
+  function settleZeroMoveSketchPick(pick: MoveSelectionPick): boolean {
+    if (!movePreview) return false;
+    const rehidden =
+      moveSketchPickVisibility(pick, movePreview, hiddenSketchIds) === 'temporary';
+    setMovePreview(null);
+    setTool(null);
+    if (rehidden) setStatus('Move closed · the sketch is hidden again.');
+    return rehidden;
   }
 
   /** Resolve the live plane, and closed-region identity when the pick carries one. */

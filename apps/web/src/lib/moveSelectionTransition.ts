@@ -7,6 +7,7 @@ import type {
 } from '@openzcad/shared';
 import type { MovePreview, RegionPickData } from '@openzcad/viewport';
 import type { PickDetail } from '@openzcad/viewport/types';
+import { movingSketchId, sketchViewShown } from './moveCard';
 
 type MoveSelectionOwner = { readonly document: ProjectDocument };
 
@@ -33,6 +34,25 @@ export type MoveSelectionRequest = MoveSelectionPick & {
   projectId: ProjectDocument['projectId'];
   version: number;
 };
+
+/** A Move can temporarily show only the hidden sketch it owns. */
+export function moveSketchPickVisibility(
+  pick: MoveSelectionPick,
+  preview: Pick<MovePreview, 'bodyId' | 'target'> | null,
+  hiddenSketchIds: ReadonlySet<string>
+): 'visible' | 'temporary' | 'hidden' | null {
+  const id =
+    pick.kind === 'region'
+      ? pick.region.sketchId
+      : pick.kind === 'sketch-profile'
+        ? pick.sketchId
+        : null;
+  if (id === null) return null;
+  if (!sketchViewShown(id, hiddenSketchIds, movingSketchId(preview))) {
+    return 'hidden';
+  }
+  return hiddenSketchIds.has(id) ? 'temporary' : 'visible';
+}
 
 /** A moved pick's old coordinates cannot arm a handle at its new pose. */
 export function movePickNeedsFreshTopology(
