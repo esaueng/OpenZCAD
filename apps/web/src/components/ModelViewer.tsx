@@ -2128,10 +2128,28 @@ export function ModelViewer({
     let dragAppliedThisFrame = false;
     let resizePending = false;
 
-    function requestRender() {
+    /**
+     * Set when a frame is asked for by anything other than the render loop
+     * continuing its own animation: a hover, a selection, a commit. Such a
+     * change may have just created a fade at its starting value, so the next
+     * frame takes the short wake step even while an older animation keeps the
+     * loop awake; otherwise the new fade would land in that one slow frame.
+     */
+    let motionRequested = false;
+    /** True from the moment a frame has taken its step until it ends. */
+    let frameStepTaken = false;
+
+    function scheduleFrame() {
       if (animationFrame === null) {
         animationFrame = window.requestAnimationFrame(animate);
       }
+    }
+
+    function requestRender() {
+      if (!frameStepTaken) {
+        motionRequested = true;
+      }
+      scheduleFrame();
     }
 
     // The camera fields delegate to the rig rather than mirroring it: the
@@ -7221,6 +7239,7 @@ export function ModelViewer({
     let loopWasAnimating = false;
     function animate(now: number) {
       animationFrame = null;
+      frameStepTaken = false;
       if (e2eCanvasHooksEnabled) {
         framesDrawn += 1;
         renderer.domElement.dataset.e2eFrames = String(framesDrawn);
@@ -7251,6 +7270,9 @@ export function ModelViewer({
       pendingHoverEvent = null;
       if (hoverEvent) {
         applyHoverAt(hoverEvent);
+      }
+      if (dragEvent || hoverEvent) {
+        motionRequested = true;
       }
       // The perspective camera stays the pose master; mirror it while the
       // ortho camera drives so switches and fits never jump.
@@ -7310,8 +7332,10 @@ export function ModelViewer({
       context.timer.update(now);
       const dt = animationStepSeconds(
         context.timer.getDelta(),
-        loopWasAnimating
+        loopWasAnimating && !motionRequested
       );
+      motionRequested = false;
+      frameStepTaken = true;
 
       selection.step(dt);
       // Edge highlight tiers ease on the overlays themselves, so each body
@@ -7534,8 +7558,9 @@ export function ModelViewer({
         retiringOverlaysRef.current.length > 0 ||
         inferenceAnimating ||
         context.fadeIns.size > 0;
+      frameStepTaken = false;
       if (loopWasAnimating) {
-        requestRender();
+        scheduleFrame();
       }
     }
     // The React chrome can become actionable before this passive setup owns a

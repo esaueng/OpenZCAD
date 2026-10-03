@@ -70,4 +70,18 @@ describe('animation step', () => {
     value = easeToward(value, 1, animationStepSeconds(0.4, true) * 1000);
     expect(hasSettled(value, 1)).toBe(true);
   });
+
+  it('gives a fade created mid-animation a visible first step', () => {
+    // An earlier fade keeps the loop awake on a 400 ms software-GL frame.
+    // A hover arriving between frames installs a new fade at opacity zero;
+    // the render loop marks that frame as woken, so the new fade takes the
+    // wake step instead of the whole gap and is seen to begin.
+    const woken = animationStepSeconds(0.4, false);
+    const incoming = easeToward(0, 1, woken * 1000);
+    expect(woken).toBe(WAKE_STEP_S);
+    expect(hasSettled(incoming, 1)).toBe(false);
+    // Without the wake, the same frame lands the fade outright.
+    const continued = animationStepSeconds(0.4, true);
+    expect(hasSettled(easeToward(0, 1, continued * 1000), 1)).toBe(true);
+  });
 });
