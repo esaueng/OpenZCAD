@@ -215,23 +215,26 @@ test('names picked faces and edges without raw fingerprints', async ({
   await expect(chip).not.toContainText('face:');
   await expect(chip).toContainText(/face/i);
 
-  // The operation card announces its lifecycle state explicitly.
+  // The chip carries the operation and announces its lifecycle state
+  // explicitly; no second chip says it again at the top of the column.
   const card = page.getByRole('region', { name: 'Resize Body operation' });
-  await expect(card.locator('.tool-card-phase')).toHaveText('Ready');
+  await expect(card).toHaveClass(/selection-callout-chip/);
+  await expect(card.locator('.selection-callout-phase')).toHaveText('Ready');
+  await expect(page.locator('.tool-card')).toHaveCount(0);
 
-  // Dragging collapses the card to a compact, accessible status marker.
+  // Dragging collapses the phase to a compact, accessible status marker.
   await page.mouse.down();
   await page.mouse.move(facePoint.x + 30, facePoint.y - 20, { steps: 3 });
-  await expect(card.locator('.tool-card-phase-dot')).toHaveAttribute(
+  await expect(card.locator('.selection-callout-phase-dot')).toHaveAttribute(
     'aria-label',
     'Dragging'
   );
-  await expect(card.locator('.tool-card-copy > small')).toBeHidden();
+  await expect(card.locator('.selection-callout-phase')).toHaveCount(0);
   await page.mouse.up();
   await page.waitForTimeout(1200);
 });
 
-test('fits the face tool card and orientation cube beside the inspector', async ({
+test('fits the face selection chip and orientation cube beside the inspector', async ({
   page
 }) => {
   await page.setViewportSize({ width: 1024, height: 700 });
@@ -240,27 +243,33 @@ test('fits the face tool card and orientation cube beside the inspector', async 
   const facePoint = await findFacePoint(page);
   await page.mouse.click(facePoint.x, facePoint.y);
 
+  // The face's operation rides the selection chip (F11): there is no
+  // column-top card to fit any more, so the chip is what has to hold.
   const card = page.getByRole('region', { name: 'Resize Body operation' });
   const inspector = page.getByRole('region', { name: 'Feature inspector' });
   await expect(card).toBeVisible();
+  await expect(card).toHaveClass(/selection-callout-chip/);
   await expect(inspector).toBeVisible();
+  await expect(page.locator('.tool-card')).toHaveCount(0);
 
   const measure = () =>
     page.locator('.viewer-area').evaluate((viewer) => {
-      const cardElement = viewer.querySelector<HTMLElement>('.tool-card');
-      const copy = viewer.querySelector<HTMLElement>('.tool-card-copy');
-      const submode = viewer.querySelector<HTMLElement>('.tool-card-submode');
+      const chip = viewer.querySelector<HTMLElement>('.selection-callout-chip');
+      const name = chip?.querySelector<HTMLElement>('.selection-callout-name');
+      const verbs = chip?.querySelector<HTMLElement>(
+        '.selection-callout-verbs'
+      );
       const cube = viewer.querySelector<SVGElement>('.orientation-cube');
       const inspectorElement = viewer.querySelector<HTMLElement>(
         '.inspector-float > *'
       );
-      if (!cardElement || !copy || !submode || !cube || !inspectorElement) {
-        throw new Error('Expected the face tool card, cube, and inspector.');
+      if (!chip || !name || !verbs || !cube || !inspectorElement) {
+        throw new Error('Expected the selection chip, cube, and inspector.');
       }
 
-      const cardBox = cardElement.getBoundingClientRect();
-      const copyBox = copy.getBoundingClientRect();
-      const submodeBox = submode.getBoundingClientRect();
+      const chipBox = chip.getBoundingClientRect();
+      const nameBox = name.getBoundingClientRect();
+      const verbsBox = verbs.getBoundingClientRect();
       const cubeBox = cube.getBoundingClientRect();
       const inspectorBox = inspectorElement.getBoundingClientRect();
       const cubeHit = document.elementFromPoint(
@@ -272,39 +281,34 @@ test('fits the face tool card and orientation cube beside the inspector', async 
         a.right > b.left &&
         a.top < b.bottom &&
         a.bottom > b.top;
-
-      const title = copy.querySelector<HTMLElement>('.tool-card-title');
+      // Every verb takes its own press: nothing lies over the switch.
+      const verbsHitTestable = [
+        ...chip.querySelectorAll<HTMLButtonElement>('button')
+      ].every((button) => {
+        const box = button.getBoundingClientRect();
+        const hit = document.elementFromPoint(
+          box.left + box.width / 2,
+          box.top + box.height / 2
+        );
+        return Boolean(hit && button.contains(hit));
+      });
 
       return {
-        cardContainsItsContents:
-          cardElement.scrollWidth <= cardElement.clientWidth &&
-          cardElement.scrollHeight <= cardElement.clientHeight,
-        copyIntersectsSubmode: intersects(copyBox, submodeBox),
-        // The operation's own name is the last thing that may be dropped.
-        titleReadsInFull: Boolean(
-          title && title.scrollWidth <= title.clientWidth + 1
-        ),
-        copyWidth: copyBox.width,
-        cubeIntersectsCard: intersects(cubeBox, cardBox),
+        chipContainsItsContents:
+          chip.scrollWidth <= chip.clientWidth + 1 &&
+          chip.scrollHeight <= chip.clientHeight + 1,
+        nameIntersectsVerbs: intersects(nameBox, verbsBox),
+        verbsHitTestable,
+        phase:
+          chip.querySelector('.selection-callout-phase')?.textContent ?? null,
+        cubeIntersectsChip: intersects(cubeBox, chipBox),
         cubeIntersectsInspector: intersects(cubeBox, inspectorBox),
         cubeOwnsItsCentre: Boolean(cubeHit && cube.contains(cubeHit)),
-        cardBox: {
-          left: cardBox.left,
-          right: cardBox.right,
-          top: cardBox.top,
-          bottom: cardBox.bottom
-        },
-        copyBox: {
-          left: copyBox.left,
-          right: copyBox.right,
-          top: copyBox.top,
-          bottom: copyBox.bottom
-        },
-        submodeBox: {
-          left: submodeBox.left,
-          right: submodeBox.right,
-          top: submodeBox.top,
-          bottom: submodeBox.bottom
+        chipBox: {
+          left: chipBox.left,
+          right: chipBox.right,
+          top: chipBox.top,
+          bottom: chipBox.bottom
         },
         cubeBox: {
           left: cubeBox.left,
@@ -321,26 +325,25 @@ test('fits the face tool card and orientation cube beside the inspector', async 
       };
     });
 
-  // The card used to be a single flex row whose action tabs refused to
-  // shrink: below ~1000px the copy was squeezed to two characters and the
-  // tabs still crossed it. Every width the app is used at has to hold.
+  // The column-top card once squeezed its copy to two characters below
+  // ~1000px. The chip that replaced it has to hold at every width too.
   for (const width of [1440, 1100, 990, 900]) {
     await page.setViewportSize({ width, height: 700 });
     await page.waitForTimeout(150);
     const geometry = await measure();
     const where = `at ${width}px: ${JSON.stringify(geometry, null, 2)}`;
 
-    expect(geometry.cardContainsItsContents, where).toBe(true);
-    expect(geometry.copyIntersectsSubmode, where).toBe(false);
-    expect(geometry.cubeIntersectsCard, where).toBe(false);
+    expect(geometry.chipContainsItsContents, where).toBe(true);
+    expect(geometry.nameIntersectsVerbs, where).toBe(false);
+    expect(geometry.verbsHitTestable, where).toBe(true);
+    expect(geometry.phase, where).toBe('Ready');
+    expect(geometry.cubeIntersectsChip, where).toBe(false);
     expect(geometry.cubeIntersectsInspector, where).toBe(false);
     expect(geometry.cubeOwnsItsCentre, where).toBe(true);
-    expect(geometry.titleReadsInFull, where).toBe(true);
-    expect(geometry.copyWidth, where).toBeGreaterThan(150);
   }
 });
 
-test('opens long tool-card diagnostics in the Activity log', async ({
+test('opens long selection-chip diagnostics in the Activity log', async ({
   page
 }) => {
   await stubApi(page);
@@ -349,31 +352,33 @@ test('opens long tool-card diagnostics in the Activity log', async ({
 
   await page.evaluate(() => {
     // The deterministic modeling fixtures return a plain refusal, so mount
-    // the production compact-card and Activity-log markup for this state.
-    const card = document.createElement('section');
-    card.className = 'tool-card phase-failed';
+    // the production selection-chip (lib/selectionCalloutView) and
+    // Activity-log markup for this state.
+    const card = document.createElement('div');
+    card.className = 'selection-callout selection-callout-chip';
     card.setAttribute('role', 'region');
     card.setAttribute('aria-label', 'Edit Fillet operation');
     card.style.position = 'fixed';
-    card.style.zIndex = '9999';
-    // Production anchors the card in the right lane at the lane's width;
-    // standing alone it needs a place and that width of its own.
+    // The chip's own stacking rule is `!important` (it must win over the
+    // label renderer's inline order), so standing alone over the start
+    // screen it needs the same weight.
+    card.style.setProperty('z-index', '9999', 'important');
+    // Production hangs the chip over the pick; standing alone it needs a
+    // place of its own.
     card.style.top = '14px';
-    card.style.right = '14px';
-    card.style.width = '330px';
+    card.style.left = '14px';
     card.innerHTML = `
-      <span class="tool-card-icon" aria-hidden="true"></span>
-      <span class="tool-card-copy">
-        <strong>
-          <span class="tool-card-title">Edit Fillet</span>
-          <span class="tool-card-phase pill-failed">Failed</span>
-        </strong>
-        <span class="tool-card-diagnostic" role="alert">
-          <span class="tool-card-error">The exact kernel could not build this result.</span>
-          <button type="button" class="activity-log-link">View details</button>
-        </span>
+      <span class="selection-callout-name">Bracket · Fillet face</span>
+      <span class="selection-callout-phase phase-failed">Failed</span>
+      <span class="selection-callout-verbs">
+        <button type="button" class="selection-callout-verb" aria-label="Selection: Edit Fillet" aria-pressed="true">Edit Fillet</button>
+        <button type="button" class="selection-callout-verb" aria-label="Selection: Remove Fillet" aria-pressed="false">Remove Fillet</button>
       </span>
-      <button type="button" class="tool-card-close" aria-label="Dismiss Edit Fillet"></button>
+      <button type="button" class="selection-callout-clear" aria-label="Deselect all">×</button>
+      <span class="selection-callout-diagnostic" role="alert">
+        <span class="selection-callout-error">The exact kernel could not build this result.</span>
+        <button type="button" class="selection-callout-recovery">View details</button>
+      </span>
     `;
     document.body.append(card);
 
@@ -394,13 +399,28 @@ test('opens long tool-card diagnostics in the Activity log', async ({
       </ol>
     `;
     document.body.append(log);
-    card.querySelector('.activity-log-link')?.addEventListener('click', () => {
-      log.hidden = false;
-    });
+    card
+      .querySelector('.selection-callout-recovery')
+      ?.addEventListener('click', () => {
+        log.hidden = false;
+      });
   });
 
   const card = page.getByRole('region', { name: 'Edit Fillet operation' });
   await expect(card).not.toContainText('resize-blend-failed');
+  // The refusal wraps inside the chip rather than stretching it: the row
+  // under the chip is exactly as wide as the chip.
+  const widths = await card.evaluate((element) => ({
+    chip: element.getBoundingClientRect().width,
+    row: element
+      .querySelector('.selection-callout-diagnostic')!
+      .getBoundingClientRect().width,
+    name: element
+      .querySelector('.selection-callout-name')!
+      .getBoundingClientRect().width
+  }));
+  expect(widths.row).toBeLessThanOrEqual(widths.chip);
+  expect(widths.chip).toBeLessThan(640);
   await card.getByRole('button', { name: 'View details' }).click();
   const log = page.getByRole('region', { name: 'Activity log' });
   await expect(log).toBeVisible();
@@ -812,7 +832,7 @@ test('snaps sketch drawing to existing endpoints', async ({ page }) => {
   const facePoint = await findFacePoint(page);
   await page.mouse.click(facePoint.x, facePoint.y);
   const card = page.getByRole('region', { name: 'Resize Body operation' });
-  await card.getByRole('tab', { name: 'Sketch' }).click();
+  await card.getByRole('button', { name: 'Selection: Sketch' }).click();
   await expect(
     page.getByRole('toolbar', { name: 'Sketch tools' })
   ).toBeVisible();
@@ -1077,14 +1097,18 @@ test('a consumed History feature lights its own faces and is named on the chip',
   });
   // No body is selected: the part is not lit whole.
   await expect(canvas).not.toHaveAttribute('data-e2e-selected-bodies', /.+/);
-  // Its faces ride the face highlight, or its consumed body is a ghost.
+  // Its faces are lit as a selected face is, or its consumed body is a
+  // ghost; never with the accent film of a blend preview (F8).
   await expect
     .poll(async () =>
       Number(
-        (await canvas.getAttribute('data-e2e-preview-blend-count')) ??
+        (await canvas.getAttribute('data-e2e-focus-faces')) ??
           (await canvas.getAttribute('data-e2e-focus-ghosts')) ??
           '0'
       )
     )
     .toBeGreaterThan(0);
+  await expect(canvas).not.toHaveAttribute('data-e2e-preview-blend-count');
+  // The rest of the part recedes behind them.
+  await expect(canvas).toHaveAttribute('data-e2e-selection-recedes', 'true');
 });

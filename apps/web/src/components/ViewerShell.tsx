@@ -1,5 +1,6 @@
 import type { ParameterPreviewBody } from '../lib/parameterVisualPreview';
 import type { HoleGhost } from '../lib/holeGhost';
+import type { AutoFrameRequest } from '../lib/autoFrame';
 import { useRef, type MutableRefObject, type ReactNode } from 'react';
 import {
   ModelViewer,
@@ -121,6 +122,7 @@ interface ViewerShellProps {
   pickListEnabled: boolean;
   settings: ViewerSettings;
   fitSignal: number;
+  autoFrame?: AutoFrameRequest | null;
   viewRequest: { view: ViewTarget; nonce: number } | null;
   normalToFaceRequest: NormalToFaceRequest | null;
   rotateRequest: { direction: 'cw' | 'ccw'; nonce: number } | null;
@@ -159,6 +161,8 @@ interface ViewerShellProps {
   selectionCallout: SelectionCalloutContent | null;
   /** Consumed bodies a History row brings into focus, drawn as ghosts. */
   focusGhostBodies?: readonly BodyRepresentation[];
+  /** The surviving faces a History row brings into focus, lit as selected. */
+  focusFaces?: readonly TopologySelection[];
   canUndo: boolean;
   canRedo: boolean;
   onUndo(): void;
@@ -275,6 +279,12 @@ interface ViewerShellProps {
   ): void;
   onToggleGrid(): void;
   onFit(): void;
+  /**
+   * Build's Measure toggle on the instrument rail. View and Tweak carry their
+   * own rail with Measure on it; absent, the button is not drawn.
+   */
+  measuring?: boolean;
+  onMeasure?(next: boolean): void;
   onView(view: ViewTarget): void;
   onRotateView(direction: 'cw' | 'ccw'): void;
   onCycleDisplayMode(): void;
@@ -306,6 +316,7 @@ export function ViewerShell({
   pickListEnabled,
   settings,
   fitSignal,
+  autoFrame = null,
   viewRequest,
   normalToFaceRequest,
   rotateRequest,
@@ -322,6 +333,7 @@ export function ViewerShell({
   viewMode = false,
   selectionCallout,
   focusGhostBodies,
+  focusFaces,
   canUndo,
   canRedo,
   onUndo,
@@ -387,6 +399,8 @@ export function ViewerShell({
   onContextMenu,
   onToggleGrid,
   onFit,
+  measuring = false,
+  onMeasure,
   onView,
   onRotateView,
   onCycleDisplayMode,
@@ -434,6 +448,8 @@ export function ViewerShell({
       onRedo={onRedo}
       onToggleGrid={onToggleGrid}
       onFit={onFit}
+      measuring={measuring}
+      {...(onMeasure ? { onMeasure } : {})}
       onView={onView}
       onCycleDisplayMode={onCycleDisplayMode}
       onToggleProjection={onToggleProjection}
@@ -487,11 +503,13 @@ export function ViewerShell({
         previewFaceHighlights={previewFaceHighlights}
         selectionCallout={selectionCallout}
         {...(focusGhostBodies ? { focusGhostBodies } : {})}
+        {...(focusFaces ? { focusFaces } : {})}
         selectedEdges={selectedEdges}
         pickListEnabled={pickListEnabled}
         settings={settings}
         exactSection={exactSection}
         fitSignal={fitSignal}
+        autoFrame={autoFrame}
         viewRequest={viewRequest}
         normalToFaceRequest={normalToFaceRequest}
         rotateRequest={rotateRequest}

@@ -3,7 +3,7 @@ import {
   composeCommands,
   type AnyCommand
 } from '@openzcad/command-system';
-import { listFeaturesInOrder } from '@openzcad/document-core';
+import { listFeaturesInOrder, numberedBodyName } from '@openzcad/document-core';
 import {
   isFeatureSuppressed,
   type BodyId,
@@ -122,15 +122,19 @@ export function primitivePlacement(
  * At the origin this is exactly the command the card always built, so a
  * default Create stores the same single feature it did before. Elsewhere it
  * is one undo step: the primitive plus its placement Move.
+ * The current document resolves the body's number into the command payload,
+ * so a placed primitive has the same name after undo, redo and replay.
  */
 export function createPrimitiveCommand(
   kind: PrimitiveKind,
   name: string,
   dimensions: Record<string, ParamValue>,
-  position: ParametricVector3
+  position: ParametricVector3,
+  document?: ProjectDocument | null
 ): AnyCommand {
   const add = commandFactories.addPrimitive({
     name,
+    ...(document ? { bodyName: numberedBodyName(document, name) } : {}),
     primitiveKind: kind,
     dimensions
   });

@@ -1,0 +1,43 @@
+/* ─────────────────────────────────────────────────────────────
+   Pointer targets of at least 24 × 24 px (WCAG 2.2, 2.5.8).
+
+   Controls drawn side by side (history-row and revision icons, parameter
+   row icons) are simply 24 px (sidebar.css, revisions.css), and the rename
+   button is 24 px tall (topbar.css): a reaching hit area there would only
+   take room from a neighbour. The controls below sit alone — the brand,
+   the view-roll buttons, 14 px section headers and an 8 px timeline thumb.
+   Each keeps its drawn size; an invisible ::after
+   reaches out to 24 px on any axis that is shorter, centred on the control,
+   so nothing in the layout moves. An axis already 24 px or longer gets an
+   inset of 0 and is hit-tested exactly as before.
+
+   The zero-specificity selector keeps `position: relative` from overriding
+   a control that is already positioned (the timeline thumb is absolute);
+   either way the control is the containing block for its ::after. None of
+   these controls draws an ::after of its own. Section titles and the brand
+   are matched as controls only: the same classes also style plain
+   headings, which must not grow a hit area over their neighbours. Each
+   reach lands in margin or padding, not on another small target.
+   ───────────────────────────────────────────────────────────── */
+
+:where(
+  button.brand,
+  .orientation-roll,
+  button.section-title,
+  summary.section-title,
+  .history-handle
+) {
+  position: relative;
+}
+
+:where(
+  button.brand,
+  .orientation-roll,
+  button.section-title,
+  summary.section-title,
+  .history-handle
+)::after {
+  content: '';
+  position: absolute;
+  inset: min(0px, calc((100% - 24px) / 2));
+}

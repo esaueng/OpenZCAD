@@ -25,7 +25,7 @@ describe('extrudeSketchGuidance', () => {
         { name: 'Sketch 01', closed: true },
         { name: 'Sketch 02', closed: true }
       ])
-    ).toBe('Extrude: click a shaded closed sketch profile to arm it.');
+    ).toBe('Extrude: click a shaded profile in the sketch to extrude it.');
   });
 
   it('lists several open sketches', () => {

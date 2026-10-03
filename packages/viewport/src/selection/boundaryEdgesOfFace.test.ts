@@ -1,6 +1,9 @@
 import { describe, expect, it } from 'vitest';
 import type { BodyTopology, EdgeTopology } from '@openzcad/shared';
-import { boundaryEdgesOfFace } from './boundaryEdgesOfFace';
+import {
+  boundaryEdgesOfFace,
+  boundaryEdgesOfFaces
+} from './boundaryEdgesOfFace';
 
 const BORE_HASH = 30;
 
@@ -85,5 +88,23 @@ describe('boundaryEdgesOfFace', () => {
 
   it('returns no edges for an unknown face hash', () => {
     expect(boundaryEdgesOfFace(BORED_BOSS, 999)).toEqual([]);
+  });
+});
+
+describe('boundaryEdgesOfFaces', () => {
+  it('rims several faces around their outline, not between them', () => {
+    // The top annulus and the bore lit together, as a History row lights
+    // every face its feature made: the rim they share is inside the region.
+    const outline = boundaryEdgesOfFaces(BORED_BOSS, [10, BORE_HASH]);
+    expect(outline.map((candidate) => candidate.topologyId)).toEqual([
+      'bottom-bore-rim',
+      'outer-top-rim'
+    ]);
+  });
+
+  it('is the single-face boundary for one face', () => {
+    expect(boundaryEdgesOfFaces(BORED_BOSS, [BORE_HASH])).toEqual(
+      boundaryEdgesOfFace(BORED_BOSS, BORE_HASH)
+    );
   });
 });

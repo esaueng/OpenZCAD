@@ -85,6 +85,7 @@ test('queries mass only on disclosure and refreshes it after edit, undo and expo
   const width = inspector.getByRole('textbox', { name: 'Width (X)' });
   await width.fill('20');
   await inspector.getByRole('button', { name: 'Apply', exact: true }).click();
+  await expect(inspector).toHaveCount(0);
   await selectBox();
   await expect(width).toHaveValue('20');
   expect((await observed()).requests).toBe(1);

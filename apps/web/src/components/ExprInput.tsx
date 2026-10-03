@@ -17,6 +17,12 @@ interface ExprInputProps {
    */
   autoFocus?: boolean;
   error?: string;
+  /**
+   * Accessible name when it should say more than the visible label — the
+   * Move card shows "dX" and names the field "Move X in mm", as the gizmo
+   * that creates a Move does.
+   */
+  ariaLabel?: string;
 }
 
 /**
@@ -32,7 +38,8 @@ export function ExprInput({
   placeholder,
   optional,
   autoFocus,
-  error
+  error,
+  ariaLabel
 }: ExprInputProps) {
   const id = useId();
   const mayAutoFocus = useFieldAutoFocus(autoFocus);
@@ -61,7 +68,8 @@ export function ExprInput({
           // Unknown identifier "w"" the next — a name that changes as you
           // type. Point the name at the label text and let the preview be a
           // description that announces itself when it changes.
-          aria-labelledby={`${id}-label`}
+          aria-label={ariaLabel}
+          aria-labelledby={ariaLabel ? undefined : `${id}-label`}
           aria-describedby={showPreview ? `${id}-preview` : undefined}
           aria-invalid={showError || undefined}
           onFocus={(event) => event.currentTarget.select()}

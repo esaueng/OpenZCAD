@@ -300,9 +300,31 @@
   gap: 6px;
   padding: 2px 2px 2px 8px;
   user-select: none;
+  /* Above the right lane. The viewer slides the chip out from under the
+     panels where there is room (clampNameCallouts); on a phone there is
+     none, and a chip drawn under the drawer would carry verbs and a way
+     out of a refusal that no press can reach. Important because the label
+     renderer rewrites each label's inline z-index every frame. */
+  z-index: calc(var(--z-inspector-float) + 1) !important;
 }
 
-.selection-callout-chip :is(.selection-callout-verb, .selection-callout-clear) {
+/* A phone is narrower than the chip with its verbs on one line: they wrap
+   under the name instead of running off the screen. After the base rule,
+   which it overrides at equal specificity. */
+@media (max-width: 640px) {
+  .selection-callout.selection-callout-chip {
+    flex-wrap: wrap;
+    row-gap: 2px;
+    max-width: calc(100vw - 24px);
+  }
+}
+
+.selection-callout-chip
+  :is(
+    .selection-callout-verb,
+    .selection-callout-clear,
+    .selection-callout-recovery
+  ) {
   pointer-events: auto;
 }
 
@@ -376,6 +398,105 @@
 .selection-callout-clear:hover {
   opacity: 1;
   background: rgba(129, 169, 255, 0.18);
+}
+
+/* The operation a pick armed rides the chip (F11): its phase as a pill
+   beside the measurement, its refusal on a row of its own underneath. The
+   chip wraps for that row only; everything above it stays on one line. */
+.selection-callout.selection-callout-chip:has(> .selection-callout-diagnostic) {
+  flex-wrap: wrap;
+  row-gap: 4px;
+  padding-bottom: 4px;
+}
+
+.selection-callout-phase {
+  flex: 0 0 auto;
+  padding: 0 6px;
+  color: var(--color-viewport-text-muted);
+  border: 1px solid rgba(255, 255, 255, 0.16);
+  border-radius: var(--radius-md);
+  font-family: var(--font-ui);
+  font-size: var(--fs-mini);
+  line-height: 16px;
+  transition:
+    color var(--dur-base) var(--ease-out),
+    border-color var(--dur-base) var(--ease-out);
+}
+
+/* The chip keeps its dark stage in every theme, so its tones are the
+   viewport's own, which never re-theme, not the chrome's accent and error. */
+.selection-callout-phase.phase-exact-entry {
+  color: var(--color-preselect);
+  border-color: rgba(129, 169, 255, 0.45);
+}
+
+.selection-callout-phase.phase-validating {
+  color: var(--color-preview);
+  border-color: rgba(72, 205, 143, 0.4);
+}
+
+.selection-callout-phase.phase-failed {
+  color: #fca5a5;
+  border-color: rgba(239, 68, 68, 0.55);
+}
+
+/* Mid-drag the value on the handle is the reading; the phase shrinks to a
+   mark, as the card's did. */
+.selection-callout-phase-dot {
+  flex: 0 0 auto;
+  width: 7px;
+  height: 7px;
+  background: var(--color-preselect);
+  border-radius: 999px;
+  box-shadow: 0 0 0 3px rgba(103, 152, 255, 0.14);
+}
+
+.selection-callout-badge {
+  color: var(--color-preview);
+  font-family: var(--font-ui);
+  font-size: var(--fs-mini);
+  text-decoration: underline dotted;
+  cursor: help;
+  pointer-events: auto;
+}
+
+/* No width of its own (`width: 0`), so a long refusal never widens the
+   chip; `min-width: 100%` then gives it the chip's full width on a line of
+   its own, and the sentence wraps inside it. */
+.selection-callout-diagnostic {
+  display: flex;
+  flex: 0 0 auto;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 4px 6px;
+  box-sizing: border-box;
+  width: 0;
+  min-width: 100%;
+  padding: 4px 6px;
+  white-space: normal;
+  font-family: var(--font-ui);
+  border: 1px solid rgba(239, 68, 68, 0.7);
+  border-radius: var(--radius-sm);
+  background: rgba(239, 68, 68, 0.14);
+}
+
+.selection-callout-error {
+  flex: 1 0 100%;
+  color: var(--color-viewport-text);
+}
+
+.selection-callout-recovery {
+  min-height: 0;
+  padding: 2px 7px;
+  color: inherit;
+  font-size: var(--fs-mini);
+  background: rgba(255, 255, 255, 0.08);
+  border: 1px solid rgba(255, 255, 255, 0.16);
+  border-radius: var(--radius-sm);
+}
+
+.selection-callout-recovery:hover {
+  background: rgba(255, 255, 255, 0.16);
 }
 
 .selection-callout.body-order-callout {

@@ -53,18 +53,23 @@ test('selects all edges from the fillet card, previews joined corners, and survi
       { timeout: 30_000 }
     )
     .toBe(true);
-  const card = page.locator('.tool-card');
+  // The edge pick's operation rides the selection chip (F11).
+  const card = page.locator('.selection-callout-chip');
   await expect(card).toHaveAttribute('aria-label', 'Fillet operation');
-  await card.getByRole('tab', { name: 'Chamfer', exact: true }).click();
+  await card
+    .getByRole('button', { name: 'Selection: Chamfer', exact: true })
+    .click();
   await page.setViewportSize({ width: 390, height: 844 });
   const selectAll = card.getByRole('button', { name: 'Select all 12 edges' });
   await expect(selectAll).toBeVisible();
   await page.screenshot({ path: testInfo.outputPath('zcad-all-edge-mobile.png') });
   await selectAll.click();
   await expect(
-    card.getByRole('tab', { name: 'Chamfer', exact: true })
-  ).toHaveAttribute('aria-selected', 'true');
-  await card.getByRole('tab', { name: 'Fillet', exact: true }).click();
+    card.getByRole('button', { name: 'Selection: Chamfer', exact: true })
+  ).toHaveAttribute('aria-pressed', 'true');
+  await card
+    .getByRole('button', { name: 'Selection: Fillet', exact: true })
+    .click();
   await page.setViewportSize({ width: 1440, height: 1000 });
   await expect(card).toContainText('12 edges');
   await expect(card.getByRole('button', { name: /Select all/ })).toHaveCount(0);

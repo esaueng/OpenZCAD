@@ -58,7 +58,11 @@ test('suppresses features and rolls the timeline back as one undoable edit', asy
   await expect(cylinder).toContainText('paused');
   await expectBodyCount(page, 1);
 
-  await page.getByRole('button', { name: 'Undo' }).click();
+  // The viewer bar's Undo: the suppress toast carries an Undo of its own.
+  await page
+    .getByRole('toolbar', { name: 'Viewer bar' })
+    .getByRole('button', { name: 'Undo' })
+    .click();
   await expect(cylinder).not.toContainText('paused');
   await expectBodyCount(page, 2);
   await page.getByRole('button', { name: 'Redo' }).click();
@@ -215,10 +219,9 @@ test('resizes a cylinder wall concentrically with one undoable radius edit', asy
     'Ø 40 mm'
   );
   // Dragging collapses the card to its accessible status marker (778d539e).
-  await expect(radiusOperation.locator('.tool-card-phase-dot')).toHaveAttribute(
-    'aria-label',
-    'Dragging'
-  );
+  await expect(
+    radiusOperation.locator('.selection-callout-phase-dot')
+  ).toHaveAttribute('aria-label', 'Dragging');
   await page.keyboard.press('Escape');
   await expect(page.getByTestId('direct-manipulation-value')).toHaveText(
     'Ø 36 mm'
@@ -389,9 +392,9 @@ test('switches a planar-face selection into an editable arc sketch', async ({
   });
   await expect(offsetCard).toBeVisible();
   await expect(
-    offsetCard.getByRole('tab', { name: 'Resize body' })
-  ).toHaveAttribute('aria-selected', 'true');
-  await offsetCard.getByRole('tab', { name: 'Sketch' }).click();
+    offsetCard.getByRole('button', { name: 'Selection: Resize' })
+  ).toHaveAttribute('aria-pressed', 'true');
+  await offsetCard.getByRole('button', { name: 'Selection: Sketch' }).click();
 
   const sketchTools = page.getByRole('toolbar', { name: 'Sketch tools' });
   await expect(sketchTools).toBeVisible();
@@ -490,7 +493,7 @@ test('shows and recovers a stale face-attached sketch when its source is suppres
   await page.mouse.click(facePoint!.x, facePoint!.y);
   await page
     .getByRole('region', { name: 'Resize Body operation' })
-    .getByRole('tab', { name: 'Sketch' })
+    .getByRole('button', { name: 'Selection: Sketch' })
     .click();
 
   const sketchTools = page.getByRole('toolbar', { name: 'Sketch tools' });
@@ -582,7 +585,7 @@ test('keeps face sketching available after a primitive direct edit', async ({
   await selectOffsetFace();
   await page
     .getByRole('region', { name: 'Resize Body operation' })
-    .getByRole('tab', { name: 'Offset Face', exact: true })
+    .getByRole('button', { name: 'Selection: Offset', exact: true })
     .click();
   // Moving a face reads the change by default (Resize body read the total);
   // the tag beside the value is the switch to the whole span.
@@ -600,13 +603,15 @@ test('keeps face sketching available after a primitive direct edit', async ({
   await selectOffsetFace();
   await page
     .getByRole('region', { name: 'Resize Body operation' })
-    .getByRole('tab', { name: 'Offset Face', exact: true })
+    .getByRole('button', { name: 'Selection: Offset', exact: true })
     .click();
   const offsetCard = page.getByRole('region', {
     name: 'Offset Face operation'
   });
   await expect(offsetCard).toBeVisible();
-  const sketchAction = offsetCard.getByRole('tab', { name: 'Sketch' });
+  const sketchAction = offsetCard.getByRole('button', {
+    name: 'Selection: Sketch'
+  });
   await expect(sketchAction).toBeEnabled();
   await sketchAction.click();
   await expect(
@@ -1041,6 +1046,8 @@ test('infers and stores an additive extrude from exact overlap', async ({
   await inspector.getByRole('textbox', { name: /^Distance/ }).fill('32');
   await inspector.getByRole('button', { name: /^Apply/ }).click();
   await expect(page.getByRole('contentinfo')).toContainText('Edit Extrude');
+  await expect(inspector).toHaveCount(0);
+  await extrudeFeature.click();
   await expect(inspector.getByLabel('Stored extrude operation')).toHaveValue(
     'add'
   );
@@ -1242,9 +1249,11 @@ test('keeps a two-rim fillet while editing a cylinder from 4.6 to 6.4 mm', async
   await expect(fillet.getByTitle('Feature failed to build')).toHaveCount(0);
   await expectBodyCount(page, 1);
   await expect(page.getByText('Diagnostics', { exact: true })).toHaveCount(0);
+  await expect(inspector).toHaveCount(0);
 
   // A radius smaller than the stored 1 mm fillet is invalid. Exact preflight
   // must refuse it without adding an undo entry or changing the live document.
+  await cylinder.locator('.feature-row-main').click();
   await inspector.getByLabel('Radius', { exact: true }).fill('0.5');
   await inspector.getByRole('button', { name: /^Apply/ }).click();
   await expect(page.getByRole('contentinfo')).toContainText(
@@ -1465,7 +1474,7 @@ test('preflights and splits a box into two live half bodies', async ({
   // One press checks the exact result and, when it builds, commits it.
   await page.getByRole('button', { name: 'Create split body' }).click();
   await expect(
-    page.getByRole('button', { name: /^Checking exact result/ })
+    page.getByRole('button', { name: /^Checking the result/ })
   ).toHaveCount(0, { timeout: 20_000 });
 
   await expect(
@@ -1474,9 +1483,9 @@ test('preflights and splits a box into two live half bodies', async ({
   // The input is consumed; its two halves are live bodies of their own.
   await expectConsumedBodyCount(page, 1);
   await page.locator('.consumed-toggle').click();
-  await expect(page.locator('.body-row.consumed')).toContainText('Box Body');
+  await expect(page.locator('.body-row.consumed')).toContainText('Box 1');
   await expect(
-    page.locator('.body-row', { hasText: 'Box Body (back)' })
+    page.locator('.body-row', { hasText: 'Box 1 (back)' })
   ).toBeVisible();
   await expectBodyCount(page, 2);
   await expect(page.getByRole('contentinfo')).toContainText('warnings0');
@@ -1536,10 +1545,9 @@ test('preflights and drills a through hole into the top face', async ({
   expect(await topFace(true)).toMatchObject({
     lineageName: 'primitive.box.face.z-max'
   });
-  await expect(entry.getByRole('button', { name: /Top face/ })).toHaveAttribute(
-    'aria-pressed',
-    'true'
-  );
+  await expect(
+    entry.getByRole('button', { name: /Box 1 · top/ })
+  ).toHaveAttribute('aria-pressed', 'true');
   await expect(
     page.getByRole('region', { name: 'Offset Face operation' })
   ).toHaveCount(0);
@@ -1549,7 +1557,7 @@ test('preflights and drills a through hole into the top face', async ({
   // One press checks the exact result and, when it builds, commits it.
   await page.getByRole('button', { name: 'Create hole' }).click();
   await expect(
-    page.getByRole('button', { name: /^Checking exact result/ })
+    page.getByRole('button', { name: /^Checking the result/ })
   ).toHaveCount(0, { timeout: 20_000 });
 
   await expect(
@@ -1557,36 +1565,42 @@ test('preflights and drills a through hole into the top face', async ({
   ).toBeVisible();
   await expectConsumedBodyCount(page, 1);
   await page.locator('.consumed-toggle').click();
-  await expect(page.locator('.body-row.consumed')).toContainText('Box Body');
+  await expect(page.locator('.body-row.consumed')).toContainText('Box 1');
   await expectBodyCount(page, 1);
   await expect(page.getByRole('contentinfo')).toContainText('warnings0');
 
   // A hole is editable after creation: its row reopens the same form,
-  // prefilled, and Apply patches the feature instead of adding another.
-  await page.locator('.feature-row-main', { hasText: 'Hole' }).click();
+  // prefilled — with no "Edit hole" step in front of it (F19) — and Apply
+  // patches the feature instead of adding another, then closes the card.
   const inspector = page.getByRole('region', { name: 'Feature inspector' });
-  const volumeBefore = await inspector.getByText(/mm³/).first().textContent();
-  await inspector.getByRole('button', { name: 'Edit hole' }).click();
+  const liveVolume = async () => {
+    await page.locator('.body-row:not(.consumed) .body-row-main').click();
+    const volume = await inspector.getByText(/mm³/).first().textContent();
+    await page.keyboard.press('Escape');
+    await expect(inspector).toHaveCount(0);
+    return volume;
+  };
+  const volumeBefore = await liveVolume();
+  await page.locator('.feature-row-main', { hasText: 'Hole' }).click();
   await expect(
     page.getByRole('textbox', { name: 'Diameter', exact: true })
   ).toHaveValue('5');
-  await expect(entry.getByRole('button', { name: /Top face/ })).toHaveAttribute(
-    'aria-pressed',
-    'true'
-  );
+  await expect(
+    entry.getByRole('button', { name: /Box 1 · top/ })
+  ).toHaveAttribute('aria-pressed', 'true');
   await page.getByRole('textbox', { name: 'Diameter', exact: true }).fill('8');
   // One press checks the exact result and, when it builds, commits it.
   await page.getByRole('button', { name: 'Apply hole' }).click();
   await expect(
-    page.getByRole('button', { name: /^Checking exact result/ })
+    page.getByRole('button', { name: /^Checking the result/ })
   ).toHaveCount(0, { timeout: 20_000 });
   await expect(page.getByRole('contentinfo')).toContainText('Edited Hole.');
   await expect(page.locator('.feature-row', { hasText: /^Hole/ })).toHaveCount(
     1
   );
   await expectBodyCount(page, 1);
-  await page.locator('.feature-row-main', { hasText: 'Hole' }).click();
-  const volumeAfter = await inspector.getByText(/mm³/).first().textContent();
+  await expect(inspector).toHaveCount(0);
+  const volumeAfter = await liveVolume();
   expect(volumeAfter).not.toEqual(volumeBefore);
   await expect(page.getByRole('contentinfo')).toContainText('warnings0');
   expect(consoleErrors).toEqual([]);
@@ -1612,11 +1626,11 @@ test('preflights and creates an exact open-top shell', async ({ page }) => {
 
   await page.getByRole('button', { name: /^Shell/ }).click();
   const openings = page.getByRole('group', { name: 'Opening faces' });
-  await openings.getByRole('button', { name: /Top face/ }).click();
+  await openings.getByRole('button', { name: /Box 1 · top/ }).click();
   // One press checks the exact result and, when it builds, commits it.
   await page.getByRole('button', { name: 'Create shell' }).click();
   await expect(
-    page.getByRole('button', { name: /^Checking exact result/ })
+    page.getByRole('button', { name: /^Checking the result/ })
   ).toHaveCount(0, { timeout: 20_000 });
 
   await expect(
@@ -1624,35 +1638,42 @@ test('preflights and creates an exact open-top shell', async ({ page }) => {
   ).toBeVisible();
   await expectConsumedBodyCount(page, 1);
   await page.locator('.consumed-toggle').click();
-  await expect(page.locator('.body-row.consumed')).toContainText('Box Body');
+  await expect(page.locator('.body-row.consumed')).toContainText('Box 1');
   await expectBodyCount(page, 1);
   await expect(page.getByRole('contentinfo')).toContainText('warnings0');
 
-  // The shell is editable afterwards through the same form, prefilled.
-  await page.locator('.feature-row-main', { hasText: 'Shell' }).click();
+  // The shell is editable afterwards through the same form, prefilled, which
+  // its row opens directly (F19).
   const inspector = page.getByRole('region', { name: 'Feature inspector' });
-  const volumeBefore = await inspector.getByText(/mm³/).first().textContent();
-  await inspector.getByRole('button', { name: 'Edit shell' }).click();
+  const liveVolume = async () => {
+    await page.locator('.body-row:not(.consumed) .body-row-main').click();
+    const volume = await inspector.getByText(/mm³/).first().textContent();
+    await page.keyboard.press('Escape');
+    await expect(inspector).toHaveCount(0);
+    return volume;
+  };
+  const volumeBefore = await liveVolume();
+  await page.locator('.feature-row-main', { hasText: 'Shell' }).click();
   const thickness = page.getByRole('textbox', {
     name: 'Wall thickness',
     exact: true
   });
   await expect(thickness).toHaveValue('2');
   await expect(
-    openings.getByRole('button', { name: /Top face/ })
+    openings.getByRole('button', { name: /Box 1 · top/ })
   ).toHaveAttribute('aria-pressed', 'true');
   await thickness.fill('3');
   // One press checks the exact result and, when it builds, commits it.
   await page.getByRole('button', { name: 'Apply shell' }).click();
   await expect(
-    page.getByRole('button', { name: /^Checking exact result/ })
+    page.getByRole('button', { name: /^Checking the result/ })
   ).toHaveCount(0, { timeout: 20_000 });
   await expect(page.getByRole('contentinfo')).toContainText('Edited Shell.');
   await expect(page.locator('.feature-row', { hasText: /^Shell/ })).toHaveCount(
     1
   );
-  await page.locator('.feature-row-main', { hasText: 'Shell' }).click();
-  const volumeAfter = await inspector.getByText(/mm³/).first().textContent();
+  await expect(inspector).toHaveCount(0);
+  const volumeAfter = await liveVolume();
   expect(volumeAfter).not.toEqual(volumeBefore);
   await expect(page.getByRole('contentinfo')).toContainText('warnings0');
   expect(consoleErrors).toEqual([]);
@@ -2896,8 +2917,8 @@ test('models a parametric part and exports a true STEP file', async ({
   ).toBeVisible();
 
   await page.getByRole('button', { name: /^Subtract \(X\)/ }).click();
-  await page.locator('.pick-row', { hasText: 'Box Body' }).click();
-  await page.locator('.pick-row', { hasText: 'Cylinder Body' }).click();
+  await page.locator('.pick-row', { hasText: 'Box 1' }).click();
+  await page.locator('.pick-row', { hasText: 'Cylinder 1' }).click();
   await page
     .getByRole('region', { name: 'Feature inspector' })
     .getByRole('button', { name: /^Create/ })
@@ -3266,8 +3287,8 @@ test('rejects a disconnected Union and succeeds after the gap is closed', async 
   await expect(inspector).toContainText(
     'Union joins solids that touch or overlap. It does not fill empty gaps.'
   );
-  await inspector.locator('.pick-row', { hasText: 'Lower Body' }).click();
-  await inspector.locator('.pick-row', { hasText: 'Upper Body' }).click();
+  await inspector.locator('.pick-row', { hasText: 'Lower 1' }).click();
+  await inspector.locator('.pick-row', { hasText: 'Upper 1' }).click();
   await inspector.getByRole('button', { name: /^Create/ }).click();
 
   await expect(page.getByRole('contentinfo')).toContainText(
@@ -3287,9 +3308,9 @@ test('rejects a disconnected Union and succeeds after the gap is closed', async 
   // A history-selected in-place edit now retains its result body as the
   // next command's selection. Verify that handoff, then add the other body.
   await expect(
-    inspector.locator('.pick-row', { hasText: 'Upper Body' })
+    inspector.locator('.pick-row', { hasText: 'Upper 1' })
   ).toHaveClass(/selected/);
-  await inspector.locator('.pick-row', { hasText: 'Lower Body' }).click();
+  await inspector.locator('.pick-row', { hasText: 'Lower 1' }).click();
   await expect(inspector.locator('.pick-row.selected')).toHaveCount(2);
   await inspector.getByRole('button', { name: /^Create/ }).click();
 
@@ -3341,6 +3362,333 @@ test('M opens the move gizmo overlay and applies an exact move', async ({
   );
 });
 
+/**
+ * F15: opening Union over a Move card holding dX 60 left both cards open and
+ * the move uncommitted. One command card holds the lane: an unapplied Move is
+ * applied or discarded first (asked once, in-page — a native confirm is
+ * answered Cancel unseen in embedded browsers), and a Move still at zero
+ * simply closes.
+ */
+test('opening a tool over an unapplied Move asks once and never stacks two cards', async ({
+  page
+}) => {
+  await stubApi(page);
+  await page.goto('/');
+  await page.getByLabel('Project name').fill('One Card Part');
+  await page.getByRole('button', { name: 'Create project' }).click();
+  const inspector = page.getByRole('region', { name: 'Feature inspector' });
+  for (const name of ['Lower', 'Upper']) {
+    await page.getByRole('button', { name: /^Box \(B\)/ }).click();
+    await inspector.getByLabel('Name').fill(name);
+    await inspector.getByRole('button', { name: /^Create/ }).click();
+  }
+  await expect(page.locator('.feature-row')).toHaveCount(2);
+
+  const move = page.getByRole('form', { name: 'Move controls' });
+  const ask = page.getByRole('alertdialog', { name: 'Apply the Move first?' });
+  const unionCard = inspector.getByText(
+    'Union joins solids that touch or overlap.'
+  );
+  const moveRows = page.locator('.feature-row', { hasText: 'Move' });
+  const openPendingMove = async () => {
+    await page.getByRole('button', { name: /^Move \(M\)/ }).click();
+    await move.getByLabel('Move X in mm').fill('60');
+    await page.getByRole('button', { name: /^Union \(U\)/ }).click();
+    await expect(ask).toBeVisible();
+    await expect(ask).toContainText('before Union opens');
+  };
+
+  // Cancel keeps the Move card, its value and nothing else.
+  await openPendingMove();
+  await ask.getByRole('button', { name: 'Cancel' }).click();
+  await expect(ask).toHaveCount(0);
+  await expect(move).toBeVisible();
+  await expect(move.getByLabel('Move X in mm')).toHaveValue('60');
+  await expect(inspector).toHaveCount(0);
+
+  // Discard closes the Move uncommitted and Union opens alone.
+  await page.getByRole('button', { name: /^Union \(U\)/ }).click();
+  await ask.getByRole('button', { name: 'Discard' }).click();
+  await expect(move).toHaveCount(0);
+  await expect(unionCard).toBeVisible();
+  await expect(moveRows).toHaveCount(0);
+  await page.keyboard.press('Escape');
+  await expect(inspector).toHaveCount(0);
+
+  // Apply commits the move first, then Union opens alone.
+  await openPendingMove();
+  await ask.getByRole('button', { name: 'Apply' }).click();
+  await expect(move).toHaveCount(0);
+  await expect(moveRows).toHaveCount(1);
+  await expect(unionCard).toBeVisible();
+  await page.keyboard.press('Escape');
+  await expect(inspector).toHaveCount(0);
+
+  // A Move with nothing to apply asks nothing: it just gives way.
+  await page.getByRole('button', { name: /^Move \(M\)/ }).click();
+  await expect(move).toBeVisible();
+  await page.getByRole('button', { name: /^Union \(U\)/ }).click();
+  await expect(unionCard).toBeVisible();
+  await expect(move).toHaveCount(0);
+  await expect(ask).toHaveCount(0);
+  await expect(moveRows).toHaveCount(1);
+});
+
+test('opening a history editor preserves an unapplied Move until its choice is settled', async ({
+  page
+}) => {
+  await stubApi(page);
+  await page.goto('/');
+  await page.getByLabel('Project name').fill('Deferred History Edit');
+  await page.getByRole('button', { name: 'Create project' }).click();
+  const inspector = page.getByRole('region', { name: 'Feature inspector' });
+  await page.getByRole('button', { name: /^Box \(B\)/ }).click();
+  await inspector.getByRole('button', { name: /^Create/ }).click();
+  await page.getByRole('button', { name: /^Split/ }).click();
+  await inspector.getByLabel('Name', { exact: true }).fill('Existing split');
+  await inspector
+    .getByRole('group', { name: 'Plane origin' })
+    .getByLabel('X', { exact: true })
+    .fill('5');
+  await inspector.getByRole('button', { name: 'Create split body' }).click();
+  const row = page.locator('.feature-row-main', { hasText: 'Existing split' });
+  await expect(row).toBeVisible();
+  await expectBodyCount(page, 2);
+
+  const move = page.getByRole('form', { name: 'Move controls' });
+  const ask = page.getByRole('alertdialog', { name: 'Apply the Move first?' });
+  const moveTool = page.getByRole('button', { name: /^Move \(M\)/ });
+  const canvas = page.locator('.viewer-host canvas');
+  const selectedRows = page.locator('.feature-row-main[aria-pressed="true"]');
+  const openPendingEdit = async () => {
+    await moveTool.click();
+    await move.getByLabel('Move X in mm').fill('3');
+    await expect(moveTool).toHaveAttribute('aria-pressed', 'true');
+    await expect(canvas).toHaveAttribute('data-e2e-move-gizmo-x', /.+/);
+    const target = await move
+      .getByRole('combobox', { name: 'Body', exact: true })
+      .inputValue();
+    const history = await selectedRows.allTextContents();
+    const bodies = await canvas.getAttribute('data-e2e-selected-bodies');
+    expect(bodies).not.toBeNull();
+    await row.click();
+    await expect(ask).toBeVisible();
+    await expect(ask).toContainText('before Existing split opens');
+    return { target, history, bodies: bodies! };
+  };
+  const moveRows = page.locator('.feature-row', { hasText: /^Move/ });
+
+  // A row click must ask before tearing down the Move: Cancel leaves its
+  // armed tool, selection and editor exactly as they were before the click.
+  const before = await openPendingEdit();
+  await ask.getByRole('button', { name: 'Cancel' }).click();
+  await expect(ask).toHaveCount(0);
+  await expect(moveTool).toHaveAttribute('aria-pressed', 'true', {
+    timeout: 5_000
+  });
+  await expect(move.getByLabel('Move X in mm')).toHaveValue('3');
+  await expect(
+    move.getByRole('combobox', { name: 'Body', exact: true })
+  ).toHaveValue(before.target);
+  await expect(selectedRows).toHaveText(before.history);
+  await expect(canvas).toHaveAttribute(
+    'data-e2e-selected-bodies',
+    before.bodies
+  );
+  await expect(canvas).toHaveAttribute('data-e2e-move-gizmo-x', /.+/);
+  await expect(inspector).toHaveCount(0);
+  await expect(moveRows).toHaveCount(0);
+
+  // Discard opens that existing feature with its saved parameters and does
+  // not append a Move or accidentally open a new-feature form.
+  await row.click();
+  await expect(ask).toBeVisible();
+  await ask.getByRole('button', { name: 'Discard' }).click();
+  await expect(move).toHaveCount(0);
+  await expect(
+    inspector.getByRole('heading', { name: 'Existing split' })
+  ).toBeVisible();
+  await expect(
+    inspector.getByRole('button', { name: 'Apply split body' })
+  ).toBeVisible();
+  await expect(
+    inspector
+      .getByRole('group', { name: 'Plane origin' })
+      .getByLabel('X', { exact: true })
+  ).toHaveValue('5');
+  await expect(moveRows).toHaveCount(0);
+  await inspector.getByRole('button', { name: 'Cancel', exact: true }).click();
+
+  // Apply commits exactly one Move, then opens the same saved history edit.
+  const applying = await openPendingEdit();
+  await ask.getByRole('button', { name: 'Apply' }).click();
+  await expect(move).toHaveCount(0);
+  await expect(moveRows).toHaveCount(1);
+  await expect(
+    inspector.getByRole('heading', { name: 'Existing split' })
+  ).toBeVisible();
+  await expect(
+    inspector.getByRole('button', { name: 'Apply split body' })
+  ).toBeVisible();
+  await expect(row).toBeVisible();
+  await expect(row).toHaveAttribute('aria-pressed', 'true');
+  await inspector.getByRole('button', { name: 'Cancel', exact: true }).click();
+  await moveRows.locator('.feature-row-main').click();
+  await expect(
+    inspector.getByRole('combobox', { name: 'Body', exact: true })
+  ).toHaveValue(applying.target);
+  await expect(inspector.getByLabel('Move X in mm')).toHaveValue('3');
+});
+
+test('opening a primitive history editor settles an unapplied Move before changing selection', async ({
+  page
+}) => {
+  await stubApi(page);
+  await page.goto('/');
+  await page.getByLabel('Project name').fill('Deferred Primitive History Edit');
+  await page.getByRole('button', { name: 'Create project' }).click();
+  const inspector = page.getByRole('region', { name: 'Feature inspector' });
+  for (const name of ['Original box', 'Other box']) {
+    await page.getByRole('button', { name: /^Box \(B\)/ }).click();
+    await inspector.getByLabel('Name', { exact: true }).fill(name);
+    await inspector.getByLabel('Width (X)').fill('10');
+    await inspector.getByRole('button', { name: /^Create/ }).click();
+    await expect(inspector).toHaveCount(0);
+  }
+  await expectBodyCount(page, 2);
+  const row = page.locator('.feature-row-main', {
+    hasText: /^Original box$/
+  });
+  const moveTool = page.getByRole('button', { name: /^Move \(M\)/ });
+  const move = page.getByRole('form', { name: 'Move controls' });
+  const ask = page.getByRole('alertdialog', { name: 'Apply the Move first?' });
+  const canvas = page.locator('.viewer-host canvas');
+  const selectedRows = page.locator('.feature-row-main[aria-pressed="true"]');
+  const openPendingEdit = async () => {
+    await moveTool.click();
+    await move.getByLabel('Move X in mm').fill('4');
+    const target = await move
+      .getByRole('combobox', { name: 'Body', exact: true })
+      .inputValue();
+    await expect(canvas).toHaveAttribute('data-e2e-selected-bodies', /.+/);
+    const bodies = (await canvas.getAttribute('data-e2e-selected-bodies'))!;
+    const history = await selectedRows.allTextContents();
+    await row.click();
+    await expect(ask).toBeVisible({ timeout: 5_000 });
+    await expect(ask).toContainText('before Original box opens');
+    return { target, bodies, history };
+  };
+  const moveRows = page.locator('.feature-row', { hasText: /^Move/ });
+  const before = await openPendingEdit();
+  await ask.getByRole('button', { name: 'Cancel' }).click();
+  await expect(moveTool).toHaveAttribute('aria-pressed', 'true');
+  await expect(move.getByLabel('Move X in mm')).toHaveValue('4');
+  await expect(
+    move.getByRole('combobox', { name: 'Body', exact: true })
+  ).toHaveValue(before.target);
+  await expect(canvas).toHaveAttribute(
+    'data-e2e-selected-bodies',
+    before.bodies
+  );
+  await expect(canvas).toHaveAttribute('data-e2e-move-gizmo-x', /.+/);
+  await expect(selectedRows).toHaveText(before.history);
+  await expect(inspector).toHaveCount(0);
+  await expect(moveRows).toHaveCount(0);
+
+  await row.click();
+  await expect(ask).toBeVisible();
+  await ask.getByRole('button', { name: 'Discard' }).click();
+  await expect(move).toHaveCount(0);
+  await expect(row).toHaveAttribute('aria-pressed', 'true');
+  await expect(
+    inspector.getByRole('heading', { name: 'Original box' })
+  ).toBeVisible();
+  await expect(inspector.getByLabel('Width (X)')).toHaveValue('10');
+  await expect(moveRows).toHaveCount(0);
+  await page.keyboard.press('Escape');
+
+  const applying = await openPendingEdit();
+  await ask.getByRole('button', { name: 'Apply' }).click();
+  await expect(move).toHaveCount(0);
+  await expect(moveRows).toHaveCount(1);
+  await expect(row).toHaveAttribute('aria-pressed', 'true');
+  await expect(
+    inspector.getByRole('heading', { name: 'Original box' })
+  ).toBeVisible();
+  await expect(inspector.getByLabel('Width (X)')).toHaveValue('10');
+  await page.keyboard.press('Escape');
+  await moveRows.locator('.feature-row-main').click();
+  await expect(
+    inspector.getByRole('combobox', { name: 'Body', exact: true })
+  ).toHaveValue(applying.target);
+  await expect(inspector.getByLabel('Move X in mm')).toHaveValue('4');
+});
+
+test('opening Measure over an unapplied Move settles the card from the ruler and palette', async ({
+  page
+}) => {
+  await stubApi(page);
+  await page.goto('/');
+  await page.getByLabel('Project name').fill('Deferred Measure');
+  await page.getByRole('button', { name: 'Create project' }).click();
+  const inspector = page.getByRole('region', { name: 'Feature inspector' });
+  for (let index = 0; index < 2; index += 1) {
+    await page.getByRole('button', { name: /^Box \(B\)/ }).click();
+    await inspector.getByRole('button', { name: /^Create/ }).click();
+  }
+  await expectBodyCount(page, 2);
+  const move = page.getByRole('form', { name: 'Move controls' });
+  const ask = page.getByRole('alertdialog', { name: 'Apply the Move first?' });
+  const workbench = page.getByLabel('Measurement workbench');
+  const ruler = page
+    .getByRole('toolbar', { name: 'Viewer bar' })
+    .getByRole('button', { name: 'Measure', exact: true });
+  const moveRows = page.locator('.feature-row', { hasText: /^Move/ });
+  const openMove = async () => {
+    await page.getByRole('button', { name: /^Move \(M\)/ }).click();
+    await move.getByLabel('Move X in mm').fill('7');
+  };
+  const measureFromPalette = async () => {
+    await page.keyboard.press('Control+k');
+    const prompt = page.getByRole('combobox', { name: 'Search commands' });
+    await prompt.fill('/measure');
+    await prompt.press('Enter');
+    await expect(ask).toBeVisible();
+    await expect(ask).toContainText('before Measure opens');
+  };
+
+  await openMove();
+  const target = await move
+    .getByRole('combobox', { name: 'Body', exact: true })
+    .inputValue();
+  await ruler.click();
+  await expect(ask).toBeVisible();
+  await ask.getByRole('button', { name: 'Cancel' }).click();
+  await expect(move.getByLabel('Move X in mm')).toHaveValue('7');
+  await expect(
+    move.getByRole('combobox', { name: 'Body', exact: true })
+  ).toHaveValue(target);
+  await expect(workbench).toHaveCount(0);
+  await expect(moveRows).toHaveCount(0);
+
+  await measureFromPalette();
+  await ask.getByRole('button', { name: 'Discard' }).click();
+  await expect(move).toHaveCount(0);
+  await expect(workbench).toBeVisible();
+  await expect(ruler).toHaveAttribute('aria-pressed', 'true');
+  await expect(moveRows).toHaveCount(0);
+  await ruler.click();
+  await expect(workbench).toHaveCount(0);
+
+  await openMove();
+  await measureFromPalette();
+  await ask.getByRole('button', { name: 'Apply' }).click();
+  await expect(move).toHaveCount(0);
+  await expect(moveRows).toHaveCount(1);
+  await expect(workbench).toBeVisible();
+  await expect(ruler).toHaveAttribute('aria-pressed', 'true');
+});
+
 test('Remus resolves the former face-plane tangent-union refusal', async ({
   page
 }) => {
@@ -3363,8 +3711,8 @@ test('Remus resolves the former face-plane tangent-union refusal', async ({
   await shift.getByRole('button', { name: /Apply move/ }).click();
 
   await page.getByRole('button', { name: /^Union \(U\)/ }).click();
-  await inspector.locator('.pick-row', { hasText: 'Box Body' }).click();
-  await inspector.locator('.pick-row', { hasText: 'Cylinder Body' }).click();
+  await inspector.locator('.pick-row', { hasText: 'Box 1' }).click();
+  await inspector.locator('.pick-row', { hasText: 'Cylinder 1' }).click();
   await inspector.getByRole('button', { name: /^Create/ }).click();
 
   const union = page.locator('.feature-row', { hasText: 'Union' });
@@ -3398,8 +3746,8 @@ test('Remus resolves the former small-radius tangent-union fallback', async ({
   await shiftX.getByRole('button', { name: /Apply move/ }).click();
 
   await page.getByRole('button', { name: /^Union \(U\)/ }).click();
-  await inspector.locator('.pick-row', { hasText: 'Box Body' }).click();
-  await inspector.locator('.pick-row', { hasText: 'Cylinder Body' }).click();
+  await inspector.locator('.pick-row', { hasText: 'Box 1' }).click();
+  await inspector.locator('.pick-row', { hasText: 'Cylinder 1' }).click();
   await inspector.getByRole('button', { name: /^Create/ }).click();
 
   const union = page.locator('.feature-row', { hasText: 'Union' });
@@ -3550,8 +3898,11 @@ test('each sketch plane label names the plane it actually opens', async ({
   await extrudeKeypad.getByRole('textbox').fill('24');
   await extrudeKeypad.getByRole('button', { name: 'Apply height' }).click();
   await expect(page.locator('.selection-callout-chip')).toBeVisible();
+  // Read from the detail: the name beside it ("Extrude 1") ends in a digit.
   const chip =
-    (await page.locator('.selection-callout-chip').textContent()) ?? '';
+    (await page
+      .locator('.selection-callout-chip .selection-callout-detail')
+      .textContent()) ?? '';
   const triple = /([\d.]+)\s*×\s*([\d.]+)\s*×\s*([\d.]+)/.exec(chip);
   if (!triple) {
     throw new Error(`no size in selection chip: ${chip}`);
@@ -3592,7 +3943,7 @@ test('Move is one UI: the gizmo names the feature and picks the body', async ({
 
   // Both things the retired form carried now live here: a Name and a body
   // picker. Choosing a body from the picker is what the form existed for.
-  await move.getByLabel('Body').selectOption({ label: 'Upper Body' });
+  await move.getByLabel('Body').selectOption({ label: 'Upper 1' });
   await move.getByLabel('Name').fill('Lift upper');
   await move.getByLabel('Move Z in mm').fill('40');
   await move.getByRole('button', { name: /Apply move/ }).click();
@@ -3659,8 +4010,12 @@ test('types an exact rectangle while drawing it', async ({ page }) => {
   await extrudeKeypad.getByRole('button', { name: 'Apply height' }).click();
 
   await expect(page.locator('.selection-callout-chip')).toBeVisible();
+  // The size is read from the chip's detail: the body name beside it
+  // ("Extrude 1") ends in a digit that would run into the first dimension.
   const chip =
-    (await page.locator('.selection-callout-chip').textContent()) ?? '';
+    (await page
+      .locator('.selection-callout-chip .selection-callout-detail')
+      .textContent()) ?? '';
   const triple = /([\d.]+)\s*×\s*([\d.]+)\s*×\s*([\d.]+)/.exec(chip);
   if (!triple) {
     throw new Error(`no size in selection chip: ${chip}`);
@@ -4227,8 +4582,8 @@ test('sketches on the wall of a drag-style extrusion and on a hash-only face', a
   await inspector.getByRole('button', { name: /^Create/ }).click();
   await expect(page.getByRole('contentinfo')).toContainText('Added box.');
   await page.getByRole('button', { name: /^Union \(U\)/ }).click();
-  await inspector.locator('.pick-row', { hasText: 'Extrude Body' }).click();
-  await inspector.locator('.pick-row', { hasText: 'Box Body' }).click();
+  await inspector.locator('.pick-row', { hasText: 'Extrude 1' }).click();
+  await inspector.locator('.pick-row', { hasText: 'Box 1' }).click();
   await inspector.getByRole('button', { name: /^Create/ }).click();
   const union = page.locator('.feature-row', { hasText: 'Union' });
   await expect(union).toBeVisible({ timeout: 20_000 });
@@ -4267,7 +4622,7 @@ test('a refused boolean never lands in history and says why in the form', async 
   // commit; a refused Subtract or Intersect landed in history as "added"
   // with the model unchanged.
   await page
-    .locator('.body-row', { hasText: 'Cylinder Body' })
+    .locator('.body-row', { hasText: 'Cylinder 1' })
     .getByRole('button')
     .first()
     .click();
@@ -4280,8 +4635,8 @@ test('a refused boolean never lands in history and says why in the form', async 
   await page.keyboard.press('Escape');
   await page.keyboard.press('i');
   await expect(inspector).toContainText('Intersect');
-  await inspector.locator('.pick-row', { hasText: 'Box Body' }).click();
-  await inspector.locator('.pick-row', { hasText: 'Cylinder Body' }).click();
+  await inspector.locator('.pick-row', { hasText: 'Box 1' }).click();
+  await inspector.locator('.pick-row', { hasText: 'Cylinder 1' }).click();
   const featureRows = page.locator('.feature-row');
   const before = await featureRows.count();
   await inspector.getByRole('button', { name: /^Create/ }).click();

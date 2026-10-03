@@ -38,3 +38,5 @@
 /* Last: the quiet stage re-anchors every floating region, in every mode, as
    islands over the viewport; it only positions and frames, never hides. */
 @import './components/quiet-stage.css';
+/* After every sizing rule: it only adds hit area, never moves a control. */
+@import './components/target-size.css';

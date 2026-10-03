@@ -19,6 +19,7 @@ import { featureHistory } from './lib/featureHistory';
 import { FeatureBuildError } from './lib/featureValidation';
 import { edgeModifierCommand } from './lib/edgeModifierEdit';
 import type { EdgeModifierFormValue } from './components/forms/FeatureForms';
+import type { FaceNamer } from './lib/faceProducerName';
 import {
   documentNodesWithHistory,
   documentTextBudgetError
@@ -57,6 +58,7 @@ import {
   PenLine,
   Move3d,
   Redo2,
+  Ruler,
   Save,
   Settings as SettingsIcon,
   Scissors,
@@ -96,6 +98,7 @@ import {
   listParameters,
   normalizeDocument,
   normalizeDocumentHistory,
+  numberedBodyName,
   repairedDirectEditOperation,
   resolveParamValue,
   restoreFromSaveState,
@@ -498,9 +501,11 @@ import {
   selectionCalloutVerbs,
   type SelectionCalloutContent,
   type SelectionCalloutKind,
+  type SelectionCalloutOperation,
   type SelectionCalloutVerbId
 } from './lib/selectionCallout';
 import { ghostBodiesFor, historyFeatureFocus } from './lib/historyFocus';
+import { useLocalAutoFrame } from './hooks/useLocalAutoFrame';
 import {
   faceSketchAttachment,
   fixedPlaneRefForLegacyAttachment
@@ -779,6 +784,11 @@ const LazyDeleteFeatureDialog = lazyWithStaleChunkNotice(() =>
     default: module.DeleteFeatureDialog
   }))
 );
+const LazyUnappliedCardDialog = lazyWithStaleChunkNotice(() =>
+  import('./components/UnappliedCardDialog').then((module) => ({
+    default: module.UnappliedCardDialog
+  }))
+);
 const LazyProjectConflictDialog = lazyWithStaleChunkNotice(() =>
   import('./components/ProjectConflictDialog').then((module) => ({
     default: module.ProjectConflictDialog
@@ -951,6 +961,16 @@ function DeleteFeatureDialog(
   );
 }
 
+function UnappliedCardDialog(
+  props: ComponentProps<typeof LazyUnappliedCardDialog>
+) {
+  return (
+    <Suspense fallback={null}>
+      <LazyUnappliedCardDialog {...props} />
+    </Suspense>
+  );
+}
+
 function ProjectConflictDialog(
   props: ComponentProps<typeof LazyProjectConflictDialog>
 ) {
@@ -1081,6 +1101,17 @@ import { holePreview, type HolePreview } from './lib/holeGhost';
 import type { HoleDraft } from './components/forms/ModelingOperationsForm';
 import { extrudeSketchGuidance } from './lib/extrudeGuidance';
 import {
+  settleSuppressionNotice,
+  suppressionRepairSnapshot,
+  type SuppressionNotice
+} from './lib/suppressionFeedback';
+import { moveHasUnappliedChange } from './lib/moveCard';
+import {
+  resolveHistoryEditorFeature,
+  resolveHistoryFeature,
+  type HistoryEditorRequest
+} from './lib/historyEditorTransition';
+import {
   countLabel,
   deleteFeatureToastMessage,
   type ToastAction,
@@ -1118,6 +1149,12 @@ import {
   type ModelingPathOption,
   type ModelingProfileOption
 } from './lib/modelingOperations';
+import {
+  advanceEditCardSession,
+  editCardSessionMatches,
+  type EditCardSession
+} from './lib/editCardLifecycle';
+import { PanelOverflow } from './components/PanelOverflow';
 import {
   clearActiveProject,
   loadActiveProjectId,
@@ -1869,6 +1906,12 @@ export function App() {
   const selectedProfilesRef = useRef(selectedProfiles);
   selectedProfilesRef.current = selectedProfiles;
   const [movePreview, setMovePreview] = useState<MovePreview | null>(null);
+  /** The entire tool/editor transition waiting on an unapplied Move. */
+  const [pendingToolSwitch, setPendingToolSwitch] = useState<{
+    tool: ToolId | 'measure' | 'history';
+    historyFeature?: HistoryEditorRequest;
+    clearHistorySelection?: boolean;
+  } | null>(null);
   /**
    * Name for the Move feature the gizmo is about to create. The gizmo is now
    * the only way to make one (WF-07), so the name it commits under has to be
@@ -2552,6 +2595,24 @@ export function App() {
       disposed = true;
     };
   }, [parameterPreviewBase, makeParameterPreview]);
+  // A suppress or resume waiting on its rebuild to say what it broke (F20).
+  const suppressionNoticeRef = useRef<SuppressionNotice | null>(null);
+  const announceSuppression = (derived: ProjectDocument['derived'] | null) => {
+    const notice = suppressionNoticeRef.current;
+    if (!notice) return;
+    const feedback = settleSuppressionNotice(
+      notice,
+      managerRef.current,
+      derived
+    );
+    if (feedback.state === 'pending') return;
+    suppressionNoticeRef.current = null;
+    if (feedback.state !== 'ready') return;
+    announce(feedback.message, {
+      label: 'Undo',
+      run: handleUndo
+    });
+  };
   const geometry = useGeometryWorker({
     manager: () => managerRef.current,
     onProjection: (derived) => {
@@ -2581,12 +2642,14 @@ export function App() {
         // unless their version matches), so any held Move pose must release
         // in this same batch — one render later would double-transform.
         setMoveCommitHold(null);
+        announceSuppression(derived);
         applyTopologyReferenceRepairs(derived);
       }
     },
     onError: (message) => {
       // No rebuild is coming; render the stored geometry truthfully.
       setMoveCommitHold(null);
+      announceSuppression(null);
       setStatus(message);
     }
   });
@@ -3347,6 +3410,7 @@ export function App() {
 
   function applyExtrudeForm(feature: FeatureNode, value: ExtrudeFormValue) {
     if (geometryBusy || !feature.bodyId || !doc) return;
+    const editSession = editCardSessionRef.current;
     edgeFormPreview.clear();
     const request = ++extrudeEditRequest.current;
     void executeValidatedFeature(extrudeEditCommand(feature, value), {
@@ -3358,7 +3422,10 @@ export function App() {
           index === 0 ? { ...target, featureName: value.name } : target
       ),
       successMessage: `Edit ${value.name}`,
-      cancelled: () => request !== extrudeEditRequest.current
+      onSuccess: () => finishFeatureEdit(feature, editSession),
+      cancelled: () =>
+        request !== extrudeEditRequest.current ||
+        !editSessionIsCurrent(feature, editSession)
     });
   }
 
@@ -3368,6 +3435,7 @@ export function App() {
     value: EdgeModifierFormValue
   ) {
     if (geometryBusy) return;
+    const editSession = editCardSessionRef.current;
     // K05 on-demand probe: a pick made before the demanded rebuild arrived
     // carries no lineage name, so the form holds no `edgeReferences` at all
     // (they are all-or-nothing). Re-read CURRENT lineage by hash at commit
@@ -3404,7 +3472,12 @@ export function App() {
           }
         : {}),
       successMessage: `${value.name} applied.`,
-      ...(!feature ? { onSuccess: finishFeatureCreation } : {})
+      onSuccess: feature
+        ? () => finishFeatureEdit(feature, editSession)
+        : finishFeatureCreation,
+      ...(feature
+        ? { cancelled: () => !editSessionIsCurrent(feature, editSession) }
+        : {})
     });
   }
 
@@ -4068,6 +4141,7 @@ export function App() {
     // command the new, empty one was somehow in the middle of.
     dispatchInteraction({ type: 'clear' });
     setPendingFeatureDelete(null);
+    setPendingToolSwitch(null);
   }, [doc?.projectId]);
 
   useEffect(() => {
@@ -4669,12 +4743,42 @@ export function App() {
   // worker, so the faces this document names have to be parsed here too.
   const textFontsVersion = useDocumentFonts(doc ?? null);
 
+  /**
+   * Face lists name a face after the feature that made it ("Box 2 · top").
+   * The namer is its own chunk, kept out of the entry: it starts loading as
+   * the app comes up, long before any face list opens, and until it lands
+   * (or if it never does) a list keeps the viewport's names.
+   */
+  const [faceNamerFor, setFaceNamerFor] = useState<
+    ((document: ProjectDocument) => FaceNamer) | null
+  >(null);
+  useEffect(() => {
+    let live = true;
+    import('./lib/faceProducerName')
+      .then((module) => {
+        if (live) setFaceNamerFor(() => module.faceNamerFor);
+      })
+      .catch(() => undefined);
+    return () => {
+      live = false;
+    };
+  }, []);
+  const faceNamer = useMemo(
+    () => (doc && faceNamerFor ? faceNamerFor(doc) : undefined),
+    [doc, faceNamerFor]
+  );
+
   const representations = useMemo(
     () => doc?.derived.bodyRepresentations ?? {},
     [doc?.derived.bodyRepresentations]
   );
   const renderedRepresentations =
     previewDoc?.derived.bodyRepresentations ?? representations;
+  const { autoFrame, recordLocalCommit, clearAutoFrame } = useLocalAutoFrame(
+    doc,
+    exactGeometryReady,
+    previewDoc !== null
+  );
   /**
    * Exact regeneration may assign a new topology ID to an edited face. Keep
    * selection attached through operation-specific immutable identity: exact
@@ -5047,6 +5151,19 @@ export function App() {
     selectedTopology
   ]);
   const selectedFeatureNodeId = selectedFeature?.id ?? null;
+  /**
+   * Each opening of an edit card gets its own session. A late Apply must
+   * leave a reopened card alone, even when it edits the same feature.
+   */
+  const editCardSessionRef = useRef<EditCardSession | null>(null);
+  editCardSessionRef.current = advanceEditCardSession(
+    editCardSessionRef.current,
+    {
+      tool,
+      inspectorFeatureId: selectedFeatureNodeId,
+      modelingEditFeatureId: modelingEditFeature?.id ?? null
+    }
+  );
   function validateSelectionEdit(): boolean {
     if (
       managerRef.current?.document.version !== doc?.version ||
@@ -5536,13 +5653,16 @@ export function App() {
     ) {
       return null;
     }
-    const focus = historyFeatureFocus(doc, selectedFeature, (bodyId) => {
-      const body = doc.derived.bodyRepresentations[bodyId];
+    // Against what is drawn: an edit preview republishes the faces it lights.
+    const shown = previewDoc ?? doc;
+    const focus = historyFeatureFocus(shown, selectedFeature, (bodyId) => {
+      const body = shown.derived.bodyRepresentations[bodyId];
       return Boolean(body && !body.consumed && !hiddenBodyIds.has(bodyId));
     });
     return focus.kind === 'focus' ? { feature: selectedFeature, focus } : null;
   }, [
     doc,
+    previewDoc,
     tool,
     featureSelectionSource,
     selectedFeature,
@@ -5555,15 +5675,9 @@ export function App() {
     () => (doc && historyFocus ? ghostBodiesFor(doc, historyFocus.focus) : []),
     [doc, historyFocus]
   );
-  // The focus faces ride the preview-face highlight, beside any live blend
-  // preview; a new array whenever the focus changes, so the viewer redraws.
-  const viewerPreviewFaces = useMemo(
-    () =>
-      historyFocus && historyFocus.focus.kind === 'focus'
-        ? [...previewBlendFaces, ...historyFocus.focus.faces]
-        : previewBlendFaces,
-    [previewBlendFaces, historyFocus]
-  );
+  // The focus faces are drawn as a selected face is, not with the accent
+  // fill of a blend preview that does not exist yet.
+  const focusFaces = historyFocus?.focus.faces;
 
   /**
    * The selection chip anchored to the pick: name, key measurement, the
@@ -5622,6 +5736,9 @@ export function App() {
             kind: calloutKind,
             faceCapabilities: calloutFaceCapabilities,
             edgesArmed: interaction.mode === 'edges',
+            resizeBody:
+              interaction.mode === 'face' &&
+              Boolean(interaction.target.resizeBodyFeatureId),
             pressedAction: calloutPressedAction,
             availability
           })
@@ -5712,6 +5829,7 @@ export function App() {
       normalized,
       session?.userId ?? normalized.ownerUserId
     );
+    clearAutoFrame();
     geometry.invalidate();
     // The document effect below writes every hydrated document to this
     // device and reports 'saving' while it does; saying so from the first
@@ -5884,6 +6002,7 @@ export function App() {
     }
     try {
       setPreviewDoc(null);
+      const before = managerRef.current.document.derived.bodyRepresentations;
       let next = managerRef.current.execute(command);
       if (derived) {
         // Validation already rebuilt this exact result; attaching it now
@@ -5892,6 +6011,7 @@ export function App() {
         next = managerRef.current.commitDerivedState(derived);
         setMoveCommitHold(null);
       }
+      recordLocalCommit(next, before);
       setDoc(next);
       setStatus(commandOutcomeMessage(command.label));
       return true;
@@ -5918,11 +6038,13 @@ export function App() {
     }
     try {
       setPreviewDoc(null);
+      const before = managerRef.current.document.derived.bodyRepresentations;
       let next = managerRef.current.runTransaction(label, commands);
       if (derived) {
         next = managerRef.current.commitDerivedState(derived);
         setMoveCommitHold(null);
       }
+      recordLocalCommit(next, before);
       setDoc(next);
       setStatus(commandOutcomeMessage(label));
       return true;
@@ -5944,6 +6066,63 @@ export function App() {
     setSelectedTopology(null);
     setSelectedEdges([]);
     setSelectedBodyIds([]);
+    setSelectedSketchProfileId(null);
+  }
+
+  /**
+   * "Box 1", "Box 2": the name a body made now takes, numbered against the
+   * document it is made in. Resolved here and stored in the command, so undo,
+   * redo and replay reproduce it; bodies already in a document keep theirs.
+   */
+  function newBodyName(featureName: string): string {
+    const current = managerRef.current?.document;
+    return current
+      ? numberedBodyName(current, featureName)
+      : `${featureName.trim()} 1`;
+  }
+
+  /**
+   * F19: an edit card closes after a successful Apply as a create card does,
+   * whatever feature it edits. A refused Apply never gets here — the card
+   * stays open with the reason — and neither does an Apply whose card the
+   * user already left for another feature or tool.
+   *
+   * An Inspector card keeps the bodies its history row selected, so the next
+   * command still pre-fills from the body just edited. A reopened modeling
+   * form selected its consumed source body to target it, so it clears
+   * everything, as it always has.
+   */
+  function editSessionIsCurrent(
+    feature: FeatureNode,
+    editSession: EditCardSession | null
+  ): boolean {
+    return editCardSessionMatches(
+      editCardSessionRef.current,
+      editSession,
+      feature.id
+    );
+  }
+
+  function finishFeatureEdit(
+    feature: FeatureNode,
+    editSession: EditCardSession | null
+  ): void {
+    if (
+      !editSession ||
+      !editSessionIsCurrent(feature, editSession)
+    ) {
+      return;
+    }
+    if (editSession.tool !== null) {
+      setModelingEditFeature(null);
+      finishFeatureCreation();
+      return;
+    }
+    dispatchInteraction({ type: 'commit-complete' });
+    setSelectedFeatureNode(null);
+    setSelectedTopology(null);
+    setSelectedEdges([]);
+    setSelectedProfiles([]);
     setSelectedSketchProfileId(null);
   }
 
@@ -5981,15 +6160,19 @@ export function App() {
     });
   }
 
-  /** The edit counterpart of {@link createValidatedFeature}. */
+  /**
+   * The edit counterpart of {@link createValidatedFeature}: on success the
+   * edit card closes, as the create card does.
+   */
   function applyValidatedFeature(
     command: AnyCommand,
     feature: FeatureNode,
     featureName: string,
     resultBodyId: BodyId | undefined = feature.bodyId
   ): void {
+    const editSession = editCardSessionRef.current;
     if (!doc || !resultBodyId) {
-      executeCommand(command);
+      if (executeCommand(command)) finishFeatureEdit(feature, editSession);
       return;
     }
     void executeValidatedFeature(command, {
@@ -5998,7 +6181,9 @@ export function App() {
       targets: affectedFeatureTargets(doc, feature.featureId).map(
         (target, index) => (index === 0 ? { ...target, featureName } : target)
       ),
-      successMessage: commandOutcomeMessage(command.label)
+      successMessage: commandOutcomeMessage(command.label),
+      onSuccess: () => finishFeatureEdit(feature, editSession),
+      cancelled: () => !editSessionIsCurrent(feature, editSession)
     });
   }
 
@@ -6096,13 +6281,131 @@ export function App() {
     );
   }
 
-  function launchTool(nextTool: ToolId) {
+  /**
+   * Opens a tool. One command card holds the lane at a time: a Move whose
+   * values were never applied is not left open under the new tool's card
+   * (F15) — the user is asked once whether to apply or discard it.
+   */
+  function launchTool(nextTool: ToolId, modelingFeature?: FeatureNode) {
+    const current = managerRef.current?.document;
+    if (modelingFeature && !current) return;
+    const request = {
+      tool: nextTool,
+      historyFeature:
+        modelingFeature && current
+          ? {
+              projectId: current.projectId,
+              featureId: modelingFeature.featureId
+            }
+          : undefined
+    };
+    if (
+      nextTool !== 'transform' &&
+      moveHasUnappliedChange(movePreview) &&
+      !toolDisabledReason(nextTool, availability)
+    ) {
+      setPendingToolSwitch(request);
+      return;
+    }
+    completeToolSwitch(request);
+  }
+
+  /** Settles the unapplied-card question, then opens the tool it held. */
+  function resolvePendingToolSwitch(choice: 'apply' | 'discard' | 'cancel') {
+    const request = pendingToolSwitch;
+    setPendingToolSwitch(null);
+    if (!request || choice === 'cancel') return;
+    completeToolSwitch(request, choice === 'apply');
+  }
+
+  function completeToolSwitch(
+    request: {
+      tool: ToolId | 'measure' | 'history';
+      historyFeature?: HistoryEditorRequest;
+      clearHistorySelection?: boolean;
+    },
+    applyMove = false
+  ) {
+    if (request.tool === 'history') {
+      const current = managerRef.current?.document;
+      const feature = request.historyFeature
+        ? resolveHistoryFeature(current, request.historyFeature)
+        : null;
+      if (!current || !feature) {
+        setStatus('This history feature is no longer available to edit.');
+        return;
+      }
+      if (modelingFeatureIsEditable(feature.data.featureKind)) {
+        const nextTool = (feature.data as EditableModelingFeatureData)
+          .featureKind;
+        const reason = toolDisabledReason(nextTool, availability);
+        if (reason) {
+          setStatus(`${TOOL_META[nextTool].label}: ${reason}.`);
+          return;
+        }
+      }
+      // Resolve/refuse before committing a Move. Only a settled navigation
+      // may disarm its tool, replace its selection or open another editor.
+      if (applyMove && !confirmMove()) return;
+      applyHistorySelection(
+        request.clearHistorySelection ? null : feature.id,
+        managerRef.current!.document
+      );
+      return;
+    }
+    if (request.tool === 'measure') {
+      if (!modelingLocked && interactionRef.current.mode === 'sketch') {
+        setStatus('Finish the sketch before measuring.');
+        return;
+      }
+      if (applyMove && !confirmMove()) return;
+      completeMeasureToggle(true);
+      return;
+    }
+    const feature = request.historyFeature
+      ? resolveHistoryEditorFeature(
+          managerRef.current?.document,
+          request.historyFeature
+        )
+      : null;
+    if (request.historyFeature && !feature) {
+      setStatus('This history feature is no longer available to edit.');
+      return;
+    }
+    const data = feature?.data as EditableModelingFeatureData | undefined;
+    const nextTool = data?.featureKind ?? request.tool;
     const reason = toolDisabledReason(nextTool, availability);
     if (reason) {
       setStatus(`${TOOL_META[nextTool].label}: ${reason}.`);
       return;
     }
+    if (applyMove && !confirmMove()) return;
+    if (!openTool(nextTool) || !feature || !data) return;
+    // Only after Apply/Discard: Cancel must leave the Move's target and the
+    // current editor untouched. The edit uses its own consumed source body.
+    const targetBodyId = 'targetBodyId' in data ? data.targetBodyId : null;
+    setModelingTargetBodyId(targetBodyId);
+    setViewportFormFacePick(null);
+    setFormFacePickTarget(null);
+    setSelectedBodyIds(targetBodyId ? [targetBodyId] : []);
+    setModelingEditFeature(feature);
+  }
+
+  function openTool(nextTool: ToolId): boolean {
+    const reason = toolDisabledReason(nextTool, availability);
+    if (reason) {
+      setStatus(`${TOOL_META[nextTool].label}: ${reason}.`);
+      return false;
+    }
+    // Any other tool takes the lane from the Move card; with nothing
+    // unapplied (or after the question above) it simply closes.
+    if (nextTool !== 'transform') {
+      setMovePreview(null);
+    }
     setFeatureFormError(null);
+    // A tool opens its create card; openModelingFeatureEditor sets the
+    // feature back afterwards when it is reopening one instead.
+    setModelingEditFeature(null);
     setFormFacePickTarget(null);
     setViewportFormFacePick(null);
     setRevertPill(null);
@@ -6131,7 +6434,7 @@ export function App() {
       setStatus('Sketch: pick a plane or a planar face to draw on.', {
         sticky: true
       });
-      return;
+      return true;
     }
     if (nextTool === 'extrude') {
       const sketchId =
@@ -6162,7 +6465,7 @@ export function App() {
           )
         );
       }
-      return;
+      return true;
     }
     if (nextTool === 'transform') {
       // A selected sketch takes the gizmo too: translation-only, committed as
@@ -6180,7 +6483,7 @@ export function App() {
         setStatus(
           'Move sketch: drag the arrows — centers snap to faces of other bodies, Shift is free.'
         );
-        return;
+        return true;
       }
       // WF-07 (resolved): Move used to be two UIs for one command, and which
       // one you got was decided by document state rather than by what you
@@ -6209,7 +6512,7 @@ export function App() {
         setStatus(
           'Move/Rotate: drag the arrows or rings — snapping follows your zoom, Shift is free.'
         );
-        return;
+        return true;
       }
     }
     if (
@@ -6241,6 +6544,7 @@ export function App() {
     }
     // Selection is kept on purpose: booleans/move/fillet pre-fill from it.
     setTool(nextTool);
+    return true;
   }
 
   /**
@@ -6255,15 +6559,15 @@ export function App() {
   function openModelingFeatureEditor(feature: FeatureNode) {
     if (!modelingFeatureIsEditable(feature.data.featureKind)) return;
     const data = feature.data as EditableModelingFeatureData;
-    launchTool(data.featureKind);
-    // launchTool seeds the target from the selection; the edit targets the
-    // feature's own (consumed) source body and its stored entry face.
-    const targetBodyId = 'targetBodyId' in data ? data.targetBodyId : null;
-    setModelingTargetBodyId(targetBodyId);
-    setViewportFormFacePick(null);
-    setFormFacePickTarget(null);
-    setSelectedBodyIds(targetBodyId ? [targetBodyId] : []);
-    setModelingEditFeature(feature);
+    const reason = toolDisabledReason(data.featureKind, availability);
+    if (reason) {
+      // The Inspector keeps its "Edit …" button for exactly this case, so
+      // the edit can be retried once the reason (exact geometry still
+      // loading, a read-only project) has gone.
+      setStatus(`${TOOL_META[data.featureKind].label}: ${reason}.`);
+      return;
+    }
+    launchTool(data.featureKind, feature);
   }
 
   function defaultModelingTargetBody(operation: ToolId): BodyId | null {
@@ -6349,15 +6653,63 @@ export function App() {
   }
 
   /**
+   * Measure on or off, from either rail or the palette. In Build it is a
+   * command of its own: it ends whatever command was running so the dock
+   * takes the command slot alone, and the effect below ends it as soon as
+   * any other command starts — the two never stack.
+   */
+  function toggleMeasure(next: boolean) {
+    if (next && !modelingLocked) {
+      if (interactionRef.current.mode === 'sketch') {
+        setStatus('Finish the sketch before measuring.');
+        return;
+      }
+      if (moveHasUnappliedChange(movePreview)) {
+        setPendingToolSwitch({ tool: 'measure' });
+        return;
+      }
+    }
+    completeMeasureToggle(next);
+  }
+
+  /** Settled activation shares the rail/palette cleanup without asking again. */
+  function completeMeasureToggle(next: boolean) {
+    if (next && !modelingLocked) cancelPanel();
+    setMeasuring(next);
+    clearMeasurementPicks();
+    setStatus(
+      next
+        ? 'Measure ready · Smart inspects one pick; Distance and Angle use two.'
+        : 'Measure off · pinned results stay on the model.'
+    );
+  }
+
+  const buildMeasureInterrupted =
+    !modelingLocked &&
+    measuring &&
+    (tool !== null ||
+      interaction.mode !== 'idle' ||
+      movePreview !== null ||
+      selectedFeature !== null ||
+      selectedProfiles.length > 0);
+  useEffect(() => {
+    if (buildMeasureInterrupted) {
+      setMeasuring(false);
+      clearMeasurementPicks();
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [buildMeasureInterrupted]);
+
+  /**
    * Commits a sketch drag: the world translation projects onto the sketch
    * plane's axes, becoming an in-plane object translation plus — for a
    * canonical-plane sketch — a plane-offset change. A face-attached sketch
    * is bound to its surface, so any normal component of the drag is dropped
    * and said out loud rather than silently discarded.
    */
-  function confirmSketchMove(preview: MovePreview) {
+  function confirmSketchMove(preview: MovePreview): boolean {
     if (!doc) {
-      return;
+      return false;
     }
     const view = sketchViews.find(
       (candidate) => candidate.sketchId === preview.bodyId
@@ -6365,7 +6717,7 @@ export function App() {
     const sketch = findSketch(doc, preview.bodyId as SketchId);
     if (!view || !sketch) {
       setMovePreview(null);
-      return;
+      return false;
     }
     const basis = view.basis;
     const t = preview.translation;
@@ -6379,7 +6731,7 @@ export function App() {
     setMovePreview(null);
     if (du === 0 && dv === 0 && dn === 0) {
       setTool(null);
-      return;
+      return true;
     }
     if (
       executeCommand(
@@ -6395,7 +6747,9 @@ export function App() {
           ? `Moved ${sketch.name} in its plane · the out-of-plane part was dropped (a face sketch stays on its face).`
           : `Moved ${sketch.name}.`
       );
+      return true;
     }
+    return false;
   }
 
   /**
@@ -6416,18 +6770,18 @@ export function App() {
     []
   );
 
-  function confirmMove() {
+  /** Commits the Move card; true when the move landed. */
+  function confirmMove(): boolean {
     const preview = movePreview;
     if (!preview || !doc) {
-      return;
+      return false;
     }
     if (preview.target === 'sketch') {
-      confirmSketchMove(preview);
-      return;
+      return confirmSketchMove(preview);
     }
     const body = representations[preview.bodyId as BodyId];
     if (!body) {
-      return;
+      return false;
     }
     const center = {
       x: (body.bbox.min.x + body.bbox.max.x) / 2,
@@ -6466,9 +6820,18 @@ export function App() {
       // meshes; cleared by onDerived in the same batch as the new geometry.
       setMoveCommitHold(preview);
     }
+    return created;
   }
 
   function clearSelection() {
+    const current = interactionRef.current;
+    if (
+      isOperationState(current) &&
+      current.mode !== 'region' &&
+      current.phase === 'validating'
+    ) {
+      return;
+    }
     retireStatusMessage();
     if (
       interaction.mode === 'face' &&
@@ -6632,7 +6995,7 @@ export function App() {
     if (!next) {
       setViewerSettings(({ sectionView: _cleared, ...rest }) => rest);
       clearSectionOutline();
-      setStatus('Section display off.');
+      setStatus('Section view off.');
       return;
     }
     const range = sectionAxisRange(next);
@@ -6642,7 +7005,7 @@ export function App() {
       sectionView: { plane: next, offset }
     }));
     setStatus(
-      `Section display: ${next} plane (display clipping, not exact). Drag the slider to move the cut; the model itself is untouched.`
+      `Section view: ${next} plane. It cuts the display only; drag the slider to move the cut, and the model itself is untouched.`
     );
     void requestExactSection({ plane: next, offset });
   }
@@ -8148,6 +8511,7 @@ export function App() {
     clearActiveProject();
     forgetProjectView();
     managerRef.current = null;
+    clearAutoFrame();
     setDoc(null);
     setArtifacts([]);
     setSelectedFeatureNode(null);
@@ -8499,6 +8863,7 @@ export function App() {
         reason
       );
       manager.applyDocumentEdit(restored, reason);
+      clearAutoFrame();
       // The meshes on screen belong to the document being left, and the
       // restored history has to be rebuilt from scratch to replace them.
       geometry.invalidate();
@@ -8637,7 +9002,9 @@ export function App() {
     }
     const label = managerRef.current.undoLabel;
     try {
-      setDoc(managerRef.current.undo());
+      const next = managerRef.current.undo();
+      clearAutoFrame();
+      setDoc(next);
     } catch (error) {
       setStatus(errorMessage(error, 'Undo history could not be restored.'));
       return;
@@ -8673,7 +9040,9 @@ export function App() {
     }
     const label = managerRef.current.redoLabel;
     try {
-      setDoc(managerRef.current.redo());
+      const next = managerRef.current.redo();
+      clearAutoFrame();
+      setDoc(next);
     } catch (error) {
       setStatus(errorMessage(error, 'Redo history could not be restored.'));
       return;
@@ -13009,8 +13378,11 @@ export function App() {
               area: target.area
             }
           ];
+    const name = regionExtrudeSettings.current?.name ?? 'Extrude';
     return {
-      name: regionExtrudeSettings.current?.name ?? 'Extrude',
+      name,
+      // The new-body name; an add or cut keeps its target's name instead.
+      bodyName: newBodyName(name),
       sketchId: target.sketchId as SketchId,
       distance,
       symmetric: regionExtrudeSettings.current?.symmetric ?? false,
@@ -14834,6 +15206,84 @@ export function App() {
         }
       : null;
 
+  /**
+   * A selection-first pick's operation rides the selection chip: its phase,
+   * its refusal and the way out, with the chip's pressed verbs as its
+   * switch. The column-top chip that said the same was one more surface lit
+   * for one pick (design review F11). Not while a tool is open (the tool's
+   * card owns the pick) or the chip is not interactive.
+   */
+  const calloutOperationModel =
+    selectionCallout?.anchor === 'selection' &&
+    selectedBodyIds.length > 0 &&
+    (interaction.mode === 'face' || interaction.mode === 'edges')
+      ? toolCardFor(interaction)
+      : null;
+  const calloutEdgeCount =
+    interaction.mode === 'edges' && edgeModifierBody?.topology
+      ? edgeModifierBody.topology.edges.filter(
+          (edge) => edge.displayRole !== 'seam'
+        ).length
+      : 0;
+  // Read through a ref, like the verbs, so the handlers' identity never
+  // refills the chip.
+  const calloutOperationActions = {
+    onEditCulprit: handleEditCulpritFeature,
+    onViewDetails: () => setActivityLogOpen(true),
+    onKeepLastValid: () => keepLastValid?.keep(),
+    onSelectAllEdges: () => {
+      if (edgeModifierBody) handleSelectAllEdges(edgeModifierBody);
+    }
+  };
+  const calloutOperationHandlers = useRef(calloutOperationActions);
+  calloutOperationHandlers.current = calloutOperationActions;
+  // Plain data, serialized: the chip is refilled only when what it says
+  // changes, never on a render that changed nothing it shows.
+  const calloutOperationKey = calloutOperationModel
+    ? JSON.stringify([
+        calloutOperationModel.title,
+        calloutOperationModel.phase ?? null,
+        calloutOperationModel.badge ?? null,
+        calloutOperationModel.error ?? null,
+        keepLastValid?.label ?? null,
+        interaction.mode === 'edges' &&
+        interaction.edges.length < calloutEdgeCount
+          ? calloutEdgeCount
+          : null
+      ])
+    : '';
+  const calloutWithOperation = useMemo<SelectionCalloutContent | null>(() => {
+    if (!selectionCallout || !calloutOperationKey) {
+      return selectionCallout;
+    }
+    const [title, phase, badge, error, keepLabel, edgeCount] = JSON.parse(
+      calloutOperationKey
+    ) as [
+      string,
+      SelectionCalloutOperation['phase'] | null,
+      SelectionCalloutOperation['badge'] | null,
+      SelectionCalloutOperation['error'] | null,
+      string | null,
+      number | null
+    ];
+    const handlers = () => calloutOperationHandlers.current;
+    return {
+      ...selectionCallout,
+      operation: {
+        title,
+        phase: phase ?? undefined,
+        badge: badge ?? undefined,
+        error: error ?? undefined,
+        keepLastValidLabel: keepLabel ?? undefined,
+        selectAllEdgesCount: edgeCount ?? undefined,
+        onEditCulprit: (featureId) => handlers().onEditCulprit(featureId),
+        onViewDetails: () => handlers().onViewDetails(),
+        onKeepLastValid: () => handlers().onKeepLastValid(),
+        onSelectAllEdges: () => handlers().onSelectAllEdges()
+      }
+    };
+  }, [selectionCallout, calloutOperationKey]);
+
   function handleEditCulpritFeature(featureId: string) {
     const node = doc
       ? Object.values(doc.nodes).find(
@@ -14848,28 +15298,65 @@ export function App() {
   }
 
   function handleOpenHistoryFeature(nodeId: string) {
-    setFeatureFormError(null);
-    setSketchEditError(null);
     handleSelectFeatureFromTree(nodeId, false);
   }
 
   function handleSelectFeatureFromTree(nodeId: string, toggle = true) {
-    extrudeEditRequest.current += 1;
-    setTool(null);
-    setSelectedTopology(null);
-    setSelectedEdges([]);
-    // Picking in the tree is a selection change like any other. Dropping the
-    // topology selection while leaving the machine armed would leave a command
-    // running against geometry the panel no longer shows.
-    dispatchInteraction({ type: 'clear' });
+    const current = managerRef.current?.document;
+    if (!current) return;
     const next =
       toggle &&
       featureSelectionSource === 'pinned' &&
       selectedFeatureNodeId === nodeId
         ? null
         : nodeId;
+    const node = current.nodes[nodeId];
+    if (node?.kind !== 'feature') {
+      setStatus('This history feature is no longer available to edit.');
+      return;
+    }
+    if (moveHasUnappliedChange(movePreview)) {
+      if (modelingFeatureIsEditable(node.data.featureKind)) {
+        const nextTool = (node.data as EditableModelingFeatureData).featureKind;
+        const reason = toolDisabledReason(nextTool, availability);
+        if (reason) {
+          setStatus(`${TOOL_META[nextTool].label}: ${reason}.`);
+          return;
+        }
+      }
+      setPendingToolSwitch({
+        tool: 'history',
+        historyFeature: {
+          projectId: current.projectId,
+          featureId: node.featureId
+        },
+        clearHistorySelection: next === null
+      });
+      return;
+    }
+    applyHistorySelection(next, current);
+  }
+
+  function applyHistorySelection(
+    next: string | null,
+    current: ProjectDocument
+  ) {
+    extrudeEditRequest.current += 1;
+    setFeatureFormError(null);
+    setSketchEditError(null);
+    setMovePreview(null);
+    setTool(null);
+    // A reopened modeling form belongs to the feature that was selected; the
+    // next one opens its own below, and nothing must inherit this one.
+    setModelingEditFeature(null);
+    setSelectedTopology(null);
+    setSelectedEdges([]);
+    // Picking in the tree is a selection change like any other. Dropping the
+    // topology selection while leaving the machine armed would leave a command
+    // running against geometry the panel no longer shows.
+    dispatchInteraction({ type: 'clear' });
     selectFeatureNode(next, 'pinned');
-    const node = next && doc ? doc.nodes[next] : undefined;
+    const node = next ? current.nodes[next] : undefined;
 
     const sourceSketchId =
       node?.kind === 'feature' &&
@@ -14951,17 +15438,35 @@ export function App() {
       setSelectedProfiles([]);
     }
     const visible = (id: BodyId) => {
-      const result = doc?.derived.bodyRepresentations[id];
+      const result = current.derived.bodyRepresentations[id];
       return Boolean(result && !result.consumed && !hiddenBodyIds.has(id));
     };
     // A feature still on screen selects its body. One a later feature
     // consumed selects nothing: `historyFocus` lights the faces it made on
     // the final part (or ghosts its body) instead of the whole part.
     const focus =
-      node?.kind === 'feature' && doc
-        ? historyFeatureFocus(doc, node, visible)
+      node?.kind === 'feature'
+        ? historyFeatureFocus(current, node, visible)
         : null;
     setSelectedBodyIds(focus?.kind === 'bodies' ? focus.bodyIds : []);
+    // F19: an edit card opens already editable. The Inspector's own forms do;
+    // a modeling feature's card is its creation form, so selecting the
+    // feature opens that form rather than a panel with an "Edit hole" button
+    // in front of it. Last, so the form's target body wins the selection.
+    if (
+      node?.kind === 'feature' &&
+      modelingFeatureIsEditable(node.data.featureKind)
+    ) {
+      // This navigation has already settled its Move choice. Launch directly
+      // so the render's old preview cannot queue the same question again.
+      completeToolSwitch({
+        tool: (node.data as EditableModelingFeatureData).featureKind,
+        historyFeature: {
+          projectId: current.projectId,
+          featureId: node.featureId
+        }
+      });
+    }
   }
 
   function handleSelectBodyFromTree(bodyId: BodyId, additive: boolean) {
@@ -15063,6 +15568,9 @@ export function App() {
         commandFactories.deleteFeature({ featureId }, `Delete ${name}`)
       )
     ) {
+      // A reopened modeling form outlives the selection (its tool is still
+      // running), so it has to be closed with the feature it was editing.
+      if (modelingEditFeature?.featureId === featureId) closeFeaturePanel();
       clearSelection();
       announce(deleteFeatureToastMessage(name, dependentCount), {
         label: 'Undo',
@@ -15084,11 +15592,21 @@ export function App() {
   }
 
   function handleToggleFeatureSuppression(feature: FeatureNode) {
-    const resume = isFeatureSuppressed(feature);
-    executeCommand(
+    const owner = managerRef.current;
+    if (!owner) return;
+    const liveFeature = findFeature(owner.document, feature.featureId);
+    if (!liveFeature) return;
+    const resume = isFeatureSuppressed(liveFeature);
+    // Only a rebuild of this live version can establish what the toggle
+    // itself breaks. An earlier toggle may still own the rendered geometry.
+    const before = suppressionRepairSnapshot(
+      owner,
+      geometry.isReadyFor(owner.document)
+    );
+    const toggled = executeCommand(
       commandFactories.setNodeMetadata(
         {
-          nodeId: feature.id,
+          nodeId: liveFeature.id,
           metadata: resume
             ? {
                 [FEATURE_SUPPRESSED_METADATA_KEY]: null,
@@ -15096,9 +15614,23 @@ export function App() {
               }
             : { [FEATURE_SUPPRESSED_METADATA_KEY]: true }
         },
-        resume ? `Resume ${feature.name}` : `Suppress ${feature.name}`
+        resume ? `Resume ${liveFeature.name}` : `Suppress ${liveFeature.name}`
       )
     );
+    const after = managerRef.current?.document;
+    if (toggled && after && managerRef.current === owner) {
+      // The cascade is only known once the rebuild of this exact version
+      // lands, so the toast waits for it in `onDerived`.
+      suppressionNoticeRef.current = {
+        manager: owner,
+        projectId: after.projectId,
+        version: after.version,
+        featureId: liveFeature.featureId,
+        name: liveFeature.name,
+        resume,
+        before
+      };
+    }
   }
 
   function handleResumeHistory() {
@@ -15534,7 +16066,8 @@ export function App() {
     !sharingOpen &&
     !pendingShaprImport &&
     !meshExportOpen &&
-    !pendingFeatureDelete;
+    !pendingFeatureDelete &&
+    !pendingToolSwitch;
   exactEntryInputEnabledRef.current =
     workspaceInputEnabled && !paletteOpen && !shortcutsOpen && !namingSave;
 
@@ -15612,8 +16145,8 @@ export function App() {
       }
       if (paletteOpen || shortcutsOpen) {
         // The command bar and the overlay own their keys; Escape is handled
-        // here as a safety net. A handled one (the bar clearing its text,
-        // or the stream rejecting a proposal) keeps the prompt's focus.
+        // here as a safety net. A handled one (the bar leaving with its
+        // text, or the stream rejecting a proposal) does nothing else.
         if (event.key === 'Escape' && !event.defaultPrevented) {
           setPaletteOpen(false);
           setShortcutsOpen(false);
@@ -15801,7 +16334,7 @@ export function App() {
             event.preventDefault();
             return;
           }
-          if (modelingLocked && measuring) {
+          if (measuring) {
             event.preventDefault();
             if (measurementDraft) {
               clearMeasurementPicks();
@@ -15809,10 +16342,7 @@ export function App() {
                 `${measurementMode} measurement canceled · pick the first target.`
               );
             } else {
-              setMeasuring(false);
-              setStatus(
-                'Measure off · pinned results remain in this View session.'
-              );
+              toggleMeasure(false);
             }
             return;
           }
@@ -15852,7 +16382,7 @@ export function App() {
           // gives up focus (the next press clears), open exact entry closes
           // back to the armed command, and a value being validated stays
           // locked until the kernel answers. A key a control already handled
-          // (the prompt bar clearing its text) is that control's, not ours.
+          // (the prompt bar leaving with its text) is that control's, not ours.
           if (event.defaultPrevented) {
             return;
           }
@@ -15948,14 +16478,7 @@ export function App() {
       const key = event.key.toLowerCase();
       if (key === 'm' && modelingLocked) {
         event.preventDefault();
-        const next = !measuring;
-        setMeasuring(next);
-        clearMeasurementPicks();
-        setStatus(
-          next
-            ? 'Measure ready · Smart inspects one pick; Distance and Angle use two.'
-            : 'Measure off · pinned results stay available in this View session.'
-        );
+        toggleMeasure(!measuring);
         return;
       }
       if (key === 'f') {
@@ -16167,7 +16690,7 @@ export function App() {
           projection:
             Object.keys(representations).length > 0
               ? 'showing the previous result until it finishes'
-              : 'no exact projection is available yet'
+              : 'the model appears when it is ready'
         };
   const visibleStatus = textOutlineBudgetError
     ? `Text outlines refused: ${textOutlineBudgetError}`
@@ -16182,6 +16705,87 @@ export function App() {
         : /fail|error|invalid|unable|denied/i.test(status)
           ? 'warning'
           : 'ready';
+
+  // The measurement workbench: View and Tweak float it over the stage while
+  // it holds results; Build gives it the command slot, and only while
+  // Measure is on there, so it never stacks on a tool card.
+  const measurementDock =
+    measuring || (modelingLocked && measurements.length > 0) ? (
+      <MeasurementDock
+        measurements={measurements}
+        formattedMeasurements={formattedMeasurements}
+        enabled={measuring}
+        activeMeasurementId={activeMeasurementId}
+        mode={measurementMode}
+        draftTargetLabel={measurementDraft?.label ?? null}
+        display={measurementDisplay}
+        onMode={(mode) => {
+          setMeasuring(true);
+          setMeasurementMode(mode);
+          clearMeasurementPicks();
+          setStatus(
+            mode === 'smart'
+              ? 'Smart measure · pick an edge, face, hole, or body.'
+              : mode === 'distance'
+                ? 'Distance · pick the first target.'
+                : 'Angle · pick the first straight edge or measured face direction.'
+          );
+        }}
+        onUnit={setMeasurementUnit}
+        onPrecision={setMeasurementPrecision}
+        onRadialDisplay={setRadialDisplay}
+        onSelect={setActiveMeasurementId}
+        onToggleVisibility={(id) =>
+          setMeasurements((current) =>
+            current.map((measurement) =>
+              measurement.id === id
+                ? {
+                    ...measurement,
+                    visible: !measurement.visible
+                  }
+                : measurement
+            )
+          )
+        }
+        onRename={(id, label, note) =>
+          setMeasurements((current) =>
+            current.map((measurement) =>
+              measurement.id === id
+                ? {
+                    ...measurement,
+                    label,
+                    note: note || undefined,
+                    renamed: true
+                  }
+                : measurement
+            )
+          )
+        }
+        onDelete={(id) => {
+          setMeasurements((current) =>
+            current.filter((measurement) => measurement.id !== id)
+          );
+          setActiveMeasurementId((current) =>
+            current === id ? null : current
+          );
+          setStatus('Measurement removed.');
+        }}
+        onClear={() => {
+          if (
+            appSettings.general.confirmDestructiveActions &&
+            !window.confirm('Clear every measurement in this View session?')
+          ) {
+            return;
+          }
+          setMeasurements([]);
+          setActiveMeasurementId(null);
+          clearMeasurementPicks();
+          setStatus('Measurement list cleared.');
+        }}
+        onCopy={(measurement) => void copyMeasurements(measurement)}
+        onExport={exportMeasurements}
+      />
+    ) : null;
 
   // An operation in flight outranks the tool hint: it knows which rung of
   // the Escape ladder you are on, which is the one thing a generic
@@ -16224,6 +16828,23 @@ export function App() {
             };
           })
         )),
+    {
+      // Measuring is reading, so it stays in every workspace — Build included,
+      // where the palette used to have no way to it at all.
+      id: 'view-measure',
+      label: measuring ? 'Measure: off' : 'Measure',
+      group: 'View',
+      keywords: ['ruler', 'distance', 'angle', 'dimension', 'inspect'],
+      ...(modelingLocked ? { shortcut: 'M' } : {}),
+      icon: <Ruler size={16} aria-hidden="true" />,
+      disabledReason:
+        viewerBodies.length === 0
+          ? 'Create a body first'
+          : interaction.mode === 'sketch'
+            ? 'Finish the sketch first'
+            : null,
+      run: () => toggleMeasure(!measuring)
+    },
     {
       id: 'view-front',
       label: 'Front view',
@@ -16576,7 +17197,7 @@ export function App() {
     ? measurementDraft
       ? `${measurementDraft.label} selected · pick the second target · Esc cancels`
       : measurementMode === 'smart'
-        ? 'Smart measure · pick geometry · Shift+Click totals edges · M exits'
+        ? `Smart measure · pick geometry · Shift+Click totals edges · ${modelingLocked ? 'M' : 'Esc'} exits`
         : measurementMode === 'distance'
           ? 'Distance · pick the first target · centers resolve automatically'
           : 'Angle · pick a straight edge or measured face direction'
@@ -16590,7 +17211,9 @@ export function App() {
     : parameters.length > 0
       ? 'Edit a parameter and press Enter · the model rebuilds exactly'
       : 'This model has no parameters · Build mode is where they are defined';
-  const workspacePrompt = viewMode
+  // Measuring writes the lane in Build too: it is the command of the moment.
+  const readingHints = viewMode || measuring;
+  const workspacePrompt = readingHints
     ? viewModeHint
     : tweakMode
       ? tweakModeHint
@@ -16756,7 +17379,8 @@ export function App() {
     : undefined;
   const modelingFaces = modelingFaceOptions(
     modelingTargetBody?.topology,
-    modelingTargetBody
+    modelingTargetBody,
+    faceNamer
   );
   const holePreviewState = ((): HolePreview | null => {
     if (modelingOperation !== 'hole' || !holeDraft) return null;
@@ -16835,11 +17459,20 @@ export function App() {
       case 'solid-offset':
         return commandFactories.offsetSolidBody(submission.input);
       case 'loft':
-        return commandFactories.loftSections(submission.input);
+        return commandFactories.loftSections({
+          ...submission.input,
+          bodyName: newBodyName(submission.input.name)
+        });
       case 'sweep':
-        return commandFactories.sweepProfile(submission.input);
+        return commandFactories.sweepProfile({
+          ...submission.input,
+          bodyName: newBodyName(submission.input.name)
+        });
       case 'helical-sweep':
-        return commandFactories.helicalSweepProfile(submission.input);
+        return commandFactories.helicalSweepProfile({
+          ...submission.input,
+          bodyName: newBodyName(submission.input.name)
+        });
       case 'draft':
         return commandFactories.draftBody(submission.input);
       case 'thicken':
@@ -16913,7 +17546,7 @@ export function App() {
         manager.document.version !== current.version
       ) {
         throw new Error(
-          'The document changed during exact preflight. Recheck the operation.'
+          'The model changed while the result was being checked. Try again.'
         );
       }
       modelingPreflightRef.current = {
@@ -16928,7 +17561,7 @@ export function App() {
       modelingPreflightRef.current = null;
       return {
         status: 'refused',
-        reason: errorMessage(error, 'Exact preflight failed.')
+        reason: errorMessage(error, 'The result could not be checked.')
       };
     }
   }
@@ -16943,11 +17576,12 @@ export function App() {
       approved.baseVersion !== manager.document.version
     ) {
       setStatus(
-        'The modeling preflight is stale. Check the exact result again.'
+        'The model changed after the result was checked. Try again.'
       );
       return;
     }
     const editing = modelingEditFeature;
+    const editSession = editCardSessionRef.current;
     void executeValidatedFeature(approved.command, {
       featureName: approved.featureName,
       resultBodyId: approved.resultBodyId,
@@ -16962,7 +17596,14 @@ export function App() {
           }
         : {}),
       successMessage: commandOutcomeMessage(approved.command.label),
+      ...(editing
+        ? { cancelled: () => !editSessionIsCurrent(editing, editSession) }
+        : {}),
       onSuccess: () => {
+        if (editing) {
+          finishFeatureEdit(editing, editSession);
+          return;
+        }
         setModelingEditFeature(null);
         finishFeatureCreation();
       }
@@ -17367,6 +18008,7 @@ export function App() {
           tweakModeDisabledReason={tweakModeDisabledReason}
           onWorkspaceMode={handleWorkspaceMode}
           onSave={() => void handleSave()}
+          onSaveAs={openSaveNameDialog}
           onImportFiles={(files) => void handleImportFiles(files)}
           onExportStep={() => void handleExportStep()}
           onOpenMeshExport={() => setMeshExportOpen(true)}
@@ -17391,15 +18033,7 @@ export function App() {
             settings={viewerSettings}
             projection={projection}
             measuring={measuring}
-            onMeasure={(next) => {
-              setMeasuring(next);
-              clearMeasurementPicks();
-              setStatus(
-                next
-                  ? 'Measure ready · Smart inspects one pick; Distance and Angle use two.'
-                  : 'Measure off · pinned results stay available in this View session.'
-              );
-            }}
+            onMeasure={toggleMeasure}
             onFit={() => setFitSignal((value) => value + 1)}
             onToggleGrid={() =>
               setViewerSettings((current) => ({
@@ -17527,11 +18161,12 @@ export function App() {
             selectedTopology={
               parameterPreview ? null : renderedSelectedTopology
             }
-            previewFaceHighlights={viewerPreviewFaces}
+            previewFaceHighlights={previewBlendFaces}
             selectedEdges={parameterPreview ? [] : selectedEdges}
             pickListEnabled={appSettings.experiments.directManipulation}
             settings={viewerSettings}
             fitSignal={fitSignal}
+            autoFrame={autoFrame}
             viewRequest={viewRequest}
             normalToFaceRequest={normalToFaceRequest}
             rotateRequest={rotateRequest}
@@ -17614,8 +18249,9 @@ export function App() {
               ) : null
             }
             viewMode={modelingLocked}
-            selectionCallout={selectionCallout}
+            selectionCallout={calloutWithOperation}
             focusGhostBodies={focusGhostBodies}
+            {...(focusFaces ? { focusFaces } : {})}
             canUndo={
               !viewMode &&
               (tweakMode
@@ -17722,94 +18358,13 @@ export function App() {
             planePickerOffset={sketchPlaneOffset}
             holeGhost={holePreviewState?.ghost ?? null}
             onPickPlane={startSketchOnPlane}
-            onMeasurePreview={
-              modelingLocked && measuring ? previewMeasurement : null
-            }
+            onMeasurePreview={measuring ? previewMeasurement : null}
             regionHandle={modelingLocked ? null : regionHandleTarget}
             modeOverlay={
               modelingLocked ? (
                 <>
                   {viewMode && <ViewModeRail {...partsProps} />}
-                  {(measuring || measurements.length > 0) && (
-                    <MeasurementDock
-                      measurements={measurements}
-                      formattedMeasurements={formattedMeasurements}
-                      enabled={measuring}
-                      activeMeasurementId={activeMeasurementId}
-                      mode={measurementMode}
-                      draftTargetLabel={measurementDraft?.label ?? null}
-                      display={measurementDisplay}
-                      onMode={(mode) => {
-                        setMeasuring(true);
-                        setMeasurementMode(mode);
-                        clearMeasurementPicks();
-                        setStatus(
-                          mode === 'smart'
-                            ? 'Smart measure · pick an edge, face, hole, or body.'
-                            : mode === 'distance'
-                              ? 'Distance · pick the first target.'
-                              : 'Angle · pick the first straight edge or measured face direction.'
-                        );
-                      }}
-                      onUnit={setMeasurementUnit}
-                      onPrecision={setMeasurementPrecision}
-                      onRadialDisplay={setRadialDisplay}
-                      onSelect={setActiveMeasurementId}
-                      onToggleVisibility={(id) =>
-                        setMeasurements((current) =>
-                          current.map((measurement) =>
-                            measurement.id === id
-                              ? {
-                                  ...measurement,
-                                  visible: !measurement.visible
-                                }
-                              : measurement
-                          )
-                        )
-                      }
-                      onRename={(id, label, note) =>
-                        setMeasurements((current) =>
-                          current.map((measurement) =>
-                            measurement.id === id
-                              ? {
-                                  ...measurement,
-                                  label,
-                                  note: note || undefined,
-                                  renamed: true
-                                }
-                              : measurement
-                          )
-                        )
-                      }
-                      onDelete={(id) => {
-                        setMeasurements((current) =>
-                          current.filter((measurement) => measurement.id !== id)
-                        );
-                        setActiveMeasurementId((current) =>
-                          current === id ? null : current
-                        );
-                        setStatus('Measurement removed.');
-                      }}
-                      onClear={() => {
-                        if (
-                          appSettings.general.confirmDestructiveActions &&
-                          !window.confirm(
-                            'Clear every measurement in this View session?'
-                          )
-                        ) {
-                          return;
-                        }
-                        setMeasurements([]);
-                        setActiveMeasurementId(null);
-                        clearMeasurementPicks();
-                        setStatus('Measurement list cleared.');
-                      }}
-                      onCopy={(measurement) =>
-                        void copyMeasurements(measurement)
-                      }
-                      onExport={exportMeasurements}
-                    />
-                  )}
+                  {measurementDock}
                 </>
               ) : contextualToolCard ? (
                 <>
@@ -17954,6 +18509,8 @@ export function App() {
               }))
             }
             onFit={() => setFitSignal((value) => value + 1)}
+            measuring={measuring}
+            onMeasure={toggleMeasure}
             onView={requestView}
             onRotateView={requestRotate}
             onCycleDisplayMode={cycleDisplayMode}
@@ -18004,8 +18561,12 @@ export function App() {
       // the revert pill is up), and the closed-profile quick action only
       // when no plane prompt, Move or revert pill is up.
       command={
-        modelingLocked ? null : contextualToolCard ? (
-          hideSketchToolCard || toolFormOwnsEdgePick ? null : (
+        modelingLocked ? null : measurementDock ? (
+          measurementDock
+        ) : contextualToolCard ? (
+          hideSketchToolCard ||
+          toolFormOwnsEdgePick ||
+          calloutOperationModel ? null : (
             <ToolCard
               model={contextualToolCard}
               selectAllEdges={
@@ -18222,7 +18783,11 @@ export function App() {
               </button>
             </span>
           </div>
-        ) : selectedProfiles.length > 0 && selectedSketchProfileName ? (
+        ) : tool === null &&
+          selectedProfiles.length > 0 &&
+          selectedSketchProfileName ? (
+          // Only with no tool open: a tool keeps the selection to pre-fill
+          // its own card, and that card is the one command card in the lane.
           <ProfileQuickAction
             profileName={selectedSketchProfileName}
             profileCount={selectedProfiles.length}
@@ -18247,7 +18812,18 @@ export function App() {
               // The same panel chrome the Inspector draws for its own forms:
               // bare in `.inspector-float`, this form sat straight on the
               // viewport under the orientation widget and the utility rail.
-              <section className="inspector" aria-label="Feature inspector">
+              <section
+                className="inspector"
+                aria-label="Feature inspector"
+                // One Escape cancels this card from anywhere in it, as it
+                // does every Inspector card (F19). Face picking keeps its own
+                // rung: that press only stops picking (the workspace keys).
+                onKeyDown={(event) => {
+                  if (event.key !== 'Escape' || formFacePickTarget) return;
+                  event.stopPropagation();
+                  cancelPanel();
+                }}
+              >
                 <div className="panel-header">
                   <div className="panel-title-row">
                     <h2>
@@ -18259,6 +18835,28 @@ export function App() {
                         ? TOOL_META[modelingOperation].label
                         : 'New feature'}
                     </span>
+                    {modelingEditFeature ? (
+                      // The same overflow every Inspector edit card has: now
+                      // that selecting the feature opens this form (F19),
+                      // this is where its delete is.
+                      <PanelOverflow>
+                        <button
+                          type="button"
+                          className="panel-overflow-item danger"
+                          title="Delete feature (Del)"
+                          onClick={() => {
+                            if (validateSelectionEdit())
+                              handleDeleteFeature(
+                                modelingEditFeature.featureId,
+                                modelingEditFeature.name
+                              );
+                          }}
+                        >
+                          <Trash2 size={13} aria-hidden="true" />
+                          Delete feature
+                        </button>
+                      </PanelOverflow>
+                    ) : null}
                     <button
                       type="button"
                       className="icon-button panel-close"
@@ -18360,6 +18958,7 @@ export function App() {
                 selectedTopology={renderedSelectedTopology}
                 selectedEdges={selectedEdges}
                 edgeModifierBody={edgeModifierBody}
+                bodyRepresentations={representations}
                 scope={parameterScope.scope}
                 sketches={sketchOptions}
                 bodies={bodyOptions}
@@ -18384,8 +18983,14 @@ export function App() {
                 onClearSelectedEdges={handleClearSelectedEdges}
                 document={doc}
                 onCreatePrimitive={createFeature}
+                onRemoveSelectedEdge={(edge) =>
+                  handleSelectTopologyFromViewer(edge, true)
+                }
                 onCreateRevolve={(value) => {
-                  const command = commandFactories.revolveSketch(value);
+                  const command = commandFactories.revolveSketch({
+                    ...value,
+                    bodyName: newBodyName(value.name)
+                  });
                   createValidatedFeature(
                     command,
                     value.name,
@@ -18429,8 +19034,10 @@ export function App() {
                   );
                 }}
                 onApplyPrimitive={(feature, name, command) => {
+                  const editSession = editCardSessionRef.current;
                   if (!doc || !feature.bodyId) {
-                    executeCommand(command);
+                    if (executeCommand(command))
+                      finishFeatureEdit(feature, editSession);
                     return;
                   }
                   void executeValidatedFeature(command, {
@@ -18440,10 +19047,13 @@ export function App() {
                       (target, index) =>
                         index === 0 ? { ...target, featureName: name } : target
                     ),
-                    successMessage: commandOutcomeMessage(command.label)
+                    successMessage: commandOutcomeMessage(command.label),
+                    onSuccess: () => finishFeatureEdit(feature, editSession),
+                    cancelled: () => !editSessionIsCurrent(feature, editSession)
                   });
                 }}
                 onApplySketch={(feature, value) => {
+                  const editSession = editCardSessionRef.current;
                   if (
                     feature.data.featureKind !== 'sketch' ||
                     !selectedSketch
@@ -18473,7 +19083,9 @@ export function App() {
                       })
                     );
                   }
-                  executeTransaction(`Edit ${value.name}`, commands);
+                  if (executeTransaction(`Edit ${value.name}`, commands)) {
+                    finishFeatureEdit(feature, editSession);
+                  }
                 }}
                 onConvertSketchToFixedPlane={(sketch) => {
                   const planeRef = fixedPlaneRefForLegacyAttachment(
@@ -18493,6 +19105,7 @@ export function App() {
                   );
                 }}
                 onApplyTextSketch={(feature, value) => {
+                  const editSession = editCardSessionRef.current;
                   if (
                     feature.data.featureKind !== 'sketch' ||
                     !selectedSketch ||
@@ -18525,7 +19138,9 @@ export function App() {
                       })
                     );
                   }
-                  executeTransaction(`Edit ${value.name}`, commands);
+                  if (executeTransaction(`Edit ${value.name}`, commands)) {
+                    finishFeatureEdit(feature, editSession);
+                  }
                 }}
                 onEditModelingFeature={openModelingFeatureEditor}
                 onEditSketchInViewport={(feature) => {
@@ -18888,6 +19503,26 @@ export function App() {
                 setPendingFeatureDelete(null);
                 commitDeleteFeature(featureId, name, dependents.length);
               }}
+            />
+          )}
+          {pendingToolSwitch && doc && (
+            <UnappliedCardDialog
+              card="Move"
+              next={
+                pendingToolSwitch.tool === 'measure'
+                  ? 'Measure'
+                  : pendingToolSwitch.tool === 'history'
+                    ? (pendingToolSwitch.historyFeature &&
+                        resolveHistoryFeature(
+                          doc,
+                          pendingToolSwitch.historyFeature
+                        )?.name) ||
+                      'History'
+                    : TOOL_META[pendingToolSwitch.tool].label
+              }
+              onApply={() => resolvePendingToolSwitch('apply')}
+              onDiscard={() => resolvePendingToolSwitch('discard')}
+              onCancel={() => resolvePendingToolSwitch('cancel')}
             />
           )}
           {namingSave && doc && (

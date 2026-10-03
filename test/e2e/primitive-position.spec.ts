@@ -85,6 +85,7 @@ test('places a cylinder on a box from the position row its card names', async ({
 
   await baseX.fill('5');
   await inspector.getByRole('button', { name: 'Apply', exact: true }).click();
+  await expect(inspector).toHaveCount(0);
   await selectCylinder();
   await expect(baseX).toHaveValue('5');
   await expectCenter('5, 9, 38');

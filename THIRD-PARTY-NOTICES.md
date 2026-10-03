@@ -26,9 +26,14 @@ authoritative dependency inventory.
 
 ## User interface, rendering, and document support
 
-- **IBM Plex Sans and IBM Plex Mono 5.3.0** — Copyright IBM Corp.; SIL Open
-  Font License 1.1. Source and license:
-  <https://github.com/IBM/plex>.
+- **Geist Sans and Geist Mono 5.3.0** (Fontsource packages) — Copyright 2023
+  Vercel, made with basement.studio; SIL Open Font License 1.1. Source and
+  license: <https://github.com/vercel/geist-font>.
+- **Noto Sans Math 3.000 and Noto Sans Symbols 2 2.008, subset** — Copyright
+  2022 Google LLC and Copyright 2022 The Noto Project Authors; SIL Open Font
+  License 1.1. `apps/web/src/theme/fonts/` redistributes glyph subsets of each
+  as the "OpenZCAD Symbols" fallback faces, with the license text in
+  `LICENSE-Noto.txt` beside them. Source: <https://github.com/notofonts>.
 - **PDF.js / `pdfjs-dist` 6.2.108** — Copyright Mozilla and contributors;
   Apache-2.0. PDF.js distributions also contain Liberation fonts under the SIL
   Open Font License. Source and notices:
