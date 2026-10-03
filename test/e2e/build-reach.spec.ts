@@ -27,13 +27,20 @@ async function createProject(
 
 async function addBox(
   page: Page,
-  size: { width: string; depth: string; height: string }
+  size: { width: string; depth: string; height: string },
+  corner?: { x: string }
 ) {
   await page.getByRole('button', { name: /^Box \(B\)/ }).click();
   const inspector = page.getByRole('region', { name: 'Feature inspector' });
   await inspector.getByLabel('Width (X)').fill(size.width);
   await inspector.getByLabel('Depth (Y)').fill(size.depth);
   await inspector.getByLabel('Height (Z)').fill(size.height);
+  if (corner) {
+    await inspector
+      .getByRole('group', { name: 'Position' })
+      .getByRole('textbox', { name: 'Corner X' })
+      .fill(corner.x);
+  }
   await inspector.getByRole('button', { name: /^Create/ }).click();
   await expect(inspector).toHaveCount(0);
 }
@@ -210,6 +217,24 @@ test('F29: a body created off screen is framed, one already in view is not', asy
   rested.forEach((value, index) =>
     expect(value).toBeCloseTo(framed[index]!, 6)
   );
+
+  // A primitive placed by its Position row far off the frame (the box and
+  // its Place move commit together) is brought into view as well.
+  await addBox(
+    page,
+    { width: '10', depth: '10', height: '10' },
+    { x: '400' }
+  );
+  await expect(page.locator('.viewer-host canvas')).toHaveAttribute(
+    'data-e2e-rendered-bodies',
+    '4'
+  );
+  await expect
+    .poll(() => bodiesInView(page), {
+      message: 'the placed box should be brought into view',
+      timeout: 15_000
+    })
+    .toBe(true);
 });
 
 test('F30: an opened fillet lists its edges by name, lights them, and drops one', async ({
