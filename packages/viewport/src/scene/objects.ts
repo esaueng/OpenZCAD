@@ -88,6 +88,9 @@ export function applyDisplayMode(bodyGroup: THREE.Group, mode: DisplayMode) {
       // A selected face's fill in the body's own material: a wireframe
       // shows no faces, so it goes with them and the rim carries the pick.
       child.visible = mode !== 'wireframe';
+      // The fill may have cloned its body's hidden material while in
+      // wireframe. Restore both visibility gates when faces return.
+      (child as ViewerMesh).material.visible = mode !== 'wireframe';
     } else if (child instanceof THREE.LineSegments || child instanceof Line2) {
       child.visible = mode !== 'shaded';
       child.userData.displayMode = mode;

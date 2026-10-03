@@ -188,8 +188,8 @@ function fill(
     badge.textContent = 'Anchored';
     children.push(badge);
   }
-  // A running check cannot be switched mid-flight, as the card's switch
-  // could not be; tools (Sketch, Hole) open their own card and stay live.
+  // The exact check owns this pick until it answers. Switching to another
+  // action or tool would leave the old operation free to commit late.
   const validating = operation?.phase === 'validating';
   if (content.verbs.length > 0 || operation?.selectAllEdgesCount) {
     const verbs = owner.createElement('span');
@@ -205,8 +205,7 @@ function fill(
       // Named for what it acts on, so it never shares a name with the rail
       // button or tool-card action of the same verb.
       verbButton.setAttribute('aria-label', `Selection: ${verb.label}`);
-      verbButton.disabled =
-        verb.disabled || (validating && verb.id.startsWith('action:'));
+      verbButton.disabled = verb.disabled || validating;
       verbButton.setAttribute('aria-pressed', String(verb.pressed));
       verbs.append(verbButton);
     }
@@ -233,6 +232,7 @@ function fill(
     );
     clear.title = 'Deselect all (Esc)';
     clear.setAttribute('aria-label', 'Deselect all');
+    clear.disabled = validating;
     children.push(clear);
   }
   const refusal = operation ? diagnostic(owner, operation) : null;

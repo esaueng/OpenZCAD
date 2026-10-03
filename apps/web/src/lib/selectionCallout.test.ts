@@ -304,10 +304,91 @@ describe('renderSelectionCallout', () => {
         element.querySelector<HTMLButtonElement>(
           `[aria-label="Selection: ${label}"]`
         );
-      // Actions on the pick wait; a tool opens its own card, so it does not.
+      // Actions and tools both wait: the exact check owns the pick.
       expect(byLabel('Offset')?.disabled).toBe(true);
-      expect(byLabel('Hole')?.disabled).toBe(false);
+      expect(byLabel('Hole')?.disabled).toBe(true);
     });
+
+    it('locks deselection until the exact check answers', () => {
+      const element = document.createElement('div');
+      const onClear = vi.fn();
+      renderSelectionCallout(
+        element,
+        textLabelSegments('Box'),
+        content({
+          onClear,
+          operation: operation({ phase: 'validating' })
+        })
+      );
+      const clear = () =>
+        element.querySelector<HTMLButtonElement>(
+          '[aria-label="Deselect all"]'
+        )!;
+      expect(clear().disabled).toBe(true);
+      clear().click();
+      expect(onClear).not.toHaveBeenCalled();
+
+      refreshSelectionCallout(
+        element,
+        content({ onClear, operation: operation({ phase: 'failed' }) })
+      );
+      expect(clear().disabled).toBe(false);
+      clear().click();
+      expect(onClear).toHaveBeenCalledTimes(1);
+    });
+
+    it.each(['failed', 'armed', 'completed'] as const)(
+      'unlocks every chip control after validation becomes %s',
+      (phase) => {
+        const element = document.createElement('div');
+        const onVerb = vi.fn();
+        const onClear = vi.fn();
+        const actions = operation({
+          phase: 'validating',
+          selectAllEdgesCount: 12
+        });
+        const verbs = selectionCalloutVerbs({
+          kind: 'face',
+          faceCapabilities: planarFace,
+          availability: READY
+        });
+        renderSelectionCallout(
+          element,
+          textLabelSegments('Box'),
+          content({ verbs, onVerb, onClear, operation: actions })
+        );
+        for (const control of element.querySelectorAll<HTMLButtonElement>(
+          'button'
+        )) {
+          expect(control.disabled).toBe(true);
+          control.click();
+        }
+        expect(onVerb).not.toHaveBeenCalled();
+        expect(onClear).not.toHaveBeenCalled();
+        expect(actions.onSelectAllEdges).not.toHaveBeenCalled();
+
+        refreshSelectionCallout(
+          element,
+          content({
+            verbs,
+            onVerb,
+            onClear,
+            operation: phase === 'completed' ? undefined : { ...actions, phase }
+          })
+        );
+        for (const control of element.querySelectorAll<HTMLButtonElement>(
+          'button'
+        )) {
+          expect(control.disabled).toBe(false);
+          control.click();
+        }
+        expect(onVerb).toHaveBeenCalledTimes(verbs.length);
+        expect(onClear).toHaveBeenCalledTimes(1);
+        expect(actions.onSelectAllEdges).toHaveBeenCalledTimes(
+          phase === 'completed' ? 0 : 1
+        );
+      }
+    );
 
     it('says why it refused, with each way out as a button', () => {
       const element = document.createElement('div');

@@ -23,6 +23,30 @@ function bodyWithEdges() {
 }
 
 describe('applyDisplayMode', () => {
+  it('restores a selected face made while its body was in wireframe', () => {
+    const { group, body } = bodyWithEdges();
+    applyDisplayMode(group, 'wireframe');
+    const selectedFace = new THREE.Mesh(
+      body.geometry.clone(),
+      body.material.clone()
+    );
+    selectedFace.userData.selectionOverlay = true;
+    selectedFace.userData.ownColourFill = true;
+    body.add(selectedFace);
+    expect(selectedFace.material.visible).toBe(false);
+
+    for (const mode of [
+      'wireframe',
+      'shaded-edges',
+      'wireframe',
+      'shaded'
+    ] as const) {
+      applyDisplayMode(group, mode);
+      expect(selectedFace.visible).toBe(mode !== 'wireframe');
+      expect(selectedFace.material.visible).toBe(mode !== 'wireframe');
+    }
+  });
+
   it.each([
     ['shaded-edges', true, true],
     ['shaded', true, false],

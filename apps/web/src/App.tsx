@@ -6808,6 +6808,14 @@ export function App() {
   }
 
   function clearSelection() {
+    const current = interactionRef.current;
+    if (
+      isOperationState(current) &&
+      current.mode !== 'region' &&
+      current.phase === 'validating'
+    ) {
+      return;
+    }
     retireStatusMessage();
     if (
       interaction.mode === 'face' &&
