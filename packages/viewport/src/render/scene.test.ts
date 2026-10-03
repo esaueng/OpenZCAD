@@ -260,6 +260,45 @@ describe('computeFitPose', () => {
   });
 });
 
+describe('computeFitPose on a narrow canvas', () => {
+  // The horizontal field of view shrinks with the aspect ratio: fitting the
+  // vertical one alone left a wide body clipped on a portrait canvas.
+  for (const direction of [
+    undefined,
+    new THREE.Vector3(0, -1, 0.3),
+    new THREE.Vector3(1, -1, 1)
+  ]) {
+    it(`frames a wide body on a portrait canvas (${direction ? direction.toArray().join(',') : 'iso'})`, () => {
+      const camera = new THREE.PerspectiveCamera(45, 375 / 900, 0.1, 4000);
+      const wide = new THREE.Mesh(new THREE.BoxGeometry(120, 10, 10));
+      wide.updateMatrixWorld();
+      const pose = computeFitPose(camera, [wide], direction);
+      camera.position.copy(pose.position);
+      camera.near = pose.near;
+      camera.far = pose.far;
+      camera.up.set(0, 0, 1);
+      camera.lookAt(pose.target);
+      camera.updateProjectionMatrix();
+      expect(
+        boxFullyInView(new THREE.Box3().setFromObject(wide), camera, 0.04)
+      ).toBe(true);
+    });
+  }
+
+  it('keeps the landscape distance unchanged', () => {
+    const landscape = new THREE.PerspectiveCamera(45, 16 / 9, 0.1, 4000);
+    const square = new THREE.PerspectiveCamera(45, 1, 0.1, 4000);
+    const mesh = new THREE.Mesh(new THREE.BoxGeometry(80, 40, 5));
+    mesh.updateMatrixWorld();
+    const wide = computeFitPose(landscape, [mesh]);
+    const even = computeFitPose(square, [mesh]);
+    expect(wide.position.distanceTo(wide.target)).toBeCloseTo(
+      even.position.distanceTo(even.target),
+      9
+    );
+  });
+});
+
 describe('boxFullyInView', () => {
   function cameraAt(position: THREE.Vector3) {
     const camera = new THREE.PerspectiveCamera(45, 1, 0.1, 4000);

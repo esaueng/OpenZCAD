@@ -1069,7 +1069,14 @@ export function computeFitPose(
   const size = box.getSize(new THREE.Vector3());
   const center = box.getCenter(new THREE.Vector3());
   const maxDim = Math.max(size.x, size.y, size.z) || 1;
-  const halfFov = THREE.MathUtils.degToRad(camera.fov / 2);
+  // The narrower of the two fields of view decides: on a portrait canvas
+  // the horizontal one is smaller than `fov`, and fitting the vertical one
+  // alone left a wide body cut off at the sides. Landscape is unchanged.
+  const verticalHalfFov = THREE.MathUtils.degToRad(camera.fov / 2);
+  const halfFov = Math.min(
+    verticalHalfFov,
+    Math.atan(Math.tan(verticalHalfFov) * (camera.aspect || 1))
+  );
   const distance = (maxDim / 2 / Math.tan(halfFov)) * 2.1;
   // Fit lands on the home orientation unless told otherwise: the same iso
   // direction the default camera pose and the ISO view preset use.

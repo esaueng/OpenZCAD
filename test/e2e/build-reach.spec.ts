@@ -14,8 +14,12 @@ import {
  * selected" over a wholly tinted body, with no way to see or drop one edge.
  */
 
-async function createProject(page: Page, name: string) {
-  await stubApi(page);
+async function createProject(
+  page: Page,
+  name: string,
+  options: Parameters<typeof stubApi>[1] = {}
+) {
+  await stubApi(page, options);
   await page.goto('/');
   await page.getByLabel('Project name').fill(name);
   await page.getByRole('button', { name: 'Create project' }).click();
@@ -145,6 +149,32 @@ test('F13: the instrument rail with Measure stays inside a short window', async 
   const measure = islands[0]!.getByRole('button', { name: 'Measure' });
   await measure.click();
   await expect(page.getByLabel('Measurement workbench')).toBeVisible();
+});
+
+test('F29: on a portrait phone a wide body is framed across the width too', async ({
+  page
+}) => {
+  // Fitting the vertical field of view alone left a long body cut off at the
+  // sides of a narrow canvas, glide or not.
+  await page.setViewportSize({ width: 390, height: 844 });
+  // A phone has no room for the drawer or the open fold beside the rail.
+  await createProject(page, 'Auto Frame Phone', {
+    modelDrawer: false,
+    commandFoldClosed: true
+  });
+  await addBox(page, { width: '10', depth: '10', height: '10' });
+  await expect.poll(() => bodiesInView(page)).toBe(true);
+  await addBox(page, { width: '160', depth: '5', height: '5' });
+  await expect(page.locator('.viewer-host canvas')).toHaveAttribute(
+    'data-e2e-rendered-bodies',
+    '2'
+  );
+  await expect
+    .poll(() => bodiesInView(page), {
+      message: 'the long bar should be framed across the narrow canvas',
+      timeout: 15_000
+    })
+    .toBe(true);
 });
 
 test('F29: a body created off screen is framed, one already in view is not', async ({

@@ -1761,25 +1761,31 @@ export function Inspector(props: InspectorProps) {
       // Only a feature pinned from its history row takes picks: a blend
       // clicked in the viewport to *find* its fillet is an inferred
       // selection, and that picked blend edge must not join the set.
-      const pickedEdgeHashes =
+      const pickedEdges =
         featureSelectionSource === 'pinned'
-          ? selectedEdges.flatMap((edge) =>
-              edge.bodyId === selectedFeature.bodyId && edge.hash !== undefined
-                ? [edge.hash]
-                : []
+          ? selectedEdges.filter(
+              (edge) =>
+                edge.bodyId === selectedFeature.bodyId &&
+                edge.hash !== undefined
             )
           : [];
+      const pickedEdgeHashes = pickedEdges.map((edge) => edge.hash!);
       const addedEdgeHashes = pickedEdgeHashes.filter(
         (hash) => !data.edgeHashes.includes(hash)
       );
-      // An edge taken off the list leaves both the hashes and the references
-      // naming it, so the two still match one for one.
-      const removed = removedEdges.edit === editKey ? removedEdges.hashes : [];
-      const editEdgeHashes = (
-        addedEdgeHashes.length > 0
-          ? [...data.edgeHashes, ...addedEdgeHashes]
-          : data.edgeHashes
-      ).filter((hash) => !removed.includes(hash));
+      // A stored edge taken off the list stays off until it is picked again:
+      // a pick of the same edge (sharp again in the preview) brings it back.
+      // It leaves both the hashes and the references naming it, so the two
+      // still match one for one.
+      const storedRemovals =
+        removedEdges.edit === editKey ? removedEdges.hashes : [];
+      const removed = storedRemovals.filter(
+        (hash) => !pickedEdgeHashes.includes(hash)
+      );
+      const editEdgeHashes = [
+        ...data.edgeHashes.filter((hash) => !removed.includes(hash)),
+        ...addedEdgeHashes
+      ];
       // Stored references only cover the stored hashes and a pick lands on
       // the blended result body, whose lineage the consumed source does not
       // carry, so a grown set goes hash-only and resolves by fingerprint.
@@ -1813,9 +1819,21 @@ export function Inspector(props: InspectorProps) {
               hash
             )
           }))}
-          onRemoveEdge={(hash) =>
-            setRemovedEdges({ edit: editKey, hashes: [...removed, hash] })
-          }
+          onRemoveEdge={(hash) => {
+            // A picked edge leaves the selection, as a Shift+Click would; a
+            // stored one is set aside until it is picked again.
+            const picked = pickedEdges.find((edge) => edge.hash === hash);
+            if (picked) props.onRemoveSelectedEdge?.(picked);
+            if (data.edgeHashes.includes(hash)) {
+              setRemovedEdges({
+                edit: editKey,
+                hashes: [
+                  ...storedRemovals.filter((stored) => stored !== hash),
+                  hash
+                ]
+              });
+            }
+          }}
           initial={{
             name: selectedFeature.name,
             size: data.featureKind === 'fillet' ? data.radius : data.distance,
