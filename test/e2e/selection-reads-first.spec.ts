@@ -283,3 +283,91 @@ test('an edge pick carries its operation on the chip, refusal included', async (
   // The handle's own riding label stays: the chip did not replace it.
   await expect(page.getByTestId('direct-manipulation-value')).toBeVisible();
 });
+
+/**
+ * Counts, every frame from now on, the cards on screen at once: an operation
+ * card, the feature inspector, anything in the command slot. Read back with
+ * {@link maxCardsSeen}.
+ */
+async function countCards(page: Page) {
+  await page.evaluate(() => {
+    const record = window as unknown as {
+      __maxCards: number;
+      __cardsAtMax: string[];
+    };
+    record.__maxCards = 0;
+    record.__cardsAtMax = [];
+    const tick = () => {
+      const cards = [
+        ...document.querySelectorAll<HTMLElement>(
+          '.tool-card, .inspector-float > *, .command-float > *'
+        )
+      ].filter((card) => {
+        const box = card.getBoundingClientRect();
+        return box.width > 0 && box.height > 0 && !card.closest('.closing');
+      });
+      if (cards.length > record.__maxCards) {
+        record.__maxCards = cards.length;
+        record.__cardsAtMax = cards.map(
+          (card) => card.getAttribute('aria-label') ?? card.className
+        );
+      }
+      requestAnimationFrame(tick);
+    };
+    requestAnimationFrame(tick);
+  });
+}
+
+async function maxCardsSeen(page: Page) {
+  return page.evaluate(() => {
+    const record = window as unknown as {
+      __maxCards: number;
+      __cardsAtMax: string[];
+    };
+    return { max: record.__maxCards, cards: record.__cardsAtMax };
+  });
+}
+
+/*
+  Batch 6b's probe: with a feature's inspector up, a face pick raised the
+  face's operation card beside it — two cards for one pick — and the same
+  from the other side. One card at a time: the face's operation rides the
+  chip on the pick, and a History row disarms it.
+*/
+test('a face pick and a History row never show two cards at once', async ({
+  page
+}) => {
+  test.setTimeout(120_000);
+  const canvas = await createBox(page, 'One card');
+  const [face] = await twoFacePoints(canvas);
+  const history = page.locator('.feature-row-main', { hasText: 'Box' }).first();
+  const inspector = page.getByRole('region', { name: 'Feature inspector' });
+  const operation = page.getByRole('region', { name: /operation$/ });
+
+  // History row first, then a face in the viewport.
+  await history.click();
+  await expect(inspector).toBeVisible();
+  await countCards(page);
+  await page.mouse.click(face.x, face.y);
+  await expect(canvas).toHaveAttribute('data-e2e-selected-face', face.face);
+  await expect(operation).toBeVisible();
+  await page.waitForTimeout(800);
+  let seen = await maxCardsSeen(page);
+  expect(seen.max, JSON.stringify(seen)).toBe(1);
+  // The face's operation is on the chip on the pick, not a second card.
+  await expect(operation).toHaveClass(/selection-callout-chip/);
+
+  // A face armed first, then a History row.
+  await page.keyboard.press('Escape');
+  await expect(canvas).not.toHaveAttribute('data-e2e-selected-face', /.+/);
+  await countCards(page);
+  await page.mouse.click(face.x, face.y);
+  await expect(canvas).toHaveAttribute('data-e2e-selected-face', face.face);
+  await history.click();
+  await expect(inspector).toBeVisible();
+  // The row disarmed the face's operation rather than standing beside it.
+  await expect(operation).toHaveCount(0);
+  await page.waitForTimeout(800);
+  seen = await maxCardsSeen(page);
+  expect(seen.max, JSON.stringify(seen)).toBe(1);
+});
