@@ -12,6 +12,7 @@ import {
 } from '@openzcad/shared';
 import type { ProjectSharingClient } from '../lib/projectSharing';
 import type { ProjectShareLinkClient } from '../lib/projectShareClient';
+import { setPersonalInfoVisible } from './PersonalInfoToggle';
 import { ProjectSharingDialog } from './ProjectSharingDialog';
 
 const owner = toUserId('user_sharing_owner');
@@ -175,8 +176,7 @@ describe('ProjectSharingDialog', () => {
     ).toHaveAttribute('aria-busy', 'true');
   });
 
-  it('hides live names and initials until revealed, while identifying your sessions', async () => {
-    const user = userEvent.setup();
+  it('hides live names and initials until Settings reveals them, while identifying your sessions', () => {
     const base = createProjectDocument('Shared sessions', owner);
     render(
       <ProjectSharingDialog
@@ -214,14 +214,18 @@ describe('ProjectSharingDialog', () => {
     expect(screen.getByText('Collaborator 2')).toBeVisible();
     expect(screen.queryByText('alex')).not.toBeInTheDocument();
     expect(screen.getAllByText('?')).toHaveLength(2);
-    await user.click(screen.getByRole('button', { name: 'Show personal info' }));
+    // Settings owns the only switch; the dialog just follows it.
+    expect(
+      screen.queryByRole('button', { name: /personal info/i })
+    ).not.toBeInTheDocument();
+    act(() => setPersonalInfoVisible(true));
     // Two sessions of one account are one person, so one row.
     expect(screen.getAllByText('test-user (you)')).toHaveLength(1);
     expect(screen.getByText('alex')).toBeVisible();
     expect(screen.queryByText('alex (you)')).not.toBeInTheDocument();
     expect(screen.getByText('Viewer')).toBeVisible();
     expect(screen.getByText('idle')).toBeVisible();
-    await user.click(screen.getByRole('button', { name: 'Hide personal info' }));
+    act(() => setPersonalInfoVisible(false));
     expect(screen.queryByText('alex')).not.toBeInTheDocument();
   });
 
@@ -251,8 +255,10 @@ describe('ProjectSharingDialog', () => {
     const dialog = screen.getByRole('dialog');
     expect(dialog.innerHTML).not.toContain('member@example.com');
     expect(dialog.innerHTML).not.toContain('pending@example.com');
-    expect(screen.getByLabelText('Role for Collaborator 1')).toHaveValue('viewer');
-    await user.click(screen.getByRole('button', { name: 'Show personal info' }));
+    expect(screen.getByLabelText('Role for Collaborator 1')).toHaveValue(
+      'viewer'
+    );
+    act(() => setPersonalInfoVisible(true));
     expect(await screen.findByText('member@example.com')).toBeVisible();
     expect(screen.getByText('pending@example.com')).toBeVisible();
     expect(screen.getByText('Invited · editor · expired')).toBeVisible();
@@ -282,7 +288,7 @@ describe('ProjectSharingDialog', () => {
     expect(
       screen.getByText('Invitation sent to new@example.com.')
     ).toBeVisible();
-    await user.click(screen.getByRole('button', { name: 'Hide personal info' }));
+    act(() => setPersonalInfoVisible(false));
     expect(screen.getByText('Invitation sent.')).toBeVisible();
     expect(dialog.innerHTML).not.toContain('new@example.com');
     expect(dialog.innerHTML).not.toContain('member@example.com');
@@ -546,7 +552,6 @@ it('hangs from the top bar sharing chip and follows it on resize', async () => {
 });
 
 it('names the self row from the account when no session is live', async () => {
-  const user = userEvent.setup();
   const base = createProjectDocument('Named self', owner);
   const { rerender } = render(
     <ProjectSharingDialog
@@ -563,7 +568,7 @@ it('names the self row from the account when no session is live', async () => {
   );
   expect(screen.getByText('You')).toBeVisible();
   expect(screen.queryByText('peter (you)')).not.toBeInTheDocument();
-  await user.click(screen.getByRole('button', { name: 'Show personal info' }));
+  act(() => setPersonalInfoVisible(true));
   expect(await screen.findByText('peter (you)')).toBeVisible();
   expect(screen.getByText('Owner')).toBeVisible();
 
