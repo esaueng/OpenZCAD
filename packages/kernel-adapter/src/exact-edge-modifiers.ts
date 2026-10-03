@@ -449,10 +449,12 @@ export function chamferLadderAim(
  * the cascade reports where it stopped FIRST, the face it stopped on changes
  * with the requested size, and this adapter's own acceptance rules are
  * stricter than the kernel's. Measured on the pin, a 30x18x24 box refuses a
- * 30 fillet with "available radius 18", and the kernel will indeed build
- * r17.999 — as a body 2x the height of its input, which the bounds guard
- * above rejects. On a 50x50x2 plate the reported ceiling falls from 50 to 2
- * between r60 and r30 on one edge, and 2 still refuses.
+ * 30 fillet with "available radius 18", and r17.999 builds a valid round
+ * there (before Remus #926 the bounds guard above refused it, reading the
+ * round's cylinder face as a full circle reaching 36 across an 18 x 24
+ * section). On a
+ * 50x50x2 plate the reported ceiling falls from 50 to 2 between r60 and r30
+ * on one edge, and 2 still refuses.
  *
  * Being wrong about the ceiling therefore costs at most a wasted rung here,
  * which is why it is used at this end and not in the sentence.
@@ -515,12 +517,13 @@ function refineStep(accepted: number, refused: number): number {
  * largest size proved to build.
  *
  * The ladder alone answers in coarse fractions of the request — a half, an
- * eighth — so a 6 mm plate that refuses r5 was told "radius 2.5 builds
+ * eighth — so a 6 mm plate that refused r5 was told "radius 2.5 builds
  * here" while r3 built, which sent the user below a radius they already
- * had. This bisects over round sizes between the two (on that plate: 3.5
- * refuses, 3 builds, so 3 is quoted), at most six more kernel calls on a
- * path that is already a refusal. Only a size that was built is returned;
- * when nothing between builds, the probed size stands.
+ * had. This bisects over round sizes between the two (on that plate, asked
+ * for r8: the rung is 3, 5.5 builds and 6 refuses, so 5.5 is quoted), at
+ * most six more kernel calls on a path that is already a refusal. Only a
+ * size that was built is returned; when nothing between builds, the probed
+ * size stands.
  */
 export function refineAcceptedEdgeModifierSize(
   kernel: RemusKernel,

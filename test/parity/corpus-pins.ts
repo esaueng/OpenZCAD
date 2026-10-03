@@ -859,7 +859,7 @@ export const KERNEL_DELTAS: KernelDeltaPin[] = [
   {
     subject: 'boolean-on-nurbs-import',
     metric: 'volume',
-    remus: 9428.680386824797,
+    remus: 9428.718990728843,
     occt: 9546.002960523074,
     owner: 'OCCT-defect',
     note:
@@ -870,7 +870,11 @@ export const KERNEL_DELTAS: KernelDeltaPin[] = [
       'Remus from +0.096% to +0.12%, and the 2.130.23 pin (B20 exact ' +
       'measurement plus stepped-rim tessellation seeding) nudged it to ' +
       '+0.13% — still an order of magnitude closer ' +
-      'to the arithmetic than OCCT. OCCT returns MORE volume ' +
+      'to the arithmetic than OCCT. Remus b3a4e4f (#926, cylinder faces ' +
+      'bounded by their arc) drops the full-circle box of the r4 bore ' +
+      'from the body box, so the measuring mesh is finer: 9428.680 -> ' +
+      '9428.719, toward the 9429.19 that mesh converges to at deflection ' +
+      '1e-4. OCCT returns MORE volume ' +
       'after a SUBTRACT than its own ' +
       'import of the same body (9500.0), which is not a tolerance question. ' +
       'Both produce 10 exact faces with no mesh fallback, so the K0.5 ' +
