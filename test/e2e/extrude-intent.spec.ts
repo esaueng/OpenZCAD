@@ -330,7 +330,8 @@ test('uses the shared editor for preview, cancel, create and operation changes i
   await editor.getByLabel('Stored extrude operation').selectOption('new-body');
   await editor.getByRole('button', { name: 'Apply', exact: true }).click();
   await expectBodyCount(page, 2);
-  await page.getByRole('button', { name: 'Close panel' }).click();
+  // An applied edit closes its card, as Create does (F19).
+  await expect(editor).toHaveCount(0);
   await page.getByRole('button', { name: 'Undo', exact: true }).click();
   await expectBodyCount(page, 1);
   await page.getByRole('button', { name: 'Redo', exact: true }).click();
