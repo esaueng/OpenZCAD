@@ -603,18 +603,16 @@
   border-left-color: transparent;
 }
 
-/* The grip only shows on hover; narrow, so a row at rest reads dot, icon,
-   name without a gap between the line and the name. Its box is the 24 px
-   minimum pointer target, and the negative margin hands 10 px of it to the
-   row's left padding (past the dot), so it still takes 14 px of the row and
-   never reaches over the feature button beside it — a hit area overhanging
-   that button turned a click on the row's leading edge into a reorder.
-   Positioned so it stacks over the timeline dot its box now overlaps. */
+/* The grip only shows on hover. Its box is the 24 px minimum pointer
+   target, and it has a column of its own between the timeline (the row's
+   left padding, where the end-of-history handle lies) and the feature
+   button. Every other arrangement stole pixels: a hit area reaching right
+   took the feature button's leading edge, and one reaching left sat under
+   the handle, which is drawn above the rows. control-names.spec.ts checks
+   both edges. */
 .history-timeline .feature-row-grip {
-  position: relative;
   width: 24px;
   height: 24px;
-  margin-left: -10px;
   padding: 0;
   display: inline-grid;
   place-items: center;
