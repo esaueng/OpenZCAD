@@ -1092,10 +1092,14 @@ interface TransformFormProps {
   initialTarget?: BodyId;
   /** Name seeded for a new feature; edits carry `initial.name` instead. */
   defaultName?: string;
+  /** Document length units, named in the translation fields' labels. */
+  units?: string;
   submitLabel: string;
   onSubmit(value: TransformFormValue): void;
   onCancel?: () => void;
 }
+
+const TRANSFORM_AXES = ['x', 'y', 'z'] as const;
 
 export function TransformForm({
   scope,
@@ -1103,6 +1107,7 @@ export function TransformForm({
   initial,
   initialTarget,
   defaultName = 'Move',
+  units,
   submitLabel,
   onSubmit,
   onCancel
@@ -1171,46 +1176,33 @@ export function TransformForm({
           ))}
         </select>
       </label>
+      {/* The labels the Move gizmo's card uses (F19): a Move is created
+          there and edited here, and the two named the same fields
+          "dX" and "Move X". */}
       <div className="field-triple">
-        <ExprInput
-          label="Move X"
-          value={values.tx ?? ''}
-          scope={scope}
-          autoFocus
-          onChange={setValue('tx')}
-        />
-        <ExprInput
-          label="Move Y"
-          value={values.ty ?? ''}
-          scope={scope}
-          onChange={setValue('ty')}
-        />
-        <ExprInput
-          label="Move Z"
-          value={values.tz ?? ''}
-          scope={scope}
-          onChange={setValue('tz')}
-        />
+        {TRANSFORM_AXES.map((axis, index) => (
+          <ExprInput
+            key={`t${axis}`}
+            label={`d${axis.toUpperCase()}`}
+            ariaLabel={`Move ${axis.toUpperCase()}${units ? ` in ${units}` : ''}`}
+            value={values[`t${axis}`] ?? ''}
+            scope={scope}
+            autoFocus={index === 0}
+            onChange={setValue(`t${axis}`)}
+          />
+        ))}
       </div>
       <div className="field-triple">
-        <ExprInput
-          label="Rotate X°"
-          value={values.rx ?? ''}
-          scope={scope}
-          onChange={setValue('rx')}
-        />
-        <ExprInput
-          label="Rotate Y°"
-          value={values.ry ?? ''}
-          scope={scope}
-          onChange={setValue('ry')}
-        />
-        <ExprInput
-          label="Rotate Z°"
-          value={values.rz ?? ''}
-          scope={scope}
-          onChange={setValue('rz')}
-        />
+        {TRANSFORM_AXES.map((axis) => (
+          <ExprInput
+            key={`r${axis}`}
+            label={`r${axis.toUpperCase()}`}
+            ariaLabel={`Rotate ${axis.toUpperCase()} in degrees`}
+            value={values[`r${axis}`] ?? ''}
+            scope={scope}
+            onChange={setValue(`r${axis}`)}
+          />
+        ))}
       </div>
       <ExprInput
         label="Scale ×"

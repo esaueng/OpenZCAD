@@ -6,7 +6,7 @@ import {
   loadMassDensitySelection,
   saveMassDensitySelection
 } from '../lib/massDensityPreference';
-import { MoreHorizontal, Trash2, X } from 'lucide-react';
+import { Trash2, X } from 'lucide-react';
 import { coerceParamValue } from '@openzcad/document-core';
 import { findFontFace } from '@openzcad/geometry';
 import { FEATURE_COLORS, featureColor } from '@openzcad/shared';
@@ -85,6 +85,7 @@ import {
 } from '../lib/inspectorHeading';
 import { ExprInput } from './ExprInput';
 import { ColorPicker } from './ColorPicker';
+import { PanelOverflow } from './PanelOverflow';
 import { FieldAutoFocusProvider } from './forms/fieldAutoFocus';
 import type { BodyAppearancePreview } from './ModelViewer';
 import {
@@ -748,56 +749,6 @@ function BodyStats({
 }
 
 /**
- * The header's overflow menu.
- *
- * A native disclosure does not close when you click away from it, which for a
- * menu means it sits open over the panel until you click it again. The colour
- * picker in this file already solved that; this uses the same listener rather
- * than inventing a second behaviour for the same gesture.
- */
-function PanelOverflow({ children }: { children: ReactNode }) {
-  const ref = useRef<HTMLDetailsElement | null>(null);
-  useEffect(() => {
-    const close = (event: Event) => {
-      const menu = ref.current;
-      if (
-        menu?.open &&
-        event.target instanceof Node &&
-        !menu.contains(event.target)
-      ) {
-        menu.open = false;
-      }
-    };
-    const onKeyDown = (event: KeyboardEvent) => {
-      if (event.key === 'Escape' && ref.current?.open) {
-        // Stop here: the panel's own Escape handler closes the whole panel,
-        // and dismissing a menu should not also dismiss what it belongs to.
-        event.stopPropagation();
-        ref.current.open = false;
-      }
-    };
-    document.addEventListener('pointerdown', close);
-    document.addEventListener('keydown', onKeyDown, true);
-    return () => {
-      document.removeEventListener('pointerdown', close);
-      document.removeEventListener('keydown', onKeyDown, true);
-    };
-  }, []);
-  return (
-    <details className="panel-overflow" ref={ref}>
-      <summary
-        className="icon-button"
-        title="More actions"
-        aria-label="More actions"
-      >
-        <MoreHorizontal size={14} aria-hidden="true" />
-      </summary>
-      <div className="panel-overflow-menu">{children}</div>
-    </details>
-  );
-}
-
-/**
  * A panel section that can be folded away.
  *
  * Everything here used to be laid out flat, so a body's principal inertia had
@@ -1454,6 +1405,7 @@ export function Inspector(props: InspectorProps) {
           key="create-scale"
           scope={scope}
           bodies={bodies}
+          units={units}
           initialTarget={
             selectedTopology?.bodyId ??
             selectedBodyIds.at(-1) ??
@@ -1739,6 +1691,7 @@ export function Inspector(props: InspectorProps) {
           key={editKey}
           scope={scope}
           bodies={bodies}
+          units={units}
           initial={{
             name: selectedFeature.name,
             targetBodyId: data.targetBodyId,
@@ -2058,6 +2011,9 @@ export function Inspector(props: InspectorProps) {
               Edit sketch in viewport
             </button>
           )}
+        {/* Selecting a modeling feature opens its form directly (F19), so
+            this only shows when that was refused — exact geometry still
+            loading, say — and is the way to retry once it is ready. */}
         {modelingFeatureIsEditable(data.featureKind) &&
           props.onEditModelingFeature && (
             <button
