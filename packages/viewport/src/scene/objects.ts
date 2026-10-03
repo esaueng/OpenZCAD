@@ -166,7 +166,7 @@ export function applySectionPlane(
       // Keep the frozen ground shadow honest: the cut body's shadow should
       // match what is rendered, not the uncut silhouette.
       material.clipShadows = plane !== null;
-      if (isViewerMesh(child)) {
+      if (isViewerMesh(child) || child.userData.ownColourFill === true) {
         material.side = plane ? THREE.DoubleSide : THREE.FrontSide;
       }
       material.needsUpdate = true;

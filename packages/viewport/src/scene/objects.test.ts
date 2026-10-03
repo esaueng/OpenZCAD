@@ -1,6 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import * as THREE from 'three';
-import { applyDisplayMode } from './objects';
+import { applyDisplayMode, applySectionPlane } from './objects';
+import { isViewerMesh } from '../pick/meshes';
 import {
   EDGE_IDLE_COLOR,
   EDGE_IDLE_OPACITY,
@@ -67,6 +68,48 @@ describe('applyDisplayMode', () => {
       expect(edges.material.opacity).toBe(
         mode === 'wireframe' ? 1 : EDGE_IDLE_OPACITY
       );
+    }
+  );
+});
+
+describe('selected face section display', () => {
+  it.each([
+    ['before', false],
+    ['during', true]
+  ] as const)(
+    'keeps a fill created %s sectioning aligned with its body',
+    (_when, createdDuringSection) => {
+      const { group, body } = bodyWithEdges();
+      const plane = new THREE.Plane(new THREE.Vector3(1, 0, 0), 0);
+      if (createdDuringSection) applySectionPlane(group, plane);
+      const selectedFace = new THREE.Mesh(
+        body.geometry.clone(),
+        body.material.clone()
+      );
+      selectedFace.userData.selectionOverlay = true;
+      selectedFace.userData.ownColourFill = true;
+      body.add(selectedFace);
+
+      applySectionPlane(group, plane);
+      expect(body.material.side).toBe(THREE.DoubleSide);
+      expect(selectedFace.material.side).toBe(THREE.DoubleSide);
+      expect(selectedFace.material.clippingPlanes).toEqual([plane]);
+      expect(isViewerMesh(selectedFace)).toBe(false);
+      expect(selectedFace.children).toHaveLength(0);
+
+      applyDisplayMode(group, 'wireframe');
+      expect(selectedFace.visible).toBe(false);
+      expect(selectedFace.material.visible).toBe(false);
+      applySectionPlane(group, null);
+      expect(body.material.side).toBe(THREE.FrontSide);
+      expect(selectedFace.material.side).toBe(THREE.FrontSide);
+      expect(selectedFace.material.clippingPlanes).toBeNull();
+      expect(isViewerMesh(selectedFace)).toBe(false);
+      expect(selectedFace.children).toHaveLength(0);
+
+      applyDisplayMode(group, 'shaded');
+      expect(selectedFace.visible).toBe(true);
+      expect(selectedFace.material.visible).toBe(true);
     }
   );
 });
