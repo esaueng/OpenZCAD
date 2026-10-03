@@ -3,6 +3,32 @@
    Import once in main.tsx before app.css.
    ───────────────────────────────────────────────────────────── */
 
+/* The symbols Geist does not draw (⌀ ∠ Δ ∥ ⊥ ⊕ □ ◇ ◎ ▾, ⌘ ⌥ ⌫ ⚠), as two
+   kilobyte-sized Noto subsets. Without them those glyphs fall to whatever
+   system font has them, and a browser that restricts local fonts paints the
+   hex missing-glyph box instead. The unicode-range lists exactly what each
+   face holds, so neither downloads until a page writes one of its glyphs.
+   Rebuilt by scripts/build-symbol-font.sh; scripts/check-glyph-coverage.mjs
+   fails on any interface glyph that Geist and these faces both lack. */
+@font-face {
+  font-family: 'OpenZCAD Symbols';
+  font-style: normal;
+  font-weight: 100 900;
+  font-display: swap;
+  src: url('./fonts/openzcad-symbols-math.woff2') format('woff2');
+  unicode-range: U+0394, U+2220, U+2225, U+22A5, U+2295, U+2300, U+25A1,
+    U+25BE, U+25C7, U+25CE;
+}
+
+@font-face {
+  font-family: 'OpenZCAD Symbols';
+  font-style: normal;
+  font-weight: 100 900;
+  font-display: swap;
+  src: url('./fonts/openzcad-symbols-keys.woff2') format('woff2');
+  unicode-range: U+2318, U+2325, U+232B, U+26A0;
+}
+
 :root {
   /* ── Surfaces & text (steel graphite) ─────────────────────
      The quiet-stage workspace: the viewport is the page, and every panel is
@@ -62,8 +88,13 @@
   --color-handle-z: #5f8fef;
 
   /* ── Typography ───────────────────────────────────────── */
-  --font-ui: 'Geist Sans', system-ui, -apple-system, sans-serif;
-  --font-mono: 'Geist Mono', ui-monospace, 'SF Mono', Menlo, monospace;
+  /* Geist Mono's latin subset is barely more than ASCII; Geist Sans, already
+     loaded, draws its arrows, ≈ and the geometric shapes before any system
+     font is asked. */
+  --font-ui: 'Geist Sans', 'OpenZCAD Symbols', system-ui, -apple-system,
+    sans-serif;
+  --font-mono: 'Geist Mono', 'Geist Sans', 'OpenZCAD Symbols', ui-monospace,
+    'SF Mono', Menlo, monospace;
 
   /* The accessibility review's floor: below 11px this metadata stops being
      readable at 100% zoom. Half a pixel less used to be needed because it
