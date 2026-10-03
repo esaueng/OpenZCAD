@@ -1042,10 +1042,17 @@ export interface CameraPose {
   far: number;
 }
 
-/** Computes the Z-up isometric fit pose without touching the live camera. */
+/**
+ * Computes the fit pose without touching the live camera: the Z-up isometric
+ * home orientation by default, or — given a direction from the target toward
+ * the camera — the same framing seen from where the user already looks, which
+ * is what an automatic reframe wants: it recentres and backs off without
+ * spinning the model.
+ */
 export function computeFitPose(
   camera: THREE.PerspectiveCamera,
-  objects: THREE.Object3D[]
+  objects: THREE.Object3D[],
+  viewDirection?: THREE.Vector3
 ): CameraPose {
   const box = new THREE.Box3();
   for (const object of objects) {
@@ -1064,9 +1071,12 @@ export function computeFitPose(
   const maxDim = Math.max(size.x, size.y, size.z) || 1;
   const halfFov = THREE.MathUtils.degToRad(camera.fov / 2);
   const distance = (maxDim / 2 / Math.tan(halfFov)) * 2.1;
-  // Fit always lands on the home orientation: the same iso direction the
-  // default camera pose and the ISO view preset use.
-  const direction = VIEW_DIRECTIONS.iso.clone();
+  // Fit lands on the home orientation unless told otherwise: the same iso
+  // direction the default camera pose and the ISO view preset use.
+  const direction =
+    viewDirection && viewDirection.lengthSq() > 1e-12
+      ? viewDirection.clone().normalize()
+      : VIEW_DIRECTIONS.iso.clone();
   return {
     position: center.clone().addScaledVector(direction, distance),
     target: center,
