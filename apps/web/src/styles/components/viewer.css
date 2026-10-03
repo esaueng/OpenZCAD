@@ -395,9 +395,15 @@
   line-height: 1;
 }
 
-.selection-callout-clear:hover {
+.selection-callout-clear:hover:not(:disabled) {
   opacity: 1;
   background: rgba(129, 169, 255, 0.18);
+}
+
+/* Held while the exact check runs, as the held verbs are. */
+.selection-callout-clear:disabled {
+  opacity: 0.3;
+  cursor: default;
 }
 
 /* The operation a pick armed rides the chip (F11): its phase as a pill

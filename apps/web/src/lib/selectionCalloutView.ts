@@ -233,6 +233,11 @@ function fill(
     );
     clear.title = 'Deselect all (Esc)';
     clear.setAttribute('aria-label', 'Deselect all');
+    // A value being validated stays locked: the commit owns the model until
+    // it answers (escapeTarget gives Escape nothing to do then), as the
+    // card's close button did. Clearing here mid-check let the answer land
+    // after the pick was dismissed — committing it and reselecting the body.
+    clear.disabled = validating;
     children.push(clear);
   }
   const refusal = operation ? diagnostic(owner, operation) : null;
