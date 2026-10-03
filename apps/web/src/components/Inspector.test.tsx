@@ -8,11 +8,19 @@ import type {
   ProjectDocument,
   TopologySelection
 } from '@openzcad/shared';
-import { createProjectDocument } from '@openzcad/document-core';
+import {
+  createProjectDocument,
+  listFeaturesInOrder
+} from '@openzcad/document-core';
+import { CommandManager, type AnyCommand } from '@openzcad/command-system';
 import { toUserId } from '@openzcad/shared';
 import type { MassPropertiesRead } from '@openzcad/kernel-adapter/exact';
 import { MASS_DENSITY_STORAGE_KEY } from '../lib/massDensityPreference';
 import { Inspector } from './Inspector';
+import {
+  createPrimitiveCommand,
+  primitivePlacement
+} from '../lib/primitivePlacement';
 
 const bodyId = 'body-1' as BodyId;
 
@@ -246,6 +254,49 @@ describe('Inspector feature provenance', () => {
     expect(
       within(inspector).getByRole('button', { name: /Delete feature/ })
     ).toBeVisible();
+  });
+});
+
+describe('primitive card position', () => {
+  it('reads a placed box from the document and applies a move with its dimensions', () => {
+    const manager = new CommandManager(
+      createProjectDocument('Placed', toUserId('user_inspector_place'))
+    );
+    manager.execute(
+      createPrimitiveCommand(
+        'box',
+        'Box',
+        { width: 30, height: 18, depth: 24 },
+        { x: 10, y: 0, z: 0 }
+      )
+    );
+    const primitive = listFeaturesInOrder(manager.document)[0]!;
+    const onApplyPrimitive =
+      vi.fn<(feature: FeatureNode, name: string, command: AnyCommand) => void>();
+    render(
+      <Inspector
+        {...makeProps({
+          selectedFeature: primitive,
+          commandSession: null,
+          featureSelectionSource: 'pinned',
+          document: manager.document,
+          onApplyPrimitive
+        })}
+      />
+    );
+    const cornerX = screen.getByRole('textbox', { name: 'Corner X' });
+    expect(cornerX).toHaveValue('10');
+    fireEvent.change(cornerX, { target: { value: '4' } });
+    fireEvent.click(screen.getByRole('button', { name: /Apply/ }));
+    expect(onApplyPrimitive).toHaveBeenCalledTimes(1);
+    const [feature, name, command] = onApplyPrimitive.mock.calls[0]!;
+    expect(feature).toBe(primitive);
+    expect(name).toBe('Box');
+    manager.execute(command);
+    expect(
+      primitivePlacement(manager.document, primitive).position
+    ).toEqual({ x: 4, y: 0, z: 0 });
+    expect(listFeaturesInOrder(manager.document)).toHaveLength(2);
   });
 });
 

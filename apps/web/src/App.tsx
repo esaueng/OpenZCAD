@@ -18382,15 +18382,8 @@ export function App() {
                 onClose={closeFeaturePanel}
                 onSelectAllEdges={handleSelectAllEdges}
                 onClearSelectedEdges={handleClearSelectedEdges}
-                onCreatePrimitive={(kind, name, dimensions) =>
-                  createFeature(
-                    commandFactories.addPrimitive({
-                      name,
-                      primitiveKind: kind,
-                      dimensions
-                    })
-                  )
-                }
+                document={doc}
+                onCreatePrimitive={createFeature}
                 onCreateRevolve={(value) => {
                   const command = commandFactories.revolveSketch(value);
                   createValidatedFeature(
@@ -18435,15 +18428,7 @@ export function App() {
                     command.payload.ids?.bodyId
                   );
                 }}
-                onApplyPrimitive={(feature, name, dimensions) => {
-                  const command = commandFactories.updateFeature(
-                    {
-                      featureId: feature.featureId,
-                      name,
-                      data: { dimensions }
-                    },
-                    `Edit ${name}`
-                  );
+                onApplyPrimitive={(feature, name, command) => {
                   if (!doc || !feature.bodyId) {
                     executeCommand(command);
                     return;

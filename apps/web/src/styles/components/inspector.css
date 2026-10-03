@@ -217,6 +217,27 @@
   gap: var(--sp-2);
 }
 
+/* A primitive's Position row: one labelled group of three axis fields. The
+   legend reads like a field label so the group sits in the form's rhythm. */
+.primitive-position {
+  min-width: 0;
+  margin: 0;
+  padding: 0;
+  border: 0;
+}
+
+.primitive-position legend {
+  margin: 0 0 5px;
+  padding: 0;
+  color: var(--color-text-muted);
+  font-size: var(--fs-xs);
+  font-weight: var(--fw-medium);
+}
+
+.primitive-position .field-hint {
+  margin-top: -4px;
+}
+
 .expr-input-row {
   display: grid;
   gap: 3px;
