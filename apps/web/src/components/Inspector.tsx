@@ -64,6 +64,12 @@ import {
   type TransformFormValue
 } from './forms/FeatureForms';
 import { PRIMITIVE_TOOLS, TOOL_META, type ToolId } from '../lib/tools';
+import {
+  applyPrimitiveCommand,
+  createPrimitiveCommand,
+  primitivePlacement
+} from '../lib/primitivePlacement';
+import type { AnyCommand } from '@openzcad/command-system';
 import { modelingFeatureIsEditable } from '../lib/modelingOperations';
 import {
   evalParamValue,
@@ -114,11 +120,8 @@ export interface InspectorCallbacks {
   onClose?(): void;
   /** Verbatim reason the last exact rebuild refused this form's operation. */
   commitError?: string | null;
-  onCreatePrimitive(
-    kind: PrimitiveKind,
-    name: string,
-    dimensions: Record<string, ParamValue>
-  ): void;
+  /** The primitive card's Create, already composed with its placement. */
+  onCreatePrimitive(command: AnyCommand): void;
   onCreateRevolve(value: {
     name: string;
     sketchId: SketchId;
@@ -144,11 +147,14 @@ export interface InspectorCallbacks {
   onSelectAllEdges(body: BodyRepresentation): void;
   onClearSelectedEdges(): void;
   onCreatePattern(value: PatternFormValue): void;
+  /** The primitive card's Apply: its dimensions and, if moved, placement. */
   onApplyPrimitive(
     feature: FeatureNode,
     name: string,
-    dimensions: Record<string, ParamValue>
+    command: AnyCommand
   ): void;
+  /** The committed document; a primitive card reads its placement from it. */
+  document?: ProjectDocument | null;
   onApplySketch(feature: FeatureNode, value: SketchFormValue): void;
   onConvertSketchToFixedPlane(sketch: SketchNode): void;
   onApplyTextSketch(feature: FeatureNode, value: TextSketchFormValue): void;
@@ -1374,8 +1380,10 @@ export function Inspector(props: InspectorProps) {
           scope={scope}
           initialName={TOOL_META[tool].label}
           submitLabel="Create"
-          onSubmit={(name, dimensions) =>
-            props.onCreatePrimitive(kind, name, dimensions)
+          onSubmit={(name, dimensions, position) =>
+            props.onCreatePrimitive(
+              createPrimitiveCommand(kind, name, dimensions, position)
+            )
           }
           onCancel={props.onCancel}
         />
@@ -1525,6 +1533,7 @@ export function Inspector(props: InspectorProps) {
     let form: ReactNode = null;
 
     if (data.featureKind === 'primitive') {
+      const placement = primitivePlacement(props.document, selectedFeature);
       form = (
         <PrimitiveForm
           key={editKey}
@@ -1532,9 +1541,20 @@ export function Inspector(props: InspectorProps) {
           scope={scope}
           initialName={selectedFeature.name}
           initialDimensions={data.dimensions}
+          initialPosition={placement.position}
           submitLabel="Apply"
-          onSubmit={(name, dimensions) =>
-            props.onApplyPrimitive(selectedFeature, name, dimensions)
+          onSubmit={(name, dimensions, position) =>
+            props.onApplyPrimitive(
+              selectedFeature,
+              name,
+              applyPrimitiveCommand(
+                props.document,
+                selectedFeature,
+                name,
+                dimensions,
+                position
+              )
+            )
           }
           onCancel={props.onCancel}
         />
