@@ -810,3 +810,78 @@ describe('mass properties tensor, axes and density', () => {
     expect(screen.getByText('0.5, 1, 1.5 in')).toBeVisible();
   });
 });
+
+describe('the edge list of an edited fillet', () => {
+  // F30 follow-up: an edge taken off the list could never come back before
+  // Apply — the removal filtered it for good — and a freshly picked edge
+  // removed from the list stayed picked.
+  const twoEdges: FeatureNode = {
+    ...feature,
+    data: {
+      featureKind: 'fillet',
+      targetBodyId: bodyId,
+      edgeHashes: [11, 12],
+      radius: 2
+    }
+  };
+  const edgeOn = (hash: number): TopologySelection => ({
+    bodyId,
+    kind: 'edge',
+    topologyId: `edge:${hash}`,
+    hash
+  });
+  const rowCount = () =>
+    within(screen.getByRole('list', { name: 'Filleted edges' })).getAllByRole(
+      'listitem'
+    ).length;
+  const pinned = (overrides: Partial<ComponentProps<typeof Inspector>>) =>
+    makeProps({
+      selectedFeature: twoEdges,
+      selectedTopology: null,
+      selectedBodyIds: [],
+      commandSession: null,
+      featureSelectionSource: 'pinned',
+      ...overrides
+    });
+
+  it('takes a stored edge back when it is picked again', () => {
+    const { rerender } = render(<Inspector {...pinned({})} />);
+    expect(rowCount()).toBe(2);
+    fireEvent.click(screen.getByRole('button', { name: /^Remove 2 / }));
+    expect(rowCount()).toBe(1);
+    // Shift+Click on the now-sharp edge in the preview picks the same hash.
+    rerender(<Inspector {...pinned({ selectedEdges: [edgeOn(12)] })} />);
+    expect(rowCount()).toBe(2);
+    expect(screen.getByText('2 exact edges selected')).toBeTruthy();
+  });
+
+  it('drops a picked edge from the selection when it is removed', () => {
+    const onRemoveSelectedEdge = vi.fn();
+    render(
+      <Inspector
+        {...pinned({ selectedEdges: [edgeOn(13)], onRemoveSelectedEdge })}
+      />
+    );
+    expect(rowCount()).toBe(3);
+    fireEvent.click(screen.getByRole('button', { name: /^Remove 3 / }));
+    expect(onRemoveSelectedEdge).toHaveBeenCalledWith(edgeOn(13));
+  });
+
+  it('can remove a re-picked stored edge again', () => {
+    const onRemoveSelectedEdge = vi.fn();
+    const { rerender } = render(
+      <Inspector {...pinned({ onRemoveSelectedEdge })} />
+    );
+    fireEvent.click(screen.getByRole('button', { name: /^Remove 2 / }));
+    rerender(
+      <Inspector
+        {...pinned({ selectedEdges: [edgeOn(12)], onRemoveSelectedEdge })}
+      />
+    );
+    fireEvent.click(screen.getByRole('button', { name: /^Remove 2 / }));
+    expect(onRemoveSelectedEdge).toHaveBeenCalledWith(edgeOn(12));
+    // The host deselects it; the stored edge stays off the list.
+    rerender(<Inspector {...pinned({ onRemoveSelectedEdge })} />);
+    expect(rowCount()).toBe(1);
+  });
+});
