@@ -8789,6 +8789,12 @@ export function ModelViewer({
     }
     clearGroup(context.moveGizmoGroup);
     context.requestRender();
+    if (E2E_CANVAS_HOOKS_ENABLED) {
+      // Republished below only when a gizmo is built, so a probe never reads
+      // the last Move's position as this one's.
+      delete context.renderer.domElement.dataset.e2eMoveGizmoX;
+      delete context.renderer.domElement.dataset.e2eMoveGizmoY;
+    }
     if (!movePreview) {
       applyMoveGizmoFocus(context.moveGizmoGroup, null);
       if (moveGizmoHudRef.current) {
