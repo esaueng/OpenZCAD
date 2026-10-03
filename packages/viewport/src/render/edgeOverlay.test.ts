@@ -194,6 +194,20 @@ describe('BodyEdgeOverlay', () => {
     expect(overlay.selectedEdges.visible).toBe(true);
   });
 
+  it('lets an edge selected on a slow frame begin visibly, then land', () => {
+    const overlay = makeOverlay();
+    // A software renderer draws one frame per ~400 ms while another
+    // animation keeps the loop running on real elapsed time. The tier's first
+    // step after a new target is capped, so the ramp is seen; the next frame
+    // advances by the real gap and lands it.
+    overlay.setSelected([selection('edge-a')]);
+    overlay.step(400);
+    expect(overlay.selectedEdges.material.opacity).toBeGreaterThan(0);
+    expect(overlay.selectedEdges.material.opacity).toBeLessThan(1);
+    overlay.step(400);
+    expect(overlay.selectedEdges.material.opacity).toBe(1);
+  });
+
   it("ramps a selected face's rim in rather than popping to full width", () => {
     const overlay = makeOverlay();
     const idleWidth = overlay.idleEdges.material.linewidth;
