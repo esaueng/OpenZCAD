@@ -295,4 +295,26 @@ describe('ExportDialog', () => {
     expect(props.onClose).toHaveBeenCalledOnce();
     expect(screen.queryByRole('status')).toBeNull();
   });
+
+  it('names each format radio and the printability check', async () => {
+    const user = userEvent.setup();
+    renderDialog();
+
+    // Each radio is named by its format, described by its hint, and carries
+    // a value of its own: every one used to report the default value "on".
+    const stl = screen.getByRole('radio', { name: 'STL (binary)' });
+    expect(stl).toHaveAttribute('value', 'stl-binary');
+    expect(stl).toHaveAccessibleDescription('Single merged mesh, compact');
+    for (const radio of screen.getAllByRole('radio')) {
+      expect(radio).not.toHaveAttribute('value', 'on');
+      expect(radio.getAttribute('aria-label')).toBeTruthy();
+    }
+
+    const check = screen.getByRole('button', { name: 'Check watertightness' });
+    expect(check).toHaveAttribute('aria-label', 'Check watertightness');
+    await user.click(check);
+    expect(
+      await screen.findByRole('button', { name: 'Re-check watertightness' })
+    ).toBe(check);
+  });
 });

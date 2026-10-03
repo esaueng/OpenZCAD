@@ -100,13 +100,14 @@ function FormShell({
           type="submit"
           className="primary"
           disabled={!canSubmit}
-          title="Enter"
+          aria-keyshortcuts="Enter"
         >
           {submitLabel}
           {/*
             Decoration, not part of the name. Without this the button announced
-            itself as "Create ↵"; the hint stays visible and `title` already
-            carries it for anyone reading the tooltip.
+            itself as "Create ↵". The key is `aria-keyshortcuts`, not a `title`:
+            a title of "Enter" was what assistive tech read in place of the
+            verb, so every Create and Apply was announced as "Enter".
           */}
           <kbd className="kbd-inline" aria-hidden="true">
             ↵
@@ -991,19 +992,27 @@ export function BooleanForm({
           )}
           {selectable.map((body) => {
             const index = selected.indexOf(body.bodyId);
+            const base = index === 0 && operation === 'subtract';
             return (
               <button
                 key={body.bodyId}
                 type="button"
                 className={`pick-row ${index >= 0 ? 'selected' : ''}`}
                 aria-pressed={index >= 0}
+                // The body's name first, then the pick order the badge
+                // draws: the badge alone is a bare digit, or empty.
+                aria-label={
+                  index >= 0
+                    ? `${body.name}, pick ${index + 1}${base ? ', base' : ''}`
+                    : body.name
+                }
                 onClick={() => toggle(body.bodyId)}
               >
                 <span className="pick-order mono">
                   {index >= 0 ? index + 1 : ''}
                 </span>
                 <span className="body-name">{body.name}</span>
-                {index === 0 && operation === 'subtract' && <small>base</small>}
+                {base && <small>base</small>}
               </button>
             );
           })}
@@ -1204,7 +1213,7 @@ export interface EdgeModifierFormValue {
 
 const VARIABLE_FILLET_LAW_LABELS: Record<VariableFilletLaw, string> = {
   linear: 'Linear',
-  scurve: 'S-curve'
+  scurve: 'Eased at both ends'
 };
 
 interface EdgeModifierFormProps {
@@ -1453,7 +1462,7 @@ export function EdgeModifierForm({
         <>
           <div className="field-pair">
             <ExprInput
-              label="End radius (blank = constant)"
+              label="End radius (blank keeps one radius)"
               value={endRadius}
               scope={scope}
               optional
@@ -1463,7 +1472,7 @@ export function EdgeModifierForm({
               }}
             />
             <label className="field">
-              <span>Radius law</span>
+              <span>Radius change</span>
               <select
                 value={radiusLaw}
                 disabled={endRadius.trim() === ''}

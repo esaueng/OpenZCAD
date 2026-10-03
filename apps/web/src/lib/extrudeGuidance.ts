@@ -32,5 +32,5 @@ export function extrudeSketchGuidance(
   if (open.length > 0) {
     return `Extrude: ${listNames(open)} ${open.length === 1 ? 'is' : 'are'} not closed — click a shaded profile in ${listNames(closed)}, or close the outline.`;
   }
-  return 'Extrude: click a shaded closed sketch profile to arm it.';
+  return 'Extrude: click a shaded profile in the sketch to extrude it.';
 }

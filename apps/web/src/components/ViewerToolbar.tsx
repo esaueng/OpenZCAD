@@ -222,14 +222,14 @@ export function ViewerToolbar({
       </Tooltip>
       <div className="rail-views-anchor">
         <Tooltip
-          label="Section display"
-          description={`Display clipping, not exact geometry. Now: ${sectionLabel}. Release the slider for exact section curves.`}
+          label="Section view"
+          description={`Cuts the display only; the model is untouched. Now: ${sectionLabel}. Release the slider to trace the true cut.`}
         >
           <button
             type="button"
             className={`rail-button ${settings.sectionView ? 'active' : ''}`}
             onClick={onCycleSection}
-            aria-label={`Section display (not exact) — now: ${sectionLabel}`}
+            aria-label={`Section view — now: ${sectionLabel}`}
             aria-pressed={settings.sectionView !== undefined}
           >
             <Slice size={15} aria-hidden="true" />

@@ -154,7 +154,7 @@ async function createBox(
 }
 
 async function openExactSection(page: Page) {
-  const sectionButton = page.getByRole('button', { name: /^Section display/ });
+  const sectionButton = page.getByRole('button', { name: /^Section view/ });
   await sectionButton.click();
   await expect(sectionButton).toHaveAttribute('aria-pressed', 'true');
   await expect(
@@ -332,7 +332,7 @@ test('keeps a section hole in the exact DXF and shuts export during a posed prev
   // Cancelling the preview leaves the old exact result invalidated. Cycling
   // the display off and on requests a fresh exact section of the restored
   // document pose, which proves the refusal is recoverable.
-  const sectionButton = page.getByRole('button', { name: /^Section display/ });
+  const sectionButton = page.getByRole('button', { name: /^Section view/ });
   // Cancellation can render one frame before the section-view state is
   // cleared. Observe the button and turn it off only when it is still on;
   // either settled state must recover to the same explicit off state.

@@ -6632,7 +6632,7 @@ export function App() {
     if (!next) {
       setViewerSettings(({ sectionView: _cleared, ...rest }) => rest);
       clearSectionOutline();
-      setStatus('Section display off.');
+      setStatus('Section view off.');
       return;
     }
     const range = sectionAxisRange(next);
@@ -6642,7 +6642,7 @@ export function App() {
       sectionView: { plane: next, offset }
     }));
     setStatus(
-      `Section display: ${next} plane (display clipping, not exact). Drag the slider to move the cut; the model itself is untouched.`
+      `Section view: ${next} plane. It cuts the display only; drag the slider to move the cut, and the model itself is untouched.`
     );
     void requestExactSection({ plane: next, offset });
   }
@@ -15612,8 +15612,8 @@ export function App() {
       }
       if (paletteOpen || shortcutsOpen) {
         // The command bar and the overlay own their keys; Escape is handled
-        // here as a safety net. A handled one (the bar clearing its text,
-        // or the stream rejecting a proposal) keeps the prompt's focus.
+        // here as a safety net. A handled one (the bar leaving with its
+        // text, or the stream rejecting a proposal) does nothing else.
         if (event.key === 'Escape' && !event.defaultPrevented) {
           setPaletteOpen(false);
           setShortcutsOpen(false);
@@ -15852,7 +15852,7 @@ export function App() {
           // gives up focus (the next press clears), open exact entry closes
           // back to the armed command, and a value being validated stays
           // locked until the kernel answers. A key a control already handled
-          // (the prompt bar clearing its text) is that control's, not ours.
+          // (the prompt bar leaving with its text) is that control's, not ours.
           if (event.defaultPrevented) {
             return;
           }
@@ -16167,7 +16167,7 @@ export function App() {
           projection:
             Object.keys(representations).length > 0
               ? 'showing the previous result until it finishes'
-              : 'no exact projection is available yet'
+              : 'the model appears when it is ready'
         };
   const visibleStatus = textOutlineBudgetError
     ? `Text outlines refused: ${textOutlineBudgetError}`
@@ -16913,7 +16913,7 @@ export function App() {
         manager.document.version !== current.version
       ) {
         throw new Error(
-          'The document changed during exact preflight. Recheck the operation.'
+          'The model changed while the result was being checked. Try again.'
         );
       }
       modelingPreflightRef.current = {
@@ -16928,7 +16928,7 @@ export function App() {
       modelingPreflightRef.current = null;
       return {
         status: 'refused',
-        reason: errorMessage(error, 'Exact preflight failed.')
+        reason: errorMessage(error, 'The result could not be checked.')
       };
     }
   }
@@ -16943,7 +16943,7 @@ export function App() {
       approved.baseVersion !== manager.document.version
     ) {
       setStatus(
-        'The modeling preflight is stale. Check the exact result again.'
+        'The model changed after the result was checked. Try again.'
       );
       return;
     }
