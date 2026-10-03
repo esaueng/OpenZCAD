@@ -221,11 +221,14 @@ function featureScopeForBodies(
       continue;
     }
     const data = feature.data;
+    // A split owns two bodies: `feature.bodyId` is the positive half and the
+    // negative half travels in the data, so either one reaches the split.
     const includedByBody =
       (feature.bodyId !== undefined && neededBodies.has(feature.bodyId)) ||
       ((data.featureKind === 'transform' ||
         data.featureKind === 'direct-edit') &&
-        neededBodies.has(data.targetBodyId));
+        neededBodies.has(data.targetBodyId)) ||
+      (data.featureKind === 'split' && neededBodies.has(data.secondBodyId));
     const includedBySketch =
       data.featureKind === 'sketch' && neededSketches.has(data.sketchId);
     if (!includedByBody && !includedBySketch) {
@@ -261,6 +264,8 @@ function featureScopeForBodies(
       case 'boolean':
         data.targetBodyIds.forEach((bodyId) => neededBodies.add(bodyId));
         break;
+      case 'hole':
+      case 'split':
       case 'transform':
       case 'mirror':
       case 'shell':
@@ -277,6 +282,11 @@ function featureScopeForBodies(
       case 'imported-step':
       case 'imported-mesh':
         break;
+      default:
+        // A new feature kind must say which bodies and sketches it consumes:
+        // falling through silently cuts the walk off at that feature, so a
+        // selected body's upstream dimensions never reach the proposal.
+        data satisfies never;
     }
   }
   return included;
@@ -530,11 +540,18 @@ function nativeCandidates(
           add(featureCandidate(feature, 'offset', data.operation.offset));
         }
         break;
+      case 'hole':
+      case 'split':
+        // In scope so the walk reaches the bodies they consume, but their
+        // own dimensions are not proposed yet, like the group above.
+        break;
       case 'boolean':
       case 'mirror':
       case 'imported-step':
       case 'imported-mesh':
         break;
+      default:
+        data satisfies never;
     }
   }
   return { candidates, skippedRelational };
