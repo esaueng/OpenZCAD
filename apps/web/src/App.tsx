@@ -15,7 +15,7 @@ import type {
 import type { AdoptLocalProjectResult } from './lib/projectIdentityTransfer';
 import { LatestTask } from './lib/latestTask';
 import { rebuildProgressLabel } from './lib/rebuildProgressLabel';
-import { featureHistory } from './lib/featureHistory';
+import { featureHistory, selectionRebuiltByMove } from './lib/featureHistory';
 import { FeatureBuildError } from './lib/featureValidation';
 import { edgeModifierCommand } from './lib/edgeModifierEdit';
 import type { EdgeModifierFormValue } from './components/forms/FeatureForms';
@@ -6382,23 +6382,31 @@ export function App() {
     pending: PendingSelectionSwitch | undefined,
     applyMove: boolean
   ) {
-    const movedBodyId = movePreview?.bodyId;
+    // Anything on the moved body, or on a body downstream of what moved (an
+    // extrude of a moved sketch, a feature built on a moved body), was
+    // picked against topology the rebuild the Apply starts replaces. Read
+    // from the history before the Apply adds its Move.
+    const pickedBodyIds = !pending
+      ? []
+      : pending.kind === 'box'
+        ? pending.bodyIds
+        : pending.kind === 'pick'
+          ? [pending.selection.bodyId]
+          : pending.selections.map((selection) => selection.bodyId);
+    const pickRebuilt = Boolean(
+      applyMove &&
+      movePreview &&
+      doc &&
+      selectionRebuiltByMove(doc, movePreview, pickedBodyIds)
+    );
     if (applyMove && !confirmMove()) return;
     setMovePreview(null);
     setTool(null);
     if (!pending) return;
     if (applyMove) {
-      // Anything on the body that just moved was picked against the preview
-      // and is renamed by the rebuild the Apply starts: pick it again there.
-      const touchesMoved =
-        pending.kind === 'box'
-          ? pending.bodyIds.includes(movedBodyId ?? '')
-          : pending.kind === 'pick'
-            ? pending.selection.bodyId === movedBodyId
-            : pending.selections.some(
-                (selection) => selection.bodyId === movedBodyId
-              );
-      if (touchesMoved) {
+      // Pick it again where it is now; the context menu it asked for waits
+      // for that pick too.
+      if (pickRebuilt) {
         setStatus(
           pending.kind === 'pick' && pending.contextMenu
             ? 'Move applied · right-click it again where it is now for its menu.'

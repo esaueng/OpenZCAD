@@ -1,4 +1,10 @@
 import type { Page } from '@playwright/test';
+import {
+  addSketchFeature,
+  createProjectDocument,
+  extrudeSketch
+} from '@openzcad/document-core';
+import { toUserId } from '@openzcad/shared';
 import { readFile } from 'node:fs/promises';
 import { fileURLToPath } from 'node:url';
 import {
@@ -3751,6 +3757,12 @@ async function modelPointClearOfMoveGizmo(page: Page) {
         x: area.x + area.width * xRatio,
         y: area.y + area.height * yRatio
       };
+      // Only bare canvas: a palette fold or card over it takes the click.
+      const onCanvas = await canvas.evaluate(
+        (element, at) => document.elementFromPoint(at.x, at.y) === element,
+        point
+      );
+      if (!onCanvas) continue;
       await page.mouse.move(point.x, point.y);
       // Past the hover dwell, so the cursor names what is under it now.
       await page.waitForTimeout(150);
@@ -4042,6 +4054,93 @@ test('a right-click over an unapplied Move asks first, then opens its menu where
   await expect(status).toContainText('right-click it again where it is now');
   await page.waitForTimeout(400);
   await expect(menu).toHaveCount(0);
+});
+
+/**
+ * A Move of a sketch rebuilds every body the sketch drives. A face picked on
+ * the extrude over the unapplied sketch Move names topology that rebuild
+ * replaces, so after Apply it is not replayed — the pick's body is not the
+ * Move's target (that is the sketch), which is how it used to slip through.
+ */
+test('a face picked on a moved sketch’s extrude is not replayed after Apply', async ({
+  page
+}) => {
+  test.setTimeout(150_000);
+  const sketch = addSketchFeature(
+    createProjectDocument('Sketch Move Pick', toUserId('user_e2e')),
+    {
+      name: 'Profile',
+      plane: 'XY',
+      offset: 0,
+      objects: [
+        {
+          objectKind: 'rectangle',
+          width: 180,
+          height: 60,
+          centerX: 0,
+          centerY: 0
+        }
+      ]
+    }
+  );
+  const plate = extrudeSketch(sketch.document, {
+    name: 'Plate',
+    sketchId: sketch.sketchId,
+    distance: 60
+  });
+  const document = plate.document;
+  await stubApi(page);
+  await page.route('**/api/projects', (route) =>
+    route.request().method() === 'POST'
+      ? route.fulfill({
+          status: 201,
+          json: {
+            project: {
+              projectId: document.projectId,
+              name: document.name,
+              revisionCount: 1,
+              updatedAt: new Date().toISOString()
+            },
+            document
+          }
+        })
+      : route.fulfill({ json: { projects: [] } })
+  );
+  await page.setViewportSize({ width: 1440, height: 900 });
+  await page.goto('/');
+  await page.getByLabel('Project name').fill(document.name);
+  await page.getByRole('button', { name: 'Create project' }).click();
+  await expect(page.getByRole('button', { name: /^Fillet/ })).toBeEnabled({
+    timeout: 30_000
+  });
+  await page.getByRole('button', { name: 'Fit' }).click();
+  await page.waitForTimeout(700);
+
+  const canvas = page.locator('.viewer-host canvas');
+  const move = page.getByRole('form', { name: 'Move controls' });
+  const ask = page.getByRole('alertdialog', { name: 'Apply the Move first?' });
+  const status = page.getByRole('contentinfo');
+
+  // A sketch an extrude consumed is hidden, and a hidden sketch does not
+  // take the gizmo; show it, then its row selects it and Move takes the
+  // sketch, not a body.
+  await page.getByRole('button', { name: 'Show Profile' }).click();
+  await page.locator('.feature-row-main', { hasText: /^Profile$/ }).click();
+  await page.getByRole('button', { name: /^Move \(M\)/ }).click();
+  await expect(move).toBeVisible();
+  await expect(status).toContainText('Move sketch');
+  await move.getByLabel('Move X in mm').fill('20');
+
+  await setSelectionFilter(page, 'Face');
+  const onPlate = await modelPointClearOfMoveGizmo(page);
+  await page.mouse.click(onPlate.x, onPlate.y);
+  await expect(ask).toBeVisible();
+  await expect(ask).toContainText('before the selection changes');
+  await ask.getByRole('button', { name: 'Apply' }).click();
+  await expect(move).toHaveCount(0);
+  await expect(status).toContainText('select it again where it is now');
+  await page.waitForTimeout(500);
+  await expect(canvas).not.toHaveAttribute('data-e2e-selected-face', /.+/);
 });
 
 /**

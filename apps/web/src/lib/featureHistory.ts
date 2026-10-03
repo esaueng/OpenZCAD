@@ -120,3 +120,62 @@ export function featureHistory(document: ProjectDocument) {
   };
   return { features, parents, downstream, missing };
 }
+
+/** What a Move applies to: a body, or a sketch translated in place. */
+export type MoveTarget =
+  { kind: 'body'; bodyId: BodyId } | { kind: 'sketch'; sketchId: SketchId };
+
+/**
+ * Every body whose geometry applying a Move to `target` rebuilds: the moved
+ * body itself, and every result body of the features downstream of what
+ * produced it in the stored history graph — so for a sketch, the extrudes,
+ * revolves and sweeps it drives and everything built on them. A face or
+ * edge picked on any of these before the Apply named topology the rebuild
+ * replaces. Errs on the side of more: a body counted here is only asked to
+ * be picked again.
+ */
+export function bodiesRebuiltByMove(
+  document: ProjectDocument,
+  target: MoveTarget
+): Set<BodyId> {
+  const graph = featureHistory(document);
+  const owner =
+    target.kind === 'sketch'
+      ? graph.features.find(
+          (feature) =>
+            feature.data.featureKind === 'sketch' &&
+            feature.data.sketchId === target.sketchId
+        )
+      : [...graph.features]
+          .reverse()
+          .find((feature) =>
+            featureResultBodyIds(feature).includes(target.bodyId)
+          );
+  const rebuilt = new Set<BodyId>(
+    target.kind === 'body' ? [target.bodyId] : []
+  );
+  if (!owner) return rebuilt;
+  for (const feature of graph.downstream(owner.featureId)) {
+    for (const bodyId of featureResultBodyIds(feature)) rebuilt.add(bodyId);
+  }
+  return rebuilt;
+}
+
+/**
+ * Whether a selection on `bodyIds`, made over the Move `preview` holds, is
+ * stale once that Move is applied: true when any of them is the Move's
+ * target body or downstream of what it moves (see `bodiesRebuiltByMove`).
+ */
+export function selectionRebuiltByMove(
+  document: ProjectDocument,
+  preview: { bodyId: string; target?: 'body' | 'sketch' },
+  bodyIds: readonly string[]
+): boolean {
+  const rebuilt = bodiesRebuiltByMove(
+    document,
+    preview.target === 'sketch'
+      ? { kind: 'sketch', sketchId: preview.bodyId as SketchId }
+      : { kind: 'body', bodyId: preview.bodyId as BodyId }
+  );
+  return bodyIds.some((bodyId) => rebuilt.has(bodyId as BodyId));
+}

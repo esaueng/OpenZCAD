@@ -6,7 +6,13 @@ import {
   listFeaturesInOrder
 } from '@openzcad/document-core';
 import { toUserId, FEATURE_SUPPRESSED_METADATA_KEY } from '@openzcad/shared';
-import { featureHistory, featureResultBodyIds } from './featureHistory';
+import type { BodyId } from '@openzcad/shared';
+import {
+  bodiesRebuiltByMove,
+  featureHistory,
+  featureResultBodyIds,
+  selectionRebuiltByMove
+} from './featureHistory';
 
 export function historyFixture() {
   const manager = new CommandManager(
@@ -250,4 +256,89 @@ it('makes the drilled body a dependent of the body a hole consumes', () => {
   expect([...graph.parents.get(hole!.featureId)!]).toEqual([box!.featureId]);
   expect([...graph.parents.get(fillet!.featureId)!]).toEqual([hole!.featureId]);
   expect([...graph.missing.get(hole!.featureId)!]).toEqual([]);
+});
+
+describe('a selection made over an unapplied Move', () => {
+  function moveFixture() {
+    const { manager } = historyFixture();
+    const sketchId = manager.document.sketchOrder[0]!;
+    const plate = manager.document.bodyOrder[0]!;
+    // The plate as it stands at the end of history: the fillet's result.
+    const rounded = featureResultBodyIds(
+      listFeaturesInOrder(manager.document).at(-1)!
+    )[0]!;
+    manager.execute(
+      commandFactories.addPrimitive({
+        name: 'Unrelated',
+        primitiveKind: 'box',
+        dimensions: { width: 5, height: 5, depth: 5 }
+      })
+    );
+    const unrelated = manager.document.bodyOrder.at(-1)!;
+    return { document: manager.document, sketchId, plate, rounded, unrelated };
+  }
+
+  it('is stale on the extrude a moved sketch drives, not on an unrelated body', () => {
+    const { document, sketchId, plate, rounded, unrelated } = moveFixture();
+    const preview = { bodyId: sketchId, target: 'sketch' as const };
+    // The extrude and everything built on it: the move and the fillet.
+    expect(bodiesRebuiltByMove(document, { kind: 'sketch', sketchId })).toEqual(
+      new Set([plate, rounded])
+    );
+    // A face picked on the rounded plate names topology the rebuild replaces.
+    expect(selectionRebuiltByMove(document, preview, [rounded])).toBe(true);
+    // A pick on a body the sketch does not drive still lands.
+    expect(selectionRebuiltByMove(document, preview, [unrelated])).toBe(false);
+    // A box sweep that caught both is stale as a whole.
+    expect(selectionRebuiltByMove(document, preview, [unrelated, plate])).toBe(
+      true
+    );
+  });
+
+  it('is stale on a moved body and nothing beside it', () => {
+    const { document, plate, unrelated } = moveFixture();
+    expect(
+      selectionRebuiltByMove(document, { bodyId: unrelated }, [unrelated])
+    ).toBe(true);
+    expect(
+      selectionRebuiltByMove(document, { bodyId: unrelated }, [plate])
+    ).toBe(false);
+    expect(
+      selectionRebuiltByMove(document, { bodyId: plate, target: 'body' }, [
+        plate
+      ])
+    ).toBe(true);
+  });
+
+  it('follows a moved body into the features built on it', () => {
+    const manager = new CommandManager(
+      createProjectDocument('Downstream', toUserId('user_test'))
+    );
+    for (const name of ['Lower', 'Upper']) {
+      manager.execute(
+        commandFactories.addPrimitive({
+          name,
+          primitiveKind: 'box',
+          dimensions: { width: 5, height: 5, depth: 5 }
+        })
+      );
+    }
+    const [lower, upper] = manager.document.bodyOrder as [BodyId, BodyId];
+    manager.execute(
+      commandFactories.mirrorBody({
+        name: 'Mirror lower',
+        targetBodyId: lower,
+        plane: { origin: { x: 20, y: 0, z: 0 }, normal: { x: 1, y: 0, z: 0 } }
+      })
+    );
+    const mirrored = manager.document.bodyOrder.at(-1)!;
+    expect(mirrored).not.toBe(lower);
+    const rebuilt = bodiesRebuiltByMove(manager.document, {
+      kind: 'body',
+      bodyId: lower
+    });
+    expect(rebuilt.has(lower)).toBe(true);
+    expect(rebuilt.has(mirrored)).toBe(true);
+    expect(rebuilt.has(upper)).toBe(false);
+  });
 });
