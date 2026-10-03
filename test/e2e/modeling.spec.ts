@@ -1,3 +1,4 @@
+import type { Page } from '@playwright/test';
 import { readFile } from 'node:fs/promises';
 import { fileURLToPath } from 'node:url';
 import {
@@ -3418,16 +3419,46 @@ test('opening a tool over an unapplied Move asks once and never stacks two cards
 });
 
 /**
- * The same question guards a history feature's editor: "Edit shell" on a
- * selected row used to open the shell form straight over an unapplied Move
- * and drop its values unasked.
+ * Counts the command cards on screen — the command lane's card plus the
+ * inspector's — on every DOM change from here on, keeping the most seen at
+ * once. A closing inspector still fading out is not a card.
  */
-test('editing a history feature over an unapplied Move asks first', async ({
+async function watchCardCount(page: Page) {
+  await page.evaluate(() => {
+    const scope = window as typeof window & { __ozMaxCards?: number };
+    scope.__ozMaxCards = 0;
+    const count = () =>
+      document.querySelectorAll('.command-float > *').length +
+      document.querySelectorAll('.inspector-float:not(.closing)').length;
+    const observer = new MutationObserver(() => {
+      scope.__ozMaxCards = Math.max(scope.__ozMaxCards ?? 0, count());
+    });
+    observer.observe(document.body, {
+      subtree: true,
+      childList: true,
+      attributes: true,
+      attributeFilter: ['class']
+    });
+  });
+  return () =>
+    page.evaluate(
+      () =>
+        (window as typeof window & { __ozMaxCards?: number }).__ozMaxCards ?? 0
+    );
+}
+
+/**
+ * Selecting a history row over an unapplied Move put the row's card under
+ * the Move's — two cards — and "Edit shell" then replaced the Move and
+ * dropped its values unasked. A row pick that would open a card asks the
+ * same question as a tool; Cancel leaves the selection where it was.
+ */
+test('selecting a history row over an unapplied Move asks first, and never shows two cards', async ({
   page
 }) => {
   await stubApi(page);
   await page.goto('/');
-  await page.getByLabel('Project name').fill('Edit Over Move');
+  await page.getByLabel('Project name').fill('Row Over Move');
   await page.getByRole('button', { name: 'Create project' }).click();
   const inspector = page.getByRole('region', { name: 'Feature inspector' });
   await page.getByRole('button', { name: /^Box \(B\)/ }).click();
@@ -3440,35 +3471,116 @@ test('editing a history feature over an unapplied Move asks first', async ({
   await page.getByRole('button', { name: 'Create shell' }).click();
   const shellRow = page.locator('.feature-row-main', { hasText: 'Shell' });
   await expect(shellRow).toBeVisible({ timeout: 20_000 });
+  await page.keyboard.press('Escape');
+  await expect(inspector).toHaveCount(0);
+  const maxCards = await watchCardCount(page);
+
+  const move = page.getByRole('form', { name: 'Move controls' });
+  const moveX = move.getByLabel('Move X in mm');
+  const ask = page.getByRole('alertdialog', { name: 'Apply the Move first?' });
+  const moveRows = page.locator('.feature-row', { hasText: 'Move' });
+  const selectedShell = page.locator('.feature-row.selected', {
+    hasText: 'Shell'
+  });
+  await page.getByRole('button', { name: /^Move \(M\)/ }).click();
+  await moveX.fill('60');
+
+  // Cancel keeps the Move and leaves the selection as it was.
+  await shellRow.click();
+  await expect(ask).toBeVisible();
+  await expect(ask).toContainText('before Shell opens');
+  await ask.getByRole('button', { name: 'Cancel' }).click();
+  await expect(ask).toHaveCount(0);
+  await expect(moveX).toHaveValue('60');
+  await expect(inspector).toHaveCount(0);
+  await expect(selectedShell).toHaveCount(0);
+
+  // Discard drops the Move, then selects the row: its card alone.
+  await shellRow.click();
+  await ask.getByRole('button', { name: 'Discard' }).click();
+  await expect(move).toHaveCount(0);
+  await expect(selectedShell).toHaveCount(1);
+  await expect(
+    inspector.getByRole('button', { name: 'Edit shell' })
+  ).toBeVisible();
+  await expect(moveRows).toHaveCount(0);
+  // Nothing is pending now, so the editor opens without a question.
+  await inspector.getByRole('button', { name: 'Edit shell' }).click();
+  await expect(ask).toHaveCount(0);
+  await expect(
+    page.getByRole('textbox', { name: 'Wall thickness', exact: true })
+  ).toHaveValue('2');
+  await page.keyboard.press('Escape');
+  await expect(inspector).toHaveCount(0);
+
+  // Apply commits the Move first, then selects the row.
+  await page.getByRole('button', { name: /^Move \(M\)/ }).click();
+  await moveX.fill('60');
+  await shellRow.click();
+  await ask.getByRole('button', { name: 'Apply' }).click();
+  await expect(move).toHaveCount(0);
+  await expect(moveRows).toHaveCount(1);
+  await expect(selectedShell).toHaveCount(1);
+  await page.keyboard.press('Escape');
+  await expect(inspector).toHaveCount(0);
+
+  // A Move at zero asks nothing: it gives way to the row's card.
+  await page.getByRole('button', { name: /^Move \(M\)/ }).click();
+  await expect(move).toBeVisible();
+  await shellRow.click();
+  await expect(ask).toHaveCount(0);
+  await expect(move).toHaveCount(0);
+  await expect(selectedShell).toHaveCount(1);
+
+  expect(await maxCards()).toBe(1);
+});
+
+/**
+ * The same holds in the viewport: clicking the body under an unapplied Move
+ * stacked the body's card under the Move's.
+ */
+test('picking a body in the viewport over an unapplied Move asks first, and never shows two cards', async ({
+  page
+}) => {
+  await stubApi(page);
+  await page.setViewportSize({ width: 1440, height: 900 });
+  await page.goto('/');
+  await page.getByLabel('Project name').fill('Pick Over Move');
+  await page.getByRole('button', { name: 'Create project' }).click();
+  const inspector = page.getByRole('region', { name: 'Feature inspector' });
+  await page.getByRole('button', { name: /^Box \(B\)/ }).click();
+  await inspector.getByLabel('Width (X)').fill('60');
+  await inspector.getByLabel('Depth (Y)').fill('60');
+  await inspector.getByLabel('Height (Z)').fill('60');
+  await inspector.getByRole('button', { name: /^Create/ }).click();
+  await expect(page.locator('.feature-row')).toHaveCount(1);
+  await expect(inspector).toHaveCount(0);
+  const maxCards = await watchCardCount(page);
 
   const move = page.getByRole('form', { name: 'Move controls' });
   const ask = page.getByRole('alertdialog', { name: 'Apply the Move first?' });
-  const thickness = page.getByRole('textbox', {
-    name: 'Wall thickness',
-    exact: true
-  });
   await page.getByRole('button', { name: /^Move \(M\)/ }).click();
-  await move.getByLabel('Move X in mm').fill('60');
-  await shellRow.click();
-  await inspector.getByRole('button', { name: 'Edit shell' }).click();
+  await move.getByLabel('Move X in mm').fill('5');
+
+  // Above the gizmo, on the box's upper half: a body pick, not a handle.
+  const canvas = page.locator('.viewer-host canvas');
+  const box = (await canvas.boundingBox())!;
+  const onBody = { x: box.x + box.width * 0.5, y: box.y + box.height * 0.3 };
+  await page.mouse.click(onBody.x, onBody.y);
   await expect(ask).toBeVisible();
-  await expect(ask).toContainText('before Shell opens');
-
-  // Cancel keeps the Move and opens no editor.
+  await expect(ask).toContainText('before the selection changes');
   await ask.getByRole('button', { name: 'Cancel' }).click();
-  await expect(ask).toHaveCount(0);
-  await expect(move.getByLabel('Move X in mm')).toHaveValue('60');
-  await expect(thickness).toHaveCount(0);
+  await expect(move.getByLabel('Move X in mm')).toHaveValue('5');
+  await expect(inspector).toHaveCount(0);
 
-  // Discard drops the Move and opens the shell's editor, prefilled.
-  await inspector.getByRole('button', { name: 'Edit shell' }).click();
+  await page.mouse.click(onBody.x, onBody.y);
   await ask.getByRole('button', { name: 'Discard' }).click();
   await expect(move).toHaveCount(0);
-  await expect(thickness).toHaveValue('2');
-  await expect(page.getByRole('button', { name: 'Apply shell' })).toBeVisible();
   await expect(page.locator('.feature-row', { hasText: 'Move' })).toHaveCount(
     0
   );
+
+  expect(await maxCards()).toBe(1);
 });
 
 test('Remus resolves the former face-plane tangent-union refusal', async ({

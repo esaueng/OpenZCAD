@@ -1605,12 +1605,34 @@ class ParameterCheckStale extends Error {
 }
 
 /**
- * A switch held back by the unapplied-Move question (F15): the tool to open,
- * or, with `feature`, the history feature whose editor to open.
+ * A switch held back by the unapplied-Move question (F15): a tool or a
+ * feature's editor to open, or a selection that would replace the Move card.
  */
-interface PendingToolSwitch {
-  tool: ToolId;
-  feature?: FeatureNode;
+type PendingToolSwitch =
+  | { kind: 'tool'; tool: ToolId }
+  | { kind: 'edit'; tool: ToolId; feature: FeatureNode }
+  /** A history row whose card would replace the Move's. */
+  | { kind: 'select-feature'; nodeId: string; toggle: boolean; name: string }
+  /** A viewport pick, or a box selection, that would replace the Move. */
+  | {
+      kind: 'select-viewport';
+      selection: TopologySelection;
+      additive: boolean;
+      detail?: PickDetail;
+    }
+  | { kind: 'box-select'; bodyIds: string[] };
+
+/** What the unapplied-Move question says happens next. */
+function pendingSwitchOutcome(next: PendingToolSwitch): string {
+  switch (next.kind) {
+    case 'tool':
+    case 'edit':
+      return `${TOOL_META[next.tool].label} opens`;
+    case 'select-feature':
+      return `${next.name} opens`;
+    default:
+      return 'the selection changes';
+  }
 }
 
 export function App() {
@@ -6173,9 +6195,10 @@ export function App() {
    */
   function deferForUnappliedMove(next: PendingToolSwitch): boolean {
     if (
-      next.tool === 'transform' ||
       !moveHasUnappliedChange(movePreview) ||
-      toolDisabledReason(next.tool, availability)
+      ((next.kind === 'tool' || next.kind === 'edit') &&
+        (next.tool === 'transform' ||
+          toolDisabledReason(next.tool, availability)))
     ) {
       return false;
     }
@@ -6185,16 +6208,39 @@ export function App() {
 
   /** Opens a tool, asking first over an unapplied Move. */
   function launchTool(nextTool: ToolId) {
-    if (deferForUnappliedMove({ tool: nextTool })) return;
+    if (deferForUnappliedMove({ kind: 'tool', tool: nextTool })) return;
     openTool(nextTool);
   }
 
-  /** Performs a switch the unapplied-Move question held back. */
-  function completeToolSwitch(next: PendingToolSwitch) {
-    if (next.feature) {
-      editModelingFeature(next.feature);
-    } else {
+  /**
+   * Performs a switch the unapplied-Move question held back. The Move card
+   * is closed first, so the selection lands with no card left over it.
+   */
+  function completeToolSwitch(next: PendingToolSwitch, applied: boolean) {
+    const movedBodyId = movePreview?.bodyId;
+    if (next.kind === 'tool') {
       openTool(next.tool);
+      return;
+    }
+    if (next.kind === 'edit') {
+      editModelingFeature(next.feature);
+      return;
+    }
+    setMovePreview(null);
+    setTool(null);
+    if (next.kind === 'select-feature') {
+      selectFeatureFromTree(next.nodeId, next.toggle);
+    } else if (next.kind === 'box-select') {
+      boxSelectFromViewer(next.bodyIds);
+    } else if (
+      applied &&
+      next.selection.kind !== 'body' &&
+      next.selection.bodyId === movedBodyId
+    ) {
+      // The face or edge was picked where the body stood before the move.
+      setStatus('Move applied · pick the face or edge again where it is now.');
+    } else {
+      selectTopologyFromViewer(next.selection, next.additive, next.detail);
     }
   }
 
@@ -6204,7 +6250,7 @@ export function App() {
     setPendingToolSwitch(null);
     if (!next || choice === 'cancel') return;
     if (choice === 'apply' && !confirmMove()) return;
-    completeToolSwitch(next);
+    completeToolSwitch(next, choice === 'apply');
   }
 
   function openTool(nextTool: ToolId) {
@@ -6374,7 +6420,13 @@ export function App() {
    */
   function openModelingFeatureEditor(feature: FeatureNode) {
     if (!modelingFeatureIsEditable(feature.data.featureKind)) return;
-    if (deferForUnappliedMove({ tool: feature.data.featureKind, feature })) {
+    if (
+      deferForUnappliedMove({
+        kind: 'edit',
+        tool: feature.data.featureKind,
+        feature
+      })
+    ) {
       return;
     }
     editModelingFeature(feature);
@@ -10850,7 +10902,35 @@ export function App() {
     );
   }
 
+  /**
+   * A viewport pick. Over an open Move card a pick of something would stack
+   * the picked body's card on the Move's or swap the Move out from under its
+   * gizmo, so over unapplied values it asks first (F15), and a Move at zero
+   * gives way. An empty click keeps the Move, as before.
+   */
   function handleSelectTopologyFromViewer(
+    selection: TopologySelection | null,
+    additive: boolean,
+    detail?: PickDetail
+  ) {
+    if (selection && movePreview) {
+      if (
+        deferForUnappliedMove({
+          kind: 'select-viewport',
+          selection,
+          additive,
+          ...(detail ? { detail } : {})
+        })
+      ) {
+        return;
+      }
+      setMovePreview(null);
+      setTool(null);
+    }
+    selectTopologyFromViewer(selection, additive, detail);
+  }
+
+  function selectTopologyFromViewer(
     selection: TopologySelection | null,
     additive: boolean,
     detail?: PickDetail
@@ -11279,6 +11359,16 @@ export function App() {
   const emptyBoxSelectExplainedRef = useRef(false);
 
   function handleBoxSelectFromViewer(bodyIds: string[]) {
+    if (
+      bodyIds.length > 0 &&
+      deferForUnappliedMove({ kind: 'box-select', bodyIds })
+    ) {
+      return;
+    }
+    boxSelectFromViewer(bodyIds);
+  }
+
+  function boxSelectFromViewer(bodyIds: string[]) {
     if (!doc) {
       return;
     }
@@ -14984,7 +15074,36 @@ export function App() {
     handleSelectFeatureFromTree(nodeId, false);
   }
 
+  /**
+   * A history row pick. Its card would replace an open Move card, so over
+   * unapplied values it asks first (F15); a pick that only clears the row
+   * (clicking the selected row again) opens no card and does not ask.
+   */
   function handleSelectFeatureFromTree(nodeId: string, toggle = true) {
+    const clears =
+      toggle &&
+      featureSelectionSource === 'pinned' &&
+      selectedFeatureNodeId === nodeId;
+    const node = doc?.nodes[nodeId as EntityId];
+    if (
+      !clears &&
+      deferForUnappliedMove({
+        kind: 'select-feature',
+        nodeId,
+        toggle,
+        name: node?.name ?? 'the feature'
+      })
+    ) {
+      return;
+    }
+    // A Move at zero has nothing to keep: it gives way to the row's card.
+    if (!clears && movePreview) {
+      setMovePreview(null);
+    }
+    selectFeatureFromTree(nodeId, toggle);
+  }
+
+  function selectFeatureFromTree(nodeId: string, toggle = true) {
     extrudeEditRequest.current += 1;
     setTool(null);
     setSelectedTopology(null);
@@ -16771,6 +16890,9 @@ export function App() {
   const inspectorActive =
     !modelingLocked &&
     !directMode &&
+    // The Move card owns the lane while it is open, whatever `tool` says:
+    // one command card at a time (F15).
+    movePreview === null &&
     // A face or edge alone is not an edit: its name, measurement and verbs
     // are on the selection chip beside it, and the inspector opened only to
     // say no one feature owns the pick. An imported STEP face is the
@@ -19046,7 +19168,7 @@ export function App() {
           {pendingToolSwitch && doc && (
             <UnappliedCardDialog
               card="Move"
-              next={TOOL_META[pendingToolSwitch.tool].label}
+              outcome={pendingSwitchOutcome(pendingToolSwitch)}
               onApply={() => resolvePendingToolSwitch('apply')}
               onDiscard={() => resolvePendingToolSwitch('discard')}
               onCancel={() => resolvePendingToolSwitch('cancel')}
