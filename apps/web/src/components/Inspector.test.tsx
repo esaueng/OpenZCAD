@@ -614,6 +614,88 @@ describe('editing an edge modifier set', () => {
       .mock.calls.at(-1)?.[2];
     expect(preview?.edgeReferences).toBeUndefined();
   });
+
+  it.each(['fillet', 'chamfer'] as const)(
+    'forgets a removed stored %s edge once the edit session ends',
+    (kind) => {
+      // Removing an edge, selecting another feature and reselecting this one
+      // without Apply reused the old removal (its key is the feature and the
+      // document version, both unchanged), so a later Apply silently dropped
+      // an edge the reopened card had no reason to leave out.
+      const selectedFeature = editFeature(kind);
+      const other: FeatureNode = {
+        ...feature,
+        id: 'feature-node-2' as FeatureNode['id'],
+        featureId: 'feature-2' as FeatureNode['featureId'],
+        name: 'Other fillet'
+      };
+      const props = makeProps({
+        selectedFeature,
+        featureSelectionSource: 'pinned',
+        commandSession: null
+      });
+      const label = kind === 'fillet' ? 'Filleted edges' : 'Chamfered edges';
+      const rows = () =>
+        within(screen.getByRole('list', { name: label })).getAllByRole(
+          'listitem'
+        );
+      const { rerender } = render(<Inspector {...props} />);
+      fireEvent.click(screen.getByRole('button', { name: /^Remove 2 / }));
+      expect(rows()).toHaveLength(1);
+
+      rerender(<Inspector {...props} selectedFeature={other} />);
+      rerender(<Inspector {...props} selectedFeature={null} />);
+      rerender(<Inspector {...props} />);
+      expect(rows()).toHaveLength(2);
+      fireEvent.submit(
+        screen.getByRole('button', { name: /Apply/ }).closest('form')!
+      );
+      expect(props.onApplyEdgeModifier).toHaveBeenLastCalledWith(
+        selectedFeature,
+        kind,
+        expect.objectContaining({
+          edgeHashes: [11, 12],
+          edgeReferences: references
+        })
+      );
+    }
+  );
+
+  it('forgets a removal when a tool opens over the edit, even with the feature still selected', () => {
+    const selectedFeature = editFeature('fillet');
+    const props = makeProps({
+      selectedFeature,
+      featureSelectionSource: 'pinned',
+      commandSession: null
+    });
+    const rows = () =>
+      within(screen.getByRole('list', { name: 'Filleted edges' })).getAllByRole(
+        'listitem'
+      );
+    const { rerender } = render(<Inspector {...props} />);
+    fireEvent.click(screen.getByRole('button', { name: /^Remove 2 / }));
+    expect(rows()).toHaveLength(1);
+    rerender(<Inspector {...props} tool="box" />);
+    rerender(<Inspector {...props} />);
+    expect(rows()).toHaveLength(2);
+  });
+
+  it('keeps a removal while the same edit session re-renders', () => {
+    const selectedFeature = editFeature('fillet');
+    const props = makeProps({
+      selectedFeature,
+      featureSelectionSource: 'pinned',
+      commandSession: null
+    });
+    const rows = () =>
+      within(screen.getByRole('list', { name: 'Filleted edges' })).getAllByRole(
+        'listitem'
+      );
+    const { rerender } = render(<Inspector {...props} />);
+    fireEvent.click(screen.getByRole('button', { name: /^Remove 2 / }));
+    rerender(<Inspector {...props} selectedEdges={[]} />);
+    expect(rows()).toHaveLength(1);
+  });
 });
 
 describe('imported face recognition display', () => {

@@ -5,16 +5,16 @@ import { useModalFocus } from '../lib/useModalFocus';
 export interface UnappliedCardDialogProps {
   /** The open command card holding the unapplied change, e.g. "Move". */
   card: string;
-  /** The tool the user asked for, e.g. "Union". */
-  next: string;
+  /** What happens once it is settled, e.g. "Union opens". */
+  outcome: string;
   onApply(): void;
   onDiscard(): void;
   onCancel(): void;
 }
 
 /**
- * Asked once when a tool is opened over a command card that still holds a
- * change nobody applied. Opening Union over a Move with dX 60 used to leave
+ * Asked once when a tool is opened, or a selection made, over a command card
+ * that still holds a change nobody applied. Opening Union over a Move with dX 60 used to leave
  * both cards open and the move uncommitted; one card owns the lane, so the
  * pending one is applied or discarded first, or the switch is called off.
  *
@@ -23,7 +23,7 @@ export interface UnappliedCardDialogProps {
  */
 export function UnappliedCardDialog({
   card,
-  next,
+  outcome,
   onApply,
   onDiscard,
   onCancel
@@ -54,7 +54,7 @@ export function UnappliedCardDialog({
         </h2>
         <p id="unapplied-card-dialog-body">
           The {card} card has changes that are not applied yet. Apply them or
-          discard them before {next} opens.
+          discard them before {outcome}.
         </p>
         <div className="unapplied-card-actions">
           <button type="button" onClick={onCancel}>

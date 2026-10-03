@@ -8,7 +8,9 @@ function renderDialog() {
     onDiscard: vi.fn(),
     onCancel: vi.fn()
   };
-  render(<UnappliedCardDialog card="Move" next="Union" {...handlers} />);
+  render(
+    <UnappliedCardDialog card="Move" outcome="Union opens" {...handlers} />
+  );
   return handlers;
 }
 

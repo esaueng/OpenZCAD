@@ -1291,8 +1291,11 @@ export function Inspector(props: InspectorProps) {
   );
   /**
    * Stored edges taken off the fillet or chamfer being edited, until Apply.
-   * Keyed by the edit, so another feature or a new document version starts
-   * from the stored set again.
+   * Keyed by the edit (feature and document version), and dropped the moment
+   * the edit session ends: a tool opens, the feature is deselected or another
+   * one is picked. The panel outlives its subject, so the key alone repeated
+   * when the same feature was reopened, and a stale removal rode the next
+   * Apply.
    */
   const [removedEdges, setRemovedEdges] = useState<{
     edit: string;
@@ -1302,6 +1305,19 @@ export function Inspector(props: InspectorProps) {
   const edgeEditKey = selectedFeature
     ? `edit-${selectedFeature.id}-${props.documentVersion ?? 0}`
     : null;
+  const edgeEditSession =
+    tool === null && selectedFeature
+      ? `${selectedFeature.id}:${featureSelectionSource ?? ''}`
+      : null;
+  const [removalSession, setRemovalSession] = useState(edgeEditSession);
+  if (removalSession !== edgeEditSession) {
+    // Reset while rendering, not in an effect: the reopened card must never
+    // draw a frame, or submit, with the old removal applied.
+    setRemovalSession(edgeEditSession);
+    if (removedEdges.hashes.length > 0 || removedEdges.picked.length > 0) {
+      setRemovedEdges({ edit: '', hashes: [], picked: [] });
+    }
+  }
   useEffect(() => {
     setRemovedEdges((current) => {
       if (current.edit !== edgeEditKey || current.hashes.length === 0)
