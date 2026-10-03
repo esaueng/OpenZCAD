@@ -1,5 +1,5 @@
-import { describe, expect, it, vi } from 'vitest';
-import { CommandManager } from '@openzcad/command-system';
+import { describe, expect, it, vi } from "vitest";
+import { CommandManager } from "@openzcad/command-system";
 import {
   addPrimitiveFeature,
   addSketchFeature,
@@ -12,22 +12,25 @@ import {
   setParameter,
   transformBody,
   updateFeature,
-  updateSketchObject
-} from '@openzcad/document-core';
+  updateSketchObject,
+} from "@openzcad/document-core";
 import {
   createExactKernelAdapter,
   type ExactKernelAdapter,
-  type RebuildCacheEvent
-} from '@openzcad/kernel-adapter/exact';
+  type RebuildCacheEvent,
+} from "@openzcad/kernel-adapter/exact";
 import {
   FEATURE_SUPPRESSED_METADATA_KEY,
   toUserId,
   type DerivedState,
   type EditAnalysisRequest,
-  type ProjectDocument
-} from '@openzcad/shared';
-import { RemusKernel } from '../packages/kernel-adapter/src/remus-runtime';
-import { historyCheckpointIndices } from '../packages/kernel-adapter/src/exact-history-cache';
+  type ProjectDocument,
+} from "@openzcad/shared";
+import { RemusKernel } from "../packages/kernel-adapter/src/remus-runtime";
+import {
+  historyCheckpointIndices,
+  type HistoryCheckpointEntry,
+} from "../packages/kernel-adapter/src/exact-history-cache";
 
 // Same triangulation-layout normalization as incremental-rebuild-cache.test.
 // All topology, references, face ranges, edges, bounds, mass and warnings stay.
@@ -41,25 +44,25 @@ function normalized({ updatedAt: _updatedAt, ...derived }: DerivedState) {
           ...body,
           mesh: {
             kind: body.mesh.kind,
-            triangles: body.mesh.indices.length / 3
-          }
-        }
-      ])
-    )
+            triangles: body.mesh.indices.length / 3,
+          },
+        },
+      ]),
+    ),
   };
 }
 
 async function equivalent(
   document: ProjectDocument,
   actual: DerivedState,
-  analysis?: EditAnalysisRequest
+  analysis?: EditAnalysisRequest,
 ) {
   const fresh = await createExactKernelAdapter({ historyCheckpointLimit: 0 });
   try {
     expect(normalized(actual)).toEqual(
       normalized(
-        await fresh.syncDocument(document, undefined, undefined, analysis)
-      )
+        await fresh.syncDocument(document, undefined, undefined, analysis),
+      ),
     );
   } finally {
     fresh.dispose();
@@ -68,13 +71,13 @@ async function equivalent(
 
 function boxes(
   count: number,
-  document = createProjectDocument('Bounded history', toUserId('cache-test'))
+  document = createProjectDocument("Bounded history", toUserId("cache-test")),
 ) {
   for (let i = 0; i < count; i++)
     document = addPrimitiveFeature(document, {
       name: `Box ${i}`,
-      primitiveKind: 'box',
-      dimensions: { width: 10, height: 8, depth: 6 }
+      primitiveKind: "box",
+      dimensions: { width: 10, height: 8, depth: 6 },
     });
   return document;
 }
@@ -82,22 +85,76 @@ function boxes(
 function edit(document: ProjectDocument, index: number, width: number) {
   return updateFeature(document, {
     featureId: listFeaturesInOrder(document)[index]!.featureId,
-    data: { dimensions: { width, height: 8, depth: 6 } }
+    data: { dimensions: { width, height: 8, depth: 6 } },
   });
 }
 
 // Inspect both owners: a correct derived result alone cannot detect a dangling
 // adapter record or an unbounded stack of inaccessible kernel checkpoints.
-function ownership(adapter: ExactKernelAdapter, count: number) {
-  const state = adapter as unknown as {
+function cacheState(adapter: ExactKernelAdapter) {
+  return adapter as unknown as {
     historyKernel: RemusKernel | null;
-    historyCheckpoints: { checkpointId: number }[];
+    historyCheckpoints: HistoryCheckpointEntry[];
+    historyCheckpointOwners: Map<number, HistoryCheckpointEntry>;
   };
-  expect(state.historyCheckpoints.map((entry) => entry.checkpointId)).toEqual(
-    Array.from({ length: count }, (_, i) => i)
-  );
+}
+
+function ownership(adapter: ExactKernelAdapter, count: number) {
+  const state = cacheState(adapter);
+  const handles = state.historyCheckpoints.map((entry) => entry.checkpointId);
+  expect(handles).toHaveLength(count);
+  expect(new Set(handles).size).toBe(count);
+  expect(state.historyCheckpointOwners.size).toBe(count);
+  for (const entry of state.historyCheckpoints) {
+    expect(Number.isSafeInteger(entry.checkpointId)).toBe(true);
+    expect(entry.checkpointId).toBeGreaterThanOrEqual(0);
+    expect(entry.checkpointId).toBeLessThanOrEqual(0xffff_ffff);
+    expect(state.historyCheckpointOwners.get(entry.checkpointId)).toBe(entry);
+  }
   expect(state.historyKernel?.checkpointCount() ?? 0).toBe(count);
   return state.historyKernel;
+}
+
+// Exercise opaque, nonrecycled handles even with the previously shipped
+// runtime. Only checkpoint handles are remapped; every snapshot, restore,
+// discard and modeled solid is still owned and evaluated by the real kernel.
+function opaqueCheckpoints(adapter: ExactKernelAdapter) {
+  const state = cacheState(adapter);
+  const kernel = state.historyKernel!;
+  const checkpoint = kernel.checkpoint.bind(kernel);
+  const restore = kernel.restore.bind(kernel);
+  const discard = kernel.discardCheckpoint.bind(kernel);
+  let live = state.historyCheckpoints.map(({ checkpointId }) => ({
+    handle: checkpointId,
+    native: checkpointId,
+  }));
+  let nextHandle = 1000;
+  const indexOf = (handle: number) => {
+    const index = live.findIndex((entry) => entry.handle === handle);
+    if (index < 0) throw new Error(`Invalid opaque checkpoint ${handle}`);
+    return index;
+  };
+  const allocation = vi.spyOn(kernel, "checkpoint").mockImplementation(() => {
+    const native = checkpoint();
+    const handle = nextHandle++;
+    live.push({ handle, native });
+    return handle;
+  });
+  const restoration = vi
+    .spyOn(kernel, "restore")
+    .mockImplementation((handle) => {
+      const index = indexOf(handle);
+      restore(live[index]!.native);
+      live = live.slice(0, index + 1);
+    });
+  const discarding = vi
+    .spyOn(kernel, "discardCheckpoint")
+    .mockImplementation((handle) => {
+      const index = indexOf(handle);
+      discard(live[index]!.native);
+      live = live.slice(0, index);
+    });
+  return { allocation, restoration, discarding };
 }
 
 function retained(count: number, limit = 32) {
@@ -112,7 +169,186 @@ function restoredBefore(count: number, changedIndex: number) {
   );
 }
 
-describe('bounded history retention', { timeout: 120_000 }, () => {
+describe("bounded history retention", { timeout: 120_000 }, () => {
+  it("keeps opaque checkpoints through dependent edits, export and mass queries", async () => {
+    const events: RebuildCacheEvent[] = [];
+    const adapter = await createExactKernelAdapter({
+      historyCheckpointLimit: Infinity,
+      onRebuildCacheEvent: (event) => events.push(event),
+    });
+    try {
+      let document = boxes(2);
+      document = transformBody(document, {
+        name: "Dependent move",
+        targetBodyId: document.bodyOrder[1]!,
+        translation: { x: 7, y: 0, z: 0 },
+      }).document;
+      await adapter.syncDocument(document);
+      const kernel = ownership(adapter, 3)!;
+      const free = vi.spyOn(kernel, "free");
+      opaqueCheckpoints(adapter);
+      const oldEpoch = adapter.currentMassPropertiesEpoch()!;
+      document = edit(document, 1, 12);
+      await equivalent(document, await adapter.syncDocument(document));
+      expect(events.at(-1)).toMatchObject({
+        kind: "prefix-restore",
+        restored: 1,
+        replayed: 2,
+      });
+      expect(ownership(adapter, 3)).toBe(kernel);
+      const ids = cacheState(adapter).historyCheckpoints.map(
+        (entry) => entry.checkpointId,
+      );
+      expect(ids.slice(1)).toEqual([1000, 1001]);
+
+      document = edit(document, 1, 14);
+      const bodyId = document.bodyOrder.at(-1)!;
+      const step = await adapter.exportStep(document, [bodyId]);
+      expect(step).toContain("MANIFOLD_SOLID_BREP");
+      expect(ownership(adapter, 3)).toBe(kernel);
+      expect(
+        adapter.readCurrentMassProperties({
+          projectId: document.projectId,
+          version: document.version,
+          bodyId,
+          epoch: oldEpoch,
+        }),
+      ).toMatchObject({ status: "unavailable", code: "stale" });
+
+      document = edit(document, 1, 16);
+      const epoch = await adapter.prepareMassPropertiesForDocument(document);
+      expect(
+        adapter.readCurrentMassProperties({
+          projectId: document.projectId,
+          version: document.version,
+          bodyId,
+          epoch,
+        }).status,
+      ).toBe("ready");
+      const actual = await adapter.syncDocument(document);
+      expect(actual.bodyRepresentations[bodyId]!.volume).toBe(16 * 8 * 6);
+      await equivalent(document, actual);
+      expect(ownership(adapter, 3)).toBe(kernel);
+      expect(free).not.toHaveBeenCalled();
+    } finally {
+      vi.restoreAllMocks();
+      adapter.dispose();
+    }
+  });
+
+  it("discards sparse opaque checkpoints by stored handle while retaining an independent tail", async () => {
+    const events: RebuildCacheEvent[] = [];
+    const adapter = await createExactKernelAdapter({
+      historyCheckpointLimit: 2,
+      onRebuildCacheEvent: (event) => events.push(event),
+    });
+    try {
+      let document = boxes(6);
+      await adapter.syncDocument(document);
+      const kernel = ownership(adapter, 2)!;
+      const free = vi.spyOn(kernel, "free");
+      const { discarding } = opaqueCheckpoints(adapter);
+      for (const [index, width] of [
+        [0, 12],
+        [1, 14],
+        [0, 16],
+      ] as const) {
+        const firstRemoved =
+          cacheState(adapter).historyCheckpoints[index]!.checkpointId;
+        document = edit(document, index, width);
+        const actual = await adapter.syncDocument(document);
+        expect(discarding).toHaveBeenLastCalledWith(firstRemoved);
+        expect(events.at(-1)).toMatchObject({
+          kind: "independent-reuse",
+          restored: index,
+          replayed: 1,
+          reusedPrimitives: 5 - index,
+        });
+        expect(
+          actual.bodyRepresentations[document.bodyOrder[index]!]!.volume,
+        ).toBe(width * 8 * 6);
+        await equivalent(document, actual);
+        expect(ownership(adapter, 2)).toBe(kernel);
+      }
+      expect(free).not.toHaveBeenCalled();
+    } finally {
+      vi.restoreAllMocks();
+      adapter.dispose();
+    }
+  });
+
+  it("accepts a discarded scratch checkpoint gap before appending a feature", async () => {
+    const events: RebuildCacheEvent[] = [];
+    const adapter = await createExactKernelAdapter({
+      historyCheckpointLimit: Infinity,
+      onRebuildCacheEvent: (event) => events.push(event),
+    });
+    try {
+      let document = boxes(2);
+      await adapter.syncDocument(document);
+      const kernel = ownership(adapter, 2)!;
+      const free = vi.spyOn(kernel, "free");
+      opaqueCheckpoints(adapter);
+      const scratch = kernel.checkpoint();
+      kernel.restore(scratch);
+      kernel.discardCheckpoint(scratch);
+      expect(ownership(adapter, 2)).toBe(kernel);
+      document = addPrimitiveFeature(document, {
+        name: "Appended",
+        primitiveKind: "box",
+        dimensions: { width: 20, height: 8, depth: 6 },
+      });
+      const actual = await adapter.syncDocument(document);
+      expect(cacheState(adapter).historyCheckpoints.at(-1)!.checkpointId).toBe(
+        1001,
+      );
+      expect(events.at(-1)).toMatchObject({
+        kind: "prefix-restore",
+        restored: 2,
+        replayed: 1,
+      });
+      expect(ownership(adapter, 3)).toBe(kernel);
+      expect(
+        actual.bodyRepresentations[document.bodyOrder.at(-1)!]!.volume,
+      ).toBe(20 * 8 * 6);
+      await equivalent(document, actual);
+      expect(free).not.toHaveBeenCalled();
+    } finally {
+      vi.restoreAllMocks();
+      adapter.dispose();
+    }
+  });
+
+  it.each(["duplicate", "unsafe", "foreign", "swapped"] as const)(
+    "rejects %s checkpoint ownership before trusting a retained snapshot",
+    async (corruption) => {
+      const adapter = await createExactKernelAdapter();
+      try {
+        const document = boxes(3);
+        await adapter.syncDocument(document);
+        const old = ownership(adapter, 3)!;
+        const free = vi.spyOn(old, "free");
+        const entries = cacheState(adapter).historyCheckpoints;
+        if (corruption === "duplicate")
+          entries[1]!.checkpointId = entries[0]!.checkpointId;
+        if (corruption === "unsafe") entries[1]!.checkpointId = 2 ** 32;
+        if (corruption === "foreign") entries[1]!.checkpointId = 42;
+        if (corruption === "swapped") {
+          [entries[0]!.checkpointId, entries[1]!.checkpointId] = [
+            entries[1]!.checkpointId,
+            entries[0]!.checkpointId,
+          ];
+        }
+        await equivalent(document, await adapter.syncDocument(document));
+        expect(free).toHaveBeenCalledOnce();
+        expect(ownership(adapter, 3)).not.toBe(old);
+      } finally {
+        vi.restoreAllMocks();
+        adapter.dispose();
+      }
+    },
+  );
+
   it('rebuilds only the referenced primitive across an early parameter edit', async () => {
     const events: RebuildCacheEvent[] = [];
     const adapter = await createExactKernelAdapter({

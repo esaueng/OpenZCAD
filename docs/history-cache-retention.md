@@ -12,16 +12,17 @@ and checkpoint-count bound, not a byte limit.
 
 ## Ownership and invalidation
 
-- The adapter owns one history kernel and a table of selected prefixes. Table
-  entry i owns kernel checkpoint i, an isolated JS build snapshot and all
+- The adapter owns one history kernel and a table of selected prefixes. Each
+  entry owns its returned opaque checkpoint handle, an isolated JS build snapshot and all
   feature digests since the preceding checkpoint. Suppressed and refused
   features also contribute digests, preserving warning attribution.
 - Prefix digests still cover feature content/order/suppression, sketch objects,
   resolved parameter dependencies and imported-source content. Project identity,
   units, scope errors and Bezier profile mode guard global reuse.
-- Restore selects the longest matching retained prefix. Remus `restore(k)` keeps
-  checkpoints 0 through k and discards later checkpoints; the adapter truncates
-  its table in lockstep. A change in a gap invalidates the next checkpoint.
+- Restore selects the longest matching retained prefix using its stored handle.
+  Remus keeps that checkpoint and its ancestors and discards descendants; the
+  adapter truncates its table and handle ownership in lockstep. Handles can have
+  gaps and need not match table positions. A change in a gap invalidates the next checkpoint.
 - When the entire suffix contains only primitive features, unchanged primitives
   can retain their current exact handles. The adapter discards later checkpoints
   without restoring topology, clones the prefix's JS state, and reconstructs the
