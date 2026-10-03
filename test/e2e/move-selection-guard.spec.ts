@@ -266,9 +266,7 @@ test('a right-click waits for the Move answer and retains its requested menu', a
   // Once the current exact result is ready, the retained menu acts on its
   // current publisher. Its old render must not refuse the newer document.
   await expect(page.getByRole('button', { name: /^Fillet/ })).toBeEnabled();
-  await menu
-    .getByRole('menuitem', { name: 'Delete Move', exact: true })
-    .click();
+  await menu.getByRole('menuitem', { name: /^Delete Move\b/ }).click();
   await expect(ask).toHaveCount(0);
   await expect(moveRows).toHaveCount(0);
   await expect(page.locator('.feature-row')).toHaveCount(1);
