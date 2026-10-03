@@ -1,4 +1,4 @@
-import { afterAll, beforeAll, describe, expect, it } from 'vitest';
+import { afterAll, beforeAll, describe, expect, it, vi } from 'vitest';
 import {
   addPrimitiveFeature,
   addSketchFeature,
@@ -25,6 +25,7 @@ import {
 } from '@openzcad/shared';
 import { createProjectDocument } from '@openzcad/document-core';
 import { commandFactories, replayCommands } from '@openzcad/command-system';
+import { RemusKernel } from '../packages/kernel-adapter/src/remus-runtime';
 
 function addSection(
   document: ProjectDocument,
@@ -79,6 +80,23 @@ function featureDataKeys(document: ProjectDocument, name: string): string[] {
     throw new Error(`Feature "${name}" not found.`);
   }
   return Object.keys(node.data);
+}
+
+function expectApexVolumeRefusal(
+  warnings: readonly string[],
+  baseline: number,
+  apexed: number
+): void {
+  const message = warnings.join(' ');
+  const measured = message.match(
+    /does not add material to this loft: the same sections loft to ([\d.]+) mm³ without the apex and to ([\d.]+) mm³ with it/
+  );
+  expect(measured).not.toBeNull();
+  // The warning prints seven significant digits. Compare its measurements
+  // with the closed-form signed frustum/pyramid volumes, allowing 0.0001 mm³
+  // for display rounding and the previous kernel's integration roundoff.
+  expect(Math.abs(Number(measured![1]) - baseline)).toBeLessThan(0.0001);
+  expect(Math.abs(Number(measured![2]) - apexed)).toBeLessThan(0.0001);
 }
 
 describe('advanced exact modeling features', { timeout: 30_000 }, () => {
@@ -442,7 +460,7 @@ describe('advanced exact modeling features', { timeout: 30_000 }, () => {
   it('refuses an apex a coplanar closing section hid from the side test', async () => {
     // Three sections, the last two on the same plane. Measured on the pinned
     // kernel this run lofts to 373.3333 with no apex, to 433.3333 with an apex
-    // at z = 15 — and to 313.3334 with an apex at z = 5, which is *less*
+    // at z = 15 — and to 313.3333 with an apex at z = 5, which is *less*
     // material than no apex at all, buried out of sight, with no warning. A
     // guard that skips itself when the section before the closing one is
     // coplanar with it leaves exactly that fail-open reachable.
@@ -478,8 +496,11 @@ describe('advanced exact modeling features', { timeout: 30_000 }, () => {
       endPoint: { x: 0, y: 0, z: 5 }
     });
     const refusedDerived = await adapter.syncDocument(refused.document);
-    expect(refusedDerived.warnings.join(' ')).toMatch(
-      /does not add material to this loft: the same sections loft to 373\.3333 mm³ without the apex and to 313\.3334 mm³ with it/
+    const baseline = (10 * (4 ** 2 + 4 * 8 + 8 ** 2)) / 3;
+    expectApexVolumeRefusal(
+      refusedDerived.warnings,
+      baseline,
+      baseline - (6 ** 2 * 5) / 3
     );
     expect(refusedDerived.bodyRepresentations[refused.bodyId]).toBeUndefined();
 
@@ -502,7 +523,7 @@ describe('advanced exact modeling features', { timeout: 30_000 }, () => {
     // A run that overshoots: the middle section sits 10 beyond the closing
     // one. An apex at z = 5 is on the far side of the closing section from
     // that middle section, so a side test alone accepts it — and measured,
-    // it returns 193.3334 against the 253.3333 of the same run with no apex.
+    // it returns 193.3333 against the 253.3333 of the same run with no apex.
     // Comparing the two builds is what refuses it.
     let document = createProjectDocument('Overshoot', toUserId('user_over'));
     const lower = addSection(document, 'Lower', 0, {
@@ -536,8 +557,12 @@ describe('advanced exact modeling features', { timeout: 30_000 }, () => {
       endPoint: { x: 0, y: 0, z: 5 }
     });
     const refusedDerived = await adapter.syncDocument(refused.document);
-    expect(refusedDerived.warnings.join(' ')).toMatch(
-      /does not add material to this loft: the same sections loft to 253\.3333 mm³ without the apex and to 193\.3334 mm³ with it/
+    const baseline =
+      (20 * (4 ** 2 + 4 * 8 + 8 ** 2) - 10 * (8 ** 2 + 8 * 6 + 6 ** 2)) / 3;
+    expectApexVolumeRefusal(
+      refusedDerived.warnings,
+      baseline,
+      baseline - (6 ** 2 * 5) / 3
     );
     expect(refusedDerived.bodyRepresentations[refused.bodyId]).toBeUndefined();
 
@@ -768,6 +793,59 @@ describe('advanced exact modeling features', { timeout: 30_000 }, () => {
     );
     expect(message).not.toMatch(/move the apex over the closing section/);
     expect(apexedDerived.bodyRepresentations[apexed.bodyId]).toBeUndefined();
+  });
+
+  it('attributes a construction refusal to the sections or the apex and keeps the kernel reason', async () => {
+    const lower = addSection(
+      createProjectDocument('Construction refusal', toUserId('user_loft')),
+      'Lower',
+      0,
+      { objectKind: 'rectangle', width: 4, height: 4, centerX: 0, centerY: 0 }
+    );
+    const upper = addSection(lower.document, 'Upper', 10, {
+      objectKind: 'rectangle',
+      width: 8,
+      height: 8,
+      centerX: 0,
+      centerY: 0
+    });
+    for (const baselineRefused of [false, true]) {
+      const lofted = loftSections(upper.document, {
+        name: 'Refused apex',
+        sections: [lower.section, upper.section],
+        mode: 'ruled',
+        endPoint: { x: 0, y: 0, z: 15 }
+      });
+      const fresh = await createExactKernelAdapter();
+      const apex = vi
+        .spyOn(RemusKernel.prototype, 'loftWithOptions')
+        .mockImplementation(() => {
+          throw new Error('Kernel refused the apex construction.');
+        });
+      const baseline = baselineRefused
+        ? vi.spyOn(RemusKernel.prototype, 'loft').mockImplementation(() => {
+            throw new Error('Kernel refused the section run.');
+          })
+        : null;
+      try {
+        const derived = await fresh.syncDocument(lofted.document);
+        const message = derived.warnings.join(' ');
+        expect(message).toContain(
+          'Loft to an apex point did not produce a valid closed solid.'
+        );
+        expect(message).toContain('Kernel refused the apex construction.');
+        expect(message).toContain(
+          baselineRefused
+            ? 'the section run itself is what the kernel cannot take; the apex is not what to change'
+            : 'The same sections do loft into a valid solid without the apex point'
+        );
+        expect(derived.bodyRepresentations[lofted.bodyId]).toBeUndefined();
+      } finally {
+        baseline?.mockRestore();
+        apex.mockRestore();
+        fresh.dispose();
+      }
+    }
   });
 
   it('refuses a loft apex point in smooth mode by name', async () => {

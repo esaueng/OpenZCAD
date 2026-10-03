@@ -45,6 +45,7 @@ import {
 } from './exact-variable-blends';
 import {
   collapseShape,
+  certifiedSolidDistance,
   exactUnionOffsetSuggestion,
   fuseUniformSolid,
   fuseUniformSolidChecked,
@@ -53,6 +54,8 @@ import {
   sharedShapeVolume,
   shapesShareMaterialOrTouch,
   sharedSolidVolume,
+  solidsHavePositiveExactIntersection,
+  solidsShareMaterialOrTouch,
   tessellatedFaceBounds,
   unifyBooleanFaces,
   unifyUnionFaces,
@@ -1326,39 +1329,10 @@ function buildBooleanFeature(
     const unionSolids = unionOperands.map((operand) => operand.solid);
     const connectivity = analyzeUnionConnectivity(
       unionOperands,
-      (left, right) => kernel.solidToSolidDistance(left, right)[0] ?? NaN,
-      (left, right) => {
-        try {
-          // Face contact has no shared volume, and a refused intersect is
-          // not evidence of separation either, so a non-ok outcome falls
-          // through to the kernel's same-domain contact query.
-          const common = exactBooleanOutcome(kernel, 'intersect', left, right);
-          if (
-            common.status === 'ok' &&
-            kernel.volume(common.solid, MEASUREMENT_DEFLECTION) > 0
-          ) {
-            return true;
-          }
-        } catch {
-          // A kernel that throws rather than answering says nothing.
-        }
-        try {
-          const contacts = JSON.parse(
-            kernel.detectCoincidentFaces(left, right)
-          ) as unknown;
-          return (
-            Array.isArray(contacts) &&
-            contacts.some(
-              (contact) =>
-                typeof contact === 'object' &&
-                contact !== null &&
-                (contact as { aabbOverlap?: unknown }).aabbOverlap === true
-            )
-          );
-        } catch {
-          return false;
-        }
-      }
+      (left, right) => certifiedSolidDistance(kernel, left, right),
+      (left, right) =>
+        solidsHavePositiveExactIntersection(kernel, left, right) ||
+        solidsShareMaterialOrTouch(kernel, left, right)
     );
     const unified = fuseUniformSolidChecked(
       kernel,
@@ -1437,7 +1411,14 @@ function buildBooleanFeature(
     if (droppedOperand) {
       raiseFeatureWarning(result, feature, droppedOperand, 'refusal');
     }
-    if (!connectivity.connected && !isFaceConnectedSolid(kernel, solid)) {
+    if (
+      !connectivity.connected &&
+      !(
+        connectivity.uncertain &&
+        !verdictRefusesUnion(unionVerdict) &&
+        isFaceConnectedSolid(kernel, solid)
+      )
+    ) {
       unionDisconnected = true;
       raiseFeatureWarning(
         result,
