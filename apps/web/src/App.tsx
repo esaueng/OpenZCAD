@@ -504,7 +504,7 @@ import {
   type SelectionCalloutVerbId
 } from './lib/selectionCallout';
 import { ghostBodiesFor, historyFeatureFocus } from './lib/historyFocus';
-import type { AutoFrameRequest } from './lib/autoFrame';
+import { useLocalAutoFrame } from './hooks/useLocalAutoFrame';
 import {
   faceSketchAttachment,
   fixedPlaneRefForLegacyAttachment
@@ -2296,17 +2296,6 @@ export function App() {
     []
   );
   const [fitSignal, setFitSignal] = useState(0);
-  /**
-   * The bodies before the last local commit, until its exact rebuild lands;
-   * then the pair goes to the viewer, which reframes only for a body that
-   * landed off screen. Previews, undo and remote edits never set it.
-   */
-  const autoFrameBaseline = useRef<{
-    projectId: string;
-    version: number;
-    before: ProjectDocument['derived']['bodyRepresentations'];
-  } | null>(null);
-  const [autoFrame, setAutoFrame] = useState<AutoFrameRequest | null>(null);
   /**
    * What the section view is currently showing. The clipped preview owns the
    * drag; the kernel's exact section is asked for once the plane rests, and
@@ -4796,26 +4785,11 @@ export function App() {
   );
   const renderedRepresentations =
     previewDoc?.derived.bodyRepresentations ?? representations;
-  useEffect(() => {
-    const pending = autoFrameBaseline.current;
-    if (
-      !pending ||
-      !doc ||
-      !exactGeometryReady ||
-      previewDoc ||
-      representations === pending.before
-    ) {
-      return;
-    }
-    if (doc.projectId === pending.projectId && doc.version < pending.version) {
-      return;
-    }
-    autoFrameBaseline.current = null;
-    if (doc.projectId === pending.projectId) {
-      setAutoFrame({ before: pending.before, after: representations });
-    }
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [representations, exactGeometryReady, previewDoc]);
+  const { autoFrame, recordLocalCommit, clearAutoFrame } = useLocalAutoFrame(
+    doc,
+    exactGeometryReady,
+    previewDoc !== null
+  );
   /**
    * Exact regeneration may assign a new topology ID to an edited face. Keep
    * selection attached through operation-specific immutable identity: exact
@@ -5869,6 +5843,7 @@ export function App() {
       normalized,
       session?.userId ?? normalized.ownerUserId
     );
+    clearAutoFrame();
     geometry.invalidate();
     // The document effect below writes every hydrated document to this
     // device and reports 'saving' while it does; saying so from the first
@@ -6050,11 +6025,7 @@ export function App() {
         next = managerRef.current.commitDerivedState(derived);
         setMoveCommitHold(null);
       }
-      autoFrameBaseline.current = {
-        projectId: next.projectId,
-        version: next.version,
-        before
-      };
+      recordLocalCommit(next, before);
       setDoc(next);
       setStatus(commandOutcomeMessage(command.label));
       return true;
@@ -6087,11 +6058,7 @@ export function App() {
         next = managerRef.current.commitDerivedState(derived);
         setMoveCommitHold(null);
       }
-      autoFrameBaseline.current = {
-        projectId: next.projectId,
-        version: next.version,
-        before
-      };
+      recordLocalCommit(next, before);
       setDoc(next);
       setStatus(commandOutcomeMessage(label));
       return true;
@@ -9011,7 +8978,9 @@ export function App() {
     }
     const label = managerRef.current.undoLabel;
     try {
-      setDoc(managerRef.current.undo());
+      const next = managerRef.current.undo();
+      clearAutoFrame();
+      setDoc(next);
     } catch (error) {
       setStatus(errorMessage(error, 'Undo history could not be restored.'));
       return;
@@ -9047,7 +9016,9 @@ export function App() {
     }
     const label = managerRef.current.redoLabel;
     try {
-      setDoc(managerRef.current.redo());
+      const next = managerRef.current.redo();
+      clearAutoFrame();
+      setDoc(next);
     } catch (error) {
       setStatus(errorMessage(error, 'Redo history could not be restored.'));
       return;
