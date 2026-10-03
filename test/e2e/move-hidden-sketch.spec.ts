@@ -227,6 +227,7 @@ test('a pick on the hidden moving sketch preserves Cancel and never replays afte
   const canvas = page.locator('.viewer-host canvas');
 
   async function start() {
+    await page.keyboard.press('Escape');
     await page.locator('.feature-row-main', { hasText: /^Profile$/ }).click();
     await page.getByRole('button', { name: /^Move \(M\)/ }).click();
     await expect(status).toContainText('Move sketch');
