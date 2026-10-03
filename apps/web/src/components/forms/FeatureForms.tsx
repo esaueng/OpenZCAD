@@ -1256,6 +1256,13 @@ interface EdgeModifierFormProps {
   availableEdgeCount?: number;
   onSelectAllEdges?: () => void;
   onClearEdges?: () => void;
+  /**
+   * The edges in `edgeHashes`, named, in order. A count alone ("2 exact
+   * edges selected") left the user to guess which two.
+   */
+  edgeRows?: readonly { hash: number; label: string }[];
+  /** Takes one edge off; absent, the rows carry no remove button. */
+  onRemoveEdge?(hash: number): void;
   initial?: {
     name: string;
     size: ParamValue;
@@ -1285,6 +1292,8 @@ export function EdgeModifierForm({
   availableEdgeCount,
   onSelectAllEdges,
   onClearEdges,
+  edgeRows,
+  onRemoveEdge,
   initial,
   submitLabel,
   onSubmit,
@@ -1329,6 +1338,16 @@ export function EdgeModifierForm({
     () => () => previewCallback.current?.(null),
     [targetBodyId, edgeSelectionKey]
   );
+  // A removed edge previews the blend without it at once: the lit faces then
+  // follow the list instead of still showing the edge just taken off.
+  const removalPending = useRef(false);
+  useEffect(() => {
+    if (removalPending.current) {
+      removalPending.current = false;
+      previewFields(fieldsWith({}));
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [edgeSelectionKey]);
   // The second value each blend can take: a fillet's far-end radius, a
   // chamfer's setback on the other face. Blank is not "zero" but "this blend
   // is the constant/symmetric one", so it is only checked when it is filled.
@@ -1446,6 +1465,38 @@ export function EdgeModifierForm({
               // the routes that work rather than the one the tool forbids.
               'Click an edge in the viewport, or pick the body in the model tree.'}
       </div>
+      {edgeRows && edgeRows.length > 0 && (
+        <ol
+          className="edge-pick-list"
+          aria-label={kind === 'fillet' ? 'Filleted edges' : 'Chamfered edges'}
+        >
+          {edgeRows.map((row, index) => (
+            <li key={row.hash} className="edge-pick-row">
+              <span className="pick-order mono">{index + 1}</span>
+              <span className="edge-pick-name">{row.label}</span>
+              {onRemoveEdge && (
+                <button
+                  type="button"
+                  className="edge-pick-remove"
+                  aria-label={`Remove ${index + 1} ${row.label}`}
+                  title={
+                    edgeRows.length === 1
+                      ? `A ${kind} needs at least one edge`
+                      : 'Remove this edge'
+                  }
+                  disabled={edgeRows.length === 1}
+                  onClick={() => {
+                    removalPending.current = true;
+                    onRemoveEdge(row.hash);
+                  }}
+                >
+                  ×
+                </button>
+              )}
+            </li>
+          ))}
+        </ol>
+      )}
       {targetBodyId &&
         availableEdgeCount &&
         availableEdgeCount > 0 &&

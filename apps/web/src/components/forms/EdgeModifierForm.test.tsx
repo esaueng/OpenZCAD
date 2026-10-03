@@ -104,3 +104,72 @@ describe('chamfer angle and second distance are exclusive in what the form emits
     expect('distance2' in value).toBe(false);
   });
 });
+
+describe('the edge list on a fillet card', () => {
+  // F30: the card said "2 exact edges selected" and nothing else, so which
+  // two, and how to drop one, was guesswork.
+  function renderFillet(props: {
+    edgeHashes: number[];
+    onRemoveEdge?: (hash: number) => void;
+    onPreview?: (value: EdgeModifierFormValue | null) => void;
+  }) {
+    const labels: Record<number, string> = {
+      11: 'Back · Top edge',
+      12: 'Top · Front edge'
+    };
+    const view = (edgeHashes: number[]) => (
+      <EdgeModifierForm
+        kind="fillet"
+        scope={{}}
+        targetBodyId={toBodyId('body_a')}
+        edgeHashes={edgeHashes}
+        edgeRows={edgeHashes.map((hash) => ({ hash, label: labels[hash]! }))}
+        {...(props.onRemoveEdge ? { onRemoveEdge: props.onRemoveEdge } : {})}
+        {...(props.onPreview ? { onPreview: props.onPreview } : {})}
+        initial={{ name: 'Edge break', size: 3 }}
+        submitLabel="Apply"
+        onSubmit={() => undefined}
+      />
+    );
+    const result = render(view(props.edgeHashes));
+    return (next: number[]) => result.rerender(view(next));
+  }
+
+  it('names each edge in order beside the count', () => {
+    renderFillet({ edgeHashes: [11, 12], onRemoveEdge: () => undefined });
+    const list = screen.getByRole('list', { name: 'Filleted edges' });
+    const rows = Array.from(list.querySelectorAll('li')).map(
+      (row) => row.textContent
+    );
+    expect(rows[0]).toContain('1');
+    expect(rows[0]).toContain('Back · Top edge');
+    expect(rows[1]).toContain('Top · Front edge');
+    expect(screen.getByText('2 exact edges selected')).toBeTruthy();
+  });
+
+  it('removes one edge and previews the blend without it', () => {
+    const onRemoveEdge = vi.fn();
+    const onPreview = vi.fn();
+    const rerender = renderFillet({
+      edgeHashes: [11, 12],
+      onRemoveEdge,
+      onPreview
+    });
+    fireEvent.click(
+      screen.getByRole('button', { name: 'Remove 2 Top · Front edge' })
+    );
+    expect(onRemoveEdge).toHaveBeenCalledWith(12);
+    rerender([11]);
+    const last = onPreview.mock.calls.at(-1)![0] as EdgeModifierFormValue;
+    expect(last.edgeHashes).toEqual([11]);
+    // A fillet needs one edge: the last one cannot be taken off.
+    expect(
+      screen.getByRole('button', { name: 'Remove 1 Back · Top edge' })
+    ).toBeDisabled();
+  });
+
+  it('draws no remove buttons when nothing can remove an edge', () => {
+    renderFillet({ edgeHashes: [11, 12] });
+    expect(screen.queryByRole('button', { name: /^Remove/ })).toBeNull();
+  });
+});

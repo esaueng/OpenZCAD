@@ -4,6 +4,10 @@ import { useEffect, useRef, useState, type MutableRefObject } from 'react';
 import { axisDimensionLabel } from '../lib/primitiveDimensionLabel';
 import * as THREE from 'three';
 import type { HoleGhost } from '../lib/holeGhost';
+import {
+  bodiesReachingNewSpace,
+  type AutoFrameRequest
+} from '../lib/autoFrame';
 import { mark, measure, timed } from '../lib/perf';
 import {
   avoidSketchDimensionOverlays,
@@ -69,6 +73,7 @@ import {
   clearGroup,
   closestAxisT,
   composeMoveTransform,
+  boxFullyInView,
   computeFitPose,
   computeNormalToFacePose,
   cylinderRadiusPreviewMatrix,
@@ -492,6 +497,12 @@ interface ModelViewerProps {
   exactSection: ExactSectionRegionDisplay[] | null;
   /** Increment to re-fit the camera to the current geometry. */
   fitSignal: number;
+  /**
+   * A local commit and the exact bodies it published. When a body it created
+   * or grew leaves the view, the camera glides back to frame the model from
+   * where the user already looks; when everything is in view, nothing moves.
+   */
+  autoFrame?: AutoFrameRequest | null;
   /** Set to move the camera to a view target; nonce forces re-runs. */
   viewRequest: { view: ViewTarget; nonce: number } | null;
   /** Set to centre and frame an exact planar face; nonce forces re-runs. */
@@ -1333,6 +1344,12 @@ const E2E_CANVAS_HOOKS_ENABLED =
     }
   ).VITE_E2E === '1';
 const SKETCH_COLOR = 0x6798ff;
+/**
+ * How far inside the canvas edge a new body must sit to count as on screen,
+ * in normalized device units per side: a body touching the edge reads as
+ * cut off.
+ */
+const AUTO_FRAME_MARGIN_NDC = 0.04;
 const SKETCH_SELECTED_COLOR = 0x9eb8ff;
 /**
  * Screen-space widths in CSS pixels for the non-body polylines. Native WebGL
@@ -1411,6 +1428,7 @@ export function ModelViewer({
   settings,
   exactSection,
   fitSignal,
+  autoFrame = null,
   viewRequest,
   normalToFaceRequest,
   rotateRequest,
@@ -4131,6 +4149,27 @@ export function ModelViewer({
       requestRender();
     };
     /**
+     * Whether every drawn body is wholly on screen through the live camera,
+     * and where that camera stands, so a spec can tell a reframe from none.
+     */
+    const handleE2EBodiesInView = (event: Event) => {
+      if (!e2eCanvasHooksEnabled) {
+        return;
+      }
+      const box = new THREE.Box3();
+      for (const object of context.bodyGroup.children) {
+        if (object.visible) box.expandByObject(object);
+      }
+      (
+        event as CustomEvent<{
+          resolve?: (value: { inView: boolean; camera: number[] }) => void;
+        }>
+      ).detail?.resolve?.({
+        inView: !box.isEmpty() && boxFullyInView(box, context.activeCamera),
+        camera: context.activeCamera.position.toArray()
+      });
+    };
+    /**
      * Route a synthetic macOS pointer packet through OrbitControls itself.
      * The embedded WebDriver's W3C action endpoint emits MouseEvents, so it
      * cannot reach Three's PointerEvent-only control listener on WKWebView.
@@ -4387,6 +4426,10 @@ export function ModelViewer({
       renderer.domElement.addEventListener(
         'openzcad:e2e-pixel-ratio',
         handleE2EPixelRatio
+      );
+      renderer.domElement.addEventListener(
+        'openzcad:e2e-bodies-in-view',
+        handleE2EBodiesInView
       );
       renderer.domElement.addEventListener(
         'openzcad:e2e-control-pointer',
@@ -7624,6 +7667,10 @@ export function ModelViewer({
         handleE2EPixelRatio
       );
       renderer.domElement.removeEventListener(
+        'openzcad:e2e-bodies-in-view',
+        handleE2EBodiesInView
+      );
+      renderer.domElement.removeEventListener(
         'openzcad:e2e-control-pointer',
         handleE2EControlPointer
       );
@@ -9842,6 +9889,54 @@ export function ModelViewer({
       { ease: viewJumpEase }
     );
   }, [fitSignal]);
+
+  // A commit that put a body somewhere new — the bracket's second box, a
+  // width that grew, a body moved away — reframes only when that body is not
+  // already wholly on screen; a result the user can see never moves the
+  // camera. It glides along the user's own view direction rather than to the
+  // iso home Fit uses, and never under a drag: a gesture owns the camera.
+  useEffect(() => {
+    const context = contextRef.current;
+    if (
+      !context ||
+      !autoFrame ||
+      !context.hasFitCamera ||
+      moveDragActiveRef.current ||
+      edgeDragActiveRef.current ||
+      offsetDragActiveRef.current ||
+      cylinderRadiusDragActiveRef.current
+    ) {
+      return;
+    }
+    const reached = new THREE.Box3();
+    for (const bodyId of bodiesReachingNewSpace(
+      autoFrame.before,
+      autoFrame.after
+    )) {
+      const object = context.objectsByBodyId.get(bodyId);
+      if (object?.visible) reached.expandByObject(object);
+    }
+    if (
+      reached.isEmpty() ||
+      boxFullyInView(reached, context.activeCamera, AUTO_FRAME_MARGIN_NDC)
+    ) {
+      return;
+    }
+    const pose = computeFitPose(
+      context.camera,
+      context.bodyGroup.children.filter((child) => child.visible),
+      context.camera.position.clone().sub(context.controls.target)
+    );
+    context.startCameraTween(
+      pose,
+      () => {
+        if (context.projection === 'orthographic') {
+          context.syncOrthographic(true);
+        }
+      },
+      { ease: viewJumpEase }
+    );
+  }, [autoFrame]);
 
   // View requests keep the current zoom and glide the camera to the axis —
   // named standard views and the cube's corner diagonals alike.

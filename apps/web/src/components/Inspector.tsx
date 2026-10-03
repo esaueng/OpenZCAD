@@ -146,6 +146,11 @@ export interface InspectorCallbacks {
   onEdgeModifierSize?(size: number | null): void;
   onSelectAllEdges(body: BodyRepresentation): void;
   onClearSelectedEdges(): void;
+  /**
+   * Drops one edge from a create card's pick, as a Shift+Click on it would.
+   * Absent, the card's edge rows carry no remove button.
+   */
+  onRemoveSelectedEdge?(edge: TopologySelection): void;
   onCreatePattern(value: PatternFormValue): void;
   /** The primitive card's Apply: its dimensions and, if moved, placement. */
   onApplyPrimitive(
@@ -262,6 +267,11 @@ interface InspectorProps extends InspectorCallbacks {
   selectedTopology: TopologySelection | null;
   selectedEdges: TopologySelection[];
   edgeModifierBody: BodyRepresentation | null;
+  /**
+   * The committed body projections, so an edited fillet or chamfer can name
+   * the edges it stores: they live on its input body, which a blend consumes.
+   */
+  bodyRepresentations?: Readonly<Record<string, BodyRepresentation>>;
   scope: Record<string, number>;
   sketches: SketchOption[];
   bodies: BodyOption[];
@@ -1328,6 +1338,15 @@ export function Inspector(props: InspectorProps) {
   const selectedEdgeReferences = selectedEdges.flatMap((edge) =>
     edge.reference?.kind === 'edge' ? [edge.reference] : []
   );
+  /**
+   * Stored edges taken off the fillet or chamfer being edited, until Apply.
+   * Keyed by the edit, so another feature or a new document version starts
+   * from the stored set again.
+   */
+  const [removedEdges, setRemovedEdges] = useState<{
+    edit: string;
+    hashes: readonly number[];
+  }>({ edit: '', hashes: [] });
 
   /**
    * Hand an edit panel the keyboard without handing it a field.
@@ -1473,6 +1492,31 @@ export function Inspector(props: InspectorProps) {
               : undefined
           }
           onClearEdges={props.onClearSelectedEdges}
+          edgeRows={selectedEdges.flatMap((edge) =>
+            edge.hash === undefined
+              ? []
+              : [
+                  {
+                    hash: edge.hash,
+                    label: edgeLabel(
+                      edgeModifierBody ??
+                        props.bodyRepresentations?.[edge.bodyId],
+                      edge.hash,
+                      edge.topologyId
+                    )
+                  }
+                ]
+          )}
+          {...(props.onRemoveSelectedEdge
+            ? {
+                onRemoveEdge: (hash: number) => {
+                  const edge = selectedEdges.find(
+                    (candidate) => candidate.hash === hash
+                  );
+                  if (edge) props.onRemoveSelectedEdge?.(edge);
+                }
+              }
+            : {})}
           submitLabel="Create"
           onSubmit={(value) => props.onCreateEdgeModifier(tool, value)}
           onPreview={(value) => props.onPreviewEdgeModifier(null, tool, value)}
@@ -1734,23 +1778,50 @@ export function Inspector(props: InspectorProps) {
       const addedEdgeHashes = pickedEdgeHashes.filter(
         (hash) => !data.edgeHashes.includes(hash)
       );
-      const editEdgeHashes =
+      // An edge taken off the list leaves both the hashes and the references
+      // naming it, so the two still match one for one.
+      const removed = removedEdges.edit === editKey ? removedEdges.hashes : [];
+      const editEdgeHashes = (
         addedEdgeHashes.length > 0
           ? [...data.edgeHashes, ...addedEdgeHashes]
-          : data.edgeHashes;
+          : data.edgeHashes
+      ).filter((hash) => !removed.includes(hash));
       // Stored references only cover the stored hashes and a pick lands on
       // the blended result body, whose lineage the consumed source does not
       // carry, so a grown set goes hash-only and resolves by fingerprint.
       const editEdgeReferences =
-        addedEdgeHashes.length > 0 ? undefined : data.edgeReferences;
+        addedEdgeHashes.length > 0
+          ? undefined
+          : data.edgeReferences?.filter(
+              (reference) => !removed.includes(reference.currentHash)
+            );
+      // Stored edges are named on the input body the blend consumed; an edge
+      // picked to grow the set, on the result it was picked on.
+      const edgeSources = [data.targetBodyId, selectedFeature.bodyId].map(
+        (bodyId) => (bodyId ? props.bodyRepresentations?.[bodyId] : undefined)
+      );
       form = (
         <EdgeModifierForm
-          key={`${editKey}:${editEdgeHashes.length}`}
+          // A removal keeps the card (and any radius typed into it); a pick
+          // that grows the set reseeds it, as it always has.
+          key={`${editKey}:${addedEdgeHashes.length}`}
           kind={data.featureKind}
           scope={scope}
           targetBodyId={data.targetBodyId}
           edgeHashes={editEdgeHashes}
           edgeReferences={editEdgeReferences}
+          edgeRows={editEdgeHashes.map((hash) => ({
+            hash,
+            label: edgeLabel(
+              edgeSources.find((body) =>
+                body?.topology?.edges.some((edge) => edge.hash === hash)
+              ),
+              hash
+            )
+          }))}
+          onRemoveEdge={(hash) =>
+            setRemovedEdges({ edit: editKey, hashes: [...removed, hash] })
+          }
           initial={{
             name: selectedFeature.name,
             size: data.featureKind === 'fillet' ? data.radius : data.distance,

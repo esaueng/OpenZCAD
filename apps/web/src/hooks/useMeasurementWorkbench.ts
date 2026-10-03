@@ -37,7 +37,10 @@ import {
 
 export interface MeasurementWorkbenchInput {
   doc: ProjectDocument | null;
-  /** View or Tweak mode: the only modes that can measure. */
+  /**
+   * View or Tweak mode. Entering one loads the measurement library ahead of
+   * the first pick; Build loads it when Measure is switched on there.
+   */
   modelingLocked: boolean;
   exactGeometryReady: boolean;
   /** The committed exact projection; the only one allowed to refresh rows. */
@@ -219,17 +222,18 @@ export function useMeasurementWorkbench({
   ]);
 
   /**
-   * The measurement library, loaded on first entry to View mode.
+   * The measurement library, loaded on first entry to View mode or on the
+   * first Measure in Build.
    *
    * It is roughly nine kilobytes of derivation, formatting and export that
-   * only View mode can reach, and importing it at the top of this file put all
+   * only a measure session can reach, and importing it at the top of this file put all
    * of it in the eager entry chunk — which the bundle budget guards precisely
    * because it is what every visitor downloads before anything renders. Types
    * are erased at build time, so `import type` above costs nothing; only the
    * runtime import is deferred.
    *
    * Every consumer below therefore has to tolerate `null` for the frame or two
-   * between entering View mode and the chunk arriving. That is a real state
+   * between switching Measure on and the chunk arriving. That is a real state
    * rather than a formality: a fast picker can click before it lands, and the
    * pick is dropped rather than half-handled.
    *
@@ -241,7 +245,7 @@ export function useMeasurementWorkbench({
   >(null);
 
   useEffect(() => {
-    if (!modelingLocked || measurementApi) {
+    if ((!modelingLocked && !measuring) || measurementApi) {
       return;
     }
     let cancelled = false;
@@ -253,7 +257,7 @@ export function useMeasurementWorkbench({
     return () => {
       cancelled = true;
     };
-  }, [modelingLocked, measurementApi]);
+  }, [modelingLocked, measuring, measurementApi]);
 
   useEffect(() => {
     if (!doc || !exactGeometryReady || !measurementApi) {
@@ -316,7 +320,7 @@ export function useMeasurementWorkbench({
     selection: TopologySelection,
     point?: { x: number; y: number; z: number }
   ): string | null {
-    if (!doc || !modelingLocked || !measuring || !measurementApi) {
+    if (!doc || !measuring || !measurementApi) {
       return null;
     }
     const body = renderedRepresentations[selection.bodyId];
@@ -393,12 +397,15 @@ export function useMeasurementWorkbench({
     additive: boolean,
     detail?: PickDetail
   ): boolean {
-    if (!doc || !modelingLocked || !measuring) {
+    // Measure is on in any mode it can be switched on in: View and Tweak's
+    // rail, or Build's instrument rail, which ends the measure session the
+    // moment another command takes the pointer.
+    if (!doc || !measuring) {
       return false;
     }
     // One guard for the whole handler. Dropping a pick that lands before the
     // measurement chunk arrives is better than servicing half of it, and the
-    // window is a frame or two on first entry to View mode only. It still
+    // window is a frame or two on the first measure session only. It still
     // counts as consumed: falling through to selection would be the very
     // coupling this seam removes.
     if (!measurementApi) {

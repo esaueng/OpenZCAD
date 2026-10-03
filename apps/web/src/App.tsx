@@ -58,6 +58,7 @@ import {
   PenLine,
   Move3d,
   Redo2,
+  Ruler,
   Save,
   Settings as SettingsIcon,
   Scissors,
@@ -503,6 +504,7 @@ import {
   type SelectionCalloutVerbId
 } from './lib/selectionCallout';
 import { ghostBodiesFor, historyFeatureFocus } from './lib/historyFocus';
+import type { AutoFrameRequest } from './lib/autoFrame';
 import {
   faceSketchAttachment,
   fixedPlaneRefForLegacyAttachment
@@ -2288,6 +2290,17 @@ export function App() {
     []
   );
   const [fitSignal, setFitSignal] = useState(0);
+  /**
+   * The bodies before the last local commit, until its exact rebuild lands;
+   * then the pair goes to the viewer, which reframes only for a body that
+   * landed off screen. Previews, undo and remote edits never set it.
+   */
+  const autoFrameBaseline = useRef<{
+    projectId: string;
+    version: number;
+    before: ProjectDocument['derived']['bodyRepresentations'];
+  } | null>(null);
+  const [autoFrame, setAutoFrame] = useState<AutoFrameRequest | null>(null);
   /**
    * What the section view is currently showing. The clipped preview owns the
    * drag; the kernel's exact section is asked for once the plane rests, and
@@ -4767,6 +4780,26 @@ export function App() {
   );
   const renderedRepresentations =
     previewDoc?.derived.bodyRepresentations ?? representations;
+  useEffect(() => {
+    const pending = autoFrameBaseline.current;
+    if (
+      !pending ||
+      !doc ||
+      !exactGeometryReady ||
+      previewDoc ||
+      representations === pending.before
+    ) {
+      return;
+    }
+    if (doc.projectId === pending.projectId && doc.version < pending.version) {
+      return;
+    }
+    autoFrameBaseline.current = null;
+    if (doc.projectId === pending.projectId) {
+      setAutoFrame({ before: pending.before, after: representations });
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [representations, exactGeometryReady, previewDoc]);
   /**
    * Exact regeneration may assign a new topology ID to an edited face. Keep
    * selection attached through operation-specific immutable identity: exact
@@ -5628,13 +5661,16 @@ export function App() {
     ) {
       return null;
     }
-    const focus = historyFeatureFocus(doc, selectedFeature, (bodyId) => {
-      const body = doc.derived.bodyRepresentations[bodyId];
+    // Against what is drawn: an edit preview republishes the faces it lights.
+    const shown = previewDoc ?? doc;
+    const focus = historyFeatureFocus(shown, selectedFeature, (bodyId) => {
+      const body = shown.derived.bodyRepresentations[bodyId];
       return Boolean(body && !body.consumed && !hiddenBodyIds.has(bodyId));
     });
     return focus.kind === 'focus' ? { feature: selectedFeature, focus } : null;
   }, [
     doc,
+    previewDoc,
     tool,
     featureSelectionSource,
     selectedFeature,
@@ -5976,6 +6012,7 @@ export function App() {
     }
     try {
       setPreviewDoc(null);
+      const before = managerRef.current.document.derived.bodyRepresentations;
       let next = managerRef.current.execute(command);
       if (derived) {
         // Validation already rebuilt this exact result; attaching it now
@@ -5984,6 +6021,11 @@ export function App() {
         next = managerRef.current.commitDerivedState(derived);
         setMoveCommitHold(null);
       }
+      autoFrameBaseline.current = {
+        projectId: next.projectId,
+        version: next.version,
+        before
+      };
       setDoc(next);
       setStatus(commandOutcomeMessage(command.label));
       return true;
@@ -6010,11 +6052,17 @@ export function App() {
     }
     try {
       setPreviewDoc(null);
+      const before = managerRef.current.document.derived.bodyRepresentations;
       let next = managerRef.current.runTransaction(label, commands);
       if (derived) {
         next = managerRef.current.commitDerivedState(derived);
         setMoveCommitHold(null);
       }
+      autoFrameBaseline.current = {
+        projectId: next.projectId,
+        version: next.version,
+        before
+      };
       setDoc(next);
       setStatus(commandOutcomeMessage(label));
       return true;
@@ -6522,6 +6570,45 @@ export function App() {
     }
     setWorkspaceMode(mode);
   }
+
+  /**
+   * Measure on or off, from either rail or the palette. In Build it is a
+   * command of its own: it ends whatever command was running so the dock
+   * takes the command slot alone, and the effect below ends it as soon as
+   * any other command starts — the two never stack.
+   */
+  function toggleMeasure(next: boolean) {
+    if (next && !modelingLocked) {
+      if (interactionRef.current.mode === 'sketch') {
+        setStatus('Finish the sketch before measuring.');
+        return;
+      }
+      cancelPanel();
+    }
+    setMeasuring(next);
+    clearMeasurementPicks();
+    setStatus(
+      next
+        ? 'Measure ready · Smart inspects one pick; Distance and Angle use two.'
+        : 'Measure off · pinned results stay on the model.'
+    );
+  }
+
+  const buildMeasureInterrupted =
+    !modelingLocked &&
+    measuring &&
+    (tool !== null ||
+      interaction.mode !== 'idle' ||
+      movePreview !== null ||
+      selectedFeature !== null ||
+      selectedProfiles.length > 0);
+  useEffect(() => {
+    if (buildMeasureInterrupted) {
+      setMeasuring(false);
+      clearMeasurementPicks();
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [buildMeasureInterrupted]);
 
   /**
    * Commits a sketch drag: the world translation projects onto the sketch
@@ -15999,7 +16086,7 @@ export function App() {
             event.preventDefault();
             return;
           }
-          if (modelingLocked && measuring) {
+          if (measuring) {
             event.preventDefault();
             if (measurementDraft) {
               clearMeasurementPicks();
@@ -16007,10 +16094,7 @@ export function App() {
                 `${measurementMode} measurement canceled · pick the first target.`
               );
             } else {
-              setMeasuring(false);
-              setStatus(
-                'Measure off · pinned results remain in this View session.'
-              );
+              toggleMeasure(false);
             }
             return;
           }
@@ -16146,14 +16230,7 @@ export function App() {
       const key = event.key.toLowerCase();
       if (key === 'm' && modelingLocked) {
         event.preventDefault();
-        const next = !measuring;
-        setMeasuring(next);
-        clearMeasurementPicks();
-        setStatus(
-          next
-            ? 'Measure ready · Smart inspects one pick; Distance and Angle use two.'
-            : 'Measure off · pinned results stay available in this View session.'
-        );
+        toggleMeasure(!measuring);
         return;
       }
       if (key === 'f') {
@@ -16381,6 +16458,87 @@ export function App() {
           ? 'warning'
           : 'ready';
 
+  // The measurement workbench: View and Tweak float it over the stage while
+  // it holds results; Build gives it the command slot, and only while
+  // Measure is on there, so it never stacks on a tool card.
+  const measurementDock =
+    measuring || (modelingLocked && measurements.length > 0) ? (
+      <MeasurementDock
+        measurements={measurements}
+        formattedMeasurements={formattedMeasurements}
+        enabled={measuring}
+        activeMeasurementId={activeMeasurementId}
+        mode={measurementMode}
+        draftTargetLabel={measurementDraft?.label ?? null}
+        display={measurementDisplay}
+        onMode={(mode) => {
+          setMeasuring(true);
+          setMeasurementMode(mode);
+          clearMeasurementPicks();
+          setStatus(
+            mode === 'smart'
+              ? 'Smart measure · pick an edge, face, hole, or body.'
+              : mode === 'distance'
+                ? 'Distance · pick the first target.'
+                : 'Angle · pick the first straight edge or measured face direction.'
+          );
+        }}
+        onUnit={setMeasurementUnit}
+        onPrecision={setMeasurementPrecision}
+        onRadialDisplay={setRadialDisplay}
+        onSelect={setActiveMeasurementId}
+        onToggleVisibility={(id) =>
+          setMeasurements((current) =>
+            current.map((measurement) =>
+              measurement.id === id
+                ? {
+                    ...measurement,
+                    visible: !measurement.visible
+                  }
+                : measurement
+            )
+          )
+        }
+        onRename={(id, label, note) =>
+          setMeasurements((current) =>
+            current.map((measurement) =>
+              measurement.id === id
+                ? {
+                    ...measurement,
+                    label,
+                    note: note || undefined,
+                    renamed: true
+                  }
+                : measurement
+            )
+          )
+        }
+        onDelete={(id) => {
+          setMeasurements((current) =>
+            current.filter((measurement) => measurement.id !== id)
+          );
+          setActiveMeasurementId((current) =>
+            current === id ? null : current
+          );
+          setStatus('Measurement removed.');
+        }}
+        onClear={() => {
+          if (
+            appSettings.general.confirmDestructiveActions &&
+            !window.confirm('Clear every measurement in this View session?')
+          ) {
+            return;
+          }
+          setMeasurements([]);
+          setActiveMeasurementId(null);
+          clearMeasurementPicks();
+          setStatus('Measurement list cleared.');
+        }}
+        onCopy={(measurement) => void copyMeasurements(measurement)}
+        onExport={exportMeasurements}
+      />
+    ) : null;
+
   // An operation in flight outranks the tool hint: it knows which rung of
   // the Escape ladder you are on, which is the one thing a generic
   // "Esc cancels" can never tell you.
@@ -16422,6 +16580,23 @@ export function App() {
             };
           })
         )),
+    {
+      // Measuring is reading, so it stays in every workspace — Build included,
+      // where the palette used to have no way to it at all.
+      id: 'view-measure',
+      label: measuring ? 'Measure: off' : 'Measure',
+      group: 'View',
+      keywords: ['ruler', 'distance', 'angle', 'dimension', 'inspect'],
+      ...(modelingLocked ? { shortcut: 'M' } : {}),
+      icon: <Ruler size={16} aria-hidden="true" />,
+      disabledReason:
+        viewerBodies.length === 0
+          ? 'Create a body first'
+          : interaction.mode === 'sketch'
+            ? 'Finish the sketch first'
+            : null,
+      run: () => toggleMeasure(!measuring)
+    },
     {
       id: 'view-front',
       label: 'Front view',
@@ -16774,7 +16949,7 @@ export function App() {
     ? measurementDraft
       ? `${measurementDraft.label} selected · pick the second target · Esc cancels`
       : measurementMode === 'smart'
-        ? 'Smart measure · pick geometry · Shift+Click totals edges · M exits'
+        ? `Smart measure · pick geometry · Shift+Click totals edges · ${modelingLocked ? 'M' : 'Esc'} exits`
         : measurementMode === 'distance'
           ? 'Distance · pick the first target · centers resolve automatically'
           : 'Angle · pick a straight edge or measured face direction'
@@ -16788,7 +16963,9 @@ export function App() {
     : parameters.length > 0
       ? 'Edit a parameter and press Enter · the model rebuilds exactly'
       : 'This model has no parameters · Build mode is where they are defined';
-  const workspacePrompt = viewMode
+  // Measuring writes the lane in Build too: it is the command of the moment.
+  const readingHints = viewMode || measuring;
+  const workspacePrompt = readingHints
     ? viewModeHint
     : tweakMode
       ? tweakModeHint
@@ -17600,15 +17777,7 @@ export function App() {
             settings={viewerSettings}
             projection={projection}
             measuring={measuring}
-            onMeasure={(next) => {
-              setMeasuring(next);
-              clearMeasurementPicks();
-              setStatus(
-                next
-                  ? 'Measure ready · Smart inspects one pick; Distance and Angle use two.'
-                  : 'Measure off · pinned results stay available in this View session.'
-              );
-            }}
+            onMeasure={toggleMeasure}
             onFit={() => setFitSignal((value) => value + 1)}
             onToggleGrid={() =>
               setViewerSettings((current) => ({
@@ -17741,6 +17910,7 @@ export function App() {
             pickListEnabled={appSettings.experiments.directManipulation}
             settings={viewerSettings}
             fitSignal={fitSignal}
+            autoFrame={autoFrame}
             viewRequest={viewRequest}
             normalToFaceRequest={normalToFaceRequest}
             rotateRequest={rotateRequest}
@@ -17931,94 +18101,13 @@ export function App() {
             planePickerOffset={sketchPlaneOffset}
             holeGhost={holePreviewState?.ghost ?? null}
             onPickPlane={startSketchOnPlane}
-            onMeasurePreview={
-              modelingLocked && measuring ? previewMeasurement : null
-            }
+            onMeasurePreview={measuring ? previewMeasurement : null}
             regionHandle={modelingLocked ? null : regionHandleTarget}
             modeOverlay={
               modelingLocked ? (
                 <>
                   {viewMode && <ViewModeRail {...partsProps} />}
-                  {(measuring || measurements.length > 0) && (
-                    <MeasurementDock
-                      measurements={measurements}
-                      formattedMeasurements={formattedMeasurements}
-                      enabled={measuring}
-                      activeMeasurementId={activeMeasurementId}
-                      mode={measurementMode}
-                      draftTargetLabel={measurementDraft?.label ?? null}
-                      display={measurementDisplay}
-                      onMode={(mode) => {
-                        setMeasuring(true);
-                        setMeasurementMode(mode);
-                        clearMeasurementPicks();
-                        setStatus(
-                          mode === 'smart'
-                            ? 'Smart measure · pick an edge, face, hole, or body.'
-                            : mode === 'distance'
-                              ? 'Distance · pick the first target.'
-                              : 'Angle · pick the first straight edge or measured face direction.'
-                        );
-                      }}
-                      onUnit={setMeasurementUnit}
-                      onPrecision={setMeasurementPrecision}
-                      onRadialDisplay={setRadialDisplay}
-                      onSelect={setActiveMeasurementId}
-                      onToggleVisibility={(id) =>
-                        setMeasurements((current) =>
-                          current.map((measurement) =>
-                            measurement.id === id
-                              ? {
-                                  ...measurement,
-                                  visible: !measurement.visible
-                                }
-                              : measurement
-                          )
-                        )
-                      }
-                      onRename={(id, label, note) =>
-                        setMeasurements((current) =>
-                          current.map((measurement) =>
-                            measurement.id === id
-                              ? {
-                                  ...measurement,
-                                  label,
-                                  note: note || undefined,
-                                  renamed: true
-                                }
-                              : measurement
-                          )
-                        )
-                      }
-                      onDelete={(id) => {
-                        setMeasurements((current) =>
-                          current.filter((measurement) => measurement.id !== id)
-                        );
-                        setActiveMeasurementId((current) =>
-                          current === id ? null : current
-                        );
-                        setStatus('Measurement removed.');
-                      }}
-                      onClear={() => {
-                        if (
-                          appSettings.general.confirmDestructiveActions &&
-                          !window.confirm(
-                            'Clear every measurement in this View session?'
-                          )
-                        ) {
-                          return;
-                        }
-                        setMeasurements([]);
-                        setActiveMeasurementId(null);
-                        clearMeasurementPicks();
-                        setStatus('Measurement list cleared.');
-                      }}
-                      onCopy={(measurement) =>
-                        void copyMeasurements(measurement)
-                      }
-                      onExport={exportMeasurements}
-                    />
-                  )}
+                  {measurementDock}
                 </>
               ) : contextualToolCard ? (
                 <>
@@ -18163,6 +18252,8 @@ export function App() {
               }))
             }
             onFit={() => setFitSignal((value) => value + 1)}
+            measuring={measuring}
+            onMeasure={toggleMeasure}
             onView={requestView}
             onRotateView={requestRotate}
             onCycleDisplayMode={cycleDisplayMode}
@@ -18213,7 +18304,9 @@ export function App() {
       // the revert pill is up), and the closed-profile quick action only
       // when no plane prompt, Move or revert pill is up.
       command={
-        modelingLocked ? null : contextualToolCard ? (
+        modelingLocked ? null : measurementDock ? (
+          measurementDock
+        ) : contextualToolCard ? (
           hideSketchToolCard || toolFormOwnsEdgePick ? null : (
             <ToolCard
               model={contextualToolCard}
@@ -18573,6 +18666,7 @@ export function App() {
                 selectedTopology={renderedSelectedTopology}
                 selectedEdges={selectedEdges}
                 edgeModifierBody={edgeModifierBody}
+                bodyRepresentations={representations}
                 scope={parameterScope.scope}
                 sketches={sketchOptions}
                 bodies={bodyOptions}
@@ -18597,6 +18691,9 @@ export function App() {
                 onClearSelectedEdges={handleClearSelectedEdges}
                 document={doc}
                 onCreatePrimitive={createFeature}
+                onRemoveSelectedEdge={(edge) =>
+                  handleSelectTopologyFromViewer(edge, true)
+                }
                 onCreateRevolve={(value) => {
                   const command = commandFactories.revolveSketch({
                     ...value,
