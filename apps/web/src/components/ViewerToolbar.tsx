@@ -1,5 +1,13 @@
 import { useEffect, useId, useRef, useState } from 'react';
-import { Camera, Grid3x3, Maximize2, Redo2, Slice, Undo2 } from 'lucide-react';
+import {
+  Camera,
+  Grid3x3,
+  Maximize2,
+  Redo2,
+  Ruler,
+  Slice,
+  Undo2
+} from 'lucide-react';
 import { VIEW_LABELS } from '@openzcad/viewport';
 import type {
   ProjectionMode,
@@ -47,6 +55,13 @@ interface ViewerToolbarProps {
   onRedo(): void;
   onToggleGrid(): void;
   onFit(): void;
+  /** Measure is switched on: the rail's ruler reads pressed. */
+  measuring?: boolean;
+  /**
+   * Switches Measure on or off — the same workbench View mode's rail opens.
+   * Absent, no ruler is drawn.
+   */
+  onMeasure?(next: boolean): void;
   onView(view: StandardView): void;
   onCycleDisplayMode(): void;
   onToggleProjection(): void;
@@ -98,6 +113,8 @@ export function ViewerToolbar({
   onRedo,
   onToggleGrid,
   onFit,
+  measuring = false,
+  onMeasure,
   onView,
   onCycleDisplayMode,
   onToggleProjection,
@@ -180,6 +197,25 @@ export function ViewerToolbar({
         </button>
       </Tooltip>
       <span className="rail-divider" aria-hidden="true" />
+      {onMeasure && (
+        // First of the viewport group, as on View mode's rail: a reading
+        // tool, so it stands with the instruments rather than among the
+        // modeling verbs on the left.
+        <Tooltip
+          label="Measure"
+          description="Inspect geometry, distance, and angle"
+        >
+          <button
+            type="button"
+            className={`rail-button ${measuring ? 'active' : ''}`}
+            onClick={() => onMeasure(!measuring)}
+            aria-label="Measure"
+            aria-pressed={measuring}
+          >
+            <Ruler size={15} aria-hidden="true" />
+          </button>
+        </Tooltip>
+      )}
       <Tooltip
         label="Fit view"
         shortcut="F"
