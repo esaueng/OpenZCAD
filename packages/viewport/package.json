@@ -12,6 +12,6 @@
   },
   "dependencies": {
     "@openzcad/shared": "workspace:*",
-    "three": "^0.185.1"
+    "three": "^0.186.1"
   }
 }
