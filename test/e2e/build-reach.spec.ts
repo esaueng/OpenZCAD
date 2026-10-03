@@ -234,13 +234,17 @@ test('F30: an opened fillet lists its edges by name, lights them, and drops one'
     inspector.getByRole('button', { name: 'Remove 1 Back · Top edge' })
   ).toBeDisabled();
 
-  // Applied, the stored set is the one edge: the card, reseeded from the
-  // new document version, lists it and the light stays on its one blend.
+  // Apply closes the card. Reopening reads the stored one-edge set from the
+  // new document version and lights its one blend.
   await inspector.getByRole('button', { name: /^Apply/ }).click();
   await expect(page.getByRole('contentinfo')).toContainText(
     'Wall top edge break applied.',
     { timeout: 60_000 }
   );
+  await expect(inspector).toHaveCount(0);
+  await page
+    .locator('.feature-row-main', { hasText: 'Wall top edge break' })
+    .click();
   await expect(edges.getByRole('listitem')).toHaveText([
     /^1\s*Back · Top edge/
   ]);
