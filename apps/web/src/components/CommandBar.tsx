@@ -7,6 +7,7 @@ import {
   sendAssistantPromptFiles,
   sendAssistantPromptKey
 } from '../lib/assistant/promptKeys';
+import { ShortcutKeys } from './ShortcutKeys';
 
 const LIST_ID = 'command-palette-list';
 const ASK_HINT_ID = 'command-bar-ask-hint';
@@ -327,7 +328,11 @@ export function CommandBar({
                     <small className="palette-group">{command.group}</small>
                   )}
                   {command.shortcut && (
-                    <kbd>{platformShortcutLabel(command.shortcut)}</kbd>
+                    <kbd>
+                      <ShortcutKeys
+                        label={platformShortcutLabel(command.shortcut)}
+                      />
+                    </kbd>
                   )}
                 </button>
               ))}
@@ -493,7 +498,9 @@ export function CommandBar({
             }}
           />
         </span>
-        <kbd>{searchKey.glyph}</kbd>
+        <kbd>
+          <ShortcutKeys label={searchKey.glyph} />
+        </kbd>
       </div>
     </div>
   );

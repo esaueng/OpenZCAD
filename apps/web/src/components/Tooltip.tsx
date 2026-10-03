@@ -13,6 +13,7 @@ import {
   type Ref
 } from 'react';
 import { platformShortcutLabel } from '../lib/platformShortcut';
+import { ShortcutKeys } from './ShortcutKeys';
 import { createPortal } from 'react-dom';
 
 export const TOOLTIP_OPEN_DELAY_MS = 300;
@@ -469,9 +470,11 @@ export function Tooltip({
               <span className="tooltip-label">{label}</span>
               {shortcut ? (
                 <kbd>
-                  {typeof shortcut === 'string'
-                    ? platformShortcutLabel(shortcut)
-                    : shortcut}
+                  {typeof shortcut === 'string' ? (
+                    <ShortcutKeys label={platformShortcutLabel(shortcut)} />
+                  ) : (
+                    shortcut
+                  )}
                 </kbd>
               ) : null}
               {description && !position?.compact ? (

@@ -262,6 +262,21 @@ kbd {
   text-align: center;
 }
 
+/* A modifier glyph drawn as an icon (ShortcutKeys), a letter's width and
+   sitting on the line with the key beside it. */
+.shortcut-glyph {
+  display: inline-block;
+  width: 1em;
+  height: 1em;
+  vertical-align: -0.125em;
+}
+
+.shortcut-glyph > svg {
+  display: block;
+  width: 100%;
+  height: 100%;
+}
+
 /* ─────────────────────────────────────────────────────────────
    Base reset
    ───────────────────────────────────────────────────────────── */
