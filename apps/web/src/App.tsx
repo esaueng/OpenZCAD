@@ -1623,6 +1623,33 @@ class ParameterCheckStale extends Error {
   }
 }
 
+/**
+ * A viewport selection held back by the unapplied-Move question (F15): a
+ * pick, a double-clicked edge run, or a box selection that would replace
+ * the Move card.
+ */
+type PendingSelectionSwitch =
+  | {
+      kind: 'pick';
+      selection: TopologySelection;
+      additive: boolean;
+      detail?: PickDetail;
+    }
+  | { kind: 'edge-chain'; selections: TopologySelection[] }
+  | { kind: 'box'; bodyIds: string[] };
+
+/**
+ * The tool, editor or selection change waiting on the unapplied-Move
+ * question: a tool to open, Measure, a history feature's editor, or (with
+ * `selection`) a viewport selection.
+ */
+interface PendingToolSwitch {
+  tool: ToolId | 'measure' | 'history' | 'selection';
+  historyFeature?: HistoryEditorRequest;
+  clearHistorySelection?: boolean;
+  selection?: PendingSelectionSwitch;
+}
+
 export function App() {
   // Counts this component's commits for the interaction probes. Deliberately
   // dependency-free so it runs after every commit, and deliberately inside
@@ -1907,11 +1934,8 @@ export function App() {
   selectedProfilesRef.current = selectedProfiles;
   const [movePreview, setMovePreview] = useState<MovePreview | null>(null);
   /** The entire tool/editor transition waiting on an unapplied Move. */
-  const [pendingToolSwitch, setPendingToolSwitch] = useState<{
-    tool: ToolId | 'measure' | 'history';
-    historyFeature?: HistoryEditorRequest;
-    clearHistorySelection?: boolean;
-  } | null>(null);
+  const [pendingToolSwitch, setPendingToolSwitch] =
+    useState<PendingToolSwitch | null>(null);
   /**
    * Name for the Move feature the gizmo is about to create. The gizmo is now
    * the only way to make one (WF-07), so the name it commits under has to be
@@ -6318,14 +6342,74 @@ export function App() {
     completeToolSwitch(request, choice === 'apply');
   }
 
-  function completeToolSwitch(
-    request: {
-      tool: ToolId | 'measure' | 'history';
-      historyFeature?: HistoryEditorRequest;
-      clearHistorySelection?: boolean;
-    },
-    applyMove = false
+  /**
+   * A viewport selection over an open Move card. The picked body's card
+   * would stack under the Move's, or the pick would swap the Move out from
+   * under its gizmo, so over unapplied values it asks the same question a
+   * tool does (F15) and returns true; Cancel leaves everything as it was.
+   * A Move at zero has nothing to keep and gives way here, before the
+   * selection lands. Returns false when the selection may go ahead now.
+   */
+  function deferSelectionForUnappliedMove(
+    selection: PendingSelectionSwitch
+  ): boolean {
+    if (!movePreview) return false;
+    if (moveHasUnappliedChange(movePreview)) {
+      setPendingToolSwitch({ tool: 'selection', selection });
+      return true;
+    }
+    setMovePreview(null);
+    setTool(null);
+    return false;
+  }
+
+  /**
+   * Lands a selection the unapplied-Move question held back. The Move card
+   * closes first, so the selection lands with no card left over it.
+   */
+  function completeSelectionSwitch(
+    pending: PendingSelectionSwitch | undefined,
+    applyMove: boolean
   ) {
+    const movedBodyId = movePreview?.bodyId;
+    if (applyMove && !confirmMove()) return;
+    setMovePreview(null);
+    setTool(null);
+    if (!pending) return;
+    if (applyMove) {
+      // Anything on the body that just moved was picked against the preview
+      // and is renamed by the rebuild the Apply starts: pick it again there.
+      const touchesMoved =
+        pending.kind === 'box'
+          ? pending.bodyIds.includes(movedBodyId ?? '')
+          : pending.kind === 'pick'
+            ? pending.selection.bodyId === movedBodyId
+            : pending.selections.some(
+                (selection) => selection.bodyId === movedBodyId
+              );
+      if (touchesMoved) {
+        setStatus('Move applied · select it again where it is now.');
+        return;
+      }
+    }
+    if (pending.kind === 'box') {
+      boxSelectFromViewer(pending.bodyIds);
+    } else if (pending.kind === 'edge-chain') {
+      selectEdgeChainFromViewer(pending.selections);
+    } else {
+      selectTopologyFromViewer(
+        pending.selection,
+        pending.additive,
+        pending.detail
+      );
+    }
+  }
+
+  function completeToolSwitch(request: PendingToolSwitch, applyMove = false) {
+    if (request.tool === 'selection') {
+      completeSelectionSwitch(request.selection, applyMove);
+      return;
+    }
     if (request.tool === 'history') {
       const current = managerRef.current?.document;
       const feature = request.historyFeature
@@ -11019,13 +11103,13 @@ export function App() {
       // commit's own message ("Filleted 2 edges at 1 mm.") the way a real
       // pick retires whatever it interrupts.
       const outcome = statusEntry;
-      handleSelectTopologyFromViewer(pick.selection, false, pick.detail);
+      selectTopologyFromViewer(pick.selection, false, pick.detail);
       if (!outcome.sticky) {
         setStatusEntry(outcome);
       }
     }
-    // handleSelectTopologyFromViewer is a per-render closure over the same
-    // state this effect already lists.
+    // selectTopologyFromViewer is a per-render closure over the same state
+    // this effect already lists.
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [representations, exactGeometryReady]);
 
@@ -11088,7 +11172,32 @@ export function App() {
     );
   }
 
+  /**
+   * A viewport pick. Over an open Move card a pick of something asks first
+   * when the Move holds unapplied values (F15), and a Move at zero gives
+   * way; an empty click keeps the Move, as it always has.
+   */
   function handleSelectTopologyFromViewer(
+    selection: TopologySelection | null,
+    additive: boolean,
+    detail?: PickDetail
+  ) {
+    if (
+      doc &&
+      selection &&
+      deferSelectionForUnappliedMove({
+        kind: 'pick',
+        selection,
+        additive,
+        ...(detail ? { detail } : {})
+      })
+    ) {
+      return;
+    }
+    selectTopologyFromViewer(selection, additive, detail);
+  }
+
+  function selectTopologyFromViewer(
     selection: TopologySelection | null,
     additive: boolean,
     detail?: PickDetail
@@ -11482,6 +11591,17 @@ export function App() {
    * handle is still armed edge by edge.
    */
   function handleSelectEdgeChainFromViewer(selections: TopologySelection[]) {
+    if (
+      doc &&
+      selections.length > 0 &&
+      deferSelectionForUnappliedMove({ kind: 'edge-chain', selections })
+    ) {
+      return;
+    }
+    selectEdgeChainFromViewer(selections);
+  }
+
+  function selectEdgeChainFromViewer(selections: TopologySelection[]) {
     const first = selections[0];
     if (!doc || !first) {
       return;
@@ -11529,11 +11649,19 @@ export function App() {
     if (movePreview && bodyIds.length === 0) {
       return;
     }
-    // A sweep that does pick something is a change of intent, so the move goes
-    // rather than staying armed on a body the user has just selected away from.
-    if (movePreview) {
-      setMovePreview(null);
-      setTool(null);
+    // A sweep that does pick something is a change of intent, so the move
+    // goes rather than staying armed on a body the user has just selected
+    // away from — but over unapplied values only once the user says whether
+    // to apply them (F15), never dropped unasked.
+    if (deferSelectionForUnappliedMove({ kind: 'box', bodyIds })) {
+      return;
+    }
+    boxSelectFromViewer(bodyIds);
+  }
+
+  function boxSelectFromViewer(bodyIds: string[]) {
+    if (!doc) {
+      return;
     }
     // A box selection replaces the active topology selection. Any direct-
     // manipulation target belongs to that old face or edge, so retaining it
@@ -15766,8 +15894,12 @@ export function App() {
       ]);
       return;
     }
-    // Adopt the clicked geometry as the selection so actions target it.
+    // Adopt the clicked geometry as the selection so actions target it. Over
+    // an unapplied Move that asks first (F15), and the menu waits for the
+    // answer rather than offering actions on a selection that never landed.
+    const asksFirst = moveHasUnappliedChange(movePreview);
     handleSelectTopologyFromViewer(selection, false);
+    if (asksFirst) return;
     const feature = selectionFeature(
       doc,
       representations[selection.bodyId],
@@ -19508,17 +19640,21 @@ export function App() {
           {pendingToolSwitch && doc && (
             <UnappliedCardDialog
               card="Move"
-              next={
-                pendingToolSwitch.tool === 'measure'
-                  ? 'Measure'
-                  : pendingToolSwitch.tool === 'history'
-                    ? (pendingToolSwitch.historyFeature &&
-                        resolveHistoryFeature(
-                          doc,
-                          pendingToolSwitch.historyFeature
-                        )?.name) ||
-                      'History'
-                    : TOOL_META[pendingToolSwitch.tool].label
+              outcome={
+                pendingToolSwitch.tool === 'selection'
+                  ? 'the selection changes'
+                  : `${
+                      pendingToolSwitch.tool === 'measure'
+                        ? 'Measure'
+                        : pendingToolSwitch.tool === 'history'
+                          ? (pendingToolSwitch.historyFeature &&
+                              resolveHistoryFeature(
+                                doc,
+                                pendingToolSwitch.historyFeature
+                              )?.name) ||
+                            'History'
+                          : TOOL_META[pendingToolSwitch.tool].label
+                    } opens`
               }
               onApply={() => resolvePendingToolSwitch('apply')}
               onDiscard={() => resolvePendingToolSwitch('discard')}

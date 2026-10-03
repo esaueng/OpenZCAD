@@ -1,3 +1,4 @@
+import type { Page } from '@playwright/test';
 import { readFile } from 'node:fs/promises';
 import { fileURLToPath } from 'node:url';
 import {
@@ -3687,6 +3688,305 @@ test('opening Measure over an unapplied Move settles the card from the ruler and
   await expect(moveRows).toHaveCount(1);
   await expect(workbench).toBeVisible();
   await expect(ruler).toHaveAttribute('aria-pressed', 'true');
+});
+
+/**
+ * Counts the command cards on screen at once — the command lane's card plus
+ * the feature inspector — every frame from here on, keeping the most seen
+ * and what they were. A closing inspector still fading out is not a card.
+ */
+async function watchCardCount(page: Page) {
+  await page.evaluate(() => {
+    const scope = window as typeof window & {
+      __ozMaxCards?: number;
+      __ozCardsAtMax?: string[];
+    };
+    scope.__ozMaxCards = 0;
+    scope.__ozCardsAtMax = [];
+    const tick = () => {
+      const cards = [
+        ...document.querySelectorAll<HTMLElement>(
+          '.command-float > *, .inspector-float:not(.closing)'
+        )
+      ].filter((card) => {
+        const box = card.getBoundingClientRect();
+        return box.width > 0 && box.height > 0;
+      });
+      if (cards.length > (scope.__ozMaxCards ?? 0)) {
+        scope.__ozMaxCards = cards.length;
+        scope.__ozCardsAtMax = cards.map(
+          (card) => card.getAttribute('aria-label') ?? card.className
+        );
+      }
+      requestAnimationFrame(tick);
+    };
+    requestAnimationFrame(tick);
+  });
+  return () =>
+    page.evaluate(() => {
+      const scope = window as typeof window & {
+        __ozMaxCards?: number;
+        __ozCardsAtMax?: string[];
+      };
+      return {
+        max: scope.__ozMaxCards ?? 0,
+        cards: scope.__ozCardsAtMax ?? []
+      };
+    });
+}
+
+/**
+ * A point on the model that a click picks rather than the Move gizmo: the
+ * pointer hovers something (the canvas cursor says so) and the gizmo's
+ * handle label stays hidden. Read with the Move open, because its arrows and
+ * rings sit over the body it moves.
+ */
+async function modelPointClearOfMoveGizmo(page: Page) {
+  const canvas = page.locator('.viewer-host canvas');
+  const hud = page.locator('.move-gizmo-hud');
+  const area = (await canvas.boundingBox())!;
+  for (const yRatio of [0.3, 0.36, 0.42, 0.48, 0.54, 0.6, 0.66, 0.72]) {
+    for (const xRatio of [0.3, 0.38, 0.46, 0.54, 0.62, 0.7]) {
+      const point = {
+        x: area.x + area.width * xRatio,
+        y: area.y + area.height * yRatio
+      };
+      await page.mouse.move(point.x, point.y);
+      // Past the hover dwell, so the cursor names what is under it now.
+      await page.waitForTimeout(150);
+      const cursor = await canvas.evaluate((element) => element.style.cursor);
+      if (
+        (cursor === 'grab' || cursor === 'pointer') &&
+        !(await hud.isVisible())
+      )
+        return point;
+    }
+  }
+  throw new Error('no point on the model clear of the Move gizmo');
+}
+
+/**
+ * A point of bare canvas near its top edge, no chrome over it, tried in the
+ * order of `xRatios` across the canvas.
+ */
+async function bareCanvasPoint(
+  page: Page,
+  xRatios = [0.5, 0.42, 0.58, 0.34, 0.66, 0.26, 0.74]
+) {
+  const canvas = page.locator('.viewer-host canvas');
+  const point = await canvas.evaluate((element, ratios) => {
+    const bounds = element.getBoundingClientRect();
+    for (const yRatio of [0.06, 0.1, 0.14]) {
+      for (const xRatio of ratios) {
+        const candidate = {
+          x: bounds.x + bounds.width * xRatio,
+          y: bounds.y + bounds.height * yRatio
+        };
+        if (document.elementFromPoint(candidate.x, candidate.y) === element) {
+          return candidate;
+        }
+      }
+    }
+    return null;
+  }, xRatios);
+  if (!point) throw new Error('no bare canvas near the top edge');
+  return point;
+}
+
+/**
+ * A viewport pick over an unapplied Move put the picked body's card under the
+ * Move's (two cards) or swapped the Move out from under its gizmo, and a box
+ * selection dropped the Move unasked. Each now asks the same question a tool
+ * does; a Move at zero gives way, and an empty click keeps it.
+ */
+test('a viewport pick or box selection over an unapplied Move asks first, and never shows two cards', async ({
+  page
+}) => {
+  test.setTimeout(180_000);
+  await stubApi(page);
+  await page.setViewportSize({ width: 1440, height: 900 });
+  await page.goto('/');
+  await page.getByLabel('Project name').fill('Pick Over Move');
+  await page.getByRole('button', { name: 'Create project' }).click();
+  const inspector = page.getByRole('region', { name: 'Feature inspector' });
+  await page.getByRole('button', { name: /^Box \(B\)/ }).click();
+  // Wide, so the body still lies under the pointer after a 60 mm preview.
+  await inspector.getByLabel('Width (X)').fill('180');
+  await inspector.getByLabel('Depth (Y)').fill('60');
+  await inspector.getByLabel('Height (Z)').fill('60');
+  await inspector.getByRole('button', { name: /^Create/ }).click();
+  await expect(page.locator('.feature-row')).toHaveCount(1);
+  await expect(page.getByRole('button', { name: /^Fillet/ })).toBeEnabled({
+    timeout: 30_000
+  });
+  await page.keyboard.press('Escape');
+  await expect(inspector).toHaveCount(0);
+  await page.getByRole('button', { name: 'Fit' }).click();
+  await page.waitForTimeout(700);
+
+  const canvas = page.locator('.viewer-host canvas');
+  const move = page.getByRole('form', { name: 'Move controls' });
+  const moveX = move.getByLabel('Move X in mm');
+  const ask = page.getByRole('alertdialog', { name: 'Apply the Move first?' });
+  const moveRows = page.locator('.feature-row', { hasText: /^Move/ });
+  const status = page.getByRole('contentinfo');
+  const openMove = async (x: string | null) => {
+    await page.getByRole('button', { name: /^Move \(M\)/ }).click();
+    await expect(move).toBeVisible();
+    await expect(canvas).toHaveAttribute('data-e2e-move-gizmo-x', /.+/);
+    if (x !== null) await moveX.fill(x);
+  };
+  const clearSelection = async () => {
+    await page.keyboard.press('Escape');
+    await expect(inspector).toHaveCount(0);
+    await expect(canvas).not.toHaveAttribute('data-e2e-selected-bodies', /.+/);
+  };
+  const maxCards = await watchCardCount(page);
+
+  // A Move at zero has nothing to keep: a body pick takes the lane without
+  // asking, and its card shows alone.
+  await setSelectionFilter(page, 'Body');
+  await openMove(null);
+  const atZero = await modelPointClearOfMoveGizmo(page);
+  await page.mouse.click(atZero.x, atZero.y);
+  await expect(move).toHaveCount(0);
+  await expect(ask).toHaveCount(0);
+  await expect(canvas).toHaveAttribute('data-e2e-selected-bodies', /.+/);
+  await clearSelection();
+
+  // (a) A body pick over 60 mm asks. Cancel keeps the Move, its value and
+  // the selection it had; Discard drops it, then the pick lands.
+  await openMove('60');
+  const onBody = await modelPointClearOfMoveGizmo(page);
+  const before = await canvas.getAttribute('data-e2e-selected-bodies');
+  await page.mouse.click(onBody.x, onBody.y);
+  await expect(ask).toBeVisible();
+  await expect(ask).toContainText('before the selection changes');
+  await ask.getByRole('button', { name: 'Cancel' }).click();
+  await expect(ask).toHaveCount(0);
+  await expect(move).toBeVisible();
+  await expect(moveX).toHaveValue('60');
+  await expect(inspector).toHaveCount(0);
+  await expect(canvas).toHaveAttribute('data-e2e-selected-bodies', before!);
+  await page.mouse.click(onBody.x, onBody.y);
+  await ask.getByRole('button', { name: 'Discard' }).click();
+  await expect(move).toHaveCount(0);
+  await expect(moveRows).toHaveCount(0);
+  await expect(canvas).toHaveAttribute('data-e2e-selected-bodies', /.+/);
+  await clearSelection();
+
+  // (b) A face pick asks too. Apply commits the Move first; the face was
+  // picked on the preview, and the rebuild renames it, so it is not
+  // selected: the status says to pick it again.
+  await setSelectionFilter(page, 'Face');
+  await openMove('60');
+  const onFace = await modelPointClearOfMoveGizmo(page);
+  await page.mouse.click(onFace.x, onFace.y);
+  await expect(ask).toBeVisible();
+  await expect(canvas).not.toHaveAttribute('data-e2e-selected-face', /.+/);
+  await ask.getByRole('button', { name: 'Apply' }).click();
+  await expect(move).toHaveCount(0);
+  await expect(moveRows).toHaveCount(1);
+  await expect(status).toContainText('select it again where it is now');
+  await expect(canvas).not.toHaveAttribute('data-e2e-selected-face', /.+/);
+  await page.keyboard.press('Escape');
+  await setSelectionFilter(page, 'Any');
+  await page.getByRole('button', { name: 'Fit' }).click();
+  await page.waitForTimeout(700);
+
+  // (c) A box selection that catches the body asks; Cancel keeps the Move,
+  // Discard drops it and the swept body is selected.
+  const sweep = async () => {
+    const area = (await canvas.boundingBox())!;
+    // Right to left is a crossing sweep: from the top right corner to the
+    // bottom left, it takes whatever it touches.
+    const from = await bareCanvasPoint(page, [0.86, 0.8, 0.74, 0.68]);
+    await page.mouse.move(from.x, from.y);
+    await page.mouse.down();
+    await page.mouse.move(
+      area.x + area.width * 0.5,
+      area.y + area.height * 0.5
+    );
+    await expect(page.locator('.selection-band')).toBeVisible();
+    await page.mouse.move(
+      area.x + area.width * 0.04,
+      area.y + area.height * 0.96
+    );
+    await page.mouse.up();
+  };
+  await openMove('60');
+  await sweep();
+  await expect(ask).toBeVisible();
+  await ask.getByRole('button', { name: 'Cancel' }).click();
+  await expect(move).toBeVisible();
+  await expect(moveX).toHaveValue('60');
+  await expect(inspector).toHaveCount(0);
+  await sweep();
+  await ask.getByRole('button', { name: 'Discard' }).click();
+  await expect(move).toHaveCount(0);
+  await expect(status).toContainText('1 body selected');
+  await expect(moveRows).toHaveCount(1);
+  await clearSelection();
+
+  // An empty click keeps the Move and asks nothing.
+  await openMove('60');
+  const empty = await bareCanvasPoint(page);
+  await page.mouse.click(empty.x, empty.y);
+  await expect(ask).toHaveCount(0);
+  await expect(move).toBeVisible();
+  await expect(moveX).toHaveValue('60');
+  await page.keyboard.press('Escape');
+  await expect(move).toHaveCount(0);
+
+  const seen = await maxCards();
+  expect(seen.max, JSON.stringify(seen)).toBe(1);
+});
+
+/**
+ * A History row over a Move: over unapplied values it asks (the tests above
+ * cover each answer), and either way the row's card replaces the Move's
+ * rather than showing beside it. A Move at zero gives way without asking.
+ */
+test('a History row over a Move shows one card at a time', async ({ page }) => {
+  await stubApi(page);
+  await page.goto('/');
+  await page.getByLabel('Project name').fill('Row Over Move');
+  await page.getByRole('button', { name: 'Create project' }).click();
+  const inspector = page.getByRole('region', { name: 'Feature inspector' });
+  await page.getByRole('button', { name: /^Box \(B\)/ }).click();
+  await inspector.getByLabel('Name', { exact: true }).fill('Block');
+  await inspector.getByRole('button', { name: /^Create/ }).click();
+  const row = page.locator('.feature-row-main', { hasText: /^Block$/ });
+  await expect(row).toBeVisible();
+  await page.keyboard.press('Escape');
+  await expect(inspector).toHaveCount(0);
+  const move = page.getByRole('form', { name: 'Move controls' });
+  const ask = page.getByRole('alertdialog', { name: 'Apply the Move first?' });
+  const moveRows = page.locator('.feature-row', { hasText: /^Move/ });
+  const maxCards = await watchCardCount(page);
+
+  await page.getByRole('button', { name: /^Move \(M\)/ }).click();
+  await move.getByLabel('Move X in mm').fill('60');
+  await row.click();
+  await expect(ask).toBeVisible();
+  await expect(ask).toContainText('before Block opens');
+  await ask.getByRole('button', { name: 'Discard' }).click();
+  await expect(move).toHaveCount(0);
+  await expect(inspector.getByRole('heading', { name: 'Block' })).toBeVisible();
+  await expect(moveRows).toHaveCount(0);
+  await page.keyboard.press('Escape');
+  await expect(inspector).toHaveCount(0);
+
+  await page.getByRole('button', { name: /^Move \(M\)/ }).click();
+  await expect(move).toBeVisible();
+  await row.click();
+  await expect(ask).toHaveCount(0);
+  await expect(move).toHaveCount(0);
+  await expect(inspector.getByRole('heading', { name: 'Block' })).toBeVisible();
+  await expect(moveRows).toHaveCount(0);
+
+  const seen = await maxCards();
+  expect(seen.max, JSON.stringify(seen)).toBe(1);
 });
 
 test('Remus resolves the former face-plane tangent-union refusal', async ({
