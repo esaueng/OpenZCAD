@@ -3417,6 +3417,60 @@ test('opening a tool over an unapplied Move asks once and never stacks two cards
   await expect(moveRows).toHaveCount(1);
 });
 
+/**
+ * The same question guards a history feature's editor: "Edit shell" on a
+ * selected row used to open the shell form straight over an unapplied Move
+ * and drop its values unasked.
+ */
+test('editing a history feature over an unapplied Move asks first', async ({
+  page
+}) => {
+  await stubApi(page);
+  await page.goto('/');
+  await page.getByLabel('Project name').fill('Edit Over Move');
+  await page.getByRole('button', { name: 'Create project' }).click();
+  const inspector = page.getByRole('region', { name: 'Feature inspector' });
+  await page.getByRole('button', { name: /^Box \(B\)/ }).click();
+  await inspector.getByRole('button', { name: /^Create/ }).click();
+  await page.getByRole('button', { name: /^Shell/ }).click();
+  await page
+    .getByRole('group', { name: 'Opening faces' })
+    .getByRole('button', { name: /Top face/ })
+    .click();
+  await page.getByRole('button', { name: 'Create shell' }).click();
+  const shellRow = page.locator('.feature-row-main', { hasText: 'Shell' });
+  await expect(shellRow).toBeVisible({ timeout: 20_000 });
+
+  const move = page.getByRole('form', { name: 'Move controls' });
+  const ask = page.getByRole('alertdialog', { name: 'Apply the Move first?' });
+  const thickness = page.getByRole('textbox', {
+    name: 'Wall thickness',
+    exact: true
+  });
+  await page.getByRole('button', { name: /^Move \(M\)/ }).click();
+  await move.getByLabel('Move X in mm').fill('60');
+  await shellRow.click();
+  await inspector.getByRole('button', { name: 'Edit shell' }).click();
+  await expect(ask).toBeVisible();
+  await expect(ask).toContainText('before Shell opens');
+
+  // Cancel keeps the Move and opens no editor.
+  await ask.getByRole('button', { name: 'Cancel' }).click();
+  await expect(ask).toHaveCount(0);
+  await expect(move.getByLabel('Move X in mm')).toHaveValue('60');
+  await expect(thickness).toHaveCount(0);
+
+  // Discard drops the Move and opens the shell's editor, prefilled.
+  await inspector.getByRole('button', { name: 'Edit shell' }).click();
+  await ask.getByRole('button', { name: 'Discard' }).click();
+  await expect(move).toHaveCount(0);
+  await expect(thickness).toHaveValue('2');
+  await expect(page.getByRole('button', { name: 'Apply shell' })).toBeVisible();
+  await expect(page.locator('.feature-row', { hasText: 'Move' })).toHaveCount(
+    0
+  );
+});
+
 test('Remus resolves the former face-plane tangent-union refusal', async ({
   page
 }) => {
