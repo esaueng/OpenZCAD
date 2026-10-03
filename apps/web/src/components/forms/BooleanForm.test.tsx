@@ -89,14 +89,14 @@ describe('Boolean form pick list', () => {
       />
     );
 
-    expect(
-      screen.getByRole('button', { name: /Left/ }).className
-    ).toContain('selected');
+    expect(screen.getByRole('button', { name: /Left/ }).className).toContain(
+      'selected'
+    );
     fireEvent.click(screen.getByRole('button', { name: /Right/ }));
     expect(onSelectionChange).not.toHaveBeenCalled();
-    expect(
-      screen.getByRole('button', { name: /Right/ }).className
-    ).toContain('selected');
+    expect(screen.getByRole('button', { name: /Right/ }).className).toContain(
+      'selected'
+    );
   });
 });
 
@@ -128,5 +128,28 @@ describe('Boolean form Enter key', () => {
       })
     );
     expect(right.getAttribute('aria-pressed')).toBe('true');
+  });
+});
+
+describe('Boolean form pick rows', () => {
+  it('names each row by its body, then its pick order', () => {
+    render(
+      <BooleanForm
+        bodies={bodies}
+        presetOperation="subtract"
+        selection={[bodies[1]!.bodyId]}
+        submitLabel="Create"
+        onSubmit={() => undefined}
+      />
+    );
+    // The badge alone is a bare digit (or nothing), which read as an
+    // unnamed row; the name leads, and the order and base follow.
+    expect(
+      screen.getByRole('button', { name: 'Right, pick 1, base' })
+    ).toHaveAttribute('aria-pressed', 'true');
+    expect(screen.getByRole('button', { name: 'Left' })).toHaveAttribute(
+      'aria-pressed',
+      'false'
+    );
   });
 });

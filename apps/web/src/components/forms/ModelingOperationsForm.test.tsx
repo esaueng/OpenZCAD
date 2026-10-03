@@ -61,7 +61,7 @@ describe('Modeling operations form', () => {
     });
     fireEvent.click(screen.getByRole('button', { name: 'Create hole' }));
     expect(screen.getByRole('status')).toHaveTextContent(
-      'Checking the exact kernel result'
+      'Checking that the result builds'
     );
 
     view.rerender(
@@ -277,7 +277,7 @@ describe('Modeling operations form', () => {
     fireEvent.click(screen.getByRole('button', { name: 'Create shell' }));
 
     expect(screen.getByRole('status')).toHaveTextContent(
-      'Checking the exact kernel result'
+      'Checking that the result builds'
     );
     expect(onSubmit).not.toHaveBeenCalled();
     expect(onPreflight).toHaveBeenCalledWith({
@@ -466,7 +466,7 @@ it.each(['removed', 'changed'] as const)(
     expect(await screen.findByRole('alert')).toHaveTextContent(
       change === 'removed'
         ? 'Selected profile no longer resolves uniquely'
-        : 'selected references changed'
+        : 'selection changed after the result was checked'
     );
   }
 );

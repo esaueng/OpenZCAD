@@ -496,7 +496,7 @@ function preflightMessage(
     case 'pending':
       return (
         <p className="muted" role="status" aria-live="polite">
-          Checking the exact kernel result…
+          Checking that the result builds…
         </p>
       );
     case 'refused':
@@ -714,7 +714,9 @@ export function ModelingOperationsForm({
         setPreflight({
           status: 'refused',
           reason:
-            error instanceof Error ? error.message : 'Exact preflight failed.'
+            error instanceof Error
+              ? error.message
+              : 'The result could not be checked.'
         });
       }
     }
@@ -730,7 +732,7 @@ export function ModelingOperationsForm({
       const candidate = submission();
       if (checkedSubmission.current !== JSON.stringify(candidate)) {
         throw new Error(
-          'The selected references changed. Recheck the exact result.'
+          'The selection changed after the result was checked. Try again.'
         );
       }
       onSubmit(candidate);
@@ -746,7 +748,7 @@ export function ModelingOperationsForm({
   };
   const buttonLabel =
     effectivePreflight.status === 'pending'
-      ? 'Checking exact result…'
+      ? 'Checking the result…'
       : `${editing ? 'Apply' : 'Create'} ${OPERATION_LABELS[operation].toLowerCase()}`;
   const positionRefusal = holePositionRefusal(state, effectivePreflight);
   const selectedFace =

@@ -186,3 +186,24 @@ describe('PrimitiveForm position row', () => {
     );
   });
 });
+
+describe('PrimitiveForm submit button', () => {
+  it('is named by its verb, with Enter as its shortcut rather than its title', () => {
+    render(
+      <PrimitiveForm
+        kind="box"
+        scope={{}}
+        initialName="Box"
+        submitLabel="Create"
+        onSubmit={vi.fn()}
+      />
+    );
+    const create = screen.getByRole('button', { name: 'Create' });
+    // A `title="Enter"` was what assistive tech announced for every Create
+    // and Apply; the key is a shortcut, not the button's name or tooltip.
+    expect(create).not.toHaveAttribute('title');
+    expect(create).toHaveAttribute('aria-keyshortcuts', 'Enter');
+    expect(create).toHaveAccessibleName('Create');
+    expect(create).toHaveAccessibleDescription('');
+  });
+});

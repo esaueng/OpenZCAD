@@ -94,6 +94,9 @@
 
 .project-title-button {
   min-width: 0;
+  /* The minimum pointer target. Its breadcrumb clips overflow for the
+     name's ellipsis, so the height is real rather than a reaching ::after. */
+  min-height: 24px;
   display: inline-flex;
   align-items: center;
   gap: 5px;
