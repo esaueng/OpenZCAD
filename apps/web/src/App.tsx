@@ -1604,6 +1604,15 @@ class ParameterCheckStale extends Error {
   }
 }
 
+/**
+ * A switch held back by the unapplied-Move question (F15): the tool to open,
+ * or, with `feature`, the history feature whose editor to open.
+ */
+interface PendingToolSwitch {
+  tool: ToolId;
+  feature?: FeatureNode;
+}
+
 export function App() {
   // Counts this component's commits for the interaction probes. Deliberately
   // dependency-free so it runs after every commit, and deliberately inside
@@ -1888,9 +1897,8 @@ export function App() {
   selectedProfilesRef.current = selectedProfiles;
   const [movePreview, setMovePreview] = useState<MovePreview | null>(null);
   /** A tool asked for over an unapplied Move, waiting on Apply/Discard. */
-  const [pendingToolSwitch, setPendingToolSwitch] = useState<ToolId | null>(
-    null
-  );
+  const [pendingToolSwitch, setPendingToolSwitch] =
+    useState<PendingToolSwitch | null>(null);
   /**
    * Name for the Move feature the gizmo is about to create. The gizmo is now
    * the only way to make one (WF-07), so the name it commits under has to be
@@ -6157,29 +6165,46 @@ export function App() {
   }
 
   /**
-   * Opens a tool. One command card holds the lane at a time: a Move whose
-   * values were never applied is not left open under the new tool's card
-   * (F15) — the user is asked once whether to apply or discard it.
+   * The one gate in front of every switch away from an open Move card (F15):
+   * a Move whose values were never applied is not dropped or left open under
+   * the next card. Returns true when the switch was deferred to the
+   * Apply / Discard / Cancel question; the caller does nothing more, and
+   * `resolvePendingToolSwitch` performs the switch once it is answered.
    */
-  function launchTool(nextTool: ToolId) {
+  function deferForUnappliedMove(next: PendingToolSwitch): boolean {
     if (
-      nextTool !== 'transform' &&
-      moveHasUnappliedChange(movePreview) &&
-      !toolDisabledReason(nextTool, availability)
+      next.tool === 'transform' ||
+      !moveHasUnappliedChange(movePreview) ||
+      toolDisabledReason(next.tool, availability)
     ) {
-      setPendingToolSwitch(nextTool);
-      return;
+      return false;
     }
+    setPendingToolSwitch(next);
+    return true;
+  }
+
+  /** Opens a tool, asking first over an unapplied Move. */
+  function launchTool(nextTool: ToolId) {
+    if (deferForUnappliedMove({ tool: nextTool })) return;
     openTool(nextTool);
   }
 
-  /** Settles the unapplied-card question, then opens the tool it held. */
+  /** Performs a switch the unapplied-Move question held back. */
+  function completeToolSwitch(next: PendingToolSwitch) {
+    if (next.feature) {
+      editModelingFeature(next.feature);
+    } else {
+      openTool(next.tool);
+    }
+  }
+
+  /** Settles the unapplied-card question, then makes the switch it held. */
   function resolvePendingToolSwitch(choice: 'apply' | 'discard' | 'cancel') {
-    const nextTool = pendingToolSwitch;
+    const next = pendingToolSwitch;
     setPendingToolSwitch(null);
-    if (!nextTool || choice === 'cancel') return;
+    if (!next || choice === 'cancel') return;
     if (choice === 'apply' && !confirmMove()) return;
-    openTool(nextTool);
+    completeToolSwitch(next);
   }
 
   function openTool(nextTool: ToolId) {
@@ -6342,8 +6367,20 @@ export function App() {
    * on a box-plus-sphere model that opened Hole on the sphere with a refusal
    * already showing.
    */
-  /** Opens a history feature in the modeling form it was created with. */
+  /**
+   * Opens a history feature in the modeling form it was created with,
+   * asking first over an unapplied Move: the editor's card would otherwise
+   * replace the Move and drop its values unasked.
+   */
   function openModelingFeatureEditor(feature: FeatureNode) {
+    if (!modelingFeatureIsEditable(feature.data.featureKind)) return;
+    if (deferForUnappliedMove({ tool: feature.data.featureKind, feature })) {
+      return;
+    }
+    editModelingFeature(feature);
+  }
+
+  function editModelingFeature(feature: FeatureNode) {
     if (!modelingFeatureIsEditable(feature.data.featureKind)) return;
     const data = feature.data as EditableModelingFeatureData;
     openTool(data.featureKind);
@@ -19009,7 +19046,7 @@ export function App() {
           {pendingToolSwitch && doc && (
             <UnappliedCardDialog
               card="Move"
-              next={TOOL_META[pendingToolSwitch].label}
+              next={TOOL_META[pendingToolSwitch.tool].label}
               onApply={() => resolvePendingToolSwitch('apply')}
               onDiscard={() => resolvePendingToolSwitch('discard')}
               onCancel={() => resolvePendingToolSwitch('cancel')}
