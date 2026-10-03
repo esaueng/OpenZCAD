@@ -18,6 +18,7 @@ import type { RegionPickData } from '@openzcad/viewport';
 import {
   currentMoveSelectionDocument,
   movePickNeedsFreshTopology,
+  moveSketchPickVisibility,
   resolveMoveSketchRegion,
   type MoveSelectionPick,
   type MoveSelectionRequest
@@ -112,6 +113,102 @@ function pendingSketch(open = false) {
   };
   return { manager, sketchId, regions, pick, request };
 }
+
+function pendingConsumedSketch() {
+  const fixture = pendingSketch();
+  fixture.manager.execute(
+    commandFactories.extrudeSketch({
+      name: 'Plate',
+      sketchId: fixture.sketchId,
+      distance: 20
+    })
+  );
+  const hidden = new Set<string>();
+  for (const feature of listFeaturesInOrder(fixture.manager.document)) {
+    if (feature.data.featureKind === 'extrude') {
+      hidden.add(feature.data.sketchId);
+    }
+  }
+  return {
+    ...fixture,
+    hidden,
+    request: { ...fixture.request, version: fixture.manager.document.version }
+  };
+}
+
+describe('temporarily visible sketch picks during Move', () => {
+  it('admits only the carried consumed sketch and retains exact ownership', () => {
+    const { manager, sketchId, pick, request, hidden } =
+      pendingConsumedSketch();
+    const preview = { bodyId: sketchId, target: 'sketch' as const };
+    expect(currentMoveSelectionDocument(manager, request)).toBe(
+      manager.document
+    );
+    expect(moveSketchPickVisibility(pick, preview, hidden)).toBe('temporary');
+    expect(moveSketchPickVisibility(pick, null, hidden)).toBe('hidden');
+    expect(moveSketchPickVisibility(pick, { bodyId: sketchId }, hidden)).toBe(
+      'hidden'
+    );
+    expect(moveSketchPickVisibility(pick, preview, new Set())).toBe('visible');
+    manager.execute(
+      commandFactories.addSketch({
+        name: 'Other hidden sketch',
+        plane: 'XY',
+        offset: 0,
+        object: { objectKind: 'line', x1: 0, y1: 0, x2: 20, y2: 0 }
+      })
+    );
+    const other = manager.document.sketchOrder.at(-1)!;
+    hidden.add(other);
+    expect(
+      moveSketchPickVisibility(
+        { kind: 'sketch-profile', sketchId: other },
+        preview,
+        hidden
+      )
+    ).toBe('hidden');
+    expect(currentMoveSelectionDocument(manager, request)).toBeNull();
+    expect(
+      currentMoveSelectionDocument(new CommandManager(manager.document), {
+        ...request,
+        version: manager.document.version
+      })
+    ).toBeNull();
+  });
+
+  it('requires fresh coordinates after Apply and hides the sketch when Move ends', () => {
+    const { manager, sketchId, pick, request, hidden } =
+      pendingConsumedSketch();
+    const preview = { bodyId: sketchId, target: 'sketch' as const };
+    expect(movePickNeedsFreshTopology(preview, pick, manager.document)).toBe(
+      true
+    );
+    expect(
+      movePickNeedsFreshTopology(
+        preview,
+        { kind: 'sketch-profile', sketchId },
+        manager.document
+      )
+    ).toBe(true);
+    const before = liveRegions(manager.document, sketchId)[0]!.samplePoint;
+    manager.execute(
+      commandFactories.translateSketch({ sketchId, du: 20, dv: 0 })
+    );
+    expect(liveRegions(manager.document, sketchId)[0]!.samplePoint).toEqual({
+      x: before.x + 20,
+      y: before.y
+    });
+    expect(currentMoveSelectionDocument(manager, request)).toBeNull();
+    expect(moveSketchPickVisibility(pick, null, hidden)).toBe('hidden');
+    expect(hidden.has(sketchId)).toBe(true);
+    manager.undo();
+    expect(liveRegions(manager.document, sketchId)[0]!.samplePoint).toEqual(
+      before
+    );
+    expect(manager.document.version).toBeGreaterThan(request.version);
+    expect(currentMoveSelectionDocument(manager, request)).toBeNull();
+  });
+});
 
 describe('pending Move selection ownership', () => {
   it.each([false, true])(
