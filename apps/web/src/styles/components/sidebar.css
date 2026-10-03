@@ -604,9 +604,17 @@
 }
 
 /* The grip only shows on hover; narrow, so a row at rest reads dot, icon,
-   name without a gap between the line and the name. */
+   name without a gap between the line and the name. Its box is the 24 px
+   minimum pointer target, and the negative margin hands 10 px of it to the
+   row's left padding (past the dot), so it still takes 14 px of the row and
+   never reaches over the feature button beside it — a hit area overhanging
+   that button turned a click on the row's leading edge into a reorder.
+   Positioned so it stacks over the timeline dot its box now overlaps. */
 .history-timeline .feature-row-grip {
-  width: 14px;
+  position: relative;
+  width: 24px;
+  height: 24px;
+  margin-left: -10px;
   padding: 0;
   display: inline-grid;
   place-items: center;

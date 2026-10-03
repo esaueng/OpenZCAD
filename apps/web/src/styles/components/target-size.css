@@ -2,14 +2,15 @@
    Pointer targets of at least 24 × 24 px (WCAG 2.2, 2.5.8).
 
    Controls drawn side by side (history-row and revision icons, parameter
-   row icons) are simply 24 px (sidebar.css, revisions.css), and the rename
-   button is 24 px tall (topbar.css): a reaching hit area there would only
-   take room from a neighbour. The controls below sit alone — the brand,
-   the view-roll buttons, 14 px section headers, a 14 px reorder grip and an
-   8 px timeline thumb. Each keeps its drawn size; an invisible ::after
-   reaches out to 24 px on any axis that is shorter, centred on the control,
-   so nothing in the layout moves. An axis already 24 px or longer gets an
-   inset of 0 and is hit-tested exactly as before.
+   row icons, the history reorder grip) are simply 24 px (sidebar.css,
+   revisions.css), and the rename button is 24 px tall (topbar.css): a
+   reaching hit area there would only take room from a neighbour — the
+   grip's once overhung the feature button and stole its leading edge. The
+   controls below sit alone — the brand, the view-roll buttons, 14 px
+   section headers and an 8 px timeline thumb. Each keeps its drawn size;
+   an invisible ::after reaches out to 24 px on any axis that is shorter,
+   centred on the control, so nothing in the layout moves. An axis already
+   24 px or longer gets an inset of 0 and is hit-tested exactly as before.
 
    The zero-specificity selector keeps `position: relative` from overriding
    a control that is already positioned (the timeline thumb is absolute);
@@ -25,7 +26,6 @@
   .orientation-roll,
   button.section-title,
   summary.section-title,
-  .feature-row-grip,
   .history-handle
 ) {
   position: relative;
@@ -36,7 +36,6 @@
   .orientation-roll,
   button.section-title,
   summary.section-title,
-  .feature-row-grip,
   .history-handle
 )::after {
   content: '';
