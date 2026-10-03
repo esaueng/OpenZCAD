@@ -3442,7 +3442,9 @@ test('opening a history editor preserves an unapplied Move until its choice is s
   const openPendingEdit = async () => {
     await page.getByRole('button', { name: /^Move \(M\)/ }).click();
     await move.getByLabel('Move X in mm').fill('3');
-    const target = await move.getByLabel('Body', { exact: true }).inputValue();
+    const target = await move
+      .getByRole('combobox', { name: 'Body', exact: true })
+      .inputValue();
     await row.click();
     await edit.click();
     await expect(ask).toBeVisible();
@@ -3456,7 +3458,9 @@ test('opening a history editor preserves an unapplied Move until its choice is s
   const target = await openPendingEdit();
   await ask.getByRole('button', { name: 'Cancel' }).click();
   await expect(move.getByLabel('Move X in mm')).toHaveValue('3');
-  await expect(move.getByLabel('Body', { exact: true })).toHaveValue(target);
+  await expect(
+    move.getByRole('combobox', { name: 'Body', exact: true })
+  ).toHaveValue(target);
   await expect(row).toHaveAttribute('aria-pressed', 'true');
   await expect(edit).toBeVisible();
   await expect(

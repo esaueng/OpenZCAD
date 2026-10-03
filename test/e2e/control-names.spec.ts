@@ -32,14 +32,12 @@ test('commands, export formats and body rows are named by what they do', async (
   ).toBeVisible();
 
   await page.getByRole('button', { name: /^Union \(U\)/ }).click();
-  await inspector
-    .getByRole('button', { name: 'Lower Body', exact: true })
-    .click();
+  await inspector.getByRole('button', { name: 'Lower 1', exact: true }).click();
   await expect(
-    inspector.getByRole('button', { name: 'Lower Body, pick 1', exact: true })
+    inspector.getByRole('button', { name: 'Lower 1, pick 1', exact: true })
   ).toHaveAttribute('aria-pressed', 'true');
   await expect(
-    inspector.getByRole('button', { name: 'Upper Body', exact: true })
+    inspector.getByRole('button', { name: 'Upper 1', exact: true })
   ).toHaveAttribute('aria-pressed', 'false');
   await inspector.getByRole('button', { name: 'Cancel', exact: true }).click();
 

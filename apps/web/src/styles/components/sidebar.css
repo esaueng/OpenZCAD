@@ -607,6 +607,7 @@
    reaching it never covers the adjacent feature-selection button. */
 .history-timeline .feature-row-grip {
   width: 24px;
+  height: 24px;
   padding: 0;
   display: inline-grid;
   place-items: center;

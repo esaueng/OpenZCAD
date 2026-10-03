@@ -1100,6 +1100,10 @@ import { extrudeSketchGuidance } from './lib/extrudeGuidance';
 import { featuresNeedingRepair } from './lib/featureRepair';
 import { moveHasUnappliedChange } from './lib/moveCard';
 import {
+  resolveHistoryEditorFeature,
+  type HistoryEditorRequest
+} from './lib/historyEditorTransition';
+import {
   countLabel,
   deleteFeatureToastMessage,
   suppressFeatureToastMessage,
@@ -1892,7 +1896,7 @@ export function App() {
   /** The entire tool/editor transition waiting on an unapplied Move. */
   const [pendingToolSwitch, setPendingToolSwitch] = useState<{
     tool: ToolId;
-    modelingFeature?: FeatureNode;
+    historyFeature?: HistoryEditorRequest;
   } | null>(null);
   /**
    * Name for the Move feature the gizmo is about to create. The gizmo is now
@@ -6202,7 +6206,18 @@ export function App() {
    * (F15) — the user is asked once whether to apply or discard it.
    */
   function launchTool(nextTool: ToolId, modelingFeature?: FeatureNode) {
-    const request = { tool: nextTool, modelingFeature };
+    const current = managerRef.current?.document;
+    if (modelingFeature && !current) return;
+    const request = {
+      tool: nextTool,
+      historyFeature:
+        modelingFeature && current
+          ? {
+              projectId: current.projectId,
+              featureId: modelingFeature.featureId
+            }
+          : undefined
+    };
     if (
       nextTool !== 'transform' &&
       moveHasUnappliedChange(movePreview) &&
@@ -6219,17 +6234,35 @@ export function App() {
     const request = pendingToolSwitch;
     setPendingToolSwitch(null);
     if (!request || choice === 'cancel') return;
-    if (choice === 'apply' && !confirmMove()) return;
-    completeToolSwitch(request);
+    completeToolSwitch(request, choice === 'apply');
   }
 
-  function completeToolSwitch(request: {
-    tool: ToolId;
-    modelingFeature?: FeatureNode;
-  }) {
-    if (!openTool(request.tool) || !request.modelingFeature) return;
-    const feature = request.modelingFeature;
-    const data = feature.data as EditableModelingFeatureData;
+  function completeToolSwitch(
+    request: {
+      tool: ToolId;
+      historyFeature?: HistoryEditorRequest;
+    },
+    applyMove = false
+  ) {
+    const feature = request.historyFeature
+      ? resolveHistoryEditorFeature(
+          managerRef.current?.document,
+          request.historyFeature
+        )
+      : null;
+    if (request.historyFeature && !feature) {
+      setStatus('This history feature is no longer available to edit.');
+      return;
+    }
+    const data = feature?.data as EditableModelingFeatureData | undefined;
+    const nextTool = data?.featureKind ?? request.tool;
+    const reason = toolDisabledReason(nextTool, availability);
+    if (reason) {
+      setStatus(`${TOOL_META[nextTool].label}: ${reason}.`);
+      return;
+    }
+    if (applyMove && !confirmMove()) return;
+    if (!openTool(nextTool) || !feature || !data) return;
     // Only after Apply/Discard: Cancel must leave the Move's target and the
     // current editor untouched. The edit uses its own consumed source body.
     const targetBodyId = 'targetBodyId' in data ? data.targetBodyId : null;
