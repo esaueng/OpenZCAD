@@ -83,6 +83,6 @@ describe('centerAlignLabel', () => {
         { axis: 'x', target: face(0, 0, 0) },
         { axis: 'y', target: face(0, 0, 0) }
       ])
-    ).toBe('Box Body ⋅ centered X·Y');
+    ).toBe('Box Body · centered X·Y');
   });
 });

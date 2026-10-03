@@ -5166,7 +5166,7 @@ export function ModelViewer({
             : 'Radius';
       } else if (rig?.kind === 'offset-face' && lineAngle !== null) {
         tagText =
-          offsetChipModeRef.current === 'total' ? 'Total ⌄' : 'Offset ⌄';
+          offsetChipModeRef.current === 'total' ? 'Total ▾' : 'Offset ▾';
       }
       if (lineAngle !== null) {
         // Both pills ride the line, rotated to read along it: the tag first,
@@ -5220,8 +5220,8 @@ export function ModelViewer({
             rig.kind === 'cylinder-radius'
               ? (tagText ?? '')
               : offsetChipModeRef.current === 'total'
-                ? 'Total ⌄'
-                : 'Offset ⌄';
+                ? 'Total ▾'
+                : 'Offset ▾';
           if (rig.kind === 'offset-face' && pinScreenAt) {
             // The pair reads tag then value and stays clear of the pin: on
             // the pin's right it starts just past the pin, on its left it
