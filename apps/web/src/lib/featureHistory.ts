@@ -131,8 +131,8 @@ export type MoveTarget =
  * produced it in the stored history graph — so for a sketch, the extrudes,
  * revolves and sweeps it drives and everything built on them. A face or
  * edge picked on any of these before the Apply named topology the rebuild
- * replaces. Errs on the side of more: a body counted here is only asked to
- * be picked again.
+ * replaces (`selectionRebuiltByMove`). Errs on the side of more: a face or
+ * edge on a body counted here is only asked to be picked again.
  */
 export function bodiesRebuiltByMove(
   document: ProjectDocument,
@@ -159,23 +159,4 @@ export function bodiesRebuiltByMove(
     for (const bodyId of featureResultBodyIds(feature)) rebuilt.add(bodyId);
   }
   return rebuilt;
-}
-
-/**
- * Whether a selection on `bodyIds`, made over the Move `preview` holds, is
- * stale once that Move is applied: true when any of them is the Move's
- * target body or downstream of what it moves (see `bodiesRebuiltByMove`).
- */
-export function selectionRebuiltByMove(
-  document: ProjectDocument,
-  preview: { bodyId: string; target?: 'body' | 'sketch' },
-  bodyIds: readonly string[]
-): boolean {
-  const rebuilt = bodiesRebuiltByMove(
-    document,
-    preview.target === 'sketch'
-      ? { kind: 'sketch', sketchId: preview.bodyId as SketchId }
-      : { kind: 'body', bodyId: preview.bodyId as BodyId }
-  );
-  return bodyIds.some((bodyId) => rebuilt.has(bodyId as BodyId));
 }

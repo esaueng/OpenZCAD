@@ -10,8 +10,7 @@ import type { BodyId } from '@openzcad/shared';
 import {
   bodiesRebuiltByMove,
   featureHistory,
-  featureResultBodyIds,
-  selectionRebuiltByMove
+  featureResultBodyIds
 } from './featureHistory';
 
 export function historyFixture() {
@@ -258,12 +257,11 @@ it('makes the drilled body a dependent of the body a hole consumes', () => {
   expect([...graph.missing.get(hole!.featureId)!]).toEqual([]);
 });
 
-describe('a selection made over an unapplied Move', () => {
-  function moveFixture() {
+describe('bodies a Move rebuilds', () => {
+  it('follows a moved sketch into the extrude it drives and what is built on it', () => {
     const { manager } = historyFixture();
     const sketchId = manager.document.sketchOrder[0]!;
     const plate = manager.document.bodyOrder[0]!;
-    // The plate as it stands at the end of history: the fillet's result.
     const rounded = featureResultBodyIds(
       listFeaturesInOrder(manager.document).at(-1)!
     )[0]!;
@@ -274,40 +272,11 @@ describe('a selection made over an unapplied Move', () => {
         dimensions: { width: 5, height: 5, depth: 5 }
       })
     );
-    const unrelated = manager.document.bodyOrder.at(-1)!;
-    return { document: manager.document, sketchId, plate, rounded, unrelated };
-  }
-
-  it('is stale on the extrude a moved sketch drives, not on an unrelated body', () => {
-    const { document, sketchId, plate, rounded, unrelated } = moveFixture();
-    const preview = { bodyId: sketchId, target: 'sketch' as const };
-    // The extrude and everything built on it: the move and the fillet.
-    expect(bodiesRebuiltByMove(document, { kind: 'sketch', sketchId })).toEqual(
-      new Set([plate, rounded])
-    );
-    // A face picked on the rounded plate names topology the rebuild replaces.
-    expect(selectionRebuiltByMove(document, preview, [rounded])).toBe(true);
-    // A pick on a body the sketch does not drive still lands.
-    expect(selectionRebuiltByMove(document, preview, [unrelated])).toBe(false);
-    // A box sweep that caught both is stale as a whole.
-    expect(selectionRebuiltByMove(document, preview, [unrelated, plate])).toBe(
-      true
-    );
-  });
-
-  it('is stale on a moved body and nothing beside it', () => {
-    const { document, plate, unrelated } = moveFixture();
+    // The extrude and everything built on it (the move and the fillet), and
+    // not the unrelated box.
     expect(
-      selectionRebuiltByMove(document, { bodyId: unrelated }, [unrelated])
-    ).toBe(true);
-    expect(
-      selectionRebuiltByMove(document, { bodyId: unrelated }, [plate])
-    ).toBe(false);
-    expect(
-      selectionRebuiltByMove(document, { bodyId: plate, target: 'body' }, [
-        plate
-      ])
-    ).toBe(true);
+      bodiesRebuiltByMove(manager.document, { kind: 'sketch', sketchId })
+    ).toEqual(new Set([plate, rounded]));
   });
 
   it('follows a moved body into the features built on it', () => {

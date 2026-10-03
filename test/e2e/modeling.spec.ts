@@ -3887,6 +3887,22 @@ test('a viewport pick or box selection over an unapplied Move asks first, and ne
   await expect(canvas).toHaveAttribute('data-e2e-selected-bodies', /.+/);
   await clearSelection();
 
+  // Apply commits the Move, then the body pick lands: a body keeps its id
+  // through the rebuild, so there is nothing to pick again.
+  await openMove('60');
+  const onMoved = await modelPointClearOfMoveGizmo(page);
+  await page.mouse.click(onMoved.x, onMoved.y);
+  await expect(ask).toBeVisible();
+  await ask.getByRole('button', { name: 'Apply' }).click();
+  await expect(move).toHaveCount(0);
+  await expect(moveRows).toHaveCount(1);
+  await expect(canvas).toHaveAttribute('data-e2e-selected-bodies', /.+/);
+  await expect(inspector).toBeVisible();
+  await expect(status).not.toContainText('select it again');
+  await clearSelection();
+  await page.getByRole('button', { name: 'Fit' }).click();
+  await page.waitForTimeout(700);
+
   // (b) A face pick asks too. Apply commits the Move first; the face was
   // picked on the preview, and the rebuild renames it, so it is not
   // selected: the status says to pick it again.
@@ -3898,7 +3914,7 @@ test('a viewport pick or box selection over an unapplied Move asks first, and ne
   await expect(canvas).not.toHaveAttribute('data-e2e-selected-face', /.+/);
   await ask.getByRole('button', { name: 'Apply' }).click();
   await expect(move).toHaveCount(0);
-  await expect(moveRows).toHaveCount(1);
+  await expect(moveRows).toHaveCount(2);
   await expect(status).toContainText('select it again where it is now');
   await expect(canvas).not.toHaveAttribute('data-e2e-selected-face', /.+/);
   await page.keyboard.press('Escape');
@@ -3937,7 +3953,7 @@ test('a viewport pick or box selection over an unapplied Move asks first, and ne
   await ask.getByRole('button', { name: 'Discard' }).click();
   await expect(move).toHaveCount(0);
   await expect(status).toContainText('1 body selected');
-  await expect(moveRows).toHaveCount(1);
+  await expect(moveRows).toHaveCount(2);
   await clearSelection();
 
   // An empty click keeps the Move and asks nothing.
@@ -3998,6 +4014,8 @@ test('a right-click over an unapplied Move asks first, then opens its menu where
     await moveX.fill('60');
   };
 
+  // Faces first: the menu of a face pick.
+  await setSelectionFilter(page, 'Face');
   await openMove();
   const point = await modelPointClearOfMoveGizmo(page);
   await page.mouse.click(point.x, point.y, { button: 'right' });
@@ -4043,8 +4061,9 @@ test('a right-click over an unapplied Move asks first, then opens its menu where
   await page.keyboard.press('Escape');
   await expect(move).toHaveCount(0);
 
-  // Apply on the body that moved: the pick was made on the preview, so no
-  // menu opens and the status says to right-click it again.
+  // Apply with a face right-clicked on the body that moved: the face was
+  // picked on the preview and the rebuild renames it, so no menu opens and
+  // the status says to right-click it again.
   await openMove();
   const again = await modelPointClearOfMoveGizmo(page);
   await page.mouse.click(again.x, again.y, { button: 'right' });
@@ -4054,6 +4073,22 @@ test('a right-click over an unapplied Move asks first, then opens its menu where
   await expect(status).toContainText('right-click it again where it is now');
   await page.waitForTimeout(400);
   await expect(menu).toHaveCount(0);
+  await page.keyboard.press('Escape');
+
+  // Apply with the body itself right-clicked: a body keeps its id through
+  // the rebuild, so the pick lands and its menu opens at the click.
+  await setSelectionFilter(page, 'Body');
+  await openMove();
+  const onBody = await modelPointClearOfMoveGizmo(page);
+  await page.mouse.click(onBody.x, onBody.y, { button: 'right' });
+  await expect(ask).toBeVisible();
+  await ask.getByRole('button', { name: 'Apply' }).click();
+  await expect(move).toHaveCount(0);
+  await expect(moveRows).toHaveCount(2);
+  await expect(menu).toBeVisible();
+  await expect(canvas).toHaveAttribute('data-e2e-selected-bodies', /.+/);
+  const left = await menu.evaluate((element) => parseFloat(element.style.left));
+  expect(Math.abs(left - onBody.x)).toBeLessThanOrEqual(1);
 });
 
 /**
