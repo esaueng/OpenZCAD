@@ -1,9 +1,11 @@
-import { afterAll, beforeAll, describe, expect, it } from 'vitest';
+import { afterAll, beforeAll, describe, expect, it, vi } from 'vitest';
 import { CommandManager, commandFactories } from '@openzcad/command-system';
 import {
   addPrimitiveFeature,
   addSketchFeature,
+  addSketchObjects,
   createProjectDocument,
+  findSketch,
   extrudeSketch,
   getLatestBodyId,
   getLatestSketchId,
@@ -27,8 +29,15 @@ import {
   type ProjectDocument,
   type SketchPlaneRef
 } from '@openzcad/shared';
-import { resolveExtrudeOperation } from '../apps/web/src/lib/extrudeInference';
+import {
+  regionInferenceRefusal,
+  resolveExtrudeOperation
+} from '../apps/web/src/lib/extrudeInference';
 import { faceSketchAttachment } from '../apps/web/src/lib/faceSketchAttachment';
+import { profileReferencesForSelection } from '../apps/web/src/lib/profileReferences';
+import { computeSketchRegions, setTextFontProvider } from '@openzcad/geometry';
+import { FontLibrary } from '../packages/geometry/src/text/loader';
+import { nodeFontDataSource } from '../packages/geometry/src/text/nodeFontSource';
 
 /**
  * The plane ref the workspace itself would persist for a picked face, so these
@@ -332,6 +341,65 @@ describe('stored extrude operations', { timeout: 30_000 }, () => {
     });
     expect(resolved.inference.operation).toBe('add');
     expect(resolved.command.payload.operation).toBe('add');
+  });
+
+  it('refuses two selected regions whose own inferences disagree', async () => {
+    // One rectangle over the box, one beside it, both dragged 4 down from the
+    // top. Together they measure as a partial overlap and would silently
+    // become an add, so the pocket never appears; each alone is a cut and a
+    // new body, which the selection must refuse rather than split.
+    const { document: seeded, targetBodyId } = baseSketchDocument(10);
+    const sketchId = getLatestSketchId(seeded)!;
+    let base = addSketchObjects(seeded, {
+      sketchId,
+      objects: [
+        {
+          objectKind: 'rectangle',
+          width: 4,
+          height: 4,
+          centerX: 40,
+          centerY: 10
+        }
+      ]
+    }).document;
+    base = { ...base, derived: await kernel.syncDocument(base) };
+    const [over, beside] = findSketch(base, sketchId)!.objectIds;
+    const input = {
+      name: 'Pockets',
+      sketchId,
+      distance: -4,
+      profiles: [
+        { all: true as const, sourceEntityIds: [over!] },
+        { all: true as const, sourceEntityIds: [beside!] }
+      ]
+    };
+    const derive = vi.fn((document: ProjectDocument) =>
+      kernel.syncDocument(document)
+    );
+    // The whole selection measures as a partial overlap: an add.
+    const combined = await resolveExtrudeOperation({ base, input, derive });
+    expect(combined.inference).toMatchObject({
+      operation: 'add',
+      reason: 'partial-overlap'
+    });
+    await expect(
+      regionInferenceRefusal({ base, input, derive }, combined.inference)
+    ).resolves.toBe(
+      'One selected profile would cut into the body and another would make a new body, so extrude them separately or choose an operation.'
+    );
+    // An explicit operation is the way out and is never second-guessed.
+    await expect(
+      regionInferenceRefusal(
+        { base, input, derive, choice: { operation: 'cut', targetBodyId } },
+        { reason: 'explicit' }
+      )
+    ).resolves.toBeNull();
+    // A verdict every profile shares (all inside one body) costs no rebuild.
+    derive.mockClear();
+    await expect(
+      regionInferenceRefusal({ base, input, derive }, { reason: 'enclosed' })
+    ).resolves.toBeNull();
+    expect(derive).not.toHaveBeenCalled();
   });
 
   it('resolves a negative free-plane preview as a new body', async () => {
@@ -709,5 +777,104 @@ describe('stored extrude operations', { timeout: 30_000 }, () => {
         resolved.command.payload.ids!.bodyId
       ];
     expect(result?.consumed).toBe(false);
+  });
+});
+
+describe('a word straddling a body edge', { timeout: 60_000 }, () => {
+  const library = new FontLibrary(nodeFontDataSource());
+  let kernel: ExactKernelAdapter;
+
+  beforeAll(async () => {
+    await library.load('open-sans', 'regular');
+    setTextFontProvider((family, style) => library.peek(family, style));
+    kernel = await createExactKernelAdapter();
+  });
+
+  afterAll(() => {
+    setTextFontProvider(null);
+    kernel.dispose();
+  });
+
+  it('refuses glyphs that would not extrude the same way, though stored as one word', async () => {
+    let base = createProjectDocument(
+      'Straddling word',
+      toUserId('user_straddling_word')
+    );
+    base = addPrimitiveFeature(base, {
+      name: 'Base',
+      primitiveKind: 'box',
+      dimensions: { width: 20, height: 20, depth: 10 }
+    });
+    // Above the box, so no glyph cap lies on its top face; driven 6 down,
+    // the H sinks into the box while the I, past its edge, meets nothing.
+    const { document, sketchId } = addSketchFeature(base, {
+      name: 'Label',
+      planeRef: { type: 'canonical', plane: 'XY', offset: 12 },
+      objects: [
+        {
+          objectKind: 'text',
+          text: 'H  I',
+          fontFamily: 'open-sans',
+          fontStyle: 'regular',
+          size: 20,
+          x: 2,
+          y: 4
+        }
+      ]
+    });
+    const sketch = findSketch(document, sketchId)!;
+    const textId = sketch.objectIds[0]!;
+    const regions = computeSketchRegions(
+      sketch.objectIds.map((id) => {
+        const node = document.nodes[id]!;
+        if (node.kind !== 'sketch-object') throw new Error('not an object');
+        return { id, data: node.data };
+      }),
+      (value) => Number(value)
+    );
+    expect(regions).toHaveLength(2);
+    const glyphs = regions.map((region) => ({
+      sketchId,
+      profileId: region.profileId,
+      regionFingerprint: region.regionFingerprint,
+      samplePoint: region.samplePoint,
+      centroid: region.centroid,
+      boundingBox: region.boundingBox,
+      sourceEntityIds: region.sourceEntityIds,
+      area: region.area
+    }));
+    // One glyph over the 20 mm box, one wholly beyond it.
+    expect(glyphs.map((glyph) => glyph.boundingBox.max.x < 20).sort()).toEqual([
+      false,
+      true
+    ]);
+    expect(glyphs.some((glyph) => glyph.boundingBox.min.x > 20)).toBe(true);
+    const options = {
+      base: { ...document, derived: await kernel.syncDocument(document) },
+      // The stored reference stays entity-wide: one word.
+      input: {
+        name: 'Label',
+        sketchId,
+        distance: -6,
+        profiles: [{ all: true as const, sourceEntityIds: [textId] }]
+      },
+      derive: (next: ProjectDocument) => kernel.syncDocument(next)
+    };
+    const combined = await resolveExtrudeOperation(options).then(
+      (resolved) => resolved.inference,
+      () => null
+    );
+    // The one stored reference alone has nothing to compare.
+    await expect(regionInferenceRefusal(options, combined)).resolves.toBeNull();
+    // Judged glyph by glyph, as the commit does, the word is refused.
+    await expect(
+      regionInferenceRefusal(
+        options,
+        combined,
+        profileReferencesForSelection(glyphs, () => false)
+      )
+    ).resolves.toBe(
+      'One selected profile would add to the body and another would make a new body, so extrude them separately or choose an operation.'
+    );
   });
 });
