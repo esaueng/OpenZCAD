@@ -729,7 +729,11 @@
    space into the pictures instead. The minimum is low enough that the swing
    when a column comes or goes stays small — a tile is never more than about
    a third over it before another column fits — and the `min()` lets a single
-   tile shrink to a window narrower than one tile. */
+   tile shrink to a window narrower than one tile. `auto-fill`, not
+   `auto-fit`, on purpose: a shelf of one or two parts keeps the full row's
+   column count, so its tiles stay the size of a full shelf's rather than
+   stretching one tile across the whole stage. (A partial last row is the
+   same either way; only a shelf shorter than one row differs.) */
 .start-tile-grid {
   --start-tile-min: 220px;
   display: grid;
