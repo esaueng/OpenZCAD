@@ -42,7 +42,7 @@ for (const viewport of [
       new MutationObserver(() => {
         const launcher = document.querySelector('.start-screen');
         if (!launcher) return;
-        for (const text of ['No parts yet', 'Signed out']) {
+        for (const text of ['No parts yet', 'On this device only']) {
           if (launcher.textContent?.includes(text))
             browserWindow.__libraryFlashes.push(text);
         }
@@ -104,7 +104,7 @@ for (const viewport of [
     await expect(
       page.locator('.start-tile-open', { hasText: 'Refresh bracket' })
     ).toBeVisible();
-    await expect(page.locator('.start-account')).toContainText('1 / 1 saved');
+    await expect(page.locator('.start-account')).toContainText('1 part saved');
     await expect(page.getByLabel('Project name')).toHaveValue(
       'Name kept during refresh'
     );
@@ -146,11 +146,10 @@ test('failed account listing finishes refresh with the saved device library', as
   await expect(
     page.locator('.start-tile-open', { hasText: 'Device refresh part' })
   ).toBeVisible();
-  await expect(
-    page.getByText('Cloud project status is temporarily unavailable.', {
-      exact: false
-    })
-  ).toBeVisible();
+  await expect(page.getByText('Account status unavailable')).toHaveAttribute(
+    'title',
+    /Cloud project status is temporarily unavailable\./
+  );
   await expect(
     page.getByRole('status', { name: 'Loading library' })
   ).toHaveCount(0);

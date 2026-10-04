@@ -69,7 +69,7 @@ test('saves unopened legacy projects with undo history from the library', async 
   await expect(
     page.getByRole('button', { name: 'Create project' })
   ).toBeVisible();
-  await expect(page.locator('.start-account-count')).toHaveText('0 / 0 saved');
+  await expect(page.locator('.start-account-text')).toHaveText('Signed in');
   await page.evaluate(async (snapshots) => {
     const database = await new Promise<IDBDatabase>((resolve, reject) => {
       const open = indexedDB.open('openzcad-v2');
@@ -95,12 +95,17 @@ test('saves unopened legacy projects with undo history from the library', async 
   }, documents);
   // Reloading refreshes the shelf; no project has been opened or edited.
   await page.reload();
-  await expect(page.locator('.start-account-count')).toHaveText('0 / 3 saved');
-  await page.getByRole('button', { name: /Save.*account/ }).click();
-  await expect(page.locator('.start-sync-title')).toHaveText(
-    'All 3 projects saved to your account'
+  await expect(page.locator('.start-account-text')).toHaveText(
+    '3 parts not saved'
   );
-  await expect(page.locator('.start-account-count')).toHaveText('3 / 3 saved');
+  await page.getByRole('button', { name: /Save.*account/ }).click();
+  await expect(page.locator('.start-account-text')).toHaveText(
+    'All 3 saved to your account'
+  );
+  await page.getByRole('button', { name: 'Dismiss sync results' }).click();
+  await expect(page.locator('.start-account-text')).toHaveText(
+    'All 3 parts saved'
+  );
   expect(saved.map((document) => document.projectId).sort()).toEqual(
     documents.map((document) => document.projectId).sort()
   );

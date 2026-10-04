@@ -639,7 +639,9 @@ test('leaves the restore screen when a remembered project is missing', async ({
   ).toBeVisible();
   await expect(page.getByLabel('Project name')).toBeVisible();
   await expect(page.locator('.startup-screen')).toHaveCount(0);
-  await expect(page.locator('.start-status')).toContainText('Local workspace');
+  await expect(page.locator('.start-account-text')).toHaveText(
+    'On this device only'
+  );
 });
 
 test('keeps anonymous CAD creation local without calling cloud projects', async ({
@@ -655,7 +657,9 @@ test('keeps anonymous CAD creation local without calling cloud projects', async 
     });
   });
   await page.goto('/');
-  await expect(page.locator('.start-status')).toContainText('Local workspace');
+  await expect(page.locator('.start-account-text')).toHaveText(
+    'On this device only'
+  );
   await page.getByLabel('Project name').fill('Anonymous Part');
   await page.getByRole('button', { name: 'Create project' }).click();
   await expect(page.getByRole('button', { name: /^Box \(B\)/ })).toBeVisible({
@@ -707,7 +711,9 @@ test('signs in with an email code only when cloud profile access is requested', 
         });
   });
   await page.goto('/');
-  await expect(page.locator('.start-status')).toContainText('Local workspace');
+  await expect(page.locator('.start-account-text')).toHaveText(
+    'On this device only'
+  );
 
   await page.getByRole('button', { name: 'Open settings' }).click();
   await page.getByRole('button', { name: 'Account', exact: true }).click();
