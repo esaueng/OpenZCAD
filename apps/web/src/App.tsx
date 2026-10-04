@@ -13822,6 +13822,12 @@ export function App() {
           ...options,
           derive: (document: ProjectDocument) => geometry.syncOnce(document)
         };
+        // Every selected region on its own, a text glyph included: the
+        // stored input names a whole word once.
+        const regionProfiles =
+          selected.length > 0
+            ? profileReferencesForSelection(selected, () => false)
+            : (input.profiles ?? []);
         let resolved: ResolvedExtrude | null;
         try {
           resolved =
@@ -13831,7 +13837,7 @@ export function App() {
           // A selection whose profiles disagree often fails as a whole; the
           // disagreement is the cause worth naming, not the kernel's refusal.
           const mixed = isCurrent()
-            ? await regionInferenceRefusal(agreement, null)
+            ? await regionInferenceRefusal(agreement, null, regionProfiles)
             : null;
           throw mixed ? new Error(mixed) : error;
         }
@@ -13840,7 +13846,8 @@ export function App() {
         // extrude the same way are refused, not silently merged into one.
         const mixed = await regionInferenceRefusal(
           agreement,
-          resolved.inference
+          resolved.inference,
+          regionProfiles
         );
         if (!isCurrent()) return;
         if (mixed) throw new Error(mixed);

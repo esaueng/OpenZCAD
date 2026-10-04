@@ -7,7 +7,11 @@ import {
   type ExtrudeOperationInference,
   type ExtrudeUnionMeasurement
 } from '@openzcad/kernel-adapter/extrude-inference';
-import type { BodyId, ProjectDocument } from '@openzcad/shared';
+import type {
+  BodyId,
+  ProjectDocument,
+  SketchProfileReference
+} from '@openzcad/shared';
 
 type DerivedState = ProjectDocument['derived'];
 type ExtrudeCommand = ReturnType<typeof commandFactories.extrudeSketch>;
@@ -395,13 +399,19 @@ async function profileInference(
  * combined build itself failed. When it is one every profile must share, the
  * per-profile rebuilds are skipped, so a plate of pockets pays nothing extra.
  * An explicit operation is the user's answer to the question and is never
- * second-guessed; one reference — a single region, or a whole text object —
- * has nothing to disagree with. A profile whose own inference fails proves
+ * second-guessed; a single region has nothing to disagree with. A profile whose own inference fails proves
  * nothing either way and is left to the combined build to report.
  */
 export async function regionInferenceRefusal(
   options: ResolveExtrudeOptions,
-  combined: Pick<ResolvedExtrude['inference'], 'reason'> | null
+  combined: Pick<ResolvedExtrude['inference'], 'reason'> | null,
+  /**
+   * One reference per selected region, for this check only. The stored input
+   * collapses a text object to one entity-wide reference, which would hide
+   * glyphs that straddle a body edge; each glyph is judged on its own here.
+   */
+  regionProfiles: readonly SketchProfileReference[] = options.input.profiles ??
+    []
 ): Promise<string | null> {
   if (
     (options.choice && options.choice.operation !== 'automatic') ||
@@ -409,7 +419,7 @@ export async function regionInferenceRefusal(
   ) {
     return null;
   }
-  const profiles = options.input.profiles ?? [];
+  const profiles = regionProfiles;
   if (profiles.length < 2) {
     return null;
   }

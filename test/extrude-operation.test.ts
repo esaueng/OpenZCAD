@@ -34,6 +34,10 @@ import {
   resolveExtrudeOperation
 } from '../apps/web/src/lib/extrudeInference';
 import { faceSketchAttachment } from '../apps/web/src/lib/faceSketchAttachment';
+import { profileReferencesForSelection } from '../apps/web/src/lib/profileReferences';
+import { computeSketchRegions, setTextFontProvider } from '@openzcad/geometry';
+import { FontLibrary } from '../packages/geometry/src/text/loader';
+import { nodeFontDataSource } from '../packages/geometry/src/text/nodeFontSource';
 
 /**
  * The plane ref the workspace itself would persist for a picked face, so these
@@ -773,5 +777,104 @@ describe('stored extrude operations', { timeout: 30_000 }, () => {
         resolved.command.payload.ids!.bodyId
       ];
     expect(result?.consumed).toBe(false);
+  });
+});
+
+describe('a word straddling a body edge', { timeout: 60_000 }, () => {
+  const library = new FontLibrary(nodeFontDataSource());
+  let kernel: ExactKernelAdapter;
+
+  beforeAll(async () => {
+    await library.load('open-sans', 'regular');
+    setTextFontProvider((family, style) => library.peek(family, style));
+    kernel = await createExactKernelAdapter();
+  });
+
+  afterAll(() => {
+    setTextFontProvider(null);
+    kernel.dispose();
+  });
+
+  it('refuses glyphs that would not extrude the same way, though stored as one word', async () => {
+    let base = createProjectDocument(
+      'Straddling word',
+      toUserId('user_straddling_word')
+    );
+    base = addPrimitiveFeature(base, {
+      name: 'Base',
+      primitiveKind: 'box',
+      dimensions: { width: 20, height: 20, depth: 10 }
+    });
+    // Above the box, so no glyph cap lies on its top face; driven 6 down,
+    // the H sinks into the box while the I, past its edge, meets nothing.
+    const { document, sketchId } = addSketchFeature(base, {
+      name: 'Label',
+      planeRef: { type: 'canonical', plane: 'XY', offset: 12 },
+      objects: [
+        {
+          objectKind: 'text',
+          text: 'H  I',
+          fontFamily: 'open-sans',
+          fontStyle: 'regular',
+          size: 20,
+          x: 2,
+          y: 4
+        }
+      ]
+    });
+    const sketch = findSketch(document, sketchId)!;
+    const textId = sketch.objectIds[0]!;
+    const regions = computeSketchRegions(
+      sketch.objectIds.map((id) => {
+        const node = document.nodes[id]!;
+        if (node.kind !== 'sketch-object') throw new Error('not an object');
+        return { id, data: node.data };
+      }),
+      (value) => Number(value)
+    );
+    expect(regions).toHaveLength(2);
+    const glyphs = regions.map((region) => ({
+      sketchId,
+      profileId: region.profileId,
+      regionFingerprint: region.regionFingerprint,
+      samplePoint: region.samplePoint,
+      centroid: region.centroid,
+      boundingBox: region.boundingBox,
+      sourceEntityIds: region.sourceEntityIds,
+      area: region.area
+    }));
+    // One glyph over the 20 mm box, one wholly beyond it.
+    expect(glyphs.map((glyph) => glyph.boundingBox.max.x < 20).sort()).toEqual([
+      false,
+      true
+    ]);
+    expect(glyphs.some((glyph) => glyph.boundingBox.min.x > 20)).toBe(true);
+    const options = {
+      base: { ...document, derived: await kernel.syncDocument(document) },
+      // The stored reference stays entity-wide: one word.
+      input: {
+        name: 'Label',
+        sketchId,
+        distance: -6,
+        profiles: [{ all: true as const, sourceEntityIds: [textId] }]
+      },
+      derive: (next: ProjectDocument) => kernel.syncDocument(next)
+    };
+    const combined = await resolveExtrudeOperation(options).then(
+      (resolved) => resolved.inference,
+      () => null
+    );
+    // The one stored reference alone has nothing to compare.
+    await expect(regionInferenceRefusal(options, combined)).resolves.toBeNull();
+    // Judged glyph by glyph, as the commit does, the word is refused.
+    await expect(
+      regionInferenceRefusal(
+        options,
+        combined,
+        profileReferencesForSelection(glyphs, () => false)
+      )
+    ).resolves.toBe(
+      'One selected profile would add to the body and another would make a new body, so extrude them separately or choose an operation.'
+    );
   });
 });
