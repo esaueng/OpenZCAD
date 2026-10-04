@@ -452,21 +452,27 @@ describe('text tool composing', () => {
   it('an unresolved size makes the draft unplaceable until it resolves', () => {
     let state = interactionReducer(composing(), {
       type: 'sketch-text-draft',
-      patch: { text: 'Boa', size: 8 }
+      patch: { text: 'Boa', size: 'h' }
     });
-    // The card types 0 into Size (em): the draft keeps 8 for the outline.
+    const draft = () => composingTextDraft(state);
+    // What the plane click asks, with the parameter scope as it is now.
+    expect(textDraftPlaceable(draft(), { h: 8 })).toBe(true);
+    // `h` changes to 0 in the Parameters panel; the card is not touched and
+    // the draft is the same, but a click now places nothing.
+    expect(textDraftPlaceable(draft(), { h: 0 })).toBe(false);
+    // Or `h` is deleted and the expression no longer resolves at all.
+    expect(textDraftPlaceable(draft(), {})).toBe(false);
+    // The card typing 0 into Size (em) writes it to the draft.
     state = interactionReducer(state, {
       type: 'sketch-text-draft',
-      patch: { sizeValid: false }
+      patch: { size: 0 }
     });
-    expect(composingTextDraft(state)?.size).toBe(8);
-    // What the plane click asks before it places anything.
-    expect(textDraftPlaceable(composingTextDraft(state))).toBe(false);
+    expect(textDraftPlaceable(draft(), { h: 8 })).toBe(false);
     state = interactionReducer(state, {
       type: 'sketch-text-draft',
-      patch: { size: 12, sizeValid: true }
+      patch: { size: 12 }
     });
-    expect(textDraftPlaceable(composingTextDraft(state))).toBe(true);
+    expect(textDraftPlaceable(draft(), {})).toBe(true);
   });
 
   it('holds off the tool letters while composing, so they cannot discard the draft', () => {

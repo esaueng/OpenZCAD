@@ -231,6 +231,7 @@ import {
 } from '../lib/sketch/session';
 import {
   canPlaceTextDraft,
+  textDraftPlaceable,
   textObjectFromPoint
 } from '../lib/sketch/textPlacement';
 import type {
@@ -6958,7 +6959,7 @@ export function ModelViewer({
           const draft = mode.textDraft;
           if (
             draft &&
-            canPlaceTextDraft(draft, {
+            canPlaceTextDraft(draft, mode.parameterScope, {
               busy: mode.textDraftBusy,
               budgetError: mode.textDraftBudgetError
             })
@@ -9960,7 +9961,13 @@ export function ModelViewer({
         sink.current = null;
       }
     }
-    if (!sketchMode || !draft || draft.text.length === 0) {
+    // No string, or a size that does not resolve in the current scope:
+    // nothing could be placed, so nothing is drawn.
+    if (
+      !sketchMode ||
+      !draft ||
+      !textDraftPlaceable(draft, sketchMode.parameterScope)
+    ) {
       rig.setTextPreview(null, [], () => 0);
     } else {
       const resolve = (value: unknown) =>

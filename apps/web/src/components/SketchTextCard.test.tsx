@@ -149,13 +149,16 @@ describe('SketchTextCard', () => {
     await user.clear(size);
     await user.type(size, 'h * 2');
     expect(draftOf().size).toBe('h * 2');
+    expect(screen.getByRole('button', { name: 'Place' })).toBeEnabled();
     await user.clear(size);
     await user.type(size, '0');
-    // A size that does not resolve to a positive length keeps the last good
-    // one in the draft (the outline stays) and refuses placement.
-    expect(draftOf().size).toBe('h * 2');
-    expect(draftOf().sizeValid).toBe(false);
+    // A size that does not resolve to a positive length is what the draft
+    // holds, and the shared rule refuses placement with the reason shown.
+    expect(draftOf().size).toBe(0);
     expect(screen.getByRole('button', { name: 'Place' })).toBeDisabled();
+    expect(screen.getByRole('alert')).toHaveTextContent(
+      'Size must resolve to a number greater than zero.'
+    );
   });
 
   it('sets the family, style and alignment on the draft', async () => {

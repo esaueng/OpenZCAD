@@ -19,10 +19,11 @@ import type { SketchTextDraft } from '../lib/interaction/machine';
 import type { SketchPoint } from '../lib/sketch/session';
 import {
   canPlaceTextDraft,
+  resolvedTextDraftSize,
   textObjectFromPoint,
   textPlacementBudgetError
 } from '../lib/sketch/textPlacement';
-import { paramValueText, previewExpression } from '../lib/model';
+import { paramValueText } from '../lib/model';
 import { loadTextFont } from '../lib/textFonts';
 import { ExprInput } from './ExprInput';
 import { TextObjectFields } from './TextObjectFields';
@@ -54,12 +55,6 @@ interface SketchTextCardProps {
   onFaceLoaded?(): void;
 }
 
-/** True when a size expression resolves to a positive finite em size. */
-function sizeIsValid(text: string, scope: Record<string, number>): boolean {
-  const { ok, value } = previewExpression(text, scope);
-  return ok && value !== undefined && Number.isFinite(value) && value > 0;
-}
-
 export function SketchTextCard({
   draft,
   scope,
@@ -85,10 +80,11 @@ export function SketchTextCard({
       live = false;
     };
   }, [draft.fontFamily, draft.fontStyle]);
-  // The size field keeps what is typed; the draft only takes a size that
-  // resolves, so a half-typed expression never blanks the live outline.
+  // The field shows what is typed; the draft holds the same value, and
+  // whether it resolves is decided from the current scope wherever it is
+  // asked, so a parameter change elsewhere is seen at once.
   const [sizeText, setSizeText] = useState(() => paramValueText(draft.size));
-  const sizeValid = sizeIsValid(sizeText, scope);
+  const sizeValid = resolvedTextDraftSize(draft, scope) !== null;
   const empty = draft.text.length === 0;
   // The same document-wide check the commit asserts, run with the draft
   // added, so Place is never offered for an add the commit would refuse.
@@ -99,9 +95,10 @@ export function SketchTextCard({
         : textPlacementBudgetError(document, sketchId, draft.text),
     [document, sketchId, draft.text]
   );
-  const canPlace =
-    sizeValid &&
-    canPlaceTextDraft(draft, { busy: disabled, budgetError: error });
+  const canPlace = canPlaceTextDraft(draft, scope, {
+    busy: disabled,
+    budgetError: error
+  });
 
   function submit(event: FormEvent) {
     // Enter in a field is not placement; the click on the plane is.
@@ -149,14 +146,7 @@ export function SketchTextCard({
               scope={scope}
               onChange={(value) => {
                 setSizeText(value);
-                // The draft keeps its last good size for the outline and
-                // records whether the field resolves, which the plane click
-                // reads too.
-                onChange(
-                  sizeIsValid(value, scope)
-                    ? { size: coerceParamValue(value), sizeValid: true }
-                    : { sizeValid: false }
-                );
+                onChange({ size: coerceParamValue(value) });
               }}
             />
           </div>

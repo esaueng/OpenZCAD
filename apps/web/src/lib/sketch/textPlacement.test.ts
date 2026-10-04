@@ -15,6 +15,7 @@ import {
 import { newSketchTextDraft } from '../interaction/machine';
 import {
   canPlaceTextDraft,
+  resolvedTextDraftSize,
   textDraftPlaceable,
   textPlacementBudgetError
 } from './textPlacement';
@@ -171,15 +172,24 @@ describe('textPlacementBudgetError', () => {
 });
 
 describe('textDraftPlaceable', () => {
-  it('needs a string and a size that resolves, as the card and the click do', () => {
+  it('needs a string and a size that resolves now, as the card and the click do', () => {
     const draft = { ...newSketchTextDraft(), text: 'Boa' };
-    expect(textDraftPlaceable(draft)).toBe(true);
-    expect(textDraftPlaceable({ ...draft, text: '' })).toBe(false);
-    // The card keeps the last good size for the outline and marks the
-    // field invalid; a click on the plane must not place that stale size.
-    expect(textDraftPlaceable({ ...draft, sizeValid: false })).toBe(false);
-    expect(textDraftPlaceable({ ...draft, sizeValid: true })).toBe(true);
-    expect(textDraftPlaceable(null)).toBe(false);
+    expect(textDraftPlaceable(draft, {})).toBe(true);
+    expect(textDraftPlaceable({ ...draft, text: '' }, {})).toBe(false);
+    expect(textDraftPlaceable({ ...draft, size: 0 }, {})).toBe(false);
+    expect(textDraftPlaceable({ ...draft, size: -2 }, {})).toBe(false);
+    expect(textDraftPlaceable(null, {})).toBe(false);
+  });
+
+  it('reads a parameter-driven size from the scope at call time', () => {
+    const draft = { ...newSketchTextDraft(), text: 'Boa', size: 'h' };
+    expect(resolvedTextDraftSize(draft, { h: 8 })).toBe(8);
+    expect(textDraftPlaceable(draft, { h: 8 })).toBe(true);
+    // `h` set to 0 elsewhere while the card is open: nothing to place.
+    expect(resolvedTextDraftSize(draft, { h: 0 })).toBeNull();
+    expect(canPlaceTextDraft(draft, { h: 0 }, {})).toBe(false);
+    // `h` removed: the expression no longer resolves.
+    expect(canPlaceTextDraft(draft, {}, {})).toBe(false);
   });
 });
 
@@ -187,23 +197,23 @@ describe('canPlaceTextDraft', () => {
   const draft = { ...newSketchTextDraft(), text: 'Boa' };
 
   it('places a placeable draft when nothing blocks it', () => {
-    expect(canPlaceTextDraft(draft, {})).toBe(true);
-    expect(canPlaceTextDraft(draft, { busy: false, budgetError: null })).toBe(
-      true
-    );
+    expect(canPlaceTextDraft(draft, {}, {})).toBe(true);
+    expect(
+      canPlaceTextDraft(draft, {}, { busy: false, budgetError: null })
+    ).toBe(true);
   });
 
   it('places nothing while a solve or rebuild owns the sketch', () => {
     // The card disables Place while busy; the plane click asks this same
     // rule, so a click mid-solve commits nothing either.
-    expect(canPlaceTextDraft(draft, { busy: true })).toBe(false);
+    expect(canPlaceTextDraft(draft, {}, { busy: true })).toBe(false);
   });
 
   it('places nothing over budget, or for a draft the card cannot place', () => {
     expect(
-      canPlaceTextDraft(draft, { budgetError: 'Project text exceeds' })
+      canPlaceTextDraft(draft, {}, { budgetError: 'Project text exceeds' })
     ).toBe(false);
-    expect(canPlaceTextDraft({ ...draft, sizeValid: false }, {})).toBe(false);
-    expect(canPlaceTextDraft({ ...draft, text: '' }, {})).toBe(false);
+    expect(canPlaceTextDraft({ ...draft, size: 0 }, {}, {})).toBe(false);
+    expect(canPlaceTextDraft({ ...draft, text: '' }, {}, {})).toBe(false);
   });
 });

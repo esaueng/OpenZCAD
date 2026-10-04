@@ -10,6 +10,7 @@ import {
   type SketchObjectData
 } from '@openzcad/shared';
 import type { SketchTextDraft } from '../interaction/machine';
+import { evalParamValue } from '../model';
 import type { SketchPoint } from './session';
 
 /**
@@ -39,14 +40,33 @@ export function textObjectFromPoint(
 }
 
 /**
+ * The draft's em size resolved against the parameter scope as it is now, or
+ * null when it does not resolve to a positive length. Evaluated at call time,
+ * never stored: a size written as `h` stops being placeable the moment `h`
+ * changes to 0 in the Parameters panel, with no edit to the card.
+ */
+export function resolvedTextDraftSize(
+  draft: SketchTextDraft,
+  scope: Record<string, number>
+): number | null {
+  const size = evalParamValue(draft.size, scope);
+  return size !== null && size > 0 ? size : null;
+}
+
+/**
  * Whether the draft can be placed at all: a string to place and a size that
- * resolves. The card and the plane click both ask this, so a click never
- * commits a draft whose card says it cannot be placed.
+ * resolves in the current scope. The card and the plane click both ask this,
+ * so a click never commits a draft whose card says it cannot be placed.
  */
 export function textDraftPlaceable(
-  draft: SketchTextDraft | null | undefined
+  draft: SketchTextDraft | null | undefined,
+  scope: Record<string, number>
 ): boolean {
-  return Boolean(draft && draft.text.length > 0 && draft.sizeValid !== false);
+  return Boolean(
+    draft &&
+    draft.text.length > 0 &&
+    resolvedTextDraftSize(draft, scope) !== null
+  );
 }
 
 /**
@@ -56,9 +76,12 @@ export function textDraftPlaceable(
  */
 export function canPlaceTextDraft(
   draft: SketchTextDraft | null | undefined,
+  scope: Record<string, number>,
   blockers: { busy?: boolean; budgetError?: string | null }
 ): boolean {
-  return textDraftPlaceable(draft) && !blockers.busy && !blockers.budgetError;
+  return (
+    textDraftPlaceable(draft, scope) && !blockers.busy && !blockers.budgetError
+  );
 }
 
 /** Every node key the budget walk can see: current nodes and undo history. */
