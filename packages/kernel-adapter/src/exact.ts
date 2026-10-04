@@ -182,7 +182,10 @@ export {
   type MeshQualityReport
 };
 import { dot, length, subtract, uniformScaleMatrix } from './exact-math';
-import { displayTessellationForExtents } from './display-tessellation';
+import {
+  displayTessellationForExtents,
+  heldDisplayTessellation
+} from './display-tessellation';
 import {
   MAX_HISTORY_CHECKPOINTS,
   MAX_HISTORY_REPLAY_WORK,
@@ -952,6 +955,18 @@ export class RemusKernelAdapter implements ExactKernelAdapter {
     MeasuredBodyCacheEntry
   >();
   private measuredShapeCacheBytes = 0;
+  /**
+   * Per body, the linear display deflection each of its solids was last
+   * meshed at (see `heldDisplayTessellation`). A display policy, not a
+   * geometry cache: it survives history-cache invalidation (a sync whose
+   * history cannot be reused still edits the same bodies) and is dropped
+   * only on dispose. Body ids are never reused, so a stale entry cannot
+   * resurface.
+   */
+  private readonly heldDisplayDeflections = new Map<
+    BodyId,
+    readonly number[]
+  >();
 
   private get maxHistoryCheckpoints(): number {
     return this.options.historyCheckpointLimit ?? MAX_HISTORY_CHECKPOINTS;
@@ -1449,7 +1464,12 @@ export class RemusKernelAdapter implements ExactKernelAdapter {
      * Strict verdicts the union gate established earlier in this sync, keyed
      * by handle; a hit replaces the strict `validateSolid` call.
      */
-    strictVerdicts?: ReadonlyMap<number, StrictUnionVerdict>
+    strictVerdicts?: ReadonlyMap<number, StrictUnionVerdict>,
+    /**
+     * The linear display deflection each solid of this body was meshed at
+     * last time, in solid order; held while the body's size stays close.
+     */
+    heldDisplayDeflections?: readonly number[]
   ): MeasuredShape {
     if (shape.solids.length === 0) {
       throw new Error('Exact body contains no solids.');
@@ -1476,17 +1496,25 @@ export class RemusKernelAdapter implements ExactKernelAdapter {
     // is rebuilt per solid, so two solids that touch exactly — a linear pattern
     // whose spacing equals its extent — never share an id.
     let nextVertexId = 0;
+    const displayLinearDeflections: number[] = [];
 
     for (const solid of shape.solids) {
       const bounds = kernel.boundingBox(solid);
       // What the body publishes: the kernel's box, tightened to its display
       // mesh where that proves it loose (see exact-bounds.ts).
       let publishedBounds: readonly number[];
-      const displayTessellation = displayTessellationForExtents(
-        bounds[3]! - bounds[0]!,
-        bounds[4]! - bounds[1]!,
-        bounds[5]! - bounds[2]!
+      // Hold the previous deflection while the body's size stays close: a
+      // nudged bounding box must not re-mesh every face (the kernel reuses
+      // per-face meshes only at the same deflection).
+      const displayTessellation = heldDisplayTessellation(
+        displayTessellationForExtents(
+          bounds[3]! - bounds[0]!,
+          bounds[4]! - bounds[1]!,
+          bounds[5]! - bounds[2]!
+        ),
+        heldDisplayDeflections?.[displayLinearDeflections.length]
       );
+      displayLinearDeflections.push(displayTessellation.linearDeflection);
       const faceHandles = Array.from(kernel.getSolidFaces(solid));
       const edgeToFaces = JSON.parse(kernel.edgeToFaceMap(solid)) as Record<
         string,
@@ -1848,7 +1876,8 @@ export class RemusKernelAdapter implements ExactKernelAdapter {
       valid,
       strictValid,
       meshClosure,
-      bbox
+      bbox,
+      displayLinearDeflections
     };
   }
 
@@ -2058,9 +2087,16 @@ export class RemusKernelAdapter implements ExactKernelAdapter {
               ),
             analysisHashes,
             1 / UNIT_TO_MM[document.units],
-            strictVerdicts
+            strictVerdicts,
+            this.heldDisplayDeflections.get(bodyId)
           );
           remeasured += 1;
+          if (measured.displayLinearDeflections) {
+            this.heldDisplayDeflections.set(
+              bodyId,
+              measured.displayLinearDeflections
+            );
+          }
           const witness = measured.witness;
           this.storeMeasuredShape(bodyId, {
             ...(analysisKey ? { analysisKey } : {}),
@@ -2929,6 +2965,7 @@ export class RemusKernelAdapter implements ExactKernelAdapter {
     // kernel and its checkpoints are adapter-scoped and must be released.
     this.invalidateHistoryCache();
     this.importedSteps.clear();
+    this.heldDisplayDeflections.clear();
   }
 
   /**
