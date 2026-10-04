@@ -12,7 +12,8 @@ import { describe, expect, it, vi } from 'vitest';
 import type { SketchObjectData } from '@openzcad/shared';
 import { SketchEntityEditor } from './SketchEntityEditor';
 import { styleFromToggles } from './TextObjectFields';
-import { textObjectFromPoint } from '../lib/sketch/session';
+import { newSketchTextDraft } from '../lib/interaction/machine';
+import { textObjectFromPoint } from '../lib/sketch/textPlacement';
 
 const TEXT_OBJECT: SketchObjectData = {
   objectKind: 'text',
@@ -133,7 +134,7 @@ describe('SketchEntityEditor', () => {
         y: 2,
         align: 'center'
       },
-      'Size',
+      'Size (em)',
       '25'
     );
     expect(applied).toEqual({
@@ -219,7 +220,7 @@ describe('SketchEntityEditor', () => {
     // the same gesture.
     expect(screen.getByLabelText('Text')).toBeTruthy();
     expect(screen.getByLabelText('Font')).toBeTruthy();
-    expect(screen.getByLabelText('Size')).toBeTruthy();
+    expect(screen.getByLabelText('Size (em)')).toBeTruthy();
     expect(screen.getByRole('group', { name: 'Font style' })).toBeTruthy();
   });
 
@@ -322,6 +323,75 @@ describe('text placement and movement', () => {
   });
 });
 
+describe('text alignment in the editor', () => {
+  // The text card sets alignment before placement; once placed, the editor
+  // owns the object, so alignment has to be editable here too.
+  async function applyAlignment(
+    data: SketchObjectData,
+    pick: string | null
+  ): Promise<SketchObjectData> {
+    const onApply = vi.fn();
+    const user = userEvent.setup();
+    render(
+      <SketchEntityEditor
+        data={data}
+        scope={{}}
+        onApply={onApply}
+        onDelete={vi.fn()}
+        onClose={vi.fn()}
+      />
+    );
+    if (pick) {
+      await user.click(screen.getByRole('radio', { name: pick }));
+    }
+    await user.click(screen.getByRole('button', { name: /apply/i }));
+    return onApply.mock.calls[0]![0] as SketchObjectData;
+  }
+
+  it('shows the stored alignment, and left for an object without one', () => {
+    const { unmount } = render(
+      <SketchEntityEditor
+        data={{ ...TEXT_OBJECT, align: 'right' }}
+        scope={{}}
+        onApply={vi.fn()}
+        onDelete={vi.fn()}
+        onClose={vi.fn()}
+      />
+    );
+    expect(screen.getByRole('radio', { name: 'Align right' })).toHaveAttribute(
+      'aria-checked',
+      'true'
+    );
+    unmount();
+    render(
+      <SketchEntityEditor
+        data={TEXT_OBJECT}
+        scope={{}}
+        onApply={vi.fn()}
+        onDelete={vi.fn()}
+        onClose={vi.fn()}
+      />
+    );
+    expect(screen.getByRole('radio', { name: 'Align left' })).toHaveAttribute(
+      'aria-checked',
+      'true'
+    );
+  });
+
+  it('applies a picked alignment', async () => {
+    const applied = await applyAlignment(
+      { ...TEXT_OBJECT, align: 'center' },
+      'Align right'
+    );
+    expect(applied).toMatchObject({ align: 'right', text: 'Text' });
+  });
+
+  it('writes no alignment back onto an object that never had one', async () => {
+    const applied = await applyAlignment(TEXT_OBJECT, null);
+    expect('align' in applied).toBe(false);
+  });
+});
+
 describe('styleFromToggles', () => {
   it('maps both toggles onto the four bundled faces', () => {
     expect(styleFromToggles(false, false)).toBe('regular');
@@ -332,22 +402,46 @@ describe('styleFromToggles', () => {
 });
 
 describe('textObjectFromPoint', () => {
-  it('places a ready-to-edit object at the click, with no drag extent', () => {
-    const object = textObjectFromPoint({ x: 3, y: -4 });
-    expect(object).toMatchObject({
-      objectKind: 'text',
-      x: 3,
-      y: -4,
-      fontStyle: 'regular'
-    });
-    // A placeholder string and a real size, so the object is visible and
-    // selectable the instant it lands rather than being a zero-extent nothing.
-    expect(object.objectKind === 'text' && object.text.length).toBeGreaterThan(
-      0
+  it('places the composed draft at the click, with no drag extent', () => {
+    const object = textObjectFromPoint(
+      { x: 3, y: -4 },
+      { ...newSketchTextDraft(), text: 'Boa', size: 8 }
     );
-    expect(object.objectKind === 'text' && object.size).toBeGreaterThan(0);
+    // The card's string, never a placeholder, and the left alignment the
+    // schema defaults to left out so the stored object stays minimal.
+    expect(object).toEqual({
+      objectKind: 'text',
+      text: 'Boa',
+      fontFamily: 'open-sans',
+      fontStyle: 'regular',
+      size: 8,
+      x: 3,
+      y: -4
+    });
   });
 
+  it('carries a non-default alignment and face from the draft', () => {
+    const object = textObjectFromPoint(
+      { x: 0, y: 0 },
+      {
+        text: 'Hi',
+        fontFamily: 'lora',
+        fontStyle: 'bold',
+        size: 'h * 2',
+        align: 'center'
+      }
+    );
+    expect(object).toMatchObject({
+      fontFamily: 'lora',
+      fontStyle: 'bold',
+      size: 'h * 2',
+      align: 'center'
+    });
+  });
+
+  it('starts a draft empty, so nothing is placed until text is typed', () => {
+    expect(newSketchTextDraft()).toMatchObject({ text: '', align: 'left' });
+  });
   it('lists what holds the entity, with edit and delete per row', async () => {
     const user = userEvent.setup();
     const onDeleteConstraint = vi.fn();
