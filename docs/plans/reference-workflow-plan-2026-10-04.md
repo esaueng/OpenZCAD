@@ -389,10 +389,12 @@ drag restores the object's stored values; it never deletes persisted text.
   command-card contents of C and D, U04; F and G belong to U03 (motion
   audit). No new master ID is needed. ROADMAP rows U01, U03 and U04 name
   this plan as their active execution record together with the PR numbers.
-- Each implementation PR adds one evidence sentence to its owning row when
-  it is revised after this mapping lands; PRs already green at that point
-  keep their CI result and PR H adds their evidence with merge commits. H
-  also flips status columns and closes the record.
+- Every implementation PR updates its owning ROADMAP row with its own
+  evidence sentence before it merges; B, C, E and G already carry theirs,
+  and D and H must too. Two PRs merged before this mapping existed, F
+  (#586, `57bd6aca`) and K (#583, `1344a52f`); H adds their evidence with
+  those merge commits as a one-off backfill, flips status columns and
+  closes the record. No other PR may defer its row to H.
 - Reference doc §4 refreshed in Phase 0; §6 open questions 1, 2 and 11
   stay open (they need a second recording).
 
