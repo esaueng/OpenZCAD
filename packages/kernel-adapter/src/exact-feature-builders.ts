@@ -87,6 +87,11 @@ import { MEASUREMENT_DEFLECTION } from './exact-witnesses';
 import { isBlendFace } from './exact-brep';
 import { separatePlanarEmboss } from './planar-emboss';
 import {
+  piercedBodyTool,
+  piercedExtrudeTool,
+  retryCoplanarRefusal
+} from './exact-pierce-tool';
+import {
   DIRECT_EDIT_TOLERANCE,
   GEOMETRY_EPSILON,
   axisDirection,
@@ -434,7 +439,15 @@ function buildExtrudeFeature(
     );
     const operation = data.operation ?? 'new-body';
     if (operation === 'new-body') {
-      result.shapes.set(feature.bodyId, extrusion);
+      // Recorded so a later boolean can rebuild this exact tool with pierce
+      // travel (`exact-pierce-tool.ts`) while these handles are still it.
+      result.shapes.set(feature.bodyId, {
+        ...extrusion,
+        sweepSource: {
+          featureId: feature.featureId,
+          solids: [...extrusion.solids]
+        }
+      });
       return;
     }
     const targetBodyId = data.targetBodyId;
@@ -484,50 +497,79 @@ function buildExtrudeFeature(
         `Stored ${operation} extrusion no longer overlaps ${targetBody.name}; operation was not re-inferred.`
       );
     }
-    const operandLineage = [
-      booleanOperandLineage(kernel, target, 'target'),
-      booleanOperandLineage(kernel, extrusion, 'tool')
-    ];
     const targetSolid = collapseShape(kernel, target);
-    const extrusionSolid = collapseShape(kernel, extrusion);
-    // GEOMETRY COMES FROM THE TYPED DETAILED ENTRY POINTS, through the
-    // cancellable twin when this rebuild carries a token. It keeps the
-    // kernel's exact-only policy: a boolean the exact pipeline cannot do
-    // refuses here by its named reason instead of shipping an approximate
-    // body. Provenance is read afterwards, from a separate probe that cannot
-    // touch this result — see `exact-boolean-evolution.ts`.
     const operandNames = [targetBody.name, extrusionBody.name];
-    const coaxial =
-      operation === 'cut'
-        ? tryExactCoaxialCylinderCut(kernel, targetSolid, extrusionSolid)
-        : null;
-    const solid =
-      operation === 'add'
-        ? fuseUniformSolid(
-            kernel,
-            [...target.solids, ...extrusion.solids],
-            [
-              ...target.solids.map(() => targetBody.name),
-              ...extrusion.solids.map(() => extrusionBody.name)
-            ]
-          )
-        : unifyBooleanFaces(
-            kernel,
-            coaxial ??
-              exactCutWithCancellation(
-                kernel,
-                targetSolid,
-                extrusionSolid,
-                ctx.cancellation,
-                operandNames
-              )
-          );
+    const combine = (tool: ExactShape) => {
+      const operandLineage = [
+        booleanOperandLineage(kernel, target, 'target'),
+        booleanOperandLineage(kernel, tool, 'tool')
+      ];
+      const extrusionSolid = collapseShape(kernel, tool);
+      // GEOMETRY COMES FROM THE TYPED DETAILED ENTRY POINTS, through the
+      // cancellable twin when this rebuild carries a token. It keeps the
+      // kernel's exact-only policy: a boolean the exact pipeline cannot do
+      // refuses here by its named reason instead of shipping an approximate
+      // body. Provenance is read afterwards, from a separate probe that
+      // cannot touch this result — see `exact-boolean-evolution.ts`.
+      const coaxial =
+        operation === 'cut'
+          ? tryExactCoaxialCylinderCut(kernel, targetSolid, extrusionSolid)
+          : null;
+      const solid =
+        operation === 'add'
+          ? fuseUniformSolid(
+              kernel,
+              [...target.solids, ...tool.solids],
+              [
+                ...target.solids.map(() => targetBody.name),
+                ...tool.solids.map(() => extrusionBody.name)
+              ]
+            )
+          : unifyBooleanFaces(
+              kernel,
+              coaxial ??
+                exactCutWithCancellation(
+                  kernel,
+                  targetSolid,
+                  extrusionSolid,
+                  ctx.cancellation,
+                  operandNames
+                )
+            );
+      return { tool, operandLineage, extrusionSolid, coaxial, solid };
+    };
+    let combined: ReturnType<typeof combine>;
+    try {
+      combined = combine(extrusion);
+    } catch (error) {
+      // remus#953: a tool whose start cap lies on the target's face is
+      // refused; the same tool with a hair of travel across the face is not,
+      // and where the gate holds that travel cannot change the result. The
+      // user's refusal stands if the gate fails or the twin is refused too.
+      combined = retryCoplanarRefusal(
+        error,
+        () =>
+          piercedExtrudeTool(
+            ctx,
+            feature,
+            target.solids,
+            extrusion.solids,
+            operation
+          ),
+        combine
+      );
+    }
+    const { operandLineage, extrusionSolid, coaxial, solid } = combined;
     // An add only needs the two to meet. Shared volume cannot answer that —
     // a boss grown off the face it was sketched on meets its target exactly
-    // there and shares none — so contact is measured by exact distance.
+    // there and shares none — so contact is measured by exact distance. A
+    // pierced tool has already proved it: its gate found the cap lying on a
+    // boundary face of the target, material on one side and air on the
+    // other — and the exact contact probes refuse that very configuration.
     if (
       operation === 'add' &&
       sharedVolume <= 0 &&
+      combined.tool === extrusion &&
       !shapesShareMaterialOrTouch(kernel, target, extrusion)
     ) {
       throw new Error(
@@ -567,7 +609,7 @@ function buildExtrudeFeature(
     // multi-solid operand, or a cut the exact coaxial path took, keeps carrier
     // lineage and records the reason.
     const pairwise =
-      target.solids.length === 1 && extrusion.solids.length === 1;
+      target.solids.length === 1 && combined.tool.solids.length === 1;
     const evidence =
       coaxial !== null
         ? declinedBooleanEvidence(
@@ -1236,7 +1278,7 @@ function buildBooleanFeature(
   feature: FeatureNode,
   data: FeatureDataOf<'boolean'>
 ): void {
-  const { kernel, document, result } = ctx;
+  const { document, result } = ctx;
   if (!feature.bodyId || data.targetBodyIds.length < 2) {
     throw new Error('Boolean requires at least two bodies.');
   }
@@ -1266,6 +1308,68 @@ function buildBooleanFeature(
     data.targetBodyIds.forEach((bodyId) => result.consumed.add(bodyId));
     inheritMeshOrigin(result, data.targetBodyIds[0]!, feature.bodyId);
     return;
+  }
+  try {
+    combineBooleanOperands(ctx, feature, data, operands);
+  } catch (error) {
+    // remus#953: see `exact-pierce-tool.ts`. Only a refused boolean is
+    // retried, only with tools the gate proves the pierce cannot change, and
+    // the user's original refusal stands whenever the retry is not possible
+    // or is refused as well.
+    retryCoplanarRefusal(
+      error,
+      () => piercedBooleanOperands(ctx, data, operands),
+      (pierced) => combineBooleanOperands(ctx, feature, data, pierced)
+    );
+  }
+}
+
+/**
+ * The boolean's operands with each tool that is still a plain new-body
+ * extrude, sketched on a face of the body it is combined with, swapped for
+ * its pierced twin — or null when no operand qualifies. A subtract pierces
+ * its tools against the target; a union of exactly two bodies pierces either
+ * into the other. Intersect is never pierced.
+ */
+function piercedBooleanOperands(
+  ctx: FeatureBuildContext,
+  data: FeatureDataOf<'boolean'>,
+  operands: readonly ExactShape[]
+): ExactShape[] | null {
+  const pierced = [...operands];
+  let changed = false;
+  if (data.operation === 'subtract') {
+    const target = operands[0]!;
+    for (let index = 1; index < operands.length; index += 1) {
+      const tool = piercedBodyTool(ctx, operands[index]!, target.solids, 'cut');
+      if (tool) {
+        pierced[index] = tool;
+        changed = true;
+      }
+    }
+  } else if (data.operation === 'union' && operands.length === 2) {
+    for (const index of [0, 1]) {
+      const partner = operands[1 - index]!;
+      const tool = piercedBodyTool(ctx, operands[index]!, partner.solids, 'add');
+      if (tool) {
+        pierced[index] = tool;
+        changed = true;
+      }
+    }
+  }
+  return changed ? pierced : null;
+}
+
+function combineBooleanOperands(
+  ctx: FeatureBuildContext,
+  feature: FeatureNode,
+  data: FeatureDataOf<'boolean'>,
+  operands: readonly ExactShape[]
+): void {
+  const { kernel, document, result } = ctx;
+  const bodyId = feature.bodyId;
+  if (!bodyId) {
+    throw new Error('Boolean requires at least two bodies.');
   }
   const operandLineage = operands.map((shape) =>
     booleanOperandLineage(kernel, shape)
@@ -1607,7 +1711,7 @@ function buildBooleanFeature(
     }
   }
   data.targetBodyIds.forEach((bodyId) => result.consumed.add(bodyId));
-  result.shapes.set(feature.bodyId, {
+  result.shapes.set(bodyId, {
     solids: [solid],
     lineage: deriveBooleanLineage({
       evidence:

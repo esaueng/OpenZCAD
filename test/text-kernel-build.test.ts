@@ -108,8 +108,8 @@ function bodyOf(derived: DerivedState): BodyRepresentation {
 }
 
 /** Exact 2D area of the text, straight from the glyph pipeline. */
-function textArea(font: LoadedFont, text: string): number {
-  return buildTextProfileSet(font, { text, size: 20 }).regions.reduce(
+function textArea(font: LoadedFont, text: string, size = 20): number {
+  return buildTextProfileSet(font, { text, size }).regions.reduce(
     (total, region) => total + region.area,
     0
   );
@@ -624,6 +624,120 @@ describe('text built by the exact kernel', { timeout: 120_000 }, () => {
       expect(closure.nonManifoldEdges).toBe(0);
     } finally {
       warn.mockRestore();
+    }
+  });
+
+  /**
+   * Engrave and emboss with the text sketched ON the slab's top face — the
+   * way the UI does it — rather than buried below it as the cases above are.
+   * The exact kernel refuses a Bezier-walled tool whose cap lies on the
+   * target's face (remus#953, `exact_only_unattainable`); the adapter
+   * rebuilds that tool with a hair of travel across the face on the side
+   * where it cannot change the result (`exact-pierce-tool.ts`). Both routes
+   * the app uses are covered: the extrude's own operation and target, and an
+   * explicit boolean after a plain new-body extrude.
+   */
+  describe('on the face it was sketched on', () => {
+    const SLAB = { width: 62, height: 50, depth: 10 } as const;
+    const TEXT = 'Boa';
+    const SIZE = 8;
+    const DEPTH = 2;
+
+    function onFaceScene(
+      route: 'extrude' | 'boolean',
+      operation: 'subtract' | 'union'
+    ): ProjectDocument {
+      const withSlab = addPrimitiveFeature(
+        createProjectDocument('On face', toUserId('user_text_on_face')),
+        { name: 'Slab', primitiveKind: 'box', dimensions: { ...SLAB } }
+      );
+      const slabId = withSlab.bodyOrder.at(-1)!;
+      const created = addSketchFeature(withSlab, {
+        name: 'Label',
+        // The slab's top face: the box spans z 0..depth.
+        planeRef: { type: 'canonical', plane: 'XY', offset: SLAB.depth },
+        objects: [textObject(TEXT, { size: SIZE, x: 8, y: 12 })]
+      });
+      const sketch = findSketch(created.document, created.sketchId)!;
+      const extruded = extrudeSketch(created.document, {
+        name: 'Label text',
+        sketchId: created.sketchId,
+        distance: operation === 'subtract' ? -DEPTH : DEPTH,
+        profiles: [{ all: true, sourceEntityIds: [sketch.objectIds[0]!] }],
+        ...(route === 'extrude'
+          ? {
+              operation: operation === 'subtract' ? 'cut' : 'add',
+              targetBodyId: slabId
+            }
+          : {})
+      });
+      if (route === 'extrude') return extruded.document;
+      return new CommandManager(extruded.document).execute(
+        commandFactories.booleanBodies({
+          name: operation === 'subtract' ? 'Engrave' : 'Emboss',
+          operation,
+          targetBodyIds: [slabId, extruded.bodyId]
+        })
+      );
+    }
+
+    for (const route of ['extrude', 'boolean'] as const) {
+      for (const operation of ['subtract', 'union'] as const) {
+        const verb = operation === 'subtract' ? 'engraves' : 'embosses';
+        it(`${verb} on-face text through the ${route} route`, async () => {
+          const document = onFaceScene(route, operation);
+          const derived = await adapter.syncDocument(document);
+          // The boolean was built: no feature failed on a kernel refusal.
+          expect(
+            derived.featureWarnings?.filter(
+              (entry) => entry.kind === 'build-failed'
+            ) ?? []
+          ).toEqual([]);
+          if (!(route === 'boolean' && operation === 'union')) {
+            expect(derived.warnings).toEqual([]);
+          }
+          // Known follow-up, not this fix: the union connectivity gate cannot
+          // certify glyph-to-slab contact (no certified distance for Bezier
+          // walls, and the exact intersect refuses the pair), so the boolean
+          // Union still files a "disconnected groups" advisory although the
+          // fused body below is the right one. It does so with the text
+          // buried 0.5 mm as well, so it is not caused by the pierce.
+
+          const body = bodyOf(derived);
+          const closure = inspectTriangleMeshClosure(
+            body.mesh.vertices,
+            body.mesh.indices
+          );
+          expect(closure.boundaryEdges).toBe(0);
+          expect(closure.nonManifoldEdges).toBe(0);
+          expect(meshComponents(body)).toBe(1);
+
+          // Closed form: the slab plus or minus the glyph area times the
+          // user's depth. A pierce that leaked into the result would move
+          // this by its own 0.01 mm sliver, and a refusal would leave the
+          // bare slab.
+          const glyphVolume = textArea(openSans, TEXT, SIZE) * DEPTH;
+          const slab = SLAB.width * SLAB.height * SLAB.depth;
+          const expected =
+            operation === 'subtract' ? slab - glyphVolume : slab + glyphVolume;
+          expect(volumeRatio(body, expected)).toBeCloseTo(1, 5);
+
+          // The travel never reaches the document: the extrude still stores
+          // the user's distance and no back distance.
+          const extrude = Object.values(document.nodes).find(
+            (node) => node.kind === 'feature' && node.name === 'Label text'
+          );
+          expect(extrude?.kind === 'feature' && extrude.data).toMatchObject({
+            featureKind: 'extrude',
+            distance: operation === 'subtract' ? -DEPTH : DEPTH
+          });
+          expect(
+            extrude?.kind === 'feature' &&
+              extrude.data.featureKind === 'extrude' &&
+              extrude.data.backDistance
+          ).toBeFalsy();
+        });
+      }
     }
   });
 
