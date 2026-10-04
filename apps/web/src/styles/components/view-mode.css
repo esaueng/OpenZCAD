@@ -584,8 +584,9 @@
 }
 
 .measurement-row {
+  position: relative;
   display: grid;
-  grid-template-columns: minmax(0, 1fr) auto;
+  grid-template-columns: minmax(0, 1fr);
   align-items: stretch;
   border-bottom: 1px solid
     color-mix(in srgb, var(--color-border) 55%, transparent);
@@ -703,18 +704,36 @@
   color: var(--color-error);
 }
 
+/* Show, copy, edit and delete as one row of 24px buttons in the row's
+   bottom-right corner, beside the value, while the row is in play — hovered,
+   focused or the active one (a tap on touch). Stacked in a 31px column they
+   were four 16px icons the height of the whole row. */
 .measurement-row-actions {
-  width: 31px;
+  position: absolute;
+  right: 6px;
+  bottom: 6px;
   display: flex;
-  flex-direction: column;
-  align-items: stretch;
-  justify-content: center;
-  padding: 4px 3px;
-  border-left: 1px solid
-    color-mix(in srgb, var(--color-border) 45%, transparent);
+  gap: 2px;
+  padding: 2px;
+  background: var(--color-surface);
+  border: var(--border-thin);
+  border-radius: var(--radius-md);
+  box-shadow: var(--shadow-1);
+  opacity: 0;
+  pointer-events: none;
+  transition: opacity var(--dur-fast) var(--ease-out);
+}
+
+.measurement-row:hover .measurement-row-actions,
+.measurement-row:focus-within .measurement-row-actions,
+.measurement-row.active .measurement-row-actions {
+  opacity: 1;
+  pointer-events: auto;
 }
 
 .measurement-row-actions button {
+  width: 24px;
+  height: 24px;
   min-width: 24px;
   min-height: 24px;
   display: grid;
