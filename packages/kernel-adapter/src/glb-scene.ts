@@ -242,8 +242,13 @@ export function glbPlacement(data: Uint8Array): readonly number[] {
     visited.add(index);
     const world = multiply(parent, localMatrix(node));
     if (node.mesh !== undefined) {
-      if (placed.has(node.mesh))
-        throw new Error('This GLB places a mesh more than once.');
+      if (placed.has(node.mesh)) {
+        throw new Error(
+          'This GLB shows a mesh more than once. The glTF reader imports each ' +
+            'mesh a single time, so the copies would be lost; export the copies ' +
+            'as separate meshes, or as one merged mesh.'
+        );
+      }
       placed.set(node.mesh, [world]);
     }
     const children = node.children ?? [];
@@ -259,13 +264,6 @@ export function glbPlacement(data: Uint8Array): readonly number[] {
   let world: Matrix4 = IDENTITY;
   if (placed.size > 0) {
     const all = [...placed.values()];
-    if (all.some((uses) => uses.length > 1)) {
-      throw new Error(
-        'This GLB shows a mesh more than once. The glTF reader imports each ' +
-          'mesh a single time, so the copies would be lost; export the copies ' +
-          'as separate meshes, or as one merged mesh.'
-      );
-    }
     if (placed.size !== meshCount) {
       throw new Error(
         `This GLB holds ${meshCount} meshes but its scene shows ${placed.size}. ` +
