@@ -310,11 +310,12 @@ export function composingTextDraft(
 }
 
 /**
- * Whether the single-letter sketch tool keys (V, L, A, C, R, T) are held off.
- * While text is being composed a letter is text, not a tool: before the card
- * has mounted (a cold chunk load) or after focus has left its field, a stray
- * letter would otherwise switch tools and throw the typed draft away. Escape
- * and the rail still leave the text tool.
+ * Whether the sketch's single-key shortcuts are held off: the tool letters
+ * (V, L, A, C, R, T) and E, which starts an extrude and leaves the sketch.
+ * While text is being composed a letter is text, not a command: before the
+ * card has mounted (a cold chunk load) or with focus on one of its buttons, a
+ * stray key would otherwise switch tools or exit the sketch and throw the
+ * typed draft away. Escape and the rail are the explicit exits.
  */
 export function sketchToolKeysSuspended(state: InteractionState): boolean {
   return composingTextDraft(state) !== null;

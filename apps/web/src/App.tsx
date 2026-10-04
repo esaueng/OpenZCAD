@@ -16680,6 +16680,12 @@ export function App() {
       }
 
       if (interaction.mode === 'sketch' && event.key !== 'Escape') {
+        // While text is being composed, no single key acts on the sketch: a
+        // tool letter would switch tools and E would start an extrude, and
+        // either drops the unplaced draft. Escape and the rail are the exits.
+        if (sketchToolKeysSuspended(interaction)) {
+          return;
+        }
         // The sketch profile status promises that E starts the same extrude
         // flow as the rail. Handle it before the sketch-tool shortcuts, whose
         // early return otherwise prevents the global E shortcut from seeing
@@ -16724,7 +16730,7 @@ export function App() {
                     : event.key.toLowerCase() === 't'
                       ? ('text' as const)
                       : null;
-        if (sketchTool && !sketchToolKeysSuspended(interaction)) {
+        if (sketchTool) {
           event.preventDefault();
           dispatchInteraction({ type: 'sketch-tool', tool: sketchTool });
         }

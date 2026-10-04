@@ -133,6 +133,41 @@ test('T opens the text card, the outline follows the typing, and a click places 
   expect(pageErrors).toEqual([]);
 });
 
+test('E while composing does not extrude or drop the draft', async ({
+  page
+}) => {
+  test.setTimeout(60_000);
+  const { canvas, bounds } = await startTopSketch(page);
+  const rail = page.getByRole('toolbar', { name: 'Sketch tools' });
+  // A closed profile, so E would otherwise start an extrude.
+  const corner = {
+    x: bounds.x + bounds.width * 0.3,
+    y: bounds.y + bounds.height * 0.7
+  };
+  await rail.getByRole('button', { name: 'Rectangle', exact: true }).click();
+  await page.mouse.click(corner.x, corner.y);
+  await page.mouse.move(corner.x + 80, corner.y - 50, { steps: 4 });
+  await page.mouse.click(corner.x + 80, corner.y - 50);
+  await expect
+    .poll(async () => (await readLiveSketch(canvas)).objects.length)
+    .toBe(1);
+
+  await page.keyboard.press('t');
+  const card = page.getByRole('form', { name: 'Place text' });
+  await expect(card.getByLabel('Text', { exact: true })).toBeFocused();
+  await page.keyboard.type('Boa');
+  // Focus moves to a card button, out of the text field.
+  await card.getByRole('button', { name: 'B', exact: true }).click();
+  await page.keyboard.press('e');
+  await page.keyboard.press('l');
+  await expect(card).toBeVisible();
+  await expect(card.getByLabel('Text', { exact: true })).toHaveValue('Boa');
+  await expect(rail).toBeVisible();
+  await expect(
+    rail.getByRole('button', { name: 'Text', exact: true })
+  ).toHaveAttribute('aria-pressed', 'true');
+});
+
 test('the rail tile opens the same card, and Escape while composing leaves nothing', async ({
   page
 }) => {
