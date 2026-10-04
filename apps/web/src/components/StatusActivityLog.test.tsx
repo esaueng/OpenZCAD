@@ -4,7 +4,7 @@ import { describe, expect, it, vi } from 'vitest';
 import { StatusActivityLog } from './StatusActivityLog';
 
 describe('StatusActivityLog', () => {
-  it('keeps the full diagnostic with its compact status entry', () => {
+  it('keeps the full diagnostic with its compact status entry', async () => {
     render(
       <StatusActivityLog
         id="test-activity-log"
@@ -17,13 +17,15 @@ describe('StatusActivityLog', () => {
       />
     );
 
-    expect(screen.getByText('Parameter height was not changed.')).toBeTruthy();
+    expect(
+      await screen.findByText('Parameter height was not changed.')
+    ).toBeTruthy();
     expect(
       screen.getByText('move-face would change topology at face 9')
     ).toHaveClass('status-log-detail');
   });
 
-  it('logs a message set while the geometry line is up, not only the line', () => {
+  it('logs a message set while the geometry line is up, not only the line', async () => {
     const props = {
       id: 'test-activity-log',
       open: true,
@@ -56,6 +58,8 @@ describe('StatusActivityLog', () => {
       />
     );
 
+    // The region shows a loading frame until the panel's chunk arrives.
+    await screen.findAllByRole('listitem');
     const log = screen.getByRole('region', { name: 'Activity log' });
     const messages = within(log)
       .getAllByRole('listitem')
@@ -68,7 +72,40 @@ describe('StatusActivityLog', () => {
     );
   });
 
-  it('closes on Escape before the workspace sees the key', () => {
+  it('leaves a lane-only message out of the log', async () => {
+    const props = {
+      id: 'test-activity-log',
+      open: true,
+      tone: 'ready' as const,
+      triggerRef: createRef<HTMLButtonElement>(),
+      onClose: vi.fn()
+    };
+    const { rerender } = render(
+      <StatusActivityLog {...props} status="Added box." />
+    );
+    // A workspace switch says where the user is, not what the model did.
+    rerender(
+      <StatusActivityLog
+        {...props}
+        status="Build mode · modeling tools are back."
+        logged={false}
+      />
+    );
+    rerender(<StatusActivityLog {...props} status="Added cylinder." />);
+
+    // The region shows a loading frame until the panel's chunk arrives.
+    await screen.findAllByRole('listitem');
+    const log = screen.getByRole('region', { name: 'Activity log' });
+    const messages = within(log)
+      .getAllByRole('listitem')
+      .map((item) => item.textContent ?? '');
+    expect(messages).toHaveLength(2);
+    expect(messages[0]).toContain('Added box.');
+    expect(messages[1]).toContain('Added cylinder.');
+    expect(log).not.toHaveTextContent('Build mode');
+  });
+
+  it('closes on Escape before the workspace sees the key', async () => {
     const onClose = vi.fn();
     const workspaceEscape = vi.fn();
     window.addEventListener('keydown', workspaceEscape);
@@ -83,6 +120,8 @@ describe('StatusActivityLog', () => {
           onClose={onClose}
         />
       );
+      // The handler is the log's own, there before and after the panel loads.
+      await screen.findByRole('listitem');
       fireEvent.keyDown(document.body, { key: 'Escape' });
       expect(onClose).toHaveBeenCalledWith(true);
       expect(workspaceEscape).not.toHaveBeenCalled();

@@ -760,6 +760,16 @@ export function ModelingOperationsForm({
     state.operation === 'loft' ||
     state.operation === 'sweep' ||
     state.operation === 'helical-sweep';
+  const liveBodies = bodies.filter((body) => !body.consumed);
+  // A one-body model has nothing to choose: a "Target body" select with one
+  // option is chrome. It returns as soon as there is a second body, or when
+  // the target is not that body (an edit whose body has since gone).
+  const targetChoice =
+    !profileOperation &&
+    !(
+      liveBodies.length === 1 &&
+      liveBodies[0]!.bodyId === state.value.targetBodyId
+    );
 
   return (
     <form
@@ -780,23 +790,21 @@ export function ModelingOperationsForm({
           onChange={(event) => setName(event.target.value)}
         />
       </label>
-      {!profileOperation ? (
+      {targetChoice ? (
         <label className="field">
           <span>Target body</span>
           <select
             value={state.value.targetBodyId}
             onChange={(event) => setTarget(event.target.value as BodyId)}
           >
-            {bodies.filter((body) => !body.consumed).length === 0 ? (
+            {liveBodies.length === 0 ? (
               <option value="">No live solid bodies</option>
             ) : null}
-            {bodies
-              .filter((body) => !body.consumed)
-              .map((body) => (
-                <option key={body.bodyId} value={body.bodyId}>
-                  {body.name}
-                </option>
-              ))}
+            {liveBodies.map((body) => (
+              <option key={body.bodyId} value={body.bodyId}>
+                {body.name}
+              </option>
+            ))}
           </select>
         </label>
       ) : null}

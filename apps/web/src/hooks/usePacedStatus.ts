@@ -11,7 +11,10 @@ export const STATUS_MIN_DWELL_MS = 1200;
 export interface PacedStatus<T extends string> {
   status: string;
   tone: T;
-  /** Messages replaced while waiting their turn; the activity log has them. */
+  /**
+   * Messages replaced while waiting their turn that `notable` picks out (all
+   * of them without one); the activity log has them.
+   */
   skipped: number;
 }
 
@@ -28,7 +31,8 @@ export interface PacedStatus<T extends string> {
 export function usePacedStatus<T extends string>(
   status: string,
   tone: T,
-  live: boolean
+  live: boolean,
+  notable?: (status: string, tone: T) => boolean
 ): PacedStatus<T> {
   const [shown, setShown] = useState<PacedStatus<T>>({
     status,
@@ -38,6 +42,8 @@ export function usePacedStatus<T extends string>(
   const shownAtRef = useRef(live ? Date.now() : Number.NEGATIVE_INFINITY);
   const waitingRef = useRef<{ status: string; tone: T } | null>(null);
   const skippedRef = useRef(0);
+  const notableRef = useRef(notable);
+  notableRef.current = notable;
 
   // A layout effect so a toast turning visible never paints the previous
   // message for a frame before the current one replaces it.
@@ -51,7 +57,11 @@ export function usePacedStatus<T extends string>(
       return;
     }
     const waiting = waitingRef.current;
-    if (waiting && (waiting.status !== status || waiting.tone !== tone)) {
+    if (
+      waiting &&
+      (waiting.status !== status || waiting.tone !== tone) &&
+      (notableRef.current?.(waiting.status, waiting.tone) ?? true)
+    ) {
       skippedRef.current += 1;
     }
     waitingRef.current = { status, tone };

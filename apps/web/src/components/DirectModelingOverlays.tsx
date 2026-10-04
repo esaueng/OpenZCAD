@@ -1,4 +1,5 @@
-import { Check, Layers3, MousePointer2, Move3d, X } from 'lucide-react';
+import { Check, Layers3, MousePointer2, X } from 'lucide-react';
+import { CARD_EYEBROWS } from '../lib/cardEyebrows';
 import { useEffect, useState, type MutableRefObject } from 'react';
 
 interface ProfileQuickActionProps {
@@ -229,11 +230,8 @@ export function MoveOverlay({
     >
       <div className="panel-header">
         <div className="panel-title-row">
-          <h2>
-            <Move3d size={16} aria-hidden="true" />
-            Move / Rotate
-          </h2>
-          <span className="panel-eyebrow">Direct edit</span>
+          <h2>Move / Rotate</h2>
+          <span className="panel-eyebrow">{CARD_EYEBROWS.direct}</span>
           <button
             type="button"
             className="icon-button panel-close"
