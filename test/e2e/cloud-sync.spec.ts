@@ -840,6 +840,15 @@ test('syncs across two devices and preserves the losing side of a conflict', asy
         hasText: 'Device B unsent edit (Recovery)'
       })
     ).toBeVisible();
+    // The copy is born with a save point of its own; written with none, it
+    // showed "rev 0" and no save of it could ever be made.
+    await expect(
+      pageB
+        .locator('.start-tile-open', {
+          hasText: 'Device B unsent edit (Recovery)'
+        })
+        .locator('.start-tile-rev')
+    ).toHaveText('rev 1');
     await pageB
       .locator('.start-tile-open', {
         hasText: 'Device B unsent edit (Recovery)'

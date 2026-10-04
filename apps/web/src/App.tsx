@@ -3839,18 +3839,10 @@ export function App() {
           })
         )
         .catch(() => undefined);
+      // From the document just written, so the card counts the copy's own
+      // recovery save point rather than claiming it has none.
       setProjects((current) =>
-        mergeProjectSummaries(
-          [
-            {
-              projectId: copy.projectId,
-              name: copy.name,
-              updatedAt: copy.derived.updatedAt,
-              revisionCount: 0
-            }
-          ],
-          current
-        )
+        mergeProjectSummaries([summarizeLocalDocument(copy)], current)
       );
     },
     useRemoteVersion(remoteDocument, outcome) {
