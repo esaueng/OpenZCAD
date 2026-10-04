@@ -17,9 +17,10 @@
  * kernel work and cannot abandon a rebuild it has started, so a commit queued
  * behind a preview waits for that preview first. Two things keep that to one
  * rebuild: `running` hands a commit at the same value the rebuild already in
- * flight, and on a body whose earlier rebuilds were slow (`expectedFrameMs`)
- * `slowSettleMs` holds rebuilds until the hand rests, so a release mid-motion
- * finds no stale rebuild ahead of it.
+ * flight, and on a body whose earlier rebuilds were slow, or that is
+ * predictably slow before any (`expectedFrameMs`), `slowSettleMs` holds
+ * rebuilds until the hand rests, so a release mid-motion finds no stale
+ * rebuild ahead of it.
  */
 
 /** A rebuild slower than this ends live preview for the current gesture. */
@@ -75,10 +76,11 @@ export interface LivePreviewOptions<TDocument, TDerived> {
    */
   slowSettleMs?: number;
   /**
-   * Measured rebuild time for what the next request edits, from earlier
-   * gestures. Above `slowFrameMs` the gesture degrades before its first
-   * rebuild instead of learning it from a slow frame a release would then
-   * have to wait behind.
+   * Expected rebuild time for what the next request edits: measured in
+   * earlier gestures, or estimated from the body before any was measured.
+   * Above `slowFrameMs` the gesture degrades before its first rebuild
+   * instead of learning it from a slow frame a release would then have to
+   * wait behind.
    */
   expectedFrameMs?(): number | undefined;
   /** Injected so tests do not depend on wall-clock timing. */

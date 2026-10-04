@@ -1146,7 +1146,7 @@ import {
 } from './lib/projectShelf';
 import { sharedThumbnailCapture } from './lib/projectThumbnailCapture';
 import { LivePreview } from './lib/livePreview';
-import { PreviewRebuilds } from './lib/previewRebuilds';
+import { PreviewRebuilds, predictedPreviewMs } from './lib/previewRebuilds';
 import {
   blendPreviewSelectionKey,
   canReuseBlendPreview
@@ -1344,7 +1344,8 @@ const E2E_SLOW_FRAME_MS =
 
 /**
  * How long the handle must rest before a face edit is previewed on a body
- * whose earlier previews were all slow. Each exact preview there outlasts the
+ * whose earlier previews were all slow, or, before any, that is predictably
+ * slow (see `expectedFacePreviewMs`). Each exact preview there outlasts the
  * drag that asked for it, and the worker cannot drop one it has started, so a
  * frame started mid-motion only delays the release's own rebuild. Resting
  * first means a release straight out of motion is the one rebuild, and a
@@ -2940,14 +2941,35 @@ export function App() {
       previewRebuildKey(candidate.baseProjectId, candidate.bodyId)
     );
   }
+  /**
+   * What the next offset or radius frame on the armed body should cost. Above
+   * the slow-frame budget the gesture starts degraded and rests before each
+   * exact frame (`SLOW_PREVIEW_SETTLE_MS`). Decided in this order:
+   *
+   * 1. Measured: the fastest of this body's last three preview frames this
+   *    session. A measurement always overrides the prior, in both directions.
+   * 2. Predicted, until any frame for the body has been measured: an imported
+   *    STEP body with at least 100 faces or at least 8 `bspline` faces is slow
+   *    (`predictedPreviewMs`, which records the calibration). That keeps the
+   *    first gesture on a body like the 160-face hammer holder from starting a
+   *    multi-second frame that a release at another value would queue behind.
+   * 3. Otherwise unknown: frames stream, and a slow one degrades the gesture
+   *    without a rest, as one slow frame is often just a cold kernel.
+   *
+   * Within a gesture, the first frame that lands in budget lifts the rest
+   * (`LivePreview`), and its timing becomes the measurement of step 1.
+   */
   function expectedFacePreviewMs() {
     const base = managerRef.current?.document;
     const current = interactionRef.current;
-    return base && current.mode === 'face'
-      ? previewRebuilds.expectedMs(
-          previewRebuildKey(base.projectId, current.target.bodyId)
-        )
-      : undefined;
+    if (!base || current.mode !== 'face') {
+      return undefined;
+    }
+    const bodyId = current.target.bodyId as BodyId;
+    return previewRebuilds.expectedMs(
+      previewRebuildKey(base.projectId, bodyId),
+      () => predictedPreviewMs(base.derived.bodyRepresentations[bodyId])
+    );
   }
   function previewBaseIsCurrent(candidate: {
     baseProjectId: ProjectDocument['projectId'];
@@ -3134,9 +3156,10 @@ export function App() {
       // A slow rebuild no longer freezes the preview for the rest of the
       // gesture: the exact solid keeps following the hand at whatever rate
       // the kernel manages, and the chip reports when it is behind. On a body
-      // whose recent frames were all slow the gesture starts degraded and
-      // previews where the hand rests, so a release out of motion is not
-      // queued behind a frame for a value the hand already passed.
+      // whose recent frames were all slow, or a large imported body not yet
+      // previewed, the gesture starts degraded and previews where the hand
+      // rests, so a release out of motion is not queued behind a frame for a
+      // value the hand already passed.
       continueAfterSlow: true,
       slowSettleMs: SLOW_PREVIEW_SETTLE_MS,
       expectedFrameMs: expectedFacePreviewMs,

@@ -20,7 +20,7 @@ import {
   type ProjectDocument
 } from '@openzcad/shared';
 import { LivePreview } from '../lib/livePreview';
-import { PreviewRebuilds } from '../lib/previewRebuilds';
+import { PreviewRebuilds, predictedPreviewMs } from '../lib/previewRebuilds';
 import { useDirectEditCommit } from './useDirectEditCommit';
 
 function body(bodyId: BodyId, name: string): BodyRepresentation {
@@ -404,7 +404,13 @@ type Derived = ProjectDocument['derived'];
  * Every rebuild — preview or commit — is one entry in `syncs`, standing in
  * for one exact syncDocument in the serialised geometry worker.
  */
-function radiusDrag(options: { expectedFrameMs?: () => number } = {}) {
+function radiusDrag(
+  options: {
+    expectedFrameMs?: () => number;
+    /** The dragged body as derived, for the never-measured prediction. */
+    predictFrom?: BodyRepresentation;
+  } = {}
+) {
   const { sourceBodyId, sourceFeature, fillet } = filletedCylinder();
   const manager = new CommandManager(fillet.document);
   const syncs: {
@@ -469,6 +475,15 @@ function radiusDrag(options: { expectedFrameMs?: () => number } = {}) {
     now: () => Date.now(),
     ...(options.expectedFrameMs
       ? { expectedFrameMs: options.expectedFrameMs }
+      : {}),
+    // As App's expectedFacePreviewMs: measured, else predicted.
+    ...(options.predictFrom
+      ? {
+          expectedFrameMs: () =>
+            rebuilds.expectedMs('body', () =>
+              predictedPreviewMs(options.predictFrom)
+            )
+        }
       : {})
   });
   const commitDerive = vi.fn(sync);
@@ -593,9 +608,42 @@ describe('releasing a slow live preview', () => {
     expect(drag.radiusOf(drag.manager.document)).toBe(6.4);
   });
 
+  it('queues no preview ahead of the first release on a large imported body', async () => {
+    // Never previewed, so nothing is measured: the body's size alone says
+    // its frames will be slow, and the gesture rests from the first move.
+    vi.useFakeTimers();
+    const drag = radiusDrag({
+      predictFrom: {
+        ...body('body_imported_holder' as BodyId, 'Imported holder'),
+        source: 'imported-step',
+        faceCount: 160
+      }
+    });
+    for (let step = 1; step <= 18; step += 1) {
+      drag.preview.request(4.6 + step / 10);
+      await vi.advanceTimersByTimeAsync(16);
+    }
+    expect(drag.preview.degraded).toBe(true);
+
+    let applied: Promise<boolean> = Promise.resolve(false);
+    await act(async () => {
+      applied = drag.release(6.4);
+      await vi.advanceTimersByTimeAsync(1_000);
+    });
+    expect(drag.syncs).toHaveLength(1);
+    expect(drag.commitDerive).toHaveBeenCalledTimes(1);
+    await act(async () => {
+      drag.syncs[0]!.resolve();
+      await vi.advanceTimersByTimeAsync(0);
+    });
+    await expect(applied).resolves.toBe(true);
+    expect(drag.radiusOf(drag.manager.document)).toBe(6.4);
+  });
+
   it('still rebuilds a different value behind the first frame of an unknown body', async () => {
-    // The residual cost, pinned so it is not mistaken for fixed: the worker
-    // cannot drop the frame it started for 4.7, and 6.4 is another edit.
+    // The residual cost, pinned so it is not mistaken for fixed: on a body
+    // neither measured nor predicted slow the worker cannot drop the frame
+    // it started for 4.7, and 6.4 is another edit.
     vi.useFakeTimers();
     const drag = radiusDrag();
     for (let step = 1; step <= 18; step += 1) {
