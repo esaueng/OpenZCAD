@@ -143,6 +143,41 @@ describe('exact section geometry in the viewport', () => {
     expect(fills[0]!.getHex()).not.toBe(0x86a9c6);
   });
 
+  it('follows a body colour previewed after the cut was drawn', () => {
+    // Review on #578: the Appearance picker patches the live body material
+    // while it drags, and the cut fill stayed on the pre-drag colour until
+    // the section moved or the body rebuilt.
+    const { group, mesh } = body();
+    mesh.material.color.set('#e1a948');
+    applySectionPlane(
+      group,
+      sectionClippingPlane({ plane: 'XY', offset: 1 }),
+      shaded([region()])
+    );
+    const fill = group
+      .getObjectByName(EXACT_SECTION)!
+      .children.find((child) => child instanceof THREE.Mesh) as THREE.Mesh<
+      THREE.BufferGeometry,
+      THREE.MeshPhongMaterial
+    >;
+    // What the picker does: set the body material's colour in place.
+    mesh.material.color.set('#3fa7d6');
+    const render = () =>
+      fill.onBeforeRender(
+        ...([] as unknown as Parameters<typeof fill.onBeforeRender>)
+      );
+    render();
+    expect(fill.material.color.getHex()).toBe(
+      sectionCutColor('#3fa7d6').getHex()
+    );
+    // And back, as the picker's cleanup restores the committed colour.
+    mesh.material.color.set('#e1a948');
+    render();
+    expect(fill.material.color.getHex()).toBe(
+      sectionCutColor('#e1a948').getHex()
+    );
+  });
+
   it('is never clipped, never picked, and never a body mesh', () => {
     const { group } = body();
     const plane = sectionClippingPlane({ plane: 'XY', offset: 1 });

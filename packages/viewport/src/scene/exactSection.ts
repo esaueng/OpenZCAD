@@ -91,7 +91,13 @@ function disposeSection(group: THREE.Object3D) {
 export function applyExactSection(
   root: THREE.Object3D,
   display: ExactSectionDisplay,
-  /** Each cut body's own colour, which its cut surface is shaded from. */
+  /**
+   * Each cut body's own colour, which its cut surface is shaded from. These
+   * are the body materials' live `Color` objects, not copies: an appearance
+   * preview patches them in place while the colour picker drags, and the
+   * fill re-shades from them every frame, so the cut follows the body's
+   * colour without the section being recomputed.
+   */
   bodyColors: ReadonlyMap<string, THREE.Color> = new Map()
 ) {
   const previous = root.getObjectByName(EXACT_SECTION);
@@ -115,23 +121,28 @@ export function applyExactSection(
       );
       geometry.setIndex(new THREE.BufferAttribute(region.indices, 1));
       geometry.computeVertexNormals();
-      const mesh = new THREE.Mesh(
-        geometry,
-        new THREE.MeshPhongMaterial({
-          color: sectionCutColor(bodyColors.get(region.bodyId)),
-          side: THREE.DoubleSide,
-          // Wireframe shows outlines, and the cut surface is not one. The
-          // display-mode pass writes this same flag, but it only runs when
-          // the MODE changes — a section arriving into wireframe has to be
-          // built hidden or it appears shaded until the next cycle.
-          visible: displayMode !== 'wireframe',
-          // The cut surface lies in the clipping plane itself; without the
-          // offset it fights the clipped body's own edge for the same depth.
-          polygonOffset: true,
-          polygonOffsetFactor: -1,
-          polygonOffsetUnits: -1
-        })
-      );
+      const bodyColor = bodyColors.get(region.bodyId);
+      const fill = new THREE.MeshPhongMaterial({
+        color: sectionCutColor(bodyColor),
+        side: THREE.DoubleSide,
+        // Wireframe shows outlines, and the cut surface is not one. The
+        // display-mode pass writes this same flag, but it only runs when
+        // the MODE changes — a section arriving into wireframe has to be
+        // built hidden or it appears shaded until the next cycle.
+        visible: displayMode !== 'wireframe',
+        // The cut surface lies in the clipping plane itself; without the
+        // offset it fights the clipped body's own edge for the same depth.
+        polygonOffset: true,
+        polygonOffsetFactor: -1,
+        polygonOffsetUnits: -1
+      });
+      const mesh = new THREE.Mesh(geometry, fill);
+      if (bodyColor) {
+        // In place, no allocation: this runs every frame the cut is drawn.
+        mesh.onBeforeRender = () => {
+          fill.color.copy(bodyColor).offsetHSL(0, 0, CUT_LIGHTNESS_SHIFT);
+        };
+      }
       mesh.name = `${EXACT_SECTION}-fill`;
       mesh.userData.exactSection = true;
       mesh.userData.exactSectionRegion = index;
