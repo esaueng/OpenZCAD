@@ -23,6 +23,38 @@ prefix, so the same phases are visible in the DevTools performance panel, in
 currently marked: `worker.create`, `document.hydrate`, `viewer.init`,
 `viewer.renderer`, `viewer.environment`, `viewer.firstFrame`, `viewer.bodies`.
 
+### Kernel timing harness for an offset-face edit
+
+`test/perf/offset-face-perf.test.ts` times one offset-face direct edit on an
+imported STEP body through the real exact adapter, in Node. For the cold
+import sync and the edited sync it prints wall, kernel and remaining JS time,
+every `RemusKernel` method by total time and call count, and the adapter's own
+stage timings. It is skipped unless `OFFSET_PERF_STEP` names a STEP file, so
+the normal `vitest run` never executes it. `OFFSET_PERF_DISTANCE` (default −6)
+and `OFFSET_PERF_AREA` (default: the largest +X planar face) choose the edit.
+`OFFSET_PERF_TRACE=1` also attributes the expensive kernel methods to their
+calling frames; it is off by default because it is noisy and inflates the
+methods it traces. `OFFSET_PERF_FULL=1` also times a second edit and the undo.
+`REMUS_WASM_PKG` and `REMUS_WASM_IO_PKG` run it against a local Remus build
+through the `vitest.config.ts` overlay, without touching the pin or lockfile:
+
+```bash
+OFFSET_PERF_STEP=/path/to/part.step \
+  pnpm vitest run test/perf/offset-face-perf.test.ts --reporter=verbose
+# Against a local kernel, after `cargo xtask wasm-build` in a Remus checkout:
+REMUS_WASM_PKG=<remus>/crates/wasm/pkg \
+REMUS_WASM_IO_PKG=<remus>/crates/wasm-io/pkg \
+OFFSET_PERF_STEP=/path/to/part.step \
+  pnpm vitest run test/perf/offset-face-perf.test.ts --reporter=verbose
+```
+
+With the public Remus fixture `crates/io/tests/data/shapr3d_hammer_holder.step`
+(160 faces, 42 NURBS) against the pinned kernel on an Apple M5 Pro
+(2026-10-04, `main`, three runs, one traced): cold import sync 12.6–12.9 s,
+offset sync (−6 on the largest +X face) 15.1–15.6 s, of which
+`moveFacesJournaled` 4.0 s, `recognizeFeatures` 3.0 s and
+`solidEdgeRelations` 2.7 s. Keep fixtures out of this repository.
+
 ## Interaction baseline
 
 Reproduce with:
