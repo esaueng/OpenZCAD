@@ -42,6 +42,11 @@ export interface StatusEntry {
   at: number;
   /** Mode text that describes a state the user is still in; never expires. */
   sticky: boolean;
+  /**
+   * Lane-only: where the user now is (a workspace switch), not something
+   * that happened to the model, so the activity log leaves it out.
+   */
+  unlogged?: boolean;
 }
 
 export function statusExpiresAt(entry: {

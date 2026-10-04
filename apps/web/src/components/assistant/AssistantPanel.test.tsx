@@ -471,7 +471,8 @@ describe('asking from the prompt line', () => {
     expect(onActivity).toHaveBeenLastCalledWith({
       thinking: false,
       unread: 0,
-      context: '2 selected edges'
+      context: '2 selected edges',
+      unavailable: false
     });
   });
 });
@@ -556,9 +557,9 @@ describe('selection grounding for assistant follow-ups', () => {
       )
     );
     const user = userEvent.setup();
-    const onPreview = vi.fn(
-      async (_proposal: CadPatchProposal | null) => ({ ok: true as const })
-    );
+    const onPreview = vi.fn(async (_proposal: CadPatchProposal | null) => ({
+      ok: true as const
+    }));
     render(
       <AssistantPanel
         document={document}
@@ -931,5 +932,49 @@ describe('prompt keys on the open proposal', () => {
     } finally {
       outside.remove();
     }
+  });
+});
+
+describe('an assistant with no provider', () => {
+  const unconfigured = {
+    configured: false,
+    provider: 'openrouter',
+    model: '',
+    reasoningEffort: 'medium'
+  };
+
+  afterEach(() => {
+    vi.unstubAllEnvs();
+  });
+
+  it('tells a signed-out user what to do rather than how to deploy', async () => {
+    vi.stubEnv('DEV', false);
+    const onActivity = vi.fn();
+    await renderPanel({ effectiveAssistant: unconfigured, onActivity });
+    expect(
+      screen.getByText(
+        'Sign in and add a personal token in Settings → AI Assistant to use the assistant.'
+      )
+    ).toBeTruthy();
+    expect(screen.queryByText(/OPENROUTER_API_KEY|\.dev\.vars/)).toBeNull();
+    expect(onActivity).toHaveBeenLastCalledWith(
+      expect.objectContaining({ unavailable: true })
+    );
+  });
+
+  it('tells a signed-in user the deployment has no provider', async () => {
+    vi.stubEnv('DEV', false);
+    await renderPanel({ effectiveAssistant: unconfigured, signedIn: true });
+    expect(
+      screen.getByText(
+        'The assistant is not configured for this deployment. Add a token in Settings → AI Assistant.'
+      )
+    ).toBeTruthy();
+  });
+
+  it('keeps the developer instruction on the dev server', async () => {
+    vi.stubEnv('DEV', true);
+    await renderPanel({ effectiveAssistant: unconfigured });
+    expect(screen.getByText(/OPENROUTER_API_KEY/)).toBeTruthy();
   });
 });

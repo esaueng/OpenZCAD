@@ -359,13 +359,16 @@ test('the top-bar status chips only report, and saving lives on File', async ({
   const sharing = actions.getByRole('button', {
     name: 'Project sharing · Sign in to share'
   });
-  await expect(sharing).toHaveAttribute('aria-disabled', 'true');
+  await expect(sharing).not.toHaveAttribute('aria-disabled', 'true');
   await expect(sharing).toHaveAttribute('title', 'Sign in to share');
-  // Focusable for its tooltip; a click (forced past Playwright's own
-  // aria-disabled check) opens nothing.
-  await sharing.focus();
-  await expect(sharing).toBeFocused();
-  await sharing.click({ force: true });
+  // Signed out, the chip goes where signing in happens: Settings › Account.
+  await sharing.click();
+  const settings = page.getByRole('dialog', { name: 'Settings' });
+  await expect(settings).toBeVisible();
+  await expect(
+    settings.getByRole('heading', { name: 'Account & collaboration' })
+  ).toBeVisible();
+  await settings.getByRole('button', { name: /^Back/ }).click();
   await expect(page.getByRole('dialog')).toHaveCount(0);
 
   // Neither click saved anything; File › Save revision does.

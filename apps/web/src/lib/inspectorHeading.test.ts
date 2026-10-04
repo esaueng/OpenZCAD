@@ -3,7 +3,8 @@ import { inspectorHeadingForFeature } from './inspectorHeading';
 
 const offsetFace = {
   featureName: 'Offset face',
-  featureKindLabel: 'Direct edit'
+  featureKindLabel: 'Direct edit',
+  directEdit: true
 };
 
 describe('inspector heading', () => {
@@ -68,5 +69,16 @@ describe('inspector heading', () => {
         commandSession: { title: 'Fillet' }
       }).title
     ).toBe('Offset face');
+  });
+
+  it('says Edit feature for a history feature, whatever its kind', () => {
+    expect(
+      inspectorHeadingForFeature({
+        featureName: 'Box 1',
+        featureKindLabel: 'Primitive',
+        featureSelectionSource: 'pinned',
+        commandSession: null
+      })
+    ).toEqual({ eyebrow: 'Edit feature', title: 'Box 1', demoted: false });
   });
 });

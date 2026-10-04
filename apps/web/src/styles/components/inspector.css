@@ -367,10 +367,12 @@
   font-size: var(--fs-mini);
 }
 
+/* Eight rows before it scrolls: a box's six faces used to scroll by a few
+   pixels, so the list never showed the whole part at once. */
 .pick-list {
   display: grid;
   gap: 3px;
-  max-height: 190px;
+  max-height: calc(8 * 30px + 7 * 3px);
   overflow-y: auto;
 }
 

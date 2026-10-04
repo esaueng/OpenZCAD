@@ -71,6 +71,31 @@ describe('usePacedStatus', () => {
     });
   });
 
+  it('counts the passed-over messages its predicate calls notable', () => {
+    const { result, rerender } = renderHook(
+      ({ status, tone }: { status: string; tone: Tone }) =>
+        usePacedStatus<Tone>(
+          status,
+          tone,
+          true,
+          (_status, candidate) => candidate === 'warning'
+        ),
+      { initialProps: { status: 'Opened Bracket.', tone: 'ready' as Tone } }
+    );
+    rerender({ status: 'Rebuilding', tone: 'running' });
+    rerender({ status: 'Fillet failed: radius too large', tone: 'warning' });
+    rerender({ status: 'Measuring', tone: 'running' });
+    rerender({ status: 'Ready', tone: 'ready' });
+    act(() => {
+      vi.advanceTimersByTime(STATUS_MIN_DWELL_MS);
+    });
+    expect(result.current).toEqual({
+      status: 'Ready',
+      tone: 'ready',
+      skipped: 1
+    });
+  });
+
   it('holds each message for the dwell even when the burst keeps going', () => {
     const { result, rerender } = renderPaced(props('First'));
     act(() => {
