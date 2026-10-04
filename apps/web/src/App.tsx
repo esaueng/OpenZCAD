@@ -18555,6 +18555,12 @@ export function App() {
           saveToAccount={
             cloudFunctionsEnabled && !!session && !activeProjectIsCloud
           }
+          knownDeviceOnly={
+            cloudFunctionsEnabled &&
+            !!session &&
+            !activeProjectIsCloud &&
+            accountProjectListReached
+          }
           localOnlySourceCount={localOnlySources.length}
           artifacts={artifacts}
           session={session}

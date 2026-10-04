@@ -9,6 +9,7 @@ function renderTopBar(
     saveState?: WorkspaceSaveState;
     signedIn?: boolean;
     saveToAccount?: boolean;
+    knownDeviceOnly?: boolean;
   } = {}
 ) {
   const handlers = {
@@ -25,6 +26,7 @@ function renderTopBar(
       exportScope={null}
       saveState={options.saveState ?? 'local'}
       saveToAccount={options.saveToAccount ?? false}
+      knownDeviceOnly={options.knownDeviceOnly ?? false}
       localOnlySourceCount={0}
       artifacts={[]}
       session={
@@ -116,12 +118,25 @@ describe('TopBar sharing chip', () => {
   });
 
   it('says a device-only project is not shared, not that it is offline', () => {
-    renderTopBar({ signedIn: true, saveToAccount: true });
+    renderTopBar({
+      signedIn: true,
+      saveToAccount: true,
+      knownDeviceOnly: true
+    });
     expect(
       screen.getByRole('button', { name: 'Open project sharing · Not shared' })
     ).toBeInTheDocument();
     expect(
       screen.queryByRole('button', { name: /Offline/ })
     ).not.toBeInTheDocument();
+  });
+
+  it('keeps Offline while the account is unreachable', () => {
+    // The project list never arrived, so nothing proves this project is not
+    // in the account; the open path has just called the account unreachable.
+    renderTopBar({ signedIn: true, saveToAccount: true });
+    expect(
+      screen.getByRole('button', { name: 'Open project sharing · Offline' })
+    ).toBeInTheDocument();
   });
 });
