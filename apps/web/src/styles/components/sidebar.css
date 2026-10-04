@@ -498,8 +498,8 @@
 }
 
 .history-find-toggle {
-  width: 22px;
-  height: 22px;
+  width: 24px;
+  height: 24px;
   display: inline-grid;
   place-items: center;
   flex: 0 0 auto;

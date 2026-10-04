@@ -1,4 +1,4 @@
-import { render, screen } from '@testing-library/react';
+import { render, screen, within } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import type { ComponentProps } from 'react';
 import { describe, expect, it, vi } from 'vitest';
@@ -67,60 +67,43 @@ describe('SketchToolRail', () => {
     expect(props.onExtrude).toHaveBeenCalledOnce();
   });
 
-  it('selects a circle construction mode from the shared flyout', async () => {
+  it('shows the circle types as a strip beside the rail while the tool is live', async () => {
     const user = userEvent.setup();
     const onCircleMode = vi.fn();
-    renderRail({ onCircleMode });
+    const { props, rerender } = renderRail({ onCircleMode });
 
-    await user.click(
-      screen.getByRole('button', { name: 'Choose circle type' })
-    );
-    await user.click(
-      screen.getByRole('menuitemradio', { name: /Three-Point Circle/ })
-    );
-
-    expect(onCircleMode).toHaveBeenCalledWith('three-point');
+    // The tool's own glyph and name are the live type.
     expect(
-      screen.queryByRole('menuitemradio', { name: /Three-Point Circle/ })
-    ).not.toBeInTheDocument();
-  });
+      screen.getByRole('button', { name: 'Circle: Center Circle' })
+    ).toHaveAttribute('aria-pressed', 'true');
+    const strip = screen.getByRole('radiogroup', { name: 'Circle type' });
+    expect(within(strip).getByRole('radio', { name: 'Center' })).toBeChecked();
+    expect(
+      within(strip).getByRole('radio', { name: '3 points' })
+    ).not.toBeChecked();
 
-  /**
-   * Production QA UI-09: Escape switched the drawing tool to Select but left
-   * the circle menu open, and opening the palette left it covering the
-   * palette's controls.
-   */
-  it('dismisses the circle menu predictably', async () => {
-    const user = userEvent.setup();
-    const { props, rerender } = renderRail();
-    const open = () =>
-      user.click(screen.getByRole('button', { name: 'Choose circle type' }));
-    const menu = () => screen.queryByRole('menu');
+    await user.click(within(strip).getByRole('radio', { name: '3 points' }));
+    expect(onCircleMode).toHaveBeenLastCalledWith('three-point');
+    rerender(<SketchToolRail {...props} circleMode="three-point" />);
+    expect(
+      screen.getByRole('button', { name: 'Circle: Three-Point Circle' })
+    ).toBeInTheDocument();
+    expect(
+      within(strip).getByRole('radio', { name: '3 points' })
+    ).toBeChecked();
 
-    // Escape closes the menu alone: the sketch's own Escape never sees it.
-    const sketchEscape = vi.fn();
-    document.addEventListener('keydown', sketchEscape, true);
-    await open();
-    expect(menu()).toBeInTheDocument();
-    await user.keyboard('{Escape}');
-    expect(menu()).not.toBeInTheDocument();
-    expect(sketchEscape).not.toHaveBeenCalled();
-    await user.keyboard('{Escape}');
-    expect(sketchEscape).toHaveBeenCalledOnce();
-    document.removeEventListener('keydown', sketchEscape, true);
+    // The chip on the strip's end steps to the next type, wrapping round.
+    await user.click(screen.getByRole('button', { name: 'Next circle type' }));
+    expect(onCircleMode).toHaveBeenLastCalledWith('center-radius');
 
-    // A press anywhere else closes it.
-    await open();
-    await user.click(screen.getByRole('button', { name: 'Select' }));
-    expect(menu()).not.toBeInTheDocument();
-
-    // So do the palette opening and a tool change made by a key.
-    await open();
-    await user.click(screen.getByRole('button', { name: /Sketch palette/ }));
-    expect(menu()).not.toBeInTheDocument();
-    await open();
+    // The strip belongs to the circle tool and leaves with it.
     rerender(<SketchToolRail {...props} tool="line" />);
-    expect(menu()).not.toBeInTheDocument();
+    expect(
+      screen.queryByRole('radiogroup', { name: 'Circle type' })
+    ).not.toBeInTheDocument();
+    expect(
+      screen.getByRole('button', { name: 'Circle: Center Circle' })
+    ).toHaveAttribute('aria-pressed', 'false');
   });
 
   it('keeps geometry and grid snapping independent', async () => {
