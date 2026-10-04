@@ -1086,14 +1086,16 @@
   border-radius: 0 var(--radius-sm) var(--radius-sm) 0;
 }
 
+/* A reading-size menu: three modes at body size with a glyph each, not the
+   rail's fine print, since it is the one place the circle type is chosen. */
 .sketch-circle-menu {
   position: absolute;
   top: calc(100% + 8px);
   left: 0;
   z-index: calc(var(--z-inspector-float) + 4);
   display: grid;
-  width: 238px;
-  padding: 5px;
+  width: 280px;
+  padding: 6px;
   background: var(--color-surface-2);
   border: 1px solid var(--color-border-strong);
   border-radius: var(--radius-md);
@@ -1102,26 +1104,26 @@
 
 .sketch-circle-menu button {
   display: grid;
-  grid-template-columns: 20px minmax(0, 1fr);
-  gap: 8px;
-  padding: 7px 8px;
+  grid-template-columns: 24px minmax(0, 1fr);
+  gap: 10px;
+  padding: 9px 10px;
   text-align: left;
 }
 
 .sketch-circle-menu button > span {
   display: grid;
-  gap: 1px;
+  gap: 2px;
 }
 
 .sketch-circle-menu strong {
   color: var(--color-text);
-  font-size: var(--fs-xs);
+  font-size: var(--fs-base);
   font-weight: var(--fw-medium);
 }
 
 .sketch-circle-menu small {
   color: var(--color-text-subtle);
-  font-size: var(--fs-mini);
+  font-size: var(--fs-sm);
 }
 
 .sketch-palette-header {

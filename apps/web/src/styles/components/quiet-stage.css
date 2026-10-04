@@ -1883,14 +1883,20 @@ button.command-rail:disabled {
    the full-width rows direct-manipulation.css lays out. */
 .workspace-column .sketch-rail .sketch-circle-menu button {
   display: grid;
-  grid-template-columns: 20px minmax(0, 1fr);
+  grid-template-columns: 24px minmax(0, 1fr);
   place-items: center start;
-  gap: 8px;
+  gap: 10px;
   width: 100%;
   height: auto;
-  padding: 7px 8px;
-  font-size: var(--fs-xs);
+  padding: 9px 10px;
+  font-size: var(--fs-base);
   text-align: left;
+}
+
+/* The rail's 16px icon rule reaches the menu's glyphs too; they read at 20px. */
+.workspace-column .sketch-rail .sketch-circle-menu button svg {
+  width: 20px;
+  height: 20px;
 }
 
 /* Finish is the column's foot, lit like the primary verb. */

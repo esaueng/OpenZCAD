@@ -2,7 +2,9 @@ import { useEffect, useId, useRef, useState, type ReactNode } from 'react';
 import {
   ChevronDown,
   Circle,
+  CircleDot,
   Construction,
+  Diameter,
   Grid3x3,
   Layers3,
   Magnet,
@@ -121,25 +123,51 @@ const TOOLS: {
   { id: 'text', label: 'Text', keyHint: 'T', icon: Type }
 ];
 
+/** A circle through three points on its circumference, drawn like lucide. */
+function ThreePointCircle({ size }: { size: number }) {
+  return (
+    <svg
+      width={size}
+      height={size}
+      viewBox="0 0 24 24"
+      fill="none"
+      stroke="currentColor"
+      strokeWidth={2}
+      strokeLinecap="round"
+      strokeLinejoin="round"
+      aria-hidden="true"
+    >
+      <circle cx="12" cy="12" r="9" />
+      <circle cx="12" cy="3" r="1" fill="currentColor" />
+      <circle cx="4.2" cy="16.5" r="1" fill="currentColor" />
+      <circle cx="19.8" cy="16.5" r="1" fill="currentColor" />
+    </svg>
+  );
+}
+
 const CIRCLE_MODES: {
   mode: SketchCircleMode;
   label: string;
   detail: string;
+  icon: typeof Circle | typeof ThreePointCircle;
 }[] = [
   {
     mode: 'center-radius',
     label: 'Center Circle',
-    detail: 'Center and radius'
+    detail: 'Center and radius',
+    icon: CircleDot
   },
   {
     mode: 'two-point-diameter',
     label: 'Two-Point Diameter',
-    detail: 'Opposite diameter endpoints'
+    detail: 'Opposite diameter endpoints',
+    icon: Diameter
   },
   {
     mode: 'three-point',
     label: 'Three-Point Circle',
-    detail: 'Three circumference points'
+    detail: 'Three circumference points',
+    icon: ThreePointCircle
   }
 ];
 
@@ -279,7 +307,7 @@ export function SketchToolRail({
         </button>
         {circleMenuOpen ? (
           <span className="sketch-circle-menu" role="menu">
-            {CIRCLE_MODES.map(({ mode, label, detail }) => (
+            {CIRCLE_MODES.map(({ mode, label, detail, icon: Icon }) => (
               <button
                 key={mode}
                 type="button"
@@ -291,7 +319,7 @@ export function SketchToolRail({
                   setCircleMenuOpen(false);
                 }}
               >
-                <Circle size={14} aria-hidden="true" />
+                <Icon size={20} aria-hidden="true" />
                 <span>
                   <strong>{label}</strong>
                   <small>{detail}</small>
