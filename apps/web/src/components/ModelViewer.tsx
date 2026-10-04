@@ -154,6 +154,7 @@ import {
   type ViewerSettings,
   type FatLineResolution,
   type BodyEdgeOverlay,
+  type CalloutBounds,
   type CalloutLayoutItem,
   type DimensionGraphic,
   SELECTION_SEMANTICS,
@@ -1068,6 +1069,8 @@ interface MeasurementCalloutBinding {
   kind: 'anchor' | 'span' | 'arms';
   spanStart?: THREE.Vector3;
   spanEnd?: THREE.Vector3;
+  /** Corners of the measured face's or body's world box, when known. */
+  extent?: THREE.Vector3[];
 }
 
 interface MeasurementSceneBounds {
@@ -1079,10 +1082,11 @@ interface MeasurementSceneBounds {
  * Keeps measurement callouts off the geometry they describe. CSS2DRenderer
  * centres each pill on its projected anchor, which for a face-area or
  * diameter measurement is the middle of the model; the layout in
- * `layoutMeasurementCallouts` moves the pill outside the model's projected
- * silhouette instead, and this applies the result as margins (rewritten
- * from scratch every frame, like `clampNameCallouts`) plus a leader line
- * pointing back at the anchor.
+ * `layoutMeasurementCallouts` moves the pill just outside the measured
+ * face's projected box (or, when that is unknown, outside the model's
+ * projected silhouette) instead, and this applies the result as margins
+ * (rewritten from scratch every frame, like `clampNameCallouts`) plus a
+ * leader line pointing back at the anchor.
  */
 function updateMeasurementCallouts(
   bindings: readonly MeasurementCalloutBinding[],
@@ -1137,6 +1141,27 @@ function updateMeasurementCallouts(
         spanDir = { x: end.x - start.x, y: end.y - start.y };
       }
     }
+    // The measured face's own screen box, so its label stands just outside
+    // that face. A corner behind the camera leaves the box unknown and the
+    // layout falls back to the model's silhouette.
+    let bounds: CalloutBounds | undefined;
+    if (binding.extent) {
+      const corners = binding.extent.map((corner) =>
+        projectToScreen(corner, camera, viewportWidth, viewportHeight)
+      );
+      if (
+        corners.every(
+          (corner): corner is { x: number; y: number } => corner !== null
+        )
+      ) {
+        bounds = {
+          minX: Math.min(...corners.map((corner) => corner.x)),
+          minY: Math.min(...corners.map((corner) => corner.y)),
+          maxX: Math.max(...corners.map((corner) => corner.x)),
+          maxY: Math.max(...corners.map((corner) => corner.y))
+        };
+      }
+    }
     visible.push({
       binding,
       item: {
@@ -1144,7 +1169,8 @@ function updateMeasurementCallouts(
         width: binding.element.offsetWidth || 1,
         height: binding.element.offsetHeight || 1,
         kind: binding.kind,
-        spanDir
+        spanDir,
+        bounds
       }
     });
   }
@@ -8092,6 +8118,7 @@ export function ModelViewer({
       label.element.appendChild(leader);
       group.add(label);
       const firstSegment = annotation.segments[0];
+      const extent = annotation.extent;
       measurementCalloutsRef.current.push({
         element: label.element as HTMLDivElement,
         leader,
@@ -8116,7 +8143,17 @@ export function ModelViewer({
                 firstSegment.end.y,
                 firstSegment.end.z
               )
-            : undefined
+            : undefined,
+        extent: extent
+          ? [0, 1, 2, 3, 4, 5, 6, 7].map(
+              (corner) =>
+                new THREE.Vector3(
+                  corner & 1 ? extent.max.x : extent.min.x,
+                  corner & 2 ? extent.max.y : extent.min.y,
+                  corner & 4 ? extent.max.z : extent.min.z
+                )
+            )
+          : undefined
       });
     }
     context.requestRender();

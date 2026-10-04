@@ -7,6 +7,7 @@ import {
 } from '@openzcad/shared';
 import {
   describeSectionOutline,
+  measurementAnnotationsOnScreen,
   resolveSectionOutline,
   sectionOutlineExportable,
   sectionOutlineFor,
@@ -616,5 +617,57 @@ describe('what the section rail may offer to export', () => {
         detail: 'This cut can only be shown approximately.'
       });
     }
+  });
+});
+
+describe('measurement labels are placed against the drawing', () => {
+  const box = { min: { x: 0, y: 0, z: 0 }, max: { x: 1, y: 1, z: 1 } };
+  function annotation(id: string, bodyId?: string) {
+    return {
+      id,
+      label: '1.00 mm²',
+      selected: false,
+      status: 'current' as const,
+      graphic: 'anchor' as const,
+      anchor: { x: 0, y: 0, z: 0 },
+      segments: [],
+      ...(bodyId ? { extent: { bodyId: toBodyId(bodyId), ...box } } : {})
+    };
+  }
+  const annotations = [
+    annotation('a', 'body_a'),
+    annotation('b', 'body_b'),
+    annotation('draft')
+  ];
+  const both = [toBodyId('body_a'), toBodyId('body_b')];
+
+  it('keeps every face box while the bodies are drawn as built', () => {
+    expect(
+      measurementAnnotationsOnScreen(annotations, onScreen(document, both))
+    ).toBe(annotations);
+  });
+
+  it('drops the box of a face under a parameter preview or a Move pose', () => {
+    // The box was read from the built body. While a preview stands in for
+    // it, or the viewer has posed it elsewhere, a label placed beside that
+    // box would stand by geometry nobody can see — so it falls back to
+    // standing outside the whole model.
+    const [a, b] = measurementAnnotationsOnScreen(
+      annotations,
+      onScreen(document, both, [{ replaces: [toBodyId('body_a')] }])
+    );
+    expect(a).not.toHaveProperty('extent');
+    expect(b).toBe(annotations[1]);
+    const [, moved] = measurementAnnotationsOnScreen(
+      annotations,
+      onScreen(document, both, null, ['body_b'])
+    );
+    expect(moved).not.toHaveProperty('extent');
+    // A hidden body is not drawn at all.
+    const [hidden] = measurementAnnotationsOnScreen(
+      annotations,
+      onScreen(document, [toBodyId('body_b')])
+    );
+    expect(hidden).not.toHaveProperty('extent');
   });
 });
