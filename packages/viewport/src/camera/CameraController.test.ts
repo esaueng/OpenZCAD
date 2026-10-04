@@ -198,7 +198,8 @@ describe('CameraController external orbit lifecycle', () => {
     expect(onViewSettled).toHaveBeenCalledTimes(settlesWhileActive);
 
     controller.endOrbitDrag();
-    vi.advanceTimersByTime(120);
+    // With no frames drawn, the settle waits out the glide's cap once.
+    vi.advanceTimersByTime(120 + 200);
     expect(onViewSettled.mock.calls.length).toBeGreaterThan(settlesWhileActive);
     controller.dispose();
   });
@@ -217,7 +218,11 @@ describe('CameraController external orbit lifecycle', () => {
     expect(onViewSettled).not.toHaveBeenCalled();
 
     controller.endOrbitDrag();
+    // Not while the release glide could still be in flight…
     vi.advanceTimersByTime(120);
+    expect(onViewSettled).not.toHaveBeenCalled();
+    // …but once its cap has passed, even with no frames drawn.
+    vi.advanceTimersByTime(200);
 
     expect(onViewSettled).toHaveBeenCalledTimes(1);
     expect(onViewSettled).toHaveBeenLastCalledWith(controller.capture());
@@ -319,6 +324,221 @@ describe('CameraController external orbit lifecycle', () => {
     expect(onViewChange).toHaveBeenCalledTimes(changesAtDispose);
     expect(onViewSettled).toHaveBeenCalledTimes(settlesAtDispose);
     expect(() => controller.dispose()).not.toThrow();
+  });
+});
+
+/**
+ * One clock for the frame timestamps handed to `stepOrbit`, the
+ * `performance.now()` the controller reads at release, and its settle timer,
+ * as in the browser: a slow frame lets that timer fire between frames.
+ */
+function frameClock(start = 5_000) {
+  let at = start;
+  vi.spyOn(performance, 'now').mockImplementation(() => at);
+  return {
+    tick(ms: number) {
+      at += ms;
+      vi.advanceTimersByTime(ms);
+      return at;
+    }
+  };
+}
+
+/**
+ * Drags the external orbit through the same 240 px over 200 ms of frames,
+ * releases it, and replays the render loop at `hz` until the controller
+ * reports idle. Times are ms from release, which follows the last drag frame.
+ */
+function flickAndRelease(hz: number) {
+  const { controller, onViewSettled } = createController(false);
+  const clock = frameClock();
+  const frameMs = 1000 / hz;
+  controller.beginOrbitDrag();
+  const dragFrames = Math.max(1, Math.round(hz * 0.2));
+  let now = 0;
+  for (let frame = 0; frame < dragFrames; frame += 1) {
+    now = clock.tick(frameMs);
+    controller.orbitByPixels(240 / dragFrames, 0);
+    controller.stepOrbit(now);
+  }
+  const releasedAt = now;
+  controller.endOrbitDrag();
+  const azimuths: number[] = [controller.controls.getAzimuthalAngle()];
+  let lastMoveAt = releasedAt;
+  let idleFrames = 0;
+  for (let frame = 0; frame < 600 && idleFrames < 10; frame += 1) {
+    now = clock.tick(frameMs);
+    const moving = controller.stepOrbit(now);
+    const azimuth = controller.controls.getAzimuthalAngle();
+    if (moving) {
+      // Once idle, the loop stays idle: no late landing wakes it.
+      expect(idleFrames).toBe(0);
+      lastMoveAt = now;
+      azimuths.push(azimuth);
+    } else {
+      idleFrames += 1;
+      expect(azimuth).toBeCloseTo(azimuths.at(-1) ?? Number.NaN, 12);
+    }
+  }
+  const steps = azimuths.slice(1).map((value, index) => {
+    return value - (azimuths[index] ?? value);
+  });
+  return {
+    controller,
+    onViewSettled,
+    frameMs,
+    settleMs: lastMoveAt - releasedAt,
+    restingPosition: controller.activeCamera.position.clone(),
+    steps
+  };
+}
+
+/** The last persisted pose sits at `position`, to floating-point rounding. */
+function expectLastPersistedAt(
+  onViewSettled: ReturnType<typeof vi.fn>,
+  position: THREE.Vector3
+) {
+  const persisted = onViewSettled.mock.lastCall?.[0] as
+    { position: THREE.Vector3Tuple } | undefined;
+  expect(persisted).toBeDefined();
+  expect(
+    new THREE.Vector3(...(persisted?.position ?? [NaN, NaN, NaN])).distanceTo(
+      position
+    )
+  ).toBeLessThan(1e-9);
+}
+
+describe('CameraController orbit release glide', () => {
+  afterEach(() => {
+    vi.restoreAllMocks();
+  });
+
+  it('settles within 200 ms of release at 60 Hz, then reports idle', () => {
+    const { controller, onViewSettled, settleMs, steps } = flickAndRelease(60);
+    // Premise: the release carried residual velocity into a visible glide.
+    expect(steps.length).toBeGreaterThan(3);
+    expect(settleMs).toBeLessThanOrEqual(200 + 1e-6);
+    // The idle frames replayed past the settle delay, so the landed pose is
+    // already persisted. Idle frames still run OrbitControls' update, which
+    // re-derives the pose from spherical coordinates, so compare to rounding.
+    const rest = controller.activeCamera.position.clone();
+    expectLastPersistedAt(onViewSettled, rest);
+    // Idle: further frames neither move nor wake the loop.
+    expect(controller.stepOrbit(20_000)).toBe(false);
+    expect(controller.stepOrbit(20_016)).toBe(false);
+    expect(controller.activeCamera.position.distanceTo(rest)).toBeLessThan(
+      1e-9
+    );
+    controller.dispose();
+  });
+
+  it('decays monotonically with no overshoot', () => {
+    const { controller, steps } = flickAndRelease(60);
+    const direction = Math.sign(steps[0] ?? 0);
+    expect(direction).not.toBe(0);
+    steps.forEach((step, index) => {
+      expect(Math.sign(step)).toBe(direction);
+      if (index > 0) {
+        expect(Math.abs(step)).toBeLessThan(Math.abs(steps[index - 1] ?? 0));
+      }
+    });
+    controller.dispose();
+  });
+
+  it.each([5, 10, 30, 120, 144])(
+    'lands on the first frame at or past 200 ms, on the same pose, at %i Hz',
+    (hz) => {
+      const reference = flickAndRelease(60);
+      const run = flickAndRelease(hz);
+      // Wall-clock from release: a slow first frame does not push it later.
+      expect(run.settleMs).toBeGreaterThanOrEqual(200 - 1e-6);
+      expect(run.settleMs).toBeLessThan(200 + run.frameMs - 1e-6);
+      // The same drag leaves the same residue, and the glide plays all of it
+      // out, so the resting pose does not depend on the frame rate.
+      expect(
+        run.restingPosition.distanceTo(reference.restingPosition)
+      ).toBeLessThan(1e-6);
+      reference.controller.dispose();
+      run.controller.dispose();
+    }
+  );
+
+  it('keeps the settle timer from landing a frame-starved glide early', () => {
+    const reference = flickAndRelease(60);
+    const { controller, onViewSettled } = createController(false);
+    const clock = frameClock();
+    controller.beginOrbitDrag();
+    controller.orbitByPixels(240, 0);
+    controller.stepOrbit(clock.tick(200));
+    controller.endOrbitDrag();
+    const released = controller.activeCamera.position.clone();
+    const settlesAtRelease = onViewSettled.mock.calls.length;
+    // 5 Hz: the settle delay passes before the next frame. No jump, and
+    // nothing is persisted mid-glide.
+    clock.tick(120);
+    expect(controller.activeCamera.position.distanceTo(released)).toBe(0);
+    expect(onViewSettled).toHaveBeenCalledTimes(settlesAtRelease);
+    // The first frame at the cap lands the glide on the curve's end.
+    expect(controller.stepOrbit(clock.tick(80))).toBe(true);
+    expect(
+      controller.activeCamera.position.distanceTo(reference.restingPosition)
+    ).toBeLessThan(1e-6);
+    const landed = controller.capture();
+    // Persisted once the landing settles, and not before.
+    clock.tick(120);
+    expect(onViewSettled).toHaveBeenCalledTimes(settlesAtRelease + 1);
+    expectLastPersistedAt(onViewSettled, new THREE.Vector3(...landed.position));
+    expect(controller.stepOrbit(clock.tick(16))).toBe(false);
+    reference.controller.dispose();
+    controller.dispose();
+  });
+
+  it('lands a glide that gets no frames once the cap has passed', () => {
+    const { controller, onViewSettled } = createController(false);
+    const clock = frameClock();
+    controller.beginOrbitDrag();
+    controller.orbitByPixels(240, 0);
+    controller.stepOrbit(clock.tick(16));
+    controller.endOrbitDrag();
+    const released = controller.activeCamera.position.clone();
+    // A hidden tab draws nothing; the settle path lands it after the cap.
+    clock.tick(150);
+    expect(controller.activeCamera.position.distanceTo(released)).toBe(0);
+    clock.tick(200);
+    expect(
+      controller.activeCamera.position.distanceTo(released)
+    ).toBeGreaterThan(0);
+    expect(onViewSettled).toHaveBeenLastCalledWith(controller.capture());
+    expect(controller.stepOrbit(clock.tick(16))).toBe(false);
+    controller.dispose();
+  });
+
+  it('hands a grab mid-glide back to tight tracking with no late landing', () => {
+    const { controller } = createController(false);
+    const clock = frameClock();
+    const frameMs = 1000 / 60;
+    controller.beginOrbitDrag();
+    for (let frame = 0; frame < 12; frame += 1) {
+      controller.orbitByPixels(20, 0);
+      controller.stepOrbit(clock.tick(frameMs));
+    }
+    controller.endOrbitDrag();
+    expect(controller.stepOrbit(clock.tick(frameMs))).toBe(true);
+    // Held still, the residue drains on the drag regime's steady decay; a
+    // glide left armed would land it all in one jump at the 200 ms cap.
+    controller.beginOrbitDrag();
+    let previous = controller.controls.getAzimuthalAngle();
+    let previousStep = Infinity;
+    for (let frame = 0; frame < 30; frame += 1) {
+      controller.stepOrbit(clock.tick(frameMs));
+      const azimuth = controller.controls.getAzimuthalAngle();
+      const step = Math.abs(azimuth - previous);
+      expect(step).toBeLessThanOrEqual(previousStep + 1e-12);
+      previous = azimuth;
+      previousStep = step;
+    }
+    controller.endOrbitDrag();
+    controller.dispose();
   });
 });
 
