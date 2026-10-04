@@ -35,8 +35,10 @@ jobs:
           import urllib.parse
           import urllib.request
 
-          # Public GitHub handles only. Never put private names, emails, or a denylist here.
+          # Public GitHub handles and explicitly approved public display names only.
+          # Never put private names, emails, or a denylist here.
           PROTECTED_LOGINS = {"petergstfsn"}
+          PUBLIC_DISPLAY_NAMES = {"petergstfsn": {"Peter"}}
           POLICY = "protected-users"
           NOREPLY = re.compile(r"(?:[0-9]+\+)?([A-Za-z0-9-]+(?:\[bot\])?)@users\.noreply\.github\.com", re.IGNORECASE)
           SHA = re.compile(r"[0-9a-f]{40}")
@@ -50,7 +52,11 @@ jobs:
               if name == "GitHub" and email == "noreply@github.com":
                   return True
               match = NOREPLY.fullmatch(email)
-              return match is not None and name.casefold() == match.group(1).casefold()
+              if match is None:
+                  return False
+              login = match.group(1).casefold()
+              approved = {login} | {value.casefold() for value in PUBLIC_DISPLAY_NAMES.get(login, set())}
+              return name.casefold() in approved
 
 
           def invalid_fields(commit):
@@ -175,6 +181,13 @@ jobs:
               assert invalid_fields(fixture("Example Person", "example@example.invalid", protected)) == ["author", "committer"]
               assert invalid_fields(fixture(protected, protected + "@users.noreply.github.com", protected)) == []
               assert invalid_fields(fixture("example-user", "example-user@users.noreply.github.com", protected)) == ["author", "committer"]
+              for display_name in PUBLIC_DISPLAY_NAMES.get(protected, set()):
+                  assert invalid_fields(fixture(display_name, protected + "@users.noreply.github.com", protected)) == []
+                  assert invalid_fields(fixture(display_name, "123+" + protected + "@users.noreply.github.com", protected)) == []
+                  assert invalid_fields(fixture(display_name, "example-user@users.noreply.github.com", protected)) == ["author", "committer"]
+                  assert not valid_public_identity(display_name, "example-user@users.noreply.github.com")
+                  assert invalid_fields(fixture(display_name, "example-user@users.noreply.github.com", "other-contributor")) == ([] if POLICY == "protected-users" else ["author", "committer"])
+                  assert invalid_fields(fixture(display_name, "example@example.invalid", protected)) == ["author", "committer"]
               contributor = invalid_fields(fixture("Example Contributor", "contributor@example.invalid", "other-contributor"))
               assert contributor == (["author", "committer"] if POLICY == "all-users" else [])
               event = {"pull_request": {"base": {"sha": "a" * 40}, "head": {"sha": "b" * 40}}}
@@ -255,7 +268,7 @@ jobs:
               for commit in commits:
                   for field in invalid_fields(commit):
                       # Never echo names, emails, commit subjects, or response bodies.
-                      print(f"::error::Commit {commit['sha'][:12]} has noncompliant {field} metadata. Use a GitHub username and matching noreply email; run git-privacy-guard verify before pushing.")
+                      print(f"::error::Commit {commit['sha'][:12]} has noncompliant {field} metadata. Use an approved public name and matching GitHub noreply email; run git-privacy-guard verify before pushing.")
                       failures += 1
               print(f"Checked {len(commits)} new commits; {failures} identity violations.")
               return bool(failures)
