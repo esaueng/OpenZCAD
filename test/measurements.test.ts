@@ -389,15 +389,34 @@ describe('measurement workbench records', () => {
       'mm'
     );
     expect(area && measurementExtent(area, [body])).toEqual({
+      bodyId: body.bodyId,
       min: { x: 0, y: 0, z: 30 },
       max: { x: 10, y: 20, z: 30 }
     });
     expect(
       area && measurementToViewportAnnotation(area, DISPLAY, false, [body])
     ).toMatchObject({
-      extent: { min: { z: 30 }, max: { z: 30 } }
+      extent: { bodyId: body.bodyId, min: { z: 30 }, max: { z: 30 } }
     });
-    expect(whole && measurementExtent(whole, [body])).toEqual(body.bbox);
+    expect(whole && measurementExtent(whole, [body])).toEqual({
+      bodyId: body.bodyId,
+      ...body.bbox
+    });
+    // The box comes from whichever bodies it is given — the ones on screen.
+    // A previewed edit that raises the top face to z = 45 moves the box too.
+    const previewed: BodyRepresentation = {
+      ...body,
+      mesh: {
+        ...body.mesh,
+        vertices: body.mesh.vertices.map((value, index) =>
+          index % 3 === 2 && value === 30 ? 45 : value
+        )
+      }
+    };
+    expect(area && measurementExtent(area, [previewed])).toMatchObject({
+      min: { z: 45 },
+      max: { z: 45 }
+    });
     // A span is placed along its own dimension line, and a body that is gone
     // leaves the label on the old model-wide placement.
     expect(line && measurementExtent(line, [body])).toBeNull();

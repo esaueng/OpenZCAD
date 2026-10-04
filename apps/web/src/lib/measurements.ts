@@ -156,10 +156,15 @@ export interface MeasurementViewportAnnotation extends MeasurementAnnotation {
   /**
    * World-space box of the face or body an `anchor` figure describes, so the
    * viewport can stand the label just outside that face rather than outside
-   * the whole model. Derived from the current bodies for display only; never
-   * stored with the measurement.
+   * the whole model. Derived from the bodies the viewport draws, for display
+   * only; never stored with the measurement.
    */
-  extent?: BoundingBox;
+  extent?: MeasurementExtent;
+}
+
+/** A measured face's or body's box, and the body it was read from. */
+export interface MeasurementExtent extends BoundingBox {
+  bodyId: BodyRepresentation['bodyId'];
 }
 
 /** Which graphic each measurement kind earns. */
@@ -1771,12 +1776,14 @@ function faceMeshBounds(
  * The world-space box of the one face or body a point-style figure (an
  * area, a diameter, a body) describes. Null for spans and angles, which the
  * viewport places along their own geometry, and whenever the target does not
- * resolve against the current bodies.
+ * resolve against `bodies` — which must be the bodies the viewport draws, not
+ * the committed ones, or a parameter preview would leave the label beside
+ * the face as it was before the edit.
  */
 export function measurementExtent(
   measurement: Measurement,
   bodies: readonly BodyRepresentation[]
-): BoundingBox | null {
+): MeasurementExtent | null {
   const [target, ...rest] = measurement.targets;
   if (
     annotationGraphic(measurement.kind) !== 'anchor' ||
@@ -1789,14 +1796,17 @@ export function measurementExtent(
   if (!body) {
     return null;
   }
-  if (target.kind === 'body') {
-    return body.bbox;
-  }
-  if (target.kind !== 'face') {
-    return null;
-  }
-  const face = findFace(body, selectionForTarget(target));
-  return face ? faceMeshBounds(body.mesh, face) : null;
+  const face =
+    target.kind === 'face'
+      ? findFace(body, selectionForTarget(target))
+      : undefined;
+  const box =
+    target.kind === 'body'
+      ? body.bbox
+      : face
+        ? faceMeshBounds(body.mesh, face)
+        : null;
+  return box ? { bodyId: body.bodyId, min: box.min, max: box.max } : null;
 }
 
 export function measurementToViewportAnnotation(
