@@ -366,8 +366,10 @@ drag restores the object's stored values; it never deletes persisted text.
 - Files: `machine.ts` region state and capabilities (`count`), `rigs.ts`
   region rig, `App.tsx` `regionExtrudeInputFor` (array), `extrudeInference.ts`.
 - Tests: machine tests for add/remove/clear; `test/e2e/multi-region-extrude.spec.ts`
-  with two rectangles from one handle, the mixed add/cut refusal, and two
-  regions over separate bodies refused.
+  with two rectangles from one handle, the mixed add/cut refusal, two
+  regions over separate bodies refused, and a text-pick preview case: one
+  glyph click must hover, select, arm and preview every region of the word
+  (asserted on the selection count and the preview, not only on the commit).
 
 ### Phase 4 — Feel decisions (each a small PR, only if §6 says yes)
 
@@ -396,17 +398,17 @@ drag restores the object's stored values; it never deletes persisted text.
 
 ## 5. Order and sizing
 
-| PR  | Content                                                              | Depends on | Size         |
-| --- | -------------------------------------------------------------------- | ---------- | ------------ |
-| A   | Phase 0 baseline + doc refresh                                       | —          | S, docs only |
-| B   | Phase 1 sketch move                                                  | A          | M            |
-| K   | Pierce-the-face tool for on-face text add/cut, region-rig chip reset | A          | S            |
-| C   | Phase 2.1–2.2 text card + live outline                               | A          | M            |
-| D   | Phase 2.3–2.4 place/transform/re-entry                               | B, C, K    | M            |
-| E   | Phase 3 multi-region                                                 | A          | M            |
-| F   | Phase 4.1 hover cuts                                                 | decision   | S            |
-| G   | Phase 4.2 glide cap                                                  | decision   | S            |
-| H   | Phase 4.3 + Phase 5 ledger                                           | all        | S, docs      |
+| PR  | Content                                                              | Depends on | Size         | Status (2026-10-04)           |
+| --- | -------------------------------------------------------------------- | ---------- | ------------ | ----------------------------- |
+| A   | Phase 0 baseline + doc refresh                                       | —          | S, docs only | open #582                     |
+| B   | Phase 1 sketch move                                                  | A          | M            | open #585                     |
+| K   | Pierce-the-face tool for on-face text add/cut, region-rig chip reset | A          | S            | **merged** #583 as `1344a52f` |
+| C   | Phase 2.1–2.2 text card + live outline                               | A          | M            | open #587                     |
+| D   | Phase 2.3–2.4 place/transform/re-entry                               | B, C, K    | M            | not started (after B, C)      |
+| E   | Phase 3 multi-region                                                 | A          | M            | open #588                     |
+| F   | Phase 4.1 hover cuts                                                 | decision   | S            | **merged** #586 as `57bd6aca` |
+| G   | Phase 4.2 glide cap                                                  | decision   | S            | open #584                     |
+| H   | Phase 4.3 + Phase 5 ledger                                           | all        | S, docs      | not started (last)            |
 
 B, C and E are independent and can run in parallel sessions; branch per
 PR off `origin/main`, never stack (stacked PRs keep a stale base here).
