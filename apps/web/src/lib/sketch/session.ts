@@ -1182,3 +1182,38 @@ export function sketchMoveChanged(
   }
   return false;
 }
+
+/**
+ * Pointers the viewport ignores because they pressed while another pointer
+ * held a sketch object drag. Each stays ignored — its moves, its release and
+ * its cancel — until its own release or cancel arrives, whether or not the
+ * drag has ended by then: a second finger that outlasts the first must not
+ * land as a selection click the moment the drag lets go.
+ */
+export class SketchMovePointerGate {
+  private readonly ignored = new Set<number>();
+
+  /**
+   * A press. True when it must be ignored: another pointer holds a drag.
+   * A press from a free pointer retires any stale entry for its id, since
+   * a release lost off the canvas would otherwise ignore the id forever.
+   */
+  press(heldPointerId: number | null | undefined, pointerId: number): boolean {
+    if (sketchMovePointerRole(heldPointerId, pointerId) === 'other') {
+      this.ignored.add(pointerId);
+      return true;
+    }
+    this.ignored.delete(pointerId);
+    return false;
+  }
+
+  /** True while this pointer's events are being ignored. */
+  ignores(pointerId: number): boolean {
+    return this.ignored.has(pointerId);
+  }
+
+  /** A release or cancel. True when it ends an ignored press. */
+  release(pointerId: number): boolean {
+    return this.ignored.delete(pointerId);
+  }
+}

@@ -34,6 +34,7 @@ import {
   sketchObjectMovable,
   sketchObjectRotatable,
   sketchMovePointerRole,
+  SketchMovePointerGate,
   sketchMoveChanged,
   rotateTextObject,
   textRotationFromRingDrag,
@@ -796,5 +797,35 @@ describe('a drag that ends where it began commits nothing', () => {
     expect(sketchMoveChanged(text, { ...text, text: 'Bob' }, resolve)).toBe(
       true
     );
+  });
+});
+
+describe('SketchMovePointerGate', () => {
+  it('ignores a second pointer through its own release, in either order', () => {
+    const gate = new SketchMovePointerGate();
+    // Pointer 1 presses with no drag held and starts one.
+    expect(gate.press(null, 1)).toBe(false);
+    // Pointer 2 presses while 1 holds the drag: ignored, moves included.
+    expect(gate.press(1, 2)).toBe(true);
+    expect(gate.ignores(2)).toBe(true);
+    // Pointer 1 releases first and commits: its release is not swallowed.
+    expect(gate.release(1)).toBe(false);
+    // The drag is over, but pointer 2's late release is still swallowed,
+    // so it cannot land as a selection click.
+    expect(gate.ignores(2)).toBe(true);
+    expect(gate.release(2)).toBe(true);
+    expect(gate.ignores(2)).toBe(false);
+    // The usual order works too: 2 lets go while 1 still holds the drag.
+    expect(gate.press(1, 3)).toBe(true);
+    expect(gate.release(3)).toBe(true);
+    expect(gate.release(3)).toBe(false);
+  });
+
+  it('a fresh press retires an ignored id whose release never arrived', () => {
+    const gate = new SketchMovePointerGate();
+    expect(gate.press(1, 2)).toBe(true);
+    // Pointer 2's release was lost off the canvas; ids are reused.
+    expect(gate.press(null, 2)).toBe(false);
+    expect(gate.ignores(2)).toBe(false);
   });
 });

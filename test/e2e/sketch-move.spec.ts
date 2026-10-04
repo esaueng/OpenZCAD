@@ -20,7 +20,34 @@ async function openTopSketch(page: Page, name: string) {
   await page.getByRole('button', { name: /^Sketch \(S\)/ }).click();
   await page.getByRole('button', { name: 'Top (XY)' }).click();
   await expect(page.locator('.sketch-rail')).toBeVisible();
+  await waitForStillViewport(page);
   return page.getByRole('toolbar', { name: 'Sketch tools' });
+}
+
+/**
+ * Waits for the sketch entry glide to land. The render loop draws on demand
+ * and stops once nothing moves, so a frame counter that holds still across
+ * a window proves the camera is at rest; screen points taken before that
+ * map to a different spot on the plane once the glide finishes.
+ */
+async function waitForStillViewport(page: Page) {
+  const canvas = page.locator('.viewer-host canvas');
+  const frames = async () =>
+    Number(
+      (await canvas.evaluate(
+        (element) => (element as HTMLElement).dataset.e2eFrames
+      )) ?? '0'
+    );
+  await expect
+    .poll(
+      async () => {
+        const before = await frames();
+        await page.waitForTimeout(400);
+        return (await frames()) - before;
+      },
+      { timeout: 20_000 }
+    )
+    .toBe(0);
 }
 
 /**
@@ -71,6 +98,9 @@ async function selectCircle(page: Page, center: { x: number; y: number }) {
 async function grabHandleCenter(page: Page) {
   const handle = page.locator('.sketch-grab-handle');
   await expect(handle).toBeVisible();
+  // The view can still be moving after a selection lands, so read the
+  // handle once the loop is still.
+  await waitForStillViewport(page);
   const box = await handle.boundingBox();
   expect(box).not.toBeNull();
   return { x: box!.x + box!.width / 2, y: box!.y + box!.height / 2 };
@@ -135,19 +165,62 @@ test('dragging a text origin moves it, and its ring turns it', async ({
   };
   expect(`${placed.x},${placed.y}`).not.toBe(`${target.x},${target.y}`);
 
+  // Where the circle sits on screen now: placing the text can reframe the
+  // view, so the point it was drawn at is stale. The drag's own readout
+  // calibrates the plane: with Shift held nothing snaps, and the readout is
+  // the exact origin under the pointer.
   const origin = await grabHandleCenter(page);
+  const readout = async () => {
+    const text = (await page.locator('.sketch-dim-label').textContent()) ?? '';
+    const match = /X (-?[\d.]+) · Y (-?[\d.]+)/.exec(text);
+    expect(match, text).not.toBeNull();
+    return { x: Number(match![1]), y: Number(match![2]) };
+  };
   await page.mouse.move(origin.x, origin.y);
   await page.mouse.down();
-  await page.mouse.move(circleCenter!.x - 2, circleCenter!.y + 3, {
-    steps: 12
+  await page.keyboard.down('Shift');
+  const across = { x: origin.x - 300, y: origin.y };
+  await page.mouse.move(across.x, across.y, { steps: 8 });
+  const acrossAt = await readout();
+  const up = { x: across.x, y: across.y - 100 };
+  await page.mouse.move(up.x, up.y, { steps: 4 });
+  const upAt = await readout();
+  await page.keyboard.up('Shift');
+  // Screen-to-plane is linear here; two strokes give its columns, so the
+  // circle's screen point follows whatever the camera did meanwhile.
+  const col1 = {
+    x: (acrossAt.x - Number(placed.x)) / (across.x - origin.x),
+    y: (acrossAt.y - Number(placed.y)) / (across.x - origin.x)
+  };
+  const col2 = {
+    x: (upAt.x - acrossAt.x) / (up.y - across.y),
+    y: (upAt.y - acrossAt.y) / (up.y - across.y)
+  };
+  const want = {
+    x: Number(target.x) - upAt.x,
+    y: Number(target.y) - upAt.y
+  };
+  const det = col1.x * col2.y - col2.x * col1.y;
+  const circleOnScreen = {
+    x: up.x + (want.x * col2.y - col2.x * want.y) / det,
+    y: up.y + (col1.x * want.y - want.x * col1.y) / det
+  };
+  // A few pixels short of the centre: the snap decides where it lands.
+  await page.mouse.move(circleOnScreen.x - 2, circleOnScreen.y + 3, {
+    steps: 8
   });
+  await expect(page.locator('.sketch-snap-marker')).toHaveAttribute(
+    'data-label',
+    'Center'
+  );
   await page.mouse.up();
   await expect(page.getByRole('contentinfo')).toContainText('Moved text.');
   await expect(editor.getByLabel('X', { exact: true })).toHaveValue(target.x);
   await expect(editor.getByLabel('Y', { exact: true })).toHaveValue(target.y);
 
-  // The ring sits around the origin; a quarter turn counter-clockwise on
-  // screen is +90° on the top plane.
+  // The ring sits around the origin. A quarter turn counter-clockwise on
+  // screen is +90° on a plane seen head-on; measure it through the same
+  // screen-to-plane map rather than assume the view is square to the plane.
   const ring = page.locator('.sketch-rotate-ring');
   await expect(ring).toBeVisible();
   const ringBox = await ring.boundingBox();
@@ -168,7 +241,24 @@ test('dragging a text origin moves it, and its ring turns it', async ({
   }
   await page.mouse.up();
   await expect(page.getByRole('contentinfo')).toContainText('Rotated text.');
-  await expect(editor.getByLabel('Rotation')).toHaveValue('90');
+  const planeAngle = (dx: number, dy: number) =>
+    Math.atan2(col1.y * dx + col2.y * dy, col1.x * dx + col2.x * dy);
+  const turned =
+    ((planeAngle(0, -radius) - planeAngle(radius, 0)) * 180) / Math.PI;
+  const expected = Math.round(((((turned + 180) % 360) + 360) % 360) - 180);
+  expect(Math.abs(Math.abs(expected) - 90)).toBeLessThanOrEqual(10);
+  // Within a degree or two: the ring's drawn centre is whole pixels, and
+  // a half-pixel at this radius is about a degree of turn.
+  await expect
+    .poll(async () =>
+      Math.abs(
+        Number(await editor.getByLabel('Rotation').inputValue()) - expected
+      )
+    )
+    .toBeLessThanOrEqual(2);
+  expect(
+    Number.isInteger(Number(await editor.getByLabel('Rotation').inputValue()))
+  ).toBe(true);
   // Turning is not moving: the origin stayed on the centre.
   await expect(editor.getByLabel('X', { exact: true })).toHaveValue(target.x);
   await expect(editor.getByLabel('Y', { exact: true })).toHaveValue(target.y);
@@ -382,4 +472,64 @@ test('a click on the grab point keeps the object selected', async ({
   await expect(page.getByRole('contentinfo')).not.toContainText(
     'Moved circle.'
   );
+});
+
+test('a second pointer that outlasts the drag does not deselect', async ({
+  page
+}) => {
+  test.setTimeout(90_000);
+  const sketchTools = await openTopSketch(page, 'Sketch Move Late Release');
+  const [first, second] = await bareCanvasDrags(page, {
+    count: 2,
+    dragX: CIRCLE_DRAG_PX
+  });
+  await drawCircles(page, sketchTools, [first!, second!]);
+  const target = await selectCircle(page, second!);
+  const moved = await selectCircle(page, first!);
+
+  const handle = await grabHandleCenter(page);
+  await page.mouse.move(handle.x, handle.y);
+  await page.mouse.down();
+  await page.mouse.move(handle.x + 20, handle.y + 10, { steps: 4 });
+  const grab = page.locator('.sketch-grab-handle');
+  await expect(grab).toHaveAttribute('data-active', 'true');
+
+  // A second pointer presses on empty canvas while the mouse holds the
+  // drag, and is still down when the mouse lets go.
+  const canvas = page.locator('.viewer-host canvas');
+  const empty = {
+    x: first!.x - CIRCLE_DRAG_PX * 2,
+    y: first!.y + CIRCLE_DRAG_PX * 2
+  };
+  const touch = (type: string, buttons: number) =>
+    canvas.evaluate(
+      (element, args) => {
+        element.dispatchEvent(
+          new PointerEvent(args.type, {
+            bubbles: true,
+            cancelable: true,
+            pointerId: 7,
+            pointerType: 'touch',
+            isPrimary: false,
+            button: 0,
+            buttons: args.buttons,
+            clientX: args.x,
+            clientY: args.y
+          })
+        );
+      },
+      { type, buttons, ...empty }
+    );
+  await touch('pointerdown', 1);
+
+  await page.mouse.move(second!.x + 3, second!.y - 2, { steps: 8 });
+  await page.mouse.up();
+  // Only now does the second pointer let go, over empty canvas: a click
+  // there would deselect, and the commit's selection guard would refuse it.
+  await touch('pointerup', 0);
+
+  await expect(page.getByRole('contentinfo')).toContainText('Moved circle.');
+  await expect(moved.editor).toBeVisible();
+  await expect(moved.editor.getByLabel('Center X')).toHaveValue(target.x);
+  await expect(moved.editor.getByLabel('Center Y')).toHaveValue(target.y);
 });

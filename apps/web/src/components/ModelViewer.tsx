@@ -223,6 +223,7 @@ import {
   sketchObjectRotatable,
   snapTargetsForObject,
   sketchMoveChanged,
+  SketchMovePointerGate,
   sketchMovePointerRole,
   rotateTextObject,
   textRotationFromRingDrag,
@@ -2778,6 +2779,8 @@ export function ModelViewer({
      * release still arrives, and must not read as a selection click.
      */
     let suppressedSketchReleaseId: number | null = null;
+    /** Pointers that pressed while another pointer held a sketch drag. */
+    const sketchMovePointerGate = new SketchMovePointerGate();
     let sketchSnapCycle = 0;
     let latestSketchPointerEvent: PointerEvent | null = null;
     /**
@@ -6529,7 +6532,10 @@ export function ModelViewer({
           updateSketchMove(event);
           return;
         }
-        if (role === 'other') {
+        if (
+          role === 'other' ||
+          sketchMovePointerGate.ignores(event.pointerId)
+        ) {
           return;
         }
         if (event.buttons === 0 || event.buttons === 1) {
@@ -6897,14 +6903,15 @@ export function ModelViewer({
 
     const handlePointerDown = (event: PointerEvent) => {
       if (
-        sketchMovePointerRole(
+        sketchMovePointerGate.press(
           sketchMoveRef.current?.pointerId,
           event.pointerId
-        ) === 'other'
+        )
       ) {
         // A second pointer while one holds a sketch object: not a second
         // move, not a selection, not an orbit. Taking it would retarget the
-        // gesture tracking out from under the drag.
+        // gesture tracking out from under the drag, and it stays ignored
+        // until its own release, even if the drag ends first.
         event.preventDefault();
         return;
       }
@@ -7289,12 +7296,14 @@ export function ModelViewer({
     };
     const handlePointerUp = (event: PointerEvent) => {
       if (
+        sketchMovePointerGate.release(event.pointerId) ||
         sketchMovePointerRole(
           sketchMoveRef.current?.pointerId,
           event.pointerId
         ) === 'other'
       ) {
-        // Only the pointer holding the drag can end it.
+        // Only the pointer holding the drag can end it, and a pointer the
+        // viewport ignored stays ignored through its own release.
         return;
       }
       // The last pointer position may still be waiting for a frame. Apply it
@@ -7754,6 +7763,7 @@ export function ModelViewer({
     };
     const handlePointerCancel = (event: PointerEvent) => {
       if (
+        sketchMovePointerGate.release(event.pointerId) ||
         sketchMovePointerRole(
           sketchMoveRef.current?.pointerId,
           event.pointerId
