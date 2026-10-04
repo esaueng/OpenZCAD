@@ -468,6 +468,7 @@ import {
   idleWorkspaceHint
 } from './lib/platformShortcut';
 import { retireStatus, type StatusEntry } from './lib/statusLifetime';
+import { LIBRARY_MODE_STATUS } from './lib/libraryStatus';
 import { NumericKeypad, type KeypadRequest } from './components/NumericKeypad';
 import type { DimensionMode } from './lib/keypad';
 import {
@@ -1267,19 +1268,6 @@ const START_SCREEN_DEMOS =
     ? [...DEMO_DEFINITIONS, VISUAL_SELECTION_ACCEPTANCE_DEMO]
     : DEMO_DEFINITIONS;
 
-const DEMO_PROJECT_IDS = new Set<string>(
-  START_SCREEN_DEMOS.map((demo) => demo.projectId)
-);
-
-/**
- * Counts what the start screen header counts — the user's own projects. The
- * merged list also carries the demo parts, so status lines built from its raw
- * length contradicted the header by exactly the demo count.
- */
-function userProjectCount(projects: readonly { projectId: string }[]): number {
-  return projects.filter((project) => !DEMO_PROJECT_IDS.has(project.projectId))
-    .length;
-}
 
 declare global {
   interface Window {
@@ -2027,7 +2015,9 @@ export function App() {
       ? 'face'
       : effectiveSelectionFilter(manualSelectionFilter, tool);
   const [statusEntry, setStatusEntry] = useState<StatusEntry>(() => ({
-    text: cloudFunctionsEnabled ? 'Checking beta API...' : 'Offline workspace',
+    text: cloudFunctionsEnabled
+      ? LIBRARY_MODE_STATUS.checking
+      : LIBRARY_MODE_STATUS.offline,
     at: Date.now(),
     sticky: false
   }));
@@ -2056,7 +2046,7 @@ export function App() {
   const [toast, setToast] = useState<ToastModel | null>(null);
   /**
    * A newer build is out. The workspace says so in a toast; the start screen
-   * has no toast lane, so it keeps a Reload offer in its footer.
+   * has no toast lane, so it keeps a Reload offer above its cloud card.
    */
   const [newBuildAvailable, setNewBuildAvailable] = useState(false);
   const toastIdRef = useRef(0);
@@ -4581,12 +4571,12 @@ export function App() {
         // parts, and a second count here said the same thing twice.
         setStatus(
           !bootCloudFunctionsEnabledRef.current
-            ? 'Offline mode'
+            ? LIBRARY_MODE_STATUS.offlineMode
             : activeSession && listed.remoteReached
-              ? 'Cloud profile ready'
+              ? LIBRARY_MODE_STATUS.cloudReady
               : health
-                ? 'Local workspace'
-                : 'Offline workspace'
+                ? LIBRARY_MODE_STATUS.local
+                : LIBRARY_MODE_STATUS.offline
         );
       } catch (error) {
         if (!cancelled) {
@@ -7485,7 +7475,7 @@ export function App() {
       setCloudProjectIds(listed.cloudProjectIds);
       setAccountProjectListReached(listed.remoteReached);
       setSettingsMessage('Cloud profile connected.');
-      setStatus('Cloud profile ready');
+      setStatus(LIBRARY_MODE_STATUS.cloudReady);
     } catch {
       if (cloudFunctionsEnabledRef.current) {
         setSettingsMessage(
@@ -8691,13 +8681,9 @@ export function App() {
       setCloudProjectIds(listed.cloudProjectIds);
       setAccountProjectListReached(listed.remoteReached);
       setCloudAvailable(listed.remoteReached);
-      // The shelf heading already counts the parts, so a plain listing
-      // leaves the footer empty; it speaks only when it has news.
-      setStatus(
-        session && !listed.remoteReached
-          ? `Cloud projects are temporarily unavailable · ${countLabel(userProjectCount(listed.projects), 'project', 'projects')} remain on this device.`
-          : ''
-      );
+      // The shelf heading counts the parts and the cloud card says whether
+      // the account answered, so a listing leaves the status line empty.
+      setStatus('');
     } catch (error) {
       setStatus(errorMessage(error, 'Failed to refresh projects.'));
     }
@@ -17151,6 +17137,7 @@ export function App() {
           onOpen={(projectId) => void handleOpenProject(projectId)}
           onOpenDemo={(definition) => void handleOpenDemo(definition)}
           onOpenSettings={openSettings}
+          onSignIn={() => openSettingsAt('account')}
           onDuplicate={(project) => void handleDuplicateProject(project)}
           loadProperties={loadProperties}
           cloudProjectIds={cloudProjectIds}
