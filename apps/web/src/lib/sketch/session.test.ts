@@ -1,6 +1,8 @@
 import { describe, expect, it, vi } from 'vitest';
 import type { SketchObjectData } from '@openzcad/shared';
 import { PLANE_BASES } from '@openzcad/geometry';
+import { projectToScreen } from '@openzcad/viewport';
+import * as THREE from 'three';
 import {
   arcDimension,
   arcObjectFromPoints,
@@ -34,6 +36,10 @@ import {
   sketchObjectMovable,
   sketchObjectRotatable,
   sketchMovePointerRole,
+  rebaseSketchMove,
+  sketchHandleAtScreen,
+  SKETCH_ROTATE_RING_BAND_PX,
+  SKETCH_ROTATE_RING_RADIUS_PX,
   SketchMovePointerGate,
   sketchMoveChanged,
   rotateTextObject,
@@ -845,5 +851,129 @@ describe('SketchMovePointerGate suppression', () => {
     expect(gate.ignores(1)).toBe(false);
     // Pointer 2 was never suppressed: its release is its own.
     expect(gate.release(2)).toBe(false);
+  });
+});
+
+describe('a move edited under the drag', () => {
+  const resolve = (value: unknown) => Number(value);
+  const circle: SketchObjectData = {
+    objectKind: 'circle',
+    radius: 5,
+    centerX: -15,
+    centerY: 20
+  };
+
+  it('keeps the concurrent edit and applies the drag on top of it', () => {
+    const moved = placeSketchObjectGrabPoint(circle, { x: 0, y: 0 });
+    // A collaborator changed the radius while the centre was held.
+    const current: SketchObjectData = { ...circle, radius: 8 };
+    expect(rebaseSketchMove(circle, moved, current, resolve)).toEqual({
+      objectKind: 'circle',
+      radius: 8,
+      centerX: 0,
+      centerY: 0
+    });
+    // Unedited: the drag's own data, untouched.
+    expect(rebaseSketchMove(circle, moved, circle, resolve)).toBe(moved);
+  });
+
+  it('moves a concurrently moved object by the drag’s delta', () => {
+    const text: SketchObjectData = {
+      objectKind: 'text',
+      text: 'Boa',
+      fontFamily: 'open-sans',
+      fontStyle: 'regular',
+      size: 8,
+      x: 3,
+      y: 4
+    };
+    const moved = placeSketchObjectGrabPoint(text, { x: 10, y: 4 });
+    const current: SketchObjectData = { ...text, text: 'Bob', size: 9, x: 5 };
+    expect(rebaseSketchMove(text, moved, current, resolve)).toEqual({
+      ...current,
+      x: 12,
+      y: 4
+    });
+    // A turn replays as a turn from wherever the rotation now is.
+    const turned = rotateTextObject(text, 30);
+    expect(
+      rebaseSketchMove(text, turned, { ...text, rotation: 160 }, resolve)
+    ).toEqual({ ...text, rotation: -170 });
+  });
+
+  it('refuses when the drag can no longer apply', () => {
+    const moved = placeSketchObjectGrabPoint(circle, { x: 0, y: 0 });
+    expect(
+      rebaseSketchMove(circle, moved, { ...circle, centerX: 'offset' }, resolve)
+    ).toBeNull();
+    expect(
+      rebaseSketchMove(
+        circle,
+        moved,
+        { objectKind: 'line', x1: 0, y1: 0, x2: 1, y2: 1 },
+        resolve
+      )
+    ).toBeNull();
+  });
+});
+
+describe('sketchHandleAtScreen', () => {
+  it('hits the visible ring edge on an obliquely seen plane', () => {
+    // The XY plane seen from well off its normal, as after an orbit.
+    const width = 1280;
+    const height = 720;
+    const camera = new THREE.PerspectiveCamera(45, width / height, 0.1, 5000);
+    camera.position.set(0, -160, 90);
+    camera.lookAt(0, 0, 0);
+    camera.updateMatrixWorld();
+    const origin = new THREE.Vector3(0, 0, 0);
+    const grab = projectToScreen(origin, camera, width, height)!;
+    expect(grab).not.toBeNull();
+
+    // Plane point under a screen pixel, by ray against z = 0.
+    const planeAt = (pixel: { x: number; y: number }) => {
+      const ndc = new THREE.Vector2(
+        (pixel.x / width) * 2 - 1,
+        1 - (pixel.y / height) * 2
+      );
+      const raycaster = new THREE.Raycaster();
+      raycaster.setFromCamera(ndc, camera);
+      return raycaster.ray.intersectPlane(
+        new THREE.Plane(new THREE.Vector3(0, 0, 1), 0),
+        new THREE.Vector3()
+      )!;
+    };
+    const worldPerPixel =
+      (2 *
+        camera.position.distanceTo(origin) *
+        Math.tan(THREE.MathUtils.degToRad(camera.fov / 2))) /
+      height;
+
+    // Presses on the drawn ring, beside and above its centre.
+    for (const offset of [
+      { x: SKETCH_ROTATE_RING_RADIUS_PX, y: 0 },
+      { x: 0, y: -SKETCH_ROTATE_RING_RADIUS_PX }
+    ]) {
+      const pointer = { x: grab.x + offset.x, y: grab.y + offset.y };
+      expect(sketchHandleAtScreen(pointer, grab, true)).toBe('rotate');
+      expect(sketchHandleAtScreen(pointer, grab, false)).toBeNull();
+    }
+    // The foreshortened press, measured on the plane instead, lands well
+    // outside the ring's band: the miss this test guards against.
+    const above = planeAt({
+      x: grab.x,
+      y: grab.y - SKETCH_ROTATE_RING_RADIUS_PX
+    });
+    const planePixels = above.distanceTo(origin) / worldPerPixel;
+    expect(
+      Math.abs(planePixels - SKETCH_ROTATE_RING_RADIUS_PX)
+    ).toBeGreaterThan(SKETCH_ROTATE_RING_BAND_PX);
+
+    expect(
+      sketchHandleAtScreen({ x: grab.x + 4, y: grab.y - 3 }, grab, true)
+    ).toBe('translate');
+    expect(
+      sketchHandleAtScreen({ x: grab.x + 80, y: grab.y }, grab, true)
+    ).toBeNull();
   });
 });

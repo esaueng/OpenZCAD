@@ -1,4 +1,5 @@
 import type { PlaneBasis } from '@openzcad/geometry';
+import type { SketchMoveHandle } from '../interaction/machine';
 import type {
   SketchObjectData,
   SketchPlaneFrame,
@@ -1226,4 +1227,98 @@ export class SketchMovePointerGate {
   release(pointerId: number): boolean {
     return this.ignored.delete(pointerId);
   }
+}
+
+/**
+ * Screen radius, in CSS pixels, within which a press takes the selected
+ * object's grab point. Matches the drawn handle plus a finger's slack.
+ */
+export const SKETCH_GRAB_RADIUS_PX = 11;
+/**
+ * The text rotation ring's radius and the half-width of the band a press
+ * must land in. The ring is drawn by `.sketch-rotate-ring` at this size.
+ */
+export const SKETCH_ROTATE_RING_RADIUS_PX = 34;
+export const SKETCH_ROTATE_RING_BAND_PX = 7;
+
+/**
+ * Which drawn handle a press lands on, measured where both are drawn: in
+ * screen pixels. The dot and the ring are screen-space circles around the
+ * grab point's projection, so a press on any visible part of them hits,
+ * however obliquely the plane is seen; a plane-space distance would stretch
+ * along the foreshortened axis and miss.
+ */
+export function sketchHandleAtScreen(
+  pointer: SketchPoint,
+  grab: SketchPoint,
+  rotatable: boolean
+): SketchMoveHandle | null {
+  const distance = Math.hypot(pointer.x - grab.x, pointer.y - grab.y);
+  if (distance <= SKETCH_GRAB_RADIUS_PX) {
+    return 'translate';
+  }
+  if (
+    rotatable &&
+    Math.abs(distance - SKETCH_ROTATE_RING_RADIUS_PX) <=
+      SKETCH_ROTATE_RING_BAND_PX
+  ) {
+    return 'rotate';
+  }
+  return null;
+}
+
+/**
+ * The drag's change replayed onto the object as it is now. Another tab or a
+ * collaborator may have edited the object while the pointer held it; the
+ * drag owns only its position (and a text rotation), so those move by the
+ * drag's delta and every other field keeps the concurrent edit. Null when
+ * the move can no longer apply: the object changed kind, or the field the
+ * drag writes now holds an expression.
+ */
+export function rebaseSketchMove(
+  original: SketchObjectData,
+  moved: SketchObjectData,
+  current: SketchObjectData,
+  resolve: (value: unknown) => number
+): SketchObjectData | null {
+  if (JSON.stringify(current) === JSON.stringify(original)) {
+    return moved;
+  }
+  if (
+    current.objectKind !== original.objectKind ||
+    !sketchObjectMovable(current)
+  ) {
+    return null;
+  }
+  const before = original as unknown as Record<string, unknown>;
+  const after = moved as unknown as Record<string, unknown>;
+  const next = { ...current } as unknown as Record<string, unknown>;
+  for (const field of positionFields(original).flat()) {
+    const delta = resolve(after[field]) - resolve(before[field]);
+    if (delta === 0) {
+      continue;
+    }
+    // Where the concurrent edit left the field alone, take the dragged
+    // value itself, so a snapped point stays bit-exact.
+    next[field] =
+      resolve(next[field]) === resolve(before[field])
+        ? after[field]
+        : resolve(next[field]) + delta;
+  }
+  if (original.objectKind === 'text') {
+    const angle = (value: unknown) =>
+      value === undefined ? 0 : resolve(value);
+    const turn = angle(after.rotation) - angle(before.rotation);
+    if (turn !== 0) {
+      if (next.rotation !== undefined && !isLiteralNumber(next.rotation)) {
+        return null;
+      }
+      const turned = angle(next.rotation) + turn;
+      next.rotation = ((((turned + 180) % 360) + 360) % 360) - 180 || 0;
+      if (next.rotation === -180) {
+        next.rotation = 180;
+      }
+    }
+  }
+  return next as unknown as SketchObjectData;
 }

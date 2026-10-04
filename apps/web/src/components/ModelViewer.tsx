@@ -229,6 +229,8 @@ import {
   sketchObjectRotatable,
   snapTargetsForObject,
   sketchMoveChanged,
+  sketchHandleAtScreen,
+  rebaseSketchMove,
   SketchMovePointerGate,
   sketchMovePointerRole,
   rotateTextObject,
@@ -384,18 +386,6 @@ export interface SketchModeState {
   textOutlineBudgetError?: string | null;
   dimensions: SketchDimensionAnnotation[];
 }
-
-/**
- * Screen radius, in CSS pixels, within which a press takes the selected
- * object's grab point. Matches the drawn handle plus a finger's slack.
- */
-const SKETCH_GRAB_RADIUS_PX = 11;
-/**
- * The text rotation ring's radius and the half-width of the band a press
- * must land in. The ring is drawn by `.sketch-rotate-ring` at this size.
- */
-const SKETCH_ROTATE_RING_RADIUS_PX = 34;
-const SKETCH_ROTATE_RING_BAND_PX = 7;
 
 /** A held drag of the selected sketch object (see `sketchMoveRef`). */
 interface SketchMoveDrag {
@@ -6203,17 +6193,32 @@ export function ModelViewer({
       let grab: SketchPoint | null = null;
       let anchored = false;
       if (grabPoint) {
-        const distancePx =
-          Math.hypot(press.x - grabPoint.x, press.y - grabPoint.y) / perPixel;
-        if (distancePx <= SKETCH_GRAB_RADIUS_PX) {
+        // Hit-test where the dot and ring are drawn, in screen pixels.
+        const basis = mode.basis;
+        const grabScreen = projectToScreen(
+          new THREE.Vector3(
+            basis.origin.x + basis.u.x * grabPoint.x + basis.v.x * grabPoint.y,
+            basis.origin.y + basis.u.y * grabPoint.x + basis.v.y * grabPoint.y,
+            basis.origin.z + basis.u.z * grabPoint.x + basis.v.z * grabPoint.y
+          ),
+          context.activeCamera,
+          renderer.domElement.clientWidth,
+          renderer.domElement.clientHeight
+        );
+        const pointer = hud.toLocal(event.clientX, event.clientY);
+        const hit =
+          grabScreen && pointer
+            ? sketchHandleAtScreen(
+                pointer,
+                grabScreen,
+                sketchObjectRotatable(data)
+              )
+            : null;
+        if (hit === 'translate') {
           handle = 'translate';
           grab = grabPoint;
           anchored = true;
-        } else if (
-          sketchObjectRotatable(data) &&
-          Math.abs(distancePx - SKETCH_ROTATE_RING_RADIUS_PX) <=
-            SKETCH_ROTATE_RING_BAND_PX
-        ) {
+        } else if (hit === 'rotate') {
           handle = 'rotate';
           grab = press;
         }
@@ -6405,10 +6410,29 @@ export function ModelViewer({
         redraw();
         return;
       }
+      // Another tab or a collaborator may have edited the object while it
+      // was held: replay the drag onto the object as it is now, so the move
+      // lands without discarding their change.
+      const current = sketchModeRef.current?.objects.find(
+        (object) => object.id === drag.objectId
+      )?.data;
+      const rebased =
+        current && mode
+          ? rebaseSketchMove(
+              drag.original,
+              preview,
+              current,
+              sketchModeResolver(mode)
+            )
+          : null;
+      if (!rebased || !current) {
+        redraw();
+        return;
+      }
       const pending = {
         objectId: drag.objectId,
-        data: preview,
-        original: drag.original
+        data: rebased,
+        original: current
       };
       sketchMoveCommitPendingRef.current = pending;
       const settle = (accepted: boolean) => {
@@ -6429,7 +6453,7 @@ export function ModelViewer({
         const result =
           sketchModeRef.current?.selectedObjectId === drag.objectId
             ? onSketchMoveCommitRef.current?.(
-                preview,
+                rebased,
                 drag.handle === 'rotate' ? 'Rotate' : 'Move'
               )
             : false;
