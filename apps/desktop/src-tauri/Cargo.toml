@@ -19,7 +19,7 @@ webdriver = ["dep:tauri-plugin-wdio-webdriver"]
 tauri-build = { version = "2", features = [] }
 
 [dependencies]
-base64 = "0.22.1"
+base64 = "0.23.1"
 getrandom = "0.3.4"
 reqwest = { version = "0.12.15", default-features = false, features = ["json", "rustls-tls-webpki-roots", "stream", "system-proxy"] }
 rfd = "0.15"
