@@ -18,7 +18,7 @@ import type { ProjectDocument, SketchObjectData } from '@openzcad/shared';
 import type { SketchTextDraft } from '../lib/interaction/machine';
 import type { SketchPoint } from '../lib/sketch/session';
 import {
-  textDraftPlaceable,
+  canPlaceTextDraft,
   textObjectFromPoint,
   textPlacementBudgetError
 } from '../lib/sketch/textPlacement';
@@ -100,7 +100,8 @@ export function SketchTextCard({
     [document, sketchId, draft.text]
   );
   const canPlace =
-    textDraftPlaceable(draft) && sizeValid && !error && !disabled;
+    sizeValid &&
+    canPlaceTextDraft(draft, { busy: disabled, budgetError: error });
 
   function submit(event: FormEvent) {
     // Enter in a field is not placement; the click on the plane is.

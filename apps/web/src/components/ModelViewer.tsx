@@ -230,7 +230,7 @@ import {
   type SnapTargetKind
 } from '../lib/sketch/session';
 import {
-  textDraftPlaceable,
+  canPlaceTextDraft,
   textObjectFromPoint
 } from '../lib/sketch/textPlacement';
 import type {
@@ -368,6 +368,14 @@ export interface SketchModeState {
    * while the string is empty.
    */
   textDraft?: SketchTextDraft | null;
+  /**
+   * Why the draft cannot be placed under the text budget, evaluated on the
+   * document with the draft and undo history included — what the card
+   * shows and the commit asserts. A refused draft draws no outline.
+   */
+  textDraftBudgetError?: string | null;
+  /** A solve or rebuild owns the sketch: the card is disabled, so is a click. */
+  textDraftBusy?: boolean;
 }
 
 /** Sketch curves + detected regions, rendered when direct manipulation is on. */
@@ -6945,10 +6953,16 @@ export function ModelViewer({
           // One click places the baseline origin; everything else about a text
           // object is the card's draft, so there is no drag and no second
           // click. A draft the card cannot place (no string, a size that
-          // does not resolve) places nothing here either, and the workspace
-          // refuses a string over the text budget with its reason.
+          // does not resolve, over budget, a solve in flight) places nothing
+          // here either: one rule decides for both.
           const draft = mode.textDraft;
-          if (draft && textDraftPlaceable(draft)) {
+          if (
+            draft &&
+            canPlaceTextDraft(draft, {
+              busy: mode.textDraftBusy,
+              budgetError: mode.textDraftBudgetError
+            })
+          ) {
             onSketchCommitRef.current(textObjectFromPoint(point, draft));
           }
           requestRender();
@@ -9955,7 +9969,7 @@ export function ModelViewer({
         textObjectFromPoint(textAnchorRef.current ?? { x: 0, y: 0 }, draft),
         sketchMode.objects,
         resolve,
-        sketchMode.textOutlineBudgetError
+        sketchMode.textDraftBudgetError ?? sketchMode.textOutlineBudgetError
       );
     }
     contextRef.current?.requestRender();

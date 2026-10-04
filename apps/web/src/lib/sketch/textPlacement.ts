@@ -49,6 +49,18 @@ export function textDraftPlaceable(
   return Boolean(draft && draft.text.length > 0 && draft.sizeValid !== false);
 }
 
+/**
+ * The one placement rule the card's Place and the plane click both consult:
+ * a placeable draft, nothing busy (a solve or rebuild in flight owns the
+ * sketch until it answers), and no budget refusal for the draft.
+ */
+export function canPlaceTextDraft(
+  draft: SketchTextDraft | null | undefined,
+  blockers: { busy?: boolean; budgetError?: string | null }
+): boolean {
+  return textDraftPlaceable(draft) && !blockers.busy && !blockers.budgetError;
+}
+
 /** Every node key the budget walk can see: current nodes and undo history. */
 function budgetNodeKeys(
   document: Pick<ProjectDocument, 'nodes' | 'editHistory'>

@@ -13,7 +13,11 @@ import {
   type ProjectDocument
 } from '@openzcad/shared';
 import { newSketchTextDraft } from '../interaction/machine';
-import { textDraftPlaceable, textPlacementBudgetError } from './textPlacement';
+import {
+  canPlaceTextDraft,
+  textDraftPlaceable,
+  textPlacementBudgetError
+} from './textPlacement';
 
 type BudgetDocument = Pick<ProjectDocument, 'nodes' | 'editHistory'>;
 
@@ -176,5 +180,30 @@ describe('textDraftPlaceable', () => {
     expect(textDraftPlaceable({ ...draft, sizeValid: false })).toBe(false);
     expect(textDraftPlaceable({ ...draft, sizeValid: true })).toBe(true);
     expect(textDraftPlaceable(null)).toBe(false);
+  });
+});
+
+describe('canPlaceTextDraft', () => {
+  const draft = { ...newSketchTextDraft(), text: 'Boa' };
+
+  it('places a placeable draft when nothing blocks it', () => {
+    expect(canPlaceTextDraft(draft, {})).toBe(true);
+    expect(canPlaceTextDraft(draft, { busy: false, budgetError: null })).toBe(
+      true
+    );
+  });
+
+  it('places nothing while a solve or rebuild owns the sketch', () => {
+    // The card disables Place while busy; the plane click asks this same
+    // rule, so a click mid-solve commits nothing either.
+    expect(canPlaceTextDraft(draft, { busy: true })).toBe(false);
+  });
+
+  it('places nothing over budget, or for a draft the card cannot place', () => {
+    expect(
+      canPlaceTextDraft(draft, { budgetError: 'Project text exceeds' })
+    ).toBe(false);
+    expect(canPlaceTextDraft({ ...draft, sizeValid: false }, {})).toBe(false);
+    expect(canPlaceTextDraft({ ...draft, text: '' }, {})).toBe(false);
   });
 });

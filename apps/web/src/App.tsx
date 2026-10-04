@@ -11971,6 +11971,7 @@ export function App() {
       }) ?? [];
     const resolve = (value: unknown): number =>
       evalParamValue(value as ParamValue, parameterScope.scope) ?? 0;
+    const textDraft = composingTextDraft(interaction);
     let profiles: {
       outer: { x: number; y: number }[];
       holes: { x: number; y: number }[][];
@@ -12025,7 +12026,11 @@ export function App() {
       constraintDiagnosticObjectIds: sketchSolveDiagnosticObjectIds,
       textOutlineBudgetError,
       definedObjectIds: sketchDefinedObjectIds,
-      textDraft: composingTextDraft(interaction),
+      textDraft,
+      textDraftBudgetError:
+        textDraft && textDraft.text.length > 0
+          ? textPlacementBudgetError(doc, session.sketchId, textDraft.text)
+          : null,
       dimensions: sketchDimensionAnnotations(
         objects,
         sketch?.constraints ?? [],
@@ -12381,6 +12386,16 @@ export function App() {
     };
   }
   const [sketchSolving, setSketchSolving] = useState(false);
+  // The viewport's copy of the session also knows whether a solve or rebuild
+  // owns the sketch, so a click cannot place text the card has disabled.
+  const sketchModeForViewer = useMemo(
+    () =>
+      sketchModeState && {
+        ...sketchModeState,
+        textDraftBusy: sketchSolving || geometryBusy
+      },
+    [sketchModeState, sketchSolving, geometryBusy]
+  );
   const [sketchDimensionDraft, setSketchDimensionDraft] = useState<{
     kind: DrivingDimensionKind | 'radius';
     picks: ConstraintPick[];
@@ -18752,7 +18767,7 @@ export function App() {
                 type: dragging ? 'drag-engage' : 'drag-release'
               });
             }}
-            sketchMode={modelingLocked ? null : sketchModeState}
+            sketchMode={modelingLocked ? null : sketchModeForViewer}
             sketchTextAnchorRef={sketchTextAnchorRef}
             onSketchCommit={handleSketchCommit}
             onEditSketchDimension={handleEditSketchDimension}

@@ -6,7 +6,13 @@ import { readFile } from 'node:fs/promises';
 import path from 'node:path';
 import { PLANE_BASES, setTextFontProvider } from '@openzcad/geometry';
 import { FontLibrary } from '@openzcad/geometry/text-loader';
-import { MAX_SKETCH_TEXT_OBJECTS } from '@openzcad/shared';
+import {
+  MAX_DOCUMENT_TEXT_OBJECTS,
+  MAX_SKETCH_TEXT_OBJECTS,
+  documentTextBudgetError,
+  type ProjectDocument
+} from '@openzcad/shared';
+import { textPlacementBudgetError } from '../../lib/sketch/textPlacement';
 import type { SketchObjectData } from '@openzcad/shared';
 import {
   buildSketchModeRig,
@@ -300,6 +306,46 @@ describe('text card live outline', () => {
         }))
       ];
       expect(rig.setTextPreview(text('Boa'), objects, resolve)).toBe(0);
+      expect(rig.textPreviewState()).toBeNull();
+    } finally {
+      rig.dispose();
+    }
+  });
+
+  it('draws nothing when undo history has used up the document budget', async () => {
+    await installFonts();
+    // One fewer text object than the document may hold, spread over full
+    // sketches, plus a deleted one only undo history remembers: the document
+    // is at its limit while the active (new) sketch is nowhere near its own.
+    const nodes: Record<string, unknown> = {};
+    for (let index = 0; index < MAX_DOCUMENT_TEXT_OBJECTS - 1; index += 1) {
+      nodes[`text_${index}`] = { kind: 'sketch-object', data: text('x') };
+    }
+    const document = {
+      nodes,
+      editHistory: {
+        entries: [
+          {
+            changes: [
+              {
+                kind: 'value',
+                field: 'nodes',
+                key: 'text_deleted',
+                before: { kind: 'sketch-object', data: text('gone') }
+              }
+            ]
+          }
+        ]
+      }
+    } as unknown as Pick<ProjectDocument, 'nodes' | 'editHistory'>;
+    expect(documentTextBudgetError(document)).toBeNull();
+    // The prospective check the card and the commit use refuses the draft...
+    const refusal = textPlacementBudgetError(document, null, 'Boa');
+    expect(refusal).toMatch(/Project text/);
+    const rig = buildSketchModeRig(basis, resolution);
+    try {
+      // ...and handed to the preview, the outline is not drawn either.
+      expect(rig.setTextPreview(text('Boa'), [], resolve, refusal)).toBe(0);
       expect(rig.textPreviewState()).toBeNull();
     } finally {
       rig.dispose();
