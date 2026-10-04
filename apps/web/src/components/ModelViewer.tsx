@@ -173,6 +173,12 @@ import {
   type UnitSystem
 } from '@openzcad/shared';
 import { formatNumber } from '../lib/model';
+import {
+  faceOffsetChipState,
+  offsetChipText,
+  regionChipState,
+  type OffsetChipMode
+} from '../lib/offsetChip';
 import { setLiveDiameter } from '../lib/liveLabels';
 import type { SelectionCalloutContent } from '../lib/selectionCallout';
 import {
@@ -1886,7 +1892,7 @@ export function ModelViewer({
   /** How far the body reaches behind the armed face, for the "Total" reading. */
   const offsetExtentRef = useRef<number | null>(null);
   /** Which number the offset chip shows: the drag delta, or the whole span. */
-  const offsetChipModeRef = useRef<'offset' | 'total'>('offset');
+  const offsetChipModeRef = useRef<OffsetChipMode>('offset');
   /** Last frame's cylinder chip layout, for hysteresis at the threshold. */
   const dimensionChipBesidePinRef = useRef(false);
   /** Cylindrical radius has its own non-translating affordance and lifecycle. */
@@ -5100,12 +5106,13 @@ export function ModelViewer({
           // height when it has one, else the body's reach behind the face.
           const totalBaseline = offsetHandleRef.current?.totalBaseline;
           const totalSense = offsetHandleRef.current?.totalSense ?? 1;
-          const span = totalBaseline ?? offsetExtentRef.current;
-          const showTotal =
-            offsetChipModeRef.current === 'total' && span !== null;
-          text = showTotal
-            ? `${formatNumber(span + totalSense * rawValue)} ${unitsRef.current}`
-            : `${value >= 0 ? '+' : ''}${value} ${unitsRef.current}`;
+          text = offsetChipText({
+            rawValue,
+            mode: offsetChipModeRef.current,
+            span: totalBaseline ?? offsetExtentRef.current,
+            sense: totalSense,
+            units: unitsRef.current
+          });
           if (offsetPreviewInvalidRef.current) {
             text = `⚠ ${text}`;
           }
@@ -9174,13 +9181,12 @@ export function ModelViewer({
           )
         )
       : null;
-    offsetExtentRef.current = extentBehind;
-    // Resizing a primitive reads its own dimension (the total) by default:
-    // that is the number the gesture sets. Moving any other face reads the
-    // change, how far the face moves; the body's reach behind it stays one
-    // click away on the tag.
-    offsetChipModeRef.current =
-      offsetHandle.totalBaseline === undefined ? 'offset' : 'total';
+    const chipState = faceOffsetChipState(
+      offsetHandle.totalBaseline,
+      extentBehind
+    );
+    offsetExtentRef.current = chipState.extent;
+    offsetChipModeRef.current = chipState.mode;
     // The band starts at the face's old level. A rig re-armed after a preview
     // landed reads the moved face from the rendered body, so the loops go
     // back onto the plane the gesture started from (the pick point stays on
@@ -9556,6 +9562,11 @@ export function ModelViewer({
       }
     });
     rig.setValue(regionHandle.initialValue ?? 0);
+    // The chip machinery is shared with the face offset, so its mode and span
+    // still describe the last face armed; a region starts from its own.
+    const chipState = regionChipState();
+    offsetExtentRef.current = chipState.extent;
+    offsetChipModeRef.current = chipState.mode;
     context.scene.add(rig.group);
     context.scene.add(rig.worldGroup);
     offsetRigRef.current = rig;
