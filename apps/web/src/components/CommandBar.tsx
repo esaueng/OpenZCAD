@@ -44,6 +44,12 @@ interface CommandBarProps {
    * prompt line.
    */
   onAsk?(question: string): void;
+  /**
+   * No model provider answers right now. The bar still hands a typed line to
+   * the assistant (its built-in recipes need no provider), but it stops
+   * inviting questions the footer would only answer with "Unavailable".
+   */
+  askUnavailable?: boolean;
   /** The platform's shortcut for the bar: ⌘K or Ctrl+K. */
   searchKey: PlatformShortcutCopy;
   /** The assistant is answering: the prompt's glyph turns while it does. */
@@ -151,6 +157,7 @@ export function CommandBar({
   open,
   onOpenChange,
   onAsk,
+  askUnavailable = false,
   searchKey,
   busy = false,
   unread = false,
@@ -256,7 +263,7 @@ export function CommandBar({
   }
 
   function placeholder(): string {
-    if (!onAsk) {
+    if (!onAsk || askUnavailable) {
       return 'Type / for a command';
     }
     if (context) {

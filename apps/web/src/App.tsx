@@ -219,6 +219,7 @@ import { watchBuildVersion } from './lib/buildVersionWatch';
 import { commandOutcomeMessage } from './lib/commandOutcome';
 import { presentedDiagnostics } from './lib/diagnosticsRows';
 import { primitiveDimensionLabel } from './lib/primitiveDimensionLabel';
+import { useRememberedSectionPlane } from './hooks/useRememberedSectionPlane';
 import { newBlendFacePick } from './lib/blendRearm';
 import { exactEntryShortcut, isTypingTarget } from './lib/exactEntryShortcut';
 import { DeferredExactEntry } from './lib/deferredExactEntry';
@@ -292,6 +293,7 @@ import {
   downloadText,
   evalParamValue,
   exportFileStem,
+  formatMeasuredQuantity,
   formatNumber,
   inferContentType
 } from './lib/model';
@@ -465,7 +467,10 @@ import {
   resolveImportedBlendFace
 } from './lib/interaction/filletFaceEdit';
 import { ToastHost } from './components/Toast';
-import { commandPaletteShortcut } from './lib/platformShortcut';
+import {
+  commandPaletteShortcut,
+  idleWorkspaceHint
+} from './lib/platformShortcut';
 import { retireStatus, type StatusEntry } from './lib/statusLifetime';
 import { NumericKeypad, type KeypadRequest } from './components/NumericKeypad';
 import type { DimensionMode } from './lib/keypad';
@@ -526,6 +531,7 @@ import {
   type LabelSegment
 } from './lib/topologyLabels';
 import type { FeatureSelectionSource } from './lib/inspectorHeading';
+import { CARD_EYEBROWS } from './lib/cardEyebrows';
 import type {
   CommandDiagnostic,
   InteractionState
@@ -1251,6 +1257,7 @@ import {
   loadSettingsViewState,
   updateSettingsViewState
 } from './lib/settingsViewState';
+import type { SettingsSectionId } from './lib/settingsSections';
 import {
   clampAssistantWidth,
   clampSidebarWidth,
@@ -1350,6 +1357,9 @@ const BEFORE_RESTORE_REASON = 'Before restore';
  * one is its own gesture (Ctrl+Shift+S).
  */
 const DEFAULT_SAVE_REASON = 'Manual save';
+/** The lane's one notice for a tab that opened a project another tab owns. */
+const PROJECT_OPEN_ELSEWHERE_NOTICE =
+  'Editing is locked: this project is open in another tab.';
 /** Said once per session after a selection box that caught nothing. */
 const EMPTY_BOX_SELECT_HINT =
   'Nothing in the box. A plain drag selects bodies — Shift+drag orbits, right-drag pans.';
@@ -1883,7 +1893,9 @@ export function App() {
       ? 'Sign in to open the shared project automatically.'
       : desktopAuthorizationAttempt
         ? 'Sign in, then approve OpenZCAD for macOS.'
-        : 'Changes save on this device immediately.'
+        : // Settings' own footer says where changes save; the header is
+          // for news (an error, a sign-in step), not a second copy of it.
+          ''
   );
   const [desktopAuthorizationCode, setDesktopAuthorizationCode] = useState('');
   const [desktopAuthorizationApproved, setDesktopAuthorizationApproved] =
@@ -2096,10 +2108,14 @@ export function App() {
    * that describes a mode the user is still in, such as sketching on a plane.
    */
   const setStatus = useCallback(
-    (text: string, options?: { sticky?: boolean; detail?: string }) => {
+    (
+      text: string,
+      options?: { sticky?: boolean; detail?: string; unlogged?: boolean }
+    ) => {
       setStatusEntry({
         text,
         ...(options?.detail ? { detail: options.detail } : {}),
+        ...(options?.unlogged ? { unlogged: true } : {}),
         at: Date.now(),
         sticky: options?.sticky ?? false
       });
@@ -2417,7 +2433,8 @@ export function App() {
     {
       thinking: false,
       unread: 0,
-      context: null
+      context: null,
+      unavailable: false
     }
   );
   const [shortcutsOpen, setShortcutsOpen] = useState(false);
@@ -4195,6 +4212,7 @@ export function App() {
         return;
       }
       setProjectOpenElsewhere(false);
+      setStatus('This tab can edit the project now.');
       void adoptStoredProject(projectId);
     }).then((result) => {
       if (cancelled) {
@@ -4207,6 +4225,10 @@ export function App() {
         // The project is on this device — the other tab is keeping it that
         // way. Nothing here is unsaved, and nothing here may be saved.
         setSaveState('local');
+        // Said once, where the eye goes: the rail dims as a whole, and the
+        // reason used to live only in each button's tooltip. Sticky, since
+        // it describes a state the tab stays in until the other tab closes.
+        setStatus(PROJECT_OPEN_ELSEWHERE_NOTICE, { sticky: true });
       }
     });
     projectOwnershipSettledRef.current = settled;
@@ -4215,7 +4237,7 @@ export function App() {
       projectOwnershipSettledRef.current = null;
       claim?.release();
     };
-  }, [doc?.projectId, shareSession]);
+  }, [doc?.projectId, shareSession, setStatus]);
 
   useEffect(() => {
     // An armed face re-pick names a feature by id; a different project's
@@ -4626,14 +4648,16 @@ export function App() {
         if (startupProjectId) {
           clearActiveProject();
         }
+        // The mode only: the shelf heading beside this footer counts the
+        // parts, and a second count here said the same thing twice.
         setStatus(
           !bootCloudFunctionsEnabledRef.current
-            ? `Offline mode · ${countLabel(userProjectCount(merged), 'local project', 'local projects')}`
+            ? 'Offline mode'
             : activeSession && listed.remoteReached
-              ? `Cloud profile ready · ${countLabel(userProjectCount(merged), 'project', 'projects')}`
+              ? 'Cloud profile ready'
               : health
-                ? `Local workspace · ${countLabel(userProjectCount(merged), 'local project', 'local projects')}`
-                : `Offline workspace · ${countLabel(userProjectCount(merged), 'local project', 'local projects')}`
+                ? 'Local workspace'
+                : 'Offline workspace'
         );
       } catch (error) {
         if (!cancelled) {
@@ -5495,7 +5519,7 @@ export function App() {
           cylinderDiameter !== undefined
             ? `Ø ${round(cylinderDiameter)} ${units}`
             : geometry?.area !== undefined
-              ? `${round(geometry.area)} ${units}²`
+              ? `${formatMeasuredQuantity(geometry.area)} ${units}²`
               : undefined
       };
     }
@@ -5660,10 +5684,17 @@ export function App() {
         : sketchOverlays,
     [appSettings.experiments.directManipulation, sketchOverlays]
   );
+  // The face-drag rig (its dashed span and "Height 24 mm" pill) belongs to
+  // the bare pick. A command card owns the next gesture, so opening one —
+  // Hole from the selection chip, say — takes the rig down with the handle
+  // `openTool` already disarms, rather than leaving it drawn beside the
+  // command's own preview.
   const viewerEditableBodyIds = useMemo(
     () =>
-      modelingLocked || movePreview ? EMPTY_BODY_IDS : directEditableBodyIds,
-    [modelingLocked, movePreview, directEditableBodyIds]
+      modelingLocked || movePreview || tool
+        ? EMPTY_BODY_IDS
+        : directEditableBodyIds,
+    [modelingLocked, movePreview, tool, directEditableBodyIds]
   );
   const viewerSelectedProfileIds = useMemo(
     () => selectedProfiles.map((profile) => profile.profileId),
@@ -6802,16 +6833,19 @@ export function App() {
       setKeypad(null);
       dispatchInteraction({ type: 'clear' });
       closeFeaturePanel();
+      // The lane says where the user now is; the activity log is for what
+      // happened to the model, and a mode switch is neither.
       setStatus(
         mode === 'view'
           ? 'View mode · the model is read-only here.'
-          : 'Tweak mode · adjust parameters; the design stays locked.'
+          : 'Tweak mode · adjust parameters; the design stays locked.',
+        { unlogged: true }
       );
     } else {
       // The tape survives the trip — leaving to make an edit and coming back
       // should not cost the figures you just took — but recording stops.
       setMeasuring(false);
-      setStatus('Build mode · modeling tools are back.');
+      setStatus('Build mode · modeling tools are back.', { unlogged: true });
     }
     setWorkspaceMode(mode);
   }
@@ -7162,27 +7196,42 @@ export function App() {
     sectionBodyKey
   ]);
 
-  /** Off → XY → XZ → YZ → off, each plane starting at the model's centre. */
-  function cycleSectionView() {
-    const order: (SectionPlaneId | null)[] = [null, 'XY', 'XZ', 'YZ'];
-    const currentPlane = viewerSettings.sectionView?.plane ?? null;
-    const next = order[(order.indexOf(currentPlane) + 1) % order.length]!;
-    if (!next) {
+  // Follows the live section too, so a project's restored cut comes back on
+  // its own plane after being switched off and on.
+  const rememberedSectionPlane = useRememberedSectionPlane(
+    viewerSettings.sectionView
+  );
+
+  /**
+   * Switches the section view on or off. The rail button and the palette
+   * both toggle: cycling through every plane to reach "off" took up to three
+   * clicks. The plane is chosen inside the section panel (`setSectionPlane`),
+   * and switching back on returns to the plane last used.
+   */
+  function toggleSectionView() {
+    if (viewerSettings.sectionView) {
       setViewerSettings(({ sectionView: _cleared, ...rest }) => rest);
       clearSectionOutline();
       setStatus('Section view off.');
       return;
     }
-    const range = sectionAxisRange(next);
+    setSectionPlane(rememberedSectionPlane.current);
+  }
+
+  /** Cuts on `plane`, starting at the model's centre along its axis. */
+  function setSectionPlane(plane: SectionPlaneId) {
+    const range = sectionAxisRange(plane);
     const offset = range ? (range.min + range.max) / 2 : 0;
+    // The previous plane's exact section describes a cut that is gone.
+    clearSectionOutline();
     setViewerSettings((current) => ({
       ...current,
-      sectionView: { plane: next, offset }
+      sectionView: { plane, offset }
     }));
-    setStatus(
-      `Section view: ${next} plane. It cuts the display only; drag the slider to move the cut, and the model itself is untouched.`
-    );
-    void requestExactSection({ plane: next, offset });
+    // The panel beside the rail carries the slider and the tooltip says the
+    // cut is display-only; the lane line only names the plane.
+    setStatus(`Section view: ${plane} plane · the model is untouched.`);
+    void requestExactSection({ plane, offset });
   }
 
   function setSectionOffset(offset: number) {
@@ -7478,7 +7527,9 @@ export function App() {
       endCloudSettingsSession();
       setSettingsMessage(
         nextAuth.status === 'ready'
-          ? 'Device settings active · sign in for cloud sync.'
+          ? // Signed out is the normal state, and the Settings footer already
+            // reads "Device only"; the header stays quiet rather than repeat it.
+            ''
           : 'Beta sign-in unavailable · device settings remain active.'
       );
       return;
@@ -7505,9 +7556,7 @@ export function App() {
       setCloudProjectIds(listed.cloudProjectIds);
       setAccountProjectListReached(listed.remoteReached);
       setSettingsMessage('Cloud profile connected.');
-      setStatus(
-        `Cloud profile ready · ${countLabel(userProjectCount(listed.projects), 'project', 'projects')}`
-      );
+      setStatus('Cloud profile ready');
     } catch {
       if (cloudFunctionsEnabledRef.current) {
         setSettingsMessage(
@@ -7518,7 +7567,16 @@ export function App() {
   }
 
   function openSettings() {
-    updateSettingsViewState({ open: true });
+    openSettingsAt(null);
+  }
+
+  /** Settings at one section, fresh: a task flow, not a return visit. */
+  function openSettingsAt(section: SettingsSectionId | null) {
+    updateSettingsViewState(
+      section
+        ? { open: true, activeSection: section, query: '', scrollTop: 0 }
+        : { open: true }
+    );
     setSettingsOpen(true);
     setPaletteOpen(false);
     if (!cloudFunctionsEnabledRef.current) {
@@ -7528,7 +7586,7 @@ export function App() {
       setAuthConfigStatus('unavailable');
       return;
     }
-    setSettingsMessage('Changes save on this device immediately.');
+    setSettingsMessage('');
     void refreshCloudConnection();
   }
 
@@ -8704,10 +8762,12 @@ export function App() {
       setCloudProjectIds(listed.cloudProjectIds);
       setAccountProjectListReached(listed.remoteReached);
       setCloudAvailable(listed.remoteReached);
+      // The shelf heading already counts the parts, so a plain listing
+      // leaves the footer empty; it speaks only when it has news.
       setStatus(
         session && !listed.remoteReached
           ? `Cloud projects are temporarily unavailable · ${countLabel(userProjectCount(listed.projects), 'project', 'projects')} remain on this device.`
-          : `${countLabel(userProjectCount(listed.projects), 'project', 'projects')} available.`
+          : ''
       );
     } catch (error) {
       setStatus(errorMessage(error, 'Failed to refresh projects.'));
@@ -17211,6 +17271,19 @@ export function App() {
               ? 'showing the previous result until it finishes'
               : 'the model appears when it is ready'
         };
+  // The activity log's line for the same state: one plain entry per rebuild.
+  // Each stage the worker reports ("Measuring: Box 1: Display mesh and face
+  // topology (2/2)") was an entry of its own, so the log read as a build log.
+  // The lane keeps the stage detail while it is up; a failure keeps its cause.
+  const geometryLogLine =
+    geometryStatus === null
+      ? null
+      : geometry.state.phase === 'failed'
+        ? geometryStatus.phase
+        : geometry.state.phase === 'starting' ||
+            geometry.state.phase === 'loading-remus'
+          ? 'Loading the geometry kernel…'
+          : 'Rebuilding the model…';
   const visibleStatus = textOutlineBudgetError
     ? `Text outlines refused: ${textOutlineBudgetError}`
     : parameterPreview
@@ -17460,13 +17533,13 @@ export function App() {
       // nothing, so the only way in was an unlabelled dock icon.
       id: 'view-section',
       label: viewerSettings.sectionView
-        ? `Section view: next plane (now ${viewerSettings.sectionView.plane})`
+        ? `Section view: off (now ${viewerSettings.sectionView.plane})`
         : 'Section view: on',
       group: 'View',
       keywords: ['section', 'cut', 'clip', 'plane'],
       icon: <Slice size={16} aria-hidden="true" />,
       disabledReason: viewerBodies.length === 0 ? 'Create a body first' : null,
-      run: cycleSectionView
+      run: toggleSectionView
     },
     {
       id: 'edit-undo',
@@ -17713,6 +17786,7 @@ export function App() {
   // View mode writes its own hints rather than filtering the build chain below.
   // Selecting a cylinder still arms the radius interaction even with its handle
   // disarmed, and "drag the radial handle" is a promise View mode cannot keep.
+  const idleHint = idleWorkspaceHint();
   const viewModeHint = measuring
     ? measurementDraft
       ? `${measurementDraft.label} selected · pick the second target · Esc cancels`
@@ -17725,7 +17799,7 @@ export function App() {
       ? 'Face selected — Space faces it head-on'
       : viewerBodies.length > 0
         ? 'Click a body, face, or edge · Measure records what you pick'
-        : 'Ctrl+K commands · ? shortcuts';
+        : idleHint;
   const tweakModeHint = measuring
     ? viewModeHint
     : parameters.length > 0
@@ -17762,7 +17836,7 @@ export function App() {
                         ? 'Edit in the panel · Del deletes · Esc closes'
                         : viewerBodies.length > 0
                           ? 'Click a body, face, or edge · Shift+Click adds to selection'
-                          : 'Ctrl+K commands · ? shortcuts'));
+                          : idleHint));
   const inspectorActive =
     !modelingLocked &&
     !directMode &&
@@ -18569,6 +18643,7 @@ export function App() {
           }
           onGoHome={() => void handleGoHome()}
           onOpenSharing={() => setSharingOpen(true)}
+          onSignIn={() => openSettingsAt('account')}
           onOpenSettings={openSettings}
         />
       }
@@ -19066,7 +19141,8 @@ export function App() {
                 ? sectionAxisRange(viewerSettings.sectionView.plane)
                 : null
             }
-            onCycleSection={cycleSectionView}
+            onToggleSection={toggleSectionView}
+            onSectionPlane={setSectionPlane}
             onSectionOffset={setSectionOffset}
             // The slider was released, or a key repeat ended: cut it exactly.
             onSectionCommit={() =>
@@ -19378,8 +19454,8 @@ export function App() {
                     </h2>
                     <span className="panel-eyebrow">
                       {modelingEditFeature
-                        ? TOOL_META[modelingOperation].label
-                        : 'New feature'}
+                        ? CARD_EYEBROWS.edit
+                        : CARD_EYEBROWS.create}
                     </span>
                     {modelingEditFeature ? (
                       // The same overflow every Inspector edit card has: now
@@ -19827,6 +19903,7 @@ export function App() {
           <ErrorBoundary label="Assistant">
             <AssistantPanel
               effectiveAssistant={accountSettings?.effectiveAssistant}
+              signedIn={Boolean(session)}
               document={doc}
               selection={assistantSelection}
               onApply={handleApplyPatch}
@@ -19900,6 +19977,7 @@ export function App() {
                     : undefined
                 }
                 searchKey={commandPaletteKey}
+                askUnavailable={assistantActivity.unavailable}
                 busy={assistantAvailable && assistantActivity.thinking}
                 unread={
                   assistantAvailable &&
@@ -19918,10 +19996,8 @@ export function App() {
             {...(visibleStatus === status && statusEntry.detail
               ? { detail: statusEntry.detail }
               : {})}
-            geometryStatus={
-              geometryStatus &&
-              `${geometryStatus.phase} · ${geometryStatus.projection}`
-            }
+            logged={!(visibleStatus === status && statusEntry.unlogged)}
+            geometryStatus={geometryLogLine}
             tone={tone}
             triggerRef={activityLogTriggerRef}
             onClose={(restoreFocus) => {

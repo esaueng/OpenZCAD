@@ -7,7 +7,9 @@ import {
   createDistanceMeasurement,
   createSmartMeasurement,
   formatMeasurement,
+  measurementExtent,
   measurementTargetFromSelection,
+  measurementToViewportAnnotation,
   measurementsToCsv,
   measurementsToText,
   MEASUREMENT_LIMIT,
@@ -342,6 +344,86 @@ describe('measurement workbench records', () => {
     expect(area?.result.value).toBeCloseTo(200, 10);
     expect(hole?.result.value).toBeCloseTo(8, 10);
     expect(bounds?.result.components).toEqual({ x: 10, y: 20, z: 30 });
+  });
+
+  it('hands the viewport the measured face, not the model, to stand beside', () => {
+    // The top face is two triangles at z = 30; the hole's eight triangles
+    // reach down to the origin, so a box from the whole mesh would not do.
+    const body: BodyRepresentation = {
+      ...measuredBody(),
+      mesh: {
+        kind: 'mesh',
+        vertices: Float32Array.from([
+          0, 0, 30, 10, 0, 30, 10, 20, 30, 0, 20, 30, 3, 4, 0
+        ]),
+        indices: Uint32Array.from([
+          0,
+          1,
+          2,
+          0,
+          2,
+          3,
+          ...Array.from({ length: 24 }, (_, i) => i % 5)
+        ])
+      }
+    };
+    const area = createSmartMeasurement(
+      body,
+      selection('face', 'face:top', 21),
+      { x: 2, y: 3, z: 30 },
+      4,
+      'mm'
+    );
+    const whole = createSmartMeasurement(
+      body,
+      selection('body'),
+      undefined,
+      4,
+      'mm'
+    );
+    const line = createSmartMeasurement(
+      body,
+      selection('edge', 'edge:x', 11),
+      { x: 2, y: 0, z: 0 },
+      4,
+      'mm'
+    );
+    expect(area && measurementExtent(area, [body])).toEqual({
+      bodyId: body.bodyId,
+      min: { x: 0, y: 0, z: 30 },
+      max: { x: 10, y: 20, z: 30 }
+    });
+    expect(
+      area && measurementToViewportAnnotation(area, DISPLAY, false, [body])
+    ).toMatchObject({
+      extent: { bodyId: body.bodyId, min: { z: 30 }, max: { z: 30 } }
+    });
+    expect(whole && measurementExtent(whole, [body])).toEqual({
+      bodyId: body.bodyId,
+      ...body.bbox
+    });
+    // The box comes from whichever bodies it is given — the ones on screen.
+    // A previewed edit that raises the top face to z = 45 moves the box too.
+    const previewed: BodyRepresentation = {
+      ...body,
+      mesh: {
+        ...body.mesh,
+        vertices: body.mesh.vertices.map((value, index) =>
+          index % 3 === 2 && value === 30 ? 45 : value
+        )
+      }
+    };
+    expect(area && measurementExtent(area, [previewed])).toMatchObject({
+      min: { z: 45 },
+      max: { z: 45 }
+    });
+    // A span is placed along its own dimension line, and a body that is gone
+    // leaves the label on the old model-wide placement.
+    expect(line && measurementExtent(line, [body])).toBeNull();
+    expect(area && measurementExtent(area, [])).toBeNull();
+    expect(
+      area && measurementToViewportAnnotation(area, DISPLAY, false)
+    ).not.toHaveProperty('extent');
   });
 
   it('measures exact semantic centers and stable entity directions', () => {

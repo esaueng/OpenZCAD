@@ -186,6 +186,37 @@
   width: 100%;
 }
 
+/* Which plane cuts: chosen here, so the rail button only switches the cut
+   on and off. Three equal segments, the current one lit as the rail's own
+   active buttons are. */
+.rail-section-planes {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 2px;
+}
+
+/* Sized as the Standard views rows beside it: a 26px target at 12px. */
+.rail-section-plane {
+  min-height: 26px;
+  padding: 0 6px;
+  color: var(--color-text-muted);
+  border: 1px solid transparent;
+  border-radius: var(--radius-sm);
+  font-family: var(--font-mono);
+  font-size: var(--fs-sm);
+}
+
+.rail-section-plane:hover:not([aria-pressed='true']) {
+  color: var(--color-text);
+  background: var(--color-surface-2);
+}
+
+.rail-section-plane[aria-pressed='true'] {
+  color: var(--color-accent);
+  background: var(--color-accent-dim);
+  border-color: var(--color-accent-border);
+}
+
 /* The cut's own status line: which of the two section pipelines is on
    screen, and either its measured area or why there is no exact one. */
 .rail-section-state {
@@ -557,6 +588,31 @@
   font-size: var(--fs-mini);
   font-variant-numeric: tabular-nums;
   pointer-events: none;
+}
+
+/*
+ * A measurement stays on screen after Measure is left, so its pill says what
+ * it is: a small ruler ahead of the value. Drawn in CSS rather than set as a
+ * glyph, since the mono face carries no ruler symbol; it takes the pill's
+ * colour, so it turns amber with a stale value like the text does.
+ */
+.selection-callout.measurement-callout::before {
+  content: '';
+  display: inline-block;
+  box-sizing: border-box;
+  width: 11px;
+  height: 6px;
+  margin-right: 5px;
+  vertical-align: 0;
+  border: 1px solid currentColor;
+  border-radius: 1px;
+  background: repeating-linear-gradient(
+      90deg,
+      transparent 0 2px,
+      currentColor 2px 3px
+    )
+    0 0 / 8px 3px no-repeat;
+  opacity: 0.7;
 }
 
 /*
