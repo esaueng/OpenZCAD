@@ -305,6 +305,7 @@ export function cloneBuildState(result: ExactBuildResult): ExactBuildResult {
   for (const [bodyId, shape] of result.shapes) {
     shapes.set(bodyId, {
       solids: [...shape.solids],
+      ...(shape.sweepSource ? { sweepSource: shape.sweepSource } : {}),
       ...(shape.lineage
         ? {
             lineage: {
