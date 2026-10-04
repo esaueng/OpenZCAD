@@ -1084,8 +1084,12 @@
   left: calc(100% + var(--island-gap));
   z-index: calc(var(--z-inspector-float) + 4);
   display: flex;
+  flex-wrap: wrap;
   align-items: center;
   gap: 2px;
+  /* Never past the window's edge: on a phone the tiles wrap into rows in
+     whatever width is left beside the rail. */
+  max-width: calc(100vw - var(--island-gap) * 3 - var(--rail-w));
   padding: 3px;
   background: var(--color-surface-2);
   border: 1px solid var(--color-border-strong);

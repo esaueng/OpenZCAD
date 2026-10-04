@@ -260,4 +260,21 @@ test('UI-09: the circle type strip sits beside the rail and leaves with the tool
     'aria-pressed',
     'false'
   );
+
+  // On a phone, beside an open palette, the tiles wrap into the width left
+  // rather than running off the window.
+  await page.setViewportSize({ width: 390, height: 844 });
+  await page.keyboard.press('c');
+  await tools.getByRole('button', { name: /^Sketch palette/ }).click();
+  await expect(
+    page.getByRole('complementary', { name: 'Sketch palette' })
+  ).toBeVisible();
+  await expect(tiles).toHaveCount(3);
+  for (const index of [0, 1, 2]) {
+    await expect.poll(() => insideWindow(tiles.nth(index))).toBe(true);
+    await expectReachable(tiles.nth(index));
+  }
+  await expectReachable(
+    strip.getByRole('button', { name: 'Next circle type' })
+  );
 });
