@@ -1,3 +1,4 @@
+import { consumeWorkspaceValue } from './value-budget';
 import type { ShaprImportLimits } from './limits';
 
 interface DecodeState {
@@ -58,6 +59,7 @@ function readValue(state: DecodeState, depth: number): unknown {
     throw new Error('MessagePack value exceeds the nesting-depth limit.');
   }
   state.nodes += 1;
+  consumeWorkspaceValue(state.limits);
   if (state.nodes > state.limits.maxValueNodes) {
     throw new Error('MessagePack value exceeds the node-count limit.');
   }

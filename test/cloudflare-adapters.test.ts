@@ -1188,10 +1188,13 @@ describe('cloudflare adapters', () => {
     // ~1 MB of document. Under the old layout the room wrote latest plus its
     // whole history into one value, so a handful of these blew past 2 MiB.
     const heavy = addPrimitiveFeature(base, {
-      name: 'H'.repeat(500_000),
+      name: 'Heavy',
       primitiveKind: 'box',
       dimensions: { width: 1, height: 1, depth: 1 }
     });
+    heavy.nodes[heavy.rootNodeId]!.metadata = {
+      padding: 'H'.repeat(1_000_000)
+    };
     const at = (version: number): ProjectDocument => ({
       ...structuredClone(heavy),
       version

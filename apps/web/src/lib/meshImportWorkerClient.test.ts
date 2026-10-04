@@ -210,3 +210,21 @@ describe('mesh import worker client', () => {
     expect(worker.terminated).toBe(true);
   });
 });
+
+it('terminates a synchronous worker at the wall-clock deadline', async () => {
+  vi.useFakeTimers();
+  try {
+    vi.stubGlobal('Worker', FakeWorker);
+    const pending = importMeshFileInDisposableWorker(
+      new File(['mesh'], 'mesh.obj'),
+      'obj',
+      'mm'
+    );
+    const rejected = expect(pending).rejects.toThrow(/120 second/);
+    await vi.advanceTimersByTimeAsync(120_000);
+    await rejected;
+    expect(FakeWorker.latest!.terminated).toBe(true);
+  } finally {
+    vi.useRealTimers();
+  }
+});

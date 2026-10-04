@@ -10,6 +10,7 @@ permissions:
 
 jobs:
   health:
+    timeout-minutes: 5
     runs-on: ubuntu-latest
     steps:
       - name: Check hosted beta readiness

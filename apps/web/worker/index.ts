@@ -1,3 +1,5 @@
+import { enforceApiRateLimit, publicRequestBucket } from './apiRateLimit';
+import { JsonComplexityGuard } from '@openzcad/shared';
 import { accountEntitlements } from '@openzcad/cloudflare-adapters';
 import {
   loadWorkspaceSessions,
@@ -298,6 +300,16 @@ function envForCollaborationRollout(
 
 export function assertSafeRuntimeConfiguration(env: CloudflareEnv): void {
   if (
+    (env.PRODUCTION_GUARD !== undefined ||
+      env.ENVIRONMENT !== 'development' ||
+      env.AUTH_MODE !== 'development') &&
+    !env.DB
+  ) {
+    throw new Error(
+      'Refusing to start without DB in a guarded or hosted environment.'
+    );
+  }
+  if (
     env.AUTH_MODE === 'development' &&
     (env.ENVIRONMENT !== 'development' || env.PRODUCTION_GUARD !== undefined)
   ) {
@@ -309,7 +321,10 @@ export function assertSafeRuntimeConfiguration(env: CloudflareEnv): void {
 
 function assertSameOrigin(request: Request): void {
   const origin = request.headers.get('origin');
-  if (origin && origin !== new URL(request.url).origin) {
+  if (
+    (!origin && request.headers.get('sec-fetch-site') === 'cross-site') ||
+    (origin && origin !== new URL(request.url).origin)
+  ) {
     throw new HttpError(403, 'Cross-origin changes are not allowed.');
   }
 }
@@ -342,6 +357,7 @@ async function readJsonBody(
     }
     const decoder = new TextDecoder();
     const chunks: string[] = [];
+    const structure = new JsonComplexityGuard();
     let totalBytes = 0;
     try {
       while (true) {
@@ -354,7 +370,14 @@ async function readJsonBody(
           await reader.cancel().catch(() => undefined);
           throw new HttpError(413, 'Request body is too large.');
         }
-        chunks.push(decoder.decode(value, { stream: true }));
+        const chunk = decoder.decode(value, { stream: true });
+        try {
+          structure.consume(chunk);
+        } catch {
+          await reader.cancel().catch(() => undefined);
+          throw new HttpError(413, 'Request JSON is too complex.');
+        }
+        chunks.push(chunk);
       }
     } finally {
       reader.releaseLock();
@@ -427,16 +450,20 @@ async function notifyProjectRoleChange(
     return;
   }
   const headers = new Headers({
+    'x-openzcad-internal-role-update': 'v1',
     'x-openzcad-internal-user-id': memberUserId
   });
   if (role) {
     headers.set('x-openzcad-internal-project-role', role);
   }
   const response = await env.PROJECT_ROOM.getByName(projectId).fetch(
-    new Request(`https://project-room.internal/?projectId=${projectId}`, {
-      method: 'PATCH',
-      headers
-    })
+    new Request(
+      `https://project-room.internal/?projectId=${encodeURIComponent(projectId)}`,
+      {
+        method: 'PATCH',
+        headers
+      }
+    )
   );
   if (!response.ok) {
     throw new Error('Project room rejected an internal role update.');
@@ -464,6 +491,7 @@ async function notifyOwnedRoomsCollaborationDisabled(
           {
             method: 'PATCH',
             headers: {
+              'x-openzcad-internal-role-update': 'v1',
               'x-openzcad-internal-owner-collaboration-disabled': 'v1'
             }
           }
@@ -515,6 +543,13 @@ async function handleApiRequest(request: Request, env: Env): Promise<Response> {
   const { pathname } = url;
 
   if (request.method === 'GET' && pathname === '/api/health') {
+    if (env.ENVIRONMENT !== 'development') {
+      await enforceApiRateLimit(
+        env,
+        await publicRequestBucket(request, env, 'health'),
+        120
+      );
+    }
     const {
       artifactUploadAccountingReady,
       documentStorageAccountingReady,
@@ -604,6 +639,7 @@ async function handleApiRequest(request: Request, env: Env): Promise<Response> {
       return new Response(source.body, {
         headers: {
           'content-type': source.contentType,
+          'content-disposition': 'attachment',
           ...(source.bytes !== undefined
             ? { 'content-length': String(source.bytes) }
             : {}),
@@ -623,6 +659,7 @@ async function handleApiRequest(request: Request, env: Env): Promise<Response> {
       return new Response(asset.body, {
         headers: {
           'content-type': asset.contentType,
+          'content-disposition': 'attachment',
           'content-length': String(asset.body.byteLength),
           'cache-control': 'no-store',
           'x-content-type-options': 'nosniff'
@@ -641,7 +678,18 @@ async function handleApiRequest(request: Request, env: Env): Promise<Response> {
           name: shared.name,
           mode: shared.mode
         },
-        document: shared.document
+        document: {
+          ...shared.document,
+          ownerUserId: toUserId('user_shared'),
+          ...(shared.document.editHistory
+            ? {
+                editHistory: {
+                  ...shared.document.editHistory,
+                  actorUserId: toUserId('user_shared')
+                }
+              }
+            : {})
+        }
       },
       200,
       { 'cache-control': 'no-store' }
@@ -691,13 +739,32 @@ async function handleApiRequest(request: Request, env: Env): Promise<Response> {
     const ticketValues = url.searchParams.getAll('ticket');
     if (
       request.headers.get('upgrade')?.toLowerCase() !== 'websocket' ||
-      ticketValues.length !== 1
+      ticketValues.length !== 1 ||
+      !/^[A-Za-z0-9_-]{43}$/.test(ticketValues[0] ?? '') ||
+      !/^proj_[A-Za-z0-9_-]{1,120}$/.test(collaborationMatch[1] ?? '')
     ) {
       return new Response('Collaboration ticket is invalid or expired.', {
         status: 401
       });
     }
     const projectId = collaborationMatch[1]!;
+    if (env.ENVIRONMENT !== 'development') {
+      await enforceApiRateLimit(
+        env,
+        await publicRequestBucket(request, env, 'socket'),
+        60
+      );
+      const exists = await env
+        .DB!.prepare(
+          "SELECT id FROM projects WHERE id = ? AND status != 'deleted'"
+        )
+        .bind(projectId)
+        .first<{ id: string }>();
+      if (!exists)
+        return new Response('Collaboration ticket is invalid or expired.', {
+          status: 401
+        });
+    }
     const roomUrl = new URL('https://project-room.internal/');
     roomUrl.searchParams.set('projectId', projectId);
     roomUrl.searchParams.set('ticket', ticketValues[0]!);
@@ -977,6 +1044,12 @@ async function handleApiRequest(request: Request, env: Env): Promise<Response> {
 
   const session = await authenticateRequest(request, env);
   const userId = session.userId;
+  if (
+    !['GET', 'HEAD', 'OPTIONS'].includes(request.method) &&
+    pathname !== '/api/assistant'
+  ) {
+    await enforceApiRateLimit(env, `api:${userId}`, 120);
+  }
   const collaborationRollout = projectCollaborationRollout(env, session.email);
   const persistence = createPersistenceService(
     envForCollaborationRollout(env, collaborationRollout)
@@ -1673,9 +1746,17 @@ async function handleApiRequest(request: Request, env: Env): Promise<Response> {
 
   const projectArtifactsMatch = PROJECT_ARTIFACTS_ROUTE.exec(pathname);
   if (request.method === 'GET' && projectArtifactsMatch) {
-    return json(
-      await persistence.listArtifacts(userId, projectArtifactsMatch[1]!)
+    const result = await persistence.listArtifacts(
+      userId,
+      projectArtifactsMatch[1]!
     );
+    return json({
+      ...result,
+      artifacts: result.artifacts.map((artifact) => ({
+        ...artifact,
+        objectKey: ''
+      }))
+    });
   }
 
   const artifactDownloadMatch = ARTIFACT_DOWNLOAD_ROUTE.exec(pathname);
@@ -1712,7 +1793,7 @@ async function handleApiRequest(request: Request, env: Env): Promise<Response> {
       artifactMatch[1]!
     );
     return metadata.artifact
-      ? json(metadata)
+      ? json({ artifact: { ...metadata.artifact, objectKey: '' } })
       : json({ error: 'Artifact not found.' }, 404);
   }
 
@@ -1725,12 +1806,15 @@ export default {
     await createPersistenceService(env).purgeExpiredUploadSessions();
   },
   async fetch(request: Request, env: Env): Promise<Response> {
-    assertSafeRuntimeConfiguration(env);
     if (new URL(request.url).pathname === '/healthz') {
       const headers = {
         'content-type': 'application/json; charset=utf-8',
         'cache-control': 'no-store',
-        'x-content-type-options': 'nosniff'
+        'x-content-type-options': 'nosniff',
+        'referrer-policy': 'no-referrer',
+        'cross-origin-resource-policy': 'same-origin',
+        'content-security-policy':
+          "default-src 'none'; sandbox; frame-ancestors 'none'"
       };
       if (request.method !== 'GET' && request.method !== 'HEAD') {
         return new Response(null, {
@@ -1746,6 +1830,7 @@ export default {
       );
     }
 
+    assertSafeRuntimeConfiguration(env);
     const response = await dispatchApiRequest(request, env);
     return withApiSecurityHeaders(response);
   }
@@ -1770,6 +1855,11 @@ function withApiSecurityHeaders(response: Response): Response {
   wrapped.headers.set('x-content-type-options', 'nosniff');
   wrapped.headers.set('referrer-policy', 'no-referrer');
   wrapped.headers.set('cross-origin-resource-policy', 'same-origin');
+  wrapped.headers.set(
+    'content-security-policy',
+    "default-src 'none'; sandbox; frame-ancestors 'none'"
+  );
+  wrapped.headers.set('x-frame-options', 'DENY');
   return wrapped;
 }
 
@@ -1810,7 +1900,8 @@ async function dispatchApiRequest(
     }
     if (error instanceof ProjectSharingError) {
       const status =
-        error.code === 'INVITATION_RATE_LIMIT'
+        error.code === 'INVITATION_RATE_LIMIT' ||
+        error.code === 'SHARE_LINK_LIMIT'
           ? 429
           : error.code.endsWith('_NOT_FOUND')
             ? 404

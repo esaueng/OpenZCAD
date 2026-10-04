@@ -456,16 +456,19 @@ export function useCollaboration({
       lastSentVersionRef.current = current.version;
       if (new TextEncoder().encode(payload).byteLength > MAX_MESSAGE_BYTES) {
         setStatus('oversize');
-        void desktopFetch(`/api/projects/${projectId}/collaboration`, {
-          method: 'POST',
-          headers: { 'content-type': 'application/json' },
-          body: JSON.stringify({
-            clientId: id,
-            baseVersion: baseVersionRef.current,
-            document: collaborationDocument(current),
-            leaseId: leaseIdRef.current
-          })
-        })
+        void desktopFetch(
+          `/api/projects/${encodeURIComponent(projectId)}/collaboration`,
+          {
+            method: 'POST',
+            headers: { 'content-type': 'application/json' },
+            body: JSON.stringify({
+              clientId: id,
+              baseVersion: baseVersionRef.current,
+              document: collaborationDocument(current),
+              leaseId: leaseIdRef.current
+            })
+          }
+        )
           .then(async (response) => {
             if (disposed || socketRef.current !== socket) return;
             const message = parseServerMessage(
@@ -753,7 +756,7 @@ export function useCollaboration({
         return;
       }
       const url = new URL(
-        `/api/projects/${projectId}/collaboration`,
+        `/api/projects/${encodeURIComponent(projectId!)}/collaboration`,
         window.location.href
       );
       url.protocol = url.protocol === 'https:' ? 'wss:' : 'ws:';
@@ -916,7 +919,7 @@ export function useCollaboration({
 
       try {
         const response = await desktopFetch(
-          `/api/projects/${projectId}/collaboration`,
+          `/api/projects/${encodeURIComponent(projectId)}/collaboration`,
           {
             method: 'POST',
             headers: { 'content-type': 'application/json' },

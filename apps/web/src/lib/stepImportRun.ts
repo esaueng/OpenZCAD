@@ -1,3 +1,4 @@
+import { boundedName } from '@openzcad/shared';
 /**
  * One STEP import, from the file the user chose to the fate of its source bytes.
  *
@@ -487,7 +488,9 @@ export async function runStepImport(
     // Preassign every id so validation and the finalized command name the
     // same bodies, including when the source is archived after validation.
     const payloads = selections.map((solidIndex, index) => ({
-      name: selections.length > 1 ? `${name} — Body ${index + 1}` : name,
+      name: boundedName(
+        selections.length > 1 ? `${name} — Body ${index + 1}` : name
+      ),
       ids: createBodyFeatureIds(),
       sourceName: file.name,
       ...(sourceRef ? { stepSourceRef: sourceRef } : { stepText }),

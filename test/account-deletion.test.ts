@@ -35,7 +35,7 @@ function database(
       },
       async first() {
         if (query.includes("name LIKE 'block_erasing_%'")) {
-          return { table_ready: 1, trigger_count: 26 };
+          return { table_ready: 1, trigger_count: 30 };
         }
         if (query.includes("pragma_table_info('projects')")) {
           return {

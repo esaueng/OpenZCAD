@@ -25,7 +25,8 @@
     ],
     "security": {
       "capabilities": ["main-window"],
-      "csp": "default-src 'self'; connect-src 'self' ipc: http://ipc.localhost http://127.0.0.1:1420 ws://127.0.0.1:1420 wss://zcad.app https://challenges.cloudflare.com; font-src 'self' data:; frame-src https://challenges.cloudflare.com; img-src 'self' asset: http://asset.localhost blob: data:; script-src 'self' 'wasm-unsafe-eval' https://challenges.cloudflare.com; style-src 'self' 'unsafe-inline'"
+      "csp": "default-src 'self'; connect-src 'self' ipc: http://ipc.localhost wss://zcad.app; font-src 'self' data:; frame-src 'none'; img-src 'self' blob: data:; script-src 'self' 'wasm-unsafe-eval'; style-src 'self' 'unsafe-inline'; object-src 'none'; base-uri 'none'; frame-ancestors 'none'; form-action 'self'",
+      "devCsp": "default-src 'self'; connect-src 'self' ipc: http://ipc.localhost wss://zcad.app http://127.0.0.1:1420 ws://127.0.0.1:1420; font-src 'self' data:; frame-src 'none'; img-src 'self' blob: data:; script-src 'self' 'wasm-unsafe-eval'; style-src 'self' 'unsafe-inline'; object-src 'none'; base-uri 'none'; frame-ancestors 'none'; form-action 'self'"
     }
   },
   "bundle": {

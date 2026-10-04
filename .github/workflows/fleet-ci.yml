@@ -66,6 +66,7 @@ jobs:
           node-version: 22
           cache: pnpm
       - run: pnpm install --frozen-lockfile
+      - run: pnpm audit --audit-level=high
       - run: pnpm lint
       - run: pnpm typecheck
   validation:
@@ -267,6 +268,7 @@ jobs:
   # a skipped job satisfies branch protection, so this job must run and fail
   # explicitly whenever any shard did not succeed.
   e2e:
+    timeout-minutes: 5
     needs: e2e-tests
     if: always()
     runs-on: *fleet-runner

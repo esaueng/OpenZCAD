@@ -13,7 +13,7 @@ describe('workflow runner policy', () => {
       'production-health.yml': ['ubuntu-latest'],
       'update-remus.yml': ['ubuntu-latest'],
       'trusted-vps.yml': ['ubuntu-latest'],
-      'trusted-pr.yml': ['ubuntu-latest', 'ubuntu-latest', 'ubuntu-latest']
+      'dependency-audit.yml': ['ubuntu-latest', 'ubuntu-latest']
     };
     const workflowPaths = readdirSync(workflowDirectory)
       .filter((path) => path.endsWith('.yml') || path.endsWith('.yaml'))
@@ -30,16 +30,6 @@ describe('workflow runner policy', () => {
       ].map((match) => match[1]);
 
       expect(runners).toEqual(expectedRunners[workflowPath]);
-      if (workflowPath === 'trusted-pr.yml') {
-        expect(workflow).toMatch(
-          /runs-on:\n +group: ci-trusted-main\n +labels: \$\{\{ needs\.route\.outputs\.target \}\}/
-        );
-        expect(workflow).toContain('persist-credentials: false');
-        expect(workflow).not.toMatch(
-          /workflow_run|pull_request_target|secrets\./
-        );
-        expect(workflow).not.toMatch(/^[ \t]+pull_request[ \t]*:/m);
-      }
       if (workflowPath === 'trusted-vps.yml') {
         expect(workflow).toContain('workflow_dispatch:');
         expect(workflow).not.toMatch(

@@ -20,7 +20,8 @@ export const OFFICIAL: Readonly<{
 export function validateDeploymentConfig(
   config: Record<string, any>,
   options: {
-    target: 'official' | 'selfhost' | 'example';
+    target: 'official' | 'selfhost' | 'example' | 'dev';
+    configOnly?: boolean;
     originUrl?: string;
     environment?: Record<string, string | undefined>;
   }

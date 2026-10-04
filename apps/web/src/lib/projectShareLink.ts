@@ -15,7 +15,7 @@ export function shareTokenFromHash(hash: string): string | null {
     return null;
   }
   const token = raw.slice(PROJECT_SHARE_HASH_PREFIX.length).trim();
-  return token.length > 0 ? token : null;
+  return /^[A-Za-z0-9_-]{43}$/.test(token) ? token : null;
 }
 
 export function captureProjectShareToken(): string | null {
