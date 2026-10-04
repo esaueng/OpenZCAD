@@ -252,3 +252,207 @@ export function flattenedOutlineWarning(count: number): string {
     'self-overlapping ASCII glyph and stay exact.'
   );
 }
+
+/**
+ * The tolerance at which the pinned kernel's extrude reads a NURBS profile
+ * edge as an analytic curve: `Tolerance::new().linear × 100`, absolute in
+ * model units (remus `crates/operations/src/extrude.rs`, side-face
+ * construction).
+ */
+export const KERNEL_EXTRUDE_RECOGNITION_TOLERANCE = 1e-5;
+
+/** Samples the kernel's `recognize_curve` takes, uniformly in parameter. */
+const RECOGNITION_SAMPLES = 16;
+
+/**
+ * Whether the pinned kernel's extrude will build this bezier's side wall as a
+ * cylinder.
+ *
+ * remus `extrude` recognizes each NURBS profile edge with
+ * `recognize_curve(nc, 1e-5)` before it builds that edge's side face, and
+ * takes a `Circle` verdict as licence for a `Cylinder` wall — without the
+ * exact-circle check (`nurbs_is_quadratic_circle`) that its own cap-edge pass
+ * applies. A nearly straight polynomial bezier fits some huge circle to
+ * 1e-5, so its wall becomes, say, a 302 mm cylinder that leaves the bezier
+ * cap edges it is bounded by by up to 10 µm, and the exact boolean refuses
+ * any cut, union or intersect that has to trim that wall. Open Sans's 'b' at
+ * em 10 is the first glyph found doing it, and about 2 % of all glyph
+ * segments across the bundled fonts do at some size.
+ *
+ * This replays the kernel's own test — sixteen samples, a line check, then
+ * the algebraic circle fit — so the adapter can decline to hand the kernel an
+ * edge it will misread. It was checked against the kernel's verdict on every
+ * bezier of every bundled ASCII glyph at six sizes (57 147 segments, zero
+ * disagreements). A line verdict wins over a circle one, exactly as in the
+ * kernel, and leaves a ruled B-spline wall.
+ *
+ * 2D is enough: the kernel samples the lifted 3D curve, and lifting into a
+ * plane is an isometry.
+ */
+export function kernelReadsBezierAsCircle(
+  points: readonly Vec2Like[],
+  tolerance = KERNEL_EXTRUDE_RECOGNITION_TOLERANCE
+): boolean {
+  if (points.length < 3) return false;
+  const samples = Array.from({ length: RECOGNITION_SAMPLES }, (_, index) =>
+    bezierPointAt(points, index / (RECOGNITION_SAMPLES - 1))
+  );
+  if (recognizedAsLine(samples, tolerance)) return false;
+  const first = samples[0]!;
+  // The kernel needs one sample triple spanning a plane before it fits.
+  let spansPlane = false;
+  search: for (let i = 1; i < samples.length; i += 1) {
+    for (let j = i + 1; j < samples.length; j += 1) {
+      const cross =
+        (samples[i]!.x - first.x) * (samples[j]!.y - first.y) -
+        (samples[i]!.y - first.y) * (samples[j]!.x - first.x);
+      if (Math.abs(cross) > tolerance) {
+        spansPlane = true;
+        break search;
+      }
+    }
+  }
+  if (!spansPlane) return false;
+  const ux0 = samples[1]!.x - first.x;
+  const uy0 = samples[1]!.y - first.y;
+  const uLength = Math.hypot(ux0, uy0);
+  if (uLength < 1e-15) return false;
+  const ux = ux0 / uLength;
+  const uy = uy0 / uLength;
+  const local = samples.map((sample) => {
+    const dx = sample.x - first.x;
+    const dy = sample.y - first.y;
+    return { x: dx * ux + dy * uy, y: dx * -uy + dy * ux };
+  });
+  // Least squares over each sample against the first, which eliminates r².
+  const origin = local[0]!;
+  const originSquared = origin.x * origin.x + origin.y * origin.y;
+  let a00 = 0;
+  let a01 = 0;
+  let a11 = 0;
+  let b0 = 0;
+  let b1 = 0;
+  for (const point of local.slice(1)) {
+    const r0 = 2 * (point.x - origin.x);
+    const r1 = 2 * (point.y - origin.y);
+    const rhs = point.x * point.x + point.y * point.y - originSquared;
+    a00 += r0 * r0;
+    a01 += r0 * r1;
+    a11 += r1 * r1;
+    b0 += r0 * rhs;
+    b1 += r1 * rhs;
+  }
+  const determinant = a00 * a11 - a01 * a01;
+  if (Math.abs(determinant) < 1e-30) return false;
+  const cx = (b0 * a11 - b1 * a01) / determinant;
+  const cy = (a00 * b1 - a01 * b0) / determinant;
+  const radii = local.map((point) => Math.hypot(point.x - cx, point.y - cy));
+  const mean =
+    radii.reduce((total, radius) => total + radius, 0) / radii.length;
+  if (mean < tolerance) return false;
+  return radii.every((radius) => Math.abs(radius - mean) <= tolerance);
+}
+
+function recognizedAsLine(
+  samples: readonly Vec2Like[],
+  tolerance: number
+): boolean {
+  const first = samples[0]!;
+  const last = samples.at(-1)!;
+  const length = Math.hypot(last.x - first.x, last.y - first.y);
+  if (length < 1e-15) return false;
+  const dx = (last.x - first.x) / length;
+  const dy = (last.y - first.y) / length;
+  return samples.every(
+    (sample) =>
+      Math.abs((sample.x - first.x) * dy - (sample.y - first.y) * dx) <=
+      tolerance
+  );
+}
+
+/** Ceiling on the pieces one bezier is split into for the kernel. */
+const MAX_KERNEL_SAFE_PIECES = 64;
+
+/** de Casteljau split of a bezier's control points at `t`. */
+function splitControlPoints(
+  points: readonly Vec2Like[],
+  t: number
+): [Vec2Like[], Vec2Like[]] {
+  const left: Vec2Like[] = [];
+  const right: Vec2Like[] = [];
+  let row: readonly Vec2Like[] = points;
+  while (row.length > 0) {
+    left.push(row[0]!);
+    right.unshift(row.at(-1)!);
+    const next: Vec2Like[] = [];
+    for (let index = 0; index + 1 < row.length; index += 1) {
+      next.push({
+        x: row[index]!.x + (row[index + 1]!.x - row[index]!.x) * t,
+        y: row[index]!.y + (row[index + 1]!.y - row[index]!.y) * t
+      });
+    }
+    row = next;
+  }
+  return [left, right];
+}
+
+/**
+ * The bezier as the kernel can extrude it: itself, or — when the pinned
+ * kernel would misread it as a circle ({@link kernelReadsBezierAsCircle}) —
+ * the same curve split by de Casteljau into the fewest equal-parameter pieces
+ * that the kernel reads as lines.
+ *
+ * The split is exact: the pieces trace the original polynomial, so the walls
+ * and caps keep the font's own curve and the volume is unchanged. A piece the
+ * kernel reads as a line still gets a ruled B-spline wall (its cap-edge pass
+ * only straightens a NURBS whose control polygon is itself straight to
+ * 1e-7), so caps and walls agree, which is all the exact boolean needs. Each
+ * piece must pass the line test at half the kernel's tolerance, a margin for
+ * the kernel sampling the lifted 3D curve rather than these 2D points.
+ *
+ * Measured over every bundled font, sizes 5, 10 and 20, A–Z, a–z and 0–9:
+ * of the 201 glyph regions with a misread segment, 200 refused an exact cut
+ * through a slab face as built, and all 201 cut exactly once split; the 1002
+ * regions without one cut exactly either way. Only flagged segments are split,
+ * so every other wall keeps the "one glyph segment, one wall" structure.
+ *
+ * Endpoints are the curve's own point objects and the pieces share their
+ * joints by identity, which keeps `makeWire`'s 1e-7 weld bit-exact.
+ */
+export function kernelSafeBezierPieces(
+  curve: BezierRegionCurve
+): BezierRegionCurve[] {
+  const points = [curve.a, ...curve.controls, curve.b];
+  if (!kernelReadsBezierAsCircle(points)) return [curve];
+  const lineTolerance = KERNEL_EXTRUDE_RECOGNITION_TOLERANCE / 2;
+  for (let count = 2; count <= MAX_KERNEL_SAFE_PIECES; count += 1) {
+    const pieces: Vec2Like[][] = [];
+    let rest: readonly Vec2Like[] = points;
+    for (let index = 0; index < count - 1; index += 1) {
+      const [left, right] = splitControlPoints(rest, 1 / (count - index));
+      pieces.push(left);
+      rest = right;
+    }
+    pieces.push([...rest]);
+    // Share joints by identity, and keep the curve's own endpoint objects.
+    pieces[0]![0] = curve.a;
+    pieces.at(-1)![pieces.at(-1)!.length - 1] = curve.b;
+    for (let index = 1; index < pieces.length; index += 1) {
+      pieces[index]![0] = pieces[index - 1]!.at(-1)!;
+    }
+    const straight = pieces.every((piece) => {
+      const samples = Array.from({ length: RECOGNITION_SAMPLES }, (_, at) =>
+        bezierPointAt(piece, at / (RECOGNITION_SAMPLES - 1))
+      );
+      return recognizedAsLine(samples, lineTolerance);
+    });
+    if (!straight) continue;
+    return pieces.map((piece) => ({
+      ...curve,
+      a: piece[0]!,
+      b: piece.at(-1)!,
+      controls: piece.slice(1, -1) as unknown as BezierRegionCurve['controls']
+    }));
+  }
+  return [curve];
+}
