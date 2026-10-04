@@ -67,6 +67,11 @@
      intended result, not a failure. */
   --color-cut: #ff644d;
   --color-viewport-bg: #101215;
+  /* Part cards are rendered on a near-black stage and stored that way. On
+     the dark palette `lighten` lets that stage take the card's own surface;
+     on the light one it would wash the part out, so the picture stays as
+     captured there. */
+  --thumbnail-blend: lighten;
   /* Overlays drawn on the viewport's dark stage (orientation widget, scale
      bar, pick lists, callouts) keep light text in every theme — the light
      theme repaints the chrome, not the canvas. Never use --color-text there. */
@@ -251,6 +256,7 @@
   --color-error: #dc2626;
   --color-error-text: #b91c1c;
   --color-success: #137638;
+  --thumbnail-blend: normal;
 }
 
 /* 'system' under a light OS: the same palette, resolved by the browser. */
@@ -275,6 +281,7 @@
     --color-error: #dc2626;
     --color-error-text: #b91c1c;
     --color-success: #137638;
+    --thumbnail-blend: normal;
   }
 }
 

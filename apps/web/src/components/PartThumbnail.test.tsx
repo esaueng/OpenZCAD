@@ -162,7 +162,7 @@ describe('PartThumbnail', () => {
     const loadThumbnail = vi.fn().mockResolvedValue(null);
     const publishThumbnail = vi.fn();
 
-    render(
+    const view = render(
       <PartThumbnail
         project={summary()}
         loadThumbnail={loadThumbnail}
@@ -171,6 +171,9 @@ describe('PartThumbnail', () => {
     );
 
     expect(await screen.findByText('No geometry')).toBeVisible();
+    // One placeholder for both: an empty part keeps the wire cube a missing
+    // preview shows, captioned, rather than swapping it for text alone.
+    expect(view.container.querySelector('svg')).toBeInTheDocument();
     // A cached "empty" is an answer, not a miss — re-deriving it every visit
     // would defeat the cache for exactly the parts that render to nothing.
     expect(publishThumbnail).not.toHaveBeenCalled();

@@ -8,6 +8,15 @@
    overlays. Durations stay inside the token scale and collapse to zero
    under prefers-reduced-motion (tokens.css). */
 
+/* A theme switch repaints in one frame (useAppSettingsSync sets the flag
+   for the frame the palette changes in). Without it the surfaces snapped
+   while every control below ramped its colours after them. */
+:root[data-theme-switching] *,
+:root[data-theme-switching] *::before,
+:root[data-theme-switching] *::after {
+  transition: none !important;
+}
+
 /* The default for every control: hover, pressed and selected colours ease
    rather than snap. :where() keeps this at zero specificity, so a component
    that declares its own transition (a sliding thumb, a width bar) still wins.

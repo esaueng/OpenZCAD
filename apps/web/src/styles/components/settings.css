@@ -245,16 +245,23 @@
 .settings-content {
   min-width: 0;
   overflow-y: auto;
+  /* A page long enough to scroll would otherwise lose the scrollbar's width
+     and shift its centred column sideways against the pages that do not. */
+  scrollbar-gutter: stable;
   padding: var(--sp-6) clamp(var(--sp-4), 5vw, 72px) 64px;
 }
 
+/* Every page sits in the same centred frame, so its left edge is the same
+   whichever page is open. A page's content keeps a reading width inside it;
+   the controls reference alone runs the full frame. Centring each page at
+   its own width put the reference's left edge 140px left of the others. */
 .settings-section {
-  width: min(900px, 100%);
+  width: min(1040px, 100%);
   margin: 0 auto;
 }
 
-.settings-section.settings-section-wide {
-  width: min(1180px, 100%);
+.settings-section:not(.settings-section-wide) > .settings-card {
+  max-width: 900px;
 }
 
 .settings-section > header {
@@ -566,35 +573,6 @@
   background: var(--color-accent-dim);
 }
 
-.settings-controls-note {
-  display: flex;
-  align-items: flex-start;
-  gap: var(--sp-3);
-  padding: var(--sp-4);
-  color: var(--color-text-muted);
-  background: var(--color-accent-dim);
-  border-bottom: var(--border-thin);
-}
-
-.settings-controls-note > svg {
-  flex: 0 0 auto;
-  color: var(--color-accent);
-}
-
-.settings-controls-note > span {
-  display: grid;
-  gap: 2px;
-}
-
-.settings-controls-note strong {
-  color: var(--color-text);
-  font-weight: var(--fw-medium);
-}
-
-.settings-controls-note small {
-  color: var(--color-text-muted);
-}
-
 .settings-control-collection + .settings-control-collection {
   border-top: var(--border-thin);
 }
@@ -645,7 +623,9 @@
 
 .settings-control-groups {
   display: grid;
-  grid-template-columns: repeat(auto-fit, minmax(300px, 1fr));
+  /* Wide enough for a one-line key column ("Ctrl/Cmd+Shift+Z Ctrl/Cmd+Y")
+     beside a readable label: two groups across the full frame. */
+  grid-template-columns: repeat(auto-fit, minmax(min(400px, 100%), 1fr));
   gap: 1px;
   background: var(--color-border);
 }
@@ -680,17 +660,21 @@
   margin-top: var(--sp-1);
 }
 
+/* The key column is as wide as the group's longest binding and every row
+   shares it (subgrid), so a binding never wraps inside a keycap and the
+   labels start on one line down the group. */
 .settings-control-group dl {
   display: grid;
-  gap: 0;
+  grid-template-columns: max-content minmax(0, 1fr);
+  column-gap: var(--sp-3);
   margin: var(--sp-3) 0 0;
 }
 
 .settings-control-row {
   min-width: 0;
   display: grid;
-  grid-template-columns: minmax(112px, 0.42fr) minmax(0, 1fr);
-  gap: var(--sp-3);
+  grid-column: 1 / -1;
+  grid-template-columns: subgrid;
   padding: 9px 0;
   border-top: var(--border-thin);
 }
@@ -703,15 +687,12 @@
 
 .settings-control-keys {
   display: flex;
-  flex-wrap: wrap;
   gap: 4px;
 }
 
 .settings-control-keys kbd {
-  width: max-content;
-  max-width: 100%;
   min-width: 30px;
-  overflow-wrap: anywhere;
+  white-space: nowrap;
   text-align: center;
 }
 
@@ -831,9 +812,20 @@
     padding: var(--sp-3);
   }
 
+  /* No room for a key column beside the label: the binding sits above its
+     label, and a sequence of several keys may wrap between keycaps (never
+     inside one). */
+  .settings-control-group dl {
+    grid-template-columns: minmax(0, 1fr);
+  }
+
   .settings-control-row {
-    grid-template-columns: minmax(96px, 0.38fr) minmax(0, 1fr);
-    gap: var(--sp-2);
+    grid-template-columns: minmax(0, 1fr);
+    gap: var(--sp-1);
+  }
+
+  .settings-control-keys {
+    flex-wrap: wrap;
   }
 
   .settings-section h2 {
