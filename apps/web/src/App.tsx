@@ -13818,20 +13818,28 @@ export function App() {
         };
         const { regionInferenceRefusal, resolveCurrentExtrude } =
           await extrudeInference();
-        const resolved =
-          reuseResolvedExtrudePreview(preview, options) ??
-          (await resolveCurrentExtrude(
-            {
-              ...options,
-              derive: (document) => geometry.syncOnce(document)
-            },
-            isCurrent
-          ));
+        const agreement = {
+          ...options,
+          derive: (document: ProjectDocument) => geometry.syncOnce(document)
+        };
+        let resolved: ResolvedExtrude | null;
+        try {
+          resolved =
+            reuseResolvedExtrudePreview(preview, options) ??
+            (await resolveCurrentExtrude(agreement, isCurrent));
+        } catch (error) {
+          // A selection whose profiles disagree often fails as a whole; the
+          // disagreement is the cause worth naming, not the kernel's refusal.
+          const mixed = isCurrent()
+            ? await regionInferenceRefusal(agreement, null)
+            : null;
+          throw mixed ? new Error(mixed) : error;
+        }
         if (!resolved || !isCurrent()) return;
         // One drag is one operation: selected profiles that would not each
         // extrude the same way are refused, not silently merged into one.
         const mixed = await regionInferenceRefusal(
-          { ...options, derive: (document) => geometry.syncOnce(document) },
+          agreement,
           resolved.inference
         );
         if (!isCurrent()) return;

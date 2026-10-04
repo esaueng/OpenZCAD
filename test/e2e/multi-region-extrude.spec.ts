@@ -2,7 +2,9 @@ import {
   addPrimitiveFeature,
   addSketchFeature,
   createProjectDocument,
-  listFeaturesInOrder
+  getLatestBodyId,
+  listFeaturesInOrder,
+  transformBody
 } from '@openzcad/document-core';
 import { toUserId, type ProjectDocument } from '@openzcad/shared';
 import type { Locator, Page } from '@playwright/test';
@@ -287,6 +289,68 @@ test('refuses regions that would not extrude the same way', async ({
     page.locator('.feature-row-main', { hasText: 'Extrude' })
   ).toHaveCount(0);
   await expectBodyCount(page, 1);
+});
+
+test('refuses regions over two different bodies', async ({ page }) => {
+  test.setTimeout(120_000);
+  await stubApi(page);
+  let document = createProjectDocument('Two plates', toUserId('user_e2e'));
+  for (const name of ['Left', 'Right']) {
+    document = addPrimitiveFeature(document, {
+      name,
+      primitiveKind: 'box',
+      dimensions: { width: 30, height: 30, depth: 8 }
+    });
+  }
+  document = transformBody(document, {
+    name: 'Place right',
+    targetBodyId: getLatestBodyId(document)!,
+    translation: { x: 50, y: 0, z: 0 }
+  }).document;
+  // One pocket over each plate: both cut, but one extrude has one target.
+  document = addSketchFeature(document, {
+    name: 'Pockets',
+    plane: 'XY',
+    offset: 8,
+    objects: [
+      {
+        objectKind: 'rectangle',
+        width: 10,
+        height: 10,
+        centerX: 15,
+        centerY: 15
+      },
+      {
+        objectKind: 'rectangle',
+        width: 10,
+        height: 10,
+        centerX: 65,
+        centerY: 15
+      }
+    ]
+  }).document;
+  await openDocument(page, document);
+  const canvas = page.locator('.viewer-host canvas');
+  await expect(canvas).toHaveAttribute('data-e2e-rendered-bodies', '2', {
+    timeout: 30_000
+  });
+  const editor = page.getByRole('form', { name: 'Extrude settings' });
+  await pickProfile(canvas, 0);
+  await pickProfile(canvas, 1, true);
+  await expect(editor).toContainText('2 selected profiles');
+
+  await page.getByTestId('direct-manipulation-value').click();
+  const keypad = page.getByRole('dialog', { name: 'Height value' });
+  await keypad.getByRole('textbox').fill('-4');
+  await keypad.getByRole('button', { name: 'Apply height' }).click();
+  await expect(page.getByRole('contentinfo')).toContainText(
+    'The selected profiles sit over different bodies; extrude them separately.',
+    { timeout: 30_000 }
+  );
+  await expect(
+    page.locator('.feature-row-main', { hasText: 'Extrude' })
+  ).toHaveCount(0);
+  await expectBodyCount(page, 2);
 });
 
 test('a glyph pick selects, arms and builds the whole word', async ({
