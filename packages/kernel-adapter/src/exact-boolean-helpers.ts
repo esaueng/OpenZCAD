@@ -12,7 +12,10 @@ import {
   type ExtrudeInferenceBody
 } from './extrude-inference';
 import { MEASUREMENT_DEFLECTION } from './exact-witnesses';
-import { displayTessellationForExtents } from './display-tessellation';
+import {
+  displayTessellationForExtents,
+  heldDisplayTessellation
+} from './display-tessellation';
 import {
   censusOfSolids,
   countFaceConnectedComponents,
@@ -67,14 +70,20 @@ export function solidMeshIsClosed(kernel: RemusKernel, solid: number): boolean {
 function tessellateAndCheckSolidMesh(
   kernel: RemusKernel,
   solid: number,
-  retainForMeasurement: boolean
+  retainForMeasurement: boolean,
+  heldLinearDeflection?: number
 ): { closed: boolean; displayMesh?: UnionDisplayMeshPayload } {
   try {
     const bounds = kernel.boundingBox(solid);
-    const tessellation = displayTessellationForExtents(
-      bounds[3]! - bounds[0]!,
-      bounds[4]! - bounds[1]!,
-      bounds[5]! - bounds[2]!
+    // The same deflection rule as the measurement pass, so the projection
+    // retained here is the one measurement asks for.
+    const tessellation = heldDisplayTessellation(
+      displayTessellationForExtents(
+        bounds[3]! - bounds[0]!,
+        bounds[4]! - bounds[1]!,
+        bounds[5]! - bounds[2]!
+      ),
+      heldLinearDeflection
     );
     const mesh = kernel.tessellateSolidGroupedBinary(
       solid,
@@ -404,7 +413,8 @@ export function unifyUnionFacesChecked(
   kernel: RemusKernel,
   rawSolid: number,
   onAccepted?: (solid: number) => void,
-  retainDisplayMesh = false
+  retainDisplayMesh = false,
+  heldLinearDeflection?: number
 ): UnifiedUnion {
   const unified = unifyCopyChecked(kernel, rawSolid);
   if (unified === null) {
@@ -415,7 +425,8 @@ export function unifyUnionFacesChecked(
       kernel,
       rawSolid,
       validationReport(kernel, rawSolid).errorCount,
-      retainDisplayMesh
+      retainDisplayMesh,
+      heldLinearDeflection
     );
   }
   return unifyUnionFacesWithVerdict(
@@ -424,7 +435,8 @@ export function unifyUnionFacesChecked(
     unified.report,
     unified.candidate,
     onAccepted,
-    retainDisplayMesh
+    retainDisplayMesh,
+    heldLinearDeflection
   );
 }
 
@@ -440,13 +452,15 @@ export function unifyUnionFacesWithVerdict(
   report: KernelUnifyReport,
   healedCopy: number,
   onAccepted?: (solid: number) => void,
-  retainDisplayMesh = false
+  retainDisplayMesh = false,
+  heldLinearDeflection?: number
 ): UnifiedUnion {
   if (!report.reverted && report.facesMerged > 0 && report.resultErrors === 0) {
     const closure = tessellateAndCheckSolidMesh(
       kernel,
       healedCopy,
-      retainDisplayMesh
+      retainDisplayMesh,
+      heldLinearDeflection
     );
     if (closure.closed) {
       onAccepted?.(healedCopy);
@@ -466,7 +480,8 @@ export function unifyUnionFacesWithVerdict(
     kernel,
     rawSolid,
     report.inputErrors,
-    retainDisplayMesh
+    retainDisplayMesh,
+    heldLinearDeflection
   );
 }
 
@@ -475,11 +490,17 @@ function rawUnionWithVerdict(
   kernel: RemusKernel,
   rawSolid: number,
   strictErrors: number,
-  retainDisplayMesh: boolean
+  retainDisplayMesh: boolean,
+  heldLinearDeflection?: number
 ): UnifiedUnion {
   const closure =
     strictErrors === 0
-      ? tessellateAndCheckSolidMesh(kernel, rawSolid, retainDisplayMesh)
+      ? tessellateAndCheckSolidMesh(
+          kernel,
+          rawSolid,
+          retainDisplayMesh,
+          heldLinearDeflection
+        )
       : undefined;
   return {
     solid: rawSolid,
@@ -501,7 +522,8 @@ export function fuseUniformSolidChecked(
   solids: number[],
   labels?: readonly string[],
   onAccepted?: (solid: number) => void,
-  retainDisplayMesh = false
+  retainDisplayMesh = false,
+  heldLinearDeflection?: number
 ): UnifiedUnion {
   return unifyUnionFacesChecked(
     kernel,
@@ -509,7 +531,8 @@ export function fuseUniformSolidChecked(
     // solid reaches the gate.
     exactFuseAll(kernel, solids, labels),
     onAccepted,
-    retainDisplayMesh
+    retainDisplayMesh,
+    heldLinearDeflection
   );
 }
 
