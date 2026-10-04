@@ -61,8 +61,26 @@ export function FeatureHistoryPanel({
       {isFeatureSuppressed(feature) && <span> (inactive)</span>}
     </li>
   );
+  // The row already names the feature, and an ordinary one that is in the
+  // build says nothing here: only a state the row cannot show at a glance.
+  const status = !selected
+    ? null
+    : isFeatureRollbackSuppressed(selected)
+      ? 'Paused by rollback'
+      : isFeatureSuppressed(selected)
+        ? 'Suppressed'
+        : warning || missing.length > 0
+          ? 'Needs repair'
+          : null;
+  const showsUses = parents.length > 0 || missing.length > 0;
+  const hasDetails =
+    selected !== undefined &&
+    (status !== null || showsUses || downstream.length > 0);
   // Rollback status and Resume live at the top of the History list itself.
-  if (!selected && !failure) return null;
+  // A standalone feature with nothing to report draws no block at all: four
+  // lines saying its name, that it was built and that nothing relates to it
+  // cost a row-click 130px for no news.
+  if (!hasDetails && !failure) return null;
   return (
     <section className="feature-history-panel" aria-label="History details">
       {failure && (
@@ -83,18 +101,9 @@ export function FeatureHistoryPanel({
           </button>
         </div>
       )}
-      {selected && (
+      {selected && hasDetails && (
         <div>
-          <strong>{selected.name}</strong>
-          <p>
-            {isFeatureRollbackSuppressed(selected)
-              ? 'Paused by rollback'
-              : isFeatureSuppressed(selected)
-                ? 'Suppressed'
-                : warning || missing.length > 0
-                  ? 'Needs repair'
-                  : 'Included in the build'}
-          </p>
+          {status && <p>{status}</p>}
           {warning && <p role="alert">{warning}</p>}
           {missing.length > 0 && (
             <p role="alert">
@@ -102,11 +111,7 @@ export function FeatureHistoryPanel({
               deletion or edit this feature's references.
             </p>
           )}
-          {/* An empty disclosure said it twice: "Uses 0 earlier features"
-              over "No earlier geometry dependencies." One line instead. */}
-          {parents.length === 0 && missing.length === 0 ? (
-            <p className="muted">No earlier features feed this one.</p>
-          ) : (
+          {showsUses && (
             <details open>
               <summary>
                 Uses {parents.length} earlier{' '}
@@ -119,22 +124,20 @@ export function FeatureHistoryPanel({
               )}
             </details>
           )}
-          {downstream.length === 0 ? (
-            <p className="muted">Nothing later depends on it.</p>
-          ) : (
-            <details open>
-              <summary>
-                Affects {downstream.length} later{' '}
-                {downstream.length === 1 ? 'feature' : 'features'}
-              </summary>
-              <ul>{downstream.map(link)}</ul>
-            </details>
-          )}
           {downstream.length > 0 && (
-            <p className="muted">
-              Deleting or suppressing this feature can break these later
-              features. Undo restores the previous history.
-            </p>
+            <>
+              <details open>
+                <summary>
+                  Affects {downstream.length} later{' '}
+                  {downstream.length === 1 ? 'feature' : 'features'}
+                </summary>
+                <ul>{downstream.map(link)}</ul>
+              </details>
+              <p className="muted">
+                Deleting or suppressing this feature can break these later
+                features. Undo restores the previous history.
+              </p>
+            </>
           )}
         </div>
       )}

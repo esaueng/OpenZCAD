@@ -148,38 +148,41 @@ export function TweakPanel({
         {panelOpen && (
           <aside className="sidebar tweak-panel" aria-label="Parameters">
             <div className="sidebar-label">Parameters</div>
-            <p className="muted tweak-panel-intro">
-              Change a value and press Enter, or use an on/off toggle. The
-              design itself stays locked.
-            </p>
+            {/* How to change a value only where there is one to change. */}
+            {parameters.length > 0 && (
+              <p className="muted tweak-panel-intro">
+                Change a value and press Enter, or use an on/off toggle. The
+                design itself stays locked.
+              </p>
+            )}
             {modelError && (
               <p className="parameter-feedback error" role="alert">
                 {modelError} Enter a valid parameter value to rebuild the model.
               </p>
             )}
-            <div className="param-list tweak-panel-params">
-              {parameters.map((parameter) => (
-                <div className="param-entry" key={parameter.parameterId}>
-                  <ParameterRow
-                    parameter={parameter}
-                    value={parameterValues[parameter.name]}
-                    minimum={parameterMinimums?.[parameter.name]}
-                    onSet={onSetParameter}
-                    onViewDetails={onViewActivityLog}
-                    onPreview={onPreviewParameter}
-                  />
-                  {parameter.description && (
-                    <p className="param-description-text">
-                      {parameter.description}
-                    </p>
-                  )}
-                </div>
-              ))}
-            </div>
-            {parameters.length === 0 && (
+            {parameters.length > 0 ? (
+              <div className="param-list tweak-panel-params">
+                {parameters.map((parameter) => (
+                  <div className="param-entry" key={parameter.parameterId}>
+                    <ParameterRow
+                      parameter={parameter}
+                      value={parameterValues[parameter.name]}
+                      minimum={parameterMinimums?.[parameter.name]}
+                      onSet={onSetParameter}
+                      onViewDetails={onViewActivityLog}
+                      onPreview={onPreviewParameter}
+                    />
+                    {parameter.description && (
+                      <p className="param-description-text">
+                        {parameter.description}
+                      </p>
+                    )}
+                  </div>
+                ))}
+              </div>
+            ) : (
               <p className="muted sidebar-hint">
-                This model offers no parameters to adjust. Build mode is where
-                they are defined and chosen.
+                This model offers no parameters to adjust.
               </p>
             )}
           </aside>

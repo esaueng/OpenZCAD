@@ -377,15 +377,23 @@ test('a tool card owns the lane and keeps its actions in view', async ({
     const actions = document
       .querySelector('.stage-right .inspector .form-actions')!
       .getBoundingClientRect();
+    const cube = document
+      .querySelector('.viewer-rail-stack')!
+      .getBoundingClientRect();
     return {
       laneHeight: lane.height,
       cardHeight: card.height,
+      cardBottom: card.bottom,
+      cubeTop: cube.top,
       actionsInside: actions.top >= body.top && actions.bottom <= body.bottom
     };
   });
   // The card has the lane to itself, less the gap the empty drawer keeps.
   expect(layout.cardHeight).toBeGreaterThan(layout.laneHeight - 40);
   expect(layout.actionsInside).toBe(true);
+  // …and the lane stops above the corner: the Hole card used to run to the
+  // window's foot and the orientation cube drew through it.
+  expect(layout.cardBottom).toBeLessThanOrEqual(layout.cubeTop);
 
   // The card's actions are on screen without scrolling it.
   const box = (await submit.boundingBox())!;

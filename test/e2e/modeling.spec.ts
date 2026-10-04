@@ -3300,6 +3300,12 @@ test('rejects a disconnected Union and succeeds after the gap is closed', async 
   await expect(inspector.locator('.pick-row.selected')).toHaveCount(2);
   await expectConsumedBodyCount(page, 0);
 
+  // The refused Union card keeps the lane, and in a 720px window it fills
+  // it: the drawer gives way under it to nothing, and the lane stops above
+  // the orientation cube, so History is out of reach until the card closes.
+  // (The row used to be clicked through a sliver of drawer drawn over the
+  // cube.)
+  await inspector.getByRole('button', { name: 'Cancel' }).click();
   await page.locator('.feature-row-main', { hasText: 'Lift upper' }).click();
   await inspector.getByLabel('Move Z').fill('10');
   await inspector.getByRole('button', { name: /^Apply/ }).click();
