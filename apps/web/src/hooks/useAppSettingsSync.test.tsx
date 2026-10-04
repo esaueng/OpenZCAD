@@ -137,6 +137,7 @@ afterEach(() => {
   delete document.documentElement.dataset.density;
   delete document.documentElement.dataset.reducedMotion;
   delete document.documentElement.dataset.theme;
+  delete document.documentElement.dataset.themeSwitching;
 });
 
 describe('boot state', () => {
@@ -211,6 +212,61 @@ describe('device persistence and chrome', () => {
       expect(defaultAppSettings().appearance.theme).toBe('system');
       expect(document.documentElement.dataset.theme).toBe('system');
       expect(matchMedia).not.toHaveBeenCalled();
+    } finally {
+      vi.unstubAllGlobals();
+    }
+  });
+});
+
+describe('theme switch', () => {
+  it('repaints in one frame: transitions are off only while the palette changes', () => {
+    // Every control eases its colours (motion.css), so a switch used to snap
+    // the surfaces while hundreds of buttons ramped after them. The flag
+    // turns transitions off for the switch's frame and then clears.
+    const frames: FrameRequestCallback[] = [];
+    vi.stubGlobal('requestAnimationFrame', (callback: FrameRequestCallback) => {
+      frames.push(callback);
+      return frames.length;
+    });
+    vi.stubGlobal('cancelAnimationFrame', vi.fn());
+    try {
+      loadRecord.mockReturnValue({
+        settings: settings({
+          appearance: {
+            theme: 'dark',
+            density: 'compact',
+            reducedMotion: false
+          }
+        }),
+        syncedRevision: 7
+      });
+      const { result } = render();
+      const root = document.documentElement;
+
+      // The first paint is not a switch.
+      expect(root.dataset.theme).toBe('dark');
+      expect(root.dataset.themeSwitching).toBeUndefined();
+      expect(frames).toHaveLength(0);
+
+      act(() =>
+        result.current.handleAppSettingsChange(
+          settings({
+            appearance: {
+              theme: 'light',
+              density: 'compact',
+              reducedMotion: false
+            }
+          })
+        )
+      );
+      expect(root.dataset.theme).toBe('light');
+      expect(root.dataset.themeSwitching).toBe('true');
+
+      // Cleared two frames later, once the new palette has painted.
+      frames.shift()?.(0);
+      expect(root.dataset.themeSwitching).toBe('true');
+      frames.shift()?.(16);
+      expect(root.dataset.themeSwitching).toBeUndefined();
     } finally {
       vi.unstubAllGlobals();
     }

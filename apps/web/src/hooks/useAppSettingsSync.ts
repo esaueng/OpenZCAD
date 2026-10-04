@@ -88,6 +88,8 @@ export function useAppSettingsSync({
       : 'false';
   }, [appSettings]);
 
+  /** The theme last painted, so the first paint is not treated as a switch. */
+  const appliedThemeRef = useRef<string | null>(null);
   useLayoutEffect(() => {
     // The root carries the setting itself, and the stylesheet resolves it:
     // 'system' paints the light palette under `prefers-color-scheme: light`
@@ -99,8 +101,32 @@ export function useAppSettingsSync({
     // paint, so an explicit choice never flashes the default first. The 3D
     // viewport keeps its dark stage either way — only the chrome tokens
     // switch.
-    globalThis.document.documentElement.dataset.theme =
-      appSettings.appearance.theme;
+    //
+    // A change of theme repaints in one frame. Every control eases its
+    // colours over --dur-fast (motion.css), so a switch used to snap the
+    // surfaces while some three hundred buttons and fields ramped behind
+    // them — the chrome visibly arrived in pieces. `themeSwitching` turns
+    // transitions off for the frame the palette changes in, then clears.
+    const root = globalThis.document.documentElement;
+    const theme = appSettings.appearance.theme;
+    const switching =
+      appliedThemeRef.current !== null && appliedThemeRef.current !== theme;
+    appliedThemeRef.current = theme;
+    if (!switching) {
+      root.dataset.theme = theme;
+      return;
+    }
+    root.dataset.themeSwitching = 'true';
+    root.dataset.theme = theme;
+    let frame = requestAnimationFrame(() => {
+      frame = requestAnimationFrame(() => {
+        delete root.dataset.themeSwitching;
+      });
+    });
+    return () => {
+      cancelAnimationFrame(frame);
+      delete root.dataset.themeSwitching;
+    };
   }, [appSettings.appearance.theme]);
 
   useEffect(() => {

@@ -258,8 +258,11 @@
   white-space: nowrap;
 }
 
+/* An explicit size: a bare <small> renders "smaller" than the 11.5px item,
+   which put the sublabels at 9.6px, under the 11px floor for chrome text. */
 .topbar-menu-item small {
   color: var(--color-text-subtle);
+  font-size: var(--fs-mini);
 }
 
 .topbar-menu-sep {
