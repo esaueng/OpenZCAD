@@ -31,7 +31,8 @@ import {
   getParameterHiddenBodyIds,
   listFeaturesInOrder,
   listNodesByKind,
-  resolveParamValue
+  resolveParamValue,
+  rigidImportedSource
 } from '@openzcad/document-core';
 import { writeDxf } from '@openzcad/io-dxf';
 import { writeAsciiStl } from '@openzcad/io-stl';
@@ -100,7 +101,8 @@ export type { DxfFaceSelector } from './exact-types';
 import { diagnoseImportedSolid } from './exact-lineage-builders';
 import {
   blendRegionKeyOfHashes,
-  measureOwnedFaceGeometry
+  measureOwnedFaceGeometry,
+  withFaceGeometryMemo
 } from './exact-measure';
 import {
   hasRefusingFeatureWarning,
@@ -779,6 +781,13 @@ function importedExactBodyIds(document: ProjectDocument): Set<BodyId> {
 }
 
 /**
+ * Published instead of measuring the opening of an imported body that is no
+ * longer the import under fixed moves or rotations.
+ */
+const OPENING_NEEDS_RIGID_IMPORT =
+  'Only an imported STEP body with at most fixed moves or rotations after import can be grown. This body has other history since import (a shape edit, scaling, parameter-driven placement or a boolean), so its opening is not measured.';
+
+/**
  * Budget for retained per-body measurements. The cache holds at most one
  * entry per live body, so this only bites on huge documents; eviction drops
  * the oldest entries, which then simply re-measure on their next sync.
@@ -1449,7 +1458,12 @@ export class RemusKernelAdapter implements ExactKernelAdapter {
      * Strict verdicts the union gate established earlier in this sync, keyed
      * by handle; a hit replaces the strict `validateSolid` call.
      */
-    strictVerdicts?: ReadonlyMap<number, StrictUnionVerdict>
+    strictVerdicts?: ReadonlyMap<number, StrictUnionVerdict>,
+    /**
+     * Whether the opening is measured, or published as unsupported without
+     * running the recognizer; see the decision in `syncMeasuredDocument`.
+     */
+    measureOpening = recognizeImportedFeatures
   ): MeasuredShape {
     if (shape.solids.length === 0) {
       throw new Error('Exact body contains no solids.');
@@ -1671,7 +1685,16 @@ export class RemusKernelAdapter implements ExactKernelAdapter {
         // imported body can be offered for growing, so the consumed source
         // references a holder carves its pieces from are not measured: on the
         // hammer that was four recognitions per rebuild, most of its latency.
-        if (recognizeImportedFeatures && shape.solids.length === 1) {
+        if (
+          recognizeImportedFeatures &&
+          shape.solids.length === 1 &&
+          !measureOpening
+        ) {
+          topology.recognizedOpening = {
+            status: 'unsupported',
+            reason: OPENING_NEEDS_RIGID_IMPORT
+          };
+        } else if (recognizeImportedFeatures && shape.solids.length === 1) {
           const openingDone = onStage?.('Opening recognition');
           try {
             topology.recognizedOpening = recognizeOpening(kernel, solid, {
@@ -1979,6 +2002,26 @@ export class RemusKernelAdapter implements ExactKernelAdapter {
           feature.data.operation === 'union';
         const recognizeImportedFeatures =
           !consumed && importedBodyIds.has(bodyId);
+        // The opening is measured only where it can be grown. Its one
+        // consumer, the growing-holder recipe, compiles only against an
+        // import under fixed moves or rotations (`rigidImportedSource`, the
+        // same test as here), so after a direct edit, fillet, hole or boolean
+        // the measurement could only be refused at compile time. On the
+        // 160-face hammer it was 3.0 s of a 15.2 s offset-face rebuild (two
+        // strict validations inside the lettering proof, three slab
+        // intersections, a full face inventory). The body publishes an
+        // unsupported opening with that reason instead, which the assistant
+        // explains rather than proposing a recipe that cannot compile.
+        //
+        // Imported-feature recognition is deliberately NOT skipped or carried
+        // across such edits: hole edits, face-distance proofs and the edit
+        // catalog bind to it on edited bodies, and an edit changes it — an
+        // offset face re-limits the fillet bands along its edges and can make
+        // a blend recognizable that was not before — so a carried result
+        // would publish stale proofs.
+        const measureOpening =
+          recognizeImportedFeatures &&
+          rigidImportedSource(document, bodyId) !== null;
         // Tessellation dominates a sync once the prefix cache removed the
         // replay cost, so an unchanged body serves its previous measurement.
         // Handle identity is the key (see MeasuredBodyCacheEntry); the
@@ -2002,7 +2045,8 @@ export class RemusKernelAdapter implements ExactKernelAdapter {
           cached.provenanceKey === provenanceKey &&
           cached.solidKey === solidKey &&
           cached.strict === requiresStrictUnionValidation &&
-          cached.recognizedImportedFeatures === recognizeImportedFeatures
+          cached.recognizedImportedFeatures === recognizeImportedFeatures &&
+          cached.measuredOpening === measureOpening
         ) {
           // A matching key is only a candidate. A stale handle, changed face/
           // edge/vertex set or validation verdict abandons the entire arena.
@@ -2040,25 +2084,37 @@ export class RemusKernelAdapter implements ExactKernelAdapter {
                 : cached.strict !== requiresStrictUnionValidation
                   ? 'strictness'
                   : cached.recognizedImportedFeatures !==
-                      recognizeImportedFeatures
+                        recognizeImportedFeatures ||
+                      cached.measuredOpening !== measureOpening
                     ? 'recognition'
                     : 'provenance';
           measurementMisses[reason] = (measurementMisses[reason] ?? 0) + 1;
-          measured = this.measureShape(
+          // Each face of the body is read once for the whole measurement —
+          // published geometry, recognition and the opening inventory share
+          // it — instead of up to three times (see withFaceGeometryMemo).
+          measured = withFaceGeometryMemo(
             kernel,
-            shape,
-            requiresStrictUnionValidation,
-            recognizeImportedFeatures,
-            (part) =>
-              report(
-                'measurement',
-                `${body.name}: ${part}`,
-                document.bodyOrder.indexOf(bodyId) + 1,
-                document.bodyOrder.length
-              ),
-            analysisHashes,
-            1 / UNIT_TO_MM[document.units],
-            strictVerdicts
+            shape.solids.flatMap((solid) =>
+              Array.from(kernel.getSolidFaces(solid))
+            ),
+            () =>
+              this.measureShape(
+                kernel,
+                shape,
+                requiresStrictUnionValidation,
+                recognizeImportedFeatures,
+                (part) =>
+                  report(
+                    'measurement',
+                    `${body.name}: ${part}`,
+                    document.bodyOrder.indexOf(bodyId) + 1,
+                    document.bodyOrder.length
+                  ),
+                analysisHashes,
+                1 / UNIT_TO_MM[document.units],
+                strictVerdicts,
+                measureOpening
+              )
           );
           remeasured += 1;
           const witness = measured.witness;
@@ -2069,6 +2125,7 @@ export class RemusKernelAdapter implements ExactKernelAdapter {
             witness,
             strict: requiresStrictUnionValidation,
             recognizedImportedFeatures: recognizeImportedFeatures,
+            measuredOpening: measureOpening,
             faceHandleCount: witness.solids.reduce(
               (count, solid) => count + solid.faces.length,
               0

@@ -90,7 +90,64 @@ export function measureAreaProvenance(
   return 'exact';
 }
 
+/**
+ * Face geometry already measured inside one {@link withFaceGeometryMemo}
+ * scope. One body measurement used to read each face up to three times — its
+ * published geometry, the imported-feature query's surface read, and the
+ * opening inventory — and `faceArea` dominates each read.
+ *
+ * Only the listed handles are memoized: the faces of the solids being
+ * measured, which exist before the scope opens and are never mutated in
+ * place. Anything a recognizer allocates inside the scope (slab pieces,
+ * probe results, handles a checkpoint restore may hand out again) is always
+ * measured afresh, so a handle can never answer with another entity's
+ * geometry.
+ */
+let faceGeometryMemo: {
+  kernel: RemusKernel;
+  faces: ReadonlySet<number>;
+  measured: Map<number, FaceGeometry | undefined>;
+} | null = null;
+
+/**
+ * Runs `measure` with {@link measureFaceGeometry} memoized for `faces` of
+ * `kernel`. The scope is synchronous and closes on return or throw, so a
+ * memo never outlives the measurement that opened it.
+ */
+export function withFaceGeometryMemo<T>(
+  kernel: RemusKernel,
+  faces: Iterable<number>,
+  measure: () => T
+): T {
+  const previous = faceGeometryMemo;
+  faceGeometryMemo = { kernel, faces: new Set(faces), measured: new Map() };
+  try {
+    return measure();
+  } finally {
+    faceGeometryMemo = previous;
+  }
+}
+
 export function measureFaceGeometry(
+  kernel: RemusKernel,
+  face: number
+): FaceGeometry | undefined {
+  const memo = faceGeometryMemo;
+  if (!memo || memo.kernel !== kernel || !memo.faces.has(face)) {
+    return measureFaceGeometryOnce(kernel, face);
+  }
+  // Callers decorate the record they get (blend and through-hole roles,
+  // region keys), so every caller receives its own copy and the memo keeps
+  // an untouched one.
+  if (memo.measured.has(face)) {
+    return structuredClone(memo.measured.get(face));
+  }
+  const geometry = measureFaceGeometryOnce(kernel, face);
+  memo.measured.set(face, structuredClone(geometry));
+  return geometry;
+}
+
+function measureFaceGeometryOnce(
   kernel: RemusKernel,
   face: number
 ): FaceGeometry | undefined {
