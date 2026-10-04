@@ -351,13 +351,15 @@ drag restores the object's stored values; it never deletes persisted text.
   by the same value; only the grabbed arrow carries a chip. Preview and
   commit pass all profiles through `profileReferencesForSelection`, which
   already dedupes entity-wide (text) sources.
-- Add/cut inference runs per region against its own carrier and must
-  agree; a mixed result is a refusal with a plain sentence, not a silent
-  split.
+- Add/cut inference runs per region against its own carrier, and every
+  region must agree on both the operation and the target body (one extrude
+  stores one `targetBodyId`); two regions over different bodies, or a mixed
+  add/cut result, are refused with a plain sentence, not silently split.
 - Files: `machine.ts` region state and capabilities (`count`), `rigs.ts`
   region rig, `App.tsx` `regionExtrudeInputFor` (array), `extrudeInference.ts`.
 - Tests: machine tests for add/remove/clear; `test/e2e/multi-region-extrude.spec.ts`
-  with two rectangles from one handle and the refusal case.
+  with two rectangles from one handle, the mixed add/cut refusal, and two
+  regions over separate bodies refused.
 
 ### Phase 4 — Feel decisions (each a small PR, only if §6 says yes)
 
