@@ -239,7 +239,7 @@
   right: calc(100% + 7px);
   bottom: -4px;
   display: grid;
-  grid-template-columns: repeat(2, 66px);
+  grid-template-columns: repeat(2, 76px);
   gap: 2px;
   padding: 4px;
   background: var(--color-surface);
@@ -249,12 +249,12 @@
 }
 
 .rail-views-panel button {
-  min-height: 22px;
+  min-height: 26px;
   padding: 0 6px;
   color: var(--color-text-muted);
   border: 1px solid transparent;
   border-radius: var(--radius-sm);
-  font-size: var(--fs-xs);
+  font-size: var(--fs-sm);
   white-space: nowrap;
 }
 
@@ -273,7 +273,7 @@
    frame, and the e2e suite reads it as the viewport's readiness signal, so
    it neither moves by transform nor hides: a margin lifts it clear. */
 .viewer-shell:has(.handle-value-chip:not([hidden])) .selection-callout {
-  margin-top: -30px;
+  margin-top: -34px;
 }
 
 .selection-callout {
@@ -299,6 +299,8 @@
   align-items: center;
   gap: 6px;
   padding: 2px 2px 2px 8px;
+  /* The one callout that is pressed, so it reads at control size. */
+  font-size: var(--fs-sm);
   user-select: none;
   /* Above the right lane. The viewer slides the chip out from under the
      panels where there is room (clampNameCallouts); on a phone there is
@@ -330,7 +332,7 @@
 
 /* Over several picks it rises above their numbered labels. */
 .selection-callout.selection-callout-over-picks {
-  margin-top: -28px;
+  margin-top: -32px;
 }
 
 .selection-callout-name {
@@ -355,14 +357,14 @@
 
 .selection-callout-verb {
   min-height: 0;
-  height: 20px;
-  padding: 0 7px;
+  height: 24px;
+  padding: 0 8px;
   color: inherit;
   background: transparent;
   border: 1px solid transparent;
   border-radius: var(--radius-sm);
   font-family: var(--font-ui);
-  font-size: var(--fs-mini);
+  font-size: var(--fs-sm);
   line-height: 1;
 }
 
@@ -383,8 +385,8 @@
 .selection-callout-clear {
   display: inline-grid;
   place-items: center;
-  width: 18px;
-  height: 18px;
+  width: 24px;
+  height: 24px;
   min-height: 0;
   padding: 0;
   color: inherit;
