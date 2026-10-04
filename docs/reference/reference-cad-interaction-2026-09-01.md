@@ -483,8 +483,13 @@ cut). Nothing is linear; nothing rings — one overshoot lobe on the pill, none 
 
 ## 4. Contrasts with OpenZCAD
 
-Citations are to the repository at `main` `d35b2ff9` (kernel pin Remus
-`74422f0`), each file:line re-read for this refresh on 2026-10-04. Rows marked
+**This table is the Phase 0 snapshot at `main` `d35b2ff9`** (kernel pin
+Remus `74422f0`), each file:line re-read on 2026-10-04. It is historical
+evidence for the plan, not the live state: later the same day #586 (F,
+hover/selection cuts), #583 (K, on-face text engrave/emboss pierces the
+face), #588 (E, multi-region selection with one drag, whole-word text
+picks) and #584 (G, 200 ms orbit glide cap) closed their rows. The plan's
+PR table carries the current status; PR H will mark closed rows here. Rows marked
 _live_ were also driven in the dev app that day (Phase 0 of
 [reference-workflow-plan-2026-10-04.md](../plans/reference-workflow-plan-2026-10-04.md));
 the screenshots named there are the evidence.
