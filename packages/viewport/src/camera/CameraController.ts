@@ -32,7 +32,11 @@ import {
   createZoomProjectionScratch,
   wheelDeltaToLogScale
 } from './wheelZoom';
-import { orbitGlideElapsedMs, orbitGlideStepFraction } from './orbitGlide';
+import {
+  ORBIT_GLIDE_MAX_MS,
+  orbitGlideElapsedMs,
+  orbitGlideStepFraction
+} from './orbitGlide';
 
 /** A post-release orbit or pan glide in flight, timed on the render clock. */
 interface OrbitGlide {
@@ -40,6 +44,8 @@ interface OrbitGlide {
   releasedAt: number;
   /** Glide time played out by the last frame, in ms; null before the first. */
   elapsedMs: number | null;
+  /** The settle timer already waited out the cap once for this glide. */
+  settleDeferred: boolean;
 }
 
 /** A durable camera pose: what a reload restores. */
@@ -422,7 +428,11 @@ export class CameraController {
       return;
     }
     // The glide sets the damping factor frame by frame from its own clock.
-    this.orbitGlide = { releasedAt: performance.now(), elapsedMs: null };
+    this.orbitGlide = {
+      releasedAt: performance.now(),
+      elapsedMs: null,
+      settleDeferred: false
+    };
     this.options.requestRender();
     // The live pose is readable at release, while durable persistence remains
     // parked until the damping tail reaches this controller's settle path.
@@ -430,7 +440,7 @@ export class CameraController {
     this.scheduleSettledViewChange();
   };
 
-  private scheduleSettledViewChange = () => {
+  private scheduleSettledViewChange = (delayMs = VIEW_SETTLE_MS) => {
     this.options.requestRender();
     if (this.settleTimeout !== null) {
       window.clearTimeout(this.settleTimeout);
@@ -443,6 +453,18 @@ export class CameraController {
         this.pendingZoomLogScale !== 0 ||
         this.disposed
       ) {
+        return;
+      }
+      const glide = this.orbitGlide;
+      if (glide !== null && !glide.settleDeferred) {
+        // Frames slower than this delay leave a glide in flight; flushing it
+        // now would jump the residue ahead of its curve. Wait out the cap
+        // once: a landing frame re-arms this as usual, and if no frame comes
+        // (a hidden tab) the flush below lands it after the cap, where the
+        // curve is at rest anyway. Two firings put this flush at least
+        // 2 × VIEW_SETTLE_MS after release, past the cap.
+        glide.settleDeferred = true;
+        this.scheduleSettledViewChange(ORBIT_GLIDE_MAX_MS);
         return;
       }
       this.orbitGlide = null;
@@ -461,7 +483,7 @@ export class CameraController {
         this.flushingSettle = false;
       }
       this.emitSettledViewChange();
-    }, VIEW_SETTLE_MS);
+    }, delayMs);
   };
 
   private createOrbit(camera: THREE.Camera): OrbitControls<THREE.Camera> {
