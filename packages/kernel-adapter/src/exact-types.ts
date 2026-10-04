@@ -11,6 +11,7 @@ import type {
   BodyTopology,
   EdgeReferenceRepair,
   FaceReferenceRepair,
+  FeatureId,
   FeatureWarning,
   SketchId
 } from '@openzcad/shared';
@@ -22,6 +23,13 @@ export interface ExactShape {
   solids: number[];
   /** Exact, handle-bound schema-v5 references plus fail-closed diagnostics. */
   lineage?: RemusLineageState;
+  /**
+   * The new-body extrude that produced exactly these solid handles. Only
+   * meaningful while `solids` still equals `sweepSource.solids`: any feature
+   * that moves, edits or replaces the body produces new handles. Read by the
+   * coplanar-cap pierce (`exact-pierce-tool.ts`) to rebuild the tool.
+   */
+  sweepSource?: { featureId: FeatureId; solids: readonly number[] };
 }
 
 /** What the K0.6 import validator found on one `imported-step` feature. */
