@@ -1335,6 +1335,12 @@ export class RemusKernelAdapter implements ExactKernelAdapter {
     // anything.
     const strictVerdicts: StrictUnionVerdicts =
       new UnionVerdictsWithMeshBudget();
+    // Another project's bodies are a different set: start their held display
+    // deflections fresh before the build (the union gate reads them).
+    if (this.heldDisplayProjectId !== document.projectId) {
+      this.heldDisplayDeflections.clear();
+      this.heldDisplayProjectId = document.projectId;
+    }
     try {
       build = buildDocumentHistory(
         activeKernel,
@@ -1369,7 +1375,8 @@ export class RemusKernelAdapter implements ExactKernelAdapter {
             }
           : undefined,
         cancellation,
-        normalizedDemand
+        normalizedDemand,
+        (bodyId) => this.heldDisplayDeflections.get(bodyId)?.[0]
       );
     } catch (error) {
       // A cancelled build keeps the retained prefix: the checkpoints pushed
@@ -1983,12 +1990,7 @@ export class RemusKernelAdapter implements ExactKernelAdapter {
         }
       }
       // Same for the held display deflections: a body this build no longer
-      // produces will never be measured again under that id, and another
-      // project's bodies are a different set altogether.
-      if (this.heldDisplayProjectId !== document.projectId) {
-        this.heldDisplayDeflections.clear();
-        this.heldDisplayProjectId = document.projectId;
-      }
+      // produces will never be measured again under that id.
       for (const bodyId of [...this.heldDisplayDeflections.keys()]) {
         if (!build.shapes.has(bodyId)) {
           this.heldDisplayDeflections.delete(bodyId);
