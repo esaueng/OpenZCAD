@@ -317,7 +317,10 @@ click is the only step that creates a document object. It writes the typed
 object at the click point, returns the tool to Select with the object
 selected, and that selection shows the Phase 1 move and rotate handles.
 There is no `Continue → Done` modal and no scale handle; `Place` in the
-card is a keyboard equivalent that drops the object where the outline is.
+card is a keyboard equivalent with a deterministic anchor: the outline's
+current plane position when the pointer has reached the plane, otherwise
+the sketch origin (so `T` → type → `Place` with no pointer movement is
+valid and covered by the e2e flow).
 Escape while composing closes the card and leaves no object; Escape during
 a later drag cancels that drag only. Enter in the string field is not
 placement.
@@ -350,7 +353,12 @@ drag restores the object's stored values; it never deletes persisted text.
 - The region rig draws one arrow per region; dragging any arrow moves all
   by the same value; only the grabbed arrow carries a chip. Preview and
   commit pass all profiles through `profileReferencesForSelection`, which
-  already dedupes entity-wide (text) sources.
+  already dedupes entity-wide (text) sources. That helper only shapes the
+  persisted references, so the viewport side must expand too: a pick on one
+  glyph of a text object expands to every region of that object for hover,
+  selection, the rig and the drag preview, so what the preview shows is
+  what the entity-wide reference commits (Phase 0 V1 mismatch); the text
+  extrude regression covers it.
 - Add/cut inference runs per region against its own carrier, and every
   region must agree on both the operation and the target body (one extrude
   stores one `targetBodyId`); two regions over different bodies, or a mixed
