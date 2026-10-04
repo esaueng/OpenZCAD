@@ -226,7 +226,8 @@ test('an edge pick carries its operation on the chip, refusal included', async (
   await expect(operation).toBeVisible();
   await expect(operation).toHaveClass(/selection-callout-chip/);
   await expect(page.locator('.tool-card')).toHaveCount(0);
-  await expect(chip.locator('.selection-callout-phase')).toHaveText('Ready');
+  // Armed is conveyed by the lit verb alone; no "Ready" pill repeats it.
+  await expect(chip.locator('.selection-callout-phase')).toHaveCount(0);
 
   // Its Fillet/Chamfer switch is the chip's own pressed verbs.
   const fillet = chip.getByRole('button', {

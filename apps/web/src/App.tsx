@@ -218,6 +218,7 @@ import { watchBuildVersion } from './lib/buildVersionWatch';
 import { commandOutcomeMessage } from './lib/commandOutcome';
 import { presentedDiagnostics } from './lib/diagnosticsRows';
 import { primitiveDimensionLabel } from './lib/primitiveDimensionLabel';
+import { useRememberedSectionPlane } from './hooks/useRememberedSectionPlane';
 import { newBlendFacePick } from './lib/blendRearm';
 import { exactEntryShortcut, isTypingTarget } from './lib/exactEntryShortcut';
 import { DeferredExactEntry } from './lib/deferredExactEntry';
@@ -291,6 +292,7 @@ import {
   downloadText,
   evalParamValue,
   exportFileStem,
+  formatMeasuredQuantity,
   formatNumber,
   inferContentType
 } from './lib/model';
@@ -464,7 +466,10 @@ import {
   resolveImportedBlendFace
 } from './lib/interaction/filletFaceEdit';
 import { ToastHost } from './components/Toast';
-import { commandPaletteShortcut } from './lib/platformShortcut';
+import {
+  commandPaletteShortcut,
+  idleWorkspaceHint
+} from './lib/platformShortcut';
 import { retireStatus, type StatusEntry } from './lib/statusLifetime';
 import { NumericKeypad, type KeypadRequest } from './components/NumericKeypad';
 import type { DimensionMode } from './lib/keypad';
@@ -475,6 +480,7 @@ import {
   commandSessionFor,
   isOperationState,
   isStaleSelectionError,
+  nextSketchCircleMode,
   radialFaceOperationName,
   toolCardFor,
   type FaceTarget,
@@ -491,8 +497,10 @@ import {
 import { extrudeCapAncestor } from './lib/interaction/extrudeCapAncestry';
 import { updateProfileSelection } from './lib/profileSelection';
 import {
+  entityWideSourceKey,
   isEntityWideProfileSource,
-  profileReferencesForSelection
+  profileReferencesForSelection,
+  profilesBuiltWith
 } from './lib/profileReferences';
 import {
   selectionCapabilities,
@@ -520,6 +528,7 @@ import {
   type LabelSegment
 } from './lib/topologyLabels';
 import type { FeatureSelectionSource } from './lib/inspectorHeading';
+import { CARD_EYEBROWS } from './lib/cardEyebrows';
 import type {
   CommandDiagnostic,
   InteractionState
@@ -538,10 +547,9 @@ import { CommandBar, type PaletteCommand } from './components/CommandBar';
 import { DISPLAY_MODE_LABELS } from './lib/displayMode';
 import { ContextMenu, type ContextMenuState } from './components/ContextMenu';
 import type { BodyFeatureIds } from '@openzcad/document-core';
-import {
-  resolveExtrudeOperation,
-  resolveCurrentExtrude,
-  type ResolvedExtrude
+import type {
+  ResolveExtrudeOptions,
+  ResolvedExtrude
 } from './lib/extrudeInference';
 import { isExtrudeSessionCurrent } from './lib/extrudeSession';
 import {
@@ -606,6 +614,17 @@ function faceOffsetTargetFields(
   return box ? { resizeBodyFeatureId: box.primitive.featureId } : {};
 }
 
+/** The interaction machine's view of one picked region. */
+function regionTargetFor(region: RegionPickData): RegionTarget {
+  return {
+    sketchId: region.sketchId,
+    regionFingerprint: region.regionFingerprint,
+    samplePoint: region.samplePoint,
+    area: region.area,
+    sourceEntityIds: region.sourceEntityIds
+  };
+}
+
 function focusedControlOwnsSpace(target: HTMLElement | null): boolean {
   if (!target) {
     return false;
@@ -641,6 +660,13 @@ function focusedControlOwnsSpace(target: HTMLElement | null): boolean {
  * BEFORE it (unsupported extension, a lone `.shapr`) stay synchronous.
  */
 const stepImportRun = () => import('./lib/stepImportRun');
+
+/**
+ * Extrude classification runs only once a region extrude is previewed or
+ * committed, each already awaiting the geometry worker, so its module and the
+ * kernel adapter's inference helpers stay out of the launcher chunk.
+ */
+const extrudeInference = () => import('./lib/extrudeInference');
 
 const LazyViewerShell = lazyWithStaleChunkNotice(() =>
   import('./components/ViewerShell').then((module) => ({
@@ -1193,6 +1219,7 @@ import {
   loadSettingsViewState,
   updateSettingsViewState
 } from './lib/settingsViewState';
+import type { SettingsSectionId } from './lib/settingsSections';
 import {
   clampAssistantWidth,
   clampSidebarWidth,
@@ -1292,6 +1319,9 @@ const BEFORE_RESTORE_REASON = 'Before restore';
  * one is its own gesture (Ctrl+Shift+S).
  */
 const DEFAULT_SAVE_REASON = 'Manual save';
+/** The lane's one notice for a tab that opened a project another tab owns. */
+const PROJECT_OPEN_ELSEWHERE_NOTICE =
+  'Editing is locked: this project is open in another tab.';
 /** Said once per session after a selection box that caught nothing. */
 const EMPTY_BOX_SELECT_HINT =
   'Nothing in the box. A plain drag selects bodies — Shift+drag orbits, right-drag pans.';
@@ -1369,10 +1399,8 @@ interface RegionExtrudePreviewCandidate {
   document: ProjectDocument;
   base: ProjectDocument;
   input: ExtrudeInput;
-  choice: NonNullable<Parameters<typeof resolveExtrudeOperation>[0]['choice']>;
-  faceAttachment?: Parameters<
-    typeof resolveExtrudeOperation
-  >[0]['faceAttachment'];
+  choice: NonNullable<ResolveExtrudeOptions['choice']>;
+  faceAttachment?: ResolveExtrudeOptions['faceAttachment'];
   distance: number;
   resultBodyId: BodyId;
   label: string;
@@ -1827,7 +1855,9 @@ export function App() {
       ? 'Sign in to open the shared project automatically.'
       : desktopAuthorizationAttempt
         ? 'Sign in, then approve OpenZCAD for macOS.'
-        : 'Changes save on this device immediately.'
+        : // Settings' own footer says where changes save; the header is
+          // for news (an error, a sign-in step), not a second copy of it.
+          ''
   );
   const [desktopAuthorizationCode, setDesktopAuthorizationCode] = useState('');
   const [desktopAuthorizationApproved, setDesktopAuthorizationApproved] =
@@ -2040,10 +2070,14 @@ export function App() {
    * that describes a mode the user is still in, such as sketching on a plane.
    */
   const setStatus = useCallback(
-    (text: string, options?: { sticky?: boolean; detail?: string }) => {
+    (
+      text: string,
+      options?: { sticky?: boolean; detail?: string; unlogged?: boolean }
+    ) => {
       setStatusEntry({
         text,
         ...(options?.detail ? { detail: options.detail } : {}),
+        ...(options?.unlogged ? { unlogged: true } : {}),
         at: Date.now(),
         sticky: options?.sticky ?? false
       });
@@ -2361,7 +2395,8 @@ export function App() {
     {
       thinking: false,
       unread: 0,
-      context: null
+      context: null,
+      unavailable: false
     }
   );
   const [shortcutsOpen, setShortcutsOpen] = useState(false);
@@ -3087,6 +3122,7 @@ export function App() {
         };
       },
       derive: async (candidate) => {
+        const { resolveExtrudeOperation } = await extrudeInference();
         const resolved = await resolveExtrudeOperation({
           base: candidate.base,
           input: candidate.input,
@@ -4138,6 +4174,7 @@ export function App() {
         return;
       }
       setProjectOpenElsewhere(false);
+      setStatus('This tab can edit the project now.');
       void adoptStoredProject(projectId);
     }).then((result) => {
       if (cancelled) {
@@ -4150,6 +4187,10 @@ export function App() {
         // The project is on this device — the other tab is keeping it that
         // way. Nothing here is unsaved, and nothing here may be saved.
         setSaveState('local');
+        // Said once, where the eye goes: the rail dims as a whole, and the
+        // reason used to live only in each button's tooltip. Sticky, since
+        // it describes a state the tab stays in until the other tab closes.
+        setStatus(PROJECT_OPEN_ELSEWHERE_NOTICE, { sticky: true });
       }
     });
     projectOwnershipSettledRef.current = settled;
@@ -4158,7 +4199,7 @@ export function App() {
       projectOwnershipSettledRef.current = null;
       claim?.release();
     };
-  }, [doc?.projectId, shareSession]);
+  }, [doc?.projectId, shareSession, setStatus]);
 
   useEffect(() => {
     // An armed face re-pick names a feature by id; a different project's
@@ -4569,14 +4610,16 @@ export function App() {
         if (startupProjectId) {
           clearActiveProject();
         }
+        // The mode only: the shelf heading beside this footer counts the
+        // parts, and a second count here said the same thing twice.
         setStatus(
           !bootCloudFunctionsEnabledRef.current
-            ? `Offline mode · ${countLabel(userProjectCount(merged), 'local project', 'local projects')}`
+            ? 'Offline mode'
             : activeSession && listed.remoteReached
-              ? `Cloud profile ready · ${countLabel(userProjectCount(merged), 'project', 'projects')}`
+              ? 'Cloud profile ready'
               : health
-                ? `Local workspace · ${countLabel(userProjectCount(merged), 'local project', 'local projects')}`
-                : `Offline workspace · ${countLabel(userProjectCount(merged), 'local project', 'local projects')}`
+                ? 'Local workspace'
+                : 'Offline workspace'
         );
       } catch (error) {
         if (!cancelled) {
@@ -5438,7 +5481,7 @@ export function App() {
           cylinderDiameter !== undefined
             ? `Ø ${round(cylinderDiameter)} ${units}`
             : geometry?.area !== undefined
-              ? `${round(geometry.area)} ${units}²`
+              ? `${formatMeasuredQuantity(geometry.area)} ${units}²`
               : undefined
       };
     }
@@ -5603,10 +5646,17 @@ export function App() {
         : sketchOverlays,
     [appSettings.experiments.directManipulation, sketchOverlays]
   );
+  // The face-drag rig (its dashed span and "Height 24 mm" pill) belongs to
+  // the bare pick. A command card owns the next gesture, so opening one —
+  // Hole from the selection chip, say — takes the rig down with the handle
+  // `openTool` already disarms, rather than leaving it drawn beside the
+  // command's own preview.
   const viewerEditableBodyIds = useMemo(
     () =>
-      modelingLocked || movePreview ? EMPTY_BODY_IDS : directEditableBodyIds,
-    [modelingLocked, movePreview, directEditableBodyIds]
+      modelingLocked || movePreview || tool
+        ? EMPTY_BODY_IDS
+        : directEditableBodyIds,
+    [modelingLocked, movePreview, tool, directEditableBodyIds]
   );
   const viewerSelectedProfileIds = useMemo(
     () => selectedProfiles.map((profile) => profile.profileId),
@@ -6295,13 +6345,8 @@ export function App() {
     }
     dispatchInteraction({
       type: 'select-region',
-      target: {
-        sketchId: anchor.sketchId,
-        regionFingerprint: anchor.regionFingerprint,
-        samplePoint: anchor.samplePoint,
-        area: anchor.area,
-        sourceEntityIds: anchor.sourceEntityIds
-      }
+      target: regionTargetFor(anchor),
+      group: chosen.map(regionTargetFor)
     });
     setStatus(
       chosen.length === 1
@@ -6750,16 +6795,19 @@ export function App() {
       setKeypad(null);
       dispatchInteraction({ type: 'clear' });
       closeFeaturePanel();
+      // The lane says where the user now is; the activity log is for what
+      // happened to the model, and a mode switch is neither.
       setStatus(
         mode === 'view'
           ? 'View mode · the model is read-only here.'
-          : 'Tweak mode · adjust parameters; the design stays locked.'
+          : 'Tweak mode · adjust parameters; the design stays locked.',
+        { unlogged: true }
       );
     } else {
       // The tape survives the trip — leaving to make an edit and coming back
       // should not cost the figures you just took — but recording stops.
       setMeasuring(false);
-      setStatus('Build mode · modeling tools are back.');
+      setStatus('Build mode · modeling tools are back.', { unlogged: true });
     }
     setWorkspaceMode(mode);
   }
@@ -7110,27 +7158,42 @@ export function App() {
     sectionBodyKey
   ]);
 
-  /** Off → XY → XZ → YZ → off, each plane starting at the model's centre. */
-  function cycleSectionView() {
-    const order: (SectionPlaneId | null)[] = [null, 'XY', 'XZ', 'YZ'];
-    const currentPlane = viewerSettings.sectionView?.plane ?? null;
-    const next = order[(order.indexOf(currentPlane) + 1) % order.length]!;
-    if (!next) {
+  // Follows the live section too, so a project's restored cut comes back on
+  // its own plane after being switched off and on.
+  const rememberedSectionPlane = useRememberedSectionPlane(
+    viewerSettings.sectionView
+  );
+
+  /**
+   * Switches the section view on or off. The rail button and the palette
+   * both toggle: cycling through every plane to reach "off" took up to three
+   * clicks. The plane is chosen inside the section panel (`setSectionPlane`),
+   * and switching back on returns to the plane last used.
+   */
+  function toggleSectionView() {
+    if (viewerSettings.sectionView) {
       setViewerSettings(({ sectionView: _cleared, ...rest }) => rest);
       clearSectionOutline();
       setStatus('Section view off.');
       return;
     }
-    const range = sectionAxisRange(next);
+    setSectionPlane(rememberedSectionPlane.current);
+  }
+
+  /** Cuts on `plane`, starting at the model's centre along its axis. */
+  function setSectionPlane(plane: SectionPlaneId) {
+    const range = sectionAxisRange(plane);
     const offset = range ? (range.min + range.max) / 2 : 0;
+    // The previous plane's exact section describes a cut that is gone.
+    clearSectionOutline();
     setViewerSettings((current) => ({
       ...current,
-      sectionView: { plane: next, offset }
+      sectionView: { plane, offset }
     }));
-    setStatus(
-      `Section view: ${next} plane. It cuts the display only; drag the slider to move the cut, and the model itself is untouched.`
-    );
-    void requestExactSection({ plane: next, offset });
+    // The panel beside the rail carries the slider and the tooltip says the
+    // cut is display-only; the lane line only names the plane.
+    setStatus(`Section view: ${plane} plane · the model is untouched.`);
+    void requestExactSection({ plane, offset });
   }
 
   function setSectionOffset(offset: number) {
@@ -7426,7 +7489,9 @@ export function App() {
       endCloudSettingsSession();
       setSettingsMessage(
         nextAuth.status === 'ready'
-          ? 'Device settings active · sign in for cloud sync.'
+          ? // Signed out is the normal state, and the Settings footer already
+            // reads "Device only"; the header stays quiet rather than repeat it.
+            ''
           : 'Beta sign-in unavailable · device settings remain active.'
       );
       return;
@@ -7453,9 +7518,7 @@ export function App() {
       setCloudProjectIds(listed.cloudProjectIds);
       setAccountProjectListReached(listed.remoteReached);
       setSettingsMessage('Cloud profile connected.');
-      setStatus(
-        `Cloud profile ready · ${countLabel(userProjectCount(listed.projects), 'project', 'projects')}`
-      );
+      setStatus('Cloud profile ready');
     } catch {
       if (cloudFunctionsEnabledRef.current) {
         setSettingsMessage(
@@ -7466,7 +7529,16 @@ export function App() {
   }
 
   function openSettings() {
-    updateSettingsViewState({ open: true });
+    openSettingsAt(null);
+  }
+
+  /** Settings at one section, fresh: a task flow, not a return visit. */
+  function openSettingsAt(section: SettingsSectionId | null) {
+    updateSettingsViewState(
+      section
+        ? { open: true, activeSection: section, query: '', scrollTop: 0 }
+        : { open: true }
+    );
     setSettingsOpen(true);
     setPaletteOpen(false);
     if (!cloudFunctionsEnabledRef.current) {
@@ -7476,7 +7548,7 @@ export function App() {
       setAuthConfigStatus('unavailable');
       return;
     }
-    setSettingsMessage('Changes save on this device immediately.');
+    setSettingsMessage('');
     void refreshCloudConnection();
   }
 
@@ -8652,10 +8724,12 @@ export function App() {
       setCloudProjectIds(listed.cloudProjectIds);
       setAccountProjectListReached(listed.remoteReached);
       setCloudAvailable(listed.remoteReached);
+      // The shelf heading already counts the parts, so a plain listing
+      // leaves the footer empty; it speaks only when it has news.
       setStatus(
         session && !listed.remoteReached
           ? `Cloud projects are temporarily unavailable · ${countLabel(userProjectCount(listed.projects), 'project', 'projects')} remain on this device.`
-          : `${countLabel(userProjectCount(listed.projects), 'project', 'projects')} available.`
+          : ''
       );
     } catch (error) {
       setStatus(errorMessage(error, 'Failed to refresh projects.'));
@@ -11853,7 +11927,7 @@ export function App() {
 
   const regionInteractionKey =
     interaction.mode === 'region'
-      ? `${interaction.target.sketchId}:${interaction.target.regionFingerprint}:${JSON.stringify(interaction.extrudeChoice)}`
+      ? `${interaction.target.sketchId}:${interaction.targets.map((target) => target.regionFingerprint).join(',')}:${JSON.stringify(interaction.extrudeChoice)}`
       : null;
   useEffect(() => {
     regionExtrudePreview.clear();
@@ -13371,22 +13445,35 @@ export function App() {
         area: number;
         outer: { x: number; y: number }[];
         holes: { x: number; y: number }[][];
+        buildGroup?: string;
       }[] = [];
+      // A text object's glyphs are built as one, so they hover as one.
+      const entityWideIds = new Set(
+        objects
+          .filter((object) => isEntityWideProfileSource(object.data))
+          .map((object) => object.id as string)
+      );
       try {
         regions = computeSketchRegions(
           displayObjectsWithTextBudget(objects, textOutlineBudgetError),
           (value) => resolve(value)
-        ).map((region) => ({
-          profileId: region.profileId,
-          regionFingerprint: region.regionFingerprint,
-          samplePoint: region.samplePoint,
-          centroid: region.centroid,
-          boundingBox: region.boundingBox,
-          sourceEntityIds: region.sourceEntityIds,
-          area: region.area,
-          outer: region.outer.polyline,
-          holes: region.holes.map((hole) => hole.polyline)
-        }));
+        ).map((region) => {
+          const buildGroup = entityWideSourceKey(region.sourceEntityIds, (id) =>
+            entityWideIds.has(id)
+          );
+          return {
+            profileId: region.profileId,
+            regionFingerprint: region.regionFingerprint,
+            samplePoint: region.samplePoint,
+            centroid: region.centroid,
+            boundingBox: region.boundingBox,
+            sourceEntityIds: region.sourceEntityIds,
+            area: region.area,
+            outer: region.outer.polyline,
+            holes: region.holes.map((hole) => hole.polyline),
+            ...(buildGroup === null ? {} : { buildGroup })
+          };
+        });
       } catch {
         // Unresolvable sketches simply render without pickable regions.
       }
@@ -13520,7 +13607,8 @@ export function App() {
   function settleZeroMoveSketchPick(pick: MoveSelectionPick): boolean {
     if (!movePreview) return false;
     const rehidden =
-      moveSketchPickVisibility(pick, movePreview, hiddenSketchIds) === 'temporary';
+      moveSketchPickVisibility(pick, movePreview, hiddenSketchIds) ===
+      'temporary';
     setMovePreview(null);
     setTool(null);
     if (rehidden) setStatus('Move closed · the sketch is hidden again.');
@@ -13568,10 +13656,18 @@ export function App() {
     region: RegionPickData,
     modifiers: { additive: boolean; toggle: boolean }
   ) {
+    // A glyph stands for its whole text object: the commit builds the whole
+    // word, so the pick selects, arms and previews the whole word too.
+    const group = profilesBuiltWith(
+      region,
+      regionPicksForSketch(region.sketchId),
+      entityWideProfileSource
+    );
     const nextProfiles = updateProfileSelection(
       selectedProfiles,
       region,
-      modifiers
+      modifiers,
+      group
     );
     setSelectedProfiles(nextProfiles);
     setSelectedSketchProfileId(region.sketchId as SketchId);
@@ -13590,16 +13686,35 @@ export function App() {
     }
     dispatchInteraction({
       type: 'select-region',
-      target: {
-        sketchId: region.sketchId,
-        regionFingerprint: region.regionFingerprint,
-        samplePoint: region.samplePoint,
-        area: region.area,
-        sourceEntityIds: region.sourceEntityIds
-      }
+      target: regionTargetFor(region),
+      additive: modifiers.additive || modifiers.toggle,
+      group: group.map(regionTargetFor)
     });
     setStatus(
-      'Closed sketch profile selected · press E to Extrude, or drag the arrow.'
+      nextProfiles.length > 1
+        ? `${nextProfiles.length} closed sketch profiles selected · drag any arrow to extrude them together.`
+        : nextProfiles.length === 1
+          ? 'Closed sketch profile selected · press E to Extrude, or drag the arrow.'
+          : 'Sketch profile selection cleared.'
+    );
+  }
+
+  /** Every detected region of one sketch view, as pick data. */
+  function regionPicksForSketch(sketchId: string): RegionPickData[] {
+    const view = sketchViews.find(
+      (candidate) => candidate.sketchId === sketchId
+    );
+    return (
+      view?.regions.map((candidate) => ({
+        sketchId,
+        profileId: candidate.profileId,
+        regionFingerprint: candidate.regionFingerprint,
+        samplePoint: candidate.samplePoint,
+        centroid: candidate.centroid,
+        boundingBox: candidate.boundingBox,
+        sourceEntityIds: candidate.sourceEntityIds,
+        area: candidate.area
+      })) ?? []
     );
   }
 
@@ -13622,12 +13737,19 @@ export function App() {
     if (interaction.mode !== 'region' || interaction.phase === 'validating') {
       return null;
     }
+    const anchor = interaction.target;
     return {
-      sketchId: interaction.target.sketchId,
-      regionFingerprint: interaction.target.regionFingerprint,
-      samplePoint: interaction.target.samplePoint,
-      area: interaction.target.area,
-      initialValue: interaction.lastValue ?? 0
+      sketchId: anchor.sketchId,
+      regionFingerprint: anchor.regionFingerprint,
+      samplePoint: anchor.samplePoint,
+      area: anchor.area,
+      initialValue: interaction.lastValue ?? 0,
+      followers: interaction.targets
+        .filter((target) => target !== anchor)
+        .map((target) => ({
+          regionFingerprint: target.regionFingerprint,
+          samplePoint: target.samplePoint
+        }))
     };
   }, [interaction]);
 
@@ -13754,16 +13876,41 @@ export function App() {
           choice,
           ...(faceAttachment ? { faceAttachment } : {})
         };
-        const resolved =
-          reuseResolvedExtrudePreview(preview, options) ??
-          (await resolveCurrentExtrude(
-            {
-              ...options,
-              derive: (document) => geometry.syncOnce(document)
-            },
-            isCurrent
-          ));
+        const { regionInferenceRefusal, resolveCurrentExtrude } =
+          await extrudeInference();
+        const agreement = {
+          ...options,
+          derive: (document: ProjectDocument) => geometry.syncOnce(document)
+        };
+        // Every selected region on its own, a text glyph included: the
+        // stored input names a whole word once.
+        const regionProfiles =
+          selected.length > 0
+            ? profileReferencesForSelection(selected, () => false)
+            : (input.profiles ?? []);
+        let resolved: ResolvedExtrude | null;
+        try {
+          resolved =
+            reuseResolvedExtrudePreview(preview, options) ??
+            (await resolveCurrentExtrude(agreement, isCurrent));
+        } catch (error) {
+          // A selection whose profiles disagree often fails as a whole; the
+          // disagreement is the cause worth naming, not the kernel's refusal.
+          const mixed = isCurrent()
+            ? await regionInferenceRefusal(agreement, null, regionProfiles)
+            : null;
+          throw mixed ? new Error(mixed) : error;
+        }
         if (!resolved || !isCurrent()) return;
+        // One drag is one operation: selected profiles that would not each
+        // extrude the same way are refused, not silently merged into one.
+        const mixed = await regionInferenceRefusal(
+          agreement,
+          resolved.inference,
+          regionProfiles
+        );
+        if (!isCurrent()) return;
+        if (mixed) throw new Error(mixed);
         const command = resolved.command;
         const resultBodyId = command.payload.ids?.bodyId;
         if (!resultBodyId)
@@ -15015,7 +15162,11 @@ export function App() {
       // to armed, including a failed value, without adding a machine state.
       dispatchInteraction({ type: 'select-face', target: current.target });
     } else if (current.mode === 'region') {
-      dispatchInteraction({ type: 'select-region', target: current.target });
+      dispatchInteraction({
+        type: 'select-region',
+        target: current.target,
+        group: current.targets
+      });
     }
   }
 
@@ -16630,6 +16781,19 @@ export function App() {
           handleDeleteSketchEntity();
           return;
         }
+        // C on the circle tool steps its type, the way the rail's strip does;
+        // the strip and the tool's glyph show which one is live.
+        if (
+          event.key.toLowerCase() === 'c' &&
+          interaction.session.tool === 'circle'
+        ) {
+          event.preventDefault();
+          dispatchInteraction({
+            type: 'sketch-circle-mode',
+            mode: nextSketchCircleMode(interaction.session.circleMode)
+          });
+          return;
+        }
         const sketchTool =
           event.key.toLowerCase() === 'v'
             ? ('select' as const)
@@ -17035,6 +17199,19 @@ export function App() {
               ? 'showing the previous result until it finishes'
               : 'the model appears when it is ready'
         };
+  // The activity log's line for the same state: one plain entry per rebuild.
+  // Each stage the worker reports ("Measuring: Box 1: Display mesh and face
+  // topology (2/2)") was an entry of its own, so the log read as a build log.
+  // The lane keeps the stage detail while it is up; a failure keeps its cause.
+  const geometryLogLine =
+    geometryStatus === null
+      ? null
+      : geometry.state.phase === 'failed'
+        ? geometryStatus.phase
+        : geometry.state.phase === 'starting' ||
+            geometry.state.phase === 'loading-remus'
+          ? 'Loading the geometry kernel…'
+          : 'Rebuilding the model…';
   const visibleStatus = textOutlineBudgetError
     ? `Text outlines refused: ${textOutlineBudgetError}`
     : parameterPreview
@@ -17049,86 +17226,87 @@ export function App() {
           ? 'warning'
           : 'ready';
 
-  // The measurement workbench: View and Tweak float it over the stage while
-  // it holds results; Build gives it the command slot, and only while
-  // Measure is on there, so it never stacks on a tool card.
-  const measurementDock =
-    measuring || (modelingLocked && measurements.length > 0) ? (
-      <MeasurementDock
-        measurements={measurements}
-        formattedMeasurements={formattedMeasurements}
-        enabled={measuring}
-        activeMeasurementId={activeMeasurementId}
-        mode={measurementMode}
-        draftTargetLabel={measurementDraft?.label ?? null}
-        display={measurementDisplay}
-        onMode={(mode) => {
-          setMeasuring(true);
-          setMeasurementMode(mode);
-          clearMeasurementPicks();
-          setStatus(
-            mode === 'smart'
-              ? 'Smart measure · pick an edge, face, hole, or body.'
-              : mode === 'distance'
-                ? 'Distance · pick the first target.'
-                : 'Angle · pick the first straight edge or measured face direction.'
-          );
-        }}
-        onUnit={setMeasurementUnit}
-        onPrecision={setMeasurementPrecision}
-        onRadialDisplay={setRadialDisplay}
-        onSelect={setActiveMeasurementId}
-        onToggleVisibility={(id) =>
-          setMeasurements((current) =>
-            current.map((measurement) =>
-              measurement.id === id
-                ? {
-                    ...measurement,
-                    visible: !measurement.visible
-                  }
-                : measurement
-            )
+  // The measurement workbench, only while Measure is on: View and Tweak
+  // float it over the stage, Build gives it the command slot so it never
+  // stacks on a tool card. Results alone do not open it — pinned ones stay
+  // on the model, and View used to greet them with a dock that said only
+  // "Measure is off"; the Measure button (or M) brings the list back.
+  const measurementDock = measuring ? (
+    <MeasurementDock
+      measurements={measurements}
+      formattedMeasurements={formattedMeasurements}
+      enabled={measuring}
+      activeMeasurementId={activeMeasurementId}
+      mode={measurementMode}
+      draftTargetLabel={measurementDraft?.label ?? null}
+      display={measurementDisplay}
+      onMode={(mode) => {
+        setMeasuring(true);
+        setMeasurementMode(mode);
+        clearMeasurementPicks();
+        setStatus(
+          mode === 'smart'
+            ? 'Smart measure · pick an edge, face, hole, or body.'
+            : mode === 'distance'
+              ? 'Distance · pick the first target.'
+              : 'Angle · pick the first straight edge or measured face direction.'
+        );
+      }}
+      onUnit={setMeasurementUnit}
+      onPrecision={setMeasurementPrecision}
+      onRadialDisplay={setRadialDisplay}
+      onSelect={setActiveMeasurementId}
+      onToggleVisibility={(id) =>
+        setMeasurements((current) =>
+          current.map((measurement) =>
+            measurement.id === id
+              ? {
+                  ...measurement,
+                  visible: !measurement.visible
+                }
+              : measurement
           )
-        }
-        onRename={(id, label, note) =>
-          setMeasurements((current) =>
-            current.map((measurement) =>
-              measurement.id === id
-                ? {
-                    ...measurement,
-                    label,
-                    note: note || undefined,
-                    renamed: true
-                  }
-                : measurement
-            )
+        )
+      }
+      onRename={(id, label, note) =>
+        setMeasurements((current) =>
+          current.map((measurement) =>
+            measurement.id === id
+              ? {
+                  ...measurement,
+                  label,
+                  note: note || undefined,
+                  renamed: true
+                }
+              : measurement
           )
+        )
+      }
+      onDelete={(id) => {
+        setMeasurements((current) =>
+          current.filter((measurement) => measurement.id !== id)
+        );
+        setActiveMeasurementId((current) =>
+          current === id ? null : current
+        );
+        setStatus('Measurement removed.');
+      }}
+      onClear={() => {
+        if (
+          appSettings.general.confirmDestructiveActions &&
+          !window.confirm('Clear every measurement in this View session?')
+        ) {
+          return;
         }
-        onDelete={(id) => {
-          setMeasurements((current) =>
-            current.filter((measurement) => measurement.id !== id)
-          );
-          setActiveMeasurementId((current) =>
-            current === id ? null : current
-          );
-          setStatus('Measurement removed.');
-        }}
-        onClear={() => {
-          if (
-            appSettings.general.confirmDestructiveActions &&
-            !window.confirm('Clear every measurement in this View session?')
-          ) {
-            return;
-          }
-          setMeasurements([]);
-          setActiveMeasurementId(null);
-          clearMeasurementPicks();
-          setStatus('Measurement list cleared.');
-        }}
-        onCopy={(measurement) => void copyMeasurements(measurement)}
-        onExport={exportMeasurements}
-      />
-    ) : null;
+        setMeasurements([]);
+        setActiveMeasurementId(null);
+        clearMeasurementPicks();
+        setStatus('Measurement list cleared.');
+      }}
+      onCopy={(measurement) => void copyMeasurements(measurement)}
+      onExport={exportMeasurements}
+    />
+  ) : null;
 
   // An operation in flight outranks the tool hint: it knows which rung of
   // the Escape ladder you are on, which is the one thing a generic
@@ -17283,13 +17461,13 @@ export function App() {
       // nothing, so the only way in was an unlabelled dock icon.
       id: 'view-section',
       label: viewerSettings.sectionView
-        ? `Section view: next plane (now ${viewerSettings.sectionView.plane})`
+        ? `Section view: off (now ${viewerSettings.sectionView.plane})`
         : 'Section view: on',
       group: 'View',
       keywords: ['section', 'cut', 'clip', 'plane'],
       icon: <Slice size={16} aria-hidden="true" />,
       disabledReason: viewerBodies.length === 0 ? 'Create a body first' : null,
-      run: cycleSectionView
+      run: toggleSectionView
     },
     {
       id: 'edit-undo',
@@ -17536,6 +17714,7 @@ export function App() {
   // View mode writes its own hints rather than filtering the build chain below.
   // Selecting a cylinder still arms the radius interaction even with its handle
   // disarmed, and "drag the radial handle" is a promise View mode cannot keep.
+  const idleHint = idleWorkspaceHint();
   const viewModeHint = measuring
     ? measurementDraft
       ? `${measurementDraft.label} selected · pick the second target · Esc cancels`
@@ -17548,7 +17727,7 @@ export function App() {
       ? 'Face selected — Space faces it head-on'
       : viewerBodies.length > 0
         ? 'Click a body, face, or edge · Measure records what you pick'
-        : 'Ctrl+K commands · ? shortcuts';
+        : idleHint;
   const tweakModeHint = measuring
     ? viewModeHint
     : parameters.length > 0
@@ -17585,7 +17764,7 @@ export function App() {
                         ? 'Edit in the panel · Del deletes · Esc closes'
                         : viewerBodies.length > 0
                           ? 'Click a body, face, or edge · Shift+Click adds to selection'
-                          : 'Ctrl+K commands · ? shortcuts'));
+                          : idleHint));
   const inspectorActive =
     !modelingLocked &&
     !directMode &&
@@ -18368,6 +18547,7 @@ export function App() {
           }
           onGoHome={() => void handleGoHome()}
           onOpenSharing={() => setSharingOpen(true)}
+          onSignIn={() => openSettingsAt('account')}
           onOpenSettings={openSettings}
         />
       }
@@ -18864,7 +19044,8 @@ export function App() {
                 ? sectionAxisRange(viewerSettings.sectionView.plane)
                 : null
             }
-            onCycleSection={cycleSectionView}
+            onToggleSection={toggleSectionView}
+            onSectionPlane={setSectionPlane}
             onSectionOffset={setSectionOffset}
             // The slider was released, or a key repeat ended: cut it exactly.
             onSectionCommit={() =>
@@ -19176,8 +19357,8 @@ export function App() {
                     </h2>
                     <span className="panel-eyebrow">
                       {modelingEditFeature
-                        ? TOOL_META[modelingOperation].label
-                        : 'New feature'}
+                        ? CARD_EYEBROWS.edit
+                        : CARD_EYEBROWS.create}
                     </span>
                     {modelingEditFeature ? (
                       // The same overflow every Inspector edit card has: now
@@ -19625,6 +19806,7 @@ export function App() {
           <ErrorBoundary label="Assistant">
             <AssistantPanel
               effectiveAssistant={accountSettings?.effectiveAssistant}
+              signedIn={Boolean(session)}
               document={doc}
               selection={assistantSelection}
               onApply={handleApplyPatch}
@@ -19698,6 +19880,7 @@ export function App() {
                     : undefined
                 }
                 searchKey={commandPaletteKey}
+                askUnavailable={assistantActivity.unavailable}
                 busy={assistantAvailable && assistantActivity.thinking}
                 unread={
                   assistantAvailable &&
@@ -19716,10 +19899,8 @@ export function App() {
             {...(visibleStatus === status && statusEntry.detail
               ? { detail: statusEntry.detail }
               : {})}
-            geometryStatus={
-              geometryStatus &&
-              `${geometryStatus.phase} · ${geometryStatus.projection}`
-            }
+            logged={!(visibleStatus === status && statusEntry.unlogged)}
+            geometryStatus={geometryLogLine}
             tone={tone}
             triggerRef={activityLogTriggerRef}
             onClose={(restoreFocus) => {

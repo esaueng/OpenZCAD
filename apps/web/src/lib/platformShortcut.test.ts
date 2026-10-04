@@ -1,8 +1,16 @@
 import { describe, expect, it } from 'vitest';
 import {
   commandPaletteShortcut,
+  idleWorkspaceHint,
   platformShortcutLabel
 } from './platformShortcut';
+
+describe('idleWorkspaceHint', () => {
+  it('names the key the command box shows', () => {
+    expect(idleWorkspaceHint('MacIntel')).toBe('⌘K commands · ? shortcuts');
+    expect(idleWorkspaceHint('Win32')).toBe('Ctrl+K commands · ? shortcuts');
+  });
+});
 
 describe('commandPaletteShortcut', () => {
   it('uses Command copy on Apple platforms', () => {

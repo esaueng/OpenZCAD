@@ -5,6 +5,7 @@ describe('workflow runner policy', () => {
   it('keeps ordinary workflows hosted with a restricted trusted workflow', () => {
     const workflowDirectory = '.github/workflows';
     const expectedRunners: Record<string, string[]> = {
+      'commit-privacy.yml': ['ubuntu-24.04'],
       'ci.yml': [],
       'public-commit-metadata.yml': ['ubuntu-24.04'],
       'fleet-ci.yml': Array(5).fill('*fleet-runner'),
