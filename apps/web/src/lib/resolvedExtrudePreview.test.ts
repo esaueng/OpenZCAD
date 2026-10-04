@@ -8,7 +8,8 @@ import type {
 } from './extrudeInference';
 import {
   resolvedExtrudePreviewKey,
-  reuseResolvedExtrudePreview
+  reuseResolvedExtrudePreview,
+  reuseRunningExtrudePreview
 } from './resolvedExtrudePreview';
 
 const base = createProjectDocument('Extrude', toUserId('user_preview'));
@@ -87,5 +88,70 @@ describe('resolved extrusion preview reuse', () => {
         base: createProjectDocument('Other', toUserId('user_preview'))
       })
     ).toBeNull();
+  });
+});
+
+describe('running extrusion preview reuse', () => {
+  const running = (
+    result: Promise<{ resolved: ResolvedExtrude; rejection: unknown }>,
+    input = command.payload
+  ) => ({
+    document: {
+      ...options,
+      input,
+      baseProjectId: base.projectId,
+      baseVersion: base.version
+    },
+    result
+  });
+
+  it('awaits the frame still rebuilding this exact extrusion', async () => {
+    let finish!: (value: {
+      resolved: ResolvedExtrude;
+      rejection: null;
+    }) => void;
+    const frame = running(
+      new Promise((resolve) => {
+        finish = resolve;
+      })
+    );
+    const reused = reuseRunningExtrudePreview(frame, options);
+    finish({ resolved, rejection: null });
+    await expect(reused).resolves.toBe(resolved);
+  });
+
+  it('does not wait for a frame rebuilding another extrusion', async () => {
+    // Never settles: answering null must not depend on it.
+    const frame = running(new Promise(() => undefined), {
+      ...command.payload,
+      distance: 6
+    });
+    await expect(reuseRunningExtrudePreview(frame, options)).resolves.toBe(
+      null
+    );
+    await expect(
+      reuseRunningExtrudePreview(running(new Promise(() => undefined)), {
+        ...options,
+        base: { ...base, version: base.version + 1 }
+      })
+    ).resolves.toBeNull();
+    await expect(reuseRunningExtrudePreview(null, options)).resolves.toBeNull();
+  });
+
+  it('leaves a refused or failed frame to the commit to resolve itself', async () => {
+    await expect(
+      reuseRunningExtrudePreview(
+        running(
+          Promise.resolve({ resolved, rejection: { message: 'refused' } })
+        ),
+        options
+      )
+    ).resolves.toBeNull();
+    await expect(
+      reuseRunningExtrudePreview(
+        running(Promise.reject(new Error('worker failed'))),
+        options
+      )
+    ).resolves.toBeNull();
   });
 });

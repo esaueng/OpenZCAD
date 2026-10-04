@@ -12,6 +12,14 @@
  * the rest of the gesture; one that opts in keeps rebuilding at whatever rate
  * the kernel allows, and `lagging` says whether the geometry is behind the
  * hand. Dragging works either way; release commits the final value.
+ *
+ * Release is where a slow rebuild costs most. The geometry worker serialises
+ * kernel work and cannot abandon a rebuild it has started, so a commit queued
+ * behind a preview waits for that preview first. Two things keep that to one
+ * rebuild: `running` hands a commit at the same value the rebuild already in
+ * flight, and on a body whose earlier rebuilds were slow (`expectedFrameMs`)
+ * `slowSettleMs` holds rebuilds until the hand rests, so a release mid-motion
+ * finds no stale rebuild ahead of it.
  */
 
 /** A rebuild slower than this ends live preview for the current gesture. */
@@ -58,8 +66,31 @@ export interface LivePreviewOptions<TDocument, TDerived> {
    * can opt into accepting either direction while still rejecting zero.
    */
   acceptValue?(value: number): boolean;
+  /**
+   * While `expectedFrameMs` predicts a slow gesture, a rebuild starts only
+   * after the newest value has been held this long. The first rebuild that
+   * lands within `slowFrameMs` lifts the wait for the rest of the gesture.
+   * A gesture that finds a slow frame on its own does not start waiting: one
+   * slow frame is as often a cold kernel as a slow body.
+   */
+  slowSettleMs?: number;
+  /**
+   * Measured rebuild time for what the next request edits, from earlier
+   * gestures. Above `slowFrameMs` the gesture degrades before its first
+   * rebuild instead of learning it from a slow frame a release would then
+   * have to wait behind.
+   */
+  expectedFrameMs?(): number | undefined;
   /** Injected so tests do not depend on wall-clock timing. */
   now?(): number;
+}
+
+/** A rebuild that has started and not yet settled. */
+export interface RunningPreview<TDocument, TDerived> {
+  value: number;
+  document: TDocument;
+  /** The consumer's own `derive` promise for `document`. */
+  result: Promise<TDerived>;
 }
 
 export class LivePreview<TDocument, TDerived> {
@@ -71,8 +102,15 @@ export class LivePreview<TDocument, TDerived> {
   private timer: ReturnType<typeof setTimeout> | null = null;
   private nextStartAt = 0;
   private lastValue: number | null = null;
-  private pending: { value: number; token: number } | null = null;
+  private pending: {
+    value: number;
+    token: number;
+    requestedAt: number;
+  } | null = null;
+  private runningPreview: RunningPreview<TDocument, TDerived> | null = null;
   private slow = false;
+  /** Predicted slow: hold rebuilds until the hand rests (`slowSettleMs`). */
+  private settle = false;
   /** True once something has been published and not yet cleared. */
   private active = false;
   /** Token of the newest value that has reached publish(). */
@@ -96,10 +134,39 @@ export class LivePreview<TDocument, TDerived> {
     return this.active && this.token !== this.publishedToken;
   }
 
+  /**
+   * The rebuild in flight, until it settles — including one that `stop()` or
+   * `clear()` already invalidated, which will never publish but whose result
+   * still answers a commit of the same edit. A commit that awaits it pays for
+   * one exact rebuild instead of queuing a second one behind it.
+   */
+  get running(): RunningPreview<TDocument, TDerived> | null {
+    return this.runningPreview;
+  }
+
+  private get slowFrameMs(): number {
+    return this.options.slowFrameMs ?? DEFAULT_SLOW_FRAME_MS;
+  }
+
+  private degrade() {
+    if (!this.slow) this.options.onDegrade?.();
+    this.slow = true;
+  }
+
   /** Queues a scalar when it satisfies this previewer's value policy. */
   request(value: number) {
     const accepted = this.options.acceptValue?.(value) ?? value > 0;
-    if ((this.slow && !this.options.continueAfterSlow) || !accepted) {
+    if (!accepted) {
+      return;
+    }
+    if (!this.slow) {
+      const expected = this.options.expectedFrameMs?.();
+      if (expected !== undefined && expected > this.slowFrameMs) {
+        this.degrade();
+        this.settle = true;
+      }
+    }
+    if (this.slow && !this.options.continueAfterSlow) {
       return;
     }
     if (
@@ -110,7 +177,7 @@ export class LivePreview<TDocument, TDerived> {
       return;
     }
     this.lastValue = value;
-    this.pending = { value, token: ++this.token };
+    this.pending = { value, token: ++this.token, requestedAt: this.now() };
     this.active = true;
     if (!this.inFlight) {
       this.schedule();
@@ -123,7 +190,14 @@ export class LivePreview<TDocument, TDerived> {
 
   private schedule() {
     if (this.inFlight || this.timer !== null || !this.pending) return;
-    const delay = this.nextStartAt - this.now();
+    const rest = this.settle ? (this.options.slowSettleMs ?? 0) : 0;
+    // A newer request re-runs this when the timer fires, so the wait always
+    // measures from the newest value: the hand has to rest, not just pause.
+    const startAt =
+      rest > 0
+        ? Math.max(this.nextStartAt, this.pending.requestedAt + rest)
+        : this.nextStartAt;
+    const delay = startAt - this.now();
     if (delay > 0) {
       this.timer = setTimeout(() => {
         this.timer = null;
@@ -142,6 +216,8 @@ export class LivePreview<TDocument, TDerived> {
     const generation = this.generation;
     const started = this.now();
     let document: TDocument | null = null;
+    // Only a completed rebuild measures the body; a null build does not.
+    let rebuilt = false;
     const current = () =>
       this.active &&
       generation === this.generation &&
@@ -149,7 +225,10 @@ export class LivePreview<TDocument, TDerived> {
     try {
       document = this.options.build(request.value);
       if (!document) return;
-      const derived = await this.options.derive(document);
+      const result = this.options.derive(document);
+      this.runningPreview = { value: request.value, document, result };
+      const derived = await result;
+      rebuilt = true;
       if (
         current() &&
         (this.options.publishIntermediate || request.token === this.token)
@@ -163,6 +242,7 @@ export class LivePreview<TDocument, TDerived> {
         this.options.onFailure?.({ error, value: request.value });
       }
     } finally {
+      this.runningPreview = null;
       if (current()) {
         const elapsed = this.now() - started;
         const interval = this.options.minIntervalMs ?? 0;
@@ -177,10 +257,13 @@ export class LivePreview<TDocument, TDerived> {
           interval > 0
             ? Math.max(started + interval, this.now() + presentationYield)
             : 0;
-        if (elapsed > (this.options.slowFrameMs ?? DEFAULT_SLOW_FRAME_MS)) {
-          if (!this.slow) this.options.onDegrade?.();
-          this.slow = true;
+        if (elapsed > this.slowFrameMs) {
+          this.degrade();
           if (!this.options.continueAfterSlow) this.pending = null;
+        } else if (rebuilt) {
+          // The prediction was stale (the body got faster, or the earlier
+          // frames were cold): stop making the hand rest.
+          this.settle = false;
         }
       }
       this.inFlight = false;
@@ -198,6 +281,7 @@ export class LivePreview<TDocument, TDerived> {
     this.nextStartAt = 0;
     this.lastValue = null;
     this.slow = false;
+    this.settle = false;
     this.publishedToken = this.token;
   }
 
