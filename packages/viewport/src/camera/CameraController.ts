@@ -270,11 +270,24 @@ export class CameraController {
       this.options.wheelDeviceMemory?.write(learned);
       this.options.onWheelDeviceLearned?.(learned);
     }
+    if (
+      this.disposed ||
+      !this.orbit.enabled ||
+      (intent !== 'pan' && !this.orbit.enableZoom)
+    ) {
+      return;
+    }
+    if (this.gestureActive || event.buttons !== 0) {
+      event.preventDefault();
+      event.stopImmediatePropagation();
+      return;
+    }
     if (intent === 'pan') {
       // Take the event away from OrbitControls entirely: its wheel handler
       // only ever dollies, so leaving it to run would zoom as well as pan.
       event.preventDefault();
       event.stopImmediatePropagation();
+      if (!this.orbit.enablePan) return;
       // A pan is the user taking over from any queued zoom or command glide.
       this.cancelZoom();
       this.cancelTween();
@@ -286,18 +299,6 @@ export class CameraController {
       // events, and the durable pose only has to match the last one.
       this.scheduleSettledViewChange();
       this.options.requestRender();
-      return;
-    }
-    if (this.disposed || !this.orbit.enabled || !this.orbit.enableZoom) {
-      // OrbitControls declines these states itself, so the packet is inert.
-      return;
-    }
-    if (this.gestureActive || event.buttons !== 0) {
-      // A notch during a drag is noise, but OrbitControls does not know about
-      // external orbits or held buttons and would dolly it immediately — the
-      // one-frame jump this handler exists to remove. Swallow it instead.
-      event.preventDefault();
-      event.stopImmediatePropagation();
       return;
     }
     const { state, speed } = stepZoomDynamics(

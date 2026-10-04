@@ -273,6 +273,7 @@ import {
   currentVersionOf,
   type WorkspaceSaveState
 } from './lib/cloudProjectAutosave';
+import { applyAccountProjectRefresh } from './lib/accountProjectRefresh';
 import {
   decideProjectSync,
   shouldPollForFreshness
@@ -4140,6 +4141,7 @@ export function App() {
       if (cancelled) {
         return;
       }
+      projectOpenElsewhereRef.current = false;
       setProjectOpenElsewhere(false);
       setStatus('This tab can edit the project now.');
       void adoptStoredProject(projectId);
@@ -4149,6 +4151,7 @@ export function App() {
         return;
       }
       claim = result;
+      projectOpenElsewhereRef.current = !result.owned;
       setProjectOpenElsewhere(!result.owned);
       if (!result.owned) {
         // The project is on this device — the other tab is keeping it that
@@ -4262,81 +4265,103 @@ export function App() {
       return;
     }
     let cancelled = false;
+    let checking = false;
 
     async function check() {
-      const controller = cloudProjectAutosaveRef.current;
-      const current = managerRef.current?.document;
-      if (cancelled || !controller || !current) {
-        return;
+      if (checking || projectOpenElsewhereRef.current) return;
+      checking = true;
+      try {
+        await projectOwnershipSettledRef.current;
+        if (cancelled || projectOpenElsewhereRef.current) return;
+        const controller = cloudProjectAutosaveRef.current;
+        const current = managerRef.current?.document;
+        if (cancelled || !controller || !current) {
+          return;
+        }
+        // Asked on every tick rather than once when the effect was set up. Both
+        // answers change without anything here changing with them: saving the
+        // open project to the account makes it worth polling, and resolving a
+        // conflict releases the controller that was holding it back.
+        if (
+          !shouldPollForFreshness({
+            projectId: current.projectId,
+            signedIn: Boolean(session),
+            accountHoldsProject: remoteVersionsRef.current.has(
+              current.projectId
+            ),
+            awaitingResolution: controller.isHalted
+          })
+        ) {
+          return;
+        }
+        const summary = (
+          await api.listProjects().catch(() => null)
+        )?.projects.find((project) => project.projectId === current.projectId);
+        if (cancelled || summary?.documentVersion === undefined) {
+          return;
+        }
+        const action = decideProjectSync({
+          localVersion: current.version,
+          accountVersion: summary.documentVersion,
+          lastSyncedVersion: controller.syncedVersion,
+          hasUnsentChanges: controller.hasPendingChanges
+        });
+        if (action !== 'pull') {
+          // `push` is already the autosave controller's job, and `conflict` is
+          // raised by the write that gets fenced rather than guessed at here.
+          return;
+        }
+        const remote = await api
+          .loadProject(current.projectId)
+          .catch(() => null);
+        const live = managerRef.current?.document;
+        // Anything the user did while the document was in flight makes it stale.
+        if (
+          cancelled ||
+          !remote ||
+          !live ||
+          live.projectId !== current.projectId ||
+          live.version !== current.version ||
+          controller.hasPendingChanges
+        ) {
+          return;
+        }
+        const outcome = await applyAccountProjectRefresh({
+          before: current,
+          remote,
+          current: () => managerRef.current?.document ?? null,
+          isActive: () =>
+            !cancelled &&
+            !projectOpenElsewhereRef.current &&
+            cloudProjectAutosaveRef.current === controller,
+          hasPendingChanges: () => controller.hasPendingChanges,
+          saveLocal: saveLocalProject,
+          apply: (document) => {
+            controller.adoptAccountVersion(
+              document.projectId,
+              document.version
+            );
+            remoteVersionsRef.current.set(document.projectId, document.version);
+            hydrateDocument(document);
+          },
+          saveBaseline: (document) =>
+            saveLastSyncedVersion(document.projectId, document.version),
+          onDiverged: (document) => {
+            controller.haltForConflict(document.projectId);
+          }
+        });
+        if (outcome === 'diverged' && !cancelled) {
+          const latest = managerRef.current?.document;
+          if (latest?.projectId === current.projectId) {
+            raiseAccountConflict(latest.projectId, latest, remote.version);
+          }
+        }
+        if (outcome === 'applied' && !cancelled) {
+          setStatus(`Updated to the version saved on another device.`);
+        }
+      } finally {
+        checking = false;
       }
-      // Asked on every tick rather than once when the effect was set up. Both
-      // answers change without anything here changing with them: saving the
-      // open project to the account makes it worth polling, and resolving a
-      // conflict releases the controller that was holding it back.
-      if (
-        !shouldPollForFreshness({
-          projectId: current.projectId,
-          signedIn: Boolean(session),
-          accountHoldsProject: remoteVersionsRef.current.has(current.projectId),
-          awaitingResolution: controller.isHalted
-        })
-      ) {
-        return;
-      }
-      const summary = (
-        await api.listProjects().catch(() => null)
-      )?.projects.find((project) => project.projectId === current.projectId);
-      if (cancelled || summary?.documentVersion === undefined) {
-        return;
-      }
-      const action = decideProjectSync({
-        localVersion: current.version,
-        accountVersion: summary.documentVersion,
-        lastSyncedVersion: controller.syncedVersion,
-        hasUnsentChanges: controller.hasPendingChanges
-      });
-      if (action !== 'pull') {
-        // `push` is already the autosave controller's job, and `conflict` is
-        // raised by the write that gets fenced rather than guessed at here.
-        return;
-      }
-      const remote = await api.loadProject(current.projectId).catch(() => null);
-      const live = managerRef.current?.document;
-      // Anything the user did while the document was in flight makes it stale.
-      if (
-        cancelled ||
-        !remote ||
-        !live ||
-        live.projectId !== current.projectId ||
-        live.version !== current.version ||
-        controller.hasPendingChanges
-      ) {
-        return;
-      }
-      await saveLocalProject(remote);
-      await saveLastSyncedVersion(remote.projectId, remote.version);
-      remoteVersionsRef.current.set(remote.projectId, remote.version);
-      // Checked AGAIN after the two IndexedDB transactions above, the same
-      // way `acceptAccountDocument` re-checks after its own. An edit or a
-      // project switch can land inside those awaits, and the hydrate below
-      // replaces the manager outright — with an edit in flight that is not a
-      // refresh, it is the edit silently gone. The baseline stays adopted
-      // either way: it is durable now, and the controller must agree with it
-      // even when the swap is abandoned, or the next push is fenced against
-      // a version the account no longer holds.
-      controller.adoptAccountVersion(remote.projectId, remote.version);
-      const stillLive = managerRef.current?.document;
-      if (
-        cancelled ||
-        !stillLive ||
-        stillLive.projectId !== remote.projectId ||
-        stillLive.version !== current.version ||
-        controller.hasPendingChanges
-      ) {
-        return;
-      }
-      hydrateDocument(remote);
-      setStatus(`Updated to the version saved on another device.`);
     }
 
     const onFocus = () => void check();
@@ -8659,7 +8684,11 @@ export function App() {
 
   async function handleGoHome() {
     await flushPendingLocalSave();
-    await cloudProjectAutosaveRef.current?.flushPending();
+    const draining = cloudProjectAutosaveRef.current?.flushPending();
+    // A manual checkpoint now shares the account queue. The device is safe;
+    // navigation need not wait for its network response. Its continuation is
+    // guarded by the originating manager, and closing discards stale mirrors.
+    if (!accountSavePendingRef.current) await draining;
     // The card is written before the shelf that shows it is listed. Then
     // forgotten: a project trashed from that shelf must not get its record
     // written back by a later flush.
@@ -9519,10 +9548,19 @@ export function App() {
       );
       return;
     }
+    if (!ensureCanEdit('save a shared revision')) return;
     accountSavePendingRef.current = true;
     let sourceWarning: string | null = null;
     let savingDocument = savingManager.document;
     try {
+      await projectOwnershipSettledRef.current;
+      if (
+        !isCurrentProject() ||
+        projectOpenElsewhereRef.current ||
+        !ensureCanEdit('save a shared revision')
+      )
+        return;
+      savingDocument = savingManager.document;
       setSaveState('saving');
       await saveLocalProject(savingDocument);
       if (!isCurrentProject()) {
@@ -9607,17 +9645,44 @@ export function App() {
       // A queued autosave writing the same document behind this one would race
       // the checkpoint for the version fence, and the loser reports a conflict
       // that does not exist. Drain it first; a manual save is worth the wait.
-      await cloudProjectAutosaveRef.current?.flushPending();
-      if (!isCurrentProject()) {
+      const controller = cloudProjectAutosaveRef.current;
+      const readDocument = () =>
+        isCurrentProject() &&
+        !projectOpenElsewhereRef.current &&
+        ensureCanEdit('save a shared revision')
+          ? savingManager.document
+          : null;
+      const writeCheckpoint = async (input: {
+        projectId: ProjectDocument['projectId'];
+        expectedVersion: number;
+        document: ProjectDocument;
+      }) => {
+        savingDocument = input.document;
+        await saveLocalProject(savingDocument);
+        if (!readDocument()) return null;
+        return api.saveRevision({
+          ...input,
+          reason,
+          document: withoutDerivedProjection(savingDocument)
+        });
+      };
+      const currentDocument = readDocument();
+      if (!currentDocument) return;
+      const saved = controller
+        ? await controller.saveCheckpoint(
+            currentDocument.projectId,
+            readDocument,
+            writeCheckpoint
+          )
+        : await writeCheckpoint({
+            projectId: currentDocument.projectId,
+            expectedVersion,
+            document: currentDocument
+          });
+      if (!saved) {
+        if (isCurrentProject()) controller?.schedule(savingManager.document);
         return;
       }
-      const saved = await api.saveRevision({
-        projectId: savingDocument.projectId,
-        reason,
-        expectedVersion:
-          cloudProjectAutosaveRef.current?.syncedVersion ?? expectedVersion,
-        document: withoutDerivedProjection(savingDocument)
-      });
       remoteVersionsRef.current.set(saved.projectId, saved.version);
       await saveLastSyncedVersion(saved.projectId, saved.version);
       if (!isCurrentProject()) {
@@ -9630,10 +9695,6 @@ export function App() {
         // entries survive. Record the account version so the next autosave
         // fences correctly and let it carry the newer edits up.
         setCloudAvailable(true);
-        cloudProjectAutosaveRef.current?.adoptAccountVersion(
-          saved.projectId,
-          saved.version
-        );
         setStatus(sourceWarning ?? 'Saved revision.');
         return;
       }
@@ -9648,10 +9709,9 @@ export function App() {
         setSaveState('synced');
       }
       setCloudAvailable(true);
-      cloudProjectAutosaveRef.current?.adoptAccountVersion(
-        restored.projectId,
-        restored.version
-      );
+      if (savingManager.document.version !== savingDocument.version) {
+        await saveLocalProject(savingManager.document);
+      }
       setStatus(sourceWarning ?? 'Saved revision.');
     } catch (error) {
       if (!isCurrentProject()) {
