@@ -37,22 +37,35 @@ export interface AppSettingsSyncInput {
  * server said — stays with the caller; this owns only what happens to the
  * settings once it knows.
  */
+/** The hold that currently owns `data-theme-switching`, if any. */
+let activeThemeSwitchHold: object | null = null;
+
 /**
  * Turns transitions off (motion.css, `data-theme-switching`) for the frame a
  * theme change paints in, and back on two frames later. Returns the early
  * release for an effect cleanup.
+ *
+ * Releases are ownership-aware: the attribute is shared, and a stale release
+ * (an OS-flip hold whose frames already ran, cleaned up after the layout
+ * effect installed a hold for an explicit switch) must not remove the newer
+ * hold's flag and let that switch's palette change ramp.
  */
 function holdTransitionsForThemeSwitch(root: HTMLElement): () => void {
+  const hold = {};
+  activeThemeSwitchHold = hold;
   root.dataset.themeSwitching = 'true';
   let frame = requestAnimationFrame(() => {
-    frame = requestAnimationFrame(() => {
-      delete root.dataset.themeSwitching;
-    });
+    frame = requestAnimationFrame(release);
   });
-  return () => {
+  function release() {
     cancelAnimationFrame(frame);
+    if (activeThemeSwitchHold !== hold) {
+      return;
+    }
+    activeThemeSwitchHold = null;
     delete root.dataset.themeSwitching;
-  };
+  }
+  return release;
 }
 
 export function useAppSettingsSync({

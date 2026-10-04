@@ -324,6 +324,64 @@ describe('theme switch', () => {
     }
   });
 
+  it('keeps an explicit switch held when a finished OS-flip hold is cleaned up', () => {
+    // System, then the OS flips (a hold that completes), then Light. The
+    // System listener's cleanup runs after Light's layout effect installed
+    // its own hold; it must not remove that hold's flag.
+    const frames: FrameRequestCallback[] = [];
+    vi.stubGlobal('requestAnimationFrame', (callback: FrameRequestCallback) => {
+      frames.push(callback);
+      return frames.length;
+    });
+    vi.stubGlobal('cancelAnimationFrame', vi.fn());
+    const listeners = new Set<() => void>();
+    vi.stubGlobal(
+      'matchMedia',
+      vi.fn(() => ({
+        matches: false,
+        addEventListener: (_: string, listener: () => void) =>
+          listeners.add(listener),
+        removeEventListener: (_: string, listener: () => void) =>
+          listeners.delete(listener)
+      }))
+    );
+    try {
+      loadRecord.mockReturnValue({
+        settings: defaultAppSettings(),
+        syncedRevision: 7
+      });
+      const { result } = render();
+      const root = document.documentElement;
+
+      act(() => listeners.forEach((listener) => listener()));
+      frames.shift()?.(0);
+      frames.shift()?.(16);
+      expect(root.dataset.themeSwitching).toBeUndefined();
+
+      act(() =>
+        result.current.handleAppSettingsChange(
+          settings({
+            appearance: {
+              theme: 'light',
+              density: 'compact',
+              reducedMotion: false
+            }
+          })
+        )
+      );
+      expect(root.dataset.theme).toBe('light');
+      expect(listeners.size).toBe(0);
+      // The OS hold's cleanup has run; Light's hold is still in place.
+      expect(root.dataset.themeSwitching).toBe('true');
+
+      frames.shift()?.(32);
+      frames.shift()?.(48);
+      expect(root.dataset.themeSwitching).toBeUndefined();
+    } finally {
+      vi.unstubAllGlobals();
+    }
+  });
+
   it('does not watch the OS for an explicit theme', () => {
     const matchMedia = vi.fn();
     vi.stubGlobal('matchMedia', matchMedia);
