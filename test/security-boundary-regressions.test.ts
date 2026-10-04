@@ -121,6 +121,30 @@ describe('security resource and persistence boundaries', () => {
     ).toHaveLength(1);
   });
 
+  it('accepts exactly the 3MF placement limit with closing tags still to scan', async () => {
+    const bytes = await deflatedThreeMfFixture({
+      items: Array.from({ length: MAX_THREE_MF_PLACEMENTS }, () => ({
+        objectid: 1
+      }))
+    });
+    expect((await readThreeMfPackage(bytes)).placements).toHaveLength(
+      MAX_THREE_MF_PLACEMENTS
+    );
+  });
+
+  it('accepts exactly 10,000 3MF objects and refuses the next object', async () => {
+    expect(
+      (
+        await readThreeMfPackage(
+          await deflatedThreeMfFixture({ objects: 10_000 })
+        )
+      ).meshObjectCount
+    ).toBe(10_000);
+    await expect(
+      readThreeMfPackage(await deflatedThreeMfFixture({ objects: 10_001 }))
+    ).rejects.toThrow(/object count.*limit/);
+  });
+
   it('stops gzip output at its declared logical length', async () => {
     const compressed = await new Response(
       new Blob(['x'.repeat(100_000)])

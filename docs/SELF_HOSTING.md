@@ -220,7 +220,7 @@ Export D1 before a migration or major upgrade:
 
 ```bash
 pnpm --filter @openzcad/web exec mkdir -p backups
-wrangler d1 export DB --remote --config ../../wrangler.selfhost.jsonc --output backups/openzcad-backup.sql
+pnpm --filter @openzcad/web exec wrangler d1 export DB --remote --config ../../wrangler.selfhost.jsonc --output backups/openzcad-backup.sql
 ```
 
 The SQL export can contain user data and must remain private and outside Git.

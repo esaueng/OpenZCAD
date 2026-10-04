@@ -357,6 +357,12 @@ async function scanModelPart(
   let inResources = false;
   let inBuild = false;
   let current: ScannedObject | null = null;
+  const appendObject = (object: ScannedObject): void => {
+    if (model.objects.length >= MAX_THREE_MF_OBJECTS) {
+      throw refuse('its object count exceeds the browser import limit');
+    }
+    model.objects.push(object);
+  };
 
   const consume = (text: string, final: boolean): void => {
     const combined = carry + text;
@@ -374,14 +380,6 @@ async function scanModelPart(
       refuseUnclosedTag(carry);
     }
     for (const match of scannable.matchAll(STRUCTURAL_TAG)) {
-      if (
-        model.objects.length >= MAX_THREE_MF_OBJECTS ||
-        model.items.length >= MAX_THREE_MF_PLACEMENTS
-      ) {
-        throw refuse(
-          'its object or placement count exceeds the browser import limit'
-        );
-      }
       const closing = match[1] === '/';
       const name = match[2]!;
       const selfClosing = (match[3] ?? '').trimEnd().endsWith('/');
@@ -391,7 +389,7 @@ async function scanModelPart(
         } else if (name === 'build') {
           inBuild = false;
         } else if (name === 'object' && current) {
-          model.objects.push(current);
+          appendObject(current);
           current = null;
         }
         continue;
@@ -416,7 +414,7 @@ async function scanModelPart(
               hasComponents: false
             };
             if (selfClosing) {
-              model.objects.push(object);
+              appendObject(object);
             } else {
               current = object;
             }
@@ -434,6 +432,11 @@ async function scanModelPart(
           break;
         default:
           if (inBuild) {
+            if (model.items.length >= MAX_THREE_MF_PLACEMENTS) {
+              throw refuse(
+                'its placement count exceeds the browser import limit'
+              );
+            }
             model.items.push({
               objectId: attribute(match[0], 'objectid'),
               transform: attribute(match[0], 'transform'),
@@ -450,7 +453,7 @@ async function scanModelPart(
   }
   consume(decoder.decode(), true);
   if (current) {
-    model.objects.push(current);
+    appendObject(current);
   }
   if (!model.sawModel) {
     throw refuse('its 3D model part holds no <model> element');

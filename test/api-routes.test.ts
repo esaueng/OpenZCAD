@@ -491,6 +491,9 @@ describe('worker api routes', () => {
                         expires_at: 4_000_000_000
                       }
                     : null;
+                },
+                async run() {
+                  return { success: true };
                 }
               };
             }
@@ -1427,6 +1430,7 @@ describe('worker api routes', () => {
         DB: {
           prepare: (sql: string) => ({
             bind: () => ({
+              run: async () => ({ success: true }),
               first: async () =>
                 sql.includes('auth_rate_limits')
                   ? { request_count: 1 }
