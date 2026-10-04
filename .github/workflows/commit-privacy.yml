@@ -1,9 +1,13 @@
 name: Commit privacy
 
 on:
-  pull_request:
+  # Use the base policy even when a pull request edits this workflow.
+  # No PR code, checkout, dependencies, secrets, or writable token are used.
+  pull_request_target:
+    types: [opened, synchronize, reopened, edited]
   push:
-    branches: ['**']
+    branches: ["**"]
+    tags: ["**"]
   merge_group:
 
 permissions:
@@ -12,7 +16,7 @@ permissions:
 jobs:
   commit-privacy:
     name: commit-privacy
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     timeout-minutes: 10
     steps:
       # Read commit metadata through GitHub's API. No checkout, dependencies,
@@ -67,8 +71,23 @@ jobs:
               return invalid
 
 
+          def resolve_commit(oid, request):
+              # Push payloads can identify an annotated tag object rather than its commit.
+              seen = set()
+              while oid not in seen:
+                  seen.add(oid)
+                  commit = request("/commits/" + oid, allow_missing=True)
+                  if commit is not None:
+                      return commit["sha"]
+                  target = request("/git/tags/" + oid)["object"]
+                  if target["type"] not in ("tag", "commit"):
+                      raise CheckError("Tag does not point to a commit.")
+                  oid = target["sha"]
+              raise CheckError("Tag cycle cannot be verified.")
+
+
           def commit_range(event_name, event, request):
-              if event_name == "pull_request":
+              if event_name in ("pull_request", "pull_request_target"):
                   pr = event["pull_request"]
                   return pr["base"]["sha"], pr["head"]["sha"]
               if event_name == "merge_group":
@@ -79,13 +98,15 @@ jobs:
                       return None
                   head = event["after"]
                   base = event["before"]
+                  if event.get("ref", "").startswith("refs/tags/"):
+                      head = resolve_commit(head, request)
+                      if base != "0" * 40:
+                          base = resolve_commit(base, request)
                   if base == "0" * 40:
                       # A new branch has no previous tip. Compare with the current default
                       # branch, rather than rejecting inherited upstream history.
                       branch = urllib.parse.quote(event["repository"]["default_branch"], safe="")
                       base = request("/commits/" + branch)["sha"]
-                      if base == head:
-                          raise CheckError("No previous tip exists; audit initial history locally.")
                   return base, head
               raise CheckError("Unsupported event; commit range cannot be verified.")
 
@@ -93,6 +114,8 @@ jobs:
           def collect_commits(base, head, request):
               if not SHA.fullmatch(base) or not SHA.fullmatch(head):
                   raise CheckError("Invalid commit range.")
+              if base == head:
+                  return []
               commits = []
               total = None
               page = 1
@@ -134,12 +157,32 @@ jobs:
               assert contributor == (["author", "committer"] if POLICY == "all-users" else [])
               event = {"pull_request": {"base": {"sha": "a" * 40}, "head": {"sha": "b" * 40}}}
               assert commit_range("pull_request", event, None) == ("a" * 40, "b" * 40)
+              assert commit_range("pull_request_target", event, None) == ("a" * 40, "b" * 40)
               assert commit_range("push", {"deleted": True}, None) is None
               assert commit_range("push", {"before": "a" * 40, "after": "b" * 40}, None) == ("a" * 40, "b" * 40)
               group = {"merge_group": {"base_sha": "a" * 40, "head_sha": "b" * 40}}
               assert commit_range("merge_group", group, None) == ("a" * 40, "b" * 40)
               new_branch = {"before": "0" * 40, "after": "b" * 40, "repository": {"default_branch": "feature/default"}}
               assert commit_range("push", new_branch, lambda path: {"sha": "a" * 40}) == ("a" * 40, "b" * 40)
+              empty_branch = {"before": "0" * 40, "after": "a" * 40, "repository": {"default_branch": "main"}}
+              assert commit_range("push", empty_branch, lambda path: {"sha": "a" * 40}) == ("a" * 40, "a" * 40)
+              assert collect_commits("a" * 40, "a" * 40, None) == []
+              def tag_request(path, allow_missing=False):
+                  if path == "/git/tags/" + "c" * 40:
+                      return {"object": {"type": "commit", "sha": "b" * 40}}
+                  if path == "/commits/" + "c" * 40:
+                      assert allow_missing
+                      return None
+                  if path == "/commits/" + "b" * 40:
+                      return {"sha": "b" * 40}
+                  if path == "/commits/main":
+                      return {"sha": "a" * 40}
+                  raise AssertionError("Unexpected tag request")
+              tag_event = {"before": "0" * 40, "after": "c" * 40, "ref": "refs/tags/v-test", "repository": {"default_branch": "main"}}
+              assert commit_range("push", tag_event, tag_request) == ("a" * 40, "b" * 40)
+              assert resolve_commit("b" * 40, tag_request) == "b" * 40
+              changed_base = {"pull_request": {"base": {"sha": "d" * 40}, "head": {"sha": "b" * 40}}}
+              assert commit_range("pull_request_target", changed_base, tag_request) == ("d" * 40, "b" * 40)
               # Cover more than 250 commits; never rely on truncated event/PR commit lists.
               calls = []
               def paginated(path):
@@ -166,7 +209,7 @@ jobs:
                   event = json.load(stream)
               api = os.environ["GITHUB_API_URL"].rstrip("/")
               repository = os.environ["GITHUB_REPOSITORY"]
-              def request(path):
+              def request(path, allow_missing=False):
                   req = urllib.request.Request(api + "/repos/" + repository + path, headers={
                       "Authorization": "Bearer " + os.environ["GH_TOKEN"],
                       "Accept": "application/vnd.github+json",
@@ -175,6 +218,10 @@ jobs:
                   try:
                       with urllib.request.urlopen(req, timeout=30) as response:
                           return json.load(response)
+                  except urllib.error.HTTPError as error:
+                      if allow_missing and error.code == 404:
+                          return None
+                      raise CheckError("GitHub could not supply commit metadata; retry the check.") from None
                   except (urllib.error.URLError, ValueError):
                       raise CheckError("GitHub could not supply commit metadata; retry the check.") from None
               selected = commit_range(os.environ["GITHUB_EVENT_NAME"], event, request)
