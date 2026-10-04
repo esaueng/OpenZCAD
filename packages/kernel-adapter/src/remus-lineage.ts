@@ -15,6 +15,7 @@ import {
   straightEdgePositionOnSource,
   inspectTopologyWitness,
   topologyHashOfWitness,
+  topologyWitnessKey,
   topologyWitnessesEqual,
   topologyWitnessesNearlyEqual,
   verifyTopologyEvolution,
@@ -622,16 +623,18 @@ export function carryRemusUnchangedLineage(
     ...source.faceReferences.values(),
     ...source.edgeReferences.values()
   ];
+  const matching = {
+    face: witnessMatcher(
+      'face',
+      results.filter((candidate) => candidate.kind === 'face')
+    ),
+    edge: witnessMatcher(
+      'edge',
+      results.filter((candidate) => candidate.kind === 'edge')
+    )
+  };
   for (const reference of references) {
-    const matches = results.filter(
-      (candidate) =>
-        candidate.kind === reference.kind &&
-        topologyWitnessesEqual(
-          reference.kind,
-          reference.witness,
-          candidate.witness
-        )
-    );
+    const matches = matching[reference.kind](reference.witness);
     if (matches.length !== 1) {
       omitted += 1;
       continue;
@@ -673,6 +676,33 @@ export interface RemusMoveFacesRelation {
    * original, so publishing either would be a guess.
    */
   readonly conflictedSources: ReadonlySet<number>;
+}
+
+/**
+ * Looks up the candidates whose witness equals a given one under
+ * `topologyWitnessesEqual(kind, …)`, in candidate order. That equality is
+ * key equality, so the candidates are indexed once (on the first lookup)
+ * instead of compared with every reference: on a 160-face, 386-edge body the
+ * pairwise scan rebuilt the same signature strings ~350 000 times per edit.
+ */
+function witnessMatcher(
+  kind: TopologyKind,
+  candidates: Iterable<RemusTopologyCandidate>
+): (witness: TopologyWitnessV1) => RemusTopologyCandidate[] {
+  let index: Map<string, RemusTopologyCandidate[]> | null = null;
+  return (witness) => {
+    if (!index) {
+      index = new Map();
+      for (const candidate of candidates) {
+        const key = topologyWitnessKey(kind, candidate.witness);
+        const group = index.get(key);
+        if (group) group.push(candidate);
+        else index.set(key, [candidate]);
+      }
+    }
+    if (index.size === 0) return [];
+    return [...(index.get(topologyWitnessKey(kind, witness)) ?? [])];
+  };
 }
 
 function sameLineageName(
@@ -791,15 +821,9 @@ export function deriveRemusMoveFacesDirectEditLineage(input: {
   // The independent derivation: exact witness equality, unique match only.
   const unchangedClaims = new Map<number, FaceClaim>();
   const unchangedTaken = new Set<string>();
+  const resultFacesMatching = witnessMatcher('face', resultFaces.values());
   for (const reference of source.faceReferences.values()) {
-    const matches = [...resultFaces.values()].filter(
-      (candidate) =>
-        topologyWitnessesEqual(
-          'face',
-          reference.witness,
-          candidate.witness as FaceWitnessV1
-        )
-    );
+    const matches = resultFacesMatching(reference.witness);
     if (matches.length !== 1) {
       continue;
     }
@@ -889,14 +913,9 @@ export function deriveRemusMoveFacesDirectEditLineage(input: {
   // is out of scope for dimension-edit references, and an edge whose exact
   // witness survived is the same edge by measurement.
   const claimedEdges = new Set<string>();
+  const resultEdgesMatching = witnessMatcher('edge', resultEdges.values());
   for (const reference of source.edgeReferences.values()) {
-    const matches = [...resultEdges.values()].filter((candidate) =>
-      topologyWitnessesEqual(
-        'edge',
-        reference.witness,
-        candidate.witness as EdgeWitnessV1
-      )
-    );
+    const matches = resultEdgesMatching(reference.witness);
     if (matches.length !== 1) {
       continue;
     }

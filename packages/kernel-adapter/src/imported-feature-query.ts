@@ -28,6 +28,7 @@ import {
   subtract
 } from './exact-math';
 import { measureFaceGeometry } from './exact-measure';
+import { edgeToFaceMapOf, surfaceTypeOf } from './exact-sync-memo';
 import {
   SolidFaceAdjacency,
   crossCheckHoleClaims,
@@ -326,10 +327,7 @@ export class RemusImportedFeatureQuery implements ExactFaceAdjacencyQuery {
     private readonly solid: number
   ) {
     this.faceHandles = new Set(kernel.getSolidFaces(solid));
-    this.edgeToFaces = JSON.parse(kernel.edgeToFaceMap(solid)) as Record<
-      string,
-      number[]
-    >;
+    this.edgeToFaces = edgeToFaceMapOf(kernel, solid);
     // One bulk query per solid: a per-edge loop rebuilds adjacency per edge
     // (the quadratic trap on a 2 000-edge import). Fail closed to an empty
     // map — every missing edge then reads as `unknown` → `intersection`.
@@ -479,7 +477,7 @@ export class RemusImportedFeatureQuery implements ExactFaceAdjacencyQuery {
   }
 
   private readSurface(handle: number): ExactRecognitionFace['surface'] {
-    const surfaceType = this.kernel.getSurfaceType(handle);
+    const surfaceType = surfaceTypeOf(this.kernel, handle);
     const geometry = measureFaceGeometry(this.kernel, handle);
     if (surfaceType === 'plane' && geometry?.normal) {
       const normal = normalized(geometry.normal);

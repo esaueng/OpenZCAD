@@ -149,8 +149,16 @@ import {
 import {
   MEASUREMENT_DEFLECTION,
   edgeWitnessOf,
-  faceWitnessOf
+  faceWitnessOf,
+  registerSolidWitnesses
 } from './exact-witnesses';
+import {
+  SyncReadMemo,
+  TopologyWitnessStore,
+  edgeToFaceMapOf,
+  enterSyncReadMemo,
+  withSyncReadMemo
+} from './exact-sync-memo';
 import {
   brepAdjacentFaceHashes,
   brepEdgeCurve,
@@ -952,6 +960,14 @@ export class RemusKernelAdapter implements ExactKernelAdapter {
     MeasuredBodyCacheEntry
   >();
   private measuredShapeCacheBytes = 0;
+  /**
+   * ADR-011 witnesses per solid handle in the history kernel, so the next
+   * edit of a body starts from the witnesses its measurement recorded. Same
+   * lifetime and handle-identity argument as {@link measuredShapeCache};
+   * every record is revalidated against the solid's live face and edge lists
+   * before use (see `exact-sync-memo.ts`).
+   */
+  private readonly topologyWitnessStore = new TopologyWitnessStore();
 
   private get maxHistoryCheckpoints(): number {
     return this.options.historyCheckpointLimit ?? MAX_HISTORY_CHECKPOINTS;
@@ -973,6 +989,7 @@ export class RemusKernelAdapter implements ExactKernelAdapter {
     this.primitiveBuildCache.clear();
     this.measuredShapeCache.clear();
     this.measuredShapeCacheBytes = 0;
+    this.topologyWitnessStore.clear();
     if (this.historyKernel) {
       this.historyKernel.free();
       this.historyKernel = null;
@@ -1044,6 +1061,8 @@ export class RemusKernelAdapter implements ExactKernelAdapter {
     reusedPrimitives: number;
     /** Strict verdicts the union gate established, keyed by kernel handle. */
     strictVerdicts: StrictUnionVerdicts;
+    /** The replay's kernel reads, for the measurement pass of this sync. */
+    readMemo: SyncReadMemo;
     recycleReason?: 'replay-budget';
     cacheResetReason?: 'checkpoint-ownership' | 'checkpoint-restore';
   } {
@@ -1318,6 +1337,10 @@ export class RemusKernelAdapter implements ExactKernelAdapter {
     // anything.
     const strictVerdicts: StrictUnionVerdicts =
       new UnionVerdictsWithMeshBudget();
+    // Kernel reads the replay shares with the measurement pass of the same
+    // sync: surface classes, edge-to-face maps and topology witnesses.
+    const readMemo = new SyncReadMemo(activeKernel, this.topologyWitnessStore);
+    const closeReadMemo = enterSyncReadMemo(readMemo);
     try {
       build = buildDocumentHistory(
         activeKernel,
@@ -1365,6 +1388,8 @@ export class RemusKernelAdapter implements ExactKernelAdapter {
       }
       this.invalidateHistoryCache();
       throw error;
+    } finally {
+      closeReadMemo();
     }
     if (startIndex > 0 || reusePrimitiveTail) {
       this.historyReplayWork += features.length - startIndex - reusedPrimitives;
@@ -1379,7 +1404,8 @@ export class RemusKernelAdapter implements ExactKernelAdapter {
       reusedPrimitives,
       ...(cacheResetReason ? { cacheResetReason } : {}),
       ...(recycled ? { recycleReason: 'replay-budget' as const } : {}),
-      strictVerdicts
+      strictVerdicts,
+      readMemo
     };
   }
 
@@ -1488,10 +1514,11 @@ export class RemusKernelAdapter implements ExactKernelAdapter {
         bounds[5]! - bounds[2]!
       );
       const faceHandles = Array.from(kernel.getSolidFaces(solid));
-      const edgeToFaces = JSON.parse(kernel.edgeToFaceMap(solid)) as Record<
-        string,
-        number[]
-      >;
+      const edgeToFaces = edgeToFaceMapOf(kernel, solid);
+      // The edit that produced this solid usually measured its witnesses
+      // already; inside the sync memo they are shared rather than measured
+      // again, and kept for the next edit of this body.
+      registerSolidWitnesses(kernel, solid);
       // Face handle -> ADR-011 hash, for translating the kernel's edge-to-face
       // map when the edge records are built below. Scoped to this solid:
       // `edgeToFaces` is per solid while `topology.faces` accumulates across
@@ -1917,6 +1944,7 @@ export class RemusKernelAdapter implements ExactKernelAdapter {
         restored,
         reusedPrimitives,
         strictVerdicts,
+        readMemo,
         recycleReason,
         cacheResetReason
       } = this.buildWithHistoryCache(
@@ -2044,21 +2072,25 @@ export class RemusKernelAdapter implements ExactKernelAdapter {
                     ? 'recognition'
                     : 'provenance';
           measurementMisses[reason] = (measurementMisses[reason] ?? 0) + 1;
-          measured = this.measureShape(
-            kernel,
-            shape,
-            requiresStrictUnionValidation,
-            recognizeImportedFeatures,
-            (part) =>
-              report(
-                'measurement',
-                `${body.name}: ${part}`,
-                document.bodyOrder.indexOf(bodyId) + 1,
-                document.bodyOrder.length
-              ),
-            analysisHashes,
-            1 / UNIT_TO_MM[document.units],
-            strictVerdicts
+          // Inside the replay's read memo: a solid the replay just built (or
+          // the last sync measured) is not witnessed or classified again.
+          measured = withSyncReadMemo(readMemo, () =>
+            this.measureShape(
+              kernel,
+              shape,
+              requiresStrictUnionValidation,
+              recognizeImportedFeatures,
+              (part) =>
+                report(
+                  'measurement',
+                  `${body.name}: ${part}`,
+                  document.bodyOrder.indexOf(bodyId) + 1,
+                  document.bodyOrder.length
+                ),
+              analysisHashes,
+              1 / UNIT_TO_MM[document.units],
+              strictVerdicts
+            )
           );
           remeasured += 1;
           const witness = measured.witness;

@@ -34,6 +34,7 @@ import {
 } from './exact-math';
 import { canonicalDirection } from './topology-fingerprint';
 import { topologyHashOfWitness } from './topology-lineage';
+import { surfaceTypeOf, syncReadMemoFor } from './exact-sync-memo';
 
 /** Chord tolerance for identity sampling; mirrors the display default. */
 export const MEASUREMENT_DEFLECTION = 0.08;
@@ -242,7 +243,7 @@ export function analyticParamsSignature(kernel: RemusKernel, face: number): stri
  * ADR-008/ADR-010 establish for edges).
  */
 export function faceFingerprint(kernel: RemusKernel, face: number): number {
-  const surfaceType = kernel.getSurfaceType(face);
+  const surfaceType = surfaceTypeOf(kernel, face);
   let perimeter = 0;
   for (const edge of kernel.getFaceEdges(face)) {
     perimeter += kernel.edgeLength(edge);
@@ -305,7 +306,23 @@ export function quantizedDirectionOf(direction: Vec3): QuantizedTopologyPoint | 
   ];
 }
 
+/**
+ * The edge's ADR-011 witness. Inside a sync memo it is measured at most once
+ * per handle and shared (see `exact-sync-memo.ts`); witnesses are immutable
+ * values, so callers must not mutate the record they get.
+ */
 export function edgeWitnessOf(kernel: RemusKernel, edge: number): EdgeWitnessV1 {
+  const memo = syncReadMemoFor(kernel);
+  if (!memo) return measureEdgeWitness(kernel, edge);
+  let witness = memo.edgeWitnesses.get(edge);
+  if (!witness) {
+    witness = measureEdgeWitness(kernel, edge);
+    memo.recordEdgeWitness(edge, witness);
+  }
+  return witness;
+}
+
+function measureEdgeWitness(kernel: RemusKernel, edge: number): EdgeWitnessV1 {
   const sample = edgeSampleOf(kernel, edge);
   if (sample.closed) {
     return {
@@ -381,8 +398,24 @@ export function remusFaceClosure(
   }
 }
 
+/**
+ * The face's ADR-011 witness. Inside a sync memo it is measured at most once
+ * per handle and shared (see `exact-sync-memo.ts`); witnesses are immutable
+ * values, so callers must not mutate the record they get.
+ */
 export function faceWitnessOf(kernel: RemusKernel, face: number): FaceWitnessV1 {
-  const surfaceType = kernel.getSurfaceType(face);
+  const memo = syncReadMemoFor(kernel);
+  if (!memo) return measureFaceWitness(kernel, face);
+  let witness = memo.faceWitnesses.get(face);
+  if (!witness) {
+    witness = measureFaceWitness(kernel, face);
+    memo.recordFaceWitness(face, witness);
+  }
+  return witness;
+}
+
+function measureFaceWitness(kernel: RemusKernel, face: number): FaceWitnessV1 {
+  const surfaceType = surfaceTypeOf(kernel, face);
   let perimeter = 0;
   for (const edge of kernel.getFaceEdges(face)) {
     perimeter += kernel.edgeLength(edge);
@@ -438,11 +471,26 @@ export function faceWitnessOf(kernel: RemusKernel, face: number): FaceWitnessV1 
   };
 }
 
+/**
+ * Declares that `solid`'s face and edge witnesses are about to be read.
+ * Inside a sync memo (see `exact-sync-memo.ts`) the witnesses an earlier sync
+ * measured for this very solid are served again after the solid's face and
+ * edge lists are rechecked, and whatever this sync measures for it is kept
+ * for the next one: the next edit of a body starts from the body this sync
+ * measured. Outside a memo it does nothing.
+ */
+export function registerSolidWitnesses(
+  kernel: RemusKernel,
+  solid: number
+): void {
+  syncReadMemoFor(kernel)?.registerSolid(solid);
+}
+
 /** The pre-ADR-011 Remus face scheme, kept only for persisted references. */
 export function legacyFaceFingerprint(kernel: RemusKernel, face: number): number {
   const centroid = faceVertexCentroid(kernel, face);
   const signature = [
-    kernel.getSurfaceType(face),
+    surfaceTypeOf(kernel, face),
     quantizeEdgeCoordinate(
       Math.sqrt(Math.max(kernel.faceArea(face, MEASUREMENT_DEFLECTION), 0))
     ),

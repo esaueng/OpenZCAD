@@ -10,6 +10,7 @@ import type { Vec3 } from '@openzcad/geometry';
 import type { FaceAreaProvenance, FaceGeometry } from '@openzcad/shared';
 import { MEASUREMENT_DEFLECTION, faceWitnessOf } from './exact-witnesses';
 import { faceVertexCentroid, isBlendFace } from './exact-brep';
+import { surfaceTypeOf } from './exact-sync-memo';
 import { planarFaceCentroid } from './exact-face-centroid';
 import { topologyHashOfWitness } from './topology-lineage';
 import {
@@ -94,7 +95,7 @@ export function measureFaceGeometry(
   kernel: RemusKernel,
   face: number
 ): FaceGeometry | undefined {
-  const surfaceType = kernel.getSurfaceType(face);
+  const surfaceType = surfaceTypeOf(kernel, face);
   const centroid = faceVertexCentroid(kernel, face);
   const areaProvenance = measureAreaProvenance(kernel, face, surfaceType);
   const geometry: FaceGeometry = {

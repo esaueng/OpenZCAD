@@ -2,6 +2,7 @@ import type { Vector3 } from '@openzcad/shared';
 
 import { faceVertexCentroid } from './exact-brep';
 import type { RemusKernel } from './remus-runtime';
+import { surfaceTypeOf, syncReadMemoFor } from './exact-sync-memo';
 
 /**
  * The narrow face data consumed by planar-distance proofs.
@@ -31,7 +32,29 @@ export function readFacePlaneFrame(
   kernel: RemusKernel,
   face: number
 ): FacePlaneFrame {
-  const surfaceType = kernel.getSurfaceType(face);
+  // The planar-distance proofs read every face's frame once per candidate
+  // pair; inside a sync memo each face is read once. Callers get their own
+  // copy of the shared record.
+  const memo = syncReadMemoFor(kernel);
+  const frame = memo
+    ? memo.faceValue('plane-frame', face, () =>
+        measureFacePlaneFrame(kernel, face)
+      )
+    : measureFacePlaneFrame(kernel, face);
+  return memo
+    ? {
+        ...frame,
+        center: { ...frame.center },
+        ...(frame.normal ? { normal: { ...frame.normal } } : {})
+      }
+    : frame;
+}
+
+function measureFacePlaneFrame(
+  kernel: RemusKernel,
+  face: number
+): FacePlaneFrame {
+  const surfaceType = surfaceTypeOf(kernel, face);
   const center = faceVertexCentroid(kernel, face) ?? { x: 0, y: 0, z: 0 };
   const frame: FacePlaneFrame = { surfaceType, center };
   if (surfaceType !== 'plane') {
