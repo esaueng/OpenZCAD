@@ -402,7 +402,7 @@ drag restores the object's stored values; it never deletes persisted text.
 | --- | -------------------------------------------------------------------- | ---------- | ------------ | ----------------------------- |
 | A   | Phase 0 baseline + doc refresh                                       | —          | S, docs only | open #582                     |
 | B   | Phase 1 sketch move                                                  | A          | M            | open #585                     |
-| K   | Pierce-the-face tool for on-face text add/cut, region-rig chip reset | A          | S            | **merged** #583 as `1344a52f` |
+| K   | Pierce-the-face tool for on-face text add/cut, region-rig chip reset | —          | S            | **merged** #583 as `1344a52f` |
 | C   | Phase 2.1–2.2 text card + live outline                               | A          | M            | open #587                     |
 | D   | Phase 2.3–2.4 place/transform/re-entry                               | B, C       | M            | not started (after B, C)      |
 | E   | Phase 3 multi-region                                                 | A          | M            | open #588                     |
