@@ -7,6 +7,7 @@ import {
 } from '@openzcad/shared';
 import {
   describeSectionOutline,
+  measurementAnnotationsOnScreen,
   resolveSectionOutline,
   sectionOutlineExportable,
   sectionOutlineFor,
@@ -77,7 +78,7 @@ const report = (
   }) as unknown as Parameters<typeof sectionOutlineFromReport>[0];
 
 describe('the exact section asks about the bodies on screen', () => {
-  it('sends the caller\'s visible body list to the kernel', async () => {
+  it("sends the caller's visible body list to the kernel", async () => {
     const sectionOutline = vi.fn(async () => report([region('body_a', 540)]));
     const visible: BodyId[] = [toBodyId('body_a')];
 
@@ -158,8 +159,14 @@ describe('the exact section asks about the bodies on screen', () => {
     expect(exportModel).toHaveBeenCalledWith('dxf', document, visible, {
       section: { origin: [0, 0, 3], normal: [0, 0, 1] }
     });
-    expect(save).toHaveBeenCalledWith('part-section.dxf', 'dxf', '0\r\nEOF\r\n');
-    expect(announced.at(-1)).toBe('Exported the XY section to part-section.dxf.');
+    expect(save).toHaveBeenCalledWith(
+      'part-section.dxf',
+      'dxf',
+      '0\r\nEOF\r\n'
+    );
+    expect(announced.at(-1)).toBe(
+      'Exported the XY section to part-section.dxf.'
+    );
   });
 
   it('writes nothing for a section the exporter would refuse', async () => {
@@ -312,7 +319,10 @@ describe('a section is of the drawing, not of the document behind it', () => {
     // area exact. Not shown at all — back to the clipped preview.
     const bodies = [toBodyId('body_a')];
     expect(
-      sectionOutlineFor(onScreen(document, bodies, parameterPreview), exportable)
+      sectionOutlineFor(
+        onScreen(document, bodies, parameterPreview),
+        exportable
+      )
     ).toEqual({ kind: 'clipping' });
     expect(
       sectionOutlineFor(
@@ -467,7 +477,7 @@ describe('what the section rail may offer to export', () => {
     expect(state).toMatchObject({ kind: 'exact', missed: 1, unsectioned: 1 });
   });
 
-  it('counts bodies, not the kernel\'s per-solid outcomes', () => {
+  it("counts bodies, not the kernel's per-solid outcomes", () => {
     // One imported body holding two solids, the plane through one of them.
     // The kernel answers per solid, so the same body appears as a region
     // AND as a refusal. Counting refusals told the user "1 body is not cut
@@ -487,7 +497,7 @@ describe('what the section rail may offer to export', () => {
     expect(state).toMatchObject({ kind: 'exact', missed: 0, unsectioned: 0 });
     expect(sectionOutlineExportable(state)).toBe(true);
     expect(describeSectionOutline(state, 'mm').detail).toBe(
-      '100.00 mm² of material'
+      '100 mm² of material'
     );
   });
 
@@ -519,7 +529,8 @@ describe('what the section rail may offer to export', () => {
           {
             bodyId: 'body_preview_only',
             reason: 'unknown-body',
-            message: 'Body body_preview_only has no exact geometry in this model.'
+            message:
+              'Body body_preview_only has no exact geometry in this model.'
           }
         ]
       )
@@ -534,7 +545,7 @@ describe('what the section rail may offer to export', () => {
     );
     expect(sectionOutlineExportable(state)).toBe(true);
     expect(describeSectionOutline(state, 'mm').detail).toBe(
-      '540.00 mm² of material, 1 body is not cut here'
+      '540 mm² of material, 1 body is not cut here'
     );
   });
 
@@ -547,7 +558,7 @@ describe('what the section rail may offer to export', () => {
     );
     expect(sectionOutlineExportable(state)).toBe(false);
     expect(describeSectionOutline(state, 'mm').detail).toBe(
-      '540.00 mm² of material, 1 body has no exact section, so there is no drawing to export'
+      '540 mm² of material, 1 body has no exact section, so there is no drawing to export'
     );
   });
 
@@ -564,5 +575,99 @@ describe('what the section rail may offer to export', () => {
       kind: 'refused',
       detail: 'The section plane does not pass through this body.'
     });
+  });
+
+  it('says a refused cut is approximate instead of quoting the kernel', () => {
+    // The panel used to read out "The kernel's cross-section area
+    // (720.0000) disagrees with the tessellated witness (576.2842) by more
+    // than 0.8641." — a diagnostic, with two numbers neither of which is
+    // the exact area.
+    const state = sectionOutlineFromReport(report([], [mismatch]));
+    expect(state).toEqual({
+      kind: 'refused',
+      detail: 'Area is approximate for this cut.'
+    });
+    const detail = describeSectionOutline(state, 'mm').detail;
+    expect(detail).not.toMatch(/kernel|witness|tessellat|[0-9]/);
+    expect(sectionOutlineExportable(state)).toBe(false);
+  });
+
+  it('keeps every other refusal free of kernel vocabulary', () => {
+    for (const reason of [
+      'kernel-refused',
+      'empty-section',
+      'non-planar-section',
+      'wire-order-unverified',
+      'unknown-body'
+    ] as const) {
+      const state = sectionOutlineFromReport(
+        report(
+          [],
+          [
+            {
+              bodyId: 'body_a',
+              reason,
+              message: 'The kernel returned a bspline cross-section face.'
+            }
+          ]
+        )
+      );
+      expect(state).toEqual({
+        kind: 'refused',
+        detail: 'This cut can only be shown approximately.'
+      });
+    }
+  });
+});
+
+describe('measurement labels are placed against the drawing', () => {
+  const box = { min: { x: 0, y: 0, z: 0 }, max: { x: 1, y: 1, z: 1 } };
+  function annotation(id: string, bodyId?: string) {
+    return {
+      id,
+      label: '1.00 mm²',
+      selected: false,
+      status: 'current' as const,
+      graphic: 'anchor' as const,
+      anchor: { x: 0, y: 0, z: 0 },
+      segments: [],
+      ...(bodyId ? { extent: { bodyId: toBodyId(bodyId), ...box } } : {})
+    };
+  }
+  const annotations = [
+    annotation('a', 'body_a'),
+    annotation('b', 'body_b'),
+    annotation('draft')
+  ];
+  const both = [toBodyId('body_a'), toBodyId('body_b')];
+
+  it('keeps every face box while the bodies are drawn as built', () => {
+    expect(
+      measurementAnnotationsOnScreen(annotations, onScreen(document, both))
+    ).toBe(annotations);
+  });
+
+  it('drops the box of a face under a parameter preview or a Move pose', () => {
+    // The box was read from the built body. While a preview stands in for
+    // it, or the viewer has posed it elsewhere, a label placed beside that
+    // box would stand by geometry nobody can see — so it falls back to
+    // standing outside the whole model.
+    const [a, b] = measurementAnnotationsOnScreen(
+      annotations,
+      onScreen(document, both, [{ replaces: [toBodyId('body_a')] }])
+    );
+    expect(a).not.toHaveProperty('extent');
+    expect(b).toBe(annotations[1]);
+    const [, moved] = measurementAnnotationsOnScreen(
+      annotations,
+      onScreen(document, both, null, ['body_b'])
+    );
+    expect(moved).not.toHaveProperty('extent');
+    // A hidden body is not drawn at all.
+    const [hidden] = measurementAnnotationsOnScreen(
+      annotations,
+      onScreen(document, [toBodyId('body_b')])
+    );
+    expect(hidden).not.toHaveProperty('extent');
   });
 });

@@ -388,17 +388,6 @@
   padding: 10px 12px 9px;
 }
 
-.move-controller .panel-title-row h2 {
-  display: flex;
-  align-items: center;
-  gap: 6px;
-  font-size: var(--fs-md);
-}
-
-.move-controller .panel-title-row h2 svg {
-  color: var(--color-accent);
-}
-
 .move-controller .form-actions {
   margin-top: 10px;
 }

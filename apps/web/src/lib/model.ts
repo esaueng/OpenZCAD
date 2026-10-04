@@ -72,6 +72,29 @@ export function formatNumber(value: number): string {
   return String(Math.round(value * 1000) / 1000);
 }
 
+/**
+ * One display precision for a measured area or volume, wherever the
+ * workspace reads one out: the selection callout, the inspector, the body
+ * statistics and the section readout. They used to disagree — 511.73 mm²
+ * on the callout, 511.726 mm² in the inspector for the same face. Two
+ * decimals, trailing zeros dropped; below 1 three significant digits, so a
+ * small face in inches does not round to nothing. Measure keeps its own
+ * precision setting and does not come through here.
+ */
+export function formatMeasuredQuantity(value: number): string {
+  if (!Number.isFinite(value)) {
+    return '—';
+  }
+  const abs = Math.abs(value);
+  if (abs !== 0 && (abs >= 1e7 || abs < 1e-3)) {
+    return value.toExponential(3);
+  }
+  if (abs < 1) {
+    return String(Number(value.toPrecision(3)));
+  }
+  return String(Math.round(value * 100) / 100);
+}
+
 export const FEATURE_KIND_LABELS: Record<FeatureKind, string> = {
   primitive: 'Primitive',
   sketch: 'Sketch',

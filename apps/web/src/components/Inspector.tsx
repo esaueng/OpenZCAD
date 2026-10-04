@@ -74,6 +74,7 @@ import { modelingFeatureIsEditable } from '../lib/modelingOperations';
 import {
   evalParamValue,
   FEATURE_KIND_LABELS,
+  formatMeasuredQuantity,
   formatNumber,
   previewExpression
 } from '../lib/model';
@@ -83,6 +84,7 @@ import {
   inspectorHeadingForFeature,
   type FeatureSelectionSource
 } from '../lib/inspectorHeading';
+import { CARD_EYEBROWS } from '../lib/cardEyebrows';
 import { ExprInput } from './ExprInput';
 import { ColorPicker } from './ColorPicker';
 import { PanelOverflow } from './PanelOverflow';
@@ -378,7 +380,7 @@ function TopologyMeasurements({
     if (geometry) {
       rows.push([
         'area',
-        `${formatNumber(geometry.area)} ${unitLabel('area', units)}`
+        `${formatMeasuredQuantity(geometry.area)} ${unitLabel('area', units)}`
       ]);
       rows.push(['surface', geometry.surfaceType]);
       if (geometry.diameter !== undefined) {
@@ -598,7 +600,7 @@ function BodyStats({
         <div className="kv-grid">
           <b>volume</b>
           <span>
-            {formatNumber(body.volume)} {unitLabel('volume', units)}
+            {formatMeasuredQuantity(body.volume)} {unitLabel('volume', units)}
           </span>
           <b>size</b>
           <span>
@@ -1192,7 +1194,7 @@ function FaceDirectEdit({
         <span>{geometry.surfaceType}</span>
         <b>area</b>
         <span>
-          {formatNumber(geometry.area)} {units}²
+          {formatMeasuredQuantity(geometry.area)} {units}²
         </span>
         {geometry.axialLength !== undefined && (
           <>
@@ -1388,7 +1390,7 @@ export function Inspector(props: InspectorProps) {
   let deleteAction: { label: string; run: () => void } | null = null;
 
   if (tool) {
-    eyebrow = 'New feature';
+    eyebrow = CARD_EYEBROWS.create;
     title = TOOL_META[tool].label;
     if (PRIMITIVE_TOOLS.includes(tool)) {
       const kind = tool as PrimitiveKind;
@@ -1567,6 +1569,7 @@ export function Inspector(props: InspectorProps) {
     const heading = inspectorHeadingForFeature({
       featureName: selectedFeature.name,
       featureKindLabel: FEATURE_KIND_LABELS[selectedFeature.featureKind],
+      directEdit: selectedFeature.featureKind === 'direct-edit',
       ...(selectionLabel ? { selectionLabel } : {}),
       ...(selectedBody ? { selectionBodyName: selectedBody.name } : {}),
       featureSelectionSource,

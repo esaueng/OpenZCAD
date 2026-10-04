@@ -500,6 +500,11 @@ test('opens a project read-only when another tab already has it', async ({
   await expect(second.getByRole('button', { name: /^Box \(B\)/ })).toBeDisabled(
     { timeout: SYNC_BUDGET_MS }
   );
+  // The dimmed rail is explained once, in the lane, not only in each
+  // button's tooltip.
+  await expect(
+    second.locator('.workspace-toast-body [role="status"]')
+  ).toContainText('Editing is locked: this project is open in another tab.');
   // And settles on saying so, rather than leaving up a save that is never
   // going to happen. Claiming the project is asynchronous, so the indicator
   // reads as saving until the answer arrives.
@@ -515,6 +520,9 @@ test('opens a project read-only when another tab already has it', async ({
   await expect(second.getByRole('button', { name: /^Box \(B\)/ })).toBeEnabled({
     timeout: SYNC_BUDGET_MS
   });
+  await expect(
+    second.locator('.workspace-toast-body [role="status"]')
+  ).toContainText('This tab can edit the project now.');
   await second.close();
 });
 

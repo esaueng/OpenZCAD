@@ -43,3 +43,13 @@ export function platformShortcutLabel(
   ).map((modifier) => MAC_MODIFIER_GLYPHS[modifier]);
   return [...new Set(glyphs)].join('') + key;
 }
+
+/**
+ * The lane's line when nothing is selected or armed. It named "Ctrl+K" on a
+ * Mac while the command box beside it showed ⌘K.
+ */
+export function idleWorkspaceHint(
+  platform = globalThis.navigator?.platform ?? ''
+): string {
+  return `${platformShortcutLabel('Ctrl+K', platform)} commands · ? shortcuts`;
+}

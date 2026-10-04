@@ -915,6 +915,14 @@
   left: var(--lane-inset);
 }
 
+/* The Move instruction shares the viewport's overlay slot with the
+   revert-sketch pill and starts where it does, under the top islands. At
+   the focused sketch's 14px it sat beneath the mode switch, which covered
+   its title. */
+.workspace.column-layout .extrude-instruction {
+  top: var(--stage-top);
+}
+
 /* Everything that floats in the palette slot (direct-mode strips such as
    the plane picker) starts under the top islands, as does the measurement
    dock. */
@@ -1466,15 +1474,26 @@ button.command-rail:hover:not(:disabled) {
   background: var(--color-surface-hover);
 }
 
-/* The context's primary verb is lit; the armed tool is outlined. */
+/* The context's primary verb is a hint, lighter than the armed state: an
+   accent icon and a 2px accent bar at the rail's edge, with no fill and no
+   outline. The armed tool is outlined, and while a tool is armed the hint
+   is not drawn at all (CommandCard drops the class), so one button is lit. */
 /* `is-primary`, not `primary`: the base button style claims that word. */
 button.command-rail.is-primary {
+  position: relative;
   color: var(--color-accent);
-  background: var(--color-accent-dim);
 }
 
-button.command-rail.is-primary:hover:not(:disabled) {
-  background: color-mix(in srgb, var(--color-accent) 22%, transparent);
+button.command-rail.is-primary::before {
+  position: absolute;
+  top: 50%;
+  left: -4px;
+  width: 2px;
+  height: 14px;
+  content: '';
+  background: var(--color-accent);
+  border-radius: 1px;
+  transform: translateY(-50%);
 }
 
 button.command-rail.active {

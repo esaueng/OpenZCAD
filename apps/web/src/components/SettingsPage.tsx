@@ -2037,20 +2037,13 @@ export function SettingsPage({
               intro="A complete reference for keyboard commands, viewport navigation, selection, sketching, and direct modeling."
               wide
             >
-              <div className="settings-controls-note">
-                <Keyboard size={18} aria-hidden="true" />
-                <span>
-                  <strong>Shortcuts are fixed and context-aware.</strong>
-                  <small>
-                    Workspace commands pause while you type or while Settings is
-                    open. Sketch mode reuses C and R for Circle and Rectangle.
-                  </small>
-                </span>
-              </div>
+              {/* One header for the keyboard half. A banner above it used to
+                  repeat the keyboard icon with its own line of guidance, so
+                  the page opened on two stacked headers. */}
               <ControlReferenceCollection
                 icon={<Keyboard size={18} aria-hidden="true" />}
                 title="Keyboard"
-                description="Commands are grouped by the part of the workspace that owns them."
+                description="Shortcuts are fixed and grouped by the part of the workspace that owns them. They pause while you type or while Settings is open; in a sketch, C and R draw a circle and a rectangle."
                 groups={KEYBOARD_CONTROL_GROUPS}
               />
               <ControlReferenceCollection
