@@ -407,13 +407,14 @@ drag restores the object's stored values; it never deletes persisted text.
 | K   | Pierce-the-face tool for on-face text add/cut, region-rig chip reset | —          | S            | **merged** #583 as `1344a52f` |
 | C   | Phase 2.1–2.2 text card + live outline                               | A          | M            | open #587                     |
 | D   | Phase 2.3–2.4 place/transform/re-entry                               | B, C       | M            | not started (after B, C)      |
-| E   | Phase 3 multi-region                                                 | A          | M            | open #588                     |
+| E   | Phase 3 multi-region                                                 | A          | M            | **merged** #588 as `c3426766` |
 | F   | Phase 4.1 hover cuts                                                 | decision   | S            | **merged** #586 as `57bd6aca` |
 | G   | Phase 4.2 glide cap                                                  | decision   | S            | open #584                     |
 | H   | Phase 4.3 + Phase 5 ledger                                           | all        | S, docs      | not started (last)            |
 
-B, C and E are independent and can run in parallel sessions; branch per
-PR off `origin/main`, never stack (stacked PRs keep a stale base here).
+B and C are independent and ran in parallel sessions (E has landed);
+branch per PR off `origin/main`, never stack (stacked PRs keep a stale base
+here).
 
 ## 6. Decisions (taken 2026-10-04: the recommendation in each item)
 
