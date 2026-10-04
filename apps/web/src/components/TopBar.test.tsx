@@ -114,4 +114,14 @@ describe('TopBar sharing chip', () => {
     );
     expect(onOpenSharing).toHaveBeenCalledOnce();
   });
+
+  it('says a device-only project is not shared, not that it is offline', () => {
+    renderTopBar({ signedIn: true, saveToAccount: true });
+    expect(
+      screen.getByRole('button', { name: 'Open project sharing · Not shared' })
+    ).toBeInTheDocument();
+    expect(
+      screen.queryByRole('button', { name: /Offline/ })
+    ).not.toBeInTheDocument();
+  });
 });
