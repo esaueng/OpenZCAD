@@ -323,6 +323,86 @@ describe('text placement and movement', () => {
   });
 });
 
+describe('one owner while the canvas moves the object', () => {
+  // A handle drag commits through the same path as Apply, so the editor stays
+  // mounted and rebases onto the stored object: the newest write wins per
+  // field, and nothing typed but not yet applied is thrown away.
+  function renderEditor(data: SketchObjectData, onApply = vi.fn()) {
+    const props = {
+      scope: {},
+      onApply,
+      onDelete: vi.fn(),
+      onClose: vi.fn()
+    };
+    const view = render(<SketchEntityEditor data={data} {...props} />);
+    return {
+      onApply,
+      moveTo: (next: SketchObjectData) =>
+        view.rerender(<SketchEntityEditor data={next} {...props} />)
+    };
+  }
+
+  it('keeps a typed string through a drag and applies both', async () => {
+    const user = userEvent.setup();
+    const placed = { ...TEXT_OBJECT, text: 'Boa', x: 5, y: 7 };
+    const { onApply, moveTo } = renderEditor(placed);
+    const field = screen.getByLabelText('Text', { exact: true });
+    await user.clear(field);
+    await user.type(field, 'Bob');
+
+    // The drag lands: the stored origin and turn change, the string does not.
+    moveTo({ ...placed, x: 12.25, y: -3, rotation: 30 });
+    expect(screen.getByLabelText('Text', { exact: true })).toHaveValue('Bob');
+    expect(screen.getByLabelText('X')).toHaveValue('12.25');
+    expect(screen.getByLabelText('Y')).toHaveValue('-3');
+    expect(screen.getByLabelText('Rotation')).toHaveValue('30');
+
+    await user.click(screen.getByRole('button', { name: /apply/i }));
+    expect(onApply).toHaveBeenCalledTimes(1);
+    expect(onApply.mock.calls[0]![0]).toMatchObject({
+      text: 'Bob',
+      x: 12.25,
+      y: -3,
+      rotation: 30
+    });
+  });
+
+  it('shows the stored value for a field the canvas wrote, even if typed', async () => {
+    const user = userEvent.setup();
+    const placed = { ...TEXT_OBJECT, x: 5, y: 7 };
+    const { moveTo } = renderEditor(placed);
+    const x = screen.getByLabelText('X');
+    await user.clear(x);
+    await user.type(x, '40');
+    const size = screen.getByLabelText('Size (em)');
+    await user.clear(size);
+    await user.type(size, '14');
+
+    // The drag is the newer write to X; Size was not touched by it.
+    moveTo({ ...placed, x: 9, y: 7 });
+    expect(screen.getByLabelText('X')).toHaveValue('9');
+    expect(screen.getByLabelText('Size (em)')).toHaveValue('14');
+  });
+
+  it('follows a style change made elsewhere and keeps untouched fields exact', async () => {
+    const user = userEvent.setup();
+    const placed = { ...TEXT_OBJECT, x: 20.904235858081403, y: 7 };
+    const { onApply, moveTo } = renderEditor(placed);
+    moveTo({ ...placed, fontStyle: 'bold', y: 8 });
+    expect(screen.getByRole('button', { name: 'B' })).toHaveAttribute(
+      'aria-pressed',
+      'true'
+    );
+    await user.click(screen.getByRole('button', { name: /apply/i }));
+    // X was never typed in, so the exact double goes back, not its display.
+    expect(onApply.mock.calls[0]![0]).toMatchObject({
+      fontStyle: 'bold',
+      x: 20.904235858081403,
+      y: 8
+    });
+  });
+});
+
 describe('text alignment in the editor', () => {
   // The text card sets alignment before placement; once placed, the editor
   // owns the object, so alignment has to be editable here too.
