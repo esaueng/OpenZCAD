@@ -32,6 +32,8 @@ export type ProjectDocumentSchemaVersion =
 
 export type UnitSystem = 'mm' | 'cm' | 'm' | 'inch';
 export type PlaneId = 'XY' | 'XZ' | 'YZ';
+/** See `SketchPlaneRef`'s `basisRevision`; absent means revision 1. */
+export type CanonicalPlaneBasisRevision = 2;
 export type PrimitiveKind = 'box' | 'cylinder' | 'sphere' | 'cone' | 'torus';
 export type FeatureKind =
   | 'primitive'
@@ -464,7 +466,25 @@ export interface SketchPlaneFrame {
  * schema-v4 migration and diagnostics; it is never a fallback for a v5 ref.
  */
 export type SketchPlaneRef =
-  | { type: 'canonical'; plane: PlaneId; offset: ParamValue }
+  | {
+      type: 'canonical';
+      plane: PlaneId;
+      offset: ParamValue;
+      /**
+       * Which basis the plane's stored coordinates were drawn against. Absent
+       * is revision 1, the bases every sketch written before this field
+       * resolves to; 2 turns the XZ plane to face the Front view (u = +X,
+       * v = +Z, normal -Y) so a sketch entered on it reads +u right and +v up
+       * instead of mirrored behind the model. XY and YZ are the same in both
+       * revisions, so only XZ refs carry it.
+       *
+       * Like {@link SketchPlaneRef.sourceCentroid}, this is a marker rather
+       * than a preference: rewriting an existing sketch's basis would move
+       * its geometry and flip its extrudes, so new sketches take revision 2
+       * and saved ones keep what they were drawn against.
+       */
+      basisRevision?: CanonicalPlaneBasisRevision;
+    }
   | { type: 'frame'; frame: SketchPlaneFrame }
   | {
       type: 'face';
