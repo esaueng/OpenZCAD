@@ -1373,7 +1373,7 @@ export function Inspector(props: InspectorProps) {
     if (panel && !panel.contains(document.activeElement)) {
       panel.focus({ preventScroll: true });
     }
-  }, [editPanelKey]);
+  }, [editPanelKey, featureSelectionSource]);
 
   let eyebrow = '';
   let title = '';
@@ -1575,11 +1575,7 @@ export function Inspector(props: InspectorProps) {
       featureSelectionSource,
       commandSession
     });
-    const inferredUnderCommand =
-      heading.demoted ||
-      (featureSelectionSource === 'inferred' &&
-        selectedTopology?.kind === 'body');
-    objectReadout = inferredUnderCommand;
+    objectReadout = heading.demoted;
     eyebrow = heading.eyebrow;
     title = heading.title;
     const editKey = `edit-${selectedFeature.id}-${props.documentVersion ?? 0}`;
@@ -2149,7 +2145,7 @@ export function Inspector(props: InspectorProps) {
         )}
       </>
     );
-    body = inferredUnderCommand ? (
+    body = objectReadout ? (
       <>
         {selectedTopology && selectedTopology.kind !== 'body' ? (
           // The heading names the face or edge; this is what it measures.
@@ -2174,7 +2170,10 @@ export function Inspector(props: InspectorProps) {
           <button
             type="button"
             className="secondary"
-            onClick={() => props.onPinFeature(selectedFeature)}
+            onClick={() => {
+              if (props.onValidateSelection?.() !== false)
+                props.onPinFeature(selectedFeature);
+            }}
           >
             Edit
           </button>
@@ -2183,7 +2182,7 @@ export function Inspector(props: InspectorProps) {
     ) : (
       featurePanel
     );
-    if (!inferredUnderCommand) {
+    if (!objectReadout) {
       deleteAction = {
         label:
           selectedFeature.data.featureKind === 'imported-step'
