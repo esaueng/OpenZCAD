@@ -776,31 +776,60 @@
   transform: translateX(-4px);
 }
 
+/* The end of history: a 20px knob centred on the line, with a grip across
+   it, so it reads as the thing to drag. A 20×8 bar here read as a stray
+   dash under the last row. The knob is drawn by ::before; ::after is the
+   invisible 24px reach (target-size.css). */
 .history-handle {
   position: absolute;
   z-index: 2;
   left: 0;
   top: var(--handle-y, 0);
   width: 20px;
-  height: 8px;
-  margin-top: -4px;
-  border-radius: 4px;
-  background: var(--color-accent);
-  box-shadow: 0 0 0 3px var(--color-surface);
+  height: 20px;
+  margin-top: -10px;
+  display: grid;
+  place-items: center;
+  border-radius: 50%;
   cursor: grab;
   touch-action: none;
+  transition: top var(--dur-slow) var(--ease-out);
+}
+
+.history-handle::before {
+  content: '';
+  width: 14px;
+  height: 14px;
+  border-radius: 50%;
+  /* Two short grip lines across the knob, over the accent fill. */
+  background:
+    linear-gradient(var(--color-on-accent) 0 0) center calc(50% - 2px) / 6px
+      1.5px no-repeat,
+    linear-gradient(var(--color-on-accent) 0 0) center calc(50% + 2px) / 6px
+      1.5px no-repeat,
+    var(--color-accent);
+  box-shadow: 0 0 0 3px var(--color-surface);
   transition:
-    top var(--dur-slow) var(--ease-out),
-    box-shadow var(--dur-fast) var(--ease-out);
+    box-shadow var(--dur-fast) var(--ease-out),
+    transform var(--dur-fast) var(--ease-out);
 }
 
 .history-handle:hover,
 .history-handle:focus-visible,
 .history-handle.is-dragging {
   outline: none;
+}
+
+.history-handle:hover::before,
+.history-handle:focus-visible::before,
+.history-handle.is-dragging::before {
   box-shadow:
     0 0 0 3px var(--color-surface),
     0 0 0 6px var(--color-accent-dim);
+}
+
+.history-handle.is-dragging::before {
+  transform: scale(1.1);
 }
 
 .history-handle.is-dragging {
