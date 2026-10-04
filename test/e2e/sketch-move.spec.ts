@@ -290,3 +290,71 @@ test('a click after Escape ended a drag released off the canvas still selects', 
   await expect(before.editor.getByLabel('Center X')).toHaveValue(other.x);
   await expect(before.editor.getByLabel('Center Y')).toHaveValue(other.y);
 });
+
+test('a second pointer during a drag neither steals nor ends it', async ({
+  page
+}) => {
+  test.setTimeout(90_000);
+  const sketchTools = await openTopSketch(page, 'Sketch Move Two Pointers');
+  const [first, second] = await bareCanvasDrags(page, {
+    count: 2,
+    dragX: CIRCLE_DRAG_PX
+  });
+  await drawCircles(page, sketchTools, [first!, second!]);
+  const target = await selectCircle(page, second!);
+  const moved = await selectCircle(page, first!);
+
+  const handle = await grabHandleCenter(page);
+  await page.mouse.move(handle.x, handle.y);
+  await page.mouse.down();
+  await page.mouse.move(handle.x + 20, handle.y + 10, { steps: 4 });
+  const grab = page.locator('.sketch-grab-handle');
+  await expect(grab).toHaveAttribute('data-active', 'true');
+
+  // A second pointer presses the grabbed object's handle and lets go, the
+  // way a second finger or a stylus would, while the mouse still holds it.
+  const dragged = await grab.boundingBox();
+  await page.locator('.viewer-host canvas').evaluate(
+    (canvas, point) => {
+      const init = {
+        bubbles: true,
+        cancelable: true,
+        pointerId: 7,
+        pointerType: 'touch',
+        isPrimary: false,
+        button: 0,
+        clientX: point.x,
+        clientY: point.y
+      };
+      canvas.dispatchEvent(
+        new PointerEvent('pointerdown', { ...init, buttons: 1 })
+      );
+      canvas.dispatchEvent(
+        new PointerEvent('pointermove', {
+          ...init,
+          buttons: 1,
+          clientX: point.x + 40
+        })
+      );
+      canvas.dispatchEvent(
+        new PointerEvent('pointerup', { ...init, buttons: 0 })
+      );
+    },
+    {
+      x: dragged!.x + dragged!.width / 2,
+      y: dragged!.y + dragged!.height / 2
+    }
+  );
+  await expect(grab).toHaveAttribute('data-active', 'true');
+  await expect(page.getByRole('contentinfo')).not.toContainText(
+    'Moved circle.'
+  );
+
+  // The first pointer's drag is intact: it still snaps, and its release is
+  // the one that commits.
+  await page.mouse.move(second!.x + 3, second!.y - 2, { steps: 8 });
+  await page.mouse.up();
+  await expect(page.getByRole('contentinfo')).toContainText('Moved circle.');
+  await expect(moved.editor.getByLabel('Center X')).toHaveValue(target.x);
+  await expect(moved.editor.getByLabel('Center Y')).toHaveValue(target.y);
+});

@@ -1115,3 +1115,20 @@ export function textRotationFromRingDrag(
   }
   return Object.is(degrees, -0) ? 0 : degrees;
 }
+
+/**
+ * Whose a pointer event is while a sketch object drag may be held: the
+ * pointer that holds it (`owner`), another pointer arriving mid-drag
+ * (`other`: a second finger or a stylus, which the viewport ignores
+ * entirely, so it can neither start a second move nor end, select through
+ * or cancel the first), or any pointer when no drag is held (`free`).
+ */
+export function sketchMovePointerRole(
+  heldPointerId: number | null | undefined,
+  pointerId: number
+): 'free' | 'owner' | 'other' {
+  if (heldPointerId === null || heldPointerId === undefined) {
+    return 'free';
+  }
+  return heldPointerId === pointerId ? 'owner' : 'other';
+}

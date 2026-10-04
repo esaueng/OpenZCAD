@@ -222,6 +222,7 @@ import {
   sketchObjectMovable,
   sketchObjectRotatable,
   snapTargetsForObject,
+  sketchMovePointerRole,
   textRotationFromRingDrag,
   translateSketchObject,
   pointAtDistanceAlongDirection,
@@ -6173,6 +6174,9 @@ export function ModelViewer({
      * click it always was.
      */
     function beginSketchMove(event: PointerEvent): boolean {
+      if (sketchMoveRef.current) {
+        return false;
+      }
       const selection = movableSketchSelection();
       const press = rawSketchPointAt(event);
       if (!selection || !press) {
@@ -6512,12 +6516,16 @@ export function ModelViewer({
         return;
       }
       if (sketchModeRef.current) {
-        if (
-          sketchMoveRef.current &&
-          sketchMoveRef.current.pointerId === event.pointerId
-        ) {
+        const role = sketchMovePointerRole(
+          sketchMoveRef.current?.pointerId,
+          event.pointerId
+        );
+        if (role === 'owner') {
           event.preventDefault();
           updateSketchMove(event);
+          return;
+        }
+        if (role === 'other') {
           return;
         }
         if (event.buttons === 0 || event.buttons === 1) {
@@ -6884,6 +6892,18 @@ export function ModelViewer({
     }
 
     const handlePointerDown = (event: PointerEvent) => {
+      if (
+        sketchMovePointerRole(
+          sketchMoveRef.current?.pointerId,
+          event.pointerId
+        ) === 'other'
+      ) {
+        // A second pointer while one holds a sketch object: not a second
+        // move, not a selection, not an orbit. Taking it would retarget the
+        // gesture tracking out from under the drag.
+        event.preventDefault();
+        return;
+      }
       lastPickListPointer = event;
       if (!topologyPickList.contains(event.target)) {
         topologyPickList.hide();
@@ -7264,6 +7284,15 @@ export function ModelViewer({
       event.preventDefault();
     };
     const handlePointerUp = (event: PointerEvent) => {
+      if (
+        sketchMovePointerRole(
+          sketchMoveRef.current?.pointerId,
+          event.pointerId
+        ) === 'other'
+      ) {
+        // Only the pointer holding the drag can end it.
+        return;
+      }
       // The last pointer position may still be waiting for a frame. Apply it
       // before the release is handled, or the drag settles on the
       // second-to-last position and that is what gets committed.
@@ -7715,6 +7744,16 @@ export function ModelViewer({
       }
     };
     const handlePointerCancel = (event: PointerEvent) => {
+      if (
+        sketchMovePointerRole(
+          sketchMoveRef.current?.pointerId,
+          event.pointerId
+        ) === 'other'
+      ) {
+        // Cancelling a pointer the viewport ignored must not reset the
+        // gesture state the held drag still owns.
+        return;
+      }
       pendingHoverEvent = null;
       if (sketchMoveRef.current?.pointerId === event.pointerId) {
         const drag = sketchMoveRef.current;

@@ -33,6 +33,7 @@ import {
   sketchObjectGrabPoint,
   sketchObjectMovable,
   sketchObjectRotatable,
+  sketchMovePointerRole,
   textRotationFromRingDrag,
   translateSketchObject
 } from './session';
@@ -714,5 +715,20 @@ describe('sketch object drag-move helpers', () => {
     expect(
       textRotationFromRingDrag(origin, { x: 10, y: 0 }, { x: 0, y: -10 }, -90)
     ).toBe(180);
+  });
+});
+
+describe('sketchMovePointerRole', () => {
+  it('lets only the holding pointer drive a sketch object drag', () => {
+    // No drag: every pointer is free to press.
+    expect(sketchMovePointerRole(null, 1)).toBe('free');
+    expect(sketchMovePointerRole(undefined, 2)).toBe('free');
+    // Pointer 1 holds the drag: a second press, move, release or cancel
+    // from pointer 2 is ignored, and pointer 1's release still ends it.
+    expect(sketchMovePointerRole(1, 2)).toBe('other');
+    expect(sketchMovePointerRole(1, 1)).toBe('owner');
+    // Pointer id 0 is a real id (the first touch), not "no drag".
+    expect(sketchMovePointerRole(0, 0)).toBe('owner');
+    expect(sketchMovePointerRole(0, 1)).toBe('other');
   });
 });
