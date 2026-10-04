@@ -8,6 +8,8 @@ import {
   getParameterScope,
   listFeaturesInOrder,
   listParameters,
+  patternBody,
+  findParameterReferences,
   renameParameter,
   resolveParamValue,
   setParameter
@@ -53,6 +55,88 @@ function documentWithReaders() {
 }
 
 describe('renameParameter', () => {
+  it('preserves pattern axes when a parameter has the same name', () => {
+    let document = setParameter(createProjectDocument('Axes', USER), {
+      name: 'x',
+      expression: '12'
+    });
+    document = addPrimitiveFeature(document, {
+      name: 'Box',
+      primitiveKind: 'box',
+      dimensions: { width: 10, height: 10, depth: 10 }
+    });
+    document = patternBody(document, {
+      name: 'Copies',
+      targetBodyId: document.bodyOrder[0]!,
+      patternKind: 'linear',
+      count: 3,
+      axis: 'x',
+      axis2: 'x',
+      spacing: 'x'
+    }).document;
+    const renamed = renameParameter(document, { name: 'x', newName: 'pitch' });
+    expect(listFeaturesInOrder(renamed).at(-1)?.data).toMatchObject({
+      axis: 'x',
+      axis2: 'x',
+      spacing: 'pitch'
+    });
+    const literalOnly = patternBody(document, {
+      name: 'Literal axis',
+      targetBodyId: document.bodyOrder[0]!,
+      patternKind: 'linear',
+      count: 3,
+      axis: 'x',
+      spacing: 10
+    }).document;
+    expect(
+      findParameterReferences(literalOnly, 'x').map((ref) => ref.label)
+    ).not.toContain('Feature "Literal axis"');
+  });
+
+  it('keeps literal sketch text, alignment, font style and plane names intact', () => {
+    let document = createProjectDocument('Literal strings', USER);
+    for (const name of ['width', 'left', 'regular', 'XY'])
+      document = setParameter(document, { name, expression: '10' });
+    const created = addSketchFeature(document, {
+      name: 'Label',
+      planeRef: { type: 'canonical', plane: 'XY', offset: 'XY' },
+      objects: [
+        {
+          objectKind: 'text',
+          text: 'width',
+          fontFamily: 'width',
+          fontStyle: 'regular',
+          align: 'left',
+          size: 'width',
+          x: 0,
+          y: 0
+        }
+      ]
+    });
+    document = created.document;
+    for (const name of ['width', 'left', 'regular', 'XY'])
+      document = renameParameter(document, {
+        name,
+        newName: `${name}_renamed`
+      });
+    const sketch = findSketch(document, created.sketchId)!;
+    expect(sketch.planeRef).toEqual({
+      type: 'canonical',
+      plane: 'XY',
+      offset: 'XY_renamed'
+    });
+    expect(document.nodes[sketch.objectIds[0]!]!).toMatchObject({
+      data: {
+        text: 'width',
+        fontFamily: 'width',
+        fontStyle: 'regular',
+        align: 'left',
+        size: 'width_renamed'
+      }
+    });
+    expect(findParameterReferences(created.document, 'left')).toEqual([]);
+  });
+
   it('renames the node and rewrites every reading expression', () => {
     const { document, sketchId } = documentWithReaders();
     const renamed = renameParameter(document, {
