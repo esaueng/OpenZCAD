@@ -41,8 +41,8 @@
 /* ── StartScreen ─────────────────────────────────────────── */
 
 /* A library shell: a fixed column on the left (identity, the launch form, the
-   shelves, the demos, the account readout), the shelf you are looking at
-   filling the rest, and a status footer. Every block is a direct grid item
+   shelves, the demos, the cloud card), the shelf you are looking at filling
+   the rest. Every block is a direct grid item
    placed by name, so the same markup re-flows for the three layouts below —
    the column, the first run (demos take the stage) and a narrow window (one
    scrolling column) — without any block existing twice. */
@@ -56,25 +56,24 @@
      a grid track defaults to min-content, which on a phone let the toolbar
      hold the whole page wider than the screen. */
   grid-template-columns: var(--start-column-w) minmax(0, 1fr);
-  grid-template-rows: auto auto auto minmax(0, 1fr) auto var(--statusbar-h);
+  grid-template-rows: auto auto auto minmax(0, 1fr) auto;
   grid-template-areas:
     'header  body'
     'launch  body'
     'library body'
     'learn   body'
-    'account body'
-    'foot    foot';
+    'cloud   body';
   background: var(--color-bg);
   overflow: hidden;
 }
 
 /* The column's surface, drawn once behind its blocks so each block can be a
-   separate grid item. Stops above the footer, which has its own surface. */
+   separate grid item. */
 .start-screen::before {
   content: '';
   position: absolute;
   top: 0;
-  bottom: var(--statusbar-h);
+  bottom: 0;
   left: 0;
   width: var(--start-column-w);
   background: var(--color-surface);
@@ -348,20 +347,34 @@
   }
 }
 
-/* ── Column: account readout ─────────────────────────────── */
+/* ── Column: cloud card ──────────────────────────────────── */
 
-.start-account {
-  grid-area: account;
+/* Where the parts are kept, closing the column: the account readout, the
+   offer to save device-only parts (or a save-all run in progress) and the
+   library's status line, with a new-version notice above. */
+.start-cloud {
+  grid-area: cloud;
   align-self: end;
   display: grid;
+  grid-template-columns: minmax(0, 1fr);
   gap: var(--sp-2);
   margin: 0 12px 12px;
+}
+
+.start-cloud-card {
+  display: grid;
+  gap: var(--sp-2);
   padding: 10px;
   color: var(--color-text-subtle);
   background: var(--color-surface-2);
   border: var(--border-thin);
   border-radius: var(--radius-lg);
   font-size: var(--fs-sm);
+}
+
+.start-account {
+  display: grid;
+  gap: var(--sp-2);
 }
 
 .start-account-head {
@@ -588,23 +601,27 @@
   color: var(--color-error);
 }
 
-/* ── Cloud status bars ───────────────────────────────────── */
+/* ── Cloud card sections ─────────────────────────────────── */
 
 /*
  * The offer to upload device-only work. It reads as information rather than a
- * warning: keeping a part on one machine is a legitimate choice, and the bar
+ * warning: keeping a part on one machine is a legitimate choice, and the line
  * exists to make the alternative reachable, not to nag.
  */
 .start-adopt-bar {
-  display: flex;
+  display: grid;
+  grid-template-columns: auto minmax(0, 1fr);
   align-items: center;
   gap: var(--sp-2);
-  padding: var(--sp-2) var(--sp-3);
-  background: var(--color-surface);
-  border: var(--border-thin);
-  border-radius: var(--radius-md);
-  color: var(--color-text-subtle);
-  font-size: var(--fs-sm);
+  padding-top: var(--sp-2);
+  border-top: var(--border-thin);
+}
+
+/* In the column's width the button takes its own line under the sentence. */
+.start-adopt-bar > button {
+  grid-column: 1 / -1;
+  justify-content: center;
+  margin-left: 0;
 }
 
 .start-adopt-bar.is-unavailable {
@@ -612,19 +629,15 @@
 }
 
 /*
- * The adopt bar's live sibling: while a save-all run is on screen it takes the
- * bar's slot, and it keeps the failures readable after the run finishes.
+ * The adopt line's live sibling: while a save-all run is on screen it takes
+ * the line's slot, and it keeps the failures readable after the run finishes.
  */
 .start-sync-panel {
   display: flex;
   flex-direction: column;
   gap: var(--sp-2);
-  padding: var(--sp-2) var(--sp-3);
-  background: var(--color-surface);
-  border: var(--border-thin);
-  border-radius: var(--radius-md);
-  color: var(--color-text-subtle);
-  font-size: var(--fs-sm);
+  padding-top: var(--sp-2);
+  border-top: var(--border-thin);
 }
 
 .start-sync-head {
@@ -1044,40 +1057,28 @@
   border: var(--border-thin);
 }
 
-/* ── Footer ──────────────────────────────────────────────── */
+/* ── Cloud card: update notice and status line ──────────── */
 
-.start-foot {
-  grid-area: foot;
+/* A newer build is out: said in the accent, with the action beside it, as a
+   pill above the cloud card rather than in its small grey status type. */
+.start-update {
   display: flex;
   align-items: center;
-  gap: var(--sp-3);
-  padding: 0 var(--sp-4);
-  background: var(--color-surface);
-  border-top: var(--border-thin);
-}
-
-/* A newer build is out: said in the accent, with the action beside it, not
-   in the footer's small grey status type. The pill must stay shorter than
-   the 30px bar — at the shared button's 32px minimum it spilled over the
-   bar's top edge and was clipped at the window's bottom. */
-.start-update {
-  display: inline-flex;
-  flex: none;
-  align-items: center;
+  justify-content: space-between;
   gap: var(--sp-2);
-  height: 22px;
-  padding: 0 2px 0 8px;
+  min-height: 26px;
+  padding: 3px 3px 3px 10px;
   color: var(--color-text);
   font-size: var(--fs-xs);
-  white-space: nowrap;
   background: var(--color-accent-dim);
   border: 1px solid var(--color-accent-border);
   border-radius: var(--radius-md);
 }
 
 .start-update button {
+  flex: none;
   min-height: 0;
-  height: 18px;
+  height: 20px;
   padding: 0 8px;
   font-size: var(--fs-xs);
   border-radius: var(--radius-sm);
@@ -1085,12 +1086,18 @@
 
 .start-status {
   min-width: 0;
+  padding-top: var(--sp-2);
+  border-top: var(--border-thin);
   overflow: hidden;
   color: var(--color-text-subtle);
   font-family: var(--font-mono);
   font-size: var(--fs-xs);
   white-space: nowrap;
   text-overflow: ellipsis;
+}
+
+.start-status:empty {
+  display: none;
 }
 
 /* Discovery keeps the library layout; unknown data is never an empty shelf
@@ -1115,19 +1122,17 @@
 /* ── First run ───────────────────────────────────────────── */
 
 /* With nothing saved yet the demos take the stage under the empty shelf as
-   full cards, and the account readout closes the column on its own. */
+   full cards, and the cloud card closes the column on its own. */
 @media (min-width: 901px) {
   .start-screen.is-fresh {
     /* The empty shelf stretches to fill the stage above the demo cards, so
-       the page reads as an empty stage with the demos anchored under it;
-       the account readout closes the column on its own. */
-    grid-template-rows: auto auto minmax(0, 1fr) auto var(--statusbar-h);
+       the page reads as an empty stage with the demos anchored under it. */
+    grid-template-rows: auto auto minmax(0, 1fr) auto;
     grid-template-areas:
       'header  body'
       'launch  body'
       'library body'
-      'account learn'
-      'foot    foot';
+      'cloud   learn';
   }
 
   .start-screen.is-fresh .start-library {
@@ -1157,7 +1162,7 @@
 /* ── Narrow layouts ──────────────────────────────────────── */
 
 /* One column that scrolls as a page: identity, the launch card, the shelves
-   as a tab strip, the shelf itself, the demos as cards, the account readout. */
+   as a tab strip, the shelf itself, the demos as cards, the cloud card. */
 @media (max-width: 900px) {
   .start-screen,
   .start-screen.is-fresh {
@@ -1165,17 +1170,14 @@
     /* The shelf never shrinks below its content here: the page scrolls as
        a whole, and a track that could collapse would let the shelf spill
        over the demos beneath it. */
-    grid-template-rows: auto auto auto minmax(max-content, 1fr) auto auto var(
-        --statusbar-h
-      );
+    grid-template-rows: auto auto auto minmax(max-content, 1fr) auto auto;
     grid-template-areas:
       'header'
       'launch'
       'library'
       'body'
       'learn'
-      'account'
-      'foot';
+      'cloud';
     overflow-x: hidden;
     overflow-y: auto;
   }
@@ -1295,7 +1297,7 @@
     overflow: visible;
   }
 
-  .start-account {
+  .start-cloud {
     align-self: start;
     margin: 0 var(--sp-3) var(--sp-3);
   }

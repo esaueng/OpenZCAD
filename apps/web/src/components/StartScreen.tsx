@@ -918,123 +918,6 @@ export function StartScreen({
             </div>
           )}
 
-          {syncRun && syncTotals ? (
-            <div className="start-sync-panel" role="status" aria-live="polite">
-              <div className="start-sync-head">
-                {syncTotals.active ? (
-                  <LoaderCircle size={14} className="spin" aria-hidden="true" />
-                ) : syncTotals.failed > 0 ? (
-                  <TriangleAlert
-                    size={14}
-                    className="is-failed"
-                    aria-hidden="true"
-                  />
-                ) : (
-                  <Check size={14} className="is-synced" aria-hidden="true" />
-                )}
-                <span className="start-sync-title">
-                  {syncTotals.active
-                    ? `Saving to your account · ${syncTotals.settled} of ${syncTotals.total} done`
-                    : syncTotals.failed > 0
-                      ? `Saved ${syncTotals.synced} of ${syncTotals.total} · ${syncTotals.failed} could not be saved`
-                      : `All ${syncTotals.total} ${
-                          syncTotals.total === 1 ? 'project' : 'projects'
-                        } saved to your account`}
-                </span>
-                {!syncTotals.active && failedSummaries.length > 0 && (
-                  <button
-                    type="button"
-                    className="start-shelf-action"
-                    disabled={busy}
-                    onClick={() => onSaveAllToAccount(failedSummaries)}
-                  >
-                    <RotateCcw size={13} aria-hidden="true" />
-                    Retry {failedSummaries.length === 1 ? 'it' : 'all'}
-                  </button>
-                )}
-                {!syncTotals.active && (
-                  <button
-                    type="button"
-                    className="start-sync-dismiss"
-                    aria-label="Dismiss sync results"
-                    onClick={onDismissSyncRun}
-                  >
-                    <X size={13} aria-hidden="true" />
-                  </button>
-                )}
-              </div>
-              <div className="start-sync-track" aria-hidden="true">
-                <span
-                  className="start-sync-fill"
-                  style={{
-                    width: `${(syncTotals.synced / syncTotals.total) * 100}%`
-                  }}
-                />
-                <span
-                  className="start-sync-fill is-failed"
-                  style={{
-                    width: `${(syncTotals.failed / syncTotals.total) * 100}%`
-                  }}
-                />
-              </div>
-              {syncFailures.length > 0 && (
-                <ul className="start-sync-failures">
-                  {syncFailures.map((entry) => (
-                    <li key={entry.projectId} className="start-sync-failure">
-                      <TriangleAlert size={12} aria-hidden="true" />
-                      <span className="start-sync-failure-name">
-                        {entry.name}
-                      </span>
-                      <span className="start-sync-failure-detail">
-                        {entry.detail ?? 'Could not be saved.'}
-                      </span>
-                      <button
-                        type="button"
-                        className="start-shelf-action"
-                        disabled={busy}
-                        onClick={() => onRetrySync(entry.projectId)}
-                      >
-                        <RotateCcw size={12} aria-hidden="true" />
-                        Retry
-                      </button>
-                    </li>
-                  ))}
-                </ul>
-              )}
-            </div>
-          ) : signedIn && !accountProjectListReached ? (
-            <div className="start-adopt-bar is-unavailable" role="status">
-              <TriangleAlert size={14} aria-hidden="true" />
-              <span>
-                Cloud project status is temporarily unavailable. Your projects
-                remain saved on this device.
-              </span>
-            </div>
-          ) : (
-            localOnlyProjects.length > 0 && (
-              <div className="start-adopt-bar" role="status">
-                <CloudOff size={14} aria-hidden="true" />
-                <span>
-                  {localOnlyProjects.length}{' '}
-                  {localOnlyProjects.length === 1
-                    ? 'project is'
-                    : 'projects are'}{' '}
-                  on this device only.
-                </span>
-                <button
-                  type="button"
-                  className="start-shelf-action"
-                  disabled={busy}
-                  onClick={() => onSaveAllToAccount(localOnlyProjects)}
-                >
-                  <CloudUpload size={13} aria-hidden="true" />
-                  Save {localOnlyProjects.length === 1 ? 'it' : 'them all'} to
-                  my account
-                </button>
-              </div>
-            )
-          )}
-
           {loading && (
             <>
               <div
@@ -1164,52 +1047,11 @@ export function StartScreen({
         </div>
       </section>
 
-      {/* The column's account card is a readout, not a control: the offer
-          to save device-only parts stays with the parts it is about. */}
-      <div className="start-account" role="status">
-        {loading ? (
-          <div className="start-account-head">
-            <Cloud size={14} aria-hidden="true" />
-            <strong>Account</strong>
-            <span className="start-account-count">Checking…</span>
-          </div>
-        ) : signedIn ? (
-          <>
-            <div className="start-account-head">
-              <Cloud size={14} aria-hidden="true" className="is-synced" />
-              <strong>Account</strong>
-              <span className="start-account-count">
-                {accountProjectListReached
-                  ? `${savedToAccountCount} / ${accountableProjects.length} saved`
-                  : 'status unavailable'}
-              </span>
-            </div>
-            {accountProjectListReached && accountableProjects.length > 0 && (
-              <div className="start-account-track" aria-hidden="true">
-                <span
-                  className="start-account-fill"
-                  style={{
-                    width: `${(savedToAccountCount / accountableProjects.length) * 100}%`
-                  }}
-                />
-              </div>
-            )}
-          </>
-        ) : (
-          // One line, like the signed-in readout. Settings already says how
-          // to sign in (its footer); a paragraph here said it a third time.
-          <div
-            className="start-account-head"
-            title="Parts stay on this device. Sign in from Settings to keep them across devices."
-          >
-            <CloudOff size={14} aria-hidden="true" />
-            <strong>Signed out</strong>
-            <span className="start-account-count">device only</span>
-          </div>
-        )}
-      </div>
-
-      <footer className="start-foot">
+      {/* Everything about where parts are kept, in one card closing the
+          column: the account readout, the offer to save device-only parts
+          (or a save-all run's progress) and the library's status line. It
+          also carries what the footer bar used to: the new-version notice. */}
+      <aside className="start-cloud" aria-label="Cloud sync">
         {onReloadForUpdate ? (
           // A deploy renamed the chunks this tab loads lazily, so the next
           // demo, import or panel would fail. The failure used to surface as
@@ -1226,10 +1068,171 @@ export function StartScreen({
             </button>
           </span>
         ) : null}
-        <span className="start-status">
-          {loading ? 'Loading library…' : status}
-        </span>
-      </footer>
+        <div className="start-cloud-card">
+          <div className="start-account" role="status">
+            {loading ? (
+              <div className="start-account-head">
+                <Cloud size={14} aria-hidden="true" />
+                <strong>Account</strong>
+                <span className="start-account-count">Checking…</span>
+              </div>
+            ) : signedIn ? (
+              <>
+                <div className="start-account-head">
+                  <Cloud size={14} aria-hidden="true" className="is-synced" />
+                  <strong>Account</strong>
+                  <span className="start-account-count">
+                    {accountProjectListReached
+                      ? `${savedToAccountCount} / ${accountableProjects.length} saved`
+                      : 'status unavailable'}
+                  </span>
+                </div>
+                {accountProjectListReached &&
+                  accountableProjects.length > 0 && (
+                    <div className="start-account-track" aria-hidden="true">
+                      <span
+                        className="start-account-fill"
+                        style={{
+                          width: `${(savedToAccountCount / accountableProjects.length) * 100}%`
+                        }}
+                      />
+                    </div>
+                  )}
+              </>
+            ) : (
+              // One line, like the signed-in readout. Settings already says how
+              // to sign in (its footer); a paragraph here said it a third time.
+              <div
+                className="start-account-head"
+                title="Parts stay on this device. Sign in from Settings to keep them across devices."
+              >
+                <CloudOff size={14} aria-hidden="true" />
+                <strong>Signed out</strong>
+                <span className="start-account-count">device only</span>
+              </div>
+            )}
+          </div>
+          {syncRun && syncTotals ? (
+            <div className="start-sync-panel" role="status" aria-live="polite">
+              <div className="start-sync-head">
+                {syncTotals.active ? (
+                  <LoaderCircle size={14} className="spin" aria-hidden="true" />
+                ) : syncTotals.failed > 0 ? (
+                  <TriangleAlert
+                    size={14}
+                    className="is-failed"
+                    aria-hidden="true"
+                  />
+                ) : (
+                  <Check size={14} className="is-synced" aria-hidden="true" />
+                )}
+                <span className="start-sync-title">
+                  {syncTotals.active
+                    ? `Saving to your account · ${syncTotals.settled} of ${syncTotals.total} done`
+                    : syncTotals.failed > 0
+                      ? `Saved ${syncTotals.synced} of ${syncTotals.total} · ${syncTotals.failed} could not be saved`
+                      : `All ${syncTotals.total} ${
+                          syncTotals.total === 1 ? 'project' : 'projects'
+                        } saved to your account`}
+                </span>
+                {!syncTotals.active && failedSummaries.length > 0 && (
+                  <button
+                    type="button"
+                    className="start-shelf-action"
+                    disabled={busy}
+                    onClick={() => onSaveAllToAccount(failedSummaries)}
+                  >
+                    <RotateCcw size={13} aria-hidden="true" />
+                    Retry {failedSummaries.length === 1 ? 'it' : 'all'}
+                  </button>
+                )}
+                {!syncTotals.active && (
+                  <button
+                    type="button"
+                    className="start-sync-dismiss"
+                    aria-label="Dismiss sync results"
+                    onClick={onDismissSyncRun}
+                  >
+                    <X size={13} aria-hidden="true" />
+                  </button>
+                )}
+              </div>
+              <div className="start-sync-track" aria-hidden="true">
+                <span
+                  className="start-sync-fill"
+                  style={{
+                    width: `${(syncTotals.synced / syncTotals.total) * 100}%`
+                  }}
+                />
+                <span
+                  className="start-sync-fill is-failed"
+                  style={{
+                    width: `${(syncTotals.failed / syncTotals.total) * 100}%`
+                  }}
+                />
+              </div>
+              {syncFailures.length > 0 && (
+                <ul className="start-sync-failures">
+                  {syncFailures.map((entry) => (
+                    <li key={entry.projectId} className="start-sync-failure">
+                      <TriangleAlert size={12} aria-hidden="true" />
+                      <span className="start-sync-failure-name">
+                        {entry.name}
+                      </span>
+                      <span className="start-sync-failure-detail">
+                        {entry.detail ?? 'Could not be saved.'}
+                      </span>
+                      <button
+                        type="button"
+                        className="start-shelf-action"
+                        disabled={busy}
+                        onClick={() => onRetrySync(entry.projectId)}
+                      >
+                        <RotateCcw size={12} aria-hidden="true" />
+                        Retry
+                      </button>
+                    </li>
+                  ))}
+                </ul>
+              )}
+            </div>
+          ) : signedIn && !accountProjectListReached ? (
+            <div className="start-adopt-bar is-unavailable" role="status">
+              <TriangleAlert size={14} aria-hidden="true" />
+              <span>
+                Cloud project status is temporarily unavailable. Your projects
+                remain saved on this device.
+              </span>
+            </div>
+          ) : (
+            localOnlyProjects.length > 0 && (
+              <div className="start-adopt-bar" role="status">
+                <CloudOff size={14} aria-hidden="true" />
+                <span>
+                  {localOnlyProjects.length}{' '}
+                  {localOnlyProjects.length === 1
+                    ? 'project is'
+                    : 'projects are'}{' '}
+                  on this device only.
+                </span>
+                <button
+                  type="button"
+                  className="start-shelf-action"
+                  disabled={busy}
+                  onClick={() => onSaveAllToAccount(localOnlyProjects)}
+                >
+                  <CloudUpload size={13} aria-hidden="true" />
+                  Save {localOnlyProjects.length === 1 ? 'it' : 'them all'} to
+                  my account
+                </button>
+              </div>
+            )
+          )}
+          <span className="start-status">
+            {loading ? 'Loading library…' : status}
+          </span>
+        </div>
+      </aside>
       {propertiesProject && (
         <Suspense fallback={null}>
           <ProjectPropertiesDialog
