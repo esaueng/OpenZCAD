@@ -723,15 +723,23 @@ export function buildSketchModeRig(
         previewedId = objectId;
       }
       disposeChildren(previewGroup);
+      // The moved object answers to the same text budget as the committed
+      // draw: a text the budget leaves out of `setObjects` gets no glyph
+      // outline mid-drag either. The budget keeps or drops the entry by
+      // identity, as in `setTextPreview`.
+      const previewEntry = { id: objectId, data };
+      const budgeted = displayObjectsWithTextBudget(
+        state.objects.map((object) =>
+          object.id === objectId ? previewEntry : object
+        ),
+        state.textBudgetError
+      );
+      if (!budgeted.includes(previewEntry)) {
+        return;
+      }
       const dotPositions: number[] = [];
       const dotColors: number[] = [];
-      appendObject(
-        previewGroup,
-        state,
-        { id: objectId, data },
-        dotPositions,
-        dotColors
-      );
+      appendObject(previewGroup, state, previewEntry, dotPositions, dotColors);
       appendDots(previewGroup, dotPositions, dotColors);
     },
     setGrid(worldPerPixel, visible) {

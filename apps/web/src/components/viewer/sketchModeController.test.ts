@@ -408,6 +408,65 @@ describe('text card live outline', () => {
     }
   });
 
+  it('a drag preview draws no glyphs for text the budget refuses', async () => {
+    await installFonts();
+    const objects = [
+      { id: 'ent_line', data: line() },
+      { id: 'ent_text', data: text('Boa') }
+    ];
+    const moved = (x: number): SketchObjectData => ({
+      objectKind: 'text',
+      text: 'Boa',
+      fontFamily: 'open-sans',
+      fontStyle: 'regular',
+      size: 10,
+      x,
+      y: 0
+    });
+    const previewGroupOf = (rig: { group: THREE.Group }) =>
+      rig.group.getObjectByName('sketch-move-preview')!;
+
+    // Within budget the dragged text draws its outline, so the refusal
+    // below is the budget's doing, not a missing font.
+    const allowed = buildSketchModeRig(basis, resolution);
+    try {
+      allowed.setObjects(objects, 'ent_text', resolve);
+      allowed.setPreviewObject('ent_text', moved(5));
+      expect(previewGroupOf(allowed).children.length).toBeGreaterThan(0);
+    } finally {
+      allowed.dispose();
+    }
+
+    const rig = buildSketchModeRig(basis, resolution);
+    try {
+      rig.setObjects(
+        objects,
+        'ent_text',
+        resolve,
+        [],
+        [],
+        'Project text limit'
+      );
+      for (let frame = 1; frame <= 3; frame += 1) {
+        rig.setPreviewObject('ent_text', moved(frame));
+        expect(previewGroupOf(rig).children).toHaveLength(0);
+      }
+      // The committed draw omits the text as before; the line still draws.
+      expect(
+        committedGroupOf(rig).children.some(
+          (child) => child.userData.sketchObjectId === 'ent_text'
+        )
+      ).toBe(false);
+      expect(
+        committedGroupOf(rig).children.some(
+          (child) => child.userData.sketchObjectId === 'ent_line'
+        )
+      ).toBe(true);
+    } finally {
+      rig.dispose();
+    }
+  });
+
   it('draws nothing when undo history has used up the document budget', async () => {
     await installFonts();
     // One fewer text object than the document may hold, spread over full
