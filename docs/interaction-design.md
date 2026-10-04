@@ -24,6 +24,13 @@ bookkeeping. Anything that reaches its target within `SETTLE_EPSILON` snaps
 and stops being stepped, which is also what lets the render loop go back to
 sleep.
 
+State changes cut; chrome animates. Hover and selection tints on faces, edges
+and sketch regions land in the frame the state changes, on and off, matching
+the reference CAD (decided 2026-10-04); only the x-ray pass that draws an
+occluded highlight through the solid still eases, so it does not flicker.
+The 60 ms dwell before hover moves to a new target (`HOVER_DWELL_MS`) is a
+separate knob and unchanged.
+
 Camera motion is separate and older, and carries its own vocabulary of three
 named glides (`camera/views.ts`), calibrated against frame-by-frame
 measurements of the reference CAD (spec: "Sketch & Body Interaction Spec",
@@ -51,9 +58,9 @@ the user just put it.
 
 ### Rules
 
-- **Arriving and leaving are symmetric.** Anything that fades in fades out.
-  A highlight that vanishes in one frame reads as cheap however good its
-  entrance was.
+- **Arriving and leaving are symmetric.** Anything that fades in fades out,
+  and anything that cuts in cuts out. A highlight that pops in and then fades
+  away, or the reverse, reads as two different things.
 - **Never animate what positions something.** A chip's `transform` tracks a
   moving anchor; easing it drags the chip behind its handle. Ease colour,
   opacity, and elevation instead. The same rule is why an overlay's entrance
