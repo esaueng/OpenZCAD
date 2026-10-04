@@ -915,6 +915,14 @@
   left: var(--lane-inset);
 }
 
+/* The Move instruction shares the viewport's overlay slot with the
+   revert-sketch pill and starts where it does, under the top islands. At
+   the focused sketch's 14px it sat beneath the mode switch, which covered
+   its title. */
+.workspace.column-layout .extrude-instruction {
+  top: var(--stage-top);
+}
+
 /* Everything that floats in the palette slot (direct-mode strips such as
    the plane picker) starts under the top islands, as does the measurement
    dock. */

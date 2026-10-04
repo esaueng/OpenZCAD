@@ -176,7 +176,10 @@ function fill(
     detail.textContent = content.detail;
     children.push(detail);
   }
-  if (operation?.phase) {
+  // Armed is the chip's resting state, and the lit verb already says which
+  // operation the pick carries: a "Ready" pill beside it said nothing else.
+  // Every other phase is news, so it keeps its marker.
+  if (operation?.phase && operation.phase !== 'armed') {
     children.push(phaseMarker(owner, operation.phase));
   }
   if (operation?.badge) {

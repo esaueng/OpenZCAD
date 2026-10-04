@@ -215,11 +215,12 @@ test('names picked faces and edges without raw fingerprints', async ({
   await expect(chip).not.toContainText('face:');
   await expect(chip).toContainText(/face/i);
 
-  // The chip carries the operation and announces its lifecycle state
-  // explicitly; no second chip says it again at the top of the column.
+  // The chip carries the operation; no second chip says it again at the top
+  // of the column. Armed is its resting state and the lit verb says so, so
+  // there is no "Ready" pill — only a phase that is news gets a marker.
   const card = page.getByRole('region', { name: 'Resize Body operation' });
   await expect(card).toHaveClass(/selection-callout-chip/);
-  await expect(card.locator('.selection-callout-phase')).toHaveText('Ready');
+  await expect(card.locator('.selection-callout-phase')).toHaveCount(0);
   await expect(page.locator('.tool-card')).toHaveCount(0);
 
   // Dragging collapses the phase to a compact, accessible status marker.
@@ -232,6 +233,26 @@ test('names picked faces and edges without raw fingerprints', async ({
   await expect(card.locator('.selection-callout-phase')).toHaveCount(0);
   await page.mouse.up();
   await page.waitForTimeout(1200);
+});
+
+test('a command started from the selection chip takes the face-drag rig down', async ({
+  page
+}) => {
+  await createBoxProject(page, 'Rig Teardown Part');
+
+  const facePoint = await findFacePoint(page);
+  await page.mouse.click(facePoint.x, facePoint.y);
+  const chip = page.locator('.selection-callout-chip');
+  await expect(chip).toContainText(/face/i);
+  // The bare pick carries the box's span: a dashed line and its size pill.
+  const sizePill = page.locator('.dimension-callout');
+  await expect(sizePill).toHaveCount(1);
+
+  // Hole from the chip opens its card on that face. The span belonged to
+  // the pick; it used to stay drawn next to the hole preview.
+  await chip.getByRole('button', { name: 'Selection: Hole' }).click();
+  await expect(page.getByRole('button', { name: 'Create hole' })).toBeVisible();
+  await expect(sizePill).toHaveCount(0);
 });
 
 test('fits the face selection chip and orientation cube beside the inspector', async ({
@@ -336,7 +357,7 @@ test('fits the face selection chip and orientation cube beside the inspector', a
     expect(geometry.chipContainsItsContents, where).toBe(true);
     expect(geometry.nameIntersectsVerbs, where).toBe(false);
     expect(geometry.verbsHitTestable, where).toBe(true);
-    expect(geometry.phase, where).toBe('Ready');
+    expect(geometry.phase, where).toBeNull();
     expect(geometry.cubeIntersectsChip, where).toBe(false);
     expect(geometry.cubeIntersectsInspector, where).toBe(false);
     expect(geometry.cubeOwnsItsCentre, where).toBe(true);

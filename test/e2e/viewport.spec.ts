@@ -1934,7 +1934,7 @@ test('view keys still work while a profile pick is waiting for a click', async (
   );
 });
 
-test('section view cycles planes, cuts exactly at rest, and cuts nothing from the model', async ({
+test('section view toggles, picks its plane in the panel, cuts exactly at rest, and cuts nothing from the model', async ({
   page
 }) => {
   await stubApi(page);
@@ -2045,12 +2045,33 @@ test('section view cycles planes, cuts exactly at rest, and cuts nothing from th
     })
     .toBeCloseTo(movedOffset);
 
-  // XY → XZ → YZ → off; the cut is display-only, so the feature tree and
-  // the body list never change while cycling.
-  await sectionButton.click();
+  // The plane is chosen in the panel; the cut is display-only, so the
+  // feature tree and the body list never change while switching planes.
+  const planes = page.getByRole('group', { name: 'Section plane' });
+  await planes.getByRole('button', { name: 'XZ plane' }).click();
   await expect(sectionButton).toHaveAttribute('aria-label', /now: XZ plane/);
-  await sectionButton.click();
+  await expect(
+    planes.getByRole('button', { name: 'XZ plane' })
+  ).toHaveAttribute('aria-pressed', 'true');
+  await planes.getByRole('button', { name: 'YZ plane' }).click();
   await expect(sectionButton).toHaveAttribute('aria-label', /now: YZ plane/);
+
+  // Escape puts the panel away and leaves the cut on; the views flyout and
+  // the section panel are never open together.
+  await page.keyboard.press('Escape');
+  await expect(slider).toHaveCount(0);
+  await expect(sectionButton).toHaveAttribute('aria-pressed', 'true');
+  await sectionButton.click();
+  await expect(slider).toBeVisible();
+  const views = page.getByRole('button', { name: 'Standard views' });
+  await views.click();
+  await expect(views).toHaveAttribute('aria-expanded', 'true');
+  await expect(slider).toHaveCount(0);
+  await sectionButton.click();
+  await expect(slider).toBeVisible();
+  await expect(views).toHaveAttribute('aria-expanded', 'false');
+
+  // One click switches it off.
   await sectionButton.click();
   await expect(sectionButton).toHaveAttribute('aria-pressed', 'false');
   await expect(slider).toHaveCount(0);
