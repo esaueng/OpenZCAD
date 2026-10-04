@@ -118,8 +118,6 @@ interface StartScreenProps {
 
 const LOADING_PROJECT_TILES = 10;
 
-const DAY_MS = 24 * 60 * 60 * 1000;
-
 function formatTime(date: Date): string {
   return date.toLocaleTimeString(undefined, {
     hour: 'numeric',
@@ -137,34 +135,18 @@ export function formatLastEditedExact(updatedAt: string): string {
 }
 
 /**
- * The shelf's shorthand for when a part was last edited: the time alone for
- * today, the weekday within the last week, and the date beyond that. Recency
- * is what a shelf is for — "Tue 4:05 PM" places a part in the week at a
- * glance where a full date makes every tile read the same.
+ * The shelf's date for when a part was last edited: one absolute shape for
+ * every tile ("Oct 4, 2026"). The shelf used to say "Today 4:05 PM" or
+ * "Tue 4:05 PM" within the week and a numeric date beyond it, so one row
+ * mixed two notations and neighbours could not be compared at a glance. The
+ * exact time stays in the tooltip (formatLastEditedExact).
  */
-export function formatLastEdited(
-  updatedAt: string,
-  now: Date = new Date()
-): string {
-  const date = new Date(updatedAt);
-  const startOfToday = new Date(now);
-  startOfToday.setHours(0, 0, 0, 0);
-  const dayOffset = Math.floor(
-    (startOfToday.getTime() - date.getTime()) / DAY_MS
-  );
-  if (
-    date.getTime() >= startOfToday.getTime() &&
-    date.getTime() <= now.getTime()
-  ) {
-    return `Today ${formatTime(date)}`;
-  }
-  if (dayOffset === 0) {
-    return `Yesterday ${formatTime(date)}`;
-  }
-  if (dayOffset > 0 && dayOffset < 6) {
-    return `${date.toLocaleDateString(undefined, { weekday: 'short' })} ${formatTime(date)}`;
-  }
-  return date.toLocaleDateString();
+export function formatLastEdited(updatedAt: string): string {
+  return new Date(updatedAt).toLocaleDateString(undefined, {
+    month: 'short',
+    day: 'numeric',
+    year: 'numeric'
+  });
 }
 
 const SHELVES: ReadonlyArray<{
@@ -1209,16 +1191,16 @@ export function StartScreen({
             )}
           </>
         ) : (
-          <>
-            <div className="start-account-head">
-              <CloudOff size={14} aria-hidden="true" />
-              <strong>Signed out</strong>
-            </div>
-            <span className="start-account-note">
-              Parts stay on this device. Sign in from Settings to keep them
-              across devices.
-            </span>
-          </>
+          // One line, like the signed-in readout. Settings already says how
+          // to sign in (its footer); a paragraph here said it a third time.
+          <div
+            className="start-account-head"
+            title="Parts stay on this device. Sign in from Settings to keep them across devices."
+          >
+            <CloudOff size={14} aria-hidden="true" />
+            <strong>Signed out</strong>
+            <span className="start-account-count">device only</span>
+          </div>
         )}
       </div>
 

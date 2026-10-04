@@ -105,6 +105,28 @@ describe('settings viewport copy', () => {
   });
 });
 
+describe('settings shortcuts section', () => {
+  it('opens on one keyboard header, not a banner stacked above it', async () => {
+    const user = userEvent.setup();
+    const { container } = renderSettings();
+
+    await user.click(screen.getByRole('button', { name: 'Shortcuts' }));
+
+    expect(screen.queryByText('Shortcuts are fixed and context-aware.')).toBe(
+      null
+    );
+    const headers = container.querySelectorAll(
+      '.settings-control-collection > header'
+    );
+    expect([...headers].map((header) => header.textContent)).toEqual([
+      expect.stringContaining('Keyboard'),
+      expect.stringContaining('Mouse & pointer')
+    ]);
+    // The banner's guidance lives on in the one header.
+    expect(headers[0]).toHaveTextContent(/pause while you type/);
+  });
+});
+
 describe('settings assistant section', () => {
   it('keeps the master toggle on the AI Assistant page while disabled', async () => {
     const user = userEvent.setup();

@@ -788,7 +788,9 @@
 }
 
 .shortcuts-card {
-  width: min(640px, 100%);
+  /* Wide enough that two columns each hold a one-line binding beside its
+     label; at 640px the Redo pair stacked and half the labels wrapped. */
+  width: min(880px, 100%);
   max-height: 76vh;
   display: flex;
   flex-direction: column;
@@ -1249,36 +1251,37 @@
   overflow-y: auto;
 }
 
+/*
+ * The key column is as wide as the section's longest binding and every row
+ * shares it (subgrid). A fixed 148px column was too narrow for "Ctrl/Cmd+
+ * Shift+Z" beside "Ctrl/Cmd+Y": the pair stacked and the label floated
+ * between them. Bindings now stay on one line and the label takes the rest.
+ */
 .shortcuts-grid dl {
   margin: 0;
   display: grid;
-  gap: 5px;
+  grid-template-columns: max-content minmax(0, 1fr);
+  gap: 5px var(--sp-3);
 }
 
 .shortcut-row {
-  display: flex;
+  display: grid;
+  grid-column: 1 / -1;
+  grid-template-columns: subgrid;
   align-items: center;
-  gap: var(--sp-3);
 }
 
 .shortcut-row dt {
-  /*
-   * Wide enough for a pointer binding. The keyboard half fits in 96px, but the
-   * mouse gestures now listed here do not — "Shift + left-drag" and
-   * "Ctrl/Cmd + right-drag" clip at that width.
-   */
-  flex: 0 0 148px;
+  min-width: 0;
 }
 
 .shortcut-key-sequence {
   display: flex;
-  flex-wrap: wrap;
   gap: 3px;
 }
 
 .shortcut-key-sequence kbd {
-  width: max-content;
-  max-width: 100%;
+  white-space: nowrap;
 }
 
 .shortcut-row dd {

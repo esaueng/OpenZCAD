@@ -73,13 +73,15 @@
     box-shadow: 0 0 0 2px var(--color-surface);
     font-size: 9.5px;
   }
-
-  .shortcuts-grid {
-    grid-template-columns: 1fr;
-  }
 }
 
 @media (max-width: 820px) {
+  /* The controls sheet keeps two columns until each would wrap its
+     bindings; it is 880px wide at most, not the workspace's breakpoint. */
+  .shortcuts-grid {
+    grid-template-columns: 1fr;
+  }
+
   .workspace {
     grid-template-columns: var(--sidebar-col-w) minmax(320px, 1fr);
   }
