@@ -7402,9 +7402,14 @@ export function ModelViewer({
             finishSketchMove(sketchMove, true);
             return;
           }
-          // The press never travelled: it is the selection click it would
-          // have been without a grab point under it.
+          // The press never travelled: a click on the selected object's own
+          // handle. The selection path below raycasts only drawn curves, and
+          // a centre or text origin is not on one, so it would read as empty
+          // canvas and deselect; the object stays selected instead.
           sketchMoveRef.current = null;
+          gestures.release(event, null);
+          requestRender();
+          return;
         }
         const mode = sketchModeRef.current;
         const rig = sketchRigRef.current;

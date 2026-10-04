@@ -358,3 +358,28 @@ test('a second pointer during a drag neither steals nor ends it', async ({
   await expect(moved.editor.getByLabel('Center X')).toHaveValue(target.x);
   await expect(moved.editor.getByLabel('Center Y')).toHaveValue(target.y);
 });
+
+test('a click on the grab point keeps the object selected', async ({
+  page
+}) => {
+  test.setTimeout(90_000);
+  const sketchTools = await openTopSketch(page, 'Sketch Move Handle Click');
+  const [center] = await bareCanvasDrags(page, {
+    count: 1,
+    dragX: CIRCLE_DRAG_PX
+  });
+  await drawCircles(page, sketchTools, [center!]);
+  const before = await selectCircle(page, center!);
+
+  // A press that never travels is a click, and a click on the selected
+  // circle's own centre handle must not read as one on empty canvas.
+  const handle = await grabHandleCenter(page);
+  await page.mouse.click(handle.x, handle.y);
+  await expect(before.editor).toBeVisible();
+  await expect(page.locator('.sketch-grab-handle')).toBeVisible();
+  await expect(before.editor.getByLabel('Center X')).toHaveValue(before.x);
+  await expect(before.editor.getByLabel('Center Y')).toHaveValue(before.y);
+  await expect(page.getByRole('contentinfo')).not.toContainText(
+    'Moved circle.'
+  );
+});
