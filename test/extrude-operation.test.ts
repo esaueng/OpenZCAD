@@ -1,9 +1,11 @@
-import { afterAll, beforeAll, describe, expect, it } from 'vitest';
+import { afterAll, beforeAll, describe, expect, it, vi } from 'vitest';
 import { CommandManager, commandFactories } from '@openzcad/command-system';
 import {
   addPrimitiveFeature,
   addSketchFeature,
+  addSketchObjects,
   createProjectDocument,
+  findSketch,
   extrudeSketch,
   getLatestBodyId,
   getLatestSketchId,
@@ -27,7 +29,10 @@ import {
   type ProjectDocument,
   type SketchPlaneRef
 } from '@openzcad/shared';
-import { resolveExtrudeOperation } from '../apps/web/src/lib/extrudeInference';
+import {
+  regionInferenceRefusal,
+  resolveExtrudeOperation
+} from '../apps/web/src/lib/extrudeInference';
 import { faceSketchAttachment } from '../apps/web/src/lib/faceSketchAttachment';
 
 /**
@@ -332,6 +337,65 @@ describe('stored extrude operations', { timeout: 30_000 }, () => {
     });
     expect(resolved.inference.operation).toBe('add');
     expect(resolved.command.payload.operation).toBe('add');
+  });
+
+  it('refuses two selected regions whose own inferences disagree', async () => {
+    // One rectangle over the box, one beside it, both dragged 4 down from the
+    // top. Together they measure as a partial overlap and would silently
+    // become an add, so the pocket never appears; each alone is a cut and a
+    // new body, which the selection must refuse rather than split.
+    const { document: seeded, targetBodyId } = baseSketchDocument(10);
+    const sketchId = getLatestSketchId(seeded)!;
+    let base = addSketchObjects(seeded, {
+      sketchId,
+      objects: [
+        {
+          objectKind: 'rectangle',
+          width: 4,
+          height: 4,
+          centerX: 40,
+          centerY: 10
+        }
+      ]
+    }).document;
+    base = { ...base, derived: await kernel.syncDocument(base) };
+    const [over, beside] = findSketch(base, sketchId)!.objectIds;
+    const input = {
+      name: 'Pockets',
+      sketchId,
+      distance: -4,
+      profiles: [
+        { all: true as const, sourceEntityIds: [over!] },
+        { all: true as const, sourceEntityIds: [beside!] }
+      ]
+    };
+    const derive = vi.fn((document: ProjectDocument) =>
+      kernel.syncDocument(document)
+    );
+    // The whole selection measures as a partial overlap: an add.
+    const combined = await resolveExtrudeOperation({ base, input, derive });
+    expect(combined.inference).toMatchObject({
+      operation: 'add',
+      reason: 'partial-overlap'
+    });
+    await expect(
+      regionInferenceRefusal({ base, input, derive }, combined.inference)
+    ).resolves.toBe(
+      'One selected profile would cut into the body and another would make a new body, so extrude them separately or choose an operation.'
+    );
+    // An explicit operation is the way out and is never second-guessed.
+    await expect(
+      regionInferenceRefusal(
+        { base, input, derive, choice: { operation: 'cut', targetBodyId } },
+        { reason: 'explicit' }
+      )
+    ).resolves.toBeNull();
+    // A verdict every profile shares (all inside one body) costs no rebuild.
+    derive.mockClear();
+    await expect(
+      regionInferenceRefusal({ base, input, derive }, { reason: 'enclosed' })
+    ).resolves.toBeNull();
+    expect(derive).not.toHaveBeenCalled();
   });
 
   it('resolves a negative free-plane preview as a new body', async () => {

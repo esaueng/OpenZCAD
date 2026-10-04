@@ -714,6 +714,28 @@ describe('region hover fades', () => {
     expect(mesh.material.opacity).toBe(REGION_HOVER_OPACITY);
   });
 
+  it('lights every companion of a hovered region and drops them together', () => {
+    const { manager } = makeManager();
+    const glyph = regionMesh();
+    const sibling = regionMesh();
+    const selectedSibling = regionMesh(true);
+    for (const mesh of [glyph, sibling, selectedSibling]) {
+      mesh.userData.regionCompanions = [glyph, sibling, selectedSibling];
+    }
+
+    manager.setRegionHover(sibling);
+    expect(glyph.material.userData.targetOpacity).toBe(REGION_HOVER_OPACITY);
+    expect(sibling.material.userData.targetOpacity).toBe(REGION_HOVER_OPACITY);
+    expect(manager.fadeIns.has(selectedSibling.material)).toBe(false);
+    // A selection sync while hovered keeps the companion lit.
+    manager.updateRegionState(glyph, false, 0.08);
+    expect(glyph.material.opacity).toBe(REGION_HOVER_OPACITY);
+
+    manager.setRegionHover(null);
+    expect(glyph.material.userData.targetOpacity).toBe(0.08);
+    expect(sibling.material.userData.targetOpacity).toBe(0);
+  });
+
   it('only draws the duplicate region boundary for hover or selection', () => {
     const { manager } = makeManager();
     const mesh = regionMesh();

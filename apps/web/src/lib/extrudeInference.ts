@@ -292,6 +292,118 @@ export async function resolveExtrudeOperation(
   };
 }
 
+type OperationInference = Pick<
+  ResolvedExtrude['inference'],
+  'operation' | 'targetBodyId'
+>;
+
+const OPERATION_PHRASES: Record<OperationInference['operation'], string> = {
+  cut: 'cut into the body',
+  add: 'add to the body',
+  'new-body': 'make a new body'
+};
+
+/**
+ * The refusal for selected profiles that would not extrude the same way on
+ * their own, or null when they agree.
+ *
+ * One drag extrudes every selected profile by the same value as one feature
+ * with one operation. Classified together, a profile over the body and one
+ * beside it measure as a partial overlap and silently become an add, so the
+ * pocket the user dragged never appears. Agreement is checked instead, and a
+ * mix is refused in one sentence that says how to get each result.
+ */
+export function mixedExtrudeRefusal(
+  inferences: readonly OperationInference[]
+): string | null {
+  const operations: OperationInference['operation'][] = [];
+  for (const inference of inferences) {
+    if (!operations.includes(inference.operation)) {
+      operations.push(inference.operation);
+    }
+  }
+  if (operations.length === 2) {
+    return (
+      `One selected profile would ${OPERATION_PHRASES[operations[0]!]} and ` +
+      `another would ${OPERATION_PHRASES[operations[1]!]}, so extrude them ` +
+      'separately or choose an operation.'
+    );
+  }
+  if (operations.length > 2) {
+    return (
+      'The selected profiles would cut, add and make a new body at once, so ' +
+      'extrude them separately or choose an operation.'
+    );
+  }
+  const targets = new Set(
+    inferences.map((inference) => inference.targetBodyId ?? null)
+  );
+  if (targets.size > 1) {
+    return (
+      `The selected profiles would ${operations[0] === 'cut' ? 'cut' : 'add to'} ` +
+      'different bodies, so extrude them separately or choose the target body.'
+    );
+  }
+  return null;
+}
+
+/**
+ * Combined verdicts every part of the extrusion necessarily shares. Inside one
+ * body as a whole means each profile is inside it; touching nothing as a whole
+ * means each profile touches nothing (and grows onto the sketched face alike).
+ * Only a mixed verdict — partial overlap and what is derived from it — can
+ * hide profiles that disagree.
+ */
+const UNIFORM_REASONS: ReadonlySet<ResolvedExtrude['inference']['reason']> =
+  new Set([
+    'explicit',
+    'enclosed',
+    'no-overlap',
+    'no-live-body',
+    'onto-face-body'
+  ]);
+
+/**
+ * Infers each profile reference of an automatic extrusion on its own and
+ * returns the refusal when they disagree (see `mixedExtrudeRefusal`).
+ *
+ * `combined` is the verdict for the whole selection. When it is one every
+ * profile must share, the per-profile rebuilds are skipped, so a plate of
+ * pockets pays nothing extra. An explicit operation is the user's answer to
+ * the question and is never second-guessed; one reference — a single region,
+ * or a whole text object — has nothing to disagree with. A profile whose own
+ * inference fails proves nothing either way and is left to the combined
+ * build to report.
+ */
+export async function regionInferenceRefusal(
+  options: ResolveExtrudeOptions,
+  combined: Pick<ResolvedExtrude['inference'], 'reason'>
+): Promise<string | null> {
+  if (
+    (options.choice && options.choice.operation !== 'automatic') ||
+    UNIFORM_REASONS.has(combined.reason)
+  ) {
+    return null;
+  }
+  const profiles = options.input.profiles ?? [];
+  if (profiles.length < 2) {
+    return null;
+  }
+  const inferences: OperationInference[] = [];
+  for (const profile of profiles) {
+    try {
+      const resolved = await resolveExtrudeOperation({
+        ...options,
+        input: { ...options.input, profiles: [profile] }
+      });
+      inferences.push(resolved.inference);
+    } catch {
+      // Unknown, not a disagreement.
+    }
+  }
+  return mixedExtrudeRefusal(inferences);
+}
+
 /** A discarded command must not publish a late result or refusal. */
 export async function resolveCurrentExtrude(
   options: ResolveExtrudeOptions,

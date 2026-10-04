@@ -61,15 +61,17 @@ function edgeState(
 }
 
 function regionState(phase: OperationPhase): InteractionState {
+  const target = {
+    sketchId: 'sketch-1',
+    regionFingerprint: 1,
+    samplePoint: { x: 0, y: 0 },
+    sourceEntityIds: [],
+    area: 10
+  };
   return {
     mode: 'region',
-    target: {
-      sketchId: 'sketch-1',
-      regionFingerprint: 1,
-      samplePoint: { x: 0, y: 0 },
-      sourceEntityIds: [],
-      area: 10
-    },
+    target,
+    targets: [target],
     phase,
     lastValue: null,
     error: null
