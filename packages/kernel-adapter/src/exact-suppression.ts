@@ -128,6 +128,7 @@ export function passSuppressedFeatureThrough(
   // id cannot reach the other.
   result.shapes.set(feature.bodyId, {
     solids: [...input.solids],
+    ...(input.sweepSource ? { sweepSource: input.sweepSource } : {}),
     ...(input.lineage
       ? {
           lineage: {

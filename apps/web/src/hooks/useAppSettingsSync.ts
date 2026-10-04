@@ -37,6 +37,37 @@ export interface AppSettingsSyncInput {
  * server said — stays with the caller; this owns only what happens to the
  * settings once it knows.
  */
+/** The hold that currently owns `data-theme-switching`, if any. */
+let activeThemeSwitchHold: object | null = null;
+
+/**
+ * Turns transitions off (motion.css, `data-theme-switching`) for the frame a
+ * theme change paints in, and back on two frames later. Returns the early
+ * release for an effect cleanup.
+ *
+ * Releases are ownership-aware: the attribute is shared, and a stale release
+ * (an OS-flip hold whose frames already ran, cleaned up after the layout
+ * effect installed a hold for an explicit switch) must not remove the newer
+ * hold's flag and let that switch's palette change ramp.
+ */
+function holdTransitionsForThemeSwitch(root: HTMLElement): () => void {
+  const hold = {};
+  activeThemeSwitchHold = hold;
+  root.dataset.themeSwitching = 'true';
+  let frame = requestAnimationFrame(() => {
+    frame = requestAnimationFrame(release);
+  });
+  function release() {
+    cancelAnimationFrame(frame);
+    if (activeThemeSwitchHold !== hold) {
+      return;
+    }
+    activeThemeSwitchHold = null;
+    delete root.dataset.themeSwitching;
+  }
+  return release;
+}
+
 export function useAppSettingsSync({
   api,
   isCloudEnabled,
@@ -88,6 +119,8 @@ export function useAppSettingsSync({
       : 'false';
   }, [appSettings]);
 
+  /** The theme last painted, so the first paint is not treated as a switch. */
+  const appliedThemeRef = useRef<string | null>(null);
   useLayoutEffect(() => {
     // The root carries the setting itself, and the stylesheet resolves it:
     // 'system' paints the light palette under `prefers-color-scheme: light`
@@ -99,8 +132,51 @@ export function useAppSettingsSync({
     // paint, so an explicit choice never flashes the default first. The 3D
     // viewport keeps its dark stage either way — only the chrome tokens
     // switch.
-    globalThis.document.documentElement.dataset.theme =
-      appSettings.appearance.theme;
+    //
+    // A change of theme repaints in one frame. Every control eases its
+    // colours over --dur-fast (motion.css), so a switch used to snap the
+    // surfaces while some three hundred buttons and fields ramped behind
+    // them — the chrome visibly arrived in pieces. `themeSwitching` turns
+    // transitions off for the frame the palette changes in, then clears.
+    const root = globalThis.document.documentElement;
+    const theme = appSettings.appearance.theme;
+    const switching =
+      appliedThemeRef.current !== null && appliedThemeRef.current !== theme;
+    appliedThemeRef.current = theme;
+    if (!switching) {
+      root.dataset.theme = theme;
+      return;
+    }
+    const release = holdTransitionsForThemeSwitch(root);
+    root.dataset.theme = theme;
+    return release;
+  }, [appSettings.appearance.theme]);
+
+  useEffect(() => {
+    // 'System' switches without the setting changing: the OS flips and the
+    // stylesheet's media query repaints the palette, so the effect above
+    // never runs. The listener does not resolve the theme (the stylesheet
+    // still does, on the frame the OS changes); it only holds transitions
+    // for that frame. A media query's change event is reported before the
+    // frame's style update, so the flag is in place when the palette moves.
+    if (
+      appSettings.appearance.theme !== 'system' ||
+      typeof globalThis.matchMedia !== 'function'
+    ) {
+      return;
+    }
+    const root = globalThis.document.documentElement;
+    const query = globalThis.matchMedia('(prefers-color-scheme: light)');
+    let release: (() => void) | null = null;
+    const onChange = () => {
+      release?.();
+      release = holdTransitionsForThemeSwitch(root);
+    };
+    query.addEventListener('change', onChange);
+    return () => {
+      query.removeEventListener('change', onChange);
+      release?.();
+    };
   }, [appSettings.appearance.theme]);
 
   useEffect(() => {
