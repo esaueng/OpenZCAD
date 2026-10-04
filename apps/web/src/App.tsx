@@ -17006,86 +17006,87 @@ export function App() {
           ? 'warning'
           : 'ready';
 
-  // The measurement workbench: View and Tweak float it over the stage while
-  // it holds results; Build gives it the command slot, and only while
-  // Measure is on there, so it never stacks on a tool card.
-  const measurementDock =
-    measuring || (modelingLocked && measurements.length > 0) ? (
-      <MeasurementDock
-        measurements={measurements}
-        formattedMeasurements={formattedMeasurements}
-        enabled={measuring}
-        activeMeasurementId={activeMeasurementId}
-        mode={measurementMode}
-        draftTargetLabel={measurementDraft?.label ?? null}
-        display={measurementDisplay}
-        onMode={(mode) => {
-          setMeasuring(true);
-          setMeasurementMode(mode);
-          clearMeasurementPicks();
-          setStatus(
-            mode === 'smart'
-              ? 'Smart measure · pick an edge, face, hole, or body.'
-              : mode === 'distance'
-                ? 'Distance · pick the first target.'
-                : 'Angle · pick the first straight edge or measured face direction.'
-          );
-        }}
-        onUnit={setMeasurementUnit}
-        onPrecision={setMeasurementPrecision}
-        onRadialDisplay={setRadialDisplay}
-        onSelect={setActiveMeasurementId}
-        onToggleVisibility={(id) =>
-          setMeasurements((current) =>
-            current.map((measurement) =>
-              measurement.id === id
-                ? {
-                    ...measurement,
-                    visible: !measurement.visible
-                  }
-                : measurement
-            )
+  // The measurement workbench, only while Measure is on: View and Tweak
+  // float it over the stage, Build gives it the command slot so it never
+  // stacks on a tool card. Results alone do not open it — pinned ones stay
+  // on the model, and View used to greet them with a dock that said only
+  // "Measure is off"; the Measure button (or M) brings the list back.
+  const measurementDock = measuring ? (
+    <MeasurementDock
+      measurements={measurements}
+      formattedMeasurements={formattedMeasurements}
+      enabled={measuring}
+      activeMeasurementId={activeMeasurementId}
+      mode={measurementMode}
+      draftTargetLabel={measurementDraft?.label ?? null}
+      display={measurementDisplay}
+      onMode={(mode) => {
+        setMeasuring(true);
+        setMeasurementMode(mode);
+        clearMeasurementPicks();
+        setStatus(
+          mode === 'smart'
+            ? 'Smart measure · pick an edge, face, hole, or body.'
+            : mode === 'distance'
+              ? 'Distance · pick the first target.'
+              : 'Angle · pick the first straight edge or measured face direction.'
+        );
+      }}
+      onUnit={setMeasurementUnit}
+      onPrecision={setMeasurementPrecision}
+      onRadialDisplay={setRadialDisplay}
+      onSelect={setActiveMeasurementId}
+      onToggleVisibility={(id) =>
+        setMeasurements((current) =>
+          current.map((measurement) =>
+            measurement.id === id
+              ? {
+                  ...measurement,
+                  visible: !measurement.visible
+                }
+              : measurement
           )
-        }
-        onRename={(id, label, note) =>
-          setMeasurements((current) =>
-            current.map((measurement) =>
-              measurement.id === id
-                ? {
-                    ...measurement,
-                    label,
-                    note: note || undefined,
-                    renamed: true
-                  }
-                : measurement
-            )
+        )
+      }
+      onRename={(id, label, note) =>
+        setMeasurements((current) =>
+          current.map((measurement) =>
+            measurement.id === id
+              ? {
+                  ...measurement,
+                  label,
+                  note: note || undefined,
+                  renamed: true
+                }
+              : measurement
           )
+        )
+      }
+      onDelete={(id) => {
+        setMeasurements((current) =>
+          current.filter((measurement) => measurement.id !== id)
+        );
+        setActiveMeasurementId((current) =>
+          current === id ? null : current
+        );
+        setStatus('Measurement removed.');
+      }}
+      onClear={() => {
+        if (
+          appSettings.general.confirmDestructiveActions &&
+          !window.confirm('Clear every measurement in this View session?')
+        ) {
+          return;
         }
-        onDelete={(id) => {
-          setMeasurements((current) =>
-            current.filter((measurement) => measurement.id !== id)
-          );
-          setActiveMeasurementId((current) =>
-            current === id ? null : current
-          );
-          setStatus('Measurement removed.');
-        }}
-        onClear={() => {
-          if (
-            appSettings.general.confirmDestructiveActions &&
-            !window.confirm('Clear every measurement in this View session?')
-          ) {
-            return;
-          }
-          setMeasurements([]);
-          setActiveMeasurementId(null);
-          clearMeasurementPicks();
-          setStatus('Measurement list cleared.');
-        }}
-        onCopy={(measurement) => void copyMeasurements(measurement)}
-        onExport={exportMeasurements}
-      />
-    ) : null;
+        setMeasurements([]);
+        setActiveMeasurementId(null);
+        clearMeasurementPicks();
+        setStatus('Measurement list cleared.');
+      }}
+      onCopy={(measurement) => void copyMeasurements(measurement)}
+      onExport={exportMeasurements}
+    />
+  ) : null;
 
   // An operation in flight outranks the tool hint: it knows which rung of
   // the Escape ladder you are on, which is the one thing a generic
