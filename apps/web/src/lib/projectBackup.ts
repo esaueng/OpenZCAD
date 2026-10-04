@@ -172,7 +172,9 @@ export function backupFileBytes(file: {
 }): Uint8Array<ArrayBuffer> {
   const encoded = file.base64;
   if (
-    encoded.length > Math.ceil((128 * 1024 * 1024) / 3) * 4 ||
+    // Base64 is ASCII and part of the 256 MiB archive budget. A decoded
+    // entry can exceed 128 MiB while its complete backup still fits.
+    encoded.length > MAX_PROJECT_BACKUP_BYTES ||
     encoded.length % 4 !== 0 ||
     !/^[A-Za-z0-9+/]*={0,2}$/.test(encoded)
   ) {
