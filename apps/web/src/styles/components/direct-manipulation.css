@@ -1070,60 +1070,87 @@
   background: var(--color-surface-hover);
 }
 
+/* The circle tool carries its type as a strip of tiles beside the rail
+   while it is the live tool: one click to any type, nothing behind a badge,
+   and the strip leaves with the tool. The tool's own glyph is the type. */
 .sketch-circle-tool {
   position: relative;
   display: flex;
 }
 
-.sketch-circle-tool > button:first-child {
-  border-radius: var(--radius-sm) 0 0 var(--radius-sm);
-}
-
-.sketch-circle-tool .sketch-circle-chevron {
-  min-width: 22px;
-  padding-inline: 3px;
-  border-left: 0;
-  border-radius: 0 var(--radius-sm) var(--radius-sm) 0;
-}
-
-/* A reading-size menu: three modes at body size with a glyph each, not the
-   rail's fine print, since it is the one place the circle type is chosen. */
-.sketch-circle-menu {
+.sketch-type-strip {
   position: absolute;
-  top: calc(100% + 8px);
-  left: 0;
+  top: 0;
+  left: calc(100% + var(--island-gap));
   z-index: calc(var(--z-inspector-float) + 4);
-  display: grid;
-  width: 280px;
-  padding: 6px;
+  display: flex;
+  align-items: center;
+  gap: 2px;
+  padding: 3px;
   background: var(--color-surface-2);
   border: 1px solid var(--color-border-strong);
-  border-radius: var(--radius-md);
+  border-radius: var(--radius-lg);
   box-shadow: 0 16px 36px rgba(0, 0, 0, 0.48);
+  animation: oz-fade var(--dur-fast) var(--ease-out);
 }
 
-.sketch-circle-menu button {
-  display: grid;
-  grid-template-columns: 24px minmax(0, 1fr);
-  gap: 10px;
-  padding: 9px 10px;
-  text-align: left;
-}
-
-.sketch-circle-menu button > span {
-  display: grid;
-  gap: 2px;
-}
-
-.sketch-circle-menu strong {
-  color: var(--color-text);
-  font-size: var(--fs-base);
-  font-weight: var(--fw-medium);
-}
-
-.sketch-circle-menu small {
-  color: var(--color-text-subtle);
+.sketch-type-tile {
+  display: flex;
+  align-items: center;
+  gap: 7px;
+  height: 28px;
+  padding: 0 9px 0 7px;
+  color: var(--color-text-muted);
+  border: 1px solid transparent;
+  border-radius: var(--radius-md);
   font-size: var(--fs-sm);
+  font-weight: var(--fw-medium);
+  white-space: nowrap;
+}
+
+.sketch-type-tile:hover,
+.sketch-type-tile:focus-visible {
+  color: var(--color-text);
+  background: var(--color-surface-hover);
+}
+
+.sketch-type-tile.active {
+  color: var(--color-accent);
+  background: var(--color-accent-dim);
+  border-color: var(--color-accent-border);
+}
+
+.sketch-type-tile svg {
+  flex: 0 0 auto;
+  width: 16px;
+  height: 16px;
+}
+
+/* The key that steps the type, as a chip on the strip's end. The rail hides
+   its buttons' key badges at laptop widths; this chip is the control. */
+.sketch-type-cycle {
+  display: grid;
+  place-items: center;
+  height: 28px;
+  padding: 0 6px 0 4px;
+  border-radius: var(--radius-md);
+}
+
+.sketch-type-cycle:hover,
+.sketch-type-cycle:focus-visible {
+  background: var(--color-surface-hover);
+}
+
+.sketch-rail .sketch-type-cycle kbd {
+  display: inline-block;
+  padding: 1px 5px;
+  color: var(--color-text-muted);
+  background: var(--color-surface-hover);
+  border: 1px solid var(--color-border-strong);
+  border-radius: var(--radius-sm);
+  font-family: var(--font-mono);
+  font-size: var(--fs-mini);
+  line-height: 1.3;
 }
 
 .sketch-palette-header {
