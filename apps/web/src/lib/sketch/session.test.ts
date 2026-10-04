@@ -829,3 +829,21 @@ describe('SketchMovePointerGate', () => {
     expect(gate.ignores(2)).toBe(false);
   });
 });
+
+describe('SketchMovePointerGate suppression', () => {
+  it('a keyboard-ended drag swallows only its own pointer’s release', () => {
+    const gate = new SketchMovePointerGate();
+    expect(gate.press(null, 1)).toBe(false);
+    // Escape (or Enter) ends pointer 1's drag while it is still down.
+    gate.suppress(1);
+    // Pointer 2 presses before pointer 1 lets go: it is a fresh press of its
+    // own and must not retire pointer 1's suppression.
+    expect(gate.press(null, 2)).toBe(false);
+    expect(gate.ignores(1)).toBe(true);
+    // Pointer 1's late release over empty canvas is swallowed, not a click.
+    expect(gate.release(1)).toBe(true);
+    expect(gate.ignores(1)).toBe(false);
+    // Pointer 2 was never suppressed: its release is its own.
+    expect(gate.release(2)).toBe(false);
+  });
+});

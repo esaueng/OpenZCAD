@@ -2781,11 +2781,12 @@ export function ModelViewer({
     topologyPickListRef.current = topologyPickList;
     let activeSketchSnap: SnapTarget | null = null;
     /**
-     * The pointer whose sketch move Escape (or Enter) already ended. Its
-     * release still arrives, and must not read as a selection click.
+     * Pointers whose remaining events are ignored: those that pressed while
+     * another pointer held a sketch drag, and those whose drag Escape or
+     * Enter already ended (their release still arrives, and must not read
+     * as a selection click). Each is retired only by its own release,
+     * cancel or next press.
      */
-    let suppressedSketchReleaseId: number | null = null;
-    /** Pointers that pressed while another pointer held a sketch drag. */
     const sketchMovePointerGate = new SketchMovePointerGate();
     let sketchSnapCycle = 0;
     let latestSketchPointerEvent: PointerEvent | null = null;
@@ -6452,7 +6453,7 @@ export function ModelViewer({
       if (!drag) {
         return false;
       }
-      suppressedSketchReleaseId = drag.pointerId;
+      sketchMovePointerGate.suppress(drag.pointerId);
       gestures.release(drag.pointerId, '');
       finishSketchMove(drag, false);
       return true;
@@ -6465,7 +6466,7 @@ export function ModelViewer({
       if (!drag?.active) {
         return false;
       }
-      suppressedSketchReleaseId = drag.pointerId;
+      sketchMovePointerGate.suppress(drag.pointerId);
       gestures.release(drag.pointerId, '');
       finishSketchMove(drag, true);
       return true;
@@ -6943,11 +6944,6 @@ export function ModelViewer({
       if (event.button !== 0) {
         return;
       }
-      // A release swallowed after Escape or Enter ended a move may never
-      // reach the canvas: with capture already dropped, a pointer let go
-      // outside lands elsewhere. Pointer ids are reused, so a fresh press
-      // retires the stale suppression rather than letting it eat this click.
-      suppressedSketchReleaseId = null;
       gestures.begin(event);
       // The viewport owns unmodified drag for box selection. Shift hands the
       // same left-button gesture to OrbitControls, whose modifier swap is
@@ -7409,12 +7405,6 @@ export function ModelViewer({
         return;
       }
       if (sketchModeRef.current && event.button === 0) {
-        if (suppressedSketchReleaseId === event.pointerId) {
-          // Escape or Enter already ended this press's move.
-          suppressedSketchReleaseId = null;
-          gestures.release(event, null);
-          return;
-        }
         const sketchMove = sketchMoveRef.current;
         if (sketchMove && sketchMove.pointerId === event.pointerId) {
           if (sketchMove.active) {
@@ -7785,9 +7775,6 @@ export function ModelViewer({
         const drag = sketchMoveRef.current;
         gestures.release(event, '');
         finishSketchMove(drag, false);
-      }
-      if (suppressedSketchReleaseId === event.pointerId) {
-        suppressedSketchReleaseId = null;
       }
       // A cancelled gesture discards its pending position rather than
       // applying it: the drag is being abandoned, not completed.

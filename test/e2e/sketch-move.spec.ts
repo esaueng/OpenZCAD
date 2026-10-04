@@ -533,3 +533,61 @@ test('a second pointer that outlasts the drag does not deselect', async ({
   await expect(moved.editor.getByLabel('Center X')).toHaveValue(target.x);
   await expect(moved.editor.getByLabel('Center Y')).toHaveValue(target.y);
 });
+
+test('another press after Escape does not free the held release', async ({
+  page
+}) => {
+  test.setTimeout(90_000);
+  const sketchTools = await openTopSketch(page, 'Sketch Move Escape Then Tap');
+  const [center] = await bareCanvasDrags(page, {
+    count: 1,
+    dragX: CIRCLE_DRAG_PX
+  });
+  await drawCircles(page, sketchTools, [center!]);
+  const before = await selectCircle(page, center!);
+
+  const handle = await grabHandleCenter(page);
+  await page.mouse.move(handle.x, handle.y);
+  await page.mouse.down();
+  // Away to empty canvas, so the eventual release would be a deselecting
+  // click if anything let it through.
+  const empty = { x: handle.x - 90, y: handle.y + 70 };
+  await page.mouse.move(empty.x, empty.y, { steps: 8 });
+  const grab = page.locator('.sketch-grab-handle');
+  await expect(grab).toHaveAttribute('data-active', 'true');
+  await page.keyboard.press('Escape');
+
+  // A second pointer taps the circle's rim while the mouse is still held:
+  // an ordinary click that keeps the same selection.
+  await page.locator('.viewer-host canvas').evaluate(
+    (canvas, point) => {
+      const init = {
+        bubbles: true,
+        cancelable: true,
+        pointerId: 9,
+        pointerType: 'touch',
+        isPrimary: false,
+        button: 0,
+        clientX: point.x,
+        clientY: point.y
+      };
+      canvas.dispatchEvent(
+        new PointerEvent('pointerdown', { ...init, buttons: 1 })
+      );
+      canvas.dispatchEvent(
+        new PointerEvent('pointerup', { ...init, buttons: 0 })
+      );
+    },
+    { x: center!.x + CIRCLE_DRAG_PX, y: center!.y }
+  );
+
+  // The mouse's release, over empty canvas, belongs to the drag Escape
+  // already ended: the circle stays selected and unmoved.
+  await page.mouse.up();
+  await expect(before.editor).toBeVisible();
+  await expect(before.editor.getByLabel('Center X')).toHaveValue(before.x);
+  await expect(before.editor.getByLabel('Center Y')).toHaveValue(before.y);
+  await expect(page.getByRole('contentinfo')).not.toContainText(
+    'Moved circle.'
+  );
+});

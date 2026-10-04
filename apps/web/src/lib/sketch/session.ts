@@ -1184,11 +1184,13 @@ export function sketchMoveChanged(
 }
 
 /**
- * Pointers the viewport ignores because they pressed while another pointer
- * held a sketch object drag. Each stays ignored — its moves, its release and
- * its cancel — until its own release or cancel arrives, whether or not the
- * drag has ended by then: a second finger that outlasts the first must not
- * land as a selection click the moment the drag lets go.
+ * Pointers whose remaining events the viewport ignores: one that pressed
+ * while another pointer held a sketch object drag, and one whose own drag
+ * Escape or Enter already ended. Each stays ignored — its moves, its release
+ * and its cancel — until its own release or cancel arrives, whatever the
+ * other pointers do meanwhile: a second finger that outlasts the drag, or
+ * a held mouse whose Escape-ended drag another pointer interrupts, must not
+ * land as a selection click.
  */
 export class SketchMovePointerGate {
   private readonly ignored = new Set<number>();
@@ -1205,6 +1207,14 @@ export class SketchMovePointerGate {
     }
     this.ignored.delete(pointerId);
     return false;
+  }
+
+  /**
+   * A drag ended by the keyboard while its pointer is still down: its
+   * release is the end of a gesture already finished, not a click.
+   */
+  suppress(pointerId: number): void {
+    this.ignored.add(pointerId);
   }
 
   /** True while this pointer's events are being ignored. */
