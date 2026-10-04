@@ -305,6 +305,126 @@ describe('CameraController external orbit lifecycle', () => {
     controller.dispose();
   });
 
+  it('holds a sketch roll through the ortho switch and hands it back on exit', () => {
+    const { controller } = createController(false);
+    // A top face's stored sketch frame: u along world -Y, v along world +X.
+    const u = new THREE.Vector3(0, -1, 0);
+    const v = new THREE.Vector3(1, 0, 0);
+    const start = performance.now();
+    controller.startTween({
+      position: new THREE.Vector3(0, 0, 150),
+      target: new THREE.Vector3(0, 0, 0),
+      near: 0.1,
+      far: 4000,
+      up: v
+    });
+    controller.stepTween(start + 10_000);
+    controller.applyProjection('orthographic');
+    controller.controls.update();
+
+    const screenAxes = (camera: THREE.Camera) => {
+      camera.updateMatrixWorld(true);
+      return {
+        right: new THREE.Vector3().setFromMatrixColumn(camera.matrixWorld, 0),
+        up: new THREE.Vector3().setFromMatrixColumn(camera.matrixWorld, 1)
+      };
+    };
+    const sketchView = screenAxes(controller.activeCamera);
+    expect(sketchView.right.dot(u)).toBeCloseTo(1, 6);
+    expect(sketchView.up.dot(v)).toBeCloseTo(1, 6);
+
+    // Leaving the sketch: back to perspective, then a world-up return glide.
+    controller.applyProjection('perspective');
+    controller.startTween({
+      position: new THREE.Vector3(90, -90, 80),
+      target: new THREE.Vector3(0, 0, 0),
+      near: 0.1,
+      far: 4000
+    });
+    controller.stepTween(performance.now() + 10_000);
+    const camera = controller.activeCamera;
+    expect(camera.up.distanceTo(new THREE.Vector3(0, 0, 1))).toBeLessThan(
+      1e-12
+    );
+    // The controls rebuilt while the roll was held must still orbit about
+    // world Z: a horizontal orbit keeps the camera's height.
+    const heightBefore = camera.position.z - controller.controls.target.z;
+    controller.beginOrbitDrag();
+    controller.orbitByPixels(40, 0);
+    controller.stepOrbit(performance.now());
+    controller.endOrbitDrag();
+    const heightAfter = camera.position.z - controller.controls.target.z;
+    expect(heightAfter).toBeCloseTo(heightBefore, 6);
+    controller.dispose();
+  });
+
+  it('lands a held roll when its glide is interrupted, and releases it to an orbit', () => {
+    const { controller } = createController(false);
+    const v = new THREE.Vector3(1, 0, 0);
+    const start = performance.now();
+    controller.startTween({
+      position: new THREE.Vector3(0, 0, 150),
+      target: new THREE.Vector3(0, 0, 0),
+      near: 0.1,
+      far: 4000,
+      up: v
+    });
+    controller.stepTween(start + 100);
+    controller.cancelTween();
+    expect(controller.perspective.up.distanceTo(v)).toBeLessThan(1e-9);
+
+    // Pan and zoom keep the roll; only a rotate gesture releases it. The
+    // controls set `state` before they dispatch `start`.
+    const orbit = controller.controls as unknown as THREE.EventDispatcher<{
+      start: object;
+      end: object;
+    }> & { state: number };
+    orbit.state = 2; // PAN
+    orbit.dispatchEvent({ type: 'start' });
+    orbit.dispatchEvent({ type: 'end' });
+    expect(controller.perspective.up.distanceTo(v)).toBeLessThan(1e-9);
+    orbit.state = 0; // ROTATE
+    orbit.dispatchEvent({ type: 'start' });
+    orbit.dispatchEvent({ type: 'end' });
+    orbit.state = -1;
+    expect(
+      controller.perspective.up.distanceTo(new THREE.Vector3(0, 0, 1))
+    ).toBeLessThan(1e-12);
+
+    // The view cube orbits even with canvas rotation off, so it releases too.
+    controller.startTween({
+      position: new THREE.Vector3(0, 0, 150),
+      target: new THREE.Vector3(0, 0, 0),
+      near: 0.1,
+      far: 4000,
+      up: v
+    });
+    controller.stepTween(performance.now() + 10_000);
+    expect(controller.perspective.up.distanceTo(v)).toBeLessThan(1e-9);
+    controller.beginOrbitDrag();
+    expect(
+      controller.perspective.up.distanceTo(new THREE.Vector3(0, 0, 1))
+    ).toBeLessThan(1e-12);
+    controller.endOrbitDrag();
+    controller.dispose();
+  });
+
+  it('holds a requested roll with reduced motion too', () => {
+    const { controller } = createController(true);
+    controller.startTween({
+      position: new THREE.Vector3(0, 0, 150),
+      target: new THREE.Vector3(0, 0, 0),
+      near: 0.1,
+      far: 4000,
+      up: new THREE.Vector3(1, 0, 0)
+    });
+    const camera = controller.activeCamera;
+    camera.updateMatrixWorld(true);
+    const up = new THREE.Vector3().setFromMatrixColumn(camera.matrixWorld, 1);
+    expect(up.x).toBeCloseTo(1, 6);
+    controller.dispose();
+  });
+
   it('cancels an active external orbit and pending settle on dispose', () => {
     const { controller, requestRender, onViewChange, onViewSettled } =
       createController(false);
