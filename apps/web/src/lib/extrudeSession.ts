@@ -9,6 +9,7 @@ export function isExtrudeSessionCurrent(
   return (
     current.mode === 'region' &&
     current.target === started.target &&
+    current.targets === started.targets &&
     current.extrudeChoice === started.extrudeChoice &&
     selected === currentSelected
   );
