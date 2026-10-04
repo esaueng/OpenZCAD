@@ -62,6 +62,10 @@ test('Save to my account uploads a device project that has no revisions', async 
   await page.route(`**/api/projects/${accountProjectId}`, (route) =>
     route.fulfill({ json: adopted })
   );
+  // What the worker answers for a project the account does not hold.
+  await page.route('**/api/projects/proj_recovery_e2e', (route) =>
+    route.fulfill({ status: 404, json: { error: 'Project not found.' } })
+  );
 
   const recovery = createProjectDocument(
     'Bracket (Recovery)',
@@ -112,6 +116,13 @@ test('Save to my account uploads a device project that has no revisions', async 
   await expect(page.getByRole('button', { name: 'Rename project' })).toHaveText(
     'Bracket (Recovery)'
   );
+  // Not being in the account yet is not an outage.
+  await expect(page.getByText('Opened Bracket (Recovery).')).toBeVisible();
+  await expect(page.getByText(/currently unreachable/)).toHaveCount(0);
+  await expect(page.locator('.save-state')).not.toHaveClass(/is-offline/);
+  await expect(
+    page.getByRole('button', { name: 'Open project sharing · Not shared' })
+  ).toBeVisible();
 
   await page
     .getByRole('button', { name: 'Save to my account', exact: true })

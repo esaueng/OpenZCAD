@@ -8425,7 +8425,16 @@ export function App() {
         ]);
       const remoteDocument = remoteResult.document;
       setArtifacts(artifactList);
-      if (remoteResult.error && localDocument) {
+      // A project this device holds alone is not in the account, and the
+      // account says so with a 404. That is the ordinary answer, not an
+      // outage: reading it as one opened every device project with "The
+      // account copy is currently unreachable" and an Offline save state,
+      // right beside the Save to my account chip that fixes it.
+      const notInAccount =
+        remoteResult.error instanceof ApiError &&
+        remoteResult.error.status === 404 &&
+        !cloudProjectIds.has(projectId);
+      if (remoteResult.error && localDocument && !notInAccount) {
         const needsRepair = isProjectDocumentUnavailableError(
           remoteResult.error
         );
