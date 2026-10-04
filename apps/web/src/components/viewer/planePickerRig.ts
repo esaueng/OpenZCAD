@@ -1,5 +1,8 @@
 import * as THREE from 'three';
-import { PLANE_BASES } from '@openzcad/geometry';
+import {
+  CURRENT_CANONICAL_BASIS_REVISION,
+  canonicalPlaneBasis
+} from '@openzcad/geometry';
 import { VIEWPORT_RENDER_ORDER } from '@openzcad/viewport';
 import type { PlaneId } from '@openzcad/shared';
 
@@ -121,7 +124,12 @@ export function buildPlanePickerRig(): PlanePickerRig {
   const applyOffset = () => {
     const scale = group.scale.x || 1;
     for (const [plane, mesh] of meshes) {
-      const normal = PLANE_BASES[plane].normal;
+      // The basis a sketch started here is written with, so the offset
+      // ghost lands where that sketch will.
+      const normal = canonicalPlaneBasis(
+        plane,
+        CURRENT_CANONICAL_BASIS_REVISION
+      ).normal;
       mesh.position
         .set(normal.x, normal.y, normal.z)
         .multiplyScalar(offsetDistance / scale);

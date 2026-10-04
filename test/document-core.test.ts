@@ -591,6 +591,32 @@ describe('feature editing', () => {
     }
   });
 
+  it('keeps a sketch basis revision when the form edits its offset', () => {
+    const document = createProjectDocument('Front', user());
+    const { document: withSketch, sketchId } = addSketchFeature(document, {
+      name: 'Front profile',
+      planeRef: {
+        type: 'canonical',
+        plane: 'XZ',
+        offset: 0,
+        basisRevision: 2
+      },
+      objects: [
+        { objectKind: 'circle', radius: 4, centerX: 0, centerY: 0 }
+      ]
+    });
+    const edited = updateSketch(withSketch, { sketchId, offset: 6 });
+    const sketch = Object.values(edited.nodes).find(
+      (node) => node.kind === 'sketch'
+    );
+    expect(sketch?.kind === 'sketch' && sketch.planeRef).toEqual({
+      type: 'canonical',
+      plane: 'XZ',
+      offset: 6,
+      basisRevision: 2
+    });
+  });
+
   it('keeps a body named after what the user made, not after the last feature', () => {
     let document = createProjectDocument('Naming doc', user());
     document = addPrimitiveFeature(document, {
