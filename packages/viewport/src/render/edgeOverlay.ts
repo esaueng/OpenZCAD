@@ -130,15 +130,19 @@ function sameKeys(left: ReadonlySet<string>, right: ReadonlySet<string>) {
 }
 
 /**
- * One eased highlight tier: a visible batch, its x-ray twin, and the 0..1
- * presence that drives the width and opacity of both.
+ * One highlight tier: a visible batch, its x-ray twin, and the 0..1 presence
+ * of each, which drives its width and opacity.
  *
- * Hover, edge selection, and a selected face's rim are the same ramp over
- * different widths. They were three hand-maintained copies, which is how the
- * selection tiers came to be missing the ramp hover already had.
+ * Hover, edge selection, and a selected face's rim are the same tier over
+ * different widths. The visible batch is a state change, so it cuts on and
+ * off in the frame its keys change; the x-ray twin eases, so a highlight on an
+ * edge behind the solid does not flicker through it.
  */
 class PresenceTier {
+  /** The visible batch: 0 or 1, cut the moment the target changes. */
   private presence = 0;
+  /** The x-ray twin, eased toward the same target. */
+  private hiddenPresence = 0;
   private target = 0;
   /** Set on a new target; that step is the fade's first (see fadeStepMs). */
   private firstStep = false;
@@ -167,14 +171,18 @@ class PresenceTier {
     return this.visible.geometry.instanceCount > 0 && this.presence > 0;
   }
 
+  /**
+   * The x-ray twin outlives the visible batch on the way out: it is still
+   * fading when the visible line has already cut off.
+   */
   get hiddenDrawable(): boolean {
-    return this.drawable && this.hidden.geometry.instanceCount > 0;
+    return this.hidden.geometry.instanceCount > 0 && this.hiddenPresence > 0;
   }
 
   /**
-   * Points the tier at content or starts its fade-out. Retargeting keeps the
-   * presence already on screen, so moving between edges reads as one highlight
-   * travelling rather than a stutter of fades.
+   * Points the tier at content or cuts it off. The x-ray twin keeps the
+   * presence already on screen, so moving between edges reads as one
+   * highlight travelling rather than a stutter of fades behind the solid.
    */
   retarget(hasContent: boolean) {
     const target = hasContent ? 1 : 0;
@@ -182,45 +190,56 @@ class PresenceTier {
       this.firstStep = true;
     }
     this.target = target;
+    this.presence = target;
     this.clearing = !hasContent;
     if (hasContent) {
       this.refreshPositions();
+    } else if (this.hiddenPresence === 0) {
+      // Nothing left to fade out behind the solid, so let go of it now.
+      this.finishClearing();
     }
     this.apply();
   }
 
   /**
-   * Width and opacity both ride the ramp: fading alone leaves a full-width
+   * Width and opacity both follow presence: fading alone leaves a full-width
    * ghost, and growing alone reads as the line thickening rather than
    * lighting up.
    */
   apply() {
-    const width =
-      EDGE_IDLE_WIDTH + (this.activeWidth - EDGE_IDLE_WIDTH) * this.presence;
+    const widthAt = (presence: number) =>
+      EDGE_IDLE_WIDTH + (this.activeWidth - EDGE_IDLE_WIDTH) * presence;
     this.visible.material.opacity = this.presence;
-    this.visible.material.linewidth = width;
-    this.hidden.material.opacity = this.presence * HIDDEN_EDGE_OPACITY;
-    this.hidden.material.linewidth = width;
+    this.visible.material.linewidth = widthAt(this.presence);
+    this.hidden.material.opacity = this.hiddenPresence * HIDDEN_EDGE_OPACITY;
+    this.hidden.material.linewidth = widthAt(this.hiddenPresence);
   }
 
-  /** Advances one frame. Returns false once there is nothing left to move. */
+  /**
+   * Advances the x-ray twin one frame, the only part of a tier that moves
+   * over time. Returns false once there is nothing left to move.
+   */
   step(dtMs: number): boolean {
-    if (hasSettled(this.presence, this.target)) {
+    if (hasSettled(this.hiddenPresence, this.target)) {
       return false;
     }
-    this.presence = easeToward(
-      this.presence,
+    this.hiddenPresence = easeToward(
+      this.hiddenPresence,
       this.target,
       fadeStepMs(dtMs, this.firstStep)
     );
     this.firstStep = false;
-    if (this.presence === 0 && this.clearing) {
-      this.clearing = false;
-      this.refreshPositions();
-      this.onCleared?.();
+    if (this.hiddenPresence === 0 && this.clearing) {
+      this.finishClearing();
     }
     this.apply();
     return true;
+  }
+
+  private finishClearing() {
+    this.clearing = false;
+    this.refreshPositions();
+    this.onCleared?.();
   }
 }
 
@@ -253,10 +272,9 @@ export class BodyEdgeOverlay extends THREE.Group {
   private hoveredKeys = new Set<string>();
   private selectedFaceBoundaryKeys = new Set<string>();
   /**
-   * The three eased highlight tiers. Each swaps between edges instantly —
-   * pointing at or picking a new edge should feel immediate — but appearing
-   * and disappearing ramps, because a 1.4 px slate line becoming a 4–6 px pale
-   * one in a single frame is the loudest pop in the viewport.
+   * The three highlight tiers. Each cuts — pointing at, picking, or leaving an
+   * edge lands in the frame it happens, like every other hover and selection
+   * tint — and only their x-ray twins ease (see PresenceTier).
    */
   private readonly hoverTier: PresenceTier;
   private readonly selectedTier: PresenceTier;
@@ -528,7 +546,7 @@ export class BodyEdgeOverlay extends THREE.Group {
   }
 
   /**
-   * Advances the eased tiers by one frame. Returns true while something is
+   * Advances the tiers' x-ray twins by one frame. Returns true while one is
    * still moving, so the render loop knows to keep drawing.
    */
   step(dtMs: number): boolean {
@@ -689,8 +707,8 @@ export class BodyEdgeOverlay extends THREE.Group {
       this.seamEdges.visible = this.displayMode === 'wireframe';
     }
     this.idleEdges.visible = showEdges && this.ownershipBySegment.length > 0;
-    // `drawable` is gated on presence rather than key count, so a tier
-    // survives its own fade-out, which runs after the keys are already gone.
+    // Both are gated on presence rather than key count, so a tier's x-ray
+    // twin survives its own fade-out, which runs after the keys are gone.
     this.selectedEdges.visible = showEdges && this.selectedTier.drawable;
     this.selectedHiddenEdges.visible =
       this.xrayEnabled && showEdges && this.selectedTier.hiddenDrawable;
