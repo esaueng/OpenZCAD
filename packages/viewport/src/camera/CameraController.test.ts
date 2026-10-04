@@ -393,6 +393,21 @@ function flickAndRelease(hz: number) {
   };
 }
 
+/** The last persisted pose sits at `position`, to floating-point rounding. */
+function expectLastPersistedAt(
+  onViewSettled: ReturnType<typeof vi.fn>,
+  position: THREE.Vector3
+) {
+  const persisted = onViewSettled.mock.lastCall?.[0] as
+    { position: THREE.Vector3Tuple } | undefined;
+  expect(persisted).toBeDefined();
+  expect(
+    new THREE.Vector3(...(persisted?.position ?? [NaN, NaN, NaN])).distanceTo(
+      position
+    )
+  ).toBeLessThan(1e-9);
+}
+
 describe('CameraController orbit release glide', () => {
   afterEach(() => {
     vi.restoreAllMocks();
@@ -403,15 +418,17 @@ describe('CameraController orbit release glide', () => {
     // Premise: the release carried residual velocity into a visible glide.
     expect(steps.length).toBeGreaterThan(3);
     expect(settleMs).toBeLessThanOrEqual(200 + 1e-6);
-    // Idle is exact: further frames neither move nor wake the loop.
+    // The idle frames replayed past the settle delay, so the landed pose is
+    // already persisted. Idle frames still run OrbitControls' update, which
+    // re-derives the pose from spherical coordinates, so compare to rounding.
     const rest = controller.activeCamera.position.clone();
+    expectLastPersistedAt(onViewSettled, rest);
+    // Idle: further frames neither move nor wake the loop.
     expect(controller.stepOrbit(20_000)).toBe(false);
     expect(controller.stepOrbit(20_016)).toBe(false);
     expect(controller.activeCamera.position.distanceTo(rest)).toBeLessThan(
       1e-9
     );
-    vi.advanceTimersByTime(120);
-    expect(onViewSettled).toHaveBeenLastCalledWith(controller.capture());
     controller.dispose();
   });
 
@@ -470,13 +487,7 @@ describe('CameraController orbit release glide', () => {
     // Persisted once the landing settles, and not before.
     clock.tick(120);
     expect(onViewSettled).toHaveBeenCalledTimes(settlesAtRelease + 1);
-    const persisted = onViewSettled.mock.lastCall?.[0] as
-      { position: THREE.Vector3Tuple } | undefined;
-    expect(
-      new THREE.Vector3(...(persisted?.position ?? [NaN, NaN, NaN])).distanceTo(
-        new THREE.Vector3(...landed.position)
-      )
-    ).toBeLessThan(1e-9);
+    expectLastPersistedAt(onViewSettled, new THREE.Vector3(...landed.position));
     expect(controller.stepOrbit(clock.tick(16))).toBe(false);
     reference.controller.dispose();
     controller.dispose();
