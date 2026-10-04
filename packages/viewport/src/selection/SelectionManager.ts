@@ -47,7 +47,11 @@ type HoverHiddenFaceMesh = THREE.Mesh<
   THREE.MeshBasicMaterial
 >;
 
-/** One independently eased face film, including its occluded x-ray pass. */
+/**
+ * One face film and its occluded x-ray pass. The film is a state change, so it
+ * cuts on and off in the frame its hover changes; only the x-ray pass eases,
+ * so a face hovered or left behind the solid does not flicker through it.
+ */
 class HoverFaceMeshSlot {
   readonly faceMesh: HoverFaceMesh;
   readonly hiddenFaceMesh: HoverHiddenFaceMesh;
@@ -100,26 +104,27 @@ class HoverFaceMeshSlot {
     this.hiddenFaceMesh.raycast = () => undefined;
   }
 
-  /** Occupied retiring slots keep the render loop alive until they detach. */
+  /**
+   * Only the x-ray pass moves over time, so only it keeps the render loop
+   * alive — including a retired slot, which stays occupied until that pass
+   * has faded out and the slot detaches.
+   */
   get isSettling(): boolean {
     if (this.key === null) {
       return false;
     }
     return (
       (this.faceTarget === 0 && this.hiddenFaceTarget === 0) ||
-      Math.abs(this.faceTarget - this.faceMesh.material.opacity) >=
-        SETTLE_EPSILON ||
       Math.abs(this.hiddenFaceTarget - this.hiddenFaceMesh.material.opacity) >=
         SETTLE_EPSILON
     );
   }
 
   /**
-   * The targets each film was last stepped toward. A target that differs is
-   * new — installed, retired, or an x-ray change — so that step is the fade's
-   * first and takes the wake step (see fadeStepMs).
+   * The target the x-ray pass was last stepped toward. A target that differs
+   * is new — installed, retired, or an x-ray change — so that step is the
+   * fade's first and takes the wake step (see fadeStepMs).
    */
-  private steppedFaceTarget = Number.NaN;
   private steppedHiddenFaceTarget = Number.NaN;
 
   install(
@@ -133,13 +138,13 @@ class HoverFaceMeshSlot {
     this.key = key;
     this.faceMesh.geometry = geometry;
     this.hiddenFaceMesh.geometry = hiddenGeometry;
-    this.faceMesh.material.opacity = 0;
+    // The film cuts in at its resting opacity; the x-ray pass rises to its.
+    this.faceMesh.material.opacity = HOVER_FACE_OPACITY;
     this.hiddenFaceMesh.material.opacity = 0;
     this.faceMesh.visible = true;
     this.hiddenFaceMesh.visible = xrayEnabled;
     this.faceTarget = HOVER_FACE_OPACITY;
     this.hiddenFaceTarget = xrayEnabled ? HOVER_FACE_HIDDEN_OPACITY : 0;
-    this.steppedFaceTarget = Number.NaN;
     this.steppedHiddenFaceTarget = Number.NaN;
     this.faceMesh.userData.hoverFaceKey = key;
     this.hiddenFaceMesh.userData.hoverFaceKey = key;
@@ -147,16 +152,29 @@ class HoverFaceMeshSlot {
     parent.add(this.hiddenFaceMesh);
   }
 
+  /**
+   * Cuts the film off now. The slot itself stays occupied only while its
+   * x-ray pass still has a fade-out to play; with nothing left to ease it is
+   * released on the spot, so a cut never costs the render loop a frame.
+   */
   retire() {
     this.faceTarget = 0;
     this.hiddenFaceTarget = 0;
+    this.faceMesh.material.opacity = 0;
+    this.faceMesh.visible = false;
+    this.faceMesh.removeFromParent();
+    if (this.hiddenFaceMesh.material.opacity < SETTLE_EPSILON) {
+      this.reset();
+    }
   }
 
   setXrayEnabled(enabled: boolean, active: boolean) {
     this.hiddenFaceTarget = enabled && active ? HOVER_FACE_HIDDEN_OPACITY : 0;
+    // A retired slot is still occupied while its pass fades out, though its
+    // film has already cut off — so occupancy, not the film, decides.
     this.hiddenFaceMesh.visible =
       enabled &&
-      this.faceMesh.visible &&
+      this.key !== null &&
       (active || this.hiddenFaceMesh.material.opacity >= SETTLE_EPSILON);
   }
 
@@ -164,16 +182,9 @@ class HoverFaceMeshSlot {
     if (this.key === null) {
       return;
     }
-    const faceFirstStep = this.faceTarget !== this.steppedFaceTarget;
     const hiddenFirstStep =
       this.hiddenFaceTarget !== this.steppedHiddenFaceTarget;
-    this.steppedFaceTarget = this.faceTarget;
     this.steppedHiddenFaceTarget = this.hiddenFaceTarget;
-    this.faceMesh.material.opacity = easeToward(
-      this.faceMesh.material.opacity,
-      this.faceTarget,
-      fadeStepMs(frameMs, faceFirstStep)
-    );
     this.hiddenFaceMesh.material.opacity = easeToward(
       this.hiddenFaceMesh.material.opacity,
       this.hiddenFaceTarget,
@@ -188,7 +199,6 @@ class HoverFaceMeshSlot {
     if (
       this.faceTarget === 0 &&
       this.hiddenFaceTarget === 0 &&
-      this.faceMesh.material.opacity < SETTLE_EPSILON &&
       this.hiddenFaceMesh.material.opacity < SETTLE_EPSILON
     ) {
       this.reset();
@@ -267,16 +277,26 @@ export interface SelectionManagerOptions {
  *
  * All feedback here is imperative on purpose: hover changes on every pointer
  * move, and routing that through React would re-render the workspace at
- * pointer frequency. The manager owns the overlays and eases them itself.
+ * pointer frequency. The manager owns the overlays and steps them itself.
+ *
+ * Hover and selection tints are state changes, so they cut: each lands on its
+ * target in the first frame after the change. Only x-ray passes, which draw a
+ * highlight through the solid in front of it, ease — see `easeOpacity`.
  */
 export class SelectionManager {
-  /** Overlay materials easing toward their resting opacity. */
+  /**
+   * Overlay materials on their way to `userData.targetOpacity`. Each lands on
+   * it at the next step — the frame the change is drawn — unless it was
+   * registered with `easeOpacity`, in which case it eases there.
+   */
   readonly fadeIns = new Set<THREE.Material>();
   /**
-   * The target each fading material was last stepped toward. A material that
+   * The target each easing material was last stepped toward. A material that
    * is new to `fadeIns`, or whose target changed since, is on its first step.
    */
   private readonly fadeTargets = new WeakMap<THREE.Material, number>();
+  /** Materials whose opacity eases rather than cuts (see `easeOpacity`). */
+  private readonly easedMaterials = new WeakSet<THREE.Material>();
 
   hoveredBodyId: string | null = null;
   /** Legacy per-edge visual, retained while ModelViewer adopts edge batches. */
@@ -318,7 +338,19 @@ export class SelectionManager {
     );
   }
 
-  /** True while any hover overlay is still easing toward its target. */
+  /**
+   * Opts a material out of the cut: whenever it is in `fadeIns`, its opacity
+   * eases toward the target instead of landing there in one frame. For
+   * x-ray passes — a highlight seen through the solid reads as a flicker when
+   * it pops — and for mode transitions that ride a camera glide, never for a
+   * hover or selection tint. Membership lasts as long as the material.
+   */
+  easeOpacity<T extends THREE.Material>(material: T): T {
+    this.easedMaterials.add(material);
+    return material;
+  }
+
+  /** True while any overlay is still on its way to its target. */
   get isSettling(): boolean {
     return (
       this.hoverFaceSlots.some((slot) => slot.isSettling) ||
@@ -384,9 +416,11 @@ export class SelectionManager {
   }
 
   /**
-   * Rebuilds the preselection film over one exact face. The entering slot and
-   * the slot being left coexist for the short cross-fade, then the latter
-   * releases its geometry and detaches from the body.
+   * Rebuilds the preselection film over one exact face. The film being left
+   * cuts off and the entering one cuts on in the same call, so a hop between
+   * neighbours never shows both. Their x-ray passes cross-fade, which is why
+   * there are two slots: the one being left keeps its geometry until its
+   * pass has faded out, then releases it and detaches from the body.
    */
   setHoverFace(selection: TopologySelection | null) {
     const key =
@@ -565,9 +599,9 @@ export class SelectionManager {
     this.setHoverFace(candidate?.selection ?? null);
     const cursor = canDragFace
       ? 'grab'
-        : bodyId || candidate?.sketchId || candidate?.region
-          ? 'pointer'
-          : '';
+      : bodyId || candidate?.sketchId || candidate?.region
+        ? 'pointer'
+        : '';
     // Writing the same cursor every hover frame makes sweeping across a dense
     // edge set flicker between shapes, because each frame's pick can land on
     // a different side of a boundary. Only a real change is worth a write.
@@ -603,8 +637,9 @@ export class SelectionManager {
   }
 
   /**
-   * Eases every overlay one frame toward its target. `dt` is already clamped
-   * by the caller's render clock.
+   * Advances every overlay one frame: a cut lands on its target, an eased
+   * material steps toward it. `dt` is already clamped by the caller's render
+   * clock; a cut does not read it, so even a zero-length frame lands one.
    */
   step(dt: number) {
     const dtMs = dt * 1000;
@@ -615,13 +650,17 @@ export class SelectionManager {
       const target =
         (material.userData.targetOpacity as number | undefined) ??
         DEFAULT_FADE_TARGET;
-      const firstStep = this.fadeTargets.get(material) !== target;
-      this.fadeTargets.set(material, target);
-      material.opacity = easeToward(
-        material.opacity,
-        target,
-        fadeStepMs(dtMs, firstStep)
-      );
+      if (this.easedMaterials.has(material)) {
+        const firstStep = this.fadeTargets.get(material) !== target;
+        this.fadeTargets.set(material, target);
+        material.opacity = easeToward(
+          material.opacity,
+          target,
+          fadeStepMs(dtMs, firstStep)
+        );
+      } else {
+        material.opacity = target;
+      }
       if (material.opacity === target) {
         // A material faded back to full opacity goes back to the opaque pass
         // once it settles: leaving `transparent` set keeps it in depth-sorted
