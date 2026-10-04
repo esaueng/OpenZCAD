@@ -71,6 +71,19 @@ export type SketchToolId =
 export type SketchCircleMode =
   'center-radius' | 'two-point-diameter' | 'three-point';
 
+/** The circle types in the order the rail's strip shows them and C cycles. */
+export const SKETCH_CIRCLE_MODES: readonly SketchCircleMode[] = [
+  'center-radius',
+  'two-point-diameter',
+  'three-point'
+];
+
+/** The type after `mode` in the strip's order, wrapping round. */
+export function nextSketchCircleMode(mode: SketchCircleMode): SketchCircleMode {
+  const index = SKETCH_CIRCLE_MODES.indexOf(mode);
+  return SKETCH_CIRCLE_MODES[(index + 1) % SKETCH_CIRCLE_MODES.length]!;
+}
+
 /** Constraint tools exposed by the sketch rail. */
 export type SketchConstraintToolKind =
   | 'horizontal'
