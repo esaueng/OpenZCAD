@@ -581,6 +581,82 @@ describe('normal-to-face camera framing', () => {
     }
   });
 
+  it('rolls a face sketch so its u axis reads rightward and v upward', () => {
+    const camera = new THREE.PerspectiveCamera(45, 1.6, 0.1, 4000);
+    // The top face of a 62 x 50 x 10 box, with its stored sketch frame: the
+    // reference-axis convention puts u on world -Y and v on world +X, so a
+    // world-up view ran sketch text down the screen.
+    const center = new THREE.Vector3(31, 25, 10);
+    const points = [
+      new THREE.Vector3(0, 0, 10),
+      new THREE.Vector3(62, 0, 10),
+      new THREE.Vector3(62, 50, 10),
+      new THREE.Vector3(0, 50, 10)
+    ];
+    const normal = new THREE.Vector3(0, 0, 1);
+    const u = new THREE.Vector3(0, -1, 0);
+    const v = new THREE.Vector3(1, 0, 0);
+    const pose = computeNormalToFacePose(camera, points, center, normal, v);
+
+    expect(pose).not.toBeNull();
+    expect(pose!.up).toBeDefined();
+    expect(pose!.up!.dot(v)).toBeCloseTo(1, 6);
+    const direction = pose!.position.clone().sub(pose!.target).normalize();
+    expect(direction.dot(normal)).toBeGreaterThan(0.999999);
+    // The pole nudge leans away from v, so world up projects onto v as well.
+    expect(cameraUpForDirection(direction).dot(v)).toBeCloseTo(1, 6);
+
+    camera.position.copy(pose!.position);
+    camera.quaternion.copy(tweenOrientationFor(direction, pose!.up));
+    camera.updateMatrixWorld(true);
+    camera.updateProjectionMatrix();
+    const origin = center.clone().project(camera);
+    const stepU = center.clone().addScaledVector(u, 5).project(camera);
+    const stepV = center.clone().addScaledVector(v, 5).project(camera);
+    expect(stepU.x - origin.x).toBeGreaterThan(0.01);
+    expect(Math.abs(stepU.y - origin.y)).toBeLessThan(1e-6);
+    expect(stepV.y - origin.y).toBeGreaterThan(0.01);
+    expect(Math.abs(stepV.x - origin.x)).toBeLessThan(1e-6);
+    // Framed in the rolled basis: the 62 mm side now runs vertically.
+    for (const point of points) {
+      const projected = point.clone().project(camera);
+      expect(Math.abs(projected.x)).toBeLessThan(0.9);
+      expect(Math.abs(projected.y)).toBeLessThan(0.9);
+    }
+  });
+
+  it('rolls a tilted near-horizontal face where world up would turn it over', () => {
+    const camera = new THREE.PerspectiveCamera(45, 1, 0.1, 4000);
+    const tilt = THREE.MathUtils.degToRad(20);
+    const normal = new THREE.Vector3(Math.sin(tilt), 0, Math.cos(tilt));
+    // The stored frame for this normal (reference axis X): v = n x (X x n).
+    const v = new THREE.Vector3(Math.cos(tilt), 0, -Math.sin(tilt));
+    const center = new THREE.Vector3(0, 0, 0);
+    const points = [
+      v.clone().multiplyScalar(10),
+      v.clone().multiplyScalar(-10),
+      new THREE.Vector3(0, 10, 0),
+      new THREE.Vector3(0, -10, 0)
+    ];
+    // Premise: world up's projection points along -v here.
+    expect(cameraUpForDirection(normal).dot(v)).toBeCloseTo(-1, 6);
+
+    const pose = computeNormalToFacePose(camera, points, center, normal, v);
+    expect(pose!.up!.dot(v)).toBeCloseTo(1, 6);
+  });
+
+  it('keeps world-up roll and the -Y pole nudge without a preferred up', () => {
+    const camera = new THREE.PerspectiveCamera(45, 1, 0.1, 4000);
+    const pose = computeNormalToFacePose(
+      camera,
+      [new THREE.Vector3(-5, -5, 0), new THREE.Vector3(5, 5, 0)],
+      new THREE.Vector3(0, 0, 0),
+      new THREE.Vector3(0, 0, -1)
+    );
+    expect(pose!.up).toBeUndefined();
+    expect(pose!.position.y).toBeGreaterThan(0);
+  });
+
   it('frames an arbitrarily oriented planar face without axis guessing', () => {
     const camera = new THREE.PerspectiveCamera(50, 1.6, 0.1, 1000);
     const center = new THREE.Vector3(12, 8, -5);
