@@ -236,7 +236,7 @@
   background: transparent;
   border: 0;
   border-radius: var(--radius-sm);
-  font-size: var(--fs-xs);
+  font-size: var(--fs-sm);
   text-align: left;
 }
 
@@ -258,8 +258,8 @@
   white-space: nowrap;
 }
 
-/* An explicit size: a bare <small> renders "smaller" than the 11.5px item,
-   which put the sublabels at 9.6px, under the 11px floor for chrome text. */
+/* The detail line was the browser's `smaller` of an 11.5px row: 9.6px, the
+   smallest text in the app. */
 .topbar-menu-item small {
   color: var(--color-text-subtle);
   font-size: var(--fs-mini);
