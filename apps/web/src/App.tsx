@@ -218,6 +218,7 @@ import { watchBuildVersion } from './lib/buildVersionWatch';
 import { commandOutcomeMessage } from './lib/commandOutcome';
 import { presentedDiagnostics } from './lib/diagnosticsRows';
 import { primitiveDimensionLabel } from './lib/primitiveDimensionLabel';
+import { useRememberedSectionPlane } from './hooks/useRememberedSectionPlane';
 import { newBlendFacePick } from './lib/blendRearm';
 import { exactEntryShortcut, isTypingTarget } from './lib/exactEntryShortcut';
 import { DeferredExactEntry } from './lib/deferredExactEntry';
@@ -2204,8 +2205,6 @@ export function App() {
   // one set of visible bodies. Everything that invalidates it bumps this
   // token, and an answer that arrives under an old token is dropped.
   const sectionTokenRef = useRef(0);
-  /** The plane the section view last cut on; switching it back on returns there. */
-  const lastSectionPlaneRef = useRef<SectionPlaneId>('XY');
   // Key by membership so an unrelated dimension edit keeps the viewport's
   // body array stable instead of disposing and uploading identical meshes.
   const parameterHiddenBodyKey = useMemo(
@@ -5613,7 +5612,7 @@ export function App() {
   // command's own preview.
   const viewerEditableBodyIds = useMemo(
     () =>
-      modelingLocked || movePreview || tool !== null
+      modelingLocked || movePreview || tool
         ? EMPTY_BODY_IDS
         : directEditableBodyIds,
     [modelingLocked, movePreview, tool, directEditableBodyIds]
@@ -7120,6 +7119,12 @@ export function App() {
     sectionBodyKey
   ]);
 
+  // Follows the live section too, so a project's restored cut comes back on
+  // its own plane after being switched off and on.
+  const rememberedSectionPlane = useRememberedSectionPlane(
+    viewerSettings.sectionView
+  );
+
   /**
    * Switches the section view on or off. The rail button and the palette
    * both toggle: cycling through every plane to reach "off" took up to three
@@ -7133,12 +7138,11 @@ export function App() {
       setStatus('Section view off.');
       return;
     }
-    setSectionPlane(lastSectionPlaneRef.current);
+    setSectionPlane(rememberedSectionPlane.current);
   }
 
   /** Cuts on `plane`, starting at the model's centre along its axis. */
   function setSectionPlane(plane: SectionPlaneId) {
-    lastSectionPlaneRef.current = plane;
     const range = sectionAxisRange(plane);
     const offset = range ? (range.min + range.max) / 2 : 0;
     // The previous plane's exact section describes a cut that is gone.
@@ -7147,9 +7151,9 @@ export function App() {
       ...current,
       sectionView: { plane, offset }
     }));
-    setStatus(
-      `Section view: ${plane} plane. It cuts the display only; drag the slider to move the cut, and the model itself is untouched.`
-    );
+    // The panel beside the rail carries the slider and the tooltip says the
+    // cut is display-only; the lane line only names the plane.
+    setStatus(`Section view: ${plane} plane · the model is untouched.`);
     void requestExactSection({ plane, offset });
   }
 
