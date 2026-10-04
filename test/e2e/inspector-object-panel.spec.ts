@@ -69,7 +69,7 @@ for (const directManipulation of [true, false]) {
       0
     );
     await expect(inspector.getByLabel('More actions')).toHaveCount(0);
-    await expect(page.locator('.vite-error-overlay')).toHaveCount(0);
+    await expect(page.locator('vite-error-overlay')).toHaveCount(0);
     const operation = page.getByRole('region', {
       name: 'Resize Cylinder operation'
     });
