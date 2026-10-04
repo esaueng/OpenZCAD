@@ -109,3 +109,40 @@ describe('display deflection held across a small edit', () => {
     expect(deflections.at(-1)).toBe(sourceNominal);
   }, 60_000);
 });
+
+describe('held display deflections are pruned with the body', () => {
+  it('drops the entry when the body leaves the document', async () => {
+    const adapter = await createExactKernelAdapter();
+    try {
+      const manager = new CommandManager(
+        createProjectDocument(
+          'Deflection prune',
+          toUserId('user_deflection_prune')
+        )
+      );
+      manager.execute(
+        commandFactories.addPrimitive({
+          name: 'Block',
+          primitiveKind: 'box',
+          dimensions: { width: 50, height: 20, depth: 30 }
+        })
+      );
+      const withBody = manager.document;
+      await adapter.syncDocument(withBody);
+      const held = (
+        adapter as unknown as { heldDisplayDeflections: Map<string, number[]> }
+      ).heldDisplayDeflections;
+      expect(held.size).toBe(1);
+      // A document without that body: the entry goes with it.
+      await adapter.syncDocument(
+        createProjectDocument(
+          'Deflection prune',
+          toUserId('user_deflection_prune')
+        )
+      );
+      expect(held.size).toBe(0);
+    } finally {
+      adapter.dispose();
+    }
+  }, 60_000);
+});
