@@ -92,7 +92,10 @@ const FIELDS: Record<SketchObjectData['objectKind'], FieldDefinition[]> = {
   // string, family and style are not expression fields and live in
   // `TextObjectFields` above the grid.
   text: [
-    { key: 'size', label: 'Size' },
+    // The stored size is the em size (the layout scales the face by
+    // size / unitsPerEm), not the capital height: Open Sans capitals stand
+    // 0.714 of it. The label says which.
+    { key: 'size', label: 'Size (em)' },
     { key: 'rotation', label: 'Rotation', fallback: '0' },
     { key: 'x', label: 'X' },
     { key: 'y', label: 'Y' }

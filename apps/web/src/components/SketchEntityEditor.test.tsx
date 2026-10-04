@@ -12,7 +12,8 @@ import { describe, expect, it, vi } from 'vitest';
 import type { SketchObjectData } from '@openzcad/shared';
 import { SketchEntityEditor } from './SketchEntityEditor';
 import { styleFromToggles } from './TextObjectFields';
-import { textObjectFromPoint } from '../lib/sketch/session';
+import { newSketchTextDraft } from '../lib/interaction/machine';
+import { textObjectFromPoint } from '../lib/sketch/textPlacement';
 
 const TEXT_OBJECT: SketchObjectData = {
   objectKind: 'text',
@@ -133,7 +134,7 @@ describe('SketchEntityEditor', () => {
         y: 2,
         align: 'center'
       },
-      'Size',
+      'Size (em)',
       '25'
     );
     expect(applied).toEqual({
@@ -219,7 +220,7 @@ describe('SketchEntityEditor', () => {
     // the same gesture.
     expect(screen.getByLabelText('Text')).toBeTruthy();
     expect(screen.getByLabelText('Font')).toBeTruthy();
-    expect(screen.getByLabelText('Size')).toBeTruthy();
+    expect(screen.getByLabelText('Size (em)')).toBeTruthy();
     expect(screen.getByRole('group', { name: 'Font style' })).toBeTruthy();
   });
 
@@ -332,22 +333,46 @@ describe('styleFromToggles', () => {
 });
 
 describe('textObjectFromPoint', () => {
-  it('places a ready-to-edit object at the click, with no drag extent', () => {
-    const object = textObjectFromPoint({ x: 3, y: -4 });
-    expect(object).toMatchObject({
-      objectKind: 'text',
-      x: 3,
-      y: -4,
-      fontStyle: 'regular'
-    });
-    // A placeholder string and a real size, so the object is visible and
-    // selectable the instant it lands rather than being a zero-extent nothing.
-    expect(object.objectKind === 'text' && object.text.length).toBeGreaterThan(
-      0
+  it('places the composed draft at the click, with no drag extent', () => {
+    const object = textObjectFromPoint(
+      { x: 3, y: -4 },
+      { ...newSketchTextDraft(), text: 'Boa', size: 8 }
     );
-    expect(object.objectKind === 'text' && object.size).toBeGreaterThan(0);
+    // The card's string, never a placeholder, and the left alignment the
+    // schema defaults to left out so the stored object stays minimal.
+    expect(object).toEqual({
+      objectKind: 'text',
+      text: 'Boa',
+      fontFamily: 'open-sans',
+      fontStyle: 'regular',
+      size: 8,
+      x: 3,
+      y: -4
+    });
   });
 
+  it('carries a non-default alignment and face from the draft', () => {
+    const object = textObjectFromPoint(
+      { x: 0, y: 0 },
+      {
+        text: 'Hi',
+        fontFamily: 'lora',
+        fontStyle: 'bold',
+        size: 'h * 2',
+        align: 'center'
+      }
+    );
+    expect(object).toMatchObject({
+      fontFamily: 'lora',
+      fontStyle: 'bold',
+      size: 'h * 2',
+      align: 'center'
+    });
+  });
+
+  it('starts a draft empty, so nothing is placed until text is typed', () => {
+    expect(newSketchTextDraft()).toMatchObject({ text: '', align: 'left' });
+  });
   it('lists what holds the entity, with edit and delete per row', async () => {
     const user = userEvent.setup();
     const onDeleteConstraint = vi.fn();

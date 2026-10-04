@@ -42,7 +42,7 @@ describe('TextSketchForm', () => {
     expect(screen.getByLabelText('Text')).toHaveValue('Hello');
     expect(screen.getByLabelText('Font')).toBeTruthy();
     expect(screen.getByRole('group', { name: 'Font style' })).toBeTruthy();
-    expect(screen.getByLabelText('Size')).toBeTruthy();
+    expect(screen.getByLabelText('Size (em)')).toBeTruthy();
     expect(screen.getByLabelText('Rotation')).toBeTruthy();
     expect(screen.getByLabelText('X')).toBeTruthy();
     expect(screen.getByLabelText('Y')).toBeTruthy();

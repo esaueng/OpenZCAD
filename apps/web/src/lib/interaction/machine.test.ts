@@ -2,6 +2,7 @@ import { describe, expect, it } from 'vitest';
 import {
   IDLE,
   commandSessionFor,
+  composingTextDraft,
   radialFaceOperationName,
   escapeTarget,
   interactionReducer,
@@ -20,6 +21,7 @@ import type {
 } from '@openzcad/shared';
 import { UNSTABLE_FACE_OFFSET_REASON } from '../directEdit';
 import { UNSTABLE_FACE_SKETCH_REASON } from '../faceSketchAttachment';
+import { textObjectFromPoint } from '../sketch/textPlacement';
 
 const faceReference: FaceTopologyReferenceV5 = {
   kind: 'face',
@@ -340,6 +342,135 @@ describe('interactionReducer', () => {
       objectId: 'ent_b'
     });
     expect(untouched).toBe(state);
+  });
+});
+
+describe('text tool composing', () => {
+  const composing = () =>
+    interactionReducer(
+      interactionReducer(IDLE, { type: 'enter-sketch', plane }),
+      {
+        type: 'sketch-tool',
+        tool: 'text'
+      }
+    );
+
+  it('opens the card with an empty draft the moment the tool arms', () => {
+    const state = composing();
+    expect(state.mode === 'sketch' && state.session.tool).toBe('text');
+    expect(composingTextDraft(state)).toEqual({
+      text: '',
+      fontFamily: 'open-sans',
+      fontStyle: 'regular',
+      size: 10,
+      align: 'left'
+    });
+  });
+
+  it('takes each edit into the draft without touching the rest', () => {
+    let state = composing();
+    state = interactionReducer(state, {
+      type: 'sketch-text-draft',
+      patch: { text: 'B' }
+    });
+    state = interactionReducer(state, {
+      type: 'sketch-text-draft',
+      patch: { text: 'Boa', fontStyle: 'bold' }
+    });
+    state = interactionReducer(state, {
+      type: 'sketch-text-draft',
+      patch: { size: 8, align: 'center' }
+    });
+    expect(composingTextDraft(state)).toEqual({
+      text: 'Boa',
+      fontFamily: 'open-sans',
+      fontStyle: 'bold',
+      size: 8,
+      align: 'center'
+    });
+    // Pressing T again keeps what is being typed.
+    state = interactionReducer(state, { type: 'sketch-tool', tool: 'text' });
+    expect(composingTextDraft(state)?.text).toBe('Boa');
+  });
+
+  it('ignores draft edits when no card is open', () => {
+    const sketching = interactionReducer(IDLE, { type: 'enter-sketch', plane });
+    expect(
+      interactionReducer(sketching, {
+        type: 'sketch-text-draft',
+        patch: { text: 'stray' }
+      })
+    ).toBe(sketching);
+    expect(
+      interactionReducer(IDLE, {
+        type: 'sketch-text-draft',
+        patch: { text: 'stray' }
+      })
+    ).toBe(IDLE);
+  });
+
+  it('Escape closes the card, drops the draft and keeps the sketch', () => {
+    let state = interactionReducer(composing(), {
+      type: 'sketch-text-draft',
+      patch: { text: 'Boa' }
+    });
+    expect(escapeTarget(state)).toBe('exit-drawing-tool');
+    state = interactionReducer(state, { type: 'escape' });
+    expect(state.mode).toBe('sketch');
+    expect(state.mode === 'sketch' && state.session.tool).toBe('select');
+    expect(state.mode === 'sketch' && state.session.textDraft).toBeNull();
+    expect(composingTextDraft(state)).toBeNull();
+    // The next T starts over rather than reviving the abandoned string.
+    state = interactionReducer(state, { type: 'sketch-tool', tool: 'text' });
+    expect(composingTextDraft(state)?.text).toBe('');
+  });
+
+  it('another tool ends the composition', () => {
+    let state = interactionReducer(composing(), {
+      type: 'sketch-text-draft',
+      patch: { text: 'Boa' }
+    });
+    state = interactionReducer(state, { type: 'sketch-tool', tool: 'line' });
+    expect(composingTextDraft(state)).toBeNull();
+    // A constraint tool lands on Select: the draft no longer reads as live
+    // even though that route does not clear it.
+    state = interactionReducer(composing(), {
+      type: 'sketch-text-draft',
+      patch: { text: 'Boa' }
+    });
+    state = interactionReducer(state, {
+      type: 'sketch-constraint-tool',
+      kind: 'horizontal'
+    });
+    expect(composingTextDraft(state)).toBeNull();
+  });
+
+  it('places exactly the typed object, then hands over to Select', () => {
+    let state = interactionReducer(composing(), {
+      type: 'sketch-text-draft',
+      patch: { text: 'Boa', size: 8 }
+    });
+    const draft = composingTextDraft(state)!;
+    const placed = textObjectFromPoint({ x: 12, y: -3 }, draft);
+    expect(placed).toEqual({
+      objectKind: 'text',
+      text: 'Boa',
+      fontFamily: 'open-sans',
+      fontStyle: 'regular',
+      size: 8,
+      x: 12,
+      y: -3
+    });
+    // The workspace commits it, then selects the new object for the editor.
+    state = interactionReducer(state, { type: 'sketch-tool', tool: 'select' });
+    state = interactionReducer(state, {
+      type: 'sketch-select-object',
+      objectId: 'ent_text'
+    });
+    expect(state.mode === 'sketch' && state.session.selectedObjectId).toBe(
+      'ent_text'
+    );
+    expect(composingTextDraft(state)).toBeNull();
   });
 });
 

@@ -225,12 +225,18 @@ import {
   sketchEntryPose,
   sketchObjectFromDrag,
   snapSketchPoint,
-  textObjectFromPoint,
   type SketchPoint,
   type SnapTarget,
   type SnapTargetKind
 } from '../lib/sketch/session';
-import type { SketchCircleMode } from '../lib/interaction/machine';
+import {
+  textDraftBudgetError,
+  textObjectFromPoint
+} from '../lib/sketch/textPlacement';
+import type {
+  SketchCircleMode,
+  SketchTextDraft
+} from '../lib/interaction/machine';
 import type { PlaneBasis } from '@openzcad/geometry';
 import type { ParamValue, PlaneId, SketchObjectData } from '@openzcad/shared';
 import { buildPlanePickerRig } from './viewer/planePickerRig';
@@ -356,6 +362,12 @@ export interface SketchModeState {
   definedObjectIds: string[];
   textOutlineBudgetError?: string | null;
   dimensions: SketchDimensionAnnotation[];
+  /**
+   * The text card's draft while the text tool composes. Its outline follows
+   * the pointer over the plane and a click places it; nothing is placed
+   * while the string is empty.
+   */
+  textDraft?: SketchTextDraft | null;
 }
 
 /** Sketch curves + detected regions, rendered when direct manipulation is on. */
@@ -709,6 +721,12 @@ interface ModelViewerProps {
   regionHandle: RegionHandleTarget | null;
   /** In-viewport sketch session; null when not sketching. */
   sketchMode: SketchModeState | null;
+  /**
+   * Where the text card's outline sits on the plane (the baseline origin a
+   * click there would place), written as the pointer moves. The card's Place
+   * button reads it, so it places exactly what the outline shows.
+   */
+  sketchTextAnchorRef?: MutableRefObject<SketchPoint | null>;
   /** A drawing gesture completed an entity. */
   onSketchCommit(object: SketchObjectData): void;
   onEditSketchDimension(id: string, anchor: { x: number; y: number }): void;
@@ -1537,6 +1555,7 @@ export function ModelViewer({
   onMeasurePreview,
   regionHandle,
   sketchMode,
+  sketchTextAnchorRef,
   onSketchCommit,
   onEditSketchDimension,
   onMoveSketchDimension,
@@ -1788,6 +1807,10 @@ export function ModelViewer({
   onSketchSelectObjectRef.current = onSketchSelectObject;
   /** Live sketch rig + local gesture state (imperative, no re-renders). */
   const sketchRigRef = useRef<SketchModeRig | null>(null);
+  /** The text outline's origin; null until the pointer reaches the plane. */
+  const textAnchorRef = useRef<SketchPoint | null>(null);
+  const sketchTextAnchorSinkRef = useRef(sketchTextAnchorRef);
+  sketchTextAnchorSinkRef.current = sketchTextAnchorRef;
   const sketchGestureRef = useRef<{
     chainAnchor: SketchPoint | null;
     dragStart: SketchPoint | null;
@@ -4434,12 +4457,22 @@ export function ModelViewer({
       const detail = (
         event as CustomEvent<{
           resolve?: (
-            value: { objects: SketchModeState['objects'] } | null
+            value: {
+              objects: SketchModeState['objects'];
+              textPreview: { loops: number; origin: SketchPoint } | null;
+            } | null
           ) => void;
         }>
       ).detail;
       const mode = sketchModeRef.current;
-      detail?.resolve?.(mode ? { objects: mode.objects } : null);
+      detail?.resolve?.(
+        mode
+          ? {
+              objects: mode.objects,
+              textPreview: sketchRigRef.current?.textPreviewState() ?? null
+            }
+          : null
+      );
     };
     if (E2E_CANVAS_HOOKS_ENABLED) {
       renderer.domElement.addEventListener(
@@ -5941,6 +5974,18 @@ export function ModelViewer({
           );
         }
         requestRender();
+        return;
+      }
+      if (mode.tool === 'text') {
+        // The outline follows the pointer: a pure slide in the plane, laid
+        // out again only when the draft changes.
+        textAnchorRef.current = point;
+        const sink = sketchTextAnchorSinkRef.current;
+        if (sink) {
+          sink.current = point;
+        }
+        rig.moveTextPreview(point);
+        requestRender();
       }
     }
 
@@ -6895,8 +6940,20 @@ export function ModelViewer({
         }
         if (mode.tool === 'text' && point && !moved) {
           // One click places the baseline origin; everything else about a text
-          // object is a parameter, so there is no drag and no second click.
-          onSketchCommitRef.current(textObjectFromPoint(point));
+          // object is the card's draft, so there is no drag and no second
+          // click. An empty string places nothing: the card says so.
+          const draft = mode.textDraft;
+          if (
+            draft &&
+            draft.text.length > 0 &&
+            !textDraftBudgetError(
+              mode.objects,
+              draft.text,
+              mode.textOutlineBudgetError
+            )
+          ) {
+            onSketchCommitRef.current(textObjectFromPoint(point, draft));
+          }
           requestRender();
           return;
         }
@@ -9866,6 +9923,40 @@ export function ModelViewer({
       );
     }
     context.requestRender();
+  }, [sketchMode]);
+
+  // The text card's live outline, laid out again whenever the draft or the
+  // sketch it is budgeted against changes. It sits at the last pointer
+  // position on the plane, or the sketch origin until the pointer gets there.
+  useEffect(() => {
+    const rig = sketchRigRef.current;
+    if (!rig) {
+      return;
+    }
+    const draft =
+      sketchMode?.tool === 'text' ? (sketchMode.textDraft ?? null) : null;
+    if (!sketchMode || !draft) {
+      // A finished composition forgets where it was: the next one starts
+      // under the pointer, not where the last text went.
+      textAnchorRef.current = null;
+      const sink = sketchTextAnchorSinkRef.current;
+      if (sink) {
+        sink.current = null;
+      }
+    }
+    if (!sketchMode || !draft || draft.text.length === 0) {
+      rig.setTextPreview(null, [], () => 0);
+    } else {
+      const resolve = (value: unknown) =>
+        evalParamValue(value as ParamValue, sketchMode.parameterScope) ?? 0;
+      rig.setTextPreview(
+        textObjectFromPoint(textAnchorRef.current ?? { x: 0, y: 0 }, draft),
+        sketchMode.objects,
+        resolve,
+        sketchMode.textOutlineBudgetError
+      );
+    }
+    contextRef.current?.requestRender();
   }, [sketchMode]);
 
   // Escape ends the line chain: clear the local anchor when the machine says

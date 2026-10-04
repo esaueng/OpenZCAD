@@ -13,7 +13,7 @@
  * regular), so a request that cannot be honoured falls back down the registry's
  * style chain — and says so, rather than quietly rendering the wrong weight.
  */
-import { useEffect } from 'react';
+import { useEffect, useRef } from 'react';
 import {
   FONT_FAMILIES,
   findFontFace,
@@ -22,6 +22,7 @@ import {
 } from '@openzcad/geometry';
 import type { TextFontStyle } from '@openzcad/shared';
 import { loadTextFont } from '../lib/textFonts';
+import { useFieldAutoFocus } from './forms/fieldAutoFocus';
 
 export interface TextAttributes {
   text: string;
@@ -32,6 +33,12 @@ export interface TextAttributes {
 interface TextObjectFieldsProps {
   value: TextAttributes;
   onChange(next: TextAttributes): void;
+  /**
+   * Take the keyboard in the string field on mount. The text card asks for
+   * it — the card opened because someone is about to type — while the edit
+   * forms leave the workspace's shortcuts alone.
+   */
+  autoFocusText?: boolean;
 }
 
 /** CSS family name used only for the picker's own previews. */
@@ -82,8 +89,19 @@ export function styleFromToggles(
 const BOLD_STYLES: TextFontStyle[] = ['bold', 'boldItalic'];
 const ITALIC_STYLES: TextFontStyle[] = ['italic', 'boldItalic'];
 
-export function TextObjectFields({ value, onChange }: TextObjectFieldsProps) {
+export function TextObjectFields({
+  value,
+  onChange,
+  autoFocusText
+}: TextObjectFieldsProps) {
   usePreviewFontFaces();
+  const focusText = useFieldAutoFocus(autoFocusText);
+  const textInputRef = useRef<HTMLInputElement | null>(null);
+  useEffect(() => {
+    if (focusText) {
+      textInputRef.current?.focus();
+    }
+  }, [focusText]);
   const bold = BOLD_STYLES.includes(value.fontStyle);
   const italic = ITALIC_STYLES.includes(value.fontStyle);
 
@@ -109,6 +127,7 @@ export function TextObjectFields({ value, onChange }: TextObjectFieldsProps) {
       <label className="field">
         <span>Text</span>
         <input
+          ref={textInputRef}
           type="text"
           value={value.text}
           spellCheck={false}

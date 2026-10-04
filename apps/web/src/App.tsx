@@ -328,7 +328,6 @@ import {
   PartsRailButtons,
   ViewModeRail
 } from './components/ViewModeRail';
-import { TweakPanel } from './components/TweakPanel';
 import { StartScreen } from './components/StartScreen';
 import { StartupScreen } from './components/StartupScreen';
 import type { AuthConfigStatus } from './components/SettingsPage';
@@ -470,6 +469,7 @@ import { NumericKeypad, type KeypadRequest } from './components/NumericKeypad';
 import type { DimensionMode } from './lib/keypad';
 import {
   IDLE,
+  composingTextDraft,
   escapeTarget,
   interactionReducer,
   commandSessionFor,
@@ -801,6 +801,18 @@ const LazySketchEntityEditor = lazyWithStaleChunkNotice(() =>
     default: module.SketchEntityEditor
   }))
 );
+// Tweak's panel shows only in Tweak mode; Build and View never load it.
+const LazyTweakPanel = lazyWithStaleChunkNotice(() =>
+  import('./components/TweakPanel').then((module) => ({
+    default: module.TweakPanel
+  }))
+);
+// The text tool's card exists only while text is being composed.
+const LazySketchTextCard = lazyWithStaleChunkNotice(() =>
+  import('./components/SketchTextCard').then((module) => ({
+    default: module.SketchTextCard
+  }))
+);
 const LazyAssistantPanel = lazyWithStaleChunkNotice(() =>
   import('./components/assistant/AssistantPanel').then((module) => ({
     default: module.AssistantPanel
@@ -989,6 +1001,22 @@ function SketchEntityEditor(
   return (
     <Suspense fallback={null}>
       <LazySketchEntityEditor {...props} />
+    </Suspense>
+  );
+}
+
+function TweakPanel(props: ComponentProps<typeof LazyTweakPanel>) {
+  return (
+    <Suspense fallback={null}>
+      <LazyTweakPanel {...props} />
+    </Suspense>
+  );
+}
+
+function SketchTextCard(props: ComponentProps<typeof LazySketchTextCard>) {
+  return (
+    <Suspense fallback={null}>
+      <LazySketchTextCard {...props} />
     </Suspense>
   );
 }
@@ -11996,6 +12024,7 @@ export function App() {
       constraintDiagnosticObjectIds: sketchSolveDiagnosticObjectIds,
       textOutlineBudgetError,
       definedObjectIds: sketchDefinedObjectIds,
+      textDraft: composingTextDraft(interaction),
       dimensions: sketchDimensionAnnotations(
         objects,
         sketch?.constraints ?? [],
@@ -12016,6 +12045,9 @@ export function App() {
     textOutlineBudgetError,
     sketchDefinedObjectIds
   ]);
+
+  /** Where the text card's live outline sits; the viewport writes it. */
+  const sketchTextAnchorRef = useRef<{ x: number; y: number } | null>(null);
 
   const selectedSketchEntity = useMemo(() => {
     if (
@@ -12041,14 +12073,13 @@ export function App() {
       ...(sketchConstruction ? { construction: true } : {})
     };
     /**
-     * A placed text object says "Text" in a default face — useless until it is
-     * edited, and the editor is where every one of its parameters lives. So
-     * placing one selects it and hands over to Select, the way a drawing app
-     * drops you into the caret.
+     * A placed text object is selected and handed over to Select: the card
+     * composed it, and the entity editor is where its exact values live from
+     * here on, so the next thing the user can do is adjust what they placed.
      *
      * This has to run for the first object of a brand-new sketch as well as
-     * for later ones. Start a sketch, press T, click — that is the common
-     * path, and it is the one that goes through `addSketch`.
+     * for later ones. Start a sketch, press T, type, click — that is the
+     * common path, and it is the one that goes through `addSketch`.
      */
     const selectIfText = (sketchId: SketchId) => {
       if (committedObject.objectKind !== 'text') {
@@ -17975,29 +18006,51 @@ export function App() {
     (interaction.mode === 'sketch' ? interaction.session.plane : null);
   // The selected entity's editor rides in the sketch card, under the tools:
   // the card changes with the pick, and the right side stays the relations'.
-  const sketchEntityEditor =
-    interaction.mode === 'sketch' && selectedSketchEntity ? (
-      <SketchEntityEditor
-        key={`${selectedSketchEntity.id}:${doc.version}`}
-        disabled={sketchSolving || geometryBusy}
-        error={sketchEditError}
-        data={selectedSketchEntity.data}
-        scope={parameterScope.scope}
-        onApply={(data) => {
-          void handleUpdateSketchEntity(data);
-        }}
-        onDelete={handleDeleteSketchEntity}
-        constraints={selectedEntityConstraints}
-        onEditConstraint={handleEditSketchDimension}
-        onDeleteConstraint={handleDeleteSketchConstraint}
-        onClose={() =>
-          dispatchInteraction({
-            type: 'sketch-select-object',
-            objectId: null
-          })
-        }
-      />
-    ) : null;
+  const sketchTextDraft = composingTextDraft(interaction);
+  // The text tool's card takes the editor's slot while text is composed.
+  const sketchEntityEditor = sketchTextDraft ? (
+    <SketchTextCard
+      draft={sketchTextDraft}
+      scope={parameterScope.scope}
+      sketchObjects={sketchModeState?.objects ?? []}
+      documentBudgetError={textOutlineBudgetError}
+      anchorRef={sketchTextAnchorRef}
+      disabled={sketchSolving || geometryBusy}
+      onChange={(patch) =>
+        dispatchInteraction({ type: 'sketch-text-draft', patch })
+      }
+      onPlace={handleSketchCommit}
+      onFaceLoaded={() =>
+        // An empty patch is still a new draft: the outline lays out again
+        // now that the face it needs has been parsed.
+        dispatchInteraction({ type: 'sketch-text-draft', patch: {} })
+      }
+      onCancel={() =>
+        dispatchInteraction({ type: 'sketch-tool', tool: 'select' })
+      }
+    />
+  ) : interaction.mode === 'sketch' && selectedSketchEntity ? (
+    <SketchEntityEditor
+      key={`${selectedSketchEntity.id}:${doc.version}`}
+      disabled={sketchSolving || geometryBusy}
+      error={sketchEditError}
+      data={selectedSketchEntity.data}
+      scope={parameterScope.scope}
+      onApply={(data) => {
+        void handleUpdateSketchEntity(data);
+      }}
+      onDelete={handleDeleteSketchEntity}
+      constraints={selectedEntityConstraints}
+      onEditConstraint={handleEditSketchDimension}
+      onDeleteConstraint={handleDeleteSketchConstraint}
+      onClose={() =>
+        dispatchInteraction({
+          type: 'sketch-select-object',
+          objectId: null
+        })
+      }
+    />
+  ) : null;
   const armConstraintTool = (kind: SketchConstraintToolKind | null) => {
     dispatchInteraction({
       type: 'sketch-constraint-tool',
@@ -18686,6 +18739,7 @@ export function App() {
               });
             }}
             sketchMode={modelingLocked ? null : sketchModeState}
+            sketchTextAnchorRef={sketchTextAnchorRef}
             onSketchCommit={handleSketchCommit}
             onEditSketchDimension={handleEditSketchDimension}
             onMoveSketchDimension={handleMoveSketchDimension}

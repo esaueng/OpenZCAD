@@ -513,7 +513,7 @@ export function TextSketchForm({
       <TextObjectFields value={text} onChange={setText} />
       <div className="field-pair">
         <ExprInput
-          label="Size"
+          label="Size (em)"
           value={values.size ?? ''}
           scope={scope}
           onChange={setValue('size')}
