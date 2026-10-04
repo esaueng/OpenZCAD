@@ -186,6 +186,37 @@
   width: 100%;
 }
 
+/* Which plane cuts: chosen here, so the rail button only switches the cut
+   on and off. Three equal segments, the current one lit as the rail's own
+   active buttons are. */
+.rail-section-planes {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 2px;
+}
+
+/* Sized as the Standard views rows beside it: a 26px target at 12px. */
+.rail-section-plane {
+  min-height: 26px;
+  padding: 0 6px;
+  color: var(--color-text-muted);
+  border: 1px solid transparent;
+  border-radius: var(--radius-sm);
+  font-family: var(--font-mono);
+  font-size: var(--fs-sm);
+}
+
+.rail-section-plane:hover:not([aria-pressed='true']) {
+  color: var(--color-text);
+  background: var(--color-surface-2);
+}
+
+.rail-section-plane[aria-pressed='true'] {
+  color: var(--color-accent);
+  background: var(--color-accent-dim);
+  border-color: var(--color-accent-border);
+}
+
 /* The cut's own status line: which of the two section pipelines is on
    screen, and either its measured area or why there is no exact one. */
 .rail-section-state {

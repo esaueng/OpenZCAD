@@ -252,7 +252,7 @@ describe('renderSelectionCallout', () => {
       availability: READY
     });
 
-    it('is announced as the operation and shows its phase', () => {
+    it('is announced as the operation, its lit verb the only armed mark', () => {
       const element = document.createElement('div');
       renderSelectionCallout(
         element,
@@ -262,9 +262,11 @@ describe('renderSelectionCallout', () => {
       // The name the column-top chip had, so it is still one region.
       expect(element.getAttribute('role')).toBe('region');
       expect(element.getAttribute('aria-label')).toBe('Fillet operation');
-      expect(
-        element.querySelector('.selection-callout-phase')?.textContent
-      ).toBe('Ready');
+      // Armed is the resting state: no "Ready" pill repeats what the pressed
+      // verb already says.
+      expect(element.querySelector('.selection-callout-phase')).toBeNull();
+      expect(element.querySelector('.selection-callout-phase-dot')).toBeNull();
+      expect(element.textContent).not.toContain('Ready');
       // The Fillet/Chamfer switch is the chip's own pressed verbs.
       expect(
         [...element.querySelectorAll('.selection-callout-verb')].map((verb) => [

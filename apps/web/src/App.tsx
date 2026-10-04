@@ -218,6 +218,7 @@ import { watchBuildVersion } from './lib/buildVersionWatch';
 import { commandOutcomeMessage } from './lib/commandOutcome';
 import { presentedDiagnostics } from './lib/diagnosticsRows';
 import { primitiveDimensionLabel } from './lib/primitiveDimensionLabel';
+import { useRememberedSectionPlane } from './hooks/useRememberedSectionPlane';
 import { newBlendFacePick } from './lib/blendRearm';
 import { exactEntryShortcut, isTypingTarget } from './lib/exactEntryShortcut';
 import { DeferredExactEntry } from './lib/deferredExactEntry';
@@ -5626,10 +5627,17 @@ export function App() {
         : sketchOverlays,
     [appSettings.experiments.directManipulation, sketchOverlays]
   );
+  // The face-drag rig (its dashed span and "Height 24 mm" pill) belongs to
+  // the bare pick. A command card owns the next gesture, so opening one —
+  // Hole from the selection chip, say — takes the rig down with the handle
+  // `openTool` already disarms, rather than leaving it drawn beside the
+  // command's own preview.
   const viewerEditableBodyIds = useMemo(
     () =>
-      modelingLocked || movePreview ? EMPTY_BODY_IDS : directEditableBodyIds,
-    [modelingLocked, movePreview, directEditableBodyIds]
+      modelingLocked || movePreview || tool
+        ? EMPTY_BODY_IDS
+        : directEditableBodyIds,
+    [modelingLocked, movePreview, tool, directEditableBodyIds]
   );
   const viewerSelectedProfileIds = useMemo(
     () => selectedProfiles.map((profile) => profile.profileId),
@@ -7128,27 +7136,42 @@ export function App() {
     sectionBodyKey
   ]);
 
-  /** Off → XY → XZ → YZ → off, each plane starting at the model's centre. */
-  function cycleSectionView() {
-    const order: (SectionPlaneId | null)[] = [null, 'XY', 'XZ', 'YZ'];
-    const currentPlane = viewerSettings.sectionView?.plane ?? null;
-    const next = order[(order.indexOf(currentPlane) + 1) % order.length]!;
-    if (!next) {
+  // Follows the live section too, so a project's restored cut comes back on
+  // its own plane after being switched off and on.
+  const rememberedSectionPlane = useRememberedSectionPlane(
+    viewerSettings.sectionView
+  );
+
+  /**
+   * Switches the section view on or off. The rail button and the palette
+   * both toggle: cycling through every plane to reach "off" took up to three
+   * clicks. The plane is chosen inside the section panel (`setSectionPlane`),
+   * and switching back on returns to the plane last used.
+   */
+  function toggleSectionView() {
+    if (viewerSettings.sectionView) {
       setViewerSettings(({ sectionView: _cleared, ...rest }) => rest);
       clearSectionOutline();
       setStatus('Section view off.');
       return;
     }
-    const range = sectionAxisRange(next);
+    setSectionPlane(rememberedSectionPlane.current);
+  }
+
+  /** Cuts on `plane`, starting at the model's centre along its axis. */
+  function setSectionPlane(plane: SectionPlaneId) {
+    const range = sectionAxisRange(plane);
     const offset = range ? (range.min + range.max) / 2 : 0;
+    // The previous plane's exact section describes a cut that is gone.
+    clearSectionOutline();
     setViewerSettings((current) => ({
       ...current,
-      sectionView: { plane: next, offset }
+      sectionView: { plane, offset }
     }));
-    setStatus(
-      `Section view: ${next} plane. It cuts the display only; drag the slider to move the cut, and the model itself is untouched.`
-    );
-    void requestExactSection({ plane: next, offset });
+    // The panel beside the rail carries the slider and the tooltip says the
+    // cut is display-only; the lane line only names the plane.
+    setStatus(`Section view: ${plane} plane · the model is untouched.`);
+    void requestExactSection({ plane, offset });
   }
 
   function setSectionOffset(offset: number) {
@@ -17394,13 +17417,13 @@ export function App() {
       // nothing, so the only way in was an unlabelled dock icon.
       id: 'view-section',
       label: viewerSettings.sectionView
-        ? `Section view: next plane (now ${viewerSettings.sectionView.plane})`
+        ? `Section view: off (now ${viewerSettings.sectionView.plane})`
         : 'Section view: on',
       group: 'View',
       keywords: ['section', 'cut', 'clip', 'plane'],
       icon: <Slice size={16} aria-hidden="true" />,
       disabledReason: viewerBodies.length === 0 ? 'Create a body first' : null,
-      run: cycleSectionView
+      run: toggleSectionView
     },
     {
       id: 'edit-undo',
@@ -18975,7 +18998,8 @@ export function App() {
                 ? sectionAxisRange(viewerSettings.sectionView.plane)
                 : null
             }
-            onCycleSection={cycleSectionView}
+            onToggleSection={toggleSectionView}
+            onSectionPlane={setSectionPlane}
             onSectionOffset={setSectionOffset}
             // The slider was released, or a key repeat ended: cut it exactly.
             onSectionCommit={() =>

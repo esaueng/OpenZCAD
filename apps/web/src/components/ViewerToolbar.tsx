@@ -65,8 +65,10 @@ interface ViewerToolbarProps {
   onView(view: StandardView): void;
   onCycleDisplayMode(): void;
   onToggleProjection(): void;
-  /** Advances the section view: off → XY → XZ → YZ → off. */
-  onCycleSection(): void;
+  /** Switches the section view on (at the last plane used) or off. */
+  onToggleSection(): void;
+  /** Cuts on another plane; chosen inside the section panel. */
+  onSectionPlane(plane: SectionPlaneId): void;
   onSectionOffset(offset: number): void;
   /** The section plane came to rest; the exact section can be computed. */
   onSectionCommit(): void;
@@ -96,6 +98,8 @@ const SECTION_PLANE_LABELS: Record<SectionPlaneId, string> = {
   YZ: 'YZ plane'
 };
 
+const SECTION_PLANES: readonly SectionPlaneId[] = ['XY', 'XZ', 'YZ'];
+
 /**
  * Right-hand utility rail, centred against the viewport edge: fit, grid,
  * projection, and display mode as icons, with the standard views behind a
@@ -118,7 +122,8 @@ export function ViewerToolbar({
   onView,
   onCycleDisplayMode,
   onToggleProjection,
-  onCycleSection,
+  onToggleSection,
+  onSectionPlane,
   onSectionOffset,
   onSectionCommit,
   onExportSectionDxf,
@@ -128,6 +133,24 @@ export function ViewerToolbar({
   const [viewsOpen, setViewsOpen] = useState(false);
   const anchorRef = useRef<HTMLDivElement | null>(null);
   const triggerRef = useRef<HTMLButtonElement | null>(null);
+  const sectionAnchorRef = useRef<HTMLDivElement | null>(null);
+  const sectionTriggerRef = useRef<HTMLButtonElement | null>(null);
+  // The cut and its panel are two things: the cut stays on while the panel
+  // is put away (Escape, or the views flyout taking its place), so a look
+  // from a standard view can still be a sectioned one. The panel opens
+  // whenever the cut is switched on, from the rail or the palette alike.
+  const sectionOn = settings.sectionView !== undefined;
+  const [sectionPanelOpen, setSectionPanelOpen] = useState(sectionOn);
+  const [sectionWasOn, setSectionWasOn] = useState(sectionOn);
+  if (sectionWasOn !== sectionOn) {
+    setSectionWasOn(sectionOn);
+    setSectionPanelOpen(sectionOn);
+    // One rail popover at a time: they open into the same space.
+    if (sectionOn) {
+      setViewsOpen(false);
+    }
+  }
+  const sectionPanelShown = sectionPanelOpen && sectionOn;
   const panelId = useId();
   const displayModeLabel = DISPLAY_MODE_LABELS[settings.displayMode];
   const sectionLabel = settings.sectionView
@@ -165,9 +188,73 @@ export function ViewerToolbar({
     };
   }, [viewsOpen]);
 
+  // Escape puts the section panel away while it is what the user is working
+  // in — the keyboard is on its button, plane choice or slider, or the last
+  // press landed there and nothing else has taken the focus since — and
+  // hands focus back to the button. Anywhere else Escape keeps its workspace
+  // meaning (cancel the command, clear the pick): the panel stays up for as
+  // long as the cut is on, and claiming every Escape would cost a press each
+  // time. The press is tracked as well as the focus because Safari does not
+  // focus a clicked button.
+  const sectionEngagedRef = useRef(false);
+  useEffect(() => {
+    function onPointerDown(event: PointerEvent) {
+      sectionEngagedRef.current = Boolean(
+        sectionAnchorRef.current?.contains(event.target as Node)
+      );
+    }
+    window.addEventListener('pointerdown', onPointerDown, true);
+    return () => window.removeEventListener('pointerdown', onPointerDown, true);
+  }, []);
+  useEffect(() => {
+    if (!sectionPanelShown) {
+      return;
+    }
+    function onKeyDown(event: KeyboardEvent) {
+      if (event.key !== 'Escape') {
+        return;
+      }
+      const focused = document.activeElement;
+      const inPanel = Boolean(sectionAnchorRef.current?.contains(focused));
+      const unfocused = !focused || focused === document.body;
+      if (!inPanel && !(sectionEngagedRef.current && unfocused)) {
+        return;
+      }
+      event.stopPropagation();
+      event.preventDefault();
+      setSectionPanelOpen(false);
+      sectionTriggerRef.current?.focus();
+    }
+    window.addEventListener('keydown', onKeyDown, true);
+    return () => window.removeEventListener('keydown', onKeyDown, true);
+  }, [sectionPanelShown]);
+
   function selectView(view: StandardView) {
     onView(view);
     setViewsOpen(false);
+  }
+
+  function toggleViews() {
+    const next = !viewsOpen;
+    setViewsOpen(next);
+    if (next) {
+      setSectionPanelOpen(false);
+    }
+  }
+
+  /**
+   * On and off, one click each. A cut whose panel was put away comes back
+   * to the panel first, so its plane and slider are never out of reach.
+   */
+  function pressSection(button: HTMLButtonElement) {
+    // Safari does not focus a clicked button; Escape reads the focus.
+    button.focus();
+    if (sectionOn && !sectionPanelOpen) {
+      setSectionPanelOpen(true);
+      setViewsOpen(false);
+      return;
+    }
+    onToggleSection();
   }
 
   return (
@@ -256,28 +343,54 @@ export function ViewerToolbar({
           <Camera size={15} aria-hidden="true" />
         </button>
       </Tooltip>
-      <div className="rail-views-anchor">
+      <div className="rail-views-anchor" ref={sectionAnchorRef}>
         <Tooltip
           label="Section view"
-          description={`Cuts the display only; the model is untouched. Now: ${sectionLabel}. Release the slider to trace the true cut.`}
+          description={`Cuts the display only; the model is untouched. Now: ${sectionLabel}. Choose the plane in its panel.`}
         >
           <button
             type="button"
+            ref={sectionTriggerRef}
             className={`rail-button ${settings.sectionView ? 'active' : ''}`}
-            onClick={onCycleSection}
+            onClick={(event) => pressSection(event.currentTarget)}
             aria-label={`Section view — now: ${sectionLabel}`}
-            aria-pressed={settings.sectionView !== undefined}
+            aria-pressed={sectionOn}
           >
             <Slice size={15} aria-hidden="true" />
           </button>
         </Tooltip>
-        {settings.sectionView && sectionRange && (
+        {settings.sectionView && sectionRange && sectionPanelShown && (
           <div
             className="rail-section-panel"
             data-rail-flyout=""
             role="group"
             aria-label="Section plane offset"
           >
+            <div
+              className="rail-section-planes"
+              role="group"
+              aria-label="Section plane"
+            >
+              {SECTION_PLANES.map((plane) => {
+                const current = settings.sectionView?.plane === plane;
+                return (
+                  <button
+                    key={plane}
+                    type="button"
+                    className="rail-section-plane"
+                    aria-label={SECTION_PLANE_LABELS[plane]}
+                    aria-pressed={current}
+                    onClick={() => {
+                      if (!current) {
+                        onSectionPlane(plane);
+                      }
+                    }}
+                  >
+                    {plane}
+                  </button>
+                );
+              })}
+            </div>
             <input
               type="range"
               className="rail-section-slider"
@@ -345,7 +458,7 @@ export function ViewerToolbar({
             type="button"
             ref={triggerRef}
             className={`rail-button ${viewsOpen ? 'open' : ''}`}
-            onClick={() => setViewsOpen((open) => !open)}
+            onClick={toggleViews}
             aria-label="Standard views"
             aria-haspopup="true"
             aria-expanded={viewsOpen}
