@@ -6,6 +6,7 @@ import type {
 } from '@openzcad/shared';
 import type { GeometryWorkerApi } from '../hooks/useGeometryWorker';
 import type { MeasurementViewportAnnotation } from './measurements';
+import { formatMeasuredQuantity } from './model';
 import type {
   ExactSectionRegionDisplay,
   SectionViewSettings
@@ -402,7 +403,7 @@ export function describeSectionOutline(
     return {
       kind: 'exact',
       detail: [
-        `${outline.area.toFixed(2)} ${units}² of material`,
+        `${formatMeasuredQuantity(outline.area)} ${units}² of material`,
         ...notes
       ].join(', ')
     };

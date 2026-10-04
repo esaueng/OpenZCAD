@@ -4,6 +4,7 @@ import { useEffect, useRef, useState, type MutableRefObject } from 'react';
 import { axisDimensionLabel } from '../lib/primitiveDimensionLabel';
 import * as THREE from 'three';
 import type { HoleGhost } from '../lib/holeGhost';
+import { buildHoleGhostRig } from './viewer/holeGhostRig';
 import {
   bodiesReachingNewSpace,
   type AutoFrameRequest
@@ -9712,67 +9713,21 @@ export function ModelViewer({
     };
   }, [planePickerArmed]);
 
-  // The open Hole card's bore, drawn through the body: a translucent
-  // cylinder with its entry and exit rims, over everything so a hole buried
-  // in the part (or missing it) is still seen. Rebuilt per value change; the
-  // viewport renders on demand, so each change asks for its frame.
+  // The open Hole card's bore (viewer/holeGhostRig): an opening on the entry
+  // face and a barrel that is a faint ghost inside the body, so it reads as a
+  // cut rather than a post. Rebuilt per value change; the viewport renders on
+  // demand, so each change asks for its frame.
   useEffect(() => {
     const context = contextRef.current;
     if (!context || !holeGhost) {
       return;
     }
-    const group = new THREE.Group();
-    group.name = 'hole-ghost';
-    const { entry, axis, radius, depth } = holeGhost;
-    const direction = new THREE.Vector3(axis.x, axis.y, axis.z).normalize();
-    const body = new THREE.CylinderGeometry(radius, radius, depth, 40, 1, true);
-    const fill = new THREE.MeshBasicMaterial({
-      color: SKETCH_COLOR,
-      transparent: true,
-      opacity: 0.28,
-      side: THREE.DoubleSide,
-      depthTest: false,
-      depthWrite: false
-    });
-    const barrel = new THREE.Mesh(body, fill);
-    barrel.quaternion.setFromUnitVectors(new THREE.Vector3(0, 1, 0), direction);
-    barrel.position
-      .set(entry.x, entry.y, entry.z)
-      .addScaledVector(direction, depth / 2);
-    barrel.renderOrder = 20;
-    group.add(barrel);
-    const rimGeometry = new THREE.BufferGeometry().setFromPoints(
-      Array.from({ length: 64 }, (_, index) => {
-        const angle = (index / 64) * Math.PI * 2;
-        return new THREE.Vector3(
-          Math.cos(angle) * radius,
-          0,
-          Math.sin(angle) * radius
-        );
-      })
-    );
-    const rimMaterial = new THREE.LineBasicMaterial({
-      color: SKETCH_COLOR,
-      depthTest: false,
-      transparent: true
-    });
-    for (const along of [0, depth]) {
-      const rim = new THREE.LineLoop(rimGeometry, rimMaterial);
-      rim.quaternion.copy(barrel.quaternion);
-      rim.position
-        .set(entry.x, entry.y, entry.z)
-        .addScaledVector(direction, along);
-      rim.renderOrder = 21;
-      group.add(rim);
-    }
-    context.scene.add(group);
+    const rig = buildHoleGhostRig(holeGhost, SKETCH_COLOR);
+    context.scene.add(rig.group);
     context.requestRender();
     return () => {
-      context.scene.remove(group);
-      body.dispose();
-      fill.dispose();
-      rimGeometry.dispose();
-      rimMaterial.dispose();
+      context.scene.remove(rig.group);
+      rig.dispose();
       context.requestRender();
     };
   }, [holeGhost]);

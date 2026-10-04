@@ -78,7 +78,7 @@ const report = (
   }) as unknown as Parameters<typeof sectionOutlineFromReport>[0];
 
 describe('the exact section asks about the bodies on screen', () => {
-  it('sends the caller\'s visible body list to the kernel', async () => {
+  it("sends the caller's visible body list to the kernel", async () => {
     const sectionOutline = vi.fn(async () => report([region('body_a', 540)]));
     const visible: BodyId[] = [toBodyId('body_a')];
 
@@ -159,8 +159,14 @@ describe('the exact section asks about the bodies on screen', () => {
     expect(exportModel).toHaveBeenCalledWith('dxf', document, visible, {
       section: { origin: [0, 0, 3], normal: [0, 0, 1] }
     });
-    expect(save).toHaveBeenCalledWith('part-section.dxf', 'dxf', '0\r\nEOF\r\n');
-    expect(announced.at(-1)).toBe('Exported the XY section to part-section.dxf.');
+    expect(save).toHaveBeenCalledWith(
+      'part-section.dxf',
+      'dxf',
+      '0\r\nEOF\r\n'
+    );
+    expect(announced.at(-1)).toBe(
+      'Exported the XY section to part-section.dxf.'
+    );
   });
 
   it('writes nothing for a section the exporter would refuse', async () => {
@@ -313,7 +319,10 @@ describe('a section is of the drawing, not of the document behind it', () => {
     // area exact. Not shown at all — back to the clipped preview.
     const bodies = [toBodyId('body_a')];
     expect(
-      sectionOutlineFor(onScreen(document, bodies, parameterPreview), exportable)
+      sectionOutlineFor(
+        onScreen(document, bodies, parameterPreview),
+        exportable
+      )
     ).toEqual({ kind: 'clipping' });
     expect(
       sectionOutlineFor(
@@ -468,7 +477,7 @@ describe('what the section rail may offer to export', () => {
     expect(state).toMatchObject({ kind: 'exact', missed: 1, unsectioned: 1 });
   });
 
-  it('counts bodies, not the kernel\'s per-solid outcomes', () => {
+  it("counts bodies, not the kernel's per-solid outcomes", () => {
     // One imported body holding two solids, the plane through one of them.
     // The kernel answers per solid, so the same body appears as a region
     // AND as a refusal. Counting refusals told the user "1 body is not cut
@@ -488,7 +497,7 @@ describe('what the section rail may offer to export', () => {
     expect(state).toMatchObject({ kind: 'exact', missed: 0, unsectioned: 0 });
     expect(sectionOutlineExportable(state)).toBe(true);
     expect(describeSectionOutline(state, 'mm').detail).toBe(
-      '100.00 mm² of material'
+      '100 mm² of material'
     );
   });
 
@@ -520,7 +529,8 @@ describe('what the section rail may offer to export', () => {
           {
             bodyId: 'body_preview_only',
             reason: 'unknown-body',
-            message: 'Body body_preview_only has no exact geometry in this model.'
+            message:
+              'Body body_preview_only has no exact geometry in this model.'
           }
         ]
       )
@@ -535,7 +545,7 @@ describe('what the section rail may offer to export', () => {
     );
     expect(sectionOutlineExportable(state)).toBe(true);
     expect(describeSectionOutline(state, 'mm').detail).toBe(
-      '540.00 mm² of material, 1 body is not cut here'
+      '540 mm² of material, 1 body is not cut here'
     );
   });
 
@@ -548,7 +558,7 @@ describe('what the section rail may offer to export', () => {
     );
     expect(sectionOutlineExportable(state)).toBe(false);
     expect(describeSectionOutline(state, 'mm').detail).toBe(
-      '540.00 mm² of material, 1 body has no exact section, so there is no drawing to export'
+      '540 mm² of material, 1 body has no exact section, so there is no drawing to export'
     );
   });
 

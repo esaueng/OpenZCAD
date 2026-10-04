@@ -296,19 +296,34 @@
 }
 
 .move-axis {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
   font-family: var(--font-mono);
   font-size: var(--fs-mini);
   color: var(--color-text-subtle);
 }
 
+/* The axis colour ties a field to its gizmo arrow, so it stays — as a swatch
+   beside the label. Coloured label text made Move the one card whose field
+   labels were not the card's text colour. */
+.move-axis::before {
+  content: '';
+  width: 6px;
+  height: 6px;
+  flex: none;
+  border-radius: 50%;
+  background: var(--move-axis-color, currentColor);
+}
+
 .move-axis-x {
-  color: var(--color-handle-x);
+  --move-axis-color: var(--color-handle-x);
 }
 
 .move-axis-y {
-  color: var(--color-handle-y);
+  --move-axis-color: var(--color-handle-y);
 }
 
 .move-axis-z {
-  color: var(--color-handle-z);
+  --move-axis-color: var(--color-handle-z);
 }

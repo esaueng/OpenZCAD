@@ -292,6 +292,7 @@ import {
   downloadText,
   evalParamValue,
   exportFileStem,
+  formatMeasuredQuantity,
   formatNumber,
   inferContentType
 } from './lib/model';
@@ -465,7 +466,10 @@ import {
   resolveImportedBlendFace
 } from './lib/interaction/filletFaceEdit';
 import { ToastHost } from './components/Toast';
-import { commandPaletteShortcut } from './lib/platformShortcut';
+import {
+  commandPaletteShortcut,
+  idleWorkspaceHint
+} from './lib/platformShortcut';
 import { retireStatus, type StatusEntry } from './lib/statusLifetime';
 import { NumericKeypad, type KeypadRequest } from './components/NumericKeypad';
 import type { DimensionMode } from './lib/keypad';
@@ -524,6 +528,7 @@ import {
   type LabelSegment
 } from './lib/topologyLabels';
 import type { FeatureSelectionSource } from './lib/inspectorHeading';
+import { CARD_EYEBROWS } from './lib/cardEyebrows';
 import type {
   CommandDiagnostic,
   InteractionState
@@ -1214,6 +1219,7 @@ import {
   loadSettingsViewState,
   updateSettingsViewState
 } from './lib/settingsViewState';
+import type { SettingsSectionId } from './lib/settingsSections';
 import {
   clampAssistantWidth,
   clampSidebarWidth,
@@ -1313,6 +1319,9 @@ const BEFORE_RESTORE_REASON = 'Before restore';
  * one is its own gesture (Ctrl+Shift+S).
  */
 const DEFAULT_SAVE_REASON = 'Manual save';
+/** The lane's one notice for a tab that opened a project another tab owns. */
+const PROJECT_OPEN_ELSEWHERE_NOTICE =
+  'Editing is locked: this project is open in another tab.';
 /** Said once per session after a selection box that caught nothing. */
 const EMPTY_BOX_SELECT_HINT =
   'Nothing in the box. A plain drag selects bodies — Shift+drag orbits, right-drag pans.';
@@ -2061,10 +2070,14 @@ export function App() {
    * that describes a mode the user is still in, such as sketching on a plane.
    */
   const setStatus = useCallback(
-    (text: string, options?: { sticky?: boolean; detail?: string }) => {
+    (
+      text: string,
+      options?: { sticky?: boolean; detail?: string; unlogged?: boolean }
+    ) => {
       setStatusEntry({
         text,
         ...(options?.detail ? { detail: options.detail } : {}),
+        ...(options?.unlogged ? { unlogged: true } : {}),
         at: Date.now(),
         sticky: options?.sticky ?? false
       });
@@ -2382,7 +2395,8 @@ export function App() {
     {
       thinking: false,
       unread: 0,
-      context: null
+      context: null,
+      unavailable: false
     }
   );
   const [shortcutsOpen, setShortcutsOpen] = useState(false);
@@ -4160,6 +4174,7 @@ export function App() {
         return;
       }
       setProjectOpenElsewhere(false);
+      setStatus('This tab can edit the project now.');
       void adoptStoredProject(projectId);
     }).then((result) => {
       if (cancelled) {
@@ -4172,6 +4187,10 @@ export function App() {
         // The project is on this device — the other tab is keeping it that
         // way. Nothing here is unsaved, and nothing here may be saved.
         setSaveState('local');
+        // Said once, where the eye goes: the rail dims as a whole, and the
+        // reason used to live only in each button's tooltip. Sticky, since
+        // it describes a state the tab stays in until the other tab closes.
+        setStatus(PROJECT_OPEN_ELSEWHERE_NOTICE, { sticky: true });
       }
     });
     projectOwnershipSettledRef.current = settled;
@@ -4180,7 +4199,7 @@ export function App() {
       projectOwnershipSettledRef.current = null;
       claim?.release();
     };
-  }, [doc?.projectId, shareSession]);
+  }, [doc?.projectId, shareSession, setStatus]);
 
   useEffect(() => {
     // An armed face re-pick names a feature by id; a different project's
@@ -5462,7 +5481,7 @@ export function App() {
           cylinderDiameter !== undefined
             ? `Ø ${round(cylinderDiameter)} ${units}`
             : geometry?.area !== undefined
-              ? `${round(geometry.area)} ${units}²`
+              ? `${formatMeasuredQuantity(geometry.area)} ${units}²`
               : undefined
       };
     }
@@ -6776,16 +6795,19 @@ export function App() {
       setKeypad(null);
       dispatchInteraction({ type: 'clear' });
       closeFeaturePanel();
+      // The lane says where the user now is; the activity log is for what
+      // happened to the model, and a mode switch is neither.
       setStatus(
         mode === 'view'
           ? 'View mode · the model is read-only here.'
-          : 'Tweak mode · adjust parameters; the design stays locked.'
+          : 'Tweak mode · adjust parameters; the design stays locked.',
+        { unlogged: true }
       );
     } else {
       // The tape survives the trip — leaving to make an edit and coming back
       // should not cost the figures you just took — but recording stops.
       setMeasuring(false);
-      setStatus('Build mode · modeling tools are back.');
+      setStatus('Build mode · modeling tools are back.', { unlogged: true });
     }
     setWorkspaceMode(mode);
   }
@@ -7507,7 +7529,16 @@ export function App() {
   }
 
   function openSettings() {
-    updateSettingsViewState({ open: true });
+    openSettingsAt(null);
+  }
+
+  /** Settings at one section, fresh: a task flow, not a return visit. */
+  function openSettingsAt(section: SettingsSectionId | null) {
+    updateSettingsViewState(
+      section
+        ? { open: true, activeSection: section, query: '', scrollTop: 0 }
+        : { open: true }
+    );
     setSettingsOpen(true);
     setPaletteOpen(false);
     if (!cloudFunctionsEnabledRef.current) {
@@ -17168,6 +17199,19 @@ export function App() {
               ? 'showing the previous result until it finishes'
               : 'the model appears when it is ready'
         };
+  // The activity log's line for the same state: one plain entry per rebuild.
+  // Each stage the worker reports ("Measuring: Box 1: Display mesh and face
+  // topology (2/2)") was an entry of its own, so the log read as a build log.
+  // The lane keeps the stage detail while it is up; a failure keeps its cause.
+  const geometryLogLine =
+    geometryStatus === null
+      ? null
+      : geometry.state.phase === 'failed'
+        ? geometryStatus.phase
+        : geometry.state.phase === 'starting' ||
+            geometry.state.phase === 'loading-remus'
+          ? 'Loading the geometry kernel…'
+          : 'Rebuilding the model…';
   const visibleStatus = textOutlineBudgetError
     ? `Text outlines refused: ${textOutlineBudgetError}`
     : parameterPreview
@@ -17670,6 +17714,7 @@ export function App() {
   // View mode writes its own hints rather than filtering the build chain below.
   // Selecting a cylinder still arms the radius interaction even with its handle
   // disarmed, and "drag the radial handle" is a promise View mode cannot keep.
+  const idleHint = idleWorkspaceHint();
   const viewModeHint = measuring
     ? measurementDraft
       ? `${measurementDraft.label} selected · pick the second target · Esc cancels`
@@ -17682,7 +17727,7 @@ export function App() {
       ? 'Face selected — Space faces it head-on'
       : viewerBodies.length > 0
         ? 'Click a body, face, or edge · Measure records what you pick'
-        : 'Ctrl+K commands · ? shortcuts';
+        : idleHint;
   const tweakModeHint = measuring
     ? viewModeHint
     : parameters.length > 0
@@ -17719,7 +17764,7 @@ export function App() {
                         ? 'Edit in the panel · Del deletes · Esc closes'
                         : viewerBodies.length > 0
                           ? 'Click a body, face, or edge · Shift+Click adds to selection'
-                          : 'Ctrl+K commands · ? shortcuts'));
+                          : idleHint));
   const inspectorActive =
     !modelingLocked &&
     !directMode &&
@@ -18502,6 +18547,7 @@ export function App() {
           }
           onGoHome={() => void handleGoHome()}
           onOpenSharing={() => setSharingOpen(true)}
+          onSignIn={() => openSettingsAt('account')}
           onOpenSettings={openSettings}
         />
       }
@@ -19311,8 +19357,8 @@ export function App() {
                     </h2>
                     <span className="panel-eyebrow">
                       {modelingEditFeature
-                        ? TOOL_META[modelingOperation].label
-                        : 'New feature'}
+                        ? CARD_EYEBROWS.edit
+                        : CARD_EYEBROWS.create}
                     </span>
                     {modelingEditFeature ? (
                       // The same overflow every Inspector edit card has: now
@@ -19760,6 +19806,7 @@ export function App() {
           <ErrorBoundary label="Assistant">
             <AssistantPanel
               effectiveAssistant={accountSettings?.effectiveAssistant}
+              signedIn={Boolean(session)}
               document={doc}
               selection={assistantSelection}
               onApply={handleApplyPatch}
@@ -19833,6 +19880,7 @@ export function App() {
                     : undefined
                 }
                 searchKey={commandPaletteKey}
+                askUnavailable={assistantActivity.unavailable}
                 busy={assistantAvailable && assistantActivity.thinking}
                 unread={
                   assistantAvailable &&
@@ -19851,10 +19899,8 @@ export function App() {
             {...(visibleStatus === status && statusEntry.detail
               ? { detail: statusEntry.detail }
               : {})}
-            geometryStatus={
-              geometryStatus &&
-              `${geometryStatus.phase} · ${geometryStatus.projection}`
-            }
+            logged={!(visibleStatus === status && statusEntry.unlogged)}
+            geometryStatus={geometryLogLine}
             tone={tone}
             triggerRef={activityLogTriggerRef}
             onClose={(restoreFocus) => {

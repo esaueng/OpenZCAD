@@ -74,6 +74,7 @@ import {
   type AssistantPromptFilesDetail,
   type AssistantPromptKeyDetail
 } from '../../lib/assistant/promptKeys';
+import { unconfiguredAssistantMessage } from '../../lib/assistant/unconfigured';
 import { QuestionCard } from './QuestionCard';
 import { ProposalCard } from './ProposalCard';
 import { RichText } from './RichText';
@@ -89,12 +90,19 @@ export interface AssistantActivity {
   unread: number;
   /** What an ask can see, for the prompt's placeholder: "12 selected edges". */
   context: string | null;
+  /**
+   * No model provider answers: the deployment has none configured or its
+   * status could not be read. The prompt line stops offering to ask.
+   */
+  unavailable: boolean;
 }
 
 interface AssistantPanelProps {
   document: ProjectDocument;
   /** Server-confirmed settings, refreshed after account saves and credential changes. */
   effectiveAssistant?: AssistantStatus;
+  /** Decides what an unconfigured assistant tells the user to do about it. */
+  signedIn?: boolean;
   selection: CadSelectionContext;
   onAnalyze?(
     document: ProjectDocument,
@@ -250,6 +258,7 @@ function Turn({
 export function AssistantPanel({
   document: sourceDoc,
   effectiveAssistant,
+  signedIn = false,
   selection,
   onApply,
   onPreview,
@@ -341,6 +350,16 @@ export function AssistantPanel({
   );
   const thinking = conversation.status === 'thinking';
   const configured = status?.configured ?? false;
+  const unavailable = status ? !status.configured : statusError !== null;
+  // Worded at render: signing in changes what the user can do about it.
+  const statusNotice =
+    status && !status.configured
+      ? unconfiguredAssistantMessage({
+          provider: status.provider,
+          signedIn,
+          dev: import.meta.env.DEV
+        })
+      : statusError;
   const entries = conversation.entries;
   const autoParameterizeProposal =
     autoParameterizeResult?.document === doc &&
@@ -440,8 +459,13 @@ export function AssistantPanel({
   useEffect(() => () => abortRef.current?.abort(), []);
 
   useEffect(() => {
-    onActivity?.({ thinking, unread, context: selectionSummary });
-  }, [onActivity, thinking, unread, selectionSummary]);
+    onActivity?.({
+      thinking,
+      unread,
+      context: selectionSummary,
+      unavailable
+    });
+  }, [onActivity, thinking, unread, selectionSummary, unavailable]);
 
   useEffect(() => {
     if (collapsed) {
@@ -484,13 +508,6 @@ export function AssistantPanel({
       .then((next) => {
         if (controller.signal.aborted) return;
         setStatus(next);
-        setStatusError(
-          next.configured
-            ? null
-            : next.provider === 'openrouter'
-              ? 'Set OPENROUTER_API_KEY in your shell or apps/web/.dev.vars (or as a beta Worker secret), then restart the app.'
-              : 'Add AI_API_KEY to apps/web/.dev.vars (or a beta Worker secret), then restart the app.'
-        );
       })
       .catch((error: unknown) => {
         if (!controller.signal.aborted) {
@@ -1314,9 +1331,9 @@ export function AssistantPanel({
             {notice}
           </p>
         )}
-        {!configured && statusError && (
+        {!configured && statusNotice && (
           <p className="assistant-notice" role="status">
-            {statusError}
+            {statusNotice}
           </p>
         )}
         {pending.length > 0 && (

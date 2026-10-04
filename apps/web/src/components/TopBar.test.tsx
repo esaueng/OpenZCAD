@@ -14,7 +14,8 @@ function renderTopBar(
   const handlers = {
     onSave: vi.fn(),
     onSaveAs: vi.fn(),
-    onOpenSharing: vi.fn()
+    onOpenSharing: vi.fn(),
+    onSignIn: vi.fn()
   };
   render(
     <TopBar
@@ -92,17 +93,18 @@ describe('TopBar save chip', () => {
 });
 
 describe('TopBar sharing chip', () => {
-  it('says to sign in, and opens nothing, when signed out', () => {
-    const { onOpenSharing } = renderTopBar();
+  it('says to sign in, and goes to sign-in, when signed out', () => {
+    const { onOpenSharing, onSignIn } = renderTopBar();
     const chip = screen.getByRole('button', {
       name: 'Project sharing · Sign in to share'
     });
-    expect(chip).toHaveAttribute('aria-disabled', 'true');
     expect(chip).toHaveAttribute('title', 'Sign in to share');
-    // Focusable, so the reason is reachable from the keyboard.
+    // A live control now, not an aria-disabled one that did nothing.
+    expect(chip).not.toHaveAttribute('aria-disabled');
     expect(chip).not.toBeDisabled();
     fireEvent.click(chip);
     expect(onOpenSharing).not.toHaveBeenCalled();
+    expect(onSignIn).toHaveBeenCalledOnce();
   });
 
   it('opens sharing when signed in', () => {
