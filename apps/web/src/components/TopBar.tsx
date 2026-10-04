@@ -336,8 +336,12 @@ export function TopBar({
     canExport
       ? `Export ${exportScope ?? 'all bodies'} as ${format}`
       : 'Create a body before exporting';
-  const collaborationLabel =
-    collaborationStatus === 'live'
+  // A project that is not in the account has no room to join, so its room
+  // status is `offline` — which, beside "Save to my account", read as a
+  // connection problem rather than the plain fact that nothing is shared yet.
+  const collaborationLabel = saveToAccount
+    ? COLLABORATION_LABELS.rejected
+    : collaborationStatus === 'live'
       ? `${collaboratorCount} live`
       : COLLABORATION_LABELS[collaborationStatus];
   const accountLabel =
