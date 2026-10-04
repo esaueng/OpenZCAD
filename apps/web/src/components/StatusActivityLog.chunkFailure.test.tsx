@@ -36,9 +36,19 @@ afterEach(() => {
   vi.restoreAllMocks();
 });
 
+/** Portalled to the page, in the panel's overlay frame, outside the stage. */
+function expectOverlay(element: HTMLElement) {
+  const frame = element.closest('.status-log-panel');
+  expect(frame).not.toBeNull();
+  expect(frame!.parentElement).toBe(document.body);
+  expect(element.closest('.viewer-area')).toBeNull();
+}
+
 function logAt(open: boolean, onClose = vi.fn()) {
   return (
-    <main>
+    // The stage the log is mounted in: a flex container whose viewer takes
+    // the remaining space, so nothing the log draws may land in it.
+    <main className="viewer-area">
       <p>Workspace</p>
       <StatusActivityLog
         id="test-activity-log"
@@ -62,7 +72,7 @@ describe('StatusActivityLog while its panel loads', () => {
     window.addEventListener('keydown', workspaceEscape);
     try {
       render(logAt(true, onClose));
-      expect(screen.queryByRole('region', { name: 'Activity log' })).toBeNull();
+      expectOverlay(screen.getByRole('region', { name: 'Activity log' }));
       fireEvent.keyDown(document.body, { key: 'Escape' });
       expect(onClose).toHaveBeenCalledWith(true);
       expect(workspaceEscape).not.toHaveBeenCalled();
@@ -75,7 +85,12 @@ describe('StatusActivityLog while its panel loads', () => {
     load.next = 'pending';
     const onClose = vi.fn();
     render(logAt(true, onClose));
-    expect(screen.queryByRole('region', { name: 'Activity log' })).toBeNull();
+    const loading = screen.getByRole('region', { name: 'Activity log' });
+    expect(loading).toHaveTextContent('Loading…');
+    expect(loading).toHaveAttribute('aria-busy', 'true');
+    // A press on the loading frame is inside the log.
+    fireEvent.pointerDown(loading);
+    expect(onClose).not.toHaveBeenCalled();
     // Otherwise the click acts on the workspace and the log, still open,
     // pops up over that action once the chunk lands.
     fireEvent.pointerDown(screen.getByText('Workspace'));
@@ -89,7 +104,10 @@ describe('StatusActivityLog while its panel loads', () => {
     const { rerender } = render(logAt(true, onClose));
 
     const alert = await screen.findByRole('alert');
-    expect(alert).toHaveTextContent('Activity log could not be rendered.');
+    expect(alert).toHaveTextContent('Could not load.');
+    // The failure is drawn as the log's overlay, not inline in the stage
+    // where it would take a flex share from the viewport.
+    expectOverlay(alert);
     const reload = within(alert).getByRole('button', {
       name: 'Reload workspace'
     });
@@ -104,8 +122,11 @@ describe('StatusActivityLog while its panel loads', () => {
     load.next = 'real';
     rerender(logAt(false, onClose));
     rerender(logAt(true, onClose));
-    const log = await screen.findByRole('region', { name: 'Activity log' });
-    expect(log).toHaveTextContent('Added box.');
+    // The loading frame first, then the panel in its place.
+    await screen.findByText('Added box.');
+    const log = screen.getByRole('region', { name: 'Activity log' });
+    expect(log).not.toHaveTextContent('Loading…');
+    expectOverlay(log);
     expect(screen.queryByRole('alert')).toBeNull();
     // A press on the loaded panel (portalled out of this tree) stays in it;
     // one in the workspace closes it, from the one handler there is.

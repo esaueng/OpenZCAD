@@ -4,8 +4,10 @@ import {
   useRef,
   useState,
   type LazyExoticComponent,
+  type ReactNode,
   type RefObject
 } from 'react';
+import { createPortal } from 'react-dom';
 import { lazyWithStaleChunkNotice } from '../lib/staleChunk';
 import { ErrorBoundary } from './ErrorBoundary';
 import type { StatusActivityLogPanel as Panel } from './StatusActivityLogPanel';
@@ -53,6 +55,48 @@ const lazyPanel = () =>
       return { default: module.StatusActivityLogPanel };
     })
   );
+
+/**
+ * The panel's frame with a line in place of the list: while its chunk loads,
+ * and when it failed. Drawn in the panel's own overlay position, so neither
+ * state is a flex item in the stage that pushes the viewport aside, and the
+ * toggle's expanded state always has a region to point at.
+ */
+function LogShell({
+  id,
+  busy,
+  onClose,
+  children
+}: {
+  id: string;
+  busy?: boolean;
+  onClose(restoreFocus: boolean): void;
+  children: ReactNode;
+}) {
+  return (
+    <section
+      id={id}
+      className="status-log-panel"
+      role="region"
+      aria-label="Activity log"
+      aria-busy={busy}
+    >
+      <header className="status-log-header">
+        <div>
+          <strong>Activity log</strong>
+          {children}
+        </div>
+        <button
+          type="button"
+          className="status-log-close"
+          onClick={() => onClose(true)}
+        >
+          Close
+        </button>
+      </header>
+    </section>
+  );
+}
 
 // Status ticks arrive from every hover prompt, save, and rebuild for the life
 // of the session; without a bound a day-long session accumulates thousands of
@@ -140,9 +184,8 @@ export function StatusActivityLog({
   // its chunk loads (or after it failed) the log must still close — Escape
   // must not reach the workspace's Escape ladder and cancel the command
   // behind it, and a click in the workspace must not leave the log to pop up
-  // over that action when the chunk lands. Inside is the panel (portalled
-  // by id), the failure alert (in this host) and the button that toggles it.
-  const hostRef = useRef<HTMLDivElement | null>(null);
+  // over that action when the chunk lands. Inside is the log's region, in
+  // whichever state it is drawn (found by id), and the button that toggles it.
   useEffect(() => {
     if (!open) {
       return;
@@ -151,7 +194,6 @@ export function StatusActivityLog({
       const target = event.target as Node;
       if (
         !document.getElementById(id)?.contains(target) &&
-        !hostRef.current?.contains(target) &&
         !triggerRef.current?.contains(target)
       ) {
         onClose(false);
@@ -180,20 +222,42 @@ export function StatusActivityLog({
 
   // Its own boundary: a tab left open across a deploy asks for a chunk that
   // no longer exists, and that rejection must cost the log, not the
-  // workspace behind it. The boundary says so with a Reload; closing and
-  // reopening the log mounts a fresh boundary and a fresh import.
-  return (
-    <div ref={hostRef} style={{ display: 'contents' }}>
-      <ErrorBoundary label="Activity log">
-        <Suspense fallback={null}>
-          <LogPanel
-            id={id}
-            entries={entries}
-            truncated={nextEntryIdRef.current > MAX_STATUS_LOG_ENTRIES}
-            onClose={onClose}
-          />
-        </Suspense>
-      </ErrorBoundary>
-    </div>
+  // workspace behind it. Closing and reopening the log mounts a fresh
+  // boundary and a fresh import. Both stand-ins are portalled where the
+  // panel itself is drawn.
+  return createPortal(
+    <ErrorBoundary
+      label="Activity log"
+      fallback={
+        <LogShell id={id} onClose={onClose}>
+          <span role="alert">
+            Could not load.{' '}
+            <button
+              type="button"
+              className="status-log-close"
+              onClick={() => window.location.reload()}
+            >
+              Reload workspace
+            </button>
+          </span>
+        </LogShell>
+      }
+    >
+      <Suspense
+        fallback={
+          <LogShell id={id} busy onClose={onClose}>
+            <span>Loading…</span>
+          </LogShell>
+        }
+      >
+        <LogPanel
+          id={id}
+          entries={entries}
+          truncated={nextEntryIdRef.current > MAX_STATUS_LOG_ENTRIES}
+          onClose={onClose}
+        />
+      </Suspense>
+    </ErrorBoundary>,
+    document.body
   );
 }

@@ -58,7 +58,9 @@ describe('StatusActivityLog', () => {
       />
     );
 
-    const log = await screen.findByRole('region', { name: 'Activity log' });
+    // The region shows a loading frame until the panel's chunk arrives.
+    await screen.findAllByRole('listitem');
+    const log = screen.getByRole('region', { name: 'Activity log' });
     const messages = within(log)
       .getAllByRole('listitem')
       .map((item) => item.textContent ?? '');
@@ -91,7 +93,9 @@ describe('StatusActivityLog', () => {
     );
     rerender(<StatusActivityLog {...props} status="Added cylinder." />);
 
-    const log = await screen.findByRole('region', { name: 'Activity log' });
+    // The region shows a loading frame until the panel's chunk arrives.
+    await screen.findAllByRole('listitem');
+    const log = screen.getByRole('region', { name: 'Activity log' });
     const messages = within(log)
       .getAllByRole('listitem')
       .map((item) => item.textContent ?? '');
@@ -116,8 +120,8 @@ describe('StatusActivityLog', () => {
           onClose={onClose}
         />
       );
-      // The panel loads on demand; its key handler arrives with it.
-      await screen.findByRole('region', { name: 'Activity log' });
+      // The handler is the log's own, there before and after the panel loads.
+      await screen.findByRole('listitem');
       fireEvent.keyDown(document.body, { key: 'Escape' });
       expect(onClose).toHaveBeenCalledWith(true);
       expect(workspaceEscape).not.toHaveBeenCalled();
