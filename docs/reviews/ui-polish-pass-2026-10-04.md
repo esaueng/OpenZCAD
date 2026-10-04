@@ -90,18 +90,18 @@ that review fixed and that now hold are listed at the end.
 - Hole U/V fields now say "U · along −Y / V · along +X" and the hole previews live.
 - Delete with dependents shows a dialog that names the dependents (F2).
 - "?" opens the shortcut overlay from the canvas (F24).
-- Enter creates in Hole; Escape is one press everywhere; the command list explains disabled items ("Create a sketch first").
+- Enter creates in Hole; one Escape cancels a card, clears the selection and closes the File menu and dialogs (the Section popover was the exception, see 1.2 and 4.1); the command list explains disabled items ("Create a sketch first").
 - Top bar collapses to icons at 1024 px and the command bar, lane, scale bar and cube all fit at 1024×625.
 - The light theme is complete once painted: every island, card, menu and dialog has a light surface; only the viewport and its overlays stay dark, as the Appearance text promises.
 - Tooltips on both rails carry the key hint and a one-line purpose.
 
-## Five to do first
+## Status and priorities
 
-1. 3.1 — replace the developer instruction with a user message (S).
-2. 1.5 — scope `.view-rail button` so the Parts row lays out (S).
-3. 1.1 — move the Move hint card off the mode switch (S).
-4. 4.1 + 1.2 — make Section a toggle with a plane picker inside the popover, close it on Escape, and keep one rail popover open at a time (M).
-5. 1.3 + 2.1 — give the card + column stack its own scroll at short heights and make the timeline thumb a real 20×20 handle (M).
+Delivery order for this audit lives in [ROADMAP.md](../../ROADMAP.md) under master U03, which is the only priority ledger; this section records what landed against it and what is still open, not a second queue.
+
+Landed on 4 October 2026, in merge order: #576 (column and panels: 1.3, 1.4, 1.5, 2.1, 2.4, 2.5, 3.4, 3.5), #577 (start screen and Settings: 1.7, 1.8, 2.3 menu sublabels, 3.10, 3.11, 5.2 grid/dates/placeholder, 5.3, 5.4), #578 (viewer popovers: 1.1, 1.2, 1.6, 2.2, 3.2, 3.6, 4.1, 5.6), #579 (rail and widgets: 2.6, 4.2, 5.5), #580 (copy and chrome: 3.1, 3.3, 3.8, 3.9, 3.12, 4.3, 4.4, 4.6, 5.1).
+
+Still open: 3.7 (two labels during a face drag) and 4.5 (the persisted tools fold) are design decisions and stay as they are; 5.2's light-theme thumbnails need a transparent capture and a re-capture of stored thumbnails; 2.3's inspector eyebrow measured 11 px on re-check and is withdrawn. The History drawer hiding under a tall card in short windows (a consequence of 1.3) was accepted: the card owns the lane.
 
 ## How this was measured
 
