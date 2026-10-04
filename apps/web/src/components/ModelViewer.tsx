@@ -877,11 +877,14 @@ export interface ModelViewerProps {
   /** Mirrors a sketch object drag's lifecycle into the interaction machine. */
   onSketchMoveChange?(event: SketchMoveEvent): void;
   /**
-   * A drag released: commit the selected object's moved data through the
-   * entity-edit path. Resolves false when the edit was refused, so the
-   * preview can let go.
+   * A drag released: commit the dragged object's moved data through the
+   * entity-edit path. The object is named rather than read from the
+   * selection, so selecting something else before the edit answers does not
+   * drop the move. Resolves false when the edit was refused, so the preview
+   * can let go.
    */
   onSketchMoveCommit?(
+    objectId: string,
     data: SketchObjectData,
     verb: 'Move' | 'Rotate'
   ): Promise<boolean> | boolean;
@@ -6680,6 +6683,7 @@ export function ModelViewer({
         const result =
           sketchModeRef.current?.selectedObjectId === drag.objectId
             ? onSketchMoveCommitRef.current?.(
+                drag.objectId,
                 rebased,
                 drag.handle === 'rotate' ? 'Rotate' : 'Move'
               )

@@ -196,6 +196,7 @@ import {
 } from './lib/sketch/applySolve';
 import { sketchContentFramePoints } from './lib/sketch/session';
 import { resolvedSketchPlaneBasis } from './lib/sketch/planeBasis';
+import { sketchEntityEditTarget } from './lib/sketch/editTarget';
 import { textPlacementBudgetError } from './lib/sketch/textPlacement';
 import {
   modelingOperationNeedsPlanarFaces,
@@ -12249,21 +12250,19 @@ export function App() {
    */
   async function handleUpdateSketchEntity(
     data: SketchObjectData,
-    verb: 'Edit' | 'Move' | 'Rotate' = 'Edit'
+    verb: 'Edit' | 'Move' | 'Rotate' = 'Edit',
+    capturedObjectId?: string
   ): Promise<boolean> {
     const base = managerRef.current?.document;
-    const current = interactionRef.current;
-    if (
-      !base ||
-      current.mode !== 'sketch' ||
-      !current.session.sketchId ||
-      !current.session.selectedObjectId ||
-      sketchSolving ||
-      geometryBusy
-    )
-      return false;
-    const sketchId = current.session.sketchId as SketchId;
-    const objectId = current.session.selectedObjectId as EntityId;
+    // A viewport drag names the object it captured at release; an editor
+    // edit writes the selection and is refused if the selection moves.
+    const target = sketchEntityEditTarget(
+      interactionRef.current,
+      capturedObjectId
+    );
+    if (!base || !target || sketchSolving || geometryBusy) return false;
+    const sketchId = target.sketchId as SketchId;
+    const objectId = target.objectId as EntityId;
     const selected = base.nodes[objectId];
     const nextData =
       selected?.kind === 'sketch-object' && selected.data.construction
@@ -12287,7 +12286,7 @@ export function App() {
           sketchId,
           commands,
           `${verb} ${data.objectKind}`,
-          objectId
+          target.raceObjectId
         )
       ) {
         setStatus(
@@ -18907,7 +18906,9 @@ export function App() {
               !geometryBusy
             }
             onSketchMoveChange={dispatchInteraction}
-            onSketchMoveCommit={handleUpdateSketchEntity}
+            onSketchMoveCommit={(objectId, data, verb) =>
+              handleUpdateSketchEntity(data, verb, objectId)
+            }
             onSketchSelectObject={(objectId, snapPoint, clickPoint) => {
               if (
                 handleSketchConstraintPick(
