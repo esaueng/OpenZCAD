@@ -1042,7 +1042,7 @@
   background: var(--color-surface);
   border-radius: var(--radius-sm);
   font-family: var(--font-mono);
-  font-size: 9px;
+  font-size: 10px;
   line-height: 12px;
   text-align: center;
   font-variant-numeric: tabular-nums;
@@ -1374,7 +1374,7 @@
   position: static;
 }
 
-.viewer-area .workspace-column-float:has(.sketch-rail) .sketch-circle-menu {
+.viewer-area .workspace-column-float:has(.sketch-rail) .sketch-type-strip {
   position: fixed;
   /* Level with the circle tool: its static position. */
   top: auto;
@@ -1650,8 +1650,8 @@ button.command-rail:disabled {
   background: var(--color-surface);
   border-radius: var(--radius-sm);
   font-family: var(--font-mono);
-  font-size: 8px;
-  line-height: 11px;
+  font-size: 10px;
+  line-height: 12px;
   letter-spacing: 0.04em;
 }
 
@@ -1848,49 +1848,38 @@ button.command-rail:disabled {
   background: var(--color-warning);
 }
 
-/* The circle tool carries its type menu as a corner badge; the menu opens
-   beside the rail. */
+/* The circle tool's type strip opens beside the rail, level with the tool.
+   Its tiles sit inside the rail, so the rail's 30px icon-button rule (and
+   its zero font size) reached them; they are the labelled tiles
+   direct-manipulation.css lays out. */
 .workspace-column .sketch-circle-tool {
   position: relative;
   display: flex;
 }
 
-.workspace-column .sketch-rail .sketch-circle-chevron {
-  position: absolute;
-  right: -1px;
-  bottom: -1px;
-  width: 13px;
-  min-width: 0;
-  height: 13px;
-  color: var(--color-text-subtle);
-  background: var(--color-surface);
-  border-radius: 999px;
-}
-
-.workspace-column .sketch-rail .sketch-circle-chevron svg {
-  width: 10px;
-  height: 10px;
-}
-
-.workspace-column .sketch-circle-menu {
+.workspace-column .sketch-type-strip {
   top: 0;
   left: calc(100% + var(--island-gap));
 }
 
-/* The menu's rows sit inside the rail, so the rail's 30px icon-button rule
-   (and its zero font size) reached them and squeezed each name and
-   description into a 30px column that spilled over the next row. They are
-   the full-width rows direct-manipulation.css lays out. */
-.workspace-column .sketch-rail .sketch-circle-menu button {
+.workspace-column .sketch-rail .sketch-type-tile {
+  display: flex;
+  width: auto;
+  height: 28px;
+  padding: 0 9px 0 7px;
+  font-size: var(--fs-sm);
+}
+
+.workspace-column .sketch-rail .sketch-type-cycle {
   display: grid;
-  grid-template-columns: 20px minmax(0, 1fr);
-  place-items: center start;
-  gap: 8px;
-  width: 100%;
-  height: auto;
-  padding: 7px 8px;
-  font-size: var(--fs-xs);
-  text-align: left;
+  width: auto;
+  height: 28px;
+  padding: 0 6px 0 4px;
+  border-color: transparent;
+}
+
+.workspace-column .sketch-rail .sketch-type-cycle kbd {
+  font-size: var(--fs-mini);
 }
 
 /* Finish is the column's foot, lit like the primary verb. */
@@ -1919,22 +1908,51 @@ button.command-rail:disabled {
 }
 
 /* The flyouts beside the rail: the selected entity's editor, then the
-   palette (overview and settings), each its own island. */
+   palette (overview and settings), each its own island. Their width is a
+   variable so the circle strip can stand clear of them. */
+.workspace-column {
+  /* At most the room between the rail and the right lane (the relations and
+     the instrument rail): a fixed 272px ran under both on a phone, where the
+     editor's Apply took Equal's clicks. */
+  --sketch-flyout-w: min(
+    272px,
+    calc(100vw - var(--lane-end) - var(--rail-w) - var(--island-gap) * 2)
+  );
+}
+
 .sketch-flyouts {
   position: absolute;
   top: 0;
   left: calc(100% + var(--island-gap));
-  /* At most the room between the rail and the right lane (the relations and
-     the instrument rail): a fixed 272px ran under both on a phone, where the
-     editor's Apply took Equal's clicks. */
-  width: min(
-    272px,
-    calc(100vw - var(--lane-end) - var(--rail-w) - var(--island-gap) * 2)
-  );
+  width: var(--sketch-flyout-w);
   display: flex;
   flex-direction: column;
   gap: var(--island-gap);
   pointer-events: none;
+}
+
+/* An open flyout takes the strip's place beside the rail; the strip moves
+   past it rather than covering its header. */
+.viewer-area
+  .workspace-column-float:has(.sketch-flyouts > *)
+  .sketch-type-strip {
+  left: calc(100% + var(--island-gap) * 2 + var(--sketch-flyout-w));
+  max-width: calc(
+    100vw - var(--island-gap) * 4 - var(--rail-w) - var(--sketch-flyout-w)
+  );
+}
+
+/* On a phone the flyout already takes every pixel between the rail and the
+   right lane, so there is nowhere past it: the strip stays beside the rail,
+   wrapped, over the flyout's top rows for as long as the circle tool is
+   live. */
+@media (max-width: 640px) {
+  .viewer-area
+    .workspace-column-float:has(.sketch-flyouts > *)
+    .sketch-type-strip {
+    left: calc(100% + var(--island-gap));
+    max-width: calc(100vw - var(--island-gap) * 3 - var(--rail-w));
+  }
 }
 
 .sketch-flyouts > * {

@@ -1,8 +1,8 @@
-import { useEffect, useId, useRef, useState, type ReactNode } from 'react';
+import { useId, useState, type ReactNode } from 'react';
 import {
-  ChevronDown,
-  Circle,
+  CircleDot,
   Construction,
+  Diameter,
   Grid3x3,
   Layers3,
   Magnet,
@@ -19,13 +19,14 @@ import {
   Waypoints
 } from 'lucide-react';
 import type { AppSettings } from '@openzcad/shared';
-import type {
-  PendingSketchConstraint,
-  PendingSketchEdit,
-  SketchCircleMode,
-  SketchConstraintToolKind,
-  SketchEditToolKind,
-  SketchToolId
+import {
+  nextSketchCircleMode,
+  type PendingSketchConstraint,
+  type PendingSketchEdit,
+  type SketchCircleMode,
+  type SketchConstraintToolKind,
+  type SketchEditToolKind,
+  type SketchToolId
 } from '../lib/interaction/machine';
 import { CONSTRAINT_TOOL_SPECS } from '../lib/sketch/constraints';
 import type { SketchDefinedState } from '../lib/sketch/constraints';
@@ -121,25 +122,59 @@ const TOOLS: {
   { id: 'text', label: 'Text', keyHint: 'T', icon: Type }
 ];
 
+/** A circle through three points on its circumference, drawn like lucide. */
+function ThreePointCircle({ size }: { size: number }) {
+  return (
+    <svg
+      width={size}
+      height={size}
+      viewBox="0 0 24 24"
+      fill="none"
+      stroke="currentColor"
+      strokeWidth={2}
+      strokeLinecap="round"
+      strokeLinejoin="round"
+      aria-hidden="true"
+    >
+      <circle cx="12" cy="12" r="9" />
+      <circle cx="12" cy="3" r="1" fill="currentColor" />
+      <circle cx="4.2" cy="16.5" r="1" fill="currentColor" />
+      <circle cx="19.8" cy="16.5" r="1" fill="currentColor" />
+    </svg>
+  );
+}
+
+/**
+ * The circle's three types. `label` names the type on the tool and in its
+ * tooltip; `tile` is the short word on the strip beside the rail.
+ */
 const CIRCLE_MODES: {
   mode: SketchCircleMode;
   label: string;
+  tile: string;
   detail: string;
+  icon: typeof CircleDot | typeof ThreePointCircle;
 }[] = [
   {
     mode: 'center-radius',
     label: 'Center Circle',
-    detail: 'Center and radius'
+    tile: 'Center',
+    detail: 'Center and radius',
+    icon: CircleDot
   },
   {
     mode: 'two-point-diameter',
-    label: 'Two-Point Diameter',
-    detail: 'Opposite diameter endpoints'
+    label: 'Diameter Circle',
+    tile: 'Diameter',
+    detail: 'Opposite diameter endpoints',
+    icon: Diameter
   },
   {
     mode: 'three-point',
     label: 'Three-Point Circle',
-    detail: 'Three circumference points'
+    tile: '3 points',
+    detail: 'Three circumference points',
+    icon: ThreePointCircle
   }
 ];
 
@@ -147,12 +182,6 @@ const EDIT_TOOL_ICONS: Record<SketchEditToolKind, typeof Minus> = {
   fillet: Radius,
   chamfer: Slice,
   offset: SquareDashed
-};
-
-const CIRCLE_LABELS: Record<SketchCircleMode, string> = {
-  'center-radius': 'Center Circle',
-  'two-point-diameter': 'Diameter Circle',
-  'three-point': 'Three-Point Circle'
 };
 
 /** The sketch rail: the sketch's tools as one icon column, plus its flyouts. */
@@ -188,42 +217,6 @@ export function SketchToolRail({
   // The sketch's overview and settings open beside the rail; closed until asked.
   const [paletteOpenState, setPaletteOpenState] = useState(false);
   const paletteOpen = paletteOpenProp ?? paletteOpenState;
-  // The circle-type menu is temporary: it belongs to the tool and palette
-  // state it opened under, so a tool change (a click or a key) or the palette
-  // opening closes it rather than leaving it over the palette's controls.
-  const circleMenuKey = `${tool}|${paletteOpen}`;
-  const [circleMenuOpenFor, setCircleMenuOpenFor] = useState<string | null>(
-    null
-  );
-  const circleMenuOpen = circleMenuOpenFor === circleMenuKey;
-  const setCircleMenuOpen = (open: boolean) =>
-    setCircleMenuOpenFor(open ? circleMenuKey : null);
-  const circleToolRef = useRef<HTMLSpanElement | null>(null);
-  useEffect(() => {
-    if (!circleMenuOpen) {
-      return;
-    }
-    // Escape closes the menu and nothing else; the next one is the sketch's.
-    // Window capture runs ahead of the sketch's own capture listener.
-    const onKeyDown = (event: KeyboardEvent) => {
-      if (event.key === 'Escape') {
-        event.preventDefault();
-        event.stopPropagation();
-        setCircleMenuOpenFor(null);
-      }
-    };
-    const onPointerDown = (event: PointerEvent) => {
-      if (!circleToolRef.current?.contains(event.target as Node)) {
-        setCircleMenuOpenFor(null);
-      }
-    };
-    window.addEventListener('keydown', onKeyDown, true);
-    window.addEventListener('pointerdown', onPointerDown, true);
-    return () => {
-      window.removeEventListener('keydown', onKeyDown, true);
-      window.removeEventListener('pointerdown', onPointerDown, true);
-    };
-  }, [circleMenuOpen]);
   const togglePalette = () =>
     onTogglePalette ? onTogglePalette() : setPaletteOpenState((open) => !open);
   const patchSettings = (patch: Partial<AppSettings['sketching']>) =>
@@ -249,55 +242,63 @@ export function SketchToolRail({
       </button>
     </Tooltip>
   );
+  const circleSpec =
+    CIRCLE_MODES.find((spec) => spec.mode === circleMode) ?? CIRCLE_MODES[0]!;
+  const CircleIcon = circleSpec.icon;
   const drawTools = (
     <>
       {TOOLS.slice(0, 3).map(drawTool)}
-      <span className="sketch-circle-tool" ref={circleToolRef}>
+      <span className="sketch-circle-tool">
         <Tooltip
-          label={CIRCLE_LABELS[circleMode]}
+          label={circleSpec.label}
           shortcut="C"
-          description="Choose the circle type from the corner menu"
+          description="C again steps through the circle types"
         >
           <button
             type="button"
             className={tool === 'circle' ? 'active' : undefined}
             aria-pressed={tool === 'circle'}
-            aria-label={`Circle: ${CIRCLE_LABELS[circleMode]}`}
+            aria-label={`Circle: ${circleSpec.label}`}
             onClick={() => onTool('circle')}
           >
-            <Circle size={16} aria-hidden="true" />
+            <CircleIcon size={16} aria-hidden="true" />
           </button>
         </Tooltip>
-        <button
-          type="button"
-          className="sketch-circle-chevron"
-          aria-label="Choose circle type"
-          aria-expanded={circleMenuOpen}
-          onClick={() => setCircleMenuOpen(!circleMenuOpen)}
-        >
-          <ChevronDown size={10} aria-hidden="true" />
-        </button>
-        {circleMenuOpen ? (
-          <span className="sketch-circle-menu" role="menu">
-            {CIRCLE_MODES.map(({ mode, label, detail }) => (
-              <button
-                key={mode}
-                type="button"
-                role="menuitemradio"
-                aria-checked={circleMode === mode}
-                className={circleMode === mode ? 'active' : undefined}
-                onClick={() => {
-                  onCircleMode(mode);
-                  setCircleMenuOpen(false);
-                }}
-              >
-                <Circle size={14} aria-hidden="true" />
-                <span>
-                  <strong>{label}</strong>
-                  <small>{detail}</small>
-                </span>
-              </button>
+        {tool === 'circle' ? (
+          // The type rides beside the rail while the circle tool is live:
+          // one click to any type, and the strip leaves with the tool.
+          <span
+            className="sketch-type-strip"
+            role="radiogroup"
+            aria-label="Circle type"
+            data-rail-flyout=""
+          >
+            {CIRCLE_MODES.map(({ mode, label, tile, detail, icon: Icon }) => (
+              <Tooltip key={mode} label={label} description={detail}>
+                <button
+                  type="button"
+                  role="radio"
+                  aria-checked={circleMode === mode}
+                  className={`sketch-type-tile${
+                    circleMode === mode ? ' active' : ''
+                  }`}
+                  onClick={() => onCircleMode(mode)}
+                >
+                  <Icon size={16} aria-hidden="true" />
+                  <span>{tile}</span>
+                </button>
+              </Tooltip>
             ))}
+            <Tooltip label="Next circle type" shortcut="C">
+              <button
+                type="button"
+                className="sketch-type-cycle"
+                aria-label="Next circle type"
+                onClick={() => onCircleMode(nextSketchCircleMode(circleMode))}
+              >
+                <kbd>C</kbd>
+              </button>
+            </Tooltip>
           </span>
         ) : null}
       </span>
