@@ -24,7 +24,9 @@ describe('plane picker offsets', () => {
         expect(position.y).toBeCloseTo(origin.y, 10);
         expect(position.z).toBeCloseTo(origin.z, 10);
 
-        const border = rig.group.getObjectByName(`plane-picker-border-${plane}`);
+        const border = rig.group.getObjectByName(
+          `plane-picker-border-${plane}`
+        );
         expect(border?.getWorldPosition(new THREE.Vector3())).toEqual(position);
       }
     }
