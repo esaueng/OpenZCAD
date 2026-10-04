@@ -37,6 +37,24 @@ export interface AppSettingsSyncInput {
  * server said — stays with the caller; this owns only what happens to the
  * settings once it knows.
  */
+/**
+ * Turns transitions off (motion.css, `data-theme-switching`) for the frame a
+ * theme change paints in, and back on two frames later. Returns the early
+ * release for an effect cleanup.
+ */
+function holdTransitionsForThemeSwitch(root: HTMLElement): () => void {
+  root.dataset.themeSwitching = 'true';
+  let frame = requestAnimationFrame(() => {
+    frame = requestAnimationFrame(() => {
+      delete root.dataset.themeSwitching;
+    });
+  });
+  return () => {
+    cancelAnimationFrame(frame);
+    delete root.dataset.themeSwitching;
+  };
+}
+
 export function useAppSettingsSync({
   api,
   isCloudEnabled,
@@ -116,16 +134,35 @@ export function useAppSettingsSync({
       root.dataset.theme = theme;
       return;
     }
-    root.dataset.themeSwitching = 'true';
+    const release = holdTransitionsForThemeSwitch(root);
     root.dataset.theme = theme;
-    let frame = requestAnimationFrame(() => {
-      frame = requestAnimationFrame(() => {
-        delete root.dataset.themeSwitching;
-      });
-    });
+    return release;
+  }, [appSettings.appearance.theme]);
+
+  useEffect(() => {
+    // 'System' switches without the setting changing: the OS flips and the
+    // stylesheet's media query repaints the palette, so the effect above
+    // never runs. The listener does not resolve the theme (the stylesheet
+    // still does, on the frame the OS changes); it only holds transitions
+    // for that frame. A media query's change event is reported before the
+    // frame's style update, so the flag is in place when the palette moves.
+    if (
+      appSettings.appearance.theme !== 'system' ||
+      typeof globalThis.matchMedia !== 'function'
+    ) {
+      return;
+    }
+    const root = globalThis.document.documentElement;
+    const query = globalThis.matchMedia('(prefers-color-scheme: light)');
+    let release: (() => void) | null = null;
+    const onChange = () => {
+      release?.();
+      release = holdTransitionsForThemeSwitch(root);
+    };
+    query.addEventListener('change', onChange);
     return () => {
-      cancelAnimationFrame(frame);
-      delete root.dataset.themeSwitching;
+      query.removeEventListener('change', onChange);
+      release?.();
     };
   }, [appSettings.appearance.theme]);
 

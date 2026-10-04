@@ -211,7 +211,11 @@ describe('device persistence and chrome', () => {
 
       expect(defaultAppSettings().appearance.theme).toBe('system');
       expect(document.documentElement.dataset.theme).toBe('system');
-      expect(matchMedia).not.toHaveBeenCalled();
+      // A light OS (matches: true) still leaves 'system' on the root: the
+      // query is watched only to hold transitions (see 'theme switch'),
+      // never read to choose a palette.
+      expect(matchMedia).toHaveBeenCalledTimes(1);
+      expect(matchMedia).toHaveBeenCalledWith('(prefers-color-scheme: light)');
     } finally {
       vi.unstubAllGlobals();
     }
@@ -267,6 +271,76 @@ describe('theme switch', () => {
       expect(root.dataset.themeSwitching).toBe('true');
       frames.shift()?.(16);
       expect(root.dataset.themeSwitching).toBeUndefined();
+    } finally {
+      vi.unstubAllGlobals();
+    }
+  });
+
+  it('holds transitions when the OS flips under System, too', () => {
+    // Under System the setting never changes when the OS does; the media
+    // query repaints the palette, so the guard has to hear the OS itself.
+    const frames: FrameRequestCallback[] = [];
+    vi.stubGlobal('requestAnimationFrame', (callback: FrameRequestCallback) => {
+      frames.push(callback);
+      return frames.length;
+    });
+    vi.stubGlobal('cancelAnimationFrame', vi.fn());
+    const listeners = new Set<() => void>();
+    const query = {
+      matches: false,
+      addEventListener: vi.fn((_: string, listener: () => void) =>
+        listeners.add(listener)
+      ),
+      removeEventListener: vi.fn((_: string, listener: () => void) =>
+        listeners.delete(listener)
+      )
+    };
+    const matchMedia = vi.fn(() => query);
+    vi.stubGlobal('matchMedia', matchMedia);
+    try {
+      loadRecord.mockReturnValue({
+        settings: defaultAppSettings(),
+        syncedRevision: 7
+      });
+      const { unmount } = render();
+      const root = document.documentElement;
+
+      expect(matchMedia).toHaveBeenCalledWith('(prefers-color-scheme: light)');
+      expect(root.dataset.themeSwitching).toBeUndefined();
+
+      act(() => listeners.forEach((listener) => listener()));
+      expect(root.dataset.themeSwitching).toBe('true');
+      // The stylesheet still resolves the palette; the root keeps 'system'.
+      expect(root.dataset.theme).toBe('system');
+
+      frames.shift()?.(0);
+      frames.shift()?.(16);
+      expect(root.dataset.themeSwitching).toBeUndefined();
+
+      unmount();
+      expect(listeners.size).toBe(0);
+    } finally {
+      vi.unstubAllGlobals();
+    }
+  });
+
+  it('does not watch the OS for an explicit theme', () => {
+    const matchMedia = vi.fn();
+    vi.stubGlobal('matchMedia', matchMedia);
+    try {
+      loadRecord.mockReturnValue({
+        settings: settings({
+          appearance: {
+            theme: 'dark',
+            density: 'compact',
+            reducedMotion: false
+          }
+        }),
+        syncedRevision: 7
+      });
+      render();
+
+      expect(matchMedia).not.toHaveBeenCalled();
     } finally {
       vi.unstubAllGlobals();
     }
