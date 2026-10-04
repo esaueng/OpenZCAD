@@ -1135,9 +1135,18 @@ export function sketchMovePointerRole(
 }
 
 /**
- * Text turned to `rotationDeg`. A text object with no stored rotation keeps
- * the field absent when the result is the default 0, so a ring dragged back
- * to where it started writes nothing new.
+ * Whether two rotations, in degrees, point the same way: equal modulo a
+ * full turn, within a hair. A stored 360 and a dragged 0 are one angle.
+ */
+export function sameRotation(first: number, second: number): boolean {
+  const difference = (((first - second) % 360) + 360) % 360;
+  return Math.min(difference, 360 - difference) < 1e-9;
+}
+
+/**
+ * Text turned to `rotationDeg`. When that is the angle the object already
+ * has — a ring dragged back to where it started — the object comes back
+ * untouched, so an absent rotation stays absent and a stored 360 stays 360.
  */
 export function rotateTextObject(
   data: SketchObjectData,
@@ -1146,7 +1155,8 @@ export function rotateTextObject(
   if (data.objectKind !== 'text') {
     return data;
   }
-  if (rotationDeg === 0 && data.rotation === undefined) {
+  const current = data.rotation === undefined ? 0 : Number(data.rotation);
+  if (Number.isFinite(current) && sameRotation(rotationDeg, current)) {
     return data;
   }
   return { ...data, rotation: rotationDeg };
@@ -1154,9 +1164,10 @@ export function rotateTextObject(
 
 /**
  * Whether a drag changed what the object means. Position fields and text
- * rotation compare by value — an absent rotation is 0 and a stored `'12.5'`
- * is 12.5 — so a gesture that ends where it began commits nothing: no solve,
- * no undo entry, no rewritten data. Every other field must match exactly.
+ * rotation compare by value — an absent rotation is 0, a stored `'12.5'` is
+ * 12.5, and rotations compare modulo a full turn — so a gesture that ends
+ * where it began commits nothing: no solve, no undo entry, no rewritten
+ * data. Every other field must match exactly.
  */
 export function sketchMoveChanged(
   original: SketchObjectData,
@@ -1173,7 +1184,11 @@ export function sketchMoveChanged(
     key === 'rotation' && record[key] === undefined ? 0 : resolve(record[key]);
   const keys = new Set([...Object.keys(before), ...Object.keys(after)]);
   for (const key of keys) {
-    if (valued.has(key)) {
+    if (key === 'rotation' && valued.has(key)) {
+      if (!sameRotation(numeric(before, key), numeric(after, key))) {
+        return true;
+      }
+    } else if (valued.has(key)) {
       if (numeric(before, key) !== numeric(after, key)) {
         return true;
       }
@@ -1309,7 +1324,7 @@ export function rebaseSketchMove(
     const angle = (value: unknown) =>
       value === undefined ? 0 : resolve(value);
     const turn = angle(after.rotation) - angle(before.rotation);
-    if (turn !== 0) {
+    if (!sameRotation(turn, 0)) {
       if (next.rotation !== undefined && !isLiteralNumber(next.rotation)) {
         return null;
       }

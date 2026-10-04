@@ -37,6 +37,7 @@ import {
   sketchObjectRotatable,
   sketchMovePointerRole,
   rebaseSketchMove,
+  sameRotation,
   sketchHandleAtScreen,
   SKETCH_ROTATE_RING_BAND_PX,
   SKETCH_ROTATE_RING_RADIUS_PX,
@@ -975,5 +976,48 @@ describe('sketchHandleAtScreen', () => {
     expect(
       sketchHandleAtScreen({ x: grab.x + 80, y: grab.y }, grab, true)
     ).toBeNull();
+  });
+});
+
+describe('a full-turn rotation dragged back to its start', () => {
+  const resolve = (value: unknown) => Number(value);
+  const text = (
+    rotation: number
+  ): Extract<SketchObjectData, { objectKind: 'text' }> => ({
+    objectKind: 'text',
+    text: 'Boa',
+    fontFamily: 'open-sans',
+    fontStyle: 'regular',
+    size: 8,
+    x: 3,
+    y: 4,
+    rotation
+  });
+
+  it('keeps a stored 360 or -360 verbatim and commits nothing', () => {
+    for (const stored of [360, -360, 720]) {
+      const original = text(stored);
+      const origin = { x: 3, y: 4 };
+      const from = { x: 13, y: 4 };
+      // The ring readout is normalised, so it reports 0 for a full turn.
+      const angle = textRotationFromRingDrag(origin, from, from, stored);
+      expect(angle).toBe(0);
+      const turned = rotateTextObject(original, angle);
+      // The same object back: no rewritten field, so no commit, no solve
+      // and no undo entry.
+      expect(turned).toBe(original);
+      expect(sketchMoveChanged(original, turned, resolve)).toBe(false);
+      // Even a rewritten 0 reads as the same angle.
+      expect(
+        sketchMoveChanged(original, { ...original, rotation: 0 }, resolve)
+      ).toBe(false);
+      expect(rebaseSketchMove(original, turned, original, resolve)).toBe(
+        turned
+      );
+    }
+    expect(sameRotation(360, 0)).toBe(true);
+    expect(sameRotation(-360, 0)).toBe(true);
+    expect(sameRotation(359.5, 0)).toBe(false);
+    expect(sketchMoveChanged(text(360), text(10), resolve)).toBe(true);
   });
 });
