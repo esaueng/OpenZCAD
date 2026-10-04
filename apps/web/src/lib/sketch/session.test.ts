@@ -241,12 +241,12 @@ describe('sketchEntryPose', () => {
   });
 
   // Screen direction of a +10 step along the plane's u and v axes, seen from
-  // the entry pose with world +Z up — the camera the sketch glide arrives at
-  // on a canonical plane.
+  // the entry pose with the up it holds (world +Z when it holds none) — the
+  // camera the sketch glide arrives at.
   const screenAxes = (basis: PlaneBasis) => {
     const pose = sketchEntryPose(basis, 200);
     const camera = new THREE.PerspectiveCamera(45, 1, 0.1, 5000);
-    camera.up.set(0, 0, 1);
+    camera.up.set(pose.up?.x ?? 0, pose.up?.y ?? 0, pose.up?.z ?? 1);
     camera.position.set(pose.position.x, pose.position.y, pose.position.z);
     camera.lookAt(pose.target.x, pose.target.y, pose.target.z);
     camera.updateMatrixWorld();
@@ -306,7 +306,10 @@ describe('sketchEntryPose', () => {
   });
 
   it('keeps world up on canonical planes, offset or not', () => {
-    for (const basis of Object.values(PLANE_BASES)) {
+    for (const basis of [
+      ...Object.values(PLANE_BASES),
+      frameForPlaneRef(newCanonicalPlaneRef('XZ', 0), Number)
+    ]) {
       expect(sketchEntryUp(basis)).toBeNull();
       expect(sketchEntryUp({ ...basis, origin: { x: 3, y: -4, z: 12 } })).toBe(
         null
