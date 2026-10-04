@@ -67,6 +67,38 @@ describe('column and panel sizes', () => {
     expect(px(button.height)).toBeGreaterThanOrEqual(24);
   });
 
+  it('keeps the measured value clear of the action bar', () => {
+    const css = sheet('view-mode.css');
+    // The bar is exactly as wide as the track the value and notes leave
+    // clear on the right; only the heading spans it.
+    const actions = rule(css, '.measurement-row-actions');
+    expect(actions.width).toBe('var(--measurement-actions-w)');
+    expect(actions['box-sizing']).toBe('border-box');
+    const main = rule(css, '.measurement-row-main');
+    expect(main['grid-template-columns']).toBe(
+      'minmax(0, 1fr) var(--measurement-actions-w)'
+    );
+    // The bar sits flush with the main button's right padding.
+    expect(actions.right).toBe(main.padding?.split(' ')[1]);
+    expect(rule(css, '.measurement-row-heading')['grid-column']).toBe('1 / -1');
+    expect(
+      rule(
+        css,
+        '.measurement-row-value,\n.measurement-row-note,\n.measurement-row-user-note'
+      )['grid-column']
+    ).toBe('1');
+    // Four 24px buttons, three 2px gaps, 2px padding a side, 1px border a
+    // side: the track is the bar's whole width.
+    const width = rule(css, '.measurement-row')['--measurement-actions-w'];
+    expect(width).toBe('calc(24px * 4 + 2px * 3 + 2px * 2 + 2px)');
+    // The value line is at least the bar's height (24 + 2 × 2 + 2 × 1), so
+    // the bar, level with the value's foot, never reaches the heading.
+    expect(
+      px(rule(css, '.measurement-row-value')['min-height'])
+    ).toBeGreaterThanOrEqual(30);
+    expect(actions.bottom).toBe(main.padding?.split(' ')[2]);
+  });
+
   it('stops the right lane above the bottom-right corner', () => {
     const css = sheet('quiet-stage.css');
     expect(rule(css, '.stage-right').bottom).toContain('var(--stage-corner-h)');
