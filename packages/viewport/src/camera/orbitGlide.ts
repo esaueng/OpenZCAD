@@ -17,9 +17,9 @@ import { WAKE_STEP_S } from '../motion';
  * so speed decays monotonically with time constant τ, the camera never moves
  * past the pose the residue implies (no overshoot), and at T it lands exactly
  * and stops. The total travel is the residue itself, unchanged; only its
- * timing is bounded. Each frame applies the share of what is still left, so
- * any frame rate traces the same curve and a slow frame simply lands further
- * along it.
+ * timing is bounded. Each frame applies the share of what is still left at
+ * its wall-clock time since release, so any frame rate traces the same curve
+ * and a slow frame simply lands further along it.
  */
 
 /** Decay time constant: ≈0.80× speed per 60 Hz frame. */
@@ -56,14 +56,25 @@ export function orbitGlideStepFraction(fromMs: number, toMs: number): number {
 }
 
 /**
- * Glide time a frame advances. The first frame after release measures from
- * the last drag frame, bounded like any wake-up step so a loop that slept
- * through a held pointer does not skip the glide; it never advances zero, so
- * the release frame always moves. Later frames take the real gap.
+ * Glide time at a frame: the wall-clock time since release, so the residue
+ * lands on the first frame at or past the cap at any frame rate, however slow.
+ * The first frame after release never reads less than one frame step (the gap
+ * since the last drag frame, bounded like any wake-up step, or a nominal
+ * frame without one): a frame timestamp can predate the pointer-up event, and
+ * the release frame must still move. The clock never runs backwards.
  */
-export function orbitGlideFrameMs(gapMs: number, firstStep: boolean): number {
-  if (firstStep) {
-    return gapMs > 0 ? Math.min(gapMs, WAKE_STEP_S * 1000) : NOMINAL_FRAME_MS;
+export function orbitGlideElapsedMs(
+  previousElapsedMs: number | null,
+  sinceReleaseMs: number,
+  frameGapMs: number
+): number {
+  const sinceRelease = sinceReleaseMs > 0 ? sinceReleaseMs : 0;
+  if (previousElapsedMs === null) {
+    const firstStep =
+      frameGapMs > 0
+        ? Math.min(frameGapMs, WAKE_STEP_S * 1000)
+        : NOMINAL_FRAME_MS;
+    return Math.max(sinceRelease, firstStep);
   }
-  return gapMs > 0 ? gapMs : 0;
+  return Math.max(sinceRelease, previousElapsedMs);
 }

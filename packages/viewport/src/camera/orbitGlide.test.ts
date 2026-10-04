@@ -2,7 +2,7 @@ import { describe, expect, it } from 'vitest';
 import {
   ORBIT_GLIDE_MAX_MS,
   ORBIT_GLIDE_TAU_MS,
-  orbitGlideFrameMs,
+  orbitGlideElapsedMs,
   orbitGlideProgress,
   orbitGlideStepFraction
 } from './orbitGlide';
@@ -42,7 +42,7 @@ describe('orbit glide curve', () => {
     }
   });
 
-  it.each([30, 60, 120, 144])(
+  it.each([5, 10, 30, 60, 120, 144])(
     'decelerates every frame and stops by the cap at %i Hz',
     (hz) => {
       const frameMs = 1000 / hz;
@@ -64,13 +64,38 @@ describe('orbit glide curve', () => {
     expect(ratio).toBeCloseTo(Math.exp(-1000 / 60 / ORBIT_GLIDE_TAU_MS), 10);
   });
 
-  it('times the first frame from the last drag frame, bounded', () => {
-    expect(orbitGlideFrameMs(16, true)).toBe(16);
-    expect(orbitGlideFrameMs(2_000, true)).toBe(50);
-    expect(orbitGlideFrameMs(Number.NaN, true)).toBeCloseTo(1000 / 60, 10);
-    expect(orbitGlideFrameMs(0, true)).toBeCloseTo(1000 / 60, 10);
-    // A running glide takes the real gap, so a slow frame lands further on.
-    expect(orbitGlideFrameMs(400, false)).toBe(400);
-    expect(orbitGlideFrameMs(-3, false)).toBe(0);
+  it('reads the first frame at least one step in, never zero', () => {
+    // A frame timestamp can predate pointer-up; the release frame still moves.
+    expect(orbitGlideElapsedMs(null, -3, 16)).toBe(16);
+    expect(orbitGlideElapsedMs(null, 2, 2_000)).toBe(50);
+    expect(orbitGlideElapsedMs(null, 0, Number.NaN)).toBeCloseTo(1000 / 60, 10);
+    // Otherwise it is wall-clock time since release, and never runs back.
+    expect(orbitGlideElapsedMs(null, 100, 100)).toBe(100);
+    expect(orbitGlideElapsedMs(16, 400, 384)).toBe(400);
+    expect(orbitGlideElapsedMs(20, 18, 0)).toBe(20);
   });
+
+  it.each([
+    [5, 200],
+    [10, 100],
+    [10, 37],
+    [24, 5]
+  ])(
+    'lands on the first frame at or past 200 ms after release at %i Hz (first frame %i ms in)',
+    (hz, firstFrameMs) => {
+      const frameMs = 1000 / hz;
+      let elapsed: number | null = null;
+      let residue = 1;
+      let landedAt = Number.NaN;
+      for (let at = firstFrameMs; residue > 0; at += frameMs) {
+        const from: number = elapsed ?? 0;
+        elapsed = orbitGlideElapsedMs(elapsed, at, frameMs);
+        residue *= 1 - orbitGlideStepFraction(from, elapsed);
+        landedAt = at;
+        expect(at).toBeLessThan(1_000);
+      }
+      expect(landedAt).toBeGreaterThanOrEqual(ORBIT_GLIDE_MAX_MS);
+      expect(landedAt).toBeLessThan(ORBIT_GLIDE_MAX_MS + frameMs);
+    }
+  );
 });

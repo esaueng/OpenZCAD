@@ -32,14 +32,14 @@ import {
   createZoomProjectionScratch,
   wheelDeltaToLogScale
 } from './wheelZoom';
-import { orbitGlideFrameMs, orbitGlideStepFraction } from './orbitGlide';
+import { orbitGlideElapsedMs, orbitGlideStepFraction } from './orbitGlide';
 
 /** A post-release orbit or pan glide in flight, timed on the render clock. */
 interface OrbitGlide {
-  /** Glide time already played out, in ms. */
-  elapsedMs: number;
-  /** False until the first frame after release has stepped it. */
-  started: boolean;
+  /** `performance.now()` at release; the glide's clock runs from here. */
+  releasedAt: number;
+  /** Glide time played out by the last frame, in ms; null before the first. */
+  elapsedMs: number | null;
 }
 
 /** A durable camera pose: what a reload restores. */
@@ -422,7 +422,7 @@ export class CameraController {
       return;
     }
     // The glide sets the damping factor frame by frame from its own clock.
-    this.orbitGlide = { elapsedMs: 0, started: false };
+    this.orbitGlide = { releasedAt: performance.now(), elapsedMs: null };
     this.options.requestRender();
     // The live pose is readable at release, while durable persistence remains
     // parked until the damping tail reaches this controller's settle path.
@@ -689,9 +689,11 @@ export class CameraController {
    * Advances pointer-driven orbit damping; after release, plays the glide.
    *
    * OrbitControls applies damping per rendered frame, so the glide sets each
-   * frame's factor from elapsed render-clock time (see `orbitGlide.ts`): the
-   * curve and its 200 ms landing are the same at any frame rate, and a busy
-   * frame lands further along it rather than stretching the coast.
+   * frame's factor from the wall-clock time since release (see
+   * `orbitGlide.ts`): the curve is the same at any frame rate, the first frame
+   * at or past 200 ms lands it, and a busy frame lands further along it
+   * rather than stretching the coast. `now` is the frame timestamp, on the
+   * same timeline as `performance.now()`.
    */
   stepOrbit(now: number): boolean {
     if (this.disposed) {
@@ -704,9 +706,12 @@ export class CameraController {
     if (glide === null) {
       return this.updateOrbitForFrame();
     }
-    const fromMs = glide.elapsedMs;
-    glide.elapsedMs += orbitGlideFrameMs(gapMs, !glide.started);
-    glide.started = true;
+    const fromMs = glide.elapsedMs ?? 0;
+    glide.elapsedMs = orbitGlideElapsedMs(
+      glide.elapsedMs,
+      now - glide.releasedAt,
+      gapMs
+    );
     const fraction = orbitGlideStepFraction(fromMs, glide.elapsedMs);
     if (fraction >= 1) {
       this.orbitGlide = null;

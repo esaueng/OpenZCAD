@@ -323,18 +323,34 @@ describe('CameraController external orbit lifecycle', () => {
 });
 
 /**
- * Drags the external orbit at the same fast angular speed for 200 ms of
- * frames, releases it, and replays the render loop at `hz` until the
- * controller reports idle. Times are render-clock ms from the last drag frame.
+ * One clock for both the frame timestamps handed to `stepOrbit` and the
+ * `performance.now()` the controller reads at release, as in the browser.
+ */
+function frameClock(start = 5_000) {
+  let at = start;
+  vi.spyOn(performance, 'now').mockImplementation(() => at);
+  return {
+    tick(ms: number) {
+      at += ms;
+      return at;
+    }
+  };
+}
+
+/**
+ * Drags the external orbit through the same 240 px over 200 ms of frames,
+ * releases it, and replays the render loop at `hz` until the controller
+ * reports idle. Times are ms from release, which follows the last drag frame.
  */
 function flickAndRelease(hz: number) {
   const { controller, onViewSettled } = createController(false);
+  const clock = frameClock();
   const frameMs = 1000 / hz;
-  let now = performance.now();
   controller.beginOrbitDrag();
-  const dragFrames = Math.round(hz * 0.2);
+  const dragFrames = Math.max(1, Math.round(hz * 0.2));
+  let now = 0;
   for (let frame = 0; frame < dragFrames; frame += 1) {
-    now += frameMs;
+    now = clock.tick(frameMs);
     controller.orbitByPixels(240 / dragFrames, 0);
     controller.stepOrbit(now);
   }
@@ -344,7 +360,7 @@ function flickAndRelease(hz: number) {
   let lastMoveAt = releasedAt;
   let idleFrames = 0;
   for (let frame = 0; frame < 600 && idleFrames < 10; frame += 1) {
-    now += frameMs;
+    now = clock.tick(frameMs);
     const moving = controller.stepOrbit(now);
     const azimuth = controller.controls.getAzimuthalAngle();
     if (moving) {
@@ -371,6 +387,10 @@ function flickAndRelease(hz: number) {
 }
 
 describe('CameraController orbit release glide', () => {
+  afterEach(() => {
+    vi.restoreAllMocks();
+  });
+
   it('settles within 200 ms of release at 60 Hz, then reports idle', () => {
     const { controller, onViewSettled, settleMs, steps } = flickAndRelease(60);
     // Premise: the release carried residual velocity into a visible glide.
@@ -378,8 +398,8 @@ describe('CameraController orbit release glide', () => {
     expect(settleMs).toBeLessThanOrEqual(200 + 1e-6);
     // Idle is exact: further frames neither move nor wake the loop.
     const rest = controller.activeCamera.position.clone();
-    expect(controller.stepOrbit(10_000)).toBe(false);
-    expect(controller.stepOrbit(10_016)).toBe(false);
+    expect(controller.stepOrbit(20_000)).toBe(false);
+    expect(controller.stepOrbit(20_016)).toBe(false);
     expect(controller.activeCamera.position.distanceTo(rest)).toBeLessThan(
       1e-9
     );
@@ -401,13 +421,14 @@ describe('CameraController orbit release glide', () => {
     controller.dispose();
   });
 
-  it.each([30, 120, 144])(
-    'lands by the cap and on the same pose at %i Hz',
+  it.each([5, 10, 30, 120, 144])(
+    'lands on the first frame at or past 200 ms, on the same pose, at %i Hz',
     (hz) => {
       const reference = flickAndRelease(60);
       const run = flickAndRelease(hz);
-      // The landing frame is the first one at or past 200 ms.
-      expect(run.settleMs).toBeLessThan(200 + run.frameMs);
+      // Wall-clock from release: a slow first frame does not push it later.
+      expect(run.settleMs).toBeGreaterThanOrEqual(200 - 1e-6);
+      expect(run.settleMs).toBeLessThan(200 + run.frameMs - 1e-6);
       // The same drag leaves the same residue, and the glide plays all of it
       // out, so the resting pose does not depend on the frame rate.
       expect(
@@ -420,25 +441,22 @@ describe('CameraController orbit release glide', () => {
 
   it('hands a grab mid-glide back to tight tracking with no late landing', () => {
     const { controller } = createController(false);
+    const clock = frameClock();
     const frameMs = 1000 / 60;
-    let now = performance.now();
     controller.beginOrbitDrag();
     for (let frame = 0; frame < 12; frame += 1) {
-      now += frameMs;
       controller.orbitByPixels(20, 0);
-      controller.stepOrbit(now);
+      controller.stepOrbit(clock.tick(frameMs));
     }
     controller.endOrbitDrag();
-    now += frameMs;
-    expect(controller.stepOrbit(now)).toBe(true);
+    expect(controller.stepOrbit(clock.tick(frameMs))).toBe(true);
     // Held still, the residue drains on the drag regime's steady decay; a
     // glide left armed would land it all in one jump at the 200 ms cap.
     controller.beginOrbitDrag();
     let previous = controller.controls.getAzimuthalAngle();
     let previousStep = Infinity;
     for (let frame = 0; frame < 30; frame += 1) {
-      now += frameMs;
-      controller.stepOrbit(now);
+      controller.stepOrbit(clock.tick(frameMs));
       const azimuth = controller.controls.getAzimuthalAngle();
       const step = Math.abs(azimuth - previous);
       expect(step).toBeLessThanOrEqual(previousStep + 1e-12);
