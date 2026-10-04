@@ -235,6 +235,8 @@ interface ViewerShellProps {
   onOpenEdgeKeypad(currentSize: number): boolean;
   onDirectManipulationChange(dragging: boolean, source?: 'move'): void;
   sketchMode: SketchModeState | null;
+  /** Where the text card's live outline sits; the card's Place reads it. */
+  sketchTextAnchorRef?: MutableRefObject<{ x: number; y: number } | null>;
   onSketchCommit(object: SketchObjectData): void;
   onEditSketchDimension(id: string, anchor: { x: number; y: number }): void;
   onMoveSketchDimension(id: string, offset: { x: number; y: number }): void;
@@ -384,6 +386,7 @@ export function ViewerShell({
   onOpenEdgeKeypad,
   onDirectManipulationChange,
   sketchMode,
+  sketchTextAnchorRef,
   onSketchCommit,
   onEditSketchDimension,
   onMoveSketchDimension,
@@ -580,6 +583,7 @@ export function ViewerShell({
         onOpenEdgeKeypad={onOpenEdgeKeypad}
         onDirectManipulationChange={onDirectManipulationChange}
         sketchMode={sketchMode}
+        sketchTextAnchorRef={sketchTextAnchorRef}
         onSketchCommit={onSketchCommit}
         onEditSketchDimension={onEditSketchDimension}
         onMoveSketchDimension={onMoveSketchDimension}

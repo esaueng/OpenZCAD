@@ -1,5 +1,11 @@
 import type { ExtrudeChoice } from '../extrudeInference';
-import type { SketchPlaneRef, TopologySelection } from '@openzcad/shared';
+import type {
+  ParamValue,
+  SketchPlaneRef,
+  TextAlign,
+  TextFontStyle,
+  TopologySelection
+} from '@openzcad/shared';
 import {
   preferredCapability,
   selectionCapabilities,
@@ -139,6 +145,32 @@ export interface SketchMoveSession {
   handle: SketchMoveHandle;
 }
 
+/**
+ * What the text card holds while the text tool composes: everything a text
+ * object needs except where it goes. The string starts empty — the card is
+ * typed into before anything is placed, so the document never carries a
+ * placeholder the user then has to overwrite.
+ */
+export interface SketchTextDraft {
+  text: string;
+  fontFamily: string;
+  fontStyle: TextFontStyle;
+  /** Em size: the layout scales the face by `size / unitsPerEm`. */
+  size: ParamValue;
+  align: TextAlign;
+}
+
+/** A fresh, empty draft in the default face (Open Sans) at em size 10. */
+export function newSketchTextDraft(): SketchTextDraft {
+  return {
+    text: '',
+    fontFamily: 'open-sans',
+    fontStyle: 'regular',
+    size: 10,
+    align: 'left'
+  };
+}
+
 export interface SketchSessionState {
   /** Null until the first entity commit creates the sketch node. */
   sketchId: string | null;
@@ -159,6 +191,12 @@ export interface SketchSessionState {
    * clears the selection.
    */
   moving?: SketchMoveSession;
+  /**
+   * The text card's pending object while the text tool composes. Nothing is
+   * written to the document until a click places it; read it through
+   * `composingTextDraft`, which ignores a draft left behind by another tool.
+   */
+  textDraft?: SketchTextDraft | null;
 }
 
 export type OperationPhase =
@@ -289,6 +327,7 @@ export type InteractionEvent =
     }
   | { type: 'sketch-move-commit' }
   | { type: 'sketch-move-cancel' }
+  | { type: 'sketch-text-draft'; patch: Partial<SketchTextDraft> }
   | { type: 'exit-sketch' }
   | { type: 'escape' }
   | { type: 'clear' }
@@ -311,6 +350,31 @@ export function isOperationState(
   state: InteractionState
 ): state is Exclude<InteractionState, { mode: 'idle' } | { mode: 'sketch' }> {
   return state.mode !== 'idle' && state.mode !== 'sketch';
+}
+
+/**
+ * The text card's draft while the text tool is composing, else null. A draft
+ * only means something under the text tool: leaving it by any route (a rail
+ * tool, a constraint, a selection) ends the composition.
+ */
+export function composingTextDraft(
+  state: InteractionState
+): SketchTextDraft | null {
+  return state.mode === 'sketch' && state.session.tool === 'text'
+    ? (state.session.textDraft ?? null)
+    : null;
+}
+
+/**
+ * Whether the sketch's single-key shortcuts are held off: the tool letters
+ * (V, L, A, C, R, T) and E, which starts an extrude and leaves the sketch.
+ * While text is being composed a letter is text, not a command: before the
+ * card has mounted (a cold chunk load) or with focus on one of its buttons, a
+ * stray key would otherwise switch tools or exit the sketch and throw the
+ * typed draft away. Escape and the rail are the explicit exits.
+ */
+export function sketchToolKeysSuspended(state: InteractionState): boolean {
+  return composingTextDraft(state) !== null;
 }
 
 /**
@@ -669,7 +733,13 @@ function reduceInteraction(
           selectedObjectId:
             event.tool === 'select' ? state.session.selectedObjectId : null,
           pendingConstraint: null,
-          pendingEdit: null
+          pendingEdit: null,
+          // The text tool opens its card at once with an empty string; the
+          // key again keeps what is being typed. Any other tool drops it.
+          textDraft:
+            event.tool === 'text'
+              ? (composingTextDraft(state) ?? newSketchTextDraft())
+              : null
         }
       };
     case 'sketch-constraint-tool':
@@ -735,6 +805,18 @@ function reduceInteraction(
           }
         }
       };
+    case 'sketch-text-draft': {
+      const draft = composingTextDraft(state);
+      return state.mode === 'sketch' && draft
+        ? {
+            ...state,
+            session: {
+              ...state.session,
+              textDraft: { ...draft, ...event.patch }
+            }
+          }
+        : state;
+    }
     case 'sketch-created':
       return state.mode === 'sketch'
         ? {

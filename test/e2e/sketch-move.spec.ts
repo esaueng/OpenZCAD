@@ -155,8 +155,15 @@ test('dragging a text origin moves it, and its ring turns it', async ({
   await drawCircles(page, sketchTools, [circleCenter!]);
   const target = await selectCircle(page, circleCenter!);
 
+  // Text is typed first: the card opens focused, and a click places the
+  // typed string.
   await sketchTools.getByRole('button', { name: /^Text/ }).click();
+  const card = page.getByRole('form', { name: 'Place text' });
+  await expect(card.getByLabel('Text', { exact: true })).toBeFocused();
+  await page.keyboard.type('Text');
+  await expect(card.getByRole('button', { name: 'Place' })).toBeEnabled();
   await page.mouse.click(textPoint!.x, textPoint!.y);
+  await expect(card).toHaveCount(0);
   const editor = page.getByRole('form', { name: 'Edit text' });
   await expect(editor).toBeVisible();
   const placed = {
