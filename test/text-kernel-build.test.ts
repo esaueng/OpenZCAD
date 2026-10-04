@@ -643,15 +643,40 @@ describe('text built by the exact kernel', { timeout: 120_000 }, () => {
     const SIZE = 8;
     const DEPTH = 2;
 
+    interface Hole {
+      centerX: number;
+      centerY: number;
+      radius: number;
+    }
+
     function onFaceScene(
       route: 'extrude' | 'boolean',
-      operation: 'subtract' | 'union'
+      operation: 'subtract' | 'union',
+      hole?: Hole
     ): ProjectDocument {
-      const withSlab = addPrimitiveFeature(
+      const withBox = addPrimitiveFeature(
         createProjectDocument('On face', toUserId('user_text_on_face')),
         { name: 'Slab', primitiveKind: 'box', dimensions: { ...SLAB } }
       );
-      const slabId = withSlab.bodyOrder.at(-1)!;
+      let withSlab = withBox;
+      let slabId = withBox.bodyOrder.at(-1)!;
+      if (hole) {
+        // A through-hole drilled before the text, overshooting both faces.
+        const drill = addSketchFeature(withBox, {
+          name: 'Drill',
+          planeRef: { type: 'canonical', plane: 'XY', offset: -1 },
+          objects: [{ objectKind: 'circle', ...hole }]
+        });
+        const drilled = extrudeSketch(drill.document, {
+          name: 'Hole',
+          sketchId: drill.sketchId,
+          distance: SLAB.depth + 2,
+          operation: 'cut',
+          targetBodyId: slabId
+        });
+        withSlab = drilled.document;
+        slabId = drilled.bodyId;
+      }
       const created = addSketchFeature(withSlab, {
         name: 'Label',
         // The slab's top face: the box spans z 0..depth.
@@ -738,6 +763,72 @@ describe('text built by the exact kernel', { timeout: 120_000 }, () => {
           ).toBeFalsy();
         });
       }
+    }
+
+    /**
+     * The pierce must never be taken over a pre-existing hole: the sliver
+     * would cap it (emboss) or reach past its rim (engrave). The B's stem
+     * is 0.66 mm wide at this size, so the hole under it is 0.4 mm across
+     * to sit wholly inside the glyph's material.
+     */
+    const UNDER_B_STEM: Hole = { centerX: 9.113, centerY: 13.5, radius: 0.2 };
+    const CLEAR_OF_TEXT: Hole = { centerX: 50, centerY: 40, radius: 0.5 };
+    const slabWith = (hole: Hole) =>
+      SLAB.width * SLAB.height * SLAB.depth -
+      Math.PI * hole.radius ** 2 * SLAB.depth;
+
+    // Engrave goes through the boolean route here: on a drilled slab the
+    // extrude-cut route refuses earlier, in its overlap measurement, before
+    // any boolean runs (a separate, pre-existing limit). Emboss goes through
+    // the extrude route, since the boolean Union still files its glyph
+    // connectivity advisory (see above).
+    for (const operation of ['subtract', 'union'] as const) {
+      const verb = operation === 'subtract' ? 'engrave' : 'emboss';
+      const route = operation === 'subtract' ? 'boolean' : 'extrude';
+      it(`keeps the refusal for an on-face ${verb} over a hole in the face`, async () => {
+        const derived = await adapter.syncDocument(
+          onFaceScene(route, operation, UNDER_B_STEM)
+        );
+        // The user's own refusal, unchanged: the gate declined the retry.
+        const failed = (derived.featureWarnings ?? []).filter(
+          (entry) => entry.kind === 'build-failed'
+        );
+        expect(failed).toHaveLength(1);
+        expect(failed[0]!.featureName).toBe(
+          route === 'boolean' ? 'Engrave' : 'Label text'
+        );
+        expect(failed[0]!.kernelRefusal).toMatchObject({
+          family: 'boolean',
+          code: 'exact_only_unattainable'
+        });
+        expect(failed[0]!.message).toContain(
+          operation === 'subtract'
+            ? 'could not be cut exactly'
+            : 'could not be combined exactly'
+        );
+        // And the drilled slab is left exactly as it was, beside the text
+        // body the refused boolean did not consume.
+        const bodies = Object.values(derived.bodyRepresentations).filter(
+          (body) => !body.consumed
+        );
+        expect(bodies).toHaveLength(route === 'boolean' ? 2 : 1);
+        const slab = bodies.reduce((largest, body) =>
+          body.volume > largest.volume ? body : largest
+        );
+        expect(volumeRatio(slab, slabWith(UNDER_B_STEM))).toBeCloseTo(1, 6);
+      });
+
+      it(`still pierces an on-face ${verb} when the hole is clear of the text`, async () => {
+        const derived = await adapter.syncDocument(
+          onFaceScene(route, operation, CLEAR_OF_TEXT)
+        );
+        expect(derived.warnings).toEqual([]);
+        const glyphVolume = textArea(openSans, TEXT, SIZE) * DEPTH;
+        const expected =
+          slabWith(CLEAR_OF_TEXT) +
+          (operation === 'subtract' ? -glyphVolume : glyphVolume);
+        expect(volumeRatio(bodyOf(derived), expected)).toBeCloseTo(1, 5);
+      });
     }
   });
 

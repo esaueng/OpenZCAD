@@ -65,9 +65,9 @@ const COPLANAR_TOLERANCES = 10;
 const PARALLEL_COSINE = 1 - 1e-9;
 
 /**
- * Ceiling on the cap triangles sampled by the side test. A glyph cap
- * tessellates to a few hundred; the stride keeps a pathological cap from
- * turning a refusal into a long stall.
+ * Ceiling on the cap triangles sampled by the side test. That test only says
+ * which side of the face is air; coverage of the footprint is proved from the
+ * loops by `capsOnPartnerFaces`, so the stride cannot let a hole through.
  */
 const MAX_SIDE_SAMPLES = 512;
 
@@ -219,6 +219,225 @@ function insideAny(
   return inside;
 }
 
+/** A face loop flattened into the sketch plane: a closed segment soup. */
+interface PlaneLoop {
+  /** `[x1, y1, x2, y2]` per chord, in plane (u, v) coordinates. */
+  segments: Float64Array[];
+  /** A point on the loop, for side tests once the loops are separated. */
+  probe: [number, number];
+  /** Axis-aligned bounds of the chords: `[minX, minY, maxX, maxY]`. */
+  bounds: [number, number, number, number];
+}
+
+interface PlaneRegion {
+  outer: PlaneLoop;
+  inner: PlaneLoop[];
+}
+
+/**
+ * A planar face's loops (outer first, then its holes) in plane coordinates.
+ * Each edge is sampled by the kernel at `deflection`, so a chord sits within
+ * `deflection` of the true curve; the containment test widens every
+ * clearance by that much on both sides, so flattening can only make it more
+ * conservative.
+ */
+function planeRegion(
+  kernel: RemusKernel,
+  face: number,
+  plane: PlaneBasis,
+  deflection: number
+): PlaneRegion {
+  const wires = Array.from(kernel.getFaceWires(face));
+  if (wires.length === 0 || wires[0] !== kernel.getFaceOuterWire(face)) {
+    throw new Error('Face wires did not lead with the outer wire.');
+  }
+  const loops = wires.map((wire): PlaneLoop => {
+    const segments: Float64Array[] = [];
+    const bounds: [number, number, number, number] = [
+      Infinity,
+      Infinity,
+      -Infinity,
+      -Infinity
+    ];
+    let probe: [number, number] | null = null;
+    for (const edge of Array.from(kernel.getWireEdges(wire))) {
+      const values = kernel.sampleEdge(edge, deflection);
+      let previous: [number, number] | null = null;
+      for (let at = 0; at + 2 < values.length; at += 3) {
+        const dx = values[at]! - plane.origin.x;
+        const dy = values[at + 1]! - plane.origin.y;
+        const dz = values[at + 2]! - plane.origin.z;
+        const point: [number, number] = [
+          dx * plane.u.x + dy * plane.u.y + dz * plane.u.z,
+          dx * plane.v.x + dy * plane.v.y + dz * plane.v.z
+        ];
+        probe ??= point;
+        bounds[0] = Math.min(bounds[0], point[0]);
+        bounds[1] = Math.min(bounds[1], point[1]);
+        bounds[2] = Math.max(bounds[2], point[0]);
+        bounds[3] = Math.max(bounds[3], point[1]);
+        if (previous) {
+          segments.push(
+            Float64Array.of(previous[0], previous[1], point[0], point[1])
+          );
+        }
+        previous = point;
+      }
+    }
+    if (!probe || segments.length === 0) {
+      throw new Error('A face loop sampled to nothing.');
+    }
+    return { segments, probe, bounds };
+  });
+  return { outer: loops[0]!, inner: loops.slice(1) };
+}
+
+function pointSegmentDistance(
+  x: number,
+  y: number,
+  segment: Float64Array
+): number {
+  const x1 = segment[0]!;
+  const y1 = segment[1]!;
+  const dx = segment[2]! - x1;
+  const dy = segment[3]! - y1;
+  const lengthSquared = dx * dx + dy * dy;
+  const t =
+    lengthSquared === 0
+      ? 0
+      : Math.max(
+          0,
+          Math.min(1, ((x - x1) * dx + (y - y1) * dy) / lengthSquared)
+        );
+  return Math.hypot(x - (x1 + t * dx), y - (y1 + t * dy));
+}
+
+function orientation(segment: Float64Array, x: number, y: number): number {
+  return (
+    (segment[2]! - segment[0]!) * (y - segment[1]!) -
+    (segment[3]! - segment[1]!) * (x - segment[0]!)
+  );
+}
+
+function segmentDistance(a: Float64Array, b: Float64Array): number {
+  const crosses =
+    orientation(b, a[0]!, a[1]!) * orientation(b, a[2]!, a[3]!) < 0 &&
+    orientation(a, b[0]!, b[1]!) * orientation(a, b[2]!, b[3]!) < 0;
+  if (crosses) return 0;
+  return Math.min(
+    pointSegmentDistance(a[0]!, a[1]!, b),
+    pointSegmentDistance(a[2]!, a[3]!, b),
+    pointSegmentDistance(b[0]!, b[1]!, a),
+    pointSegmentDistance(b[2]!, b[3]!, a)
+  );
+}
+
+/** Whether two loops' chords stay more than `clearance` apart everywhere. */
+function loopsSeparated(
+  left: PlaneLoop,
+  right: PlaneLoop,
+  clearance: number
+): boolean {
+  if (
+    left.bounds[0] - right.bounds[2] > clearance ||
+    right.bounds[0] - left.bounds[2] > clearance ||
+    left.bounds[1] - right.bounds[3] > clearance ||
+    right.bounds[1] - left.bounds[3] > clearance
+  ) {
+    return true;
+  }
+  for (const a of left.segments) {
+    for (const b of right.segments) {
+      if (segmentDistance(a, b) <= clearance) return false;
+    }
+  }
+  return true;
+}
+
+/** Even-odd ray test against a closed segment soup. */
+function insideLoop(point: [number, number], loop: PlaneLoop): boolean {
+  const [x, y] = point;
+  let inside = false;
+  for (const segment of loop.segments) {
+    const y1 = segment[1]!;
+    const y2 = segment[3]!;
+    if (y1 > y !== y2 > y) {
+      const x1 = segment[0]!;
+      const crossing = x1 + ((y - y1) * (segment[2]! - x1)) / (y2 - y1);
+      if (crossing > x) inside = !inside;
+    }
+  }
+  return inside;
+}
+
+function insideRegion(point: [number, number], region: PlaneRegion): boolean {
+  return (
+    insideLoop(point, region.outer) &&
+    !region.inner.some((hole) => insideLoop(point, hole))
+  );
+}
+
+/**
+ * Whether the cap region lies inside the face region — on the face's
+ * material, clear of its outer boundary and of every hole — with every loop
+ * of each kept more than `clearance` from every loop of the other. Once that
+ * separation holds no loop crosses another, so one probe point per loop
+ * decides which side of the other region it lies on.
+ */
+function regionContains(
+  face: PlaneRegion,
+  cap: PlaneRegion,
+  clearance: number
+): boolean {
+  const faceLoops = [face.outer, ...face.inner];
+  for (const capLoop of [cap.outer, ...cap.inner]) {
+    for (const faceLoop of faceLoops) {
+      if (!loopsSeparated(capLoop, faceLoop, clearance)) return false;
+    }
+  }
+  // The cap's outline stands on the face's material...
+  if (!insideRegion(cap.outer.probe, face)) return false;
+  // ...and no hole of the face opens under the cap's material. A hole inside
+  // a counter of the cap (the eye of an "o") is not under it.
+  return !face.inner.some((hole) => insideRegion(hole.probe, cap));
+}
+
+/**
+ * Whether every tool cap lies wholly on ONE of the partner's coplanar faces,
+ * decided from the loops themselves rather than by sampling the cap's
+ * interior. A cap spanning two faces, touching or crossing a boundary, or
+ * over any hole fails, and so does anything the kernel cannot sample.
+ */
+function capsOnPartnerFaces(
+  kernel: RemusKernel,
+  partnerFaces: readonly number[],
+  caps: readonly number[],
+  plane: PlaneBasis,
+  deflection: number,
+  clearance: number
+): boolean {
+  let regions: PlaneRegion[];
+  try {
+    regions = partnerFaces.map((face) =>
+      planeRegion(kernel, face, plane, deflection)
+    );
+  } catch {
+    return false;
+  }
+  return caps.every((cap) => {
+    let capRegion: PlaneRegion;
+    try {
+      capRegion = planeRegion(kernel, cap, plane, deflection);
+    } catch {
+      return false;
+    }
+    return (
+      regions.filter((region) => regionContains(region, capRegion, clearance))
+        .length === 1
+    );
+  });
+}
+
 export interface PierceGateInput {
   /** The body the tool is cut from or united with: its material. */
   partnerSolids: readonly number[];
@@ -234,21 +453,25 @@ export interface PierceGateInput {
 }
 
 /**
- * Whether piercing the tool by `travel` along `direction` provably leaves the
- * boolean's result unchanged, to the extent the kernel can be asked:
+ * Whether piercing the tool by `travel` along `direction` leaves the
+ * boolean's result unchanged:
  *
  * 1. the partner has a planar face in the sketch plane (the remus#953
  *    trigger — without it there is nothing to work around);
  * 2. the tool has its start cap in that plane;
- * 3. at every sampled interior point of that cap, the partner's material lies
- *    on exactly the expected side of the plane: for a cut, air on the pierce
- *    side and material on the tool side; for an add, material on the pierce
- *    side and air on the tool side. That is the footprint sitting on a
- *    boundary face of the partner, so the pierced sliver lies wholly in air
- *    (cut) or wholly in material (add) and cannot change the result.
+ * 3. DECIDING: every cap lies wholly on a single one of those partner faces,
+ *    proved from the loops themselves — inside the face's outer loop, clear
+ *    of every hole, each cap loop more than the sampling allowance plus
+ *    tolerance from every face loop. The face then covers the whole
+ *    footprint, and no pre-existing hole or recess, however small, sits under
+ *    it for the sliver to fill or cut;
+ * 4. GUARD: at sampled interior points of the cap the partner's material lies
+ *    on the expected side of the plane — for a cut, air on the pierce side
+ *    and material on the tool side; for an add, the reverse. This says which
+ *    side of the face is air, which a Remus face normal cannot.
  *
- * Any sample the kernel cannot classify, or that lands on a boundary, fails
- * the gate: the original refusal stands.
+ * Anything the kernel cannot sample or classify, or that lands on a
+ * boundary, fails the gate: the original refusal stands.
  */
 export function pierceGateHolds(
   kernel: RemusKernel,
@@ -259,14 +482,31 @@ export function pierceGateHolds(
     ...input.toolSolids
   ]);
   const tolerance = COPLANAR_TOLERANCES * geometryTolerance(scale);
+  const partnerFaces = coplanarFaces(
+    kernel,
+    input.partnerSolids,
+    input.plane,
+    tolerance
+  );
+  if (partnerFaces.length === 0) return false;
+  const caps = coplanarFaces(kernel, input.toolSolids, input.plane, tolerance);
+  if (caps.length === 0) return false;
+  // Chords within a tenth of the travel of the true curves. Either side of a
+  // clearance can be off by that much, so loops must stay twice that plus the
+  // coplanar tolerance apart; closer than that counts as touching.
+  const deflection = input.travel / 10;
   if (
-    coplanarFaces(kernel, input.partnerSolids, input.plane, tolerance)
-      .length === 0
+    !capsOnPartnerFaces(
+      kernel,
+      partnerFaces,
+      caps,
+      input.plane,
+      deflection,
+      2 * deflection + tolerance
+    )
   ) {
     return false;
   }
-  const caps = coplanarFaces(kernel, input.toolSolids, input.plane, tolerance);
-  if (caps.length === 0) return false;
   const samples = capSamples(kernel, caps);
   if (samples.length === 0) return false;
   const half = input.travel / 2;

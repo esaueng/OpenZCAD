@@ -43,13 +43,34 @@ function scene(input: {
   planeOffset: number;
   distance: number;
   centerX?: number;
+  /** A through-hole drilled in the slab before the tool is sketched. */
+  hole?: { centerX: number; centerY: number; radius: number };
 }) {
   const kernel = new RemusKernel();
-  const withSlab = addPrimitiveFeature(
+  const withBox = addPrimitiveFeature(
     createProjectDocument('Pierce gate', toUserId('user_pierce_gate')),
     { name: 'Slab', primitiveKind: 'box', dimensions: { ...SLAB } }
   );
-  const slabId = withSlab.bodyOrder.at(-1)!;
+  let withSlab = withBox;
+  let slabId = withBox.bodyOrder.at(-1)!;
+  if (input.hole) {
+    // Drilled clear through, overshooting both faces, so the hole's own
+    // build never meets a coplanar cap.
+    const drill = addSketchFeature(withBox, {
+      name: 'Drill',
+      planeRef: { type: 'canonical', plane: 'XY', offset: -1 },
+      objects: [{ objectKind: 'circle', ...input.hole }]
+    });
+    const drilled = extrudeSketch(drill.document, {
+      name: 'Hole',
+      sketchId: drill.sketchId,
+      distance: SLAB.depth + 2,
+      operation: 'cut',
+      targetBodyId: slabId
+    });
+    withSlab = drilled.document;
+    slabId = drilled.bodyId;
+  }
   const created = addSketchFeature(withSlab, {
     name: 'Pocket',
     planeRef: { type: 'canonical', plane: 'XY', offset: input.planeOffset },
@@ -69,6 +90,7 @@ function scene(input: {
     distance: input.distance
   });
   const result = buildDocumentHistory(kernel, extruded.document);
+  expect(result.warnings).toEqual([]);
   const slab = result.shapes.get(slabId)!;
   const tool = result.shapes.get(extruded.bodyId)!;
   const plane = result.sketchBases.get(created.sketchId)!;
@@ -145,7 +167,7 @@ describe('coplanar-cap pierce gate', () => {
     ).toBe(false);
   });
 
-  it('does not fire when the footprint runs off the face', () => {
+  it('does not fire when the cap crosses the face outline', () => {
     // Centred on the slab's x = 62 edge: half the cap hangs over air, where
     // a cut's tool side is not material, so the face does not carry the
     // whole footprint and the gate cannot vouch for the travel.
@@ -164,6 +186,47 @@ describe('coplanar-cap pierce gate', () => {
         travel
       })
     ).toBe(false);
+  });
+
+  it('does not fire over a hole in the face, however small', () => {
+    // A 1 mm through-hole wholly under the 12 x 6 cap. The cap's two display
+    // triangles have their centroids clear of it, so a sampled side test
+    // alone approved this and the sliver would have capped the hole.
+    const under = scene({
+      planeOffset: SLAB.depth,
+      distance: -2,
+      hole: { centerX: 20, centerY: 20, radius: 0.5 }
+    });
+    const gate = (built: typeof under) =>
+      pierceGateHolds(built.kernel, {
+        partnerSolids: built.slab.solids,
+        toolSolids: built.tool.solids,
+        plane: built.plane,
+        direction: UP,
+        mode: 'cut',
+        travel: built.travel
+      });
+    expect(gate(under)).toBe(false);
+    // Half under the cap's edge: the loops cross, so it is declined too.
+    expect(
+      gate(
+        scene({
+          planeOffset: SLAB.depth,
+          distance: -2,
+          hole: { centerX: 26, centerY: 20, radius: 0.5 }
+        })
+      )
+    ).toBe(false);
+    // The same hole well clear of the footprint changes nothing.
+    expect(
+      gate(
+        scene({
+          planeOffset: SLAB.depth,
+          distance: -2,
+          hole: { centerX: 45, centerY: 40, radius: 0.5 }
+        })
+      )
+    ).toBe(true);
   });
 
   it('only rebuilds a body that is still exactly the extrude it came from', () => {
