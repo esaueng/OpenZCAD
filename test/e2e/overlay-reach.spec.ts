@@ -207,47 +207,74 @@ test('UI-06: open menus move back inside a window resized under them', async ({
   await page.keyboard.press('Escape');
 });
 
-test('UI-09: the circle menu shows readable rows and dismisses predictably', async ({
+test('UI-09: the circle type strip sits beside the rail and leaves with the tool', async ({
   page
 }) => {
   await page.setViewportSize({ width: 1366, height: 768 });
-  await createBox(page, 'Circle Menu');
+  await createBox(page, 'Circle Strip');
   await page.getByRole('button', { name: /^Sketch \(S\)/ }).click();
   await page.getByRole('button', { name: 'Top (XY)' }).click();
   const tools = page.getByRole('toolbar', { name: 'Sketch tools' });
   await expect(tools).toBeVisible();
-  await tools.getByRole('button', { name: /^Circle:/ }).click();
-  await tools.getByRole('button', { name: 'Choose circle type' }).click();
-  const menu = page.getByRole('menu');
-  const rows = menu.getByRole('menuitemradio');
-  await expect(rows).toHaveCount(3);
+  const strip = page.getByRole('radiogroup', { name: 'Circle type' });
+  await expect(strip).toHaveCount(0);
 
-  const boxes = await rows.evaluateAll((elements) =>
+  await tools.getByRole('button', { name: /^Circle:/ }).click();
+  const tiles = strip.getByRole('radio');
+  await expect(tiles).toHaveCount(3);
+  await expect(tiles.nth(0)).toHaveAttribute('aria-checked', 'true');
+
+  // Labelled tiles of a usable size, clear of the rail and inside the window.
+  const rail = (await tools.boundingBox())!;
+  const boxes = await tiles.evaluateAll((elements) =>
     elements.map((element) => {
       const box = element.getBoundingClientRect();
-      return { top: box.top, bottom: box.bottom, width: box.width };
+      return { left: box.left, width: box.width, height: box.height };
     })
   );
-  const menuBox = (await menu.boundingBox())!;
-  for (const [index, box] of boxes.entries()) {
-    expect(box.width).toBeGreaterThan(200);
-    expect(box.bottom).toBeLessThanOrEqual(menuBox.y + menuBox.height + 0.5);
-    if (index > 0) {
-      expect(box.top).toBeGreaterThanOrEqual(boxes[index - 1]!.bottom - 0.5);
-    }
+  for (const box of boxes) {
+    expect(box.height).toBeGreaterThanOrEqual(28);
+    expect(box.width).toBeGreaterThan(48);
+    expect(box.left).toBeGreaterThan(rail.x + rail.width);
   }
-  await expectReachable(rows.nth(2));
+  await expectReachable(tiles.nth(2));
 
-  // Escape closes the menu and keeps the tool; the next one is the sketch's.
-  await page.keyboard.press('Escape');
-  await expect(menu).toHaveCount(0);
+  // A tile is one click; the tool's own name follows the type.
+  await tiles.nth(2).click();
+  await expect(tiles.nth(2)).toHaveAttribute('aria-checked', 'true');
+  await expect(
+    tools.getByRole('button', { name: 'Circle: Three-Point Circle' })
+  ).toHaveAttribute('aria-pressed', 'true');
+
+  // C steps the type while the circle tool is live, wrapping round.
+  await page.keyboard.press('c');
+  await expect(tiles.nth(0)).toHaveAttribute('aria-checked', 'true');
+  await expect(
+    tools.getByRole('button', { name: 'Circle: Center Circle' })
+  ).toHaveAttribute('aria-pressed', 'true');
+
+  // The strip belongs to the tool: picking another one takes it away.
+  await page.keyboard.press('l');
+  await expect(strip).toHaveCount(0);
   await expect(tools.getByRole('button', { name: /^Circle:/ })).toHaveAttribute(
     'aria-pressed',
-    'true'
+    'false'
   );
-  // Opening the palette closes it too.
-  await tools.getByRole('button', { name: 'Choose circle type' }).click();
-  await expect(menu).toBeVisible();
+
+  // On a phone, beside an open palette, the tiles wrap into the width left
+  // rather than running off the window.
+  await page.setViewportSize({ width: 390, height: 844 });
+  await page.keyboard.press('c');
   await tools.getByRole('button', { name: /^Sketch palette/ }).click();
-  await expect(menu).toHaveCount(0);
+  await expect(
+    page.getByRole('complementary', { name: 'Sketch palette' })
+  ).toBeVisible();
+  await expect(tiles).toHaveCount(3);
+  for (const index of [0, 1, 2]) {
+    await expect.poll(() => insideWindow(tiles.nth(index))).toBe(true);
+    await expectReachable(tiles.nth(index));
+  }
+  await expectReachable(
+    strip.getByRole('button', { name: 'Next circle type' })
+  );
 });
