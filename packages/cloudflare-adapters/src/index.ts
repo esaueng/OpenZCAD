@@ -5076,6 +5076,17 @@ export class ProjectCollaborationRoom extends DurableObject {
       socket.close(4001, 'Cloud project was permanently deleted.');
       return;
     }
+    const now = Date.now();
+    let frameWindow = this.socketFrameTimes.get(socket);
+    if (!frameWindow || now - frameWindow.start >= 1_000) {
+      frameWindow = { start: now, count: 0 };
+      this.socketFrameTimes.set(socket, frameWindow);
+    }
+    if (++frameWindow.count > 30) {
+      socket.close(1008, 'Collaboration message rate limit reached.');
+      this.removeSocket(socket);
+      return;
+    }
     if (typeof raw !== 'string' || raw.length > 950_000) {
       socket.close(1009, 'Collaboration message is too large.');
       return;
@@ -5095,17 +5106,6 @@ export class ProjectCollaborationRoom extends DurableObject {
       return;
     }
 
-    const now = Date.now();
-    let frameWindow = this.socketFrameTimes.get(socket);
-    if (!frameWindow || now - frameWindow.start >= 1_000) {
-      frameWindow = { start: now, count: 0 };
-      this.socketFrameTimes.set(socket, frameWindow);
-    }
-    if (++frameWindow.count > 30) {
-      socket.close(1008, 'Collaboration message rate limit reached.');
-      this.removeSocket(socket);
-      return;
-    }
     if (message.type === 'hello') {
       const existing = this.sockets.get(socket);
       const collision = Array.from(this.sockets.entries()).find(

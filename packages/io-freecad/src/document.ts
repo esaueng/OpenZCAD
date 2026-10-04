@@ -35,14 +35,43 @@ function xml(bytes: Uint8Array): Xml {
   if (/<!DOCTYPE|<!ENTITY/i.test(text))
     throw new Error('FreeCAD XML entities and document types are unsupported.');
   let depth = 0;
-  for (const [tag] of text.matchAll(
-    /<!--[\s\S]*?-->|<!\[CDATA\[[\s\S]*?\]\]>|<\/?[\w:.-]+(?:[^>"']|"[^"]*"|'[^']*')*>/g
-  )) {
-    if (tag.startsWith('<!')) continue;
-    if (tag.startsWith('</')) depth -= 1;
-    else if (!tag.endsWith('/>')) depth += 1;
+  let cursor = 0;
+  // Advance once through the input. A global tag regex can rescan the entire
+  // remaining suffix for every malformed opening tag or unclosed comment.
+  while ((cursor = text.indexOf('<', cursor)) !== -1) {
+    const opening = cursor;
+    const special = text.startsWith('<!--', cursor)
+      ? ['<!--', '-->']
+      : text.startsWith('<![CDATA[', cursor)
+        ? ['<![CDATA[', ']]>']
+        : text.startsWith('<?', cursor)
+          ? ['<?', '?>']
+          : null;
+    if (special) {
+      const end = text.indexOf(special[1]!, cursor + special[0]!.length);
+      if (end === -1) throw new Error('FreeCAD XML is malformed.');
+      cursor = end + special[1]!.length;
+      continue;
+    }
+    let quote: string | null = null;
+    for (cursor += 1; cursor < text.length; cursor += 1) {
+      const char = text[cursor]!;
+      if (quote) {
+        if (char === quote) quote = null;
+      } else if (char === '"' || char === "'") {
+        quote = char;
+      } else if (char === '<') {
+        throw new Error('FreeCAD XML is malformed.');
+      } else if (char === '>') {
+        break;
+      }
+    }
+    if (cursor === text.length) throw new Error('FreeCAD XML is malformed.');
+    if (text[opening + 1] === '/') depth -= 1;
+    else if (text[cursor - 1] !== '/') depth += 1;
     if (depth > 64)
       throw new Error('FreeCAD XML exceeds the nesting-depth limit.');
+    cursor += 1;
   }
   if (XMLValidator.validate(text) !== true)
     throw new Error('FreeCAD XML is malformed.');

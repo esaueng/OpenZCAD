@@ -109,6 +109,34 @@ function deeplyNestedDocumentFrame(depth: number, clientId = 'client_ws') {
 }
 
 describe('collaboration room socket handling', () => {
+  it('counts frames without client identity before JSON parsing and resets after one second', async () => {
+    const now = vi.spyOn(Date, 'now').mockReturnValue(1_000);
+    try {
+      const { context } = createRoomContext();
+      const room = createTestRoom(context, {});
+      const socket = await openSocket(room, 'proj_frame_limit');
+      const parse = vi.spyOn(JSON, 'parse');
+      try {
+        for (let i = 0; i < 30; i++) await socket.receive('{}');
+        expect(socket.closed).toBeNull();
+        now.mockReturnValue(2_000);
+        await socket.receive('{}');
+        expect(socket.closed).toBeNull();
+        for (let i = 0; i < 29; i++) await socket.receive('{}');
+        const parsedBeforeLimit = parse.mock.calls.length;
+        await socket.receive('{}');
+        expect(socket.closed).toEqual({
+          code: 1008,
+          reason: 'Collaboration message rate limit reached.'
+        });
+        expect(parse.mock.calls.length).toBe(parsedBeforeLimit);
+      } finally {
+        parse.mockRestore();
+      }
+    } finally {
+      now.mockRestore();
+    }
+  });
   it('restores open sockets and presence after hibernation', async () => {
     const { context } = createRoomContext();
     const base = createProjectDocument('Sleeping room', toUserId('user_room'));
