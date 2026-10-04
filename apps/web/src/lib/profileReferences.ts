@@ -38,6 +38,47 @@ export function isEntityWideProfileSource(
 }
 
 /**
+ * The key shared by every profile one entity-wide source supplies, or null
+ * for a profile that is matched by its own geometry. Profiles with the same
+ * key are built together whatever was picked, so they are picked together.
+ */
+export function entityWideSourceKey(
+  sourceEntityIds: readonly string[],
+  isEntityWideSource: (entityId: string) => boolean
+): string | null {
+  if (
+    sourceEntityIds.length === 0 ||
+    !sourceEntityIds.every(isEntityWideSource)
+  ) {
+    return null;
+  }
+  return [...sourceEntityIds].sort().join('|');
+}
+
+/**
+ * The profiles a pick of `picked` stands for: every candidate from the same
+ * entity-wide source (all the glyphs of one text object), or just the pick.
+ */
+export function profilesBuiltWith<
+  T extends { sketchId: string; sourceEntityIds: string[] }
+>(
+  picked: T,
+  candidates: readonly T[],
+  isEntityWideSource: (entityId: string) => boolean
+): T[] {
+  const key = entityWideSourceKey(picked.sourceEntityIds, isEntityWideSource);
+  if (key === null) {
+    return [picked];
+  }
+  const group = candidates.filter(
+    (candidate) =>
+      candidate.sketchId === picked.sketchId &&
+      entityWideSourceKey(candidate.sourceEntityIds, isEntityWideSource) === key
+  );
+  return group.length > 0 ? group : [picked];
+}
+
+/**
  * The references to persist for a profile selection.
  *
  * Selections over an entity-wide source collapse to one reference per source
@@ -53,18 +94,18 @@ export function profileReferencesForSelection(
   const seenEntitySets = new Set<string>();
   for (const profile of profiles) {
     const sourceEntityIds = profile.sourceEntityIds;
-    const entityWide =
-      sourceEntityIds.length > 0 && sourceEntityIds.every(isEntityWideSource);
-    if (entityWide) {
-      // Sorted for the key and for the stored reference, so two selections
-      // that name the same entities produce the same reference.
-      const sorted = [...sourceEntityIds].sort();
-      const key = sorted.join('|');
+    // Sorted for the key and for the stored reference, so two selections
+    // that name the same entities produce the same reference.
+    const key = entityWideSourceKey(sourceEntityIds, isEntityWideSource);
+    if (key !== null) {
       if (seenEntitySets.has(key)) {
         continue;
       }
       seenEntitySets.add(key);
-      references.push({ all: true, sourceEntityIds: sorted });
+      references.push({
+        all: true,
+        sourceEntityIds: [...sourceEntityIds].sort()
+      });
       continue;
     }
     references.push({

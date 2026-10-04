@@ -492,8 +492,10 @@ import {
 import { extrudeCapAncestor } from './lib/interaction/extrudeCapAncestry';
 import { updateProfileSelection } from './lib/profileSelection';
 import {
+  entityWideSourceKey,
   isEntityWideProfileSource,
-  profileReferencesForSelection
+  profileReferencesForSelection,
+  profilesBuiltWith
 } from './lib/profileReferences';
 import {
   selectionCapabilities,
@@ -539,10 +541,9 @@ import { CommandBar, type PaletteCommand } from './components/CommandBar';
 import { DISPLAY_MODE_LABELS } from './lib/displayMode';
 import { ContextMenu, type ContextMenuState } from './components/ContextMenu';
 import type { BodyFeatureIds } from '@openzcad/document-core';
-import {
-  resolveExtrudeOperation,
-  resolveCurrentExtrude,
-  type ResolvedExtrude
+import type {
+  ResolveExtrudeOptions,
+  ResolvedExtrude
 } from './lib/extrudeInference';
 import { isExtrudeSessionCurrent } from './lib/extrudeSession';
 import {
@@ -607,6 +608,17 @@ function faceOffsetTargetFields(
   return box ? { resizeBodyFeatureId: box.primitive.featureId } : {};
 }
 
+/** The interaction machine's view of one picked region. */
+function regionTargetFor(region: RegionPickData): RegionTarget {
+  return {
+    sketchId: region.sketchId,
+    regionFingerprint: region.regionFingerprint,
+    samplePoint: region.samplePoint,
+    area: region.area,
+    sourceEntityIds: region.sourceEntityIds
+  };
+}
+
 function focusedControlOwnsSpace(target: HTMLElement | null): boolean {
   if (!target) {
     return false;
@@ -642,6 +654,13 @@ function focusedControlOwnsSpace(target: HTMLElement | null): boolean {
  * BEFORE it (unsupported extension, a lone `.shapr`) stay synchronous.
  */
 const stepImportRun = () => import('./lib/stepImportRun');
+
+/**
+ * Extrude classification runs only once a region extrude is previewed or
+ * committed, each already awaiting the geometry worker, so its module and the
+ * kernel adapter's inference helpers stay out of the launcher chunk.
+ */
+const extrudeInference = () => import('./lib/extrudeInference');
 
 const LazyViewerShell = lazyWithStaleChunkNotice(() =>
   import('./components/ViewerShell').then((module) => ({
@@ -1370,10 +1389,8 @@ interface RegionExtrudePreviewCandidate {
   document: ProjectDocument;
   base: ProjectDocument;
   input: ExtrudeInput;
-  choice: NonNullable<Parameters<typeof resolveExtrudeOperation>[0]['choice']>;
-  faceAttachment?: Parameters<
-    typeof resolveExtrudeOperation
-  >[0]['faceAttachment'];
+  choice: NonNullable<ResolveExtrudeOptions['choice']>;
+  faceAttachment?: ResolveExtrudeOptions['faceAttachment'];
   distance: number;
   resultBodyId: BodyId;
   label: string;
@@ -3088,6 +3105,7 @@ export function App() {
         };
       },
       derive: async (candidate) => {
+        const { resolveExtrudeOperation } = await extrudeInference();
         const resolved = await resolveExtrudeOperation({
           base: candidate.base,
           input: candidate.input,
@@ -6296,13 +6314,8 @@ export function App() {
     }
     dispatchInteraction({
       type: 'select-region',
-      target: {
-        sketchId: anchor.sketchId,
-        regionFingerprint: anchor.regionFingerprint,
-        samplePoint: anchor.samplePoint,
-        area: anchor.area,
-        sourceEntityIds: anchor.sourceEntityIds
-      }
+      target: regionTargetFor(anchor),
+      group: chosen.map(regionTargetFor)
     });
     setStatus(
       chosen.length === 1
@@ -11854,7 +11867,7 @@ export function App() {
 
   const regionInteractionKey =
     interaction.mode === 'region'
-      ? `${interaction.target.sketchId}:${interaction.target.regionFingerprint}:${JSON.stringify(interaction.extrudeChoice)}`
+      ? `${interaction.target.sketchId}:${interaction.targets.map((target) => target.regionFingerprint).join(',')}:${JSON.stringify(interaction.extrudeChoice)}`
       : null;
   useEffect(() => {
     regionExtrudePreview.clear();
@@ -13372,22 +13385,35 @@ export function App() {
         area: number;
         outer: { x: number; y: number }[];
         holes: { x: number; y: number }[][];
+        buildGroup?: string;
       }[] = [];
+      // A text object's glyphs are built as one, so they hover as one.
+      const entityWideIds = new Set(
+        objects
+          .filter((object) => isEntityWideProfileSource(object.data))
+          .map((object) => object.id as string)
+      );
       try {
         regions = computeSketchRegions(
           displayObjectsWithTextBudget(objects, textOutlineBudgetError),
           (value) => resolve(value)
-        ).map((region) => ({
-          profileId: region.profileId,
-          regionFingerprint: region.regionFingerprint,
-          samplePoint: region.samplePoint,
-          centroid: region.centroid,
-          boundingBox: region.boundingBox,
-          sourceEntityIds: region.sourceEntityIds,
-          area: region.area,
-          outer: region.outer.polyline,
-          holes: region.holes.map((hole) => hole.polyline)
-        }));
+        ).map((region) => {
+          const buildGroup = entityWideSourceKey(region.sourceEntityIds, (id) =>
+            entityWideIds.has(id)
+          );
+          return {
+            profileId: region.profileId,
+            regionFingerprint: region.regionFingerprint,
+            samplePoint: region.samplePoint,
+            centroid: region.centroid,
+            boundingBox: region.boundingBox,
+            sourceEntityIds: region.sourceEntityIds,
+            area: region.area,
+            outer: region.outer.polyline,
+            holes: region.holes.map((hole) => hole.polyline),
+            ...(buildGroup === null ? {} : { buildGroup })
+          };
+        });
       } catch {
         // Unresolvable sketches simply render without pickable regions.
       }
@@ -13521,7 +13547,8 @@ export function App() {
   function settleZeroMoveSketchPick(pick: MoveSelectionPick): boolean {
     if (!movePreview) return false;
     const rehidden =
-      moveSketchPickVisibility(pick, movePreview, hiddenSketchIds) === 'temporary';
+      moveSketchPickVisibility(pick, movePreview, hiddenSketchIds) ===
+      'temporary';
     setMovePreview(null);
     setTool(null);
     if (rehidden) setStatus('Move closed · the sketch is hidden again.');
@@ -13569,10 +13596,18 @@ export function App() {
     region: RegionPickData,
     modifiers: { additive: boolean; toggle: boolean }
   ) {
+    // A glyph stands for its whole text object: the commit builds the whole
+    // word, so the pick selects, arms and previews the whole word too.
+    const group = profilesBuiltWith(
+      region,
+      regionPicksForSketch(region.sketchId),
+      entityWideProfileSource
+    );
     const nextProfiles = updateProfileSelection(
       selectedProfiles,
       region,
-      modifiers
+      modifiers,
+      group
     );
     setSelectedProfiles(nextProfiles);
     setSelectedSketchProfileId(region.sketchId as SketchId);
@@ -13591,16 +13626,35 @@ export function App() {
     }
     dispatchInteraction({
       type: 'select-region',
-      target: {
-        sketchId: region.sketchId,
-        regionFingerprint: region.regionFingerprint,
-        samplePoint: region.samplePoint,
-        area: region.area,
-        sourceEntityIds: region.sourceEntityIds
-      }
+      target: regionTargetFor(region),
+      additive: modifiers.additive || modifiers.toggle,
+      group: group.map(regionTargetFor)
     });
     setStatus(
-      'Closed sketch profile selected · press E to Extrude, or drag the arrow.'
+      nextProfiles.length > 1
+        ? `${nextProfiles.length} closed sketch profiles selected · drag any arrow to extrude them together.`
+        : nextProfiles.length === 1
+          ? 'Closed sketch profile selected · press E to Extrude, or drag the arrow.'
+          : 'Sketch profile selection cleared.'
+    );
+  }
+
+  /** Every detected region of one sketch view, as pick data. */
+  function regionPicksForSketch(sketchId: string): RegionPickData[] {
+    const view = sketchViews.find(
+      (candidate) => candidate.sketchId === sketchId
+    );
+    return (
+      view?.regions.map((candidate) => ({
+        sketchId,
+        profileId: candidate.profileId,
+        regionFingerprint: candidate.regionFingerprint,
+        samplePoint: candidate.samplePoint,
+        centroid: candidate.centroid,
+        boundingBox: candidate.boundingBox,
+        sourceEntityIds: candidate.sourceEntityIds,
+        area: candidate.area
+      })) ?? []
     );
   }
 
@@ -13623,12 +13677,19 @@ export function App() {
     if (interaction.mode !== 'region' || interaction.phase === 'validating') {
       return null;
     }
+    const anchor = interaction.target;
     return {
-      sketchId: interaction.target.sketchId,
-      regionFingerprint: interaction.target.regionFingerprint,
-      samplePoint: interaction.target.samplePoint,
-      area: interaction.target.area,
-      initialValue: interaction.lastValue ?? 0
+      sketchId: anchor.sketchId,
+      regionFingerprint: anchor.regionFingerprint,
+      samplePoint: anchor.samplePoint,
+      area: anchor.area,
+      initialValue: interaction.lastValue ?? 0,
+      followers: interaction.targets
+        .filter((target) => target !== anchor)
+        .map((target) => ({
+          regionFingerprint: target.regionFingerprint,
+          samplePoint: target.samplePoint
+        }))
     };
   }, [interaction]);
 
@@ -13755,16 +13816,41 @@ export function App() {
           choice,
           ...(faceAttachment ? { faceAttachment } : {})
         };
-        const resolved =
-          reuseResolvedExtrudePreview(preview, options) ??
-          (await resolveCurrentExtrude(
-            {
-              ...options,
-              derive: (document) => geometry.syncOnce(document)
-            },
-            isCurrent
-          ));
+        const { regionInferenceRefusal, resolveCurrentExtrude } =
+          await extrudeInference();
+        const agreement = {
+          ...options,
+          derive: (document: ProjectDocument) => geometry.syncOnce(document)
+        };
+        // Every selected region on its own, a text glyph included: the
+        // stored input names a whole word once.
+        const regionProfiles =
+          selected.length > 0
+            ? profileReferencesForSelection(selected, () => false)
+            : (input.profiles ?? []);
+        let resolved: ResolvedExtrude | null;
+        try {
+          resolved =
+            reuseResolvedExtrudePreview(preview, options) ??
+            (await resolveCurrentExtrude(agreement, isCurrent));
+        } catch (error) {
+          // A selection whose profiles disagree often fails as a whole; the
+          // disagreement is the cause worth naming, not the kernel's refusal.
+          const mixed = isCurrent()
+            ? await regionInferenceRefusal(agreement, null, regionProfiles)
+            : null;
+          throw mixed ? new Error(mixed) : error;
+        }
         if (!resolved || !isCurrent()) return;
+        // One drag is one operation: selected profiles that would not each
+        // extrude the same way are refused, not silently merged into one.
+        const mixed = await regionInferenceRefusal(
+          agreement,
+          resolved.inference,
+          regionProfiles
+        );
+        if (!isCurrent()) return;
+        if (mixed) throw new Error(mixed);
         const command = resolved.command;
         const resultBodyId = command.payload.ids?.bodyId;
         if (!resultBodyId)
@@ -15016,7 +15102,11 @@ export function App() {
       // to armed, including a failed value, without adding a machine state.
       dispatchInteraction({ type: 'select-face', target: current.target });
     } else if (current.mode === 'region') {
-      dispatchInteraction({ type: 'select-region', target: current.target });
+      dispatchInteraction({
+        type: 'select-region',
+        target: current.target,
+        group: current.targets
+      });
     }
   }
 
