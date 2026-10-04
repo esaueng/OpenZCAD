@@ -283,6 +283,15 @@ export interface SelectionManagerOptions {
  * target in the first frame after the change. Only x-ray passes, which draw a
  * highlight through the solid in front of it, ease — see `easeOpacity`.
  */
+type RegionMesh = THREE.Mesh<THREE.BufferGeometry, THREE.MeshBasicMaterial>;
+
+/** A hovered region mesh plus the companions a pick of it also selects. */
+function regionHoverSet(mesh: RegionMesh): RegionMesh[] {
+  const companions =
+    (mesh.userData.regionCompanions as RegionMesh[] | undefined) ?? [];
+  return [mesh, ...companions.filter((companion) => companion !== mesh)];
+}
+
 export class SelectionManager {
   /**
    * Overlay materials on their way to `userData.targetOpacity`. Each lands on
@@ -317,6 +326,11 @@ export class SelectionManager {
     THREE.BufferGeometry,
     THREE.MeshBasicMaterial
   > | null = null;
+  /** The hovered region and its companions, all lit together. */
+  private hoveredRegionMeshes: THREE.Mesh<
+    THREE.BufferGeometry,
+    THREE.MeshBasicMaterial
+  >[] = [];
 
   constructor(options: SelectionManagerOptions) {
     this.options = options;
@@ -475,6 +489,11 @@ export class SelectionManager {
     this.options.requestRender();
   }
 
+  /**
+   * Lights the region under the pointer, and with it every region a click
+   * there would select: a mesh's `regionCompanions` (the other glyphs of one
+   * text object) are built with it, so they are previewed with it.
+   */
   setRegionHover(next: THREE.Object3D | null) {
     const mesh =
       next instanceof THREE.Mesh && next.userData.region !== undefined
@@ -483,17 +502,19 @@ export class SelectionManager {
     if (this.hoveredRegionMesh === mesh) {
       return;
     }
-    if (
-      this.hoveredRegionMesh &&
-      this.hoveredRegionMesh.userData.regionSelected !== true
-    ) {
-      this.setRegionVisual(this.hoveredRegionMesh, 'idle');
-      this.fadeIns.add(this.hoveredRegionMesh.material);
+    for (const previous of this.hoveredRegionMeshes) {
+      if (previous.userData.regionSelected !== true) {
+        this.setRegionVisual(previous, 'idle');
+        this.fadeIns.add(previous.material);
+      }
     }
     this.hoveredRegionMesh = mesh;
-    if (mesh && mesh.userData.regionSelected !== true) {
-      this.setRegionVisual(mesh, 'hover');
-      this.fadeIns.add(mesh.material);
+    this.hoveredRegionMeshes = mesh ? regionHoverSet(mesh) : [];
+    for (const hovered of this.hoveredRegionMeshes) {
+      if (hovered.userData.regionSelected !== true) {
+        this.setRegionVisual(hovered, 'hover');
+        this.fadeIns.add(hovered.material);
+      }
     }
     this.options.requestRender();
   }
@@ -512,7 +533,11 @@ export class SelectionManager {
     mesh.userData.regionBaseOpacity = baseOpacity;
     this.setRegionVisual(
       mesh,
-      selected ? 'selected' : this.hoveredRegionMesh === mesh ? 'hover' : 'idle'
+      selected
+        ? 'selected'
+        : this.hoveredRegionMeshes.includes(mesh)
+          ? 'hover'
+          : 'idle'
     );
     const target =
       (mesh.material.userData.targetOpacity as number | undefined) ??
