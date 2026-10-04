@@ -9,7 +9,12 @@ import {
   vi
 } from 'vitest';
 import { createProjectDocument } from '@openzcad/document-core';
-import { toBodyId, toUserId, type TopologySelection } from '@openzcad/shared';
+import {
+  toBodyId,
+  toUserId,
+  type BodyRepresentation,
+  type TopologySelection
+} from '@openzcad/shared';
 import {
   loadProjectMeasurements,
   saveProjectMeasurements
@@ -319,5 +324,81 @@ describe('measurement annotations', () => {
     expect(result.current.measurementAnnotations[0]!.id).toBe(
       'measurement-annotated'
     );
+  });
+
+  it('places an area label against the face on screen, not the committed one', async () => {
+    // A parameter preview hands the viewport other bodies than the committed
+    // ones. The label's face box must come from what is drawn — here the top
+    // face previewed up from z = 30 to z = 45 — or label and leader would
+    // stand beside the face as it was before the edit.
+    const doc = createProjectDocument('Measure H', toUserId('user_measure_h'));
+    const bodyAt = (z: number): BodyRepresentation => ({
+      bodyId: toBodyId('body-1'),
+      name: 'Box',
+      source: 'primitive',
+      mesh: {
+        kind: 'mesh',
+        vertices: Float32Array.from([0, 0, z, 10, 0, z, 10, 20, z]),
+        indices: Uint32Array.from([0, 1, 2])
+      },
+      faceCount: 1,
+      color: '#fff',
+      exportableStep: true,
+      consumed: false,
+      volume: 1,
+      bbox: { min: { x: 0, y: 0, z: 0 }, max: { x: 10, y: 20, z } },
+      topology: {
+        edges: [],
+        faces: [
+          {
+            topologyId: 'face-1',
+            hash: 1,
+            triangleStart: 0,
+            triangleCount: 1,
+            geometry: {
+              surfaceType: 'plane',
+              area: 200,
+              center: { x: 5, y: 10, z }
+            }
+          }
+        ]
+      }
+    });
+    const area: Measurement = {
+      ...measurement('measurement-area', true),
+      kind: 'face-area',
+      label: 'Top face',
+      targets: [
+        {
+          ...target,
+          kind: 'face',
+          topologyId: 'face-1',
+          semantic: 'face-center'
+        }
+      ],
+      result: { value: 200, dimension: 'area' }
+    };
+    load.mockResolvedValue(record(doc.projectId, [area]));
+
+    const { result } = renderHook(() =>
+      useMeasurementWorkbench(
+        input({
+          doc,
+          modelingLocked: true,
+          representations: { 'body-1': bodyAt(30) },
+          renderedRepresentations: { 'body-1': bodyAt(45) },
+          viewerBodies: [bodyAt(45)]
+        })
+      )
+    );
+
+    await waitFor(() =>
+      expect(result.current.measurementAnnotations).toHaveLength(1)
+    );
+    expect(result.current.measurementAnnotations[0]!.extent).toMatchObject({
+      bodyId: 'body-1',
+      min: { z: 45 },
+      max: { z: 45 }
+    });
   });
 });

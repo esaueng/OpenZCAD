@@ -41,6 +41,61 @@ describe('layoutMeasurementCallouts', () => {
     expect(fromAnchor).toBeLessThanOrEqual(221);
   });
 
+  it('stands an area label just outside its own face, not the model', () => {
+    // A face of a large model, right of centre: its label clears the face's
+    // projected box and stops there, well inside the model's silhouette.
+    const anchor = { x: 680, y: 400 };
+    const bounds = { minX: 640, minY: 360, maxX: 720, maxY: 440 };
+    const [placed = { x: NaN, y: NaN, leader: false }] =
+      layoutMeasurementCallouts(
+        [pill({ anchor, kind: 'anchor', bounds })],
+        viewport
+      );
+    // Outward from the model centre is +x here: the pill's left edge sits
+    // just past the face's right edge, and the pill stays level with it.
+    expect(placed.x - 45).toBeGreaterThan(bounds.maxX);
+    expect(placed.x - 45).toBeLessThanOrEqual(bounds.maxX + 12);
+    expect(placed.y).toBeCloseTo(400, 5);
+    expect(Math.hypot(placed.x - 600, placed.y - 400)).toBeLessThan(
+      viewport.radius
+    );
+  });
+
+  it('leaves a face by its nearest edge on the side away from the model', () => {
+    // Down and right both face away from the centre; the face's bottom edge
+    // is much the nearer, so the label hangs just below it.
+    const anchor = { x: 650, y: 420 };
+    const bounds = { minX: 560, minY: 300, maxX: 700, maxY: 440 };
+    const [placed = { x: NaN, y: NaN, leader: false }] =
+      layoutMeasurementCallouts(
+        [pill({ anchor, kind: 'anchor', bounds })],
+        viewport
+      );
+    expect(placed.x).toBeCloseTo(650, 5);
+    expect(placed.y - 12).toBeGreaterThan(bounds.maxY);
+    expect(placed.y - 12).toBeLessThanOrEqual(bounds.maxY + 12);
+  });
+
+  it('keeps an area label on a short leash beside a face filling the screen', () => {
+    // No leash clears this face, so the label stays close rather than
+    // running the whole leash out on a long leader over the face.
+    const anchor = { x: 620, y: 380 };
+    const [placed = { x: NaN, y: NaN, leader: false }] =
+      layoutMeasurementCallouts(
+        [
+          pill({
+            anchor,
+            kind: 'anchor',
+            bounds: { minX: -2000, minY: -2000, maxX: 3000, maxY: 3000 }
+          })
+        ],
+        viewport
+      );
+    expect(
+      Math.hypot(placed.x - anchor.x, placed.y - anchor.y)
+    ).toBeLessThanOrEqual(121);
+  });
+
   it('lifts a span label off its dimension line, away from the model', () => {
     // Horizontal span across the top of the model: the label must move up
     // (away from the centre below it), not sit on the line.

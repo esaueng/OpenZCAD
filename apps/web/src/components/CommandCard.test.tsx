@@ -1,3 +1,5 @@
+import { readFileSync } from 'node:fs';
+import { resolve } from 'node:path';
 import { fireEvent, render, screen, within } from '@testing-library/react';
 import { useState } from 'react';
 import { describe, expect, it, vi } from 'vitest';
@@ -125,6 +127,38 @@ describe('CommandCard', () => {
     expect(sketch.querySelector('svg')).not.toBeNull();
     // Nothing is picked, so nothing is dimmed.
     expect(container.querySelectorAll('.is-dim')).toHaveLength(0);
+  });
+
+  it('drops the primary hint while a tool is armed, so one button is lit', () => {
+    const { container } = renderCard(NOTHING, { activeTool: 'box' });
+    const box = screen.getByRole('button', { name: /^Box \(B\)/ });
+    expect(box).toHaveClass('active');
+    expect(box).not.toHaveClass('is-primary');
+    expect(
+      screen.getByRole('button', { name: /^Sketch \(S\)/ })
+    ).not.toHaveClass('is-primary');
+    expect(container.querySelectorAll('.is-primary')).toHaveLength(0);
+    expect(
+      container.querySelectorAll('button.command-rail.active')
+    ).toHaveLength(1);
+  });
+
+  it('draws the primary hint lighter than the armed outline', () => {
+    // The hint once carried the accent fill, the same weight as an armed
+    // tool's outline, so two rail buttons read as active.
+    const css = readFileSync(
+      resolve(__dirname, '../styles/components/quiet-stage.css'),
+      'utf8'
+    );
+    const rules = Array.from(
+      css.matchAll(/([^{}]+)\{([^{}]*)\}/g),
+      (match) => ({ selector: match[1]!.trim(), body: match[2]! })
+    ).filter((rule) => /\.command-rail\.is-primary\b/.test(rule.selector));
+    expect(rules.length).toBeGreaterThan(0);
+    for (const rule of rules) {
+      if (rule.selector.endsWith('::before')) continue;
+      expect(rule.body).not.toMatch(/background|border|outline|box-shadow/);
+    }
   });
 
   it.each([

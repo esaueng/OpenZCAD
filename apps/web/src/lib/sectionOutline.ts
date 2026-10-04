@@ -5,6 +5,7 @@ import type {
   ProjectDocument
 } from '@openzcad/shared';
 import type { GeometryWorkerApi } from '../hooks/useGeometryWorker';
+import type { MeasurementViewportAnnotation } from './measurements';
 import type {
   ExactSectionRegionDisplay,
   SectionViewSettings
@@ -177,6 +178,51 @@ export const sectionReadsEveryViewportField: SectionReadsEveryViewportField = tr
  * it actually drew — is the other half, and the half that does not depend on
  * a future mechanism remembering to declare itself.
  */
+/**
+ * The bodies on screen exactly as `bodies` built them: not covered by a
+ * stand-in and not reported drawn elsewhere. Anything placed against a
+ * body's own geometry — a measurement label beside its face — may only
+ * trust these; for the rest the geometry it would read is not what is drawn.
+ */
+export function bodiesDrawnAsBuilt(view: ViewportGeometry): Set<BodyId> {
+  const replaced = new Set<string>([
+    ...(view.standIns ?? []).flatMap((standIn) => standIn.replaces),
+    ...view.drawnElsewhere
+  ]);
+  return new Set(
+    view.bodies
+      .map((body) => body.bodyId)
+      .filter((bodyId) => !replaced.has(bodyId))
+  );
+}
+
+/**
+ * Measurement annotations as this drawing may place them: a label keeps the
+ * box of the face it measures only while that face's body is drawn as
+ * built. Under a parameter stand-in or a Move pose the box describes
+ * geometry that is not on screen, so the label falls back to standing
+ * outside the whole model. Unchanged annotations keep their identity.
+ */
+export function measurementAnnotationsOnScreen(
+  annotations: MeasurementViewportAnnotation[],
+  view: ViewportGeometry
+): MeasurementViewportAnnotation[] {
+  if (!annotations.some((annotation) => annotation.extent)) {
+    return annotations;
+  }
+  const asBuilt = bodiesDrawnAsBuilt(view);
+  const placed = annotations.map((annotation) => {
+    if (!annotation.extent || asBuilt.has(annotation.extent.bodyId)) {
+      return annotation;
+    }
+    const { extent: _offScreen, ...rest } = annotation;
+    return rest;
+  });
+  return placed.every((annotation, index) => annotation === annotations[index])
+    ? annotations
+    : placed;
+}
+
 export function sectionSourceOf(view: ViewportGeometry): SectionSource {
   // Destructured, not read field by field, so this reads as what it is: the
   // whole of what the viewport is drawing, every field of it accounted for
