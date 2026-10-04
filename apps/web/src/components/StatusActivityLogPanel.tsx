@@ -1,4 +1,4 @@
-import { useEffect, useRef, type RefObject } from 'react';
+import { useEffect, useRef } from 'react';
 import { createPortal } from 'react-dom';
 import type { StatusLogEntry } from './StatusActivityLog';
 
@@ -7,7 +7,6 @@ interface StatusActivityLogPanelProps {
   entries: readonly StatusLogEntry[];
   /** Older entries were dropped to keep the log bounded. */
   truncated: boolean;
-  triggerRef: RefObject<HTMLButtonElement | null>;
   onClose(restoreFocus: boolean): void;
 }
 
@@ -20,35 +19,16 @@ const statusTimeFormatter = new Intl.DateTimeFormat(undefined, {
 /**
  * The activity log's panel. The log itself (StatusActivityLog) records every
  * message from the moment the workspace opens and stays on the entry chunk;
- * this, drawn only when someone opens it, loads on demand.
+ * this, drawn only when someone opens it, loads on demand. Escape and a
+ * press outside close it from there too, so they work before it loads.
  */
 export function StatusActivityLogPanel({
   id,
   entries,
   truncated,
-  triggerRef,
   onClose
 }: StatusActivityLogPanelProps) {
-  const panelRef = useRef<HTMLElement | null>(null);
   const listRef = useRef<HTMLOListElement | null>(null);
-
-  useEffect(() => {
-    const closeOnOutsidePointer = (event: PointerEvent) => {
-      const target = event.target as Node;
-      if (
-        !panelRef.current?.contains(target) &&
-        !triggerRef.current?.contains(target)
-      ) {
-        onClose(false);
-      }
-    };
-
-    // Escape is the always-loaded StatusActivityLog's: it has to work
-    // before this chunk arrives.
-    document.addEventListener('pointerdown', closeOnOutsidePointer);
-    return () =>
-      document.removeEventListener('pointerdown', closeOnOutsidePointer);
-  }, [onClose, triggerRef]);
 
   useEffect(() => {
     if (listRef.current) {
@@ -58,7 +38,6 @@ export function StatusActivityLogPanel({
 
   return createPortal(
     <section
-      ref={panelRef}
       id={id}
       className="status-log-panel"
       role="region"

@@ -71,26 +71,48 @@ describe('StatusActivityLog while its panel loads', () => {
     }
   });
 
+  it('closes on a press in the workspace before the chunk arrives', () => {
+    load.next = 'pending';
+    const onClose = vi.fn();
+    render(logAt(true, onClose));
+    expect(screen.queryByRole('region', { name: 'Activity log' })).toBeNull();
+    // Otherwise the click acts on the workspace and the log, still open,
+    // pops up over that action once the chunk lands.
+    fireEvent.pointerDown(screen.getByText('Workspace'));
+    expect(onClose).toHaveBeenCalledWith(false);
+  });
+
   it('fails inside the log, then loads when the log is opened again', async () => {
     vi.spyOn(console, 'error').mockImplementation(() => {});
     load.next = 'missing';
-    const { rerender } = render(logAt(true));
+    const onClose = vi.fn();
+    const { rerender } = render(logAt(true, onClose));
 
     const alert = await screen.findByRole('alert');
     expect(alert).toHaveTextContent('Activity log could not be rendered.');
-    expect(
-      within(alert).getByRole('button', { name: 'Reload workspace' })
-    ).toBeInTheDocument();
+    const reload = within(alert).getByRole('button', {
+      name: 'Reload workspace'
+    });
+    // Pressing the alert's own Reload is inside the log, not a press away.
+    fireEvent.pointerDown(reload);
+    expect(onClose).not.toHaveBeenCalled();
     // Nothing above the log was replaced by an error page.
     expect(screen.getByText('Workspace')).toBeInTheDocument();
 
     // The chunk is reachable again: closing and reopening retries the import
     // instead of replaying the rejection React.lazy kept.
     load.next = 'real';
-    rerender(logAt(false));
-    rerender(logAt(true));
+    rerender(logAt(false, onClose));
+    rerender(logAt(true, onClose));
     const log = await screen.findByRole('region', { name: 'Activity log' });
     expect(log).toHaveTextContent('Added box.');
     expect(screen.queryByRole('alert')).toBeNull();
+    // A press on the loaded panel (portalled out of this tree) stays in it;
+    // one in the workspace closes it, from the one handler there is.
+    fireEvent.pointerDown(log);
+    expect(onClose).not.toHaveBeenCalled();
+    fireEvent.pointerDown(screen.getByText('Workspace'));
+    expect(onClose).toHaveBeenCalledOnce();
+    expect(onClose).toHaveBeenCalledWith(false);
   });
 });

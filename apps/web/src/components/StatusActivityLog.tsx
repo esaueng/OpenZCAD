@@ -136,13 +136,27 @@ export function StatusActivityLog({
     }
   }, [detail, geometryStatus, logged, status, tone]);
 
-  // Escape is answered here, not in the panel: while its chunk loads (or
-  // after it failed) the key must still close the log rather than reach the
-  // workspace's Escape ladder and cancel the command behind it.
+  // Escape and a press outside are answered here, not in the panel: while
+  // its chunk loads (or after it failed) the log must still close — Escape
+  // must not reach the workspace's Escape ladder and cancel the command
+  // behind it, and a click in the workspace must not leave the log to pop up
+  // over that action when the chunk lands. Inside is the panel (portalled
+  // by id), the failure alert (in this host) and the button that toggles it.
+  const hostRef = useRef<HTMLDivElement | null>(null);
   useEffect(() => {
     if (!open) {
       return;
     }
+    const closeOnOutsidePointer = (event: PointerEvent) => {
+      const target = event.target as Node;
+      if (
+        !document.getElementById(id)?.contains(target) &&
+        !hostRef.current?.contains(target) &&
+        !triggerRef.current?.contains(target)
+      ) {
+        onClose(false);
+      }
+    };
     const closeOnEscape = (event: KeyboardEvent) => {
       if (event.key !== 'Escape') {
         return;
@@ -151,9 +165,13 @@ export function StatusActivityLog({
       event.stopImmediatePropagation();
       onClose(true);
     };
+    document.addEventListener('pointerdown', closeOnOutsidePointer);
     window.addEventListener('keydown', closeOnEscape, true);
-    return () => window.removeEventListener('keydown', closeOnEscape, true);
-  }, [onClose, open]);
+    return () => {
+      document.removeEventListener('pointerdown', closeOnOutsidePointer);
+      window.removeEventListener('keydown', closeOnEscape, true);
+    };
+  }, [id, onClose, open, triggerRef]);
 
   const LogPanel = loadedPanel ?? attempt.Lazy;
   if (!open || !LogPanel) {
@@ -165,16 +183,17 @@ export function StatusActivityLog({
   // workspace behind it. The boundary says so with a Reload; closing and
   // reopening the log mounts a fresh boundary and a fresh import.
   return (
-    <ErrorBoundary label="Activity log">
-      <Suspense fallback={null}>
-        <LogPanel
-          id={id}
-          entries={entries}
-          truncated={nextEntryIdRef.current > MAX_STATUS_LOG_ENTRIES}
-          triggerRef={triggerRef}
-          onClose={onClose}
-        />
-      </Suspense>
-    </ErrorBoundary>
+    <div ref={hostRef} style={{ display: 'contents' }}>
+      <ErrorBoundary label="Activity log">
+        <Suspense fallback={null}>
+          <LogPanel
+            id={id}
+            entries={entries}
+            truncated={nextEntryIdRef.current > MAX_STATUS_LOG_ENTRIES}
+            onClose={onClose}
+          />
+        </Suspense>
+      </ErrorBoundary>
+    </div>
   );
 }
