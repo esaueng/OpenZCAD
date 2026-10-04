@@ -1,4 +1,5 @@
 import type { PlaneBasis } from '@openzcad/geometry';
+import type { SketchMoveHandle } from '../interaction/machine';
 import type {
   SketchObjectData,
   SketchPlaneFrame,
@@ -946,4 +947,368 @@ export function centerInferenceSegments(
       { x: target.x, y: target.y + halfSpan }
     ]
   ];
+}
+
+// ---------------------------------------------------------------------------
+// Drag-move of a committed object
+// ---------------------------------------------------------------------------
+
+/**
+ * Whether a stored value is a plain number a drag may overwrite. An
+ * expression (`width / 2`, a parameter name) is the user's intent, and a drag
+ * that wrote a number over it would cut the link without saying so; such an
+ * object keeps its exact-entry fields and offers no drag.
+ */
+function isLiteralNumber(value: unknown): boolean {
+  if (typeof value === 'number') {
+    return Number.isFinite(value);
+  }
+  return (
+    typeof value === 'string' &&
+    /^\s*[-+]?(\d+(\.\d*)?|\.\d+)([eE][-+]?\d+)?\s*$/.test(value)
+  );
+}
+
+/** The stored fields a translation rewrites, per object kind. */
+function positionFields(data: SketchObjectData): [string, string][] {
+  switch (data.objectKind) {
+    case 'line':
+      return [
+        ['x1', 'y1'],
+        ['x2', 'y2']
+      ];
+    case 'text':
+      return [['x', 'y']];
+    default:
+      return [['centerX', 'centerY']];
+  }
+}
+
+/** True when every position field is a literal number a drag can rewrite. */
+export function sketchObjectMovable(data: SketchObjectData): boolean {
+  const record = data as unknown as Record<string, unknown>;
+  return positionFields(data).every(
+    ([x, y]) => isLiteralNumber(record[x]) && isLiteralNumber(record[y])
+  );
+}
+
+/** True for a text object whose rotation is absent or a literal number. */
+export function sketchObjectRotatable(data: SketchObjectData): boolean {
+  return (
+    data.objectKind === 'text' &&
+    sketchObjectMovable(data) &&
+    (data.rotation === undefined || isLiteralNumber(data.rotation))
+  );
+}
+
+/**
+ * The one point a closed object is dragged by: the centre of a circle,
+ * rectangle or polygon, and the baseline origin of text — the same points
+ * `snapTargetsForObject` already offers. Lines and arcs have none; they are
+ * grabbed anywhere along the curve. Null too when a field cannot resolve.
+ */
+export function sketchObjectGrabPoint(
+  data: SketchObjectData,
+  resolve: (value: unknown) => number
+): SketchPoint | null {
+  try {
+    switch (data.objectKind) {
+      case 'circle':
+      case 'rectangle':
+      case 'polygon':
+        return { x: resolve(data.centerX), y: resolve(data.centerY) };
+      case 'text':
+        return { x: resolve(data.x), y: resolve(data.y) };
+      default:
+        return null;
+    }
+  } catch {
+    return null;
+  }
+}
+
+/**
+ * The object moved by (`dx`, `dy`). Sizes, angles and text attributes are
+ * kept as written; only the position fields change, so the result goes
+ * through the same entity-edit path the exact fields use.
+ */
+export function translateSketchObject(
+  data: SketchObjectData,
+  dx: number,
+  dy: number,
+  resolve: (value: unknown) => number
+): SketchObjectData {
+  const next = { ...data } as unknown as Record<string, unknown>;
+  for (const [x, y] of positionFields(data)) {
+    next[x] = resolve(next[x]) + dx;
+    next[y] = resolve(next[y]) + dy;
+  }
+  return next as unknown as SketchObjectData;
+}
+
+/**
+ * The object moved so its grab point lands exactly on `target`. Writing the
+ * target itself, rather than adding a delta to the old position, keeps a
+ * snapped centre bit-exact on the point it snapped to.
+ */
+export function placeSketchObjectGrabPoint(
+  data: SketchObjectData,
+  target: SketchPoint
+): SketchObjectData {
+  switch (data.objectKind) {
+    case 'circle':
+    case 'rectangle':
+    case 'polygon':
+      return { ...data, centerX: target.x, centerY: target.y };
+    case 'text':
+      return { ...data, x: target.x, y: target.y };
+    default:
+      return data;
+  }
+}
+
+/**
+ * Text rotation after dragging the ring from `from` to `to` about `origin`.
+ * Whole degrees unless `free` (Shift), normalised to (-180, 180] so the
+ * field reads the way a person would type it.
+ */
+export function textRotationFromRingDrag(
+  origin: SketchPoint,
+  from: SketchPoint,
+  to: SketchPoint,
+  startRotationDeg: number,
+  free = false
+): number {
+  const start = Math.atan2(from.y - origin.y, from.x - origin.x);
+  const end = Math.atan2(to.y - origin.y, to.x - origin.x);
+  let degrees = startRotationDeg + ((end - start) * 180) / Math.PI;
+  if (!free) {
+    degrees = Math.round(degrees);
+  }
+  degrees = ((((degrees + 180) % 360) + 360) % 360) - 180;
+  if (degrees === -180) {
+    degrees = 180;
+  }
+  return Object.is(degrees, -0) ? 0 : degrees;
+}
+
+/**
+ * Whose a pointer event is while a sketch object drag may be held: the
+ * pointer that holds it (`owner`), another pointer arriving mid-drag
+ * (`other`: a second finger or a stylus, which the viewport ignores
+ * entirely, so it can neither start a second move nor end, select through
+ * or cancel the first), or any pointer when no drag is held (`free`).
+ */
+export function sketchMovePointerRole(
+  heldPointerId: number | null | undefined,
+  pointerId: number
+): 'free' | 'owner' | 'other' {
+  if (heldPointerId === null || heldPointerId === undefined) {
+    return 'free';
+  }
+  return heldPointerId === pointerId ? 'owner' : 'other';
+}
+
+/**
+ * Whether two rotations, in degrees, point the same way: equal modulo a
+ * full turn, within a hair. A stored 360 and a dragged 0 are one angle.
+ */
+export function sameRotation(first: number, second: number): boolean {
+  const difference = (((first - second) % 360) + 360) % 360;
+  return Math.min(difference, 360 - difference) < 1e-9;
+}
+
+/**
+ * Text turned to `rotationDeg`. When that is the angle the object already
+ * has — a ring dragged back to where it started — the object comes back
+ * untouched, so an absent rotation stays absent and a stored 360 stays 360.
+ */
+export function rotateTextObject(
+  data: SketchObjectData,
+  rotationDeg: number
+): SketchObjectData {
+  if (data.objectKind !== 'text') {
+    return data;
+  }
+  const current = data.rotation === undefined ? 0 : Number(data.rotation);
+  if (Number.isFinite(current) && sameRotation(rotationDeg, current)) {
+    return data;
+  }
+  return { ...data, rotation: rotationDeg };
+}
+
+/**
+ * Whether a drag changed what the object means. Position fields and text
+ * rotation compare by value — an absent rotation is 0, a stored `'12.5'` is
+ * 12.5, and rotations compare modulo a full turn — so a gesture that ends
+ * where it began commits nothing: no solve, no undo entry, no rewritten
+ * data. Every other field must match exactly.
+ */
+export function sketchMoveChanged(
+  original: SketchObjectData,
+  next: SketchObjectData,
+  resolve: (value: unknown) => number
+): boolean {
+  const before = original as unknown as Record<string, unknown>;
+  const after = next as unknown as Record<string, unknown>;
+  const valued = new Set(positionFields(original).flat());
+  if (original.objectKind === 'text') {
+    valued.add('rotation');
+  }
+  const numeric = (record: Record<string, unknown>, key: string) =>
+    key === 'rotation' && record[key] === undefined ? 0 : resolve(record[key]);
+  const keys = new Set([...Object.keys(before), ...Object.keys(after)]);
+  for (const key of keys) {
+    if (key === 'rotation' && valued.has(key)) {
+      if (!sameRotation(numeric(before, key), numeric(after, key))) {
+        return true;
+      }
+    } else if (valued.has(key)) {
+      if (numeric(before, key) !== numeric(after, key)) {
+        return true;
+      }
+    } else if (JSON.stringify(before[key]) !== JSON.stringify(after[key])) {
+      return true;
+    }
+  }
+  return false;
+}
+
+/**
+ * Pointers whose remaining events the viewport ignores: one that pressed
+ * while another pointer held a sketch object drag, and one whose own drag
+ * Escape or Enter already ended. Each stays ignored — its moves, its release
+ * and its cancel — until its own release or cancel arrives, whatever the
+ * other pointers do meanwhile: a second finger that outlasts the drag, or
+ * a held mouse whose Escape-ended drag another pointer interrupts, must not
+ * land as a selection click.
+ */
+export class SketchMovePointerGate {
+  private readonly ignored = new Set<number>();
+
+  /**
+   * A press. True when it must be ignored: another pointer holds a drag.
+   * A press from a free pointer retires any stale entry for its id, since
+   * a release lost off the canvas would otherwise ignore the id forever.
+   */
+  press(heldPointerId: number | null | undefined, pointerId: number): boolean {
+    if (sketchMovePointerRole(heldPointerId, pointerId) === 'other') {
+      this.ignored.add(pointerId);
+      return true;
+    }
+    this.ignored.delete(pointerId);
+    return false;
+  }
+
+  /**
+   * A drag ended by the keyboard while its pointer is still down: its
+   * release is the end of a gesture already finished, not a click.
+   */
+  suppress(pointerId: number): void {
+    this.ignored.add(pointerId);
+  }
+
+  /** True while this pointer's events are being ignored. */
+  ignores(pointerId: number): boolean {
+    return this.ignored.has(pointerId);
+  }
+
+  /** A release or cancel. True when it ends an ignored press. */
+  release(pointerId: number): boolean {
+    return this.ignored.delete(pointerId);
+  }
+}
+
+/**
+ * Screen radius, in CSS pixels, within which a press takes the selected
+ * object's grab point. Matches the drawn handle plus a finger's slack.
+ */
+export const SKETCH_GRAB_RADIUS_PX = 11;
+/**
+ * The text rotation ring's radius and the half-width of the band a press
+ * must land in. The ring is drawn by `.sketch-rotate-ring` at this size.
+ */
+export const SKETCH_ROTATE_RING_RADIUS_PX = 34;
+export const SKETCH_ROTATE_RING_BAND_PX = 7;
+
+/**
+ * Which drawn handle a press lands on, measured where both are drawn: in
+ * screen pixels. The dot and the ring are screen-space circles around the
+ * grab point's projection, so a press on any visible part of them hits,
+ * however obliquely the plane is seen; a plane-space distance would stretch
+ * along the foreshortened axis and miss.
+ */
+export function sketchHandleAtScreen(
+  pointer: SketchPoint,
+  grab: SketchPoint,
+  rotatable: boolean
+): SketchMoveHandle | null {
+  const distance = Math.hypot(pointer.x - grab.x, pointer.y - grab.y);
+  if (distance <= SKETCH_GRAB_RADIUS_PX) {
+    return 'translate';
+  }
+  if (
+    rotatable &&
+    Math.abs(distance - SKETCH_ROTATE_RING_RADIUS_PX) <=
+      SKETCH_ROTATE_RING_BAND_PX
+  ) {
+    return 'rotate';
+  }
+  return null;
+}
+
+/**
+ * The drag's change replayed onto the object as it is now. Another tab or a
+ * collaborator may have edited the object while the pointer held it; the
+ * drag owns only its position (and a text rotation), so those move by the
+ * drag's delta and every other field keeps the concurrent edit. Null when
+ * the move can no longer apply: the object changed kind, or the field the
+ * drag writes now holds an expression.
+ */
+export function rebaseSketchMove(
+  original: SketchObjectData,
+  moved: SketchObjectData,
+  current: SketchObjectData,
+  resolve: (value: unknown) => number
+): SketchObjectData | null {
+  if (JSON.stringify(current) === JSON.stringify(original)) {
+    return moved;
+  }
+  if (
+    current.objectKind !== original.objectKind ||
+    !sketchObjectMovable(current)
+  ) {
+    return null;
+  }
+  const before = original as unknown as Record<string, unknown>;
+  const after = moved as unknown as Record<string, unknown>;
+  const next = { ...current } as unknown as Record<string, unknown>;
+  for (const field of positionFields(original).flat()) {
+    const delta = resolve(after[field]) - resolve(before[field]);
+    if (delta === 0) {
+      continue;
+    }
+    // Where the concurrent edit left the field alone, take the dragged
+    // value itself, so a snapped point stays bit-exact.
+    next[field] =
+      resolve(next[field]) === resolve(before[field])
+        ? after[field]
+        : resolve(next[field]) + delta;
+  }
+  if (original.objectKind === 'text') {
+    const angle = (value: unknown) =>
+      value === undefined ? 0 : resolve(value);
+    const turn = angle(after.rotation) - angle(before.rotation);
+    if (!sameRotation(turn, 0)) {
+      if (next.rotation !== undefined && !isLiteralNumber(next.rotation)) {
+        return null;
+      }
+      const turned = angle(next.rotation) + turn;
+      next.rotation = ((((turned + 180) % 360) + 360) % 360) - 180 || 0;
+      if (next.rotation === -180) {
+        next.rotation = 180;
+      }
+    }
+  }
+  return next as unknown as SketchObjectData;
 }

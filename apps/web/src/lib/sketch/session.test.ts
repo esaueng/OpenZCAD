@@ -1,6 +1,8 @@
 import { describe, expect, it, vi } from 'vitest';
 import type { SketchObjectData } from '@openzcad/shared';
 import { PLANE_BASES } from '@openzcad/geometry';
+import { projectToScreen } from '@openzcad/viewport';
+import * as THREE from 'three';
 import {
   arcDimension,
   arcObjectFromPoints,
@@ -28,7 +30,22 @@ import {
   sketchContentFramePoints,
   sketchObjectFromDrag,
   snapSketchPoint,
-  snapTargetsForObject
+  snapTargetsForObject,
+  placeSketchObjectGrabPoint,
+  sketchObjectGrabPoint,
+  sketchObjectMovable,
+  sketchObjectRotatable,
+  sketchMovePointerRole,
+  rebaseSketchMove,
+  sameRotation,
+  sketchHandleAtScreen,
+  SKETCH_ROTATE_RING_BAND_PX,
+  SKETCH_ROTATE_RING_RADIUS_PX,
+  SketchMovePointerGate,
+  sketchMoveChanged,
+  rotateTextObject,
+  textRotationFromRingDrag,
+  translateSketchObject
 } from './session';
 
 describe('snapSketchPoint / sketchObjectFromDrag', () => {
@@ -578,5 +595,429 @@ describe('sketchContentFramePoints', () => {
 
   it('returns no points for an empty sketch', () => {
     expect(sketchContentFramePoints([], resolve, PLANE_BASES.XY)).toEqual([]);
+  });
+});
+
+describe('sketch object drag-move helpers', () => {
+  const resolve = (value: unknown) => Number(value);
+  const circle: SketchObjectData = {
+    objectKind: 'circle',
+    radius: 5,
+    centerX: -15,
+    centerY: 20
+  };
+  const text: SketchObjectData = {
+    objectKind: 'text',
+    text: 'Boa',
+    fontFamily: 'open-sans',
+    fontStyle: 'regular',
+    size: 8,
+    x: 3,
+    y: 4
+  };
+  const line: SketchObjectData = {
+    objectKind: 'line',
+    x1: 0,
+    y1: 0,
+    x2: 10,
+    y2: 5
+  };
+
+  it('grabs closed shapes by their centre and text by its baseline origin', () => {
+    expect(sketchObjectGrabPoint(circle, resolve)).toEqual({ x: -15, y: 20 });
+    expect(
+      sketchObjectGrabPoint(
+        {
+          objectKind: 'rectangle',
+          width: 4,
+          height: 2,
+          centerX: 1,
+          centerY: 2
+        },
+        resolve
+      )
+    ).toEqual({ x: 1, y: 2 });
+    expect(
+      sketchObjectGrabPoint(
+        { objectKind: 'polygon', sides: 6, radius: 3, centerX: 7, centerY: 8 },
+        resolve
+      )
+    ).toEqual({ x: 7, y: 8 });
+    expect(sketchObjectGrabPoint(text, resolve)).toEqual({ x: 3, y: 4 });
+    // Lines and arcs are grabbed anywhere along the curve instead.
+    expect(sketchObjectGrabPoint(line, resolve)).toBeNull();
+  });
+
+  it('lands a grab point exactly on the snapped target', () => {
+    expect(placeSketchObjectGrabPoint(circle, { x: 0, y: 0 })).toEqual({
+      ...circle,
+      centerX: 0,
+      centerY: 0
+    });
+    expect(placeSketchObjectGrabPoint(text, { x: 12.5, y: -1 })).toEqual({
+      ...text,
+      x: 12.5,
+      y: -1
+    });
+  });
+
+  it('translates every position field and nothing else', () => {
+    expect(translateSketchObject(line, 2, -3, resolve)).toEqual({
+      objectKind: 'line',
+      x1: 2,
+      y1: -3,
+      x2: 12,
+      y2: 2
+    });
+    const arc: SketchObjectData = {
+      objectKind: 'arc',
+      centerX: 1,
+      centerY: 1,
+      radius: 4,
+      startAngleDeg: 0,
+      endAngleDeg: 90,
+      construction: true
+    };
+    expect(translateSketchObject(arc, 1, 1, resolve)).toEqual({
+      ...arc,
+      centerX: 2,
+      centerY: 2
+    });
+  });
+
+  it('refuses a drag that would overwrite an expression', () => {
+    expect(sketchObjectMovable(circle)).toBe(true);
+    expect(sketchObjectMovable({ ...circle, centerX: '12.5' })).toBe(true);
+    expect(sketchObjectMovable({ ...circle, centerX: 'offset * 2' })).toBe(
+      false
+    );
+    expect(sketchObjectMovable({ ...line, y2: 'height' })).toBe(false);
+    // A size expression is kept as written, so it does not block a move.
+    expect(sketchObjectMovable({ ...circle, radius: 'r' })).toBe(true);
+    expect(sketchObjectRotatable(text)).toBe(true);
+    expect(sketchObjectRotatable({ ...text, rotation: 30 })).toBe(true);
+    expect(sketchObjectRotatable({ ...text, rotation: 'angle' })).toBe(false);
+    expect(sketchObjectRotatable(circle)).toBe(false);
+  });
+
+  it('turns text by the angle the ring was dragged through', () => {
+    const origin = { x: 0, y: 0 };
+    // A quarter turn counter-clockwise from +X to +Y.
+    expect(
+      textRotationFromRingDrag(origin, { x: 10, y: 0 }, { x: 0, y: 10 }, 0)
+    ).toBe(90);
+    // Whole degrees unless free, normalised to (-180, 180].
+    expect(
+      textRotationFromRingDrag(origin, { x: 10, y: 0 }, { x: 10, y: 0.3 }, 0)
+    ).toBe(2);
+    expect(
+      textRotationFromRingDrag(
+        origin,
+        { x: 10, y: 0 },
+        { x: 10, y: 0.3 },
+        0,
+        true
+      )
+    ).toBeCloseTo(1.718, 3);
+    expect(
+      textRotationFromRingDrag(origin, { x: 10, y: 0 }, { x: -10, y: 0 }, 90)
+    ).toBe(-90);
+    expect(
+      textRotationFromRingDrag(origin, { x: 10, y: 0 }, { x: 0, y: -10 }, -90)
+    ).toBe(180);
+  });
+});
+
+describe('sketchMovePointerRole', () => {
+  it('lets only the holding pointer drive a sketch object drag', () => {
+    // No drag: every pointer is free to press.
+    expect(sketchMovePointerRole(null, 1)).toBe('free');
+    expect(sketchMovePointerRole(undefined, 2)).toBe('free');
+    // Pointer 1 holds the drag: a second press, move, release or cancel
+    // from pointer 2 is ignored, and pointer 1's release still ends it.
+    expect(sketchMovePointerRole(1, 2)).toBe('other');
+    expect(sketchMovePointerRole(1, 1)).toBe('owner');
+    // Pointer id 0 is a real id (the first touch), not "no drag".
+    expect(sketchMovePointerRole(0, 0)).toBe('owner');
+    expect(sketchMovePointerRole(0, 1)).toBe('other');
+  });
+});
+
+describe('a drag that ends where it began commits nothing', () => {
+  const resolve = (value: unknown) => Number(value);
+  const text: SketchObjectData = {
+    objectKind: 'text',
+    text: 'Boa',
+    fontFamily: 'open-sans',
+    fontStyle: 'regular',
+    size: 8,
+    x: 3,
+    y: 4
+  };
+
+  it('keeps an absent text rotation absent when the ring returns to the start', () => {
+    const origin = { x: 3, y: 4 };
+    const from = { x: 13, y: 4 };
+    const rotation = textRotationFromRingDrag(origin, from, from, 0);
+    const turned = rotateTextObject(text, rotation);
+    expect(rotation).toBe(0);
+    expect(turned).not.toHaveProperty('rotation');
+    // No change means no commit, so no solve and no undo entry.
+    expect(sketchMoveChanged(text, turned, resolve)).toBe(false);
+    // An explicit 0 is the same value as the absent default.
+    expect(sketchMoveChanged(text, { ...text, rotation: 0 }, resolve)).toBe(
+      false
+    );
+    expect(sketchMoveChanged(text, rotateTextObject(text, 15), resolve)).toBe(
+      true
+    );
+  });
+
+  it('compares positions by value and everything else exactly', () => {
+    const circle: SketchObjectData = {
+      objectKind: 'circle',
+      radius: 5,
+      centerX: '12.5',
+      centerY: 2
+    };
+    expect(
+      sketchMoveChanged(
+        circle,
+        placeSketchObjectGrabPoint(circle, { x: 12.5, y: 2 }),
+        resolve
+      )
+    ).toBe(false);
+    expect(
+      sketchMoveChanged(
+        circle,
+        placeSketchObjectGrabPoint(circle, { x: 13, y: 2 }),
+        resolve
+      )
+    ).toBe(true);
+    expect(
+      sketchMoveChanged(
+        text,
+        translateSketchObject(text, 0, 0, resolve),
+        resolve
+      )
+    ).toBe(false);
+    expect(sketchMoveChanged(text, { ...text, text: 'Bob' }, resolve)).toBe(
+      true
+    );
+  });
+});
+
+describe('SketchMovePointerGate', () => {
+  it('ignores a second pointer through its own release, in either order', () => {
+    const gate = new SketchMovePointerGate();
+    // Pointer 1 presses with no drag held and starts one.
+    expect(gate.press(null, 1)).toBe(false);
+    // Pointer 2 presses while 1 holds the drag: ignored, moves included.
+    expect(gate.press(1, 2)).toBe(true);
+    expect(gate.ignores(2)).toBe(true);
+    // Pointer 1 releases first and commits: its release is not swallowed.
+    expect(gate.release(1)).toBe(false);
+    // The drag is over, but pointer 2's late release is still swallowed,
+    // so it cannot land as a selection click.
+    expect(gate.ignores(2)).toBe(true);
+    expect(gate.release(2)).toBe(true);
+    expect(gate.ignores(2)).toBe(false);
+    // The usual order works too: 2 lets go while 1 still holds the drag.
+    expect(gate.press(1, 3)).toBe(true);
+    expect(gate.release(3)).toBe(true);
+    expect(gate.release(3)).toBe(false);
+  });
+
+  it('a fresh press retires an ignored id whose release never arrived', () => {
+    const gate = new SketchMovePointerGate();
+    expect(gate.press(1, 2)).toBe(true);
+    // Pointer 2's release was lost off the canvas; ids are reused.
+    expect(gate.press(null, 2)).toBe(false);
+    expect(gate.ignores(2)).toBe(false);
+  });
+});
+
+describe('SketchMovePointerGate suppression', () => {
+  it('a keyboard-ended drag swallows only its own pointer’s release', () => {
+    const gate = new SketchMovePointerGate();
+    expect(gate.press(null, 1)).toBe(false);
+    // Escape (or Enter) ends pointer 1's drag while it is still down.
+    gate.suppress(1);
+    // Pointer 2 presses before pointer 1 lets go: it is a fresh press of its
+    // own and must not retire pointer 1's suppression.
+    expect(gate.press(null, 2)).toBe(false);
+    expect(gate.ignores(1)).toBe(true);
+    // Pointer 1's late release over empty canvas is swallowed, not a click.
+    expect(gate.release(1)).toBe(true);
+    expect(gate.ignores(1)).toBe(false);
+    // Pointer 2 was never suppressed: its release is its own.
+    expect(gate.release(2)).toBe(false);
+  });
+});
+
+describe('a move edited under the drag', () => {
+  const resolve = (value: unknown) => Number(value);
+  const circle: SketchObjectData = {
+    objectKind: 'circle',
+    radius: 5,
+    centerX: -15,
+    centerY: 20
+  };
+
+  it('keeps the concurrent edit and applies the drag on top of it', () => {
+    const moved = placeSketchObjectGrabPoint(circle, { x: 0, y: 0 });
+    // A collaborator changed the radius while the centre was held.
+    const current: SketchObjectData = { ...circle, radius: 8 };
+    expect(rebaseSketchMove(circle, moved, current, resolve)).toEqual({
+      objectKind: 'circle',
+      radius: 8,
+      centerX: 0,
+      centerY: 0
+    });
+    // Unedited: the drag's own data, untouched.
+    expect(rebaseSketchMove(circle, moved, circle, resolve)).toBe(moved);
+  });
+
+  it('moves a concurrently moved object by the drag’s delta', () => {
+    const text: SketchObjectData = {
+      objectKind: 'text',
+      text: 'Boa',
+      fontFamily: 'open-sans',
+      fontStyle: 'regular',
+      size: 8,
+      x: 3,
+      y: 4
+    };
+    const moved = placeSketchObjectGrabPoint(text, { x: 10, y: 4 });
+    const current: SketchObjectData = { ...text, text: 'Bob', size: 9, x: 5 };
+    expect(rebaseSketchMove(text, moved, current, resolve)).toEqual({
+      ...current,
+      x: 12,
+      y: 4
+    });
+    // A turn replays as a turn from wherever the rotation now is.
+    const turned = rotateTextObject(text, 30);
+    expect(
+      rebaseSketchMove(text, turned, { ...text, rotation: 160 }, resolve)
+    ).toEqual({ ...text, rotation: -170 });
+  });
+
+  it('refuses when the drag can no longer apply', () => {
+    const moved = placeSketchObjectGrabPoint(circle, { x: 0, y: 0 });
+    expect(
+      rebaseSketchMove(circle, moved, { ...circle, centerX: 'offset' }, resolve)
+    ).toBeNull();
+    expect(
+      rebaseSketchMove(
+        circle,
+        moved,
+        { objectKind: 'line', x1: 0, y1: 0, x2: 1, y2: 1 },
+        resolve
+      )
+    ).toBeNull();
+  });
+});
+
+describe('sketchHandleAtScreen', () => {
+  it('hits the visible ring edge on an obliquely seen plane', () => {
+    // The XY plane seen from well off its normal, as after an orbit.
+    const width = 1280;
+    const height = 720;
+    const camera = new THREE.PerspectiveCamera(45, width / height, 0.1, 5000);
+    camera.position.set(0, -160, 90);
+    camera.lookAt(0, 0, 0);
+    camera.updateMatrixWorld();
+    const origin = new THREE.Vector3(0, 0, 0);
+    const grab = projectToScreen(origin, camera, width, height)!;
+    expect(grab).not.toBeNull();
+
+    // Plane point under a screen pixel, by ray against z = 0.
+    const planeAt = (pixel: { x: number; y: number }) => {
+      const ndc = new THREE.Vector2(
+        (pixel.x / width) * 2 - 1,
+        1 - (pixel.y / height) * 2
+      );
+      const raycaster = new THREE.Raycaster();
+      raycaster.setFromCamera(ndc, camera);
+      return raycaster.ray.intersectPlane(
+        new THREE.Plane(new THREE.Vector3(0, 0, 1), 0),
+        new THREE.Vector3()
+      )!;
+    };
+    const worldPerPixel =
+      (2 *
+        camera.position.distanceTo(origin) *
+        Math.tan(THREE.MathUtils.degToRad(camera.fov / 2))) /
+      height;
+
+    // Presses on the drawn ring, beside and above its centre.
+    for (const offset of [
+      { x: SKETCH_ROTATE_RING_RADIUS_PX, y: 0 },
+      { x: 0, y: -SKETCH_ROTATE_RING_RADIUS_PX }
+    ]) {
+      const pointer = { x: grab.x + offset.x, y: grab.y + offset.y };
+      expect(sketchHandleAtScreen(pointer, grab, true)).toBe('rotate');
+      expect(sketchHandleAtScreen(pointer, grab, false)).toBeNull();
+    }
+    // The foreshortened press, measured on the plane instead, lands well
+    // outside the ring's band: the miss this test guards against.
+    const above = planeAt({
+      x: grab.x,
+      y: grab.y - SKETCH_ROTATE_RING_RADIUS_PX
+    });
+    const planePixels = above.distanceTo(origin) / worldPerPixel;
+    expect(
+      Math.abs(planePixels - SKETCH_ROTATE_RING_RADIUS_PX)
+    ).toBeGreaterThan(SKETCH_ROTATE_RING_BAND_PX);
+
+    expect(
+      sketchHandleAtScreen({ x: grab.x + 4, y: grab.y - 3 }, grab, true)
+    ).toBe('translate');
+    expect(
+      sketchHandleAtScreen({ x: grab.x + 80, y: grab.y }, grab, true)
+    ).toBeNull();
+  });
+});
+
+describe('a full-turn rotation dragged back to its start', () => {
+  const resolve = (value: unknown) => Number(value);
+  const text = (
+    rotation: number
+  ): Extract<SketchObjectData, { objectKind: 'text' }> => ({
+    objectKind: 'text',
+    text: 'Boa',
+    fontFamily: 'open-sans',
+    fontStyle: 'regular',
+    size: 8,
+    x: 3,
+    y: 4,
+    rotation
+  });
+
+  it('keeps a stored 360 or -360 verbatim and commits nothing', () => {
+    for (const stored of [360, -360, 720]) {
+      const original = text(stored);
+      const origin = { x: 3, y: 4 };
+      const from = { x: 13, y: 4 };
+      // The ring readout is normalised, so it reports 0 for a full turn.
+      const angle = textRotationFromRingDrag(origin, from, from, stored);
+      expect(angle).toBe(0);
+      const turned = rotateTextObject(original, angle);
+      // The same object back: no rewritten field, so no commit, no solve
+      // and no undo entry.
+      expect(turned).toBe(original);
+      expect(sketchMoveChanged(original, turned, resolve)).toBe(false);
+      // Even a rewritten 0 reads as the same angle.
+      expect(
+        sketchMoveChanged(original, { ...original, rotation: 0 }, resolve)
+      ).toBe(false);
+      expect(rebaseSketchMove(original, turned, original, resolve)).toBe(
+        turned
+      );
+    }
+    expect(sameRotation(360, 0)).toBe(true);
+    expect(sameRotation(-360, 0)).toBe(true);
+    expect(sameRotation(359.5, 0)).toBe(false);
+    expect(sketchMoveChanged(text(360), text(10), resolve)).toBe(true);
   });
 });
