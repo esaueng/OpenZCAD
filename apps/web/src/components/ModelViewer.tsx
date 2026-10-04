@@ -4707,20 +4707,40 @@ export function ModelViewer({
       }
       const detail = (
         event as CustomEvent<{
+          /** Plane points to report in client pixels, for picking by hand. */
+          project?: SketchPoint[];
           resolve?: (
             value: {
               objects: SketchModeState['objects'];
               textPreview: { loops: number; origin: SketchPoint } | null;
+              screen: SketchPoint[];
             } | null
           ) => void;
         }>
       ).detail;
       const mode = sketchModeRef.current;
+      const bounds = renderer.domElement.getBoundingClientRect();
+      const screen = (detail?.project ?? []).map((point) => {
+        const { basis } = mode ?? {};
+        if (!basis) {
+          return { x: Number.NaN, y: Number.NaN };
+        }
+        const ndc = new THREE.Vector3(
+          basis.origin.x + basis.u.x * point.x + basis.v.x * point.y,
+          basis.origin.y + basis.u.y * point.x + basis.v.y * point.y,
+          basis.origin.z + basis.u.z * point.x + basis.v.z * point.y
+        ).project(context.activeCamera);
+        return {
+          x: bounds.left + ((ndc.x + 1) / 2) * bounds.width,
+          y: bounds.top + ((1 - ndc.y) / 2) * bounds.height
+        };
+      });
       detail?.resolve?.(
         mode
           ? {
               objects: mode.objects,
-              textPreview: sketchRigRef.current?.textPreviewState() ?? null
+              textPreview: sketchRigRef.current?.textPreviewState() ?? null,
+              screen
             }
           : null
       );
