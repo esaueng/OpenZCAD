@@ -6,6 +6,7 @@ import {
   escapeTarget,
   interactionReducer,
   isOperationState,
+  nextSketchCircleMode,
   toolCardFor,
   type FaceTarget,
   type InteractionState,
@@ -262,6 +263,12 @@ describe('interactionReducer', () => {
     expect(state.mode === 'sketch' && state.session.tool).toBe('circle');
     state = interactionReducer(state, { type: 'exit-sketch' });
     expect(state).toEqual(IDLE);
+  });
+
+  it('steps the circle type in the strip order, wrapping round', () => {
+    expect(nextSketchCircleMode('center-radius')).toBe('two-point-diameter');
+    expect(nextSketchCircleMode('two-point-diameter')).toBe('three-point');
+    expect(nextSketchCircleMode('three-point')).toBe('center-radius');
   });
 
   it('collects constraint picks and clears them on tool changes', () => {

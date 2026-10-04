@@ -470,6 +470,7 @@ import {
   commandSessionFor,
   isOperationState,
   isStaleSelectionError,
+  nextSketchCircleMode,
   radialFaceOperationName,
   toolCardFor,
   type FaceTarget,
@@ -16571,6 +16572,19 @@ export function App() {
         ) {
           event.preventDefault();
           handleDeleteSketchEntity();
+          return;
+        }
+        // C on the circle tool steps its type, the way the rail's strip does;
+        // the strip and the tool's glyph show which one is live.
+        if (
+          event.key.toLowerCase() === 'c' &&
+          interaction.session.tool === 'circle'
+        ) {
+          event.preventDefault();
+          dispatchInteraction({
+            type: 'sketch-circle-mode',
+            mode: nextSketchCircleMode(interaction.session.circleMode)
+          });
           return;
         }
         const sketchTool =
