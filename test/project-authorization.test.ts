@@ -506,7 +506,7 @@ describe('project authorization', () => {
       statement.sql.startsWith('UPDATE projects')
     );
     const revision = batched.find((statement) =>
-      statement.sql.startsWith('INSERT OR REPLACE INTO revisions')
+      statement.sql.startsWith('INSERT INTO revisions')
     );
     // The owner binds the UPDATE's user_id predicate: an editor's save must
     // stay scoped to the owner's row rather than to the editor's.

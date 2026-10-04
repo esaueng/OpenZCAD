@@ -1,3 +1,4 @@
+import type { ProjectDocument } from '@openzcad/shared';
 import { describe, expect, it, vi } from 'vitest';
 import worker from '../apps/web/worker/index';
 import { D1R2PersistenceService } from '@openzcad/cloudflare-adapters';
@@ -304,76 +305,96 @@ describe('project share links (persistence)', () => {
 });
 
 describe('project share links (worker helpers)', () => {
-  it('serves only the STEP source referenced by an active shared document', async () => {
-    const service = getInMemoryPersistence();
-    const owner = toUserId(`user_share_source_${crypto.randomUUID()}`);
-    const project = await service.createProject(owner, {
-      name: 'Synthetic source'
-    });
-    const projectId = project.document.projectId;
-    const source = new TextEncoder().encode('ISO-10303-21;\nEND-ISO-10303-21;');
-    const checksumSha256 = Array.from(
-      new Uint8Array(await crypto.subtle.digest('SHA-256', source)),
-      (byte) => byte.toString(16).padStart(2, '0')
-    ).join('');
-    const { session } = await service.createUploadSession(owner, {
-      projectId,
-      fileName: 'synthetic.step',
-      contentType: 'application/step',
-      kind: 'step-import'
-    });
-    await service.putUpload(owner, session.uploadSessionId, source.buffer);
-    await service.finalizeArtifact(owner, {
-      projectId,
-      uploadSessionId: session.uploadSessionId,
-      artifactId: session.artifactId
-    });
-    const imported = importStepBody(project.document, {
-      name: 'Synthetic import',
-      sourceName: 'synthetic.step',
-      artifactId: session.artifactId,
-      stepSourceRef: {
-        marker: 'openzcad-source-ref',
-        version: 1,
-        hashAlgorithm: 'sha256',
-        checksumSha256,
-        logicalBytes: source.byteLength
-      }
-    }).document;
-    await service.saveRevision(owner, {
-      projectId,
-      expectedVersion: project.document.version,
-      reason: 'Import source',
-      document: imported
-    });
-    const { token, shareLink } = await createShareLink(
-      service,
-      owner,
-      projectId,
-      { mode: 'tweak' },
-      2_000_000_000
-    );
-    const sourceUrl = `https://example.com/api/share/${token}/sources/${session.artifactId}`;
-    const load = () => worker.fetch(new Request(sourceUrl), routeEnv);
-    const available = await load();
-    expect(available.status).toBe(200);
-    expect(available.headers.get('cache-control')).toBe('no-store');
-    expect(new Uint8Array(await available.arrayBuffer())).toEqual(source);
-    const unrelated = await worker.fetch(
-      new Request(
-        `https://example.com/api/share/${token}/sources/artifact_unrelated`
-      ),
-      routeEnv
-    );
-    expect(unrelated.status).toBe(404);
-    await service.revokeProjectShareLink(
-      owner,
-      projectId,
-      shareLink.shareLinkId,
-      2_000_000_001
-    );
-    expect((await load()).status).toBe(404);
-  });
+  it.each(['application/step', 'text/html', 'image/svg+xml'])(
+    'serves referenced sources as inert downloads even for %s',
+    async (contentType) => {
+      const service = getInMemoryPersistence();
+      const owner = toUserId(`user_share_source_${crypto.randomUUID()}`);
+      const project = await service.createProject(owner, {
+        name: 'Synthetic source'
+      });
+      const projectId = project.document.projectId;
+      const source = new TextEncoder().encode(
+        contentType === 'application/step'
+          ? 'ISO-10303-21;\nEND-ISO-10303-21;'
+          : '<script>fetch("/api/account/delete-data", {method: "POST"})</script>'
+      );
+      const checksumSha256 = Array.from(
+        new Uint8Array(await crypto.subtle.digest('SHA-256', source)),
+        (byte) => byte.toString(16).padStart(2, '0')
+      ).join('');
+      const { session } = await service.createUploadSession(owner, {
+        projectId,
+        fileName: 'synthetic.step',
+        contentType,
+        kind: 'step-import'
+      });
+      await service.putUpload(owner, session.uploadSessionId, source.buffer);
+      await service.finalizeArtifact(owner, {
+        projectId,
+        uploadSessionId: session.uploadSessionId,
+        artifactId: session.artifactId
+      });
+      const imported = importStepBody(project.document, {
+        name: 'Synthetic import',
+        sourceName: 'synthetic.step',
+        artifactId: session.artifactId,
+        stepSourceRef: {
+          marker: 'openzcad-source-ref',
+          version: 1,
+          hashAlgorithm: 'sha256',
+          checksumSha256,
+          logicalBytes: source.byteLength
+        }
+      }).document;
+      await service.saveRevision(owner, {
+        projectId,
+        expectedVersion: project.document.version,
+        reason: 'Import source',
+        document: imported
+      });
+      const { token, shareLink } = await createShareLink(
+        service,
+        owner,
+        projectId,
+        { mode: 'tweak' },
+        2_000_000_000
+      );
+      const sourceUrl = `https://example.com/api/share/${token}/sources/${session.artifactId}`;
+      const load = () => worker.fetch(new Request(sourceUrl), routeEnv);
+      const anonymous = await worker.fetch(
+        new Request(`https://example.com/api/share/${token}`),
+        routeEnv
+      );
+      const projection = (await anonymous.json()) as {
+        document: ProjectDocument;
+      };
+      expect(projection.document.ownerUserId).toBe('user_shared');
+      expect(projection.document.ownerUserId).not.toBe(owner);
+      const available = await load();
+      expect(available.status).toBe(200);
+      expect(available.headers.get('cache-control')).toBe('no-store');
+      expect(available.headers.get('content-disposition')).toBe('attachment');
+      expect(available.headers.get('content-security-policy')).toContain(
+        "default-src 'none'; sandbox"
+      );
+      expect(new Uint8Array(await available.arrayBuffer())).toEqual(source);
+      const unrelated = await worker.fetch(
+        new Request(
+          `https://example.com/api/share/${token}/sources/artifact_unrelated`
+        ),
+        routeEnv
+      );
+      expect(unrelated.status).toBe(404);
+      await service.revokeProjectShareLink(
+        owner,
+        projectId,
+        shareLink.shareLinkId,
+        2_000_000_001
+      );
+      expect((await load()).status).toBe(404);
+    }
+  );
 
   it('mints a 256-bit token and persists only its hash', async () => {
     const service = new InMemoryPersistenceService();

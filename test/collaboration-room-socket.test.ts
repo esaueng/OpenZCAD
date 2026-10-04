@@ -109,6 +109,34 @@ function deeplyNestedDocumentFrame(depth: number, clientId = 'client_ws') {
 }
 
 describe('collaboration room socket handling', () => {
+  it('counts frames without client identity before JSON parsing and resets after one second', async () => {
+    const now = vi.spyOn(Date, 'now').mockReturnValue(1_000);
+    try {
+      const { context } = createRoomContext();
+      const room = createTestRoom(context, {});
+      const socket = await openSocket(room, 'proj_frame_limit');
+      const parse = vi.spyOn(JSON, 'parse');
+      try {
+        for (let i = 0; i < 30; i++) await socket.receive('{}');
+        expect(socket.closed).toBeNull();
+        now.mockReturnValue(2_000);
+        await socket.receive('{}');
+        expect(socket.closed).toBeNull();
+        for (let i = 0; i < 29; i++) await socket.receive('{}');
+        const parsedBeforeLimit = parse.mock.calls.length;
+        await socket.receive('{}');
+        expect(socket.closed).toEqual({
+          code: 1008,
+          reason: 'Collaboration message rate limit reached.'
+        });
+        expect(parse.mock.calls.length).toBe(parsedBeforeLimit);
+      } finally {
+        parse.mockRestore();
+      }
+    } finally {
+      now.mockRestore();
+    }
+  });
   it('restores open sockets and presence after hibernation', async () => {
     const { context } = createRoomContext();
     const base = createProjectDocument('Sleeping room', toUserId('user_room'));
@@ -291,6 +319,93 @@ describe('collaboration room socket handling', () => {
     expect((await room.fetch(upgradeRequest(base.projectId))).status).toBe(410);
   });
 
+  it('refuses a snapshot whose body finishes after erasure and closes sockets before hello', async () => {
+    const { context, values } = createRoomContext();
+    const base = createProjectDocument('Pending erase', toUserId('user_room'));
+    const room = createTestRoom(context, {});
+    const pendingSocket = await openSocket(room, base.projectId);
+    let release!: () => void;
+    const body = new ReadableStream<Uint8Array>({
+      start(controller) {
+        release = () => {
+          controller.enqueue(
+            new TextEncoder().encode(
+              JSON.stringify({ clientId: 'late', document: base })
+            )
+          );
+          controller.close();
+        };
+      }
+    });
+    const pending = room.fetch(
+      new Request(`https://room.test/?projectId=${base.projectId}`, {
+        method: 'POST',
+        headers: {
+          'x-openzcad-user-id': 'user_room',
+          'x-openzcad-display-name': 'Owner',
+          'x-openzcad-project-role': 'owner'
+        },
+        body,
+        duplex: 'half'
+      } as RequestInit)
+    );
+    const erased = await room.fetch(
+      new Request(`https://room.test/?projectId=${base.projectId}`, {
+        method: 'DELETE',
+        headers: { 'x-openzcad-internal-project-erasure': 'v1' }
+      })
+    );
+    expect(erased.status).toBe(204);
+    expect(pendingSocket.closed?.code).toBe(4001);
+    release();
+    expect((await pending).status).toBe(410);
+    expect(values.size).toBe(0);
+  });
+
+  it('serializes an in-flight socket ticket before erasing its identity data', async () => {
+    const { context, values } = createRoomContext();
+    const base = createProjectDocument('Ticket erase', toUserId('user_room'));
+    const room = createTestRoom(context, {});
+    let release!: () => void;
+    let signal!: () => void;
+    const entered = new Promise<void>((resolve) => {
+      signal = resolve;
+    });
+    const originalGet = context.storage.get.bind(context.storage);
+    vi.spyOn(context.storage, 'get').mockImplementation(async (key: string) => {
+      if (key === 'room:socket-tickets') {
+        signal();
+        await new Promise<void>((resolve) => {
+          release = resolve;
+        });
+      }
+      return originalGet(key);
+    });
+    const pending = room.fetch(
+      new Request(`https://room.test/?projectId=${base.projectId}`, {
+        method: 'PUT',
+        headers: {
+          'x-openzcad-internal-ticket-request': 'v1',
+          'x-openzcad-user-id': 'user_room',
+          'x-openzcad-display-name': 'Owner',
+          'x-openzcad-project-role': 'owner'
+        }
+      })
+    );
+    await entered;
+    const erased = room.fetch(
+      new Request(`https://room.test/?projectId=${base.projectId}`, {
+        method: 'DELETE',
+        headers: { 'x-openzcad-internal-project-erasure': 'v1' }
+      })
+    );
+    release();
+    expect((await pending).status).toBe(200);
+    expect((await erased).status).toBe(204);
+    expect(values.size).toBe(0);
+    vi.restoreAllMocks();
+  });
+
   it('fails hosted room access closed outside the account canary', async () => {
     const { context } = createRoomContext();
     const base = createProjectDocument('Canary room', toUserId('user_room'));
@@ -339,10 +454,14 @@ describe('collaboration room socket handling', () => {
     let memberRole: 'editor' | null = 'editor';
     const roomEnv = {
       DB: {
-        prepare: () => ({
+        prepare: (sql: string) => ({
           bind: () => ({
             first: async () =>
-              memberRole ? { role: memberRole, collaboration_enabled: 1 } : null
+              sql.startsWith('SELECT user_id, document_version FROM projects')
+                ? { user_id: 'user_room' }
+                : memberRole
+                  ? { role: memberRole, collaboration_enabled: 1 }
+                  : null
           })
         })
       }
@@ -388,7 +507,10 @@ describe('collaboration room socket handling', () => {
           bind: () => ({
             first: async () => {
               if (query.includes('account_erasure_requests')) return null;
-              if (query.includes('SELECT user_id FROM projects')) return null;
+              if (query.includes('SELECT user_id'))
+                return query.includes('AND user_id')
+                  ? null
+                  : { user_id: 'user_room' };
               expect(query).toContain("p.status != 'deleted'");
               return trashed
                 ? null
@@ -444,9 +566,16 @@ describe('collaboration room socket handling', () => {
     let releaseBlocker: (() => void) | undefined;
     const room = createTestRoom(context, {
       DB: {
-        prepare: () => ({
+        prepare: (sql: string) => ({
           bind: (_projectId: string, userId: string) => ({
             first: async () => {
+              if (
+                sql.startsWith(
+                  'SELECT user_id, document_version FROM projects'
+                ) &&
+                !sql.includes('AND user_id')
+              )
+                return { user_id: 'user_room' };
               if (delayBlocker && userId === 'user_blocker') {
                 await new Promise<void>((resolve) => {
                   releaseBlocker = resolve;
@@ -556,6 +685,7 @@ describe('collaboration room socket handling', () => {
         {
           method: 'PATCH',
           headers: {
+            'x-openzcad-internal-role-update': 'v1',
             'x-openzcad-internal-owner-collaboration-disabled': 'v1'
           }
         }
@@ -600,6 +730,7 @@ describe('collaboration room socket handling', () => {
         {
           method: 'PATCH',
           headers: {
+            'x-openzcad-internal-role-update': 'v1',
             'x-openzcad-internal-owner-collaboration-disabled': 'v1'
           }
         }
@@ -627,7 +758,7 @@ describe('collaboration room socket handling', () => {
               if (query.includes('account_erasure_requests')) {
                 return null;
               }
-              if (query.includes('SELECT user_id FROM projects')) {
+              if (query.includes('SELECT user_id')) {
                 return null;
               }
               return {
@@ -737,6 +868,81 @@ describe('collaboration room socket handling', () => {
     expect(socket.closed).toBeNull();
   });
 
+  it.each([
+    ['huge version', { version: 1e308 }],
+    ['string version', { version: '99' }],
+    ['fractional version', { version: 1.5 }],
+    ['negative version', { version: -1 }],
+    ['foreign owner', { ownerUserId: 'attacker' }],
+    ['missing nodes', { nodes: null }],
+    ['array nodes', { nodes: [] }],
+    ['missing command log', { commandLog: null }]
+  ])(
+    'refuses %s over sockets and HTTP without changing durable state',
+    async (_name, malicious) => {
+      const { context, values } = createRoomContext();
+      const base = createProjectDocument('Safe room', toUserId('user_room'));
+      const room = createTestRoom(context, {});
+      const socket = await openSocket(room, base.projectId);
+      await socket.receive(hello(base));
+      const stored = structuredClone(values.get('room:latest'));
+      const document = {
+        ...base,
+        version: base.version + 1,
+        ...malicious
+      } as ProjectDocument;
+      await socket.receive(documentFrame(document));
+      expect(socket.lastFrame()).toMatchObject({
+        type: 'error',
+        code: 'document-invalid'
+      });
+      const response = await room.fetch(
+        new Request(`https://room.test/?projectId=${base.projectId}`, {
+          method: 'POST',
+          headers: {
+            'x-openzcad-user-id': 'user_room',
+            'x-openzcad-display-name': 'Owner',
+            'x-openzcad-project-role': 'owner'
+          },
+          body: JSON.stringify({ clientId: 'http', document })
+        })
+      );
+      expect(response.status).toBe(400);
+      expect(values.get('room:latest')).toEqual(stored);
+      expect(socket.closed).toBeNull();
+    }
+  );
+
+  it('caps connections before hello and retains the cap across hibernation', async () => {
+    const { context } = createRoomContext();
+    const base = createProjectDocument('Capped room', toUserId('user_room'));
+    let room = createTestRoom(context, {});
+    for (let i = 0; i < 8; i++) await openSocket(room, base.projectId);
+    expect((await room.fetch(upgradeRequest(base.projectId))).status).toBe(429);
+    room = createTestRoom(context, {});
+    expect((await room.fetch(upgradeRequest(base.projectId))).status).toBe(429);
+  });
+
+  it('refuses presence identity collisions and repeated identity changes', async () => {
+    const { context } = createRoomContext();
+    const base = createProjectDocument(
+      'Bound identities',
+      toUserId('user_room')
+    );
+    const room = createTestRoom(context, {});
+    const first = await openSocket(room, base.projectId);
+    await first.receive(hello(base, 'same-client'));
+    const second = await openSocket(room, base.projectId, {
+      userId: 'viewer',
+      displayName: 'Viewer',
+      role: 'viewer'
+    });
+    await second.receive(hello(null, 'same-client'));
+    expect(second.closed?.code).toBe(1008);
+    await first.receive(hello(null, 'other-client'));
+    expect(first.closed?.code).toBe(1008);
+  });
+
   it('answers a hostile payload with an error frame and stays live', async () => {
     const { context } = createRoomContext();
     const base = createProjectDocument('Hostile Room', toUserId('user_room'));
@@ -775,15 +981,29 @@ describe('collaboration room socket handling', () => {
     // result is unstorable, which is why the size guard has to run against the
     // resolved document rather than the submitted one.
     const fromA = addPrimitiveFeature(base, {
-      name: 'A'.repeat(400_000),
+      name: 'A',
       primitiveKind: 'box',
       dimensions: { width: 1, height: 1, depth: 1 }
     });
     const fromB = addPrimitiveFeature(base, {
-      name: 'B'.repeat(400_000),
+      name: 'B',
       primitiveKind: 'sphere',
       dimensions: { radius: 1 }
     });
+
+    for (const [document, padding] of [
+      [fromA, 'A'],
+      [fromB, 'B']
+    ] as const) {
+      for (const node of Object.values(document.nodes)) {
+        if (node.kind === 'feature' || node.kind === 'body') {
+          node.metadata = {
+            ...node.metadata,
+            testPadding: padding.repeat(400_000)
+          };
+        }
+      }
+    }
 
     const room = createTestRoom(context, {});
     const socket = await openSocket(room, base.projectId);

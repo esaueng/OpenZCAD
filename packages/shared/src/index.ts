@@ -1,4 +1,5 @@
 export * from './workspace-resume';
+export * from './document-validation';
 export * from './document-history';
 export * from './textLimits';
 export * from './imported-step-source';

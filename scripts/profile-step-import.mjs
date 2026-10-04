@@ -87,7 +87,7 @@ function parseArgs(argv) {
   const args = {
     sizesMb: [12, 25, 50, 100, 128, 200, 250],
     seed: path.join(repoRoot, 'samples/parametric-bracket.step'),
-    workdir: path.join(os.tmpdir(), 'openzcad-step-profile'),
+    workdir: os.tmpdir(),
     mesh: false,
     out: null,
     child: null
@@ -304,7 +304,9 @@ function runLadder(args) {
       `remus-wasm not installed at ${REMUS_PACKAGE_JSON} — run pnpm install first.`
     );
   }
-  fs.mkdirSync(args.workdir, { recursive: true });
+  args.workdir = fs.mkdtempSync(
+    path.join(args.workdir, 'openzcad-step-profile-')
+  );
   const seedText = fs.readFileSync(args.seed, 'utf8');
   const seed = splitSeed(seedText);
   const seedStem = path.basename(args.seed).replace(/\.[^.]+$/, '');

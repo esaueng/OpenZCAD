@@ -34,7 +34,15 @@ export function isPrivateIpv4(hostname: string): boolean {
 }
 
 export function isPrivateHostname(hostname: string): boolean {
-  const host = hostname.toLowerCase().replace(/^\[|\]$/g, '');
+  let normalized: string;
+  try {
+    normalized = new URL(
+      `http://${hostname.includes(':') && !hostname.startsWith('[') ? `[${hostname}]` : hostname}/`
+    ).hostname;
+  } catch {
+    return true;
+  }
+  const host = normalized.toLowerCase().replace(/^\[|\]$/g, '');
   if (
     host === 'localhost' ||
     host.endsWith('.localhost') ||

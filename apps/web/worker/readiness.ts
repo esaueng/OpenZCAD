@@ -115,6 +115,39 @@ export async function isArtifactUploadAccountingReady(
   }
 }
 
+export const REQUIRED_ERASURE_TRIGGERS = [
+  'block_erasing_access_event_write',
+  'block_erasing_ai_lease_insert',
+  'block_erasing_ai_usage_insert',
+  'block_erasing_ai_usage_update',
+  'block_erasing_artifact_write',
+  'block_erasing_browser_session_insert',
+  'block_erasing_credential_insert',
+  'block_erasing_credential_update',
+  'block_erasing_desktop_access_insert',
+  'block_erasing_desktop_attempt_update',
+  'block_erasing_desktop_refresh_insert',
+  'block_erasing_document_object_write',
+  'block_erasing_invitation_write',
+  'block_erasing_measurement_insert',
+  'block_erasing_measurement_update',
+  'block_erasing_member_update',
+  'block_erasing_member_write',
+  'block_erasing_project_adoption_insert',
+  'block_erasing_project_adoption_update',
+  'block_erasing_project_insert',
+  'block_erasing_project_update',
+  'block_erasing_revision_write',
+  'block_erasing_settings_insert',
+  'block_erasing_settings_update',
+  'block_erasing_share_link_insert',
+  'block_erasing_storage_asset_write',
+  'block_erasing_upload_insert',
+  'block_erasing_upload_update',
+  'block_erasing_workspace_session_insert',
+  'block_erasing_workspace_session_update'
+] as const;
+
 /** Whether migrations through 0016 installed the erasure fence and write guards. */
 export async function isAccountErasureReady(
   db: D1Database | undefined
@@ -133,10 +166,14 @@ export async function isAccountErasureReady(
           (
             SELECT COUNT(*) FROM sqlite_schema
             WHERE type = 'trigger' AND name LIKE 'block_erasing_%'
+              AND name IN (${REQUIRED_ERASURE_TRIGGERS.map((name) => `'${name}'`).join(', ')})
           ) AS trigger_count`
       )
       .first<AccountErasureSchema>();
-    return schema?.table_ready === 1 && schema.trigger_count === 26;
+    return (
+      schema?.table_ready === 1 &&
+      schema.trigger_count === REQUIRED_ERASURE_TRIGGERS.length
+    );
   } catch {
     return false;
   }

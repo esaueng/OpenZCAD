@@ -2,6 +2,7 @@
 """Evaluate the checked-in scheduling expressions against trusted and hostile events."""
 
 import copy
+import ast
 import json
 import re
 import subprocess
@@ -9,8 +10,13 @@ import unittest
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[1]
-TEXT = (ROOT / ".github/workflows/fleet-ci.yml").read_text()
 CALLER = (ROOT / ".github/workflows/ci.yml").read_text()
+PIN = re.search(r"fleet-ci\.yml@([a-f0-9]{40})", CALLER)[1]
+try:
+    TEXT = subprocess.check_output(["git", "show", f"{PIN}:.github/workflows/fleet-ci.yml"], cwd=ROOT, text=True, stderr=subprocess.DEVNULL)
+except subprocess.CalledProcessError:
+    subprocess.run(["git", "fetch", "--no-tags", "--depth=1", "origin", PIN], cwd=ROOT, check=True)
+    TEXT = subprocess.check_output(["git", "show", f"{PIN}:.github/workflows/fleet-ci.yml"], cwd=ROOT, text=True)
 EXPRESSIONS = re.findall(
     r"^    runs-on: (?:&fleet-runner )?(\$\{\{ fromJSON\(.+\) \}\})$", TEXT, re.M
 )
@@ -28,16 +34,39 @@ def evaluate(expression, github, variables):
     source = expression[3:-3].replace("&&", " and ").replace("||", " or ")
     source = re.sub(r"\btrue\b(?!\')", "True", source)
     source = re.sub(r"\bfalse\b(?!\')", "False", source)
-    return eval(
-        source,
-        {"__builtins__": {}},
-        {
-            "github": Context(github),
-            "vars": Context(variables),
-            "fromJSON": json.loads,
-            "format": lambda template, value: template.format(value),
-        },
-    )
+    names = {"github": Context(github), "vars": Context(variables)}
+    def visit(node):
+        if isinstance(node, ast.Constant):
+            return node.value
+        if isinstance(node, ast.Name) and node.id in names:
+            return names[node.id]
+        if isinstance(node, ast.Attribute) and not node.attr.startswith("_"):
+            value = visit(node.value)
+            if not isinstance(value, dict):
+                raise ValueError("Only context fields are allowed")
+            result = value.get(node.attr)
+            return Context(result) if isinstance(result, dict) else result
+        if isinstance(node, ast.BoolOp):
+            result = visit(node.values[0])
+            for value in node.values[1:]:
+                if isinstance(node.op, ast.And) and not result:
+                    return result
+                if isinstance(node.op, ast.Or) and result:
+                    return result
+                result = visit(value)
+            return result
+        if isinstance(node, ast.Compare) and len(node.ops) == 1 and isinstance(node.ops[0], ast.Eq):
+            return visit(node.left) == visit(node.comparators[0])
+        if isinstance(node, ast.Call) and isinstance(node.func, ast.Name) and not node.keywords:
+            args = [visit(arg) for arg in node.args]
+            if node.func.id == "fromJSON" and len(args) == 1 and isinstance(args[0], str):
+                return json.loads(args[0])
+            if node.func.id == "format" and len(args) == 2 and isinstance(args[0], str):
+                # The reviewed expression uses only the literal {0} placeholder.
+                return args[0].replace("{0}", str(args[1]))
+        raise ValueError("Unsupported routing expression")
+    return visit(ast.parse(source.strip(), mode="eval").body)
+
 
 
 class DirectFleetTests(unittest.TestCase):

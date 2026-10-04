@@ -41,3 +41,17 @@ it('returns declared solid indices unchanged and releases the worker', async () 
   await expect(pending).resolves.toEqual([0, 2]);
   expect(FakeWorker.latest.terminate).toHaveBeenCalledTimes(1);
 });
+
+it('terminates a synchronous worker at the wall-clock deadline', async () => {
+  vi.useFakeTimers();
+  try {
+    vi.stubGlobal('Worker', FakeWorker);
+    const pending = inspectStepSolidsInWorker(new File(['step'], 'model.step'));
+    const rejected = expect(pending).rejects.toThrow(/120 second/);
+    await vi.advanceTimersByTimeAsync(120_000);
+    await rejected;
+    expect(FakeWorker.latest.terminate).toHaveBeenCalledOnce();
+  } finally {
+    vi.useRealTimers();
+  }
+});

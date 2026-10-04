@@ -13,6 +13,7 @@ import {
 import { toArtifactId, toUserId } from '@openzcad/shared';
 import {
   backupFileBytes,
+  MAX_PROJECT_BACKUP_BYTES,
   importProjectCopy,
   packBackupFile,
   parseProjectBackup,
@@ -63,6 +64,21 @@ function fixture(): ProjectBackup {
 }
 
 describe('complete project backups', () => {
+  it('decodes entries above 128 MiB within the archive budget', () => {
+    const size = 128 * 1024 * 1024 + 1;
+    const encodedLength = Math.ceil(size / 3) * 4;
+    const bytes = backupFileBytes({
+      base64: 'A'.repeat(encodedLength)
+    });
+    expect(bytes.length).toBe(size);
+    expect(bytes[0]).toBe(0);
+    expect(bytes[size - 1]).toBe(0);
+  }, 30_000);
+  it('rejects an encoded entry beyond the archive budget before decoding', () => {
+    expect(() =>
+      backupFileBytes({ base64: 'A'.repeat(MAX_PROJECT_BACKUP_BYTES + 4) })
+    ).toThrow('byte limit');
+  });
   it('round trips every document field, sources, units and history without normalization', async () => {
     const backup = fixture();
     expect(await parseProjectBackup(JSON.stringify(backup))).toEqual(backup);

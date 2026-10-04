@@ -1,5 +1,7 @@
 import {
   assertDocumentHistory,
+  documentStructureError,
+  documentEnvelopeError,
   assertDocumentTextBudget,
   hasValidImportedStepSources
 } from '@openzcad/shared';
@@ -256,6 +258,8 @@ function parseProjectDocument(
   value: unknown,
   projectIdFromPath?: string
 ): ProjectDocument {
+  const invalid = documentStructureError(value) ?? documentEnvelopeError(value);
+  if (invalid) throw badRequest(invalid);
   const record = asRecord(value, '"document"');
   if (projectIdFromPath === undefined) {
     if (

@@ -94,6 +94,71 @@ describe('a collaboration submission that shares no history with the room', () =
     expect(resolution.document.featureOrder).toEqual(latest.featureOrder);
   });
 
+  it.each([0, 1])(
+    'refuses a revision list truncated to %s entries',
+    (count) => {
+      const a = session('Truncated lineage');
+      a.box('First');
+      const latest = a.box('Committed');
+      const incoming = {
+        ...latest,
+        version: latest.version + 1,
+        nodes: {},
+        revisions: latest.revisions.slice(0, count)
+      };
+      expect(resolveCollaborationDocument(latest, incoming)).toMatchObject({
+        kind: 'conflict',
+        document: latest
+      });
+    }
+  );
+
+  it('accepts forward lineage when the bounded revision window rolls over', () => {
+    const a = session('Rolling lineage');
+    const seed = a.box('First');
+    const latest = {
+      ...seed,
+      version: 501,
+      revisions: Array.from({ length: 500 }, (_, index) => ({
+        ...seed.revisions[0]!,
+        revisionId:
+          `rev_${index}` as ProjectDocument['revisions'][number]['revisionId']
+      }))
+    };
+    const incoming = {
+      ...latest,
+      version: 502,
+      revisions: [
+        ...latest.revisions.slice(1),
+        {
+          ...latest.revisions[0]!,
+          revisionId:
+            'rev_500' as ProjectDocument['revisions'][number]['revisionId']
+        }
+      ]
+    };
+    expect(resolveCollaborationDocument(latest, incoming, latest).kind).toBe(
+      'accept'
+    );
+    expect(resolveCollaborationDocument(latest, incoming).kind).toBe(
+      'conflict'
+    );
+    expect(
+      resolveCollaborationDocument(
+        latest,
+        { ...incoming, revisions: incoming.revisions.slice(1) },
+        latest
+      ).kind
+    ).toBe('conflict');
+    expect(
+      resolveCollaborationDocument(
+        latest,
+        { ...incoming, version: Number.MAX_SAFE_INTEGER },
+        latest
+      ).kind
+    ).toBe('conflict');
+  });
+
   it('still accepts an ordinary edit that continues the room line', () => {
     const a = session('Forward');
     const latest = a.box('First');

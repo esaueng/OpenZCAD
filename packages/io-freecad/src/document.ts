@@ -34,6 +34,45 @@ function xml(bytes: Uint8Array): Xml {
   const text = new TextDecoder('utf-8', { fatal: true }).decode(bytes);
   if (/<!DOCTYPE|<!ENTITY/i.test(text))
     throw new Error('FreeCAD XML entities and document types are unsupported.');
+  let depth = 0;
+  let cursor = 0;
+  // Advance once through the input. A global tag regex can rescan the entire
+  // remaining suffix for every malformed opening tag or unclosed comment.
+  while ((cursor = text.indexOf('<', cursor)) !== -1) {
+    const opening = cursor;
+    const special = text.startsWith('<!--', cursor)
+      ? ['<!--', '-->']
+      : text.startsWith('<![CDATA[', cursor)
+        ? ['<![CDATA[', ']]>']
+        : text.startsWith('<?', cursor)
+          ? ['<?', '?>']
+          : null;
+    if (special) {
+      const end = text.indexOf(special[1]!, cursor + special[0]!.length);
+      if (end === -1) throw new Error('FreeCAD XML is malformed.');
+      cursor = end + special[1]!.length;
+      continue;
+    }
+    let quote: string | null = null;
+    for (cursor += 1; cursor < text.length; cursor += 1) {
+      const char = text[cursor]!;
+      if (quote) {
+        if (char === quote) quote = null;
+      } else if (char === '"' || char === "'") {
+        quote = char;
+      } else if (char === '<') {
+        throw new Error('FreeCAD XML is malformed.');
+      } else if (char === '>') {
+        break;
+      }
+    }
+    if (cursor === text.length) throw new Error('FreeCAD XML is malformed.');
+    if (text[opening + 1] === '/') depth -= 1;
+    else if (text[cursor - 1] !== '/') depth += 1;
+    if (depth > 64)
+      throw new Error('FreeCAD XML exceeds the nesting-depth limit.');
+    cursor += 1;
+  }
   if (XMLValidator.validate(text) !== true)
     throw new Error('FreeCAD XML is malformed.');
   return record(
@@ -107,7 +146,9 @@ export function readFreecadShapes(
   limits: FreecadImportLimits = FREECAD_IMPORT_LIMITS
 ): FreecadSavedShape[] {
   const archive = inspectFreecadArchive(bytes, limits);
-  const doc = record(xml(extractFreecadEntry(bytes, limits))['Document']);
+  const doc = record(
+    xml(extractFreecadEntry(bytes, limits, 'Document.xml', archive))['Document']
+  );
   if (!['2', '3', '4'].includes(attribute(doc, 'SchemaVersion'))) {
     throw new Error(
       'Unsupported FreeCAD document schema. Export the model as STEP in FreeCAD.'
@@ -200,7 +241,7 @@ export function readFreecadShapes(
       throw new Error(
         'FreeCAD has an unsaved or unsupported shape. Recompute and save it in FreeCAD, or export STEP.'
       );
-    const brep = extractFreecadEntry(bytes, limits, file);
+    const brep = extractFreecadEntry(bytes, limits, file, archive);
     if (!brep.byteLength)
       throw new Error(
         'FreeCAD has an empty saved shape. Recompute and save it in FreeCAD.'

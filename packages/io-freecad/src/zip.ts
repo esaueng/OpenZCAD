@@ -274,9 +274,9 @@ export function inspectFreecadArchive(
 export function extractFreecadEntry(
   bytes: Uint8Array,
   limits: FreecadImportLimits,
-  entryName = 'Document.xml'
+  entryName = 'Document.xml',
+  inspection = inspectFreecadArchive(bytes, limits)
 ): Uint8Array {
-  const inspection = inspectFreecadArchive(bytes, limits);
   const entry = inspection.entries.find((item) => item.name === entryName);
   if (!entry) throw new Error('FreeCAD references a missing shape entry.');
   const output = new Uint8Array(entry.uncompressedBytes);

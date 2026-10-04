@@ -1,7 +1,9 @@
+import { consumeWorkspaceValue } from './value-budget';
 import type { ShaprImportLimits } from './limits';
 
+const encoder = new TextEncoder();
 function byteLength(value: string): number {
-  return new TextEncoder().encode(value).byteLength;
+  return encoder.encode(value).byteLength;
 }
 
 function validateNestingBeforeParse(
@@ -79,6 +81,7 @@ export function parseBoundedJson(
   while (stack.length > 0) {
     const current = stack.pop()!;
     nodes += 1;
+    consumeWorkspaceValue(limits);
     if (nodes > limits.maxValueNodes) {
       throw new Error(`${label} exceeds the JSON node-count limit.`);
     }

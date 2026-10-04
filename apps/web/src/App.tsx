@@ -1,3 +1,4 @@
+import { clearAssistantHistory } from './lib/assistant/historyStorage';
 import { exactWarningBaseline } from './lib/exactWarnings';
 import { topologyReferenceRepairCommand } from './lib/topologyReferenceRepairs';
 import { boxPreviewProfile } from './lib/interaction/boxPreviewProfile';
@@ -7382,6 +7383,7 @@ export function App() {
   }
 
   function endCloudSettingsSession() {
+    clearAssistantHistory();
     endCloudSettingsAutosave();
     // The next session on this device may be a different account; it must not
     // reconcile against this account's sync baselines.
@@ -7756,6 +7758,7 @@ export function App() {
       cloudProjectAutosaveRef.current?.closeProject();
       await cloudSettingsAutosaveRef.current?.flushPending();
       await api.logout();
+      clearAssistantHistory();
       const listed = await loadProjectSummaries(false);
       remoteVersionsRef.current.clear();
       accountDocumentUnavailableProjectIdRef.current = null;
@@ -10633,15 +10636,10 @@ export function App() {
     });
     sink.update({ phase: 'reading', fraction: null });
     try {
-      const {
-        MAX_PROJECT_BACKUP_BYTES,
-        importProjectCopy,
-        parseProjectBackup
-      } = await import('./lib/projectBackup');
-      if (file.size > MAX_PROJECT_BACKUP_BYTES)
-        throw new Error('Project backup exceeds the 256 MB limit.');
-      const backup = importProjectCopy(
-        await parseProjectBackup(await file.text()),
+      const { restoreProjectInWorker } =
+        await import('./lib/projectBackupWorkerClient');
+      const backup = await restoreProjectInWorker(
+        file,
         session?.userId ?? localUserId
       );
       sink.update({ phase: 'saving', fraction: null });

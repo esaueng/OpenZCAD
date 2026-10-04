@@ -43,3 +43,6 @@ service-account*.json
 .worktrees/
 backups/
 perf-results
+
+# Private database exports; keep migrations tracked.
+openzcad-backup*.sql

@@ -80,6 +80,8 @@ const RELATIONSHIP_BYTES = 64 * 1024;
  * accept meets it, and a package that inflates past it is refused rather than
  * read.
  */
+export const MAX_THREE_MF_PLACEMENTS = 200_000;
+const MAX_THREE_MF_OBJECTS = 10_000;
 const MODEL_SCAN_BYTES = 256 * 1024 * 1024;
 /**
  * The most text the scan will carry while waiting for a tag to close.
@@ -355,6 +357,12 @@ async function scanModelPart(
   let inResources = false;
   let inBuild = false;
   let current: ScannedObject | null = null;
+  const appendObject = (object: ScannedObject): void => {
+    if (model.objects.length >= MAX_THREE_MF_OBJECTS) {
+      throw refuse('its object count exceeds the browser import limit');
+    }
+    model.objects.push(object);
+  };
 
   const consume = (text: string, final: boolean): void => {
     const combined = carry + text;
@@ -381,7 +389,7 @@ async function scanModelPart(
         } else if (name === 'build') {
           inBuild = false;
         } else if (name === 'object' && current) {
-          model.objects.push(current);
+          appendObject(current);
           current = null;
         }
         continue;
@@ -406,7 +414,7 @@ async function scanModelPart(
               hasComponents: false
             };
             if (selfClosing) {
-              model.objects.push(object);
+              appendObject(object);
             } else {
               current = object;
             }
@@ -424,6 +432,11 @@ async function scanModelPart(
           break;
         default:
           if (inBuild) {
+            if (model.items.length >= MAX_THREE_MF_PLACEMENTS) {
+              throw refuse(
+                'its placement count exceeds the browser import limit'
+              );
+            }
             model.items.push({
               objectId: attribute(match[0], 'objectid'),
               transform: attribute(match[0], 'transform'),
@@ -440,7 +453,7 @@ async function scanModelPart(
   }
   consume(decoder.decode(), true);
   if (current) {
-    model.objects.push(current);
+    appendObject(current);
   }
   if (!model.sawModel) {
     throw refuse('its 3D model part holds no <model> element');

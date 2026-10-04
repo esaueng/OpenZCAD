@@ -1,4 +1,5 @@
 import { accountEntitlements } from '@openzcad/cloudflare-adapters';
+import { PROJECT_INVITATION_RATE_WINDOW_SECONDS } from '@openzcad/persistence';
 import { toUserId, type AuthSession } from '@openzcad/shared';
 import {
   isCloudflareFeatureEnabled,
@@ -451,7 +452,13 @@ async function cleanExpiredAuthRows(
   db: D1Database,
   timestamp: number
 ): Promise<void> {
-  const staleWindow = timestamp - LOGIN_RATE_WINDOW_SECONDS * 2;
+  const staleWindow =
+    timestamp -
+    Math.max(
+      LOGIN_RATE_WINDOW_SECONDS,
+      PROJECT_INVITATION_RATE_WINDOW_SECONDS
+    ) *
+      2;
   await db.batch([
     db
       .prepare(

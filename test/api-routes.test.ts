@@ -118,7 +118,7 @@ function storageAccountingDb(
         return projectMeasurementRow;
       }
       if (query.includes('account_erasure_requests')) {
-        return { table_ready: 1, trigger_count: 26 };
+        return { table_ready: 1, trigger_count: 30 };
       }
       return row;
     })
@@ -473,6 +473,7 @@ describe('worker api routes', () => {
     const canaryEnv = {
       ENVIRONMENT: 'beta' as const,
       AUTH_MODE: 'email-code' as const,
+      AUTH_OTP_PEPPER: 'test-pepper',
       PRODUCTION_GUARD: 'enabled',
       PROJECT_COLLABORATION_CANARY_EMAILS: 'canary@example.com',
       DB: {
@@ -481,6 +482,8 @@ describe('worker api routes', () => {
             bind() {
               return {
                 async first() {
+                  if (query.includes('INSERT INTO auth_rate_limits'))
+                    return { request_count: 1 };
                   return query.includes('FROM auth_sessions')
                     ? {
                         user_id: 'user_canary',
@@ -488,6 +491,9 @@ describe('worker api routes', () => {
                         expires_at: 4_000_000_000
                       }
                     : null;
+                },
+                async run() {
+                  return { success: true };
                 }
               };
             }
@@ -688,6 +694,7 @@ describe('worker api routes', () => {
       {
         ...env,
         AUTH_MODE: 'email-code',
+        DB: {prepare: () => ({bind: () => ({first: async () => null})})},
         TURNSTILE_SITE_KEY: 'public-site-key',
         TURNSTILE_SECRET_KEY: 'secret-never-returned'
       } as never
@@ -1140,6 +1147,7 @@ describe('worker api routes', () => {
       {
         ...env,
         AUTH_MODE: 'email-code',
+        DB: {prepare: () => ({bind: () => ({first: async () => null})})},
         OPENROUTER_API_KEY: 'secret-test-value'
       } as never
     );
@@ -1195,7 +1203,7 @@ describe('worker api routes', () => {
   it('requires an email-code identity for cloud routes', async () => {
     const response = await worker.fetch(
       new Request('https://example.com/api/projects'),
-      { ...env, AUTH_MODE: 'email-code' } as never
+      { ...env, AUTH_MODE: 'email-code', ARTIFACTS: undefined, DB: {prepare: () => ({first: async () => ({trigger_count:7, revision_owner_trigger:1})})} } as never
     );
     expect(response.status).toBe(401);
   });
@@ -1418,6 +1426,18 @@ describe('worker api routes', () => {
       {
         ENVIRONMENT: 'beta',
         AUTH_MODE: 'email-code',
+        AUTH_OTP_PEPPER: 'test-pepper',
+        DB: {
+          prepare: (sql: string) => ({
+            bind: () => ({
+              run: async () => ({ success: true }),
+              first: async () =>
+                sql.includes('auth_rate_limits')
+                  ? { request_count: 1 }
+                  : { id: projectId }
+            })
+          })
+        },
         PROJECT_ROOM: { getByName }
       } as never
     );
@@ -2478,6 +2498,10 @@ describe('worker api routes', () => {
     expect(response.status).toBe(200);
     expect(response.headers.get('x-content-type-options')).toBe('nosniff');
     expect(response.headers.get('referrer-policy')).toBe('no-referrer');
+    expect(response.headers.get('content-security-policy')).toBe(
+      "default-src 'none'; sandbox; frame-ancestors 'none'"
+    );
+    expect(response.headers.get('x-frame-options')).toBe('DENY');
     expect(response.headers.get('cross-origin-resource-policy')).toBe(
       'same-origin'
     );
