@@ -34,6 +34,8 @@ import {
   sketchObjectMovable,
   sketchObjectRotatable,
   sketchMovePointerRole,
+  sketchMoveChanged,
+  rotateTextObject,
   textRotationFromRingDrag,
   translateSketchObject
 } from './session';
@@ -730,5 +732,69 @@ describe('sketchMovePointerRole', () => {
     // Pointer id 0 is a real id (the first touch), not "no drag".
     expect(sketchMovePointerRole(0, 0)).toBe('owner');
     expect(sketchMovePointerRole(0, 1)).toBe('other');
+  });
+});
+
+describe('a drag that ends where it began commits nothing', () => {
+  const resolve = (value: unknown) => Number(value);
+  const text: SketchObjectData = {
+    objectKind: 'text',
+    text: 'Boa',
+    fontFamily: 'open-sans',
+    fontStyle: 'regular',
+    size: 8,
+    x: 3,
+    y: 4
+  };
+
+  it('keeps an absent text rotation absent when the ring returns to the start', () => {
+    const origin = { x: 3, y: 4 };
+    const from = { x: 13, y: 4 };
+    const rotation = textRotationFromRingDrag(origin, from, from, 0);
+    const turned = rotateTextObject(text, rotation);
+    expect(rotation).toBe(0);
+    expect(turned).not.toHaveProperty('rotation');
+    // No change means no commit, so no solve and no undo entry.
+    expect(sketchMoveChanged(text, turned, resolve)).toBe(false);
+    // An explicit 0 is the same value as the absent default.
+    expect(sketchMoveChanged(text, { ...text, rotation: 0 }, resolve)).toBe(
+      false
+    );
+    expect(sketchMoveChanged(text, rotateTextObject(text, 15), resolve)).toBe(
+      true
+    );
+  });
+
+  it('compares positions by value and everything else exactly', () => {
+    const circle: SketchObjectData = {
+      objectKind: 'circle',
+      radius: 5,
+      centerX: '12.5',
+      centerY: 2
+    };
+    expect(
+      sketchMoveChanged(
+        circle,
+        placeSketchObjectGrabPoint(circle, { x: 12.5, y: 2 }),
+        resolve
+      )
+    ).toBe(false);
+    expect(
+      sketchMoveChanged(
+        circle,
+        placeSketchObjectGrabPoint(circle, { x: 13, y: 2 }),
+        resolve
+      )
+    ).toBe(true);
+    expect(
+      sketchMoveChanged(
+        text,
+        translateSketchObject(text, 0, 0, resolve),
+        resolve
+      )
+    ).toBe(false);
+    expect(sketchMoveChanged(text, { ...text, text: 'Bob' }, resolve)).toBe(
+      true
+    );
   });
 });

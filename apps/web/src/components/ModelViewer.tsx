@@ -222,7 +222,9 @@ import {
   sketchObjectMovable,
   sketchObjectRotatable,
   snapTargetsForObject,
+  sketchMoveChanged,
   sketchMovePointerRole,
+  rotateTextObject,
   textRotationFromRingDrag,
   translateSketchObject,
   pointAtDistanceAlongDirection,
@@ -6294,7 +6296,7 @@ export function ModelViewer({
           drag.startRotation,
           event.shiftKey
         );
-        drag.preview = { ...drag.original, rotation } as SketchObjectData;
+        drag.preview = rotateTextObject(drag.original, rotation);
         positionSketchDimLabel(event, `${formatNumber(rotation)}°`, false);
       } else {
         const snapped = sketchPointAt(event, drag.targets);
@@ -6369,9 +6371,11 @@ export function ModelViewer({
       sketchRigRef.current?.setInference(null);
       activeSketchSnap = null;
       const preview = drag.preview;
+      const mode = sketchModeRef.current;
       const changed =
         preview !== null &&
-        JSON.stringify(preview) !== JSON.stringify(drag.original);
+        mode !== null &&
+        sketchMoveChanged(drag.original, preview, sketchModeResolver(mode));
       if (drag.active) {
         onSketchMoveChangeRef.current?.({
           type: commit && changed ? 'sketch-move-commit' : 'sketch-move-cancel'

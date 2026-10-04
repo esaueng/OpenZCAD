@@ -1132,3 +1132,53 @@ export function sketchMovePointerRole(
   }
   return heldPointerId === pointerId ? 'owner' : 'other';
 }
+
+/**
+ * Text turned to `rotationDeg`. A text object with no stored rotation keeps
+ * the field absent when the result is the default 0, so a ring dragged back
+ * to where it started writes nothing new.
+ */
+export function rotateTextObject(
+  data: SketchObjectData,
+  rotationDeg: number
+): SketchObjectData {
+  if (data.objectKind !== 'text') {
+    return data;
+  }
+  if (rotationDeg === 0 && data.rotation === undefined) {
+    return data;
+  }
+  return { ...data, rotation: rotationDeg };
+}
+
+/**
+ * Whether a drag changed what the object means. Position fields and text
+ * rotation compare by value — an absent rotation is 0 and a stored `'12.5'`
+ * is 12.5 — so a gesture that ends where it began commits nothing: no solve,
+ * no undo entry, no rewritten data. Every other field must match exactly.
+ */
+export function sketchMoveChanged(
+  original: SketchObjectData,
+  next: SketchObjectData,
+  resolve: (value: unknown) => number
+): boolean {
+  const before = original as unknown as Record<string, unknown>;
+  const after = next as unknown as Record<string, unknown>;
+  const valued = new Set(positionFields(original).flat());
+  if (original.objectKind === 'text') {
+    valued.add('rotation');
+  }
+  const numeric = (record: Record<string, unknown>, key: string) =>
+    key === 'rotation' && record[key] === undefined ? 0 : resolve(record[key]);
+  const keys = new Set([...Object.keys(before), ...Object.keys(after)]);
+  for (const key of keys) {
+    if (valued.has(key)) {
+      if (numeric(before, key) !== numeric(after, key)) {
+        return true;
+      }
+    } else if (JSON.stringify(before[key]) !== JSON.stringify(after[key])) {
+      return true;
+    }
+  }
+  return false;
+}
