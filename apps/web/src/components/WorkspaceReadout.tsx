@@ -153,8 +153,8 @@ export function WorkspaceReadout({
   // and saves passed over in a burst are routine, and "10 more in log"
   // after adding one box sent people looking for a problem there was not.
   const missed =
-    paced.skippedNotable > 0
-      ? `${paced.skippedNotable} ${paced.skippedNotable === 1 ? 'warning' : 'warnings'}`
+    paced.skipped > 0
+      ? `${paced.skipped} ${paced.skipped === 1 ? 'warning' : 'warnings'}`
       : null;
   // A retired or expired message leaves the bar reading as nothing happening.
   const shownStatus = quiet ? '' : paced.status;

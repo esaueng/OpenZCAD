@@ -1,5 +1,6 @@
 import { Suspense, useEffect, useRef, useState, type RefObject } from 'react';
 import { lazyWithStaleChunkNotice } from '../lib/staleChunk';
+import { ErrorBoundary } from './ErrorBoundary';
 
 export type StatusTone = 'ready' | 'warning' | 'running';
 
@@ -116,15 +117,21 @@ export function StatusActivityLog({
     return null;
   }
 
+  // Its own boundary: a tab left open across a deploy asks for a chunk that
+  // no longer exists, and that rejection must cost the log, not the
+  // workspace behind it. The boundary says so with a Reload; closing and
+  // reopening the log mounts a fresh one and tries again.
   return (
-    <Suspense fallback={null}>
-      <LazyStatusActivityLogPanel
-        id={id}
-        entries={entries}
-        truncated={nextEntryIdRef.current > MAX_STATUS_LOG_ENTRIES}
-        triggerRef={triggerRef}
-        onClose={onClose}
-      />
-    </Suspense>
+    <ErrorBoundary label="Activity log">
+      <Suspense fallback={null}>
+        <LazyStatusActivityLogPanel
+          id={id}
+          entries={entries}
+          truncated={nextEntryIdRef.current > MAX_STATUS_LOG_ENTRIES}
+          triggerRef={triggerRef}
+          onClose={onClose}
+        />
+      </Suspense>
+    </ErrorBoundary>
   );
 }

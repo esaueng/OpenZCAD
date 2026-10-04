@@ -31,8 +31,7 @@ describe('usePacedStatus', () => {
     expect(result.current).toEqual({
       status: 'Opened Bracket.',
       tone: 'ready',
-      skipped: 0,
-      skippedNotable: 0
+      skipped: 0
     });
     act(() => {
       vi.advanceTimersByTime(STATUS_MIN_DWELL_MS);
@@ -58,8 +57,7 @@ describe('usePacedStatus', () => {
     expect(result.current).toEqual({
       status: 'Reopened Gentle Duckling.',
       tone: 'ready',
-      skipped: 10,
-      skippedNotable: 0
+      skipped: 10
     });
     // The next message after a quiet dwell starts a fresh count.
     act(() => {
@@ -69,8 +67,7 @@ describe('usePacedStatus', () => {
     expect(result.current).toEqual({
       status: 'Saved',
       tone: 'ready',
-      skipped: 0,
-      skippedNotable: 0
+      skipped: 0
     });
   });
 
@@ -95,8 +92,7 @@ describe('usePacedStatus', () => {
     expect(result.current).toEqual({
       status: 'Ready',
       tone: 'ready',
-      skipped: 3,
-      skippedNotable: 1
+      skipped: 1
     });
   });
 
@@ -128,8 +124,7 @@ describe('usePacedStatus', () => {
     expect(result.current).toEqual({
       status: 'Shell added',
       tone: 'ready',
-      skipped: 0,
-      skippedNotable: 0
+      skipped: 0
     });
   });
 });
