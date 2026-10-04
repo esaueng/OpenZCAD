@@ -229,7 +229,10 @@ import {
   type SnapTarget,
   type SnapTargetKind
 } from '../lib/sketch/session';
-import { textObjectFromPoint } from '../lib/sketch/textPlacement';
+import {
+  textDraftPlaceable,
+  textObjectFromPoint
+} from '../lib/sketch/textPlacement';
 import type {
   SketchCircleMode,
   SketchTextDraft
@@ -6941,11 +6944,11 @@ export function ModelViewer({
         if (mode.tool === 'text' && point && !moved) {
           // One click places the baseline origin; everything else about a text
           // object is the card's draft, so there is no drag and no second
-          // click. An empty string places nothing: the card says so, and
-          // the workspace refuses a string over the text budget with its
-          // reason.
+          // click. A draft the card cannot place (no string, a size that
+          // does not resolve) places nothing here either, and the workspace
+          // refuses a string over the text budget with its reason.
           const draft = mode.textDraft;
-          if (draft && draft.text.length > 0) {
+          if (draft && textDraftPlaceable(draft)) {
             onSketchCommitRef.current(textObjectFromPoint(point, draft));
           }
           requestRender();

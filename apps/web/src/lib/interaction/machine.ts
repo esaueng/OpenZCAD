@@ -141,6 +141,12 @@ export interface SketchTextDraft {
   /** Em size: the layout scales the face by `size / unitsPerEm`. */
   size: ParamValue;
   align: TextAlign;
+  /**
+   * False while the card's size field does not resolve to a positive size.
+   * `size` keeps the last good value so the outline stays up, so this flag is
+   * what keeps the plane click from placing it. Absent reads as valid.
+   */
+  sizeValid?: boolean;
 }
 
 /** A fresh, empty draft in the default face (Open Sans) at em size 10. */

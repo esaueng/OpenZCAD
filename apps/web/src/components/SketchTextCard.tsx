@@ -18,6 +18,7 @@ import type { ProjectDocument, SketchObjectData } from '@openzcad/shared';
 import type { SketchTextDraft } from '../lib/interaction/machine';
 import type { SketchPoint } from '../lib/sketch/session';
 import {
+  textDraftPlaceable,
   textObjectFromPoint,
   textPlacementBudgetError
 } from '../lib/sketch/textPlacement';
@@ -98,7 +99,8 @@ export function SketchTextCard({
         : textPlacementBudgetError(document, sketchId, draft.text),
     [document, sketchId, draft.text]
   );
-  const canPlace = !empty && sizeValid && !error && !disabled;
+  const canPlace =
+    textDraftPlaceable(draft) && sizeValid && !error && !disabled;
 
   function submit(event: FormEvent) {
     // Enter in a field is not placement; the click on the plane is.
@@ -146,9 +148,14 @@ export function SketchTextCard({
               scope={scope}
               onChange={(value) => {
                 setSizeText(value);
-                if (sizeIsValid(value, scope)) {
-                  onChange({ size: coerceParamValue(value) });
-                }
+                // The draft keeps its last good size for the outline and
+                // records whether the field resolves, which the plane click
+                // reads too.
+                onChange(
+                  sizeIsValid(value, scope)
+                    ? { size: coerceParamValue(value), sizeValid: true }
+                    : { sizeValid: false }
+                );
               }}
             />
           </div>

@@ -21,7 +21,10 @@ import type {
 } from '@openzcad/shared';
 import { UNSTABLE_FACE_OFFSET_REASON } from '../directEdit';
 import { UNSTABLE_FACE_SKETCH_REASON } from '../faceSketchAttachment';
-import { textObjectFromPoint } from '../sketch/textPlacement';
+import {
+  textDraftPlaceable,
+  textObjectFromPoint
+} from '../sketch/textPlacement';
 
 const faceReference: FaceTopologyReferenceV5 = {
   kind: 'face',
@@ -443,6 +446,26 @@ describe('text tool composing', () => {
       kind: 'horizontal'
     });
     expect(composingTextDraft(state)).toBeNull();
+  });
+
+  it('an unresolved size makes the draft unplaceable until it resolves', () => {
+    let state = interactionReducer(composing(), {
+      type: 'sketch-text-draft',
+      patch: { text: 'Boa', size: 8 }
+    });
+    // The card types 0 into Size (em): the draft keeps 8 for the outline.
+    state = interactionReducer(state, {
+      type: 'sketch-text-draft',
+      patch: { sizeValid: false }
+    });
+    expect(composingTextDraft(state)?.size).toBe(8);
+    // What the plane click asks before it places anything.
+    expect(textDraftPlaceable(composingTextDraft(state))).toBe(false);
+    state = interactionReducer(state, {
+      type: 'sketch-text-draft',
+      patch: { size: 12, sizeValid: true }
+    });
+    expect(textDraftPlaceable(composingTextDraft(state))).toBe(true);
   });
 
   it('places exactly the typed object, then hands over to Select', () => {

@@ -154,6 +154,7 @@ describe('SketchTextCard', () => {
     // A size that does not resolve to a positive length keeps the last good
     // one in the draft (the outline stays) and refuses placement.
     expect(draftOf().size).toBe('h * 2');
+    expect(draftOf().sizeValid).toBe(false);
     expect(screen.getByRole('button', { name: 'Place' })).toBeDisabled();
   });
 

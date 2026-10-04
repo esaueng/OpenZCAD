@@ -38,8 +38,48 @@ export function textObjectFromPoint(
   };
 }
 
-/** Node id the draft stands in under while the budget is checked. */
-const DRAFT_NODE_ID = 'sketch-text-draft';
+/**
+ * Whether the draft can be placed at all: a string to place and a size that
+ * resolves. The card and the plane click both ask this, so a click never
+ * commits a draft whose card says it cannot be placed.
+ */
+export function textDraftPlaceable(
+  draft: SketchTextDraft | null | undefined
+): boolean {
+  return Boolean(draft && draft.text.length > 0 && draft.sizeValid !== false);
+}
+
+/** Every node key the budget walk can see: current nodes and undo history. */
+function budgetNodeKeys(
+  document: Pick<ProjectDocument, 'nodes' | 'editHistory'>
+): Set<string> {
+  const keys = new Set(Object.keys(document.nodes));
+  for (const entry of document.editHistory?.entries ?? []) {
+    for (const change of entry.changes) {
+      if (change.kind !== 'value' || change.field !== 'nodes') continue;
+      if (change.key !== undefined) {
+        keys.add(change.key);
+        continue;
+      }
+      for (const value of [change.before, change.after]) {
+        if (value && typeof value === 'object' && !Array.isArray(value)) {
+          for (const key of Object.keys(value)) keys.add(key);
+        }
+      }
+    }
+  }
+  return keys;
+}
+
+/** `base`, or `base-1`, `base-2`, ... — the first one `used` does not hold. */
+function unusedKey(used: Set<string>, base: string): string {
+  let key = base;
+  for (let suffix = 1; used.has(key); suffix += 1) {
+    key = `${base}-${suffix}`;
+  }
+  used.add(key);
+  return key;
+}
 
 /**
  * Why placing a text object with `text` would be refused, if it would.
@@ -50,8 +90,10 @@ const DRAFT_NODE_ID = 'sketch-text-draft';
  * holds. That is the same `documentTextBudgetError` the command manager
  * asserts after the add, so the card and the click refuse exactly what the
  * commit would, instead of enabling Place for an add that then fails. The
- * sketch-level limits are part of the same check. (Approximation: history the
- * add would evict still counts, so a refusal can come one edit early.)
+ * sketch-level limits are part of the same check. The stand-in nodes take
+ * keys no node or history entry uses, so they never mask a real one.
+ * (Approximation: history the add would evict still counts, so a refusal can
+ * come one edit early.)
  */
 export function textPlacementBudgetError(
   document: Pick<ProjectDocument, 'nodes' | 'editHistory'>,
@@ -64,19 +106,23 @@ export function textPlacementBudgetError(
       )
     : undefined;
   const existing = entry?.[1].kind === 'sketch' ? entry[1] : null;
-  const draft = {
-    kind: 'sketch-object',
-    data: { objectKind: 'text', text }
-  };
+  const used = budgetNodeKeys(document);
+  const draftKey = unusedKey(used, 'sketch-text-draft');
+  const sketchKey = entry
+    ? entry[0]
+    : unusedKey(used, 'sketch-text-draft-sketch');
   return documentTextBudgetError({
     editHistory: document.editHistory,
     nodes: {
       ...document.nodes,
-      [DRAFT_NODE_ID]: draft,
-      [entry ? entry[0] : `${DRAFT_NODE_ID}-sketch`]: {
+      [draftKey]: {
+        kind: 'sketch-object',
+        data: { objectKind: 'text', text }
+      },
+      [sketchKey]: {
         ...(existing ?? {}),
         kind: 'sketch',
-        objectIds: [...(existing?.objectIds ?? []), DRAFT_NODE_ID]
+        objectIds: [...(existing?.objectIds ?? []), draftKey]
       }
     } as unknown as ProjectDocument['nodes']
   });

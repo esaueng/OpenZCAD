@@ -4,12 +4,16 @@
  */
 import { describe, expect, it } from 'vitest';
 import {
+  MAX_DOCUMENT_TEXT_CODE_UNITS,
   MAX_DOCUMENT_TEXT_OBJECTS,
+  MAX_SKETCH_TEXT_CODE_UNITS,
+  MAX_TEXT_OBJECT_CODE_UNITS,
   MAX_SKETCH_TEXT_OBJECTS,
   documentTextBudgetError,
   type ProjectDocument
 } from '@openzcad/shared';
-import { textPlacementBudgetError } from './textPlacement';
+import { newSketchTextDraft } from '../interaction/machine';
+import { textDraftPlaceable, textPlacementBudgetError } from './textPlacement';
 
 type BudgetDocument = Pick<ProjectDocument, 'nodes' | 'editHistory'>;
 
@@ -95,5 +99,82 @@ describe('textPlacementBudgetError', () => {
     );
     // The same string fits in a new sketch.
     expect(textPlacementBudgetError(document, null, 'A')).toBeNull();
+  });
+
+  it('never lets a stand-in key mask a real node with the same id', () => {
+    // The document sits exactly at its code-unit ceiling, and one of its
+    // longest strings is stored under the id the stand-in used to take
+    // (and a sketch under the stand-in sketch's id).
+    const long = 'x'.repeat(MAX_TEXT_OBJECT_CODE_UNITS);
+    const perSketch = MAX_SKETCH_TEXT_CODE_UNITS / MAX_TEXT_OBJECT_CODE_UNITS;
+    const count = MAX_DOCUMENT_TEXT_CODE_UNITS / MAX_TEXT_OBJECT_CODE_UNITS;
+    const nodes: Record<string, unknown> = {};
+    for (let sketch = 0; sketch * perSketch < count; sketch += 1) {
+      const objectIds: string[] = [];
+      for (let index = 0; index < perSketch; index += 1) {
+        const id =
+          sketch === 0 && index === 0
+            ? 'sketch-text-draft'
+            : `text_${sketch}_${index}`;
+        nodes[id] = {
+          kind: 'sketch-object',
+          data: { objectKind: 'text', text: long }
+        };
+        objectIds.push(id);
+      }
+      nodes[sketch === 0 ? 'sketch-text-draft-sketch' : `node_${sketch}`] = {
+        kind: 'sketch',
+        sketchId: `sketch_${sketch}`,
+        objectIds
+      };
+    }
+    const document = { nodes } as unknown as BudgetDocument;
+    expect(documentTextBudgetError(document)).toBeNull();
+    // One more code unit anywhere crosses the ceiling.
+    expect(textPlacementBudgetError(document, null, 'A')).toMatch(
+      /Project text/
+    );
+  });
+
+  it('keeps clear of keys that only undo history holds', () => {
+    const document = documentWithText(MAX_DOCUMENT_TEXT_OBJECTS - 1);
+    // A deleted text node, remembered by history under the old stand-in id.
+    const withHistory = {
+      ...document,
+      editHistory: {
+        entries: [
+          {
+            changes: [
+              {
+                kind: 'value',
+                field: 'nodes',
+                key: 'sketch-text-draft',
+                before: {
+                  kind: 'sketch-object',
+                  data: { objectKind: 'text', text: 'gone' }
+                }
+              }
+            ]
+          }
+        ]
+      }
+    } as unknown as BudgetDocument;
+    expect(documentTextBudgetError(withHistory)).toBeNull();
+    expect(textPlacementBudgetError(withHistory, null, 'A')).toMatch(
+      /Project text/
+    );
+  });
+});
+
+describe('textDraftPlaceable', () => {
+  it('needs a string and a size that resolves, as the card and the click do', () => {
+    const draft = { ...newSketchTextDraft(), text: 'Boa' };
+    expect(textDraftPlaceable(draft)).toBe(true);
+    expect(textDraftPlaceable({ ...draft, text: '' })).toBe(false);
+    // The card keeps the last good size for the outline and marks the
+    // field invalid; a click on the plane must not place that stale size.
+    expect(textDraftPlaceable({ ...draft, sizeValid: false })).toBe(false);
+    expect(textDraftPlaceable({ ...draft, sizeValid: true })).toBe(true);
+    expect(textDraftPlaceable(null)).toBe(false);
   });
 });
