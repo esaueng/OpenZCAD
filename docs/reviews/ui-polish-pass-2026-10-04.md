@@ -1,7 +1,9 @@
 # UI polish pass — 4 October 2026
 
-Hands-on audit of https://zcad.app at commit `d35b2ff9` (the same commit as
-this branch, so every file reference below is current). Driven signed-out in
+Hands-on audit of https://zcad.app at commit `d35b2ff9`. File and line
+references below are as of that commit; the fixes in #576–#580 have since
+moved many of them, so treat them as pointers into history, not current
+lines. Driven signed-out in
 Chrome at 1440×900, 1024×625 and once at ~1590 wide, dark and light themes.
 Model used: a new project with Box 30×18×24, a Ø6 through hole on the top
 face, one open sketch line, plus Measure, Section, Move and Fillet picks.
@@ -101,7 +103,7 @@ Delivery order for this audit lives in [ROADMAP.md](../../ROADMAP.md) under mast
 
 Landed on 4 October 2026, in merge order: #576 (column and panels: 1.3, 1.4, 1.5, 2.1, 2.4, 2.5, 3.4, 3.5), #577 (start screen and Settings: 1.7, 1.8, 2.3 menu sublabels, 3.10, 3.11, 5.2 grid/dates/placeholder, 5.3, 5.4), #578 (viewer popovers: 1.1, 1.2, 1.6, 2.2, 3.2, 3.6, 4.1, 5.6), #579 (rail and widgets: 2.6, 4.2, 5.5), #580 (copy and chrome: 3.1, 3.3, 3.8, 3.9, 3.12, 4.3, 4.4, 4.6, 5.1).
 
-Still open: 3.7 (two labels during a face drag) and 4.5 (the persisted tools fold) are design decisions and stay as they are; 5.2's light-theme thumbnails need a transparent capture and a re-capture of stored thumbnails; 2.3's inspector eyebrow measured 11 px on re-check and is withdrawn. The History drawer hiding under a tall card in short windows (a consequence of 1.3) was accepted: the card owns the lane.
+Count: 38 findings; 34 landed in full, 2 landed in part (2.3: menu sublabels fixed, the inspector eyebrow measured 11 px on re-check and is withdrawn; 5.2: grid, dates and placeholder fixed, light-theme thumbnails still need a transparent capture and a re-capture of stored thumbnails), and 2 stay as they are by design (3.7, two labels during a face drag; 4.5, the persisted tools fold). The History drawer hiding under a tall card in short windows (a consequence of 1.3) was accepted: the card owns the lane.
 
 ## How this was measured
 
