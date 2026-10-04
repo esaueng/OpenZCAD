@@ -1845,7 +1845,9 @@ export function App() {
       ? 'Sign in to open the shared project automatically.'
       : desktopAuthorizationAttempt
         ? 'Sign in, then approve OpenZCAD for macOS.'
-        : 'Changes save on this device immediately.'
+        : // Settings' own footer says where changes save; the header is
+          // for news (an error, a sign-in step), not a second copy of it.
+          ''
   );
   const [desktopAuthorizationCode, setDesktopAuthorizationCode] = useState('');
   const [desktopAuthorizationApproved, setDesktopAuthorizationApproved] =
@@ -4588,14 +4590,16 @@ export function App() {
         if (startupProjectId) {
           clearActiveProject();
         }
+        // The mode only: the shelf heading beside this footer counts the
+        // parts, and a second count here said the same thing twice.
         setStatus(
           !bootCloudFunctionsEnabledRef.current
-            ? `Offline mode · ${countLabel(userProjectCount(merged), 'local project', 'local projects')}`
+            ? 'Offline mode'
             : activeSession && listed.remoteReached
-              ? `Cloud profile ready · ${countLabel(userProjectCount(merged), 'project', 'projects')}`
+              ? 'Cloud profile ready'
               : health
-                ? `Local workspace · ${countLabel(userProjectCount(merged), 'local project', 'local projects')}`
-                : `Offline workspace · ${countLabel(userProjectCount(merged), 'local project', 'local projects')}`
+                ? 'Local workspace'
+                : 'Offline workspace'
         );
       } catch (error) {
         if (!cancelled) {
@@ -7440,7 +7444,9 @@ export function App() {
       endCloudSettingsSession();
       setSettingsMessage(
         nextAuth.status === 'ready'
-          ? 'Device settings active · sign in for cloud sync.'
+          ? // Signed out is the normal state, and the Settings footer already
+            // reads "Device only"; the header stays quiet rather than repeat it.
+            ''
           : 'Beta sign-in unavailable · device settings remain active.'
       );
       return;
@@ -7467,9 +7473,7 @@ export function App() {
       setCloudProjectIds(listed.cloudProjectIds);
       setAccountProjectListReached(listed.remoteReached);
       setSettingsMessage('Cloud profile connected.');
-      setStatus(
-        `Cloud profile ready · ${countLabel(userProjectCount(listed.projects), 'project', 'projects')}`
-      );
+      setStatus('Cloud profile ready');
     } catch {
       if (cloudFunctionsEnabledRef.current) {
         setSettingsMessage(
@@ -7490,7 +7494,7 @@ export function App() {
       setAuthConfigStatus('unavailable');
       return;
     }
-    setSettingsMessage('Changes save on this device immediately.');
+    setSettingsMessage('');
     void refreshCloudConnection();
   }
 
@@ -8666,10 +8670,12 @@ export function App() {
       setCloudProjectIds(listed.cloudProjectIds);
       setAccountProjectListReached(listed.remoteReached);
       setCloudAvailable(listed.remoteReached);
+      // The shelf heading already counts the parts, so a plain listing
+      // leaves the footer empty; it speaks only when it has news.
       setStatus(
         session && !listed.remoteReached
           ? `Cloud projects are temporarily unavailable · ${countLabel(userProjectCount(listed.projects), 'project', 'projects')} remain on this device.`
-          : `${countLabel(userProjectCount(listed.projects), 'project', 'projects')} available.`
+          : ''
       );
     } catch (error) {
       setStatus(errorMessage(error, 'Failed to refresh projects.'));
