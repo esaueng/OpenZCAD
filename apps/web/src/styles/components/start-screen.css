@@ -142,10 +142,26 @@
   text-transform: uppercase;
 }
 
+.start-header-actions {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
+
 .start-settings-button {
-  margin-left: auto;
   background: var(--color-surface-2);
   border: var(--border-thin);
+}
+
+/* The import is an icon button beside Settings; it gains its label only in
+   the narrow layout's header bar, which has the room the column does not. */
+.start-import > span {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  overflow: hidden;
+  clip-path: inset(50%);
+  white-space: nowrap;
 }
 
 /* Section labels in the column: the same mono eyebrow the workspace uses. */
@@ -227,11 +243,6 @@
   color: var(--color-text-subtle);
   font-size: var(--fs-xs);
   line-height: 1.4;
-}
-
-.start-import {
-  width: 100%;
-  justify-content: flex-start;
 }
 
 /* ── Column: shelves ─────────────────────────────────────── */
@@ -392,13 +403,14 @@
 /* ── Body: the shelf ─────────────────────────────────────── */
 
 /* The body is the only thing that scrolls in the wide layout, so the column
-   stays put while a long shelf goes by. */
+   stays put while a long shelf goes by. Its margins are kept to the tiles'
+   own gap scale: every pixel of padding here is a pixel off every tile. */
 .start-body {
   grid-area: body;
   display: grid;
   align-content: start;
-  gap: var(--sp-4);
-  padding: 22px var(--sp-5) var(--sp-5);
+  gap: var(--sp-3);
+  padding: 18px var(--sp-4) var(--sp-4);
   overflow-x: hidden;
   overflow-y: auto;
 }
@@ -710,21 +722,26 @@
 
 /* ── Part tiles ──────────────────────────────────────────── */
 
-/* Tiles keep one width and the shelf adds or drops a column as the window
-   changes. A `1fr` track stretched every tile to fill the row instead, so the
-   card size swung by a quarter or more each time a column came or went. With
-   a definite maximum, auto-fill counts columns at that maximum, so the count
-   only ever steps by one and the tile never grows past it; the `min()` lets
-   a single tile shrink to a window narrower than one tile. */
+/* Tiles fill their row. A fixed tile width left a dead gutter beside the
+   last column of up to a whole tile (184px at a 1000px window), ragged
+   against the full-width search above it, and on a phone a separate rule
+   then doubled the tile. Stretching each column to share the row puts that
+   space into the pictures instead. The minimum is low enough that the swing
+   when a column comes or goes stays small — a tile is never more than about
+   a third over it before another column fits — and the `min()` lets a single
+   tile shrink to a window narrower than one tile. `auto-fill`, not
+   `auto-fit`, on purpose: a shelf of one or two parts keeps the full row's
+   column count, so its tiles stay the size of a full shelf's rather than
+   stretching one tile across the whole stage. (A partial last row is the
+   same either way; only a shelf shorter than one row differs.) */
 .start-tile-grid {
-  --start-tile-w: 248px;
+  --start-tile-min: 220px;
   display: grid;
   grid-template-columns: repeat(
     auto-fill,
-    minmax(min(100%, 208px), var(--start-tile-w))
+    minmax(min(100%, var(--start-tile-min)), 1fr)
   );
-  justify-content: start;
-  gap: var(--sp-4);
+  gap: var(--sp-3);
 }
 
 .start-tile {
@@ -1169,7 +1186,7 @@
 
   .start-header {
     grid-template-columns: auto minmax(0, 1fr) auto;
-    padding: 10px var(--sp-4);
+    padding: 10px var(--sp-3);
     background: var(--color-surface);
     border-bottom: var(--border-thin);
   }
@@ -1181,24 +1198,51 @@
     border-left: var(--border-thin);
   }
 
-  .start-settings-button {
+  .start-header-actions {
     order: 1;
-    margin-left: 0;
   }
 
+  .start-import {
+    display: inline-flex;
+    gap: 6px;
+    width: auto;
+    padding: 0 10px;
+  }
+
+  .start-import > span {
+    position: static;
+    width: auto;
+    height: auto;
+    overflow: visible;
+    clip-path: none;
+    font-size: var(--fs-sm);
+  }
+
+  /* The launch card is one row — heading, name, units, create — so it costs
+     the shelf one control's height rather than a stacked form's. The fields
+     keep their accessible names (aria-label), so their visible labels and
+     the hint can go; an error still takes its own row. */
   .start-launch {
-    grid-template-columns: minmax(0, 1fr) auto;
-    align-items: start;
-    padding: var(--sp-4) var(--sp-4) 0;
+    padding: var(--sp-3) var(--sp-3) 0;
   }
 
   .start-launch-form {
-    grid-template-columns: minmax(0, 1fr) 150px auto;
-    align-items: end;
+    /* The units track sizes to its longest option, so it never clips. */
+    grid-template-columns: auto minmax(0, 1fr) max-content auto;
+    align-items: center;
+    padding: 8px;
   }
 
-  .start-launch-form h2,
-  .start-launch-form .start-launch-hint,
+  .start-launch-form h2 {
+    margin: 0 4px 0 2px;
+    white-space: nowrap;
+  }
+
+  .start-field-label,
+  .start-launch-hint {
+    display: none;
+  }
+
   .start-launch-form .start-launch-error {
     grid-column: 1 / -1;
   }
@@ -1207,13 +1251,8 @@
     margin-top: 0;
   }
 
-  .start-import {
-    width: auto;
-    margin-top: 28px;
-  }
-
   .start-library {
-    padding: var(--sp-4) var(--sp-4) 0;
+    padding: var(--sp-3) var(--sp-3) 0;
   }
 
   .start-eyebrow {
@@ -1243,7 +1282,7 @@
   }
 
   .start-body {
-    padding: var(--sp-4);
+    padding: var(--sp-3);
     overflow: visible;
   }
 
@@ -1252,35 +1291,57 @@
     /* The column form's min-height: 0 would let this auto row collapse when
        the page is taller than the window; here the cards size the row. */
     min-height: auto;
-    padding: 0 var(--sp-4) var(--sp-4);
+    padding: 0 var(--sp-3) var(--sp-3);
     overflow: visible;
   }
 
   .start-account {
     align-self: start;
-    margin: 0 var(--sp-4) var(--sp-4);
+    margin: 0 var(--sp-3) var(--sp-3);
+  }
+}
+
+/* Too narrow for the heading beside the fields: it still names the card
+   (aria-labelledby reads hidden text), and Create project says the rest. */
+@media (max-width: 680px) {
+  .start-launch-form h2 {
+    display: none;
   }
 }
 
 @media (max-width: 560px) {
-  /* One tile per row on a phone fills the row rather than leaving a gutter
-     beside a fixed-width tile. */
-  .start-tile-grid {
-    grid-template-columns: minmax(0, 1fr);
-  }
-
-  .start-launch,
+  /* Two rows on a phone: the name across the card, then units and create. */
   .start-launch-form {
-    grid-template-columns: minmax(0, 1fr);
+    grid-template-columns: minmax(0, 1fr) auto;
   }
 
+  .start-field-name {
+    grid-column: 1 / -1;
+  }
+
+  /* Back to the icon alone; clipped rather than display: none, so the label
+     still names the button. */
   .start-import {
-    width: 100%;
-    margin-top: 0;
+    width: 28px;
+    padding: 0;
+  }
+
+  .start-import > span {
+    position: absolute;
+    width: 1px;
+    height: 1px;
+    overflow: hidden;
+    clip-path: inset(50%);
   }
 
   .start-tagline {
     display: none;
+  }
+
+  /* With the tagline gone the actions land in its track; keep them at the
+     end of the bar. */
+  .start-header-actions {
+    justify-self: end;
   }
 
   .start-search {

@@ -5,13 +5,16 @@ export function ProjectImportButton({
   onImport,
   disabled = false,
   className = 'topbar-menu-item',
-  hint
+  hint,
+  title
 }: {
   onImport(file: File): void;
   disabled?: boolean;
   className?: string;
   /** A second line under the label, for the menu's format column. */
   hint?: string;
+  /** A tooltip, for where the label is clipped down to the icon. */
+  title?: string;
 }) {
   const input = useRef<HTMLInputElement>(null);
   return (
@@ -20,6 +23,7 @@ export function ProjectImportButton({
         type="button"
         className={className}
         disabled={disabled}
+        title={title}
         onClick={() => input.current?.click()}
       >
         <Upload size={14} aria-hidden="true" />

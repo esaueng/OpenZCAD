@@ -27,14 +27,23 @@ function rule(css: string, selector: string): string {
 }
 
 describe('start shelf grid', () => {
-  it('gives every tile a definite maximum, so a column never stretches the cards', () => {
-    // `minmax(236px, 1fr)` stretched each tile to fill its row, so adding or
-    // dropping a column swung the card size by a quarter or more.
+  it('stretches the tiles to fill their row, so no gutter is left beside the last column', () => {
+    // A fixed 248px maximum left up to a tile's width of dead space beside
+    // the grid (184px at a 1000px window), ragged against the search field.
     const columns = rule(sheet('start-screen.css'), '.start-tile-grid').match(
       /grid-template-columns:\s*([^;]+);/
     )?.[1];
     expect(columns).toMatch(/auto-fill/);
-    expect(columns).not.toMatch(/\dfr\b/);
+    expect(columns).toMatch(
+      /minmax\(min\(100%, var\(--start-tile-min\)\), 1fr\)/
+    );
+  });
+
+  it('lets no narrower rule pin the grid to a single full-width column', () => {
+    // A phone rule forced `minmax(0, 1fr)`, doubling the tile at 560px.
+    const css = sheet('start-screen.css');
+    const overrides = css.match(/\.start-tile-grid\s*\{[^}]*\}/g) ?? [];
+    expect(overrides).toHaveLength(1);
   });
 
   it('puts the part picture on a surface token, not the viewport stage', () => {
