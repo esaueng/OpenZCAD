@@ -365,8 +365,8 @@ describe('StartScreen library shell', () => {
     ).toBeInTheDocument();
   });
 
-  it('reads the account balance in the column without repeating the offer', () => {
-    renderStartScreen({
+  it('reads the account balance in the cloud card without repeating the offer', () => {
+    const { container } = renderStartScreen({
       projects: [
         localProject,
         {
@@ -380,10 +380,19 @@ describe('StartScreen library shell', () => {
     });
 
     expect(screen.getByText('1 / 2 saved')).toBeInTheDocument();
-    // One offer, with the parts it is about; the readout is not a second one.
+    // One offer, beside the readout it changes; the readout is not a second.
     expect(
       screen.getAllByRole('button', { name: /to my account/ })
     ).toHaveLength(1);
+    // The readout, the offer and the status line share the docked card, and
+    // the footer bar that used to carry the status is gone.
+    const card = screen.getByRole('complementary', { name: 'Cloud sync' });
+    expect(within(card).getByText('1 / 2 saved')).toBeInTheDocument();
+    expect(
+      within(card).getByRole('button', { name: /to my account/ })
+    ).toBeInTheDocument();
+    expect(card.querySelector('.start-status')).not.toBeNull();
+    expect(container.querySelector('footer')).toBeNull();
   });
 
   it('says so when signed out instead of counting', () => {
