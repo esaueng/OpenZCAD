@@ -324,6 +324,7 @@ import { StatusActivityLog } from './components/StatusActivityLog';
 import { PanelResizer } from './components/PanelResizer';
 import { ErrorBoundary } from './components/ErrorBoundary';
 import { TopBar } from './components/TopBar';
+import { SketchTextCardFallback } from './components/SketchTextCardFallback';
 import {
   PartsList,
   PartsRailButtons,
@@ -472,6 +473,7 @@ import {
   IDLE,
   composingTextDraft,
   escapeTarget,
+  sketchToolKeysSuspended,
   interactionReducer,
   commandSessionFor,
   isOperationState,
@@ -1016,7 +1018,14 @@ function TweakPanel(props: ComponentProps<typeof LazyTweakPanel>) {
 
 function SketchTextCard(props: ComponentProps<typeof LazySketchTextCard>) {
   return (
-    <Suspense fallback={null}>
+    <Suspense
+      fallback={
+        <SketchTextCardFallback
+          text={props.draft.text}
+          onText={(text) => props.onChange({ text })}
+        />
+      }
+    >
       <LazySketchTextCard {...props} />
     </Suspense>
   );
@@ -16715,7 +16724,7 @@ export function App() {
                     : event.key.toLowerCase() === 't'
                       ? ('text' as const)
                       : null;
-        if (sketchTool) {
+        if (sketchTool && !sketchToolKeysSuspended(interaction)) {
           event.preventDefault();
           dispatchInteraction({ type: 'sketch-tool', tool: sketchTool });
         }

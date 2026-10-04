@@ -3,6 +3,7 @@ import {
   IDLE,
   commandSessionFor,
   composingTextDraft,
+  sketchToolKeysSuspended,
   radialFaceOperationName,
   escapeTarget,
   interactionReducer,
@@ -466,6 +467,35 @@ describe('text tool composing', () => {
       patch: { size: 12, sizeValid: true }
     });
     expect(textDraftPlaceable(composingTextDraft(state))).toBe(true);
+  });
+
+  it('holds off the tool letters while composing, so they cannot discard the draft', () => {
+    let state = interactionReducer(composing(), {
+      type: 'sketch-text-draft',
+      patch: { text: 'Bo' }
+    });
+    // The workspace's key handler: a tool letter dispatches only when the
+    // keys are not suspended. Before the card mounts, or with focus off its
+    // field, these letters would otherwise switch tools.
+    for (const tool of [
+      'select',
+      'line',
+      'arc',
+      'circle',
+      'rectangle'
+    ] as const) {
+      if (!sketchToolKeysSuspended(state)) {
+        state = interactionReducer(state, { type: 'sketch-tool', tool });
+      }
+    }
+    expect(state.mode === 'sketch' && state.session.tool).toBe('text');
+    expect(composingTextDraft(state)?.text).toBe('Bo');
+    // Outside a composition the letters work as before.
+    const drawing = interactionReducer(IDLE, { type: 'enter-sketch', plane });
+    expect(sketchToolKeysSuspended(drawing)).toBe(false);
+    // Escape still leaves the text tool, and the keys come back.
+    state = interactionReducer(state, { type: 'escape' });
+    expect(sketchToolKeysSuspended(state)).toBe(false);
   });
 
   it('places exactly the typed object, then hands over to Select', () => {

@@ -316,6 +316,17 @@ export function composingTextDraft(
 }
 
 /**
+ * Whether the single-letter sketch tool keys (V, L, A, C, R, T) are held off.
+ * While text is being composed a letter is text, not a tool: before the card
+ * has mounted (a cold chunk load) or after focus has left its field, a stray
+ * letter would otherwise switch tools and throw the typed draft away. Escape
+ * and the rail still leave the text tool.
+ */
+export function sketchToolKeysSuspended(state: InteractionState): boolean {
+  return composingTextDraft(state) !== null;
+}
+
+/**
  * What the next Escape press does.
  *
  * Inside a sketch Escape climbs a ladder, innermost state first: the chain

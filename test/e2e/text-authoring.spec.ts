@@ -152,6 +152,13 @@ test('the rail tile opens the same card, and Escape while composing leaves nothi
   );
   await expect(card).toBeVisible();
   expect(textObjects(await readLiveSketch(canvas))).toEqual([]);
+  // Focus is off the field now; a tool letter must not switch tools and
+  // discard the composition.
+  await page.keyboard.press('l');
+  await expect(card).toBeVisible();
+  await expect(
+    rail.getByRole('button', { name: 'Text', exact: true })
+  ).toHaveAttribute('aria-pressed', 'true');
 
   await card.getByLabel('Text', { exact: true }).focus();
   await page.keyboard.type('Boa');

@@ -115,8 +115,12 @@ export function TextObjectFields({
   const focusText = useFieldAutoFocus(autoFocusText);
   const textInputRef = useRef<HTMLInputElement | null>(null);
   useEffect(() => {
-    if (focusText) {
-      textInputRef.current?.focus();
+    const input = textInputRef.current;
+    if (focusText && input) {
+      input.focus();
+      // Anything typed before this mounted (into the loading stand-in) is
+      // already in the field; the caret continues after it.
+      input.setSelectionRange(input.value.length, input.value.length);
     }
   }, [focusText]);
   const bold = BOLD_STYLES.includes(value.fontStyle);
