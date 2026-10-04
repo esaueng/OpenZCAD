@@ -44,8 +44,19 @@ const INFERENCE_COLOR = 0x7da3fc;
  * 3D stage), so this stays correct in both themes.
  */
 export const DEFINED_COLOR = 0x48cd8f;
-/** Budget id of the text card's draft, which is not yet a document object. */
-const TEXT_PREVIEW_ID = 'sketch-text-preview';
+/**
+ * Budget id for the text card's draft, which is not yet a document object:
+ * the first `sketch-text-preview[-n]` no committed object uses, so a stored
+ * object can never stand in for the draft (or the draft mask it).
+ */
+function textPreviewId(objects: readonly { id: string }[]): string {
+  const used = new Set(objects.map((object) => object.id));
+  let id = 'sketch-text-preview';
+  for (let suffix = 1; used.has(id); suffix += 1) {
+    id = `sketch-text-preview-${suffix}`;
+  }
+  return id;
+}
 /** Screen-space width in CSS pixels for the sketch polylines. */
 const SKETCH_LINE_WIDTH = 1.6;
 /** Screen-space diameter in CSS pixels for the snap-point dots. */
@@ -648,11 +659,14 @@ export function buildSketchModeRig(
       if (!preview || preview.objectKind !== 'text') {
         return 0;
       }
+      // The budget keeps or drops the draft entry itself; asking for that
+      // entry by identity, not by id, is what says the draft survived.
+      const draftEntry = { id: textPreviewId(objects), data: preview };
       const budgeted = displayObjectsWithTextBudget(
-        [...objects, { id: TEXT_PREVIEW_ID, data: preview }],
+        [...objects, draftEntry],
         textBudgetError
       );
-      if (!budgeted.some((object) => object.id === TEXT_PREVIEW_ID)) {
+      if (!budgeted.includes(draftEntry)) {
         return 0;
       }
       let polylines: SketchObjectPolyline[];

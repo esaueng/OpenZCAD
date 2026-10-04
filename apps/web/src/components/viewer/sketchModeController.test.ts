@@ -1,7 +1,12 @@
 import { describe, expect, it } from 'vitest';
 import * as THREE from 'three';
 import { Line2 } from 'three/examples/jsm/lines/Line2.js';
-import { PLANE_BASES } from '@openzcad/geometry';
+import { existsSync } from 'node:fs';
+import { readFile } from 'node:fs/promises';
+import path from 'node:path';
+import { PLANE_BASES, setTextFontProvider } from '@openzcad/geometry';
+import { FontLibrary } from '@openzcad/geometry/text-loader';
+import { MAX_SKETCH_TEXT_OBJECTS } from '@openzcad/shared';
 import type { SketchObjectData } from '@openzcad/shared';
 import {
   buildSketchModeRig,
@@ -233,6 +238,69 @@ describe('sketch mode defined colours', () => {
           (child) => child.userData.sketchObjectId === 'ent_line'
         )
       ).not.toHaveLength(0);
+    } finally {
+      rig.dispose();
+    }
+  });
+});
+
+describe('text card live outline', () => {
+  const basis = PLANE_BASES.XY;
+  const resolution = () => ({ width: 800, height: 600 });
+  const text = (value: string): SketchObjectData => ({
+    objectKind: 'text',
+    text: value,
+    fontFamily: 'open-sans',
+    fontStyle: 'regular',
+    size: 10,
+    x: 0,
+    y: 0
+  });
+
+  async function installFonts() {
+    let dir = process.cwd();
+    while (!existsSync(path.join(dir, 'packages/geometry/assets/fonts'))) {
+      dir = path.dirname(dir);
+    }
+    const fonts = path.join(dir, 'packages/geometry/assets/fonts');
+    const library = new FontLibrary(async ({ file }) => {
+      const bytes = await readFile(path.join(fonts, file));
+      return bytes.buffer.slice(
+        bytes.byteOffset,
+        bytes.byteOffset + bytes.byteLength
+      );
+    });
+    await library.load('open-sans', 'regular');
+    setTextFontProvider((family, style) => library.peek(family, style));
+  }
+
+  it('draws the draft within budget', async () => {
+    await installFonts();
+    const rig = buildSketchModeRig(basis, resolution);
+    try {
+      expect(rig.setTextPreview(text('Boa'), [], resolve)).toBeGreaterThan(0);
+      expect(rig.textPreviewState()?.loops).toBeGreaterThan(0);
+    } finally {
+      rig.dispose();
+    }
+  });
+
+  it('draws nothing over budget, even beside an object stored under the old preview id', async () => {
+    await installFonts();
+    const rig = buildSketchModeRig(basis, resolution);
+    try {
+      // The sketch already holds as much text as it may draw, plus a line
+      // whose persisted id is the one the preview used to take: the budget
+      // drops every text entry and keeps that line.
+      const objects = [
+        { id: 'sketch-text-preview', data: line() },
+        ...Array.from({ length: MAX_SKETCH_TEXT_OBJECTS }, (_, index) => ({
+          id: `ent_text_${index}`,
+          data: text('x')
+        }))
+      ];
+      expect(rig.setTextPreview(text('Boa'), objects, resolve)).toBe(0);
+      expect(rig.textPreviewState()).toBeNull();
     } finally {
       rig.dispose();
     }
