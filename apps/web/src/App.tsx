@@ -112,16 +112,11 @@ import {
   circleProfile,
   computeSketchProfileAnalysis,
   computeSketchRegions,
-  frameForPlaneRef,
   polygonProfile,
   rectangleProfile,
   type PlaneBasis,
   type Vec2
 } from '@openzcad/geometry';
-import {
-  resolveFaceAttachment,
-  type FaceAttachmentCandidate
-} from '@openzcad/kernel-adapter/face-attachment';
 import type { SketchSolveOutcome } from '@openzcad/kernel-adapter/exact';
 import type {
   ArtifactKind,
@@ -146,7 +141,6 @@ import type {
   SketchId,
   SketchNode,
   SketchObjectData,
-  SketchPlaneRef,
   TopologySelection,
   UnitSystem
 } from '@openzcad/shared';
@@ -201,6 +195,7 @@ import {
   solvedSketchCommands
 } from './lib/sketch/applySolve';
 import { sketchContentFramePoints } from './lib/sketch/session';
+import { resolvedSketchPlaneBasis } from './lib/sketch/planeBasis';
 import {
   modelingOperationNeedsPlanarFaces,
   modelingOperationPicksFaces,
@@ -1543,73 +1538,6 @@ function localRecoveryCopy(
     root.revisionId = null;
   }
   return normalizeDocumentHistory(beforeRename, copy);
-}
-
-function resolvedSketchPlaneBasis(
-  document: ProjectDocument,
-  planeRef: SketchPlaneRef,
-  resolveOffset: (value: ParamValue) => number,
-  sketchName: string
-): PlaneBasis {
-  if (planeRef.type !== 'face' || !planeRef.faceReference) {
-    return frameForPlaneRef(planeRef, resolveOffset);
-  }
-  const body = document.derived.bodyRepresentations[planeRef.bodyId];
-  const candidates: FaceAttachmentCandidate[] = (body?.topology?.faces ?? [])
-    .filter(
-      (face) => face.reference?.kind === 'face' && face.geometry !== undefined
-    )
-    .map((face) => {
-      const reference = face.reference!;
-      const geometry = face.geometry!;
-      return {
-        kind: 'face',
-        currentHash: face.hash,
-        witnessVersion: 1,
-        witness: reference.witness,
-        plane:
-          geometry.surfaceType.toLowerCase() === 'plane' && geometry.normal
-            ? {
-                center: geometry.center,
-                centroid: geometry.centroid ?? null,
-                normal: geometry.normal
-              }
-            : null,
-        lineage: {
-          source: 'derived',
-          identity: {
-            producingFeatureId: reference.producingFeatureId,
-            lineageName: reference.lineageName
-          }
-        }
-      };
-    });
-  const sourceFeature = listFeaturesInOrder(document).find(
-    (feature) =>
-      feature.featureId === planeRef.faceReference?.producingFeatureId
-  );
-  const frame = resolveFaceAttachment({
-    reference: planeRef.faceReference,
-    candidates,
-    snapshot: {
-      sourceArea: planeRef.sourceArea,
-      sourceCenter: planeRef.sourceCenter,
-      ...(planeRef.sourceCentroid
-        ? { sourceCentroid: planeRef.sourceCentroid }
-        : {}),
-      sourceNormal: planeRef.sourceNormal,
-      frame: planeRef.frame
-    },
-    sketchName,
-    sourceFeatureName:
-      sourceFeature?.name ?? String(planeRef.faceReference.producingFeatureId)
-  });
-  return {
-    origin: frame.origin,
-    u: frame.xAxis,
-    v: frame.yAxis,
-    normal: frame.zAxis
-  };
 }
 
 /**
@@ -18701,29 +18629,8 @@ export function App() {
               !sketchSolving &&
               !geometryBusy
             }
-            onSketchMoveChange={(change) =>
-              dispatchInteraction(
-                change.phase === 'start'
-                  ? {
-                      type: 'sketch-move-start',
-                      objectId: change.objectId,
-                      handle: change.handle
-                    }
-                  : change.phase === 'commit'
-                    ? { type: 'sketch-move-commit' }
-                    : { type: 'sketch-move-cancel' }
-              )
-            }
-            onSketchMoveCommit={(objectId, data, handle) => {
-              const current = interactionRef.current;
-              return current.mode === 'sketch' &&
-                current.session.selectedObjectId === objectId
-                ? handleUpdateSketchEntity(
-                    data,
-                    handle === 'rotate' ? 'Rotate' : 'Move'
-                  )
-                : false;
-            }}
+            onSketchMoveChange={dispatchInteraction}
+            onSketchMoveCommit={handleUpdateSketchEntity}
             onSketchSelectObject={(objectId, snapPoint, clickPoint) => {
               if (
                 handleSketchConstraintPick(

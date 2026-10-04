@@ -238,9 +238,16 @@ import {
   type SnapTargetKind
 } from '../lib/sketch/session';
 import type {
+  InteractionEvent,
   SketchCircleMode,
   SketchMoveHandle
 } from '../lib/interaction/machine';
+
+/** The machine events a sketch object drag reports. */
+type SketchMoveEvent = Extract<
+  InteractionEvent,
+  { type: 'sketch-move-start' | 'sketch-move-commit' | 'sketch-move-cancel' }
+>;
 import type { PlaneBasis } from '@openzcad/geometry';
 import type { ParamValue, PlaneId, SketchObjectData } from '@openzcad/shared';
 import { buildPlanePickerRig } from './viewer/planePickerRig';
@@ -800,19 +807,15 @@ export interface ModelViewerProps {
    */
   sketchMoveEnabled?: boolean;
   /** Mirrors a sketch object drag's lifecycle into the interaction machine. */
-  onSketchMoveChange?(
-    change:
-      | { phase: 'start'; objectId: string; handle: SketchMoveHandle }
-      | { phase: 'commit' | 'cancel' }
-  ): void;
+  onSketchMoveChange?(event: SketchMoveEvent): void;
   /**
-   * A drag released: commit the moved object through the entity-edit path.
-   * Resolves false when the edit was refused, so the preview can let go.
+   * A drag released: commit the selected object's moved data through the
+   * entity-edit path. Resolves false when the edit was refused, so the
+   * preview can let go.
    */
   onSketchMoveCommit?(
-    objectId: string,
     data: SketchObjectData,
-    handle: SketchMoveHandle
+    verb: 'Move' | 'Rotate'
   ): Promise<boolean> | boolean;
   /** Selects a committed entity for exact-value editing. */
   onSketchSelectObject(
@@ -6264,7 +6267,7 @@ export function ModelViewer({
         drag.active = true;
         rig.setProfiles([], false);
         onSketchMoveChangeRef.current?.({
-          phase: 'start',
+          type: 'sketch-move-start',
           objectId: drag.objectId,
           handle: drag.handle
         });
@@ -6364,7 +6367,7 @@ export function ModelViewer({
         JSON.stringify(preview) !== JSON.stringify(drag.original);
       if (drag.active) {
         onSketchMoveChangeRef.current?.({
-          phase: commit && changed ? 'commit' : 'cancel'
+          type: commit && changed ? 'sketch-move-commit' : 'sketch-move-cancel'
         });
       }
       const redraw = () => {
@@ -6399,11 +6402,15 @@ export function ModelViewer({
         }
       };
       try {
-        const result = onSketchMoveCommitRef.current?.(
-          drag.objectId,
-          preview,
-          drag.handle
-        );
+        // The edit path writes the selected object; one that changed under
+        // the drag is refused here rather than written to the wrong entity.
+        const result =
+          sketchModeRef.current?.selectedObjectId === drag.objectId
+            ? onSketchMoveCommitRef.current?.(
+                preview,
+                drag.handle === 'rotate' ? 'Rotate' : 'Move'
+              )
+            : false;
         if (result instanceof Promise) {
           result.then(settle, () => settle(false));
         } else {
@@ -6895,6 +6902,11 @@ export function ModelViewer({
       if (event.button !== 0) {
         return;
       }
+      // A release swallowed after Escape or Enter ended a move may never
+      // reach the canvas: with capture already dropped, a pointer let go
+      // outside lands elsewhere. Pointer ids are reused, so a fresh press
+      // retires the stale suppression rather than letting it eat this click.
+      suppressedSketchReleaseId = null;
       gestures.begin(event);
       // The viewport owns unmodified drag for box selection. Shift hands the
       // same left-button gesture to OrbitControls, whose modifier swap is

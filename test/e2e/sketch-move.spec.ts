@@ -251,3 +251,42 @@ test('a press away from the grab point does not move the selection', async ({
   await expect(before.editor.getByLabel('Center X')).toHaveValue(before.x);
   await expect(before.editor.getByLabel('Center Y')).toHaveValue(before.y);
 });
+
+test('a click after Escape ended a drag released off the canvas still selects', async ({
+  page
+}) => {
+  test.setTimeout(90_000);
+  const sketchTools = await openTopSketch(page, 'Sketch Move Off Canvas');
+  const [first, second] = await bareCanvasDrags(page, {
+    count: 2,
+    dragX: CIRCLE_DRAG_PX
+  });
+  await drawCircles(page, sketchTools, [first!, second!]);
+  const other = await selectCircle(page, second!);
+  const before = await selectCircle(page, first!);
+
+  // Drag onto the sketch rail, end the drag with Escape there, and let go
+  // over the rail: with capture dropped, that release never reaches the
+  // canvas, so the viewport cannot consume it.
+  const handle = await grabHandleCenter(page);
+  const rail = await page.locator('.sketch-rail').boundingBox();
+  expect(rail).not.toBeNull();
+  await page.mouse.move(handle.x, handle.y);
+  await page.mouse.down();
+  await page.mouse.move(rail!.x + rail!.width / 2, rail!.y + 4, {
+    steps: 10
+  });
+  await expect(page.locator('.sketch-grab-handle')).toHaveAttribute(
+    'data-active',
+    'true'
+  );
+  await page.keyboard.press('Escape');
+  await page.mouse.up();
+  await expect(before.editor.getByLabel('Center X')).toHaveValue(before.x);
+
+  // The next click on the other circle must select it, not be swallowed as
+  // the release Escape was waiting for.
+  await page.mouse.click(second!.x + CIRCLE_DRAG_PX, second!.y);
+  await expect(before.editor.getByLabel('Center X')).toHaveValue(other.x);
+  await expect(before.editor.getByLabel('Center Y')).toHaveValue(other.y);
+});
