@@ -243,6 +243,19 @@ test('the Move panel heads the right lane over the drawer', async ({
   await expect(page.locator('.stage-right .extrude-instruction')).toHaveCount(
     0
   );
+  // It starts under the top islands: at the stage's old 14px it sat under
+  // the View / Tweak / Build switch, which covered its title.
+  const instructionBox = await page
+    .locator('.extrude-instruction')
+    .boundingBox();
+  const modeSwitchBox = await page
+    .locator('.topbar > .mode-switch')
+    .boundingBox();
+  expect(instructionBox).not.toBeNull();
+  expect(modeSwitchBox).not.toBeNull();
+  expect(instructionBox!.y).toBeGreaterThanOrEqual(
+    modeSwitchBox!.y + modeSwitchBox!.height
+  );
   await expect(drawer).toBeVisible();
   const lane = await laneChildren(page);
   expect(lane[0]?.name).toBe('command-float');

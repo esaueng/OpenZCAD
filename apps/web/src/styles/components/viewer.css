@@ -186,6 +186,36 @@
   width: 100%;
 }
 
+/* Which plane cuts: chosen here, so the rail button only switches the cut
+   on and off. Three equal segments, the current one lit as the rail's own
+   active buttons are. */
+.rail-section-planes {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 2px;
+}
+
+.rail-section-plane {
+  min-height: 24px;
+  padding: 0 6px;
+  color: var(--color-text-muted);
+  border: 1px solid transparent;
+  border-radius: var(--radius-sm);
+  font-family: var(--font-mono);
+  font-size: var(--fs-xs);
+}
+
+.rail-section-plane:hover:not([aria-pressed='true']) {
+  color: var(--color-text);
+  background: var(--color-surface-2);
+}
+
+.rail-section-plane[aria-pressed='true'] {
+  color: var(--color-accent);
+  background: var(--color-accent-dim);
+  border-color: var(--color-accent-border);
+}
+
 /* The cut's own status line: which of the two section pipelines is on
    screen, and either its measured area or why there is no exact one. */
 .rail-section-state {
@@ -353,10 +383,13 @@
   border-left: 1px solid rgba(129, 169, 255, 0.28);
 }
 
+/* 24px tall: the verbs are the main way into a direct edit, and at 20px
+   they were the smallest targets on the stage. The side padding came down
+   a pixel each so the taller row does not also widen the chip. */
 .selection-callout-verb {
   min-height: 0;
-  height: 20px;
-  padding: 0 7px;
+  height: 24px;
+  padding: 0 6px;
   color: inherit;
   background: transparent;
   border: 1px solid transparent;
@@ -383,8 +416,8 @@
 .selection-callout-clear {
   display: inline-grid;
   place-items: center;
-  width: 18px;
-  height: 18px;
+  width: 24px;
+  height: 24px;
   min-height: 0;
   padding: 0;
   color: inherit;

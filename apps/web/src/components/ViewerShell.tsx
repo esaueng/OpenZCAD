@@ -22,6 +22,7 @@ import type {
   MoveSnap,
   PickDetail,
   ProjectionMode,
+  SectionPlaneId,
   SelectionFilter,
   SketchOverlay,
   ViewerSettings,
@@ -290,7 +291,8 @@ interface ViewerShellProps {
   onCycleDisplayMode(): void;
   onToggleProjection(): void;
   sectionRange: { min: number; max: number } | null;
-  onCycleSection(): void;
+  onToggleSection(): void;
+  onSectionPlane(plane: SectionPlaneId): void;
   onSectionOffset(offset: number): void;
   onSectionCommit(): void;
   onExportSectionDxf(): void;
@@ -406,7 +408,8 @@ export function ViewerShell({
   onCycleDisplayMode,
   onToggleProjection,
   sectionRange,
-  onCycleSection,
+  onToggleSection,
+  onSectionPlane,
   onSectionOffset,
   onSectionCommit,
   onExportSectionDxf,
@@ -454,7 +457,8 @@ export function ViewerShell({
       onCycleDisplayMode={onCycleDisplayMode}
       onToggleProjection={onToggleProjection}
       sectionRange={sectionRange}
-      onCycleSection={onCycleSection}
+      onToggleSection={onToggleSection}
+      onSectionPlane={onSectionPlane}
       onSectionOffset={onSectionOffset}
       onSectionCommit={onSectionCommit}
       onExportSectionDxf={onExportSectionDxf}

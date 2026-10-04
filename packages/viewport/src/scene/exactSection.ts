@@ -1,4 +1,5 @@
 import * as THREE from 'three';
+import { DEFAULT_BODY_COLOR } from '@openzcad/shared';
 import type { DisplayMode } from '../types';
 
 /**
@@ -18,10 +19,26 @@ import type { DisplayMode } from '../types';
 export const EXACT_SECTION = 'viewport-exact-section';
 
 /**
- * Cut-surface fill: a cool slate against the warm default body colour, so the
- * exact cut never reads as more of the body's own surface.
+ * How far a cut surface sits below its body's colour in lightness. The cut
+ * takes the colour of the body it cuts — a pale slate blue used to fill every
+ * cut, a colour nothing else on the stage used — and is shaded down from it,
+ * so it reads as the inside of that body and never as more of its outside.
  */
-const CUT_COLOR = 0x86a9c6;
+const CUT_LIGHTNESS_SHIFT = -0.14;
+
+/**
+ * The fill for a cut through a body of `bodyColor`; a body whose colour is
+ * not known is cut as the default body colour would be.
+ */
+export function sectionCutColor(
+  bodyColor: THREE.ColorRepresentation | undefined
+): THREE.Color {
+  return new THREE.Color(bodyColor ?? DEFAULT_BODY_COLOR).offsetHSL(
+    0,
+    0,
+    CUT_LIGHTNESS_SHIFT
+  );
+}
 /** The section curves themselves, drawn over the fill. */
 const CURVE_COLOR = 0x14293c;
 
@@ -71,7 +88,12 @@ function disposeSection(group: THREE.Object3D) {
  * position, and showing it beside a clipped preview of a different one would
  * be a drawing of a cut that is not on screen.
  */
-export function applyExactSection(root: THREE.Object3D, display: ExactSectionDisplay) {
+export function applyExactSection(
+  root: THREE.Object3D,
+  display: ExactSectionDisplay,
+  /** Each cut body's own colour, which its cut surface is shaded from. */
+  bodyColors: ReadonlyMap<string, THREE.Color> = new Map()
+) {
   const previous = root.getObjectByName(EXACT_SECTION);
   if (previous) {
     previous.removeFromParent();
@@ -96,7 +118,7 @@ export function applyExactSection(root: THREE.Object3D, display: ExactSectionDis
       const mesh = new THREE.Mesh(
         geometry,
         new THREE.MeshPhongMaterial({
-          color: CUT_COLOR,
+          color: sectionCutColor(bodyColors.get(region.bodyId)),
           side: THREE.DoubleSide,
           // Wireframe shows outlines, and the cut surface is not one. The
           // display-mode pass writes this same flag, but it only runs when
