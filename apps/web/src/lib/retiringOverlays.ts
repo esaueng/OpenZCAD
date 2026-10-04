@@ -14,11 +14,13 @@ interface FadeHost {
 }
 
 /**
- * Starts a deselected highlight fading instead of deleting it outright.
+ * Retires a deselected highlight instead of deleting it outright.
  *
  * The overlay is renamed first: the rebuild finds selection overlays by name,
- * and a fading one must not be mistaken for the current selection's. Its
- * materials are handed to the same fade the entrance uses, aimed at zero.
+ * and a retiring one must not be mistaken for the current selection's. Its
+ * materials are handed to the same fade set the entrance uses, aimed at zero:
+ * the visible fill cuts off on the next frame, and only an x-ray pass the
+ * entrance eased keeps the overlay alive while it fades out.
  */
 export function retireOverlay(
   host: FadeHost,

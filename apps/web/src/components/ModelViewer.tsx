@@ -173,6 +173,12 @@ import {
   type UnitSystem
 } from '@openzcad/shared';
 import { formatNumber } from '../lib/model';
+import {
+  faceOffsetChipState,
+  offsetChipText,
+  regionChipState,
+  type OffsetChipMode
+} from '../lib/offsetChip';
 import { setLiveDiameter } from '../lib/liveLabels';
 import type { SelectionCalloutContent } from '../lib/selectionCallout';
 import {
@@ -848,7 +854,10 @@ export interface SceneContext {
     THREE.BufferGeometry,
     THREE.MeshLambertMaterial
   >;
-  /** Selection overlays fading in toward their resting opacity. */
+  /**
+   * Overlay materials on their way to their target opacity: they cut there
+   * on the next frame unless `selection.easeOpacity` opted them into a fade.
+   */
   readonly fadeIns: Set<THREE.Material>;
   /** Frame timing for the overlay eases; `update()` once per frame, then read. */
   timer: THREE.Timer;
@@ -1832,7 +1841,7 @@ export function ModelViewer({
   /** How far the body reaches behind the armed face, for the "Total" reading. */
   const offsetExtentRef = useRef<number | null>(null);
   /** Which number the offset chip shows: the drag delta, or the whole span. */
-  const offsetChipModeRef = useRef<'offset' | 'total'>('offset');
+  const offsetChipModeRef = useRef<OffsetChipMode>('offset');
   /** Last frame's cylinder chip layout, for hysteresis at the threshold. */
   const dimensionChipBesidePinRef = useRef(false);
   /** Cylindrical radius has its own non-translating affordance and lifecycle. */
@@ -4946,12 +4955,13 @@ export function ModelViewer({
           // height when it has one, else the body's reach behind the face.
           const totalBaseline = offsetHandleRef.current?.totalBaseline;
           const totalSense = offsetHandleRef.current?.totalSense ?? 1;
-          const span = totalBaseline ?? offsetExtentRef.current;
-          const showTotal =
-            offsetChipModeRef.current === 'total' && span !== null;
-          text = showTotal
-            ? `${formatNumber(span + totalSense * rawValue)} ${unitsRef.current}`
-            : `${value >= 0 ? '+' : ''}${value} ${unitsRef.current}`;
+          text = offsetChipText({
+            rawValue,
+            mode: offsetChipModeRef.current,
+            span: totalBaseline ?? offsetExtentRef.current,
+            sense: totalSense,
+            units: unitsRef.current
+          });
           if (offsetPreviewInvalidRef.current) {
             text = `⚠ ${text}`;
           }
@@ -7403,7 +7413,8 @@ export function ModelViewer({
         sketchGridIndicator.hidden = true;
       }
 
-      // Preselection and selection overlays ease toward their targets.
+      // Preselection and selection overlays cut to their targets; their
+      // x-ray passes ease there.
       // Timer separates advancing time from reading it, so update once here.
       context.timer.update(now);
       const dt = animationStepSeconds(
@@ -8258,9 +8269,9 @@ export function ModelViewer({
             color: SELECTED_FACE_COLOR,
             toneMapped: false,
             transparent: true,
-            // Rises with its visible twin rather than arriving whole: the two
-            // halves are one highlight, and staggering them reads as a
-            // flicker behind the solid.
+            // The one eased half of the highlight: the visible fill cuts in,
+            // but a pass seen through the solid reads as a flicker when it
+            // pops, so this one rises (and, retired, falls) over a few frames.
             opacity: 0,
             side: THREE.DoubleSide,
             depthWrite: false,
@@ -8268,6 +8279,7 @@ export function ModelViewer({
           })
         );
         hiddenMaterial.userData.targetOpacity = SELECTED_FACE_HIDDEN_OPACITY;
+        context.selection.easeOpacity(hiddenMaterial);
         context.fadeIns.add(hiddenMaterial);
         const hiddenHighlight = new THREE.Mesh(hiddenGeometry, hiddenMaterial);
         hiddenHighlight.name = 'body-face-selected-hidden';
@@ -8447,7 +8459,7 @@ export function ModelViewer({
             color: SELECTION_SEMANTICS.preview.added,
             toneMapped: false,
             transparent: true,
-            // Same rise as a committed selection: which code path built the
+            // Same cut as a committed selection: which code path built the
             // highlight should not be visible in how it arrives.
             opacity: 0,
             side: THREE.DoubleSide,
@@ -9008,13 +9020,12 @@ export function ModelViewer({
           )
         )
       : null;
-    offsetExtentRef.current = extentBehind;
-    // Resizing a primitive reads its own dimension (the total) by default:
-    // that is the number the gesture sets. Moving any other face reads the
-    // change, how far the face moves; the body's reach behind it stays one
-    // click away on the tag.
-    offsetChipModeRef.current =
-      offsetHandle.totalBaseline === undefined ? 'offset' : 'total';
+    const chipState = faceOffsetChipState(
+      offsetHandle.totalBaseline,
+      extentBehind
+    );
+    offsetExtentRef.current = chipState.extent;
+    offsetChipModeRef.current = chipState.mode;
     // The band starts at the face's old level. A rig re-armed after a preview
     // landed reads the moved face from the rendered body, so the loops go
     // back onto the plane the gesture started from (the pick point stays on
@@ -9371,6 +9382,11 @@ export function ModelViewer({
       }
     });
     rig.setValue(regionHandle.initialValue ?? 0);
+    // The chip machinery is shared with the face offset, so its mode and span
+    // still describe the last face armed; a region starts from its own.
+    const chipState = regionChipState();
+    offsetExtentRef.current = chipState.extent;
+    offsetChipModeRef.current = chipState.mode;
     context.scene.add(rig.group);
     context.scene.add(rig.worldGroup);
     offsetRigRef.current = rig;
@@ -9803,8 +9819,10 @@ export function ModelViewer({
           };
         }
         // Eased, not flipped: the recede rides the same fade set as the
-        // other scene fades, subordinate to the entry camera glide. A body
-        // rebuilt mid-sketch re-enters here at full opacity and fades again.
+        // overlays, subordinate to the entry camera glide, and opts into the
+        // ease that set otherwise cuts. A body rebuilt mid-sketch re-enters
+        // here at full opacity and fades again.
+        context.selection.easeOpacity(material);
         material.transparent = true;
         delete material.userData.restoreOpaque;
         if (reducedMotionRef.current === true) {
@@ -9818,6 +9836,7 @@ export function ModelViewer({
           material.opacity = stored.sketchRecede.opacity;
           material.transparent = stored.sketchRecede.transparent;
         } else {
+          context.selection.easeOpacity(material);
           material.userData.targetOpacity = stored.sketchRecede.opacity;
           if (!stored.sketchRecede.transparent) {
             material.userData.restoreOpaque = true;

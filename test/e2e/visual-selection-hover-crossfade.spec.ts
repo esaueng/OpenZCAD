@@ -85,7 +85,7 @@ async function probeFaceTransition(
   );
 }
 
-test('cross-fades adjacent hovered faces and removes every stale film', async ({
+test('cuts between adjacent hovered faces and removes every stale film', async ({
   page
 }, testInfo) => {
   test.setTimeout(180_000);
@@ -120,22 +120,24 @@ test('cross-fades adjacent hovered faces and removes every stale film', async ({
       );
     })
     .toBe(true);
+  const restingOpacity = (await readHoverFaceState(canvas)).slots[0]!.opacity;
+  expect(restingOpacity).toBeGreaterThan(0);
 
   const transition = await probeFaceTransition(canvas, 'outer-wall');
   expect(transition.face).not.toBeNull();
   const newKey = `${transition.face!.bodyId}:${transition.face!.topologyId}`;
   expect(newKey).not.toBe(oldKey);
 
-  const crossing = transition.state;
-  expect(crossing.settling).toBe(true);
-  expect(crossing.slots).toHaveLength(2);
-  expect(crossing.slots.map((slot) => slot.topologyKey).sort()).toEqual(
-    [oldKey, newKey].sort()
-  );
-  expect(crossing.slots.every((slot) => slot.visible)).toBe(true);
-  expect(crossing.slots.every((slot) => slot.opacity > 0)).toBe(true);
-  expect(crossing.slots.every((slot) => slot.triangleCount > 0)).toBe(true);
-  await testInfo.attach('hover-face-cross-fade-overlap', {
+  // One frame after the hop: the old film is gone and the new one is already
+  // at the opacity the old one rested at — a cut, with no frame showing both.
+  // Only the x-ray passes are still easing, which is what `settling` reports.
+  const hop = transition.state;
+  expect(hop.settling).toBe(true);
+  expect(hop.slots.map((slot) => slot.topologyKey)).toEqual([newKey]);
+  expect(hop.slots[0]!.visible).toBe(true);
+  expect(hop.slots[0]!.opacity).toBeCloseTo(restingOpacity, 5);
+  expect(hop.slots[0]!.triangleCount).toBeGreaterThan(0);
+  await testInfo.attach('hover-face-hop-first-frame', {
     body: await page.screenshot(),
     contentType: 'image/png'
   });
@@ -149,7 +151,7 @@ test('cross-fades adjacent hovered faces and removes every stale film', async ({
       };
     })
     .toEqual({ settling: false, keys: [newKey] });
-  await testInfo.attach('hover-face-cross-fade-settled', {
+  await testInfo.attach('hover-face-hop-settled', {
     body: await page.screenshot(),
     contentType: 'image/png'
   });
