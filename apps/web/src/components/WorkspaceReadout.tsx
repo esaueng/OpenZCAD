@@ -16,6 +16,16 @@ import {
 import { WORKSPACE_SAVE_STATE_PRESENTATION } from '../lib/workspaceSaveStatePresentation';
 import type { StatusTone } from './StatusActivityLog';
 
+/**
+ * A message worth going back to the log for: a warning, or a refusal worded
+ * as one ("Cannot use Box: …", "Not created — …") whatever its tone.
+ */
+const REFUSAL_PATTERN = /refus|cannot|can't|not created|not applied|no change/i;
+
+function isNotableStatus(status: string, tone: StatusTone): boolean {
+  return tone === 'warning' || REFUSAL_PATTERN.test(status);
+}
+
 interface WorkspaceReadoutProps {
   status: string;
   statusAt?: number;
@@ -138,7 +148,14 @@ export function WorkspaceReadout({
   const quiet = geometryStatus === null && expired;
   const shown = !quiet && !muted && line !== '';
   // The log keeps every message; the toast holds each long enough to read.
-  const paced = usePacedStatus(line, tone, shown);
+  const paced = usePacedStatus(line, tone, shown, isNotableStatus);
+  // Only what the user would go back for earns a counter: rebuild stages
+  // and saves passed over in a burst are routine, and "10 more in log"
+  // after adding one box sent people looking for a problem there was not.
+  const missed =
+    paced.skippedNotable > 0
+      ? `${paced.skippedNotable} ${paced.skippedNotable === 1 ? 'warning' : 'warnings'}`
+      : null;
   // A retired or expired message leaves the bar reading as nothing happening.
   const shownStatus = quiet ? '' : paced.status;
   const featureLabel = `${featureCount} ${featureCount === 1 ? 'feature' : 'features'}`;
@@ -172,8 +189,8 @@ export function WorkspaceReadout({
           title={
             quiet
               ? 'View activity log'
-              : paced.skipped > 0
-                ? `${paced.status} — ${paced.skipped} more in the activity log`
+              : missed
+                ? `${paced.status} — ${missed} in the activity log`
                 : `${paced.status} — View activity log`
           }
           aria-label={
@@ -190,9 +207,9 @@ export function WorkspaceReadout({
           </span>
           {/* Says what it counts: a bare "+11" after every status read as
               jargon. The title above carries the same for the tooltip. */}
-          {shown && paced.skipped > 0 ? (
+          {shown && missed ? (
             <span className="workspace-toast-more" aria-hidden="true">
-              {paced.skipped} more in log
+              {missed} in log
             </span>
           ) : null}
         </button>

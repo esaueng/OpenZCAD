@@ -30,7 +30,8 @@ function Bar({
   onOpenChange,
   initialOpen = false,
   draft = null,
-  context = null
+  context = null,
+  askUnavailable = false
 }: {
   commands: PaletteCommand[];
   onAsk?(question: string): void;
@@ -38,6 +39,7 @@ function Bar({
   initialOpen?: boolean;
   draft?: { id: number; text: string } | null;
   context?: string | null;
+  askUnavailable?: boolean;
 }) {
   const [open, setOpen] = useState(initialOpen);
   return (
@@ -52,6 +54,7 @@ function Bar({
       searchKey={{ glyph: '⌘K', accessible: 'Cmd+K' }}
       draft={draft}
       context={context}
+      askUnavailable={askUnavailable}
     />
   );
 }
@@ -249,6 +252,21 @@ describe('CommandBar', () => {
     expect(searchField()).toHaveAttribute(
       'placeholder',
       'Ask about 12 selected edges…'
+    );
+  });
+
+  it('stops inviting questions while no provider answers', () => {
+    render(
+      <Bar
+        commands={[]}
+        onAsk={vi.fn()}
+        context="12 selected edges"
+        askUnavailable
+      />
+    );
+    expect(searchField()).toHaveAttribute(
+      'placeholder',
+      'Type / for a command'
     );
   });
 

@@ -31,7 +31,8 @@ describe('usePacedStatus', () => {
     expect(result.current).toEqual({
       status: 'Opened Bracket.',
       tone: 'ready',
-      skipped: 0
+      skipped: 0,
+      skippedNotable: 0
     });
     act(() => {
       vi.advanceTimersByTime(STATUS_MIN_DWELL_MS);
@@ -57,7 +58,8 @@ describe('usePacedStatus', () => {
     expect(result.current).toEqual({
       status: 'Reopened Gentle Duckling.',
       tone: 'ready',
-      skipped: 10
+      skipped: 10,
+      skippedNotable: 0
     });
     // The next message after a quiet dwell starts a fresh count.
     act(() => {
@@ -67,7 +69,34 @@ describe('usePacedStatus', () => {
     expect(result.current).toEqual({
       status: 'Saved',
       tone: 'ready',
-      skipped: 0
+      skipped: 0,
+      skippedNotable: 0
+    });
+  });
+
+  it('counts the passed-over messages its predicate calls notable', () => {
+    const { result, rerender } = renderHook(
+      ({ status, tone }: { status: string; tone: Tone }) =>
+        usePacedStatus<Tone>(
+          status,
+          tone,
+          true,
+          (_status, candidate) => candidate === 'warning'
+        ),
+      { initialProps: { status: 'Opened Bracket.', tone: 'ready' as Tone } }
+    );
+    rerender({ status: 'Rebuilding', tone: 'running' });
+    rerender({ status: 'Fillet failed: radius too large', tone: 'warning' });
+    rerender({ status: 'Measuring', tone: 'running' });
+    rerender({ status: 'Ready', tone: 'ready' });
+    act(() => {
+      vi.advanceTimersByTime(STATUS_MIN_DWELL_MS);
+    });
+    expect(result.current).toEqual({
+      status: 'Ready',
+      tone: 'ready',
+      skipped: 3,
+      skippedNotable: 1
     });
   });
 
@@ -99,7 +128,8 @@ describe('usePacedStatus', () => {
     expect(result.current).toEqual({
       status: 'Shell added',
       tone: 'ready',
-      skipped: 0
+      skipped: 0,
+      skippedNotable: 0
     });
   });
 });

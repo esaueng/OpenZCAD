@@ -13,6 +13,11 @@ export interface PacedStatus<T extends string> {
   tone: T;
   /** Messages replaced while waiting their turn; the activity log has them. */
   skipped: number;
+  /**
+   * How many of those `notable` picked out: a warning or a refusal the user
+   * would want to go back for, rather than routine progress.
+   */
+  skippedNotable: number;
 }
 
 /**
@@ -28,16 +33,21 @@ export interface PacedStatus<T extends string> {
 export function usePacedStatus<T extends string>(
   status: string,
   tone: T,
-  live: boolean
+  live: boolean,
+  notable?: (status: string, tone: T) => boolean
 ): PacedStatus<T> {
   const [shown, setShown] = useState<PacedStatus<T>>({
     status,
     tone,
-    skipped: 0
+    skipped: 0,
+    skippedNotable: 0
   });
   const shownAtRef = useRef(live ? Date.now() : Number.NEGATIVE_INFINITY);
   const waitingRef = useRef<{ status: string; tone: T } | null>(null);
   const skippedRef = useRef(0);
+  const skippedNotableRef = useRef(0);
+  const notableRef = useRef(notable);
+  notableRef.current = notable;
 
   // A layout effect so a toast turning visible never paints the previous
   // message for a frame before the current one replaces it.
@@ -48,19 +58,25 @@ export function usePacedStatus<T extends string>(
     if (shown.status === status && shown.tone === tone) {
       waitingRef.current = null;
       skippedRef.current = 0;
+      skippedNotableRef.current = 0;
       return;
     }
     const waiting = waitingRef.current;
     if (waiting && (waiting.status !== status || waiting.tone !== tone)) {
       skippedRef.current += 1;
+      if (notableRef.current?.(waiting.status, waiting.tone)) {
+        skippedNotableRef.current += 1;
+      }
     }
     waitingRef.current = { status, tone };
     const show = () => {
       shownAtRef.current = live ? Date.now() : Number.NEGATIVE_INFINITY;
       const skipped = live ? skippedRef.current : 0;
+      const skippedNotable = live ? skippedNotableRef.current : 0;
       waitingRef.current = null;
       skippedRef.current = 0;
-      setShown({ status, tone, skipped });
+      skippedNotableRef.current = 0;
+      setShown({ status, tone, skipped, skippedNotable });
     };
     const wait = shownAtRef.current + STATUS_MIN_DWELL_MS - Date.now();
     if (wait <= 0) {
@@ -73,7 +89,7 @@ export function usePacedStatus<T extends string>(
 
   if (!live) {
     // Nothing is on screen to pace; never let a stale message stand in.
-    return { status, tone, skipped: 0 };
+    return { status, tone, skipped: 0, skippedNotable: 0 };
   }
   return shown;
 }

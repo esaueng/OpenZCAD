@@ -4,7 +4,7 @@ import { describe, expect, it, vi } from 'vitest';
 import { StatusActivityLog } from './StatusActivityLog';
 
 describe('StatusActivityLog', () => {
-  it('keeps the full diagnostic with its compact status entry', () => {
+  it('keeps the full diagnostic with its compact status entry', async () => {
     render(
       <StatusActivityLog
         id="test-activity-log"
@@ -17,13 +17,15 @@ describe('StatusActivityLog', () => {
       />
     );
 
-    expect(screen.getByText('Parameter height was not changed.')).toBeTruthy();
+    expect(
+      await screen.findByText('Parameter height was not changed.')
+    ).toBeTruthy();
     expect(
       screen.getByText('move-face would change topology at face 9')
     ).toHaveClass('status-log-detail');
   });
 
-  it('logs a message set while the geometry line is up, not only the line', () => {
+  it('logs a message set while the geometry line is up, not only the line', async () => {
     const props = {
       id: 'test-activity-log',
       open: true,
@@ -56,7 +58,7 @@ describe('StatusActivityLog', () => {
       />
     );
 
-    const log = screen.getByRole('region', { name: 'Activity log' });
+    const log = await screen.findByRole('region', { name: 'Activity log' });
     const messages = within(log)
       .getAllByRole('listitem')
       .map((item) => item.textContent ?? '');
@@ -66,5 +68,36 @@ describe('StatusActivityLog', () => {
     expect(messages[2]).toContain(
       'Cannot use Box: This shared project is read-only.'
     );
+  });
+
+  it('leaves a lane-only message out of the log', async () => {
+    const props = {
+      id: 'test-activity-log',
+      open: true,
+      tone: 'ready' as const,
+      triggerRef: createRef<HTMLButtonElement>(),
+      onClose: vi.fn()
+    };
+    const { rerender } = render(
+      <StatusActivityLog {...props} status="Added box." />
+    );
+    // A workspace switch says where the user is, not what the model did.
+    rerender(
+      <StatusActivityLog
+        {...props}
+        status="Build mode · modeling tools are back."
+        logged={false}
+      />
+    );
+    rerender(<StatusActivityLog {...props} status="Added cylinder." />);
+
+    const log = await screen.findByRole('region', { name: 'Activity log' });
+    const messages = within(log)
+      .getAllByRole('listitem')
+      .map((item) => item.textContent ?? '');
+    expect(messages).toHaveLength(2);
+    expect(messages[0]).toContain('Added box.');
+    expect(messages[1]).toContain('Added cylinder.');
+    expect(log).not.toHaveTextContent('Build mode');
   });
 });

@@ -84,8 +84,9 @@ describe('the section panel', () => {
       missed: 1,
       unsectioned: 0
     });
-    expect(screen.getByText('540.00 mm² of material, 1 body is not cut here'))
-      .toBeTruthy();
+    expect(
+      screen.getByText('540 mm² of material, 1 body is not cut here')
+    ).toBeTruthy();
     // The exporter treats a plane that misses a body as an ordinary section,
     // so the drawing is complete and the button stays live.
     expect(
@@ -105,7 +106,7 @@ describe('the section panel', () => {
     expect(screen.getByText('Exact section')).toBeTruthy();
     expect(
       screen.getByText(
-        '540.00 mm² of material, 1 body has no exact section, so there is no drawing to export'
+        '540 mm² of material, 1 body has no exact section, so there is no drawing to export'
       )
     ).toBeTruthy();
     const button = screen.getByLabelText('Export the exact section as DXF');

@@ -86,6 +86,11 @@ interface TopBarProps {
   onRenameProject(name: string): void;
   onGoHome(): void;
   onOpenSharing(): void;
+  /**
+   * Where the sharing chip goes while signed out: Settings → Account, so the
+   * one action it points at is a click away instead of a dead button.
+   */
+  onSignIn?(): void;
   onOpenSettings(): void;
 }
 
@@ -192,6 +197,7 @@ export function TopBar({
   onRenameProject,
   onGoHome,
   onOpenSharing,
+  onSignIn,
   onOpenSettings
 }: TopBarProps) {
   const [editingProjectName, setEditingProjectName] = useState(false);
@@ -496,9 +502,9 @@ export function TopBar({
             </span>
           )}
           {projectSharingEnabled ? (
-            // Signed out there is nothing to share into, so the chip says so.
-            // aria-disabled rather than disabled keeps it focusable, and so
-            // keeps the tooltip that explains why it is unavailable.
+            // Signed out there is nothing to share into, so the chip says so
+            // and takes the user to where signing in happens. It used to be
+            // aria-disabled: a button that did nothing when pressed.
             <button
               type="button"
               className={`collaboration-state ${collaborationStatus}`}
@@ -512,9 +518,8 @@ export function TopBar({
                   ? `Open project sharing · ${collaborationLabel}`
                   : 'Project sharing · Sign in to share'
               }
-              aria-disabled={session ? undefined : true}
               disabled={!projectName}
-              onClick={session ? onOpenSharing : undefined}
+              onClick={session ? onOpenSharing : onSignIn}
             >
               <Users size={13} aria-hidden="true" />
               {collaborationStatus === 'live' ? (

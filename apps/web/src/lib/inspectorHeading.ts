@@ -1,4 +1,5 @@
 import type { CommandSession } from './interaction/machine';
+import { CARD_EYEBROWS } from './cardEyebrows';
 
 /** How the inspector's feature selection was made. */
 export type FeatureSelectionSource = 'pinned' | 'inferred';
@@ -6,8 +7,13 @@ export type FeatureSelectionSource = 'pinned' | 'inferred';
 export interface InspectorHeadingInput {
   /** Display name of the feature the inspector resolved. */
   featureName: string;
-  /** Feature-kind eyebrow used when the feature is the panel's subject. */
+  /** The feature's kind, named for a demoted panel with no body to name. */
   featureKindLabel: string;
+  /**
+   * A direct edit (a face offset) rather than a history feature with a
+   * creation form: its panel says "Direct edit", as the Move card does.
+   */
+  directEdit?: boolean;
   /** D5 topology label for the viewport object under the running command. */
   selectionLabel?: string;
   /** Body that owns the viewport object under the running command. */
@@ -50,7 +56,7 @@ export function inspectorHeadingForFeature(
         demoted: true
       }
     : {
-        eyebrow: input.featureKindLabel,
+        eyebrow: input.directEdit ? CARD_EYEBROWS.direct : CARD_EYEBROWS.edit,
         title: input.featureName,
         demoted: false
       };

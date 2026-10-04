@@ -114,19 +114,20 @@ describe('WorkspaceReadout', () => {
 });
 
 describe('WorkspaceReadout pacing', () => {
-  it('holds a message through a burst, then shows the latest with a count', () => {
+  const readout = (status: string, tone: 'ready' | 'warning' = 'ready') => (
+    <WorkspaceReadout
+      status={status}
+      statusAt={Date.now()}
+      tone={tone}
+      logOpen={false}
+      onToggleLog={vi.fn()}
+      {...SUMMARY}
+    />
+  );
+
+  it('holds a message through a routine burst, then shows the latest without a count', () => {
     vi.useFakeTimers();
     try {
-      const readout = (status: string) => (
-        <WorkspaceReadout
-          status={status}
-          statusAt={Date.now()}
-          tone="ready"
-          logOpen={false}
-          onToggleLog={vi.fn()}
-          {...SUMMARY}
-        />
-      );
       const { container, rerender } = render(readout('Opening Bracket'));
       for (const step of ['Loading', 'Rebuilding', 'Tessellating']) {
         act(() => {
@@ -136,23 +137,49 @@ describe('WorkspaceReadout pacing', () => {
       }
       rerender(readout('Reopened Bracket.'));
       expect(screen.getByRole('status')).toHaveTextContent('Opening Bracket');
-      expect(container.querySelector('.workspace-toast-more')).toBeNull();
       act(() => {
         vi.advanceTimersByTime(STATUS_MIN_DWELL_MS);
       });
       expect(screen.getByRole('status')).toHaveTextContent('Reopened Bracket.');
-      // The counter says what it counts, not a bare "+3".
+      // Progress passed over is routine: no "3 more in log" for a model that
+      // simply rebuilt.
+      expect(container.querySelector('.workspace-toast-more')).toBeNull();
+      expect(
+        screen.getByRole('button', {
+          name: 'Open activity log. Current status: Reopened Bracket.'
+        })
+      ).toHaveAttribute('title', 'Reopened Bracket. — View activity log');
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it('counts a warning or refusal the burst passed over', () => {
+    vi.useFakeTimers();
+    try {
+      const { container, rerender } = render(readout('Opening Bracket'));
+      act(() => {
+        vi.advanceTimersByTime(40);
+      });
+      rerender(readout('Fillet failed: radius too large', 'warning'));
+      rerender(readout('Cannot use Box: This shared project is read-only.'));
+      rerender(readout('Rebuilding'));
+      rerender(readout('Reopened Bracket.'));
+      act(() => {
+        vi.advanceTimersByTime(STATUS_MIN_DWELL_MS);
+      });
+      expect(screen.getByRole('status')).toHaveTextContent('Reopened Bracket.');
+      // The counter says what it counts, not a bare "+2".
       expect(
         container.querySelector('.workspace-toast-more')
-      ).toHaveTextContent(/^3 more in log$/);
-      // The button still names the live message for assistive tech.
+      ).toHaveTextContent(/^2 warnings in log$/);
       expect(
         screen.getByRole('button', {
           name: 'Open activity log. Current status: Reopened Bracket.'
         })
       ).toHaveAttribute(
         'title',
-        'Reopened Bracket. — 3 more in the activity log'
+        'Reopened Bracket. — 2 warnings in the activity log'
       );
     } finally {
       vi.useRealTimers();
