@@ -86,6 +86,8 @@ import type {
 import {
   appendRevision,
   createCheckpoint,
+  createSavePoint,
+  createSavedRevision,
   createProjectDocument,
   duplicateProjectDocument,
   findBodyNode,
@@ -1604,7 +1606,13 @@ function localRecoveryCopy(
     root.name = name;
     root.revisionId = null;
   }
-  return normalizeDocumentHistory(beforeRename, copy);
+  // The source's save points stay with the source; the copy starts its own
+  // record. Born with none at all, it could not be saved: every Save,
+  // including Save to my account, refused for want of a revision to name.
+  return createSavedRevision(
+    normalizeDocumentHistory(beforeRename, copy),
+    `Recovered from ${source.name}`
+  );
 }
 
 /**
@@ -9544,7 +9552,7 @@ export function App() {
         session &&
         !cloudProjectIds.has(savingDocument.projectId)
       ) {
-        const marked = createCheckpoint(savingDocument, reason);
+        const marked = createSavePoint(savingDocument, reason);
         await saveLocalProject(marked);
         if (!isCurrentProject()) return;
         if (savingManager.document.version === savingDocument.version) {
@@ -9588,7 +9596,7 @@ export function App() {
         // one it was born with — which would leave restore and branch with
         // nothing to offer exactly where they are needed most, and would drop
         // a name the user had just typed.
-        const marked = createCheckpoint(savingDocument, reason);
+        const marked = createSavePoint(savingDocument, reason);
         if (savingManager.document.version === savingDocument.version) {
           await saveLocalProject(marked);
           if (!isCurrentProject()) {

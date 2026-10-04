@@ -19,6 +19,7 @@ import {
   filletEdges,
   mirrorBody,
   createCheckpoint,
+  createSavePoint,
   createProjectDocument,
   deleteSketchObject,
   findSketch,
@@ -110,6 +111,36 @@ describe('document-core', () => {
     expect(saved.version).toBe(document.version);
     expect(saved.checkpoints).toHaveLength(2);
     expect(saved.checkpoints.at(-1)?.reason).toBe('Manual save');
+  });
+
+  it('saves a document that has no revision by minting one first', () => {
+    // Conflict recovery copies were written with empty revisions, and every
+    // Save of one — Save to my account included — threw before reaching the
+    // account: "Cannot create a checkpoint without a revision."
+    const document = createProjectDocument('Recovered', user());
+    document.revisions = [];
+    document.checkpoints = [];
+    expect(() => createCheckpoint(document, 'Saved')).toThrow(
+      /without a revision/
+    );
+
+    const saved = createSavePoint(document, 'Saved');
+
+    expect(saved.version).toBe(document.version);
+    expect(saved.revisions).toHaveLength(1);
+    expect(saved.checkpoints).toHaveLength(1);
+    expect(saved.checkpoints[0]?.revisionId).toBe(
+      saved.revisions[0]?.revisionId
+    );
+    expect(saved.checkpoints[0]?.documentVersion).toBe(document.version);
+  });
+
+  it('saves an ordinary document as a plain checkpoint', () => {
+    const document = createProjectDocument('Checkpoint', user());
+    const saved = createSavePoint(document, 'Manual save');
+
+    expect(saved.revisions).toEqual(document.revisions);
+    expect(saved.checkpoints).toHaveLength(2);
   });
 
   it('sanitizes malformed and unbounded checkpoint history on load', () => {
@@ -534,7 +565,8 @@ describe('feature editing', () => {
     expect('endPoint' in after.data).toBe(false);
     expect(after.data).toEqual({
       featureKind: 'loft',
-      sections: feature.data.featureKind === 'loft' ? feature.data.sections : [],
+      sections:
+        feature.data.featureKind === 'loft' ? feature.data.sections : [],
       mode: 'ruled'
     });
 
