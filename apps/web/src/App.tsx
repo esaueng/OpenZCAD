@@ -201,6 +201,7 @@ import {
   solvedSketchCommands
 } from './lib/sketch/applySolve';
 import { sketchContentFramePoints } from './lib/sketch/session';
+import { textPlacementBudgetError } from './lib/sketch/textPlacement';
 import {
   modelingOperationNeedsPlanarFaces,
   modelingOperationPicksFaces,
@@ -325,12 +326,12 @@ import { StatusActivityLog } from './components/StatusActivityLog';
 import { PanelResizer } from './components/PanelResizer';
 import { ErrorBoundary } from './components/ErrorBoundary';
 import { TopBar } from './components/TopBar';
+import { SketchTextCardFallback } from './components/SketchTextCardFallback';
 import {
   PartsList,
   PartsRailButtons,
   ViewModeRail
 } from './components/ViewModeRail';
-import { TweakPanel } from './components/TweakPanel';
 import { StartScreen } from './components/StartScreen';
 import { StartupScreen } from './components/StartupScreen';
 import type { AuthConfigStatus } from './components/SettingsPage';
@@ -475,7 +476,9 @@ import { NumericKeypad, type KeypadRequest } from './components/NumericKeypad';
 import type { DimensionMode } from './lib/keypad';
 import {
   IDLE,
+  composingTextDraft,
   escapeTarget,
+  sketchToolKeysSuspended,
   interactionReducer,
   commandSessionFor,
   isOperationState,
@@ -826,6 +829,18 @@ const LazySketchEntityEditor = lazyWithStaleChunkNotice(() =>
     default: module.SketchEntityEditor
   }))
 );
+// Tweak's panel shows only in Tweak mode; Build and View never load it.
+const LazyTweakPanel = lazyWithStaleChunkNotice(() =>
+  import('./components/TweakPanel').then((module) => ({
+    default: module.TweakPanel
+  }))
+);
+// The text tool's card exists only while text is being composed.
+const LazySketchTextCard = lazyWithStaleChunkNotice(() =>
+  import('./components/SketchTextCard').then((module) => ({
+    default: module.SketchTextCard
+  }))
+);
 const LazyAssistantPanel = lazyWithStaleChunkNotice(() =>
   import('./components/assistant/AssistantPanel').then((module) => ({
     default: module.AssistantPanel
@@ -1014,6 +1029,29 @@ function SketchEntityEditor(
   return (
     <Suspense fallback={null}>
       <LazySketchEntityEditor {...props} />
+    </Suspense>
+  );
+}
+
+function TweakPanel(props: ComponentProps<typeof LazyTweakPanel>) {
+  return (
+    <Suspense fallback={null}>
+      <LazyTweakPanel {...props} />
+    </Suspense>
+  );
+}
+
+function SketchTextCard(props: ComponentProps<typeof LazySketchTextCard>) {
+  return (
+    <Suspense
+      fallback={
+        <SketchTextCardFallback
+          text={props.draft.text}
+          onText={(text) => props.onChange({ text })}
+        />
+      }
+    >
+      <LazySketchTextCard {...props} />
     </Suspense>
   );
 }
@@ -12015,6 +12053,7 @@ export function App() {
       }) ?? [];
     const resolve = (value: unknown): number =>
       evalParamValue(value as ParamValue, parameterScope.scope) ?? 0;
+    const textDraft = composingTextDraft(interaction);
     let profiles: {
       outer: { x: number; y: number }[];
       holes: { x: number; y: number }[][];
@@ -12069,6 +12108,11 @@ export function App() {
       constraintDiagnosticObjectIds: sketchSolveDiagnosticObjectIds,
       textOutlineBudgetError,
       definedObjectIds: sketchDefinedObjectIds,
+      textDraft,
+      textDraftBudgetError:
+        textDraft && textDraft.text.length > 0
+          ? textPlacementBudgetError(doc, session.sketchId, textDraft.text)
+          : null,
       dimensions: sketchDimensionAnnotations(
         objects,
         sketch?.constraints ?? [],
@@ -12089,6 +12133,9 @@ export function App() {
     textOutlineBudgetError,
     sketchDefinedObjectIds
   ]);
+
+  /** Where the text card's live outline sits; the viewport writes it. */
+  const sketchTextAnchorRef = useRef<{ x: number; y: number } | null>(null);
 
   const selectedSketchEntity = useMemo(() => {
     if (
@@ -12113,15 +12160,24 @@ export function App() {
       ...object,
       ...(sketchConstruction ? { construction: true } : {})
     };
+    // The card already refuses this; a click on the plane must too, with
+    // the reason, rather than leave the command manager to throw it.
+    const textRefusal =
+      committedObject.objectKind === 'text' && doc
+        ? textPlacementBudgetError(doc, session.sketchId, committedObject.text)
+        : null;
+    if (textRefusal) {
+      setStatus(textRefusal);
+      return;
+    }
     /**
-     * A placed text object says "Text" in a default face — useless until it is
-     * edited, and the editor is where every one of its parameters lives. So
-     * placing one selects it and hands over to Select, the way a drawing app
-     * drops you into the caret.
+     * A placed text object is selected and handed over to Select: the card
+     * composed it, and the entity editor is where its exact values live from
+     * here on, so the next thing the user can do is adjust what they placed.
      *
      * This has to run for the first object of a brand-new sketch as well as
-     * for later ones. Start a sketch, press T, click — that is the common
-     * path, and it is the one that goes through `addSketch`.
+     * for later ones. Start a sketch, press T, type, click — that is the
+     * common path, and it is the one that goes through `addSketch`.
      */
     const selectIfText = (sketchId: SketchId) => {
       if (committedObject.objectKind !== 'text') {
@@ -12412,6 +12468,16 @@ export function App() {
     };
   }
   const [sketchSolving, setSketchSolving] = useState(false);
+  // The viewport's copy of the session also knows whether a solve or rebuild
+  // owns the sketch, so a click cannot place text the card has disabled.
+  const sketchModeForViewer = useMemo(
+    () =>
+      sketchModeState && {
+        ...sketchModeState,
+        textDraftBusy: sketchSolving || geometryBusy
+      },
+    [sketchModeState, sketchSolving, geometryBusy]
+  );
   const [sketchDimensionDraft, setSketchDimensionDraft] = useState<{
     kind: DrivingDimensionKind | 'radius';
     picks: ConstraintPick[];
@@ -16764,6 +16830,12 @@ export function App() {
       }
 
       if (interaction.mode === 'sketch' && event.key !== 'Escape') {
+        // While text is being composed, no single key acts on the sketch: a
+        // tool letter would switch tools and E would start an extrude, and
+        // either drops the unplaced draft. Escape and the rail are the exits.
+        if (sketchToolKeysSuspended(interaction)) {
+          return;
+        }
         // The sketch profile status promises that E starts the same extrude
         // flow as the rail. Handle it before the sketch-tool shortcuts, whose
         // early return otherwise prevents the global E shortcut from seeing
@@ -18140,29 +18212,53 @@ export function App() {
     (interaction.mode === 'sketch' ? interaction.session.plane : null);
   // The selected entity's editor rides in the sketch card, under the tools:
   // the card changes with the pick, and the right side stays the relations'.
-  const sketchEntityEditor =
-    interaction.mode === 'sketch' && selectedSketchEntity ? (
-      <SketchEntityEditor
-        key={`${selectedSketchEntity.id}:${doc.version}`}
-        disabled={sketchSolving || geometryBusy}
-        error={sketchEditError}
-        data={selectedSketchEntity.data}
-        scope={parameterScope.scope}
-        onApply={(data) => {
-          void handleUpdateSketchEntity(data);
-        }}
-        onDelete={handleDeleteSketchEntity}
-        constraints={selectedEntityConstraints}
-        onEditConstraint={handleEditSketchDimension}
-        onDeleteConstraint={handleDeleteSketchConstraint}
-        onClose={() =>
-          dispatchInteraction({
-            type: 'sketch-select-object',
-            objectId: null
-          })
-        }
-      />
-    ) : null;
+  const sketchTextDraft = composingTextDraft(interaction);
+  // The text tool's card takes the editor's slot while text is composed.
+  const sketchEntityEditor = sketchTextDraft ? (
+    <SketchTextCard
+      draft={sketchTextDraft}
+      scope={parameterScope.scope}
+      document={doc}
+      sketchId={
+        interaction.mode === 'sketch' ? interaction.session.sketchId : null
+      }
+      anchorRef={sketchTextAnchorRef}
+      disabled={sketchSolving || geometryBusy}
+      onChange={(patch) =>
+        dispatchInteraction({ type: 'sketch-text-draft', patch })
+      }
+      onPlace={handleSketchCommit}
+      onFaceLoaded={() =>
+        // An empty patch is still a new draft: the outline lays out again
+        // now that the face it needs has been parsed.
+        dispatchInteraction({ type: 'sketch-text-draft', patch: {} })
+      }
+      onCancel={() =>
+        dispatchInteraction({ type: 'sketch-tool', tool: 'select' })
+      }
+    />
+  ) : interaction.mode === 'sketch' && selectedSketchEntity ? (
+    <SketchEntityEditor
+      key={`${selectedSketchEntity.id}:${doc.version}`}
+      disabled={sketchSolving || geometryBusy}
+      error={sketchEditError}
+      data={selectedSketchEntity.data}
+      scope={parameterScope.scope}
+      onApply={(data) => {
+        void handleUpdateSketchEntity(data);
+      }}
+      onDelete={handleDeleteSketchEntity}
+      constraints={selectedEntityConstraints}
+      onEditConstraint={handleEditSketchDimension}
+      onDeleteConstraint={handleDeleteSketchConstraint}
+      onClose={() =>
+        dispatchInteraction({
+          type: 'sketch-select-object',
+          objectId: null
+        })
+      }
+    />
+  ) : null;
   const armConstraintTool = (kind: SketchConstraintToolKind | null) => {
     dispatchInteraction({
       type: 'sketch-constraint-tool',
@@ -18851,7 +18947,8 @@ export function App() {
                 type: dragging ? 'drag-engage' : 'drag-release'
               });
             }}
-            sketchMode={modelingLocked ? null : sketchModeState}
+            sketchMode={modelingLocked ? null : sketchModeForViewer}
+            sketchTextAnchorRef={sketchTextAnchorRef}
             onSketchCommit={handleSketchCommit}
             onEditSketchDimension={handleEditSketchDimension}
             onMoveSketchDimension={handleMoveSketchDimension}

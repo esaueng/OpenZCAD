@@ -44,6 +44,19 @@ const INFERENCE_COLOR = 0x7da3fc;
  * 3D stage), so this stays correct in both themes.
  */
 export const DEFINED_COLOR = 0x48cd8f;
+/**
+ * Budget id for the text card's draft, which is not yet a document object:
+ * the first `sketch-text-preview[-n]` no committed object uses, so a stored
+ * object can never stand in for the draft (or the draft mask it).
+ */
+function textPreviewId(objects: readonly { id: string }[]): string {
+  const used = new Set(objects.map((object) => object.id));
+  let id = 'sketch-text-preview';
+  for (let suffix = 1; used.has(id); suffix += 1) {
+    id = `sketch-text-preview-${suffix}`;
+  }
+  return id;
+}
 /** Screen-space width in CSS pixels for the sketch polylines. */
 const SKETCH_LINE_WIDTH = 1.6;
 /** Screen-space diameter in CSS pixels for the snap-point dots. */
@@ -105,6 +118,24 @@ export interface SketchModeRig {
   pickObject(raycaster: THREE.Raycaster, threshold: number): string | null;
   /** Replaces the in-progress (orange) polyline; null hides it. */
   setInProgress(points: SketchPoint[] | null, closed: boolean): void;
+  /**
+   * Replaces the text card's live outline (orange, never pickable); null
+   * hides it. The outline is the `objectPolylines` expansion of the object a
+   * click would place, budgeted together with the sketch's committed
+   * `objects` exactly as it will be once placed, so the preview cannot show
+   * text the sketch would then refuse. Returns the loops drawn: zero for an
+   * empty string, a refused budget, or a face still loading.
+   */
+  setTextPreview(
+    preview: SketchObjectData | null,
+    objects: { id: string; data: SketchObjectData }[],
+    resolve: (value: unknown) => number,
+    textBudgetError?: string | null
+  ): number;
+  /** Slides the built outline so its baseline origin sits at `point`. */
+  moveTextPreview(point: SketchPoint): void;
+  /** What the live outline shows, for the e2e hook; null when hidden. */
+  textPreviewState(): { loops: number; origin: SketchPoint } | null;
   /** Temporary horizontal/vertical or center-cross inference guides. */
   setInference(segments: readonly SketchInferenceSegment[] | null): void;
   /** Advances the center-guide dash flow; true while another frame is useful. */
@@ -314,6 +345,18 @@ export function buildSketchModeRig(
   const profileGroup = new THREE.Group();
   profileGroup.name = 'sketch-profiles';
   group.add(profileGroup);
+
+  // The text card's live outline: one run per glyph region and counter,
+  // built once per draft and slid under the pointer by its group offset.
+  const textPreviewGroup = new THREE.Group();
+  textPreviewGroup.name = 'sketch-text-preview';
+  textPreviewGroup.visible = false;
+  group.add(textPreviewGroup);
+  let textPreview: {
+    loops: number;
+    builtAt: SketchPoint;
+    origin: SketchPoint;
+  } | null = null;
 
   const inProgressMaterial = createFatLineMaterial({
     color: IN_PROGRESS_COLOR,
@@ -608,6 +651,73 @@ export function buildSketchModeRig(
       );
       inProgress.visible = true;
     },
+    setTextPreview(preview, objects, resolve, textBudgetError = null) {
+      disposeChildren(textPreviewGroup);
+      textPreviewGroup.position.set(0, 0, 0);
+      textPreviewGroup.visible = false;
+      textPreview = null;
+      if (!preview || preview.objectKind !== 'text') {
+        return 0;
+      }
+      // The budget keeps or drops the draft entry itself; asking for that
+      // entry by identity, not by id, is what says the draft survived.
+      const draftEntry = { id: textPreviewId(objects), data: preview };
+      const budgeted = displayObjectsWithTextBudget(
+        [...objects, draftEntry],
+        textBudgetError
+      );
+      if (!budgeted.includes(draftEntry)) {
+        return 0;
+      }
+      let polylines: SketchObjectPolyline[];
+      let builtAt: SketchPoint;
+      try {
+        polylines = objectPolylines(preview, resolve);
+        builtAt = { x: resolve(preview.x), y: resolve(preview.y) };
+      } catch {
+        return 0;
+      }
+      let loops = 0;
+      for (const polyline of polylines) {
+        if (polyline.points.length < 2) {
+          continue;
+        }
+        const visual = createFatLine(
+          polyline.points.map((point) => liftPoint(basis, point)),
+          {
+            color: IN_PROGRESS_COLOR,
+            linewidth: SKETCH_LINE_WIDTH,
+            opacity: 0.95,
+            depthTest: true,
+            closed: polyline.closed,
+            resolution: resolution()
+          }
+        );
+        visual.renderOrder = VIEWPORT_RENDER_ORDER.ACTIVE_SKETCH;
+        visual.frustumCulled = false;
+        visual.raycast = () => undefined;
+        textPreviewGroup.add(visual);
+        loops += 1;
+      }
+      textPreviewGroup.visible = loops > 0;
+      textPreview = loops > 0 ? { loops, builtAt, origin: builtAt } : null;
+      return loops;
+    },
+    moveTextPreview(point) {
+      if (!textPreview) {
+        return;
+      }
+      // Text lays out relative to its origin, so moving the origin is a pure
+      // translation in the plane: no re-layout per pointer move.
+      const from = liftPoint(basis, textPreview.builtAt);
+      textPreviewGroup.position.copy(liftPoint(basis, point).sub(from));
+      textPreview.origin = { x: point.x, y: point.y };
+    },
+    textPreviewState() {
+      return textPreview
+        ? { loops: textPreview.loops, origin: { ...textPreview.origin } }
+        : null;
+    },
     setInference(segments) {
       if (!segments || segments.length === 0) {
         inferenceGroup.visible = false;
@@ -683,6 +793,7 @@ export function buildSketchModeRig(
       group.removeFromParent();
       disposeChildren(committedGroup);
       disposeChildren(profileGroup);
+      disposeChildren(textPreviewGroup);
       disposeGrid();
       tint.geometry.dispose();
       tint.material.dispose();
