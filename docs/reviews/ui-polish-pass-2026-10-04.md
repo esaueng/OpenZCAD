@@ -108,6 +108,6 @@ Count: 38 findings; 34 landed in full, 2 landed in part (2.3: menu sublabels fix
 ## How this was measured
 
 - Chrome via the Claude extension; window 1440×1043 gives a 1440×900 viewport (the first screenshots at "1440×900" were really ~1590 wide).
-- Small targets: every visible `button, a, input, select, [role=button|tab|menuitem|slider]` under 24 px in either dimension, from `getBoundingClientRect()`.
+- Small targets: every visible `button, a[href], input, select, textarea, [role=button], [role=tab], [role=menuitem], [role=option], [role=slider]` under 24 px in either dimension, from `getBoundingClientRect()`.
 - Tiny text: leaf elements with computed `font-size` under 10.5 px.
 - Theme: `document.documentElement.dataset.theme` and computed backgrounds of `.topbar-island`, `.command-bar`, `.start-tile`, read with the theme set from Settings and again with the attribute set by hand.
