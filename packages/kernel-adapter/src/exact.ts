@@ -959,14 +959,16 @@ export class RemusKernelAdapter implements ExactKernelAdapter {
    * Per body, the linear display deflection each of its solids was last
    * meshed at (see `heldDisplayTessellation`). A display policy, not a
    * geometry cache: it survives history-cache invalidation (a sync whose
-   * history cannot be reused still edits the same bodies) and is dropped
-   * only on dispose. Body ids are never reused, so a stale entry cannot
-   * resurface.
+   * history cannot be reused still edits the same bodies). Entries for
+   * bodies a build no longer produces are pruned with the measured-shape
+   * cache, the map is cleared when the project changes, and on dispose.
    */
   private readonly heldDisplayDeflections = new Map<
     BodyId,
     readonly number[]
   >();
+  /** The project the held display deflections belong to. */
+  private heldDisplayProjectId: ProjectDocument['projectId'] | null = null;
 
   private get maxHistoryCheckpoints(): number {
     return this.options.historyCheckpointLimit ?? MAX_HISTORY_CHECKPOINTS;
@@ -1978,6 +1980,18 @@ export class RemusKernelAdapter implements ExactKernelAdapter {
       for (const bodyId of [...this.measuredShapeCache.keys()]) {
         if (!build.shapes.has(bodyId)) {
           this.evictMeasuredShape(bodyId);
+        }
+      }
+      // Same for the held display deflections: a body this build no longer
+      // produces will never be measured again under that id, and another
+      // project's bodies are a different set altogether.
+      if (this.heldDisplayProjectId !== document.projectId) {
+        this.heldDisplayDeflections.clear();
+        this.heldDisplayProjectId = document.projectId;
+      }
+      for (const bodyId of [...this.heldDisplayDeflections.keys()]) {
+        if (!build.shapes.has(bodyId)) {
+          this.heldDisplayDeflections.delete(bodyId);
         }
       }
       let remeasured = 0;
