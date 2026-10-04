@@ -213,7 +213,7 @@ function officialOriginUrl(originUrl) {
 
 export function validateDeploymentConfig(
   config,
-  { target, originUrl = '', environment = {} }
+  { target, originUrl = '', environment = {}, configOnly = false }
 ) {
   if (target === 'dev') {
     const errors = [];
@@ -295,6 +295,7 @@ export function validateDeploymentConfig(
       );
     }
     if (
+      !configOnly &&
       environment.GITHUB_ACTIONS === 'true' &&
       environment.GITHUB_REF !== 'refs/heads/main'
     ) {
@@ -357,7 +358,7 @@ if (process.argv[1]?.endsWith('validate-deployment-config.mjs')) {
   const target = argument('--target');
   if (!configPath || !target) {
     console.error(
-      'Usage: node scripts/validate-deployment-config.mjs --config <path> --target <official|selfhost|example>'
+      'Usage: node scripts/validate-deployment-config.mjs --config <path> --target <official|selfhost|example|dev> [--config-only]'
     );
     process.exit(2);
   }
@@ -367,7 +368,8 @@ if (process.argv[1]?.endsWith('validate-deployment-config.mjs')) {
     const errors = validateDeploymentConfig(config, {
       target,
       originUrl: readOriginUrl(),
-      environment: process.env
+      environment: process.env,
+      configOnly: process.argv.includes('--config-only')
     });
     if (errors.length) {
       for (const error of errors) console.error(`- ${error}`);

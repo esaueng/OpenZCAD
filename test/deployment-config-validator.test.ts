@@ -1,4 +1,6 @@
 import { describe, expect, it } from 'vitest';
+import { readFileSync } from 'node:fs';
+import ts from 'typescript';
 import {
   OFFICIAL,
   validateDeploymentConfig
@@ -114,5 +116,30 @@ describe('deployment configuration preflight', () => {
     expect(errors).toContain(
       'official deployment is not allowed from GitHub ref refs/pull/1/merge'
     );
+  });
+  it('validates official PR configuration without authorizing a deployment', () => {
+    const config = ts.parseConfigFileTextToJson(
+      'wrangler.jsonc',
+      readFileSync('wrangler.jsonc', 'utf8')
+    ).config as ReturnType<typeof hostedConfig>;
+    const options = {
+      target: 'official',
+      originUrl: 'https://github.com/esaueng/OpenZCAD.git',
+      environment: {
+        GITHUB_ACTIONS: 'true',
+        GITHUB_REPOSITORY: 'esaueng/OpenZCAD',
+        GITHUB_REF: 'refs/pull/565/merge'
+      }
+    };
+    expect(
+      validateDeploymentConfig(config, { ...options, configOnly: true })
+    ).toEqual([]);
+    expect(validateDeploymentConfig(config, options)).toContain(
+      'official deployment is not allowed from GitHub ref refs/pull/565/merge'
+    );
+    config.vars.AUTH_MODE = 'development';
+    expect(
+      validateDeploymentConfig(config, { ...options, configOnly: true })
+    ).toContain('vars.AUTH_MODE must be email-code for a hosted deployment');
   });
 });
