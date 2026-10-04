@@ -6,15 +6,17 @@ import {
   type InteractionState
 } from './interaction/machine';
 
+const bore = {
+  sketchId: 'bores',
+  regionFingerprint: 1,
+  samplePoint: { x: 0, y: 0 },
+  area: 20,
+  sourceEntityIds: ['circle']
+};
 const session: Extract<InteractionState, { mode: 'region' }> = {
   mode: 'region',
-  target: {
-    sketchId: 'bores',
-    regionFingerprint: 1,
-    samplePoint: { x: 0, y: 0 },
-    area: 20,
-    sourceEntityIds: ['circle']
-  },
+  target: bore,
+  targets: [bore],
   phase: 'armed',
   lastValue: null,
   error: null,
@@ -38,6 +40,15 @@ describe('extrusion session ownership', () => {
       isExtrudeSessionCurrent(
         session,
         { ...session, target: { ...session.target } },
+        profiles,
+        profiles
+      )
+    ).toBe(false);
+    // A region added or removed after the commit started is a new session.
+    expect(
+      isExtrudeSessionCurrent(
+        session,
+        { ...session, targets: [...session.targets] },
         profiles,
         profiles
       )

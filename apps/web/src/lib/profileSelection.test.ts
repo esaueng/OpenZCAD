@@ -28,7 +28,7 @@ describe('updateProfileSelection', () => {
     ).toEqual(['c']);
   });
 
-  it('Shift adds once and keeps the persistent selection', () => {
+  it('Shift adds, and Shift on a selected profile takes it back out', () => {
     const selected = updateProfileSelection([profile('a')], profile('b'), {
       additive: true,
       toggle: false
@@ -38,8 +38,39 @@ describe('updateProfileSelection', () => {
       updateProfileSelection(selected, profile('b'), {
         additive: true,
         toggle: false
-      })
-    ).toEqual(selected);
+      }).map((item) => item.profileId)
+    ).toEqual(['a']);
+  });
+
+  it('selects and removes a whole group for a pick that stands for one', () => {
+    const word = [profile('g1'), profile('g2'), profile('g3')];
+    const picked = updateProfileSelection(
+      [profile('a')],
+      word[1]!,
+      { additive: false, toggle: false },
+      word
+    );
+    expect(picked.map((item) => item.profileId)).toEqual(['g1', 'g2', 'g3']);
+    const added = updateProfileSelection(
+      [profile('a')],
+      word[2]!,
+      { additive: true, toggle: false },
+      word
+    );
+    expect(added.map((item) => item.profileId)).toEqual([
+      'a',
+      'g1',
+      'g2',
+      'g3'
+    ]);
+    expect(
+      updateProfileSelection(
+        added,
+        word[0]!,
+        { additive: true, toggle: false },
+        word
+      ).map((item) => item.profileId)
+    ).toEqual(['a']);
   });
 
   it('Ctrl or Cmd toggles a profile in and back out', () => {
