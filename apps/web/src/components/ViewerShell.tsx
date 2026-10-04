@@ -1,7 +1,7 @@
 import type { ParameterPreviewBody } from '../lib/parameterVisualPreview';
 import type { HoleGhost } from '../lib/holeGhost';
 import type { AutoFrameRequest } from '../lib/autoFrame';
-import { useRef, type MutableRefObject, type ReactNode } from 'react';
+import { useMemo, useRef, type MutableRefObject, type ReactNode } from 'react';
 import {
   ModelViewer,
   type BodyAppearancePreview,
@@ -23,6 +23,7 @@ import type {
   MoveSnap,
   PickDetail,
   ProjectionMode,
+  SectionPlaneId,
   SelectionFilter,
   SketchOverlay,
   ViewerSettings,
@@ -31,6 +32,7 @@ import type {
 } from '@openzcad/viewport';
 import { ViewerToolbar } from './ViewerToolbar';
 import {
+  measurementAnnotationsOnScreen,
   sectionOutlineFor,
   type SectionOutlineState,
   type ViewportGeometry
@@ -294,7 +296,8 @@ interface ViewerShellProps {
   onCycleDisplayMode(): void;
   onToggleProjection(): void;
   sectionRange: { min: number; max: number } | null;
-  onCycleSection(): void;
+  onToggleSection(): void;
+  onSectionPlane(plane: SectionPlaneId): void;
   onSectionOffset(offset: number): void;
   onSectionCommit(): void;
   onExportSectionDxf(): void;
@@ -413,7 +416,8 @@ export function ViewerShell({
   onCycleDisplayMode,
   onToggleProjection,
   sectionRange,
-  onCycleSection,
+  onToggleSection,
+  onSectionPlane,
   onSectionOffset,
   onSectionCommit,
   onExportSectionDxf,
@@ -427,6 +431,13 @@ export function ViewerShell({
    * the DXF button all come down together, from one reading of one value.
    */
   const drawnSection = sectionOutlineFor(view, sectionOutline);
+  // Same reading for the measurement labels: one standing beside a face
+  // keeps that face's box only while the face is drawn as built. Memoized
+  // so the viewer reinstalls its labels only when the answer changes.
+  const placedMeasurements = useMemo(
+    () => measurementAnnotationsOnScreen(measurementAnnotations, view),
+    [measurementAnnotations, view]
+  );
   /** Kernel section geometry for the resting plane; null while dragging. */
   const exactSection: ExactSectionRegionDisplay[] | null =
     drawnSection.kind === 'exact' ? drawnSection.regions : null;
@@ -461,7 +472,8 @@ export function ViewerShell({
       onCycleDisplayMode={onCycleDisplayMode}
       onToggleProjection={onToggleProjection}
       sectionRange={sectionRange}
-      onCycleSection={onCycleSection}
+      onToggleSection={onToggleSection}
+      onSectionPlane={onSectionPlane}
       onSectionOffset={onSectionOffset}
       onSectionCommit={onSectionCommit}
       onExportSectionDxf={onExportSectionDxf}
@@ -504,7 +516,7 @@ export function ViewerShell({
         bodies={bodies}
         parameterVisualPreview={parameterVisualPreview}
         sketches={sketches}
-        measurementAnnotations={measurementAnnotations}
+        measurementAnnotations={placedMeasurements}
         selectedBodyIds={selectedBodyIds}
         selectedTopology={selectedTopology}
         previewFaceHighlights={previewFaceHighlights}

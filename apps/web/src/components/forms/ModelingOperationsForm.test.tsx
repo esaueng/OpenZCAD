@@ -26,6 +26,35 @@ const faces: ModelingFaceOption[] = [
 ];
 
 describe('Modeling operations form', () => {
+  it('asks for a target body only when there is a choice to make', () => {
+    const props = {
+      operation: 'hole' as const,
+      scope: {},
+      faceOptions: faces,
+      onPreflight: vi.fn(),
+      onSubmit: vi.fn()
+    };
+    const view = render(<ModelingOperationsForm {...props} bodies={bodies} />);
+    expect(screen.queryByLabelText('Target body')).toBeNull();
+    // The one body is still the target the hole is drilled into.
+    expect(screen.getByRole('button', { name: faces[0]!.label })).toBeVisible();
+
+    view.rerender(
+      <ModelingOperationsForm
+        {...props}
+        bodies={[
+          ...bodies,
+          {
+            bodyId: toBodyId('other_body'),
+            name: 'Other body',
+            consumed: false
+          }
+        ]}
+      />
+    );
+    expect(screen.getByLabelText('Target body')).toHaveValue(bodyId);
+  });
+
   it('consumes a viewport Hole pick without losing edited fields or accepting an older preflight', async () => {
     let resolvePreflight: ((value: { status: 'ready' }) => void) | undefined;
     const onPreflight = vi.fn(

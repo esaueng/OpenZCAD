@@ -1,3 +1,5 @@
+import { readFileSync } from 'node:fs';
+import { resolve } from 'node:path';
 import type { MutableRefObject } from 'react';
 import { fireEvent, render } from '@testing-library/react';
 import { afterAll, beforeAll, describe, expect, it, vi } from 'vitest';
@@ -330,23 +332,85 @@ describe('OrientationWidget pointer lifecycle', () => {
       orientationRef.current?.(ISOMETRIC);
 
       const corners = visibleCorners(container);
-      const glancing = corners.filter(
-        ({ drawn, target }) =>
-          !polygonPoints(drawn).every((vertex) =>
-            contains(polygonPoints(target), vertex)
-          )
-      );
-      // The deeper cut is the drawn facet scaled about the corner's projected
-      // apex, and at a glancing angle that apex lies outside it — so on those
-      // corners the deeper cut does NOT contain the facet. This is the whole
-      // reason the click sits on the group rather than on that cut: the target
-      // is the union of both, which cannot be smaller than what is drawn.
-      expect(glancing.length).toBeGreaterThan(0);
-      for (const { drawn, target } of glancing) {
+      expect(corners.length).toBe(4);
+      for (const { drawn, target } of corners) {
+        // The target is the surface the deeper cut takes off the corner, so
+        // it holds the facet on glancing corners too — a planar deeper cut,
+        // scaled about the apex, did not. Shrunk a hair toward its centroid
+        // so a vertex on the target's own edge is tested strictly inside.
+        const facet = polygonPoints(drawn);
+        const [cx, cy] = facet
+          .reduce(([sx, sy], [x, y]) => [sx + x, sy + y], [0, 0])
+          .map((sum) => sum / facet.length) as [number, number];
+        for (const [x, y] of facet) {
+          expect(
+            contains(polygonPoints(target), [
+              x + (cx - x) * 0.01,
+              y + (cy - y) * 0.01
+            ])
+          ).toBe(true);
+        }
+        // The click still sits on the group, so the painted seam counts too.
         expect(drawn.parentElement).toBe(target.parentElement);
         expect(drawn.parentElement).toHaveClass('cube-corner-target');
       }
     });
+
+    it('gives every isometric corner a target at least 16 px each way', () => {
+      // Measured on the running widget before this target: 10×17 and 20×6 px
+      // for the corners on the silhouette, which have a face turned away.
+      const { container, orientationRef } = renderWidget();
+      orientationRef.current?.(ISOMETRIC);
+
+      const corners = visibleCorners(container);
+      expect(corners.length).toBe(4);
+      for (const { target } of corners) {
+        const points = polygonPoints(target);
+        const xs = points.map(([x]) => x);
+        const ys = points.map(([, y]) => y);
+        expect(Math.max(...xs) - Math.min(...xs)).toBeGreaterThanOrEqual(16);
+        expect(Math.max(...ys) - Math.min(...ys)).toBeGreaterThanOrEqual(16);
+      }
+    });
+
+    it.each([
+      ['isometric', ISOMETRIC],
+      [
+        'front',
+        {
+          x: { x: 1, y: 0, z: 0 },
+          y: { x: 0, y: 0, z: -1 },
+          z: { x: 0, y: -1, z: 0 }
+        }
+      ],
+      [
+        'oblique',
+        {
+          x: { x: 0.866, y: 0.25, z: 0.433 },
+          y: { x: -0.5, y: 0.433, z: 0.75 },
+          z: { x: 0, y: -0.866, z: 0.5 }
+        }
+      ]
+    ] as const)(
+      'never lets two corner targets claim one pixel (%s)',
+      (_view, axes) => {
+        const { container, orientationRef } = renderWidget();
+        orientationRef.current?.(axes);
+
+        const targets = visibleCorners(container).map(({ target }) =>
+          polygonPoints(target)
+        );
+        expect(targets.length).toBeGreaterThan(0);
+        for (let x = 0.5; x < 88; x += 1) {
+          for (let y = 0.5; y < 88; y += 1) {
+            const claims = targets.filter((polygon) =>
+              contains(polygon, [x, y])
+            );
+            expect(claims.length).toBeLessThan(2);
+          }
+        }
+      }
+    );
 
     it('takes the click from the drawn facet as well as the deeper cut', () => {
       const { container, orientationRef, onSelectView } = renderWidget();
@@ -426,5 +490,22 @@ describe('OrientationWidget pointer lifecycle', () => {
       expect(onSelectView).toHaveBeenCalledOnce();
       expect(onSelectView.mock.calls[0]?.[0]).toHaveProperty('corner');
     });
+  });
+});
+
+describe('OrientationWidget roll buttons', () => {
+  it('draws them at the full 24 px target without moving the cube', () => {
+    // They were 22 px circles reaching to 24 px with an invisible ::after.
+    // happy-dom does no layout, so read the sheet the browser applies.
+    const css = readFileSync(
+      resolve(__dirname, '../styles/components/viewport-overlays.css'),
+      'utf8'
+    );
+    const rule = /(?:^|\n)\.orientation-roll\s*\{([^}]*)\}/.exec(css)?.[1];
+    expect(rule).toBeDefined();
+    expect(rule).toMatch(/\bwidth:\s*24px;/);
+    expect(rule).toMatch(/\bheight:\s*24px;/);
+    // Their layout box stays the old 22 px, so the cube keeps its place.
+    expect(rule).toMatch(/\bmargin:\s*0 -1px;/);
   });
 });

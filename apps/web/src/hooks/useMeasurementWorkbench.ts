@@ -508,11 +508,16 @@ export function useMeasurementWorkbench({
     if (!measurementApi) {
       return [];
     }
+    // The bodies only size each label's standoff: an area's label stands
+    // just outside the face it measures, not outside the whole model. They
+    // are the bodies on screen, so a previewed edit moves the label with the
+    // face it is drawing rather than leaving it by the committed one.
     const pinned = measurements.flatMap((measurement) => {
       const annotation = measurementApi.measurementToViewportAnnotation(
         measurement,
         measurementDisplay,
-        measurement.id === activeMeasurementId
+        measurement.id === activeMeasurementId,
+        viewerBodies
       );
       return annotation ? [annotation] : [];
     });
@@ -537,7 +542,8 @@ export function useMeasurementWorkbench({
     measurementDisplay,
     measurementDraft,
     measurements,
-    measurementApi
+    measurementApi,
+    viewerBodies
   ]);
   const formattedMeasurements = useMemo(
     () =>

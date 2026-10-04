@@ -4,6 +4,7 @@ import { useEffect, useRef, useState, type MutableRefObject } from 'react';
 import { axisDimensionLabel } from '../lib/primitiveDimensionLabel';
 import * as THREE from 'three';
 import type { HoleGhost } from '../lib/holeGhost';
+import { buildHoleGhostRig } from './viewer/holeGhostRig';
 import {
   bodiesReachingNewSpace,
   type AutoFrameRequest
@@ -153,6 +154,7 @@ import {
   type ViewerSettings,
   type FatLineResolution,
   type BodyEdgeOverlay,
+  type CalloutBounds,
   type CalloutLayoutItem,
   type DimensionGraphic,
   SELECTION_SEMANTICS,
@@ -1161,6 +1163,8 @@ interface MeasurementCalloutBinding {
   kind: 'anchor' | 'span' | 'arms';
   spanStart?: THREE.Vector3;
   spanEnd?: THREE.Vector3;
+  /** Corners of the measured face's or body's world box, when known. */
+  extent?: THREE.Vector3[];
 }
 
 interface MeasurementSceneBounds {
@@ -1172,10 +1176,11 @@ interface MeasurementSceneBounds {
  * Keeps measurement callouts off the geometry they describe. CSS2DRenderer
  * centres each pill on its projected anchor, which for a face-area or
  * diameter measurement is the middle of the model; the layout in
- * `layoutMeasurementCallouts` moves the pill outside the model's projected
- * silhouette instead, and this applies the result as margins (rewritten
- * from scratch every frame, like `clampNameCallouts`) plus a leader line
- * pointing back at the anchor.
+ * `layoutMeasurementCallouts` moves the pill just outside the measured
+ * face's projected box (or, when that is unknown, outside the model's
+ * projected silhouette) instead, and this applies the result as margins
+ * (rewritten from scratch every frame, like `clampNameCallouts`) plus a
+ * leader line pointing back at the anchor.
  */
 function updateMeasurementCallouts(
   bindings: readonly MeasurementCalloutBinding[],
@@ -1230,6 +1235,27 @@ function updateMeasurementCallouts(
         spanDir = { x: end.x - start.x, y: end.y - start.y };
       }
     }
+    // The measured face's own screen box, so its label stands just outside
+    // that face. A corner behind the camera leaves the box unknown and the
+    // layout falls back to the model's silhouette.
+    let bounds: CalloutBounds | undefined;
+    if (binding.extent) {
+      const corners = binding.extent.map((corner) =>
+        projectToScreen(corner, camera, viewportWidth, viewportHeight)
+      );
+      if (
+        corners.every(
+          (corner): corner is { x: number; y: number } => corner !== null
+        )
+      ) {
+        bounds = {
+          minX: Math.min(...corners.map((corner) => corner.x)),
+          minY: Math.min(...corners.map((corner) => corner.y)),
+          maxX: Math.max(...corners.map((corner) => corner.x)),
+          maxY: Math.max(...corners.map((corner) => corner.y))
+        };
+      }
+    }
     visible.push({
       binding,
       item: {
@@ -1237,7 +1263,8 @@ function updateMeasurementCallouts(
         width: binding.element.offsetWidth || 1,
         height: binding.element.offsetHeight || 1,
         kind: binding.kind,
-        spanDir
+        spanDir,
+        bounds
       }
     });
   }
@@ -8762,6 +8789,7 @@ export function ModelViewer({
       label.element.appendChild(leader);
       group.add(label);
       const firstSegment = annotation.segments[0];
+      const extent = annotation.extent;
       measurementCalloutsRef.current.push({
         element: label.element as HTMLDivElement,
         leader,
@@ -8786,7 +8814,17 @@ export function ModelViewer({
                 firstSegment.end.y,
                 firstSegment.end.z
               )
-            : undefined
+            : undefined,
+        extent: extent
+          ? [0, 1, 2, 3, 4, 5, 6, 7].map(
+              (corner) =>
+                new THREE.Vector3(
+                  corner & 1 ? extent.max.x : extent.min.x,
+                  corner & 2 ? extent.max.y : extent.min.y,
+                  corner & 4 ? extent.max.z : extent.min.z
+                )
+            )
+          : undefined
       });
     }
     context.requestRender();
@@ -10346,67 +10384,21 @@ export function ModelViewer({
     };
   }, [planePickerArmed]);
 
-  // The open Hole card's bore, drawn through the body: a translucent
-  // cylinder with its entry and exit rims, over everything so a hole buried
-  // in the part (or missing it) is still seen. Rebuilt per value change; the
-  // viewport renders on demand, so each change asks for its frame.
+  // The open Hole card's bore (viewer/holeGhostRig): an opening on the entry
+  // face and a barrel that is a faint ghost inside the body, so it reads as a
+  // cut rather than a post. Rebuilt per value change; the viewport renders on
+  // demand, so each change asks for its frame.
   useEffect(() => {
     const context = contextRef.current;
     if (!context || !holeGhost) {
       return;
     }
-    const group = new THREE.Group();
-    group.name = 'hole-ghost';
-    const { entry, axis, radius, depth } = holeGhost;
-    const direction = new THREE.Vector3(axis.x, axis.y, axis.z).normalize();
-    const body = new THREE.CylinderGeometry(radius, radius, depth, 40, 1, true);
-    const fill = new THREE.MeshBasicMaterial({
-      color: SKETCH_COLOR,
-      transparent: true,
-      opacity: 0.28,
-      side: THREE.DoubleSide,
-      depthTest: false,
-      depthWrite: false
-    });
-    const barrel = new THREE.Mesh(body, fill);
-    barrel.quaternion.setFromUnitVectors(new THREE.Vector3(0, 1, 0), direction);
-    barrel.position
-      .set(entry.x, entry.y, entry.z)
-      .addScaledVector(direction, depth / 2);
-    barrel.renderOrder = 20;
-    group.add(barrel);
-    const rimGeometry = new THREE.BufferGeometry().setFromPoints(
-      Array.from({ length: 64 }, (_, index) => {
-        const angle = (index / 64) * Math.PI * 2;
-        return new THREE.Vector3(
-          Math.cos(angle) * radius,
-          0,
-          Math.sin(angle) * radius
-        );
-      })
-    );
-    const rimMaterial = new THREE.LineBasicMaterial({
-      color: SKETCH_COLOR,
-      depthTest: false,
-      transparent: true
-    });
-    for (const along of [0, depth]) {
-      const rim = new THREE.LineLoop(rimGeometry, rimMaterial);
-      rim.quaternion.copy(barrel.quaternion);
-      rim.position
-        .set(entry.x, entry.y, entry.z)
-        .addScaledVector(direction, along);
-      rim.renderOrder = 21;
-      group.add(rim);
-    }
-    context.scene.add(group);
+    const rig = buildHoleGhostRig(holeGhost, SKETCH_COLOR);
+    context.scene.add(rig.group);
     context.requestRender();
     return () => {
-      context.scene.remove(group);
-      body.dispose();
-      fill.dispose();
-      rimGeometry.dispose();
-      rimMaterial.dispose();
+      context.scene.remove(rig.group);
+      rig.dispose();
       context.requestRender();
     };
   }, [holeGhost]);
