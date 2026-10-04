@@ -16959,10 +16959,7 @@ export function App() {
           }
           if (
             selectedFeature &&
-            (featureSelectionSource !== 'inferred' ||
-              (!tool &&
-                !commandSession &&
-                selectedTopology?.kind !== 'body')) &&
+            featureSelectionSource !== 'inferred' &&
             validateSelectionEdit()
           ) {
             event.preventDefault();
@@ -19841,7 +19838,7 @@ export function App() {
                 onResizeThroughHole={handleResizeThroughHole}
                 onRemoveFaceFeature={handleRemoveFaceFeature}
                 onPinFeature={(feature) =>
-                  handleSelectFeatureFromTree(feature.id)
+                  handleSelectFeatureFromTree(feature.id, false)
                 }
                 onDeleteFeature={(feature) =>
                   handleDeleteFeature(feature.featureId, feature.name)

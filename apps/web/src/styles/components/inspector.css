@@ -565,6 +565,15 @@
   font-weight: var(--fw-regular);
 }
 
+.object-definition-row > span {
+  min-width: 0;
+  overflow-wrap: anywhere;
+}
+
+.object-definition-row > button {
+  flex-shrink: 0;
+}
+
 /* Mirror and Split: the three principal planes as one-click choices above
    the numeric plane fields. */
 .plane-chips {
