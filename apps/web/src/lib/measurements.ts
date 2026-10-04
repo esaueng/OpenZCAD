@@ -1,5 +1,6 @@
 import type {
   BodyRepresentation,
+  BoundingBox,
   EdgeTopology,
   FaceAreaProvenance,
   FaceTopology,
@@ -152,6 +153,13 @@ export interface MeasurementViewportAnnotation extends MeasurementAnnotation {
    * measurement.
    */
   graphic: 'span' | 'arms' | 'anchor';
+  /**
+   * World-space box of the face or body an `anchor` figure describes, so the
+   * viewport can stand the label just outside that face rather than outside
+   * the whole model. Derived from the current bodies for display only; never
+   * stored with the measurement.
+   */
+  extent?: BoundingBox;
 }
 
 /** Which graphic each measurement kind earns. */
@@ -1723,15 +1731,85 @@ export function formatMeasurement(
   return { value, detail, quality };
 }
 
+/** Box around one face's display triangles, from the body's own mesh. */
+function faceMeshBounds(
+  mesh: BodyRepresentation['mesh'],
+  face: Pick<FaceTopology, 'triangleStart' | 'triangleCount'>
+): BoundingBox | null {
+  const start = face.triangleStart * 3;
+  const end = (face.triangleStart + face.triangleCount) * 3;
+  if (
+    !Number.isInteger(start) ||
+    !Number.isInteger(end) ||
+    start < 0 ||
+    end <= start ||
+    end > mesh.indices.length
+  ) {
+    return null;
+  }
+  const min = { x: Infinity, y: Infinity, z: Infinity };
+  const max = { x: -Infinity, y: -Infinity, z: -Infinity };
+  for (let index = start; index < end; index += 1) {
+    const vertex = (mesh.indices[index] ?? 0) * 3;
+    const x = mesh.vertices[vertex];
+    const y = mesh.vertices[vertex + 1];
+    const z = mesh.vertices[vertex + 2];
+    if (x === undefined || y === undefined || z === undefined) {
+      return null;
+    }
+    min.x = Math.min(min.x, x);
+    min.y = Math.min(min.y, y);
+    min.z = Math.min(min.z, z);
+    max.x = Math.max(max.x, x);
+    max.y = Math.max(max.y, y);
+    max.z = Math.max(max.z, z);
+  }
+  return { min, max };
+}
+
+/**
+ * The world-space box of the one face or body a point-style figure (an
+ * area, a diameter, a body) describes. Null for spans and angles, which the
+ * viewport places along their own geometry, and whenever the target does not
+ * resolve against the current bodies.
+ */
+export function measurementExtent(
+  measurement: Measurement,
+  bodies: readonly BodyRepresentation[]
+): BoundingBox | null {
+  const [target, ...rest] = measurement.targets;
+  if (
+    annotationGraphic(measurement.kind) !== 'anchor' ||
+    !target ||
+    rest.length > 0
+  ) {
+    return null;
+  }
+  const body = bodies.find((candidate) => candidate.bodyId === target.bodyId);
+  if (!body) {
+    return null;
+  }
+  if (target.kind === 'body') {
+    return body.bbox;
+  }
+  if (target.kind !== 'face') {
+    return null;
+  }
+  const face = findFace(body, selectionForTarget(target));
+  return face ? faceMeshBounds(body.mesh, face) : null;
+}
+
 export function measurementToViewportAnnotation(
   measurement: Measurement,
   options: MeasurementDisplayOptions,
-  selected: boolean
+  selected: boolean,
+  bodies: readonly BodyRepresentation[] = []
 ): MeasurementViewportAnnotation | null {
   if (!measurement.visible || !measurement.annotation) {
     return null;
   }
   const formatted = formatMeasurement(measurement, options);
+  const extent = measurementExtent(measurement, bodies);
   return {
     id: measurement.id,
     label: formatted.value,
@@ -1739,7 +1817,8 @@ export function measurementToViewportAnnotation(
     status: measurement.status,
     graphic: annotationGraphic(measurement.kind),
     anchor: measurement.annotation.anchor,
-    segments: measurement.annotation.segments
+    segments: measurement.annotation.segments,
+    ...(extent ? { extent } : {})
   };
 }
 

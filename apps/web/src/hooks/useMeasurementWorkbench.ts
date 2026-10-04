@@ -508,11 +508,17 @@ export function useMeasurementWorkbench({
     if (!measurementApi) {
       return [];
     }
+    // The bodies only size each label's standoff: an area's label stands
+    // just outside the face it measures, not outside the whole model.
+    const bodies = Object.values(representations).filter(
+      (body) => !body.consumed
+    );
     const pinned = measurements.flatMap((measurement) => {
       const annotation = measurementApi.measurementToViewportAnnotation(
         measurement,
         measurementDisplay,
-        measurement.id === activeMeasurementId
+        measurement.id === activeMeasurementId,
+        bodies
       );
       return annotation ? [annotation] : [];
     });
@@ -537,7 +543,8 @@ export function useMeasurementWorkbench({
     measurementDisplay,
     measurementDraft,
     measurements,
-    measurementApi
+    measurementApi,
+    representations
   ]);
   const formattedMeasurements = useMemo(
     () =>
