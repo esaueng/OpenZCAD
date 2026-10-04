@@ -11,6 +11,7 @@ import {
   EDGE_IDLE_OPACITY,
   EDGE_IDLE_WIDTH,
   EDGE_SELECTED_COLOR,
+  EDGE_SELECTED_WIDTH,
   EDGE_WIREFRAME_COLOR
 } from '../pick/edges';
 import { SELECTION_SEMANTICS } from './semantics';
@@ -81,9 +82,9 @@ function makeOverlay() {
 }
 
 /**
- * Runs the eased tiers to rest. Hover and selection both ramp now, so neither
- * batch is visible on the frame the pointer arrives or the click lands — the
- * render loop steps them.
+ * Runs the tiers' x-ray twins to rest. The visible batches cut in the frame
+ * the pointer arrives or the click lands; only the twins behind the solid
+ * ease, and the render loop steps them.
  */
 function settle(overlay: ReturnType<typeof makeOverlay>) {
   for (let frame = 0; frame < 60 && overlay.step(16); frame += 1) {
@@ -171,95 +172,109 @@ describe('BodyEdgeOverlay', () => {
     expect(overlay.setSelected([selection('edge-b')])).toBe(false);
   });
 
-  it('ramps the selected tier in rather than popping to full width', () => {
+  it('cuts the selected tier in at full width on the frame the click lands', () => {
     const overlay = makeOverlay();
     const idleWidth = overlay.idleEdges.material.linewidth;
 
     overlay.setSelected([selection('edge-a')]);
-    // The frame the click lands on: geometry is in place, but nothing is drawn
-    // at selection width yet. Popping straight to 4.5 px is the defect.
-    expect(overlay.selectedEdges.geometry.instanceCount).toBeGreaterThan(0);
-    expect(overlay.selectedEdges.material.linewidth).toBe(idleWidth);
-    expect(overlay.selectedEdges.material.opacity).toBe(0);
+    // Selection is a state change: no step has run, and the line is already
+    // drawn at selection width. Only its x-ray twin has a ramp to play.
+    expect(overlay.selectedEdges.visible).toBe(true);
+    expect(overlay.selectedEdges.material.opacity).toBe(1);
+    expect(overlay.selectedEdges.material.linewidth).toBe(EDGE_SELECTED_WIDTH);
+    expect(overlay.selectedHiddenEdges.material.opacity).toBe(0);
+    expect(overlay.selectedHiddenEdges.material.linewidth).toBe(idleWidth);
 
-    overlay.step(16);
-    const midWidth = overlay.selectedEdges.material.linewidth;
-    const midOpacity = overlay.selectedEdges.material.opacity;
-    expect(midWidth).toBeGreaterThan(idleWidth);
-    expect(midOpacity).toBeGreaterThan(0);
+    expect(overlay.step(16)).toBe(true);
+    const midHidden = overlay.selectedHiddenEdges.material.opacity;
+    expect(midHidden).toBeGreaterThan(0);
+    expect(overlay.selectedEdges.material.opacity).toBe(1);
 
     settle(overlay);
-    expect(overlay.selectedEdges.material.linewidth).toBeGreaterThan(midWidth);
-    expect(overlay.selectedEdges.material.opacity).toBe(1);
-    expect(overlay.selectedEdges.visible).toBe(true);
+    expect(overlay.selectedHiddenEdges.material.opacity).toBeGreaterThan(
+      midHidden
+    );
+    expect(overlay.selectedHiddenEdges.material.opacity).toBeLessThan(1);
+    expect(overlay.selectedEdges.material.linewidth).toBe(EDGE_SELECTED_WIDTH);
   });
 
-  it('lets an edge selected on a slow frame begin visibly, then land', () => {
+  it("lets an edge's x-ray twin begin visibly on a slow frame, then land", () => {
     const overlay = makeOverlay();
     // A software renderer draws one frame per ~400 ms while another
-    // animation keeps the loop running on real elapsed time. The tier's first
-    // step after a new target is capped, so the ramp is seen; the next frame
-    // advances by the real gap and lands it.
+    // animation keeps the loop running on real elapsed time. The twin's
+    // first step after a new target is capped, so its ramp is seen; the next
+    // frame advances by the real gap and lands it.
     overlay.setSelected([selection('edge-a')]);
     overlay.step(400);
-    expect(overlay.selectedEdges.material.opacity).toBeGreaterThan(0);
-    expect(overlay.selectedEdges.material.opacity).toBeLessThan(1);
+    const first = overlay.selectedHiddenEdges.material.opacity;
+    expect(first).toBeGreaterThan(0);
     overlay.step(400);
-    expect(overlay.selectedEdges.material.opacity).toBe(1);
+    expect(overlay.selectedHiddenEdges.material.opacity).toBeGreaterThan(first);
+    expect(overlay.step(400)).toBe(false);
   });
 
-  it("ramps a selected face's rim in rather than popping to full width", () => {
+  it("cuts a selected face's rim on and off, easing only its x-ray twin", () => {
     const overlay = makeOverlay();
-    const idleWidth = overlay.idleEdges.material.linewidth;
 
     overlay.setSelectedFaceBoundary(101);
-    // The rim is the widest tier at 6 px, so landing it in one frame is the
-    // loudest of the three pops.
     expect(
       overlay.selectedFaceBoundaryEdges.geometry.instanceCount
     ).toBeGreaterThan(0);
+    expect(overlay.selectedFaceBoundaryEdges.visible).toBe(true);
+    expect(overlay.selectedFaceBoundaryEdges.material.opacity).toBe(1);
     expect(overlay.selectedFaceBoundaryEdges.material.linewidth).toBe(
-      idleWidth
+      SELECTION_SEMANTICS.selected.boundaryWidth
     );
-    expect(overlay.selectedFaceBoundaryEdges.material.opacity).toBe(0);
-
-    overlay.step(16);
-    const midWidth = overlay.selectedFaceBoundaryEdges.material.linewidth;
-    expect(midWidth).toBeGreaterThan(idleWidth);
+    expect(overlay.selectedFaceBoundaryHiddenEdges.material.opacity).toBe(0);
 
     settle(overlay);
-    expect(
-      overlay.selectedFaceBoundaryEdges.material.linewidth
-    ).toBeGreaterThan(midWidth);
-    expect(overlay.selectedFaceBoundaryEdges.material.opacity).toBe(1);
-    expect(overlay.selectedFaceBoundaryEdges.visible).toBe(true);
+    expect(overlay.selectedFaceBoundaryHiddenEdges.visible).toBe(true);
 
     overlay.setSelectedFaceBoundary(null);
-    // Same hold as the selected tier: dropping the rim's positions on the
-    // clearing frame would make its fade-out invisible.
+    // The rim itself is gone on the same frame; its twin behind the solid
+    // keeps the positions until its fade-out has played.
+    expect(overlay.selectedFaceBoundaryEdges.visible).toBe(false);
+    expect(overlay.selectedFaceBoundaryEdges.material.opacity).toBe(0);
+    expect(overlay.selectedFaceBoundaryHiddenEdges.visible).toBe(true);
     expect(
-      overlay.selectedFaceBoundaryEdges.geometry.instanceCount
+      overlay.selectedFaceBoundaryHiddenEdges.geometry.instanceCount
     ).toBeGreaterThan(0);
     settle(overlay);
-    expect(overlay.selectedFaceBoundaryEdges.visible).toBe(false);
+    expect(overlay.selectedFaceBoundaryHiddenEdges.visible).toBe(false);
     expect(overlay.selectedFaceBoundaryEdges.geometry.instanceCount).toBe(0);
   });
 
-  it('holds the selected geometry until its fade-out finishes', () => {
+  it('cuts the selected line off but holds its geometry for the x-ray fade-out', () => {
     const overlay = makeOverlay();
     overlay.setSelected([selection('edge-a')]);
     settle(overlay);
 
     overlay.setSelected([]);
-    // Dropping the positions on the clearing frame would make the ramp
-    // invisible — the tier has to outlive the selection it is fading out.
-    expect(overlay.selectedEdges.geometry.instanceCount).toBeGreaterThan(0);
-    expect(overlay.selectedEdges.visible).toBe(true);
+    expect(overlay.selectedEdges.visible).toBe(false);
+    expect(overlay.selectedEdges.material.opacity).toBe(0);
+    // Dropping the positions on the clearing frame would make the twin's
+    // fade-out invisible: the tier has to outlive the selection it is losing.
+    expect(overlay.selectedHiddenEdges.visible).toBe(true);
+    expect(overlay.selectedHiddenEdges.geometry.instanceCount).toBeGreaterThan(
+      0
+    );
 
     settle(overlay);
-    expect(overlay.selectedEdges.material.opacity).toBe(0);
-    expect(overlay.selectedEdges.visible).toBe(false);
+    expect(overlay.selectedHiddenEdges.material.opacity).toBe(0);
+    expect(overlay.selectedHiddenEdges.visible).toBe(false);
     expect(overlay.selectedEdges.geometry.instanceCount).toBe(0);
+  });
+
+  it('lets go of a cleared tier at once when its twin has nothing to fade', () => {
+    const overlay = makeOverlay();
+    overlay.setSelected([selection('edge-a')]);
+    // Deselected before any frame ran: the twin never rose, so there is no
+    // fade-out to hold geometry for, and nothing to keep the loop awake.
+    overlay.setSelected([]);
+    expect(overlay.selectedEdges.geometry.instanceCount).toBe(0);
+    expect(overlay.selectedEdges.visible).toBe(false);
+    expect(overlay.selectedHiddenEdges.visible).toBe(false);
+    expect(overlay.step(16)).toBe(false);
   });
 
   it('does not draw a sentinel for filtered or unknown selections', () => {
@@ -341,9 +356,9 @@ describe('BodyEdgeOverlay', () => {
 
     expect(overlay.setSelectedFaceBoundary(101)).toBe(true);
     overlay.setDisplayMode('shaded');
-    // Both tiers ramp, so settle with an edge selected too — otherwise the
-    // width comparison below reads against an idle-width selected tier and
-    // stops saying anything about the rim being the wider of the two.
+    // Select an edge too — otherwise the width comparison below reads
+    // against an idle-width selected tier and stops saying anything about
+    // the rim being the wider of the two.
     overlay.setSelected([selection('edge-a')]);
     settle(overlay);
 
@@ -483,7 +498,8 @@ function largeOverlay(edgeCount: number, pointCount: number) {
  * `Mesh` declares does not typecheck.
  */
 function instanceCountOf(line: THREE.Object3D): number {
-  const geometry = (line as THREE.Mesh).geometry as THREE.InstancedBufferGeometry;
+  const geometry = (line as THREE.Mesh)
+    .geometry as THREE.InstancedBufferGeometry;
   return geometry.instanceCount;
 }
 
