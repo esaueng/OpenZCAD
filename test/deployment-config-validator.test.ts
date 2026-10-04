@@ -123,7 +123,7 @@ describe('deployment configuration preflight', () => {
       readFileSync('wrangler.jsonc', 'utf8')
     ).config as ReturnType<typeof hostedConfig>;
     const options = {
-      target: 'official',
+      target: 'official' as const,
       originUrl: 'https://github.com/esaueng/OpenZCAD.git',
       environment: {
         GITHUB_ACTIONS: 'true',
