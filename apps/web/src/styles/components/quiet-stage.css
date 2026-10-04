@@ -1042,7 +1042,7 @@
   background: var(--color-surface);
   border-radius: var(--radius-sm);
   font-family: var(--font-mono);
-  font-size: 9px;
+  font-size: 10px;
   line-height: 12px;
   text-align: center;
   font-variant-numeric: tabular-nums;
@@ -1650,8 +1650,8 @@ button.command-rail:disabled {
   background: var(--color-surface);
   border-radius: var(--radius-sm);
   font-family: var(--font-mono);
-  font-size: 8px;
-  line-height: 11px;
+  font-size: 10px;
+  line-height: 12px;
   letter-spacing: 0.04em;
 }
 
@@ -1908,22 +1908,35 @@ button.command-rail:disabled {
 }
 
 /* The flyouts beside the rail: the selected entity's editor, then the
-   palette (overview and settings), each its own island. */
+   palette (overview and settings), each its own island. Their width is a
+   variable so the circle strip can stand clear of them. */
+.workspace-column {
+  /* At most the room between the rail and the right lane (the relations and
+     the instrument rail): a fixed 272px ran under both on a phone, where the
+     editor's Apply took Equal's clicks. */
+  --sketch-flyout-w: min(
+    272px,
+    calc(100vw - var(--lane-end) - var(--rail-w) - var(--island-gap) * 2)
+  );
+}
+
 .sketch-flyouts {
   position: absolute;
   top: 0;
   left: calc(100% + var(--island-gap));
-  /* At most the room between the rail and the right lane (the relations and
-     the instrument rail): a fixed 272px ran under both on a phone, where the
-     editor's Apply took Equal's clicks. */
-  width: min(
-    272px,
-    calc(100vw - var(--lane-end) - var(--rail-w) - var(--island-gap) * 2)
-  );
+  width: var(--sketch-flyout-w);
   display: flex;
   flex-direction: column;
   gap: var(--island-gap);
   pointer-events: none;
+}
+
+/* An open flyout takes the strip's place beside the rail; the strip moves
+   past it rather than covering its header. */
+.viewer-area
+  .workspace-column-float:has(.sketch-flyouts > *)
+  .sketch-type-strip {
+  left: calc(100% + var(--island-gap) * 2 + var(--sketch-flyout-w));
 }
 
 .sketch-flyouts > * {

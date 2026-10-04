@@ -1201,12 +1201,15 @@
 .sketch-palette label {
   display: flex;
   align-items: center;
-  gap: 7px;
+  gap: 8px;
   color: var(--color-text-muted);
-  font-size: var(--fs-xs);
+  font-size: var(--fs-sm);
 }
 
 .sketch-palette input[type='checkbox'] {
+  width: 15px;
+  height: 15px;
+  margin: 0;
   accent-color: var(--color-accent);
 }
 
