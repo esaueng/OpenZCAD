@@ -652,3 +652,233 @@ describe('bounded progressive gestures', () => {
     expect(failures).toEqual([]);
   });
 });
+
+describe('the rebuild in flight', () => {
+  it('stays readable until it settles, even after the gesture released', async () => {
+    const running = deferred();
+    const { preview, published } = makePreview({
+      derive: () => running.promise
+    });
+    expect(preview.running).toBeNull();
+
+    preview.request(5);
+    const inFlight = preview.running;
+    expect(inFlight?.value).toBe(5);
+    expect(inFlight?.document).toEqual({ value: 5 });
+
+    // Release invalidates the frame for publishing, not for a commit that
+    // wants the same edit's result.
+    preview.stop();
+    expect(preview.running).toBe(inFlight);
+    running.resolve('derived');
+    await expect(inFlight!.result).resolves.toBe('derived');
+    await settle();
+
+    expect(preview.running).toBeNull();
+    expect(published).toEqual([]);
+  });
+
+  it('is the newest started frame, not the newest requested value', async () => {
+    const first = deferred();
+    const { preview } = makePreview({ derive: () => first.promise });
+    preview.request(1);
+    preview.request(2);
+    preview.request(3);
+    // 2 and 3 are queued behind the frame for 1; only 1 has a rebuild.
+    expect(preview.running?.value).toBe(1);
+    preview.stop();
+    first.resolve('derived');
+    await settle();
+    expect(preview.running).toBeNull();
+  });
+});
+
+describe('slow gestures wait for the hand to rest', () => {
+  function slowPreview(options: {
+    expectedFrameMs?: () => number | undefined;
+    frameMs: number;
+    onDegrade?: () => void;
+  }) {
+    const starts: { at: number; value: number }[] = [];
+    const preview = new LivePreview<Doc, string>({
+      build: (value) => {
+        starts.push({ at: Date.now(), value });
+        return { value };
+      },
+      derive: async () => {
+        await new Promise((resolve) => setTimeout(resolve, options.frameMs));
+        return 'derived';
+      },
+      publish: () => undefined,
+      publishIntermediate: true,
+      continueAfterSlow: true,
+      minIntervalMs: 100,
+      slowFrameMs: 400,
+      slowSettleMs: 300,
+      now: () => Date.now(),
+      ...(options.expectedFrameMs
+        ? { expectedFrameMs: options.expectedFrameMs }
+        : {}),
+      ...(options.onDegrade ? { onDegrade: options.onDegrade } : {})
+    });
+    return { preview, starts };
+  }
+
+  it('starts no rebuild while a body known to be slow is still moving', async () => {
+    vi.useFakeTimers();
+    try {
+      let degrades = 0;
+      const { preview, starts } = slowPreview({
+        expectedFrameMs: () => 12_000,
+        frameMs: 12_000,
+        onDegrade: () => {
+          degrades += 1;
+        }
+      });
+      for (let value = 1; value <= 20; value += 1) {
+        preview.request(value);
+        await vi.advanceTimersByTimeAsync(16);
+      }
+      // Told once, before any frame, that geometry will lag the hand.
+      expect(preview.degraded).toBe(true);
+      expect(degrades).toBe(1);
+      // Released straight out of motion: nothing is rebuilding ahead of the
+      // commit, so the release's own rebuild is the only one.
+      preview.stop();
+      expect(preview.running).toBeNull();
+      await vi.advanceTimersByTimeAsync(1_000);
+      expect(starts).toEqual([]);
+      preview.clear();
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it('previews the value the hand rests on, measured from its newest move', async () => {
+    vi.useFakeTimers();
+    try {
+      const { preview, starts } = slowPreview({
+        expectedFrameMs: () => 12_000,
+        frameMs: 12_000
+      });
+      const begin = Date.now();
+      preview.request(1);
+      await vi.advanceTimersByTimeAsync(200);
+      // A pause shorter than the settle is still motion.
+      preview.request(2);
+      await vi.advanceTimersByTimeAsync(299);
+      expect(starts).toEqual([]);
+      await vi.advanceTimersByTimeAsync(1);
+      expect(starts).toEqual([{ at: begin + 500, value: 2 }]);
+      expect(preview.degraded).toBe(true);
+      expect(preview.running?.value).toBe(2);
+      preview.clear();
+      await vi.runAllTimersAsync();
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it('keeps rebuilding at once after a slow frame it found on its own', async () => {
+    // One slow frame is as often a cold kernel as a slow body: without a
+    // prediction the gesture streams as before rather than making the hand
+    // rest for frames that may well be fast.
+    vi.useFakeTimers();
+    try {
+      const { preview, starts } = slowPreview({ frameMs: 2_000 });
+      const begin = Date.now();
+      preview.request(1);
+      expect(starts).toEqual([{ at: begin, value: 1 }]);
+      for (let value = 2; value <= 10; value += 1) {
+        await vi.advanceTimersByTimeAsync(250);
+        preview.request(value);
+      }
+      // The slow frame landed at 2000 while the hand kept moving; the newest
+      // value (9, requested the same instant) started after the bounded
+      // presentation yield, not after a rest.
+      expect(preview.degraded).toBe(true);
+      expect(starts).toEqual([
+        { at: begin, value: 1 },
+        { at: begin + 2_008, value: 9 }
+      ]);
+      preview.clear();
+      await vi.runAllTimersAsync();
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it('stops making the hand rest once a predicted-slow body rebuilds in budget', async () => {
+    vi.useFakeTimers();
+    try {
+      const { preview, starts } = slowPreview({
+        expectedFrameMs: () => 12_000,
+        frameMs: 50
+      });
+      const begin = Date.now();
+      preview.request(1);
+      await vi.advanceTimersByTimeAsync(300);
+      expect(starts).toEqual([{ at: begin + 300, value: 1 }]);
+      await vi.advanceTimersByTimeAsync(50);
+      // The prediction was stale: the next value streams without a rest.
+      preview.request(2);
+      await vi.advanceTimersByTimeAsync(50);
+      expect(starts).toEqual([
+        { at: begin + 300, value: 1 },
+        { at: begin + 400, value: 2 }
+      ]);
+      // Still reported degraded once: the chip clears when it catches up.
+      expect(preview.degraded).toBe(true);
+      preview.clear();
+      await vi.runAllTimersAsync();
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it('starts at once when the last measured frame was within budget', async () => {
+    vi.useFakeTimers();
+    try {
+      let degrades = 0;
+      const { preview, starts } = slowPreview({
+        expectedFrameMs: () => 120,
+        frameMs: 120,
+        onDegrade: () => {
+          degrades += 1;
+        }
+      });
+      const begin = Date.now();
+      preview.request(1);
+      expect(starts).toEqual([{ at: begin, value: 1 }]);
+      expect(degrades).toBe(0);
+      preview.clear();
+      await vi.runAllTimersAsync();
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it('re-arms with the next gesture and asks the prediction again', async () => {
+    vi.useFakeTimers();
+    try {
+      let expected: number | undefined = 12_000;
+      const { preview, starts } = slowPreview({
+        expectedFrameMs: () => expected,
+        frameMs: 50
+      });
+      preview.request(1);
+      expect(preview.degraded).toBe(true);
+      preview.clear();
+      expect(preview.degraded).toBe(false);
+      // The body got faster (or another body is armed): no settle.
+      expected = 50;
+      const begin = Date.now();
+      preview.request(2);
+      expect(starts).toEqual([{ at: begin, value: 2 }]);
+      preview.clear();
+      await vi.runAllTimersAsync();
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+});
