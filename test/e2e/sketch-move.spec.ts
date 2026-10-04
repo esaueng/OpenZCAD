@@ -1,0 +1,253 @@
+import { type Locator, type Page } from '@playwright/test';
+import { bareCanvasDrags, expect, stubApi, test } from './openzcad-fixtures';
+
+/**
+ * Sketch objects move by dragging their grab point: a circle by its centre,
+ * text by its baseline origin, with the same snaps a new point gets. The
+ * release commits through the entity editor's own path, so the editor's
+ * fields are the stored values these tests read; Escape mid-drag drops the
+ * drag and nothing else.
+ */
+
+const CIRCLE_DRAG_PX = 30;
+
+async function openTopSketch(page: Page, name: string) {
+  await stubApi(page);
+  await page.setViewportSize({ width: 1280, height: 720 });
+  await page.goto('/');
+  await page.getByLabel('Project name').fill(name);
+  await page.getByRole('button', { name: 'Create project' }).click();
+  await page.getByRole('button', { name: /^Sketch \(S\)/ }).click();
+  await page.getByRole('button', { name: 'Top (XY)' }).click();
+  await expect(page.locator('.sketch-rail')).toBeVisible();
+  return page.getByRole('toolbar', { name: 'Sketch tools' });
+}
+
+/**
+ * Draws one circle per slot. The rail button flips before the viewport owns
+ * the tool; the adaptive grid readout is written from the render pass that
+ * has the sketch rig, so a gesture made after it lands on the plane.
+ */
+async function drawCircles(
+  page: Page,
+  sketchTools: Locator,
+  centers: readonly { x: number; y: number }[]
+) {
+  const circleTool = sketchTools.getByRole('button', { name: /^Circle/ });
+  const gridReadout = page.locator('.viewport-dock-grid');
+  for (const [index, center] of centers.entries()) {
+    await circleTool.click();
+    await expect(circleTool).toHaveAttribute('aria-pressed', 'true');
+    await expect(gridReadout).toBeVisible();
+    await expect(gridReadout).not.toHaveText('');
+    await page.mouse.move(center.x, center.y);
+    await page.mouse.down();
+    await page.mouse.move(center.x + CIRCLE_DRAG_PX, center.y, { steps: 6 });
+    await page.mouse.up();
+    await expect(page.getByRole('contentinfo')).toContainText(
+      index === 0 ? 'Sketch 01 started.' : 'Added circle.'
+    );
+  }
+  await sketchTools.getByRole('button', { name: /^Select/ }).click();
+}
+
+/** Selects a circle by its rim and returns its stored centre. */
+async function selectCircle(page: Page, center: { x: number; y: number }) {
+  await page.mouse.click(center.x + CIRCLE_DRAG_PX, center.y);
+  const editor = page.getByRole('form', { name: 'Edit circle' });
+  await expect(editor).toBeVisible();
+  return {
+    editor,
+    x: await editor.getByLabel('Center X').inputValue(),
+    y: await editor.getByLabel('Center Y').inputValue()
+  };
+}
+
+/**
+ * Where the selected object's grab dot is drawn. The dot is placed by the
+ * render loop, so waiting for it proves a frame with the selection was drawn
+ * — a plain timeout would prove nothing.
+ */
+async function grabHandleCenter(page: Page) {
+  const handle = page.locator('.sketch-grab-handle');
+  await expect(handle).toBeVisible();
+  const box = await handle.boundingBox();
+  expect(box).not.toBeNull();
+  return { x: box!.x + box!.width / 2, y: box!.y + box!.height / 2 };
+}
+
+test('dragging a circle by its centre snaps it onto another centre', async ({
+  page
+}) => {
+  test.setTimeout(90_000);
+  const sketchTools = await openTopSketch(page, 'Sketch Move Circle');
+  const [first, second] = await bareCanvasDrags(page, {
+    count: 2,
+    dragX: CIRCLE_DRAG_PX
+  });
+  await drawCircles(page, sketchTools, [first!, second!]);
+
+  const target = await selectCircle(page, second!);
+  const moved = await selectCircle(page, first!);
+  expect(`${moved.x},${moved.y}`).not.toBe(`${target.x},${target.y}`);
+
+  const handle = await grabHandleCenter(page);
+  await page.mouse.move(handle.x, handle.y);
+  await page.mouse.down();
+  // A few pixels short of the other centre: the snap, not the pointer,
+  // decides where the centre lands.
+  await page.mouse.move(second!.x + 3, second!.y - 2, { steps: 12 });
+  await expect(page.locator('.sketch-grab-handle')).toHaveAttribute(
+    'data-active',
+    'true'
+  );
+  const marker = page.locator('.sketch-snap-marker');
+  await expect(marker).toBeVisible();
+  await expect(marker).toHaveAttribute('data-label', 'Center');
+  await page.mouse.up();
+
+  await expect(page.getByRole('contentinfo')).toContainText('Moved circle.');
+  // The editor re-keys on the document version, so its fields are the
+  // stored centre, and the selection survived the drag.
+  await expect(moved.editor.getByLabel('Center X')).toHaveValue(target.x);
+  await expect(moved.editor.getByLabel('Center Y')).toHaveValue(target.y);
+});
+
+test('dragging a text origin moves it, and its ring turns it', async ({
+  page
+}) => {
+  test.setTimeout(90_000);
+  const sketchTools = await openTopSketch(page, 'Sketch Move Text');
+  const [circleCenter, textPoint] = await bareCanvasDrags(page, {
+    count: 2,
+    dragX: CIRCLE_DRAG_PX
+  });
+  await drawCircles(page, sketchTools, [circleCenter!]);
+  const target = await selectCircle(page, circleCenter!);
+
+  await sketchTools.getByRole('button', { name: /^Text/ }).click();
+  await page.mouse.click(textPoint!.x, textPoint!.y);
+  const editor = page.getByRole('form', { name: 'Edit text' });
+  await expect(editor).toBeVisible();
+  const placed = {
+    x: await editor.getByLabel('X', { exact: true }).inputValue(),
+    y: await editor.getByLabel('Y', { exact: true }).inputValue()
+  };
+  expect(`${placed.x},${placed.y}`).not.toBe(`${target.x},${target.y}`);
+
+  const origin = await grabHandleCenter(page);
+  await page.mouse.move(origin.x, origin.y);
+  await page.mouse.down();
+  await page.mouse.move(circleCenter!.x - 2, circleCenter!.y + 3, {
+    steps: 12
+  });
+  await page.mouse.up();
+  await expect(page.getByRole('contentinfo')).toContainText('Moved text.');
+  await expect(editor.getByLabel('X', { exact: true })).toHaveValue(target.x);
+  await expect(editor.getByLabel('Y', { exact: true })).toHaveValue(target.y);
+
+  // The ring sits around the origin; a quarter turn counter-clockwise on
+  // screen is +90° on the top plane.
+  const ring = page.locator('.sketch-rotate-ring');
+  await expect(ring).toBeVisible();
+  const ringBox = await ring.boundingBox();
+  expect(ringBox).not.toBeNull();
+  const ringCenter = {
+    x: ringBox!.x + ringBox!.width / 2,
+    y: ringBox!.y + ringBox!.height / 2
+  };
+  const radius = ringBox!.width / 2 - 1;
+  await page.mouse.move(ringCenter.x + radius, ringCenter.y);
+  await page.mouse.down();
+  for (let step = 1; step <= 12; step += 1) {
+    const angle = (step / 12) * (Math.PI / 2);
+    await page.mouse.move(
+      ringCenter.x + radius * Math.cos(angle),
+      ringCenter.y - radius * Math.sin(angle)
+    );
+  }
+  await page.mouse.up();
+  await expect(page.getByRole('contentinfo')).toContainText('Rotated text.');
+  await expect(editor.getByLabel('Rotation')).toHaveValue('90');
+  // Turning is not moving: the origin stayed on the centre.
+  await expect(editor.getByLabel('X', { exact: true })).toHaveValue(target.x);
+  await expect(editor.getByLabel('Y', { exact: true })).toHaveValue(target.y);
+});
+
+test('Escape mid-drag restores the circle and keeps it selected', async ({
+  page
+}) => {
+  test.setTimeout(90_000);
+  const sketchTools = await openTopSketch(page, 'Sketch Move Escape');
+  const [center] = await bareCanvasDrags(page, {
+    count: 1,
+    dragX: CIRCLE_DRAG_PX
+  });
+  await drawCircles(page, sketchTools, [center!]);
+  const before = await selectCircle(page, center!);
+
+  const handle = await grabHandleCenter(page);
+  await page.mouse.move(handle.x, handle.y);
+  await page.mouse.down();
+  await page.mouse.move(handle.x + 60, handle.y + 40, { steps: 10 });
+  const grab = page.locator('.sketch-grab-handle');
+  await expect(grab).toHaveAttribute('data-active', 'true');
+  // The preview really moved before Escape takes it back.
+  const dragged = await grab.boundingBox();
+  expect(dragged!.x + dragged!.width / 2).toBeGreaterThan(handle.x + 30);
+
+  await page.keyboard.press('Escape');
+  await page.mouse.up();
+
+  // One press cancels the drag only: the object and its editor stay, at
+  // the stored centre, and nothing was written.
+  await expect(grab).toHaveAttribute('data-active', 'false');
+  await expect(before.editor).toBeVisible();
+  await expect(before.editor.getByLabel('Center X')).toHaveValue(before.x);
+  await expect(before.editor.getByLabel('Center Y')).toHaveValue(before.y);
+  await expect(page.getByRole('contentinfo')).not.toContainText(
+    'Moved circle.'
+  );
+  await expect
+    .poll(async () => {
+      const box = await grab.boundingBox();
+      return box ? Math.round(box.x + box.width / 2 - handle.x) : null;
+    })
+    .toBe(0);
+
+  // The release after Escape was swallowed rather than read as a click on
+  // empty canvas, so the next Escape is the one that deselects.
+  await page.keyboard.press('Escape');
+  await expect(before.editor).toBeHidden();
+});
+
+test('a press away from the grab point does not move the selection', async ({
+  page
+}) => {
+  test.setTimeout(90_000);
+  const sketchTools = await openTopSketch(page, 'Sketch Move Off Handle');
+  const [center] = await bareCanvasDrags(page, {
+    count: 1,
+    dragX: CIRCLE_DRAG_PX
+  });
+  await drawCircles(page, sketchTools, [center!]);
+  const before = await selectCircle(page, center!);
+
+  // Between the centre and the rim is neither the grab point nor the curve:
+  // the press keeps meaning what it meant before, and the circle stays put.
+  const handle = await grabHandleCenter(page);
+  const start = { x: handle.x - CIRCLE_DRAG_PX / 2, y: handle.y };
+  await page.mouse.move(start.x, start.y);
+  await page.mouse.down();
+  await page.mouse.move(start.x - 50, start.y + 30, { steps: 8 });
+  await expect(page.locator('.sketch-grab-handle')).toHaveAttribute(
+    'data-active',
+    'false'
+  );
+  await page.mouse.up();
+  await expect(page.getByRole('contentinfo')).not.toContainText(
+    'Moved circle.'
+  );
+  await expect(before.editor.getByLabel('Center X')).toHaveValue(before.x);
+  await expect(before.editor.getByLabel('Center Y')).toHaveValue(before.y);
+});

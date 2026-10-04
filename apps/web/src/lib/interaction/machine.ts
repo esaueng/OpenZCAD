@@ -109,6 +109,23 @@ export interface PendingSketchEdit {
   picks: string[];
 }
 
+/**
+ * How a selected sketch object is being dragged: `translate` by its grab
+ * point (circle, rectangle and polygon centre, text baseline origin, or any
+ * point on a line or arc), `rotate` by the ring around a text origin.
+ */
+export type SketchMoveHandle = 'translate' | 'rotate';
+
+/**
+ * A drag-move of the selected sketch object. Only the lifecycle lives here;
+ * the per-frame position stays in the viewport so a drag costs no React
+ * render, exactly like the direct-edit handles.
+ */
+export interface SketchMoveSession {
+  objectId: string;
+  handle: SketchMoveHandle;
+}
+
 export interface SketchSessionState {
   /** Null until the first entity commit creates the sketch node. */
   sketchId: string | null;
@@ -123,6 +140,12 @@ export interface SketchSessionState {
   pendingConstraint: PendingSketchConstraint | null;
   /** Armed modify tool, if any; picking routes here instead of select. */
   pendingEdit: PendingSketchEdit | null;
+  /**
+   * The selected object's drag-move, while the pointer holds it. Absent
+   * otherwise; a release commits it and Escape cancels it, and neither
+   * clears the selection.
+   */
+  moving?: SketchMoveSession;
 }
 
 export type OperationPhase =
@@ -220,6 +243,13 @@ export type InteractionEvent =
   | { type: 'sketch-constraint-pick'; pick: SketchConstraintPick }
   | { type: 'sketch-edit-tool'; kind: SketchEditToolKind | null }
   | { type: 'sketch-edit-pick'; objectId: string }
+  | {
+      type: 'sketch-move-start';
+      objectId: string;
+      handle: SketchMoveHandle;
+    }
+  | { type: 'sketch-move-commit' }
+  | { type: 'sketch-move-cancel' }
   | { type: 'exit-sketch' }
   | { type: 'escape' }
   | { type: 'clear' }
@@ -265,6 +295,7 @@ export function escapeTarget(
 ):
   | 'close-keypad'
   | 'cancel-drag'
+  | 'cancel-move'
   | 'end-drawing'
   | 'exit-drawing-tool'
   | 'cancel-constraint'
@@ -277,6 +308,11 @@ export function escapeTarget(
     return 'none';
   }
   if (state.mode === 'sketch') {
+    // A held object drag is the innermost rung of all: one press drops the
+    // drag and keeps the object selected, like a held handle elsewhere.
+    if (state.session.moving) {
+      return 'cancel-move';
+    }
     if (state.session.drawing) {
       return 'end-drawing';
     }
@@ -309,6 +345,37 @@ export function escapeTarget(
 }
 
 export function interactionReducer(
+  state: InteractionState,
+  event: InteractionEvent
+): InteractionState {
+  return settleSketchMove(reduceInteraction(state, event));
+}
+
+/**
+ * A sketch move belongs to the selected object under the Select tool. Any
+ * event that leaves that state — another tool, another selection, a pick
+ * sequence, a drawing gesture — ends the move with it, so a stale move can
+ * never outlive the selection it was dragging.
+ */
+function settleSketchMove(state: InteractionState): InteractionState {
+  if (state.mode !== 'sketch' || !state.session.moving) {
+    return state;
+  }
+  const session = state.session;
+  if (
+    session.tool === 'select' &&
+    !session.drawing &&
+    !session.pendingConstraint &&
+    !session.pendingEdit &&
+    session.selectedObjectId === session.moving?.objectId
+  ) {
+    return state;
+  }
+  const { moving: _ended, ...rest } = session;
+  return { ...state, session: rest };
+}
+
+function reduceInteraction(
   state: InteractionState,
   event: InteractionEvent
 ): InteractionState {
@@ -596,6 +663,41 @@ export function interactionReducer(
             }
           }
         : state;
+    case 'sketch-move-start': {
+      if (state.mode !== 'sketch') {
+        return state;
+      }
+      const session = state.session;
+      // Only the selected object, under Select, with nothing else in flight:
+      // a press anywhere else keeps meaning what it meant before.
+      if (
+        session.tool !== 'select' ||
+        session.drawing ||
+        session.pendingConstraint ||
+        session.pendingEdit ||
+        session.moving ||
+        session.selectedObjectId !== event.objectId
+      ) {
+        return state;
+      }
+      return {
+        ...state,
+        session: {
+          ...session,
+          moving: { objectId: event.objectId, handle: event.handle }
+        }
+      };
+    }
+    case 'sketch-move-commit':
+    case 'sketch-move-cancel': {
+      // Both end the drag and keep the selection: the commit itself runs
+      // through the entity-edit path, and a cancel restores in the viewport.
+      if (state.mode !== 'sketch' || !state.session.moving) {
+        return state;
+      }
+      const { moving: _ended, ...session } = state.session;
+      return { ...state, session };
+    }
     case 'exit-sketch':
       return state.mode === 'sketch' ? IDLE : state;
     case 'escape': {
@@ -604,6 +706,8 @@ export function interactionReducer(
           return interactionReducer(state, { type: 'keypad-close' });
         case 'cancel-drag':
           return interactionReducer(state, { type: 'reset-value' });
+        case 'cancel-move':
+          return interactionReducer(state, { type: 'sketch-move-cancel' });
         case 'end-drawing':
           return interactionReducer(state, {
             type: 'sketch-drawing',
@@ -965,6 +1069,16 @@ export function toolCardFor(state: InteractionState): ToolCardModel | null {
         ...lifecycleHint(state, 'Drag the region to pull it into a solid.')
       };
     case 'sketch':
+      if (state.session.moving) {
+        return {
+          icon,
+          title,
+          hint:
+            state.session.moving.handle === 'rotate'
+              ? 'Release to set the rotation · Esc cancels the drag.'
+              : 'Release to place · Shift frees snapping · Esc cancels the drag.'
+        };
+      }
       return {
         icon,
         title,

@@ -28,7 +28,13 @@ import {
   sketchContentFramePoints,
   sketchObjectFromDrag,
   snapSketchPoint,
-  snapTargetsForObject
+  snapTargetsForObject,
+  placeSketchObjectGrabPoint,
+  sketchObjectGrabPoint,
+  sketchObjectMovable,
+  sketchObjectRotatable,
+  textRotationFromRingDrag,
+  translateSketchObject
 } from './session';
 
 describe('snapSketchPoint / sketchObjectFromDrag', () => {
@@ -578,5 +584,135 @@ describe('sketchContentFramePoints', () => {
 
   it('returns no points for an empty sketch', () => {
     expect(sketchContentFramePoints([], resolve, PLANE_BASES.XY)).toEqual([]);
+  });
+});
+
+describe('sketch object drag-move helpers', () => {
+  const resolve = (value: unknown) => Number(value);
+  const circle: SketchObjectData = {
+    objectKind: 'circle',
+    radius: 5,
+    centerX: -15,
+    centerY: 20
+  };
+  const text: SketchObjectData = {
+    objectKind: 'text',
+    text: 'Boa',
+    fontFamily: 'open-sans',
+    fontStyle: 'regular',
+    size: 8,
+    x: 3,
+    y: 4
+  };
+  const line: SketchObjectData = {
+    objectKind: 'line',
+    x1: 0,
+    y1: 0,
+    x2: 10,
+    y2: 5
+  };
+
+  it('grabs closed shapes by their centre and text by its baseline origin', () => {
+    expect(sketchObjectGrabPoint(circle, resolve)).toEqual({ x: -15, y: 20 });
+    expect(
+      sketchObjectGrabPoint(
+        {
+          objectKind: 'rectangle',
+          width: 4,
+          height: 2,
+          centerX: 1,
+          centerY: 2
+        },
+        resolve
+      )
+    ).toEqual({ x: 1, y: 2 });
+    expect(
+      sketchObjectGrabPoint(
+        { objectKind: 'polygon', sides: 6, radius: 3, centerX: 7, centerY: 8 },
+        resolve
+      )
+    ).toEqual({ x: 7, y: 8 });
+    expect(sketchObjectGrabPoint(text, resolve)).toEqual({ x: 3, y: 4 });
+    // Lines and arcs are grabbed anywhere along the curve instead.
+    expect(sketchObjectGrabPoint(line, resolve)).toBeNull();
+  });
+
+  it('lands a grab point exactly on the snapped target', () => {
+    expect(placeSketchObjectGrabPoint(circle, { x: 0, y: 0 })).toEqual({
+      ...circle,
+      centerX: 0,
+      centerY: 0
+    });
+    expect(placeSketchObjectGrabPoint(text, { x: 12.5, y: -1 })).toEqual({
+      ...text,
+      x: 12.5,
+      y: -1
+    });
+  });
+
+  it('translates every position field and nothing else', () => {
+    expect(translateSketchObject(line, 2, -3, resolve)).toEqual({
+      objectKind: 'line',
+      x1: 2,
+      y1: -3,
+      x2: 12,
+      y2: 2
+    });
+    const arc: SketchObjectData = {
+      objectKind: 'arc',
+      centerX: 1,
+      centerY: 1,
+      radius: 4,
+      startAngleDeg: 0,
+      endAngleDeg: 90,
+      construction: true
+    };
+    expect(translateSketchObject(arc, 1, 1, resolve)).toEqual({
+      ...arc,
+      centerX: 2,
+      centerY: 2
+    });
+  });
+
+  it('refuses a drag that would overwrite an expression', () => {
+    expect(sketchObjectMovable(circle)).toBe(true);
+    expect(sketchObjectMovable({ ...circle, centerX: '12.5' })).toBe(true);
+    expect(sketchObjectMovable({ ...circle, centerX: 'offset * 2' })).toBe(
+      false
+    );
+    expect(sketchObjectMovable({ ...line, y2: 'height' })).toBe(false);
+    // A size expression is kept as written, so it does not block a move.
+    expect(sketchObjectMovable({ ...circle, radius: 'r' })).toBe(true);
+    expect(sketchObjectRotatable(text)).toBe(true);
+    expect(sketchObjectRotatable({ ...text, rotation: 30 })).toBe(true);
+    expect(sketchObjectRotatable({ ...text, rotation: 'angle' })).toBe(false);
+    expect(sketchObjectRotatable(circle)).toBe(false);
+  });
+
+  it('turns text by the angle the ring was dragged through', () => {
+    const origin = { x: 0, y: 0 };
+    // A quarter turn counter-clockwise from +X to +Y.
+    expect(
+      textRotationFromRingDrag(origin, { x: 10, y: 0 }, { x: 0, y: 10 }, 0)
+    ).toBe(90);
+    // Whole degrees unless free, normalised to (-180, 180].
+    expect(
+      textRotationFromRingDrag(origin, { x: 10, y: 0 }, { x: 10, y: 0.3 }, 0)
+    ).toBe(2);
+    expect(
+      textRotationFromRingDrag(
+        origin,
+        { x: 10, y: 0 },
+        { x: 10, y: 0.3 },
+        0,
+        true
+      )
+    ).toBeCloseTo(1.718, 3);
+    expect(
+      textRotationFromRingDrag(origin, { x: 10, y: 0 }, { x: -10, y: 0 }, 90)
+    ).toBe(-90);
+    expect(
+      textRotationFromRingDrag(origin, { x: 10, y: 0 }, { x: 0, y: -10 }, -90)
+    ).toBe(180);
   });
 });

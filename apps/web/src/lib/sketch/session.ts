@@ -972,3 +972,146 @@ export function centerInferenceSegments(
     ]
   ];
 }
+
+// ---------------------------------------------------------------------------
+// Drag-move of a committed object
+// ---------------------------------------------------------------------------
+
+/**
+ * Whether a stored value is a plain number a drag may overwrite. An
+ * expression (`width / 2`, a parameter name) is the user's intent, and a drag
+ * that wrote a number over it would cut the link without saying so; such an
+ * object keeps its exact-entry fields and offers no drag.
+ */
+function isLiteralNumber(value: unknown): boolean {
+  if (typeof value === 'number') {
+    return Number.isFinite(value);
+  }
+  return (
+    typeof value === 'string' &&
+    /^\s*[-+]?(\d+(\.\d*)?|\.\d+)([eE][-+]?\d+)?\s*$/.test(value)
+  );
+}
+
+/** The stored fields a translation rewrites, per object kind. */
+function positionFields(data: SketchObjectData): [string, string][] {
+  switch (data.objectKind) {
+    case 'line':
+      return [
+        ['x1', 'y1'],
+        ['x2', 'y2']
+      ];
+    case 'text':
+      return [['x', 'y']];
+    default:
+      return [['centerX', 'centerY']];
+  }
+}
+
+/** True when every position field is a literal number a drag can rewrite. */
+export function sketchObjectMovable(data: SketchObjectData): boolean {
+  const record = data as unknown as Record<string, unknown>;
+  return positionFields(data).every(
+    ([x, y]) => isLiteralNumber(record[x]) && isLiteralNumber(record[y])
+  );
+}
+
+/** True for a text object whose rotation is absent or a literal number. */
+export function sketchObjectRotatable(data: SketchObjectData): boolean {
+  return (
+    data.objectKind === 'text' &&
+    sketchObjectMovable(data) &&
+    (data.rotation === undefined || isLiteralNumber(data.rotation))
+  );
+}
+
+/**
+ * The one point a closed object is dragged by: the centre of a circle,
+ * rectangle or polygon, and the baseline origin of text — the same points
+ * `snapTargetsForObject` already offers. Lines and arcs have none; they are
+ * grabbed anywhere along the curve. Null too when a field cannot resolve.
+ */
+export function sketchObjectGrabPoint(
+  data: SketchObjectData,
+  resolve: (value: unknown) => number
+): SketchPoint | null {
+  try {
+    switch (data.objectKind) {
+      case 'circle':
+      case 'rectangle':
+      case 'polygon':
+        return { x: resolve(data.centerX), y: resolve(data.centerY) };
+      case 'text':
+        return { x: resolve(data.x), y: resolve(data.y) };
+      default:
+        return null;
+    }
+  } catch {
+    return null;
+  }
+}
+
+/**
+ * The object moved by (`dx`, `dy`). Sizes, angles and text attributes are
+ * kept as written; only the position fields change, so the result goes
+ * through the same entity-edit path the exact fields use.
+ */
+export function translateSketchObject(
+  data: SketchObjectData,
+  dx: number,
+  dy: number,
+  resolve: (value: unknown) => number
+): SketchObjectData {
+  const next = { ...data } as unknown as Record<string, unknown>;
+  for (const [x, y] of positionFields(data)) {
+    next[x] = resolve(next[x]) + dx;
+    next[y] = resolve(next[y]) + dy;
+  }
+  return next as unknown as SketchObjectData;
+}
+
+/**
+ * The object moved so its grab point lands exactly on `target`. Writing the
+ * target itself, rather than adding a delta to the old position, keeps a
+ * snapped centre bit-exact on the point it snapped to.
+ */
+export function placeSketchObjectGrabPoint(
+  data: SketchObjectData,
+  target: SketchPoint
+): SketchObjectData {
+  switch (data.objectKind) {
+    case 'circle':
+    case 'rectangle':
+    case 'polygon':
+      return { ...data, centerX: target.x, centerY: target.y };
+    case 'text':
+      return { ...data, x: target.x, y: target.y };
+    default:
+      return data;
+  }
+}
+
+/**
+ * Text rotation after dragging the ring from `from` to `to` about `origin`.
+ * Whole degrees unless `free` (Shift), normalised to (-180, 180] so the
+ * field reads the way a person would type it.
+ */
+export function textRotationFromRingDrag(
+  origin: SketchPoint,
+  from: SketchPoint,
+  to: SketchPoint,
+  startRotationDeg: number,
+  free = false
+): number {
+  const start = Math.atan2(from.y - origin.y, from.x - origin.x);
+  const end = Math.atan2(to.y - origin.y, to.x - origin.x);
+  let degrees = startRotationDeg + ((end - start) * 180) / Math.PI;
+  if (!free) {
+    degrees = Math.round(degrees);
+  }
+  degrees = ((((degrees + 180) % 360) + 360) % 360) - 180;
+  if (degrees === -180) {
+    degrees = 180;
+  }
+  return Object.is(degrees, -0) ? 0 : degrees;
+}

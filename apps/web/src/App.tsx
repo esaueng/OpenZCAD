@@ -12184,7 +12184,15 @@ export function App() {
     return executeTransaction(label, commands, derived);
   }
 
-  async function handleUpdateSketchEntity(data: SketchObjectData) {
+  /**
+   * Writes the selected entity's new data through the solver and the
+   * document's validation. Resolves true once the edit is committed, so a
+   * viewport drag that previewed it knows whether to let the preview go.
+   */
+  async function handleUpdateSketchEntity(
+    data: SketchObjectData,
+    verb: 'Edit' | 'Move' | 'Rotate' = 'Edit'
+  ): Promise<boolean> {
     const base = managerRef.current?.document;
     const current = interactionRef.current;
     if (
@@ -12195,7 +12203,7 @@ export function App() {
       sketchSolving ||
       geometryBusy
     )
-      return;
+      return false;
     const sketchId = current.session.sketchId as SketchId;
     const objectId = current.session.selectedObjectId as EntityId;
     const selected = base.nodes[objectId];
@@ -12220,13 +12228,19 @@ export function App() {
           base,
           sketchId,
           commands,
-          `Edit ${data.objectKind}`,
+          `${verb} ${data.objectKind}`,
           objectId
         )
       ) {
-        setStatus(`Updated ${data.objectKind} geometry.`);
+        setStatus(
+          verb === 'Edit'
+            ? `Updated ${data.objectKind} geometry.`
+            : `${verb === 'Move' ? 'Moved' : 'Rotated'} ${data.objectKind}.`
+        );
         setSketchSolveStatus(null);
+        return true;
       }
+      return false;
     } catch (error) {
       if (error instanceof FeatureBuildError) recordHistoryFailure(error, base);
       const message = errorMessage(
@@ -12240,6 +12254,7 @@ export function App() {
       )
         setSketchEditError(message);
       setStatus(message);
+      return false;
     } finally {
       setSketchSolving(false);
     }
@@ -18678,6 +18693,37 @@ export function App() {
             onSketchDrawingChange={(drawing) =>
               dispatchInteraction({ type: 'sketch-drawing', drawing })
             }
+            sketchMoveEnabled={
+              interaction.mode === 'sketch' &&
+              interaction.session.tool === 'select' &&
+              !interaction.session.pendingConstraint &&
+              !interaction.session.pendingEdit &&
+              !sketchSolving &&
+              !geometryBusy
+            }
+            onSketchMoveChange={(change) =>
+              dispatchInteraction(
+                change.phase === 'start'
+                  ? {
+                      type: 'sketch-move-start',
+                      objectId: change.objectId,
+                      handle: change.handle
+                    }
+                  : change.phase === 'commit'
+                    ? { type: 'sketch-move-commit' }
+                    : { type: 'sketch-move-cancel' }
+              )
+            }
+            onSketchMoveCommit={(objectId, data, handle) => {
+              const current = interactionRef.current;
+              return current.mode === 'sketch' &&
+                current.session.selectedObjectId === objectId
+                ? handleUpdateSketchEntity(
+                    data,
+                    handle === 'rotate' ? 'Rotate' : 'Move'
+                  )
+                : false;
+            }}
             onSketchSelectObject={(objectId, snapPoint, clickPoint) => {
               if (
                 handleSketchConstraintPick(

@@ -217,6 +217,13 @@ import {
   dimensionForInProgress,
   lineObjectFromPoints,
   nearestCenterGuideTarget,
+  placeSketchObjectGrabPoint,
+  sketchObjectGrabPoint,
+  sketchObjectMovable,
+  sketchObjectRotatable,
+  snapTargetsForObject,
+  textRotationFromRingDrag,
+  translateSketchObject,
   pointAtDistanceAlongDirection,
   resolveSketchSnap,
   screenRayToPlanePoint,
@@ -230,7 +237,10 @@ import {
   type SnapTarget,
   type SnapTargetKind
 } from '../lib/sketch/session';
-import type { SketchCircleMode } from '../lib/interaction/machine';
+import type {
+  SketchCircleMode,
+  SketchMoveHandle
+} from '../lib/interaction/machine';
 import type { PlaneBasis } from '@openzcad/geometry';
 import type { ParamValue, PlaneId, SketchObjectData } from '@openzcad/shared';
 import { buildPlanePickerRig } from './viewer/planePickerRig';
@@ -358,6 +368,74 @@ export interface SketchModeState {
   dimensions: SketchDimensionAnnotation[];
 }
 
+/**
+ * Screen radius, in CSS pixels, within which a press takes the selected
+ * object's grab point. Matches the drawn handle plus a finger's slack.
+ */
+const SKETCH_GRAB_RADIUS_PX = 11;
+/**
+ * The text rotation ring's radius and the half-width of the band a press
+ * must land in. The ring is drawn by `.sketch-rotate-ring` at this size.
+ */
+const SKETCH_ROTATE_RING_RADIUS_PX = 34;
+const SKETCH_ROTATE_RING_BAND_PX = 7;
+
+/** A held drag of the selected sketch object (see `sketchMoveRef`). */
+interface SketchMoveDrag {
+  pointerId: number;
+  objectId: string;
+  handle: SketchMoveHandle;
+  /** The stored data at press time; Escape and a refusal restore it. */
+  original: SketchObjectData;
+  /**
+   * The sketch point that follows the pointer: the object's grab point, or
+   * where a line or arc was pressed; for rotation, the press on the ring.
+   */
+  grab: SketchPoint;
+  /** True when `grab` is the object's own grab point and lands exactly. */
+  anchored: boolean;
+  /** The text origin a rotation turns about. */
+  origin: SketchPoint;
+  startRotation: number;
+  /** Snap candidates from every other object: an object never snaps to itself. */
+  targets: SnapTarget[];
+  /** The latest moved data, drawn in place of the stored object. */
+  preview: SketchObjectData | null;
+  /** False until the press travels past the click threshold. */
+  active: boolean;
+}
+
+/** Evaluates a sketch value in the session's parameter scope. */
+function sketchModeResolver(mode: SketchModeState) {
+  return (value: unknown) =>
+    evalParamValue(value as ParamValue, mode.parameterScope) ?? 0;
+}
+
+/**
+ * Draws the session's committed objects, with one object's data replaced
+ * while a drag previews it somewhere else.
+ */
+function drawSketchModeObjects(
+  rig: SketchModeRig,
+  mode: SketchModeState,
+  override: { objectId: string; data: SketchObjectData } | null
+) {
+  rig.setObjects(
+    override
+      ? mode.objects.map((object) =>
+          object.id === override.objectId
+            ? { id: object.id, data: override.data }
+            : object
+        )
+      : mode.objects,
+    mode.selectedObjectId,
+    sketchModeResolver(mode),
+    mode.constraintDiagnosticObjectIds,
+    mode.definedObjectIds,
+    mode.textOutlineBudgetError
+  );
+}
+
 /** Sketch curves + detected regions, rendered when direct manipulation is on. */
 /**
  * In-plane bounding-box center of a sketch's curves, lifted to world space.
@@ -470,7 +548,7 @@ export interface NormalToFaceRequest {
   nonce: number;
 }
 
-interface ModelViewerProps {
+export interface ModelViewerProps {
   parameterVisualPreview?: ParameterVisualPreview | null;
   bodies: BodyRepresentation[];
   sketches: SketchOverlay[];
@@ -715,6 +793,27 @@ interface ModelViewerProps {
   onMoveSketchDimension(id: string, offset: { x: number; y: number }): void;
   /** Mirrors chain/drag liveness into the interaction machine. */
   onSketchDrawingChange(drawing: boolean): void;
+  /**
+   * Whether a press on the selected object's grab point may drag it: false
+   * while a pick tool is armed or a solve or rebuild owns the sketch, so the
+   * press keeps meaning what it meant before.
+   */
+  sketchMoveEnabled?: boolean;
+  /** Mirrors a sketch object drag's lifecycle into the interaction machine. */
+  onSketchMoveChange?(
+    change:
+      | { phase: 'start'; objectId: string; handle: SketchMoveHandle }
+      | { phase: 'commit' | 'cancel' }
+  ): void;
+  /**
+   * A drag released: commit the moved object through the entity-edit path.
+   * Resolves false when the edit was refused, so the preview can let go.
+   */
+  onSketchMoveCommit?(
+    objectId: string,
+    data: SketchObjectData,
+    handle: SketchMoveHandle
+  ): Promise<boolean> | boolean;
   /** Selects a committed entity for exact-value editing. */
   onSketchSelectObject(
     objectId: string | null,
@@ -1541,6 +1640,9 @@ export function ModelViewer({
   onEditSketchDimension,
   onMoveSketchDimension,
   onSketchDrawingChange,
+  sketchMoveEnabled = false,
+  onSketchMoveChange,
+  onSketchMoveCommit,
   onSketchSelectObject,
   onSelectSketchProfile,
   onResizePrimitiveFace,
@@ -1786,6 +1888,28 @@ export function ModelViewer({
   onSketchDrawingChangeRef.current = onSketchDrawingChange;
   const onSketchSelectObjectRef = useRef(onSketchSelectObject);
   onSketchSelectObjectRef.current = onSketchSelectObject;
+  const sketchMoveEnabledRef = useRef(sketchMoveEnabled);
+  sketchMoveEnabledRef.current = sketchMoveEnabled;
+  const onSketchMoveChangeRef = useRef(onSketchMoveChange);
+  onSketchMoveChangeRef.current = onSketchMoveChange;
+  const onSketchMoveCommitRef = useRef(onSketchMoveCommit);
+  onSketchMoveCommitRef.current = onSketchMoveCommit;
+  /**
+   * The selected object's drag-move while the pointer holds it, and the
+   * moved data a released drag is waiting to see committed. Both live at
+   * component scope so the committed-objects effect, which re-runs on every
+   * machine change, draws the preview rather than snapping back to the
+   * stored position mid-gesture.
+   */
+  const sketchMoveRef = useRef<SketchMoveDrag | null>(null);
+  const sketchMoveCommitPendingRef = useRef<{
+    objectId: string;
+    data: SketchObjectData;
+    /** The stored data the drag started from; a change means it landed. */
+    original: SketchObjectData;
+  } | null>(null);
+  /** Drops a held sketch move, restoring the stored geometry. */
+  const cancelSketchMoveRef = useRef<(() => boolean) | null>(null);
   /** Live sketch rig + local gesture state (imperative, no re-renders). */
   const sketchRigRef = useRef<SketchModeRig | null>(null);
   const sketchGestureRef = useRef<{
@@ -2640,6 +2764,11 @@ export function ModelViewer({
     });
     topologyPickListRef.current = topologyPickList;
     let activeSketchSnap: SnapTarget | null = null;
+    /**
+     * The pointer whose sketch move Escape (or Enter) already ended. Its
+     * release still arrives, and must not read as a selection click.
+     */
+    let suppressedSketchReleaseId: number | null = null;
     let sketchSnapCycle = 0;
     let latestSketchPointerEvent: PointerEvent | null = null;
     /**
@@ -2730,6 +2859,23 @@ export function ModelViewer({
           event.stopPropagation();
           return;
         }
+      }
+      if (
+        sketchMoveRef.current &&
+        (event.key === 'Escape' || event.key === 'Enter')
+      ) {
+        // A held object drag owns both keys, as a held handle does: Escape
+        // drops the drag and keeps the selection, Enter places it here.
+        // Neither reaches the workspace, whose Escape would climb the
+        // sketch ladder a rung further than the one press asked for.
+        if (event.key === 'Escape') {
+          cancelSketchMove();
+        } else if (!commitSketchMove()) {
+          return;
+        }
+        event.preventDefault();
+        event.stopPropagation();
+        return;
       }
       if (handleSketchNumericKey(event)) {
         return;
@@ -3038,6 +3184,16 @@ export function ModelViewer({
       sketchCenterTarget.appendChild(line);
     }
     sketchCenterTargetRef.current = sketchCenterTarget;
+
+    // The selected object's drag handles: a grab dot on the point a press
+    // moves it by, and for text a ring that turns it. Positioned from the
+    // render loop, so they track the camera and the drag preview alike.
+    const sketchGrabHandle = hud.create('sketch-grab-handle', {
+      ariaHidden: true
+    });
+    const sketchRotateRing = hud.create('sketch-rotate-ring', {
+      ariaHidden: true
+    });
 
     // Exact entry drives the same preview the drag does.
     offsetSetterRef.current = (value: number) => {
@@ -5388,7 +5544,10 @@ export function ModelViewer({
     }
 
     /** Sketch-local point under the cursor: entity snap, then grid snap. */
-    function sketchPointAt(event: PointerEvent): SketchPoint | null {
+    function sketchPointAt(
+      event: PointerEvent,
+      targets: readonly SnapTarget[] = snapTargetsRef.current
+    ): SketchPoint | null {
       const mode = sketchModeRef.current;
       if (!mode) {
         return null;
@@ -5414,7 +5573,7 @@ export function ModelViewer({
       if (mode.geometrySnapEnabled) {
         const resolved = resolveSketchSnap(
           point,
-          snapTargetsRef.current,
+          targets,
           mode.snapTolerancePx * sketchWorldPerPixel(mode.basis.origin),
           {
             lockedId: activeSketchSnap?.id,
@@ -5774,6 +5933,44 @@ export function ModelViewer({
       return true;
     }
 
+    /**
+     * Center discovery guides: the dashed axes through the nearest exact
+     * centre and its beacon, shown before the snap engages. Shared by the
+     * drawing tools and the object drag, so a moved centre finds its
+     * destination the same way a new one does.
+     */
+    function showSketchCenterInference(
+      point: SketchPoint,
+      targets: readonly SnapTarget[]
+    ) {
+      const mode = sketchModeRef.current;
+      const rig = sketchRigRef.current;
+      if (!mode || !rig) {
+        return;
+      }
+      const worldPerPixel = sketchWorldPerPixel(mode.basis.origin);
+      const discoveryRadiusPx = Math.max(mode.snapTolerancePx * 6, 48);
+      const centerTarget = nearestCenterGuideTarget(
+        point,
+        targets,
+        discoveryRadiusPx * worldPerPixel
+      );
+      if (centerTarget) {
+        const halfSpan =
+          worldPerPixel *
+          Math.max(
+            renderer.domElement.clientWidth,
+            renderer.domElement.clientHeight
+          ) *
+          0.65;
+        rig.setInference(centerInferenceSegments(centerTarget, halfSpan));
+        positionSketchCenterTarget(
+          centerTarget,
+          activeSketchSnap?.id === centerTarget.id
+        );
+      }
+    }
+
     function updateSketchInProgress(event: PointerEvent) {
       const mode = sketchModeRef.current;
       const rig = sketchRigRef.current;
@@ -5788,27 +5985,7 @@ export function ModelViewer({
       rig.setInference(null);
       sketchCenterTarget.hidden = true;
       if (mode.tool !== 'select' && mode.inferenceEnabled && !event.shiftKey) {
-        const worldPerPixel = sketchWorldPerPixel(mode.basis.origin);
-        const discoveryRadiusPx = Math.max(mode.snapTolerancePx * 6, 48);
-        const centerTarget = nearestCenterGuideTarget(
-          point,
-          snapTargetsRef.current,
-          discoveryRadiusPx * worldPerPixel
-        );
-        if (centerTarget) {
-          const halfSpan =
-            worldPerPixel *
-            Math.max(
-              renderer.domElement.clientWidth,
-              renderer.domElement.clientHeight
-            ) *
-            0.65;
-          rig.setInference(centerInferenceSegments(centerTarget, halfSpan));
-          positionSketchCenterTarget(
-            centerTarget,
-            activeSketchSnap?.id === centerTarget.id
-          );
-        }
+        showSketchCenterInference(point, snapTargetsRef.current);
       }
       if (
         mode.tool === 'circle' &&
@@ -5944,6 +6121,377 @@ export function ModelViewer({
       }
     }
 
+    /** Plane point under the pointer with no snapping at all. */
+    function rawSketchPointAt(event: PointerEvent): SketchPoint | null {
+      const mode = sketchModeRef.current;
+      if (!mode) {
+        return null;
+      }
+      setRayFromEvent(event);
+      return screenRayToPlanePoint(
+        context.raycaster.ray.origin,
+        context.raycaster.ray.direction,
+        mode.basis
+      );
+    }
+
+    /** The selected object, when a press on it may start a drag-move. */
+    function movableSketchSelection(): {
+      mode: SketchModeState;
+      id: string;
+      data: SketchObjectData;
+    } | null {
+      const mode = sketchModeRef.current;
+      if (
+        !mode ||
+        !sketchMoveEnabledRef.current ||
+        mode.tool !== 'select' ||
+        mode.drawing ||
+        !mode.selectedObjectId
+      ) {
+        return null;
+      }
+      const object = mode.objects.find(
+        (candidate) => candidate.id === mode.selectedObjectId
+      );
+      if (!object || !sketchObjectMovable(object.data)) {
+        return null;
+      }
+      return { mode, id: object.id, data: object.data };
+    }
+
+    /**
+     * A press on the selected object's grab point (or its text ring, or
+     * anywhere along a selected line or arc) arms a drag-move. The drag only
+     * starts once the press travels: a press that stays put is still the
+     * click it always was.
+     */
+    function beginSketchMove(event: PointerEvent): boolean {
+      const selection = movableSketchSelection();
+      const press = rawSketchPointAt(event);
+      if (!selection || !press) {
+        return false;
+      }
+      const { mode, id, data } = selection;
+      const resolve = sketchModeResolver(mode);
+      const perPixel = sketchWorldPerPixel(mode.basis.origin);
+      const grabPoint = sketchObjectGrabPoint(data, resolve);
+      let handle: SketchMoveHandle | null = null;
+      let grab: SketchPoint | null = null;
+      let anchored = false;
+      if (grabPoint) {
+        const distancePx =
+          Math.hypot(press.x - grabPoint.x, press.y - grabPoint.y) / perPixel;
+        if (distancePx <= SKETCH_GRAB_RADIUS_PX) {
+          handle = 'translate';
+          grab = grabPoint;
+          anchored = true;
+        } else if (
+          sketchObjectRotatable(data) &&
+          Math.abs(distancePx - SKETCH_ROTATE_RING_RADIUS_PX) <=
+            SKETCH_ROTATE_RING_BAND_PX
+        ) {
+          handle = 'rotate';
+          grab = press;
+        }
+      } else if (data.objectKind === 'line' || data.objectKind === 'arc') {
+        setRayFromEvent(event);
+        const hitId = sketchRigRef.current?.pickObject(
+          context.raycaster,
+          worldPerPixelAt(
+            new THREE.Vector3(
+              mode.basis.origin.x,
+              mode.basis.origin.y,
+              mode.basis.origin.z
+            )
+          ) * 8
+        );
+        if (hitId === id) {
+          // Grabbed along the curve. A press near one of its own points
+          // takes that point exactly, so an endpoint dragged onto another
+          // snap lands on it rather than a few pixels off.
+          const own = resolveSketchSnap(
+            press,
+            snapTargetsForObject(data, resolve, id),
+            mode.snapTolerancePx * perPixel
+          );
+          handle = 'translate';
+          grab = own ? { x: own.target.x, y: own.target.y } : press;
+        }
+      }
+      if (!handle || !grab) {
+        return false;
+      }
+      let targets: SnapTarget[];
+      try {
+        targets = collectSketchSnapTargets(
+          mode.objects.filter((object) => object.id !== id),
+          resolve
+        );
+      } catch {
+        targets = [{ id: 'sketch-origin', x: 0, y: 0, kind: 'origin' }];
+      }
+      sketchMoveRef.current = {
+        pointerId: event.pointerId,
+        objectId: id,
+        handle,
+        original: data,
+        grab,
+        anchored,
+        origin: grabPoint ?? grab,
+        startRotation:
+          data.objectKind === 'text' ? resolve(data.rotation ?? 0) : 0,
+        targets,
+        preview: null,
+        active: false
+      };
+      gestures.capture(event, 'grabbing');
+      event.preventDefault();
+      return true;
+    }
+
+    function updateSketchMove(event: PointerEvent) {
+      const drag = sketchMoveRef.current;
+      const mode = sketchModeRef.current;
+      const rig = sketchRigRef.current;
+      if (!drag || !mode || !rig) {
+        return;
+      }
+      if (!drag.active) {
+        if (!gestures.hasMoved(event)) {
+          return;
+        }
+        drag.active = true;
+        rig.setProfiles([], false);
+        onSketchMoveChangeRef.current?.({
+          phase: 'start',
+          objectId: drag.objectId,
+          handle: drag.handle
+        });
+      }
+      const resolve = sketchModeResolver(mode);
+      rig.setInference(null);
+      sketchCenterTarget.hidden = true;
+      if (drag.handle === 'rotate') {
+        const to = rawSketchPointAt(event);
+        if (!to) {
+          return;
+        }
+        const rotation = textRotationFromRingDrag(
+          drag.origin,
+          drag.grab,
+          to,
+          drag.startRotation,
+          event.shiftKey
+        );
+        drag.preview = { ...drag.original, rotation } as SketchObjectData;
+        positionSketchDimLabel(event, `${formatNumber(rotation)}°`, false);
+      } else {
+        const snapped = sketchPointAt(event, drag.targets);
+        if (!snapped) {
+          return;
+        }
+        let point = snapped;
+        const raw = rawSketchPointAt(event);
+        if (
+          !drag.anchored &&
+          !activeSketchSnap &&
+          mode.snapStep &&
+          !event.shiftKey &&
+          raw
+        ) {
+          // A curve grabbed between its points has no point of its own on
+          // the grid, so the grid steps its travel instead: a line that was
+          // on the grid stays on it.
+          const step = mode.snapStep;
+          point = {
+            x: drag.grab.x + Math.round((raw.x - drag.grab.x) / step) * step,
+            y: drag.grab.y + Math.round((raw.y - drag.grab.y) / step) * step
+          };
+        }
+        if (mode.inferenceEnabled && !event.shiftKey) {
+          // An exact snap wins; without one the move infers horizontal or
+          // vertical travel from where the drag began, as a line does from
+          // its anchor.
+          if (!activeSketchSnap) {
+            const locked = axisLockPoint(drag.grab, point);
+            point = locked.point;
+            if (locked.lockedAxis) {
+              rig.setInference([[drag.grab, point]]);
+              positionSketchSnapMarker(event, locked.lockedAxis);
+            }
+          }
+          showSketchCenterInference(point, drag.targets);
+        }
+        drag.preview = drag.anchored
+          ? placeSketchObjectGrabPoint(drag.original, point)
+          : translateSketchObject(
+              drag.original,
+              point.x - drag.grab.x,
+              point.y - drag.grab.y,
+              resolve
+            );
+        const readout = drag.anchored
+          ? `X ${formatNumber(point.x)} · Y ${formatNumber(point.y)}`
+          : `ΔX ${formatNumber(point.x - drag.grab.x)} · ΔY ${formatNumber(point.y - drag.grab.y)}`;
+        positionSketchDimLabel(event, `${readout} ${unitsRef.current}`, false);
+      }
+      drawSketchModeObjects(
+        rig,
+        mode,
+        drag.preview ? { objectId: drag.objectId, data: drag.preview } : null
+      );
+      requestRender();
+    }
+
+    /**
+     * Ends a sketch move. A commit hands the moved data to the entity-edit
+     * path and keeps drawing it until that edit answers; a cancel, an
+     * unchanged drop or a refused edit draws the stored geometry again.
+     */
+    function finishSketchMove(drag: SketchMoveDrag, commit: boolean) {
+      if (sketchMoveRef.current === drag) {
+        sketchMoveRef.current = null;
+      }
+      hideSketchDimLabel();
+      hideSketchSnapMarker();
+      sketchCenterTarget.hidden = true;
+      sketchRigRef.current?.setInference(null);
+      activeSketchSnap = null;
+      const preview = drag.preview;
+      const changed =
+        preview !== null &&
+        JSON.stringify(preview) !== JSON.stringify(drag.original);
+      if (drag.active) {
+        onSketchMoveChangeRef.current?.({
+          phase: commit && changed ? 'commit' : 'cancel'
+        });
+      }
+      const redraw = () => {
+        const mode = sketchModeRef.current;
+        const rig = sketchRigRef.current;
+        if (mode && rig) {
+          drawSketchModeObjects(rig, mode, null);
+          rig.setProfiles(mode.profiles, true);
+        }
+        requestRender();
+      };
+      if (!commit || !changed || !drag.active || !preview) {
+        redraw();
+        return;
+      }
+      const pending = {
+        objectId: drag.objectId,
+        data: preview,
+        original: drag.original
+      };
+      sketchMoveCommitPendingRef.current = pending;
+      const settle = (accepted: boolean) => {
+        if (sketchMoveCommitPendingRef.current !== pending) {
+          return;
+        }
+        sketchMoveCommitPendingRef.current = null;
+        // An accepted edit changes the document, and the objects effect
+        // draws the result when it lands; redrawing here would flash the
+        // old position for a frame first.
+        if (!accepted) {
+          redraw();
+        }
+      };
+      try {
+        const result = onSketchMoveCommitRef.current?.(
+          drag.objectId,
+          preview,
+          drag.handle
+        );
+        if (result instanceof Promise) {
+          result.then(settle, () => settle(false));
+        } else {
+          settle(result === true);
+        }
+      } catch {
+        settle(false);
+      }
+      requestRender();
+    }
+
+    /**
+     * Retires a held sketch move without committing it. The release that
+     * follows is swallowed, so it cannot read as a selection click.
+     */
+    function cancelSketchMove(): boolean {
+      const drag = sketchMoveRef.current;
+      if (!drag) {
+        return false;
+      }
+      suppressedSketchReleaseId = drag.pointerId;
+      gestures.release(drag.pointerId, '');
+      finishSketchMove(drag, false);
+      return true;
+    }
+    cancelSketchMoveRef.current = cancelSketchMove;
+
+    /** Commits a held sketch move where it is now, as a release would. */
+    function commitSketchMove(): boolean {
+      const drag = sketchMoveRef.current;
+      if (!drag?.active) {
+        return false;
+      }
+      suppressedSketchReleaseId = drag.pointerId;
+      gestures.release(drag.pointerId, '');
+      finishSketchMove(drag, true);
+      return true;
+    }
+
+    /** Places the grab dot and text ring on the selected object, per frame. */
+    function positionSketchMoveHandles() {
+      const selection = movableSketchSelection();
+      const drag = sketchMoveRef.current;
+      const pending = sketchMoveCommitPendingRef.current;
+      const data = selection
+        ? ((drag?.objectId === selection.id ? drag.preview : null) ??
+          (pending?.objectId === selection.id ? pending.data : null) ??
+          selection.data)
+        : null;
+      const grab =
+        selection && data
+          ? sketchObjectGrabPoint(data, sketchModeResolver(selection.mode))
+          : null;
+      if (!selection || !grab) {
+        sketchGrabHandle.hidden = true;
+        sketchRotateRing.hidden = true;
+        return;
+      }
+      const basis = selection.mode.basis;
+      const screen = projectToScreen(
+        new THREE.Vector3(
+          basis.origin.x + basis.u.x * grab.x + basis.v.x * grab.y,
+          basis.origin.y + basis.u.y * grab.x + basis.v.y * grab.y,
+          basis.origin.z + basis.u.z * grab.x + basis.v.z * grab.y
+        ),
+        context.activeCamera,
+        renderer.domElement.clientWidth,
+        renderer.domElement.clientHeight
+      );
+      if (!screen) {
+        sketchGrabHandle.hidden = true;
+        sketchRotateRing.hidden = true;
+        return;
+      }
+      sketchGrabHandle.dataset.active = String(
+        drag?.active === true && drag.handle === 'translate'
+      );
+      hud.showAt(sketchGrabHandle, screen.x, screen.y);
+      if (sketchObjectRotatable(selection.data)) {
+        sketchRotateRing.dataset.active = String(
+          drag?.active === true && drag.handle === 'rotate'
+        );
+        hud.showAt(sketchRotateRing, screen.x, screen.y);
+      } else {
+        sketchRotateRing.hidden = true;
+      }
+    }
+
     const applyPointerMove = (event: PointerEvent) => {
       if (import.meta.env.OZ_PERF === '1') {
         const scope = window as typeof window & { __ozDragApplies?: number };
@@ -5954,6 +6502,14 @@ export function ModelViewer({
         return;
       }
       if (sketchModeRef.current) {
+        if (
+          sketchMoveRef.current &&
+          sketchMoveRef.current.pointerId === event.pointerId
+        ) {
+          event.preventDefault();
+          updateSketchMove(event);
+          return;
+        }
         if (event.buttons === 0 || event.buttons === 1) {
           updateSketchInProgress(event);
         }
@@ -6265,6 +6821,7 @@ export function ModelViewer({
         return 'band';
       }
       return (moveDrag !== null && moveDrag.pointerId === pointerId) ||
+        sketchMoveRef.current?.pointerId === pointerId ||
         (offsetDrag !== null && offsetDrag.pointerId === pointerId) ||
         (cylinderRadiusDrag !== null &&
           cylinderRadiusDrag.pointerId === pointerId) ||
@@ -6442,6 +6999,11 @@ export function ModelViewer({
         return;
       }
       if (sketchModeRef.current && event.button === 0) {
+        // A press on the selected object's grab point is a move, never an
+        // orbit; anywhere else falls through to what a press always did.
+        if (beginSketchMove(event)) {
+          return;
+        }
         const mode = sketchModeRef.current;
         const gesture = sketchGestureRef.current;
         const point = sketchPointAt(event);
@@ -6783,6 +7345,23 @@ export function ModelViewer({
         return;
       }
       if (sketchModeRef.current && event.button === 0) {
+        if (suppressedSketchReleaseId === event.pointerId) {
+          // Escape or Enter already ended this press's move.
+          suppressedSketchReleaseId = null;
+          gestures.release(event, null);
+          return;
+        }
+        const sketchMove = sketchMoveRef.current;
+        if (sketchMove && sketchMove.pointerId === event.pointerId) {
+          if (sketchMove.active) {
+            gestures.release(event, null);
+            finishSketchMove(sketchMove, true);
+            return;
+          }
+          // The press never travelled: it is the selection click it would
+          // have been without a grab point under it.
+          sketchMoveRef.current = null;
+        }
         const mode = sketchModeRef.current;
         const rig = sketchRigRef.current;
         const gesture = sketchGestureRef.current;
@@ -7122,6 +7701,14 @@ export function ModelViewer({
     };
     const handlePointerCancel = (event: PointerEvent) => {
       pendingHoverEvent = null;
+      if (sketchMoveRef.current?.pointerId === event.pointerId) {
+        const drag = sketchMoveRef.current;
+        gestures.release(event, '');
+        finishSketchMove(drag, false);
+      }
+      if (suppressedSketchReleaseId === event.pointerId) {
+        suppressedSketchReleaseId = null;
+      }
       // A cancelled gesture discards its pending position rather than
       // applying it: the drag is being abandoned, not completed.
       if (pendingDragEvent && pendingDragEvent.pointerId === event.pointerId) {
@@ -7398,9 +7985,12 @@ export function ModelViewer({
           now,
           reducedMotionRef.current === true
         );
+        positionSketchMoveHandles();
       } else {
         sketchGridReadoutRef?.current?.(null);
         sketchGridIndicator.hidden = true;
+        sketchGrabHandle.hidden = true;
+        sketchRotateRing.hidden = true;
       }
 
       // Preselection and selection overlays ease toward their targets.
@@ -7795,6 +8385,9 @@ export function ModelViewer({
       sketchDimLabelRef.current = null;
       sketchSnapMarkerRef.current = null;
       sketchCenterTargetRef.current = null;
+      sketchMoveRef.current = null;
+      sketchMoveCommitPendingRef.current = null;
+      cancelSketchMoveRef.current = null;
       offsetSetterRef.current = null;
       cancelDirectManipulationRef.current = null;
       openExactEntryRef.current = null;
@@ -9830,10 +10423,26 @@ export function ModelViewer({
     context.requestRender();
   }, [sketchMode, bodies]);
 
+  // The drag handles appear and go with this flag; draw a frame for it.
+  useEffect(() => {
+    contextRef.current?.requestRender();
+  }, [sketchMoveEnabled]);
+
   // Committed sketch entities re-render after every entity commit.
   useEffect(() => {
     const context = contextRef.current;
     const rig = sketchRigRef.current;
+    // A move outlives nothing that owned it: leaving the sketch, the Select
+    // tool or the selection drops the drag where it started.
+    const heldMove = sketchMoveRef.current;
+    if (
+      heldMove &&
+      (!sketchMode ||
+        sketchMode.tool !== 'select' ||
+        sketchMode.selectedObjectId !== heldMove.objectId)
+    ) {
+      cancelSketchMoveRef.current?.();
+    }
     if (!context || !rig || !sketchMode) {
       snapTargetsRef.current = [];
       setSketchSnapRefusal(null);
@@ -9841,15 +10450,32 @@ export function ModelViewer({
     }
     const resolve = (value: unknown) =>
       evalParamValue(value as ParamValue, sketchMode.parameterScope) ?? 0;
-    rig.setObjects(
-      sketchMode.objects,
-      sketchMode.selectedObjectId,
-      resolve,
-      sketchMode.constraintDiagnosticObjectIds,
-      sketchMode.definedObjectIds,
-      sketchMode.textOutlineBudgetError
+    // The machine changes when a drag starts and when it is released, and
+    // each change lands here; keep drawing the moved object rather than its
+    // stored position until the edit it became has answered.
+    const move = sketchMoveRef.current;
+    let pendingMove = sketchMoveCommitPendingRef.current;
+    if (
+      pendingMove &&
+      sketchMode.objects.find((object) => object.id === pendingMove?.objectId)
+        ?.data !== pendingMove.original
+    ) {
+      // The edit has landed (or the object is gone): the document is the
+      // truth again, solver adjustments and all.
+      sketchMoveCommitPendingRef.current = null;
+      pendingMove = null;
+    }
+    drawSketchModeObjects(
+      rig,
+      sketchMode,
+      move?.preview
+        ? { objectId: move.objectId, data: move.preview }
+        : pendingMove
     );
-    rig.setProfiles(sketchMode.profiles, true);
+    // The region fills are the stored profiles; while an object is dragged
+    // (or its move is still being committed) they would mark where it was,
+    // so they wait for the document to catch up.
+    rig.setProfiles(sketchMode.profiles, !move?.active && !pendingMove);
     rig.setDiagnostics(sketchMode.diagnosticPoints);
     try {
       snapTargetsRef.current = collectSketchSnapTargets(
