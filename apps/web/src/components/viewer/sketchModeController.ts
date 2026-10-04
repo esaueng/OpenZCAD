@@ -107,6 +107,13 @@ export interface SketchModeRig {
     definedObjectIds?: readonly string[],
     textBudgetError?: string | null
   ): void;
+  /**
+   * Draws one object somewhere else while it is dragged, leaving every other
+   * object's render resources in place: only the preview is rebuilt per
+   * frame, and the stored object is hidden until `setObjects` or a null
+   * call restores it. Null ends the preview.
+   */
+  setPreviewObject(objectId: string | null, data?: SketchObjectData): void;
   /** Updates the adaptive sketch-local grid and returns its minor spacing. */
   setGrid(worldPerPixel: number, visible: boolean): number;
   /** Closed profiles derived from the canonical sketch objects. */
@@ -342,6 +349,12 @@ export function buildSketchModeRig(
   committedGroup.name = 'sketch-committed';
   group.add(committedGroup);
 
+  // A dragged object's stand-in. Rebuilt per pointer frame on its own, so a
+  // drag in a large sketch never rebuilds everyone else's lines and glyphs.
+  const previewGroup = new THREE.Group();
+  previewGroup.name = 'sketch-move-preview';
+  group.add(previewGroup);
+
   const profileGroup = new THREE.Group();
   profileGroup.name = 'sketch-profiles';
   group.add(profileGroup);
@@ -450,6 +463,196 @@ export function buildSketchModeRig(
     }
   };
 
+  interface CommittedState {
+    objects: { id: string; data: SketchObjectData }[];
+    selectedObjectId: string | null;
+    resolve: (value: unknown) => number;
+    diagnosticIds: ReadonlySet<string>;
+    definedIds: ReadonlySet<string>;
+    textBudgetError: string | null;
+  }
+  let committed: CommittedState | null = null;
+  /** The object a preview stands in for; hidden from the committed draw. */
+  let previewedId: string | null = null;
+
+  const objectColor = (
+    state: CommittedState,
+    id: string,
+    construction: boolean
+  ) =>
+    committedSketchColor({
+      diagnostic: state.diagnosticIds.has(id),
+      selected: id === state.selectedObjectId,
+      defined: state.definedIds.has(id),
+      construction
+    });
+
+  /**
+   * One object's pick proxies and fat lines, added to `container`; its snap
+   * dots are appended to the shared buffers. Tagged with the object id so a
+   * preview can hide exactly this object's lines.
+   */
+  const appendObject = (
+    container: THREE.Group,
+    state: CommittedState,
+    object: { id: string; data: SketchObjectData },
+    dotPositions: number[],
+    dotColors: number[]
+  ) => {
+    const diagnostic = state.diagnosticIds.has(object.id);
+    const construction = object.data.construction === true;
+    const color = objectColor(state, object.id, construction);
+    const opacity = diagnostic ? 1 : construction ? 0.72 : 0.95;
+    // One object can draw several runs — a text object is one loop per
+    // glyph region plus one per counter.
+    let polylines: SketchObjectPolyline[];
+    try {
+      polylines = objectPolylines(object.data, state.resolve);
+    } catch {
+      return;
+    }
+    for (const polyline of polylines) {
+      if (polyline.points.length < 2) {
+        continue;
+      }
+      const vertices = polyline.points.map((point) => liftPoint(basis, point));
+      // The native line stays on as an invisible pick proxy. Line2 raycasts
+      // against a screen-space threshold whereas pickObject's caller supplies
+      // a world-unit radius, so keeping it leaves selection behaviour exactly
+      // as it was. Both are siblings: an invisible parent would hide the
+      // visual with it.
+      const geometry = new THREE.BufferGeometry().setFromPoints(vertices);
+      const pickProxy = polyline.closed
+        ? new THREE.LineLoop(geometry, new THREE.LineBasicMaterial())
+        : new THREE.Line(geometry, new THREE.LineBasicMaterial());
+      pickProxy.visible = false;
+      pickProxy.frustumCulled = false;
+      pickProxy.userData.sketchObjectId = object.id;
+      pickProxy.userData.pickProxy = true;
+      container.add(pickProxy);
+
+      const visual = createFatLine(vertices, {
+        color,
+        linewidth: SKETCH_LINE_WIDTH,
+        opacity,
+        depthTest: true,
+        closed: polyline.closed,
+        resolution: resolution()
+      });
+      if (object.data.construction) {
+        visual.material.dashed = true;
+        visual.material.dashSize = 1.4;
+        visual.material.gapSize = 1;
+      }
+      visual.renderOrder = VIEWPORT_RENDER_ORDER.ACTIVE_SKETCH;
+      visual.frustumCulled = false;
+      visual.raycast = () => undefined; // the proxy is the only pick target
+      visual.userData.sketchObjectId = object.id;
+      container.add(visual);
+    }
+    // The constraint-schema snap points wear the object's own colour,
+    // so the defined-state tint covers points with no second code path.
+    // Dots never pick: the proxy lines above stay the only pick targets.
+    try {
+      const dotColor = new THREE.Color(color);
+      for (const marker of sketchObjectMarkerPoints(
+        object.data,
+        state.resolve
+      )) {
+        const lifted = liftPoint(basis, marker);
+        dotPositions.push(lifted.x, lifted.y, lifted.z);
+        dotColors.push(dotColor.r, dotColor.g, dotColor.b);
+      }
+    } catch {
+      // Unresolvable values: the polylines above already skipped the
+      // object, so its points stay out too.
+    }
+  };
+
+  const appendDots = (
+    container: THREE.Group,
+    dotPositions: number[],
+    dotColors: number[]
+  ) => {
+    if (dotPositions.length === 0) {
+      return;
+    }
+    const dotsGeometry = new THREE.BufferGeometry();
+    dotsGeometry.setAttribute(
+      'position',
+      new THREE.Float32BufferAttribute(dotPositions, 3)
+    );
+    dotsGeometry.setAttribute(
+      'color',
+      new THREE.Float32BufferAttribute(dotColors, 3)
+    );
+    const dots = new THREE.Points(
+      dotsGeometry,
+      new THREE.PointsMaterial({
+        size: SKETCH_POINT_SIZE,
+        sizeAttenuation: false,
+        vertexColors: true,
+        depthTest: true,
+        depthWrite: false,
+        transparent: true,
+        opacity: 0.95
+      })
+    );
+    dots.name =
+      container === committedGroup
+        ? 'sketch-snap-points'
+        : 'sketch-preview-points';
+    dots.renderOrder = VIEWPORT_RENDER_ORDER.ACTIVE_SKETCH;
+    dots.frustumCulled = false;
+    dots.raycast = () => undefined;
+    container.add(dots);
+  };
+
+  /**
+   * The committed dots, less the previewed object's. Every object's dots
+   * share one buffer, so hiding one object's means rebuilding the buffer —
+   * marker points only, no polylines or glyph layout — once per preview,
+   * not per frame.
+   */
+  const rebuildCommittedDots = (
+    state: CommittedState,
+    skipId: string | null
+  ) => {
+    const existing = committedGroup.getObjectByName('sketch-snap-points');
+    if (existing instanceof THREE.Points) {
+      committedGroup.remove(existing);
+      (existing.geometry as THREE.BufferGeometry).dispose();
+      (existing.material as THREE.Material).dispose();
+    }
+    const positions: number[] = [];
+    const colors: number[] = [];
+    const dotColor = new THREE.Color();
+    for (const object of displayObjectsWithTextBudget(
+      state.objects,
+      state.textBudgetError
+    )) {
+      if (object.id === skipId) {
+        continue;
+      }
+      try {
+        dotColor.set(
+          objectColor(state, object.id, object.data.construction === true)
+        );
+        for (const marker of sketchObjectMarkerPoints(
+          object.data,
+          state.resolve
+        )) {
+          const lifted = liftPoint(basis, marker);
+          positions.push(lifted.x, lifted.y, lifted.z);
+          colors.push(dotColor.r, dotColor.g, dotColor.b);
+        }
+      } catch {
+        // As in `appendObject`: an unresolvable object draws no dots.
+      }
+    }
+    appendDots(committedGroup, positions, colors);
+  };
+
   return {
     group,
     setObjects(
@@ -461,114 +664,83 @@ export function buildSketchModeRig(
       textBudgetError = null
     ) {
       disposeChildren(committedGroup);
-      const diagnosticIds = new Set(diagnosticObjectIds);
-      const definedIds = new Set(definedObjectIds);
+      disposeChildren(previewGroup);
+      previewedId = null;
+      const state: CommittedState = {
+        objects,
+        selectedObjectId,
+        resolve,
+        diagnosticIds: new Set(diagnosticObjectIds),
+        definedIds: new Set(definedObjectIds),
+        textBudgetError
+      };
+      committed = state;
       const dotPositions: number[] = [];
       const dotColors: number[] = [];
-      const dotColor = new THREE.Color();
       for (const object of displayObjectsWithTextBudget(
         objects,
         textBudgetError
       )) {
-        const diagnostic = diagnosticIds.has(object.id);
-        const construction = object.data.construction === true;
-        const color = committedSketchColor({
-          diagnostic,
-          selected: object.id === selectedObjectId,
-          defined: definedIds.has(object.id),
-          construction
-        });
-        const opacity = diagnostic ? 1 : construction ? 0.72 : 0.95;
-        // One object can draw several runs — a text object is one loop per
-        // glyph region plus one per counter.
-        let polylines: SketchObjectPolyline[];
-        try {
-          polylines = objectPolylines(object.data, resolve);
-        } catch {
-          continue;
+        appendObject(committedGroup, state, object, dotPositions, dotColors);
+      }
+      appendDots(committedGroup, dotPositions, dotColors);
+    },
+    setPreviewObject(objectId, data) {
+      const state = committed;
+      if (!state) {
+        return;
+      }
+      if (objectId === null || !data) {
+        if (previewedId !== null) {
+          disposeChildren(previewGroup);
+          for (const child of committedGroup.children) {
+            if (
+              child.userData.sketchObjectId === previewedId &&
+              child.userData.pickProxy !== true
+            ) {
+              child.visible = true;
+            }
+          }
+          rebuildCommittedDots(state, null);
+          previewedId = null;
         }
-        for (const polyline of polylines) {
-          if (polyline.points.length < 2) {
+        return;
+      }
+      if (previewedId !== objectId) {
+        // First frame of this preview: hide the stored object once.
+        for (const child of committedGroup.children) {
+          if (child.userData.pickProxy === true) {
             continue;
           }
-          const vertices = polyline.points.map((point) =>
-            liftPoint(basis, point)
-          );
-          // The native line stays on as an invisible pick proxy. Line2 raycasts
-          // against a screen-space threshold whereas pickObject's caller supplies
-          // a world-unit radius, so keeping it leaves selection behaviour exactly
-          // as it was. Both are siblings: an invisible parent would hide the
-          // visual with it.
-          const geometry = new THREE.BufferGeometry().setFromPoints(vertices);
-          const pickProxy = polyline.closed
-            ? new THREE.LineLoop(geometry, new THREE.LineBasicMaterial())
-            : new THREE.Line(geometry, new THREE.LineBasicMaterial());
-          pickProxy.visible = false;
-          pickProxy.frustumCulled = false;
-          pickProxy.userData.sketchObjectId = object.id;
-          committedGroup.add(pickProxy);
-
-          const visual = createFatLine(vertices, {
-            color,
-            linewidth: SKETCH_LINE_WIDTH,
-            opacity,
-            depthTest: true,
-            closed: polyline.closed,
-            resolution: resolution()
-          });
-          if (object.data.construction) {
-            visual.material.dashed = true;
-            visual.material.dashSize = 1.4;
-            visual.material.gapSize = 1;
+          if (child.userData.sketchObjectId === previewedId) {
+            child.visible = true;
           }
-          visual.renderOrder = VIEWPORT_RENDER_ORDER.ACTIVE_SKETCH;
-          visual.frustumCulled = false;
-          visual.raycast = () => undefined; // the proxy is the only pick target
-          committedGroup.add(visual);
-        }
-        // The constraint-schema snap points wear the object's own colour,
-        // so the defined-state tint covers points with no second code path.
-        // Dots never pick: the proxy lines above stay the only pick targets.
-        try {
-          dotColor.set(color);
-          for (const marker of sketchObjectMarkerPoints(object.data, resolve)) {
-            const lifted = liftPoint(basis, marker);
-            dotPositions.push(lifted.x, lifted.y, lifted.z);
-            dotColors.push(dotColor.r, dotColor.g, dotColor.b);
+          if (child.userData.sketchObjectId === objectId) {
+            child.visible = false;
           }
-        } catch {
-          // Unresolvable values: the polylines above already skipped the
-          // object, so its points stay out too.
         }
+        rebuildCommittedDots(state, objectId);
+        previewedId = objectId;
       }
-      if (dotPositions.length > 0) {
-        const dotsGeometry = new THREE.BufferGeometry();
-        dotsGeometry.setAttribute(
-          'position',
-          new THREE.Float32BufferAttribute(dotPositions, 3)
-        );
-        dotsGeometry.setAttribute(
-          'color',
-          new THREE.Float32BufferAttribute(dotColors, 3)
-        );
-        const dots = new THREE.Points(
-          dotsGeometry,
-          new THREE.PointsMaterial({
-            size: SKETCH_POINT_SIZE,
-            sizeAttenuation: false,
-            vertexColors: true,
-            depthTest: true,
-            depthWrite: false,
-            transparent: true,
-            opacity: 0.95
-          })
-        );
-        dots.name = 'sketch-snap-points';
-        dots.renderOrder = VIEWPORT_RENDER_ORDER.ACTIVE_SKETCH;
-        dots.frustumCulled = false;
-        dots.raycast = () => undefined;
-        committedGroup.add(dots);
+      disposeChildren(previewGroup);
+      // The moved object answers to the same text budget as the committed
+      // draw: a text the budget leaves out of `setObjects` gets no glyph
+      // outline mid-drag either. The budget keeps or drops the entry by
+      // identity, as in `setTextPreview`.
+      const previewEntry = { id: objectId, data };
+      const budgeted = displayObjectsWithTextBudget(
+        state.objects.map((object) =>
+          object.id === objectId ? previewEntry : object
+        ),
+        state.textBudgetError
+      );
+      if (!budgeted.includes(previewEntry)) {
+        return;
       }
+      const dotPositions: number[] = [];
+      const dotColors: number[] = [];
+      appendObject(previewGroup, state, previewEntry, dotPositions, dotColors);
+      appendDots(previewGroup, dotPositions, dotColors);
     },
     setGrid(worldPerPixel, visible) {
       const spacing = adaptiveGridSpacing(worldPerPixel);
@@ -792,6 +964,7 @@ export function buildSketchModeRig(
     dispose() {
       group.removeFromParent();
       disposeChildren(committedGroup);
+      disposeChildren(previewGroup);
       disposeChildren(profileGroup);
       disposeChildren(textPreviewGroup);
       disposeGrid();

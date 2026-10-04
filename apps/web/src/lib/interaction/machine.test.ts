@@ -14,6 +14,7 @@ import {
   type InteractionState,
   type RegionTarget
 } from './machine';
+import { commandPrompt } from './prompt';
 import type {
   FaceTopologyReferenceV5,
   FeatureId,
@@ -1030,6 +1031,166 @@ describe('extrusion intent lifecycle', () => {
       target: { ...region, sketchId: 'another-sketch' }
     });
     expect(state).not.toHaveProperty('extrudeChoice');
+  });
+});
+
+describe('sketch object move', () => {
+  const selected = (objectId = 'circle_1'): InteractionState => {
+    let state = interactionReducer(IDLE, { type: 'enter-sketch', plane });
+    state = interactionReducer(state, {
+      type: 'sketch-created',
+      sketchId: 's'
+    });
+    return interactionReducer(state, {
+      type: 'sketch-select-object',
+      objectId
+    });
+  };
+  const moving = (state: InteractionState) =>
+    state.mode === 'sketch' ? state.session.moving : undefined;
+
+  it('starts on the selected object under Select', () => {
+    const state = interactionReducer(selected(), {
+      type: 'sketch-move-start',
+      objectId: 'circle_1',
+      handle: 'translate'
+    });
+    expect(moving(state)).toEqual({
+      objectId: 'circle_1',
+      handle: 'translate'
+    });
+    expect(escapeTarget(state)).toBe('cancel-move');
+    expect(toolCardFor(state)?.hint).toMatch(/^Release to place/);
+    expect(commandPrompt(state)?.escape).toBe('cancels the move');
+  });
+
+  it('a press off the selected object changes nothing', () => {
+    const base = selected();
+    // Another object, no selection, a drawing tool, an armed pick tool and a
+    // chain in flight all keep the press meaning what it meant before.
+    const refusals: InteractionState[] = [
+      interactionReducer(base, {
+        type: 'sketch-select-object',
+        objectId: null
+      }),
+      interactionReducer(base, { type: 'sketch-tool', tool: 'circle' }),
+      interactionReducer(base, {
+        type: 'sketch-constraint-tool',
+        kind: 'coincident'
+      }),
+      interactionReducer(base, { type: 'sketch-edit-tool', kind: 'fillet' }),
+      interactionReducer(base, { type: 'sketch-drawing', drawing: true }),
+      interactionReducer(IDLE, { type: 'select-region', target: region }),
+      IDLE
+    ];
+    for (const state of refusals) {
+      expect(
+        interactionReducer(state, {
+          type: 'sketch-move-start',
+          objectId: 'circle_1',
+          handle: 'translate'
+        }),
+        JSON.stringify(state)
+      ).toBe(state);
+    }
+    expect(
+      interactionReducer(base, {
+        type: 'sketch-move-start',
+        objectId: 'another_object',
+        handle: 'translate'
+      })
+    ).toBe(base);
+  });
+
+  it('a move in progress cannot be started twice', () => {
+    const started = interactionReducer(selected(), {
+      type: 'sketch-move-start',
+      objectId: 'circle_1',
+      handle: 'rotate'
+    });
+    expect(
+      interactionReducer(started, {
+        type: 'sketch-move-start',
+        objectId: 'circle_1',
+        handle: 'translate'
+      })
+    ).toBe(started);
+    expect(toolCardFor(started)?.hint).toMatch(/^Release to set the rotation/);
+  });
+
+  it('commit and cancel both end the move and keep the selection', () => {
+    const started = interactionReducer(selected(), {
+      type: 'sketch-move-start',
+      objectId: 'circle_1',
+      handle: 'translate'
+    });
+    for (const type of ['sketch-move-commit', 'sketch-move-cancel'] as const) {
+      const ended = interactionReducer(started, { type });
+      expect(moving(ended)).toBeUndefined();
+      expect(ended.mode === 'sketch' && ended.session.selectedObjectId).toBe(
+        'circle_1'
+      );
+      expect(ended).toEqual(selected());
+    }
+    // Ending a move that is not running is a no-op.
+    const idle = selected();
+    expect(interactionReducer(idle, { type: 'sketch-move-commit' })).toBe(idle);
+    expect(interactionReducer(idle, { type: 'sketch-move-cancel' })).toBe(idle);
+  });
+
+  it('one Escape cancels the drag only, and the next deselects', () => {
+    let state = interactionReducer(selected(), {
+      type: 'sketch-move-start',
+      objectId: 'circle_1',
+      handle: 'translate'
+    });
+    state = interactionReducer(state, { type: 'escape' });
+    expect(moving(state)).toBeUndefined();
+    expect(state.mode === 'sketch' && state.session.selectedObjectId).toBe(
+      'circle_1'
+    );
+    expect(escapeTarget(state)).toBe('clear-sketch-selection');
+    state = interactionReducer(state, { type: 'escape' });
+    expect(state.mode === 'sketch' && state.session.selectedObjectId).toBe(
+      null
+    );
+  });
+
+  it('does not outlive the selection or the Select tool', () => {
+    const started = interactionReducer(selected(), {
+      type: 'sketch-move-start',
+      objectId: 'circle_1',
+      handle: 'translate'
+    });
+    expect(
+      moving(
+        interactionReducer(started, {
+          type: 'sketch-select-object',
+          objectId: 'line_2'
+        })
+      )
+    ).toBeUndefined();
+    expect(
+      moving(interactionReducer(started, { type: 'sketch-tool', tool: 'line' }))
+    ).toBeUndefined();
+    expect(
+      moving(
+        interactionReducer(started, {
+          type: 'sketch-constraint-tool',
+          kind: 'distance'
+        })
+      )
+    ).toBeUndefined();
+    expect(interactionReducer(started, { type: 'exit-sketch' })).toEqual(IDLE);
+    // Re-selecting the same object keeps the drag it is already under.
+    expect(
+      moving(
+        interactionReducer(started, {
+          type: 'sketch-select-object',
+          objectId: 'circle_1'
+        })
+      )
+    ).toEqual({ objectId: 'circle_1', handle: 'translate' });
   });
 });
 

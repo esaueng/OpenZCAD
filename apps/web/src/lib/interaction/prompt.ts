@@ -30,6 +30,7 @@ export interface CommandPrompt {
 const ESCAPE_LABELS: Record<ReturnType<typeof escapeTarget>, string | null> = {
   'close-keypad': 'closes exact entry',
   'cancel-drag': 'cancels the drag',
+  'cancel-move': 'cancels the move',
   'end-drawing': 'ends the chain',
   'cancel-constraint': 'cancels the constraint',
   'cancel-edit': 'cancels the modify tool',
@@ -105,6 +106,15 @@ export function commandPrompt(state: InteractionState): CommandPrompt | null {
     return null;
   }
   if (state.mode === 'sketch') {
+    if (state.session.moving) {
+      return {
+        step:
+          state.session.moving.handle === 'rotate'
+            ? 'Release to set the rotation · Enter sets it here'
+            : 'Release to place · Enter places it here',
+        escape
+      };
+    }
     if (state.session.drawing) {
       return { step: 'Click the next point · Enter finishes', escape };
     }
