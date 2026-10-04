@@ -201,11 +201,12 @@ What this changes in §4:
   regions and one-drag extrusion already work. What is left is the count,
   per-region arrows, the inference-agreement refusal, and making text pick
   and preview whole-entity so they match the entity-wide commit.
-- **Text engrave needs kernel work first.** The engrave step in Phase 2's
-  e2e cannot pass until the exact kernel accepts a boolean between glyph
-  solids and their host body. That is a Remus item and should be filed before
-  Phase 2.3 starts.
-- **One defect to fix on its own:** the region chip's stale `Total` state.
+- **Text engrave was blocked at the kernel; PR K is the gate.** The engrave
+  step in Phase 2's e2e could not pass until the on-face boolean was handled.
+  PR K (merged as `1344a52f`) handles it app-side, so the e2e is runnable
+  now. The kernel item is filed as esaueng/remus#953 and is not a
+  prerequisite for any phase.
+- **One defect fixed in PR K:** the region chip's stale `Total` state.
 - Decision 2 (size semantics) has its number: capital height is 0.714 of
   the stored size for the default font.
 
@@ -409,7 +410,7 @@ drag restores the object's stored values; it never deletes persisted text.
 | D   | Phase 2.3–2.4 place/transform/re-entry                               | B, C       | M            | not started (after B, C)      |
 | E   | Phase 3 multi-region                                                 | A          | M            | **merged** #588 as `c3426766` |
 | F   | Phase 4.1 hover cuts                                                 | decision   | S            | **merged** #586 as `57bd6aca` |
-| G   | Phase 4.2 glide cap                                                  | decision   | S            | open #584                     |
+| G   | Phase 4.2 glide cap                                                  | decision   | S            | **merged** #584 as `12cd17d2` |
 | H   | Phase 4.3 + Phase 5 ledger                                           | all        | S, docs      | not started (last)            |
 
 B and C are independent and ran in parallel sessions (E has landed);
