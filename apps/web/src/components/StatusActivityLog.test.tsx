@@ -1,5 +1,5 @@
 import { createRef } from 'react';
-import { render, screen, within } from '@testing-library/react';
+import { fireEvent, render, screen, within } from '@testing-library/react';
 import { describe, expect, it, vi } from 'vitest';
 import { StatusActivityLog } from './StatusActivityLog';
 
@@ -99,5 +99,30 @@ describe('StatusActivityLog', () => {
     expect(messages[0]).toContain('Added box.');
     expect(messages[1]).toContain('Added cylinder.');
     expect(log).not.toHaveTextContent('Build mode');
+  });
+
+  it('closes on Escape before the workspace sees the key', async () => {
+    const onClose = vi.fn();
+    const workspaceEscape = vi.fn();
+    window.addEventListener('keydown', workspaceEscape);
+    try {
+      render(
+        <StatusActivityLog
+          id="test-activity-log"
+          open
+          status="Ready"
+          tone="ready"
+          triggerRef={createRef<HTMLButtonElement>()}
+          onClose={onClose}
+        />
+      );
+      // The panel loads on demand; its key handler arrives with it.
+      await screen.findByRole('region', { name: 'Activity log' });
+      fireEvent.keyDown(document.body, { key: 'Escape' });
+      expect(onClose).toHaveBeenCalledWith(true);
+      expect(workspaceEscape).not.toHaveBeenCalled();
+    } finally {
+      window.removeEventListener('keydown', workspaceEscape);
+    }
   });
 });

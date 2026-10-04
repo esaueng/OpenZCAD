@@ -575,4 +575,46 @@ describe('what the section rail may offer to export', () => {
       detail: 'The section plane does not pass through this body.'
     });
   });
+
+  it('says a refused cut is approximate instead of quoting the kernel', () => {
+    // The panel used to read out "The kernel's cross-section area
+    // (720.0000) disagrees with the tessellated witness (576.2842) by more
+    // than 0.8641." — a diagnostic, with two numbers neither of which is
+    // the exact area.
+    const state = sectionOutlineFromReport(report([], [mismatch]));
+    expect(state).toEqual({
+      kind: 'refused',
+      detail: 'Area is approximate for this cut.'
+    });
+    const detail = describeSectionOutline(state, 'mm').detail;
+    expect(detail).not.toMatch(/kernel|witness|tessellat|[0-9]/);
+    expect(sectionOutlineExportable(state)).toBe(false);
+  });
+
+  it('keeps every other refusal free of kernel vocabulary', () => {
+    for (const reason of [
+      'kernel-refused',
+      'empty-section',
+      'non-planar-section',
+      'wire-order-unverified',
+      'unknown-body'
+    ] as const) {
+      const state = sectionOutlineFromReport(
+        report(
+          [],
+          [
+            {
+              bodyId: 'body_a',
+              reason,
+              message: 'The kernel returned a bspline cross-section face.'
+            }
+          ]
+        )
+      );
+      expect(state).toEqual({
+        kind: 'refused',
+        detail: 'This cut can only be shown approximately.'
+      });
+    }
+  });
 });

@@ -244,6 +244,32 @@ export function sectionPlaneSpec(
   };
 }
 
+/**
+ * The section panel's sentence for a cut with no exact section.
+ *
+ * The adapter's refusal messages are diagnostics — "the kernel's
+ * cross-section area (720.0000) disagrees with the tessellated witness
+ * (576.2842) by more than 0.8641" — and the panel read them out to people
+ * who cannot act on a witness or a tolerance. The panel says what it means
+ * for them instead, and quotes no number that is not exact: the label above
+ * already says there is no exact section, and the disabled DXF button says
+ * there is no drawing.
+ */
+export function sectionRefusalDetail(
+  refusal: Pick<SectionOutlineReport['refusals'][number], 'reason'> | undefined
+): string {
+  switch (refusal?.reason) {
+    case undefined:
+      return 'The section plane does not cut any body.';
+    case 'plane-misses-body':
+      return 'The section plane does not pass through this body.';
+    case 'area-mismatch':
+      return 'Area is approximate for this cut.';
+    default:
+      return 'This cut can only be shown approximately.';
+  }
+}
+
 /** What the viewport should show for one kernel section report. */
 export function sectionOutlineFromReport(
   report: SectionOutlineReport
@@ -251,9 +277,7 @@ export function sectionOutlineFromReport(
   if (report.regions.length === 0) {
     return {
       kind: 'refused',
-      detail:
-        report.refusals[0]?.message ??
-        'The section plane does not cut any body.'
+      detail: sectionRefusalDetail(report.refusals[0])
     };
   }
   // A plane that simply misses a body is an ordinary section; a body it cuts

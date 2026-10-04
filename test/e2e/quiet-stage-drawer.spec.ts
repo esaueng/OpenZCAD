@@ -243,6 +243,19 @@ test('the Move panel heads the right lane over the drawer', async ({
   await expect(page.locator('.stage-right .extrude-instruction')).toHaveCount(
     0
   );
+  // It starts under the top islands: at the stage's old 14px it sat under
+  // the View / Tweak / Build switch, which covered its title.
+  const instructionBox = await page
+    .locator('.extrude-instruction')
+    .boundingBox();
+  const modeSwitchBox = await page
+    .locator('.topbar > .mode-switch')
+    .boundingBox();
+  expect(instructionBox).not.toBeNull();
+  expect(modeSwitchBox).not.toBeNull();
+  expect(instructionBox!.y).toBeGreaterThanOrEqual(
+    modeSwitchBox!.y + modeSwitchBox!.height
+  );
   await expect(drawer).toBeVisible();
   const lane = await laneChildren(page);
   expect(lane[0]?.name).toBe('command-float');
@@ -377,15 +390,23 @@ test('a tool card owns the lane and keeps its actions in view', async ({
     const actions = document
       .querySelector('.stage-right .inspector .form-actions')!
       .getBoundingClientRect();
+    const cube = document
+      .querySelector('.viewer-rail-stack')!
+      .getBoundingClientRect();
     return {
       laneHeight: lane.height,
       cardHeight: card.height,
+      cardBottom: card.bottom,
+      cubeTop: cube.top,
       actionsInside: actions.top >= body.top && actions.bottom <= body.bottom
     };
   });
   // The card has the lane to itself, less the gap the empty drawer keeps.
   expect(layout.cardHeight).toBeGreaterThan(layout.laneHeight - 40);
   expect(layout.actionsInside).toBe(true);
+  // …and the lane stops above the corner: the Hole card used to run to the
+  // window's foot and the orientation cube drew through it.
+  expect(layout.cardBottom).toBeLessThanOrEqual(layout.cubeTop);
 
   // The card's actions are on screen without scrolling it.
   const box = (await submit.boundingBox())!;
