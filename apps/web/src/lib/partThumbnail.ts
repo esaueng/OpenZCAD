@@ -9,8 +9,16 @@ import {
   shouldRenderTopologyEdge
 } from '@openzcad/viewport';
 
-const THUMBNAIL_WIDTH = 360;
-const THUMBNAIL_HEIGHT = 200;
+/**
+ * Twice the 360×200 card the capture was first drawn for: the shelf's tiles
+ * now stretch to fill their row, up to about 350 CSS pixels wide, so on a
+ * 2× display a 360-pixel capture was being upscaled two to three times and
+ * read as blurred. A capture this size still encodes to tens of kilobytes,
+ * far inside MAX_THUMBNAIL_BYTES.
+ */
+const THUMBNAIL_SCALE = 2;
+const THUMBNAIL_WIDTH = 360 * THUMBNAIL_SCALE;
+const THUMBNAIL_HEIGHT = 200 * THUMBNAIL_SCALE;
 const THUMBNAIL_FOV = 34;
 /**
  * How much room the part leaves around itself, as a multiple of the distance
@@ -148,7 +156,9 @@ export function renderThumbnailFrame(
         }
         const line = createFatLine(points, {
           color: '#162437',
-          linewidth: 1.25,
+          // Pixels of the capture, so they scale with it to keep the edge
+          // the same weight on the card.
+          linewidth: 1.25 * THUMBNAIL_SCALE,
           opacity: 0.92,
           resolution
         });

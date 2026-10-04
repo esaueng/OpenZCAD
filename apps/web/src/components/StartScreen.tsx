@@ -727,15 +727,27 @@ export function StartScreen({
           <h1 className="start-header-name">OpenZCAD</h1>
           <span className="start-beta">beta</span>
         </div>
-        <button
-          className="start-settings-button icon-button"
-          type="button"
-          aria-label="Open settings"
-          title={`Settings (${platformShortcutLabel('Ctrl+,')})`}
-          onClick={onOpenSettings}
-        >
-          <Settings size={16} aria-hidden="true" />
-        </button>
+        {/* Import sits with Settings as a header action: beside the launch
+            card it competed with Create project and pushed the shelf down. */}
+        <div className="start-header-actions">
+          {onImportProject && (
+            <ProjectImportButton
+              onImport={onImportProject}
+              disabled={busy}
+              className="icon-button start-import"
+              title="Import project…"
+            />
+          )}
+          <button
+            className="start-settings-button icon-button"
+            type="button"
+            aria-label="Open settings"
+            title={`Settings (${platformShortcutLabel('Ctrl+,')})`}
+            onClick={onOpenSettings}
+          >
+            <Settings size={16} aria-hidden="true" />
+          </button>
+        </div>
         <span className="start-tagline">Parametric CAD in the browser</span>
       </header>
 
@@ -806,13 +818,6 @@ export function StartScreen({
             </small>
           )}
         </form>
-        {onImportProject && (
-          <ProjectImportButton
-            onImport={onImportProject}
-            disabled={busy}
-            className="secondary start-import"
-          />
-        )}
       </section>
 
       <nav className="start-library" aria-label="Library">
