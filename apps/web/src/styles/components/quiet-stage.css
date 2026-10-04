@@ -19,6 +19,10 @@
      200px, then 12px of clearance. The bar is centred on the window, so it
      can be the window less twice this before its ends run under the ruler. */
   --stage-corner-w: calc(var(--island-gap) + 144px + 200px + 12px);
+  /* How far the corner's cube stack (88px, 4px off the edge) stands above
+     the window's bottom edge, with a few pixels to spare. The right lane
+     stops a gap above it, so no card in the lane ever reaches the cube. */
+  --stage-corner-h: 96px;
   /* The bar gives way before anything else moves: it narrows from 520px at
      a 1252px window to 280px at 1012px, and only past that does the ruler
      leave the corner (the narrow-window rules below lift the cap). A text
@@ -223,7 +227,11 @@
   position: absolute;
   top: var(--stage-top);
   right: var(--lane-end);
-  bottom: var(--island-gap);
+  /* Above the bottom-right corner, not the window's edge: the lane is only
+     ever as tall as the stage less the cube, so a tall command card (Hole)
+     scrolls inside it instead of drawing through the cube and its roll
+     buttons. */
+  bottom: calc(var(--stage-corner-h) + var(--island-gap));
   z-index: var(--z-inspector-float);
   width: var(--drawer-w);
   display: flex;
@@ -296,7 +304,6 @@
    refusal below the fold. */
 .viewer-area.inspector-owns-lane .stage-right > .model-drawer-float {
   min-height: 0;
-  margin-bottom: 0;
   overflow: hidden;
 }
 
@@ -997,12 +1004,15 @@
   transform: translateY(-50%);
 }
 
-.view-rail button,
+.view-rail > button,
 .tweak-rail button {
   position: relative;
 }
 
-.view-rail button {
+/* The rail's own icon buttons only: the parts list is a flyout inside the
+   rail, and a descendant selector here made its rows icon buttons too —
+   centred on a grid, the swatch stood on its own line above the name. */
+.view-rail > button {
   display: grid;
   place-items: center;
   width: 30px;
@@ -1015,40 +1025,41 @@
   border-radius: var(--radius-md);
 }
 
-.view-rail button svg {
+.view-rail > button svg {
   width: 16px;
   height: 16px;
 }
 
-.view-rail button:hover:not(:disabled) {
+.view-rail > button:hover:not(:disabled) {
   color: var(--color-text);
   background: var(--color-surface-hover);
 }
 
-.view-rail button.active {
+.view-rail > button.active {
   color: var(--color-accent);
   background: var(--color-accent-dim);
   border-color: var(--color-accent-border);
 }
 
-/* A count in the button's corner: parts, or parts hidden. */
+/* A count in the button's corner: parts, or parts hidden. The mini size,
+   not a smaller one: at 9px it read as a speck beside the glyph. */
 .rail-count {
   position: absolute;
-  right: 0;
-  bottom: 0;
-  min-width: 12px;
+  right: -1px;
+  bottom: -1px;
+  min-width: 13px;
   padding: 0 2px;
-  color: var(--color-text-subtle);
+  color: var(--color-text-muted);
   background: var(--color-surface);
   border-radius: var(--radius-sm);
   font-family: var(--font-mono);
-  font-size: 10px;
-  line-height: 12px;
+  font-size: var(--fs-mini);
+  line-height: 13px;
   text-align: center;
   font-variant-numeric: tabular-nums;
 }
 
-.view-rail button.active .rail-count {
+.view-rail > button.active .rail-count {
   color: var(--color-accent);
 }
 
@@ -1137,6 +1148,8 @@
 @media (max-width: 520px) {
   .workspace.column-layout {
     --lane-right: var(--island-gap);
+    /* The cube stands above the search bar (below), and the lane above it. */
+    --stage-corner-h: calc(var(--island-gap) * 2 + var(--command-bar-h) + 92px);
   }
 
   /* There is no second column on a phone: the right lane, when something
@@ -1270,6 +1283,9 @@
 @media (min-width: 521px) and (max-width: 960px) {
   .workspace.column-layout {
     --lane-right: var(--island-gap);
+    /* The cube stands 52px up here (workspace-column.css); the right lane
+       stops above it all the same. */
+    --stage-corner-h: calc(52px + 92px);
   }
 }
 
@@ -1640,18 +1656,19 @@ button.command-rail:disabled {
   cursor: default;
 }
 
-/* The two exports share a glyph; the mesh one wears a badge. */
+/* The two exports share a glyph; the mesh one wears a badge, at the same
+   mini size as the parts count. */
 .tweak-rail-badge {
   position: absolute;
-  right: 1px;
-  bottom: 1px;
+  right: -1px;
+  bottom: -1px;
   padding: 0 2px;
-  color: var(--color-text-subtle);
+  color: var(--color-text-muted);
   background: var(--color-surface);
   border-radius: var(--radius-sm);
   font-family: var(--font-mono);
-  font-size: 10px;
-  line-height: 12px;
+  font-size: var(--fs-mini);
+  line-height: 13px;
   letter-spacing: 0.04em;
 }
 
@@ -1706,13 +1723,12 @@ button.command-rail:disabled {
 }
 
 /* Parameters, bodies and history in the right lane, on demand. The
-   bottom-right corner stays the cube's and the scale's: the drawer stops
-   above that row so navigation is never under it, and keeps enough height
-   to read under a tall inspector. */
+   bottom-right corner stays the cube's and the scale's: the lane itself
+   stops above that row (--stage-corner-h), so navigation is never under the
+   drawer, which keeps enough height to read under a tall inspector. */
 .model-drawer-float {
   flex: 1 1 0;
   min-height: min(180px, 100%);
-  margin-bottom: calc(var(--island-gap) + 96px);
   display: flex;
   pointer-events: none;
 }
