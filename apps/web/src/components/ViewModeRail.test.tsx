@@ -1,3 +1,5 @@
+import { readdirSync, readFileSync } from 'node:fs';
+import { resolve } from 'node:path';
 import { fireEvent, render, screen, within } from '@testing-library/react';
 import { describe, expect, it, vi } from 'vitest';
 import type { BodyRepresentation } from '@openzcad/shared';
@@ -92,8 +94,60 @@ describe('ViewModeRail', () => {
     );
     const list = screen.getByRole('complementary', { name: 'Parts' });
     expect(list.querySelector('.view-mode-rail-foot')).toHaveTextContent(
-      'Visibility only — change values in Parameters; the design stays locked.'
+      'Visibility only — the design stays locked.'
     );
     expect(list).not.toHaveTextContent(/View mode/);
+  });
+
+  /*
+    The parts list is a flyout inside the rail, so a rule written for the
+    rail's icon buttons as `.view-rail button` reached every button in the
+    list too: the row's name button became a centred 30px grid, and the
+    colour swatch stood on its own line above the part's name.
+  */
+  it("keeps the rail's icon-button rules off the parts list's buttons", () => {
+    renderRail(true);
+    const rail = screen.getByRole('toolbar', { name: 'Parts tools' });
+    const list = screen.getByRole('complementary', { name: 'Parts' });
+    const listButtons = within(list).getAllByRole('button');
+    expect(listButtons.length).toBeGreaterThan(0);
+    const railButton = within(rail).getByRole('button', {
+      name: 'Hide the parts list'
+    });
+
+    const sheets = resolve(__dirname, '../styles/components');
+    const railSelectors = readdirSync(sheets)
+      .filter((name) => name.endsWith('.css'))
+      .flatMap((name) => {
+        const css = readFileSync(resolve(sheets, name), 'utf8').replace(
+          /\/\*[\s\S]*?\*\//g,
+          ''
+        );
+        return [...css.matchAll(/([^{}]+)\{[^{}]*\}/g)].flatMap((match) =>
+          match[1]!
+            .split(',')
+            .map((selector) => selector.trim())
+            .filter((selector) => /^\.view-rail[\s>]/.test(selector))
+            .map((selector) => ({ name, selector }))
+        );
+      });
+    // The rail does have icon-button rules, and they reach its own button.
+    const buttonRules = railSelectors.filter(({ selector }) =>
+      /\bbutton\b/.test(selector)
+    );
+    expect(buttonRules.length).toBeGreaterThan(0);
+    expect(
+      buttonRules.some(({ selector }) =>
+        railButton.matches(selector.replace(/:hover|:focus-visible/g, ''))
+      )
+    ).toBe(true);
+
+    const leaks = railSelectors.flatMap(({ name, selector }) => {
+      const plain = selector.replace(/:hover|:focus-visible/g, '');
+      return listButtons
+        .filter((button) => button.matches(plain))
+        .map((button) => `${name}: ${selector} → ${button.className}`);
+    });
+    expect(leaks).toEqual([]);
   });
 });

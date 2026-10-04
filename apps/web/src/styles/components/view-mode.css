@@ -372,8 +372,8 @@
 
 .view-mode-rail-action {
   flex: 0 0 auto;
-  width: 22px;
-  height: 22px;
+  width: 24px;
+  height: 24px;
   display: inline-grid;
   place-items: center;
   color: var(--color-text-subtle);
@@ -584,8 +584,12 @@
 }
 
 .measurement-row {
+  /* Four 24px actions, their 2px gaps, the bar's padding and border. */
+  --measurement-actions-w: calc(24px * 4 + 2px * 3 + 2px * 2 + 2px);
+
+  position: relative;
   display: grid;
-  grid-template-columns: minmax(0, 1fr) auto;
+  grid-template-columns: minmax(0, 1fr);
   align-items: stretch;
   border-bottom: 1px solid
     color-mix(in srgb, var(--color-border) 55%, transparent);
@@ -604,10 +608,14 @@
   background: color-mix(in srgb, var(--color-warning) 5%, transparent);
 }
 
+/* The heading runs the full width; the value and notes keep a right-hand
+   track clear for the action bar, so a hovered or selected row still shows
+   its result beside the actions rather than under them. */
 .measurement-row-main {
   min-width: 0;
   display: grid;
-  gap: 3px;
+  grid-template-columns: minmax(0, 1fr) var(--measurement-actions-w);
+  gap: 3px 6px;
   padding: 8px 4px 8px 10px;
   text-align: left;
   color: inherit;
@@ -631,6 +639,7 @@
 }
 
 .measurement-row-heading {
+  grid-column: 1 / -1;
   min-width: 0;
   display: flex;
   align-items: center;
@@ -647,7 +656,19 @@
   white-space: nowrap;
 }
 
+.measurement-row-value,
+.measurement-row-note,
+.measurement-row-user-note {
+  grid-column: 1;
+  min-width: 0;
+}
+
+/* As tall as the action bar, so the bar beside it never reaches up into
+   the heading. */
 .measurement-row-value {
+  min-height: 30px;
+  display: flex;
+  align-items: center;
   color: var(--color-accent-hi);
   font-family: var(--font-mono);
   font-size: var(--fs-md);
@@ -703,18 +724,39 @@
   color: var(--color-error);
 }
 
+/* Show, copy, edit and delete as one row of 24px buttons in the track the
+   value and notes leave clear (bottom-right, level with the value), while
+   the row is in play — hovered, focused or the active one (a tap on touch).
+   Stacked in a 31px column they were four 16px icons the height of the
+   whole row. */
 .measurement-row-actions {
-  width: 31px;
+  position: absolute;
+  right: 4px;
+  bottom: 8px;
+  box-sizing: border-box;
+  width: var(--measurement-actions-w);
   display: flex;
-  flex-direction: column;
-  align-items: stretch;
-  justify-content: center;
-  padding: 4px 3px;
-  border-left: 1px solid
-    color-mix(in srgb, var(--color-border) 45%, transparent);
+  gap: 2px;
+  padding: 2px;
+  background: var(--color-surface);
+  border: var(--border-thin);
+  border-radius: var(--radius-md);
+  box-shadow: var(--shadow-1);
+  opacity: 0;
+  pointer-events: none;
+  transition: opacity var(--dur-fast) var(--ease-out);
+}
+
+.measurement-row:hover .measurement-row-actions,
+.measurement-row:focus-within .measurement-row-actions,
+.measurement-row.active .measurement-row-actions {
+  opacity: 1;
+  pointer-events: auto;
 }
 
 .measurement-row-actions button {
+  width: 24px;
+  height: 24px;
   min-width: 24px;
   min-height: 24px;
   display: grid;

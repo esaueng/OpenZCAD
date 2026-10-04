@@ -4,9 +4,14 @@
 
 /* ── StatusBar ───────────────────────────────────────────── */
 
+/* The log rises from the bottom edge but stops short of the instrument
+   rail on the right: full width, it covered the rail's lower group — the
+   very button that opened it — and its own Close was the only way out. */
 .status-log-panel {
+  --status-log-rail-clear: calc(var(--rail-w) + var(--island-gap) * 2);
+
   position: fixed;
-  right: 0;
+  right: var(--status-log-rail-clear);
   bottom: 0;
   left: 0;
   z-index: var(--z-context-menu);
@@ -16,7 +21,16 @@
   color: var(--color-text);
   background: color-mix(in srgb, var(--color-surface) 97%, black);
   border-top: var(--border-strong);
+  border-right: var(--border-strong);
+  border-top-right-radius: var(--radius-lg);
   box-shadow: 0 -18px 40px rgb(0 0 0 / 0.32);
+}
+
+/* A short window stands the rail two islands wide (quiet-stage.css). */
+@media (max-height: 540px) {
+  .status-log-panel {
+    --status-log-rail-clear: calc(var(--rail-w) * 2 + var(--island-gap) * 3);
+  }
 }
 
 .status-log-header {

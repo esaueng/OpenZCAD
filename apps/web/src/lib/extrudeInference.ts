@@ -7,7 +7,11 @@ import {
   type ExtrudeOperationInference,
   type ExtrudeUnionMeasurement
 } from '@openzcad/kernel-adapter/extrude-inference';
-import type { BodyId, ProjectDocument } from '@openzcad/shared';
+import type {
+  BodyId,
+  ProjectDocument,
+  SketchProfileReference
+} from '@openzcad/shared';
 
 type DerivedState = ProjectDocument['derived'];
 type ExtrudeCommand = ReturnType<typeof commandFactories.extrudeSketch>;
@@ -290,6 +294,146 @@ export async function resolveExtrudeOperation(
     inference,
     baseVersion: options.base.version
   };
+}
+
+type OperationInference = Pick<
+  ResolvedExtrude['inference'],
+  'operation' | 'targetBodyId'
+>;
+
+const OPERATION_PHRASES: Record<OperationInference['operation'], string> = {
+  cut: 'cut into the body',
+  add: 'add to the body',
+  'new-body': 'make a new body'
+};
+
+/**
+ * The refusal for selected profiles that would not extrude the same way on
+ * their own, or null when they agree.
+ *
+ * One drag extrudes every selected profile by the same value as one feature
+ * with one operation. Classified together, a profile over the body and one
+ * beside it measure as a partial overlap and silently become an add, so the
+ * pocket the user dragged never appears. Agreement is checked instead, and a
+ * mix is refused in one sentence that says how to get each result.
+ */
+export function mixedExtrudeRefusal(
+  inferences: readonly OperationInference[]
+): string | null {
+  const operations: OperationInference['operation'][] = [];
+  for (const inference of inferences) {
+    if (!operations.includes(inference.operation)) {
+      operations.push(inference.operation);
+    }
+  }
+  if (operations.length === 2) {
+    return (
+      `One selected profile would ${OPERATION_PHRASES[operations[0]!]} and ` +
+      `another would ${OPERATION_PHRASES[operations[1]!]}, so extrude them ` +
+      'separately or choose an operation.'
+    );
+  }
+  if (operations.length > 2) {
+    return (
+      'The selected profiles would cut, add and make a new body at once, so ' +
+      'extrude them separately or choose an operation.'
+    );
+  }
+  // One extrude stores one target body, so profiles that agree on cut or add
+  // but sit over different bodies cannot be one feature either.
+  const targets = new Set(
+    inferences.map((inference) => inference.targetBodyId ?? null)
+  );
+  if (targets.size > 1) {
+    return 'The selected profiles sit over different bodies; extrude them separately.';
+  }
+  return null;
+}
+
+/**
+ * Combined verdicts every part of the extrusion necessarily shares. Inside one
+ * body as a whole means each profile is inside it; touching nothing as a whole
+ * means each profile touches nothing. Anything else can hide profiles that
+ * disagree — including a boss grown onto its sketched face, whose verdict is
+ * taken from the attachment rather than measured, so a profile beside the
+ * face rides along unless each is classified on its own.
+ */
+const UNIFORM_REASONS: ReadonlySet<ResolvedExtrude['inference']['reason']> =
+  new Set(['explicit', 'enclosed', 'no-overlap', 'no-live-body']);
+
+/** Whether a combined verdict is one every selected profile must share. */
+export function combinedVerdictIsUniform(
+  reason: ResolvedExtrude['inference']['reason']
+): boolean {
+  return UNIFORM_REASONS.has(reason);
+}
+
+/**
+ * One profile's own verdict. On a face-attached sketch a profile off the
+ * face cannot be joined to the face's body, so its attached rebuild refuses;
+ * measured without the attachment it is what it really is, a new body.
+ */
+async function profileInference(
+  options: ResolveExtrudeOptions
+): Promise<OperationInference | null> {
+  try {
+    return (await resolveExtrudeOperation(options)).inference;
+  } catch {
+    if (!options.faceAttachment) {
+      return null;
+    }
+  }
+  const { faceAttachment: _attachment, ...unattached } = options;
+  try {
+    return (await resolveExtrudeOperation(unattached)).inference;
+  } catch {
+    return null;
+  }
+}
+
+/**
+ * Infers each profile reference of an automatic extrusion on its own and
+ * returns the refusal when they disagree (see `mixedExtrudeRefusal`).
+ *
+ * `combined` is the verdict for the whole selection, or null when the
+ * combined build itself failed. When it is one every profile must share, the
+ * per-profile rebuilds are skipped, so a plate of pockets pays nothing extra.
+ * An explicit operation is the user's answer to the question and is never
+ * second-guessed; a single region has nothing to disagree with. A profile whose own inference fails proves
+ * nothing either way and is left to the combined build to report.
+ */
+export async function regionInferenceRefusal(
+  options: ResolveExtrudeOptions,
+  combined: Pick<ResolvedExtrude['inference'], 'reason'> | null,
+  /**
+   * One reference per selected region, for this check only. The stored input
+   * collapses a text object to one entity-wide reference, which would hide
+   * glyphs that straddle a body edge; each glyph is judged on its own here.
+   */
+  regionProfiles: readonly SketchProfileReference[] = options.input.profiles ??
+    []
+): Promise<string | null> {
+  if (
+    (options.choice && options.choice.operation !== 'automatic') ||
+    (combined && combinedVerdictIsUniform(combined.reason))
+  ) {
+    return null;
+  }
+  const profiles = regionProfiles;
+  if (profiles.length < 2) {
+    return null;
+  }
+  const inferences: OperationInference[] = [];
+  for (const profile of profiles) {
+    const inference = await profileInference({
+      ...options,
+      input: { ...options.input, profiles: [profile] }
+    });
+    if (inference) {
+      inferences.push(inference);
+    }
+  }
+  return mixedExtrudeRefusal(inferences);
 }
 
 /** A discarded command must not publish a late result or refusal. */

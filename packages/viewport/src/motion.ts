@@ -9,6 +9,11 @@
  *
  * The 3D layer cannot use CSS transitions: it eases per rendered frame,
  * frame-rate independent, through `easeToward`.
+ *
+ * Hover and selection tints do not use it: they are state changes and cut to
+ * their target in one frame. X-ray passes, handles and mode transitions such
+ * as the sketch recede still ease (see "Motion" in
+ * `docs/interaction-design.md`).
  */
 
 /** Matches `--dur-fast`. Hover response, handle entrances, cursor states. */

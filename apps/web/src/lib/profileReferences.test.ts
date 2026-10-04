@@ -2,7 +2,8 @@ import { describe, expect, it } from 'vitest';
 import type { RegionPickData } from '@openzcad/viewport';
 import {
   isEntityWideProfileSource,
-  profileReferencesForSelection
+  profileReferencesForSelection,
+  profilesBuiltWith
 } from './profileReferences';
 
 function pick(
@@ -105,6 +106,37 @@ describe('profileReferencesForSelection', () => {
       isText
     );
     expect(references[0]).toMatchObject({ profileId: 'profile_mixed' });
+  });
+});
+
+describe('profilesBuiltWith', () => {
+  const word = [
+    pick('glyph_B', ['text_1']),
+    pick('glyph_o', ['text_1']),
+    pick('glyph_a', ['text_1'])
+  ];
+  const others = [
+    pick('other_text', ['text_2']),
+    pick('rectangle', ['rect_1']),
+    pick('mixed', ['text_1', 'rect_1']),
+    pick('elsewhere', ['text_1'], { sketchId: 'sketch_2' })
+  ];
+
+  it('expands one glyph to every glyph of its text object, in one sketch', () => {
+    expect(
+      profilesBuiltWith(word[1]!, [...others, ...word], isText).map(
+        (profile) => profile.profileId
+      )
+    ).toEqual(['glyph_B', 'glyph_o', 'glyph_a']);
+  });
+
+  it('leaves a geometry-matched profile on its own', () => {
+    expect(profilesBuiltWith(others[1]!, [...others, ...word], isText)).toEqual(
+      [others[1]]
+    );
+    expect(profilesBuiltWith(others[2]!, [...others, ...word], isText)).toEqual(
+      [others[2]]
+    );
   });
 });
 

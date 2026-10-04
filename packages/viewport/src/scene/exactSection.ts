@@ -1,4 +1,5 @@
 import * as THREE from 'three';
+import { DEFAULT_BODY_COLOR } from '@openzcad/shared';
 import type { DisplayMode } from '../types';
 
 /**
@@ -18,10 +19,26 @@ import type { DisplayMode } from '../types';
 export const EXACT_SECTION = 'viewport-exact-section';
 
 /**
- * Cut-surface fill: a cool slate against the warm default body colour, so the
- * exact cut never reads as more of the body's own surface.
+ * How far a cut surface sits below its body's colour in lightness. The cut
+ * takes the colour of the body it cuts — a pale slate blue used to fill every
+ * cut, a colour nothing else on the stage used — and is shaded down from it,
+ * so it reads as the inside of that body and never as more of its outside.
  */
-const CUT_COLOR = 0x86a9c6;
+const CUT_LIGHTNESS_SHIFT = -0.14;
+
+/**
+ * The fill for a cut through a body of `bodyColor`; a body whose colour is
+ * not known is cut as the default body colour would be.
+ */
+export function sectionCutColor(
+  bodyColor: THREE.ColorRepresentation | undefined
+): THREE.Color {
+  return new THREE.Color(bodyColor ?? DEFAULT_BODY_COLOR).offsetHSL(
+    0,
+    0,
+    CUT_LIGHTNESS_SHIFT
+  );
+}
 /** The section curves themselves, drawn over the fill. */
 const CURVE_COLOR = 0x14293c;
 
@@ -71,7 +88,18 @@ function disposeSection(group: THREE.Object3D) {
  * position, and showing it beside a clipped preview of a different one would
  * be a drawing of a cut that is not on screen.
  */
-export function applyExactSection(root: THREE.Object3D, display: ExactSectionDisplay) {
+export function applyExactSection(
+  root: THREE.Object3D,
+  display: ExactSectionDisplay,
+  /**
+   * Each cut body's own colour, which its cut surface is shaded from. These
+   * are the body materials' live `Color` objects, not copies: an appearance
+   * preview patches them in place while the colour picker drags, and the
+   * fill re-shades from them every frame, so the cut follows the body's
+   * colour without the section being recomputed.
+   */
+  bodyColors: ReadonlyMap<string, THREE.Color> = new Map()
+) {
   const previous = root.getObjectByName(EXACT_SECTION);
   if (previous) {
     previous.removeFromParent();
@@ -93,23 +121,28 @@ export function applyExactSection(root: THREE.Object3D, display: ExactSectionDis
       );
       geometry.setIndex(new THREE.BufferAttribute(region.indices, 1));
       geometry.computeVertexNormals();
-      const mesh = new THREE.Mesh(
-        geometry,
-        new THREE.MeshPhongMaterial({
-          color: CUT_COLOR,
-          side: THREE.DoubleSide,
-          // Wireframe shows outlines, and the cut surface is not one. The
-          // display-mode pass writes this same flag, but it only runs when
-          // the MODE changes — a section arriving into wireframe has to be
-          // built hidden or it appears shaded until the next cycle.
-          visible: displayMode !== 'wireframe',
-          // The cut surface lies in the clipping plane itself; without the
-          // offset it fights the clipped body's own edge for the same depth.
-          polygonOffset: true,
-          polygonOffsetFactor: -1,
-          polygonOffsetUnits: -1
-        })
-      );
+      const bodyColor = bodyColors.get(region.bodyId);
+      const fill = new THREE.MeshPhongMaterial({
+        color: sectionCutColor(bodyColor),
+        side: THREE.DoubleSide,
+        // Wireframe shows outlines, and the cut surface is not one. The
+        // display-mode pass writes this same flag, but it only runs when
+        // the MODE changes — a section arriving into wireframe has to be
+        // built hidden or it appears shaded until the next cycle.
+        visible: displayMode !== 'wireframe',
+        // The cut surface lies in the clipping plane itself; without the
+        // offset it fights the clipped body's own edge for the same depth.
+        polygonOffset: true,
+        polygonOffsetFactor: -1,
+        polygonOffsetUnits: -1
+      });
+      const mesh = new THREE.Mesh(geometry, fill);
+      if (bodyColor) {
+        // In place, no allocation: this runs every frame the cut is drawn.
+        mesh.onBeforeRender = () => {
+          fill.color.copy(bodyColor).offsetHSL(0, 0, CUT_LIGHTNESS_SHIFT);
+        };
+      }
       mesh.name = `${EXACT_SECTION}-fill`;
       mesh.userData.exactSection = true;
       mesh.userData.exactSectionRegion = index;
