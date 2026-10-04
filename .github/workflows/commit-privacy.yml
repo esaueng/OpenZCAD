@@ -71,6 +71,19 @@ jobs:
               return invalid
 
 
+          def missing_commit(error):
+              if error.code == 404:
+                  return True
+              if error.code != 422:
+                  return False
+              try:
+                  body = json.load(error)
+              except (ValueError, TypeError):
+                  return False
+              message = body.get("message", "") if isinstance(body, dict) else ""
+              return isinstance(message, str) and message.startswith("No commit found for SHA:")
+
+
           def resolve_commit(oid, request):
               # Push payloads can identify an annotated tag object rather than its commit.
               seen = set()
@@ -138,6 +151,15 @@ jobs:
 
 
           def regression_checks():
+              # GitHub returns 422, rather than 404, for an annotated tag object.
+              from io import BytesIO
+              def http_error(code, body):
+                  return urllib.error.HTTPError("https://example.invalid", code, "fixture", None, BytesIO(body))
+              assert missing_commit(http_error(404, b""))
+              assert missing_commit(http_error(422, b'{"message":"No commit found for SHA: synthetic"}'))
+              assert not missing_commit(http_error(422, b'{"message":"Validation Failed"}'))
+              assert not missing_commit(http_error(422, b'[]'))
+              assert not missing_commit(http_error(403, b'{"message":"No commit found for SHA: synthetic"}'))
               # Synthetic examples only: no real personal identifiers in tests or logs.
               def fixture(name, email, login=None):
                   raw = {"name": name, "email": email}
@@ -219,7 +241,7 @@ jobs:
                       with urllib.request.urlopen(req, timeout=30) as response:
                           return json.load(response)
                   except urllib.error.HTTPError as error:
-                      if allow_missing and error.code == 404:
+                      if allow_missing and missing_commit(error):
                           return None
                       raise CheckError("GitHub could not supply commit metadata; retry the check.") from None
                   except (urllib.error.URLError, ValueError):
