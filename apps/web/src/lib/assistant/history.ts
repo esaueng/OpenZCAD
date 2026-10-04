@@ -28,7 +28,8 @@ import type {
   AssistantEntry
 } from './conversation';
 
-export const ASSISTANT_HISTORY_STORAGE_KEY = 'openzcad-assistant-history:v1';
+import { ASSISTANT_HISTORY_STORAGE_KEY } from './historyStorage';
+export { ASSISTANT_HISTORY_STORAGE_KEY, ASSISTANT_HISTORY_CLEARED_EVENT, clearAssistantHistory } from './historyStorage';
 
 const HISTORY_VERSION = 1;
 

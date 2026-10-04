@@ -44,6 +44,7 @@ import {
 } from '../../lib/assistant/conversation';
 import {
   clearAssistantThread,
+  ASSISTANT_HISTORY_CLEARED_EVENT,
   loadAssistantThread,
   saveAssistantThread
 } from '../../lib/assistant/history';
@@ -518,6 +519,20 @@ export function AssistantPanel({
     setUnread(0);
     setScrollback(false);
   }, [projectId]);
+
+  useEffect(() => {
+    const clear = () => {
+      abortRef.current?.abort();
+      abortRef.current = null;
+      dispatch({ type: 'restore', entries: [] });
+      seenCountRef.current = 0;
+      setNotice(null);
+      setUnread(0);
+    };
+    window.addEventListener(ASSISTANT_HISTORY_CLEARED_EVENT, clear);
+    return () =>
+      window.removeEventListener(ASSISTANT_HISTORY_CLEARED_EVENT, clear);
+  }, []);
 
   // Every turn is written straight back: a browser tab is closed without
   // ceremony, and a thread that only survives a clean exit is not a record.

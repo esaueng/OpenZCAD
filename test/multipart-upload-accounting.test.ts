@@ -317,6 +317,31 @@ beforeEach(() => {
 });
 
 describe('durable multipart quota accounting', () => {
+  it("reclaims the caller's expired sessions before admission without touching another account", async () => {
+    const foreign = await createMultipart(service, OTHER_OWNER, OTHER_PROJECT);
+    const expired: string[] = [];
+    for (let i = 0; i < MAX_ACTIVE_ARTIFACT_UPLOAD_SESSIONS; i++) {
+      const created = await createMultipart(service);
+      expired.push(created.session.uploadSessionId);
+    }
+    sqlite
+      .prepare('UPDATE upload_sessions SET expires_at = ?')
+      .run('2020-01-01T00:00:00.000Z');
+    const replacement = await service.createUploadSession(OWNER, {
+      projectId: PROJECT,
+      fileName: 'replacement.step',
+      contentType: 'model/step',
+      kind: 'snapshot'
+    });
+    expect(
+      uploadRow(sqlite, replacement.session.uploadSessionId)
+    ).toBeDefined();
+    for (const id of expired) expect(uploadRow(sqlite, id)).toBeUndefined();
+    expect(usage(sqlite)?.active_sessions).toBe(1);
+    expect(uploadRow(sqlite, foreign.session.uploadSessionId)).toBeDefined();
+    expect(r2.multipart.has(foreign.uploadId)).toBe(true);
+    expect(r2.multipart.size).toBe(1);
+  });
   it('rechecks project trash state when an editor inserts a session', async () => {
     sqlite.prepare(
       `INSERT INTO project_members

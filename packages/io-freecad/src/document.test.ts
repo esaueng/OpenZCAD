@@ -153,6 +153,48 @@ describe('FreeCAD saved-body selection', () => {
   });
 });
 describe('FreeCAD archive boundary', () => {
+  it.each([
+    '<a '.repeat(100_000),
+    '<!--'.repeat(100_000),
+    '<![CDATA['.repeat(50_000)
+  ])(
+    'refuses unfinished XML scans without repeatedly searching the remaining input',
+    (xml) => {
+      const archive = zipSync({ 'Document.xml': strToU8(xml) }, { level: 0 });
+      expect(() => readFreecadShapes(archive)).toThrow(/malformed/);
+    }
+  );
+
+  it('ignores tags inside comments, CDATA, quoted attributes, and processing instructions', () => {
+    const comment = `<!--${'<Nested>'.repeat(80)}-->`;
+    const cdata = `<![CDATA[${'<Nested>'.repeat(80)}]]>`;
+    expect(
+      readFreecadShapes(
+        fixture(
+          [
+            {
+              name: 'Body',
+              type: 'PartDesign::Body',
+              props: shape('a.brp') + comment + cdata
+            }
+          ],
+          { 'a.brp': 'body', 'unused.xml': '' },
+          '<?xml version="1.0"?><GuiDocument note="&lt;ignored&gt;"><ViewProviderData/></GuiDocument>'
+        )
+      )
+    ).toHaveLength(1);
+  });
+
+  it('refuses a well-formed document deeper than the XML nesting limit', () => {
+    const xml =
+      '<Document>' +
+      '<Nested>'.repeat(64) +
+      '</Nested>'.repeat(64) +
+      '</Document>';
+    expect(() =>
+      readFreecadShapes(zipSync({ 'Document.xml': strToU8(xml) }, { level: 0 }))
+    ).toThrow(/nesting-depth/);
+  });
   const valid = () =>
     fixture(
       [{ name: 'Body', type: 'PartDesign::Body', props: shape('a.brp') }],

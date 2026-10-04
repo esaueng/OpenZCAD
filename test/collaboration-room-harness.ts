@@ -91,7 +91,15 @@ export function createTestRoom(
   context: FakeRoomStorage['context'],
   env: unknown
 ): ProjectCollaborationRoom {
-  const room = new ProjectCollaborationRoom(context, env);
+  const roomEnv =
+    'ENVIRONMENT' in (env as object) || 'PRODUCTION_GUARD' in (env as object)
+      ? env
+      : {
+          ENVIRONMENT: 'development',
+          AUTH_MODE: 'development',
+          ...(env as object)
+        };
+  const room = new ProjectCollaborationRoom(context, roomEnv);
   context.activate(room);
   return room;
 }

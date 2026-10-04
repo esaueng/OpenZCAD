@@ -417,6 +417,7 @@ describe('project edit lease', () => {
       new Request(`https://room.test/?projectId=${document.projectId}`, {
         method: 'PATCH',
         headers: {
+          'x-openzcad-internal-role-update': 'v1',
           'x-openzcad-internal-user-id': 'user_owner',
           'x-openzcad-internal-project-role': 'viewer'
         }
@@ -711,6 +712,7 @@ describe('project edit lease', () => {
         {
           method: 'PATCH',
           headers: {
+            'x-openzcad-internal-role-update': 'v1',
             'x-openzcad-internal-user-id': 'user_role_editor',
             'x-openzcad-internal-project-role': 'viewer'
           }
@@ -739,6 +741,7 @@ describe('project edit lease', () => {
         {
           method: 'PATCH',
           headers: {
+            'x-openzcad-internal-role-update': 'v1',
             'x-openzcad-internal-user-id': 'user_role_editor'
           }
         }
@@ -808,9 +811,14 @@ describe('project edit lease', () => {
     const env = {
       PROJECT_EDIT_LEASES_ENFORCED: 'true',
       DB: {
-        prepare: () => ({
+        prepare: (sql: string) => ({
           bind: () => ({
-            first: async () => (memberRole ? { role: memberRole } : null)
+            first: async () =>
+              sql.includes('SELECT user_id, document_version FROM projects')
+                ? { user_id: document.ownerUserId }
+                : memberRole
+                  ? { role: memberRole }
+                  : null
           })
         })
       }
@@ -860,9 +868,14 @@ describe('project edit lease', () => {
     const env = {
       PROJECT_EDIT_LEASES_ENFORCED: 'true',
       DB: {
-        prepare: () => ({
+        prepare: (sql: string) => ({
           bind: () => ({
-            first: async () => (memberRole ? { role: memberRole } : null)
+            first: async () =>
+              sql.includes('SELECT user_id, document_version FROM projects')
+                ? { user_id: document.ownerUserId }
+                : memberRole
+                  ? { role: memberRole }
+                  : null
           })
         })
       }
@@ -963,6 +976,7 @@ describe('project edit lease', () => {
       new Request(`https://room.test/?projectId=${document.projectId}`, {
         method: 'PATCH',
         headers: {
+          'x-openzcad-internal-role-update': 'v1',
           'x-openzcad-internal-user-id': 'user_member',
           'x-openzcad-internal-project-role': 'owner'
         }

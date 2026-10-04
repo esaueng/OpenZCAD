@@ -154,7 +154,10 @@ jobs:
             exit 0
           fi
 
-          unexpected_paths="$(git diff --name-only | grep -Ev '^(packages/kernel-adapter/package\.json|pnpm-lock\.yaml)$' || true)"
+          pnpm install --frozen-lockfile
+          node scripts/verify-remus-artifacts.mjs --record
+
+          unexpected_paths="$(git diff --name-only | grep -Ev '^(packages/kernel-adapter/package\.json|pnpm-lock\.yaml|remus-checksums\.json)$' || true)"
           if [[ -n "$unexpected_paths" ]]; then
             echo "::error title=Unexpected updater diff::The targeted update changed files outside the kernel manifest and lockfile: $unexpected_paths"
             exit 1
@@ -303,10 +306,10 @@ jobs:
           git config user.name "$bot_login"
           git config user.email "$bot_id+$bot_login@users.noreply.github.com"
           git switch -c "$branch"
-          git add -- packages/kernel-adapter/package.json pnpm-lock.yaml
+          git add -- packages/kernel-adapter/package.json pnpm-lock.yaml remus-checksums.json
 
-          if [[ "$(git diff --cached --name-only)" != $'packages/kernel-adapter/package.json\npnpm-lock.yaml' ]]; then
-            echo "::error title=Unexpected staged files::Only the kernel manifest and pnpm-lock.yaml may be committed by this workflow."
+          if [[ "$(git diff --cached --name-only)" != $'packages/kernel-adapter/package.json\npnpm-lock.yaml\nremus-checksums.json' ]]; then
+            echo "::error title=Unexpected staged files::Only the kernel manifest, pnpm-lock.yaml and paired checksums may be committed by this workflow."
             exit 1
           fi
 

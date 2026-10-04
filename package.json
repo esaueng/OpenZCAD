@@ -12,7 +12,7 @@
     "dev": "turbo run dev --parallel",
     "dev:web": "pnpm --filter @openzcad/web dev",
     "dev:desktop": "pnpm --filter @openzcad/desktop dev",
-    "build": "pnpm --filter @openzcad/web build && node scripts/report-bundle-sizes.mjs --check",
+    "build": "node scripts/verify-remus-artifacts.mjs && pnpm --filter @openzcad/web build && node scripts/report-bundle-sizes.mjs --check",
     "build:desktop": "pnpm --filter @openzcad/desktop build",
     "build:desktop:app": "pnpm --filter @openzcad/desktop build:app",
     "build:report": "pnpm --filter @openzcad/web build && node scripts/report-bundle-sizes.mjs",
@@ -27,14 +27,14 @@
     "format": "prettier --write .",
     "selfhost:check": "node scripts/validate-deployment-config.mjs --config wrangler.selfhost.jsonc --target selfhost",
     "deploy:selfhost": "pnpm selfhost:check && pnpm build && pnpm --filter @openzcad/web exec wrangler d1 migrations apply DB --remote --config ../../wrangler.selfhost.jsonc && pnpm --filter @openzcad/web exec wrangler deploy --config ../../wrangler.selfhost.jsonc",
-    "deploy:beta": "pnpm --filter @openzcad/web deploy:beta"
+    "deploy:beta": "pnpm --filter @openzcad/web deploy:beta",
+    "audit:dependencies": "pnpm audit --audit-level=high"
   },
   "pnpm": {
     "overrides": {
-      "brace-expansion@>=5.0.0 <5.0.9": "5.0.9",
-      "nanoid@<3.3.18": "3.3.18",
-      "postcss@<=8.5.22": "8.5.23",
-      "undici@>=7.0.0 <7.29.0": "7.29.0"
+      "brace-expansion@>=5.0.0 <5.0.12": "5.0.12",
+      "nanoid@>=3.0.0 <3.3.18": "3.3.18",
+      "undici@>=7.0.0 <7.29.1": "7.29.1"
     }
   },
   "devDependencies": {

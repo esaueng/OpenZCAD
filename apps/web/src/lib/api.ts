@@ -41,7 +41,7 @@ import {
   normalizeDocumentHistory,
   withoutDerivedProjection
 } from '@openzcad/document-core';
-import { desktopFetch } from './desktopBridge';
+import { desktopFetch, isDesktopApp } from './desktopBridge';
 
 /**
  * An API call that reached the server and came back refused. Callers need the
@@ -216,7 +216,9 @@ export const api = {
     });
   },
   loadProject: (projectId: string) =>
-    requestJson<ProjectDocument>(`/api/projects/${projectId}`),
+    requestJson<ProjectDocument>(
+      `/api/projects/${encodeURIComponent(projectId)}`
+    ),
   /**
    * Copies a project. With `revisionId`, the copy starts from that stored save
    * state instead of the project's current document and records where it came
@@ -227,7 +229,7 @@ export const api = {
     options: { name?: string; revisionId?: string } = {}
   ) =>
     requestJson<DuplicateProjectResponse>(
-      `/api/projects/${projectId}/duplicate`,
+      `/api/projects/${encodeURIComponent(projectId)}/duplicate`,
       {
         method: 'POST',
         body: JSON.stringify({
@@ -240,7 +242,9 @@ export const api = {
     ),
   /** The project's retained save states, newest first, without documents. */
   listRevisions: (projectId: string) =>
-    requestJson<ListRevisionsResponse>(`/api/projects/${projectId}/revisions`),
+    requestJson<ListRevisionsResponse>(
+      `/api/projects/${encodeURIComponent(projectId)}/revisions`
+    ),
   /**
    * One save state's document. Resolves to null when the account no longer
    * stores it, which retention makes an ordinary outcome rather than a fault.
@@ -248,7 +252,7 @@ export const api = {
   loadRevision: async (projectId: string, revisionId: string) => {
     try {
       return await requestJson<ProjectDocument>(
-        `/api/projects/${projectId}/revisions/${revisionId}`
+        `/api/projects/${encodeURIComponent(projectId)}/revisions/${encodeURIComponent(revisionId)}`
       );
     } catch (error) {
       if (error instanceof ApiError && error.status === 404) {
@@ -258,10 +262,13 @@ export const api = {
     }
   },
   updateProject: (payload: UpdateProjectRequest) =>
-    requestJson<UpdateProjectResponse>(`/api/projects/${payload.projectId}`, {
-      method: 'PATCH',
-      body: JSON.stringify(payload)
-    }),
+    requestJson<UpdateProjectResponse>(
+      `/api/projects/${encodeURIComponent(payload.projectId)}`,
+      {
+        method: 'PATCH',
+        body: JSON.stringify(payload)
+      }
+    ),
   reorderProjects: (payload: ReorderProjectsRequest) =>
     requestJson<ReorderProjectsResponse>('/api/projects/reorder', {
       method: 'POST',
@@ -269,10 +276,13 @@ export const api = {
     }),
   /** Irreversible. Use `updateProject` with status 'deleted' for the bin. */
   deleteProject: async (projectId: string) => {
-    const response = await desktopFetch(`/api/projects/${projectId}`, {
-      method: 'DELETE',
-      credentials: 'same-origin'
-    });
+    const response = await desktopFetch(
+      `/api/projects/${encodeURIComponent(projectId)}`,
+      {
+        method: 'DELETE',
+        credentials: 'same-origin'
+      }
+    );
     if (!response.ok) {
       throw new ApiError(
         response.status,
@@ -287,7 +297,7 @@ export const api = {
     }),
   saveRevision: (payload: SaveRevisionRequest) =>
     requestJson<ProjectDocument>(
-      `/api/projects/${payload.projectId}/revisions`,
+      `/api/projects/${encodeURIComponent(payload.projectId)}/revisions`,
       {
         method: 'POST',
         body: JSON.stringify(payload)
@@ -308,7 +318,7 @@ export const api = {
   ) => {
     const body = JSON.stringify(payload);
     return requestJson<SaveProjectDocumentResponse>(
-      `/api/projects/${payload.projectId}/document`,
+      `/api/projects/${encodeURIComponent(payload.projectId)}/document`,
       {
         method: 'PUT',
         body,
@@ -323,6 +333,9 @@ export const api = {
       body: JSON.stringify(payload)
     }),
   uploadArtifact: async (uploadUrl: string, body: Blob) => {
+    if (!isDesktopApp() && new URL(uploadUrl, window.location.href).origin !== window.location.origin) {
+      throw new Error('Artifact upload URL must use the application origin.');
+    }
     const response = await desktopFetch(uploadUrl, {
       method: 'PUT',
       headers: { 'content-type': body.type || 'application/octet-stream' },
@@ -336,7 +349,7 @@ export const api = {
   },
   createMultipartUpload: (uploadSessionId: string) =>
     requestJson<CreateMultipartUploadResponse>(
-      `/api/uploads/${uploadSessionId}/multipart`,
+      `/api/uploads/${encodeURIComponent(uploadSessionId)}/multipart`,
       { method: 'POST' }
     ),
   uploadArtifactPart: async (
@@ -346,7 +359,7 @@ export const api = {
     body: Blob
   ): Promise<UploadedArtifactPart> => {
     const response = await desktopFetch(
-      `/api/uploads/${uploadSessionId}/parts/${partNumber}?uploadId=${encodeURIComponent(uploadId)}`,
+      `/api/uploads/${encodeURIComponent(uploadSessionId)}/parts/${partNumber}?uploadId=${encodeURIComponent(uploadId)}`,
       {
         method: 'PUT',
         headers: { 'content-type': 'application/octet-stream' },
@@ -366,7 +379,7 @@ export const api = {
     payload: CompleteMultipartUploadRequest
   ) => {
     const response = await desktopFetch(
-      `/api/uploads/${uploadSessionId}/multipart/complete`,
+      `/api/uploads/${encodeURIComponent(uploadSessionId)}/multipart/complete`,
       {
         method: 'POST',
         headers: { 'content-type': 'application/json' },
@@ -382,7 +395,7 @@ export const api = {
   },
   abortMultipartUpload: async (uploadSessionId: string, uploadId: string) => {
     const response = await desktopFetch(
-      `/api/uploads/${uploadSessionId}/multipart?uploadId=${encodeURIComponent(uploadId)}`,
+      `/api/uploads/${encodeURIComponent(uploadSessionId)}/multipart?uploadId=${encodeURIComponent(uploadId)}`,
       { method: 'DELETE' }
     );
     if (!response.ok) {
@@ -398,7 +411,11 @@ export const api = {
       body: JSON.stringify(payload)
     }),
   listArtifacts: (projectId: string) =>
-    requestJson<ListArtifactsResponse>(`/api/projects/${projectId}/artifacts`),
+    requestJson<ListArtifactsResponse>(
+      `/api/projects/${encodeURIComponent(projectId)}/artifacts`
+    ),
   getArtifactMetadata: (artifactId: string) =>
-    requestJson<ArtifactMetadataResponse>(`/api/artifacts/${artifactId}`)
+    requestJson<ArtifactMetadataResponse>(
+      `/api/artifacts/${encodeURIComponent(artifactId)}`
+    )
 };

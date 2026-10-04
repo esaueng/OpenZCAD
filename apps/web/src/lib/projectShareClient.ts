@@ -59,7 +59,7 @@ async function responseError(
 
 /** The fragment form the workspace reads back out on load. */
 export function buildShareLinkUrl(token: string): string {
-  return `${location.origin}/#share=${token}`;
+  return `${location.origin}/#share=${encodeURIComponent(token)}`;
 }
 
 /** Where a share-link visitor fetches one import-source asset from. */

@@ -106,7 +106,7 @@ describe('D1 project storage readiness', () => {
 
 describe('account erasure readiness', () => {
   it('requires the erasure fence and every write-safety trigger through 0016', async () => {
-    const first = vi.fn(async () => ({ table_ready: 1, trigger_count: 26 }));
+    const first = vi.fn(async () => ({ table_ready: 1, trigger_count: 30 }));
     const prepare = vi.fn((_query: string) => ({ first }));
     const db = {
       prepare

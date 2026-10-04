@@ -1,3 +1,4 @@
+import { workspaceValueLimits } from './value-budget';
 import { decodeSqlText, parseBoundedJson } from './json';
 import type { ShaprImportLimits } from './limits';
 import { truncateCodeUnits } from './truncate';
@@ -161,9 +162,10 @@ function collectNumericCandidates(value: unknown, maximum = 64): number[] {
     ) {
       seen.add(current);
     } else if (Array.isArray(current)) {
-      stack.push(...(current as unknown[]));
+      for (const item of current) stack.push(item);
     } else if (current && typeof current === 'object') {
-      stack.push(...Object.values(current as Record<string, unknown>));
+      for (const item of Object.values(current as Record<string, unknown>))
+        stack.push(item);
     }
   }
   return [...seen];
@@ -850,6 +852,7 @@ export function parseWorkspace269(
   checksumSha256: string,
   limits: ShaprImportLimits
 ): ShaprImportIR {
+  limits = workspaceValueLimits(limits);
   validateRequiredSchema(database);
   const [integrity] = database.all('PRAGMA quick_check(1)');
   if (

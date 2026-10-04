@@ -233,6 +233,11 @@ function tessellatePlacements(
       }
       tessellated.set(placement.solid, facets);
     }
+    if (indices.length + facets.triangles.length > MAX_IMPORT_TRIANGLES * 3) {
+      throw new Error(
+        `Mesh exceeds the browser import limit of ${MAX_IMPORT_TRIANGLES} triangles.`
+      );
+    }
     const base = vertices.length / 3;
     const matrix = placement.transform;
     if (matrix) {

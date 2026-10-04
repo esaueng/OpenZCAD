@@ -724,7 +724,27 @@ async function translateOpenRouterChatCompletion(
 
   let payload: unknown;
   try {
-    payload = await response.json();
+    const reader = response.body?.getReader();
+    if (!reader) throw new Error('Provider response has no body.');
+    const decoder = new TextDecoder();
+    const chunks: string[] = [];
+    let bytes = 0;
+    try {
+      while (true) {
+        const chunk = await reader.read();
+        if (chunk.done) break;
+        bytes += chunk.value.byteLength;
+        if (bytes > 2 * 1024 * 1024) {
+          await reader.cancel();
+          throw new Error('Provider response exceeds the 2 MB limit.');
+        }
+        chunks.push(decoder.decode(chunk.value, { stream: true }));
+      }
+    } finally {
+      reader.releaseLock();
+    }
+    chunks.push(decoder.decode());
+    payload = JSON.parse(chunks.join(''));
   } catch {
     payload = undefined;
   }
