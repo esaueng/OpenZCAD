@@ -43,8 +43,11 @@ Part II):
 | Everything else — pivots, restores | `easeInOutCubic` | 170–520 ms scaled by travel |
 
 Orbit uses two damping regimes — tight while the pointer is down, a short
-glide on release, bounded in wall-clock so a slow device cannot stretch it
-into a coast.
+glide on release. Decided 2026-10-04: the orbit and pan glide decays with
+τ ≈ 75 ms and is at rest 200 ms after release at any frame rate, monotone and
+without overshoot (`camera/orbitGlide.ts`), matching the reference CAD's
+10–12-frame stops; the former 800 ms cap was a low-frame-rate allowance the
+vsync-floor audit retired.
 
 The same measurements showed the reference spends its entire motion budget on
 the camera and on panel-content crossfades: geometry state (selection fills,

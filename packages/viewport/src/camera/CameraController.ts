@@ -32,6 +32,21 @@ import {
   createZoomProjectionScratch,
   wheelDeltaToLogScale
 } from './wheelZoom';
+import {
+  ORBIT_GLIDE_MAX_MS,
+  orbitGlideElapsedMs,
+  orbitGlideStepFraction
+} from './orbitGlide';
+
+/** A post-release orbit or pan glide in flight, timed on the render clock. */
+interface OrbitGlide {
+  /** `performance.now()` at release; the glide's clock runs from here. */
+  releasedAt: number;
+  /** Glide time played out by the last frame, in ms; null before the first. */
+  elapsedMs: number | null;
+  /** The settle timer already waited out the cap once for this glide. */
+  settleDeferred: boolean;
+}
 
 /** A durable camera pose: what a reload restores. */
 export interface ViewportCameraState {
@@ -54,14 +69,14 @@ const VIEW_SETTLE_MS = 120;
  * down the camera must track the hand nearly 1:1 — CAD framing is a precision
  * task, and heavier smoothing reads as the model swimming after the cursor —
  * so the drag factor is just enough to absorb pointer jitter. Release hands
- * the remaining velocity to the glide factor for a short ease-out (~300 ms to
- * rest at 60 Hz): decisive like a tool, not an instant halt, not a map
- * viewer's coast past the framing the user chose.
+ * the remaining velocity to a wall-clock glide (`orbitGlide.ts`): τ ≈ 75 ms,
+ * at rest by 200 ms whatever the frame rate, monotone with no overshoot.
+ * Decisive like a tool, not an instant halt, and never a coast past the
+ * framing the user chose. The cap used to be 800 ms to spare low-frame-rate
+ * devices; every audited scenario now holds the vsync floor, so the cap is set
+ * by feel instead.
  */
 const DRAG_DAMPING = 0.35;
-const GLIDE_DAMPING = 0.15;
-/** Keep low-frame-rate devices from stretching a short CAD glide into a coast. */
-const ORBIT_GLIDE_MAX_MS = 800;
 
 /** Orbit radius of the home pose on a fresh document, before any fit runs. */
 const DEFAULT_ORBIT_RADIUS = 150;
@@ -149,7 +164,9 @@ export class CameraController {
   private tween: CameraTween | null = null;
   private settleTimeout: number | null = null;
   private flushingSettle = false;
-  private orbitGlideEndsAt: number | null = null;
+  private orbitGlide: OrbitGlide | null = null;
+  /** Render-clock time of the previous `stepOrbit`, for frame gaps. */
+  private lastOrbitStepAt: number | null = null;
   private gestureActive = false;
   private externalOrbitActive = false;
   private disposed = false;
@@ -310,7 +327,7 @@ export class CameraController {
       -((event.clientY - rect.top) / rect.height) * 2 + 1
     );
     this.pendingZoomLogScale += impulse;
-    this.orbitGlideEndsAt = null;
+    this.orbitGlide = null;
     if (this.settleTimeout !== null) {
       window.clearTimeout(this.settleTimeout);
       this.settleTimeout = null;
@@ -383,7 +400,7 @@ export class CameraController {
   private beginGesture = () => {
     this.cancelZoom();
     this.gestureActive = true;
-    this.orbitGlideEndsAt = null;
+    this.orbitGlide = null;
     if (this.settleTimeout !== null) {
       window.clearTimeout(this.settleTimeout);
       this.settleTimeout = null;
@@ -401,7 +418,7 @@ export class CameraController {
   private settleDamping = () => {
     this.gestureActive = false;
     if (this.options.reducedMotion()) {
-      this.orbitGlideEndsAt = null;
+      this.orbitGlide = null;
       this.orbit.enableDamping = false;
       this.orbit.update();
       this.orbit.enableDamping = true;
@@ -410,8 +427,12 @@ export class CameraController {
       this.scheduleSettledViewChange();
       return;
     }
-    this.orbit.dampingFactor = GLIDE_DAMPING;
-    this.orbitGlideEndsAt = performance.now() + ORBIT_GLIDE_MAX_MS;
+    // The glide sets the damping factor frame by frame from its own clock.
+    this.orbitGlide = {
+      releasedAt: performance.now(),
+      elapsedMs: null,
+      settleDeferred: false
+    };
     this.options.requestRender();
     // The live pose is readable at release, while durable persistence remains
     // parked until the damping tail reaches this controller's settle path.
@@ -419,7 +440,7 @@ export class CameraController {
     this.scheduleSettledViewChange();
   };
 
-  private scheduleSettledViewChange = () => {
+  private scheduleSettledViewChange = (delayMs = VIEW_SETTLE_MS) => {
     this.options.requestRender();
     if (this.settleTimeout !== null) {
       window.clearTimeout(this.settleTimeout);
@@ -434,7 +455,19 @@ export class CameraController {
       ) {
         return;
       }
-      this.orbitGlideEndsAt = null;
+      const glide = this.orbitGlide;
+      if (glide !== null && !glide.settleDeferred) {
+        // Frames slower than this delay leave a glide in flight; flushing it
+        // now would jump the residue ahead of its curve. Wait out the cap
+        // once: a landing frame re-arms this as usual, and if no frame comes
+        // (a hidden tab) the flush below lands it after the cap, where the
+        // curve is at rest anyway. Two firings put this flush at least
+        // 2 × VIEW_SETTLE_MS after release, past the cap.
+        glide.settleDeferred = true;
+        this.scheduleSettledViewChange(ORBIT_GLIDE_MAX_MS);
+        return;
+      }
+      this.orbitGlide = null;
       // The glide has decayed below OrbitControls' movement epsilon by now,
       // but a sub-epsilon offset still sits frozen on the controls; thawed
       // mid-gesture it lands as a jump in whatever comes next — a pan
@@ -450,7 +483,7 @@ export class CameraController {
         this.flushingSettle = false;
       }
       this.emitSettledViewChange();
-    }, VIEW_SETTLE_MS);
+    }, delayMs);
   };
 
   private createOrbit(camera: THREE.Camera): OrbitControls<THREE.Camera> {
@@ -545,7 +578,7 @@ export class CameraController {
   ) {
     this.cancelZoom();
     // Consume leftover damping inertia so the glide starts from rest.
-    this.orbitGlideEndsAt = null;
+    this.orbitGlide = null;
     this.orbit.dampingFactor = DRAG_DAMPING;
     this.orbit.update();
     if (this.options.reducedMotion()) {
@@ -675,18 +708,35 @@ export class CameraController {
   }
 
   /**
-   * Advances pointer-driven orbit damping with a real-time upper bound.
+   * Advances pointer-driven orbit damping; after release, plays the glide.
    *
-   * OrbitControls applies damping per rendered frame. Without this deadline,
-   * a busy or low-refresh device turns the same short residue into a much
-   * longer wall-clock coast and drifts beyond the framing the user released.
+   * OrbitControls applies damping per rendered frame, so the glide sets each
+   * frame's factor from the wall-clock time since release (see
+   * `orbitGlide.ts`): the curve is the same at any frame rate, the first frame
+   * at or past 200 ms lands it, and a busy frame lands further along it
+   * rather than stretching the coast. `now` is the frame timestamp, on the
+   * same timeline as `performance.now()`.
    */
   stepOrbit(now: number): boolean {
     if (this.disposed) {
       return false;
     }
-    if (this.orbitGlideEndsAt !== null && now >= this.orbitGlideEndsAt) {
-      this.orbitGlideEndsAt = null;
+    const gapMs =
+      this.lastOrbitStepAt === null ? Number.NaN : now - this.lastOrbitStepAt;
+    this.lastOrbitStepAt = now;
+    const glide = this.orbitGlide;
+    if (glide === null) {
+      return this.updateOrbitForFrame();
+    }
+    const fromMs = glide.elapsedMs ?? 0;
+    glide.elapsedMs = orbitGlideElapsedMs(
+      glide.elapsedMs,
+      now - glide.releasedAt,
+      gapMs
+    );
+    const fraction = orbitGlideStepFraction(fromMs, glide.elapsedMs);
+    if (fraction >= 1) {
+      this.orbitGlide = null;
       this.orbit.enableDamping = false;
       const changed = this.updateOrbitForFrame();
       this.orbit.enableDamping = true;
@@ -695,9 +745,15 @@ export class CameraController {
       this.scheduleSettledViewChange();
       return changed;
     }
+    if (fraction <= 0) {
+      // A repeated timestamp advances nothing; keep the loop awake for the
+      // next frame instead of reading "no movement" as the glide's end.
+      return true;
+    }
+    this.orbit.dampingFactor = fraction;
     const changed = this.updateOrbitForFrame();
-    if (this.orbitGlideEndsAt !== null && !changed) {
-      this.orbitGlideEndsAt = null;
+    if (!changed) {
+      this.orbitGlide = null;
       this.orbit.dampingFactor = DRAG_DAMPING;
     }
     return changed;
@@ -937,7 +993,7 @@ export class CameraController {
     this.cancelZoom();
     this.gestureActive = false;
     this.externalOrbitActive = false;
-    this.orbitGlideEndsAt = null;
+    this.orbitGlide = null;
     if (this.settleTimeout !== null) {
       window.clearTimeout(this.settleTimeout);
       this.settleTimeout = null;
