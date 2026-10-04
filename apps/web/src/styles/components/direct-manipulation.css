@@ -1403,6 +1403,13 @@
   outline-offset: 1px;
 }
 
+/* The text card composes before anything is placed; its hint (what to do
+   next) sits between the fields and Place, closer to the fields. */
+.sketch-text-card .field-hint,
+.sketch-text-card .form-error {
+  margin: 2px 0 10px;
+}
+
 /* A style that fell back to a real face is information, not an error: the
    registry ships no synthetic bold or italic, so this is the honest outcome. */
 .field-hint {

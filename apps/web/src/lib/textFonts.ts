@@ -18,7 +18,7 @@
  * message, which is the behaviour we want if a font 404s in production.
  */
 import { useEffect, useState } from 'react';
-import { setTextFontProvider } from '@openzcad/geometry';
+import { resolveFontStyle, setTextFontProvider } from '@openzcad/geometry';
 import type { FontStyle } from '@openzcad/geometry';
 // Type-only: erased at build time, so it creates no static edge to the parser.
 import type { FontLibrary } from '@openzcad/geometry/text-loader';
@@ -75,6 +75,18 @@ const FONT_PRELOAD_BUDGET_MS = 10_000;
  * degrade that one string into a visible diagnostic, not fail the whole
  * rebuild and take the rest of the model with it.
  */
+/**
+ * The face a request for `style` actually draws with. Not every family ships
+ * every style (Pacifico is regular only, Oswald and Roboto Slab have no
+ * italic), and the geometry path falls back down the registry's style chain
+ * rather than fail. Loading the raw request fetched nothing for those, so the
+ * fallback face was never parsed and the text drew blank; loading what the
+ * geometry will ask for keeps the two in step.
+ */
+export function loadedFontStyle(family: string, style: FontStyle): FontStyle {
+  return resolveFontStyle(family, style) ?? style;
+}
+
 export async function preloadDocumentFonts(
   document: ProjectDocument
 ): Promise<void> {
@@ -84,7 +96,7 @@ export async function preloadDocumentFonts(
       continue;
     }
     const family = node.data.fontFamily;
-    const style = node.data.fontStyle;
+    const style = loadedFontStyle(family, node.data.fontStyle);
     wanted.set(`${family}|${style}`, { family, style });
   }
   // A document with no text never pays for the font parser at all.
@@ -110,7 +122,9 @@ export async function loadTextFont(
   style: FontStyle
 ): Promise<void> {
   const library = await fontLibrary();
-  await library.load(family, style).catch(() => undefined);
+  await library
+    .load(family, loadedFontStyle(family, style))
+    .catch(() => undefined);
 }
 
 /**

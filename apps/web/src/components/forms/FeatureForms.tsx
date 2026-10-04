@@ -471,7 +471,8 @@ export function TextSketchForm({
   const [text, setText] = useState<TextAttributes>({
     text: initial.object.text,
     fontFamily: initial.object.fontFamily,
-    fontStyle: initial.object.fontStyle
+    fontStyle: initial.object.fontStyle,
+    ...(initial.object.align ? { align: initial.object.align } : {})
   });
   const [values, setValues] = useState<Record<string, string>>(() => ({
     size: paramValueText(initial.object.size),
@@ -497,8 +498,8 @@ export function TextSketchForm({
         onSubmit({
           name,
           data: {
-            // Spread first so fields this form does not own — alignment,
-            // construction — survive the edit.
+            // Spread first so fields this form does not own — construction
+            // — survive the edit; alignment rides in `text` once picked.
             ...initial.object,
             ...text,
             size: coerceParamValue(values.size ?? ''),
@@ -513,7 +514,7 @@ export function TextSketchForm({
       <TextObjectFields value={text} onChange={setText} />
       <div className="field-pair">
         <ExprInput
-          label="Size"
+          label="Size (em)"
           value={values.size ?? ''}
           scope={scope}
           onChange={setValue('size')}
