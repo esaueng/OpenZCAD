@@ -1003,3 +1003,164 @@ describe('sketch object move', () => {
     ).toEqual({ objectId: 'circle_1', handle: 'translate' });
   });
 });
+
+describe('multi-region selection', () => {
+  const second: RegionTarget = { ...region, regionFingerprint: 43 };
+  const third: RegionTarget = { ...region, regionFingerprint: 44 };
+  const fingerprints = (state: InteractionState) =>
+    state.mode === 'region'
+      ? state.targets.map((target) => target.regionFingerprint)
+      : [];
+
+  it('adds a region on Shift and counts every selected one', () => {
+    let state = interactionReducer(IDLE, {
+      type: 'select-region',
+      target: region
+    });
+    expect(commandSessionFor(state)?.target).toEqual({
+      kind: 'region',
+      count: 1
+    });
+    state = interactionReducer(state, {
+      type: 'select-region',
+      target: second,
+      additive: true
+    });
+    expect(fingerprints(state)).toEqual([42, 43]);
+    // The newest pick anchors the default arrow and the form.
+    expect(state).toMatchObject({ target: { regionFingerprint: 43 } });
+    expect(commandSessionFor(state)?.target).toEqual({
+      kind: 'region',
+      count: 2
+    });
+    expect(toolCardFor(state)?.hint).toContain('all 2 regions');
+  });
+
+  it('removes an already-selected region on Shift, and the last one clears', () => {
+    let state = interactionReducer(IDLE, {
+      type: 'select-region',
+      target: region
+    });
+    state = interactionReducer(state, {
+      type: 'select-region',
+      target: second,
+      additive: true
+    });
+    state = interactionReducer(state, {
+      type: 'select-region',
+      target: second,
+      additive: true
+    });
+    expect(fingerprints(state)).toEqual([42]);
+    // The anchor falls back to a region that is still selected.
+    expect(state).toMatchObject({ target: { regionFingerprint: 42 } });
+    expect(
+      interactionReducer(state, {
+        type: 'select-region',
+        target: region,
+        additive: true
+      })
+    ).toBe(IDLE);
+  });
+
+  it('replaces the whole set on a plain click', () => {
+    let state = interactionReducer(IDLE, {
+      type: 'select-region',
+      target: region
+    });
+    state = interactionReducer(state, {
+      type: 'select-region',
+      target: second,
+      additive: true
+    });
+    state = interactionReducer(state, {
+      type: 'select-region',
+      target: third
+    });
+    expect(fingerprints(state)).toEqual([44]);
+    expect(commandSessionFor(state)?.target.count).toBe(1);
+  });
+
+  it('never mixes sketches: Shift on another sketch starts a new set', () => {
+    let state = interactionReducer(IDLE, {
+      type: 'select-region',
+      target: region
+    });
+    state = interactionReducer(state, {
+      type: 'select-region',
+      target: { ...second, sketchId: 'sketch_2' },
+      additive: true
+    });
+    expect(fingerprints(state)).toEqual([43]);
+  });
+
+  it('clears every region at once', () => {
+    let state = interactionReducer(IDLE, {
+      type: 'select-region',
+      target: region
+    });
+    state = interactionReducer(state, {
+      type: 'select-region',
+      target: second,
+      additive: true
+    });
+    expect(interactionReducer(state, { type: 'clear' })).toBe(IDLE);
+    expect(interactionReducer(state, { type: 'escape' })).toBe(IDLE);
+  });
+
+  it('expands a text glyph to every region of its entity', () => {
+    const glyph = (fingerprint: number): RegionTarget => ({
+      ...region,
+      regionFingerprint: fingerprint,
+      sourceEntityIds: ['text_1']
+    });
+    const word = [glyph(1), glyph(2), glyph(3)];
+    let state = interactionReducer(IDLE, {
+      type: 'select-region',
+      target: word[1]!,
+      group: word
+    });
+    expect(fingerprints(state)).toEqual([1, 2, 3]);
+    expect(state).toMatchObject({ target: { regionFingerprint: 2 } });
+    expect(commandSessionFor(state)?.target.count).toBe(3);
+    state = interactionReducer(state, {
+      type: 'select-region',
+      target: second,
+      additive: true
+    });
+    expect(fingerprints(state)).toEqual([1, 2, 3, 43]);
+    // Shift on any glyph of the word removes the whole word: it cannot be
+    // built in part.
+    state = interactionReducer(state, {
+      type: 'select-region',
+      target: word[0]!,
+      group: word,
+      additive: true
+    });
+    expect(fingerprints(state)).toEqual([43]);
+  });
+
+  it('re-arms the same set when the pick repeats it as a group', () => {
+    let state = interactionReducer(IDLE, {
+      type: 'select-region',
+      target: region
+    });
+    state = interactionReducer(state, {
+      type: 'select-region',
+      target: second,
+      additive: true
+    });
+    state = interactionReducer(state, {
+      type: 'validation-failed',
+      diagnostic: { message: 'No' }
+    });
+    if (state.mode !== 'region') throw new Error('expected region');
+    const rearmed = interactionReducer(state, {
+      type: 'select-region',
+      target: state.target,
+      group: state.targets
+    });
+    expect(fingerprints(rearmed)).toEqual([42, 43]);
+    expect(rearmed).toMatchObject({ phase: 'armed', error: null });
+  });
+});

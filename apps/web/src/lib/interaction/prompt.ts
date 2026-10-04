@@ -72,7 +72,9 @@ function armedStep(state: InteractionState): string {
     return `Drag the handle to set the ${state.op} on ${noun}, or type a value`;
   }
   if (state.mode === 'region') {
-    return 'Drag the arrow off the plane to extrude the profile';
+    return state.targets.length > 1
+      ? `Drag the arrow off the plane to extrude the profiles together · each of the ${state.targets.length} arrows moves them all`
+      : 'Drag the arrow off the plane to extrude the profile';
   }
   return 'Pick a body, face, or edge';
 }

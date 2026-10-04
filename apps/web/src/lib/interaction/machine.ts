@@ -218,7 +218,17 @@ export type InteractionState =
     } & OperationLifecycle)
   | ({
       mode: 'region';
+      /**
+       * The anchor: the region picked last, which a command that needs one
+       * region (the default arrow, the form's sketch) reads. Always one of
+       * `targets`.
+       */
       target: RegionTarget;
+      /**
+       * Every selected region, in pick order. One drag extrudes them all by
+       * the same value; each draws its own arrow.
+       */
+      targets: RegionTarget[];
       extrudeChoice?: ExtrudeChoice;
     } & OperationLifecycle)
   | { mode: 'sketch'; session: SketchSessionState };
@@ -226,7 +236,23 @@ export type InteractionState =
 export type InteractionEvent =
   | { type: 'select-face'; target: FaceTarget }
   | { type: 'select-edge'; selection: TopologySelection; additive: boolean }
-  | { type: 'select-region'; target: RegionTarget }
+  | {
+      type: 'select-region';
+      target: RegionTarget;
+      /**
+       * Shift: add the pick to the regions already selected in the same
+       * sketch, or remove it when it is already one of them — the rule faces
+       * and edges follow. Plain: the pick replaces the selection.
+       */
+      additive?: boolean;
+      /**
+       * The regions this pick stands for, `target` among them. A glyph of a
+       * text object is built with every other glyph of that object, so a
+       * pick of one selects, arms and previews all of them; a plain region
+       * stands for itself alone.
+       */
+      group?: RegionTarget[];
+    }
   | { type: 'set-extrude-choice'; choice: ExtrudeChoice }
   | { type: 'drag-engage' }
   | { type: 'drag-release' }
@@ -357,6 +383,55 @@ export function escapeTarget(
   return 'clear-selection';
 }
 
+function sameRegion(a: RegionTarget, b: RegionTarget): boolean {
+  return (
+    a.sketchId === b.sketchId && a.regionFingerprint === b.regionFingerprint
+  );
+}
+
+/** The pick and the regions built with it, the pick always among them. */
+function regionPickGroup(
+  target: RegionTarget,
+  group: readonly RegionTarget[] | undefined
+): RegionTarget[] {
+  const members = (group ?? []).filter(
+    (member) =>
+      member.sketchId === target.sketchId &&
+      selectionCapabilities({ kind: 'region', area: member.area }).length > 0
+  );
+  return members.some((member) => sameRegion(member, target))
+    ? members
+    : [...members, target];
+}
+
+/**
+ * Applies one region pick to the current set: a pick whose regions are all
+ * already selected removes them, anything else adds what is missing. With an
+ * empty current set this is a plain replace.
+ */
+function nextRegionTargets(
+  current: readonly RegionTarget[],
+  group: readonly RegionTarget[]
+): RegionTarget[] {
+  const selected = (candidate: RegionTarget) =>
+    current.some((member) => sameRegion(member, candidate));
+  if (current.length > 0 && group.every(selected)) {
+    return current.filter(
+      (member) => !group.some((candidate) => sameRegion(candidate, member))
+    );
+  }
+  const added: RegionTarget[] = [];
+  for (const candidate of group) {
+    if (
+      !selected(candidate) &&
+      !added.some((member) => sameRegion(member, candidate))
+    ) {
+      added.push(candidate);
+    }
+  }
+  return [...current, ...added];
+}
+
 export function interactionReducer(
   state: InteractionState,
   event: InteractionEvent
@@ -459,13 +534,23 @@ function reduceInteraction(
       ) {
         return IDLE;
       }
+      const sameSketch =
+        state.mode === 'region' &&
+        state.target.sketchId === event.target.sketchId;
+      const targets = nextRegionTargets(
+        event.additive && sameSketch ? state.targets : [],
+        regionPickGroup(event.target, event.group)
+      );
+      if (targets.length === 0) {
+        return IDLE;
+      }
       return {
         mode: 'region',
-        target: event.target,
-        ...(state.mode === 'region' &&
-        state.target.sketchId === event.target.sketchId
-          ? { extrudeChoice: state.extrudeChoice }
-          : {}),
+        target:
+          targets.find((target) => sameRegion(target, event.target)) ??
+          targets[targets.length - 1]!,
+        targets,
+        ...(sameSketch ? { extrudeChoice: state.extrudeChoice } : {}),
         ...ARMED
       };
     }
@@ -923,7 +1008,7 @@ export function commandSessionFor(
       : state.mode === 'face'
         ? { kind: 'face', count: 1 }
         : state.mode === 'region'
-          ? { kind: 'region', count: 1 }
+          ? { kind: 'region', count: state.targets.length }
           : { kind: 'sketch', count: 0 };
   return {
     id: identity.id,
@@ -1079,7 +1164,12 @@ export function toolCardFor(state: InteractionState): ToolCardModel | null {
       return {
         icon,
         title,
-        ...lifecycleHint(state, 'Drag the region to pull it into a solid.')
+        ...lifecycleHint(
+          state,
+          state.targets.length > 1
+            ? `Drag any arrow to pull all ${state.targets.length} regions into solids together.`
+            : 'Drag the region to pull it into a solid.'
+        )
       };
     case 'sketch':
       if (state.session.moving) {
