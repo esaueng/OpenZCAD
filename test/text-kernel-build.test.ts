@@ -652,7 +652,9 @@ describe('text built by the exact kernel', { timeout: 120_000 }, () => {
     function onFaceScene(
       route: 'extrude' | 'boolean',
       operation: 'subtract' | 'union',
-      hole?: Hole
+      hole?: Hole,
+      /** A sealed 6 x 3 x 2 cavity whose roof is at z = `top`. */
+      cavity?: { centerX: number; centerY: number; top: number }
     ): ProjectDocument {
       const withBox = addPrimitiveFeature(
         createProjectDocument('On face', toUserId('user_text_on_face')),
@@ -676,6 +678,26 @@ describe('text built by the exact kernel', { timeout: 120_000 }, () => {
         });
         withSlab = drilled.document;
         slabId = drilled.bodyId;
+      }
+      if (cavity) {
+        // Cut down from a buried plane, so the top face stays whole.
+        const { top, ...center } = cavity;
+        const pocket = addSketchFeature(withSlab, {
+          name: 'Cavity',
+          planeRef: { type: 'canonical', plane: 'XY', offset: top },
+          objects: [
+            { objectKind: 'rectangle', ...center, width: 6, height: 3 }
+          ]
+        });
+        const hollowed = extrudeSketch(pocket.document, {
+          name: 'Cavity cut',
+          sketchId: pocket.sketchId,
+          distance: -2,
+          operation: 'cut',
+          targetBodyId: slabId
+        });
+        withSlab = hollowed.document;
+        slabId = hollowed.bodyId;
       }
       const created = addSketchFeature(withSlab, {
         name: 'Label',
@@ -830,6 +852,34 @@ describe('text built by the exact kernel', { timeout: 120_000 }, () => {
         expect(volumeRatio(bodyOf(derived), expected)).toBeCloseTo(1, 5);
       });
     }
+
+    it('keeps the refusal for an on-face emboss over a thin-roofed cavity', async () => {
+      // The emboss's pierce runs 0.01 into the slab; a sealed cavity roofed
+      // 0.007 under the text would have its top filled by it. The face has
+      // no hole, so of the gate's checks only the through-thickness band
+      // declines it. On this kernel pin the pierced union over that roof is
+      // refused too, so this case pins the end-to-end outcome; the band
+      // check itself is proved in exact-pierce-tool.test.ts.
+      const cavity = { centerX: 15, centerY: 14, top: SLAB.depth - 0.007 };
+      const derived = await adapter.syncDocument(
+        onFaceScene('extrude', 'union', undefined, cavity)
+      );
+      const failed = (derived.featureWarnings ?? []).filter(
+        (entry) => entry.kind === 'build-failed'
+      );
+      expect(failed).toHaveLength(1);
+      expect(failed[0]!.featureName).toBe('Label text');
+      expect(failed[0]!.kernelRefusal).toMatchObject({
+        family: 'boolean',
+        code: 'exact_only_unattainable'
+      });
+      expect(
+        volumeRatio(
+          bodyOf(derived),
+          SLAB.width * SLAB.height * SLAB.depth - 6 * 3 * 2
+        )
+      ).toBeCloseTo(1, 6);
+    });
   });
 
   it('keeps a curved letter to a handful of walls rather than hundreds', async () => {

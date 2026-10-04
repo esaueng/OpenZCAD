@@ -39,6 +39,7 @@ import { classifySolidPoint } from './exact-measure';
 import { isBuildCancelled } from './exact-cancellation';
 import { readFacePlaneFrame } from './exact-face-plane-frame';
 import { MEASUREMENT_DEFLECTION } from './exact-witnesses';
+import { tessellatedFaceBounds } from './exact-boolean-helpers';
 import { kernelRefusalRecordOf } from './kernel-refusal';
 import type { RemusKernel } from './remus-runtime';
 import type { ExactShape } from './exact-types';
@@ -407,6 +408,8 @@ function regionContains(
  * decided from the loops themselves rather than by sampling the cap's
  * interior. A cap spanning two faces, touching or crossing a boundary, or
  * over any hole fails, and so does anything the kernel cannot sample.
+ * Returns the caps' combined plane bounds `[minU, minV, maxU, maxV]` when
+ * they all pass, null otherwise.
  */
 function capsOnPartnerFaces(
   kernel: RemusKernel,
@@ -415,27 +418,115 @@ function capsOnPartnerFaces(
   plane: PlaneBasis,
   deflection: number,
   clearance: number
-): boolean {
+): [number, number, number, number] | null {
   let regions: PlaneRegion[];
+  let capRegions: PlaneRegion[];
   try {
     regions = partnerFaces.map((face) =>
       planeRegion(kernel, face, plane, deflection)
     );
+    capRegions = caps.map((cap) => planeRegion(kernel, cap, plane, deflection));
   } catch {
-    return false;
+    return null;
   }
-  return caps.every((cap) => {
-    let capRegion: PlaneRegion;
-    try {
-      capRegion = planeRegion(kernel, cap, plane, deflection);
-    } catch {
-      return false;
-    }
-    return (
+  const covered = capRegions.every(
+    (capRegion) =>
       regions.filter((region) => regionContains(region, capRegion, clearance))
         .length === 1
-    );
-  });
+  );
+  if (!covered) return null;
+  return capRegions.reduce<[number, number, number, number]>(
+    (bounds, region) => [
+      Math.min(bounds[0], region.outer.bounds[0]),
+      Math.min(bounds[1], region.outer.bounds[1]),
+      Math.max(bounds[2], region.outer.bounds[2]),
+      Math.max(bounds[3], region.outer.bounds[3])
+    ],
+    [Infinity, Infinity, -Infinity, -Infinity]
+  );
+}
+
+/**
+ * Whether the slab the pierce sweeps through is free of every partner face
+ * but the ones that bound it by construction.
+ *
+ * The band runs from the sketch plane to `depth` past it along `direction`,
+ * over the footprint's plane bounds. The coplanar faces themselves, and every
+ * face sharing an edge with them (the walls the loop check already keeps the
+ * cap clear of), are excluded; ANY other face whose bounds reach into the
+ * band — the roof of a sealed cavity under an emboss, an internal void, an
+ * overhang just above a cut — declines the retry. Bounds of bounds, so this
+ * errs toward declining, and it needs no boolean: an intersect of the sliver
+ * is the very coplanar Bezier boolean that refuses.
+ */
+function pierceBandClear(
+  kernel: RemusKernel,
+  partnerSolids: readonly number[],
+  partnerFaces: readonly number[],
+  footprint: readonly [number, number, number, number],
+  plane: PlaneBasis,
+  direction: Vec3,
+  depth: number,
+  tolerance: number
+): boolean {
+  const boundingEdges = new Set<number>();
+  for (const face of partnerFaces) {
+    for (const edge of Array.from(kernel.getFaceEdges(face))) {
+      boundingEdges.add(edge);
+    }
+  }
+  const excluded = new Set(partnerFaces);
+  for (const solid of partnerSolids) {
+    for (const face of Array.from(kernel.getSolidFaces(solid))) {
+      if (excluded.has(face)) continue;
+      if (
+        Array.from(kernel.getFaceEdges(face)).some((edge) =>
+          boundingEdges.has(edge)
+        )
+      ) {
+        continue;
+      }
+      let bounds: Float64Array;
+      try {
+        bounds = tessellatedFaceBounds(kernel, face);
+      } catch {
+        return false;
+      }
+      // The face's box in the band's frame: (u, v) across the plane, w along
+      // the pierce. Projecting all eight corners keeps it a superset.
+      const range = [
+        Infinity,
+        Infinity,
+        Infinity,
+        -Infinity,
+        -Infinity,
+        -Infinity
+      ];
+      for (let corner = 0; corner < 8; corner += 1) {
+        const dx = bounds[corner & 1 ? 3 : 0]! - plane.origin.x;
+        const dy = bounds[corner & 2 ? 4 : 1]! - plane.origin.y;
+        const dz = bounds[corner & 4 ? 5 : 2]! - plane.origin.z;
+        const frame = [
+          dx * plane.u.x + dy * plane.u.y + dz * plane.u.z,
+          dx * plane.v.x + dy * plane.v.y + dz * plane.v.z,
+          dx * direction.x + dy * direction.y + dz * direction.z
+        ];
+        for (let axis = 0; axis < 3; axis += 1) {
+          range[axis] = Math.min(range[axis]!, frame[axis]!);
+          range[axis + 3] = Math.max(range[axis + 3]!, frame[axis]!);
+        }
+      }
+      const inBand =
+        range[0]! <= footprint[2] + tolerance &&
+        range[3]! >= footprint[0] - tolerance &&
+        range[1]! <= footprint[3] + tolerance &&
+        range[4]! >= footprint[1] - tolerance &&
+        range[5]! > tolerance &&
+        range[2]! < depth + tolerance;
+      if (inBand) return false;
+    }
+  }
+  return true;
 }
 
 export interface PierceGateInput {
@@ -465,7 +556,12 @@ export interface PierceGateInput {
  *    tolerance from every face loop. The face then covers the whole
  *    footprint, and no pre-existing hole or recess, however small, sits under
  *    it for the sliver to fill or cut;
- * 4. GUARD: at sampled interior points of the cap the partner's material lies
+ * 4. DECIDING: the band the sliver sweeps — `travel` deep, over the
+ *    footprint — meets no partner face but the coplanar ones and their
+ *    neighbours, so nothing lies inside the sliver's thickness either: no
+ *    sealed cavity under a thin roof, no void, no overhang
+ *    (`pierceBandClear`);
+ * 5. GUARD: at sampled interior points of the cap the partner's material lies
  *    on the expected side of the plane — for a cut, air on the pierce side
  *    and material on the tool side; for an add, the reverse. This says which
  *    side of the face is air, which a Remus face normal cannot.
@@ -495,14 +591,25 @@ export function pierceGateHolds(
   // clearance can be off by that much, so loops must stay twice that plus the
   // coplanar tolerance apart; closer than that counts as touching.
   const deflection = input.travel / 10;
+  const footprint = capsOnPartnerFaces(
+    kernel,
+    partnerFaces,
+    caps,
+    input.plane,
+    deflection,
+    2 * deflection + tolerance
+  );
+  if (!footprint) return false;
   if (
-    !capsOnPartnerFaces(
+    !pierceBandClear(
       kernel,
+      input.partnerSolids,
       partnerFaces,
-      caps,
+      footprint,
       input.plane,
-      deflection,
-      2 * deflection + tolerance
+      input.direction,
+      input.travel,
+      tolerance
     )
   ) {
     return false;

@@ -45,6 +45,8 @@ function scene(input: {
   centerX?: number;
   /** A through-hole drilled in the slab before the tool is sketched. */
   hole?: { centerX: number; centerY: number; radius: number };
+  /** A sealed box cavity 2 deep whose roof is at z = `top`. */
+  cavity?: { centerX: number; centerY: number; top: number };
 }) {
   const kernel = new RemusKernel();
   const withBox = addPrimitiveFeature(
@@ -70,6 +72,24 @@ function scene(input: {
     });
     withSlab = drilled.document;
     slabId = drilled.bodyId;
+  }
+  if (input.cavity) {
+    // Cut from a buried plane down, so the slab's top face stays whole.
+    const { top, ...center } = input.cavity;
+    const pocket = addSketchFeature(withSlab, {
+      name: 'Cavity',
+      planeRef: { type: 'canonical', plane: 'XY', offset: top },
+      objects: [{ objectKind: 'rectangle', ...center, width: 4, height: 2 }]
+    });
+    const hollowed = extrudeSketch(pocket.document, {
+      name: 'Cavity cut',
+      sketchId: pocket.sketchId,
+      distance: -2,
+      operation: 'cut',
+      targetBodyId: slabId
+    });
+    withSlab = hollowed.document;
+    slabId = hollowed.bodyId;
   }
   const created = addSketchFeature(withSlab, {
     name: 'Pocket',
@@ -227,6 +247,39 @@ describe('coplanar-cap pierce gate', () => {
         })
       )
     ).toBe(true);
+  });
+
+  it('does not fire over a sealed cavity closer to the face than the travel', () => {
+    // An emboss's pierce runs 0.01 down into the slab. A cavity roofed 0.007
+    // under the face sits inside that sliver: the top face has no hole, and
+    // both side samples (0.005 either side) land as expected, so only the
+    // band check sees that the sliver would fill the cavity's upper part.
+    const gate = (cavity: {
+      centerX: number;
+      centerY: number;
+      top: number;
+    }) => {
+      const built = scene({ planeOffset: SLAB.depth, distance: 2, cavity });
+      return pierceGateHolds(built.kernel, {
+        partnerSolids: built.slab.solids,
+        toolSolids: built.tool.solids,
+        plane: built.plane,
+        direction: DOWN,
+        mode: 'add',
+        travel: built.travel
+      });
+    };
+    expect(gate({ centerX: 20, centerY: 20, top: SLAB.depth - 0.007 })).toBe(
+      false
+    );
+    // A roof thicker than the travel is out of the sliver's reach.
+    expect(gate({ centerX: 20, centerY: 20, top: SLAB.depth - 0.05 })).toBe(
+      true
+    );
+    // A thin roof well away from the footprint is none of its business.
+    expect(gate({ centerX: 50, centerY: 40, top: SLAB.depth - 0.007 })).toBe(
+      true
+    );
   });
 
   it('only rebuilds a body that is still exactly the extrude it came from', () => {
