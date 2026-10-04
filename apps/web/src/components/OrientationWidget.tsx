@@ -39,13 +39,25 @@ const BEVEL = 0.42;
  * turned most toward the camera covers ~67 px² and the glancing ones ~21 px²,
  * against ~960 px² for a face — a 14:1 ratio, so the isometric views are the
  * hardest thing on the cube to hit and the easiest to miss. Growing the drawn
- * bevel to fix that would restyle the cube, so only the target grows: the hit
- * facet is the same triangle cut deeper, concentric with the visible one and
- * roughly 2.5x its area. Deeper cuts stay disjoint between corners for any
- * bevel below 1, so no two corners can ever compete for the same pixel; the
- * area comes off the faces instead, which can spare it.
+ * bevel to fix that would restyle the cube, so only the target grows: it is
+ * the part of the cube's surface this deeper cut takes off the corner — the
+ * facet plus a triangle on each adjacent face that shows. Deeper cuts stay
+ * disjoint between corners for any bevel below 1, so no two corners can ever
+ * compete for the same pixel; the area comes off the faces instead, which
+ * can spare it (each keeps a centre disc ~18 px across at this depth).
  */
-const CORNER_HIT_BEVEL = 0.66;
+const CORNER_HIT_BEVEL = 0.8;
+/**
+ * How far, in px, a corner's target reaches past the cube's silhouette.
+ *
+ * A corner on the silhouette has a face turned away, so its target is the
+ * surface you can see on one side of the apex and nothing on the other: in
+ * the isometric view those targets measured 10×17 and 20×6 px. The target
+ * runs out through the apex into the empty margin instead, so it keeps at
+ * least ~16 px on both axes there. The silhouette corners' apexes stand at
+ * least a cube edge apart on screen, so the reaches never meet.
+ */
+const CORNER_HIT_OVERHANG = 6;
 /**
  * The triad is anchored on the cube corner the model origin projects to, and
  * its arms run along the cube edges — through the far corners at 2 half-edges
@@ -145,8 +157,16 @@ interface CornerSpec {
   corner: CubeCorner;
   normal: Vec3;
   points: readonly Vec3[];
-  /** Same facet cut deeper — the click target, never painted. */
-  hitPoints: readonly Vec3[];
+  /**
+   * Where the deeper cut crosses each of the corner's three edges, by axis:
+   * the click target's outline, never painted. Edge `i` runs along axis `i`.
+   */
+  hitPoints: readonly [Vec3, Vec3, Vec3];
+  /**
+   * The outward normal of the face between edges `i` and `i + 1` (mod 3),
+   * which is the face across the third axis.
+   */
+  faceNormals: readonly [Vec3, Vec3, Vec3];
   label: string;
 }
 
@@ -156,7 +176,7 @@ function cornerFacet(
   sy: number,
   sz: number,
   bevel: number
-): readonly Vec3[] {
+): readonly [Vec3, Vec3, Vec3] {
   const b = 1 - bevel;
   return [
     [sx * b, sy, sz],
@@ -174,6 +194,11 @@ const CORNERS: CornerSpec[] = ([-1, 1] as const).flatMap((sx) =>
         normal: [sx * n, sy * n, sz * n],
         points: cornerFacet(sx, sy, sz, BEVEL),
         hitPoints: cornerFacet(sx, sy, sz, CORNER_HIT_BEVEL),
+        faceNormals: [
+          [0, 0, sz],
+          [sx, 0, 0],
+          [0, sy, 0]
+        ],
         // "isometric" between the octant and "view" keeps every corner name
         // distinct from the face names under substring accessible-name
         // matching: "top front right view" would otherwise contain "right
@@ -362,6 +387,41 @@ export function OrientationWidget({
       const py = (p: Vec3) => CY + SCALE * sy(p);
       const outline = (points: readonly Vec3[]) =>
         points.map((point) => `${px(point)},${py(point)}`).join(' ');
+      /**
+       * The surface the deeper cut takes off a corner, as it shows: walking
+       * the three edge crossings, a face that shows is crossed in a straight
+       * line (its share is the triangle between the line and the corner),
+       * and a face turned away is skipped by running out through the apex,
+       * pushed `CORNER_HIT_OVERHANG` past the silhouette. An edge between
+       * two turned-away faces points into the screen and adds nothing.
+       */
+      const cornerTargetOutline = (corner: CornerSpec) => {
+        const shows = corner.faceNormals.map(
+          (normal) => depth(normal) > FACING_EPSILON
+        );
+        const outX = sx(corner.normal);
+        const outY = sy(corner.normal);
+        const reach = Math.hypot(outX, outY);
+        const push = reach > 1e-6 ? CORNER_HIT_OVERHANG / reach : 0;
+        const apex = `${px(corner.corner) + outX * push},${
+          py(corner.corner) + outY * push
+        }`;
+        const points: string[] = [];
+        corner.hitPoints.forEach((point, edge) => {
+          const before = shows[(edge + 2) % 3];
+          const after = shows[edge];
+          if (before || after) {
+            points.push(`${px(point)},${py(point)}`);
+          }
+          if (!after && points.at(-1) !== apex) {
+            points.push(apex);
+          }
+        });
+        if (points.length > 1 && points[0] === points.at(-1)) {
+          points.pop();
+        }
+        return points.join(' ');
+      };
 
       FACES.forEach((face, index) => {
         const polygon = faceRefs.current[index];
@@ -423,7 +483,7 @@ export function OrientationWidget({
         hit.style.display = '';
         polygon.setAttribute('points', outline(corner.points));
         polygon.setAttribute('fill', shade(facing));
-        hit.setAttribute('points', outline(corner.hitPoints));
+        hit.setAttribute('points', cornerTargetOutline(corner));
       });
 
       for (const key of ['x', 'y', 'z'] as const) {
@@ -633,11 +693,11 @@ export function OrientationWidget({
         {CORNERS.map((corner, index) => (
           // The painted facet and the deeper cut that widens it. The click
           // lives on the group, so the target is the union of the two: the
-          // deeper cut is scaled about the corner's projected apex, and at a
-          // glancing angle that apex falls outside it — a target that was
-          // only the deeper cut would drop part of the facet you can actually
-          // see. Hover and focus are styled off the group too, so the drawn
-          // triangle lights up from anywhere in the union.
+          // cut's outline contains the facet, and the union keeps that true
+          // for the facet's painted seam as well, so the target can never
+          // be smaller than what is drawn. Hover and focus are styled off
+          // the group too, so the drawn triangle lights up from anywhere in
+          // the union.
           <g
             className="cube-corner-target"
             key={corner.label}
