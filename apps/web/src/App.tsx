@@ -112,16 +112,11 @@ import {
   circleProfile,
   computeSketchProfileAnalysis,
   computeSketchRegions,
-  frameForPlaneRef,
   polygonProfile,
   rectangleProfile,
   type PlaneBasis,
   type Vec2
 } from '@openzcad/geometry';
-import {
-  resolveFaceAttachment,
-  type FaceAttachmentCandidate
-} from '@openzcad/kernel-adapter/face-attachment';
 import type { SketchSolveOutcome } from '@openzcad/kernel-adapter/exact';
 import type {
   ArtifactKind,
@@ -146,7 +141,6 @@ import type {
   SketchId,
   SketchNode,
   SketchObjectData,
-  SketchPlaneRef,
   TopologySelection,
   UnitSystem
 } from '@openzcad/shared';
@@ -201,6 +195,8 @@ import {
   solvedSketchCommands
 } from './lib/sketch/applySolve';
 import { sketchContentFramePoints } from './lib/sketch/session';
+import { resolvedSketchPlaneBasis } from './lib/sketch/planeBasis';
+import { sketchEntityEditTarget } from './lib/sketch/editTarget';
 import { textPlacementBudgetError } from './lib/sketch/textPlacement';
 import {
   modelingOperationNeedsPlanarFaces,
@@ -1609,73 +1605,6 @@ function localRecoveryCopy(
     root.revisionId = null;
   }
   return normalizeDocumentHistory(beforeRename, copy);
-}
-
-function resolvedSketchPlaneBasis(
-  document: ProjectDocument,
-  planeRef: SketchPlaneRef,
-  resolveOffset: (value: ParamValue) => number,
-  sketchName: string
-): PlaneBasis {
-  if (planeRef.type !== 'face' || !planeRef.faceReference) {
-    return frameForPlaneRef(planeRef, resolveOffset);
-  }
-  const body = document.derived.bodyRepresentations[planeRef.bodyId];
-  const candidates: FaceAttachmentCandidate[] = (body?.topology?.faces ?? [])
-    .filter(
-      (face) => face.reference?.kind === 'face' && face.geometry !== undefined
-    )
-    .map((face) => {
-      const reference = face.reference!;
-      const geometry = face.geometry!;
-      return {
-        kind: 'face',
-        currentHash: face.hash,
-        witnessVersion: 1,
-        witness: reference.witness,
-        plane:
-          geometry.surfaceType.toLowerCase() === 'plane' && geometry.normal
-            ? {
-                center: geometry.center,
-                centroid: geometry.centroid ?? null,
-                normal: geometry.normal
-              }
-            : null,
-        lineage: {
-          source: 'derived',
-          identity: {
-            producingFeatureId: reference.producingFeatureId,
-            lineageName: reference.lineageName
-          }
-        }
-      };
-    });
-  const sourceFeature = listFeaturesInOrder(document).find(
-    (feature) =>
-      feature.featureId === planeRef.faceReference?.producingFeatureId
-  );
-  const frame = resolveFaceAttachment({
-    reference: planeRef.faceReference,
-    candidates,
-    snapshot: {
-      sourceArea: planeRef.sourceArea,
-      sourceCenter: planeRef.sourceCenter,
-      ...(planeRef.sourceCentroid
-        ? { sourceCentroid: planeRef.sourceCentroid }
-        : {}),
-      sourceNormal: planeRef.sourceNormal,
-      frame: planeRef.frame
-    },
-    sketchName,
-    sourceFeatureName:
-      sourceFeature?.name ?? String(planeRef.faceReference.producingFeatureId)
-  });
-  return {
-    origin: frame.origin,
-    u: frame.xAxis,
-    v: frame.yAxis,
-    normal: frame.zAxis
-  };
 }
 
 /**
@@ -12314,20 +12243,26 @@ export function App() {
     return executeTransaction(label, commands, derived);
   }
 
-  async function handleUpdateSketchEntity(data: SketchObjectData) {
+  /**
+   * Writes the selected entity's new data through the solver and the
+   * document's validation. Resolves true once the edit is committed, so a
+   * viewport drag that previewed it knows whether to let the preview go.
+   */
+  async function handleUpdateSketchEntity(
+    data: SketchObjectData,
+    verb: 'Edit' | 'Move' | 'Rotate' = 'Edit',
+    capturedObjectId?: string
+  ): Promise<boolean> {
     const base = managerRef.current?.document;
-    const current = interactionRef.current;
-    if (
-      !base ||
-      current.mode !== 'sketch' ||
-      !current.session.sketchId ||
-      !current.session.selectedObjectId ||
-      sketchSolving ||
-      geometryBusy
-    )
-      return;
-    const sketchId = current.session.sketchId as SketchId;
-    const objectId = current.session.selectedObjectId as EntityId;
+    // A viewport drag names the object it captured at release; an editor
+    // edit writes the selection and is refused if the selection moves.
+    const target = sketchEntityEditTarget(
+      interactionRef.current,
+      capturedObjectId
+    );
+    if (!base || !target || sketchSolving || geometryBusy) return false;
+    const sketchId = target.sketchId as SketchId;
+    const objectId = target.objectId as EntityId;
     const selected = base.nodes[objectId];
     const nextData =
       selected?.kind === 'sketch-object' && selected.data.construction
@@ -12350,13 +12285,19 @@ export function App() {
           base,
           sketchId,
           commands,
-          `Edit ${data.objectKind}`,
-          objectId
+          `${verb} ${data.objectKind}`,
+          target.raceObjectId
         )
       ) {
-        setStatus(`Updated ${data.objectKind} geometry.`);
+        setStatus(
+          verb === 'Edit'
+            ? `Updated ${data.objectKind} geometry.`
+            : `${verb === 'Move' ? 'Moved' : 'Rotated'} ${data.objectKind}.`
+        );
         setSketchSolveStatus(null);
+        return true;
       }
+      return false;
     } catch (error) {
       if (error instanceof FeatureBuildError) recordHistoryFailure(error, base);
       const message = errorMessage(
@@ -12370,6 +12311,7 @@ export function App() {
       )
         setSketchEditError(message);
       setStatus(message);
+      return false;
     } finally {
       setSketchSolving(false);
     }
@@ -18954,6 +18896,18 @@ export function App() {
             onMoveSketchDimension={handleMoveSketchDimension}
             onSketchDrawingChange={(drawing) =>
               dispatchInteraction({ type: 'sketch-drawing', drawing })
+            }
+            sketchMoveEnabled={
+              interaction.mode === 'sketch' &&
+              interaction.session.tool === 'select' &&
+              !interaction.session.pendingConstraint &&
+              !interaction.session.pendingEdit &&
+              !sketchSolving &&
+              !geometryBusy
+            }
+            onSketchMoveChange={dispatchInteraction}
+            onSketchMoveCommit={(objectId, data, verb) =>
+              handleUpdateSketchEntity(data, verb, objectId)
             }
             onSketchSelectObject={(objectId, snapPoint, clickPoint) => {
               if (

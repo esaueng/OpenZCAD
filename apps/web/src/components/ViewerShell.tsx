@@ -6,6 +6,7 @@ import {
   ModelViewer,
   type BodyAppearancePreview,
   type FaceResizeCommit,
+  type ModelViewerProps,
   type CylinderRadiusHandleTarget,
   type EdgeHandleTarget,
   type OrientationDragControls,
@@ -240,6 +241,9 @@ interface ViewerShellProps {
   onEditSketchDimension(id: string, anchor: { x: number; y: number }): void;
   onMoveSketchDimension(id: string, offset: { x: number; y: number }): void;
   onSketchDrawingChange(drawing: boolean): void;
+  sketchMoveEnabled?: ModelViewerProps['sketchMoveEnabled'];
+  onSketchMoveChange?: ModelViewerProps['onSketchMoveChange'];
+  onSketchMoveCommit?: ModelViewerProps['onSketchMoveCommit'];
   onSketchSelectObject(
     objectId: string | null,
     snapPoint: {
@@ -387,6 +391,9 @@ export function ViewerShell({
   onEditSketchDimension,
   onMoveSketchDimension,
   onSketchDrawingChange,
+  sketchMoveEnabled,
+  onSketchMoveChange,
+  onSketchMoveCommit,
   onSketchSelectObject,
   sketchViews,
   selectedProfileIds,
@@ -581,6 +588,9 @@ export function ViewerShell({
         onEditSketchDimension={onEditSketchDimension}
         onMoveSketchDimension={onMoveSketchDimension}
         onSketchDrawingChange={onSketchDrawingChange}
+        sketchMoveEnabled={sketchMoveEnabled}
+        onSketchMoveChange={onSketchMoveChange}
+        onSketchMoveCommit={onSketchMoveCommit}
         onSketchSelectObject={onSketchSelectObject}
         sketchViews={sketchViews}
         selectedProfileIds={selectedProfileIds}
