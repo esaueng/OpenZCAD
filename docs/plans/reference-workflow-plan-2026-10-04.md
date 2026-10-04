@@ -281,12 +281,15 @@ Exit: every G and V above is marked confirmed, refuted or re-scoped.
 ### Phase 1 — Sketch object drag-move (unblocks Phase 2)
 
 - Add a `sketch-move` interaction: pointer-down on a selected object's grab
-  point (circle/rectangle/polygon centre, text baseline origin, line/arc
-  endpoints), drag with the existing snap targets and inference guides,
-  live solver preview on every frame, commit on release through
-  `handleUpdateSketchEntity`, Escape cancels per the U01 contract.
+  point (circle/rectangle/polygon centre, text baseline origin, any point
+  on a line or arc), drag with the existing snap targets and inference
+  guides, commit on release through `handleUpdateSketchEntity`, Escape
+  cancels the drag and keeps the selection per the U01 contract. The object
+  moves rigidly during the drag; the solver runs on commit (a per-frame
+  solver preview is a later refinement, not part of this phase).
 - Rotation only for text (drag on a ring around the origin), stored in the
-  existing `rotation` field.
+  existing `rotation` field. **No scale gesture**: text size stays a field
+  in the entity editor, and Phase 2 must not expose a scale handle.
 - Files: `lib/interaction/machine.ts` (state + events), `ModelViewer.tsx`
   sketch pointer path next to the drawing path, `lib/sketch/session.ts`
   (grab points beside `snapTargets`), one new overlay for the grab handles.
@@ -299,33 +302,45 @@ Exit: every G and V above is marked confirmed, refuted or re-scoped.
 ### Phase 2 — Type-first text authoring
 
 2.1 **Text card.** Pressing `T` opens the text card at once (string, family,
-style toggles, size, alignment, `Continue` disabled while the string is
+style toggles, `Size (em)`, alignment, `Place` disabled while the string is
 empty). Reuse `TextObjectFields`; the card is the command slot of the left
-command card, not a modal. Lazy-loaded (entry chunk is ~14 KB under budget).
+command card, not a modal. Lazy-loaded: the entry chunk is full (56 B under
+its budget on main), so the card must make its own room.
 
 2.2 **Live outline.** Every keystroke renders the glyph outlines on the
 sketch plane through the existing `objectPolylines` + text budget path,
-anchored at the pointer until placed, then at the placed origin. This is
-the same overlay the rubber band uses; no document write until `Continue`.
+anchored at the pointer until placed. This is the same overlay the rubber
+band uses; nothing is written to the document until the placing click.
 
-2.3 **Place and transform.** `Continue` commits the object at the current
-anchor and enters the Phase 1 move/rotate/scale state with `Done` / `Cancel`
-in the command card (Enter / Escape per U01). `Done` returns to Select with
-the object selected; the field editor remains the exact-entry owner.
+2.3 **Place, then transform.** One ordering, matching §6.1: the placing
+click is the only step that creates a document object. It writes the typed
+object at the click point, returns the tool to Select with the object
+selected, and that selection shows the Phase 1 move and rotate handles.
+There is no `Continue → Done` modal and no scale handle; `Place` in the
+card is a keyboard equivalent that drops the object where the outline is.
+Escape while composing closes the card and leaves no object; Escape during
+a later drag cancels that drag only. Enter in the string field is not
+placement.
 
-2.4 **Re-entry.** Selecting an existing text object shows the same handles
-and card, so creation and edit are one flow.
+2.4 **Re-entry and the single owner.** Selecting an existing text object
+shows the same handles. Its string, family, style, size, rotation and
+position have exactly one owner, the entity editor's state and submit path
+(`nextData` → `handleUpdateSketchEntity`); the card exists only for a
+not-yet-placed draft and shares `TextObjectFields` and that same commit
+path, never a second draft of a placed object. Escape during a re-entry
+drag restores the object's stored values; it never deletes persisted text.
 
 - Files: new `components/TextCard.tsx` (or fold into the sketch command
   card), `ModelViewer.tsx` text branch at 6899, `machine.ts` (`text` tool
   gains `composing` and `placing` phases), `App.tsx` `selectIfText`
   (replaced by the phase handoff).
-- Tests: `test/e2e/text-authoring.spec.ts` covering empty-string refusal,
-  per-keystroke outline presence, Continue → place → Done, Escape at each
-  phase leaving no object behind, and the engrave from V1 end to end. CSS
-  class coverage and glyph coverage tests will flag new classes or symbols.
-- Decision needed: §6.1 (card before click vs click then card) and §6.2
-  (size semantics).
+- Tests: `test/e2e/text-authoring.spec.ts` covering the disabled `Place`
+  on an empty string, per-keystroke outline presence, click places the typed
+  string (the placeholder `Text` never reaches the document), Escape while
+  composing leaves no object, a drag on the placed object then Escape
+  restores it, re-entry on an existing object edits through the editor's
+  path, and the engrave from V1 end to end once PR K is in. CSS class
+  coverage and glyph coverage tests will flag new classes or symbols.
 
 ### Phase 3 — Multi-region selection, one drag
 
@@ -356,9 +371,16 @@ and card, so creation and edit are one flow.
 
 ### Phase 5 — Ledger
 
-- ROADMAP: attach Phases 1–3 as evidence under U01 (one owner across
-  handle, chip, keypad and fields) and U04 (command card contents); Phase 4
-  under U03. No new master ID is needed.
+- **Master-ID mapping, registered in ROADMAP by PR A (this plan's PR), not
+  deferred:** K, B, C, D and E belong to U01 (one owner across handle, chip,
+  keypad and fields; displayed value = committed geometry) and, for the
+  command-card contents of C and D, U04; F and G belong to U03 (motion
+  audit). No new master ID is needed. ROADMAP rows U01, U03 and U04 name
+  this plan as their active execution record together with the PR numbers.
+- Each implementation PR adds one evidence sentence to its owning row when
+  it is revised after this mapping lands; PRs already green at that point
+  keep their CI result and PR H adds their evidence with merge commits. H
+  also flips status columns and closes the record.
 - Reference doc §4 refreshed in Phase 0; §6 open questions 1, 2 and 11
   stay open (they need a second recording).
 
