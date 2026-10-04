@@ -854,7 +854,10 @@ export interface SceneContext {
     THREE.BufferGeometry,
     THREE.MeshLambertMaterial
   >;
-  /** Selection overlays fading in toward their resting opacity. */
+  /**
+   * Overlay materials on their way to their target opacity: they cut there
+   * on the next frame unless `selection.easeOpacity` opted them into a fade.
+   */
   readonly fadeIns: Set<THREE.Material>;
   /** Frame timing for the overlay eases; `update()` once per frame, then read. */
   timer: THREE.Timer;
@@ -7410,7 +7413,8 @@ export function ModelViewer({
         sketchGridIndicator.hidden = true;
       }
 
-      // Preselection and selection overlays ease toward their targets.
+      // Preselection and selection overlays cut to their targets; their
+      // x-ray passes ease there.
       // Timer separates advancing time from reading it, so update once here.
       context.timer.update(now);
       const dt = animationStepSeconds(
@@ -8265,9 +8269,9 @@ export function ModelViewer({
             color: SELECTED_FACE_COLOR,
             toneMapped: false,
             transparent: true,
-            // Rises with its visible twin rather than arriving whole: the two
-            // halves are one highlight, and staggering them reads as a
-            // flicker behind the solid.
+            // The one eased half of the highlight: the visible fill cuts in,
+            // but a pass seen through the solid reads as a flicker when it
+            // pops, so this one rises (and, retired, falls) over a few frames.
             opacity: 0,
             side: THREE.DoubleSide,
             depthWrite: false,
@@ -8275,6 +8279,7 @@ export function ModelViewer({
           })
         );
         hiddenMaterial.userData.targetOpacity = SELECTED_FACE_HIDDEN_OPACITY;
+        context.selection.easeOpacity(hiddenMaterial);
         context.fadeIns.add(hiddenMaterial);
         const hiddenHighlight = new THREE.Mesh(hiddenGeometry, hiddenMaterial);
         hiddenHighlight.name = 'body-face-selected-hidden';
@@ -8454,7 +8459,7 @@ export function ModelViewer({
             color: SELECTION_SEMANTICS.preview.added,
             toneMapped: false,
             transparent: true,
-            // Same rise as a committed selection: which code path built the
+            // Same cut as a committed selection: which code path built the
             // highlight should not be visible in how it arrives.
             opacity: 0,
             side: THREE.DoubleSide,
@@ -9814,8 +9819,10 @@ export function ModelViewer({
           };
         }
         // Eased, not flipped: the recede rides the same fade set as the
-        // other scene fades, subordinate to the entry camera glide. A body
-        // rebuilt mid-sketch re-enters here at full opacity and fades again.
+        // overlays, subordinate to the entry camera glide, and opts into the
+        // ease that set otherwise cuts. A body rebuilt mid-sketch re-enters
+        // here at full opacity and fades again.
+        context.selection.easeOpacity(material);
         material.transparent = true;
         delete material.userData.restoreOpaque;
         if (reducedMotionRef.current === true) {
@@ -9829,6 +9836,7 @@ export function ModelViewer({
           material.opacity = stored.sketchRecede.opacity;
           material.transparent = stored.sketchRecede.transparent;
         } else {
+          context.selection.easeOpacity(material);
           material.userData.targetOpacity = stored.sketchRecede.opacity;
           if (!stored.sketchRecede.transparent) {
             material.userData.restoreOpaque = true;
