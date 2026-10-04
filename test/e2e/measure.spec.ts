@@ -214,6 +214,14 @@ test('the preview names exactly what the click then measures', async ({
   await page.mouse.click(spot.x, spot.y);
   await expect(workbench.getByRole('listitem')).toHaveCount(1);
   await expect(workbench.getByRole('listitem')).toContainText(previewed!);
+
+  // Measure off closes the workbench — the result stays pinned on the model
+  // — instead of leaving it open to say only that Measure is off; Measure on
+  // brings the list back.
+  await armMeasure(page);
+  await expect(workbench).toHaveCount(0);
+  await armMeasure(page);
+  await expect(workbench.getByRole('listitem')).toHaveCount(1);
 });
 
 test('a hover on an edge snaps to a named point', async ({ page }) => {

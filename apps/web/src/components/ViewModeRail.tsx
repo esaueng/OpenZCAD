@@ -43,8 +43,7 @@ export function PartsListModeProvider({
 
 const PARTS_LIST_FOOTNOTE: Record<PartsListMode, string> = {
   view: 'Visibility only — geometry is locked in View mode.',
-  tweak:
-    'Visibility only — change values in Parameters; the design stays locked.'
+  tweak: 'Visibility only — the design stays locked.'
 };
 
 /**
