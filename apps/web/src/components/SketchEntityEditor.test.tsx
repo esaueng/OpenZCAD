@@ -323,6 +323,75 @@ describe('text placement and movement', () => {
   });
 });
 
+describe('text alignment in the editor', () => {
+  // The text card sets alignment before placement; once placed, the editor
+  // owns the object, so alignment has to be editable here too.
+  async function applyAlignment(
+    data: SketchObjectData,
+    pick: string | null
+  ): Promise<SketchObjectData> {
+    const onApply = vi.fn();
+    const user = userEvent.setup();
+    render(
+      <SketchEntityEditor
+        data={data}
+        scope={{}}
+        onApply={onApply}
+        onDelete={vi.fn()}
+        onClose={vi.fn()}
+      />
+    );
+    if (pick) {
+      await user.click(screen.getByRole('radio', { name: pick }));
+    }
+    await user.click(screen.getByRole('button', { name: /apply/i }));
+    return onApply.mock.calls[0]![0] as SketchObjectData;
+  }
+
+  it('shows the stored alignment, and left for an object without one', () => {
+    const { unmount } = render(
+      <SketchEntityEditor
+        data={{ ...TEXT_OBJECT, align: 'right' }}
+        scope={{}}
+        onApply={vi.fn()}
+        onDelete={vi.fn()}
+        onClose={vi.fn()}
+      />
+    );
+    expect(screen.getByRole('radio', { name: 'Align right' })).toHaveAttribute(
+      'aria-checked',
+      'true'
+    );
+    unmount();
+    render(
+      <SketchEntityEditor
+        data={TEXT_OBJECT}
+        scope={{}}
+        onApply={vi.fn()}
+        onDelete={vi.fn()}
+        onClose={vi.fn()}
+      />
+    );
+    expect(screen.getByRole('radio', { name: 'Align left' })).toHaveAttribute(
+      'aria-checked',
+      'true'
+    );
+  });
+
+  it('applies a picked alignment', async () => {
+    const applied = await applyAlignment(
+      { ...TEXT_OBJECT, align: 'center' },
+      'Align right'
+    );
+    expect(applied).toMatchObject({ align: 'right', text: 'Text' });
+  });
+
+  it('writes no alignment back onto an object that never had one', async () => {
+    const applied = await applyAlignment(TEXT_OBJECT, null);
+    expect('align' in applied).toBe(false);
+  });
+});
+
 describe('styleFromToggles', () => {
   it('maps both toggles onto the four bundled faces', () => {
     expect(styleFromToggles(false, false)).toBe('regular');

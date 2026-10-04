@@ -292,7 +292,9 @@ export function SketchEntityEditor({
       ? {
           text: data.text,
           fontFamily: data.fontFamily,
-          fontStyle: data.fontStyle
+          fontStyle: data.fontStyle,
+          // Absent stays absent: Apply writes `align` only once one is picked.
+          ...(data.align ? { align: data.align } : {})
         }
       : null
   );

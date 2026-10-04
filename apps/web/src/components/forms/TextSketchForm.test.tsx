@@ -72,6 +72,20 @@ describe('TextSketchForm', () => {
     });
   });
 
+  it('edits the alignment the text card set', async () => {
+    const user = userEvent.setup();
+    const { onSubmit } = renderForm();
+    expect(screen.getByRole('radio', { name: 'Align left' })).toHaveAttribute(
+      'aria-checked',
+      'true'
+    );
+    await user.click(screen.getByRole('radio', { name: 'Align center' }));
+    await user.click(screen.getByRole('button', { name: /apply/i }));
+    expect(onSubmit.mock.calls[0]![0]).toMatchObject({
+      data: { objectKind: 'text', text: 'Hello', align: 'center' }
+    });
+  });
+
   it('offers the viewport as the spatial alternative', async () => {
     const user = userEvent.setup();
     const { onEditInViewport, onSubmit } = renderForm();

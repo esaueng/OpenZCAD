@@ -14,13 +14,14 @@
  * style chain — and says so, rather than quietly rendering the wrong weight.
  */
 import { useEffect, useRef } from 'react';
+import { AlignCenter, AlignLeft, AlignRight } from 'lucide-react';
 import {
   FONT_FAMILIES,
   findFontFace,
   fontAssetUrl,
   resolveFontStyle
 } from '@openzcad/geometry';
-import type { TextFontStyle } from '@openzcad/shared';
+import type { TextAlign, TextFontStyle } from '@openzcad/shared';
 import { loadTextFont } from '../lib/textFonts';
 import { useFieldAutoFocus } from './forms/fieldAutoFocus';
 
@@ -28,7 +29,23 @@ export interface TextAttributes {
   text: string;
   fontFamily: string;
   fontStyle: TextFontStyle;
+  /**
+   * Horizontal alignment about the origin. Absent reads as left, the schema
+   * default, and stays absent until someone picks one, so an untouched object
+   * is written back exactly as it was.
+   */
+  align?: TextAlign;
 }
+
+const ALIGNMENTS: {
+  value: TextAlign;
+  label: string;
+  icon: typeof AlignLeft;
+}[] = [
+  { value: 'left', label: 'Align left', icon: AlignLeft },
+  { value: 'center', label: 'Align center', icon: AlignCenter },
+  { value: 'right', label: 'Align right', icon: AlignRight }
+];
 
 interface TextObjectFieldsProps {
   value: TextAttributes;
@@ -179,6 +196,32 @@ export function TextObjectFields({
           >
             <em>I</em>
           </button>
+        </div>
+      </div>
+      <div className="field">
+        <span>Align</span>
+        <div
+          className="text-style-toggles"
+          role="radiogroup"
+          aria-label="Alignment"
+        >
+          {ALIGNMENTS.map(({ value: align, label, icon: Icon }) => {
+            const checked = (value.align ?? 'left') === align;
+            return (
+              <button
+                key={align}
+                type="button"
+                role="radio"
+                aria-checked={checked}
+                aria-label={label}
+                title={label}
+                className={checked ? 'toggle active' : 'toggle'}
+                onClick={() => onChange({ ...value, align })}
+              >
+                <Icon size={14} aria-hidden="true" />
+              </button>
+            );
+          })}
         </div>
       </div>
       {substituted && (

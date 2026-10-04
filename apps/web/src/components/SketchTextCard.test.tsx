@@ -7,7 +7,45 @@ import { fireEvent, render, screen } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { useState } from 'react';
 import { describe, expect, it, vi } from 'vitest';
-import type { SketchObjectData } from '@openzcad/shared';
+import {
+  MAX_DOCUMENT_TEXT_OBJECTS,
+  MAX_SKETCH_TEXT_OBJECTS,
+  type ProjectDocument,
+  type SketchObjectData
+} from '@openzcad/shared';
+
+const EMPTY_DOCUMENT = { nodes: {} } as Pick<
+  ProjectDocument,
+  'nodes' | 'editHistory'
+>;
+
+/** `count` one-letter text objects, `perSketch` to a sketch. */
+function documentWithText(
+  count: number,
+  perSketch = MAX_SKETCH_TEXT_OBJECTS
+): Pick<ProjectDocument, 'nodes' | 'editHistory'> {
+  const nodes: Record<string, unknown> = {};
+  for (let sketch = 0; sketch * perSketch < count; sketch += 1) {
+    const objectIds: string[] = [];
+    for (
+      let index = sketch * perSketch;
+      index < Math.min(count, (sketch + 1) * perSketch);
+      index += 1
+    ) {
+      nodes[`text_${index}`] = {
+        kind: 'sketch-object',
+        data: { objectKind: 'text', text: 'x' }
+      };
+      objectIds.push(`text_${index}`);
+    }
+    nodes[`node_sketch_${sketch}`] = {
+      kind: 'sketch',
+      sketchId: `sketch_${sketch}`,
+      objectIds
+    };
+  }
+  return { nodes } as unknown as Pick<ProjectDocument, 'nodes' | 'editHistory'>;
+}
 import { SketchTextCard } from './SketchTextCard';
 import {
   newSketchTextDraft,
@@ -17,15 +55,15 @@ import {
 function Harness({
   onPlace = vi.fn(),
   onCancel = vi.fn(),
-  documentBudgetError = null,
-  sketchObjects = [],
+  document = EMPTY_DOCUMENT,
+  sketchId = null,
   anchor = null,
   initial = newSketchTextDraft()
 }: {
   onPlace?: (object: SketchObjectData) => void;
   onCancel?: () => void;
-  documentBudgetError?: string | null;
-  sketchObjects?: { data: SketchObjectData }[];
+  document?: Pick<ProjectDocument, 'nodes' | 'editHistory'>;
+  sketchId?: string | null;
   anchor?: { x: number; y: number } | null;
   initial?: SketchTextDraft;
 }) {
@@ -35,8 +73,8 @@ function Harness({
       <SketchTextCard
         draft={draft}
         scope={{ h: 4 }}
-        sketchObjects={sketchObjects}
-        documentBudgetError={documentBudgetError}
+        document={document}
+        sketchId={sketchId}
         anchorRef={{ current: anchor }}
         onChange={(patch) => setDraft((current) => ({ ...current, ...patch }))}
         onPlace={onPlace}
@@ -139,22 +177,12 @@ describe('SketchTextCard', () => {
   });
 
   it('refuses a string the sketch text budget would drop', () => {
-    // The sketch already holds as many text objects as it may draw.
-    const full = Array.from({ length: 32 }, () => ({
-      data: {
-        objectKind: 'text' as const,
-        text: 'x',
-        fontFamily: 'open-sans',
-        fontStyle: 'regular' as const,
-        size: 10,
-        x: 0,
-        y: 0
-      }
-    }));
+    // The active sketch already holds as many text objects as it may draw.
     render(
       <Harness
         initial={{ ...newSketchTextDraft(), text: 'Boa' }}
-        sketchObjects={full}
+        document={documentWithText(MAX_SKETCH_TEXT_OBJECTS)}
+        sketchId="sketch_0"
       />
     );
     expect(screen.getByRole('alert')).toHaveTextContent(
@@ -163,15 +191,15 @@ describe('SketchTextCard', () => {
     expect(screen.getByRole('button', { name: 'Place' })).toBeDisabled();
   });
 
-  it('shows the document budget refusal and will not place over it', () => {
+  it('refuses at the document limit, where the document itself is still fine', () => {
     render(
       <Harness
         initial={{ ...newSketchTextDraft(), text: 'Boa' }}
-        documentBudgetError="Project text exceeds the outline limit."
+        document={documentWithText(MAX_DOCUMENT_TEXT_OBJECTS)}
       />
     );
     expect(screen.getByRole('alert')).toHaveTextContent(
-      'Project text exceeds the outline limit.'
+      'Project text exceeds the outline limit'
     );
     expect(screen.getByRole('button', { name: 'Place' })).toBeDisabled();
   });

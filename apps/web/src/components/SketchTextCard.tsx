@@ -11,15 +11,15 @@
  * the object where its outline is showing). Escape closes the card and
  * leaves nothing behind.
  */
-import { useEffect, useRef, useState, type FormEvent } from 'react';
-import { AlignCenter, AlignLeft, AlignRight, X } from 'lucide-react';
+import { useEffect, useMemo, useRef, useState, type FormEvent } from 'react';
+import { X } from 'lucide-react';
 import { coerceParamValue } from '@openzcad/document-core';
-import type { SketchObjectData, TextAlign } from '@openzcad/shared';
+import type { ProjectDocument, SketchObjectData } from '@openzcad/shared';
 import type { SketchTextDraft } from '../lib/interaction/machine';
 import type { SketchPoint } from '../lib/sketch/session';
 import {
-  textDraftBudgetError,
-  textObjectFromPoint
+  textObjectFromPoint,
+  textPlacementBudgetError
 } from '../lib/sketch/textPlacement';
 import { paramValueText, previewExpression } from '../lib/model';
 import { loadTextFont } from '../lib/textFonts';
@@ -29,10 +29,12 @@ import { TextObjectFields } from './TextObjectFields';
 interface SketchTextCardProps {
   draft: SketchTextDraft;
   scope: Record<string, number>;
-  /** The sketch's committed objects; the draft is budgeted with its text. */
-  sketchObjects: readonly { data: SketchObjectData }[];
-  /** The document-wide text budget's refusal, if it already refuses. */
-  documentBudgetError?: string | null;
+  /**
+   * The document the object would join, and the session's sketch (null until
+   * the first object creates it): the draft is budgeted as if already added.
+   */
+  document: Pick<ProjectDocument, 'nodes' | 'editHistory'>;
+  sketchId: string | null;
   /**
    * Where the live outline sits on the plane, written by the viewport as the
    * pointer moves; the sketch origin until the pointer has been there.
@@ -51,16 +53,6 @@ interface SketchTextCardProps {
   onFaceLoaded?(): void;
 }
 
-const ALIGNMENTS: {
-  value: TextAlign;
-  label: string;
-  icon: typeof AlignLeft;
-}[] = [
-  { value: 'left', label: 'Align left', icon: AlignLeft },
-  { value: 'center', label: 'Align center', icon: AlignCenter },
-  { value: 'right', label: 'Align right', icon: AlignRight }
-];
-
 /** True when a size expression resolves to a positive finite em size. */
 function sizeIsValid(text: string, scope: Record<string, number>): boolean {
   const { ok, value } = previewExpression(text, scope);
@@ -70,8 +62,8 @@ function sizeIsValid(text: string, scope: Record<string, number>): boolean {
 export function SketchTextCard({
   draft,
   scope,
-  sketchObjects,
-  documentBudgetError = null,
+  document,
+  sketchId,
   anchorRef,
   disabled = false,
   onChange,
@@ -97,9 +89,15 @@ export function SketchTextCard({
   const [sizeText, setSizeText] = useState(() => paramValueText(draft.size));
   const sizeValid = sizeIsValid(sizeText, scope);
   const empty = draft.text.length === 0;
-  const error = empty
-    ? null
-    : textDraftBudgetError(sketchObjects, draft.text, documentBudgetError);
+  // The same document-wide check the commit asserts, run with the draft
+  // added, so Place is never offered for an add the commit would refuse.
+  const error = useMemo(
+    () =>
+      draft.text.length === 0
+        ? null
+        : textPlacementBudgetError(document, sketchId, draft.text),
+    [document, sketchId, draft.text]
+  );
   const canPlace = !empty && sizeValid && !error && !disabled;
 
   function submit(event: FormEvent) {
@@ -134,9 +132,12 @@ export function SketchTextCard({
             value={{
               text: draft.text,
               fontFamily: draft.fontFamily,
-              fontStyle: draft.fontStyle
+              fontStyle: draft.fontStyle,
+              align: draft.align
             }}
-            onChange={(next) => onChange(next)}
+            onChange={({ align, ...next }) =>
+              onChange({ ...next, align: align ?? 'left' })
+            }
           />
           <div className="sketch-entity-fields">
             <ExprInput
@@ -150,31 +151,6 @@ export function SketchTextCard({
                 }
               }}
             />
-            <div className="field">
-              <span>Align</span>
-              <div
-                className="text-style-toggles"
-                role="radiogroup"
-                aria-label="Alignment"
-              >
-                {ALIGNMENTS.map(({ value, label, icon: Icon }) => (
-                  <button
-                    key={value}
-                    type="button"
-                    role="radio"
-                    aria-checked={draft.align === value}
-                    aria-label={label}
-                    title={label}
-                    className={
-                      draft.align === value ? 'toggle active' : 'toggle'
-                    }
-                    onClick={() => onChange({ align: value })}
-                  >
-                    <Icon size={14} aria-hidden="true" />
-                  </button>
-                ))}
-              </div>
-            </div>
           </div>
           {error ? (
             <p className="form-error" role="alert">

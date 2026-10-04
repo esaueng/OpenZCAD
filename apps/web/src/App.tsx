@@ -201,6 +201,7 @@ import {
   solvedSketchCommands
 } from './lib/sketch/applySolve';
 import { sketchContentFramePoints } from './lib/sketch/session';
+import { textPlacementBudgetError } from './lib/sketch/textPlacement';
 import {
   modelingOperationNeedsPlanarFaces,
   modelingOperationPicksFaces,
@@ -12072,6 +12073,16 @@ export function App() {
       ...object,
       ...(sketchConstruction ? { construction: true } : {})
     };
+    // The card already refuses this; a click on the plane must too, with
+    // the reason, rather than leave the command manager to throw it.
+    const textRefusal =
+      committedObject.objectKind === 'text' && doc
+        ? textPlacementBudgetError(doc, session.sketchId, committedObject.text)
+        : null;
+    if (textRefusal) {
+      setStatus(textRefusal);
+      return;
+    }
     /**
      * A placed text object is selected and handed over to Select: the card
      * composed it, and the entity editor is where its exact values live from
@@ -18012,8 +18023,10 @@ export function App() {
     <SketchTextCard
       draft={sketchTextDraft}
       scope={parameterScope.scope}
-      sketchObjects={sketchModeState?.objects ?? []}
-      documentBudgetError={textOutlineBudgetError}
+      document={doc}
+      sketchId={
+        interaction.mode === 'sketch' ? interaction.session.sketchId : null
+      }
       anchorRef={sketchTextAnchorRef}
       disabled={sketchSolving || geometryBusy}
       onChange={(patch) =>
