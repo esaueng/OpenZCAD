@@ -42,24 +42,12 @@ export function StatusActivityLogPanel({
         onClose(false);
       }
     };
-    const closeOnEscape = (event: KeyboardEvent) => {
-      if (event.key !== 'Escape') {
-        return;
-      }
 
-      // The workspace has its own Escape ladder. This overlay must consume
-      // the key before it can also cancel a modeling action behind the log.
-      event.preventDefault();
-      event.stopImmediatePropagation();
-      onClose(true);
-    };
-
+    // Escape is the always-loaded StatusActivityLog's: it has to work
+    // before this chunk arrives.
     document.addEventListener('pointerdown', closeOnOutsidePointer);
-    window.addEventListener('keydown', closeOnEscape, true);
-    return () => {
+    return () =>
       document.removeEventListener('pointerdown', closeOnOutsidePointer);
-      window.removeEventListener('keydown', closeOnEscape, true);
-    };
   }, [onClose, triggerRef]);
 
   useEffect(() => {

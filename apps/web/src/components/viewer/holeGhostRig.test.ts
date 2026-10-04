@@ -66,10 +66,32 @@ describe('buildHoleGhostRig', () => {
 
   it('dashes the far rim as a hidden line', () => {
     const rig = buildHoleGhostRig(ghost, 0x6798ff);
-    const exit = part(rig.group, 'hole-ghost-exit-rim') as THREE.LineLoop;
+    const exit = part(rig.group, 'hole-ghost-exit-rim') as THREE.Line;
     expect(exit.material).toBeInstanceOf(THREE.LineDashedMaterial);
     expect(exit.position.z).toBeCloseTo(0, 6);
-    expect(exit.geometry.getAttribute('lineDistance')).toBeDefined();
+    // A closed Line, not a LineLoop: no closing chord whose distance jumps
+    // from the full circumference back to 0.
+    expect(exit).not.toBeInstanceOf(THREE.LineLoop);
+    const positions = exit.geometry.getAttribute('position');
+    const first = new THREE.Vector3().fromBufferAttribute(positions, 0);
+    const last = new THREE.Vector3().fromBufferAttribute(
+      positions,
+      positions.count - 1
+    );
+    expect(last.distanceTo(first)).toBeCloseTo(0, 9);
+    const distances = Array.from(
+      exit.geometry.getAttribute('lineDistance').array
+    );
+    expect(distances[0]).toBe(0);
+    for (let index = 1; index < distances.length; index += 1) {
+      expect(distances[index]!).toBeGreaterThan(distances[index - 1]!);
+    }
+    // Ends at the rim's full length (the 64-gon's perimeter, ~2πr).
+    expect(distances.at(-1)!).toBeCloseTo(
+      64 * 2 * 3 * Math.sin(Math.PI / 64),
+      4
+    );
+    expect(distances.at(-1)!).toBeCloseTo(2 * Math.PI * 3, 1);
     rig.dispose();
   });
 });

@@ -8,6 +8,7 @@ export const HOLE_GHOST_VISIBLE_OPACITY = 0.32;
 /** The darkened opening drawn on the entry face. */
 export const HOLE_GHOST_OPENING_OPACITY = 0.55;
 const OPENING_COLOR = 0x0b0d10;
+const RIM_SEGMENTS = 64;
 
 export interface HoleGhostRig {
   group: THREE.Group;
@@ -106,9 +107,12 @@ export function buildHoleGhostRig(
   opening.renderOrder = 21;
   group.add(opening);
 
+  // A closed Line with the first point repeated, not a LineLoop: a loop's
+  // closing chord runs from the last distance back to 0, and the dashed rim
+  // crammed its whole pattern into that one segment.
   const rimGeometry = new THREE.BufferGeometry().setFromPoints(
-    Array.from({ length: 64 }, (_, index) => {
-      const angle = (index / 64) * Math.PI * 2;
+    Array.from({ length: RIM_SEGMENTS + 1 }, (_, index) => {
+      const angle = ((index % RIM_SEGMENTS) / RIM_SEGMENTS) * Math.PI * 2;
       return new THREE.Vector3(
         Math.cos(angle) * radius,
         0,
@@ -133,24 +137,18 @@ export function buildHoleGhostRig(
     ['hole-ghost-entry-rim', 0, entryRimMaterial],
     ['hole-ghost-exit-rim', depth, exitRimMaterial]
   ] as const) {
-    const rim = new THREE.LineLoop(rimGeometry, material);
+    const rim = new THREE.Line(rimGeometry, material);
     rim.name = name;
     rim.quaternion.copy(alongAxis);
     rim.position.copy(origin).addScaledVector(direction, along);
     rim.renderOrder = 22;
     group.add(rim);
   }
-  // Dash lengths are read from per-vertex distances along the loop.
-  rimGeometry.setAttribute(
-    'lineDistance',
-    new THREE.Float32BufferAttribute(
-      Array.from(
-        { length: 64 },
-        (_, index) => (index / 64) * Math.PI * 2 * radius
-      ),
-      1
-    )
-  );
+  // Dash lengths are read from per-vertex distances along the rim: rising
+  // all the way round, ending at its full length on the repeated point.
+  (
+    group.getObjectByName('hole-ghost-exit-rim') as THREE.Line
+  ).computeLineDistances();
 
   return {
     group,
