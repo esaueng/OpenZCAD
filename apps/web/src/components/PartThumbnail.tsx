@@ -75,6 +75,11 @@ function thumbnailFor(
   return pending;
 }
 
+/**
+ * One placeholder for every tile without a picture. An empty part used to
+ * swap the wire cube for a line of mono text, so two tiles in the same row
+ * looked unrelated; it now keeps the cube and adds a caption.
+ */
 function ThumbnailPlaceholder({
   empty,
   previewRef
@@ -82,22 +87,22 @@ function ThumbnailPlaceholder({
   empty: boolean;
   previewRef?: Ref<SVGSVGElement>;
 }) {
-  if (empty) {
-    return <span className="start-tile-thumb-empty">No geometry</span>;
-  }
   return (
-    <svg ref={previewRef} viewBox="0 0 120 80" aria-hidden="true">
-      <g
-        fill="none"
-        stroke="currentColor"
-        strokeWidth={1.1}
-        strokeLinejoin="round"
-      >
-        <path d="M34 52 60 40l26 12-26 12-26-12Z" />
-        <path d="M34 52V32l26-12 26 12v20" />
-        <path d="M60 40V20" />
-      </g>
-    </svg>
+    <>
+      <svg ref={previewRef} viewBox="0 0 120 80" aria-hidden="true">
+        <g
+          fill="none"
+          stroke="currentColor"
+          strokeWidth={1.1}
+          strokeLinejoin="round"
+        >
+          <path d="M34 52 60 40l26 12-26 12-26-12Z" />
+          <path d="M34 52V32l26-12 26 12v20" />
+          <path d="M60 40V20" />
+        </g>
+      </svg>
+      {empty && <span className="start-tile-thumb-empty">No geometry</span>}
+    </>
   );
 }
 

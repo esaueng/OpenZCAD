@@ -68,7 +68,10 @@ export function CommandCard({
     const meta = TOOL_META[tool];
     const disabledReason = toolDisabledReason(tool, availability);
     const active = activeTool === tool;
-    const primary = variant === 'rail' && context.primary === tool;
+    // The primary verb hints at what to do next; once a tool is armed it
+    // yields, so the armed tool is the only lit button.
+    const primary =
+      variant === 'rail' && activeTool === null && context.primary === tool;
     const applies = active || toolApplies(context, tool);
     return (
       <Tooltip

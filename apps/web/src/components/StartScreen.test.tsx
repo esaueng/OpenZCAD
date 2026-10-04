@@ -265,11 +265,18 @@ describe('StartScreen library discovery', () => {
 });
 
 describe('StartScreen project timestamps', () => {
-  it('shows the local date for a project edited more than a week ago', () => {
+  const shortDate = (date: Date) =>
+    date.toLocaleDateString(undefined, {
+      month: 'short',
+      day: 'numeric',
+      year: 'numeric'
+    });
+
+  it('shows the date on the tile and the exact time in its tooltip', () => {
     renderStartScreen();
 
     const date = new Date(localProject.updatedAt);
-    const timestamp = screen.getByText(date.toLocaleDateString());
+    const timestamp = screen.getByText(shortDate(date));
 
     expect(timestamp).toHaveAttribute('datetime', localProject.updatedAt);
     expect(timestamp).toHaveAttribute(
@@ -281,33 +288,17 @@ describe('StartScreen project timestamps', () => {
     );
   });
 
-  it('shortens recent edits to the time, the day or the date', () => {
-    const now = new Date(2026, 8, 4, 15, 30);
-    const time = (date: Date) =>
-      date.toLocaleTimeString(undefined, {
-        hour: 'numeric',
-        minute: '2-digit'
-      });
-
-    const today = new Date(2026, 8, 4, 12, 21);
-    expect(formatLastEdited(today.toISOString(), now)).toBe(
-      `Today ${time(today)}`
-    );
-
-    const yesterday = new Date(2026, 8, 3, 23, 5);
-    expect(formatLastEdited(yesterday.toISOString(), now)).toBe(
-      `Yesterday ${time(yesterday)}`
-    );
-
-    const thisWeek = new Date(2026, 8, 1, 9, 0);
-    expect(formatLastEdited(thisWeek.toISOString(), now)).toBe(
-      `${thisWeek.toLocaleDateString(undefined, { weekday: 'short' })} ${time(thisWeek)}`
-    );
-
+  it('writes recent and old edits in one shape, so a row never mixes two', () => {
+    // The shelf used to say "Today 4:05 PM" and "Tue 4:05 PM" within the week
+    // and a numeric date beyond it, so neighbouring tiles read differently.
+    const today = new Date();
+    const yesterday = new Date(today.getTime() - 24 * 60 * 60 * 1000);
     const lastMonth = new Date(2026, 7, 4, 9, 0);
-    expect(formatLastEdited(lastMonth.toISOString(), now)).toBe(
-      lastMonth.toLocaleDateString()
-    );
+
+    for (const date of [today, yesterday, lastMonth]) {
+      expect(formatLastEdited(date.toISOString())).toBe(shortDate(date));
+    }
+    expect(formatLastEdited(today.toISOString())).not.toMatch(/^Today/);
   });
 });
 
@@ -400,6 +391,22 @@ describe('StartScreen library shell', () => {
 
     expect(screen.getByText('Signed out')).toBeInTheDocument();
     expect(screen.queryByText(/saved$/)).toBeNull();
+  });
+
+  it('keeps the signed-out readout to one line', () => {
+    // Settings' footer says how to sign in; the card used to repeat it as a
+    // paragraph, a third copy of the same nag.
+    const { container } = renderStartScreen({ signedIn: false });
+    const card = container.querySelector('.start-account');
+    if (!card) throw new Error('No account readout');
+
+    expect(card.children).toHaveLength(1);
+    expect(within(card as HTMLElement).getByText('device only')).toBeVisible();
+    expect(card).not.toHaveTextContent(/Sign in from Settings/);
+    expect(card.firstElementChild).toHaveAttribute(
+      'title',
+      expect.stringContaining('Sign in from Settings')
+    );
   });
 });
 
