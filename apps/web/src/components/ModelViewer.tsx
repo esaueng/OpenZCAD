@@ -419,8 +419,9 @@ function sketchModeResolver(mode: SketchModeState) {
 }
 
 /**
- * Draws the session's committed objects, with one object's data replaced
- * while a drag previews it somewhere else.
+ * Draws the session's committed objects, with one object drawn somewhere
+ * else while a drag previews it. The full rebuild runs only when the
+ * session changes; per-frame drag updates go to `setPreviewObject` alone.
  */
 function drawSketchModeObjects(
   rig: SketchModeRig,
@@ -428,19 +429,16 @@ function drawSketchModeObjects(
   override: { objectId: string; data: SketchObjectData } | null
 ) {
   rig.setObjects(
-    override
-      ? mode.objects.map((object) =>
-          object.id === override.objectId
-            ? { id: object.id, data: override.data }
-            : object
-        )
-      : mode.objects,
+    mode.objects,
     mode.selectedObjectId,
     sketchModeResolver(mode),
     mode.constraintDiagnosticObjectIds,
     mode.definedObjectIds,
     mode.textOutlineBudgetError
   );
+  if (override) {
+    rig.setPreviewObject(override.objectId, override.data);
+  }
 }
 
 /** Sketch curves + detected regions, rendered when direct manipulation is on. */
@@ -6515,11 +6513,10 @@ export function ModelViewer({
           : `ΔX ${formatNumber(point.x - drag.grab.x)} · ΔY ${formatNumber(point.y - drag.grab.y)}`;
         positionSketchDimLabel(event, `${readout} ${unitsRef.current}`, false);
       }
-      drawSketchModeObjects(
-        rig,
-        mode,
-        drag.preview ? { objectId: drag.objectId, data: drag.preview } : null
-      );
+      // Only the dragged object is rebuilt; everything else keeps its lines.
+      if (drag.preview) {
+        rig.setPreviewObject(drag.objectId, drag.preview);
+      }
       requestRender();
     }
 

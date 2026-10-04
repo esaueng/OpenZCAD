@@ -238,3 +238,99 @@ describe('sketch mode defined colours', () => {
     }
   });
 });
+
+describe('sketch move preview', () => {
+  const basis = PLANE_BASES.XY;
+  const resolution = () => ({ width: 800, height: 600 });
+  const circle = (centerX: number): SketchObjectData => ({
+    objectKind: 'circle',
+    radius: 4,
+    centerX,
+    centerY: 0
+  });
+  const objects = [
+    { id: 'ent_a', data: line() },
+    { id: 'ent_b', data: line({ y1: 5, y2: 5 }) },
+    { id: 'ent_c', data: circle(20) }
+  ];
+  const previewGroupOf = (rig: { group: THREE.Group }) =>
+    rig.group.getObjectByName('sketch-move-preview')!;
+
+  it('rebuilds only the dragged object on each frame', () => {
+    const rig = buildSketchModeRig(basis, resolution);
+    try {
+      rig.setObjects(objects, 'ent_c', resolve);
+      const committed = committedGroupOf(rig);
+      // Count every dispose of the committed objects' render resources.
+      let disposed = 0;
+      const lines = committed.children.filter(
+        (child) => child.name !== 'sketch-snap-points'
+      );
+      for (const child of lines) {
+        const mesh = child as THREE.Mesh;
+        const original = mesh.geometry.dispose.bind(mesh.geometry);
+        mesh.geometry.dispose = () => {
+          disposed += 1;
+          original();
+        };
+      }
+
+      for (let frame = 1; frame <= 5; frame += 1) {
+        rig.setPreviewObject('ent_c', circle(20 + frame));
+      }
+
+      // Nothing committed was rebuilt: the same line objects, none disposed.
+      expect(disposed).toBe(0);
+      for (const child of lines) {
+        expect(child.parent).toBe(committed);
+      }
+      // The stored circle is hidden; the other two draw as before.
+      const shown = (id: string) =>
+        lines.filter(
+          (child) =>
+            child.userData.sketchObjectId === id &&
+            child.userData.pickProxy !== true
+        );
+      expect(shown('ent_c').every((child) => !child.visible)).toBe(true);
+      expect(shown('ent_a').every((child) => child.visible)).toBe(true);
+      expect(shown('ent_b').every((child) => child.visible)).toBe(true);
+      // The preview holds the circle alone, at its latest position.
+      const preview = previewGroupOf(rig);
+      expect(
+        preview.children.every(
+          (child) =>
+            child.name === 'sketch-preview-points' ||
+            child.userData.sketchObjectId === 'ent_c'
+        )
+      ).toBe(true);
+      const centre = preview.getObjectByName('sketch-preview-points') as
+        THREE.Points | undefined;
+      expect(centre?.geometry.getAttribute('position').getX(0)).toBe(25);
+
+      // Ending the preview brings the stored circle back.
+      rig.setPreviewObject(null);
+      expect(preview.children).toHaveLength(0);
+      expect(shown('ent_c').every((child) => child.visible)).toBe(true);
+      expect(disposed).toBe(0);
+    } finally {
+      rig.dispose();
+    }
+  });
+
+  it('a full redraw clears any preview', () => {
+    const rig = buildSketchModeRig(basis, resolution);
+    try {
+      rig.setObjects(objects, 'ent_c', resolve);
+      rig.setPreviewObject('ent_c', circle(30));
+      rig.setObjects(objects, 'ent_c', resolve);
+      expect(previewGroupOf(rig).children).toHaveLength(0);
+      expect(
+        committedGroupOf(rig).children.every(
+          (child) => child.userData.pickProxy === true || child.visible
+        )
+      ).toBe(true);
+    } finally {
+      rig.dispose();
+    }
+  });
+});
