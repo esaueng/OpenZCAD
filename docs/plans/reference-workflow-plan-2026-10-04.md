@@ -248,10 +248,10 @@ Consequences for the plan:
   stored feature keeps the user's distance, and the probe shows 0.01 mm is
   enough. Regression: extend `test/text-kernel-build.test.ts` with the
   on-face case. Phase 2's engrave e2e then becomes runnable.
-- **Remus item to file** (needs the maintainer's go-ahead, outward action): exact
-  boolean with a coplanar bezier-walled cap. Repro is the probe's first
-  row; the flattened-wall and pierced-tool rows show it is the coplanar
-  curved-wall seam, not the glyph topology.
+- **Remus item filed:** [esaueng/remus#953](https://github.com/esaueng/remus/issues/953),
+  exact boolean with a coplanar bezier-walled cap. Repro is the probe's
+  first row; the flattened-wall and pierced-tool rows show it is the
+  coplanar curved-wall seam, not the glyph topology.
 - **Two secondary defects seen on the way**, each a small PR or a note in
   PR K: (1) the region rig inherits the previous face offset's chip mode and
   span, so a −5 mm region drag read `Total ⚠ 5 mm` (`ModelViewer.tsx:9011-9017,
