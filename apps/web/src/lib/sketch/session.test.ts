@@ -32,6 +32,7 @@ import {
   resolveSketchSnap,
   screenRayToPlanePoint,
   sketchEntryPose,
+  sketchEntryUp,
   sketchContentFramePoints,
   sketchObjectFromDrag,
   snapSketchPoint,
@@ -302,6 +303,66 @@ describe('sketchEntryPose', () => {
     const pose = sketchEntryPose(PLANE_BASES.XY, 50);
     expect(pose.position.y).toBeLessThan(0);
     expect(pose.position.z).toBeCloseTo(50, 1);
+  });
+
+  it('keeps world up on canonical planes, offset or not', () => {
+    for (const basis of Object.values(PLANE_BASES)) {
+      expect(sketchEntryUp(basis)).toBeNull();
+      expect(sketchEntryUp({ ...basis, origin: { x: 3, y: -4, z: 12 } })).toBe(
+        null
+      );
+      expect(sketchEntryPose(basis, 80).up).toBeNull();
+    }
+  });
+
+  it('rolls a top-face sketch so +u reads rightward and +v upward', () => {
+    const frame = frameFromFace({ x: 31, y: 25, z: 10 }, { x: 0, y: 0, z: 1 });
+    // Premise: the stored frame's u runs along world -Y on a top face.
+    expect(frame.xAxis.y).toBeCloseTo(-1, 9);
+    const basis = {
+      origin: frame.origin,
+      u: frame.xAxis,
+      v: frame.yAxis,
+      normal: frame.zAxis
+    };
+    const pose = sketchEntryPose(basis, 120);
+    expect(pose.up).toEqual(frame.yAxis);
+
+    const camera = new THREE.PerspectiveCamera(45, 1.5, 0.1, 4000);
+    camera.position.set(pose.position.x, pose.position.y, pose.position.z);
+    camera.up.set(pose.up!.x, pose.up!.y, pose.up!.z);
+    camera.lookAt(pose.target.x, pose.target.y, pose.target.z);
+    camera.updateMatrixWorld(true);
+    const at = (x: number, y: number) =>
+      projectToScreen(
+        new THREE.Vector3(
+          basis.origin.x + basis.u.x * x + basis.v.x * y,
+          basis.origin.y + basis.u.y * x + basis.v.y * y,
+          basis.origin.z + basis.u.z * x + basis.v.z * y
+        ),
+        camera,
+        900,
+        600
+      )!;
+    const origin = at(0, 0);
+    const stepU = at(10, 0);
+    const stepV = at(0, 10);
+    expect(stepU.x - origin.x).toBeGreaterThan(1);
+    expect(Math.abs(stepU.y - origin.y)).toBeLessThan(1e-6);
+    // Screen y grows downward.
+    expect(origin.y - stepV.y).toBeGreaterThan(1);
+    expect(Math.abs(stepV.x - origin.x)).toBeLessThan(1e-6);
+    // Even without the held roll, world up projects onto v here.
+    const worldUp = new THREE.PerspectiveCamera();
+    worldUp.up.set(0, 0, 1);
+    worldUp.position.copy(camera.position);
+    worldUp.lookAt(pose.target.x, pose.target.y, pose.target.z);
+    worldUp.updateMatrixWorld(true);
+    const screenUp = new THREE.Vector3().setFromMatrixColumn(
+      worldUp.matrixWorld,
+      1
+    );
+    expect(screenUp.x).toBeCloseTo(1, 6);
   });
 });
 
