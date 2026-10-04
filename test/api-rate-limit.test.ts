@@ -1,6 +1,7 @@
 import { DatabaseSync } from 'node:sqlite';
 import { expect, it, vi } from 'vitest';
 import type { CloudflareEnv } from '@openzcad/cloudflare-adapters';
+import { startEmailLogin } from '../apps/web/worker/auth';
 import {
   enforceApiRateLimit,
   publicRequestBucket
@@ -49,15 +50,16 @@ it('counts concurrent callers atomically, isolates buckets, and resets at the ne
     db.close();
   }
 });
-it('prunes at most 100 stale buckets per public request without resetting current or login windows', async () => {
+it('prunes at most 100 stale buckets without resetting current, login, or hourly invitation windows', async () => {
   const db = new DatabaseSync(':memory:');
   db.exec(
     'CREATE TABLE auth_rate_limits(bucket TEXT PRIMARY KEY, window_start INTEGER, request_count INTEGER)'
   );
   const insert = db.prepare('INSERT INTO auth_rate_limits VALUES (?, ?, ?)');
   for (let i = 0; i < 101; i++) insert.run(`stale_${i}`, 0, 1);
-  insert.run('login', 1800, 7);
-  insert.run('public', 3600, 1);
+  insert.run('login', 9900, 7);
+  insert.run('project-invite-account:owner', 7200, 10);
+  insert.run('public', 10740, 1);
   const env = {
     ENVIRONMENT: 'beta',
     DB: {
@@ -77,7 +79,7 @@ it('prunes at most 100 stale buckets per public request without resetting curren
       }
     }
   } as unknown as CloudflareEnv;
-  const now = vi.spyOn(Date, 'now').mockReturnValue(3_600_000);
+  const now = vi.spyOn(Date, 'now').mockReturnValue(10_740_000);
   try {
     await expect(enforceApiRateLimit(env, 'public', 1)).rejects.toMatchObject({
       status: 429
@@ -96,6 +98,13 @@ it('prunes at most 100 stale buckets per public request without resetting curren
         )
         .get()
     ).toEqual({ request_count: 7 });
+    expect(
+      db
+        .prepare(
+          "SELECT request_count FROM auth_rate_limits WHERE bucket = 'project-invite-account:owner'"
+        )
+        .get()
+    ).toEqual({ request_count: 10 });
     expect(
       db
         .prepare(
@@ -137,4 +146,71 @@ it('fails closed without its database and keeps anonymous buckets opaque', async
       'health'
     )
   ).not.toBe(first);
+});
+
+it('login cleanup preserves the same active hourly invitation counters', async () => {
+  const db = new DatabaseSync(':memory:');
+  db.exec(`
+    CREATE TABLE auth_rate_limits(bucket TEXT PRIMARY KEY, window_start INTEGER, request_count INTEGER);
+    CREATE TABLE auth_sessions(token_hash TEXT, expires_at INTEGER);
+    CREATE TABLE auth_email_challenges(id TEXT, email TEXT, code_hash TEXT, attempts INTEGER, created_at INTEGER, expires_at INTEGER, consumed_at INTEGER);
+    INSERT INTO auth_rate_limits VALUES ('project-invite-account:owner', 7200, 10), ('expired', 0, 1);
+  `);
+  function prepare(sql: string, values: (string | number)[] = []) {
+    return {
+      bind: (...next: (string | number)[]) => prepare(sql, next),
+      first: async () => db.prepare(sql).get(...values) ?? null,
+      run: async () => ({
+        success: true,
+        meta: { changes: Number(db.prepare(sql).run(...values).changes) }
+      })
+    };
+  }
+  const database = {
+    prepare,
+    batch: async (statements: ReturnType<typeof prepare>[]) =>
+      Promise.all(statements.map((statement) => statement.run()))
+  };
+  const now = vi.spyOn(Date, 'now').mockReturnValue(10_740_000);
+  const fetchMock = vi
+    .spyOn(globalThis, 'fetch')
+    .mockResolvedValue(
+      Response.json({
+        success: true,
+        action: 'email-code',
+        hostname: 'example.com'
+      })
+    );
+  try {
+    await startEmailLogin(
+      new Request('https://example.com/api/auth/email/start'),
+      { email: 'person@example.com', turnstileToken: 'test-token' },
+      {
+        ENVIRONMENT: 'beta',
+        AUTH_MODE: 'email-code',
+        DB: database as unknown as D1Database,
+        EMAIL: { send: async () => ({ messageId: 'test-message' }) },
+        AUTH_EMAIL_FROM: 'login@auth.example.com',
+        AUTH_OTP_PEPPER: 'test-pepper',
+        TURNSTILE_SITE_KEY: 'test-site',
+        TURNSTILE_SECRET_KEY: 'test-secret'
+      }
+    );
+    expect(
+      db
+        .prepare(
+          "SELECT request_count FROM auth_rate_limits WHERE bucket = 'project-invite-account:owner'"
+        )
+        .get()
+    ).toEqual({ request_count: 10 });
+    expect(
+      db
+        .prepare("SELECT bucket FROM auth_rate_limits WHERE bucket = 'expired'")
+        .get()
+    ).toBeUndefined();
+  } finally {
+    fetchMock.mockRestore();
+    now.mockRestore();
+    db.close();
+  }
 });

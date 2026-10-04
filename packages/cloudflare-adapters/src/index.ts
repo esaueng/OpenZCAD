@@ -2153,6 +2153,7 @@ export class D1R2PersistenceService implements PersistenceService {
       throw new ArtifactStorageError();
     }
     // Expired cross-account uploads are reclaimed by the scheduled sweeper.
+    await this.purgeExpiredUploadSessionsForOwner(userId);
     await this.refreshAccountQuota(access.ownerUserId);
     const session = createUploadSessionRecord(request);
     try {
@@ -3926,6 +3927,12 @@ export class D1R2PersistenceService implements PersistenceService {
   }
 
   async purgeExpiredUploadSessions(): Promise<number> {
+    return this.purgeExpiredUploadSessionsForOwner();
+  }
+
+  private async purgeExpiredUploadSessionsForOwner(
+    ownerUserId?: UserId
+  ): Promise<number> {
     if (!this.env.DB) {
       return getInMemoryPersistence().purgeExpiredUploadSessions();
     }
@@ -3934,14 +3941,30 @@ export class D1R2PersistenceService implements PersistenceService {
     }
     const expired = await this.env.DB.prepare(
       `SELECT id FROM upload_sessions
-       WHERE expires_at < ?
-       ORDER BY expires_at LIMIT 100`
+       WHERE expires_at < ?${ownerUserId === undefined ? '' : ' AND owner_user_id = ?'}
+       ORDER BY expires_at LIMIT ${ownerUserId === undefined ? 100 : MAX_ACTIVE_ARTIFACT_UPLOAD_SESSIONS}`
     )
-      .bind(nowIso())
+      .bind(
+        ...(ownerUserId === undefined ? [nowIso()] : [nowIso(), ownerUserId])
+      )
       .all<{ id: string }>();
     const rows = expired.results ?? [];
     if (rows.length === 0) {
       return 0;
+    }
+    if (ownerUserId !== undefined) {
+      // Bound request work to one account and reconcile each storage write
+      // before beginning another. Failed cleanup retains its indexed session.
+      let count = 0;
+      for (const row of rows) {
+        try {
+          const upload = await this.loadUploadSession(row.id);
+          if (upload && (await this.cleanupUploadSession(upload))) count += 1;
+        } catch {
+          // The scheduled sweeper can retry incomplete cleanup.
+        }
+      }
+      return count;
     }
     const cleanups = await Promise.allSettled(
       rows.map(async (row) => {

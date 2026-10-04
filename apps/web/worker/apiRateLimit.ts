@@ -1,4 +1,5 @@
 import type { CloudflareEnv } from '@openzcad/cloudflare-adapters';
+import { PROJECT_INVITATION_RATE_WINDOW_SECONDS } from '@openzcad/persistence';
 import { HttpError } from './validation';
 
 /** Atomic fixed-window buckets share the existing expiring auth accounting table. */
@@ -26,14 +27,15 @@ export async function enforceApiRateLimit(
     .first<{ request_count: number }>();
   if (!usage) throw new HttpError(503, 'API request guard is unavailable.');
   // Public traffic must also expire its buckets when no login flow runs.
-  // Retain two login windows so cleanup cannot reset active auth accounting.
+  // The shared table includes hourly invitation counters as well as login
+  // counters. Retain two of the longest windows before reclaiming rows.
   await env.DB.prepare(
     `DELETE FROM auth_rate_limits WHERE bucket IN (
       SELECT bucket FROM auth_rate_limits WHERE window_start < ?
       ORDER BY window_start LIMIT 100
     )`
   )
-    .bind(windowStart - 30 * 60)
+    .bind(windowStart - PROJECT_INVITATION_RATE_WINDOW_SECONDS * 2)
     .run();
   if (usage.request_count > limit)
     throw new HttpError(429, 'API request limit reached. Try again later.');
