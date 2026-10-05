@@ -2223,8 +2223,9 @@ export function Inspector(props: InspectorProps) {
     body = (
       <>
         <p>
-          Selected {selectionNoun}. To change its shape, edit the feature that
-          made it in History.
+          {selectedTopology.kind === 'face'
+            ? 'Selected face. Drag an available face handle to adjust its shape, or edit the feature that made it in History.'
+            : `Selected ${selectionNoun}. To change its shape, edit the feature that made it in History.`}
         </p>
         {!commandSession &&
           selectedTopology.kind === 'face' &&

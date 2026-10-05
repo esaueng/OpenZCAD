@@ -6,6 +6,7 @@ import type {
   ProjectConflict
 } from '../lib/conflictRecovery';
 import { useModalFocus } from '../lib/useModalFocus';
+import { canonicalProjectContentKey } from '../worker/exactRebuildCache';
 
 export interface ProjectConflictDialogProps {
   conflict: ProjectConflict;
@@ -64,6 +65,9 @@ export function ProjectConflictDialog({
   const working = busy || resolving;
   useModalFocus(dialogRef, { autoFocus: true });
   const other = OTHER_SIDE[conflict.source];
+  const sameGeometry =
+    canonicalProjectContentKey(conflict.localDocument) ===
+    canonicalProjectContentKey(conflict.remoteDocument);
 
   async function resolve(resolution: ConflictResolution) {
     setError(null);
@@ -104,10 +108,44 @@ export function ProjectConflictDialog({
         <p>
           <strong>{conflict.localDocument.name}</strong> is at version{' '}
           {conflict.localDocument.version} on this device and version{' '}
-          {conflict.remoteDocument.version} {other.where}. Both still exist —
-          whichever you do not keep is saved as a separate recovery project
-          first.
+          {conflict.remoteDocument.version} {other.where}. Both still exist. Any
+          work missing from the version you choose is saved as a separate
+          recovery project first.
         </p>
+        <p className="conflict-dialog-note">
+          {sameGeometry
+            ? 'The model matches; the saved or undo history needs reconciliation.'
+            : 'The model differs between these copies.'}{' '}
+          Version numbers alone do not tell you which copy to keep.
+        </p>
+        {[
+          { label: 'This device', document: conflict.localDocument },
+          {
+            label:
+              conflict.source === 'account' ? 'Your account' : 'Live session',
+            document: conflict.remoteDocument
+          }
+        ].map(({ label, document }) => {
+          const checkpoint = document.checkpoints.at(-1);
+          return (
+            <p className="conflict-dialog-note" key={label}>
+              {label}: {document.checkpoints.length} save{' '}
+              {document.checkpoints.length === 1 ? 'point' : 'points'}
+              {checkpoint ? (
+                <>
+                  {' '}
+                  · Latest: {checkpoint.reason} (
+                  <time dateTime={checkpoint.createdAt}>
+                    {new Date(checkpoint.createdAt).toLocaleString()}
+                  </time>
+                  )
+                </>
+              ) : (
+                ' · No saved checkpoint'
+              )}
+            </p>
+          );
+        })}
         <div className="conflict-dialog-actions">
           <button
             type="button"

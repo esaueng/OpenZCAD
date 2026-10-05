@@ -10,6 +10,8 @@ function renderTopBar(
     signedIn?: boolean;
     saveToAccount?: boolean;
     knownDeviceOnly?: boolean;
+    geometryPending?: boolean;
+    geometryFailed?: boolean;
   } = {}
 ) {
   const handlers = {
@@ -25,6 +27,8 @@ function renderTopBar(
       canExport={false}
       exportScope={null}
       saveState={options.saveState ?? 'local'}
+      geometryPending={options.geometryPending}
+      geometryFailed={options.geometryFailed}
       saveToAccount={options.saveToAccount ?? false}
       knownDeviceOnly={options.knownDeviceOnly ?? false}
       localOnlySourceCount={0}
@@ -59,6 +63,35 @@ function renderTopBar(
 }
 
 describe('TopBar save chip', () => {
+  it('distinguishes stored work from exact geometry readiness', () => {
+    renderTopBar({
+      saveState: 'synced',
+      signedIn: true,
+      geometryPending: true
+    });
+    const chip = screen.getByRole('status', {
+      name: 'Saved · preparing model'
+    });
+    expect(chip).toHaveAttribute(
+      'title',
+      expect.stringContaining('Saved on this device and in your account.')
+    );
+    expect(chip).toHaveAttribute(
+      'title',
+      expect.stringContaining('Face and edge edits become available')
+    );
+  });
+  it('does not describe a failed rebuild as ongoing preparation', () => {
+    renderTopBar({
+      saveState: 'synced',
+      signedIn: true,
+      geometryPending: true,
+      geometryFailed: true
+    });
+    expect(
+      screen.getByRole('status', { name: 'Saved · model unavailable' })
+    ).toHaveAttribute('title', expect.stringContaining('activity log'));
+  });
   it('is a readout that saves nothing when clicked', () => {
     const { onSave } = renderTopBar({ saveState: 'local' });
     expect(

@@ -41,6 +41,8 @@ interface TopBarProps {
   /** Name of the body the export will target, or null for "all bodies". */
   exportScope: string | null;
   saveState: WorkspaceSaveState;
+  geometryPending?: boolean;
+  geometryFailed?: boolean;
   /**
    * Import sources that exist only in this browser because their cloud
    * archival failed. Nonzero shows the File-menu action that retries the
@@ -142,12 +144,11 @@ const WORKSPACE_MODE_OPTIONS: ReadonlyArray<{
 const saveStateLabels = (states: readonly WorkspaceSaveState[]) =>
   states.map((state) => WORKSPACE_SAVE_STATE_PRESENTATION[state].topBarLabel);
 /** Signed in: the account round-trip. Signed out: device saves only. */
-const CLOUD_SAVE_LABEL_RESERVE = saveStateLabels([
-  'saving',
-  'syncing',
-  'synced',
-  'offline'
-]);
+const CLOUD_SAVE_LABEL_RESERVE = [
+  ...saveStateLabels(['saving', 'syncing', 'synced', 'offline']),
+  'Saved · preparing model',
+  'Saved · model unavailable'
+];
 const DEVICE_SAVE_LABEL_RESERVE = saveStateLabels(['saving', 'local']);
 // "Joining…" rather than "Connecting…": the room is joined for the opening
 // frames of every cloud project, and the longer word would either resize the
@@ -175,6 +176,8 @@ export function TopBar({
   canExport,
   exportScope,
   saveState,
+  geometryPending = false,
+  geometryFailed = false,
   localOnlySourceCount,
   artifacts,
   session,
@@ -296,7 +299,12 @@ export function TopBar({
   const presentation = WORKSPACE_SAVE_STATE_PRESENTATION[saveState];
   const saveLabel = saveToAccount
     ? 'Save to my account'
-    : presentation.topBarLabel;
+    : saveState === 'synced' && geometryPending
+      ? geometryFailed
+        ? 'Saved · model unavailable'
+        : 'Saved · preparing model'
+      : presentation.topBarLabel;
+  const saveTitle = `${presentation.title}${geometryPending ? (geometryFailed ? ' Exact geometry is unavailable; see the activity log.' : ' Preparing exact geometry. Face and edge edits become available when it finishes.') : ''}`;
   const saveChipContent = (
     <>
       {/* Keyed by the glyph, not the state: saving → syncing keeps the
@@ -495,7 +503,7 @@ export function TopBar({
               title={
                 saveToAccount
                   ? 'Save this local project and its source files to your account.'
-                  : presentation.title
+                  : saveTitle
               }
             >
               {saveChipContent}
@@ -507,7 +515,7 @@ export function TopBar({
               className={`save-state topbar-action is-readout is-${saveState}`}
               role="status"
               aria-label={saveLabel}
-              title={`${presentation.title} Save a revision from File or with ${platformShortcutLabel('Ctrl+S')}.`}
+              title={`${saveTitle} Save a revision from File or with ${platformShortcutLabel('Ctrl+S')}.`}
             >
               {saveChipContent}
             </span>

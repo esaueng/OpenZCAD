@@ -1,6 +1,7 @@
 import type { Page } from '@playwright/test';
 import {
   createProjectDocument,
+  createSavedRevision,
   withoutDerivedProjection
 } from '@openzcad/document-core';
 import {
@@ -28,6 +29,122 @@ import {
 const SYNC_BUDGET_MS = process.env.CI ? 30_000 : 10_000;
 
 const accountUserId = toUserId('user_cloud_sync_e2e');
+
+test('keeps exact geometry and undo through a save echo and reopens compatible saved history without a conflict', async ({
+  page
+}, testInfo) => {
+  const browserErrors: string[] = [];
+  page.on('pageerror', (error) => browserErrors.push(error.message));
+  page.on('console', (message) => {
+    // This fixture deliberately has no thumbnail upload service. Its mocked
+    // 404 is expected; application exceptions and all other console errors fail.
+    if (message.type() !== 'error') return;
+    if (
+      message.location().url.endsWith('/api/uploads') &&
+      message.text().includes('404 (Not Found)')
+    )
+      return;
+    browserErrors.push(message.text());
+  });
+  const api = new SharedCloudProjectApi();
+  await api.install(page);
+  await page.addInitScript(() => {
+    const counters = window as unknown as { __saveFlowBroadcasts: number };
+    counters.__saveFlowBroadcasts = 0;
+    const NativeWorker = window.Worker;
+    window.Worker = class extends NativeWorker {
+      override postMessage(
+        message: unknown,
+        options?: StructuredSerializeOptions | Transferable[]
+      ) {
+        const request = message as { type?: string; requestId?: string };
+        if (request.type === 'sync' && !request.requestId)
+          counters.__saveFlowBroadcasts++;
+        if (Array.isArray(options)) super.postMessage(message, options);
+        else super.postMessage(message, options);
+      }
+    };
+  });
+  await page.goto('/');
+  await page.getByLabel('Project name').fill('Save Flow');
+  await page.getByRole('button', { name: 'Create project' }).click();
+  await page.getByRole('button', { name: /^Box \(B\)/ }).click();
+  await page
+    .getByRole('region', { name: 'Feature inspector' })
+    .getByRole('button', { name: /^Create/ })
+    .click();
+  await expect(
+    page.getByRole('status', { name: 'Saved', exact: true })
+  ).toBeVisible({ timeout: SYNC_BUDGET_MS });
+  const count = () =>
+    page.evaluate(
+      () =>
+        (window as unknown as { __saveFlowBroadcasts: number })
+          .__saveFlowBroadcasts
+    );
+  const broadcasts = await count();
+  // A server echo can advance the fence without changing the exact model.
+  await page.route('**/api/projects/*/revisions', async (route) => {
+    if (route.request().method() !== 'POST') return route.fallback();
+    const payload = route.request().postDataJSON() as {
+      document: ProjectDocument;
+      reason: string;
+    };
+    api.project = withoutDerivedProjection(
+      createSavedRevision(
+        { ...payload.document, version: payload.document.version + 1 },
+        payload.reason
+      )
+    );
+    await route.fulfill({ json: api.project });
+  });
+  const savedCheckpoints = api.project!.checkpoints.length;
+  await page.keyboard.press('ControlOrMeta+s');
+  await expect
+    .poll(() => api.project?.checkpoints.length)
+    .toBe(savedCheckpoints + 1);
+  await expect
+    .poll(() => api.project?.checkpoints.at(-1)?.reason)
+    .toBe('Manual save');
+  await expect(
+    page.getByRole('status', { name: 'Saved', exact: true })
+  ).toBeVisible();
+  expect(await count()).toBe(broadcasts);
+  await expect(
+    page.getByRole('button', { name: 'Undo', exact: true })
+  ).toBeEnabled();
+
+  await page.getByTitle('Back to projects').click();
+  // Another saved checkpoint at the SAME version used to raise 8-vs-8.
+  api.project = withoutDerivedProjection(
+    createSavedRevision(api.project!, 'Before drilling')
+  );
+  await page.locator('.start-tile-open', { hasText: 'Save Flow' }).click();
+  await expect(
+    page.getByRole('status', { name: 'Saved', exact: true })
+  ).toBeVisible({ timeout: SYNC_BUDGET_MS });
+  await expect(
+    page.getByRole('dialog', { name: 'This project changed in two places' })
+  ).toHaveCount(0);
+  expect(await count()).toBe(broadcasts);
+  const reopenedCheckpoints = api.project.checkpoints.length;
+  await page.keyboard.press('ControlOrMeta+s');
+  await expect
+    .poll(() => api.project?.checkpoints.length)
+    .toBe(reopenedCheckpoints + 1);
+  await expect(
+    page.getByRole('status', { name: 'Saved', exact: true })
+  ).toBeVisible();
+  await expect
+    .poll(() =>
+      api.project?.checkpoints.some(
+        (checkpoint) => checkpoint.reason === 'Before drilling'
+      )
+    )
+    .toBe(true);
+  await page.screenshot({ path: testInfo.outputPath('save-flow.png') });
+  expect(browserErrors).toEqual([]);
+});
 
 function projectIdFrom(url: string): string {
   const parts = new URL(url).pathname.split('/');
@@ -755,7 +872,7 @@ test('syncs View measurements to a second device without changing the CAD docume
 
 test('syncs across two devices and preserves the losing side of a conflict', async ({
   browser
-}) => {
+}, testInfo) => {
   test.setTimeout(60_000);
   const api = new SharedCloudProjectApi();
   const deviceA = await browser.newContext();
@@ -827,6 +944,9 @@ test('syncs across two devices and preserves the losing side of a conflict', asy
       name: 'This project changed in two places'
     });
     await expect(conflict).toBeVisible({ timeout: SYNC_BUDGET_MS });
+    await pageB.screenshot({
+      path: testInfo.outputPath('conflict-details.png')
+    });
     // The top bar's save state is the one sync readout now.
     await expect(pageB.locator('.save-state')).toContainText('Conflict');
     // A lower overlay may mount after async conflict detection. The account
@@ -859,7 +979,7 @@ test('syncs across two devices and preserves the losing side of a conflict', asy
           hasText: 'Device B unsent edit (Recovery)'
         })
         .locator('.start-tile-rev')
-    ).toHaveText('rev 1');
+    ).toHaveText('1 save');
     await pageB
       .locator('.start-tile-open', {
         hasText: 'Device B unsent edit (Recovery)'
