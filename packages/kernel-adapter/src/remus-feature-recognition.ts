@@ -23,6 +23,7 @@
  */
 import { GEOMETRY_LINEAR_TOLERANCE, type Vec3 } from '@openzcad/geometry';
 import { faceVertexCentroid, tangentPlanarNeighbours } from './exact-brep';
+import { edgeToFaceMapOf, surfaceTypeOf } from './exact-sync-memo';
 import { GEOMETRY_EPSILON, dot, normalized, subtract } from './exact-math';
 import type {
   ExactCylinderSurface,
@@ -244,10 +245,7 @@ export class SolidFaceAdjacency {
     private readonly kernel: RemusKernel,
     private readonly solid: number
   ) {
-    this.edgeToFaces = JSON.parse(kernel.edgeToFaceMap(solid)) as Record<
-      string,
-      number[]
-    >;
+    this.edgeToFaces = edgeToFaceMapOf(kernel, solid);
   }
 
   /** Neighbouring face handle to the edges it shares, or null if non-manifold. */
@@ -296,7 +294,7 @@ export class SolidFaceAdjacency {
   }
 
   private readPlane(face: number): PlanarFaceWitness | null {
-    if (this.kernel.getSurfaceType(face) !== 'plane') {
+    if (surfaceTypeOf(this.kernel, face) !== 'plane') {
       return null;
     }
     let normal: Vec3 | null;
