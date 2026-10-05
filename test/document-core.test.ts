@@ -98,9 +98,9 @@ describe('document-core', () => {
     // The refusal happens before any stamp: the input keeps its version and
     // the current version is untouched.
     expect(future.schemaVersion).toBe(PROJECT_DOCUMENT_SCHEMA_VERSION + 84);
-    expect(
-      normalizeDocument(structuredClone(current)).schemaVersion
-    ).toBe(PROJECT_DOCUMENT_SCHEMA_VERSION);
+    expect(normalizeDocument(structuredClone(current)).schemaVersion).toBe(
+      PROJECT_DOCUMENT_SCHEMA_VERSION
+    );
   });
 
   it('records save checkpoints without changing model version', () => {
@@ -534,7 +534,8 @@ describe('feature editing', () => {
     expect('endPoint' in after.data).toBe(false);
     expect(after.data).toEqual({
       featureKind: 'loft',
-      sections: feature.data.featureKind === 'loft' ? feature.data.sections : [],
+      sections:
+        feature.data.featureKind === 'loft' ? feature.data.sections : [],
       mode: 'ruled'
     });
 
@@ -589,6 +590,30 @@ describe('feature editing', () => {
         });
       }
     }
+  });
+
+  it('keeps a sketch basis revision when the form edits its offset', () => {
+    const document = createProjectDocument('Front', user());
+    const { document: withSketch, sketchId } = addSketchFeature(document, {
+      name: 'Front profile',
+      planeRef: {
+        type: 'canonical',
+        plane: 'XZ',
+        offset: 0,
+        basisRevision: 2
+      },
+      objects: [{ objectKind: 'circle', radius: 4, centerX: 0, centerY: 0 }]
+    });
+    const edited = updateSketch(withSketch, { sketchId, offset: 6 });
+    const sketch = Object.values(edited.nodes).find(
+      (node) => node.kind === 'sketch'
+    );
+    expect(sketch?.kind === 'sketch' && sketch.planeRef).toEqual({
+      type: 'canonical',
+      plane: 'XZ',
+      offset: 6,
+      basisRevision: 2
+    });
   });
 
   it('keeps a body named after what the user made, not after the last feature', () => {

@@ -1190,10 +1190,15 @@ export function updateSketch(
       sketch.planeRef.type === 'canonical'
         ? sketch.planeRef
         : { type: 'canonical' as const, plane: 'XY' as const, offset: 0 };
+    // Keep the basis revision: the sketch's stored coordinates were drawn
+    // against it, and dropping it would mirror a Front (XZ) sketch in place.
     sketch.planeRef = {
       type: 'canonical',
       plane: input.plane ?? previous.plane,
-      offset: input.offset ?? previous.offset
+      offset: input.offset ?? previous.offset,
+      ...('basisRevision' in previous && previous.basisRevision !== undefined
+        ? { basisRevision: previous.basisRevision }
+        : {})
     };
   }
   if (input.object !== undefined) {
