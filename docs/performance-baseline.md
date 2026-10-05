@@ -556,6 +556,46 @@ The per-edit floor on a drilled holder is measurement of the edited body
 `test/e2e/perf-holder-reload.spec.ts` under `OZ_PERF=1`; `OZ_PERF_BUDGET=1`
 asserts the within-run ratios the report pins.
 
+## Edited imported body measurement (2026-10-04)
+
+One `syncDocument` for an offset-face direct edit (−6 mm on a +X planar face)
+of the 160-face Remus hammer-holder test fixture (42 NURBS patches), in Node
+against the pinned kernel on an Apple M5 Pro. Three interleaved runs per
+build, medians; a local probe wraps every `RemusKernel` method with a timer.
+Call counts are deterministic.
+
+| Offset-face sync                   | Before (`main`) |        After |
+| ---------------------------------- | --------------: | -----------: |
+| Wall                               |         15.34 s |      11.91 s |
+| Opening recognition stage          |          3.00 s |      not run |
+| Imported feature recognition stage |          6.09 s |       5.70 s |
+| `validateSolid` calls              |   12 (2 293 ms) |            0 |
+| `faceArea` calls                   |  510 (1 006 ms) | 162 (330 ms) |
+| `intersectDetailed` calls          |      3 (270 ms) |            0 |
+
+The cold import of the same file goes from 12.62 s to 11.97 s (`faceArea`
+508 → 188 calls). Body volume, face count and warnings are identical.
+
+Two changes. The opening is measured only on an import under at most fixed
+moves or rotations, which is the only body the growing-holder recipe compiles
+against; any other imported body publishes an unsupported opening with that
+reason. And one body measurement reads each face's geometry once, shared by
+the published face geometry, the imported-feature query and the opening
+inventory.
+
+What remains is kernel work: the edit itself (`moveFacesJournaled`, 3.97 s)
+and imported-feature recognition, which is two whole-solid queries
+(`recognizeFeatures` 2.98 s, `solidEdgeRelations` 2.70 s). Recognition is not
+carried through the edit. On this fixture the edit shrinks three recognized
+fillet bands along the moved face from 8 mm to 2 mm and makes a radius-8 band
+recognizable, so a carried result would publish stale proofs, and hole edits,
+face-distance proofs and the edit catalog bind to it on edited bodies. Taking
+it off the critical path needs faster kernel queries or a two-phase
+publication (geometry first, recognition after); the worker protocol and the
+assistant panel have no such phase today. Regressions:
+`test/edited-import-opening.test.ts`,
+`packages/kernel-adapter/src/exact-measure.test.ts`.
+
 ## Exact-kernel fixture refresh (2026-07-31)
 
 `test/parity/parity.test.ts` passed all 24 cross-kernel cases. The committed
