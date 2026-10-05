@@ -317,9 +317,9 @@ describe('collaboration conflict recovery', () => {
 
   // A keep-mine is a fenced write that mints a new version of the same model,
   // and the room and the account each cite that new version in their next
-  // dialog. Keyed on version and revision, the same model came back under a
-  // fresh key on every hop, and every hop wrote another recovery project.
-  it('copies a model once however many versions it is cited under', async () => {
+  // dialog. A version-fence change alone must not mint another recovery.
+  // New saved or undo history is separate work and still needs preservation.
+  it('copies unchanged work once however many versions it is cited under', async () => {
     const base = createProjectDocument('Conflict', owner);
     const context = {
       role: 'owner' as const,
@@ -338,15 +338,7 @@ describe('collaboration conflict recovery', () => {
     );
     expect(first.writeRecoveryCopy).toHaveBeenCalledTimes(1);
 
-    // The same model as `mine`, resaved under a new version by a fenced write
-    // and with a fresh revision on top — what every hop looks like.
-    const resaved = {
-      ...version(mine, 28),
-      revisions: [
-        ...mine.revisions,
-        { ...mine.revisions.at(-1), revisionId: 'rev_resaved' }
-      ]
-    } as ProjectDocument;
+    const resaved = version(mine, 28);
     for (const [local, remote, resolution] of [
       [resaved, theirs, 'use-remote'],
       [theirs, resaved, 'keep-mine'],
@@ -364,7 +356,53 @@ describe('collaboration conflict recovery', () => {
     }
   });
 
-  it('writes nothing when both sides would rebuild to the same model', async () => {
+  it('preserves a new save point even when an earlier copy of the same model exists', async () => {
+    const base = createProjectDocument('Saved history', owner);
+    const local = version(base, 8);
+    const checkpoint = {
+      checkpointId: 'cp_unique',
+      revisionId: base.revisions.at(-1)!.revisionId,
+      documentVersion: 8,
+      reason: 'Before drilling',
+      createdAt: '2026-10-05T05:00:00Z'
+    };
+    const remote = {
+      ...local,
+      checkpoints: [...local.checkpoints, checkpoint]
+    };
+    const context = {
+      role: 'owner' as const,
+      lease: null,
+      leasesEnforced: false
+    };
+    const first = handlers();
+    await resolveProjectConflict(
+      conflictFromDocuments(local, edited(base, 9, 'different'), 'account'),
+      'use-remote',
+      context,
+      first
+    );
+    const keep = handlers();
+    const outcome = await resolveProjectConflict(
+      conflictFromDocuments(local, remote, 'account'),
+      'keep-mine',
+      context,
+      keep
+    );
+    expect(outcome.recoveryCopy).toBe('written');
+    expect(keep.writeRecoveryCopy).toHaveBeenCalledWith(remote);
+    const retry = handlers();
+    const retried = await resolveProjectConflict(
+      conflictFromDocuments(local, remote, 'account'),
+      'keep-mine',
+      context,
+      retry
+    );
+    expect(retried.recoveryCopy).toBe('already-preserved');
+    expect(retry.writeRecoveryCopy).not.toHaveBeenCalled();
+  });
+
+  it('writes nothing when the chosen copy already preserves the losing model and history', async () => {
     const base = createProjectDocument('Conflict', owner);
     const context = {
       role: 'owner' as const,

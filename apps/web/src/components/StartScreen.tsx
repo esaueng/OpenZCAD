@@ -436,8 +436,13 @@ export function StartScreen({
               title={`Last edited ${formatLastEditedExact(project.updatedAt)}`}
             >
               {formatLastEdited(project.updatedAt)}
+              {/\((Recovery|Local copy)\)$/.test(project.name) &&
+                ` · ${formatTime(new Date(project.updatedAt))}`}
             </time>
-            <span className="start-tile-rev">rev {project.revisionCount}</span>
+            <span className="start-tile-rev">
+              {project.revisionCount}{' '}
+              {project.revisionCount === 1 ? 'save' : 'saves'}
+            </span>
           </small>
           {trashed && (
             <small className="start-tile-purge">

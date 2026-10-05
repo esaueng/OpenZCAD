@@ -36,6 +36,99 @@ afterEach(() => {
 });
 
 describe('useGeometryWorker', () => {
+  it('retains only a completed live result across metadata changes, without another worker sync', () => {
+    installWorker();
+    const document = createProjectDocument('Saved model', toUserId('user'));
+    const manager = { document } as CommandManager;
+    const host = {
+      manager: () => manager,
+      onDerived: vi.fn(),
+      onError: vi.fn()
+    };
+    const { result } = renderHook(() => useGeometryWorker(host));
+    const worker = FakeWorker.instances[0]!;
+    act(() => result.current.sync(document));
+    expect(result.current.retainReadyGeometry(document)).toBe(false);
+    act(() => {
+      worker.emit({
+        type: 'state',
+        phase: 'ready',
+        projectId: document.projectId,
+        version: document.version,
+        stale: false
+      });
+      worker.emit({
+        type: 'sync',
+        ok: true,
+        projectId: document.projectId,
+        version: document.version,
+        derived: document.derived
+      });
+    });
+    const saved = {
+      ...document,
+      version: document.version + 1,
+      checkpoints: [
+        ...document.checkpoints,
+        { ...document.checkpoints[0]!, reason: 'Before drilling' }
+      ]
+    };
+    act(() => {
+      expect(result.current.retainReadyGeometry(saved)).toBe(true);
+      manager.document = saved;
+    });
+    expect(result.current.isReadyFor(saved)).toBe(true);
+    act(() => result.current.sync(saved));
+    expect(worker.postMessage).toHaveBeenCalledTimes(1);
+    expect(
+      result.current.retainReadyGeometry({ ...saved, name: 'Changed model' })
+    ).toBe(false);
+    expect(
+      result.current.retainReadyGeometry({
+        ...saved,
+        projectId: 'another-project' as typeof document.projectId
+      })
+    ).toBe(false);
+    act(() => result.current.sync(saved, [toBodyId('new-lineage-demand')]));
+    expect(result.current.retainReadyGeometry(saved)).toBe(false);
+    expect(worker.postMessage).toHaveBeenCalledTimes(2);
+  });
+
+  it('cannot reuse persisted display meshes or an invalidated worker result', () => {
+    installWorker();
+    const document = createProjectDocument('Reloaded model', toUserId('user'));
+    const manager = { document } as CommandManager;
+    const { result } = renderHook(() =>
+      useGeometryWorker({
+        manager: () => manager,
+        onDerived: vi.fn(),
+        onError: vi.fn()
+      })
+    );
+    const worker = FakeWorker.instances[0]!;
+    act(() =>
+      worker.emit({
+        type: 'state',
+        phase: 'ready',
+        projectId: document.projectId,
+        version: document.version,
+        stale: false
+      })
+    );
+    expect(result.current.retainReadyGeometry(document)).toBe(false);
+    act(() => result.current.sync(document));
+    act(() =>
+      worker.emit({
+        type: 'sync',
+        ok: true,
+        projectId: document.projectId,
+        version: document.version,
+        derived: document.derived
+      })
+    );
+    act(() => result.current.invalidate());
+    expect(result.current.retainReadyGeometry(document)).toBe(false);
+  });
   it('routes a mass query by request ID without changing live derived state', async () => {
     installWorker();
     const document = createProjectDocument('Mass query', toUserId('user'));

@@ -1130,6 +1130,7 @@ function ModelingOperationsForm(
 }
 import {
   chooseProjectDocument,
+  projectsHaveSameRebuildInputs,
   clearAllLastSyncedVersions,
   clearLastSyncedVersion,
   deleteLocalProject,
@@ -3862,7 +3863,11 @@ export function App() {
     if (!reason) {
       return true;
     }
-    setStatus(`Cannot ${action}: ${reason}.`);
+    setStatus(
+      projectOpenElsewhereRef.current
+        ? PROJECT_OPEN_ELSEWHERE_NOTICE
+        : `Cannot ${action}: ${reason}.`
+    );
     return false;
   }
 
@@ -3871,7 +3876,11 @@ export function App() {
     if (!reason) {
       return true;
     }
-    setStatus(`Cannot ${action}: ${reason}.`);
+    setStatus(
+      projectOpenElsewhereRef.current
+        ? PROJECT_OPEN_ELSEWHERE_NOTICE
+        : `Cannot ${action}: ${reason}.`
+    );
     return false;
   }
 
@@ -5979,12 +5988,22 @@ export function App() {
     if (rememberProject) {
       rememberActiveProject(normalized.projectId);
     }
+    const current = managerRef.current?.document;
+    if (
+      !restoreView &&
+      current?.projectId === normalized.projectId &&
+      projectsHaveSameRebuildInputs(current, normalized)
+    ) {
+      showAccountEcho(withMatchingLocalDerived(normalized, current));
+      setSaveState('saving');
+      return;
+    }
     managerRef.current = new CommandManager(
       normalized,
       session?.userId ?? normalized.ownerUserId
     );
     clearAutoFrame();
-    geometry.invalidate();
+    if (!geometry.retainReadyGeometry(normalized)) geometry.invalidate();
     // The document effect below writes every hydrated document to this
     // device and reports 'saving' while it does; saying so from the first
     // frame keeps the chip from showing the previous project's "Saved" and
@@ -8159,6 +8178,7 @@ export function App() {
    * invalidate first, or the viewport stays blank until a reload rebuilds it.
    */
   function showAccountEcho(echo: ProjectDocument) {
+    geometry.retainReadyGeometry(echo);
     if (managerRef.current) {
       managerRef.current.document = echo;
     }
@@ -18709,6 +18729,8 @@ export function App() {
       }
       topBar={
         <TopBar
+          geometryPending={!geometry.isReadyFor(doc)}
+          geometryFailed={geometry.state.phase === 'failed'}
           projectTransferBusy={projectTransferBusy}
           onImportProject={(file) => void handleImportProject(file)}
           onExportProject={() => void handleExportProject()}
