@@ -3,7 +3,10 @@ import type {
   ProjectDocument,
   ProjectEditLease
 } from '@openzcad/shared';
-import { projectRebuildInputs } from './localProjectStore';
+import {
+  projectPreservesLocalWork,
+  syncComparableDocument
+} from './localProjectStore';
 
 const CONFLICT_MARKER_PREFIX = 'openzcad-unresolved-project-conflict:';
 const RECOVERY_LEDGER_PREFIX = 'openzcad-recovery-copies:';
@@ -225,17 +228,12 @@ function fnv1a64(text: string): string {
 }
 
 /**
- * Identifies what a recovery copy would preserve: the document's rebuild
- * inputs, and nothing about how it got there. Keying on the version and last
- * revision looked equivalent but was not — a keep-mine is a fenced write that
- * mints a new version of the same model, and the room and the account each
- * cite that new version in their next dialog, so the same model came back
- * under a fresh key on every hop and every hop wrote another copy. Two
- * documents that would rebuild to the same geometry, name and parameters
- * are the same thing to recover, whatever their bookkeeping says.
+ * Identifies the work a recovery copy preserves, including saved history.
+ * Version fences, ownership and derived meshes do not constitute new work.
+ * An earlier copy of the same model cannot preserve a later named save point.
  */
 export function recoveryCopyKey(document: ProjectDocument): string {
-  return `content:${fnv1a64(canonicalJson(projectRebuildInputs(document)))}`;
+  return `work:${fnv1a64(canonicalJson(syncComparableDocument(document)))}`;
 }
 
 /**
@@ -340,10 +338,11 @@ export function recoveryCopyName(
  * are known to be valid, the side the user is NOT keeping is written as a
  * recovery project before invoking a handler that can replace either side of
  * the conflict — but only when there is something to preserve: not when the
- * two sides would rebuild to the same model, and not when that model already
- * has a recovery project. The same conflict can be re-raised by every room
- * frame, a failed handler can be retried, and the room and the account can
- * pass one divergence back and forth under new version numbers; none of
+ * chosen copy already retains the losing copy's model and history, or
+ * that exact work already has a recovery project. The same conflict can be
+ * re-raised by every room frame, a failed handler can be retried, and the
+ * room and the account can pass one divergence back and forth under new
+ * version numbers; none of
  * those may mint another copy.
  */
 export async function resolveProjectConflict(
@@ -410,7 +409,7 @@ export async function resolveProjectConflict(
   // the user asked for the project, not for a judgement about its contents.
   const nothingToPreserve =
     resolution !== 'save-local-copy' &&
-    copyKey === recoveryCopyKey(winningDocument);
+    projectPreservesLocalWork(losingDocument, winningDocument);
   const alreadyPreserved =
     (markerMatches && (marker.recoveryCopies ?? []).includes(copyKey)) ||
     readRecoveryLedger(conflict.projectId).includes(copyKey);
@@ -474,6 +473,6 @@ export function recoveryCopyNote(outcome: ConflictResolutionOutcome): string {
     case 'already-preserved':
       return 'the other version already had a recovery copy';
     case 'nothing-to-preserve':
-      return 'both versions held the same model, so nothing was discarded';
+      return 'the chosen version already contains your model and saved history';
   }
 }

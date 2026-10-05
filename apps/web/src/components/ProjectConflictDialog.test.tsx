@@ -20,6 +20,35 @@ function conflict(source: ConflictSource): ProjectConflict {
 }
 
 describe('ProjectConflictDialog', () => {
+  it('explains matching version numbers and shows the saved-history differences', () => {
+    const value = conflict('account');
+    value.remoteDocument.version = value.localDocument.version;
+    value.expectedRemoteVersion = value.localDocument.version;
+    value.remoteDocument.checkpoints.push({
+      checkpointId: 'cp_before_drilling',
+      revisionId: value.remoteDocument.revisions.at(-1)!.revisionId,
+      documentVersion: value.expectedRemoteVersion,
+      reason: 'Before drilling',
+      createdAt: '2026-10-05T05:00:00Z'
+    });
+    render(
+      <ProjectConflictDialog
+        conflict={value}
+        busy={false}
+        onResolve={vi.fn()}
+        onClose={vi.fn()}
+      />
+    );
+    expect(screen.getByText(/The model matches/)).toHaveTextContent(
+      'Version numbers alone do not tell you which copy to keep.'
+    );
+    expect(screen.getByText(/Your account:.*save points/)).toHaveTextContent(
+      'Before drilling'
+    );
+    expect(
+      screen.getByText(/Your account:.*save points/).querySelector('time')
+    ).toHaveAttribute('dateTime', '2026-10-05T05:00:00Z');
+  });
   it('names the account as the other side and offers all three resolutions', async () => {
     const user = userEvent.setup();
     const onResolve = vi.fn();

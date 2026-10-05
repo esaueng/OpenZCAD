@@ -43,6 +43,59 @@ function at(
 }
 
 describe('choosing between the two copies of a project', () => {
+  it('does not retry a richer local history behind the account version fence', () => {
+    const remote = structuredClone(base);
+    const local = {
+      ...appendRevision(base, 'Saved locally'),
+      version: base.version - 1
+    };
+    expect(chooseProjectDocument(local, remote)).toEqual({
+      choice: 'diverged',
+      local,
+      remote
+    });
+  });
+  it.each([null, base.version])(
+    'adopts a saved-history extension at the same model version (baseline %s)',
+    (baseline) => {
+      const local = structuredClone(base);
+      const remote = {
+        ...structuredClone(base),
+        checkpoints: [
+          ...base.checkpoints,
+          {
+            checkpointId: 'cp_account',
+            revisionId: base.revisions.at(-1)!.revisionId,
+            documentVersion: base.version,
+            reason: 'Before drilling',
+            createdAt: '2026-10-05T05:00:00Z'
+          }
+        ]
+      } as ProjectDocument;
+      expect(chooseProjectDocument(local, remote, baseline)).toEqual({
+        choice: 'remote',
+        document: remote
+      });
+      expect(chooseProjectDocument(remote, local, baseline)).toEqual({
+        choice: 'local',
+        document: remote
+      });
+      const divergent = {
+        ...local,
+        checkpoints: [
+          ...local.checkpoints,
+          {
+            ...remote.checkpoints.at(-1)!,
+            checkpointId: 'cp_device',
+            reason: 'Before rounding'
+          }
+        ]
+      };
+      expect(chooseProjectDocument(divergent, remote, baseline).choice).toBe(
+        'diverged'
+      );
+    }
+  );
   it('takes whichever copy exists when only one does', () => {
     expect(chooseProjectDocument(at(3), null)).toMatchObject({
       choice: 'local'

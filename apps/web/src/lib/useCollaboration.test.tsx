@@ -216,12 +216,63 @@ describe('useCollaboration lease ordering', () => {
           newerLocal.featureOrder
         );
       } else {
-        expect(onRemoteDocument).toHaveBeenCalledWith(merged);
+        expect(onRemoteDocument).toHaveBeenCalledWith(merged, {
+          adopted: true
+        });
         expect(onConflict).not.toHaveBeenCalled();
       }
       unmount();
     }
   );
+
+  it('adopts save-history acknowledgements even when the model version is unchanged', () => {
+    const base = createProjectDocument(
+      'Acknowledged save',
+      toUserId('user_ack')
+    );
+    const { socket, onRemoteDocument, unmount } = connectedOwner(base);
+    const saved = {
+      ...base,
+      checkpoints: [
+        ...base.checkpoints,
+        {
+          checkpointId: 'cp_room',
+          revisionId: base.revisions.at(-1)!.revisionId,
+          documentVersion: base.version,
+          reason: 'Before drilling',
+          createdAt: '2026-10-05T05:00:00Z'
+        }
+      ]
+    } as ProjectDocument;
+    act(() =>
+      socket.receive({ type: 'ack', version: base.version, document: saved })
+    );
+    expect(onRemoteDocument).toHaveBeenCalledWith(saved, { adopted: true });
+    unmount();
+  });
+
+  it('does not adopt a late acknowledgement over edits that have not been submitted', () => {
+    const base = createProjectDocument(
+      'Late acknowledgement',
+      toUserId('user_ack')
+    );
+    const { socket, rerender, unmount, onRemoteDocument, onConflict } =
+      connectedOwner(base);
+    const edited = addPrimitiveFeature(base, {
+      name: 'Box',
+      primitiveKind: 'box',
+      dimensions: { width: 1, height: 1, depth: 1 }
+    });
+    rerender({ document: edited });
+    // The previous submission was already acknowledged; this edit is still
+    // inside the send debounce when a duplicate acknowledgement arrives.
+    act(() =>
+      socket.receive({ type: 'ack', version: base.version, document: base })
+    );
+    expect(onRemoteDocument).not.toHaveBeenCalled();
+    expect(onConflict).toHaveBeenCalledWith(base);
+    unmount();
+  });
 
   it('resubmits its unchanged local document after reconnecting with a fresh lease', () => {
     const base = createProjectDocument(

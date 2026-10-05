@@ -1,6 +1,7 @@
 import type { EditAnalysisRequest } from '@openzcad/shared';
 import { useEffect, useRef, useState } from 'react';
 import { documentForWorker } from '../lib/meshTransport';
+import { canonicalProjectContentKey } from '../worker/exactRebuildCache';
 import { describeWorkerFailure } from '../lib/workerFailure';
 import type {
   BodyId,
@@ -224,6 +225,8 @@ export interface GeometryWorkerApi {
   }): Promise<FaceRecognitionSummary>;
   /** Forces the next `sync` to post even if the version has not changed. */
   invalidate(): void;
+  /** Retains a completed exact result across a bookkeeping-only adoption. */
+  retainReadyGeometry(document: ProjectDocument): boolean;
 }
 
 /**
@@ -264,6 +267,8 @@ export function useGeometryWorker(host: GeometryWorkerHost): GeometryWorkerApi {
     new Map<string, (state: GeometryWorkerState) => void>()
   );
   const lastSyncedKey = useRef<string | null>(null);
+  const broadcastDocument = useRef<ProjectDocument | null>(null);
+  const readyDocument = useRef<ProjectDocument | null>(null);
   const lastDemandRef = useRef<readonly BodyId[] | null>(null);
   const firstReadyMarkedRef = useRef(false);
   // True while work has been posted whose terminal state has not arrived.
@@ -348,6 +353,8 @@ export function useGeometryWorker(host: GeometryWorkerHost): GeometryWorkerApi {
       }
       rejectOutstanding(new Error(message));
       lastSyncedKey.current = null;
+      readyDocument.current = null;
+      broadcastDocument.current = null;
       failed?.terminate();
       workerRef.current = null;
       if (!disposed && !reloadRequired && respawnsSinceReady < RESPAWN_LIMIT) {
@@ -363,6 +370,7 @@ export function useGeometryWorker(host: GeometryWorkerHost): GeometryWorkerApi {
         const manager = hostRef.current.manager();
         const replacement = workerRef.current;
         if (manager && replacement) {
+          broadcastDocument.current = manager.document;
           postSync(
             replacement,
             manager.document,
@@ -606,9 +614,16 @@ export function useGeometryWorker(host: GeometryWorkerHost): GeometryWorkerApi {
         }
         if (!result.ok) {
           lastSyncedKey.current = null;
+          readyDocument.current = null;
           hostRef.current.onError(`Geometry rebuild failed: ${result.error}`);
           return;
         }
+        const submitted = broadcastDocument.current;
+        readyDocument.current =
+          submitted?.projectId === result.projectId &&
+          submitted.version === result.version
+            ? submitted
+            : null;
         hostRef.current.onDerived(result.derived);
       };
 
@@ -678,9 +693,7 @@ export function useGeometryWorker(host: GeometryWorkerHost): GeometryWorkerApi {
   const postRequest = <T>(
     pending: Map<string, PendingRequest<T>>,
     message: Record<string, unknown>
-  ):
-    | { ok: true; requestId: string; promise: Promise<T> }
-    | { ok: false } => {
+  ): { ok: true; requestId: string; promise: Promise<T> } | { ok: false } => {
     const worker = workerRef.current;
     if (!worker) {
       return { ok: false };
@@ -712,6 +725,14 @@ export function useGeometryWorker(host: GeometryWorkerHost): GeometryWorkerApi {
       }
       if (lineageDemand !== undefined) {
         lastDemandRef.current = lineageDemand;
+      }
+      const demand = lastDemandRef.current ?? [];
+      if (
+        lastSyncedKey.current !==
+        `${document.projectId}:${document.version}:${demand.join()}`
+      ) {
+        broadcastDocument.current = document;
+        readyDocument.current = null;
       }
       postSync(
         worker,
@@ -897,12 +918,35 @@ export function useGeometryWorker(host: GeometryWorkerHost): GeometryWorkerApi {
     },
     invalidate() {
       lastSyncedKey.current = null;
+      readyDocument.current = null;
       setState((current) => ({
         ...current,
         phase: 'starting',
         stale: true,
         error: undefined
       }));
+    },
+    retainReadyGeometry(document) {
+      const completed = readyDocument.current;
+      if (
+        !completed ||
+        state.phase !== 'ready' ||
+        state.stale ||
+        state.projectId !== completed.projectId ||
+        state.version !== completed.version ||
+        completed.projectId !== document.projectId ||
+        canonicalProjectContentKey(completed) !==
+          canonicalProjectContentKey(document)
+      ) {
+        return false;
+      }
+      // Retarget the live result, not a stored mesh. Invalidation, crashes and
+      // a new sync retire this witness; different projects/content still rebuild.
+      readyDocument.current = document;
+      broadcastDocument.current = document;
+      lastSyncedKey.current = `${document.projectId}:${document.version}:${(lastDemandRef.current ?? []).join()}`;
+      setState((current) => ({ ...current, version: document.version }));
+      return true;
     }
   };
 }

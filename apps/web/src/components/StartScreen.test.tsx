@@ -307,6 +307,23 @@ describe('StartScreen project timestamps', () => {
 });
 
 describe('StartScreen cloud project status', () => {
+  it('shows recovery time and save count without presenting it as a model version', () => {
+    const project = {
+      ...localProject,
+      name: 'Bracket (Recovery)',
+      revisionCount: 1,
+      updatedAt: '2026-10-05T05:00:00Z'
+    };
+    renderStartScreen({ projects: [project] });
+    const tile = screen.getByText(project.name).closest('button')!;
+    expect(tile).toHaveTextContent('1 save');
+    expect(tile).toHaveTextContent(
+      new Date(project.updatedAt).toLocaleTimeString(undefined, {
+        hour: 'numeric',
+        minute: '2-digit'
+      })
+    );
+  });
   it('offers a confirmed device-only project for account sync', () => {
     renderStartScreen();
 
