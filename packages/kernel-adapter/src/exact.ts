@@ -31,7 +31,8 @@ import {
   getParameterHiddenBodyIds,
   listFeaturesInOrder,
   listNodesByKind,
-  resolveParamValue
+  resolveParamValue,
+  rigidImportedSource
 } from '@openzcad/document-core';
 import { writeDxf } from '@openzcad/io-dxf';
 import { writeAsciiStl } from '@openzcad/io-stl';
@@ -100,7 +101,8 @@ export type { DxfFaceSelector } from './exact-types';
 import { diagnoseImportedSolid } from './exact-lineage-builders';
 import {
   blendRegionKeyOfHashes,
-  measureOwnedFaceGeometry
+  measureOwnedFaceGeometry,
+  withFaceGeometryMemo
 } from './exact-measure';
 import {
   hasRefusingFeatureWarning,
@@ -149,8 +151,16 @@ import {
 import {
   MEASUREMENT_DEFLECTION,
   edgeWitnessOf,
-  faceWitnessOf
+  faceWitnessOf,
+  registerSolidWitnesses
 } from './exact-witnesses';
+import {
+  SyncReadMemo,
+  TopologyWitnessStore,
+  edgeToFaceMapOf,
+  enterSyncReadMemo,
+  withSyncReadMemo
+} from './exact-sync-memo';
 import {
   brepAdjacentFaceHashes,
   brepEdgeCurve,
@@ -182,7 +192,10 @@ export {
   type MeshQualityReport
 };
 import { dot, length, subtract, uniformScaleMatrix } from './exact-math';
-import { displayTessellationForExtents } from './display-tessellation';
+import {
+  displayTessellationForExtents,
+  heldDisplayTessellation
+} from './display-tessellation';
 import {
   MAX_HISTORY_CHECKPOINTS,
   MAX_HISTORY_REPLAY_WORK,
@@ -779,6 +792,13 @@ function importedExactBodyIds(document: ProjectDocument): Set<BodyId> {
 }
 
 /**
+ * Published instead of measuring the opening of an imported body that is no
+ * longer the import under fixed moves or rotations.
+ */
+const OPENING_NEEDS_RIGID_IMPORT =
+  'Only an imported STEP body with at most fixed moves or rotations after import can be grown. This body has other history since import (a shape edit, scaling, parameter-driven placement or a boolean), so its opening is not measured.';
+
+/**
  * Budget for retained per-body measurements. The cache holds at most one
  * entry per live body, so this only bites on huge documents; eviction drops
  * the oldest entries, which then simply re-measure on their next sync.
@@ -952,6 +972,28 @@ export class RemusKernelAdapter implements ExactKernelAdapter {
     MeasuredBodyCacheEntry
   >();
   private measuredShapeCacheBytes = 0;
+  /**
+   * Per body, the linear display deflection each of its solids was last
+   * meshed at (see `heldDisplayTessellation`). A display policy, not a
+   * geometry cache: it survives history-cache invalidation (a sync whose
+   * history cannot be reused still edits the same bodies). Entries for
+   * bodies a build no longer produces are pruned with the measured-shape
+   * cache, the map is cleared when the project changes, and on dispose.
+   */
+  private readonly heldDisplayDeflections = new Map<
+    BodyId,
+    readonly number[]
+  >();
+  /** The project the held display deflections belong to. */
+  private heldDisplayProjectId: ProjectDocument['projectId'] | null = null;
+  /**
+   * ADR-011 witnesses per solid handle in the history kernel, so the next
+   * edit of a body starts from the witnesses its measurement recorded. Same
+   * lifetime and handle-identity argument as {@link measuredShapeCache};
+   * every record is revalidated against the solid's live face and edge lists
+   * before use (see `exact-sync-memo.ts`).
+   */
+  private readonly topologyWitnessStore = new TopologyWitnessStore();
 
   private get maxHistoryCheckpoints(): number {
     return this.options.historyCheckpointLimit ?? MAX_HISTORY_CHECKPOINTS;
@@ -973,6 +1015,7 @@ export class RemusKernelAdapter implements ExactKernelAdapter {
     this.primitiveBuildCache.clear();
     this.measuredShapeCache.clear();
     this.measuredShapeCacheBytes = 0;
+    this.topologyWitnessStore.clear();
     if (this.historyKernel) {
       this.historyKernel.free();
       this.historyKernel = null;
@@ -1044,6 +1087,8 @@ export class RemusKernelAdapter implements ExactKernelAdapter {
     reusedPrimitives: number;
     /** Strict verdicts the union gate established, keyed by kernel handle. */
     strictVerdicts: StrictUnionVerdicts;
+    /** The replay's kernel reads, for the measurement pass of this sync. */
+    readMemo: SyncReadMemo;
     recycleReason?: 'replay-budget';
     cacheResetReason?: 'checkpoint-ownership' | 'checkpoint-restore';
   } {
@@ -1318,6 +1363,16 @@ export class RemusKernelAdapter implements ExactKernelAdapter {
     // anything.
     const strictVerdicts: StrictUnionVerdicts =
       new UnionVerdictsWithMeshBudget();
+    // Another project's bodies are a different set: start their held display
+    // deflections fresh before the build (the union gate reads them).
+    if (this.heldDisplayProjectId !== document.projectId) {
+      this.heldDisplayDeflections.clear();
+      this.heldDisplayProjectId = document.projectId;
+    }
+    // Kernel reads the replay shares with the measurement pass of the same
+    // sync: surface classes, edge-to-face maps and topology witnesses.
+    const readMemo = new SyncReadMemo(activeKernel, this.topologyWitnessStore);
+    const closeReadMemo = enterSyncReadMemo(readMemo);
     try {
       build = buildDocumentHistory(
         activeKernel,
@@ -1352,7 +1407,8 @@ export class RemusKernelAdapter implements ExactKernelAdapter {
             }
           : undefined,
         cancellation,
-        normalizedDemand
+        normalizedDemand,
+        (bodyId) => this.heldDisplayDeflections.get(bodyId)?.[0]
       );
     } catch (error) {
       // A cancelled build keeps the retained prefix: the checkpoints pushed
@@ -1365,6 +1421,8 @@ export class RemusKernelAdapter implements ExactKernelAdapter {
       }
       this.invalidateHistoryCache();
       throw error;
+    } finally {
+      closeReadMemo();
     }
     if (startIndex > 0 || reusePrimitiveTail) {
       this.historyReplayWork += features.length - startIndex - reusedPrimitives;
@@ -1379,7 +1437,8 @@ export class RemusKernelAdapter implements ExactKernelAdapter {
       reusedPrimitives,
       ...(cacheResetReason ? { cacheResetReason } : {}),
       ...(recycled ? { recycleReason: 'replay-budget' as const } : {}),
-      strictVerdicts
+      strictVerdicts,
+      readMemo
     };
   }
 
@@ -1449,7 +1508,17 @@ export class RemusKernelAdapter implements ExactKernelAdapter {
      * Strict verdicts the union gate established earlier in this sync, keyed
      * by handle; a hit replaces the strict `validateSolid` call.
      */
-    strictVerdicts?: ReadonlyMap<number, StrictUnionVerdict>
+    strictVerdicts?: ReadonlyMap<number, StrictUnionVerdict>,
+    /**
+     * Whether the opening is measured, or published as unsupported without
+     * running the recognizer; see the decision in `syncMeasuredDocument`.
+     */
+    measureOpening = recognizeImportedFeatures,
+    /**
+     * The linear display deflection each solid of this body was meshed at
+     * last time, in solid order; held while the body's size stays close.
+     */
+    heldDisplayDeflections?: readonly number[]
   ): MeasuredShape {
     if (shape.solids.length === 0) {
       throw new Error('Exact body contains no solids.');
@@ -1476,22 +1545,31 @@ export class RemusKernelAdapter implements ExactKernelAdapter {
     // is rebuilt per solid, so two solids that touch exactly — a linear pattern
     // whose spacing equals its extent — never share an id.
     let nextVertexId = 0;
+    const displayLinearDeflections: number[] = [];
 
     for (const solid of shape.solids) {
       const bounds = kernel.boundingBox(solid);
       // What the body publishes: the kernel's box, tightened to its display
       // mesh where that proves it loose (see exact-bounds.ts).
       let publishedBounds: readonly number[];
-      const displayTessellation = displayTessellationForExtents(
-        bounds[3]! - bounds[0]!,
-        bounds[4]! - bounds[1]!,
-        bounds[5]! - bounds[2]!
+      // Hold the previous deflection while the body's size stays close: a
+      // nudged bounding box must not re-mesh every face (the kernel reuses
+      // per-face meshes only at the same deflection).
+      const displayTessellation = heldDisplayTessellation(
+        displayTessellationForExtents(
+          bounds[3]! - bounds[0]!,
+          bounds[4]! - bounds[1]!,
+          bounds[5]! - bounds[2]!
+        ),
+        heldDisplayDeflections?.[displayLinearDeflections.length]
       );
+      displayLinearDeflections.push(displayTessellation.linearDeflection);
       const faceHandles = Array.from(kernel.getSolidFaces(solid));
-      const edgeToFaces = JSON.parse(kernel.edgeToFaceMap(solid)) as Record<
-        string,
-        number[]
-      >;
+      const edgeToFaces = edgeToFaceMapOf(kernel, solid);
+      // The edit that produced this solid usually measured its witnesses
+      // already; inside the sync memo they are shared rather than measured
+      // again, and kept for the next edit of this body.
+      registerSolidWitnesses(kernel, solid);
       // Face handle -> ADR-011 hash, for translating the kernel's edge-to-face
       // map when the edge records are built below. Scoped to this solid:
       // `edgeToFaces` is per solid while `topology.faces` accumulates across
@@ -1671,7 +1749,16 @@ export class RemusKernelAdapter implements ExactKernelAdapter {
         // imported body can be offered for growing, so the consumed source
         // references a holder carves its pieces from are not measured: on the
         // hammer that was four recognitions per rebuild, most of its latency.
-        if (recognizeImportedFeatures && shape.solids.length === 1) {
+        if (
+          recognizeImportedFeatures &&
+          shape.solids.length === 1 &&
+          !measureOpening
+        ) {
+          topology.recognizedOpening = {
+            status: 'unsupported',
+            reason: OPENING_NEEDS_RIGID_IMPORT
+          };
+        } else if (recognizeImportedFeatures && shape.solids.length === 1) {
           const openingDone = onStage?.('Opening recognition');
           try {
             topology.recognizedOpening = recognizeOpening(kernel, solid, {
@@ -1848,7 +1935,8 @@ export class RemusKernelAdapter implements ExactKernelAdapter {
       valid,
       strictValid,
       meshClosure,
-      bbox
+      bbox,
+      displayLinearDeflections
     };
   }
 
@@ -1917,6 +2005,7 @@ export class RemusKernelAdapter implements ExactKernelAdapter {
         restored,
         reusedPrimitives,
         strictVerdicts,
+        readMemo,
         recycleReason,
         cacheResetReason
       } = this.buildWithHistoryCache(
@@ -1951,6 +2040,13 @@ export class RemusKernelAdapter implements ExactKernelAdapter {
           this.evictMeasuredShape(bodyId);
         }
       }
+      // Same for the held display deflections: a body this build no longer
+      // produces will never be measured again under that id.
+      for (const bodyId of [...this.heldDisplayDeflections.keys()]) {
+        if (!build.shapes.has(bodyId)) {
+          this.heldDisplayDeflections.delete(bodyId);
+        }
+      }
       let remeasured = 0;
       let reusedMeasurements = 0;
       const measurementMisses: Record<string, number> = {};
@@ -1979,6 +2075,26 @@ export class RemusKernelAdapter implements ExactKernelAdapter {
           feature.data.operation === 'union';
         const recognizeImportedFeatures =
           !consumed && importedBodyIds.has(bodyId);
+        // The opening is measured only where it can be grown. Its one
+        // consumer, the growing-holder recipe, compiles only against an
+        // import under fixed moves or rotations (`rigidImportedSource`, the
+        // same test as here), so after a direct edit, fillet, hole or boolean
+        // the measurement could only be refused at compile time. On the
+        // 160-face hammer it was 3.0 s of a 15.2 s offset-face rebuild (two
+        // strict validations inside the lettering proof, three slab
+        // intersections, a full face inventory). The body publishes an
+        // unsupported opening with that reason instead, which the assistant
+        // explains rather than proposing a recipe that cannot compile.
+        //
+        // Imported-feature recognition is deliberately NOT skipped or carried
+        // across such edits: hole edits, face-distance proofs and the edit
+        // catalog bind to it on edited bodies, and an edit changes it — an
+        // offset face re-limits the fillet bands along its edges and can make
+        // a blend recognizable that was not before — so a carried result
+        // would publish stale proofs.
+        const measureOpening =
+          recognizeImportedFeatures &&
+          rigidImportedSource(document, bodyId) !== null;
         // Tessellation dominates a sync once the prefix cache removed the
         // replay cost, so an unchanged body serves its previous measurement.
         // Handle identity is the key (see MeasuredBodyCacheEntry); the
@@ -2002,7 +2118,8 @@ export class RemusKernelAdapter implements ExactKernelAdapter {
           cached.provenanceKey === provenanceKey &&
           cached.solidKey === solidKey &&
           cached.strict === requiresStrictUnionValidation &&
-          cached.recognizedImportedFeatures === recognizeImportedFeatures
+          cached.recognizedImportedFeatures === recognizeImportedFeatures &&
+          cached.measuredOpening === measureOpening
         ) {
           // A matching key is only a candidate. A stale handle, changed face/
           // edge/vertex set or validation verdict abandons the entire arena.
@@ -2040,27 +2157,50 @@ export class RemusKernelAdapter implements ExactKernelAdapter {
                 : cached.strict !== requiresStrictUnionValidation
                   ? 'strictness'
                   : cached.recognizedImportedFeatures !==
-                      recognizeImportedFeatures
+                        recognizeImportedFeatures ||
+                      cached.measuredOpening !== measureOpening
                     ? 'recognition'
                     : 'provenance';
           measurementMisses[reason] = (measurementMisses[reason] ?? 0) + 1;
-          measured = this.measureShape(
-            kernel,
-            shape,
-            requiresStrictUnionValidation,
-            recognizeImportedFeatures,
-            (part) =>
-              report(
-                'measurement',
-                `${body.name}: ${part}`,
-                document.bodyOrder.indexOf(bodyId) + 1,
-                document.bodyOrder.length
+          // Inside the replay's read memo: a solid the replay just built (or
+          // the last sync measured) is not witnessed or classified again.
+          // Each face of the body is read once for the whole measurement —
+          // published geometry, recognition and the opening inventory share
+          // it — instead of up to three times (see withFaceGeometryMemo).
+          measured = withSyncReadMemo(readMemo, () =>
+            withFaceGeometryMemo(
+              kernel,
+              shape.solids.flatMap((solid) =>
+                Array.from(kernel.getSolidFaces(solid))
               ),
-            analysisHashes,
-            1 / UNIT_TO_MM[document.units],
-            strictVerdicts
+              () =>
+                this.measureShape(
+                  kernel,
+                  shape,
+                  requiresStrictUnionValidation,
+                  recognizeImportedFeatures,
+                  (part) =>
+                    report(
+                      'measurement',
+                      `${body.name}: ${part}`,
+                      document.bodyOrder.indexOf(bodyId) + 1,
+                      document.bodyOrder.length
+                    ),
+                  analysisHashes,
+                  1 / UNIT_TO_MM[document.units],
+                  strictVerdicts,
+                  measureOpening,
+                  this.heldDisplayDeflections.get(bodyId)
+                )
+            )
           );
           remeasured += 1;
+          if (measured.displayLinearDeflections) {
+            this.heldDisplayDeflections.set(
+              bodyId,
+              measured.displayLinearDeflections
+            );
+          }
           const witness = measured.witness;
           this.storeMeasuredShape(bodyId, {
             ...(analysisKey ? { analysisKey } : {}),
@@ -2069,6 +2209,7 @@ export class RemusKernelAdapter implements ExactKernelAdapter {
             witness,
             strict: requiresStrictUnionValidation,
             recognizedImportedFeatures: recognizeImportedFeatures,
+            measuredOpening: measureOpening,
             faceHandleCount: witness.solids.reduce(
               (count, solid) => count + solid.faces.length,
               0
@@ -2929,6 +3070,7 @@ export class RemusKernelAdapter implements ExactKernelAdapter {
     // kernel and its checkpoints are adapter-scoped and must be released.
     this.invalidateHistoryCache();
     this.importedSteps.clear();
+    this.heldDisplayDeflections.clear();
   }
 
   /**

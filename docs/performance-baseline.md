@@ -23,6 +23,38 @@ prefix, so the same phases are visible in the DevTools performance panel, in
 currently marked: `worker.create`, `document.hydrate`, `viewer.init`,
 `viewer.renderer`, `viewer.environment`, `viewer.firstFrame`, `viewer.bodies`.
 
+### Kernel timing harness for an offset-face edit
+
+`test/perf/offset-face-perf.test.ts` times one offset-face direct edit on an
+imported STEP body through the real exact adapter, in Node. For the cold
+import sync and the edited sync it prints wall, kernel and remaining JS time,
+every `RemusKernel` method by total time and call count, and the adapter's own
+stage timings. It is skipped unless `OFFSET_PERF_STEP` names a STEP file, so
+the normal `vitest run` never executes it. `OFFSET_PERF_DISTANCE` (default −6)
+and `OFFSET_PERF_AREA` (default: the largest +X planar face) choose the edit.
+`OFFSET_PERF_TRACE=1` also attributes the expensive kernel methods to their
+calling frames; it is off by default because it is noisy and inflates the
+methods it traces. `OFFSET_PERF_FULL=1` also times a second edit and the undo.
+`REMUS_WASM_PKG` and `REMUS_WASM_IO_PKG` run it against a local Remus build
+through the `vitest.config.ts` overlay, without touching the pin or lockfile:
+
+```bash
+OFFSET_PERF_STEP=/path/to/part.step \
+  pnpm vitest run test/perf/offset-face-perf.test.ts --reporter=verbose
+# Against a local kernel, after `cargo xtask wasm-build` in a Remus checkout:
+REMUS_WASM_PKG=<remus>/crates/wasm/pkg \
+REMUS_WASM_IO_PKG=<remus>/crates/wasm-io/pkg \
+OFFSET_PERF_STEP=/path/to/part.step \
+  pnpm vitest run test/perf/offset-face-perf.test.ts --reporter=verbose
+```
+
+With the public Remus fixture `crates/io/tests/data/shapr3d_hammer_holder.step`
+(160 faces, 42 NURBS) against the pinned kernel on an Apple M5 Pro
+(2026-10-04, `main`, three runs, one traced): cold import sync 12.6–12.9 s,
+offset sync (−6 on the largest +X face) 15.1–15.6 s, of which
+`moveFacesJournaled` 4.0 s, `recognizeFeatures` 3.0 s and
+`solidEdgeRelations` 2.7 s. Keep fixtures out of this repository.
+
 ## Interaction baseline
 
 Reproduce with:
@@ -555,6 +587,46 @@ The per-edit floor on a drilled holder is measurement of the edited body
 (planar-distance edit proofs 0.6–0.7 s), not history replay. The probe is
 `test/e2e/perf-holder-reload.spec.ts` under `OZ_PERF=1`; `OZ_PERF_BUDGET=1`
 asserts the within-run ratios the report pins.
+
+## Edited imported body measurement (2026-10-04)
+
+One `syncDocument` for an offset-face direct edit (−6 mm on a +X planar face)
+of the 160-face Remus hammer-holder test fixture (42 NURBS patches), in Node
+against the pinned kernel on an Apple M5 Pro. Three interleaved runs per
+build, medians; a local probe wraps every `RemusKernel` method with a timer.
+Call counts are deterministic.
+
+| Offset-face sync                   | Before (`main`) |        After |
+| ---------------------------------- | --------------: | -----------: |
+| Wall                               |         15.34 s |      11.91 s |
+| Opening recognition stage          |          3.00 s |      not run |
+| Imported feature recognition stage |          6.09 s |       5.70 s |
+| `validateSolid` calls              |   12 (2 293 ms) |            0 |
+| `faceArea` calls                   |  510 (1 006 ms) | 162 (330 ms) |
+| `intersectDetailed` calls          |      3 (270 ms) |            0 |
+
+The cold import of the same file goes from 12.62 s to 11.97 s (`faceArea`
+508 → 188 calls). Body volume, face count and warnings are identical.
+
+Two changes. The opening is measured only on an import under at most fixed
+moves or rotations, which is the only body the growing-holder recipe compiles
+against; any other imported body publishes an unsupported opening with that
+reason. And one body measurement reads each face's geometry once, shared by
+the published face geometry, the imported-feature query and the opening
+inventory.
+
+What remains is kernel work: the edit itself (`moveFacesJournaled`, 3.97 s)
+and imported-feature recognition, which is two whole-solid queries
+(`recognizeFeatures` 2.98 s, `solidEdgeRelations` 2.70 s). Recognition is not
+carried through the edit. On this fixture the edit shrinks three recognized
+fillet bands along the moved face from 8 mm to 2 mm and makes a radius-8 band
+recognizable, so a carried result would publish stale proofs, and hole edits,
+face-distance proofs and the edit catalog bind to it on edited bodies. Taking
+it off the critical path needs faster kernel queries or a two-phase
+publication (geometry first, recognition after); the worker protocol and the
+assistant panel have no such phase today. Regressions:
+`test/edited-import-opening.test.ts`,
+`packages/kernel-adapter/src/exact-measure.test.ts`.
 
 ## Exact-kernel fixture refresh (2026-07-31)
 
