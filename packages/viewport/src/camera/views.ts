@@ -49,20 +49,48 @@ export function cameraUpForDirection(direction: THREE.Vector3): THREE.Vector3 {
 }
 
 /**
+ * Screen-up for a view that asks for a particular roll — a sketch plane's v
+ * axis, so the plane's +u reads rightward — projected perpendicular to the
+ * view. Falls back to `cameraUpForDirection` without a preference or when
+ * the preference lies along the view, where it fixes no roll.
+ */
+export function screenUpForView(
+  direction: THREE.Vector3,
+  preferredUp?: THREE.Vector3 | null
+): THREE.Vector3 {
+  const view = direction.clone().normalize();
+  if (preferredUp) {
+    const up = preferredUp
+      .clone()
+      .addScaledVector(view, -preferredUp.dot(view));
+    const length = up.length();
+    if (
+      Number.isFinite(length) &&
+      length > 1e-6 * Math.max(preferredUp.length(), 1e-12)
+    ) {
+      return up.divideScalar(length);
+    }
+  }
+  return cameraUpForDirection(view);
+}
+
+/**
  * The full camera orientation a view direction implies, roll included.
  * Standard-view glides slerp between these instead of interpolating the
  * camera position, so a long reorientation swings around the model on an arc
  * rather than diving through it, and the roll turns smoothly instead of
- * snapping in the final frames near a pole.
+ * snapping in the final frames near a pole. A preferred up overrides the
+ * world-up roll (see `screenUpForView`).
  */
 export function tweenOrientationFor(
-  direction: THREE.Vector3
+  direction: THREE.Vector3,
+  preferredUp?: THREE.Vector3 | null
 ): THREE.Quaternion {
   const view = direction.clone().normalize();
   const matrix = new THREE.Matrix4().lookAt(
     view,
     new THREE.Vector3(0, 0, 0),
-    cameraUpForDirection(view)
+    screenUpForView(view, preferredUp)
   );
   return new THREE.Quaternion().setFromRotationMatrix(matrix);
 }
@@ -122,6 +150,12 @@ export function faceTrianglesCentroid(
  * basis, so a wide face fits a portrait viewport without relying on a
  * world-axis bounding box.
  *
+ * `preferredUp` pins the roll: entering a sketch passes the plane's v axis so
+ * the sketch's +u reads rightward and +v upward, whatever world up projects
+ * to. The pose then carries that `up`, the framing is measured in the rolled
+ * screen basis, and the pole nudge leans away from it, so even world up's
+ * projection agrees on a horizontal face. Without it the roll is world up's.
+ *
  * Returns null for incomplete or degenerate derived geometry. Camera commands
  * must fail closed rather than inventing a usable plane from a bad normal.
  */
@@ -129,7 +163,8 @@ export function computeNormalToFacePose(
   camera: THREE.PerspectiveCamera,
   facePoints: readonly THREE.Vector3[],
   center: THREE.Vector3,
-  outwardNormal: THREE.Vector3
+  outwardNormal: THREE.Vector3,
+  preferredUp?: THREE.Vector3 | null
 ): CameraPose | null {
   if (
     facePoints.length === 0 ||
@@ -144,19 +179,22 @@ export function computeNormalToFacePose(
   }
 
   const direction = outwardNormal.clone().divideScalar(normalLength);
+  const faceUp = preferredUp ? screenUpForView(direction, preferredUp) : null;
   // Match the named top/bottom views: an exact pole leaves OrbitControls'
   // azimuth undefined, so the first orbit after arriving can choose a random
   // roll. This hair is visually head-on while keeping that azimuth stable.
+  // Leaning it away from the preferred up (screen +Y by default, as the named
+  // views do) makes world up project onto that same screen-up.
   if (direction.x * direction.x + direction.y * direction.y < 1e-16) {
-    direction.set(
-      0,
-      direction.z >= 0 ? -0.0001 : 0.0001,
-      direction.z >= 0 ? 1 : -1
-    );
+    const sign = direction.z >= 0 ? 1 : -1;
+    const lean = faceUp ?? new THREE.Vector3(0, 1, 0);
+    direction.set(-sign * 0.0001 * lean.x, -sign * 0.0001 * lean.y, sign);
     direction.normalize();
   }
 
-  const up = cameraUpForDirection(direction);
+  const up = faceUp
+    ? screenUpForView(direction, faceUp)
+    : cameraUpForDirection(direction);
   const right = up.clone().cross(direction).normalize();
   const halfFov = THREE.MathUtils.degToRad(camera.fov / 2);
   const tanHalfFov = Math.tan(halfFov);
@@ -200,7 +238,8 @@ export function computeNormalToFacePose(
     near,
     // Preserve a farther existing scene range while guaranteeing the selected
     // face remains inside the frustum at every supported model scale.
-    far: Math.max(camera.far, distance * 12 + faceRadius * 4, near * 1_000)
+    far: Math.max(camera.far, distance * 12 + faceRadius * 4, near * 1_000),
+    ...(faceUp ? { up } : {})
   };
 }
 

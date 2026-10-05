@@ -1,3 +1,4 @@
+import { rewriteNodeExpressions } from './parameter-expressions';
 export {
   constantRigidTransform,
   rigidImportedSource
@@ -749,6 +750,8 @@ export function normalizeDocument(document: ProjectDocument): ProjectDocument {
   // fallback until a feature writes a lineage reference; a v6 document has no
   // text objects and no `all: true` reference, and a v8 sketch simply has no
   // `constraints`, so nothing needs rewriting.
+  // Schema v15 -> v16 adds the canonical-plane basis marker. Never synthesize
+  // it while migrating: unmarked saved sketches must retain revision 1 geometry.
   return {
     ...document,
     schemaVersion: PROJECT_DOCUMENT_SCHEMA_VERSION,
@@ -1190,10 +1193,15 @@ export function updateSketch(
       sketch.planeRef.type === 'canonical'
         ? sketch.planeRef
         : { type: 'canonical' as const, plane: 'XY' as const, offset: 0 };
+    // Keep the basis revision: the sketch's stored coordinates were drawn
+    // against it, and dropping it would mirror a Front (XZ) sketch in place.
     sketch.planeRef = {
       type: 'canonical',
       plane: input.plane ?? previous.plane,
-      offset: input.offset ?? previous.offset
+      offset: input.offset ?? previous.offset,
+      ...('basisRevision' in previous && previous.basisRevision !== undefined
+        ? { basisRevision: previous.basisRevision }
+        : {})
     };
   }
   if (input.object !== undefined) {
@@ -2612,12 +2620,10 @@ export function deleteParameter(
  * Renames a parameter and rewrites every stored expression that reads it, in
  * one step, so no reader is ever stranded on the old name.
  *
- * Readers are found the way {@link findParameterReferences} finds them: a
- * string counts only if it both names the parameter and evaluates against the
- * live scope, which is what keeps ids, enum discriminants, and font families
- * out of the rewrite. Parameter-node expressions are a known expression field,
- * so their identifier is rewritten even while another typo makes them
- * unevaluatable; the broader mixed payloads remain conservative.
+ * Only authored expression fields are rewritten. Literal text, enums, ids
+ * and topology witnesses never become readers just because they happen to
+ * match a parameter name. A typo in another identifier does not prevent a
+ * known expression field from retaining its reference through the rename.
  */
 export function renameParameter(
   document: ProjectDocument,
@@ -2644,39 +2650,13 @@ export function renameParameter(
       throw new Error(`A parameter named "${newName}" already exists.`);
     }
   }
-  const { scope } = getParameterScope(next);
   const rewrite = (candidate: string): string =>
-    readsParameter(candidate, input.name, scope, next.units)
+    expressionIdentifiers(candidate).includes(input.name)
       ? renameIdentifierInExpression(candidate, input.name, newName)
       : candidate;
   for (const node of Object.values(next.nodes)) {
-    if (node.kind === 'parameter') {
-      if (node.name !== input.name) {
-        // This field is known to be an expression, so keep its reference
-        // intact even when another typo currently prevents evaluation. The
-        // broader payload walk remains conservative because it also contains
-        // ids, enum values and font names that can resemble expressions.
-        node.expression = expressionIdentifiers(node.expression).includes(
-          input.name
-        )
-          ? renameIdentifierInExpression(node.expression, input.name, newName)
-          : node.expression;
-      }
-    } else if (node.kind === 'feature' || node.kind === 'sketch-object') {
-      node.data = rewritePayloadStrings(node.data, rewrite) as typeof node.data;
-    } else if (node.kind === 'sketch') {
-      node.planeRef = rewritePayloadStrings(
-        node.planeRef,
-        rewrite
-      ) as typeof node.planeRef;
-      node.offset = rewritePayloadStrings(
-        node.offset,
-        rewrite
-      ) as typeof node.offset;
-      node.constraints = rewritePayloadStrings(
-        node.constraints,
-        rewrite
-      ) as typeof node.constraints;
+    if (node.kind !== 'parameter' || node.name !== input.name) {
+      rewriteNodeExpressions(node, rewrite);
     }
   }
   parameter.name = newName;
@@ -3490,6 +3470,23 @@ export function createSavedRevision(
 ): ProjectDocument {
   const appended = appendRevision(document, reason);
   return createCheckpoint({ ...appended, version: document.version }, reason);
+}
+
+/**
+ * The save point a user's Save makes. A checkpoint names a revision, and a
+ * document can arrive with none — a conflict recovery copy is born that way —
+ * so where there is nothing to name, the save mints the revision first instead
+ * of refusing. That refusal used to surface as "Cannot create a checkpoint
+ * without a revision. Saved on this device." on every save of such a project,
+ * including Save to my account, which never reached the account at all.
+ */
+export function createSavePoint(
+  document: ProjectDocument,
+  reason: string
+): ProjectDocument {
+  return document.revisions.length === 0
+    ? createSavedRevision(document, reason)
+    : createCheckpoint(document, reason);
 }
 
 /** Records a durable save point without changing model or undo semantics. */
@@ -4389,60 +4386,6 @@ export interface ParameterReference {
 }
 
 /**
- * Every string primitive nested anywhere in a stored payload.
- *
- * Identity-based rather than schema-based, for the reason
- * `validateFeatureReorder` gives in command-system: `ParamValue` appears at
- * ~70 sites across feature, sketch-object, and constraint payloads, and a
- * field-by-field walk would rot the first time a feature kind adds a
- * dimension. {@link readsParameter} does the discrimination instead.
- */
-function collectPayloadStrings(value: unknown, into: string[]): void {
-  if (typeof value === 'string') {
-    into.push(value);
-    return;
-  }
-  if (Array.isArray(value)) {
-    for (const item of value) {
-      collectPayloadStrings(item, into);
-    }
-    return;
-  }
-  if (value !== null && typeof value === 'object') {
-    for (const item of Object.values(value)) {
-      collectPayloadStrings(item, into);
-    }
-  }
-}
-
-/**
- * The mutating twin of {@link collectPayloadStrings}: rewrites every nested
- * string through `rewrite`, in place for containers. Returns the (possibly
- * replaced) value because a bare top-level string cannot be swapped in place.
- */
-function rewritePayloadStrings(
-  value: unknown,
-  rewrite: (candidate: string) => string
-): unknown {
-  if (typeof value === 'string') {
-    return rewrite(value);
-  }
-  if (Array.isArray(value)) {
-    for (let index = 0; index < value.length; index += 1) {
-      value[index] = rewritePayloadStrings(value[index], rewrite);
-    }
-    return value;
-  }
-  if (value !== null && typeof value === 'object') {
-    const record = value as Record<string, unknown>;
-    for (const key of Object.keys(record)) {
-      record[key] = rewritePayloadStrings(record[key], rewrite);
-    }
-  }
-  return value;
-}
-
-/**
  * Replaces identifier tokens equal to `oldName` with `newName`, leaving
  * everything else — whitespace, operators, number literals — byte-identical.
  * Scans numbers before identifiers in the same order as `tokenizeExpression`,
@@ -4490,12 +4433,10 @@ function renameIdentifierInExpression(
 /**
  * Whether a stored string is an expression that reads `name` right now.
  *
- * Both halves matter. Naming the parameter is not enough: ids, enum
- * discriminants and font families are strings in the same payloads, and
- * `body_a-1` or `open-sans` tokenize perfectly well. Requiring the string to
- * also evaluate against the live scope drops all of them, because their
- * identifiers are not parameters. What survives is a value the document is
- * really reading — the thing a delete would strand.
+ * Called only for authored expression fields. Reference queries retain the
+ * existing requirement that an expression evaluate against the live scope:
+ * a broken expression is not currently reading a value a delete would strand.
+ * Renames still preserve its identifier tokens so repairing it later works.
  */
 function readsParameter(
   candidate: string,
@@ -4548,15 +4489,10 @@ export function findParameterReferences(
       continue;
     }
     const candidates: string[] = [];
-    if (node.kind === 'parameter') {
-      candidates.push(node.expression);
-    } else if (node.kind === 'feature' || node.kind === 'sketch-object') {
-      collectPayloadStrings(node.data, candidates);
-    } else if (node.kind === 'sketch') {
-      collectPayloadStrings(node.planeRef, candidates);
-      collectPayloadStrings(node.offset, candidates);
-      collectPayloadStrings(node.constraints, candidates);
-    }
+    rewriteNodeExpressions(node, (expression) => {
+      candidates.push(expression);
+      return expression;
+    });
     const expressions: string[] = [];
     for (const candidate of candidates) {
       if (

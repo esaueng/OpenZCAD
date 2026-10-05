@@ -17,6 +17,7 @@ import {
   importStepBody
 } from '@openzcad/document-core';
 import {
+  PROJECT_DOCUMENT_SCHEMA_VERSION,
   toBodyId,
   toFeatureId,
   toUserId,
@@ -1377,7 +1378,7 @@ describe('imported-feature proof binding', () => {
   const digestWith = (
     recognizedImportedFeatures: RecognizedImportedFeature[]
   ): Parameters<typeof validateCadPatchProposalAgainstDigest>[1] => ({
-    schemaVersion: 15,
+    schemaVersion: PROJECT_DOCUMENT_SCHEMA_VERSION,
     projectId: 'proj_digest',
     name: 'Imported plate',
     units: 'mm',

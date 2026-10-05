@@ -64,7 +64,7 @@ describe('in-memory persistence', () => {
     } as unknown as typeof created.document;
     // Same bypass the write guard a newer deployment would have used: the
     // store holds a newer-schema blob, and every read path funnels through
-    // normalizeDocument — which must refuse rather than stamp v15.
+    // normalizeDocument — which must refuse rather than stamp the current schema.
     (
       service as unknown as {
         projects: Map<string, typeof created.document>;

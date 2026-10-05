@@ -9,6 +9,8 @@ import {
   Box,
   Check,
   Cloud,
+  CloudAlert,
+  CloudCheck,
   CloudOff,
   CloudUpload,
   Copy,
@@ -25,8 +27,10 @@ import {
   Settings,
   Trash2,
   TriangleAlert,
-  X
+  X,
+  type LucideIcon
 } from 'lucide-react';
+import { isLibraryModeStatus } from '../lib/libraryStatus';
 import {
   daysUntilPurge,
   MAX_PROJECT_NAME_LENGTH,
@@ -66,6 +70,8 @@ interface StartScreenProps {
   onOpen(projectId: string): void;
   onOpenDemo(definition: DemoDefinition): void;
   onOpenSettings(): void;
+  /** Settings at its Account section; falls back to plain Settings. */
+  onSignIn?(): void;
   onDuplicate(project: ProjectSummary): void;
   loadProperties(project: ProjectSummary): Promise<ProjectProperties | null>;
   /**
@@ -173,6 +179,23 @@ const SHELVES: ReadonlyArray<{
 /** The start screen's crossfade into the workspace. */
 const START_SCREEN_DISSOLVE_MS = 240;
 
+/** The cloud card's one sentence and its one action, for a library state. */
+interface CloudSentence {
+  tone: 'idle' | 'busy' | 'saved' | 'warning' | 'failed';
+  Icon: LucideIcon;
+  spin?: boolean;
+  text: string;
+  title?: string;
+  progress?: { saved: number; failed: number };
+  action?: {
+    text: string;
+    label: string;
+    /** Saving waits for the library to settle; signing in does not. */
+    needsIdle?: boolean;
+    run(): void;
+  };
+}
+
 export function StartScreen({
   projects,
   status,
@@ -186,6 +209,7 @@ export function StartScreen({
   onOpen,
   onOpenDemo,
   onOpenSettings,
+  onSignIn,
   onDuplicate,
   loadProperties,
   cloudProjectIds,
@@ -716,6 +740,119 @@ export function StartScreen({
   // so they take the stage as full cards instead of a list in the column.
   const fresh = !loading && userProjects.length === 0;
 
+  const cloud = describeCloud();
+  // A run's outcome is in the sentence, and the startup mode texts restate
+  // what the sentence already says; anything else is news worth a line.
+  const statusLine =
+    !loading && !syncRun && status && !isLibraryModeStatus(status)
+      ? status
+      : '';
+
+  function describeCloud(): CloudSentence {
+    if (syncTotals) {
+      const progress = {
+        saved: syncTotals.synced / syncTotals.total,
+        failed: syncTotals.failed / syncTotals.total
+      };
+      if (syncTotals.active) {
+        return {
+          tone: 'busy',
+          Icon: LoaderCircle,
+          spin: true,
+          text: `Saving ${syncTotals.settled + 1} of ${syncTotals.total}…`,
+          progress
+        };
+      }
+      if (syncTotals.failed > 0) {
+        return {
+          tone: 'failed',
+          Icon: CloudAlert,
+          text: `${syncTotals.failed} not saved`,
+          title: `Saved ${syncTotals.synced} of ${syncTotals.total}. ${syncTotals.failed} could not be saved.`,
+          progress,
+          ...(failedSummaries.length > 0 && {
+            action: {
+              text: 'Retry',
+              label:
+                failedSummaries.length === 1
+                  ? 'Retry it'
+                  : `Retry all ${failedSummaries.length}`,
+              needsIdle: true,
+              run: () => onSaveAllToAccount(failedSummaries)
+            }
+          })
+        };
+      }
+      return {
+        tone: 'saved',
+        Icon: CloudCheck,
+        text:
+          syncTotals.total === 1
+            ? 'Saved to your account'
+            : `All ${syncTotals.total} saved to your account`
+      };
+    }
+    if (loading) {
+      return { tone: 'idle', Icon: Cloud, text: 'Checking account…' };
+    }
+    if (!signedIn) {
+      return {
+        tone: 'idle',
+        Icon: CloudOff,
+        text: 'On this device only',
+        title:
+          'Parts stay on this device. Sign in to keep them across devices.',
+        action: {
+          text: 'Sign in',
+          label: 'Sign in',
+          run: onSignIn ?? onOpenSettings
+        }
+      };
+    }
+    if (!accountProjectListReached) {
+      return {
+        tone: 'warning',
+        Icon: CloudAlert,
+        text: 'Account status unavailable',
+        title:
+          'Cloud project status is temporarily unavailable. Your projects remain saved on this device.'
+      };
+    }
+    if (localOnlyProjects.length > 0) {
+      const count = localOnlyProjects.length;
+      return {
+        tone: 'warning',
+        Icon: CloudAlert,
+        text: `${count} ${count === 1 ? 'part' : 'parts'} not saved`,
+        title: `${savedToAccountCount} of ${accountableProjects.length} parts are in your account; ${count === 1 ? 'one is' : `${count} are`} on this device only.`,
+        progress: {
+          saved: savedToAccountCount / accountableProjects.length,
+          failed: 0
+        },
+        action: {
+          text: 'Save',
+          label:
+            count === 1
+              ? 'Save it to my account'
+              : 'Save them all to my account',
+          needsIdle: true,
+          run: () => onSaveAllToAccount(localOnlyProjects)
+        }
+      };
+    }
+    const saved = accountableProjects.length;
+    return {
+      tone: 'saved',
+      Icon: CloudCheck,
+      text:
+        saved === 0
+          ? 'Signed in'
+          : saved === 1
+            ? '1 part saved'
+            : `All ${saved} parts saved`
+    };
+  }
+
   return (
     <div
       ref={screenRef}
@@ -918,123 +1055,6 @@ export function StartScreen({
             </div>
           )}
 
-          {syncRun && syncTotals ? (
-            <div className="start-sync-panel" role="status" aria-live="polite">
-              <div className="start-sync-head">
-                {syncTotals.active ? (
-                  <LoaderCircle size={14} className="spin" aria-hidden="true" />
-                ) : syncTotals.failed > 0 ? (
-                  <TriangleAlert
-                    size={14}
-                    className="is-failed"
-                    aria-hidden="true"
-                  />
-                ) : (
-                  <Check size={14} className="is-synced" aria-hidden="true" />
-                )}
-                <span className="start-sync-title">
-                  {syncTotals.active
-                    ? `Saving to your account · ${syncTotals.settled} of ${syncTotals.total} done`
-                    : syncTotals.failed > 0
-                      ? `Saved ${syncTotals.synced} of ${syncTotals.total} · ${syncTotals.failed} could not be saved`
-                      : `All ${syncTotals.total} ${
-                          syncTotals.total === 1 ? 'project' : 'projects'
-                        } saved to your account`}
-                </span>
-                {!syncTotals.active && failedSummaries.length > 0 && (
-                  <button
-                    type="button"
-                    className="start-shelf-action"
-                    disabled={busy}
-                    onClick={() => onSaveAllToAccount(failedSummaries)}
-                  >
-                    <RotateCcw size={13} aria-hidden="true" />
-                    Retry {failedSummaries.length === 1 ? 'it' : 'all'}
-                  </button>
-                )}
-                {!syncTotals.active && (
-                  <button
-                    type="button"
-                    className="start-sync-dismiss"
-                    aria-label="Dismiss sync results"
-                    onClick={onDismissSyncRun}
-                  >
-                    <X size={13} aria-hidden="true" />
-                  </button>
-                )}
-              </div>
-              <div className="start-sync-track" aria-hidden="true">
-                <span
-                  className="start-sync-fill"
-                  style={{
-                    width: `${(syncTotals.synced / syncTotals.total) * 100}%`
-                  }}
-                />
-                <span
-                  className="start-sync-fill is-failed"
-                  style={{
-                    width: `${(syncTotals.failed / syncTotals.total) * 100}%`
-                  }}
-                />
-              </div>
-              {syncFailures.length > 0 && (
-                <ul className="start-sync-failures">
-                  {syncFailures.map((entry) => (
-                    <li key={entry.projectId} className="start-sync-failure">
-                      <TriangleAlert size={12} aria-hidden="true" />
-                      <span className="start-sync-failure-name">
-                        {entry.name}
-                      </span>
-                      <span className="start-sync-failure-detail">
-                        {entry.detail ?? 'Could not be saved.'}
-                      </span>
-                      <button
-                        type="button"
-                        className="start-shelf-action"
-                        disabled={busy}
-                        onClick={() => onRetrySync(entry.projectId)}
-                      >
-                        <RotateCcw size={12} aria-hidden="true" />
-                        Retry
-                      </button>
-                    </li>
-                  ))}
-                </ul>
-              )}
-            </div>
-          ) : signedIn && !accountProjectListReached ? (
-            <div className="start-adopt-bar is-unavailable" role="status">
-              <TriangleAlert size={14} aria-hidden="true" />
-              <span>
-                Cloud project status is temporarily unavailable. Your projects
-                remain saved on this device.
-              </span>
-            </div>
-          ) : (
-            localOnlyProjects.length > 0 && (
-              <div className="start-adopt-bar" role="status">
-                <CloudOff size={14} aria-hidden="true" />
-                <span>
-                  {localOnlyProjects.length}{' '}
-                  {localOnlyProjects.length === 1
-                    ? 'project is'
-                    : 'projects are'}{' '}
-                  on this device only.
-                </span>
-                <button
-                  type="button"
-                  className="start-shelf-action"
-                  disabled={busy}
-                  onClick={() => onSaveAllToAccount(localOnlyProjects)}
-                >
-                  <CloudUpload size={13} aria-hidden="true" />
-                  Save {localOnlyProjects.length === 1 ? 'it' : 'them all'} to
-                  my account
-                </button>
-              </div>
-            )
-          )}
-
           {loading && (
             <>
               <div
@@ -1164,57 +1184,16 @@ export function StartScreen({
         </div>
       </section>
 
-      {/* The column's account card is a readout, not a control: the offer
-          to save device-only parts stays with the parts it is about. */}
-      <div className="start-account" role="status">
-        {loading ? (
-          <div className="start-account-head">
-            <Cloud size={14} aria-hidden="true" />
-            <strong>Account</strong>
-            <span className="start-account-count">Checking…</span>
-          </div>
-        ) : signedIn ? (
-          <>
-            <div className="start-account-head">
-              <Cloud size={14} aria-hidden="true" className="is-synced" />
-              <strong>Account</strong>
-              <span className="start-account-count">
-                {accountProjectListReached
-                  ? `${savedToAccountCount} / ${accountableProjects.length} saved`
-                  : 'status unavailable'}
-              </span>
-            </div>
-            {accountProjectListReached && accountableProjects.length > 0 && (
-              <div className="start-account-track" aria-hidden="true">
-                <span
-                  className="start-account-fill"
-                  style={{
-                    width: `${(savedToAccountCount / accountableProjects.length) * 100}%`
-                  }}
-                />
-              </div>
-            )}
-          </>
-        ) : (
-          // One line, like the signed-in readout. Settings already says how
-          // to sign in (its footer); a paragraph here said it a third time.
-          <div
-            className="start-account-head"
-            title="Parts stay on this device. Sign in from Settings to keep them across devices."
-          >
-            <CloudOff size={14} aria-hidden="true" />
-            <strong>Signed out</strong>
-            <span className="start-account-count">device only</span>
-          </div>
-        )}
-      </div>
-
-      <footer className="start-foot">
+      {/* Where the parts are kept, said once: one sentence, its one action,
+          and a hairline of progress. A save-all run takes the sentence over
+          while it is on screen, and the status line speaks only with news
+          the sentence does not already carry. */}
+      <aside className="start-cloud" aria-label="Cloud sync">
         {onReloadForUpdate ? (
           // A deploy renamed the chunks this tab loads lazily, so the next
           // demo, import or panel would fail. The failure used to surface as
-          // "Failed to fetch dynamically imported module" in the status text
-          // beside this, with nothing happening on the card that was clicked.
+          // "Failed to fetch dynamically imported module" in the status text,
+          // with nothing happening on the card that was clicked.
           <span className="start-update" role="alert">
             <span>A new version of OpenZCAD is available.</span>
             <button
@@ -1226,10 +1205,82 @@ export function StartScreen({
             </button>
           </span>
         ) : null}
-        <span className="start-status">
-          {loading ? 'Loading library…' : status}
-        </span>
-      </footer>
+        <div
+          className={`start-account is-${cloud.tone}`}
+          role="status"
+          aria-live="polite"
+        >
+          <div className="start-account-row">
+            <cloud.Icon
+              size={14}
+              aria-hidden="true"
+              className={cloud.spin ? 'spin' : undefined}
+            />
+            <span className="start-account-text" title={cloud.title}>
+              {cloud.text}
+            </span>
+            {cloud.action && (
+              <button
+                type="button"
+                className="start-account-action"
+                aria-label={cloud.action.label}
+                title={cloud.action.label}
+                disabled={cloud.action.needsIdle && busy}
+                onClick={cloud.action.run}
+              >
+                {cloud.action.text}
+              </button>
+            )}
+            {syncTotals && !syncTotals.active && (
+              <button
+                type="button"
+                className="start-account-dismiss"
+                aria-label="Dismiss sync results"
+                onClick={onDismissSyncRun}
+              >
+                <X size={12} aria-hidden="true" />
+              </button>
+            )}
+          </div>
+          {cloud.progress && (
+            <div className="start-account-track" aria-hidden="true">
+              <span
+                className="start-account-fill"
+                style={{ width: `${cloud.progress.saved * 100}%` }}
+              />
+              <span
+                className="start-account-fill is-failed"
+                style={{ width: `${cloud.progress.failed * 100}%` }}
+              />
+            </div>
+          )}
+          {syncFailures.length > 0 && (
+            <ul className="start-sync-failures">
+              {syncFailures.map((entry) => (
+                <li key={entry.projectId} className="start-sync-failure">
+                  <span
+                    className="start-sync-failure-name"
+                    title={entry.detail ?? 'Could not be saved.'}
+                  >
+                    {entry.name}
+                  </span>
+                  <button
+                    type="button"
+                    className="start-account-action"
+                    aria-label={`Retry ${entry.name}`}
+                    title={entry.detail ?? 'Could not be saved.'}
+                    disabled={busy}
+                    onClick={() => onRetrySync(entry.projectId)}
+                  >
+                    Retry
+                  </button>
+                </li>
+              ))}
+            </ul>
+          )}
+          {statusLine && <p className="start-status">{statusLine}</p>}
+        </div>
+      </aside>
       {propertiesProject && (
         <Suspense fallback={null}>
           <ProjectPropertiesDialog

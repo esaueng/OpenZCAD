@@ -262,6 +262,17 @@ Consequences for the plan:
   misreads glyph solids.
 - Phase 3 for text shrinks to making hover and the drag preview show the
   whole word (the commit already does; see Phase 0 findings, V1).
+- **Second kernel finding (2026-10-04, after PR K):** with the pierce in
+  place, Open Sans `b` (and so `Bob`) at em 10 still refused, now even as a
+  genuine through-face cut. Not the coplanar cap: the pinned extrude reads one
+  nearly straight quadratic in the `b` (0.48 mm long, within 0.1 µm of
+  straight) as a circle of radius 302 mm and builds its wall as that
+  cylinder, which misses the wall's own bezier cap edges by up to 10 µm.
+  About 2 % of all bundled glyph segments do this at some size. The adapter
+  now splits such a curve exactly into pieces the kernel reads as lines
+  (`kernelSafeBezierPieces`), and a Remus issue body for the side-face
+  recognizer is drafted in that PR. The same PR stops the pierced engrave
+  publishing a 10.01 mm tall slab (`refineBoundsAtSplineFaces`).
 
 ## 4. Plan
 

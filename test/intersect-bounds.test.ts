@@ -10,7 +10,11 @@ import {
   type ExactKernelAdapter
 } from '@openzcad/kernel-adapter/exact';
 import { toUserId } from '@openzcad/shared';
-import { tightenBoundsToMesh } from '../packages/kernel-adapter/src/exact-bounds';
+import {
+  refineBoundsAtSplineFaces,
+  tightenBoundsToMesh,
+  type GroupedMesh
+} from '../packages/kernel-adapter/src/exact-bounds';
 
 /**
  * Production QA CAD-02: an Intersect whose geometry is 4.14 × 6.18 × 12 mm
@@ -180,5 +184,188 @@ describe('tightenBoundsToMesh', () => {
     expect(tightenBoundsToMesh([-15, -15, 0, 15, 15, 12], [], 0.01)).toEqual([
       -15, -15, 0, 15, 15, 12
     ]);
+  });
+});
+
+describe('refineBoundsAtSplineFaces', () => {
+  /**
+   * A slab top at z 10 (one plane face) with an engraved glyph wall (a
+   * B-spline face) running from the engraving's floor at z 8 up to the top. The kernel reports the
+   * wall's untrimmed height, 10.01; the display deflection is 0.0124, so
+   * `tightenBoundsToMesh` keeps it.
+   */
+  const deflection = 0.0124;
+  const kernelBox = [0, 0, 8, 62, 50, 10.01];
+  function slabWithWall(wallTop: number): GroupedMesh {
+    return {
+      // face 0: top plane triangle; face 1: wall triangle
+      positions: [
+        0,
+        0,
+        10,
+        62,
+        0,
+        10,
+        0,
+        50,
+        10,
+        20,
+        20,
+        8,
+        21,
+        20,
+        8,
+        20,
+        20,
+        wallTop
+      ],
+      indices: [0, 1, 2, 3, 4, 5],
+      faceOffsets: [0, 3, 6]
+    };
+  }
+  const planeAndSpline = [{ surfaceType: 'plane' }, { surfaceType: 'bspline' }];
+
+  it('pulls in a sub-deflection gap that only a B-spline face could hold', () => {
+    const display = slabWithWall(10);
+    expect(
+      tightenBoundsToMesh(kernelBox, display.positions, deflection)
+    ).toEqual(kernelBox);
+    const remeshed: number[] = [];
+    const refined = refineBoundsAtSplineFaces(
+      kernelBox,
+      display,
+      planeAndSpline,
+      deflection,
+      (fine) => {
+        remeshed.push(fine);
+        return slabWithWall(10);
+      }
+    );
+    expect(refined).toEqual([
+      0,
+      0,
+      8,
+      62,
+      50,
+      10 + deflection / 8 + 4 * Math.fround(10) * 2 ** -23
+    ]);
+    // A true extremum between finer-mesh vertices must remain enclosed.
+    expect(refined[5]).toBeGreaterThanOrEqual(10 + deflection / 16);
+    // One finer mesh, at a power-of-two fraction of the display's.
+    expect(remeshed).toEqual([deflection / 8]);
+  });
+
+  it('keeps the side when the finer mesh still reaches it', () => {
+    // A wall that truly bulges to within the finer deflection of the box.
+    expect(
+      refineBoundsAtSplineFaces(
+        kernelBox,
+        slabWithWall(10),
+        planeAndSpline,
+        deflection,
+        () => slabWithWall(10.009)
+      )
+    ).toEqual(kernelBox);
+  });
+
+  it('declines a side another curved surface could hold', () => {
+    let remeshed = false;
+    expect(
+      refineBoundsAtSplineFaces(
+        kernelBox,
+        slabWithWall(10),
+        [{ surfaceType: 'plane' }, { surfaceType: 'cylinder' }],
+        deflection,
+        () => {
+          remeshed = true;
+          return slabWithWall(10);
+        }
+      )
+    ).toEqual(kernelBox);
+    expect(remeshed).toBe(false);
+  });
+
+  it('leaves exact sides and a box with only planes alone', () => {
+    const exact = [0, 0, 8, 62, 50, 10];
+    expect(
+      refineBoundsAtSplineFaces(
+        exact,
+        slabWithWall(10),
+        planeAndSpline,
+        deflection,
+        () => {
+          throw new Error('no side is loose');
+        }
+      )
+    ).toEqual(exact);
+    expect(
+      refineBoundsAtSplineFaces(
+        kernelBox,
+        slabWithWall(10),
+        [{ surfaceType: 'plane' }, { surfaceType: 'plane' }],
+        deflection,
+        () => {
+          throw new Error('planes are never re-meshed');
+        }
+      )
+    ).toEqual(kernelBox);
+  });
+
+  it('does not re-mesh for a gap no size readout shows', () => {
+    // A quarter of the display deflection is the floor.
+    const box = [0, 0, 8, 62, 50, 10 + deflection / 8];
+    expect(
+      refineBoundsAtSplineFaces(
+        box,
+        slabWithWall(10),
+        planeAndSpline,
+        deflection,
+        () => {
+          throw new Error('too small a gap to re-mesh for');
+        }
+      )
+    ).toEqual(box);
+  });
+
+  it('refines a low side the same way', () => {
+    // The wall's foot reported 0.01 below the slab's z = 8 floor.
+    const box = [0, 0, 7.99, 62, 50, 10];
+    const lowFloor: GroupedMesh = {
+      positions: [
+        0, 0, 8, 62, 0, 8, 0, 50, 8, 20, 20, 8, 21, 20, 8, 20, 20, 10
+      ],
+      indices: [0, 1, 2, 3, 4, 5],
+      faceOffsets: [0, 3, 6]
+    };
+    expect(
+      refineBoundsAtSplineFaces(
+        box,
+        lowFloor,
+        planeAndSpline,
+        deflection,
+        () => lowFloor
+      )
+    ).toEqual([
+      0,
+      0,
+      8 - deflection / 8 - 4 * Math.fround(8) * 2 ** -23,
+      62,
+      50,
+      10
+    ]);
+  });
+
+  it('fails safe when the finer mesh cannot be built', () => {
+    expect(
+      refineBoundsAtSplineFaces(
+        kernelBox,
+        slabWithWall(10),
+        planeAndSpline,
+        deflection,
+        () => {
+          throw new Error('tessellation failed');
+        }
+      )
+    ).toEqual(kernelBox);
   });
 });

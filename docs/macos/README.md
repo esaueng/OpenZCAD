@@ -13,7 +13,8 @@ Prerequisites:
 - Xcode Command Line Tools
 - Node 20.19+ or Node 22.12+ (Node 22 is used in CI)
 - pnpm 10.8.0
-- stable Rust with the `aarch64-apple-darwin` target
+- current stable Rust with the `aarch64-apple-darwin` target (the desktop crate
+  declares a 1.85 minimum; current locked dependencies require 1.88 or newer)
 
 From the repository root:
 

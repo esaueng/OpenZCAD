@@ -51,7 +51,7 @@ function planarFace(
 }
 
 for (const filter of ['Face', 'Any'] as const) {
-  test(`viewport faces and blends with ${filter} selection edit their owning features`, async ({
+  test(`viewport faces and blends with ${filter} selection pin and edit their owning features`, async ({
     page
   }) => {
     test.setTimeout(120_000);
@@ -113,6 +113,11 @@ for (const filter of ['Face', 'Any'] as const) {
         lineageName: 'modifier.cylinder.face.cap.end'
       });
     await planarFace(canvas, { x: 0, y: 0, z: 1 });
+    await expect(inspector.getByLabel('Radius', { exact: true })).toHaveCount(
+      0
+    );
+    await expect(inspector.getByLabel('More actions')).toHaveCount(0);
+    await inspector.getByRole('button', { name: 'Edit', exact: true }).click();
     await expect(inspector.getByLabel('Radius', { exact: true })).toHaveValue(
       '46'
     );
@@ -122,7 +127,9 @@ for (const filter of ['Face', 'Any'] as const) {
     await expect(page.locator('.feature-row').first()).toHaveClass(/selected/);
     await inspector.getByLabel('Radius', { exact: true }).fill('48');
     await inspector.getByRole('button', { name: /^Apply/ }).click();
-    await expect(page.getByRole('contentinfo')).toContainText('Edited Cylinder.');
+    await expect(page.getByRole('contentinfo')).toContainText(
+      'Edited Cylinder.'
+    );
     await expect
       .poll(async () => (await blend(canvas, 3))?.producingFeatureId, {
         timeout: 30_000
@@ -142,12 +149,17 @@ for (const filter of ['Face', 'Any'] as const) {
       });
     }
     await clickBlend(3);
+    await expect(inspector.getByLabel('Radius', { exact: true })).toHaveCount(
+      0
+    );
+    await expect(inspector.getByLabel('More actions')).toHaveCount(0);
+    if (filter === 'Face')
+      await expect(canvas).toHaveAttribute('data-e2e-selected-face', /.+/);
+    await inspector.getByRole('button', { name: 'Edit', exact: true }).click();
     await expect(inspector.getByLabel('Radius', { exact: true })).toHaveValue(
       '3'
     );
     await expect(page.locator('.feature-row').nth(1)).toHaveClass(/selected/);
-    if (filter === 'Face')
-      await expect(canvas).toHaveAttribute('data-e2e-selected-face', /.+/);
     await page.screenshot({
       path: `/tmp/openzcad-selection-top-${filter}.png`
     });
@@ -160,6 +172,11 @@ for (const filter of ['Face', 'Any'] as const) {
       .toBe(topOwner);
     expect((await blend(canvas, 4))?.producingFeatureId).toBe(bottomOwner);
     await clickBlend(4);
+    await expect(inspector.getByLabel('Radius', { exact: true })).toHaveCount(
+      0
+    );
+    await expect(inspector.getByLabel('More actions')).toHaveCount(0);
+    await inspector.getByRole('button', { name: 'Edit', exact: true }).click();
     await expect(inspector.getByLabel('Radius', { exact: true })).toHaveValue(
       '4'
     );
@@ -181,12 +198,27 @@ for (const filter of ['Face', 'Any'] as const) {
       .poll(async () => (await blend(canvas, 5))?.producingFeatureId)
       .toBe(bottomOwner);
     await clickBlend(2);
+    await expect(inspector.getByLabel('Radius', { exact: true })).toHaveCount(
+      0
+    );
+    await expect(inspector.getByLabel('More actions')).toHaveCount(0);
+    await inspector.getByRole('button', { name: 'Edit', exact: true }).click();
     await expect(inspector.getByLabel('Radius', { exact: true })).toHaveValue(
       '2'
     );
     await page.screenshot({ path: '/tmp/openzcad-selection-top-fillet.png' });
     await clickBlend(5, 'right');
-    await page.getByRole('menuitem', { name: /Delete Fillet edges/ }).click();
+    await expect(page.getByRole('menuitem', { name: /^Delete/ })).toHaveCount(
+      0
+    );
+    await page.getByRole('menuitem', { name: /Edit Fillet edges/ }).click();
+    await expect(inspector.getByLabel('Radius', { exact: true })).toHaveValue(
+      '5'
+    );
+    await inspector.getByLabel('More actions').click();
+    await inspector
+      .getByRole('button', { name: 'Delete feature', exact: true })
+      .click();
     await expect(page.locator('.feature-row')).toHaveCount(2);
     await expect
       .poll(async () => (await blend(canvas, 2))?.producingFeatureId)

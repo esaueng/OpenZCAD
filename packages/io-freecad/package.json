@@ -9,6 +9,6 @@
     "@openzcad/io-step": "workspace:*",
     "fast-xml-parser": "5.11.2",
     "fflate": "0.8.3",
-    "occt-wasm": "5.3.5"
+    "occt-wasm": "5.4.1"
   }
 }

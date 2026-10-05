@@ -1,6 +1,11 @@
 import { describe, expect, it, vi } from 'vitest';
 import type { SketchObjectData } from '@openzcad/shared';
-import { PLANE_BASES } from '@openzcad/geometry';
+import {
+  PLANE_BASES,
+  frameForPlaneRef,
+  newCanonicalPlaneRef,
+  type PlaneBasis
+} from '@openzcad/geometry';
 import { projectToScreen } from '@openzcad/viewport';
 import * as THREE from 'three';
 import {
@@ -27,6 +32,7 @@ import {
   resolveSketchSnap,
   screenRayToPlanePoint,
   sketchEntryPose,
+  sketchEntryUp,
   sketchContentFramePoints,
   sketchObjectFromDrag,
   snapSketchPoint,
@@ -234,10 +240,132 @@ describe('sketchEntryPose', () => {
     expect(pose.target).toEqual({ x: 0, y: 0, z: 0 });
   });
 
+  // Screen direction of a +10 step along the plane's u and v axes, seen from
+  // the entry pose with the up it holds (world +Z when it holds none) — the
+  // camera the sketch glide arrives at.
+  const screenAxes = (basis: PlaneBasis) => {
+    const pose = sketchEntryPose(basis, 200);
+    const camera = new THREE.PerspectiveCamera(45, 1, 0.1, 5000);
+    camera.up.set(pose.up?.x ?? 0, pose.up?.y ?? 0, pose.up?.z ?? 1);
+    camera.position.set(pose.position.x, pose.position.y, pose.position.z);
+    camera.lookAt(pose.target.x, pose.target.y, pose.target.z);
+    camera.updateMatrixWorld();
+    const at = (u: number, v: number) =>
+      projectToScreen(
+        new THREE.Vector3(
+          basis.origin.x + basis.u.x * u + basis.v.x * v,
+          basis.origin.y + basis.u.y * u + basis.v.y * v,
+          basis.origin.z + basis.u.z * u + basis.v.z * v
+        ),
+        camera,
+        800,
+        800
+      )!;
+    const origin = at(0, 0);
+    const u = at(10, 0);
+    const v = at(0, 10);
+    return {
+      u: { x: u.x - origin.x, y: u.y - origin.y },
+      v: { x: v.x - origin.x, y: v.y - origin.y }
+    };
+  };
+
+  it('enters every new canonical sketch reading +u right and +v up', () => {
+    for (const plane of ['XY', 'XZ', 'YZ'] as const) {
+      const basis = frameForPlaneRef(newCanonicalPlaneRef(plane, 0), Number);
+      const { u, v } = screenAxes(basis);
+      expect(u.x, `${plane} +u`).toBeGreaterThan(10);
+      expect(Math.abs(u.y), `${plane} +u`).toBeLessThan(0.5);
+      // Screen y grows downward, so up is negative.
+      expect(v.y, `${plane} +v`).toBeLessThan(-10);
+      expect(Math.abs(v.x), `${plane} +v`).toBeLessThan(0.5);
+    }
+  });
+
+  it('enters a new Front (XZ) sketch from the front of the model', () => {
+    const basis = frameForPlaneRef(newCanonicalPlaneRef('XZ', 0), Number);
+    expect(sketchEntryPose(basis, 100).position).toEqual({
+      x: 0,
+      y: -100,
+      z: 0
+    });
+  });
+
+  it('keeps a revision-1 XZ sketch on the pose it was drawn against', () => {
+    // Saved documents' XZ sketches still resolve to the old basis, entered
+    // from behind the model; the measured mirror is what they always showed.
+    const { u, v } = screenAxes(PLANE_BASES.XZ);
+    expect(u.x).toBeLessThan(-10);
+    expect(v.y).toBeGreaterThan(10);
+  });
+
   it('tilts the top view a hair off +Z to keep orbit math stable', () => {
     const pose = sketchEntryPose(PLANE_BASES.XY, 50);
     expect(pose.position.y).toBeLessThan(0);
     expect(pose.position.z).toBeCloseTo(50, 1);
+  });
+
+  it('keeps world up on canonical planes, offset or not', () => {
+    for (const basis of [
+      ...Object.values(PLANE_BASES),
+      frameForPlaneRef(newCanonicalPlaneRef('XZ', 0), Number)
+    ]) {
+      expect(sketchEntryUp(basis)).toBeNull();
+      expect(sketchEntryUp({ ...basis, origin: { x: 3, y: -4, z: 12 } })).toBe(
+        null
+      );
+      expect(sketchEntryPose(basis, 80).up).toBeNull();
+    }
+  });
+
+  it('rolls a top-face sketch so +u reads rightward and +v upward', () => {
+    const frame = frameFromFace({ x: 31, y: 25, z: 10 }, { x: 0, y: 0, z: 1 });
+    // Premise: the stored frame's u runs along world -Y on a top face.
+    expect(frame.xAxis.y).toBeCloseTo(-1, 9);
+    const basis = {
+      origin: frame.origin,
+      u: frame.xAxis,
+      v: frame.yAxis,
+      normal: frame.zAxis
+    };
+    const pose = sketchEntryPose(basis, 120);
+    expect(pose.up).toEqual(frame.yAxis);
+
+    const camera = new THREE.PerspectiveCamera(45, 1.5, 0.1, 4000);
+    camera.position.set(pose.position.x, pose.position.y, pose.position.z);
+    camera.up.set(pose.up!.x, pose.up!.y, pose.up!.z);
+    camera.lookAt(pose.target.x, pose.target.y, pose.target.z);
+    camera.updateMatrixWorld(true);
+    const at = (x: number, y: number) =>
+      projectToScreen(
+        new THREE.Vector3(
+          basis.origin.x + basis.u.x * x + basis.v.x * y,
+          basis.origin.y + basis.u.y * x + basis.v.y * y,
+          basis.origin.z + basis.u.z * x + basis.v.z * y
+        ),
+        camera,
+        900,
+        600
+      )!;
+    const origin = at(0, 0);
+    const stepU = at(10, 0);
+    const stepV = at(0, 10);
+    expect(stepU.x - origin.x).toBeGreaterThan(1);
+    expect(Math.abs(stepU.y - origin.y)).toBeLessThan(1e-6);
+    // Screen y grows downward.
+    expect(origin.y - stepV.y).toBeGreaterThan(1);
+    expect(Math.abs(stepV.x - origin.x)).toBeLessThan(1e-6);
+    // Even without the held roll, world up projects onto v here.
+    const worldUp = new THREE.PerspectiveCamera();
+    worldUp.up.set(0, 0, 1);
+    worldUp.position.copy(camera.position);
+    worldUp.lookAt(pose.target.x, pose.target.y, pose.target.z);
+    worldUp.updateMatrixWorld(true);
+    const screenUp = new THREE.Vector3().setFromMatrixColumn(
+      worldUp.matrixWorld,
+      1
+    );
+    expect(screenUp.x).toBeCloseTo(1, 6);
   });
 });
 
