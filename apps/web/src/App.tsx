@@ -1175,7 +1175,11 @@ import { useProjectView } from './hooks/useProjectView';
 import { useAppSettingsSync } from './hooks/useAppSettingsSync';
 import { useDirectEditCommit } from './hooks/useDirectEditCommit';
 import { useMeasurementWorkbench } from './hooks/useMeasurementWorkbench';
-import { useValidatedFeatureCommit } from './hooks/useValidatedFeatureCommit';
+import {
+  useValidatedFeatureCommit,
+  type ValidatedFeatureRunOptions
+} from './hooks/useValidatedFeatureCommit';
+import { PatternProgress } from './components/PatternProgress';
 import { OVERLAY_EXIT_MS, useDelayedUnmount } from './hooks/useDelayedUnmount';
 import {
   affectedFeatureTargets,
@@ -2138,6 +2142,11 @@ export function App() {
     setStatusEntry((current) => retireStatus(current, Date.now()));
   }, []);
   const [busy, setBusy] = useState(false);
+  const patternAbortRef = useRef<AbortController | null>(null);
+  const [patternProgress, setPatternProgress] = useState<{
+    name: string;
+  } | null>(null);
+  useEffect(() => () => patternAbortRef.current?.abort(), []);
   /**
    * The validated-commit lock's presentation. A long import holds the lock
    * across parse, rebuild and archive — and the lock must stay held, because
@@ -3392,6 +3401,39 @@ export function App() {
     onRejection: recordHistoryFailure
   });
   const executeValidatedFeature = validatedFeature.run;
+  function runPattern(
+    command: AnyCommand,
+    options: ValidatedFeatureRunOptions
+  ): void {
+    const reservation = validatedFeature.reserve();
+    if (!reservation) {
+      setStatus(
+        'Another exact operation is still finishing. Try again once it completes.'
+      );
+      return;
+    }
+    const abort = new AbortController();
+    patternAbortRef.current = abort;
+    setPatternProgress({ name: options.featureName });
+    void executeValidatedFeature(command, {
+      ...options,
+      reservation,
+      signal: abort.signal,
+      cancelled: () => abort.signal.aborted || Boolean(options.cancelled?.()),
+      validatingMessage: `Rebuilding ${options.featureName}; overlapping copies need exact merging…`
+    }).finally(() => {
+      reservation.release();
+      if (patternAbortRef.current === abort) {
+        patternAbortRef.current = null;
+        setPatternProgress(null);
+      }
+    });
+  }
+  function cancelPattern(): void {
+    if (!patternAbortRef.current) return;
+    patternAbortRef.current?.abort();
+    setStatus('Pattern canceled; no change was applied.');
+  }
   const edgeFormCandidate = useRef<{
     command: AnyCommand;
     bodyId: BodyId;
@@ -6003,6 +6045,19 @@ export function App() {
       normalized,
       session?.userId ?? normalized.ownerUserId
     );
+    // Sessions and numeric drafts refer to ids in the previous document.
+    // Hydration may preserve the camera, never an armed sketch or handle.
+    cancelDirectManipulationRef.current?.();
+    patternAbortRef.current?.abort();
+    setImportRun((current) => (current?.outcome ? null : current));
+    exactEntryQueue.cancel();
+    dispatchInteraction({ type: 'exit-sketch' });
+    dispatchInteraction({ type: 'clear' });
+    setKeypad(null);
+    setSketchDimensionDraft(null);
+    setSketchEditDraft(null);
+    setModelingEditFeature(null);
+    setFeatureFormError(null);
     clearAutoFrame();
     if (!geometry.retainReadyGeometry(normalized)) geometry.invalidate();
     // The document effect below writes every hydrated document to this
@@ -6349,7 +6404,11 @@ export function App() {
       if (executeCommand(command)) finishFeatureEdit(feature, editSession);
       return;
     }
-    void executeValidatedFeature(command, {
+    const run =
+      feature.data.featureKind === 'pattern'
+        ? runPattern
+        : executeValidatedFeature;
+    void run(command, {
       featureName,
       resultBodyId,
       targets: affectedFeatureTargets(doc, feature.featureId).map(
@@ -10009,6 +10068,14 @@ export function App() {
   async function archiveArtifact(input: ArchiveArtifactInput): Promise<string> {
     if (!doc) {
       throw new Error('No project is open.');
+    }
+    // Local-first imports/exports keep their bytes on this device. A protected
+    // upload cannot succeed before this project has an account copy, and its
+    // failed request would add a console error to an otherwise valid import.
+    if (!sessionRef.current || !remoteVersionsRef.current.has(doc.projectId)) {
+      throw new Error(
+        'Cloud archival needs an account project. The file stays on this device.'
+      );
     }
     if (!ensureCanEdit('upload a project artifact')) {
       throw new Error(
@@ -19854,11 +19921,14 @@ export function App() {
                 }
                 onCreatePattern={(value) => {
                   const command = commandFactories.patternBody(value);
-                  createValidatedFeature(
-                    command,
-                    value.name,
-                    command.payload.ids?.bodyId
-                  );
+                  const resultBodyId = command.payload.ids?.bodyId;
+                  if (resultBodyId)
+                    runPattern(command, {
+                      featureName: value.name,
+                      resultBodyId,
+                      successMessage: commandOutcomeMessage(command.label),
+                      onSuccess: finishFeatureCreation
+                    });
                 }}
                 onApplyPrimitive={(feature, name, command) => {
                   const editSession = editCardSessionRef.current;
@@ -20138,7 +20208,13 @@ export function App() {
           {/* The same lane as the status toast, and in front of it: while a
               file is moving, the pill is the one notice about it. */}
           <div className="activity-lane">
-            {importRun && (
+            {patternProgress && (
+              <PatternProgress
+                name={patternProgress.name}
+                onCancel={cancelPattern}
+              />
+            )}
+            {importRun && !patternProgress && (
               <Suspense fallback={null}>
                 <LazyActivityPill
                   run={importRun}

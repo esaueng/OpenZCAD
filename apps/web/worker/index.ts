@@ -1,4 +1,8 @@
 import { enforceApiRateLimit, publicRequestBucket } from './apiRateLimit';
+import {
+  FREECAD_WORKER_PATH,
+  serveFreecadWorkerAsset
+} from './freecadWorkerAsset';
 import { JsonComplexityGuard } from '@openzcad/shared';
 import { accountEntitlements } from '@openzcad/cloudflare-adapters';
 import {
@@ -124,6 +128,7 @@ import {
 } from '@openzcad/shared';
 
 type Env = CloudflareEnv & {
+  ASSETS?: { fetch(request: Request): Promise<Response> };
   PROJECT_ROOM?: DurableObjectNamespace<ProjectCollaborationRoom>;
 };
 
@@ -1806,6 +1811,11 @@ export default {
     await createPersistenceService(env).purgeExpiredUploadSessions();
   },
   async fetch(request: Request, env: Env): Promise<Response> {
+    if (FREECAD_WORKER_PATH.test(new URL(request.url).pathname)) {
+      if (!env.ASSETS)
+        return new Response('Asset service unavailable.', { status: 503 });
+      return serveFreecadWorkerAsset(request, env.ASSETS);
+    }
     if (new URL(request.url).pathname === '/healthz') {
       const headers = {
         'content-type': 'application/json; charset=utf-8',

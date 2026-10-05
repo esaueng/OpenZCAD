@@ -2476,7 +2476,35 @@ function buildPatternFeature(
   // would rebuild topology and re-key lineage for no change in any
   // number a user sees. So the fuse runs only where the sum is
   // actually wrong.
-  const shared = sharedSolidVolume(kernel, solids);
+  // In a full-turn ring, rotating both operands by -i maps (i,a),(j,b)
+  // to (0,a),(j-i,b). Intersection volume is invariant under that common
+  // rigid motion. Reuse only the exact measurement, retaining every pair's
+  // bounds/floor and the same full sum used by the merge-integrity check.
+  const fullTurn =
+    data.patternKind === 'circular' &&
+    Math.abs(
+      Math.abs(
+        resolveParamValue(
+          data.angleDeg,
+          scope,
+          'pattern angle',
+          ctx.document.units
+        )
+      ) - 360
+    ) <= GEOMETRY_EPSILON;
+  const shared = sharedSolidVolume(
+    kernel,
+    solids,
+    fullTurn
+      ? (left, right) => {
+          const width = target.solids.length;
+          const delta = Math.floor(right / width) - Math.floor(left / width);
+          const direct = `${left % width}:${right % width}:${delta}`;
+          const reversed = `${right % width}:${left % width}:${count - delta}`;
+          return direct < reversed ? direct : reversed;
+        }
+      : undefined
+  );
   if (shared > 0) {
     const summed = solids.reduce(
       (total, instance) =>

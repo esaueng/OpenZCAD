@@ -337,6 +337,7 @@ export function NumericKeypad({
         <input
           ref={inputRef}
           className="keypad-value"
+          aria-label={label}
           value={value}
           aria-invalid={commitDisabled || !evaluation.ok}
           spellCheck={false}
