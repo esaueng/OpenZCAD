@@ -242,6 +242,20 @@ export function newCanonicalPlaneRef(
 }
 
 /**
+ * Authoring only: preserve a saved basis on the same plane, use the current
+ * basis when changing planes. Historical command replay keeps its stored ref.
+ */
+export function canonicalPlaneRefForEdit(
+  previous: SketchPlaneRef,
+  plane: PlaneId,
+  offset: ParamValue
+): Extract<SketchPlaneRef, { type: 'canonical' }> {
+  return previous.type === 'canonical' && previous.plane === plane
+    ? { ...previous, offset }
+    : newCanonicalPlaneRef(plane, offset);
+}
+
+/**
  * Resolves a sketch plane reference to a concrete basis. This is the single
  * shared resolution path — the kernel adapter and the viewport must agree on
  * where a sketch plane sits. Canonical refs carry a parametric offset, so the
