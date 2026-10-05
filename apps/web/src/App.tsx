@@ -473,7 +473,7 @@ import {
 } from './lib/platformShortcut';
 import { retireStatus, type StatusEntry } from './lib/statusLifetime';
 import { LIBRARY_MODE_STATUS } from './lib/libraryStatus';
-import { NumericKeypad, type KeypadRequest } from './components/NumericKeypad';
+import type { KeypadRequest } from './components/NumericKeypad';
 import type { DimensionMode } from './lib/keypad';
 import {
   IDLE,
@@ -672,6 +672,20 @@ const stepImportRun = () => import('./lib/stepImportRun');
  * kernel adapter's inference helpers stay out of the launcher chunk.
  */
 const extrudeInference = () => import('./lib/extrudeInference');
+
+// The touch keypad is needed only when a numeric field requests it.
+const LazyNumericKeypad = lazyWithStaleChunkNotice(() =>
+  import('./components/NumericKeypad').then((module) => ({
+    default: module.NumericKeypad
+  }))
+);
+function NumericKeypad(props: ComponentProps<typeof LazyNumericKeypad>) {
+  return (
+    <Suspense fallback={null}>
+      <LazyNumericKeypad {...props} />
+    </Suspense>
+  );
+}
 
 const LazyViewerShell = lazyWithStaleChunkNotice(() =>
   import('./components/ViewerShell').then((module) => ({
@@ -2547,13 +2561,13 @@ export function App() {
   const viewportMenuHandlersRef = useRef({
     launchTool,
     validateSelectionEdit,
-    handleDeleteFeature,
+    handleSelectFeatureFromTree,
     toggleBodyVisibility
   });
   viewportMenuHandlersRef.current = {
     launchTool,
     validateSelectionEdit,
-    handleDeleteFeature,
+    handleSelectFeatureFromTree,
     toggleBodyVisibility
   };
   const managerRef = useRef<CommandManager | null>(null);
@@ -16524,19 +16538,14 @@ export function App() {
           ? [
               {
                 item: {
-                  id: 'delete',
-                  label: `Delete ${feature.name}`,
-                  icon: <Trash2 size={13} aria-hidden="true" />,
-                  shortcut: 'Del',
-                  danger: true,
+                  id: 'edit',
+                  label: `Edit ${feature.name}`,
+                  icon: <PenLine size={13} aria-hidden="true" />,
                   section: true
                 },
                 run: runCurrent((handlers) => {
                   if (handlers.validateSelectionEdit())
-                    handlers.handleDeleteFeature(
-                      feature.featureId,
-                      feature.name
-                    );
+                    handlers.handleSelectFeatureFromTree(feature.id, false);
                 })
               }
             ]

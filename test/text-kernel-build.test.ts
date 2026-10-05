@@ -1137,6 +1137,43 @@ describe('text built by the exact kernel', { timeout: 120_000 }, () => {
       expect(refused).toBeLessThan(curves / 10);
     });
 
+    it('subdivides large Lora glyph curves beyond the small-count search', async () => {
+      const font = await library.load('lora', 'regular');
+      const profiles = buildTextProfileSet(font, { text: 'F', size: 180 });
+      let largestSplit = 0;
+      let flagged = 0;
+      for (const region of profiles.regions) {
+        for (const segment of region.outer.segments) {
+          if (segment.kind === 'line') continue;
+          const points = controlPoints(segment);
+          if (!kernelReadsBezierAsCircle(points)) continue;
+          const curve: BezierRegionCurve = {
+            kind: 'bezier',
+            a: segment.a,
+            b: segment.b,
+            controls:
+              segment.kind === 'quadratic'
+                ? [segment.control]
+                : [segment.control1, segment.control2],
+            sourceObjectId: 'large-glyph-probe'
+          };
+          flagged += 1;
+          const pieces = kernelSafeBezierPieces(curve);
+          largestSplit = Math.max(largestSplit, pieces.length);
+          expect(pieces[0]!.a).toBe(curve.a);
+          expect(pieces.at(-1)!.b).toBe(curve.b);
+          for (const piece of pieces) {
+            expect(
+              kernelReadsBezierAsCircle([piece.a, ...piece.controls, piece.b])
+            ).toBe(false);
+          }
+        }
+      }
+      expect(flagged).toBeGreaterThan(0);
+      expect(largestSplit).toBeGreaterThan(64);
+      expect(largestSplit).toBeLessThanOrEqual(1024);
+    });
+
     it('splits exactly, sharing every joint', () => {
       const curve: BezierRegionCurve = {
         kind: 'bezier',
