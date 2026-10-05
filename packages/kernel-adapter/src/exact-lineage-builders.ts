@@ -42,8 +42,10 @@ import {
   edgeWitnessOf,
   faceWitnessOf,
   quantizedDirectionOf,
-  quantizedPoint
+  quantizedPoint,
+  registerSolidWitnesses
 } from './exact-witnesses';
+import { edgeToFaceMapOf } from './exact-sync-memo';
 import {
   pointAt,
   pointOnPlane,
@@ -73,10 +75,7 @@ export function diagnoseImportedSolid(
   solid: number,
   index: number
 ): ImportedSolidDiagnosis {
-  const edgeToFaces = JSON.parse(kernel.edgeToFaceMap(solid)) as Record<
-    string,
-    number[]
-  >;
+  const edgeToFaces = edgeToFaceMapOf(kernel, solid);
   // `validateSolidDetailed` reports the same error count as `validateSolid`
   // — checked against every solid in the parity corpus on this pin — plus the
   // validator's reasons, so the import taxonomy can name the defect instead
@@ -110,10 +109,18 @@ export function diagnoseImportedSolid(
   };
 }
 
+/**
+ * Every face, then every edge, of `solid` with its exact witness. Inside a
+ * sync memo each witness is measured once and shared, so an edit's source
+ * (measured by the previous sync), its result and the measurement pass that
+ * publishes the result all read the same records (see
+ * `registerSolidWitnesses`).
+ */
 export function topologyCandidatesForSolid(
   kernel: RemusKernel,
   solid: number
 ): RemusTopologyCandidate[] {
+  registerSolidWitnesses(kernel, solid);
   return [
     ...Array.from(kernel.getSolidFaces(solid), (handle) => ({
       handle,
@@ -137,6 +144,7 @@ export function faceCandidatesForSolid(
   kernel: RemusKernel,
   solid: number
 ): RemusTopologyCandidate[] {
+  registerSolidWitnesses(kernel, solid);
   return Array.from(kernel.getSolidFaces(solid), (handle) => ({
     handle,
     kind: 'face' as const,
