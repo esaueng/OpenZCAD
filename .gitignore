@@ -46,3 +46,6 @@ perf-results
 
 # Private database exports; keep migrations tracked.
 openzcad-backup*.sql
+
+# Screenshots e2e specs write while debugging (cloud-sync.spec.ts).
+output/playwright
