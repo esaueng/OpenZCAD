@@ -32,3 +32,40 @@ export function reuseResolvedExtrudePreview(
     ? preview.resolved
     : null;
 }
+
+/** An extrude preview frame still rebuilding (`LivePreview.running`). */
+export interface RunningExtrudePreview {
+  document: PreviewOptions & {
+    baseProjectId: ProjectDocument['projectId'];
+    baseVersion: number;
+  };
+  result: Promise<{ resolved: ResolvedExtrude; rejection: unknown }>;
+}
+
+/**
+ * The extrude a preview frame still in flight resolves, when that frame is for
+ * exactly this commit. Awaiting it costs the rest of one rebuild instead of
+ * that rest plus a whole second one queued behind it in the worker. A frame
+ * for another edit, a refused frame and a failed frame all answer null, which
+ * leaves the commit to resolve its own exactly as it would without a preview.
+ */
+export async function reuseRunningExtrudePreview(
+  running: RunningExtrudePreview | null,
+  options: PreviewOptions & { base: ProjectDocument }
+): Promise<ResolvedExtrude | null> {
+  if (
+    !running ||
+    running.document.baseProjectId !== options.base.projectId ||
+    running.document.baseVersion !== options.base.version ||
+    resolvedExtrudePreviewKey(running.document) !==
+      resolvedExtrudePreviewKey(options)
+  ) {
+    return null;
+  }
+  try {
+    const result = await running.result;
+    return result.rejection ? null : result.resolved;
+  } catch {
+    return null;
+  }
+}

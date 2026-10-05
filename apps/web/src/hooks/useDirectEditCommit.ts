@@ -39,11 +39,16 @@ export interface DirectEditCommitOptions {
  * when the document is still the one it was computed against, so a preview
  * that passed is never followed by a second wait — or a different answer —
  * for the same value on release.
+ *
+ * `derived` may still be running: a release at the value whose preview is in
+ * flight awaits that rebuild instead of queuing the same edit behind it in the
+ * worker, which serialises kernel work and cannot abandon a started rebuild.
+ * The commit judges the result exactly as it would its own rebuild.
  */
 export interface PrecomputedDirectEditDerived {
   baseProjectId: ProjectDocument['projectId'];
   baseVersion: number;
-  derived: ProjectDocument['derived'];
+  derived: ProjectDocument['derived'] | Promise<ProjectDocument['derived']>;
 }
 
 export interface DirectEditCommit {
@@ -109,9 +114,14 @@ export function useDirectEditCommit(
           precomputed !== undefined &&
           precomputed.baseProjectId === current.projectId &&
           precomputed.baseVersion === current.version;
-        const derived = reusable
-          ? precomputed.derived
-          : await host.derive(preview);
+        const derived = !reusable
+          ? await host.derive(preview)
+          : precomputed.derived instanceof Promise
+            ? // A shared rebuild that failed outright (worker or kernel error,
+              // not a refusal) says nothing about this command: derive it
+              // afresh, exactly as a commit without a preview would.
+              await precomputed.derived.catch(() => host.derive(preview))
+            : precomputed.derived;
         const live = host.manager();
         const documentMoved =
           live !== manager ||
