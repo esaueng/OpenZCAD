@@ -13,7 +13,7 @@ Prerequisites:
 - Xcode Command Line Tools
 - Node 20.19+ or Node 22.12+ (Node 22 is used in CI)
 - pnpm 10.8.0
-- stable Rust with the `aarch64-apple-darwin` target
+- stable Rust 1.85 or newer with the `aarch64-apple-darwin` target
 
 From the repository root:
 
