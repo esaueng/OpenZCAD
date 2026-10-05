@@ -288,6 +288,7 @@ describe('H02 unchanged measurement payload safety', { timeout: 30_000 }, () => 
     'analysisKey',
     'strict',
     'recognizedImportedFeatures',
+    'measuredOpening',
     'solidKey',
     'provenanceKey'
   ] as const)(
@@ -304,7 +305,11 @@ describe('H02 unchanged measurement payload safety', { timeout: 30_000 }, () => 
         const cached = state(adapter).measuredShapeCache.get(
           doc.bodyOrder[0]!
         )!;
-        if (key === 'strict' || key === 'recognizedImportedFeatures')
+        if (
+          key === 'strict' ||
+          key === 'recognizedImportedFeatures' ||
+          key === 'measuredOpening'
+        )
           cached[key] = !cached[key];
         else cached[key] = 'different';
         expect(normalized(await adapter.syncDocument(doc))).toEqual(

@@ -377,6 +377,12 @@ export interface MeasuredBodyCacheEntry {
   /** Whether exact imported-feature proofs were collected with the topology. */
   recognizedImportedFeatures: boolean;
   /**
+   * Whether the opening was measured rather than published as unsupported.
+   * It follows the document (only a rigidly placed import is measured), not
+   * the solid, so the same handles can need either answer.
+   */
+  measuredOpening: boolean;
+  /**
    * Total face-handle count at cache time. Recounted with exact handle sets
    * and validation verdicts before a hit; disagreement retires the arena.
    */
