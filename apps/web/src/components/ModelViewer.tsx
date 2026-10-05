@@ -244,6 +244,7 @@ import {
   SKETCH_SNAP_GLYPHS,
   SKETCH_SNAP_LABELS,
   sketchEntryPose,
+  sketchEntryUp,
   sketchObjectFromDrag,
   snapSketchPoint,
   type SketchPoint,
@@ -4707,20 +4708,40 @@ export function ModelViewer({
       }
       const detail = (
         event as CustomEvent<{
+          /** Plane points to report in client pixels, for picking by hand. */
+          project?: SketchPoint[];
           resolve?: (
             value: {
               objects: SketchModeState['objects'];
               textPreview: { loops: number; origin: SketchPoint } | null;
+              screen: SketchPoint[];
             } | null
           ) => void;
         }>
       ).detail;
       const mode = sketchModeRef.current;
+      const bounds = renderer.domElement.getBoundingClientRect();
+      const screen = (detail?.project ?? []).map((point) => {
+        const { basis } = mode ?? {};
+        if (!basis) {
+          return { x: Number.NaN, y: Number.NaN };
+        }
+        const ndc = new THREE.Vector3(
+          basis.origin.x + basis.u.x * point.x + basis.v.x * point.y,
+          basis.origin.y + basis.u.y * point.x + basis.v.y * point.y,
+          basis.origin.z + basis.u.z * point.x + basis.v.z * point.y
+        ).project(context.activeCamera);
+        return {
+          x: bounds.left + ((ndc.x + 1) / 2) * bounds.width,
+          y: bounds.top + ((1 - ndc.y) / 2) * bounds.height
+        };
+      });
       detail?.resolve?.(
         mode
           ? {
               objects: mode.objects,
-              textPreview: sketchRigRef.current?.textPreviewState() ?? null
+              textPreview: sketchRigRef.current?.textPreviewState() ?? null,
+              screen
             }
           : null
       );
@@ -10592,6 +10613,13 @@ export function ModelViewer({
       sketchBasis.origin.y,
       sketchBasis.origin.z
     );
+    // A face sketch arrives rolled so its +u reads rightward and +v upward:
+    // a top face's stored frame has u along world -Y, so under world up its
+    // text ran down the screen. Canonical planes keep world up (null).
+    const entryUp = sketchEntryUp(sketchBasis);
+    const sketchUp = entryUp
+      ? new THREE.Vector3(entryUp.x, entryUp.y, entryUp.z)
+      : null;
     // Frame the glide's subject when there is one — the attached face, or
     // re-entered content — reusing the normal-to-face fit so a wide face
     // fills a portrait viewport too. Fall back to orient-only at the current
@@ -10636,7 +10664,13 @@ export function ModelViewer({
         const center =
           faceTrianglesCentroid(points) ??
           new THREE.Vector3(frame.center.x, frame.center.y, frame.center.z);
-        return computeNormalToFacePose(context.camera, points, center, normal);
+        return computeNormalToFacePose(
+          context.camera,
+          points,
+          center,
+          normal,
+          sketchUp
+        );
       }
       if (frame.points.length === 0) {
         return null;
@@ -10647,7 +10681,13 @@ export function ModelViewer({
       const center = points
         .reduce((sum, point) => sum.add(point), new THREE.Vector3())
         .divideScalar(points.length);
-      return computeNormalToFacePose(context.camera, points, center, normal);
+      return computeNormalToFacePose(
+        context.camera,
+        points,
+        center,
+        normal,
+        sketchUp
+      );
     })();
     const distance = Math.max(context.camera.position.distanceTo(origin), 40);
     const pose = sketchEntryPose(sketchBasis, distance);
@@ -10661,7 +10701,8 @@ export function ModelViewer({
         ),
         target: new THREE.Vector3(pose.target.x, pose.target.y, pose.target.z),
         near: context.camera.near,
-        far: context.camera.far
+        far: context.camera.far,
+        ...(sketchUp ? { up: sketchUp } : {})
       },
       () => {
         context.applyProjection('orthographic');

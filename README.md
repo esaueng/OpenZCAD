@@ -99,7 +99,7 @@ Boundaries that hold everywhere:
 - The browser document/history model is the source of truth; meshes are disposable projections.
 - Geometry and exports run in the browser worker, never in the Cloudflare Worker.
 - Topology fingerprints are content-addressed and stable across rebuilds — checked in `test/kernel-seam.test.ts`, and against the OpenCascade reference in bulk by the parity corpus — and resolution is fail-closed at every call site. Documents saved by the pre-fingerprint OpenCascade scheme are rejected with a re-select diagnostic rather than reinterpreted.
-- Schema-v1 through schema-v14 documents migrate to additive schema v15 on load. Schema v14 preserves bounded undo/redo history; schema v15 adds on/off parameters that control body visibility and export inclusion.
+- Schema-v1 through schema-v15 documents migrate to schema v16 on load. Schema v14 preserves bounded undo/redo history; schema v15 adds on/off parameters that control body visibility and export inclusion. Schema v16 marks the orientation of newly authored Front sketches; saved unmarked sketches retain their original basis, and older clients must update before opening v16 documents.
 
 See [architecture.md](architecture.md) and the decision records in [docs/adrs](docs/adrs).
 The current implementation status and explicitly unshipped gaps are tracked in
@@ -140,7 +140,9 @@ restoration. The desktop app signs in through the browser: it starts a
 short-lived sign-in attempt, the browser approves it, and the app exchanges it
 for refreshable access tokens, so no password or session cookie ever passes
 through the native shell. It needs macOS 14+, Xcode Command Line Tools, and
-stable Rust with the `aarch64-apple-darwin` target:
+current stable Rust with the `aarch64-apple-darwin` target. The desktop crate
+declares Rust 1.85 as its minimum; the current locked dependencies require
+Rust 1.88 or newer:
 
 ```bash
 pnpm dev:desktop      # tauri dev against the local workspace

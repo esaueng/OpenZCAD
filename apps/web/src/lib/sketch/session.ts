@@ -1,4 +1,8 @@
-import type { PlaneBasis } from '@openzcad/geometry';
+import {
+  FRONT_FACING_XZ_BASIS,
+  PLANE_BASES,
+  type PlaneBasis
+} from '@openzcad/geometry';
 import type { SketchMoveHandle } from '../interaction/machine';
 import type {
   SketchObjectData,
@@ -344,21 +348,66 @@ export function axisLockPoint(
   return { point, lockedAxis: null };
 }
 
+const AXIS_Y: Vector3 = { x: 0, y: 1, z: 0 };
+
+const sameAxis = (a: Vector3, b: Vector3) =>
+  Math.abs(a.x - b.x) < 1e-9 &&
+  Math.abs(a.y - b.y) < 1e-9 &&
+  Math.abs(a.z - b.z) < 1e-9;
+
 /**
- * Camera pose facing the sketch plane head-on from the given distance. Planes
- * whose normal is parallel to world +Z get a hair of -Y mixed in, exactly like
- * the standard top view, so OrbitControls never sees a degenerate up axis.
+ * The screen-up a sketch entry holds so the plane's +u reads rightward and
+ * +v upward: the basis v axis, for a face-attached frame. Face frames are
+ * right-handed and, on any face steeper than the kernel's reference cutoff,
+ * their v already is world up's projection, so this only changes the roll on
+ * near-horizontal faces — where a top face's u runs along world -Y and text
+ * otherwise ran down the screen.
+ *
+ * Canonical planes return null and keep their established world-up views:
+ * revision 1's XZ has v on world -Z, so rolling to it would stand the model
+ * on its head; revision 2's XZ already reads +v up under world up.
+ */
+export function sketchEntryUp(basis: PlaneBasis): Vector3 | null {
+  const canonical = [...Object.values(PLANE_BASES), FRONT_FACING_XZ_BASIS].some(
+    (plane) =>
+      sameAxis(plane.u, basis.u) &&
+      sameAxis(plane.v, basis.v) &&
+      sameAxis(plane.normal, basis.normal)
+  );
+  return canonical ? null : { ...basis.v };
+}
+
+/**
+ * Camera pose facing the sketch plane head-on from the given distance, with
+ * the roll `sketchEntryUp` picks (null: world up's). Planes whose normal is
+ * parallel to world Z get a hair of that up's opposite mixed in (-Y, like the
+ * standard top view, without one), so OrbitControls never sees a degenerate
+ * up axis and world up projects onto the same screen-up.
  */
 export function sketchEntryPose(
   basis: PlaneBasis,
   distance: number
-): { position: Vector3; target: Vector3 } {
+): { position: Vector3; target: Vector3; up: Vector3 | null } {
+  const up = sketchEntryUp(basis);
   const clamped = Math.max(distance, 1);
   let direction = { ...basis.normal };
-  if (Math.abs(direction.z) > 0.9999 && Math.abs(direction.y) < 1e-6) {
+  if (
+    Math.abs(direction.z) > 0.9999 &&
+    Math.hypot(direction.x, direction.y) < 1e-6
+  ) {
     const sign = direction.z >= 0 ? 1 : -1;
-    const magnitude = Math.hypot(0.0001, 1);
-    direction = { x: 0, y: -0.0001 / magnitude, z: sign / magnitude };
+    const lean = up && Math.hypot(up.x, up.y) > 1e-6 ? up : AXIS_Y;
+    const raw = {
+      x: -sign * 0.0001 * lean.x,
+      y: -sign * 0.0001 * lean.y,
+      z: sign
+    };
+    const magnitude = Math.hypot(raw.x, raw.y, raw.z);
+    direction = {
+      x: raw.x / magnitude,
+      y: raw.y / magnitude,
+      z: raw.z / magnitude
+    };
   }
   return {
     position: {
@@ -366,7 +415,8 @@ export function sketchEntryPose(
       y: basis.origin.y + direction.y * clamped,
       z: basis.origin.z + direction.z * clamped
     },
-    target: { ...basis.origin }
+    target: { ...basis.origin },
+    up
   };
 }
 

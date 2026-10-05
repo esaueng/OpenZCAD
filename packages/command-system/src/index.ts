@@ -177,6 +177,7 @@ import {
 import {
   computeSketchProfileAnalysis,
   computeSketchRegions,
+  newCanonicalPlaneRef,
   regionAtPoint,
   type SketchRegion
 } from '@openzcad/geometry';
@@ -2464,11 +2465,7 @@ export function commandsForCadPatch(
         }
         return commandFactories.addSketch({
           name: operation.name,
-          planeRef: {
-            type: 'canonical',
-            plane: operation.plane,
-            offset: operation.offset
-          },
+          planeRef: newCanonicalPlaneRef(operation.plane, operation.offset),
           objects: operation.objects,
           ids
         });

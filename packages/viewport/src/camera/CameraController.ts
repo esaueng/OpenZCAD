@@ -5,6 +5,7 @@ import {
   easeInOutCubic,
   orbitPivotForPoint,
   tweenDurationFor,
+  screenUpForView,
   tweenOrientationFor,
   VIEW_DIRECTIONS,
   type CameraEase
@@ -78,6 +79,18 @@ const VIEW_SETTLE_MS = 120;
  */
 const DRAG_DAMPING = 0.35;
 
+/**
+ * OrbitControls' gesture states that turn the camera (ROTATE, TOUCH_ROTATE,
+ * TOUCH_DOLLY_ROTATE). Its `state` is set before it dispatches `start`, and
+ * is not part of the published typings.
+ */
+const ORBIT_ROTATE_STATES: ReadonlySet<number> = new Set([0, 3, 6]);
+
+function orbitGestureRotates(orbit: OrbitControls<THREE.Camera>): boolean {
+  const { state } = orbit as unknown as { state?: number };
+  return state !== undefined && ORBIT_ROTATE_STATES.has(state);
+}
+
 /** Orbit radius of the home pose on a fresh document, before any fit runs. */
 const DEFAULT_ORBIT_RADIUS = 150;
 
@@ -107,6 +120,8 @@ interface CameraTween {
   toDistance: number;
   near: number;
   far: number;
+  /** The roll the pose asked to hold on arrival, if any. */
+  up: THREE.Vector3 | null;
   onComplete?: () => void;
 }
 
@@ -270,11 +285,24 @@ export class CameraController {
       this.options.wheelDeviceMemory?.write(learned);
       this.options.onWheelDeviceLearned?.(learned);
     }
+    if (
+      this.disposed ||
+      !this.orbit.enabled ||
+      (intent !== 'pan' && !this.orbit.enableZoom)
+    ) {
+      return;
+    }
+    if (this.gestureActive || event.buttons !== 0) {
+      event.preventDefault();
+      event.stopImmediatePropagation();
+      return;
+    }
     if (intent === 'pan') {
       // Take the event away from OrbitControls entirely: its wheel handler
       // only ever dollies, so leaving it to run would zoom as well as pan.
       event.preventDefault();
       event.stopImmediatePropagation();
+      if (!this.orbit.enablePan) return;
       // A pan is the user taking over from any queued zoom or command glide.
       this.cancelZoom();
       this.cancelTween();
@@ -286,18 +314,6 @@ export class CameraController {
       // events, and the durable pose only has to match the last one.
       this.scheduleSettledViewChange();
       this.options.requestRender();
-      return;
-    }
-    if (this.disposed || !this.orbit.enabled || !this.orbit.enableZoom) {
-      // OrbitControls declines these states itself, so the packet is inert.
-      return;
-    }
-    if (this.gestureActive || event.buttons !== 0) {
-      // A notch during a drag is noise, but OrbitControls does not know about
-      // external orbits or held buttons and would dolly it immediately — the
-      // one-frame jump this handler exists to remove. Swallow it instead.
-      event.preventDefault();
-      event.stopImmediatePropagation();
       return;
     }
     const { state, speed } = stepZoomDynamics(
@@ -399,6 +415,12 @@ export class CameraController {
   /** Restores tight tracking; a grab mid-glide folds the residue into it. */
   private beginGesture = () => {
     this.cancelZoom();
+    // A held roll belongs to a head-on view; an orbit around a rolled up
+    // would tumble, so a rotate hands roll back to world up. Pan and zoom
+    // keep it, so a sketch stays right-way-up while it is navigated.
+    if (orbitGestureRotates(this.orbit)) {
+      this.restoreWorldUp();
+    }
     this.gestureActive = true;
     this.orbitGlide = null;
     if (this.settleTimeout !== null) {
@@ -487,7 +509,14 @@ export class CameraController {
   };
 
   private createOrbit(camera: THREE.Camera): OrbitControls<THREE.Camera> {
+    // OrbitControls snapshots `up` as its orbit axis. A held sketch roll (or a
+    // mid-glide up) must not become that axis, so present world up while the
+    // controls are built and hand the held roll back afterwards; the next
+    // update()'s lookAt reapplies it.
+    const heldUp = camera.up.clone();
+    camera.up.set(0, 0, 1);
     const orbit = new OrbitControls(camera, this.options.domElement);
+    camera.up.copy(heldUp);
     orbit.enableDamping = true;
     orbit.dampingFactor = DRAG_DAMPING;
     orbit.zoomToCursor = this.options.zoomToCursor();
@@ -583,6 +612,12 @@ export class CameraController {
     this.orbit.update();
     if (this.options.reducedMotion()) {
       this.tween = null;
+      const offset = pose.position.clone().sub(pose.target);
+      if (pose.up && offset.lengthSq() > 1e-18) {
+        this.holdUp(screenUpForView(offset, pose.up));
+      } else {
+        this.restoreWorldUp();
+      }
       this.perspective.position.copy(pose.position);
       this.orbit.target.copy(pose.target);
       this.perspective.near = pose.near;
@@ -623,21 +658,42 @@ export class CameraController {
       fromTarget,
       toTarget: pose.target.clone(),
       fromQuaternion: this.perspective.quaternion.clone(),
-      toQuaternion: tweenOrientationFor(toDirection),
+      toQuaternion: tweenOrientationFor(toDirection, pose.up),
       fromDistance: Math.max(fromPosition.distanceTo(fromTarget), 1e-6),
       toDistance,
       near: pose.near,
       far: pose.far,
+      up: pose.up ? screenUpForView(toDirection, pose.up) : null,
       onComplete
     };
     this.options.requestRender();
   }
 
   cancelTween() {
-    if (this.tween) {
+    const tween = this.tween;
+    if (tween) {
       this.tween = null;
+      this.settleRoll(tween);
+    }
+  }
+
+  /**
+   * Where a finished or interrupted glide leaves the roll: held on the up it
+   * asked for, else back on world up. An interrupted sketch-entry glide still
+   * lands its roll, so the sketch reads right-way-up from the first stroke.
+   */
+  private settleRoll(tween: CameraTween) {
+    if (tween.up) {
+      this.holdUp(tween.up);
+    } else {
       this.restoreWorldUp();
     }
+  }
+
+  /** Keeps both cameras' `lookAt` on a requested screen-up. */
+  private holdUp(up: THREE.Vector3) {
+    this.perspective.up.copy(up);
+    this.orthographic.up.copy(up);
   }
 
   private cancelZoom() {
@@ -647,9 +703,9 @@ export class CameraController {
 
   /**
    * Hands roll authority back to `lookAt`'s world-up projection once a glide
-   * ends. The glide's final frame was built from the same projection, so
-   * nothing moves — but leaving a slerped up vector behind would roll every
-   * subsequent orbit.
+   * ends, or when a held roll is released. A world-up glide's final frame
+   * was built from the same projection, so nothing moves — but leaving a
+   * slerped up vector behind would roll every subsequent orbit.
    */
   private restoreWorldUp() {
     this.perspective.up.set(0, 0, 1);
@@ -666,6 +722,9 @@ export class CameraController {
       return;
     }
     this.cancelTween();
+    // The view cube orbits even while canvas rotation is off (a sketch), so
+    // it always releases a held roll.
+    this.restoreWorldUp();
     this.externalOrbitActive = true;
     this.beginGesture();
   }
@@ -899,7 +958,7 @@ export class CameraController {
     }
     if (t >= 1) {
       this.tween = null;
-      this.restoreWorldUp();
+      this.settleRoll(tween);
       this.perspective.near = tween.near;
       this.perspective.far = tween.far;
       this.perspective.updateProjectionMatrix();
@@ -928,6 +987,7 @@ export class CameraController {
    */
   restore(state: ViewportCameraState, projection: ProjectionMode) {
     this.cancelZoom();
+    this.restoreWorldUp();
     this.perspective.position.fromArray(state.position);
     this.orbit.target.fromArray(state.target);
     this.perspective.lookAt(this.orbit.target);

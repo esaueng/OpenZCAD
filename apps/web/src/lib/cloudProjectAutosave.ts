@@ -66,10 +66,7 @@ export type CloudProjectSyncState =
  * safe on the device, which is the one thing that is not true here.
  */
 export type WorkspaceSaveState =
-  | CloudProjectSyncState
-  | 'saving'
-  | 'local-source'
-  | 'device-failed';
+  CloudProjectSyncState | 'saving' | 'local-source' | 'device-failed';
 
 export interface CloudProjectAutosaveStatus {
   state: CloudProjectSyncState;
@@ -482,6 +479,60 @@ export class CloudProjectAutosave {
 
   async whenIdle(): Promise<void> {
     await this.#queue;
+  }
+
+  /** Serializes an explicit checkpoint with autosave and reads its snapshot after the drain. */
+  async saveCheckpoint(
+    projectId: string,
+    readDocument: () => ProjectDocument | null,
+    write: (input: {
+      projectId: ProjectDocument['projectId'];
+      expectedVersion: number;
+      document: ProjectDocument;
+    }) => Promise<ProjectDocument | null>
+  ): Promise<ProjectDocument | null> {
+    this.#assertUsable();
+    await this.flushPending();
+    const epoch = this.#project?.epoch;
+    if (
+      epoch === undefined ||
+      !this.#isActive(epoch, projectId) ||
+      this.#halted
+    ) {
+      return null;
+    }
+    const save = this.#queue.then(async () => {
+      if (!this.#isActive(epoch, projectId) || this.#halted) return null;
+      const document = readDocument();
+      if (!document || document.projectId !== projectId) return null;
+      const editEpoch = this.#editEpoch;
+      const saved = await write({
+        projectId: document.projectId,
+        expectedVersion: this.#project!.version,
+        document
+      });
+      if (saved && this.#isActive(epoch, projectId)) {
+        this.#project!.version = saved.version;
+        // A newer queued edit is based on this checkpoint's model. Keep it
+        // and the project epoch so any autosave queued behind us uses the
+        // acknowledged fence rather than being cancelled as stale.
+        if (this.#pending && this.#pending.editEpoch <= editEpoch) {
+          this.#pending = null;
+        }
+        this.#options.onSynced?.({ projectId, version: saved.version });
+      }
+      return saved;
+    });
+    this.#queue = save.then(
+      (saved): SaveResult =>
+        saved ? { state: 'saved', version: saved.version } : { state: 'stale' },
+      (): SaveResult => ({ state: 'failed' })
+    );
+    const saved = await save;
+    if (saved && this.#isActive(epoch, projectId)) {
+      this.#afterSave({ state: 'saved', version: saved.version });
+    }
+    return saved;
   }
 
   dispose(): void {

@@ -19,6 +19,7 @@ import {
   filletEdges,
   mirrorBody,
   createCheckpoint,
+  createSavePoint,
   createProjectDocument,
   deleteSketchObject,
   findSketch,
@@ -98,9 +99,62 @@ describe('document-core', () => {
     // The refusal happens before any stamp: the input keeps its version and
     // the current version is untouched.
     expect(future.schemaVersion).toBe(PROJECT_DOCUMENT_SCHEMA_VERSION + 84);
-    expect(
-      normalizeDocument(structuredClone(current)).schemaVersion
-    ).toBe(PROJECT_DOCUMENT_SCHEMA_VERSION);
+    expect(normalizeDocument(structuredClone(current)).schemaVersion).toBe(
+      PROJECT_DOCUMENT_SCHEMA_VERSION
+    );
+  });
+
+  it('migrates v15 Front sketches without synthesizing a new basis', () => {
+    const created = addSketchFeature(
+      createProjectDocument('Legacy Front', user()),
+      {
+        name: 'Front',
+        planeRef: { type: 'canonical', plane: 'XZ', offset: 3 },
+        objects: [{ objectKind: 'circle', radius: 4, centerX: 2, centerY: 5 }]
+      }
+    );
+    const legacy = structuredClone(created.document);
+    legacy.schemaVersion = 15 as typeof legacy.schemaVersion;
+    const migrated = normalizeDocument(legacy);
+
+    expect(migrated.schemaVersion).toBe(16);
+    expect({ ...migrated, schemaVersion: 15 }).toEqual(legacy);
+    expect(findSketch(migrated, created.sketchId)?.planeRef).toEqual({
+      type: 'canonical',
+      plane: 'XZ',
+      offset: 3
+    });
+    expect(legacy.schemaVersion).toBe(15);
+  });
+
+  it('saves revision-2 Front sketches beyond the v15 client boundary', () => {
+    const created = addSketchFeature(
+      createProjectDocument('New Front', user()),
+      {
+        name: 'Front',
+        planeRef: {
+          type: 'canonical',
+          plane: 'XZ',
+          offset: 3,
+          basisRevision: 2
+        },
+        objects: [{ objectKind: 'circle', radius: 4, centerX: 2, centerY: 5 }]
+      }
+    );
+    const saved = JSON.parse(
+      JSON.stringify(created.document)
+    ) as typeof created.document;
+
+    // A v15 normalizer refuses newer schemas before it evaluates unknown fields.
+    expect(saved.schemaVersion).toBe(16);
+    expect(saved.schemaVersion).toBeGreaterThan(15);
+    const reopened = normalizeDocument(saved);
+    expect(findSketch(reopened, created.sketchId)?.planeRef).toEqual({
+      type: 'canonical',
+      plane: 'XZ',
+      offset: 3,
+      basisRevision: 2
+    });
   });
 
   it('records save checkpoints without changing model version', () => {
@@ -110,6 +164,36 @@ describe('document-core', () => {
     expect(saved.version).toBe(document.version);
     expect(saved.checkpoints).toHaveLength(2);
     expect(saved.checkpoints.at(-1)?.reason).toBe('Manual save');
+  });
+
+  it('saves a document that has no revision by minting one first', () => {
+    // Conflict recovery copies were written with empty revisions, and every
+    // Save of one — Save to my account included — threw before reaching the
+    // account: "Cannot create a checkpoint without a revision."
+    const document = createProjectDocument('Recovered', user());
+    document.revisions = [];
+    document.checkpoints = [];
+    expect(() => createCheckpoint(document, 'Saved')).toThrow(
+      /without a revision/
+    );
+
+    const saved = createSavePoint(document, 'Saved');
+
+    expect(saved.version).toBe(document.version);
+    expect(saved.revisions).toHaveLength(1);
+    expect(saved.checkpoints).toHaveLength(1);
+    expect(saved.checkpoints[0]?.revisionId).toBe(
+      saved.revisions[0]?.revisionId
+    );
+    expect(saved.checkpoints[0]?.documentVersion).toBe(document.version);
+  });
+
+  it('saves an ordinary document as a plain checkpoint', () => {
+    const document = createProjectDocument('Checkpoint', user());
+    const saved = createSavePoint(document, 'Manual save');
+
+    expect(saved.revisions).toEqual(document.revisions);
+    expect(saved.checkpoints).toHaveLength(2);
   });
 
   it('sanitizes malformed and unbounded checkpoint history on load', () => {
@@ -534,7 +618,8 @@ describe('feature editing', () => {
     expect('endPoint' in after.data).toBe(false);
     expect(after.data).toEqual({
       featureKind: 'loft',
-      sections: feature.data.featureKind === 'loft' ? feature.data.sections : [],
+      sections:
+        feature.data.featureKind === 'loft' ? feature.data.sections : [],
       mode: 'ruled'
     });
 
@@ -589,6 +674,30 @@ describe('feature editing', () => {
         });
       }
     }
+  });
+
+  it('keeps a sketch basis revision when the form edits its offset', () => {
+    const document = createProjectDocument('Front', user());
+    const { document: withSketch, sketchId } = addSketchFeature(document, {
+      name: 'Front profile',
+      planeRef: {
+        type: 'canonical',
+        plane: 'XZ',
+        offset: 0,
+        basisRevision: 2
+      },
+      objects: [{ objectKind: 'circle', radius: 4, centerX: 0, centerY: 0 }]
+    });
+    const edited = updateSketch(withSketch, { sketchId, offset: 6 });
+    const sketch = Object.values(edited.nodes).find(
+      (node) => node.kind === 'sketch'
+    );
+    expect(sketch?.kind === 'sketch' && sketch.planeRef).toEqual({
+      type: 'canonical',
+      plane: 'XZ',
+      offset: 6,
+      basisRevision: 2
+    });
   });
 
   it('keeps a body named after what the user made, not after the last feature', () => {

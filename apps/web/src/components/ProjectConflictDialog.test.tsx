@@ -1,4 +1,4 @@
-import { render, screen } from '@testing-library/react';
+import { act, render, screen } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { describe, expect, it, vi } from 'vitest';
 import { createProjectDocument } from '@openzcad/document-core';
@@ -126,5 +126,48 @@ describe('ProjectConflictDialog', () => {
     await user.keyboard('{Escape}');
     expect(onClose).toHaveBeenCalledTimes(2);
     expect(onResolve).not.toHaveBeenCalled();
+  });
+
+  it('shows pending confirmation, keeps failures visible, and allows a retry', async () => {
+    const user = userEvent.setup();
+    let reject!: (error: Error) => void;
+    const onResolve = vi
+      .fn()
+      .mockImplementationOnce(
+        () =>
+          new Promise<void>((_resolve, fail) => {
+            reject = fail;
+          })
+      )
+      .mockResolvedValueOnce(undefined);
+    const onClose = vi.fn();
+    render(
+      <ProjectConflictDialog
+        conflict={conflict('room')}
+        busy={false}
+        onResolve={onResolve}
+        onClose={onClose}
+      />
+    );
+    const keep = screen.getByRole('button', {
+      name: 'Keep this device’s version'
+    });
+    await user.click(keep);
+    expect(keep).toBeDisabled();
+    expect(screen.getByRole('status')).toHaveTextContent(
+      /waiting for confirmation/
+    );
+    await user.keyboard('{Escape}');
+    expect(onClose).not.toHaveBeenCalled();
+    await act(async () => {
+      reject(new Error('The room disconnected. Please retry.'));
+    });
+    expect(screen.getByRole('alert')).toHaveTextContent(
+      'The room disconnected. Please retry.'
+    );
+    expect(keep).toBeEnabled();
+    await user.click(keep);
+    expect(onResolve).toHaveBeenCalledTimes(2);
+    expect(screen.queryByRole('alert')).not.toBeInTheDocument();
   });
 });

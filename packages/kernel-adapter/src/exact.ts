@@ -178,7 +178,10 @@ import {
   sanitizeThreeMf
 } from './mesh-export-sanitize';
 import { orientGlbForGltf } from './glb-scene';
-import { tightenBoundsToMesh } from './exact-bounds';
+import {
+  refineBoundsAtSplineFaces,
+  tightenBoundsToMesh
+} from './exact-bounds';
 import {
   readMeshQuality,
   type BodyMeshQuality,
@@ -1680,6 +1683,31 @@ export class RemusKernelAdapter implements ExactKernelAdapter {
           faceTopologyByHandle.set(handle, publishedFace);
           topology.faces.push(publishedFace);
         }
+        publishedBounds = refineBoundsAtSplineFaces(
+          publishedBounds,
+          { positions, indices: meshIndices, faceOffsets },
+          faceHandles.map((handle) => ({
+            surfaceType:
+              faceTopologyByHandle.get(handle)?.geometry?.surfaceType ?? ''
+          })),
+          displayTessellation.linearDeflection,
+          (deflection) => {
+            const fine = kernel.tessellateSolidGroupedBinary(
+              solid,
+              deflection,
+              displayTessellation.angularDeflection
+            );
+            try {
+              return {
+                positions: fine.positions.slice(),
+                indices: fine.indices.slice(),
+                faceOffsets: Array.from(fine.faceOffsets)
+              };
+            } finally {
+              fine.free();
+            }
+          }
+        );
       } finally {
         mesh.free();
       }
