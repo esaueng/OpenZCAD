@@ -20,7 +20,12 @@ import {
 const fixture = (file: string) =>
   fileURLToPath(new URL(`../fixtures/hammer-holder/${file}`, import.meta.url));
 
-async function importHolder(page: Page, file: string, project: string) {
+async function importHolder(
+  page: Page,
+  file: string,
+  project: string,
+  { accountReady = false }: { accountReady?: boolean } = {}
+) {
   await stubApi(page, { assistantEnabled: true });
   await page.route('**/api/assistant/status', (route) =>
     route.fulfill({
@@ -36,7 +41,11 @@ async function importHolder(page: Page, file: string, project: string) {
   await page.getByLabel('Project name').fill(project);
   await page.getByRole('button', { name: 'Create project' }).click();
   await expect(page.getByRole('region', { name: '3D viewport' })).toBeVisible();
-  await page.getByLabel(/^Import FreeCAD, STEP or /).setInputFiles(fixture(file));
+  if (accountReady)
+    await expect(page.locator('.save-state')).toHaveClass(/is-synced/);
+  await page
+    .getByLabel(/^Import FreeCAD, STEP or /)
+    .setInputFiles(fixture(file));
   await expect(page.locator('.feature-row').first()).toBeVisible({
     timeout: 60_000
   });
@@ -121,11 +130,28 @@ test('parameterizes a moved holder import: opening, mounting holes, edits, reloa
   page
 }) => {
   test.setTimeout(420_000);
-  const consoleErrors: string[] = [];
+  const consoleErrors: { text: string; path: string }[] = [];
+  const archiveKinds: string[] = [];
   page.on('console', (message) => {
-    if (message.type() === 'error') consoleErrors.push(message.text());
+    if (message.type() === 'error') {
+      const url = message.location().url;
+      consoleErrors.push({
+        text: message.text(),
+        path: url ? new URL(url).pathname : ''
+      });
+    }
   });
-  await importHolder(page, 'synthetic-holder.step', 'Holder acceptance');
+  page.on('request', (request) => {
+    if (new URL(request.url()).pathname !== '/api/uploads') return;
+    const { kind } = request.postDataJSON() as { kind: string };
+    if (kind !== 'thumbnail') archiveKinds.push(kind);
+  });
+  // Make the initial account-backed archive attempt deterministic. Local-only
+  // imports deliberately skip protected uploads.
+  await importHolder(page, 'synthetic-holder.step', 'Holder acceptance', {
+    accountReady: true
+  });
+  expect(archiveKinds).toEqual(['step-import']);
 
   // Reproduce positioning an imported holder before requesting the verified
   // recipe. Every source copy must receive the same ordered rigid placement.
@@ -198,6 +224,11 @@ test('parameterizes a moved holder import: opening, mounting holes, edits, reloa
   });
   await expectBodyCount(page, 1);
   await expectExactReady(page);
+  // The shared API stub returns an empty account shelf on reload, so this
+  // restored device copy is local-only and its export must skip cloud archival.
+  await expect(
+    page.getByRole('button', { name: 'Save to my account', exact: true })
+  ).toBeVisible();
 
   // Export the grown holder as STEP: a real closed B-rep, not a mesh.
   const fileMenu = page.locator('details.file-menu');
@@ -218,11 +249,20 @@ test('parameterizes a moved holder import: opening, mounting holes, edits, reloa
   const source = await readFile(fixture('synthetic-holder.step'), 'utf8');
   expect(text).not.toBe(source);
 
-  // Only the artifact-archive uploads may fail on the static preview host.
-  expect(consoleErrors.filter((message) => !message.includes('404'))).toEqual(
-    []
+  // Only the initial import archive may fail on the static preview. Identify
+  // its kind and exact console source, and refuse an extra local-export upload.
+  await expect(page.getByRole('contentinfo')).toContainText(
+    'Exported 1 body to'
   );
-  expect(consoleErrors).toHaveLength(2);
+  expect(archiveKinds).toEqual(['step-import']);
+  await expect
+    .poll(() => consoleErrors)
+    .toEqual([
+      {
+        text: 'Failed to load resource: the server responded with a status of 404 (Not Found)',
+        path: '/api/uploads'
+      }
+    ]);
 });
 
 test('applies a parameter typed while the second verified suggestion is still landing', async ({

@@ -632,7 +632,7 @@
 }
 
 .keypad-label {
-  color: var(--color-text-dim);
+  color: var(--color-text-muted);
   font-size: var(--fs-xs);
   white-space: nowrap;
 }
@@ -676,9 +676,9 @@
 .keypad-units button {
   flex: 1;
   padding: 4px 0;
-  color: var(--color-text-dim);
+  color: var(--color-text);
   font-size: var(--fs-xs);
-  background: rgba(0, 0, 0, 0.28);
+  background: var(--color-surface-2);
   border: 1px solid transparent;
   border-radius: var(--radius-sm);
   cursor: pointer;
@@ -721,7 +721,7 @@
 .keypad-commit {
   grid-column: span 3;
   padding: 7px 0;
-  color: #101316;
+  color: var(--color-on-accent);
   font-size: var(--fs-sm);
   font-weight: 600;
   background: var(--color-accent);
