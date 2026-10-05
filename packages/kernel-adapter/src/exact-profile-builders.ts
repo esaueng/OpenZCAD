@@ -63,7 +63,8 @@ import {
   bezierNurbsParams,
   bezierProfileEdgesEnabled,
   flattenBezierCurve,
-  flattenedOutlineWarning
+  flattenedOutlineWarning,
+  kernelSafeBezierPieces
 } from './profile-bezier-edges';
 import {
   remusHashOnlyLineage,
@@ -409,23 +410,28 @@ export function makeRegionFace(
       }
       if (curve.kind === 'bezier') {
         if (exactBeziers) {
-          edges.push(
-            kernel.liftCurve2dToPlane(
-              NURBS_CURVE_TYPE,
-              bezierNurbsParams(curve),
-              basis.origin.x,
-              basis.origin.y,
-              basis.origin.z,
-              basis.u.x,
-              basis.u.y,
-              basis.u.z,
-              basis.normal.x,
-              basis.normal.y,
-              basis.normal.z,
-              0,
-              1
-            )
-          );
+          // Split where the kernel would misread the curve as a circle and
+          // build a cylinder wall that misses its own cap edges (remus
+          // extrude side-face recognition; see kernelSafeBezierPieces).
+          for (const piece of kernelSafeBezierPieces(curve)) {
+            edges.push(
+              kernel.liftCurve2dToPlane(
+                NURBS_CURVE_TYPE,
+                bezierNurbsParams(piece),
+                basis.origin.x,
+                basis.origin.y,
+                basis.origin.z,
+                basis.u.x,
+                basis.u.y,
+                basis.u.z,
+                basis.normal.x,
+                basis.normal.y,
+                basis.normal.z,
+                0,
+                1
+              )
+            );
+          }
           continue;
         }
         // Feature-flagged fallback: the same line pipeline every polygon
