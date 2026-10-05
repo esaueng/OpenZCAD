@@ -49,16 +49,28 @@ describe('inspector heading', () => {
     });
   });
 
-  it('keeps an inferred feature as the subject when no command is running', () => {
-    // Selecting a body with nothing armed is still "show me what made this",
-    // and its edit form is the point of the panel.
+  it('keeps inferred objects as readouts when no command is running', () => {
     expect(
       inspectorHeadingForFeature({
         ...offsetFace,
+        selectionLabel: 'Front face',
+        selectionBodyName: 'Bracket',
         featureSelectionSource: 'inferred',
         commandSession: null
       })
-    ).toEqual({ eyebrow: 'Direct edit', title: 'Offset face', demoted: false });
+    ).toEqual({ eyebrow: 'Bracket', title: 'Front face', demoted: true });
+  });
+
+  it('uses the body name for an inferred whole-body readout', () => {
+    expect(
+      inspectorHeadingForFeature({
+        ...offsetFace,
+        selectionLabel: 'Bracket',
+        selectionBodyName: 'Bracket',
+        featureSelectionSource: 'inferred',
+        commandSession: null
+      })
+    ).toEqual({ eyebrow: 'Bracket', title: 'Bracket', demoted: true });
   });
 
   it('keeps the feature as the subject when its provenance is unknown', () => {
