@@ -111,6 +111,7 @@ import {
   type StaleDirectEditFaceRepair
 } from '@openzcad/document-core';
 import {
+  canonicalPlaneRefForEdit,
   circleProfile,
   computeSketchProfileAnalysis,
   computeSketchRegions,
@@ -19832,8 +19833,11 @@ export function App() {
                     commandFactories.updateSketch(
                       {
                         sketchId: feature.data.sketchId,
-                        plane: value.plane,
-                        offset: value.offset,
+                        planeRef: canonicalPlaneRefForEdit(
+                          selectedSketch.planeRef,
+                          value.plane,
+                          value.offset
+                        ),
                         object: value.object
                       },
                       `Edit ${value.name}`

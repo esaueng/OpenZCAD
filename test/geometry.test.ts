@@ -3,6 +3,7 @@ import {
   FRONT_FACING_XZ_BASIS,
   PLANE_BASES,
   canonicalPlaneBasis,
+  canonicalPlaneRefForEdit,
   circleProfile,
   frameForPlaneRef,
   newCanonicalPlaneRef,
@@ -115,6 +116,47 @@ describe('sketch plane frames', () => {
     expect(basis.u).toEqual(frame.xAxis);
     expect(basis.v).toEqual(frame.yAxis);
     expect(basis.normal).toEqual(frame.zAxis);
+  });
+
+  it.each(['XY', 'YZ'] as const)(
+    'authors a %s to Front edit with the current basis',
+    (plane) => {
+      const ref = canonicalPlaneRefForEdit(
+        { type: 'canonical', plane, offset: 0 },
+        'XZ',
+        3
+      );
+      const frame = frameForPlaneRef(ref, (value) => Number(value));
+      expect(frame.origin).toEqual({ x: 0, y: -3, z: 0 });
+      expect(frame.v).toEqual({ x: 0, y: 0, z: 1 });
+      expect(frame.normal).toEqual({ x: 0, y: -1, z: 0 });
+    }
+  );
+
+  it('keeps a legacy Front basis when only its offset changes', () => {
+    const ref = canonicalPlaneRefForEdit(
+      { type: 'canonical', plane: 'XZ', offset: 0 },
+      'XZ',
+      3
+    );
+    expect(ref).toEqual({ type: 'canonical', plane: 'XZ', offset: 3 });
+    expect(frameForPlaneRef(ref, (value) => Number(value)).origin).toEqual({
+      x: 0,
+      y: 3,
+      z: 0
+    });
+  });
+
+  it('keeps a current Front basis on the same plane and uses it when returning to Front', () => {
+    const ref = canonicalPlaneRefForEdit(
+      newCanonicalPlaneRef('XZ', 0),
+      'XZ',
+      3
+    );
+    expect(ref.basisRevision).toBe(2);
+    const side = canonicalPlaneRefForEdit(ref, 'YZ', 3);
+    expect(side).toEqual(newCanonicalPlaneRef('YZ', 3));
+    expect(canonicalPlaneRefForEdit(side, 'XZ', 3)).toEqual(ref);
   });
 });
 

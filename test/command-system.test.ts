@@ -1,4 +1,5 @@
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
+import { canonicalPlaneRefForEdit } from '@openzcad/geometry';
 import {
   CommandManager,
   commandFactories,
@@ -36,6 +37,57 @@ describe('command-system', () => {
 
   afterAll(() => {
     kernel.dispose();
+  });
+
+  it('replays new Front plane edits without reinterpreting old partial-plane commands', async () => {
+    const base = createProjectDocument(
+      'Front edit replay',
+      toUserId('user_test')
+    );
+    const manager = new CommandManager(base);
+    manager.execute(
+      commandFactories.addSketch({
+        name: 'Profile',
+        planeRef: { type: 'canonical', plane: 'XY', offset: 0 },
+        objects: [{ objectKind: 'circle', radius: 4, centerX: 0, centerY: 0 }]
+      })
+    );
+    const sketch = Object.values(manager.document.nodes).find(
+      (node) => node.kind === 'sketch'
+    );
+    if (!sketch) throw new Error('Expected profile');
+    manager.execute(
+      commandFactories.updateSketch({
+        sketchId: sketch.sketchId,
+        planeRef: canonicalPlaneRefForEdit(sketch.planeRef, 'XZ', 3)
+      })
+    );
+    manager.execute(
+      commandFactories.extrudeSketch({
+        name: 'Extrude',
+        sketchId: sketch.sketchId,
+        distance: 5
+      })
+    );
+
+    const current = replayCommands(base, manager.document.commandLog);
+    const currentDerived = await kernel.syncDocument(current);
+    const currentBody = Object.values(currentDerived.bodyRepresentations).find(
+      (body) => !body.consumed
+    )!;
+    expect(currentBody.bbox.min.y).toBeCloseTo(-8, 9);
+    expect(currentBody.bbox.max.y).toBeCloseTo(-3, 9);
+
+    const oldLog = structuredClone(manager.document.commandLog);
+    const edit = oldLog.find((command) => command.kind === 'sketch.update')!;
+    edit.payload = { sketchId: sketch.sketchId, plane: 'XZ', offset: 3 };
+    const legacy = replayCommands(base, oldLog);
+    const legacyDerived = await kernel.syncDocument(legacy);
+    const legacyBody = Object.values(legacyDerived.bodyRepresentations).find(
+      (body) => !body.consumed
+    )!;
+    expect(legacyBody.bbox.min.y).toBeCloseTo(3, 9);
+    expect(legacyBody.bbox.max.y).toBeCloseTo(8, 9);
   });
 
   const edgeReference = {
