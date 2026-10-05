@@ -43,7 +43,12 @@ import type {
 } from './imported-feature-recognition';
 import { collapseShape } from './exact-boolean-helpers';
 import { assertDirectEditOperation } from './exact-direct-edit-guards';
-import { faceHandlesByFingerprint, faceWitnessOf } from './exact-witnesses';
+import {
+  faceHandlesByFingerprint,
+  faceWitnessOf,
+  registerSolidWitnesses
+} from './exact-witnesses';
+import { surfaceTypeOf } from './exact-sync-memo';
 import {
   DIRECT_EDIT_TOLERANCE,
   GEOMETRY_EPSILON,
@@ -141,8 +146,9 @@ function resolveDirectEditFaceInSolids(
     if (matches.length !== 1) throw ambiguousReferenceError('face');
     return { face: matches[0]!, viaLineage: false };
   }
-  const candidates: TopologyResolutionCandidate[] = solids.flatMap((solid) =>
-    Array.from(kernel.getSolidFaces(solid), (handle) => {
+  const candidates: TopologyResolutionCandidate[] = solids.flatMap((solid) => {
+    registerSolidWitnesses(kernel, solid);
+    return Array.from(kernel.getSolidFaces(solid), (handle) => {
       const witness = faceWitnessOf(kernel, handle);
       const lineageReference = lineage?.faceReferences.get(handle);
       return {
@@ -163,8 +169,8 @@ function resolveDirectEditFaceInSolids(
           : {}),
         value: handle
       };
-    })
-  );
+    });
+  });
   const resolution = resolveTopologyReference(
     reference,
     candidates,
@@ -1430,8 +1436,15 @@ export function applyDirectEdit(
     // rebuilds a uniquely proven incident blend region. Unsupported or
     // ambiguous neighborhoods throw; never fall back to the old face-prism
     // construction, which leaves a fillet rim behind as a ledge.
-    const sourceCensus = censusOfSolids(kernel, [solid]);
+    // Surface classes are read once per face per sync: the source's come
+    // from the witnesses its last measurement recorded, and the result's
+    // are shared with its candidates and the measurement that follows.
+    const faceCensus = {
+      getSolidFaces: (body: number) => kernel.getSolidFaces(body),
+      getSurfaceType: (handle: number) => surfaceTypeOf(kernel, handle)
+    };
     const sourceCandidates = topologyCandidatesForSolid(kernel, solid);
+    const sourceCensus = censusOfSolids(faceCensus, [solid]);
     const analytic = tryExactAnalyticCylinderCapOffset(
       kernel,
       solid,
@@ -1452,7 +1465,7 @@ export function applyDirectEdit(
     // Preserve the last exact body instead of committing/exporting its facets.
     const facetFallback = directEditFacetFallbackWarning({
       operands: sourceCensus,
-      result: censusOfSolids(kernel, [output])
+      result: censusOfSolids(faceCensus, [output])
     });
     if (facetFallback) {
       throw new Error(facetFallback);

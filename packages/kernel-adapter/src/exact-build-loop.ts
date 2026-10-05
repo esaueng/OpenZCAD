@@ -106,6 +106,14 @@ export interface FeatureBuildContext {
    */
   strictVerdicts?: StrictUnionVerdicts;
   /**
+   * The linear display deflection a body was last meshed at, if the adapter
+   * holds one (see `heldDisplayTessellation`). The union gate meshes its
+   * result at that value when the body's size stays close, so the projection
+   * it retains for measurement is the one measurement asks for and the
+   * kernel's per-face mesh reuse applies to it.
+   */
+  heldDisplayDeflection?: (bodyId: BodyId) => number | undefined;
+  /**
    * This rebuild's cancellation state. Always set by the loop itself (one
    * shared kernel token per build); builders read the token for the
    * cancellable booleans and the signal for their own probes. Optional only
@@ -161,7 +169,9 @@ export function buildDocumentHistory(
    * `buildBooleanFeature` probes demanded bodies; the history digest carries
    * the same bit so a carrier-only checkpoint is never reused once demanded.
    */
-  lineageDemand?: ReadonlySet<BodyId> | readonly BodyId[]
+  lineageDemand?: ReadonlySet<BodyId> | readonly BodyId[],
+  /** See {@link FeatureBuildContext.heldDisplayDeflection}. */
+  heldDisplayDeflection?: (bodyId: BodyId) => number | undefined
 ): ExactBuildResult {
   const { scope, errors } = getParameterScope(document);
   const result: ExactBuildResult = resume?.initial ?? {
@@ -203,6 +213,7 @@ export function buildDocumentHistory(
     ...(normalizedDemand !== undefined ? { lineageDemand: normalizedDemand } : {}),
     importedSteps,
     strictVerdicts,
+    ...(heldDisplayDeflection === undefined ? {} : { heldDisplayDeflection }),
     ...(cancellation === undefined ? {} : { cancellation })
   };
 

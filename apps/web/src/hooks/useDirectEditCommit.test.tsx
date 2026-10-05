@@ -1,6 +1,10 @@
 import { act, renderHook } from '@testing-library/react';
-import { describe, expect, it, vi } from 'vitest';
-import { CommandManager, commandFactories } from '@openzcad/command-system';
+import { afterEach, describe, expect, it, vi } from 'vitest';
+import {
+  CommandManager,
+  commandFactories,
+  type AnyCommand
+} from '@openzcad/command-system';
 import {
   addPrimitiveFeature,
   createProjectDocument,
@@ -15,6 +19,8 @@ import {
   type BodyRepresentation,
   type ProjectDocument
 } from '@openzcad/shared';
+import { LivePreview } from '../lib/livePreview';
+import { PreviewRebuilds, predictedPreviewMs } from '../lib/previewRebuilds';
 import { useDirectEditCommit } from './useDirectEditCommit';
 
 function body(bodyId: BodyId, name: string): BodyRepresentation {
@@ -386,5 +392,324 @@ describe('direct manipulation commit', () => {
     expect(listFeaturesInOrder(manager.document)[0]!.data).toMatchObject({
       dimensions: { radius: 6.4, height: 12 }
     });
+  });
+});
+
+type Derived = ProjectDocument['derived'];
+
+/**
+ * The radius drag as App wires it: one LivePreview whose frames start their
+ * rebuild through PreviewRebuilds, and a release that commits from the
+ * published frame, else the frame still rebuilding, else its own rebuild.
+ * Every rebuild — preview or commit — is one entry in `syncs`, standing in
+ * for one exact syncDocument in the serialised geometry worker.
+ */
+function radiusDrag(
+  options: {
+    expectedFrameMs?: () => number;
+    /** The dragged body as derived, for the never-measured prediction. */
+    predictFrom?: BodyRepresentation;
+  } = {}
+) {
+  const { sourceBodyId, sourceFeature, fillet } = filletedCylinder();
+  const manager = new CommandManager(fillet.document);
+  const syncs: {
+    document: ProjectDocument;
+    resolve(): void;
+    reject(error: Error): void;
+  }[] = [];
+  const derivedFor = (candidate: ProjectDocument): Derived => ({
+    bodyRepresentations: {
+      [sourceBodyId]: body(sourceBodyId, 'Cylinder'),
+      [fillet.bodyId]: body(fillet.bodyId, 'Two rim fillet')
+    },
+    exportableBodyIds: [fillet.bodyId],
+    warnings: [],
+    updatedAt: candidate.derived.updatedAt
+  });
+  const sync = (document: ProjectDocument) =>
+    new Promise<Derived>((resolve, reject) => {
+      syncs.push({
+        document,
+        resolve: () => resolve(derivedFor(document)),
+        reject
+      });
+    });
+  const resize = (radius: number) =>
+    commandFactories.updateFeature(
+      { featureId: sourceFeature.featureId, data: { dimensions: { radius } } },
+      'Resize Cylinder Radius'
+    );
+  interface Candidate {
+    radius: number;
+    command: AnyCommand;
+    document: ProjectDocument;
+    baseProjectId: ProjectDocument['projectId'];
+    baseVersion: number;
+  }
+  const rebuilds = new PreviewRebuilds<Derived>(() => Date.now());
+  let published: { candidate: Candidate; derived: Derived } | null = null;
+  const preview = new LivePreview<Candidate, Derived>({
+    build: (radius) => {
+      const base = manager.document;
+      const command = resize(radius);
+      return {
+        radius,
+        command,
+        document: command.apply(base),
+        baseProjectId: base.projectId,
+        baseVersion: base.version
+      };
+    },
+    derive: (candidate) =>
+      rebuilds.start(candidate, () => sync(candidate.document), 'body'),
+    publish: (frame) => {
+      published = frame
+        ? { candidate: frame.document, derived: frame.derived }
+        : null;
+    },
+    publishIntermediate: true,
+    continueAfterSlow: true,
+    minIntervalMs: 100,
+    slowSettleMs: 300,
+    now: () => Date.now(),
+    ...(options.expectedFrameMs
+      ? { expectedFrameMs: options.expectedFrameMs }
+      : {}),
+    // As App's expectedFacePreviewMs: measured, else predicted.
+    ...(options.predictFrom
+      ? {
+          expectedFrameMs: () =>
+            rebuilds.expectedMs('body', () =>
+              predictedPreviewMs(options.predictFrom)
+            )
+        }
+      : {})
+  });
+  const commitDerive = vi.fn(sync);
+  const committed: Derived[] = [];
+  const { result } = renderHook(() =>
+    useDirectEditCommit({
+      manager: () => manager,
+      derive: commitDerive,
+      commit: (command, derived) => {
+        manager.execute(command);
+        committed.push(derived);
+        return true;
+      },
+      onValidationStart: () => preview.stop(),
+      onValidationFailed: vi.fn(),
+      onCommitted: () => preview.clear(),
+      onBusy: vi.fn(),
+      onStatus: vi.fn()
+    })
+  );
+  const targets = [
+    { featureName: 'Cylinder', resultBodyId: sourceBodyId },
+    { featureName: 'Two rim fillet', resultBodyId: fillet.bodyId }
+  ];
+  /** Mirrors handleCylinderRadiusCommit. */
+  function release(radius: number): Promise<boolean> {
+    const live = manager.document;
+    const reuse = rebuilds.reusable(
+      published,
+      preview.running?.document,
+      (candidate) =>
+        candidate.radius === radius &&
+        candidate.baseProjectId === live.projectId &&
+        candidate.baseVersion === live.version
+    );
+    return result.current.run(
+      reuse?.candidate.command ?? resize(radius),
+      fillet.bodyId,
+      'Adjusted cylinder radius.',
+      radius,
+      undefined,
+      targets,
+      reuse
+        ? {
+            baseProjectId: reuse.candidate.baseProjectId,
+            baseVersion: reuse.candidate.baseVersion,
+            derived: reuse.derived
+          }
+        : undefined
+    );
+  }
+  const radiusOf = (document: ProjectDocument) => {
+    const data = listFeaturesInOrder(document)[0]!.data;
+    return data.featureKind === 'primitive' ? data.dimensions.radius : null;
+  };
+  return {
+    manager,
+    preview,
+    syncs,
+    commitDerive,
+    committed,
+    release,
+    radiusOf,
+    published: () => published
+  };
+}
+
+describe('releasing a slow live preview', () => {
+  afterEach(() => {
+    vi.useRealTimers();
+  });
+
+  it('derives once when released at the value still rebuilding', async () => {
+    vi.useFakeTimers();
+    const drag = radiusDrag();
+    drag.preview.request(6.4);
+    expect(drag.syncs).toHaveLength(1);
+
+    let applied: Promise<boolean> = Promise.resolve(false);
+    await act(async () => {
+      applied = drag.release(6.4);
+      await vi.advanceTimersByTimeAsync(1_000);
+    });
+    // The commit waits on the preview's own rebuild rather than queuing the
+    // same edit behind it.
+    expect(drag.commitDerive).not.toHaveBeenCalled();
+    expect(drag.syncs).toHaveLength(1);
+
+    await act(async () => {
+      drag.syncs[0]!.resolve();
+      await vi.advanceTimersByTimeAsync(0);
+    });
+    await expect(applied).resolves.toBe(true);
+    expect(drag.syncs).toHaveLength(1);
+    expect(drag.committed).toHaveLength(1);
+    expect(drag.radiusOf(drag.manager.document)).toBe(6.4);
+    // Released, so the late frame never published over the commit.
+    expect(drag.published()).toBeNull();
+  });
+
+  it('queues no preview ahead of the release on a body known to be slow', async () => {
+    vi.useFakeTimers();
+    const drag = radiusDrag({ expectedFrameMs: () => 12_000 });
+    for (let step = 1; step <= 18; step += 1) {
+      drag.preview.request(4.6 + step / 10);
+      await vi.advanceTimersByTimeAsync(16);
+    }
+
+    let applied: Promise<boolean> = Promise.resolve(false);
+    await act(async () => {
+      applied = drag.release(6.4);
+      await vi.advanceTimersByTimeAsync(1_000);
+    });
+    // The only rebuild is the release's own: no stale frame ahead of it.
+    expect(drag.syncs).toHaveLength(1);
+    expect(drag.commitDerive).toHaveBeenCalledTimes(1);
+    await act(async () => {
+      drag.syncs[0]!.resolve();
+      await vi.advanceTimersByTimeAsync(0);
+    });
+    await expect(applied).resolves.toBe(true);
+    expect(drag.radiusOf(drag.manager.document)).toBe(6.4);
+  });
+
+  it('queues no preview ahead of the first release on a large imported body', async () => {
+    // Never previewed, so nothing is measured: the body's size alone says
+    // its frames will be slow, and the gesture rests from the first move.
+    vi.useFakeTimers();
+    const drag = radiusDrag({
+      predictFrom: {
+        ...body('body_imported_holder' as BodyId, 'Imported holder'),
+        source: 'imported-step',
+        faceCount: 160
+      }
+    });
+    for (let step = 1; step <= 18; step += 1) {
+      drag.preview.request(4.6 + step / 10);
+      await vi.advanceTimersByTimeAsync(16);
+    }
+    expect(drag.preview.degraded).toBe(true);
+
+    let applied: Promise<boolean> = Promise.resolve(false);
+    await act(async () => {
+      applied = drag.release(6.4);
+      await vi.advanceTimersByTimeAsync(1_000);
+    });
+    expect(drag.syncs).toHaveLength(1);
+    expect(drag.commitDerive).toHaveBeenCalledTimes(1);
+    await act(async () => {
+      drag.syncs[0]!.resolve();
+      await vi.advanceTimersByTimeAsync(0);
+    });
+    await expect(applied).resolves.toBe(true);
+    expect(drag.radiusOf(drag.manager.document)).toBe(6.4);
+  });
+
+  it('still rebuilds a different value behind the first frame of an unknown body', async () => {
+    // The residual cost, pinned so it is not mistaken for fixed: on a body
+    // neither measured nor predicted slow the worker cannot drop the frame
+    // it started for 4.7, and 6.4 is another edit.
+    vi.useFakeTimers();
+    const drag = radiusDrag();
+    for (let step = 1; step <= 18; step += 1) {
+      drag.preview.request(4.6 + step / 10);
+      await vi.advanceTimersByTimeAsync(16);
+    }
+    expect(drag.syncs).toHaveLength(1);
+    expect(drag.preview.running?.value).toBeCloseTo(4.7, 9);
+
+    let applied: Promise<boolean> = Promise.resolve(false);
+    await act(async () => {
+      applied = drag.release(6.4);
+      await vi.advanceTimersByTimeAsync(0);
+    });
+    expect(drag.commitDerive).toHaveBeenCalledTimes(1);
+    expect(drag.syncs).toHaveLength(2);
+    await act(async () => {
+      drag.syncs[0]!.resolve();
+      drag.syncs[1]!.resolve();
+      await vi.advanceTimersByTimeAsync(1_000);
+    });
+    await expect(applied).resolves.toBe(true);
+    // Released, so nothing more was queued after the stale frame landed.
+    expect(drag.syncs).toHaveLength(2);
+  });
+
+  it('commits a finished preview without rebuilding, as before', async () => {
+    vi.useFakeTimers();
+    const drag = radiusDrag();
+    drag.preview.request(6.4);
+    await act(async () => {
+      drag.syncs[0]!.resolve();
+      await vi.advanceTimersByTimeAsync(0);
+    });
+    const shown = drag.published();
+    expect(shown?.candidate.radius).toBe(6.4);
+
+    let applied = false;
+    await act(async () => {
+      applied = await drag.release(6.4);
+    });
+    expect(applied).toBe(true);
+    expect(drag.commitDerive).not.toHaveBeenCalled();
+    expect(drag.syncs).toHaveLength(1);
+    // The very rebuild the preview showed is the one committed.
+    expect(drag.committed).toEqual([shown!.derived]);
+    expect(drag.committed[0]).toBe(shown!.derived);
+  });
+
+  it('rebuilds afresh when the shared rebuild fails outright', async () => {
+    vi.useFakeTimers();
+    const drag = radiusDrag();
+    drag.preview.request(6.4);
+    let applied: Promise<boolean> = Promise.resolve(false);
+    await act(async () => {
+      applied = drag.release(6.4);
+      drag.syncs[0]!.reject(new Error('Geometry worker restarted.'));
+      await vi.advanceTimersByTimeAsync(0);
+    });
+    // A worker failure says nothing about the edit: the commit asks again.
+    expect(drag.commitDerive).toHaveBeenCalledTimes(1);
+    expect(drag.syncs).toHaveLength(2);
+    await act(async () => {
+      drag.syncs[1]!.resolve();
+      await vi.advanceTimersByTimeAsync(0);
+    });
+    await expect(applied).resolves.toBe(true);
   });
 });
