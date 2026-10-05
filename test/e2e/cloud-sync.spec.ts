@@ -514,6 +514,16 @@ test('opens a project read-only when another tab already has it', async ({
 
   // The tab that owns it keeps editing.
   await expect(page.getByRole('button', { name: /^Box \(B\)/ })).toBeEnabled();
+  await renameProject(page, 'Owner latest');
+  await expect.poll(() => storedProjectNames(page)).toEqual(['Owner latest']);
+  // The waiting tab still displays its older snapshot. Save must check the
+  // ownership lock before touching the shared device record.
+  await second.keyboard.press('ControlOrMeta+s');
+  await expect(
+    second.locator('.workspace-toast-body [role="status"]')
+  ).toContainText('Editing is locked');
+  await second.waitForTimeout(500);
+  expect(await storedProjectNames(second)).toEqual(['Owner latest']);
 
   // Handing the project back promotes the tab that was waiting for it.
   await page.goto('about:blank');
@@ -522,7 +532,8 @@ test('opens a project read-only when another tab already has it', async ({
   });
   await expect(
     second.locator('.workspace-toast-body [role="status"]')
-  ).toContainText('This tab can edit the project now.');
+  ).toContainText('Editing this project here now.');
+  await expect(second.getByRole('banner')).toContainText('Owner latest');
   await second.close();
 });
 

@@ -739,6 +739,36 @@ describe('CameraController wheel device detection', () => {
 });
 
 describe('CameraController wheel zoom', () => {
+  it('keeps trackpad pan inert while controls or panning are disabled', () => {
+    const { controller, wheel } = createController(false);
+    const before = controller.capture();
+    controller.controls.enabled = false;
+    wheel({ deltaX: 4, deltaY: 10 });
+    expect(controller.capture()).toEqual(before);
+    controller.controls.enabled = true;
+    controller.controls.enablePan = false;
+    const disabledPan = wheel({ deltaX: 4, deltaY: 10 });
+    expect(disabledPan.stopImmediatePropagation).toHaveBeenCalledOnce();
+    expect(controller.capture()).toEqual(before);
+    controller.dispose();
+    wheel({ deltaX: 4, deltaY: 10 });
+    expect(controller.capture()).toEqual(before);
+  });
+
+  it('swallows trackpad pan while a modeling button or external orbit is held', () => {
+    const { controller, wheel } = createController(false);
+    const before = controller.capture();
+    const held = wheel({ deltaX: 4, deltaY: 10, buttons: 1 });
+    expect(held.stopImmediatePropagation).toHaveBeenCalledOnce();
+    expect(controller.capture()).toEqual(before);
+    controller.beginOrbitDrag();
+    const orbit = wheel({ deltaX: 4, deltaY: 10 });
+    expect(orbit.stopImmediatePropagation).toHaveBeenCalledOnce();
+    expect(controller.capture()).toEqual(before);
+    controller.endOrbitDrag();
+    controller.dispose();
+  });
+
   it('swallows a wheel packet while an external orbit or a button is held', () => {
     const { controller, wheel } = createController(false);
     const before = controller.capture();
