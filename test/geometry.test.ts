@@ -1,8 +1,11 @@
 import { describe, expect, it } from 'vitest';
 import {
+  FRONT_FACING_XZ_BASIS,
   PLANE_BASES,
+  canonicalPlaneBasis,
   circleProfile,
   frameForPlaneRef,
+  newCanonicalPlaneRef,
   polygonProfile,
   rectangleProfile,
   solidFromTriangles,
@@ -29,8 +32,10 @@ function signedArea(points: { x: number; y: number }[]): number {
 
 describe('sketch plane frames', () => {
   it('keeps every canonical basis right-handed (u x v = normal)', () => {
-    for (const plane of ['XY', 'XZ', 'YZ'] as const) {
-      const { u, v, normal } = PLANE_BASES[plane];
+    for (const { u, v, normal } of [
+      ...Object.values(PLANE_BASES),
+      FRONT_FACING_XZ_BASIS
+    ]) {
       const cross = {
         x: u.y * v.z - u.z * v.y,
         y: u.z * v.x - u.x * v.z,
@@ -52,6 +57,48 @@ describe('sketch plane frames', () => {
     expect(basis.u).toEqual(PLANE_BASES.XZ.u);
     expect(basis.v).toEqual(PLANE_BASES.XZ.v);
     expect(basis.normal).toEqual(PLANE_BASES.XZ.normal);
+  });
+
+  it('resolves a revision-2 XZ plane to face the Front view', () => {
+    // The Front view looks along +Y from -Y with +Z up, so screen-right is +X
+    // and screen-up is +Z. Revision 1's XZ (v = -Z, normal +Y) is viewed from
+    // behind the model and reads mirrored; revision 2 must read u right and
+    // v up from the front, with its offset sliding toward that viewer.
+    const basis = frameForPlaneRef(
+      { type: 'canonical', plane: 'XZ', offset: 'h', basisRevision: 2 },
+      () => 7
+    );
+    expect(basis.origin).toEqual({ x: 0, y: -7, z: 0 });
+    expect(basis.u).toEqual({ x: 1, y: 0, z: 0 });
+    expect(basis.v).toEqual({ x: 0, y: 0, z: 1 });
+    expect(basis.normal).toEqual({ x: 0, y: -1, z: 0 });
+  });
+
+  it('keeps XY and YZ identical across basis revisions', () => {
+    expect(canonicalPlaneBasis('XY', 2)).toBe(PLANE_BASES.XY);
+    expect(canonicalPlaneBasis('YZ', 2)).toBe(PLANE_BASES.YZ);
+    expect(canonicalPlaneBasis('XZ')).toBe(PLANE_BASES.XZ);
+  });
+
+  it('writes the basis revision on new refs only where it changes the basis', () => {
+    // Saved XY and YZ sketches must stay byte-identical to new ones, and a
+    // legacy XZ ref with no revision must keep resolving to revision 1.
+    expect(newCanonicalPlaneRef('XY', 3)).toEqual({
+      type: 'canonical',
+      plane: 'XY',
+      offset: 3
+    });
+    expect(newCanonicalPlaneRef('YZ', 0)).toEqual({
+      type: 'canonical',
+      plane: 'YZ',
+      offset: 0
+    });
+    expect(newCanonicalPlaneRef('XZ', 0)).toEqual({
+      type: 'canonical',
+      plane: 'XZ',
+      offset: 0,
+      basisRevision: 2
+    });
   });
 
   it('uses a stored frame verbatim for non-canonical plane references', () => {

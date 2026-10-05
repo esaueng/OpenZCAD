@@ -1,4 +1,8 @@
-import { PLANE_BASES, type PlaneBasis } from '@openzcad/geometry';
+import {
+  FRONT_FACING_XZ_BASIS,
+  PLANE_BASES,
+  type PlaneBasis
+} from '@openzcad/geometry';
 import type { SketchMoveHandle } from '../interaction/machine';
 import type {
   SketchObjectData,
@@ -360,10 +364,11 @@ const sameAxis = (a: Vector3, b: Vector3) =>
  * otherwise ran down the screen.
  *
  * Canonical planes return null and keep their established world-up views:
- * XZ's v is world -Z, so rolling to it would stand the model on its head.
+ * revision 1's XZ has v on world -Z, so rolling to it would stand the model
+ * on its head; revision 2's XZ already reads +v up under world up.
  */
 export function sketchEntryUp(basis: PlaneBasis): Vector3 | null {
-  const canonical = Object.values(PLANE_BASES).some(
+  const canonical = [...Object.values(PLANE_BASES), FRONT_FACING_XZ_BASIS].some(
     (plane) =>
       sameAxis(plane.u, basis.u) &&
       sameAxis(plane.v, basis.v) &&
