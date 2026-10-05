@@ -1,5 +1,11 @@
 import { type Locator, type Page } from '@playwright/test';
-import { bareCanvasDrags, expect, stubApi, test } from './openzcad-fixtures';
+import {
+  bareCanvasDrags,
+  expect,
+  stubApi,
+  test,
+  waitForStillViewport
+} from './openzcad-fixtures';
 
 /**
  * Sketch objects move by dragging their grab point: a circle by its centre,
@@ -22,32 +28,6 @@ async function openTopSketch(page: Page, name: string) {
   await expect(page.locator('.sketch-rail')).toBeVisible();
   await waitForStillViewport(page);
   return page.getByRole('toolbar', { name: 'Sketch tools' });
-}
-
-/**
- * Waits for the sketch entry glide to land. The render loop draws on demand
- * and stops once nothing moves, so a frame counter that holds still across
- * a window proves the camera is at rest; screen points taken before that
- * map to a different spot on the plane once the glide finishes.
- */
-async function waitForStillViewport(page: Page) {
-  const canvas = page.locator('.viewer-host canvas');
-  const frames = async () =>
-    Number(
-      (await canvas.evaluate(
-        (element) => (element as HTMLElement).dataset.e2eFrames
-      )) ?? '0'
-    );
-  await expect
-    .poll(
-      async () => {
-        const before = await frames();
-        await page.waitForTimeout(400);
-        return (await frames()) - before;
-      },
-      { timeout: 20_000 }
-    )
-    .toBe(0);
 }
 
 /**
