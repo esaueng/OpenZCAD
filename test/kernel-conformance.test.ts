@@ -484,6 +484,31 @@ describe('exact kernel conventions', { timeout: 30_000 }, () => {
     expect(distance).toBeCloseTo(solvedCircle.radius, 7);
   });
 
+  it('refuses the converged zero-vector perpendicular solve without publishing collapsed geometry', async () => {
+    const base = createProjectDocument(
+      'Parallel perpendicular',
+      toUserId('user_conformance')
+    );
+    const { document, sketchId } = addSketchFeature(base, {
+      name: 'Lines',
+      planeRef: { type: 'canonical', plane: 'XY', offset: 0 },
+      objects: [
+        { objectKind: 'line', x1: -37, y1: 14, x2: -10, y2: 14 },
+        { objectKind: 'line', x1: 4, y1: -14, x2: 32, y2: -14 }
+      ]
+    });
+    const [a, b] = findSketch(document, sketchId)!.objectIds;
+    const constrained = addSketchConstraint(document, {
+      sketchId,
+      constraint: { constraintKind: 'perpendicular', a: a!, b: b! }
+    }).document;
+    const before = structuredClone(constrained);
+    await expect(exact.solveSketch(constrained, sketchId)).rejects.toThrow(
+      /collapse.*No change was applied/
+    );
+    expect(constrained).toEqual(before);
+  });
+
   it('rolls back a sketch whose driving dimensions conflict', async () => {
     const base = createProjectDocument(
       'GCS Conflict',

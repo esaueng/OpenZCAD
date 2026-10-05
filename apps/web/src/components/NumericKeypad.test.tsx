@@ -25,7 +25,7 @@ function setup(initial: string, selectInitial?: boolean) {
     />
   );
   return {
-    input: screen.getByRole<HTMLInputElement>('textbox'),
+    input: screen.getByRole<HTMLInputElement>('textbox', { name: 'Height' }),
     onPreview,
     onCommit
   };

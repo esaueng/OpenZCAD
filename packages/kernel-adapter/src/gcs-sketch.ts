@@ -476,6 +476,33 @@ export function solveSketchWithGcs(
     };
   });
 
+  // GCS can report convergence after satisfying a direction relation with a
+  // zero vector. Never publish that degeneration as solved document geometry.
+  for (const [index, solved] of solvedObjects.entries()) {
+    const original = objects[index]!;
+    const numbers = Object.values(solved).filter(
+      (value): value is number => typeof value === 'number'
+    );
+    const originalSize =
+      original.kind === 'line'
+        ? Math.hypot(original.x2 - original.x1, original.y2 - original.y1)
+        : original.radius;
+    const solvedSize =
+      solved.kind === 'line'
+        ? Math.hypot(solved.x2 - solved.x1, solved.y2 - solved.y1)
+        : solved.radius;
+    // Relative to the input entity and read-back precision, not project units.
+    const floor = Math.max(
+      originalSize * 1e-10,
+      Number.EPSILON * Math.max(...numbers.map(Math.abs), originalSize) * 16
+    );
+    if (!numbers.every(Number.isFinite) || solvedSize <= floor) {
+      throw new Error(
+        'Sketch solve would collapse or invalidate an entity. No change was applied. Move the geometry or edit/remove a conflicting constraint, then try again.'
+      );
+    }
+  }
+
   return {
     classification,
     converged: diagnostics.converged === true,

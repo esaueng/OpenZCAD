@@ -26,6 +26,11 @@ self.onmessage = async (event: MessageEvent<FreecadImportWorkerRequest>) => {
   try {
     if (file.size > FREECAD_IMPORT_LIMITS.maxArchiveBytes)
       throw new Error('FreeCAD import is limited to 32 MB.');
+    self.postMessage({
+      requestId,
+      type: 'progress',
+      message: 'Reading and validating saved FreeCAD bodies…'
+    } satisfies FreecadImportWorkerResult);
     const result = await convertFreecadToStep(
       new Uint8Array(await file.arrayBuffer()),
       {

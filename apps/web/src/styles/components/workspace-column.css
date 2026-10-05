@@ -248,7 +248,7 @@
 /* The verb recedes so the filter's value reads first. */
 .viewport-dock-filter-label {
   margin-right: 0.5em;
-  color: var(--color-text-dim);
+  color: var(--color-text-muted);
 }
 
 /* "Snap" and "Grid": a flex item drops its trailing space, so the margin

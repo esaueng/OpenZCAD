@@ -72,6 +72,36 @@ function renderSidebar(
 }
 
 describe('Sidebar', () => {
+  it('keeps the consumed-source disclosure inside a list item', async () => {
+    const panelState = defaultPanelState();
+    panelState.sidebarSections.bodies = true;
+    const body = {
+      bodyId: 'body-1',
+      name: 'Original',
+      consumed: true
+    } as unknown as BodyRepresentation;
+    renderSidebar({ panelState, representations: { 'body-1': body } });
+    const list = screen.getByRole('list', { name: 'Bodies' });
+    expect(
+      [...list.children].every(
+        (child) => child.getAttribute('role') === 'listitem'
+      )
+    ).toBe(true);
+    const disclosure = screen.getByRole('button', { name: '1 source body' });
+    await userEvent.click(disclosure);
+    expect(disclosure).toHaveAttribute('aria-expanded', 'true');
+    expect(
+      screen.getByRole('button', { name: 'Original' })
+    ).toBeInTheDocument();
+  });
+  it('gives the empty Bodies message list-item semantics', () => {
+    const panelState = defaultPanelState();
+    panelState.sidebarSections.bodies = true;
+    renderSidebar({ panelState });
+    expect(
+      screen.getByText('No bodies yet. Create a primitive or extrude a sketch.')
+    ).toHaveAttribute('role', 'listitem');
+  });
   it('collapses History into one line that counts and names the newest feature', () => {
     const { container } = renderSidebar();
     const header = screen.getByTitle('Expand History');
