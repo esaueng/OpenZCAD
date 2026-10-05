@@ -140,7 +140,9 @@ restoration. The desktop app signs in through the browser: it starts a
 short-lived sign-in attempt, the browser approves it, and the app exchanges it
 for refreshable access tokens, so no password or session cookie ever passes
 through the native shell. It needs macOS 14+, Xcode Command Line Tools, and
-stable Rust 1.85 or newer with the `aarch64-apple-darwin` target:
+current stable Rust with the `aarch64-apple-darwin` target. The desktop crate
+declares Rust 1.85 as its minimum; the current locked dependencies require
+Rust 1.88 or newer:
 
 ```bash
 pnpm dev:desktop      # tauri dev against the local workspace
