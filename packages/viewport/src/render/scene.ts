@@ -1045,6 +1045,12 @@ export interface CameraPose {
   target: THREE.Vector3;
   near: number;
   far: number;
+  /**
+   * Screen-up to arrive with and hold, instead of world up's projection.
+   * Sketch entry sets it so the plane's axes read right and up; any later
+   * pose without one, or an orbit, hands the roll back to world up.
+   */
+  up?: THREE.Vector3;
 }
 
 /**
