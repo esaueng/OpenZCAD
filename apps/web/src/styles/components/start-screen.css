@@ -41,8 +41,8 @@
 /* ── StartScreen ─────────────────────────────────────────── */
 
 /* A library shell: a fixed column on the left (identity, the launch form, the
-   shelves, the demos, the account readout), the shelf you are looking at
-   filling the rest, and a status footer. Every block is a direct grid item
+   shelves, the demos, the cloud card), the shelf you are looking at filling
+   the rest. Every block is a direct grid item
    placed by name, so the same markup re-flows for the three layouts below —
    the column, the first run (demos take the stage) and a narrow window (one
    scrolling column) — without any block existing twice. */
@@ -56,25 +56,24 @@
      a grid track defaults to min-content, which on a phone let the toolbar
      hold the whole page wider than the screen. */
   grid-template-columns: var(--start-column-w) minmax(0, 1fr);
-  grid-template-rows: auto auto auto minmax(0, 1fr) auto var(--statusbar-h);
+  grid-template-rows: auto auto auto minmax(0, 1fr) auto;
   grid-template-areas:
     'header  body'
     'launch  body'
     'library body'
     'learn   body'
-    'account body'
-    'foot    foot';
+    'cloud   body';
   background: var(--color-bg);
   overflow: hidden;
 }
 
 /* The column's surface, drawn once behind its blocks so each block can be a
-   separate grid item. Stops above the footer, which has its own surface. */
+   separate grid item. */
 .start-screen::before {
   content: '';
   position: absolute;
   top: 0;
-  bottom: var(--statusbar-h);
+  bottom: 0;
   left: 0;
   width: var(--start-column-w);
   background: var(--color-surface);
@@ -348,15 +347,24 @@
   }
 }
 
-/* ── Column: account readout ─────────────────────────────── */
+/* ── Column: cloud card ──────────────────────────────────── */
 
-.start-account {
-  grid-area: account;
+/* Where the parts are kept, closing the column, said as one sentence with at
+   most one action beside it. The icon carries the tone (saved, not saved,
+   failed) so the words can stay short; the full account is in the tooltip. */
+.start-cloud {
+  grid-area: cloud;
   align-self: end;
   display: grid;
+  grid-template-columns: minmax(0, 1fr);
   gap: var(--sp-2);
   margin: 0 12px 12px;
-  padding: 10px;
+}
+
+.start-account {
+  display: grid;
+  gap: 7px;
+  padding: 9px 10px;
   color: var(--color-text-subtle);
   background: var(--color-surface-2);
   border: var(--border-thin);
@@ -364,32 +372,96 @@
   font-size: var(--fs-sm);
 }
 
-.start-account-head {
+.start-account-row {
   display: flex;
   align-items: center;
   gap: var(--sp-2);
+  min-height: 20px;
 }
 
-.start-account-head strong {
-  color: var(--color-text);
-  font-weight: var(--fw-medium);
+.start-account-row > svg {
+  flex: none;
 }
 
-.start-account-head svg.is-synced {
+.start-account.is-saved .start-account-row > svg {
   color: var(--color-success);
 }
 
-.start-account-count {
-  margin-left: auto;
-  font-family: var(--font-mono);
-  font-size: var(--fs-mini);
-  font-variant-numeric: tabular-nums;
+.start-account.is-warning .start-account-row > svg {
+  color: var(--color-warning);
 }
 
-.start-account-track {
-  height: 3px;
-  background: var(--color-border);
+.start-account.is-failed .start-account-row > svg {
+  color: var(--color-error);
+}
+
+.start-account.is-busy .start-account-row > svg {
+  color: var(--color-accent);
+}
+
+.start-account-text {
+  flex: 1;
+  min-width: 0;
+  overflow: hidden;
+  color: var(--color-text);
+  white-space: nowrap;
+  text-overflow: ellipsis;
+}
+
+.start-account.is-idle .start-account-text {
+  color: var(--color-text-subtle);
+}
+
+/* A text action, not a second button row: the sentence and its verb read as
+   one line. */
+.start-account-action {
+  flex: none;
+  min-height: 0;
+  height: 20px;
+  padding: 0 4px;
+  color: var(--color-accent);
+  font-size: var(--fs-sm);
+  font-weight: var(--fw-medium);
+  background: none;
+  border: none;
   border-radius: var(--radius-sm);
+  cursor: pointer;
+}
+
+.start-account-action:hover:not(:disabled) {
+  color: var(--color-accent-hi);
+  background: var(--color-accent-dim);
+}
+
+.start-account-action:disabled {
+  color: var(--color-text-subtle);
+  cursor: default;
+}
+
+.start-account-dismiss {
+  display: inline-flex;
+  flex: none;
+  min-height: 0;
+  padding: 3px;
+  color: var(--color-text-subtle);
+  background: none;
+  border: none;
+  border-radius: var(--radius-sm);
+  cursor: pointer;
+}
+
+.start-account-dismiss:hover {
+  color: var(--color-text);
+  background: var(--color-surface);
+}
+
+/* A hairline under the sentence: what is in the account, then (during or
+   after a run) what could not get there. */
+.start-account-track {
+  display: flex;
+  height: 2px;
+  background: var(--color-border);
+  border-radius: 1px;
   overflow: hidden;
 }
 
@@ -398,6 +470,52 @@
   height: 100%;
   background: var(--color-success);
   transition: width var(--dur-base) var(--ease-out);
+}
+
+.start-account-fill.is-failed {
+  background: var(--color-error);
+}
+
+/* After a run, each part that did not make it, with its own retry. The
+   reason is in the tooltip; the column is too narrow to print it. The column
+   does not scroll, so a long list scrolls inside the card instead of running
+   off the window; the dismiss and Retry-all controls sit above it in the
+   sentence row and stay in reach either way. */
+.start-sync-failures {
+  display: grid;
+  align-content: start;
+  gap: 2px;
+  max-height: min(30vh, 220px);
+  margin: 0;
+  padding: 0;
+  overflow-y: auto;
+  overscroll-behavior: contain;
+  list-style: none;
+}
+
+.start-sync-failure {
+  display: flex;
+  align-items: center;
+  gap: var(--sp-2);
+  padding-left: 22px;
+}
+
+.start-sync-failure-name {
+  flex: 1;
+  min-width: 0;
+  overflow: hidden;
+  color: var(--color-text);
+  white-space: nowrap;
+  text-overflow: ellipsis;
+}
+
+/* News the sentence does not already carry, such as a refused name. */
+.start-status {
+  margin: 0;
+  color: var(--color-text-subtle);
+  font-size: var(--fs-xs);
+  line-height: 1.4;
+  overflow-wrap: anywhere;
 }
 
 /* ── Body: the shelf ─────────────────────────────────────── */
@@ -586,138 +704,6 @@
 
 .start-shelf-action.is-destructive {
   color: var(--color-error);
-}
-
-/* ── Cloud status bars ───────────────────────────────────── */
-
-/*
- * The offer to upload device-only work. It reads as information rather than a
- * warning: keeping a part on one machine is a legitimate choice, and the bar
- * exists to make the alternative reachable, not to nag.
- */
-.start-adopt-bar {
-  display: flex;
-  align-items: center;
-  gap: var(--sp-2);
-  padding: var(--sp-2) var(--sp-3);
-  background: var(--color-surface);
-  border: var(--border-thin);
-  border-radius: var(--radius-md);
-  color: var(--color-text-subtle);
-  font-size: var(--fs-sm);
-}
-
-.start-adopt-bar.is-unavailable {
-  color: var(--color-warning);
-}
-
-/*
- * The adopt bar's live sibling: while a save-all run is on screen it takes the
- * bar's slot, and it keeps the failures readable after the run finishes.
- */
-.start-sync-panel {
-  display: flex;
-  flex-direction: column;
-  gap: var(--sp-2);
-  padding: var(--sp-2) var(--sp-3);
-  background: var(--color-surface);
-  border: var(--border-thin);
-  border-radius: var(--radius-md);
-  color: var(--color-text-subtle);
-  font-size: var(--fs-sm);
-}
-
-.start-sync-head {
-  display: flex;
-  align-items: center;
-  gap: var(--sp-2);
-}
-
-.start-sync-head svg.is-synced {
-  color: var(--color-success);
-}
-
-.start-sync-head svg.is-failed {
-  color: var(--color-error);
-}
-
-.start-sync-title {
-  flex: 1;
-  color: var(--color-text);
-}
-
-.start-sync-dismiss {
-  display: inline-flex;
-  padding: 3px;
-  background: none;
-  border: none;
-  border-radius: var(--radius-sm);
-  color: var(--color-text-subtle);
-  cursor: pointer;
-}
-
-.start-sync-dismiss:hover {
-  color: var(--color-text);
-  background: var(--color-surface-2);
-}
-
-/* Two segments share one track: what made it, then what did not. */
-.start-sync-track {
-  display: flex;
-  height: 4px;
-  border-radius: var(--radius-md);
-  background: var(--color-surface-2);
-  overflow: hidden;
-}
-
-.start-sync-fill {
-  height: 100%;
-  background: var(--color-success);
-  transition: width var(--dur-base) var(--ease-out);
-}
-
-.start-sync-fill.is-failed {
-  background: var(--color-error);
-}
-
-.start-sync-failures {
-  display: flex;
-  flex-direction: column;
-  gap: var(--sp-1);
-  margin: 0;
-  padding: 0;
-  list-style: none;
-}
-
-.start-sync-failure {
-  display: flex;
-  align-items: center;
-  gap: var(--sp-2);
-  padding: var(--sp-1) 0;
-  border-top: var(--border-thin);
-}
-
-.start-sync-failure > svg {
-  flex-shrink: 0;
-  color: var(--color-error);
-}
-
-.start-sync-failure-name {
-  flex-shrink: 0;
-  max-width: 18ch;
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-  color: var(--color-text);
-  font-weight: var(--fw-medium);
-}
-
-.start-sync-failure-detail {
-  flex: 1;
-  min-width: 0;
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
 }
 
 /* ── Part tiles ──────────────────────────────────────────── */
@@ -1044,53 +1030,31 @@
   border: var(--border-thin);
 }
 
-/* ── Footer ──────────────────────────────────────────────── */
+/* ── Cloud card: update notice ───────────────────────────── */
 
-.start-foot {
-  grid-area: foot;
+/* A newer build is out: said in the accent, with the action beside it, as a
+   pill above the cloud card. */
+.start-update {
   display: flex;
   align-items: center;
-  gap: var(--sp-3);
-  padding: 0 var(--sp-4);
-  background: var(--color-surface);
-  border-top: var(--border-thin);
-}
-
-/* A newer build is out: said in the accent, with the action beside it, not
-   in the footer's small grey status type. The pill must stay shorter than
-   the 30px bar — at the shared button's 32px minimum it spilled over the
-   bar's top edge and was clipped at the window's bottom. */
-.start-update {
-  display: inline-flex;
-  flex: none;
-  align-items: center;
+  justify-content: space-between;
   gap: var(--sp-2);
-  height: 22px;
-  padding: 0 2px 0 8px;
+  min-height: 26px;
+  padding: 3px 3px 3px 10px;
   color: var(--color-text);
   font-size: var(--fs-xs);
-  white-space: nowrap;
   background: var(--color-accent-dim);
   border: 1px solid var(--color-accent-border);
   border-radius: var(--radius-md);
 }
 
 .start-update button {
+  flex: none;
   min-height: 0;
-  height: 18px;
+  height: 20px;
   padding: 0 8px;
   font-size: var(--fs-xs);
   border-radius: var(--radius-sm);
-}
-
-.start-status {
-  min-width: 0;
-  overflow: hidden;
-  color: var(--color-text-subtle);
-  font-family: var(--font-mono);
-  font-size: var(--fs-xs);
-  white-space: nowrap;
-  text-overflow: ellipsis;
 }
 
 /* Discovery keeps the library layout; unknown data is never an empty shelf
@@ -1115,19 +1079,17 @@
 /* ── First run ───────────────────────────────────────────── */
 
 /* With nothing saved yet the demos take the stage under the empty shelf as
-   full cards, and the account readout closes the column on its own. */
+   full cards, and the cloud card closes the column on its own. */
 @media (min-width: 901px) {
   .start-screen.is-fresh {
     /* The empty shelf stretches to fill the stage above the demo cards, so
-       the page reads as an empty stage with the demos anchored under it;
-       the account readout closes the column on its own. */
-    grid-template-rows: auto auto minmax(0, 1fr) auto var(--statusbar-h);
+       the page reads as an empty stage with the demos anchored under it. */
+    grid-template-rows: auto auto minmax(0, 1fr) auto;
     grid-template-areas:
       'header  body'
       'launch  body'
       'library body'
-      'account learn'
-      'foot    foot';
+      'cloud   learn';
   }
 
   .start-screen.is-fresh .start-library {
@@ -1157,7 +1119,7 @@
 /* ── Narrow layouts ──────────────────────────────────────── */
 
 /* One column that scrolls as a page: identity, the launch card, the shelves
-   as a tab strip, the shelf itself, the demos as cards, the account readout. */
+   as a tab strip, the shelf itself, the demos as cards, the cloud card. */
 @media (max-width: 900px) {
   .start-screen,
   .start-screen.is-fresh {
@@ -1165,17 +1127,14 @@
     /* The shelf never shrinks below its content here: the page scrolls as
        a whole, and a track that could collapse would let the shelf spill
        over the demos beneath it. */
-    grid-template-rows: auto auto auto minmax(max-content, 1fr) auto auto var(
-        --statusbar-h
-      );
+    grid-template-rows: auto auto auto minmax(max-content, 1fr) auto auto;
     grid-template-areas:
       'header'
       'launch'
       'library'
       'body'
       'learn'
-      'account'
-      'foot';
+      'cloud';
     overflow-x: hidden;
     overflow-y: auto;
   }
@@ -1295,7 +1254,7 @@
     overflow: visible;
   }
 
-  .start-account {
+  .start-cloud {
     align-self: start;
     margin: 0 var(--sp-3) var(--sp-3);
   }

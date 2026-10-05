@@ -1941,6 +1941,59 @@ describe('exact kernel adapter', { timeout: 30_000 }, () => {
     });
   });
 
+  it('builds a Front (XZ) sketch on the basis revision it records', async () => {
+    // One rectangle, off-centre in both plane axes, extruded 5 on each
+    // revision. Revision 1 (v = -Z, normal +Y) lands it below the grid and
+    // behind the XZ plane; revision 2 (v = +Z, normal -Y) above and in front.
+    const build = async (basisRevision?: 2) => {
+      const { document: withSketch, sketchId } = addSketchFeature(
+        createProjectDocument('Front sketch', toUserId('user_exact')),
+        {
+          name: 'Front profile',
+          planeRef: {
+            type: 'canonical',
+            plane: 'XZ',
+            offset: 0,
+            ...(basisRevision ? { basisRevision } : {})
+          },
+          objects: [
+            {
+              objectKind: 'rectangle',
+              width: 4,
+              height: 6,
+              centerX: 10,
+              centerY: 20
+            }
+          ]
+        }
+      );
+      const { document, bodyId } = extrudeSketch(withSketch, {
+        name: 'Front extrude',
+        sketchId,
+        distance: 5
+      });
+      const derived = await adapter.syncDocument(document);
+      expect(derived.warnings).toEqual([]);
+      return derived.bodyRepresentations[bodyId]!.bbox;
+    };
+
+    const legacy = await build();
+    expect(legacy.min.x).toBeCloseTo(8, 7);
+    expect(legacy.max.x).toBeCloseTo(12, 7);
+    expect(legacy.min.y).toBeCloseTo(0, 7);
+    expect(legacy.max.y).toBeCloseTo(5, 7);
+    expect(legacy.min.z).toBeCloseTo(-23, 7);
+    expect(legacy.max.z).toBeCloseTo(-17, 7);
+
+    const front = await build(2);
+    expect(front.min.x).toBeCloseTo(8, 7);
+    expect(front.max.x).toBeCloseTo(12, 7);
+    expect(front.min.y).toBeCloseTo(-5, 7);
+    expect(front.max.y).toBeCloseTo(0, 7);
+    expect(front.min.z).toBeCloseTo(17, 7);
+    expect(front.max.z).toBeCloseTo(23, 7);
+  });
+
   it('fuses adjacent selected cells without an internal wall', async () => {
     const resolve = (value: ParamValue): number =>
       typeof value === 'number' ? value : Number(value);

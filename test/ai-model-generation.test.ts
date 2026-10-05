@@ -1,5 +1,9 @@
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
-import { CommandManager, commandsForCadPatch } from '@openzcad/command-system';
+import {
+  CommandManager,
+  commandsForCadPatch,
+  replayCommands
+} from '@openzcad/command-system';
 import {
   createCadDocumentDigest,
   groundCadPatchProposalToSelection,
@@ -329,6 +333,60 @@ describe('AI-generated sketch regions', () => {
       ]
     });
   }
+
+  it('authors Front AI sketches with revision 2 and preserves both replay bases', async () => {
+    const initial = createProjectDocument(
+      'AI Front sketch',
+      toUserId('user_ai')
+    );
+    const proposal = ringProposal();
+    const sketchOperation = proposal.operations[0]!;
+    if (sketchOperation.kind !== 'add_sketch')
+      throw new Error('Expected sketch');
+    sketchOperation.plane = 'XZ';
+    sketchOperation.offset = 3;
+    const manager = new CommandManager(initial);
+    const document = manager.runTransaction(
+      'Apply Front sketch',
+      commandsForCadPatch(initial, proposal)
+    );
+    const sketchOf = (value: typeof document) =>
+      Object.values(value.nodes).find((node) => node.kind === 'sketch');
+    expect(sketchOf(document)?.planeRef).toEqual({
+      type: 'canonical',
+      plane: 'XZ',
+      offset: 3,
+      basisRevision: 2
+    });
+    const replayed = replayCommands(initial, document.commandLog);
+    expect(sketchOf(replayed)?.planeRef).toEqual(sketchOf(document)?.planeRef);
+    const derived = await adapter.syncDocument(replayed);
+    const body = Object.values(derived.bodyRepresentations).find(
+      (candidate) => !candidate.consumed
+    )!;
+    expect(body.bbox.min.y).toBeCloseTo(-15, 9);
+    expect(body.bbox.max.y).toBeCloseTo(-3, 9);
+
+    // Old serialized commands keep their old basis; only new authoring stamps it.
+    const legacyLog = structuredClone(document.commandLog);
+    const addSketch = legacyLog.find(
+      (command) => command.kind === 'sketch.add'
+    )!;
+    const payload = addSketch.payload as { planeRef: { basisRevision?: 2 } };
+    delete payload.planeRef.basisRevision;
+    const legacy = replayCommands(initial, legacyLog);
+    expect(sketchOf(legacy)?.planeRef).toEqual({
+      type: 'canonical',
+      plane: 'XZ',
+      offset: 3
+    });
+    const oldDerived = await adapter.syncDocument(legacy);
+    const oldBody = Object.values(oldDerived.bodyRepresentations).find(
+      (candidate) => !candidate.consumed
+    )!;
+    expect(oldBody.bbox.min.y).toBeCloseTo(3, 9);
+    expect(oldBody.bbox.max.y).toBeCloseTo(15, 9);
+  });
 
   it('parses the sketch-and-region vocabulary', () => {
     expect(() => ringProposal()).not.toThrow();

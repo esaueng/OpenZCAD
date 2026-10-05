@@ -21,13 +21,21 @@ import { CommandManager, commandFactories } from '@openzcad/command-system';
 import {
   buildTextProfileSet,
   setTextFontProvider,
-  type LoadedFont
+  type BezierRegionCurve,
+  type LoadedFont,
+  type TextSegment,
+  type Vec2Like
 } from '@openzcad/geometry';
 import {
   DEFAULT_EXACT_BEZIER_EDGES,
   bezierProfileEdgesEnabled,
   setBezierProfileEdges
 } from '@openzcad/kernel-adapter';
+import {
+  kernelReadsBezierAsCircle,
+  kernelSafeBezierPieces
+} from '../packages/kernel-adapter/src/profile-bezier-edges';
+import { RemusKernel } from '../packages/kernel-adapter/src/remus-runtime';
 import {
   createExactKernelAdapter,
   type ExactKernelAdapter
@@ -344,9 +352,9 @@ describe('text built by the exact kernel', { timeout: 120_000 }, () => {
     // below is real, measured and exportable; it is merely faceted. A commit
     // gate that refused on this would throw away work that succeeded, which
     // is what it did while every warning looked alike.
-    expect(
-      flattened.featureWarnings?.map((entry) => entry.kind)
-    ).toContain('advisory');
+    expect(flattened.featureWarnings?.map((entry) => entry.kind)).toContain(
+      'advisory'
+    );
     const flattenedFaces = bodyOf(flattened).topology?.faces ?? [];
     expect(
       flattenedFaces.filter((face) => face.geometry?.surfaceType === 'bspline')
@@ -685,9 +693,7 @@ describe('text built by the exact kernel', { timeout: 120_000 }, () => {
         const pocket = addSketchFeature(withSlab, {
           name: 'Cavity',
           planeRef: { type: 'canonical', plane: 'XY', offset: top },
-          objects: [
-            { objectKind: 'rectangle', ...center, width: 6, height: 3 }
-          ]
+          objects: [{ objectKind: 'rectangle', ...center, width: 6, height: 3 }]
         });
         const hollowed = extrudeSketch(pocket.document, {
           name: 'Cavity cut',
@@ -768,6 +774,17 @@ describe('text built by the exact kernel', { timeout: 120_000 }, () => {
           const expected =
             operation === 'subtract' ? slab - glyphVolume : slab + glyphVolume;
           expect(volumeRatio(body, expected)).toBeCloseTo(1, 5);
+          // ...and neither does it reach the published size. The cut trims
+          // the pierced walls back to the face, but the kernel boxes a
+          // trimmed B-spline face by its untrimmed surface, so the slab read
+          // 10.01 tall — inside one display deflection, where the mesh alone
+          // could not prove the box loose (refineBoundsAtSplineFaces).
+          const actualTop =
+            operation === 'subtract' ? SLAB.depth : SLAB.depth + DEPTH;
+          expect(body.bbox.max.z).toBeGreaterThanOrEqual(actualTop);
+          // The reported side keeps its outward tessellation tolerance,
+          // while still displaying 10.00 rather than the untrimmed 10.01.
+          expect(body.bbox.max.z).toBeLessThan(actualTop + 0.005);
 
           // The travel never reaches the document: the extrude still stores
           // the user's distance and no back distance.
@@ -905,5 +922,407 @@ describe('text built by the exact kernel', { timeout: 120_000 }, () => {
     } finally {
       setBezierProfileEdges(DEFAULT_EXACT_BEZIER_EDGES);
     }
+  });
+
+  /**
+   * Open Sans's lowercase 'b' at em 10 could not be cut into or embossed onto
+   * a face it crossed, while 'd' and 'p' — the same bowl mirrored and dropped
+   * — could. The cause is one segment: the quadratic that runs up the inside
+   * of the stem where it meets the bowl, 0.48 mm long and within 0.1 µm of
+   * straight. The pinned kernel's extrude reads that nearly straight parabola
+   * as a circle (it fits one of radius 302 mm to 1e-5) and builds its wall as
+   * that cylinder, which misses the wall's own bezier cap edges by up to
+   * 10 µm; every exact boolean that has to trim the wall then refuses. The
+   * adapter now splits such a curve, exactly, into pieces the kernel reads
+   * as lines (`kernelSafeBezierPieces`).
+   */
+  describe('a nearly straight glyph curve the kernel reads as a circle', () => {
+    // Open Sans 'b' at em 10, outer loop segment 14, placed at (20, 20).
+    const A = { x: 21.62109375, y: 24.5849609375 };
+    const C = { x: 21.630859375, y: 24.755859375 };
+    const B = { x: 21.64794921875, y: 25.0634765625 };
+
+    function controlPoints(segment: TextSegment): Vec2Like[] {
+      if (segment.kind === 'line') return [segment.a, segment.b];
+      if (segment.kind === 'quadratic') {
+        return [segment.a, segment.control, segment.b];
+      }
+      return [segment.a, segment.control1, segment.control2, segment.b];
+    }
+
+    function quadraticParams(points: readonly Vec2Like[]): Float64Array {
+      const count = points.length;
+      return Float64Array.from([
+        count - 1,
+        count,
+        ...Array<number>(count).fill(0),
+        ...Array<number>(count).fill(1),
+        ...points.flatMap((point) => [point.x, point.y]),
+        ...Array<number>(count).fill(1)
+      ]);
+    }
+
+    /** A prism on the bezier A-C-B closed by two lines, from z0 down. */
+    function sliverPrism(
+      kernel: RemusKernel,
+      curves: readonly (readonly Vec2Like[])[],
+      z0: number,
+      depth: number
+    ): number {
+      const apex = { x: 21.6650390625, y: 27.59765625 };
+      const last = curves.at(-1)!.at(-1)!;
+      const edges = [
+        ...curves.map((points) =>
+          kernel.liftCurve2dToPlane(
+            3,
+            quadraticParams(points),
+            0,
+            0,
+            z0,
+            1,
+            0,
+            0,
+            0,
+            0,
+            1,
+            0,
+            1
+          )
+        ),
+        kernel.makeLineEdge(last.x, last.y, z0, apex.x, apex.y, z0),
+        kernel.makeLineEdge(apex.x, apex.y, z0, A.x, A.y, z0)
+      ];
+      const face = kernel.makePlanarFaceFromWire(
+        kernel.makeWire(Uint32Array.from(edges), true)
+      );
+      return kernel.extrude(face, 0, 0, -1, depth);
+    }
+
+    function curvedWallTypes(kernel: RemusKernel, solid: number): string[] {
+      return Array.from(kernel.getSolidFaces(solid))
+        .map((face) => kernel.getSurfaceType(face))
+        .filter((type) => type !== 'plane');
+    }
+
+    it('pins the kernel defect on a three-edge prism', () => {
+      // A kernel canary, not app behaviour. When this fails the pinned
+      // kernel stopped misreading the curve (the remus extrude side-face
+      // path gained the exact-circle check its cap-edge pass already has),
+      // and kernelSafeBezierPieces can be retired.
+      const kernel = new RemusKernel();
+      try {
+        const slab = kernel.makeBox(62, 50, 10);
+        const crossing = sliverPrism(kernel, [[A, C, B]], 10.5, 2.5);
+        expect(curvedWallTypes(kernel, crossing)).toEqual(['cylinder']);
+        expect(() =>
+          kernel.booleanWithQuality('cut', slab, crossing, true)
+        ).toThrow(/exact-only/);
+        // Buried in the slab, so no face crosses the wall, it cuts.
+        const buried = sliverPrism(kernel, [[A, C, B]], 9.5, 2);
+        expect(
+          kernel.booleanWithQuality('cut', slab, buried, true).quality
+        ).toBe('exact');
+
+        // The same curve as the adapter now hands it over: split exactly,
+        // every piece a ruled B-spline wall, and the cut goes through.
+        const curve: BezierRegionCurve = {
+          kind: 'bezier',
+          a: A,
+          b: B,
+          controls: [C],
+          sourceObjectId: 'probe'
+        };
+        const pieces = kernelSafeBezierPieces(curve);
+        expect(pieces.length).toBeGreaterThan(1);
+        const split = sliverPrism(
+          kernel,
+          pieces.map((piece) => [piece.a, ...piece.controls, piece.b]),
+          10.5,
+          2.5
+        );
+        expect(curvedWallTypes(kernel, split)).toEqual(
+          pieces.map(() => 'bspline')
+        );
+        const cut = kernel.booleanWithQuality('cut', slab, split, true);
+        expect(cut.quality).toBe('exact');
+        // The split tool removes its own footprint, 2 mm deep. (The volume
+        // integrator is good to ~1e-5 relative on spline walls.)
+        const footprint = kernel.volume(split, 0.08) / 2.5;
+        expect(
+          (62 * 50 * 10 - kernel.volume(cut.solid, 0.08)) / 2 / footprint
+        ).toBeCloseTo(1, 4);
+      } finally {
+        kernel.free();
+      }
+    });
+
+    it("predicts the kernel's verdict on every Open Sans glyph curve", () => {
+      // The adapter only splits what the kernel would misread, so the
+      // prediction has to agree with the pinned kernel itself. A curve and
+      // its chord make a D-shaped face; its curved wall shows the verdict.
+      const kernel = new RemusKernel();
+      let curves = 0;
+      let circles = 0;
+      let refused = 0;
+      try {
+        for (const size of [5, 10]) {
+          const set = buildTextProfileSet(openSans, {
+            text: 'abdghjpqvwAKMNQW46',
+            size
+          });
+          for (const region of set.regions) {
+            for (const loop of [region.outer, ...region.holes]) {
+              for (const segment of loop.segments) {
+                if (segment.kind === 'line') continue;
+                const points = controlPoints(segment);
+                const first = points[0]!;
+                const last = points.at(-1)!;
+                const face = kernel.makePlanarFaceFromWire(
+                  kernel.makeWire(
+                    Uint32Array.of(
+                      kernel.liftCurve2dToPlane(
+                        3,
+                        quadraticParams(points),
+                        0,
+                        0,
+                        0,
+                        1,
+                        0,
+                        0,
+                        0,
+                        0,
+                        1,
+                        0,
+                        1
+                      ),
+                      kernel.makeLineEdge(
+                        last.x,
+                        last.y,
+                        0,
+                        first.x,
+                        first.y,
+                        0
+                      )
+                    ),
+                    true
+                  )
+                );
+                const flagged = kernelReadsBezierAsCircle(points);
+                let solid: number;
+                try {
+                  solid = kernel.extrude(face, 0, 0, 1, 1);
+                } catch (error) {
+                  // The same misreading, met earlier: the cap-edge pass
+                  // recognizes the curve as a circle, then refuses it on
+                  // its own midpoint check. Only a flagged curve may do it.
+                  expect(String(error)).toMatch(/recognized extrude circle/);
+                  expect(flagged).toBe(true);
+                  refused += 1;
+                  continue;
+                }
+                const cylinder = curvedWallTypes(kernel, solid).includes(
+                  'cylinder'
+                );
+                expect(flagged).toBe(cylinder);
+                curves += 1;
+                if (cylinder) circles += 1;
+              }
+            }
+          }
+        }
+      } finally {
+        kernel.free();
+      }
+      // Both verdicts must actually occur for the agreement to mean much.
+      expect(curves).toBeGreaterThan(200);
+      expect(circles).toBeGreaterThan(5);
+      expect(refused).toBeLessThan(curves / 10);
+    });
+
+    it('subdivides large Lora glyph curves beyond the small-count search', async () => {
+      const font = await library.load('lora', 'regular');
+      const profiles = buildTextProfileSet(font, { text: 'F', size: 180 });
+      let largestSplit = 0;
+      let flagged = 0;
+      for (const region of profiles.regions) {
+        for (const segment of region.outer.segments) {
+          if (segment.kind === 'line') continue;
+          const points = controlPoints(segment);
+          if (!kernelReadsBezierAsCircle(points)) continue;
+          const curve: BezierRegionCurve = {
+            kind: 'bezier',
+            a: segment.a,
+            b: segment.b,
+            controls:
+              segment.kind === 'quadratic'
+                ? [segment.control]
+                : [segment.control1, segment.control2],
+            sourceObjectId: 'large-glyph-probe'
+          };
+          flagged += 1;
+          const pieces = kernelSafeBezierPieces(curve);
+          largestSplit = Math.max(largestSplit, pieces.length);
+          expect(pieces[0]!.a).toBe(curve.a);
+          expect(pieces.at(-1)!.b).toBe(curve.b);
+          for (const piece of pieces) {
+            expect(
+              kernelReadsBezierAsCircle([piece.a, ...piece.controls, piece.b])
+            ).toBe(false);
+          }
+        }
+      }
+      expect(flagged).toBeGreaterThan(0);
+      expect(largestSplit).toBeGreaterThan(64);
+      expect(largestSplit).toBeLessThanOrEqual(1024);
+    });
+
+    it('splits exactly, sharing every joint', () => {
+      const curve: BezierRegionCurve = {
+        kind: 'bezier',
+        a: A,
+        b: B,
+        controls: [C],
+        sourceObjectId: 'probe'
+      };
+      const pieces = kernelSafeBezierPieces(curve);
+      expect(pieces[0]!.a).toBe(A);
+      expect(pieces.at(-1)!.b).toBe(B);
+      for (let index = 1; index < pieces.length; index += 1) {
+        expect(pieces[index]!.a).toBe(pieces[index - 1]!.b);
+      }
+      // Every piece traces the original polynomial: piece k over [0, 1] is
+      // the curve over [k/n, (k+1)/n].
+      const at = (points: readonly Vec2Like[], t: number): Vec2Like => {
+        const [p0, p1, p2] = points as [Vec2Like, Vec2Like, Vec2Like];
+        const u = 1 - t;
+        return {
+          x: u * u * p0.x + 2 * u * t * p1.x + t * t * p2.x,
+          y: u * u * p0.y + 2 * u * t * p1.y + t * t * p2.y
+        };
+      };
+      pieces.forEach((piece, index) => {
+        for (const t of [0.25, 0.5, 0.75]) {
+          const mine = at([piece.a, ...piece.controls, piece.b], t);
+          const original = at([A, C, B], (index + t) / pieces.length);
+          expect(
+            Math.hypot(mine.x - original.x, mine.y - original.y)
+          ).toBeLessThan(1e-12);
+        }
+        expect(
+          kernelReadsBezierAsCircle([piece.a, ...piece.controls, piece.b])
+        ).toBe(false);
+      });
+      // A curve the kernel reads correctly is handed over untouched.
+      const round: BezierRegionCurve = {
+        ...curve,
+        controls: [{ x: 22, y: 24.8 }]
+      };
+      expect(kernelSafeBezierPieces(round)).toEqual([round]);
+    });
+
+    const SLAB = { width: 62, height: 50, depth: 10 } as const;
+
+    function labelScene(
+      text: string,
+      distance: number,
+      options: { offset?: number; rotation?: number } = {}
+    ): { document: ProjectDocument; sketchId: SketchId; objectId: EntityId } {
+      const withBox = addPrimitiveFeature(
+        createProjectDocument('Label', toUserId('user_text_label')),
+        { name: 'Slab', primitiveKind: 'box', dimensions: { ...SLAB } }
+      );
+      const slabId = withBox.bodyOrder.at(-1)!;
+      const created = addSketchFeature(withBox, {
+        name: 'Label',
+        planeRef: {
+          type: 'canonical',
+          plane: 'XY',
+          offset: options.offset ?? SLAB.depth
+        },
+        objects: [
+          textObject(text, {
+            size: 10,
+            x: 20,
+            y: 20,
+            ...(options.rotation === undefined
+              ? {}
+              : { rotation: options.rotation })
+          })
+        ]
+      });
+      const objectId = findSketch(created.document, created.sketchId)!
+        .objectIds[0]!;
+      const document = extrudeSketch(created.document, {
+        name: 'Label text',
+        sketchId: created.sketchId,
+        distance,
+        operation: distance < 0 ? 'cut' : 'add',
+        targetBodyId: slabId,
+        profiles: [{ all: true, sourceEntityIds: [objectId] }]
+      }).document;
+      return { document, sketchId: created.sketchId, objectId };
+    }
+
+    async function expectLabel(
+      document: ProjectDocument,
+      text: string,
+      depth: number
+    ): Promise<BodyRepresentation> {
+      const derived = await adapter.syncDocument(document);
+      expect(derived.featureWarnings ?? []).toEqual([]);
+      expect(derived.warnings).toEqual([]);
+      const body = bodyOf(derived);
+      const glyphs = textArea(openSans, text, 10) * Math.abs(depth);
+      const slab = SLAB.width * SLAB.height * SLAB.depth;
+      expect(
+        volumeRatio(body, depth < 0 ? slab - glyphs : slab + glyphs)
+      ).toBeCloseTo(1, 5);
+      const closure = inspectTriangleMeshClosure(
+        body.mesh.vertices,
+        body.mesh.indices
+      );
+      expect(closure.boundaryEdges).toBe(0);
+      expect(closure.nonManifoldEdges).toBe(0);
+      return body;
+    }
+
+    it("cuts a 'b' whose walls cross the face", async () => {
+      // Sketched 0.5 above the face and cut 2.5 down: a genuine through-face
+      // tool with no coplanar cap, so the pierce never runs.
+      await expectLabel(
+        labelScene('b', -2.5, { offset: SLAB.depth + 0.5 }).document,
+        'b',
+        -2
+      );
+    });
+
+    it("engraves and embosses 'Bob' on the face, upright and turned", async () => {
+      const engraved = await expectLabel(
+        labelScene('Bob', -2).document,
+        'Bob',
+        -2
+      );
+      expect(engraved.bbox.max.z).toBeGreaterThanOrEqual(SLAB.depth);
+      expect(engraved.bbox.max.z).toBeLessThan(SLAB.depth + 0.005);
+      await expectLabel(labelScene('Bob', 2).document, 'Bob', 2);
+      await expectLabel(
+        labelScene('Bob', -2, { rotation: 89 }).document,
+        'Bob',
+        -2
+      );
+    });
+
+    it("re-enters an engraved 'Boa' and retypes it to 'Bob'", async () => {
+      // The reported flow: the edit used to be refused with "Subtract
+      // refused ... The sketch edit was not saved."
+      const scene = labelScene('Boa', -2);
+      await expectLabel(scene.document, 'Boa', -2);
+      const edited = updateSketchObject(scene.document, {
+        sketchId: scene.sketchId,
+        objectId: scene.objectId,
+        data: textObject('Bob', { size: 10, x: 20, y: 20 })
+      });
+      await expectLabel(edited, 'Bob', -2);
+    });
   });
 });

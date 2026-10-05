@@ -1,6 +1,11 @@
 import { GEOMETRY_LINEAR_TOLERANCE } from './tolerance';
 import { boundedPolygonSides } from './regions';
-import type { ParamValue, SketchPlaneRef } from '@openzcad/shared';
+import type {
+  CanonicalPlaneBasisRevision,
+  ParamValue,
+  PlaneId,
+  SketchPlaneRef
+} from '@openzcad/shared';
 
 export {
   GEOMETRY_LINEAR_TOLERANCE,
@@ -190,6 +195,67 @@ export const PLANE_BASES: Record<'XY' | 'XZ' | 'YZ', PlaneBasis> = {
 };
 
 /**
+ * Revision 2 of the XZ basis: the same plane, turned to face the Front view
+ * (which looks along +Y from -Y). Revision 1's XZ has its normal on +Y, so a
+ * sketch entered head-on views it from behind the model, where +u runs left
+ * and +v runs down and text reads upside down; no camera roll fixes that
+ * without turning the model upside down. Here u × v = normal still holds, so
+ * a counter-clockwise profile still extrudes outward, toward the viewer, as
+ * it does on XY and YZ. See {@link canonicalPlaneBasis}.
+ */
+export const FRONT_FACING_XZ_BASIS: PlaneBasis = {
+  origin: vec(0, 0, 0),
+  u: vec(1, 0, 0),
+  v: vec(0, 0, 1),
+  normal: vec(0, -1, 0)
+};
+
+/** The revision new sketches on a canonical plane are written with. */
+export const CURRENT_CANONICAL_BASIS_REVISION: CanonicalPlaneBasisRevision = 2;
+
+/**
+ * The basis a canonical plane resolves to under a basis revision; absent is
+ * revision 1, {@link PLANE_BASES}. Only XZ differs between revisions.
+ */
+export function canonicalPlaneBasis(
+  plane: PlaneId,
+  revision?: CanonicalPlaneBasisRevision
+): PlaneBasis {
+  return plane === 'XZ' && revision === 2
+    ? FRONT_FACING_XZ_BASIS
+    : PLANE_BASES[plane];
+}
+
+/**
+ * The plane reference a new sketch on a canonical plane is written with. It
+ * carries the current basis revision only where that changes the basis, so
+ * XY and YZ refs stay byte-identical to the ones written before revisions.
+ */
+export function newCanonicalPlaneRef(
+  plane: PlaneId,
+  offset: ParamValue
+): Extract<SketchPlaneRef, { type: 'canonical' }> {
+  const basisRevision = CURRENT_CANONICAL_BASIS_REVISION;
+  return canonicalPlaneBasis(plane, basisRevision) === PLANE_BASES[plane]
+    ? { type: 'canonical', plane, offset }
+    : { type: 'canonical', plane, offset, basisRevision };
+}
+
+/**
+ * Authoring only: preserve a saved basis on the same plane, use the current
+ * basis when changing planes. Historical command replay keeps its stored ref.
+ */
+export function canonicalPlaneRefForEdit(
+  previous: SketchPlaneRef,
+  plane: PlaneId,
+  offset: ParamValue
+): Extract<SketchPlaneRef, { type: 'canonical' }> {
+  return previous.type === 'canonical' && previous.plane === plane
+    ? { ...previous, offset }
+    : newCanonicalPlaneRef(plane, offset);
+}
+
+/**
  * Resolves a sketch plane reference to a concrete basis. This is the single
  * shared resolution path — the kernel adapter and the viewport must agree on
  * where a sketch plane sits. Canonical refs carry a parametric offset, so the
@@ -201,7 +267,7 @@ export function frameForPlaneRef(
   resolveOffset: (value: ParamValue) => number
 ): PlaneBasis {
   if (ref.type === 'canonical') {
-    const base = PLANE_BASES[ref.plane];
+    const base = canonicalPlaneBasis(ref.plane, ref.basisRevision);
     const offset = resolveOffset(ref.offset);
     return {
       origin: vec(

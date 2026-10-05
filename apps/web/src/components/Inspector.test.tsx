@@ -191,6 +191,7 @@ describe('Inspector feature provenance', () => {
   it('rejects stale Apply and Delete actions', () => {
     const props = makeProps({
       commandSession: null,
+      featureSelectionSource: 'pinned',
       onValidateSelection: () => false
     });
     render(<Inspector {...props} />);
@@ -205,7 +206,11 @@ describe('Inspector feature provenance', () => {
   });
 
   it('resets a form to committed values after undo, redo or a document update', () => {
-    const props = makeProps({ commandSession: null, documentVersion: 1 });
+    const props = makeProps({
+      commandSession: null,
+      featureSelectionSource: 'pinned',
+      documentVersion: 1
+    });
     const { rerender } = render(<Inspector {...props} />);
     fireEvent.change(screen.getByLabelText('Radius'), {
       target: { value: '9' }
@@ -262,6 +267,73 @@ describe('Inspector feature provenance', () => {
     expect(
       within(inspector).getByRole('button', { name: /Delete feature/ })
     ).toBeVisible();
+  });
+
+  it.each([
+    ['face', frontFace, 'Front face'],
+    [
+      'edge',
+      { bodyId, kind: 'edge', topologyId: 'edge:rim', hash: 11 },
+      'Edge'
+    ],
+    ['body', { bodyId, kind: 'body' }, body.name]
+  ] as const)(
+    'keeps an inferred %s read-only without a command',
+    (_kind, topology, title) => {
+      const props = makeProps({
+        commandSession: null,
+        selectedTopology: topology
+      });
+      render(<Inspector {...props} />);
+      const inspector = screen.getByRole('region', {
+        name: 'Feature inspector'
+      });
+      expect(inspector).toHaveClass('object-readout');
+      expect(
+        within(inspector).getByRole('heading', { level: 2 })
+      ).toHaveTextContent(title);
+      expect(within(inspector).getByText('120 mm³')).toBeVisible();
+      expect(
+        within(inspector).queryByLabelText('Radius')
+      ).not.toBeInTheDocument();
+      expect(
+        within(inspector).queryByLabelText('More actions')
+      ).not.toBeInTheDocument();
+      fireEvent.click(within(inspector).getByRole('button', { name: 'Edit' }));
+      expect(props.onPinFeature).toHaveBeenCalledWith(feature);
+    }
+  );
+
+  it('refuses Edit when the inferred selection has gone stale', () => {
+    const props = makeProps({ onValidateSelection: () => false });
+    render(<Inspector {...props} />);
+    fireEvent.click(screen.getByRole('button', { name: 'Edit' }));
+    expect(props.onPinFeature).not.toHaveBeenCalled();
+    expect(screen.queryByLabelText('Radius')).not.toBeInTheDocument();
+  });
+
+  it('holds keyboard focus when Edit replaces the readout with a feature form', () => {
+    function Harness() {
+      const [pinned, setPinned] = useState(false);
+      return (
+        <Inspector
+          {...makeProps({
+            featureSelectionSource: pinned ? 'pinned' : 'inferred',
+            commandSession: null,
+            onPinFeature: () => setPinned(true)
+          })}
+        />
+      );
+    }
+    render(<Harness />);
+    const edit = screen.getByRole('button', { name: 'Edit' });
+    edit.focus();
+    fireEvent.click(edit);
+    expect(
+      screen.getByRole('region', { name: 'Feature inspector' })
+    ).toHaveFocus();
+    expect(screen.getByLabelText('Radius')).toHaveValue('2');
+    expect(screen.getByLabelText('More actions')).toBeVisible();
   });
 });
 

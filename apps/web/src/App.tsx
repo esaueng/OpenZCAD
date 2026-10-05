@@ -86,6 +86,8 @@ import type {
 import {
   appendRevision,
   createCheckpoint,
+  createSavePoint,
+  createSavedRevision,
   createProjectDocument,
   duplicateProjectDocument,
   findBodyNode,
@@ -109,9 +111,11 @@ import {
   type StaleDirectEditFaceRepair
 } from '@openzcad/document-core';
 import {
+  canonicalPlaneRefForEdit,
   circleProfile,
   computeSketchProfileAnalysis,
   computeSketchRegions,
+  newCanonicalPlaneRef,
   polygonProfile,
   rectangleProfile,
   type PlaneBasis,
@@ -273,6 +277,7 @@ import {
   currentVersionOf,
   type WorkspaceSaveState
 } from './lib/cloudProjectAutosave';
+import { applyAccountProjectRefresh } from './lib/accountProjectRefresh';
 import {
   decideProjectSync,
   shouldPollForFreshness
@@ -468,7 +473,8 @@ import {
   idleWorkspaceHint
 } from './lib/platformShortcut';
 import { retireStatus, type StatusEntry } from './lib/statusLifetime';
-import { NumericKeypad, type KeypadRequest } from './components/NumericKeypad';
+import { LIBRARY_MODE_STATUS } from './lib/libraryStatus';
+import type { KeypadRequest } from './components/NumericKeypad';
 import type { DimensionMode } from './lib/keypad';
 import {
   IDLE,
@@ -667,6 +673,20 @@ const stepImportRun = () => import('./lib/stepImportRun');
  * kernel adapter's inference helpers stay out of the launcher chunk.
  */
 const extrudeInference = () => import('./lib/extrudeInference');
+
+// The touch keypad is needed only when a numeric field requests it.
+const LazyNumericKeypad = lazyWithStaleChunkNotice(() =>
+  import('./components/NumericKeypad').then((module) => ({
+    default: module.NumericKeypad
+  }))
+);
+function NumericKeypad(props: ComponentProps<typeof LazyNumericKeypad>) {
+  return (
+    <Suspense fallback={null}>
+      <LazyNumericKeypad {...props} />
+    </Suspense>
+  );
+}
 
 const LazyViewerShell = lazyWithStaleChunkNotice(() =>
   import('./components/ViewerShell').then((module) => ({
@@ -1269,19 +1289,6 @@ const START_SCREEN_DEMOS =
     ? [...DEMO_DEFINITIONS, VISUAL_SELECTION_ACCEPTANCE_DEMO]
     : DEMO_DEFINITIONS;
 
-const DEMO_PROJECT_IDS = new Set<string>(
-  START_SCREEN_DEMOS.map((demo) => demo.projectId)
-);
-
-/**
- * Counts what the start screen header counts — the user's own projects. The
- * merged list also carries the demo parts, so status lines built from its raw
- * length contradicted the header by exactly the demo count.
- */
-function userProjectCount(projects: readonly { projectId: string }[]): number {
-  return projects.filter((project) => !DEMO_PROJECT_IDS.has(project.projectId))
-    .length;
-}
 
 declare global {
   interface Window {
@@ -1617,7 +1624,13 @@ function localRecoveryCopy(
     root.name = name;
     root.revisionId = null;
   }
-  return normalizeDocumentHistory(beforeRename, copy);
+  // The source's save points stay with the source; the copy starts its own
+  // record. Born with none at all, it could not be saved: every Save,
+  // including Save to my account, refused for want of a revision to name.
+  return createSavedRevision(
+    normalizeDocumentHistory(beforeRename, copy),
+    `Recovered from ${source.name}`
+  );
 }
 
 /**
@@ -2040,7 +2053,9 @@ export function App() {
       ? 'face'
       : effectiveSelectionFilter(manualSelectionFilter, tool);
   const [statusEntry, setStatusEntry] = useState<StatusEntry>(() => ({
-    text: cloudFunctionsEnabled ? 'Checking beta API...' : 'Offline workspace',
+    text: cloudFunctionsEnabled
+      ? LIBRARY_MODE_STATUS.checking
+      : LIBRARY_MODE_STATUS.offline,
     at: Date.now(),
     sticky: false
   }));
@@ -2069,7 +2084,7 @@ export function App() {
   const [toast, setToast] = useState<ToastModel | null>(null);
   /**
    * A newer build is out. The workspace says so in a toast; the start screen
-   * has no toast lane, so it keeps a Reload offer in its footer.
+   * has no toast lane, so it keeps a Reload offer above its cloud card.
    */
   const [newBuildAvailable, setNewBuildAvailable] = useState(false);
   const toastIdRef = useRef(0);
@@ -2547,13 +2562,13 @@ export function App() {
   const viewportMenuHandlersRef = useRef({
     launchTool,
     validateSelectionEdit,
-    handleDeleteFeature,
+    handleSelectFeatureFromTree,
     toggleBodyVisibility
   });
   viewportMenuHandlersRef.current = {
     launchTool,
     validateSelectionEdit,
-    handleDeleteFeature,
+    handleSelectFeatureFromTree,
     toggleBodyVisibility
   };
   const managerRef = useRef<CommandManager | null>(null);
@@ -3892,9 +3907,9 @@ export function App() {
       await saveLocalProject(copy);
       // The shelf never loads a document to draw a card, so a copy saved
       // without a preview would stay a placeholder until it is opened. Seed it
-      // now, while the meshes are in memory; a failure here must not undo the
-      // recovery itself.
-      await Promise.all([
+      // now, while the meshes are in memory. The durable copy is complete;
+      // optional preview rendering must not delay the user's resolution.
+      void Promise.all([
         import('./lib/recoveryCopyThumbnail'),
         import('./lib/partThumbnail')
       ])
@@ -3906,18 +3921,10 @@ export function App() {
           })
         )
         .catch(() => undefined);
+      // From the document just written, so the card counts the copy's own
+      // recovery save point rather than claiming it has none.
       setProjects((current) =>
-        mergeProjectSummaries(
-          [
-            {
-              projectId: copy.projectId,
-              name: copy.name,
-              updatedAt: copy.derived.updatedAt,
-              revisionCount: 0
-            }
-          ],
-          current
-        )
+        mergeProjectSummaries([summarizeLocalDocument(copy)], current)
       );
     },
     useRemoteVersion(remoteDocument, outcome) {
@@ -3932,7 +3939,7 @@ export function App() {
     },
     async keepMyVersion({ expectedRemoteVersion }) {
       await collaboration.keepLocalVersion(expectedRemoteVersion);
-      setStatus('Submitting the preserved local version to the room.');
+      setStatus('Kept this device’s version in the live session.');
     },
     saveLocalAsCopy(_document, outcome) {
       setStatus(
@@ -4041,6 +4048,7 @@ export function App() {
       clearUnresolvedConflict(accountConflict.projectId, 'account');
     } catch (error) {
       setStatus(errorMessage(error, 'Could not resolve the conflict.'));
+      throw error;
     } finally {
       setBusy(false);
     }
@@ -4070,6 +4078,7 @@ export function App() {
       );
     } catch (error) {
       setStatus(errorMessage(error, 'Could not resolve the conflict.'));
+      throw error;
     } finally {
       setBusy(false);
     }
@@ -4088,7 +4097,7 @@ export function App() {
     ? null
     : collaboration.role === 'viewer'
       ? 'Viewers cannot replace the live version.'
-      : collaborationRollout.editLeasesEnforced && !activeCollaborationLease
+      : !activeCollaborationLease
         ? 'Keeping this device’s version requires an active edit lease.'
         : null;
 
@@ -4215,6 +4224,7 @@ export function App() {
       if (cancelled) {
         return;
       }
+      projectOpenElsewhereRef.current = false;
       setProjectOpenElsewhere(false);
       setStatus('This tab can edit the project now.');
       void adoptStoredProject(projectId);
@@ -4224,6 +4234,7 @@ export function App() {
         return;
       }
       claim = result;
+      projectOpenElsewhereRef.current = !result.owned;
       setProjectOpenElsewhere(!result.owned);
       if (!result.owned) {
         // The project is on this device — the other tab is keeping it that
@@ -4337,81 +4348,103 @@ export function App() {
       return;
     }
     let cancelled = false;
+    let checking = false;
 
     async function check() {
-      const controller = cloudProjectAutosaveRef.current;
-      const current = managerRef.current?.document;
-      if (cancelled || !controller || !current) {
-        return;
+      if (checking || projectOpenElsewhereRef.current) return;
+      checking = true;
+      try {
+        await projectOwnershipSettledRef.current;
+        if (cancelled || projectOpenElsewhereRef.current) return;
+        const controller = cloudProjectAutosaveRef.current;
+        const current = managerRef.current?.document;
+        if (cancelled || !controller || !current) {
+          return;
+        }
+        // Asked on every tick rather than once when the effect was set up. Both
+        // answers change without anything here changing with them: saving the
+        // open project to the account makes it worth polling, and resolving a
+        // conflict releases the controller that was holding it back.
+        if (
+          !shouldPollForFreshness({
+            projectId: current.projectId,
+            signedIn: Boolean(session),
+            accountHoldsProject: remoteVersionsRef.current.has(
+              current.projectId
+            ),
+            awaitingResolution: controller.isHalted
+          })
+        ) {
+          return;
+        }
+        const summary = (
+          await api.listProjects().catch(() => null)
+        )?.projects.find((project) => project.projectId === current.projectId);
+        if (cancelled || summary?.documentVersion === undefined) {
+          return;
+        }
+        const action = decideProjectSync({
+          localVersion: current.version,
+          accountVersion: summary.documentVersion,
+          lastSyncedVersion: controller.syncedVersion,
+          hasUnsentChanges: controller.hasPendingChanges
+        });
+        if (action !== 'pull') {
+          // `push` is already the autosave controller's job, and `conflict` is
+          // raised by the write that gets fenced rather than guessed at here.
+          return;
+        }
+        const remote = await api
+          .loadProject(current.projectId)
+          .catch(() => null);
+        const live = managerRef.current?.document;
+        // Anything the user did while the document was in flight makes it stale.
+        if (
+          cancelled ||
+          !remote ||
+          !live ||
+          live.projectId !== current.projectId ||
+          live.version !== current.version ||
+          controller.hasPendingChanges
+        ) {
+          return;
+        }
+        const outcome = await applyAccountProjectRefresh({
+          before: current,
+          remote,
+          current: () => managerRef.current?.document ?? null,
+          isActive: () =>
+            !cancelled &&
+            !projectOpenElsewhereRef.current &&
+            cloudProjectAutosaveRef.current === controller,
+          hasPendingChanges: () => controller.hasPendingChanges,
+          saveLocal: saveLocalProject,
+          apply: (document) => {
+            controller.adoptAccountVersion(
+              document.projectId,
+              document.version
+            );
+            remoteVersionsRef.current.set(document.projectId, document.version);
+            hydrateDocument(document);
+          },
+          saveBaseline: (document) =>
+            saveLastSyncedVersion(document.projectId, document.version),
+          onDiverged: (document) => {
+            controller.haltForConflict(document.projectId);
+          }
+        });
+        if (outcome === 'diverged' && !cancelled) {
+          const latest = managerRef.current?.document;
+          if (latest?.projectId === current.projectId) {
+            raiseAccountConflict(latest.projectId, latest, remote.version);
+          }
+        }
+        if (outcome === 'applied' && !cancelled) {
+          setStatus(`Updated to the version saved on another device.`);
+        }
+      } finally {
+        checking = false;
       }
-      // Asked on every tick rather than once when the effect was set up. Both
-      // answers change without anything here changing with them: saving the
-      // open project to the account makes it worth polling, and resolving a
-      // conflict releases the controller that was holding it back.
-      if (
-        !shouldPollForFreshness({
-          projectId: current.projectId,
-          signedIn: Boolean(session),
-          accountHoldsProject: remoteVersionsRef.current.has(current.projectId),
-          awaitingResolution: controller.isHalted
-        })
-      ) {
-        return;
-      }
-      const summary = (
-        await api.listProjects().catch(() => null)
-      )?.projects.find((project) => project.projectId === current.projectId);
-      if (cancelled || summary?.documentVersion === undefined) {
-        return;
-      }
-      const action = decideProjectSync({
-        localVersion: current.version,
-        accountVersion: summary.documentVersion,
-        lastSyncedVersion: controller.syncedVersion,
-        hasUnsentChanges: controller.hasPendingChanges
-      });
-      if (action !== 'pull') {
-        // `push` is already the autosave controller's job, and `conflict` is
-        // raised by the write that gets fenced rather than guessed at here.
-        return;
-      }
-      const remote = await api.loadProject(current.projectId).catch(() => null);
-      const live = managerRef.current?.document;
-      // Anything the user did while the document was in flight makes it stale.
-      if (
-        cancelled ||
-        !remote ||
-        !live ||
-        live.projectId !== current.projectId ||
-        live.version !== current.version ||
-        controller.hasPendingChanges
-      ) {
-        return;
-      }
-      await saveLocalProject(remote);
-      await saveLastSyncedVersion(remote.projectId, remote.version);
-      remoteVersionsRef.current.set(remote.projectId, remote.version);
-      // Checked AGAIN after the two IndexedDB transactions above, the same
-      // way `acceptAccountDocument` re-checks after its own. An edit or a
-      // project switch can land inside those awaits, and the hydrate below
-      // replaces the manager outright — with an edit in flight that is not a
-      // refresh, it is the edit silently gone. The baseline stays adopted
-      // either way: it is durable now, and the controller must agree with it
-      // even when the swap is abandoned, or the next push is fenced against
-      // a version the account no longer holds.
-      controller.adoptAccountVersion(remote.projectId, remote.version);
-      const stillLive = managerRef.current?.document;
-      if (
-        cancelled ||
-        !stillLive ||
-        stillLive.projectId !== remote.projectId ||
-        stillLive.version !== current.version ||
-        controller.hasPendingChanges
-      ) {
-        return;
-      }
-      hydrateDocument(remote);
-      setStatus(`Updated to the version saved on another device.`);
     }
 
     const onFocus = () => void check();
@@ -4656,12 +4689,12 @@ export function App() {
         // parts, and a second count here said the same thing twice.
         setStatus(
           !bootCloudFunctionsEnabledRef.current
-            ? 'Offline mode'
+            ? LIBRARY_MODE_STATUS.offlineMode
             : activeSession && listed.remoteReached
-              ? 'Cloud profile ready'
+              ? LIBRARY_MODE_STATUS.cloudReady
               : health
-                ? 'Local workspace'
-                : 'Offline workspace'
+                ? LIBRARY_MODE_STATUS.local
+                : LIBRARY_MODE_STATUS.offline
         );
       } catch (error) {
         if (!cancelled) {
@@ -7560,7 +7593,7 @@ export function App() {
       setCloudProjectIds(listed.cloudProjectIds);
       setAccountProjectListReached(listed.remoteReached);
       setSettingsMessage('Cloud profile connected.');
-      setStatus('Cloud profile ready');
+      setStatus(LIBRARY_MODE_STATUS.cloudReady);
     } catch {
       if (cloudFunctionsEnabledRef.current) {
         setSettingsMessage(
@@ -8492,7 +8525,16 @@ export function App() {
         ]);
       const remoteDocument = remoteResult.document;
       setArtifacts(artifactList);
-      if (remoteResult.error && localDocument) {
+      // A project this device holds alone is not in the account, and the
+      // account says so with a 404. That is the ordinary answer, not an
+      // outage: reading it as one opened every device project with "The
+      // account copy is currently unreachable" and an Offline save state,
+      // right beside the Save to my account chip that fixes it.
+      const notInAccount =
+        remoteResult.error instanceof ApiError &&
+        remoteResult.error.status === 404 &&
+        !cloudProjectIds.has(projectId);
+      if (remoteResult.error && localDocument && !notInAccount) {
         const needsRepair = isProjectDocumentUnavailableError(
           remoteResult.error
         );
@@ -8734,7 +8776,11 @@ export function App() {
 
   async function handleGoHome() {
     await flushPendingLocalSave();
-    await cloudProjectAutosaveRef.current?.flushPending();
+    const draining = cloudProjectAutosaveRef.current?.flushPending();
+    // A manual checkpoint now shares the account queue. The device is safe;
+    // navigation need not wait for its network response. Its continuation is
+    // guarded by the originating manager, and closing discards stale mirrors.
+    if (!accountSavePendingRef.current) await draining;
     // The card is written before the shelf that shows it is listed. Then
     // forgotten: a project trashed from that shelf must not get its record
     // written back by a later flush.
@@ -8766,13 +8812,9 @@ export function App() {
       setCloudProjectIds(listed.cloudProjectIds);
       setAccountProjectListReached(listed.remoteReached);
       setCloudAvailable(listed.remoteReached);
-      // The shelf heading already counts the parts, so a plain listing
-      // leaves the footer empty; it speaks only when it has news.
-      setStatus(
-        session && !listed.remoteReached
-          ? `Cloud projects are temporarily unavailable · ${countLabel(userProjectCount(listed.projects), 'project', 'projects')} remain on this device.`
-          : ''
-      );
+      // The shelf heading counts the parts and the cloud card says whether
+      // the account answered, so a listing leaves the status line empty.
+      setStatus('');
     } catch (error) {
       setStatus(errorMessage(error, 'Failed to refresh projects.'));
     }
@@ -9594,12 +9636,24 @@ export function App() {
       );
       return;
     }
+    if (!ensureCanEdit('save a shared revision')) return;
     accountSavePendingRef.current = true;
     let sourceWarning: string | null = null;
+    let savedOnDevice = false;
+    let accountWriteStarted = false;
     let savingDocument = savingManager.document;
     try {
+      await projectOwnershipSettledRef.current;
+      if (
+        !isCurrentProject() ||
+        projectOpenElsewhereRef.current ||
+        !ensureCanEdit('save a shared revision')
+      )
+        return;
+      savingDocument = savingManager.document;
       setSaveState('saving');
       await saveLocalProject(savingDocument);
+      savedOnDevice = true;
       if (!isCurrentProject()) {
         return;
       }
@@ -9611,7 +9665,9 @@ export function App() {
         return;
       }
       if (!ensureCanEdit('save a shared revision')) {
-        setSaveState('offline');
+        setSaveState(
+          collaboration.conflict || accountConflict ? 'conflict' : 'local'
+        );
         return;
       }
       if (
@@ -9619,13 +9675,14 @@ export function App() {
         session &&
         !cloudProjectIds.has(savingDocument.projectId)
       ) {
-        const marked = createCheckpoint(savingDocument, reason);
+        const marked = createSavePoint(savingDocument, reason);
         await saveLocalProject(marked);
         if (!isCurrentProject()) return;
         if (savingManager.document.version === savingDocument.version) {
           savingManager.document = marked;
           setDoc(marked);
         }
+        accountWriteStarted = true;
         const outcome = await adoptLocalProject(savingDocument.projectId);
         if (!isCurrentProject()) return;
         if (outcome.state === 'conflict') {
@@ -9649,6 +9706,7 @@ export function App() {
         session &&
         listLocalOnlyImportSources(savingDocument).length > 0
       ) {
+        accountWriteStarted = true;
         const result = await handleArchiveLocalSources(true);
         if (!isCurrentProject()) return;
         if (result) sourceWarning = sourceUploadMessage(result);
@@ -9663,7 +9721,7 @@ export function App() {
         // one it was born with — which would leave restore and branch with
         // nothing to offer exactly where they are needed most, and would drop
         // a name the user had just typed.
-        const marked = createCheckpoint(savingDocument, reason);
+        const marked = createSavePoint(savingDocument, reason);
         if (savingManager.document.version === savingDocument.version) {
           await saveLocalProject(marked);
           if (!isCurrentProject()) {
@@ -9682,17 +9740,45 @@ export function App() {
       // A queued autosave writing the same document behind this one would race
       // the checkpoint for the version fence, and the loser reports a conflict
       // that does not exist. Drain it first; a manual save is worth the wait.
-      await cloudProjectAutosaveRef.current?.flushPending();
-      if (!isCurrentProject()) {
+      const controller = cloudProjectAutosaveRef.current;
+      const readDocument = () =>
+        isCurrentProject() &&
+        !projectOpenElsewhereRef.current &&
+        ensureCanEdit('save a shared revision')
+          ? savingManager.document
+          : null;
+      const writeCheckpoint = async (input: {
+        projectId: ProjectDocument['projectId'];
+        expectedVersion: number;
+        document: ProjectDocument;
+      }) => {
+        savingDocument = input.document;
+        await saveLocalProject(savingDocument);
+        if (!readDocument()) return null;
+        accountWriteStarted = true;
+        return api.saveRevision({
+          ...input,
+          reason,
+          document: withoutDerivedProjection(savingDocument)
+        });
+      };
+      const currentDocument = readDocument();
+      if (!currentDocument) return;
+      const saved = controller
+        ? await controller.saveCheckpoint(
+            currentDocument.projectId,
+            readDocument,
+            writeCheckpoint
+          )
+        : await writeCheckpoint({
+            projectId: currentDocument.projectId,
+            expectedVersion,
+            document: currentDocument
+          });
+      if (!saved) {
+        if (isCurrentProject()) controller?.schedule(savingManager.document);
         return;
       }
-      const saved = await api.saveRevision({
-        projectId: savingDocument.projectId,
-        reason,
-        expectedVersion:
-          cloudProjectAutosaveRef.current?.syncedVersion ?? expectedVersion,
-        document: withoutDerivedProjection(savingDocument)
-      });
       remoteVersionsRef.current.set(saved.projectId, saved.version);
       await saveLastSyncedVersion(saved.projectId, saved.version);
       if (!isCurrentProject()) {
@@ -9705,10 +9791,6 @@ export function App() {
         // entries survive. Record the account version so the next autosave
         // fences correctly and let it carry the newer edits up.
         setCloudAvailable(true);
-        cloudProjectAutosaveRef.current?.adoptAccountVersion(
-          saved.projectId,
-          saved.version
-        );
         setStatus(sourceWarning ?? 'Saved revision.');
         return;
       }
@@ -9723,10 +9805,9 @@ export function App() {
         setSaveState('synced');
       }
       setCloudAvailable(true);
-      cloudProjectAutosaveRef.current?.adoptAccountVersion(
-        restored.projectId,
-        restored.version
-      );
+      if (savingManager.document.version !== savingDocument.version) {
+        await saveLocalProject(savingManager.document);
+      }
       setStatus(sourceWarning ?? 'Saved revision.');
     } catch (error) {
       if (!isCurrentProject()) {
@@ -9757,10 +9838,24 @@ export function App() {
         );
         return;
       }
-      setCloudAvailable(false);
-      setSaveState('offline');
+      // A local failure or a server refusal does not mean the account is
+      // unreachable. Only an attempted account write with no usable response
+      // should turn the connectivity indicator offline.
+      const accountUnreachable =
+        accountWriteStarted &&
+        (!(error instanceof ApiError) || error.status >= 500);
+      if (accountUnreachable) setCloudAvailable(false);
+      setSaveState(
+        !savedOnDevice
+          ? 'device-failed'
+          : accountUnreachable
+            ? 'offline'
+            : error instanceof ApiError && error.status === 413
+              ? 'refused'
+              : 'local'
+      );
       setStatus(
-        `${errorMessage(error, 'Cloud save failed')} Saved on this device.`
+        `${errorMessage(error, 'Save failed')} ${savedOnDevice ? 'Saved on this device.' : 'Could not save on this device; keep this tab open and export your model.'}`
       );
     } finally {
       accountSavePendingRef.current = false;
@@ -11182,7 +11277,7 @@ export function App() {
     const offset = sketchPlaneOffset;
     dispatchInteraction({
       type: 'enter-sketch',
-      plane: { type: 'canonical', plane, offset }
+      plane: newCanonicalPlaneRef(plane, offset)
     });
     setTool(null);
     setStatus(
@@ -16444,19 +16539,14 @@ export function App() {
           ? [
               {
                 item: {
-                  id: 'delete',
-                  label: `Delete ${feature.name}`,
-                  icon: <Trash2 size={13} aria-hidden="true" />,
-                  shortcut: 'Del',
-                  danger: true,
+                  id: 'edit',
+                  label: `Edit ${feature.name}`,
+                  icon: <PenLine size={13} aria-hidden="true" />,
                   section: true
                 },
                 run: runCurrent((handlers) => {
                   if (handlers.validateSelectionEdit())
-                    handlers.handleDeleteFeature(
-                      feature.featureId,
-                      feature.name
-                    );
+                    handlers.handleSelectFeatureFromTree(feature.id, false);
                 })
               }
             ]
@@ -17054,10 +17144,7 @@ export function App() {
           }
           if (
             selectedFeature &&
-            (featureSelectionSource !== 'inferred' ||
-              (!tool &&
-                !commandSession &&
-                selectedTopology?.kind !== 'body')) &&
+            featureSelectionSource !== 'inferred' &&
             validateSelectionEdit()
           ) {
             event.preventDefault();
@@ -17246,6 +17333,7 @@ export function App() {
           onOpen={(projectId) => void handleOpenProject(projectId)}
           onOpenDemo={(definition) => void handleOpenDemo(definition)}
           onOpenSettings={openSettings}
+          onSignIn={() => openSettingsAt('account')}
           onDuplicate={(project) => void handleDuplicateProject(project)}
           loadProperties={loadProperties}
           cloudProjectIds={cloudProjectIds}
@@ -18276,7 +18364,11 @@ export function App() {
     />
   ) : interaction.mode === 'sketch' && selectedSketchEntity ? (
     <SketchEntityEditor
-      key={`${selectedSketchEntity.id}:${doc.version}`}
+      // One editor per object, not per document version: a handle drag or
+      // turn commits through the same path as Apply, and the editor rebases
+      // its fields onto the stored object instead of remounting, so a value
+      // typed but not yet applied survives a move on the canvas.
+      key={selectedSketchEntity.id}
       disabled={sketchSolving || geometryBusy}
       error={sketchEditError}
       data={selectedSketchEntity.data}
@@ -18640,6 +18732,12 @@ export function App() {
           saveState={presentedSaveState}
           saveToAccount={
             cloudFunctionsEnabled && !!session && !activeProjectIsCloud
+          }
+          knownDeviceOnly={
+            cloudFunctionsEnabled &&
+            !!session &&
+            !activeProjectIsCloud &&
+            accountProjectListReached
           }
           localOnlySourceCount={localOnlySources.length}
           artifacts={artifacts}
@@ -19735,8 +19833,11 @@ export function App() {
                     commandFactories.updateSketch(
                       {
                         sketchId: feature.data.sketchId,
-                        plane: value.plane,
-                        offset: value.offset,
+                        planeRef: canonicalPlaneRefForEdit(
+                          selectedSketch.planeRef,
+                          value.plane,
+                          value.offset
+                        ),
                         object: value.object
                       },
                       `Edit ${value.name}`
@@ -19936,7 +20037,7 @@ export function App() {
                 onResizeThroughHole={handleResizeThroughHole}
                 onRemoveFaceFeature={handleRemoveFaceFeature}
                 onPinFeature={(feature) =>
-                  handleSelectFeatureFromTree(feature.id)
+                  handleSelectFeatureFromTree(feature.id, false)
                 }
                 onDeleteFeature={(feature) =>
                   handleDeleteFeature(feature.featureId, feature.name)
@@ -20231,7 +20332,7 @@ export function App() {
                 conflict={collaboration.conflict}
                 busy={busy}
                 keepMineDisabledReason={roomKeepMineDisabledReason}
-                onResolve={(resolution) => void resolveRoomConflict(resolution)}
+                onResolve={resolveRoomConflict}
                 onClose={() => setDismissedRoomConflict(roomConflictKey)}
               />
             )}
@@ -20241,9 +20342,7 @@ export function App() {
               <ProjectConflictDialog
                 conflict={accountConflict}
                 busy={busy}
-                onResolve={(resolution) =>
-                  void resolveAccountConflict(resolution)
-                }
+                onResolve={resolveAccountConflict}
                 onClose={() => setAccountConflict(null)}
               />
             )}

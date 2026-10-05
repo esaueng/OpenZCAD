@@ -131,6 +131,147 @@ function harness(
 const lastState = (statuses: CloudProjectAutosaveStatus[]) =>
   statuses.at(-1)?.state;
 
+describe('explicit checkpoints', () => {
+  it('reads the latest document after draining edits made during autosave', async () => {
+    const held = gate();
+    const started = gate();
+    const { controller, saves } = harness({
+      respond: async ({ document }) => {
+        if (document.version === 2) {
+          started.open();
+          await held.wait;
+        }
+        return {
+          projectId: document.projectId,
+          version: document.version,
+          updatedAt: ''
+        };
+      }
+    });
+    let live = documentAt(2);
+    controller.openProject(live.projectId, 1);
+    controller.schedule(live);
+    const checkpoint = vi.fn(
+      async ({ document }: { document: ProjectDocument }) => document
+    );
+    const saving = controller.saveCheckpoint(
+      live.projectId,
+      () => live,
+      checkpoint
+    );
+    await started.wait;
+    live = documentAt(3, live);
+    controller.schedule(live);
+    held.open();
+    await saving;
+    expect(saves).toEqual([
+      { expectedVersion: 1, version: 2 },
+      { expectedVersion: 2, version: 3 }
+    ]);
+    expect(checkpoint).toHaveBeenCalledWith({
+      projectId: live.projectId,
+      expectedVersion: 3,
+      document: live
+    });
+    controller.dispose();
+  });
+
+  it('serializes a newer autosave behind a checkpoint without dropping the edit', async () => {
+    const { controller, saves } = harness();
+    let live = documentAt(2);
+    controller.openProject(live.projectId, 1);
+    const held = gate();
+    const started = gate();
+    const saving = controller.saveCheckpoint(
+      live.projectId,
+      () => live,
+      async ({ document, expectedVersion }) => {
+        expect(expectedVersion).toBe(1);
+        started.open();
+        await held.wait;
+        expect(saves).toEqual([]);
+        return document;
+      }
+    );
+    await started.wait;
+    live = documentAt(3, live);
+    controller.schedule(live);
+    const autosave = controller.flush();
+    held.open();
+    await saving;
+    await autosave;
+    expect(saves).toEqual([{ expectedVersion: 2, version: 3 }]);
+    expect(controller.syncedVersion).toBe(3);
+    controller.dispose();
+  });
+
+  it('keeps a debounced edit made during a checkpoint queued', async () => {
+    const { controller, saves } = harness();
+    let live = documentAt(2);
+    controller.openProject(live.projectId, 1);
+    const held = gate();
+    const started = gate();
+    const saving = controller.saveCheckpoint(
+      live.projectId,
+      () => live,
+      async ({ document }) => {
+        started.open();
+        await held.wait;
+        return document;
+      }
+    );
+    await started.wait;
+    live = documentAt(3, live);
+    controller.schedule(live);
+    held.open();
+    await saving;
+    expect(controller.hasPendingChanges).toBe(true);
+    await controller.flushPending();
+    expect(saves).toEqual([{ expectedVersion: 2, version: 3 }]);
+    controller.dispose();
+  });
+
+  it('allows an explicit checkpoint while automatic saves are disabled', async () => {
+    const { controller, saves } = harness();
+    const live = documentAt(2);
+    controller.openProject(live.projectId, 1);
+    controller.configure({ enabled: false });
+    controller.schedule(live);
+    const write = vi.fn(
+      async ({ document }: { document: ProjectDocument }) => document
+    );
+    await controller.saveCheckpoint(live.projectId, () => live, write);
+    expect(write).toHaveBeenCalledOnce();
+    expect(saves).toEqual([]);
+    expect(controller.hasPendingChanges).toBe(false);
+    controller.dispose();
+  });
+
+  it('skips a checkpoint after navigation and recovers its queue after rejection', async () => {
+    const { controller, saves } = harness();
+    const live = documentAt(2);
+    controller.openProject(live.projectId, 1);
+    const write = vi.fn();
+    expect(
+      await controller.saveCheckpoint(live.projectId, () => null, write)
+    ).toBeNull();
+    expect(write).not.toHaveBeenCalled();
+    await expect(
+      controller.saveCheckpoint(
+        live.projectId,
+        () => live,
+        async () => {
+          throw new Error('offline');
+        }
+      )
+    ).rejects.toThrow('offline');
+    controller.schedule(live);
+    await controller.flushPending();
+    expect(saves).toEqual([{ expectedVersion: 1, version: 2 }]);
+    controller.dispose();
+  });
+});
+
 beforeEach(() => {
   vi.useFakeTimers();
 });

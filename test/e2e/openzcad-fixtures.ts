@@ -992,6 +992,34 @@ export async function revealModelDrawer(
   await expect(drawer).toBeVisible();
 }
 
+/**
+ * Waits for the camera to come to rest — after the sketch entry glide, a
+ * reframe, a placement. The render loop draws on demand and stops once
+ * nothing moves, so a frame counter that holds still across a window proves
+ * the view is still; screen points taken before that map to a different
+ * spot on the plane once the glide finishes, and a click made mid-glide can
+ * miss the tool it was meant for.
+ */
+export async function waitForStillViewport(page: Page) {
+  const canvas = page.locator('.viewer-host canvas');
+  const frames = async () =>
+    Number(
+      (await canvas.evaluate(
+        (element) => (element as HTMLElement).dataset.e2eFrames
+      )) ?? '0'
+    );
+  await expect
+    .poll(
+      async () => {
+        const before = await frames();
+        await page.waitForTimeout(400);
+        return (await frames()) - before;
+      },
+      { timeout: 20_000 }
+    )
+    .toBe(0);
+}
+
 export async function createProject(page: Page, name: string) {
   await page.goto('/');
   await page.getByLabel('Project name').fill(name);

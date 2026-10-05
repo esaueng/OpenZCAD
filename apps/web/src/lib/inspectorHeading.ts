@@ -14,9 +14,9 @@ export interface InspectorHeadingInput {
    * creation form: its panel says "Direct edit", as the Move card does.
    */
   directEdit?: boolean;
-  /** D5 topology label for the viewport object under the running command. */
+  /** D5 topology label for the selected viewport object. */
   selectionLabel?: string;
-  /** Body that owns the viewport object under the running command. */
+  /** Body that owns the selected viewport object. */
   selectionBodyName?: string;
   featureSelectionSource: FeatureSelectionSource | null;
   commandSession: Pick<CommandSession, 'title'> | null;
@@ -26,9 +26,8 @@ export interface InspectorHeading {
   eyebrow: string;
   title: string;
   /**
-   * The feature is context for a running command rather than the panel's
-   * subject, so its form and its destructive action must say which feature
-   * they mean.
+   * The feature is provenance for a selected object. Its form and destructive
+   * actions become available only after an explicit Edit or history pick.
    */
   demoted: boolean;
 }
@@ -46,9 +45,7 @@ export interface InspectorHeading {
 export function inspectorHeadingForFeature(
   input: InspectorHeadingInput
 ): InspectorHeading {
-  const demoted =
-    input.featureSelectionSource === 'inferred' &&
-    input.commandSession !== null;
+  const demoted = input.featureSelectionSource === 'inferred';
   return demoted
     ? {
         eyebrow: input.selectionBodyName ?? input.featureKindLabel,

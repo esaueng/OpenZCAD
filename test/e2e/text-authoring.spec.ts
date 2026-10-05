@@ -1,6 +1,12 @@
 import type { Locator, Page } from '@playwright/test';
 import type { SketchObjectData } from '@openzcad/shared';
-import { createProject, expect, stubApi, test } from './openzcad-fixtures';
+import {
+  createProject,
+  expect,
+  stubApi,
+  test,
+  waitForStillViewport
+} from './openzcad-fixtures';
 
 /**
  * Type-first text: `T` opens the text card at once, the outline of what is
@@ -40,8 +46,11 @@ async function startTopSketch(page: Page) {
     page.getByRole('toolbar', { name: 'Sketch tools' })
   ).toBeVisible();
   // The grid readout is written by the render loop: once it shows, a frame
-  // of the sketch has been drawn and the canvas hooks answer.
+  // of the sketch has been drawn and the canvas hooks answer. That frame can
+  // still be the start of the entry glide, and a click made while the camera
+  // travels lands nowhere: wait for the view to come to rest.
   await expect(page.locator('.viewport-dock-grid')).toBeVisible();
+  await waitForStillViewport(page);
   const canvas = page.locator('.viewer-host canvas');
   const bounds = (await canvas.boundingBox())!;
   return { canvas, bounds };
@@ -144,7 +153,12 @@ test('E while composing does not extrude or drop the draft', async ({
     x: bounds.x + bounds.width * 0.3,
     y: bounds.y + bounds.height * 0.7
   };
-  await rail.getByRole('button', { name: 'Rectangle', exact: true }).click();
+  const rectangle = rail.getByRole('button', {
+    name: 'Rectangle',
+    exact: true
+  });
+  await rectangle.click();
+  await expect(rectangle).toHaveAttribute('aria-pressed', 'true');
   await page.mouse.click(corner.x, corner.y);
   await page.mouse.move(corner.x + 80, corner.y - 50, { steps: 4 });
   await page.mouse.click(corner.x + 80, corner.y - 50);
