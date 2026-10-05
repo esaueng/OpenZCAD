@@ -665,12 +665,15 @@ function exactSharedSolidVolume(
  */
 export function sharedSolidVolume(
   kernel: RemusKernel,
-  solids: number[]
+  solids: number[],
+  /** Only callers proving rigid equivalence may reuse an exact intersection. */
+  pairClass?: (left: number, right: number) => string
 ): number {
   if (solids.length < 2) {
     return 0;
   }
   let total = 0;
+  const exactByClass = new Map<string, number>();
   const boxes = solids.map((solid) => kernel.boundingBox(solid));
   for (let left = 0; left < solids.length; left += 1) {
     for (let right = left + 1; right < solids.length; right += 1) {
@@ -697,7 +700,12 @@ export function sharedSolidVolume(
       }
       let shared: number;
       try {
-        shared = exactSharedSolidVolume(kernel, solids[left]!, solids[right]!);
+        const key = pairClass?.(left, right);
+        const cached = key === undefined ? undefined : exactByClass.get(key);
+        shared =
+          cached ??
+          exactSharedSolidVolume(kernel, solids[left]!, solids[right]!);
+        if (key !== undefined) exactByClass.set(key, shared);
       } catch {
         // A refused intersection is not evidence of disjointness. The boxes
         // already say these two could share volume, so fail toward fusing: a

@@ -1,12 +1,49 @@
 import { test, expect, stubApi, expectBodyCount } from './openzcad-fixtures';
+import { readFileSync } from 'node:fs';
+import {
+  FREECAD_WORKER_CSP,
+  FREECAD_WORKER_PATH
+} from '../../apps/web/worker/freecadWorkerAsset';
 
 test('imports FreeCAD final solids through the picker with undo, visibility and reload', async ({
   page
 }) => {
   test.setTimeout(90_000);
   const errors: string[] = [];
+  const uploads: string[] = [];
+  page.on('request', (request) => {
+    if (new URL(request.url()).pathname === '/api/uploads')
+      uploads.push(request.url());
+  });
   page.on('pageerror', (error) => errors.push(error.message));
+  page.on('console', (message) => {
+    if (message.type() === 'error')
+      errors.push(`${message.text()} (${message.location().url})`);
+  });
   await stubApi(page);
+  // This regression exercises local-first import; cloud archival has separate
+  // API tests. The static preview's intentionally unavailable upload service
+  // must not mask errors from the real converter and its CSP.
+  await page.route('**/api/session', (route) => route.fulfill({ json: null }));
+  // Vite preview does not serve _headers: enforce the shipped policies on
+  // real built assets, including the dedicated converter's response policy.
+  const strictCsp = readFileSync('apps/web/public/_headers', 'utf8').match(
+    /Content-Security-Policy: (.+)/
+  )![1]!;
+  await page.route('**/*', async (route) => {
+    const url = new URL(route.request().url());
+    if (url.pathname.startsWith('/api/')) return route.fallback();
+    const response = await route.fetch();
+    await route.fulfill({
+      response,
+      headers: {
+        ...response.headers(),
+        'content-security-policy': FREECAD_WORKER_PATH.test(url.pathname)
+          ? FREECAD_WORKER_CSP
+          : strictCsp
+      }
+    });
+  });
   await page.setViewportSize({ width: 1440, height: 1000 });
   await page.goto('/');
   await page.getByLabel('Project name').fill('FreeCAD solids');
@@ -35,9 +72,9 @@ test('imports FreeCAD final solids through the picker with undo, visibility and 
     .first()
     .getByRole('button', { name: /^Show body / })
     .click();
-  await expect(page.locator('.save-state')).toHaveClass(
-    /is-synced|is-local-source/
-  );
+  await expect(
+    page.getByRole('status', { name: 'Local only', exact: true })
+  ).toBeVisible();
   await page.reload();
   await expectBodyCount(page, 2);
   await expect(
@@ -59,8 +96,13 @@ test('imports FreeCAD final solids through the picker with undo, visibility and 
     '2'
   );
   expect(errors).toEqual([]);
+  expect(uploads).toEqual([]);
   if (process.env.OZ_FREECAD_SCREENSHOT)
     await page.screenshot({ path: process.env.OZ_FREECAD_SCREENSHOT });
+  await page.getByRole('button', { name: 'OpenZCAD Beta', exact: true }).click();
+  await page.getByLabel('Project name').fill('QA next project');
+  await page.getByRole('button', { name: 'Create project', exact: true }).click();
+  await expect(page.locator('.activity-pill')).toHaveCount(0);
 });
 
 test('refuses a corrupt FreeCAD file without adding a body', async ({

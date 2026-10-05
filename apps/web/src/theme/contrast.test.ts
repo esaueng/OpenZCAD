@@ -97,4 +97,21 @@ describe.each([
       ).toBeGreaterThanOrEqual(3);
     }
   });
+  it('keeps numeric-entry and viewport labels legible on their actual surfaces', () => {
+    expect(
+      contrastRatio(
+        palette['--color-text-muted']!,
+        palette['--color-surface-2']!
+      )
+    ).toBeGreaterThanOrEqual(4.5);
+    expect(
+      contrastRatio(palette['--color-text-muted']!, palette['--color-surface']!)
+    ).toBeGreaterThanOrEqual(4.5);
+    expect(
+      contrastRatio(palette['--color-text']!, palette['--color-surface-2']!)
+    ).toBeGreaterThanOrEqual(4.5);
+    expect(
+      contrastRatio(palette['--color-on-accent']!, palette['--color-accent']!)
+    ).toBeGreaterThanOrEqual(4.5);
+  });
 });

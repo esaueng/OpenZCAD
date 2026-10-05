@@ -20,6 +20,12 @@
   display: none;
 }
 
+/* The right viewer rail overlaps this lane on compact screens. Keep the
+   pattern's cancel label and hit target entirely clear of it. */
+.activity-lane:has(.pattern-progress) {
+  right: max(calc(var(--column-w) + 12px), 72px);
+}
+
 /* The lane and the status toast are the same slot. While a pill is up the
    toast steps aside; its message is still in the activity log. The undo
    toast and the selection chip stack around it through the notice-lane
@@ -28,7 +34,9 @@
    `.workspace-toast:not(.hidden) .workspace-toast-body`, which loads later,
    the invisible body stayed clickable beside the pill. */
 .viewer-area:has(.activity-pill) .workspace-toast,
-.viewer-area:has(.activity-pill) .workspace-toast .workspace-toast-body {
+.viewer-area:has(.activity-pill) .workspace-toast .workspace-toast-body,
+.viewer-area:has(.pattern-progress) .workspace-toast,
+.viewer-area:has(.pattern-progress) .workspace-toast .workspace-toast-body {
   opacity: 0;
   pointer-events: none;
 }
@@ -328,4 +336,31 @@
     border-color: var(--color-accent);
     border-top-color: var(--color-accent-dim);
   }
+}
+/* Cancellable exact pattern rebuilds share the activity lane. */
+.pattern-progress {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  max-width: min(680px, calc(100vw - 32px));
+  padding: 10px 12px;
+  color: var(--color-text);
+  background: var(--color-surface);
+  border: 1px solid var(--color-border);
+  border-radius: var(--radius-md);
+  font-size: var(--fs-sm);
+  pointer-events: auto;
+}
+.pattern-progress button {
+  flex: none;
+  padding: 4px 8px;
+  color: var(--color-text);
+  background: var(--color-surface-2);
+  border: 1px solid var(--color-border);
+  border-radius: var(--radius-sm);
+}
+
+.pattern-progress small {
+  flex: none;
+  white-space: nowrap;
 }

@@ -408,33 +408,35 @@ export function Sidebar({
       >
         <div className="feature-list" role="list" aria-label="Bodies">
           {bodies.length === 0 && (
-            <p className="muted sidebar-hint">
+            <p className="muted sidebar-hint" role="listitem">
               No bodies yet. Create a primitive or extrude a sketch.
             </p>
           )}
           {liveBodies.map(renderBodyRow)}
           {consumedBodies.length > 0 && (
-            <button
-              type="button"
-              className="consumed-toggle"
-              aria-expanded={showConsumed}
-              onClick={() => setShowConsumed((current) => !current)}
-              title={
-                showConsumed
-                  ? 'Hide the earlier bodies this model was built from'
-                  : 'Show the earlier bodies this model was built from — each was combined into a later feature and is no longer separate'
-              }
-            >
-              <ChevronRight
-                size={11}
-                className="disclosure-chevron"
-                aria-hidden="true"
-              />
-              <span>
-                {consumedBodies.length} source{' '}
-                {consumedBodies.length === 1 ? 'body' : 'bodies'}
-              </span>
-            </button>
+            <div role="listitem">
+              <button
+                type="button"
+                className="consumed-toggle"
+                aria-expanded={showConsumed}
+                onClick={() => setShowConsumed((current) => !current)}
+                title={
+                  showConsumed
+                    ? 'Hide the earlier bodies this model was built from'
+                    : 'Show the earlier bodies this model was built from — each was combined into a later feature and is no longer separate'
+                }
+              >
+                <ChevronRight
+                  size={11}
+                  className="disclosure-chevron"
+                  aria-hidden="true"
+                />
+                <span>
+                  {consumedBodies.length} source{' '}
+                  {consumedBodies.length === 1 ? 'body' : 'bodies'}
+                </span>
+              </button>
+            </div>
           )}
           {showConsumed && consumedBodies.map(renderBodyRow)}
         </div>
