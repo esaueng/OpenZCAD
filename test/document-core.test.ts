@@ -104,6 +104,59 @@ describe('document-core', () => {
     );
   });
 
+  it('migrates v15 Front sketches without synthesizing a new basis', () => {
+    const created = addSketchFeature(
+      createProjectDocument('Legacy Front', user()),
+      {
+        name: 'Front',
+        planeRef: { type: 'canonical', plane: 'XZ', offset: 3 },
+        objects: [{ objectKind: 'circle', radius: 4, centerX: 2, centerY: 5 }]
+      }
+    );
+    const legacy = structuredClone(created.document);
+    legacy.schemaVersion = 15 as typeof legacy.schemaVersion;
+    const migrated = normalizeDocument(legacy);
+
+    expect(migrated.schemaVersion).toBe(16);
+    expect({ ...migrated, schemaVersion: 15 }).toEqual(legacy);
+    expect(findSketch(migrated, created.sketchId)?.planeRef).toEqual({
+      type: 'canonical',
+      plane: 'XZ',
+      offset: 3
+    });
+    expect(legacy.schemaVersion).toBe(15);
+  });
+
+  it('saves revision-2 Front sketches beyond the v15 client boundary', () => {
+    const created = addSketchFeature(
+      createProjectDocument('New Front', user()),
+      {
+        name: 'Front',
+        planeRef: {
+          type: 'canonical',
+          plane: 'XZ',
+          offset: 3,
+          basisRevision: 2
+        },
+        objects: [{ objectKind: 'circle', radius: 4, centerX: 2, centerY: 5 }]
+      }
+    );
+    const saved = JSON.parse(
+      JSON.stringify(created.document)
+    ) as typeof created.document;
+
+    // A v15 normalizer refuses newer schemas before it evaluates unknown fields.
+    expect(saved.schemaVersion).toBe(16);
+    expect(saved.schemaVersion).toBeGreaterThan(15);
+    const reopened = normalizeDocument(saved);
+    expect(findSketch(reopened, created.sketchId)?.planeRef).toEqual({
+      type: 'canonical',
+      plane: 'XZ',
+      offset: 3,
+      basisRevision: 2
+    });
+  });
+
   it('records save checkpoints without changing model version', () => {
     const document = createProjectDocument('Checkpoint', user());
     const saved = createCheckpoint(document, 'Manual save');

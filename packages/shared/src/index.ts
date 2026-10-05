@@ -26,7 +26,7 @@ export type SketchReferenceAnnotationId = Brand<
 >;
 export type ShaprImportId = Brand<string, 'ShaprImportId'>;
 
-export const PROJECT_DOCUMENT_SCHEMA_VERSION = 15 as const;
+export const PROJECT_DOCUMENT_SCHEMA_VERSION = 16 as const;
 export type ProjectDocumentSchemaVersion =
   typeof PROJECT_DOCUMENT_SCHEMA_VERSION;
 
@@ -471,8 +471,8 @@ export type SketchPlaneRef =
       plane: PlaneId;
       offset: ParamValue;
       /**
-       * Which basis the plane's stored coordinates were drawn against. Absent
-       * is revision 1, the bases every sketch written before this field
+       * Schema v16: which basis the plane's stored coordinates were drawn
+       * against. Absent is revision 1, the bases every sketch written before this field
        * resolves to; 2 turns the XZ plane to face the Front view (u = +X,
        * v = +Z, normal -Y) so a sketch entered on it reads +u right and +v up
        * instead of mirrored behind the model. XY and YZ are the same in both
