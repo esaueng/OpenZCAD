@@ -3902,9 +3902,9 @@ export function App() {
       await saveLocalProject(copy);
       // The shelf never loads a document to draw a card, so a copy saved
       // without a preview would stay a placeholder until it is opened. Seed it
-      // now, while the meshes are in memory; a failure here must not undo the
-      // recovery itself.
-      await Promise.all([
+      // now, while the meshes are in memory. The durable copy is complete;
+      // optional preview rendering must not delay the user's resolution.
+      void Promise.all([
         import('./lib/recoveryCopyThumbnail'),
         import('./lib/partThumbnail')
       ])
@@ -3934,7 +3934,7 @@ export function App() {
     },
     async keepMyVersion({ expectedRemoteVersion }) {
       await collaboration.keepLocalVersion(expectedRemoteVersion);
-      setStatus('Submitting the preserved local version to the room.');
+      setStatus('Kept this device’s version in the live session.');
     },
     saveLocalAsCopy(_document, outcome) {
       setStatus(
@@ -4043,6 +4043,7 @@ export function App() {
       clearUnresolvedConflict(accountConflict.projectId, 'account');
     } catch (error) {
       setStatus(errorMessage(error, 'Could not resolve the conflict.'));
+      throw error;
     } finally {
       setBusy(false);
     }
@@ -4072,6 +4073,7 @@ export function App() {
       );
     } catch (error) {
       setStatus(errorMessage(error, 'Could not resolve the conflict.'));
+      throw error;
     } finally {
       setBusy(false);
     }
@@ -4090,7 +4092,7 @@ export function App() {
     ? null
     : collaboration.role === 'viewer'
       ? 'Viewers cannot replace the live version.'
-      : collaborationRollout.editLeasesEnforced && !activeCollaborationLease
+      : !activeCollaborationLease
         ? 'Keeping this device’s version requires an active edit lease.'
         : null;
 
@@ -9636,6 +9638,8 @@ export function App() {
     if (!ensureCanEdit('save a shared revision')) return;
     accountSavePendingRef.current = true;
     let sourceWarning: string | null = null;
+    let savedOnDevice = false;
+    let accountWriteStarted = false;
     let savingDocument = savingManager.document;
     try {
       await projectOwnershipSettledRef.current;
@@ -9648,6 +9652,7 @@ export function App() {
       savingDocument = savingManager.document;
       setSaveState('saving');
       await saveLocalProject(savingDocument);
+      savedOnDevice = true;
       if (!isCurrentProject()) {
         return;
       }
@@ -9659,7 +9664,9 @@ export function App() {
         return;
       }
       if (!ensureCanEdit('save a shared revision')) {
-        setSaveState('offline');
+        setSaveState(
+          collaboration.conflict || accountConflict ? 'conflict' : 'local'
+        );
         return;
       }
       if (
@@ -9674,6 +9681,7 @@ export function App() {
           savingManager.document = marked;
           setDoc(marked);
         }
+        accountWriteStarted = true;
         const outcome = await adoptLocalProject(savingDocument.projectId);
         if (!isCurrentProject()) return;
         if (outcome.state === 'conflict') {
@@ -9697,6 +9705,7 @@ export function App() {
         session &&
         listLocalOnlyImportSources(savingDocument).length > 0
       ) {
+        accountWriteStarted = true;
         const result = await handleArchiveLocalSources(true);
         if (!isCurrentProject()) return;
         if (result) sourceWarning = sourceUploadMessage(result);
@@ -9745,6 +9754,7 @@ export function App() {
         savingDocument = input.document;
         await saveLocalProject(savingDocument);
         if (!readDocument()) return null;
+        accountWriteStarted = true;
         return api.saveRevision({
           ...input,
           reason,
@@ -9827,10 +9837,24 @@ export function App() {
         );
         return;
       }
-      setCloudAvailable(false);
-      setSaveState('offline');
+      // A local failure or a server refusal does not mean the account is
+      // unreachable. Only an attempted account write with no usable response
+      // should turn the connectivity indicator offline.
+      const accountUnreachable =
+        accountWriteStarted &&
+        (!(error instanceof ApiError) || error.status >= 500);
+      if (accountUnreachable) setCloudAvailable(false);
+      setSaveState(
+        !savedOnDevice
+          ? 'device-failed'
+          : accountUnreachable
+            ? 'offline'
+            : error instanceof ApiError && error.status === 413
+              ? 'refused'
+              : 'local'
+      );
       setStatus(
-        `${errorMessage(error, 'Cloud save failed')} Saved on this device.`
+        `${errorMessage(error, 'Save failed')} ${savedOnDevice ? 'Saved on this device.' : 'Could not save on this device; keep this tab open and export your model.'}`
       );
     } finally {
       accountSavePendingRef.current = false;
@@ -20311,7 +20335,7 @@ export function App() {
                 conflict={collaboration.conflict}
                 busy={busy}
                 keepMineDisabledReason={roomKeepMineDisabledReason}
-                onResolve={(resolution) => void resolveRoomConflict(resolution)}
+                onResolve={resolveRoomConflict}
                 onClose={() => setDismissedRoomConflict(roomConflictKey)}
               />
             )}
@@ -20321,9 +20345,7 @@ export function App() {
               <ProjectConflictDialog
                 conflict={accountConflict}
                 busy={busy}
-                onResolve={(resolution) =>
-                  void resolveAccountConflict(resolution)
-                }
+                onResolve={resolveAccountConflict}
                 onClose={() => setAccountConflict(null)}
               />
             )}

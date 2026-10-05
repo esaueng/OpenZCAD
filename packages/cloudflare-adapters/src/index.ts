@@ -5249,7 +5249,8 @@ export class ProjectCollaborationRoom extends DurableObject {
         message.document,
         message.baseVersion,
         true,
-        message.leaseId
+        message.leaseId,
+        message.conflictResolution
       );
     }
   }
@@ -5260,7 +5261,8 @@ export class ProjectCollaborationRoom extends DurableObject {
     rawDocument: ProjectDocument,
     baseVersion: number | null,
     broadcast: boolean,
-    leaseId?: string
+    leaseId?: string,
+    conflictResolution?: 'keep-local'
   ): Promise<void> {
     await this.enqueueLeaseOperation(() =>
       this.acceptDocumentWithCurrentLease(
@@ -5269,7 +5271,8 @@ export class ProjectCollaborationRoom extends DurableObject {
         rawDocument,
         baseVersion,
         broadcast,
-        leaseId
+        leaseId,
+        conflictResolution
       )
     );
   }
@@ -5280,7 +5283,8 @@ export class ProjectCollaborationRoom extends DurableObject {
     rawDocument: ProjectDocument,
     baseVersion: number | null,
     broadcast: boolean,
-    leaseId?: string
+    leaseId?: string,
+    conflictResolution?: 'keep-local'
   ): Promise<void> {
     const connection = this.sockets.get(socket);
     if (!connection || !(await this.canAuthor(connection, leaseId, socket))) {
@@ -5308,7 +5312,10 @@ export class ProjectCollaborationRoom extends DurableObject {
     const latest = this.latestDocument;
     const base =
       baseVersion === null ? undefined : this.documentHistory.get(baseVersion);
-    const resolution = resolveCollaborationDocument(latest, document, base);
+    const resolution =
+      conflictResolution === 'keep-local'
+        ? resolveKeptCollaborationDocument(latest, document, baseVersion)
+        : resolveCollaborationDocument(latest, document, base);
     if (resolution.kind === 'same') {
       // A newly joined browser still needs confirmation of its merge base,
       // even when another browser already supplied this exact snapshot.
@@ -5778,6 +5785,7 @@ export class ProjectCollaborationRoom extends DurableObject {
       baseVersion?: number | null;
       document?: ProjectDocument;
       leaseId?: string;
+      conflictResolution?: 'keep-local';
     };
     try {
       payload = JSON.parse(body) as typeof payload;
@@ -5804,6 +5812,7 @@ export class ProjectCollaborationRoom extends DurableObject {
           baseVersion?: number | null;
           document: ProjectDocument;
           leaseId?: string;
+          conflictResolution?: 'keep-local';
         }
       )
     );
@@ -5819,6 +5828,7 @@ export class ProjectCollaborationRoom extends DurableObject {
       baseVersion?: number | null;
       document: ProjectDocument;
       leaseId?: string;
+      conflictResolution?: 'keep-local';
     }
   ): Promise<Response> {
     if (this.erasing)
@@ -5859,13 +5869,20 @@ export class ProjectCollaborationRoom extends DurableObject {
       return new Response('Document project mismatch.', { status: 400 });
     }
     await this.ensureDocumentHistory();
-    const resolution = resolveCollaborationDocument(
-      this.latestDocument,
-      document,
-      payload.baseVersion === null || payload.baseVersion === undefined
-        ? undefined
-        : this.documentHistory.get(payload.baseVersion)
-    );
+    const resolution =
+      payload.conflictResolution === 'keep-local'
+        ? resolveKeptCollaborationDocument(
+            this.latestDocument,
+            document,
+            payload.baseVersion
+          )
+        : resolveCollaborationDocument(
+            this.latestDocument,
+            document,
+            payload.baseVersion === null || payload.baseVersion === undefined
+              ? undefined
+              : this.documentHistory.get(payload.baseVersion)
+          );
     if (resolution.kind === 'conflict') {
       return Response.json(
         { type: 'conflict', document: resolution.document },
@@ -6162,6 +6179,33 @@ function ackFor(
     : { type: 'ack', version: resolved.version, document: resolved };
 }
 
+/** An explicit recovery choice replaces only the exact room version shown. */
+export function resolveKeptCollaborationDocument(
+  latest: ProjectDocument | null,
+  incoming: ProjectDocument,
+  expectedVersion: number | null | undefined
+): ReturnType<typeof resolveCollaborationDocument> {
+  if (
+    !latest ||
+    expectedVersion !== latest.version ||
+    incoming.projectId !== latest.projectId ||
+    incoming.ownerUserId !== latest.ownerUserId ||
+    !documentVersionCanAdvance(incoming.version, latest.version)
+  ) {
+    return { kind: 'conflict', document: latest ?? incoming };
+  }
+  // This is a new committed choice even if the kept document is older or has
+  // an independent history. Give it a fresh save revision so subsequent edits
+  // have genuine lineage; ordinary submissions still use the merge rules.
+  return {
+    kind: 'accept',
+    document: createSavedRevision(
+      { ...incoming, version: Math.max(latest.version, incoming.version) + 1 },
+      'Kept this device’s version'
+    )
+  };
+}
+
 export function resolveCollaborationDocument(
   latest: ProjectDocument | null,
   incoming: ProjectDocument,
@@ -6223,7 +6267,8 @@ export function resolveCollaborationDocument(
         sketchOrder: latest.sketchOrder,
         parameterOrder: latest.parameterOrder,
         commandLog: latest.commandLog
-      });
+      }
+    );
   return sameHistory
     ? { kind: 'same', document: latest }
     : { kind: 'conflict', document: latest };

@@ -3046,6 +3046,8 @@ export type CollaborationClientMessage =
       baseVersion: number | null;
       document: ProjectDocument;
       leaseId?: string;
+      /** Explicit user choice after preserving the other copy; fenced by baseVersion. */
+      conflictResolution?: 'keep-local';
     }
   | { type: 'presence'; clientId: string; status: 'active' | 'idle' }
   | { type: 'lease-acquire'; clientId: string }

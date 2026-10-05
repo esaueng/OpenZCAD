@@ -846,8 +846,11 @@ describe('useCollaboration lease ordering', () => {
     await expect(
       result.current.keepLocalVersion(remote.version + 1)
     ).rejects.toThrow(/room version changed/i);
-    await act(async () => {
-      await result.current.keepLocalVersion(remote.version);
+    let confirmation!: Promise<void>;
+    const confirmed = vi.fn();
+    act(() => {
+      confirmation = result.current.keepLocalVersion(remote.version);
+      void confirmation.then(confirmed);
     });
 
     expect(result.current.lease).toEqual(lease);
@@ -855,11 +858,187 @@ describe('useCollaboration lease ordering', () => {
       type: 'document',
       baseVersion: remote.version,
       leaseId: lease.leaseId,
+      conflictResolution: 'keep-local',
       document: { featureOrder: local.featureOrder }
     });
-    act(() => socket.receive({ type: 'ack', version: remote.version + 1 }));
+    expect(confirmed).not.toHaveBeenCalled();
+    expect(result.current.conflict).not.toBeNull();
+    await act(async () => {
+      socket.receive({ type: 'ack', version: remote.version + 1 });
+      await confirmation;
+    });
+    expect(confirmed).toHaveBeenCalledOnce();
     expect(result.current.conflict).toBeNull();
     expect(readUnresolvedConflict(base.projectId, 'room')).toBeNull();
+    unmount();
+  });
+});
+
+describe('Keep my version confirmation failures', () => {
+  function conflictWithLease() {
+    vi.useFakeTimers();
+    vi.stubGlobal('WebSocket', FakeWebSocket);
+    const base = createProjectDocument('Recovery', toUserId('user_recovery'));
+    const local = addPrimitiveFeature(base, {
+      name: 'Local box',
+      primitiveKind: 'box',
+      dimensions: { width: 1, height: 2, depth: 3 }
+    });
+    const remote = addPrimitiveFeature(base, {
+      name: 'Remote sphere',
+      primitiveKind: 'sphere',
+      dimensions: { radius: 4 }
+    });
+    const onRemoteDocument = vi.fn();
+    const hook = renderHook(
+      ({ document }: { document: ProjectDocument }) =>
+        useCollaboration({
+          enabled: true,
+          document,
+          session: session(base.ownerUserId),
+          onRemoteDocument,
+          onConflict: vi.fn()
+        }),
+      { initialProps: { document: local } }
+    );
+    const socket = FakeWebSocket.instances[0]!;
+    act(() => {
+      socket.open();
+      socket.receive({
+        type: 'state',
+        members: [],
+        document: remote,
+        role: 'owner',
+        lease: null
+      });
+      socket.receive({
+        type: 'lease-granted',
+        lease: {
+          projectId: base.projectId,
+          leaseId: 'lease_recovery',
+          clientId: socket.frames()[0]!.clientId as string,
+          userId: base.ownerUserId,
+          expiresAt: Date.now() + 30_000
+        }
+      });
+      socket.receive({ type: 'conflict', document: remote });
+    });
+    return { ...hook, socket, local, remote, onRemoteDocument };
+  }
+
+  it.each([
+    'rejection',
+    'disconnect',
+    'timeout',
+    'conflict',
+    'lease-lost',
+    'unmount'
+  ] as const)(
+    'rejects on %s and retains the recovery decision',
+    async (failure) => {
+      const { result, socket, remote, unmount, onRemoteDocument } =
+        conflictWithLease();
+      const consoleError = vi
+        .spyOn(console, 'error')
+        .mockImplementation(() => undefined);
+      let confirmation!: Promise<void>;
+      act(() => {
+        confirmation = result.current.keepLocalVersion(remote.version);
+      });
+      const rejected = expect(confirmation).rejects.toThrow();
+      await act(async () => {
+        if (failure === 'rejection')
+          socket.receive({
+            type: 'error',
+            code: 'permission-denied',
+            message: 'Write refused'
+          });
+        if (failure === 'disconnect') socket.close();
+        if (failure === 'timeout') vi.advanceTimersByTime(15_000);
+        if (failure === 'conflict')
+          socket.receive({ type: 'conflict', document: remote });
+        if (failure === 'lease-lost')
+          socket.receive({ type: 'lease-lost', reason: 'expired' });
+        if (failure === 'unmount') unmount();
+        await rejected;
+      });
+      expect(readUnresolvedConflict(remote.projectId, 'room')).not.toBeNull();
+      expect(onRemoteDocument).not.toHaveBeenCalled();
+      if (failure !== 'unmount') {
+        expect(result.current.conflict).not.toBeNull();
+        unmount();
+      }
+      consoleError.mockRestore();
+    }
+  );
+
+  it('lets a rejected submission retry and only completes on its ack', async () => {
+    const { result, socket, remote, unmount } = conflictWithLease();
+    const consoleError = vi
+      .spyOn(console, 'error')
+      .mockImplementation(() => undefined);
+    let first!: Promise<void>;
+    act(() => {
+      first = result.current.keepLocalVersion(remote.version);
+    });
+    const rejected = expect(first).rejects.toThrow('Write refused');
+    await act(async () => {
+      socket.receive({
+        type: 'error',
+        code: 'permission-denied',
+        message: 'Write refused'
+      });
+      await rejected;
+    });
+    let retry!: Promise<void>;
+    act(() => {
+      retry = result.current.keepLocalVersion(remote.version);
+    });
+    await expect(
+      result.current.keepLocalVersion(remote.version)
+    ).rejects.toThrow(/already waiting/);
+    await act(async () => {
+      socket.receive({ type: 'ack', version: remote.version + 1 });
+      await retry;
+    });
+    expect(result.current.conflict).toBeNull();
+    unmount();
+    consoleError.mockRestore();
+  });
+
+  it('does not overwrite edits made while Keep my version is in flight', async () => {
+    const {
+      result,
+      socket,
+      local,
+      remote,
+      rerender,
+      unmount,
+      onRemoteDocument
+    } = conflictWithLease();
+    let confirmation!: Promise<void>;
+    act(() => {
+      confirmation = result.current.keepLocalVersion(remote.version);
+    });
+    const newer = addPrimitiveFeature(local, {
+      name: 'New cylinder',
+      primitiveKind: 'cylinder',
+      dimensions: { radius: 1, height: 2 }
+    });
+    rerender({ document: newer });
+    const rejected = expect(confirmation).rejects.toThrow(/Newer local edits/);
+    await act(async () => {
+      socket.receive({
+        type: 'ack',
+        version: remote.version + 1,
+        document: { ...local, version: remote.version + 1 }
+      });
+      await rejected;
+    });
+    expect(result.current.conflict?.localDocument.featureOrder).toEqual(
+      newer.featureOrder
+    );
+    expect(onRemoteDocument).not.toHaveBeenCalled();
     unmount();
   });
 });

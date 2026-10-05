@@ -64,6 +64,7 @@ export interface CollaborationClientState {
 }
 
 const MAX_MESSAGE_BYTES = 900_000;
+const KEEP_MINE_ACK_TIMEOUT_MS = 15_000;
 /**
  * Inbound frames wrap a room document (bounded server-side by
  * MAX_PERSISTED_DOCUMENT_BYTES, 1.5 MB) plus presence/lease metadata. A frame
@@ -265,6 +266,12 @@ export function useCollaboration({
   const leaseRef = useRef<ProjectEditLease | null>(null);
   const conflictRef = useRef<ProjectConflict | null>(null);
   const keepMinePendingRef = useRef(false);
+  const keepMineAckRef = useRef<{
+    document: ProjectDocument;
+    timer: number;
+    resolve(): void;
+    reject(error: Error): void;
+  } | null>(null);
   const sendCurrentDocumentRef = useRef<(() => void) | null>(null);
   documentRef.current = document;
   remoteHandlerRef.current = onRemoteDocument;
@@ -284,6 +291,16 @@ export function useCollaboration({
       ? 'connecting'
       : statusEntry.status;
 
+  const settleKeepMine = useCallback((error?: Error) => {
+    const pending = keepMineAckRef.current;
+    keepMineAckRef.current = null;
+    keepMinePendingRef.current = false;
+    if (!pending) return;
+    window.clearTimeout(pending.timer);
+    if (error) pending.reject(error);
+    else pending.resolve();
+  }, []);
+
   const reconcileMatchingRoomDocument = useCallback(
     (remote: ProjectDocument): boolean => {
       const local = documentRef.current;
@@ -300,7 +317,7 @@ export function useCollaboration({
       clearUnresolvedConflict(local.projectId, 'room');
       conflictRef.current = null;
       setConflict(null);
-      keepMinePendingRef.current = false;
+      settleKeepMine();
       lastSentVersionRef.current = remote.version;
       baseVersionRef.current = remote.version;
       serverVersionRef.current = remote.version;
@@ -316,7 +333,7 @@ export function useCollaboration({
       );
       return true;
     },
-    [setStatus]
+    [setStatus, settleKeepMine]
   );
 
   useEffect(() => {
@@ -388,7 +405,7 @@ export function useCollaboration({
     const acknowledge = (
       message: Extract<CollaborationServerMessage, { type: 'ack' }>
     ) => {
-      const submitted = pendingDocument;
+      const submitted = keepMineAckRef.current?.document ?? pendingDocument;
       pendingDocument = null;
       const local = documentRef.current;
       serverVersionRef.current = message.version;
@@ -402,12 +419,17 @@ export function useCollaboration({
         !projectPreservesLocalWork(local, submitted)
       ) {
         retainConflict(message.document, true);
+        settleKeepMine(
+          new Error(
+            'Newer local edits still need reconciliation. Please retry.'
+          )
+        );
         return;
       }
       lastSentVersionRef.current = message.version;
       baseVersionRef.current = message.version;
       if (keepMinePendingRef.current) {
-        keepMinePendingRef.current = false;
+        settleKeepMine();
         clearUnresolvedConflict(projectId, 'room');
         conflictRef.current = null;
         setConflict(null);
@@ -552,7 +574,11 @@ export function useCollaboration({
         sendDocument(socket, 'hello');
       });
       socket.addEventListener('message', (event) => {
-        if (typeof event.data !== 'string') {
+        if (
+          disposed ||
+          socketRef.current !== socket ||
+          typeof event.data !== 'string'
+        ) {
           return;
         }
         const message = parseServerMessage(event.data, projectId);
@@ -650,6 +676,11 @@ export function useCollaboration({
           return;
         }
         if (message.type === 'lease-lost') {
+          settleKeepMine(
+            new Error(
+              'The edit lease was lost. Please retry after it is renewed.'
+            )
+          );
           leaseIdRef.current = null;
           leaseRef.current = null;
           setLease(null);
@@ -717,23 +748,44 @@ export function useCollaboration({
         if (message.type === 'conflict') {
           pendingDocument = null;
           if (rejectsNewerSchema(message.document)) {
+            settleKeepMine(
+              new Error('Update the app before resolving this room version.')
+            );
             return;
           }
-          keepMinePendingRef.current = false;
           serverVersionRef.current = message.document.version;
           setRoomVersion(message.document.version);
           setStatus('conflict');
           retainConflict(message.document, true);
+          if (conflictRef.current) {
+            settleKeepMine(
+              new Error(
+                'The room changed before Keep my version completed. Please retry.'
+              )
+            );
+          }
           return;
         }
         const rejected = rejectionStatus(message);
         if (rejected) {
+          settleKeepMine(
+            new Error(
+              message.type === 'error'
+                ? message.message
+                : 'The room rejected Keep my version.'
+            )
+          );
           pendingDocument = null;
           setStatus(rejected);
         }
       });
       socket.addEventListener('close', () => {
         if (socketRef.current === socket) {
+          settleKeepMine(
+            new Error(
+              'The collaboration room disconnected before confirmation. Please retry.'
+            )
+          );
           socketRef.current = null;
         }
         if (disposed) {
@@ -779,6 +831,7 @@ export function useCollaboration({
     }, 10_000);
     return () => {
       disposed = true;
+      settleKeepMine(new Error('The project changed before confirmation.'));
       sendCurrentDocumentRef.current = null;
       if (reconnectTimer !== undefined) {
         window.clearTimeout(reconnectTimer);
@@ -815,7 +868,8 @@ export function useCollaboration({
     projectId,
     userId,
     reconcileMatchingRoomDocument,
-    setStatus
+    setStatus,
+    settleKeepMine
   ]);
 
   useEffect(() => {
@@ -867,6 +921,9 @@ export function useCollaboration({
 
   const keepLocalVersion = useCallback(
     async (expectedRemoteVersion: number): Promise<void> => {
+      if (keepMinePendingRef.current) {
+        throw new Error('Keep my version is already waiting for confirmation.');
+      }
       const pending = conflictRef.current;
       const activeLease = leaseRef.current;
       const socket = socketRef.current;
@@ -900,7 +957,8 @@ export function useCollaboration({
         clientId: clientId(),
         baseVersion: expectedRemoteVersion,
         document: collaborationDocument(current),
-        leaseId: activeLease.leaseId
+        leaseId: activeLease.leaseId,
+        conflictResolution: 'keep-local' as const
       };
       const payload = JSON.stringify(body);
       keepMinePendingRef.current = true;
@@ -913,7 +971,36 @@ export function useCollaboration({
           setStatus('conflict');
           throw new Error('The collaboration room is offline.');
         }
-        socket.send(payload);
+        try {
+          await new Promise<void>((resolve, reject) => {
+            const timer = window.setTimeout(() => {
+              settleKeepMine(
+                new Error(
+                  'The room did not confirm Keep my version. Please retry.'
+                )
+              );
+              // Reconnect before retrying, so a late ack cannot acknowledge
+              // a different submission on the same socket.
+              socket.close();
+            }, KEEP_MINE_ACK_TIMEOUT_MS);
+            keepMineAckRef.current = {
+              document: current,
+              timer,
+              resolve,
+              reject
+            };
+            socket.send(payload);
+          });
+        } catch (error) {
+          settleKeepMine(
+            error instanceof Error
+              ? error
+              : new Error('Could not submit Keep my version.')
+          );
+          if (documentRef.current?.projectId === projectId)
+            setStatus('conflict');
+          throw error;
+        }
         return;
       }
 
@@ -927,11 +1014,15 @@ export function useCollaboration({
               clientId: body.clientId,
               baseVersion: body.baseVersion,
               document: body.document,
-              leaseId: body.leaseId
+              leaseId: body.leaseId,
+              conflictResolution: body.conflictResolution
             })
           }
         );
         const message = parseServerMessage(await response.text(), projectId);
+        if (documentRef.current?.projectId !== projectId) {
+          throw new Error('The project changed before confirmation.');
+        }
         if (!message) {
           throw new Error('The room returned an unreadable response.');
         }
@@ -960,9 +1051,19 @@ export function useCollaboration({
               : 'The room did not acknowledge Keep my version.'
           );
         }
+        const latest = documentRef.current;
         serverVersionRef.current = message.version;
-        baseVersionRef.current = message.version;
         setRoomVersion(message.version);
+        if (message.document && !projectPreservesLocalWork(latest, current)) {
+          const next = conflictFromDocuments(latest, message.document);
+          conflictRef.current = next;
+          setConflict(next);
+          conflictHandlerRef.current(message.document);
+          throw new Error(
+            'Newer local edits still need reconciliation. Please retry.'
+          );
+        }
+        baseVersionRef.current = message.version;
         clearUnresolvedConflict(projectId, 'room');
         conflictRef.current = null;
         setConflict(null);
@@ -971,11 +1072,14 @@ export function useCollaboration({
           documentRef.current = message.document;
           remoteHandlerRef.current(message.document);
         }
+      } catch (error) {
+        if (documentRef.current?.projectId === projectId) setStatus('conflict');
+        throw error;
       } finally {
         keepMinePendingRef.current = false;
       }
     },
-    [projectId, reconcileMatchingRoomDocument, setStatus]
+    [projectId, reconcileMatchingRoomDocument, setStatus, settleKeepMine]
   );
 
   return {
