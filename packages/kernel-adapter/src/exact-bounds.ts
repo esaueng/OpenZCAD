@@ -143,8 +143,8 @@ function faceExtremes(mesh: GroupedMesh, faceCount: number): number[][] {
  *   real chord shortfall.
  *
  * When the certified bound still sits inside the kernel's side, the side is
- * pulled in to the refined mesh's extreme — the rule
- * {@link tightenBoundsToMesh} applies, at a finer deflection.
+ * pulled in to the certified bound, retaining the finer deflection and
+ * Float32 margin so geometry between mesh vertices stays inside the box.
  *
  * @param bounds The box after {@link tightenBoundsToMesh}.
  * @param display The solid's display mesh, grouped by face.
@@ -214,7 +214,6 @@ export function refineBoundsAtSplineFaces(
     const fineBounds = fineBoundsAt(fine);
     if (!fineBounds) continue;
     let certified = -Infinity;
-    let extreme = -Infinity;
     for (const face of candidates) {
       const plane = faces[face]!.surfaceType === 'plane';
       const value = outward(plane ? displayBounds[face]! : fineBounds[face]!);
@@ -226,10 +225,9 @@ export function refineBoundsAtSplineFaces(
         certified,
         value + (plane ? 0 : fine) + float32Slack(value)
       );
-      extreme = Math.max(extreme, value);
     }
     if (certified < kernelSide) {
-      refined[side] = sign * extreme;
+      refined[side] = sign * certified;
     }
   }
   return refined;

@@ -241,7 +241,16 @@ describe('refineBoundsAtSplineFaces', () => {
         return slabWithWall(10);
       }
     );
-    expect(refined).toEqual([0, 0, 8, 62, 50, 10]);
+    expect(refined).toEqual([
+      0,
+      0,
+      8,
+      62,
+      50,
+      10 + deflection / 8 + 4 * Math.fround(10) * 2 ** -23
+    ]);
+    // A true extremum between finer-mesh vertices must remain enclosed.
+    expect(refined[5]).toBeGreaterThanOrEqual(10 + deflection / 16);
     // One finer mesh, at a power-of-two fraction of the display's.
     expect(remeshed).toEqual([deflection / 8]);
   });
@@ -336,7 +345,14 @@ describe('refineBoundsAtSplineFaces', () => {
         deflection,
         () => lowFloor
       )
-    ).toEqual([0, 0, 8, 62, 50, 10]);
+    ).toEqual([
+      0,
+      0,
+      8 - deflection / 8 - 4 * Math.fround(8) * 2 ** -23,
+      62,
+      50,
+      10
+    ]);
   });
 
   it('fails safe when the finer mesh cannot be built', () => {
