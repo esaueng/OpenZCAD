@@ -1,4 +1,13 @@
 import type { Locator, Page } from '@playwright/test';
+import {
+  addSketchFeature,
+  createProjectDocument
+} from '@openzcad/document-core';
+import {
+  toUserId,
+  type ProjectDocument,
+  type SketchPlaneRef
+} from '@openzcad/shared';
 import { createProject, expect, stubApi, test } from './openzcad-fixtures';
 
 /**
@@ -192,3 +201,95 @@ test('a Front (XZ) sketch reads +u rightward and +v upward', async ({
 
   expectRightAndUp(await screenSteps(page.locator('.viewer-host canvas')));
 });
+
+for (const [label, planeRef] of [
+  ['XY to Front', { type: 'canonical', plane: 'XY', offset: 0 }],
+  ['YZ to Front', { type: 'canonical', plane: 'YZ', offset: 0 }],
+  ['legacy Front offset', { type: 'canonical', plane: 'XZ', offset: 0 }],
+  [
+    'current Front offset',
+    { type: 'canonical', plane: 'XZ', offset: 0, basisRevision: 2 }
+  ]
+] as const satisfies readonly (readonly [string, SketchPlaneRef])[]) {
+  test(`inspector plane edits preserve the intended basis: ${label}`, async ({
+    page
+  }) => {
+    const created = addSketchFeature(
+      createProjectDocument(label, toUserId('user_e2e')),
+      {
+        name: 'Profile',
+        planeRef,
+        objects: [{ objectKind: 'circle', radius: 4, centerX: 0, centerY: 0 }]
+      }
+    );
+    const document = created.document;
+    if (label === 'legacy Front offset')
+      document.schemaVersion = 15 as typeof document.schemaVersion;
+    await stubApi(page);
+    await page.route('**/api/projects', (route) =>
+      route.request().method() === 'POST'
+        ? route.fulfill({
+            status: 201,
+            json: {
+              project: {
+                projectId: document.projectId,
+                name: document.name,
+                revisionCount: 1,
+                updatedAt: new Date().toISOString()
+              },
+              document
+            }
+          })
+        : route.fulfill({ json: { projects: [] } })
+    );
+    await page.setViewportSize({ width: 1440, height: 1000 });
+    await page.goto('/');
+    await page.getByLabel('Project name').fill(document.name);
+    await page.getByRole('button', { name: 'Create project' }).click();
+    await page.locator('.feature-row-main', { hasText: /^Profile$/ }).click();
+    const inspector = page.getByRole('region', { name: 'Feature inspector' });
+    await inspector
+      .getByRole('combobox', { name: 'Plane', exact: true })
+      .selectOption('XZ');
+    await inspector
+      .getByRole('textbox', { name: 'Plane offset', exact: true })
+      .fill('3');
+    await inspector.getByRole('button', { name: /^Apply/ }).click();
+
+    const readRef = () =>
+      page.evaluate(
+        (projectId) =>
+          new Promise<SketchPlaneRef | null>((resolve, reject) => {
+            const open = indexedDB.open('openzcad-v2');
+            open.onerror = () =>
+              reject(new Error('Could not open project store'));
+            open.onsuccess = () => {
+              const db = open.result;
+              const request = db
+                .transaction('projects', 'readonly')
+                .objectStore('projects')
+                .get(projectId);
+              request.onerror = () => {
+                db.close();
+                reject(new Error('Could not read project'));
+              };
+              request.onsuccess = () => {
+                db.close();
+                const saved = request.result as ProjectDocument | undefined;
+                const sketch = Object.values(saved?.nodes ?? {}).find(
+                  (node) => node.kind === 'sketch'
+                );
+                resolve(sketch?.planeRef ?? null);
+              };
+            };
+          }),
+        document.projectId
+      );
+    await expect.poll(readRef).toEqual({
+      type: 'canonical',
+      plane: 'XZ',
+      offset: 3,
+      ...(label === 'legacy Front offset' ? {} : { basisRevision: 2 })
+    });
+  });
+}
