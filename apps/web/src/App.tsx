@@ -18276,7 +18276,11 @@ export function App() {
     />
   ) : interaction.mode === 'sketch' && selectedSketchEntity ? (
     <SketchEntityEditor
-      key={`${selectedSketchEntity.id}:${doc.version}`}
+      // One editor per object, not per document version: a handle drag or
+      // turn commits through the same path as Apply, and the editor rebases
+      // its fields onto the stored object instead of remounting, so a value
+      // typed but not yet applied survives a move on the canvas.
+      key={selectedSketchEntity.id}
       disabled={sketchSolving || geometryBusy}
       error={sketchEditError}
       data={selectedSketchEntity.data}

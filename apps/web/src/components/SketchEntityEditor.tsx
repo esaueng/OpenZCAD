@@ -140,6 +140,63 @@ function rawValues(data: SketchObjectData): Record<string, string | number> {
   );
 }
 
+function textAttributes(data: SketchObjectData): TextAttributes | null {
+  return data.objectKind === 'text'
+    ? {
+        text: data.text,
+        fontFamily: data.fontFamily,
+        fontStyle: data.fontStyle,
+        // Absent stays absent: Apply writes `align` only once one is picked.
+        ...(data.align ? { align: data.align } : {})
+      }
+    : null;
+}
+
+/**
+ * The editor's fields after the stored object changed under them — a drag
+ * or a turn on the canvas, an undo, a solve. The newest write wins per
+ * field: a field whose stored value changed shows the new one, and every
+ * other field keeps what it showed, typed or not. So a handle drag lands in
+ * X and Y without discarding a string typed but not yet applied, and the
+ * editor stays the one owner of the object's values rather than a draft
+ * that the canvas silently replaces.
+ */
+function rebaseEditorFields(
+  previous: SketchObjectData,
+  next: SketchObjectData,
+  values: Record<string, string>,
+  text: TextAttributes | null
+): { values: Record<string, string>; text: TextAttributes | null } {
+  if (previous.objectKind !== next.objectKind) {
+    return { values: initialValues(next), text: textAttributes(next) };
+  }
+  const before = rawValues(previous);
+  const after = rawValues(next);
+  const shown = initialValues(next);
+  const rebasedValues = Object.fromEntries(
+    FIELDS[next.objectKind].map(({ key }) => [
+      key,
+      before[key] === after[key] ? (values[key] ?? shown[key]!) : shown[key]!
+    ])
+  );
+  const was = textAttributes(previous);
+  const now = textAttributes(next);
+  if (!was || !now || !text) {
+    return { values: rebasedValues, text: now };
+  }
+  const rebasedText: TextAttributes = {
+    text: was.text === now.text ? text.text : now.text,
+    fontFamily:
+      was.fontFamily === now.fontFamily ? text.fontFamily : now.fontFamily,
+    fontStyle: was.fontStyle === now.fontStyle ? text.fontStyle : now.fontStyle
+  };
+  const align = was.align === now.align ? text.align : now.align;
+  return {
+    values: rebasedValues,
+    text: align ? { ...rebasedText, align } : rebasedText
+  };
+}
+
 function nextData(
   data: SketchObjectData,
   values: Record<string, string>,
@@ -288,16 +345,18 @@ export function SketchEntityEditor({
 }: SketchEntityEditorProps) {
   const [values, setValues] = useState(() => initialValues(data));
   const [textAttrs, setTextAttrs] = useState<TextAttributes | null>(() =>
-    data.objectKind === 'text'
-      ? {
-          text: data.text,
-          fontFamily: data.fontFamily,
-          fontStyle: data.fontStyle,
-          // Absent stays absent: Apply writes `align` only once one is picked.
-          ...(data.align ? { align: data.align } : {})
-        }
-      : null
+    textAttributes(data)
   );
+  // The stored object the fields were last reconciled with. When the object
+  // changes while this editor is open, the fields rebase onto it here,
+  // during render, so no frame shows the stale values.
+  const [base, setBase] = useState(data);
+  if (base !== data) {
+    const rebased = rebaseEditorFields(base, data, values, textAttrs);
+    setBase(data);
+    setValues(rebased.values);
+    setTextAttrs(rebased.text);
+  }
   const fields = FIELDS[data.objectKind];
   const expressionsValid = fields.every(
     ({ key }) => previewExpression(values[key] ?? '', scope).ok
