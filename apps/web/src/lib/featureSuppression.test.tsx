@@ -295,7 +295,20 @@ describe('exact suppression preflight', () => {
     manager.execute(
       commandFactories.addSketch({
         name: 'Attached profile',
-        planeRef: { type: 'face', bodyId: copy.bodyId, faceHash: 123 },
+        planeRef: {
+          type: 'face',
+          bodyId: copy.bodyId,
+          faceHash: 123,
+          sourceArea: 100,
+          sourceCenter: { x: 0, y: 0, z: 5 },
+          sourceNormal: { x: 0, y: 0, z: 1 },
+          frame: {
+            origin: { x: 0, y: 0, z: 5 },
+            xAxis: { x: 1, y: 0, z: 0 },
+            yAxis: { x: 0, y: 1, z: 0 },
+            zAxis: { x: 0, y: 0, z: 1 }
+          }
+        },
         objects: []
       })
     );
