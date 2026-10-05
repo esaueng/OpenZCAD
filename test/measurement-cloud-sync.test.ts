@@ -119,6 +119,78 @@ function api(initial: ProjectMeasurementSnapshot): {
 }
 
 describe('measurement cloud reconciliation', () => {
+  it('keeps a newer device edit when an older pull finishes and the follow-up push fails', async () => {
+    const initial = record('2026-08-07T10:00:00.000Z', 'Initial');
+    const remote = record('2026-08-07T11:00:00.000Z', 'Remote');
+    const newer = record('2026-08-07T12:00:00.000Z', 'Newer local');
+    let device = initial;
+    let release!: (snapshot: ProjectMeasurementSnapshot) => void;
+    const read = new Promise<ProjectMeasurementSnapshot>((resolve) => {
+      release = resolve;
+    });
+    const load = vi
+      .fn()
+      .mockReturnValueOnce(read)
+      .mockResolvedValue({ revision: 1, record: remote });
+    const save = vi.fn().mockRejectedValue(new Error('Network lost'));
+    const saveLocal = vi.fn(async (value: StoredMeasurementRecord) => {
+      device = value;
+    });
+    const onResult = vi.fn();
+    const watcher = watchProjectMeasurements({
+      api: { loadProjectMeasurements: load, saveProjectMeasurements: save },
+      projectId: initial.projectId,
+      loadLocal: async () => device,
+      saveLocal,
+      onResult
+    });
+    await vi.waitFor(() => expect(load).toHaveBeenCalledTimes(1));
+    device = newer;
+    watcher.push(newer);
+    release({ revision: 1, record: remote });
+    await vi.waitFor(() => expect(save).toHaveBeenCalledTimes(1));
+    expect(device).toEqual(newer);
+    expect(saveLocal).not.toHaveBeenCalled();
+    expect(onResult).not.toHaveBeenCalled();
+    watcher.stop();
+  });
+
+  it('restores edits that arrive while a cloud record is being stored locally', async () => {
+    const initial = record('2026-08-07T10:00:00.000Z', 'Initial');
+    const remote = record('2026-08-07T11:00:00.000Z', 'Remote');
+    const newer = record('2026-08-07T12:00:00.000Z', 'Newer local');
+    let device = initial;
+    let release!: () => void;
+    const held = new Promise<void>((resolve) => {
+      release = resolve;
+    });
+    const saveLocal = vi.fn(async (value: StoredMeasurementRecord) => {
+      if (value === remote) await held;
+      device = value;
+    });
+    const save = vi.fn().mockRejectedValue(new Error('Offline'));
+    const onResult = vi.fn();
+    const watcher = watchProjectMeasurements({
+      api: {
+        loadProjectMeasurements: async () => ({ revision: 1, record: remote }),
+        saveProjectMeasurements: save
+      },
+      projectId: initial.projectId,
+      loadLocal: async () => device,
+      saveLocal,
+      onResult
+    });
+    await vi.waitFor(() => expect(saveLocal).toHaveBeenCalledWith(remote));
+    device = newer;
+    watcher.push(newer);
+    release();
+    await vi.waitFor(() => expect(save).toHaveBeenCalledOnce());
+    expect(device).toBe(newer);
+    expect(saveLocal).toHaveBeenLastCalledWith(newer);
+    expect(onResult).not.toHaveBeenCalled();
+    watcher.stop();
+  });
+
   it('pushes a newer local list with the revision it just read', async () => {
     const remote = record('2026-08-07T12:00:00.000Z', 'Remote');
     const local = record('2026-08-07T13:00:00.000Z', 'Local');
