@@ -546,6 +546,18 @@ export function importedStepLineageName(
   return `import.step.${kind}.${(hash >>> 0).toString(16).padStart(8, '0')}`;
 }
 
+/**
+ * The exact comparison key behind {@link topologyWitnessesEqual}: two
+ * witnesses are equal exactly when their keys are. Lets a caller index many
+ * candidates once instead of comparing every pair.
+ */
+export function topologyWitnessKey(
+  kind: TopologyKind,
+  witness: TopologyWitnessV1
+): string {
+  return witnessKey(kind, witness);
+}
+
 function witnessKey(kind: TopologyKind, witness: TopologyWitnessV1): string {
   if (kind === 'edge') {
     const edge = witness as EdgeWitnessV1;
