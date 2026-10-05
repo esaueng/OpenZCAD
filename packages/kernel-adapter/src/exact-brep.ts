@@ -6,6 +6,7 @@
  */
 import type { RemusKernel } from './remus-runtime';
 import { canonicalDirection } from './topology-fingerprint';
+import { surfaceTypeOf } from './exact-sync-memo';
 import type { Vec3 } from '@openzcad/geometry';
 import type { EdgeCurve } from '@openzcad/shared';
 import {
@@ -52,7 +53,7 @@ export function analyticSurfaceRecord(
 export function sameSphereSurface(kernel: RemusKernel, faces: number[]): boolean {
   if (
     faces.length !== 2 ||
-    faces.some((face) => kernel.getSurfaceType(face) !== 'sphere')
+    faces.some((face) => surfaceTypeOf(kernel, face) !== 'sphere')
   ) {
     return false;
   }
@@ -364,7 +365,7 @@ export function brepEdgeDisplayRole(
   const uniqueOwners = [...new Set(owners)];
   if (
     uniqueOwners.length === 1 &&
-    PERIODIC_SURFACE_TYPES.has(kernel.getSurfaceType(uniqueOwners[0]!))
+    PERIODIC_SURFACE_TYPES.has(surfaceTypeOf(kernel, uniqueOwners[0]!))
   ) {
     return 'seam';
   }
@@ -381,12 +382,12 @@ export function readAnalyticCylinder(
 ): AnalyticCylinder | null {
   const faces = Array.from(kernel.getSolidFaces(solid));
   const cylinderFaces = faces.filter(
-    (face) => kernel.getSurfaceType(face) === 'cylinder'
+    (face) => surfaceTypeOf(kernel, face) === 'cylinder'
   );
   if (
     faces.length !== 3 ||
     cylinderFaces.length !== 1 ||
-    faces.filter((face) => kernel.getSurfaceType(face) === 'plane').length !== 2
+    faces.filter((face) => surfaceTypeOf(kernel, face) === 'plane').length !== 2
   ) {
     return null;
   }
@@ -446,7 +447,7 @@ export function isBlendFace(
   solid: number,
   face: number
 ): boolean {
-  const surfaceType = kernel.getSurfaceType(face);
+  const surfaceType = surfaceTypeOf(kernel, face);
   if (surfaceType === 'bspline') {
     return true;
   }
@@ -471,7 +472,7 @@ export function tangentPlanarNeighbours(
   solid: number,
   face: number
 ): number[] {
-  if (kernel.getSurfaceType(face) !== 'cylinder') {
+  if (surfaceTypeOf(kernel, face) !== 'cylinder') {
     return [];
   }
   let parameters: unknown;
@@ -497,7 +498,7 @@ export function tangentPlanarNeighbours(
   for (const neighbour of kernel.getSolidFaces(solid)) {
     if (
       neighbour === face ||
-      kernel.getSurfaceType(neighbour) !== 'plane' ||
+      surfaceTypeOf(kernel, neighbour) !== 'plane' ||
       !Array.from(kernel.getFaceEdges(neighbour)).some((edge) =>
         bandEdges.has(edge)
       )
