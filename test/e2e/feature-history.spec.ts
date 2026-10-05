@@ -165,6 +165,48 @@ test('a suppressed feature passes its body through to the features after it', as
   expect(errors).toEqual([]);
 });
 
+test('refuses suppression with dependent details and keeps the current model and history', async ({
+  page
+}) => {
+  test.setTimeout(90_000);
+  const errors: string[] = [];
+  page.on('pageerror', (error) => errors.push(error.message));
+  await stubApi(page);
+  await page.goto('/');
+  await expect(page).toHaveTitle(/OpenZCAD/);
+  await page.getByRole('button', { name: /Heat Sink/ }).click();
+  await expectBodyCount(page, 1);
+  const source = page.locator('.feature-row', { hasText: /^Base profile/ });
+  await source.hover();
+  await source
+    .getByRole('button', { name: 'Suppress Base profile', exact: true })
+    .click();
+  const details = page.getByRole('region', { name: 'History details' });
+  await expect(details.getByRole('alert')).toContainText(
+    'Cannot suppress "Base profile"',
+    { timeout: 30_000 }
+  );
+  await expect(details.getByRole('alert')).toContainText('Extrude base');
+  await expect(details.getByRole('alert')).toContainText('Base corner fillets');
+  await expect(details.getByRole('alert')).toContainText(
+    'The previous model is intact'
+  );
+  await expect(source).not.toContainText('suppressed');
+  await expect(
+    page.locator('.feature-row.needs-repair, .feature-row.failed')
+  ).toHaveCount(0);
+  await expect(
+    page
+      .getByRole('toolbar', { name: 'Viewer bar' })
+      .getByRole('button', { name: 'Undo', exact: true })
+  ).toBeDisabled();
+  await expectBodyCount(page, 1);
+  await page.screenshot({
+    path: test.info().outputPath('suppression-refused.png')
+  });
+  expect(errors).toEqual([]);
+});
+
 test.describe('on a touch screen', () => {
   test.use({ hasTouch: true });
 

@@ -1188,6 +1188,7 @@ import {
   suppressionRepairSnapshot,
   type SuppressionNotice
 } from './lib/suppressionFeedback';
+import { validateFeatureSuppression } from './lib/featureSuppression';
 import {
   moveHasUnappliedChange,
   movingSketchId,
@@ -16243,6 +16244,41 @@ export function App() {
     const liveFeature = findFeature(owner.document, feature.featureId);
     if (!liveFeature) return;
     const resume = isFeatureSuppressed(liveFeature);
+    if (
+      !resume &&
+      featureHistory(owner.document)
+        .downstream(liveFeature.featureId)
+        .some((dependent) => !isFeatureSuppressed(dependent))
+    ) {
+      const document = owner.document;
+      const label = `Suppress ${liveFeature.name}`;
+      void validatedFeature.runTransaction(
+        [
+          commandFactories.setNodeMetadata(
+            {
+              nodeId: liveFeature.id,
+              metadata: { [FEATURE_SUPPRESSED_METADATA_KEY]: true }
+            },
+            label
+          )
+        ],
+        {
+          label,
+          targets: [],
+          validateDerived: (derived) =>
+            validateFeatureSuppression(document, derived, liveFeature),
+          validatingMessage: `Checking dependents of ${liveFeature.name}…`,
+          successMessage: `Suppressed ${liveFeature.name}`,
+          onFailure: (message) => announce(message),
+          onSuccess: () =>
+            announce(`Suppressed ${liveFeature.name}`, {
+              label: 'Undo',
+              run: handleUndo
+            })
+        }
+      );
+      return;
+    }
     // Only a rebuild of this live version can establish what the toggle
     // itself breaks. An earlier toggle may still own the rendered geometry.
     const before = suppressionRepairSnapshot(

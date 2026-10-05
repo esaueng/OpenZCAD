@@ -2,6 +2,7 @@ import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import {
   CommandManager,
   commandFactories,
+  replayCommands,
   type AnyCommand
 } from '@openzcad/command-system';
 import {
@@ -17,6 +18,7 @@ import {
 } from '@openzcad/kernel-adapter/exact';
 import {
   toUserId,
+  FEATURE_SUPPRESSED_METADATA_KEY,
   type BodyId,
   type EdgeTopology,
   type ProjectDocument
@@ -25,6 +27,7 @@ import {
   buildModelingOperationSubmission,
   modelingFaceOptions
 } from '../apps/web/src/lib/modelingOperations';
+import { validateFeatureSuppression } from '../apps/web/src/lib/featureSuppression';
 
 /**
  * F1 of the 1 October 2026 design review: a bracket built the way a new user
@@ -68,9 +71,12 @@ describe('a primitive-built bracket follows its width parameter', () => {
   }
 
   it('rebuilds fillet and holes after width 80 → 120', async () => {
-    const manager = new CommandManager(
-      createProjectDocument('Bracket', toUserId('user_bracket_width'), 'mm')
+    const base = createProjectDocument(
+      'Bracket',
+      toUserId('user_bracket_width'),
+      'mm'
     );
+    const manager = new CommandManager(base);
     const run = (label: string, commands: AnyCommand[]) =>
       manager.runTransaction(label, commands);
     const width = (expression: string) =>
@@ -193,6 +199,92 @@ describe('a primitive-built bracket follows its width parameter', () => {
     expect(after).toHaveLength(2);
     expect(after[1]! - after[0]!).toBeCloseTo(90, 0);
     expect(before[1]! - before[0]!).toBeCloseTo(50, 0);
+
+    // F1's remaining case: the holes keep their exact stored references when
+    // the resized bracket's fillet is paused. Compare warm history restore to
+    // a cold command replay, then restore the original filleted result.
+    const features = listFeaturesInOrder(manager.document);
+    const filletFeature = features.find(
+      (feature) => feature.featureId === fillet.featureId
+    )!;
+    const holeData = structuredClone(
+      features
+        .filter((feature) => feature.data.featureKind === 'hole')
+        .map((feature) => feature.data)
+    );
+    const geometrySignature = (body: typeof wide) => ({
+      faces: body
+        .topology!.faces.map((face) => face.hash)
+        .sort((a, b) => a - b),
+      edges: body
+        .topology!.edges.map((edge) => edge.hash)
+        .sort((a, b) => a - b),
+      volume: body.volume
+    });
+    const filleted = geometrySignature(wide);
+    run('Suppress Fillet', [
+      commandFactories.setNodeMetadata({
+        nodeId: filletFeature.id,
+        metadata: { [FEATURE_SUPPRESSED_METADATA_KEY]: true }
+      })
+    ]);
+    const suppressed = await adapter.syncDocument(manager.document);
+    expect(
+      suppressed.featureWarnings?.map(({ featureId, kind }) => ({
+        featureId,
+        kind
+      }))
+    ).toEqual([{ featureId: fillet.featureId, kind: 'suppressed' }]);
+    expect(() =>
+      validateFeatureSuppression(manager.document, suppressed, filletFeature)
+    ).not.toThrow();
+    const plain = suppressed.bodyRepresentations[target]!;
+    expect(
+      plain.topology!.faces.filter(
+        (face) => face.geometry?.featureType === 'blend'
+      )
+    ).toHaveLength(0);
+    const plainBores = bores(plain);
+    expect(plainBores).toHaveLength(2);
+    expect(plainBores[1]! - plainBores[0]!).toBeCloseTo(90, 0);
+    expect(plain.volume).toBeCloseTo(45_000 - 2 * Math.PI * 9 * 5, 3);
+    expect(
+      Object.values(suppressed.bodyRepresentations)
+        .filter((body) => !body.consumed)
+        .map((body) => body.bodyId)
+    ).toEqual([target]);
+    expect(suppressed.referenceRepairs ?? []).toEqual([]);
+    expect(suppressed.faceReferenceRepairs ?? []).toEqual([]);
+    expect(
+      listFeaturesInOrder(manager.document)
+        .filter((feature) => feature.data.featureKind === 'hole')
+        .map((feature) => feature.data)
+    ).toEqual(holeData);
+
+    const cold = await createExactKernelAdapter();
+    try {
+      const replayed = replayCommands(base, manager.document.commandLog);
+      const rebuilt = await cold.syncDocument(replayed);
+      expect(geometrySignature(rebuilt.bodyRepresentations[target]!)).toEqual(
+        geometrySignature(plain)
+      );
+    } finally {
+      cold.dispose();
+    }
+    manager.undo();
+    const resumed = await adapter.syncDocument(manager.document);
+    expect(resumed.warnings).toEqual([]);
+    expect(geometrySignature(resumed.bodyRepresentations[target]!)).toEqual(
+      filleted
+    );
+    manager.redo();
+    expect(
+      geometrySignature(
+        (await adapter.syncDocument(manager.document)).bodyRepresentations[
+          target
+        ]!
+      )
+    ).toEqual(geometrySignature(plain));
   }, 240_000);
 
   it('keeps every edge of the union when all of them are rounded', async () => {
