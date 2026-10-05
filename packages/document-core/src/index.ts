@@ -750,6 +750,8 @@ export function normalizeDocument(document: ProjectDocument): ProjectDocument {
   // fallback until a feature writes a lineage reference; a v6 document has no
   // text objects and no `all: true` reference, and a v8 sketch simply has no
   // `constraints`, so nothing needs rewriting.
+  // Schema v15 -> v16 adds the canonical-plane basis marker. Never synthesize
+  // it while migrating: unmarked saved sketches must retain revision 1 geometry.
   return {
     ...document,
     schemaVersion: PROJECT_DOCUMENT_SCHEMA_VERSION,
