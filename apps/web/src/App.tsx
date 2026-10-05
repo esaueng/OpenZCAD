@@ -112,6 +112,7 @@ import {
   circleProfile,
   computeSketchProfileAnalysis,
   computeSketchRegions,
+  newCanonicalPlaneRef,
   polygonProfile,
   rectangleProfile,
   type PlaneBasis,
@@ -11182,7 +11183,7 @@ export function App() {
     const offset = sketchPlaneOffset;
     dispatchInteraction({
       type: 'enter-sketch',
-      plane: { type: 'canonical', plane, offset }
+      plane: newCanonicalPlaneRef(plane, offset)
     });
     setTool(null);
     setStatus(

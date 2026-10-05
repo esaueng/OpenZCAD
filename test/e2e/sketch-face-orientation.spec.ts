@@ -171,3 +171,24 @@ test('a Top (XY) sketch keeps +u rightward and +v upward', async ({ page }) => {
 
   expectRightAndUp(await screenSteps(page.locator('.viewer-host canvas')));
 });
+
+test('a Front (XZ) sketch reads +u rightward and +v upward', async ({
+  page
+}) => {
+  // Revision 1's XZ basis (v = -Z, normal +Y) was entered from behind the
+  // model: measured on 2026-10-04, a +10 u step moved -58 px in x and a +10 v
+  // step +58 px in y, so text at rotation 0 read upside down. New sketches
+  // take the front-facing basis and enter from the Front view.
+  await stubApi(page);
+  await page.setViewportSize({ width: 1280, height: 720 });
+  await createProject(page, 'Front Sketch Axes');
+  await page.getByRole('button', { name: /^Sketch \(S\)/ }).click();
+  await page.getByRole('button', { name: 'Front (XZ)' }).click();
+  await expect(
+    page.getByRole('toolbar', { name: 'Sketch tools' })
+  ).toBeVisible();
+  await expect(page.locator('.viewport-dock-grid')).toBeVisible();
+  await waitForStillViewport(page);
+
+  expectRightAndUp(await screenSteps(page.locator('.viewer-host canvas')));
+});
