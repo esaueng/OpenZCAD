@@ -74,3 +74,8 @@ No backend traffic or production data is involved in these regressions.
   unobscured cancellation at all three viewports. Three existing archival
   project-switch/export-cancel regressions also pass; active transfers retain
   their established behavior, while completed notices clear on navigation.
+- Merge review found the holder acceptance fixture still expected two archive
+  failures. It now waits for the initial account project before importing,
+  identifies that import archive and its exact error source, and asserts that
+  the restored local-only copy exports without an extra protected upload. The
+  local-only import regression also continues to assert no protected upload.
