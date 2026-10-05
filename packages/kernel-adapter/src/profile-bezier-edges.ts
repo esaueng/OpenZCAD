@@ -371,7 +371,8 @@ function recognizedAsLine(
 }
 
 /** Ceiling on the pieces one bezier is split into for the kernel. */
-const MAX_KERNEL_SAFE_PIECES = 64;
+const MAX_KERNEL_SAFE_PIECES = 1024;
+const MINIMAL_SPLIT_SEARCH_LIMIT = 64;
 
 /** de Casteljau split of a bezier's control points at `t`. */
 function splitControlPoints(
@@ -399,8 +400,9 @@ function splitControlPoints(
 /**
  * The bezier as the kernel can extrude it: itself, or — when the pinned
  * kernel would misread it as a circle ({@link kernelReadsBezierAsCircle}) —
- * the same curve split by de Casteljau into the fewest equal-parameter pieces
- * that the kernel reads as lines.
+ * the same curve split by de Casteljau into equal-parameter pieces that the
+ * kernel reads as lines. Counts through 64 are minimal; larger counts double
+ * up to the resource limit, after which the profile explicitly refuses.
  *
  * The split is exact: the pieces trace the original polynomial, so the walls
  * and caps keep the font's own curve and the volume is unchanged. A piece the
@@ -425,7 +427,13 @@ export function kernelSafeBezierPieces(
   const points = [curve.a, ...curve.controls, curve.b];
   if (!kernelReadsBezierAsCircle(points)) return [curve];
   const lineTolerance = KERNEL_EXTRUDE_RECOGNITION_TOLERANCE / 2;
-  for (let count = 2; count <= MAX_KERNEL_SAFE_PIECES; count += 1) {
+  // Search small counts exhaustively, then double to bound the work for
+  // larger glyphs without ever forwarding a recognized unsafe curve.
+  for (
+    let count = 2;
+    count <= MAX_KERNEL_SAFE_PIECES;
+    count = count < MINIMAL_SPLIT_SEARCH_LIMIT ? count + 1 : count * 2
+  ) {
     const pieces: Vec2Like[][] = [];
     let rest: readonly Vec2Like[] = points;
     for (let index = 0; index < count - 1; index += 1) {
@@ -454,5 +462,7 @@ export function kernelSafeBezierPieces(
       controls: piece.slice(1, -1) as unknown as BezierRegionCurve['controls']
     }));
   }
-  return [curve];
+  throw new Error(
+    'Exact text profile refused: the curve exceeds the safe subdivision limit.'
+  );
 }

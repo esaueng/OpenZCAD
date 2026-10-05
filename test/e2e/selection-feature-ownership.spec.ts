@@ -208,7 +208,17 @@ for (const filter of ['Face', 'Any'] as const) {
     );
     await page.screenshot({ path: '/tmp/openzcad-selection-top-fillet.png' });
     await clickBlend(5, 'right');
-    await page.getByRole('menuitem', { name: /Delete Fillet edges/ }).click();
+    await expect(page.getByRole('menuitem', { name: /^Delete/ })).toHaveCount(
+      0
+    );
+    await page.getByRole('menuitem', { name: /Edit Fillet edges/ }).click();
+    await expect(inspector.getByLabel('Radius', { exact: true })).toHaveValue(
+      '5'
+    );
+    await inspector.getByLabel('More actions').click();
+    await inspector
+      .getByRole('button', { name: 'Delete feature', exact: true })
+      .click();
     await expect(page.locator('.feature-row')).toHaveCount(2);
     await expect
       .poll(async () => (await blend(canvas, 2))?.producingFeatureId)
