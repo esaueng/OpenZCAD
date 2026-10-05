@@ -111,6 +111,13 @@ export interface MeasuredShape {
     min: Vec3;
     max: Vec3;
   };
+  /**
+   * The linear display deflection each solid was meshed at, in solid order.
+   * Fed back as the held value for the body's next measurement so an edit
+   * that nudges the bounding box does not change the deflection and force
+   * the kernel to re-mesh every face (see `heldDisplayTessellation`).
+   */
+  displayLinearDeflections?: readonly number[];
 }
 
 /** Face identity for the DXF face export: the app's selection shape. */

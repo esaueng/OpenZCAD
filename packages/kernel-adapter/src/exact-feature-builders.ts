@@ -1445,7 +1445,10 @@ function combineBooleanOperands(
       (accepted) => {
         acceptedUnionSolid = accepted;
       },
-      ctx.strictVerdicts !== undefined
+      ctx.strictVerdicts !== undefined,
+      feature.bodyId === undefined
+        ? undefined
+        : ctx.heldDisplayDeflection?.(feature.bodyId)
     );
     solid = unified.solid;
     unionVerdict = unified.verdict;

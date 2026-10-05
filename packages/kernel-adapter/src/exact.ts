@@ -184,7 +184,10 @@ export {
   type MeshQualityReport
 };
 import { dot, length, subtract, uniformScaleMatrix } from './exact-math';
-import { displayTessellationForExtents } from './display-tessellation';
+import {
+  displayTessellationForExtents,
+  heldDisplayTessellation
+} from './display-tessellation';
 import {
   MAX_HISTORY_CHECKPOINTS,
   MAX_HISTORY_REPLAY_WORK,
@@ -961,6 +964,20 @@ export class RemusKernelAdapter implements ExactKernelAdapter {
     MeasuredBodyCacheEntry
   >();
   private measuredShapeCacheBytes = 0;
+  /**
+   * Per body, the linear display deflection each of its solids was last
+   * meshed at (see `heldDisplayTessellation`). A display policy, not a
+   * geometry cache: it survives history-cache invalidation (a sync whose
+   * history cannot be reused still edits the same bodies). Entries for
+   * bodies a build no longer produces are pruned with the measured-shape
+   * cache, the map is cleared when the project changes, and on dispose.
+   */
+  private readonly heldDisplayDeflections = new Map<
+    BodyId,
+    readonly number[]
+  >();
+  /** The project the held display deflections belong to. */
+  private heldDisplayProjectId: ProjectDocument['projectId'] | null = null;
 
   private get maxHistoryCheckpoints(): number {
     return this.options.historyCheckpointLimit ?? MAX_HISTORY_CHECKPOINTS;
@@ -1327,6 +1344,12 @@ export class RemusKernelAdapter implements ExactKernelAdapter {
     // anything.
     const strictVerdicts: StrictUnionVerdicts =
       new UnionVerdictsWithMeshBudget();
+    // Another project's bodies are a different set: start their held display
+    // deflections fresh before the build (the union gate reads them).
+    if (this.heldDisplayProjectId !== document.projectId) {
+      this.heldDisplayDeflections.clear();
+      this.heldDisplayProjectId = document.projectId;
+    }
     try {
       build = buildDocumentHistory(
         activeKernel,
@@ -1361,7 +1384,8 @@ export class RemusKernelAdapter implements ExactKernelAdapter {
             }
           : undefined,
         cancellation,
-        normalizedDemand
+        normalizedDemand,
+        (bodyId) => this.heldDisplayDeflections.get(bodyId)?.[0]
       );
     } catch (error) {
       // A cancelled build keeps the retained prefix: the checkpoints pushed
@@ -1463,7 +1487,12 @@ export class RemusKernelAdapter implements ExactKernelAdapter {
      * Whether the opening is measured, or published as unsupported without
      * running the recognizer; see the decision in `syncMeasuredDocument`.
      */
-    measureOpening = recognizeImportedFeatures
+    measureOpening = recognizeImportedFeatures,
+    /**
+     * The linear display deflection each solid of this body was meshed at
+     * last time, in solid order; held while the body's size stays close.
+     */
+    heldDisplayDeflections?: readonly number[]
   ): MeasuredShape {
     if (shape.solids.length === 0) {
       throw new Error('Exact body contains no solids.');
@@ -1490,17 +1519,25 @@ export class RemusKernelAdapter implements ExactKernelAdapter {
     // is rebuilt per solid, so two solids that touch exactly — a linear pattern
     // whose spacing equals its extent — never share an id.
     let nextVertexId = 0;
+    const displayLinearDeflections: number[] = [];
 
     for (const solid of shape.solids) {
       const bounds = kernel.boundingBox(solid);
       // What the body publishes: the kernel's box, tightened to its display
       // mesh where that proves it loose (see exact-bounds.ts).
       let publishedBounds: readonly number[];
-      const displayTessellation = displayTessellationForExtents(
-        bounds[3]! - bounds[0]!,
-        bounds[4]! - bounds[1]!,
-        bounds[5]! - bounds[2]!
+      // Hold the previous deflection while the body's size stays close: a
+      // nudged bounding box must not re-mesh every face (the kernel reuses
+      // per-face meshes only at the same deflection).
+      const displayTessellation = heldDisplayTessellation(
+        displayTessellationForExtents(
+          bounds[3]! - bounds[0]!,
+          bounds[4]! - bounds[1]!,
+          bounds[5]! - bounds[2]!
+        ),
+        heldDisplayDeflections?.[displayLinearDeflections.length]
       );
+      displayLinearDeflections.push(displayTessellation.linearDeflection);
       const faceHandles = Array.from(kernel.getSolidFaces(solid));
       const edgeToFaces = JSON.parse(kernel.edgeToFaceMap(solid)) as Record<
         string,
@@ -1871,7 +1908,8 @@ export class RemusKernelAdapter implements ExactKernelAdapter {
       valid,
       strictValid,
       meshClosure,
-      bbox
+      bbox,
+      displayLinearDeflections
     };
   }
 
@@ -1972,6 +2010,13 @@ export class RemusKernelAdapter implements ExactKernelAdapter {
       for (const bodyId of [...this.measuredShapeCache.keys()]) {
         if (!build.shapes.has(bodyId)) {
           this.evictMeasuredShape(bodyId);
+        }
+      }
+      // Same for the held display deflections: a body this build no longer
+      // produces will never be measured again under that id.
+      for (const bodyId of [...this.heldDisplayDeflections.keys()]) {
+        if (!build.shapes.has(bodyId)) {
+          this.heldDisplayDeflections.delete(bodyId);
         }
       }
       let remeasured = 0;
@@ -2113,10 +2158,17 @@ export class RemusKernelAdapter implements ExactKernelAdapter {
                 analysisHashes,
                 1 / UNIT_TO_MM[document.units],
                 strictVerdicts,
-                measureOpening
+                measureOpening,
+                this.heldDisplayDeflections.get(bodyId)
               )
           );
           remeasured += 1;
+          if (measured.displayLinearDeflections) {
+            this.heldDisplayDeflections.set(
+              bodyId,
+              measured.displayLinearDeflections
+            );
+          }
           const witness = measured.witness;
           this.storeMeasuredShape(bodyId, {
             ...(analysisKey ? { analysisKey } : {}),
@@ -2986,6 +3038,7 @@ export class RemusKernelAdapter implements ExactKernelAdapter {
     // kernel and its checkpoints are adapter-scoped and must be released.
     this.invalidateHistoryCache();
     this.importedSteps.clear();
+    this.heldDisplayDeflections.clear();
   }
 
   /**
