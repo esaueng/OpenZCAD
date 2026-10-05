@@ -1,5 +1,5 @@
 import type { Page } from '@playwright/test';
-import { expect, stubApi, test } from './openzcad-fixtures';
+import { expect, expectBodyCount, stubApi, test } from './openzcad-fixtures';
 
 /**
  * The Undo toast, the status toast and the search bar share one lane. Each
@@ -240,10 +240,10 @@ test('keeps every history row control inside a narrow sidebar', async ({
 
 /**
  * F20: suppressing Boss on the demo turned six later rows "needs repair" and
- * the warning count to 7 with no message at all. The toggle now says what it
- * broke — counting only rows it broke — and offers the undo.
+ * the warning count to 7 with no message at all. Unsafe suppression now
+ * refuses before changing the model; a safe toggle still offers Undo.
  */
-test('suppressing a feature raises an undoable toast that counts what now needs repair', async ({
+test('unsafe suppression names its dependents and safe suppression offers undo', async ({
   page
 }) => {
   test.setTimeout(120_000);
@@ -269,22 +269,24 @@ test('suppressing a feature raises an undoable toast that counts what now needs 
   await bossRow
     .getByRole('button', { name: 'Suppress Boss', exact: true })
     .click();
-  const toast = page.locator('.toast');
-  const message = toast.locator('.toast-message');
-  await expect(message).toHaveText(
-    /^Suppressed Boss · \d+ later features? now needs? repair$/,
+  const details = page.getByRole('region', { name: 'History details' });
+  await expect(details.getByRole('alert')).toContainText(
+    'Cannot suppress "Boss"',
     { timeout: 60_000 }
   );
-  const count = Number(
-    (await message.textContent())?.match(/(\d+) later/)?.[1] ?? '0'
+  await expect(details.getByRole('alert')).toContainText(
+    'Dependent features cannot rebuild'
   );
-  expect(count).toBeGreaterThan(0);
-  // The count is the tree's own: every row the toggle turned "needs repair".
-  await expect(failedRows).toHaveCount(count);
-
-  await toast.getByRole('button', { name: 'Undo' }).click();
-  await expect(toast).toHaveCount(0);
-  await expect(failedRows).toHaveCount(0, { timeout: 60_000 });
+  await expect(details.getByRole('alert')).toContainText(
+    'The previous model is intact'
+  );
+  await expect(bossRow).not.toContainText('suppressed');
+  await expect(failedRows).toHaveCount(0);
+  await expect(
+    page.getByRole('button', { name: 'Undo', exact: true })
+  ).toBeDisabled();
+  await expectBodyCount(page, 1);
+  await details.getByRole('button', { name: 'Dismiss failure' }).click();
 
   // With nothing resting on it, the toast names the feature alone, and
   // resuming it says so too.
@@ -296,8 +298,16 @@ test('suppressing a feature raises an undoable toast that counts what now needs 
     ''
   );
   await suppress.click();
+  const toast = page.locator('.toast');
+  const message = toast.locator('.toast-message');
   await expect(message).toHaveText(`Suppressed ${name}`, { timeout: 60_000 });
   await expect(toast.getByRole('button', { name: 'Undo' })).toBeVisible();
+  await toast.getByRole('button', { name: 'Undo' }).click();
+  await expect(lastRow).not.toContainText('suppressed');
+  await expect(failedRows).toHaveCount(0);
+  await lastRow.hover();
+  await suppress.click();
+  await expect(message).toHaveText(`Suppressed ${name}`, { timeout: 60_000 });
   await lastRow.hover();
   await lastRow
     .getByRole('button', { name: `Resume ${name}`, exact: true })
