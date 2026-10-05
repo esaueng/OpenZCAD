@@ -21,41 +21,45 @@ const localProject: ProjectSummary = {
   updatedAt: '2026-08-04T12:00:00.000Z'
 };
 
+function startScreenProps(
+  overrides: Partial<ComponentProps<typeof StartScreen>> = {}
+): ComponentProps<typeof StartScreen> {
+  return {
+    projects: [localProject],
+    status: '',
+    busy: false,
+    demos: [],
+    defaultUnits: 'mm',
+    onCreate: vi.fn(),
+    onOpen: vi.fn(),
+    onOpenDemo: vi.fn(),
+    onOpenSettings: vi.fn(),
+    onDuplicate: vi.fn(),
+    loadProperties: vi.fn().mockResolvedValue(null),
+    cloudProjectIds: new Set(),
+    accountProjectListReached: true,
+    conflictedProjectIds: new Set(),
+    signedIn: true,
+    onSaveToAccount: vi.fn(),
+    onSaveAllToAccount: vi.fn(),
+    syncRun: null,
+    onRetrySync: vi.fn(),
+    onDismissSyncRun: vi.fn(),
+    onMoveToShelf: vi.fn(),
+    onTogglePin: vi.fn(),
+    onReorder: vi.fn(),
+    onDeleteForever: vi.fn(),
+    onEmptyTrash: vi.fn(),
+    loadThumbnail: vi.fn().mockResolvedValue(undefined),
+    publishThumbnail: vi.fn().mockResolvedValue(undefined),
+    ...overrides
+  };
+}
+
 function renderStartScreen(
   overrides: Partial<ComponentProps<typeof StartScreen>> = {}
 ) {
-  return render(
-    <StartScreen
-      projects={[localProject]}
-      status=""
-      busy={false}
-      demos={[]}
-      defaultUnits="mm"
-      onCreate={vi.fn()}
-      onOpen={vi.fn()}
-      onOpenDemo={vi.fn()}
-      onOpenSettings={vi.fn()}
-      onDuplicate={vi.fn()}
-      loadProperties={vi.fn().mockResolvedValue(null)}
-      cloudProjectIds={new Set()}
-      accountProjectListReached={true}
-      conflictedProjectIds={new Set()}
-      signedIn={true}
-      onSaveToAccount={vi.fn()}
-      onSaveAllToAccount={vi.fn()}
-      syncRun={null}
-      onRetrySync={vi.fn()}
-      onDismissSyncRun={vi.fn()}
-      onMoveToShelf={vi.fn()}
-      onTogglePin={vi.fn()}
-      onReorder={vi.fn()}
-      onDeleteForever={vi.fn()}
-      onEmptyTrash={vi.fn()}
-      loadThumbnail={vi.fn().mockResolvedValue(undefined)}
-      publishThumbnail={vi.fn().mockResolvedValue(undefined)}
-      {...overrides}
-    />
-  );
+  return render(<StartScreen {...startScreenProps(overrides)} />);
 }
 
 describe('StartScreen properties', () => {
@@ -237,8 +241,8 @@ describe('StartScreen library discovery', () => {
       'is-fresh'
     );
     expect(screen.queryByText('No parts yet')).not.toBeInTheDocument();
-    expect(screen.queryByText('Signed out')).not.toBeInTheDocument();
-    expect(screen.getByText('Checking…')).toBeVisible();
+    expect(screen.queryByText('On this device only')).not.toBeInTheDocument();
+    expect(screen.getByText('Checking account…')).toBeVisible();
     expect(screen.getByRole('tab', { name: 'Parts …' })).toBeVisible();
     expect(
       screen.getByRole('button', { name: 'Create project' })
@@ -254,7 +258,7 @@ describe('StartScreen library discovery', () => {
 
     expect(container.querySelector('.start-screen')).toHaveClass('is-fresh');
     expect(screen.getByText('No parts yet')).toBeVisible();
-    expect(screen.getByText('Signed out')).toBeVisible();
+    expect(screen.getByText('On this device only')).toBeVisible();
     expect(
       screen.queryByRole('status', { name: 'Loading library' })
     ).not.toBeInTheDocument();
@@ -315,11 +319,10 @@ describe('StartScreen cloud project status', () => {
   it('does not relabel projects when the account listing failed', () => {
     renderStartScreen({ accountProjectListReached: false });
 
-    expect(
-      screen.getByText(
-        'Cloud project status is temporarily unavailable. Your projects remain saved on this device.'
-      )
-    ).toBeInTheDocument();
+    expect(screen.getByText('Account status unavailable')).toHaveAttribute(
+      'title',
+      'Cloud project status is temporarily unavailable. Your projects remain saved on this device.'
+    );
     expect(screen.queryByLabelText('On this device only')).toBeNull();
     expect(
       screen.queryByRole('button', { name: 'Save it to my account' })
@@ -365,8 +368,8 @@ describe('StartScreen library shell', () => {
     ).toBeInTheDocument();
   });
 
-  it('reads the account balance in the column without repeating the offer', () => {
-    renderStartScreen({
+  it('says the account balance and its offer as one sentence', () => {
+    const { container } = renderStartScreen({
       projects: [
         localProject,
         {
@@ -379,34 +382,95 @@ describe('StartScreen library shell', () => {
       cloudProjectIds: new Set([toProjectId('project_cloud')])
     });
 
-    expect(screen.getByText('1 / 2 saved')).toBeInTheDocument();
-    // One offer, with the parts it is about; the readout is not a second one.
+    // One sentence carries both the count and the offer; the card used to
+    // say "1 / 2 saved" and "1 project is on this device only" one above
+    // the other.
+    const card = screen.getByRole('complementary', { name: 'Cloud sync' });
+    expect(within(card).getByText('1 part not saved')).toBeInTheDocument();
     expect(
       screen.getAllByRole('button', { name: /to my account/ })
     ).toHaveLength(1);
+    expect(
+      within(card).getByRole('button', { name: 'Save it to my account' })
+    ).toHaveTextContent('Save');
+    expect(container.querySelector('footer')).toBeNull();
   });
 
-  it('says so when signed out instead of counting', () => {
-    renderStartScreen({ signedIn: false });
+  it('counts every part once they are all in the account', () => {
+    renderStartScreen({
+      cloudProjectIds: new Set([localProject.projectId])
+    });
 
-    expect(screen.getByText('Signed out')).toBeInTheDocument();
-    expect(screen.queryByText(/saved$/)).toBeNull();
+    expect(screen.getByText('1 part saved')).toBeInTheDocument();
+    expect(screen.queryByRole('button', { name: /to my account/ })).toBeNull();
   });
 
-  it('keeps the signed-out readout to one line', () => {
-    // Settings' footer says how to sign in; the card used to repeat it as a
-    // paragraph, a third copy of the same nag.
-    const { container } = renderStartScreen({ signedIn: false });
+  it('offers sign-in in one line when signed out', () => {
+    // Settings' footer explains signing in; the card used to repeat it as a
+    // paragraph, a third copy of the same nag. The sentence names the state
+    // and the tooltip carries the why.
+    const onSignIn = vi.fn();
+    const { container } = renderStartScreen({ signedIn: false, onSignIn });
     const card = container.querySelector('.start-account');
     if (!card) throw new Error('No account readout');
 
     expect(card.children).toHaveLength(1);
-    expect(within(card as HTMLElement).getByText('device only')).toBeVisible();
-    expect(card).not.toHaveTextContent(/Sign in from Settings/);
-    expect(card.firstElementChild).toHaveAttribute(
-      'title',
-      expect.stringContaining('Sign in from Settings')
+    expect(screen.queryByText(/saved$/)).toBeNull();
+    expect(
+      within(card as HTMLElement).getByText('On this device only')
+    ).toHaveAttribute('title', expect.stringContaining('Sign in'));
+    fireEvent.click(
+      within(card as HTMLElement).getByRole('button', { name: 'Sign in' })
     );
+    expect(onSignIn).toHaveBeenCalledOnce();
+  });
+
+  it('keeps mode texts off the status line but shows real news', () => {
+    const { rerender } = renderStartScreen({ status: 'Cloud profile ready' });
+    expect(document.querySelector('.start-status')).toBeNull();
+
+    rerender(
+      <StartScreen
+        {...startScreenProps()}
+        status='"name" must be at most 200 characters.'
+      />
+    );
+    expect(document.querySelector('.start-status')).toHaveTextContent(
+      'at most 200 characters'
+    );
+  });
+
+  it('turns the sentence over to a save run and its failures', () => {
+    const onRetrySync = vi.fn();
+    const onDismissSyncRun = vi.fn();
+    renderStartScreen({
+      status: 'Saved 1 project · 1 could not be saved.',
+      onRetrySync,
+      onDismissSyncRun,
+      syncRun: [
+        { projectId: 'project_ok', name: 'Saved part', state: 'synced' },
+        {
+          projectId: localProject.projectId,
+          name: localProject.name,
+          state: 'failed',
+          detail: 'Storage is down.'
+        }
+      ]
+    });
+
+    expect(screen.getByText('1 not saved')).toBeInTheDocument();
+    // The run's own outcome is the sentence; the status echo is not repeated.
+    expect(document.querySelector('.start-status')).toBeNull();
+    const retry = screen.getByRole('button', {
+      name: `Retry ${localProject.name}`
+    });
+    expect(retry).toHaveAttribute('title', 'Storage is down.');
+    fireEvent.click(retry);
+    expect(onRetrySync).toHaveBeenCalledWith(localProject.projectId);
+    fireEvent.click(
+      screen.getByRole('button', { name: 'Dismiss sync results' })
+    );
+    expect(onDismissSyncRun).toHaveBeenCalledOnce();
   });
 });
 
