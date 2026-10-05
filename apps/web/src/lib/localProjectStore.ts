@@ -1536,7 +1536,7 @@ export type ProjectOpenChoice =
  * metadata, while `derived` is rebuilt from canonical history on load; none of
  * the three should turn an otherwise identical project into a conflict.
  */
-function syncComparableDocument(document: ProjectDocument): unknown {
+export function syncComparableDocument(document: ProjectDocument): unknown {
   const {
     ownerUserId: _ownerUserId,
     version: _version,
@@ -1711,6 +1711,20 @@ export function chooseProjectDocument(
   // caller can keep the local derived projection.
   if (projectMatchesInterruptedAdoption(local, remote)) {
     return { choice: 'remote', document: remote };
+  }
+  // A save point can extend history without advancing the model version.
+  // Accept only a copy that retains ALL of the other copy's authored work:
+  // equal geometry or equal counters alone cannot authorize dropping history.
+  if (projectPreservesLocalWork(local, remote)) {
+    return { choice: 'remote', document: remote };
+  }
+  if (projectPreservesLocalWork(remote, local)) {
+    // Account writes cannot move its version fence backwards. An inconsistent
+    // lower local fence still needs explicit resolution before that write.
+    if (local.version < remote.version) {
+      return { choice: 'diverged', local, remote };
+    }
+    return { choice: 'local', document: local };
   }
   if (lastSyncedVersion !== null) {
     const localMoved = local.version !== lastSyncedVersion;

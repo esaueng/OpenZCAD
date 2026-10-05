@@ -414,9 +414,8 @@ export function useCollaboration({
       // was in flight. Preserve those newer edits for explicit reconciliation.
       if (
         message.document &&
-        submitted &&
         local &&
-        !projectPreservesLocalWork(local, submitted)
+        !projectPreservesLocalWork(local, submitted ?? message.document)
       ) {
         retainConflict(message.document, true);
         settleKeepMine(
@@ -438,7 +437,7 @@ export function useCollaboration({
       setStatus('live');
       if (message.document) {
         documentRef.current = message.document;
-        remoteHandlerRef.current(message.document);
+        remoteHandlerRef.current(message.document, { adopted: true });
       }
       sendCurrentDocumentRef.current?.();
     };
@@ -1070,7 +1069,7 @@ export function useCollaboration({
         setStatus('live');
         if (message.document) {
           documentRef.current = message.document;
-          remoteHandlerRef.current(message.document);
+          remoteHandlerRef.current(message.document, { adopted: true });
         }
       } catch (error) {
         if (documentRef.current?.projectId === projectId) setStatus('conflict');
