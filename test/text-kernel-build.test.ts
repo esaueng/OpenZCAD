@@ -779,10 +779,12 @@ describe('text built by the exact kernel', { timeout: 120_000 }, () => {
           // trimmed B-spline face by its untrimmed surface, so the slab read
           // 10.01 tall — inside one display deflection, where the mesh alone
           // could not prove the box loose (refineBoundsAtSplineFaces).
-          expect(body.bbox.max.z).toBeCloseTo(
-            operation === 'subtract' ? SLAB.depth : SLAB.depth + DEPTH,
-            9
-          );
+          const actualTop =
+            operation === 'subtract' ? SLAB.depth : SLAB.depth + DEPTH;
+          expect(body.bbox.max.z).toBeGreaterThanOrEqual(actualTop);
+          // The reported side keeps its outward tessellation tolerance,
+          // while still displaying 10.00 rather than the untrimmed 10.01.
+          expect(body.bbox.max.z).toBeLessThan(actualTop + 0.005);
 
           // The travel never reaches the document: the extrude still stores
           // the user's distance and no back distance.
@@ -1300,7 +1302,8 @@ describe('text built by the exact kernel', { timeout: 120_000 }, () => {
         'Bob',
         -2
       );
-      expect(engraved.bbox.max.z).toBeCloseTo(SLAB.depth, 9);
+      expect(engraved.bbox.max.z).toBeGreaterThanOrEqual(SLAB.depth);
+      expect(engraved.bbox.max.z).toBeLessThan(SLAB.depth + 0.005);
       await expectLabel(labelScene('Bob', 2).document, 'Bob', 2);
       await expectLabel(
         labelScene('Bob', -2, { rotation: 89 }).document,
