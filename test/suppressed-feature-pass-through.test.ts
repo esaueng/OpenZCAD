@@ -30,6 +30,7 @@ import {
 } from '../apps/web/src/lib/modelingOperations';
 import { buildDemoDocument, DEMO_DEFINITIONS } from '../apps/web/src/lib/demos';
 import { topologyReferenceRepairCommand } from '../apps/web/src/lib/topologyReferenceRepairs';
+import { validateFeatureSuppression } from '../apps/web/src/lib/featureSuppression';
 
 /**
  * F1 follow-up from the 1 October 2026 design review: suppressing the fillet
@@ -325,6 +326,20 @@ describe('a suppressed feature passes its input body through', () => {
     const refusal = attributed?.find(
       (entry) => entry.featureName === 'Thicken band'
     );
+    expect(() =>
+      validateFeatureSuppression(
+        manager.document,
+        {
+          ...document.derived,
+          featureWarnings: attributed
+        },
+        listFeaturesInOrder(manager.document).find(
+          (feature) => feature.featureId === modifierIds!.featureId
+        )!
+      )
+    ).toThrow(
+      /Cannot suppress "Fillet".*"Thicken band": Thicken face is stale:/
+    );
     expect(refusal?.kind).toBe('build-failed');
     expect(refusal?.message).toMatch(
       /^Feature "Thicken band": Thicken face is stale: /
@@ -372,6 +387,20 @@ describe('a suppressed feature passes its input body through', () => {
     // geometric fingerprint, and no face of the union has that fingerprint.
     const refusal = attributed?.find(
       (entry) => entry.featureName === 'Bevel hole'
+    );
+    expect(() =>
+      validateFeatureSuppression(
+        manager.document,
+        {
+          ...document.derived,
+          featureWarnings: attributed
+        },
+        listFeaturesInOrder(manager.document).find(
+          (feature) => feature.featureId === modifierIds!.featureId
+        )!
+      )
+    ).toThrow(
+      /Cannot suppress "Chamfer".*"Bevel hole": A selected face no longer exists/
     );
     expect(refusal?.kind).toBe('build-failed');
     expect(refusal?.message).toBe(

@@ -85,3 +85,21 @@ repairs from the features after it: a legacy hash-only selection resolved on
 a passed-through body would otherwise be rewritten to names that stop
 resolving when the step is resumed. The repair is offered again on the first
 build with nothing suppressed. No stored document format changes.
+
+## Amendment (5 October 2026): preflight an individual suppression
+
+The history action now rebuilds a suppression candidate before committing
+when the feature has active dependents. The existing pass-through preserves
+the input body's handles and lineage; every active dependent must still
+resolve its own exact references and produce all of its result bodies.
+Attached-sketch and in-place edit failures also refuse the candidate. The
+refusal lists the failing dependent features and their exact reasons and
+leaves metadata, command history and the current geometry intact. The
+existing validated-commit lock and document-version check prevent committing
+a candidate against a changed or replaced document.
+
+Features with no active dependents, resuming and timeline rollback retain
+their existing behavior. Command replay still reconstructs stored suppression
+states, including older states with broken dependents; the interactive
+preflight does not rewrite those states or their references. No exactness,
+reference-resolution or kernel-refusal rule changes.
