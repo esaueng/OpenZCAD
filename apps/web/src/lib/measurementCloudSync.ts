@@ -154,6 +154,7 @@ export function watchProjectMeasurements({
   let cancelled = false;
   let syncing = false;
   let pending: StoredMeasurementRecord | undefined;
+  let editEpoch = 0;
   const sync = async (localOverride?: StoredMeasurementRecord) => {
     if (cancelled) return;
     if (syncing) {
@@ -161,14 +162,22 @@ export function watchProjectMeasurements({
       return;
     }
     syncing = true;
+    const startedAt = editEpoch;
     try {
       const local = localOverride ?? (await loadLocal());
       const result = await syncProjectMeasurements(api, projectId, local);
-      if (cancelled) return;
+      if (cancelled || startedAt !== editEpoch) return;
       if (result.source === 'cloud' && result.record) {
         await saveLocal(result.record);
+        // A device edit can also arrive during the storage transaction. Put
+        // the newest device record back before retrying its account write.
+        let restoredAt = startedAt;
+        while (pending && restoredAt !== editEpoch) {
+          restoredAt = editEpoch;
+          await saveLocal(pending);
+        }
       }
-      if (!cancelled) onResult(result);
+      if (!cancelled && startedAt === editEpoch) onResult(result);
     } catch {
       // The device copy is usable; focus, online, and the poll retry cloud.
     } finally {
@@ -186,7 +195,10 @@ export function watchProjectMeasurements({
   window.addEventListener('focus', retry);
   window.addEventListener('online', retry);
   return {
-    push: (record) => void sync(record),
+    push: (record) => {
+      editEpoch += 1;
+      void sync(record);
+    },
     stop: () => {
       cancelled = true;
       window.clearInterval(interval);
