@@ -554,6 +554,7 @@ import { isExtrudeSessionCurrent } from './lib/extrudeSession';
 import {
   resolvedExtrudePreviewKey,
   reuseResolvedExtrudePreview,
+  reuseRunningExtrudePreview,
   type ResolvedExtrudePreview
 } from './lib/resolvedExtrudePreview';
 import {
@@ -1141,6 +1142,7 @@ import {
 } from './lib/projectShelf';
 import { sharedThumbnailCapture } from './lib/projectThumbnailCapture';
 import { LivePreview } from './lib/livePreview';
+import { PreviewRebuilds } from './lib/previewRebuilds';
 import {
   blendPreviewSelectionKey,
   canReuseBlendPreview
@@ -1335,6 +1337,16 @@ const E2E_SLOW_FRAME_MS =
   typeof window.__openzcadE2ESlowFrameMs === 'number'
     ? window.__openzcadE2ESlowFrameMs
     : undefined;
+
+/**
+ * How long the handle must rest before a face edit is previewed on a body
+ * whose earlier previews were all slow. Each exact preview there outlasts the
+ * drag that asked for it, and the worker cannot drop one it has started, so a
+ * frame started mid-motion only delays the release's own rebuild. Resting
+ * first means a release straight out of motion is the one rebuild, and a
+ * release at a rested value reuses its frame.
+ */
+const SLOW_PREVIEW_SETTLE_MS = 300;
 
 /**
  * How often an open cloud project checks whether another device has moved it.
@@ -2833,6 +2845,39 @@ export function App() {
     candidate: RadiusPreviewCandidate;
     derived: ProjectDocument['derived'];
   } | null>(null);
+  /**
+   * Raw exact rebuilds of the direct-edit preview frames, so a release at a
+   * value still rebuilding commits from that rebuild; and, for offset and
+   * radius frames, per-body timings, so a gesture on a body already known to
+   * be slow rests before previewing instead of queuing a frame ahead of its
+   * own release.
+   */
+  const previewRebuilds = useRef(
+    new PreviewRebuilds<ProjectDocument['derived']>()
+  ).current;
+  function previewRebuildKey(projectId: string, bodyId: string) {
+    return `${projectId}:${bodyId}`;
+  }
+  function startFacePreviewRebuild(candidate: {
+    document: ProjectDocument;
+    bodyId: BodyId;
+    baseProjectId: ProjectDocument['projectId'];
+  }) {
+    return previewRebuilds.start(
+      candidate,
+      () => geometry.syncOnce(candidate.document),
+      previewRebuildKey(candidate.baseProjectId, candidate.bodyId)
+    );
+  }
+  function expectedFacePreviewMs() {
+    const base = managerRef.current?.document;
+    const current = interactionRef.current;
+    return base && current.mode === 'face'
+      ? previewRebuilds.expectedMs(
+          previewRebuildKey(base.projectId, current.target.bodyId)
+        )
+      : undefined;
+  }
   function previewBaseIsCurrent(candidate: {
     baseProjectId: ProjectDocument['projectId'];
     baseVersion: number;
@@ -2881,7 +2926,7 @@ export function App() {
         };
       },
       derive: async (candidate) => {
-        const derived = await geometry.syncOnce(candidate.document);
+        const derived = await startFacePreviewRebuild(candidate);
         const rejection = offsetPreviewRejection({
           ...candidate,
           derived,
@@ -2910,7 +2955,9 @@ export function App() {
       publishIntermediate: true,
       minIntervalMs: 100,
       presentationTimeMs: () => previewPresentationMs.current,
-      continueAfterSlow: true
+      continueAfterSlow: true,
+      slowSettleMs: SLOW_PREVIEW_SETTLE_MS,
+      expectedFrameMs: expectedFacePreviewMs
     })
   ).current;
 
@@ -2950,7 +2997,7 @@ export function App() {
         if (candidate.preflightRejection) {
           throw new Error(candidate.preflightRejection);
         }
-        const derived = await geometry.syncOnce(candidate.document);
+        const derived = await startFacePreviewRebuild(candidate);
         const live = managerRef.current;
         const documentMoved =
           !live ||
@@ -3015,8 +3062,13 @@ export function App() {
         Number.isFinite(offset) && Math.abs(offset) > 1e-9,
       // A slow rebuild no longer freezes the preview for the rest of the
       // gesture: the exact solid keeps following the hand at whatever rate
-      // the kernel manages, and the chip reports when it is behind.
+      // the kernel manages, and the chip reports when it is behind. On a body
+      // whose recent frames were all slow the gesture starts degraded and
+      // previews where the hand rests, so a release out of motion is not
+      // queued behind a frame for a value the hand already passed.
       continueAfterSlow: true,
+      slowSettleMs: SLOW_PREVIEW_SETTLE_MS,
+      expectedFrameMs: expectedFacePreviewMs,
       ...(E2E_SLOW_FRAME_MS === undefined
         ? {}
         : { slowFrameMs: E2E_SLOW_FRAME_MS }),
@@ -13835,6 +13887,9 @@ export function App() {
       return;
     }
     const preview = reusableRegionExtrudePreview.current;
+    // Read before clear(): the frame keeps running either way, and a commit
+    // for the same extrusion awaits it rather than queuing a second rebuild.
+    const running = regionExtrudePreview.running;
     regionExtrudePreview.clear();
     setPreviewDeferred(false);
     const input = regionExtrudeInputFor(target, exact ?? rounded);
@@ -13900,6 +13955,7 @@ export function App() {
         try {
           resolved =
             reuseResolvedExtrudePreview(preview, options) ??
+            (await reuseRunningExtrudePreview(running, options)) ??
             (await resolveCurrentExtrude(agreement, isCurrent));
         } catch (error) {
           // A selection whose profiles disagree often fails as a whole; the
@@ -14389,12 +14445,17 @@ export function App() {
       setStatus('Radius is too small to form valid geometry at this scale.');
       return false;
     }
-    const reusable = reusableRadiusPreview.current;
+    // A passing preview at this radius, or one still rebuilding it, is the
+    // commit's rebuild: see handleOffsetCommit.
     const reuse =
-      exact === undefined &&
-      reusable?.candidate.radius === radius &&
-      previewSelectionIsCurrent(reusable.candidate)
-        ? reusable
+      exact === undefined
+        ? previewRebuilds.reusable(
+            reusableRadiusPreview.current,
+            cylinderRadiusPreview.running?.document,
+            (candidate) =>
+              candidate.radius === radius &&
+              previewSelectionIsCurrent(candidate)
+          )
         : null;
     void executeValidatedDirectEdit(
       reuse?.candidate.command ?? plan.command,
@@ -14482,7 +14543,9 @@ export function App() {
         };
       },
       derive: async (candidate) => {
-        const derived = await geometry.syncOnce(candidate.document);
+        const derived = await previewRebuilds.start(candidate, () =>
+          geometry.syncOnce(candidate.document)
+        );
         if (!candidate.judge || !candidate.target) {
           return { derived, rejection: null };
         }
@@ -14714,17 +14777,21 @@ export function App() {
       return;
     }
     const rounded = Math.round(size * 1000) / 1000;
-    const cached = reusableEdgePreview.current;
+    // A passing preview at this size, or one still rebuilding it, is the
+    // commit's rebuild: see handleOffsetCommit.
     const reuse =
-      exact === undefined &&
-      cached &&
-      canReuseBlendPreview(
-        cached.candidate,
-        managerRef.current?.document,
-        interactionRef.current,
-        rounded
-      )
-        ? cached
+      exact === undefined
+        ? previewRebuilds.reusable(
+            reusableEdgePreview.current,
+            edgePreview.running?.document,
+            (candidate) =>
+              canReuseBlendPreview(
+                candidate,
+                managerRef.current?.document,
+                interactionRef.current,
+                rounded
+              )
+          )
         : null;
     const command =
       reuse?.candidate.command ?? buildEdgeModifierCommand(exact ?? rounded);
@@ -14851,12 +14918,13 @@ export function App() {
     if (!imported && feature?.data.featureKind !== 'fillet') {
       return;
     }
-    const cached = reusableEdgePreview.current;
     const reuse =
-      exact === undefined &&
-      cached &&
-      canReuseBlendPreview(cached.candidate, base, current, size)
-        ? cached
+      exact === undefined
+        ? previewRebuilds.reusable(
+            reusableEdgePreview.current,
+            edgePreview.running?.document,
+            (candidate) => canReuseBlendPreview(candidate, base, current, size)
+          )
         : null;
     const command =
       reuse?.candidate.command ?? buildEdgeModifierCommand(exact ?? size, base);
@@ -15444,18 +15512,22 @@ export function App() {
     }
     // Releasing at the value the last passing preview showed commits that
     // preview's own command and rebuild. A fresh plan would carry new feature
-    // ids, so it could neither hit the worker cache nor be reused here.
-    const reusable = reusableOffsetPreviewRef.current;
+    // ids, so it could neither hit the worker cache nor be reused here. A
+    // release at the value whose preview is still rebuilding commits from
+    // that rebuild too: the worker cannot drop it, so queuing the same edit
+    // behind it would cost a second full rebuild for the same answer.
     const live = managerRef.current?.document;
     const reuse =
-      exact === undefined &&
-      reusable !== null &&
-      live !== undefined &&
-      reusable.candidate.offset === offset &&
-      reusable.candidate.baseProjectId === live.projectId &&
-      reusable.candidate.baseVersion === live.version &&
-      previewSelectionIsCurrent(reusable.candidate)
-        ? reusable
+      exact === undefined && live !== undefined
+        ? previewRebuilds.reusable(
+            reusableOffsetPreviewRef.current,
+            offsetPreview.running?.document,
+            (candidate) =>
+              candidate.offset === offset &&
+              candidate.baseProjectId === live.projectId &&
+              candidate.baseVersion === live.version &&
+              previewSelectionIsCurrent(candidate)
+          )
         : null;
     offsetPreview.stop();
     offsetPreviewValueRef.current = null;
