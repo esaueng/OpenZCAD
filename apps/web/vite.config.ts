@@ -416,7 +416,12 @@ export default defineConfig(async ({ command, isPreview, mode }) => {
               id.includes('/packages/shared/') ||
               id.includes('/packages/document-core/') ||
               id.includes('/packages/command-system/') ||
-              id.includes('/packages/ai-contracts/')
+              id.includes('/packages/ai-contracts/') ||
+              // History dependency and suppression validation belong beside
+              // the document machinery. The existing model chunk is already
+              // preloaded, so this adds no request or async commit boundary.
+              id.includes('/apps/web/src/lib/featureHistory.ts') ||
+              id.includes('/apps/web/src/lib/featureSuppression.ts')
             ) {
               return 'model';
             }
