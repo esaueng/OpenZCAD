@@ -3497,6 +3497,23 @@ export function createSavedRevision(
   return createCheckpoint({ ...appended, version: document.version }, reason);
 }
 
+/**
+ * The save point a user's Save makes. A checkpoint names a revision, and a
+ * document can arrive with none — a conflict recovery copy is born that way —
+ * so where there is nothing to name, the save mints the revision first instead
+ * of refusing. That refusal used to surface as "Cannot create a checkpoint
+ * without a revision. Saved on this device." on every save of such a project,
+ * including Save to my account, which never reached the account at all.
+ */
+export function createSavePoint(
+  document: ProjectDocument,
+  reason: string
+): ProjectDocument {
+  return document.revisions.length === 0
+    ? createSavedRevision(document, reason)
+    : createCheckpoint(document, reason);
+}
+
 /** Records a durable save point without changing model or undo semantics. */
 export function createCheckpoint(
   document: ProjectDocument,

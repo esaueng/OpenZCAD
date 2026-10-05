@@ -68,6 +68,12 @@ interface TopBarProps {
   tweakModeDisabledReason: string | null;
   onWorkspaceMode(mode: WorkspaceMode): void;
   saveToAccount?: boolean;
+  /**
+   * The account's project list was read and this project is not on it. Only
+   * then is "Not shared" a fact; an unreachable account cannot say whether
+   * the project is in it, and keeps the room's own status.
+   */
+  knownDeviceOnly?: boolean;
   /** Saves a revision: File › Save revision and the save chip's actions. */
   onSave(): void;
   /** Opens the naming dialog: File › Save revision as…. */
@@ -182,6 +188,7 @@ export function TopBar({
   tweakModeDisabledReason,
   onWorkspaceMode,
   saveToAccount = false,
+  knownDeviceOnly = false,
   onSave,
   onSaveAs,
   onImportFiles,
@@ -336,8 +343,12 @@ export function TopBar({
     canExport
       ? `Export ${exportScope ?? 'all bodies'} as ${format}`
       : 'Create a body before exporting';
-  const collaborationLabel =
-    collaborationStatus === 'live'
+  // A project that is not in the account has no room to join, so its room
+  // status is `offline` — which, beside "Save to my account", read as a
+  // connection problem rather than the plain fact that nothing is shared yet.
+  const collaborationLabel = knownDeviceOnly
+    ? COLLABORATION_LABELS.rejected
+    : collaborationStatus === 'live'
       ? `${collaboratorCount} live`
       : COLLABORATION_LABELS[collaborationStatus];
   const accountLabel =
