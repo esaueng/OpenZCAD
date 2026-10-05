@@ -171,6 +171,10 @@ export interface ValidatedFeatureRunOptions extends ValidatedFeatureTarget {
 export interface ValidatedFeatureTransactionRunOptions {
   label: string;
   targets: readonly ValidatedFeatureTarget[];
+  /** Additional exact checks for edits whose result is a history state. */
+  validateDerived?(derived: ProjectDocument['derived']): void;
+  onFailure?(message: string): void;
+  validatingMessage?: string;
   successMessage: string;
   onSuccess?(): void;
 }
@@ -259,6 +263,7 @@ export function useValidatedFeatureCommit(
 
   async function validateAndCommit(input: {
     targets: readonly ValidatedFeatureTarget[];
+    validateDerived?(derived: ProjectDocument['derived']): void;
     successMessage: string | (() => string);
     validatingMessage?: string;
     revalidateOnDocumentMove?: boolean;
@@ -374,6 +379,7 @@ export function useValidatedFeatureCommit(
       if (input.targets.length === 0 && documentMoved) {
         throw new Error('The document changed while the operation validated.');
       }
+      input.validateDerived?.(derived);
       // Withdrawn while the rebuild ran. Checked HERE, before `finalize`,
       // because finalize is where an import spends its upload: a cancel that
       // only stopped the commit would still push up to 250 MB first and leave
@@ -495,6 +501,9 @@ export function useValidatedFeatureCommit(
     ): Promise<ValidatedFeatureOutcome> {
       return validateAndCommit({
         targets: runOptions.targets,
+        validateDerived: runOptions.validateDerived,
+        onFailure: runOptions.onFailure,
+        validatingMessage: runOptions.validatingMessage,
         successMessage: runOptions.successMessage,
         onSuccess: runOptions.onSuccess,
         preview: (current) =>

@@ -447,7 +447,7 @@ test('switches a planar-face selection into an editable arc sketch', async ({
   expect(consoleErrors).toEqual([]);
 });
 
-test('shows and recovers a stale face-attached sketch when its source is suppressed', async ({
+test('refuses suppression that would stale an attached sketch and allows pausing dependents first', async ({
   page
 }) => {
   test.setTimeout(60_000);
@@ -517,17 +517,34 @@ test('shows and recovers a stale face-attached sketch when its source is suppres
 
   const box = page.locator('.feature-row', { hasText: /^Box/ });
   await box.getByRole('button', { name: 'Suppress Box' }).click();
-  await expect(box).toContainText('suppressed');
-  const diagnostic = page.locator('.diagnostic-row', {
-    hasText: /cannot attach because source body/
-  });
-  await expect(diagnostic).toContainText(
+  const details = page.getByRole('region', { name: 'History details' });
+  await expect(details.getByRole('alert')).toContainText(
+    'Cannot suppress "Box"'
+  );
+  await expect(details.getByRole('alert')).toContainText('Sketch');
+  await expect(details.getByRole('alert')).toContainText(
     "is unavailable at the sketch's history position"
   );
-  await expect(page.getByRole('contentinfo')).not.toContainText('warnings0');
+  await expect(box).not.toContainText('suppressed');
+  await expect(page.locator('.diagnostic-row')).toHaveCount(0);
+  await expectBodyCount(page, 1);
+  await details.getByRole('button', { name: 'Dismiss failure' }).click();
+
+  const sketch = page.locator('.feature-row', { hasText: /^Sketch/ });
+  await sketch.hover();
+  await sketch.getByRole('button', { name: /^Suppress Sketch/ }).click();
+  await expect(sketch).toContainText('suppressed');
+  await box.hover();
+  await box.getByRole('button', { name: 'Suppress Box' }).click();
+  await expect(box).toContainText('suppressed');
+  await expectBodyCount(page, 0);
 
   await box.getByRole('button', { name: 'Resume Box' }).click();
   await expect(box).not.toContainText('suppressed');
+  await sketch.hover();
+  await sketch.getByRole('button', { name: /^Resume Sketch/ }).click();
+  await expect(sketch).not.toContainText('suppressed');
+  await expectBodyCount(page, 1);
   await expect(page.locator('.diagnostic-row')).toHaveCount(0);
   await expect(page.getByRole('contentinfo')).toContainText('warnings0');
   expect(consoleErrors).toEqual([]);
