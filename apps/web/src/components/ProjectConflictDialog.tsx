@@ -1,4 +1,4 @@
-import { useRef } from 'react';
+import { useRef, useState } from 'react';
 import { TriangleAlert } from 'lucide-react';
 import type {
   ConflictResolution,
@@ -15,7 +15,7 @@ export interface ProjectConflictDialogProps {
    * that demands an edit lease this client does not hold. Null offers it.
    */
   keepMineDisabledReason?: string | null;
-  onResolve(resolution: ConflictResolution): void;
+  onResolve(resolution: ConflictResolution): void | Promise<void>;
   onClose(): void;
 }
 
@@ -59,8 +59,27 @@ export function ProjectConflictDialog({
   onClose
 }: ProjectConflictDialogProps) {
   const dialogRef = useRef<HTMLDivElement>(null);
+  const [resolving, setResolving] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+  const working = busy || resolving;
   useModalFocus(dialogRef, { autoFocus: true });
   const other = OTHER_SIDE[conflict.source];
+
+  async function resolve(resolution: ConflictResolution) {
+    setError(null);
+    setResolving(true);
+    try {
+      await onResolve(resolution);
+    } catch (failure) {
+      setError(
+        failure instanceof Error
+          ? failure.message
+          : 'Could not resolve the conflict. Please retry.'
+      );
+    } finally {
+      setResolving(false);
+    }
+  }
 
   return (
     <div className="modal-backdrop">
@@ -70,10 +89,11 @@ export function ProjectConflictDialog({
         role="dialog"
         aria-modal="true"
         aria-labelledby="project-conflict-title"
+        aria-busy={working}
         onKeyDown={(event) => {
           if (event.key === 'Escape') {
             event.stopPropagation();
-            onClose();
+            if (!working) onClose();
           }
         }}
       >
@@ -91,31 +111,41 @@ export function ProjectConflictDialog({
         <div className="conflict-dialog-actions">
           <button
             type="button"
-            disabled={busy || keepMineDisabledReason !== null}
+            disabled={working || keepMineDisabledReason !== null}
             aria-describedby={
               keepMineDisabledReason !== null
                 ? 'project-conflict-keep-mine-note'
                 : undefined
             }
-            onClick={() => onResolve('keep-mine')}
+            onClick={() => void resolve('keep-mine')}
           >
             Keep this device’s version
           </button>
           <button
             type="button"
-            disabled={busy}
-            onClick={() => onResolve('use-remote')}
+            disabled={working}
+            onClick={() => void resolve('use-remote')}
           >
             {other.use}
           </button>
           <button
             type="button"
-            disabled={busy}
-            onClick={() => onResolve('save-local-copy')}
+            disabled={working}
+            onClick={() => void resolve('save-local-copy')}
           >
             {other.copyThenUse}
           </button>
         </div>
+        {working && (
+          <p className="conflict-dialog-note" role="status">
+            Preserving both versions and waiting for confirmation…
+          </p>
+        )}
+        {error && (
+          <p className="conflict-dialog-note" role="alert">
+            {error}
+          </p>
+        )}
         {keepMineDisabledReason !== null && (
           <p
             id="project-conflict-keep-mine-note"
@@ -124,7 +154,12 @@ export function ProjectConflictDialog({
             {keepMineDisabledReason}
           </p>
         )}
-        <button type="button" className="secondary" onClick={onClose}>
+        <button
+          type="button"
+          className="secondary"
+          disabled={working}
+          onClick={onClose}
+        >
           Decide later
         </button>
       </div>
