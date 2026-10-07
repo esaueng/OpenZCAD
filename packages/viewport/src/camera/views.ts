@@ -411,11 +411,13 @@ export function trapezoidEase(attack: number, decel: number): CameraEase {
 }
 
 /**
- * Entering or leaving a sketch is the longest choreographed move: a fixed
- * duration (it is a mode change, not a nudge, so travel scaling would make
- * short trips feel abrupt) with a ~100 ms attack and a ~240 ms landing.
+ * Entering or leaving a sketch is a fixed-duration move (it is a mode change,
+ * not a nudge, so travel scaling would make short trips feel abrupt) with a
+ * ~65 ms attack and a ~155 ms landing. It matches the longest view glide
+ * rather than outlasting it: at 800 ms, the most frequent mode change in the
+ * app kept the user waiting on the camera.
  */
-export const SKETCH_GLIDE_MS = 800;
+export const SKETCH_GLIDE_MS = 520;
 export const sketchGlideEase: CameraEase = trapezoidEase(0.125, 0.3);
 
 /** A glide short enough to feel instant for a nudge. */
