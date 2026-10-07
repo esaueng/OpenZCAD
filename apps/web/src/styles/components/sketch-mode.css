@@ -2,32 +2,13 @@
    Split out of app.css; the cascade still depends on the import order
    in app.css, so this file is not free to move. ── */
 
-/* ── Focused sketch mode ───────────────────────────────── */
+/* ── Move instruction ───────────────────────────────────── */
 
-.sketch-workspace {
-  position: absolute;
-  inset: 0;
-  z-index: calc(var(--z-viewer-overlay) + 2);
-  overflow: hidden;
-  background: #0a0b0d;
-}
-
-.sketch-canvas {
-  position: absolute;
-  inset: 0;
-  width: 100%;
-  height: 100%;
-  touch-action: none;
-  cursor: crosshair;
-}
-
-.sketch-instruction,
-.extrude-instruction,
-.profile-pick-prompt {
+.extrude-instruction {
   position: absolute;
   top: 14px;
   left: 50%;
-  z-index: 4;
+  z-index: calc(var(--z-viewer-overlay) + 2);
   display: flex;
   align-items: center;
   gap: 10px;
@@ -43,228 +24,32 @@
   backdrop-filter: blur(10px);
 }
 
-.sketch-instruction-icon,
 .extrude-instruction-icon {
   width: 38px;
   height: 38px;
   flex: 0 0 auto;
   display: grid;
   place-items: center;
-  color: var(--color-warning);
-  background: rgba(245, 158, 11, 0.12);
-  border: 1px solid rgba(245, 158, 11, 0.32);
-  border-radius: var(--radius-md);
-}
-
-.extrude-instruction-icon {
   color: var(--color-accent);
   background: var(--color-accent-dim);
-  border-color: var(--color-accent-border);
-}
-
-.sketch-instruction > span:last-child,
-.extrude-instruction > span:last-child,
-.profile-pick-prompt > span {
-  min-width: 0;
-  display: grid;
-  gap: 1px;
-}
-
-.sketch-instruction strong,
-.extrude-instruction strong,
-.profile-pick-prompt strong {
-  font-size: var(--fs-sm);
-  font-weight: var(--fw-medium);
-}
-
-.sketch-instruction small,
-.extrude-instruction small,
-.profile-pick-prompt small {
-  color: var(--color-text-muted);
-  font-size: var(--fs-xs);
-}
-
-.sketch-tools {
-  position: absolute;
-  top: 72px;
-  left: 14px;
-  z-index: 4;
-  width: 176px;
-  display: grid;
-  gap: 3px;
-  padding: 6px;
-  background: rgba(22, 25, 28, 0.94);
-  border: var(--border-thin);
-  border-radius: var(--radius-lg);
-  box-shadow: 0 14px 34px rgba(0, 0, 0, 0.3);
-  backdrop-filter: blur(10px);
-}
-
-.sketch-tools button {
-  min-height: 34px;
-  display: grid;
-  grid-template-columns: 22px minmax(0, 1fr) auto;
-  align-items: center;
-  gap: 7px;
-  padding: 5px 8px;
-  color: var(--color-text-muted);
-  border: 1px solid transparent;
+  border: 1px solid var(--color-accent-border);
   border-radius: var(--radius-md);
-  text-align: left;
-  font-size: var(--fs-sm);
 }
 
-.sketch-tools button:hover:not(:disabled),
-.sketch-tools button.active {
-  color: var(--color-text);
-  background: var(--color-surface-hover);
-  border-color: var(--color-border-strong);
+.extrude-instruction > span:last-child {
+  min-width: 0;
+  display: grid;
+  gap: 1px;
 }
 
-.sketch-tools button.active svg {
-  color: var(--color-warning);
-}
-
-.sketch-tools kbd {
-  padding: 0 4px;
-}
-
-.sketch-tools-separator {
-  height: 1px;
-  margin: 3px 2px;
-  background: var(--color-border);
-}
-
-.sketch-setup {
-  position: absolute;
-  top: 72px;
-  right: 14px;
-  z-index: 4;
-  width: 238px;
-  padding: 10px;
-  color: var(--color-text-muted);
-  background: rgba(22, 25, 28, 0.94);
-  border: var(--border-thin);
-  border-radius: var(--radius-lg);
-  box-shadow: 0 14px 34px rgba(0, 0, 0, 0.3);
-  backdrop-filter: blur(10px);
-}
-
-.sketch-setup-header,
-.extrude-controller-header {
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  margin-bottom: 10px;
-  color: var(--color-text);
+.extrude-instruction strong {
   font-size: var(--fs-sm);
   font-weight: var(--fw-medium);
 }
 
-.sketch-setup-header > span,
-.extrude-controller-header > span {
-  display: inline-flex;
-  align-items: center;
-  gap: 7px;
-}
-
-.sketch-setup-header svg {
-  color: var(--color-warning);
-}
-
-.sketch-setup-header button,
-.extrude-controller-header button {
-  width: 26px;
-  height: 26px;
-  display: grid;
-  place-items: center;
-  color: var(--color-text-subtle);
-  border-radius: var(--radius-sm);
-}
-
-.sketch-setup-header button:hover,
-.extrude-controller-header button:hover {
-  color: var(--color-text);
-  background: var(--color-surface-hover);
-}
-
-.plane-picker {
-  display: grid;
-  grid-template-columns: repeat(3, 1fr);
-  gap: 4px;
-  margin-bottom: 10px;
-}
-
-.plane-picker button {
-  min-width: 0;
-  display: grid;
-  gap: 1px;
-  padding: 6px 3px;
+.extrude-instruction small {
   color: var(--color-text-muted);
-  background: var(--color-surface-2);
-  border: var(--border-thin);
-  border-radius: var(--radius-sm);
   font-size: var(--fs-xs);
-}
-
-.plane-picker button small {
-  color: var(--color-text-subtle);
-  font-family: var(--font-mono);
-  font-size: var(--fs-mini);
-}
-
-.plane-picker button.active {
-  color: var(--color-text);
-  background: rgba(245, 158, 11, 0.1);
-  border-color: rgba(245, 158, 11, 0.5);
-}
-
-.plane-picker button.active small {
-  color: var(--color-warning);
-}
-
-.sketch-setup-row {
-  min-height: 30px;
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  border-top: var(--border-thin);
-  font-size: var(--fs-xs);
-}
-
-.sketch-setup-row b {
-  color: var(--color-text);
-  font-family: var(--font-mono);
-  font-size: var(--fs-mini);
-  font-weight: var(--fw-regular);
-}
-
-.sketch-setup-row b.ready {
-  color: var(--color-success);
-}
-
-.sketch-profile-summary {
-  margin: 5px 0 8px;
-  padding: 7px 8px;
-  color: var(--color-warning);
-  background: rgba(245, 158, 11, 0.08);
-  border: 1px solid rgba(245, 158, 11, 0.24);
-  border-radius: var(--radius-sm);
-  font-family: var(--font-mono);
-  font-size: var(--fs-mini);
-  text-align: center;
-}
-
-.sketch-finish {
-  margin-top: 6px;
-}
-
-.sketch-enter-hint {
-  display: block;
-  margin-top: 7px;
-  color: var(--color-text-subtle);
-  font-size: var(--fs-mini);
-  text-align: center;
 }
 
 /* ── Closed-profile selection + direct extrusion ───────── */
@@ -348,20 +133,6 @@
   background: var(--color-surface-hover);
 }
 
-.extrude-instruction,
-.profile-pick-prompt {
-  z-index: calc(var(--z-viewer-overlay) + 2);
-}
-
-.profile-pick-prompt {
-  width: auto;
-  color: var(--color-text);
-}
-
-.profile-pick-prompt > svg {
-  color: var(--color-accent);
-}
-
 /* The Move panel. It rides the right lane's command slot (quiet-stage.css)
    like every other command card, so it carries no position of its own. */
 .extrude-controller {
@@ -373,10 +144,6 @@
   border-radius: var(--radius-lg);
   box-shadow: 0 14px 34px rgba(0, 0, 0, 0.38);
   backdrop-filter: blur(10px);
-}
-
-.extrude-controller-header svg {
-  color: var(--color-accent);
 }
 
 /* The Move panel wears the same chrome as every other command panel: the
@@ -396,46 +163,6 @@
   margin: -2px 0 10px;
   color: var(--color-text-subtle);
   font-size: var(--fs-xs);
-}
-
-.extrude-profile-field {
-  display: grid;
-  grid-template-columns: minmax(0, 1fr) auto;
-  gap: 6px 8px;
-  align-items: center;
-  margin-bottom: 10px;
-  padding: 8px;
-  background: var(--color-surface-2);
-  border: var(--border-thin);
-  border-radius: var(--radius-md);
-}
-
-.extrude-profile-field > span {
-  min-width: 0;
-  display: grid;
-}
-
-.extrude-profile-field strong,
-.extrude-profile-field b {
-  color: var(--color-text);
-  font-size: var(--fs-xs);
-}
-
-.extrude-profile-field small {
-  overflow: hidden;
-  color: var(--color-text-subtle);
-  font-size: var(--fs-mini);
-  text-overflow: ellipsis;
-  white-space: nowrap;
-}
-
-.extrude-profile-field > button {
-  min-height: 26px;
-  padding: 0 7px;
-  color: var(--color-text-muted);
-  background: var(--color-surface-hover);
-  border-radius: var(--radius-sm);
-  font-size: var(--fs-mini);
 }
 
 .extrude-controller label {
@@ -475,31 +202,6 @@
   font-weight: var(--fw-regular);
   transform: translateY(-50%);
   pointer-events: none;
-}
-
-.extrude-direction {
-  display: flex;
-  align-items: center;
-  gap: 6px;
-  margin: 8px 0 12px;
-  color: var(--color-accent);
-  font-family: var(--font-mono);
-  font-size: var(--fs-mini);
-}
-
-.extrude-direction button {
-  margin-left: auto;
-  padding: 3px 7px;
-  color: var(--color-text);
-  background: var(--color-surface-hover);
-  border-radius: var(--radius-sm);
-  font-size: var(--fs-mini);
-}
-
-.extrude-actions {
-  display: grid;
-  grid-template-columns: auto 1fr;
-  gap: 6px;
 }
 
 .extrude-value-callout {
