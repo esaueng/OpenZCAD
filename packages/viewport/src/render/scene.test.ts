@@ -11,6 +11,7 @@ import {
   updateStudioGrid,
   VIEWPORT_RENDER_ORDER
 } from './scene';
+import { reuseRenderBodies } from './scene';
 import { boxFullyInView, VIEW_DIRECTIONS } from '../camera/views';
 import { toBodyId, type BodyRepresentation } from '@openzcad/shared';
 
@@ -38,6 +39,35 @@ function bodyFixture(
     ...overrides
   };
 }
+
+describe('analysis publications in the viewport', () => {
+  it('preserves the drawing array when quantities and optional proofs arrive', () => {
+    const original = bodyFixture({
+      topology: { faces: [], edges: [] },
+      projectionRevision: {
+        session: 'worker',
+        geometry: 1,
+        topology: 2,
+        metadata: 3
+      }
+    });
+    const drawing = [original];
+    const measured = {
+      ...structuredClone(original),
+      volume: 123,
+      topology: { faces: [], edges: [], recognizedImportedFeatures: [] }
+    };
+    expect(reuseRenderBodies(drawing, [measured])).toBe(drawing);
+    // Appearance still updates, even when geometry is unchanged.
+    const recolored = { ...measured, color: '#ff0000' };
+    expect(reuseRenderBodies(drawing, [recolored])[0]).toBe(recolored);
+    const moved = {
+      ...measured,
+      mesh: { ...measured.mesh, vertices: Float32Array.of(1, 2, 3) }
+    };
+    expect(reuseRenderBodies(drawing, [moved])[0]).toBe(moved);
+  });
+});
 
 describe('createBodyMaterial', () => {
   it('keeps opaque bodies on the depth-writing path', () => {

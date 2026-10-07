@@ -1,6 +1,6 @@
 import * as THREE from 'three';
 import type { Line2 } from 'three/examples/jsm/lines/Line2.js';
-import type { BodyRepresentation, TopologySelection } from '@openzcad/shared';
+import type { GeometryBodyRepresentation, TopologySelection } from '@openzcad/shared';
 import type { PickCandidate } from '../pick/PickService';
 import {
   batchedEdgeTarget,
@@ -267,7 +267,7 @@ export interface SelectionManagerOptions {
   domElement: HTMLElement;
   requestRender(): void;
   /** Current derived bodies; the hover overlay is rebuilt from their meshes. */
-  bodies(): BodyRepresentation[];
+  bodies(): readonly GeometryBodyRepresentation[];
   /** Faces of these bodies drive document dimensions, so they read draggable. */
   isEditableBody(bodyId: string): boolean;
 }

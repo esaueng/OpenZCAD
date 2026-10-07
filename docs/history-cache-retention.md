@@ -8,7 +8,10 @@ feature 32 was replayed on every sync. The current adapter retains the first
 feature between checkpoints contributes to the next checkpoint's digest.
 After 512 features have actually been replayed against a retained kernel, the
 next operation retires that kernel and rebuilds exactly. This is a replay-work
-and checkpoint-count bound, not a byte limit.
+and checkpoint-count bound. Checkpoint admission also defaults to 128 MiB of
+estimated unique topology/NURBS storage plus the next mutation copy. This
+estimate includes retired arena slots, excludes several other allocations and
+does not cap process RSS. See the [edit-pipeline qualification](plans/edit-pipeline-performance.md).
 
 ## Ownership and invalidation
 
@@ -59,11 +62,13 @@ and checkpoint-count bound, not a byte limit.
   dead-body eviction remains. Disposal clears all cache owners. Optional
   mass properties are queried separately when requested by the Inspector; they
   are guarded by document identity and the current exact-build epoch.
-- Zero, negative and NaN limits disable retention. Fractional budgets retain
+- Zero, negative and NaN count limits disable retention. Fractional budgets retain
   only complete checkpoints. Explicit Infinity preserves dense, unlimited
-  retention. The default count remains 32; it is **not a strict byte limit**.
+  count retention; the independent estimated-byte admission limit still applies.
+  The default count remains 32; neither policy is a strict process-memory limit.
 
-The current audited pin is Remus `594cd308eba3632f9a320c88c8bbb7b41a68bb45`,
+The current pin is Remus `ae88947063719e0163a26f4a662b1d0a4c824102`;
+the original retirement audit used `594cd308eba3632f9a320c88c8bbb7b41a68bb45`,
 `crates/wasm/src/bindings/checkpoint.rs` and `crates/topology/src/arena.rs`.
 Restore retains ancestor checkpoints and retires later handles without slot
 reuse. Already-retired slots stay retired across the checkpoint barrier;
@@ -72,7 +77,9 @@ is exercised in `test/h02-measurement-cache.test.ts` for solids, faces, edges
 and vertices. `discardCheckpoint(k)` also discards
 all descendants, without changing current topology. Temporary measurement
 checkpoints are restored and discarded before returning. No kernel transaction
-or adaptive scheduling redesign is included here.
+redesign is included here. Yielded builds and analysis now serialize access to
+the adapter's retained arena, including export, mass and recognition queries;
+disposal cancels its active work before freeing it.
 
 The proposed H02 Text-branch cache remains blocked: restoring its old
 post-interval checkpoint cannot preserve a separately edited holder branch.

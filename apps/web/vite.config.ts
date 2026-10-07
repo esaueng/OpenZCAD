@@ -306,10 +306,39 @@ export default defineConfig(async ({ command, isPreview, mode }) => {
     optimizeDeps: {
       // The exact CAD kernel and its file-format translators ship as
       // WebAssembly and must remain runtime assets.
-      exclude: ['remus-wasm', 'remus-wasm-io', '@sqlite.org/sqlite-wasm', 'occt-wasm']
+      exclude: [
+        'remus-wasm',
+        'remus-wasm-io',
+        '@sqlite.org/sqlite-wasm',
+        'occt-wasm'
+      ]
     },
     worker: {
       format: 'es' as const,
+      rollupOptions: {
+        preserveEntrySignatures: false,
+        output: {
+          // Worker builds have their own output configuration. Keep the
+          // analysis split there without pulling unrelated dependencies into
+          // every worker. Preserve evaluation order across the split.
+          strictExecutionOrder: true,
+          codeSplitting: {
+            groups: [
+              {
+                name: 'exact-analysis',
+                test: (id: string) =>
+                  id.includes(
+                    '/packages/kernel-adapter/src/imported-feature-query.ts'
+                  ) ||
+                  id.includes(
+                    '/packages/kernel-adapter/src/exact-sync-memo.ts'
+                  ),
+                includeDependenciesRecursively: false
+              }
+            ]
+          }
+        }
+      },
       // The plugin supports several Vite majors, so narrow its cross-version
       // return type to the Vite version used by this workspace.
       plugins: (): PluginOption[] => [wasm() as PluginOption]
@@ -387,6 +416,15 @@ export default defineConfig(async ({ command, isPreview, mode }) => {
           // bundle, so isolate it for better caching without relying on the
           // object form supported by Rollup-only Vite releases.
           manualChunks: (id: string) => {
+            // Imported-feature analysis stays behind the exact adapter's lazy
+            // boundary, with its own cacheable chunk and the same size budget.
+            if (
+              id.includes(
+                '/packages/kernel-adapter/src/imported-feature-query.ts'
+              )
+            ) {
+              return 'exact-analysis';
+            }
             if (id.includes('/node_modules/three/examples/')) {
               return 'three-addons';
             }
@@ -421,7 +459,15 @@ export default defineConfig(async ({ command, isPreview, mode }) => {
               // the document machinery. The existing model chunk is already
               // preloaded, so this adds no request or async commit boundary.
               id.includes('/apps/web/src/lib/featureHistory.ts') ||
-              id.includes('/apps/web/src/lib/featureSuppression.ts')
+              id.includes('/apps/web/src/lib/featureSuppression.ts') ||
+              // Canonical worker transport and revision/reference helpers are
+              // already workspace dependencies. Reuse the preloaded model
+              // chunk rather than adding another first-paint request.
+              id.includes('/apps/web/src/lib/projectionStream.ts') ||
+              id.includes('/apps/web/src/lib/meshTransport.ts') ||
+              id.includes('/apps/web/src/lib/editTrace.ts') ||
+              id.includes('/apps/web/src/lib/topologyResolution.ts') ||
+              id.includes('/apps/web/src/lib/topologyLabels.ts')
             ) {
               return 'model';
             }

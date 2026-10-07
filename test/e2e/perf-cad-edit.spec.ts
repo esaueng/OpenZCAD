@@ -19,6 +19,7 @@ type EditSample = {
   workerResponseToBodiesMs: number;
   bodiesToNextFrameMs: number;
   inputToFrameMs: number;
+  inputToAnalysisReadyMs: number;
   warningCount: number | null;
   [key: string]: string | number | boolean | null;
 };
@@ -129,10 +130,14 @@ test('measures an applied edit through worker response and viewport frame', asyn
                     requestId?: unknown;
                     ok?: unknown;
                     derived?: { warnings?: unknown[] };
+                    packet?: {
+                      state: { analysis?: unknown; warnings?: unknown[] };
+                    };
                   }
                 | undefined;
               if (
-                response?.type !== 'sync' ||
+                (response?.type !== 'sync' &&
+                  response?.type !== 'projection-delta') ||
                 typeof response.projectId !== 'string' ||
                 typeof response.version !== 'number'
               )
@@ -145,13 +150,16 @@ test('measures an applied edit through worker response and viewport frame', asyn
                   : `${responseWorkerKey}:document:${response.projectId}:${response.version}`;
               const matched = pending.get(key);
               if (!matched) return;
-              matched.responseAt = performance.now();
-              matched.ok = response.ok === true;
-              const warnings = response.derived?.warnings;
+              matched.responseAt ??= performance.now();
+              matched.ok =
+                response.ok === true || response.type === 'projection-delta';
+              const warnings =
+                response.derived?.warnings ?? response.packet?.state.warnings;
               matched.warningCount = Array.isArray(warnings)
                 ? warnings.length
                 : undefined;
-              pending.delete(key);
+              if (response.packet?.state.analysis !== 'pending')
+                pending.delete(key);
             });
           }
         }
@@ -216,7 +224,8 @@ test('measures an applied edit through worker response and viewport frame', asyn
     'requestToWorkerResponseMs',
     'workerResponseToBodiesMs',
     'bodiesToNextFrameMs',
-    'inputToFrameMs'
+    'inputToFrameMs',
+    'inputToAnalysisReadyMs'
   ] as const;
   const summaries = Object.fromEntries(
     metrics.map((metric) => [
@@ -346,9 +355,29 @@ async function completedSample(
           `Worker input did not contain the applied width ${expectedWidth}.`
         );
       }
-      const bodyMeasure = await waitForMeasure('oz:viewer.bodies', responseAt);
+      const bodyMeasure = await waitForRevisionMeasure('oz:edit.installed');
       const bodyDoneAt = bodyMeasure.startTime + bodyMeasure.duration;
-      const frame = await waitForFrame(bodyDoneAt);
+      const frameMeasure = await waitForRevisionMeasure('oz:edit.frame');
+      const frame = frameMeasure.startTime + frameMeasure.duration;
+      const analysis = await waitForRevisionMeasure('oz:edit.analysis-ready');
+      const geometry = performance
+        .getEntriesByName('oz:edit.geometry-ready', 'measure')
+        .find((entry) => {
+          const detail = (entry as PerformanceMeasure).detail as {
+            projectId?: string;
+            version?: number;
+          } | null;
+          return (
+            detail?.projectId === record.projectId &&
+            detail.version === record.version
+          );
+        });
+      const acceptance = geometry ?? analysis;
+      const acceptedAt = acceptance.startTime + acceptance.duration;
+      if (bodyDoneAt < acceptedAt || frame < bodyDoneAt)
+        throw new Error(
+          'The revision frame preceded geometry acceptance or installation.'
+        );
       return {
         projectId: record.projectId,
         version: record.version,
@@ -362,44 +391,63 @@ async function completedSample(
         workerResponseToBodiesMs: bodyDoneAt - responseAt,
         bodiesToNextFrameMs: frame - bodyDoneAt,
         inputToFrameMs: frame - action.at,
+        inputToAnalysisReadyMs:
+          analysis.startTime + analysis.duration - action.at,
         frameMarkAt: frame,
         observedAfterMs: performance.now() - started,
-        note: 'viewer.frame is a browser render-loop mark, not physical display presentation.'
+        note: 'The revision-matched frame completes renderer.render; physical display presentation is not measured.'
       };
 
-      function waitForMeasure(
-        name: string,
-        after: number
+      function waitForRevisionMeasure(
+        name: string
       ): Promise<PerformanceMeasure> {
         return new Promise((resolve, reject) => {
           const deadline = performance.now() + 60_000;
           const check = () => {
             const match = performance
               .getEntriesByName(name, 'measure')
-              .find((entry) => entry.startTime >= after) as
-              PerformanceMeasure | undefined;
+              .find((entry) => {
+                const detail = (entry as PerformanceMeasure).detail as {
+                  projectId?: string;
+                  version?: number;
+                } | null;
+                return (
+                  detail?.projectId === record.projectId &&
+                  detail.version === record.version
+                );
+              }) as PerformanceMeasure | undefined;
             if (match) return resolve(match);
             if (performance.now() >= deadline)
               return reject(
-                new Error(`${name} did not follow worker response.`)
-              );
-            requestAnimationFrame(check);
-          };
-          check();
-        });
-      }
-
-      function waitForFrame(after: number): Promise<number> {
-        return new Promise((resolve, reject) => {
-          const deadline = performance.now() + 60_000;
-          const check = () => {
-            const frame = performance
-              .getEntriesByName('oz:viewer.frame', 'mark')
-              .find((entry) => entry.startTime >= after);
-            if (frame) return resolve(frame.startTime);
-            if (performance.now() >= deadline)
-              return reject(
-                new Error('No viewer.frame mark followed body installation.')
+                new Error(
+                  `${name} did not match geometry revision ${record.version}. ` +
+                    JSON.stringify(
+                      Object.fromEntries(
+                        [
+                          'packed',
+                          'geometry-ready',
+                          'analysis-ready',
+                          'installed',
+                          'frame'
+                        ].map((phase) => [
+                          phase,
+                          performance
+                            .getEntriesByName(`oz:edit.${phase}`, 'measure')
+                            .map((entry) => {
+                              const detail = (entry as PerformanceMeasure)
+                                .detail as {
+                                version?: number;
+                                analysis?: string;
+                              } | null;
+                              return {
+                                version: detail?.version,
+                                analysis: detail?.analysis
+                              };
+                            })
+                        ])
+                      )
+                    )
+                )
               );
             requestAnimationFrame(check);
           };

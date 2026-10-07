@@ -148,11 +148,6 @@ export async function importMeshFile(
         `${policy.label} has ${triangleCount} triangles; the browser import limit is ${MAX_IMPORT_TRIANGLES}.`
       );
     }
-    if (pkg && pkg.unit.millimetres !== 1) {
-      for (let index = 0; index < vertices.length; index += 1) {
-        vertices[index]! *= pkg.unit.millimetres;
-      }
-    }
     verifyMeshRebuilds(kernel, policy, vertices, indices, documentUnits);
   } finally {
     kernel.free();
@@ -197,7 +192,12 @@ function threeMfPlacements(
   }
   return pkg.placements.map((placement: ThreeMfPlacement) => ({
     solid: solids[placement.objectIndex]!,
-    transform: placement.transform
+    // The paired translator normalizes resource vertices to millimetres.
+    // Build translations remain in the model's unit; scale those once here.
+    transform:
+      placement.transform?.map((value, index) =>
+        index >= 9 ? value * pkg.unit.millimetres : value
+      ) ?? null
   }));
 }
 
@@ -221,7 +221,10 @@ function tessellatePlacements(
   for (const placement of placements) {
     let facets = tessellated.get(placement.solid);
     if (!facets) {
-      const mesh = kernel.tessellateSolid(placement.solid, MEASUREMENT_DEFLECTION);
+      const mesh = kernel.tessellateSolid(
+        placement.solid,
+        MEASUREMENT_DEFLECTION
+      );
       try {
         // WASM accessors materialize arrays. Read each once before iterating.
         facets = {

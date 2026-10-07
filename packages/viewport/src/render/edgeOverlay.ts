@@ -1,7 +1,7 @@
 import * as THREE from 'three';
 import type { LineSegments2 } from 'three/examples/jsm/lines/LineSegments2.js';
 import type {
-  BodyRepresentation,
+  GeometryBodyRepresentation,
   EdgeTopologyReferenceV5,
   TopologySelection
 } from '@openzcad/shared';
@@ -266,7 +266,7 @@ export class BodyEdgeOverlay extends THREE.Group {
   readonly ownershipBySegment: readonly EdgeSegmentOwner[];
 
   private readonly bodyId: TopologySelection['bodyId'];
-  private readonly topology: BodyRepresentation['topology'];
+  private readonly topology: GeometryBodyRepresentation['topology'];
   private readonly entriesByKey = new Map<string, EdgeEntry>();
   private selectedKeys = new Set<string>();
   private hoveredKeys = new Set<string>();
@@ -284,7 +284,7 @@ export class BodyEdgeOverlay extends THREE.Group {
   private bodySelected = false;
 
   constructor(
-    body: Pick<BodyRepresentation, 'bodyId' | 'topology'>,
+    body: Pick<GeometryBodyRepresentation, 'bodyId' | 'topology'>,
     resolution?: FatLineResolution
   ) {
     super();
@@ -724,7 +724,7 @@ export class BodyEdgeOverlay extends THREE.Group {
 }
 
 export function createBodyEdgeOverlay(
-  body: Pick<BodyRepresentation, 'bodyId' | 'topology'>,
+  body: Pick<GeometryBodyRepresentation, 'bodyId' | 'topology'>,
   resolution?: FatLineResolution
 ) {
   return new BodyEdgeOverlay(body, resolution);

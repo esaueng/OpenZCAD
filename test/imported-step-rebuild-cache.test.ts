@@ -65,7 +65,8 @@ function bodyGeometrySignature(body: BodyRepresentation) {
           (vertices[b]! * vertices[c + 1]! - vertices[b + 1]! * vertices[c]!)) /
       6;
   }
-  return {
+  // Keep each normalized snapshot immutable while later bodies are normalized.
+  return Object.freeze({
     bodyId: body.bodyId,
     name: body.name,
     source: body.source,
@@ -88,7 +89,7 @@ function bodyGeometrySignature(body: BodyRepresentation) {
         .map((edge) => edge.hash)
         .sort((left, right) => left - right)
     }
-  };
+  });
 }
 
 function geometrySignatures(derived: DerivedState) {
@@ -241,6 +242,11 @@ describe('imported STEP rebuild cache', () => {
       const rebuilt = await kernel.syncDocument(manager.document);
       expect(reads).toBe(3);
       expect(rebuilt.warnings).toEqual([]);
+      for (const body of Object.values(combined.bodyRepresentations)) {
+        expect(rebuilt.bodyRepresentations[body.bodyId]!.volume).toBe(
+          body.volume
+        );
+      }
       expect(geometrySignatures(rebuilt)).toEqual(geometrySignatures(combined));
       for (const [id, signature] of Object.entries(geometrySignatures(first))) {
         expect(geometrySignatures(rebuilt)[id]).toEqual(signature);

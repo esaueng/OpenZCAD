@@ -35,7 +35,10 @@ import {
   kernelReadsBezierAsCircle,
   kernelSafeBezierPieces
 } from '../packages/kernel-adapter/src/profile-bezier-edges';
-import { RemusKernel } from '../packages/kernel-adapter/src/remus-runtime';
+import {
+  RemusKernel,
+  remusTranslators
+} from '../packages/kernel-adapter/src/remus-runtime';
 import {
   createExactKernelAdapter,
   type ExactKernelAdapter
@@ -638,8 +641,7 @@ describe('text built by the exact kernel', { timeout: 120_000 }, () => {
   /**
    * Engrave and emboss with the text sketched ON the slab's top face — the
    * way the UI does it — rather than buried below it as the cases above are.
-   * The exact kernel refuses a Bezier-walled tool whose cap lies on the
-   * target's face (remus#953, `exact_only_unattainable`); the adapter
+   * A coplanar Bezier fuse can refuse or return an invalid solid; the adapter
    * rebuilds that tool with a hair of travel across the face on the side
    * where it cannot change the result (`exact-pierce-tool.ts`). Both routes
    * the app uses are covered: the extrude's own operation and target, and an
@@ -816,6 +818,111 @@ describe('text built by the exact kernel', { timeout: 120_000 }, () => {
       SLAB.width * SLAB.height * SLAB.depth -
       Math.PI * hole.radius ** 2 * SLAB.depth;
 
+    it('engraves over an existing hole without extending the tool through its rim', async () => {
+      const document = onFaceScene('boolean', 'subtract', UNDER_B_STEM);
+      const derived = await adapter.syncDocument(document);
+      expect(derived.warnings).toEqual([]);
+      const body = bodyOf(derived);
+      const glyphVolume = textArea(openSans, TEXT, SIZE) * DEPTH;
+      // The drill is entirely inside the glyph's stem. Its already empty
+      // intersection with the engraving must not be removed a second time.
+      const expected =
+        slabWith(UNDER_B_STEM) -
+        glyphVolume +
+        Math.PI * UNDER_B_STEM.radius ** 2 * DEPTH;
+      expect(volumeRatio(body, expected)).toBeCloseTo(1, 5);
+      const closure = inspectTriangleMeshClosure(
+        body.mesh.vertices,
+        body.mesh.indices
+      );
+      expect(closure.boundaryEdges).toBe(0);
+      expect(closure.nonManifoldEdges).toBe(0);
+      expect(meshComponents(body)).toBe(1);
+
+      const step = await adapter.exportStep(document, [body.bodyId]);
+      const kernel = new RemusKernel();
+      try {
+        const solids = kernel.deserializeSolids(
+          remusTranslators().importStep(new TextEncoder().encode(step))
+        );
+        expect(solids).toHaveLength(1);
+        // Verify the original void all the way through the slab and material
+        // beside it below the engraving, independently of the volume ratio.
+        for (const z of [0.5, 5, 9]) {
+          expect(
+            kernel.classifyPoint(
+              solids[0]!,
+              UNDER_B_STEM.centerX,
+              UNDER_B_STEM.centerY,
+              z,
+              1e-7
+            )
+          ).toBe('outside');
+        }
+        expect(
+          kernel.classifyPoint(
+            solids[0]!,
+            UNDER_B_STEM.centerX + 0.25,
+            UNDER_B_STEM.centerY,
+            5,
+            1e-7
+          )
+        ).toBe('inside');
+      } finally {
+        kernel.free();
+      }
+    });
+
+    it('embosses over an existing hole without piercing into its void', async () => {
+      const document = onFaceScene('extrude', 'union', UNDER_B_STEM);
+      const derived = await adapter.syncDocument(document);
+      expect(derived.warnings).toEqual([]);
+      const body = bodyOf(derived);
+      const glyphVolume = textArea(openSans, TEXT, SIZE) * DEPTH;
+      expect(
+        volumeRatio(body, slabWith(UNDER_B_STEM) + glyphVolume)
+      ).toBeCloseTo(1, 5);
+      const closure = inspectTriangleMeshClosure(
+        body.mesh.vertices,
+        body.mesh.indices
+      );
+      expect(closure.boundaryEdges).toBe(0);
+      expect(closure.nonManifoldEdges).toBe(0);
+      expect(meshComponents(body)).toBe(1);
+
+      const step = await adapter.exportStep(document, [body.bodyId]);
+      const kernel = new RemusKernel();
+      try {
+        const solids = kernel.deserializeSolids(
+          remusTranslators().importStep(new TextEncoder().encode(step))
+        );
+        expect(solids).toHaveLength(1);
+        // Sample inside the band that a 0.01 mm pierce would incorrectly fill.
+        for (const z of [0.5, 5, SLAB.depth - 0.005]) {
+          expect(
+            kernel.classifyPoint(
+              solids[0]!,
+              UNDER_B_STEM.centerX,
+              UNDER_B_STEM.centerY,
+              z,
+              1e-7
+            )
+          ).toBe('outside');
+        }
+        expect(
+          kernel.classifyPoint(
+            solids[0]!,
+            UNDER_B_STEM.centerX,
+            UNDER_B_STEM.centerY,
+            SLAB.depth + DEPTH / 2,
+            1e-7
+          )
+        ).toBe('inside');
+      } finally {
+        kernel.free();
+      }
+    });
+
     // Engrave goes through the boolean route here: on a drilled slab the
     // extrude-cut route refuses earlier, in its overlap measurement, before
     // any boolean runs (a separate, pre-existing limit). Emboss goes through
@@ -824,40 +931,7 @@ describe('text built by the exact kernel', { timeout: 120_000 }, () => {
     for (const operation of ['subtract', 'union'] as const) {
       const verb = operation === 'subtract' ? 'engrave' : 'emboss';
       const route = operation === 'subtract' ? 'boolean' : 'extrude';
-      it(`keeps the refusal for an on-face ${verb} over a hole in the face`, async () => {
-        const derived = await adapter.syncDocument(
-          onFaceScene(route, operation, UNDER_B_STEM)
-        );
-        // The user's own refusal, unchanged: the gate declined the retry.
-        const failed = (derived.featureWarnings ?? []).filter(
-          (entry) => entry.kind === 'build-failed'
-        );
-        expect(failed).toHaveLength(1);
-        expect(failed[0]!.featureName).toBe(
-          route === 'boolean' ? 'Engrave' : 'Label text'
-        );
-        expect(failed[0]!.kernelRefusal).toMatchObject({
-          family: 'boolean',
-          code: 'exact_only_unattainable'
-        });
-        expect(failed[0]!.message).toContain(
-          operation === 'subtract'
-            ? 'could not be cut exactly'
-            : 'could not be combined exactly'
-        );
-        // And the drilled slab is left exactly as it was, beside the text
-        // body the refused boolean did not consume.
-        const bodies = Object.values(derived.bodyRepresentations).filter(
-          (body) => !body.consumed
-        );
-        expect(bodies).toHaveLength(route === 'boolean' ? 2 : 1);
-        const slab = bodies.reduce((largest, body) =>
-          body.volume > largest.volume ? body : largest
-        );
-        expect(volumeRatio(slab, slabWith(UNDER_B_STEM))).toBeCloseTo(1, 6);
-      });
-
-      it(`still pierces an on-face ${verb} when the hole is clear of the text`, async () => {
+      it(`still performs an on-face ${verb} when the hole is clear of the text`, async () => {
         const derived = await adapter.syncDocument(
           onFaceScene(route, operation, CLEAR_OF_TEXT)
         );
@@ -870,13 +944,10 @@ describe('text built by the exact kernel', { timeout: 120_000 }, () => {
       });
     }
 
-    it('keeps the refusal for an on-face emboss over a thin-roofed cavity', async () => {
-      // The emboss's pierce runs 0.01 into the slab; a sealed cavity roofed
-      // 0.007 under the text would have its top filled by it. The face has
-      // no hole, so of the gate's checks only the through-thickness band
-      // declines it. On this kernel pin the pierced union over that roof is
-      // refused too, so this case pins the end-to-end outcome; the band
-      // check itself is proved in exact-pierce-tool.test.ts.
+    it('preserves a thin cavity roof when stored emboss contact is refused', async () => {
+      // An unqualified 0.01 mm pierce would fill part of this cavity's
+      // 0.007 mm roof. Keep the stored operation and original slab when
+      // contact cannot be proved; the band guard has independent coverage.
       const cavity = { centerX: 15, centerY: 14, top: SLAB.depth - 0.007 };
       const derived = await adapter.syncDocument(
         onFaceScene('extrude', 'union', undefined, cavity)
@@ -886,10 +957,10 @@ describe('text built by the exact kernel', { timeout: 120_000 }, () => {
       );
       expect(failed).toHaveLength(1);
       expect(failed[0]!.featureName).toBe('Label text');
-      expect(failed[0]!.kernelRefusal).toMatchObject({
-        family: 'boolean',
-        code: 'exact_only_unattainable'
-      });
+      expect(failed[0]!.message).toContain(
+        'Stored add extrusion no longer overlaps'
+      );
+      expect(failed[0]!.kernelRefusal).toBeUndefined();
       expect(
         volumeRatio(
           bodyOf(derived),

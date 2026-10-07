@@ -22,6 +22,7 @@
  *   OFFSET_PERF_AREA      Offset the +X planar face whose area is nearest this;
  *                         default is the largest +X planar face.
  *   OFFSET_PERF_TRACE=1   Attribute traced kernel calls to their callers.
+ *   OFFSET_PERF_KERNEL_PHASES=1  Drain opt-in kernel substage timings.
  *   OFFSET_PERF_FULL=1    Also time a second edit from the same base and the
  *                         undo back to the import.
  *   REMUS_WASM_PKG, REMUS_WASM_IO_PKG
@@ -74,6 +75,13 @@ const targetArea =
     : Number(process.env.OFFSET_PERF_AREA);
 const traceCallers = process.env.OFFSET_PERF_TRACE === '1';
 const fullRun = process.env.OFFSET_PERF_FULL === '1';
+const kernelPhases = process.env.OFFSET_PERF_KERNEL_PHASES === '1';
+let phaseProbe:
+  | (RemusKernel & {
+      setPerformanceTracing?: (enabled: boolean) => void;
+      drainPerformanceTrace?: () => string;
+    })
+  | undefined;
 
 /** Kernel methods whose callers OFFSET_PERF_TRACE=1 attributes. */
 const TRACED_METHODS = new Set([
@@ -131,6 +139,10 @@ function callerKey(name: string): string {
  * Kernel calls are synchronous, so wall time inside the call is kernel time.
  */
 function instrumentKernel(): () => void {
+  if (kernelPhases) {
+    phaseProbe = new RemusKernel();
+    phaseProbe.setPerformanceTracing?.(true);
+  }
   const proto = RemusKernel.prototype as unknown as Record<string, unknown>;
   const originals = new Map<string, PropertyDescriptor>();
   for (const name of Object.getOwnPropertyNames(proto)) {
@@ -159,6 +171,9 @@ function instrumentKernel(): () => void {
     for (const [name, descriptor] of originals) {
       Object.defineProperty(proto, name, descriptor);
     }
+    phaseProbe?.setPerformanceTracing?.(false);
+    phaseProbe?.free();
+    phaseProbe = undefined;
   };
 }
 
@@ -232,9 +247,43 @@ async function timedSync(
   callerTotals.clear();
   stages.reset();
   const start = performance.now();
-  const derived = await adapter.syncDocument(document, stages.listener);
+  const derived = await adapter.syncDocument(
+    document,
+    stages.listener,
+    undefined,
+    undefined,
+    {
+      onGeometryReady: (geometry) => {
+        console.log(
+          `geometry ready ${label}: ${(performance.now() - start).toFixed(1)} ms`
+        );
+        expect(
+          Object.values(geometry.bodyRepresentations).every(
+            (body) => !('volume' in body)
+          )
+        ).toBe(true);
+      }
+    }
+  );
   report(label, performance.now() - start, stages.lines());
   console.log(`warnings: ${JSON.stringify(derived.warnings)}`);
+  if (phaseProbe?.drainPerformanceTrace) {
+    const phases = JSON.parse(phaseProbe.drainPerformanceTrace()) as {
+      name: string;
+      duration_ms: number;
+    }[];
+    const totals = new Map<string, { time: number; count: number }>();
+    for (const phase of phases) tally(totals, phase.name, phase.duration_ms);
+    console.log(
+      `--- kernel substages ${label} (inclusive) ---\n${[...totals]
+        .sort((a, b) => b[1].time - a[1].time)
+        .map(
+          ([name, value]) =>
+            `${name}: ${value.time.toFixed(1)} ms x${value.count}`
+        )
+        .join('\n')}`
+    );
+  }
   return derived;
 }
 

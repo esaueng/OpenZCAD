@@ -57,6 +57,19 @@ function row(name: string): HTMLElement {
   return screen.getByText(name).closest('.feature-row') as HTMLElement;
 }
 
+it('shows preparation instead of repair while accepted geometry awaits analysis', () => {
+  const pending = feature(1);
+  pending.bodyId = 'body-pending' as FeatureNode['bodyId'];
+  const { rerender, props } = renderTimeline({
+    features: [pending],
+    geometryPending: true
+  });
+  expect(screen.getByText('preparing')).toBeInTheDocument();
+  expect(screen.queryByText('needs repair')).not.toBeInTheDocument();
+  rerender(<HistoryTimeline {...props} geometryPending={false} />);
+  expect(screen.getByText('needs repair')).toBeInTheDocument();
+});
+
 afterEach(() => {
   vi.useRealTimers();
 });
