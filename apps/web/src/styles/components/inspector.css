@@ -738,7 +738,7 @@
   min-width: 176px;
   padding: 4px;
   background: var(--color-surface);
-  border: var(--border-thin);
+  border: var(--border-strong);
   border-radius: var(--radius-md);
   box-shadow: var(--shadow-popover);
 }
@@ -748,8 +748,9 @@
   align-items: center;
   gap: 6px;
   width: 100%;
-  padding: 6px 8px;
-  color: var(--color-text);
+  min-height: 28px;
+  padding: 3px 8px;
+  color: var(--color-text-muted);
   font-size: var(--fs-sm);
   text-align: left;
   background: transparent;
@@ -759,6 +760,7 @@
 }
 
 .panel-overflow-item:hover {
+  color: var(--color-text);
   background: var(--color-surface-hover);
 }
 
