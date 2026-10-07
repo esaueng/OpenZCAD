@@ -964,38 +964,52 @@
   animation: mode-out-top var(--dur-fast) ease-in forwards;
 }
 
+/* The View bar entered from the right rail; it leaves the same way. */
+.palette-float.closing > .view-mode-bar {
+  animation-name: mode-out-right;
+}
+
+/* `translate`, not `transform`: see oz-rise in motion.css. The rails centre
+   themselves with translateY(-50%), which a transform keyframe replaced. */
 @keyframes mode-in-left {
   from {
     opacity: 0;
-    transform: translateX(-16px);
+    translate: -16px 0;
   }
 }
 
 @keyframes mode-in-right {
   from {
     opacity: 0;
-    transform: translateX(16px);
+    translate: 16px 0;
   }
 }
 
 @keyframes mode-in-top {
   from {
     opacity: 0;
-    transform: translateY(-12px);
+    translate: 0 -12px;
   }
 }
 
 @keyframes mode-in-bottom {
   from {
     opacity: 0;
-    transform: translateY(12px);
+    translate: 0 12px;
   }
 }
 
 @keyframes mode-out-left {
   to {
     opacity: 0;
-    transform: translateX(-16px);
+    translate: -16px 0;
+  }
+}
+
+@keyframes mode-out-right {
+  to {
+    opacity: 0;
+    translate: 16px 0;
   }
 }
 
