@@ -145,7 +145,7 @@ export function ProjectPropertiesDialog({
             aria-label="Close project properties"
             onClick={onClose}
           >
-            <X size={18} aria-hidden="true" />
+            <X size={14} aria-hidden="true" />
           </button>
         </header>
         {loading && (

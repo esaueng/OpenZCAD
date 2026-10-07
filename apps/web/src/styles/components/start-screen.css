@@ -440,11 +440,16 @@
   cursor: default;
 }
 
+/* 24px like every other icon-only control; at 3px around a 12px glyph it
+   drew 18px, under the pointer-target floor. */
 .start-account-dismiss {
-  display: inline-flex;
+  display: inline-grid;
+  place-items: center;
   flex: none;
+  width: 24px;
+  height: 24px;
   min-height: 0;
-  padding: 3px;
+  padding: 0;
   color: var(--color-text-subtle);
   background: none;
   border: none;

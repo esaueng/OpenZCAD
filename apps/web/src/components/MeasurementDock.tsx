@@ -311,9 +311,9 @@ export function MeasurementDock({
                         onClick={() => onToggleVisibility(entry.id)}
                       >
                         {entry.visible ? (
-                          <Eye size={13} aria-hidden="true" />
+                          <Eye size={12} aria-hidden="true" />
                         ) : (
-                          <EyeOff size={13} aria-hidden="true" />
+                          <EyeOff size={12} aria-hidden="true" />
                         )}
                       </button>
                       <button
@@ -322,7 +322,7 @@ export function MeasurementDock({
                         aria-label={`Copy ${entry.label}`}
                         onClick={() => onCopy(entry)}
                       >
-                        <ClipboardCopy size={13} aria-hidden="true" />
+                        <ClipboardCopy size={12} aria-hidden="true" />
                       </button>
                       <button
                         type="button"
@@ -330,7 +330,7 @@ export function MeasurementDock({
                         aria-label={`Edit ${entry.label}`}
                         onClick={() => beginEdit(entry)}
                       >
-                        <Pencil size={13} aria-hidden="true" />
+                        <Pencil size={12} aria-hidden="true" />
                       </button>
                       <button
                         type="button"
@@ -338,7 +338,7 @@ export function MeasurementDock({
                         aria-label={`Delete ${entry.label}`}
                         onClick={() => onDelete(entry.id)}
                       >
-                        <Trash2 size={13} aria-hidden="true" />
+                        <Trash2 size={12} aria-hidden="true" />
                       </button>
                     </span>
                   </>

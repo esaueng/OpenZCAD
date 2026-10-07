@@ -547,7 +547,7 @@ export function StartScreen({
                 nudgeProject(project.projectId, offset);
               }}
             >
-              <GripVertical size={14} aria-hidden="true" />
+              <GripVertical size={12} aria-hidden="true" />
             </button>
           )}
 
@@ -566,9 +566,9 @@ export function StartScreen({
               onClick={() => onTogglePin(project)}
             >
               {organization.pinned ? (
-                <PinOff size={14} aria-hidden="true" />
+                <PinOff size={12} aria-hidden="true" />
               ) : (
-                <Pin size={14} aria-hidden="true" />
+                <Pin size={12} aria-hidden="true" />
               )}
             </button>
           )}
@@ -582,7 +582,7 @@ export function StartScreen({
             disabled={busy}
             onClick={() => setOpenMenu(menuOpen ? null : project.projectId)}
           >
-            <MoreHorizontal size={15} aria-hidden="true" />
+            <MoreHorizontal size={12} aria-hidden="true" />
           </button>
         </div>
 
@@ -1035,7 +1035,7 @@ export function StartScreen({
                     aria-label="Clear search"
                     onClick={() => setQuery('')}
                   >
-                    <X size={13} aria-hidden="true" />
+                    <X size={12} aria-hidden="true" />
                   </button>
                 )}
               </div>
