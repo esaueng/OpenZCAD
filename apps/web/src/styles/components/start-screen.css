@@ -419,7 +419,7 @@
 .start-account-action {
   flex: none;
   min-height: 0;
-  height: 20px;
+  height: 24px;
   padding: 0 4px;
   color: var(--color-accent);
   font-size: var(--fs-sm);
@@ -611,8 +611,8 @@
   right: 5px;
   display: grid;
   place-items: center;
-  width: 20px;
-  height: 20px;
+  width: 24px;
+  height: 24px;
   color: var(--color-text-subtle);
   border-radius: var(--radius-sm);
 }
@@ -1053,7 +1053,7 @@
 .start-update button {
   flex: none;
   min-height: 0;
-  height: 20px;
+  height: 24px;
   padding: 0 8px;
   font-size: var(--fs-xs);
   border-radius: var(--radius-sm);

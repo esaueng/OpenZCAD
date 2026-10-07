@@ -848,8 +848,8 @@
 .assistant-pending-item button {
   display: grid;
   place-items: center;
-  width: 16px;
-  height: 16px;
+  width: 24px;
+  height: 24px;
   padding: 0;
   color: var(--color-text-subtle);
   border: 0;

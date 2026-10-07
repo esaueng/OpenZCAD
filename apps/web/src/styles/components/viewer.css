@@ -248,7 +248,7 @@
 
 .rail-section-export {
   align-self: flex-end;
-  min-height: 22px;
+  min-height: 24px;
   padding: 0 8px;
   color: var(--color-text-muted);
   border: var(--border-thin);
@@ -521,7 +521,7 @@
 }
 
 .selection-callout-recovery {
-  min-height: 0;
+  min-height: 24px;
   padding: 2px 7px;
   color: inherit;
   font-size: var(--fs-mini);
@@ -743,6 +743,7 @@
 }
 
 .toast-action {
+  min-height: 24px;
   padding: 3px 9px;
   color: var(--color-accent);
   font-weight: var(--fw-medium);
