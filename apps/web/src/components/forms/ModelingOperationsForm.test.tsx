@@ -279,7 +279,7 @@ describe('Modeling operations form', () => {
     ).toHaveClass('field-error');
   });
 
-  it('submits on Enter from a select, as the other feature cards do', () => {
+  it('submits on Enter from a select, once, as the other feature cards do', () => {
     const onPreflight = vi.fn(() => new Promise<{ status: 'ready' }>(() => {}));
     render(
       <ModelingOperationsForm
@@ -301,7 +301,10 @@ describe('Modeling operations form', () => {
     fireEvent.click(screen.getByRole('button', { name: faces[0]!.label }));
 
     fireEvent.keyDown(screen.getByLabelText('Target body'), { key: 'Enter' });
+    expect(onPreflight).toHaveBeenCalledOnce();
 
+    // A repeat while the check runs does not start a second one.
+    fireEvent.keyDown(screen.getByLabelText('Target body'), { key: 'Enter' });
     expect(onPreflight).toHaveBeenCalledOnce();
   });
 

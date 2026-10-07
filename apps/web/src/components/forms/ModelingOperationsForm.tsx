@@ -778,14 +778,22 @@ export function ModelingOperationsForm({
       onKeyDown={(event) => {
         // Enter on a face row submits (see `isPickListRow`), and so does
         // Enter on a select, as in every other feature card: a text field
-        // submits natively, a select did not.
+        // submits natively, a select did not. Only while the Create button
+        // is enabled, as native implicit submission is: a held Enter during
+        // the exact check otherwise started another check on each repeat.
         if (
           event.key === 'Enter' &&
           (isPickListRow(event.target) ||
             event.target instanceof HTMLSelectElement)
         ) {
           event.preventDefault();
-          event.currentTarget.requestSubmit();
+          if (
+            canCheck &&
+            effectivePreflight.status !== 'pending' &&
+            unsupportedReason === undefined
+          ) {
+            event.currentTarget.requestSubmit();
+          }
         }
       }}
     >

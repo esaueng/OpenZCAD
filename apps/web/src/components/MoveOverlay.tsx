@@ -97,6 +97,17 @@ function MoveNumberInput({
           onValue(next);
         }
       }}
+      onKeyDown={(event) => {
+        // An emptied or half-typed field holds no value of its own; Enter
+        // would apply the previous one, which the field no longer shows.
+        if (
+          event.key === 'Enter' &&
+          draft !== null &&
+          (draft.trim() === '' || !Number.isFinite(Number(draft)))
+        ) {
+          event.preventDefault();
+        }
+      }}
       onBlur={() => setDraft(null)}
     />
   );

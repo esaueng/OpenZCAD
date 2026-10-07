@@ -698,7 +698,9 @@ const LazyViewModeBar = lazyWithStaleChunkNotice(() =>
   }))
 );
 // The Move panel is needed only once a Move starts; lazy, its fields stay
-// off the entry chunk, which runs at its budget.
+// off the entry chunk, which runs at its budget. Its own boundary keeps a
+// chunk that fails to load (a tab left open across a deploy) to the panel
+// slot, with the Reload notice, instead of taking the workspace down.
 const LazyMoveOverlay = lazyWithStaleChunkNotice(() =>
   import('./components/MoveOverlay').then((module) => ({
     default: module.MoveOverlay
@@ -706,9 +708,11 @@ const LazyMoveOverlay = lazyWithStaleChunkNotice(() =>
 );
 function MoveOverlay(props: ComponentProps<typeof LazyMoveOverlay>) {
   return (
-    <Suspense fallback={null}>
-      <LazyMoveOverlay {...props} />
-    </Suspense>
+    <ErrorBoundary label="Move panel">
+      <Suspense fallback={null}>
+        <LazyMoveOverlay {...props} />
+      </Suspense>
+    </ErrorBoundary>
   );
 }
 const LazyMeasurementDock = lazyWithStaleChunkNotice(() =>

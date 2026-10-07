@@ -85,4 +85,31 @@ describe('Move overlay entry', () => {
     fireEvent.change(field, { target: { value: '-5' } });
     expect(changes).toEqual([{ x: -5, y: 0, z: 0 }]);
   });
+
+  it('holds Enter while a field is emptied, so it cannot apply the old value', () => {
+    let confirmed = 0;
+    render(
+      <MoveOverlay
+        bodyName="Box"
+        values={{ translation: { x: 5, y: 0, z: 0 }, rotationDeg: zero }}
+        units="mm"
+        snap={null}
+        onChange={() => {}}
+        onConfirm={() => {
+          confirmed += 1;
+        }}
+        onCancel={() => {}}
+      />
+    );
+    const field = screen.getByLabelText<HTMLInputElement>('Move X in mm');
+    fireEvent.change(field, { target: { value: '' } });
+
+    // fireEvent returns false when a handler called preventDefault, which is
+    // what stops the browser's implicit form submission on Enter.
+    expect(fireEvent.keyDown(field, { key: 'Enter' })).toBe(false);
+    expect(confirmed).toBe(0);
+
+    fireEvent.change(field, { target: { value: '0' } });
+    expect(fireEvent.keyDown(field, { key: 'Enter' })).toBe(true);
+  });
 });
