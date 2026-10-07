@@ -429,7 +429,6 @@ const MESH_EXPORT_FILE_INFO: Record<
 };
 import {
   MoveInstruction,
-  MoveOverlay,
   ProfileQuickAction
 } from './components/DirectModelingOverlays';
 import { composeMoveTransform } from '@openzcad/viewport/move-transform';
@@ -698,6 +697,20 @@ const LazyViewModeBar = lazyWithStaleChunkNotice(() =>
     default: module.ViewModeBar
   }))
 );
+// The Move panel is needed only once a Move starts; lazy, its fields stay
+// off the entry chunk, which runs at its budget.
+const LazyMoveOverlay = lazyWithStaleChunkNotice(() =>
+  import('./components/MoveOverlay').then((module) => ({
+    default: module.MoveOverlay
+  }))
+);
+function MoveOverlay(props: ComponentProps<typeof LazyMoveOverlay>) {
+  return (
+    <Suspense fallback={null}>
+      <LazyMoveOverlay {...props} />
+    </Suspense>
+  );
+}
 const LazyMeasurementDock = lazyWithStaleChunkNotice(() =>
   import('./components/MeasurementDock').then((module) => ({
     default: module.MeasurementDock

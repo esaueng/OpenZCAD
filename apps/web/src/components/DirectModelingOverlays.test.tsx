@@ -1,7 +1,8 @@
 import { act, fireEvent, render, screen } from '@testing-library/react';
 import type { MutableRefObject } from 'react';
 import { describe, expect, it } from 'vitest';
-import { MoveInstruction, MoveOverlay } from './DirectModelingOverlays';
+import { MoveInstruction } from './DirectModelingOverlays';
+import { MoveOverlay } from './MoveOverlay';
 
 type LiveValues = MutableRefObject<
   | ((
