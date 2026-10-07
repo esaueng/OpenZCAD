@@ -1,4 +1,4 @@
-import { act, render, screen } from '@testing-library/react';
+import { act, fireEvent, render, screen } from '@testing-library/react';
 import type { MutableRefObject } from 'react';
 import { describe, expect, it } from 'vitest';
 import { MoveInstruction, MoveOverlay } from './DirectModelingOverlays';
@@ -58,5 +58,30 @@ describe('Move overlay', () => {
     expect(screen.getByLabelText<HTMLInputElement>('Move X in mm').value).toBe(
       '5'
     );
+  });
+});
+
+describe('Move overlay entry', () => {
+  it('keeps a typed minus sign instead of committing 0, so -5 moves by -5', () => {
+    const changes: { x: number; y: number; z: number }[] = [];
+    render(
+      <MoveOverlay
+        bodyName="Box"
+        values={{ translation: zero, rotationDeg: zero }}
+        units="mm"
+        snap={null}
+        onChange={(next) => changes.push(next.translation)}
+        onConfirm={() => {}}
+        onCancel={() => {}}
+      />
+    );
+    const field = screen.getByLabelText<HTMLInputElement>('Move X in mm');
+
+    // A number input reads "" while it holds only "-".
+    fireEvent.change(field, { target: { value: '' } });
+    expect(changes).toEqual([]);
+
+    fireEvent.change(field, { target: { value: '-5' } });
+    expect(changes).toEqual([{ x: -5, y: 0, z: 0 }]);
   });
 });

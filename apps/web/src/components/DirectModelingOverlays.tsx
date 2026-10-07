@@ -159,6 +159,43 @@ export function MoveInstruction({
   );
 }
 
+/**
+ * A Move/Rotate field that holds what is being typed until it is a number.
+ * Bound straight to the value, a lone "-" (an empty number input) read as
+ * Number("") === 0 and rewrote the field to 0, so typing -5 produced 05: a
+ * move of +5 where the user asked for -5.
+ */
+function MoveNumberInput({
+  value,
+  step,
+  label,
+  onValue
+}: {
+  value: number;
+  step: number;
+  label: string;
+  onValue(next: number): void;
+}) {
+  const [draft, setDraft] = useState<string | null>(null);
+  return (
+    <input
+      type="number"
+      step={step}
+      value={draft ?? value}
+      aria-label={label}
+      onChange={(event) => {
+        const raw = event.target.value;
+        setDraft(raw);
+        const next = Number(raw);
+        if (raw.trim() !== '' && Number.isFinite(next)) {
+          onValue(next);
+        }
+      }}
+      onBlur={() => setDraft(null)}
+    />
+  );
+}
+
 export function MoveOverlay({
   bodyName,
   values: committedValues,
@@ -206,12 +243,8 @@ export function MoveOverlay({
   const setValue = (
     group: 'translation' | 'rotationDeg',
     axis: (typeof MOVE_AXES)[number],
-    raw: string
+    next: number
   ) => {
-    const next = Number(raw);
-    if (!Number.isFinite(next)) {
-      return;
-    }
     onChange({
       ...values,
       [group]: { ...values[group], [axis]: next }
@@ -275,14 +308,11 @@ export function MoveOverlay({
               d{axis.toUpperCase()}
             </span>
             <span className="extrude-distance-input">
-              <input
-                type="number"
+              <MoveNumberInput
                 step={snap?.move ?? 1}
                 value={values.translation[axis]}
-                aria-label={`Move ${axis.toUpperCase()} in ${units}`}
-                onChange={(event) =>
-                  setValue('translation', axis, event.target.value)
-                }
+                label={`Move ${axis.toUpperCase()} in ${units}`}
+                onValue={(next) => setValue('translation', axis, next)}
               />
               <b>{units}</b>
             </span>
@@ -301,14 +331,11 @@ export function MoveOverlay({
               r{axis.toUpperCase()}
             </span>
             <span className="extrude-distance-input">
-              <input
-                type="number"
+              <MoveNumberInput
                 step={snap?.rotate ?? 1}
                 value={values.rotationDeg[axis]}
-                aria-label={`Rotate ${axis.toUpperCase()} in degrees`}
-                onChange={(event) =>
-                  setValue('rotationDeg', axis, event.target.value)
-                }
+                label={`Rotate ${axis.toUpperCase()} in degrees`}
+                onValue={(next) => setValue('rotationDeg', axis, next)}
               />
               <b>°</b>
             </span>
