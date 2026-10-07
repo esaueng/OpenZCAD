@@ -265,7 +265,7 @@
 }
 
 .edge-pick-remove:disabled {
-  opacity: 0.4;
+  opacity: var(--opacity-disabled);
 }
 
 .field-triple {

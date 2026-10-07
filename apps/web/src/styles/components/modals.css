@@ -236,9 +236,9 @@
 .cloud-deletion-confirm {
   min-height: 32px;
   padding: 6px 11px;
-  color: white;
-  background: var(--color-error);
-  border: 1px solid var(--color-error);
+  color: var(--color-on-danger);
+  background: var(--color-danger-fill);
+  border: 1px solid var(--color-danger-fill);
   border-radius: var(--radius-md);
   font-size: var(--fs-sm);
   font-weight: var(--fw-medium);
@@ -356,9 +356,9 @@
 .delete-feature-confirm {
   min-height: 32px;
   padding: 6px 11px;
-  color: white;
-  background: var(--color-error);
-  border: 1px solid var(--color-error);
+  color: var(--color-on-danger);
+  background: var(--color-danger-fill);
+  border: 1px solid var(--color-danger-fill);
   border-radius: var(--radius-md);
   font-size: var(--fs-sm);
   font-weight: var(--fw-medium);
@@ -759,7 +759,7 @@
 }
 
 .palette-row.disabled {
-  opacity: 0.5;
+  opacity: var(--opacity-disabled);
   cursor: not-allowed;
 }
 

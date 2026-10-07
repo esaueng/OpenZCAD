@@ -90,7 +90,7 @@
 
 .mode-switch-option:disabled {
   color: var(--color-text-subtle);
-  opacity: 0.45;
+  opacity: var(--opacity-disabled);
   cursor: not-allowed;
 }
 

@@ -1515,9 +1515,11 @@ button.command-rail.active {
 /* A tool that does not act on the current pick is dimmed in place, never
    moved: the rail is one fixed set, and a hover restores it fully since it
    is still a working button that arms its own picking. */
+/* Clearly lighter than a disabled tool (--opacity-disabled), which
+   it is not: at 0.55 the two were within a step of each other. */
 button.command-rail.is-dim:not(:disabled),
 .command-tile.is-dim:not(:disabled) {
-  opacity: 0.55;
+  opacity: 0.7;
 }
 
 button.command-rail.is-dim:hover:not(:disabled),
@@ -1528,8 +1530,8 @@ button.command-rail.is-dim:hover:not(:disabled),
 /* Greyed, not hidden: the icons never move, and the reason is the
    button's description. */
 button.command-rail:disabled {
-  color: var(--color-text-dim);
-  opacity: 0.5;
+  color: var(--color-text-muted);
+  opacity: var(--opacity-disabled);
   cursor: default;
 }
 
@@ -1555,9 +1557,9 @@ button.command-rail:disabled {
       no-repeat local,
     linear-gradient(transparent, var(--color-surface) 70%) bottom / 100% 14px
       no-repeat local,
-    linear-gradient(rgba(0, 0, 0, 0.35), transparent) top / 100% 10px no-repeat
-      scroll,
-    linear-gradient(transparent, rgba(0, 0, 0, 0.35)) bottom / 100% 10px
+    linear-gradient(var(--color-scroll-shade), transparent) top / 100% 10px
+      no-repeat scroll,
+    linear-gradient(transparent, var(--color-scroll-shade)) bottom / 100% 10px
       no-repeat scroll,
     var(--color-surface);
   border: var(--border-thin);
@@ -1619,8 +1621,8 @@ button.command-rail:disabled {
 }
 
 .command-tile:disabled {
-  color: var(--color-text-dim);
-  opacity: 0.5;
+  color: var(--color-text-muted);
+  opacity: var(--opacity-disabled);
   cursor: default;
 }
 
@@ -1682,8 +1684,8 @@ button.command-rail:disabled {
 }
 
 .tweak-rail button:disabled {
-  color: var(--color-text-dim);
-  opacity: 0.5;
+  color: var(--color-text-muted);
+  opacity: var(--opacity-disabled);
   cursor: default;
 }
 
@@ -1865,8 +1867,8 @@ button.command-rail:disabled {
 }
 
 .workspace-column .sketch-rail button:disabled {
-  color: var(--color-text-dim);
-  opacity: 0.5;
+  color: var(--color-text-muted);
+  opacity: var(--opacity-disabled);
   cursor: default;
 }
 
@@ -2200,8 +2202,8 @@ button.command-rail:disabled {
 /* Greyed, not hidden: the icons never move, and the reason is the
    button's description. */
 .sketch-relation:disabled {
-  color: var(--color-text-dim);
-  opacity: 0.5;
+  color: var(--color-text-muted);
+  opacity: var(--opacity-disabled);
   cursor: default;
 }
 

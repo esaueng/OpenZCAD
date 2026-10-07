@@ -262,7 +262,7 @@
 }
 
 .rail-section-export:disabled {
-  opacity: 0.45;
+  opacity: var(--opacity-disabled);
 }
 
 /* Opens to the left of the rail and grows upward, so it never covers the
@@ -411,7 +411,7 @@
 }
 
 .selection-callout-verb:disabled {
-  opacity: 0.45;
+  opacity: var(--opacity-disabled);
   cursor: default;
 }
 

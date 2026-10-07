@@ -339,8 +339,8 @@
 }
 
 .tool-card-submode button:disabled {
-  color: var(--color-text-dim);
-  opacity: 0.45;
+  color: var(--color-text-muted);
+  opacity: var(--opacity-disabled);
   cursor: not-allowed;
 }
 
@@ -689,7 +689,7 @@
 }
 
 .keypad-units button:disabled {
-  opacity: 0.4;
+  opacity: var(--opacity-disabled);
   cursor: default;
 }
 
@@ -737,7 +737,7 @@
 }
 
 .keypad-commit:disabled {
-  opacity: 0.45;
+  opacity: var(--opacity-disabled);
   cursor: default;
 }
 

@@ -354,7 +354,7 @@
 }
 
 .assistant-suggestion:disabled {
-  opacity: 0.5;
+  opacity: var(--opacity-disabled);
   cursor: not-allowed;
 }
 
@@ -895,7 +895,7 @@
 }
 
 .assistant-verified-action:disabled {
-  opacity: 0.5;
+  opacity: var(--opacity-disabled);
   cursor: not-allowed;
 }
 
@@ -963,6 +963,6 @@
 }
 
 .assistant-foot-action:disabled {
-  opacity: 0.5;
+  opacity: var(--opacity-disabled);
   cursor: not-allowed;
 }
