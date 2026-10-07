@@ -385,7 +385,10 @@ export function TopBar({
                 event.preventDefault();
                 commitProjectRename();
               } else if (event.key === 'Escape') {
+                // The rename's own cancel; in a sketch the workspace would
+                // also climb the sketch's Escape ladder.
                 event.preventDefault();
+                event.stopPropagation();
                 setProjectNameDraft(projectName);
                 setEditingProjectName(false);
               }

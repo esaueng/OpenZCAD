@@ -221,6 +221,16 @@ export function MeasurementDock({
                       event.preventDefault();
                       finishEdit(entry.id);
                     }}
+                    onKeyDown={(event) => {
+                      // Escape cancels the edit here and stops: reaching the
+                      // workspace, it turned Measure off and the dock, with
+                      // the half-typed name, unmounted.
+                      if (event.key === 'Escape') {
+                        event.preventDefault();
+                        event.stopPropagation();
+                        setEditingId(null);
+                      }
+                    }}
                   >
                     <label>
                       <span>Name</span>
