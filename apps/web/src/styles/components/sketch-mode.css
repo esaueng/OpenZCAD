@@ -76,8 +76,8 @@
 }
 
 .profile-ready-icon {
-  width: 25px;
-  height: 25px;
+  width: 24px;
+  height: 24px;
   display: grid;
   place-items: center;
   color: var(--color-success);
@@ -103,16 +103,22 @@
   font-size: var(--fs-mini);
 }
 
+/* The lane's primary action, sized and set like .primary beside it. */
 .profile-extrude {
-  min-height: 30px;
+  min-height: 32px;
   display: inline-flex;
   align-items: center;
   gap: 6px;
-  padding: 0 9px;
+  padding: 0 11px;
   color: var(--color-on-accent);
   background: var(--color-accent);
   border-radius: var(--radius-md);
-  font-size: var(--fs-xs);
+  font-size: var(--fs-sm);
+  font-weight: var(--fw-medium);
+}
+
+.profile-extrude:hover {
+  background: var(--color-accent-hi);
 }
 
 /* On the accent fill, in the fill's own text colour: white keycaps read on
@@ -124,8 +130,8 @@
 }
 
 .profile-dismiss {
-  width: 25px;
-  height: 25px;
+  width: 28px;
+  height: 28px;
   display: grid;
   place-items: center;
   color: var(--color-text-subtle);

@@ -32,7 +32,7 @@
   background: var(--color-surface-2);
   border: 1px solid var(--color-border-strong);
   border-radius: var(--radius-md);
-  box-shadow: 0 14px 34px rgba(0, 0, 0, 0.4);
+  box-shadow: var(--shadow-2);
   animation: tool-card-in var(--dur-fast) var(--ease-out);
 }
 
@@ -1323,7 +1323,7 @@
   background: var(--color-surface-2);
   border: 1px solid var(--color-border-strong);
   border-radius: var(--radius-md);
-  box-shadow: 0 14px 34px rgba(0, 0, 0, 0.4);
+  box-shadow: var(--shadow-2);
 }
 
 .sketch-entity-editor header,
@@ -1377,7 +1377,7 @@
   background: var(--color-surface-2);
   border: 1px solid var(--color-border-strong);
   border-radius: var(--radius-md);
-  box-shadow: 0 14px 34px rgba(0, 0, 0, 0.4);
+  box-shadow: var(--shadow-2);
 }
 
 .sketch-entity-constraints .eyebrow {
@@ -1500,7 +1500,7 @@
   background: var(--color-surface-2);
   border: 1px solid var(--color-border-strong);
   border-radius: var(--radius-lg);
-  box-shadow: 0 14px 34px rgba(0, 0, 0, 0.4);
+  box-shadow: var(--shadow-2);
 }
 
 .sketch-plane-prompt span:first-child {
