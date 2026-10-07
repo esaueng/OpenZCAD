@@ -18,9 +18,14 @@ const OVERLAY_SHEETS = [
   'direct-manipulation.css'
 ];
 
-/** Literal dark stages an overlay paints for itself, independent of theme. */
+/**
+ * Literal dark stages an overlay paints for itself, independent of theme: any
+ * rgb()/rgba() whose red channel is under 40, or a hex under #300000. An
+ * enumerated list of channel values here missed the Move instruction's
+ * rgba(24, …) stage, which then read --color-text in the light theme.
+ */
 const DARK_STAGE =
-  /background:\s*(rgba?\(\s*(?:7|8|11|12|14|17)\s*,[^)]*\)|#0[0-9a-f]{5})/;
+  /background:\s*(rgba?\(\s*(?:[0-9]|[1-3][0-9])\s*,[^)]*\)|#[0-2][0-9a-f]{5})/;
 
 function ruleBlocks(css: string): { selector: string; body: string }[] {
   const blocks: { selector: string; body: string }[] = [];
@@ -84,5 +89,24 @@ describe('viewport overlay text tokens', () => {
       }
     }
     expect(offenders).toEqual([]);
+  });
+
+  it('paints the right-lane command cards as chrome, never a dark stage', () => {
+    // The Move panel and the closed-profile action ride the lane with the
+    // other command cards and hold themed headers, fields and buttons; on a
+    // fixed dark stage those went dark-on-dark in the light theme.
+    const css = readFileSync(
+      resolve(__dirname, '../styles/components/sketch-mode.css'),
+      'utf8'
+    );
+    for (const selector of ['.extrude-controller', '.profile-quick-action']) {
+      const block = ruleBlocks(css.replace(/\/\*[\s\S]*?\*\//g, '')).find(
+        (rule) => rule.selector === selector
+      );
+      expect(block, selector).toBeDefined();
+      expect(block!.body, selector).toMatch(
+        /background:\s*var\(--color-surface/
+      );
+    }
   });
 });

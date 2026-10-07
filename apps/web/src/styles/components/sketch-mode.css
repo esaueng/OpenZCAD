@@ -2,7 +2,11 @@
    Split out of app.css; the cascade still depends on the import order
    in app.css, so this file is not free to move. ── */
 
-/* ── Move instruction ───────────────────────────────────── */
+/* ── Move instruction ─────────────────────────────────────
+   A chrome island in the viewport's top overlay slot, like the revert-sketch
+   pill that shares it, so it re-themes with the other islands. It used to
+   paint its own dark stage and read the themed text tokens, which went
+   dark-on-dark in the light theme. */
 
 .extrude-instruction {
   position: absolute;
@@ -14,19 +18,18 @@
   gap: 10px;
   width: min(430px, calc(100% - 340px));
   min-width: 280px;
-  padding: 9px 12px;
+  padding: 8px 12px 8px 8px;
   color: var(--color-text);
-  background: rgba(24, 27, 31, 0.94);
+  background: var(--color-surface);
   border: var(--border-thin);
   border-radius: var(--radius-lg);
-  box-shadow: 0 12px 32px rgba(0, 0, 0, 0.34);
+  box-shadow: var(--shadow-2);
   transform: translateX(-50%);
-  backdrop-filter: blur(10px);
 }
 
 .extrude-instruction-icon {
-  width: 38px;
-  height: 38px;
+  width: 32px;
+  height: 32px;
   flex: 0 0 auto;
   display: grid;
   place-items: center;
@@ -65,12 +68,11 @@
   width: 100%;
   min-width: 0;
   padding: 7px 8px 7px 10px;
-  color: var(--color-viewport-text);
-  background: rgba(21, 24, 29, 0.95);
+  color: var(--color-text);
+  background: var(--color-surface);
   border: 1px solid var(--color-accent-border);
   border-radius: var(--radius-lg);
-  box-shadow: 0 12px 30px rgba(0, 0, 0, 0.34);
-  backdrop-filter: blur(10px);
+  box-shadow: var(--shadow-2);
 }
 
 .profile-ready-icon {
@@ -78,9 +80,9 @@
   height: 25px;
   display: grid;
   place-items: center;
-  color: #dff9ed;
-  background: rgba(72, 205, 143, 0.18);
-  border: 1px solid rgba(72, 205, 143, 0.38);
+  color: var(--color-success);
+  background: color-mix(in srgb, var(--color-success) 16%, transparent);
+  border: 1px solid color-mix(in srgb, var(--color-success) 38%, transparent);
   border-radius: 50%;
 }
 
@@ -113,10 +115,12 @@
   font-size: var(--fs-xs);
 }
 
+/* On the accent fill, in the fill's own text colour: white keycaps read on
+   the light theme's deep blue but washed out on the dark theme's pale one. */
 .profile-extrude kbd {
-  color: rgba(255, 255, 255, 0.8);
-  background: rgba(255, 255, 255, 0.12);
-  border-color: rgba(255, 255, 255, 0.18);
+  color: var(--color-on-accent);
+  background: color-mix(in srgb, var(--color-on-accent) 12%, transparent);
+  border-color: color-mix(in srgb, var(--color-on-accent) 24%, transparent);
 }
 
 .profile-dismiss {
@@ -135,15 +139,17 @@
 
 /* The Move panel. It rides the right lane's command slot (quiet-stage.css)
    like every other command card, so it carries no position of its own. */
+/* A chrome card in the lane, so it re-themes with the cards around it. It
+   used to paint a fixed dark stage under the themed header, fields and
+   buttons, which went dark-on-dark in the light theme. */
 .extrude-controller {
   box-sizing: border-box;
   padding: 12px;
-  color: var(--color-viewport-text-muted);
-  background: rgba(21, 24, 29, 0.95);
-  border: 1px solid var(--color-viewport-border);
+  color: var(--color-text-muted);
+  background: var(--color-surface);
+  border: var(--border-thin);
   border-radius: var(--radius-lg);
-  box-shadow: 0 14px 34px rgba(0, 0, 0, 0.38);
-  backdrop-filter: blur(10px);
+  box-shadow: var(--shadow-2);
 }
 
 /* The Move panel wears the same chrome as every other command panel: the

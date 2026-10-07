@@ -644,7 +644,7 @@
   color: var(--color-text);
   font-family: var(--font-mono);
   font-size: var(--fs-sm);
-  background: rgba(0, 0, 0, 0.32);
+  background: var(--color-bg);
   border: 1px solid var(--color-accent-border);
   border-radius: var(--radius-sm);
   outline: none;
@@ -1009,7 +1009,7 @@
 
 .sketch-rail button:hover {
   color: var(--color-text);
-  background: rgba(255, 255, 255, 0.05);
+  background: var(--color-surface-hover);
 }
 
 .sketch-rail button.active {
@@ -1021,9 +1021,9 @@
 .sketch-rail button kbd {
   padding: 0 4px;
   color: var(--color-text-dim);
-  font-size: 10px;
-  background: rgba(0, 0, 0, 0.35);
-  border-radius: 3px;
+  font-size: var(--fs-mini);
+  background: var(--color-bg);
+  border-radius: var(--radius-sm);
 }
 
 /* Solve-status pill: inline in the rail, tone-tinted, never positioned. */
