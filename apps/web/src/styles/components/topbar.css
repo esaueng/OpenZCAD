@@ -223,6 +223,9 @@
   background: var(--color-surface-2);
   border: var(--border-thin);
   border-radius: var(--radius-md);
+  /* A menu over the workspace, elevated like every other one; flat, it
+     read as part of the island it drops from. */
+  box-shadow: var(--shadow-popover);
 }
 
 .topbar-menu-item {

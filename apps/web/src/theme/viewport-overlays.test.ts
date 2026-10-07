@@ -12,6 +12,7 @@ import { describe, expect, it } from 'vitest';
 const tokens = readFileSync(resolve(__dirname, './tokens.css'), 'utf8');
 
 const OVERLAY_SHEETS = [
+  'view-mode.css',
   'viewer.css',
   'viewport-overlays.css',
   'sketch-mode.css',

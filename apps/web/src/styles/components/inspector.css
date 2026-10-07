@@ -759,7 +759,7 @@
 }
 
 .panel-overflow-item:hover {
-  background: rgba(255, 255, 255, 0.08);
+  background: var(--color-surface-hover);
 }
 
 .panel-overflow-item.danger {

@@ -135,13 +135,15 @@
   place-items: center;
   color: var(--color-text-muted);
   border: 1px solid transparent;
-  border-radius: var(--radius-sm);
+  border-radius: var(--radius-md);
 }
 
+/* The hover lift every other rail uses: surface-2 was within a shade of
+   the rail's own surface in the dark theme and barely registered. */
 .rail-button:hover:not(:disabled, .active),
 .rail-button.open:not(.active) {
   color: var(--color-text);
-  background: var(--color-surface-2);
+  background: var(--color-surface-hover);
 }
 
 .rail-button.active {
@@ -208,7 +210,7 @@
 
 .rail-section-plane:hover:not([aria-pressed='true']) {
   color: var(--color-text);
-  background: var(--color-surface-2);
+  background: var(--color-surface-hover);
 }
 
 .rail-section-plane[aria-pressed='true'] {
@@ -291,7 +293,7 @@
 
 .rail-views-panel button:hover {
   color: var(--color-text);
-  background: var(--color-surface-2);
+  background: var(--color-surface-hover);
 }
 
 .rail-view-wide {
