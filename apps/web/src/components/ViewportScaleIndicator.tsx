@@ -29,10 +29,13 @@ function drawRule(canvas: HTMLCanvasElement, widthPx: number) {
   context.setTransform(pixelRatio, 0, 0, pixelRatio, 0, 0);
   context.clearRect(0, 0, cssWidth, BAR_HEIGHT_PX);
 
+  // The bar is drawn on the viewport's dark stage, which never re-themes, so
+  // it reads the viewport tokens: the chrome ones turn dark in the light
+  // theme and drew the rule dark-on-dark beneath its light label.
   const styles = window.getComputedStyle(canvas);
-  const primary = cssColor(styles, '--color-text', '#ebedef');
-  const secondary = cssColor(styles, '--color-text-muted', '#9ba2ab');
-  const accent = cssColor(styles, '--color-accent', '#6798ff');
+  const primary = cssColor(styles, '--color-viewport-text', '#ebedef');
+  const secondary = cssColor(styles, '--color-viewport-text-muted', '#9ba2ab');
+  const accent = cssColor(styles, '--color-preselect', '#81a9ff');
   const left = 1;
   const right = Math.max(cssWidth - 1, left);
   const baselineY = 16;

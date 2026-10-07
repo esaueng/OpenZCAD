@@ -96,6 +96,9 @@
 
 .topbar-identity {
   justify-self: start;
+  align-self: center;
+  box-sizing: border-box;
+  height: var(--topbar-island-h);
   max-width: 100%;
   display: flex;
   align-items: center;
@@ -115,15 +118,19 @@
   border: 0;
 }
 
-/* Keeps the island its bordered, padded height (26 + 2 × 3 + 2 × 1). */
+/* The island has no border or padding, so the options are its height. */
 .topbar > .mode-switch.topbar-island .mode-switch-option {
-  min-height: 34px;
+  min-height: var(--topbar-island-h);
 }
 
+/* 28px actions + 2 × 3px padding + 2 × 1px border = the island height. */
 .topbar > .topbar-actions-island {
   justify-self: end;
   align-self: center;
+  box-sizing: border-box;
+  height: var(--topbar-island-h);
   display: flex;
+  align-items: center;
   padding: 3px var(--sp-1);
 }
 
@@ -1038,7 +1045,7 @@
   height: 16px;
 }
 
-.view-rail > button:hover:not(:disabled) {
+.view-rail > button:hover:not(:disabled):not(.active) {
   color: var(--color-text);
   background: var(--color-surface-hover);
 }
@@ -1469,15 +1476,16 @@ button.command-rail svg {
   height: 16px;
 }
 
-button.command-rail:hover:not(:disabled) {
+button.command-rail:hover:not(:disabled):not(.active) {
   color: var(--color-text);
   background: var(--color-surface-hover);
 }
 
 /* The context's primary verb is a hint, lighter than the armed state: an
    accent icon and a 2px accent bar at the rail's edge, with no fill and no
-   outline. The armed tool is outlined, and while a tool is armed the hint
-   is not drawn at all (CommandCard drops the class), so one button is lit. */
+   outline. The armed tool is filled and outlined like the selected button
+   on every other rail, and while a tool is armed the hint is not drawn at
+   all (CommandCard drops the class), so one button is lit. */
 /* `is-primary`, not `primary`: the base button style claims that word. */
 button.command-rail.is-primary {
   position: relative;
@@ -1496,8 +1504,11 @@ button.command-rail.is-primary::before {
   transform: translateY(-50%);
 }
 
+/* Hover rules on the rails skip `.active`: they out-ranked it, so pointing
+   at the selected tool used to wash its fill out and read as deselecting. */
 button.command-rail.active {
   color: var(--color-accent);
+  background: var(--color-accent-dim);
   border-color: var(--color-accent-border);
 }
 
@@ -1596,13 +1607,14 @@ button.command-rail:disabled {
   white-space: nowrap;
 }
 
-.command-tile:hover:not(:disabled) {
+.command-tile:hover:not(:disabled):not(.active) {
   color: var(--color-text);
   background: var(--color-surface-hover);
 }
 
 .command-tile.active {
   color: var(--color-accent);
+  background: var(--color-accent-dim);
   border-color: var(--color-accent-border);
 }
 
@@ -1658,7 +1670,7 @@ button.command-rail:disabled {
   height: 16px;
 }
 
-.tweak-rail button:hover:not(:disabled) {
+.tweak-rail button:hover:not(:disabled):not(.active) {
   color: var(--color-text);
   background: var(--color-surface-hover);
 }
@@ -1841,7 +1853,7 @@ button.command-rail:disabled {
   height: 16px;
 }
 
-.workspace-column .sketch-rail button:hover:not(:disabled) {
+.workspace-column .sketch-rail button:hover:not(:disabled):not(.active) {
   color: var(--color-text);
   background: var(--color-surface-hover);
 }
@@ -2174,7 +2186,7 @@ button.command-rail:disabled {
   border-radius: var(--radius-md);
 }
 
-.sketch-relation:hover:not(:disabled) {
+.sketch-relation:hover:not(:disabled):not(.active) {
   color: var(--color-text);
   background: var(--color-surface-hover);
 }

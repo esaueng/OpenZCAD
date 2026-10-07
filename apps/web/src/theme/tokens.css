@@ -156,6 +156,10 @@
 
   /* ── Layout dimensions ────────────────────────────────── */
   --topbar-h: 40px;
+  /* The three top islands (identity, mode switch, actions) share one height,
+     centred in the bar. They were 40, 34 and 32px, so their tops and bottoms
+     stepped across the window. */
+  --topbar-island-h: 36px;
   /* The quiet stage: every island floats this far from the viewport's edges
      and from its neighbours, and the stage's usable top starts under the
      top islands. */

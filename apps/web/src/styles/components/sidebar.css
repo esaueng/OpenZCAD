@@ -307,7 +307,7 @@
   display: flex;
   align-items: center;
   gap: 5px;
-  min-height: 22px;
+  min-height: 24px;
   padding: 2px 6px;
   color: var(--color-text-subtle);
   font-size: var(--fs-mini);
@@ -533,12 +533,14 @@
   min-width: 0;
 }
 
+/* Shaped like the other controls; it was the app's one pill-shaped button. */
 .history-resume {
   flex: 0 0 auto;
+  min-height: 24px;
   padding: 2px 10px;
   color: var(--color-accent);
   border: 1px solid var(--color-accent-border);
-  border-radius: 999px;
+  border-radius: var(--radius-md);
   font-size: var(--fs-mini);
 }
 
