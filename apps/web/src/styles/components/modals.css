@@ -1290,18 +1290,18 @@
   font-size: var(--fs-sm);
 }
 
-/* Every dialog card springs open from a little under full size, with a
-   slight overshoot, so it lands in front of the dimmed stage rather than
-   appearing on it. The cards are placed by the backdrop's flex layout, never
-   by their own transform, so the keyframe has the property to itself. */
+/* Every dialog card settles in from just under full size, so it lands in
+   front of the dimmed stage rather than appearing on it. On the token
+   duration and curve, without overshoot: a 320ms spring from 90% outlasted
+   the 100ms backdrop fade and made a confirm dialog feel slow. */
 .modal-backdrop > * {
   transform-origin: 50% 20%;
-  animation: dialog-spring 320ms cubic-bezier(0.34, 1.56, 0.64, 1);
+  animation: dialog-in var(--dur-base) var(--ease-out);
 }
 
-@keyframes dialog-spring {
+@keyframes dialog-in {
   from {
     opacity: 0;
-    transform: scale(0.9);
+    scale: 0.97;
   }
 }

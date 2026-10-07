@@ -224,9 +224,11 @@
   white-space: nowrap;
 }
 
+/* 24px like the suppression, rollback and delete icons in the same row: at
+   20px it was the one row control under the pointer-target floor. */
 .row-visibility {
-  width: 20px;
-  height: 20px;
+  width: 24px;
+  height: 24px;
   display: inline-grid;
   place-items: center;
   color: var(--color-text-subtle);

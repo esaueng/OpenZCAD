@@ -37,7 +37,6 @@
   border-color: var(--color-accent-border);
   box-shadow: 0 4px 18px rgba(0, 0, 0, 0.3);
   transform: translateY(-1px);
-  outline: none;
 }
 
 .demo-card:active:not(:disabled) {

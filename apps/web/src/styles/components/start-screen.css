@@ -270,14 +270,16 @@
   text-align: left;
 }
 
-.start-shelf-tabs button:hover {
+/* The open shelf wears the accent wash; hover only lifts. The two used
+   neighbouring greys, so the open shelf and a hovered one looked alike. */
+.start-shelf-tabs button:hover:not(.is-active) {
   color: var(--color-text);
-  background: var(--color-surface-2);
+  background: var(--color-surface-hover);
 }
 
 .start-shelf-tabs button.is-active {
   color: var(--color-text);
-  background: var(--color-surface-hover);
+  background: var(--color-accent-dim);
 }
 
 .start-shelf-tabs button.is-active > svg {
@@ -417,7 +419,7 @@
 .start-account-action {
   flex: none;
   min-height: 0;
-  height: 20px;
+  height: 24px;
   padding: 0 4px;
   color: var(--color-accent);
   font-size: var(--fs-sm);
@@ -609,8 +611,8 @@
   right: 5px;
   display: grid;
   place-items: center;
-  width: 20px;
-  height: 20px;
+  width: 24px;
+  height: 24px;
   color: var(--color-text-subtle);
   border-radius: var(--radius-sm);
 }
@@ -765,7 +767,7 @@
 }
 
 .start-tile-project:has(.start-tile-open:focus-visible) {
-  box-shadow: 0 0 0 2px var(--color-accent-dim);
+  box-shadow: 0 0 0 2px var(--color-accent);
 }
 
 .start-tile-open:focus-visible {
@@ -1051,7 +1053,7 @@
 .start-update button {
   flex: none;
   min-height: 0;
-  height: 20px;
+  height: 24px;
   padding: 0 8px;
   font-size: var(--fs-xs);
   border-radius: var(--radius-sm);

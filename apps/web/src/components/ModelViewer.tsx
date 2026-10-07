@@ -272,6 +272,7 @@ import type { PlaneBasis } from '@openzcad/geometry';
 import type { ParamValue, PlaneId, SketchObjectData } from '@openzcad/shared';
 import { buildPlanePickerRig } from './viewer/planePickerRig';
 import { evalParamValue } from '../lib/model';
+import { reducesMotion } from '../lib/reducedMotion';
 import {
   readWheelDeviceMemory,
   writeWheelDeviceMemory
@@ -2207,7 +2208,7 @@ export function ModelViewer({
       requestRender: () => requestRender(),
       onViewChange: (view) => onViewChangeRef.current(view),
       onViewSettled: (view) => onViewSettledRef.current(view),
-      reducedMotion: () => reducedMotionRef.current === true,
+      reducedMotion: () => reducesMotion(reducedMotionRef.current),
       // Defaults on: zooming toward the pointer is what every modern CAD
       // tool does, and a saved view from before the preference existed
       // should get the current behaviour rather than the old one.
@@ -8345,7 +8346,7 @@ export function ModelViewer({
         }
         inferenceAnimating = activeSketchRig.advanceInference(
           now,
-          reducedMotionRef.current === true
+          reducesMotion(reducedMotionRef.current)
         );
         positionSketchMoveHandles();
       } else {
@@ -10836,14 +10837,14 @@ export function ModelViewer({
         context.selection.easeOpacity(material);
         material.transparent = true;
         delete material.userData.restoreOpaque;
-        if (reducedMotionRef.current === true) {
+        if (reducesMotion(reducedMotionRef.current)) {
           material.opacity = 0.35;
         } else {
           material.userData.targetOpacity = 0.35;
           context.fadeIns.add(material);
         }
       } else if (stored.sketchRecede) {
-        if (reducedMotionRef.current === true) {
+        if (reducesMotion(reducedMotionRef.current)) {
           material.opacity = stored.sketchRecede.opacity;
           material.transparent = stored.sketchRecede.transparent;
         } else {
