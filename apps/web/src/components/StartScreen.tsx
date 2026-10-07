@@ -171,7 +171,7 @@ const SHELVES: ReadonlyArray<{
   {
     status: 'deleted',
     label: 'Trash',
-    empty: 'the recycle bin is empty',
+    empty: 'the trash is empty',
     Icon: Trash2
   }
 ];
@@ -1115,7 +1115,7 @@ export function StartScreen({
                 </>
               ) : (
                 <>
-                  <strong>Nothing in the recycle bin.</strong>
+                  <strong>Nothing in the trash.</strong>
                   <span>
                     Deleted parts wait here for {TRASH_RETENTION_DAYS} days
                     before they are destroyed.
