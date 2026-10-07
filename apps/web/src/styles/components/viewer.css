@@ -140,7 +140,7 @@
 
 /* The hover lift every other rail uses: surface-2 was within a shade of
    the rail's own surface in the dark theme and barely registered. */
-.rail-button:hover:not(:disabled, .active),
+.rail-button:hover:not(:disabled):not(.active),
 .rail-button.open:not(.active) {
   color: var(--color-text);
   background: var(--color-surface-hover);

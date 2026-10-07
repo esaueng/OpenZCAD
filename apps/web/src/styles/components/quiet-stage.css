@@ -1045,7 +1045,7 @@
   height: 16px;
 }
 
-.view-rail > button:hover:not(:disabled, .active) {
+.view-rail > button:hover:not(:disabled):not(.active) {
   color: var(--color-text);
   background: var(--color-surface-hover);
 }
@@ -1476,7 +1476,7 @@ button.command-rail svg {
   height: 16px;
 }
 
-button.command-rail:hover:not(:disabled, .active) {
+button.command-rail:hover:not(:disabled):not(.active) {
   color: var(--color-text);
   background: var(--color-surface-hover);
 }
@@ -1607,7 +1607,7 @@ button.command-rail:disabled {
   white-space: nowrap;
 }
 
-.command-tile:hover:not(:disabled, .active) {
+.command-tile:hover:not(:disabled):not(.active) {
   color: var(--color-text);
   background: var(--color-surface-hover);
 }
@@ -1670,7 +1670,7 @@ button.command-rail:disabled {
   height: 16px;
 }
 
-.tweak-rail button:hover:not(:disabled, .active) {
+.tweak-rail button:hover:not(:disabled):not(.active) {
   color: var(--color-text);
   background: var(--color-surface-hover);
 }
@@ -1853,7 +1853,7 @@ button.command-rail:disabled {
   height: 16px;
 }
 
-.workspace-column .sketch-rail button:hover:not(:disabled, .active) {
+.workspace-column .sketch-rail button:hover:not(:disabled):not(.active) {
   color: var(--color-text);
   background: var(--color-surface-hover);
 }
@@ -2186,7 +2186,7 @@ button.command-rail:disabled {
   border-radius: var(--radius-md);
 }
 
-.sketch-relation:hover:not(:disabled, .active) {
+.sketch-relation:hover:not(:disabled):not(.active) {
   color: var(--color-text);
   background: var(--color-surface-hover);
 }
