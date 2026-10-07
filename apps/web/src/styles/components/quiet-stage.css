@@ -1568,13 +1568,16 @@ button.command-rail:disabled {
   animation: oz-fade var(--dur-fast) var(--ease-out);
 }
 
+/* Small caps labels share .panel-eyebrow's type (inspector.css); this one
+   was sans, 11.5px semibold in the dim tone. */
 .command-flyout-heading {
   grid-column: 1 / -1;
   padding: 6px 7px 2px;
-  color: var(--color-text-dim);
-  font-size: var(--fs-xs);
-  font-weight: 600;
-  letter-spacing: 0.04em;
+  color: var(--color-text-subtle);
+  font-family: var(--font-mono);
+  font-size: var(--fs-mini);
+  font-weight: var(--fw-regular);
+  letter-spacing: var(--ls-eyebrow);
   text-transform: uppercase;
 }
 
