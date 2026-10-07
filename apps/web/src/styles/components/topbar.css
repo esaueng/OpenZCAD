@@ -177,7 +177,6 @@
   color: var(--color-text);
   background: var(--color-surface-hover);
   border-color: var(--color-border-strong);
-  outline: none;
 }
 
 .icon-button.is-on {
@@ -351,7 +350,6 @@ button.save-state:focus-visible,
   color: var(--color-text);
   background: var(--color-surface-hover);
   border-color: var(--color-border-strong);
-  outline: none;
 }
 
 button.save-state:active:not(:disabled),

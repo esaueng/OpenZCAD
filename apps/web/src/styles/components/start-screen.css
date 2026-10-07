@@ -767,7 +767,7 @@
 }
 
 .start-tile-project:has(.start-tile-open:focus-visible) {
-  box-shadow: 0 0 0 2px var(--color-accent-dim);
+  box-shadow: 0 0 0 2px var(--color-accent);
 }
 
 .start-tile-open:focus-visible {

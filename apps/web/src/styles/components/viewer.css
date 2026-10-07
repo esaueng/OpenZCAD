@@ -913,7 +913,12 @@
   color: #f5f8ff;
   background: rgba(103, 152, 255, 0.18);
   border-color: rgba(129, 169, 255, 0.52);
-  outline: none;
+}
+
+/* On the dark stage, so the viewport's accent rather than the chrome's. */
+.topology-pick-list-row:focus-visible {
+  outline: 2px solid var(--color-preselect);
+  outline-offset: -1px;
 }
 
 .topology-pick-list-row:hover small,
