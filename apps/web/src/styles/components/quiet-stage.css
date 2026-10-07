@@ -96,6 +96,9 @@
 
 .topbar-identity {
   justify-self: start;
+  align-self: center;
+  box-sizing: border-box;
+  height: var(--topbar-island-h);
   max-width: 100%;
   display: flex;
   align-items: center;
@@ -115,15 +118,19 @@
   border: 0;
 }
 
-/* Keeps the island its bordered, padded height (26 + 2 × 3 + 2 × 1). */
+/* The island has no border or padding, so the options are its height. */
 .topbar > .mode-switch.topbar-island .mode-switch-option {
-  min-height: 34px;
+  min-height: var(--topbar-island-h);
 }
 
+/* 28px actions + 2 × 3px padding + 2 × 1px border = the island height. */
 .topbar > .topbar-actions-island {
   justify-self: end;
   align-self: center;
+  box-sizing: border-box;
+  height: var(--topbar-island-h);
   display: flex;
+  align-items: center;
   padding: 3px var(--sp-1);
 }
 
