@@ -373,7 +373,7 @@ function exportProgressFor(state: GeometryWorkerState): ExportProgress | null {
   }
 }
 
-/** Per-format file identity for exports from the Export Mesh dialog. */
+/** Per-format file identity for exports from the Export mesh dialog. */
 const MESH_EXPORT_FILE_INFO: Record<
   MeshExportDialogFormat,
   {

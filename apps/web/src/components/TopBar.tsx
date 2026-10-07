@@ -262,7 +262,7 @@ export function TopBar({
   }, []);
 
   /**
-   * Export Mesh… opens a dialog, and the menu stayed open underneath it,
+   * Export mesh… opens a dialog, and the menu stayed open underneath it,
    * still showing when the dialog closed. Items that act in place (a STEP
    * download, the stored-file list) keep the menu open as before.
    */
@@ -654,7 +654,7 @@ export function TopBar({
                 onClick={openMeshExportFromMenu}
               >
                 <Download size={13} aria-hidden="true" />
-                <span>Export Mesh…</span>
+                <span>Export mesh…</span>
                 <small>3MF · STL · OBJ · glTF</small>
               </button>
               {onExportProject && (
