@@ -504,9 +504,16 @@
   cursor: pointer;
 }
 
-.measurement-mode-tabs button:hover,
+/* Hover is a neutral lift; only the chosen mode wears the accent. The two
+   used to share one rule, so pointing at a tab looked like choosing it. */
+.measurement-mode-tabs button:hover:not(.active),
+.measurement-radial-toggle button:hover:not(.active) {
+  color: var(--color-text);
+  background: var(--color-surface-hover);
+  border-color: var(--color-border-strong);
+}
+
 .measurement-mode-tabs button.active,
-.measurement-radial-toggle button:hover,
 .measurement-radial-toggle button.active {
   color: var(--color-accent-hi);
   background: var(--color-accent-dim);
@@ -901,9 +908,9 @@
   position: absolute;
   z-index: calc(var(--z-viewer-overlay) + 1);
   padding: 2px 7px;
-  color: var(--color-text);
+  color: var(--color-viewport-text);
   background: rgba(16, 19, 22, 0.82);
-  border: var(--border-thin);
+  border: 1px solid var(--color-viewport-border);
   border-radius: var(--radius-sm);
   font-family: var(--font-mono);
   font-size: var(--fs-xs);
@@ -957,38 +964,52 @@
   animation: mode-out-top var(--dur-fast) ease-in forwards;
 }
 
+/* The View bar entered from the right rail; it leaves the same way. */
+.palette-float.closing > .view-mode-bar {
+  animation-name: mode-out-right;
+}
+
+/* `translate`, not `transform`: see oz-rise in motion.css. The rails centre
+   themselves with translateY(-50%), which a transform keyframe replaced. */
 @keyframes mode-in-left {
   from {
     opacity: 0;
-    transform: translateX(-16px);
+    translate: -16px 0;
   }
 }
 
 @keyframes mode-in-right {
   from {
     opacity: 0;
-    transform: translateX(16px);
+    translate: 16px 0;
   }
 }
 
 @keyframes mode-in-top {
   from {
     opacity: 0;
-    transform: translateY(-12px);
+    translate: 0 -12px;
   }
 }
 
 @keyframes mode-in-bottom {
   from {
     opacity: 0;
-    transform: translateY(12px);
+    translate: 0 12px;
   }
 }
 
 @keyframes mode-out-left {
   to {
     opacity: 0;
-    transform: translateX(-16px);
+    translate: -16px 0;
+  }
+}
+
+@keyframes mode-out-right {
+  to {
+    opacity: 0;
+    translate: 16px 0;
   }
 }
 

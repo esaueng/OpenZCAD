@@ -463,8 +463,8 @@
   align-items: center;
   gap: 3px;
   padding: 1px 6px;
-  color: var(--color-preview);
-  background: color-mix(in srgb, var(--color-preview) 12%, transparent);
+  color: var(--color-success);
+  background: color-mix(in srgb, var(--color-success) 12%, transparent);
   border-radius: var(--radius-md);
   letter-spacing: 0.04em;
   text-transform: none;
@@ -570,7 +570,7 @@
 }
 
 .assistant-card-actions button.active {
-  color: var(--color-preview);
+  color: var(--color-success);
 }
 
 .assistant-card-actions button kbd {
@@ -848,8 +848,8 @@
 .assistant-pending-item button {
   display: grid;
   place-items: center;
-  width: 16px;
-  height: 16px;
+  width: 24px;
+  height: 24px;
   padding: 0;
   color: var(--color-text-subtle);
   border: 0;

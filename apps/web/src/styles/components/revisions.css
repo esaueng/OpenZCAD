@@ -121,7 +121,6 @@
 
 .revision-action:focus-visible {
   color: var(--color-text);
-  outline: none;
   border-color: var(--color-accent);
 }
 

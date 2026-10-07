@@ -54,7 +54,6 @@
 
   .live-badge {
     display: grid;
-    font-size: 9.5px;
   }
 
   /* The stored-file count gets the same treatment as the live count. Inside
@@ -65,13 +64,13 @@
     position: absolute;
     top: -5px;
     right: -5px;
-    min-width: 14px;
-    height: 14px;
+    min-width: 16px;
+    height: 16px;
     padding: 0 3px;
     color: var(--color-text);
     background: var(--color-surface-hover);
     box-shadow: 0 0 0 2px var(--color-surface);
-    font-size: 9.5px;
+    font-size: var(--fs-mini);
   }
 }
 
