@@ -138,8 +138,8 @@
   border-radius: var(--radius-sm);
 }
 
-.rail-button:hover:not(:disabled),
-.rail-button.open {
+.rail-button:hover:not(:disabled, .active),
+.rail-button.open:not(.active) {
   color: var(--color-text);
   background: var(--color-surface-2);
 }

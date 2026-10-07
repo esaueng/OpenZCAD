@@ -504,9 +504,16 @@
   cursor: pointer;
 }
 
-.measurement-mode-tabs button:hover,
+/* Hover is a neutral lift; only the chosen mode wears the accent. The two
+   used to share one rule, so pointing at a tab looked like choosing it. */
+.measurement-mode-tabs button:hover:not(.active),
+.measurement-radial-toggle button:hover:not(.active) {
+  color: var(--color-text);
+  background: var(--color-surface-hover);
+  border-color: var(--color-border-strong);
+}
+
 .measurement-mode-tabs button.active,
-.measurement-radial-toggle button:hover,
 .measurement-radial-toggle button.active {
   color: var(--color-accent-hi);
   background: var(--color-accent-dim);
