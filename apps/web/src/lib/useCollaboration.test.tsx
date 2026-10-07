@@ -2,6 +2,7 @@ import { act, renderHook } from '@testing-library/react';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import {
   addPrimitiveFeature,
+  importMeshBody,
   createProjectDocument
 } from '@openzcad/document-core';
 import {
@@ -92,6 +93,238 @@ afterEach(() => {
   vi.unstubAllGlobals();
   FakeWebSocket.instances = [];
   sessionStorage.clear();
+  localStorage.clear();
+});
+
+function largeMeshDocument(base: ProjectDocument): ProjectDocument {
+  const triangle = [0, 0, 0, 1, 0, 0, 0, 1, 0];
+  return importMeshBody(base, {
+    name: 'Large mesh',
+    artifactId: 'artifact_large',
+    sourceName: 'large.stl',
+    triangleCount: 30_000,
+    vertices: Array.from(
+      { length: 270_000 },
+      (_, index) => triangle[index % 9]!
+    ),
+    indices: Array.from({ length: 90_000 }, (_, index) => index)
+  }).document;
+}
+
+function grantLease(socket: FakeWebSocket, document: ProjectDocument) {
+  socket.open();
+  socket.receive({
+    type: 'state',
+    members: [],
+    document,
+    role: 'owner',
+    lease: null
+  });
+  socket.receive({
+    type: 'lease-granted',
+    lease: {
+      leaseId: `lease_${FakeWebSocket.instances.length}`,
+      projectId: document.projectId,
+      clientId: socket.frames()[0]!.clientId as string,
+      userId: document.ownerUserId,
+      expiresAt: Date.now() + 30_000
+    }
+  });
+}
+
+describe('HTTP collaboration response ownership', () => {
+  it.each(['ack', 'rejection', 'body'] as const)(
+    'ignores an old automatic save %s after changing projects',
+    async (outcome) => {
+      vi.useFakeTimers();
+      vi.stubGlobal('WebSocket', FakeWebSocket);
+      const base = createProjectDocument('First room', toUserId('user_http'));
+      const large = largeMeshDocument(base);
+      const next = createProjectDocument('Next room', base.ownerUserId);
+      let resolve!: (response: Response) => void;
+      let reject!: (error: Error) => void;
+      let resolveBody!: (text: string) => void;
+      const fetch = vi.fn(
+        () =>
+          new Promise<Response>((yes, no) => {
+            resolve = yes;
+            reject = no;
+          })
+      );
+      vi.stubGlobal('fetch', fetch);
+      const onRemoteDocument = vi.fn();
+      const onConflict = vi.fn();
+      const { result, rerender, unmount } = renderHook(
+        ({ document }: { document: ProjectDocument }) =>
+          useCollaboration({
+            enabled: true,
+            document,
+            session: session(base.ownerUserId),
+            onRemoteDocument,
+            onConflict
+          }),
+        { initialProps: { document: large } }
+      );
+      act(() => grantLease(FakeWebSocket.instances[0]!, base));
+      expect(fetch).toHaveBeenCalledOnce();
+      if (outcome === 'body') {
+        await act(async () =>
+          resolve({
+            ok: true,
+            text: () =>
+              new Promise<string>((yes) => {
+                resolveBody = yes;
+              })
+          } as Response)
+        );
+      }
+      rerender({ document: next });
+      const nextSocket = FakeWebSocket.instances.at(-1)!;
+      act(() => {
+        grantLease(nextSocket, next);
+        nextSocket.receive({ type: 'ack', version: next.version });
+      });
+      await act(async () => {
+        const ack = JSON.stringify({ type: 'ack', version: 12345 });
+        if (outcome === 'rejection') reject(new Error('Offline'));
+        else if (outcome === 'body') resolveBody(ack);
+        else resolve(new Response(ack));
+      });
+      expect(result.current.status).toBe('live');
+      expect(result.current.roomVersion).toBe(next.version);
+      expect(onRemoteDocument).not.toHaveBeenCalled();
+      expect(onConflict).not.toHaveBeenCalled();
+      rerender({
+        document: addPrimitiveFeature(next, {
+          name: 'Next edit',
+          primitiveKind: 'sphere',
+          dimensions: { radius: 1 }
+        })
+      });
+      act(() => {
+        vi.advanceTimersByTime(500);
+      });
+      expect(nextSocket.frames().at(-1)).toMatchObject({
+        type: 'document',
+        baseVersion: next.version
+      });
+      unmount();
+    }
+  );
+
+  it.each(['ack', 'rejection', 'body'] as const)(
+    'ignores an old Keep my version %s after rejoining the same project',
+    async (outcome) => {
+      vi.useFakeTimers();
+      vi.stubGlobal('WebSocket', FakeWebSocket);
+      const base = createProjectDocument(
+        'Reopened room',
+        toUserId('user_keep_http')
+      );
+      const local = largeMeshDocument(base);
+      const remote = { ...base, name: 'Room copy', version: 8 };
+      let resolve!: (response: Response) => void;
+      let reject!: (error: Error) => void;
+      let resolveBody!: (text: string) => void;
+      const fetch = vi.fn(
+        () =>
+          new Promise<Response>((yes, no) => {
+            resolve = yes;
+            reject = no;
+          })
+      );
+      vi.stubGlobal('fetch', fetch);
+      const onRemoteDocument = vi.fn();
+      const onConflict = vi.fn();
+      const { result, rerender, unmount } = renderHook(
+        ({
+          enabled,
+          document
+        }: {
+          enabled: boolean;
+          document: ProjectDocument;
+        }) =>
+          useCollaboration({
+            enabled,
+            document,
+            session: session(base.ownerUserId),
+            onRemoteDocument,
+            onConflict
+          }),
+        { initialProps: { enabled: true, document: local } }
+      );
+      const socket = FakeWebSocket.instances[0]!;
+      act(() => {
+        // Retain the conflict before granting the lease, so only the explicit
+        // Keep my version decision sends the large HTTP submission.
+        socket.open();
+        socket.receive({ type: 'conflict', document: remote });
+        grantLease(socket, remote);
+      });
+      let confirmation!: Promise<void>;
+      act(() => {
+        confirmation = result.current.keepLocalVersion(remote.version);
+      });
+      const settled = confirmation.then(
+        () => null,
+        (error: unknown) => error
+      );
+      expect(fetch).toHaveBeenCalledOnce();
+      if (outcome === 'body') {
+        await act(async () =>
+          resolve({
+            ok: true,
+            text: () =>
+              new Promise<string>((yes) => {
+                resolveBody = yes;
+              })
+          } as Response)
+        );
+      }
+      rerender({ enabled: false, document: base });
+      // A new visit has a separate unresolved decision for the same project.
+      localStorage.clear();
+      rerender({ enabled: true, document: base });
+      const newSocket = FakeWebSocket.instances.at(-1)!;
+      act(() => {
+        grantLease(newSocket, base);
+        newSocket.receive({ type: 'ack', version: base.version });
+        newSocket.receive({ type: 'conflict', document: remote });
+      });
+      onRemoteDocument.mockClear();
+      onConflict.mockClear();
+      let newConfirmation!: Promise<void>;
+      act(() => {
+        newConfirmation = result.current.keepLocalVersion(remote.version);
+      });
+      const newSettled = newConfirmation.then(
+        () => null,
+        (error: unknown) => error
+      );
+      await act(async () => {
+        const ack = JSON.stringify({ type: 'ack', version: 12345 });
+        if (outcome === 'rejection') reject(new Error('Offline'));
+        else if (outcome === 'body') resolveBody(ack);
+        else resolve(new Response(ack));
+        await settled;
+      });
+      expect(await settled).toBeInstanceOf(Error);
+      expect(result.current.status).toBe('connecting');
+      expect(result.current.roomVersion).toBe(remote.version);
+      expect(result.current.conflict).not.toBeNull();
+      expect(onRemoteDocument).not.toHaveBeenCalled();
+      expect(onConflict).not.toHaveBeenCalled();
+      await expect(
+        result.current.keepLocalVersion(remote.version)
+      ).rejects.toThrow(/already waiting/);
+      await act(async () => {
+        newSocket.receive({ type: 'ack', version: remote.version + 1 });
+        expect(await newSettled).toBeNull();
+      });
+      expect(result.current.conflict).toBeNull();
+      unmount();
+    }
+  );
 });
 
 describe('useCollaboration lease ordering', () => {
