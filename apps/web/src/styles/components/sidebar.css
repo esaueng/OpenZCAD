@@ -135,6 +135,12 @@
   min-width: 0;
 }
 
+/* The add row's fields stand beside its 28px add button, not the 24px row
+   icons, so they take its height. */
+.param-add input {
+  height: 28px;
+}
+
 .param-name {
   color: var(--color-accent);
   font-size: var(--fs-xs);

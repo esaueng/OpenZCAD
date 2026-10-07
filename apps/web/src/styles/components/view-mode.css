@@ -475,6 +475,7 @@
 
 .measurement-dock-clear {
   margin-left: auto;
+  min-height: 24px;
   padding: 2px 5px;
   color: var(--color-text-muted);
   background: none;
@@ -547,9 +548,12 @@
   font-size: var(--fs-mini);
 }
 
+/* 28px like the mode tabs above: a min-height alone lost to the global
+   30px field height, so the dock ran 28, 30, 26 and 18px controls. */
 .measurement-display-controls select,
 .measurement-row-editor input {
   min-width: 0;
+  height: 28px;
   min-height: 28px;
   padding: 3px 6px;
   color: var(--color-text);
@@ -804,7 +808,7 @@
 }
 
 .measurement-row-editor-actions button {
-  min-height: 26px;
+  min-height: 28px;
   display: inline-flex;
   align-items: center;
   gap: 4px;
