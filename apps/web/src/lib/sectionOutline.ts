@@ -1,7 +1,7 @@
 import type { ExactSectionPlane } from '@openzcad/kernel-adapter/exact';
 import type {
   BodyId,
-  BodyRepresentation,
+  GeometryBodyRepresentation,
   ProjectDocument
 } from '@openzcad/shared';
 import type { GeometryWorkerApi } from '../hooks/useGeometryWorker';
@@ -121,7 +121,7 @@ export interface ViewportGeometry<S extends ViewportStandIn = ViewportStandIn> {
    */
   readonly document: ProjectDocument | null;
   /** The bodies of `document` on screen: consumed and hidden ones dropped. */
-  readonly bodies: BodyRepresentation[];
+  readonly bodies: GeometryBodyRepresentation[];
   /** Every stand-in currently drawn over that build; null or empty when none. */
   readonly standIns: S[] | null;
   /**

@@ -1852,6 +1852,30 @@ export interface BodyRepresentation {
    */
   massProperties?: BodyMassProperties;
   topology?: BodyTopology;
+  /** Worker-session projection identity; never substitutes for B-rep witnesses. */
+  projectionRevision?: {
+    session: string;
+    geometry: number;
+    topology: number;
+    metadata: number;
+  };
+}
+
+/** Validated display geometry; quantities and optional analysis are absent. */
+export type GeometryBodyRepresentation = Omit<
+  BodyRepresentation,
+  'volume' | 'massProperties'
+>;
+
+/**
+ * Disposable current-revision geometry, never a completed derived document.
+ * Exact operations requiring analysis still await the completed result.
+ */
+export interface GeometryReadyState {
+  bodyRepresentations: Record<BodyId, GeometryBodyRepresentation>;
+  warnings: string[];
+  updatedAt: string;
+  analysis: 'pending';
 }
 
 export interface RevisionRecord {

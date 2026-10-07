@@ -1,3 +1,7 @@
+import type {
+  GeometryBodyRepresentation,
+  GeometryReadyState
+} from '@openzcad/shared';
 import { clearAssistantHistory } from './lib/assistant/historyStorage';
 import { exactWarningBaseline } from './lib/exactWarnings';
 import { topologyReferenceRepairCommand } from './lib/topologyReferenceRepairs';
@@ -710,9 +714,7 @@ const LazyShortcutsOverlay = lazyWithStaleChunkNotice(() =>
     default: module.ShortcutsOverlay
   }))
 );
-function ShortcutsOverlay(
-  props: ComponentProps<typeof LazyShortcutsOverlay>
-) {
+function ShortcutsOverlay(props: ComponentProps<typeof LazyShortcutsOverlay>) {
   return (
     <Suspense fallback={null}>
       <LazyShortcutsOverlay {...props} />
@@ -1294,7 +1296,6 @@ const START_SCREEN_DEMOS =
   (import.meta.env as unknown as { VITE_E2E?: string }).VITE_E2E === '1'
     ? [...DEMO_DEFINITIONS, VISUAL_SELECTION_ACCEPTANCE_DEMO]
     : DEMO_DEFINITIONS;
-
 
 declare global {
   interface Window {
@@ -2682,13 +2683,24 @@ export function App() {
       run: handleUndo
     });
   };
+  const [geometrySnapshot, setGeometrySnapshot] = useState<{
+    projectId: string;
+    version: number;
+    geometry: GeometryReadyState;
+  } | null>(null);
   const geometry = useGeometryWorker({
+    onGeometryReady: (geometry, projectId, version) => {
+      setGeometrySnapshot({ projectId, version, geometry });
+      // Accepted meshes already contain the committed Move transform.
+      setMoveCommitHold(null);
+    },
     manager: () => managerRef.current,
     onProjection: (derived) => {
       const document = managerRef.current?.document;
       if (document) setParameterPreviewBase({ ...document, derived });
     },
     onDerived: (derived) => {
+      setGeometrySnapshot(null);
       const manager = managerRef.current;
       if (manager) {
         const failure = derived.featureWarnings?.find(
@@ -3258,12 +3270,13 @@ export function App() {
           base?.projectId === candidate.baseProjectId &&
           base.version === candidate.baseVersion &&
           current.mode === 'region' &&
-          resolvedExtrudePreviewKey(candidate) === resolvedExtrudePreviewKey({
-            input: regionExtrudeInputFor(current.target, candidate.distance),
-            choice: regionExtrudeSettings.current?.choice ??
-              current.extrudeChoice ?? { operation: 'automatic' },
-            faceAttachment: candidate.faceAttachment
-          })
+          resolvedExtrudePreviewKey(candidate) ===
+            resolvedExtrudePreviewKey({
+              input: regionExtrudeInputFor(current.target, candidate.distance),
+              choice: regionExtrudeSettings.current?.choice ??
+                current.extrudeChoice ?? { operation: 'automatic' },
+              faceAttachment: candidate.faceAttachment
+            })
         );
       },
       acceptValue: (distance) =>
@@ -5245,9 +5258,26 @@ export function App() {
    */
   // Its own memo, so the array the viewer uploads meshes from keeps its
   // identity while a preview comes and goes over the top of it.
-  const viewerBodies = useMemo<BodyRepresentation[]>(
+  const currentGeometrySnapshot =
+    !previewDoc &&
+    !parameterDraftActive &&
+    geometry.state.phase !== 'failed' &&
+    geometrySnapshot !== null &&
+    geometrySnapshot.projectId === doc?.projectId &&
+    geometrySnapshot?.version === doc?.version
+      ? geometrySnapshot.geometry
+      : null;
+  const completedViewerBodies = useMemo<BodyRepresentation[]>(
     () => partBodies.filter((body) => !hiddenBodyIds.has(body.bodyId)),
     [partBodies, hiddenBodyIds]
+  );
+  const viewerBodies = useMemo<GeometryBodyRepresentation[]>(
+    () =>
+      (currentGeometrySnapshot
+        ? Object.values(currentGeometrySnapshot.bodyRepresentations)
+        : completedViewerBodies
+      ).filter((body) => !body.consumed && !hiddenBodyIds.has(body.bodyId)),
+    [completedViewerBodies, hiddenBodyIds, currentGeometrySnapshot]
   );
   const viewportGeometry = useMemo<ViewportGeometry<ParameterPreviewBody>>(
     () => ({
@@ -5256,8 +5286,9 @@ export function App() {
       // A parameter preview stands in for its own result body only; hidden
       // bodies stay hidden and every other part keeps its exact geometry.
       standIns:
-        parameterPreview?.filter((body) => !hiddenBodyIds.has(body.bodyId)) ??
-        null,
+        (!currentGeometrySnapshot
+          ? parameterPreview?.filter((body) => !hiddenBodyIds.has(body.bodyId))
+          : null) ?? null,
       // Not declared by whatever posed them — observed by the viewer in the
       // frame it drew. The Move gizmo poses a body's mesh with no state the
       // workspace can see, and the next mechanism to do that need not
@@ -5270,6 +5301,7 @@ export function App() {
       viewerBodies,
       hiddenBodyIds,
       parameterPreview,
+      currentGeometrySnapshot,
       bodiesDrawnElsewhere
     ]
   );
@@ -5671,7 +5703,7 @@ export function App() {
     exactGeometryReady,
     representations,
     renderedRepresentations,
-    viewerBodies,
+    viewerBodies: completedViewerBodies,
     setStatus
   });
 
@@ -6336,10 +6368,7 @@ export function App() {
     feature: FeatureNode,
     editSession: EditCardSession | null
   ): void {
-    if (
-      !editSession ||
-      !editSessionIsCurrent(feature, editSession)
-    ) {
+    if (!editSession || !editSessionIsCurrent(feature, editSession)) {
       return;
     }
     if (editSession.tool !== null) {
@@ -10117,9 +10146,14 @@ export function App() {
     if (lowerName.endsWith('.fcstd')) {
       const abort = startImportAbort();
       const progress = createImportProgressSink();
-      progress.start({ fileName: file.name, phases: ['reading', 'building'], cancellable: true });
+      progress.start({
+        fileName: file.name,
+        phases: ['reading', 'building'],
+        cancellable: true
+      });
       try {
-        const { convertFreecadFile } = await import('./lib/freecadImportWorkerClient');
+        const { convertFreecadFile } =
+          await import('./lib/freecadImportWorkerClient');
         const converted = await convertFreecadFile(file, {
           units: doc.units,
           signal: abort.signal,
@@ -10129,7 +10163,10 @@ export function App() {
           }
         });
         if (managerRef.current !== importManager) {
-          progress.finish({ tone: 'warning', message: 'the project changed during conversion' });
+          progress.finish({
+            tone: 'warning',
+            message: 'the project changed during conversion'
+          });
           setStatus('The project changed while the FreeCAD import finished.');
           return;
         }
@@ -10137,13 +10174,18 @@ export function App() {
         const result = await runStepImport({
           file: converted.stepFile,
           inspectSolids: async (source, signal) => {
-            const { inspectStepSolidsInWorker } = await import('./lib/stepImportWorkerClient');
+            const { inspectStepSolidsInWorker } =
+              await import('./lib/stepImportWorkerClient');
             const indices = await inspectStepSolidsInWorker(source, signal);
             if (indices.length !== converted.solidCount) {
-              throw new Error('ZCAD could not validate every saved FreeCAD solid. No bodies were imported.');
+              throw new Error(
+                'ZCAD could not validate every saved FreeCAD solid. No bodies were imported.'
+              );
             }
             if (managerRef.current !== importManager) {
-              throw new Error('The project changed while the FreeCAD import finished.');
+              throw new Error(
+                'The project changed while the FreeCAD import finished.'
+              );
             }
             return indices;
           },
@@ -10165,10 +10207,13 @@ export function App() {
             `Imported ${file.name}: ${converted.solidCount} saved solid${converted.solidCount === 1 ? '' : 's'}. FreeCAD sketches and feature history were not transferred.` +
             (archived ? '' : ' Converted geometry saved on this device only.')
         });
-        if (result.outcome === 'declined') progress.finish({ tone: 'warning', message: 'nothing was added' });
+        if (result.outcome === 'declined')
+          progress.finish({ tone: 'warning', message: 'nothing was added' });
       } catch (error) {
         const cancelled = abort.signal.aborted;
-        const message = cancelled ? 'FreeCAD import cancelled; nothing was added.' : errorMessage(error, 'FreeCAD import failed.');
+        const message = cancelled
+          ? 'FreeCAD import cancelled; nothing was added.'
+          : errorMessage(error, 'FreeCAD import failed.');
         progress.finish({ tone: cancelled ? 'cancelled' : 'error', message });
         setStatus(message);
         if (!cancelled) setFeatureFormError(message);
@@ -10592,7 +10637,9 @@ export function App() {
     const shaprFiles = files.filter((file) => /\.shapr$/i.test(file.name));
     if (shaprFiles.length === 0) {
       if (files.length !== 1) {
-        setStatus('Select one FreeCAD, STEP or mesh file, or one .shapr + STEP pair.');
+        setStatus(
+          'Select one FreeCAD, STEP or mesh file, or one .shapr + STEP pair.'
+        );
         return;
       }
       await handleImportFile(files[0]!);
@@ -17606,9 +17653,7 @@ export function App() {
         setMeasurements((current) =>
           current.filter((measurement) => measurement.id !== id)
         );
-        setActiveMeasurementId((current) =>
-          current === id ? null : current
-        );
+        setActiveMeasurementId((current) => (current === id ? null : current));
         setStatus('Measurement removed.');
       }}
       onClear={() => {
@@ -18418,9 +18463,7 @@ export function App() {
       approved.signature !== JSON.stringify(submission) ||
       approved.baseVersion !== manager.document.version
     ) {
-      setStatus(
-        'The model changed after the result was checked. Try again.'
-      );
+      setStatus('The model changed after the result was checked. Try again.');
       return;
     }
     const editing = modelingEditFeature;
@@ -18649,6 +18692,7 @@ export function App() {
       parameterMinimums={doc ? parameterMinimums(doc) : {}}
       features={features}
       representations={representations}
+      geometryPending={Boolean(currentGeometrySnapshot)}
       selectedFeatureNodeId={selectedFeatureNodeId}
       hiddenBodyIds={hiddenBodyIds}
       hiddenSketchIds={hiddenSketchIds}
@@ -19002,6 +19046,15 @@ export function App() {
         >
           <ViewerShell
             projectId={doc.projectId}
+            geometryTrace={
+              !previewDoc && (currentGeometrySnapshot || exactGeometryReady)
+                ? {
+                    projectId: doc.projectId,
+                    version: doc.version,
+                    analysis: currentGeometrySnapshot ? 'pending' : 'ready'
+                  }
+                : undefined
+            }
             view={viewportGeometry}
             measurementAnnotations={measurementAnnotations}
             measurementCloudSync={[

@@ -5,6 +5,7 @@ import { toBodyId, toUserId } from '@openzcad/shared';
 import type { CommandManager } from '@openzcad/command-system';
 import type { GeometryWorkerResult } from '../worker/geometryWorker';
 import { useGeometryWorker } from './useGeometryWorker';
+import { ProjectionSender } from '../lib/projectionStream';
 
 class FakeWorker {
   static instances: FakeWorker[] = [];
@@ -207,6 +208,98 @@ describe('useGeometryWorker', () => {
     });
     await expect(pending).resolves.toEqual(document.derived);
     expect(host.onDerived).not.toHaveBeenCalled();
+  });
+
+  it('publishes accepted geometry only for the current revision without completing quantities', () => {
+    installWorker();
+    const document = createProjectDocument(
+      'Geometry staging',
+      toUserId('user')
+    );
+    const host = {
+      manager: () => ({ document }) as CommandManager,
+      onDerived: vi.fn(),
+      onGeometryReady: vi.fn(),
+      onError: vi.fn()
+    };
+    const { result } = renderHook(() => useGeometryWorker(host));
+    const worker = FakeWorker.instances[0]!;
+    const geometry = {
+      bodyRepresentations: {},
+      warnings: [],
+      updatedAt: document.derived.updatedAt,
+      analysis: 'pending' as const
+    };
+    act(() => {
+      worker.emit({
+        type: 'geometry-ready',
+        projectId: document.projectId,
+        version: document.version,
+        geometry
+      });
+      worker.emit({
+        type: 'geometry-ready',
+        projectId: document.projectId,
+        version: document.version + 1,
+        geometry
+      });
+      worker.emit({
+        type: 'geometry-ready',
+        projectId: 'other',
+        version: document.version,
+        geometry
+      });
+    });
+    expect(host.onGeometryReady).toHaveBeenCalledExactlyOnceWith(
+      geometry,
+      document.projectId,
+      document.version
+    );
+    expect(host.onDerived).not.toHaveBeenCalled();
+    expect(result.current.isReadyFor(document)).toBe(false);
+  });
+
+
+  it('requests a full projection after a missing base and rejects stale analysis', () => {
+    installWorker();
+    const document = createProjectDocument('Recovery', toUserId('user'));
+    const host = {
+      manager: () => ({ document }) as CommandManager,
+      onDerived: vi.fn(), onGeometryReady: vi.fn(), onError: vi.fn()
+    };
+    const { result } = renderHook(() => useGeometryWorker(host));
+    const worker = FakeWorker.instances[0]!;
+    const sender = new ProjectionSender('recovery-worker');
+    const geometry = {
+      bodyRepresentations: {}, warnings: [], updatedAt: document.derived.updatedAt,
+      analysis: 'pending' as const
+    };
+    const emit = (packet: ReturnType<ProjectionSender['encode']>, version = document.version) =>
+      worker.emit({ type: 'projection-delta', projectId: document.projectId, version, packet });
+    act(() => {
+      result.current.sync(document);
+      emit(sender.encode(document.projectId, geometry));
+      sender.encode(document.projectId, geometry); // A publication was dropped.
+      emit(sender.encode(document.projectId, geometry));
+    });
+    expect(worker.postMessage.mock.calls.at(-1)?.[0]).toMatchObject({
+      type: 'sync', forceFull: true,
+      document: { projectId: document.projectId, version: document.version }
+    });
+    expect(host.onDerived).not.toHaveBeenCalled();
+    act(() => {
+      emit(sender.encode(document.projectId, geometry, true));
+      emit(sender.encode(document.projectId, document.derived), document.version - 1);
+    });
+    expect(host.onGeometryReady).toHaveBeenCalledTimes(2);
+    expect(host.onDerived).not.toHaveBeenCalled();
+    expect(result.current.isReadyFor(document)).toBe(false);
+    act(() => {
+      emit(sender.encode(document.projectId, document.derived));
+      worker.emit({ type: 'state', phase: 'ready', stale: false, projectId: document.projectId, version: document.version });
+    });
+    expect(host.onDerived).toHaveBeenCalledOnce();
+    expect(result.current.isReadyFor(document)).toBe(true);
   });
 
   it('keeps upstream projections ephemeral and ignores other revisions', () => {

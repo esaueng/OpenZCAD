@@ -1,6 +1,12 @@
+import {
+  ProjectionReceiver,
+  projectionTransferables
+} from '../lib/projectionStream';
+import { beginEditTrace, recordEditPhase } from '../lib/editTrace';
+import type { GeometryReadyState } from '@openzcad/shared';
 import type { EditAnalysisRequest } from '@openzcad/shared';
 import { useEffect, useRef, useState } from 'react';
-import { documentForWorker } from '../lib/meshTransport';
+import { documentForWorker, documentForRebuild } from '../lib/meshTransport';
 import { canonicalProjectContentKey } from '../worker/exactRebuildCache';
 import { describeWorkerFailure } from '../lib/workerFailure';
 import type {
@@ -90,9 +96,12 @@ function postSync(
   armed.current = true;
   // The idle broadcast always carries a demand (possibly empty): that is
   // what opts it into skipping the probe for booleans nothing references.
+  beginEditTrace(document);
+  const input = documentForRebuild(document);
+  recordEditPhase(document, 'packed');
   worker.postMessage({
     type: 'sync',
-    document: documentForWorker(document),
+    document: input,
     lineageDemand: [...lineageDemand]
   });
 }
@@ -115,6 +124,11 @@ export interface GeometryWorkerHost {
   onDerived(derived: DerivedState): void;
   /** Ephemeral upstream display only. Never commits derived state or marks ready. */
   onProjection?(derived: DerivedState): void;
+  onGeometryReady?(
+    geometry: GeometryReadyState,
+    projectId: string,
+    version: number
+  ): void;
   /** A rebuild failed; the message is already human-readable. */
   onError(message: string): void;
 }
@@ -427,50 +441,115 @@ export function useGeometryWorker(host: GeometryWorkerHost): GeometryWorkerApi {
       quietBudgetPhase = null;
       quietBudgetUntil = 0;
 
+      const projectionReceiver = new ProjectionReceiver();
       worker.onmessage = (event: MessageEvent<GeometryWorkerResult>) => {
+        let message = event.data;
+        if (message.type === 'projection-delta') {
+          recordEditPhase(message, 'received', {
+            ...message.packet.metrics,
+            publication: message.packet.publication,
+            changedBodies: Object.keys(message.packet.changes).length,
+            transferredMeshBytes: projectionTransferables(
+              message.packet
+            ).reduce((sum, buffer) => sum + buffer.byteLength, 0)
+          });
+          const projection = projectionReceiver.apply(message.packet);
+          if (!projection) {
+            const document = hostRef.current.manager()?.document;
+            if (document)
+              worker.postMessage({
+                type: 'sync',
+                document: documentForRebuild(document),
+                lineageDemand: [...(lastDemandRef.current ?? [])],
+                forceFull: true
+              });
+            return;
+          }
+          message =
+            'analysis' in projection
+              ? {
+                  type: 'geometry-ready',
+                  projectId: message.projectId,
+                  version: message.version,
+                  geometry: projection
+                }
+              : {
+                  type: 'sync',
+                  ok: true,
+                  projectId: message.projectId,
+                  version: message.version,
+                  derived: projection
+                };
+        }
         lastWorkerMessageAt = Date.now();
-        if (event.data.type === 'projection') {
+        if (message.type === 'geometry-ready') {
           const document = hostRef.current.manager()?.document;
           if (
-            document?.projectId === event.data.projectId &&
-            document.version === event.data.version
+            document?.projectId === message.projectId &&
+            document.version === message.version
           ) {
-            hostRef.current.onProjection?.(event.data.derived);
+            recordEditPhase(message, 'geometry-ready');
+            hostRef.current.onGeometryReady?.(
+              message.geometry,
+              message.projectId,
+              message.version
+            );
           }
           return;
         }
-        if (event.data.type === 'state') {
-          if (event.data.progress?.status === 'completed') {
+        if (message.type === 'projection') {
+          const document = hostRef.current.manager()?.document;
+          if (
+            document?.projectId === message.projectId &&
+            document.version === message.version
+          ) {
+            hostRef.current.onProjection?.(message.derived);
+          }
+          return;
+        }
+        if (message.type === 'state') {
+          if (message.progress?.status === 'completed') {
+            if (message.projectId && message.version !== undefined)
+              recordEditPhase(
+                { projectId: message.projectId, version: message.version },
+                'progress',
+                {
+                  stage: message.progress.stage,
+                  index: message.progress.index,
+                  total: message.progress.total,
+                  durationMs: message.progress.durationMs ?? 0
+                }
+              );
             // Keep each timing even when React batches adjacent phase updates.
             // Session-local only: no document contents or telemetry upload.
             console.debug(
               '[geometry rebuild]',
               JSON.stringify({
-                projectId: event.data.projectId,
-                version: event.data.version,
-                requestId: event.data.requestId,
-                ...event.data.progress
+                projectId: message.projectId,
+                version: message.version,
+                requestId: message.requestId,
+                ...message.progress
               })
             );
           }
-          if (!event.data.requestId) {
-            livePhase = event.data.phase;
-            if (event.data.phase === 'ready' || event.data.phase === 'failed') {
+          if (!message.requestId) {
+            livePhase = message.phase;
+            if (message.phase === 'ready' || message.phase === 'failed') {
               armedRef.current = false;
             }
           } else if (
-            event.data.phase === 'loading-remus' ||
-            event.data.phase === 'rebuilding'
+            message.phase === 'loading-remus' ||
+            message.phase === 'rebuilding'
           ) {
             // A request-tagged job is itself in a long phase; extend the
             // budget so the watchdog does not kill a healthy-but-slow worker
             // while the live document waits behind it in the queue.
-            quietBudgetPhase = event.data.phase;
-            quietBudgetUntil = Date.now() + RESPAWN_BUDGET_MS[event.data.phase];
+            quietBudgetPhase = message.phase;
+            quietBudgetUntil = Date.now() + RESPAWN_BUDGET_MS[message.phase];
           }
-          if (event.data.phase === 'loading-remus') {
+          if (message.phase === 'loading-remus') {
             mark('kernel.loading');
-          } else if (event.data.phase === 'ready') {
+          } else if (message.phase === 'ready') {
             respawnsSinceReady = 0;
             if (!firstReadyMarkedRef.current) {
               firstReadyMarkedRef.current = true;
@@ -482,120 +561,116 @@ export function useGeometryWorker(host: GeometryWorkerHost): GeometryWorkerApi {
           // One-off previews and exports have their own promises and must not
           // make the live document look stale or ready out of order; their
           // states go to the caller that asked to watch them, or nowhere.
-          if (event.data.requestId) {
-            stateSubscribers.current.get(event.data.requestId)?.(event.data);
+          if (message.requestId) {
+            stateSubscribers.current.get(message.requestId)?.(message);
             return;
           }
-          setState(event.data);
-          if (event.data.phase === 'failed' && event.data.error) {
+          setState(message);
+          if (message.phase === 'failed' && message.error) {
             hostRef.current.onError(
-              `Geometry rebuild failed: ${event.data.error}`
+              `Geometry rebuild failed: ${message.error}`
             );
           }
           return;
         }
-        if (event.data.type === 'export') {
-          const pending = exportRequests.current.get(event.data.requestId);
+        if (message.type === 'export') {
+          const pending = exportRequests.current.get(message.requestId);
           if (!pending) {
             return; // Cancelled — the caller's promise is already rejected.
           }
-          exportRequests.current.delete(event.data.requestId);
-          stateSubscribers.current.delete(event.data.requestId);
-          if (event.data.ok) {
-            pending.resolve(event.data);
+          exportRequests.current.delete(message.requestId);
+          stateSubscribers.current.delete(message.requestId);
+          if (message.ok) {
+            pending.resolve(message);
           } else {
-            pending.reject(new Error(event.data.error));
+            pending.reject(new Error(message.error));
           }
           return;
         }
-        if (event.data.type === 'mesh-quality') {
-          const pending = meshQualityRequests.current.get(event.data.requestId);
+        if (message.type === 'mesh-quality') {
+          const pending = meshQualityRequests.current.get(message.requestId);
           if (!pending) {
             return;
           }
-          meshQualityRequests.current.delete(event.data.requestId);
-          stateSubscribers.current.delete(event.data.requestId);
-          if (event.data.ok) {
-            pending.resolve(event.data.report);
+          meshQualityRequests.current.delete(message.requestId);
+          stateSubscribers.current.delete(message.requestId);
+          if (message.ok) {
+            pending.resolve(message.report);
           } else {
-            pending.reject(new Error(event.data.error));
+            pending.reject(new Error(message.error));
           }
           return;
         }
-        if (event.data.type === 'mass-properties') {
-          const pending = massPropertiesRequests.current.get(
-            event.data.requestId
-          );
+        if (message.type === 'mass-properties') {
+          const pending = massPropertiesRequests.current.get(message.requestId);
           if (!pending) return;
-          massPropertiesRequests.current.delete(event.data.requestId);
-          if (event.data.ok) pending.resolve(event.data.result);
-          else pending.reject(new Error(event.data.error));
+          massPropertiesRequests.current.delete(message.requestId);
+          if (message.ok) pending.resolve(message.result);
+          else pending.reject(new Error(message.error));
           return;
         }
-        if (event.data.type === 'section') {
-          const pending = sectionRequests.current.get(event.data.requestId);
+        if (message.type === 'section') {
+          const pending = sectionRequests.current.get(message.requestId);
           if (!pending) {
             return;
           }
-          sectionRequests.current.delete(event.data.requestId);
-          if (event.data.ok) {
-            pending.resolve(event.data.report);
+          sectionRequests.current.delete(message.requestId);
+          if (message.ok) {
+            pending.resolve(message.report);
           } else {
-            pending.reject(new Error(event.data.error));
+            pending.reject(new Error(message.error));
           }
           return;
         }
-        if (event.data.type === 'solve-sketch') {
-          const pending = solveSketchRequests.current.get(event.data.requestId);
+        if (message.type === 'solve-sketch') {
+          const pending = solveSketchRequests.current.get(message.requestId);
           if (!pending) {
             return;
           }
-          solveSketchRequests.current.delete(event.data.requestId);
-          if (event.data.ok) {
-            pending.resolve(event.data.outcome);
+          solveSketchRequests.current.delete(message.requestId);
+          if (message.ok) {
+            pending.resolve(message.outcome);
           } else {
-            pending.reject(new Error(event.data.error));
+            pending.reject(new Error(message.error));
           }
           return;
         }
-        if (event.data.type === 'sketch-2d-op') {
-          const pending = sketchPlanarRequests.current.get(
-            event.data.requestId
-          );
+        if (message.type === 'sketch-2d-op') {
+          const pending = sketchPlanarRequests.current.get(message.requestId);
           if (!pending) {
             return;
           }
-          sketchPlanarRequests.current.delete(event.data.requestId);
-          if (event.data.ok) {
-            pending.resolve(event.data.result);
+          sketchPlanarRequests.current.delete(message.requestId);
+          if (message.ok) {
+            pending.resolve(message.result);
           } else {
-            pending.reject(new Error(event.data.error));
+            pending.reject(new Error(message.error));
           }
           return;
         }
-        if (event.data.type === 'recognize-imported-face') {
+        if (message.type === 'recognize-imported-face') {
           const pending = recognizeImportedFaceRequests.current.get(
-            event.data.requestId
+            message.requestId
           );
           if (!pending) {
             return;
           }
-          recognizeImportedFaceRequests.current.delete(event.data.requestId);
-          if (event.data.ok) {
-            pending.resolve(event.data.summary);
+          recognizeImportedFaceRequests.current.delete(message.requestId);
+          if (message.ok) {
+            pending.resolve(message.summary);
           } else {
-            pending.reject(new Error(event.data.error));
+            pending.reject(new Error(message.error));
           }
           return;
         }
-        if (event.data.requestId) {
-          const pending = syncRequests.current.get(event.data.requestId);
+        if (message.requestId) {
+          const pending = syncRequests.current.get(message.requestId);
           if (pending) {
-            syncRequests.current.delete(event.data.requestId);
-            if (event.data.ok) {
-              pending.resolve(event.data.derived);
+            syncRequests.current.delete(message.requestId);
+            if (message.ok) {
+              pending.resolve(message.derived);
             } else {
-              pending.reject(new Error(event.data.error));
+              pending.reject(new Error(message.error));
             }
           }
           return;
@@ -604,7 +679,7 @@ export function useGeometryWorker(host: GeometryWorkerHost): GeometryWorkerApi {
         if (!manager) {
           return;
         }
-        const result = event.data;
+        const result = message;
         // Ignore results for documents we are no longer showing.
         if (
           result.projectId !== manager.document.projectId ||
@@ -618,6 +693,7 @@ export function useGeometryWorker(host: GeometryWorkerHost): GeometryWorkerApi {
           hostRef.current.onError(`Geometry rebuild failed: ${result.error}`);
           return;
         }
+        recordEditPhase(result, 'analysis-ready');
         const submitted = broadcastDocument.current;
         readyDocument.current =
           submitted?.projectId === result.projectId &&
@@ -748,7 +824,7 @@ export function useGeometryWorker(host: GeometryWorkerHost): GeometryWorkerApi {
       // default. Only an explicit demand opts one into the idle skip.
       const posted = postRequest(syncRequests.current, {
         type: 'sync',
-        document: documentForWorker(document),
+        document: documentForRebuild(document),
         ...(analysis ? { analysis } : {}),
         ...(lineageDemand ? { lineageDemand: [...lineageDemand] } : {})
       });

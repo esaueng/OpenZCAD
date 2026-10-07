@@ -3,14 +3,14 @@
  *
  * A 3MF's `<model>` element carries a `unit` attribute and its `<build>`
  * section says which of the `<resources>` objects are actually placed, how
- * many times, and where. The pinned translator reads neither: measured on the
- * pin, a box marked `meter` imports with the same coordinates as one marked
- * `millimeter`; an `<item>` transform is dropped, so a doubled box imports at
+ * many times, and where. The paired translator normalizes resource vertices
+ * to millimetres, while an `<item>` transform is dropped, so a doubled box imports at
  * original size; an object placed twice imports once; and an object never
  * placed at all imports anyway. Every one of those is geometry silently
  * different from what the file states, which is exactly the guessing the
  * adapter refuses everywhere else — so the declaration, the placements and
- * their matrices are read here and the import honours them.
+ * their matrices are read here and the import honours them. Translation
+ * entries are converted to millimetres once when applying those matrices.
  *
  * Reading them means opening the Zip package, which is why there is a small
  * Zip reader here. The relationship part is read in its first 64 KB; the 3D

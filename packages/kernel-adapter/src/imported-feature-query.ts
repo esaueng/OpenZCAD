@@ -324,19 +324,36 @@ export class RemusImportedFeatureQuery implements ExactFaceAdjacencyQuery {
 
   constructor(
     private readonly kernel: RemusKernel,
-    private readonly solid: number
+    private readonly solid: number,
+    relationScope: 'full' | 'local' = 'local'
   ) {
     this.faceHandles = new Set(kernel.getSolidFaces(solid));
     this.edgeToFaces = edgeToFaceMapOf(kernel, solid);
-    // One bulk query per solid: a per-edge loop rebuilds adjacency per edge
-    // (the quadratic trap on a 2 000-edge import). Fail closed to an empty
-    // map — every missing edge then reads as `unknown` → `intersection`.
+    if (relationScope === 'full') this.readRelations();
+  }
+
+  private fullRelationsLoaded = false;
+
+  /** Batch only a proof's dependency edges; every probe still sees the full solid. */
+  private readRelations(edges?: readonly number[]): void {
+    if (this.fullRelationsLoaded) return;
+    const needed = edges?.filter((edge) => !this.edgeRelations.has(edge));
+    if (needed?.length === 0) return;
+    const batchKernel = this.kernel as RemusKernel & {
+      solidEdgeRelationsSubset?: (solid: number, edges: Uint32Array) => string;
+    };
+    const local =
+      needed !== undefined &&
+      batchKernel.solidEdgeRelationsSubset !== undefined;
+    if (!local) this.fullRelationsLoaded = true;
     try {
-      const raw = kernel.solidEdgeRelations(solid) as unknown as string;
-      const rows = JSON.parse(raw) as Array<{
-        edge: number;
-        relation: string;
-      }>;
+      const raw = local
+        ? batchKernel.solidEdgeRelationsSubset(
+            this.solid,
+            Uint32Array.from(new Set(needed))
+          )
+        : (this.kernel.solidEdgeRelations(this.solid) as unknown as string);
+      const rows = JSON.parse(raw) as Array<{ edge: number; relation: string }>;
       for (const row of rows) {
         if (
           typeof row.edge === 'number' &&
@@ -349,8 +366,11 @@ export class RemusImportedFeatureQuery implements ExactFaceAdjacencyQuery {
         }
       }
     } catch {
-      // Empty map: fail closed.
+      /* Missing evidence stays unknown; never infer a verdict. */
     }
+    for (const edge of needed ?? [])
+      if (!this.edgeRelations.has(edge))
+        this.edgeRelations.set(edge, 'unknown');
   }
 
   private faceRadialSense(
@@ -400,7 +420,9 @@ export class RemusImportedFeatureQuery implements ExactFaceAdjacencyQuery {
       number,
       { edges: number[]; nonManifold: boolean }
     >();
-    for (const edge of this.kernel.getFaceEdges(handle)) {
+    const faceEdges = Array.from(this.kernel.getFaceEdges(handle));
+    this.readRelations(faceEdges);
+    for (const edge of faceEdges) {
       const uses = this.edgeToFaces[String(edge)] ?? [];
       const neighbors = [...new Set(uses.filter((face) => face !== handle))];
       for (const neighbor of neighbors) {
@@ -836,7 +858,7 @@ export function collectRecognizedImportedFeatures(
   solid: number,
   identities: ReadonlyMap<number, ImportedRecognitionFaceIdentity>
 ): RecognizedImportedFeature[] {
-  const query = new RemusImportedFeatureQuery(kernel, solid);
+  const query = new RemusImportedFeatureQuery(kernel, solid, 'full');
   const claimedOwnedFaces = new Set<string>();
   const exactProofs: ImportedFeatureProof[] = [];
   const attemptSeed = (face: number): void => {

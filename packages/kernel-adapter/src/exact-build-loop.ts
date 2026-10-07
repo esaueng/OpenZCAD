@@ -135,7 +135,7 @@ export interface PrimitiveReuse {
   store(index: number, feature: FeatureNode, result: ExactBuildResult): void;
 }
 
-export function buildDocumentHistory(
+function* buildDocumentHistorySteps(
   kernel: RemusKernel,
   document: ProjectDocument,
   importSources: ReadonlyMap<string, Uint8Array> = new Map(),
@@ -172,7 +172,7 @@ export function buildDocumentHistory(
   lineageDemand?: ReadonlySet<BodyId> | readonly BodyId[],
   /** See {@link FeatureBuildContext.heldDisplayDeflection}. */
   heldDisplayDeflection?: (bodyId: BodyId) => number | undefined
-): ExactBuildResult {
+): Generator<void, ExactBuildResult> {
   const { scope, errors } = getParameterScope(document);
   const result: ExactBuildResult = resume?.initial ?? {
     shapes: new Map(),
@@ -210,7 +210,9 @@ export function buildDocumentHistory(
     result,
     importSources,
     pinnedImports,
-    ...(normalizedDemand !== undefined ? { lineageDemand: normalizedDemand } : {}),
+    ...(normalizedDemand !== undefined
+      ? { lineageDemand: normalizedDemand }
+      : {}),
     importedSteps,
     strictVerdicts,
     ...(heldDisplayDeflection === undefined ? {} : { heldDisplayDeflection }),
@@ -236,6 +238,7 @@ export function buildDocumentHistory(
         // where its dependents look for the result (F1 follow-up).
         passSuppressedFeatureThrough(result, feature);
         onFeature?.(index, result);
+        yield;
         continue;
       }
       try {
@@ -270,6 +273,7 @@ export function buildDocumentHistory(
         );
       }
       onFeature?.(index, result);
+      yield;
     }
     return result;
   } finally {
@@ -298,4 +302,37 @@ function attribute(
     kind,
     ...(kernelRefusal ? { kernelRefusal } : {})
   });
+}
+
+/** Synchronous entry point retained for probes and consumers outside a worker. */
+export function buildDocumentHistory(
+  ...args: Parameters<typeof buildDocumentHistorySteps>
+): ExactBuildResult {
+  const steps = buildDocumentHistorySteps(...args);
+  let step = steps.next();
+  while (!step.done) step = steps.next();
+  return step.value;
+}
+
+/** Advance each feature inside its memo scope, yielding only after closing it. */
+export async function buildDocumentHistoryCooperatively(
+  scheduling: {
+    run<T>(work: () => T): T;
+    checkpoint(): Promise<void>;
+  },
+  ...args: Parameters<typeof buildDocumentHistorySteps>
+): Promise<ExactBuildResult> {
+  const steps = buildDocumentHistorySteps(...args);
+  try {
+    while (true) {
+      const step = scheduling.run(() => steps.next());
+      if (step.done) return step.value;
+      await scheduling.checkpoint();
+    }
+  } catch (error) {
+    // Close the generator's transaction/cancellation token even if yielding
+    // itself fails. The generator's finally runs before the error propagates.
+    steps.throw(error);
+    throw error;
+  }
 }

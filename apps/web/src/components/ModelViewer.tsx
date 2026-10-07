@@ -1,6 +1,12 @@
 import type { ParameterVisualPreview } from '../lib/parameterVisualPreview';
 import { ParameterPreviewController } from './viewer/parameterPreviewController';
-import { useEffect, useRef, useState, type MutableRefObject } from 'react';
+import {
+  useEffect,
+  useMemo,
+  useRef,
+  useState,
+  type MutableRefObject
+} from 'react';
 import { axisDimensionLabel } from '../lib/primitiveDimensionLabel';
 import * as THREE from 'three';
 import type { HoleGhost } from '../lib/holeGhost';
@@ -10,6 +16,7 @@ import {
   type AutoFrameRequest
 } from '../lib/autoFrame';
 import { mark, measure, timed } from '../lib/perf';
+import { recordEditPhase } from '../lib/editTrace';
 import {
   avoidSketchDimensionOverlays,
   buildSketchDimensions
@@ -96,6 +103,9 @@ import {
   createObjectForBody,
   updateObjectForBody,
   sameBodyProjection,
+  sameBodyRenderGeometry,
+  sameBodyPickingTopology,
+  reuseRenderBodies,
   disposeObject,
   keepProgram,
   createShadowCatcher,
@@ -169,7 +179,7 @@ import {
 } from '@openzcad/viewport';
 import {
   UNIT_TO_MM,
-  type BodyRepresentation,
+  type GeometryBodyRepresentation,
   type FaceGeometry,
   type TopologySelection,
   type UnitSystem
@@ -621,7 +631,7 @@ export interface NormalToFaceRequest {
 
 export interface ModelViewerProps {
   parameterVisualPreview?: ParameterVisualPreview | null;
-  bodies: BodyRepresentation[];
+  bodies: GeometryBodyRepresentation[];
   sketches: SketchOverlay[];
   /** Runtime-only View-mode measurements rendered above exact geometry. */
   measurementAnnotations: MeasurementViewportAnnotation[];
@@ -642,7 +652,7 @@ export interface ModelViewerProps {
    */
   selectionCallout?: SelectionCalloutContent | null;
   /** Consumed bodies a History row brings into focus, drawn as ghosts. */
-  focusGhostBodies?: readonly BodyRepresentation[];
+  focusGhostBodies?: readonly GeometryBodyRepresentation[];
   /** Exact edges highlighted for a single edge-modifier operation. */
   selectedEdges: TopologySelection[];
   /** Select-other popup follows the direct-manipulation experiment gate. */
@@ -696,6 +706,11 @@ export interface ModelViewerProps {
   /** Final camera pose emitted after navigation or a camera glide settles. */
   onViewSettled(view: ViewportCameraState): void;
   onGeometryPresented?(durationMs: number): void;
+  geometryTrace?: {
+    projectId: string;
+    version: number;
+    analysis: 'pending' | 'ready';
+  };
   /**
    * Which bodies this viewer is drawing somewhere other than where the
    * document built them — moved, resized or hidden, by any mechanism.
@@ -1006,7 +1021,7 @@ export interface SceneContext {
    * hot update) starts empty and must rebuild even though the props never
    * changed.
    */
-  renderedBodies: readonly BodyRepresentation[] | null;
+  renderedBodies: readonly GeometryBodyRepresentation[] | null;
   hasFitCamera: boolean;
   /** Viewport size in CSS pixels, the unit fat-line widths are given in. */
   fatLineResolution(): FatLineResolution;
@@ -1663,7 +1678,7 @@ function startRequestedView(
 }
 
 export function ModelViewer({
-  bodies,
+  bodies: suppliedBodies,
   parameterVisualPreview = null,
   sketches,
   measurementAnnotations,
@@ -1692,6 +1707,7 @@ export function ModelViewer({
   onViewChange,
   onViewSettled,
   onGeometryPresented,
+  geometryTrace,
   onBodiesDrawnElsewhere,
   onWheelDeviceLearned,
   orientationRef,
@@ -1755,6 +1771,14 @@ export function ModelViewer({
   moveValuesSetterRef,
   onContextMenu
 }: ModelViewerProps) {
+  const drawingBodiesRef = useRef<
+    readonly GeometryBodyRepresentation[] | undefined
+  >(undefined);
+  const bodies = useMemo(() => {
+    const result = reuseRenderBodies(drawingBodiesRef.current, suppliedBodies);
+    drawingBodiesRef.current = result;
+    return result;
+  }, [suppliedBodies]);
   const hostRef = useRef<HTMLDivElement | null>(null);
   const contextRef = useRef<SceneContext | null>(null);
   const topologyPickListRef = useRef<TopologyPickList | null>(null);
@@ -1849,6 +1873,10 @@ export function ModelViewer({
   onViewChangeRef.current = onViewChange;
   const onGeometryPresentedRef = useRef(onGeometryPresented);
   onGeometryPresentedRef.current = onGeometryPresented;
+  const geometryTraceRef = useRef(geometryTrace);
+  geometryTraceRef.current = geometryTrace;
+  const pendingEditFrameRef = useRef<typeof geometryTrace>(undefined);
+  const installedEditRevisionRef = useRef<typeof geometryTrace>(undefined);
   const onBodiesDrawnElsewhereRef = useRef(onBodiesDrawnElsewhere);
   onBodiesDrawnElsewhereRef.current = onBodiesDrawnElsewhere;
   const onViewSettledRef = useRef(onViewSettled);
@@ -8493,6 +8521,11 @@ export function ModelViewer({
       } else {
         renderer.render(scene, context.activeCamera);
       }
+      const presented = pendingEditFrameRef.current;
+      if (presented) {
+        pendingEditFrameRef.current = undefined;
+        recordEditPhase(presented, 'frame', { analysis: presented.analysis });
+      }
       if (e2eCanvasHooksEnabled) {
         const distance = context.activeCamera.position.distanceTo(
           context.controls.target
@@ -8931,6 +8964,20 @@ export function ModelViewer({
 
     const installationStarted = performance.now();
     const bodiesChanged = context.renderedBodies !== bodies;
+    const previousBodies = new Map(
+      context.renderedBodies?.map((body) => [body.bodyId, body])
+    );
+    const renderChanged =
+      bodiesChanged &&
+      (previousBodies.size !== bodies.length ||
+        bodies.some((body) => {
+          const previous = previousBodies.get(body.bodyId);
+          return (
+            !previous ||
+            !sameBodyRenderGeometry(previous, body) ||
+            !sameBodyPickingTopology(previous, body)
+          );
+        }));
     const xrayEnabled = sketchMode === null;
     context.selection.setXrayEnabled(xrayEnabled);
     // While anything is selected, whatever is not the selection recedes and
@@ -8943,12 +8990,12 @@ export function ModelViewer({
         selectedEdges.length > 0 ||
         focusFaces.length > 0 ||
         (focusGhostBodies?.length ?? 0) > 0);
-    if (bodiesChanged) {
+    if (bodiesChanged) mark('viewer.bodies:begin');
+    if (renderChanged) {
       // The exact worker result is authoritative. Forget the visual proxy
       // before its old Three object is disposed and replaced.
       cylinderRadiusProxyControllerRef.current?.discard();
       offsetBodyProxyControllerRef.current?.discard();
-      mark('viewer.bodies:begin');
       // The manager owns hover-slot geometry even while the slots are
       // parented under bodies, so it must detach them before body disposal.
       context.selection.resetForRebuild();
@@ -8959,7 +9006,7 @@ export function ModelViewer({
       disposeRetiringOverlays(retiringOverlaysRef.current);
       const liveIds = new Set(bodies.map((body) => body.bodyId));
       for (const [id, object] of context.objectsByBodyId) {
-        if (!liveIds.has(id as BodyRepresentation['bodyId'])) {
+        if (!liveIds.has(id as GeometryBodyRepresentation['bodyId'])) {
           context.bodyGroup.remove(object);
           disposeObject(object);
           context.objectsByBodyId.delete(id);
@@ -9000,15 +9047,16 @@ export function ModelViewer({
     }
     const edgeResolution = context.fatLineResolution();
 
-    const previousBodies = new Map(
-      context.renderedBodies?.map((body) => [body.bodyId, body])
-    );
     for (const body of bodies) {
       let object = context.objectsByBodyId.get(body.bodyId);
       const previous = previousBodies.get(body.bodyId);
       const bodyChanged =
         bodiesChanged && (!previous || !sameBodyProjection(previous, body));
-      if (bodyChanged && object) {
+      const geometryChanged =
+        bodiesChanged && (!previous || !sameBodyRenderGeometry(previous, body));
+      const pickingChanged =
+        bodyChanged && (!previous || !sameBodyPickingTopology(previous, body));
+      if ((geometryChanged || pickingChanged) && object) {
         // Highlight attributes alias the installed mesh. Detach before changing
         // buffers so old face ranges can never pick or shade the new topology.
         for (const name of [
@@ -9028,7 +9076,7 @@ export function ModelViewer({
           disposeObject(edges);
           context.edgeOverlaysByBodyId.delete(body.bodyId);
         }
-        if (!updateObjectForBody(object, body)) {
+        if (geometryChanged && !updateObjectForBody(object, body)) {
           context.bodyGroup.remove(object);
           disposeObject(object);
           object = undefined;
@@ -9463,7 +9511,7 @@ export function ModelViewer({
 
     // Retune the key light's shadow frustum around the current model so the
     // grounding shadow stays crisp instead of being clipped or pixelated.
-    if (bodiesChanged) {
+    if (renderChanged) {
       const sceneBox = new THREE.Box3();
       for (const child of context.bodyGroup.children) {
         sceneBox.expandByObject(child);
@@ -9694,7 +9742,17 @@ export function ModelViewer({
     }
     context.requestRender();
     if (bodiesChanged) {
-      performance.measure?.('oz:viewer.bodies', 'oz:viewer.bodies:begin');
+      const revision = geometryTraceRef.current;
+      if (revision) {
+        installedEditRevisionRef.current = revision;
+        recordEditPhase(revision, 'installed', {
+          analysis: revision.analysis,
+          installationMs: performance.now() - installationStarted,
+          renderChanged: renderChanged ? 1 : 0
+        });
+        pendingEditFrameRef.current = revision;
+      }
+      measure('viewer.bodies', 'viewer.bodies:begin');
       onGeometryPresentedRef.current?.(performance.now() - installationStarted);
     }
   }, [
@@ -9709,6 +9767,30 @@ export function ModelViewer({
     sketchMode,
     units
   ]);
+
+  useEffect(() => {
+    const context = contextRef.current;
+    const installed = installedEditRevisionRef.current;
+    if (
+      !context ||
+      !geometryTrace ||
+      context.renderedBodies !== bodies ||
+      (installed?.projectId === geometryTrace.projectId &&
+        installed.version === geometryTrace.version)
+    )
+      return;
+    // A committed revision can reuse geometry already drawn by its preview.
+    // Record its acceptance and a real frame without uploading that mesh again.
+    installedEditRevisionRef.current = geometryTrace;
+    recordEditPhase(geometryTrace, 'installed', {
+      analysis: geometryTrace.analysis,
+      installationMs: 0,
+      renderChanged: 0,
+      reusedInstalledGeometry: 1
+    });
+    pendingEditFrameRef.current = geometryTrace;
+    context.requestRender();
+  }, [geometryTrace, bodies]);
 
   const parameterPreviewFramed = useRef(false);
   const parameterPreviewController = useRef<ParameterPreviewController | null>(
@@ -9745,7 +9827,7 @@ export function ModelViewer({
       parameterVisualPreview?.flatMap((body) => body.replaces)
     );
     for (const [id, object] of context.objectsByBodyId) {
-      object.visible = !hidden.has(id as BodyRepresentation['bodyId']);
+      object.visible = !hidden.has(id as GeometryBodyRepresentation['bodyId']);
     }
     context.requestRender();
   }, [parameterVisualPreview, bodies, initialView]);

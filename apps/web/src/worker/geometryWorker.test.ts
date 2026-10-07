@@ -271,7 +271,7 @@ describe('geometry worker rebuild coordination', () => {
 
     await vi.waitFor(() =>
       expect(scope.postMessage).toHaveBeenCalledWith(
-        expect.objectContaining({ type: 'sync', ok: true })
+        expect.objectContaining({ type: 'projection-delta' })
       )
     );
     expect(createExactKernelAdapter).not.toHaveBeenCalled();
@@ -488,17 +488,16 @@ describe('geometry worker rebuild coordination', () => {
             message
           ): message is Extract<
             GeometryWorkerResult,
-            { type: 'sync'; ok: true }
+            { type: 'projection-delta' }
           > =>
-            message.type === 'sync' &&
-            message.ok &&
+            message.type === 'projection-delta' &&
             message.version === newest.version
         );
-      expect(newestResult?.derived.warnings).toEqual(['newest']);
+      expect(newestResult?.packet.state.warnings).toEqual(['newest']);
     });
     const broadcastResults = scope.postMessage.mock.calls
       .map(([message]) => message)
-      .filter((message) => message.type === 'sync' && !message.requestId);
+      .filter((message) => message.type === 'projection-delta');
     expect(broadcastResults).toHaveLength(1);
     expect(broadcastResults[0]).toMatchObject({ version: newest.version });
   });

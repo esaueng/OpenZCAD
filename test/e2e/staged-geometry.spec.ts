@@ -1,0 +1,113 @@
+import { test, expect, stubApi, expectBodyCount } from './openzcad-fixtures';
+
+test('draws accepted geometry before analysis, then completes without reinstalling its mesh', async ({
+  page
+}) => {
+  test.setTimeout(90_000);
+  const errors: string[] = [];
+  page.on('pageerror', (error) => errors.push(error.message));
+  page.on('console', (message) => {
+    if (message.type() === 'error') errors.push(message.text());
+  });
+  await stubApi(page);
+  await page.addInitScript(() => {
+    const scope = window as typeof window & {
+      holdAnalysis: boolean;
+      heldAnalysis: number;
+      releaseAnalysis: () => void;
+    };
+    scope.holdAnalysis = false;
+    scope.heldAnalysis = 0;
+    const pending: (() => void)[] = [];
+    scope.releaseAnalysis = () => {
+      scope.holdAnalysis = false;
+      for (const release of pending.splice(0)) release();
+    };
+    const descriptor = Object.getOwnPropertyDescriptor(
+      Worker.prototype,
+      'onmessage'
+    )!;
+    Object.defineProperty(Worker.prototype, 'onmessage', {
+      ...descriptor,
+      set(listener: (event: MessageEvent) => void) {
+        descriptor.set!.call(this, (event: MessageEvent) => {
+          const result = event.data as {
+            type?: string;
+            packet?: { state?: { analysis?: string } };
+          };
+          if (
+            scope.holdAnalysis &&
+            result.type === 'projection-delta' &&
+            result.packet?.state?.analysis !== 'pending'
+          ) {
+            scope.heldAnalysis += 1;
+            pending.push(() => listener.call(this, event));
+          } else listener.call(this, event);
+        });
+      }
+    });
+  });
+  await page.setViewportSize({ width: 1440, height: 1000 });
+  await page.goto('/');
+  await page.getByLabel('Project name').fill('Staged geometry');
+  await page.getByRole('button', { name: 'Create project' }).click();
+  await expectBodyCount(page, 0);
+  await page.getByRole('button', { name: /^Box \(B\)/ }).click();
+  await page.evaluate(() => {
+    (window as typeof window & { holdAnalysis: boolean }).holdAnalysis = true;
+    performance.clearMeasures('oz:edit.frame');
+    performance.clearMeasures('oz:edit.analysis-ready');
+  });
+  await page
+    .getByRole('region', { name: 'Feature inspector' })
+    .getByRole('button', { name: 'Create', exact: true })
+    .click();
+  await expect
+    .poll(() =>
+      page.evaluate(() =>
+        performance.getEntriesByName('oz:edit.frame').some(
+          (entry) =>
+            (
+              (entry as PerformanceMeasure).detail as {
+                analysis?: string;
+              } | null
+            )?.analysis === 'pending'
+        )
+      )
+    )
+    .toBe(true);
+  await expect
+    .poll(() =>
+      page.evaluate(
+        () => (window as typeof window & { heldAnalysis: number }).heldAnalysis
+      )
+    )
+    .toBeGreaterThan(0);
+  expect(
+    await page.evaluate(
+      () => performance.getEntriesByName('oz:edit.analysis-ready').length
+    )
+  ).toBe(0);
+  await expect(page.getByRole('button', { name: /^Fillet/ })).toBeDisabled();
+  await expect(page.getByText('Preparing model details…')).toBeVisible();
+  await expect(page.getByText('needs repair', { exact: true })).toHaveCount(0);
+  const installs = await page.evaluate(
+    () => performance.getEntriesByName('oz:viewer.bodies').length
+  );
+  await page.screenshot({
+    path: test.info().outputPath('geometry-before-analysis.png')
+  });
+  await page.evaluate(() =>
+    (
+      window as typeof window & { releaseAnalysis: () => void }
+    ).releaseAnalysis()
+  );
+  await expectBodyCount(page, 1);
+  await expect(page.getByRole('button', { name: /^Fillet/ })).toBeEnabled();
+  expect(
+    await page.evaluate(
+      () => performance.getEntriesByName('oz:viewer.bodies').length
+    )
+  ).toBe(installs);
+  expect(errors).toEqual([]);
+});
