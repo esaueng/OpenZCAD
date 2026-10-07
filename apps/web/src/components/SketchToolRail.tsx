@@ -689,7 +689,7 @@ export function SketchRelationsRail({
                     : onConstraintTool(armed ? null : kind)
                 }
               >
-                <Icon size={15} aria-hidden="true" />
+                <Icon size={16} aria-hidden="true" />
                 {named && (
                   <span className="sketch-relation-name" aria-hidden="true">
                     {label}

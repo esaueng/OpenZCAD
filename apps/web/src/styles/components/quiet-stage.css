@@ -2095,22 +2095,24 @@ button.command-rail:disabled {
 }
 
 /* While sketching the relations stand beside the instrument rail, so the
-   right lane — and everything that keeps clear of it — steps left. */
+   right lane — and everything that keeps clear of it — steps left. The
+   relations are a rail like every other: --rail-w wide, 30px buttons and
+   16px icons. They were 44px with 34px buttons beside the 40px rail. */
 .workspace.column-layout .viewer-area:has(.sketch-relations) {
-  --lane-end: calc(var(--rail-w) + 44px + var(--island-gap) * 3);
+  --lane-end: calc(var(--rail-w) * 2 + var(--island-gap) * 3);
 }
 
 .instrument-rail > .sketch-relations {
   position: absolute;
   top: 0;
   right: calc(100% + var(--island-gap));
-  width: 44px;
+  width: var(--rail-w);
   box-sizing: border-box;
   display: flex;
   flex-direction: column;
   align-items: center;
   gap: 2px;
-  padding: 5px 0;
+  padding: 4px 0;
   background: var(--color-surface);
   border: var(--border-thin);
   border-radius: var(--radius-lg);
@@ -2132,8 +2134,8 @@ button.command-rail:disabled {
   .instrument-rail > .sketch-relations {
     display: grid;
     grid-auto-flow: column;
-    grid-template-rows: repeat(auto-fill, 32px);
-    grid-auto-columns: 34px;
+    grid-template-rows: repeat(auto-fill, 30px);
+    grid-auto-columns: 30px;
     gap: 2px;
     width: auto;
     padding: 5px 4px;
@@ -2142,7 +2144,7 @@ button.command-rail:disabled {
   }
 
   .instrument-rail > .sketch-relations .sketch-relation {
-    height: 32px;
+    height: 30px;
     direction: ltr;
   }
 
@@ -2151,9 +2153,10 @@ button.command-rail:disabled {
   }
 }
 
+/* Two 30px columns, a 2px gap, 2 × 4px padding and the 2px border. */
 @media (max-height: 540px) {
   .workspace.column-layout .viewer-area:has(.sketch-relations) {
-    --lane-end: calc(var(--rail-w) + 78px + var(--island-gap) * 3);
+    --lane-end: calc(var(--rail-w) + 72px + var(--island-gap) * 3);
   }
 }
 
@@ -2161,7 +2164,7 @@ button.command-rail:disabled {
    and the relations step left past both. */
 @media (max-height: 540px) {
   .workspace.column-layout .viewer-area:has(.sketch-relations) {
-    --lane-end: calc(var(--rail-w) * 2 + 78px + var(--island-gap) * 4);
+    --lane-end: calc(var(--rail-w) * 2 + 72px + var(--island-gap) * 4);
   }
 }
 
@@ -2176,8 +2179,8 @@ button.command-rail:disabled {
 .sketch-relation {
   position: relative;
   flex: 0 0 auto;
-  width: 34px;
-  height: 34px;
+  width: 30px;
+  height: 30px;
   display: flex;
   align-items: center;
   justify-content: center;
