@@ -776,8 +776,14 @@ export function ModelingOperationsForm({
       className="feature-form"
       onSubmit={handleSubmit}
       onKeyDown={(event) => {
-        // Enter on a face row submits (see `isPickListRow`).
-        if (event.key === 'Enter' && isPickListRow(event.target)) {
+        // Enter on a face row submits (see `isPickListRow`), and so does
+        // Enter on a select, as in every other feature card: a text field
+        // submits natively, a select did not.
+        if (
+          event.key === 'Enter' &&
+          (isPickListRow(event.target) ||
+            event.target instanceof HTMLSelectElement)
+        ) {
           event.preventDefault();
           event.currentTarget.requestSubmit();
         }
