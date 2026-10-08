@@ -300,7 +300,7 @@ test('UI-03: the mesh export dialog scrolls to its actions in short windows', as
     await page.setViewportSize(size);
     const fileMenu = page.locator('details.file-menu');
     await fileMenu.locator('summary').click();
-    await fileMenu.getByRole('button', { name: /Export Mesh/ }).click();
+    await fileMenu.getByRole('button', { name: /Export mesh/ }).click();
     const dialog = page.getByRole('dialog', { name: /Export mesh/ });
     await expect(dialog).toBeVisible();
     await dialog.getByRole('button', { name: 'Custom' }).click();

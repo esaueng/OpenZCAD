@@ -322,7 +322,13 @@ export function NumericKeypad({
       onPointerDown={(event) => event.stopPropagation()}
       onKeyDown={(event) => {
         event.stopPropagation();
-        if (event.key === 'Enter') {
+        // Enter on a focused chip or key presses that button (a unit, the
+        // diameter mode), as Enter does on any button; it used to commit
+        // the value instead.
+        if (
+          event.key === 'Enter' &&
+          !(event.target instanceof HTMLButtonElement)
+        ) {
           event.preventDefault();
           commit();
         }

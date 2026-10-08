@@ -20,7 +20,7 @@ test('invalid primitive dimensions never enter saved history', async ({
   await expect(inspector).toBeVisible();
   await expect(
     page.getByText(
-      'No features yet. Pick a tool from the command card to start.'
+      'No features yet. Pick a tool from the Feature tools list to start.'
     )
   ).toBeVisible();
   await width.fill('30');
@@ -48,7 +48,7 @@ test('a missing export chunk leaves the workspace usable without reload', async 
     .click();
   await expect(page.getByRole('button', { name: /^Fillet/ })).toBeEnabled();
   await page.getByText('File', { exact: true }).click();
-  await page.getByRole('button', { name: /Export Mesh/ }).click();
+  await page.getByRole('button', { name: /Export mesh/ }).click();
   const unavailable = page.getByRole('dialog', { name: 'Export unavailable' });
   await expect(unavailable).toBeVisible();
   await expect(
