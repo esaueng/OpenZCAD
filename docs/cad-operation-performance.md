@@ -73,6 +73,11 @@ The follow-up [geometry latency comparison](geometry-latency.md) measures
 primitive reuse, on-demand mass properties, union mesh reuse and the paired
 Remus area integration optimization.
 
+The [2026-10-08 interactive qualification](interactive-regeneration-performance.md)
+compares mixed histories, solved sketch dimensions, an imported NURBS body and
+the complete browser path on the same installed WASM. It includes compact raw
+timings and provenance, and distinguishes adapter savings from rendering limits.
+
 ## Browser edit path
 
 The adapter benchmark excludes worker messaging and viewport work. This
@@ -93,7 +98,15 @@ OZ_PERF=1 pnpm exec playwright test perf-cad-edit
 ```
 
 Set `CAD_PERF_BROWSER_SAMPLES` to request more than the default five warm
-edits. The initial non-empty sync is captured separately and is not mixed into
+edits. Widths are distinct by default to require regeneration; use
+`CAD_PERF_BROWSER_EDIT_MODE=repeat` to characterize whole-document cache hits.
+`CAD_PERF_BROWSER_HISTORY=100` seeds a mixed 100-feature history before the
+probe creates its final box. `CAD_PERF_BROWSER_ISOLATE=1` hides unrelated bodies
+through canonical visibility inputs while retaining their exact regeneration.
+The probe also validates the returned body's actual width, records main-thread
+long tasks and per-frame draw calls, and optionally captures a CPU profile with
+`CAD_PERF_BROWSER_PROFILE=1`. Keep profiled runs separate from timing comparisons.
+The initial non-empty sync is captured separately and is not mixed into
 the warm edit summary. Instrumentation serializes the small test document and
 adds browser-side overhead, so treat these timings as observed bounds rather
 than uninstrumented latency.

@@ -17,6 +17,7 @@ import type {
   GeometryWorkerRequest,
   GeometryWorkerResult
 } from './geometryWorker';
+import type { ExactKernelAdapter } from '@openzcad/kernel-adapter/exact';
 
 function deferred<T>() {
   let resolve!: (value: T) => void;
@@ -501,6 +502,37 @@ describe('geometry worker rebuild coordination', () => {
       .filter((message) => message.type === 'sync' && !message.requestId);
     expect(broadcastResults).toHaveLength(1);
     expect(broadcastResults[0]).toMatchObject({ version: newest.version });
+  });
+
+  it('supplies task yields and drops a superseded interactive projection', async () => {
+    const first = deferred<ProjectDocument['derived']>();
+    let project: ((value: ProjectDocument['derived']) => void) | undefined;
+    const syncDocument = vi.fn<ExactKernelAdapter['syncDocument']>().mockImplementationOnce((
+      _document, _progress, onProjection, _analysis, options
+    ) => {
+      project = onProjection;
+      expect(options?.yieldControl).toBeTypeOf('function');
+      return first.promise;
+    }).mockResolvedValueOnce(derived('newest'));
+    const { scope } = await installWorker(syncDocument);
+    const original = addPrimitiveFeature(
+      createProjectDocument('Original', toUserId('user')),
+      { name: 'Box', primitiveKind: 'box', dimensions: { width: 10, height: 20, depth: 30 } }
+    );
+    post(scope, { type: 'sync', document: original });
+    await vi.waitFor(() => expect(syncDocument).toHaveBeenCalledOnce());
+    const newest = updateFeature(original, {
+      featureId: listFeaturesInOrder(original)[0]!.featureId,
+      data: { dimensions: { width: 11, height: 20, depth: 30 } }
+    });
+    post(scope, { type: 'sync', document: newest });
+    project?.(derived('stale preview'));
+    first.resolve(derived('stale exact'));
+    await vi.waitFor(() => expect(syncDocument).toHaveBeenCalledTimes(2));
+    await vi.waitFor(() => expect(scope.postMessage).toHaveBeenCalledWith(
+      expect.objectContaining({ type: 'sync', version: newest.version, ok: true })
+    ));
+    expect(scope.postMessage.mock.calls.some(([message]) => message.type === 'projection')).toBe(false);
   });
 
   it('transfers binary mesh exports back with their request id', async () => {

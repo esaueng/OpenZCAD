@@ -421,7 +421,12 @@ export default defineConfig(async ({ command, isPreview, mode }) => {
               // the document machinery. The existing model chunk is already
               // preloaded, so this adds no request or async commit boundary.
               id.includes('/apps/web/src/lib/featureHistory.ts') ||
-              id.includes('/apps/web/src/lib/featureSuppression.ts')
+              id.includes('/apps/web/src/lib/featureSuppression.ts') ||
+              // Thumbnail coordination and shelf version checks must be
+              // resident before leave-time flush. Reuse this preloaded chunk.
+              id.includes('/apps/web/src/lib/projectThumbnailCapture.ts') ||
+              id.includes('/apps/web/src/lib/sharedThumbnailCapture.ts') ||
+              id.includes('/apps/web/src/lib/projectShelf.ts')
             ) {
               return 'model';
             }
