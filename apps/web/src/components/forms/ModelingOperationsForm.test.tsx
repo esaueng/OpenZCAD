@@ -279,6 +279,35 @@ describe('Modeling operations form', () => {
     ).toHaveClass('field-error');
   });
 
+  it('submits on Enter from a select, once, as the other feature cards do', () => {
+    const onPreflight = vi.fn(() => new Promise<{ status: 'ready' }>(() => {}));
+    render(
+      <ModelingOperationsForm
+        operation="shell"
+        scope={{}}
+        bodies={[
+          ...bodies,
+          {
+            bodyId: toBodyId('other_body'),
+            name: 'Other body',
+            consumed: false
+          }
+        ]}
+        faceOptions={faces}
+        onPreflight={onPreflight}
+        onSubmit={vi.fn()}
+      />
+    );
+    fireEvent.click(screen.getByRole('button', { name: faces[0]!.label }));
+
+    fireEvent.keyDown(screen.getByLabelText('Target body'), { key: 'Enter' });
+    expect(onPreflight).toHaveBeenCalledOnce();
+
+    // A repeat while the check runs does not start a second one.
+    fireEvent.keyDown(screen.getByLabelText('Target body'), { key: 'Enter' });
+    expect(onPreflight).toHaveBeenCalledOnce();
+  });
+
   it('checks the exact result and creates a typed shell in one press', async () => {
     let resolvePreflight: ((value: { status: 'ready' }) => void) | undefined;
     const onPreflight = vi.fn(

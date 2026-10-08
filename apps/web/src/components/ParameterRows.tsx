@@ -210,7 +210,7 @@ export function ParameterRow({
             }}
           >
             <span>{parameter.name}</span>
-            <Pencil size={10} aria-hidden="true" />
+            <Pencil size={12} aria-hidden="true" />
           </button>
         ) : (
           <span className="param-name mono">{parameter.name}</span>

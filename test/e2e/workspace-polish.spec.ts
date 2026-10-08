@@ -907,7 +907,7 @@ test('empty-state copy points at the command card beside the history', async ({
 
   // Several sections carry a .sidebar-hint; match the History one by text.
   const hint = page.locator('.sidebar-hint', { hasText: 'No features yet' });
-  await expect(hint).toContainText('Pick a tool from the command card');
+  await expect(hint).toContainText('Pick a tool from the Feature tools list');
 
   // The card it names is on screen, and it is the other side of the stage
   // from the history in the drawer.

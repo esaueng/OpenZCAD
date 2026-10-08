@@ -104,6 +104,27 @@ describe('MeasurementDock', () => {
     );
   });
 
+  it('cancels a rename on Escape without the key reaching the workspace', () => {
+    // The workspace's Escape (a window listener) turned Measure off, which
+    // unmounted the dock and the half-typed name with it.
+    const workspace = vi.fn();
+    window.addEventListener('keydown', workspace);
+    try {
+      const { props } = renderDock();
+      fireEvent.click(screen.getByLabelText('Edit Bracket · Edge 1'));
+      fireEvent.change(screen.getByLabelText('Name'), {
+        target: { value: 'Overall' }
+      });
+      fireEvent.keyDown(screen.getByLabelText('Name'), { key: 'Escape' });
+
+      expect(workspace).not.toHaveBeenCalled();
+      expect(screen.queryByLabelText('Name')).toBeNull();
+      expect(props.onRename).not.toHaveBeenCalled();
+    } finally {
+      window.removeEventListener('keydown', workspace);
+    }
+  });
+
   it('announces the two-pick progress state', () => {
     renderDock({
       mode: 'distance',

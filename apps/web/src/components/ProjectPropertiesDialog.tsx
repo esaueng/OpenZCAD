@@ -117,7 +117,9 @@ export function ProjectPropertiesDialog({
   return (
     <div
       className="modal-backdrop"
-      onClick={(event) => {
+      // Mouse-down, as the other dialogs: a text selection dragged out of
+      // the dialog released over the backdrop and closed it on click.
+      onMouseDown={(event) => {
         if (event.target === event.currentTarget) onClose();
       }}
     >
@@ -145,7 +147,7 @@ export function ProjectPropertiesDialog({
             aria-label="Close project properties"
             onClick={onClose}
           >
-            <X size={18} aria-hidden="true" />
+            <X size={14} aria-hidden="true" />
           </button>
         </header>
         {loading && (

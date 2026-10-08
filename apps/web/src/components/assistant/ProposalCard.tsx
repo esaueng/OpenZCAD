@@ -79,7 +79,7 @@ export function ProposalCard({
             : 'Proposal'}
         {previewing && (
           <span className="assistant-live-pill">
-            <Eye size={10} aria-hidden="true" />
+            <Eye size={12} aria-hidden="true" />
             in the viewport
           </span>
         )}
