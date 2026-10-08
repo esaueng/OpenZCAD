@@ -102,6 +102,7 @@ import {
   createGradientBackdrop,
   createObjectForBody,
   updateObjectForBody,
+  updateBodyMaterialOpacity,
   sameBodyProjection,
   sameBodyRenderGeometry,
   sameBodyPickingTopology,
@@ -9151,6 +9152,9 @@ export function ModelViewer({
         !(selectionRecedes && partPicked);
 
       forEachMesh(object, (mesh) => {
+        if (bodyChanged) {
+          updateBodyMaterialOpacity(mesh.material, body.opacity ?? 1);
+        }
         const baseEmissive = isSelected ? SELECTION_EMISSIVE : 0x000000;
         mesh.material.emissive.setHex(baseEmissive);
         mesh.userData.baseEmissive = baseEmissive;
