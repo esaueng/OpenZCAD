@@ -897,7 +897,7 @@ test('snaps sketch drawing to existing endpoints', async ({ page }) => {
   await expect(marker).toBeHidden();
 });
 
-test('empty-state copy points at the command card beside the history', async ({
+test('empty-state copy points at the tool rail beside the history', async ({
   page
 }) => {
   await stubApi(page);
@@ -907,9 +907,11 @@ test('empty-state copy points at the command card beside the history', async ({
 
   // Several sections carry a .sidebar-hint; match the History one by text.
   const hint = page.locator('.sidebar-hint', { hasText: 'No features yet' });
-  await expect(hint).toContainText('Pick a tool from the command card');
+  await expect(hint).toContainText(
+    'Pick a tool from the tool rail on the left'
+  );
 
-  // The card it names is on screen, and it is the other side of the stage
+  // The rail it names is on screen, and it is the other side of the stage
   // from the history in the drawer.
   const tools = page.getByRole('navigation', { name: 'Feature tools' });
   await expect(tools).toBeVisible();
