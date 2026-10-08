@@ -30,6 +30,12 @@
 }
 
 :root {
+  /* Native control parts (spin buttons, select popups, scrollbars, checkbox
+     and radio glyphs) are drawn by the browser from this, not from the
+     tokens: without it they stayed light on the dark theme. */
+  color-scheme: dark;
+  accent-color: var(--color-accent);
+
   /* ── Surfaces & text (steel graphite) ─────────────────────
      The quiet-stage workspace: the viewport is the page, and every panel is
      an island floating over it. Neutrals carry a faint steel tint (hue 214)
@@ -230,6 +236,7 @@
    ───────────────────────────────────────────────────────────── */
 
 :root[data-theme='light'] {
+  color-scheme: light;
   /* Surfaces & text — the cool-steel ramp, inverted. */
   --color-bg: #eef1f5;
   --color-surface: #f7f9fb;
@@ -266,6 +273,7 @@
 /* 'system' under a light OS: the same palette, resolved by the browser. */
 @media (prefers-color-scheme: light) {
   :root[data-theme='system'] {
+    color-scheme: light;
     --color-bg: #eef1f5;
     --color-surface: #f7f9fb;
     --color-surface-2: #e7ebf1;
@@ -381,7 +389,11 @@ textarea:focus-visible,
   outline-offset: 1px;
 }
 
-input,
+/* Checkboxes and radios keep their native glyph (themed by color-scheme and
+   accent-color above): the text-field box made them 30px-tall bordered
+   rectangles with the glyph floating above its label. `:where` keeps this
+   rule at plain-element specificity so every component rule still wins. */
+input:where(:not([type='checkbox'], [type='radio'])),
 select,
 textarea {
   font-family: inherit;
@@ -394,7 +406,7 @@ textarea {
   height: 30px;
 }
 
-input:focus,
+input:where(:not([type='checkbox'], [type='radio'])):focus,
 select:focus,
 textarea:focus {
   outline: none;
