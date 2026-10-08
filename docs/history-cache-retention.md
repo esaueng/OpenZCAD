@@ -72,7 +72,8 @@ does not cap process RSS. See the [edit-pipeline qualification](plans/edit-pipel
   count retention; the independent estimated-byte admission limit still applies.
   The default count remains 32; neither policy is a strict process-memory limit.
 
-The current pin is Remus `ae88947063719e0163a26f4a662b1d0a4c824102`;
+The current pin is Remus `1482487755a2a435c8134d31d43eb3e98adffdeb`,
+the canonical equivalent after the history redaction;
 the original retirement audit used `594cd308eba3632f9a320c88c8bbb7b41a68bb45`,
 `crates/wasm/src/bindings/checkpoint.rs` and `crates/topology/src/arena.rs`.
 Restore retains ancestor checkpoints and retires later handles without slot

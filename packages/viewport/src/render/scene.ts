@@ -611,6 +611,18 @@ function equalProjectionValue(left: unknown, right: unknown): boolean {
   );
 }
 
+/** Updates body blending without touching geometry or an active drag pose. */
+export function updateBodyMaterialOpacity(
+  material: THREE.Material,
+  opacity: number
+): void {
+  if (material.transparent !== opacity < 1) material.needsUpdate = true;
+  material.opacity = opacity;
+  material.transparent = opacity < 1;
+  material.depthWrite = opacity >= 1;
+  material.stencilWrite = opacity >= 1;
+}
+
 /**
  * Reuses an exact body's GPU buffers only when triangle connectivity and face
  * partitions are unchanged. Those define the original smoothing groups;
@@ -711,13 +723,7 @@ export function updateObjectForBody(
   object.matrixWorldNeedsUpdate = true;
   object.name = body.name;
   object.material.color.set(body.color);
-  const opacity = body.opacity ?? 1;
-  if (object.material.transparent !== opacity < 1)
-    object.material.needsUpdate = true;
-  object.material.opacity = opacity;
-  object.material.transparent = opacity < 1;
-  object.material.depthWrite = opacity >= 1;
-  object.material.stencilWrite = opacity >= 1;
+  updateBodyMaterialOpacity(object.material, body.opacity ?? 1);
   return true;
 }
 
