@@ -44,6 +44,7 @@ interface MeasurementDockProps {
   measurements: Measurement[];
   formattedMeasurements: Record<string, FormattedMeasurement>;
   enabled: boolean;
+  geometryPending?: boolean;
   activeMeasurementId: string | null;
   mode: MeasurementMode;
   draftTargetLabel: string | null;
@@ -69,6 +70,7 @@ export function MeasurementDock({
   measurements,
   formattedMeasurements,
   enabled,
+  geometryPending = false,
   activeMeasurementId,
   mode,
   draftTargetLabel,
@@ -127,11 +129,13 @@ export function MeasurementDock({
     closeEditor(id);
   }
 
-  const instruction = !enabled
-    ? 'Measure is off. Choose a mode to resume.'
-    : draftTargetLabel
-      ? `${draftTargetLabel} selected. Pick the second target.`
-      : MODE_INSTRUCTIONS[mode];
+  const instruction = geometryPending
+    ? 'Measurements will refresh when the model finishes updating.'
+    : !enabled
+      ? 'Measure is off. Choose a mode to resume.'
+      : draftTargetLabel
+        ? `${draftTargetLabel} selected. Pick the second target.`
+        : MODE_INSTRUCTIONS[mode];
 
   return (
     <aside
@@ -252,7 +256,7 @@ export function MeasurementDock({
               <div
                 className={`measurement-row${
                   activeMeasurementId === entry.id ? ' active' : ''
-                }${entry.status !== 'current' ? ' stale' : ''}`}
+                }${geometryPending || entry.status !== 'current' ? ' stale' : ''}`}
                 role="listitem"
                 key={entry.id}
               >
@@ -325,18 +329,18 @@ export function MeasurementDock({
                         >
                           {formatted.quality}
                         </span>
-                        {entry.status !== 'current' ? (
+                        {geometryPending || entry.status !== 'current' ? (
                           <span
-                            className={`measurement-status ${entry.status}`}
+                            className={`measurement-status ${geometryPending ? 'stale' : entry.status}`}
                           >
-                            {entry.status}
+                            {geometryPending ? 'updating' : entry.status}
                           </span>
                         ) : null}
                       </span>
                       <span className="measurement-row-value">
-                        {formatted.value}
+                        {geometryPending ? 'Updating…' : formatted.value}
                       </span>
-                      {formatted.detail ? (
+                      {!geometryPending && formatted.detail ? (
                         <small className="measurement-row-note">
                           {formatted.detail}
                         </small>
@@ -372,6 +376,7 @@ export function MeasurementDock({
                         type="button"
                         title="Copy this measurement"
                         aria-label={`Copy ${entry.label}`}
+                        disabled={geometryPending}
                         onClick={() => onCopy(entry)}
                       >
                         <ClipboardCopy size={12} aria-hidden="true" />
@@ -409,7 +414,12 @@ export function MeasurementDock({
 
       {measurements.length > 0 ? (
         <footer className="measurement-dock-foot">
-          <button type="button" onClick={() => onCopy()} title="Copy every row">
+          <button
+            type="button"
+            onClick={() => onCopy()}
+            title="Copy every row"
+            disabled={geometryPending}
+          >
             <ClipboardCopy size={12} aria-hidden="true" />
             Copy all
           </button>
@@ -417,6 +427,7 @@ export function MeasurementDock({
             type="button"
             onClick={onExport}
             title="Download structured CSV"
+            disabled={geometryPending}
           >
             <Download size={12} aria-hidden="true" />
             CSV
