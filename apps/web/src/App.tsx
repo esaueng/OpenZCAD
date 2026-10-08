@@ -1853,7 +1853,7 @@ export function App() {
     pendingInvitationToken
       ? 'Sign in to open the shared project automatically.'
       : desktopAuthorizationAttempt
-        ? 'Sign in, then approve OpenZCAD for macOS.'
+        ? 'Sign in if needed, then approve OpenZCAD for macOS.'
         : // Settings' own footer says where changes save; the header is
           // for news (an error, a sign-in step), not a second copy of it.
           ''
@@ -8500,8 +8500,8 @@ export function App() {
       // would overflow the status line with the very names that failed.
       setStatus(
         failed === 0
-          ? `Saved ${countLabel(saved, 'project', 'projects')} to your account.`
-          : `Saved ${countLabel(saved, 'project', 'projects')} · ${failed} could not be saved. See the list above for why.`
+          ? `Saved ${countLabel(saved, 'part', 'parts')} to your account.`
+          : `Saved ${countLabel(saved, 'part', 'parts')} · ${failed} could not be saved.`
       );
     } finally {
       setBusy(false);
@@ -16786,7 +16786,7 @@ export function App() {
     const repair = staleDirectEditFaceRepair(feature, warnings);
     const sketchId =
       feature.data.featureKind === 'sketch' ? feature.data.sketchId : null;
-    openContextMenu(at.clientX, at.clientY, [
+    const entries: Parameters<typeof openContextMenu>[2] = [
       {
         item: { id: 'edit', label: 'Edit Properties' },
         run: () => handleSelectFeatureFromTree(feature.id)
@@ -16842,7 +16842,9 @@ export function App() {
         },
         run: () => handleDeleteFeature(feature.featureId, feature.name)
       }
-    ]);
+    ];
+    // The heading names the feature these actions touch, and names the menu.
+    openContextMenu(at.clientX, at.clientY, entries, feature.name);
   }
 
   // `previewDoc` renders geometry from a proposal nobody has applied, and only
@@ -17413,6 +17415,7 @@ export function App() {
         desktopAuthorizationAttempt={desktopAuthorizationAttempt}
         desktopAuthorizationApproved={desktopAuthorizationApproved}
         desktopAuthorizationCode={desktopAuthorizationCode}
+        workspaceOpen={doc !== null}
         onDesktopAuthorizationCodeChange={setDesktopAuthorizationCode}
         onChange={handleAppSettingsChange}
         onCloudFunctionsEnabledChange={handleCloudFunctionsEnabledChange}
