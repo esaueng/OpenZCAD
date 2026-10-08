@@ -343,3 +343,26 @@ function attribute(
     ...(kernelRefusal ? { kernelRefusal } : {})
   });
 }
+
+/** Advance each feature inside its memo scope, yielding only after closing it. */
+export async function buildDocumentHistoryCooperatively(
+  scheduling: {
+    run<T>(work: () => T): T;
+    checkpoint(): Promise<void>;
+  },
+  ...args: Parameters<typeof buildDocumentHistorySteps>
+): Promise<ExactBuildResult> {
+  const steps = buildDocumentHistorySteps(...args);
+  try {
+    while (true) {
+      const step = scheduling.run(() => steps.next());
+      if (step.done) return step.value;
+      await scheduling.checkpoint();
+    }
+  } catch (error) {
+    // Close the generator's transaction/cancellation token even if yielding
+    // itself fails. The generator's finally runs before the error propagates.
+    scheduling.run(() => steps.throw(error));
+    throw error;
+  }
+}

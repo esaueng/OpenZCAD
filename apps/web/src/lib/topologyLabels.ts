@@ -1,5 +1,5 @@
 import type {
-  BodyRepresentation,
+  GeometryBodyRepresentation,
   EdgeTopology,
   FaceTopology,
   TopologySelection,
@@ -59,7 +59,7 @@ const PLANAR_DIRECTIONS: Record<string, string> = {
  * is exactly the divergence a single shared derivation exists to prevent.
  */
 function findFace(
-  body: BodyRepresentation | undefined,
+  body: GeometryBodyRepresentation | undefined,
   hash: number | undefined,
   topologyId: string | undefined
 ): { face: FaceTopology; index: number } | null {
@@ -68,7 +68,7 @@ function findFace(
 }
 
 function findEdge(
-  body: BodyRepresentation | undefined,
+  body: GeometryBodyRepresentation | undefined,
   hash: number | undefined,
   topologyId: string | undefined
 ): { edge: EdgeTopology; index: number } | null {
@@ -127,7 +127,7 @@ export function textLabelSegments(text: string): readonly LabelSegment[] {
  * ordinal as the last resort. Never leaks the raw fingerprint.
  */
 export function faceLabelSegments(
-  body: BodyRepresentation | undefined,
+  body: GeometryBodyRepresentation | undefined,
   hash: number | undefined,
   topologyId?: string
 ): readonly LabelSegment[] {
@@ -173,7 +173,7 @@ export function faceLabelSegments(
 
 /** The rendered form of {@link faceLabelSegments}. */
 export function faceLabel(
-  body: BodyRepresentation | undefined,
+  body: GeometryBodyRepresentation | undefined,
   hash: number | undefined,
   topologyId?: string
 ): string {
@@ -188,7 +188,7 @@ export function faceLabel(
  * distinct faces and gives up entirely if any of them fails to resolve.
  */
 function adjacentFaces(
-  body: BodyRepresentation | undefined,
+  body: GeometryBodyRepresentation | undefined,
   edge: EdgeTopology
 ): FaceTopology[] {
   const byHash = new Map<number, FaceTopology>();
@@ -211,7 +211,7 @@ function adjacentFaces(
  * edges actually are.
  */
 export function edgeLabel(
-  body: BodyRepresentation | undefined,
+  body: GeometryBodyRepresentation | undefined,
   hash: number | undefined,
   topologyId?: string
 ): string {
@@ -254,7 +254,7 @@ export function edgeLabel(
  * from growing subtly different naming vocabularies.
  */
 export function topologySelectionLabelSegments(
-  body: BodyRepresentation | undefined,
+  body: GeometryBodyRepresentation | undefined,
   selection: Pick<TopologySelection, 'kind' | 'hash' | 'topologyId'>
 ): readonly LabelSegment[] {
   if (selection.kind === 'body') {
@@ -269,7 +269,7 @@ export function topologySelectionLabelSegments(
 
 /** The rendered form of {@link topologySelectionLabelSegments}. */
 export function topologySelectionLabel(
-  body: BodyRepresentation | undefined,
+  body: GeometryBodyRepresentation | undefined,
   selection: Pick<TopologySelection, 'kind' | 'hash' | 'topologyId'>
 ): string {
   return labelSegmentsText(topologySelectionLabelSegments(body, selection));
@@ -291,7 +291,7 @@ export type EdgeLengthQuality = 'exact-kernel' | 'sampled';
  * display points remain a backwards-compatible approximate fallback.
  */
 export function edgeLengthMeasurement(
-  body: BodyRepresentation | undefined,
+  body: GeometryBodyRepresentation | undefined,
   hash: number | undefined,
   topologyId?: string
 ): { value: number; quality: EdgeLengthQuality } | null {
@@ -316,7 +316,7 @@ export function edgeLengthMeasurement(
 
 /** Length-only compatibility helper for selection labels and older callers. */
 export function edgeLength(
-  body: BodyRepresentation | undefined,
+  body: GeometryBodyRepresentation | undefined,
   hash: number | undefined,
   topologyId?: string
 ): number | null {

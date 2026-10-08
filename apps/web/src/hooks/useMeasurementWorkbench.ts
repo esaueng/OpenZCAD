@@ -43,6 +43,8 @@ export interface MeasurementWorkbenchInput {
    */
   modelingLocked: boolean;
   exactGeometryReady: boolean;
+  /** Displayed geometry is still waiting for its measurement analysis. */
+  geometryPending?: boolean;
   /** The committed exact projection; the only one allowed to refresh rows. */
   representations: Record<string, BodyRepresentation>;
   /** What the viewport draws right now, previews included; picks resolve here. */
@@ -62,6 +64,7 @@ export function useMeasurementWorkbench({
   doc,
   modelingLocked,
   exactGeometryReady,
+  geometryPending = false,
   representations,
   renderedRepresentations,
   viewerBodies,
@@ -260,7 +263,7 @@ export function useMeasurementWorkbench({
   }, [modelingLocked, measuring, measurementApi]);
 
   useEffect(() => {
-    if (!doc || !exactGeometryReady || !measurementApi) {
+    if (!doc || !exactGeometryReady || geometryPending || !measurementApi) {
       return;
     }
     // Stored rows and worker bodies can arrive in either order. Re-resolve on
@@ -281,6 +284,7 @@ export function useMeasurementWorkbench({
     representations,
     doc?.version,
     exactGeometryReady,
+    geometryPending,
     measurementApi,
     measurementRestoreGeneration
   ]);
@@ -289,7 +293,7 @@ export function useMeasurementWorkbench({
     // Checked before the state update rather than inside it, so the refusal can
     // be reported. The list is capped rather than self-trimming: dropping the
     // oldest row to make room is data loss nobody was told about.
-    if (!measurementApi) {
+    if (!measurementApi || geometryPending) {
       return;
     }
     if (!measurementApi.canAppendMeasurement(measurements, measurement)) {
@@ -320,7 +324,7 @@ export function useMeasurementWorkbench({
     selection: TopologySelection,
     point?: { x: number; y: number; z: number }
   ): string | null {
-    if (!doc || !measuring || !measurementApi) {
+    if (!doc || !measuring || !measurementApi || geometryPending) {
       return null;
     }
     const body = renderedRepresentations[selection.bodyId];
@@ -402,6 +406,12 @@ export function useMeasurementWorkbench({
     // moment another command takes the pointer.
     if (!doc || !measuring) {
       return false;
+    }
+    if (geometryPending) {
+      setStatus(
+        'Measurements are unavailable while the model finishes updating.'
+      );
+      return true;
     }
     // One guard for the whole handler. Dropping a pick that lands before the
     // measurement chunk arrives is better than servicing half of it, and the
@@ -505,7 +515,7 @@ export function useMeasurementWorkbench({
   const measurementAnnotations = useMemo<
     MeasurementViewportAnnotation[]
   >(() => {
-    if (!measurementApi) {
+    if (!measurementApi || geometryPending) {
       return [];
     }
     // The bodies only size each label's standoff: an area's label stands
@@ -542,6 +552,7 @@ export function useMeasurementWorkbench({
       : pinned;
   }, [
     activeMeasurementId,
+    geometryPending,
     measurementDisplay,
     measurementDraft,
     measurements,
@@ -562,6 +573,12 @@ export function useMeasurementWorkbench({
   );
 
   async function copyMeasurements(measurement?: Measurement) {
+    if (geometryPending) {
+      setStatus(
+        'Measurements are unavailable while the model finishes updating.'
+      );
+      return;
+    }
     const selected = measurement ? [measurement] : measurements;
     if (selected.length === 0 || !measurementApi) {
       return;
@@ -579,6 +596,12 @@ export function useMeasurementWorkbench({
   }
 
   function exportMeasurements() {
+    if (geometryPending) {
+      setStatus(
+        'Measurements are unavailable while the model finishes updating.'
+      );
+      return;
+    }
     if (!doc || measurements.length === 0 || !measurementApi) {
       return;
     }

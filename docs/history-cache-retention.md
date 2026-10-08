@@ -8,7 +8,10 @@ feature 32 was replayed on every sync. The current adapter retains the first
 feature between checkpoints contributes to the next checkpoint's digest.
 After 512 features have actually been replayed against a retained kernel, the
 next operation retires that kernel and rebuilds exactly. This is a replay-work
-and checkpoint-count bound, not a byte limit.
+and checkpoint-count bound. Checkpoint admission also defaults to 128 MiB of
+estimated unique topology/NURBS storage plus the next mutation copy. This
+estimate includes retired arena slots, excludes several other allocations and
+does not cap process RSS. See the [edit-pipeline qualification](plans/edit-pipeline-performance.md).
 
 ## Ownership and invalidation
 
@@ -64,11 +67,14 @@ and checkpoint-count bound, not a byte limit.
   dead-body eviction remains. Disposal clears all cache owners. Optional
   mass properties are queried separately when requested by the Inspector; they
   are guarded by document identity and the current exact-build epoch.
-- Zero, negative and NaN limits disable retention. Fractional budgets retain
+- Zero, negative and NaN count limits disable retention. Fractional budgets retain
   only complete checkpoints. Explicit Infinity preserves dense, unlimited
-  retention. The default count remains 32; it is **not a strict byte limit**.
+  count retention; the independent estimated-byte admission limit still applies.
+  The default count remains 32; neither policy is a strict process-memory limit.
 
-The current audited pin is Remus `66ea8d6f6e526756e2f4be6983d1865fb2593fb8`,
+The current pin is Remus `02884ca73036e7441603b3e7dffaceb0d574d8a7`,
+the combined reviewed release from Remus PR #975 after the history redaction;
+the original retirement audit used `66ea8d6f6e526756e2f4be6983d1865fb2593fb8`,
 `crates/wasm/src/bindings/checkpoint.rs` and `crates/topology/src/arena.rs`.
 Restore retains ancestor checkpoints and retires later handles without slot
 reuse. Already-retired slots stay retired across the checkpoint barrier;

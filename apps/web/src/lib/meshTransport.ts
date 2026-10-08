@@ -1,8 +1,8 @@
-import type { ProjectDocument } from '@openzcad/shared';
+import type { ProjectDocument, GeometryReadyState } from '@openzcad/shared';
 
 /** Only caller-owned projections may transfer; adapter/cache buffers stay live. */
 export function derivedMeshTransferables(
-  derived: ProjectDocument['derived']
+  derived: Pick<GeometryReadyState, 'bodyRepresentations'>
 ): ArrayBuffer[] {
   const buffers = new Set<ArrayBuffer>();
   for (const body of Object.values(derived.bodyRepresentations)) {
@@ -95,6 +95,19 @@ export function documentForWorker(document: ProjectDocument): ProjectDocument {
   return nodes
     ? ({ ...document, nodes } as unknown as ProjectDocument)
     : document;
+}
+
+/** Rebuilds read canonical inputs; query requests retain their selected metadata. */
+export function documentForRebuild(document: ProjectDocument): ProjectDocument {
+  return documentForWorker({
+    ...document,
+    derived: {
+      bodyRepresentations: {},
+      exportableBodyIds: [],
+      warnings: [],
+      updatedAt: document.derived.updatedAt
+    }
+  });
 }
 
 /**

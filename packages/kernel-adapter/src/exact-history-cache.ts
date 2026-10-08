@@ -51,6 +51,9 @@ import type { RemusKernel } from './remus-runtime';
  */
 export const MAX_HISTORY_CHECKPOINTS = 32;
 
+/** Accounted topology storage; excludes allocator/session/cache/GPU overhead. */
+export const MAX_HISTORY_CHECKPOINT_ESTIMATED_BYTES = 128 * 1024 * 1024;
+
 /** Rebuild the kernel before retired replay allocations grow without bound. */
 export const MAX_HISTORY_REPLAY_WORK = 512;
 
@@ -438,7 +441,22 @@ export function measuredShapeBytes(measured: MeasuredShape): number {
 }
 
 /** Telemetry for tests and tuning; not part of the derived state. */
+/** Kernel allocation estimates; linear pages exclude host and GPU memory. */
+export interface CheckpointMemoryStats {
+  linearMemoryBytes: number | null;
+  estimatedBytes: number;
+  currentEstimatedBytes: number;
+  nextMutationEstimatedBytes: number;
+  uniqueNurbsBytes: number;
+  uniqueTopologies: number;
+  allocatedSlots: number;
+  retiredSlots: number;
+  checkpoints: number;
+}
+
 export interface RebuildCacheEvent {
+  /** Opt-in allocation evidence, separate from process RSS. */
+  checkpointMemory?: CheckpointMemoryStats;
   /** Opt-in session-local diagnostics; byte estimate includes payload metadata. */
   measurementCache?: {
     hits: number;

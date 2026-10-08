@@ -105,6 +105,7 @@ interface SidebarProps {
   parameterValues: Record<string, number>;
   features: FeatureNode[];
   representations: Record<string, BodyRepresentation>;
+  geometryPending?: boolean;
   selectedFeatureNodeId: string | null;
   selectedBodyIds: string[];
   hiddenBodyIds: ReadonlySet<string>;
@@ -210,6 +211,7 @@ export function Sidebar({
   parameterMinimums,
   features,
   representations,
+  geometryPending = false,
   selectedFeatureNodeId,
   selectedBodyIds,
   hiddenBodyIds,
@@ -425,7 +427,12 @@ export function Sidebar({
         onToggle={onToggleSection}
       >
         <div className="feature-list" role="list" aria-label="Bodies">
-          {bodies.length === 0 && (
+          {geometryPending && (
+            <p className="muted sidebar-hint" role="status">
+              Preparing model details…
+            </p>
+          )}
+          {bodies.length === 0 && !geometryPending && (
             <p className="muted sidebar-hint" role="listitem">
               No bodies yet. Create a primitive or extrude a sketch.
             </p>
@@ -487,6 +494,7 @@ export function Sidebar({
         <HistoryTimeline
           features={features}
           representations={representations}
+          geometryPending={geometryPending}
           selectedFeatureNodeId={selectedFeatureNodeId}
           hiddenBodyIds={hiddenBodyIds}
           hiddenSketchIds={hiddenSketchIds}

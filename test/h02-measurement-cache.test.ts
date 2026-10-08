@@ -87,11 +87,11 @@ describe('H02 unchanged measurement payload safety', { timeout: 30_000 }, () => 
       const validation = vi.spyOn(RemusKernel.prototype, 'validateSolid');
       const unionGate = vi.spyOn(RemusKernel.prototype, 'unifyFacesChecked');
       const measurable = adapter as unknown as {
-        measureShape: (...args: unknown[]) => unknown;
+        prepareShapeMeasurement: (...args: unknown[]) => unknown;
       };
-      const measure = measurable.measureShape;
+      const measure = measurable.prepareShapeMeasurement;
       let validationsAtMeasureReturn = 0;
-      vi.spyOn(measurable, 'measureShape').mockImplementation((...args) => {
+      vi.spyOn(measurable, 'prepareShapeMeasurement').mockImplementation((...args) => {
         const measured: unknown = Reflect.apply(measure, adapter, args);
         validationsAtMeasureReturn = validation.mock.calls.length;
         return measured;
