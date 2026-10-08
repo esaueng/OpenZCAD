@@ -13,6 +13,7 @@ function renderTopBar(
     geometryPending?: boolean;
     geometryFailed?: boolean;
     canExport?: boolean;
+    projectName?: string;
   } = {}
 ) {
   const handlers = {
@@ -26,7 +27,7 @@ function renderTopBar(
   };
   render(
     <TopBar
-      projectName="Plate"
+      projectName={options.projectName ?? 'Plate'}
       units="mm"
       canExport={options.canExport ?? false}
       exportScope={null}
@@ -208,6 +209,16 @@ describe('TopBar File menu', () => {
     expect(onImportFiles).toHaveBeenCalledWith([part]);
   });
 
+  it('keeps the import format list out of the import name', () => {
+    renderTopBar({ canExport: true });
+    fileMenu().open = true;
+    expect(
+      screen.getByRole('button', { name: 'Import CAD files…' })
+    ).toHaveAttribute('title', expect.stringContaining('STEP'));
+    // Only Export STEP answers to the format's name.
+    expect(screen.getAllByRole('button', { name: /STEP/ })).toHaveLength(1);
+  });
+
   it('separates Export from Import with a rule', () => {
     renderTopBar();
     const exportLabel = [
@@ -261,12 +272,20 @@ describe('TopBar File menu', () => {
 
 describe('TopBar project title', () => {
   function titleButton() {
-    return screen.getByRole('button', { name: 'Plate, rename project' });
+    return screen.getByRole('button', { name: 'Rename project Plate' });
   }
 
-  it('starts its name with the name it shows', () => {
+  it('carries the name it shows in its accessible name', () => {
     renderTopBar();
     expect(titleButton()).toHaveTextContent('Plate');
+  });
+
+  it('does not answer to a command named like the project', () => {
+    renderTopBar({ projectName: 'Fillet retarget' });
+    expect(screen.queryByRole('button', { name: /^Fillet/ })).toBeNull();
+    expect(
+      screen.getByRole('button', { name: 'Rename project Fillet retarget' })
+    ).toBeInTheDocument();
   });
 
   it('returns focus to the title after a rename is committed', () => {

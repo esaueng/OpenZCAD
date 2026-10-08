@@ -417,8 +417,10 @@ export function TopBar({
             ref={projectTitleButtonRef}
             className="project-title-button"
             type="button"
-            // Starts with the name it shows (WCAG 2.5.3), then the action.
-            aria-label={`${projectName}, rename project`}
+            // Carries the name it shows (WCAG 2.5.3). The action leads: a
+            // project named after a command would otherwise answer to that
+            // command's name.
+            aria-label={`Rename project ${projectName}`}
             title="Rename project"
             onClick={beginProjectRename}
           >
@@ -648,6 +650,9 @@ export function TopBar({
                 type="button"
                 className="topbar-menu-item"
                 title="Import FreeCAD (.FCStd), STEP, a mesh file (STL, 3MF, OBJ, GLB, PLY), or a paired Shapr3D project and STEP"
+                // The format list stays in its title: in the name it made
+                // this item answer to "STEP" beside Export STEP.
+                aria-label="Import CAD files…"
                 onClick={() => importInputRef.current?.click()}
               >
                 <Upload size={13} aria-hidden="true" />
