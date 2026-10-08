@@ -1,11 +1,56 @@
 import { describe, expect, it } from 'vitest';
 import {
+  moveHasFiniteValues,
   moveHasUnappliedChange,
   movingSketchId,
   sketchViewShown
 } from './moveCard';
 
 const zero = { x: 0, y: 0, z: 0 };
+
+describe('Move confirmation values', () => {
+  it.each([NaN, Infinity, -Infinity])(
+    'refuses %s in every consumed coordinate',
+    (value) => {
+      for (const axis of ['x', 'y', 'z'] as const) {
+        const translation = { ...zero, [axis]: value };
+        const rotationDeg = { ...zero, [axis]: value };
+        expect(moveHasFiniteValues({ translation, rotationDeg: zero })).toBe(
+          false
+        );
+        expect(
+          moveHasFiniteValues({
+            translation,
+            rotationDeg: zero,
+            target: 'sketch'
+          })
+        ).toBe(false);
+        expect(moveHasFiniteValues({ translation: zero, rotationDeg })).toBe(
+          false
+        );
+        expect(
+          moveHasFiniteValues({
+            translation: zero,
+            rotationDeg,
+            target: 'sketch'
+          })
+        ).toBe(true);
+      }
+    }
+  );
+
+  it('accepts zero and finite signed translations and rotations', () => {
+    expect(moveHasFiniteValues({ translation: zero, rotationDeg: zero })).toBe(
+      true
+    );
+    expect(
+      moveHasFiniteValues({
+        translation: { x: -5, y: 0.2, z: 7 },
+        rotationDeg: { x: 30, y: -90, z: 180 }
+      })
+    ).toBe(true);
+  });
+});
 
 describe('moveHasUnappliedChange', () => {
   it('is false with no Move card, or one still at zero', () => {
