@@ -1,4 +1,10 @@
-import { useCallback, useEffect, useRef, useState } from 'react';
+import {
+  useCallback,
+  useEffect,
+  useLayoutEffect,
+  useRef,
+  useState
+} from 'react';
 import {
   PROJECT_DOCUMENT_SCHEMA_VERSION,
   isDocumentHistory,
@@ -65,6 +71,7 @@ export interface CollaborationClientState {
 
 const MAX_MESSAGE_BYTES = 900_000;
 const KEEP_MINE_ACK_TIMEOUT_MS = 15_000;
+const ROOM_CHANGED_MESSAGE = 'The room changed.';
 /**
  * Inbound frames wrap a room document (bounded server-side by
  * MAX_PERSISTED_DOCUMENT_BYTES, 1.5 MB) plus presence/lease metadata. A frame
@@ -266,6 +273,9 @@ export function useCollaboration({
   const leaseRef = useRef<ProjectEditLease | null>(null);
   const conflictRef = useRef<ProjectConflict | null>(null);
   const keepMinePendingRef = useRef(false);
+  // A project can be left and reopened, or rejoined by another account. Its
+  // ID alone cannot identify the room that owns an asynchronous confirmation.
+  const roomEpochRef = useRef(0);
   const keepMineAckRef = useRef<{
     document: ProjectDocument;
     timer: number;
@@ -280,6 +290,15 @@ export function useCollaboration({
   const projectId = document?.projectId ?? null;
   const userId = session?.userId ?? null;
   const displayName = session?.displayName ?? null;
+  // Invalidate the committed room identity before passive socket cleanup.
+  // A pending HTTP continuation must not act for the previous account or
+  // enabled state while the old socket is still referenced.
+  useLayoutEffect(() => {
+    roomEpochRef.current += 1;
+    return () => {
+      roomEpochRef.current += 1;
+    };
+  }, [displayName, enabled, projectId, userId]);
   const roomWanted = Boolean(enabled && projectId && userId && displayName);
   const stampRef = useRef({ projectId, wanted: roomWanted });
   stampRef.current = { projectId, wanted: roomWanted };
@@ -337,6 +356,7 @@ export function useCollaboration({
   );
 
   useEffect(() => {
+    roomEpochRef.current += 1;
     if (!enabled || !projectId || !userId || !displayName) {
       setStatus('offline');
       setMembers([]);
@@ -359,6 +379,8 @@ export function useCollaboration({
     setRoomVersion(null);
     keepMinePendingRef.current = false;
     let disposed = false;
+    const roomEpoch = roomEpochRef.current;
+    const isCurrentRoom = () => !disposed && roomEpochRef.current === roomEpoch;
     let reconnectTimer: number | undefined;
     let leaseRetryTimer: number | undefined;
     let reconnectAttempt = 0;
@@ -447,7 +469,7 @@ export function useCollaboration({
       type: 'hello' | 'document'
     ): boolean => {
       const current = documentRef.current;
-      if (!current || current.projectId !== projectId) {
+      if (!isCurrentRoom() || !current || current.projectId !== projectId) {
         return false;
       }
       const payload = JSON.stringify({
@@ -491,12 +513,12 @@ export function useCollaboration({
           }
         )
           .then(async (response) => {
-            if (disposed || socketRef.current !== socket) return;
+            if (!isCurrentRoom() || socketRef.current !== socket) return;
             const message = parseServerMessage(
               await response.text(),
               projectId
             );
-            if (disposed || socketRef.current !== socket) return;
+            if (!isCurrentRoom() || socketRef.current !== socket) return;
             if (!message) {
               pendingDocument = null;
               console.error('Collaboration returned an unreadable response.');
@@ -519,7 +541,7 @@ export function useCollaboration({
             }
           })
           .catch(() => {
-            if (disposed || socketRef.current !== socket) return;
+            if (!isCurrentRoom() || socketRef.current !== socket) return;
             pendingDocument = null;
             setStatus('offline');
           });
@@ -532,13 +554,13 @@ export function useCollaboration({
 
     sendCurrentDocumentRef.current = () => {
       const socket = socketRef.current;
-      if (!disposed && socket?.readyState === WebSocket.OPEN) {
+      if (isCurrentRoom() && socket?.readyState === WebSocket.OPEN) {
         sendDocument(socket, 'document');
       }
     };
 
     const scheduleReconnect = () => {
-      if (disposed) {
+      if (!isCurrentRoom()) {
         return;
       }
       setStatus('offline');
@@ -550,7 +572,7 @@ export function useCollaboration({
     };
 
     const connectToUrl = (url: string | URL) => {
-      if (disposed) {
+      if (!isCurrentRoom()) {
         return;
       }
       let socket: WebSocket;
@@ -562,6 +584,7 @@ export function useCollaboration({
       }
       socketRef.current = socket;
       socket.addEventListener('open', () => {
+        if (!isCurrentRoom() || socketRef.current !== socket) return;
         reconnectAttempt = 0;
         pendingDocument = null;
         lastSentVersionRef.current = null;
@@ -574,7 +597,7 @@ export function useCollaboration({
       });
       socket.addEventListener('message', (event) => {
         if (
-          disposed ||
+          !isCurrentRoom() ||
           socketRef.current !== socket ||
           typeof event.data !== 'string'
         ) {
@@ -663,7 +686,7 @@ export function useCollaboration({
             }
             leaseRetryTimer = window.setTimeout(
               () => {
-                if (!disposed && socket.readyState === WebSocket.OPEN) {
+                if (isCurrentRoom() && socket.readyState === WebSocket.OPEN) {
                   socket.send(
                     JSON.stringify({ type: 'lease-acquire', clientId: id })
                   );
@@ -779,6 +802,7 @@ export function useCollaboration({
         }
       });
       socket.addEventListener('close', () => {
+        if (!isCurrentRoom()) return;
         if (socketRef.current === socket) {
           settleKeepMine(
             new Error(
@@ -787,16 +811,13 @@ export function useCollaboration({
           );
           socketRef.current = null;
         }
-        if (disposed) {
-          return;
-        }
         scheduleReconnect();
       });
       socket.addEventListener('error', () => socket.close());
     };
 
     function connect() {
-      if (disposed) {
+      if (!isCurrentRoom()) {
         return;
       }
       setStatus('connecting');
@@ -818,7 +839,7 @@ export function useCollaboration({
     const leaseRenewTimer = window.setInterval(() => {
       const socket = socketRef.current;
       const leaseId = leaseIdRef.current;
-      if (socket?.readyState === WebSocket.OPEN && leaseId) {
+      if (isCurrentRoom() && socket?.readyState === WebSocket.OPEN && leaseId) {
         socket.send(
           JSON.stringify({
             type: 'lease-renew',
@@ -830,7 +851,8 @@ export function useCollaboration({
     }, 10_000);
     return () => {
       disposed = true;
-      settleKeepMine(new Error('The project changed before confirmation.'));
+      roomEpochRef.current += 1;
+      settleKeepMine(new Error(ROOM_CHANGED_MESSAGE));
       sendCurrentDocumentRef.current = null;
       if (reconnectTimer !== undefined) {
         window.clearTimeout(reconnectTimer);
@@ -927,6 +949,11 @@ export function useCollaboration({
       const activeLease = leaseRef.current;
       const socket = socketRef.current;
       const current = documentRef.current;
+      const roomEpoch = roomEpochRef.current;
+      const isCurrentRoom = () =>
+        roomEpochRef.current === roomEpoch &&
+        socketRef.current === socket &&
+        documentRef.current?.projectId === projectId;
       if (
         !pending ||
         !current ||
@@ -991,13 +1018,14 @@ export function useCollaboration({
             socket.send(payload);
           });
         } catch (error) {
-          settleKeepMine(
-            error instanceof Error
-              ? error
-              : new Error('Could not submit Keep my version.')
-          );
-          if (documentRef.current?.projectId === projectId)
+          if (isCurrentRoom()) {
+            settleKeepMine(
+              error instanceof Error
+                ? error
+                : new Error('Could not submit Keep my version.')
+            );
             setStatus('conflict');
+          }
           throw error;
         }
         return;
@@ -1019,8 +1047,9 @@ export function useCollaboration({
           }
         );
         const message = parseServerMessage(await response.text(), projectId);
-        if (documentRef.current?.projectId !== projectId) {
-          throw new Error('The project changed before confirmation.');
+        // The room can change while either the request or its body is read.
+        if (!isCurrentRoom() || !documentRef.current) {
+          throw new Error(ROOM_CHANGED_MESSAGE);
         }
         if (!message) {
           throw new Error('The room returned an unreadable response.');
@@ -1072,10 +1101,10 @@ export function useCollaboration({
           remoteHandlerRef.current(message.document, { adopted: true });
         }
       } catch (error) {
-        if (documentRef.current?.projectId === projectId) setStatus('conflict');
+        if (isCurrentRoom()) setStatus('conflict');
         throw error;
       } finally {
-        keepMinePendingRef.current = false;
+        if (isCurrentRoom()) keepMinePendingRef.current = false;
       }
     },
     [projectId, reconcileMatchingRoomDocument, setStatus, settleKeepMine]
