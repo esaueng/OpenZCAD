@@ -63,13 +63,21 @@ export function ProjectConflictDialog({
   const [resolving, setResolving] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const working = busy || resolving;
-  useModalFocus(dialogRef, { autoFocus: true });
+  useModalFocus(dialogRef, {
+    autoFocus: true,
+    onEscape: () => {
+      if (!working) onClose();
+    }
+  });
   const other = OTHER_SIDE[conflict.source];
   const sameGeometry =
     canonicalProjectContentKey(conflict.localDocument) ===
     canonicalProjectContentKey(conflict.remoteDocument);
 
   async function resolve(resolution: ConflictResolution) {
+    if (working) {
+      return;
+    }
     setError(null);
     setResolving(true);
     try {
@@ -94,6 +102,7 @@ export function ProjectConflictDialog({
         aria-modal="true"
         aria-labelledby="project-conflict-title"
         aria-busy={working}
+        tabIndex={-1}
         onKeyDown={(event) => {
           if (event.key === 'Escape') {
             event.stopPropagation();
@@ -140,16 +149,18 @@ export function ProjectConflictDialog({
                   </time>
                   )
                 </>
-              ) : (
-                ' · No saved checkpoint'
-              )}
+              ) : null}
             </p>
           );
         })}
+        {/* aria-disabled, not disabled, while working: disabling the focused
+            choice dropped focus on the body, out of reach of Escape and of
+            the error that a failed resolution then showed. */}
         <div className="conflict-dialog-actions">
           <button
             type="button"
-            disabled={working || keepMineDisabledReason !== null}
+            disabled={keepMineDisabledReason !== null}
+            aria-disabled={working || undefined}
             aria-describedby={
               keepMineDisabledReason !== null
                 ? 'project-conflict-keep-mine-note'
@@ -161,14 +172,14 @@ export function ProjectConflictDialog({
           </button>
           <button
             type="button"
-            disabled={working}
+            aria-disabled={working || undefined}
             onClick={() => void resolve('use-remote')}
           >
             {other.use}
           </button>
           <button
             type="button"
-            disabled={working}
+            aria-disabled={working || undefined}
             onClick={() => void resolve('save-local-copy')}
           >
             {other.copyThenUse}
@@ -180,7 +191,7 @@ export function ProjectConflictDialog({
           </p>
         )}
         {error && (
-          <p className="conflict-dialog-note" role="alert">
+          <p className="conflict-dialog-error" role="alert">
             {error}
           </p>
         )}
@@ -195,8 +206,10 @@ export function ProjectConflictDialog({
         <button
           type="button"
           className="secondary"
-          disabled={working}
-          onClick={onClose}
+          aria-disabled={working || undefined}
+          onClick={() => {
+            if (!working) onClose();
+          }}
         >
           Decide later
         </button>

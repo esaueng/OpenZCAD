@@ -1,7 +1,7 @@
 import { StrictMode, useRef, useState } from 'react';
 import { render, screen, waitFor } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
-import { describe, expect, it } from 'vitest';
+import { describe, expect, it, vi } from 'vitest';
 import { modalHoldsKeyboard, useModalFocus } from './useModalFocus';
 
 function Modal({
@@ -218,6 +218,145 @@ describe('useModalFocus', () => {
     });
     expect(anchor).toHaveFocus();
   });
+  /**
+   * A dialog container without a tabindex gives up focus to the body when its
+   * text is clicked, and its own key handler then never hears Escape. The
+   * hook's fallback has to close it, and only once when focus is inside.
+   */
+  it('still closes on Escape after a click on non-focusable dialog text', async () => {
+    const user = userEvent.setup();
+    const onClose = vi.fn();
+    function TextModal() {
+      const dialogRef = useRef<HTMLDivElement | null>(null);
+      useModalFocus(dialogRef, { autoFocus: true, onEscape: onClose });
+      return (
+        <div className="modal-backdrop">
+          <div
+            ref={dialogRef}
+            role="dialog"
+            aria-label="Text dialog"
+            onKeyDown={(event) => {
+              if (event.key === 'Escape') {
+                event.stopPropagation();
+                onClose();
+              }
+            }}
+          >
+            <p>Some explanatory text</p>
+            <button type="button">Keep</button>
+          </div>
+        </div>
+      );
+    }
+    render(<TextModal />);
+    expect(screen.getByRole('button', { name: 'Keep' })).toHaveFocus();
+
+    await user.keyboard('{Escape}');
+    expect(onClose).toHaveBeenCalledOnce();
+
+    await user.click(screen.getByText('Some explanatory text'));
+    expect(document.activeElement).toBe(document.body);
+    await user.keyboard('{Escape}');
+    expect(onClose).toHaveBeenCalledTimes(2);
+  });
+
+  it('treats a radio group as one Tab stop, so Shift+Tab cannot leave from its checked radio', async () => {
+    const user = userEvent.setup();
+    function RadioModal() {
+      const dialogRef = useRef<HTMLDivElement | null>(null);
+      const [choice, setChoice] = useState('ply');
+      useModalFocus(dialogRef, { autoFocus: true });
+      return (
+        <>
+          <button type="button">Background action</button>
+          <div ref={dialogRef} role="dialog" aria-label="Radio dialog">
+            {['3mf', 'stl', 'ply'].map((value) => (
+              <input
+                key={value}
+                type="radio"
+                name="format"
+                value={value}
+                aria-label={value}
+                checked={choice === value}
+                onChange={() => setChoice(value)}
+              />
+            ))}
+            <button type="button">Export</button>
+          </div>
+        </>
+      );
+    }
+    render(<RadioModal />);
+    const checked = screen.getByRole('radio', { name: 'ply' });
+    const exportButton = screen.getByRole('button', { name: 'Export' });
+    checked.focus();
+
+    await user.tab({ shift: true });
+    expect(exportButton).toHaveFocus();
+    await user.tab();
+    expect(checked).toHaveFocus();
+  });
+
+  it.each([
+    ['inside', true],
+    ['beside', false]
+  ])(
+    'returns focus to the control that opened a modal nested %s another',
+    async (_placement, nestedInDom) => {
+      const user = userEvent.setup();
+      function Inner({ onClose }: { onClose(): void }) {
+        const dialogRef = useRef<HTMLDivElement | null>(null);
+        useModalFocus(dialogRef, { autoFocus: true });
+        return (
+          <div className="modal-backdrop">
+            <div ref={dialogRef} role="dialog" aria-label="Inner dialog">
+              <button type="button" onClick={onClose}>
+                Close inner
+              </button>
+            </div>
+          </div>
+        );
+      }
+      function Outer() {
+        const dialogRef = useRef<HTMLDivElement | null>(null);
+        const [innerOpen, setInnerOpen] = useState(false);
+        useModalFocus(dialogRef, { autoFocus: true });
+        const inner = innerOpen ? (
+          <Inner onClose={() => setInnerOpen(false)} />
+        ) : null;
+        return (
+          <>
+            <div
+              ref={dialogRef}
+              role="dialog"
+              aria-label="Outer dialog"
+              tabIndex={-1}
+            >
+              <button type="button">First outer control</button>
+              <button type="button" onClick={() => setInnerOpen(true)}>
+                Open inner
+              </button>
+              {nestedInDom && inner}
+            </div>
+            {!nestedInDom && inner}
+          </>
+        );
+      }
+      render(
+        <StrictMode>
+          <Outer />
+        </StrictMode>
+      );
+      const opener = screen.getByRole('button', { name: 'Open inner' });
+      await user.click(opener);
+      expect(screen.getByRole('button', { name: 'Close inner' })).toHaveFocus();
+
+      await user.click(screen.getByRole('button', { name: 'Close inner' }));
+      expect(opener).toHaveFocus();
+      expect(opener).not.toHaveAttribute('inert');
+    }
+  );
+
   it('holds the keyboard from the workspace unless the dialog hands it back', () => {
     function Sheet({ workspaceKeys }: { workspaceKeys: boolean }) {
       const dialogRef = useRef<HTMLDivElement | null>(null);

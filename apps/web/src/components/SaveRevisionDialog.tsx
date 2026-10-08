@@ -28,7 +28,11 @@ export function SaveRevisionDialog({
   const dialogRef = useRef<HTMLDivElement | null>(null);
   const inputRef = useRef<HTMLInputElement | null>(null);
   const [name, setName] = useState('');
-  useModalFocus(dialogRef, { autoFocus: true, initialFocusRef: inputRef });
+  useModalFocus(dialogRef, {
+    autoFocus: true,
+    initialFocusRef: inputRef,
+    onEscape: onCancel
+  });
 
   const trimmed = name.trim();
 
@@ -47,6 +51,7 @@ export function SaveRevisionDialog({
         role="dialog"
         aria-modal="true"
         aria-labelledby="save-revision-dialog-title"
+        tabIndex={-1}
         onKeyDown={(event) => {
           if (event.key === 'Escape') {
             event.stopPropagation();
@@ -79,7 +84,7 @@ export function SaveRevisionDialog({
             />
           </label>
           <div className="save-revision-actions">
-            <button type="button" onClick={onCancel}>
+            <button type="button" className="secondary" onClick={onCancel}>
               Cancel
             </button>
             {/* An unnamed named-save is just Ctrl+S with extra steps. */}

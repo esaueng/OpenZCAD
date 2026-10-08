@@ -32,7 +32,11 @@ export function DeleteFeatureDialog({
 }: DeleteFeatureDialogProps) {
   const dialogRef = useRef<HTMLDivElement | null>(null);
   const deleteRef = useRef<HTMLButtonElement | null>(null);
-  useModalFocus(dialogRef, { autoFocus: true, initialFocusRef: deleteRef });
+  useModalFocus(dialogRef, {
+    autoFocus: true,
+    initialFocusRef: deleteRef,
+    onEscape: onCancel
+  });
 
   const named = dependents.slice(0, NAMED_DEPENDENTS);
   const unnamed = dependents.length - named.length;
@@ -46,6 +50,7 @@ export function DeleteFeatureDialog({
         aria-modal="true"
         aria-labelledby="delete-feature-dialog-title"
         aria-describedby="delete-feature-dialog-body"
+        tabIndex={-1}
         onKeyDown={(event) => {
           if (event.key === 'Escape') {
             event.stopPropagation();
@@ -72,7 +77,7 @@ export function DeleteFeatureDialog({
           <p>Undo brings everything back.</p>
         </div>
         <div className="delete-feature-actions">
-          <button type="button" onClick={onCancel}>
+          <button type="button" className="secondary" onClick={onCancel}>
             Cancel
           </button>
           <button

@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState } from 'react';
+import { useRef, useState } from 'react';
 import {
   CircleCheck,
   Download,
@@ -6,6 +6,7 @@ import {
   TriangleAlert
 } from 'lucide-react';
 import type { MeshQualityReport } from '@openzcad/kernel-adapter/exact';
+import { countLabel } from '../lib/toasts';
 import { useModalFocus } from '../lib/useModalFocus';
 import { StableLabel } from './StableLabel';
 
@@ -133,7 +134,10 @@ export function ExportDialog({
   onCheckQuality
 }: ExportDialogProps) {
   const dialogRef = useRef<HTMLDivElement>(null);
-  useModalFocus(dialogRef, { autoFocus: true });
+  // Escape must still close the dialog when focus has fallen out of it (a
+  // click on the backdrop drops it on the body). The workspace keymap stands
+  // down while the dialog is open, so nothing else would take the key.
+  useModalFocus(dialogRef, { autoFocus: true, onEscape: onClose });
 
   const [format, setFormat] = useState<MeshExportDialogFormat>('3mf');
   const [preset, setPreset] = useState<QualityPresetId>('standard');
@@ -147,24 +151,6 @@ export function ExportDialog({
     result: MeshQualityReport;
   } | null>(null);
   const scope = `${revision}:${bodies.map((body) => body.bodyId).join(',')}`;
-
-  // Escape must still close the dialog when focus has fallen out of it (a
-  // click on the backdrop drops it on the body). The workspace keymap stands
-  // down while the dialog is open, so nothing else would take the key.
-  useEffect(() => {
-    const onKeyDown = (event: KeyboardEvent) => {
-      const dialog = dialogRef.current;
-      if (
-        event.key === 'Escape' &&
-        dialog &&
-        !dialog.contains(document.activeElement)
-      ) {
-        onClose();
-      }
-    };
-    window.addEventListener('keydown', onKeyDown);
-    return () => window.removeEventListener('keydown', onKeyDown);
-  }, [onClose]);
 
   const presetDeflection = QUALITY_PRESETS.find(
     (entry) => entry.id === preset
@@ -237,6 +223,7 @@ export function ExportDialog({
         role="dialog"
         aria-modal="true"
         aria-labelledby="export-dialog-title"
+        tabIndex={-1}
         onKeyDown={(event) => {
           if (event.key === 'Escape') {
             event.stopPropagation();
@@ -252,8 +239,8 @@ export function ExportDialog({
           {/* glTF fixes its own unit; the size is the same either way. */}
           Exports {scopeLabel}{' '}
           {format === 'glb'
-            ? 'in metres, the unit glTF defines.'
-            : 'in millimetres, ready for slicing.'}
+            ? 'in meters, the unit glTF defines.'
+            : 'in millimeters, ready for slicing.'}
         </p>
 
         <fieldset className="export-dialog-group">
@@ -288,6 +275,7 @@ export function ExportDialog({
                 key={entry.id}
                 type="button"
                 className={preset === entry.id ? 'active' : undefined}
+                aria-pressed={preset === entry.id}
                 onClick={() => setPreset(entry.id)}
               >
                 {entry.label}
@@ -297,6 +285,7 @@ export function ExportDialog({
             <button
               type="button"
               className={preset === 'custom' ? 'active' : undefined}
+              aria-pressed={preset === 'custom'}
               onClick={() => setPreset('custom')}
             >
               Custom
@@ -367,7 +356,7 @@ export function ExportDialog({
                   <small>
                     {body.watertight
                       ? 'watertight'
-                      : `${body.boundaryEdges} open, ${body.nonManifoldEdges} non-manifold edge(s)`}
+                      : `${countLabel(body.boundaryEdges, 'open edge', 'open edges')}, ${countLabel(body.nonManifoldEdges, 'non-manifold edge', 'non-manifold edges')}`}
                   </small>
                 </li>
               ))}

@@ -211,7 +211,9 @@ describe('ProjectSharingDialog', () => {
     );
 
     expect(screen.getByText('You')).toBeVisible();
-    expect(screen.getByText('Collaborator 2')).toBeVisible();
+    // Numbered among the others: the self row used to make alex number 2.
+    expect(screen.getByText('Collaborator 1')).toBeVisible();
+    expect(screen.queryByText('Collaborator 2')).not.toBeInTheDocument();
     expect(screen.queryByText('alex')).not.toBeInTheDocument();
     expect(screen.getAllByText('?')).toHaveLength(2);
     // Settings owns the only switch; the dialog just follows it.
@@ -224,7 +226,7 @@ describe('ProjectSharingDialog', () => {
     expect(screen.getByText('alex')).toBeVisible();
     expect(screen.queryByText('alex (you)')).not.toBeInTheDocument();
     expect(screen.getByText('Viewer')).toBeVisible();
-    expect(screen.getByText('idle')).toBeVisible();
+    expect(screen.getByText('Idle')).toBeVisible();
     act(() => setPersonalInfoVisible(false));
     expect(screen.queryByText('alex')).not.toBeInTheDocument();
   });
@@ -261,7 +263,7 @@ describe('ProjectSharingDialog', () => {
     act(() => setPersonalInfoVisible(true));
     expect(await screen.findByText('member@example.com')).toBeVisible();
     expect(screen.getByText('pending@example.com')).toBeVisible();
-    expect(screen.getByText('Invited · editor · expired')).toBeVisible();
+    expect(screen.getByText('Invited · Editor · expired')).toBeVisible();
     expect(screen.getByLabelText('Role for member@example.com')).toHaveValue(
       'viewer'
     );
@@ -335,9 +337,96 @@ describe('ProjectSharingDialog', () => {
 
     // Personal info starts hidden, so the row carries its redacted label.
     const invitation = await screen.findByText('Invitation 1');
-    expect(invitation.closest('li')).toHaveTextContent(
-      /Invited · editor · [1-9]\d*d/
+    // Rounded up: a fresh 3-day invitation read "2d".
+    expect(invitation.closest('li')).toHaveTextContent('Invited · Editor · 3d');
+  });
+
+  it('returns focus inside the dialog once an action settles', async () => {
+    const sharingClient = client();
+    let failRoleChange!: (error: Error) => void;
+    vi.mocked(sharingClient.updateMemberRole).mockImplementationOnce(
+      () =>
+        new Promise((_resolve, reject) => {
+          failRoleChange = reject;
+        })
     );
+    const base = createProjectDocument('Focus after actions', owner);
+    const user = userEvent.setup();
+    render(
+      <ProjectSharingDialog
+        projectId={base.projectId}
+        role="owner"
+        collaborationStatus="live"
+        lease={null}
+        client={sharingClient}
+        shareLinkClient={shareLinkClient()}
+        onClose={vi.fn()}
+      />
+    );
+    const dialog = screen.getByRole('dialog', { name: 'Project sharing' });
+
+    // The revoked invitation's row, and the button in it, are gone.
+    const revoke = await screen.findByRole('button', {
+      name: 'Revoke invitation for Invitation 1'
+    });
+    vi.mocked(sharingClient.getProjectSharing).mockImplementation(
+      async (projectId) => ({
+        projectId,
+        ownerUserId: owner,
+        members: [
+          {
+            userId: member,
+            email: 'member@example.com',
+            role: 'viewer',
+            createdAt: 1,
+            updatedAt: 1
+          }
+        ],
+        invitations: []
+      })
+    );
+    await user.click(revoke);
+    await waitFor(() => expect(revoke).not.toBeInTheDocument());
+    await waitFor(() => expect(dialog).toHaveFocus());
+
+    // A failed action keeps its control, which gets focus back with the
+    // error. Chrome drops focus from a control once it is disabled; happy-dom
+    // keeps it there, so the drop is made by hand.
+    const roleSelect = screen.getByLabelText<HTMLSelectElement>(
+      'Role for Collaborator 1'
+    );
+    await user.selectOptions(roleSelect, 'editor');
+    expect(roleSelect).toBeDisabled();
+    act(() => {
+      roleSelect.disabled = false;
+      roleSelect.blur();
+      roleSelect.disabled = true;
+    });
+    expect(document.activeElement).toBe(document.body);
+    await act(async () =>
+      failRoleChange(new Error('The role could not be changed.'))
+    );
+    expect(screen.getByText('The role could not be changed.')).toBeVisible();
+    expect(roleSelect).toHaveFocus();
+  });
+
+  it('closes on Escape once focus has fallen out of it', async () => {
+    const onClose = vi.fn();
+    const user = userEvent.setup();
+    render(
+      <ProjectSharingDialog
+        projectId="project"
+        role="viewer"
+        collaborationStatus="live"
+        lease={null}
+        client={client()}
+        onClose={onClose}
+      />
+    );
+    (document.activeElement as HTMLElement | null)?.blur();
+    expect(document.activeElement).toBe(document.body);
+    await user.keyboard('{Escape}');
+    expect(onClose).toHaveBeenCalledOnce();
   });
 
   it('mints a share link shown once, copies it, and revokes active links', async () => {
@@ -392,6 +481,9 @@ describe('ProjectSharingDialog', () => {
     expect(screen.getByRole('button', { name: 'Copied' })).toBeVisible();
     expect(screen.getByText('Shown once — copy it now.')).toBeVisible();
     expect(screen.getByText(/^Link created /)).toBeVisible();
+    expect(screen.getByText(/^Link created /).closest('li')).toHaveTextContent(
+      /Tweak/
+    );
 
     await user.click(
       screen.getByRole('button', { name: /Revoke share link created/ })

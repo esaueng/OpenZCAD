@@ -95,14 +95,33 @@ describe('ExportDialog', () => {
     expect(screen.queryByRole('radio', { name: /OBJ/ })).not.toBeNull();
   });
 
-  it('names glTF’s own unit rather than the slicers’ millimetres', async () => {
+  it('names glTF’s own unit rather than the slicers’ millimeters', async () => {
     const user = userEvent.setup();
     renderDialog();
-    expect(screen.getByText(/in millimetres, ready for slicing/)).toBeVisible();
+    expect(screen.getByText(/in millimeters, ready for slicing/)).toBeVisible();
 
     await user.click(screen.getByLabelText(/glTF \(GLB\)/));
 
-    expect(screen.getByText(/in metres, the unit glTF defines/)).toBeVisible();
+    expect(screen.getByText(/in meters, the unit glTF defines/)).toBeVisible();
+  });
+
+  /** The selected preset was shown by its colour alone. */
+  it('exposes the selected quality preset as pressed', async () => {
+    const user = userEvent.setup();
+    renderDialog();
+    const standard = screen.getByRole('button', { name: /Standard/ });
+    const fine = screen.getByRole('button', { name: /Fine/ });
+    const custom = screen.getByRole('button', { name: 'Custom' });
+    expect(standard).toHaveAttribute('aria-pressed', 'true');
+    expect(fine).toHaveAttribute('aria-pressed', 'false');
+    expect(custom).toHaveAttribute('aria-pressed', 'false');
+
+    await user.click(fine);
+    expect(fine).toHaveAttribute('aria-pressed', 'true');
+    expect(standard).toHaveAttribute('aria-pressed', 'false');
+    await user.click(custom);
+    expect(custom).toHaveAttribute('aria-pressed', 'true');
+    expect(fine).toHaveAttribute('aria-pressed', 'false');
   });
 
   it('offers binary PLY at the standard preset', async () => {
@@ -150,7 +169,9 @@ describe('ExportDialog', () => {
     );
     expect(screen.getByText('Base')).toBeInTheDocument();
     expect(screen.getByText('Boss')).toBeInTheDocument();
-    expect(screen.getByText(/3 open, 1 non-manifold edge/)).toBeInTheDocument();
+    expect(
+      screen.getByText('3 open edges, 1 non-manifold edge')
+    ).toBeInTheDocument();
   });
 
   it('marks a report stale when the quality changes', async () => {

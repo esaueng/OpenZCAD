@@ -14,10 +14,16 @@ export interface ProjectPropertiesDialogProps {
   onClose(): void;
 }
 
+/** The start screen tile's exact form (its tooltip): no seconds. */
 function dateLabel(value: string | undefined): string {
-  return value && Number.isFinite(Date.parse(value))
-    ? new Date(value).toLocaleString()
-    : 'Not recorded';
+  if (!value || !Number.isFinite(Date.parse(value))) {
+    return 'Not recorded';
+  }
+  const date = new Date(value);
+  return `${date.toLocaleDateString()} ${date.toLocaleTimeString(undefined, {
+    hour: 'numeric',
+    minute: '2-digit'
+  })}`;
 }
 
 export function ProjectPropertiesDialog({
@@ -31,7 +37,7 @@ export function ProjectPropertiesDialog({
   const [properties, setProperties] = useState<ProjectProperties | null>(null);
   const [loading, setLoading] = useState(true);
   const [attempt, setAttempt] = useState(0);
-  useModalFocus(ref, { autoFocus: true });
+  useModalFocus(ref, { autoFocus: true, onEscape: onClose });
   useEffect(() => {
     let cancelled = false;
     setLoading(true);
@@ -117,7 +123,9 @@ export function ProjectPropertiesDialog({
   return (
     <div
       className="modal-backdrop"
-      onClick={(event) => {
+      // On press, not click: a drag that selects the project name or ID and
+      // ends past the card fires its click on the backdrop.
+      onMouseDown={(event) => {
         if (event.target === event.currentTarget) onClose();
       }}
     >
@@ -127,6 +135,7 @@ export function ProjectPropertiesDialog({
         role="dialog"
         aria-modal="true"
         aria-labelledby={titleId}
+        tabIndex={-1}
         onKeyDown={(event) => {
           if (event.key === 'Escape') {
             event.stopPropagation();
@@ -150,7 +159,7 @@ export function ProjectPropertiesDialog({
         </header>
         {loading && (
           <p role="status">
-            <LoaderCircle size={14} aria-hidden="true" />
+            <LoaderCircle size={14} className="spin" aria-hidden="true" />
             Loading project details…
           </p>
         )}
@@ -159,6 +168,7 @@ export function ProjectPropertiesDialog({
             Project details could not be loaded.{' '}
             <button
               type="button"
+              className="secondary"
               onClick={() => setAttempt((value) => value + 1)}
             >
               Retry
@@ -193,7 +203,7 @@ export function ProjectPropertiesDialog({
           </p>
         )}
         <footer className="project-properties-actions">
-          <button type="button" onClick={onClose}>
+          <button type="button" className="secondary" onClick={onClose}>
             Close
           </button>
         </footer>
