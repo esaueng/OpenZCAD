@@ -1343,6 +1343,12 @@
   overflow-y: auto;
 }
 
+/* The list is a focusable region so the keyboard can scroll it; the
+   card's overflow clipped an outset ring on three sides. */
+.shortcuts-grid:focus-visible {
+  outline-offset: -2px;
+}
+
 /*
  * The key column is as wide as the section's longest binding and every row
  * shares it (subgrid). A fixed 148px column was too narrow for "Ctrl/Cmd+

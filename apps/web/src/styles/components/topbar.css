@@ -119,7 +119,28 @@
   opacity: 1;
 }
 
+/* Inside the edge, not around it: the breadcrumb clips overflow for the
+   name's ellipsis, and the global ring outside the button lost its top,
+   bottom and left to that clip. */
+.project-title-button:focus-visible {
+  outline-offset: -2px;
+}
+
+/* Where the name is cut short, the hidden pencil's reserved 16px read as a
+   gap between the ellipsis and the units. The button's tooltip still says
+   it renames. */
+@media (max-width: 900px) {
+  .project-title-button svg {
+    display: none;
+  }
+}
+
+/* Shrinks with the breadcrumb, which clips: at 800px wide the field ran
+   past it, cutting off its border and the text by the caret. */
 .project-title-input {
+  flex: 0 1 auto;
+  min-width: 0;
+  max-width: 100%;
   width: clamp(120px, 18vw, 280px);
   height: 28px;
   padding: 0 7px;

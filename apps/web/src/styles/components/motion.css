@@ -332,8 +332,11 @@ textarea {
   animation: oz-pop var(--dur-base) var(--ease-out);
 }
 
+/* Inert as well (Toast.tsx): a double-click's second press reached the
+   fading Undo and undid a second step. */
 .toast.closing {
   animation: oz-fade-out var(--dur-fast) var(--ease-out) forwards;
+  pointer-events: none;
 }
 
 @keyframes oz-fade-out {

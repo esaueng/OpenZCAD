@@ -717,6 +717,10 @@
   border: var(--border-strong);
   border-radius: var(--radius-lg);
   box-shadow: var(--shadow-3);
+  /* The shadow stops at the float's foot: it fell on the field below, a
+     child's shadow painting over its parent, and in light the open bar
+     read as disabled. Above and to the sides it lifts the list as before. */
+  clip-path: inset(-64px -64px 0 -64px);
   overflow: hidden;
   cursor: default;
   animation: command-bar-rise var(--dur-base) var(--ease-out);

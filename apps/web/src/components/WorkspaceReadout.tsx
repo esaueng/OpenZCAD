@@ -186,6 +186,9 @@ export function WorkspaceReadout({
         <button
           type="button"
           className={`workspace-toast-body${quiet ? ' quiet' : ''}`}
+          // Faded out, it was an invisible tab stop that opened the log. The
+          // rail's log button stays the keyboard path.
+          tabIndex={shown ? undefined : -1}
           title={
             quiet
               ? 'View activity log'

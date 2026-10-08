@@ -139,7 +139,9 @@
   white-space: normal;
 }
 
-.status-log-detail {
+/* Scoped like the rule above, which outranked it and folded a multi-line
+   detail onto one line. */
+.status-log-copy > .status-log-detail {
   color: var(--color-text-subtle);
   white-space: pre-wrap;
 }

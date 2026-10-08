@@ -213,12 +213,20 @@ export function TopBar({
   const [editingProjectName, setEditingProjectName] = useState(false);
   const [projectNameDraft, setProjectNameDraft] = useState(projectName ?? '');
   const projectNameInputRef = useRef<HTMLInputElement>(null);
+  const projectTitleButtonRef = useRef<HTMLButtonElement>(null);
+  // Enter and Escape end the rename with focus in the field it removes;
+  // the title takes it back. A blur commit leaves focus where it went.
+  const refocusProjectTitleRef = useRef(false);
   const fileMenuRef = useRef<HTMLDetailsElement>(null);
+  const importInputRef = useRef<HTMLInputElement>(null);
   const saveGlyph = saveGlyphFor(saveState);
 
   useEffect(() => {
     if (editingProjectName) {
       projectNameInputRef.current?.select();
+    } else if (refocusProjectTitleRef.current) {
+      refocusProjectTitleRef.current = false;
+      projectTitleButtonRef.current?.focus();
     }
   }, [editingProjectName]);
 
@@ -262,14 +270,27 @@ export function TopBar({
   }, []);
 
   /**
+   * Closes the menu for an item that opens a dialog. The dialog hands focus
+   * back to whatever had it when it opened, and an item inside the closed
+   * menu cannot take it — focus fell to <body> — so the File button takes
+   * it first.
+   */
+  function closeFileMenuForDialog() {
+    const fileMenu = fileMenuRef.current;
+    if (!fileMenu) {
+      return;
+    }
+    fileMenu.querySelector('summary')?.focus();
+    fileMenu.open = false;
+  }
+
+  /**
    * Export Mesh… opens a dialog, and the menu stayed open underneath it,
    * still showing when the dialog closed. Items that act in place (a STEP
    * download, the stored-file list) keep the menu open as before.
    */
   function openMeshExportFromMenu() {
-    if (fileMenuRef.current) {
-      fileMenuRef.current.open = false;
-    }
+    closeFileMenuForDialog();
     onOpenMeshExport();
   }
 
@@ -337,9 +358,7 @@ export function TopBar({
 
   /** Save items close the menu: Save as… opens a dialog over it. */
   function saveFromMenu(name: boolean) {
-    if (fileMenuRef.current) {
-      fileMenuRef.current.open = false;
-    }
+    closeFileMenuForDialog();
     if (name) {
       onSaveAs();
     } else {
@@ -383,9 +402,11 @@ export function TopBar({
             onKeyDown={(event) => {
               if (event.key === 'Enter') {
                 event.preventDefault();
+                refocusProjectTitleRef.current = true;
                 commitProjectRename();
               } else if (event.key === 'Escape') {
                 event.preventDefault();
+                refocusProjectTitleRef.current = true;
                 setProjectNameDraft(projectName);
                 setEditingProjectName(false);
               }
@@ -393,9 +414,11 @@ export function TopBar({
           />
         ) : canRenameProject ? (
           <button
+            ref={projectTitleButtonRef}
             className="project-title-button"
             type="button"
-            aria-label="Rename project"
+            // Starts with the name it shows (WCAG 2.5.3), then the action.
+            aria-label={`${projectName}, rename project`}
             title="Rename project"
             onClick={beginProjectRename}
           >
@@ -532,10 +555,11 @@ export function TopBar({
                   ? `Project sharing · ${collaborationLabel}`
                   : 'Sign in to share'
               }
+              // Each name carries the label the chip shows (WCAG 2.5.3).
               aria-label={
                 session
                   ? `Open project sharing · ${collaborationLabel}`
-                  : 'Project sharing · Sign in to share'
+                  : `${collaborationLabel} · Sign in to share`
               }
               disabled={!projectName}
               onClick={session ? onOpenSharing : onSignIn}
@@ -553,11 +577,23 @@ export function TopBar({
               </StableLabel>
             </button>
           ) : null}
-          <details ref={fileMenuRef} className="topbar-menu file-menu">
+          <details
+            ref={fileMenuRef}
+            className="topbar-menu file-menu"
+            // Tabbing past its last item left it open over the stage. Only a
+            // move to another control closes it: a press on its own labels
+            // drops focus to nothing, and the pointer handler covers clicks.
+            onBlur={(event) => {
+              const next = event.relatedTarget;
+              if (next instanceof Node && !event.currentTarget.contains(next)) {
+                event.currentTarget.open = false;
+              }
+            }}
+          >
             <summary
               className="secondary topbar-action"
-              title="Import and export"
-              aria-label={`Import and export${
+              title="File: save, import and export"
+              aria-label={`File${
                 artifacts.length > 0
                   ? ` · ${artifacts.length} stored ${artifacts.length === 1 ? 'file' : 'files'}`
                   : ''
@@ -605,28 +641,34 @@ export function TopBar({
               </button>
               <div className="topbar-menu-sep" />
               <strong className="topbar-menu-label">Import</strong>
-              <label
+              {/* A button beside its input, as ProjectImportButton is: a
+                  label around a display:none input took no focus, so Tab
+                  went past it. */}
+              <button
+                type="button"
                 className="topbar-menu-item"
                 title="Import FreeCAD (.FCStd), STEP, a mesh file (STL, 3MF, OBJ, GLB, PLY), or a paired Shapr3D project and STEP"
+                onClick={() => importInputRef.current?.click()}
               >
                 <Upload size={13} aria-hidden="true" />
                 <span>Import CAD files…</span>
                 <small>FreeCAD · STEP · STL · 3MF · OBJ · GLB · PLY</small>
-                <input
-                  type="file"
-                  aria-label="Import FreeCAD, STEP or a mesh file…"
-                  accept=".fcstd,.shapr,.stl,.step,.stp,.3mf,.obj,.glb,.ply"
-                  multiple
-                  style={{ display: 'none' }}
-                  onChange={(event: ChangeEvent<HTMLInputElement>) => {
-                    const files = [...(event.target.files ?? [])];
-                    event.target.value = '';
-                    if (files.length > 0) {
-                      onImportFiles(files);
-                    }
-                  }}
-                />
-              </label>
+              </button>
+              <input
+                ref={importInputRef}
+                type="file"
+                aria-label="Import FreeCAD, STEP or a mesh file…"
+                accept=".fcstd,.shapr,.stl,.step,.stp,.3mf,.obj,.glb,.ply"
+                multiple
+                hidden
+                onChange={(event: ChangeEvent<HTMLInputElement>) => {
+                  const files = [...(event.target.files ?? [])];
+                  event.target.value = '';
+                  if (files.length > 0) {
+                    onImportFiles(files);
+                  }
+                }}
+              />
               {onImportProject && (
                 <ProjectImportButton
                   onImport={onImportProject}
@@ -634,6 +676,7 @@ export function TopBar({
                   hint=".openzcad backup"
                 />
               )}
+              <div className="topbar-menu-sep" />
               <strong className="topbar-menu-label">Export</strong>
               <button
                 type="button"
@@ -650,12 +693,12 @@ export function TopBar({
                 type="button"
                 className="topbar-menu-item"
                 disabled={!canExport}
-                title={exportTitle('3MF, STL, OBJ or glTF')}
+                title={exportTitle('3MF, STL, OBJ, glTF or PLY')}
                 onClick={openMeshExportFromMenu}
               >
                 <Download size={13} aria-hidden="true" />
                 <span>Export Mesh…</span>
-                <small>3MF · STL · OBJ · glTF</small>
+                <small>3MF · STL · OBJ · glTF · PLY</small>
               </button>
               {onExportProject && (
                 <button

@@ -2096,7 +2096,7 @@ test('the control reference shows the mouse bindings, not just the keys', async 
   await expect(page.locator('.viewer-host canvas')).toBeVisible();
 
   await page.keyboard.press('?');
-  const sheet = page.getByRole('dialog', { name: 'Keyboard shortcuts' });
+  const sheet = page.getByRole('dialog', { name: 'Controls', exact: true });
   await expect(sheet).toBeVisible();
 
   // Orbit is Shift+drag and pan is right-drag. Neither is guessable, and the

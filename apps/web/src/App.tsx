@@ -45,6 +45,7 @@ import {
 } from 'react';
 import { ExportDialogBoundary } from './components/ExportDialogBoundary';
 import {
+  Box,
   Camera,
   Check,
   Combine,
@@ -17652,6 +17653,26 @@ export function App() {
     }));
     if (hidden) panels.release('drawer');
   };
+  // Ctrl+Shift+M steps View → Tweak → Build past whatever the project locks,
+  // so only the row it would land on carries it as its shortcut.
+  const modeCycle: readonly WorkspaceMode[] = ['view', 'tweak', 'build'];
+  const modeShortcutTarget = [1, 2]
+    .map(
+      (step) =>
+        modeCycle[
+          (modeCycle.indexOf(resolvedWorkspaceMode) + step) % modeCycle.length
+        ]!
+    )
+    .find(
+      (mode) =>
+        (mode === 'build'
+          ? buildModeDisabledReason
+          : mode === 'tweak'
+            ? tweakModeDisabledReason
+            : null) === null
+    );
+  const modeShortcut = (mode: WorkspaceMode) =>
+    mode === modeShortcutTarget ? 'Ctrl+Shift+M' : undefined;
   const paletteCommands: PaletteCommand[] = [
     // Modeling tools leave the palette entirely in the reading workspaces
     // rather than appearing greyed out: a list of things you cannot do is
@@ -17832,8 +17853,10 @@ export function App() {
     },
     {
       id: 'file-save-named',
-      label: 'Save revision with a name…',
+      // As the File menu names it; "name" still finds it.
+      label: 'Save revision as…',
       group: 'File',
+      keywords: ['name', 'named'],
       shortcut: 'Ctrl+Shift+S',
       icon: <Save size={16} aria-hidden="true" />,
       run: openSaveNameDialog
@@ -17850,7 +17873,7 @@ export function App() {
     },
     {
       id: 'file-import-project',
-      label: 'Import project',
+      label: 'Import project…',
       group: 'File',
       icon: <Upload size={16} aria-hidden="true" />,
       disabledReason: projectTransferBusy
@@ -17885,9 +17908,9 @@ export function App() {
       id: 'file-export-mesh',
       // Named as the File menu names it; the formats are search terms. The
       // palette said "3MF / STL" after OBJ and glTF had shipped.
-      label: 'Export mesh…',
+      label: 'Export Mesh…',
       group: 'File',
-      keywords: ['3mf', 'stl', 'obj', 'gltf', 'mesh'],
+      keywords: ['3mf', 'stl', 'obj', 'gltf', 'ply', 'mesh'],
       icon: <Download size={16} aria-hidden="true" />,
       disabledReason: exportBodyIds.length === 0 ? 'Create a body first' : null,
       run: () => setMeshExportOpen(true)
@@ -17915,7 +17938,7 @@ export function App() {
             id: 'workspace-mode-view',
             label: 'Switch to View mode',
             group: 'General',
-            shortcut: 'Ctrl+Shift+M',
+            shortcut: modeShortcut('view'),
             icon: <Eye size={16} aria-hidden="true" />,
             run: () => handleWorkspaceMode('view')
           } satisfies PaletteCommand
@@ -17927,7 +17950,7 @@ export function App() {
             id: 'workspace-mode-tweak',
             label: 'Switch to Tweak mode',
             group: 'General',
-            shortcut: 'Ctrl+Shift+M',
+            shortcut: modeShortcut('tweak'),
             icon: <SlidersHorizontal size={16} aria-hidden="true" />,
             disabledReason: tweakModeDisabledReason,
             run: () => handleWorkspaceMode('tweak')
@@ -17940,8 +17963,8 @@ export function App() {
             id: 'workspace-mode-build',
             label: 'Switch to Build mode',
             group: 'General',
-            shortcut: 'Ctrl+Shift+M',
-            icon: <PenLine size={16} aria-hidden="true" />,
+            shortcut: modeShortcut('build'),
+            icon: <Box size={16} aria-hidden="true" />,
             disabledReason: buildModeDisabledReason,
             run: () => handleWorkspaceMode('build')
           } satisfies PaletteCommand
