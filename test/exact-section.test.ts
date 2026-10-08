@@ -1,4 +1,4 @@
-import { afterAll, beforeAll, describe, expect, it } from 'vitest';
+import { afterAll, beforeAll, describe, expect, it, vi } from 'vitest';
 import { writeDxf } from '@openzcad/io-dxf';
 import {
   exactSolidSection,
@@ -63,7 +63,9 @@ function boredBar(): number {
 
 function expectOk(outcome: ExactSectionOutcome): ExactSectionSuccess {
   if (outcome.status !== 'ok') {
-    throw new Error(`Expected an exact section, got ${outcome.reason}: ${outcome.message}`);
+    throw new Error(
+      `Expected an exact section, got ${outcome.reason}: ${outcome.message}`
+    );
   }
   return outcome;
 }
@@ -150,22 +152,51 @@ describe('a through hole in the section', () => {
     expect(section.positions.length / 3).toBeGreaterThan(4);
   });
 
-  it('refuses the plane where the kernel drops the bore from the outline', () => {
+  it('refuses a bore-parallel section without authoritative cap clipping', () => {
     const bar = boredBar();
     // Down the bore axis. The true cross-section is 20x6 minus a 4x6 slot;
-    // the pinned kernel returns the undrilled 120 mm^2 rectangle instead.
+    // The kernel refuses this configuration before producing an outline.
     const outcome = exactSolidSection(kernel, bar, plane([0, 5, 0], [0, 1, 0]));
     expect(outcome.status).toBe('refused');
     if (outcome.status !== 'refused') return;
-    expect(outcome.reason).toBe('area-mismatch');
-    expect(outcome.message).toMatch(/disagrees with the tessellated witness/);
+    expect(outcome.reason).toBe('kernel-refused');
+    expect(outcome.message).toContain(
+      'cylindrical section parallel to axis requires authoritative cap clipping'
+    );
+  });
+
+  it('independently refuses an outline that omits the bore', () => {
+    const bar = boredBar();
+    const undrilled = kernel.makeBox(20, 10, 6);
+    const cut = plane([0, 5, 0], [0, 1, 0]);
+    // Inject the historical incorrect 120 mm^2 rectangle while preserving
+    // the bored solid's own tessellation as an independent 96 mm^2 witness.
+    const incorrectFaces = kernel.section(
+      undrilled,
+      ...cut.origin,
+      ...cut.normal
+    );
+    const section = vi.spyOn(kernel, 'section').mockReturnValue(incorrectFaces);
+    try {
+      const outcome = exactSolidSection(kernel, bar, cut);
+      expect(outcome.status).toBe('refused');
+      if (outcome.status !== 'refused') return;
+      expect(outcome.reason).toBe('area-mismatch');
+      expect(outcome.message).toMatch(/disagrees with the tessellated witness/);
+    } finally {
+      section.mockRestore();
+    }
   });
 });
 
 describe('planes that break a naive section', () => {
   it('refuses a plane that misses the body entirely', () => {
     const bar = kernel.makeBox(20, 10, 6);
-    const outcome = exactSolidSection(kernel, bar, plane([0, 0, 30], [0, 0, 1]));
+    const outcome = exactSolidSection(
+      kernel,
+      bar,
+      plane([0, 0, 30], [0, 0, 1])
+    );
     expect(outcome.status).toBe('refused');
     if (outcome.status !== 'refused') return;
     expect(outcome.reason).toBe('plane-misses-body');
@@ -183,7 +214,11 @@ describe('planes that break a naive section', () => {
 
   it('refuses a plane tangent to a curved face', () => {
     const ball = kernel.makeSphere(5, 32);
-    const outcome = exactSolidSection(kernel, ball, plane([0, 0, 5], [0, 0, 1]));
+    const outcome = exactSolidSection(
+      kernel,
+      ball,
+      plane([0, 0, 5], [0, 0, 1])
+    );
     expect(outcome.status).toBe('refused');
     if (outcome.status !== 'refused') return;
     expect(outcome.reason).toBe('plane-misses-body');
@@ -237,7 +272,11 @@ describe('planes that break a naive section', () => {
     const slot = kernel.makeBox(10, 12, 6);
     kernel.transformSolid(slot, translation(10, -1, 4));
     const fork = kernel.cut(base, slot);
-    const outcome = exactSolidSection(kernel, fork, plane([0, 0, 7], [0, 0, 1]));
+    const outcome = exactSolidSection(
+      kernel,
+      fork,
+      plane([0, 0, 7], [0, 0, 1])
+    );
     expect(outcome.status).toBe('refused');
     if (outcome.status !== 'refused') return;
     expect(outcome.reason).toBe('kernel-refused');
@@ -257,10 +296,21 @@ describe('the tessellated witness', () => {
       outward: boolean
     ) => {
       const base = positions.length / 3;
-      positions.push(a[0], a[1], -1, b[0], b[1], -1, b[0], b[1], 1, a[0], a[1], 1);
-      const quad = outward
-        ? [0, 1, 2, 0, 2, 3]
-        : [0, 2, 1, 0, 3, 2];
+      positions.push(
+        a[0],
+        a[1],
+        -1,
+        b[0],
+        b[1],
+        -1,
+        b[0],
+        b[1],
+        1,
+        a[0],
+        a[1],
+        1
+      );
+      const quad = outward ? [0, 1, 2, 0, 2, 3] : [0, 2, 1, 0, 3, 2];
       for (const index of quad) indices.push(base + index);
     };
     const outer: readonly (readonly [number, number])[] = [
@@ -299,16 +349,16 @@ describe('section DXF export', () => {
     const entities = sectionDxfEntities(kernel, section.faces, cut, 1);
     const text = writeDxf(entities);
     const lines = text.split('\r\n').filter((line) => line.length > 0);
-    const pairs = lines.map(
-      (value, index) => [index, value] as const
-    );
+    const pairs = lines.map((value, index) => [index, value] as const);
     expect(text).toContain('$INSUNITS');
     // $INSUNITS 4 — millimetres. The value follows its name in the header.
     const unitsAt = pairs.find(([, value]) => value === '$INSUNITS')![0];
     expect(lines[unitsAt + 1]).toBe('70');
     expect(lines[unitsAt + 2]).toBe('4');
     // Four outline lines plus the bore's 64 wall segments.
-    expect(entities.filter((entity) => entity.kind === 'line')).toHaveLength(68);
+    expect(entities.filter((entity) => entity.kind === 'line')).toHaveLength(
+      68
+    );
     const extent = entities.flatMap((entity) =>
       entity.kind === 'line' ? [entity.start, entity.end] : []
     );
