@@ -63,7 +63,7 @@ describe('TweakPanel mesh export', () => {
     // It said "3MF or STL" after OBJ, glTF and PLY had shipped.
     expect(
       screen.getByRole('button', {
-        name: 'Export Mesh… — 3MF, STL, OBJ, glTF or PLY'
+        name: 'Export mesh… — 3MF, STL, OBJ, glTF or PLY'
       })
     ).toBeInTheDocument();
   });

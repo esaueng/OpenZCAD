@@ -77,10 +77,7 @@ export function CloudDataDeletionDialog({
   const copy = COPY[scope];
   useModalFocus(dialogRef, {
     autoFocus: true,
-    initialFocusRef: inputRef,
-    onEscape: () => {
-      if (!busy) onClose();
-    }
+    initialFocusRef: inputRef
   });
 
   useEffect(() => {

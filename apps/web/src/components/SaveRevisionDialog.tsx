@@ -28,11 +28,7 @@ export function SaveRevisionDialog({
   const dialogRef = useRef<HTMLDivElement | null>(null);
   const inputRef = useRef<HTMLInputElement | null>(null);
   const [name, setName] = useState('');
-  useModalFocus(dialogRef, {
-    autoFocus: true,
-    initialFocusRef: inputRef,
-    onEscape: onCancel
-  });
+  useModalFocus(dialogRef, { autoFocus: true, initialFocusRef: inputRef });
 
   const trimmed = name.trim();
 

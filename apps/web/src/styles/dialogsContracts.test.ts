@@ -46,7 +46,7 @@ describe('dialog focus', () => {
   it('draws a focus indicator on the borderless sharing invite field', () => {
     // `.sharing-invite input:focus` strips border, shadow and outline.
     expect(rule('.sharing-invite input:focus-visible')).toMatch(
-      /outline:\s*2px solid var\(--color-accent\)/
+      /box-shadow:\s*inset 0 -2px 0 var\(--color-accent\)/
     );
   });
 });

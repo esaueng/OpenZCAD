@@ -34,7 +34,7 @@ interface DisplayModeIconProps {
  * a lit solid with its edges drawn for `shaded-edges`, and an all-edges cube
  * with its hidden edges ghosted for `wireframe`.
  */
-export function DisplayModeIcon({ mode, size = 15 }: DisplayModeIconProps) {
+export function DisplayModeIcon({ mode, size = 16 }: DisplayModeIconProps) {
   const faces = mode === 'wireframe' ? null : FACE_OPACITY[mode];
   return (
     <svg
@@ -67,7 +67,7 @@ export function DisplayModeIcon({ mode, size = 15 }: DisplayModeIconProps) {
  * Axis triad, matching the arms on the orientation cube. Marks the control
  * that opens the standard-view list.
  */
-export function AxisTriadIcon({ size = 15 }: { size?: number }) {
+export function AxisTriadIcon({ size = 16 }: { size?: number }) {
   return (
     <svg
       width={size}

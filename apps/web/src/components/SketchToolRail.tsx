@@ -157,21 +157,21 @@ const CIRCLE_MODES: {
 }[] = [
   {
     mode: 'center-radius',
-    label: 'Center Circle',
+    label: 'Center circle',
     tile: 'Center',
     detail: 'Center and radius',
     icon: CircleDot
   },
   {
     mode: 'two-point-diameter',
-    label: 'Diameter Circle',
+    label: 'Diameter circle',
     tile: 'Diameter',
     detail: 'Opposite diameter endpoints',
     icon: Diameter
   },
   {
     mode: 'three-point',
-    label: 'Three-Point Circle',
+    label: 'Three-point circle',
     tile: '3 points',
     detail: 'Three circumference points',
     icon: ThreePointCircle
@@ -792,7 +792,7 @@ export function SketchRelationsRail({
                     : onConstraintTool(armed ? null : kind)
                 }
               >
-                <Icon size={15} aria-hidden="true" />
+                <Icon size={16} aria-hidden="true" />
                 {named && (
                   <span className="sketch-relation-name" aria-hidden="true">
                     {label}

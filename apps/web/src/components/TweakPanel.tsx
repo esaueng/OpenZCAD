@@ -5,7 +5,7 @@ import { ParameterRow } from './ParameterRows';
 import { Tooltip } from './Tooltip';
 import { PartsListModeProvider } from './ViewModeRail';
 
-/** Every format the Export Mesh dialog offers; this said "3MF or STL". */
+/** Every format the Export mesh dialog offers; this said "3MF or STL". */
 const MESH_FORMATS = '3MF, STL, OBJ, glTF or PLY';
 
 interface TweakPanelProps {
@@ -112,12 +112,12 @@ export function TweakPanel({
           </button>
         </Tooltip>
         <Tooltip
-          label="Export Mesh…"
+          label="Export mesh…"
           description={`${exportTitle(MESH_FORMATS)}`}
         >
           <button
             type="button"
-            aria-label={`Export Mesh… — ${MESH_FORMATS}`}
+            aria-label={`Export mesh… — ${MESH_FORMATS}`}
             disabled={!canExport}
             onClick={onOpenMeshExport}
           >

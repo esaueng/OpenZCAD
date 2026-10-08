@@ -7,7 +7,7 @@ import {
   useState
 } from 'react';
 import type { CSSProperties } from 'react';
-import { Link2, Plus } from 'lucide-react';
+import { Link2, Plus, X } from 'lucide-react';
 import type {
   CollaborationMember,
   ProjectAccessRole,
@@ -206,7 +206,7 @@ export function ProjectSharingDialog({
   const [error, setError] = useState<string | null>(null);
   const [anchor, setAnchor] = useState<PopoverAnchor | null>(null);
   const actionOriginRef = useRef<HTMLElement | null>(null);
-  useModalFocus(dialogRef, { autoFocus: true, onEscape: onClose });
+  useModalFocus(dialogRef, { autoFocus: true });
 
   useLayoutEffect(() => {
     const measure = () => setAnchor(measureAnchor(12));
@@ -445,7 +445,7 @@ export function ProjectSharingDialog({
             aria-label="Close sharing"
             onClick={onClose}
           >
-            ×
+            <X size={14} aria-hidden="true" />
           </button>
         </header>
 

@@ -12,7 +12,7 @@ export function ResumeSessionDialog({
   onChoose(resume: boolean): void;
 }) {
   const ref = useRef<HTMLDivElement>(null);
-  useModalFocus(ref, { autoFocus: true, onEscape: () => onChoose(false) });
+  useModalFocus(ref, { autoFocus: true });
   return (
     <div className="modal-backdrop">
       <div

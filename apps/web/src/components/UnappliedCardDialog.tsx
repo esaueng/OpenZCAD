@@ -30,11 +30,7 @@ export function UnappliedCardDialog({
 }: UnappliedCardDialogProps) {
   const dialogRef = useRef<HTMLDivElement | null>(null);
   const applyRef = useRef<HTMLButtonElement | null>(null);
-  useModalFocus(dialogRef, {
-    autoFocus: true,
-    initialFocusRef: applyRef,
-    onEscape: onCancel
-  });
+  useModalFocus(dialogRef, { autoFocus: true, initialFocusRef: applyRef });
 
   return (
     <div className="modal-backdrop">

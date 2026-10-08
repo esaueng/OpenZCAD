@@ -29,7 +29,7 @@ export interface SketchWorkflowProps {
 }
 
 /**
- * The live tool named as the rails name it ("Diameter Circle", "Fillet: 1/2
+ * The live tool named as the rails name it ("Diameter circle", "Fillet: 1/2
  * selected"). Written out here rather than capitalised by CSS, which turned
  * a pick count into "0/1 Selected".
  */

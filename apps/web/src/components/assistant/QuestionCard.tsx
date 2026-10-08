@@ -153,7 +153,7 @@ export function QuestionCard({
                       aria-label={`Change answer for ${question.prompt}`}
                       onClick={() => answer(question.id, '')}
                     >
-                      <Pencil size={10} aria-hidden="true" />
+                      <Pencil size={12} aria-hidden="true" />
                       change
                     </button>
                   )}

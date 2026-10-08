@@ -4,7 +4,7 @@ import { useModalFocus } from '../lib/useModalFocus';
 
 function ExportUnavailable({ onClose }: { onClose(): void }) {
   const dialogRef = useRef<HTMLDivElement>(null);
-  useModalFocus(dialogRef, { autoFocus: true, onEscape: onClose });
+  useModalFocus(dialogRef, { autoFocus: true });
   return (
     <div className="modal-backdrop">
       <div

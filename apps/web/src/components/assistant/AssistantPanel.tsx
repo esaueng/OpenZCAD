@@ -1553,7 +1553,7 @@ export function AssistantPanel({
                   aria-label={`Remove ${attachment.label}`}
                   onClick={() => removePending(attachment.id)}
                 >
-                  <X size={11} aria-hidden="true" />
+                  <X size={12} aria-hidden="true" />
                 </button>
               </span>
             ))}

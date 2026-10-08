@@ -1,4 +1,4 @@
-import { useLayoutEffect, useRef, type RefObject } from 'react';
+import { useLayoutEffect, type RefObject } from 'react';
 
 const FOCUSABLE = [
   'a[href]',
@@ -21,14 +21,6 @@ interface ModalFocusOptions {
    * Only for an overlay the map itself drives (the shortcut sheet).
    */
   workspaceKeys?: boolean;
-  /**
-   * Called for Escape pressed while focus has fallen out of the dialog. A
-   * click on its text or backdrop, or a focused control that turns disabled,
-   * leaves focus on the body: the dialog's own key handler never hears the
-   * key there, and the workspace keymap stands down for the modal, so nothing
-   * closed it. Escape from inside the dialog stays the dialog's to handle.
-   */
-  onEscape?: () => void;
 }
 
 interface InertState {
@@ -42,7 +34,6 @@ interface ModalRegistration {
   autoFocus: boolean;
   initialFocusRef?: RefObject<HTMLElement | null>;
   workspaceKeys: boolean;
-  escapeRef: RefObject<(() => void) | undefined>;
   restoreBackground?: () => void;
   removeKeyListener?: () => void;
   stopWaitingForContent?: () => void;
@@ -197,11 +188,23 @@ function activateModal(
 
   const onKeyDown = (event: KeyboardEvent) => {
     if (event.key === 'Escape') {
-      const onEscape = registration.escapeRef.current;
-      if (onEscape && !dialog.contains(document.activeElement)) {
+      // A button that disables itself while its request runs (Create link,
+      // Revoke, Resolve, Import) drops focus to <body>, where the dialog's
+      // own Escape handler never hears the key, and the workspace is held
+      // off by modalHoldsKeyboard: Escape did nothing until the user clicked
+      // back in. Hand the key to the dialog so its own handler, with its own
+      // busy guards, still decides.
+      const target = event.target;
+      if (target instanceof Node && !dialog.contains(target)) {
         event.preventDefault();
         event.stopPropagation();
-        onEscape();
+        dialog.dispatchEvent(
+          new KeyboardEvent('keydown', {
+            key: 'Escape',
+            bubbles: true,
+            cancelable: true
+          })
+        );
       }
       return;
     }
@@ -308,17 +311,9 @@ export function useModalFocus(
     enabled = true,
     autoFocus = false,
     initialFocusRef,
-    workspaceKeys = false,
-    onEscape
+    workspaceKeys = false
   }: ModalFocusOptions = {}
 ): void {
-  // Read at key time, so a new callback each render neither re-registers the
-  // modal nor runs a stale closure (a busy flag it checks, say).
-  const escapeRef = useRef(onEscape);
-  useLayoutEffect(() => {
-    escapeRef.current = onEscape;
-  });
-
   useLayoutEffect(() => {
     if (!enabled) {
       return;
@@ -337,8 +332,7 @@ export function useModalFocus(
       dialog,
       autoFocus,
       initialFocusRef,
-      workspaceKeys,
-      escapeRef
+      workspaceKeys
     };
     modalStack.push(registration);
     refreshActiveModal();

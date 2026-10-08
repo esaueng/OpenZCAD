@@ -650,7 +650,7 @@ export function StartScreen({
                 nudgeProject(project.projectId, offset);
               }}
             >
-              <GripVertical size={14} aria-hidden="true" />
+              <GripVertical size={12} aria-hidden="true" />
             </button>
           )}
 
@@ -671,7 +671,7 @@ export function StartScreen({
               {/* Filled when pinned: the marker stays on a pinned tile, and a
                   slashed pin there read as "not pinned". */}
               <Pin
-                size={14}
+                size={12}
                 fill={organization.pinned ? 'currentColor' : 'none'}
                 aria-hidden="true"
               />
@@ -700,7 +700,7 @@ export function StartScreen({
               }
             }}
           >
-            <MoreHorizontal size={15} aria-hidden="true" />
+            <MoreHorizontal size={12} aria-hidden="true" />
           </button>
         </div>
 
@@ -1254,7 +1254,7 @@ export function StartScreen({
                     aria-label="Clear search"
                     onClick={() => setQuery('')}
                   >
-                    <X size={13} aria-hidden="true" />
+                    <X size={12} aria-hidden="true" />
                   </button>
                 )}
               </div>

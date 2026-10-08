@@ -221,14 +221,14 @@ describe('useModalFocus', () => {
   /**
    * A dialog container without a tabindex gives up focus to the body when its
    * text is clicked, and its own key handler then never hears Escape. The
-   * hook's fallback has to close it, and only once when focus is inside.
+   * hook hands the key to it, and only once when focus is inside.
    */
   it('still closes on Escape after a click on non-focusable dialog text', async () => {
     const user = userEvent.setup();
     const onClose = vi.fn();
     function TextModal() {
       const dialogRef = useRef<HTMLDivElement | null>(null);
-      useModalFocus(dialogRef, { autoFocus: true, onEscape: onClose });
+      useModalFocus(dialogRef, { autoFocus: true });
       return (
         <div className="modal-backdrop">
           <div
@@ -373,5 +373,45 @@ describe('useModalFocus', () => {
     const passing = render(<Sheet workspaceKeys />);
     expect(modalHoldsKeyboard()).toBe(false);
     passing.unmount();
+  });
+
+  it('hands Escape to the dialog when a disabled button has dropped focus to the body', () => {
+    // The dialog's Escape handler lives on its own element; a control that
+    // disabled itself mid-request left focus on <body>, out of its reach.
+    let closed = 0;
+    function EscapeModal() {
+      const dialogRef = useRef<HTMLDivElement | null>(null);
+      useModalFocus(dialogRef, { autoFocus: true });
+      return (
+        <div className="modal-backdrop">
+          <div
+            ref={dialogRef}
+            role="dialog"
+            aria-label="Escape dialog"
+            tabIndex={-1}
+            onKeyDown={(event) => {
+              if (event.key === 'Escape') {
+                closed += 1;
+              }
+            }}
+          >
+            <button type="button">Busy action</button>
+          </div>
+        </div>
+      );
+    }
+    render(<EscapeModal />);
+    (document.activeElement as HTMLElement | null)?.blur();
+    expect(document.activeElement).toBe(document.body);
+
+    document.body.dispatchEvent(
+      new KeyboardEvent('keydown', {
+        key: 'Escape',
+        bubbles: true,
+        cancelable: true
+      })
+    );
+
+    expect(closed).toBe(1);
   });
 });

@@ -242,7 +242,7 @@ describe('TopBar File menu', () => {
     expect(summary).toHaveFocus();
 
     fileMenu().open = true;
-    const mesh = screen.getByRole('button', { name: /^Export Mesh…/ });
+    const mesh = screen.getByRole('button', { name: /^Export mesh…/ });
     mesh.focus();
     fireEvent.click(mesh);
     expect(onOpenMeshExport).toHaveBeenCalledOnce();

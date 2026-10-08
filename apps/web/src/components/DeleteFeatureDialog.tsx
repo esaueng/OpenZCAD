@@ -32,11 +32,7 @@ export function DeleteFeatureDialog({
 }: DeleteFeatureDialogProps) {
   const dialogRef = useRef<HTMLDivElement | null>(null);
   const deleteRef = useRef<HTMLButtonElement | null>(null);
-  useModalFocus(dialogRef, {
-    autoFocus: true,
-    initialFocusRef: deleteRef,
-    onEscape: onCancel
-  });
+  useModalFocus(dialogRef, { autoFocus: true, initialFocusRef: deleteRef });
 
   const named = dependents.slice(0, NAMED_DEPENDENTS);
   const unnamed = dependents.length - named.length;

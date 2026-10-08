@@ -434,7 +434,7 @@ button.save-state:active:not(:disabled),
 .collaboration-state:disabled,
 .collaboration-state[aria-disabled='true'] {
   cursor: default;
-  opacity: 0.55;
+  opacity: var(--opacity-disabled);
 }
 
 /* The save chip as a readout (F21): it shows state and takes no click, so it

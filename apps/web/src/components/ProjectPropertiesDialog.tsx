@@ -37,7 +37,7 @@ export function ProjectPropertiesDialog({
   const [properties, setProperties] = useState<ProjectProperties | null>(null);
   const [loading, setLoading] = useState(true);
   const [attempt, setAttempt] = useState(0);
-  useModalFocus(ref, { autoFocus: true, onEscape: onClose });
+  useModalFocus(ref, { autoFocus: true });
   useEffect(() => {
     let cancelled = false;
     setLoading(true);
@@ -123,8 +123,8 @@ export function ProjectPropertiesDialog({
   return (
     <div
       className="modal-backdrop"
-      // On press, not click: a drag that selects the project name or ID and
-      // ends past the card fires its click on the backdrop.
+      // Mouse-down, as the other dialogs: a text selection dragged out of
+      // the dialog released over the backdrop and closed it on click.
       onMouseDown={(event) => {
         if (event.target === event.currentTarget) onClose();
       }}
@@ -154,7 +154,7 @@ export function ProjectPropertiesDialog({
             aria-label="Close project properties"
             onClick={onClose}
           >
-            <X size={18} aria-hidden="true" />
+            <X size={14} aria-hidden="true" />
           </button>
         </header>
         {loading && (

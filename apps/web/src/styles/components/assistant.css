@@ -52,7 +52,7 @@
   );
   font-size: var(--fs-base);
   animation: assistant-dock-in var(--dur-base) var(--ease-out);
-  transition: max-height var(--dur-slow) var(--ease-out);
+  transition: max-height var(--dur-base) var(--ease-out);
 }
 
 @keyframes assistant-dock-in {
@@ -377,7 +377,7 @@
 }
 
 .assistant-suggestion:disabled {
-  opacity: 0.5;
+  opacity: var(--opacity-disabled);
   cursor: not-allowed;
 }
 
@@ -927,7 +927,7 @@
 }
 
 .assistant-verified-action:disabled {
-  opacity: 0.5;
+  opacity: var(--opacity-disabled);
   cursor: not-allowed;
 }
 
@@ -996,6 +996,6 @@
 }
 
 .assistant-foot-action:disabled {
-  opacity: 0.5;
+  opacity: var(--opacity-disabled);
   cursor: not-allowed;
 }

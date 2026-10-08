@@ -160,7 +160,7 @@ export function WorkspaceTour({
             onDismiss();
           }}
         >
-          <X size={13} aria-hidden="true" />
+          <X size={14} aria-hidden="true" />
         </button>
       </header>
       {/* A step can change on its own (it advances when its action

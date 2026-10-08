@@ -1,4 +1,4 @@
-import { useRef, useState } from 'react';
+import { useEffect, useRef, useState } from 'react';
 import {
   CircleCheck,
   Download,
@@ -137,7 +137,7 @@ export function ExportDialog({
   // Escape must still close the dialog when focus has fallen out of it (a
   // click on the backdrop drops it on the body). The workspace keymap stands
   // down while the dialog is open, so nothing else would take the key.
-  useModalFocus(dialogRef, { autoFocus: true, onEscape: onClose });
+  useModalFocus(dialogRef, { autoFocus: true });
 
   const [format, setFormat] = useState<MeshExportDialogFormat>('3mf');
   const [preset, setPreset] = useState<QualityPresetId>('standard');
@@ -151,6 +151,27 @@ export function ExportDialog({
     result: MeshQualityReport;
   } | null>(null);
   const scope = `${revision}:${bodies.map((body) => body.bodyId).join(',')}`;
+
+  // Escape must still close the dialog when focus has fallen out of it (a
+  // click on the backdrop drops it on the body). The workspace keymap stands
+  // down while the dialog is open, so nothing else would take the key.
+  useEffect(() => {
+    const onKeyDown = (event: KeyboardEvent) => {
+      const dialog = dialogRef.current;
+      // useModalFocus hands a body-targeted Escape to the dialog itself;
+      // that copy bubbles here too and was already handled there.
+      if (
+        event.key === 'Escape' &&
+        dialog &&
+        !dialog.contains(document.activeElement) &&
+        !(event.target instanceof Node && dialog.contains(event.target))
+      ) {
+        onClose();
+      }
+    };
+    window.addEventListener('keydown', onKeyDown);
+    return () => window.removeEventListener('keydown', onKeyDown);
+  }, [onClose]);
 
   const presetDeflection = QUALITY_PRESETS.find(
     (entry) => entry.id === preset

@@ -63,12 +63,7 @@ export function ProjectConflictDialog({
   const [resolving, setResolving] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const working = busy || resolving;
-  useModalFocus(dialogRef, {
-    autoFocus: true,
-    onEscape: () => {
-      if (!working) onClose();
-    }
-  });
+  useModalFocus(dialogRef, { autoFocus: true });
   const other = OTHER_SIDE[conflict.source];
   const sameGeometry =
     canonicalProjectContentKey(conflict.localDocument) ===

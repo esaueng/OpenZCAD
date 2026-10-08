@@ -375,7 +375,7 @@ function exportProgressFor(state: GeometryWorkerState): ExportProgress | null {
   }
 }
 
-/** Per-format file identity for exports from the Export Mesh dialog. */
+/** Per-format file identity for exports from the Export mesh dialog. */
 const MESH_EXPORT_FILE_INFO: Record<
   MeshExportDialogFormat,
   {
@@ -431,7 +431,6 @@ const MESH_EXPORT_FILE_INFO: Record<
 };
 import {
   MoveInstruction,
-  MoveOverlay,
   ProfileQuickAction
 } from './components/DirectModelingOverlays';
 import { composeMoveTransform } from '@openzcad/viewport/move-transform';
@@ -702,6 +701,24 @@ const LazyViewModeBar = lazyWithStaleChunkNotice(() =>
     default: module.ViewModeBar
   }))
 );
+// The Move panel is needed only once a Move starts; lazy, its fields stay
+// off the entry chunk, which runs at its budget. Its own boundary keeps a
+// chunk that fails to load (a tab left open across a deploy) to the panel
+// slot, with the Reload notice, instead of taking the workspace down.
+const LazyMoveOverlay = lazyWithStaleChunkNotice(() =>
+  import('./components/MoveOverlay').then((module) => ({
+    default: module.MoveOverlay
+  }))
+);
+function MoveOverlay(props: ComponentProps<typeof LazyMoveOverlay>) {
+  return (
+    <ErrorBoundary label="Move panel">
+      <Suspense fallback={null}>
+        <LazyMoveOverlay {...props} />
+      </Suspense>
+    </ErrorBoundary>
+  );
+}
 const LazyMeasurementDock = lazyWithStaleChunkNotice(() =>
   import('./components/MeasurementDock').then((module) => ({
     default: module.MeasurementDock
@@ -17929,7 +17946,7 @@ export function App() {
       id: 'file-export-mesh',
       // Named as the File menu names it; the formats are search terms. The
       // palette said "3MF / STL" after OBJ and glTF had shipped.
-      label: 'Export Mesh…',
+      label: 'Export mesh…',
       group: 'File',
       keywords: ['3mf', 'stl', 'obj', 'gltf', 'ply', 'mesh'],
       icon: <Download size={16} aria-hidden="true" />,

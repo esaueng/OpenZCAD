@@ -144,7 +144,7 @@ it('names the live tool as the rails do, armed tools first', () => {
       tool: 'circle',
       circleMode: 'two-point-diameter'
     })
-  ).toBe('Diameter Circle');
+  ).toBe('Diameter circle');
   // An armed relation with its picks so far, in sentence case.
   expect(
     readout({
