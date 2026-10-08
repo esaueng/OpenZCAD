@@ -1,4 +1,4 @@
-import { useRef, useState } from 'react';
+import { useEffect, useId, useRef, useState } from 'react';
 import { Eye, EyeOff, Pencil, Plus, Trash2 } from 'lucide-react';
 import type { BodyId, ParameterNode } from '@openzcad/shared';
 import { formatNumber } from '../lib/model';
@@ -84,6 +84,17 @@ export function ParameterRow({
   const [renaming, setRenaming] = useState(false);
   const [nameDraft, setNameDraft] = useState(parameter.name);
   const [pending, setPending] = useState(false);
+  const nameEditorRef = useRef<HTMLInputElement | null>(null);
+  const renameButtonRef = useRef<HTMLButtonElement | null>(null);
+  // Set when Enter or Escape closes the rename editor: the keyboard is here,
+  // so focus returns to the name rather than falling to <body>.
+  const refocusName = useRef(false);
+  useEffect(() => {
+    if (!renaming && refocusName.current) {
+      refocusName.current = false;
+      renameButtonRef.current?.focus();
+    }
+  }, [renaming]);
 
   async function commitRename() {
     const newName = nameDraft.trim();
@@ -97,6 +108,7 @@ export function ParameterRow({
       const refusal = await onRename?.(parameter.name, newName);
       if (refusal) {
         setRenameError(`${refusal} No change applied.`);
+        keepRenaming();
         return;
       }
       setRenameError(null);
@@ -107,6 +119,15 @@ export function ParameterRow({
           ? cause.message
           : 'The parameter could not be renamed.'
       );
+      keepRenaming();
+    }
+  }
+
+  /** A refused rename from Enter puts the caret back in the name to fix. */
+  function keepRenaming() {
+    if (refocusName.current) {
+      refocusName.current = false;
+      nameEditorRef.current?.focus();
     }
   }
 
@@ -169,6 +190,7 @@ export function ParameterRow({
       >
         {renaming ? (
           <input
+            ref={nameEditorRef}
             className="param-name-editor mono"
             value={nameDraft}
             spellCheck={false}
@@ -188,9 +210,14 @@ export function ParameterRow({
             onBlur={() => void commitRename()}
             onKeyDown={(event) => {
               if (event.key === 'Enter') {
+                // Cancelled, or the same key press went on to click the name
+                // button that takes focus back, and reopened this editor.
+                event.preventDefault();
+                refocusName.current = true;
                 event.currentTarget.blur();
               }
               if (event.key === 'Escape') {
+                refocusName.current = true;
                 setNameDraft(parameter.name);
                 setRenameError(null);
                 setRenaming(false);
@@ -199,6 +226,7 @@ export function ParameterRow({
           />
         ) : onRename ? (
           <button
+            ref={renameButtonRef}
             type="button"
             className="param-name param-name-button mono"
             title={`Rename parameter ${parameter.name}`}
@@ -210,7 +238,7 @@ export function ParameterRow({
             }}
           >
             <span>{parameter.name}</span>
-            <Pencil size={10} aria-hidden="true" />
+            <Pencil size={12} aria-hidden="true" />
           </button>
         ) : (
           <span className="param-name mono">{parameter.name}</span>
@@ -272,11 +300,14 @@ export function ParameterRow({
             }}
           />
         )}
-        {showValue && !parameter.toggle && (
+        {/* Always a cell, empty when it would repeat the expression: the
+            row is a grid, and a missing cell moved the buttons after it
+            one track to the left. */}
+        {!parameter.toggle && (
           <span
             className={`param-value mono ${value === undefined ? 'error' : ''}`}
           >
-            {formattedValue}
+            {showValue ? formattedValue : ''}
           </span>
         )}
         {onExpose && (
@@ -305,7 +336,17 @@ export function ParameterRow({
             className="row-delete"
             title={`Delete parameter ${parameter.name}`}
             aria-label={`Delete parameter ${parameter.name}`}
-            onClick={() => onDelete(parameter.name)}
+            onClick={(event) => {
+              const button = event.currentTarget;
+              const next = focusAfterDelete(button);
+              onDelete(parameter.name);
+              // The delete re-renders synchronously; once this row is gone,
+              // focus moves on instead of falling to <body>. A refused
+              // delete leaves the row, and focus, where they were.
+              setTimeout(() => {
+                if (!button.isConnected && next?.isConnected) next.focus();
+              }, 0);
+            }}
           >
             <Trash2 size={12} aria-hidden="true" />
           </button>
@@ -335,7 +376,7 @@ export function ParameterRow({
           ) : pending ? (
             'Checking geometry…'
           ) : (
-            `Minimum ${minimum}`
+            `Minimum ${formatNumber(minimum ?? Number.NaN)}`
           )}
         </p>
       )}
@@ -357,6 +398,27 @@ export function ParameterRow({
       )}
     </div>
   );
+}
+
+/**
+ * Where focus goes when a row's delete removes it: the next parameter's name
+ * (or expression, where names are read-only), the add row's name field after
+ * the last one, or the previous parameter at the end of a list without one.
+ */
+function focusAfterDelete(deleteButton: HTMLElement): HTMLElement | null {
+  const row = deleteButton.closest('.param-row');
+  const entry = row?.parentElement;
+  if (!entry) return null;
+  for (const sibling of [
+    entry.nextElementSibling,
+    entry.previousElementSibling
+  ]) {
+    const target = sibling?.querySelector<HTMLElement>(
+      '.param-name-button, input'
+    );
+    if (target) return target;
+  }
+  return null;
 }
 
 /**
@@ -428,6 +490,7 @@ function ToggleBodyChoices({
   return (
     <fieldset className="param-body-choices">
       <legend>Show these bodies when on</legend>
+      {bodies.length === 0 ? <p>No bodies yet.</p> : null}
       {bodies.map((body) => (
         <label key={body.bodyId}>
           <input
@@ -455,25 +518,63 @@ function ToggleBodyChoices({
 export function AddParameterRow({
   onSet,
   onConfigureToggle,
-  bodies = []
+  bodies = [],
+  existingNames = []
 }: ToggleBindingProps & {
   onSet(name: string, expression: string): void | Promise<string | null>;
+  /**
+   * Names already in the table. Setting a parameter is set-by-name, so an
+   * add under a taken name silently replaced that parameter — and every
+   * feature using it. The add row refuses one instead.
+   */
+  existingNames?: readonly string[];
 }) {
   const [name, setName] = useState('');
   const [expression, setExpression] = useState('');
   const [type, setType] = useState('number');
   const [bodyIds, setBodyIds] = useState<BodyId[]>([]);
+  const [error, setError] = useState<string | null>(null);
+  const feedbackId = useId();
+  // Bumped by every edit, so a refusal or a success that lands after the
+  // user has typed something new neither reports on nor clears the new text.
+  const edits = useRef(0);
 
-  function submit() {
-    if (!name.trim()) return;
-    if (type === 'toggle' && onConfigureToggle) {
-      onConfigureToggle(name.trim(), bodyIds);
-    } else if (expression.trim()) {
-      void onSet(name.trim(), expression.trim());
-    } else return;
+  function edited() {
+    edits.current += 1;
+    setError(null);
+  }
+
+  async function submit() {
+    const trimmedName = name.trim();
+    const trimmedExpression = expression.trim();
+    if (!trimmedName) return;
+    const toggle = type === 'toggle' && onConfigureToggle;
+    if (!toggle && !trimmedExpression) return;
+    if (existingNames.includes(trimmedName)) {
+      setError(`${trimmedName} already exists. Change it in its own row.`);
+      return;
+    }
+    const submitted = edits.current;
+    if (toggle) {
+      toggle(trimmedName, bodyIds);
+    } else {
+      let refusal: string | null | void;
+      try {
+        refusal = await onSet(trimmedName, trimmedExpression);
+      } catch {
+        refusal = 'The parameter could not be added.';
+      }
+      if (submitted !== edits.current) return;
+      // A refused add keeps what was typed, so it can be corrected.
+      if (refusal) {
+        setError(`${refusal} Not added.`);
+        return;
+      }
+    }
     setName('');
     setExpression('');
     setBodyIds([]);
+    setError(null);
   }
 
   return (
@@ -481,14 +582,17 @@ export function AddParameterRow({
       className="param-create"
       onSubmit={(event) => {
         event.preventDefault();
-        submit();
+        void submit();
       }}
     >
       {onConfigureToggle && (
         <select
           aria-label="New parameter type"
           value={type}
-          onChange={(event) => setType(event.target.value)}
+          onChange={(event) => {
+            edited();
+            setType(event.target.value);
+          }}
         >
           <option value="number">Number / expression</option>
           <option value="toggle">On/off toggle</option>
@@ -501,7 +605,12 @@ export function AddParameterRow({
           value={name}
           spellCheck={false}
           aria-label="New parameter name"
-          onChange={(event) => setName(event.target.value)}
+          aria-invalid={error ? true : undefined}
+          aria-describedby={error ? feedbackId : undefined}
+          onChange={(event) => {
+            edited();
+            setName(event.target.value);
+          }}
         />
         {type === 'toggle' ? (
           <span className="param-value">On</span>
@@ -512,7 +621,12 @@ export function AddParameterRow({
             value={expression}
             spellCheck={false}
             aria-label="New parameter expression"
-            onChange={(event) => setExpression(event.target.value)}
+            aria-invalid={error ? true : undefined}
+            aria-describedby={error ? feedbackId : undefined}
+            onChange={(event) => {
+              edited();
+              setExpression(event.target.value);
+            }}
           />
         )}
         <button
@@ -524,6 +638,11 @@ export function AddParameterRow({
           <Plus size={13} aria-hidden="true" />
         </button>
       </div>
+      {error ? (
+        <p id={feedbackId} className="parameter-feedback error" role="alert">
+          {error}
+        </p>
+      ) : null}
       {type === 'toggle' && (
         <ToggleBodyChoices
           bodies={bodies}

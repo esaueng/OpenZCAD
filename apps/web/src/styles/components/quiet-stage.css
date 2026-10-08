@@ -23,6 +23,12 @@
      the window's bottom edge, with a few pixels to spare. The right lane
      stops a gap above it, so no card in the lane ever reaches the cube. */
   --stage-corner-h: 96px;
+  /* The notice lane's status row, which the cube steps above where it
+     shares that band: a 28px toast 8px over the bar. The cube's offset
+     adds an island gap above it. More would lift a phone's instrument
+     rail off the stage's centre line at 390 x 900, where it fits centred.
+     The toast or the hint holds the row nearly all the time. */
+  --status-row-h: 36px;
   /* The bar gives way before anything else moves: it narrows from 520px at
      a 1252px window to 280px at 1012px, and only past that does the ruler
      leave the corner (the narrow-window rules below lift the cap). A text
@@ -96,6 +102,9 @@
 
 .topbar-identity {
   justify-self: start;
+  align-self: center;
+  box-sizing: border-box;
+  height: var(--topbar-island-h);
   max-width: 100%;
   display: flex;
   align-items: center;
@@ -115,15 +124,19 @@
   border: 0;
 }
 
-/* Keeps the island its bordered, padded height (26 + 2 × 3 + 2 × 1). */
+/* The island has no border or padding, so the options are its height. */
 .topbar > .mode-switch.topbar-island .mode-switch-option {
-  min-height: 34px;
+  min-height: var(--topbar-island-h);
 }
 
+/* 28px actions + 2 × 3px padding + 2 × 1px border = the island height. */
 .topbar > .topbar-actions-island {
   justify-self: end;
   align-self: center;
+  box-sizing: border-box;
+  height: var(--topbar-island-h);
   display: flex;
+  align-items: center;
   padding: 3px var(--sp-1);
 }
 
@@ -173,6 +186,15 @@
   /* Over the right lane, so a panel the rail opens to its left lands on top
      of the drawer or the inspector rather than under them. */
   z-index: calc(var(--z-inspector-float) + 1);
+  /* Only the islands take the pointer. Side by side in a short window the
+     box is as tall as the viewer bar and as wide as both, and its empty
+     corner under the short Model panels island swallowed every click on
+     the cube beneath it. */
+  pointer-events: none;
+}
+
+.instrument-rail > * {
+  pointer-events: auto;
 }
 
 .instrument-rail .viewer-rail {
@@ -181,7 +203,9 @@
   align-items: center;
   padding: 4px 0;
   border-radius: var(--radius-lg);
-  box-shadow: var(--shadow-1);
+  /* The rails' shadow, as on the tool rail opposite and on View's bar that
+     takes this place: switching modes changed it. */
+  box-shadow: var(--shadow-2);
   transform: none;
 }
 
@@ -710,6 +734,10 @@
   border: var(--border-strong);
   border-radius: var(--radius-lg);
   box-shadow: var(--shadow-3);
+  /* The shadow stops at the float's foot: it fell on the field below, a
+     child's shadow painting over its parent, and in light the open bar
+     read as disabled. Above and to the sides it lifts the list as before. */
+  clip-path: inset(-64px -64px 0 -64px);
   overflow: hidden;
   cursor: default;
   animation: command-bar-rise var(--dur-base) var(--ease-out);
@@ -763,7 +791,7 @@
   flex: 0 0 auto;
   margin: 0;
   padding: 6px 10px;
-  color: var(--color-text-dim);
+  color: var(--color-text-subtle);
   font-size: var(--fs-mini);
   white-space: nowrap;
   overflow: hidden;
@@ -787,6 +815,15 @@
    slash is cleared or the command runs. */
 .workspace:has(.command-bar.open.command) .assistant-panel {
   visibility: hidden;
+}
+
+/* The status row stands where the list opens too. Shifted right of the
+   tour card, its end stuck out past the list ("…el."). Faded rather than
+   hidden, so its live region still speaks. */
+.workspace:has(.command-bar.open.command) .workspace-toast,
+.workspace:has(.command-bar.open.command) .workspace-toast-body {
+  opacity: 0;
+  pointer-events: none;
 }
 
 .workspace.with-assistant .command-bar-float {
@@ -1038,7 +1075,7 @@
   height: 16px;
 }
 
-.view-rail > button:hover:not(:disabled) {
+.view-rail > button:hover:not(:disabled):not(.active) {
   color: var(--color-text);
   background: var(--color-surface-hover);
 }
@@ -1156,8 +1193,11 @@
 @media (max-width: 520px) {
   .workspace.column-layout {
     --lane-right: var(--island-gap);
-    /* The cube stands above the search bar (below), and the lane above it. */
-    --stage-corner-h: calc(var(--island-gap) * 2 + var(--command-bar-h) + 92px);
+    /* The cube stands above the search bar and its status row (below), and
+       the lane above it. */
+    --stage-corner-h: calc(
+      var(--island-gap) * 2 + var(--command-bar-h) + var(--status-row-h) + 92px
+    );
   }
 
   /* There is no second column on a phone: the right lane, when something
@@ -1178,9 +1218,15 @@
     bottom: calc(var(--island-gap) * 2 + var(--command-bar-h));
   }
 
+  /* Above the status row as well as the bar: the row spans a phone's width,
+     and the status toast (or the hint) ran across the cube's foot and took
+     the click of its bottom facet. The ruler keeps its place under the
+     measurement workbench; it takes no clicks. */
   .workspace.column-layout .viewer-rail-stack,
   .workspace.column-layout .viewer-area.has-inspector .viewer-rail-stack {
-    bottom: calc(var(--island-gap) * 2 + var(--command-bar-h));
+    bottom: calc(
+      var(--island-gap) * 2 + var(--command-bar-h) + var(--status-row-h)
+    );
   }
 
   /* The lane is too short for the key badge beside the field. */
@@ -1282,6 +1328,19 @@
   }
 }
 
+/* Under 574px tall the column's foot (H/2 + 191px, or the readout once it
+   lifts) reaches into the ruler's band and covered the rule's first 40px,
+   so the bar no longer matched its label. There the ruler starts past the
+   rail. */
+@media (max-width: 1011px) and (max-height: 573px) {
+  .workspace.column-layout:has(
+      .workspace-column-float :is(.command-rail, .sketch-rail, .tweak-rail)
+    )
+    .viewport-scale-indicator {
+    left: calc(var(--rail-w) + var(--island-gap) * 2);
+  }
+}
+
 @media (min-width: 961px) and (max-width: 1011px) {
   .workspace.column-layout {
     --lane-right: calc(var(--island-gap) * 2 + 144px);
@@ -1348,7 +1407,22 @@
 
 .workspace.column-layout .instrument-rail {
   top: var(--stage-middle);
-  transform: translateY(-50%);
+  /* Centred, the 458px rail reached the cube in any window under ~690px
+     tall (~800px at 960px and narrower, where the cube stands higher): its
+     Model panels island sat on the cube's top corner and roll button. It
+     stays centred while it fits above the bottom-right corner; past that it
+     lifts so its foot stands a gap above the corner, as the right lane's
+     does (the translate's percentages are its own height), and never past
+     the top islands. */
+  --rail-band-room: calc(
+    (100vh - var(--stage-top) - var(--island-gap)) / 2 - var(--stage-corner-h)
+  );
+  transform: translateY(
+    max(
+      calc((var(--stage-top) + var(--island-gap) - 100vh) / 2),
+      min(-50%, calc(var(--rail-band-room) - 100%))
+    )
+  );
 }
 
 /* A window too short for the viewer bar and the drawer's buttons in one
@@ -1374,6 +1448,39 @@
   .instrument-rail .rail-views-panel {
     top: auto;
     bottom: -4px;
+  }
+}
+
+/* Lifted as far as the top islands, the rail still ends 518px down (374px
+   as two islands). At 960px and narrower the cube stands above the search
+   row (and on a phone above its status row too), so below about 660px
+   (700px) tall the rail's foot, or the viewer bar beside the cube in a
+   phone held sideways, still lay over the cube's top facets and roll
+   button. There the cube steps left past the rail — and past the relations
+   while sketching — as the right lane does. Wider windows keep the corner:
+   the lifted rail clears it down to about 590px (465px as two islands),
+   and the ruler beside the cube and the centred search bar have no room to
+   give. */
+@media (max-width: 960px) and (max-height: 657px),
+  (max-width: 520px) and (max-height: 703px) {
+  .workspace.column-layout .viewer-rail-stack,
+  .workspace.column-layout .viewer-area.has-inspector .viewer-rail-stack {
+    right: var(--lane-end);
+  }
+}
+
+/* Off the corner, the cube stood in the status row's band nearer its
+   centre, and a status no longer than "View mode · the model is read-only
+   here." ran over its bottom facet. It steps up above that row as well, as
+   on a phone, and the right lane stops above it. */
+@media (min-width: 521px) and (max-width: 960px) and (max-height: 657px) {
+  .workspace.column-layout {
+    --stage-corner-h: calc(56px + var(--status-row-h) + 92px);
+  }
+
+  .workspace.column-layout .viewer-rail-stack,
+  .workspace.column-layout .viewer-area.has-inspector .viewer-rail-stack {
+    bottom: calc(56px + var(--status-row-h));
   }
 }
 
@@ -1405,19 +1512,38 @@
   left: calc(100% + var(--island-gap));
 }
 
-/* Whatever room the stage leaves under the flyout's top, which is the
-   float's (its height is the flyout's 100%): half the stage plus half the
-   float while the float is centred, more once it has lifted off the
-   readout. */
+/* The room the column itself has under the flyout's top, which is the
+   float's (its height is the flyout's 100%): down to the readout's reserve
+   and a gap above it, where the rail's own foot stops. That is half the
+   stage plus half the float, less the reserve, while the float is centred,
+   and the float's own height once it has lifted to stand on the reserve.
+   Running on to the window's edge, the flyouts covered the readout, the
+   command bar and the toast, which sit under them. */
 .viewer-area .workspace-column-float :is(.command-flyout, .sketch-flyouts) {
   max-height: max(
-    calc((100vh - var(--stage-top) - var(--island-gap) + 100%) / 2),
-    calc(var(--readout-reserve) + var(--island-gap) + 100%)
+    calc(
+      (100vh - var(--stage-top) - var(--island-gap) + 100%) / 2 -
+        var(--readout-reserve) - var(--island-gap)
+    ),
+    100%
   );
 }
 
-/* The rail is not resizable; the splitter belongs to the sketch card and
-   Tweak's parameters. */
+/* A short window has no room to spare for that: the entity editor and the
+   palette share the flyout on a phone, and ending above the readout cut
+   the palette to a sliver (Grid snaps under its edge at 320 x 568). There
+   they run on to the window's edge again, over the readout. */
+@media (max-height: 600px) {
+  .viewer-area .workspace-column-float :is(.command-flyout, .sketch-flyouts) {
+    max-height: max(
+      calc((100vh - var(--stage-top) - var(--island-gap) + 100%) / 2),
+      calc(var(--readout-reserve) + var(--island-gap) + 100%)
+    );
+  }
+}
+
+/* The rails are not resizable, and the command, sketch and Tweak rails are
+   all the column holds today, so the splitter shows in no mode. */
 .viewer-area:has(
     .workspace-column-float :is(.command-rail, .sketch-rail, .tweak-rail)
   )
@@ -1469,15 +1595,16 @@ button.command-rail svg {
   height: 16px;
 }
 
-button.command-rail:hover:not(:disabled) {
+button.command-rail:hover:not(:disabled):not(.active) {
   color: var(--color-text);
   background: var(--color-surface-hover);
 }
 
 /* The context's primary verb is a hint, lighter than the armed state: an
    accent icon and a 2px accent bar at the rail's edge, with no fill and no
-   outline. The armed tool is outlined, and while a tool is armed the hint
-   is not drawn at all (CommandCard drops the class), so one button is lit. */
+   outline. The armed tool is filled and outlined like the selected button
+   on every other rail, and while a tool is armed the hint is not drawn at
+   all (CommandCard drops the class), so one button is lit. */
 /* `is-primary`, not `primary`: the base button style claims that word. */
 button.command-rail.is-primary {
   position: relative;
@@ -1496,17 +1623,22 @@ button.command-rail.is-primary::before {
   transform: translateY(-50%);
 }
 
+/* Hover rules on the rails skip `.active`: they out-ranked it, so pointing
+   at the selected tool used to wash its fill out and read as deselecting. */
 button.command-rail.active {
   color: var(--color-accent);
+  background: var(--color-accent-dim);
   border-color: var(--color-accent-border);
 }
 
 /* A tool that does not act on the current pick is dimmed in place, never
    moved: the rail is one fixed set, and a hover restores it fully since it
    is still a working button that arms its own picking. */
+/* Clearly lighter than a disabled tool (--opacity-disabled), which
+   it is not: at 0.55 the two were within a step of each other. */
 button.command-rail.is-dim:not(:disabled),
 .command-tile.is-dim:not(:disabled) {
-  opacity: 0.55;
+  opacity: 0.7;
 }
 
 button.command-rail.is-dim:hover:not(:disabled),
@@ -1517,8 +1649,8 @@ button.command-rail.is-dim:hover:not(:disabled),
 /* Greyed, not hidden: the icons never move, and the reason is the
    button's description. */
 button.command-rail:disabled {
-  color: var(--color-text-dim);
-  opacity: 0.5;
+  color: var(--color-text-muted);
+  opacity: var(--opacity-disabled);
   cursor: default;
 }
 
@@ -1544,9 +1676,9 @@ button.command-rail:disabled {
       no-repeat local,
     linear-gradient(transparent, var(--color-surface) 70%) bottom / 100% 14px
       no-repeat local,
-    linear-gradient(rgba(0, 0, 0, 0.35), transparent) top / 100% 10px no-repeat
-      scroll,
-    linear-gradient(transparent, rgba(0, 0, 0, 0.35)) bottom / 100% 10px
+    linear-gradient(var(--color-scroll-shade), transparent) top / 100% 10px
+      no-repeat scroll,
+    linear-gradient(transparent, var(--color-scroll-shade)) bottom / 100% 10px
       no-repeat scroll,
     var(--color-surface);
   border: var(--border-thin);
@@ -1555,13 +1687,16 @@ button.command-rail:disabled {
   animation: oz-fade var(--dur-fast) var(--ease-out);
 }
 
+/* Small caps labels share .panel-eyebrow's type (inspector.css); this one
+   was sans, 11.5px semibold in the dim tone. */
 .command-flyout-heading {
   grid-column: 1 / -1;
   padding: 6px 7px 2px;
-  color: var(--color-text-dim);
-  font-size: var(--fs-xs);
-  font-weight: 600;
-  letter-spacing: 0.04em;
+  color: var(--color-text-subtle);
+  font-family: var(--font-mono);
+  font-size: var(--fs-mini);
+  font-weight: var(--fw-regular);
+  letter-spacing: var(--ls-eyebrow);
   text-transform: uppercase;
 }
 
@@ -1596,19 +1731,20 @@ button.command-rail:disabled {
   white-space: nowrap;
 }
 
-.command-tile:hover:not(:disabled) {
+.command-tile:hover:not(:disabled):not(.active) {
   color: var(--color-text);
   background: var(--color-surface-hover);
 }
 
 .command-tile.active {
   color: var(--color-accent);
+  background: var(--color-accent-dim);
   border-color: var(--color-accent-border);
 }
 
 .command-tile:disabled {
-  color: var(--color-text-dim);
-  opacity: 0.5;
+  color: var(--color-text-muted);
+  opacity: var(--opacity-disabled);
   cursor: default;
 }
 
@@ -1658,7 +1794,7 @@ button.command-rail:disabled {
   height: 16px;
 }
 
-.tweak-rail button:hover:not(:disabled) {
+.tweak-rail button:hover:not(:disabled):not(.active) {
   color: var(--color-text);
   background: var(--color-surface-hover);
 }
@@ -1670,8 +1806,8 @@ button.command-rail:disabled {
 }
 
 .tweak-rail button:disabled {
-  color: var(--color-text-dim);
-  opacity: 0.5;
+  color: var(--color-text-muted);
+  opacity: var(--opacity-disabled);
   cursor: default;
 }
 
@@ -1841,7 +1977,7 @@ button.command-rail:disabled {
   height: 16px;
 }
 
-.workspace-column .sketch-rail button:hover:not(:disabled) {
+.workspace-column .sketch-rail button:hover:not(:disabled):not(.active) {
   color: var(--color-text);
   background: var(--color-surface-hover);
 }
@@ -1853,8 +1989,8 @@ button.command-rail:disabled {
 }
 
 .workspace-column .sketch-rail button:disabled {
-  color: var(--color-text-dim);
-  opacity: 0.5;
+  color: var(--color-text-muted);
+  opacity: var(--opacity-disabled);
   cursor: default;
 }
 
@@ -2081,22 +2217,24 @@ button.command-rail:disabled {
 }
 
 /* While sketching the relations stand beside the instrument rail, so the
-   right lane — and everything that keeps clear of it — steps left. */
+   right lane — and everything that keeps clear of it — steps left. The
+   relations are a rail like every other: --rail-w wide, 30px buttons and
+   16px icons. They were 44px with 34px buttons beside the 40px rail. */
 .workspace.column-layout .viewer-area:has(.sketch-relations) {
-  --lane-end: calc(var(--rail-w) + 44px + var(--island-gap) * 3);
+  --lane-end: calc(var(--rail-w) * 2 + var(--island-gap) * 3);
 }
 
 .instrument-rail > .sketch-relations {
   position: absolute;
   top: 0;
   right: calc(100% + var(--island-gap));
-  width: 44px;
+  width: var(--rail-w);
   box-sizing: border-box;
   display: flex;
   flex-direction: column;
   align-items: center;
   gap: 2px;
-  padding: 5px 0;
+  padding: 4px 0;
   background: var(--color-surface);
   border: var(--border-thin);
   border-radius: var(--radius-lg);
@@ -2118,8 +2256,8 @@ button.command-rail:disabled {
   .instrument-rail > .sketch-relations {
     display: grid;
     grid-auto-flow: column;
-    grid-template-rows: repeat(auto-fill, 32px);
-    grid-auto-columns: 34px;
+    grid-template-rows: repeat(auto-fill, 30px);
+    grid-auto-columns: 30px;
     gap: 2px;
     width: auto;
     padding: 5px 4px;
@@ -2128,7 +2266,7 @@ button.command-rail:disabled {
   }
 
   .instrument-rail > .sketch-relations .sketch-relation {
-    height: 32px;
+    height: 30px;
     direction: ltr;
   }
 
@@ -2137,9 +2275,13 @@ button.command-rail:disabled {
   }
 }
 
+/* Two columns leave the inner one no room for its names: they were drawn
+   over the outer column's icons and over each other ("Angle" on
+   "Parallel"). The relations that fit the pick are still the ones not
+   greyed, and each one's tooltip names it. */
 @media (max-height: 540px) {
-  .workspace.column-layout .viewer-area:has(.sketch-relations) {
-    --lane-end: calc(var(--rail-w) + 78px + var(--island-gap) * 3);
+  .instrument-rail > .sketch-relations .sketch-relation-name {
+    display: none;
   }
 }
 
@@ -2147,7 +2289,7 @@ button.command-rail:disabled {
    and the relations step left past both. */
 @media (max-height: 540px) {
   .workspace.column-layout .viewer-area:has(.sketch-relations) {
-    --lane-end: calc(var(--rail-w) * 2 + 78px + var(--island-gap) * 4);
+    --lane-end: calc(var(--rail-w) * 2 + 72px + var(--island-gap) * 4);
   }
 }
 
@@ -2162,8 +2304,8 @@ button.command-rail:disabled {
 .sketch-relation {
   position: relative;
   flex: 0 0 auto;
-  width: 34px;
-  height: 34px;
+  width: 30px;
+  height: 30px;
   display: flex;
   align-items: center;
   justify-content: center;
@@ -2174,7 +2316,7 @@ button.command-rail:disabled {
   border-radius: var(--radius-md);
 }
 
-.sketch-relation:hover:not(:disabled) {
+.sketch-relation:hover:not(:disabled):not(.active) {
   color: var(--color-text);
   background: var(--color-surface-hover);
 }
@@ -2188,8 +2330,8 @@ button.command-rail:disabled {
 /* Greyed, not hidden: the icons never move, and the reason is the
    button's description. */
 .sketch-relation:disabled {
-  color: var(--color-text-dim);
-  opacity: 0.5;
+  color: var(--color-text-muted);
+  opacity: var(--opacity-disabled);
   cursor: default;
 }
 

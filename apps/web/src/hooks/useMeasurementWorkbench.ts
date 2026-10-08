@@ -466,7 +466,7 @@ export function useMeasurementWorkbench({
       setStatus(
         measurementApi.measurementSelectionFailure(body, selection) ??
           (measurementMode === 'angle'
-            ? 'Angle needs a straight edge, circular axis, or measured face direction.'
+            ? 'Angle needs a straight edge, circular axis or planar face.'
             : 'That selection does not expose a trustworthy measurement point.')
       );
       return true;
@@ -526,7 +526,10 @@ export function useMeasurementWorkbench({
           ...pinned,
           {
             id: 'measurement-draft',
-            label: `A · ${measurementDraft.semantic.replaceAll('-', ' ')}`,
+            // The pick's own name, as the dock's "Top face selected" gives
+            // it: the semantic is an internal tag, and a planar face read
+            // "A · pick".
+            label: `A · ${measurementDraft.label}`,
             selected: true,
             status: 'current' as const,
             // The first of two picks marks a point; there is no second point
@@ -585,7 +588,11 @@ export function useMeasurementWorkbench({
       `${measurementApi.measurementsToCsv(measurements, measurementDisplay)}\n`,
       'text/csv'
     );
-    setStatus(`Exported ${measurements.length} measurements to ${fileName}.`);
+    setStatus(
+      `Exported ${measurements.length} measurement${
+        measurements.length === 1 ? '' : 's'
+      } to ${fileName}.`
+    );
   }
 
   return {

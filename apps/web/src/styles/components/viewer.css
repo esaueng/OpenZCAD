@@ -135,13 +135,15 @@
   place-items: center;
   color: var(--color-text-muted);
   border: 1px solid transparent;
-  border-radius: var(--radius-sm);
+  border-radius: var(--radius-md);
 }
 
-.rail-button:hover:not(:disabled),
-.rail-button.open {
+/* The hover lift every other rail uses: surface-2 was within a shade of
+   the rail's own surface in the dark theme and barely registered. */
+.rail-button:hover:not(:disabled):not(.active),
+.rail-button.open:not(.active) {
   color: var(--color-text);
-  background: var(--color-surface-2);
+  background: var(--color-surface-hover);
 }
 
 .rail-button.active {
@@ -179,7 +181,7 @@
   background: var(--color-surface);
   border: var(--border-thin);
   border-radius: var(--radius-md);
-  box-shadow: 0 8px 22px rgba(0, 0, 0, 0.45);
+  box-shadow: var(--shadow-popover);
 }
 
 .rail-section-slider {
@@ -208,7 +210,7 @@
 
 .rail-section-plane:hover:not([aria-pressed='true']) {
   color: var(--color-text);
-  background: var(--color-surface-2);
+  background: var(--color-surface-hover);
 }
 
 .rail-section-plane[aria-pressed='true'] {
@@ -246,7 +248,7 @@
 
 .rail-section-export {
   align-self: flex-end;
-  min-height: 22px;
+  min-height: 24px;
   padding: 0 8px;
   color: var(--color-text-muted);
   border: var(--border-thin);
@@ -256,11 +258,11 @@
 
 .rail-section-export:hover:not(:disabled) {
   color: var(--color-text);
-  background: var(--color-surface-2);
+  background: var(--color-surface-hover);
 }
 
 .rail-section-export:disabled {
-  opacity: 0.45;
+  opacity: var(--opacity-disabled);
 }
 
 /* Opens to the left of the rail and grows upward, so it never covers the
@@ -276,7 +278,7 @@
   background: var(--color-surface);
   border: var(--border-thin);
   border-radius: var(--radius-md);
-  box-shadow: 0 8px 22px rgba(0, 0, 0, 0.45);
+  box-shadow: var(--shadow-popover);
 }
 
 .rail-views-panel button {
@@ -289,9 +291,27 @@
   white-space: nowrap;
 }
 
+/* A view's key rides its tile, after the name. */
+.rail-views-panel button:has(kbd) {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 5px;
+}
+
+.rail-views-panel kbd {
+  padding: 0 3px;
+  color: var(--color-text-subtle);
+  border: var(--border-thin);
+  border-radius: var(--radius-sm);
+  font-family: var(--font-mono);
+  font-size: var(--fs-mini);
+  line-height: 1.4;
+}
+
 .rail-views-panel button:hover {
   color: var(--color-text);
-  background: var(--color-surface-2);
+  background: var(--color-surface-hover);
 }
 
 .rail-view-wide {
@@ -403,13 +423,15 @@
   background: rgba(129, 169, 255, 0.18);
 }
 
+/* On the dark stage, so the viewport's own blue: the chrome accent darkens
+   in the light theme and read 3.1:1 on this chip. */
 .selection-callout-verb[aria-pressed='true'] {
-  color: var(--color-accent);
-  border-color: var(--color-accent-border);
+  color: var(--color-select);
+  border-color: color-mix(in srgb, var(--color-select) 45%, transparent);
 }
 
 .selection-callout-verb:disabled {
-  opacity: 0.45;
+  opacity: var(--opacity-disabled);
   cursor: default;
 }
 
@@ -519,7 +541,7 @@
 }
 
 .selection-callout-recovery {
-  min-height: 0;
+  min-height: 24px;
   padding: 2px 7px;
   color: inherit;
   font-size: var(--fs-mini);
@@ -555,7 +577,7 @@
 }
 
 .selection-callout.sketch-callout {
-  color: var(--color-accent);
+  color: var(--color-select);
   border-color: rgba(103, 152, 255, 0.3);
 }
 
@@ -741,6 +763,7 @@
 }
 
 .toast-action {
+  min-height: 24px;
   padding: 3px 9px;
   color: var(--color-accent);
   font-weight: var(--fw-medium);
@@ -776,7 +799,7 @@
   padding: 1px 6px;
   color: #f3f7ff;
   background: rgba(16, 19, 22, 0.94);
-  border: 1px solid var(--color-accent);
+  border: 1px solid var(--color-select);
   border-radius: var(--radius-sm);
   font-family: var(--font-mono);
   font-size: var(--fs-xs);
@@ -793,14 +816,14 @@
   width: 7px;
   height: 7px;
   transform: translate(-50%, -50%) rotate(45deg);
-  background: var(--color-accent);
+  background: var(--color-select);
 }
 
 /* A centre is a ring, matching how sketch mode already draws one. */
 .snap-glyph[data-kind='center']::before {
   transform: translate(-50%, -50%);
   background: none;
-  border: 2px solid var(--color-accent);
+  border: 2px solid var(--color-select);
   border-radius: 999px;
 }
 
@@ -810,14 +833,15 @@
 .selection-band {
   position: absolute;
   z-index: calc(var(--z-viewer-overlay) + 1);
-  border: 1px solid var(--color-accent);
+  /* Stage overlays take the viewport's colours, which never re-theme. */
+  border: 1px solid var(--color-select);
   background: rgba(103, 152, 255, 0.12);
   pointer-events: none;
 }
 
 .selection-band.crossing {
   border-style: dashed;
-  border-color: var(--color-success);
+  border-color: var(--color-preview);
   background: rgba(93, 214, 158, 0.12);
 }
 
@@ -849,7 +873,7 @@
   overflow-y: auto;
   color: var(--color-viewport-text);
   background: rgba(14, 17, 20, 0.97);
-  border: 1px solid var(--color-accent-border);
+  border: 1px solid color-mix(in srgb, var(--color-select) 45%, transparent);
   border-radius: var(--radius-md);
   box-shadow: 0 14px 38px rgba(0, 0, 0, 0.46);
   backdrop-filter: blur(10px);
@@ -911,12 +935,17 @@
   color: #f5f8ff;
   background: rgba(103, 152, 255, 0.18);
   border-color: rgba(129, 169, 255, 0.52);
-  outline: none;
+}
+
+/* On the dark stage, so the viewport's accent rather than the chrome's. */
+.topology-pick-list-row:focus-visible {
+  outline: 2px solid var(--color-preselect);
+  outline-offset: -1px;
 }
 
 .topology-pick-list-row:hover small,
 .topology-pick-list-row:focus-visible small {
-  color: var(--color-accent-hi);
+  color: var(--color-preselect);
 }
 
 .move-gizmo-hud {

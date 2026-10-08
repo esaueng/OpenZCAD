@@ -52,6 +52,15 @@ interface TooltipPosition {
 const RAIL_FLYOUT_SELECTOR = '[data-rail-flyouts] > *, [data-rail-flyout]';
 
 /**
+ * Icon rails, whose tooltips open beside them: toolbars, and the rails that
+ * carry another role (the Build rail is the "Feature tools" navigation
+ * landmark) marked `data-tooltip-rail`. A `data-tooltip-rail="vertical"`
+ * box counts as vertical whatever its layout: the More tools fold is a grid
+ * of tiles, and help below a tile covered the next row.
+ */
+const RAIL_SELECTOR = '[role="toolbar"], [data-tooltip-rail]';
+
+/**
  * How far from a rail's edge a flyout or another rail still counts as beside
  * it. The layout parts islands by --island-gap (10 px); this leaves slack
  * for borders without reaching across the viewport.
@@ -98,6 +107,7 @@ function isKeyboardFocus(target: HTMLElement, pressed: boolean): boolean {
 function isVerticalToolbar(toolbar: Element): boolean {
   return (
     toolbar.getAttribute('aria-orientation') === 'vertical' ||
+    toolbar.getAttribute('data-tooltip-rail') === 'vertical' ||
     window.getComputedStyle(toolbar).flexDirection.startsWith('column')
   );
 }
@@ -109,7 +119,7 @@ function isVerticalToolbar(toolbar: Element): boolean {
  * flyout nested in the toolbar) does not count as on the rail.
  */
 function verticalRail(trigger: HTMLElement): HTMLElement | null {
-  const rail = trigger.closest<HTMLElement>('[role="toolbar"]');
+  const rail = trigger.closest<HTMLElement>(RAIL_SELECTOR);
   if (!rail) {
     return null;
   }
@@ -343,7 +353,7 @@ export function Tooltip({
       // Another rail standing beside this one (the sketch relations beside
       // the viewer rail) is stepped over, so its buttons stay clear.
       const otherRails = Array.from(
-        document.querySelectorAll('[role="toolbar"]')
+        document.querySelectorAll(RAIL_SELECTOR)
       ).filter(
         (other) =>
           other !== rail &&

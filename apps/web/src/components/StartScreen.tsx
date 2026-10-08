@@ -20,7 +20,6 @@ import {
   LoaderCircle,
   MoreHorizontal,
   Pin,
-  PinOff,
   Plus,
   RotateCcw,
   Search,
@@ -171,10 +170,35 @@ const SHELVES: ReadonlyArray<{
   {
     status: 'deleted',
     label: 'Trash',
-    empty: 'the recycle bin is empty',
+    empty: 'the trash is empty',
     Icon: Trash2
   }
 ];
+
+/** The tile's actions button, which a closing menu hands focus back to. */
+function tileMenuOpener(tile: HTMLElement | undefined) {
+  return (
+    tile?.querySelector<HTMLButtonElement>('.start-tile-menu-button') ?? null
+  );
+}
+
+function focusTileMenuItem(
+  tile: HTMLElement | undefined,
+  end: 'first' | 'last'
+) {
+  const items = tile?.querySelectorAll<HTMLElement>('[role="menuitem"]');
+  if (items && items.length > 0) {
+    items[end === 'first' ? 0 : items.length - 1]?.focus();
+  }
+}
+
+/** A part leaving the shelf from its own tile, and who inherits focus. */
+interface ShelfDeparture {
+  projectId: string;
+  shelf: ProjectStatus;
+  /** The parts after it, then the parts before it, nearest first. */
+  successors: string[];
+}
 
 /** The start screen's crossfade into the workspace. */
 const START_SCREEN_DISSOLVE_MS = 240;
@@ -239,6 +263,11 @@ export function StartScreen({
   const [dragId, setDragId] = useState<string | null>(null);
   const [dropId, setDropId] = useState<string | null>(null);
   const tileRefs = useRef(new Map<string, HTMLDivElement>());
+  // Which end of a menu takes focus as it opens: ArrowUp on the opener asks
+  // for the last item, everything else for the first.
+  const menuFocusEnd = useRef<'first' | 'last'>('first');
+  const departure = useRef<ShelfDeparture | null>(null);
+  const partsTitleRef = useRef<HTMLHeadingElement | null>(null);
   const screenRef = useRef<HTMLDivElement | null>(null);
   // Opening a part crossfades into the workspace instead of cutting to it.
   useDissolveOnUnmount(screenRef, START_SCREEN_DISSOLVE_MS);
@@ -254,11 +283,14 @@ export function StartScreen({
   }, [defaultUnits]);
 
   // A tile menu is a transient overlay: any click that is not inside it, and
-  // Escape from anywhere, dismisses it.
+  // Escape from anywhere, dismisses it. It takes focus as it opens, so the
+  // arrow keys work on it straight away.
   useEffect(() => {
     if (!openMenu) {
       return;
     }
+    focusTileMenuItem(tileRefs.current.get(openMenu), menuFocusEnd.current);
+    menuFocusEnd.current = 'first';
     const dismiss = (event: Event) => {
       if (
         event.target instanceof Element &&
@@ -271,6 +303,14 @@ export function StartScreen({
     const onKeyDown = (event: KeyboardEvent) => {
       if (event.key === 'Escape') {
         event.stopPropagation();
+        // The focused item unmounts with the menu, which would drop focus to
+        // the page; the opener takes it back instead.
+        if (
+          event.target instanceof Element &&
+          event.target.closest('.start-tile-menu')
+        ) {
+          tileMenuOpener(tileRefs.current.get(openMenu))?.focus();
+        }
         setOpenMenu(null);
       }
     };
@@ -295,6 +335,43 @@ export function StartScreen({
         project.name.toLowerCase().includes(search)
       )
     : shelfProjects;
+
+  // A part sent to another shelf takes its tile, and the focused control in
+  // it, off the page, which would leave focus on nothing. Once it is gone the
+  // next part takes focus (the previous one at the end, the shelf's heading
+  // when it was the last) — unless focus already went somewhere on purpose.
+  useEffect(() => {
+    const leaving = departure.current;
+    if (!leaving || busy) {
+      return;
+    }
+    if (
+      leaving.shelf === shelf &&
+      matchingProjects.some(
+        (project) => project.projectId === leaving.projectId
+      )
+    ) {
+      return;
+    }
+    departure.current = null;
+    const focused = globalThis.document.activeElement;
+    if (
+      leaving.shelf !== shelf ||
+      (focused && focused !== globalThis.document.body)
+    ) {
+      return;
+    }
+    for (const projectId of leaving.successors) {
+      const target = tileRefs.current
+        .get(projectId)
+        ?.querySelector<HTMLButtonElement>('button:not(:disabled)');
+      if (target) {
+        target.focus();
+        return;
+      }
+    }
+    partsTitleRef.current?.focus();
+  });
 
   // Dragging reorders positions within a shelf, which only means anything when
   // every position is on screen and in its stored order.
@@ -348,6 +425,32 @@ export function StartScreen({
 
   function shelfCount(status: ProjectStatus): number {
     return shelves[status].length;
+  }
+
+  /** Closes a tile's menu with focus back on its opener, not on the page. */
+  function closeMenu(projectId: string) {
+    tileMenuOpener(tileRefs.current.get(projectId))?.focus();
+    setOpenMenu(null);
+  }
+
+  /** Runs an action that takes the part off this shelf (see `departure`). */
+  function leaveShelf(project: ProjectSummary, action: () => void) {
+    const ids = matchingProjects.map((entry) => entry.projectId);
+    const at = ids.indexOf(project.projectId);
+    departure.current = {
+      projectId: project.projectId,
+      shelf,
+      successors: [...ids.slice(at + 1), ...ids.slice(0, at).reverse()]
+    };
+    if (openMenu === project.projectId) {
+      closeMenu(project.projectId);
+    }
+    action();
+  }
+
+  function selectShelf(status: ProjectStatus) {
+    setShelf(status);
+    setOpenMenu(null);
   }
 
   function renderProjectTile(project: ProjectSummary, index: number) {
@@ -547,7 +650,7 @@ export function StartScreen({
                 nudgeProject(project.projectId, offset);
               }}
             >
-              <GripVertical size={14} aria-hidden="true" />
+              <GripVertical size={12} aria-hidden="true" />
             </button>
           )}
 
@@ -565,11 +668,13 @@ export function StartScreen({
               disabled={busy}
               onClick={() => onTogglePin(project)}
             >
-              {organization.pinned ? (
-                <PinOff size={14} aria-hidden="true" />
-              ) : (
-                <Pin size={14} aria-hidden="true" />
-              )}
+              {/* Filled when pinned: the marker stays on a pinned tile, and a
+                  slashed pin there read as "not pinned". */}
+              <Pin
+                size={12}
+                fill={organization.pinned ? 'currentColor' : 'none'}
+                aria-hidden="true"
+              />
             </button>
           )}
 
@@ -581,23 +686,71 @@ export function StartScreen({
             aria-label={`Actions for ${project.name}`}
             disabled={busy}
             onClick={() => setOpenMenu(menuOpen ? null : project.projectId)}
+            onKeyDown={(event) => {
+              if (event.key !== 'ArrowDown' && event.key !== 'ArrowUp') {
+                return;
+              }
+              event.preventDefault();
+              const end = event.key === 'ArrowUp' ? 'last' : 'first';
+              if (menuOpen) {
+                focusTileMenuItem(tileRefs.current.get(project.projectId), end);
+              } else {
+                menuFocusEnd.current = end;
+                setOpenMenu(project.projectId);
+              }
+            }}
           >
-            <MoreHorizontal size={15} aria-hidden="true" />
+            <MoreHorizontal size={12} aria-hidden="true" />
           </button>
         </div>
 
         {menuOpen && (
-          <div className="start-tile-menu" role="menu">
+          <div
+            className="start-tile-menu"
+            role="menu"
+            aria-label={`Actions for ${project.name}`}
+            onKeyDown={(event) => {
+              if (event.key === 'Tab') {
+                // The items are not tab stops: Tab leaves the menu from its
+                // opener, onward to the next control or back to the opener.
+                closeMenu(project.projectId);
+                if (event.shiftKey) {
+                  event.preventDefault();
+                }
+                return;
+              }
+              const items = Array.from(
+                event.currentTarget.querySelectorAll<HTMLElement>(
+                  '[role="menuitem"]'
+                )
+              );
+              const at = items.findIndex(
+                (item) => item === globalThis.document.activeElement
+              );
+              const next =
+                event.key === 'ArrowDown'
+                  ? (at + 1) % items.length
+                  : event.key === 'ArrowUp'
+                    ? (at <= 0 ? items.length : at) - 1
+                    : event.key === 'Home'
+                      ? 0
+                      : event.key === 'End'
+                        ? items.length - 1
+                        : -1;
+              if (next < 0) {
+                return;
+              }
+              event.preventDefault();
+              items[next]?.focus();
+            }}
+          >
             <button
               type="button"
               role="menuitem"
+              tabIndex={-1}
               onClick={() => {
                 // Keep a mounted opener for the modal's focus restoration.
-                tileRefs.current
-                  .get(project.projectId)
-                  ?.querySelector<HTMLButtonElement>('.start-tile-menu-button')
-                  ?.focus();
-                setOpenMenu(null);
+                closeMenu(project.projectId);
                 setPropertiesProject(project);
               }}
             >
@@ -609,10 +762,10 @@ export function StartScreen({
                 <button
                   type="button"
                   role="menuitem"
-                  onClick={() => {
-                    setOpenMenu(null);
-                    onMoveToShelf(project, 'active');
-                  }}
+                  tabIndex={-1}
+                  onClick={() =>
+                    leaveShelf(project, () => onMoveToShelf(project, 'active'))
+                  }
                 >
                   <RotateCcw size={13} aria-hidden="true" />
                   Restore
@@ -620,11 +773,11 @@ export function StartScreen({
                 <button
                   type="button"
                   role="menuitem"
+                  tabIndex={-1}
                   className="is-destructive"
-                  onClick={() => {
-                    setOpenMenu(null);
-                    onDeleteForever(project);
-                  }}
+                  onClick={() =>
+                    leaveShelf(project, () => onDeleteForever(project))
+                  }
                 >
                   <Trash2 size={13} aria-hidden="true" />
                   Delete forever
@@ -636,8 +789,9 @@ export function StartScreen({
                   <button
                     type="button"
                     role="menuitem"
+                    tabIndex={-1}
                     onClick={() => {
-                      setOpenMenu(null);
+                      closeMenu(project.projectId);
                       onSaveToAccount(project);
                     }}
                   >
@@ -648,8 +802,9 @@ export function StartScreen({
                 <button
                   type="button"
                   role="menuitem"
+                  tabIndex={-1}
                   onClick={() => {
-                    setOpenMenu(null);
+                    closeMenu(project.projectId);
                     onDuplicate(project);
                   }}
                 >
@@ -660,10 +815,12 @@ export function StartScreen({
                   <button
                     type="button"
                     role="menuitem"
-                    onClick={() => {
-                      setOpenMenu(null);
-                      onMoveToShelf(project, 'archived');
-                    }}
+                    tabIndex={-1}
+                    onClick={() =>
+                      leaveShelf(project, () =>
+                        onMoveToShelf(project, 'archived')
+                      )
+                    }
                   >
                     <Archive size={13} aria-hidden="true" />
                     Archive
@@ -672,10 +829,12 @@ export function StartScreen({
                   <button
                     type="button"
                     role="menuitem"
-                    onClick={() => {
-                      setOpenMenu(null);
-                      onMoveToShelf(project, 'active');
-                    }}
+                    tabIndex={-1}
+                    onClick={() =>
+                      leaveShelf(project, () =>
+                        onMoveToShelf(project, 'active')
+                      )
+                    }
                   >
                     <ArchiveRestore size={13} aria-hidden="true" />
                     Move to parts
@@ -684,11 +843,11 @@ export function StartScreen({
                 <button
                   type="button"
                   role="menuitem"
+                  tabIndex={-1}
                   className="is-destructive"
-                  onClick={() => {
-                    setOpenMenu(null);
-                    onMoveToShelf(project, 'deleted');
-                  }}
+                  onClick={() =>
+                    leaveShelf(project, () => onMoveToShelf(project, 'deleted'))
+                  }
                 >
                   <Trash2 size={13} aria-hidden="true" />
                   Move to trash
@@ -699,11 +858,16 @@ export function StartScreen({
         )}
 
         {trashed && (
+          // The visible labels are short for the narrow footer; the names
+          // say which part, and match the menu's "Delete forever".
           <div className="start-tile-footer">
             <button
               type="button"
+              aria-label={`Restore ${project.name}`}
               disabled={busy}
-              onClick={() => onMoveToShelf(project, 'active')}
+              onClick={() =>
+                leaveShelf(project, () => onMoveToShelf(project, 'active'))
+              }
             >
               <RotateCcw size={13} aria-hidden="true" />
               Restore
@@ -711,8 +875,11 @@ export function StartScreen({
             <button
               type="button"
               className="is-destructive"
+              aria-label={`Delete ${project.name} forever`}
               disabled={busy}
-              onClick={() => onDeleteForever(project)}
+              onClick={() =>
+                leaveShelf(project, () => onDeleteForever(project))
+              }
             >
               <Trash2 size={13} aria-hidden="true" />
               Delete
@@ -744,6 +911,17 @@ export function StartScreen({
   // With nothing saved yet the demos are the most useful thing on the page,
   // so they take the stage as full cards instead of a list in the column.
   const fresh = !loading && userProjects.length === 0;
+  // An empty Parts shelf is not an empty library when every part was
+  // archived or trashed: the shelf says where they went instead of
+  // "nothing saved yet". Null when the library really is empty.
+  const partsElsewhere =
+    userProjects.length === 0
+      ? null
+      : shelves.archived.length > 0 && shelves.deleted.length > 0
+        ? 'Archive or Trash'
+        : shelves.archived.length > 0
+          ? 'Archive'
+          : 'Trash';
 
   const cloud = describeCloud();
   // A run's outcome is in the sentence, and the startup mode texts restate
@@ -901,6 +1079,12 @@ export function StartScreen({
             createPart();
           }}
           onKeyDown={(event) => {
+            // The Enter that commits an IME composition (CJK input) is not
+            // a request to create the part from a half-typed name. Safari
+            // reports that keystroke with isComposing already false.
+            if (event.nativeEvent.isComposing || event.keyCode === 229) {
+              return;
+            }
             // Enter creates from any field, including the units select.
             if (
               event.key === 'Enter' &&
@@ -930,7 +1114,8 @@ export function StartScreen({
             <span className="start-field-label">Units</span>
             <select
               value={units}
-              aria-label="Unit system"
+              // Kept for the narrow layout, which hides the visible label.
+              aria-label="Units"
               onChange={(event) => setUnits(event.target.value as UnitSystem)}
             >
               <option value="mm">Millimeters</option>
@@ -965,16 +1150,42 @@ export function StartScreen({
       <nav className="start-library" aria-label="Library">
         <span className="start-eyebrow">Library</span>
         <div className="start-shelf-tabs" role="tablist">
-          {SHELVES.map((entry) => (
+          {SHELVES.map((entry, index) => (
             <button
               key={entry.status}
+              id={`start-shelf-tab-${entry.status}`}
               type="button"
               role="tab"
               aria-selected={shelf === entry.status}
+              aria-controls="start-shelf-panel"
+              // One tab stop for the strip; the arrow keys move along it.
+              tabIndex={shelf === entry.status ? 0 : -1}
               className={shelf === entry.status ? 'is-active' : undefined}
-              onClick={() => {
-                setShelf(entry.status);
-                setOpenMenu(null);
+              onClick={() => selectShelf(entry.status)}
+              onKeyDown={(event) => {
+                const step =
+                  event.key === 'ArrowLeft' || event.key === 'ArrowUp'
+                    ? -1
+                    : event.key === 'ArrowRight' || event.key === 'ArrowDown'
+                      ? 1
+                      : 0;
+                const target =
+                  event.key === 'Home'
+                    ? 0
+                    : event.key === 'End'
+                      ? SHELVES.length - 1
+                      : step !== 0
+                        ? (index + step + SHELVES.length) % SHELVES.length
+                        : -1;
+                const next = SHELVES[target];
+                if (!next) {
+                  return;
+                }
+                event.preventDefault();
+                selectShelf(next.status);
+                event.currentTarget.parentElement
+                  ?.querySelectorAll<HTMLElement>('[role="tab"]')
+                  [target]?.focus();
               }}
             >
               <entry.Icon size={15} aria-hidden="true" />
@@ -989,18 +1200,26 @@ export function StartScreen({
 
       <div className="start-body">
         <section
+          id="start-shelf-panel"
           className="start-section"
-          aria-labelledby="start-parts-title"
+          role="tabpanel"
+          aria-labelledby={`start-shelf-tab-${shelf}`}
           aria-busy={loading}
         >
           <div className="start-toolbar">
             <div className="start-toolbar-title">
-              <h2 id="start-parts-title">{shelfLabel.label}</h2>
+              {/* Focusable from script only: it catches focus when the last
+                  part leaves the shelf (see `departure`). */}
+              <h2 id="start-parts-title" ref={partsTitleRef} tabIndex={-1}>
+                {shelfLabel.label}
+              </h2>
               <span className="start-section-note">
                 {loading
                   ? 'Loading parts…'
                   : shelfProjects.length === 0
-                    ? shelfLabel.empty
+                    ? shelf === 'active' && partsElsewhere
+                      ? 'none on this shelf'
+                      : shelfLabel.empty
                     : search
                       ? `${matchingProjects.length} of ${shelfProjects.length} match`
                       : `${shelfProjects.length} ${
@@ -1035,7 +1254,7 @@ export function StartScreen({
                     aria-label="Clear search"
                     onClick={() => setQuery('')}
                   >
-                    <X size={13} aria-hidden="true" />
+                    <X size={12} aria-hidden="true" />
                   </button>
                 )}
               </div>
@@ -1062,8 +1281,11 @@ export function StartScreen({
 
           {loading && (
             <>
+              {/* Announced, not shown: the heading's note and the cloud card
+                  already say so on screen, and a visible line here pushed the
+                  skeleton down by a row it then jumped back up from. */}
               <div
-                className="start-loading"
+                className="start-loading visually-hidden"
                 role="status"
                 aria-label="Loading library"
               >
@@ -1076,7 +1298,9 @@ export function StartScreen({
                     key={index}
                   >
                     <span className="start-tile-thumb" />
+                    {/* One bar per line of a real tile: name, then meta. */}
                     <span className="start-tile-body">
+                      <span />
                       <span />
                     </span>
                   </div>
@@ -1098,7 +1322,12 @@ export function StartScreen({
               <span className="start-empty-mark" aria-hidden="true">
                 <BrandMark />
               </span>
-              {shelf === 'active' ? (
+              {shelf === 'active' && partsElsewhere ? (
+                <>
+                  <strong>No parts on this shelf</strong>
+                  <span>{`All your parts are in ${partsElsewhere}.`}</span>
+                </>
+              ) : shelf === 'active' ? (
                 <>
                   <strong>No parts yet</strong>
                   <span>
@@ -1115,7 +1344,7 @@ export function StartScreen({
                 </>
               ) : (
                 <>
-                  <strong>Nothing in the recycle bin.</strong>
+                  <strong>Nothing in the trash.</strong>
                   <span>
                     Deleted parts wait here for {TRASH_RETENTION_DAYS} days
                     before they are destroyed.

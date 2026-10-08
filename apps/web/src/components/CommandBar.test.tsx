@@ -227,6 +227,9 @@ describe('CommandBar', () => {
     await userEvent.type(search, 'fil');
     expect(screen.queryAllByRole('option')).toHaveLength(0);
     expect(screen.getByText(hint)).toHaveClass('command-bar-keys');
+    expect(screen.getByText(hint).closest('.command-bar-float')).toHaveClass(
+      'command-bar-ask'
+    );
     expect(search).toHaveAccessibleDescription(hint);
 
     // The slash swaps it for the command list and its own key row.
@@ -388,8 +391,14 @@ describe('CommandBar', () => {
 
   it('takes a draft from its host, once per draft id', async () => {
     const onAsk = vi.fn();
+    // One command, so the slash draft below opens a list with a row in it.
+    const commands = [command('fillet', 'Fillet', 'Modify')];
     const { rerender } = render(
-      <Bar commands={[]} onAsk={onAsk} draft={{ id: 1, text: 'Grow it' }} />
+      <Bar
+        commands={commands}
+        onAsk={onAsk}
+        draft={{ id: 1, text: 'Grow it' }}
+      />
     );
     const search = searchField();
     expect(search).toHaveValue('Grow it');
@@ -400,11 +409,92 @@ describe('CommandBar', () => {
     expect(search).toHaveValue('');
 
     rerender(
-      <Bar commands={[]} onAsk={onAsk} draft={{ id: 1, text: 'Grow it' }} />
+      <Bar
+        commands={commands}
+        onAsk={onAsk}
+        draft={{ id: 1, text: 'Grow it' }}
+      />
     );
     expect(search).toHaveValue('');
-    rerender(<Bar commands={[]} onAsk={onAsk} draft={{ id: 2, text: '/' }} />);
+    rerender(
+      <Bar commands={commands} onAsk={onAsk} draft={{ id: 2, text: '/' }} />
+    );
     expect(search).toHaveValue('/');
     expect(search).toHaveAttribute('aria-expanded', 'true');
+  });
+});
+
+describe('CommandBar pointer and empty states', () => {
+  it('moves the highlight only when the pointer moves, not when a row appears under it', async () => {
+    // The list opens over the viewport, where the pointer rests: the row
+    // that appeared under it took the highlight, so Tab and Enter acted on
+    // it rather than the best match, and the arrows kept snapping back.
+    const commands = [
+      command('sketch', 'Sketch', 'Create'),
+      command('box', 'Box', 'Create'),
+      command('sphere', 'Sphere', 'Create')
+    ];
+    render(<Bar commands={commands} />);
+    const search = searchField();
+    await userEvent.type(search, '/');
+    const rows = screen.getAllByRole('option');
+
+    fireEvent.mouseEnter(rows[2]!);
+    fireEvent.mouseOver(rows[2]!);
+    expect(rows[0]).toHaveAttribute('aria-selected', 'true');
+    expect(search).toHaveAttribute(
+      'aria-activedescendant',
+      'command-palette-option-0'
+    );
+    fireEvent.keyDown(search, { key: 'ArrowDown' });
+    expect(rows[1]).toHaveAttribute('aria-selected', 'true');
+
+    fireEvent.mouseMove(rows[2]!);
+    expect(rows[2]).toHaveAttribute('aria-selected', 'true');
+    expect(rows[1]).toHaveAttribute('aria-selected', 'false');
+  });
+
+  it('says nothing matched outside the listbox, and drops the key row', async () => {
+    render(<Bar commands={[command('fillet', 'Fillet', 'Modify')]} />);
+    const search = searchField();
+    await userEvent.type(search, '/zzz');
+    expect(screen.queryByRole('listbox')).toBeNull();
+    expect(screen.getByRole('status')).toHaveTextContent(
+      'No matching command.'
+    );
+    // Not the ask hint's float, which a docked assistant stream hides.
+    expect(
+      screen.getByRole('status').closest('.command-bar-float')
+    ).not.toHaveClass('command-bar-ask');
+    expect(search).toHaveAttribute('aria-expanded', 'false');
+    expect(search).not.toHaveAttribute('aria-controls');
+    expect(
+      screen.queryByText('↑↓ move · Tab completes · Enter runs · Esc clears')
+    ).toBeNull();
+  });
+
+  it('names Control, not Ctrl, in its key shortcut', () => {
+    render(
+      <CommandBar
+        commands={[]}
+        open={false}
+        onOpenChange={vi.fn()}
+        searchKey={{ glyph: 'Ctrl+K', accessible: 'Ctrl+K' }}
+      />
+    );
+    expect(searchField()).toHaveAttribute('aria-keyshortcuts', 'Control+K');
+  });
+
+  it('stops promising the assistant on Enter while no provider answers', async () => {
+    render(
+      <Bar
+        commands={[command('fillet', 'Fillet', 'Modify')]}
+        onAsk={vi.fn()}
+        askUnavailable
+      />
+    );
+    await userEvent.type(searchField(), 'fil');
+    expect(screen.getByText('Type / for commands')).toBeTruthy();
+    expect(screen.queryByText(/asks the assistant/)).toBeNull();
   });
 });

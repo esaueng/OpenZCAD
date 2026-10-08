@@ -4,8 +4,13 @@
 
 /* ── Revision timeline (checkpoint save points) ──────────── */
 
+/* One explicit `minmax(0, 1fr)` track, as `.feature-list` has: the implicit
+   `auto` track sized itself to the longest nowrap name, so one long "Save
+   revision as…" reason widened every row and carried each row's date and
+   actions out of the drawer. */
 .revision-list {
   display: grid;
+  grid-template-columns: minmax(0, 1fr);
   gap: 1px;
 }
 
@@ -90,9 +95,26 @@
   transition: opacity var(--dur-base) var(--ease-out);
 }
 
+/* Both actions' width whatever a row holds (the save point the document is
+   on has no Restore; an unstored one has neither), so every date lines up. */
+.revision-actions,
+.revision-unavailable {
+  min-width: 50px;
+  justify-content: flex-end;
+  text-align: right;
+}
+
 .revision-row:hover .revision-actions,
 .revision-row:focus-within .revision-actions {
   opacity: 1;
+}
+
+/* Touch: nothing hovers, and an invisible Restore still takes a tap. Shown,
+   for the reason in sidebar.css's row-controls note. */
+@media (hover: none) {
+  .revision-actions {
+    opacity: 1;
+  }
 }
 
 .revision-action {
@@ -121,7 +143,6 @@
 
 .revision-action:focus-visible {
   color: var(--color-text);
-  outline: none;
   border-color: var(--color-accent);
 }
 

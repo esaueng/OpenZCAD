@@ -44,7 +44,7 @@ export function ExtrudeControls({
           }}
         >
           {allowAutomatic && <option value="automatic">Automatic</option>}
-          <option value="new-body">New Body</option>
+          <option value="new-body">New body</option>
           <option value="add">Add</option>
           <option value="cut">Cut</option>
         </select>

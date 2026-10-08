@@ -1,7 +1,7 @@
 import { cleanup, render, screen } from '@testing-library/react';
 import { describe, expect, it, vi } from 'vitest';
 import type { BodyId } from '@openzcad/shared';
-import { MoveOverlay } from '../DirectModelingOverlays';
+import { MoveOverlay } from '../MoveOverlay';
 import { TransformForm } from './FeatureForms';
 
 const zero = { x: 0, y: 0, z: 0 };

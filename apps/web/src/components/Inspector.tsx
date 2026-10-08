@@ -587,7 +587,7 @@ function BodyStats({
     const parsed = parseCustomDensityKgPerM3(Number(text));
     if (parsed === null) {
       setCustomError(
-        `Enter a positive density in kg/m³ (at most ${MAX_CUSTOM_DENSITY_KG_PER_M3}).`
+        `Enter a positive density in kg/m³ (at most ${MAX_CUSTOM_DENSITY_KG_PER_M3.toLocaleString('en-US')}).`
       );
       return;
     }
@@ -677,14 +677,13 @@ function BodyStats({
               {formatNumber(mass.centerOfMass.z)} {unitLabel('length', units)}
             </span>
             <b>principal inertia</b>
-            <span>
+            <span className="kv-multiline">
               {densityKgPerM3 === null || inertiaUnit === null ? (
                 <>
                   {formatNumber(mass.principalMoments[0])} ·{' '}
                   {formatNumber(mass.principalMoments[1])} ·{' '}
                   {formatNumber(mass.principalMoments[2])}{' '}
-                  {unitLabel('length', units)}⁵ · multiply by material density
-                  for physical values
+                  {unitLabel('length', units)}⁵
                 </>
               ) : (
                 <>
@@ -696,7 +695,10 @@ function BodyStats({
               )}
             </span>
             <b>inertia tensor</b>
-            <span style={{ fontVariantNumeric: 'tabular-nums' }}>
+            <span
+              className="kv-multiline"
+              style={{ fontVariantNumeric: 'tabular-nums' }}
+            >
               {inertiaRows(mass.inertia).map((row, index, rows) => (
                 <span key={index} style={{ display: 'block' }}>
                   {formatNumber(
@@ -721,7 +723,10 @@ function BodyStats({
               ))}
             </span>
             <b>principal axes</b>
-            <span style={{ fontVariantNumeric: 'tabular-nums' }}>
+            <span
+              className="kv-multiline"
+              style={{ fontVariantNumeric: 'tabular-nums' }}
+            >
               {mass.principalAxes.map((axis, index) => (
                 <span key={index} style={{ display: 'block' }}>
                   {`${index + 1} · (${formatNumber(axis.x)}, ${formatNumber(axis.y)}, ${formatNumber(axis.z)})`}
@@ -740,6 +745,14 @@ function BodyStats({
                   : 'Open this section to measure mass properties.'}
           </p>
         )}
+        {mass && (densityKgPerM3 === null || inertiaUnit === null) ? (
+          // Prose under the grid, not in a value cell, where it was cut off
+          // after the third moment.
+          <p className="muted">
+            Inertia is at unit density: multiply it by the material density for
+            physical values.
+          </p>
+        ) : null}
         <p className="muted">
           {densityKgPerM3 === null
             ? 'Kernel-integrated over face geometry — no tessellation. Trim outlines on curved faces are sampled.'
@@ -1003,7 +1016,38 @@ function formatRecognitionDimension(
   if (key === 'angleRadians') {
     return `${formatNumber((value * 180) / Math.PI)}°`;
   }
-  return `${formatNumber(value)} ${units}`;
+  return `${formatNumber(value)} ${unitLabel('length', units)}`;
+}
+
+/**
+ * A stored direct-edit length as a reader writes it: rounded, in the
+ * document's unit, with its expression when it has one. `String()` printed
+ * raw floats with no unit at all.
+ */
+function formatStoredLength(
+  value: ParamValue,
+  scope: Record<string, number>,
+  units: UnitSystem
+): string {
+  const resolved = evalParamValue(value, scope);
+  const shown =
+    resolved === null
+      ? '—'
+      : `${formatNumber(resolved)} ${unitLabel('length', units)}`;
+  return typeof value === 'string' && !Number.isFinite(Number(value))
+    ? `${value} = ${shown}`
+    : shown;
+}
+
+/** A stored angle in radians, shown in degrees as the recognition panel does. */
+function formatStoredAngle(
+  radians: ParamValue,
+  scope: Record<string, number>
+): string {
+  const resolved = evalParamValue(radians, scope);
+  return resolved === null
+    ? String(radians)
+    : `${formatNumber((resolved * 180) / Math.PI)}°`;
 }
 
 /**
@@ -1059,22 +1103,22 @@ function ImportedFaceRecognition({
         ? 'Recognized — read-only: no direct edit replays this family yet.'
         : null;
     return (
-      <div className="kv-grid">
-        <b>recognized</b>
-        <span>{label}</span>
+      <>
+        <div className="kv-grid">
+          <b>recognized</b>
+          <span>{label}</span>
+          {dimensions.map(([key, value]) => (
+            <Fragment key={key}>
+              <b>{RECOGNIZED_DIMENSION_LABELS[key] ?? key}</b>
+              <span>{formatRecognitionDimension(key, value, units)}</span>
+            </Fragment>
+          ))}
+        </div>
         {readOnlyNote ? (
-          <>
-            <b>editing</b>
-            <span>{readOnlyNote}</span>
-          </>
+          // A sentence, so it wraps under the grid; a value cell cut it off.
+          <p className="muted direct-edit-note">{readOnlyNote}</p>
         ) : null}
-        {dimensions.map(([key, value]) => (
-          <Fragment key={key}>
-            <b>{RECOGNIZED_DIMENSION_LABELS[key] ?? key}</b>
-            <span>{formatRecognitionDimension(key, value, units)}</span>
-          </Fragment>
-        ))}
-      </div>
+      </>
     );
   }
   return (
@@ -1194,13 +1238,13 @@ function FaceDirectEdit({
         <span>{geometry.surfaceType}</span>
         <b>area</b>
         <span>
-          {formatMeasuredQuantity(geometry.area)} {units}²
+          {formatMeasuredQuantity(geometry.area)} {unitLabel('area', units)}
         </span>
         {geometry.axialLength !== undefined && (
           <>
             <b>length</b>
             <span>
-              {formatNumber(geometry.axialLength)} {units}
+              {formatNumber(geometry.axialLength)} {unitLabel('length', units)}
             </span>
           </>
         )}
@@ -1209,7 +1253,8 @@ function FaceDirectEdit({
             <>
               <b>fillet radius</b>
               <span>
-                R {formatNumber(geometry.blendRadius)} {units}
+                R {formatNumber(geometry.blendRadius)}{' '}
+                {unitLabel('length', units)}
               </span>
             </>
           )}
@@ -1227,7 +1272,7 @@ function FaceDirectEdit({
             }}
           >
             <ExprInput
-              label={`Diameter (${units})`}
+              label={`Diameter (${unitLabel('length', units)})`}
               value={diameter}
               scope={scope}
               onChange={setDiameter}
@@ -1930,7 +1975,9 @@ export function Inspector(props: InspectorProps) {
                   : `face ${String(data.operation.oppositeFaceHash).slice(-6)}`}
               </span>
               <b>distance</b>
-              <span>{String(data.operation.distance)}</span>
+              <span>
+                {formatStoredLength(data.operation.distance, scope, units)}
+              </span>
               <b>move mode</b>
               <span>{data.operation.moveMode.replaceAll('-', ' ')}</span>
             </>
@@ -1938,47 +1985,77 @@ export function Inspector(props: InspectorProps) {
           {data.operation.kind === 'resize-through-hole' && (
             <>
               <b>diameter</b>
-              <span>{String(data.operation.diameter)}</span>
+              <span>
+                {formatStoredLength(data.operation.diameter, scope, units)}
+              </span>
             </>
           )}
           {data.operation.kind === 'resize-imported-blind-hole' && (
             <>
               <b>diameter</b>
-              <span>{String(data.operation.diameter)}</span>
+              <span>
+                {formatStoredLength(data.operation.diameter, scope, units)}
+              </span>
               <b>depth</b>
-              <span>{String(data.operation.depth)}</span>
+              <span>
+                {formatStoredLength(data.operation.depth, scope, units)}
+              </span>
             </>
           )}
           {data.operation.kind === 'resize-imported-counterbore' && (
             <>
               <b>bore diameter</b>
-              <span>{String(data.operation.boreDiameter)}</span>
+              <span>
+                {formatStoredLength(data.operation.boreDiameter, scope, units)}
+              </span>
               <b>counterbore diameter</b>
-              <span>{String(data.operation.counterboreDiameter)}</span>
+              <span>
+                {formatStoredLength(
+                  data.operation.counterboreDiameter,
+                  scope,
+                  units
+                )}
+              </span>
               <b>counterbore depth</b>
-              <span>{String(data.operation.counterboreDepth)}</span>
+              <span>
+                {formatStoredLength(
+                  data.operation.counterboreDepth,
+                  scope,
+                  units
+                )}
+              </span>
             </>
           )}
           {data.operation.kind === 'resize-imported-countersink' && (
             <>
               <b>bore diameter</b>
-              <span>{String(data.operation.boreDiameter)}</span>
+              <span>
+                {formatStoredLength(data.operation.boreDiameter, scope, units)}
+              </span>
               <b>sink diameter</b>
-              <span>{String(data.operation.sinkDiameter)}</span>
-              <b>included angle (rad)</b>
-              <span>{String(data.operation.angleRadians)}</span>
+              <span>
+                {formatStoredLength(data.operation.sinkDiameter, scope, units)}
+              </span>
+              <b>included angle</b>
+              <span>
+                {formatStoredAngle(data.operation.angleRadians, scope)}
+              </span>
             </>
           )}
           {data.operation.kind === 'resize-cylindrical-face' && (
             <>
               <b>radius</b>
-              <span>{String(data.operation.radius)}</span>
+              <span>
+                {formatStoredLength(data.operation.radius, scope, units)}
+              </span>
             </>
           )}
           {data.operation.kind === 'resize-blend' && (
             <>
               <b>radius</b>
-              <span>{String(data.operation.newRadius)}</span>
+              <span>
+                {formatStoredLength(data.operation.newRadius, scope, units)}
+              </span>
             </>
           )}
         </div>
@@ -2064,7 +2141,7 @@ export function Inspector(props: InspectorProps) {
           selectedSketchObject?.objectKind !== 'text' && (
             <button
               type="button"
-              className="secondary"
+              className="secondary feature-edit-launch"
               onClick={() => props.onEditSketchInViewport(selectedFeature)}
             >
               Edit sketch in viewport
@@ -2077,7 +2154,7 @@ export function Inspector(props: InspectorProps) {
           props.onEditModelingFeature && (
             <button
               type="button"
-              className="secondary"
+              className="secondary feature-edit-launch"
               onClick={() => props.onEditModelingFeature?.(selectedFeature)}
             >
               Edit {TOOL_META[data.featureKind].label.toLowerCase()}

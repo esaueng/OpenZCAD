@@ -1,5 +1,5 @@
 import { useEffect, useState, type ReactNode, type RefObject } from 'react';
-import { History, Magnet, MousePointer2 } from 'lucide-react';
+import { Magnet, MousePointer2, ScrollText } from 'lucide-react';
 import {
   SELECTION_FILTERS,
   SELECTION_FILTER_LABELS,
@@ -186,6 +186,9 @@ export function WorkspaceReadout({
         <button
           type="button"
           className={`workspace-toast-body${quiet ? ' quiet' : ''}`}
+          // Faded out, it was an invisible tab stop that opened the log. The
+          // rail's log button stays the keyboard path.
+          tabIndex={shown ? undefined : -1}
           title={
             quiet
               ? 'View activity log'
@@ -263,7 +266,8 @@ export function ActivityLogButton({
       aria-expanded={logOpen}
       onClick={onToggleLog}
     >
-      <History size={16} aria-hidden="true" />
+      {/* Not the clock: that is rollback and Restore, one rail up from here. */}
+      <ScrollText size={16} aria-hidden="true" />
     </button>
   );
 }

@@ -159,25 +159,26 @@ textarea {
     background-color var(--dur-fast) var(--ease-out);
 }
 
+/* The entrance keyframes move with the individual `translate` and `scale`
+   properties, never `transform`. Those compose with whatever transform the
+   element already has, so a panel centred with translateX(-50%), a rail
+   centred with translateY(-50%) and one re-anchored with `transform: none`
+   all keep their place while they arrive. Keyframes on `transform` replaced
+   it: the View and Build rails started half their height low and drifted up
+   on every mode switch, and the panels beside the instrument rail opened
+   half their width to the left before snapping back. */
 @keyframes oz-rise {
   from {
     opacity: 0;
-    transform: translateY(4px);
-  }
-  to {
-    opacity: 1;
-    transform: translateY(0);
+    translate: 0 4px;
   }
 }
 
 @keyframes oz-pop {
   from {
     opacity: 0;
-    transform: translateX(-50%) translateY(6px) scale(0.97);
-  }
-  to {
-    opacity: 1;
-    transform: translateX(-50%) translateY(0) scale(1);
+    translate: 0 6px;
+    scale: 0.97;
   }
 }
 
@@ -215,8 +216,9 @@ textarea {
   animation: oz-fade var(--dur-fast) var(--ease-out);
 }
 
+/* It hangs down from the pointer, so it drops rather than rises. */
 .context-menu {
-  animation: oz-rise var(--dur-fast) var(--ease-out);
+  animation: oz-drop var(--dur-fast) var(--ease-out);
   transform-origin: top left;
 }
 
@@ -230,20 +232,28 @@ textarea {
   pointer-events: none;
 }
 
-/* Popovers open from the control that owns them: a dropdown drops, a panel
-   above its button rises, and the drawer slides in from its edge. Centred
-   panels carry
-   translateX(-50%) in their own transform, so they use oz-pop, which keeps
-   it. */
+/* Popovers open from the control that owns them: a dropdown or a menu
+   drops, a panel above its button rises, a panel beside the right-hand rail
+   slides out leftward, and the drawer slides in from its edge. */
 .file-menu[open] > .topbar-menu-panel,
-.measurement-dock {
+.measurement-dock,
+.panel-overflow-menu,
+.start-tile-menu {
   animation: oz-drop var(--dur-fast) var(--ease-out);
 }
 
-.rail-views-panel,
 .status-log-panel,
 .color-picker {
   animation: oz-rise var(--dur-fast) var(--ease-out);
+}
+
+.rail-views-panel {
+  animation: oz-enter-left var(--dur-fast) var(--ease-out);
+}
+
+/* Placed by the anchor sink's left/top; it fades rather than travels. */
+.numeric-keypad {
+  animation: oz-fade var(--dur-fast) var(--ease-out);
 }
 
 .rail-section-panel,
@@ -276,33 +286,21 @@ textarea {
 @keyframes oz-drop {
   from {
     opacity: 0;
-    transform: translateY(-4px);
-  }
-  to {
-    opacity: 1;
-    transform: translateY(0);
+    translate: 0 -4px;
   }
 }
 
 @keyframes oz-enter-left {
   from {
     opacity: 0;
-    transform: translateX(8px);
-  }
-  to {
-    opacity: 1;
-    transform: translateX(0);
+    translate: 8px 0;
   }
 }
 
 @keyframes oz-swap {
   from {
     opacity: 0;
-    transform: scale(0.6);
-  }
-  to {
-    opacity: 1;
-    transform: scale(1);
+    scale: 0.6;
   }
 }
 
@@ -312,13 +310,19 @@ textarea {
   }
 }
 
-/* Start screen part tiles lift slightly toward the pointer. */
-.start-tile-project:not(:disabled):hover {
+/* Start screen part tiles lift slightly toward the pointer — only a tile that
+   opens: a trashed one (a static div) or one disabled while busy stays put.
+   The tile is a div, so a `:disabled` test on the tile itself never failed. */
+.start-tile-project:has(
+    > .start-tile-open:not(.is-static):not(:disabled)
+  ):hover {
   transform: translateY(-1px);
   box-shadow: 0 4px 18px rgba(0, 0, 0, 0.3);
 }
 
-.start-tile-project:not(:disabled):active {
+.start-tile-project:has(
+    > .start-tile-open:not(.is-static):not(:disabled)
+  ):active {
   transform: translateY(0);
 }
 
@@ -328,8 +332,11 @@ textarea {
   animation: oz-pop var(--dur-base) var(--ease-out);
 }
 
+/* Inert as well (Toast.tsx): a double-click's second press reached the
+   fading Undo and undid a second step. */
 .toast.closing {
   animation: oz-fade-out var(--dur-fast) var(--ease-out) forwards;
+  pointer-events: none;
 }
 
 @keyframes oz-fade-out {

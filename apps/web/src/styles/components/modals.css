@@ -55,6 +55,13 @@
   grid-column: 1 / -1;
 }
 
+/* An odd count between the full-width first and last rows (archived,
+   trashed or branched projects, details loading or failed) left one cell
+   alone with a half-width rule under it; it takes the row instead. */
+.project-properties-list > div:nth-last-child(2):nth-child(even) {
+  grid-column: 1 / -1;
+}
+
 @media (max-width: 480px) {
   .project-properties-list {
     display: block;
@@ -91,6 +98,13 @@
   padding-top: var(--sp-2);
 }
 
+/* Retry sits inside the failure sentence: a button, at the compact size. */
+.project-properties-dialog > p .secondary {
+  min-height: 26px;
+  padding: 2px 10px;
+  font-size: var(--fs-xs);
+}
+
 .modal-backdrop {
   position: fixed;
   inset: 0;
@@ -103,6 +117,11 @@
   backdrop-filter: blur(2px);
 }
 
+/* A title that wraps (Delete “a long feature name”?) squeezed its icon. */
+.modal-backdrop h2 > svg {
+  flex: none;
+}
+
 /*
  * The choice between this device's copy of a project and the account's. The
  * three resolutions are stacked rather than in a row: they are not a
@@ -110,6 +129,10 @@
  */
 .conflict-dialog {
   width: min(520px, 100%);
+  /* Bounded like Export: in a short window the resolutions and "Decide
+     later" sat below the screen, and nothing scrolled to them. */
+  max-height: calc(100dvh - 12vh - 32px);
+  overflow-y: auto;
   display: flex;
   flex-direction: column;
   gap: var(--sp-3);
@@ -120,18 +143,37 @@
   box-shadow: var(--shadow-3);
 }
 
+/* Scrolling the dialog, not squeezing its rows. */
+.conflict-dialog > * {
+  flex-shrink: 0;
+}
+
+/* The flex gap is the only spacing: browser margins on top of it made the
+   gaps 36, 24 and 12px. */
 .conflict-dialog h2 {
   display: flex;
   align-items: center;
   gap: var(--sp-2);
+  margin: 0;
   color: var(--color-warning);
   font-size: var(--fs-md);
 }
 
 .conflict-dialog p {
+  margin: 0;
   color: var(--color-text-muted);
   font-size: var(--fs-sm);
   line-height: 1.5;
+}
+
+.conflict-dialog .conflict-dialog-error {
+  color: var(--color-error-text);
+}
+
+/* Held while a resolution runs: aria-disabled keeps focus on the choice. */
+.conflict-dialog button[aria-disabled='true'] {
+  cursor: not-allowed;
+  opacity: 0.45;
 }
 
 .conflict-dialog-actions {
@@ -149,7 +191,7 @@
   text-align: left;
 }
 
-.conflict-dialog-actions button:hover:not(:disabled) {
+.conflict-dialog-actions button:hover:not(:disabled, [aria-disabled='true']) {
   background: var(--color-surface-hover);
   border-color: var(--color-border-strong);
 }
@@ -162,6 +204,8 @@
 
 .cloud-deletion-dialog {
   width: min(560px, 100%);
+  max-height: calc(100dvh - 12vh - 32px);
+  overflow-y: auto;
   display: grid;
   gap: var(--sp-4);
   padding: var(--sp-4);
@@ -206,9 +250,17 @@
   border-radius: var(--radius-md);
 }
 
-.cloud-deletion-impact > strong,
+.cloud-deletion-impact > strong {
+  color: var(--color-error-text);
+}
+
 .cloud-deletion-error {
   color: var(--color-error);
+}
+
+/* The personal-info toggle is a button, not a full-width bar. */
+.cloud-deletion-dialog > .secondary {
+  justify-self: start;
 }
 
 .cloud-deletion-confirmation {
@@ -236,16 +288,21 @@
 .cloud-deletion-confirm {
   min-height: 32px;
   padding: 6px 11px;
-  color: white;
-  background: var(--color-error);
-  border: 1px solid var(--color-error);
+  color: var(--color-on-danger);
+  background: var(--color-danger-fill);
+  border: 1px solid var(--color-danger-fill);
   border-radius: var(--radius-md);
   font-size: var(--fs-sm);
   font-weight: var(--fw-medium);
 }
 
-.cloud-deletion-confirm:hover:not(:disabled) {
+.cloud-deletion-confirm:hover:not(:disabled, [aria-disabled='true']) {
   filter: brightness(1.08);
+}
+
+.cloud-deletion-confirm[aria-disabled='true'] {
+  cursor: not-allowed;
+  opacity: 0.45;
 }
 
 /* ── Name this save (checkpoint naming at save time) ── */
@@ -253,6 +310,9 @@
 .save-revision-dialog {
   width: min(420px, 100%);
   display: grid;
+  /* An unbroken project name set the implicit track's width and pushed the
+     field and buttons out of the card. */
+  grid-template-columns: minmax(0, 1fr);
   gap: var(--sp-3);
   padding: var(--sp-4);
   color: var(--color-text);
@@ -275,6 +335,7 @@
   color: var(--color-text-muted);
   font-size: var(--fs-sm);
   line-height: 1.5;
+  overflow-wrap: anywhere;
 }
 
 .save-revision-dialog form {
@@ -356,9 +417,9 @@
 .delete-feature-confirm {
   min-height: 32px;
   padding: 6px 11px;
-  color: white;
-  background: var(--color-error);
-  border: 1px solid var(--color-error);
+  color: var(--color-on-danger);
+  background: var(--color-danger-fill);
+  border: 1px solid var(--color-danger-fill);
   border-radius: var(--radius-md);
   font-size: var(--fs-sm);
   font-weight: var(--fw-medium);
@@ -408,6 +469,9 @@
 
 .export-dialog-group {
   display: grid;
+  /* A long body name widened the implicit track past the group's border. */
+  grid-template-columns: minmax(0, 1fr);
+  min-width: 0;
   gap: var(--sp-2);
   margin: 0;
   padding: var(--sp-2) var(--sp-3) var(--sp-3);
@@ -515,8 +579,14 @@
   color: var(--color-success);
 }
 
+.export-dialog-report li > svg {
+  flex: none;
+}
+
 .export-dialog-report li span {
+  min-width: 0;
   color: var(--color-text);
+  overflow-wrap: anywhere;
 }
 
 .export-dialog-report li small {
@@ -729,6 +799,9 @@
   overflow-y: auto;
   padding: var(--sp-1);
   display: grid;
+  /* The implicit track grew to the longest unwrapped disabled reason, so
+     every row ran past the list at phone width. */
+  grid-template-columns: minmax(0, 1fr);
   gap: 1px;
 }
 
@@ -759,7 +832,7 @@
 }
 
 .palette-row.disabled {
-  opacity: 0.5;
+  opacity: var(--opacity-disabled);
   cursor: not-allowed;
 }
 
@@ -785,6 +858,19 @@
   font-family: var(--font-mono);
   font-size: var(--fs-mini);
   white-space: nowrap;
+}
+
+/* On a short row a disabled command's reason gives way before its name
+   does: the name keeps its width and the reason ellipsizes (the row's title
+   keeps it whole). Unshrinkable, the reason squeezed the name to "Crea…". */
+.palette-label:has(+ .palette-reason) {
+  flex: 1 0 auto;
+}
+
+.palette-reason {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
 }
 
 .shortcuts-card {
@@ -894,7 +980,7 @@
 }
 
 .sharing-status-line[data-tone='error'] {
-  color: var(--color-error);
+  color: var(--color-error-text);
   background: color-mix(in srgb, var(--color-error) 8%, transparent);
 }
 
@@ -941,9 +1027,11 @@
   line-height: 1.5;
 }
 
+/* Every control in the sharing rows is 28px; they ran 20, 24, 26 and 28
+   side by side. */
 .sharing-share-create {
   flex: 0 0 auto;
-  min-height: 26px;
+  min-height: 28px;
   padding: 2px 10px;
   font-size: var(--fs-xs);
 }
@@ -960,7 +1048,7 @@
 
 .sharing-share-url {
   min-width: 0;
-  height: 26px;
+  height: 28px;
   padding: 0 var(--sp-2);
   border: var(--border-thin);
   border-radius: var(--radius-sm);
@@ -970,7 +1058,7 @@
 }
 
 .sharing-share-copy {
-  min-height: 26px;
+  min-height: 28px;
   padding: 2px 10px;
   font-size: var(--fs-xs);
 }
@@ -1087,7 +1175,7 @@
 }
 
 .sharing-role-select {
-  height: 24px;
+  height: 28px;
   padding: 1px 4px;
   font-size: var(--fs-xs);
   background: transparent;
@@ -1109,6 +1197,7 @@
 /* Row actions reveal on hover; keyboard focus and coarse pointers
    always see them. */
 .sharing-row-action {
+  min-height: 24px;
   padding: 3px 7px;
   border-radius: var(--radius-sm);
   color: var(--color-text-muted);
@@ -1160,8 +1249,15 @@
   border: none;
 }
 
+/* Borderless by design, but never without a focus mark: the rule above
+   removed all three, so a keyboard user could not see the field they had
+   tabbed into. */
+.sharing-invite input:focus-visible {
+  box-shadow: inset 0 -2px 0 var(--color-accent);
+}
+
 .sharing-invite select {
-  height: 24px;
+  height: 28px;
   padding: 1px 4px;
   font-size: var(--fs-xs);
   background: transparent;
@@ -1174,7 +1270,7 @@
 }
 
 .sharing-invite button {
-  min-height: 26px;
+  min-height: 28px;
   padding: 2px 10px;
   font-size: var(--fs-xs);
 }
@@ -1251,6 +1347,12 @@
   overflow-y: auto;
 }
 
+/* The list is a focusable region so the keyboard can scroll it; the
+   card's overflow clipped an outset ring on three sides. */
+.shortcuts-grid:focus-visible {
+  outline-offset: -2px;
+}
+
 /*
  * The key column is as wide as the section's longest binding and every row
  * shares it (subgrid). A fixed 148px column was too narrow for "Ctrl/Cmd+
@@ -1290,18 +1392,18 @@
   font-size: var(--fs-sm);
 }
 
-/* Every dialog card springs open from a little under full size, with a
-   slight overshoot, so it lands in front of the dimmed stage rather than
-   appearing on it. The cards are placed by the backdrop's flex layout, never
-   by their own transform, so the keyframe has the property to itself. */
+/* Every dialog card settles in from just under full size, so it lands in
+   front of the dimmed stage rather than appearing on it. On the token
+   duration and curve, without overshoot: a 320ms spring from 90% outlasted
+   the 100ms backdrop fade and made a confirm dialog feel slow. */
 .modal-backdrop > * {
   transform-origin: 50% 20%;
-  animation: dialog-spring 320ms cubic-bezier(0.34, 1.56, 0.64, 1);
+  animation: dialog-in var(--dur-base) var(--ease-out);
 }
 
-@keyframes dialog-spring {
+@keyframes dialog-in {
   from {
     opacity: 0;
-    transform: scale(0.9);
+    scale: 0.97;
   }
 }

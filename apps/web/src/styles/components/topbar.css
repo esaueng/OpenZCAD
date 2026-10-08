@@ -119,7 +119,28 @@
   opacity: 1;
 }
 
+/* Inside the edge, not around it: the breadcrumb clips overflow for the
+   name's ellipsis, and the global ring outside the button lost its top,
+   bottom and left to that clip. */
+.project-title-button:focus-visible {
+  outline-offset: -2px;
+}
+
+/* Where the name is cut short, the hidden pencil's reserved 16px read as a
+   gap between the ellipsis and the units. The button's tooltip still says
+   it renames. */
+@media (max-width: 900px) {
+  .project-title-button svg {
+    display: none;
+  }
+}
+
+/* Shrinks with the breadcrumb, which clips: at 800px wide the field ran
+   past it, cutting off its border and the text by the caret. */
 .project-title-input {
+  flex: 0 1 auto;
+  min-width: 0;
+  max-width: 100%;
   width: clamp(120px, 18vw, 280px);
   height: 28px;
   padding: 0 7px;
@@ -177,7 +198,6 @@
   color: var(--color-text);
   background: var(--color-surface-hover);
   border-color: var(--color-border-strong);
-  outline: none;
 }
 
 .icon-button.is-on {
@@ -223,6 +243,9 @@
   background: var(--color-surface-2);
   border: var(--border-thin);
   border-radius: var(--radius-md);
+  /* A menu over the workspace, elevated like every other one; flat, it
+     read as part of the island it drops from. */
+  box-shadow: var(--shadow-popover);
 }
 
 .topbar-menu-item {
@@ -298,7 +321,13 @@
   margin-left: 8px;
   padding: 0 5px;
   color: var(--color-warning);
-  background: color-mix(in srgb, var(--color-warning) 12%, transparent);
+  /* An opaque tint: see-through, it took the menu's darker surface-2 and the
+     amber count fell to 4.08:1 in the light theme. */
+  background: color-mix(
+    in srgb,
+    var(--color-warning) 12%,
+    var(--color-surface)
+  );
   border: 1px solid color-mix(in srgb, var(--color-warning) 40%, transparent);
   border-radius: var(--radius-sm);
   font-family: var(--font-mono);
@@ -348,7 +377,6 @@ button.save-state:focus-visible,
   color: var(--color-text);
   background: var(--color-surface-hover);
   border-color: var(--color-border-strong);
-  outline: none;
 }
 
 button.save-state:active:not(:disabled),
@@ -406,7 +434,7 @@ button.save-state:active:not(:disabled),
 .collaboration-state:disabled,
 .collaboration-state[aria-disabled='true'] {
   cursor: default;
-  opacity: 0.55;
+  opacity: var(--opacity-disabled);
 }
 
 /* The save chip as a readout (F21): it shows state and takes no click, so it
@@ -430,7 +458,8 @@ button.save-state:active:not(:disabled),
    collaboration are readouts and lean on colour (green live, amber when
    something needs a look); File and Settings are commands in full text
    colour. Hover brings a surface back so the targets still read as buttons.
-   Below 1120px the row collapses to 28px icon squares (responsive.css).
+   28px tall at every width, so collapsing to 28px icon squares below
+   1120px (responsive.css) changes only their width.
    Declared after every per-chip rule above so single-class specificity
    wins here; the settings chip carries `.topbar-actions` because
    `.secondary` is imported after this sheet. */
@@ -441,8 +470,8 @@ button.save-state:active:not(:disabled),
 .topbar-actions .settings-action {
   width: auto;
   min-width: 0;
-  height: 24px;
-  min-height: 24px;
+  height: 28px;
+  min-height: 28px;
   display: inline-flex;
   align-items: center;
   justify-content: center;
@@ -510,8 +539,8 @@ button.save-state:focus-visible,
   position: absolute;
   top: -5px;
   right: -5px;
-  min-width: 14px;
-  height: 14px;
+  min-width: 16px;
+  height: 16px;
   padding: 0 3px;
   place-items: center;
   border-radius: var(--radius-md);
@@ -519,7 +548,7 @@ button.save-state:focus-visible,
   background: var(--color-success);
   box-shadow: 0 0 0 2px var(--color-surface);
   font-family: var(--font-mono);
-  font-size: 9.5px;
+  font-size: var(--fs-mini);
   font-weight: var(--fw-medium);
   line-height: 1;
 }

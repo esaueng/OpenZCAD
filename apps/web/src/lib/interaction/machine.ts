@@ -378,6 +378,21 @@ export function sketchToolKeysSuspended(state: InteractionState): boolean {
 }
 
 /**
+ * Whether a relation or modify tool is armed and waiting for picks. Its
+ * instruction on the status line ("Click a line to make it vertical.")
+ * describes that wait, so it has to go when this turns false — Escape,
+ * another tool, a second click on the armed one — or it reads as a
+ * complaint about whatever the user does next.
+ */
+export function sketchPickArmed(state: InteractionState): boolean {
+  return (
+    state.mode === 'sketch' &&
+    (state.session.pendingConstraint !== null ||
+      state.session.pendingEdit !== null)
+  );
+}
+
+/**
  * What the next Escape press does.
  *
  * Inside a sketch Escape climbs a ladder, innermost state first: the chain

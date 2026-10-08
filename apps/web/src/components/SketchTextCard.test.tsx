@@ -167,7 +167,7 @@ describe('SketchTextCard', () => {
     fireEvent.change(screen.getByLabelText('Font'), {
       target: { value: 'lora' }
     });
-    await user.click(screen.getByRole('button', { name: 'B' }));
+    await user.click(screen.getByRole('button', { name: 'Bold' }));
     await user.click(screen.getByRole('radio', { name: 'Align center' }));
     expect(draftOf()).toMatchObject({
       fontFamily: 'lora',

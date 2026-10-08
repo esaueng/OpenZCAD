@@ -30,6 +30,10 @@
   min-width: 0;
   margin-inline: auto;
   display: grid;
+  /* One column the panel's own width. An implicit auto column sized to the
+     foot line's min-content, wider than a 292px panel at 1024px, and the
+     mask clipped "hide", the times and the badges at its edge. */
+  grid-template-columns: minmax(0, 1fr);
   grid-template-rows: minmax(0, 1fr) auto;
   color: var(--color-text);
   background: var(--color-bg);
@@ -48,7 +52,7 @@
   );
   font-size: var(--fs-base);
   animation: assistant-dock-in var(--dur-base) var(--ease-out);
-  transition: max-height var(--dur-slow) var(--ease-out);
+  transition: max-height var(--dur-base) var(--ease-out);
 }
 
 @keyframes assistant-dock-in {
@@ -103,6 +107,16 @@
   border-top-right-radius: 0;
 }
 
+/* The ask hint rises onto the stream's foot line and covered attach,
+   history, clear and hide while a question was being typed — attaching a
+   drawing to it included. With the stream up, Enter plainly asks it; the
+   hint stays the field's description, which a hidden element still gives.
+   The command list, or its "No matching command.", is not this float: it
+   replaces the stream instead. */
+.workspace.with-assistant .command-bar-float.command-bar-ask {
+  display: none;
+}
+
 .assistant-panel.dragging {
   outline: 1px dashed var(--color-accent-border);
   outline-offset: -3px;
@@ -125,6 +139,9 @@
 /* ── The thread ─────────────────────────────────────────── */
 
 .assistant-thread {
+  /* The jump button shares this cell, so it stands on the thread's foot
+     whatever the footer below holds. */
+  grid-area: 1 / 1;
   min-height: 0;
   overflow-y: auto;
   padding: var(--assistant-fade) 14px 10px 10px;
@@ -155,7 +172,7 @@
 /* An older day's landmark; today needs none. */
 .assistant-day-rule {
   padding-left: 28px;
-  color: var(--color-text-dim);
+  color: var(--color-text-subtle);
   font-family: var(--font-mono);
   font-size: var(--fs-mini);
   letter-spacing: 0.08em;
@@ -194,27 +211,25 @@
 }
 
 /* Age fades the stream on top of the top-edge dissolve: the further a line
-   is from the prompt, the quieter. Hovering lifts it for a read-back. */
-.assistant-thread:not(:hover)
-  .assistant-day
-  .assistant-turn:nth-last-child(n + 4) {
+   is from the prompt, the quieter. Hovering lifts it for a read-back, and
+   scrollback, which is for reading back, does not fade at all. The age is
+   counted over the whole thread (AssistantPanel), not within each day. */
+.assistant-panel:not(.scrollback)
+  .assistant-thread:not(:hover)
+  .assistant-turn.age-1 {
   opacity: 0.86;
 }
 
-.assistant-thread:not(:hover)
-  .assistant-day
-  .assistant-turn:nth-last-child(n + 7) {
+.assistant-panel:not(.scrollback)
+  .assistant-thread:not(:hover)
+  .assistant-turn.age-2 {
   opacity: 0.68;
 }
 
-.assistant-thread:not(:hover)
-  .assistant-day
-  .assistant-turn:nth-last-child(n + 10) {
+.assistant-panel:not(.scrollback)
+  .assistant-thread:not(:hover)
+  .assistant-turn.age-3 {
   opacity: 0.5;
-}
-
-.assistant-panel.scrollback .assistant-turn {
-  opacity: 1;
 }
 
 .assistant-turn-mark {
@@ -237,7 +252,7 @@
 }
 
 .assistant-turn-time {
-  color: var(--color-text-dim);
+  color: var(--color-text-subtle);
   font-family: var(--font-mono);
   font-size: var(--fs-mini);
   line-height: 21px;
@@ -301,6 +316,14 @@
   font-size: var(--fs-mini);
 }
 
+/* An ask that never got its answer: the line under it says so. */
+.assistant-stopped {
+  margin: 0;
+  padding-left: 28px;
+  color: var(--color-text-subtle);
+  font-size: var(--fs-mini);
+}
+
 /* ── Empty stream ───────────────────────────────────────── */
 
 .assistant-empty {
@@ -354,7 +377,7 @@
 }
 
 .assistant-suggestion:disabled {
-  opacity: 0.5;
+  opacity: var(--opacity-disabled);
   cursor: not-allowed;
 }
 
@@ -388,9 +411,12 @@
 }
 
 .assistant-jump {
-  position: absolute;
-  right: 14px;
-  bottom: 48px;
+  grid-area: 1 / 1;
+  align-self: end;
+  justify-self: end;
+  z-index: 1;
+  min-height: 24px;
+  margin: 0 14px 8px 0;
   display: inline-flex;
   align-items: center;
   gap: 4px;
@@ -463,8 +489,8 @@
   align-items: center;
   gap: 3px;
   padding: 1px 6px;
-  color: var(--color-preview);
-  background: color-mix(in srgb, var(--color-preview) 12%, transparent);
+  color: var(--color-success);
+  background: color-mix(in srgb, var(--color-success) 12%, transparent);
   border-radius: var(--radius-md);
   letter-spacing: 0.04em;
   text-transform: none;
@@ -570,7 +596,7 @@
 }
 
 .assistant-card-actions button.active {
-  color: var(--color-preview);
+  color: var(--color-success);
 }
 
 .assistant-card-actions button kbd {
@@ -666,6 +692,8 @@
 
 .assistant-chip-input input {
   width: 96px;
+  /* The global field height is 30px; this one sits in a row of 25px chips. */
+  height: 25px;
   min-height: 25px;
   padding: 0 6px;
   font-size: var(--fs-mini);
@@ -684,6 +712,7 @@
 }
 
 .assistant-link {
+  min-height: 24px;
   display: inline-flex;
   align-items: center;
   gap: 3px;
@@ -711,6 +740,7 @@
 }
 
 .assistant-disclosure {
+  min-height: 24px;
   display: inline-flex;
   align-items: center;
   gap: 5px;
@@ -786,7 +816,7 @@
 }
 
 .assistant-confidence {
-  margin-left: 5px;
+  margin-left: 2px;
   color: var(--color-text-subtle);
   font-family: var(--font-mono);
   font-size: 0.85em;
@@ -799,7 +829,9 @@
 /* ── Between the stream and the prompt ───────────────────── */
 
 .assistant-actions {
+  grid-area: 2 / 1;
   display: grid;
+  grid-template-columns: minmax(0, 1fr);
   gap: 6px;
   padding: 4px 10px 6px;
 }
@@ -848,8 +880,8 @@
 .assistant-pending-item button {
   display: grid;
   place-items: center;
-  width: 16px;
-  height: 16px;
+  width: 24px;
+  height: 24px;
   padding: 0;
   color: var(--color-text-subtle);
   border: 0;
@@ -862,7 +894,7 @@
 }
 
 .assistant-pending-hint {
-  color: var(--color-text-dim);
+  color: var(--color-text-subtle);
   font-family: var(--font-mono);
   font-size: var(--fs-mini);
 }
@@ -895,7 +927,7 @@
 }
 
 .assistant-verified-action:disabled {
-  opacity: 0.5;
+  opacity: var(--opacity-disabled);
   cursor: not-allowed;
 }
 
@@ -934,7 +966,7 @@
   justify-content: flex-end;
   gap: 12px;
   padding-top: 2px;
-  color: var(--color-text-dim);
+  color: var(--color-text-subtle);
   font-family: var(--font-mono);
   font-size: var(--fs-mini);
 }
@@ -948,8 +980,9 @@
 }
 
 .assistant-foot-action {
+  min-height: 24px;
   padding: 2px 0;
-  color: var(--color-text-dim);
+  color: var(--color-text-subtle);
   border: 0;
   border-radius: var(--radius-sm);
   font: inherit;
@@ -959,10 +992,10 @@
 .assistant-foot-action:hover:not(:disabled),
 .assistant-foot-action:focus-visible,
 .assistant-foot-action.active {
-  color: var(--color-text-muted);
+  color: var(--color-text);
 }
 
 .assistant-foot-action:disabled {
-  opacity: 0.5;
+  opacity: var(--opacity-disabled);
   cursor: not-allowed;
 }

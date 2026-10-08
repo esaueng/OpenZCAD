@@ -7,12 +7,13 @@ import {
   useState
 } from 'react';
 import type { CSSProperties } from 'react';
-import { Link2, Plus } from 'lucide-react';
+import { Link2, Plus, X } from 'lucide-react';
 import type {
   CollaborationMember,
   ProjectAccessRole,
   ProjectEditLease,
   ProjectMemberRole,
+  ProjectShareLinkMode,
   ProjectShareLinkSummary,
   ProjectSharingResponse,
   UserId
@@ -80,6 +81,16 @@ const ROLE_LABELS: Record<ProjectAccessRole, string> = {
   viewer: 'Viewer'
 };
 
+const LINK_MODE_LABELS: Record<ProjectShareLinkMode, string> = {
+  tweak: 'Tweak',
+  view: 'View'
+};
+
+const PRESENCE_LABELS: Record<CollaborationMember['status'], string> = {
+  active: 'Active',
+  idle: 'Idle'
+};
+
 function errorMessage(error: unknown): string {
   return error instanceof Error ? error.message : 'The sharing request failed.';
 }
@@ -92,15 +103,17 @@ function createdLabel(createdAt: number): string {
   return new Date(createdAt * 1000).toLocaleDateString();
 }
 
-/** Compact time left on an invitation: `6d`, `3h`, or `expired`. */
+/**
+ * Compact time left on an invitation: `7d`, `3h`, or `expired`. Rounded up
+ * like the hours, so a 7-day invitation reads 7d when it is sent, not 6d.
+ */
 function expiryLabel(expiresAt: number): string {
   const remaining = expiresAt * 1000 - Date.now();
   if (remaining <= 0) {
     return 'expired';
   }
-  const days = Math.floor(remaining / 86_400_000);
-  if (days >= 1) {
-    return `${days}d`;
+  if (remaining >= 86_400_000) {
+    return `${Math.ceil(remaining / 86_400_000)}d`;
   }
   return `${Math.ceil(remaining / 3_600_000)}h`;
 }
@@ -192,6 +205,7 @@ export function ProjectSharingDialog({
   const [busy, setBusy] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [anchor, setAnchor] = useState<PopoverAnchor | null>(null);
+  const actionOriginRef = useRef<HTMLElement | null>(null);
   useModalFocus(dialogRef, { autoFocus: true });
 
   useLayoutEffect(() => {
@@ -255,6 +269,10 @@ export function ProjectSharingDialog({
   }, [refresh]);
 
   const mutate = async (key: string, action: () => Promise<void>) => {
+    actionOriginRef.current =
+      document.activeElement instanceof HTMLElement
+        ? document.activeElement
+        : null;
     setBusy(key);
     setError(null);
     try {
@@ -269,6 +287,33 @@ export function ProjectSharingDialog({
   const leaseIsActive = activeLease(lease, projectId);
   const interactionBusy = hydrating || busy !== null;
   const isOwner = !localProject && role === 'owner';
+
+  // Every control is disabled while an action runs, and a revoke or remove
+  // takes its own row away, so the control that started it drops focus on
+  // the body: out of the dialog, past Tab order and the error it may show.
+  // Once the action settles, focus goes back to that control or, when it is
+  // gone, to the dialog itself.
+  useEffect(() => {
+    if (interactionBusy) {
+      return;
+    }
+    const origin = actionOriginRef.current;
+    actionOriginRef.current = null;
+    const dialog = dialogRef.current;
+    if (!origin || !dialog) {
+      return;
+    }
+    const active = document.activeElement;
+    if (active !== null && active !== document.body) {
+      return;
+    }
+    if (origin.isConnected && dialog.contains(origin)) {
+      origin.focus();
+    }
+    if (!dialog.contains(document.activeElement)) {
+      dialog.focus();
+    }
+  }, [interactionBusy]);
 
   const people = useMemo(() => {
     const presenceByUser = new Map<UserId, Presence>();
@@ -400,7 +445,7 @@ export function ProjectSharingDialog({
             aria-label="Close sharing"
             onClick={onClose}
           >
-            ×
+            <X size={14} aria-hidden="true" />
           </button>
         </header>
 
@@ -518,7 +563,9 @@ export function ProjectSharingDialog({
                       <span className="sharing-member-id">
                         Link created {createdLabel(shareLink.createdAt)}
                       </span>
-                      <span className="sharing-kind">{shareLink.mode}</span>
+                      <span className="sharing-kind">
+                        {LINK_MODE_LABELS[shareLink.mode]}
+                      </span>
                       <button
                         type="button"
                         className="sharing-row-action"
@@ -556,11 +603,13 @@ export function ProjectSharingDialog({
             >
               <ul className="sharing-list">
                 {people.map((person, index) => {
+                  // Numbered among the others: the self row is "You", so
+                  // counting it started the list at Collaborator 2.
                   const name = personalInfoVisible
                     ? person.name
                     : person.kind === 'self'
                       ? 'You'
-                      : `Collaborator ${index + 1}`;
+                      : `Collaborator ${index + (people[0]?.kind === 'self' ? 0 : 1)}`;
                   const member =
                     person.kind === 'member'
                       ? memberByUser.get(person.userId)
@@ -588,7 +637,7 @@ export function ProjectSharingDialog({
                           className="sharing-presence"
                           data-status={person.presence ?? 'idle'}
                         >
-                          {person.presence ?? 'idle'}
+                          {PRESENCE_LABELS[person.presence ?? 'idle']}
                         </span>
                       ) : null}
                       {member ? (
@@ -659,7 +708,7 @@ export function ProjectSharingDialog({
                         : `Invitation ${index + 1}`}
                     </span>
                     <span className="sharing-kind">
-                      Invited · {invitation.role} ·{' '}
+                      Invited · {ROLE_LABELS[invitation.role]} ·{' '}
                       {expiryLabel(invitation.expiresAt)}
                     </span>
                     <button

@@ -169,6 +169,7 @@ import {
 } from '@openzcad/viewport';
 import {
   UNIT_TO_MM,
+  displayLengthName,
   type BodyRepresentation,
   type FaceGeometry,
   type TopologySelection,
@@ -272,6 +273,7 @@ import type { PlaneBasis } from '@openzcad/geometry';
 import type { ParamValue, PlaneId, SketchObjectData } from '@openzcad/shared';
 import { buildPlanePickerRig } from './viewer/planePickerRig';
 import { evalParamValue } from '../lib/model';
+import { reducesMotion } from '../lib/reducedMotion';
 import {
   readWheelDeviceMemory,
   writeWheelDeviceMemory
@@ -1821,6 +1823,10 @@ export function ModelViewer({
   editableBodyIdsRef.current = new Set(editableBodyIds);
   const unitsRef = useRef(units);
   unitsRef.current = units;
+  // What an overlay prints after a number: `inch` is the document's unit
+  // name, `in` is what the dock and the Inspector call it on screen.
+  const unitLabelRef = useRef(displayLengthName(units as UnitSystem));
+  unitLabelRef.current = displayLengthName(units as UnitSystem);
   const displayModeRef = useRef(settings.displayMode);
   displayModeRef.current = settings.displayMode;
   const sectionViewRef = useRef(settings.sectionView ?? null);
@@ -2194,6 +2200,8 @@ export function ModelViewer({
     labelRenderer.domElement.style.position = 'absolute';
     labelRenderer.domElement.style.inset = '0';
     labelRenderer.domElement.style.pointerEvents = 'none';
+    // Holds every label under the overlay cards (viewport-overlays.css).
+    labelRenderer.domElement.classList.add('viewer-label-layer');
     host.appendChild(labelRenderer.domElement);
 
     // The camera rig owns both cameras, the orbit controls, the projection
@@ -2207,7 +2215,7 @@ export function ModelViewer({
       requestRender: () => requestRender(),
       onViewChange: (view) => onViewChangeRef.current(view),
       onViewSettled: (view) => onViewSettledRef.current(view),
-      reducedMotion: () => reducedMotionRef.current === true,
+      reducedMotion: () => reducesMotion(reducedMotionRef.current),
       // Defaults on: zooming toward the pointer is what every modern CAD
       // tool does, and a saved view from before the preference existed
       // should get the current behaviour rather than the old one.
@@ -3276,6 +3284,19 @@ export function ModelViewer({
         return;
       }
       handleChipClick();
+    });
+    // The Total/Offset switch decides what exact entry edits, so it has to
+    // be reachable without a pointer: a button in all but element.
+    radiusLabelChip.setAttribute('role', 'button');
+    radiusLabelChip.tabIndex = 0;
+    radiusLabelChip.addEventListener('keydown', (event) => {
+      if (event.key !== 'Enter' && event.key !== ' ') {
+        return;
+      }
+      // The workspace reads Space and Enter as shortcuts of its own.
+      event.preventDefault();
+      event.stopPropagation();
+      radiusLabelChip.click();
     });
 
     // Cursor-following dimension readout for in-viewport sketching.
@@ -4946,7 +4967,7 @@ export function ModelViewer({
           ? ''
           : focus.kind === 'ring'
             ? ` · ${Math.round(value * 10) / 10}°`
-            : ` · ${Math.round(value * 100) / 100} ${unitsRef.current}`;
+            : ` · ${Math.round(value * 100) / 100} ${unitLabelRef.current}`;
       moveGizmoHud.textContent = `${baseLabel}${suffix}`;
       moveGizmoHud.dataset.kind = focus.kind;
       moveGizmoHud.dataset.axis = focus.kind === 'center' ? 'free' : focus.axis;
@@ -5341,11 +5362,11 @@ export function ModelViewer({
         if (rig.kind === 'cylinder-radius') {
           const mode = cylinderDimensionModeRef.current;
           const displayValue = mode === 'diameter' ? rawValue * 2 : rawValue;
-          text = `${mode === 'diameter' ? 'Ø' : 'R'} ${formatNumber(displayValue)} ${unitsRef.current}`;
+          text = `${mode === 'diameter' ? 'Ø' : 'R'} ${formatNumber(displayValue)} ${unitLabelRef.current}`;
         } else if (rig.kind === 'edge-radius') {
           const prefix = edgeHandleOpRef.current === 'fillet' ? 'R' : 'C';
           const label = edgeHandleRef.current?.label;
-          text = `${label ? `${label} · ` : ''}${prefix} ${value} ${unitsRef.current}`;
+          text = `${label ? `${label} · ` : ''}${prefix} ${value} ${unitLabelRef.current}`;
         } else {
           // "Total" reads the whole span this face sets: a primitive's own
           // height when it has one, else the body's reach behind the face.
@@ -5356,7 +5377,7 @@ export function ModelViewer({
             mode: offsetChipModeRef.current,
             span: totalBaseline ?? offsetExtentRef.current,
             sense: totalSense,
-            units: unitsRef.current
+            units: unitLabelRef.current
           });
           if (offsetPreviewInvalidRef.current) {
             text = `⚠ ${text}`;
@@ -5602,7 +5623,7 @@ export function ModelViewer({
         // Drawing-annotation typography: the units render small after the
         // number, so the chip reads "R 35ₘₘ" rather than uniform text.
         const units = document.createElement('small');
-        units.textContent = unitsRef.current;
+        units.textContent = unitLabelRef.current;
         const mode = cylinderDimensionModeRef.current;
         const displayValue =
           mode === 'diameter' ? rig.value() * 2 : rig.value();
@@ -5779,7 +5800,7 @@ export function ModelViewer({
       axis: DirectEditAxis
     ) {
       const label = axisDimensionLabel(axis);
-      dragHud.textContent = `${label} ${Math.round(value * 100) / 100} ${unitsRef.current}`;
+      dragHud.textContent = `${label} ${Math.round(value * 100) / 100} ${unitLabelRef.current}`;
       hud.showAtPointer(dragHud, event, 14, -36);
     }
 
@@ -5938,7 +5959,7 @@ export function ModelViewer({
         return;
       }
       sketchDimLabel.textContent = appendUnits
-        ? `${text} ${unitsRef.current}`
+        ? `${text} ${unitLabelRef.current}`
         : text;
       hud.showAtPointer(sketchDimLabel, event, 16, -28);
     }
@@ -5960,7 +5981,7 @@ export function ModelViewer({
 
     function renderSketchNumericHud(event: PointerEvent) {
       const label = SKETCH_NUMERIC_LABELS[sketchNumericKind];
-      const units = unitsRef.current;
+      const units = unitLabelRef.current;
       // A rectangle shows both sides at once, so it is clear which one Tab is
       // about to take you to and what the other already holds.
       const text =
@@ -6255,7 +6276,7 @@ export function ModelViewer({
             rig.setInProgress(circlePreviewPoints(circle), true);
             positionSketchDimLabel(
               event,
-              `R ${Math.round(Number(circle.radius) * 1000) / 1000} ${unitsRef.current} · ⌀ ${Math.round(Number(circle.radius) * 2000) / 1000} ${unitsRef.current}`,
+              `R ${Math.round(Number(circle.radius) * 1000) / 1000} ${unitLabelRef.current} · Ø ${Math.round(Number(circle.radius) * 2000) / 1000} ${unitLabelRef.current}`,
               false
             );
           } else {
@@ -6305,7 +6326,7 @@ export function ModelViewer({
             mode.circleMode === 'two-point-diameter' ? distance / 2 : distance;
           positionSketchDimLabel(
             event,
-            `R ${Math.round(radius * 1000) / 1000} ${unitsRef.current} · ⌀ ${Math.round(radius * 2000) / 1000} ${unitsRef.current}`,
+            `R ${Math.round(radius * 1000) / 1000} ${unitLabelRef.current} · Ø ${Math.round(radius * 2000) / 1000} ${unitLabelRef.current}`,
             false
           );
         } else {
@@ -6331,7 +6352,7 @@ export function ModelViewer({
         }
         positionSketchDimLabel(
           event,
-          `${dimensionForInProgress('line', gesture.chainAnchor, locked.point)} ${unitsRef.current} · ${angleForInProgress(gesture.chainAnchor, locked.point)}°`,
+          `${dimensionForInProgress('line', gesture.chainAnchor, locked.point)} ${unitLabelRef.current} · ${angleForInProgress(gesture.chainAnchor, locked.point)}°`,
           false
         );
         requestRender();
@@ -6363,7 +6384,7 @@ export function ModelViewer({
           );
           positionSketchDimLabel(
             event,
-            `R ${Math.round(dimension.radius * 10) / 10} ${unitsRef.current} · ${Math.round(dimension.sweepDeg * 10) / 10}°`,
+            `R ${Math.round(dimension.radius * 10) / 10} ${unitLabelRef.current} · ${Math.round(dimension.sweepDeg * 10) / 10}°`,
             false
           );
         }
@@ -6614,7 +6635,11 @@ export function ModelViewer({
         const readout = drag.anchored
           ? `X ${formatNumber(point.x)} · Y ${formatNumber(point.y)}`
           : `ΔX ${formatNumber(point.x - drag.grab.x)} · ΔY ${formatNumber(point.y - drag.grab.y)}`;
-        positionSketchDimLabel(event, `${readout} ${unitsRef.current}`, false);
+        positionSketchDimLabel(
+          event,
+          `${readout} ${unitLabelRef.current}`,
+          false
+        );
       }
       // Only the dragged object is rebuilt; everything else keeps its lines.
       if (drag.preview) {
@@ -8331,7 +8356,7 @@ export function ModelViewer({
         );
         const gridSink = sketchGridReadoutRef?.current ?? null;
         if (activeSketchMode.gridVisible) {
-          const gridSpacing = `${formatNumber(spacing)} ${unitsRef.current}`;
+          const gridSpacing = `${formatNumber(spacing)} ${unitLabelRef.current}`;
           if (gridSink) {
             gridSink(gridSpacing);
             sketchGridIndicator.hidden = true;
@@ -8345,7 +8370,7 @@ export function ModelViewer({
         }
         inferenceAnimating = activeSketchRig.advanceInference(
           now,
-          reducedMotionRef.current === true
+          reducesMotion(reducedMotionRef.current)
         );
         positionSketchMoveHandles();
       } else {
@@ -9335,7 +9360,9 @@ export function ModelViewer({
               valueButton.type = 'button';
               valueButton.className = 'callout-value';
               valueButton.title = `Click to type an exact ${dimension.toLowerCase()}`;
-              valueButton.textContent = `${dimension} ${rounded} ${units}`;
+              valueButton.textContent = `${dimension} ${rounded} ${displayLengthName(
+                units as UnitSystem
+              )}`;
               pill.appendChild(valueButton);
               element.appendChild(pill);
               const bodyId = body.bodyId;
@@ -10836,14 +10863,14 @@ export function ModelViewer({
         context.selection.easeOpacity(material);
         material.transparent = true;
         delete material.userData.restoreOpaque;
-        if (reducedMotionRef.current === true) {
+        if (reducesMotion(reducedMotionRef.current)) {
           material.opacity = 0.35;
         } else {
           material.userData.targetOpacity = 0.35;
           context.fadeIns.add(material);
         }
       } else if (stored.sketchRecede) {
-        if (reducedMotionRef.current === true) {
+        if (reducesMotion(reducedMotionRef.current)) {
           material.opacity = stored.sketchRecede.opacity;
           material.transparent = stored.sketchRecede.transparent;
         } else {

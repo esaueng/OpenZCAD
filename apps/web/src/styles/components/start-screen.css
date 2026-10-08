@@ -131,7 +131,7 @@
   align-items: center;
   min-height: 16px;
   padding: 0 5px;
-  color: var(--color-accent);
+  color: var(--color-accent-hi);
   background: var(--color-accent-dim);
   border: 1px solid var(--color-accent-border);
   border-radius: var(--radius-sm);
@@ -270,14 +270,16 @@
   text-align: left;
 }
 
-.start-shelf-tabs button:hover {
+/* The open shelf wears the accent wash; hover only lifts. The two used
+   neighbouring greys, so the open shelf and a hovered one looked alike. */
+.start-shelf-tabs button:hover:not(.is-active) {
   color: var(--color-text);
-  background: var(--color-surface-2);
+  background: var(--color-surface-hover);
 }
 
 .start-shelf-tabs button.is-active {
   color: var(--color-text);
-  background: var(--color-surface-hover);
+  background: var(--color-accent-dim);
 }
 
 .start-shelf-tabs button.is-active > svg {
@@ -297,8 +299,10 @@
   text-align: center;
 }
 
+/* The badge's wash sits on the open tab's own, so its digits take the
+   brighter accent to keep their contrast on the doubled tint. */
 .start-shelf-tabs button.is-active .start-shelf-count {
-  color: var(--color-accent);
+  color: var(--color-accent-hi);
   background: var(--color-accent-dim);
 }
 
@@ -344,6 +348,12 @@
 
   .start-screen:not(.is-fresh) .start-learn-head .start-section-note {
     display: none;
+  }
+
+  /* The Library eyebrow's inset, so the two labels and the entries under
+     them share one left edge (with the list's 2px gap, 6px under it too). */
+  .start-screen:not(.is-fresh) .start-learn-head {
+    padding: 0 8px 4px;
   }
 }
 
@@ -417,7 +427,7 @@
 .start-account-action {
   flex: none;
   min-height: 0;
-  height: 20px;
+  height: 24px;
   padding: 0 4px;
   color: var(--color-accent);
   font-size: var(--fs-sm);
@@ -438,11 +448,16 @@
   cursor: default;
 }
 
+/* 24px like every other icon-only control; at 3px around a 12px glyph it
+   drew 18px, under the pointer-target floor. */
 .start-account-dismiss {
-  display: inline-flex;
+  display: inline-grid;
+  place-items: center;
   flex: none;
+  width: 24px;
+  height: 24px;
   min-height: 0;
-  padding: 3px;
+  padding: 0;
   color: var(--color-text-subtle);
   background: none;
   border: none;
@@ -483,6 +498,9 @@
    sentence row and stay in reach either way. */
 .start-sync-failures {
   display: grid;
+  /* An auto column grows to the longest name's min-content, which pushed
+     every row's Retry past the list's clip edge. */
+  grid-template-columns: minmax(0, 1fr);
   align-content: start;
   gap: 2px;
   max-height: min(30vh, 220px);
@@ -609,8 +627,8 @@
   right: 5px;
   display: grid;
   place-items: center;
-  width: 20px;
-  height: 20px;
+  width: 24px;
+  height: 24px;
   color: var(--color-text-subtle);
   border-radius: var(--radius-sm);
 }
@@ -703,7 +721,7 @@
 }
 
 .start-shelf-action.is-destructive {
-  color: var(--color-error);
+  color: var(--color-error-text);
 }
 
 /* ── Part tiles ──────────────────────────────────────────── */
@@ -757,7 +775,9 @@
   text-align: left;
 }
 
-.start-tile-project:has(.start-tile-open:hover:not(:disabled)),
+.start-tile-project:has(
+  > .start-tile-open:not(.is-static):hover:not(:disabled)
+),
 .start-tile-project:has(.start-tile-open:focus-visible),
 .start-tile-project.is-drop-target {
   color: var(--color-text);
@@ -765,7 +785,7 @@
 }
 
 .start-tile-project:has(.start-tile-open:focus-visible) {
-  box-shadow: 0 0 0 2px var(--color-accent-dim);
+  box-shadow: 0 0 0 2px var(--color-accent);
 }
 
 .start-tile-open:focus-visible {
@@ -841,7 +861,9 @@
   text-align: center;
 }
 
-.start-tile-project:hover .start-tile-thumb {
+/* Only a tile that opens answers the pointer; a trashed one is a static div. */
+.start-tile-project:has(> .start-tile-open:not(.is-static):not(:disabled)):hover
+  .start-tile-thumb {
   color: var(--color-accent);
 }
 
@@ -950,6 +972,14 @@
   opacity: 1;
 }
 
+/* Without hover, a hidden action could never be revealed before a tap on the
+   tile opened the part, so Archive, Trash and the rest stay in sight. */
+@media (hover: none) {
+  .start-tile-actions {
+    opacity: 1;
+  }
+}
+
 .start-tile-action {
   display: grid;
   place-items: center;
@@ -988,11 +1018,11 @@
   display: grid;
   min-width: 168px;
   padding: 4px;
-  background: var(--color-surface-2);
-  border: var(--border-thin);
-  border-color: var(--color-border-strong);
+  /* The one menu style: the context and inspector overflow menus match. */
+  background: var(--color-surface);
+  border: var(--border-strong);
   border-radius: var(--radius-md);
-  box-shadow: 0 8px 24px rgba(0, 0, 0, 0.45);
+  box-shadow: var(--shadow-popover);
 }
 
 .start-tile-menu button,
@@ -1000,7 +1030,8 @@
   display: flex;
   align-items: center;
   gap: 8px;
-  padding: 6px 8px;
+  min-height: 28px;
+  padding: 3px 8px;
   color: var(--color-text-muted);
   border-radius: var(--radius-sm);
   font-size: var(--fs-sm);
@@ -1013,9 +1044,14 @@
   background: var(--color-surface-hover);
 }
 
+/* The text-grade red: --color-error is under AA on the menu's surface-2 and
+   on the hover wash. The hover rule restates it because the generic hover
+   colour above outranks the plain class. */
 .start-tile-menu button.is-destructive,
-.start-tile-footer button.is-destructive {
-  color: var(--color-error);
+.start-tile-footer button.is-destructive,
+.start-tile-menu button.is-destructive:hover:not(:disabled),
+.start-tile-footer button.is-destructive:hover:not(:disabled) {
+  color: var(--color-error-text);
 }
 
 .start-tile-footer {
@@ -1051,7 +1087,7 @@
 .start-update button {
   flex: none;
   min-height: 0;
-  height: 20px;
+  height: 24px;
   padding: 0 8px;
   font-size: var(--fs-xs);
   border-radius: var(--radius-sm);
@@ -1068,22 +1104,51 @@
   background: var(--color-surface);
 }
 
+/* A real tile's text sits in its open button, whose line-height is the UA's
+   normal rather than the page's 1.5. Each bar takes the height of the line it
+   stands in for (name, then meta), so the grid does not shift as the parts
+   arrive. */
+.start-tile-placeholder .start-tile-body {
+  line-height: normal;
+}
+
 .start-tile-placeholder .start-tile-body > span {
   width: 55%;
-  height: 12px;
-  margin: 5px 0;
+  height: 10px;
+  margin-block: calc((1lh - 10px) / 2);
   background: var(--color-surface-2);
   border-radius: var(--radius-sm);
+  font-size: var(--fs-base);
+}
+
+.start-tile-placeholder .start-tile-body > span + span {
+  width: 35%;
+  height: 8px;
+  margin-block: calc((1lh - 8px) / 2);
+  font-size: var(--fs-xs);
 }
 
 /* ── First run ───────────────────────────────────────────── */
 
 /* With nothing saved yet the demos take the stage under the empty shelf as
-   full cards, and the cloud card closes the column on its own. */
+   full cards, and the cloud card closes the column on its own. The empty
+   shelf stretches to fill the stage above them, in both layouts, so the page
+   reads as an empty stage with the demos anchored under it. A min-height on
+   the section could not do it: it resolved against the body's auto row. */
+.start-screen.is-fresh .start-body {
+  grid-template-rows: minmax(0, 1fr);
+}
+
+.start-screen.is-fresh .start-body > .start-section {
+  grid-template-rows: auto minmax(0, 1fr);
+}
+
+.start-screen.is-fresh .start-empty {
+  align-content: center;
+}
+
 @media (min-width: 901px) {
   .start-screen.is-fresh {
-    /* The empty shelf stretches to fill the stage above the demo cards, so
-       the page reads as an empty stage with the demos anchored under it. */
     grid-template-rows: auto auto minmax(0, 1fr) auto;
     grid-template-areas:
       'header  body'
@@ -1100,18 +1165,11 @@
     padding-bottom: 0;
   }
 
-  .start-screen.is-fresh .start-body > .start-section {
-    grid-template-rows: auto minmax(0, 1fr);
-    min-height: 100%;
-  }
-
-  .start-screen.is-fresh .start-empty {
-    align-content: center;
-  }
-
+  /* The shelf's own inset and the cloud card's bottom margin, so the cards
+     line up with the shelf above and the card beside them. */
   .start-screen.is-fresh .start-learn {
     gap: var(--sp-3);
-    padding: var(--sp-4) var(--sp-5) var(--sp-5);
+    padding: var(--sp-4) var(--sp-4) 12px;
     overflow: visible;
   }
 }

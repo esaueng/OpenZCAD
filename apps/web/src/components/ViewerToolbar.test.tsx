@@ -360,3 +360,84 @@ describe('the section button and its panel', () => {
     expect(views.getAttribute('aria-expanded')).toBe('false');
   });
 });
+
+describe('the standard views flyout', () => {
+  it('hands the keyboard back to its button once a view is chosen', () => {
+    // The chosen tile unmounted with the panel and focus fell to <body>.
+    const onView = vi.fn();
+    const noop = () => undefined;
+    render(
+      <ViewerToolbar
+        settings={{ ...settings, sectionView: undefined }}
+        projection="perspective"
+        canUndo={false}
+        canRedo={false}
+        sectionRange={null}
+        onUndo={noop}
+        onRedo={noop}
+        onToggleGrid={noop}
+        onFit={noop}
+        onView={onView}
+        onCycleDisplayMode={noop}
+        onToggleProjection={noop}
+        onToggleSection={noop}
+        onSectionPlane={noop}
+        onSectionOffset={noop}
+        onSectionCommit={noop}
+        onExportSectionDxf={noop}
+        sectionOutline={{ kind: 'clipping' }}
+        units="mm"
+      />
+    );
+    const trigger = screen.getByRole('button', { name: 'Standard views' });
+    // A group of buttons, not a menu: no menu-button claim.
+    expect(trigger).not.toHaveAttribute('aria-haspopup');
+    fireEvent.click(trigger);
+    const top = screen.getByRole('button', { name: 'Top view (2)' });
+    // The key is on the tile; the view's name stays the visible text.
+    expect(top).toHaveTextContent('Top2');
+    top.focus();
+    fireEvent.click(top);
+    expect(onView).toHaveBeenCalledWith('top');
+    expect(trigger).toHaveFocus();
+  });
+});
+
+describe('the section view help', () => {
+  it('leads with the state and names the panel apart from its slider', () => {
+    const noop = () => undefined;
+    render(
+      <ViewerToolbar
+        settings={settings}
+        projection="perspective"
+        canUndo={false}
+        canRedo={false}
+        sectionRange={{ min: 0, max: 6 }}
+        onUndo={noop}
+        onRedo={noop}
+        onToggleGrid={noop}
+        onFit={noop}
+        onView={noop}
+        onCycleDisplayMode={noop}
+        onToggleProjection={noop}
+        onToggleSection={noop}
+        onSectionPlane={noop}
+        onSectionOffset={noop}
+        onSectionCommit={noop}
+        onExportSectionDxf={noop}
+        sectionOutline={{ kind: 'clipping' }}
+        units="mm"
+      />
+    );
+    // The old sentence ran past the 320px tooltip and lost "Now: …".
+    fireEvent.focus(screen.getByRole('button', { name: /^Section view/ }));
+    expect(screen.getByRole('tooltip')).toHaveTextContent(
+      'Section viewNow: XY plane · cuts the display only'
+    );
+    expect(
+      screen.getByRole('group', { name: 'Section view' })
+    ).toContainElement(
+      screen.getByRole('slider', { name: 'Section plane offset' })
+    );
+  });
+});

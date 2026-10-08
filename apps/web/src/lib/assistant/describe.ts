@@ -55,10 +55,22 @@ function isZeroVector(input: {
   );
 }
 
+function plural(count: number, noun: string): string {
+  return `${count} ${noun}${count === 1 ? '' : 's'}`;
+}
+
 export function describeOperation(operation: CadPatchOperation): string {
   switch (operation.kind) {
+    case 'add_raised_feature_control':
+      return `Separate the measured raised profiles of ${describeBodyRef(operation.targetBodyId)}, shown by ${operation.parameter}`;
+    case 'use_edit_candidate':
+      return `Measured parameter controls on ${describeBodyRef(operation.targetBodyId)}, at their current values`;
     case 'set_parameter':
       return `Set ${operation.name} = ${operation.expression}`;
+    case 'rename_parameter':
+      return `Rename parameter ${operation.name} to ${operation.newName}`;
+    case 'delete_parameter':
+      return `Delete parameter ${operation.name}`;
     case 'set_feature_dimension':
       return `Set ${operation.field} = ${value(operation.value)} on ${operation.featureId}`;
     case 'set_sketch_dimension':
@@ -92,6 +104,8 @@ export function describeOperation(operation: CadPatchOperation): string {
       return `${operation.name} — drive both ${value(operation.holes[0]?.sourceDiameter ?? 0)} mounting bores of ${describeBodyRef(operation.targetBodyId)} by ${operation.parameter}`;
     case 'add_growing_holder_recipe':
       return `${operation.name} — grow the measured ${value(operation.opening.sourceOpening)} opening of ${describeBodyRef(operation.targetBodyId)} along ${operation.opening.axis}, driven by ${operation.parameter}${operation.opening.lettering ? '; keep the complete lettering together with a show_text toggle' : ''}`;
+    case 'add_imported_opening_recipe':
+      return `${operation.name} — resize the measured ${value(operation.sourceWidth)} opening of ${describeBodyRef(operation.targetBodyId)} to ${value(operation.width)} along ${operation.axis}`;
     case 'add_direct_edit':
       return `${operation.name} — ${operation.operation.kind.replaceAll('-', ' ')} on ${describeBodyRef(operation.targetBodyId)}`;
     case 'add_edge_modifier':
@@ -104,8 +118,23 @@ export function describeOperation(operation: CadPatchOperation): string {
       } at ${value(operation.size)} on ${describeBodyRef(operation.targetBodyId)}`;
     case 'add_pattern':
       return `${operation.name} — ${operation.patternKind} pattern of ${describeBodyRef(operation.targetBodyId)}, ${value(operation.count)} along ${operation.axis}`;
-    default:
+    case 'add_face_sketch':
+      return `${operation.name} — sketch on face ${operation.planeRef.faceReference.lineageName}, ${plural(operation.objects.length, 'object')}`;
+    case 'add_multi_profile_extrude':
+      return `${operation.name} — extrude ${plural(operation.samplePoints.length, 'region')} of ${describeBodyRef(operation.sketchId)} by ${value(operation.distance)}`;
+    case 'add_mirror':
+      return `${operation.name} — mirror ${describeBodyRef(operation.targetBodyId)} across the plane through ${vector(operation.plane.origin)}, normal ${vector(operation.plane.normal)}`;
+    case 'add_shell':
+      return `${operation.name} — shell ${describeBodyRef(operation.targetBodyId)} at ${value(operation.thickness)}, ${plural(operation.openingFaceHashes.length, 'open face')}`;
+    case 'add_solid_offset':
+      return `${operation.name} — offset ${describeBodyRef(operation.targetBodyId)} by ${value(operation.distance)}`;
+    default: {
+      // Every kind the contract allows has a line above; a new kind fails the
+      // typecheck here instead of reaching a reviewer as "Unknown operation".
+      const unhandled: never = operation;
+      void unhandled;
       return 'Unknown operation';
+    }
   }
 }
 
@@ -120,7 +149,11 @@ export function operationCreatesBody(operation: CadPatchOperation): boolean {
     operation.kind === 'add_revolve' ||
     operation.kind === 'add_boolean' ||
     operation.kind === 'add_edge_modifier' ||
-    operation.kind === 'add_pattern'
+    operation.kind === 'add_pattern' ||
+    operation.kind === 'add_multi_profile_extrude' ||
+    operation.kind === 'add_mirror' ||
+    operation.kind === 'add_shell' ||
+    operation.kind === 'add_solid_offset'
   );
 }
 

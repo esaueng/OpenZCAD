@@ -135,6 +135,12 @@
   min-width: 0;
 }
 
+/* The add row's fields stand beside its 28px add button, not the 24px row
+   icons, so they take its height. */
+.param-add input {
+  height: 28px;
+}
+
 .param-name {
   color: var(--color-accent);
   font-size: var(--fs-xs);
@@ -307,7 +313,7 @@
   display: flex;
   align-items: center;
   gap: 5px;
-  min-height: 22px;
+  min-height: 24px;
   padding: 2px 6px;
   color: var(--color-text-subtle);
   font-size: var(--fs-mini);
@@ -361,7 +367,8 @@
   flex: 0 0 auto;
 }
 
-.feature-row.selected .feature-icon {
+.feature-row.selected .feature-icon,
+.body-row.selected .feature-icon {
   color: var(--color-accent);
 }
 
@@ -415,8 +422,8 @@
   background: var(--color-accent-dim);
 }
 
+/* No top rule: the section above already draws one with its border-bottom. */
 .diagnostics {
-  border-top: var(--border-thin);
   border-bottom: none;
   max-height: 180px;
   overflow-y: auto;
@@ -482,6 +489,13 @@
   .feature-row-grip {
     opacity: 1;
   }
+
+  /* Two classes, to outrank the later `.row-visibility` rule in
+     viewport-overlays.css. Revision actions are in revisions.css. */
+  .feature-row .row-visibility,
+  .body-row .row-visibility {
+    opacity: 1;
+  }
 }
 
 /* ── History timeline ────────────────────────────────────────
@@ -533,12 +547,14 @@
   min-width: 0;
 }
 
+/* Shaped like the other controls; it was the app's one pill-shaped button. */
 .history-resume {
   flex: 0 0 auto;
+  min-height: 24px;
   padding: 2px 10px;
   color: var(--color-accent);
   border: 1px solid var(--color-accent-border);
-  border-radius: 999px;
+  border-radius: var(--radius-md);
   font-size: var(--fs-mini);
 }
 
@@ -569,6 +585,13 @@
 
 .history-find input:focus {
   box-shadow: none;
+}
+
+/* The browser's own clear button is a small accent-blue glyph in no theme;
+   Escape and the Find toggle already clear the field. */
+.history-find input::-webkit-search-cancel-button {
+  -webkit-appearance: none;
+  appearance: none;
 }
 
 .history-find-count {
@@ -635,11 +658,12 @@
   transition: opacity var(--dur-base) var(--ease-out);
 }
 
+/* On the handle's duration, so the fill and the knob land together. */
 .history-spine-fill {
   height: var(--fill-height, 0);
   background: var(--color-accent);
   transition:
-    height var(--dur-slow) var(--ease-out),
+    height var(--dur-base) var(--ease-out),
     opacity var(--dur-base) var(--ease-out);
 }
 
@@ -674,7 +698,8 @@
   top: 50%;
   width: 8px;
   height: 8px;
-  margin-top: -6px;
+  /* Half the height: border-box sizing, so the border is inside the 8px. */
+  margin-top: -4px;
   border: 2px solid var(--color-accent);
   border-radius: 50%;
   background: var(--color-surface);
@@ -685,10 +710,12 @@
 }
 
 .feature-row.is-sketch .history-dot {
-  left: 7px;
-  width: 2px;
-  height: 2px;
-  margin-top: -3px;
+  /* A 4px dot (border only) centred on the 2px line at left 9px, as the
+     8px dot at left 4px is. */
+  left: 6px;
+  width: 4px;
+  height: 4px;
+  margin-top: -2px;
   border-color: var(--color-text-subtle);
 }
 
@@ -784,7 +811,10 @@
   position: absolute;
   z-index: 2;
   left: 0;
-  top: var(--handle-y, 0);
+  /* Moved by transform, not `top`: a keyboard step or an undo glides the
+     knob on the compositor instead of re-laying it out each frame. */
+  top: 0;
+  transform: translateY(var(--handle-y, 0));
   width: 20px;
   height: 20px;
   margin-top: -10px;
@@ -793,7 +823,7 @@
   border-radius: 50%;
   cursor: grab;
   touch-action: none;
-  transition: top var(--dur-slow) var(--ease-out);
+  transition: transform var(--dur-base) var(--ease-out);
 }
 
 .history-handle::before {
@@ -888,9 +918,13 @@
   }
 }
 
+/* A rule above the details, not below: the History section's own
+   border-bottom sits just under it and the two read as a double line. The
+   margin clears the end-of-history handle, which hangs 10px below the list. */
 .feature-history-panel {
-  padding: 10px 12px;
-  border-bottom: var(--border-thin);
+  margin-top: 12px;
+  padding: 10px 2px 0;
+  border-top: var(--border-thin);
   font-size: var(--fs-xs);
   display: grid;
   gap: 10px;
@@ -909,6 +943,20 @@
   font-size: inherit;
   padding: 4px 6px;
   text-align: left;
+}
+/* The inputs and dependents are links to those features; the global button
+   reset left them looking like plain bullet text. */
+.feature-history-panel li button {
+  color: var(--color-accent);
+  border-radius: var(--radius-sm);
+}
+.feature-history-panel li button:hover {
+  background: var(--color-surface-hover);
+  text-decoration: underline;
+}
+.feature-history-failure .secondary {
+  min-height: 28px;
+  margin: 4px 6px 0 0;
 }
 .feature-history-panel summary {
   cursor: pointer;

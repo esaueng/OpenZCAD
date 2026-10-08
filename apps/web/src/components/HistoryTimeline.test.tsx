@@ -1,6 +1,12 @@
-import { act, fireEvent, render, screen } from '@testing-library/react';
+import {
+  act,
+  fireEvent,
+  render,
+  screen,
+  waitFor
+} from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
-import type { ComponentProps } from 'react';
+import { useEffect, useRef, useState, type ComponentProps } from 'react';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import {
   FEATURE_ROLLBACK_SUPPRESSED_METADATA_KEY,
@@ -27,10 +33,10 @@ function feature(
 
 const rolledBack = { [FEATURE_ROLLBACK_SUPPRESSED_METADATA_KEY]: true };
 
-function renderTimeline(
+function timelineProps(
   overrides: Partial<ComponentProps<typeof HistoryTimeline>> = {}
-) {
-  const props: ComponentProps<typeof HistoryTimeline> = {
+): ComponentProps<typeof HistoryTimeline> {
+  return {
     features: [feature(1), feature(2), feature(3), feature(4)],
     representations: {},
     selectedFeatureNodeId: null,
@@ -50,6 +56,12 @@ function renderTimeline(
     onReorderFeature: vi.fn(),
     ...overrides
   };
+}
+
+function renderTimeline(
+  overrides: Partial<ComponentProps<typeof HistoryTimeline>> = {}
+) {
+  const props = timelineProps(overrides);
   return { ...render(<HistoryTimeline {...props} />), props };
 }
 
@@ -313,6 +325,40 @@ describe('HistoryTimeline', () => {
     expect(props.onSelectFeature).toHaveBeenCalledWith('node-3');
     fireEvent.keyDown(main, { key: 'ArrowUp' });
     expect(props.onSelectFeature).toHaveBeenCalledWith('node-1');
+  });
+
+  it('keeps walking the rows while the edit card takes focus on each selection', async () => {
+    // The inspector hands the selected feature's edit panel the keyboard in
+    // an effect, after the keydown that made the selection. The walk used to
+    // stop there: the second arrow key went to the panel, not the list.
+    function Workspace() {
+      const [selected, setSelected] = useState<string | null>('node-1');
+      const panel = useRef<HTMLElement>(null);
+      useEffect(() => {
+        panel.current?.focus();
+      }, [selected]);
+      return (
+        <>
+          <HistoryTimeline
+            {...timelineProps()}
+            selectedFeatureNodeId={selected}
+            onSelectFeature={setSelected}
+          />
+          <section ref={panel} tabIndex={-1} aria-label="Feature inspector" />
+        </>
+      );
+    }
+    const user = userEvent.setup();
+    render(<Workspace />);
+    const main = (name: string) =>
+      row(name).querySelector<HTMLElement>('.feature-row-main')!;
+    act(() => main('Feature 1').focus());
+
+    await user.keyboard('{ArrowDown}');
+    await waitFor(() => expect(document.activeElement).toBe(main('Feature 2')));
+    await user.keyboard('{ArrowDown}');
+    await waitFor(() => expect(document.activeElement).toBe(main('Feature 3')));
+    expect(row('Feature 3')).toHaveClass('selected');
   });
 
   it('filters by name and marks the match', async () => {
