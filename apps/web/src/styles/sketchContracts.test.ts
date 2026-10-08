@@ -53,6 +53,20 @@ describe('sketch flyouts', () => {
     expect(maxHeight).not.toMatch(/\+\s*var\(--readout-reserve\)/);
     expect(maxHeight).not.toMatch(/var\(--readout-reserve\)\s*\+/);
   });
+
+  it('run on to the window edge in a short window, where the palette needs it', () => {
+    const css = sheet('quiet-stage.css');
+    const selector =
+      '.viewer-area .workspace-column-float :is(.command-flyout, .sketch-flyouts)';
+    const short = css.slice(css.indexOf('@media (max-height: 600px)'));
+    const maxHeight =
+      rule(short, selector).match(/max-height:\s*([^;]+);/)?.[1] ?? '';
+    expect(css.indexOf('@media (max-height: 600px)')).toBeGreaterThan(
+      css.indexOf(`${selector} {`)
+    );
+    expect(maxHeight).toMatch(/var\(--readout-reserve\)\s*\+/);
+    expect(maxHeight).not.toMatch(/-\s*var\(--readout-reserve\)/);
+  });
 });
 
 describe('relations rail', () => {

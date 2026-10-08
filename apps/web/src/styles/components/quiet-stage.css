@@ -1527,6 +1527,19 @@
   );
 }
 
+/* A short window has no room to spare for that: the entity editor and the
+   palette share the flyout on a phone, and ending above the readout cut
+   the palette to a sliver (Grid snaps under its edge at 320 x 568). There
+   they run on to the window's edge again, over the readout. */
+@media (max-height: 600px) {
+  .viewer-area .workspace-column-float :is(.command-flyout, .sketch-flyouts) {
+    max-height: max(
+      calc((100vh - var(--stage-top) - var(--island-gap) + 100%) / 2),
+      calc(var(--readout-reserve) + var(--island-gap) + 100%)
+    );
+  }
+}
+
 /* The rails are not resizable, and the command, sketch and Tweak rails are
    all the column holds today, so the splitter shows in no mode. */
 .viewer-area:has(
