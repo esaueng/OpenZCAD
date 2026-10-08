@@ -95,6 +95,7 @@ export function createThumbnailCapture(
     null;
   let timer: ReturnType<typeof setTimeout> | null = null;
   let inflight: Promise<void> | null = null;
+  let flushing: Promise<void> | null = null;
   let lastActivityAt = -Infinity;
   let busy = false;
   let forceCapture = false;
@@ -239,10 +240,20 @@ export function createThumbnailCapture(
     },
     flush() {
       clearTimer();
+      if (flushing) return flushing;
       forceCapture = true;
-      return run().finally(() => {
+      const pending = inflight;
+      flushing = (async () => {
+        // An idle attempt may already have decided to skip its render before
+        // this flush arrives. Wait for it, then try any unwritten entry once
+        // with forceCapture still set. Concurrent flushes share this attempt.
+        if (pending) await pending;
+        await run();
+      })().finally(() => {
         forceCapture = false;
+        flushing = null;
       });
+      return flushing;
     },
     discard() {
       clearTimer();

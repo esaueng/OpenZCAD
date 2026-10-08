@@ -145,6 +145,42 @@ describe('createThumbnailCapture', () => {
     expect(h.render).toHaveBeenCalledTimes(1);
   });
 
+  it.each(['activity', 'busy'] as const)(
+    'retries an idle capture skipped by %s when flush joins before it settles',
+    async (reason) => {
+      vi.useFakeTimers();
+      const capture = createThumbnailCapture();
+      let flush: Promise<void> | undefined;
+      let queueCalls = 0;
+      const h = host({
+        queue: async (work) => {
+          if (++queueCalls === 1) {
+            if (reason === 'activity') capture.activity();
+            else capture.setBusy(true);
+            const skipped = work();
+            // Leave after the queue decides to skip but before captureOnce
+            // observes that result. A joined flush still owes a capture.
+            flush = capture.flush();
+            return skipped;
+          }
+          return work();
+        }
+      });
+
+      capture.stage(staged(3), h);
+      await vi.advanceTimersByTimeAsync(4000);
+      expect(flush).toBeDefined();
+      await flush;
+      expect(h.render).toHaveBeenCalledOnce();
+      expect(h.save).toHaveBeenCalledWith(
+        PROJECT,
+        expect.objectContaining({ version: 3 })
+      );
+      await vi.advanceTimersByTimeAsync(10_000);
+      expect(h.render).toHaveBeenCalledOnce();
+    }
+  );
+
   it('replaces the empty-phase record with the modelled version', async () => {
     // A new project records "no geometry" for its first version; the box
     // added a moment later must overwrite it on the way out.
