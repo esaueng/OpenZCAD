@@ -39,6 +39,84 @@ function normalized({ updatedAt: _updatedAt, ...derived }: DerivedState) {
 }
 
 describe('interactive regeneration', { timeout: 120_000 }, () => {
+  it.each(['history', 'measurement'] as const)(
+    'cancels disposal during a %s yield and rejects work queued before disposal',
+    async (stage) => {
+      const events: RebuildCacheEvent[] = [];
+      const adapter = await createExactKernelAdapter({
+        onRebuildCacheEvent: (event) => events.push(event)
+      });
+      const fresh = await createExactKernelAdapter({
+        historyCheckpointLimit: 0
+      });
+      const document = boxes(3);
+      await adapter.syncDocument(document);
+      const edited = updateFeature(document, {
+        featureId: listFeaturesInOrder(document)[0]!.featureId,
+        data: { dimensions: { width: 12, height: 8, depth: 6 } }
+      });
+      events.length = 0;
+      let release!: () => void;
+      let entered!: () => void;
+      const paused = new Promise<void>((resolve) => {
+        entered = resolve;
+      });
+      const gate = new Promise<void>((resolve) => {
+        release = resolve;
+      });
+      let yielded = false;
+      const active = adapter
+        .syncDocument(
+          stage === 'history' ? edited : document,
+          undefined,
+          undefined,
+          undefined,
+          {
+            yieldControl: () => {
+              if (yielded) return;
+              yielded = true;
+              entered();
+              return gate;
+            }
+          }
+        )
+        .catch((error: unknown) => error);
+      await paused;
+      const queued = adapter
+        .syncDocument(document)
+        .catch((error: unknown) => error);
+      adapter.dispose();
+      expect(adapter.currentMassPropertiesEpoch()).toBeNull();
+      release();
+      expect(kernelRefusalCategoryOf(await active)).toBe('cancelled');
+      expect(kernelRefusalCategoryOf(await queued)).toBe('cancelled');
+      expect(events).toEqual([]);
+      expect(
+        (adapter as unknown as { historyKernel: RemusKernel | null })
+          .historyKernel
+      ).toBeNull();
+      expect(normalized(await adapter.syncDocument(document))).toEqual(
+        normalized(await fresh.syncDocument(document))
+      );
+      adapter.dispose();
+      fresh.dispose();
+    }
+  );
+
+  it('does not allocate retained geometry for a job disposed before it starts', async () => {
+    const adapter = await createExactKernelAdapter();
+    const pending = adapter
+      .syncDocument(boxes(1))
+      .catch((error: unknown) => error);
+    adapter.dispose();
+    expect(kernelRefusalCategoryOf(await pending)).toBe('cancelled');
+    expect(
+      (adapter as unknown as { historyKernel: RemusKernel | null })
+        .historyKernel
+    ).toBeNull();
+    adapter.dispose();
+  });
+
   it('closes synchronous memo scopes before another adapter runs during a yield', async () => {
     const adapter = await createExactKernelAdapter();
     const other = await createExactKernelAdapter();

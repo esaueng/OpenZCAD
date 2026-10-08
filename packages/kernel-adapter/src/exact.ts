@@ -859,15 +859,43 @@ export class RemusKernelAdapter implements ExactKernelAdapter {
 
   /** Task yields must not let another caller restore the owned live arena. */
   private historyJobs: Promise<void> = Promise.resolve();
+  private historyGeneration = 0;
+  private historyCancellation: BuildCancellationSignal | undefined;
 
   private runHistoryJob<T>(work: () => Promise<T>): Promise<T> {
-    const job = this.historyJobs.then(work);
+    const generation = this.historyGeneration;
+    const job = this.historyJobs.then(async () => {
+      const lifetime = {
+        isCancelled: () => generation !== this.historyGeneration
+      };
+      throwIfBuildCancelled(lifetime);
+      this.historyCancellation = lifetime;
+      try {
+        const result = await work();
+        throwIfBuildCancelled(lifetime);
+        return result;
+      } finally {
+        this.historyCancellation = undefined;
+        if (lifetime.isCancelled()) this.clearRetainedState();
+      }
+    });
     // Rejection releases ownership too; retain neither results nor errors.
     this.historyJobs = job.then(
       () => undefined,
       () => undefined
     );
     return job;
+  }
+
+  private historySignal(
+    signal?: BuildCancellationSignal
+  ): BuildCancellationSignal | undefined {
+    const lifetime = this.historyCancellation;
+    if (!signal) return lifetime;
+    return {
+      isCancelled: () =>
+        Boolean(lifetime?.isCancelled() || signal.isCancelled())
+    };
   }
 
   private massPropertiesEpoch = 0;
@@ -1118,6 +1146,8 @@ export class RemusKernelAdapter implements ExactKernelAdapter {
     recycleReason?: 'replay-budget';
     cacheResetReason?: 'checkpoint-ownership' | 'checkpoint-restore';
   }> {
+    cancellation = this.historySignal(cancellation);
+    throwIfBuildCancelled(cancellation);
     this.clearCurrentMassSnapshot();
     const features = listFeaturesInOrder(document);
     const recycled =
@@ -2033,6 +2063,7 @@ export class RemusKernelAdapter implements ExactKernelAdapter {
     cancellation?: BuildCancellationSignal,
     yieldControl?: () => Promise<void> | void
   ): Promise<DerivedState> {
+    cancellation = this.historySignal(cancellation);
     if (
       analysis &&
       (!document.bodyOrder.some((id) => id === analysis.bodyId) ||
@@ -3148,6 +3179,15 @@ export class RemusKernelAdapter implements ExactKernelAdapter {
   }
 
   dispose(): void {
+    this.historyGeneration += 1;
+    this.clearCurrentMassSnapshot();
+    // An active generator still owns its kernel and cancellation token.
+    // Cancel it now and release retained state in its ownership finally;
+    // queued work from this lifetime must never recreate that state.
+    if (!this.historyCancellation) this.clearRetainedState();
+  }
+
+  private clearRetainedState(): void {
     // Export and solve methods own short-lived kernels, but the history
     // kernel and its checkpoints are adapter-scoped and must be released.
     this.invalidateHistoryCache();
