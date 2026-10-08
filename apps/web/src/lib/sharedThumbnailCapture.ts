@@ -7,12 +7,27 @@ export function lazyThumbnailCapture(
   let capture: ThumbnailCapture | undefined;
   let loading: Promise<ThumbnailCapture> | undefined;
   let busy = false;
+  let staged: Parameters<ThumbnailCapture['stage']> | undefined;
+  const listeners = new Map<
+    Parameters<ThumbnailCapture['subscribe']>[0],
+    (() => void) | undefined
+  >();
   const ready = () => {
-    loading ??= load().then((loaded) => {
-      capture = loaded;
-      capture.setBusy(busy);
-      return loaded;
-    });
+    loading ??= load()
+      .then((loaded) => {
+        capture = loaded;
+        capture.setBusy(busy);
+        for (const listener of listeners.keys()) {
+          listeners.set(listener, capture.subscribe(listener));
+        }
+        if (staged) capture.stage(...staged);
+        staged = undefined;
+        return loaded;
+      })
+      .catch((error: unknown) => {
+        loading = undefined;
+        throw error;
+      });
     return loading;
   };
   const run = (work: (loaded: ThumbnailCapture) => void) => {
@@ -32,7 +47,11 @@ export function lazyThumbnailCapture(
       capture?.setBusy(next);
     },
     stage(entry, host) {
-      run((loaded) => loaded.stage(entry, host));
+      if (capture) capture.stage(entry, host);
+      else {
+        staged = [entry, host];
+        void ready().catch(() => undefined);
+      }
     },
     flush() {
       return capture
@@ -42,18 +61,18 @@ export function lazyThumbnailCapture(
             .catch(() => undefined);
     },
     discard() {
-      if (capture) capture.discard();
-      else if (loading) run((loaded) => loaded.discard());
+      staged = undefined;
+      capture?.discard();
     },
     subscribe(listener) {
-      let active = true;
-      let unsubscribe: (() => void) | undefined;
-      run((loaded) => {
-        if (active) unsubscribe = loaded.subscribe(listener);
-      });
+      // Keep pending subscriptions across a failed import, until their
+      // owner unsubscribes or a later call successfully loads the module.
+      const token = (entry: Parameters<typeof listener>[0]) => listener(entry);
+      listeners.set(token, capture?.subscribe(token));
+      if (!capture) void ready().catch(() => undefined);
       return () => {
-        active = false;
-        unsubscribe?.();
+        listeners.get(token)?.();
+        listeners.delete(token);
       };
     }
   };

@@ -1,5 +1,30 @@
 import { expect, it, vi } from 'vitest';
+import type { RebuildProgressListener } from '@openzcad/kernel-adapter/exact';
 import { geometryProgress } from './geometryProgress';
+
+it('publishes the final feature completion before moving to another phase', () => {
+  const publish = vi.fn<RebuildProgressListener>();
+  const progress = geometryProgress(publish, () => 0);
+  const feature = {
+    stage: 'feature' as const,
+    status: 'started' as const,
+    name: 'Box32',
+    index: 33,
+    total: 33
+  };
+  progress(feature);
+  progress({ ...feature, status: 'completed' });
+  progress({ ...feature, stage: 'checkpoint', status: 'completed' });
+  expect(publish).toHaveBeenCalledOnce();
+  progress({ ...feature, stage: 'history', status: 'completed' });
+  expect(
+    publish.mock.calls.map(([event]) => [event.stage, event.status])
+  ).toEqual([
+    ['feature', 'started'],
+    ['feature', 'completed'],
+    ['history', 'completed']
+  ]);
+});
 
 it('samples dense feature/checkpoint status without delaying stage transitions', () => {
   let clock = 0;
