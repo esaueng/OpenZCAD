@@ -117,7 +117,7 @@ export function WorkspaceTour({
           aria-label="Skip the tour"
           onClick={onDismiss}
         >
-          <X size={13} aria-hidden="true" />
+          <X size={14} aria-hidden="true" />
         </button>
       </header>
       <h2 className="workspace-tour-title">{step.title}</h2>

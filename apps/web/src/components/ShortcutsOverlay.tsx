@@ -1,4 +1,5 @@
 import { useRef } from 'react';
+import { X } from 'lucide-react';
 import {
   KEYBOARD_CONTROL_GROUPS,
   POINTER_CONTROL_GROUPS
@@ -50,7 +51,7 @@ export function ShortcutsOverlay({ onClose }: ShortcutsOverlayProps) {
             aria-label="Close"
             onClick={onClose}
           >
-            ×
+            <X size={14} aria-hidden="true" />
           </button>
         </div>
         <div className="shortcuts-grid">

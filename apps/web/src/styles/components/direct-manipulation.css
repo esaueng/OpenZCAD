@@ -339,8 +339,8 @@
 }
 
 .tool-card-submode button:disabled {
-  color: var(--color-text-dim);
-  opacity: 0.45;
+  color: var(--color-text-muted);
+  opacity: var(--opacity-disabled);
   cursor: not-allowed;
 }
 
@@ -689,7 +689,7 @@
 }
 
 .keypad-units button:disabled {
-  opacity: 0.4;
+  opacity: var(--opacity-disabled);
   cursor: default;
 }
 
@@ -737,7 +737,7 @@
 }
 
 .keypad-commit:disabled {
-  opacity: 0.45;
+  opacity: var(--opacity-disabled);
   cursor: default;
 }
 
@@ -1232,11 +1232,15 @@
   border-radius: var(--radius-sm);
 }
 
+/* The eyebrow type of .panel-eyebrow (inspector.css), like the sketch
+   cards' .eyebrow labels below. */
 .sketch-palette legend {
   padding: 0 5px;
   color: var(--color-text-subtle);
+  font-family: var(--font-mono);
   font-size: var(--fs-mini);
-  letter-spacing: 0.06em;
+  font-weight: var(--fw-regular);
+  letter-spacing: var(--ls-eyebrow);
   text-transform: uppercase;
 }
 
@@ -1345,8 +1349,11 @@
 }
 
 .sketch-entity-editor .eyebrow {
-  color: var(--color-text-dim);
+  color: var(--color-text-subtle);
+  font-family: var(--font-mono);
   font-size: var(--fs-mini);
+  font-weight: var(--fw-regular);
+  letter-spacing: var(--ls-eyebrow);
   text-transform: uppercase;
 }
 
@@ -1381,8 +1388,11 @@
 }
 
 .sketch-entity-constraints .eyebrow {
-  color: var(--color-text-dim);
+  color: var(--color-text-subtle);
+  font-family: var(--font-mono);
   font-size: var(--fs-mini);
+  font-weight: var(--fw-regular);
+  letter-spacing: var(--ls-eyebrow);
   text-transform: uppercase;
 }
 

@@ -61,6 +61,10 @@
   /* Error TEXT on tinted chips: lighter than --color-error so it clears the
      dark surfaces; the light theme swaps it for a deeper red instead. */
   --color-error-text: #fca5a5;
+  /* A destructive confirm button's fill and label. The error red holds only
+     3.8:1 under white text; this deeper red holds 4.8:1 in both themes. */
+  --color-danger-fill: #dc2626;
+  --color-on-danger: #ffffff;
   /* Material gained. Also the success tone: both mean "this adds". */
   --color-success: #48cd8f;
   /* Material removed by a cut. Distinct from --color-error: a cut is an
@@ -80,6 +84,9 @@
   /* Borders on those same overlays: --color-border re-themes to a light grey
      and drew a pale ring round the dark rotate-view button in light theme. */
   --color-viewport-border: rgba(235, 237, 239, 0.18);
+  /* The fade at the edge of a scrolling list: black on the dark islands, a
+     faint ink on the light ones, where black drew a heavy grey band. */
+  --color-scroll-shade: rgba(0, 0, 0, 0.35);
 
   /* ── Viewport selection & manipulation ────────────────── */
   --color-select: #6798ff; /* selected geometry */
@@ -144,6 +151,11 @@
   /* ── Borders (composed) ───────────────────────────────── */
   --border-thin: 1px solid var(--color-border);
   --border-strong: 1px solid var(--color-border-strong);
+
+  /* ── States ───────────────────────────────────────────── */
+  /* One disabled fade for every control, over its normal (muted) colour;
+     rails used to fade the dim colour as well, and went near-invisible. */
+  --opacity-disabled: 0.45;
 
   /* ── Elevation ────────────────────────────────────────── */
   /* Three steps: a chip or card resting on a panel, a menu or popover
@@ -260,6 +272,7 @@
   --color-error: #dc2626;
   --color-error-text: #b91c1c;
   --color-success: #137638;
+  --color-scroll-shade: rgba(26, 35, 48, 0.14);
   --thumbnail-blend: normal;
 }
 
@@ -285,6 +298,7 @@
     --color-error: #dc2626;
     --color-error-text: #b91c1c;
     --color-success: #137638;
+    --color-scroll-shade: rgba(26, 35, 48, 0.14);
     --thumbnail-blend: normal;
   }
 }
@@ -357,7 +371,7 @@ button {
 
 button:disabled {
   cursor: not-allowed;
-  opacity: 0.45;
+  opacity: var(--opacity-disabled);
 }
 
 /*

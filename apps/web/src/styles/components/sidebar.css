@@ -135,6 +135,12 @@
   min-width: 0;
 }
 
+/* The add row's fields stand beside its 28px add button, not the 24px row
+   icons, so they take its height. */
+.param-add input {
+  height: 28px;
+}
+
 .param-name {
   color: var(--color-accent);
   font-size: var(--fs-xs);
@@ -637,11 +643,12 @@
   transition: opacity var(--dur-base) var(--ease-out);
 }
 
+/* On the handle's duration, so the fill and the knob land together. */
 .history-spine-fill {
   height: var(--fill-height, 0);
   background: var(--color-accent);
   transition:
-    height var(--dur-slow) var(--ease-out),
+    height var(--dur-base) var(--ease-out),
     opacity var(--dur-base) var(--ease-out);
 }
 
@@ -786,7 +793,10 @@
   position: absolute;
   z-index: 2;
   left: 0;
-  top: var(--handle-y, 0);
+  /* Moved by transform, not `top`: a keyboard step or an undo glides the
+     knob on the compositor instead of re-laying it out each frame. */
+  top: 0;
+  transform: translateY(var(--handle-y, 0));
   width: 20px;
   height: 20px;
   margin-top: -10px;
@@ -795,7 +805,7 @@
   border-radius: 50%;
   cursor: grab;
   touch-action: none;
-  transition: top var(--dur-slow) var(--ease-out);
+  transition: transform var(--dur-base) var(--ease-out);
 }
 
 .history-handle::before {

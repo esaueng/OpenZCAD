@@ -195,7 +195,7 @@ export function ToolCard({
         disabled={model.phase === 'validating' && !cancelableWhileValidating}
         onClick={onClose}
       >
-        <X size={14} aria-hidden="true" />
+        <X size={12} aria-hidden="true" />
       </button>
       {children}
     </div>

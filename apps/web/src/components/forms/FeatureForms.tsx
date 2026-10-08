@@ -1,4 +1,5 @@
 import { useEffect, useMemo, useRef, useState, type ReactNode } from 'react';
+import { X } from 'lucide-react';
 import { coerceParamValue } from '@openzcad/document-core';
 import {
   FULL_REVOLVE_ANGLE_DEG,
@@ -1482,7 +1483,7 @@ export function EdgeModifierForm({
                     onRemoveEdge(row.hash);
                   }}
                 >
-                  ×
+                  <X size={12} aria-hidden="true" />
                 </button>
               )}
             </li>

@@ -3162,7 +3162,7 @@ test('exports a 3MF package through the mesh export dialog', async ({
   await page.keyboard.press('Escape');
   await expect(fileMenu).not.toHaveAttribute('open', '');
   await fileMenu.locator('summary').click();
-  await fileMenu.getByRole('button', { name: /Export Mesh/ }).click();
+  await fileMenu.getByRole('button', { name: /Export mesh/ }).click();
 
   const dialog = page.getByRole('dialog', { name: /Export mesh/ });
   await expect(dialog).toBeVisible();
@@ -3225,7 +3225,7 @@ test('mesh export keeps the keyboard, its scope and its verdict together', async
   const fileMenu = page.locator('details.file-menu');
   const openExport = async () => {
     await fileMenu.locator('summary').click();
-    await fileMenu.getByRole('button', { name: /Export Mesh/ }).click();
+    await fileMenu.getByRole('button', { name: /Export mesh/ }).click();
   };
   await openExport();
   const dialog = page.getByRole('dialog', { name: /Export mesh/ });
@@ -4378,7 +4378,7 @@ test('cancelling an export stops its archive upload', async ({ page }) => {
 
   const fileMenu = page.locator('details.file-menu');
   await fileMenu.locator('summary').click();
-  await fileMenu.getByRole('button', { name: /Export Mesh/ }).click();
+  await fileMenu.getByRole('button', { name: /Export mesh/ }).click();
   const dialog = page.getByRole('dialog', { name: /Export mesh/ });
   await expect(dialog).toBeVisible();
 

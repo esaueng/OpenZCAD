@@ -91,7 +91,7 @@ export function ViewModeBar({
         aria-label="Measure"
         onClick={() => onMeasure(!measuring)}
       >
-        <Ruler size={15} aria-hidden="true" />
+        <Ruler size={16} aria-hidden="true" />
         <span className="view-mode-button-label">Measure</span>
       </button>
       <span className="view-mode-divider" aria-hidden="true" />
@@ -102,7 +102,7 @@ export function ViewModeBar({
         title="Fit view (F)"
         aria-label="Fit view (F)"
       >
-        <Maximize2 size={15} aria-hidden="true" />
+        <Maximize2 size={16} aria-hidden="true" />
       </button>
       <div className="view-mode-views-anchor" ref={anchorRef}>
         <button
@@ -158,7 +158,7 @@ export function ViewModeBar({
         aria-label="Toggle grid (G)"
         aria-pressed={settings.showGrid}
       >
-        <Grid3x3 size={15} aria-hidden="true" />
+        <Grid3x3 size={16} aria-hidden="true" />
       </button>
       <button
         type="button"
@@ -177,7 +177,7 @@ export function ViewModeBar({
         aria-label={`Orthographic projection (P) — now: ${projection}`}
         aria-pressed={projection === 'orthographic'}
       >
-        <Camera size={15} aria-hidden="true" />
+        <Camera size={16} aria-hidden="true" />
       </button>
     </div>
   );

@@ -221,6 +221,16 @@ export function MeasurementDock({
                       event.preventDefault();
                       finishEdit(entry.id);
                     }}
+                    onKeyDown={(event) => {
+                      // Escape cancels the edit here and stops: reaching the
+                      // workspace, it turned Measure off and the dock, with
+                      // the half-typed name, unmounted.
+                      if (event.key === 'Escape') {
+                        event.preventDefault();
+                        event.stopPropagation();
+                        setEditingId(null);
+                      }
+                    }}
                   >
                     <label>
                       <span>Name</span>
@@ -311,9 +321,9 @@ export function MeasurementDock({
                         onClick={() => onToggleVisibility(entry.id)}
                       >
                         {entry.visible ? (
-                          <Eye size={13} aria-hidden="true" />
+                          <Eye size={12} aria-hidden="true" />
                         ) : (
-                          <EyeOff size={13} aria-hidden="true" />
+                          <EyeOff size={12} aria-hidden="true" />
                         )}
                       </button>
                       <button
@@ -322,7 +332,7 @@ export function MeasurementDock({
                         aria-label={`Copy ${entry.label}`}
                         onClick={() => onCopy(entry)}
                       >
-                        <ClipboardCopy size={13} aria-hidden="true" />
+                        <ClipboardCopy size={12} aria-hidden="true" />
                       </button>
                       <button
                         type="button"
@@ -330,7 +340,7 @@ export function MeasurementDock({
                         aria-label={`Edit ${entry.label}`}
                         onClick={() => beginEdit(entry)}
                       >
-                        <Pencil size={13} aria-hidden="true" />
+                        <Pencil size={12} aria-hidden="true" />
                       </button>
                       <button
                         type="button"
@@ -338,7 +348,7 @@ export function MeasurementDock({
                         aria-label={`Delete ${entry.label}`}
                         onClick={() => onDelete(entry.id)}
                       >
-                        <Trash2 size={13} aria-hidden="true" />
+                        <Trash2 size={12} aria-hidden="true" />
                       </button>
                     </span>
                   </>

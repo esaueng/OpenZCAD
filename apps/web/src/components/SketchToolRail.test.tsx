@@ -74,7 +74,7 @@ describe('SketchToolRail', () => {
 
     // The tool's own glyph and name are the live type.
     expect(
-      screen.getByRole('button', { name: 'Circle: Center Circle' })
+      screen.getByRole('button', { name: 'Circle: Center circle' })
     ).toHaveAttribute('aria-pressed', 'true');
     const strip = screen.getByRole('radiogroup', { name: 'Circle type' });
     expect(within(strip).getByRole('radio', { name: 'Center' })).toBeChecked();
@@ -86,7 +86,7 @@ describe('SketchToolRail', () => {
     expect(onCircleMode).toHaveBeenLastCalledWith('three-point');
     rerender(<SketchToolRail {...props} circleMode="three-point" />);
     expect(
-      screen.getByRole('button', { name: 'Circle: Three-Point Circle' })
+      screen.getByRole('button', { name: 'Circle: Three-point circle' })
     ).toBeInTheDocument();
     expect(
       within(strip).getByRole('radio', { name: '3 points' })
@@ -102,7 +102,7 @@ describe('SketchToolRail', () => {
       screen.queryByRole('radiogroup', { name: 'Circle type' })
     ).not.toBeInTheDocument();
     expect(
-      screen.getByRole('button', { name: 'Circle: Center Circle' })
+      screen.getByRole('button', { name: 'Circle: Center circle' })
     ).toHaveAttribute('aria-pressed', 'false');
   });
 
@@ -231,7 +231,7 @@ describe('SketchToolRail', () => {
     expect(line).toHaveTextContent('');
     expect(line.querySelector('svg')).not.toBeNull();
     expect(
-      screen.getByRole('button', { name: 'Circle: Center Circle' })
+      screen.getByRole('button', { name: 'Circle: Center circle' })
     ).toBeInTheDocument();
     expect(screen.getByRole('button', { name: 'Solve' })).toBeInTheDocument();
     // No group headings, no words: dividers separate the groups.

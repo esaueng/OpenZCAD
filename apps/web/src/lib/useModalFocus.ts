@@ -129,6 +129,27 @@ function activateModal(registration: ModalRegistration): void {
   }
 
   const onKeyDown = (event: KeyboardEvent) => {
+    if (event.key === 'Escape') {
+      // A button that disables itself while its request runs (Create link,
+      // Revoke, Resolve, Import) drops focus to <body>, where the dialog's
+      // own Escape handler never hears the key, and the workspace is held
+      // off by modalHoldsKeyboard: Escape did nothing until the user clicked
+      // back in. Hand the key to the dialog so its own handler, with its own
+      // busy guards, still decides.
+      const target = event.target;
+      if (target instanceof Node && !dialog.contains(target)) {
+        event.preventDefault();
+        event.stopPropagation();
+        dialog.dispatchEvent(
+          new KeyboardEvent('keydown', {
+            key: 'Escape',
+            bubbles: true,
+            cancelable: true
+          })
+        );
+      }
+      return;
+    }
     if (event.key !== 'Tab') {
       return;
     }

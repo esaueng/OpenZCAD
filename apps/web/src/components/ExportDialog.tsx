@@ -154,10 +154,13 @@ export function ExportDialog({
   useEffect(() => {
     const onKeyDown = (event: KeyboardEvent) => {
       const dialog = dialogRef.current;
+      // useModalFocus hands a body-targeted Escape to the dialog itself;
+      // that copy bubbles here too and was already handled there.
       if (
         event.key === 'Escape' &&
         dialog &&
-        !dialog.contains(document.activeElement)
+        !dialog.contains(document.activeElement) &&
+        !(event.target instanceof Node && dialog.contains(event.target))
       ) {
         onClose();
       }

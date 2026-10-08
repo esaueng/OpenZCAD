@@ -7,7 +7,7 @@ import {
   useState
 } from 'react';
 import type { CSSProperties } from 'react';
-import { Link2, Plus } from 'lucide-react';
+import { Link2, Plus, X } from 'lucide-react';
 import type {
   CollaborationMember,
   ProjectAccessRole,
@@ -400,7 +400,7 @@ export function ProjectSharingDialog({
             aria-label="Close sharing"
             onClick={onClose}
           >
-            ×
+            <X size={14} aria-hidden="true" />
           </button>
         </header>
 

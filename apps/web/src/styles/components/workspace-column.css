@@ -115,9 +115,9 @@
       no-repeat local,
     linear-gradient(transparent, var(--color-surface) 70%) bottom / 100% 14px
       no-repeat local,
-    linear-gradient(rgba(0, 0, 0, 0.35), transparent) top / 100% 10px no-repeat
-      scroll,
-    linear-gradient(transparent, rgba(0, 0, 0, 0.35)) bottom / 100% 10px
+    linear-gradient(var(--color-scroll-shade), transparent) top / 100% 10px
+      no-repeat scroll,
+    linear-gradient(transparent, var(--color-scroll-shade)) bottom / 100% 10px
       no-repeat scroll;
 }
 
