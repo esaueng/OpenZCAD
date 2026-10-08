@@ -1,4 +1,5 @@
 import { act, renderHook } from '@testing-library/react';
+import * as React from 'react';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import {
   addPrimitiveFeature,
@@ -18,6 +19,11 @@ import {
 } from './conflictRecovery';
 import { useCollaboration } from './useCollaboration';
 import { parseServerMessage } from './useCollaboration';
+
+vi.mock('react', async (importOriginal) => {
+  const actual = await importOriginal<typeof React>();
+  return { ...actual, useEffect: vi.fn(actual.useEffect) };
+});
 
 class FakeWebSocket {
   static readonly CONNECTING = 0;
@@ -133,6 +139,135 @@ function grantLease(socket: FakeWebSocket, document: ProjectDocument) {
 }
 
 describe('HTTP collaboration response ownership', () => {
+  it.each(
+    (['enabled', 'account', 'display-name'] as const).flatMap((change) =>
+      (['keep-mine', 'automatic-save'] as const).map((mode) => ({
+        change,
+        mode
+      }))
+    )
+  )(
+    'invalidates $mode after a committed $change change before passive room effects run',
+    async ({ change, mode }) => {
+      vi.useFakeTimers();
+      vi.stubGlobal('WebSocket', FakeWebSocket);
+      let defer = false;
+      const pendingEffects: Array<() => void | (() => void)> = [];
+      const { useEffect: actualEffect } =
+        await vi.importActual<typeof React>('react');
+      const effectSpy = vi
+        .mocked(React.useEffect)
+        .mockImplementation((effect, deps) =>
+          actualEffect(() => {
+            if (defer) {
+              pendingEffects.push(effect);
+              return;
+            }
+            const cleanup = effect();
+            return () => {
+              if (defer && cleanup) {
+                pendingEffects.push(() => {
+                  cleanup();
+                });
+              } else cleanup?.();
+            };
+          }, deps)
+        );
+      const base = createProjectDocument(
+        'Committed room',
+        toUserId('user_commit')
+      );
+      const local = largeMeshDocument(base);
+      const remote = { ...base, name: 'Room copy', version: 8 };
+      let resolve!: (response: Response) => void;
+      vi.stubGlobal(
+        'fetch',
+        vi.fn(
+          () =>
+            new Promise<Response>((done) => {
+              resolve = done;
+            })
+        )
+      );
+      const onRemoteDocument = vi.fn();
+      const onConflict = vi.fn();
+      const auth = session(base.ownerUserId);
+      const hook = renderHook(
+        ({ enabled, auth }: { enabled: boolean; auth: AuthSession }) =>
+          useCollaboration({
+            enabled,
+            session: auth,
+            document: local,
+            onRemoteDocument,
+            onConflict
+          }),
+        { initialProps: { enabled: true, auth } }
+      );
+      try {
+        const socket = FakeWebSocket.instances[0]!;
+        const room = mode === 'keep-mine' ? remote : base;
+        act(() => {
+          if (mode === 'keep-mine') {
+            socket.open();
+            socket.receive({ type: 'conflict', document: remote });
+          }
+          grantLease(socket, room);
+        });
+        let settled: Promise<unknown> | undefined;
+        if (mode === 'keep-mine') {
+          act(() => {
+            settled = hook.result.current
+              .keepLocalVersion(remote.version)
+              .catch((error: unknown) => error);
+          });
+        }
+        expect(fetch).toHaveBeenCalledTimes(1);
+        onRemoteDocument.mockClear();
+        onConflict.mockClear();
+        defer = true;
+        hook.rerender({
+          enabled: change !== 'enabled',
+          auth:
+            change === 'account'
+              ? session('user_next')
+              : change === 'display-name'
+                ? { ...auth, displayName: 'Changed name' }
+                : auth
+        });
+        // Neither the old socket cleanup nor the replacement room setup has
+        // run; only the new props and layout effects have committed.
+        expect(FakeWebSocket.instances).toHaveLength(1);
+        await act(async () => {
+          resolve(
+            new Response(JSON.stringify({ type: 'ack', version: 12345 }))
+          );
+          await settled;
+        });
+        if (settled) expect(await settled).toBeInstanceOf(Error);
+        expect(hook.result.current.roomVersion).toBe(room.version);
+        if (mode === 'keep-mine') {
+          expect(hook.result.current.conflict).not.toBeNull();
+        } else {
+          expect(hook.result.current.conflict).toBeNull();
+        }
+        expect(onRemoteDocument).not.toHaveBeenCalled();
+        expect(onConflict).not.toHaveBeenCalled();
+      } finally {
+        defer = false;
+        effectSpy.mockImplementation(actualEffect);
+        const cleanups: Array<() => void> = [];
+        act(() => {
+          for (const run of pendingEffects) {
+            const cleanup = run();
+            if (cleanup) cleanups.push(cleanup);
+          }
+        });
+        hook.unmount();
+        for (const cleanup of cleanups) cleanup();
+      }
+    }
+  );
+
   it.each(['ack', 'rejection', 'body'] as const)(
     'ignores an old automatic save %s after changing projects',
     async (outcome) => {
