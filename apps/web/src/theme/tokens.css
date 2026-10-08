@@ -86,6 +86,9 @@
   /* Borders on those same overlays: --color-border re-themes to a light grey
      and drew a pale ring round the dark rotate-view button in light theme. */
   --color-viewport-border: rgba(235, 237, 239, 0.18);
+  /* The warning hue on the stage: the light theme deepens --color-warning
+     to a brown that reads on chrome but turns muddy on the dark canvas. */
+  --color-viewport-warning: #f59e0b;
 
   /* ── Viewport selection & manipulation ────────────────── */
   --color-select: #6798ff; /* selected geometry */
