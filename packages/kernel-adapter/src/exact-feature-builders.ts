@@ -515,28 +515,33 @@ function buildExtrudeFeature(
         operation === 'cut'
           ? tryExactCoaxialCylinderCut(kernel, targetSolid, extrusionSolid)
           : null;
-      const solid =
+      const union =
         operation === 'add'
-          ? fuseUniformSolid(
+          ? fuseUniformSolidChecked(
               kernel,
               [...target.solids, ...tool.solids],
               [
                 ...target.solids.map(() => targetBody.name),
                 ...tool.solids.map(() => extrusionBody.name)
-              ]
+              ],
+              undefined,
+              ctx.strictVerdicts !== undefined
             )
-          : unifyBooleanFaces(
-              kernel,
-              coaxial ??
-                exactCutWithCancellation(
-                  kernel,
-                  targetSolid,
-                  extrusionSolid,
-                  ctx.cancellation,
-                  operandNames
-                )
-            );
-      return { tool, operandLineage, extrusionSolid, coaxial, solid };
+          : null;
+      const solid = union
+        ? union.solid
+        : unifyBooleanFaces(
+            kernel,
+            coaxial ??
+              exactCutWithCancellation(
+                kernel,
+                targetSolid,
+                extrusionSolid,
+                ctx.cancellation,
+                operandNames
+              )
+          );
+      return { tool, operandLineage, extrusionSolid, coaxial, solid, union };
     };
     let combined: ReturnType<typeof combine>;
     try {
@@ -559,7 +564,32 @@ function buildExtrudeFeature(
         combine
       );
     }
+    // Some coplanar fuses return exact geometry but fail the strict solid
+    // gate. Try the same qualified, geometry-preserving travel used for a
+    // typed coplanar refusal; never accept an invalid result or extend a
+    // tool through an existing hole or a thin cavity roof.
+    if (combined.union && verdictRefusesUnion(combined.union.verdict)) {
+      if (combined.tool === extrusion) {
+        const pierced = piercedExtrudeTool(
+          ctx,
+          feature,
+          target.solids,
+          extrusion.solids,
+          operation
+        );
+        if (pierced) combined = combine(pierced);
+      }
+      if (combined.union && verdictRefusesUnion(combined.union.verdict)) {
+        throw new Error(
+          'Union produced an open, non-manifold, or inconsistently ' +
+            'oriented result. Adjust the overlap or placement and try again.'
+        );
+      }
+    }
     const { operandLineage, extrusionSolid, coaxial, solid } = combined;
+    if (combined.union) {
+      ctx.strictVerdicts?.set(solid, combined.union.verdict);
+    }
     // An add only needs the two to meet. Shared volume cannot answer that —
     // a boss grown off the face it was sketched on meets its target exactly
     // there and shares none — so contact is measured by exact distance. A
@@ -744,12 +774,7 @@ function buildTransformFeature(
   const rotation = data.transform.rotationDeg;
   const scaleFactor =
     data.transform.scale !== undefined
-      ? resolveParamValue(
-          data.transform.scale,
-          scope,
-          'scale',
-          document.units
-        )
+      ? resolveParamValue(data.transform.scale, scope, 'scale', document.units)
       : 1;
   if (!Number.isFinite(scaleFactor) || scaleFactor <= 0) {
     throw new Error('Transform scale must resolve to a positive number.');
@@ -796,8 +821,18 @@ function buildMirrorFeature(
   const origin = data.plane.origin;
   const rawNormal = data.plane.normal;
   const planePoint = {
-    x: resolveParamValue(origin.x, scope, 'mirror origin X', ctx.document.units),
-    y: resolveParamValue(origin.y, scope, 'mirror origin Y', ctx.document.units),
+    x: resolveParamValue(
+      origin.x,
+      scope,
+      'mirror origin X',
+      ctx.document.units
+    ),
+    y: resolveParamValue(
+      origin.y,
+      scope,
+      'mirror origin Y',
+      ctx.document.units
+    ),
     z: resolveParamValue(origin.z, scope, 'mirror origin Z', ctx.document.units)
   };
   const planeNormal = normalized({
@@ -1350,7 +1385,12 @@ function piercedBooleanOperands(
   } else if (data.operation === 'union' && operands.length === 2) {
     for (const index of [0, 1]) {
       const partner = operands[1 - index]!;
-      const tool = piercedBodyTool(ctx, operands[index]!, partner.solids, 'add');
+      const tool = piercedBodyTool(
+        ctx,
+        operands[index]!,
+        partner.solids,
+        'add'
+      );
       if (tool) {
         pierced[index] = tool;
         changed = true;
@@ -1827,9 +1867,7 @@ function buildEdgeModifierFeature(
       document.units
     );
     if (chamferSecondDistance <= GEOMETRY_EPSILON) {
-      throw new Error(
-        'Chamfer second distance must be greater than zero.'
-      );
+      throw new Error('Chamfer second distance must be greater than zero.');
     }
   }
   let reportedRefusal: string | null = null;

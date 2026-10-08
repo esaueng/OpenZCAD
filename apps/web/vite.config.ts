@@ -306,10 +306,38 @@ export default defineConfig(async ({ command, isPreview, mode }) => {
     optimizeDeps: {
       // The exact CAD kernel and its file-format translators ship as
       // WebAssembly and must remain runtime assets.
-      exclude: ['remus-wasm', 'remus-wasm-io', '@sqlite.org/sqlite-wasm', 'occt-wasm']
+      exclude: [
+        'remus-wasm',
+        'remus-wasm-io',
+        '@sqlite.org/sqlite-wasm',
+        'occt-wasm'
+      ]
     },
     worker: {
       format: 'es' as const,
+      rollupOptions: {
+        preserveEntrySignatures: false,
+        output: {
+          // Worker output is separate from the browser's chunk routing.
+          // Split only these analysis modules, preserving evaluation order.
+          strictExecutionOrder: true,
+          codeSplitting: {
+            groups: [
+              {
+                name: 'exact-analysis',
+                test: (id: string) =>
+                  id.includes(
+                    '/packages/kernel-adapter/src/imported-feature-query.ts'
+                  ) ||
+                  id.includes(
+                    '/packages/kernel-adapter/src/exact-sync-memo.ts'
+                  ),
+                includeDependenciesRecursively: false
+              }
+            ]
+          }
+        }
+      },
       // The plugin supports several Vite majors, so narrow its cross-version
       // return type to the Vite version used by this workspace.
       plugins: (): PluginOption[] => [wasm() as PluginOption]
@@ -387,6 +415,15 @@ export default defineConfig(async ({ command, isPreview, mode }) => {
           // bundle, so isolate it for better caching without relying on the
           // object form supported by Rollup-only Vite releases.
           manualChunks: (id: string) => {
+            // Keep imported-feature queries behind the existing exact-adapter
+            // lazy boundary and within the unchanged per-file size budget.
+            if (
+              id.includes(
+                '/packages/kernel-adapter/src/imported-feature-query.ts'
+              )
+            ) {
+              return 'exact-analysis';
+            }
             if (id.includes('/node_modules/three/examples/')) {
               return 'three-addons';
             }
