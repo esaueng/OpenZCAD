@@ -153,7 +153,8 @@ test('exposes the full measurement workbench in View mode', async ({
     .getByRole('button', { name: 'Measure' })
     .click();
 
-  const workbench = page.getByLabel('Measurement workbench');
+  // Exact: the project, named alike, is in the title and the status names.
+  const workbench = page.getByLabel('Measurement workbench', { exact: true });
   await expect(workbench).toBeVisible();
   await expect(
     workbench.getByRole('button', { name: 'Smart' })
