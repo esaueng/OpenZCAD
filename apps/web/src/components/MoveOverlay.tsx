@@ -70,9 +70,12 @@ const MOVE_AXES = ['x', 'y', 'z'] as const;
  * A number as a field shows it. A geometry snap lands on `point - pivot`, and
  * that subtraction leaves binary noise (0.19999999999999998) the gizmo's own
  * grid snap no longer does; nine places is far below any modelling tolerance.
+ * Negative zero folds to 0, but — as in the gizmo's `snapTo` — an invalid
+ * coordinate stays invalid instead of reading as a plausible 0.
  */
 function fieldValue(value: number): number {
-  return Number(value.toFixed(9)) || 0;
+  const cleaned = Number(value.toFixed(9));
+  return cleaned === 0 ? 0 : cleaned;
 }
 
 /**
@@ -97,7 +100,9 @@ function MoveNumberInput({
     <input
       type="number"
       step={step}
-      value={draft ?? value}
+      // A number input cannot hold NaN or Infinity (React warns on NaN; the
+      // browser blanks both), so a non-finite value shows as an empty field.
+      value={draft ?? (Number.isFinite(value) ? value : '')}
       aria-label={label}
       onChange={(event) => {
         const raw = event.target.value;
@@ -168,6 +173,16 @@ export function MoveOverlay({
   const dirty =
     MOVE_AXES.some((axis) => values.translation[axis] !== 0) ||
     MOVE_AXES.some((axis) => values.rotationDeg[axis] !== 0);
+  // This panel's Apply refuses a value it cannot show; nothing downstream
+  // rejects a non-finite move. A sketch move commits no rotation, so a hidden
+  // rotation does not block it.
+  const canApply =
+    dirty &&
+    MOVE_AXES.every(
+      (axis) =>
+        Number.isFinite(values.translation[axis]) &&
+        (hideRotation || Number.isFinite(values.rotationDeg[axis]))
+    );
   const setValue = (
     group: 'translation' | 'rotationDeg',
     axis: (typeof MOVE_AXES)[number],
@@ -184,7 +199,7 @@ export function MoveOverlay({
       aria-label="Move controls"
       onSubmit={(event) => {
         event.preventDefault();
-        if (dirty) {
+        if (canApply) {
           onConfirm();
         }
       }}
@@ -271,7 +286,7 @@ export function MoveOverlay({
         </div>
       )}
       <div className="form-actions">
-        <button type="submit" className="primary" disabled={!dirty}>
+        <button type="submit" className="primary" disabled={!canApply}>
           Apply move
         </button>
         <button type="button" className="secondary" onClick={onCancel}>
