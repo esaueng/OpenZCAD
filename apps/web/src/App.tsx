@@ -5597,7 +5597,7 @@ export function App() {
     label: readonly LabelSegment[];
     detail?: string;
   } | null>(() => {
-    if (!doc || tool === 'sketch') {
+    if (!doc || tool === 'sketch' || currentGeometrySnapshot !== null) {
       return null;
     }
     // `in`, not the `inch` enum, as the dock and the Inspector print it.
@@ -5712,7 +5712,8 @@ export function App() {
     selectedEdges,
     renderedSelectedTopology,
     selectedBodyIds,
-    renderedRepresentations
+    renderedRepresentations,
+    currentGeometrySnapshot
   ]);
 
   const {
@@ -5854,10 +5855,16 @@ export function App() {
   // command's own preview.
   const viewerEditableBodyIds = useMemo(
     () =>
-      modelingLocked || movePreview || tool
+      modelingLocked || movePreview || tool || currentGeometrySnapshot !== null
         ? EMPTY_BODY_IDS
         : directEditableBodyIds,
-    [modelingLocked, movePreview, tool, directEditableBodyIds]
+    [
+      modelingLocked,
+      movePreview,
+      tool,
+      directEditableBodyIds,
+      currentGeometrySnapshot
+    ]
   );
   const viewerSelectedProfileIds = useMemo(
     () => selectedProfiles.map((profile) => profile.profileId),
@@ -11679,6 +11686,12 @@ export function App() {
     detail?: PickDetail
   ) {
     if (!doc) {
+      return;
+    }
+    if (selection && currentGeometrySnapshot !== null) {
+      setStatus(
+        'The model is still updating. Try that selection again when it finishes.'
+      );
       return;
     }
     exactEntryQueue.cancel();
@@ -19175,10 +19188,14 @@ export function App() {
             sketches={viewerSketches}
             selectedBodyIds={selectedBodyIds}
             selectedTopology={
-              parameterPreview ? null : renderedSelectedTopology
+              parameterPreview || currentGeometrySnapshot
+                ? null
+                : renderedSelectedTopology
             }
             previewFaceHighlights={previewBlendFaces}
-            selectedEdges={parameterPreview ? [] : selectedEdges}
+            selectedEdges={
+              parameterPreview || currentGeometrySnapshot ? [] : selectedEdges
+            }
             pickListEnabled={appSettings.experiments.directManipulation}
             settings={viewerSettings}
             fitSignal={fitSignal}
@@ -19987,10 +20004,14 @@ export function App() {
                 onValidateSelection={validateSelectionEdit}
                 selectedSketch={selectedSketch}
                 selectedSketchObject={selectedSketchObject}
-                selectedBody={selectedBody}
-                selectedTopology={renderedSelectedTopology}
-                selectedEdges={selectedEdges}
-                edgeModifierBody={edgeModifierBody}
+                selectedBody={currentGeometrySnapshot ? null : selectedBody}
+                selectedTopology={
+                  currentGeometrySnapshot ? null : renderedSelectedTopology
+                }
+                selectedEdges={currentGeometrySnapshot ? [] : selectedEdges}
+                edgeModifierBody={
+                  currentGeometrySnapshot ? null : edgeModifierBody
+                }
                 bodyRepresentations={representations}
                 scope={parameterScope.scope}
                 sketches={sketchOptions}
