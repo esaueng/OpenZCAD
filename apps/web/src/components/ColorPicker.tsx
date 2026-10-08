@@ -106,6 +106,9 @@ export function ColorPicker({
   // Arrow keys preview each step and commit once on release, as a pointer
   // drag does: a held key otherwise wrote one history entry per repeat.
   const keyStepped = useRef(false);
+  // The arrows still down: releasing Shift, or one of two arrows, mid-step
+  // committed while the other went on repeating.
+  const heldArrows = useRef(new Set<string>());
 
   function onSliderKeyDown(
     event: KeyboardEvent<HTMLDivElement>,
@@ -123,6 +126,7 @@ export function ColorPicker({
       return;
     }
     event.preventDefault();
+    heldArrows.current.add(event.key);
     keyStepped.current = true;
     // Like a drag, the keys own the value until release: resyncing from the
     // previewed hex loses the hue of a grey.
@@ -130,7 +134,16 @@ export function ColorPicker({
     emit(step(hsvRef.current, move[0], move[1]), false);
   }
 
-  function onSliderKeyUp() {
+  function onSliderKeyUp(event: KeyboardEvent<HTMLDivElement>) {
+    heldArrows.current.delete(event.key);
+    if (heldArrows.current.size === 0) {
+      finishKeyStep();
+    }
+  }
+
+  /** Also on blur: focus leaving mid-step takes the key release with it. */
+  function finishKeyStep() {
+    heldArrows.current.clear();
     if (!keyStepped.current) {
       return;
     }
@@ -164,6 +177,7 @@ export function ColorPicker({
           }))
         }
         onKeyUp={onSliderKeyUp}
+        onBlur={finishKeyStep}
         onPointerDown={(event) => {
           svDragging.current = true;
           draggingRef.current = true;
@@ -211,6 +225,7 @@ export function ColorPicker({
           }))
         }
         onKeyUp={onSliderKeyUp}
+        onBlur={finishKeyStep}
         onPointerDown={(event) => {
           hueDragging.current = true;
           draggingRef.current = true;

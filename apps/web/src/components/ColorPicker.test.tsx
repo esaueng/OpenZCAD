@@ -108,6 +108,34 @@ describe('ColorPicker from the keyboard', () => {
       'aria-valuetext',
       '90% saturation, 90% brightness'
     );
+    // ArrowLeft is still down: one step, one commit, once it is released.
+    expect(onCommit).not.toHaveBeenCalled();
+    fireEvent.keyUp(pad, { key: 'ArrowLeft' });
     expect(onCommit).toHaveBeenCalledOnce();
+  });
+
+  it('commits a held Shift+arrow step once, not when Shift is released', () => {
+    const onCommit = vi.fn();
+    render(<Harness onCommit={onCommit} initial="#ff0000" />);
+    const hue = screen.getByRole('slider', { name: 'Hue' });
+    fireEvent.keyDown(hue, { key: 'ArrowRight', shiftKey: true });
+    fireEvent.keyUp(hue, { key: 'Shift' });
+    fireEvent.keyDown(hue, { key: 'ArrowRight' });
+    expect(onCommit).not.toHaveBeenCalled();
+    fireEvent.keyUp(hue, { key: 'ArrowRight' });
+    expect(onCommit).toHaveBeenCalledOnce();
+    expect(hue).toHaveAttribute('aria-valuenow', '11');
+  });
+
+  it('commits a step when focus leaves before the arrow is released', () => {
+    const onCommit = vi.fn();
+    render(<Harness onCommit={onCommit} initial="#ff0000" />);
+    const hue = screen.getByRole('slider', { name: 'Hue' });
+    fireEvent.keyDown(hue, { key: 'ArrowRight' });
+    fireEvent.blur(hue);
+    expect(onCommit).toHaveBeenCalledOnce();
+    fireEvent.keyDown(hue, { key: 'ArrowRight' });
+    fireEvent.keyUp(hue, { key: 'ArrowRight' });
+    expect(onCommit).toHaveBeenCalledTimes(2);
   });
 });
