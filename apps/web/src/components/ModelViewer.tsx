@@ -9564,8 +9564,8 @@ export function ModelViewer({
       // Bodies are the only dynamic shadow casters; camera and selection-only
       // frames reuse this map until geometry or the light rig changes again.
       context.refreshShadowMap();
-      context.renderedBodies = bodies;
     }
+    if (bodiesChanged) context.renderedBodies = bodies;
 
     // A History row whose feature a later one consumed: the faces it made
     // are lit above (as a selected face is), and when none survived its

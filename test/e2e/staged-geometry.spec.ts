@@ -91,6 +91,23 @@ test('draws accepted geometry before analysis, then completes without reinstalli
   await expect(page.getByRole('button', { name: /^Fillet/ })).toBeDisabled();
   await expect(page.getByText('Preparing model details…')).toBeVisible();
   await expect(page.getByText('needs repair', { exact: true })).toHaveCount(0);
+  const canvas = page.locator('.viewer-host canvas');
+  const stagedFace = await canvas.evaluate(
+    (element) =>
+      new Promise<unknown>((resolve) => {
+        element.dispatchEvent(
+          new CustomEvent('openzcad:e2e-select-planar-face', {
+            detail: { normal: { x: 0, y: 0, z: 1 }, resolve }
+          })
+        );
+      })
+  );
+  expect(stagedFace).not.toBeNull();
+  await expect(page.getByRole('contentinfo')).toContainText(
+    'The model is still updating. Try that selection again when it finishes.'
+  );
+  await expect(canvas).not.toHaveAttribute('data-e2e-selected-face', /.+/);
+  await expect(page.locator('.selection-callout-chip')).toHaveCount(0);
   const installs = await page.evaluate(
     () => performance.getEntriesByName('oz:viewer.bodies').length
   );
@@ -110,4 +127,49 @@ test('draws accepted geometry before analysis, then completes without reinstalli
     )
   ).toBe(installs);
   expect(errors).toEqual([]);
+});
+
+test('acknowledges appearance edits without reinstalling on later selection', async ({
+  page
+}) => {
+  await stubApi(page);
+  await page.setViewportSize({ width: 1440, height: 1000 });
+  await page.goto('/');
+  await page.getByLabel('Project name').fill('Retained appearance');
+  await page.getByRole('button', { name: 'Create project' }).click();
+  await expectBodyCount(page, 0);
+  await page.getByRole('button', { name: /^Box \(B\)/ }).click();
+  const inspector = page.getByRole('region', { name: 'Feature inspector' });
+  await inspector.getByRole('button', { name: 'Create', exact: true }).click();
+  await expectBodyCount(page, 1);
+  await page.locator('.feature-row').first().dblclick();
+  const appearance = inspector.getByText('Appearance', { exact: true });
+  await appearance.focus();
+  await appearance.press('Enter');
+  const opacity = inspector.getByLabel('Body opacity');
+  await expect(opacity).toBeVisible();
+  await opacity.focus();
+  await opacity.press('ArrowLeft');
+  await expect(opacity).toHaveValue('0.95');
+  await opacity.blur();
+  await expect(page.getByRole('button', { name: /^Fillet/ })).toBeEnabled();
+  await expect
+    .poll(() =>
+      page.evaluate(
+        () => performance.getEntriesByName('oz:viewer.bodies').length
+      )
+    )
+    .toBeGreaterThan(1);
+  const installs = await page.evaluate(
+    () => performance.getEntriesByName('oz:viewer.bodies').length
+  );
+  await page.locator('.body-row-main').first().click();
+  await expect(page.locator('.selection-callout-chip')).toBeVisible();
+  await page.keyboard.press('Escape');
+  await expect(page.locator('.selection-callout-chip')).toHaveCount(0);
+  expect(
+    await page.evaluate(
+      () => performance.getEntriesByName('oz:viewer.bodies').length
+    )
+  ).toBe(installs);
 });
