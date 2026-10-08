@@ -62,6 +62,22 @@ function renderDock(
 }
 
 describe('MeasurementDock', () => {
+  it('marks saved rows updating and disables copies and CSV while analysis is pending', () => {
+    const { props, container } = renderDock({ geometryPending: true });
+    expect(screen.getByText('updating')).toBeVisible();
+    expect(screen.getByText('Updating…')).toBeVisible();
+    expect(container.querySelector('.measurement-row')).toHaveClass('stale');
+    expect(screen.queryByText('84.00 mm')).toBeNull();
+    for (const name of ['Copy Bracket · Edge 1', 'Copy all', 'CSV']) {
+      const button = screen.getByRole('button', { name });
+      expect(button).toBeDisabled();
+      fireEvent.click(button);
+    }
+    expect(props.onCopy).not.toHaveBeenCalled();
+    expect(props.onExport).not.toHaveBeenCalled();
+    expect(props.measurements[0]!.status).toBe('current');
+  });
+
   it('exposes explicit Smart, Distance, and Angle workflows', () => {
     const { props } = renderDock();
     fireEvent.click(screen.getByRole('button', { name: 'Distance' }));

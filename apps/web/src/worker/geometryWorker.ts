@@ -1,3 +1,9 @@
+import {
+  ProjectionSender,
+  projectionTransferables,
+  type ProjectionPacket
+} from '../lib/projectionStream';
+import type { GeometryReadyState } from '@openzcad/shared';
 import type { EditAnalysisRequest } from '@openzcad/shared';
 import type {
   BodyId,
@@ -66,6 +72,7 @@ export type GeometryWorkerRequest =
        * and the adapter's history digest.
        */
       lineageDemand?: BodyId[];
+      forceFull?: boolean;
     }
   | {
       type: 'export';
@@ -287,6 +294,18 @@ export type GeometryRecognizeImportedFaceResult =
 
 export type GeometryWorkerResult =
   | {
+      type: 'projection-delta';
+      projectId: ProjectId;
+      version: number;
+      packet: ProjectionPacket;
+    }
+  | {
+      type: 'geometry-ready';
+      projectId: string;
+      version: number;
+      geometry: GeometryReadyState;
+    }
+  | {
       type: 'projection';
       projectId: string;
       version: number;
@@ -306,6 +325,7 @@ type ExactKernel = Awaited<ReturnType<typeof createExactKernelAdapter>>;
 let exactKernelStatus: 'idle' | 'loading' | 'ready' | 'failed' = 'idle';
 let exactKernelError: unknown;
 let exactKernelPromise: Promise<ExactKernel | null> | null = null;
+let rebuildMetrics: Record<string, number> = {};
 
 /**
  * The kernel is a multi-megabyte wasm fetch plus compile; a stalled fetch
@@ -323,11 +343,37 @@ function loadExactKernel(): Promise<ExactKernel | null> {
     ({ createExactKernelAdapter }) =>
       createExactKernelAdapter({
         resolveSourceBytes: resolveExactSourceBytes,
+        onRebuildCacheEvent: (event) => {
+          rebuildMetrics = {
+            replayedFeatures: event.replayed,
+            restoredFeatures: event.restored,
+            reusedPrimitives: event.reusedPrimitives ?? 0,
+            measuredBodies: event.remeasured,
+            reusedMeasurements: event.reusedMeasurements,
+            ...(event.checkpointMemory
+              ? {
+                  allocatedWasmBytes:
+                    event.checkpointMemory.linearMemoryBytes ?? 0,
+                  estimatedCheckpointBytes:
+                    event.checkpointMemory.estimatedBytes,
+                  nextMutationEstimatedBytes:
+                    event.checkpointMemory.nextMutationEstimatedBytes,
+                  uniqueNurbsBytes: event.checkpointMemory.uniqueNurbsBytes,
+                  retiredSlots: event.checkpointMemory.retiredSlots
+                }
+              : {}),
+            ...(event.measurementCache
+              ? {
+                  retainedMeasurementBytes: event.measurementCache.retainedBytes
+                }
+              : {})
+          };
+          if (import.meta.env.VITE_E2E === '1')
+            console.debug('[geometry cache]', JSON.stringify(event));
+        },
         ...(import.meta.env.VITE_E2E === '1'
           ? {
-              measurementCacheDiagnostics: true,
-              onRebuildCacheEvent: (event) =>
-                console.debug('[geometry cache]', JSON.stringify(event))
+              measurementCacheDiagnostics: true
             }
           : {})
       })
@@ -371,6 +417,7 @@ const rebuildCache = new ExactRebuildCache<ProjectDocument['derived']>({
   maxInFlight: 4
 });
 const broadcastGate = new LatestBroadcastGate();
+const projectionSender = new ProjectionSender();
 let lastExactSyncKey: string | null = null;
 let lastExactSyncEpoch: number | null = null;
 
@@ -384,6 +431,7 @@ interface GeometryWorkerJob {
   request: GeometryWorkerWorkRequest;
   requestId?: string;
   broadcastToken: number | null;
+  queuedAtMs: number;
 }
 
 /**
@@ -435,6 +483,11 @@ async function execute(job: GeometryWorkerJob): Promise<void> {
   }
   const request = job.request;
   const document = request.document;
+  const workerStartedMs = performance.now();
+  const queueMs = workerStartedMs - job.queuedAtMs;
+  rebuildMetrics = {};
+  let resultCacheHit = true;
+  let forceFull = request.type === 'sync' && request.forceFull === true;
   const post = (message: GeometryWorkerResult, transfer?: Transferable[]) => {
     if (!broadcastGate.isCurrent(job.broadcastToken)) {
       return;
@@ -470,9 +523,8 @@ async function execute(job: GeometryWorkerJob): Promise<void> {
         }
         const prepare = async () => {
           await preloadDocumentFonts(document);
-          const nextEpoch = await exact.prepareMassPropertiesForDocument(
-            document
-          );
+          const nextEpoch =
+            await exact.prepareMassPropertiesForDocument(document);
           lastExactSyncKey = key;
           lastExactSyncEpoch = nextEpoch;
           return nextEpoch;
@@ -554,7 +606,9 @@ async function execute(job: GeometryWorkerJob): Promise<void> {
         // (hash + topology id) that only matches the live derived topology.
         const faceReference =
           request.topologyId !== undefined
-            ? document.derived.bodyRepresentations[request.bodyId]?.topology?.faces.find(
+            ? document.derived.bodyRepresentations[
+                request.bodyId
+              ]?.topology?.faces.find(
                 (face) => face.topologyId === request.topologyId
               )?.reference
             : undefined;
@@ -701,6 +755,7 @@ async function execute(job: GeometryWorkerJob): Promise<void> {
         : await rebuildCache.get(
             `${contentKey}${request.type === 'sync' && request.analysis ? `:analysis:${JSON.stringify(request.analysis)}` : ''}${lineageDemandKey}`,
             async () => {
+              resultCacheHit = false;
               // 'failed' retries on the next load call, so it counts as a
               // loading state here too.
               if (exactKernelStatus !== 'ready') {
@@ -748,6 +803,36 @@ async function execute(job: GeometryWorkerJob): Promise<void> {
                 request.type === 'sync' ? request.analysis : undefined,
                 {
                   cancellation,
+                  ...(!request.requestId
+                    ? {
+                        onGeometryReady: (geometry: GeometryReadyState) => {
+                          if (!broadcastGate.isCurrent(job.broadcastToken))
+                            return;
+                          const encodingStartedMs = performance.now();
+                          const packet = projectionSender.encode(
+                            document.projectId,
+                            geometry,
+                            forceFull
+                          );
+                          forceFull = false;
+                          packet.metrics = {
+                            queueMs,
+                            resultCacheHit: 0,
+                            encodingMs: performance.now() - encodingStartedMs,
+                            workerMs: performance.now() - workerStartedMs
+                          };
+                          post(
+                            {
+                              type: 'projection-delta',
+                              projectId: document.projectId,
+                              version: document.version,
+                              packet
+                            },
+                            projectionTransferables(packet)
+                          );
+                        }
+                      }
+                    : {}),
                   yieldControl: geometryYield(),
                   ...(request.type === 'sync' && request.lineageDemand
                     ? { lineageDemand: request.lineageDemand }
@@ -770,7 +855,32 @@ async function execute(job: GeometryWorkerJob): Promise<void> {
       ...(request.requestId ? { requestId: request.requestId } : {}),
       derived
     };
-    post(result, derivedMeshTransferables(derived));
+    if (request.requestId) {
+      post(result, derivedMeshTransferables(derived));
+    } else {
+      const encodingStartedMs = performance.now();
+      const packet = projectionSender.encode(
+        document.projectId,
+        derived,
+        forceFull
+      );
+      packet.metrics = {
+        ...rebuildMetrics,
+        queueMs,
+        resultCacheHit: resultCacheHit ? 1 : 0,
+        encodingMs: performance.now() - encodingStartedMs,
+        workerMs: performance.now() - workerStartedMs
+      };
+      post(
+        {
+          type: 'projection-delta',
+          projectId: document.projectId,
+          version: document.version,
+          packet
+        },
+        projectionTransferables(packet)
+      );
+    }
     post(stateFor('ready', request, { stale: false }));
   } catch (error) {
     if (!broadcastGate.isCurrent(job.broadcastToken)) {
@@ -872,6 +982,7 @@ self.onmessage = (event: MessageEvent<GeometryWorkerRequest>) => {
   const isBroadcast = request.type === 'sync' && !request.requestId;
   queue.enqueue({
     request,
+    queuedAtMs: performance.now(),
     ...(request.requestId ? { requestId: request.requestId } : {}),
     broadcastToken: broadcastGate.issue(isBroadcast)
   });

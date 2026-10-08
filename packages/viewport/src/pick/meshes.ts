@@ -1,5 +1,5 @@
 import * as THREE from 'three';
-import type { BodyRepresentation } from '@openzcad/shared';
+import type { GeometryBodyRepresentation } from '@openzcad/shared';
 
 export type ViewerBodyMaterial =
   | THREE.MeshStandardMaterial
@@ -56,7 +56,7 @@ export function findBodyId(object: THREE.Object3D): string | null {
 }
 
 export function normalForTriangle(
-  body: BodyRepresentation,
+  body: GeometryBodyRepresentation,
   triangleStart: number
 ): THREE.Vector3 | null {
   const offset = triangleStart * 3;

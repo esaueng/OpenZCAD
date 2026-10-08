@@ -21,6 +21,8 @@ import {
 } from '../lib/localProjectStore';
 import type { Measurement, MeasurementTarget } from '../lib/measurements';
 import type { StoredMeasurementRecord } from '../lib/measurementRecord';
+import { downloadText } from '../lib/model';
+import type * as ModelModule from '../lib/model';
 import {
   useMeasurementWorkbench,
   type MeasurementWorkbenchInput
@@ -29,6 +31,11 @@ import {
 vi.mock('../lib/localProjectStore', () => ({
   loadProjectMeasurements: vi.fn(),
   saveProjectMeasurements: vi.fn()
+}));
+
+vi.mock('../lib/model', async (importOriginal) => ({
+  ...(await importOriginal<typeof ModelModule>()),
+  downloadText: vi.fn()
 }));
 
 // The hook defers `../lib/measurements` to a dynamic import. Warming the module
@@ -118,6 +125,8 @@ beforeEach(() => {
 
 afterEach(() => {
   vi.useRealTimers();
+  vi.restoreAllMocks();
+  vi.mocked(downloadText).mockClear();
 });
 
 describe('measurement workbench persistence', () => {
@@ -255,6 +264,83 @@ describe('measurement workbench persistence', () => {
 });
 
 describe('measurement picks', () => {
+  it('rejects stale body measurements until staged analysis arrives', async () => {
+    const doc = createProjectDocument(
+      'Staged measure',
+      toUserId('user_measure')
+    );
+    const body: BodyRepresentation = {
+      bodyId: toBodyId('body-1'),
+      name: 'Box',
+      source: 'primitive',
+      mesh: {
+        kind: 'mesh',
+        vertices: new Float32Array(),
+        indices: new Uint32Array()
+      },
+      faceCount: 0,
+      color: '#fff',
+      exportableStep: true,
+      consumed: false,
+      volume: 12,
+      bbox: { min: { x: 0, y: 0, z: 0 }, max: { x: 2, y: 2, z: 3 } }
+    };
+    const selection: TopologySelection = {
+      bodyId: body.bodyId,
+      kind: 'body'
+    };
+    const setStatus = vi.fn();
+    const pendingInput = input({
+      doc,
+      modelingLocked: true,
+      geometryPending: true,
+      representations: { 'body-1': body },
+      renderedRepresentations: { 'body-1': body },
+      viewerBodies: [body],
+      setStatus
+    });
+    const { result, rerender } = renderHook(
+      (props: MeasurementWorkbenchInput) => useMeasurementWorkbench(props),
+      { initialProps: pendingInput }
+    );
+    await waitFor(() => expect(result.current.measurementApi).not.toBeNull());
+    act(() => result.current.setMeasuring(true));
+    expect(result.current.previewMeasurement(selection)).toBeNull();
+    act(() => {
+      expect(result.current.handleMeasurementPick(selection, false)).toBe(true);
+    });
+    expect(result.current.measurements).toEqual([]);
+    expect(result.current.measurementDraft).toBeNull();
+    expect(setStatus).toHaveBeenCalledWith(
+      'Measurements are unavailable while the model finishes updating.'
+    );
+
+    const completedBody = {
+      ...body,
+      volume: 24,
+      bbox: { ...body.bbox, max: { x: 4, y: 2, z: 3 } }
+    };
+    rerender({
+      ...pendingInput,
+      geometryPending: false,
+      exactGeometryReady: true,
+      representations: { 'body-1': completedBody },
+      renderedRepresentations: { 'body-1': completedBody },
+      viewerBodies: [completedBody]
+    });
+    expect(result.current.previewMeasurement(selection)).not.toBeNull();
+    act(() => {
+      result.current.handleMeasurementPick(selection, false);
+    });
+    expect(result.current.measurements).toHaveLength(1);
+    expect(result.current.measurements[0]!.result).toEqual({
+      value: 24,
+      dimension: 'volume',
+      components: { x: 4, y: 2, z: 3 }
+    });
+    expect(result.current.measurements[0]!.sourceRevision).toBe(doc.version);
+  });
+
   it('leaves a pick alone when no measuring session is running', async () => {
     const doc = createProjectDocument('Measure D', toUserId('user_measure_d'));
     const setStatus = vi.fn();
@@ -297,6 +383,116 @@ describe('measurement picks', () => {
 });
 
 describe('measurement annotations', () => {
+  it('suspends saved measurements during staged edits without persisting transient state', async () => {
+    const doc = createProjectDocument(
+      'Saved measure',
+      toUserId('user_measure')
+    );
+    const body: BodyRepresentation = {
+      bodyId: toBodyId('body-1'),
+      name: 'Box',
+      source: 'primitive',
+      mesh: {
+        kind: 'mesh',
+        vertices: new Float32Array(),
+        indices: new Uint32Array()
+      },
+      faceCount: 0,
+      color: '#fff',
+      exportableStep: true,
+      consumed: false,
+      volume: 12,
+      bbox: { min: { x: 0, y: 0, z: 0 }, max: { x: 2, y: 2, z: 3 } }
+    };
+    const { createSmartMeasurement } = await import('../lib/measurements');
+    const stored = createSmartMeasurement(
+      body,
+      { bodyId: body.bodyId, kind: 'body' },
+      undefined,
+      doc.version,
+      doc.units
+    )!;
+    load.mockResolvedValue(record(doc.projectId, [stored]));
+    const clipboard = vi
+      .spyOn(navigator.clipboard, 'writeText')
+      .mockResolvedValue();
+    const initialProps = input({
+      doc,
+      modelingLocked: true,
+      exactGeometryReady: true,
+      representations: { 'body-1': body },
+      renderedRepresentations: { 'body-1': body },
+      viewerBodies: [body]
+    });
+    const { result, rerender } = renderHook(
+      (props: MeasurementWorkbenchInput) => useMeasurementWorkbench(props),
+      { initialProps }
+    );
+    await waitFor(() =>
+      expect(result.current.measurementAnnotations).toHaveLength(1)
+    );
+    const saved = result.current.measurements;
+    rerender({
+      ...initialProps,
+      doc: { ...doc, version: doc.version + 1 },
+      geometryPending: true,
+      exactGeometryReady: false
+    });
+    expect(result.current.measurementAnnotations).toEqual([]);
+    await act(async () => {
+      await result.current.copyMeasurements();
+      await result.current.copyMeasurements(saved[0]);
+      result.current.exportMeasurements();
+    });
+    expect(clipboard).not.toHaveBeenCalled();
+    expect(downloadText).not.toHaveBeenCalled();
+    expect(result.current.measurements).toBe(saved);
+    expect(result.current.measurements[0]).toMatchObject({
+      status: 'current',
+      sourceRevision: doc.version,
+      result: { value: 12 }
+    });
+    await new Promise((resolve) => setTimeout(resolve, 450));
+    for (const [persisted] of save.mock.calls) {
+      expect(persisted.measurements[0]).toMatchObject({
+        status: 'current',
+        sourceRevision: doc.version,
+        result: { value: 12 }
+      });
+    }
+
+    const completedBody = {
+      ...body,
+      volume: 24,
+      bbox: { ...body.bbox, max: { x: 4, y: 2, z: 3 } }
+    };
+    rerender({
+      ...initialProps,
+      doc: { ...doc, version: doc.version + 1 },
+      representations: { 'body-1': completedBody },
+      renderedRepresentations: { 'body-1': completedBody },
+      viewerBodies: [completedBody]
+    });
+    await waitFor(() =>
+      expect(result.current.measurements[0]).toMatchObject({
+        status: 'current',
+        sourceRevision: doc.version + 1,
+        result: { value: 24 }
+      })
+    );
+    expect(result.current.measurementAnnotations[0]!.anchor).toEqual({
+      x: 2,
+      y: 1,
+      z: 1.5
+    });
+    await act(async () => {
+      await result.current.copyMeasurements();
+      result.current.exportMeasurements();
+    });
+    expect(clipboard).toHaveBeenCalledOnce();
+    expect(downloadText).toHaveBeenCalledOnce();
+  });
+
   it('reports no annotations without measurements or a draft', async () => {
     const doc = createProjectDocument('Measure F', toUserId('user_measure_f'));
     const { result } = renderHook(() =>

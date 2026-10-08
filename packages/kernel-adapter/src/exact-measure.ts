@@ -118,10 +118,11 @@ let faceGeometryMemo: {
 export function withFaceGeometryMemo<T>(
   kernel: RemusKernel,
   faces: Iterable<number>,
-  measure: () => T
+  measure: () => T,
+  measured = new Map<number, FaceGeometry | undefined>()
 ): T {
   const previous = faceGeometryMemo;
-  faceGeometryMemo = { kernel, faces: new Set(faces), measured: new Map() };
+  faceGeometryMemo = { kernel, faces: new Set(faces), measured };
   try {
     return measure();
   } finally {

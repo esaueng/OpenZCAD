@@ -1,6 +1,6 @@
 import type {
   BodyId,
-  BodyRepresentation,
+  GeometryBodyRepresentation,
   FaceTopology,
   FeatureId,
   FeatureNode,
@@ -166,7 +166,7 @@ export function featureFaceOwnerName(
 }
 
 /** "top" for an axis-aligned plane, otherwise the viewport's own face name. */
-function faceRole(body: BodyRepresentation, face: FaceTopology): string {
+function faceRole(body: GeometryBodyRepresentation, face: FaceTopology): string {
   const label = faceLabel(body, face.hash, face.topologyId);
   const direction = DIRECTION.exec(label);
   if (direction) return direction[1]!.toLowerCase();
@@ -188,7 +188,7 @@ export interface ProducedFaceName {
 
 /** Names a body's faces, as {@link producedFaceNames} does for a document. */
 export type FaceNamer = (
-  body: BodyRepresentation,
+  body: GeometryBodyRepresentation,
   faces: readonly FaceTopology[]
 ) => (ProducedFaceName | null)[];
 
@@ -220,7 +220,7 @@ export function faceNamerFor(document: ProjectDocument): FaceNamer {
  */
 export function producedFaceNames(
   document: ProjectDocument,
-  body: BodyRepresentation,
+  body: GeometryBodyRepresentation,
   faces: readonly FaceTopology[]
 ): (ProducedFaceName | null)[] {
   return nameFaces(document, body, faces, indexFeatures(document));
@@ -228,7 +228,7 @@ export function producedFaceNames(
 
 function nameFaces(
   document: ProjectDocument,
-  body: BodyRepresentation,
+  body: GeometryBodyRepresentation,
   faces: readonly FaceTopology[],
   index: FeatureIndex
 ): (ProducedFaceName | null)[] {
@@ -250,7 +250,7 @@ function nameFaces(
 /** One face's feature name, or null when its lineage cannot say. */
 export function producedFaceName(
   document: ProjectDocument,
-  body: BodyRepresentation,
+  body: GeometryBodyRepresentation,
   face: FaceTopology
 ): string | null {
   return producedFaceNames(document, body, [face])[0]?.name ?? null;
