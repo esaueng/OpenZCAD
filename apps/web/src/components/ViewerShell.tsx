@@ -175,6 +175,11 @@ interface ViewerShellProps {
   onViewChange(view: ViewportCameraState): void;
   onViewSettled(view: ViewportCameraState): void;
   onGeometryPresented?(durationMs: number): void;
+  geometryTrace?: {
+    projectId: string;
+    version: number;
+    analysis: 'pending' | 'ready';
+  };
   /**
    * The viewer's own report of which bodies it drew away from their document
    * pose. It goes back to the workspace and returns as
@@ -352,6 +357,7 @@ export function ViewerShell({
   onViewChange,
   onViewSettled,
   onGeometryPresented,
+  geometryTrace,
   onBodiesDrawnElsewhere,
   onWheelDeviceLearned,
   orientationRef,
@@ -545,6 +551,7 @@ export function ViewerShell({
         onViewChange={onViewChange}
         onViewSettled={onViewSettled}
         onGeometryPresented={onGeometryPresented}
+        geometryTrace={geometryTrace}
         onBodiesDrawnElsewhere={onBodiesDrawnElsewhere}
         onWheelDeviceLearned={onWheelDeviceLearned}
         orientationRef={orientationRef}

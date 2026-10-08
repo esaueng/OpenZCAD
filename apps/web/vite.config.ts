@@ -318,8 +318,9 @@ export default defineConfig(async ({ command, isPreview, mode }) => {
       rollupOptions: {
         preserveEntrySignatures: false,
         output: {
-          // Worker output is separate from the browser's chunk routing.
-          // Split only these analysis modules, preserving evaluation order.
+          // Worker builds have their own output configuration. Keep the
+          // analysis split there without pulling unrelated dependencies into
+          // every worker. Preserve evaluation order across the split.
           strictExecutionOrder: true,
           codeSplitting: {
             groups: [
@@ -415,8 +416,8 @@ export default defineConfig(async ({ command, isPreview, mode }) => {
           // bundle, so isolate it for better caching without relying on the
           // object form supported by Rollup-only Vite releases.
           manualChunks: (id: string) => {
-            // Keep imported-feature queries behind the existing exact-adapter
-            // lazy boundary and within the unchanged per-file size budget.
+            // Imported-feature analysis stays behind the exact adapter's lazy
+            // boundary, with its own cacheable chunk and the same size budget.
             if (
               id.includes(
                 '/packages/kernel-adapter/src/imported-feature-query.ts'
@@ -459,6 +460,14 @@ export default defineConfig(async ({ command, isPreview, mode }) => {
               // preloaded, so this adds no request or async commit boundary.
               id.includes('/apps/web/src/lib/featureHistory.ts') ||
               id.includes('/apps/web/src/lib/featureSuppression.ts') ||
+              // Canonical worker transport and revision/reference helpers are
+              // already workspace dependencies. Reuse the preloaded model
+              // chunk rather than adding another first-paint request.
+              id.includes('/apps/web/src/lib/projectionStream.ts') ||
+              id.includes('/apps/web/src/lib/meshTransport.ts') ||
+              id.includes('/apps/web/src/lib/editTrace.ts') ||
+              id.includes('/apps/web/src/lib/topologyResolution.ts') ||
+              id.includes('/apps/web/src/lib/topologyLabels.ts') ||
               // Thumbnail coordination and shelf version checks must be
               // resident before leave-time flush. Reuse this preloaded chunk.
               id.includes('/apps/web/src/lib/projectThumbnailCapture.ts') ||

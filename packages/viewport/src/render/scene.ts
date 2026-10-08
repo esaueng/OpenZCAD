@@ -6,7 +6,7 @@ import { LineMaterial } from 'three/examples/jsm/lines/LineMaterial.js';
 import { LineSegments2 } from 'three/examples/jsm/lines/LineSegments2.js';
 import { LineSegmentsGeometry } from 'three/examples/jsm/lines/LineSegmentsGeometry.js';
 import type {
-  BodyRepresentation,
+  GeometryBodyRepresentation,
   BodyTopology,
   MeshGeometry
 } from '@openzcad/shared';
@@ -411,7 +411,7 @@ const DECORATION_STENCIL_TEST = {
  * and broad highlights on curves without environment-map reflections crawling
  * across tessellation triangles.
  */
-export function createBodyMaterial(body: BodyRepresentation) {
+export function createBodyMaterial(body: GeometryBodyRepresentation) {
   const opacity = body.opacity ?? 1;
   const translucent = opacity < 1;
   // Every exact result replaces the body's object, and the old one is
@@ -460,7 +460,7 @@ export function createBodyMaterial(body: BodyRepresentation) {
  * feature edges remain its only outline.
  */
 export function createObjectForBody(
-  body: BodyRepresentation,
+  body: GeometryBodyRepresentation,
   resolution?: FatLineResolution
 ): THREE.Object3D {
   const geometry = geometryFromMesh(body.mesh, body.topology);
@@ -496,10 +496,84 @@ export function createObjectForBody(
 
 /** A worker message clones unchanged bodies; compare without serializing mesh arrays. */
 export function sameBodyProjection(
-  previous: BodyRepresentation,
-  next: BodyRepresentation
+  previous: GeometryBodyRepresentation,
+  next: GeometryBodyRepresentation
 ): boolean {
+  const a = previous.projectionRevision;
+  const b = next.projectionRevision;
+  if (
+    a &&
+    b &&
+    a.session === b.session &&
+    (a.geometry !== b.geometry ||
+      a.topology !== b.topology ||
+      a.metadata !== b.metadata)
+  )
+    return false;
+  // Revisions may survive a saved document or a caller's immutable copy.
+  // Equal tags alone cannot certify a modified projection's payload.
   return equalProjectionValue(previous, next);
+}
+
+/** Quantities and recognition metadata do not change smoothing or GPU buffers. */
+export function sameBodyRenderGeometry(
+  previous: GeometryBodyRepresentation,
+  next: GeometryBodyRepresentation
+): boolean {
+  const a = previous.projectionRevision;
+  const b = next.projectionRevision;
+  if (a && b && a.session === b.session && a.geometry !== b.geometry)
+    return false;
+  return (
+    equalProjectionValue(previous.mesh, next.mesh) &&
+    equalProjectionValue(
+      previous.topology?.faces.flatMap((face) => [
+        face.triangleStart,
+        face.triangleCount
+      ]),
+      next.topology?.faces.flatMap((face) => [
+        face.triangleStart,
+        face.triangleCount
+      ])
+    )
+  );
+}
+
+/** Optional analysis leaves the geometry used by picking and edge overlays intact. */
+export function sameBodyPickingTopology(
+  previous: GeometryBodyRepresentation,
+  next: GeometryBodyRepresentation
+): boolean {
+  return (
+    equalProjectionValue(previous.topology?.faces, next.topology?.faces) &&
+    equalProjectionValue(previous.topology?.edges, next.topology?.edges)
+  );
+}
+
+/** Keep the viewport's input stable when only quantities/proofs arrive. */
+export function reuseRenderBodies(
+  previous: readonly GeometryBodyRepresentation[] | undefined,
+  next: readonly GeometryBodyRepresentation[]
+): readonly GeometryBodyRepresentation[] {
+  if (!previous) return next;
+  const byId = new Map(previous.map((body) => [body.bodyId, body]));
+  const retained = next.map((body) => {
+    const before = byId.get(body.bodyId);
+    return before &&
+      before.name === body.name &&
+      before.color === body.color &&
+      before.opacity === body.opacity &&
+      before.consumed === body.consumed &&
+      equalProjectionValue(before.bbox, body.bbox) &&
+      sameBodyRenderGeometry(before, body) &&
+      sameBodyPickingTopology(before, body)
+      ? before
+      : body;
+  });
+  return retained.length === previous.length &&
+    retained.every((body, i) => body === previous[i])
+    ? previous
+    : retained;
 }
 
 function equalProjectionValue(left: unknown, right: unknown): boolean {
@@ -537,6 +611,18 @@ function equalProjectionValue(left: unknown, right: unknown): boolean {
   );
 }
 
+/** Updates body blending without touching geometry or an active drag pose. */
+export function updateBodyMaterialOpacity(
+  material: THREE.Material,
+  opacity: number
+): void {
+  if (material.transparent !== opacity < 1) material.needsUpdate = true;
+  material.opacity = opacity;
+  material.transparent = opacity < 1;
+  material.depthWrite = opacity >= 1;
+  material.stencilWrite = opacity >= 1;
+}
+
 /**
  * Reuses an exact body's GPU buffers only when triangle connectivity and face
  * partitions are unchanged. Those define the original smoothing groups;
@@ -545,7 +631,7 @@ function equalProjectionValue(left: unknown, right: unknown): boolean {
  */
 export function updateObjectForBody(
   object: THREE.Object3D,
-  body: BodyRepresentation
+  body: GeometryBodyRepresentation
 ): boolean {
   if (
     !(object instanceof THREE.Mesh) ||
@@ -637,13 +723,7 @@ export function updateObjectForBody(
   object.matrixWorldNeedsUpdate = true;
   object.name = body.name;
   object.material.color.set(body.color);
-  const opacity = body.opacity ?? 1;
-  if (object.material.transparent !== opacity < 1)
-    object.material.needsUpdate = true;
-  object.material.opacity = opacity;
-  object.material.transparent = opacity < 1;
-  object.material.depthWrite = opacity >= 1;
-  object.material.stencilWrite = opacity >= 1;
+  updateBodyMaterialOpacity(object.material, body.opacity ?? 1);
   return true;
 }
 

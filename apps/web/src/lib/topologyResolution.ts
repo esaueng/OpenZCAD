@@ -1,5 +1,5 @@
 import type {
-  BodyRepresentation,
+  GeometryBodyRepresentation,
   EdgeTopology,
   EdgeTopologyReferenceV5,
   FaceTopology,
@@ -176,7 +176,7 @@ function resolve<T extends Identified>(
 }
 
 export function resolveFace(
-  body: BodyRepresentation | undefined,
+  body: GeometryBodyRepresentation | undefined,
   identity: Identity
 ): TopologyLookup<FaceTopology> {
   if (!body) {
@@ -186,7 +186,7 @@ export function resolveFace(
 }
 
 export function resolveEdge(
-  body: BodyRepresentation | undefined,
+  body: GeometryBodyRepresentation | undefined,
   identity: Identity
 ): TopologyLookup<EdgeTopology> {
   if (!body) {
@@ -210,7 +210,7 @@ export function resolveEdge(
  * persisted today (hash-only). Never guesses, never rebinds by proximity.
  */
 export function refreshEdgeReferenceForCommit(
-  body: BodyRepresentation | undefined,
+  body: GeometryBodyRepresentation | undefined,
   selection: Pick<TopologySelection, 'topologyId' | 'hash' | 'reference'>
 ): TopologyReferenceV5 | undefined {
   const stale = selection.reference;
@@ -234,7 +234,7 @@ export function refreshEdgeReferenceForCommit(
 
 /** Face half of {@link refreshEdgeReferenceForCommit}. */
 export function refreshFaceReferenceForCommit(
-  body: BodyRepresentation | undefined,
+  body: GeometryBodyRepresentation | undefined,
   selection: Pick<TopologySelection, 'topologyId' | 'hash' | 'reference'>
 ): TopologyReferenceV5 | undefined {
   const stale = selection.reference;
@@ -259,7 +259,7 @@ export function refreshFaceReferenceForCommit(
  * reference (usually hash-only).
  */
 export function refreshEdgeReferencesForCommit(
-  body: BodyRepresentation | undefined,
+  body: GeometryBodyRepresentation | undefined,
   selections: readonly Pick<
     TopologySelection,
     'topologyId' | 'hash' | 'reference'
@@ -280,7 +280,7 @@ export function refreshEdgeReferencesForCommit(
  * `undefined` so the caller commits exactly what the form holds.
  */
 export function refreshEdgeFormReferencesForCommit(
-  body: BodyRepresentation | undefined,
+  body: GeometryBodyRepresentation | undefined,
   edgeHashes: readonly number[],
   edgeReferences: readonly EdgeTopologyReferenceV5[] | undefined
 ): EdgeTopologyReferenceV5[] | undefined {

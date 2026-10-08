@@ -120,6 +120,13 @@ export interface MeasuredShape {
   displayLinearDeflections?: readonly number[];
 }
 
+/** Geometry gates complete before optional recognition or quantities run. */
+export interface PreparedShapeMeasurement {
+  geometry: Omit<MeasuredShape, 'volume'>;
+  analysis: readonly (() => void)[];
+  complete(): MeasuredShape;
+}
+
 /** Face identity for the DXF face export: the app's selection shape. */
 export interface DxfFaceSelector {
   bodyId: BodyId;

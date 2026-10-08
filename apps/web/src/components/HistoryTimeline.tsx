@@ -110,6 +110,7 @@ export function findRollbackMarkerIndex(
 export interface HistoryTimelineProps {
   features: FeatureNode[];
   representations: Record<string, BodyRepresentation>;
+  geometryPending?: boolean;
   selectedFeatureNodeId: string | null;
   hiddenBodyIds: ReadonlySet<string>;
   hiddenSketchIds: ReadonlySet<string>;
@@ -203,6 +204,7 @@ function placeTimeline(list: HTMLElement) {
 export function HistoryTimeline({
   features,
   representations,
+  geometryPending = false,
   selectedFeatureNodeId,
   hiddenBodyIds,
   hiddenSketchIds,
@@ -606,15 +608,18 @@ export function HistoryTimeline({
             : feature.bodyId
               ? hiddenBodyIds.has(feature.bodyId)
               : false;
-          const failed = featureNeedsRepair(feature, representations);
+          const failed =
+            !geometryPending && featureNeedsRepair(feature, representations);
           const selected = selectedFeatureNodeId === feature.id;
           const value = manual
             ? 'suppressed'
             : paused
               ? 'paused'
-              : failed
-                ? 'needs repair'
-                : (summaries[index] ?? '');
+              : geometryPending
+                ? 'preparing'
+                : failed
+                  ? 'needs repair'
+                  : (summaries[index] ?? '');
           const delay =
             Math.min(Math.abs(index - end), CASCADE_MAX_STEPS) *
             CASCADE_STEP_MS;

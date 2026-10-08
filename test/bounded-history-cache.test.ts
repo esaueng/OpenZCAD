@@ -170,6 +170,23 @@ function restoredBefore(count: number, changedIndex: number) {
 }
 
 describe("bounded history retention", { timeout: 120_000 }, () => {
+  it('declines checkpoints above the estimated byte budget without changing results', async () => {
+    const adapter = await createExactKernelAdapter({
+      historyCheckpointEstimatedBytes: 0
+    });
+    try {
+      const document = boxes(3);
+      await equivalent(document, await adapter.syncDocument(document));
+      expect(cacheState(adapter).historyCheckpoints).toHaveLength(0);
+      expect(cacheState(adapter).historyKernel?.checkpointCount()).toBe(0);
+      const changed = edit(document, 1, 13);
+      await equivalent(changed, await adapter.syncDocument(changed));
+      expect(cacheState(adapter).historyCheckpoints).toHaveLength(0);
+    } finally {
+      adapter.dispose();
+    }
+  });
+
   it("keeps opaque checkpoints through dependent edits, export and mass queries", async () => {
     const events: RebuildCacheEvent[] = [];
     const adapter = await createExactKernelAdapter({
@@ -1050,12 +1067,12 @@ describe("bounded history retention", { timeout: 120_000 }, () => {
     const adapter = await createExactKernelAdapter({
       historyCheckpointLimit: 2
     });
-    const measurable = adapter as unknown as { measureShape: () => unknown };
+    const measurable = adapter as unknown as { prepareShapeMeasurement: () => unknown };
     try {
       const document = boxes(5);
       await adapter.syncDocument(document);
       const measurement = vi
-        .spyOn(measurable, 'measureShape')
+        .spyOn(measurable, 'prepareShapeMeasurement')
         .mockImplementationOnce(() => {
           throw new Error('Injected measurement failure');
         });

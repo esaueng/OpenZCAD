@@ -7,10 +7,14 @@ import {
   createGradientBackdrop,
   createStudioGrid,
   shouldShowGroundShadow,
+  sameBodyPickingTopology,
+  sameBodyRenderGeometry,
   updateAxesGizmo,
+  updateBodyMaterialOpacity,
   updateStudioGrid,
   VIEWPORT_RENDER_ORDER
 } from './scene';
+import { reuseRenderBodies } from './scene';
 import { boxFullyInView, VIEW_DIRECTIONS } from '../camera/views';
 import { toBodyId, type BodyRepresentation } from '@openzcad/shared';
 
@@ -39,6 +43,35 @@ function bodyFixture(
   };
 }
 
+describe('analysis publications in the viewport', () => {
+  it('preserves the drawing array when quantities and optional proofs arrive', () => {
+    const original = bodyFixture({
+      topology: { faces: [], edges: [] },
+      projectionRevision: {
+        session: 'worker',
+        geometry: 1,
+        topology: 2,
+        metadata: 3
+      }
+    });
+    const drawing = [original];
+    const measured = {
+      ...structuredClone(original),
+      volume: 123,
+      topology: { faces: [], edges: [], recognizedImportedFeatures: [] }
+    };
+    expect(reuseRenderBodies(drawing, [measured])).toBe(drawing);
+    // Appearance still updates, even when geometry is unchanged.
+    const recolored = { ...measured, color: '#ff0000' };
+    expect(reuseRenderBodies(drawing, [recolored])[0]).toBe(recolored);
+    const moved = {
+      ...measured,
+      mesh: { ...measured.mesh, vertices: Float32Array.of(1, 2, 3) }
+    };
+    expect(reuseRenderBodies(drawing, [moved])[0]).toBe(moved);
+  });
+});
+
 describe('createBodyMaterial', () => {
   it('keeps opaque bodies on the depth-writing path', () => {
     const material = createBodyMaterial(bodyFixture());
@@ -63,6 +96,75 @@ describe('createBodyMaterial', () => {
     expect(material.depthWrite).toBe(false);
     expect(material.stencilWrite).toBe(false);
   });
+});
+
+describe('opacity-only body updates', () => {
+  it.each(['phong', 'standard'])(
+    'updates %s blending on retained geometry without resetting the drag pose',
+    (kind) => {
+      const original = bodyFixture({
+        projectionRevision: {
+          session: 'worker',
+          geometry: 1,
+          topology: 2,
+          metadata: 3
+        }
+      });
+      const translucent = { ...original, opacity: 0.35 };
+      const retained = reuseRenderBodies([original], [translucent])[0]!;
+      expect(retained).toBe(translucent);
+      expect(sameBodyRenderGeometry(original, retained)).toBe(true);
+      expect(sameBodyPickingTopology(original, retained)).toBe(true);
+
+      const geometry = new THREE.BoxGeometry();
+      const material =
+        kind === 'phong'
+          ? createBodyMaterial(original)
+          : new THREE.MeshStandardMaterial({
+              color: original.color,
+              stencilWrite: true
+            });
+      const object = new THREE.Mesh(geometry, material);
+      object.position.set(1, 2, 3);
+      object.rotation.set(0.1, 0.2, 0.3);
+      object.scale.set(2, 3, 4);
+      object.updateMatrix();
+      const pose = object.matrix.clone();
+      const positions = geometry.getAttribute(
+        'position'
+      ) as THREE.BufferAttribute;
+      const vertices = positions.array;
+      const positionVersion = positions.version;
+      const materialVersion = material.version;
+
+      updateBodyMaterialOpacity(material, retained.opacity ?? 1);
+      expect(material.opacity).toBe(0.35);
+      expect(material.transparent).toBe(true);
+      expect(material.depthWrite).toBe(false);
+      expect(material.stencilWrite).toBe(false);
+      expect(material.version).toBe(materialVersion + 1);
+
+      updateBodyMaterialOpacity(material, 0.7);
+      expect(material.opacity).toBe(0.7);
+      expect(material.version).toBe(materialVersion + 1);
+
+      updateBodyMaterialOpacity(material, 1);
+      expect(material.opacity).toBe(1);
+      expect(material.transparent).toBe(false);
+      expect(material.depthWrite).toBe(true);
+      expect(material.stencilWrite).toBe(true);
+      expect(material.version).toBe(materialVersion + 2);
+      expect(object.geometry).toBe(geometry);
+      expect(object.material).toBe(material);
+      expect(geometry.getAttribute('position')).toBe(positions);
+      expect(positions.array).toBe(vertices);
+      expect(positions.version).toBe(positionVersion);
+      object.updateMatrix();
+      expect(object.matrix.equals(pose)).toBe(true);
+      geometry.dispose();
+      material.dispose();
+    }
+  );
 });
 
 describe('createGradientBackdrop', () => {
