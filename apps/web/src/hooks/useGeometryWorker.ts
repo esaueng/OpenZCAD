@@ -442,6 +442,10 @@ export function useGeometryWorker(host: GeometryWorkerHost): GeometryWorkerApi {
       quietBudgetUntil = 0;
 
       const projectionReceiver = new ProjectionReceiver();
+      let recoveringProjection: Pick<
+        ProjectDocument,
+        'projectId' | 'version'
+      > | null = null;
       worker.onmessage = (event: MessageEvent<GeometryWorkerResult>) => {
         let message = event.data;
         if (message.type === 'projection-delta') {
@@ -456,14 +460,43 @@ export function useGeometryWorker(host: GeometryWorkerHost): GeometryWorkerApi {
           const projection = projectionReceiver.apply(message.packet);
           if (!projection) {
             const document = hostRef.current.manager()?.document;
-            if (document)
+            if (
+              document &&
+              (recoveringProjection?.projectId !== document.projectId ||
+                recoveringProjection.version !== document.version)
+            ) {
+              recoveringProjection = {
+                projectId: document.projectId,
+                version: document.version
+              };
+              readyDocument.current = null;
+              broadcastDocument.current = document;
+              armedRef.current = true;
+              livePhase = 'starting';
+              lastWorkerMessageAt = Date.now();
+              setState({
+                type: 'state',
+                phase: 'starting',
+                stale: true,
+                ...recoveringProjection
+              });
               worker.postMessage({
                 type: 'sync',
                 document: documentForRebuild(document),
                 lineageDemand: [...(lastDemandRef.current ?? [])],
                 forceFull: true
               });
+            }
             return;
+          }
+          if (!('analysis' in projection) && recoveringProjection) {
+            const document = hostRef.current.manager()?.document;
+            if (
+              document?.projectId === message.projectId &&
+              document.version === message.version
+            ) {
+              recoveringProjection = null;
+            }
           }
           message =
             'analysis' in projection
@@ -508,6 +541,18 @@ export function useGeometryWorker(host: GeometryWorkerHost): GeometryWorkerApi {
           return;
         }
         if (message.type === 'state') {
+          // The rejected job queued ready before it received our recovery
+          // request. Only an accepted completed projection can settle it.
+          if (
+            !message.requestId &&
+            message.phase === 'ready' &&
+            recoveringProjection
+          ) {
+            return;
+          }
+          if (!message.requestId && message.phase === 'failed') {
+            recoveringProjection = null;
+          }
           if (message.progress?.status === 'completed') {
             if (message.projectId && message.version !== undefined)
               recordEditPhase(
