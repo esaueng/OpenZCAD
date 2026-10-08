@@ -227,6 +227,9 @@ describe('CommandBar', () => {
     await userEvent.type(search, 'fil');
     expect(screen.queryAllByRole('option')).toHaveLength(0);
     expect(screen.getByText(hint)).toHaveClass('command-bar-keys');
+    expect(screen.getByText(hint).closest('.command-bar-float')).toHaveClass(
+      'command-bar-ask'
+    );
     expect(search).toHaveAccessibleDescription(hint);
 
     // The slash swaps it for the command list and its own key row.
@@ -459,6 +462,10 @@ describe('CommandBar pointer and empty states', () => {
     expect(screen.getByRole('status')).toHaveTextContent(
       'No matching command.'
     );
+    // Not the ask hint's float, which a docked assistant stream hides.
+    expect(
+      screen.getByRole('status').closest('.command-bar-float')
+    ).not.toHaveClass('command-bar-ask');
     expect(search).toHaveAttribute('aria-expanded', 'false');
     expect(search).not.toHaveAttribute('aria-controls');
     expect(

@@ -58,3 +58,16 @@ describe('age fading', () => {
     expect(css).not.toMatch(/\.assistant-turn:nth-last-child/);
   });
 });
+
+describe('ask hint beside the stream', () => {
+  it('hides only the ask hint, not an empty command result', () => {
+    // Picked out by the absence of a result list, the rule also hid "No
+    // matching command." for a slash query with no matches.
+    expect(
+      rule('.workspace.with-assistant .command-bar-float.command-bar-ask')
+    ).toMatch(/display:\s*none/);
+    expect(css).not.toMatch(
+      /\.command-bar-float:not\(:has\(\.palette-list\)\)/
+    );
+  });
+});

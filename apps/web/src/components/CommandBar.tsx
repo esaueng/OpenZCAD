@@ -369,7 +369,7 @@ export function CommandBar({
         )}
         {askHintShown && (
           <div
-            className="command-bar-float"
+            className="command-bar-float command-bar-ask"
             onMouseDown={(event) => event.preventDefault()}
           >
             <p className="command-bar-keys" id={ASK_HINT_ID}>

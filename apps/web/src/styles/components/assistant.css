@@ -111,8 +111,9 @@
    history, clear and hide while a question was being typed — attaching a
    drawing to it included. With the stream up, Enter plainly asks it; the
    hint stays the field's description, which a hidden element still gives.
-   The command list is not this float: it replaces the stream instead. */
-.workspace.with-assistant .command-bar-float:not(:has(.palette-list)) {
+   The command list, or its "No matching command.", is not this float: it
+   replaces the stream instead. */
+.workspace.with-assistant .command-bar-float.command-bar-ask {
   display: none;
 }
 
