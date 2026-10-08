@@ -1219,6 +1219,7 @@ import {
 } from './lib/suppressionFeedback';
 import { validateFeatureSuppression } from './lib/featureSuppression';
 import {
+  moveHasFiniteValues,
   moveHasUnappliedChange,
   movingSketchId,
   sketchViewShown
@@ -7118,6 +7119,10 @@ export function App() {
       t.x * basis.normal.x + t.y * basis.normal.y + t.z * basis.normal.z;
     const canonical = sketch.planeRef.type === 'canonical';
     const dn = canonical ? round(rawDn) : 0;
+    if (![du, dv, rawDn, dn].every(Number.isFinite)) {
+      setStatus('Could not apply Move: its translation must be finite.');
+      return false;
+    }
     setMovePreview(null);
     if (du === 0 && dv === 0 && dn === 0) {
       setTool(null);
@@ -7169,6 +7174,12 @@ export function App() {
     if (!preview || !doc) {
       return false;
     }
+    // Every entry point (panel, Enter, and Apply before navigating) lands
+    // here. Refuse before clearing the draft or changing document/history.
+    if (!moveHasFiniteValues(preview)) {
+      setStatus('Could not apply Move: enter finite values before applying.');
+      return false;
+    }
     if (preview.target === 'sketch') {
       return confirmSketchMove(preview);
     }
@@ -7189,6 +7200,25 @@ export function App() {
       preview.rotationDeg
     );
     const round = (value: number) => Math.round(value * 1000) / 1000;
+    const values = {
+      translation: {
+        x: round(translation.x),
+        y: round(translation.y),
+        z: round(translation.z)
+      },
+      rotationDeg: {
+        x: round(preview.rotationDeg.x),
+        y: round(preview.rotationDeg.y),
+        z: round(preview.rotationDeg.z)
+      }
+    };
+    // Finite inputs can still overflow during pivot composition or rounding.
+    if (!moveHasFiniteValues(values)) {
+      setStatus(
+        'Could not apply Move: its resulting transform must be finite.'
+      );
+      return false;
+    }
     setMovePreview(null);
     const created = createFeature(
       commandFactories.transformBody({
@@ -7196,16 +7226,7 @@ export function App() {
         // rather than committing a feature with a blank name.
         name: moveName.trim() || 'Move',
         targetBodyId: preview.bodyId as BodyId,
-        translation: {
-          x: round(translation.x),
-          y: round(translation.y),
-          z: round(translation.z)
-        },
-        rotationDeg: {
-          x: round(preview.rotationDeg.x),
-          y: round(preview.rotationDeg.y),
-          z: round(preview.rotationDeg.z)
-        }
+        ...values
       })
     );
     if (created) {
