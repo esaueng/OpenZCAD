@@ -1510,14 +1510,20 @@
   left: calc(100% + var(--island-gap));
 }
 
-/* Whatever room the stage leaves under the flyout's top, which is the
-   float's (its height is the flyout's 100%): half the stage plus half the
-   float while the float is centred, more once it has lifted off the
-   readout. */
+/* The room the column itself has under the flyout's top, which is the
+   float's (its height is the flyout's 100%): down to the readout's reserve
+   and a gap above it, where the rail's own foot stops. That is half the
+   stage plus half the float, less the reserve, while the float is centred,
+   and the float's own height once it has lifted to stand on the reserve.
+   Running on to the window's edge, the flyouts covered the readout, the
+   command bar and the toast, which sit under them. */
 .viewer-area .workspace-column-float :is(.command-flyout, .sketch-flyouts) {
   max-height: max(
-    calc((100vh - var(--stage-top) - var(--island-gap) + 100%) / 2),
-    calc(var(--readout-reserve) + var(--island-gap) + 100%)
+    calc(
+      (100vh - var(--stage-top) - var(--island-gap) + 100%) / 2 -
+        var(--readout-reserve) - var(--island-gap)
+    ),
+    100%
   );
 }
 
@@ -2247,9 +2253,13 @@ button.command-rail:disabled {
   }
 }
 
+/* Two columns leave the inner one no room for its names: they were drawn
+   over the outer column's icons and over each other ("Angle" on
+   "Parallel"). The relations that fit the pick are still the ones not
+   greyed, and each one's tooltip names it. */
 @media (max-height: 540px) {
-  .workspace.column-layout .viewer-area:has(.sketch-relations) {
-    --lane-end: calc(var(--rail-w) + 78px + var(--island-gap) * 3);
+  .instrument-rail > .sketch-relations .sketch-relation-name {
+    display: none;
   }
 }
 

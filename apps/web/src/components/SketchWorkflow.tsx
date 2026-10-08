@@ -1,8 +1,19 @@
 import type { SketchProfileAnalysis } from '@openzcad/geometry';
+import type { SketchSessionState } from '../lib/interaction/machine';
+import { constraintToolSpec } from '../lib/sketch/constraints';
+import { sketchEditToolSpec } from '../lib/sketch/edits';
+import { sketchDrawToolLabel } from './SketchToolRail';
 
 export interface SketchWorkflowProps {
   plane: string;
-  tool: string;
+  /**
+   * What the rails have live: an armed relation or modify tool, with its
+   * picks so far, ahead of the draw tool under it.
+   */
+  tool: Pick<
+    SketchSessionState,
+    'tool' | 'circleMode' | 'pendingConstraint' | 'pendingEdit'
+  >;
   objects: { id: string; label: string }[];
   selectedId: string | null;
   analysis: SketchProfileAnalysis | null;
@@ -17,6 +28,28 @@ export interface SketchWorkflowProps {
   onDiagnose(): void;
 }
 
+/**
+ * The live tool named as the rails name it ("Diameter Circle", "Fillet: 1/2
+ * selected"). Written out here rather than capitalised by CSS, which turned
+ * a pick count into "0/1 Selected".
+ */
+function toolReadout(session: SketchWorkflowProps['tool']): string {
+  const armed = session.pendingConstraint
+    ? {
+        spec: constraintToolSpec(session.pendingConstraint.kind),
+        picks: session.pendingConstraint.picks.length
+      }
+    : session.pendingEdit
+      ? {
+          spec: sketchEditToolSpec(session.pendingEdit.kind),
+          picks: session.pendingEdit.picks.length
+        }
+      : null;
+  return armed
+    ? `${armed.spec.label}: ${armed.picks}/${armed.spec.picks} selected`
+    : sketchDrawToolLabel(session.tool, session.circleMode);
+}
+
 /** Persistent, document-backed orientation and feedback for the sketch session. */
 export function SketchWorkflow(props: SketchWorkflowProps) {
   const profiles = props.analysis?.profiles.length ?? 0;
@@ -28,26 +61,28 @@ export function SketchWorkflow(props: SketchWorkflowProps) {
     <section className="sketch-workflow" aria-label="Sketch overview">
       <p className="sketch-workflow-context">
         <strong>{props.plane}</strong>
-        <span>{props.tool}</span>
+        <span>{toolReadout(props.tool)}</span>
       </p>
       <div
         className="sketch-workflow-snaps"
         role="group"
         aria-label="Sketch snapping"
       >
+        {/* A toggle keeps one name and says on or off by being pressed:
+            "Geometry snaps off", pressed, was read out as a contradiction. */}
         <button
           type="button"
           aria-pressed={props.geometrySnaps}
           onClick={props.onGeometrySnaps}
         >
-          Geometry snaps {props.geometrySnaps ? 'on' : 'off'}
+          Geometry snaps
         </button>
         <button
           type="button"
           aria-pressed={props.gridSnaps}
           onClick={props.onGridSnaps}
         >
-          Grid snaps {props.gridSnaps ? 'on' : 'off'}
+          Grid snaps
         </button>
       </div>
       <p className="sketch-workflow-readiness" role="status">
@@ -77,7 +112,11 @@ export function SketchWorkflow(props: SketchWorkflowProps) {
               </li>
             ))}
           </ul>
-          <button type="button" onClick={props.onDiagnose}>
+          <button
+            type="button"
+            className="secondary"
+            onClick={props.onDiagnose}
+          >
             Highlight gaps
           </button>
         </details>
@@ -104,9 +143,10 @@ export function SketchWorkflow(props: SketchWorkflowProps) {
           {props.error}
         </p>
       )}
+      {/* The Shift hint is the palette's footer, under the settings. */}
       <p className="muted">
-        Select geometry to edit dimensions. Shift temporarily disables snapping.
-        Finish Sketch keeps completed geometry.
+        Select geometry to edit dimensions. Finish Sketch keeps completed
+        geometry.
       </p>
     </section>
   );

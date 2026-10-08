@@ -1027,58 +1027,6 @@
   pointer-events: none;
 }
 
-.sketch-rail button {
-  display: flex;
-  gap: 6px;
-  align-items: center;
-  padding: 5px 10px;
-  color: var(--color-text-dim);
-  font-size: var(--fs-xs);
-  background: transparent;
-  border: 1px solid transparent;
-  border-radius: var(--radius-sm);
-  cursor: pointer;
-}
-
-.sketch-rail button:hover {
-  color: var(--color-text);
-  background: var(--color-surface-hover);
-}
-
-.sketch-rail button.active {
-  color: var(--color-text);
-  background: var(--color-accent-dim);
-  border-color: var(--color-accent-border);
-}
-
-.sketch-rail button kbd {
-  padding: 0 4px;
-  color: var(--color-text-dim);
-  font-size: var(--fs-mini);
-  background: var(--color-bg);
-  border-radius: var(--radius-sm);
-}
-
-/* Solve-status pill: inline in the rail, tone-tinted, never positioned. */
-.sketch-rail .sketch-solve-pill {
-  padding: 3px 8px;
-  border: 1px solid var(--color-border-strong);
-  border-radius: var(--radius-md);
-  font-size: var(--fs-xs);
-  white-space: nowrap;
-  color: var(--color-text-dim);
-}
-
-.sketch-rail .sketch-solve-pill[data-tone='ok'] {
-  color: var(--color-accent-hi);
-  border-color: var(--color-accent-border);
-}
-
-.sketch-rail .sketch-solve-pill[data-tone='warn'] {
-  color: #ffb4a6;
-  border-color: rgba(255, 128, 100, 0.55);
-}
-
 /* Constraint list in the palette: label + trailing delete per row. */
 .sketch-constraint-list {
   display: flex;
@@ -1097,19 +1045,25 @@
   min-width: 0;
 }
 
+/* A row that only deletes takes the rest of the row, like the edit button
+   in an editable one; between an icon and the delete, space-between left
+   it floating mid-row. */
 .sketch-constraint-list li > span {
+  flex: 1;
+  min-width: 0;
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
   font-size: var(--fs-xs);
 }
 
+/* Text, so the error's text shade: --color-error is under AA on surface-2. */
 .sketch-constraint-list li[data-conflicted='true'] {
-  color: var(--color-error);
+  color: var(--color-error-text);
 }
 
 .sketch-constraint-list li[data-conflicted='true'] .sketch-constraint-edit {
-  color: var(--color-error);
+  color: var(--color-error-text);
 }
 
 /* Fully-defined rows agree with the "Fully constrained" pill and the green
@@ -1160,8 +1114,16 @@
   flex-wrap: wrap;
   align-items: center;
   gap: 2px;
-  /* Never past the window's edge: on a phone the tiles wrap into rows in
-     whatever width is left beside the rail. */
+  /* One row as wide as its tiles while it fits, wrapped into the room left
+     when it does not. With only its left edge set, past the rail's 40px the
+     strip had no room of its own, so it shrank to min-content and the wrap
+     stacked every tile in a column. The right edge is the right lane's
+     (the relations and instrument rails), measured from the float that
+     contains the strip (quiet-stage.css), so a phone wraps the tiles
+     rather than running them under those rails; fit-content sizes against
+     that room and still hugs a single row. */
+  right: calc(var(--island-gap) + 100% + var(--lane-end) - 100vw);
+  width: fit-content;
   max-width: calc(100vw - var(--island-gap) * 3 - var(--rail-w));
   padding: 3px;
   background: var(--color-surface-2);
@@ -1329,17 +1291,6 @@
   font-size: var(--fs-mini);
 }
 
-@media (min-width: 761px) and (max-width: 1500px) {
-  .sketch-rail button {
-    gap: 4px;
-    padding-inline: 6px;
-  }
-
-  .sketch-rail button kbd {
-    display: none;
-  }
-}
-
 /* The editor and its constraints card stack in the top-right; the stack
    carries the float so the form's box stays the form's own. */
 .sketch-entity-dock {
@@ -1391,6 +1342,13 @@
   gap: 0 8px;
 }
 
+/* A field showing its preview or error line makes the row taller; its
+   neighbour keeps its input at the top rather than spreading the extra
+   height and dropping out of line. */
+.sketch-entity-fields .field {
+  align-content: start;
+}
+
 .sketch-entity-editor .field input {
   width: 100%;
   min-width: 0;
@@ -1398,7 +1356,7 @@
 
 .sketch-entity-editor .form-error {
   margin: 0 0 10px;
-  color: var(--color-error);
+  color: var(--color-error-text);
   font-size: var(--fs-mini);
 }
 
@@ -1489,35 +1447,6 @@
   margin: 0 0 10px;
   color: var(--color-text-dim);
   font-size: var(--fs-mini);
-}
-
-@media (max-width: 760px) {
-  .sketch-rail {
-    max-width: calc(100% - 20px);
-    overflow-x: auto;
-  }
-
-  .sketch-entity-dock {
-    top: auto;
-    right: 10px;
-    bottom: 54px;
-    left: 10px;
-    width: auto;
-  }
-
-  .sketch-entity-editor {
-    max-height: 44vh;
-    overflow-y: auto;
-  }
-
-  .sketch-palette {
-    top: auto;
-    right: 10px;
-    bottom: 54px;
-    width: min(238px, calc(100% - 20px));
-    max-height: 46vh;
-    overflow-y: auto;
-  }
 }
 
 /* Plane picker shown while the Sketch tool waits for a target. A command
@@ -1641,11 +1570,6 @@
 
 .revert-sketch-pill:hover {
   background: var(--color-accent-dim);
-}
-
-/* An empty slot keeps the rail's width and the buttons' places. */
-.sketch-solve-pill.empty {
-  visibility: hidden;
 }
 
 .extrude-controls {

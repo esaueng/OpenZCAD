@@ -482,6 +482,7 @@ import {
   IDLE,
   composingTextDraft,
   escapeTarget,
+  sketchPickArmed,
   sketchToolKeysSuspended,
   interactionReducer,
   commandSessionFor,
@@ -2424,6 +2425,18 @@ export function App() {
   // `idle` render it was constructed during.
   const interactionRef = useRef(interaction);
   interactionRef.current = interaction;
+  // An armed relation's or modify tool's instruction retires once the tool
+  // is put down, and the live hint takes the bar back. A message set with
+  // the disarm itself ("constraint added") is younger than the settle time
+  // and stays.
+  const sketchPicking = sketchPickArmed(interaction);
+  const sketchPickingRef = useRef(sketchPicking);
+  useEffect(() => {
+    if (sketchPickingRef.current && !sketchPicking) {
+      retireStatusMessage();
+    }
+    sketchPickingRef.current = sketchPicking;
+  }, [sketchPicking, retireStatusMessage]);
   // A sketch or a drag takes the stage: the drawer and the "More tools" fold
   // step aside for it and return when it ends, the preference untouched.
   // The viewer reports the gesture's pointer, which outlasts a refused
@@ -18490,6 +18503,11 @@ export function App() {
   const sketchOverviewPlane =
     editingSketchNode?.planeRef ??
     (interaction.mode === 'sketch' ? interaction.session.plane : null);
+  // The palette names an offset plane as the status line does, not bare.
+  const sketchOverviewOffset =
+    sketchOverviewPlane?.type === 'canonical'
+      ? evalParamValue(sketchOverviewPlane.offset, parameterScope.scope)
+      : null;
   // The selected entity's editor rides in the sketch card, under the tools:
   // the card changes with the pick, and the right side stays the relations'.
   const sketchTextDraft = composingTextDraft(interaction);
@@ -18571,16 +18589,12 @@ export function App() {
           <SketchWorkflow
             plane={
               sketchOverviewPlane?.type === 'canonical'
-                ? `${sketchOverviewPlane.plane} plane`
+                ? `${sketchOverviewPlane.plane} plane${sketchOverviewOffset ? ` offset ${formatNumber(sketchOverviewOffset)} ${doc.units}` : ''}`
                 : sketchOverviewPlane?.type === 'face'
                   ? 'Attached face'
                   : 'Sketch plane'
             }
-            tool={
-              interaction.session.pendingConstraint
-                ? `${constraintToolSpec(interaction.session.pendingConstraint.kind).label}: ${interaction.session.pendingConstraint.picks.length}/${constraintToolSpec(interaction.session.pendingConstraint.kind).picks} selected`
-                : interaction.session.tool
-            }
+            tool={interaction.session}
             objects={sketchOverview.objects}
             selectedId={interaction.session.selectedObjectId}
             analysis={sketchOverview.analysis}
