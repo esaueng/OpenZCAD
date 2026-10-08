@@ -1,4 +1,5 @@
 import { Check, Layers3, MousePointer2, X } from 'lucide-react';
+import { displayLengthName, type UnitSystem } from '@openzcad/shared';
 import { useEffect, useState, type MutableRefObject } from 'react';
 
 interface ProfileQuickActionProps {
@@ -69,6 +70,7 @@ export function MoveInstruction({
   hideRotation,
   liveSnapRef
 }: MoveInstructionProps) {
+  const unitText = displayLengthName(units as UnitSystem);
   const [snap, setSnap] = useState(committedSnap);
   useEffect(() => {
     setSnap(committedSnap);
@@ -95,8 +97,12 @@ export function MoveInstruction({
         </strong>
         <small>
           Snaps to{' '}
-          {snap ? `${snap.move} ${units} · ${snap.rotate}°` : 'whole steps'} —
-          zoom in for finer steps, hold Shift for free movement.
+          {snap
+            ? hideRotation
+              ? `${snap.move} ${unitText}`
+              : `${snap.move} ${unitText} · ${snap.rotate}°`
+            : 'whole steps'}{' '}
+          — zoom in for finer steps, hold Shift for free movement.
         </small>
       </span>
     </div>

@@ -1,4 +1,9 @@
-import { useEffect, useRef, useState } from 'react';
+import {
+  useEffect,
+  useRef,
+  useState,
+  type FocusEvent as ReactFocusEvent
+} from 'react';
 import { X } from 'lucide-react';
 import {
   advanceThroughCompleted,
@@ -30,6 +35,36 @@ export function WorkspaceTour({
   );
   const onDismissRef = useRef(onDismiss);
   onDismissRef.current = onDismiss;
+  const cardRef = useRef<HTMLElement | null>(null);
+  /** Where the keyboard came from when it entered the card. */
+  const returnFocusRef = useRef<HTMLElement | null>(null);
+
+  const rememberReturn = (event: ReactFocusEvent<HTMLElement>) => {
+    const from = event.relatedTarget;
+    if (
+      from instanceof HTMLElement &&
+      from !== from.ownerDocument.body &&
+      !event.currentTarget.contains(from)
+    ) {
+      returnFocusRef.current = from;
+    }
+  };
+
+  // Skip and Finish unmount the card with the focus inside it, which left
+  // the keyboard on <body>. It goes back where it came from or, failing
+  // that, to the command bar.
+  const releaseFocus = () => {
+    const doc = globalThis.document;
+    if (!cardRef.current?.contains(doc.activeElement)) {
+      return;
+    }
+    const back = returnFocusRef.current;
+    const target =
+      back && back.isConnected
+        ? back
+        : doc.querySelector<HTMLElement>('.command-bar-input');
+    target?.focus();
+  };
 
   useEffect(() => {
     setIndex((current) =>
@@ -95,7 +130,12 @@ export function WorkspaceTour({
 
   const last = index === WORKSPACE_TOUR_STEPS.length - 1;
   return (
-    <section className="workspace-tour" aria-label="Getting started">
+    <section
+      ref={cardRef}
+      className="workspace-tour"
+      aria-label="Getting started"
+      onFocus={rememberReturn}
+    >
       <header className="workspace-tour-head">
         <span className="workspace-tour-progress" aria-hidden="true">
           {WORKSPACE_TOUR_STEPS.map((entry, dot) => (
@@ -115,18 +155,30 @@ export function WorkspaceTour({
           className="icon-button"
           title="Skip the tour"
           aria-label="Skip the tour"
-          onClick={onDismiss}
+          onClick={() => {
+            releaseFocus();
+            onDismiss();
+          }}
         >
           <X size={14} aria-hidden="true" />
         </button>
       </header>
-      <h2 className="workspace-tour-title">{step.title}</h2>
-      <p className="workspace-tour-body">{step.body}</p>
+      {/* A step can change on its own (it advances when its action
+          happens), so the new step is announced. */}
+      <div aria-live="polite" aria-atomic="true">
+        <h2 className="workspace-tour-title">{step.title}</h2>
+        <p className="workspace-tour-body">{step.body}</p>
+      </div>
       <footer className="workspace-tour-actions">
         <button
           type="button"
           className="workspace-tour-next"
-          onClick={() => setIndex((current) => current + 1)}
+          onClick={() => {
+            if (last) {
+              releaseFocus();
+            }
+            setIndex((current) => current + 1);
+          }}
         >
           <StableLabel reserve={['Finish', 'Next']} align="center">
             {last ? 'Finish' : 'Next'}

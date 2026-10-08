@@ -1,8 +1,8 @@
 import { render, screen, within } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
-import type { ComponentProps } from 'react';
+import { useState, type ComponentProps } from 'react';
 import { describe, expect, it, vi } from 'vitest';
-import { DEFAULT_APP_SETTINGS } from '@openzcad/shared';
+import { DEFAULT_APP_SETTINGS, type AppSettings } from '@openzcad/shared';
 import { CONSTRAINT_TOOL_SPECS } from '../lib/sketch/constraints';
 import { SketchRelationsRail, SketchToolRail } from './SketchToolRail';
 
@@ -129,6 +129,126 @@ describe('SketchToolRail', () => {
         geometrySnapEnabled: false
       })
     );
+  });
+
+  it('takes a snap spacing typed over the old one, keystroke by keystroke', async () => {
+    const user = userEvent.setup();
+    const commits: number[] = [];
+    // The palette as App drives it: every committed patch comes back in.
+    function Controlled() {
+      const [settings, setSettings] = useState<AppSettings['sketching']>({
+        ...structuredClone(DEFAULT_APP_SETTINGS.sketching),
+        linearSnap: 1
+      });
+      return (
+        <SketchToolRail
+          tool="line"
+          circleMode="center-radius"
+          construction={false}
+          settings={settings}
+          units="mm"
+          paletteVisible
+          canConstrain
+          pendingEdit={null}
+          constraints={[]}
+          solveStatus={null}
+          solving={false}
+          onTool={vi.fn()}
+          onCircleMode={vi.fn()}
+          onConstruction={vi.fn()}
+          onSettings={(next) => {
+            commits.push(next.linearSnap);
+            setSettings(next);
+          }}
+          onEditTool={vi.fn()}
+          onEditConstraint={vi.fn()}
+          onDeleteConstraint={vi.fn()}
+          onSolve={vi.fn()}
+          onDiagnostics={vi.fn()}
+          onExtrude={vi.fn()}
+        />
+      );
+    }
+    render(<Controlled />);
+    await user.click(screen.getByRole('button', { name: /Sketch palette/ }));
+    const field = screen.getByLabelText('Sketch snap spacing');
+    expect(field).toHaveValue(1);
+
+    // Emptied while focused, the field stays empty and nothing is committed:
+    // the old value used to be written straight back over the deletion.
+    await user.clear(field);
+    expect(field).toHaveDisplayValue('');
+    expect(commits).toEqual([]);
+
+    // "0.5" typed in: the "0" on the way there is out of range and is not
+    // committed, and it is not replaced by the old 1 either (which made the
+    // finished entry read 1.5).
+    await user.type(field, '0.5');
+    expect(field).toHaveValue(0.5);
+    expect(commits.at(-1)).toBe(0.5);
+    expect(commits).not.toContain(0);
+
+    // An out-of-range entry stays a draft; leaving the field shows the
+    // spacing still in force.
+    await user.clear(field);
+    await user.type(field, '0');
+    expect(commits.at(-1)).toBe(0.5);
+    await user.tab();
+    expect(field).toHaveValue(0.5);
+  });
+
+  it('lights only the armed modify tool, not Select under it', () => {
+    for (const kind of ['fillet', 'chamfer', 'offset'] as const) {
+      const { unmount } = renderRail({
+        // Arming a modify tool parks the machine on Select for its picks.
+        tool: 'select',
+        pendingEdit: { kind, picks: [] }
+      });
+      const rail = screen.getByRole('toolbar', { name: 'Sketch tools' });
+      const lit = Array.from(
+        rail.querySelectorAll('button[aria-pressed="true"]')
+      ).map((button) => button.getAttribute('aria-label'));
+      const label = kind[0]!.toUpperCase() + kind.slice(1);
+      expect(lit).toEqual([label]);
+      expect(rail.querySelectorAll('button.active')).toHaveLength(1);
+      unmount();
+    }
+    // Without one, Select reads as the live tool again.
+    renderRail({ tool: 'select', pendingEdit: null });
+    expect(screen.getByRole('button', { name: 'Select' })).toHaveAttribute(
+      'aria-pressed',
+      'true'
+    );
+  });
+
+  it('steps the circle type with the arrow keys, one tab stop for the strip', async () => {
+    const user = userEvent.setup();
+    const onCircleMode = vi.fn();
+    const { props, rerender } = renderRail({ onCircleMode });
+    const strip = screen.getByRole('radiogroup', { name: 'Circle type' });
+    const radios = within(strip).getAllByRole('radio');
+    expect(radios.map((radio) => radio.tabIndex)).toEqual([0, -1, -1]);
+
+    radios[0]!.focus();
+    await user.keyboard('{ArrowRight}');
+    expect(onCircleMode).toHaveBeenLastCalledWith('two-point-diameter');
+    expect(radios[1]).toHaveFocus();
+    rerender(<SketchToolRail {...props} circleMode="two-point-diameter" />);
+    expect(radios.map((radio) => radio.tabIndex)).toEqual([-1, 0, -1]);
+
+    // Back past the first wraps round to the last.
+    radios[0]!.focus();
+    await user.keyboard('{ArrowUp}');
+    expect(onCircleMode).toHaveBeenLastCalledWith('three-point');
+    expect(radios[2]).toHaveFocus();
+  });
+
+  it('names the Extrude key, which works inside a sketch too', async () => {
+    const user = userEvent.setup();
+    renderRail();
+    await user.hover(screen.getByRole('button', { name: 'Extrude' }));
+    const tooltip = await screen.findByRole('tooltip');
+    expect(tooltip.querySelector('kbd')).toHaveTextContent(/^E$/);
   });
 
   it('keeps the relations off the card: they have their own rail', () => {
@@ -466,6 +586,13 @@ describe('SketchRelationsRail', () => {
       'Does not apply to a circle.'
     );
     expect(horizontal.querySelector('.sketch-relation-name')).toBeNull();
+  });
+
+  it('says "an arc", not "a arc", in the refusal', () => {
+    renderRelations({ selection: { kind: 'arc', fitting: ['radius'] } });
+    expect(
+      screen.getByRole('button', { name: 'Horizontal' })
+    ).toHaveAccessibleDescription('Does not apply to an arc.');
   });
 
   it('greys every relation until there is geometry, and says so', () => {

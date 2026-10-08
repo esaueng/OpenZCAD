@@ -41,6 +41,21 @@
   pointer-events: none;
 }
 
+/* Faded is not gone: the body was still a tab stop, invisible, that opened
+   the log. Hidden takes it out of the tab order; its live region opts back
+   in, so a status set while the pill is up is still announced. */
+.viewer-area:has(.activity-pill) .workspace-toast .workspace-toast-body,
+.viewer-area:has(.pattern-progress) .workspace-toast .workspace-toast-body {
+  visibility: hidden;
+  /* After the toast's fade, not before it. */
+  transition: visibility 0s linear var(--dur-fast);
+}
+
+.viewer-area:has(.activity-pill) .workspace-toast-body > [role='status'],
+.viewer-area:has(.pattern-progress) .workspace-toast-body > [role='status'] {
+  visibility: visible;
+}
+
 /* A fixed width, so the card does not twitch every time the detail line
    changes phase; the height is --activity-pill-h, which the notice lane in
    quiet-stage.css reserves. */

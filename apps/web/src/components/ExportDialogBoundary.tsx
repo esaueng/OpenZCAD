@@ -13,6 +13,7 @@ function ExportUnavailable({ onClose }: { onClose(): void }) {
         role="dialog"
         aria-modal="true"
         aria-labelledby="export-unavailable-title"
+        tabIndex={-1}
         onKeyDown={(event) => {
           if (event.key === 'Escape') {
             event.stopPropagation();
@@ -21,13 +22,15 @@ function ExportUnavailable({ onClose }: { onClose(): void }) {
         }}
       >
         <h2 id="export-unavailable-title">Export unavailable</h2>
-        <p role="alert">
+        <p className="export-dialog-scope" role="alert">
           The export panel could not load. Close this dialog to keep working.
           Save your work before reloading the page to try again.
         </p>
-        <button type="button" className="secondary" onClick={onClose}>
-          Close
-        </button>
+        <div className="export-dialog-actions">
+          <button type="button" className="secondary" onClick={onClose}>
+            Close
+          </button>
+        </div>
       </div>
     </div>
   );

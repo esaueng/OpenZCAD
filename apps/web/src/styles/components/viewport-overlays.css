@@ -74,9 +74,14 @@
   outline: none;
 }
 
+/* The cube is drawn on the dark stage in either theme, so its focus reads
+   the viewport's preselection blue rather than the chrome accent, which the
+   light theme darkens to 1.7:1 on a facet. The hover lift goes with it: the
+   faces painted after the focused one draw over its shared seams. */
 .cube-face:focus-visible,
 .cube-corner-target:has(.cube-corner-hit:focus-visible) .cube-corner {
-  stroke: var(--color-accent);
+  fill: #4a5767;
+  stroke: var(--color-preselect);
   stroke-width: 1.5;
 }
 
@@ -330,4 +335,17 @@
 
 .move-axis-z {
   --move-axis-color: var(--color-handle-z);
+}
+
+/* ── CSS2D label layer ───────────────────────────────────── */
+
+/* The label renderer writes every label an inline z-index of 1..N by depth,
+   and its layer is no stacking context, so a few measurement pills on screen
+   climbed over the Measure dock, the Move banner, the pick list and the
+   keypad — and the editable dimension pill took their clicks. Labels hold the
+   bottom overlay level instead (important: the renderer rewrites the inline
+   value every frame). The selection chip keeps its own level (viewer.css):
+   it carries verbs and must clear the right lane where it cannot dodge it. */
+.viewer-label-layer > :not(.selection-callout-chip) {
+  z-index: 1 !important;
 }

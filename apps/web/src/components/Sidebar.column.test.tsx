@@ -6,7 +6,8 @@ import {
   FEATURE_ROLLBACK_SUPPRESSED_METADATA_KEY,
   type BodyRepresentation,
   type FeatureNode,
-  type FeatureId
+  type FeatureId,
+  type ProjectCheckpoint
 } from '@openzcad/shared';
 import { defaultPanelState } from '../lib/panelState';
 import { Sidebar } from './Sidebar';
@@ -112,6 +113,11 @@ describe('Sidebar', () => {
     expect(container.querySelector('.history-scrub-name')).toHaveTextContent(
       '· at Feature 3'
     );
+    // A plain leading space collapses at the start of the flex item, which
+    // ran the count into the dot ("3 features·").
+    expect(container.querySelector('.history-scrub-name')?.textContent).toMatch(
+      /^\u00a0· /
+    );
     // The position is not drawn, but the tooltip and the name carry it.
     expect(header).toHaveTextContent('step 3 of 3');
     expect(screen.getByTitle('Step 3 of 3: Feature 3')).toBeInTheDocument();
@@ -194,5 +200,70 @@ describe('Sidebar', () => {
     });
     await user.dblClick(screen.getByText('Uses 1 feature'));
     expect(onClose).not.toHaveBeenCalled();
+  });
+
+  it('stays open when the double-click selects text in the history details', async () => {
+    const user = userEvent.setup();
+    const onClose = vi.fn();
+    renderSidebar({
+      onClose,
+      panelState: defaultPanelState(),
+      historyDetails: (
+        <section className="feature-history-panel" aria-label="History details">
+          <p>Edit not saved · Fillet 1</p>
+        </section>
+      )
+    });
+    // Double-clicking a word to copy an error closed the whole drawer.
+    await user.dblClick(screen.getByText('Edit not saved · Fillet 1'));
+    expect(onClose).not.toHaveBeenCalled();
+  });
+
+  it('returns focus to the Find toggle when Escape closes the field', async () => {
+    const user = userEvent.setup();
+    renderSidebar({ panelState: defaultPanelState() });
+    const toggle = screen.getByRole('button', { name: 'Find a step' });
+    await user.click(toggle);
+    const field = screen.getByRole('searchbox', { name: 'Find a step' });
+    expect(document.activeElement).toBe(field);
+    await user.keyboard('{Escape}');
+    expect(screen.queryByRole('searchbox', { name: 'Find a step' })).toBeNull();
+    // The field unmounted with focus in it, which dropped focus on the body.
+    expect(document.activeElement).toBe(toggle);
+  });
+
+  it("shows the time of today's save points and the date of older ones", () => {
+    const panelState = defaultPanelState();
+    panelState.sidebarSections.revisions = true;
+    const today = new Date();
+    today.setHours(9, 5, 0, 0);
+    const older = new Date(2025, 0, 15, 9, 5);
+    const checkpoint = (
+      id: string,
+      createdAt: Date,
+      documentVersion: number
+    ): ProjectCheckpoint =>
+      ({
+        checkpointId: id,
+        revisionId: `rev-${id}`,
+        documentVersion,
+        createdAt: createdAt.toISOString(),
+        reason: 'Manual save'
+      }) as ProjectCheckpoint;
+    const { container } = renderSidebar({
+      panelState,
+      checkpoints: [checkpoint('a', older, 1), checkpoint('b', today, 2)]
+    });
+    const times = [...container.querySelectorAll('.revision-time')].map(
+      (time) => time.textContent
+    );
+    // Newest first. Two same-day "Manual save" rows used to read the same.
+    expect(times).toEqual([
+      today.toLocaleTimeString(undefined, {
+        hour: 'numeric',
+        minute: '2-digit'
+      }),
+      older.toLocaleDateString()
+    ]);
   });
 });

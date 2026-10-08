@@ -21,6 +21,7 @@ import {
   parseAllEdgesFilletRequest,
   MAX_ASSISTANT_ATTACHMENTS,
   parseCadPatchProposal,
+  type AssistantReply,
   type CadPatchProposal,
   type CadSelectionContext
 } from '@openzcad/ai-contracts';
@@ -40,7 +41,8 @@ import {
   openProposal as findOpenProposal,
   type AssistantAttachmentPreview,
   type AssistantEntry,
-  type AssistantQuestionsEntry
+  type AssistantQuestionsEntry,
+  type AssistantUserEntry
 } from '../../lib/assistant/conversation';
 import {
   clearAssistantThread,
@@ -75,6 +77,7 @@ import {
   type AssistantPromptKeyDetail
 } from '../../lib/assistant/promptKeys';
 import { unconfiguredAssistantMessage } from '../../lib/assistant/unconfigured';
+import { platformShortcutLabel } from '../../lib/platformShortcut';
 import { QuestionCard } from './QuestionCard';
 import { ProposalCard } from './ProposalCard';
 import { RichText } from './RichText';
@@ -207,6 +210,38 @@ function selectionIntentForFollowup(
   return undefined;
 }
 
+/**
+ * The question card a turn of answers was sent from, found by the questions
+ * it answered, so a retry can answer that card again rather than resend the
+ * composed sentence as a plain ask.
+ */
+function answeredQuestionsEntryId(
+  entries: readonly AssistantEntry[],
+  ask: AssistantUserEntry
+): string | undefined {
+  for (let index = entries.indexOf(ask) - 1; index >= 0; index -= 1) {
+    const entry = entries[index]!;
+    if (
+      entry.kind === 'questions' &&
+      ask.answers.every((answer) =>
+        entry.questions.some((question) => question.id === answer.questionId)
+      )
+    ) {
+      return entry.id;
+    }
+  }
+  return undefined;
+}
+
+/** What the stream's live region says once a turn lands. */
+function announcementFor(reply: AssistantReply): string {
+  return reply.kind === 'patch'
+    ? 'Proposal ready to review.'
+    : reply.kind === 'questions'
+      ? 'The assistant needs an answer.'
+      : 'The assistant replied.';
+}
+
 type TurnRole = 'user' | 'assistant';
 
 /**
@@ -220,21 +255,29 @@ type TurnRole = 'user' | 'assistant';
 function Turn({
   role,
   at,
+  age,
   children
 }: {
   role: TurnRole;
   at: number | undefined;
+  /** Turns between this one and the newest, across days. */
+  age: number;
   children: ReactNode;
 }) {
   const time = formatEntryTime(at);
+  const ageClass =
+    age >= 9 ? ' age-3' : age >= 6 ? ' age-2' : age >= 3 ? ' age-1' : '';
   return (
-    <article className={`assistant-turn ${role}`}>
+    <article className={`assistant-turn ${role}${ageClass}`}>
       <span className="assistant-turn-mark" aria-hidden="true">
         {role === 'user' ? '›' : <Sparkles size={12} />}
       </span>
       <div className="assistant-turn-body">{children}</div>
-      {time && (
-        <time className="assistant-turn-time" dateTime={String(at)}>
+      {time && at && (
+        <time
+          className="assistant-turn-time"
+          dateTime={new Date(at).toISOString()}
+        >
           {time}
         </time>
       )}
@@ -310,6 +353,10 @@ export function AssistantPanel({
     []
   );
   const [notice, setNotice] = useState<string | null>(null);
+  // The stream's one live region. It stays mounted and changes only when a
+  // turn starts or lands: a region rendered together with its content is
+  // missed, and one fed every streamed delta reads out half-sentences.
+  const [announcement, setAnnouncement] = useState('');
   const [loadedStatus, setStatus] = useState<AssistantStatus | null>(null);
   const status = effectiveAssistant ?? loadedStatus;
   const [statusError, setStatusError] = useState<string | null>(null);
@@ -332,6 +379,7 @@ export function AssistantPanel({
   const abortRef = useRef<AbortController | null>(null);
   const threadRef = useRef<HTMLDivElement | null>(null);
   const fileInputRef = useRef<HTMLInputElement | null>(null);
+  const attachRef = useRef<HTMLButtonElement | null>(null);
   /**
    * Which project the conversation on screen belongs to.
    *
@@ -368,6 +416,15 @@ export function AssistantPanel({
       : null;
   const groups = useMemo(
     () => groupThreadByDay(entries, Date.now()),
+    [entries]
+  );
+  // Age fades the stream by distance from the prompt across the whole
+  // thread; counted per day, yesterday's last turns outshone today's.
+  const entryAges = useMemo(
+    () =>
+      new Map(
+        entries.map((entry, index) => [entry.id, entries.length - 1 - index])
+      ),
     [entries]
   );
   const growingHolderProposal = useMemo(
@@ -509,12 +566,12 @@ export function AssistantPanel({
         if (controller.signal.aborted) return;
         setStatus(next);
       })
-      .catch((error: unknown) => {
+      .catch(() => {
+        // The raw reason ("status check failed (503)", "Failed to fetch") is
+        // the network's, not something the user can act on.
         if (!controller.signal.aborted) {
           setStatusError(
-            error instanceof Error
-              ? error.message
-              : 'Assistant status is unavailable.'
+            "The assistant can't be reached right now. Verified recipes still work."
           );
         }
       });
@@ -533,6 +590,7 @@ export function AssistantPanel({
     // Scrollback that was already there is not news, however the stream is.
     seenCountRef.current = restored.length;
     setNotice(null);
+    setAnnouncement('');
     setUnread(0);
     setScrollback(false);
   }, [projectId]);
@@ -544,6 +602,7 @@ export function AssistantPanel({
       dispatch({ type: 'restore', entries: [] });
       seenCountRef.current = 0;
       setNotice(null);
+      setAnnouncement('');
       setUnread(0);
     };
     window.addEventListener(ASSISTANT_HISTORY_CLEARED_EVENT, clear);
@@ -623,10 +682,17 @@ export function AssistantPanel({
   // conversation is one click on the bar away. Only the moment focus arrives
   // opens it: hiding it while the prompt keeps focus has to stick.
   const wasPromptingRef = useRef(prompting);
+  // Set when "hide" hands focus to the prompt itself: that arrival must not
+  // bring straight back up the stream the user just put away.
+  const keepTuckedRef = useRef(false);
   useEffect(() => {
     const tookFocus = prompting && !wasPromptingRef.current;
     wasPromptingRef.current = prompting;
-    if (tookFocus && collapsed && !hidden) {
+    const keepTucked = keepTuckedRef.current;
+    if (tookFocus || !collapsed) {
+      keepTuckedRef.current = false;
+    }
+    if (tookFocus && collapsed && !hidden && !keepTucked) {
       onCollapsedChange(false);
     }
   }, [prompting, collapsed, hidden, onCollapsedChange]);
@@ -688,6 +754,7 @@ export function AssistantPanel({
         ...(answers ? { answers } : {}),
         ...(answeredEntryId ? { answeredEntryId } : {})
       });
+      setAnnouncement('The assistant is thinking.');
 
       try {
         const allEdgesFillet =
@@ -721,6 +788,7 @@ export function AssistantPanel({
             at: Date.now()
           });
           dispatch({ type: 'preview', entryId });
+          setAnnouncement('Proposal ready to review.');
           return;
         }
         // One immutable snapshot per turn: if the selection or document changes
@@ -772,20 +840,24 @@ export function AssistantPanel({
         if (reply.kind === 'patch') {
           dispatch({ type: 'preview', entryId });
         }
+        setAnnouncement(announcementFor(reply));
       } catch (error) {
         if (controller.signal.aborted) {
           dispatch({ type: 'cancel' });
+          setAnnouncement('Stopped.');
           return;
         }
+        const message =
+          error instanceof Error
+            ? error.message
+            : 'The assistant could not answer.';
         dispatch({
           type: 'fail',
           id: nextEntryId('error'),
           at: Date.now(),
-          message:
-            error instanceof Error
-              ? error.message
-              : 'The assistant could not answer.'
+          message
         });
+        setAnnouncement(`Failed. ${message.split('\n')[0]}`);
       }
     },
     [conversation, doc, onPreview, selection, findDirectSuggestion]
@@ -883,6 +955,94 @@ export function AssistantPanel({
     abortRef.current = null;
   }
 
+  /**
+   * Somewhere for focus to stay when the control that had it goes away with
+   * what it did — stop, clear, the jump button — instead of falling back to
+   * the top of the page.
+   */
+  function focusThread() {
+    threadRef.current?.focus({ preventScroll: true });
+  }
+
+  /**
+   * Tucks the stream away. Focus inside it moves to the prompt line, the
+   * stream's own foot and where ⌘J and a new question start from; arriving
+   * there would normally bring the stream straight back, so this once it
+   * does not.
+   */
+  function hideStream() {
+    const active = window.document.activeElement;
+    const prompt = window.document.querySelector<HTMLElement>(
+      `${ASSISTANT_PROMPT_SELECTOR} input`
+    );
+    if (
+      prompt &&
+      !prompting &&
+      active instanceof Node &&
+      panelRef.current?.contains(active)
+    ) {
+      keepTuckedRef.current = true;
+      prompt.focus({ preventScroll: true });
+      if (window.document.activeElement !== prompt) {
+        keepTuckedRef.current = false;
+      }
+    }
+    onCollapsedChange(true);
+  }
+
+  // A removed drawing's button goes with it; focus moves to its neighbour's,
+  // or to "attach" once the tray is empty.
+  const pendingFocusRef = useRef<number | null>(null);
+  useEffect(() => {
+    const index = pendingFocusRef.current;
+    if (index === null) {
+      return;
+    }
+    pendingFocusRef.current = null;
+    const buttons = panelRef.current?.querySelectorAll<HTMLButtonElement>(
+      '.assistant-pending-item button'
+    );
+    const neighbour =
+      buttons && buttons.length > 0
+        ? buttons[Math.min(index, buttons.length - 1)]
+        : null;
+    const attach = attachRef.current;
+    if (neighbour) {
+      neighbour.focus();
+    } else if (attach && !attach.disabled) {
+      attach.focus();
+    } else {
+      focusThread();
+    }
+  }, [pending]);
+
+  function removePending(id: string) {
+    pendingFocusRef.current = pendingRef.current.findIndex(
+      (item) => item.id === id
+    );
+    updatePending((current) => current.filter((item) => item.id !== id));
+  }
+
+  function retry(ask: AssistantUserEntry) {
+    // A drawing whose bytes aged out of storage cannot be resent; the words
+    // can.
+    const attachments = ask.attachments.filter(
+      (attachment) => attachment.dataBase64
+    );
+    if (ask.answers.length > 0) {
+      // Answers go again as answers: the thread shows them as a list again,
+      // and the follow-up keeps the selection intent of the original ask.
+      void send(
+        ask.text,
+        attachments,
+        ask.answers,
+        answeredQuestionsEntryId(entries, ask)
+      );
+      return;
+    }
+    void send(ask.text, attachments);
+  }
+
   function clearThread() {
     if (
       confirmDestructive &&
@@ -897,8 +1057,10 @@ export function AssistantPanel({
     dispatch({ type: 'reset' });
     clearAssistantThread(projectId);
     setNotice(null);
+    setAnnouncement('');
     setUnread(0);
     setScrollback(false);
+    focusThread();
   }
 
   async function addFiles(files: readonly File[]) {
@@ -935,6 +1097,9 @@ export function AssistantPanel({
   function handleDrop(event: DragEvent<HTMLElement>) {
     event.preventDefault();
     setDragging(false);
+    if (!configured) {
+      return;
+    }
     const files = Array.from(event.dataTransfer?.files ?? []);
     if (files.length > 0) {
       void addFiles(files);
@@ -969,7 +1134,7 @@ export function AssistantPanel({
     try {
       if (!(await onApply(proposal))) {
         setNotice(
-          'That patch could not be applied. See the status bar for details.'
+          'That patch could not be applied. See the activity log for details.'
         );
         return;
       }
@@ -977,7 +1142,7 @@ export function AssistantPanel({
       setNotice(null);
     } catch {
       setNotice(
-        'That patch could not be applied. See the status bar for details.'
+        'That patch could not be applied. See the activity log for details.'
       );
     } finally {
       applyingEntryRef.current = null;
@@ -1048,7 +1213,9 @@ export function AssistantPanel({
   // bring a tucked-away stream up so the drawing can be seen.
   const promptFilesRef = useRef<(files: File[]) => boolean>(() => false);
   promptFilesRef.current = (files) => {
-    if (hidden) {
+    // Nothing reads a drawing without a provider, and a drawing that can
+    // never be sent is a dead end; the pasted file is left to the bar.
+    if (hidden || !configured) {
       return false;
     }
     if (collapsed) {
@@ -1082,7 +1249,12 @@ export function AssistantPanel({
   function renderEntry(entry: AssistantEntry) {
     if (entry.kind === 'user') {
       return (
-        <Turn role="user" at={entry.at} key={entry.id}>
+        <Turn
+          role="user"
+          at={entry.at}
+          age={entryAges.get(entry.id) ?? 0}
+          key={entry.id}
+        >
           {entry.answers.length > 0 ? (
             <dl className="assistant-answer-list">
               {entry.answers.map((answer) => (
@@ -1125,7 +1297,12 @@ export function AssistantPanel({
     }
     if (entry.kind === 'questions') {
       return (
-        <Turn role="assistant" at={entry.at} key={entry.id}>
+        <Turn
+          role="assistant"
+          at={entry.at}
+          age={entryAges.get(entry.id) ?? 0}
+          key={entry.id}
+        >
           <QuestionCard
             entry={entry}
             busy={thinking}
@@ -1144,7 +1321,12 @@ export function AssistantPanel({
     }
     if (entry.kind === 'proposal') {
       return (
-        <Turn role="assistant" at={entry.at} key={entry.id}>
+        <Turn
+          role="assistant"
+          at={entry.at}
+          age={entryAges.get(entry.id) ?? 0}
+          key={entry.id}
+        >
           <ProposalCard
             entry={entry}
             busy={thinking || applyingEntryId !== null}
@@ -1164,7 +1346,12 @@ export function AssistantPanel({
       );
     }
     return (
-      <Turn role="assistant" at={entry.at} key={entry.id}>
+      <Turn
+        role="assistant"
+        at={entry.at}
+        age={entryAges.get(entry.id) ?? 0}
+        key={entry.id}
+      >
         <div className={`assistant-card message ${entry.tone}`}>
           {entry.tone === 'error' && (
             <span className="assistant-card-label">
@@ -1173,22 +1360,15 @@ export function AssistantPanel({
             </span>
           )}
           <RichText text={entry.text} className="assistant-card-copy" />
-          {entry.tone === 'error' && lastAsk && (
+          {/* Only the newest failure repeats the last ask: an older one
+              failed a different ask, and would resend the wrong thing. */}
+          {entry.tone === 'error' && entry === entries.at(-1) && lastAsk && (
             <div className="assistant-card-actions">
               <button
                 type="button"
                 disabled={thinking}
                 title={`Send "${lastAsk.text}" again`}
-                onClick={() =>
-                  void send(
-                    lastAsk.text,
-                    // A drawing whose bytes aged out of storage cannot be
-                    // resent; the words can.
-                    lastAsk.attachments.filter(
-                      (attachment) => attachment.dataBase64
-                    )
-                  )
-                }
+                onClick={() => retry(lastAsk)}
               >
                 <RotateCcw size={12} aria-hidden="true" />
                 Try again
@@ -1221,7 +1401,15 @@ export function AssistantPanel({
       aria-label="AI modeling assistant"
       aria-hidden={hidden || undefined}
       onDragOver={(event) => {
+        // Taken either way: an untaken drop navigates the tab to the file.
         event.preventDefault();
+        if (!configured) {
+          // No provider, nothing to read the drawing; say so with the cursor.
+          if (event.dataTransfer) {
+            event.dataTransfer.dropEffect = 'none';
+          }
+          return;
+        }
         setDragging(true);
       }}
       onDragLeave={() => setDragging(false)}
@@ -1230,6 +1418,7 @@ export function AssistantPanel({
       <div
         className="assistant-thread"
         ref={threadRef}
+        tabIndex={-1}
         onScroll={(event) => {
           const thread = event.currentTarget;
           const distance =
@@ -1282,8 +1471,16 @@ export function AssistantPanel({
           </div>
         ))}
 
+        {/* An ask with nothing under it was stopped — by "stop", a project
+            switch or a closed tab. Said once, at the foot, never stored. */}
+        {!thinking && entries.at(-1)?.kind === 'user' && (
+          <p className="assistant-stopped">
+            Stopped before the assistant answered.
+          </p>
+        )}
+
         {thinking && (
-          <div className="assistant-turn assistant-working" aria-live="polite">
+          <div className="assistant-turn assistant-working">
             <span className="assistant-turn-mark" aria-hidden="true">
               <Sparkles size={12} />
             </span>
@@ -1298,7 +1495,10 @@ export function AssistantPanel({
               <button
                 type="button"
                 className="assistant-link"
-                onClick={stopThinking}
+                onClick={() => {
+                  stopThinking();
+                  focusThread();
+                }}
                 aria-label="Stop the assistant"
                 title="Stop"
               >
@@ -1316,6 +1516,7 @@ export function AssistantPanel({
           onClick={() => {
             scrollToLatest();
             setAtBottom(true);
+            focusThread();
           }}
         >
           <ArrowDown size={12} aria-hidden="true" />
@@ -1350,18 +1551,16 @@ export function AssistantPanel({
                 <button
                   type="button"
                   aria-label={`Remove ${attachment.label}`}
-                  onClick={() =>
-                    updatePending((current) =>
-                      current.filter((item) => item.id !== attachment.id)
-                    )
-                  }
+                  onClick={() => removePending(attachment.id)}
                 >
                   <X size={12} aria-hidden="true" />
                 </button>
               </span>
             ))}
             <span className="assistant-pending-hint">
-              attached to the next ask · Enter sends without words
+              {configured
+                ? 'attached to the next ask · Enter sends without words'
+                : 'attached to the next ask'}
             </span>
           </div>
         )}
@@ -1438,28 +1637,34 @@ export function AssistantPanel({
           </details>
         )}
         <div className="assistant-foot">
-          <span
-            className="assistant-model"
-            title={modelDescription}
-            aria-label={modelDescription}
-          >
+          <span className="assistant-model" title={modelDescription}>
             {modelLabel}
+            {status?.configured && (
+              <span className="visually-hidden"> reasoning</span>
+            )}
           </span>
           <button
+            ref={attachRef}
             type="button"
             className="assistant-foot-action"
             title="Attach a drawing (PNG, JPEG, WebP, or PDF)"
             aria-label="Attach a drawing"
-            disabled={thinking || pending.length >= MAX_ASSISTANT_ATTACHMENTS}
+            // Without a provider a drawing could only wait in the tray.
+            disabled={
+              !configured ||
+              thinking ||
+              pending.length >= MAX_ASSISTANT_ATTACHMENTS
+            }
             onClick={() => fileInputRef.current?.click()}
           >
             attach
           </button>
+          {/* Named by its own word, so "click history" finds it; pressed
+              says whether scrollback is open. */}
           <button
             type="button"
             className={`assistant-foot-action${scrollback ? ' active' : ''}`}
-            title={scrollback ? 'Close scrollback (⌘↑)' : 'Scrollback (⌘↑)'}
-            aria-label={scrollback ? 'Close scrollback' : 'Open scrollback'}
+            title={`Scrollback (${platformShortcutLabel('Ctrl+↑')})`}
             aria-pressed={scrollback}
             onClick={() => setScrollback((open) => !open)}
           >
@@ -1482,9 +1687,9 @@ export function AssistantPanel({
           <button
             type="button"
             className="assistant-foot-action"
-            title="Collapse the assistant (⌘J)"
-            aria-label="Collapse the assistant"
-            onClick={() => onCollapsedChange(true)}
+            title={`Hide the assistant (${platformShortcutLabel('Ctrl+J')})`}
+            aria-label="Hide the assistant"
+            onClick={hideStream}
           >
             hide
           </button>
@@ -1504,6 +1709,9 @@ export function AssistantPanel({
           }}
         />
       </footer>
+      <p className="visually-hidden" aria-live="polite" aria-atomic="true">
+        {announcement}
+      </p>
     </section>
   );
 }

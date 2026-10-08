@@ -1,4 +1,4 @@
-import { useState } from 'react';
+import { useLayoutEffect, useRef, useState } from 'react';
 import {
   Check,
   ClipboardCopy,
@@ -28,8 +28,17 @@ const MODE_LABELS: Record<MeasurementMode, string> = {
 const MODE_INSTRUCTIONS: Record<MeasurementMode, string> = {
   smart: 'Pick an edge, face, hole, or body to inspect it.',
   distance: 'Pick two targets. Circles and cylinders use their exact centers.',
-  angle: 'Pick two straight edges or two planar faces.'
+  angle: 'Pick two straight edges, circular axes or planar faces.'
 };
+
+/** Decimal places the dock offers: everything a stored record may carry. */
+const PRECISIONS = [0, 1, 2, 3, 4, 5, 6] as const;
+
+/**
+ * The toggle that opened this dock, which closing it hands focus back to. Both
+ * rails (View's bar and Build's instrument rail) name their toggle "Measure".
+ */
+const MEASURE_TOGGLE = 'button[aria-label="Measure"][aria-pressed]';
 
 interface MeasurementDockProps {
   measurements: Measurement[];
@@ -52,7 +61,10 @@ interface MeasurementDockProps {
   onExport(): void;
 }
 
-/** View-only measurement workbench; every mutation is runtime session state. */
+/**
+ * The measurement workbench. Results are saved with the project, never with
+ * the model: nothing here changes geometry.
+ */
 export function MeasurementDock({
   measurements,
   formattedMeasurements,
@@ -76,6 +88,25 @@ export function MeasurementDock({
   const [editingId, setEditingId] = useState<string | null>(null);
   const [draftLabel, setDraftLabel] = useState('');
   const [draftNote, setDraftNote] = useState('');
+  const dockRef = useRef<HTMLElement>(null);
+  // The row whose Edit button takes focus back once its editor closes: the
+  // editor held focus, and unmounting it would drop focus on the body.
+  const refocusEditRef = useRef<string | null>(null);
+
+  // Escape, the rail and M all close the dock by unmounting it. Done while it
+  // held focus, that dropped focus on the body; it goes back to the Measure
+  // toggle instead. A layout cleanup runs before the dock leaves the DOM, so
+  // where focus was can still be read.
+  useLayoutEffect(() => {
+    const dock = dockRef.current;
+    return () => {
+      const owner = dock?.ownerDocument;
+      if (!dock || !owner || !dock.contains(owner.activeElement)) {
+        return;
+      }
+      owner.querySelector<HTMLElement>(MEASURE_TOGGLE)?.focus();
+    };
+  }, []);
 
   function beginEdit(measurement: Measurement) {
     setEditingId(measurement.id);
@@ -83,22 +114,31 @@ export function MeasurementDock({
     setDraftNote(measurement.note ?? '');
   }
 
+  function closeEditor(id: string) {
+    refocusEditRef.current = id;
+    setEditingId(null);
+  }
+
   function finishEdit(id: string) {
     const label = draftLabel.trim();
     if (label) {
       onRename(id, label, draftNote.trim());
     }
-    setEditingId(null);
+    closeEditor(id);
   }
 
   const instruction = !enabled
-    ? 'Measure is off. Choose a mode or press M to resume.'
+    ? 'Measure is off. Choose a mode to resume.'
     : draftTargetLabel
       ? `${draftTargetLabel} selected. Pick the second target.`
       : MODE_INSTRUCTIONS[mode];
 
   return (
-    <aside className="measurement-dock" aria-label="Measurement workbench">
+    <aside
+      ref={dockRef}
+      className="measurement-dock"
+      aria-label="Measurement workbench"
+    >
       <header className="measurement-dock-head">
         <Ruler size={14} aria-hidden="true" />
         <h2>Measure</h2>
@@ -153,11 +193,11 @@ export function MeasurementDock({
         <label>
           <span>Precision</span>
           <select
-            aria-label="Measurement decimal places"
+            aria-label="Measurement precision"
             value={display.precision}
             onChange={(event) => onPrecision(Number(event.target.value))}
           >
-            {[0, 1, 2, 3, 4].map((precision) => (
+            {PRECISIONS.map((precision) => (
               <option key={precision} value={precision}>
                 {precision}
               </option>
@@ -176,6 +216,7 @@ export function MeasurementDock({
             }
             aria-pressed={display.radialDisplay === 'diameter'}
             onClick={() => onRadialDisplay('diameter')}
+            aria-label="Diameter"
             title="Show diameters"
           >
             Ø
@@ -187,6 +228,7 @@ export function MeasurementDock({
             }
             aria-pressed={display.radialDisplay === 'radius'}
             onClick={() => onRadialDisplay('radius')}
+            aria-label="Radius"
             title="Show radii"
           >
             R
@@ -196,7 +238,7 @@ export function MeasurementDock({
 
       {measurements.length === 0 ? (
         <p className="measurement-dock-empty">
-          Results stay in this View session and never change the model.
+          Results are saved with this project and never change the model.
         </p>
       ) : (
         <div className="measurement-dock-list" role="list">
@@ -222,13 +264,13 @@ export function MeasurementDock({
                       finishEdit(entry.id);
                     }}
                     onKeyDown={(event) => {
-                      // Escape cancels the edit here and stops: reaching the
-                      // workspace, it turned Measure off and the dock, with
-                      // the half-typed name, unmounted.
+                      // Escape here cancels the edit and nothing more. Left
+                      // to the workspace, it ended the whole Measure session
+                      // and threw the typed name away with the dock.
                       if (event.key === 'Escape') {
                         event.preventDefault();
                         event.stopPropagation();
-                        setEditingId(null);
+                        closeEditor(entry.id);
                       }
                     }}
                   >
@@ -256,7 +298,7 @@ export function MeasurementDock({
                       <button
                         type="button"
                         title="Cancel editing"
-                        onClick={() => setEditingId(null)}
+                        onClick={() => closeEditor(entry.id)}
                       >
                         <X size={13} aria-hidden="true" />
                         Cancel
@@ -338,6 +380,12 @@ export function MeasurementDock({
                         type="button"
                         title="Rename or add a note"
                         aria-label={`Edit ${entry.label}`}
+                        ref={(button) => {
+                          if (button && refocusEditRef.current === entry.id) {
+                            refocusEditRef.current = null;
+                            button.focus();
+                          }
+                        }}
                         onClick={() => beginEdit(entry)}
                       >
                         <Pencil size={12} aria-hidden="true" />

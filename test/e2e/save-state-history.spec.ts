@@ -357,7 +357,7 @@ test('the top-bar status chips only report, and saving lives on File', async ({
   await chip.click();
 
   const sharing = actions.getByRole('button', {
-    name: 'Project sharing · Sign in to share'
+    name: 'Offline · Sign in to share'
   });
   await expect(sharing).not.toHaveAttribute('aria-disabled', 'true');
   await expect(sharing).toHaveAttribute('title', 'Sign in to share');
@@ -373,13 +373,13 @@ test('the top-bar status chips only report, and saving lives on File', async ({
 
   // Neither click saved anything; File › Save revision does.
   await expect(revisionRow(page, 'Manual save')).toHaveCount(0);
-  await actions.getByLabel('Import and export').click();
+  await actions.getByLabel(/^File/).click();
   await page.getByRole('button', { name: /^Save revision(?! as)/ }).click();
   await expect(revisionRow(page, 'Manual save')).toBeVisible();
   await expect(revisions(page)).toHaveCount(2);
 
   // And naming one is on the same menu.
-  await actions.getByLabel('Import and export').click();
+  await actions.getByLabel(/^File/).click();
   await page.getByRole('button', { name: /^Save revision as…/ }).click();
   await expect(
     page.getByRole('dialog', { name: 'Name this save' })

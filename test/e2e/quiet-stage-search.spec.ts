@@ -104,7 +104,7 @@ test('a question typed into the prompt goes to the stream standing on it', async
   await expect(hint).toHaveCount(1);
   await expect(hint).toBeHidden();
 
-  await page.getByRole('button', { name: 'Collapse the assistant' }).click();
+  await page.getByRole('button', { name: 'Hide the assistant' }).click();
   await expect(panel).toHaveCount(0);
   await expect(search).toBeVisible();
   await expect(hint).toBeVisible();

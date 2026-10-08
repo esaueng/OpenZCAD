@@ -111,6 +111,38 @@ describe('WorkspaceReadout', () => {
     );
     expect(screen.getByRole('contentinfo')).toHaveClass('hidden');
   });
+
+  it('takes its log button out of the tab order while hidden', () => {
+    // Faded to nothing, it was still a tab stop: focus vanished onto it and
+    // Enter opened the log. The rail's log button is the keyboard path.
+    const { rerender } = render(
+      <WorkspaceReadout
+        status="Fillet added"
+        statusAt={Date.now()}
+        tone="ready"
+        logOpen={false}
+        onToggleLog={vi.fn()}
+        {...SUMMARY}
+      />
+    );
+    const body = () => screen.getByRole('button', { name: /activity log/ });
+    expect(screen.getByRole('contentinfo')).not.toHaveClass('hidden');
+    expect(body().tabIndex).toBe(0);
+
+    rerender(
+      <WorkspaceReadout
+        status=""
+        tone="ready"
+        logOpen={false}
+        onToggleLog={vi.fn()}
+        {...SUMMARY}
+      />
+    );
+    expect(screen.getByRole('contentinfo')).toHaveClass('hidden');
+    expect(body().tabIndex).toBe(-1);
+    // Still in the tree with its live region, as the comment above it asks.
+    expect(screen.getByRole('status')).toBeInTheDocument();
+  });
 });
 
 describe('WorkspaceReadout pacing', () => {

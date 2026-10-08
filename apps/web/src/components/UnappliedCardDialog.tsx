@@ -41,6 +41,7 @@ export function UnappliedCardDialog({
         aria-modal="true"
         aria-labelledby="unapplied-card-dialog-title"
         aria-describedby="unapplied-card-dialog-body"
+        tabIndex={-1}
         onKeyDown={(event) => {
           if (event.key === 'Escape') {
             event.stopPropagation();
@@ -57,10 +58,10 @@ export function UnappliedCardDialog({
           discard them before {outcome}.
         </p>
         <div className="unapplied-card-actions">
-          <button type="button" onClick={onCancel}>
+          <button type="button" className="secondary" onClick={onCancel}>
             Cancel
           </button>
-          <button type="button" onClick={onDiscard}>
+          <button type="button" className="secondary" onClick={onDiscard}>
             Discard
           </button>
           <button

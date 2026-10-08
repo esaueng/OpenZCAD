@@ -47,6 +47,34 @@ describe('system theme', () => {
     expect(tokens.indexOf(":root[data-theme='system']")).toBe(systemAt);
   });
 
+  it('tells the browser which scheme to draw native control parts in', () => {
+    // Spin buttons, select popups, scrollbars and checkbox glyphs ignore the
+    // tokens; without color-scheme they were drawn light on the dark theme.
+    const scheme = (from: number) => {
+      const open = tokens.indexOf('{', from);
+      return /color-scheme:\s*(\w+);/.exec(
+        tokens.slice(open + 1, tokens.indexOf('}', open))
+      )?.[1];
+    };
+    expect(scheme(tokens.indexOf(':root {'))).toBe('dark');
+    expect(scheme(tokens.indexOf(":root[data-theme='light'] {"))).toBe('light');
+    expect(
+      scheme(tokens.indexOf(":root[data-theme='system'] {", media))
+    ).toBe('light');
+  });
+
+  it('keeps checkboxes and radios out of the text-field box', () => {
+    // The global 30px bordered field turned a checkbox into a tall bar with
+    // its glyph floating above the label.
+    const field = /\n([^{}]+)\{\s*font-family: inherit;\s*font-size: inherit;\s*color: var\(--color-text\);/.exec(
+      tokens
+    )?.[1];
+    expect(field).toContain(
+      "input:where(:not([type='checkbox'], [type='radio']))"
+    );
+    expect(field).not.toMatch(/(^|,)\s*input\s*,/);
+  });
+
   it('follows the OS from the first paint, before the app runs', () => {
     expect(html).toMatch(/<html lang="en" data-theme="system">/);
   });

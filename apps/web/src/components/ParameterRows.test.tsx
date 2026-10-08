@@ -22,7 +22,8 @@ describe('ParameterRow evaluated value', () => {
       <ParameterRow parameter={parameter('80')} value={80} onSet={vi.fn()} />
     );
 
-    expect(container.querySelector('.param-value')).toBeNull();
+    // The cell stays, empty, so the buttons after it keep their tracks.
+    expect(container.querySelector('.param-value')).toBeEmptyDOMElement();
   });
 
   it('shows the evaluated value for an expression', () => {

@@ -1256,3 +1256,53 @@ describe('mass properties tensor, axes and density', () => {
     expect(screen.getByText('0.5, 1, 1.5 in')).toBeVisible();
   });
 });
+
+describe('direct-edit readout', () => {
+  /*
+    The readout printed `String()` of each stored value: raw floats with no
+    unit, and the countersink angle as 1.5707963267948966 "(rad)" while the
+    recognition panel above showed the same quantity in degrees.
+  */
+  it('rounds stored values, names the unit, and shows angles in degrees', () => {
+    const directEdit = {
+      ...feature,
+      featureKind: 'direct-edit',
+      name: 'Countersink resize',
+      data: {
+        featureKind: 'direct-edit',
+        targetBodyId: bodyId,
+        operation: {
+          kind: 'resize-imported-countersink',
+          faceHash: 701,
+          sourceOpeningPoint: { x: 0, y: 0, z: 0 },
+          sourceAxisDirection: { x: 0, y: 0, z: -1 },
+          sourceBoreDiameter: 5,
+          sourceSinkDiameter: 10,
+          sourceAngleRadians: Math.PI / 2,
+          sourceCountersinkDepth: 2.5,
+          sourceTotalDepth: 8,
+          boreDiameter: 'bore',
+          sinkDiameter: 10.123456,
+          angleRadians: Math.PI / 2
+        }
+      }
+    } as unknown as FeatureNode;
+    render(
+      <Inspector
+        {...makeProps({
+          selectedFeature: directEdit,
+          selectedTopology: null,
+          commandSession: null,
+          featureSelectionSource: 'pinned',
+          scope: { bore: 5.5 },
+          units: 'inch'
+        })}
+      />
+    );
+    const inspector = screen.getByRole('region', { name: 'Feature inspector' });
+    expect(within(inspector).getByText('bore = 5.5 in')).toBeVisible();
+    expect(within(inspector).getByText('10.123 in')).toBeVisible();
+    expect(within(inspector).getByText('included angle')).toBeVisible();
+    expect(within(inspector).getByText('90°')).toBeVisible();
+  });
+});

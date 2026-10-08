@@ -34,7 +34,7 @@ it('shows pending validation, explains refusal, and restores the committed value
       onViewDetails={onViewDetails}
     />
   );
-  expect(screen.getByText('Minimum 56.910504')).toBeTruthy();
+  expect(screen.getByText('Minimum 56.911')).toBeTruthy();
   const input = screen.getByLabelText('Expression for holder_height');
   await user.clear(input);
   await user.type(input, '55{Enter}');
