@@ -48,3 +48,18 @@ describe('private email input', () => {
     expect(input.checkValidity()).toBe(true);
   });
 });
+
+describe('personal info toggle', () => {
+  it('carries its state in the label alone', async () => {
+    const user = userEvent.setup();
+    render(<EmailForm />);
+    // A label that flips between Show and Hide already says the state;
+    // aria-pressed on top announced "Hide personal info, pressed".
+    const show = screen.getByRole('button', { name: 'Show personal info' });
+    expect(show).not.toHaveAttribute('aria-pressed');
+    await user.click(show);
+    expect(
+      screen.getByRole('button', { name: 'Hide personal info' })
+    ).not.toHaveAttribute('aria-pressed');
+  });
+});

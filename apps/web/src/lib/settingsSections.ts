@@ -49,7 +49,8 @@ export const SETTINGS_SECTIONS: readonly SettingsSectionMeta[] = [
     id: 'appearance',
     label: 'Appearance',
     detail: 'Theme, density, and motion',
-    settings: ['Theme', 'Interface density', 'Reduce motion']
+    settings: ['Theme', 'Interface density', 'Reduce motion'],
+    searchTerms: ['dark mode', 'light mode', 'color scheme']
   },
   {
     id: 'shortcuts',
@@ -74,7 +75,7 @@ export const SETTINGS_SECTIONS: readonly SettingsSectionMeta[] = [
   {
     id: 'sketching',
     label: 'Sketching',
-    detail: 'Linear and angular snapping',
+    detail: 'Grid, snapping, and inferencing',
     settings: [
       'Show sketch grid',
       'Snap to sketch grid',
@@ -97,8 +98,9 @@ export const SETTINGS_SECTIONS: readonly SettingsSectionMeta[] = [
       'Cloud revisions',
       'Account storage',
       'Cloud file storage',
-      'STEP and STL exports'
-    ]
+      'Exports'
+    ],
+    searchTerms: ['STEP', 'STL', '3MF', 'export formats']
   },
   {
     id: 'account',
@@ -111,7 +113,18 @@ export const SETTINGS_SECTIONS: readonly SettingsSectionMeta[] = [
       'Cloud profile',
       'Preference synchronization'
     ],
-    searchTerms: ['hide name', 'hide email', 'screenshot', 'show personal info']
+    searchTerms: [
+      'hide name',
+      'hide email',
+      'screenshot',
+      'show personal info',
+      'sign in',
+      'sign out',
+      'log in',
+      'login',
+      'password',
+      'sync preferences'
+    ]
   },
   {
     id: 'assistant',
@@ -127,7 +140,8 @@ export const SETTINGS_SECTIONS: readonly SettingsSectionMeta[] = [
       'Output budget',
       'Request timeout',
       'Personal API token'
-    ]
+    ],
+    searchTerms: ['api key', 'CAD assistant preferences', 'custom instructions']
   },
   {
     id: 'privacy',

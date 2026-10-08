@@ -46,7 +46,7 @@ test('hides profile details by default, keeps disclosure across reopen and reset
   await expect(settings).not.toContainText('Screenshot Person');
   await expect(settings).not.toContainText('screenshot@example.com');
   await settings.getByRole('button', { name: 'Show personal info' }).click();
-  await page.getByRole('button', { name: 'Back to workspace' }).click();
+  await page.getByRole('button', { name: 'Back to projects' }).click();
   await page.getByRole('button', { name: 'Open settings' }).click();
   // The choice lasts the session (project sharing follows it) but not a reload.
   await expect(
@@ -201,7 +201,7 @@ test('collapses the top-bar actions at 1120px without overflow or lost labels', 
       name: 'Open project sharing · Offline'
     })
   ).toBeVisible();
-  await expect(actions.getByLabel('Import and export')).toBeVisible();
+  await expect(actions.getByLabel(/^File/)).toBeVisible();
   await expect(
     actions.getByRole('button', { name: 'Open settings' })
   ).toBeVisible();
@@ -433,7 +433,9 @@ test('settings name their sections and search individual settings', async ({
   await page.getByLabel('Linear snap increment').fill('0');
   await page.getByRole('button', { name: 'Viewport', exact: true }).click();
   await page.getByRole('button', { name: 'Sketching', exact: true }).click();
-  await expect(page.getByLabel('Linear snap increment')).toHaveValue('1');
+  // Leaving the field pulls a refused value to the nearest bound storage
+  // keeps, rather than showing it while the default is what gets saved.
+  await expect(page.getByLabel('Linear snap increment')).toHaveValue('0.001');
   await page.getByRole('button', { name: 'General', exact: true }).click();
 
   // The search itself is desktop-only, but below 580px the nav collapses to
@@ -447,7 +449,7 @@ test('settings name their sections and search individual settings', async ({
     page.getByRole('button', { name: 'Viewport', exact: true })
   ).toBeVisible();
 
-  await page.getByRole('button', { name: 'Back to workspace' }).click();
+  await page.getByRole('button', { name: 'Back to projects' }).click();
   await expect(settingsTrigger).toBeFocused();
   await expect(page.locator('.start-screen')).not.toHaveAttribute('inert', '');
 });
@@ -632,7 +634,7 @@ test('settings restore the exact non-sensitive view after reload', async ({
     Math.min(scrollTop, restoredScroll.maximum)
   );
 
-  await page.getByRole('button', { name: 'Back to workspace' }).click();
+  await page.getByRole('button', { name: 'Back to projects' }).click();
   await page.reload();
   await expect(page.getByRole('dialog', { name: 'Settings' })).toHaveCount(0);
 });
@@ -674,7 +676,7 @@ test('command palette and shortcut overlay behave as modal dialogs', async ({
 
   await page.keyboard.press('?');
   await expect(paletteInput).toHaveValue('');
-  const shortcuts = page.getByRole('dialog', { name: 'Keyboard shortcuts' });
+  const shortcuts = page.getByRole('dialog', { name: 'Controls', exact: true });
   await expect(shortcuts).toHaveAttribute('aria-modal', 'true');
   // Focus used to stay on BODY, leaving the dialog unreachable by keyboard.
   await expect(shortcuts.locator(':focus')).toHaveCount(1);

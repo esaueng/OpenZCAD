@@ -1,8 +1,12 @@
 import { render, screen, within } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
-import type { ComponentProps } from 'react';
+import { useState, type ComponentProps } from 'react';
 import { afterEach, describe, expect, it, vi } from 'vitest';
-import { defaultAppSettings } from '../lib/appSettings';
+import {
+  defaultAppSettings,
+  loadLocalAppSettings,
+  saveLocalAppSettings
+} from '../lib/appSettings';
 import {
   KERNEL_BUILD,
   kernelBuildDetail,
@@ -10,6 +14,7 @@ import {
 } from '../lib/kernelBuild';
 import {
   toUserId,
+  type AppSettings,
   type AppSettingsResponse,
   type HealthResponse
 } from '@openzcad/shared';
@@ -56,6 +61,269 @@ function renderSettings(
     />
   );
 }
+
+/**
+ * Settings wired the way App wires it: every change comes back as the new
+ * `settings`, so a field sees its own commits as it would in the app.
+ */
+function renderStatefulSettings(
+  overrides: Partial<ComponentProps<typeof SettingsPage>> = {}
+) {
+  const commits: AppSettings[] = [];
+  function Harness() {
+    const [settings, setSettings] = useState(defaultAppSettings);
+    return (
+      <SettingsPage
+        settings={settings}
+        cloudFunctionsEnabled={true}
+        accountState={null}
+        authConfig={null}
+        authConfigStatus="unavailable"
+        health={null}
+        session={null}
+        busy={false}
+        message=""
+        onChange={(next) => {
+          commits.push(next);
+          setSettings(next);
+        }}
+        onCloudFunctionsEnabledChange={vi.fn()}
+        onSaveCredential={vi.fn()}
+        onDeleteCredential={vi.fn()}
+        onTestAssistant={vi.fn()}
+        onRequestLoginCode={vi.fn()}
+        onVerifyLoginCode={vi.fn()}
+        onRefreshAuthConfig={vi.fn()}
+        onStartDesktopLogin={vi.fn()}
+        onDesktopAuthorizationCodeChange={vi.fn()}
+        onApproveDesktopLogin={vi.fn()}
+        onLogout={vi.fn()}
+        onDeleteCloudData={vi.fn()}
+        onReset={vi.fn()}
+        onApplyViewportDefaults={vi.fn()}
+        onDismissProjectInvitation={vi.fn()}
+        onClose={vi.fn()}
+        {...overrides}
+      />
+    );
+  }
+  render(<Harness />);
+  return {
+    latest: () => commits.at(-1) ?? defaultAppSettings()
+  };
+}
+
+describe('settings number fields', () => {
+  /**
+   * Bound straight to the setting, every keystroke through an out-of-range
+   * value was put back: "12" in a 4–24 field left 10, and "0.5" in linear
+   * snap saved 1.5.
+   */
+  it('accepts a value whose first digit is below the floor', async () => {
+    const user = userEvent.setup();
+    const { latest } = renderStatefulSettings({ initialSection: 'sketching' });
+    const tolerance = screen.getByLabelText('Sketch snap tolerance');
+
+    await user.clear(tolerance);
+    await user.type(tolerance, '12');
+    expect(tolerance).toHaveValue(12);
+    expect(latest().sketching.snapTolerancePx).toBe(12);
+    await user.tab();
+    expect(tolerance).toHaveValue(12);
+    expect(latest().sketching.snapTolerancePx).toBe(12);
+  });
+
+  it('types a fractional linear snap without corrupting it', async () => {
+    const user = userEvent.setup();
+    const { latest } = renderStatefulSettings({ initialSection: 'sketching' });
+    const linear = screen.getByLabelText('Linear snap increment');
+
+    await user.clear(linear);
+    await user.type(linear, '0.5');
+    await user.tab();
+    expect(linear).toHaveValue(0.5);
+    expect(latest().sketching.linearSnap).toBe(0.5);
+  });
+
+  it('clamps an out-of-range angle on blur to the value storage keeps', async () => {
+    const user = userEvent.setup();
+    const { latest } = renderStatefulSettings({ initialSection: 'sketching' });
+    const angle = screen.getByLabelText('Angular snap increment');
+
+    await user.clear(angle);
+    await user.type(angle, '500');
+    // Still being typed: shown as typed, never committed out of range.
+    expect(angle).toHaveValue(500);
+    expect(latest().sketching.angleSnap).toBeLessThanOrEqual(90);
+    await user.tab();
+
+    expect(angle).toHaveValue(90);
+    expect(latest().sketching.angleSnap).toBe(90);
+    // What the page shows is what a reload reads back, not the default.
+    window.localStorage.clear();
+    saveLocalAppSettings(latest());
+    expect(loadLocalAppSettings().sketching.angleSnap).toBe(90);
+  });
+
+  it('restores the setting when a field is left empty', async () => {
+    const user = userEvent.setup();
+    const { latest } = renderStatefulSettings({ initialSection: 'sketching' });
+    const tolerance = screen.getByLabelText('Sketch snap tolerance');
+    const before = latest().sketching.snapTolerancePx;
+
+    await user.clear(tolerance);
+    expect(tolerance).toHaveValue(null);
+    await user.tab();
+    expect(tolerance).toHaveValue(before);
+    expect(latest().sketching.snapTolerancePx).toBe(before);
+  });
+
+  it('keeps the default output budget on the step grid', () => {
+    const personal = defaultAppSettings();
+    personal.assistant.credentialSource = 'personal';
+    renderSettings(null, { settings: personal, initialSection: 'assistant' });
+
+    // The step grid starts at `min`: a 1024 floor with a 1024 step made the
+    // 32000 default a step mismatch and sent the arrow keys to 32768 (and a
+    // 0.001 floor with a 0.1 step did the same to linear snap's 1).
+    const budget = screen.getByLabelText<HTMLInputElement>(
+      'Output budget (tokens)'
+    );
+    expect(budget).toHaveValue(personal.assistant.maxOutputTokens);
+    expect(budget.validity.stepMismatch).toBe(false);
+  });
+});
+
+describe('settings navigation', () => {
+  it('opens on the active section, not the brand button that closes it', () => {
+    window.localStorage.clear();
+    const onClose = vi.fn();
+    renderSettings(null, { onClose });
+
+    expect(screen.getByRole('button', { name: 'General' })).toHaveFocus();
+  });
+
+  it('clears a search with Escape before Escape closes Settings', async () => {
+    const user = userEvent.setup();
+    window.localStorage.clear();
+    const onClose = vi.fn();
+    renderSettings(null, { onClose });
+    const search = screen.getByLabelText('Find a setting');
+
+    await user.type(search, 'snap');
+    await user.keyboard('{Escape}');
+    expect(search).toHaveValue('');
+    expect(onClose).not.toHaveBeenCalled();
+
+    await user.keyboard('{Escape}');
+    expect(onClose).toHaveBeenCalledOnce();
+  });
+
+  it('shows no section while a search matches nothing', async () => {
+    const user = userEvent.setup();
+    window.localStorage.clear();
+    renderSettings();
+    expect(screen.getByRole('heading', { level: 2 })).toHaveTextContent(
+      'General'
+    );
+
+    await user.type(screen.getByLabelText('Find a setting'), 'zzzz');
+
+    expect(screen.queryByRole('heading', { level: 2 })).toBeNull();
+    expect(
+      screen.getByText(/Clear the search to see every section/)
+    ).toBeVisible();
+  });
+
+  it('names the way back after what is behind Settings', () => {
+    window.localStorage.clear();
+    const view = renderSettings(null, { initialSection: 'viewport' });
+    expect(
+      screen.getByRole('button', { name: 'Back to workspace' })
+    ).toBeVisible();
+    expect(
+      screen.getByRole('button', { name: 'Apply defaults to current view' })
+    ).toBeEnabled();
+    view.unmount();
+
+    renderSettings(null, { initialSection: 'viewport', workspaceOpen: false });
+    expect(
+      screen.getByRole('button', { name: 'Back to projects' })
+    ).toBeVisible();
+    // No project is open, so there is no view to apply the defaults to.
+    expect(
+      screen.getByRole('button', { name: 'Apply defaults to current view' })
+    ).toBeDisabled();
+    expect(screen.getByText(/Open a project to apply/)).toBeVisible();
+  });
+
+  it('does not call a profile it could not load connected', () => {
+    const session = {
+      userId: toUserId('user_footer'),
+      displayName: 'person',
+      email: 'person@example.com',
+      mode: 'email-code' as const
+    };
+    const view = renderSettings(null, {
+      authConfigStatus: 'ready',
+      session,
+      accountState: null
+    });
+    expect(screen.getByText('Cloud profile unavailable')).toBeVisible();
+    view.unmount();
+
+    renderSettings(null, {
+      authConfigStatus: 'ready',
+      session,
+      accountState: {
+        settings: defaultAppSettings(),
+        revision: 1,
+        synced: true,
+        credential: { stored: false, storageAvailable: true },
+        effectiveAssistant: {
+          configured: false,
+          source: 'deployment',
+          provider: 'openrouter',
+          model: '',
+          reasoningEffort: 'provider-default'
+        }
+      }
+    });
+    expect(screen.getByText('Cloud profile connected')).toBeVisible();
+  });
+});
+
+describe('settings accessible names', () => {
+  it('start each control name with its visible title', async () => {
+    const user = userEvent.setup();
+    const personal = defaultAppSettings();
+    personal.assistant.credentialSource = 'personal';
+    renderSettings(null, { settings: personal, initialSection: 'viewport' });
+
+    expect(
+      screen.getByRole('checkbox', { name: 'Zoom toward the pointer' })
+    ).toBeInTheDocument();
+    await user.click(screen.getByRole('button', { name: 'AI Assistant' }));
+    expect(screen.getByLabelText('Output budget (tokens)')).toBeInTheDocument();
+    expect(
+      screen.getByLabelText('Request timeout (seconds)')
+    ).toBeInTheDocument();
+    expect(screen.getByLabelText('Personal API token')).toBeInTheDocument();
+  });
+
+  it('shows the token visibility state to sighted users too', async () => {
+    const user = userEvent.setup();
+    const personal = defaultAppSettings();
+    personal.assistant.credentialSource = 'personal';
+    renderSettings(null, { settings: personal, initialSection: 'assistant' });
+
+    const reveal = screen.getByRole('button', { name: 'Show token' });
+    expect(reveal).toHaveAttribute('title', 'Show token');
+    await user.click(reveal);
+    const conceal = screen.getByRole('button', { name: 'Hide token' });
+    expect(conceal).toHaveAttribute('title', 'Hide token');
+  });
+});
 
 describe('settings offline mode', () => {
   it('keeps local features available and removes cloud-only surfaces', async () => {
@@ -290,7 +558,9 @@ describe('settings advanced section', () => {
     await user.click(screen.getByRole('button', { name: 'Advanced' }));
 
     expect(screen.getByText('Cloud project storage')).toBeInTheDocument();
-    expect(screen.getByText(/Migrations 0010 and 0011/)).toBeInTheDocument();
+    expect(
+      screen.getByText(/ready to store your projects before they can sync/)
+    ).toBeInTheDocument();
     expect(screen.getByText('Not ready')).toHaveClass(
       'settings-state',
       'warning'
@@ -454,13 +724,15 @@ describe('settings privacy and data section', () => {
     expect(view.container.innerHTML).not.toContain(session.email);
     expect(screen.getByText('Name hidden')).toBeVisible();
     expect(screen.getByText('Email hidden')).toBeVisible();
+    // The label names the action and so carries the state; aria-pressed on
+    // top of it announced "Hide personal info, pressed".
     const show = screen.getByRole('button', { name: 'Show personal info' });
-    expect(show).toHaveAttribute('aria-pressed', 'false');
+    expect(show).not.toHaveAttribute('aria-pressed');
     await user.click(show);
     expect(screen.getByText(session.displayName)).toBeVisible();
     expect(screen.getByText(session.email)).toBeVisible();
     const hide = screen.getByRole('button', { name: 'Hide personal info' });
-    expect(hide).toHaveAttribute('aria-pressed', 'true');
+    expect(hide).not.toHaveAttribute('aria-pressed');
     await user.click(hide);
     expect(view.container.innerHTML).not.toContain(session.email);
     await user.click(
@@ -472,7 +744,7 @@ describe('settings privacy and data section', () => {
     expect(screen.getByText(session.displayName)).toBeVisible();
     expect(
       screen.getByRole('button', { name: 'Hide personal info' })
-    ).toHaveAttribute('aria-pressed', 'true');
+    ).toBeVisible();
   });
 
   it('keeps all cloud deletion functions together on Privacy & data', () => {
@@ -568,7 +840,9 @@ describe('settings privacy and data section', () => {
     expect(
       screen.getByRole('button', { name: 'Delete projects' })
     ).toBeDisabled();
-    expect(screen.getByText(/migrations 0014/)).toBeVisible();
+    expect(
+      screen.getByText(/Cloud data deletion isn’t available on this server/)
+    ).toBeVisible();
   });
 
   it('keeps profile deletion available when project object storage is unavailable', () => {

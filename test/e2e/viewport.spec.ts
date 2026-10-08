@@ -424,7 +424,7 @@ test('the wheel zooms toward the pointer, and the preference turns it off', asyn
   // Turning the preference off restores zooming toward the view centre.
   await page.getByRole('button', { name: 'Open settings' }).click();
   await page.getByRole('button', { name: 'Viewport', exact: true }).click();
-  await page.getByLabel('Zoom to cursor').uncheck();
+  await page.getByLabel('Zoom toward the pointer').uncheck();
   await page
     .getByRole('button', { name: /Back to workspace|Close settings/ })
     .first()
