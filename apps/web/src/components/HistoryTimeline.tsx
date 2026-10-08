@@ -555,7 +555,7 @@ export function HistoryTimeline({
       >
         {features.length === 0 && (
           <p className="muted sidebar-hint">
-            No features yet. Pick a tool from the command card to start.
+            No features yet. Pick a tool from the Feature tools list to start.
           </p>
         )}
         {filtering && visible.length === 0 && (

@@ -427,7 +427,7 @@ export function Sidebar({
                 }
               >
                 <ChevronRight
-                  size={11}
+                  size={12}
                   className="disclosure-chevron"
                   aria-hidden="true"
                 />

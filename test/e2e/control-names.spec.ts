@@ -44,7 +44,7 @@ test('commands, export formats and body rows are named by what they do', async (
 
   const fileMenu = page.locator('details.file-menu');
   await fileMenu.locator('summary').click();
-  await fileMenu.getByRole('button', { name: /Export Mesh/ }).click();
+  await fileMenu.getByRole('button', { name: /Export mesh/ }).click();
   const dialog = page.getByRole('dialog', { name: /Export mesh/ });
   await expect(dialog).toBeVisible();
   const stl = dialog.getByRole('radio', { name: 'STL (binary)', exact: true });

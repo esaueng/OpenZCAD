@@ -269,7 +269,7 @@ export function ViewerToolbar({
           aria-label="Undo"
           disabled={!canUndo}
         >
-          <Undo2 size={15} aria-hidden="true" />
+          <Undo2 size={16} aria-hidden="true" />
         </button>
       </Tooltip>
       <Tooltip label="Redo" shortcut="Ctrl+Shift+Z">
@@ -280,7 +280,7 @@ export function ViewerToolbar({
           aria-label="Redo"
           disabled={!canRedo}
         >
-          <Redo2 size={15} aria-hidden="true" />
+          <Redo2 size={16} aria-hidden="true" />
         </button>
       </Tooltip>
       <span className="rail-divider" aria-hidden="true" />
@@ -299,7 +299,7 @@ export function ViewerToolbar({
             aria-label="Measure"
             aria-pressed={measuring}
           >
-            <Ruler size={15} aria-hidden="true" />
+            <Ruler size={16} aria-hidden="true" />
           </button>
         </Tooltip>
       )}
@@ -314,7 +314,7 @@ export function ViewerToolbar({
           onClick={onFit}
           aria-label="Fit view (F)"
         >
-          <Maximize2 size={15} aria-hidden="true" />
+          <Maximize2 size={16} aria-hidden="true" />
         </button>
       </Tooltip>
       <Tooltip label="Toggle grid" shortcut="G">
@@ -325,7 +325,7 @@ export function ViewerToolbar({
           aria-label="Toggle grid (G)"
           aria-pressed={settings.showGrid}
         >
-          <Grid3x3 size={15} aria-hidden="true" />
+          <Grid3x3 size={16} aria-hidden="true" />
         </button>
       </Tooltip>
       <Tooltip
@@ -340,7 +340,7 @@ export function ViewerToolbar({
           aria-label={`Orthographic projection (P) — now: ${projection}`}
           aria-pressed={projection === 'orthographic'}
         >
-          <Camera size={15} aria-hidden="true" />
+          <Camera size={16} aria-hidden="true" />
         </button>
       </Tooltip>
       <div className="rail-views-anchor" ref={sectionAnchorRef}>
@@ -356,7 +356,7 @@ export function ViewerToolbar({
             aria-label={`Section view — now: ${sectionLabel}`}
             aria-pressed={sectionOn}
           >
-            <Slice size={15} aria-hidden="true" />
+            <Slice size={16} aria-hidden="true" />
           </button>
         </Tooltip>
         {settings.sectionView && sectionRange && sectionPanelShown && (
