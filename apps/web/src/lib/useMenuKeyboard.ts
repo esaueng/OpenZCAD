@@ -1,4 +1,4 @@
-import { useEffect, type RefObject } from 'react';
+import { useEffect, useRef, type RefObject } from 'react';
 
 /**
  * The keyboard half of `role="menu"`.
@@ -17,12 +17,19 @@ import { useEffect, type RefObject } from 'react';
  * reaches the items, which is what a native context menu charges too.
  */
 export function useMenuKeyboard(ref: RefObject<HTMLElement | null>): void {
+  // Where focus was before the menu took it. Kept across effect runs: a
+  // re-run (StrictMode mounts twice) finds focus already inside the menu,
+  // and recording that would leave nothing to return to on close.
+  const previousRef = useRef<Element | null>(null);
   useEffect(() => {
     const element = ref.current;
     if (!element) {
       return;
     }
-    const previous = document.activeElement;
+    if (!element.contains(document.activeElement)) {
+      previousRef.current = document.activeElement;
+    }
+    const previous = previousRef.current;
     element.focus({ preventScroll: true });
 
     // Disabled items are skipped rather than focused-and-inert: focusing one

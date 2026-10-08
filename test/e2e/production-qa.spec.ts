@@ -20,7 +20,7 @@ test('invalid primitive dimensions never enter saved history', async ({
   await expect(inspector).toBeVisible();
   await expect(
     page.getByText(
-      'No features yet. Pick a tool from the command card to start.'
+      'No features yet. Pick a tool from the tool rail on the left to start.'
     )
   ).toBeVisible();
   await width.fill('30');
