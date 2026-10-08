@@ -204,8 +204,9 @@ export function snapTo(value: number, step: number, fine: boolean): number {
     return value;
   }
   const snapped = Math.round(value / step) * step;
-  // `|| 0` folds the -0 a small negative drag rounds to.
-  return Number(snapped.toFixed(stepDecimals(step))) || 0;
+  const cleaned = Number(snapped.toFixed(stepDecimals(step)));
+  // Fold negative zero without replacing an invalid coordinate with zero.
+  return cleaned === 0 ? 0 : cleaned;
 }
 
 /** Decimal places a snap step needs, found within a tolerance, not by ==. */

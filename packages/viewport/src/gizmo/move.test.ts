@@ -22,6 +22,12 @@ describe('snapTo', () => {
     expect(Object.is(snapTo(-0.04, 0.1, false), 0)).toBe(true);
   });
 
+  it('preserves non-finite values instead of substituting an origin snap', () => {
+    expect(snapTo(Number.NaN, 0.1, false)).toBeNaN();
+    expect(snapTo(Infinity, 0.1, false)).toBe(Infinity);
+    expect(snapTo(-Infinity, 0.1, false)).toBe(-Infinity);
+  });
+
   it('rounds a fine drag to hundredths', () => {
     expect(snapTo(0.123, 0.1, true)).toBe(0.12);
   });

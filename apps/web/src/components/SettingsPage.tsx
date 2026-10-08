@@ -1288,7 +1288,6 @@ export function SettingsPage({
               >
                 <NumberSetting
                   {...APP_SETTINGS_NUMBER_BOUNDS.snapTolerancePx}
-                  integer
                   unit="px"
                   value={settings.sketching.snapTolerancePx}
                   label="Sketch snap tolerance"
@@ -1306,7 +1305,6 @@ export function SettingsPage({
               >
                 <NumberSetting
                   {...APP_SETTINGS_NUMBER_BOUNDS.angleSnap}
-                  integer
                   unit="°"
                   value={settings.sketching.angleSnap}
                   label="Angular snap increment"

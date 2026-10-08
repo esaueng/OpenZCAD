@@ -165,6 +165,30 @@ describe('settings number fields', () => {
     expect(loadLocalAppSettings().sketching.angleSnap).toBe(90);
   });
 
+  it.each([
+    { label: 'Sketch snap tolerance', key: 'snapTolerancePx', value: 4.5 },
+    { label: 'Angular snap increment', key: 'angleSnap', value: 22.5 }
+  ] as const)(
+    'preserves fractional $label through storage',
+    async ({ label, key, value }) => {
+      const user = userEvent.setup();
+      const { latest } = renderStatefulSettings({
+        initialSection: 'sketching'
+      });
+      const field = screen.getByLabelText(label);
+
+      await user.clear(field);
+      await user.type(field, String(value));
+      expect(latest().sketching[key]).toBe(value);
+      await user.tab();
+      expect(field).toHaveValue(value);
+      expect(latest().sketching[key]).toBe(value);
+      window.localStorage.clear();
+      saveLocalAppSettings(latest());
+      expect(loadLocalAppSettings().sketching[key]).toBe(value);
+    }
+  );
+
   it('restores the setting when a field is left empty', async () => {
     const user = userEvent.setup();
     const { latest } = renderStatefulSettings({ initialSection: 'sketching' });
