@@ -10,7 +10,7 @@
  * exact curves and whose area is the kernel's own.
  *
  * The kernel's section is candidate evidence, not proof. Measured against the
- * pinned kernel (2.131.0), it has three failure modes that all look like a
+ * earlier kernel releases, it had three failure modes that all looked like a
  * perfectly ordinary answer:
  *
  * - A plane that misses the body returns an EMPTY handle array, not an error.
@@ -20,6 +20,8 @@
  * - A plane parallel to a through-hole's wall can come back as the outer
  *   rectangle with the hole silently missing (a 20x10x6 bar with a 4 mm bore
  *   sections to 120 mm^2 at the bore axis, where the true area is 96 mm^2).
+ *   Current releases refuse this case without authoritative cap clipping;
+ *   the independent witness still guards against incorrect successful answers.
  *
  * So every exact section is checked against an independent witness computed
  * from the solid's own tessellation: the signed cross-section area obtained by
@@ -214,7 +216,12 @@ export function sectionPlaneFrame(
     up[2] - normal[2] * along
   ]);
   // u x v = normal, so the 2D frame is right-handed about the cut direction.
-  return { origin: plane.origin, u: cross(v, normal), v, scale: millimeterScale };
+  return {
+    origin: plane.origin,
+    u: cross(v, normal),
+    v,
+    scale: millimeterScale
+  };
 }
 
 export interface SectionWitness {

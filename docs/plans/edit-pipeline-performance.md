@@ -31,12 +31,16 @@ A single WASM call still blocks its worker until it returns. A separate analysis
 Measured qualification (7 October 2026):
 
 The final paired packages are `2026.1.45`, pinned to Remus
-`1482487755a2a435c8134d31d43eb3e98adffdeb` ([Remus PR #970](https://github.com/esaueng/remus/pull/970)).
-This is the equivalent pin after the history redaction: both WASM blob
-identities match the original qualification package. The measurements below
-remain the 7 October samples; they have not been rerun on the integrated branch.
-The final commit corrects a native test's layout guard for shared NURBS storage;
-its shipped WASM bytes are identical to the `4e6584f1` measurement build.
+`a04b5c8689f5dd12b22f1b6246921779ff10abb6` ([Remus PR #975](https://github.com/esaueng/remus/pull/975)),
+which incorporates the reviewed correctness and performance sources in one
+canonical package pair. This changes the WASM bytes from the earlier #970
+candidate; the historical samples below have not been rerun for this combined
+release.
+The 7 October samples used the earlier #970 qualification package, whose
+equivalent rewritten pin is `1482487755a2a435c8134d31d43eb3e98adffdeb`.
+That candidate's final commit corrects a native test's layout guard for shared
+NURBS storage; its shipped WASM bytes are identical to the `4e6584f1`
+measurement build.
 Three independent, quiet Node processes used the same public STEP file, +X face
 (area 1045.93), edit distances and Linux environment as the baseline. Times
 below are medians in milliseconds. Geometry-ready is the validated adapter

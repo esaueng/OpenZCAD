@@ -9,7 +9,8 @@
  * a hair of travel across the face — a two-sided extrude with a 0.01 back
  * distance — cuts and embosses to the exact closed-form volume.
  *
- * So when the plain tool is refused by that code, and only then, the tool is
+ * When the plain tool is refused by that code or an add fails the strict
+ * union validity gate, the tool is
  * rebuilt with that hair of travel on the side of the face where it cannot
  * change the result:
  *
@@ -22,9 +23,9 @@
  * distance, and the travel exists only on the transient feature node handed
  * to the sweep builder for this one kernel call.
  *
- * Retrying after the refusal, rather than piercing up front, is deliberate:
+ * Retrying after that refusal or failed validity verdict is deliberate:
  * every on-face boolean the kernel already builds keeps exactly the tool and
- * topology it had, and the day the kernel fixes the coplanar case this path
+ * topology it had, and when the kernel returns a valid coplanar solid this path
  * simply stops running.
  */
 import { findFeature, resolveParamValue } from '@openzcad/document-core';
