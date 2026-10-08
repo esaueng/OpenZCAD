@@ -1,4 +1,4 @@
-import { useState } from 'react';
+import { useEffect, useId, useRef, useState } from 'react';
 import { Check, CircleHelp, Pencil } from 'lucide-react';
 import {
   allQuestionsAnswered,
@@ -35,18 +35,58 @@ export function QuestionCard({
   const answered = collectedAnswers(entry).length;
   const total = entry.questions.length;
   const complete = allQuestionsAnswered(entry);
+  const idPrefix = useId();
+  const cardRef = useRef<HTMLDivElement | null>(null);
+  const itemRefs = useRef(new Map<string, HTMLLIElement>());
+
+  /*
+    Every control here replaces itself when used: a chip with the answer and
+    its "change", "change" with the chips again, the send button with the
+    card as sent. Focus follows to what took its place, once the answer has
+    come back round through the conversation, rather than falling to the page.
+  */
+  const focusNext = useRef<
+    { to: 'answer' | 'choices'; questionId: string } | { to: 'card' } | null
+  >(null);
+  useEffect(() => {
+    const next = focusNext.current;
+    if (!next) {
+      return;
+    }
+    focusNext.current = null;
+    if (next.to === 'card') {
+      cardRef.current?.focus({ preventScroll: true });
+      return;
+    }
+    const item = itemRefs.current.get(next.questionId);
+    const target = item?.querySelector<HTMLElement>(
+      next.to === 'answer'
+        ? '.assistant-answer button'
+        : '.assistant-chips button:not(:disabled), .assistant-chips input:not(:disabled)'
+    );
+    target?.focus();
+  }, [entry.answers, entry.sent]);
+
+  function answer(questionId: string, value: string) {
+    focusNext.current = { to: value ? 'answer' : 'choices', questionId };
+    onAnswer(questionId, value);
+  }
 
   function commitDraft(questionId: string) {
     const value = (drafts[questionId] ?? '').trim();
     if (!value) {
       return;
     }
-    onAnswer(questionId, value);
+    answer(questionId, value);
     setDrafts((current) => ({ ...current, [questionId]: '' }));
   }
 
   return (
-    <div className={`assistant-card questions${entry.sent ? ' sent' : ''}`}>
+    <div
+      ref={cardRef}
+      tabIndex={-1}
+      className={`assistant-card questions${entry.sent ? ' sent' : ''}`}
+    >
       <span className="assistant-card-label">
         <CircleHelp size={13} aria-hidden="true" />
         <StableLabel reserve={['Asked', 'Needs an answer']}>
@@ -81,12 +121,20 @@ export function QuestionCard({
           const chosen = Object.hasOwn(entry.answers, question.id)
             ? entry.answers[question.id]
             : undefined;
+          const promptId = `${idPrefix}-${question.id}`;
           return (
             <li
               key={question.id}
+              ref={(node) => {
+                if (node) {
+                  itemRefs.current.set(question.id, node);
+                } else {
+                  itemRefs.current.delete(question.id);
+                }
+              }}
               className={chosen ? 'answered' : 'unanswered'}
             >
-              <p className="assistant-question-prompt">
+              <p className="assistant-question-prompt" id={promptId}>
                 {question.prompt}
                 {question.unit && (
                   <span className="assistant-question-unit">
@@ -102,7 +150,8 @@ export function QuestionCard({
                     <button
                       type="button"
                       className="assistant-link"
-                      onClick={() => onAnswer(question.id, '')}
+                      aria-label={`Change answer for ${question.prompt}`}
+                      onClick={() => answer(question.id, '')}
                     >
                       <Pencil size={10} aria-hidden="true" />
                       change
@@ -110,14 +159,18 @@ export function QuestionCard({
                   )}
                 </p>
               ) : (
-                <div className="assistant-chips">
+                <div
+                  className="assistant-chips"
+                  role="group"
+                  aria-labelledby={promptId}
+                >
                   {question.options.map((option) => (
                     <button
                       key={option.value}
                       type="button"
                       className="assistant-chip"
                       disabled={busy || entry.sent}
-                      onClick={() => onAnswer(question.id, option.value)}
+                      onClick={() => answer(question.id, option.value)}
                     >
                       {option.label}
                     </button>
@@ -147,6 +200,7 @@ export function QuestionCard({
                       <button
                         type="button"
                         className="assistant-chip"
+                        aria-label={`Use answer for ${question.prompt}`}
                         disabled={busy || !(drafts[question.id] ?? '').trim()}
                         onClick={() => commitDraft(question.id)}
                       >
@@ -166,7 +220,10 @@ export function QuestionCard({
             type="button"
             className="assistant-primary"
             disabled={busy || answered === 0}
-            onClick={onSend}
+            onClick={() => {
+              focusNext.current = { to: 'card' };
+              onSend();
+            }}
             title={
               complete
                 ? 'Send these answers'

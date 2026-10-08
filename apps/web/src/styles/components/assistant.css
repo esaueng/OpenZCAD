@@ -30,6 +30,10 @@
   min-width: 0;
   margin-inline: auto;
   display: grid;
+  /* One column the panel's own width. An implicit auto column sized to the
+     foot line's min-content, wider than a 292px panel at 1024px, and the
+     mask clipped "hide", the times and the badges at its edge. */
+  grid-template-columns: minmax(0, 1fr);
   grid-template-rows: minmax(0, 1fr) auto;
   color: var(--color-text);
   background: var(--color-bg);
@@ -103,6 +107,15 @@
   border-top-right-radius: 0;
 }
 
+/* The ask hint rises onto the stream's foot line and covered attach,
+   history, clear and hide while a question was being typed — attaching a
+   drawing to it included. With the stream up, Enter plainly asks it; the
+   hint stays the field's description, which a hidden element still gives.
+   The command list is not this float: it replaces the stream instead. */
+.workspace.with-assistant .command-bar-float:not(:has(.palette-list)) {
+  display: none;
+}
+
 .assistant-panel.dragging {
   outline: 1px dashed var(--color-accent-border);
   outline-offset: -3px;
@@ -125,6 +138,9 @@
 /* ── The thread ─────────────────────────────────────────── */
 
 .assistant-thread {
+  /* The jump button shares this cell, so it stands on the thread's foot
+     whatever the footer below holds. */
+  grid-area: 1 / 1;
   min-height: 0;
   overflow-y: auto;
   padding: var(--assistant-fade) 14px 10px 10px;
@@ -194,27 +210,25 @@
 }
 
 /* Age fades the stream on top of the top-edge dissolve: the further a line
-   is from the prompt, the quieter. Hovering lifts it for a read-back. */
-.assistant-thread:not(:hover)
-  .assistant-day
-  .assistant-turn:nth-last-child(n + 4) {
+   is from the prompt, the quieter. Hovering lifts it for a read-back, and
+   scrollback, which is for reading back, does not fade at all. The age is
+   counted over the whole thread (AssistantPanel), not within each day. */
+.assistant-panel:not(.scrollback)
+  .assistant-thread:not(:hover)
+  .assistant-turn.age-1 {
   opacity: 0.86;
 }
 
-.assistant-thread:not(:hover)
-  .assistant-day
-  .assistant-turn:nth-last-child(n + 7) {
+.assistant-panel:not(.scrollback)
+  .assistant-thread:not(:hover)
+  .assistant-turn.age-2 {
   opacity: 0.68;
 }
 
-.assistant-thread:not(:hover)
-  .assistant-day
-  .assistant-turn:nth-last-child(n + 10) {
+.assistant-panel:not(.scrollback)
+  .assistant-thread:not(:hover)
+  .assistant-turn.age-3 {
   opacity: 0.5;
-}
-
-.assistant-panel.scrollback .assistant-turn {
-  opacity: 1;
 }
 
 .assistant-turn-mark {
@@ -298,6 +312,14 @@
   color: var(--color-text-subtle);
   border: 1px dashed var(--color-border);
   border-radius: var(--radius-sm);
+  font-size: var(--fs-mini);
+}
+
+/* An ask that never got its answer: the line under it says so. */
+.assistant-stopped {
+  margin: 0;
+  padding-left: 28px;
+  color: var(--color-text-subtle);
   font-size: var(--fs-mini);
 }
 
@@ -388,9 +410,12 @@
 }
 
 .assistant-jump {
-  position: absolute;
-  right: 14px;
-  bottom: 48px;
+  grid-area: 1 / 1;
+  align-self: end;
+  justify-self: end;
+  z-index: 1;
+  min-height: 24px;
+  margin: 0 14px 8px 0;
   display: inline-flex;
   align-items: center;
   gap: 4px;
@@ -666,6 +691,8 @@
 
 .assistant-chip-input input {
   width: 96px;
+  /* The global field height is 30px; this one sits in a row of 25px chips. */
+  height: 25px;
   min-height: 25px;
   padding: 0 6px;
   font-size: var(--fs-mini);
@@ -684,6 +711,7 @@
 }
 
 .assistant-link {
+  min-height: 24px;
   display: inline-flex;
   align-items: center;
   gap: 3px;
@@ -711,6 +739,7 @@
 }
 
 .assistant-disclosure {
+  min-height: 24px;
   display: inline-flex;
   align-items: center;
   gap: 5px;
@@ -786,7 +815,7 @@
 }
 
 .assistant-confidence {
-  margin-left: 5px;
+  margin-left: 2px;
   color: var(--color-text-subtle);
   font-family: var(--font-mono);
   font-size: 0.85em;
@@ -799,7 +828,9 @@
 /* ── Between the stream and the prompt ───────────────────── */
 
 .assistant-actions {
+  grid-area: 2 / 1;
   display: grid;
+  grid-template-columns: minmax(0, 1fr);
   gap: 6px;
   padding: 4px 10px 6px;
 }
@@ -948,6 +979,7 @@
 }
 
 .assistant-foot-action {
+  min-height: 24px;
   padding: 2px 0;
   color: var(--color-text-dim);
   border: 0;

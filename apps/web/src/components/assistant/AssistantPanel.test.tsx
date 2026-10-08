@@ -1,4 +1,10 @@
-import { act, render, screen, waitFor } from '@testing-library/react';
+import {
+  act,
+  fireEvent,
+  render,
+  screen,
+  waitFor
+} from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import type { ComponentProps } from 'react';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
@@ -784,6 +790,7 @@ describe('prompt keys on the open proposal', () => {
         collapsed
         onCollapsedChange={onCollapsedChange}
         confirmDestructive={false}
+        effectiveAssistant={configured}
       />
     );
     await act(async () => {});
@@ -808,6 +815,7 @@ describe('prompt keys on the open proposal', () => {
         collapsed={false}
         onCollapsedChange={vi.fn()}
         confirmDestructive={false}
+        effectiveAssistant={configured}
       />
     );
     await act(async () => {
@@ -976,5 +984,359 @@ describe('an assistant with no provider', () => {
     vi.stubEnv('DEV', true);
     await renderPanel({ effectiveAssistant: unconfigured });
     expect(screen.getByText(/OPENROUTER_API_KEY/)).toBeTruthy();
+  });
+
+  /*
+    With no provider nothing can read a drawing, and Enter on the empty
+    prompt never sends one — so a drawing taken into the tray could only
+    wait there under "Enter sends without words". None is taken.
+  */
+  it('takes no drawing it could never send', async () => {
+    await renderPanel({ effectiveAssistant: unconfigured });
+    expect(
+      screen.getByRole('button', { name: 'Attach a drawing' })
+    ).toBeDisabled();
+
+    const drawing = new File(['png'], 'drawing.png', { type: 'image/png' });
+    let taken = true;
+    await act(async () => {
+      taken = sendAssistantPromptFiles([drawing]);
+    });
+    expect(taken).toBe(false);
+
+    const panel = screen.getByRole('region', { name: 'AI modeling assistant' });
+    fireEvent.dragOver(panel, { dataTransfer: { files: [drawing] } });
+    expect(panel).not.toHaveClass('dragging');
+    await act(async () => {
+      fireEvent.drop(panel, { dataTransfer: { files: [drawing] } });
+    });
+    expect(document.querySelector('.assistant-pending')).toBeNull();
+    expect(
+      screen
+        .queryAllByRole('status')
+        .some((status) => status.textContent?.includes('drawing.png'))
+    ).toBe(false);
+  });
+});
+
+describe('trying a failed ask again', () => {
+  const configured = {
+    configured: true,
+    provider: 'openai',
+    model: 'gpt-5.6-sol',
+    reasoningEffort: 'medium'
+  } as const;
+
+  function proposalsCalls() {
+    return vi
+      .mocked(fetch)
+      .mock.calls.filter(([url]) =>
+        String(url instanceof Request ? url.url : url).includes(
+          '/api/assistant/proposals'
+        )
+      );
+  }
+
+  it('resends a failed answer turn as answers, keeping the original selection intent', async () => {
+    window.localStorage.clear();
+    const document = allEdgeDocument();
+    const bodyId = document.bodyOrder[0]!;
+    saveAssistantThread(
+      document.projectId,
+      [
+        {
+          kind: 'user',
+          id: 'initial_request',
+          text: 'Fillet all selected edges',
+          attachments: [],
+          answers: [],
+          at: 1
+        },
+        {
+          kind: 'questions',
+          id: 'clarification',
+          preamble: 'How large should the fillet be?',
+          questions: [
+            {
+              id: 'radius',
+              prompt: 'Fillet size',
+              options: [{ label: '5 mm', value: '5 mm' }],
+              allowFreeText: true,
+              unit: 'mm'
+            }
+          ],
+          answers: { radius: '5 mm' },
+          sent: true,
+          at: 2
+        },
+        {
+          kind: 'user',
+          id: 'answer_turn',
+          text: '5 mm',
+          attachments: [],
+          answers: [
+            { questionId: 'radius', prompt: 'Fillet size', value: '5 mm' }
+          ],
+          at: 3
+        },
+        {
+          kind: 'message',
+          id: 'failure',
+          text: 'The AI provider is temporarily unavailable.',
+          tone: 'error',
+          at: 4
+        }
+      ],
+      4
+    );
+    // The model guesses the wrong part; only the original ask's selection
+    // intent ("all selected edges") grounds it back onto the selection.
+    const proposal = {
+      proposalId: 'retry_wrong_edge_guess',
+      summary: 'Fillet the selected edges.',
+      assumptions: [],
+      operations: [
+        {
+          kind: 'add_edge_modifier',
+          name: 'Selected edge fillets',
+          localId: null,
+          modifier: 'fillet',
+          targetBodyId: 'body_other',
+          edgeHashes: [999],
+          size: 5
+        }
+      ]
+    };
+    const streamBody = `data: ${JSON.stringify({
+      type: 'response.output_text.done',
+      text: JSON.stringify({
+        replyKind: 'patch',
+        proposal,
+        questions: null,
+        message: null,
+        readings: null
+      })
+    })}\n\ndata: ${JSON.stringify({ type: 'response.completed' })}\n\n`;
+    vi.stubGlobal(
+      'fetch',
+      vi.fn(
+        async () =>
+          new Response(streamBody, {
+            status: 200,
+            headers: { 'content-type': 'text/event-stream' }
+          })
+      )
+    );
+    const onPreview = vi.fn(async (_proposal: CadPatchProposal | null) => ({
+      ok: true as const
+    }));
+    const user = userEvent.setup();
+    render(
+      <AssistantPanel
+        document={document}
+        selection={{
+          bodyIds: [bodyId],
+          featureIds: [],
+          topologies: [
+            { bodyId, kind: 'edge', topologyId: 'edge:1', hash: 1 },
+            { bodyId, kind: 'edge', topologyId: 'edge:2', hash: 2 }
+          ]
+        }}
+        onApply={vi.fn().mockResolvedValue(true)}
+        onPreview={onPreview}
+        collapsed={false}
+        onCollapsedChange={vi.fn()}
+        confirmDestructive
+        effectiveAssistant={configured}
+      />
+    );
+
+    await user.click(await screen.findByRole('button', { name: 'Try again' }));
+
+    await waitFor(() =>
+      expect(onPreview.mock.calls.at(-1)?.[0]).toMatchObject({
+        operations: [
+          expect.objectContaining({
+            targetBodyId: bodyId,
+            edgeHashes: [1, 2],
+            size: 5
+          })
+        ]
+      })
+    );
+    const [, init] = proposalsCalls().at(-1)!;
+    const body = JSON.parse(init?.body as string) as { prompt: string };
+    expect(body.prompt).toBe('5 mm');
+    // The resent turn reads as the answer list it was, not as a sentence
+    // the user never typed.
+    expect(
+      window.document.querySelectorAll('.assistant-answer-list')
+    ).toHaveLength(2);
+    expect(window.document.querySelectorAll('.assistant-ask')).toHaveLength(1);
+  });
+
+  it('offers it on the newest failure only, which repeats the newest ask', async () => {
+    window.localStorage.clear();
+    saveAssistantThread(
+      doc.projectId,
+      [
+        {
+          kind: 'user',
+          id: 'ask_a',
+          text: 'Ask A',
+          attachments: [],
+          answers: [],
+          at: 1
+        },
+        {
+          kind: 'message',
+          id: 'failure_a',
+          text: 'A failed.',
+          tone: 'error',
+          at: 2
+        },
+        {
+          kind: 'user',
+          id: 'ask_b',
+          text: 'Ask B',
+          attachments: [],
+          answers: [],
+          at: 3
+        },
+        {
+          kind: 'message',
+          id: 'failure_b',
+          text: 'B failed.',
+          tone: 'error',
+          at: 4
+        }
+      ],
+      4
+    );
+    await renderPanel({ effectiveAssistant: configured });
+    const retries = screen.getAllByRole('button', { name: 'Try again' });
+    expect(retries).toHaveLength(1);
+    expect(retries[0]!.closest('.assistant-card')).toHaveTextContent(
+      'B failed.'
+    );
+    expect(retries[0]).toHaveAttribute('title', 'Send "Ask B" again');
+  });
+});
+
+describe('the stream as a record', () => {
+  it('stamps each turn with a valid machine-readable time', async () => {
+    await renderPanel();
+    const times = window.document.querySelectorAll('time');
+    expect(times.length).toBeGreaterThan(0);
+    for (const time of times) {
+      const value = time.getAttribute('datetime') ?? '';
+      expect(value).toMatch(/^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(\.\d+)?Z$/);
+      expect(Number.isNaN(Date.parse(value))).toBe(false);
+    }
+  });
+
+  it('adds nothing under an ask that was answered', async () => {
+    await renderPanel();
+    expect(screen.queryByText(/Stopped before the assistant/)).toBeNull();
+  });
+
+  it('marks a trailing ask that never got its answer', async () => {
+    window.localStorage.clear();
+    saveAssistantThread(
+      doc.projectId,
+      [
+        {
+          kind: 'user',
+          id: 'unanswered',
+          text: 'Make it taller',
+          attachments: [],
+          answers: [],
+          at: 1
+        }
+      ],
+      1
+    );
+    await renderPanel();
+    expect(
+      screen.getByText('Stopped before the assistant answered.')
+    ).toBeInTheDocument();
+  });
+
+  it('names its foot actions by their visible words', async () => {
+    await renderPanel();
+    expect(
+      screen.getByRole('button', { name: 'Hide the assistant' })
+    ).toHaveTextContent('hide');
+    const history = screen.getByRole('button', { name: 'history' });
+    expect(history).toHaveAttribute('aria-pressed', 'false');
+    await userEvent.setup().click(history);
+    expect(screen.getByRole('button', { name: 'history' })).toHaveAttribute(
+      'aria-pressed',
+      'true'
+    );
+    expect(
+      window.document.querySelector('.assistant-model')
+    ).not.toHaveAttribute('aria-label');
+  });
+
+  it('says plainly when the status check cannot reach the assistant', async () => {
+    await renderPanel();
+    expect(
+      await screen.findByText(
+        "The assistant can't be reached right now. Verified recipes still work."
+      )
+    ).toBeInTheDocument();
+    expect(screen.queryByText(/offline/)).toBeNull();
+  });
+
+  it('announces a reply once it lands, from a region that was already there', async () => {
+    window.localStorage.clear();
+    const reply = `data: ${JSON.stringify({
+      type: 'response.output_text.done',
+      text: JSON.stringify({
+        replyKind: 'message',
+        proposal: null,
+        questions: null,
+        message: 'The wall is 2 mm.',
+        readings: null
+      })
+    })}\n\ndata: ${JSON.stringify({ type: 'response.completed' })}\n\n`;
+    vi.stubGlobal(
+      'fetch',
+      vi.fn(
+        async () =>
+          new Response(reply, {
+            status: 200,
+            headers: { 'content-type': 'text/event-stream' }
+          })
+      )
+    );
+    const props: ComponentProps<typeof AssistantPanel> = {
+      document: doc,
+      selection: { bodyIds: [], featureIds: [], topologies: [] },
+      onApply: vi.fn().mockResolvedValue(true),
+      onPreview: vi.fn().mockResolvedValue({ ok: true }),
+      collapsed: false,
+      onCollapsedChange: vi.fn(),
+      confirmDestructive: false,
+      effectiveAssistant: {
+        configured: true,
+        provider: 'openai',
+        model: 'gpt-5.6-sol',
+        reasoningEffort: 'medium'
+      }
+    };
+    const view = render(<AssistantPanel {...props} />);
+    const region = window.document.querySelector('[aria-live="polite"]');
+    expect(region).toHaveTextContent('');
+    await act(async () => {
+      view.rerender(
+        <AssistantPanel {...props} request={{ id: 1, text: 'How thick?' }} />
+      );
+    });
+    await screen.findByText('The wall is 2 mm.');
+    // The same node, now carrying the news: nothing streams into it.
+    expect(window.document.querySelector('[aria-live="polite"]')).toBe(region);
+    expect(region).toHaveTextContent('The assistant replied.');
   });
 });

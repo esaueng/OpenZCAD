@@ -897,7 +897,7 @@ test('collapsing the assistant tucks it behind the prompt and keeps the thread',
     'Add a 10 mm cube.'
   );
 
-  await page.getByRole('button', { name: 'Collapse the assistant' }).click();
+  await page.getByRole('button', { name: 'Hide the assistant' }).click();
 
   // The conversation tucks away behind the prompt line, which stays.
   await expect(page.locator('.assistant-panel')).toHaveCount(0);
