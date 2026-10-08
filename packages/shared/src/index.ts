@@ -1874,6 +1874,8 @@ export type GeometryBodyRepresentation = Omit<
 export interface GeometryReadyState {
   bodyRepresentations: Record<BodyId, GeometryBodyRepresentation>;
   warnings: string[];
+  /** Current build attribution; never borrowed from a completed projection. */
+  featureWarnings?: FeatureWarning[];
   updatedAt: string;
   analysis: 'pending';
 }
