@@ -43,6 +43,8 @@ export interface MeasurementWorkbenchInput {
    */
   modelingLocked: boolean;
   exactGeometryReady: boolean;
+  /** Displayed geometry is still waiting for its measurement analysis. */
+  geometryPending?: boolean;
   /** The committed exact projection; the only one allowed to refresh rows. */
   representations: Record<string, BodyRepresentation>;
   /** What the viewport draws right now, previews included; picks resolve here. */
@@ -62,6 +64,7 @@ export function useMeasurementWorkbench({
   doc,
   modelingLocked,
   exactGeometryReady,
+  geometryPending = false,
   representations,
   renderedRepresentations,
   viewerBodies,
@@ -320,7 +323,7 @@ export function useMeasurementWorkbench({
     selection: TopologySelection,
     point?: { x: number; y: number; z: number }
   ): string | null {
-    if (!doc || !measuring || !measurementApi) {
+    if (!doc || !measuring || !measurementApi || geometryPending) {
       return null;
     }
     const body = renderedRepresentations[selection.bodyId];
@@ -402,6 +405,12 @@ export function useMeasurementWorkbench({
     // moment another command takes the pointer.
     if (!doc || !measuring) {
       return false;
+    }
+    if (geometryPending) {
+      setStatus(
+        'Measurements are unavailable while the model finishes updating.'
+      );
+      return true;
     }
     // One guard for the whole handler. Dropping a pick that lands before the
     // measurement chunk arrives is better than servicing half of it, and the

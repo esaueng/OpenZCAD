@@ -603,6 +603,7 @@ import type {
   SectionOutlineState,
   ViewportGeometry
 } from './lib/sectionOutline';
+import { sectionAxisRangeForBodies } from './lib/sectionAxisRange';
 
 /**
  * Space activates focused buttons and belongs in free-text fields. Numeric and
@@ -5741,6 +5742,7 @@ export function App() {
     doc,
     modelingLocked,
     exactGeometryReady,
+    geometryPending: currentGeometrySnapshot !== null,
     representations,
     renderedRepresentations,
     viewerBodies: completedViewerBodies,
@@ -7310,17 +7312,7 @@ export function App() {
   function sectionAxisRange(
     plane: SectionPlaneId
   ): { min: number; max: number } | null {
-    const axis = plane === 'XY' ? 'z' : plane === 'XZ' ? 'y' : 'x';
-    let min = Infinity;
-    let max = -Infinity;
-    for (const body of Object.values(doc?.derived.bodyRepresentations ?? {})) {
-      if (body.consumed) {
-        continue;
-      }
-      min = Math.min(min, body.bbox.min[axis]);
-      max = Math.max(max, body.bbox.max[axis]);
-    }
-    return min < max ? { min, max } : null;
+    return sectionAxisRangeForBodies(plane, viewerBodies);
   }
 
   /**
