@@ -1,6 +1,6 @@
 import { act, fireEvent, render, screen } from '@testing-library/react';
 import type { MutableRefObject } from 'react';
-import { describe, expect, it } from 'vitest';
+import { describe, expect, it, vi } from 'vitest';
 import { MoveInstruction } from './DirectModelingOverlays';
 import { MoveOverlay } from './MoveOverlay';
 
@@ -217,5 +217,158 @@ describe('Move overlay entry', () => {
 
     fireEvent.change(field, { target: { value: '0' } });
     expect(fireEvent.keyDown(field, { key: 'Enter' })).toBe(true);
+  });
+});
+
+// `|| 0` cleaned float noise but also read NaN as 0, so an invalid coordinate
+// showed as a plausible 0 and, since NaN !== 0, still enabled Apply.
+describe('Move overlay invalid values', () => {
+  it('shows a non-finite value as an empty field, never as 0', () => {
+    const consoleError = vi
+      .spyOn(console, 'error')
+      .mockImplementation(() => {});
+    try {
+      render(
+        <MoveOverlay
+          bodyName="Box"
+          values={{
+            translation: { x: NaN, y: Infinity, z: -Infinity },
+            rotationDeg: { x: NaN, y: 0, z: 0 }
+          }}
+          units="mm"
+          snap={null}
+          onChange={() => {}}
+          onConfirm={() => {}}
+          onCancel={() => {}}
+        />
+      );
+      for (const label of [
+        'Move X in mm',
+        'Move Y in mm',
+        'Move Z in mm',
+        'Rotate X in degrees'
+      ]) {
+        expect(screen.getByLabelText<HTMLInputElement>(label).value).toBe('');
+      }
+      expect(
+        screen.getByLabelText<HTMLInputElement>('Rotate Y in degrees').value
+      ).toBe('0');
+      expect(consoleError).not.toHaveBeenCalled();
+    } finally {
+      consoleError.mockRestore();
+    }
+  });
+
+  it.each([NaN, Infinity, -Infinity])(
+    'refuses Apply while a value is %s',
+    (invalid) => {
+      const onConfirm = vi.fn();
+      render(
+        <MoveOverlay
+          bodyName="Box"
+          values={{
+            translation: { x: 5, y: invalid, z: 0 },
+            rotationDeg: zero
+          }}
+          units="mm"
+          snap={null}
+          onChange={() => {}}
+          onConfirm={onConfirm}
+          onCancel={() => {}}
+        />
+      );
+      expect(screen.getByRole('button', { name: 'Apply move' })).toBeDisabled();
+      fireEvent.submit(screen.getByRole('form', { name: 'Move controls' }));
+      expect(onConfirm).not.toHaveBeenCalled();
+    }
+  );
+
+  it('lets a sketch move apply when only its hidden rotation is invalid', () => {
+    const onConfirm = vi.fn();
+    render(
+      <MoveOverlay
+        bodyName="Sketch 1"
+        values={{
+          translation: { x: 5, y: 0, z: 0 },
+          rotationDeg: { x: NaN, y: 0, z: 0 }
+        }}
+        units="mm"
+        snap={null}
+        onChange={() => {}}
+        onConfirm={onConfirm}
+        onCancel={() => {}}
+        hideRotation
+      />
+    );
+    const apply = screen.getByRole('button', { name: 'Apply move' });
+    expect(apply).toBeEnabled();
+    fireEvent.click(apply);
+    expect(onConfirm).toHaveBeenCalledOnce();
+  });
+
+  it('blanks a live NaN and restores Apply once the value is finite', () => {
+    const liveValuesRef: LiveValues = { current: null };
+    render(
+      <MoveOverlay
+        bodyName="Box"
+        values={{ translation: zero, rotationDeg: zero }}
+        units="mm"
+        snap={null}
+        onChange={() => {}}
+        onConfirm={() => {}}
+        onCancel={() => {}}
+        liveValuesRef={liveValuesRef}
+      />
+    );
+    const apply = screen.getByRole('button', { name: 'Apply move' });
+    act(() => {
+      liveValuesRef.current?.(
+        { x: 5, y: 0, z: 0 },
+        { x: 0, y: 0, z: NaN },
+        { move: 5, rotate: 15 }
+      );
+    });
+    expect(screen.getByLabelText<HTMLInputElement>('Move X in mm').value).toBe(
+      '5'
+    );
+    expect(
+      screen.getByLabelText<HTMLInputElement>('Rotate Z in degrees').value
+    ).toBe('');
+    expect(apply).toBeDisabled();
+
+    act(() => {
+      liveValuesRef.current?.({ x: 5, y: 0, z: 0 }, zero, {
+        move: 5,
+        rotate: 15
+      });
+    });
+    expect(
+      screen.getByLabelText<HTMLInputElement>('Rotate Z in degrees').value
+    ).toBe('0');
+    expect(apply).toBeEnabled();
+  });
+
+  it('still rounds sub-precision noise to 0', () => {
+    render(
+      <MoveOverlay
+        bodyName="Box"
+        values={{
+          translation: { x: -0, y: -1e-10, z: 0 },
+          rotationDeg: { x: -0, y: 0, z: 0 }
+        }}
+        units="mm"
+        snap={null}
+        onChange={() => {}}
+        onConfirm={() => {}}
+        onCancel={() => {}}
+      />
+    );
+    for (const label of [
+      'Move X in mm',
+      'Move Y in mm',
+      'Rotate X in degrees'
+    ]) {
+      expect(screen.getByLabelText<HTMLInputElement>(label).value).toBe('0');
+    }
   });
 });

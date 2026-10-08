@@ -1,5 +1,17 @@
 import type { MovePreview } from '@openzcad/viewport';
 
+/** Sketch moves consume translation only; body moves also consume rotation. */
+export function moveHasFiniteValues(
+  preview: Pick<MovePreview, 'translation' | 'rotationDeg' | 'target'>
+): boolean {
+  return (['x', 'y', 'z'] as const).every(
+    (axis) =>
+      Number.isFinite(preview.translation[axis]) &&
+      (preview.target === 'sketch' ||
+        Number.isFinite(preview.rotationDeg[axis]))
+  );
+}
+
 /**
  * True when the open Move card holds values nobody applied: any translation
  * or rotation away from zero. Opening a different tool over it asks first
