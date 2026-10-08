@@ -1,10 +1,12 @@
 import { describe, expect, it } from 'vitest';
 import {
   MAX_CHECKPOINT_REASON_LENGTH,
+  MAX_PROJECT_CHECKPOINTS,
   isRevisionRecord,
   type BodyId,
   type SketchId
 } from '@openzcad/shared';
+import { parseSaveProjectDocumentRequest } from '../apps/web/worker/validation';
 import {
   addPrimitiveFeature,
   addSketchConstraint,
@@ -164,6 +166,55 @@ describe('document-core', () => {
     expect(saved.version).toBe(document.version);
     expect(saved.checkpoints).toHaveLength(2);
     expect(saved.checkpoints.at(-1)?.reason).toBe('Manual save');
+  });
+
+  it('retains the newest checkpoints within the account save contract', () => {
+    let document = createProjectDocument('Many saves', user());
+    for (let index = 0; index < MAX_PROJECT_CHECKPOINTS + 5; index += 1) {
+      document = createCheckpoint(document, `Save ${index}`);
+      expect(() =>
+        parseSaveProjectDocumentRequest(
+          {
+            projectId: document.projectId,
+            expectedVersion: document.version,
+            document
+          },
+          document.projectId
+        )
+      ).not.toThrow();
+    }
+    expect(document.checkpoints).toHaveLength(MAX_PROJECT_CHECKPOINTS);
+    expect(document.checkpoints[0]?.reason).toBe('Save 5');
+    expect(document.checkpoints.at(-1)?.reason).toBe(
+      `Save ${MAX_PROJECT_CHECKPOINTS + 4}`
+    );
+    expect(normalizeDocument(document).checkpoints).toEqual(
+      document.checkpoints
+    );
+  });
+
+  it('bounds restore checkpoint names before persistence and deduplication', () => {
+    const document = createProjectDocument('Long save name', user());
+    const reason = `Restored “${'x'.repeat(MAX_CHECKPOINT_REASON_LENGTH)}”`;
+    const saved = createCheckpoint(document, `  ${reason}  `);
+    expect(saved.checkpoints.at(-1)?.reason).toBe(
+      `${reason.slice(0, MAX_CHECKPOINT_REASON_LENGTH - 1)}…`
+    );
+    expect(normalizeDocument(saved).checkpoints).toEqual(saved.checkpoints);
+    expect(createCheckpoint(saved, reason)).toBe(saved);
+    expect(() =>
+      parseSaveProjectDocumentRequest(
+        {
+          projectId: saved.projectId,
+          expectedVersion: saved.version,
+          document: saved
+        },
+        saved.projectId
+      )
+    ).not.toThrow();
+    expect(createCheckpoint(document, '   ').checkpoints.at(-1)?.reason).toBe(
+      'Saved'
+    );
   });
 
   it('saves a document that has no revision by minting one first', () => {

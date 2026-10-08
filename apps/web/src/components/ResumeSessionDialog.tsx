@@ -21,6 +21,7 @@ export function ResumeSessionDialog({
         role="dialog"
         aria-modal="true"
         aria-labelledby="resume-session-title"
+        tabIndex={-1}
         onKeyDown={(event) => {
           if (event.key === 'Escape') {
             event.stopPropagation();
@@ -38,7 +39,11 @@ export function ResumeSessionDialog({
         </p>
         {alsoOpen && <p>This project is also open in another session.</p>}
         <div className="save-revision-actions">
-          <button type="button" onClick={() => onChoose(false)}>
+          <button
+            type="button"
+            className="secondary"
+            onClick={() => onChoose(false)}
+          >
             Open with default view
           </button>
           <button

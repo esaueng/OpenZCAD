@@ -1,4 +1,7 @@
-import { SETTINGS_SECTIONS, type SettingsSectionId } from './settingsSections';
+import {
+  SETTINGS_SECTION_IDS,
+  type SettingsSectionId
+} from './settingsSectionIds';
 
 /**
  * Device-local navigation state for the Settings overlay.
@@ -22,9 +25,7 @@ const DEFAULT_SETTINGS_VIEW_STATE: SettingsViewState = {
   scrollTop: 0
 };
 
-const SETTINGS_SECTION_IDS = new Set<SettingsSectionId>(
-  SETTINGS_SECTIONS.map((section) => section.id)
-);
+const KNOWN_SECTION_IDS = new Set<string>(SETTINGS_SECTION_IDS);
 
 function copyDefaults(): SettingsViewState {
   return { ...DEFAULT_SETTINGS_VIEW_STATE };
@@ -41,7 +42,7 @@ export function normalizeSettingsViewState(value: unknown): SettingsViewState {
   }
   if (
     typeof root.activeSection === 'string' &&
-    SETTINGS_SECTION_IDS.has(root.activeSection as SettingsSectionId)
+    KNOWN_SECTION_IDS.has(root.activeSection)
   ) {
     state.activeSection = root.activeSection as SettingsSectionId;
   }

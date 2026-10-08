@@ -1,5 +1,6 @@
 import { useMemo } from 'react';
 import {
+  isFeatureManuallySuppressed,
   isFeatureRollbackSuppressed,
   isFeatureSuppressed,
   type ProjectDocument,
@@ -58,7 +59,12 @@ export function FeatureHistoryPanel({
       >
         {feature.name}
       </button>
-      {isFeatureSuppressed(feature) && <span> (inactive)</span>}
+      {/* The row's own words for the same two states. */}
+      {isFeatureSuppressed(feature) && (
+        <span>
+          {isFeatureManuallySuppressed(feature) ? ' (suppressed)' : ' (paused)'}
+        </span>
+      )}
     </li>
   );
   // The row already names the feature, and an ordinary one that is in the
@@ -92,11 +98,19 @@ export function FeatureHistoryPanel({
             the edit.
           </p>
           {culprit && (
-            <button type="button" onClick={() => onSelect(culprit.id)}>
+            <button
+              type="button"
+              className="secondary"
+              onClick={() => onSelect(culprit.id)}
+            >
               Edit {culprit.name}
             </button>
           )}
-          <button type="button" onClick={onDismissFailure}>
+          <button
+            type="button"
+            className="secondary"
+            onClick={onDismissFailure}
+          >
             Dismiss failure
           </button>
         </div>
@@ -114,8 +128,9 @@ export function FeatureHistoryPanel({
           {showsUses && (
             <details open>
               <summary>
-                Uses {parents.length} earlier{' '}
-                {parents.length === 1 ? 'feature' : 'features'}
+                {parents.length === 0
+                  ? 'Uses missing inputs'
+                  : `Uses ${parents.length} earlier ${parents.length === 1 ? 'feature' : 'features'}`}
               </summary>
               {parents.length ? (
                 <ul>{parents.map(link)}</ul>

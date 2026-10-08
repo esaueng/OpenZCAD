@@ -45,6 +45,7 @@ import {
 } from 'react';
 import { ExportDialogBoundary } from './components/ExportDialogBoundary';
 import {
+  Box,
   Camera,
   Check,
   Combine,
@@ -154,6 +155,7 @@ import {
   BODY_OPACITY_METADATA_KEY,
   compareProjectSummaries,
   DEFAULT_PROJECT_ORGANIZATION,
+  displayLengthName,
   duplicateProjectName,
   FEATURE_ROLLBACK_SUPPRESSED_METADATA_KEY,
   FEATURE_SUPPRESSED_METADATA_KEY,
@@ -373,7 +375,7 @@ function exportProgressFor(state: GeometryWorkerState): ExportProgress | null {
   }
 }
 
-/** Per-format file identity for exports from the Export Mesh dialog. */
+/** Per-format file identity for exports from the Export mesh dialog. */
 const MESH_EXPORT_FILE_INFO: Record<
   MeshExportDialogFormat,
   {
@@ -429,7 +431,6 @@ const MESH_EXPORT_FILE_INFO: Record<
 };
 import {
   MoveInstruction,
-  MoveOverlay,
   ProfileQuickAction
 } from './components/DirectModelingOverlays';
 import { composeMoveTransform } from '@openzcad/viewport/move-transform';
@@ -480,6 +481,7 @@ import {
   IDLE,
   composingTextDraft,
   escapeTarget,
+  sketchPickArmed,
   sketchToolKeysSuspended,
   interactionReducer,
   commandSessionFor,
@@ -565,6 +567,7 @@ import {
 } from './lib/resolvedExtrudePreview';
 import {
   ExtrudeForm,
+  distanceKeypadText,
   type ExtrudeFormValue
 } from './components/forms/ExtrudeForm';
 import {
@@ -698,6 +701,24 @@ const LazyViewModeBar = lazyWithStaleChunkNotice(() =>
     default: module.ViewModeBar
   }))
 );
+// The Move panel is needed only once a Move starts; lazy, its fields stay
+// off the entry chunk, which runs at its budget. Its own boundary keeps a
+// chunk that fails to load (a tab left open across a deploy) to the panel
+// slot, with the Reload notice, instead of taking the workspace down.
+const LazyMoveOverlay = lazyWithStaleChunkNotice(() =>
+  import('./components/MoveOverlay').then((module) => ({
+    default: module.MoveOverlay
+  }))
+);
+function MoveOverlay(props: ComponentProps<typeof LazyMoveOverlay>) {
+  return (
+    <ErrorBoundary label="Move panel">
+      <Suspense fallback={null}>
+        <LazyMoveOverlay {...props} />
+      </Suspense>
+    </ErrorBoundary>
+  );
+}
 const LazyMeasurementDock = lazyWithStaleChunkNotice(() =>
   import('./components/MeasurementDock').then((module) => ({
     default: module.MeasurementDock
@@ -1161,7 +1182,8 @@ import {
   mergeProjectSummaries,
   resolveShelfThumbnail
 } from './lib/projectShelf';
-import { sharedThumbnailCapture } from './lib/projectThumbnailCapture';
+import { sharedThumbnailCapture } from './lib/sharedThumbnailCapture';
+import { useThumbnailCaptureActivity } from './hooks/useThumbnailCaptureActivity';
 import { LivePreview } from './lib/livePreview';
 import { PreviewRebuilds, predictedPreviewMs } from './lib/previewRebuilds';
 import {
@@ -1853,7 +1875,7 @@ export function App() {
     pendingInvitationToken
       ? 'Sign in to open the shared project automatically.'
       : desktopAuthorizationAttempt
-        ? 'Sign in, then approve OpenZCAD for macOS.'
+        ? 'Sign in if needed, then approve OpenZCAD for macOS.'
         : // Settings' own footer says where changes save; the header is
           // for news (an error, a sign-in step), not a second copy of it.
           ''
@@ -2421,6 +2443,18 @@ export function App() {
   // `idle` render it was constructed during.
   const interactionRef = useRef(interaction);
   interactionRef.current = interaction;
+  // An armed relation's or modify tool's instruction retires once the tool
+  // is put down, and the live hint takes the bar back. A message set with
+  // the disarm itself ("constraint added") is younger than the settle time
+  // and stays.
+  const sketchPicking = sketchPickArmed(interaction);
+  const sketchPickingRef = useRef(sketchPicking);
+  useEffect(() => {
+    if (sketchPickingRef.current && !sketchPicking) {
+      retireStatusMessage();
+    }
+    sketchPickingRef.current = sketchPicking;
+  }, [sketchPicking, retireStatusMessage]);
   // A sketch or a drag takes the stage: the drawer and the "More tools" fold
   // step aside for it and return when it ends, the preference untouched.
   // The viewer reports the gesture's pointer, which outlasts a refused
@@ -2722,6 +2756,10 @@ export function App() {
       setStatus(message);
     }
   });
+  useThumbnailCaptureActivity(
+    sharedThumbnailCapture,
+    geometryBusy || Boolean(doc && geometry.state.phase !== 'ready')
+  );
   const parameterDraftActive =
     parameterCandidate !== null &&
     parameterCandidate.base.projectId === doc?.projectId &&
@@ -5528,7 +5566,8 @@ export function App() {
     if (!doc || tool === 'sketch') {
       return null;
     }
-    const units = doc.units;
+    // `in`, not the `inch` enum, as the dock and the Inspector print it.
+    const units = displayLengthName(doc.units);
     const round = (value: number) => Math.round(value * 100) / 100;
     if (selectedEdges.length > 1) {
       let sampled = false;
@@ -8500,8 +8539,8 @@ export function App() {
       // would overflow the status line with the very names that failed.
       setStatus(
         failed === 0
-          ? `Saved ${countLabel(saved, 'project', 'projects')} to your account.`
-          : `Saved ${countLabel(saved, 'project', 'projects')} · ${failed} could not be saved. See the list above for why.`
+          ? `Saved ${countLabel(saved, 'part', 'parts')} to your account.`
+          : `Saved ${countLabel(saved, 'part', 'parts')} · ${failed} could not be saved.`
       );
     } finally {
       setBusy(false);
@@ -15297,7 +15336,9 @@ export function App() {
   function handleOpenOffsetKeypad(
     currentOffset: number,
     totalBaseline?: number,
-    totalSense: 1 | -1 = 1
+    totalSense: 1 | -1 = 1,
+    /** A form's own text for the value; a drag has none and is rounded. */
+    initialText?: string
   ): boolean {
     if (
       interaction.mode !== 'region' &&
@@ -15315,13 +15356,14 @@ export function App() {
             : 'Offset'
           : 'Total',
       initial:
-        totalBaseline !== undefined || currentOffset !== 0
+        initialText ??
+        (totalBaseline !== undefined || currentOffset !== 0
           ? String(
               Math.round(
                 ((totalBaseline ?? 0) + totalSense * currentOffset) * 100
               ) / 100
             )
-          : '',
+          : ''),
       unitKind: 'length',
       ...(totalBaseline === undefined ? {} : { totalBaseline, totalSense })
     });
@@ -16495,7 +16537,7 @@ export function App() {
         {
           item: {
             id: 'fit',
-            label: 'Fit View',
+            label: 'Fit view',
             icon: <Maximize2 size={13} aria-hidden="true" />,
             shortcut: 'F'
           },
@@ -16504,7 +16546,7 @@ export function App() {
         {
           item: {
             id: 'grid',
-            label: viewerSettings.showGrid ? 'Hide Grid' : 'Show Grid',
+            label: viewerSettings.showGrid ? 'Hide grid' : 'Show grid',
             icon: <Grid3x3 size={13} aria-hidden="true" />,
             shortcut: 'G'
           },
@@ -16517,7 +16559,9 @@ export function App() {
         {
           item: {
             id: 'projection',
-            label: `Projection: ${projection === 'perspective' ? 'Orthographic' : 'Perspective'}`,
+            // An action, so it names where it goes; "Projection: Orthographic"
+            // read as the current state.
+            label: `Switch to ${projection === 'perspective' ? 'orthographic' : 'perspective'}`,
             icon: <Camera size={13} aria-hidden="true" />,
             shortcut: 'P'
           },
@@ -16526,7 +16570,7 @@ export function App() {
         {
           item: {
             id: 'showAll',
-            label: 'Show All Bodies',
+            label: 'Show all bodies',
             icon: <Eye size={13} aria-hidden="true" />,
             disabled: hiddenBodyIds.size === 0
           },
@@ -16593,7 +16637,7 @@ export function App() {
               {
                 item: {
                   id: 'fillet',
-                  label: 'Fillet Edge…',
+                  label: 'Fillet edge…',
                   icon: <Spline size={13} aria-hidden="true" />
                 },
                 run: runCurrent((handlers) => handlers.launchTool('fillet'))
@@ -16601,7 +16645,7 @@ export function App() {
               {
                 item: {
                   id: 'chamfer',
-                  label: 'Chamfer Edge…',
+                  label: 'Chamfer edge…',
                   icon: <TriangleRight size={13} aria-hidden="true" />
                 },
                 run: runCurrent((handlers) => handlers.launchTool('chamfer'))
@@ -16641,7 +16685,7 @@ export function App() {
         {
           item: {
             id: 'hide',
-            label: 'Hide Body',
+            label: 'Hide body',
             icon: <Eye size={13} aria-hidden="true" />,
             section: true
           },
@@ -16652,7 +16696,7 @@ export function App() {
         {
           item: {
             id: 'fit',
-            label: 'Fit View',
+            label: 'Fit view',
             icon: <Maximize2 size={13} aria-hidden="true" />,
             shortcut: 'F'
           },
@@ -16786,9 +16830,9 @@ export function App() {
     const repair = staleDirectEditFaceRepair(feature, warnings);
     const sketchId =
       feature.data.featureKind === 'sketch' ? feature.data.sketchId : null;
-    openContextMenu(at.clientX, at.clientY, [
+    const entries: Parameters<typeof openContextMenu>[2] = [
       {
-        item: { id: 'edit', label: 'Edit Properties' },
+        item: { id: 'edit', label: 'Edit properties' },
         run: () => handleSelectFeatureFromTree(feature.id)
       },
       ...(repair
@@ -16796,7 +16840,7 @@ export function App() {
             {
               item: {
                 id: 'repair-face',
-                label: 'Re-pick Face…',
+                label: 'Re-pick face…',
                 icon: <Crosshair size={13} aria-hidden="true" />
               },
               run: () => armFaceRepair(repair)
@@ -16808,7 +16852,7 @@ export function App() {
             {
               item: {
                 id: 'visibility',
-                label: hiddenBodyIds.has(bodyId) ? 'Show Body' : 'Hide Body',
+                label: hiddenBodyIds.has(bodyId) ? 'Show body' : 'Hide body',
                 icon: <Eye size={13} aria-hidden="true" />
               },
               run: () => toggleBodyVisibility(bodyId)
@@ -16823,8 +16867,8 @@ export function App() {
               item: {
                 id: 'sketch-visibility',
                 label: hiddenSketchIds.has(sketchId)
-                  ? 'Show Sketch'
-                  : 'Hide Sketch',
+                  ? 'Show sketch'
+                  : 'Hide sketch',
                 icon: <Eye size={13} aria-hidden="true" />
               },
               run: () => toggleSketchVisibility(sketchId)
@@ -16842,7 +16886,9 @@ export function App() {
         },
         run: () => handleDeleteFeature(feature.featureId, feature.name)
       }
-    ]);
+    ];
+    // The heading names the feature these actions touch, and names the menu.
+    openContextMenu(at.clientX, at.clientY, entries, feature.name);
   }
 
   // `previewDoc` renders geometry from a proposal nobody has applied, and only
@@ -17168,7 +17214,7 @@ export function App() {
             if (measurementDraft) {
               clearMeasurementPicks();
               setStatus(
-                `${measurementMode} measurement canceled · pick the first target.`
+                `${measurementMode === 'angle' ? 'Angle' : 'Distance'} measurement canceled · pick the first target.`
               );
             } else {
               toggleMeasure(false);
@@ -17413,6 +17459,7 @@ export function App() {
         desktopAuthorizationAttempt={desktopAuthorizationAttempt}
         desktopAuthorizationApproved={desktopAuthorizationApproved}
         desktopAuthorizationCode={desktopAuthorizationCode}
+        workspaceOpen={doc !== null}
         onDesktopAuthorizationCodeChange={setDesktopAuthorizationCode}
         onChange={handleAppSettingsChange}
         onCloudFunctionsEnabledChange={handleCloudFunctionsEnabledChange}
@@ -17569,7 +17616,7 @@ export function App() {
             ? 'Smart measure · pick an edge, face, hole, or body.'
             : mode === 'distance'
               ? 'Distance · pick the first target.'
-              : 'Angle · pick the first straight edge or measured face direction.'
+              : 'Angle · pick the first straight edge, circular axis or planar face.'
         );
       }}
       onUnit={setMeasurementUnit}
@@ -17614,7 +17661,7 @@ export function App() {
       onClear={() => {
         if (
           appSettings.general.confirmDestructiveActions &&
-          !window.confirm('Clear every measurement in this View session?')
+          !window.confirm('Clear every measurement in this project?')
         ) {
           return;
         }
@@ -17649,6 +17696,26 @@ export function App() {
     }));
     if (hidden) panels.release('drawer');
   };
+  // Ctrl+Shift+M steps View → Tweak → Build past whatever the project locks,
+  // so only the row it would land on carries it as its shortcut.
+  const modeCycle: readonly WorkspaceMode[] = ['view', 'tweak', 'build'];
+  const modeShortcutTarget = [1, 2]
+    .map(
+      (step) =>
+        modeCycle[
+          (modeCycle.indexOf(resolvedWorkspaceMode) + step) % modeCycle.length
+        ]!
+    )
+    .find(
+      (mode) =>
+        (mode === 'build'
+          ? buildModeDisabledReason
+          : mode === 'tweak'
+            ? tweakModeDisabledReason
+            : null) === null
+    );
+  const modeShortcut = (mode: WorkspaceMode) =>
+    mode === modeShortcutTarget ? 'Ctrl+Shift+M' : undefined;
   const paletteCommands: PaletteCommand[] = [
     // Modeling tools leave the palette entirely in the reading workspaces
     // rather than appearing greyed out: a list of things you cannot do is
@@ -17829,8 +17896,10 @@ export function App() {
     },
     {
       id: 'file-save-named',
-      label: 'Save revision with a name…',
+      // As the File menu names it; "name" still finds it.
+      label: 'Save revision as…',
       group: 'File',
+      keywords: ['name', 'named'],
       shortcut: 'Ctrl+Shift+S',
       icon: <Save size={16} aria-hidden="true" />,
       run: openSaveNameDialog
@@ -17847,7 +17916,7 @@ export function App() {
     },
     {
       id: 'file-import-project',
-      label: 'Import project',
+      label: 'Import project…',
       group: 'File',
       icon: <Upload size={16} aria-hidden="true" />,
       disabledReason: projectTransferBusy
@@ -17884,7 +17953,7 @@ export function App() {
       // palette said "3MF / STL" after OBJ and glTF had shipped.
       label: 'Export mesh…',
       group: 'File',
-      keywords: ['3mf', 'stl', 'obj', 'gltf', 'mesh'],
+      keywords: ['3mf', 'stl', 'obj', 'gltf', 'ply', 'mesh'],
       icon: <Download size={16} aria-hidden="true" />,
       disabledReason: exportBodyIds.length === 0 ? 'Create a body first' : null,
       run: () => setMeshExportOpen(true)
@@ -17912,7 +17981,7 @@ export function App() {
             id: 'workspace-mode-view',
             label: 'Switch to View mode',
             group: 'General',
-            shortcut: 'Ctrl+Shift+M',
+            shortcut: modeShortcut('view'),
             icon: <Eye size={16} aria-hidden="true" />,
             run: () => handleWorkspaceMode('view')
           } satisfies PaletteCommand
@@ -17924,7 +17993,7 @@ export function App() {
             id: 'workspace-mode-tweak',
             label: 'Switch to Tweak mode',
             group: 'General',
-            shortcut: 'Ctrl+Shift+M',
+            shortcut: modeShortcut('tweak'),
             icon: <SlidersHorizontal size={16} aria-hidden="true" />,
             disabledReason: tweakModeDisabledReason,
             run: () => handleWorkspaceMode('tweak')
@@ -17937,8 +18006,8 @@ export function App() {
             id: 'workspace-mode-build',
             label: 'Switch to Build mode',
             group: 'General',
-            shortcut: 'Ctrl+Shift+M',
-            icon: <PenLine size={16} aria-hidden="true" />,
+            shortcut: modeShortcut('build'),
+            icon: <Box size={16} aria-hidden="true" />,
             disabledReason: buildModeDisabledReason,
             run: () => handleWorkspaceMode('build')
           } satisfies PaletteCommand
@@ -18042,7 +18111,7 @@ export function App() {
         ? `Smart measure · pick geometry · Shift+Click totals edges · ${modelingLocked ? 'M' : 'Esc'} exits`
         : measurementMode === 'distance'
           ? 'Distance · pick the first target · centers resolve automatically'
-          : 'Angle · pick a straight edge or measured face direction'
+          : 'Angle · pick a straight edge, circular axis or planar face'
     : selectedTopology?.kind === 'face'
       ? 'Face selected — Space faces it head-on'
       : viewerBodies.length > 0
@@ -18458,6 +18527,11 @@ export function App() {
   const sketchOverviewPlane =
     editingSketchNode?.planeRef ??
     (interaction.mode === 'sketch' ? interaction.session.plane : null);
+  // The palette names an offset plane as the status line does, not bare.
+  const sketchOverviewOffset =
+    sketchOverviewPlane?.type === 'canonical'
+      ? evalParamValue(sketchOverviewPlane.offset, parameterScope.scope)
+      : null;
   // The selected entity's editor rides in the sketch card, under the tools:
   // the card changes with the pick, and the right side stays the relations'.
   const sketchTextDraft = composingTextDraft(interaction);
@@ -18539,16 +18613,12 @@ export function App() {
           <SketchWorkflow
             plane={
               sketchOverviewPlane?.type === 'canonical'
-                ? `${sketchOverviewPlane.plane} plane`
+                ? `${sketchOverviewPlane.plane} plane${sketchOverviewOffset ? ` offset ${formatNumber(sketchOverviewOffset)} ${doc.units}` : ''}`
                 : sketchOverviewPlane?.type === 'face'
                   ? 'Attached face'
                   : 'Sketch plane'
             }
-            tool={
-              interaction.session.pendingConstraint
-                ? `${constraintToolSpec(interaction.session.pendingConstraint.kind).label}: ${interaction.session.pendingConstraint.picks.length}/${constraintToolSpec(interaction.session.pendingConstraint.kind).picks} selected`
-                : interaction.session.tool
-            }
+            tool={interaction.session}
             objects={sketchOverview.objects}
             selectedId={interaction.session.selectedObjectId}
             analysis={sketchOverview.analysis}
@@ -18759,7 +18829,7 @@ export function App() {
         }}
       >
         <Check size={16} aria-hidden="true" />
-        <span className="workspace-column-finish-label">Finish sketch</span>
+        <span className="workspace-column-finish-label">Finish Sketch</span>
       </button>
     ) : null;
   // Direct-mode strips (plane picking, direct extrude) keep floating over
@@ -19540,7 +19610,10 @@ export function App() {
                     }}
                     onDistance={(value) =>
                       handleOpenOffsetKeypad(
-                        resolveParamValue(value, parameterScope.scope)
+                        resolveParamValue(value, parameterScope.scope),
+                        undefined,
+                        1,
+                        distanceKeypadText(value)
                       )
                     }
                   />

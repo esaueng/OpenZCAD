@@ -64,6 +64,16 @@ function previewFamily(familyId: string): string {
 }
 
 /**
+ * The inline `font-family` that previews a family, falling back to the UI
+ * face while its bytes load. A fallback of `inherit` is a CSS-wide keyword,
+ * which is invalid inside a family list, so the whole declaration was
+ * dropped and no option ever previewed its face.
+ */
+export function previewFontFamily(familyId: string): string {
+  return `"${previewFamily(familyId)}", var(--font-ui)`;
+}
+
+/**
  * `@font-face` rules so each option in the picker renders in the face it
  * selects. Generated from the same registry the geometry reads, against the
  * same `/fonts/` URLs, so the preview cannot drift from what gets extruded.
@@ -90,6 +100,23 @@ function usePreviewFontFaces(): void {
     style.textContent = previewFontFaceCss();
     document.head.append(style);
   }, []);
+}
+
+/**
+ * The alignment an arrow key moves to from `index`, wrapping round, as a
+ * radio group does; Home and End go to the ends. Null for any other key.
+ */
+function alignmentKeyStep(key: string, index: number): number | null {
+  const count = ALIGNMENTS.length;
+  if (key === 'Home') return 0;
+  if (key === 'End') return count - 1;
+  const step =
+    key === 'ArrowRight' || key === 'ArrowDown'
+      ? 1
+      : key === 'ArrowLeft' || key === 'ArrowUp'
+        ? -1
+        : 0;
+  return step === 0 ? null : (index + step + count) % count;
 }
 
 /** `regular | bold | italic | boldItalic` from two independent toggles. */
@@ -159,9 +186,7 @@ export function TextObjectFields({
         <span>Font</span>
         <select
           value={value.fontFamily}
-          style={{
-            fontFamily: `"${previewFamily(value.fontFamily)}", inherit`
-          }}
+          style={{ fontFamily: previewFontFamily(value.fontFamily) }}
           onChange={(event) =>
             onChange({ ...value, fontFamily: event.target.value })
           }
@@ -170,7 +195,7 @@ export function TextObjectFields({
             <option
               key={family.id}
               value={family.id}
-              style={{ fontFamily: `"${previewFamily(family.id)}", inherit` }}
+              style={{ fontFamily: previewFontFamily(family.id) }}
             >
               {family.family}
             </option>
@@ -188,17 +213,21 @@ export function TextObjectFields({
             type="button"
             className={bold ? 'toggle active' : 'toggle'}
             aria-pressed={bold}
+            aria-label="Bold"
+            title="Bold"
             onClick={() => setStyle(!bold, italic)}
           >
-            <strong>B</strong>
+            <strong aria-hidden="true">B</strong>
           </button>
           <button
             type="button"
             className={italic ? 'toggle active' : 'toggle'}
             aria-pressed={italic}
+            aria-label="Italic"
+            title="Italic"
             onClick={() => setStyle(bold, !italic)}
           >
-            <em>I</em>
+            <em aria-hidden="true">I</em>
           </button>
         </div>
       </div>
@@ -209,7 +238,7 @@ export function TextObjectFields({
           role="radiogroup"
           aria-label="Alignment"
         >
-          {ALIGNMENTS.map(({ value: align, label, icon: Icon }) => {
+          {ALIGNMENTS.map(({ value: align, label, icon: Icon }, index) => {
             const checked = (value.align ?? 'left') === align;
             return (
               <button
@@ -219,8 +248,21 @@ export function TextObjectFields({
                 aria-checked={checked}
                 aria-label={label}
                 title={label}
+                // One tab stop for the group; the arrow keys move the choice.
+                tabIndex={checked ? 0 : -1}
                 className={checked ? 'toggle active' : 'toggle'}
                 onClick={() => onChange({ ...value, align })}
+                onKeyDown={(event) => {
+                  const next = alignmentKeyStep(event.key, index);
+                  if (next === null) {
+                    return;
+                  }
+                  event.preventDefault();
+                  onChange({ ...value, align: ALIGNMENTS[next]!.value });
+                  event.currentTarget.parentElement
+                    ?.querySelectorAll<HTMLElement>('[role="radio"]')
+                    [next]?.focus();
+                }}
               >
                 <Icon size={14} aria-hidden="true" />
               </button>

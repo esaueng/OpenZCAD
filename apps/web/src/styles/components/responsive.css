@@ -91,19 +91,28 @@
   }
 }
 
-@media (max-width: 620px) {
-  .topbar {
-    gap: var(--sp-1);
-    padding-inline: 6px;
-  }
-
+/* The top bar's flanks are equal (quiet-stage.css), so the identity island
+   has under half the window: below about 860px the full "OpenZCAD BETA"
+   kept its width and the project name was squeezed to nothing. The brand
+   is its mark alone from there; the button is still named OpenZCAD. */
+@media (max-width: 860px) {
   .brand {
     flex: 0 0 auto;
     gap: 0;
     font-size: 0;
   }
 
-  .brand .beta-tag,
+  .brand .beta-tag {
+    display: none;
+  }
+}
+
+@media (max-width: 620px) {
+  .topbar {
+    gap: var(--sp-1);
+    padding-inline: 6px;
+  }
+
   .topbar-divider,
   .breadcrumb .mono {
     display: none;

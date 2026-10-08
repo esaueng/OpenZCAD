@@ -299,7 +299,7 @@ test('a right-click waits for the Move answer and retains its requested menu', a
   // The original right-click opens its menu without requiring another click.
   await expect(menu).toBeVisible();
   await expect(menu.locator('.context-menu-heading')).toHaveText(target);
-  await expect(menu.getByRole('menuitem', { name: 'Hide Body' })).toBeVisible();
+  await expect(menu.getByRole('menuitem', { name: 'Hide body' })).toBeVisible();
   await expect(moveRows).toHaveCount(0);
   await page.keyboard.press('Escape');
 
@@ -381,7 +381,7 @@ test('a deferred edge menu opens Fillet after Discard without asking about the o
   await expect(moveRows).toHaveCount(0);
 
   await menu
-    .getByRole('menuitem', { name: 'Fillet Edge…', exact: true })
+    .getByRole('menuitem', { name: 'Fillet edge…', exact: true })
     .click();
   await expect(inspector).toBeVisible();
   await expect(inspector.getByLabel('Radius', { exact: true })).toBeVisible();

@@ -21,8 +21,8 @@ import {
   Cpu,
   Database,
   Eye,
+  EyeOff,
   HardDrive,
-  KeyRound,
   Keyboard,
   LockKeyhole,
   LogIn,
@@ -50,25 +50,9 @@ import {
   type AuthSession,
   type HealthResponse
 } from '@openzcad/shared';
-
-/**
- * A typed number input still hands back NaN for an empty field, and the bounds
- * are the store's rather than a suggestion — a delay outside them is normalized
- * away on the way to the account, so it should never be reachable here.
- */
-function clampAutosaveDelay(seconds: number): number {
-  if (!Number.isFinite(seconds)) {
-    return CLOUD_AUTOSAVE_DELAY_BOUNDS.default;
-  }
-  return Math.round(
-    Math.min(
-      Math.max(seconds, CLOUD_AUTOSAVE_DELAY_BOUNDS.min),
-      CLOUD_AUTOSAVE_DELAY_BOUNDS.max
-    )
-  );
-}
 import { countLabel } from '../lib/toasts';
 import { api } from '../lib/api';
+import { APP_SETTINGS_NUMBER_BOUNDS } from '../lib/appSettings';
 import { isDesktopApp } from '../lib/desktopBridge';
 import {
   KERNEL_BUILD,
@@ -137,6 +121,11 @@ interface SettingsPageProps {
   desktopAuthorizationAttempt?: string | null;
   desktopAuthorizationApproved?: boolean;
   desktopAuthorizationCode?: string;
+  /**
+   * Whether a project's workspace sits behind Settings. From the start screen
+   * there is no view to apply defaults to and no workspace to go back to.
+   */
+  workspaceOpen?: boolean;
   onChange(settings: AppSettings): void;
   onCloudFunctionsEnabledChange(enabled: boolean): void;
   onSaveCredential(token: string): void;
@@ -228,6 +217,81 @@ function Toggle({
       />
       <span aria-hidden="true" />
     </label>
+  );
+}
+
+/**
+ * A number field that lets the user type through values it would refuse.
+ *
+ * Bound straight to the setting, a keystroke that passed through an
+ * out-of-range value (the "1" of "12" when the floor is 4, the "0" of "0.5")
+ * was put back at once, so some values could not be typed at all and others
+ * came out wrong. The field keeps its own text while focused, commits each
+ * in-range value as it is typed, and on blur pulls anything else to the
+ * nearest bound: the bounds storage normalizes to, so what the field shows is
+ * what is kept rather than a value later swapped for the default.
+ */
+function NumberSetting({
+  value,
+  min,
+  max,
+  step = 1,
+  integer = false,
+  unit = '',
+  label,
+  disabled = false,
+  onCommit
+}: {
+  value: number;
+  min: number;
+  max: number;
+  step?: number;
+  integer?: boolean;
+  unit?: string;
+  label: string;
+  disabled?: boolean;
+  onCommit(value: number): void;
+}) {
+  const [draft, setDraft] = useState<string | null>(null);
+  const settle = (typed: number) => (integer ? Math.round(typed) : typed);
+  // The step grid starts at `min` when there is one. A floor off that grid
+  // (0.001 with step 0.1, 1024 with step 1000) made the default itself a step
+  // mismatch and sent the arrow keys to 1.001, so it is left off then and the
+  // clamp alone holds the floor.
+  const minOnStepGrid = Math.abs(min / step - Math.round(min / step)) < 1e-9;
+  return (
+    <div className="settings-unit-input">
+      <input
+        className="settings-number"
+        type="number"
+        min={minOnStepGrid ? min : undefined}
+        max={max}
+        step={step}
+        disabled={disabled}
+        aria-label={label}
+        value={draft ?? String(value)}
+        onChange={(event) => {
+          const typed = event.currentTarget.valueAsNumber;
+          setDraft(event.currentTarget.value);
+          if (Number.isFinite(typed) && typed >= min && typed <= max) {
+            onCommit(settle(typed));
+          }
+        }}
+        onBlur={(event) => {
+          const typed = event.currentTarget.valueAsNumber;
+          setDraft(null);
+          if (!Number.isFinite(typed)) {
+            return;
+          }
+          const clamped = Math.min(max, Math.max(min, settle(typed)));
+          if (clamped !== value) {
+            onCommit(clamped);
+          }
+        }}
+      />
+      {/* Present even without a unit so every field's right edge lines up. */}
+      <span aria-hidden={unit ? undefined : true}>{unit}</span>
+    </div>
   );
 }
 
@@ -503,6 +567,7 @@ export function SettingsPage({
   desktopAuthorizationAttempt = null,
   desktopAuthorizationApproved = false,
   desktopAuthorizationCode = '',
+  workspaceOpen = true,
   onChange,
   onCloudFunctionsEnabledChange,
   onSaveCredential,
@@ -545,6 +610,9 @@ export function SettingsPage({
   const [deletionScope, setDeletionScope] =
     useState<AccountDeletionScope | null>(null);
   const contentRef = useRef<HTMLElement>(null);
+  const pageRef = useRef<HTMLDivElement>(null);
+  const brandRef = useRef<HTMLButtonElement>(null);
+  const navRef = useRef<HTMLElement>(null);
   const scrollTopRef = useRef(
     initialSection === undefined ? initialViewState.scrollTop : 0
   );
@@ -596,6 +664,26 @@ export function SettingsPage({
     window.addEventListener('keydown', onKeyDown);
     return () => window.removeEventListener('keydown', onKeyDown);
   }, [onClose]);
+
+  // The overlay's modal focus lands on the first control, the brand button,
+  // which closes Settings: a first Enter dismissed the page. Start on the open
+  // section instead. A passive effect runs after that hook has recorded the
+  // opener, so focus still returns there on close.
+  useEffect(() => {
+    const current = document.activeElement;
+    if (
+      current instanceof HTMLElement &&
+      current !== brandRef.current &&
+      pageRef.current?.contains(current)
+    ) {
+      return;
+    }
+    const nav = navRef.current;
+    (
+      nav?.querySelector<HTMLElement>('[aria-current="page"]') ??
+      nav?.querySelector<HTMLElement>('button')
+    )?.focus();
+  }, []);
 
   useLayoutEffect(() => {
     const content = contentRef.current;
@@ -673,14 +761,25 @@ export function SettingsPage({
   const credential = accountState?.credential;
   const effective = accountState?.effectiveAssistant;
   const credentialValidated = Boolean(credential?.lastValidatedAt);
+  // From the start screen there is no workspace behind Settings to go back to.
+  const backLabel = workspaceOpen ? 'Back to workspace' : 'Back to projects';
+  // A search with no match leaves nothing to show; the section that was open
+  // before it must not linger as if it matched.
+  const anyMatch = visibleSections.length > 0;
 
   return (
     <div
+      ref={pageRef}
       className={`settings-page density-${settings.appearance.density}`}
       data-reduced-motion={settings.appearance.reducedMotion ? 'true' : 'false'}
     >
       <header className="settings-topbar">
-        <button className="brand" type="button" onClick={onClose}>
+        <button
+          ref={brandRef}
+          className="brand"
+          type="button"
+          onClick={onClose}
+        >
           <BrandMark compact />
           OpenZCAD <span className="beta-tag">Beta</span>
         </button>
@@ -691,8 +790,8 @@ export function SettingsPage({
         <button
           className="settings-back-action"
           type="button"
-          aria-label="Back to workspace"
-          title="Back to workspace"
+          aria-label={backLabel}
+          title={backLabel}
           onClick={onClose}
         >
           <ChevronLeft size={14} aria-hidden="true" />
@@ -709,6 +808,15 @@ export function SettingsPage({
               placeholder="Find a setting"
               aria-label="Find a setting"
               onChange={(event) => changeQuery(event.target.value)}
+              onKeyDown={(event) => {
+                // Escape clears a search before it closes Settings, as it
+                // does in any search field; otherwise the filter outlived the
+                // close and greeted the next visit.
+                if (event.key === 'Escape' && query) {
+                  event.stopPropagation();
+                  changeQuery('');
+                }
+              }}
             />
           </label>
           {/* The narrow layout has no room for the field, so while a filter
@@ -726,7 +834,7 @@ export function SettingsPage({
               <SearchX size={16} aria-hidden="true" />
             </button>
           )}
-          <nav>
+          <nav ref={navRef}>
             {visibleSections.map((section) => (
               <button
                 key={section.id}
@@ -764,14 +872,17 @@ export function SettingsPage({
                   only `session` and so announced "Cloud profile connected"
                   while the header of the same screen said the profile was
                   unavailable — two claims about one thing, on screen together.
-                  Reachability decides first.
+                  Reachability decides first, and a session whose profile
+                  could not be loaded is not connected either.
                 */}
                 {!cloudFunctionsEnabled
                   ? 'Offline mode'
                   : authConfigStatus === 'unavailable'
                     ? 'Cloud unreachable'
                     : session
-                      ? 'Cloud profile connected'
+                      ? accountState
+                        ? 'Cloud profile connected'
+                        : 'Cloud profile unavailable'
                       : 'Device only'}
               </strong>
               <small>Local changes save immediately</small>
@@ -786,7 +897,13 @@ export function SettingsPage({
             scrollTopRef.current = event.currentTarget.scrollTop;
           }}
         >
-          {active === 'general' && (
+          {!anyMatch && (
+            <p className="settings-empty">
+              No settings match “{query.trim()}”. Clear the search to see every
+              section.
+            </p>
+          )}
+          {active === 'general' && anyMatch && (
             <Section
               title="General"
               intro="Choose how OpenZCAD starts and what a new project inherits. Existing document units are never reinterpreted."
@@ -862,7 +979,7 @@ export function SettingsPage({
             </Section>
           )}
 
-          {active === 'appearance' && (
+          {active === 'appearance' && anyMatch && (
             <Section
               title="Appearance & motion"
               intro="Keep the engineering workspace dense, readable, and predictable."
@@ -930,7 +1047,7 @@ export function SettingsPage({
             </Section>
           )}
 
-          {active === 'viewport' && (
+          {active === 'viewport' && anyMatch && (
             <Section
               title="Viewport"
               intro="Set defaults for new or previously unopened project views. Per-project camera state remains local."
@@ -979,7 +1096,7 @@ export function SettingsPage({
               >
                 <Toggle
                   checked={settings.viewport.zoomToCursor}
-                  label="Zoom to cursor"
+                  label="Zoom toward the pointer"
                   onChange={(zoomToCursor) =>
                     patch({
                       viewport: { ...settings.viewport, zoomToCursor }
@@ -1061,9 +1178,15 @@ export function SettingsPage({
                 </select>
               </SettingRow>
               <div className="settings-card-action">
+                {workspaceOpen ? null : (
+                  <small className="settings-card-action-note">
+                    Open a project to apply these defaults to its view.
+                  </small>
+                )}
                 <button
                   className="secondary"
                   type="button"
+                  disabled={!workspaceOpen}
                   onClick={onApplyViewportDefaults}
                 >
                   <Eye size={14} aria-hidden="true" />
@@ -1073,7 +1196,7 @@ export function SettingsPage({
             </Section>
           )}
 
-          {active === 'sketching' && (
+          {active === 'sketching' && anyMatch && (
             <Section
               title="Sketching & snapping"
               intro="Grid placement, geometry snapping, and temporary inferencing are independent. Stored dimensions remain exact document values."
@@ -1146,29 +1269,16 @@ export function SettingsPage({
                 description="Increment in the current document unit."
                 scope="This device"
               >
-                <input
-                  className="settings-number"
-                  type="number"
-                  min="0.001"
-                  max="10000"
-                  step="0.1"
+                <NumberSetting
+                  {...APP_SETTINGS_NUMBER_BOUNDS.linearSnap}
+                  step={0.1}
                   value={settings.sketching.linearSnap}
-                  aria-label="Linear snap increment"
-                  onChange={(event) => {
-                    const value = event.currentTarget.valueAsNumber;
-                    if (
-                      Number.isFinite(value) &&
-                      value >= 0.001 &&
-                      value <= 10_000
-                    ) {
-                      patch({
-                        sketching: {
-                          ...settings.sketching,
-                          linearSnap: value
-                        }
-                      });
-                    }
-                  }}
+                  label="Linear snap increment"
+                  onCommit={(linearSnap) =>
+                    patch({
+                      sketching: { ...settings.sketching, linearSnap }
+                    })
+                  }
                 />
               </SettingRow>
               <SettingRow
@@ -1176,58 +1286,34 @@ export function SettingsPage({
                 description="Screen-space radius around exact sketch candidates."
                 scope="This device"
               >
-                <div className="settings-unit-input">
-                  <input
-                    className="settings-number"
-                    type="number"
-                    min="4"
-                    max="24"
-                    step="1"
-                    value={settings.sketching.snapTolerancePx}
-                    aria-label="Sketch snap tolerance"
-                    onChange={(event) => {
-                      const value = event.currentTarget.valueAsNumber;
-                      if (Number.isFinite(value) && value >= 4 && value <= 24) {
-                        patch({
-                          sketching: {
-                            ...settings.sketching,
-                            snapTolerancePx: value
-                          }
-                        });
-                      }
-                    }}
-                  />
-                  <span>px</span>
-                </div>
+                <NumberSetting
+                  {...APP_SETTINGS_NUMBER_BOUNDS.snapTolerancePx}
+                  unit="px"
+                  value={settings.sketching.snapTolerancePx}
+                  label="Sketch snap tolerance"
+                  onCommit={(snapTolerancePx) =>
+                    patch({
+                      sketching: { ...settings.sketching, snapTolerancePx }
+                    })
+                  }
+                />
               </SettingRow>
               <SettingRow
                 title="Angular snap"
                 description="Reserved for rotate and future sketch constraint tools."
                 scope="Input default"
               >
-                <div className="settings-unit-input">
-                  <input
-                    className="settings-number"
-                    type="number"
-                    min="1"
-                    max="90"
-                    step="1"
-                    value={settings.sketching.angleSnap}
-                    aria-label="Angular snap increment"
-                    onChange={(event) => {
-                      const value = event.currentTarget.valueAsNumber;
-                      if (Number.isFinite(value)) {
-                        patch({
-                          sketching: {
-                            ...settings.sketching,
-                            angleSnap: value
-                          }
-                        });
-                      }
-                    }}
-                  />
-                  <span>°</span>
-                </div>
+                <NumberSetting
+                  {...APP_SETTINGS_NUMBER_BOUNDS.angleSnap}
+                  unit="°"
+                  value={settings.sketching.angleSnap}
+                  label="Angular snap increment"
+                  onCommit={(angleSnap) =>
+                    patch({
+                      sketching: { ...settings.sketching, angleSnap }
+                    })
+                  }
+                />
               </SettingRow>
               <SettingRow
                 title="Direct manipulation (experimental)"
@@ -1250,7 +1336,7 @@ export function SettingsPage({
             </Section>
           )}
 
-          {active === 'files' && (
+          {active === 'files' && anyMatch && (
             <Section
               title="Files & autosave"
               intro="Recovery behavior is visible here, but durability protections are not optional toggles."
@@ -1284,25 +1370,20 @@ export function SettingsPage({
                 description="Quiet time before the copy is written. A continuous edit is still written at least once a minute."
                 scope="Account"
               >
-                <input
-                  type="number"
-                  aria-label="Cloud autosave delay in seconds"
+                <NumberSetting
+                  min={CLOUD_AUTOSAVE_DELAY_BOUNDS.min}
+                  max={CLOUD_AUTOSAVE_DELAY_BOUNDS.max}
+                  integer
+                  unit="s"
+                  label="Cloud autosave delay in seconds"
                   disabled={
                     !cloudFunctionsEnabled || !settings.files.cloudAutosave
                   }
-                  min={CLOUD_AUTOSAVE_DELAY_BOUNDS.min}
-                  max={CLOUD_AUTOSAVE_DELAY_BOUNDS.max}
-                  step={1}
                   value={settings.files.cloudAutosaveDelaySeconds}
-                  onChange={(event) =>
+                  onCommit={(cloudAutosaveDelaySeconds) =>
                     onChange({
                       ...settings,
-                      files: {
-                        ...settings.files,
-                        cloudAutosaveDelaySeconds: clampAutosaveDelay(
-                          event.target.valueAsNumber
-                        )
-                      }
+                      files: { ...settings.files, cloudAutosaveDelaySeconds }
                     })
                   }
                 />
@@ -1345,7 +1426,7 @@ export function SettingsPage({
                 </span>
               </SettingRow>
               <SettingRow
-                title="STEP and STL exports"
+                title="Exports"
                 description="Exports are generated and validated by the same browser geometry worker as the viewport."
                 scope="Exact pipeline"
               >
@@ -1354,7 +1435,7 @@ export function SettingsPage({
             </Section>
           )}
 
-          {active === 'assistant' && cloudFunctionsEnabled && (
+          {active === 'assistant' && cloudFunctionsEnabled && anyMatch && (
             <Section
               title="AI Assistant"
               intro="Choose a deployment-managed assistant or store an encrypted personal credential. Proposals remain previewable and explicitly applied."
@@ -1468,7 +1549,7 @@ export function SettingsPage({
                       <option value="low">Low</option>
                       <option value="medium">Medium</option>
                       <option value="high">High</option>
-                      <option value="xhigh">XHigh</option>
+                      <option value="xhigh">Extra high</option>
                     </select>
                   </SettingRow>
                   <SettingRow
@@ -1476,20 +1557,15 @@ export function SettingsPage({
                     description="Reasoning and patch output share this token ceiling."
                     scope="Advanced AI"
                   >
-                    <input
-                      className="settings-number"
-                      type="number"
-                      min="1024"
-                      max="128000"
-                      step="1024"
+                    <NumberSetting
+                      {...APP_SETTINGS_NUMBER_BOUNDS.maxOutputTokens}
+                      step={1000}
+                      integer
                       value={settings.assistant.maxOutputTokens}
-                      aria-label="Maximum output tokens"
-                      onChange={(event) => {
-                        const value = event.currentTarget.valueAsNumber;
-                        if (Number.isFinite(value)) {
-                          patchAssistant({ maxOutputTokens: value });
-                        }
-                      }}
+                      label="Output budget (tokens)"
+                      onCommit={(maxOutputTokens) =>
+                        patchAssistant({ maxOutputTokens })
+                      }
                     />
                   </SettingRow>
                   <SettingRow
@@ -1497,30 +1573,23 @@ export function SettingsPage({
                     description="Bounded between 5 and 300 seconds."
                     scope="Advanced AI"
                   >
-                    <div className="settings-unit-input">
-                      <input
-                        className="settings-number"
-                        type="number"
-                        min="5"
-                        max="300"
-                        value={settings.assistant.timeoutMs / 1000}
-                        aria-label="AI timeout seconds"
-                        onChange={(event) => {
-                          const value = event.currentTarget.valueAsNumber;
-                          if (Number.isFinite(value)) {
-                            patchAssistant({ timeoutMs: value * 1000 });
-                          }
-                        }}
-                      />
-                      <span>s</span>
-                    </div>
+                    <NumberSetting
+                      min={APP_SETTINGS_NUMBER_BOUNDS.timeoutMs.min / 1000}
+                      max={APP_SETTINGS_NUMBER_BOUNDS.timeoutMs.max / 1000}
+                      unit="s"
+                      value={settings.assistant.timeoutMs / 1000}
+                      label="Request timeout (seconds)"
+                      onCommit={(seconds) =>
+                        patchAssistant({ timeoutMs: seconds * 1000 })
+                      }
+                    />
                   </SettingRow>
                   <SettingRow
                     title="Personal API token"
                     description={
                       credential?.stored
                         ? `Saved as ${credential.hint}. The token cannot be revealed after saving.`
-                        : 'Sent once to the Worker and encrypted before storage. Never stored in the browser.'
+                        : 'Sent once to the server and encrypted before storage. Never stored in the browser.'
                     }
                     scope="Encrypted"
                   >
@@ -1540,16 +1609,24 @@ export function SettingsPage({
                         placeholder={
                           credential?.stored ? credential.hint : 'API token'
                         }
-                        aria-label="Personal AI API token"
+                        aria-label="Personal API token"
                         onChange={(event) => setToken(event.target.value)}
                       />
+                      {/* The label carries the state, as Show/Hide personal
+                          info does; the icon and tooltip follow it so sighted
+                          users see the state too. */}
                       <button
                         className="icon-button"
                         type="button"
                         aria-label={showToken ? 'Hide token' : 'Show token'}
+                        title={showToken ? 'Hide token' : 'Show token'}
                         onClick={() => setShowToken((current) => !current)}
                       >
-                        <KeyRound size={14} aria-hidden="true" />
+                        {showToken ? (
+                          <EyeOff size={14} aria-hidden="true" />
+                        ) : (
+                          <Eye size={14} aria-hidden="true" />
+                        )}
                       </button>
                       <button
                         className="secondary"
@@ -1582,8 +1659,7 @@ export function SettingsPage({
                     </div>
                   ) : credential && !credential.storageAvailable ? (
                     <div className="settings-warning">
-                      Personal credential storage requires the D1 migration and
-                      SETTINGS_ENCRYPTION_KEY Worker secret.
+                      Personal token storage isn’t available on this server yet.
                     </div>
                   ) : null}
                   <div className="settings-card-action split">
@@ -1674,7 +1750,7 @@ export function SettingsPage({
             </Section>
           )}
 
-          {active === 'account' && cloudFunctionsEnabled && (
+          {active === 'account' && cloudFunctionsEnabled && anyMatch && (
             <Section
               title="Account & collaboration"
               intro="The CAD workspace stays local and usable without an account. Sign in only when you want a cloud profile."
@@ -1768,7 +1844,7 @@ export function SettingsPage({
                     <div
                       className={
                         desktopAuthorizationApproved
-                          ? 'settings-state good'
+                          ? 'settings-warning settings-success'
                           : 'settings-warning settings-sign-in-warning'
                       }
                       role="status"
@@ -1827,8 +1903,8 @@ export function SettingsPage({
                   </SettingRow>
                   {authConfigStatus === 'loading' ? (
                     <div className="settings-warning" role="status">
-                      Checking beta email sign-in readiness. Device settings and
-                      local CAD projects remain available.
+                      Checking whether email sign-in is available. Device
+                      settings and local CAD projects remain available.
                     </div>
                   ) : authConfigStatus === 'unavailable' ? (
                     <div
@@ -1876,8 +1952,8 @@ export function SettingsPage({
                       </div>
                     ) : (
                       <div className="settings-warning" role="status">
-                        Desktop sign-in is not ready on this beta Worker. Device
-                        settings and local CAD projects remain available.
+                        Desktop sign-in isn’t available on this server yet.
+                        Device settings and local CAD projects remain available.
                       </div>
                     )
                   ) : authConfig?.emailCodeEnabled &&
@@ -2003,7 +2079,7 @@ export function SettingsPage({
                     )
                   ) : (
                     <div className="settings-warning" role="status">
-                      Email sign-in is not ready on this beta Worker. Device
+                      Email sign-in isn’t available on this server yet. Device
                       settings and local CAD projects remain available.
                     </div>
                   )}
@@ -2031,7 +2107,7 @@ export function SettingsPage({
             </Section>
           )}
 
-          {active === 'shortcuts' && (
+          {active === 'shortcuts' && anyMatch && (
             <Section
               title="Controls & shortcuts"
               intro="A complete reference for keyboard commands, viewport navigation, selection, sketching, and direct modeling."
@@ -2055,7 +2131,7 @@ export function SettingsPage({
             </Section>
           )}
 
-          {active === 'privacy' && (
+          {active === 'privacy' && anyMatch && (
             <Section
               title="Privacy & data"
               intro="Reset this device's settings and permanently remove your cloud data. Local projects are managed from the Trash on the start screen, and local and cloud copies remain separate."
@@ -2132,9 +2208,8 @@ export function SettingsPage({
                   </div>
                   {health?.accountErasureReady !== true ? (
                     <div className="settings-warning" role="status">
-                      Cloud data deletion is unavailable until migrations 0014
-                      and 0015 and their write-safety checks are ready. No data
-                      can be deleted from this screen yet.
+                      Cloud data deletion isn’t available on this server yet. No
+                      data can be deleted from this screen until it is.
                     </div>
                   ) : health?.projectErasureReady !== true ? (
                     <div className="settings-warning" role="status">
@@ -2156,7 +2231,7 @@ export function SettingsPage({
             </Section>
           )}
 
-          {active === 'advanced' && (
+          {active === 'advanced' && anyMatch && (
             <Section
               title="Advanced & diagnostics"
               intro="These architectural guarantees are intentionally visible and non-configurable."
@@ -2173,7 +2248,10 @@ export function SettingsPage({
                 description="The pinned kernel build this app was compiled against. Quote it when reporting a geometry defect."
                 scope="Diagnostics"
               >
-                <span className="mono" title={kernelBuildDetail(KERNEL_BUILD)}>
+                <span
+                  className="settings-state"
+                  title={kernelBuildDetail(KERNEL_BUILD)}
+                >
                   {kernelBuildLabel(KERNEL_BUILD)}
                 </span>
               </SettingRow>
@@ -2189,11 +2267,13 @@ export function SettingsPage({
                 description="Versioned independently from the project document schema."
                 scope="Diagnostics"
               >
-                <span className="mono">v{settings.schemaVersion}</span>
+                <span className="settings-state">
+                  v{settings.schemaVersion}
+                </span>
               </SettingRow>
               <SettingRow
                 title="Cloud project storage"
-                description="Migrations 0010 and 0011 plus private R2 project storage must be ready before personal device sync can be enabled."
+                description="This server must be ready to store your projects before they can sync between your devices."
                 scope="Diagnostics"
               >
                 <span

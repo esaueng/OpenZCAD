@@ -20,7 +20,13 @@ export interface RichTextSpan {
 
 export type RichTextBlock =
   | { kind: 'paragraph'; spans: RichTextSpan[] }
-  | { kind: 'list'; ordered: boolean; items: RichTextSpan[][] }
+  | {
+      kind: 'list';
+      ordered: boolean;
+      items: RichTextSpan[][];
+      /** The source number of a numbered list's first item, when not 1. */
+      start?: number;
+    }
   | { kind: 'code'; text: string };
 
 const BULLET = /^\s*([-*•])\s+(.*)$/;
@@ -64,7 +70,15 @@ export function parseInlineSpans(line: string): RichTextSpan[] {
       continue;
     }
 
-    const italic = /^(?:\*([^*\s][^*]*)\*|_([^_\s][^_]*)_)/.exec(rest);
+    // Emphasis only opens after a non-word character and closes before one,
+    // as CommonMark's flanking rule has it: parameter names here are
+    // snake_case (`plate_length`) and replies do arithmetic (`2*3*4`).
+    const opensAfterWord = index > 0 && /\w/.test(line[index - 1]!);
+    const italic = opensAfterWord
+      ? null
+      : /^(?:\*([^*\s](?:[^*]*?[^*\s])?)\*|_([^_\s](?:[^_]*?[^_\s])?)_)(?!\w)/.exec(
+          rest
+        );
     const italicText = italic?.[1] ?? italic?.[2];
     if (italic && italicText) {
       flush();
@@ -86,7 +100,7 @@ export function parseRichText(source: string): RichTextBlock[] {
   const lines = source.replace(/\r\n/g, '\n').split('\n');
 
   let paragraph: string[] = [];
-  let list: { ordered: boolean; items: string[] } | null = null;
+  let list: { ordered: boolean; items: string[]; start: number } | null = null;
   let fence: string[] | null = null;
 
   const flushParagraph = () => {
@@ -103,7 +117,8 @@ export function parseRichText(source: string): RichTextBlock[] {
       blocks.push({
         kind: 'list',
         ordered: list.ordered,
-        items: list.items.map((item) => parseInlineSpans(item))
+        items: list.items.map((item) => parseInlineSpans(item)),
+        ...(list.ordered && list.start !== 1 ? { start: list.start } : {})
       });
     }
     list = null;
@@ -126,9 +141,11 @@ export function parseRichText(source: string): RichTextBlock[] {
       continue;
     }
 
+    // A blank line ends a paragraph but not a list: models write loose lists
+    // ("1. A", blank, "2. B"), and closing the list there renumbered every
+    // item as "1.". The next line that is not an item closes it instead.
     if (!line.trim()) {
       flushParagraph();
-      flushList();
       continue;
     }
 
@@ -141,7 +158,11 @@ export function parseRichText(source: string): RichTextBlock[] {
       if (list && list.ordered !== isOrdered) {
         flushList();
       }
-      list ??= { ordered: isOrdered, items: [] };
+      list ??= {
+        ordered: isOrdered,
+        items: [],
+        start: ordered ? Number(ordered[1]) : 1
+      };
       list.items.push(itemText.trim());
       continue;
     }

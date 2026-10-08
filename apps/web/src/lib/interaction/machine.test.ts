@@ -4,6 +4,7 @@ import {
   commandSessionFor,
   composingTextDraft,
   sketchToolKeysSuspended,
+  sketchPickArmed,
   radialFaceOperationName,
   escapeTarget,
   interactionReducer,
@@ -347,6 +348,62 @@ describe('interactionReducer', () => {
       objectId: 'ent_b'
     });
     expect(untouched).toBe(state);
+  });
+});
+
+describe('armed pick tools', () => {
+  // App retires the armed tool's instruction when this turns false, so every
+  // way of putting the tool down has to read as disarmed here.
+  const sketch = interactionReducer(IDLE, { type: 'enter-sketch', plane });
+  const vertical = interactionReducer(sketch, {
+    type: 'sketch-constraint-tool',
+    kind: 'vertical'
+  });
+  const fillet = interactionReducer(sketch, {
+    type: 'sketch-edit-tool',
+    kind: 'fillet'
+  });
+
+  it('reads armed while a relation or modify tool waits for picks', () => {
+    expect(sketchPickArmed(sketch)).toBe(false);
+    expect(sketchPickArmed(vertical)).toBe(true);
+    expect(sketchPickArmed(fillet)).toBe(true);
+    // A pick on the way keeps it armed.
+    expect(
+      sketchPickArmed(
+        interactionReducer(fillet, { type: 'sketch-edit-pick', objectId: 'a' })
+      )
+    ).toBe(true);
+    expect(sketchPickArmed(IDLE)).toBe(false);
+  });
+
+  it('reads disarmed after Escape, another tool, or the tool clicked off', () => {
+    for (const armed of [vertical, fillet]) {
+      expect(
+        sketchPickArmed(interactionReducer(armed, { type: 'escape' }))
+      ).toBe(false);
+      expect(
+        sketchPickArmed(
+          interactionReducer(armed, { type: 'sketch-tool', tool: 'line' })
+        )
+      ).toBe(false);
+      expect(
+        sketchPickArmed(interactionReducer(armed, { type: 'exit-sketch' }))
+      ).toBe(false);
+    }
+    expect(
+      sketchPickArmed(
+        interactionReducer(vertical, {
+          type: 'sketch-constraint-tool',
+          kind: null
+        })
+      )
+    ).toBe(false);
+    expect(
+      sketchPickArmed(
+        interactionReducer(fillet, { type: 'sketch-edit-tool', kind: null })
+      )
+    ).toBe(false);
   });
 });
 

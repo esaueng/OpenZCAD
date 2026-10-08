@@ -1,9 +1,10 @@
-/* ── Workspace column (experiments.workspaceColumn) ──
-   The single-column layout: one floating column over the viewport carries
-   the mode's tools and the model browser; the status bar is replaced by a
-   readout overlay. Everything here restyles components that keep their
-   classic rules for the docked layout, so it stays after them in the
-   cascade and before view-mode.css, which subtracts from both. ── */
+/* ── Workspace column ──
+   The column layout: one floating column over the viewport carries the
+   mode's tools (the model browser rides in the drawer, quiet-stage.css); the
+   status bar is replaced by a readout overlay. Everything here restyles
+   components that keep their classic rules for the docked layout, so it
+   stays after them in the cascade and before view-mode.css, which subtracts
+   from both. ── */
 
 /* `--column-w` is what the column is drawn at: the stored sidebar width,
    capped as the window narrows, without touching the preference itself. */
@@ -27,7 +28,9 @@
 }
 
 /* The splitter sits on the column's right edge; the column keeps the
-   stored sidebar width, so the classic drag logic applies unchanged. */
+   stored sidebar width, so the classic drag logic applies unchanged.
+   quiet-stage.css hides it beside every rail the column holds today (the
+   command, sketch and Tweak rails), so it is not shown in any mode. */
 .workspace.column-layout .sidebar-resizer {
   left: min(var(--column-w), calc(100% - 20px));
   z-index: calc(var(--z-inspector-float) + 1);
@@ -115,9 +118,9 @@
       no-repeat local,
     linear-gradient(transparent, var(--color-surface) 70%) bottom / 100% 14px
       no-repeat local,
-    linear-gradient(rgba(0, 0, 0, 0.35), transparent) top / 100% 10px no-repeat
-      scroll,
-    linear-gradient(transparent, rgba(0, 0, 0, 0.35)) bottom / 100% 10px
+    linear-gradient(var(--color-scroll-shade), transparent) top / 100% 10px
+      no-repeat scroll,
+    linear-gradient(transparent, var(--color-scroll-shade)) bottom / 100% 10px
       no-repeat scroll;
 }
 
@@ -169,22 +172,27 @@
   width: auto;
 }
 
-/* ── Browser in the column ── */
-
-.sidebar .sidebar-section.grow {
-  flex: 1;
-}
+/* ── The model browser's History summary ── */
 
 /* Collapsed History: one line of plain text in the header — the feature
    count, then where the history is at. The name truncates; the count keeps
-   its width. */
-.sidebar .sidebar-section.collapsed .section-title {
-  gap: 8px;
+   its width. The title hugs its word and the line takes the rest: the
+   header's `> span { flex: 1 }` split the two halves evenly, which squeezed
+   the line into the right half beside empty space. Its margin is the extra
+   room between the title and the line, kept off the header's own gap so no
+   other header shifts when it collapses. */
+.sidebar-section .section-title > span:has(+ .history-scrub) {
+  flex: 0 0 auto;
+}
+
+.sidebar-section .section-title > .history-scrub {
+  flex: 1 1 auto;
 }
 
 .history-scrub {
   flex: 1 1 auto;
   min-width: 0;
+  margin-left: 3px;
   display: flex;
   align-items: baseline;
   overflow: hidden;
@@ -366,8 +374,8 @@
   border-color: var(--color-border-strong);
 }
 
-/* The bottom-right corner holds the cube with undo/redo and, under it, the
-   scale bar.
+/* The bottom-right corner holds the cube with its two roll buttons and,
+   beside it, the scale bar.
    The cube box hugs its silhouette, so the few pixels the triad tips
    overhang need room below rather than sitting flush on the edge. */
 .workspace.column-layout .viewer-rail-stack,
