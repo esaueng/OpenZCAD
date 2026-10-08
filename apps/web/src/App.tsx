@@ -1178,7 +1178,8 @@ import {
   mergeProjectSummaries,
   resolveShelfThumbnail
 } from './lib/projectShelf';
-import { sharedThumbnailCapture } from './lib/projectThumbnailCapture';
+import { sharedThumbnailCapture } from './lib/sharedThumbnailCapture';
+import { useThumbnailCaptureActivity } from './hooks/useThumbnailCaptureActivity';
 import { LivePreview } from './lib/livePreview';
 import { PreviewRebuilds, predictedPreviewMs } from './lib/previewRebuilds';
 import {
@@ -2739,6 +2740,10 @@ export function App() {
       setStatus(message);
     }
   });
+  useThumbnailCaptureActivity(
+    sharedThumbnailCapture,
+    geometryBusy || Boolean(doc && geometry.state.phase !== 'ready')
+  );
   const parameterDraftActive =
     parameterCandidate !== null &&
     parameterCandidate.base.projectId === doc?.projectId &&

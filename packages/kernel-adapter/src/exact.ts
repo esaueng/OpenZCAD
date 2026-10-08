@@ -132,7 +132,7 @@ import {
   type StepImportReport
 } from './kernel-step-import';
 import {
-  buildDocumentHistory,
+  buildDocumentHistoryAsync,
   type StrictUnionVerdict,
   type StrictUnionVerdicts
 } from './exact-build-loop';
@@ -158,7 +158,6 @@ import {
   SyncReadMemo,
   TopologyWitnessStore,
   edgeToFaceMapOf,
-  enterSyncReadMemo,
   withSyncReadMemo
 } from './exact-sync-memo';
 import {
@@ -568,6 +567,8 @@ export interface ExactKernelAdapter {
     options?: {
       cancellation?: BuildCancellationSignal;
       lineageDemand?: readonly BodyId[] | ReadonlySet<BodyId>;
+      /** Deliver incoming worker messages between indivisible kernel operations. */
+      yieldControl?: () => Promise<void> | void;
     }
   ): Promise<DerivedState>;
   /** Epoch of the most recent live sync, or null after its handles were retired. */
@@ -856,6 +857,47 @@ export class RemusKernelAdapter implements ExactKernelAdapter {
   private historyReplayWork = 0;
   private readonly primitiveBuildCache = new PrimitiveBuildCache();
 
+  /** Task yields must not let another caller restore the owned live arena. */
+  private historyJobs: Promise<void> = Promise.resolve();
+  private historyGeneration = 0;
+  private historyCancellation: BuildCancellationSignal | undefined;
+
+  private runHistoryJob<T>(work: () => Promise<T>): Promise<T> {
+    const generation = this.historyGeneration;
+    const job = this.historyJobs.then(async () => {
+      const lifetime = {
+        isCancelled: () => generation !== this.historyGeneration
+      };
+      throwIfBuildCancelled(lifetime);
+      this.historyCancellation = lifetime;
+      try {
+        const result = await work();
+        throwIfBuildCancelled(lifetime);
+        return result;
+      } finally {
+        this.historyCancellation = undefined;
+        if (lifetime.isCancelled()) this.clearRetainedState();
+      }
+    });
+    // Rejection releases ownership too; retain neither results nor errors.
+    this.historyJobs = job.then(
+      () => undefined,
+      () => undefined
+    );
+    return job;
+  }
+
+  private historySignal(
+    signal?: BuildCancellationSignal
+  ): BuildCancellationSignal | undefined {
+    const lifetime = this.historyCancellation;
+    if (!signal) return lifetime;
+    return {
+      isCancelled: () =>
+        Boolean(lifetime?.isCancelled() || signal.isCancelled())
+    };
+  }
+
   private massPropertiesEpoch = 0;
   private currentMassSnapshot: {
     projectId: ProjectDocument['projectId'];
@@ -924,12 +966,20 @@ export class RemusKernelAdapter implements ExactKernelAdapter {
   async prepareMassPropertiesForDocument(
     document: ProjectDocument
   ): Promise<number> {
+    return this.runHistoryJob(() =>
+      this.prepareMassPropertiesInHistory(document)
+    );
+  }
+
+  private async prepareMassPropertiesInHistory(
+    document: ProjectDocument
+  ): Promise<number> {
     const { sources, pinned } = await this.prefetchImportSources(document);
     if (documentNeedsTranslators(document)) {
       await loadRemusTranslators();
     }
     try {
-      const { kernel, build } = this.buildWithHistoryCache(
+      const { kernel, build } = await this.buildWithHistoryCache(
         document,
         sources,
         pinned
@@ -1071,18 +1121,19 @@ export class RemusKernelAdapter implements ExactKernelAdapter {
    * Restores the longest cached prefix whose digests still match and replays
    * only the remaining features; falls back to a from-scratch build when the
    * scope or project changed, no prefix matches, caching is disabled, or a
-   * kernel restore fails. A primitive-only suffix may instead retain matching
-   * exact handles, with new geometry built only for changed primitives.
+   * kernel restore fails. Audited mixed suffixes retain matching primitive
+   * handles while dependent builders replay against this run's operands.
    */
-  private buildWithHistoryCache(
+  private async buildWithHistoryCache(
     document: ProjectDocument,
     importSources: ReadonlyMap<string, Uint8Array>,
     pinnedImports: ReadonlySet<string>,
     onProgress?: RebuildProgressListener,
     onProjection?: (derived: DerivedState) => void,
     lineageDemand?: readonly BodyId[] | ReadonlySet<BodyId>,
-    cancellation?: BuildCancellationSignal
-  ): {
+    cancellation?: BuildCancellationSignal,
+    yieldControl?: () => Promise<void> | void
+  ): Promise<{
     kernel: RemusKernel;
     build: ExactBuildResult;
     replayed: number;
@@ -1094,7 +1145,9 @@ export class RemusKernelAdapter implements ExactKernelAdapter {
     readMemo: SyncReadMemo;
     recycleReason?: 'replay-budget';
     cacheResetReason?: 'checkpoint-ownership' | 'checkpoint-restore';
-  } {
+  }> {
+    cancellation = this.historySignal(cancellation);
+    throwIfBuildCancelled(cancellation);
     this.clearCurrentMassSnapshot();
     const features = listFeaturesInOrder(document);
     const recycled =
@@ -1135,9 +1188,7 @@ export class RemusKernelAdapter implements ExactKernelAdapter {
     let reusePrimitiveTail = false;
     let reusedPrimitives = 0;
     let cacheResetReason:
-      | 'checkpoint-ownership'
-      | 'checkpoint-restore'
-      | undefined;
+      'checkpoint-ownership' | 'checkpoint-restore' | undefined;
     this.primitiveBuildCache.prune(features);
 
     // Counts alone cannot prove ownership. Retain the exact association of
@@ -1269,7 +1320,9 @@ export class RemusKernelAdapter implements ExactKernelAdapter {
 
     const report = rebuildReporter(onProgress);
     let featureDone: (() => void) | undefined;
+    let executedFeatures = 0;
     const onFeatureStart = (index: number) => {
+      executedFeatures += 1;
       featureDone = report(
         'feature',
         features[index]!.name,
@@ -1375,9 +1428,12 @@ export class RemusKernelAdapter implements ExactKernelAdapter {
     // Kernel reads the replay shares with the measurement pass of the same
     // sync: surface classes, edge-to-face maps and topology witnesses.
     const readMemo = new SyncReadMemo(activeKernel, this.topologyWitnessStore);
-    const closeReadMemo = enterSyncReadMemo(readMemo);
     try {
-      build = buildDocumentHistory(
+      build = await buildDocumentHistoryAsync(
+        {
+          yieldControl,
+          runStep: (step) => withSyncReadMemo(readMemo, step)
+        },
         activeKernel,
         document,
         importSources,
@@ -1425,10 +1481,14 @@ export class RemusKernelAdapter implements ExactKernelAdapter {
       this.invalidateHistoryCache();
       throw error;
     } finally {
-      closeReadMemo();
-    }
-    if (startIndex > 0 || reusePrimitiveTail) {
-      this.historyReplayWork += features.length - startIndex - reusedPrimitives;
+      // Cancelled jobs also allocated geometry. Charge completed replay work
+      // before yielding ownership, otherwise an edit storm evades recycling.
+      if (
+        this.historyKernel === activeKernel &&
+        (startIndex > 0 || reusePrimitiveTail)
+      ) {
+        this.historyReplayWork += executedFeatures - reusedPrimitives;
+      }
     }
     // The cache event is emitted by syncDocument AFTER the measure pass, so
     // it can carry the measure-reuse counts alongside the replay counts.
@@ -1976,16 +2036,20 @@ export class RemusKernelAdapter implements ExactKernelAdapter {
     options?: {
       cancellation?: BuildCancellationSignal;
       lineageDemand?: readonly BodyId[] | ReadonlySet<BodyId>;
+      yieldControl?: () => Promise<void> | void;
     }
   ): Promise<DerivedState> {
-    return this.syncMeasuredDocument(
-      document,
-      onProgress,
-      onProjection,
-      analysis,
-      true,
-      options?.lineageDemand,
-      options?.cancellation
+    return this.runHistoryJob(() =>
+      this.syncMeasuredDocument(
+        document,
+        onProgress,
+        onProjection,
+        analysis,
+        true,
+        options?.lineageDemand,
+        options?.cancellation,
+        options?.yieldControl
+      )
     );
   }
 
@@ -1996,8 +2060,10 @@ export class RemusKernelAdapter implements ExactKernelAdapter {
     analysis?: EditAnalysisRequest,
     allowRecovery = true,
     lineageDemand?: readonly BodyId[] | ReadonlySet<BodyId>,
-    cancellation?: BuildCancellationSignal
+    cancellation?: BuildCancellationSignal,
+    yieldControl?: () => Promise<void> | void
   ): Promise<DerivedState> {
+    cancellation = this.historySignal(cancellation);
     if (
       analysis &&
       (!document.bodyOrder.some((id) => id === analysis.bodyId) ||
@@ -2036,14 +2102,15 @@ export class RemusKernelAdapter implements ExactKernelAdapter {
         readMemo,
         recycleReason,
         cacheResetReason
-      } = this.buildWithHistoryCache(
+      } = await this.buildWithHistoryCache(
         document,
         sources,
         pinned,
         onProgress,
         onProjection,
         lineageDemand,
-        cancellation
+        cancellation,
+        yieldControl
       );
       historyDone();
       const bodies = listNodesByKind(document, 'body');
@@ -2080,6 +2147,9 @@ export class RemusKernelAdapter implements ExactKernelAdapter {
       const measurementMisses: Record<string, number> = {};
 
       for (const bodyId of document.bodyOrder) {
+        const pending = yieldControl?.();
+        if (pending) await pending;
+        throwIfBuildCancelled(cancellation);
         const body = bodies.find((candidate) => candidate.bodyId === bodyId);
         const shape = build.shapes.get(bodyId);
         if (!body || !shape) {
@@ -2344,6 +2414,11 @@ export class RemusKernelAdapter implements ExactKernelAdapter {
         }
       }
 
+      // The last body may itself exhaust the worker budget. Deliver pending
+      // edits before publishing any final derived state or live query epoch.
+      const pending = yieldControl?.();
+      if (pending) await pending;
+      throwIfBuildCancelled(cancellation);
       this.options.onRebuildCacheEvent?.({
         kind:
           reusedPrimitives > 0
@@ -2365,7 +2440,7 @@ export class RemusKernelAdapter implements ExactKernelAdapter {
                 retainedBytes: this.measuredShapeCacheBytes,
                 resetReason: !allowRecovery
                   ? 'measurement-proof'
-                  : cacheResetReason ?? null
+                  : (cacheResetReason ?? null)
               }
             }
           : {})
@@ -2409,7 +2484,8 @@ export class RemusKernelAdapter implements ExactKernelAdapter {
           analysis,
           false,
           lineageDemand,
-          cancellation
+          cancellation,
+          yieldControl
         );
       }
       throw error;
@@ -2428,12 +2504,21 @@ export class RemusKernelAdapter implements ExactKernelAdapter {
    * restore to, so the cache is invalidated exactly as a thrown sync would —
    * the next sync rebuilds from scratch either way.
    */
-  private async withExportBuild<T>(
+  private withExportBuild<T>(
+    document: ProjectDocument,
+    operate: (kernel: RemusKernel, build: ExactBuildResult) => T
+  ): Promise<T> {
+    return this.runHistoryJob(() =>
+      this.withOwnedExportBuild(document, operate)
+    );
+  }
+
+  private async withOwnedExportBuild<T>(
     document: ProjectDocument,
     operate: (kernel: RemusKernel, build: ExactBuildResult) => T
   ): Promise<T> {
     const { sources, pinned } = await this.prefetchImportSources(document);
-    const { kernel, build } = this.buildWithHistoryCache(
+    const { kernel, build } = await this.buildWithHistoryCache(
       document,
       sources,
       pinned
@@ -3094,6 +3179,15 @@ export class RemusKernelAdapter implements ExactKernelAdapter {
   }
 
   dispose(): void {
+    this.historyGeneration += 1;
+    this.clearCurrentMassSnapshot();
+    // An active generator still owns its kernel and cancellation token.
+    // Cancel it now and release retained state in its ownership finally;
+    // queued work from this lifetime must never recreate that state.
+    if (!this.historyCancellation) this.clearRetainedState();
+  }
+
+  private clearRetainedState(): void {
     // Export and solve methods own short-lived kernels, but the history
     // kernel and its checkpoints are adapter-scoped and must be released.
     this.invalidateHistoryCache();
@@ -3113,15 +3207,16 @@ export class RemusKernelAdapter implements ExactKernelAdapter {
    * build failure. Dimensions are scaled from kernel millimetres into
    * document units before publishing; the refusal reason travels verbatim.
    */
-  async recognizeImportedFace(input: {
-    document: ProjectDocument;
-    bodyId: BodyId;
-    faceHash: number;
-    faceReference?: FaceTopologyReferenceV5;
-  }): Promise<FaceRecognitionSummary> {
-    const missing = (
-      message: string
-    ): FaceRecognitionSummary => ({
+  async recognizeImportedFace(
+    input: Parameters<ExactKernelAdapter['recognizeImportedFace']>[0]
+  ): Promise<FaceRecognitionSummary> {
+    return this.runHistoryJob(() => this.recognizeImportedFaceInHistory(input));
+  }
+
+  private async recognizeImportedFaceInHistory(
+    input: Parameters<ExactKernelAdapter['recognizeImportedFace']>[0]
+  ): Promise<FaceRecognitionSummary> {
+    const missing = (message: string): FaceRecognitionSummary => ({
       kind: 'unsupported',
       refusalReason: 'seed-face-missing',
       message
@@ -3133,7 +3228,7 @@ export class RemusKernelAdapter implements ExactKernelAdapter {
     let kernel: RemusKernel;
     let build: ExactBuildResult;
     try {
-      ({ kernel, build } = this.buildWithHistoryCache(
+      ({ kernel, build } = await this.buildWithHistoryCache(
         input.document,
         sources,
         pinned
