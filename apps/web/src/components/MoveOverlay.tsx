@@ -1,6 +1,7 @@
 import { X } from 'lucide-react';
 import { displayLengthName, type UnitSystem } from '@openzcad/shared';
 import { CARD_EYEBROWS } from '../lib/cardEyebrows';
+import { moveHasFiniteValues } from '../lib/moveCard';
 import { useEffect, useState, type MutableRefObject } from 'react';
 
 /*
@@ -70,9 +71,12 @@ const MOVE_AXES = ['x', 'y', 'z'] as const;
  * A number as a field shows it. A geometry snap lands on `point - pivot`, and
  * that subtraction leaves binary noise (0.19999999999999998) the gizmo's own
  * grid snap no longer does; nine places is far below any modelling tolerance.
+ * Negative zero folds to 0, but — as in the gizmo's `snapTo` — an invalid
+ * coordinate stays invalid instead of reading as a plausible 0.
  */
 function fieldValue(value: number): number {
-  return Number(value.toFixed(9)) || 0;
+  const cleaned = Number(value.toFixed(9));
+  return cleaned === 0 ? 0 : cleaned;
 }
 
 /**
@@ -97,7 +101,9 @@ function MoveNumberInput({
     <input
       type="number"
       step={step}
-      value={draft ?? value}
+      // A number input cannot hold NaN or Infinity (React warns on NaN; the
+      // browser blanks both), so a non-finite value shows as an empty field.
+      value={draft ?? (Number.isFinite(value) ? value : '')}
       aria-label={label}
       onChange={(event) => {
         const raw = event.target.value;
@@ -168,6 +174,13 @@ export function MoveOverlay({
   const dirty =
     MOVE_AXES.some((axis) => values.translation[axis] !== 0) ||
     MOVE_AXES.some((axis) => values.rotationDeg[axis] !== 0);
+  // Match the shared confirmation guard, including translation-only sketches.
+  const canApply =
+    dirty &&
+    moveHasFiniteValues({
+      ...values,
+      ...(hideRotation ? { target: 'sketch' as const } : {})
+    });
   const setValue = (
     group: 'translation' | 'rotationDeg',
     axis: (typeof MOVE_AXES)[number],
@@ -184,7 +197,7 @@ export function MoveOverlay({
       aria-label="Move controls"
       onSubmit={(event) => {
         event.preventDefault();
-        if (dirty) {
+        if (canApply) {
           onConfirm();
         }
       }}
@@ -271,7 +284,7 @@ export function MoveOverlay({
         </div>
       )}
       <div className="form-actions">
-        <button type="submit" className="primary" disabled={!dirty}>
+        <button type="submit" className="primary" disabled={!canApply}>
           Apply move
         </button>
         <button type="button" className="secondary" onClick={onCancel}>
