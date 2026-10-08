@@ -255,6 +255,83 @@ describe('measurement workbench persistence', () => {
 });
 
 describe('measurement picks', () => {
+  it('rejects stale body measurements until staged analysis arrives', async () => {
+    const doc = createProjectDocument(
+      'Staged measure',
+      toUserId('user_measure')
+    );
+    const body: BodyRepresentation = {
+      bodyId: toBodyId('body-1'),
+      name: 'Box',
+      source: 'primitive',
+      mesh: {
+        kind: 'mesh',
+        vertices: new Float32Array(),
+        indices: new Uint32Array()
+      },
+      faceCount: 0,
+      color: '#fff',
+      exportableStep: true,
+      consumed: false,
+      volume: 12,
+      bbox: { min: { x: 0, y: 0, z: 0 }, max: { x: 2, y: 2, z: 3 } }
+    };
+    const selection: TopologySelection = {
+      bodyId: body.bodyId,
+      kind: 'body'
+    };
+    const setStatus = vi.fn();
+    const pendingInput = input({
+      doc,
+      modelingLocked: true,
+      geometryPending: true,
+      representations: { 'body-1': body },
+      renderedRepresentations: { 'body-1': body },
+      viewerBodies: [body],
+      setStatus
+    });
+    const { result, rerender } = renderHook(
+      (props: MeasurementWorkbenchInput) => useMeasurementWorkbench(props),
+      { initialProps: pendingInput }
+    );
+    await waitFor(() => expect(result.current.measurementApi).not.toBeNull());
+    act(() => result.current.setMeasuring(true));
+    expect(result.current.previewMeasurement(selection)).toBeNull();
+    act(() => {
+      expect(result.current.handleMeasurementPick(selection, false)).toBe(true);
+    });
+    expect(result.current.measurements).toEqual([]);
+    expect(result.current.measurementDraft).toBeNull();
+    expect(setStatus).toHaveBeenCalledWith(
+      'Measurements are unavailable while the model finishes updating.'
+    );
+
+    const completedBody = {
+      ...body,
+      volume: 24,
+      bbox: { ...body.bbox, max: { x: 4, y: 2, z: 3 } }
+    };
+    rerender({
+      ...pendingInput,
+      geometryPending: false,
+      exactGeometryReady: true,
+      representations: { 'body-1': completedBody },
+      renderedRepresentations: { 'body-1': completedBody },
+      viewerBodies: [completedBody]
+    });
+    expect(result.current.previewMeasurement(selection)).not.toBeNull();
+    act(() => {
+      result.current.handleMeasurementPick(selection, false);
+    });
+    expect(result.current.measurements).toHaveLength(1);
+    expect(result.current.measurements[0]!.result).toEqual({
+      value: 24,
+      dimension: 'volume',
+      components: { x: 4, y: 2, z: 3 }
+    });
+    expect(result.current.measurements[0]!.sourceRevision).toBe(doc.version);
+  });
+
   it('leaves a pick alone when no measuring session is running', async () => {
     const doc = createProjectDocument('Measure D', toUserId('user_measure_d'));
     const setStatus = vi.fn();
