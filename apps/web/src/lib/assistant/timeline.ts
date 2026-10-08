@@ -31,13 +31,16 @@ function dayKey(at: number): string {
   return `${date.getFullYear()}-${month}-${day}`;
 }
 
-/** `14:32`, in the viewer's locale. */
+/**
+ * `14:32` or `2:32 PM`, in the viewer's locale. A `numeric` hour, not
+ * `2-digit`, which a 12-hour clock wrote as `02:32 PM`.
+ */
 export function formatEntryTime(at: number | undefined): string {
   if (!at) {
     return '';
   }
   return new Date(at).toLocaleTimeString(undefined, {
-    hour: '2-digit',
+    hour: 'numeric',
     minute: '2-digit'
   });
 }

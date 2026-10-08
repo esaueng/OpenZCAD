@@ -60,6 +60,25 @@ describe('ViewportScaleIndicator', () => {
       new Set(['#eeeeee', '#dddddd', '#cccccc'])
     );
   });
+
+  it('is one named image, not a live region that reads every zoom step', () => {
+    // The value was an <output>, a polite status announcing a bare "50 mm"
+    // on each step, while the descriptive label sat on a role-less div.
+    vi.spyOn(HTMLCanvasElement.prototype, 'getContext').mockReturnValue(null);
+    const sinkRef: MutableRefObject<ViewportScaleSink | null> = {
+      current: null
+    };
+    render(<ViewportScaleIndicator scaleSinkRef={sinkRef} units="mm" />);
+
+    act(() => sinkRef.current?.({ value: 10, widthPx: 120 }));
+
+    expect(
+      screen.getByRole('img', {
+        name: 'Viewport scale at the camera focus plane: 10 mm'
+      })
+    ).toBeVisible();
+    expect(screen.queryByRole('status')).toBeNull();
+  });
 });
 
 describe('ViewportGridReadout', () => {

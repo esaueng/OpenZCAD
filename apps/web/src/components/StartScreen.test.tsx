@@ -224,6 +224,233 @@ describe('StartScreen new part suggestion', () => {
   });
 });
 
+describe('StartScreen launch form', () => {
+  it('does not create the part from the Enter that commits an IME composition', () => {
+    // CJK input commits a composition with Enter; creating on that keystroke
+    // left the start screen with a half-typed name.
+    const onCreate = vi.fn();
+    renderStartScreen({ onCreate });
+    const input = screen.getByLabelText('Project name');
+
+    fireEvent.keyDown(input, { key: 'Enter', isComposing: true });
+    // Safari sends the committing Enter after compositionend, marked by 229.
+    fireEvent.keyDown(input, { key: 'Enter', keyCode: 229 });
+    expect(onCreate).not.toHaveBeenCalled();
+
+    fireEvent.keyDown(input, { key: 'Enter' });
+    expect(onCreate).toHaveBeenCalledOnce();
+  });
+
+  it('names the units select by its visible label', () => {
+    renderStartScreen();
+
+    expect(screen.getByRole('combobox', { name: 'Units' })).toHaveValue('mm');
+  });
+});
+
+describe('StartScreen keyboard', () => {
+  const parts = ['Alpha', 'Bravo', 'Charlie'].map(
+    (name, index): ProjectSummary => ({
+      ...localProject,
+      projectId: toProjectId(`project_${name.toLowerCase()}`),
+      name,
+      organization: { status: 'active', pinned: false, sortOrder: index }
+    })
+  );
+
+  function archived(project: ProjectSummary): ProjectSummary {
+    return {
+      ...project,
+      organization: { status: 'archived', pinned: false, sortOrder: 0 }
+    };
+  }
+
+  it('moves focus into the tile menu, around it with the arrow keys, and back to its button on Escape', () => {
+    renderStartScreen();
+    const opener = screen.getByRole('button', {
+      name: `Actions for ${localProject.name}`
+    });
+
+    fireEvent.click(opener);
+    const items = within(screen.getByRole('menu')).getAllByRole('menuitem');
+    const first = items[0]!;
+    const last = items.at(-1)!;
+    expect(first).toHaveFocus();
+
+    fireEvent.keyDown(first, { key: 'ArrowDown' });
+    expect(items[1]).toHaveFocus();
+    fireEvent.keyDown(items[1]!, { key: 'End' });
+    expect(last).toHaveFocus();
+    fireEvent.keyDown(last, { key: 'ArrowDown' });
+    expect(first).toHaveFocus();
+    fireEvent.keyDown(first, { key: 'ArrowUp' });
+    expect(last).toHaveFocus();
+    fireEvent.keyDown(last, { key: 'Home' });
+    expect(first).toHaveFocus();
+
+    // The focused item unmounts with the menu; focus used to fall to <body>.
+    fireEvent.keyDown(first, { key: 'Escape' });
+    expect(screen.queryByRole('menu')).toBeNull();
+    expect(opener).toHaveFocus();
+  });
+
+  it('opens the tile menu from its button with the arrow keys and leaves it with Tab', () => {
+    renderStartScreen();
+    const opener = screen.getByRole('button', {
+      name: `Actions for ${localProject.name}`
+    });
+
+    fireEvent.keyDown(opener, { key: 'ArrowUp' });
+    const items = within(screen.getByRole('menu')).getAllByRole('menuitem');
+    expect(items.at(-1)).toHaveFocus();
+    // Not tab stops: Tab leaves the menu instead of walking its items.
+    for (const item of items) {
+      expect(item).toHaveAttribute('tabindex', '-1');
+    }
+
+    fireEvent.keyDown(items.at(-1)!, { key: 'Tab', shiftKey: true });
+    expect(screen.queryByRole('menu')).toBeNull();
+    expect(opener).toHaveFocus();
+
+    fireEvent.keyDown(opener, { key: 'ArrowDown' });
+    expect(
+      within(screen.getByRole('menu')).getAllByRole('menuitem')[0]
+    ).toHaveFocus();
+  });
+
+  it('hands focus to the next part, then the previous, then the heading as parts leave the shelf', () => {
+    const onMoveToShelf = vi.fn();
+    const [alpha, bravo, charlie] = parts as [
+      ProjectSummary,
+      ProjectSummary,
+      ProjectSummary
+    ];
+    // Signed out, so no device-only badge leads the tiles' names.
+    const props = { onMoveToShelf, signedIn: false };
+    const { rerender } = renderStartScreen({ ...props, projects: parts });
+    // App persists the move, then hands the shelf its new listing.
+    const show = (projects: ProjectSummary[]) =>
+      rerender(<StartScreen {...startScreenProps({ ...props, projects })} />);
+    const archive = (project: ProjectSummary) => {
+      fireEvent.click(
+        screen.getByRole('button', { name: `Actions for ${project.name}` })
+      );
+      fireEvent.click(screen.getByRole('menuitem', { name: 'Archive' }));
+      expect(onMoveToShelf).toHaveBeenLastCalledWith(project, 'archived');
+    };
+
+    archive(bravo);
+    show([alpha, archived(bravo), charlie]);
+    expect(screen.getByRole('button', { name: /^Charlie/ })).toHaveFocus();
+
+    archive(charlie);
+    show([alpha, archived(bravo), archived(charlie)]);
+    expect(screen.getByRole('button', { name: /^Alpha/ })).toHaveFocus();
+
+    archive(alpha);
+    show(parts.map(archived));
+    expect(
+      screen.getByRole('heading', { level: 2, name: 'Parts' })
+    ).toHaveFocus();
+  });
+
+  it('leaves focus alone when a move did not take the part off the shelf', () => {
+    renderStartScreen();
+    const opener = screen.getByRole('button', {
+      name: `Actions for ${localProject.name}`
+    });
+
+    fireEvent.click(opener);
+    fireEvent.click(screen.getByRole('menuitem', { name: 'Archive' }));
+    // A failed move keeps the tile; focus waits on its menu button.
+    expect(opener).toHaveFocus();
+  });
+
+  it('makes the shelf tabs one tab stop that the arrow keys move along', () => {
+    renderStartScreen();
+    const tabs = screen.getAllByRole('tab');
+    const panel = screen.getByRole('tabpanel');
+
+    expect(tabs.map((tab) => tab.tabIndex)).toEqual([0, -1, -1]);
+    expect(tabs[0]).toHaveAttribute('aria-controls', panel.id);
+    expect(panel).toHaveAccessibleName('Parts 1');
+
+    fireEvent.keyDown(tabs[0]!, { key: 'ArrowDown' });
+    const archive = screen.getByRole('tab', { name: 'Archive 0' });
+    expect(archive).toHaveFocus();
+    expect(archive).toHaveAttribute('aria-selected', 'true');
+    expect(screen.getByRole('tabpanel')).toHaveAccessibleName('Archive 0');
+
+    fireEvent.keyDown(archive, { key: 'End' });
+    expect(screen.getByRole('tab', { name: 'Trash 0' })).toHaveFocus();
+    fireEvent.keyDown(screen.getByRole('tab', { name: 'Trash 0' }), {
+      key: 'ArrowRight'
+    });
+    expect(screen.getByRole('tab', { name: 'Parts 1' })).toHaveFocus();
+    expect(screen.getAllByRole('tab').map((tab) => tab.tabIndex)).toEqual([
+      0, -1, -1
+    ]);
+  });
+});
+
+describe('StartScreen shelf wording', () => {
+  it('says where the parts went when the Parts shelf is empty but the library is not', () => {
+    renderStartScreen({
+      projects: [
+        {
+          ...localProject,
+          organization: { status: 'archived', pinned: false, sortOrder: 0 }
+        }
+      ]
+    });
+
+    expect(screen.queryByText('No parts yet')).toBeNull();
+    expect(screen.queryByText('nothing saved yet')).toBeNull();
+    expect(screen.getByText('none on this shelf')).toBeInTheDocument();
+    expect(
+      screen.getByText('All your parts are in Archive.')
+    ).toBeInTheDocument();
+  });
+
+  it('calls an empty trash the trash, like every other trash control', () => {
+    renderStartScreen();
+
+    fireEvent.click(screen.getByRole('tab', { name: /^Trash/ }));
+    expect(screen.getByText('the trash is empty')).toBeInTheDocument();
+    expect(screen.getByText('Nothing in the trash.')).toBeInTheDocument();
+    expect(screen.queryByText(/recycle bin/)).toBeNull();
+  });
+
+  it('names the trash footer actions after their part', () => {
+    const onDeleteForever = vi.fn();
+    renderStartScreen({
+      onDeleteForever,
+      projects: [
+        {
+          ...localProject,
+          organization: {
+            status: 'deleted',
+            pinned: false,
+            sortOrder: 0,
+            deletedAt: new Date().toISOString()
+          }
+        }
+      ]
+    });
+
+    fireEvent.click(screen.getByRole('tab', { name: /^Trash/ }));
+    expect(
+      screen.getByRole('button', { name: `Restore ${localProject.name}` })
+    ).toHaveTextContent('Restore');
+    fireEvent.click(
+      screen.getByRole('button', {
+        name: `Delete ${localProject.name} forever`
+      })
+    );
+    expect(onDeleteForever).toHaveBeenCalledOnce();
+  });
+});
+
 describe('StartScreen library discovery', () => {
   it('keeps unknown parts and account state out of the first-run layout', () => {
     const { container } = renderStartScreen({
@@ -461,7 +688,7 @@ describe('StartScreen library shell', () => {
     const onRetrySync = vi.fn();
     const onDismissSyncRun = vi.fn();
     renderStartScreen({
-      status: 'Saved 1 project · 1 could not be saved.',
+      status: 'Saved 1 part · 1 could not be saved.',
       onRetrySync,
       onDismissSyncRun,
       syncRun: [

@@ -16,6 +16,11 @@ const DEFAULT_NAMES = new Set([
   'your name here'
 ]);
 
+// Exact public automation identities only; personal addresses still fail.
+const PUBLIC_BOT_IDENTITIES = new Map([
+  ['noreply@anthropic.com', new Set(['claude', 'claude code'])],
+]);
+
 export function validateIdentity(name, email) {
   const problems = [];
   const normalizedName = name.trim().toLowerCase();
@@ -31,9 +36,13 @@ export function validateIdentity(name, email) {
     problems.push('email is malformed');
   } else if (
     !match[1] ||
-    !(['users.noreply.github.com', 'noreply.github.com'].includes(match[2]) || normalizedEmail === 'noreply@github.com')
+    !(
+      ['users.noreply.github.com', 'noreply.github.com'].includes(match[2]) ||
+      normalizedEmail === 'noreply@github.com' ||
+      PUBLIC_BOT_IDENTITIES.get(normalizedEmail)?.has(normalizedName)
+    )
   ) {
-    problems.push('email must use a GitHub noreply domain');
+    problems.push('email must use a GitHub noreply domain or an approved public bot identity');
   }
 
   return problems;

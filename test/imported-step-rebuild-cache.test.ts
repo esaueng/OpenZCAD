@@ -247,7 +247,13 @@ describe('imported STEP rebuild cache', () => {
           body.volume
         );
       }
-      expect(geometrySignatures(rebuilt)).toEqual(geometrySignatures(combined));
+      const rebuiltSignature = geometrySignatures(rebuilt);
+      const combinedSignature = geometrySignatures(combined);
+      // Check the persisted scalar snapshot independently of matcher traversal.
+      expect(JSON.stringify(rebuiltSignature)).toBe(
+        JSON.stringify(combinedSignature)
+      );
+      expect(rebuiltSignature).toEqual(combinedSignature);
       for (const [id, signature] of Object.entries(geometrySignatures(first))) {
         expect(geometrySignatures(rebuilt)[id]).toEqual(signature);
       }

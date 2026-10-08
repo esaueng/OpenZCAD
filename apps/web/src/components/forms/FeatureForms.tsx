@@ -1,7 +1,9 @@
 import { useEffect, useMemo, useRef, useState, type ReactNode } from 'react';
+import { X } from 'lucide-react';
 import { coerceParamValue } from '@openzcad/document-core';
 import {
   FULL_REVOLVE_ANGLE_DEG,
+  MAX_SKETCH_POLYGON_SIDES,
   type AxisId,
   type BodyId,
   type BooleanOperation,
@@ -154,6 +156,42 @@ function FormShell({
 
 function fieldsValid(scope: Record<string, number>, values: string[]): boolean {
   return values.every((value) => previewExpression(value, scope).ok);
+}
+
+/**
+ * A size that evaluates but cannot build, in PrimitiveForm's words. Without
+ * it a plain "0" showed nothing at all — a plain number has no preview — and
+ * the primary button was simply off.
+ */
+function positiveError(
+  value: string,
+  scope: Record<string, number>
+): string | undefined {
+  const preview = previewExpression(value, scope);
+  return preview.ok && preview.value !== undefined && !(preview.value > 0)
+    ? 'Must be greater than zero.'
+    : undefined;
+}
+
+/**
+ * A count the geometry takes only within its range. `whole` counts are
+ * refused unless integral, as polygon sides are; the others are rounded
+ * first, as the pattern builder rounds its counts.
+ */
+function countError(
+  value: string,
+  scope: Record<string, number>,
+  min: number,
+  max: number,
+  whole: boolean
+): string | undefined {
+  const preview = previewExpression(value, scope);
+  if (!preview.ok || preview.value === undefined) return undefined;
+  const count = whole ? preview.value : Math.round(preview.value);
+  if (Number.isInteger(count) && count >= min && count <= max) return undefined;
+  return whole
+    ? `Must be a whole number from ${min} to ${max}.`
+    : `Must be from ${min} to ${max}.`;
 }
 
 // ---------------------------------------------------------------------------
@@ -592,9 +630,25 @@ export function SketchForm({
         ? ['radius']
         : ['sides', 'radius'];
   const activeKeys = [...shapeKeys, 'centerX', 'centerY'];
+  const shapeErrors: Record<string, string | undefined> = {
+    width: positiveError(values.width ?? '', scope),
+    height: positiveError(values.height ?? '', scope),
+    radius: positiveError(values.radius ?? '', scope),
+    sides: countError(
+      values.sides ?? '',
+      scope,
+      3,
+      MAX_SKETCH_POLYGON_SIDES,
+      true
+    )
+  };
   const canSubmit =
     name.trim().length > 0 &&
-    fieldsValid(scope, [offset, ...activeKeys.map((key) => values[key] ?? '')]);
+    fieldsValid(scope, [
+      offset,
+      ...activeKeys.map((key) => values[key] ?? '')
+    ]) &&
+    shapeKeys.every((key) => !shapeErrors[key]);
 
   const setValue = (key: string) => (value: string) =>
     setValues((current) => ({ ...current, [key]: value }));
@@ -682,12 +736,14 @@ export function SketchForm({
             scope={scope}
             autoFocus
             onChange={setValue('width')}
+            error={shapeErrors.width}
           />
           <ExprInput
             label="Height"
             value={values.height ?? ''}
             scope={scope}
             onChange={setValue('height')}
+            error={shapeErrors.height}
           />
         </>
       )}
@@ -698,6 +754,7 @@ export function SketchForm({
           scope={scope}
           autoFocus
           onChange={setValue('radius')}
+          error={shapeErrors.radius}
         />
       )}
       {shape === 'polygon' && (
@@ -706,6 +763,7 @@ export function SketchForm({
           value={values.sides ?? ''}
           scope={scope}
           onChange={setValue('sides')}
+          error={shapeErrors.sides}
         />
       )}
       <div className="field-pair">
@@ -826,6 +884,7 @@ export function RevolveForm({
   const isPartial =
     anglePreview.ok &&
     anglePreview.value !== undefined &&
+    anglePreview.value > 0 &&
     anglePreview.value < FULL_REVOLVE_ANGLE_DEG;
 
   return (
@@ -864,10 +923,15 @@ export function RevolveForm({
         </select>
       </label>
       <ExprInput
-        label="Angle (deg)"
+        label="Angle (°)"
         value={angleDeg}
         scope={scope}
         onChange={setAngleDeg}
+        error={
+          anglePreview.ok && !angleInRange
+            ? 'Must be greater than 0° and at most 360°.'
+            : undefined
+        }
       />
       <p className="muted">
         Sweeps the profile through the angle, greater than 0 and up to 360.
@@ -878,11 +942,6 @@ export function RevolveForm({
           A partial revolve keeps hash-only face and edge references rather than
           named ones, and its edges cannot be filleted or chamfered. Round the
           full revolve first if the result needs blends.
-        </p>
-      )}
-      {!angleInRange && anglePreview.ok && (
-        <p className="muted error">
-          Angle must be greater than 0 and at most 360 degrees.
         </p>
       )}
     </FormShell>
@@ -1130,10 +1189,12 @@ export function TransformForm({
   const setValue = (key: string) => (value: string) =>
     setValues((current) => ({ ...current, [key]: value }));
 
+  const scaleError = positiveError(values.scale ?? '', scope);
   const canSubmit =
     name.trim().length > 0 &&
     target !== '' &&
-    fieldsValid(scope, Object.values(values));
+    fieldsValid(scope, Object.values(values)) &&
+    !scaleError;
 
   return (
     <FormShell
@@ -1210,6 +1271,7 @@ export function TransformForm({
         value={values.scale ?? ''}
         scope={scope}
         onChange={setValue('scale')}
+        error={scaleError}
       />
     </FormShell>
   );
@@ -1482,7 +1544,7 @@ export function EdgeModifierForm({
                     onRemoveEdge(row.hash);
                   }}
                 >
-                  ×
+                  <X size={12} aria-hidden="true" />
                 </button>
               )}
             </li>
@@ -1516,6 +1578,7 @@ export function EdgeModifierForm({
         scope={scope}
         autoFocus
         onChange={changeSize}
+        error={positiveError(size, scope)}
       />
       <input
         className="edge-size-slider"
@@ -1536,10 +1599,15 @@ export function EdgeModifierForm({
         <>
           <div className="field-pair">
             <ExprInput
-              label="End radius (blank keeps one radius)"
+              label="End radius (blank = constant)"
               value={endRadius}
               scope={scope}
               optional
+              error={
+                endRadius.trim() === ''
+                  ? undefined
+                  : positiveError(endRadius, scope)
+              }
               onChange={(next) => {
                 setEndRadius(next);
                 previewFields(fieldsWith({ endRadius: next }));
@@ -1583,7 +1651,7 @@ export function EdgeModifierForm({
         <>
           {distance2.trim() === '' ? (
             <ExprInput
-              label="Angle° (blank = 45)"
+              label="Angle (°, blank = 45)"
               value={angle}
               scope={scope}
               optional
@@ -1600,6 +1668,11 @@ export function EdgeModifierForm({
                 value={distance2}
                 scope={scope}
                 optional
+                error={
+                  distance2.trim() === ''
+                    ? undefined
+                    : positiveError(distance2, scope)
+                }
                 onChange={(next) => {
                   setDistance2(next);
                   previewFields(fieldsWith({ distance2: next }));
@@ -1728,10 +1801,17 @@ export function PatternForm({
       : kind === 'grid'
         ? fieldsValid(scope, [spacing, spacing2, count2]) && axis !== axis2
         : fieldsValid(scope, [angleDeg]);
+  const countErrors = {
+    count: countError(count, scope, 2, 100, false),
+    count2:
+      kind === 'grid' ? countError(count2, scope, 2, 100, false) : undefined
+  };
   const canSubmit =
     name.trim().length > 0 &&
     targetBodyId !== '' &&
     fieldsValid(scope, [count]) &&
+    !countErrors.count &&
+    !countErrors.count2 &&
     kindFieldsValid;
   const coerceDirectionField = (field: string) =>
     coerceParamValue(field.trim() === '' ? '0' : field);
@@ -1804,6 +1884,7 @@ export function PatternForm({
           scope={scope}
           autoFocus
           onChange={setCount}
+          error={countErrors.count}
         />
         <label className="field">
           <span>Axis</span>
@@ -1826,7 +1907,7 @@ export function PatternForm({
         />
       ) : (
         <ExprInput
-          label="Total angle°"
+          label="Total angle (°)"
           value={angleDeg}
           scope={scope}
           onChange={setAngleDeg}
@@ -1834,32 +1915,37 @@ export function PatternForm({
       )}
       {kind === 'linear' ? (
         <>
-          <p className="muted edge-selection-hint">
-            Custom direction (blank = axis):
-          </p>
-          <div className="field-pair">
-            <ExprInput
-              label="X"
-              value={dirX}
-              scope={scope}
-              optional
-              onChange={setDirX}
-            />
-            <ExprInput
-              label="Y"
-              value={dirY}
-              scope={scope}
-              optional
-              onChange={setDirY}
-            />
-          </div>
-          <ExprInput
-            label="Z"
-            value={dirZ}
-            scope={scope}
-            optional
-            onChange={setDirZ}
-          />
+          {/* One labelled X/Y/Z row, as Position is: the fields were named
+              just "X", "Y" and "Z", under an unassociated caption. */}
+          <fieldset className="primitive-position">
+            <legend>Custom direction (blank = axis)</legend>
+            <div className="field-triple">
+              <ExprInput
+                label="X"
+                ariaLabel="Direction X"
+                value={dirX}
+                scope={scope}
+                optional
+                onChange={setDirX}
+              />
+              <ExprInput
+                label="Y"
+                ariaLabel="Direction Y"
+                value={dirY}
+                scope={scope}
+                optional
+                onChange={setDirY}
+              />
+              <ExprInput
+                label="Z"
+                ariaLabel="Direction Z"
+                value={dirZ}
+                scope={scope}
+                optional
+                onChange={setDirZ}
+              />
+            </div>
+          </fieldset>
         </>
       ) : null}
       {kind === 'grid' ? (
@@ -1870,6 +1956,7 @@ export function PatternForm({
               value={count2}
               scope={scope}
               onChange={setCount2}
+              error={countErrors.count2}
             />
             <label className="field">
               <span>Axis 2</span>

@@ -90,7 +90,7 @@
 
 .mode-switch-option:disabled {
   color: var(--color-text-subtle);
-  opacity: 0.45;
+  opacity: var(--opacity-disabled);
   cursor: not-allowed;
 }
 
@@ -109,7 +109,9 @@
 }
 
 .tweak-panel .sidebar-hint {
-  margin: 8px 12px 0;
+  /* Its own bottom margin: at 0 the empty-state hint sat on the panel's
+     bottom border. */
+  margin: 8px 12px 12px;
 }
 
 .tweak-panel-params {
@@ -224,9 +226,11 @@
   display: inline-flex;
 }
 
-/* Opens downward: the bar sits at the top of the viewport. Opening upward
-   (from when the bar was at the bottom edge) put the panel at -67px, off
-   the window and over the top bar, with Front to Right unreachable. */
+/* Opens downward from a bar laid out as a row. Opening upward (from when
+   the bar was at the bottom edge) put the panel at -67px, off the window
+   and over the top bar, with Front to Right unreachable. The column layout
+   stands the bar on the right edge and opens the panel beside it, leftward
+   (quiet-stage.css). */
 .view-mode-views-panel {
   position: absolute;
   top: calc(100% + 6px);
@@ -258,6 +262,24 @@
 .view-mode-views-panel button:hover {
   color: var(--color-text);
   background: var(--color-surface-hover);
+}
+
+/* A view's key rides its tile, after the name. */
+.view-mode-views-panel button:has(kbd) {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 5px;
+}
+
+.view-mode-views-panel kbd {
+  padding: 0 3px;
+  color: var(--color-text-subtle);
+  border: var(--border-thin);
+  border-radius: var(--radius-sm);
+  font-family: var(--font-mono);
+  font-size: var(--fs-mini);
+  line-height: 1.4;
 }
 
 .view-mode-view-wide {
@@ -475,6 +497,7 @@
 
 .measurement-dock-clear {
   margin-left: auto;
+  min-height: 24px;
   padding: 2px 5px;
   color: var(--color-text-muted);
   background: none;
@@ -547,9 +570,12 @@
   font-size: var(--fs-mini);
 }
 
+/* 28px like the mode tabs above: a min-height alone lost to the global
+   30px field height, so the dock ran 28, 30, 26 and 18px controls. */
 .measurement-display-controls select,
 .measurement-row-editor input {
   min-width: 0;
+  height: 28px;
   min-height: 28px;
   padding: 3px 6px;
   color: var(--color-text);
@@ -804,7 +830,7 @@
 }
 
 .measurement-row-editor-actions button {
-  min-height: 26px;
+  min-height: 28px;
   display: inline-flex;
   align-items: center;
   gap: 4px;

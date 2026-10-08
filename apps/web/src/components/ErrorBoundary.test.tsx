@@ -48,6 +48,18 @@ describe('ErrorBoundary', () => {
     expect(screen.getByText('boom')).toBeTruthy();
   });
 
+  it('keeps the page a main landmark and alerts with the message alone', () => {
+    renderFailing(new Error('boom'), 'page');
+    expect(
+      screen.getByRole('main', {
+        name: 'OpenZCAD workspace could not be rendered.'
+      })
+    ).toBeTruthy();
+    expect(screen.getByRole('alert')).toHaveTextContent(
+      'An unexpected error stopped the workspace. Reload to recover.'
+    );
+  });
+
   it('stays an inline panel fallback by default', () => {
     const { container } = renderFailing(new Error('boom'));
     expect(container.querySelector('.error-boundary')).not.toBeNull();

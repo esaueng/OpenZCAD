@@ -1,4 +1,4 @@
-import { useState } from 'react';
+import { useEffect, useRef, useState } from 'react';
 import {
   Check,
   ChevronRight,
@@ -39,6 +39,10 @@ const CONFIDENCE_LABEL = {
   unreadable: 'unreadable'
 } as const;
 
+function count(value: number, noun: string): string {
+  return `${value} ${noun}${value === 1 ? '' : 's'}`;
+}
+
 /**
  * A proposal as a block in the stream: its state as a label, the summary,
  * what was read from a drawing, the operations behind a disclosure, and
@@ -58,10 +62,39 @@ export function ProposalCard({
   const [showOperations, setShowOperations] = useState(false);
   const [showReadings, setShowReadings] = useState(true);
   const totals = summarizeOperations(entry.proposal.operations);
+  const totalParts = [
+    totals.parameters > 0 ? count(totals.parameters, 'param') : null,
+    totals.bodies > 0 ? count(totals.bodies, 'solid') : null,
+    totals.edits > 0 ? count(totals.edits, 'edit') : null
+  ].filter((part) => part !== null);
   const resolved = entry.status !== 'open';
+
+  // Apply and Reject leave with the decision they made. Focus stays on the
+  // card that now records it instead of falling to the page — unless it has
+  // already gone somewhere else, as it has when the prompt's keys decided.
+  const cardRef = useRef<HTMLDivElement | null>(null);
+  const previousStatus = useRef(entry.status);
+  useEffect(() => {
+    const was = previousStatus.current;
+    previousStatus.current = entry.status;
+    const card = cardRef.current;
+    if (was !== 'open' || entry.status === 'open' || !card) {
+      return;
+    }
+    const active = card.ownerDocument.activeElement;
+    if (
+      !active ||
+      active === card.ownerDocument.body ||
+      card.contains(active)
+    ) {
+      card.focus({ preventScroll: true });
+    }
+  }, [entry.status]);
 
   return (
     <div
+      ref={cardRef}
+      tabIndex={-1}
       className={`assistant-card proposal ${entry.status}${
         previewing ? ' previewing' : ''
       }`}
@@ -79,7 +112,7 @@ export function ProposalCard({
             : 'Proposal'}
         {previewing && (
           <span className="assistant-live-pill">
-            <Eye size={10} aria-hidden="true" />
+            <Eye size={12} aria-hidden="true" />
             in the viewport
           </span>
         )}
@@ -140,7 +173,7 @@ export function ProposalCard({
                   >
                     <th scope="row">{reading.label}</th>
                     <td>
-                      {reading.value}
+                      {reading.value}{' '}
                       <span className="assistant-confidence">
                         {CONFIDENCE_LABEL[reading.confidence]}
                       </span>
@@ -173,13 +206,14 @@ export function ProposalCard({
           className="disclosure-chevron"
           aria-hidden="true"
         />
-        {entry.proposal.operations.length} operation
-        {entry.proposal.operations.length === 1 ? '' : 's'}
-        <span className="assistant-op-totals">
-          {totals.parameters > 0 && `${totals.parameters} param`}
-          {totals.bodies > 0 && ` · ${totals.bodies} solid`}
-          {totals.edits > 0 && ` · ${totals.edits} edit`}
-        </span>
+        {count(entry.proposal.operations.length, 'operation')}
+        {totalParts.length > 0 && (
+          // The leading space reads in the accessible name; the flex gap
+          // draws the visible one.
+          <span className="assistant-op-totals">
+            {` · ${totalParts.join(' · ')}`}
+          </span>
+        )}
       </button>
       {showOperations && (
         <ol className="assistant-operations">

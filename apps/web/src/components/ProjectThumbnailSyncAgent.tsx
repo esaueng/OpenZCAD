@@ -10,10 +10,8 @@ import {
   type ThumbnailCloudTransport
 } from '../lib/cloudThumbnail';
 import { queuePartThumbnail, renderThumbnailFrame } from '../lib/partThumbnail';
-import {
-  sharedThumbnailCapture,
-  type ThumbnailCapture
-} from '../lib/projectThumbnailCapture';
+import type { ThumbnailCapture } from '../lib/projectThumbnailCapture';
+import { sharedThumbnailCapture } from '../lib/sharedThumbnailCapture';
 
 interface ProjectThumbnailSyncAgentProps {
   projectId: ProjectId;

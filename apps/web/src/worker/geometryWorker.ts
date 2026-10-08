@@ -31,6 +31,8 @@ import {
   canonicalProjectContentKey
 } from './exactRebuildCache';
 import { GeometryWorkerQueue } from './geometryWorkerQueue';
+import { geometryYield } from './geometryYield';
+import { geometryProgress } from './geometryProgress';
 import {
   derivedMeshTransferables,
   unpackWorkerRequest
@@ -780,16 +782,17 @@ async function execute(job: GeometryWorkerJob): Promise<void> {
               };
               const result = await exact.syncDocument(
                 document,
-                (progress) => {
+                geometryProgress((progress) => {
                   if (!broadcastGate.isCurrent(job.broadcastToken)) return;
                   post({
                     ...stateFor('rebuilding', request, { stale: true }),
                     progress
                   });
-                },
+                }),
                 request.requestId
                   ? undefined
                   : (projection) => {
+                      if (!broadcastGate.isCurrent(job.broadcastToken)) return;
                       post({
                         type: 'projection',
                         projectId: document.projectId,
@@ -830,6 +833,7 @@ async function execute(job: GeometryWorkerJob): Promise<void> {
                         }
                       }
                     : {}),
+                  yieldControl: geometryYield(),
                   ...(request.type === 'sync' && request.lineageDemand
                     ? { lineageDemand: request.lineageDemand }
                     : {})

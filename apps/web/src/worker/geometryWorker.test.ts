@@ -17,6 +17,7 @@ import type {
   GeometryWorkerRequest,
   GeometryWorkerResult
 } from './geometryWorker';
+import type { ExactKernelAdapter } from '@openzcad/kernel-adapter/exact';
 
 function deferred<T>() {
   let resolve!: (value: T) => void;
@@ -62,7 +63,9 @@ async function installWorker(
     currentMassPropertiesEpoch: vi.fn(() => 1),
     prepareMassPropertiesForDocument: vi.fn(async () => 2),
     readCurrentMassProperties: vi.fn(() => ({
-      status: 'unavailable', reason: 'No live solid is available.', epoch: 1
+      status: 'unavailable',
+      reason: 'No live solid is available.',
+      epoch: 1
     })),
     exportStep: vi.fn(),
     exportStl: vi.fn(),
@@ -102,21 +105,36 @@ describe('geometry worker rebuild coordination', () => {
       });
       const box = addPrimitiveFeature(
         createProjectDocument('Text mass', toUserId('user')),
-        { name: 'Box', primitiveKind: 'box', dimensions: { width: 1, height: 1, depth: 1 } }
+        {
+          name: 'Box',
+          primitiveKind: 'box',
+          dimensions: { width: 1, height: 1, depth: 1 }
+        }
       );
       const document = addSketchFeature(box, {
         name: 'Label',
         planeRef: { type: 'canonical', plane: 'XY', offset: 0 },
-        objects: [{
-          objectKind: 'text', text: 'A', fontFamily: 'open-sans',
-          fontStyle: 'regular', size: 10, x: 0, y: 0
-        }]
+        objects: [
+          {
+            objectKind: 'text',
+            text: 'A',
+            fontFamily: 'open-sans',
+            fontStyle: 'regular',
+            size: 10,
+            x: 0,
+            y: 0
+          }
+        ]
       }).document;
       post(scope, {
-        type: 'mass-properties', document,
-        bodyId: document.bodyOrder[0]!, requestId: 'text-mass'
+        type: 'mass-properties',
+        document,
+        bodyId: document.bodyOrder[0]!,
+        requestId: 'text-mass'
       });
-      await vi.waitFor(() => expect(prepareMassPropertiesForDocument).toHaveBeenCalledWith(document));
+      await vi.waitFor(() =>
+        expect(prepareMassPropertiesForDocument).toHaveBeenCalledWith(document)
+      );
       expect(preloadDocumentFonts).toHaveBeenCalledWith(document);
       expect(preloadDocumentFonts.mock.invocationCallOrder[0]).toBeLessThan(
         prepareMassPropertiesForDocument.mock.invocationCallOrder[0]!
@@ -133,7 +151,9 @@ describe('geometry worker rebuild coordination', () => {
       return epoch;
     });
     const readCurrentMassProperties = vi.fn(() => ({
-      status: 'unavailable', reason: 'No live solid is available.', epoch
+      status: 'unavailable',
+      reason: 'No live solid is available.',
+      epoch
     }));
     const { scope } = await installWorker(syncDocument, {
       currentMassPropertiesEpoch: () => epoch,
@@ -142,7 +162,11 @@ describe('geometry worker rebuild coordination', () => {
     });
     const first = addPrimitiveFeature(
       createProjectDocument('Mass cache', toUserId('user')),
-      { name: 'Box', primitiveKind: 'box', dimensions: { width: 1, height: 1, depth: 1 } }
+      {
+        name: 'Box',
+        primitiveKind: 'box',
+        dimensions: { width: 1, height: 1, depth: 1 }
+      }
     );
     const bodyId = first.bodyOrder[0]!;
     const edited = updateFeature(first, {
@@ -151,58 +175,104 @@ describe('geometry worker rebuild coordination', () => {
     });
     post(scope, { type: 'sync', document: first, requestId: 'first' });
     await vi.waitFor(() => expect(syncDocument).toHaveBeenCalledTimes(1));
-    post(scope, { type: 'mass-properties', document: first, bodyId, requestId: 'mass-current' });
-    await vi.waitFor(() => expect(readCurrentMassProperties).toHaveBeenCalledTimes(1));
+    post(scope, {
+      type: 'mass-properties',
+      document: first,
+      bodyId,
+      requestId: 'mass-current'
+    });
+    await vi.waitFor(() =>
+      expect(readCurrentMassProperties).toHaveBeenCalledTimes(1)
+    );
     expect(prepareMassPropertiesForDocument).not.toHaveBeenCalled();
 
     post(scope, { type: 'sync', document: edited, requestId: 'edited' });
     await vi.waitFor(() => expect(syncDocument).toHaveBeenCalledTimes(2));
     post(scope, { type: 'sync', document: first, requestId: 'cached-undo' });
-    await vi.waitFor(() => expect(
-      scope.postMessage.mock.calls.some(([message]) =>
-        message.type === 'sync' && message.ok && message.requestId === 'cached-undo'
-      )
-    ).toBe(true));
+    await vi.waitFor(() =>
+      expect(
+        scope.postMessage.mock.calls.some(
+          ([message]) =>
+            message.type === 'sync' &&
+            message.ok &&
+            message.requestId === 'cached-undo'
+        )
+      ).toBe(true)
+    );
     expect(syncDocument).toHaveBeenCalledTimes(2);
-    post(scope, { type: 'mass-properties', document: first, bodyId, requestId: 'mass-undo' });
-    await vi.waitFor(() => expect(prepareMassPropertiesForDocument).toHaveBeenCalledTimes(1));
+    post(scope, {
+      type: 'mass-properties',
+      document: first,
+      bodyId,
+      requestId: 'mass-undo'
+    });
+    await vi.waitFor(() =>
+      expect(prepareMassPropertiesForDocument).toHaveBeenCalledTimes(1)
+    );
     expect(prepareMassPropertiesForDocument).toHaveBeenCalledWith(first);
 
     epoch = null; // An export retires the exact handles even when the derived LRU still hits.
-    post(scope, { type: 'mass-properties', document: first, bodyId, requestId: 'mass-after-export' });
-    await vi.waitFor(() => expect(prepareMassPropertiesForDocument).toHaveBeenCalledTimes(2));
+    post(scope, {
+      type: 'mass-properties',
+      document: first,
+      bodyId,
+      requestId: 'mass-after-export'
+    });
+    await vi.waitFor(() =>
+      expect(prepareMassPropertiesForDocument).toHaveBeenCalledTimes(2)
+    );
     expect(readCurrentMassProperties).toHaveBeenCalledTimes(3);
   });
 
   it('recovers a version-only cache hit using the typed stale result', async () => {
-    const readCurrentMassProperties = vi.fn()
+    const readCurrentMassProperties = vi
+      .fn()
       .mockReturnValueOnce({
-        status: 'unavailable', code: 'stale',
-        reason: 'The body geometry changed.', epoch: 1
+        status: 'unavailable',
+        code: 'stale',
+        reason: 'The body geometry changed.',
+        epoch: 1
       })
       .mockReturnValueOnce({
-        status: 'unavailable', code: 'unsupported',
-        reason: 'No live solid is available.', epoch: 2
+        status: 'unavailable',
+        code: 'unsupported',
+        reason: 'No live solid is available.',
+        epoch: 2
       });
     const prepareMassPropertiesForDocument = vi.fn(async () => 2);
-    const { scope } = await installWorker(
-      async () => derived('exact'),
-      { readCurrentMassProperties, prepareMassPropertiesForDocument }
-    );
+    const { scope } = await installWorker(async () => derived('exact'), {
+      readCurrentMassProperties,
+      prepareMassPropertiesForDocument
+    });
     const document = addPrimitiveFeature(
       createProjectDocument('Version-only mass', toUserId('user')),
-      { name: 'Box', primitiveKind: 'box', dimensions: { width: 1, height: 1, depth: 1 } }
+      {
+        name: 'Box',
+        primitiveKind: 'box',
+        dimensions: { width: 1, height: 1, depth: 1 }
+      }
     );
     post(scope, { type: 'sync', document, requestId: 'initial' });
-    await vi.waitFor(() => expect(scope.postMessage.mock.calls.some(([message]) =>
-      message.type === 'sync' && message.ok && message.requestId === 'initial'
-    )).toBe(true));
+    await vi.waitFor(() =>
+      expect(
+        scope.postMessage.mock.calls.some(
+          ([message]) =>
+            message.type === 'sync' &&
+            message.ok &&
+            message.requestId === 'initial'
+        )
+      ).toBe(true)
+    );
     const later = { ...document, version: document.version + 1 };
     post(scope, {
-      type: 'mass-properties', document: later,
-      bodyId: later.bodyOrder[0]!, requestId: 'version-only'
+      type: 'mass-properties',
+      document: later,
+      bodyId: later.bodyOrder[0]!,
+      requestId: 'version-only'
     });
-    await vi.waitFor(() => expect(prepareMassPropertiesForDocument).toHaveBeenCalledWith(later));
+    await vi.waitFor(() =>
+      expect(prepareMassPropertiesForDocument).toHaveBeenCalledWith(later)
+    );
     expect(readCurrentMassProperties).toHaveBeenCalledTimes(2);
   });
   it('transfers each owned mesh buffer once without detaching adapter or cached meshes', async () => {
@@ -239,13 +309,21 @@ describe('geometry worker rebuild coordination', () => {
       if (message.type !== 'sync' || !message.ok) return;
       expect(options?.transfer).toHaveLength(2);
       const copy = structuredClone(message, options);
-      expect(message.derived.bodyRepresentations[bodyId]!.mesh.vertices.byteLength).toBe(0);
-      expect(message.derived.bodyRepresentations[bodyId]!.mesh.indices.byteLength).toBe(0);
+      expect(
+        message.derived.bodyRepresentations[bodyId]!.mesh.vertices.byteLength
+      ).toBe(0);
+      expect(
+        message.derived.bodyRepresentations[bodyId]!.mesh.indices.byteLength
+      ).toBe(0);
       received.push(copy.derived);
     });
     const document = addPrimitiveFeature(
       createProjectDocument('Transport', toUserId('user')),
-      { name: 'Box', primitiveKind: 'box', dimensions: { width: 1, height: 1, depth: 1 } }
+      {
+        name: 'Box',
+        primitiveKind: 'box',
+        dimensions: { width: 1, height: 1, depth: 1 }
+      }
     );
     for (const requestId of ['first', 'cache-hit']) {
       post(scope, { type: 'sync', document, requestId });
@@ -502,6 +580,57 @@ describe('geometry worker rebuild coordination', () => {
     expect(broadcastResults[0]).toMatchObject({ version: newest.version });
   });
 
+  it('supplies task yields and drops a superseded interactive projection', async () => {
+    const first = deferred<ProjectDocument['derived']>();
+    let project: ((value: ProjectDocument['derived']) => void) | undefined;
+    const syncDocument = vi
+      .fn<ExactKernelAdapter['syncDocument']>()
+      .mockImplementationOnce(
+        (_document, _progress, onProjection, _analysis, options) => {
+          project = onProjection;
+          expect(options?.yieldControl).toBeTypeOf('function');
+          return first.promise;
+        }
+      )
+      .mockResolvedValueOnce(derived('newest'));
+    const { scope } = await installWorker(syncDocument);
+    const original = addPrimitiveFeature(
+      createProjectDocument('Original', toUserId('user')),
+      {
+        name: 'Box',
+        primitiveKind: 'box',
+        dimensions: { width: 10, height: 20, depth: 30 }
+      }
+    );
+    post(scope, { type: 'sync', document: original });
+    await vi.waitFor(() => expect(syncDocument).toHaveBeenCalledOnce());
+    const newest = updateFeature(original, {
+      featureId: listFeaturesInOrder(original)[0]!.featureId,
+      data: { dimensions: { width: 11, height: 20, depth: 30 } }
+    });
+    post(scope, { type: 'sync', document: newest });
+    project?.(derived('stale preview'));
+    first.resolve(derived('stale exact'));
+    await vi.waitFor(() => expect(syncDocument).toHaveBeenCalledTimes(2));
+    await vi.waitFor(() => {
+      const results = scope.postMessage.mock.calls
+        .map(([message]) => message)
+        .filter((message) => message.type === 'projection-delta');
+      expect(results).toHaveLength(1);
+      expect(results[0]).toMatchObject({
+        type: 'projection-delta',
+        projectId: newest.projectId,
+        version: newest.version,
+        packet: { state: { warnings: ['newest'] } }
+      });
+    });
+    expect(
+      scope.postMessage.mock.calls.some(
+        ([message]) => message.type === 'projection'
+      )
+    ).toBe(false);
+  });
+
   it('transfers binary mesh exports back with their request id', async () => {
     const exportMesh = vi.fn(async () => new Uint8Array([80, 75, 3, 4]));
     const { scope } = await installWorker(async () => derived('unused'), {
@@ -585,7 +714,7 @@ describe('geometry worker rebuild coordination', () => {
     });
   });
 
-  it('answers a section request with the adapter\'s exact outline', async () => {
+  it("answers a section request with the adapter's exact outline", async () => {
     const report = {
       plane: { origin: [0, 0, 3], normal: [0, 0, 1] },
       regions: [

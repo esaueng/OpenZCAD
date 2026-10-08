@@ -107,6 +107,8 @@ export function ContextMenu({
       // The heading is the only statement of which body or face the generic
       // actions will touch, so it names the menu rather than being decoration.
       aria-labelledby={menu.heading ? headingId : undefined}
+      // A menu with no heading still needs a name to be announced by.
+      aria-label={menu.heading ? undefined : 'Actions'}
       tabIndex={-1}
       style={{ left: position.x, top: position.y }}
     >

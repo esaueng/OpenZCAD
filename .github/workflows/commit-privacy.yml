@@ -39,6 +39,12 @@ jobs:
           # Never put private names, emails, or a denylist here.
           PROTECTED_LOGINS = {"petergstfsn"}
           PUBLIC_DISPLAY_NAMES = {"petergstfsn": {"Peter"}}
+          # Public automation identities; do not exempt an entire actor or commit.
+          PUBLIC_BOT_IDENTITIES = {"noreply@anthropic.com": {"claude", "claude code"}}
+          BOT_DISPLAY_NAMES = {
+              "claude[bot]": {"claude", "claude code"},
+              "claude-code-action[bot]": {"claude", "claude code"},
+          }
           POLICY = "protected-users"
           NOREPLY = re.compile(r"(?:[0-9]+\+)?([A-Za-z0-9-]+(?:\[bot\])?)@users\.noreply\.github\.com", re.IGNORECASE)
           SHA = re.compile(r"[0-9a-f]{40}")
@@ -51,11 +57,15 @@ jobs:
           def valid_public_identity(name, email):
               if name == "GitHub" and email == "noreply@github.com":
                   return True
+              if name.casefold() in PUBLIC_BOT_IDENTITIES.get(email.casefold(), set()):
+                  return True
               match = NOREPLY.fullmatch(email)
               if match is None:
                   return False
               login = match.group(1).casefold()
               approved = {login} | {value.casefold() for value in PUBLIC_DISPLAY_NAMES.get(login, set())}
+              if login.endswith("[bot]"):
+                  approved |= {login[:-5]} | BOT_DISPLAY_NAMES.get(login, set())
               return name.casefold() in approved
 
 
@@ -175,10 +185,35 @@ jobs:
               assert valid_public_identity("example-user", "example-user@users.noreply.github.com")
               assert valid_public_identity("github-actions[bot]", "41898282+github-actions[bot]@users.noreply.github.com")
               assert valid_public_identity("GitHub", "noreply@github.com")
+              for name, email, login in (
+                  ("Claude", "noreply@anthropic.com", "claude"),
+                  ("Claude Code", "noreply@anthropic.com", "claude"),
+                  ("CLAUDE", "NOREPLY@ANTHROPIC.COM", "claude"),
+                  ("Claude", "209825114+claude[bot]@users.noreply.github.com", "claude[bot]"),
+                  ("Claude Code", "208546643+claude-code-action[bot]@users.noreply.github.com", "claude-code-action[bot]"),
+                  ("example-automation", "123+example-automation[bot]@users.noreply.github.com", "example-automation[bot]"),
+                  ("dependabot[bot]", "49699333+dependabot[bot]@users.noreply.github.com", "dependabot[bot]"),
+              ):
+                  assert valid_public_identity(name, email)
+                  assert invalid_fields(fixture(name, email, login)) == []
+              assert not valid_public_identity("Example Person", "noreply@anthropic.com")
+              assert not valid_public_identity("Claude", "example@anthropic.com")
+              assert not valid_public_identity("Claude", "noreply@anthropic.com.example.invalid")
+              assert not valid_public_identity("Example Person", "123+example-automation[bot]@users.noreply.github.com")
               assert not valid_public_identity("Example Person", "123+example-user@users.noreply.github.com")
               assert not valid_public_identity("example-user", "example@example.invalid")
               protected = next(iter(PROTECTED_LOGINS))
               assert invalid_fields(fixture("Example Person", "example@example.invalid", protected)) == ["author", "committer"]
+              # A public bot identity cannot disguise the protected human account.
+              assert invalid_fields(fixture("Claude", "noreply@anthropic.com", protected)) == ["author", "committer"]
+              mixed = fixture("Claude", "noreply@anthropic.com", "claude")
+              mixed["commit"]["committer"] = {"name": "Example Person", "email": "example@example.invalid"}
+              mixed["committer"] = {"login": protected}
+              assert invalid_fields(mixed) == ["committer"]
+              mixed = fixture(protected, protected + "@users.noreply.github.com", protected)
+              mixed["commit"]["committer"] = {"name": "Claude", "email": "noreply@anthropic.com"}
+              mixed["committer"] = {"login": "claude"}
+              assert invalid_fields(mixed) == []
               assert invalid_fields(fixture(protected, protected + "@users.noreply.github.com", protected)) == []
               assert invalid_fields(fixture("example-user", "example-user@users.noreply.github.com", protected)) == ["author", "committer"]
               for display_name in PUBLIC_DISPLAY_NAMES.get(protected, set()):
