@@ -46,8 +46,10 @@ export function offsetChipText(input: {
   units: string;
 }): string {
   const { rawValue, mode, span, sense, units } = input;
+  // Both readings round to hundredths, so flipping the tag changes the number
+  // it shows, never how precisely it shows it.
   if (mode === 'total' && span !== null) {
-    return `${formatNumber(span + sense * rawValue)} ${units}`;
+    return `${formatNumber(Math.round((span + sense * rawValue) * 100) / 100)} ${units}`;
   }
   const value = Math.round(rawValue * 100) / 100;
   return `${value >= 0 ? '+' : ''}${value} ${units}`;

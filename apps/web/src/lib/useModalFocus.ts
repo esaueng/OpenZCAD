@@ -109,11 +109,69 @@ function waitForContent(registration: ModalRegistration): void {
   };
 }
 
-function activateModal(registration: ModalRegistration): void {
+function isGroupedRadio(element: Element | null): element is HTMLInputElement {
+  return (
+    element instanceof HTMLInputElement &&
+    element.type === 'radio' &&
+    element.name !== ''
+  );
+}
+
+/** Whether two controls are one Tab stop: a radio group is a single stop. */
+function sameTabStop(a: Element | null, b: HTMLElement): boolean {
+  return (
+    a === b ||
+    (isGroupedRadio(a) &&
+      isGroupedRadio(b) &&
+      a.name === b.name &&
+      a.form === b.form)
+  );
+}
+
+/**
+ * The dialog's Tab stops in order. Only the checked radio of a group takes
+ * Tab, so its unchecked siblings are dropped: counting the unchecked first
+ * radio as the first stop let Shift+Tab from the checked one leave the dialog.
+ */
+function tabStops(dialog: HTMLElement): HTMLElement[] {
+  const candidates = Array.from(
+    dialog.querySelectorAll<HTMLElement>(FOCUSABLE)
+  );
+  return candidates.filter(
+    (element) =>
+      !isGroupedRadio(element) ||
+      element.checked ||
+      !candidates.some(
+        (other) =>
+          isGroupedRadio(other) && other.checked && sameTabStop(element, other)
+      )
+  );
+}
+
+/** Focuses `target` when it is still a live control in `dialog`. */
+function returnFocusInto(
+  dialog: HTMLElement,
+  target: HTMLElement | null
+): boolean {
+  if (!target?.isConnected || !dialog.contains(target)) {
+    return false;
+  }
+  target.focus();
+  return document.activeElement === target;
+}
+
+function activateModal(
+  registration: ModalRegistration,
+  returnFocus: HTMLElement | null = null
+): void {
   const { dialog, autoFocus, initialFocusRef } = registration;
   registration.restoreBackground = inertBackground(dialog);
 
-  if (autoFocus && !dialog.contains(document.activeElement)) {
+  // A modal opened from a control in here has closed: the keyboard goes back
+  // to that control, not to this dialog's first one (Settings → Privacy →
+  // Delete… → Escape landed on the top of Settings).
+  const returned = returnFocusInto(dialog, returnFocus);
+  if (!returned && autoFocus && !dialog.contains(document.activeElement)) {
     const first = dialog.querySelector<HTMLElement>(FOCUSABLE);
     const target = initialFocusRef?.current ?? first;
     (target ?? dialog).focus();
@@ -129,12 +187,31 @@ function activateModal(registration: ModalRegistration): void {
   }
 
   const onKeyDown = (event: KeyboardEvent) => {
+    if (event.key === 'Escape') {
+      // A button that disables itself while its request runs (Create link,
+      // Revoke, Resolve, Import) drops focus to <body>, where the dialog's
+      // own Escape handler never hears the key, and the workspace is held
+      // off by modalHoldsKeyboard: Escape did nothing until the user clicked
+      // back in. Hand the key to the dialog so its own handler, with its own
+      // busy guards, still decides.
+      const target = event.target;
+      if (target instanceof Node && !dialog.contains(target)) {
+        event.preventDefault();
+        event.stopPropagation();
+        dialog.dispatchEvent(
+          new KeyboardEvent('keydown', {
+            key: 'Escape',
+            bubbles: true,
+            cancelable: true
+          })
+        );
+      }
+      return;
+    }
     if (event.key !== 'Tab') {
       return;
     }
-    const focusable = Array.from(
-      dialog.querySelectorAll<HTMLElement>(FOCUSABLE)
-    );
+    const focusable = tabStops(dialog);
     if (focusable.length === 0) {
       event.preventDefault();
       return;
@@ -143,10 +220,10 @@ function activateModal(registration: ModalRegistration): void {
     const last = focusable[focusable.length - 1]!;
     const current = document.activeElement;
     const outside = !dialog.contains(current);
-    if (event.shiftKey && (current === first || outside)) {
+    if (event.shiftKey && (sameTabStop(current, first) || outside)) {
       event.preventDefault();
       last.focus();
-    } else if (!event.shiftKey && (current === last || outside)) {
+    } else if (!event.shiftKey && (sameTabStop(current, last) || outside)) {
       event.preventDefault();
       first.focus();
     }
@@ -166,7 +243,11 @@ function deactivateModal(registration: ModalRegistration): void {
   registration.restoreBackground = undefined;
 }
 
-function refreshActiveModal(): void {
+/**
+ * Re-picks the visually top registration. `returnFocus` is the opener of a
+ * modal that just closed, handed to the one below when it was opened from it.
+ */
+function refreshActiveModal(returnFocus: HTMLElement | null = null): void {
   let next: ModalRegistration | null = null;
   for (const candidate of modalStack) {
     if (!candidate.dialog.isConnected) {
@@ -198,7 +279,7 @@ function refreshActiveModal(): void {
   activeModal = next;
 
   if (next) {
-    activateModal(next);
+    activateModal(next, returnFocus);
   } else if (stackOpener?.isConnected) {
     stackOpener.focus();
   }
@@ -241,8 +322,11 @@ export function useModalFocus(
     if (!dialog) {
       return;
     }
+    // Each modal keeps its own opener as well as the stack's: one opened
+    // from inside another hands focus back to that control when it closes.
+    const opener = document.activeElement as HTMLElement | null;
     if (modalStack.length === 0) {
-      stackOpener = document.activeElement as HTMLElement | null;
+      stackOpener = opener;
     }
     const registration: ModalRegistration = {
       dialog,
@@ -258,7 +342,7 @@ export function useModalFocus(
       if (index !== -1) {
         modalStack.splice(index, 1);
       }
-      refreshActiveModal();
+      refreshActiveModal(opener);
     };
   }, [autoFocus, enabled, initialFocusRef, ref, workspaceKeys]);
 }

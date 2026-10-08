@@ -59,6 +59,19 @@ const REASONING_EFFORTS: AppSettings['assistant']['reasoningEffort'][] = [
   'xhigh'
 ];
 
+/**
+ * The ranges `normalizeAppSettings` accepts for its numeric preferences. Settings
+ * clamps its fields to these same bounds, so a value the page shows is always a
+ * value storage keeps rather than one normalization swaps for the default.
+ */
+export const APP_SETTINGS_NUMBER_BOUNDS = {
+  linearSnap: { min: 0.001, max: 10_000 },
+  angleSnap: { min: 1, max: 90 },
+  snapTolerancePx: { min: 4, max: 24 },
+  maxOutputTokens: { min: 1_024, max: 128_000 },
+  timeoutMs: { min: 5_000, max: 300_000 }
+} as const;
+
 function copyDefaults(): AppSettings {
   return structuredClone(DEFAULT_APP_SETTINGS);
 }
@@ -221,20 +234,20 @@ export function normalizeAppSettings(value: unknown): AppSettings {
       linearSnap: boundedNumber(
         sketching.linearSnap,
         defaults.sketching.linearSnap,
-        0.001,
-        10_000
+        APP_SETTINGS_NUMBER_BOUNDS.linearSnap.min,
+        APP_SETTINGS_NUMBER_BOUNDS.linearSnap.max
       ),
       angleSnap: boundedNumber(
         sketching.angleSnap,
         defaults.sketching.angleSnap,
-        1,
-        90
+        APP_SETTINGS_NUMBER_BOUNDS.angleSnap.min,
+        APP_SETTINGS_NUMBER_BOUNDS.angleSnap.max
       ),
       snapTolerancePx: boundedNumber(
         sketching.snapTolerancePx,
         defaults.sketching.snapTolerancePx,
-        4,
-        24
+        APP_SETTINGS_NUMBER_BOUNDS.snapTolerancePx.min,
+        APP_SETTINGS_NUMBER_BOUNDS.snapTolerancePx.max
       )
     },
     files: {
@@ -276,16 +289,16 @@ export function normalizeAppSettings(value: unknown): AppSettings {
         boundedNumber(
           assistant.maxOutputTokens,
           defaults.assistant.maxOutputTokens,
-          1_024,
-          128_000
+          APP_SETTINGS_NUMBER_BOUNDS.maxOutputTokens.min,
+          APP_SETTINGS_NUMBER_BOUNDS.maxOutputTokens.max
         )
       ),
       timeoutMs: Math.round(
         boundedNumber(
           assistant.timeoutMs,
           defaults.assistant.timeoutMs,
-          5_000,
-          300_000
+          APP_SETTINGS_NUMBER_BOUNDS.timeoutMs.min,
+          APP_SETTINGS_NUMBER_BOUNDS.timeoutMs.max
         )
       ),
       customInstructions:

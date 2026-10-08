@@ -54,7 +54,7 @@ async function createBox(
   await page.goto('/');
   await page.getByLabel('Project name').fill(name);
   if (options.units) {
-    await page.getByLabel('Unit system').selectOption(options.units);
+    await page.getByLabel('Units', { exact: true }).selectOption(options.units);
   }
   await page.getByRole('button', { name: 'Create project' }).click();
   await page.getByRole('button', { name: /^Box \(B\)/ }).click();
@@ -243,14 +243,14 @@ test('UI-09: the circle type strip sits beside the rail and leaves with the tool
   await tiles.nth(2).click();
   await expect(tiles.nth(2)).toHaveAttribute('aria-checked', 'true');
   await expect(
-    tools.getByRole('button', { name: 'Circle: Three-Point Circle' })
+    tools.getByRole('button', { name: 'Circle: Three-point circle' })
   ).toHaveAttribute('aria-pressed', 'true');
 
   // C steps the type while the circle tool is live, wrapping round.
   await page.keyboard.press('c');
   await expect(tiles.nth(0)).toHaveAttribute('aria-checked', 'true');
   await expect(
-    tools.getByRole('button', { name: 'Circle: Center Circle' })
+    tools.getByRole('button', { name: 'Circle: Center circle' })
   ).toHaveAttribute('aria-pressed', 'true');
 
   // The strip belongs to the tool: picking another one takes it away.

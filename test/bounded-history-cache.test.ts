@@ -400,7 +400,7 @@ describe("bounded history retention", { timeout: 120_000 }, () => {
     }
   });
 
-  it('falls back to dependency replay when a modifier follows retained primitives', async () => {
+  it('retains independent primitives while replaying a dependent move against the edited operand', async () => {
     const events: RebuildCacheEvent[] = [];
     const adapter = await createExactKernelAdapter({
       historyCheckpointLimit: 2,
@@ -418,11 +418,13 @@ describe("bounded history retention", { timeout: 120_000 }, () => {
       }).document;
       await equivalent(document, await adapter.syncDocument(document));
       expect(events.at(-1)).toMatchObject({
-        kind: 'prefix-restore', restored: 2, replayed: 5
+        kind: 'independent-reuse', restored: 2, replayed: 1, reusedPrimitives: 4
       });
       document = edit(document, 3, 14);
       await equivalent(document, await adapter.syncDocument(document));
-      expect(events.at(-1)?.reusedPrimitives).toBeUndefined();
+      expect(events.at(-1)).toMatchObject({
+        kind: 'independent-reuse', restored: 2, replayed: 2, reusedPrimitives: 3
+      });
     } finally {
       adapter.dispose();
     }

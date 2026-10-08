@@ -281,6 +281,46 @@ function* buildDocumentHistorySteps(
   }
 }
 
+/** Synchronous replay for callers that do not need worker message delivery. */
+export function buildDocumentHistory(
+  ...args: Parameters<typeof buildDocumentHistorySteps>
+): ExactBuildResult {
+  const steps = buildDocumentHistorySteps(...args);
+  let step = steps.next();
+  while (!step.done) step = steps.next();
+  return step.value;
+}
+
+/**
+ * Same ordered replay, with optional task-level yields between features. The
+ * generator owns the cancellation token; closing it also frees the token when
+ * the scheduler throws. Kernel calls and checkpoint commits remain indivisible.
+ */
+export async function buildDocumentHistoryAsync(
+  controls: {
+    yieldControl?: () => Promise<void> | void;
+    /** Open synchronous read scopes only while advancing the generator. */
+    runStep?: <T>(step: () => T) => T;
+  },
+  ...args: Parameters<typeof buildDocumentHistorySteps>
+): Promise<ExactBuildResult> {
+  const steps = buildDocumentHistorySteps(...args);
+  const runStep = controls.runStep ?? ((step) => step());
+  try {
+    let step = runStep(() => steps.next());
+    while (!step.done) {
+      const pending = controls.yieldControl?.();
+      if (pending) await pending;
+      step = runStep(() => steps.next());
+    }
+    return step.value;
+  } catch (error) {
+    // Throwing into the suspended loop runs its token-owning finally block.
+    runStep(() => steps.throw(error));
+    throw error;
+  }
+}
+
 /**
  * Records who a loop-raised warning belongs to, alongside the string itself.
  *
@@ -304,16 +344,6 @@ function attribute(
   });
 }
 
-/** Synchronous entry point retained for probes and consumers outside a worker. */
-export function buildDocumentHistory(
-  ...args: Parameters<typeof buildDocumentHistorySteps>
-): ExactBuildResult {
-  const steps = buildDocumentHistorySteps(...args);
-  let step = steps.next();
-  while (!step.done) step = steps.next();
-  return step.value;
-}
-
 /** Advance each feature inside its memo scope, yielding only after closing it. */
 export async function buildDocumentHistoryCooperatively(
   scheduling: {
@@ -332,7 +362,7 @@ export async function buildDocumentHistoryCooperatively(
   } catch (error) {
     // Close the generator's transaction/cancellation token even if yielding
     // itself fails. The generator's finally runs before the error propagates.
-    steps.throw(error);
+    scheduling.run(() => steps.throw(error));
     throw error;
   }
 }

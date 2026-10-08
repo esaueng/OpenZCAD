@@ -1,4 +1,10 @@
-import { useEffect, useRef, useState, type PointerEvent } from 'react';
+import {
+  useEffect,
+  useRef,
+  useState,
+  type KeyboardEvent,
+  type PointerEvent
+} from 'react';
 import { hexToHsv, hsvToHex, normalizeHex, type HsvColor } from '../lib/color';
 
 /**
@@ -97,6 +103,56 @@ export function ColorPicker({
 
   const svDragging = useRef(false);
   const hueDragging = useRef(false);
+  // Arrow keys preview each step and commit once on release, as a pointer
+  // drag does: a held key otherwise wrote one history entry per repeat.
+  const keyStepped = useRef(false);
+  // The arrows still down: releasing Shift, or one of two arrows, mid-step
+  // committed while the other went on repeating.
+  const heldArrows = useRef(new Set<string>());
+
+  function onSliderKeyDown(
+    event: KeyboardEvent<HTMLDivElement>,
+    step: (current: HsvColor, dx: number, dy: number) => HsvColor
+  ) {
+    const amount = event.shiftKey ? 10 : 1;
+    const delta: Record<string, [number, number]> = {
+      ArrowLeft: [-amount, 0],
+      ArrowRight: [amount, 0],
+      ArrowDown: [0, -amount],
+      ArrowUp: [0, amount]
+    };
+    const move = delta[event.key];
+    if (!move) {
+      return;
+    }
+    event.preventDefault();
+    heldArrows.current.add(event.key);
+    keyStepped.current = true;
+    // Like a drag, the keys own the value until release: resyncing from the
+    // previewed hex loses the hue of a grey.
+    draggingRef.current = true;
+    emit(step(hsvRef.current, move[0], move[1]), false);
+  }
+
+  function onSliderKeyUp(event: KeyboardEvent<HTMLDivElement>) {
+    heldArrows.current.delete(event.key);
+    if (heldArrows.current.size === 0) {
+      finishKeyStep();
+    }
+  }
+
+  /** Also on blur: focus leaving mid-step takes the key release with it. */
+  function finishKeyStep() {
+    heldArrows.current.clear();
+    if (!keyStepped.current) {
+      return;
+    }
+    keyStepped.current = false;
+    draggingRef.current = false;
+    onCommit(hsvToHex(hsvRef.current));
+  }
+
+  const clamp01 = (value: number) => Math.min(1, Math.max(0, value));
 
   return (
     <div className="color-picker">
@@ -104,9 +160,24 @@ export function ColorPicker({
         ref={svRef}
         className="color-picker-sv"
         role="slider"
+        tabIndex={0}
         aria-label="Saturation and brightness"
+        // A two-axis pad on a one-axis role: the value is the saturation
+        // (left/right), and the text names both.
+        aria-valuenow={Math.round(hsv.s * 100)}
+        aria-valuemin={0}
+        aria-valuemax={100}
         aria-valuetext={`${Math.round(hsv.s * 100)}% saturation, ${Math.round(hsv.v * 100)}% brightness`}
         style={{ background: hsvToHex({ h: hsv.h, s: 1, v: 1 }) }}
+        onKeyDown={(event) =>
+          onSliderKeyDown(event, (current, dx, dy) => ({
+            ...current,
+            s: clamp01(current.s + dx / 100),
+            v: clamp01(current.v + dy / 100)
+          }))
+        }
+        onKeyUp={onSliderKeyUp}
+        onBlur={finishKeyStep}
         onPointerDown={(event) => {
           svDragging.current = true;
           draggingRef.current = true;
@@ -142,10 +213,19 @@ export function ColorPicker({
         ref={hueRef}
         className="color-picker-hue"
         role="slider"
+        tabIndex={0}
         aria-label="Hue"
         aria-valuenow={Math.round(hsv.h)}
         aria-valuemin={0}
         aria-valuemax={360}
+        onKeyDown={(event) =>
+          onSliderKeyDown(event, (current, dx, dy) => ({
+            ...current,
+            h: Math.min(360, Math.max(0, current.h + dx + dy))
+          }))
+        }
+        onKeyUp={onSliderKeyUp}
+        onBlur={finishKeyStep}
         onPointerDown={(event) => {
           hueDragging.current = true;
           draggingRef.current = true;

@@ -40,8 +40,11 @@
   background: var(--color-surface-hover);
 }
 
+/* Text takes the error-text shade: --color-error itself is 4.0–4.3:1 on
+   --color-surface-2 in both themes, under AA for 13px labels. The fill and
+   border keep the brighter red. */
 .secondary.danger {
-  color: var(--color-error);
+  color: var(--color-error-text);
 }
 
 .secondary.danger:hover:not(:disabled) {
@@ -51,4 +54,16 @@
 
 .wide {
   width: 100%;
+}
+
+/* ── Form messages ───────────────────────────────────────── */
+
+/* A refusal under a form (custom density, an unbundled font, a sketch edit).
+   Only the sketch cards styled it, so elsewhere it fell back to body text in
+   body colour; cards still set their own spacing. */
+.form-error {
+  margin: 0;
+  color: var(--color-error-text);
+  font-size: var(--fs-xs);
+  line-height: 1.4;
 }

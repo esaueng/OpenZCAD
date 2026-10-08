@@ -27,7 +27,14 @@ export function PanelOverflow({ children }: { children: ReactNode }) {
         // Stop here: the panel's own Escape handler closes the whole panel,
         // and dismissing a menu should not also dismiss what it belongs to.
         event.stopPropagation();
-        ref.current.open = false;
+        const menu = ref.current;
+        // Closing hides the item that has focus, which drops it on the page;
+        // the menu's own button is where the keyboard user came from.
+        const hadFocus = menu.contains(document.activeElement);
+        menu.open = false;
+        if (hadFocus) {
+          menu.querySelector('summary')?.focus();
+        }
       }
     };
     document.addEventListener('pointerdown', close);

@@ -3429,6 +3429,12 @@ export function setNodeMetadata(
   return next;
 }
 
+function boundedHistoryReason(reason: string): string {
+  return reason.length > MAX_CHECKPOINT_REASON_LENGTH
+    ? `${reason.slice(0, MAX_CHECKPOINT_REASON_LENGTH - 1)}…`
+    : reason;
+}
+
 export function appendRevision(
   document: ProjectDocument,
   reason: string
@@ -3440,10 +3446,6 @@ export function appendRevision(
   // an unrecognised failure to `offline`, and so a permanently unsaveable
   // document presented as a network problem — while `normalizeDocument` quietly
   // dropped the offending revision on reload, taking that save point with it.
-  const bounded =
-    reason.length > MAX_CHECKPOINT_REASON_LENGTH
-      ? `${reason.slice(0, MAX_CHECKPOINT_REASON_LENGTH - 1)}…`
-      : reason;
   // Shallow copy is sufficient: only `revisions` and `version` change, and the
   // shared sub-objects are never mutated in place (see module invariant).
   return {
@@ -3455,7 +3457,7 @@ export function appendRevision(
       {
         revisionId: toRevisionId(createId('rev')),
         createdAt: nowIso(),
-        reason: bounded,
+        reason: boundedHistoryReason(reason),
         commandCount: document.commandLog.length
       }
     ].slice(-MAX_PROJECT_REVISION_RECORDS),
@@ -3498,7 +3500,7 @@ export function createCheckpoint(
   if (!latestRevision) {
     throw new Error('Cannot create a checkpoint without a revision.');
   }
-  const normalizedReason = reason.trim() || 'Saved';
+  const normalizedReason = boundedHistoryReason(reason.trim() || 'Saved');
   const previous = document.checkpoints.at(-1);
   if (
     previous?.documentVersion === document.version &&
@@ -3518,7 +3520,7 @@ export function createCheckpoint(
         createdAt: nowIso(),
         reason: normalizedReason
       }
-    ]
+    ].slice(-MAX_PROJECT_CHECKPOINTS)
   };
 }
 

@@ -191,8 +191,8 @@ describe('SketchEntityEditor', () => {
         onClose={vi.fn()}
       />
     );
-    const bold = screen.getByRole('button', { name: 'B' });
-    const italic = screen.getByRole('button', { name: 'I' });
+    const bold = screen.getByRole('button', { name: 'Bold' });
+    const italic = screen.getByRole('button', { name: 'Italic' });
     expect(bold).toHaveAttribute('aria-pressed', 'false');
 
     await user.click(bold);
@@ -389,7 +389,7 @@ describe('one owner while the canvas moves the object', () => {
     const placed = { ...TEXT_OBJECT, x: 20.904235858081403, y: 7 };
     const { onApply, moveTo } = renderEditor(placed);
     moveTo({ ...placed, fontStyle: 'bold', y: 8 });
-    expect(screen.getByRole('button', { name: 'B' })).toHaveAttribute(
+    expect(screen.getByRole('button', { name: 'Bold' })).toHaveAttribute(
       'aria-pressed',
       'true'
     );
@@ -616,5 +616,87 @@ describe('textObjectFromPoint', () => {
     expect(
       screen.getByRole('region', { name: 'Constraints' })
     ).not.toContainElement(form);
+  });
+});
+
+describe('editor feedback', () => {
+  const LINE: SketchObjectData = {
+    objectKind: 'line',
+    x1: 0,
+    y1: 0,
+    x2: 10,
+    y2: 0
+  };
+
+  it('shows a refused Apply as a form error beside the values', () => {
+    render(
+      <SketchEntityEditor
+        data={LINE}
+        scope={{}}
+        error="The solver could not apply this edit."
+        onApply={vi.fn()}
+        onDelete={vi.fn()}
+        onClose={vi.fn()}
+      />
+    );
+    const alert = screen.getByRole('alert');
+    expect(alert).toHaveTextContent('The solver could not apply this edit.');
+    expect(alert).toHaveClass('form-error');
+    // Inside the values, ahead of Delete and Apply, as the validation
+    // message is.
+    const footer = screen
+      .getByRole('button', { name: /apply/i })
+      .closest('footer')!;
+    expect(alert.parentElement).toBe(footer.parentElement);
+    expect(
+      alert.compareDocumentPosition(footer) & Node.DOCUMENT_POSITION_FOLLOWING
+    ).toBeTruthy();
+  });
+
+  it('offers a driving dimension to edit only when one holds the entity', () => {
+    const { rerender } = render(
+      <SketchEntityEditor
+        data={LINE}
+        scope={{}}
+        onApply={vi.fn()}
+        onDelete={vi.fn()}
+        onClose={vi.fn()}
+        constraints={[
+          {
+            constraintId: 'c1',
+            kind: 'horizontal',
+            label: 'Horizontal · Line 1',
+            editable: false
+          }
+        ]}
+      />
+    );
+    const section = screen.getByRole('region', { name: 'Constraints' });
+    expect(section).toHaveTextContent(
+      'These constraints control this geometry.'
+    );
+    expect(section).not.toHaveTextContent('driving dimension');
+    rerender(
+      <SketchEntityEditor
+        data={LINE}
+        scope={{}}
+        onApply={vi.fn()}
+        onDelete={vi.fn()}
+        onClose={vi.fn()}
+        constraints={[
+          {
+            constraintId: 'c2',
+            kind: 'distance',
+            label: 'Distance 10 mm',
+            editable: true
+          }
+        ]}
+      />
+    );
+    expect(
+      screen.getByRole('region', { name: 'Constraints' })
+    ).toHaveTextContent(
+      'Edit a driving dimension below to change its constrained size.'
+    );
   });
 });

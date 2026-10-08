@@ -1,4 +1,4 @@
-import { useId, useState, type ReactNode } from 'react';
+import { useId, useState, type KeyboardEvent, type ReactNode } from 'react';
 import {
   CircleDot,
   Construction,
@@ -157,21 +157,21 @@ const CIRCLE_MODES: {
 }[] = [
   {
     mode: 'center-radius',
-    label: 'Center Circle',
+    label: 'Center circle',
     tile: 'Center',
     detail: 'Center and radius',
     icon: CircleDot
   },
   {
     mode: 'two-point-diameter',
-    label: 'Diameter Circle',
+    label: 'Diameter circle',
     tile: 'Diameter',
     detail: 'Opposite diameter endpoints',
     icon: Diameter
   },
   {
     mode: 'three-point',
-    label: 'Three-Point Circle',
+    label: 'Three-point circle',
     tile: '3 points',
     detail: 'Three circumference points',
     icon: ThreePointCircle
@@ -183,6 +183,99 @@ const EDIT_TOOL_ICONS: Record<SketchEditToolKind, typeof Minus> = {
   chamfer: Slice,
   offset: SquareDashed
 };
+
+function circleModeSpec(mode: SketchCircleMode) {
+  return CIRCLE_MODES.find((spec) => spec.mode === mode) ?? CIRCLE_MODES[0]!;
+}
+
+/**
+ * The live draw tool as the rail names it: the circle by its type, every
+ * other tool by its tooltip's name.
+ */
+export function sketchDrawToolLabel(
+  tool: SketchToolId,
+  circleMode: SketchCircleMode
+): string {
+  return tool === 'circle'
+    ? circleModeSpec(circleMode).label
+    : (TOOLS.find((entry) => entry.id === tool)?.label ?? tool);
+}
+
+/**
+ * Arrow keys step the strip's type and move focus with it, wrapping round;
+ * Home and End go to the ends. Only the checked tile is in the tab order
+ * (a roving tabIndex), so Tab leaves the group in one press.
+ */
+function radioGroupKeyStep(
+  event: KeyboardEvent<HTMLElement>,
+  count: number,
+  index: number
+): number | null {
+  const step =
+    event.key === 'ArrowRight' || event.key === 'ArrowDown'
+      ? 1
+      : event.key === 'ArrowLeft' || event.key === 'ArrowUp'
+        ? -1
+        : 0;
+  const next =
+    event.key === 'Home'
+      ? 0
+      : event.key === 'End'
+        ? count - 1
+        : step === 0
+          ? null
+          : (index + step + count) % count;
+  if (next === null) {
+    return null;
+  }
+  event.preventDefault();
+  const radios = event.currentTarget
+    .closest('[role="radiogroup"]')
+    ?.querySelectorAll<HTMLElement>('[role="radio"]');
+  radios?.[next]?.focus();
+  return next;
+}
+
+/**
+ * The snap spacing as typed. While the field has focus it shows the draft,
+ * so a value on its way to valid ("", "0.", "0.0") stays in the field: the
+ * committed value written back over each refused keystroke turned "0.5"
+ * typed over 1 into 1.5. Only a value in range is committed, and leaving
+ * the field shows the committed value again.
+ */
+function SnapSpacingField({
+  value,
+  onCommit
+}: {
+  value: number;
+  onCommit(value: number): void;
+}) {
+  const [draft, setDraft] = useState<string | null>(null);
+  return (
+    <input
+      type="number"
+      min="0.001"
+      max="10000"
+      step="0.1"
+      value={draft ?? String(value)}
+      aria-label="Sketch snap spacing"
+      onChange={(event) => {
+        const text = event.currentTarget.value;
+        setDraft(text);
+        const next = Number(text);
+        if (
+          text.trim() !== '' &&
+          Number.isFinite(next) &&
+          next >= 0.001 &&
+          next <= 10_000
+        ) {
+          onCommit(next);
+        }
+      }}
+      onBlur={() => setDraft(null)}
+    />
+  );
+}
 
 /** The sketch rail: the sketch's tools as one icon column, plus its flyouts. */
 export function SketchToolRail({
@@ -229,21 +322,26 @@ export function SketchToolRail({
     label,
     keyHint,
     icon: Icon
-  }: (typeof TOOLS)[number]) => (
-    <Tooltip key={id} label={label} shortcut={keyHint}>
-      <button
-        type="button"
-        className={tool === id ? 'active' : undefined}
-        aria-pressed={tool === id}
-        aria-label={label}
-        onClick={() => onTool(id)}
-      >
-        <Icon size={16} aria-hidden="true" />
-      </button>
-    </Tooltip>
-  );
-  const circleSpec =
-    CIRCLE_MODES.find((spec) => spec.mode === circleMode) ?? CIRCLE_MODES[0]!;
+  }: (typeof TOOLS)[number]) => {
+    // An armed modify tool picks through Select's hit-testing, so the
+    // machine parks the tool there; the rail lights the modify tool alone
+    // rather than Select beside it as a second live tool.
+    const on = tool === id && !(id === 'select' && pendingEdit);
+    return (
+      <Tooltip key={id} label={label} shortcut={keyHint}>
+        <button
+          type="button"
+          className={on ? 'active' : undefined}
+          aria-pressed={on}
+          aria-label={label}
+          onClick={() => onTool(id)}
+        >
+          <Icon size={16} aria-hidden="true" />
+        </button>
+      </Tooltip>
+    );
+  };
+  const circleSpec = circleModeSpec(circleMode);
   const CircleIcon = circleSpec.icon;
   const drawTools = (
     <>
@@ -273,22 +371,35 @@ export function SketchToolRail({
             aria-label="Circle type"
             data-rail-flyout=""
           >
-            {CIRCLE_MODES.map(({ mode, label, tile, detail, icon: Icon }) => (
-              <Tooltip key={mode} label={label} description={detail}>
-                <button
-                  type="button"
-                  role="radio"
-                  aria-checked={circleMode === mode}
-                  className={`sketch-type-tile${
-                    circleMode === mode ? ' active' : ''
-                  }`}
-                  onClick={() => onCircleMode(mode)}
-                >
-                  <Icon size={16} aria-hidden="true" />
-                  <span>{tile}</span>
-                </button>
-              </Tooltip>
-            ))}
+            {CIRCLE_MODES.map(
+              ({ mode, label, tile, detail, icon: Icon }, index) => (
+                <Tooltip key={mode} label={label} description={detail}>
+                  <button
+                    type="button"
+                    role="radio"
+                    aria-checked={circleMode === mode}
+                    tabIndex={circleMode === mode ? 0 : -1}
+                    className={`sketch-type-tile${
+                      circleMode === mode ? ' active' : ''
+                    }`}
+                    onClick={() => onCircleMode(mode)}
+                    onKeyDown={(event) => {
+                      const next = radioGroupKeyStep(
+                        event,
+                        CIRCLE_MODES.length,
+                        index
+                      );
+                      if (next !== null) {
+                        onCircleMode(CIRCLE_MODES[next]!.mode);
+                      }
+                    }}
+                  >
+                    <Icon size={16} aria-hidden="true" />
+                    <span>{tile}</span>
+                  </button>
+                </Tooltip>
+              )
+            )}
             <Tooltip label="Next circle type" shortcut="C">
               <button
                 type="button"
@@ -357,7 +468,7 @@ export function SketchToolRail({
         </button>
       </Tooltip>
       <span
-        className={`sketch-solve-pill visually-hidden${solveStatus ? '' : ' empty'}`}
+        className="sketch-solve-pill visually-hidden"
         data-tone={solveStatus?.tone}
         role="status"
       >
@@ -388,6 +499,7 @@ export function SketchToolRail({
       </Tooltip>
       <Tooltip
         label="Extrude"
+        shortcut="E"
         description={
           canExtrude
             ? 'Extrude valid profiles'
@@ -488,23 +600,9 @@ export function SketchToolRail({
             <label className="sketch-palette-number">
               <span>Snap spacing</span>
               <span>
-                <input
-                  type="number"
-                  min="0.001"
-                  max="10000"
-                  step="0.1"
+                <SnapSpacingField
                   value={settings.linearSnap}
-                  aria-label="Sketch snap spacing"
-                  onChange={(event) => {
-                    const value = event.currentTarget.valueAsNumber;
-                    if (
-                      Number.isFinite(value) &&
-                      value >= 0.001 &&
-                      value <= 10_000
-                    ) {
-                      patchSettings({ linearSnap: value });
-                    }
-                  }}
+                  onCommit={(linearSnap) => patchSettings({ linearSnap })}
                 />
                 <small>{units}</small>
               </span>
@@ -588,7 +686,12 @@ export function SketchToolRail({
   // (SketchRelationsRail); Finish is the column's foot, under the rail.
   return (
     <>
-      <div className="sketch-rail" role="toolbar" aria-label="Sketch tools">
+      <div
+        className="sketch-rail"
+        role="toolbar"
+        aria-label="Sketch tools"
+        aria-orientation="vertical"
+      >
         <div className="sketch-rail-group draw">{drawTools}</div>
         <span className="sketch-rail-divider" aria-hidden="true" />
         <div className="sketch-rail-group modify">{modifyTools}</div>
@@ -667,7 +770,7 @@ export function SketchRelationsRail({
           ? 'Draw an entity first.'
           : fits
             ? null
-            : `Does not apply to a ${selection.kind}.`;
+            : `Does not apply to ${/^[aeiou]/i.test(selection.kind) ? 'an' : 'a'} ${selection.kind}.`;
         const named = armed || Boolean(selection && fits && canConstrain);
         return (
           <span key={kind} className="sketch-relation-slot">
@@ -689,7 +792,7 @@ export function SketchRelationsRail({
                     : onConstraintTool(armed ? null : kind)
                 }
               >
-                <Icon size={15} aria-hidden="true" />
+                <Icon size={16} aria-hidden="true" />
                 {named && (
                   <span className="sketch-relation-name" aria-hidden="true">
                     {label}

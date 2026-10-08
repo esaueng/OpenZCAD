@@ -419,6 +419,13 @@ export function SketchEntityEditor({
               {semanticError ?? 'Fix invalid values before applying this edit.'}
             </p>
           )}
+          {/* An Apply the document refused reads as an error, beside the
+              values it is about, not as body text under the buttons. */}
+          {error && (
+            <p className="form-error" role="alert">
+              {error}
+            </p>
+          )}
           <footer>
             <button
               type="button"
@@ -438,14 +445,14 @@ export function SketchEntityEditor({
             </button>
           </footer>
         </fieldset>
-        {error && <p role="alert">{error}</p>}
       </form>
       {constraints && constraints.length > 0 && (
         <section className="sketch-entity-constraints" aria-label="Constraints">
           <span className="eyebrow">Constraints</span>
           <p className="muted">
-            These constraints control this geometry. Edit a driving dimension
-            below to change its constrained size.
+            These constraints control this geometry.
+            {constraints.some(({ editable }) => editable) &&
+              ' Edit a driving dimension below to change its constrained size.'}
           </p>
           <ul className="sketch-constraint-list">
             {constraints.map(({ constraintId, kind, label, editable }) => {

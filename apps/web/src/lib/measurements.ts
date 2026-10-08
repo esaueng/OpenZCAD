@@ -1625,10 +1625,34 @@ function fixed(value: number, precision: number): string {
   return safe.toFixed(precision);
 }
 
+/**
+ * Who reads a formatted figure. `screen` is the dock, the canvas pills and the
+ * hover chip; `text` is the clipboard copy, whose rows keep the plain form
+ * they have always had so a paste lines up with earlier ones.
+ */
+export type MeasurementTextStyle = 'screen' | 'text';
+
+/**
+ * What sits between a number and its unit. On screen the degree sign sits on
+ * its number, as every other angle in the app does ("45°"), and a body's
+ * three-number size keeps its unit on the last number's line.
+ */
+function unitGap(
+  dimension: MeasurementDimension,
+  style: MeasurementTextStyle,
+  joined = false
+): string {
+  if (style === 'text') {
+    return ' ';
+  }
+  return dimension === 'angle' ? '' : joined ? '\u00a0' : ' ';
+}
+
 function formatQuantity(
   quantity: MeasurementQuantity,
   sourceUnit: UnitSystem,
-  options: MeasurementDisplayOptions
+  options: MeasurementDisplayOptions,
+  style: MeasurementTextStyle
 ): string {
   const value = convertedValue(
     quantity.value,
@@ -1636,10 +1660,10 @@ function formatQuantity(
     sourceUnit,
     options.unit
   );
-  return `${fixed(value, options.precision)} ${unitLabel(
+  return `${fixed(value, options.precision)}${unitGap(
     quantity.dimension,
-    options.unit
-  )}`;
+    style
+  )}${unitLabel(quantity.dimension, options.unit)}`;
 }
 
 export function measurementQualityLabel(quality: MeasurementQuality): string {
@@ -1659,7 +1683,8 @@ export function measurementQualityLabel(quality: MeasurementQuality): string {
 
 export function formatMeasurement(
   measurement: Measurement,
-  options: MeasurementDisplayOptions
+  options: MeasurementDisplayOptions,
+  style: MeasurementTextStyle = 'screen'
 ): FormattedMeasurement {
   const { result } = measurement;
   const quality = measurementQualityLabel(measurement.quality);
@@ -1675,11 +1700,17 @@ export function formatMeasurement(
       )
     );
     return {
-      value: `${components.join(' × ')} ${unitLabel('length', options.unit)}`,
+      // The value column is narrow, and "… × 24.00 mm" wrapped to leave the
+      // unit alone on a second line.
+      value: `${components.join(' × ')}${unitGap('length', style, true)}${unitLabel(
+        'length',
+        options.unit
+      )}`,
       detail: `Volume ${formatQuantity(
         { label: 'Volume', value: result.value, dimension: 'volume' },
         measurement.sourceUnit,
-        options
+        options,
+        style
       )}`,
       quality
     };
@@ -1704,7 +1735,10 @@ export function formatMeasurement(
       options.unit
     ),
     options.precision
-  )} ${unitLabel(result.dimension, options.unit)}`;
+  )}${unitGap(result.dimension, style)}${unitLabel(
+    result.dimension,
+    options.unit
+  )}`;
   let detail: string | undefined;
   if (
     (measurement.kind === 'angle' || measurement.kind === 'point-angle') &&
@@ -1730,7 +1764,8 @@ export function formatMeasurement(
     detail = `${result.secondary.label} ${formatQuantity(
       result.secondary,
       measurement.sourceUnit,
-      options
+      options,
+      style
     )}`;
   }
   return { value, detail, quality };
@@ -1838,7 +1873,7 @@ export function measurementsToText(
 ): string {
   return list
     .map((entry) => {
-      const formatted = formatMeasurement(entry, options);
+      const formatted = formatMeasurement(entry, options, 'text');
       return [
         entry.label,
         formatted.value,

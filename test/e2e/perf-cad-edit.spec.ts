@@ -12,11 +12,20 @@ import { cpus, release } from 'node:os';
 import type { Locator, Page } from '@playwright/test';
 import { join, resolve } from 'node:path';
 import { expect, test, stubApi } from './openzcad-fixtures';
+import {
+  addPrimitiveFeature,
+  configureParameterToggle,
+  createProjectDocument,
+  setParameter,
+  transformBody
+} from '@openzcad/document-core';
+import { toUserId } from '@openzcad/shared';
 
 type EditSample = {
   inputToWorkerRequestMs: number;
   requestToWorkerResponseMs: number;
   workerResponseToBodiesMs: number;
+  bodyInstallationMs: number;
   bodiesToNextFrameMs: number;
   inputToFrameMs: number;
   inputToAnalysisReadyMs: number;
@@ -31,11 +40,52 @@ test.skip(
   'CAD edit performance probe; set OZ_PERF=1 to run it.'
 );
 
+test.afterEach(async ({ page }) => {
+  if (!['failed', 'timedOut'].includes(test.info().status ?? '')) return;
+  const diagnostic = await page.evaluate(() => {
+    const probe = (
+      window as typeof window & {
+        __cadPerfProbe?: {
+          records: Array<{ canonicalInput: string }>;
+          actions: unknown[];
+          states: unknown[];
+          longTasks: unknown[];
+        };
+      }
+    ).__cadPerfProbe;
+    return {
+      actions: probe?.actions,
+      requests: probe?.records
+        .slice(-5)
+        .map(({ canonicalInput, ...record }) => ({
+          ...record,
+          canonicalInputBytes: canonicalInput.length
+        })),
+      states: probe?.states.slice(-10),
+      longTasks: probe?.longTasks.slice(-10),
+      bodies: performance
+        .getEntriesByName('oz:viewer.bodies', 'measure')
+        .slice(-5)
+        .map(({ startTime, duration }) => ({ startTime, duration })),
+      frames: performance
+        .getEntriesByName('oz:viewer.frame', 'mark')
+        .slice(-5)
+        .map(({ startTime }) => startTime)
+    };
+  });
+  await test.info().attach('cad-edit-stall.json', {
+    body: JSON.stringify(diagnostic),
+    contentType: 'application/json'
+  });
+  console.log('[cad edit stall]', JSON.stringify(diagnostic));
+});
+
 test('measures an applied edit through worker response and viewport frame', async ({
   page,
   browser
 }) => {
-  test.setTimeout(120_000);
+  test.setTimeout(300_000);
+  const provenance = kernelProvenance();
   const runtimeErrors: string[] = [];
   page.on('pageerror', (error) => runtimeErrors.push(error.message));
   page.on('console', (message) => {
@@ -43,6 +93,55 @@ test('measures an applied edit through worker response and viewport frame', asyn
   });
 
   await stubApi(page);
+  const history = Math.max(
+    1,
+    Number(process.env.CAD_PERF_BROWSER_HISTORY ?? 1)
+  );
+  const isolateSource = process.env.CAD_PERF_BROWSER_ISOLATE === '1';
+  const editMode = process.env.CAD_PERF_BROWSER_EDIT_MODE ?? 'unique';
+  if (history > 1) {
+    await page.route('**/api/projects', (route) => {
+      if (route.request().method() !== 'POST') return route.fallback();
+      const input = route.request().postDataJSON() as { name: string };
+      let document = createProjectDocument(input.name, toUserId('user_e2e'));
+      for (let index = 0; index < history - 1; index++) {
+        document = addPrimitiveFeature(document, {
+          name: `Box ${index}`,
+          primitiveKind: 'box',
+          dimensions: { width: 30, height: 18, depth: 24 }
+        });
+      }
+      document = transformBody(document, {
+        name: 'Dependent move',
+        targetBodyId: document.bodyOrder[0]!,
+        translation: { x: 1, y: 0, z: 0 }
+      }).document;
+      if (isolateSource) {
+        // A normal isolated-part view: all independent history bodies still
+        // rebuild and measure exactly; their visibility is an explicit input.
+        document = configureParameterToggle(document, {
+          name: 'context_parts',
+          bodyIds: document.bodyOrder.slice(1)
+        });
+        document = setParameter(document, {
+          name: 'context_parts',
+          expression: '0'
+        });
+      }
+      return route.fulfill({
+        status: 201,
+        json: {
+          project: {
+            projectId: document.projectId,
+            name: document.name,
+            revisionCount: 1,
+            updatedAt: new Date().toISOString()
+          },
+          document
+        }
+      });
+    });
+  }
   await page.addInitScript(() => {
     type SyncRecord = {
       workerKey: number;
@@ -57,11 +156,31 @@ test('measures an applied edit through worker response and viewport frame', asyn
       responseAt?: number;
       ok?: boolean;
       warningCount?: number;
+      firstBodyId?: string;
+      bodyWidth?: number;
     };
     const probe = {
       records: [] as SyncRecord[],
-      actions: [] as Array<{ at: number; label: string }>
+      actions: [] as Array<{ at: number; label: string }>,
+      states: [] as Array<{
+        at: number;
+        phase: unknown;
+        progress: unknown;
+        version: unknown;
+        requestId: unknown;
+      }>,
+      longTasks: [] as Array<{ startTime: number; duration: number }>
     };
+    if (PerformanceObserver.supportedEntryTypes.includes('longtask')) {
+      new PerformanceObserver((list) => {
+        for (const entry of list.getEntries()) {
+          probe.longTasks.push({
+            startTime: entry.startTime,
+            duration: entry.duration
+          });
+        }
+      }).observe({ type: 'longtask', buffered: true });
+    }
     (
       window as typeof window & { __cadPerfProbe?: typeof probe }
     ).__cadPerfProbe = probe;
@@ -83,6 +202,7 @@ test('measures an applied edit through worker response and viewport frame', asyn
               projectId?: unknown;
               version?: unknown;
               featureOrder?: unknown[];
+              bodyOrder?: unknown[];
             };
           }
         | undefined;
@@ -107,6 +227,9 @@ test('measures an applied edit through worker response and viewport frame', asyn
             version,
             featureCount: featureOrder.length,
             canonicalInput: JSON.stringify(request.document),
+            ...(typeof request.document.bodyOrder?.[0] === 'string'
+              ? { firstBodyId: request.document.bodyOrder[0] }
+              : {}),
             requestAt: performance.now(),
             inputAt: action?.at ?? performance.now(),
             ...(typeof request.requestId === 'string'
@@ -121,46 +244,83 @@ test('measures an applied edit through worker response and viewport frame', asyn
           pending.set(key, record);
           if (!workersWithListener.has(this)) {
             workersWithListener.add(this);
-            this.addEventListener('message', (event: MessageEvent<unknown>) => {
-              const response = event.data as
-                | {
-                    type?: unknown;
-                    projectId?: unknown;
-                    version?: unknown;
-                    requestId?: unknown;
-                    ok?: unknown;
-                    derived?: { warnings?: unknown[] };
-                    packet?: {
-                      state: { analysis?: unknown; warnings?: unknown[] };
-                    };
-                  }
-                | undefined;
-              if (
-                (response?.type !== 'sync' &&
-                  response?.type !== 'projection-delta') ||
-                typeof response.projectId !== 'string' ||
-                typeof response.version !== 'number'
-              )
-                return;
-              const responseWorkerKey = workerKeys.get(this);
-              if (responseWorkerKey === undefined) return;
-              const key =
-                typeof response.requestId === 'string'
-                  ? `${responseWorkerKey}:request:${response.requestId}`
-                  : `${responseWorkerKey}:document:${response.projectId}:${response.version}`;
-              const matched = pending.get(key);
-              if (!matched) return;
-              matched.responseAt ??= performance.now();
-              matched.ok =
-                response.ok === true || response.type === 'projection-delta';
-              const warnings =
-                response.derived?.warnings ?? response.packet?.state.warnings;
-              matched.warningCount = Array.isArray(warnings)
-                ? warnings.length
-                : undefined;
-              if (response.packet?.state.analysis !== 'pending')
-                pending.delete(key);
-            });
+            this.addEventListener(
+              'message',
+              (event: MessageEvent<unknown>) => {
+                const response = event.data as
+                  | {
+                      type?: unknown;
+                      projectId?: unknown;
+                      version?: unknown;
+                      requestId?: unknown;
+                      ok?: unknown;
+                      phase?: unknown;
+                      progress?: unknown;
+                      packet?: {
+                        state: {
+                          analysis?: unknown;
+                          warnings?: unknown[];
+                          bodyRepresentations?: Record<
+                            string,
+                            {
+                              bbox?: { min: { x: number }; max: { x: number } };
+                            }
+                          >;
+                        };
+                      };
+                      derived?: {
+                        warnings?: unknown[];
+                        bodyRepresentations?: Record<
+                          string,
+                          { bbox?: { min: { x: number }; max: { x: number } } }
+                        >;
+                      };
+                    }
+                  | undefined;
+                if (response?.type === 'state') {
+                  probe.states.push({
+                    at: performance.now(),
+                    phase: response.phase,
+                    progress: response.progress,
+                    version: response.version,
+                    requestId: response.requestId
+                  });
+                }
+                if (
+                  (response?.type !== 'sync' &&
+                    response?.type !== 'projection-delta') ||
+                  typeof response.projectId !== 'string' ||
+                  typeof response.version !== 'number'
+                )
+                  return;
+                const responseWorkerKey = workerKeys.get(this);
+                if (responseWorkerKey === undefined) return;
+                const key =
+                  typeof response.requestId === 'string'
+                    ? `${responseWorkerKey}:request:${response.requestId}`
+                    : `${responseWorkerKey}:document:${response.projectId}:${response.version}`;
+                const matched = pending.get(key);
+                if (!matched) return;
+                matched.responseAt ??= performance.now();
+                matched.ok =
+                  response.ok === true || response.type === 'projection-delta';
+                const bbox = matched.firstBodyId
+                  ? (response.derived?.bodyRepresentations ??
+                      response.packet?.state.bodyRepresentations)?.[
+                      matched.firstBodyId
+                    ]?.bbox
+                  : undefined;
+                if (bbox) matched.bodyWidth = bbox.max.x - bbox.min.x;
+                const warnings =
+                  response.derived?.warnings ?? response.packet?.state.warnings;
+                matched.warningCount = Array.isArray(warnings)
+                  ? warnings.length
+                  : undefined;
+                if (response.packet?.state.analysis !== 'pending')
+                  pending.delete(key);
+              },
+              { capture: true }
+            );
           }
         }
       }
@@ -195,8 +355,19 @@ test('measures an applied edit through worker response and viewport frame', asyn
     Number(process.env.CAD_PERF_BROWSER_SAMPLES ?? 5)
   );
   const edits: EditSample[] = [];
+  const profiler = process.env.CAD_PERF_BROWSER_PROFILE
+    ? await page.context().newCDPSession(page)
+    : undefined;
+  if (profiler) {
+    await profiler.send('Profiler.enable');
+    await profiler.send('Profiler.setSamplingInterval', { interval: 200 });
+    await profiler.send('Profiler.start');
+  }
   for (let sample = 0; sample < sampleCount; sample += 1) {
-    const expectedWidth = 12 + (sample % 2);
+    const expectedWidth =
+      editMode === 'unique'
+        ? Number((12 + sample / 10).toFixed(1))
+        : 12 + (sample % 2);
     // An applied edit closes its card (F19), so each sample reopens it.
     await row.click();
     await width.fill(String(expectedWidth));
@@ -206,7 +377,25 @@ test('measures an applied edit through worker response and viewport frame', asyn
     });
     const before = await armAction(applyButton, 'Apply');
     await applyButton.click();
-    edits.push(await completedSample(page, before, expectedWidth));
+    const edit = await completedSample(page, before, expectedWidth);
+    edits.push(edit);
+    console.log(
+      '[cad edit sample]',
+      JSON.stringify({
+        sample,
+        history,
+        version: edit.version,
+        inputToFrameMs: edit.inputToFrameMs,
+        requestToWorkerResponseMs: edit.requestToWorkerResponseMs
+      })
+    );
+  }
+  if (profiler) {
+    const { profile } = await profiler.send('Profiler.stop');
+    await test.info().attach('cad-edit-main-thread.cpuprofile', {
+      body: JSON.stringify(profile),
+      contentType: 'application/json'
+    });
   }
 
   const report = await page.evaluate(
@@ -214,6 +403,43 @@ test('measures an applied edit through worker response and viewport frame', asyn
       browser: navigator.userAgent,
       viewport: { width: innerWidth, height: innerHeight },
       devicePixelRatio,
+      webglRenderer: (() => {
+        const gl = document.createElement('canvas').getContext('webgl2');
+        const debug = gl?.getExtension('WEBGL_debug_renderer_info');
+        const renderer: unknown = debug
+          ? gl?.getParameter(debug.UNMASKED_RENDERER_WEBGL)
+          : null;
+        gl?.getExtension('WEBGL_lose_context')?.loseContext();
+        return typeof renderer === 'string' ? renderer : null;
+      })(),
+      startupRequests:
+        (
+          window as typeof window & {
+            __cadPerfProbe?: {
+              records: Array<{ actionIndex: number; featureCount: number }>;
+            };
+          }
+        ).__cadPerfProbe?.records.filter(
+          (record) => record.actionIndex < 0 && record.featureCount > 0
+        ) ?? [],
+      stateEvents:
+        (window as typeof window & { __cadPerfProbe?: { states: unknown[] } })
+          .__cadPerfProbe?.states ?? [],
+      frameStats: performance
+        .getEntriesByName('oz:viewer.frame', 'mark')
+        .slice(-200)
+        .map((entry) => ({
+          at: entry.startTime,
+          detail: (entry as PerformanceMark).detail as unknown
+        })),
+      longTasks:
+        (
+          window as typeof window & {
+            __cadPerfProbe?: {
+              longTasks: Array<{ startTime: number; duration: number }>;
+            };
+          }
+        ).__cadPerfProbe?.longTasks ?? [],
       initial,
       edits
     }),
@@ -223,6 +449,7 @@ test('measures an applied edit through worker response and viewport frame', asyn
     'inputToWorkerRequestMs',
     'requestToWorkerResponseMs',
     'workerResponseToBodiesMs',
+    'bodyInstallationMs',
     'bodiesToNextFrameMs',
     'inputToFrameMs',
     'inputToAnalysisReadyMs'
@@ -234,13 +461,16 @@ test('measures an applied edit through worker response and viewport frame', asyn
     ])
   );
   const environment = {
+    history,
+    isolateSource,
+    editMode,
     node: process.version,
     platform: process.platform,
     arch: process.arch,
     osRelease: release(),
     cpuModel: cpus()[0]?.model,
     browserVersion: browser.version(),
-    ...kernelProvenance()
+    ...provenance
   };
   const artifact = { environment, report, summaries, runtimeErrors };
   const serializedArtifact = `${JSON.stringify(artifact, null, 2)}\n`;
@@ -287,6 +517,7 @@ async function completedSample(
               responseAt?: number;
               ok?: boolean;
               warningCount?: number;
+              bodyWidth?: number;
             }>;
           };
         }
@@ -347,6 +578,18 @@ async function completedSample(
         check();
       });
       const responseAt = record.responseAt!;
+      if (!record.ok)
+        throw new Error(`Geometry sync ${record.version} failed.`);
+      if (
+        expectedWidth !== undefined &&
+        Math.abs((record.bodyWidth ?? NaN) - expectedWidth) > 1e-7
+      ) {
+        throw new Error(
+          `The exact edited body width ${record.bodyWidth} did not match ${expectedWidth}.`
+        );
+      }
+      if (expectedWidth !== undefined && !Number.isFinite(record.bodyWidth))
+        throw new Error('The exact edited body has no bounds.');
       if (
         expectedWidth !== undefined &&
         !record.canonicalInput.includes(`"width":${expectedWidth}`)
@@ -386,9 +629,11 @@ async function completedSample(
         actionLabel: action.label,
         ok: record.ok === true,
         warningCount: record.warningCount ?? null,
+        bodyWidth: record.bodyWidth ?? null,
         inputToWorkerRequestMs: start - action.at,
         requestToWorkerResponseMs: responseAt - start,
         workerResponseToBodiesMs: bodyDoneAt - responseAt,
+        bodyInstallationMs: bodyMeasure.duration,
         bodiesToNextFrameMs: frame - bodyDoneAt,
         inputToFrameMs: frame - action.at,
         inputToAnalysisReadyMs:
@@ -449,7 +694,7 @@ async function completedSample(
                     )
                 )
               );
-            requestAnimationFrame(check);
+            setTimeout(check, 16);
           };
           check();
         });
@@ -460,10 +705,11 @@ async function completedSample(
 }
 
 function kernelProvenance() {
-  const sourceSha = execFileSync('git', ['rev-parse', 'HEAD'], {
+  const root = resolve(process.env.CAD_PERF_BROWSER_SOURCE_ROOT ?? '.');
+  const sourceSha = execFileSync('git', ['-C', root, 'rev-parse', 'HEAD'], {
     encoding: 'utf8'
   }).trim();
-  const sourceDir = resolve('packages/kernel-adapter/src');
+  const sourceDir = join(root, 'packages/kernel-adapter/src');
   const adapterHash = createHash('sha256');
   for (const name of readdirSync(sourceDir)
     .filter((entry) => entry.endsWith('.ts'))
@@ -471,8 +717,24 @@ function kernelProvenance() {
     adapterHash.update(name);
     adapterHash.update(readFileSync(join(sourceDir, name)));
   }
+  const pipelineHash = createHash('sha256');
+  for (const file of [
+    'apps/web/src/App.tsx',
+    'apps/web/src/hooks/useThumbnailCaptureActivity.ts',
+    'apps/web/src/lib/projectThumbnailCapture.ts',
+    'apps/web/src/lib/sharedThumbnailCapture.ts',
+    'apps/web/src/components/ProjectThumbnailSyncAgent.tsx',
+    'apps/web/src/worker/geometryWorker.ts',
+    'apps/web/src/worker/geometryYield.ts',
+    'apps/web/src/worker/geometryProgress.ts'
+  ]) {
+    pipelineHash.update(file);
+    pipelineHash.update(
+      existsSync(join(root, file)) ? readFileSync(join(root, file)) : '<absent>'
+    );
+  }
   const packageRequire = createRequire(
-    resolve('packages/kernel-adapter/package.json')
+    join(root, 'packages/kernel-adapter/package.json')
   );
   const wasmPath = packageRequire.resolve('remus-wasm/remus_wasm_bg.wasm');
   let manifestDir = resolve(wasmPath, '..');
@@ -487,7 +749,7 @@ function kernelProvenance() {
     name: string;
     version: string;
   };
-  const lockLine = readFileSync('pnpm-lock.yaml', 'utf8')
+  const lockLine = readFileSync(join(root, 'pnpm-lock.yaml'), 'utf8')
     .split('\n')
     .find((line) => line.trimStart().startsWith('remus-wasm@'));
   const wasm = readFileSync(wasmPath);
@@ -508,6 +770,7 @@ function kernelProvenance() {
   return {
     sourceSha,
     adapterSourceSha256: adapterHash.digest('hex'),
+    pipelineSourceSha256: pipelineHash.digest('hex'),
     installedRemusPackage: manifest.name,
     installedRemusVersion: manifest.version,
     remusLockLine: lockLine,

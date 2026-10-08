@@ -101,7 +101,14 @@ function ThumbnailPlaceholder({
           <path d="M60 40V20" />
         </g>
       </svg>
-      {empty && <span className="start-tile-thumb-empty">No geometry</span>}
+      {/* Hidden from the tile's name like the rest of the preview: inside
+          the open button it came first, so every empty part was announced
+          as "No geometry" before its own name. */}
+      {empty && (
+        <span className="start-tile-thumb-empty" aria-hidden="true">
+          No geometry
+        </span>
+      )}
     </>
   );
 }

@@ -1,5 +1,5 @@
 import type { DiagnosticRow } from '../lib/diagnosticsRows';
-import { useState, type ReactNode } from 'react';
+import { useRef, useState, type ReactNode } from 'react';
 import { useArrivals } from '../hooks/useArrivals';
 import {
   AlertTriangle,
@@ -164,7 +164,7 @@ interface SidebarProps {
  * controls so a fast double-select on a feature never closes the drawer.
  */
 const DOUBLE_CLICK_OWNERS =
-  'button, a, input, textarea, select, label, summary, [contenteditable], [role="listitem"], [role="button"], [role="slider"], .feature-row, .body-row, .revision-row, .diagnostic-row, .param-row, .history-rollback';
+  'button, a, input, textarea, select, label, summary, [contenteditable], [role="listitem"], [role="button"], [role="slider"], .feature-row, .body-row, .revision-row, .diagnostic-row, .param-row, .history-rollback, .feature-history-panel';
 
 /** Body kind icons mirror the feature icons so the two lists read as one. */
 function bodyIcon(body: BodyRepresentation) {
@@ -189,6 +189,21 @@ function bodyIcon(body: BodyRepresentation) {
 
 /** How long a new row keeps `.is-arrival`: its accent wash drains in 900ms. */
 const ARRIVAL_MS = 900;
+
+/**
+ * When a save point was made. A same-day save shows its time: Ctrl+S makes a
+ * "Manual save" each time, and a list of identical names over identical dates
+ * gave no way to tell them apart.
+ */
+function revisionTime(createdAt: string): string {
+  const created = new Date(createdAt);
+  return created.toDateString() === new Date().toDateString()
+    ? created.toLocaleTimeString(undefined, {
+        hour: 'numeric',
+        minute: '2-digit'
+      })
+    : created.toLocaleDateString();
+}
 
 export function Sidebar({
   parameters,
@@ -232,6 +247,7 @@ export function Sidebar({
   onClose
 }: SidebarProps) {
   const [findOpen, setFindOpen] = useState(false);
+  const findToggleRef = useRef<HTMLButtonElement>(null);
   const [showConsumed, setShowConsumed] = useState(false);
   // Bodies in feature-history order so the tree matches the timeline below.
   const bodies: BodyRepresentation[] = [];
@@ -338,7 +354,8 @@ export function Sidebar({
         {features.length} {features.length === 1 ? 'feature' : 'features'}
       </span>
       <span className="history-scrub-name">
-        {' · '}
+        {/* A plain leading space collapses at the start of a flex item. */}
+        {'\u00a0· '}
         {rolledBack ? 'rolled back to ' : 'at '}
         {activeFeature.name}
       </span>
@@ -388,6 +405,7 @@ export function Sidebar({
             />
           ))}
           <AddParameterRow
+            existingNames={parameters.map((parameter) => parameter.name)}
             onSet={onSetParameter}
             onConfigureToggle={onConfigureToggle}
             bodies={liveBodies}
@@ -434,7 +452,7 @@ export function Sidebar({
                 }
               >
                 <ChevronRight
-                  size={11}
+                  size={12}
                   className="disclosure-chevron"
                   aria-hidden="true"
                 />
@@ -459,6 +477,7 @@ export function Sidebar({
         actions={
           panelState.sidebarSections.history && features.length > 0 ? (
             <button
+              ref={findToggleRef}
               type="button"
               className="history-find-toggle"
               title="Find a step"
@@ -482,7 +501,12 @@ export function Sidebar({
           parameterValues={parameterValues}
           units={units}
           findOpen={findOpen}
-          onCloseFind={() => setFindOpen(false)}
+          onCloseFind={() => {
+            setFindOpen(false);
+            // The field unmounts with focus in it; hand focus back to the
+            // toggle that opened it rather than dropping it on the page.
+            findToggleRef.current?.focus();
+          }}
           onSelectFeature={onSelectFeature}
           onToggleBodyVisibility={onToggleBodyVisibility}
           onToggleSketchVisibility={onToggleSketchVisibility}
@@ -523,7 +547,7 @@ export function Sidebar({
                   <span className="revision-dot" aria-hidden="true" />
                   <span className="revision-reason">{checkpoint.reason}</span>
                   <small className="revision-time mono">
-                    {new Date(checkpoint.createdAt).toLocaleDateString()}
+                    {revisionTime(checkpoint.createdAt)}
                   </small>
                   {stored ? (
                     <span className="revision-actions">

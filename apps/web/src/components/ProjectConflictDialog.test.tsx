@@ -31,6 +31,7 @@ describe('ProjectConflictDialog', () => {
       reason: 'Before drilling',
       createdAt: '2026-10-05T05:00:00Z'
     });
+    value.localDocument = { ...value.localDocument, checkpoints: [] };
     render(
       <ProjectConflictDialog
         conflict={value}
@@ -48,6 +49,29 @@ describe('ProjectConflictDialog', () => {
     expect(
       screen.getByText(/Your account:.*save points/).querySelector('time')
     ).toHaveAttribute('dateTime', '2026-10-05T05:00:00Z');
+    // A side with no save points says so once, not as "0 save points ·
+    // No saved checkpoint".
+    expect(screen.getByText(/^This device:/)).toHaveTextContent(
+      /^This device: 0 save points$/
+    );
+  });
+
+  it('closes on Escape once focus has fallen out of it', async () => {
+    const user = userEvent.setup();
+    const onClose = vi.fn();
+    render(
+      <ProjectConflictDialog
+        conflict={conflict('account')}
+        busy={false}
+        onResolve={vi.fn()}
+        onClose={onClose}
+      />
+    );
+    (document.activeElement as HTMLElement | null)?.blur();
+    expect(document.activeElement).toBe(document.body);
+
+    await user.keyboard('{Escape}');
+    expect(onClose).toHaveBeenCalledOnce();
   });
   it('names the account as the other side and offers all three resolutions', async () => {
     const user = userEvent.setup();
@@ -182,10 +206,15 @@ describe('ProjectConflictDialog', () => {
       name: 'Keep this device’s version'
     });
     await user.click(keep);
-    expect(keep).toBeDisabled();
+    // aria-disabled rather than disabled: disabling the focused choice
+    // dropped focus on the body, where Escape and the error were lost.
+    expect(keep).toHaveAttribute('aria-disabled', 'true');
+    expect(keep).toHaveFocus();
     expect(screen.getByRole('status')).toHaveTextContent(
       /waiting for confirmation/
     );
+    await user.click(keep);
+    expect(onResolve).toHaveBeenCalledOnce();
     await user.keyboard('{Escape}');
     expect(onClose).not.toHaveBeenCalled();
     await act(async () => {
@@ -195,6 +224,8 @@ describe('ProjectConflictDialog', () => {
       'The room disconnected. Please retry.'
     );
     expect(keep).toBeEnabled();
+    expect(keep).not.toHaveAttribute('aria-disabled');
+    expect(keep).toHaveFocus();
     await user.click(keep);
     expect(onResolve).toHaveBeenCalledTimes(2);
     expect(screen.queryByRole('alert')).not.toBeInTheDocument();

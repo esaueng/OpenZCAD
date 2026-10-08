@@ -1,6 +1,6 @@
 import { render, screen } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
-import { useState } from 'react';
+import { StrictMode, useState } from 'react';
 import { describe, expect, it, vi } from 'vitest';
 import { ContextMenu, type ContextMenuItem } from '../components/ContextMenu';
 
@@ -119,6 +119,24 @@ describe('the context menu keyboard contract', () => {
     expect(document.activeElement).toBe(trigger);
   });
 
+  it('gives focus back to the trigger under StrictMode too', async () => {
+    // StrictMode runs the effect twice on mount. The second run used to
+    // record the menu it had just focused as the place to return to, so
+    // closing restored nothing and focus fell to the body in development.
+    const user = userEvent.setup();
+    render(
+      <StrictMode>
+        <Host />
+      </StrictMode>
+    );
+    const trigger = screen.getByRole('button', { name: 'Feature row' });
+    await user.click(trigger);
+    expect(document.activeElement).toBe(screen.getByRole('menu'));
+    await user.keyboard('{ArrowDown}{Escape}');
+    expect(screen.queryByRole('menu')).toBeNull();
+    expect(document.activeElement).toBe(trigger);
+  });
+
   it('leaves focus alone when the chosen action claims it', async () => {
     // Several of these items open a dialog on the same commit that unmounts
     // the menu. Restoring focus unconditionally would pull it straight back
@@ -147,7 +165,8 @@ describe('the context menu heading', () => {
     ).toBeInTheDocument();
   });
 
-  it('has no name when nothing was picked', () => {
+  it('falls back to a generic name when nothing was picked', () => {
+    // A role="menu" with no name is announced as a bare "menu".
     render(
       <ContextMenu
         menu={{ x: 40, y: 40, items: ITEMS }}
@@ -156,5 +175,6 @@ describe('the context menu heading', () => {
       />
     );
     expect(screen.getByRole('menu')).not.toHaveAttribute('aria-labelledby');
+    expect(screen.getByRole('menu', { name: 'Actions' })).toBeInTheDocument();
   });
 });
