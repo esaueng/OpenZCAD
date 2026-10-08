@@ -204,20 +204,19 @@ export function snapTo(value: number, step: number, fine: boolean): number {
     return value;
   }
   const snapped = Math.round(value / step) * step;
-  const cleaned = Number(snapped.toFixed(stepDecimals(step)));
+  const decimals = stepDecimals(step);
+  // toFixed accepts at most 100 decimal places. Smaller increments still
+  // snap normally; they do not need decimal cleanup at unsupported precision.
+  const cleaned = decimals <= 100 ? Number(snapped.toFixed(decimals)) : snapped;
   // Fold negative zero without replacing an invalid coordinate with zero.
   return cleaned === 0 ? 0 : cleaned;
 }
 
-/** Decimal places a snap step needs, found within a tolerance, not by ==. */
+/** Decimal places in the step's round-trippable base-ten representation. */
 function stepDecimals(step: number): number {
-  for (let decimals = 0; decimals < 10; decimals += 1) {
-    const scaled = step * 10 ** decimals;
-    if (Math.abs(scaled - Math.round(scaled)) <= 1e-9 * Math.max(1, scaled)) {
-      return decimals;
-    }
-  }
-  return 10;
+  const [coefficient, exponent = '0'] = step.toString().split('e');
+  const fractionDigits = coefficient!.split('.')[1]?.length ?? 0;
+  return Math.max(0, fractionDigits - Number(exponent));
 }
 
 /** Neutral highlight for whichever handle has focus. */

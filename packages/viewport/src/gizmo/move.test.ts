@@ -28,6 +28,14 @@ describe('snapTo', () => {
     expect(snapTo(-Infinity, 0.1, false)).toBe(-Infinity);
   });
 
+  it.each([9000.000005, 0.001000000001, 1e-10, 1e-101])(
+    'preserves the configured snap increment %s',
+    (step) => {
+      expect(snapTo(step, step, false)).toBe(step);
+      expect(snapTo(step * 1.1, step, false)).toBe(step);
+    }
+  );
+
   it('rounds a fine drag to hundredths', () => {
     expect(snapTo(0.123, 0.1, true)).toBe(0.12);
   });
