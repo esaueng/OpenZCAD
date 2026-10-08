@@ -1939,6 +1939,22 @@ export function transformBody(
   document: ProjectDocument,
   input: TransformInput
 ): { document: ProjectDocument; bodyId: BodyId } {
+  // Preserve expression-valued parameters while refusing numeric values that
+  // would turn into null when the document or command log is serialized.
+  const values = [
+    input.translation.x,
+    input.translation.y,
+    input.translation.z,
+    input.rotationDeg?.x,
+    input.rotationDeg?.y,
+    input.rotationDeg?.z,
+    input.scale
+  ];
+  if (
+    values.some((value) => typeof value === 'number' && !Number.isFinite(value))
+  ) {
+    throw new Error('Body transform values must be finite.');
+  }
   const next = cloneDocument(document);
   const { featureId, featureNodeId } = input.ids ?? createFeatureOnlyIds();
 
