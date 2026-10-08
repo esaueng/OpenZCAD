@@ -17710,6 +17710,7 @@ export function App() {
       measurements={measurements}
       formattedMeasurements={formattedMeasurements}
       enabled={measuring}
+      geometryPending={currentGeometrySnapshot !== null}
       activeMeasurementId={activeMeasurementId}
       mode={measurementMode}
       draftTargetLabel={measurementDraft?.label ?? null}

@@ -1,6 +1,12 @@
 import { readFile } from 'node:fs/promises';
 import type { Page } from '@playwright/test';
-import { test, expect, stubApi, expectBodyCount } from './openzcad-fixtures';
+import {
+  test,
+  expect,
+  stubApi,
+  expectBodyCount,
+  locateEdge
+} from './openzcad-fixtures';
 
 async function installAnalysisGate(page: Page) {
   await page.addInitScript(() => {
@@ -50,6 +56,81 @@ async function installAnalysisGate(page: Page) {
     });
   });
 }
+
+test('suspends saved measurements while a resized body waits for analysis', async ({
+  page
+}) => {
+  await stubApi(page);
+  await installAnalysisGate(page);
+  await page.setViewportSize({ width: 1440, height: 1000 });
+  await page.goto('/');
+  await page.getByLabel('Project name').fill('Staged saved measurement');
+  await page.getByRole('button', { name: 'Create project' }).click();
+  await page.getByRole('button', { name: /^Box \(B\)/ }).click();
+  const inspector = page.getByRole('region', { name: 'Feature inspector' });
+  await inspector.getByRole('button', { name: 'Create', exact: true }).click();
+  await expectBodyCount(page, 1);
+  const modes = page.getByRole('group', { name: 'Workspace mode' });
+  await modes.getByRole('button', { name: 'View', exact: true }).click();
+  await page
+    .getByRole('toolbar', { name: 'View tools' })
+    .getByRole('button', { name: 'Measure', exact: true })
+    .click();
+  const edge = await locateEdge(page);
+  await page.mouse.click(edge.x, edge.y);
+  const workbench = page.getByLabel('Measurement workbench');
+  await expect(workbench.getByRole('listitem')).toHaveCount(1);
+  const previousValue = await workbench
+    .locator('.measurement-row-value')
+    .innerText();
+  await modes.getByRole('button', { name: 'Build', exact: true }).click();
+  await page.locator('.feature-row').first().dblclick();
+  for (const label of ['Width (X)', 'Depth (Y)', 'Height (Z)']) {
+    const field = inspector.getByLabel(label);
+    await field.fill(String(Number(await field.inputValue()) * 2));
+  }
+  await page.evaluate(() => {
+    (window as typeof window & { holdAnalysis: boolean }).holdAnalysis = true;
+  });
+  await inspector.getByRole('button', { name: 'Apply', exact: true }).click();
+  await expect
+    .poll(() =>
+      page.evaluate(
+        () => (window as typeof window & { heldAnalysis: number }).heldAnalysis
+      )
+    )
+    .toBeGreaterThan(0);
+  await modes.getByRole('button', { name: 'View', exact: true }).click();
+  await page
+    .getByRole('toolbar', { name: 'View tools' })
+    .getByRole('button', { name: 'Measure', exact: true })
+    .click();
+  await expect(workbench.getByText('updating', { exact: true })).toBeVisible();
+  await expect(workbench.locator('.measurement-row-value')).toHaveText(
+    'Updating…'
+  );
+  await expect(
+    workbench.getByRole('button', { name: 'Copy all' })
+  ).toBeDisabled();
+  await expect(
+    workbench.getByRole('button', { name: 'CSV', exact: true })
+  ).toBeDisabled();
+  await page.evaluate(() =>
+    (
+      window as typeof window & { releaseAnalysis: () => void }
+    ).releaseAnalysis()
+  );
+  await expect(workbench.getByText('updating', { exact: true })).toHaveCount(0);
+  await expect(workbench.locator('.measurement-row-value')).not.toHaveText(
+    previousValue
+  );
+  await expect(
+    workbench.getByRole('button', { name: 'Copy all' })
+  ).toBeEnabled();
+  await expect(
+    workbench.getByRole('button', { name: 'CSV', exact: true })
+  ).toBeEnabled();
+});
 
 test('draws accepted geometry before analysis, then completes without reinstalling its mesh', async ({
   page

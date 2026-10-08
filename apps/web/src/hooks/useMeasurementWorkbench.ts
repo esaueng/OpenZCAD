@@ -263,7 +263,7 @@ export function useMeasurementWorkbench({
   }, [modelingLocked, measuring, measurementApi]);
 
   useEffect(() => {
-    if (!doc || !exactGeometryReady || !measurementApi) {
+    if (!doc || !exactGeometryReady || geometryPending || !measurementApi) {
       return;
     }
     // Stored rows and worker bodies can arrive in either order. Re-resolve on
@@ -284,6 +284,7 @@ export function useMeasurementWorkbench({
     representations,
     doc?.version,
     exactGeometryReady,
+    geometryPending,
     measurementApi,
     measurementRestoreGeneration
   ]);
@@ -292,7 +293,7 @@ export function useMeasurementWorkbench({
     // Checked before the state update rather than inside it, so the refusal can
     // be reported. The list is capped rather than self-trimming: dropping the
     // oldest row to make room is data loss nobody was told about.
-    if (!measurementApi) {
+    if (!measurementApi || geometryPending) {
       return;
     }
     if (!measurementApi.canAppendMeasurement(measurements, measurement)) {
@@ -514,7 +515,7 @@ export function useMeasurementWorkbench({
   const measurementAnnotations = useMemo<
     MeasurementViewportAnnotation[]
   >(() => {
-    if (!measurementApi) {
+    if (!measurementApi || geometryPending) {
       return [];
     }
     // The bodies only size each label's standoff: an area's label stands
@@ -551,6 +552,7 @@ export function useMeasurementWorkbench({
       : pinned;
   }, [
     activeMeasurementId,
+    geometryPending,
     measurementDisplay,
     measurementDraft,
     measurements,
@@ -571,6 +573,12 @@ export function useMeasurementWorkbench({
   );
 
   async function copyMeasurements(measurement?: Measurement) {
+    if (geometryPending) {
+      setStatus(
+        'Measurements are unavailable while the model finishes updating.'
+      );
+      return;
+    }
     const selected = measurement ? [measurement] : measurements;
     if (selected.length === 0 || !measurementApi) {
       return;
@@ -588,6 +596,12 @@ export function useMeasurementWorkbench({
   }
 
   function exportMeasurements() {
+    if (geometryPending) {
+      setStatus(
+        'Measurements are unavailable while the model finishes updating.'
+      );
+      return;
+    }
     if (!doc || measurements.length === 0 || !measurementApi) {
       return;
     }
