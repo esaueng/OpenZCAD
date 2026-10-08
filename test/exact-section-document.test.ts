@@ -343,15 +343,23 @@ describe('exportSectionDxf', () => {
   it('refuses to write a drawing for a plane that cuts nothing', async () => {
     const exact = await kernel();
     await expect(
-      exact.exportSectionDxf(boredBar(), { origin: [0, 0, 40], normal: [0, 0, 1] })
+      exact.exportSectionDxf(boredBar(), {
+        origin: [0, 0, 40],
+        normal: [0, 0, 1]
+      })
     ).rejects.toThrow(/does not cut any body/);
   }, 120_000);
 
   it('refuses to write a drawing the kernel cannot section correctly', async () => {
     const exact = await kernel();
-    // Down the bore axis, where the kernel drops the bore from its outline.
+    // The kernel refuses this bore-parallel section without cap-clipping evidence.
     await expect(
-      exact.exportSectionDxf(boredBar(), { origin: [0, 5, 0], normal: [0, 1, 0] })
-    ).rejects.toThrow(/tessellated witness/);
+      exact.exportSectionDxf(boredBar(), {
+        origin: [0, 5, 0],
+        normal: [0, 1, 0]
+      })
+    ).rejects.toThrow(
+      /cylindrical section parallel to axis requires authoritative cap clipping/
+    );
   }, 120_000);
 });

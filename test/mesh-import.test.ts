@@ -440,6 +440,27 @@ describe('mesh file imports', { timeout: 30_000 }, () => {
    * measurements that said so, turned into assertions.
    */
   describe('a 3MF build section', () => {
+    it('normalizes inch resource vertices and build translations exactly once', async () => {
+      const mesh = await importMeshFile(
+        '3mf',
+        threeMfFixture({
+          unit: 'inch',
+          items: [{ objectid: 1, transform: '2 0 0 0 2 0 0 0 2 3 0 0' }]
+        }),
+        'mm'
+      );
+      const xs = mesh.vertices.filter((_value, index) => index % 3 === 0);
+      expect(Math.min(...xs)).toBeCloseTo(3 * 25.4, 9);
+      expect(Math.max(...xs)).toBeCloseTo((3 + 2 * FIXTURE_BOX.x) * 25.4, 9);
+      expect(meshVolume(mesh)).toBeCloseTo(
+        FIXTURE_BOX_VOLUME * 8 * 25.4 ** 3,
+        3
+      );
+      const body = await rebuiltBody(adapter, 'inch placement', mesh);
+      expect(body.warnings).toEqual([]);
+      expect(body.volume).toBeCloseTo(FIXTURE_BOX_VOLUME * 8 * 25.4 ** 3, 3);
+    });
+
     it('applies an item transform that scales the object', async () => {
       const mesh = await importMeshFile(
         '3mf',
@@ -904,8 +925,7 @@ describe('mesh file imports', { timeout: 30_000 }, () => {
  */
 describe('the mesh import lazy boundary', () => {
   const root = fileURLToPath(new URL('..', import.meta.url));
-  const read = (path: string): string =>
-    readFileSync(join(root, path), 'utf8');
+  const read = (path: string): string => readFileSync(join(root, path), 'utf8');
 
   it('keeps the format table out of the adapter index barrel', () => {
     expect(read('packages/kernel-adapter/src/index.ts')).not.toContain(
