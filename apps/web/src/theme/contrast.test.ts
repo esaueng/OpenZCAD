@@ -115,3 +115,21 @@ describe.each([
     ).toBeGreaterThanOrEqual(4.5);
   });
 });
+
+describe('destructive confirm', () => {
+  it('labels the danger fill at WCAG AA in both themes', () => {
+    // Defined once on :root and not re-themed. White on the error red was
+    // 3.8:1 on the delete-feature and cloud-deletion confirm buttons.
+    const palette = tokenBlock(':root {');
+    expect(palette['--color-on-danger']).toBeDefined();
+    expect(
+      contrastRatio(
+        palette['--color-on-danger']!,
+        palette['--color-danger-fill']!
+      )
+    ).toBeGreaterThanOrEqual(4.5);
+    expect(tokenBlock(":root[data-theme='light'] {")).not.toHaveProperty(
+      '--color-danger-fill'
+    );
+  });
+});

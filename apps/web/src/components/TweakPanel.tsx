@@ -109,12 +109,12 @@ export function TweakPanel({
           </button>
         </Tooltip>
         <Tooltip
-          label="Export Mesh…"
+          label="Export mesh…"
           description={`${exportTitle('3MF or STL')}`}
         >
           <button
             type="button"
-            aria-label="Export Mesh… — 3MF or STL"
+            aria-label="Export mesh… — 3MF or STL"
             disabled={!canExport}
             onClick={onOpenMeshExport}
           >
