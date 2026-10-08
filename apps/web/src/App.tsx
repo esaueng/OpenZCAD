@@ -567,6 +567,7 @@ import {
 } from './lib/resolvedExtrudePreview';
 import {
   ExtrudeForm,
+  distanceKeypadText,
   type ExtrudeFormValue
 } from './components/forms/ExtrudeForm';
 import {
@@ -15300,7 +15301,9 @@ export function App() {
   function handleOpenOffsetKeypad(
     currentOffset: number,
     totalBaseline?: number,
-    totalSense: 1 | -1 = 1
+    totalSense: 1 | -1 = 1,
+    /** A form's own text for the value; a drag has none and is rounded. */
+    initialText?: string
   ): boolean {
     if (
       interaction.mode !== 'region' &&
@@ -15318,13 +15321,14 @@ export function App() {
             : 'Offset'
           : 'Total',
       initial:
-        totalBaseline !== undefined || currentOffset !== 0
+        initialText ??
+        (totalBaseline !== undefined || currentOffset !== 0
           ? String(
               Math.round(
                 ((totalBaseline ?? 0) + totalSense * currentOffset) * 100
               ) / 100
             )
-          : '',
+          : ''),
       unitKind: 'length',
       ...(totalBaseline === undefined ? {} : { totalBaseline, totalSense })
     });
@@ -19568,7 +19572,10 @@ export function App() {
                     }}
                     onDistance={(value) =>
                       handleOpenOffsetKeypad(
-                        resolveParamValue(value, parameterScope.scope)
+                        resolveParamValue(value, parameterScope.scope),
+                        undefined,
+                        1,
+                        distanceKeypadText(value)
                       )
                     }
                   />

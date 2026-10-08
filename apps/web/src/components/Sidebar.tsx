@@ -403,6 +403,7 @@ export function Sidebar({
             />
           ))}
           <AddParameterRow
+            existingNames={parameters.map((parameter) => parameter.name)}
             onSet={onSetParameter}
             onConfigureToggle={onConfigureToggle}
             bodies={liveBodies}

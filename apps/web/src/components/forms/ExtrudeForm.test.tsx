@@ -1,9 +1,14 @@
 import { createRef } from 'react';
-import { act, render, screen } from '@testing-library/react';
+import { act, fireEvent, render, screen } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { describe, expect, it, vi } from 'vitest';
 import { toBodyId, toSketchId, type ParamValue } from '@openzcad/shared';
-import { ExtrudeForm } from './ExtrudeForm';
+import {
+  ExtrudeForm,
+  distanceKeypadText,
+  reversedDistance
+} from './ExtrudeForm';
+import { NumericKeypad } from '../NumericKeypad';
 
 const sketchId = toSketchId('layout');
 const bodies = [{ bodyId: toBodyId('plate'), name: 'Mounting plate' }];
@@ -231,5 +236,80 @@ describe('zero-distance extrude', () => {
       screen.queryByText(/Enter a distance other than 0/)
     ).not.toBeInTheDocument();
     expect(screen.getByRole('button', { name: 'Create' })).toBeEnabled();
+  });
+});
+
+describe('Distance… exact entry', () => {
+  /*
+    The keypad opened on the resolved number rounded to two decimals, and
+    Enter (which its hint offers) applied that: Distance 10/3 became a
+    3.33 mm extrude and lost its expression.
+  */
+  it('opens the keypad on the distance as the form holds it', () => {
+    expect(distanceKeypadText('10/3')).toBe('10/3');
+    expect(distanceKeypadText('-thickness')).toBe('-thickness');
+    expect(distanceKeypadText(12.345)).toBe('12.345');
+    expect(distanceKeypadText(-8)).toBe('-8');
+    // Zero opens empty, so the first key types the value.
+    expect(distanceKeypadText(0)).toBe('');
+    expect(distanceKeypadText('')).toBe('');
+  });
+
+  it('re-commits that prefill as the expression, not a rounding of it', () => {
+    const onCommit = vi.fn<(value: number, raw: string) => void>();
+    render(
+      <NumericKeypad
+        request={{
+          kind: 'offset',
+          label: 'Distance',
+          initial: distanceKeypadText('10/3'),
+          unitKind: 'length'
+        }}
+        units="mm"
+        scope={{}}
+        anchorRef={{ current: null }}
+        onPreview={vi.fn()}
+        onCommit={onCommit}
+        onCancel={vi.fn()}
+      />
+    );
+    const field = screen.getByRole('textbox', { name: 'Distance' });
+    expect(field).toHaveValue('10/3');
+    fireEvent.keyDown(field, { key: 'Enter' });
+    expect(onCommit).toHaveBeenCalledOnce();
+    const [value, raw] = onCommit.mock.calls[0]!;
+    expect(value).toBeCloseTo(10 / 3, 9);
+    expect(raw).toBe('10/3');
+  });
+});
+
+describe('Reverse direction', () => {
+  it('unwraps a negated expression instead of negating it again', () => {
+    expect(reversedDistance('10/2')).toBe('-(10/2)');
+    expect(reversedDistance('-(10/2)')).toBe('10/2');
+    expect(reversedDistance('12')).toBe('-12');
+    expect(reversedDistance('-12')).toBe('12');
+    // The first parenthesis closes early: not a negation of the whole.
+    expect(reversedDistance('-(a)*(b)')).toBe('-(-(a)*(b))');
+  });
+
+  it('round-trips the distance field through two presses', async () => {
+    const user = userEvent.setup();
+    render(
+      <ExtrudeForm
+        {...base}
+        initial={{ ...initial, distance: '10/2' }}
+        onSubmit={vi.fn()}
+        onCancel={vi.fn()}
+      />
+    );
+    const reverse = screen.getByRole('button', { name: 'Reverse direction' });
+    // A styled button, not bare caption text.
+    expect(reverse).toHaveClass('secondary');
+    await user.click(reverse);
+    await user.click(reverse);
+    expect(screen.getByRole('textbox', { name: 'Distance' })).toHaveValue(
+      '10/2'
+    );
   });
 });

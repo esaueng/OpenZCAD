@@ -551,7 +551,7 @@ describe('Hole position', () => {
       'Not created — The hole removed no material — it misses the body.'
     );
     expect(alert.closest('fieldset')).toHaveTextContent(
-      'Position on face (from centre)'
+      'Position on face (from center)'
     );
     expect(screen.getAllByRole('alert')).toHaveLength(1);
     expect(onSubmit).not.toHaveBeenCalled();
@@ -578,7 +578,7 @@ describe('Hole position', () => {
       'No preview — the hole points away from the body.'
     );
     expect(notice.closest('fieldset')).toHaveTextContent(
-      'Position on face (from centre)'
+      'Position on face (from center)'
     );
     // Advisory: it does not stop the exact check from being asked.
     expect(screen.getByRole('button', { name: 'Create hole' })).toBeEnabled();

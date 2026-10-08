@@ -88,8 +88,10 @@ export function ToolCard({
         <strong>
           <span className="tool-card-title">{model.title}</span>
           {model.phase === 'dragging' ? (
+            // role="img": ARIA drops a name given to a role-less span.
             <span
               className="tool-card-phase-dot"
+              role="img"
               aria-label={PHASE_LABELS[model.phase]}
               title={PHASE_LABELS[model.phase]}
             />
@@ -104,6 +106,7 @@ export function ToolCard({
             <Tooltip label={model.badge.label} description={model.badge.detail}>
               <span
                 className="tool-card-badge"
+                role="img"
                 tabIndex={0}
                 aria-label={model.badge.label}
               >
@@ -151,13 +154,18 @@ export function ToolCard({
       {(model.actions && model.actions.length > 1) || selectAllEdges ? (
         <div className="tool-card-actions">
           {model.actions && model.actions.length > 1 ? (
-            <span className="tool-card-submode" role="tablist">
+            // Toggle buttons, not tabs: there is no tab panel, and a tablist
+            // promises arrow-key movement these never had.
+            <span
+              className="tool-card-submode"
+              role="group"
+              aria-label={`${model.title} mode`}
+            >
               {model.actions.map((action) => (
                 <button
                   key={action.id}
                   type="button"
-                  role="tab"
-                  aria-selected={action.active}
+                  aria-pressed={action.active}
                   aria-label={
                     action.disabledReason
                       ? `${action.label}: ${action.disabledReason}`
