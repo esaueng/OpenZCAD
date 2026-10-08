@@ -24,9 +24,11 @@
      stops a gap above it, so no card in the lane ever reaches the cube. */
   --stage-corner-h: 96px;
   /* The notice lane's status row, which the cube steps above where it
-     shares that band: a 28px toast 8px over the bar, with room to spare.
+     shares that band: a 28px toast 8px over the bar. The cube's offset
+     adds an island gap above it. More would lift a phone's instrument
+     rail off the stage's centre line at 390 x 900, where it fits centred.
      The toast or the hint holds the row nearly all the time. */
-  --status-row-h: 40px;
+  --status-row-h: 36px;
   /* The bar gives way before anything else moves: it narrows from 520px at
      a 1252px window to 280px at 1012px, and only past that does the ruler
      leave the corner (the narrow-window rules below lift the cap). A text
@@ -1473,12 +1475,12 @@
    on a phone, and the right lane stops above it. */
 @media (min-width: 521px) and (max-width: 960px) and (max-height: 657px) {
   .workspace.column-layout {
-    --stage-corner-h: calc(52px + var(--status-row-h) + 92px);
+    --stage-corner-h: calc(56px + var(--status-row-h) + 92px);
   }
 
   .workspace.column-layout .viewer-rail-stack,
   .workspace.column-layout .viewer-area.has-inspector .viewer-rail-stack {
-    bottom: calc(52px + var(--status-row-h));
+    bottom: calc(56px + var(--status-row-h));
   }
 }
 
