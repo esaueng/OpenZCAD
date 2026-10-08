@@ -1,6 +1,7 @@
 import { X } from 'lucide-react';
 import { displayLengthName, type UnitSystem } from '@openzcad/shared';
 import { CARD_EYEBROWS } from '../lib/cardEyebrows';
+import { moveHasFiniteValues } from '../lib/moveCard';
 import { useEffect, useState, type MutableRefObject } from 'react';
 
 /*
@@ -173,16 +174,13 @@ export function MoveOverlay({
   const dirty =
     MOVE_AXES.some((axis) => values.translation[axis] !== 0) ||
     MOVE_AXES.some((axis) => values.rotationDeg[axis] !== 0);
-  // This panel's Apply refuses a value it cannot show; nothing downstream
-  // rejects a non-finite move. A sketch move commits no rotation, so a hidden
-  // rotation does not block it.
+  // Match the shared confirmation guard, including translation-only sketches.
   const canApply =
     dirty &&
-    MOVE_AXES.every(
-      (axis) =>
-        Number.isFinite(values.translation[axis]) &&
-        (hideRotation || Number.isFinite(values.rotationDeg[axis]))
-    );
+    moveHasFiniteValues({
+      ...values,
+      ...(hideRotation ? { target: 'sketch' as const } : {})
+    });
   const setValue = (
     group: 'translation' | 'rotationDeg',
     axis: (typeof MOVE_AXES)[number],
