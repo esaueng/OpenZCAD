@@ -423,9 +423,11 @@
   background: rgba(129, 169, 255, 0.18);
 }
 
+/* On the dark stage, so the viewport's own blue: the chrome accent darkens
+   in the light theme and read 3.1:1 on this chip. */
 .selection-callout-verb[aria-pressed='true'] {
-  color: var(--color-accent);
-  border-color: var(--color-accent-border);
+  color: var(--color-select);
+  border-color: color-mix(in srgb, var(--color-select) 45%, transparent);
 }
 
 .selection-callout-verb:disabled {
@@ -575,7 +577,7 @@
 }
 
 .selection-callout.sketch-callout {
-  color: var(--color-accent);
+  color: var(--color-select);
   border-color: rgba(103, 152, 255, 0.3);
 }
 
@@ -797,7 +799,7 @@
   padding: 1px 6px;
   color: #f3f7ff;
   background: rgba(16, 19, 22, 0.94);
-  border: 1px solid var(--color-accent);
+  border: 1px solid var(--color-select);
   border-radius: var(--radius-sm);
   font-family: var(--font-mono);
   font-size: var(--fs-xs);
@@ -814,14 +816,14 @@
   width: 7px;
   height: 7px;
   transform: translate(-50%, -50%) rotate(45deg);
-  background: var(--color-accent);
+  background: var(--color-select);
 }
 
 /* A centre is a ring, matching how sketch mode already draws one. */
 .snap-glyph[data-kind='center']::before {
   transform: translate(-50%, -50%);
   background: none;
-  border: 2px solid var(--color-accent);
+  border: 2px solid var(--color-select);
   border-radius: 999px;
 }
 
@@ -831,14 +833,15 @@
 .selection-band {
   position: absolute;
   z-index: calc(var(--z-viewer-overlay) + 1);
-  border: 1px solid var(--color-accent);
+  /* Stage overlays take the viewport's colours, which never re-theme. */
+  border: 1px solid var(--color-select);
   background: rgba(103, 152, 255, 0.12);
   pointer-events: none;
 }
 
 .selection-band.crossing {
   border-style: dashed;
-  border-color: var(--color-success);
+  border-color: var(--color-preview);
   background: rgba(93, 214, 158, 0.12);
 }
 
@@ -870,7 +873,7 @@
   overflow-y: auto;
   color: var(--color-viewport-text);
   background: rgba(14, 17, 20, 0.97);
-  border: 1px solid var(--color-accent-border);
+  border: 1px solid color-mix(in srgb, var(--color-select) 45%, transparent);
   border-radius: var(--radius-md);
   box-shadow: 0 14px 38px rgba(0, 0, 0, 0.46);
   backdrop-filter: blur(10px);
@@ -942,7 +945,7 @@
 
 .topology-pick-list-row:hover small,
 .topology-pick-list-row:focus-visible small {
-  color: var(--color-accent-hi);
+  color: var(--color-preselect);
 }
 
 .move-gizmo-hud {

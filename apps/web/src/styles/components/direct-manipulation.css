@@ -687,7 +687,7 @@
 
 .keypad-expr-preview {
   min-height: calc(var(--fs-xs) * 1.35);
-  color: var(--color-text-dim);
+  color: var(--color-text-subtle);
   font-family: var(--font-mono);
   font-size: var(--fs-xs);
   text-align: right;
@@ -709,7 +709,9 @@
   padding: 4px 0;
   color: var(--color-text);
   font-size: var(--fs-xs);
-  background: var(--color-surface-2);
+  /* The keys' fill: on the keypad's own surface-2 an unpicked unit or mode
+     read as bare text, not as a choice. */
+  background: var(--color-surface);
   border: 1px solid transparent;
   border-radius: var(--radius-sm);
   cursor: pointer;
@@ -745,7 +747,7 @@
   place-items: center;
 }
 
-.keypad-key:hover {
+.keypad-key:hover:not(:disabled) {
   background: var(--color-surface-hover);
 }
 
@@ -765,7 +767,7 @@
   gap: 6px;
 }
 
-.keypad-commit:hover {
+.keypad-commit:hover:not(:disabled) {
   background: var(--color-accent-hi);
 }
 
@@ -1331,7 +1333,7 @@
 }
 
 .sketch-entity-editor .eyebrow {
-  color: var(--color-text-dim);
+  color: var(--color-text-subtle);
   font-size: var(--fs-mini);
   text-transform: uppercase;
 }
@@ -1374,7 +1376,7 @@
 }
 
 .sketch-entity-constraints .eyebrow {
-  color: var(--color-text-dim);
+  color: var(--color-text-subtle);
   font-size: var(--fs-mini);
   text-transform: uppercase;
 }
@@ -1445,7 +1447,7 @@
    registry ships no synthetic bold or italic, so this is the honest outcome. */
 .field-hint {
   margin: 0 0 10px;
-  color: var(--color-text-dim);
+  color: var(--color-text-subtle);
   font-size: var(--fs-mini);
 }
 
@@ -1478,7 +1480,7 @@
 }
 
 .sketch-plane-prompt small {
-  color: var(--color-text-dim);
+  color: var(--color-text-subtle);
   font-size: var(--fs-xs);
 }
 
@@ -1506,7 +1508,7 @@
 }
 
 .sketch-plane-offset-units {
-  color: var(--color-text-dim);
+  color: var(--color-text-subtle);
 }
 
 .sketch-plane-buttons {

@@ -140,7 +140,7 @@ describe('viewport overlay text tokens', () => {
 
 /** HUD elements drawn on the viewport's dark stage. */
 const HUD_SUBJECT =
-  /\.(handle-value-chip|handle-label-chip|handle-dimension-prefix|sketch-snap-marker|sketch-center-(target|axis)|sketch-dim-label|sketch-grab-handle|sketch-rotate-ring|sketch-grid-indicator)\b/;
+  /\.(handle-value-chip|handle-label-chip|handle-dimension-prefix|sketch-snap-marker|sketch-center-(target|axis)|sketch-dim-label|sketch-grab-handle|sketch-rotate-ring|sketch-grid-indicator|snap-glyph|selection-band|selection-callout-verb|topology-pick-list[\w-]*)\b/;
 
 /** Chrome tokens the light theme repaints. */
 const CHROME_HUE =

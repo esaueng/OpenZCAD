@@ -321,7 +321,13 @@
   margin-left: 8px;
   padding: 0 5px;
   color: var(--color-warning);
-  background: color-mix(in srgb, var(--color-warning) 12%, transparent);
+  /* An opaque tint: see-through, it took the menu's darker surface-2 and the
+     amber count fell to 4.08:1 in the light theme. */
+  background: color-mix(
+    in srgb,
+    var(--color-warning) 12%,
+    var(--color-surface)
+  );
   border: 1px solid color-mix(in srgb, var(--color-warning) 40%, transparent);
   border-radius: var(--radius-sm);
   font-family: var(--font-mono);

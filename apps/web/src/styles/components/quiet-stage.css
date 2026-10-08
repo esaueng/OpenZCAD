@@ -789,7 +789,7 @@
   flex: 0 0 auto;
   margin: 0;
   padding: 6px 10px;
-  color: var(--color-text-dim);
+  color: var(--color-text-subtle);
   font-size: var(--fs-mini);
   white-space: nowrap;
   overflow: hidden;
@@ -1673,7 +1673,7 @@ button.command-rail:disabled {
 .command-flyout-heading {
   grid-column: 1 / -1;
   padding: 6px 7px 2px;
-  color: var(--color-text-dim);
+  color: var(--color-text-subtle);
   font-size: var(--fs-xs);
   font-weight: 600;
   letter-spacing: 0.04em;

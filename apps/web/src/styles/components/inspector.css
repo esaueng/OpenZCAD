@@ -408,10 +408,11 @@ fieldset.field > legend {
 }
 
 .kbd-inline {
-  /* Always a lightened chip with dark text, whatever the theme: the primary
-     button behind it is accent-filled in both. */
-  color: rgba(15, 18, 21, 0.75);
-  background: rgba(255, 255, 255, 0.28);
+  /* On the primary button's accent fill in either theme, so it takes the
+     button's own on-accent text: a fixed dark glyph read 3.97:1 on the light
+     theme's deeper blue. Matches the Extrude keycap (.profile-extrude kbd). */
+  color: var(--color-on-accent);
+  background: color-mix(in srgb, var(--color-on-accent) 12%, transparent);
   border: none;
   border-radius: var(--radius-sm);
   padding: 0 4px;

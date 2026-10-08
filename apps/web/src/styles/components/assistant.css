@@ -171,7 +171,7 @@
 /* An older day's landmark; today needs none. */
 .assistant-day-rule {
   padding-left: 28px;
-  color: var(--color-text-dim);
+  color: var(--color-text-subtle);
   font-family: var(--font-mono);
   font-size: var(--fs-mini);
   letter-spacing: 0.08em;
@@ -251,7 +251,7 @@
 }
 
 .assistant-turn-time {
-  color: var(--color-text-dim);
+  color: var(--color-text-subtle);
   font-family: var(--font-mono);
   font-size: var(--fs-mini);
   line-height: 21px;
@@ -893,7 +893,7 @@
 }
 
 .assistant-pending-hint {
-  color: var(--color-text-dim);
+  color: var(--color-text-subtle);
   font-family: var(--font-mono);
   font-size: var(--fs-mini);
 }
@@ -965,7 +965,7 @@
   justify-content: flex-end;
   gap: 12px;
   padding-top: 2px;
-  color: var(--color-text-dim);
+  color: var(--color-text-subtle);
   font-family: var(--font-mono);
   font-size: var(--fs-mini);
 }
@@ -981,7 +981,7 @@
 .assistant-foot-action {
   min-height: 24px;
   padding: 2px 0;
-  color: var(--color-text-dim);
+  color: var(--color-text-subtle);
   border: 0;
   border-radius: var(--radius-sm);
   font: inherit;
@@ -991,7 +991,7 @@
 .assistant-foot-action:hover:not(:disabled),
 .assistant-foot-action:focus-visible,
 .assistant-foot-action.active {
-  color: var(--color-text-muted);
+  color: var(--color-text);
 }
 
 .assistant-foot-action:disabled {

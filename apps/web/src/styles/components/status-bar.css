@@ -127,6 +127,11 @@
   white-space: nowrap;
 }
 
+/* On the current row's accent wash subtle text fell under 4.5:1 (light). */
+.status-log-entry.current time {
+  color: var(--color-text-muted);
+}
+
 .status-log-copy {
   display: flex;
   min-width: 0;
