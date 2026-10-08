@@ -608,23 +608,6 @@ export function ViewerShell({
         onMovePreviewChange={onMovePreviewChange}
         onContextMenu={onContextMenu}
       />
-      {!hideViewerToolbar && (
-        <>
-          <div className="viewer-rail-stack">
-            <OrientationWidget
-              orientationRef={orientationRef}
-              onSelectView={onView}
-              onRotateView={onRotateView}
-              onDragStart={() => orientationDragRef.current?.begin()}
-              onDrag={(deltaX, deltaY) =>
-                orientationDragRef.current?.move(deltaX, deltaY)
-              }
-              onDragEnd={() => orientationDragRef.current?.end()}
-            />
-          </div>
-          {!viewMode && !dockLayout && viewerToolbar}
-        </>
-      )}
       {dockLayout && !hideViewerToolbar && (
         <>
           {/* How you look at the model: icon instruments down the right edge,
@@ -647,6 +630,28 @@ export function ViewerShell({
                 scale bar itself sits by the orientation cube. */}
             <ViewportGridReadout sinkRef={sketchGridReadoutRef} />
           </div>
+        </>
+      )}
+      {/* After the rail and the readout in the document, though it is drawn
+          in the bottom-right corner: Tab reaches the cube's eight facets
+          after the instruments above it, not before them. Every island is
+          placed absolutely with its own stacking, so the order moves
+          nothing on screen. */}
+      {!hideViewerToolbar && (
+        <>
+          <div className="viewer-rail-stack">
+            <OrientationWidget
+              orientationRef={orientationRef}
+              onSelectView={onView}
+              onRotateView={onRotateView}
+              onDragStart={() => orientationDragRef.current?.begin()}
+              onDrag={(deltaX, deltaY) =>
+                orientationDragRef.current?.move(deltaX, deltaY)
+              }
+              onDragEnd={() => orientationDragRef.current?.end()}
+            />
+          </div>
+          {!viewMode && !dockLayout && viewerToolbar}
         </>
       )}
       {modeOverlay}

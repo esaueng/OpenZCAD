@@ -74,9 +74,14 @@
   outline: none;
 }
 
+/* The cube is drawn on the dark stage in either theme, so its focus reads
+   the viewport's preselection blue rather than the chrome accent, which the
+   light theme darkens to 1.7:1 on a facet. The hover lift goes with it: the
+   faces painted after the focused one draw over its shared seams. */
 .cube-face:focus-visible,
 .cube-corner-target:has(.cube-corner-hit:focus-visible) .cube-corner {
-  stroke: var(--color-accent);
+  fill: #4a5767;
+  stroke: var(--color-preselect);
   stroke-width: 1.5;
 }
 

@@ -388,5 +388,95 @@ describe('Tooltip', () => {
         'below'
       );
     });
+
+    it('opens beside a rail that is a landmark rather than a toolbar', () => {
+      // The Build rail is the "Feature tools" navigation: every tooltip on it
+      // fell through to below, over the next tool and the open More fold.
+      boxes.Rail = box(20, 300, 40, 120);
+      boxes.Parts = box(25, 305, 30, 30);
+      render(
+        <nav
+          aria-label="Rail"
+          data-tooltip-rail=""
+          style={{ flexDirection: 'column' }}
+        >
+          <Tooltip label="Parts" description="Show the parts list">
+            <button type="button" aria-label="Parts">
+              P
+            </button>
+          </Tooltip>
+        </nav>
+      );
+
+      fireEvent.focus(screen.getByRole('button', { name: 'Parts' }));
+      const tooltip = screen.getByRole('tooltip');
+      expect(tooltip).toHaveAttribute('data-placement', 'right');
+      expect(parseFloat(tooltip.style.left)).toBeCloseTo(68, 6);
+      expect(tooltip).toHaveTextContent('PartsShow the parts list');
+    });
+
+    it('drops the description beside the landmark rail’s open fold', () => {
+      boxes.Rail = box(20, 300, 40, 120);
+      boxes.Parts = box(25, 305, 30, 30);
+      boxes.Fold = box(70, 290, 244, 300);
+      render(
+        <nav
+          aria-label="Rail"
+          data-tooltip-rail=""
+          style={{ flexDirection: 'column' }}
+        >
+          <Tooltip label="Parts" description="Show the parts list">
+            <button type="button" aria-label="Parts">
+              P
+            </button>
+          </Tooltip>
+          <div
+            aria-label="Fold"
+            data-rail-flyout=""
+            data-tooltip-rail="vertical"
+            style={{ display: 'grid' }}
+          />
+        </nav>
+      );
+
+      fireEvent.focus(screen.getByRole('button', { name: 'Parts' }));
+      const tooltip = screen.getByRole('tooltip');
+      expect(tooltip).toHaveAttribute('data-placement', 'right');
+      expect(tooltip).toHaveTextContent(/^Parts$/);
+    });
+
+    it('opens a fold tile’s help beside the fold, not over the next row', () => {
+      boxes.Rail = box(20, 300, 40, 120);
+      boxes.Fold = box(70, 290, 244, 300);
+      boxes.Torus = box(74, 400, 118, 26);
+      render(
+        <nav
+          aria-label="Rail"
+          data-tooltip-rail=""
+          style={{ flexDirection: 'column' }}
+        >
+          <div
+            aria-label="Fold"
+            data-rail-flyout=""
+            data-tooltip-rail="vertical"
+            style={{ display: 'grid' }}
+          >
+            <Tooltip label="Torus" description="A ring">
+              <button type="button" aria-label="Torus">
+                T
+              </button>
+            </Tooltip>
+          </div>
+        </nav>
+      );
+
+      fireEvent.focus(screen.getByRole('button', { name: 'Torus' }));
+      const tooltip = screen.getByRole('tooltip');
+      expect(tooltip).toHaveAttribute('data-placement', 'right');
+      // The fold's right edge plus the 8 px gap, level with the tile.
+      expect(parseFloat(tooltip.style.left)).toBeCloseTo(322, 6);
+      expect(parseFloat(tooltip.style.top)).toBeCloseTo(413, 6);
+      expect(tooltip).toHaveTextContent('TorusA ring');
+    });
   });
 });

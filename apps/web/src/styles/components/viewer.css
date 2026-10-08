@@ -258,7 +258,7 @@
 
 .rail-section-export:hover:not(:disabled) {
   color: var(--color-text);
-  background: var(--color-surface-2);
+  background: var(--color-surface-hover);
 }
 
 .rail-section-export:disabled {
@@ -289,6 +289,24 @@
   border-radius: var(--radius-sm);
   font-size: var(--fs-sm);
   white-space: nowrap;
+}
+
+/* A view's key rides its tile, after the name. */
+.rail-views-panel button:has(kbd) {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 5px;
+}
+
+.rail-views-panel kbd {
+  padding: 0 3px;
+  color: var(--color-text-subtle);
+  border: var(--border-thin);
+  border-radius: var(--radius-sm);
+  font-family: var(--font-mono);
+  font-size: var(--fs-mini);
+  line-height: 1.4;
 }
 
 .rail-views-panel button:hover {

@@ -8,6 +8,7 @@ import type {
 } from '@openzcad/viewport';
 import { AxisTriadIcon, DisplayModeIcon } from './ViewerRailIcons';
 import { DISPLAY_MODE_LABELS } from '../lib/displayMode';
+import { Tooltip } from './Tooltip';
 
 const VIEWS: { id: StandardView; shortcut?: string }[] = [
   { id: 'front', shortcut: '1' },
@@ -18,6 +19,12 @@ const VIEWS: { id: StandardView; shortcut?: string }[] = [
   { id: 'bottom' },
   { id: 'iso', shortcut: '4' }
 ];
+
+/** Cased like the display modes the bar's other "Now:" lines name. */
+const PROJECTION_LABELS: Record<ProjectionMode, string> = {
+  perspective: 'Perspective',
+  orthographic: 'Orthographic'
+};
 
 interface ViewModeBarProps {
   settings: ViewerSettings;
@@ -56,6 +63,8 @@ export function ViewModeBar({
   const anchorRef = useRef<HTMLDivElement | null>(null);
   const triggerRef = useRef<HTMLButtonElement | null>(null);
   const panelId = useId();
+  const displayModeLabel = DISPLAY_MODE_LABELS[settings.displayMode];
+  const projectionLabel = PROJECTION_LABELS[projection];
 
   useEffect(() => {
     if (!viewsOpen) {
@@ -81,46 +90,60 @@ export function ViewModeBar({
     };
   }, [viewsOpen]);
 
+  // The same styled help as Build's viewer bar, which carries the same
+  // controls: switching modes used to swap it for the browser's own titles,
+  // without the keys.
   return (
     <div className="view-mode-bar" role="toolbar" aria-label="View tools">
-      <button
-        type="button"
-        className={`view-mode-button wide${measuring ? ' active' : ''}`}
-        aria-pressed={measuring}
-        title="Measure (M) — inspect geometry, distance, and angle"
-        aria-label="Measure"
-        onClick={() => onMeasure(!measuring)}
+      <Tooltip
+        label="Measure"
+        shortcut="M"
+        description="Inspect geometry, distance, and angle"
       >
-        <Ruler size={15} aria-hidden="true" />
-        <span className="view-mode-button-label">Measure</span>
-      </button>
-      <span className="view-mode-divider" aria-hidden="true" />
-      <button
-        type="button"
-        className="view-mode-button"
-        onClick={onFit}
-        title="Fit view (F)"
-        aria-label="Fit view (F)"
-      >
-        <Maximize2 size={15} aria-hidden="true" />
-      </button>
-      <div className="view-mode-views-anchor" ref={anchorRef}>
         <button
           type="button"
-          ref={triggerRef}
-          className={`view-mode-button${viewsOpen ? ' open' : ''}`}
-          onClick={() => setViewsOpen((open) => !open)}
-          title="Standard views"
-          aria-label="Standard views"
-          aria-haspopup="true"
-          aria-expanded={viewsOpen}
-          aria-controls={viewsOpen ? panelId : undefined}
+          className={`view-mode-button wide${measuring ? ' active' : ''}`}
+          aria-pressed={measuring}
+          aria-label="Measure"
+          onClick={() => onMeasure(!measuring)}
         >
-          <AxisTriadIcon />
+          <Ruler size={15} aria-hidden="true" />
+          <span className="view-mode-button-label">Measure</span>
         </button>
+      </Tooltip>
+      <span className="view-mode-divider" aria-hidden="true" />
+      <Tooltip
+        label="Fit view"
+        shortcut="F"
+        description="Double-click the viewport to fit"
+      >
+        <button
+          type="button"
+          className="view-mode-button"
+          onClick={onFit}
+          aria-label="Fit view (F)"
+        >
+          <Maximize2 size={15} aria-hidden="true" />
+        </button>
+      </Tooltip>
+      <div className="view-mode-views-anchor" ref={anchorRef}>
+        <Tooltip label="Standard views">
+          <button
+            type="button"
+            ref={triggerRef}
+            className={`view-mode-button${viewsOpen ? ' open' : ''}`}
+            onClick={() => setViewsOpen((open) => !open)}
+            aria-label="Standard views"
+            aria-expanded={viewsOpen}
+            aria-controls={viewsOpen ? panelId : undefined}
+          >
+            <AxisTriadIcon />
+          </button>
+        </Tooltip>
         {viewsOpen && (
           <div
             className="view-mode-views-panel"
+            data-rail-flyout=""
             id={panelId}
             role="group"
             aria-label="Standard views"
@@ -137,48 +160,64 @@ export function ViewModeBar({
                   onClick={() => {
                     onView(view.id);
                     setViewsOpen(false);
+                    // The chosen tile unmounts with the panel; the keyboard
+                    // returns to the button that opened it, not to <body>.
+                    triggerRef.current?.focus();
                   }}
-                  title={view.shortcut ? `${label} (${view.shortcut})` : label}
                   aria-label={
                     view.shortcut ? `${label} (${view.shortcut})` : label
                   }
                 >
                   {VIEW_LABELS[view.id]}
+                  {view.shortcut ? (
+                    <kbd aria-hidden="true">{view.shortcut}</kbd>
+                  ) : null}
                 </button>
               );
             })}
           </div>
         )}
       </div>
-      <button
-        type="button"
-        className={`view-mode-button${settings.showGrid ? ' active' : ''}`}
-        onClick={onToggleGrid}
-        title="Toggle grid (G)"
-        aria-label="Toggle grid (G)"
-        aria-pressed={settings.showGrid}
+      <Tooltip label="Toggle grid" shortcut="G">
+        <button
+          type="button"
+          className={`view-mode-button${settings.showGrid ? ' active' : ''}`}
+          onClick={onToggleGrid}
+          aria-label="Toggle grid (G)"
+          aria-pressed={settings.showGrid}
+        >
+          <Grid3x3 size={15} aria-hidden="true" />
+        </button>
+      </Tooltip>
+      <Tooltip
+        label="Display mode"
+        shortcut="W"
+        description={`Now: ${displayModeLabel}`}
       >
-        <Grid3x3 size={15} aria-hidden="true" />
-      </button>
-      <button
-        type="button"
-        className="view-mode-button"
-        onClick={onCycleDisplayMode}
-        title={`Display mode (W) — now: ${DISPLAY_MODE_LABELS[settings.displayMode]}`}
-        aria-label={`Display mode (W) — now: ${DISPLAY_MODE_LABELS[settings.displayMode]}`}
+        <button
+          type="button"
+          className="view-mode-button"
+          onClick={onCycleDisplayMode}
+          aria-label={`Display mode (W) — now: ${displayModeLabel}`}
+        >
+          <DisplayModeIcon mode={settings.displayMode} />
+        </button>
+      </Tooltip>
+      <Tooltip
+        label="Projection"
+        shortcut="P"
+        description={`Now: ${projectionLabel}`}
       >
-        <DisplayModeIcon mode={settings.displayMode} />
-      </button>
-      <button
-        type="button"
-        className={`view-mode-button${projection === 'orthographic' ? ' active' : ''}`}
-        onClick={onToggleProjection}
-        title={`Projection (P) — now: ${projection}`}
-        aria-label={`Orthographic projection (P) — now: ${projection}`}
-        aria-pressed={projection === 'orthographic'}
-      >
-        <Camera size={15} aria-hidden="true" />
-      </button>
+        <button
+          type="button"
+          className={`view-mode-button${projection === 'orthographic' ? ' active' : ''}`}
+          onClick={onToggleProjection}
+          aria-label={`Orthographic projection (P) — now: ${projectionLabel}`}
+          aria-pressed={projection === 'orthographic'}
+        >
+          <Camera size={15} aria-hidden="true" />
+        </button>
+      </Tooltip>
     </div>
   );
 }

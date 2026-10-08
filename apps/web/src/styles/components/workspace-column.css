@@ -374,8 +374,8 @@
   border-color: var(--color-border-strong);
 }
 
-/* The bottom-right corner holds the cube with undo/redo and, under it, the
-   scale bar.
+/* The bottom-right corner holds the cube with its two roll buttons and,
+   beside it, the scale bar.
    The cube box hugs its silhouette, so the few pixels the triad tips
    overhang need room below rather than sitting flush on the edge. */
 .workspace.column-layout .viewer-rail-stack,
