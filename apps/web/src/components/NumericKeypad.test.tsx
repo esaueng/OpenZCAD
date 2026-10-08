@@ -229,3 +229,79 @@ describe('a millimetre document', () => {
     ]);
   });
 });
+
+describe('keyboard on the chips and keys', () => {
+  /*
+    Enter anywhere in the pad committed: a keyboard user who Tabbed to `cm`
+    and pressed Enter applied 12 as 12 mm, in the unit they were moving away
+    from, instead of pressing the chip.
+  */
+  it('lets Enter press a focused chip or key instead of committing', () => {
+    const { input, onCommit } = setup('12');
+    const cm = screen.getByRole('radio', { name: 'cm' });
+    cm.focus();
+    // Not prevented, so the browser turns it into the chip's click.
+    expect(fireEvent.keyDown(cm, { key: 'Enter' })).toBe(true);
+    expect(onCommit).not.toHaveBeenCalled();
+    const seven = screen.getByRole('button', { name: '7' });
+    expect(fireEvent.keyDown(seven, { key: 'Enter' })).toBe(true);
+    expect(onCommit).not.toHaveBeenCalled();
+
+    fireEvent.click(cm);
+    expect(fireEvent.keyDown(input, { key: 'Enter' })).toBe(false);
+    expect(onCommit).toHaveBeenCalledExactlyOnceWith(120, '120');
+  });
+
+  it('crosses a radio group with one Tab stop and moves through it with arrows', () => {
+    setup('12');
+    const [mm, cm, m] = ['mm', 'cm', 'm'].map((name) =>
+      screen.getByRole('radio', { name })
+    );
+    expect(mm).toHaveAttribute('tabindex', '0');
+    expect(cm).toHaveAttribute('tabindex', '-1');
+    expect(m).toHaveAttribute('tabindex', '-1');
+
+    mm!.focus();
+    fireEvent.keyDown(mm!, { key: 'ArrowRight' });
+    expect(cm).toHaveFocus();
+    expect(cm).toHaveAttribute('aria-checked', 'true');
+    expect(cm).toHaveAttribute('tabindex', '0');
+    fireEvent.keyDown(cm!, { key: 'ArrowLeft' });
+    fireEvent.keyDown(mm!, { key: 'ArrowLeft' });
+    expect(m).toHaveFocus();
+    expect(m).toHaveAttribute('aria-checked', 'true');
+  });
+});
+
+describe('the converted value under the field', () => {
+  it('shows a plain number typed under another unit in document units', () => {
+    const { input } = setup('12', false);
+    expect(screen.queryByText(/^=/)).toBeNull();
+    fireEvent.click(screen.getByRole('radio', { name: 'cm' }));
+    expect(screen.getByText('= 120 mm')).toBeTruthy();
+    fireEvent.change(input, { target: { value: '' } });
+    expect(screen.queryByText(/^=/)).toBeNull();
+  });
+
+  it('names an inch document’s unit as its chip does', () => {
+    render(
+      <NumericKeypad
+        request={{
+          kind: 'offset',
+          label: 'Height',
+          initial: '10',
+          unitKind: 'length',
+          selectInitial: false
+        }}
+        units="inch"
+        scope={{}}
+        anchorRef={{ current: null }}
+        onPreview={vi.fn()}
+        onCommit={vi.fn()}
+        onCancel={() => undefined}
+      />
+    );
+    fireEvent.click(screen.getByRole('radio', { name: 'mm' }));
+    expect(screen.getByText('= 0.394 in')).toBeTruthy();
+  });
+});

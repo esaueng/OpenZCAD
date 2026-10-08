@@ -1,4 +1,5 @@
 import { useRef } from 'react';
+import { X } from 'lucide-react';
 import {
   KEYBOARD_CONTROL_GROUPS,
   POINTER_CONTROL_GROUPS
@@ -39,21 +40,30 @@ export function ShortcutsOverlay({ onClose }: ShortcutsOverlayProps) {
         className="shortcuts-card"
         role="dialog"
         aria-modal="true"
-        aria-label="Keyboard shortcuts"
+        // Named by its title: it lists pointer controls too, and was
+        // announced as "Keyboard shortcuts" under a heading reading Controls.
+        aria-labelledby="shortcuts-title"
         ref={dialogRef}
       >
         <div className="shortcuts-header">
-          <h2>Controls</h2>
+          <h2 id="shortcuts-title">Controls</h2>
           <button
             type="button"
             className="icon-button"
             aria-label="Close"
             onClick={onClose}
           >
-            ×
+            <X size={14} aria-hidden="true" />
           </button>
         </div>
-        <div className="shortcuts-grid">
+        {/* The scroller takes focus: Close was the only stop, so arrows and
+            Page Down could not reach the half of the list below the fold. */}
+        <div
+          className="shortcuts-grid"
+          tabIndex={0}
+          role="region"
+          aria-label="Controls list"
+        >
           {[...KEYBOARD_CONTROL_GROUPS, ...POINTER_CONTROL_GROUPS].map(
             (group) => (
               <section key={group.title}>

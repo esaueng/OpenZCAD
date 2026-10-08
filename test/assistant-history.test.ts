@@ -106,6 +106,24 @@ describe('assistant thread storage', () => {
     expect(loadAssistantThread('proj_a', null)).toEqual([]);
   });
 
+  it('drops a stored time outside the Date range rather than the turn', () => {
+    // 1e300 is a positive finite number, but new Date(1e300) is invalid and
+    // its toISOString() threw while rendering the restored turn.
+    for (const at of [1e300, 8.64e15 + 1]) {
+      const entry = parseStoredEntry({ kind: 'user', id: 'u', text: 'hi', at });
+      expect(entry).not.toBeNull();
+      expect(entry).not.toHaveProperty('at');
+    }
+    expect(
+      parseStoredEntry({
+        kind: 'user',
+        id: 'u',
+        text: 'hi',
+        at: 1_700_000_000_000
+      })
+    ).toHaveProperty('at', 1_700_000_000_000);
+  });
+
   it('drops entries it cannot trust instead of loading half of one', () => {
     expect(parseStoredEntry({ kind: 'user' })).toBeNull();
     expect(parseStoredEntry({ kind: 'nonsense', id: 'x' })).toBeNull();

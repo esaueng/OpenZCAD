@@ -39,14 +39,15 @@ const COPY: Record<
   }
 };
 
+/** Binary units, named as such: Project properties labels the same sizes. */
 function formatBytes(bytes: number): string {
   if (bytes < 1024) {
     return `${bytes} B`;
   }
-  const megabytes = bytes / (1024 * 1024);
-  return megabytes >= 1
-    ? `${megabytes.toFixed(1)} MB`
-    : `${Math.round(bytes / 1024)} KB`;
+  const mebibytes = bytes / (1024 * 1024);
+  return mebibytes >= 1
+    ? `${mebibytes.toFixed(1)} MiB`
+    : `${Math.round(bytes / 1024)} KiB`;
 }
 
 function inventory(
@@ -67,6 +68,7 @@ export function CloudDataDeletionDialog({
 }: CloudDataDeletionDialogProps) {
   const dialogRef = useRef<HTMLDivElement>(null);
   const inputRef = useRef<HTMLInputElement>(null);
+  const cancelRef = useRef<HTMLButtonElement>(null);
   const [preview, setPreview] = useState<AccountDeletionPreview | null>(null);
   const [confirmation, setConfirmation] = useState('');
   const [personalInfoVisible, setPersonalInfoVisible] = useState(false);
@@ -102,6 +104,23 @@ export function CloudDataDeletionDialog({
       cancelled = true;
     };
   }, [scope]);
+
+  // The confirmation field arrives with the preview, after opening focused
+  // the only control there was, Cancel. Move on to the field unless the
+  // viewer has taken focus somewhere else in the meantime.
+  useEffect(() => {
+    if (!preview) {
+      return;
+    }
+    const active = document.activeElement;
+    if (
+      active === cancelRef.current ||
+      active === dialogRef.current ||
+      active === document.body
+    ) {
+      inputRef.current?.focus();
+    }
+  }, [preview]);
 
   const matches = Boolean(
     preview &&
@@ -187,15 +206,17 @@ export function CloudDataDeletionDialog({
               </small>
             </div>
             <label className="cloud-deletion-confirmation">
-              <span>
-                Type{' '}
-                <strong className="mono">
-                  {preview.confirmationKind === 'email' && !personalInfoVisible
-                    ? 'your email address'
-                    : preview.confirmationText}
-                </strong>{' '}
-                to confirm
-              </span>
+              {/* Mono marks text to type verbatim; the masked prompt is a
+                  description of it, not the text itself. */}
+              {preview.confirmationKind === 'email' && !personalInfoVisible ? (
+                <span>Type your email address to confirm</span>
+              ) : (
+                <span>
+                  Type{' '}
+                  <strong className="mono">{preview.confirmationText}</strong>{' '}
+                  to confirm
+                </span>
+              )}
               <input
                 ref={inputRef}
                 type={
@@ -233,6 +254,7 @@ export function CloudDataDeletionDialog({
 
         <div className="cloud-deletion-actions">
           <button
+            ref={cancelRef}
             type="button"
             className="secondary"
             disabled={busy}
@@ -240,10 +262,14 @@ export function CloudDataDeletionDialog({
           >
             Cancel
           </button>
+          {/* aria-disabled, not disabled, while deleting: disabling the
+              focused button dropped focus on the body, and a failure's error
+              then appeared with the keyboard nowhere. */}
           <button
             type="button"
             className="cloud-deletion-confirm"
-            disabled={!matches || busy}
+            disabled={!matches}
+            aria-disabled={busy || undefined}
             onClick={() => void submit()}
           >
             {busy ? 'Deleting…' : copy.action}

@@ -56,3 +56,15 @@ describe('TweakPanel', () => {
     expect(panel.querySelector('.param-list')).not.toBeNull();
   });
 });
+
+describe('TweakPanel mesh export', () => {
+  it('names every format the export dialog offers', () => {
+    renderPanel([]);
+    // It said "3MF or STL" after OBJ, glTF and PLY had shipped.
+    expect(
+      screen.getByRole('button', {
+        name: 'Export mesh… — 3MF, STL, OBJ, glTF or PLY'
+      })
+    ).toBeInTheDocument();
+  });
+});

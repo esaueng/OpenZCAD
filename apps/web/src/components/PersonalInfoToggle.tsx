@@ -34,11 +34,13 @@ export function PersonalInfoToggle({
   visible: boolean;
   onChange(visible: boolean): void;
 }) {
+  // The label names the action and so already carries the state. Adding
+  // aria-pressed on top announced "Hide personal info, pressed": a toggle
+  // button's label has to stay put, and this one deliberately does not.
   return (
     <button
       type="button"
       className="secondary"
-      aria-pressed={visible}
       onClick={() => onChange(!visible)}
     >
       {visible ? (

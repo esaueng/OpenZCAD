@@ -54,6 +54,19 @@ describe('offset chip', () => {
     expect(reading(region)).toBe('-5 mm');
   });
 
+  it('reads Total and Offset at the same precision', () => {
+    const reading = (mode: 'offset' | 'total') =>
+      offsetChipText({
+        rawValue: 2.004,
+        mode,
+        span: 10,
+        sense: 1,
+        units: 'in'
+      });
+    expect(reading('offset')).toBe('+2 in');
+    expect(reading('total')).toBe('12 in');
+  });
+
   it('never reads Total without a span to add to', () => {
     expect(
       offsetChipText({

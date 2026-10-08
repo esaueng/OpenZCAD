@@ -27,7 +27,7 @@ export const KEYBOARD_CONTROL_GROUPS = [
       {
         id: 'open-settings',
         keys: ['Ctrl/Cmd+,'],
-        action: 'Open Settings',
+        action: 'Open settings',
         detail: 'Available from the start screen or an open project.'
       },
       {
@@ -193,8 +193,8 @@ export const KEYBOARD_CONTROL_GROUPS = [
     items: [
       {
         id: 'workspace-mode',
-        keys: ['Ctrl', 'Shift', 'M'],
-        action: 'Switch between View and Build',
+        keys: ['Ctrl/Cmd+Shift+M'],
+        action: 'Cycle View, Tweak and Build',
         detail:
           'A shared project you can only read stays in View, and says why.'
       },
@@ -311,7 +311,7 @@ export const KEYBOARD_CONTROL_GROUPS = [
         keys: ['↑', '↓'],
         action: 'Move through command bar results',
         detail:
-          'Press Enter to run the highlighted command, or Tab to ask the assistant instead.'
+          'Press Enter to run the highlighted command, or Tab to complete its name.'
       },
       {
         id: 'dialog-focus',

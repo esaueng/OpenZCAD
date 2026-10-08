@@ -228,6 +228,7 @@ export function HistoryTimeline({
   const [draggingHandle, setDraggingHandle] = useState(false);
   const listRef = useRef<HTMLDivElement>(null);
   const commitTimer = useRef<number | null>(null);
+  const refocusFrame = useRef<number | null>(null);
   const featureArrivals = useArrivals(
     features.map((feature) => feature.id),
     ARRIVAL_MS
@@ -265,6 +266,9 @@ export function HistoryTimeline({
     () => () => {
       if (commitTimer.current !== null) {
         window.clearTimeout(commitTimer.current);
+      }
+      if (refocusFrame.current !== null) {
+        cancelAnimationFrame(refocusFrame.current);
       }
     },
     []
@@ -487,11 +491,24 @@ export function HistoryTimeline({
       return;
     }
     onSelectFeature(next.feature.id);
-    listRef.current
-      ?.querySelector<HTMLElement>(
-        `[data-node-id="${CSS.escape(next.feature.id)}"] .feature-row-main`
-      )
-      ?.focus();
+    const focusRow = () =>
+      listRef.current
+        ?.querySelector<HTMLElement>(
+          `[data-node-id="${CSS.escape(next.feature.id)}"] .feature-row-main`
+        )
+        ?.focus();
+    focusRow();
+    // Selecting a row opens its edit card, and the inspector hands that card
+    // the keyboard once the selection commits, after this handler has run.
+    // Taking focus back a frame later keeps the walk going; otherwise the
+    // next arrow key lands in the card and the walk stops after one row.
+    if (refocusFrame.current !== null) {
+      cancelAnimationFrame(refocusFrame.current);
+    }
+    refocusFrame.current = requestAnimationFrame(() => {
+      refocusFrame.current = null;
+      focusRow();
+    });
   }
 
   const handleFeature = features[end];
@@ -555,7 +572,8 @@ export function HistoryTimeline({
       >
         {features.length === 0 && (
           <p className="muted sidebar-hint">
-            No features yet. Pick a tool from the command card to start.
+            No features yet. Pick a tool from the tool rail on the left to
+            start.
           </p>
         )}
         {filtering && visible.length === 0 && (

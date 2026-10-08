@@ -54,7 +54,9 @@ export function RichText({ text, className }: RichTextProps) {
             </li>
           ));
           return block.ordered ? (
-            <ol key={index}>{items}</ol>
+            <ol key={index} start={block.start}>
+              {items}
+            </ol>
           ) : (
             <ul key={index}>{items}</ul>
           );

@@ -464,6 +464,12 @@ function FacePicker({
   );
 }
 
+/** A reason that can stand alone as a line, ended like one. */
+function asSentence(reason: string): string {
+  const trimmed = reason.trim();
+  return /[.!?]$/.test(trimmed) ? trimmed : `${trimmed}.`;
+}
+
 /** "Not created — the hole misses the body." rather than kernel jargon. */
 function refusalSentence(reason: string, editing: boolean): string {
   const plain = reason.replace(/^Feature "[^"]*":\s*/, '');
@@ -776,10 +782,24 @@ export function ModelingOperationsForm({
       className="feature-form"
       onSubmit={handleSubmit}
       onKeyDown={(event) => {
-        // Enter on a face row submits (see `isPickListRow`).
-        if (event.key === 'Enter' && isPickListRow(event.target)) {
+        // Enter on a face row submits (see `isPickListRow`), and so does
+        // Enter on a select, as in every other feature card: a text field
+        // submits natively, a select did not. Only while the Create button
+        // is enabled, as native implicit submission is: a held Enter during
+        // the exact check otherwise started another check on each repeat.
+        if (
+          event.key === 'Enter' &&
+          (isPickListRow(event.target) ||
+            event.target instanceof HTMLSelectElement)
+        ) {
           event.preventDefault();
-          event.currentTarget.requestSubmit();
+          if (
+            canCheck &&
+            effectivePreflight.status !== 'pending' &&
+            unsupportedReason === undefined
+          ) {
+            event.currentTarget.requestSubmit();
+          }
         }
       }}
     >
@@ -854,6 +874,7 @@ export function ModelingOperationsForm({
                 <button
                   type="button"
                   className="secondary"
+                  aria-label={`Remove section ${index + 1}`}
                   disabled={state.value.sectionIds.length <= 2}
                   onClick={() =>
                     replaceState({
@@ -893,7 +914,7 @@ export function ModelingOperationsForm({
               Add section
             </button>
           </fieldset>
-          <label className="field">
+          <label className="field-check">
             <input
               type="checkbox"
               checked={state.value.endPoint !== null}
@@ -965,6 +986,9 @@ export function ModelingOperationsForm({
                 })
               }
             >
+              {pathOptions.length === 0 ? (
+                <option value="">No path sketches yet</option>
+              ) : null}
               {pathOptions.map((path) => (
                 <option key={path.id} value={path.id}>
                   {path.label}
@@ -1192,7 +1216,7 @@ export function ModelingOperationsForm({
             }
           />
           <ExprInput
-            label="Draft angle (degrees)"
+            label="Draft angle (°)"
             value={state.value.angleDeg}
             scope={scope}
             onChange={(angleDeg) =>
@@ -1316,7 +1340,7 @@ export function ModelingOperationsForm({
                 }
               />
               <ExprInput
-                label="Countersink angle (deg)"
+                label="Countersink angle (°)"
                 value={state.value.countersinkAngleDeg}
                 scope={scope}
                 onChange={(countersinkAngleDeg) =>
@@ -1329,7 +1353,7 @@ export function ModelingOperationsForm({
             </>
           ) : null}
           <FieldGroup
-            legend="Position on face (from centre)"
+            legend="Position on face (from center)"
             message={
               positionRefusal ? (
                 // The refusal belongs to the position it is about, not to a
@@ -1401,9 +1425,11 @@ export function ModelingOperationsForm({
         </>
       ) : null}
 
-      {validation ? (
+      {validation &&
+      !(unsupportedReason !== undefined && validation.kind === 'missing') ? (
         // Something still to choose is a next step, not a mistake: it reads
         // as a hint until the user has typed a value that does not resolve.
+        // Under a capability reason it only said the same thing again.
         <p
           className={validation.kind === 'missing' ? 'muted' : 'field-error'}
           aria-live="polite"
@@ -1421,8 +1447,12 @@ export function ModelingOperationsForm({
               effectivePreflight.status === 'pending' ||
               unsupportedReason !== undefined
             }
+            aria-keyshortcuts="Enter"
           >
             {buttonLabel}
+            <kbd className="kbd-inline" aria-hidden="true">
+              ↵
+            </kbd>
           </button>
           {onCancel ? (
             <button type="button" className="secondary" onClick={onCancel}>
@@ -1432,7 +1462,15 @@ export function ModelingOperationsForm({
         </div>
         {/* Below the actions on purpose: it appears in answer to the button,
             and above it the button moved under the pointer that pressed it. */}
-        {positionRefusal ? null : preflightMessage(effectivePreflight, editing)}
+        {unsupportedReason !== undefined ? (
+          // Verbatim: nothing was attempted, so "Not created —" in front of
+          // "Create a line or arc path sketch" misreported what happened.
+          <p className="field-error" role="alert">
+            {asSentence(unsupportedReason)}
+          </p>
+        ) : positionRefusal ? null : (
+          preflightMessage(effectivePreflight, editing)
+        )}
       </div>
     </form>
   );

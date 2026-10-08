@@ -2,6 +2,7 @@ import type { BackupFile, ProjectBackup } from './projectBackup';
 import {
   isPurgeDue,
   MAX_LOCAL_CHECKPOINT_DOCUMENTS,
+  MAX_PROJECT_CHECKPOINTS,
   type ArtifactId,
   type ImportedSourceReference,
   type ProjectCheckpoint,
@@ -1613,13 +1614,16 @@ export function projectMatchesInterruptedAdoption(
   if (
     adoptionCheckpoint?.reason !== 'Saved to account' ||
     adoptionCheckpoint.documentVersion !== remote.version ||
-    remote.checkpoints.length !== local.checkpoints.length + 1
+    !jsonValuesEqual(
+      remote.checkpoints,
+      [...local.checkpoints, adoptionCheckpoint].slice(-MAX_PROJECT_CHECKPOINTS)
+    )
   ) {
     return false;
   }
   return projectsHaveSameCanonicalContent(local, {
     ...remote,
-    checkpoints: remote.checkpoints.slice(0, -1)
+    checkpoints: local.checkpoints
   });
 }
 
@@ -1653,14 +1657,40 @@ export function projectsHaveSameRebuildInputs(
   );
 }
 
-/** A metadata-only room update is safe only if it retains all local history. */
+/** Retention can evict an oldest prefix only when the retained overlap proves it. */
+function checkpointsPreserveLocalWork(
+  local: readonly ProjectCheckpoint[],
+  remote: readonly ProjectCheckpoint[]
+): boolean {
+  if (local.every((entry, index) => jsonValuesEqual(entry, remote[index]))) {
+    return true;
+  }
+  if (
+    remote.length !== MAX_PROJECT_CHECKPOINTS ||
+    local.length > remote.length
+  ) {
+    return false;
+  }
+  const start = local.findIndex(
+    (entry) => entry.checkpointId === remote[0]?.checkpointId
+  );
+  return (
+    start > 0 &&
+    local
+      .slice(start)
+      .every((entry, index) => jsonValuesEqual(entry, remote[index]))
+  );
+}
+
+/** A metadata-only room update must retain local history within its save window. */
 export function projectPreservesLocalWork(
   local: ProjectDocument,
   remote: ProjectDocument
 ): boolean {
   return (
     projectsHaveSameRebuildInputs(local, remote) &&
-    (['revisions', 'checkpoints', 'commandLog'] as const).every(
+    checkpointsPreserveLocalWork(local.checkpoints, remote.checkpoints) &&
+    (['revisions', 'commandLog'] as const).every(
       (key) =>
         local[key].length <= remote[key].length &&
         local[key].every((entry, index) =>

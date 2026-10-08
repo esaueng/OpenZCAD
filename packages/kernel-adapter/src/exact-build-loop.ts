@@ -135,7 +135,7 @@ export interface PrimitiveReuse {
   store(index: number, feature: FeatureNode, result: ExactBuildResult): void;
 }
 
-export function buildDocumentHistory(
+function* buildDocumentHistorySteps(
   kernel: RemusKernel,
   document: ProjectDocument,
   importSources: ReadonlyMap<string, Uint8Array> = new Map(),
@@ -172,7 +172,7 @@ export function buildDocumentHistory(
   lineageDemand?: ReadonlySet<BodyId> | readonly BodyId[],
   /** See {@link FeatureBuildContext.heldDisplayDeflection}. */
   heldDisplayDeflection?: (bodyId: BodyId) => number | undefined
-): ExactBuildResult {
+): Generator<void, ExactBuildResult> {
   const { scope, errors } = getParameterScope(document);
   const result: ExactBuildResult = resume?.initial ?? {
     shapes: new Map(),
@@ -210,7 +210,9 @@ export function buildDocumentHistory(
     result,
     importSources,
     pinnedImports,
-    ...(normalizedDemand !== undefined ? { lineageDemand: normalizedDemand } : {}),
+    ...(normalizedDemand !== undefined
+      ? { lineageDemand: normalizedDemand }
+      : {}),
     importedSteps,
     strictVerdicts,
     ...(heldDisplayDeflection === undefined ? {} : { heldDisplayDeflection }),
@@ -236,6 +238,7 @@ export function buildDocumentHistory(
         // where its dependents look for the result (F1 follow-up).
         passSuppressedFeatureThrough(result, feature);
         onFeature?.(index, result);
+        yield;
         continue;
       }
       try {
@@ -270,10 +273,51 @@ export function buildDocumentHistory(
         );
       }
       onFeature?.(index, result);
+      yield;
     }
     return result;
   } finally {
     cancellation?.token.free();
+  }
+}
+
+/** Synchronous replay for callers that do not need worker message delivery. */
+export function buildDocumentHistory(
+  ...args: Parameters<typeof buildDocumentHistorySteps>
+): ExactBuildResult {
+  const steps = buildDocumentHistorySteps(...args);
+  let step = steps.next();
+  while (!step.done) step = steps.next();
+  return step.value;
+}
+
+/**
+ * Same ordered replay, with optional task-level yields between features. The
+ * generator owns the cancellation token; closing it also frees the token when
+ * the scheduler throws. Kernel calls and checkpoint commits remain indivisible.
+ */
+export async function buildDocumentHistoryAsync(
+  controls: {
+    yieldControl?: () => Promise<void> | void;
+    /** Open synchronous read scopes only while advancing the generator. */
+    runStep?: <T>(step: () => T) => T;
+  },
+  ...args: Parameters<typeof buildDocumentHistorySteps>
+): Promise<ExactBuildResult> {
+  const steps = buildDocumentHistorySteps(...args);
+  const runStep = controls.runStep ?? ((step) => step());
+  try {
+    let step = runStep(() => steps.next());
+    while (!step.done) {
+      const pending = controls.yieldControl?.();
+      if (pending) await pending;
+      step = runStep(() => steps.next());
+    }
+    return step.value;
+  } catch (error) {
+    // Throwing into the suspended loop runs its token-owning finally block.
+    runStep(() => steps.throw(error));
+    throw error;
   }
 }
 

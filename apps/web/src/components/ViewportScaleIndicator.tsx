@@ -130,10 +130,15 @@ export function ViewportScaleIndicator({
   }, [scaleSinkRef, units]);
 
   return (
+    // One image named by its label ("Viewport scale … : 20 mm"), not a live
+    // region: as an <output> the value was a polite status that announced a
+    // bare "50 mm", "100 mm" on every zoom step, and the label on a plain
+    // div was never exposed at all.
     <div
       ref={rootRef}
       className="viewport-scale-indicator"
       data-testid="viewport-scale-indicator"
+      role="img"
       hidden
     >
       <canvas
@@ -142,7 +147,11 @@ export function ViewportScaleIndicator({
         data-testid="viewport-scale-rule"
         aria-hidden="true"
       />
-      <output ref={valueRef} className="viewport-scale-value" />
+      <output
+        ref={valueRef}
+        className="viewport-scale-value"
+        aria-hidden="true"
+      />
     </div>
   );
 }

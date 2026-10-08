@@ -37,7 +37,7 @@ export const WORKSPACE_TOUR_STEPS: readonly WorkspaceTourStep[] = [
   {
     id: 'create',
     title: 'Create your first feature',
-    body: 'Pick a tool from the Feature tools list — click Box, or press B, then press Enter to create it. Its tools stay in place whatever you pick; More tools at its foot opens the rest.',
+    body: 'Pick a tool from the rail on the left — click Box (the cube), or press B, then press Enter to create it. Its tools stay in place whatever you pick; More tools at its foot opens the rest.',
     targetSelector: '.tool-palette',
     isComplete: (signals) => signals.featureCount > 0
   },
@@ -51,7 +51,7 @@ export const WORKSPACE_TOUR_STEPS: readonly WorkspaceTourStep[] = [
   {
     id: 'history',
     title: 'The history is the model',
-    body: 'Every feature lands in the History panel and replays in order. Drag the grip to reorder, right-click a row for actions, and roll back with the clock.',
+    body: 'Every feature lands in the History panel and replays in order. Drag the grip to reorder, right-click a row for actions, and roll back with the clock on a row.',
     targetSelector: '.sidebar',
     isComplete: () => false
   },

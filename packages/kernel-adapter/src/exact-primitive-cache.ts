@@ -22,6 +22,30 @@ function copyShape(shape: ExactShape): ExactShape {
   };
 }
 
+/**
+ * Audited builders leave input solids intact: transforms copy first, modifiers
+ * and booleans produce new solids, and sketches change only build-local state.
+ * They still replay in history order and read the newly rebuilt operands. An
+ * unreviewed builder must retain the checkpoint restore path.
+ */
+function preservesPrimitiveInputs(feature: FeatureNode): boolean {
+  switch (feature.data.featureKind) {
+    case 'primitive':
+    case 'sketch':
+    case 'extrude':
+    case 'revolve':
+    case 'transform':
+    case 'boolean':
+    case 'fillet':
+    case 'chamfer':
+    case 'pattern':
+    case 'direct-edit':
+      return true;
+    default:
+      return false;
+  }
+}
+
 /** Same-kernel primitive results; every actual topology restore retires its tail. */
 export class PrimitiveBuildCache {
   private readonly entries = new Map<FeatureNode['featureId'], Entry>();
@@ -60,11 +84,13 @@ export class PrimitiveBuildCache {
     startIndex: number
   ): boolean {
     const tail = features.slice(startIndex);
-    // Only primitive builders have been audited to depend solely on their
-    // digest and to change only one shape entry, without kernel session state.
+    // Only primitives are reused. Dependent builders replay against this run's
+    // shapes, consumed set, sketch bases, diagnostics and references. Retaining
+    // the arena avoids retiring independent primitive handles just because a
+    // dependent builder happens to follow them in history order.
     return (
       tail.length > 0 &&
-      tail.every((feature) => feature.data.featureKind === 'primitive') &&
+      tail.every(preservesPrimitiveInputs) &&
       tail.some((feature, offset) =>
         this.matching(feature, digests[startIndex + offset]!)
       )

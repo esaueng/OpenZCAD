@@ -108,7 +108,9 @@
 }
 
 .danger-ghost {
-  color: var(--color-error);
+  /* The error hue itself is under 4.5:1 as text on these surfaces in both
+     themes; it stays on the hover fill and border below. */
+  color: var(--color-error-text);
   border: 1px solid transparent;
 }
 
@@ -371,6 +373,12 @@
   font-family: var(--font-mono);
 }
 
+/* Every number field carries a unit slot, empty or not, all one width, so
+   the fields' right edges line up down a card. */
+.settings-unit-input > span {
+  min-width: 2ch;
+}
+
 .settings-toggle {
   position: relative;
   width: 36px;
@@ -422,8 +430,26 @@
 }
 
 .settings-toggle input:focus-visible + span {
-  outline: 1px solid var(--color-accent);
+  /* Two pixels, as the app-wide ring in tokens.css: one is under the
+     perimeter WCAG 2.2 asks for. */
+  outline: 2px solid var(--color-accent);
   outline-offset: 2px;
+}
+
+/* A disabled switch or field must not read as live; 0.45 matches
+   button:disabled. The switch's own checkbox stays invisible: its track is
+   what dims. */
+.settings-toggle:has(input:disabled) {
+  cursor: not-allowed;
+}
+
+.settings-toggle input:disabled + span,
+.settings-page :is(input:not([type='checkbox']), select, textarea):disabled {
+  opacity: 0.45;
+}
+
+.settings-page :is(input:not([type='checkbox']), select, textarea):disabled {
+  cursor: not-allowed;
 }
 
 .settings-state {
@@ -482,11 +508,30 @@
   font-size: var(--fs-xs);
 }
 
+.settings-success {
+  color: var(--color-success);
+  background: color-mix(in srgb, var(--color-success) 7%, transparent);
+}
+
 .settings-sign-in-warning {
   align-items: center;
   display: flex;
+  flex-wrap: wrap;
   gap: var(--sp-3);
   justify-content: space-between;
+}
+
+/* The explanation takes the slack and wraps above the controls when the row
+   runs out of room; the action never shrinks into its neighbour or wraps its
+   own label. */
+.settings-sign-in-warning > span {
+  flex: 1 1 16rem;
+  min-width: 0;
+}
+
+.settings-sign-in-warning > button {
+  flex: none;
+  white-space: nowrap;
 }
 
 .settings-auth-form {
@@ -537,6 +582,34 @@
 
 .settings-turnstile {
   min-height: 65px;
+}
+
+/* No widget rendered (the script is still loading or was blocked): no slot
+   to hold open above the status line. */
+.settings-turnstile:empty {
+  min-height: 0;
+}
+
+.settings-challenge-state {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--sp-2);
+  color: var(--color-text-muted);
+  font-size: var(--fs-xs);
+}
+
+.settings-challenge-state.error,
+.settings-challenge-state.expired {
+  color: var(--color-warning);
+}
+
+.settings-challenge-state > button {
+  flex: none;
+  display: inline-flex;
+  align-items: center;
+  gap: var(--sp-1);
+  white-space: nowrap;
 }
 
 .settings-long-field {
@@ -713,6 +786,26 @@
   line-height: 1.4;
 }
 
+/* Every row draws its own bottom rule; the card's border already closes the
+   last one, so a second line there doubled it. */
+.settings-card > :last-child,
+.settings-cloud-delete-all:last-child > .setting-row {
+  border-bottom: 0;
+}
+
+.settings-card-action-note {
+  margin-right: auto;
+  align-self: center;
+  color: var(--color-text-muted);
+  font-size: var(--fs-xs);
+}
+
+.settings-empty {
+  width: min(900px, 100%);
+  margin: 0 auto;
+  color: var(--color-text-muted);
+}
+
 @media (max-width: 860px) {
   .settings-topbar-title,
   .settings-save-message,
@@ -842,6 +935,14 @@
     min-width: 0;
   }
 
+  .settings-unit-input {
+    width: 100%;
+  }
+
+  .settings-unit-input input {
+    flex: 1;
+  }
+
   .settings-back-action {
     font-size: 0;
   }
@@ -851,6 +952,11 @@
   display: grid;
   gap: var(--sp-1);
   min-width: 12rem;
+}
+
+.settings-field-inline input {
+  width: 100%;
+  min-width: 0;
 }
 
 .settings-field-inline span {

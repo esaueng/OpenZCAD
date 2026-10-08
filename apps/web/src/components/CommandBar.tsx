@@ -183,6 +183,7 @@ export function CommandBar({
   const question = commandMode ? '' : query.trim();
   const clampedIndex = Math.min(activeIndex, Math.max(matches.length - 1, 0));
   const listShown = open && commandMode;
+  const hasMatches = matches.length > 0;
   // Plain words list nothing, so "fil" looked like a search that found
   // nothing. Say what Enter will do with them, and where commands are.
   const askHintShown = open && question.length > 0;
@@ -297,65 +298,82 @@ export function CommandBar({
             // Rows are pressed with the mouse while focus stays in the field.
             onMouseDown={(event) => event.preventDefault()}
           >
-            <div
-              className="palette-list"
-              id={LIST_ID}
-              role="listbox"
-              aria-label="Commands"
-              ref={listRef}
+            {/* Outside the listbox, whose children may only be options, and
+                mounted with the list so the message lands in a live region
+                that already exists. */}
+            <p
+              className={hasMatches ? 'visually-hidden' : 'palette-empty'}
+              role="status"
             >
-              {matches.length === 0 && (
-                <p className="palette-empty">No matching command.</p>
-              )}
-              {matches.map((command, index) => (
-                <button
-                  key={command.id}
-                  type="button"
-                  id={optionId(index)}
-                  role="option"
-                  aria-selected={index === clampedIndex}
-                  aria-disabled={command.disabledReason ? true : undefined}
-                  // Focus stays in the field; the rows are described
-                  // through aria-activedescendant instead.
-                  tabIndex={-1}
-                  className={`palette-row ${index === clampedIndex ? 'active' : ''} ${
-                    command.disabledReason ? 'disabled' : ''
-                  }`}
-                  title={command.disabledReason ?? undefined}
-                  onMouseEnter={() => setActiveIndex(index)}
-                  onClick={() => runCommand(command)}
-                >
-                  <span className="palette-icon">{command.icon}</span>
-                  <span className="palette-label">{command.label}</span>
-                  {command.disabledReason ? (
-                    <small className="palette-reason">
-                      {command.disabledReason}
-                    </small>
-                  ) : (
-                    <small className="palette-group">{command.group}</small>
-                  )}
-                  {command.shortcut && (
-                    <kbd>
-                      <ShortcutKeys
-                        label={platformShortcutLabel(command.shortcut)}
-                      />
-                    </kbd>
-                  )}
-                </button>
-              ))}
-            </div>
-            <p className="command-bar-keys" aria-hidden="true">
-              ↑↓ move · Tab completes · Enter runs · Esc clears
+              {hasMatches ? '' : 'No matching command.'}
             </p>
+            {hasMatches && (
+              <div
+                className="palette-list"
+                id={LIST_ID}
+                role="listbox"
+                aria-label="Commands"
+                ref={listRef}
+              >
+                {matches.map((command, index) => (
+                  <button
+                    key={command.id}
+                    type="button"
+                    id={optionId(index)}
+                    role="option"
+                    aria-selected={index === clampedIndex}
+                    aria-disabled={command.disabledReason ? true : undefined}
+                    // Focus stays in the field; the rows are described
+                    // through aria-activedescendant instead.
+                    tabIndex={-1}
+                    className={`palette-row ${index === clampedIndex ? 'active' : ''} ${
+                      command.disabledReason ? 'disabled' : ''
+                    }`}
+                    title={command.disabledReason ?? undefined}
+                    // Movement, not entry: the list opens over the viewport
+                    // where the pointer rests, and the row that appeared under
+                    // a still pointer took the highlight from the keyboard.
+                    onMouseMove={() => {
+                      if (index !== clampedIndex) {
+                        setActiveIndex(index);
+                      }
+                    }}
+                    onClick={() => runCommand(command)}
+                  >
+                    <span className="palette-icon">{command.icon}</span>
+                    <span className="palette-label">{command.label}</span>
+                    {command.disabledReason ? (
+                      <small className="palette-reason">
+                        {command.disabledReason}
+                      </small>
+                    ) : (
+                      <small className="palette-group">{command.group}</small>
+                    )}
+                    {command.shortcut && (
+                      <kbd>
+                        <ShortcutKeys
+                          label={platformShortcutLabel(command.shortcut)}
+                        />
+                      </kbd>
+                    )}
+                  </button>
+                ))}
+              </div>
+            )}
+            {hasMatches && (
+              <p className="command-bar-keys" aria-hidden="true">
+                ↑↓ move · Tab completes · Enter runs · Esc clears
+              </p>
+            )}
           </div>
         )}
         {askHintShown && (
           <div
-            className="command-bar-float"
+            className="command-bar-float command-bar-ask"
             onMouseDown={(event) => event.preventDefault()}
           >
             <p className="command-bar-keys" id={ASK_HINT_ID}>
-              {onAsk
+              {onAsk && !askUnavailable
                 ? 'Enter asks the assistant · type / for commands'
                 : 'Type / for commands'}
             </p>
@@ -427,15 +445,16 @@ export function CommandBar({
             autoComplete="off"
             role="combobox"
             aria-label="Search commands"
-            aria-keyshortcuts={searchKey.accessible.replace('Cmd', 'Meta')}
+            // ARIA names the modifiers Meta and Control.
+            aria-keyshortcuts={searchKey.accessible
+              .replace('Cmd', 'Meta')
+              .replace('Ctrl', 'Control')}
             aria-autocomplete="list"
-            aria-expanded={listShown}
+            aria-expanded={listShown && hasMatches}
             aria-describedby={askHintShown ? ASK_HINT_ID : undefined}
-            aria-controls={listShown ? LIST_ID : undefined}
+            aria-controls={listShown && hasMatches ? LIST_ID : undefined}
             aria-activedescendant={
-              listShown && matches.length > 0
-                ? optionId(clampedIndex)
-                : undefined
+              listShown && hasMatches ? optionId(clampedIndex) : undefined
             }
             onFocus={(event) => {
               const from = event.relatedTarget;

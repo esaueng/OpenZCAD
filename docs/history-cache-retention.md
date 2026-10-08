@@ -23,23 +23,28 @@ and checkpoint-count bound, not a byte limit.
   Remus keeps that checkpoint and its ancestors and discards descendants; the
   adapter truncates its table and handle ownership in lockstep. Handles can have
   gaps and need not match table positions. A change in a gap invalidates the next checkpoint.
-- When the entire suffix contains only primitive features, unchanged primitives
+- When the suffix contains only audited builders that preserve their input
+  solids, unchanged primitives
   can retain their current exact handles. The adapter discards later checkpoints
   without restoring topology, clones the prefix's JS state, and reconstructs the
   suffix from cached primitive results and changed builders. Each cache entry is
   guarded by the complete feature/order/suppression/resolved-parameter digest.
-  Unknown or dependent feature kinds in the suffix use ordinary prefix replay.
+  Dependent sketches, extrusions, revolutions, transforms, booleans, fillets,
+  chamfers, patterns and direct edits still replay against current operands;
+  their presence no longer retires unrelated primitives. Unaudited feature
+  kinds in the suffix use ordinary prefix replay.
   Telemetry reports `independent-reuse` and `reusedPrimitives` separately from
   restored prefixes and executed builders; cached shapes remain within one
   kernel lifetime and are pruned after any actual restore.
 - The adapter counts features replayed after a restore across sync, export and
-  recognition. At 512, the following operation frees the history kernel and
+  recognition, including work completed by cancelled builds. At 512, the
+  following operation frees the history kernel and
   its measurement cache before a cold rebuild. Zero-replay hits do not advance
   the counter; a previously due recycle still occurs on the next operation.
   Prior derived results own their buffers, so the retired kernel has no live
   result alias. This limits lifetime arena growth between rebuilds but does
   not cap one large operation or linear-memory high water already reached.
-- With no matching prefix or reusable primitive-only suffix, disabled retention,
+- With no matching prefix or reusable audited suffix, disabled retention,
   a project/scope change or failed restore/discard, the old kernel and
   measurements are released before an exact rebuild.
   Thrown replay/checkpoint failures invalidate both owners for sync, export and
@@ -72,7 +77,12 @@ is exercised in `test/h02-measurement-cache.test.ts` for solids, faces, edges
 and vertices. `discardCheckpoint(k)` also discards
 all descendants, without changing current topology. Temporary measurement
 checkpoints are restored and discarded before returning. No kernel transaction
-or adaptive scheduling redesign is included here.
+redesign is included here. The adapter serializes all owners of retained
+history, including direct callers, so cooperative worker task yields cannot
+let a concurrent sync, export or recognition restore its active arena. The
+worker yields at feature/body boundaries after an 8 ms work quantum and checks
+cancellation before final publication. Synchronous kernel calls remain
+indivisible. See the [interactive regeneration qualification](interactive-regeneration-performance.md).
 
 The proposed H02 Text-branch cache remains blocked: restoring its old
 post-interval checkpoint cannot preserve a separately edited holder branch.
