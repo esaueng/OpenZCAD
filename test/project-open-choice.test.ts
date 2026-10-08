@@ -2,13 +2,19 @@ import { describe, expect, it } from 'vitest';
 import {
   adoptProjectDocument,
   appendRevision,
+  createCheckpoint,
   createProjectDocument
 } from '@openzcad/document-core';
-import { toUserId, type ProjectDocument } from '@openzcad/shared';
+import {
+  MAX_PROJECT_CHECKPOINTS,
+  toUserId,
+  type ProjectDocument
+} from '@openzcad/shared';
 import {
   chooseProjectDocument,
   projectDescendsFrom,
   projectMatchesInterruptedAdoption,
+  projectPreservesLocalWork,
   projectsHaveSameCanonicalContent,
   selectProjectDocument
 } from '../apps/web/src/lib/localProjectStore';
@@ -43,6 +49,59 @@ function at(
 }
 
 describe('choosing between the two copies of a project', () => {
+  function fullSaveWindow() {
+    let document = structuredClone(base);
+    for (let index = 0; index < MAX_PROJECT_CHECKPOINTS; index += 1) {
+      document = createCheckpoint(document, `Save ${index}`);
+    }
+    return document;
+  }
+
+  it.each([1, 3])(
+    'recognizes %s saves that shift a full retention window',
+    (count) => {
+      const local = fullSaveWindow();
+      let remote = local;
+      for (let index = 0; index < count; index += 1) {
+        remote = createCheckpoint(remote, `Account save ${index}`);
+      }
+      expect(projectPreservesLocalWork(local, remote)).toBe(true);
+      expect(projectPreservesLocalWork(remote, local)).toBe(false);
+      expect(chooseProjectDocument(local, remote).choice).toBe('remote');
+      expect(chooseProjectDocument(remote, local).choice).toBe('local');
+      const editedOverlap = structuredClone(remote);
+      editedOverlap.checkpoints[0]!.reason = 'Different history';
+      expect(projectPreservesLocalWork(local, editedOverlap)).toBe(false);
+      const localBranch = createCheckpoint(local, 'Device save');
+      expect(chooseProjectDocument(localBranch, remote).choice).toBe(
+        'diverged'
+      );
+      expect(
+        projectPreservesLocalWork(local, {
+          ...remote,
+          checkpoints: remote.checkpoints.slice(1)
+        })
+      ).toBe(false);
+    }
+  );
+
+  it('recognizes interrupted adoption at the checkpoint limit without accepting other edits', () => {
+    const local = fullSaveWindow();
+    const remote = adoptProjectDocument(local, toUserId('user_account'));
+    expect(remote.checkpoints).toHaveLength(MAX_PROJECT_CHECKPOINTS);
+    expect(projectMatchesInterruptedAdoption(local, remote)).toBe(true);
+    expect(chooseProjectDocument(local, remote).choice).toBe('remote');
+    expect(
+      projectMatchesInterruptedAdoption(
+        { ...local, name: 'Device edit' },
+        remote
+      )
+    ).toBe(false);
+    const editedOverlap = structuredClone(remote);
+    editedOverlap.checkpoints[0]!.reason = 'Different history';
+    expect(projectMatchesInterruptedAdoption(local, editedOverlap)).toBe(false);
+  });
+
   it('does not retry a richer local history behind the account version fence', () => {
     const remote = structuredClone(base);
     const local = {
