@@ -44,9 +44,11 @@ export default defineConfig({
   test: {
     environment: 'node',
     // Exact-kernel suites instantiate large OCCT/Remus WASM modules. Keep
-    // file-level parallelism bounded so CI does not turn kernel startup into
-    // unrelated five-second test timeouts under CPU and memory contention.
-    maxWorkers: 4,
+    // file-level parallelism bounded. The qualified kernel's refusal probes
+    // are CPU-heavy; four simultaneous suites caused both the unchanged
+    // sequential-fillet and unrelated glyph-audit deadlines to fail in CI.
+    // Run every case and probe with less CPU/memory contention.
+    maxWorkers: 2,
     // Package-owned tests live beside their source so they resolve that
     // package's own dependencies (`three` is not a root dependency).
     include: ['test/**/*.test.ts', 'packages/*/src/**/*.test.ts'],
