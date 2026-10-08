@@ -579,6 +579,7 @@ export function useGeometryWorker(host: GeometryWorkerHost): GeometryWorkerApi {
           }
           if (!message.requestId) {
             livePhase = message.phase;
+            if (message.phase === 'starting') armedRef.current = true;
             if (message.phase === 'ready' || message.phase === 'failed') {
               armedRef.current = false;
             }

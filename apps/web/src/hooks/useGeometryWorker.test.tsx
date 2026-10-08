@@ -662,78 +662,81 @@ describe('useGeometryWorker', () => {
       vi.useRealTimers();
     });
 
-    it('keeps full-projection recovery stale and watches it after the rejected job reports ready', () => {
-      vi.useFakeTimers();
-      installWorker();
-      const document = createProjectDocument(
-        'Recovery watchdog',
-        toUserId('user')
-      );
-      const manager = { document } as CommandManager;
-      const { result } = renderHook(() =>
-        useGeometryWorker({
-          manager: () => manager,
-          onDerived: vi.fn(),
-          onError: vi.fn()
-        })
-      );
-      const worker = FakeWorker.instances[0]!;
-      const sender = new ProjectionSender('recovery-watchdog');
-      const emit = (packet: ReturnType<ProjectionSender['encode']>) =>
-        worker.emit({
-          type: 'projection-delta',
-          projectId: document.projectId,
-          version: document.version,
-          packet
+    it.each(['ready', 'failed'] as const)(
+      'keeps recovery watched after the rejected job reports %s',
+      (terminal) => {
+        vi.useFakeTimers();
+        installWorker();
+        const document = createProjectDocument(
+          'Recovery watchdog',
+          toUserId('user')
+        );
+        const manager = { document } as CommandManager;
+        const { result } = renderHook(() =>
+          useGeometryWorker({
+            manager: () => manager,
+            onDerived: vi.fn(),
+            onError: vi.fn()
+          })
+        );
+        const worker = FakeWorker.instances[0]!;
+        const sender = new ProjectionSender('recovery-watchdog');
+        const emit = (packet: ReturnType<ProjectionSender['encode']>) =>
+          worker.emit({
+            type: 'projection-delta',
+            projectId: document.projectId,
+            version: document.version,
+            packet
+          });
+        act(() => {
+          result.current.sync(document);
+          emit(sender.encode(document.projectId, document.derived));
+          worker.emit({
+            type: 'state',
+            phase: 'ready',
+            stale: false,
+            projectId: document.projectId,
+            version: document.version
+          });
         });
-      act(() => {
-        result.current.sync(document);
-        emit(sender.encode(document.projectId, document.derived));
-        worker.emit({
-          type: 'state',
-          phase: 'ready',
-          stale: false,
-          projectId: document.projectId,
-          version: document.version
+        expect(result.current.isReadyFor(document)).toBe(true);
+        act(() => {
+          sender.encode(document.projectId, document.derived); // Dropped base.
+          emit(sender.encode(document.projectId, document.derived));
+          emit(sender.encode(document.projectId, document.derived));
+          worker.emit({
+            type: 'state',
+            phase: terminal,
+            stale: terminal !== 'ready',
+            projectId: document.projectId,
+            version: document.version
+          });
+          worker.emit({
+            type: 'state',
+            phase: 'starting',
+            stale: true,
+            projectId: document.projectId,
+            version: document.version
+          });
         });
-      });
-      expect(result.current.isReadyFor(document)).toBe(true);
-      act(() => {
-        sender.encode(document.projectId, document.derived); // Dropped base.
-        emit(sender.encode(document.projectId, document.derived));
-        emit(sender.encode(document.projectId, document.derived));
-        worker.emit({
-          type: 'state',
-          phase: 'ready',
-          stale: false,
-          projectId: document.projectId,
-          version: document.version
+        expect(result.current.isReadyFor(document)).toBe(false);
+        expect(result.current.retainReadyGeometry(document)).toBe(false);
+        expect(worker.postMessage.mock.calls.at(-1)?.[0]).toMatchObject({
+          forceFull: true
         });
-        worker.emit({
-          type: 'state',
-          phase: 'starting',
-          stale: true,
-          projectId: document.projectId,
-          version: document.version
+        expect(worker.postMessage).toHaveBeenCalledTimes(2);
+        act(() => {
+          vi.advanceTimersByTime(20_000);
         });
-      });
-      expect(result.current.isReadyFor(document)).toBe(false);
-      expect(result.current.retainReadyGeometry(document)).toBe(false);
-      expect(worker.postMessage.mock.calls.at(-1)?.[0]).toMatchObject({
-        forceFull: true
-      });
-      expect(worker.postMessage).toHaveBeenCalledTimes(2);
-      act(() => {
-        vi.advanceTimersByTime(20_000);
-      });
-      expect(worker.terminate).toHaveBeenCalledOnce();
-      expect(FakeWorker.instances).toHaveLength(2);
-      expect(FakeWorker.instances[1]!.postMessage).toHaveBeenCalledWith({
-        type: 'sync',
-        document,
-        lineageDemand: []
-      });
-    });
+        expect(worker.terminate).toHaveBeenCalledOnce();
+        expect(FakeWorker.instances).toHaveLength(2);
+        expect(FakeWorker.instances[1]!.postMessage).toHaveBeenCalledWith({
+          type: 'sync',
+          document,
+          lineageDemand: []
+        });
+      }
+    );
 
     it('settles recovery when a newer current document completes', () => {
       installWorker();
