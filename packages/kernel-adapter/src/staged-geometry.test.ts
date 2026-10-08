@@ -1,9 +1,15 @@
 import { describe, expect, it } from 'vitest';
 import {
   addPrimitiveFeature,
-  createProjectDocument
+  createProjectDocument,
+  listFeaturesInOrder
 } from '@openzcad/document-core';
-import { toUserId, type GeometryReadyState } from '@openzcad/shared';
+import {
+  FEATURE_SUPPRESSED_METADATA_KEY,
+  toUserId,
+  type GeometryReadyState
+} from '@openzcad/shared';
+import { CommandManager, commandFactories } from '@openzcad/command-system';
 import { createExactKernelAdapter } from './exact';
 import { isBuildCancelled } from './exact-cancellation';
 import { buildDocumentHistoryCooperatively } from './exact-build-loop';
@@ -22,6 +28,48 @@ function boxes(count = 1) {
 }
 
 describe('validated geometry before analysis', () => {
+  it('owns current warning attribution, including intentional suppression', async () => {
+    const manager = new CommandManager(boxes(2));
+    const feature = listFeaturesInOrder(manager.document)[0]!;
+    manager.execute(
+      commandFactories.setNodeMetadata({
+        nodeId: feature.id,
+        metadata: { [FEATURE_SUPPRESSED_METADATA_KEY]: true }
+      })
+    );
+    const adapter = await createExactKernelAdapter();
+    let published = false;
+    const message =
+      'Feature "Box 0": Suppressed; skipped during exact rebuild.';
+    try {
+      const result = await adapter.syncDocument(
+        manager.document,
+        undefined,
+        undefined,
+        undefined,
+        {
+          onGeometryReady: (snapshot) => {
+            published = true;
+            expect(snapshot.warnings).toEqual([message]);
+            expect(snapshot.featureWarnings).toMatchObject([
+              { featureName: 'Box 0', kind: 'suppressed', message }
+            ]);
+            snapshot.featureWarnings![0]!.message = 'Observer mutation';
+          }
+        }
+      );
+      expect(published).toBe(true);
+      expect(result.featureWarnings).toMatchObject([
+        { featureName: 'Box 0', kind: 'suppressed', message }
+      ]);
+      expect(result.warnings).toEqual([message]);
+      expect(
+        Object.values(result.bodyRepresentations).map((body) => body.volume)
+      ).toEqual([480]);
+    } finally {
+      adapter.dispose();
+    }
+  });
   it('serializes concurrent callers while a yielded build still owns its arena', async () => {
     const adapter = await createExactKernelAdapter();
     const first = boxes(1),

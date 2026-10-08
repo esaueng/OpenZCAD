@@ -2547,6 +2547,7 @@ export class RemusKernelAdapter implements ExactKernelAdapter {
           structuredClone({
             bodyRepresentations: geometryRepresentations,
             warnings: build.warnings,
+            featureWarnings: build.featureWarnings,
             updatedAt: nowIso(),
             analysis: 'pending' as const
           })

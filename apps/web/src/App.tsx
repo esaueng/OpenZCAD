@@ -5205,17 +5205,31 @@ export function App() {
       label: faceLabel(body, face.hash, face.topologyId)
     };
   }, [renderedRepresentations, renderedSelectedTopology]);
+  const currentGeometrySnapshot =
+    !previewDoc &&
+    !parameterDraftActive &&
+    geometry.state.phase !== 'failed' &&
+    geometrySnapshot !== null &&
+    geometrySnapshot.projectId === doc?.projectId &&
+    geometrySnapshot?.version === doc?.version
+      ? geometrySnapshot.geometry
+      : null;
   // Warnings must describe what is actually on screen. While a preview is up the
   // viewport shows previewDoc's bodies, so showing the live document's warnings
   // would hide exactly the problems the preview exists to reveal.
-  const warnings = (previewDoc ?? doc)?.derived.warnings ?? [];
+  const warnings =
+    currentGeometrySnapshot?.warnings ??
+    (previewDoc ?? doc)?.derived.warnings ??
+    [];
   const diagnostics = useMemo(
     () =>
       presentedDiagnostics(
         warnings,
-        (previewDoc ?? doc)?.derived.featureWarnings
+        currentGeometrySnapshot
+          ? currentGeometrySnapshot.featureWarnings
+          : (previewDoc ?? doc)?.derived.featureWarnings
       ),
-    [warnings, previewDoc, doc]
+    [warnings, currentGeometrySnapshot, previewDoc, doc]
   );
 
   // Keyed on the derived body table, not the whole document: commands clone
@@ -5298,15 +5312,6 @@ export function App() {
    */
   // Its own memo, so the array the viewer uploads meshes from keeps its
   // identity while a preview comes and goes over the top of it.
-  const currentGeometrySnapshot =
-    !previewDoc &&
-    !parameterDraftActive &&
-    geometry.state.phase !== 'failed' &&
-    geometrySnapshot !== null &&
-    geometrySnapshot.projectId === doc?.projectId &&
-    geometrySnapshot?.version === doc?.version
-      ? geometrySnapshot.geometry
-      : null;
   const completedViewerBodies = useMemo<BodyRepresentation[]>(
     () => partBodies.filter((body) => !hiddenBodyIds.has(body.bodyId)),
     [partBodies, hiddenBodyIds]
@@ -10939,6 +10944,12 @@ export function App() {
     bodyId: string;
     topologyId: string;
   }) {
+    if (currentGeometrySnapshot !== null) {
+      setStatus(
+        'The model is still updating. Try exporting again when it finishes.'
+      );
+      return;
+    }
     if (!doc) {
       return;
     }
@@ -18026,7 +18037,12 @@ export function App() {
       group: 'File',
       keywords: ['laser', 'outline', 'flat', 'cut'],
       icon: <Download size={16} aria-hidden="true" />,
-      disabledReason: normalToFaceTarget ? null : 'Select a planar face first',
+      disabledReason:
+        currentGeometrySnapshot !== null
+          ? 'Wait for the model to finish updating'
+          : normalToFaceTarget
+            ? null
+            : 'Select a planar face first',
       run: () => {
         if (normalToFaceTarget) {
           void handleExportFaceDxf(normalToFaceTarget);

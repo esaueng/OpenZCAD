@@ -7,10 +7,12 @@ async function installAnalysisGate(page: Page) {
     const scope = window as typeof window & {
       holdAnalysis: boolean;
       heldAnalysis: number;
+      warningOverride: string[] | null;
       releaseAnalysis: () => void;
     };
     scope.holdAnalysis = false;
     scope.heldAnalysis = 0;
+    scope.warningOverride = null;
     const pending: (() => void)[] = [];
     scope.releaseAnalysis = () => {
       scope.holdAnalysis = false;
@@ -26,8 +28,15 @@ async function installAnalysisGate(page: Page) {
         descriptor.set!.call(this, (event: MessageEvent) => {
           const result = event.data as {
             type?: string;
-            packet?: { state?: { analysis?: string } };
+            packet?: { state?: { analysis?: string; warnings?: string[] } };
           };
+          if (
+            result.type === 'projection-delta' &&
+            result.packet?.state &&
+            scope.warningOverride !== null
+          ) {
+            result.packet.state.warnings = [...scope.warningOverride];
+          }
           if (
             scope.holdAnalysis &&
             result.type === 'projection-delta' &&
@@ -240,6 +249,16 @@ test('blocks staged context actions and exports, then exports both completed bod
     page.getByRole('button', { name: /^Export mesh/ })
   ).toBeDisabled();
   await page.keyboard.press('Escape');
+  await page.keyboard.press('Control+k');
+  await page
+    .getByRole('combobox', { name: 'Search commands' })
+    .fill('/Export face');
+  const faceDxf = page.getByRole('option', {
+    name: /Export face outline as DXF/
+  });
+  await expect(faceDxf).toHaveAttribute('aria-disabled', 'true');
+  await expect(faceDxf).toContainText('Wait for the model to finish updating');
+  await page.keyboard.press('Escape');
   await page.evaluate(() =>
     (
       window as typeof window & { releaseAnalysis: () => void }
@@ -261,4 +280,68 @@ test('blocks staged context actions and exports, then exports both completed bod
   expect(path).not.toBeNull();
   const content = await readFile(path, 'utf8');
   expect(content.match(/MANIFOLD_SOLID_BREP/g)).toHaveLength(2);
+});
+
+test('shows current staged advisories and clears resolved diagnostics before analysis', async ({
+  page
+}) => {
+  await stubApi(page);
+  await installAnalysisGate(page);
+  await page.setViewportSize({ width: 1440, height: 1000 });
+  await page.goto('/');
+  await page.getByLabel('Project name').fill('Staged diagnostics');
+  await page.getByRole('button', { name: 'Create project' }).click();
+  await expectBodyCount(page, 0);
+  const inspector = page.getByRole('region', { name: 'Feature inspector' });
+  const diagnosticRows = page.locator('.diagnostic-row');
+  const warningCount = page
+    .getByRole('group', { name: 'Workspace status' })
+    .locator('span')
+    .filter({ has: page.getByText('warnings', { exact: true }) });
+
+  await page.evaluate(() => {
+    (window as typeof window & { warningOverride: string[] }).warningOverride =
+      ['Previous geometry advisory.'];
+  });
+  await page.getByRole('button', { name: /^Box \(B\)/ }).click();
+  await inspector.getByRole('button', { name: 'Create', exact: true }).click();
+  await expectBodyCount(page, 1);
+  await expect(diagnosticRows).toHaveText(['Previous geometry advisory.']);
+  await expect(warningCount).toHaveText('warnings1');
+
+  for (const warnings of [['Current geometry advisory.'], []]) {
+    await page.getByRole('button', { name: /^Box \(B\)/ }).click();
+    await page.evaluate((warnings) => {
+      const scope = window as typeof window & {
+        warningOverride: string[];
+        holdAnalysis: boolean;
+        heldAnalysis: number;
+      };
+      scope.warningOverride = warnings;
+      scope.holdAnalysis = true;
+      scope.heldAnalysis = 0;
+    }, warnings);
+    await inspector
+      .getByRole('button', { name: 'Create', exact: true })
+      .click();
+    await expect(page.getByText('Preparing model details…')).toBeVisible();
+    await expect
+      .poll(() =>
+        page.evaluate(
+          () =>
+            (window as typeof window & { heldAnalysis: number }).heldAnalysis
+        )
+      )
+      .toBeGreaterThan(0);
+    await expect(diagnosticRows).toHaveText(warnings);
+    await expect(warningCount).toHaveText(`warnings${warnings.length}`);
+    await page.evaluate(() =>
+      (
+        window as typeof window & { releaseAnalysis: () => void }
+      ).releaseAnalysis()
+    );
+    await expect(page.getByText('Preparing model details…')).toHaveCount(0);
+    await expect(diagnosticRows).toHaveText(warnings);
+  }
+  await expectBodyCount(page, 3);
 });
