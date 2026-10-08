@@ -210,6 +210,9 @@ export function ParameterRow({
             onBlur={() => void commitRename()}
             onKeyDown={(event) => {
               if (event.key === 'Enter') {
+                // Cancelled, or the same key press went on to click the name
+                // button that takes focus back, and reopened this editor.
+                event.preventDefault();
                 refocusName.current = true;
                 event.currentTarget.blur();
               }

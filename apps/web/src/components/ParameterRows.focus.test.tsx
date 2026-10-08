@@ -116,6 +116,34 @@ describe('focus after a parameter rename', () => {
     ).toHaveFocus();
   });
 
+  it('keeps the editor closed after Enter commits a rename', async () => {
+    const user = userEvent.setup();
+    render(
+      <ParameterRow
+        parameter={parameter('width', '80')}
+        value={80}
+        onSet={vi.fn()}
+        onRename={vi.fn().mockResolvedValue(null)}
+      />
+    );
+    await user.click(
+      screen.getByRole('button', { name: 'Rename parameter width' })
+    );
+    const editor = screen.getByRole('textbox', {
+      name: 'Rename parameter width'
+    });
+    await user.keyboard('{Control>}a{/Control}plate_width');
+    // A browser goes on from an uncancelled Enter to press whatever has
+    // focus by then: the name button, which reopened the editor.
+    expect(fireEvent.keyDown(editor, { key: 'Enter' })).toBe(false);
+    expect(
+      await screen.findByRole('button', { name: 'Rename parameter width' })
+    ).toHaveFocus();
+    expect(
+      screen.queryByRole('textbox', { name: 'Rename parameter width' })
+    ).toBeNull();
+  });
+
   it('puts the caret back in a rename the Enter key had refused', async () => {
     const user = userEvent.setup();
     render(
