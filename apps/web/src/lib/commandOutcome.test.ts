@@ -24,6 +24,23 @@ describe('command outcome messages', () => {
     );
   });
 
+  it('reports parameter curation and toggle commands as what happened', () => {
+    // These labels read "Hide parameter w in Tweak added." until they had
+    // past tenses of their own.
+    expect(commandOutcomeMessage('Hide parameter w in Tweak')).toBe(
+      'Hid parameter w in Tweak.'
+    );
+    expect(commandOutcomeMessage('Show parameter w in Tweak')).toBe(
+      'Showed parameter w in Tweak.'
+    );
+    expect(commandOutcomeMessage('Describe parameter h')).toBe(
+      'Described parameter h.'
+    );
+    expect(commandOutcomeMessage('Configure on/off parameter show_lid')).toBe(
+      'Configured on/off parameter show_lid.'
+    );
+  });
+
   it('describes a feature named by what it is as added', () => {
     expect(commandOutcomeMessage('Linear pattern')).toBe(
       'Linear pattern added.'

@@ -74,10 +74,11 @@ export class ErrorBoundary extends Component<
   private renderPage() {
     const stale = this.state.staleChunk === true;
     return (
+      // The page keeps its main landmark; only the message is the alert, so
+      // the card is not announced whole on top of its focused Reload button.
       <main
         className="error-page"
         data-variant={stale ? 'update' : 'crash'}
-        role="alert"
         aria-labelledby="error-page-title"
       >
         <div className="error-page-card">
@@ -92,7 +93,7 @@ export class ErrorBoundary extends Component<
               ? 'OpenZCAD has been updated'
               : `${this.props.label} could not be rendered.`}
           </h1>
-          <p>
+          <p role="alert">
             {stale
               ? 'A new version was released while this tab was open, and this tab can no longer load the parts it needs. Reload to continue on the new version.'
               : 'An unexpected error stopped the workspace. Reload to recover.'}

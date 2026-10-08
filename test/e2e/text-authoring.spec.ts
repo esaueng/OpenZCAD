@@ -171,7 +171,7 @@ test('E while composing does not extrude or drop the draft', async ({
   await expect(card.getByLabel('Text', { exact: true })).toBeFocused();
   await page.keyboard.type('Boa');
   // Focus moves to a card button, out of the text field.
-  await card.getByRole('button', { name: 'B', exact: true }).click();
+  await card.getByRole('button', { name: 'Bold', exact: true }).click();
   await page.keyboard.press('e');
   await page.keyboard.press('l');
   await expect(card).toBeVisible();

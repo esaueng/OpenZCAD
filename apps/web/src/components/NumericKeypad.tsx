@@ -3,6 +3,7 @@ import {
   useLayoutEffect,
   useRef,
   useState,
+  type KeyboardEvent,
   type MutableRefObject
 } from 'react';
 import { Check, Delete } from 'lucide-react';
@@ -17,6 +18,8 @@ import {
   type KeypadExclusion,
   type KeypadUnit
 } from '../lib/keypad';
+import { unitLabel } from '../lib/measurements';
+import { formatNumber } from '../lib/model';
 
 export interface KeypadRequest {
   /** Which commit path the value feeds (routing is the opener's concern). */
@@ -87,6 +90,37 @@ const PAD_KEYS = [
   ['1', '2', '3', '-'],
   ['±', '0', '.', '+']
 ];
+
+/**
+ * Arrow keys move through a radio group's chips and pick the one they land
+ * on, as a native radio group does. Only the checked chip is a Tab stop, so
+ * Tab crosses each group once instead of stopping on every unit.
+ */
+function onRadioGroupKeyDown(event: KeyboardEvent<HTMLElement>) {
+  const step =
+    event.key === 'ArrowRight' || event.key === 'ArrowDown'
+      ? 1
+      : event.key === 'ArrowLeft' || event.key === 'ArrowUp'
+        ? -1
+        : 0;
+  if (step === 0) {
+    return;
+  }
+  const radios = [
+    ...event.currentTarget.querySelectorAll<HTMLButtonElement>(
+      '[role="radio"]:not(:disabled)'
+    )
+  ];
+  const index = radios.findIndex((radio) => radio === event.target);
+  if (index < 0) {
+    return;
+  }
+  event.preventDefault();
+  const next = radios[(index + step + radios.length) % radios.length]!;
+  next.click();
+  // After the click: a mode switch hands focus to the value field.
+  next.focus();
+}
 
 /**
  * Panels floating over the viewport, in host-relative pixels.
@@ -351,13 +385,16 @@ export function NumericKeypad({
         />
       </div>
       {/* A converted or computed value is shown in the document's own units,
-          so a value typed in some other unit is never committed unseen. */}
+          so a value typed in some other unit is never committed unseen — a
+          plain number under another unit's chip included. */}
       {/* Always present so typing an operator does not push the number grid
           and the Commit button down under the pointer. */}
       <div className="keypad-expr-preview">
-        {evaluation.isExpression || evaluation.typedUnit
+        {evaluation.isExpression ||
+        evaluation.typedUnit ||
+        (request.unitKind === 'length' && entryUnit !== units && evaluation.ok)
           ? evaluation.ok && evaluation.value !== undefined
-            ? `= ${Math.round((evaluation.displayValue ?? evaluation.value) * 1000) / 1000} ${units}`
+            ? `= ${formatNumber(evaluation.displayValue ?? evaluation.value)}${request.unitKind === 'angle' ? '°' : ` ${unitLabel('length', units)}`}`
             : (evaluation.error ?? 'invalid')
           : ''}
       </div>
@@ -371,6 +408,7 @@ export function NumericKeypad({
           className="keypad-units"
           role="radiogroup"
           aria-label="Radial entry mode"
+          onKeyDown={onRadioGroupKeyDown}
         >
           {(['diameter', 'radius'] as DimensionMode[]).map((mode) => (
             <button
@@ -378,6 +416,7 @@ export function NumericKeypad({
               type="button"
               role="radio"
               aria-checked={dimensionMode === mode}
+              tabIndex={dimensionMode === mode ? 0 : -1}
               className={dimensionMode === mode ? 'active' : undefined}
               onClick={() => switchDimensionMode(mode)}
             >
@@ -386,7 +425,12 @@ export function NumericKeypad({
           ))}
         </div>
       )}
-      <div className="keypad-units" role="radiogroup" aria-label="Entry unit">
+      <div
+        className="keypad-units"
+        role="radiogroup"
+        aria-label="Entry unit"
+        onKeyDown={onRadioGroupKeyDown}
+      >
         {(request.unitKind === 'angle'
           ? (['deg'] as KeypadUnit[])
           : lengthUnitsFor(units)
@@ -396,6 +440,7 @@ export function NumericKeypad({
             type="button"
             role="radio"
             aria-checked={entryUnit === unit}
+            tabIndex={entryUnit === unit ? 0 : -1}
             className={entryUnit === unit ? 'active' : undefined}
             // Unit chips only rescale plain numbers, not expressions.
             disabled={evaluation.isExpression}

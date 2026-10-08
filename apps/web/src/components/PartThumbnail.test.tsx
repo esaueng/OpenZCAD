@@ -179,6 +179,26 @@ describe('PartThumbnail', () => {
     expect(publishThumbnail).not.toHaveBeenCalled();
   });
 
+  it('keeps the empty caption out of the name of the tile that holds it', async () => {
+    // The preview sits first inside the tile's open button, so its caption
+    // used to open every empty part's name: "No geometry Bright Penguin …".
+    const project = summary();
+
+    render(
+      <button type="button">
+        <PartThumbnail
+          project={project}
+          loadThumbnail={vi.fn().mockResolvedValue(null)}
+          publishThumbnail={vi.fn()}
+        />
+        {project.name}
+      </button>
+    );
+
+    expect(await screen.findByText('No geometry')).toBeVisible();
+    expect(screen.getByRole('button')).toHaveAccessibleName(project.name);
+  });
+
   it('survives a rejected read without throwing', async () => {
     const loadThumbnail = vi.fn().mockRejectedValue(new Error('idb closed'));
     const publishThumbnail = vi.fn();

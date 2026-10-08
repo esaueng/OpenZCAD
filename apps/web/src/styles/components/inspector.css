@@ -163,6 +163,49 @@
   font-size: var(--fs-xs);
 }
 
+/* A group of fields under one label (an axis, a plane, a face list). The
+   browser's fieldset drew a grooved box with the legend notched into it;
+   the legend reads like any other field label instead. */
+fieldset.field {
+  min-width: 0;
+  padding: 0;
+  border: 0;
+}
+
+fieldset.field > legend {
+  margin: 0 0 5px;
+  padding: 0;
+  font-size: var(--fs-xs);
+}
+
+/* A checkbox and its label on one line. In a `.field` grid the box took a
+   row of its own across the form and pushed its label under it. */
+.field-check {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin: 0 0 10px;
+  color: var(--color-text-muted);
+  font-size: var(--fs-xs);
+  font-weight: var(--fw-medium);
+}
+
+.field-check input {
+  flex: 0 0 auto;
+  margin: 0;
+}
+
+/* The Extrude card's Reverse direction and Distance… sit at their content
+   width, under the fields they act on, rather than as full-width bars. */
+.extrude-form > fieldset > button.secondary {
+  justify-self: start;
+}
+
+/* The way into a feature's viewport editor, above its form fields. */
+.feature-edit-launch {
+  margin-bottom: 10px;
+}
+
 .field-error {
   color: var(--color-error);
   font-size: var(--fs-xs);
@@ -185,7 +228,9 @@
 
 .field-pair {
   display: grid;
-  grid-template-columns: 1fr 1fr;
+  /* minmax: with plain 1fr, a wider select pushed its row's second column
+     out of line with the next row's. */
+  grid-template-columns: repeat(2, minmax(0, 1fr));
   gap: var(--sp-2);
 }
 
@@ -317,11 +362,17 @@
 
 .expr-preview.error {
   color: var(--color-error);
+  /* An error is read, not glanced at: in a third-width Position cell the
+     ellipsis left "Unknown ident…". The `= value` preview stays one line. */
+  overflow: visible;
+  overflow-wrap: anywhere;
+  text-overflow: clip;
+  white-space: normal;
 }
 
-/* A form-level constraint the field itself cannot express, e.g. a revolve
-   angle that evaluates fine but falls outside (0, 360]. */
-.feature-form .muted.error {
+/* A constraint the field itself cannot express, inside a form or out of one
+   (the legacy-sketch warning sits under the sketch's form, not in it). */
+.muted.error {
   color: var(--color-error);
 }
 
@@ -357,10 +408,11 @@
 }
 
 .kbd-inline {
-  /* Always a lightened chip with dark text, whatever the theme: the primary
-     button behind it is accent-filled in both. */
-  color: rgba(15, 18, 21, 0.75);
-  background: rgba(255, 255, 255, 0.28);
+  /* On the primary button's accent fill in either theme, so it takes the
+     button's own on-accent text: a fixed dark glyph read 3.97:1 on the light
+     theme's deeper blue. Matches the Extrude keycap (.profile-extrude kbd). */
+  color: var(--color-on-accent);
+  background: color-mix(in srgb, var(--color-on-accent) 12%, transparent);
   border: none;
   border-radius: var(--radius-sm);
   padding: 0 4px;
@@ -542,9 +594,39 @@
 .kv-grid span {
   color: var(--color-text);
   text-align: right;
+}
+
+/* One-line values truncate. Only the value cells: on every descendant span
+   the rule also clipped multi-line readouts and the controls inside cells. */
+.kv-grid > span {
+  min-width: 0;
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
+}
+
+/* Inertia moments, tensor rows and axes wrap rather than losing their last
+   number and unit. */
+.kv-grid > span.kv-multiline {
+  overflow: visible;
+  overflow-wrap: anywhere;
+  white-space: normal;
+}
+
+/* A cell holding a control (the material select, the custom density field
+   and its unit) fits the control to the cell instead of clipping it. */
+.kv-grid > span:has(select, input) {
+  display: flex;
+  align-items: center;
+  justify-content: flex-end;
+  gap: 6px;
+  overflow: visible;
+}
+
+.kv-grid > span :is(select, input) {
+  flex: 1 1 auto;
+  min-width: 0;
+  max-width: 100%;
 }
 
 .object-definition-row {

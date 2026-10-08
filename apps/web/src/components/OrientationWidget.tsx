@@ -5,7 +5,7 @@ import {
   type MutableRefObject,
   type PointerEvent as ReactPointerEvent
 } from 'react';
-import { Redo2, Undo2 } from 'lucide-react';
+import { RotateCcwSquare, RotateCwSquare } from 'lucide-react';
 import {
   VIEW_LABELS,
   type AxisProjection,
@@ -13,6 +13,7 @@ import {
   type StandardView,
   type ViewTarget
 } from '@openzcad/viewport';
+import { Tooltip } from './Tooltip';
 
 const AXIS_COLORS = {
   x: 'var(--color-handle-x)',
@@ -604,16 +605,23 @@ export function OrientationWidget({
       role="group"
       aria-label="View orientation"
     >
-      <button
-        type="button"
-        className="orientation-roll"
-        title="Rotate view clockwise"
-        aria-label="Rotate view clockwise"
-        onClick={() => onRotateView('cw')}
-      >
-        <Redo2 size={12} aria-hidden="true" />
-      </button>
+      {/* Roll glyphs, not Undo and Redo's: those stand on the rail just
+          above, and the cube's buttons read as a second pair of them. */}
+      <Tooltip label="Rotate view clockwise">
+        <button
+          type="button"
+          className="orientation-roll"
+          aria-label="Rotate view clockwise"
+          onClick={() => onRotateView('cw')}
+        >
+          <RotateCwSquare size={12} aria-hidden="true" />
+        </button>
+      </Tooltip>
+      {/* A group, not the img an SVG with a title is by default: an img's
+          children are presentational, which hid the face and corner buttons
+          inside it from some screen readers. */}
       <svg
+        role="group"
         className="orientation-cube"
         viewBox={`0 0 ${SIZE} ${SIZE}`}
         width={SIZE}
@@ -733,15 +741,16 @@ export function OrientationWidget({
         ))}
         <g className="orientation-triad" ref={overLayerRef} />
       </svg>
-      <button
-        type="button"
-        className="orientation-roll"
-        title="Rotate view counterclockwise"
-        aria-label="Rotate view counterclockwise"
-        onClick={() => onRotateView('ccw')}
-      >
-        <Undo2 size={12} aria-hidden="true" />
-      </button>
+      <Tooltip label="Rotate view counterclockwise">
+        <button
+          type="button"
+          className="orientation-roll"
+          aria-label="Rotate view counterclockwise"
+          onClick={() => onRotateView('ccw')}
+        >
+          <RotateCcwSquare size={12} aria-hidden="true" />
+        </button>
+      </Tooltip>
     </div>
   );
 }

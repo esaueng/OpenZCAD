@@ -130,14 +130,17 @@ describe('ToolCard', () => {
       />
     );
 
-    const sketch = screen.getByRole('tab', {
+    const sketch = screen.getByRole('button', {
       name: /Sketch: This edited face has no stable topology reference/
     });
     expect(sketch).toBeDisabled();
     await userEvent.click(sketch);
     expect(onAction).not.toHaveBeenCalled();
 
-    await userEvent.click(screen.getByRole('tab', { name: 'Offset Face' }));
+    const offset = screen.getByRole('button', { name: 'Offset Face' });
+    expect(offset).toHaveAttribute('aria-pressed', 'true');
+    expect(sketch).toHaveAttribute('aria-pressed', 'false');
+    await userEvent.click(offset);
     expect(onAction).toHaveBeenCalledWith('offset-face');
   });
 

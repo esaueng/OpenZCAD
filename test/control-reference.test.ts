@@ -70,11 +70,12 @@ describe('controls reference', () => {
     // is how someone concludes the feature does not exist.
     expect(keyboardItem('measure')?.keys).toEqual(['M']);
     expect(keyboardItem('measure')?.detail).toContain('View mode');
-    expect(keyboardItem('workspace-mode')?.keys).toEqual([
-      'Ctrl',
-      'Shift',
-      'M'
-    ]);
+    // One keycap, written as every other chord here is; the handler takes
+    // ⌘ as well as Ctrl, and the key now cycles three modes, not two.
+    expect(keyboardItem('workspace-mode')?.keys).toEqual(['Ctrl/Cmd+Shift+M']);
+    expect(keyboardItem('workspace-mode')?.action).toBe(
+      'Cycle View, Tweak and Build'
+    );
     // And Move now says which mode it belongs to, so the shared key reads as
     // deliberate rather than as a contradiction.
     expect(keyboardItem('move')?.detail).toContain('View');

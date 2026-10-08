@@ -104,15 +104,20 @@
   background: var(--color-accent-hi);
 }
 
-/* The chrome region the current step points at. */
+/* The chrome region the current step points at. Drawn inside its edge: the
+   tool rail is exactly as large as the overflow boxes around it, which
+   clipped an outline drawn outside it away entirely. */
 .tour-target {
   outline: 2px dashed var(--color-accent-border);
-  outline-offset: 2px;
+  outline-offset: -2px;
 }
 
 /* On narrow screens the workspace stacks and the palette floats over less
-   room; the card would cover the tools it is pointing at. */
-@media (max-width: 720px) {
+   room; the card would cover the tools it is pointing at. In a short window
+   (a phone held sideways) the card, lifted clear of the notice lane, rose
+   under the top bar's islands, and its Skip button took the mode switch's
+   clicks. */
+@media (max-width: 720px), (max-height: 480px) {
   .workspace-tour {
     display: none;
   }

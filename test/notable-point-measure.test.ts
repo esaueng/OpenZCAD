@@ -541,7 +541,7 @@ describe('three-point angle', () => {
       expect(segment.start).toEqual({ x: 5, y: 5, z: 5 });
     }
     const formatted = formatMeasurement(measured, DISPLAY);
-    expect(formatted.value).toBe('90.00 °');
+    expect(formatted.value).toBe('90.00°');
     expect(formatted.detail).toBe('Angle included');
   });
 

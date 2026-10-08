@@ -100,6 +100,12 @@ const SECTION_PLANE_LABELS: Record<SectionPlaneId, string> = {
 
 const SECTION_PLANES: readonly SectionPlaneId[] = ['XY', 'XZ', 'YZ'];
 
+/** Cased like the display modes the rail's other "Now:" lines name. */
+const PROJECTION_LABELS: Record<ProjectionMode, string> = {
+  perspective: 'Perspective',
+  orthographic: 'Orthographic'
+};
+
 /**
  * Right-hand utility rail, centred against the viewport edge: fit, grid,
  * projection, and display mode as icons, with the standard views behind a
@@ -155,7 +161,8 @@ export function ViewerToolbar({
   const displayModeLabel = DISPLAY_MODE_LABELS[settings.displayMode];
   const sectionLabel = settings.sectionView
     ? SECTION_PLANE_LABELS[settings.sectionView.plane]
-    : 'off';
+    : 'Off';
+  const projectionLabel = PROJECTION_LABELS[projection];
   const sectionStatus = describeSectionOutline(sectionOutline, units);
   // Live only when the export can actually write every body the plane cuts.
   // An exact section beside a body the kernel refused is still on screen and
@@ -232,6 +239,9 @@ export function ViewerToolbar({
   function selectView(view: StandardView) {
     onView(view);
     setViewsOpen(false);
+    // The chosen tile unmounts with the panel; the keyboard returns to the
+    // control that opened it, as it does on Escape, rather than to <body>.
+    triggerRef.current?.focus();
   }
 
   function toggleViews() {
@@ -331,13 +341,13 @@ export function ViewerToolbar({
       <Tooltip
         label="Projection"
         shortcut="P"
-        description={`Now: ${projection}`}
+        description={`Now: ${projectionLabel}`}
       >
         <button
           type="button"
           className={`rail-button ${projection === 'orthographic' ? 'active' : ''}`}
           onClick={onToggleProjection}
-          aria-label={`Orthographic projection (P) — now: ${projection}`}
+          aria-label={`Orthographic projection (P) — now: ${projectionLabel}`}
           aria-pressed={projection === 'orthographic'}
         >
           <Camera size={16} aria-hidden="true" />
@@ -346,7 +356,9 @@ export function ViewerToolbar({
       <div className="rail-views-anchor" ref={sectionAnchorRef}>
         <Tooltip
           label="Section view"
-          description={`Cuts the display only; the model is untouched. Now: ${sectionLabel}. Choose the plane in its panel.`}
+          // Short enough to show whole: the state is the part that matters,
+          // and the 320px tooltip cut the old sentence off before it.
+          description={`Now: ${sectionLabel} · cuts the display only`}
         >
           <button
             type="button"
@@ -364,7 +376,7 @@ export function ViewerToolbar({
             className="rail-section-panel"
             data-rail-flyout=""
             role="group"
-            aria-label="Section plane offset"
+            aria-label="Section view"
           >
             <div
               className="rail-section-planes"
@@ -460,7 +472,6 @@ export function ViewerToolbar({
             className={`rail-button ${viewsOpen ? 'open' : ''}`}
             onClick={toggleViews}
             aria-label="Standard views"
-            aria-haspopup="true"
             aria-expanded={viewsOpen}
             aria-controls={viewsOpen ? panelId : undefined}
           >
@@ -475,23 +486,24 @@ export function ViewerToolbar({
             role="group"
             aria-label="Standard views"
           >
+            {/* The key is on the tile itself: a tooltip below each tile
+                covered the next one and, for the views without a key, only
+                repeated its name. */}
             {VIEWS.map((view) => (
-              <Tooltip
+              <button
                 key={view.id}
-                label={`${VIEW_LABELS[view.id]} view`}
-                shortcut={view.shortcut}
+                type="button"
+                className={view.id === 'iso' ? 'rail-view-wide' : undefined}
+                onClick={() => selectView(view.id)}
+                // The visible text is just the view name; the accessible
+                // name keeps the "<View> view (n)" wording used elsewhere.
+                aria-label={viewTitle(view)}
               >
-                <button
-                  type="button"
-                  className={view.id === 'iso' ? 'rail-view-wide' : undefined}
-                  onClick={() => selectView(view.id)}
-                  // The visible text is just the view name; the accessible
-                  // name keeps the "<View> view (n)" wording used elsewhere.
-                  aria-label={viewTitle(view)}
-                >
-                  {VIEW_LABELS[view.id]}
-                </button>
-              </Tooltip>
+                {VIEW_LABELS[view.id]}
+                {view.shortcut ? (
+                  <kbd aria-hidden="true">{view.shortcut}</kbd>
+                ) : null}
+              </button>
             ))}
           </div>
         )}

@@ -401,4 +401,71 @@ describe('measurement annotations', () => {
       max: { z: 45 }
     });
   });
+
+  it('names the first of two picks the way the dock does', async () => {
+    // A planar face picked for Distance carries the internal semantic "pick";
+    // the canvas read "A · pick" while the dock named the face.
+    const doc = createProjectDocument('Measure I', toUserId('user_measure_i'));
+    const body: BodyRepresentation = {
+      bodyId: toBodyId('body-1'),
+      name: 'Box',
+      source: 'primitive',
+      mesh: {
+        kind: 'mesh',
+        vertices: Float32Array.from([0, 0, 5, 10, 0, 5, 10, 20, 5]),
+        indices: Uint32Array.from([0, 1, 2])
+      },
+      faceCount: 1,
+      color: '#fff',
+      exportableStep: true,
+      consumed: false,
+      volume: 1,
+      bbox: { min: { x: 0, y: 0, z: 0 }, max: { x: 10, y: 20, z: 5 } },
+      topology: {
+        edges: [],
+        faces: [
+          {
+            topologyId: 'face-1',
+            hash: 1,
+            triangleStart: 0,
+            triangleCount: 1,
+            geometry: {
+              surfaceType: 'plane',
+              area: 200,
+              center: { x: 5, y: 10, z: 5 }
+            }
+          }
+        ]
+      }
+    };
+    const { result } = renderHook(() =>
+      useMeasurementWorkbench(
+        input({
+          doc,
+          modelingLocked: true,
+          representations: { 'body-1': body },
+          renderedRepresentations: { 'body-1': body },
+          viewerBodies: [body]
+        })
+      )
+    );
+    await waitFor(() => expect(result.current.measurementApi).not.toBeNull());
+    act(() => {
+      result.current.setMeasuring(true);
+      result.current.setMeasurementMode('distance');
+    });
+    act(() => {
+      result.current.handleMeasurementPick(faceSelection, false, {
+        point: { x: 2, y: 3, z: 5 }
+      });
+    });
+
+    const draft = result.current.measurementDraft;
+    expect(draft?.semantic).toBe('pick');
+    const pill = result.current.measurementAnnotations.find(
+      (annotation) => annotation.id === 'measurement-draft'
+    );
+    expect(pill?.label).toBe(`A · ${draft!.label}`);
+    expect(pill?.label).not.toContain('pick');
+  });
 });

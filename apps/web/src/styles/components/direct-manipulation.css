@@ -143,7 +143,6 @@
   border-radius: var(--radius-md);
 }
 
-.tool-card-phase.pill-dragging,
 .tool-card-phase.pill-exact-entry {
   color: var(--color-accent-hi);
   background: var(--color-accent-dim);
@@ -361,6 +360,15 @@
   background: var(--color-surface-hover);
 }
 
+/* The handle chips paint on the viewport's dark stage, which never
+   re-themes, so their hues come from the viewport set: the chrome accents
+   darken in the light theme and went dark-on-dark here. Each value is the
+   dark theme's accent it replaces. */
+.handle-value-chip,
+.handle-label-chip {
+  --hud-accent-border: color-mix(in srgb, var(--color-select) 45%, transparent);
+}
+
 /* Value chip beside a drag handle; tap to type the exact value. A small,
    translucent tag rather than a tooltip: it reads at a glance and lets the
    geometry under it show through. */
@@ -371,7 +379,7 @@
   color: #eaf1ff;
   background: rgba(16, 19, 22, 0.8);
   border: 1px solid
-    color-mix(in srgb, var(--color-accent-border) 70%, transparent);
+    color-mix(in srgb, var(--hud-accent-border) 70%, transparent);
   border-radius: var(--radius-sm);
   box-shadow: 0 2px 10px rgba(0, 0, 0, 0.3);
   backdrop-filter: blur(6px);
@@ -394,7 +402,7 @@
 }
 
 .handle-value-chip:hover {
-  border-color: var(--color-accent-hi);
+  border-color: var(--color-preselect);
   background: rgba(26, 30, 36, 0.98);
 }
 
@@ -417,20 +425,20 @@
 .handle-value-chip[data-engaged='false'] {
   color: #c9d2e4;
   background: rgba(16, 19, 22, 0.55);
-  border-color: color-mix(in srgb, var(--color-accent-border) 45%, transparent);
+  border-color: color-mix(in srgb, var(--hud-accent-border) 45%, transparent);
   box-shadow: none;
 }
 
 .handle-value-chip[data-engaged='false']:hover {
   color: #eaf1ff;
   background: rgba(26, 30, 36, 0.95);
-  border-color: var(--color-accent-hi);
+  border-color: var(--color-preselect);
 }
 
 /* The kernel stopped keeping up: the number is still live, the shape is not. */
 .handle-value-chip[data-state='deferred'] {
   color: #dbe3f5;
-  border-color: color-mix(in srgb, var(--color-accent-border) 60%, #404b59);
+  border-color: color-mix(in srgb, var(--hud-accent-border) 60%, #404b59);
   background: rgba(18, 21, 24, 0.96);
 }
 
@@ -445,7 +453,7 @@
   width: 7px;
   height: 7px;
   border-radius: 999px;
-  background: var(--color-accent-hi);
+  background: var(--color-preselect);
   box-shadow: 0 0 0 3px rgba(18, 21, 24, 0.96);
   transform: translateY(-50%);
   animation: preview-catching-up 900ms ease-in-out infinite alternate;
@@ -467,12 +475,15 @@
   }
 }
 
+/* The light theme's amber is a deep brown for chrome text; on the dark
+   stage it turned this chip muddy. The fallback is the dark theme's amber. */
 .handle-value-chip[data-state='warning'] {
+  --hud-warning: var(--color-viewport-warning, #f59e0b);
   color: #fff4dc;
-  background: color-mix(in srgb, var(--color-warning) 18%, #101316);
-  border-color: var(--color-warning);
+  background: color-mix(in srgb, var(--hud-warning) 18%, #101316);
+  border-color: var(--hud-warning);
   box-shadow:
-    0 0 0 1px color-mix(in srgb, var(--color-warning) 35%, transparent),
+    0 0 0 1px color-mix(in srgb, var(--hud-warning) 35%, transparent),
     0 8px 22px rgba(0, 0, 0, 0.35);
 }
 
@@ -491,7 +502,7 @@
   padding: 2px 8px;
   color: #1c2026;
   background: rgba(252, 253, 255, 0.98);
-  border: 1.5px solid var(--color-accent);
+  border: 1.5px solid var(--color-select);
   border-radius: var(--radius-md);
   box-shadow: 0 1px 4px rgba(0, 0, 0, 0.35);
   backdrop-filter: none;
@@ -520,13 +531,13 @@
 .handle-value-chip[data-variant='line'][data-engaged='false'] {
   color: #1c2026;
   background: rgba(252, 253, 255, 0.92);
-  border-color: color-mix(in srgb, var(--color-accent) 60%, transparent);
+  border-color: color-mix(in srgb, var(--color-select) 60%, transparent);
 }
 
 .handle-value-chip[data-variant='line'][data-state='warning'] {
   color: #1c2026;
   background: #fff4dc;
-  border-color: var(--color-warning);
+  border-color: var(--hud-warning);
 }
 
 /* Dimension-line variant: a light pill centred on the radius callout line,
@@ -534,7 +545,7 @@
 .handle-value-chip[data-variant='dimension'] {
   color: #1c2026;
   background: rgba(250, 252, 255, 0.97);
-  border: 1.5px solid var(--color-accent-hi);
+  border: 1.5px solid var(--color-preselect);
   border-radius: var(--radius-md);
   font-weight: 600;
   transform: translate(4px, -50%);
@@ -561,8 +572,22 @@
 
 .handle-dimension-prefix:hover,
 .handle-dimension-prefix:focus-visible {
-  color: var(--color-accent);
-  outline: none;
+  color: var(--color-preselect);
+}
+
+/* The periwinkle reads 2.6:1 on the white line and dimension pills; a deeper
+   blue carries the cue there. */
+.handle-value-chip:is([data-variant='line'], [data-variant='dimension'])
+  .handle-dimension-prefix:is(:hover, :focus-visible) {
+  color: #1c64c2;
+}
+
+/* A colour change alone is no focus indicator. The ring takes the glyph's
+   own colour, so it reads on the white pills and the dark pin chip alike. */
+.handle-dimension-prefix:focus-visible {
+  outline: 2px solid currentColor;
+  outline-offset: 1px;
+  border-radius: 2px;
 }
 
 /* "Radius" name tag sitting flush against the dimension value pill. */
@@ -570,9 +595,9 @@
   position: absolute;
   z-index: calc(var(--z-viewer-overlay) + 1);
   padding: 4px 10px;
-  color: var(--color-text);
-  background: var(--color-surface-2);
-  border: 1px solid var(--color-accent-border);
+  color: var(--color-viewport-text);
+  background: #1e2126;
+  border: 1px solid var(--hud-accent-border);
   border-radius: var(--radius-md);
   box-shadow: 0 8px 22px rgba(0, 0, 0, 0.35);
   font-family: var(--font-mono);
@@ -589,10 +614,18 @@
 }
 
 /* The only light surface on a dark viewport pulled the eye harder than the
-   value it labels; it now matches the value chip and lifts on hover. */
+   value it labels; it now matches the value chip and lifts on hover. Its
+   fills are the dark theme's surfaces, fixed: chrome surfaces turn light. */
 .handle-label-chip:hover {
-  background: var(--color-surface-hover);
-  border-color: var(--color-accent-hi);
+  background: #23272c;
+  border-color: var(--color-preselect);
+}
+
+/* A keyboard stop (the Total/Offset switch); the chrome ring's accent is
+   too dark on the stage in the light theme. */
+.handle-label-chip:focus-visible {
+  outline: 2px solid var(--color-preselect);
+  outline-offset: 1px;
 }
 
 /* Floating exact-value keypad anchored at the point of action. */
@@ -654,7 +687,7 @@
 
 .keypad-expr-preview {
   min-height: calc(var(--fs-xs) * 1.35);
-  color: var(--color-text-dim);
+  color: var(--color-text-subtle);
   font-family: var(--font-mono);
   font-size: var(--fs-xs);
   text-align: right;
@@ -676,7 +709,9 @@
   padding: 4px 0;
   color: var(--color-text);
   font-size: var(--fs-xs);
-  background: var(--color-surface-2);
+  /* The keys' fill: on the keypad's own surface-2 an unpicked unit or mode
+     read as bare text, not as a choice. */
+  background: var(--color-surface);
   border: 1px solid transparent;
   border-radius: var(--radius-sm);
   cursor: pointer;
@@ -712,7 +747,7 @@
   place-items: center;
 }
 
-.keypad-key:hover {
+.keypad-key:hover:not(:disabled) {
   background: var(--color-surface-hover);
 }
 
@@ -732,7 +767,7 @@
   gap: 6px;
 }
 
-.keypad-commit:hover {
+.keypad-commit:hover:not(:disabled) {
   background: var(--color-accent-hi);
 }
 
@@ -762,14 +797,16 @@
 
 /* Entity-snap glyph pinned to the cursor while sketching. The marker is
    centered on the pointer via transform so left/top track the event. */
+/* One above the centre target: that target is created after the marker, and
+   its dashed axes struck through the marker's "Origin" label at equal z. */
 .sketch-snap-marker {
   position: absolute;
-  z-index: calc(var(--z-viewer-overlay) + 1);
+  z-index: calc(var(--z-viewer-overlay) + 2);
   display: grid;
   width: 18px;
   height: 18px;
   place-items: center;
-  color: var(--color-success);
+  color: var(--color-preview);
   font-family: var(--font-mono);
   font-size: 16px;
   font-weight: var(--fw-bold);
@@ -992,58 +1029,6 @@
   pointer-events: none;
 }
 
-.sketch-rail button {
-  display: flex;
-  gap: 6px;
-  align-items: center;
-  padding: 5px 10px;
-  color: var(--color-text-dim);
-  font-size: var(--fs-xs);
-  background: transparent;
-  border: 1px solid transparent;
-  border-radius: var(--radius-sm);
-  cursor: pointer;
-}
-
-.sketch-rail button:hover {
-  color: var(--color-text);
-  background: var(--color-surface-hover);
-}
-
-.sketch-rail button.active {
-  color: var(--color-text);
-  background: var(--color-accent-dim);
-  border-color: var(--color-accent-border);
-}
-
-.sketch-rail button kbd {
-  padding: 0 4px;
-  color: var(--color-text-dim);
-  font-size: var(--fs-mini);
-  background: var(--color-bg);
-  border-radius: var(--radius-sm);
-}
-
-/* Solve-status pill: inline in the rail, tone-tinted, never positioned. */
-.sketch-rail .sketch-solve-pill {
-  padding: 3px 8px;
-  border: 1px solid var(--color-border-strong);
-  border-radius: var(--radius-md);
-  font-size: var(--fs-xs);
-  white-space: nowrap;
-  color: var(--color-text-dim);
-}
-
-.sketch-rail .sketch-solve-pill[data-tone='ok'] {
-  color: var(--color-accent-hi);
-  border-color: var(--color-accent-border);
-}
-
-.sketch-rail .sketch-solve-pill[data-tone='warn'] {
-  color: #ffb4a6;
-  border-color: rgba(255, 128, 100, 0.55);
-}
-
 /* Constraint list in the palette: label + trailing delete per row. */
 .sketch-constraint-list {
   display: flex;
@@ -1062,19 +1047,25 @@
   min-width: 0;
 }
 
+/* A row that only deletes takes the rest of the row, like the edit button
+   in an editable one; between an icon and the delete, space-between left
+   it floating mid-row. */
 .sketch-constraint-list li > span {
+  flex: 1;
+  min-width: 0;
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
   font-size: var(--fs-xs);
 }
 
+/* Text, so the error's text shade: --color-error is under AA on surface-2. */
 .sketch-constraint-list li[data-conflicted='true'] {
-  color: var(--color-error);
+  color: var(--color-error-text);
 }
 
 .sketch-constraint-list li[data-conflicted='true'] .sketch-constraint-edit {
-  color: var(--color-error);
+  color: var(--color-error-text);
 }
 
 /* Fully-defined rows agree with the "Fully constrained" pill and the green
@@ -1125,8 +1116,16 @@
   flex-wrap: wrap;
   align-items: center;
   gap: 2px;
-  /* Never past the window's edge: on a phone the tiles wrap into rows in
-     whatever width is left beside the rail. */
+  /* One row as wide as its tiles while it fits, wrapped into the room left
+     when it does not. With only its left edge set, past the rail's 40px the
+     strip had no room of its own, so it shrank to min-content and the wrap
+     stacked every tile in a column. The right edge is the right lane's
+     (the relations and instrument rails), measured from the float that
+     contains the strip (quiet-stage.css), so a phone wraps the tiles
+     rather than running them under those rails; fit-content sizes against
+     that room and still hugs a single row. */
+  right: calc(var(--island-gap) + 100% + var(--lane-end) - 100vw);
+  width: fit-content;
   max-width: calc(100vw - var(--island-gap) * 3 - var(--rail-w));
   padding: 3px;
   background: var(--color-surface-2);
@@ -1298,17 +1297,6 @@
   font-size: var(--fs-mini);
 }
 
-@media (min-width: 761px) and (max-width: 1500px) {
-  .sketch-rail button {
-    gap: 4px;
-    padding-inline: 6px;
-  }
-
-  .sketch-rail button kbd {
-    display: none;
-  }
-}
-
 /* The editor and its constraints card stack in the top-right; the stack
    carries the float so the form's box stays the form's own. */
 .sketch-entity-dock {
@@ -1363,6 +1351,13 @@
   gap: 0 8px;
 }
 
+/* A field showing its preview or error line makes the row taller; its
+   neighbour keeps its input at the top rather than spreading the extra
+   height and dropping out of line. */
+.sketch-entity-fields .field {
+  align-content: start;
+}
+
 .sketch-entity-editor .field input {
   width: 100%;
   min-width: 0;
@@ -1370,7 +1365,7 @@
 
 .sketch-entity-editor .form-error {
   margin: 0 0 10px;
-  color: var(--color-error);
+  color: var(--color-error-text);
   font-size: var(--fs-mini);
 }
 
@@ -1462,37 +1457,8 @@
    registry ships no synthetic bold or italic, so this is the honest outcome. */
 .field-hint {
   margin: 0 0 10px;
-  color: var(--color-text-dim);
+  color: var(--color-text-subtle);
   font-size: var(--fs-mini);
-}
-
-@media (max-width: 760px) {
-  .sketch-rail {
-    max-width: calc(100% - 20px);
-    overflow-x: auto;
-  }
-
-  .sketch-entity-dock {
-    top: auto;
-    right: 10px;
-    bottom: 54px;
-    left: 10px;
-    width: auto;
-  }
-
-  .sketch-entity-editor {
-    max-height: 44vh;
-    overflow-y: auto;
-  }
-
-  .sketch-palette {
-    top: auto;
-    right: 10px;
-    bottom: 54px;
-    width: min(238px, calc(100% - 20px));
-    max-height: 46vh;
-    overflow-y: auto;
-  }
 }
 
 /* Plane picker shown while the Sketch tool waits for a target. A command
@@ -1524,7 +1490,7 @@
 }
 
 .sketch-plane-prompt small {
-  color: var(--color-text-dim);
+  color: var(--color-text-subtle);
   font-size: var(--fs-xs);
 }
 
@@ -1552,7 +1518,7 @@
 }
 
 .sketch-plane-offset-units {
-  color: var(--color-text-dim);
+  color: var(--color-text-subtle);
 }
 
 .sketch-plane-buttons {
@@ -1571,7 +1537,7 @@
 }
 
 .sketch-plane-buttons button:hover {
-  background: rgba(103, 152, 255, 0.22);
+  background: color-mix(in srgb, var(--color-accent) 22%, transparent);
 }
 
 /*
@@ -1616,11 +1582,6 @@
 
 .revert-sketch-pill:hover {
   background: var(--color-accent-dim);
-}
-
-/* An empty slot keeps the rail's width and the buttons' places. */
-.sketch-solve-pill.empty {
-  visibility: hidden;
 }
 
 .extrude-controls {
