@@ -163,16 +163,16 @@ test('exposes the full measurement workbench in View mode', async ({
   ).toBeVisible();
   await expect(workbench.getByRole('button', { name: 'Angle' })).toBeVisible();
   await expect(workbench.getByLabel('Measurement units')).toHaveValue('mm');
-  await expect(workbench.getByLabel('Measurement decimal places')).toHaveValue(
-    '2'
-  );
+  await expect(workbench.getByLabel('Measurement precision')).toHaveValue('2');
   await expect(
     workbench.getByRole('group', { name: 'Radial display' })
   ).toBeVisible();
 
   await workbench.getByRole('button', { name: 'Angle' }).click();
   await expect(
-    workbench.getByText('Pick two straight edges or two planar faces.')
+    workbench.getByText(
+      'Pick two straight edges, circular axes or planar faces.'
+    )
   ).toBeVisible();
 });
 

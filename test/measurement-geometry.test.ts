@@ -233,7 +233,7 @@ describe('through createAngleMeasurement', () => {
 
     // The convention travels with the number wherever it is shown.
     const formatted = formatMeasurement(measured, DISPLAY);
-    expect(formatted.value).toBe('30.00 °');
+    expect(formatted.value).toBe('30.00°');
     expect(formatted.detail).toBe(`Angle ${ANGLE_CONVENTION_LABELS.dihedral}`);
   });
 

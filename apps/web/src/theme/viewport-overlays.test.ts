@@ -110,4 +110,68 @@ describe('viewport overlay text tokens', () => {
       );
     }
   });
+
+  it('paints the viewport HUD in viewport hues, never re-themed chrome ones', () => {
+    // These paint on the always-dark stage, but the light theme darkens the
+    // accents, the success green and the amber, and turns the surfaces and
+    // text light: the Total/Offset tag went light grey beside its dark value
+    // chip, and the snap glyph and the "catching up" dot fell under 3:1. The
+    // viewport set (--color-select, --color-preselect, --color-preview,
+    // --color-viewport-*) holds the dark values and never re-themes. Scoped
+    // to the HUD whose rules live in direct-manipulation.css.
+    const offenders: string[] = [];
+    for (const sheet of OVERLAY_SHEETS) {
+      const css = readFileSync(
+        resolve(__dirname, '../styles/components', sheet),
+        'utf8'
+      ).replace(/\/\*[\s\S]*?\*\//g, '');
+      for (const { selector, body } of ruleBlocks(css)) {
+        if (!subjects(selector).some((subject) => HUD_SUBJECT.test(subject))) {
+          continue;
+        }
+        if (CHROME_HUE.test(body)) {
+          offenders.push(`${sheet}: ${selector}`);
+        }
+      }
+    }
+    expect(offenders).toEqual([]);
+  });
 });
+
+/** HUD elements drawn on the viewport's dark stage. */
+const HUD_SUBJECT =
+  /\.(handle-value-chip|handle-label-chip|handle-dimension-prefix|sketch-snap-marker|sketch-center-(target|axis)|sketch-dim-label|sketch-grab-handle|sketch-rotate-ring|sketch-grid-indicator)\b/;
+
+/** Chrome tokens the light theme repaints. */
+const CHROME_HUE =
+  /var\(--(color-(accent|success|warning|error|surface|text|border)[\w-]*|border-(thin|strong))\)/;
+
+/**
+ * The element each selector in a list styles: its last compound selector.
+ * `.viewer-shell:has(.handle-value-chip) .selection-callout` styles a callout,
+ * not the chip it mentions.
+ */
+function subjects(selectorList: string): string[] {
+  const selectors: string[] = [];
+  let depth = 0;
+  let current = '';
+  for (const char of selectorList) {
+    depth += char === '(' ? 1 : char === ')' ? -1 : 0;
+    if (char === ',' && depth === 0) {
+      selectors.push(current);
+      current = '';
+    } else {
+      current += char;
+    }
+  }
+  selectors.push(current);
+  return selectors.map((selector) => {
+    let last = '';
+    let level = 0;
+    for (const char of selector.trim()) {
+      level += char === '(' ? 1 : char === ')' ? -1 : 0;
+      last = level === 0 && /[\s>+~]/.test(char) ? '' : last + char;
+    }
+    return last;
+  });
+}

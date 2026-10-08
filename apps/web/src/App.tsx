@@ -155,6 +155,7 @@ import {
   BODY_OPACITY_METADATA_KEY,
   compareProjectSummaries,
   DEFAULT_PROJECT_ORGANIZATION,
+  displayLengthName,
   duplicateProjectName,
   FEATURE_ROLLBACK_SUPPRESSED_METADATA_KEY,
   FEATURE_SUPPRESSED_METADATA_KEY,
@@ -5529,7 +5530,8 @@ export function App() {
     if (!doc || tool === 'sketch') {
       return null;
     }
-    const units = doc.units;
+    // `in`, not the `inch` enum, as the dock and the Inspector print it.
+    const units = displayLengthName(doc.units);
     const round = (value: number) => Math.round(value * 100) / 100;
     if (selectedEdges.length > 1) {
       let sampled = false;
@@ -17171,7 +17173,7 @@ export function App() {
             if (measurementDraft) {
               clearMeasurementPicks();
               setStatus(
-                `${measurementMode} measurement canceled · pick the first target.`
+                `${measurementMode === 'angle' ? 'Angle' : 'Distance'} measurement canceled · pick the first target.`
               );
             } else {
               toggleMeasure(false);
@@ -17573,7 +17575,7 @@ export function App() {
             ? 'Smart measure · pick an edge, face, hole, or body.'
             : mode === 'distance'
               ? 'Distance · pick the first target.'
-              : 'Angle · pick the first straight edge or measured face direction.'
+              : 'Angle · pick the first straight edge, circular axis or planar face.'
         );
       }}
       onUnit={setMeasurementUnit}
@@ -17618,7 +17620,7 @@ export function App() {
       onClear={() => {
         if (
           appSettings.general.confirmDestructiveActions &&
-          !window.confirm('Clear every measurement in this View session?')
+          !window.confirm('Clear every measurement in this project?')
         ) {
           return;
         }
@@ -18068,7 +18070,7 @@ export function App() {
         ? `Smart measure · pick geometry · Shift+Click totals edges · ${modelingLocked ? 'M' : 'Esc'} exits`
         : measurementMode === 'distance'
           ? 'Distance · pick the first target · centers resolve automatically'
-          : 'Angle · pick a straight edge or measured face direction'
+          : 'Angle · pick a straight edge, circular axis or planar face'
     : selectedTopology?.kind === 'face'
       ? 'Face selected — Space faces it head-on'
       : viewerBodies.length > 0

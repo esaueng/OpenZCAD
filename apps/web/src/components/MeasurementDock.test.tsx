@@ -67,9 +67,91 @@ describe('MeasurementDock', () => {
     fireEvent.click(screen.getByRole('button', { name: 'Distance' }));
     expect(props.onMode).toHaveBeenCalledWith('distance');
     expect(screen.getByLabelText('Measurement units')).toHaveValue('mm');
-    expect(screen.getByLabelText('Measurement decimal places')).toHaveValue(
-      '2'
+    // Named with its visible label, so "click Precision" reaches it.
+    expect(screen.getByLabelText('Measurement precision')).toHaveValue('2');
+    expect(screen.getByRole('button', { name: 'Diameter' })).toHaveAttribute(
+      'aria-pressed',
+      'true'
     );
+    expect(screen.getByRole('button', { name: 'Radius' })).toHaveAttribute(
+      'aria-pressed',
+      'false'
+    );
+  });
+
+  it('offers every precision a stored record can carry', () => {
+    renderDock({
+      display: { unit: 'mm', precision: 6, radialDisplay: 'diameter' }
+    });
+    const select = screen.getByLabelText<HTMLSelectElement>(
+      'Measurement precision'
+    );
+    expect([...select.options].map((option) => option.value)).toEqual([
+      '0',
+      '1',
+      '2',
+      '3',
+      '4',
+      '5',
+      '6'
+    ]);
+    expect(select).toHaveValue('6');
+  });
+
+  it('cancels a row edit on Escape without ending Measure', () => {
+    // The workspace's Escape ladder listens on window and closes Measure.
+    const workspaceEscape = vi.fn();
+    window.addEventListener('keydown', workspaceEscape);
+    try {
+      const { props, container } = renderDock();
+      fireEvent.click(screen.getByLabelText('Edit Bracket · Edge 1'));
+      const name = screen.getByLabelText('Name');
+      fireEvent.change(name, { target: { value: 'Overall length' } });
+      fireEvent.keyDown(name, { key: 'Escape' });
+
+      expect(workspaceEscape).not.toHaveBeenCalled();
+      expect(screen.queryByLabelText('Name')).toBeNull();
+      expect(props.onRename).not.toHaveBeenCalled();
+      expect(container.querySelector('.measurement-dock')).not.toBeNull();
+      // Focus goes back to the row it was editing, not to the body.
+      expect(document.activeElement).toBe(
+        screen.getByLabelText('Edit Bracket · Edge 1')
+      );
+    } finally {
+      window.removeEventListener('keydown', workspaceEscape);
+    }
+  });
+
+  it('hands focus back to the Measure toggle when it closes', () => {
+    const toggle = document.createElement('button');
+    toggle.setAttribute('aria-label', 'Measure');
+    toggle.setAttribute('aria-pressed', 'true');
+    document.body.append(toggle);
+    try {
+      const { unmount } = renderDock();
+      screen.getByRole('button', { name: 'Distance' }).focus();
+      unmount();
+      expect(document.activeElement).toBe(toggle);
+    } finally {
+      toggle.remove();
+    }
+  });
+
+  it('leaves focus alone when it closes without holding it', () => {
+    const toggle = document.createElement('button');
+    toggle.setAttribute('aria-label', 'Measure');
+    toggle.setAttribute('aria-pressed', 'true');
+    const elsewhere = document.createElement('input');
+    document.body.append(toggle, elsewhere);
+    try {
+      const { unmount } = renderDock();
+      elsewhere.focus();
+      unmount();
+      expect(document.activeElement).toBe(elsewhere);
+    } finally {
+      toggle.remove();
+      elsewhere.remove();
+    }
   });
 
   it('renders value provenance and row actions', () => {

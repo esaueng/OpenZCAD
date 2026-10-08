@@ -1,4 +1,5 @@
 import { Check, Layers3, MousePointer2, X } from 'lucide-react';
+import { displayLengthName, type UnitSystem } from '@openzcad/shared';
 import { CARD_EYEBROWS } from '../lib/cardEyebrows';
 import { useEffect, useState, type MutableRefObject } from 'react';
 
@@ -104,6 +105,15 @@ interface MoveOverlayProps {
 
 const MOVE_AXES = ['x', 'y', 'z'] as const;
 
+/**
+ * A number as a field shows it. A geometry snap lands on `point - pivot`, and
+ * that subtraction leaves binary noise (0.19999999999999998) the gizmo's own
+ * grid snap no longer does; nine places is far below any modelling tolerance.
+ */
+function fieldValue(value: number): number {
+  return Number(value.toFixed(9)) || 0;
+}
+
 interface MoveInstructionProps {
   units: string;
   /** Current gizmo snap increments; null until the first drag. */
@@ -125,6 +135,7 @@ export function MoveInstruction({
   hideRotation,
   liveSnapRef
 }: MoveInstructionProps) {
+  const unitText = displayLengthName(units as UnitSystem);
   const [snap, setSnap] = useState(committedSnap);
   useEffect(() => {
     setSnap(committedSnap);
@@ -151,8 +162,12 @@ export function MoveInstruction({
         </strong>
         <small>
           Snaps to{' '}
-          {snap ? `${snap.move} ${units} · ${snap.rotate}°` : 'whole steps'} —
-          zoom in for finer steps, hold Shift for free movement.
+          {snap
+            ? hideRotation
+              ? `${snap.move} ${unitText}`
+              : `${snap.move} ${unitText} · ${snap.rotate}°`
+            : 'whole steps'}{' '}
+          — zoom in for finer steps, hold Shift for free movement.
         </small>
       </span>
     </div>
@@ -200,6 +215,7 @@ export function MoveOverlay({
   }, [liveValuesRef, liveSnapRef]);
   const values = live.values;
   const snap = live.snap;
+  const unitText = displayLengthName(units as UnitSystem);
   const dirty =
     MOVE_AXES.some((axis) => values.translation[axis] !== 0) ||
     MOVE_AXES.some((axis) => values.rotationDeg[axis] !== 0);
@@ -230,7 +246,7 @@ export function MoveOverlay({
     >
       <div className="panel-header">
         <div className="panel-title-row">
-          <h2>Move / Rotate</h2>
+          <h2>{hideRotation ? 'Move' : 'Move / Rotate'}</h2>
           <span className="panel-eyebrow">{CARD_EYEBROWS.direct}</span>
           <button
             type="button"
@@ -278,43 +294,43 @@ export function MoveOverlay({
               <input
                 type="number"
                 step={snap?.move ?? 1}
-                value={values.translation[axis]}
+                value={fieldValue(values.translation[axis])}
                 aria-label={`Move ${axis.toUpperCase()} in ${units}`}
                 onChange={(event) =>
                   setValue('translation', axis, event.target.value)
                 }
               />
-              <b>{units}</b>
+              <b>{unitText}</b>
             </span>
           </label>
         ))}
       </div>
-      <div
-        className="move-grid"
-        role="group"
-        aria-label="Rotation"
-        hidden={hideRotation}
-      >
-        {MOVE_AXES.map((axis) => (
-          <label key={`r-${axis}`}>
-            <span className={`move-axis move-axis-${axis}`}>
-              r{axis.toUpperCase()}
-            </span>
-            <span className="extrude-distance-input">
-              <input
-                type="number"
-                step={snap?.rotate ?? 1}
-                value={values.rotationDeg[axis]}
-                aria-label={`Rotate ${axis.toUpperCase()} in degrees`}
-                onChange={(event) =>
-                  setValue('rotationDeg', axis, event.target.value)
-                }
-              />
-              <b>°</b>
-            </span>
-          </label>
-        ))}
-      </div>
+      {/* Not rendered rather than `hidden`: `.move-grid { display: grid }`
+          beat the attribute, so a sketch move showed rotation fields whose
+          values its commit silently dropped. */}
+      {hideRotation ? null : (
+        <div className="move-grid" role="group" aria-label="Rotation">
+          {MOVE_AXES.map((axis) => (
+            <label key={`r-${axis}`}>
+              <span className={`move-axis move-axis-${axis}`}>
+                r{axis.toUpperCase()}
+              </span>
+              <span className="extrude-distance-input">
+                <input
+                  type="number"
+                  step={snap?.rotate ?? 1}
+                  value={fieldValue(values.rotationDeg[axis])}
+                  aria-label={`Rotate ${axis.toUpperCase()} in degrees`}
+                  onChange={(event) =>
+                    setValue('rotationDeg', axis, event.target.value)
+                  }
+                />
+                <b>°</b>
+              </span>
+            </label>
+          ))}
+        </div>
+      )}
       <div className="form-actions">
         <button type="submit" className="primary" disabled={!dirty}>
           Apply move
