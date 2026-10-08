@@ -1,5 +1,5 @@
 import { useEffect, useState, type ReactNode, type RefObject } from 'react';
-import { History, Magnet, MousePointer2 } from 'lucide-react';
+import { Magnet, MousePointer2, ScrollText } from 'lucide-react';
 import {
   SELECTION_FILTERS,
   SELECTION_FILTER_LABELS,
@@ -266,7 +266,8 @@ export function ActivityLogButton({
       aria-expanded={logOpen}
       onClick={onToggleLog}
     >
-      <History size={16} aria-hidden="true" />
+      {/* Not the clock: that is rollback and Restore, one rail up from here. */}
+      <ScrollText size={16} aria-hidden="true" />
     </button>
   );
 }

@@ -16515,7 +16515,7 @@ export function App() {
         {
           item: {
             id: 'fit',
-            label: 'Fit View',
+            label: 'Fit view',
             icon: <Maximize2 size={13} aria-hidden="true" />,
             shortcut: 'F'
           },
@@ -16524,7 +16524,7 @@ export function App() {
         {
           item: {
             id: 'grid',
-            label: viewerSettings.showGrid ? 'Hide Grid' : 'Show Grid',
+            label: viewerSettings.showGrid ? 'Hide grid' : 'Show grid',
             icon: <Grid3x3 size={13} aria-hidden="true" />,
             shortcut: 'G'
           },
@@ -16537,7 +16537,9 @@ export function App() {
         {
           item: {
             id: 'projection',
-            label: `Projection: ${projection === 'perspective' ? 'Orthographic' : 'Perspective'}`,
+            // An action, so it names where it goes; "Projection: Orthographic"
+            // read as the current state.
+            label: `Switch to ${projection === 'perspective' ? 'orthographic' : 'perspective'}`,
             icon: <Camera size={13} aria-hidden="true" />,
             shortcut: 'P'
           },
@@ -16546,7 +16548,7 @@ export function App() {
         {
           item: {
             id: 'showAll',
-            label: 'Show All Bodies',
+            label: 'Show all bodies',
             icon: <Eye size={13} aria-hidden="true" />,
             disabled: hiddenBodyIds.size === 0
           },
@@ -16613,7 +16615,7 @@ export function App() {
               {
                 item: {
                   id: 'fillet',
-                  label: 'Fillet Edge…',
+                  label: 'Fillet edge…',
                   icon: <Spline size={13} aria-hidden="true" />
                 },
                 run: runCurrent((handlers) => handlers.launchTool('fillet'))
@@ -16621,7 +16623,7 @@ export function App() {
               {
                 item: {
                   id: 'chamfer',
-                  label: 'Chamfer Edge…',
+                  label: 'Chamfer edge…',
                   icon: <TriangleRight size={13} aria-hidden="true" />
                 },
                 run: runCurrent((handlers) => handlers.launchTool('chamfer'))
@@ -16661,7 +16663,7 @@ export function App() {
         {
           item: {
             id: 'hide',
-            label: 'Hide Body',
+            label: 'Hide body',
             icon: <Eye size={13} aria-hidden="true" />,
             section: true
           },
@@ -16672,7 +16674,7 @@ export function App() {
         {
           item: {
             id: 'fit',
-            label: 'Fit View',
+            label: 'Fit view',
             icon: <Maximize2 size={13} aria-hidden="true" />,
             shortcut: 'F'
           },
@@ -16808,7 +16810,7 @@ export function App() {
       feature.data.featureKind === 'sketch' ? feature.data.sketchId : null;
     const entries: Parameters<typeof openContextMenu>[2] = [
       {
-        item: { id: 'edit', label: 'Edit Properties' },
+        item: { id: 'edit', label: 'Edit properties' },
         run: () => handleSelectFeatureFromTree(feature.id)
       },
       ...(repair
@@ -16816,7 +16818,7 @@ export function App() {
             {
               item: {
                 id: 'repair-face',
-                label: 'Re-pick Face…',
+                label: 'Re-pick face…',
                 icon: <Crosshair size={13} aria-hidden="true" />
               },
               run: () => armFaceRepair(repair)
@@ -16828,7 +16830,7 @@ export function App() {
             {
               item: {
                 id: 'visibility',
-                label: hiddenBodyIds.has(bodyId) ? 'Show Body' : 'Hide Body',
+                label: hiddenBodyIds.has(bodyId) ? 'Show body' : 'Hide body',
                 icon: <Eye size={13} aria-hidden="true" />
               },
               run: () => toggleBodyVisibility(bodyId)
@@ -16843,8 +16845,8 @@ export function App() {
               item: {
                 id: 'sketch-visibility',
                 label: hiddenSketchIds.has(sketchId)
-                  ? 'Show Sketch'
-                  : 'Hide Sketch',
+                  ? 'Show sketch'
+                  : 'Hide sketch',
                 icon: <Eye size={13} aria-hidden="true" />
               },
               run: () => toggleSketchVisibility(sketchId)
@@ -18805,7 +18807,7 @@ export function App() {
         }}
       >
         <Check size={16} aria-hidden="true" />
-        <span className="workspace-column-finish-label">Finish sketch</span>
+        <span className="workspace-column-finish-label">Finish Sketch</span>
       </button>
     ) : null;
   // Direct-mode strips (plane picking, direct extrude) keep floating over

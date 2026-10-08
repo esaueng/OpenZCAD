@@ -1527,8 +1527,8 @@
   );
 }
 
-/* The rail is not resizable; the splitter belongs to the sketch card and
-   Tweak's parameters. */
+/* The rails are not resizable, and the command, sketch and Tweak rails are
+   all the column holds today, so the splitter shows in no mode. */
 .viewer-area:has(
     .workspace-column-float :is(.command-rail, .sketch-rail, .tweak-rail)
   )

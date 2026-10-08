@@ -104,7 +104,7 @@ test('viewport context menu hides a body and the sidebar eye restores it', async
     .click();
   await expect(page.getByRole('button', { name: /^Fillet/ })).toBeEnabled();
 
-  // Right-click the body → contextual actions → Hide Body.
+  // Right-click the body → contextual actions → Hide body.
   const canvas = page.locator('.viewer-host canvas');
   const bounds = await canvas.boundingBox();
   if (!bounds) {
@@ -124,7 +124,7 @@ test('viewport context menu hides a body and the sidebar eye restores it', async
   await expect(
     menu.getByRole('menuitem', { name: /Move \/ Rotate/ })
   ).toBeVisible();
-  await menu.getByRole('menuitem', { name: 'Hide Body' }).click();
+  await menu.getByRole('menuitem', { name: 'Hide body' }).click();
   await expect(menu).toBeHidden();
 
   // Hidden bodies leave a blank viewport but stay in the tree with an eye
@@ -163,7 +163,7 @@ test('choosing Move from an edge right-click disarms the fillet handle it just a
   await expect(menu).toBeVisible();
   // Edge actions prove the right-click armed the edge handle underneath.
   await expect(
-    menu.getByRole('menuitem', { name: /Fillet Edge/ })
+    menu.getByRole('menuitem', { name: /Fillet edge/ })
   ).toBeVisible();
   await expect(
     page.getByRole('region', { name: 'Fillet operation' })
