@@ -1,15 +1,8 @@
+import { readFile } from 'node:fs/promises';
+import type { Page } from '@playwright/test';
 import { test, expect, stubApi, expectBodyCount } from './openzcad-fixtures';
 
-test('draws accepted geometry before analysis, then completes without reinstalling its mesh', async ({
-  page
-}) => {
-  test.setTimeout(90_000);
-  const errors: string[] = [];
-  page.on('pageerror', (error) => errors.push(error.message));
-  page.on('console', (message) => {
-    if (message.type() === 'error') errors.push(message.text());
-  });
-  await stubApi(page);
+async function installAnalysisGate(page: Page) {
   await page.addInitScript(() => {
     const scope = window as typeof window & {
       holdAnalysis: boolean;
@@ -47,6 +40,19 @@ test('draws accepted geometry before analysis, then completes without reinstalli
       }
     });
   });
+}
+
+test('draws accepted geometry before analysis, then completes without reinstalling its mesh', async ({
+  page
+}) => {
+  test.setTimeout(90_000);
+  const errors: string[] = [];
+  page.on('pageerror', (error) => errors.push(error.message));
+  page.on('console', (message) => {
+    if (message.type() === 'error') errors.push(message.text());
+  });
+  await stubApi(page);
+  await installAnalysisGate(page);
   await page.setViewportSize({ width: 1440, height: 1000 });
   await page.goto('/');
   await page.getByLabel('Project name').fill('Staged geometry');
@@ -172,4 +178,87 @@ test('acknowledges appearance edits without reinstalling on later selection', as
       () => performance.getEntriesByName('oz:viewer.bodies').length
     )
   ).toBe(installs);
+});
+
+test('blocks staged context actions and exports, then exports both completed bodies', async ({
+  page
+}) => {
+  test.setTimeout(90_000);
+  await stubApi(page);
+  await installAnalysisGate(page);
+  await page.setViewportSize({ width: 1440, height: 1000 });
+  await page.goto('/');
+  await page.getByLabel('Project name').fill('Staged export');
+  await page.getByRole('button', { name: 'Create project' }).click();
+  await expectBodyCount(page, 0);
+  const inspector = page.getByRole('region', { name: 'Feature inspector' });
+  await page.getByRole('button', { name: /^Box \(B\)/ }).click();
+  await inspector.getByRole('button', { name: 'Create', exact: true }).click();
+  await expectBodyCount(page, 1);
+  await page.locator('.body-row-main').first().click();
+  await expect(page.locator('.selection-callout-chip')).toBeVisible();
+
+  await page.getByRole('button', { name: /^Box \(B\)/ }).click();
+  await page.evaluate(() => {
+    (window as typeof window & { holdAnalysis: boolean }).holdAnalysis = true;
+  });
+  await inspector.getByRole('button', { name: 'Create', exact: true }).click();
+  await expect(page.getByText('Preparing model details…')).toBeVisible();
+  await expect
+    .poll(() =>
+      page.evaluate(
+        () => (window as typeof window & { heldAnalysis: number }).heldAnalysis
+      )
+    )
+    .toBeGreaterThan(0);
+
+  const canvas = page.locator('.viewer-host canvas');
+  const hit = await canvas.evaluate(
+    (element) =>
+      new Promise<{ x: number; y: number } | null>((resolve) => {
+        element.dispatchEvent(
+          new CustomEvent('openzcad:e2e-locate-pick-stack', {
+            detail: { resolve }
+          })
+        );
+      })
+  );
+  expect(hit).not.toBeNull();
+  await page.keyboard.down('Shift');
+  await page.mouse.click(hit!.x, hit!.y, { button: 'right' });
+  await page.keyboard.up('Shift');
+  await expect(page.getByRole('contentinfo')).toContainText(
+    'The model is still updating. Try that selection again when it finishes.'
+  );
+  await expect(page.locator('.context-menu')).toHaveCount(0);
+
+  await page.getByText('File', { exact: true }).click();
+  await expect(
+    page.getByRole('button', { name: /^Export STEP/ })
+  ).toBeDisabled();
+  await expect(
+    page.getByRole('button', { name: /^Export mesh/ })
+  ).toBeDisabled();
+  await page.keyboard.press('Escape');
+  await page.evaluate(() =>
+    (
+      window as typeof window & { releaseAnalysis: () => void }
+    ).releaseAnalysis()
+  );
+  await expectBodyCount(page, 2);
+  await page.keyboard.press('Escape');
+  await expect(page.locator('.selection-callout-chip')).toHaveCount(0);
+  await page.getByText('File', { exact: true }).click();
+  const step = page.getByRole('button', { name: /^Export STEP/ });
+  await expect(step).toBeEnabled();
+  await expect(
+    page.getByRole('button', { name: /^Export mesh/ })
+  ).toBeEnabled();
+  const downloaded = page.waitForEvent('download');
+  await step.click();
+  const file = await downloaded;
+  const path = await file.path();
+  expect(path).not.toBeNull();
+  const content = await readFile(path, 'utf8');
+  expect(content.match(/MANIFOLD_SOLID_BREP/g)).toHaveLength(2);
 });

@@ -5559,7 +5559,11 @@ export function App() {
       ? parameterModelFailure.message
       : null;
   const exportBodyIds = useMemo<BodyId[]>(() => {
-    if (!doc || (tweakMode && parameterModelError)) {
+    if (
+      !doc ||
+      currentGeometrySnapshot !== null ||
+      (tweakMode && parameterModelError)
+    ) {
       return [];
     }
     if (
@@ -5583,7 +5587,8 @@ export function App() {
     selectedBody,
     parameterHiddenBodyIds,
     tweakMode,
-    parameterModelError
+    parameterModelError,
+    currentGeometrySnapshot
   ]);
 
   /**
@@ -11225,6 +11230,12 @@ export function App() {
   }
 
   async function handleExportStep() {
+    if (currentGeometrySnapshot !== null) {
+      setStatus(
+        'The model is still updating. Try exporting again when it finishes.'
+      );
+      return;
+    }
     if (!doc || exportBodyIds.length === 0) {
       setStatus('Create a body before exporting.');
       return;
@@ -11269,6 +11280,12 @@ export function App() {
     format: MeshExportDialogFormat,
     deflection: number
   ) {
+    if (currentGeometrySnapshot !== null) {
+      setStatus(
+        'The model is still updating. Try exporting again when it finishes.'
+      );
+      return;
+    }
     if (!doc || exportBodyIds.length === 0) {
       setStatus('Create a body before exporting.');
       return;
@@ -11635,6 +11652,12 @@ export function App() {
     detail?: PickDetail,
     contextMenu?: { x: number; y: number }
   ): boolean {
+    if (selection && currentGeometrySnapshot !== null) {
+      setStatus(
+        'The model is still updating. Try that selection again when it finishes.'
+      );
+      return true;
+    }
     if (movePreview) {
       // An empty click, like an empty box sweep, costs the Move nothing.
       if (!selection) return false;
@@ -18015,7 +18038,12 @@ export function App() {
       label: 'Export STEP',
       group: 'File',
       icon: <Download size={16} aria-hidden="true" />,
-      disabledReason: exportBodyIds.length === 0 ? 'Create a body first' : null,
+      disabledReason:
+        currentGeometrySnapshot !== null
+          ? 'Wait for the model to finish updating'
+          : exportBodyIds.length === 0
+            ? 'Create a body first'
+            : null,
       run: () => void handleExportStep()
     },
     {
@@ -18026,7 +18054,12 @@ export function App() {
       group: 'File',
       keywords: ['3mf', 'stl', 'obj', 'gltf', 'ply', 'mesh'],
       icon: <Download size={16} aria-hidden="true" />,
-      disabledReason: exportBodyIds.length === 0 ? 'Create a body first' : null,
+      disabledReason:
+        currentGeometrySnapshot !== null
+          ? 'Wait for the model to finish updating'
+          : exportBodyIds.length === 0
+            ? 'Create a body first'
+            : null,
       run: () => setMeshExportOpen(true)
     },
     {
