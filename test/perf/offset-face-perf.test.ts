@@ -52,7 +52,10 @@ import { performance } from 'node:perf_hooks';
 import { fileURLToPath } from 'node:url';
 import { expect, it } from 'vitest';
 import { CommandManager, commandFactories } from '@openzcad/command-system';
-import { createProjectDocument } from '@openzcad/document-core';
+import {
+  addPrimitiveFeature,
+  createProjectDocument
+} from '@openzcad/document-core';
 import { sanitizeStepHeaderPrivacy } from '@openzcad/io-step';
 import {
   toUserId,
@@ -273,6 +276,32 @@ function pickFace(faces: readonly FaceTopology[]): FaceTopology | undefined {
   }
   return candidates[0]?.face;
 }
+
+it('records SDK calls made by the selected exact adapter', async () => {
+  const restoreKernel = instrumentKernel();
+  let adapter: ExactKernelAdapter | undefined;
+  methodTotals.clear();
+  try {
+    adapter = await createExactKernelAdapter();
+    const document = addPrimitiveFeature(
+      createProjectDocument('Probe ownership', toUserId('probe_owner')),
+      {
+        name: 'Probe box',
+        primitiveKind: 'box',
+        dimensions: { width: 10, height: 8, depth: 6 }
+      }
+    );
+    const derived = await adapter.syncDocument(document);
+    expect(Object.keys(derived.bodyRepresentations)).toHaveLength(1);
+    expect(methodTotals.get('makeBox')?.count).toBeGreaterThan(0);
+    expect(methodTotals.get('volume')?.count).toBeGreaterThan(0);
+  } finally {
+    adapter?.dispose();
+    restoreKernel();
+    methodTotals.clear();
+    callerTotals.clear();
+  }
+});
 
 it.skipIf(!stepPath)(
   'times one offset-face direct edit on an imported STEP body',

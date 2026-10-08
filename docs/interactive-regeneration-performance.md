@@ -245,12 +245,15 @@ revision, not an additional OpenZCAD before/after gain.
 
 ## Verification and limitations
 
-The required repository gates passed: lint (18 existing warnings, no errors),
+The measured implementation passed the required repository gates: lint
+(18 existing warnings, no errors),
 typecheck, 4,001 root tests, 2,070 web tests, 182 parity tests and `pnpm build`,
 including paired-Remus verification and the unchanged bundle-size gate. The
 kernel's existing size-review warning remains; there are no budget failures.
-Background thumbnail coordination loads behind a separate module boundary;
-staging, unsubscribe and leave-time flush across that boundary are tested.
+Thumbnail coordination is resident in the existing preloaded model chunk;
+leave-time flush needs no dynamic import. GL/readback still waits for quiet
+input during routine capture, and the renderer remains behind its workspace
+boundary.
 
 Both adapter variants check every warm edited output against a fresh adapter
 with checkpointing disabled, including topology, witnesses, references,
@@ -277,6 +280,14 @@ dependent builders still replay even if they are unrelated to an edit. Cache
 proofs, cloning and per-body render comparisons still visit the whole model.
 Count and replay-work limits do not bound retained topology bytes; actual
 worker-heap and native desktop-GPU qualification remain open W01/W02 work.
+Review repairs after these measurements add adapter-disposal cancellation,
+terminal progress delivery and resident thumbnail coordination. The recorded
+source hashes identify the measured implementation; those timings were not
+rerun for the repairs. The offset harness now instruments the selected
+adapter's runtime even when the baseline has a distinct package instance.
+Its regression probe verifies real SDK calls for each checkout; the recorded
+holder baseline already includes nonzero kernel method timings.
+
 The local browser probes exercise the real edit flow; the complete browser CI
 matrix and hosted/desktop verification are separate from these local results.
 

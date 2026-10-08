@@ -14,6 +14,12 @@ export default defineConfig({
             '@openzcad/kernel-adapter/exact': resolve(
               process.env.CAD_PERF_BASELINE_ROOT,
               'packages/kernel-adapter/src/exact.ts'
+            ),
+            // Instrument the runtime owned by that adapter, even when its
+            // checkout resolves a separate instance of the same WASM package.
+            '../../packages/kernel-adapter/src/remus-runtime': resolve(
+              process.env.CAD_PERF_BASELINE_ROOT,
+              'packages/kernel-adapter/src/remus-runtime.ts'
             )
           }
         : {})
