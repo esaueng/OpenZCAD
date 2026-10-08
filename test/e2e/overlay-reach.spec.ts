@@ -54,7 +54,7 @@ async function createBox(
   await page.goto('/');
   await page.getByLabel('Project name').fill(name);
   if (options.units) {
-    await page.getByLabel('Unit system').selectOption(options.units);
+    await page.getByLabel('Units', { exact: true }).selectOption(options.units);
   }
   await page.getByRole('button', { name: 'Create project' }).click();
   await page.getByRole('button', { name: /^Box \(B\)/ }).click();

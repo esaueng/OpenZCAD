@@ -190,11 +190,33 @@ export function closestAxisT(
   return (b * f - c) / denominator;
 }
 
+/**
+ * Rounds `value` to the nearest multiple of `step` (or to 0.01 when `fine`).
+ * Decimal steps have no exact binary form, so the bare product
+ * `round(v / step) * step` reached the Move panel as 0.30000000000000004;
+ * the result is cleaned to the step's own decimal places.
+ */
 export function snapTo(value: number, step: number, fine: boolean): number {
   if (fine) {
     return Math.round(value * 100) / 100;
   }
-  return Math.round(value / step) * step;
+  if (!Number.isFinite(step) || step <= 0) {
+    return value;
+  }
+  const snapped = Math.round(value / step) * step;
+  const decimals = stepDecimals(step);
+  // toFixed accepts at most 100 decimal places. Smaller increments still
+  // snap normally; they do not need decimal cleanup at unsupported precision.
+  const cleaned = decimals <= 100 ? Number(snapped.toFixed(decimals)) : snapped;
+  // Fold negative zero without replacing an invalid coordinate with zero.
+  return cleaned === 0 ? 0 : cleaned;
+}
+
+/** Decimal places in the step's round-trippable base-ten representation. */
+function stepDecimals(step: number): number {
+  const [coefficient, exponent = '0'] = step.toString().split('e');
+  const fractionDigits = coefficient!.split('.')[1]?.length ?? 0;
+  return Math.max(0, fractionDigits - Number(exponent));
 }
 
 /** Neutral highlight for whichever handle has focus. */

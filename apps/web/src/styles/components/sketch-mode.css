@@ -239,8 +239,11 @@
   cursor: grabbing;
 }
 
+/* The ring stands 2px off the pill, on the viewport's dark stage, which
+   never re-themes: the viewport's accent, not the chrome's text colour,
+   which went dark-on-dark in the light theme. */
 .sketch-dimension-label:focus-visible {
-  outline: 2px solid var(--color-text);
+  outline: 2px solid var(--color-preselect);
   outline-offset: 2px;
 }
 
@@ -263,8 +266,10 @@
 .sketch-workflow .field {
   flex-wrap: wrap;
 }
+/* The basis is the placeholder's width: at 120px the picker shrank beside
+   its label and clipped "Choose geometry to edit" before it ever wrapped. */
 .sketch-workflow .field select {
-  flex: 1 1 120px;
+  flex: 1 1 170px;
   min-width: 0;
   max-width: 100%;
 }
@@ -284,8 +289,9 @@
   text-overflow: ellipsis;
   white-space: nowrap;
 }
+/* Cased where it is written (SketchWorkflow): capitalising here turned a
+   pick count into "0/1 Selected". */
 .sketch-workflow-context span {
-  text-transform: capitalize;
   color: var(--color-text-muted);
 }
 /* Two toggles share the row when the column is wide and stack when it is
@@ -310,8 +316,23 @@
 .sketch-workflow-problems ul {
   padding-left: 16px;
 }
+/* Each issue is a link-like row: a block, so its bullet sits on the first
+   line rather than beside the middle of a wrapped message. */
 .sketch-workflow-problems li button {
+  display: block;
+  width: 100%;
+  min-height: 24px;
+  padding: 2px 0;
   text-align: left;
+  font-size: inherit;
+}
+.sketch-workflow-problems li button:hover,
+.sketch-workflow-problems li button:focus-visible {
+  color: var(--color-accent-hi);
+}
+.sketch-workflow-problems > .secondary {
+  min-height: 28px;
+  margin-top: 4px;
   font-size: inherit;
 }
 .workspace-column-tools:has(.sketch-workflow) {

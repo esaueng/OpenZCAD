@@ -96,10 +96,13 @@ export function CommandCard({
     );
   };
   return (
+    // A navigation landmark rather than a toolbar, so the tooltips are told
+    // it is a rail: they open beside it instead of over the next tool.
     <nav
       className="tool-palette command-rail"
       aria-label="Feature tools"
       data-context={context.kind}
+      data-tooltip-rail=""
     >
       {RAIL_GROUPS.map((group, index) => (
         <Fragment key={group.label}>
@@ -140,7 +143,14 @@ export function CommandCard({
           </button>
         </Tooltip>
         {moreOpen && (
-          <div className="command-flyout">
+          // A flyout beside the rail: help for a rail button next to it
+          // drops its description, and a tile's help opens beside the fold
+          // rather than over the tiles below it.
+          <div
+            className="command-flyout"
+            data-rail-flyout=""
+            data-tooltip-rail="vertical"
+          >
             {FOLD_GROUPS.map((group) => (
               <Fragment key={group.label}>
                 <span className="command-flyout-heading">{group.label}</span>

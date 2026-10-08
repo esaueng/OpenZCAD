@@ -310,13 +310,19 @@ textarea {
   }
 }
 
-/* Start screen part tiles lift slightly toward the pointer. */
-.start-tile-project:not(:disabled):hover {
+/* Start screen part tiles lift slightly toward the pointer — only a tile that
+   opens: a trashed one (a static div) or one disabled while busy stays put.
+   The tile is a div, so a `:disabled` test on the tile itself never failed. */
+.start-tile-project:has(
+    > .start-tile-open:not(.is-static):not(:disabled)
+  ):hover {
   transform: translateY(-1px);
   box-shadow: 0 4px 18px rgba(0, 0, 0, 0.3);
 }
 
-.start-tile-project:not(:disabled):active {
+.start-tile-project:has(
+    > .start-tile-open:not(.is-static):not(:disabled)
+  ):active {
   transform: translateY(0);
 }
 
@@ -326,8 +332,11 @@ textarea {
   animation: oz-pop var(--dur-base) var(--ease-out);
 }
 
+/* Inert as well (Toast.tsx): a double-click's second press reached the
+   fading Undo and undid a second step. */
 .toast.closing {
   animation: oz-fade-out var(--dur-fast) var(--ease-out) forwards;
+  pointer-events: none;
 }
 
 @keyframes oz-fade-out {

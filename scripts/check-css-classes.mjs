@@ -62,12 +62,6 @@ export const UNSTYLED_ALLOWANCES = [
       'Bare wrapper around the sized .settings-turnstile widget slot and its status line.'
   },
   {
-    file: 'apps/web/src/components/SettingsPage.tsx',
-    classes: ['settings-challenge-state'],
-    reason:
-      'Inherits the surrounding settings type scale; the name plus its state suffix is a status hook.'
-  },
-  {
     file: 'apps/web/src/components/Sidebar.tsx',
     classes: ['revisions'],
     reason:

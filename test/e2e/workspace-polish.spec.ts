@@ -153,7 +153,8 @@ test('exposes the full measurement workbench in View mode', async ({
     .getByRole('button', { name: 'Measure' })
     .click();
 
-  const workbench = page.getByLabel('Measurement workbench');
+  // Exact: the project, named alike, is in the title and the status names.
+  const workbench = page.getByLabel('Measurement workbench', { exact: true });
   await expect(workbench).toBeVisible();
   await expect(
     workbench.getByRole('button', { name: 'Smart' })
@@ -163,16 +164,16 @@ test('exposes the full measurement workbench in View mode', async ({
   ).toBeVisible();
   await expect(workbench.getByRole('button', { name: 'Angle' })).toBeVisible();
   await expect(workbench.getByLabel('Measurement units')).toHaveValue('mm');
-  await expect(workbench.getByLabel('Measurement decimal places')).toHaveValue(
-    '2'
-  );
+  await expect(workbench.getByLabel('Measurement precision')).toHaveValue('2');
   await expect(
     workbench.getByRole('group', { name: 'Radial display' })
   ).toBeVisible();
 
   await workbench.getByRole('button', { name: 'Angle' }).click();
   await expect(
-    workbench.getByText('Pick two straight edges or two planar faces.')
+    workbench.getByText(
+      'Pick two straight edges, circular axes or planar faces.'
+    )
   ).toBeVisible();
 });
 
@@ -897,7 +898,7 @@ test('snaps sketch drawing to existing endpoints', async ({ page }) => {
   await expect(marker).toBeHidden();
 });
 
-test('empty-state copy points at the command card beside the history', async ({
+test('empty-state copy points at the tool rail beside the history', async ({
   page
 }) => {
   await stubApi(page);
@@ -907,9 +908,11 @@ test('empty-state copy points at the command card beside the history', async ({
 
   // Several sections carry a .sidebar-hint; match the History one by text.
   const hint = page.locator('.sidebar-hint', { hasText: 'No features yet' });
-  await expect(hint).toContainText('Pick a tool from the Feature tools list');
+  await expect(hint).toContainText(
+    'Pick a tool from the tool rail on the left'
+  );
 
-  // The card it names is on screen, and it is the other side of the stage
+  // The rail it names is on screen, and it is the other side of the stage
   // from the history in the drawer.
   const tools = page.getByRole('navigation', { name: 'Feature tools' });
   await expect(tools).toBeVisible();

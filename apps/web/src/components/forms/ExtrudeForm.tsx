@@ -40,6 +40,44 @@ interface ExtrudeFormProps {
   onDistance?(value: ParamValue): void;
 }
 
+/**
+ * The text the exact-entry keypad opens with for this form's distance: as the
+ * form holds it, so an expression stays one and Enter re-commits it
+ * unchanged. Built from the resolved number, "10/3" opened as 3.33 and was
+ * applied as 3.33 mm. Zero opens empty, so the first key types the value.
+ */
+export function distanceKeypadText(distance: ParamValue): string {
+  const text = String(distance).trim();
+  return Number(text) === 0 ? '' : text;
+}
+
+/**
+ * The distance with its direction flipped. A negated expression is unwrapped
+ * rather than wrapped again, so Reverse twice reads as it started instead of
+ * `-(-(10/2))`.
+ */
+export function reversedDistance(distance: string): string {
+  const text = distance.trim();
+  if (Number.isFinite(Number(text))) {
+    return String(-Number(text));
+  }
+  if (text.startsWith('-(') && text.endsWith(')')) {
+    // Only when that first parenthesis closes at the very end: `-(a)*(b)`
+    // is not a negation of everything after the minus.
+    let depth = 0;
+    for (let index = 1; index < text.length; index += 1) {
+      const char = text[index];
+      if (char === '(') depth += 1;
+      if (char === ')') depth -= 1;
+      if (depth === 0) {
+        if (index === text.length - 1) return text.slice(2, -1).trim();
+        break;
+      }
+    }
+  }
+  return `-(${text})`;
+}
+
 /** The same draft editor for a selected profile and an existing feature. */
 export function ExtrudeForm({
   scope,
@@ -200,13 +238,8 @@ export function ExtrudeForm({
         ) : null}
         <button
           type="button"
-          onClick={() =>
-            change({
-              distance: Number.isFinite(Number(draft.distance))
-                ? String(-Number(draft.distance))
-                : `-(${draft.distance})`
-            })
-          }
+          className="secondary"
+          onClick={() => change({ distance: reversedDistance(draft.distance) })}
         >
           Reverse direction
         </button>
@@ -238,6 +271,7 @@ export function ExtrudeForm({
         {onDistance && (
           <button
             type="button"
+            className="secondary"
             disabled={!distance.ok}
             onClick={() => onDistance(coerceParamValue(draft.distance))}
           >
@@ -246,8 +280,16 @@ export function ExtrudeForm({
         )}
       </fieldset>
       <div className="form-actions">
-        <button type="submit" className="primary" disabled={disabled || !valid}>
+        <button
+          type="submit"
+          className="primary"
+          disabled={disabled || !valid}
+          aria-keyshortcuts="Enter"
+        >
           {submitLabel}
+          <kbd className="kbd-inline" aria-hidden="true">
+            ↵
+          </kbd>
         </button>
         <button type="button" className="secondary" onClick={onCancel}>
           Cancel

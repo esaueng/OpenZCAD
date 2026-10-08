@@ -78,8 +78,16 @@ function text(value: unknown): string {
   return typeof value === 'string' ? value : '';
 }
 
+/** The largest instant a Date can hold (ECMA-262 §21.4.1.1). */
+const MAX_DATE_MS = 8.64e15;
+
 function timestamp(value: unknown): { at?: number } {
-  return typeof value === 'number' && Number.isFinite(value) && value > 0
+  // A stored time past the Date range parses as a number but makes an
+  // Invalid Date, and the turn's <time dateTime> then throws on render.
+  return typeof value === 'number' &&
+    Number.isFinite(value) &&
+    value > 0 &&
+    value <= MAX_DATE_MS
     ? { at: value }
     : {};
 }
