@@ -1,5 +1,6 @@
 import { describe, expect, it } from 'vitest';
-import { visibleSettingsSections } from './settingsSections';
+import { SETTINGS_SECTION_IDS } from './settingsSectionIds';
+import { SETTINGS_SECTIONS, visibleSettingsSections } from './settingsSections';
 
 function matches(query: string): string[] {
   return visibleSettingsSections({ query }).map((section) => section.id);
@@ -45,5 +46,16 @@ describe('find a setting', () => {
       expect(ids).not.toContain('account');
       expect(ids).not.toContain('assistant');
     }
+  });
+});
+
+describe('section ids', () => {
+  it('lists exactly the sections the index renders', () => {
+    // The startup id list stands apart so the entry chunk does not carry the
+    // search index; a section added to one and not the other would make a
+    // restored Settings view fall back to General, or restore a dead id.
+    expect([...SETTINGS_SECTION_IDS].sort()).toEqual(
+      SETTINGS_SECTIONS.map((section) => section.id).sort()
+    );
   });
 });

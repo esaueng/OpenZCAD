@@ -1,4 +1,5 @@
 import { CONTROL_REFERENCE_SEARCH_TERMS } from './controlReference';
+import type { SettingsSectionId } from './settingsSectionIds';
 
 /**
  * Settings navigation metadata and search rules.
@@ -7,17 +8,7 @@ import { CONTROL_REFERENCE_SEARCH_TERMS } from './controlReference';
  * JSX-free and directly unit-testable.
  */
 
-export type SettingsSectionId =
-  | 'general'
-  | 'appearance'
-  | 'viewport'
-  | 'sketching'
-  | 'files'
-  | 'assistant'
-  | 'account'
-  | 'shortcuts'
-  | 'privacy'
-  | 'advanced';
+export type { SettingsSectionId };
 
 export interface SettingsSectionMeta {
   id: SettingsSectionId;
