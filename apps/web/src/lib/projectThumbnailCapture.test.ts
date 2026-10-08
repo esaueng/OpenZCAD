@@ -9,6 +9,7 @@ import {
   type StagedThumbnail,
   type ThumbnailCaptureHost
 } from './projectThumbnailCapture';
+import type { ProjectThumbnailRecord } from './localProjectStore';
 
 const PROJECT = toProjectId('proj_capture');
 const BOX = { id: 'body_box' } as unknown as BodyRepresentation;
@@ -46,6 +47,61 @@ function staged(
 afterEach(() => vi.useRealTimers());
 
 describe('createThumbnailCapture', () => {
+  it('waits for input to stop and exact work to finish, while leave-time flush still captures', async () => {
+    vi.useFakeTimers();
+    const capture = createThumbnailCapture();
+    const h = host();
+    capture.stage(staged(3), h);
+    await vi.advanceTimersByTimeAsync(3500);
+    capture.activity();
+    await vi.advanceTimersByTimeAsync(3500);
+    expect(h.render).not.toHaveBeenCalled();
+    capture.setBusy(true);
+    await vi.advanceTimersByTimeAsync(10_000);
+    expect(h.render).not.toHaveBeenCalled();
+    capture.setBusy(false);
+    await vi.advanceTimersByTimeAsync(3999);
+    expect(h.render).not.toHaveBeenCalled();
+    await vi.advanceTimersByTimeAsync(1);
+    expect(h.render).toHaveBeenCalledOnce();
+    capture.stage(staged(4), h);
+    capture.setBusy(true);
+    capture.activity();
+    await capture.flush();
+    expect(h.save).toHaveBeenLastCalledWith(
+      PROJECT,
+      expect.objectContaining({ version: 4 })
+    );
+  });
+
+  it('skips an obsolete capture after storage loading instead of drawing it on the input thread', async () => {
+    vi.useFakeTimers();
+    let release!: (value: ProjectThumbnailRecord | null) => void;
+    const capture = createThumbnailCapture();
+    const h = host({
+      load: vi
+        .fn<ThumbnailCaptureHost['load']>()
+        .mockImplementationOnce(
+          () =>
+            new Promise((resolve) => {
+              release = resolve;
+            })
+        )
+        .mockResolvedValue(null)
+    });
+    capture.stage(staged(2), h);
+    await vi.advanceTimersByTimeAsync(4000);
+    capture.stage(staged(4), h);
+    release(null);
+    await vi.advanceTimersByTimeAsync(0);
+    expect(h.render).not.toHaveBeenCalled();
+    await vi.advanceTimersByTimeAsync(4000);
+    expect(h.render).toHaveBeenCalledOnce();
+    expect(h.save).toHaveBeenCalledWith(
+      PROJECT,
+      expect.objectContaining({ version: 4 })
+    );
+  });
   it('captures a staged part once the idle timer comes due', async () => {
     vi.useFakeTimers();
     const capture = createThumbnailCapture({ idleMs: 4000 });

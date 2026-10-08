@@ -24,6 +24,9 @@
  *   OFFSET_PERF_TRACE=1   Attribute traced kernel calls to their callers.
  *   OFFSET_PERF_FULL=1    Also time a second edit from the same base and the
  *                         undo back to the import.
+ *   OFFSET_PERF_SAMPLES  Alternating warm edits (default 0). A fresh exact
+ *                         rebuild checks the final sample outside timed work.
+ *   OFFSET_PERF_OUT      Optional JSONL timing output.
  *   REMUS_WASM_PKG, REMUS_WASM_IO_PKG
  *                         Run against a local Remus build instead of the
  *                         pinned packages (the `vitest.config.ts` overlay).
@@ -44,7 +47,7 @@
  * (160 faces, 42 of them NURBS) is the body the 2026-10-04 offset-face
  * measurements used. Keep fixtures out of this repository.
  */
-import { readFileSync } from 'node:fs';
+import { appendFileSync, readFileSync, writeFileSync } from 'node:fs';
 import { performance } from 'node:perf_hooks';
 import { fileURLToPath } from 'node:url';
 import { expect, it } from 'vitest';
@@ -193,6 +196,19 @@ function report(label: string, wall: number, stages: string[]): void {
     (a, b) => b[1].time - a[1].time
   );
   const kernel = methods.reduce((sum, [, entry]) => sum + entry.time, 0);
+  if (process.env.OFFSET_PERF_OUT) {
+    appendFileSync(
+      process.env.OFFSET_PERF_OUT,
+      `${JSON.stringify({
+        label,
+        wallMs: wall,
+        kernelMs: kernel,
+        jsMs: wall - kernel,
+        methods: Object.fromEntries(methods),
+        stages
+      })}\n`
+    );
+  }
   const lines = [
     `=== ${label}: wall ${wall.toFixed(0)} ms, kernel ${kernel.toFixed(0)} ms, JS ${(wall - kernel).toFixed(0)} ms ===`,
     ...methods
@@ -325,6 +341,8 @@ it.skipIf(!stepPath)(
         stages
       );
       const body1 = derived1.bodyRepresentations[bodyId]!;
+      let lastDocument = edited;
+      let lastDerived = derived1;
       console.log(
         `body volume ${body1.volume} (delta ${body1.volume - body0.volume}) faces ${body1.topology?.faces.length}`
       );
@@ -339,6 +357,93 @@ it.skipIf(!stepPath)(
           stages
         );
         await timedSync(adapter, imported, 'undo to import sync', stages);
+      }
+      // Opt-in repeated edits use the same exact fixture and pinned WASM. No
+      // display deflection, validation, tolerance or volume shortcut is applied.
+      for (
+        let index = 0;
+        index < Number(process.env.OFFSET_PERF_SAMPLES ?? 0);
+        index++
+      ) {
+        const distance = offset - (index % 2);
+        const next = planAt(distance);
+        expect(next?.kind).toBe('direct-edit');
+        const document = new CommandManager(base).runTransaction('Offset', [
+          next!.command
+        ]);
+        const result = await timedSync(
+          adapter,
+          document,
+          `warm offset sample ${index + 1}`,
+          stages
+        );
+        expect(result.warnings).toEqual([]);
+        const actual = result.bodyRepresentations[bodyId]!;
+        expect(actual.topology?.faces.length).toBe(
+          body1.topology?.faces.length
+        );
+        expect(actual.volume).toBeGreaterThan(0);
+        lastDocument = document;
+        lastDerived = result;
+      }
+      if (Number(process.env.OFFSET_PERF_SAMPLES ?? 0) > 0) {
+        const fresh = await createExactKernelAdapter({
+          historyCheckpointLimit: 0
+        });
+        try {
+          const reference = await fresh.syncDocument(lastDocument);
+          expect(reference.warnings).toEqual(lastDerived.warnings);
+          const actual = lastDerived.bodyRepresentations[bodyId]!;
+          const expected = reference.bodyRepresentations[bodyId]!;
+          if (process.env.OFFSET_PERF_PARITY_OUT) {
+            writeFileSync(
+              process.env.OFFSET_PERF_PARITY_OUT,
+              JSON.stringify({ actual, expected })
+            );
+          }
+          expect(actual.volume).toBeCloseTo(expected.volume, 6);
+          expect(actual.bbox).toEqual(expected.bbox);
+          // Display tessellation holds the previous body's deflection during
+          // small edits. A fresh adapter selects it from the new bounds, so
+          // triangle ranges can differ even on the unchanged baseline. Compare
+          // every exact topology field, and exports at one explicit accuracy.
+          const exactTopology = (body: typeof actual) => ({
+            ...body.topology,
+            faces: body.topology?.faces.map(
+              ({ triangleStart: _start, triangleCount: _count, ...face }) =>
+                face
+            )
+          });
+          expect(exactTopology(actual)).toEqual(exactTopology(expected));
+          for (const body of [actual, expected]) {
+            expect(body.mesh.vertices.every(Number.isFinite)).toBe(true);
+            expect(
+              body.mesh.indices.every(
+                (index) =>
+                  Number.isInteger(index) &&
+                  index < body.mesh.vertices.length / 3
+              )
+            ).toBe(true);
+            expect(
+              body.topology?.faces.reduce(
+                (sum, face) => sum + face.triangleCount,
+                0
+              )
+            ).toBe(body.mesh.indices.length / 3);
+          }
+          const stepData = (text: string) => text.slice(text.indexOf('DATA;'));
+          expect(
+            stepData(await adapter.exportStep(lastDocument, [bodyId]))
+          ).toBe(stepData(await fresh.exportStep(lastDocument, [bodyId])));
+          expect(await adapter.exportStl(lastDocument, [bodyId], 0.08)).toBe(
+            await fresh.exportStl(lastDocument, [bodyId], 0.08)
+          );
+          console.log(
+            'fresh exact parity: topology, STEP data and fixed-deflection STL identical'
+          );
+        } finally {
+          fresh.dispose();
+        }
       }
     } finally {
       adapter?.dispose();

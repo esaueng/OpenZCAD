@@ -49,6 +49,10 @@ export interface ThumbnailCaptureHost {
 }
 
 export interface ThumbnailCapture {
+  /** Defer background rendering until the user has stopped interacting. */
+  activity(): void;
+  /** Exact work takes priority over background card rendering. */
+  setBusy(busy: boolean): void;
   /**
    * Records what the workspace currently shows and arms the idle timer. The
    * routine path: a part left alone for a few seconds gets its card without
@@ -91,6 +95,9 @@ export function createThumbnailCapture(
     null;
   let timer: ReturnType<typeof setTimeout> | null = null;
   let inflight: Promise<void> | null = null;
+  let lastActivityAt = -Infinity;
+  let busy = false;
+  let forceCapture = false;
   const written = new Map<string, number>();
   const listeners = new Set<(captured: CapturedThumbnail) => void>();
 
@@ -105,6 +112,16 @@ export function createThumbnailCapture(
     return written.get(entry.projectId) === entry.version;
   }
 
+  function armIdle(delay = idleMs) {
+    if (timer !== null || busy || !staged || isWritten(staged.entry)) return;
+    timer = setTimeout(() => {
+      timer = null;
+      const remaining = idleMs - (Date.now() - lastActivityAt);
+      if (remaining > 0) armIdle(remaining);
+      else void run();
+    }, delay);
+  }
+
   function notify(captured: CapturedThumbnail) {
     for (const listener of listeners) {
       listener(captured);
@@ -116,6 +133,7 @@ export function createThumbnailCapture(
     host: ThumbnailCaptureHost
   ): Promise<void> {
     const cached = await host.load(entry.projectId).catch(() => null);
+    if (staged?.entry !== entry) return;
     if (
       cached &&
       thumbnailRecordDescribes(cached, { documentVersion: entry.version })
@@ -133,7 +151,18 @@ export function createThumbnailCapture(
     }
     let source: string | null;
     try {
-      source = await host.queue(() => host.render(entry.bodies));
+      const result = await host.queue(() => {
+        // Loading storage or waiting on the render queue can outlive this
+        // version or receive new input. Check again before synchronous GL.
+        if (
+          staged?.entry !== entry ||
+          (!forceCapture && (busy || Date.now() - lastActivityAt < idleMs))
+        )
+          return { rendered: false as const };
+        return { rendered: true as const, source: host.render(entry.bodies) };
+      });
+      if (!result.rendered) return;
+      source = result.source;
     } catch {
       // No context, or a driver that refused: keep whatever record exists
       // rather than recording "no geometry" for a part that has some. Left
@@ -184,20 +213,36 @@ export function createThumbnailCapture(
   }
 
   return {
+    activity() {
+      lastActivityAt = Date.now();
+      // Keep one timer; motion/typing updates only the deadline, not a timer
+      // allocation on every event. The timer rechecks the deadline when due.
+      armIdle();
+    },
+    setBusy(next) {
+      if (busy === next) return;
+      busy = next;
+      clearTimer();
+      if (!busy) {
+        lastActivityAt = Date.now();
+        armIdle();
+      }
+    },
     stage(entry, host) {
       staged = { entry, host };
+      lastActivityAt = Date.now();
       clearTimer();
       if (isWritten(entry)) {
         return;
       }
-      timer = setTimeout(() => {
-        timer = null;
-        void run();
-      }, idleMs);
+      armIdle();
     },
     flush() {
       clearTimer();
-      return run();
+      forceCapture = true;
+      return run().finally(() => {
+        forceCapture = false;
+      });
     },
     discard() {
       clearTimer();
@@ -211,9 +256,3 @@ export function createThumbnailCapture(
     }
   };
 }
-
-/**
- * The instance the workspace stages into and the leave paths flush. Module
- * scope rather than React state so it outlives the agent that stages it.
- */
-export const sharedThumbnailCapture = createThumbnailCapture();
