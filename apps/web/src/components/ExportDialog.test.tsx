@@ -337,5 +337,8 @@ describe('ExportDialog', () => {
     expect(
       await screen.findByRole('button', { name: 'Re-check watertightness' })
     ).toBe(check);
+    // The visible label fills the width it reserves; a bare "Re-check" sat
+    // in a button sized for the longer label.
+    expect(check).toHaveTextContent('Re-check watertightness');
   });
 });

@@ -3,6 +3,7 @@ import {
   CircleCheck,
   Download,
   LoaderCircle,
+  ShieldCheck,
   TriangleAlert
 } from 'lucide-react';
 import type { MeshQualityReport } from '@openzcad/kernel-adapter/exact';
@@ -357,10 +358,16 @@ export function ExportDialog({
               <span className="icon-slot" aria-hidden="true">
                 {phase === 'checking' ? (
                   <LoaderCircle size={13} className="spin" />
-                ) : null}
+                ) : (
+                  <ShieldCheck size={13} />
+                )}
               </span>
-              <StableLabel reserve={['Re-check', 'Check watertightness']}>
-                {report && !staleReport ? 'Re-check' : 'Check watertightness'}
+              <StableLabel
+                reserve={['Re-check watertightness', 'Check watertightness']}
+              >
+                {report && !staleReport
+                  ? 'Re-check watertightness'
+                  : 'Check watertightness'}
               </StableLabel>
             </button>
           </header>
