@@ -71,7 +71,7 @@ describe('application settings', () => {
     expect(normalized.sketching.linearSnap).toBe(1);
     expect(normalized.collaboration.enabled).toBe(false);
     expect(normalized.assistant.enabled).toBe(false);
-    expect(normalized.assistant.model).toBe('openai/gpt-5.6-sol');
+    expect(normalized.assistant.model).toBe('openai/gpt-6-luna');
   });
 
   it('accepts the light theme on both layers and falls back on junk', () => {

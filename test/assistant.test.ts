@@ -1054,10 +1054,10 @@ describe('assistant integration', () => {
     });
   });
 
-  it('uses one centralized frontier-model default', () => {
+  it('uses GPT-6 Luna as the default for both provider formats', () => {
     expect(DEFAULT_AI_PROVIDER).toBe('openrouter');
-    expect(DEFAULT_OPENROUTER_MODEL).toBe('openai/gpt-5.6-sol');
-    expect(DEFAULT_AI_MODEL).toBe('gpt-5.6-sol');
+    expect(DEFAULT_OPENROUTER_MODEL).toBe('openai/gpt-6-luna');
+    expect(DEFAULT_AI_MODEL).toBe('gpt-6-luna');
   });
 
   it('recovers from a stale direct-provider variable when only OpenRouter is configured', () => {
@@ -1070,7 +1070,7 @@ describe('assistant integration', () => {
     ).toEqual({
       configured: true,
       provider: 'openrouter',
-      model: 'openai/gpt-5.6-sol',
+      model: 'openai/gpt-6-luna',
       reasoningEffort: 'high'
     });
   });
@@ -1108,7 +1108,7 @@ describe('assistant integration', () => {
     expect(fetchMock).not.toHaveBeenCalled();
   });
 
-  it('uses an OpenRouter key, endpoint, headers, and frontier model default', async () => {
+  it('uses an OpenRouter key, endpoint, headers, and Luna model default', async () => {
     const fetchMock = vi.fn(
       async (_input: RequestInfo | URL, _init?: RequestInit) =>
         new Response('data: {"type":"response.completed"}\n\n', {
@@ -1147,7 +1147,7 @@ describe('assistant integration', () => {
       stream: boolean;
     };
     expect(request).toMatchObject({
-      model: 'openai/gpt-5.6-sol',
+      model: 'openai/gpt-6-luna',
       provider: { require_parameters: true },
       reasoning: { effort: 'high' },
       stream: true
@@ -1357,7 +1357,7 @@ describe('assistant integration', () => {
       expect.objectContaining({
         requestId,
         provider: 'openrouter',
-        model: 'openai/gpt-5.6-sol',
+        model: 'openai/gpt-6-luna',
         upstreamResponseId: 'resp_safe_123',
         classification: 'invalid_json',
         terminalEvent: 'response.completed',
@@ -1528,7 +1528,7 @@ describe('assistant integration', () => {
       expect.objectContaining({
         requestId,
         provider: 'openrouter',
-        model: 'openai/gpt-5.6-sol',
+        model: 'openai/gpt-6-luna',
         status: 400,
         providerCode: 'invalid_prompt'
       })
