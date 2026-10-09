@@ -94,6 +94,20 @@ describe('TopBar save chip', () => {
       screen.getByRole('status', { name: 'Saved · model unavailable' })
     ).toHaveAttribute('title', expect.stringContaining('activity log'));
   });
+  it('keeps its width to the short labels while the model prepares', () => {
+    renderTopBar({
+      saveState: 'synced',
+      signedIn: true,
+      geometryPending: true
+    });
+    const chip = screen.getByRole('status', {
+      name: 'Saved · preparing model'
+    });
+    expect(chip).toHaveTextContent(/^Saved$/);
+    const slot = chip.querySelector('.stable-label');
+    expect(slot?.getAttribute('data-reserve')).not.toContain('model');
+    expect(chip.querySelector('.spin')).not.toBeNull();
+  });
   it('is a readout that saves nothing when clicked', () => {
     const { onSave } = renderTopBar({ saveState: 'local' });
     expect(

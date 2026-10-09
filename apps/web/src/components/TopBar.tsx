@@ -144,11 +144,12 @@ const WORKSPACE_MODE_OPTIONS: ReadonlyArray<{
 const saveStateLabels = (states: readonly WorkspaceSaveState[]) =>
   states.map((state) => WORKSPACE_SAVE_STATE_PRESENTATION[state].topBarLabel);
 /** Signed in: the account round-trip. Signed out: device saves only. */
-const CLOUD_SAVE_LABEL_RESERVE = [
-  ...saveStateLabels(['saving', 'syncing', 'synced', 'offline']),
-  'Saved · preparing model',
-  'Saved · model unavailable'
-];
+const CLOUD_SAVE_LABEL_RESERVE = saveStateLabels([
+  'saving',
+  'syncing',
+  'synced',
+  'offline'
+]);
 const DEVICE_SAVE_LABEL_RESERVE = saveStateLabels(['saving', 'local']);
 // "Joining…" rather than "Connecting…": the room is joined for the opening
 // frames of every cloud project, and the longer word would either resize the
@@ -219,7 +220,16 @@ export function TopBar({
   const refocusProjectTitleRef = useRef(false);
   const fileMenuRef = useRef<HTMLDetailsElement>(null);
   const importInputRef = useRef<HTMLInputElement>(null);
-  const saveGlyph = saveGlyphFor(saveState);
+  // Model readiness rides on the glyph, not the label: "Saved · preparing
+  // model" shows after every edit, so reserving its width left a short
+  // "Saved" floating in a chip three times its size.
+  const modelPending =
+    !saveToAccount && saveState === 'synced' && geometryPending;
+  const saveGlyph: SaveGlyph = modelPending
+    ? geometryFailed
+      ? 'warning'
+      : 'busy'
+    : saveGlyphFor(saveState);
 
   useEffect(() => {
     if (editingProjectName) {
@@ -318,13 +328,14 @@ export function TopBar({
   const saveChipActs =
     saveToAccount || saveState === 'repair' || saveState === 'local-source';
   const presentation = WORKSPACE_SAVE_STATE_PRESENTATION[saveState];
-  const saveLabel = saveToAccount
+  const saveText = saveToAccount
     ? 'Save to my account'
-    : saveState === 'synced' && geometryPending
-      ? geometryFailed
-        ? 'Saved · model unavailable'
-        : 'Saved · preparing model'
-      : presentation.topBarLabel;
+    : presentation.topBarLabel;
+  // The accessible name keeps the readiness the glyph shows, and still
+  // begins with the visible label (WCAG 2.5.3).
+  const saveLabel = modelPending
+    ? `${saveText} · ${geometryFailed ? 'model unavailable' : 'preparing model'}`
+    : saveText;
   const saveTitle = `${presentation.title}${geometryPending ? (geometryFailed ? ' Exact geometry is unavailable; see the activity log.' : ' Preparing exact geometry. Face and edge edits become available when it finishes.') : ''}`;
   const saveChipContent = (
     <>
@@ -351,7 +362,7 @@ export function TopBar({
         }
         align="center"
       >
-        {saveLabel}
+        {saveText}
       </StableLabel>
     </>
   );
