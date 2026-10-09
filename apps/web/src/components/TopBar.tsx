@@ -331,10 +331,15 @@ export function TopBar({
   const saveText = saveToAccount
     ? 'Save to my account'
     : presentation.topBarLabel;
+  const modelReadiness = modelPending
+    ? geometryFailed
+      ? 'model unavailable'
+      : 'preparing model'
+    : null;
   // The accessible name keeps the readiness the glyph shows, and still
   // begins with the visible label (WCAG 2.5.3).
-  const saveLabel = modelPending
-    ? `${saveText} · ${geometryFailed ? 'model unavailable' : 'preparing model'}`
+  const saveLabel = modelReadiness
+    ? `${saveText} · ${modelReadiness}`
     : saveText;
   const saveTitle = `${presentation.title}${geometryPending ? (geometryFailed ? ' Exact geometry is unavailable; see the activity log.' : ' Preparing exact geometry. Face and edge edits become available when it finishes.') : ''}`;
   const saveChipContent = (
@@ -364,6 +369,11 @@ export function TopBar({
       >
         {saveText}
       </StableLabel>
+      {/* Live regions announce content, not a changed aria-label, so the
+          readiness stays in the content, outside the reserved width. */}
+      {modelReadiness ? (
+        <span className="visually-hidden"> · {modelReadiness}</span>
+      ) : null}
     </>
   );
 

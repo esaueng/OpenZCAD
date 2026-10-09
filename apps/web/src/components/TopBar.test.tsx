@@ -103,9 +103,11 @@ describe('TopBar save chip', () => {
     const chip = screen.getByRole('status', {
       name: 'Saved · preparing model'
     });
-    expect(chip).toHaveTextContent(/^Saved$/);
     const slot = chip.querySelector('.stable-label');
+    expect(slot).toHaveTextContent(/^Saved$/);
     expect(slot?.getAttribute('data-reserve')).not.toContain('model');
+    // Announced through the live region's content, not only its name.
+    expect(chip).toHaveTextContent('Saved · preparing model');
     expect(chip.querySelector('.spin')).not.toBeNull();
   });
   it('is a readout that saves nothing when clicked', () => {
