@@ -1,9 +1,8 @@
-import { FileArchive, LoaderCircle, ShieldCheck } from 'lucide-react';
+import { FileArchive, LoaderCircle, ShieldCheck, Upload } from 'lucide-react';
 import { useRef } from 'react';
 
 import type { ShaprPairInspection } from '../lib/shaprImportWorkerClient';
 import { useModalFocus } from '../lib/useModalFocus';
-import { StableLabel } from './StableLabel';
 
 export type ShaprImportDialogPhase = 'parsing' | 'preview' | 'applying';
 
@@ -175,9 +174,9 @@ export function ShaprImportDialog({
             disabled={phase === 'applying'}
             onClick={onCancel}
           >
-            <StableLabel reserve={['Cancel preview', 'Cancel']}>
-              {phase === 'parsing' ? 'Cancel preview' : 'Cancel'}
-            </StableLabel>
+            {/* One word in every phase: "Cancel preview" left the button
+                sized for it, so the usual "Cancel" sat in empty space. */}
+            Cancel
           </button>
           <button
             type="button"
@@ -188,7 +187,9 @@ export function ShaprImportDialog({
             <span className="icon-slot" aria-hidden="true">
               {phase === 'applying' ? (
                 <LoaderCircle size={13} className="spin" />
-              ) : null}
+              ) : (
+                <Upload size={13} />
+              )}
             </span>
             Import exact STEP + evidence
           </button>
