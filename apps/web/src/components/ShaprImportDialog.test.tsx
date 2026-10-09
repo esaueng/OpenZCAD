@@ -107,9 +107,7 @@ describe('ShaprImportDialog', () => {
     expect(
       screen.getByRole('button', { name: 'Import exact STEP + evidence' })
     ).toBeDisabled();
-    await userEvent.click(
-      screen.getByRole('button', { name: 'Cancel preview' })
-    );
+    await userEvent.click(screen.getByRole('button', { name: 'Cancel' }));
     expect(onCancel).toHaveBeenCalledOnce();
   });
 });
