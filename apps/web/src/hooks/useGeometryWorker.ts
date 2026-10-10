@@ -158,6 +158,11 @@ export interface GeometryWorkerApi {
     analysis?: EditAnalysisRequest,
     lineageDemand?: readonly BodyId[]
   ): Promise<DerivedState>;
+  /** Exact display/validation only; cannot be used as an authoritative commit. */
+  previewGeometry(
+    document: ProjectDocument,
+    options?: { signal?: AbortSignal }
+  ): Promise<GeometryReadyState>;
   /**
    * `onState` receives this request's own lifecycle states (kernel load,
    * rebuild) so a dialog can narrate progress. Aborting the `signal` rejects
@@ -276,6 +281,9 @@ export function useGeometryWorker(host: GeometryWorkerHost): GeometryWorkerApi {
     new Map<string, PendingRequest<FaceRecognitionSummary>>()
   );
   const syncRequests = useRef(new Map<string, PendingRequest<DerivedState>>());
+  const geometryPreviewRequests = useRef(
+    new Map<string, PendingRequest<GeometryReadyState>>()
+  );
   // Callers who asked to watch their own request's lifecycle states.
   const stateSubscribers = useRef(
     new Map<string, (state: GeometryWorkerState) => void>()
@@ -354,6 +362,10 @@ export function useGeometryWorker(host: GeometryWorkerHost): GeometryWorkerApi {
         request.reject(error);
       }
       syncRequests.current.clear();
+      for (const request of geometryPreviewRequests.current.values()) {
+        request.reject(error);
+      }
+      geometryPreviewRequests.current.clear();
       stateSubscribers.current.clear();
     };
 
@@ -619,6 +631,16 @@ export function useGeometryWorker(host: GeometryWorkerHost): GeometryWorkerApi {
           }
           return;
         }
+        if (message.type === 'preview-geometry') {
+          const pending = geometryPreviewRequests.current.get(
+            message.requestId
+          );
+          if (!pending) return;
+          geometryPreviewRequests.current.delete(message.requestId);
+          if (message.ok) pending.resolve(message.geometry);
+          else pending.reject(new Error(message.error));
+          return;
+        }
         if (message.type === 'export') {
           const pending = exportRequests.current.get(message.requestId);
           if (!pending) {
@@ -877,6 +899,40 @@ export function useGeometryWorker(host: GeometryWorkerHost): GeometryWorkerApi {
       return posted.ok
         ? posted.promise
         : Promise.reject(new Error('Geometry worker unavailable.'));
+    },
+    previewGeometry(document, options) {
+      if (options?.signal?.aborted)
+        return Promise.reject(abortError('Preview cancelled.'));
+      const worker = workerRef.current;
+      if (!worker)
+        return Promise.reject(new Error('Geometry worker unavailable.'));
+      const requestId = crypto.randomUUID();
+      return new Promise((resolve, reject) => {
+        const onAbort = () => {
+          if (!geometryPreviewRequests.current.delete(requestId)) return;
+          workerRef.current?.postMessage({ type: 'cancel', requestId });
+          reject(abortError('Preview cancelled.'));
+        };
+        const settle = () =>
+          options?.signal?.removeEventListener('abort', onAbort);
+        geometryPreviewRequests.current.set(requestId, {
+          resolve: (value) => {
+            settle();
+            resolve(value);
+          },
+          reject: (error) => {
+            settle();
+            reject(error);
+          }
+        });
+        options?.signal?.addEventListener('abort', onAbort, { once: true });
+        armedRef.current = true;
+        worker.postMessage({
+          type: 'preview-geometry',
+          requestId,
+          document: documentForRebuild(document)
+        });
+      });
     },
     exportModel(format, document, bodyIds, options) {
       const worker = workerRef.current;

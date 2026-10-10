@@ -1,7 +1,9 @@
-import { describe, expect, it } from 'vitest';
+import { describe, expect, it, vi } from 'vitest';
+import { readFileSync } from 'node:fs';
 import {
   addPrimitiveFeature,
   createProjectDocument,
+  importStepBody,
   listFeaturesInOrder
 } from '@openzcad/document-core';
 import {
@@ -28,6 +30,155 @@ function boxes(count = 1) {
 }
 
 describe('validated geometry before analysis', () => {
+  it.each([
+    ['e-analytic-fillet-plate.step', true],
+    ['e-nurbs-fillet-plate.step', false]
+  ] as const)(
+    'previews %s without recognition and preserves the fresh full verdict',
+    async (filename, supported) => {
+      const adapter = await createExactKernelAdapter();
+      const fresh = await createExactKernelAdapter();
+      const imported = importStepBody(
+        createProjectDocument('Filleted plate', toUserId('stage_test')),
+        {
+          name: 'Plate',
+          sourceName: filename,
+          artifactId: 'artifact_preview_plate',
+          stepText: readFileSync(
+            new URL(
+              `../../../test/parity/corpus/${filename}`,
+              import.meta.url
+            ),
+            'utf8'
+          )
+        }
+      );
+      try {
+        const before = await adapter.syncDocument(imported.document);
+        expect(before.warnings).toEqual([]);
+        const faces =
+          before.bodyRepresentations[imported.bodyId]!.topology!.faces;
+        expect(
+          faces.some((face) => face.geometry?.surfaceType === 'bspline')
+        ).toBe(!supported);
+        const top = faces.find(
+          (face) =>
+            face.geometry?.surfaceType === 'plane' &&
+            face.geometry.normal!.z > 0.99
+        )!;
+        expect(top).toBeDefined();
+        const command = commandFactories.directEditBody({
+          name: 'Push face',
+          targetBodyId: imported.bodyId,
+          operation: {
+            kind: 'offset-face',
+            faceHash: top.hash,
+            ...(top.reference ? { faceReference: top.reference } : {}),
+            sourceSurfaceType: 'plane',
+            sourceArea: top.geometry!.area,
+            sourceCenter: top.geometry!.center,
+            sourceNormal: top.geometry!.normal!,
+            offset: 1
+          }
+        });
+        const candidate = command.apply(imported.document);
+        const recognition = vi.spyOn(
+          RemusKernel.prototype,
+          'recognizeFeatures'
+        );
+        try {
+          const geometry = await adapter.previewGeometry(candidate);
+          expect(geometry.warnings).toEqual(
+            supported
+              ? []
+              : [
+                  'Feature "Push face": offset: move-face does not support face Id(7) (nurbs): face is adjacent to selected move boundary edge 8'
+                ]
+          );
+          expect(recognition).not.toHaveBeenCalled();
+          const previewBody = geometry.bodyRepresentations[imported.bodyId]!;
+          expect('volume' in previewBody).toBe(false);
+          const full = await adapter.syncDocument(candidate);
+          if (supported) expect(recognition).toHaveBeenCalled();
+          const independent = await fresh.syncDocument(candidate);
+          expect(full.warnings).toEqual(geometry.warnings);
+          expect(independent.warnings).toEqual(geometry.warnings);
+          const result = full.bodyRepresentations[imported.bodyId]!;
+          const reference = independent.bodyRepresentations[imported.bodyId]!;
+          expect(previewBody.bbox).toEqual(result.bbox);
+          expect(previewBody.mesh).toEqual(result.mesh);
+          expect(result.volume).toBe(reference.volume);
+          expect(result.bbox).toEqual(reference.bbox);
+          expect(result.mesh).toEqual(reference.mesh);
+        } finally {
+          recognition.mockRestore();
+        }
+      } finally {
+        adapter.dispose();
+        fresh.dispose();
+      }
+    },
+    120_000
+  );
+  it('finishes a drag preview without volume analysis and still completes authoritative release', async () => {
+    const adapter = await createExactKernelAdapter();
+    const doc = boxes();
+    const volume = vi.spyOn(RemusKernel.prototype, 'volume');
+    try {
+      const geometry = await adapter.previewGeometry(doc);
+      const body = geometry.bodyRepresentations[doc.bodyOrder[0]!]!;
+      expect(geometry.analysis).toBe('pending');
+      expect(geometry.warnings).toEqual([]);
+      expect('volume' in body).toBe(false);
+      expect('massProperties' in body).toBe(false);
+      expect(volume).not.toHaveBeenCalled();
+      expect(adapter.currentMassPropertiesEpoch()).toBeNull();
+      // A preview observer cannot change retained exact geometry or a release.
+      body.mesh.vertices.fill(999);
+      body.topology!.faces.length = 0;
+      const complete = await adapter.syncDocument(doc);
+      const committed = complete.bodyRepresentations[doc.bodyOrder[0]!]!;
+      expect(volume).toHaveBeenCalled();
+      expect(committed.volume).toBe(480);
+      expect(committed.topology!.faces).toHaveLength(6);
+      expect(committed.mesh.vertices.every((value) => value !== 999)).toBe(
+        true
+      );
+      expect(adapter.currentMassPropertiesEpoch()).not.toBeNull();
+    } finally {
+      volume.mockRestore();
+      adapter.dispose();
+    }
+  });
+
+  it('retains validation warnings in a geometry-only preview and cancels stale work', async () => {
+    const adapter = await createExactKernelAdapter();
+    const doc = boxes();
+    const validation = vi
+      .spyOn(RemusKernel.prototype, 'validateSolidRelaxed')
+      .mockReturnValue(1);
+    try {
+      const geometry = await adapter.previewGeometry(doc);
+      expect(geometry.warnings).toEqual([
+        'Body "Box 0 Body" failed exact B-rep validation.'
+      ]);
+      expect('volume' in geometry.bodyRepresentations[doc.bodyOrder[0]!]!).toBe(
+        false
+      );
+      await expect(
+        adapter.previewGeometry(doc, {
+          cancellation: { isCancelled: () => true }
+        })
+      ).rejects.toSatisfy(isBuildCancelled);
+      expect(adapter.currentMassPropertiesEpoch()).toBeNull();
+      const complete = await adapter.syncDocument(doc);
+      expect(geometry.warnings).toEqual(complete.warnings);
+      expect(geometry.featureWarnings).toEqual(complete.featureWarnings);
+    } finally {
+      validation.mockRestore();
+      adapter.dispose();
+    }
+  });
   it('owns current warning attribution, including intentional suppression', async () => {
     const manager = new CommandManager(boxes(2));
     const feature = listFeaturesInOrder(manager.document)[0]!;

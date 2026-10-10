@@ -35,6 +35,21 @@ const renderedWorldBounds = (page: Page) =>
  */
 async function armChamferedTopCapOffset(page: Page) {
   await stubApi(page);
+  await page.addInitScript(() => {
+    const scope = window as typeof window & { facePreviewRequests?: string[] };
+    scope.facePreviewRequests = [];
+    const send = Worker.prototype.postMessage;
+    Worker.prototype.postMessage = function (message, transfer) {
+      const type = (message as { type?: string } | null)?.type;
+      if (
+        type === 'preview-geometry' ||
+        (type === 'sync' &&
+          typeof (message as { requestId?: unknown }).requestId === 'string')
+      )
+        scope.facePreviewRequests!.push(type);
+      return send.call(this, message, transfer as StructuredSerializeOptions);
+    };
+  });
   await page.setViewportSize({ width: 1440, height: 1000 });
   const consoleErrors: string[] = [];
   page.on('console', (message) => {
@@ -139,7 +154,9 @@ test('keeps generic face geometry unchanged while the exact offset rebuild is pe
     Worker.prototype.postMessage = function (message, transfer) {
       if (
         scope.holdOffsetPreview &&
-        (message as { type?: string } | null)?.type === 'sync'
+        ['sync', 'preview-geometry'].includes(
+          (message as { type?: string } | null)?.type ?? ''
+        )
       ) {
         // Keep the exact worker genuinely pending for this cancel-path test.
         // A short timer races on slower CI runners: the exact result can land
@@ -187,6 +204,17 @@ test('streams exact planar previews and restores invalid or canceled offsets', a
   test.setTimeout(process.env.CI ? 240_000 : 120_000);
   const { canvas, chip, readAxisLength, handle, start, consoleErrors } =
     await armChamferedTopCapOffset(page);
+  const requests = () =>
+    page.evaluate(() => {
+      const messages = (
+        window as typeof window & { facePreviewRequests: string[] }
+      ).facePreviewRequests;
+      return {
+        preview: messages.filter((type) => type === 'preview-geometry').length,
+        full: messages.filter((type) => type === 'sync').length
+      };
+    });
+  const beforeDrag = await requests();
   await page.mouse.move(start.x, start.y);
   await page.mouse.down();
   await page.mouse.move(
@@ -197,6 +225,9 @@ test('streams exact planar previews and restores invalid or canceled offsets', a
   await expect
     .poll(readAxisLength, { timeout: PREVIEW_BUDGET_MS })
     .toBeCloseTo(30, 4);
+  const duringDrag = await requests();
+  expect(duringDrag.preview).toBeGreaterThan(beforeDrag.preview);
+  expect(duringDrag.full).toBe(beforeDrag.full);
   // A second pointer value after the first exact frame must replace it rather
   // than leaving the coalescer stuck on the first sample. Offset-face keeps
   // previewing after a slow frame, but the chip reports the lag as deferred
@@ -300,6 +331,7 @@ test('streams exact planar previews and restores invalid or canceled offsets', a
     keypad.getByRole('button', { name: 'Apply total' })
   ).toBeEnabled();
   await expect(page.getByRole('button', { name: 'History 2' })).toBeVisible();
+  const beforeApply = await requests();
   await keypad.getByRole('button', { name: 'Apply total' }).click();
   await expect(page.getByRole('contentinfo')).toContainText(
     'Cylinder height set to 35.7 mm.'
@@ -307,6 +339,7 @@ test('streams exact planar previews and restores invalid or canceled offsets', a
   await expect
     .poll(readAxisLength, { timeout: PREVIEW_BUDGET_MS })
     .toBeCloseTo(35.7, 4);
+  expect((await requests()).full).toBeGreaterThan(beforeApply.full);
   expect(consoleErrors).toEqual([]);
 });
 

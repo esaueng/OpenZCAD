@@ -1494,13 +1494,11 @@ interface RegionExtrudePreviewCandidate {
 }
 
 /**
- * The last exact offset preview that passed, kept so releasing the handle at
- * that value commits the same command with the same rebuild instead of
- * waiting for — and possibly being refused by — a second one.
+ * The last exact offset candidate that passed display validation. Release
+ * preserves its feature ids and completes its analysis before committing.
  */
 interface ReusableOffsetPreview {
   candidate: OffsetPreviewCandidate;
-  derived: ProjectDocument['derived'];
 }
 
 interface OffsetPreviewResult {
@@ -2283,6 +2281,13 @@ export function App() {
     [localHiddenBodyIds, parameterHiddenBodyIds]
   );
   const [previewDoc, setPreviewDoc] = useState<ProjectDocument | null>(null);
+  const [faceGeometryPreview, setFaceGeometryPreview] = useState<{
+    document: ProjectDocument;
+    baseProjectId: ProjectDocument['projectId'];
+    baseVersion: number;
+    selectionKey: string;
+    geometry: GeometryReadyState;
+  } | null>(null);
   const [saveState, setSaveState] = useState<WorkspaceSaveState>('saving');
   const saveStateRef = useRef(saveState);
   saveStateRef.current = saveState;
@@ -2922,31 +2927,36 @@ export function App() {
   const previewPresentationMs = useRef(0);
   const reusableRadiusPreview = useRef<{
     candidate: RadiusPreviewCandidate;
-    derived: ProjectDocument['derived'];
   } | null>(null);
-  /**
-   * Raw exact rebuilds of the direct-edit preview frames, so a release at a
-   * value still rebuilding commits from that rebuild; and, for offset and
-   * radius frames, per-body timings, so a gesture on a body already known to
-   * be slow rests before previewing instead of queuing a frame ahead of its
-   * own release.
-   */
+  /** Full blend/extrude preview results may still be reused on release. */
   const previewRebuilds = useRef(
     new PreviewRebuilds<ProjectDocument['derived']>()
   ).current;
+  const facePreviewTimings = useRef(new Map<string, number[]>());
   function previewRebuildKey(projectId: string, bodyId: string) {
     return `${projectId}:${bodyId}`;
   }
-  function startFacePreviewRebuild(candidate: {
-    document: ProjectDocument;
-    bodyId: BodyId;
-    baseProjectId: ProjectDocument['projectId'];
-  }) {
-    return previewRebuilds.start(
-      candidate,
-      () => geometry.syncOnce(candidate.document),
-      previewRebuildKey(candidate.baseProjectId, candidate.bodyId)
-    );
+  async function startFaceGeometryPreview(
+    candidate: {
+      document: ProjectDocument;
+      bodyId: BodyId;
+      baseProjectId: ProjectDocument['projectId'];
+    },
+    signal: AbortSignal
+  ) {
+    const started = performance.now();
+    const geometryReady = await geometry.previewGeometry(candidate.document, {
+      signal
+    });
+    if (!signal.aborted) {
+      const key = previewRebuildKey(candidate.baseProjectId, candidate.bodyId);
+      const recent = facePreviewTimings.current.get(key) ?? [];
+      facePreviewTimings.current.set(
+        key,
+        [...recent, performance.now() - started].slice(-3)
+      );
+    }
+    return geometryReady;
   }
   /**
    * What the next offset or radius frame on the armed body should cost. Above
@@ -2973,10 +2983,12 @@ export function App() {
       return undefined;
     }
     const bodyId = current.target.bodyId as BodyId;
-    return previewRebuilds.expectedMs(
-      previewRebuildKey(base.projectId, bodyId),
-      () => predictedPreviewMs(base.derived.bodyRepresentations[bodyId])
+    const recent = facePreviewTimings.current.get(
+      previewRebuildKey(base.projectId, bodyId)
     );
+    return recent?.length
+      ? Math.min(...recent)
+      : predictedPreviewMs(base.derived.bodyRepresentations[bodyId]);
   }
   function previewBaseIsCurrent(candidate: {
     baseProjectId: ProjectDocument['projectId'];
@@ -3000,7 +3012,7 @@ export function App() {
     );
   }
   const cylinderRadiusPreview = useRef(
-    new LivePreview<RadiusPreviewCandidate, ProjectDocument['derived']>({
+    new LivePreview<RadiusPreviewCandidate, GeometryReadyState>({
       build: (radius) => {
         const plan = buildCylinderRadiusCommand(radius);
         const base = managerRef.current?.document;
@@ -3025,8 +3037,8 @@ export function App() {
             : {})
         };
       },
-      derive: async (candidate) => {
-        const derived = await startFacePreviewRebuild(candidate);
+      derive: async (candidate, signal) => {
+        const derived = await startFaceGeometryPreview(candidate, signal);
         const rejection = offsetPreviewRejection({
           ...candidate,
           derived,
@@ -3039,11 +3051,16 @@ export function App() {
       publish: (preview) => {
         if (preview) recoverPreviewInteraction();
         reusableRadiusPreview.current = preview
-          ? { candidate: preview.document, derived: preview.derived }
+          ? { candidate: preview.document }
           : null;
-        setPreviewDoc(
+        setPreviewDoc(null);
+        setFaceGeometryPreview(
           preview
-            ? { ...preview.document.document, derived: preview.derived }
+            ? {
+                ...preview.document,
+                document: preview.document.document,
+                geometry: preview.derived
+              }
             : null
         );
       },
@@ -3053,6 +3070,7 @@ export function App() {
           value
         ),
       publishIntermediate: true,
+      cancelSuperseded: true,
       minIntervalMs: 100,
       presentationTimeMs: () => previewPresentationMs.current,
       continueAfterSlow: true,
@@ -3062,12 +3080,12 @@ export function App() {
   ).current;
 
   /**
-   * Exact planar push/pull preview. The document wrapper carries validation
-   * context alongside the candidate, but only its rebuilt ProjectDocument is
-   * ever published into previewDoc; manager.document is never touched.
+   * Exact planar push/pull preview. Validation and display finish while volume
+   * and recognition wait for release. Disposable geometry has its own state;
+   * manager.document and complete derived results remain authoritative.
    */
   const offsetPreview = useRef(
-    new LivePreview<OffsetPreviewCandidate, OffsetPreviewResult>({
+    new LivePreview<OffsetPreviewCandidate, GeometryReadyState>({
       build: (offset) => {
         const base = managerRef.current?.document;
         const plan = base ? buildOffsetEditPlan(offset, undefined, base) : null;
@@ -3093,11 +3111,11 @@ export function App() {
             }
           : null;
       },
-      derive: async (candidate) => {
+      derive: async (candidate, signal) => {
         if (candidate.preflightRejection) {
           throw new Error(candidate.preflightRejection);
         }
-        const derived = await startFacePreviewRebuild(candidate);
+        const derived = await startFaceGeometryPreview(candidate, signal);
         const live = managerRef.current;
         const documentMoved =
           !live ||
@@ -3117,34 +3135,27 @@ export function App() {
             withFaceTravelHint(rejection.message, candidate.travelHint)
           );
         }
-        return { derived, rejection };
+        return derived;
       },
       isCurrent: previewSelectionIsCurrent,
       publishIntermediate: true,
+      cancelSuperseded: true,
       minIntervalMs: 100,
       presentationTimeMs: () => previewPresentationMs.current,
       publish: (preview) => {
         if (!preview) {
           reusableOffsetPreviewRef.current = null;
           setPreviewDoc(null);
+          setFaceGeometryPreview(null);
           setRenderedOffsetPreview(null);
           return;
         }
-        if (preview.derived.rejection) {
-          reusableOffsetPreviewRef.current = null;
-          reportPreviewFailure(
-            preview.derived.rejection.message,
-            preview.document.offset
-          );
-          return;
-        }
-        reusableOffsetPreviewRef.current = {
-          candidate: preview.document,
-          derived: preview.derived.derived
-        };
-        setPreviewDoc({
-          ...preview.document.document,
-          derived: preview.derived.derived
+        reusableOffsetPreviewRef.current = { candidate: preview.document };
+        setPreviewDoc(null);
+        setFaceGeometryPreview({
+          ...preview.document,
+          document: preview.document.document,
+          geometry: preview.derived
         });
         setRenderedOffsetPreview(preview.document.offset);
         setLastValidPreview(preview.document.offset);
@@ -5023,12 +5034,22 @@ export function App() {
     () => doc?.derived.bodyRepresentations ?? {},
     [doc?.derived.bodyRepresentations]
   );
+  const currentFaceGeometryPreview =
+    !previewDoc &&
+    faceGeometryPreview &&
+    faceGeometryPreview.baseProjectId === doc?.projectId &&
+    faceGeometryPreview.baseVersion === doc?.version &&
+    interaction.mode === 'face' &&
+    faceGeometryPreview.selectionKey ===
+      `${interaction.op}:${interaction.target.bodyId}:${interaction.target.topologyId}:${Boolean(interaction.target.localFaceOffset)}`
+      ? faceGeometryPreview
+      : null;
   const renderedRepresentations =
     previewDoc?.derived.bodyRepresentations ?? representations;
   const { autoFrame, recordLocalCommit, clearAutoFrame } = useLocalAutoFrame(
     doc,
     exactGeometryReady,
-    previewDoc !== null
+    previewDoc !== null || currentFaceGeometryPreview !== null
   );
   /**
    * Exact regeneration may assign a new topology ID to an edited face. Keep
@@ -5037,7 +5058,7 @@ export function App() {
    * fixed axis for cylinder radii.
    */
   const renderedSelectedTopology = useMemo<TopologySelection | null>(() => {
-    if (selectedTopology) {
+    if (selectedTopology && !currentFaceGeometryPreview) {
       const resolved = resolveSelectionTopology(
         renderedRepresentations[selectedTopology.bodyId],
         selectedTopology
@@ -5045,7 +5066,10 @@ export function App() {
       if (resolved) return resolved;
     }
     if (selectedTopology?.kind !== 'face') return null;
-    const body = renderedRepresentations[selectedTopology.bodyId];
+    const body =
+      currentFaceGeometryPreview?.geometry.bodyRepresentations[
+        selectedTopology.bodyId
+      ] ?? renderedRepresentations[selectedTopology.bodyId];
     const faces = body?.topology?.faces ?? [];
     if (
       interaction.mode === 'face' &&
@@ -5166,6 +5190,7 @@ export function App() {
     representations,
     renderedOffsetPreview,
     renderedRepresentations,
+    currentFaceGeometryPreview,
     selectedTopology
   ]);
   const normalToFaceTarget = useMemo(() => {
@@ -5218,6 +5243,7 @@ export function App() {
   // viewport shows previewDoc's bodies, so showing the live document's warnings
   // would hide exactly the problems the preview exists to reveal.
   const warnings =
+    currentFaceGeometryPreview?.geometry.warnings ??
     currentGeometrySnapshot?.warnings ??
     (previewDoc ?? doc)?.derived.warnings ??
     [];
@@ -5225,11 +5251,19 @@ export function App() {
     () =>
       presentedDiagnostics(
         warnings,
-        currentGeometrySnapshot
-          ? currentGeometrySnapshot.featureWarnings
-          : (previewDoc ?? doc)?.derived.featureWarnings
+        currentFaceGeometryPreview
+          ? currentFaceGeometryPreview.geometry.featureWarnings
+          : currentGeometrySnapshot
+            ? currentGeometrySnapshot.featureWarnings
+            : (previewDoc ?? doc)?.derived.featureWarnings
       ),
-    [warnings, currentGeometrySnapshot, previewDoc, doc]
+    [
+      warnings,
+      currentGeometrySnapshot,
+      currentFaceGeometryPreview,
+      previewDoc,
+      doc
+    ]
   );
 
   // Keyed on the derived body table, not the whole document: commands clone
@@ -5318,15 +5352,23 @@ export function App() {
   );
   const viewerBodies = useMemo<GeometryBodyRepresentation[]>(
     () =>
-      (currentGeometrySnapshot
-        ? Object.values(currentGeometrySnapshot.bodyRepresentations)
-        : completedViewerBodies
+      (currentFaceGeometryPreview
+        ? Object.values(currentFaceGeometryPreview.geometry.bodyRepresentations)
+        : currentGeometrySnapshot
+          ? Object.values(currentGeometrySnapshot.bodyRepresentations)
+          : completedViewerBodies
       ).filter((body) => !body.consumed && !hiddenBodyIds.has(body.bodyId)),
-    [completedViewerBodies, hiddenBodyIds, currentGeometrySnapshot]
+    [
+      completedViewerBodies,
+      hiddenBodyIds,
+      currentGeometrySnapshot,
+      currentFaceGeometryPreview
+    ]
   );
   const viewportGeometry = useMemo<ViewportGeometry<ParameterPreviewBody>>(
     () => ({
-      document: previewDoc ?? doc ?? null,
+      document:
+        currentFaceGeometryPreview?.document ?? previewDoc ?? doc ?? null,
       bodies: viewerBodies,
       // A parameter preview stands in for its own result body only; hidden
       // bodies stay hidden and every other part keeps its exact geometry.
@@ -5347,6 +5389,7 @@ export function App() {
       hiddenBodyIds,
       parameterPreview,
       currentGeometrySnapshot,
+      currentFaceGeometryPreview,
       bodiesDrawnElsewhere
     ]
   );
@@ -5567,6 +5610,7 @@ export function App() {
     if (
       !doc ||
       currentGeometrySnapshot !== null ||
+      currentFaceGeometryPreview !== null ||
       (tweakMode && parameterModelError)
     ) {
       return [];
@@ -5593,7 +5637,8 @@ export function App() {
     parameterHiddenBodyIds,
     tweakMode,
     parameterModelError,
-    currentGeometrySnapshot
+    currentGeometrySnapshot,
+    currentFaceGeometryPreview
   ]);
 
   /**
@@ -5753,7 +5798,8 @@ export function App() {
     doc,
     modelingLocked,
     exactGeometryReady,
-    geometryPending: currentGeometrySnapshot !== null,
+    geometryPending:
+      currentGeometrySnapshot !== null || currentFaceGeometryPreview !== null,
     representations,
     renderedRepresentations,
     viewerBodies: completedViewerBodies,
@@ -14797,20 +14843,20 @@ export function App() {
       setStatus('Radius is too small to form valid geometry at this scale.');
       return false;
     }
-    // A passing preview at this radius, or one still rebuilding it, is the
-    // commit's rebuild: see handleOffsetCommit.
-    const reuse =
+    const candidate =
       exact === undefined
-        ? previewRebuilds.reusable(
-            reusableRadiusPreview.current,
-            cylinderRadiusPreview.running?.document,
-            (candidate) =>
-              candidate.radius === radius &&
-              previewSelectionIsCurrent(candidate)
-          )
+        ? cylinderRadiusPreview.running?.document?.radius === radius
+          ? cylinderRadiusPreview.running.document
+          : reusableRadiusPreview.current?.candidate
+        : undefined;
+    const reuse =
+      candidate &&
+      candidate.radius === radius &&
+      previewSelectionIsCurrent(candidate)
+        ? candidate
         : null;
     void executeValidatedDirectEdit(
-      reuse?.candidate.command ?? plan.command,
+      reuse?.command ?? plan.command,
       current.target.bodyId as BodyId,
       `Adjusted cylinder ${cylinderDimensionMode === 'diameter' ? 'diameter' : 'radius'} to ${cylinderDimensionMode === 'diameter' ? 'Ø' : 'R'} ${formatNumber(cylinderDimensionMode === 'diameter' ? radius * 2 : radius)} ${doc?.units ?? ''}.`,
       radius,
@@ -14820,13 +14866,6 @@ export function App() {
             managerRef.current!.document,
             plan.sourceFeatureId
           )
-        : undefined,
-      reuse
-        ? {
-            baseProjectId: reuse.candidate.baseProjectId,
-            baseVersion: reuse.candidate.baseVersion,
-            derived: reuse.derived
-          }
         : undefined
     );
     return true;
@@ -15617,6 +15656,7 @@ export function App() {
     offsetPreviewValueRef.current = null;
     reusableOffsetPreviewRef.current = null;
     reusableRadiusPreview.current = null;
+    setFaceGeometryPreview(null);
     setRenderedOffsetPreview(null);
     setLastValidPreview(null);
     setPreviewBlendFaces([]);
@@ -15865,41 +15905,29 @@ export function App() {
       reportPreviewFailure(plan.preflightRejection, offset);
       return false;
     }
-    // Releasing at the value the last passing preview showed commits that
-    // preview's own command and rebuild. A fresh plan would carry new feature
-    // ids, so it could neither hit the worker cache nor be reused here. A
-    // release at the value whose preview is still rebuilding commits from
-    // that rebuild too: the worker cannot drop it, so queuing the same edit
-    // behind it would cost a second full rebuild for the same answer.
-    const live = managerRef.current?.document;
+    // Keep the accepted candidate's feature ids, but analysis is still absent:
+    // release always asks for a full authoritative rebuild before committing.
+    const candidate =
+      exact === undefined
+        ? offsetPreview.running?.document?.offset === offset
+          ? offsetPreview.running.document
+          : reusableOffsetPreviewRef.current?.candidate
+        : undefined;
     const reuse =
-      exact === undefined && live !== undefined
-        ? previewRebuilds.reusable(
-            reusableOffsetPreviewRef.current,
-            offsetPreview.running?.document,
-            (candidate) =>
-              candidate.offset === offset &&
-              candidate.baseProjectId === live.projectId &&
-              candidate.baseVersion === live.version &&
-              previewSelectionIsCurrent(candidate)
-          )
+      candidate &&
+      candidate.offset === offset &&
+      previewSelectionIsCurrent(candidate)
+        ? candidate
         : null;
     offsetPreview.stop();
     offsetPreviewValueRef.current = null;
     void executeValidatedDirectEdit(
-      reuse ? reuse.candidate.command : plan.command,
-      reuse ? reuse.candidate.bodyId : plan.bodyId,
-      reuse ? reuse.candidate.successMessage : plan.successMessage,
+      reuse ? reuse.command : plan.command,
+      reuse ? reuse.bodyId : plan.bodyId,
+      reuse ? reuse.successMessage : plan.successMessage,
       offset,
       undefined,
-      reuse ? reuse.candidate.validationTargets : plan.validationTargets,
-      reuse
-        ? {
-            baseProjectId: reuse.candidate.baseProjectId,
-            baseVersion: reuse.candidate.baseVersion,
-            derived: reuse.derived
-          }
-        : undefined
+      reuse ? reuse.validationTargets : plan.validationTargets
     );
     return true;
   }
@@ -17710,7 +17738,9 @@ export function App() {
       measurements={measurements}
       formattedMeasurements={formattedMeasurements}
       enabled={measuring}
-      geometryPending={currentGeometrySnapshot !== null}
+      geometryPending={
+        currentGeometrySnapshot !== null || currentFaceGeometryPreview !== null
+      }
       activeMeasurementId={activeMeasurementId}
       mode={measurementMode}
       draftTargetLabel={measurementDraft?.label ?? null}
@@ -18838,7 +18868,9 @@ export function App() {
       parameterMinimums={doc ? parameterMinimums(doc) : {}}
       features={features}
       representations={representations}
-      geometryPending={Boolean(currentGeometrySnapshot)}
+      geometryPending={Boolean(
+        currentGeometrySnapshot || currentFaceGeometryPreview
+      )}
       selectedFeatureNodeId={selectedFeatureNodeId}
       hiddenBodyIds={hiddenBodyIds}
       hiddenSketchIds={hiddenSketchIds}
@@ -19244,7 +19276,11 @@ export function App() {
             }
             previewFaceHighlights={previewBlendFaces}
             selectedEdges={
-              parameterPreview || currentGeometrySnapshot ? [] : selectedEdges
+              parameterPreview ||
+              currentGeometrySnapshot ||
+              currentFaceGeometryPreview
+                ? []
+                : selectedEdges
             }
             pickListEnabled={appSettings.experiments.directManipulation}
             settings={viewerSettings}
@@ -20054,13 +20090,25 @@ export function App() {
                 onValidateSelection={validateSelectionEdit}
                 selectedSketch={selectedSketch}
                 selectedSketchObject={selectedSketchObject}
-                selectedBody={currentGeometrySnapshot ? null : selectedBody}
-                selectedTopology={
-                  currentGeometrySnapshot ? null : renderedSelectedTopology
+                selectedBody={
+                  currentGeometrySnapshot || currentFaceGeometryPreview
+                    ? null
+                    : selectedBody
                 }
-                selectedEdges={currentGeometrySnapshot ? [] : selectedEdges}
+                selectedTopology={
+                  currentGeometrySnapshot || currentFaceGeometryPreview
+                    ? null
+                    : renderedSelectedTopology
+                }
+                selectedEdges={
+                  currentGeometrySnapshot || currentFaceGeometryPreview
+                    ? []
+                    : selectedEdges
+                }
                 edgeModifierBody={
-                  currentGeometrySnapshot ? null : edgeModifierBody
+                  currentGeometrySnapshot || currentFaceGeometryPreview
+                    ? null
+                    : edgeModifierBody
                 }
                 bodyRepresentations={representations}
                 scope={parameterScope.scope}

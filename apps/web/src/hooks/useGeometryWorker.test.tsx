@@ -210,6 +210,86 @@ describe('useGeometryWorker', () => {
     expect(host.onDerived).not.toHaveBeenCalled();
   });
 
+  it('routes disposable geometry previews to their caller without completing live analysis', async () => {
+    installWorker();
+    const document = createProjectDocument('Drag geometry', toUserId('user'));
+    const host = {
+      manager: () => null,
+      onDerived: vi.fn(),
+      onGeometryReady: vi.fn(),
+      onError: vi.fn()
+    };
+    const { result } = renderHook(() => useGeometryWorker(host));
+    const worker = FakeWorker.instances[0]!;
+    const pending = result.current.previewGeometry(document);
+    const request = worker.postMessage.mock.calls.at(-1)![0] as {
+      requestId: string;
+    };
+    expect(request).toMatchObject({ type: 'preview-geometry', document });
+    const geometry = {
+      bodyRepresentations: {},
+      warnings: [],
+      updatedAt: document.derived.updatedAt,
+      analysis: 'pending' as const
+    };
+    act(() =>
+      worker.emit({
+        type: 'preview-geometry',
+        ok: true,
+        requestId: request.requestId,
+        geometry
+      })
+    );
+    await expect(pending).resolves.toEqual(geometry);
+    expect(host.onDerived).not.toHaveBeenCalled();
+    expect(host.onGeometryReady).not.toHaveBeenCalled();
+    expect(result.current.isReadyFor(document)).toBe(false);
+  });
+
+  it('cancels obsolete geometry previews and discards their late results', async () => {
+    installWorker();
+    const document = createProjectDocument('Cancelled drag', toUserId('user'));
+    const host = {
+      manager: () => null,
+      onDerived: vi.fn(),
+      onGeometryReady: vi.fn(),
+      onError: vi.fn()
+    };
+    const { result } = renderHook(() => useGeometryWorker(host));
+    const worker = FakeWorker.instances[0]!;
+    const controller = new AbortController();
+    const pending = result.current.previewGeometry(document, {
+      signal: controller.signal
+    });
+    const rejected = expect(pending).rejects.toMatchObject({
+      name: 'AbortError'
+    });
+    const request = worker.postMessage.mock.calls.at(-1)![0] as {
+      requestId: string;
+    };
+    act(() => controller.abort());
+    await rejected;
+    expect(worker.postMessage).toHaveBeenLastCalledWith({
+      type: 'cancel',
+      requestId: request.requestId
+    });
+    act(() =>
+      worker.emit({
+        type: 'preview-geometry',
+        ok: true,
+        requestId: request.requestId,
+        geometry: {
+          bodyRepresentations: {},
+          warnings: [],
+          updatedAt: document.derived.updatedAt,
+          analysis: 'pending'
+        }
+      })
+    );
+    expect(host.onDerived).not.toHaveBeenCalled();
+    expect(host.onGeometryReady).not.toHaveBeenCalled();
+  });
+
   it('publishes accepted geometry only for the current revision without completing quantities', () => {
     installWorker();
     const document = createProjectDocument(

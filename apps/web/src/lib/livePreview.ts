@@ -30,7 +30,9 @@ export interface LivePreviewOptions<TDocument, TDerived> {
   /** Builds the document to preview, or null when the value cannot apply. */
   build(value: number): TDocument | null;
   /** Rebuilds derived geometry. Rejection just skips the frame. */
-  derive(document: TDocument): Promise<TDerived>;
+  derive(document: TDocument, signal: AbortSignal): Promise<TDerived>;
+  /** Cancel obsolete worker frames instead of completing their analysis. */
+  cancelSuperseded?: boolean;
   /** Publishes a rebuilt preview, or null to clear it. The pair travels
    * together because a document without its derived geometry is not a
    * preview anyone can render. */
@@ -110,6 +112,7 @@ export class LivePreview<TDocument, TDerived> {
     requestedAt: number;
   } | null = null;
   private runningPreview: RunningPreview<TDocument, TDerived> | null = null;
+  private abort: AbortController | null = null;
   private slow = false;
   /** Predicted slow: hold rebuilds until the hand rests (`slowSettleMs`). */
   private settle = false;
@@ -180,6 +183,7 @@ export class LivePreview<TDocument, TDerived> {
     }
     this.lastValue = value;
     this.pending = { value, token: ++this.token, requestedAt: this.now() };
+    if (this.options.cancelSuperseded) this.abort?.abort();
     this.active = true;
     if (!this.inFlight) {
       this.schedule();
@@ -227,11 +231,14 @@ export class LivePreview<TDocument, TDerived> {
     try {
       document = this.options.build(request.value);
       if (!document) return;
-      const result = this.options.derive(document);
+      const abort = new AbortController();
+      this.abort = abort;
+      const result = this.options.derive(document, abort.signal);
       this.runningPreview = { value: request.value, document, result };
       const derived = await result;
       rebuilt = true;
       if (
+        !abort.signal.aborted &&
         current() &&
         (this.options.publishIntermediate || request.token === this.token)
       ) {
@@ -244,9 +251,10 @@ export class LivePreview<TDocument, TDerived> {
         this.options.onFailure?.({ error, value: request.value });
       }
     } finally {
+      const aborted = this.abort?.signal.aborted ?? false;
       this.runningPreview = null;
+      this.abort = null;
       if (current()) {
-        const elapsed = this.now() - started;
         const interval = this.options.minIntervalMs ?? 0;
         // Leave a bounded presentation/input yield, not another rebuild-sized
         // pause. Exact work runs in a worker: doubling its elapsed time made
@@ -259,13 +267,19 @@ export class LivePreview<TDocument, TDerived> {
           interval > 0
             ? Math.max(started + interval, this.now() + presentationYield)
             : 0;
-        if (elapsed > this.slowFrameMs) {
-          this.degrade();
-          if (!this.options.continueAfterSlow) this.pending = null;
-        } else if (rebuilt) {
-          // The prediction was stale (the body got faster, or the earlier
-          // frames were cold): stop making the hand rest.
-          this.settle = false;
+        // An abort may reject before synchronous worker work finishes. Keep
+        // the start interval so pointer events still coalesce, but do not
+        // mistake cancellation latency for the cost of a completed frame.
+        if (!aborted) {
+          const elapsed = this.now() - started;
+          if (elapsed > this.slowFrameMs) {
+            this.degrade();
+            if (!this.options.continueAfterSlow) this.pending = null;
+          } else if (rebuilt) {
+            // The prediction was stale (the body got faster, or the earlier
+            // frames were cold): stop making the hand rest.
+            this.settle = false;
+          }
         }
       }
       this.inFlight = false;
@@ -277,6 +291,7 @@ export class LivePreview<TDocument, TDerived> {
   stop() {
     this.generation += 1;
     this.token += 1;
+    this.abort?.abort();
     this.pending = null;
     if (this.timer !== null) clearTimeout(this.timer);
     this.timer = null;
