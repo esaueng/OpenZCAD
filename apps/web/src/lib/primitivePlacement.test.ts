@@ -69,9 +69,10 @@ describe('primitive placement', () => {
         manager.document
       );
       const add = command.commands?.[0] ?? command;
+      // G9: History read "Box", "Box" for two boxes.
       expect(add).toMatchObject({
         kind: 'primitive.add',
-        payload: { bodyName: 'Box 2' }
+        payload: { name: 'Box 2', bodyName: 'Box 2' }
       });
       manager.execute(command);
       const names = () =>
@@ -89,7 +90,9 @@ describe('primitive placement', () => {
           .filter((node) => node.kind === 'body')
           .map((node) => node.name)
       ).toEqual(['Box 1', 'Box 2']);
-      expect(features(manager)).toHaveLength(x === 0 ? 2 : 3);
+      expect(features(manager).map((feature) => feature.name)).toEqual(
+        x === 0 ? ['Box', 'Box 2'] : ['Box', 'Box 2', 'Place Box 2']
+      );
     }
   );
 

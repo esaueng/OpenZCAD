@@ -295,10 +295,9 @@ import {
   writeWheelDeviceMemory
 } from '../lib/wheelDeviceMemory';
 import {
-  edgeLabel,
-  faceLabelSegments,
   textLabelSegments,
   topologySelectionLabel,
+  topologySelectionLabelSegments,
   type LabelSegment
 } from '../lib/topologyLabels';
 
@@ -9757,29 +9756,13 @@ export function ModelViewer({
       if (target && body) {
         const box = new THREE.Box3().setFromObject(target);
         if (!box.isEmpty()) {
-          const suffix: readonly LabelSegment[] =
-            selectedTopology?.bodyId === primaryId &&
-            selectedTopology.topologyId
-              ? [
-                  { kind: 'text', text: ' · ' },
-                  ...(selectedTopology.kind === 'edge'
-                    ? textLabelSegments(
-                        edgeLabel(
-                          body,
-                          selectedTopology.hash,
-                          selectedTopology.topologyId
-                        )
-                      )
-                    : faceLabelSegments(
-                        body,
-                        selectedTopology.hash,
-                        selectedTopology.topologyId
-                      ))
-                ]
-              : [];
+          // Spelled as every other surface spells a pick.
           addSelectionCallout(
             box,
-            [{ kind: 'text', text: body.name }, ...suffix],
+            selectedTopology?.bodyId === primaryId &&
+              selectedTopology.topologyId
+              ? topologySelectionLabelSegments(body, selectedTopology)
+              : textLabelSegments(body.name),
             primaryId
           );
         }

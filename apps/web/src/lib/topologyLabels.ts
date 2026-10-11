@@ -84,9 +84,7 @@ function planarDirection(
     return undefined;
   }
   const axis = dominantAxis(geometry.normal);
-  return axis
-    ? PLANAR_DIRECTIONS[`${axis.axis}:${axis.sign}`]
-    : undefined;
+  return axis ? PLANAR_DIRECTIONS[`${axis.axis}:${axis.sign}`] : undefined;
 }
 
 /**
@@ -248,6 +246,46 @@ export function edgeLabel(
   return `Edge ${match.index + 1}`;
 }
 
+/** Between an owner and the face or edge it owns: "Box 1 · Top face". */
+const OWNER_SEPARATOR = ' · ';
+
+/**
+ * The one spelling of a named face or edge: its owner, then the viewport's
+ * own name for it — "Box 1 · Top face", "Hole · Through hole Ø6",
+ * "Box 1 · Front · Top edge".
+ *
+ * The Hole card's face list said "Box 1 · top" while the viewport tag on the
+ * same face said "Box 1 · Top face", and faces the lineage could not place
+ * read a bare "Bottom face" in the same list. Every surface that names a
+ * pick — face lists, the selection tag, the select-other list, the
+ * measurement tape, the fillet card's edge list — goes through here.
+ *
+ * Which owner depends on what the surface is for. The viewport's tags name
+ * the body that was clicked, as the Parts list does. A face list inside a
+ * card is already about one body, so it names the feature that made each
+ * face when the lineage says ("Box 2 · Top face" on a union of two boxes,
+ * see `faceProducerName`) and the body otherwise.
+ */
+export function ownedTopologyName(owner: string, entity: string): string {
+  return `${owner}${OWNER_SEPARATOR}${entity}`;
+}
+
+/** The six box directions, in the order a face list shows them. */
+const DIRECTION_FACE_ORDER = [
+  'Top face',
+  'Bottom face',
+  'Front face',
+  'Back face',
+  'Left face',
+  'Right face'
+];
+
+/** Where a face name sorts in a list: the six box directions first. */
+export function faceNameRank(entity: string): number {
+  const index = DIRECTION_FACE_ORDER.indexOf(entity);
+  return index < 0 ? DIRECTION_FACE_ORDER.length : index;
+}
+
 /**
  * One complete pick name for the measurement tape, selection summaries, and
  * select-other list. Keeping the body prefix here prevents those surfaces
@@ -264,7 +302,9 @@ export function topologySelectionLabelSegments(
     selection.kind === 'edge'
       ? textLabelSegments(edgeLabel(body, selection.hash, selection.topologyId))
       : faceLabelSegments(body, selection.hash, selection.topologyId);
-  return body ? [{ kind: 'text', text: `${body.name} · ` }, ...entity] : entity;
+  return body
+    ? [{ kind: 'text', text: ownedTopologyName(body.name, '') }, ...entity]
+    : entity;
 }
 
 /** The rendered form of {@link topologySelectionLabelSegments}. */

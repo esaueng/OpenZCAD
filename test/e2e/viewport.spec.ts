@@ -1293,7 +1293,7 @@ test('double-clicking a filleted rim takes the whole run of edges', async ({
     .toBe(true);
 
   await page.mouse.click(rim!.x, rim!.y);
-  await expect(status).toContainText('exact edge selected');
+  await expect(status).toContainText('edge selected');
 
   // Selecting the probe edge creates a value chip at that exact point; a
   // physical double-click can then send its second click to the chip. Clear

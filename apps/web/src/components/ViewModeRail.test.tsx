@@ -94,8 +94,10 @@ describe('ViewModeRail', () => {
     );
     const list = screen.getByRole('complementary', { name: 'Parts' });
     expect(list.querySelector('.view-mode-rail-foot')).toHaveTextContent(
-      'Visibility only — the design stays locked.'
+      'Visibility only.'
     );
+    // Said once, by the lane, not again by every Tweak panel.
+    expect(list).not.toHaveTextContent(/stays locked/);
     expect(list).not.toHaveTextContent(/View mode/);
   });
 
