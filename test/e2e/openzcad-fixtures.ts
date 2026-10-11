@@ -469,7 +469,7 @@ export async function shiftSelectTwoVisibleBoxEdges(page: Page) {
   const first = await locateEdge(page);
   await page.mouse.click(first.x, first.y);
   const status = page.getByRole('contentinfo');
-  await expect(status).toContainText('1 exact edge selected');
+  await expect(status).toContainText('1 edge selected');
 
   await page.getByRole('button', { name: 'Close panel' }).click();
   const second = await locateEdge(page, { exclude: [first.topologyId] });
@@ -480,7 +480,7 @@ export async function shiftSelectTwoVisibleBoxEdges(page: Page) {
     await page.keyboard.up('Shift');
   }
 
-  await expect(status).toContainText('2 exact edges selected');
+  await expect(status).toContainText('2 edges selected');
   await expect(
     page.locator('.selection-callout-chip .selection-callout-name')
   ).toHaveText('2 edges');

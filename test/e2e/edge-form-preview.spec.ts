@@ -26,7 +26,7 @@ for (const [tool, field] of [
     await inspector.getByRole('button', { name: 'Select all 2 edges' }).click();
     await inspector.getByLabel(field, { exact: true }).fill('1');
     await expect(page.getByRole('contentinfo')).toContainText(
-      'Preview · Apply to save the exact result.'
+      'Preview · Apply to save the result.'
     );
     await expect(inspector.getByLabel(field, { exact: true })).toHaveValue('1');
     await expect(page.locator('.feature-row')).toHaveCount(1);
@@ -60,7 +60,7 @@ test('a fillet takes another edge after creation from its own form', async ({
   const first = await locateEdge(page);
   await page.mouse.click(first.x, first.y);
   await page.getByRole('button', { name: /^Fillet/ }).click();
-  await expect(inspector).toContainText('1 exact edge');
+  await expect(inspector).toContainText('1 edge selected');
   await inspector.getByLabel('Radius', { exact: true }).fill('1');
   await inspector.getByRole('button', { name: /^Create/ }).click();
   const feature = page.locator('.feature-row', { hasText: /^Fillet/ });
@@ -70,16 +70,14 @@ test('a fillet takes another edge after creation from its own form', async ({
   // Reopen the fillet and add the other rim: the edit form takes the pick
   // and Apply patches the same feature instead of creating a second one.
   await feature.locator('.feature-row-main').click();
-  await expect(inspector).toContainText('1 exact edge');
+  await expect(inspector).toContainText('1 edge selected');
   const second = await locateEdge(page, { exclude: [first.topologyId] });
   await page.keyboard.down('Shift');
   await page.mouse.click(second.x, second.y);
   await page.keyboard.up('Shift');
-  await expect(inspector).toContainText('2 exact edges');
+  await expect(inspector).toContainText('2 edges selected');
   await inspector.getByRole('button', { name: /^Apply/ }).click();
-  await expect(page.getByRole('contentinfo')).toContainText(
-    'Fillet applied.'
-  );
+  await expect(page.getByRole('contentinfo')).toContainText('Fillet applied.');
   await expect(
     page.locator('.feature-row', { hasText: /^Fillet/ })
   ).toHaveCount(1);

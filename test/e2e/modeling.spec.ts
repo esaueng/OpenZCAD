@@ -1096,7 +1096,7 @@ test('fillets all twelve edges of a box in one exact feature', async ({
   const inspector = page.getByRole('region', { name: 'Feature inspector' });
   await inspector.getByRole('button', { name: 'Select all 12 edges' }).click();
   await expect(inspector.locator('.selection-summary')).toContainText(
-    '12 exact edges selected'
+    '12 edges selected'
   );
   await inspector.getByRole('button', { name: /^Create/ }).click();
 
@@ -1563,7 +1563,7 @@ test('preflights and drills a through hole into the top face', async ({
     lineageName: 'primitive.box.face.z-max'
   });
   await expect(
-    entry.getByRole('button', { name: /Box 1 · top/ })
+    entry.getByRole('button', { name: /Box 1 · Top face/ })
   ).toHaveAttribute('aria-pressed', 'true');
   await expect(
     page.getByRole('region', { name: 'Offset Face operation' })
@@ -1603,7 +1603,7 @@ test('preflights and drills a through hole into the top face', async ({
     page.getByRole('textbox', { name: 'Diameter', exact: true })
   ).toHaveValue('5');
   await expect(
-    entry.getByRole('button', { name: /Box 1 · top/ })
+    entry.getByRole('button', { name: /Box 1 · Top face/ })
   ).toHaveAttribute('aria-pressed', 'true');
   await page.getByRole('textbox', { name: 'Diameter', exact: true }).fill('8');
   // One press checks the exact result and, when it builds, commits it.
@@ -1643,7 +1643,7 @@ test('preflights and creates an exact open-top shell', async ({ page }) => {
 
   await page.getByRole('button', { name: /^Shell/ }).click();
   const openings = page.getByRole('group', { name: 'Opening faces' });
-  await openings.getByRole('button', { name: /Box 1 · top/ }).click();
+  await openings.getByRole('button', { name: /Box 1 · Top face/ }).click();
   // One press checks the exact result and, when it builds, commits it.
   await page.getByRole('button', { name: 'Create shell' }).click();
   await expect(
@@ -1677,7 +1677,7 @@ test('preflights and creates an exact open-top shell', async ({ page }) => {
   });
   await expect(thickness).toHaveValue('2');
   await expect(
-    openings.getByRole('button', { name: /Box 1 · top/ })
+    openings.getByRole('button', { name: /Box 1 · Top face/ })
   ).toHaveAttribute('aria-pressed', 'true');
   await thickness.fill('3');
   // One press checks the exact result and, when it builds, commits it.
@@ -1734,7 +1734,7 @@ for (const modifier of [
       name: 'Feature inspector'
     });
     await expect(inspector.locator('.selection-summary')).toContainText(
-      '2 exact edges selected'
+      '2 edges selected'
     );
     // The tool's card is the one surface for the command: the edge
     // operation's "Ready" chip no longer stands above it saying the same.
@@ -1787,7 +1787,7 @@ test('a refused fillet size marks the handle and says why in the card', async ({
   const edge = await locateEdge(page);
   await page.mouse.click(edge.x, edge.y);
   await expect(inspector.locator('.selection-summary')).toContainText(
-    '1 exact edge selected'
+    '1 edge selected'
   );
 
   const radius = inspector.getByRole('textbox', {
@@ -2664,7 +2664,7 @@ test('imports a STEP solid, fillets it, and re-exports it', async ({
   const inspector = page.getByRole('region', { name: 'Feature inspector' });
   await inspector.getByRole('button', { name: 'Select all 12 edges' }).click();
   await expect(inspector.locator('.selection-summary')).toContainText(
-    '12 exact edges selected'
+    '12 edges selected'
   );
   await inspector.getByRole('button', { name: /^Create/ }).click();
 

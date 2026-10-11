@@ -4,7 +4,12 @@ import { toBodyId } from '@openzcad/shared';
 import { EdgeModifierForm, type EdgeModifierFormValue } from './FeatureForms';
 
 function renderChamfer(
-  initial: { name: string; size: number; angleDeg?: number; distance2?: number },
+  initial: {
+    name: string;
+    size: number;
+    angleDeg?: number;
+    distance2?: number;
+  },
   onSubmit: (value: EdgeModifierFormValue) => void
 ) {
   render(
@@ -144,7 +149,7 @@ describe('the edge list on a fillet card', () => {
     expect(rows[0]).toContain('1');
     expect(rows[0]).toContain('Back · Top edge');
     expect(rows[1]).toContain('Top · Front edge');
-    expect(screen.getByText('2 exact edges selected')).toBeTruthy();
+    expect(screen.getByText('2 edges selected')).toBeTruthy();
   });
 
   it('removes one edge and previews the blend without it', () => {
