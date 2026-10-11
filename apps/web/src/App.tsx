@@ -555,6 +555,7 @@ import {
 } from './lib/objectPolyline';
 import type { RegionPickData } from './components/viewer/regionOverlay';
 import { CommandBar, type PaletteCommand } from './components/CommandBar';
+import { featurePaletteLabel, withDistinctLabels } from './lib/paletteLabels';
 import { DISPLAY_MODE_LABELS } from './lib/displayMode';
 import { ContextMenu, type ContextMenuState } from './components/ContextMenu';
 import type { BodyFeatureIds } from '@openzcad/document-core';
@@ -17852,7 +17853,8 @@ export function App() {
     );
   const modeShortcut = (mode: WorkspaceMode) =>
     mode === modeShortcutTarget ? 'Ctrl+Shift+M' : undefined;
-  const paletteCommands: PaletteCommand[] = [
+  // No two rows share a name: a repeated one is numbered.
+  const paletteCommands = withDistinctLabels<PaletteCommand>([
     // Modeling tools leave the palette entirely in the reading workspaces
     // rather than appearing greyed out: a list of things you cannot do is
     // not a menu.
@@ -18180,7 +18182,7 @@ export function App() {
             (feature) =>
               ({
                 id: `feature-${feature.id}`,
-                label: feature.name,
+                label: featurePaletteLabel(feature.name),
                 group: 'Feature',
                 icon: <ListOrdered size={16} aria-hidden="true" />,
                 run: () => {
@@ -18213,7 +18215,7 @@ export function App() {
           )
         ]
       : [])
-  ];
+  ]);
 
   const directMode =
     tool === 'sketch' || (tool === 'transform' && movePreview !== null);
