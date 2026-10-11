@@ -16,6 +16,7 @@ import {
   loftSections,
   normalizeDocument,
   numberedBodyName,
+  numberedFeatureName,
   renameNode,
   withoutDerivedProjection
 } from '@openzcad/document-core';
@@ -76,6 +77,50 @@ describe('numberedBodyName', () => {
     document = box(document, 'Bracket 2');
     expect(numberedBodyName(document, 'Bracket 2')).toBe('Bracket 2 1');
     expect(numberedBodyName(document, '')).toBe('Body 1');
+  });
+});
+
+describe('numberedFeatureName', () => {
+  // G9 of the 11 October 2026 review: History and the delete dialog read
+  // "Hole", "Hole" for two features.
+  it('keeps the first of a name and numbers the repeats from 2', () => {
+    let document = createProjectDocument('Features', user);
+    expect(numberedFeatureName(document, 'Box')).toBe('Box');
+    document = box(document, numberedFeatureName(document, 'Box'));
+    expect(numberedFeatureName(document, 'Box')).toBe('Box 2');
+    document = box(document, numberedFeatureName(document, 'Box'));
+    expect(numberedFeatureName(document, 'Box')).toBe('Box 3');
+    expect(numberedFeatureName(document, 'Cylinder')).toBe('Cylinder');
+  });
+
+  it('counts on from the highest number, not from a gap', () => {
+    let document = box(createProjectDocument('Gaps', user), 'Hole');
+    document = box(document, 'Hole 4');
+    expect(numberedFeatureName(document, 'Hole')).toBe('Hole 5');
+    // A taken numbered name counts on from its stem, not "Hole 4 2".
+    expect(numberedFeatureName(document, 'Hole 4')).toBe('Hole 5');
+    // A free one is used as typed.
+    expect(numberedFeatureName(document, 'Hole 2')).toBe('Hole 2');
+  });
+
+  it('leaves a name no feature carries exactly as given', () => {
+    const document = box(createProjectDocument('Typed', user), 'Box');
+    expect(numberedFeatureName(document, 'Bracket ')).toBe('Bracket ');
+    expect(numberedFeatureName(document, '')).toBe('');
+    // Matching is on the trimmed name, as History shows it.
+    expect(numberedFeatureName(document, ' Box ')).toBe('Box 2');
+  });
+
+  it('never renames a feature already in the document', () => {
+    let document = box(createProjectDocument('Stored', user), 'Box');
+    document = box(document, 'Box');
+    const before = names(document);
+    const features = Object.values(document.nodes)
+      .filter((node) => node.kind === 'feature')
+      .map((node) => node.name);
+    expect(features).toEqual(['Box', 'Box']);
+    expect(numberedFeatureName(document, 'Box')).toBe('Box 2');
+    expect(names(document)).toEqual(before);
   });
 });
 
@@ -151,6 +196,57 @@ describe('body names at creation', () => {
     expect(names(document)).toEqual(['Box 1', 'Box 2', 'Box 2']);
   });
 
+  it('names a numbered union or intersect for itself, a subtract for its base', () => {
+    const document = box(
+      box(createProjectDocument('Booleans', user), 'Box'),
+      'Box'
+    );
+    const [a, b] = document.bodyOrder;
+    const combine = (operation: 'union' | 'subtract' | 'intersect') =>
+      names(
+        commandFactories
+          .booleanBodies({
+            name: 'Combine',
+            bodyName: numberedBodyName(document, 'Combine'),
+            operation,
+            targetBodyIds: [a!, b!]
+          })
+          .apply(document)
+      ).at(-1);
+    // G9: the merged bracket still read "Box 1" in Parts and the callout.
+    expect(combine('union')).toBe('Combine 1');
+    expect(combine('intersect')).toBe('Combine 1');
+    // A plate with a pocket cut is still the plate.
+    expect(combine('subtract')).toBe('Box 1');
+  });
+
+  it('replays a numbered union to the name it was created with', () => {
+    const initial = createProjectDocument('Replay union', user);
+    const manager = new CommandManager(initial);
+    const ids = [createBodyFeatureIds(), createBodyFeatureIds()];
+    manager.runTransaction('Bracket', [
+      ...ids.map((bodyIds, index) =>
+        commandFactories.addPrimitive({
+          name: 'Box',
+          bodyName: `Box ${index + 1}`,
+          primitiveKind: 'box',
+          dimensions: { width: 10, height: 10, depth: 10 },
+          ids: bodyIds
+        })
+      ),
+      commandFactories.booleanBodies({
+        name: 'Union',
+        bodyName: numberedBodyName(manager.document, 'Union'),
+        operation: 'union',
+        targetBodyIds: ids.map((bodyIds) => bodyIds.bodyId)
+      })
+    ]);
+    expect(names(manager.document)).toEqual(['Box 1', 'Box 2', 'Union 1']);
+    expect(names(replayCommands(initial, manager.document.commandLog))).toEqual(
+      ['Box 1', 'Box 2', 'Union 1']
+    );
+  });
+
   it('numbers the bodies an assistant patch creates', () => {
     const primitive = (name: string, localId: string) =>
       ({
@@ -183,6 +279,85 @@ describe('body names at creation', () => {
       commandsForCadPatch(manager.document, proposal)
     );
     expect(names(manager.document)).toEqual(['Box 1', 'Box 2', 'Box 3']);
+  });
+});
+
+describe('feature names an assistant patch creates', () => {
+  const featureNames = (document: ProjectDocument) =>
+    document.featureOrder.map(
+      (featureId) =>
+        Object.values(document.nodes).find(
+          (node) => node.kind === 'feature' && node.featureId === featureId
+        )!.name
+    );
+  const primitive = (name: string, localId: string) =>
+    ({
+      kind: 'add_primitive',
+      name,
+      localId,
+      primitiveKind: 'box',
+      dimensions: {
+        width: 10,
+        height: 10,
+        depth: 10,
+        radius: null,
+        bottomRadius: null,
+        topRadius: null,
+        majorRadius: null,
+        minorRadius: null
+      }
+    }) as const;
+
+  it('numbers a repeated feature name as the app does, and replays it', () => {
+    const initial = box(createProjectDocument('Assistant names', user), 'Box');
+    const manager = new CommandManager(initial);
+    const proposal: CadPatchProposal = {
+      proposalId: 'proposal_numbered_features',
+      summary: 'Two more boxes, joined.',
+      assumptions: [],
+      operations: [
+        primitive('Box', 'a'),
+        primitive('Box', 'b'),
+        {
+          kind: 'add_boolean',
+          name: 'Union',
+          localId: 'joined',
+          operation: 'union',
+          targetBodyIds: ['$a', '$b']
+        },
+        {
+          kind: 'add_boolean',
+          name: 'Union',
+          localId: 'all',
+          operation: 'union',
+          targetBodyIds: [initial.bodyOrder[0]!, '$joined']
+        }
+      ]
+    };
+    const commands = commandsForCadPatch(manager.document, proposal);
+    // Resolved when compiled and stored in each command's payload.
+    expect(
+      commands.map((command) => (command.payload as { name: string }).name)
+    ).toEqual(['Box 2', 'Box 3', 'Union', 'Union 2']);
+    manager.runTransaction('Apply AI patch', commands);
+    expect(featureNames(manager.document)).toEqual([
+      'Box',
+      'Box 2',
+      'Box 3',
+      'Union',
+      'Union 2'
+    ]);
+    // Bodies still count from the name as proposed.
+    expect(names(manager.document)).toEqual([
+      'Box 1',
+      'Box 2',
+      'Box 3',
+      'Union 1',
+      'Union 2'
+    ]);
+    expect(
+      featureNames(replayCommands(initial, manager.document.commandLog))
+    ).toEqual(featureNames(manager.document));
   });
 });
 

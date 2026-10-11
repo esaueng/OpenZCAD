@@ -110,6 +110,7 @@ import {
   normalizeDocument,
   normalizeDocumentHistory,
   numberedBodyName,
+  numberedFeatureName,
   repairedDirectEditOperation,
   resolveParamValue,
   restoreFromSaveState,
@@ -3512,7 +3513,7 @@ export function App() {
           setStatus(
             warning ??
               (valid
-                ? 'Preview · Apply to save the exact result.'
+                ? 'Preview · Apply to save the result.'
                 : 'This size did not produce a valid body.')
           );
         }
@@ -3646,9 +3647,13 @@ export function App() {
       value.edgeHashes,
       value.edgeReferences
     );
-    const refreshedValue = namedReferences
-      ? { ...value, edgeReferences: namedReferences }
-      : value;
+    const refreshedValue = {
+      ...(namedReferences
+        ? { ...value, edgeReferences: namedReferences }
+        : value),
+      // Edits keep their name; a new fillet is numbered past any other.
+      name: feature ? value.name : newFeatureName(value.name)
+    };
     const command = edgeModifierCommand(feature, kind, refreshedValue);
     const bodyId =
       feature?.bodyId ??
@@ -3657,7 +3662,7 @@ export function App() {
     edgeFormPreview.clear();
     setEdgeFormSize(null);
     void executeValidatedFeature(command, {
-      featureName: value.name,
+      featureName: refreshedValue.name,
       resultBodyId: bodyId,
       ...(feature
         ? {
@@ -3667,7 +3672,7 @@ export function App() {
             )
           }
         : {}),
-      successMessage: `${value.name} applied.`,
+      successMessage: `${refreshedValue.name} applied.`,
       onSuccess: feature
         ? () => finishFeatureEdit(feature, editSession)
         : finishFeatureCreation,
@@ -6416,6 +6421,16 @@ export function App() {
   }
 
   /**
+   * "Hole", then "Hole 2": the History name a feature made now takes, so two
+   * holes are not two rows both reading "Hole". Stored in the command like
+   * `newBodyName`; features already in a document keep their names.
+   */
+  function newFeatureName(featureName: string): string {
+    const current = managerRef.current?.document;
+    return current ? numberedFeatureName(current, featureName) : featureName;
+  }
+
+  /**
    * F19: an edit card closes after a successful Apply as a create card does,
    * whatever feature it edits. A refused Apply never gets here — the card
    * stays open with the reason — and neither does an Apply whose card the
@@ -7257,7 +7272,7 @@ export function App() {
       commandFactories.transformBody({
         // Whatever the gizmo's Name field holds, falling back to the default
         // rather than committing a feature with a blank name.
-        name: moveName.trim() || 'Move',
+        name: newFeatureName(moveName.trim() || 'Move'),
         targetBodyId: preview.bodyId as BodyId,
         ...values
       })
@@ -11696,8 +11711,8 @@ export function App() {
     setFormFacePickTarget(null);
     setStatus(
       operation === 'hole'
-        ? 'Hole entry face selected · adjust the hole and check the exact result.'
-        : `${label}: face picked · click more faces to add or remove them, then check the exact result.`
+        ? 'Hole entry face selected · adjust the hole and check the result.'
+        : `${label}: face picked · click more faces to add or remove them, then check the result.`
     );
   }
 
@@ -12066,7 +12081,7 @@ export function App() {
       }
       setStatus(
         nextEdges.length > 0
-          ? `${nextEdges.length} exact edge${nextEdges.length === 1 ? '' : 's'} selected.`
+          ? `${nextEdges.length} edge${nextEdges.length === 1 ? '' : 's'} selected.`
           : 'Edge selection cleared.'
       );
       return;
@@ -12145,7 +12160,7 @@ export function App() {
     ) {
       dispatchInteraction({ type: 'set-edge-op', op: 'chamfer' });
     }
-    setStatus(`Selected all ${edges.length} exact edges on ${body.name}.`);
+    setStatus(`Selected all ${edges.length} edges on ${body.name}.`);
   }
 
   /**
@@ -13660,6 +13675,8 @@ export function App() {
       const toggle = listParameters(prospective).find(
         (p) => p.name === name
       )?.toggle;
+      // setParameter both adds and changes one; say which happened.
+      const added = !listParameters(base).some((p) => p.name === name);
       if (toggle)
         setHiddenBodyIds(
           (hidden) =>
@@ -13667,7 +13684,9 @@ export function App() {
               [...hidden].filter((id) => !toggle.bodyIds.includes(id as BodyId))
             )
         );
-      setStatus(`Parameter ${name} updated.`);
+      setStatus(
+        added ? `Added parameter ${name}.` : `Parameter ${name} updated.`
+      );
       return { kind: 'applied' };
     };
     setParameterEditPending(true);
@@ -14241,11 +14260,11 @@ export function App() {
               area: target.area
             }
           ];
-    const name = regionExtrudeSettings.current?.name ?? 'Extrude';
+    const givenName = regionExtrudeSettings.current?.name ?? 'Extrude';
     return {
-      name,
+      name: newFeatureName(givenName),
       // The new-body name; an add or cut keeps its target's name instead.
-      bodyName: newBodyName(name),
+      bodyName: newBodyName(givenName),
       sketchId: target.sketchId as SketchId,
       distance,
       symmetric: regionExtrudeSettings.current?.symmetric ?? false,
@@ -15138,8 +15157,9 @@ export function App() {
       return null;
     }
     const payload = {
-      name:
-        currentInteraction.op === 'fillet' ? 'Fillet edges' : 'Chamfer edges',
+      name: newFeatureName(
+        currentInteraction.op === 'fillet' ? 'Fillet edges' : 'Chamfer edges'
+      ),
       targetBodyId: bodyId,
       edgeHashes,
       ...(edges.length === edgeHashes.length &&
@@ -17492,7 +17512,7 @@ export function App() {
             const leftSketch = escapeTarget(interaction) === 'exit-sketch';
             dispatchInteraction({ type: 'escape' });
             if (leftSketch) {
-              setStatus('Sketch closed · sketch edits preserved.');
+              setStatus('Sketch closed.');
             }
             return;
           }
@@ -18395,7 +18415,7 @@ export function App() {
           : tool === 'fillet' || tool === 'chamfer'
             ? selectedEdges.length > 0
               ? `${selectedEdges.length} edge${selectedEdges.length === 1 ? '' : 's'} selected · Shift+Click adjusts · Enter creates`
-              : 'Click edges with Shift or choose Select all edges · Esc cancels'
+              : 'Click an edge (Shift adds more) or choose Select all edges'
             : tool === 'union' || tool === 'subtract' || tool === 'intersect'
               ? selectedBodyIds.length >= 2
                 ? `${selectedBodyIds.length} bodies picked, numbered in the viewport · Click toggles · Enter creates`
@@ -18608,8 +18628,14 @@ export function App() {
     : null;
 
   function commandForModelingSubmission(
-    submission: ModelingOperationSubmission
+    created: ModelingOperationSubmission
   ): AnyCommand {
+    // Only ever a new feature (an edit goes through updateFeature), so the
+    // name is numbered past any feature that already carries it.
+    const submission = {
+      ...created,
+      input: { ...created.input, name: newFeatureName(created.input.name) }
+    } as ModelingOperationSubmission;
     switch (submission.operation) {
       case 'mirror':
         return commandFactories.mirrorBody(submission.input);
@@ -18624,17 +18650,17 @@ export function App() {
       case 'loft':
         return commandFactories.loftSections({
           ...submission.input,
-          bodyName: newBodyName(submission.input.name)
+          bodyName: newBodyName(created.input.name)
         });
       case 'sweep':
         return commandFactories.sweepProfile({
           ...submission.input,
-          bodyName: newBodyName(submission.input.name)
+          bodyName: newBodyName(created.input.name)
         });
       case 'helical-sweep':
         return commandFactories.helicalSweepProfile({
           ...submission.input,
-          bodyName: newBodyName(submission.input.name)
+          bodyName: newBodyName(created.input.name)
         });
       case 'draft':
         return commandFactories.draftBody(submission.input);
@@ -19078,7 +19104,7 @@ export function App() {
           setTool(null);
           setSketchEditError(null);
           setSketchDiagnosticPoints([]);
-          setStatus(`${editingSketchName} finished · sketch edits preserved.`);
+          setStatus(`${editingSketchName} finished.`);
         }}
       >
         <Check size={16} aria-hidden="true" />
@@ -20244,28 +20270,38 @@ export function App() {
                   handleSelectTopologyFromViewer(edge, true)
                 }
                 onCreateRevolve={(value) => {
+                  const name = newFeatureName(value.name);
                   const command = commandFactories.revolveSketch({
                     ...value,
+                    name,
                     bodyName: newBodyName(value.name)
                   });
                   createValidatedFeature(
                     command,
-                    value.name,
+                    name,
                     command.payload.ids?.bodyId
                   );
                 }}
                 onCreateBoolean={(value) => {
-                  const command = commandFactories.booleanBodies(value);
+                  const name = newFeatureName(value.name);
+                  // A union or intersect result is named for itself
+                  // ("Union 1"); a subtract keeps its base body's name.
+                  const command = commandFactories.booleanBodies({
+                    ...value,
+                    name,
+                    bodyName: newBodyName(value.name)
+                  });
                   createValidatedFeature(
                     command,
-                    value.name,
+                    name,
                     command.payload.ids?.bodyId
                   );
                 }}
-                onCreateTransform={(value) =>
+                onCreateTransform={(value) => {
+                  const name = newFeatureName(value.name);
                   createValidatedFeature(
                     commandFactories.transformBody({
-                      name: value.name,
+                      name,
                       targetBodyId: value.targetBodyId,
                       translation: value.translation,
                       rotationDeg: value.rotationDeg,
@@ -20273,21 +20309,25 @@ export function App() {
                         ? { scale: value.scale }
                         : {})
                     }),
-                    value.name,
+                    name,
                     value.targetBodyId
-                  )
-                }
+                  );
+                }}
                 onPreviewEdgeModifier={previewEdgeForm}
                 onEdgeModifierSize={setEdgeFormSize}
                 onCreateEdgeModifier={(kind, value) =>
                   applyEdgeForm(null, kind, value)
                 }
                 onCreatePattern={(value) => {
-                  const command = commandFactories.patternBody(value);
+                  const name = newFeatureName(value.name);
+                  const command = commandFactories.patternBody({
+                    ...value,
+                    name
+                  });
                   const resultBodyId = command.payload.ids?.bodyId;
                   if (resultBodyId)
                     runPattern(command, {
-                      featureName: value.name,
+                      featureName: name,
                       resultBodyId,
                       successMessage: commandOutcomeMessage(command.label),
                       onSuccess: finishFeatureCreation

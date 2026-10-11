@@ -47,15 +47,11 @@ async function hookBaseStepBytes(): Promise<Uint8Array> {
     kernel.transformSolid(ribA, translation(12, 10, 6));
     const ribB = kernel.makeBox(6, 20, 18);
     kernel.transformSolid(ribB, translation(42, 10, 6));
-    const fused = kernel.fuseAll(
-      Uint32Array.of(plate, lip, ribA, ribB)
-    );
+    const fused = kernel.fuseAll(Uint32Array.of(plate, lip, ribA, ribB));
     const bore = kernel.makeCylinder(4, 10);
     kernel.transformSolid(bore, translation(30, 25, -2));
     const hooked = kernel.cut(fused, bore);
-    return io.exportStep(
-      kernel.serializeSolids(Uint32Array.of(hooked))
-    );
+    return io.exportStep(kernel.serializeSolids(Uint32Array.of(hooked)));
   } finally {
     kernel.free();
   }
@@ -151,7 +147,9 @@ test('manual All-edges fillet finishes the STEP-imported hook (49 physical edges
   await page.setViewportSize({ width: 390, height: 844 });
   const selectAll = card.getByRole('button', { name: 'Select all 49 edges' });
   await expect(selectAll).toBeVisible({ timeout: 30_000 });
-  await page.screenshot({ path: testInfo.outputPath('hook-all-edge-narrow.png') });
+  await page.screenshot({
+    path: testInfo.outputPath('hook-all-edge-narrow.png')
+  });
   await selectAll.click();
   await page.setViewportSize({ width: 1440, height: 1000 });
   await expect(card).toContainText('49 edges');
@@ -172,7 +170,9 @@ test('manual All-edges fillet finishes the STEP-imported hook (49 physical edges
     )
     .toBeGreaterThan(0);
   await expect(page.getByRole('button', { name: 'History 1' })).toBeVisible();
-  await page.screenshot({ path: testInfo.outputPath('hook-all-edge-manual-preview.png') });
+  await page.screenshot({
+    path: testInfo.outputPath('hook-all-edge-manual-preview.png')
+  });
   await keypad.getByRole('button', { name: 'Apply radius' }).click();
   await expect(status).toContainText('Filleted 49 edges at 1 mm.', {
     timeout: 120_000
@@ -180,7 +180,9 @@ test('manual All-edges fillet finishes the STEP-imported hook (49 physical edges
   await expect(page.getByRole('button', { name: 'History 2' })).toBeVisible();
   await expectBodyCount(page, 1);
   await expect(status).toContainText('warnings0');
-  await page.screenshot({ path: testInfo.outputPath('hook-all-edge-manual-applied.png') });
+  await page.screenshot({
+    path: testInfo.outputPath('hook-all-edge-manual-applied.png')
+  });
 
   // Edit the committed feature 1 mm -> 0.5 mm through the History row, as a
   // user does. It updates in place: History stays at 2 and exactly one
@@ -188,9 +190,11 @@ test('manual All-edges fillet finishes the STEP-imported hook (49 physical edges
   // (Blend-face chip editing arms only cylindrical bands; the whole-part hook
   // carries torus patches, so the History form is the supported edit path.)
   await expect.poll(() => readBlend(page), { timeout: 60_000 }).not.toBeNull();
-  await expect.poll(async () => (await readBlend(page))?.blendRadius ?? null, {
-    timeout: 60_000
-  }).toBeCloseTo(1, 2);
+  await expect
+    .poll(async () => (await readBlend(page))?.blendRadius ?? null, {
+      timeout: 60_000
+    })
+    .toBeCloseTo(1, 2);
   // Dismiss the Select-all creation card so the History row is reachable.
   const dismissFillet = card.getByRole('button', { name: /Dismiss.*Fillet/ });
   if ((await dismissFillet.count()) > 0) {
@@ -200,8 +204,10 @@ test('manual All-edges fillet finishes the STEP-imported hook (49 physical edges
   await expect(filletRow).toBeVisible();
   await filletRow.locator('.feature-row-main').click();
   const inspector = page.getByRole('region', { name: 'Feature inspector' });
-  await expect(inspector).toContainText('49 exact edges');
-  await expect(inspector.getByLabel('Radius', { exact: true })).toHaveValue('1');
+  await expect(inspector).toContainText('49 edges selected');
+  await expect(inspector.getByLabel('Radius', { exact: true })).toHaveValue(
+    '1'
+  );
   await inspector.getByLabel('Radius', { exact: true }).fill('0.5');
   await inspector.getByRole('button', { name: /^Apply/ }).click();
   await expect
@@ -211,7 +217,9 @@ test('manual All-edges fillet finishes the STEP-imported hook (49 physical edges
     .toBeCloseTo(0.5, 2);
   await expect(page.getByRole('button', { name: 'History 2' })).toBeVisible();
   await expect(page.getByRole('button', { name: 'History 3' })).toHaveCount(0);
-  await expect(page.locator('.feature-row', { hasText: 'Fillet' })).toHaveCount(1);
+  await expect(page.locator('.feature-row', { hasText: 'Fillet' })).toHaveCount(
+    1
+  );
   await expect(status).toContainText('warnings0');
   await expect(status).not.toContainText(
     /Rebuilding exact geometry|Waiting for exact geometry|Rebuilding geometry/i,
@@ -223,9 +231,12 @@ test('manual All-edges fillet finishes the STEP-imported hook (49 physical edges
   // toggled shut by the row click on slower machines.
   await page.keyboard.press('Escape');
   await filletRow.locator('.feature-row-main').click();
-  await expect(inspector.getByLabel('Radius', { exact: true })).toHaveValue('0.5', {
-    timeout: 30_000
-  });
+  await expect(inspector.getByLabel('Radius', { exact: true })).toHaveValue(
+    '0.5',
+    {
+      timeout: 30_000
+    }
+  );
   await inspector.getByLabel('Radius', { exact: true }).fill('0.7');
   await page.keyboard.press('Escape');
   await expect
@@ -240,16 +251,21 @@ test('manual All-edges fillet finishes the STEP-imported hook (49 physical edges
   // chip path disables Apply instead); either way nothing commits.
   await page.keyboard.press('Escape');
   await filletRow.locator('.feature-row-main').click();
-  await expect(inspector.getByLabel('Radius', { exact: true })).toHaveValue('0.5', {
-    timeout: 30_000
-  });
+  await expect(inspector.getByLabel('Radius', { exact: true })).toHaveValue(
+    '0.5',
+    {
+      timeout: 30_000
+    }
+  );
   await inspector.getByLabel('Radius', { exact: true }).fill('10');
   await expect(inspector).toContainText(/Try a smaller radius|Failed|refus/i, {
     timeout: 120_000
   });
   await inspector.getByRole('button', { name: /^Apply/ }).click();
   await expect(page.getByRole('button', { name: 'History 2' })).toBeVisible();
-  await expect(page.locator('.feature-row', { hasText: 'Fillet' })).toHaveCount(1);
+  await expect(page.locator('.feature-row', { hasText: 'Fillet' })).toHaveCount(
+    1
+  );
   await expect
     .poll(async () => (await readBlend(page))?.blendRadius ?? null)
     .toBeCloseTo(0.5, 2);
@@ -308,7 +324,9 @@ test('manual All-edges fillet finishes the STEP-imported hook (49 physical edges
   expect(stepText).toContain('CLOSED_SHELL');
   // 12 torus bands survive the UI export (8 rib mirrors + 2 lip notches +
   // 2 hole-rim bands); a mesh fallback would export faceted shells instead.
-  expect(stepText.match(/TOROIDAL_SURFACE/g)?.length ?? 0).toBeGreaterThanOrEqual(12);
+  expect(
+    stepText.match(/TOROIDAL_SURFACE/g)?.length ?? 0
+  ).toBeGreaterThanOrEqual(12);
 
   // Reimport the exported STEP as a new project and verify it stays valid.
   // Navigate via the product button rather than goto('/'): the workspace
@@ -373,7 +391,9 @@ test('assistant finishes the STEP-imported hook provider-free with no mutation u
   // No document mutation until Apply: history stays at the imported baseline.
   await expect(page.getByRole('button', { name: 'History 1' })).toBeVisible();
   await expectBodyCount(page, 1);
-  await page.screenshot({ path: testInfo.outputPath('hook-all-edge-assistant.png') });
+  await page.screenshot({
+    path: testInfo.outputPath('hook-all-edge-assistant.png')
+  });
   await proposal.getByRole('button', { name: 'Apply', exact: true }).click();
   await expect(
     page.locator('.assistant-card.proposal.applied').last()

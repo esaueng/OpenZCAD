@@ -282,11 +282,28 @@ fieldset.field > legend {
 }
 
 .edge-pick-name {
+  display: flex;
   min-width: 0;
   flex: 1;
   overflow: hidden;
-  text-overflow: ellipsis;
   white-space: nowrap;
+}
+
+/* "Box 1 · ": the owner gives way first, so the edge's own name stays whole. */
+.edge-pick-owner {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: pre;
+  color: var(--color-text-muted);
+}
+
+.edge-pick-entity {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  flex: none;
+  max-width: 100%;
 }
 
 .edge-pick-remove {
