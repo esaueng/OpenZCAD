@@ -553,6 +553,17 @@ function provenOpposingPlanarFacePairs(
 }
 export interface ExactKernelAdapter {
   readonly kind: 'remus';
+  /**
+   * Disposable exact drag geometry with the normal validation gates. Defers
+   * completion-stage volume and recognition; syncDocument produces commits.
+   */
+  previewGeometry(
+    document: ProjectDocument,
+    options?: {
+      cancellation?: BuildCancellationSignal;
+      yieldControl?: () => Promise<void> | void;
+    }
+  ): Promise<GeometryReadyState>;
   syncDocument(
     document: ProjectDocument,
     onProgress?: RebuildProgressListener,
@@ -2110,8 +2121,8 @@ export class RemusKernelAdapter implements ExactKernelAdapter {
       yieldControl?: () => Promise<void> | void;
     }
   ): Promise<DerivedState> {
-    return this.runHistoryJob(() =>
-      this.syncMeasuredDocument(
+    return this.runHistoryJob(async () => {
+      const result = await this.syncMeasuredDocument(
         document,
         onProgress,
         onProjection,
@@ -2121,8 +2132,37 @@ export class RemusKernelAdapter implements ExactKernelAdapter {
         options?.cancellation,
         options?.onGeometryReady,
         options?.yieldControl
-      )
-    );
+      );
+      if ('analysis' in result)
+        throw new Error('Document analysis is pending.');
+      return result;
+    });
+  }
+
+  async previewGeometry(
+    document: ProjectDocument,
+    options?: {
+      cancellation?: BuildCancellationSignal;
+      yieldControl?: () => Promise<void> | void;
+    }
+  ): Promise<GeometryReadyState> {
+    return this.runHistoryJob(async () => {
+      const result = await this.syncMeasuredDocument(
+        document,
+        undefined,
+        undefined,
+        undefined,
+        true,
+        undefined,
+        options?.cancellation,
+        undefined,
+        options?.yieldControl,
+        true
+      );
+      if (!('analysis' in result))
+        throw new Error('Expected preview geometry.');
+      return result;
+    });
   }
 
   private async syncMeasuredDocument(
@@ -2134,8 +2174,9 @@ export class RemusKernelAdapter implements ExactKernelAdapter {
     lineageDemand?: readonly BodyId[] | ReadonlySet<BodyId>,
     cancellation?: BuildCancellationSignal,
     onGeometryReady?: (geometry: GeometryReadyState) => void,
-    yieldControl?: () => Promise<void> | void
-  ): Promise<DerivedState> {
+    yieldControl?: () => Promise<void> | void,
+    geometryOnly = false
+  ): Promise<DerivedState | GeometryReadyState> {
     cancellation = this.historySignal(cancellation);
     if (
       analysis &&
@@ -2534,6 +2575,21 @@ export class RemusKernelAdapter implements ExactKernelAdapter {
         }
       }
 
+      if (geometryOnly) {
+        // This is deliberately not a measured-shape cache entry or a mass
+        // snapshot. A release must complete current-revision analysis before
+        // committing; a preview never creates quantities or analysis proofs.
+        const pending = yieldControl?.();
+        if (pending) await pending;
+        throwIfBuildCancelled(cancellation);
+        return structuredClone({
+          bodyRepresentations: geometryRepresentations,
+          warnings: build.warnings,
+          featureWarnings: build.featureWarnings,
+          updatedAt: nowIso(),
+          analysis: 'pending' as const
+        });
+      }
       if (
         onGeometryReady &&
         geometryValid &&
@@ -2631,7 +2687,8 @@ export class RemusKernelAdapter implements ExactKernelAdapter {
           lineageDemand,
           cancellation,
           onGeometryReady,
-          yieldControl
+          yieldControl,
+          geometryOnly
         );
       }
       throw error;

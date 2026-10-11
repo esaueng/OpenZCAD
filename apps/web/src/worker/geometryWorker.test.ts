@@ -94,6 +94,72 @@ beforeEach(() => {
 });
 
 describe('geometry worker rebuild coordination', () => {
+  it('uses geometry-only work for drag frames and full analysis for a later commit', async () => {
+    const document = addPrimitiveFeature(
+      createProjectDocument('Drag frames', toUserId('user')),
+      {
+        name: 'Box',
+        primitiveKind: 'box',
+        dimensions: { width: 10, height: 8, depth: 6 }
+      }
+    );
+    const geometry = {
+      bodyRepresentations: {},
+      warnings: [],
+      updatedAt: document.derived.updatedAt,
+      analysis: 'pending' as const
+    };
+    const syncDocument = vi.fn(async () => derived('complete'));
+    const previewGeometry = vi.fn(async () => geometry);
+    const { scope } = await installWorker(syncDocument, { previewGeometry });
+    post(scope, { type: 'preview-geometry', document, requestId: 'frame' });
+    await vi.waitFor(() =>
+      expect(scope.postMessage).toHaveBeenCalledWith({
+        type: 'preview-geometry',
+        ok: true,
+        requestId: 'frame',
+        geometry
+      })
+    );
+    expect(syncDocument).not.toHaveBeenCalled();
+    expect(previewGeometry).toHaveBeenCalledExactlyOnceWith(
+      document,
+      expect.objectContaining({
+        cancellation: expect.any(Object) as unknown,
+        yieldControl: expect.any(Function) as unknown
+      })
+    );
+    post(scope, { type: 'sync', document, requestId: 'commit' });
+    await vi.waitFor(() => expect(syncDocument).toHaveBeenCalledOnce());
+    await vi.waitFor(() =>
+      expect(
+        scope.postMessage.mock.calls.some(
+          ([message]) =>
+            message.type === 'sync' &&
+            message.ok &&
+            message.requestId === 'commit'
+        )
+      ).toBe(true)
+    );
+  });
+
+  it('rejects a failed geometry preview through its own protocol', async () => {
+    const document = createProjectDocument('Failed frame', toUserId('user'));
+    const { scope } = await installWorker(vi.fn(), {
+      previewGeometry: vi.fn(async () => {
+        throw new Error('Exact edit refused.');
+      })
+    });
+    post(scope, { type: 'preview-geometry', document, requestId: 'frame' });
+    await vi.waitFor(() =>
+      expect(scope.postMessage).toHaveBeenCalledWith({
+        type: 'preview-geometry',
+        ok: false,
+        requestId: 'frame',
+        error: 'Exact edit refused.'
+      })
+    );
+  });
   it('preloads text fonts before a mass query must restore exact history', async () => {
     const preloadDocumentFonts = vi.fn(async () => undefined);
     vi.doMock('../lib/textFonts', () => ({ preloadDocumentFonts }));

@@ -41,6 +41,82 @@ function makePreview(overrides: {
 const settle = () => new Promise((resolve) => setTimeout(resolve, 0));
 
 describe('coalescing', () => {
+  it('rejects an aborted intermediate frame even when its derive ignores cancellation', async () => {
+    const first = deferred();
+    const published: number[] = [];
+    const preview = new LivePreview<Doc, string>({
+      build: (value) => ({ value }),
+      derive: (document) =>
+        document.value === 1 ? first.promise : Promise.resolve('new geometry'),
+      publish: (result) => {
+        if (result) published.push(result.document.value);
+      },
+      cancelSuperseded: true,
+      publishIntermediate: true
+    });
+    preview.request(1);
+    preview.request(2);
+    first.resolve('aborted geometry');
+    await settle();
+    expect(published).toEqual([2]);
+    preview.clear();
+  });
+  it('aborts superseded geometry frames and publishes only the latest value', async () => {
+    const signals: AbortSignal[] = [];
+    const published: number[] = [];
+    const failure = vi.fn();
+    const preview = new LivePreview<Doc, string>({
+      build: (value) => ({ value }),
+      derive: (document, signal) => {
+        signals.push(signal);
+        return document.value === 1
+          ? new Promise((_resolve, reject) => {
+              signal.addEventListener(
+                'abort',
+                () => reject(new Error('Cancelled preview.')),
+                { once: true }
+              );
+            })
+          : Promise.resolve('geometry');
+      },
+      publish: (result) => {
+        if (result) published.push(result.document.value);
+      },
+      onFailure: failure,
+      cancelSuperseded: true,
+      publishIntermediate: true
+    });
+    preview.request(1);
+    preview.request(2);
+    preview.request(3);
+    await settle();
+    expect(signals[0]!.aborted).toBe(true);
+    expect(published).toEqual([3]);
+    expect(failure).not.toHaveBeenCalled();
+    expect(preview.degraded).toBe(false);
+    preview.clear();
+  });
+
+  it('aborts an in-flight geometry frame on release without publishing a late result', async () => {
+    const frame = deferred();
+    let signal: AbortSignal | undefined;
+    const publish = vi.fn();
+    const preview = new LivePreview<Doc, string>({
+      build: (value) => ({ value }),
+      derive: (_document, abortSignal) => {
+        signal = abortSignal;
+        return frame.promise;
+      },
+      publish,
+      cancelSuperseded: true
+    });
+    preview.request(1);
+    preview.stop();
+    expect(signal!.aborted).toBe(true);
+    frame.resolve('late geometry');
+    await settle();
+    expect(publish).not.toHaveBeenCalled();
+  });
   it('keeps only the newest value requested during a rebuild', async () => {
     const first = deferred();
     let call = 0;
@@ -420,6 +496,62 @@ describe('lagging', () => {
 });
 
 describe('bounded progressive gestures', () => {
+  it('keeps the minimum start interval when superseded derives reject immediately', async () => {
+    vi.useFakeTimers();
+    try {
+      const starts: { at: number; value: number }[] = [];
+      const publish = vi.fn();
+      const preview = new LivePreview<Doc, string>({
+        build: (value) => {
+          starts.push({ at: Date.now(), value });
+          return { value };
+        },
+        derive: (_document, signal) =>
+          new Promise((_resolve, reject) => {
+            signal.addEventListener(
+              'abort',
+              () => reject(new Error('Cancelled preview.')),
+              { once: true }
+            );
+          }),
+        publish,
+        cancelSuperseded: true,
+        publishIntermediate: true,
+        minIntervalMs: 100,
+        slowFrameMs: 5,
+        now: () => Date.now()
+      });
+      const begin = Date.now();
+      preview.request(1);
+      for (let value = 2; value <= 10; value += 1) {
+        await vi.advanceTimersByTimeAsync(10);
+        preview.request(value);
+        await vi.advanceTimersByTimeAsync(0);
+        expect(starts).toHaveLength(1);
+      }
+      await vi.advanceTimersByTimeAsync(9);
+      preview.request(11);
+      expect(starts).toEqual([{ at: begin, value: 1 }]);
+      await vi.advanceTimersByTimeAsync(1);
+      expect(starts).toEqual([
+        { at: begin, value: 1 },
+        { at: begin + 100, value: 11 }
+      ]);
+      for (let value = 12; value <= 20; value += 1) {
+        await vi.advanceTimersByTimeAsync(10);
+        preview.request(value);
+        await vi.advanceTimersByTimeAsync(0);
+        expect(starts).toHaveLength(2);
+      }
+      expect(preview.degraded).toBe(false);
+      expect(publish).not.toHaveBeenCalled();
+      preview.clear();
+      await vi.runAllTimersAsync();
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
   it('advances during continuous input with one rebuild and one pending value', async () => {
     vi.useFakeTimers();
     try {
