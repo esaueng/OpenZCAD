@@ -19360,7 +19360,9 @@ export function App() {
           <ViewerShell
             projectId={doc.projectId}
             geometryTrace={
-              !previewDoc && (currentGeometrySnapshot || exactGeometryReady)
+              !previewDoc &&
+              !currentFaceGeometryPreview &&
+              (currentGeometrySnapshot || exactGeometryReady)
                 ? {
                     projectId: doc.projectId,
                     version: doc.version,
