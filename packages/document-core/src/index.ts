@@ -3923,21 +3923,6 @@ function requireMatchingDimensions(
   return quantity(value, first?.length ?? 0, first?.angle ?? 0);
 }
 
-/**
- * Thrown when an expression reads a name that is neither a parameter in scope,
- * a constant nor a unit in unit position. Carries the name so a field can
- * offer to define it where it was typed instead of only reporting it; the
- * message is unchanged.
- */
-export class UnknownIdentifierError extends Error {
-  readonly identifier: string;
-
-  constructor(identifier: string) {
-    super(`Unknown identifier "${identifier}" in expression.`);
-    this.identifier = identifier;
-  }
-}
-
 const EXPRESSION_CONSTANTS: Record<string, number> = {
   pi: Math.PI,
   PI: Math.PI
@@ -4192,7 +4177,7 @@ function parseExpressionQuantity(
       }
       const value = scope[token.name];
       if (value === undefined) {
-        throw new UnknownIdentifierError(token.name);
+        throw new Error(`Unknown identifier "${token.name}" in expression.`);
       }
       return quantity(value);
     }

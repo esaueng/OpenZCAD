@@ -31,7 +31,6 @@ import {
   deleteParameter,
   duplicateProjectDocument,
   evaluateExpression,
-  UnknownIdentifierError,
   extrudeSketch,
   getLatestBodyId,
   getLatestSketchId,
@@ -928,31 +927,6 @@ describe('evaluateExpression', () => {
       /Unknown identifier/
     );
     expect(() => evaluateExpression('alert(1)', scope)).toThrow();
-  });
-
-  it('names the unknown identifier so a field can offer to define it', () => {
-    let thrown: unknown;
-    try {
-      evaluateExpression('depth * 2 + width', scope);
-    } catch (error) {
-      thrown = error;
-    }
-    expect(thrown).toBeInstanceOf(UnknownIdentifierError);
-    expect(thrown).toBeInstanceOf(Error);
-    expect((thrown as UnknownIdentifierError).identifier).toBe('depth');
-    // The message every existing caller shows is unchanged.
-    expect((thrown as Error).message).toBe(
-      'Unknown identifier "depth" in expression.'
-    );
-    // Other refusals keep their plain Error.
-    let syntax: unknown;
-    try {
-      evaluateExpression('width +', scope);
-    } catch (error) {
-      syntax = error;
-    }
-    expect(syntax).toBeInstanceOf(Error);
-    expect(syntax).not.toBeInstanceOf(UnknownIdentifierError);
   });
 
   it('rejects malformed expressions', () => {
