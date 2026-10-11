@@ -177,6 +177,8 @@ export interface ValidatedFeatureTransactionRunOptions {
   validatingMessage?: string;
   successMessage: string;
   onSuccess?(): void;
+  /** As {@link ValidatedFeatureRunOptions.cancelled}. */
+  cancelled?(): boolean;
 }
 
 /**
@@ -506,6 +508,7 @@ export function useValidatedFeatureCommit(
         validatingMessage: runOptions.validatingMessage,
         successMessage: runOptions.successMessage,
         onSuccess: runOptions.onSuccess,
+        ...(runOptions.cancelled ? { cancelled: runOptions.cancelled } : {}),
         preview: (current) =>
           new CommandManager(current).runTransaction(
             runOptions.label,

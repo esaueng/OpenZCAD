@@ -13,6 +13,7 @@ function renderTopBar(
     geometryPending?: boolean;
     geometryFailed?: boolean;
     canExport?: boolean;
+    exportWithheld?: string | null;
     projectName?: string;
   } = {}
 ) {
@@ -31,6 +32,7 @@ function renderTopBar(
       units="mm"
       canExport={options.canExport ?? false}
       exportScope={null}
+      exportWithheld={options.exportWithheld ?? null}
       saveState={options.saveState ?? 'local'}
       geometryPending={options.geometryPending}
       geometryFailed={options.geometryFailed}
@@ -233,6 +235,29 @@ describe('TopBar File menu', () => {
     ).toHaveAttribute('title', expect.stringContaining('STEP'));
     // Only Export STEP answers to the format's name.
     expect(screen.getAllByRole('button', { name: /STEP/ })).toHaveLength(1);
+  });
+
+  it('says which body a failed feature holds out of the export', () => {
+    const reason =
+      'Duct 1 not exported: “Duct wall” failed to rebuild, so it does not match the design. Fix or suppress the failed feature in History to export it.';
+    renderTopBar({ canExport: false, exportWithheld: reason });
+    fileMenu().open = true;
+    expect(screen.getByRole('note')).toHaveTextContent(reason);
+    const exportStep = screen.getByRole('button', { name: /Export STEP/ });
+    expect(exportStep).toBeDisabled();
+    expect(exportStep).toHaveAttribute('title', reason);
+  });
+
+  it('keeps a partial export available and says what it leaves out', () => {
+    const reason = 'Duct 1 not exported: “Duct wall” failed to rebuild.';
+    renderTopBar({ canExport: true, exportWithheld: reason });
+    fileMenu().open = true;
+    const exportStep = screen.getByRole('button', { name: /Export STEP/ });
+    expect(exportStep).toBeEnabled();
+    expect(exportStep).toHaveAttribute(
+      'title',
+      `Export all bodies as STEP. ${reason}`
+    );
   });
 
   it('separates Export from Import with a rule', () => {
