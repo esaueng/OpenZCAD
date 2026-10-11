@@ -118,7 +118,22 @@ Format: **Where** · **What** (in the user's words) · **Severity** · **Fix** �
 
 **G16 · The first tool open after load shows its lane prompt 2–4 s before its card.** "Enter creates" appeared with nothing to create. **Polish.** Fix: prefetch the ToolCard chunk when idle, or show a skeleton card. Hands-on (a single observation; it did not recur).
 
-## Ranked list with rough sizes
+## Where these findings are tracked
+
+This document is historical evidence. Priority and delivery status for the findings live in [ROADMAP.md](../../ROADMAP.md), and each fix PR records its evidence under a master row there. The ranked list and the top five below show how the review saw priorities on 11 October; they are not a work queue.
+
+| Findings     | Fix PR | ROADMAP row         |
+| ------------ | ------ | ------------------- |
+| G1, G10      | #630   | U02                 |
+| G2, G15      | #633   | U04                 |
+| G3, G12      | #631   | recorded by that PR |
+| G4, G13      | #628   | U04                 |
+| G5           | #635   | recorded by that PR |
+| G6, G7       | #629   | U01                 |
+| G8, G14, G16 | #634   | U03                 |
+| G9, G11      | #632   | U02                 |
+
+## Ranked list with rough sizes (as of the review)
 
 1. G1 suppress refusal: hours (dialog with "suppress dependents too", plain text, correct attribution)
 2. G2 body colour equals preview colour: hours, plus a palette decision
@@ -129,7 +144,7 @@ Format: **Where** · **What** (in the user's words) · **Severity** · **Fix** �
 7. G15, G8, G9, G10: hours each
 8. G11–G14, G16 polish: under an hour each
 
-## Top five changes to make next
+## Top five changes to make next (as of the review)
 
 1. Make suppress behave like delete: one dialog, the dependents named, an option to suppress them too, and no internal ids in the text (G1).
 2. Stop recolouring the part per operation, so the preview hue only ever means "preview" (G2).
