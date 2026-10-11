@@ -1051,6 +1051,13 @@ export function ModelingOperationsForm({
               <option value="smooth">Smooth</option>
             </select>
           </label>
+          {state.value.guideId === '' && state.value.mode === 'smooth' ? (
+            <p className="muted">
+              Smooth samples a path of one line, or one arc of up to a quarter
+              turn, more finely. It does not make exact curved surfaces, and a
+              longer path builds the same body as Standard.
+            </p>
+          ) : null}
           {state.value.guideId === '' ? null : (
             <p className="muted">
               {state.value.mode === 'smooth'

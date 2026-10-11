@@ -230,6 +230,7 @@ import { watchBuildVersion } from './lib/buildVersionWatch';
 import { commandOutcomeMessage } from './lib/commandOutcome';
 import { tintPreviewResultBodies } from './lib/previewBodyTint';
 import { presentedDiagnostics } from './lib/diagnosticsRows';
+import { sweepFacetingAdvisories } from './lib/sweepFaceting';
 import { primitiveDimensionLabel } from './lib/primitiveDimensionLabel';
 import { useRememberedSectionPlane } from './hooks/useRememberedSectionPlane';
 import { newBlendFacePick } from './lib/blendRearm';
@@ -5254,24 +5255,32 @@ export function App() {
     currentGeometrySnapshot?.warnings ??
     (previewDoc ?? doc)?.derived.warnings ??
     [];
-  const diagnostics = useMemo(
-    () =>
-      presentedDiagnostics(
-        warnings,
-        currentFaceGeometryPreview
-          ? currentFaceGeometryPreview.geometry.featureWarnings
-          : currentGeometrySnapshot
-            ? currentGeometrySnapshot.featureWarnings
-            : (previewDoc ?? doc)?.derived.featureWarnings
-      ),
-    [
-      warnings,
-      currentGeometrySnapshot,
-      currentFaceGeometryPreview,
-      previewDoc,
-      doc
-    ]
-  );
+  const diagnostics = useMemo(() => {
+    const shown = previewDoc ?? doc;
+    // Faceted sweeps are disclosed from the shown bodies' measured topology
+    // (see sweepFacetingAdvisories); transient previews carry none.
+    const faceting =
+      currentFaceGeometryPreview || currentGeometrySnapshot || !shown
+        ? []
+        : sweepFacetingAdvisories(shown);
+    const featureWarnings = currentFaceGeometryPreview
+      ? currentFaceGeometryPreview.geometry.featureWarnings
+      : currentGeometrySnapshot
+        ? currentGeometrySnapshot.featureWarnings
+        : shown?.derived.featureWarnings;
+    return presentedDiagnostics(
+      [...warnings, ...faceting.map((advisory) => advisory.message)],
+      faceting.length
+        ? [...(featureWarnings ?? []), ...faceting]
+        : featureWarnings
+    );
+  }, [
+    warnings,
+    currentGeometrySnapshot,
+    currentFaceGeometryPreview,
+    previewDoc,
+    doc
+  ]);
 
   // Keyed on the derived body table, not the whole document: commands clone
   // the document but share `derived` by reference, so keying on `doc` gave
