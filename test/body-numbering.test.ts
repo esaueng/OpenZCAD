@@ -282,6 +282,85 @@ describe('body names at creation', () => {
   });
 });
 
+describe('feature names an assistant patch creates', () => {
+  const featureNames = (document: ProjectDocument) =>
+    document.featureOrder.map(
+      (featureId) =>
+        Object.values(document.nodes).find(
+          (node) => node.kind === 'feature' && node.featureId === featureId
+        )!.name
+    );
+  const primitive = (name: string, localId: string) =>
+    ({
+      kind: 'add_primitive',
+      name,
+      localId,
+      primitiveKind: 'box',
+      dimensions: {
+        width: 10,
+        height: 10,
+        depth: 10,
+        radius: null,
+        bottomRadius: null,
+        topRadius: null,
+        majorRadius: null,
+        minorRadius: null
+      }
+    }) as const;
+
+  it('numbers a repeated feature name as the app does, and replays it', () => {
+    const initial = box(createProjectDocument('Assistant names', user), 'Box');
+    const manager = new CommandManager(initial);
+    const proposal: CadPatchProposal = {
+      proposalId: 'proposal_numbered_features',
+      summary: 'Two more boxes, joined.',
+      assumptions: [],
+      operations: [
+        primitive('Box', 'a'),
+        primitive('Box', 'b'),
+        {
+          kind: 'add_boolean',
+          name: 'Union',
+          localId: 'joined',
+          operation: 'union',
+          targetBodyIds: ['$a', '$b']
+        },
+        {
+          kind: 'add_boolean',
+          name: 'Union',
+          localId: 'all',
+          operation: 'union',
+          targetBodyIds: [initial.bodyOrder[0]!, '$joined']
+        }
+      ]
+    };
+    const commands = commandsForCadPatch(manager.document, proposal);
+    // Resolved when compiled and stored in each command's payload.
+    expect(
+      commands.map((command) => (command.payload as { name: string }).name)
+    ).toEqual(['Box 2', 'Box 3', 'Union', 'Union 2']);
+    manager.runTransaction('Apply AI patch', commands);
+    expect(featureNames(manager.document)).toEqual([
+      'Box',
+      'Box 2',
+      'Box 3',
+      'Union',
+      'Union 2'
+    ]);
+    // Bodies still count from the name as proposed.
+    expect(names(manager.document)).toEqual([
+      'Box 1',
+      'Box 2',
+      'Box 3',
+      'Union 1',
+      'Union 2'
+    ]);
+    expect(
+      featureNames(replayCommands(initial, manager.document.commandLog))
+    ).toEqual(featureNames(manager.document));
+  });
+});
+
 describe('a stored document keeps its stored names', () => {
   function legacyDocument(): ProjectDocument {
     const manager = new CommandManager(createProjectDocument('Stored', user));
