@@ -236,11 +236,10 @@ export function rememberActiveProject(
   since?: ActiveProjectSnapshot
 ): boolean {
   const session = readSession(storage);
-  if (
-    pointerMovedSince(session, since) &&
-    session.activeProjectId !== projectId
-  ) {
-    return false;
+  if (pointerMovedSince(session, since)) {
+    // Already pointing here is success, but rewriting it would bump the
+    // revision and make a newer open's snapshot look stale.
+    return session.activeProjectId === projectId;
   }
   return writeSession(withPointer(session, projectId), storage);
 }
