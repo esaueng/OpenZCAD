@@ -111,15 +111,17 @@ test('cuts two native profiles with explicit intent and retains it through undo 
     await page
       .getByRole('combobox', { name: 'Extrude operation', exact: true })
       .selectOption('cut');
-    await page.getByRole('button', { name: 'Distance…' }).click();
-    const pendingKeypad = page.getByRole('dialog', { name: 'Height value' });
+    // The card's own signed distance: the one way to type the extrusion.
+    const pendingDistance = page
+      .getByRole('region', { name: 'Extrude operation' })
+      .getByRole('textbox', { name: 'Distance', exact: true });
     await page.evaluate(() => {
       (
         Reflect.get(window, '__extrudeValidationGate') as ExtrudeValidationGate
       ).hold = true;
     });
-    await pendingKeypad.getByRole('textbox').fill('-8');
-    await pendingKeypad.getByRole('button', { name: 'Apply height' }).click();
+    await pendingDistance.fill('-8');
+    await pendingDistance.press('Enter');
     await expect
       .poll(() =>
         page.evaluate(
@@ -165,10 +167,11 @@ test('cuts two native profiles with explicit intent and retains it through undo 
   await expect(page.getByLabel('Extrude target body')).toHaveValue(
     document.bodyOrder[0]!
   );
-  await page.getByRole('button', { name: 'Distance…' }).click();
-  const keypad = page.getByRole('dialog', { name: 'Height value' });
-  await keypad.getByRole('textbox').fill('-8');
-  await keypad.getByRole('button', { name: 'Apply height' }).click();
+  const distance = page
+    .getByRole('region', { name: 'Extrude operation' })
+    .getByRole('textbox', { name: 'Distance', exact: true });
+  await distance.fill('-8');
+  await distance.press('Enter');
   await expect(page.getByRole('contentinfo')).toContainText(
     'Extruded region by -8 mm (cut).',
     { timeout: 30_000 }

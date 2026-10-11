@@ -960,9 +960,16 @@ export interface ToolCardAction {
   note?: string;
 }
 
+/**
+ * Which CARD_EYEBROWS word the card's header carries: a command that adds a
+ * feature, one that edits a feature in history, or a direct edit of the shape.
+ */
+export type ToolCardEyebrow = 'create' | 'edit' | 'direct';
+
 export interface ToolCardModel {
   icon: ToolCardIcon;
   title: string;
+  eyebrow: ToolCardEyebrow;
   actions?: ToolCardAction[];
   /** Compact disclosure for context that would make the live hint overflow. */
   badge?: { label: string; detail: string };
@@ -1012,6 +1019,7 @@ interface CommandIdentity {
   id: CommandId;
   icon: ToolCardIcon;
   title: string;
+  eyebrow: ToolCardEyebrow;
 }
 
 /**
@@ -1029,22 +1037,34 @@ function commandIdentityFor(state: InteractionState): CommandIdentity | null {
     case 'face':
       switch (state.op) {
         case 'edit-fillet':
-          return { id: 'edit-fillet', icon: 'fillet', title: 'Edit Fillet' };
+          return {
+            id: 'edit-fillet',
+            icon: 'fillet',
+            title: 'Edit Fillet',
+            eyebrow: 'edit'
+          };
         case 'remove-face-feature':
           return {
             id: 'remove-face-feature',
             icon: 'fillet',
-            title: 'Blend Face'
+            title: 'Blend Face',
+            eyebrow: 'direct'
           };
         case 'resize-cylinder-radius':
           return {
             id: 'resize-cylinder-radius',
             icon: 'resize-cylinder-radius',
-            title: radialFaceOperationName(state.target)
+            title: radialFaceOperationName(state.target),
+            eyebrow: 'direct'
           };
         case 'offset-face':
           return state.target.extrudeFeatureId
-            ? { id: 'offset-face', icon: 'extrude', title: 'Extrude' }
+            ? {
+                id: 'offset-face',
+                icon: 'extrude',
+                title: 'Extrude',
+                eyebrow: 'edit'
+              }
             : {
                 id: 'offset-face',
                 icon: 'offset-face',
@@ -1052,18 +1072,29 @@ function commandIdentityFor(state: InteractionState): CommandIdentity | null {
                   state.target.resizeBodyFeatureId &&
                   !state.target.localFaceOffset
                     ? 'Resize Body'
-                    : 'Offset Face'
+                    : 'Offset Face',
+                eyebrow: 'direct'
               };
       }
       break;
     case 'edges':
       return state.op === 'fillet'
-        ? { id: 'fillet', icon: 'fillet', title: 'Fillet' }
-        : { id: 'chamfer', icon: 'fillet', title: 'Chamfer' };
+        ? { id: 'fillet', icon: 'fillet', title: 'Fillet', eyebrow: 'create' }
+        : {
+            id: 'chamfer',
+            icon: 'fillet',
+            title: 'Chamfer',
+            eyebrow: 'create'
+          };
     case 'region':
-      return { id: 'extrude-region', icon: 'extrude', title: 'Extrude' };
+      return {
+        id: 'extrude-region',
+        icon: 'extrude',
+        title: 'Extrude',
+        eyebrow: 'create'
+      };
     case 'sketch':
-      return { id: 'sketch', icon: 'sketch', title: 'Sketch' };
+      return { id: 'sketch', icon: 'sketch', title: 'Sketch', eyebrow: 'edit' };
   }
   return null;
 }
@@ -1155,7 +1186,7 @@ export function toolCardFor(state: InteractionState): ToolCardModel | null {
   if (!identity) {
     return null;
   }
-  const { icon, title } = identity;
+  const { icon, title, eyebrow } = identity;
   switch (state.mode) {
     case 'face': {
       const capabilities = selectionCapabilities({
@@ -1216,6 +1247,7 @@ export function toolCardFor(state: InteractionState): ToolCardModel | null {
       return {
         icon,
         title,
+        eyebrow,
         ...(alwaysShowActions || actions.length > 1 ? { actions } : {}),
         ...(offsetNote
           ? {
@@ -1248,6 +1280,7 @@ export function toolCardFor(state: InteractionState): ToolCardModel | null {
       return {
         icon,
         title,
+        eyebrow,
         actions,
         ...lifecycleHint(
           state,
@@ -1261,6 +1294,7 @@ export function toolCardFor(state: InteractionState): ToolCardModel | null {
       return {
         icon,
         title,
+        eyebrow,
         ...lifecycleHint(
           state,
           state.targets.length > 1
@@ -1273,6 +1307,7 @@ export function toolCardFor(state: InteractionState): ToolCardModel | null {
         return {
           icon,
           title,
+          eyebrow,
           hint:
             state.session.moving.handle === 'rotate'
               ? 'Release to set the rotation · Esc cancels the drag.'
@@ -1282,6 +1317,7 @@ export function toolCardFor(state: InteractionState): ToolCardModel | null {
       return {
         icon,
         title,
+        eyebrow,
         hint: state.session.pendingConstraint
           ? 'Pick geometry for the constraint · Esc cancels.'
           : state.session.pendingEdit
