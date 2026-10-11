@@ -222,6 +222,27 @@ export class SyncReadMemo {
     }
     return map;
   }
+
+  /**
+   * Faces that use one of `edges`, in the solid's original traversal order.
+   * The kernel's solid-scoped incidence map narrows candidates only; callers
+   * still verify the shared edge and geometry before publishing a proof.
+   */
+  facesAdjacentToEdges(solid: number, edges: Iterable<number>): number[] {
+    const incidence = this.edgeToFaceMap(solid);
+    const candidates = new Set<number>();
+    for (const edge of edges) {
+      for (const face of incidence[String(edge)] ?? []) {
+        candidates.add(face);
+      }
+    }
+    const faces =
+      this.records.get(solid)?.faces ??
+      this.faceValue('adjacency-faces', solid, () =>
+        Array.from(this.kernel.getSolidFaces(solid))
+      );
+    return faces.filter((face) => candidates.has(face));
+  }
 }
 
 let activeMemo: SyncReadMemo | null = null;
