@@ -340,6 +340,13 @@ fieldset.field > legend {
   margin-top: -4px;
 }
 
+/* An expression field is a <div> with its <label> beside the input (the
+   define prompt under it holds a control of its own), so the label takes
+   the size `.field > span` gives every other field label. */
+.expr-field > label {
+  font-size: var(--fs-xs);
+}
+
 .expr-input-row {
   display: grid;
   gap: 3px;
@@ -358,6 +365,68 @@ fieldset.field > legend {
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
+}
+
+/* "`width` is not defined yet · Define width = [80] Define ↵", in place
+   of the "Unknown identifier" error under a field that names a parameter
+   nobody has defined. */
+.expr-define {
+  display: grid;
+  gap: 4px;
+  min-width: 0;
+}
+
+.expr-define-note {
+  color: var(--color-text-muted);
+  font-size: var(--fs-mini);
+  overflow-wrap: anywhere;
+}
+
+.expr-define-note code {
+  color: var(--color-accent);
+  font-family: var(--font-mono);
+}
+
+/* Wraps rather than squeezes: in a third-width Position cell the value
+   field and the button go under "Define width =". */
+.expr-define-row {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 4px 6px;
+  min-width: 0;
+  font-size: var(--fs-xs);
+}
+
+.expr-define-row label {
+  flex: 0 1 auto;
+  min-width: 0;
+  font-family: var(--font-mono);
+  overflow-wrap: anywhere;
+}
+
+.expr-define-row input {
+  flex: 1 1 4em;
+  width: 4em;
+  min-width: 0;
+  height: 26px;
+  padding: 2px 6px;
+  font-size: var(--fs-xs);
+}
+
+/* 26 px: beside a 26 px value field, over the 24 px minimum target. */
+.expr-define-submit {
+  flex: none;
+  min-height: 26px;
+  gap: 5px;
+  padding: 2px 8px;
+  font-size: var(--fs-xs);
+}
+
+.expr-define-key {
+  color: var(--color-text-subtle);
+  font-family: inherit;
+  font-size: var(--fs-mini);
 }
 
 .expr-preview.error {

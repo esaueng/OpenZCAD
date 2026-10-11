@@ -1,6 +1,11 @@
-import { fireEvent, render, screen } from '@testing-library/react';
+import { act, fireEvent, render, screen } from '@testing-library/react';
+import { useState } from 'react';
 import { describe, expect, it, vi } from 'vitest';
 import { PrimitiveForm } from './FeatureForms';
+import {
+  ParameterDefinitionProvider,
+  type ParameterDefinition
+} from './parameterDefinition';
 
 describe('PrimitiveForm dimension validation', () => {
   it.each(['-5', '0', 'w - 10'])(
@@ -205,5 +210,59 @@ describe('PrimitiveForm submit button', () => {
     expect(create).toHaveAttribute('aria-keyshortcuts', 'Enter');
     expect(create).toHaveAccessibleName('Create');
     expect(create).toHaveAccessibleDescription('');
+  });
+});
+
+describe('PrimitiveForm defines a parameter from a field (G5)', () => {
+  it('creates a box over a parameter defined in its Width field', async () => {
+    const onSubmit = vi.fn();
+    const defined: Array<[string, string]> = [];
+    function Workspace() {
+      const [scope, setScope] = useState<Record<string, number>>({});
+      const definition: ParameterDefinition = {
+        has: (name) => name in scope,
+        define: async (name, expression) => {
+          defined.push([name, expression]);
+          setScope((current) => ({ ...current, [name]: Number(expression) }));
+          return null;
+        }
+      };
+      return (
+        <ParameterDefinitionProvider value={definition}>
+          <PrimitiveForm
+            kind="box"
+            scope={scope}
+            initialName="Box"
+            submitLabel="Create"
+            onSubmit={onSubmit}
+          />
+        </ParameterDefinitionProvider>
+      );
+    }
+    render(<Workspace />);
+    const width = screen.getByRole('textbox', { name: 'Width (X)' });
+    const previous = (width as HTMLInputElement).value;
+    fireEvent.change(width, { target: { value: 'width' } });
+    expect(screen.getByRole('button', { name: 'Create' })).toBeDisabled();
+    const value = await screen.findByRole('textbox', {
+      name: 'Value for new parameter width'
+    });
+    expect(value).toHaveValue(previous);
+    // Enter in the value defines; it does not reach the card's Enter.
+    await act(async () => {
+      fireEvent.keyDown(value, { key: 'Enter' });
+    });
+    expect(onSubmit).not.toHaveBeenCalled();
+    expect(defined).toEqual([['width', previous]]);
+    expect(screen.getByText(`= ${previous}`)).toBeVisible();
+    expect(screen.getByRole('button', { name: 'Create' })).toBeEnabled();
+    // Back in the field, Enter creates the box over the new parameter.
+    expect(width).toHaveFocus();
+    fireEvent.keyDown(width, { key: 'Enter' });
+    expect(onSubmit).toHaveBeenCalledWith(
+      'Box',
+      { width: 'width', height: 18, depth: 24 },
+      { x: 0, y: 0, z: 0 }
+    );
   });
 });
