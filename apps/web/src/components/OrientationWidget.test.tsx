@@ -356,9 +356,11 @@ describe('OrientationWidget pointer lifecycle', () => {
       }
     });
 
-    it('gives every isometric corner a target at least 16 px each way', () => {
+    it('gives every isometric corner a target at least 24 px each way', () => {
       // Measured on the running widget before this target: 10×17 and 20×6 px
-      // for the corners on the silhouette, which have a face turned away.
+      // for the corners on the silhouette, which have a face turned away;
+      // then 17×21 and 24×20 px (11 Oct 2026 review, G14) against the 24 px
+      // minimum pointer target.
       const { container, orientationRef } = renderWidget();
       orientationRef.current?.(ISOMETRIC);
 
@@ -368,8 +370,40 @@ describe('OrientationWidget pointer lifecycle', () => {
         const points = polygonPoints(target);
         const xs = points.map(([x]) => x);
         const ys = points.map(([, y]) => y);
-        expect(Math.max(...xs) - Math.min(...xs)).toBeGreaterThanOrEqual(16);
-        expect(Math.max(...ys) - Math.min(...ys)).toBeGreaterThanOrEqual(16);
+        expect(Math.max(...xs) - Math.min(...xs)).toBeGreaterThanOrEqual(24);
+        expect(Math.max(...ys) - Math.min(...ys)).toBeGreaterThanOrEqual(24);
+      }
+    });
+
+    it('leaves every face the middle of itself around its label', () => {
+      // The corners' area comes off the faces; each must still own a
+      // generous region round its centre, where its label is drawn.
+      const { container, orientationRef } = renderWidget();
+      orientationRef.current?.(ISOMETRIC);
+      const targets = visibleCorners(container).map(({ target }) =>
+        polygonPoints(target)
+      );
+      const faces = [
+        ...container.querySelectorAll<SVGPolygonElement>('.cube-face')
+      ].filter((face) => face.style.display !== 'none');
+      expect(faces.length).toBe(3);
+      for (const face of faces) {
+        const outline = polygonPoints(face);
+        const [cx, cy] = outline
+          .reduce(([sx, sy], [x, y]) => [sx + x, sy + y], [0, 0])
+          .map((sum) => sum / outline.length) as [number, number];
+        // The centre and a ring 6 px round it: no corner claims any of it.
+        for (let step = 0; step < 16; step += 1) {
+          const angle = (step / 16) * Math.PI * 2;
+          for (const point of [
+            [cx, cy] as const,
+            [cx + 6 * Math.cos(angle), cy + 6 * Math.sin(angle)] as const
+          ]) {
+            expect(targets.some((target) => contains(target, point))).toBe(
+              false
+            );
+          }
+        }
       }
     });
 

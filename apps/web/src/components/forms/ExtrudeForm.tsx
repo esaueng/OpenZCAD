@@ -37,18 +37,6 @@ interface ExtrudeFormProps {
   onPreview?(value: ExtrudeFormValue | null): void;
   onSubmit(value: ExtrudeFormValue): void;
   onCancel(): void;
-  onDistance?(value: ParamValue): void;
-}
-
-/**
- * The text the exact-entry keypad opens with for this form's distance: as the
- * form holds it, so an expression stays one and Enter re-commits it
- * unchanged. Built from the resolved number, "10/3" opened as 3.33 and was
- * applied as 3.33 mm. Zero opens empty, so the first key types the value.
- */
-export function distanceKeypadText(distance: ParamValue): string {
-  const text = String(distance).trim();
-  return Number(text) === 0 ? '' : text;
 }
 
 /**
@@ -92,8 +80,7 @@ export function ExtrudeForm({
   onDraft,
   onPreview,
   onSubmit,
-  onCancel,
-  onDistance
+  onCancel
 }: ExtrudeFormProps) {
   const [draft, setDraft] = useState(() => ({
     name: initial.name,
@@ -264,20 +251,14 @@ export function ExtrudeForm({
             }
           />
         )}
+        {/* Direction is the distance's sign, and Reverse is the one control
+            that flips it. A third way, "Distance…", opened the viewport's
+            exact-entry keypad for the same number this field already holds
+            (the value chip and typing a digit still open that keypad). */}
         <p className="muted">
           Negative distance reverses the extrusion. Drag or type to preview;{' '}
           {submitLabel} saves the result.
         </p>
-        {onDistance && (
-          <button
-            type="button"
-            className="secondary"
-            disabled={!distance.ok}
-            onClick={() => onDistance(coerceParamValue(draft.distance))}
-          >
-            Distance…
-          </button>
-        )}
       </fieldset>
       <div className="form-actions">
         <button
