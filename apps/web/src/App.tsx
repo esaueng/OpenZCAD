@@ -4009,7 +4009,6 @@ export function App() {
   const accountConflictHandlers: ConflictResolutionHandlers = {
     writeRecoveryCopy: conflictHandlers.writeRecoveryCopy,
     async useRemoteVersion(incomingDocument, outcome) {
-      const activeProjectSince = snapshotActiveProject();
       // Account documents are stored without their derived projection.
       // Reattach the local one when it provably describes the same canonical
       // model rather than hydrating a blank viewport.
@@ -4033,7 +4032,8 @@ export function App() {
       );
       hydrateDocument(remoteDocument, {
         restoreView: false,
-        activeProjectSince
+        // The open project's own conflict: nothing to reopen differently.
+        rememberProject: false
       });
       setAccountConflict(null);
       setStatus(
@@ -4407,7 +4407,6 @@ export function App() {
     async function check() {
       if (checking || projectOpenElsewhereRef.current) return;
       checking = true;
-      const activeProjectSince = snapshotActiveProject();
       try {
         await projectOwnershipSettledRef.current;
         if (cancelled || projectOpenElsewhereRef.current) return;
@@ -4480,7 +4479,9 @@ export function App() {
               document.version
             );
             remoteVersionsRef.current.set(document.projectId, document.version);
-            hydrateDocument(document, { activeProjectSince });
+            // A refresh of the open project is not a choice to reopen it, and
+            // must not revise the pointer under an open of another project.
+            hydrateDocument(document, { rememberProject: false });
           },
           saveBaseline: (document) =>
             saveLastSyncedVersion(document.projectId, document.version),
@@ -4740,7 +4741,7 @@ export function App() {
           return;
         }
         if (startupProjectId) {
-          clearActiveProject();
+          clearActiveProject(undefined, startupPointer);
         }
         // The mode only: the shelf heading beside this footer counts the
         // parts, and a second count here said the same thing twice.
@@ -4755,7 +4756,7 @@ export function App() {
         );
       } catch (error) {
         if (!cancelled) {
-          clearActiveProject();
+          clearActiveProject(undefined, startupPointer);
           setStatus(errorMessage(error, 'Could not restore the workspace.'));
         }
       } finally {

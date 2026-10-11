@@ -179,6 +179,17 @@ function writeSession(
   }
 }
 
+function pointerMovedSince(
+  session: WorkspaceSession,
+  since: ActiveProjectSnapshot | undefined
+): boolean {
+  return Boolean(
+    since &&
+    (session.activeProjectId !== since.activeProjectId ||
+      session.pointerRevision !== since.pointerRevision)
+  );
+}
+
 function withPointer(
   session: WorkspaceSession,
   activeProjectId: string | null
@@ -226,9 +237,7 @@ export function rememberActiveProject(
 ): boolean {
   const session = readSession(storage);
   if (
-    since &&
-    (session.activeProjectId !== since.activeProjectId ||
-      session.pointerRevision !== since.pointerRevision) &&
+    pointerMovedSince(session, since) &&
     session.activeProjectId !== projectId
   ) {
     return false;
@@ -236,10 +245,15 @@ export function rememberActiveProject(
   return writeSession(withPointer(session, projectId), storage);
 }
 
+/** With a snapshot, keeps a pointer written since it, as remembering does. */
 export function clearActiveProject(
-  storage: StorageLike | null = defaultStorage()
+  storage: StorageLike | null = defaultStorage(),
+  since?: ActiveProjectSnapshot
 ): boolean {
   const session = readSession(storage);
+  if (pointerMovedSince(session, since)) {
+    return false;
+  }
   return writeSession(withPointer(session, null), storage);
 }
 

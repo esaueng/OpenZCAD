@@ -94,6 +94,20 @@ describe('workspace session persistence', () => {
     expect(loadActiveProjectId(storage)).toBeNull();
   });
 
+  it('clears only a pointer that has not moved since the snapshot', () => {
+    const storage = new MemoryStorage();
+    rememberActiveProject('missing', storage);
+    const restoreBegan = snapshotActiveProject(storage);
+    rememberActiveProject('newer', storage);
+
+    expect(clearActiveProject(storage, restoreBegan)).toBe(false);
+    expect(loadActiveProjectId(storage)).toBe('newer');
+
+    const unchanged = snapshotActiveProject(storage);
+    expect(clearActiveProject(storage, unchanged)).toBe(true);
+    expect(loadActiveProjectId(storage)).toBeNull();
+  });
+
   it('keeps a pointer seeded by a writer that knows no revision', () => {
     const storage = new MemoryStorage();
     const openBegan = snapshotActiveProject(storage);
