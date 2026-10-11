@@ -78,3 +78,92 @@ export function holePositionLabels(normal: Vector3 | undefined): {
     v: v ? `V · along ${v}` : 'V'
   };
 }
+
+/** Which world axis a direction mostly runs along: 0 for X, 1 for Y, 2 for Z. */
+function dominantAxis(direction: Vector3): number {
+  const magnitudes = [
+    Math.abs(direction.x),
+    Math.abs(direction.y),
+    Math.abs(direction.z)
+  ];
+  return magnitudes.indexOf(Math.max(...magnitudes));
+}
+
+/**
+ * The order the card shows the U and V fields in: the one running along X
+ * first, then Y, then Z.
+ *
+ * The frame itself cannot change — saved holes store (u, v) in it, and the
+ * kernel builder rebuilds them from it — so on a top face U still runs along
+ * −Y and V along +X. Listing V first there puts the plate's X (its width) in
+ * the first field, where a reader looks for it, while each label still says
+ * which way its own field runs. Side faces already list their horizontal
+ * axis first and keep their order.
+ */
+export function holePositionFieldOrder(
+  normal: Vector3 | undefined
+): readonly ['u', 'v'] | readonly ['v', 'u'] {
+  const axes = normal ? holePositionAxes(normal) : null;
+  if (!axes) return ['u', 'v'];
+  return dominantAxis(axes.v) < dominantAxis(axes.u) ? ['v', 'u'] : ['u', 'v'];
+}
+
+/** A picked coordinate as field text: no float noise, no "-0". */
+function coordinateText(value: number, step: number | null): string {
+  const increment = step !== null && step > 0 ? step : 0.01;
+  const snapped = Math.round(value / increment) * increment;
+  // As many places as the increment has (0.25 → 2), never more than six.
+  const written = String(increment);
+  const dot = written.indexOf('.');
+  const places = written.includes('e')
+    ? 6
+    : dot < 0
+      ? 0
+      : Math.min(6, written.length - dot - 1);
+  const rounded = Number(snapped.toFixed(places));
+  return rounded === 0 ? '0' : String(rounded);
+}
+
+/**
+ * The hole position (u, v) a click on the entry face asks for: the picked
+ * point measured from the face's anchor along the same U and V the builder
+ * drills in, rounded to the snap increment (or to 0.01 with snapping off).
+ * Null when the face has no usable frame.
+ */
+export function holePositionFromPoint(
+  normal: Vector3,
+  anchor: Vector3,
+  point: Vector3,
+  step: number | null
+): { u: string; v: string } | null {
+  const axes = holePositionAxes(normal);
+  if (!axes) return null;
+  const offset = {
+    x: point.x - anchor.x,
+    y: point.y - anchor.y,
+    z: point.z - anchor.z
+  };
+  const along = (axis: Vector3) =>
+    offset.x * axis.x + offset.y * axis.y + offset.z * axis.z;
+  const u = along(axes.u);
+  const v = along(axes.v);
+  if (!Number.isFinite(u) || !Number.isFinite(v)) return null;
+  return { u: coordinateText(u, step), v: coordinateText(v, step) };
+}
+
+/**
+ * `holePositionFromPoint` for a picked entry face's measured geometry,
+ * measured from the anchor the hole is drilled against (see
+ * `holePositionAnchor`). Null when the face lacks a normal or that anchor.
+ */
+export function holePositionFromPick(
+  face: { normal?: Vector3; centroid?: Vector3; center?: Vector3 },
+  anchor: 'centroid' | 'center',
+  point: Vector3,
+  step: number | null
+): { u: string; v: string } | null {
+  const origin = anchor === 'centroid' ? face.centroid : face.center;
+  return face.normal && origin
+    ? holePositionFromPoint(face.normal, origin, point, step)
+    : null;
+}
