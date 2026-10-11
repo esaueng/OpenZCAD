@@ -34,7 +34,7 @@
     "DESKTOP_AUTH_ENABLED": "true",
     "TURNSTILE_SITE_KEY": "0x4AAAAAAD_j6Y7NvXKtcxNX",
     "AI_PROVIDER": "openai",
-    "AI_MODEL": "gpt-5.6-sol",
+    "AI_MODEL": "gpt-6-luna",
     "AI_REASONING_EFFORT": "high",
     // Collaboration is open to every authenticated beta account. Authorization
     // still comes from project ownership/membership, and editor writes still

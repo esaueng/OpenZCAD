@@ -32,7 +32,7 @@
     "DESKTOP_AUTH_ENABLED": "false",
     "TURNSTILE_SITE_KEY": "<YOUR_TURNSTILE_SITE_KEY>",
     "AI_PROVIDER": "openai",
-    "AI_MODEL": "gpt-5.6-sol",
+    "AI_MODEL": "gpt-6-luna",
     "AI_REASONING_EFFORT": "high",
     "PROJECT_SHARING_ENABLED": "true",
     "PROJECT_EDIT_LEASES_ENFORCED": "true",
