@@ -6,7 +6,8 @@ import {
   loadProjectView,
   rememberActiveProject,
   rekeyWorkspaceProject,
-  saveProjectView
+  saveProjectView,
+  snapshotActiveProject
 } from './workspaceSession';
 
 class MemoryStorage {
@@ -56,6 +57,40 @@ describe('workspace session persistence', () => {
 
     expect(loadActiveProjectId(storage)).toBeNull();
     expect(loadProjectView('project-1', storage)).toEqual(view);
+  });
+
+  it('keeps a pointer written after the open began', () => {
+    const storage = new MemoryStorage();
+    rememberActiveProject('previous', storage);
+    const openBegan = snapshotActiveProject(storage);
+    // Another tab, or a test seeding the session, records a newer choice
+    // while the open is still awaiting storage.
+    rememberActiveProject('newer', storage);
+    saveProjectView('newer', view, storage);
+
+    expect(rememberActiveProject('opened', storage, openBegan)).toBe(false);
+
+    expect(loadActiveProjectId(storage)).toBe('newer');
+    expect(loadProjectView('newer', storage)).toEqual(view);
+  });
+
+  it('records the open when the pointer has not moved since it began', () => {
+    const storage = new MemoryStorage();
+    const fromEmpty = snapshotActiveProject(storage);
+    expect(rememberActiveProject('first', storage, fromEmpty)).toBe(true);
+    expect(loadActiveProjectId(storage)).toBe('first');
+
+    const openBegan = snapshotActiveProject(storage);
+    // Camera writes touch the session but not the pointer.
+    saveProjectView('first', view, storage);
+    expect(rememberActiveProject('second', storage, openBegan)).toBe(true);
+    expect(loadActiveProjectId(storage)).toBe('second');
+
+    const cleared = snapshotActiveProject(storage);
+    rememberActiveProject('third', storage);
+    // A pointer that already names this project is not a conflict.
+    expect(rememberActiveProject('third', storage, cleared)).toBe(true);
+    expect(loadActiveProjectId(storage)).toBe('third');
   });
 
   it('fails closed when browser storage is unavailable', () => {
