@@ -141,8 +141,314 @@ async function armChamferedTopCapOffset(page: Page) {
   const bounds = await canvas.boundingBox();
   expect(bounds).not.toBeNull();
   const start = { x: bounds!.x + handle.x, y: bounds!.y + handle.y };
-  return { canvas, chip, readAxisLength, handle, start, consoleErrors };
+  return {
+    canvas,
+    chip,
+    readAxisLength,
+    selectTopCap,
+    handle,
+    start,
+    consoleErrors
+  };
 }
+
+interface FacePreviewGate {
+  holdPreview: boolean;
+  holdFinal: boolean;
+  previewDelayMs: number;
+  heldPreview: number;
+  heldFinal: number;
+  releasePreview(): void;
+  releaseFinal(): void;
+}
+
+async function installFacePreviewGate(page: Page) {
+  await page.addInitScript(() => {
+    const scope = window as typeof window & {
+      facePreviewGate: FacePreviewGate;
+    };
+    const previews: (() => void)[] = [];
+    const finals: (() => void)[] = [];
+    scope.facePreviewGate = {
+      holdPreview: false,
+      holdFinal: false,
+      previewDelayMs: 0,
+      heldPreview: 0,
+      heldFinal: 0,
+      releasePreview() {
+        this.holdPreview = false;
+        for (const release of previews.splice(0)) release();
+      },
+      releaseFinal() {
+        this.holdFinal = false;
+        for (const release of finals.splice(0)) release();
+      }
+    };
+    const descriptor = Object.getOwnPropertyDescriptor(
+      Worker.prototype,
+      'onmessage'
+    )!;
+    Object.defineProperty(Worker.prototype, 'onmessage', {
+      ...descriptor,
+      set(listener: (event: MessageEvent) => void) {
+        descriptor.set!.call(this, (event: MessageEvent) => {
+          const result = event.data as { type?: string; requestId?: string };
+          const gate = scope.facePreviewGate;
+          if (gate.holdPreview && result.type === 'preview-geometry') {
+            gate.heldPreview += 1;
+            previews.push(() => listener.call(this, event));
+          } else if (
+            gate.previewDelayMs > 0 &&
+            result.type === 'preview-geometry'
+          ) {
+            setTimeout(() => listener.call(this, event), gate.previewDelayMs);
+          } else if (
+            gate.holdFinal &&
+            result.type === 'sync' &&
+            typeof result.requestId === 'string'
+          ) {
+            gate.heldFinal += 1;
+            finals.push(() => listener.call(this, event));
+          } else listener.call(this, event);
+        });
+      }
+    });
+  });
+}
+
+test('shows completed exact frames while face pointer input stays ahead of the worker', async ({
+  page
+}) => {
+  test.setTimeout(process.env.CI ? 240_000 : 120_000);
+  await installFacePreviewGate(page);
+  const { canvas, chip, readAxisLength, handle, start, consoleErrors } =
+    await armChamferedTopCapOffset(page);
+  await page.evaluate(() => {
+    (
+      window as typeof window & { facePreviewGate: FacePreviewGate }
+    ).facePreviewGate.previewDelayMs = 200;
+  });
+  await canvas.evaluate((element) => {
+    element.addEventListener(
+      'pointerdown',
+      (event) => {
+        if (!(event instanceof PointerEvent)) return;
+        element.dataset.continuousPointerId = String(event.pointerId);
+      },
+      { once: true }
+    );
+  });
+  await page.mouse.move(start.x, start.y);
+  await page.mouse.down();
+  await canvas.evaluate(
+    async (element, { start, handle }) => {
+      for (let sample = 1; sample <= 60; sample += 1) {
+        const offset = 1 + sample * 0.1;
+        element.dispatchEvent(
+          new PointerEvent('pointermove', {
+            bubbles: true,
+            cancelable: true,
+            pointerType: 'mouse',
+            isPrimary: true,
+            pointerId: Number(element.dataset.continuousPointerId),
+            buttons: 1,
+            shiftKey: true,
+            clientX: start.x + handle.dx * handle.pixelsPerUnit * offset,
+            clientY: start.y + handle.dy * handle.pixelsPerUnit * offset
+          })
+        );
+        // Deliver precise positions inside the browser, avoiding both snap
+        // plateaus and automation round trips that can let the hand rest.
+        await new Promise((resolve) => setTimeout(resolve, 8));
+      }
+    },
+    { start, handle }
+  );
+  expect(await readAxisLength()).toBeGreaterThan(28.5);
+  await expect(
+    page
+      .getByRole('region', { name: 'Offset Face operation' })
+      .locator('.selection-callout-phase-dot')
+  ).toHaveAttribute('aria-label', 'Dragging');
+  await page.keyboard.press('Escape');
+  await page.mouse.up();
+  await expect(chip).toHaveText('28 mm');
+  await expect
+    .poll(readAxisLength, { timeout: PREVIEW_BUDGET_MS })
+    .toBeCloseTo(28, 4);
+  expect(consoleErrors).toEqual([]);
+});
+
+test('reuses an exact frame on reversal and waits for complete validation on release', async ({
+  page
+}) => {
+  test.setTimeout(process.env.CI ? 240_000 : 120_000);
+  await installFacePreviewGate(page);
+  const {
+    canvas,
+    chip,
+    readAxisLength,
+    selectTopCap,
+    handle,
+    start,
+    consoleErrors
+  } = await armChamferedTopCapOffset(page);
+  const requests = () =>
+    page.evaluate(() => {
+      const messages = (
+        window as typeof window & { facePreviewRequests: string[] }
+      ).facePreviewRequests;
+      return {
+        preview: messages.filter((type) => type === 'preview-geometry').length,
+        full: messages.filter((type) => type === 'sync').length
+      };
+    });
+  const moveBy = (offset: number) =>
+    page.mouse.move(
+      start.x + handle.dx * handle.pixelsPerUnit * offset,
+      start.y + handle.dy * handle.pixelsPerUnit * offset,
+      { steps: 1 }
+    );
+  const beforeDrag = await requests();
+  await page.mouse.move(start.x, start.y);
+  await page.mouse.down();
+  await moveBy(3);
+  await expect
+    .poll(readAxisLength, { timeout: PREVIEW_BUDGET_MS })
+    .toBeCloseTo(31, 4);
+  const previewBounds = await renderedWorldBounds(page);
+  expect(previewBounds.max[2]! - previewBounds.min[2]!).toBeCloseTo(31, 4);
+  expect((await requests()).full).toBe(beforeDrag.full);
+
+  // Hold the next worker reply, then reverse to the frame already on screen.
+  // Returning to it must neither queue another rebuild nor accept the older
+  // reply over the frame matching the current pointer position.
+  await page.evaluate(() => {
+    (
+      window as typeof window & { facePreviewGate: FacePreviewGate }
+    ).facePreviewGate.holdPreview = true;
+  });
+  await moveBy(5);
+  await expect
+    .poll(() =>
+      page.evaluate(
+        () =>
+          (window as typeof window & { facePreviewGate: FacePreviewGate })
+            .facePreviewGate.heldPreview
+      )
+    )
+    .toBe(1);
+  const beforeReversal = await requests();
+  await moveBy(3);
+  await expect(chip).toHaveText('31 mm');
+  await expect(chip).toHaveAttribute('data-state', 'ready');
+  expect(await readAxisLength()).toBeCloseTo(31, 4);
+  expect(await requests()).toEqual(beforeReversal);
+  await page.evaluate(async () => {
+    (
+      window as typeof window & { facePreviewGate: FacePreviewGate }
+    ).facePreviewGate.releasePreview();
+    // Let the ignored reply finish and React paint any degradation callback.
+    await new Promise<void>((resolve) =>
+      requestAnimationFrame(() => requestAnimationFrame(() => resolve()))
+    );
+  });
+  await expect(chip).toHaveAttribute('data-state', 'ready');
+  expect(await readAxisLength()).toBeCloseTo(31, 4);
+
+  await page.evaluate(() => {
+    (
+      window as typeof window & { facePreviewGate: FacePreviewGate }
+    ).facePreviewGate.holdFinal = true;
+  });
+  await page.mouse.up();
+  await expect
+    .poll(() =>
+      page.evaluate(
+        () =>
+          (window as typeof window & { facePreviewGate: FacePreviewGate })
+            .facePreviewGate.heldFinal
+      )
+    )
+    .toBe(1);
+  await expect(
+    page.getByRole('region', { name: 'Offset Face operation' })
+  ).toContainText('Validating');
+  // A released drag keeps the drawer suspended through validation; opening
+  // it explicitly must still disclose the preview's incomplete analysis.
+  await page.getByRole('button', { name: 'Items panel', exact: true }).click();
+  await expect(page.getByText('Preparing model details…')).toBeVisible();
+  await expect(page.getByRole('contentinfo')).not.toContainText(
+    'Cylinder height set to 31 mm.'
+  );
+  expect(await readAxisLength()).toBeCloseTo(31, 4);
+  expect(await requests()).toEqual({
+    preview: beforeReversal.preview,
+    full: beforeDrag.full + 1
+  });
+  await page.evaluate(() =>
+    (
+      window as typeof window & { facePreviewGate: FacePreviewGate }
+    ).facePreviewGate.releaseFinal()
+  );
+  await expect(page.getByRole('contentinfo')).toContainText(
+    'Cylinder height set to 31 mm.'
+  );
+  await expect(page.getByText('Preparing model details…')).toBeHidden();
+  await page.getByRole('button', { name: 'Undo', exact: true }).click();
+  await expect
+    .poll(readAxisLength, { timeout: PREVIEW_BUDGET_MS })
+    .toBeCloseTo(28, 4);
+
+  // A reply delivered after Escape must not resurrect the canceled gesture.
+  await selectTopCap();
+  await expect(chip).toHaveText('28 mm');
+  const nextHandle = await canvas.evaluate((element) => ({
+    x: Number(element.dataset.e2eHandleX),
+    y: Number(element.dataset.e2eHandleY),
+    dx: Number(element.dataset.e2eHandleDx),
+    dy: Number(element.dataset.e2eHandleDy),
+    pixelsPerUnit: Number(element.dataset.e2eHandlePixelsPerUnit)
+  }));
+  const bounds = (await canvas.boundingBox())!;
+  const beforeCancel = await requests();
+  await page.evaluate(() => {
+    const gate = (
+      window as typeof window & { facePreviewGate: FacePreviewGate }
+    ).facePreviewGate;
+    gate.heldPreview = 0;
+    gate.holdPreview = true;
+  });
+  await page.mouse.move(bounds.x + nextHandle.x, bounds.y + nextHandle.y);
+  await page.mouse.down();
+  await page.mouse.move(
+    bounds.x + nextHandle.x + nextHandle.dx * nextHandle.pixelsPerUnit * 4,
+    bounds.y + nextHandle.y + nextHandle.dy * nextHandle.pixelsPerUnit * 4,
+    { steps: 1 }
+  );
+  await expect
+    .poll(() =>
+      page.evaluate(
+        () =>
+          (window as typeof window & { facePreviewGate: FacePreviewGate })
+            .facePreviewGate.heldPreview
+      )
+    )
+    .toBe(1);
+  await page.keyboard.press('Escape');
+  await page.mouse.up();
+  await page.evaluate(() =>
+    (
+      window as typeof window & { facePreviewGate: FacePreviewGate }
+    ).facePreviewGate.releasePreview()
+  );
+  await expect
+    .poll(readAxisLength, { timeout: PREVIEW_BUDGET_MS })
+    .toBeCloseTo(28, 4);
+  await expect(chip).toHaveText('28 mm');
+  expect((await requests()).full).toBe(beforeCancel.full);
+  expect(consoleErrors).toEqual([]);
+});
 
 test('keeps generic face geometry unchanged while the exact offset rebuild is pending', async ({
   page
@@ -400,6 +706,7 @@ test('clears the catching-up preview state when a degraded gesture is canceled',
   await page.addInitScript(() => {
     window.__openzcadE2ESlowFrameMs = 0;
   });
+  await installFacePreviewGate(page);
   const { chip, readAxisLength, handle, start, consoleErrors } =
     await armChamferedTopCapOffset(page);
 
@@ -410,14 +717,44 @@ test('clears the catching-up preview state when a degraded gesture is canceled',
     start.y + handle.dy * handle.pixelsPerUnit * 2,
     { steps: 1 }
   );
+  await expect
+    .poll(readAxisLength, { timeout: PREVIEW_BUDGET_MS })
+    .toBeCloseTo(30, 4);
+  // A slow frame that already caught up must leave the value ready. Keep
+  // the next value genuinely pending before expecting catching-up feedback.
+  await expect(chip).toHaveAttribute('data-state', 'ready');
+  await page.evaluate(() => {
+    (
+      window as typeof window & { facePreviewGate: FacePreviewGate }
+    ).facePreviewGate.holdPreview = true;
+  });
+  await page.mouse.move(
+    start.x + handle.dx * handle.pixelsPerUnit * 3,
+    start.y + handle.dy * handle.pixelsPerUnit * 3,
+    { steps: 1 }
+  );
   await expect(chip).toHaveAttribute('data-state', 'deferred', {
     timeout: PREVIEW_BUDGET_MS
   });
+  await expect
+    .poll(() =>
+      page.evaluate(
+        () =>
+          (window as typeof window & { facePreviewGate: FacePreviewGate })
+            .facePreviewGate.heldPreview
+      )
+    )
+    .toBe(1);
 
   // clear() re-arms the previewer, so the chip must leave its catching-up
   // state. It used to stay deferred until the next commit.
   await page.keyboard.press('Escape');
   await page.mouse.up();
+  await page.evaluate(() =>
+    (
+      window as typeof window & { facePreviewGate: FacePreviewGate }
+    ).facePreviewGate.releasePreview()
+  );
   await expect(chip).toHaveAttribute('data-state', 'ready', {
     timeout: PREVIEW_BUDGET_MS
   });
