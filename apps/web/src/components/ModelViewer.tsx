@@ -80,6 +80,8 @@ import {
   chooseMoveSnapStep,
   chooseRotateSnapStep,
   chooseViewportScale,
+  scaleBarAnchor,
+  presentedBoundsCenter,
   clearGroup,
   closestAxisT,
   composeMoveTransform,
@@ -205,6 +207,7 @@ import {
   SELECTION_CALLOUT_OBSTACLES,
   selectionCalloutObstacleShift
 } from '../lib/selectionCalloutView';
+import { measureFitFrame } from '../lib/fitFrame';
 import type { DimensionMode } from '../lib/keypad';
 import type { ViewportCameraState } from '../lib/workspaceSession';
 import type { MeasurementViewportAnnotation } from '../lib/measurements';
@@ -982,6 +985,8 @@ export interface SceneContext {
   syncOrthographic(resetZoom: boolean): void;
   /** Re-applies navigation preferences onto the live orbit controls. */
   refreshNavigation(): void;
+  /** Target-to-camera direction the view is settling on (a glide's end). */
+  viewDirection(): THREE.Vector3;
   /** Starts a glide toward a new pose; user input cancels it. */
   startCameraTween(
     pose: CameraPose,
@@ -2507,6 +2512,7 @@ export function ModelViewer({
       applyProjection: (mode) => cameraRig.applyProjection(mode),
       syncOrthographic: (resetZoom) => cameraRig.syncOrthographic(resetZoom),
       refreshNavigation: () => cameraRig.refreshNavigationPreferences(),
+      viewDirection: () => cameraRig.viewDirection(),
       startCameraTween: (pose, onComplete, glide) =>
         cameraRig.startTween(pose, onComplete, glide),
       captureView: () => cameraRig.capture(),
@@ -4937,6 +4943,8 @@ export function ModelViewer({
       picker.setRayFromEvent(event);
     }
 
+    const scaleBarForward = new THREE.Vector3();
+    const scaleBarModelCenter = new THREE.Vector3();
     /** World units spanned by one screen pixel at the given point. */
     function worldPerPixelAt(point: THREE.Vector3): number {
       const height = Math.max(renderer.domElement.clientHeight, 1);
@@ -8259,7 +8267,14 @@ export function ModelViewer({
       if (bodyGroup.children.length === 0) {
         return;
       }
-      const pose = computeFitPose(camera, bodyGroup.children);
+      // Like F: keep the view direction, frame into the clear stage.
+      const pose = computeFitPose(
+        camera,
+        bodyGroup.children,
+        cameraRig.viewDirection(),
+        0,
+        measureFitFrame(renderer.domElement)
+      );
       cameraRig.startTween(
         pose,
         () => {
@@ -8513,7 +8528,21 @@ export function ModelViewer({
       const offsetBodyProxyFrame = flushOffsetBodyProxy();
       updateOffsetChip();
       scaleIndicatorRef.current?.(
-        chooseViewportScale(worldPerPixelAt(cameraRig.controls.target))
+        chooseViewportScale(
+          worldPerPixelAt(
+            scaleBarAnchor(
+              cameraRig.activeCamera.position,
+              cameraRig.activeCamera.getWorldDirection(scaleBarForward),
+              // What is drawn this frame, previews included, so a Move or
+              // parameter preview does not leave the bar to jump at commit.
+              presentedBoundsCenter(
+                [bodyGroup, parameterPreviewController.current?.group],
+                scaleBarModelCenter
+              ),
+              cameraRig.controls.target
+            )
+          )
+        )
       );
       updateStudioGrid(grid, context.activeCamera, cameraRig.controls.target);
       updateAxesGizmo(axes, context.activeCamera);
@@ -11299,7 +11328,15 @@ export function ModelViewer({
     if (fitTargets.length === 0) {
       return;
     }
-    const pose = computeFitPose(context.camera, fitTargets);
+    // Fit keeps the view the user chose (`4` and the view menu give home)
+    // and frames into the stage the side panels leave clear.
+    const pose = computeFitPose(
+      context.camera,
+      fitTargets,
+      context.viewDirection(),
+      0,
+      measureFitFrame(context.renderer.domElement)
+    );
     context.startCameraTween(
       pose,
       () => {
@@ -11347,6 +11384,9 @@ export function ModelViewer({
       context.camera,
       context.bodyGroup.children.filter((child) => child.visible),
       context.camera.position.clone().sub(context.controls.target),
+      // The whole canvas, like the trigger above: framing into the clear
+      // stage here moved the camera on commits whose result was already in
+      // view, because the clear stage changes with whatever card is open.
       AUTO_FRAME_MARGIN_NDC
     );
     context.startCameraTween(
