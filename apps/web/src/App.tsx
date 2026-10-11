@@ -571,6 +571,11 @@ import type {
 } from './lib/extrudeInference';
 import { isExtrudeSessionCurrent } from './lib/extrudeSession';
 import {
+  beginFieldDefinition,
+  createFieldDefinitionTracker,
+  editFormVersion
+} from './lib/fieldParameterDefinitions';
+import {
   resolvedExtrudePreviewKey,
   reuseResolvedExtrudePreview,
   reuseRunningExtrudePreview,
@@ -12405,6 +12410,8 @@ export function App() {
           (candidate) => candidate.sketchId === interaction.session.sketchId
         )?.name ?? 'Sketch')
       : 'New sketch';
+  /** Parameters defined from an expression field, for edit forms (G5). */
+  const fieldDefinitions = useRef(createFieldDefinitionTracker());
   const parameterScopeRef = useRef(parameterScope);
   parameterScopeRef.current = parameterScope;
   // Solver diagnostics are transient UI state. Keep the entity ids beside
@@ -13729,6 +13736,37 @@ export function App() {
         setParameterEditPending(false);
         setParameterCandidate(null);
       }
+    }
+  }
+
+  /**
+   * Defines a parameter from the expression field that first names it (G5):
+   * the Parameters panel's own validated set, as its own undo step, so the
+   * card's Create lands after it in history. It only ever adds — a name that
+   * exists by now (a collaborator's, or one whose expression is broken and so
+   * missing from the field's scope) is refused rather than overwritten.
+   */
+  async function handleDefineParameter(
+    name: string,
+    expression: string
+  ): Promise<string | null> {
+    const live = managerRef.current?.document;
+    if (live && listParameters(live).some((p) => p.name === name)) {
+      return `${name} already exists. Change it in the Parameters panel.`;
+    }
+    const settle = live
+      ? beginFieldDefinition(fieldDefinitions.current, name, live)
+      : () => {};
+    try {
+      const refusal = await handleSetParameter(name, expression);
+      const committed = managerRef.current?.document;
+      if (!refusal && committed) {
+        editFormVersion(fieldDefinitions.current, committed);
+        setStatus(`Added parameter ${name}.`);
+      }
+      return refusal;
+    } finally {
+      settle();
     }
   }
 
@@ -19124,6 +19162,14 @@ export function App() {
   return (
     <AppShell
       workspaceRef={workspaceRef}
+      parameterDefinition={
+        doc && !parameterEditDisabledReason
+          ? {
+              has: (name) => listParameters(doc).some((p) => p.name === name),
+              define: handleDefineParameter
+            }
+          : null
+      }
       onDropFiles={(files) => void handleDroppedFiles(files)}
       sidebarWidth={sidebarWidth}
       assistantWidth={assistantWidth}
@@ -20165,7 +20211,7 @@ export function App() {
                 onPrimitiveGhostChange={setPrimitiveGhost}
                 commitError={featureFormError}
                 selectedFeature={selectedFeature}
-                documentVersion={doc.version}
+                documentVersion={editFormVersion(fieldDefinitions.current, doc)}
                 onValidateSelection={validateSelectionEdit}
                 selectedSketch={selectedSketch}
                 selectedSketchObject={selectedSketchObject}

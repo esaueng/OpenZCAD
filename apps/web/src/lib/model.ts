@@ -1,4 +1,7 @@
-import { evaluateExpression } from '@openzcad/document-core';
+import {
+  evaluateExpression,
+  isValidParameterName
+} from '@openzcad/document-core';
 import type {
   FeatureKind,
   ParamValue,
@@ -19,6 +22,13 @@ export interface EvalPreview {
   text: string;
   /** The evaluated number, present exactly when `ok`. */
   value?: number;
+  /**
+   * Set when the expression's only problem is a name nobody has defined
+   * yet: the first such name, which a field can offer to define on the
+   * spot. Absent for anything else that is wrong with it — a syntax error,
+   * trailing tokens, a name that is not a valid parameter name.
+   */
+  undefinedParameter?: string;
 }
 
 /** Live evaluation preview for expression inputs ("= 42" or the error). */
@@ -38,11 +48,59 @@ export function previewExpression(
       value
     };
   } catch (error) {
+    const undefinedParameter = undefinedParameterIn(trimmed, scope);
     return {
       ok: false,
-      text: error instanceof Error ? error.message : 'invalid'
+      text: error instanceof Error ? error.message : 'invalid',
+      ...(undefinedParameter ? { undefinedParameter } : {})
     };
   }
+}
+
+/**
+ * Refusals of a value rather than of the expression: what a name with no
+ * value yet (read as NaN below) trips once it reaches a guard. Anything else
+ * (syntax, trailing tokens, a reserved name, a unit or a dimension) is wrong
+ * with the expression itself.
+ */
+const VALUE_REFUSAL =
+  /^(?:Expression did not evaluate to a finite number|require_(?:min|one_of) needs a finite|a(?:sin|cos)\(\) expects an argument between)/;
+
+/**
+ * The first undefined parameter an expression reads, when defining the names
+ * it is missing is all it would take for it to parse. Decided by the
+ * evaluator's own parser, never by trying sample values: the scope records
+ * every valid parameter name the parse reads that it does not hold and
+ * answers NaN, so `sqrt(width - 1000)` names `width` although most values of
+ * it would fail. Done here rather than as a parser mode in document-core,
+ * whose chunk has no room left under the bundle budget.
+ */
+function undefinedParameterIn(
+  expression: string,
+  scope: Record<string, number>
+): string | undefined {
+  const missing: string[] = [];
+  const reading = new Proxy(scope, {
+    get(target, key, receiver) {
+      if (
+        typeof key === 'string' &&
+        !Object.hasOwn(target, key) &&
+        isValidParameterName(key)
+      ) {
+        if (!missing.includes(key)) missing.push(key);
+        return Number.NaN;
+      }
+      return Reflect.get(target, key, receiver) as unknown;
+    }
+  });
+  try {
+    evaluateExpression(expression, reading);
+  } catch (error) {
+    if (!(error instanceof Error) || !VALUE_REFUSAL.test(error.message)) {
+      return undefined;
+    }
+  }
+  return missing[0];
 }
 
 /** Resolve a stored parametric value to a number, or null if it can't evaluate. */
