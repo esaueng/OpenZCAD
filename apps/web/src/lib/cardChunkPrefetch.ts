@@ -6,7 +6,8 @@ import { useEffect } from 'react';
  * Each card is its own chunk so the entry chunk stays under its budget, and
  * a chunk is fetched the first time its card renders. On the first Box after
  * a fresh load that left the lane saying "Enter creates · Esc cancels" for
- * 2–4 s with no card to create from (11 Oct 2026 review, G16). Fetching them
+ * an estimated 2–4 s with no card to create from (11 Oct 2026 review, G16;
+ * no wall-clock timing was recorded). Fetching them
  * once the workspace is up and the main thread is idle means the first open
  * finds the module already there.
  *

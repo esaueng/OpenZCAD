@@ -280,6 +280,7 @@ describe('PrimitiveForm ghost (G6)', () => {
     const onGhostChange = vi.fn();
     const view = render(
       <PrimitiveForm
+        documentUnits="mm"
         kind="box"
         scope={{ w: 100 }}
         initialName="Box"
@@ -293,6 +294,15 @@ describe('PrimitiveForm ghost (G6)', () => {
       dimensions: { width: 30, height: 18, depth: 24 },
       position: { x: 0, y: 0, z: 0 }
     });
+
+    fireEvent.change(screen.getByRole('textbox', { name: 'Width (X)' }), {
+      target: { value: '1 in' }
+    });
+    expect(onGhostChange).toHaveBeenLastCalledWith(
+      expect.objectContaining({
+        dimensions: { width: 25.4, height: 18, depth: 24 }
+      })
+    );
 
     // Expressions resolve against the parameters, as Create would.
     fireEvent.change(screen.getByRole('textbox', { name: 'Width (X)' }), {
@@ -337,6 +347,7 @@ describe('PrimitiveForm ghost (G6)', () => {
     const onGhostChange = vi.fn();
     render(
       <PrimitiveForm
+        documentUnits="mm"
         kind="cylinder"
         scope={{}}
         initialName="Cylinder"
@@ -373,6 +384,7 @@ describe('PrimitiveForm defines a parameter from a field (G5)', () => {
       return (
         <ParameterDefinitionProvider value={definition}>
           <PrimitiveForm
+            documentUnits="mm"
             kind="box"
             scope={scope}
             initialName="Box"

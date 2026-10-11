@@ -1,4 +1,4 @@
-import type { PrimitiveKind } from '@openzcad/shared';
+import type { PrimitiveKind, UnitSystem } from '@openzcad/shared';
 import { previewExpression } from './model';
 
 interface Vector3 {
@@ -41,11 +41,16 @@ export function primitiveGhostFor(
   kind: PrimitiveKind,
   values: Readonly<Record<string, string>>,
   position: Readonly<Record<'x' | 'y' | 'z', string>>,
-  scope: Record<string, number>
+  scope: Record<string, number>,
+  documentUnits?: UnitSystem
 ): PrimitiveGhost | null {
   const resolve = (text: string | undefined): number | null => {
     if (text === undefined) return null;
-    const preview = previewExpression(text, scope);
+    const preview = previewExpression(
+      text,
+      scope,
+      documentUnits ? { documentUnits, dimension: 'length' } : undefined
+    );
     return preview.ok &&
       preview.value !== undefined &&
       Number.isFinite(preview.value)

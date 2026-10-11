@@ -35,6 +35,9 @@ describe('previewExpression undefined parameters (G5)', () => {
 
   it.each([
     ['width +', 'a syntax error'],
+    ['require_min(width, 5000) +', 'syntax after a failed guard'],
+    ['require_one_of(width, 1, 2) 80', 'tokens after a failed guard'],
+    ['asin(width) +', 'syntax after a failed domain check'],
     ['width 80', 'trailing tokens'],
     ['(width', 'an unclosed parenthesis'],
     ['sqrt', 'a reserved function name'],

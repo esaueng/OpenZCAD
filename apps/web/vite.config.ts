@@ -332,6 +332,9 @@ export default defineConfig(async ({ command, isPreview, mode }) => {
                   ) ||
                   id.includes(
                     '/packages/kernel-adapter/src/exact-sync-memo.ts'
+                  ) ||
+                  id.includes(
+                    '/packages/kernel-adapter/src/union-connectivity.ts'
                   ),
                 includeDependenciesRecursively: false
               }
@@ -416,12 +419,13 @@ export default defineConfig(async ({ command, isPreview, mode }) => {
           // bundle, so isolate it for better caching without relying on the
           // object form supported by Rollup-only Vite releases.
           manualChunks: (id: string) => {
-            // Imported-feature analysis stays behind the exact adapter's lazy
-            // boundary, with its own cacheable chunk and the same size budget.
+            // Imported-feature and union-connectivity analysis stay behind the
+            // exact adapter's lazy boundary in the existing analysis chunk.
             if (
               id.includes(
                 '/packages/kernel-adapter/src/imported-feature-query.ts'
-              )
+              ) ||
+              id.includes('/packages/kernel-adapter/src/union-connectivity.ts')
             ) {
               return 'exact-analysis';
             }
@@ -460,6 +464,11 @@ export default defineConfig(async ({ command, isPreview, mode }) => {
               // preloaded, so this adds no request or async commit boundary.
               id.includes('/apps/web/src/lib/featureHistory.ts') ||
               id.includes('/apps/web/src/lib/featureSuppression.ts') ||
+              // Export eligibility and sweep disclosure inspect document
+              // history/topology. Keep them with the same preloaded model
+              // helpers so their integration does not grow the entry chunk.
+              id.includes('/apps/web/src/lib/failedHistoryExport.ts') ||
+              id.includes('/apps/web/src/lib/sweepFaceting.ts') ||
               // Canonical worker transport and revision/reference helpers are
               // already workspace dependencies. Reuse the preloaded model
               // chunk rather than adding another first-paint request.

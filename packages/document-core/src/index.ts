@@ -551,6 +551,8 @@ export interface ShaprGuidedImportInput {
 export interface ParameterSetInput {
   name: string;
   expression: string;
+  /** Inline definitions must refuse a name added while validation awaited. */
+  addOnly?: boolean;
   ids?: ParameterIds;
 }
 
@@ -2584,6 +2586,11 @@ export function setParameter(
   const parameters = listParameters(next);
   const existing = parameters.find((parameter) => parameter.name === name);
   if (existing) {
+    if (input.addOnly) {
+      throw new Error(
+        `${name} already exists. Change it in the Parameters panel.`
+      );
+    }
     if (existing.toggle && !['0', '1'].includes(input.expression.trim())) {
       throw new Error('An on/off parameter must be 0 (off) or 1 (on).');
     }
@@ -4099,6 +4106,7 @@ function parseExpressionQuantity(
 ): ExpressionQuantity {
   const tokens = tokenizeExpression(expression);
   let position = 0;
+  let callError: Error | undefined;
 
   const peek = (): ExpressionToken | undefined => tokens[position];
   const next = (): ExpressionToken => {
@@ -4181,7 +4189,14 @@ function parseExpressionQuantity(
     if (fn.arity === 'nullary' && args.length !== 0) {
       throw new Error(`${name}() takes no arguments.`);
     }
-    return fn.apply(args);
+    try {
+      return fn.apply(args);
+    } catch (error) {
+      // Finish parsing before reporting a value/domain failure. Otherwise a
+      // failed guard can hide malformed trailing syntax from field guidance.
+      callError ??= error instanceof Error ? error : new Error(String(error));
+      return quantity(Number.NaN);
+    }
   }
 
   function parsePrimary(): ExpressionQuantity {
@@ -4361,6 +4376,7 @@ function parseExpressionQuantity(
   if (position < tokens.length) {
     throw new Error('Unexpected trailing tokens in expression.');
   }
+  if (callError !== undefined) throw callError;
   return result;
 }
 

@@ -24,7 +24,7 @@ import {
  * 902 planes in Standard and Smooth alike (−2.16% against the exact torus
  * segment), and a helical spring was planes and bilinear patches. Geometry is
  * unchanged here; what changes is that Diagnostics now says so, with the
- * measured end-cap shortfall, and says when Smooth could not apply.
+ * curved-profile disclosure, and says when Smooth could not apply.
  */
 const user = toUserId('user_sweep_faceting');
 const circle = roundProfile(3);
@@ -55,7 +55,7 @@ describe('faceted sweep disclosure', { timeout: 60_000 }, () => {
     return { document: { ...swept.document, derived }, bodyId: swept.bodyId };
   }
 
-  it('discloses the QA elbow as facets, with its measured cap shortfall, and leaves it unchanged', async () => {
+  it('discloses the QA elbow as facets, without an unproven cap-area figure, and leaves it unchanged', async () => {
     for (const mode of ['standard', 'smooth'] as const) {
       const { document, bodyId } = await sweep(circle, elbowPath, mode);
       const body = document.derived.bodyRepresentations[bodyId]!;
@@ -66,14 +66,34 @@ describe('faceted sweep disclosure', { timeout: 60_000 }, () => {
 
       const [advisory, ...rest] = sweepFacetingAdvisories(document);
       expect(rest).toEqual([]);
+      expect(advisory?.message).not.toContain('end caps measure');
       expect(advisory).toMatchObject({ featureName: 'Bend', kind: 'advisory' });
       expect(advisory!.message).toBe(
-        'Feature "Bend": This sweep is a faceted approximation, not exact curved surfaces: its curved path is followed in straight steps, and the profile\'s curved edges become straight chords (its end caps measure 2.02% less area than the profile). Its 902 faces are what its volume, mass and STEP export measure.' +
+        'Feature "Bend": This sweep is a faceted approximation, not exact curved surfaces: its curved path is followed in straight steps, and the profile\'s curved edges become straight chords. Its 902 faces are what its volume, mass and STEP export measure.' +
           (mode === 'smooth'
             ? ' Smooth only samples a path of one line or one arc of up to a quarter turn more finely; this path is built from 3 edges, so Smooth built the same body as Standard.'
             : '')
       );
     }
+  });
+
+  it('uses active preview topology and does not mistake a similar-area wall for a cap', async () => {
+    const { document, bodyId } = await sweep(circle, elbowPath, 'standard');
+    const shown = document.derived.bodyRepresentations[bodyId]!;
+    const faces = shown.topology!.faces.map((face) => ({
+      ...face,
+      geometry: face.geometry
+        ? { ...face.geometry, area: Math.PI * 9 * 0.999 }
+        : undefined
+    }));
+    const active = { ...shown, topology: { ...shown.topology!, faces } };
+    // The completed document has no bodies during staged analysis.
+    document.derived.bodyRepresentations = {};
+    expect(sweepFacetingAdvisories(document)).toEqual([]);
+    const [advisory] = sweepFacetingAdvisories(document, { [bodyId]: active });
+    expect(advisory?.message).toContain('faceted approximation');
+    expect(advisory?.message).toContain('straight chords');
+    expect(advisory?.message).not.toContain('%');
   });
 
   it('discloses a straight-edged profile on a curved path without a cap figure', async () => {
@@ -123,7 +143,7 @@ describe('faceted sweep disclosure', { timeout: 60_000 }, () => {
       derived
     });
     expect(advisory?.message).toMatch(
-      /^Feature "Spring": This helical sweep is a faceted approximation, not exact curved surfaces: its curved path is followed in straight steps, and the profile's curved edges become straight chords \(its end caps measure 2\.02% less area than the profile\)\. Its \d+ faces are what its volume, mass and STEP export measure\.$/
+      /^Feature "Spring": This helical sweep is a faceted approximation, not exact curved surfaces: its curved path is followed in straight steps, and the profile's curved edges become straight chords\. Its \d+ faces are what its volume, mass and STEP export measure\.$/
     );
   });
 });

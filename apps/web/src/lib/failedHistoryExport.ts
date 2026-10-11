@@ -31,7 +31,6 @@ function inputBodyIds(feature: FeatureNode): BodyId[] {
     case 'split':
     case 'hole':
     case 'transform':
-    case 'mirror':
     case 'shell':
     case 'solid-offset':
     case 'draft':
@@ -41,6 +40,7 @@ function inputBodyIds(feature: FeatureNode): BodyId[] {
     case 'pattern':
     case 'direct-edit':
       return [data.targetBodyId];
+    case 'mirror':
     case 'primitive':
     case 'sketch':
     case 'revolve':

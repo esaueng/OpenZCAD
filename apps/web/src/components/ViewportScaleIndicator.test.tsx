@@ -74,7 +74,7 @@ describe('ViewportScaleIndicator', () => {
 
     expect(
       screen.getByRole('img', {
-        name: 'Viewport scale at the camera focus plane: 10 mm'
+        name: 'Viewport scale at the model center plane: 10 mm'
       })
     ).toBeVisible();
     expect(screen.queryByRole('status')).toBeNull();

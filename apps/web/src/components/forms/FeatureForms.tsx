@@ -380,7 +380,7 @@ export function PrimitiveForm({
   // Keyed on the resolved numbers, so a keystroke that leaves the value the
   // same (`30` → `30.`, `w` while w = 30) does not rebuild the ghost.
   const ghost = onGhostChange
-    ? primitiveGhostFor(kind, values, position, scope)
+    ? primitiveGhostFor(kind, values, position, scope, documentUnits)
     : null;
   const ghostKey = ghost ? JSON.stringify(ghost) : null;
   const ghostCallback = useRef(onGhostChange);

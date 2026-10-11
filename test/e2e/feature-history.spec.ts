@@ -392,3 +392,51 @@ test('a seeded demo stores every revision it promises, and restores one', async 
   ).toHaveCount(0);
   await expectBodyCount(page, 1);
 });
+
+test('renaming a modeling feature closes its stale editor and keeps the new name on the next edit', async ({
+  page
+}) => {
+  test.setTimeout(90_000);
+  await stubApi(page);
+  await page.goto('/');
+  await page.getByLabel('Project name').fill('Rename open shell');
+  await page.getByRole('button', { name: 'Create project' }).click();
+  const inspector = page.getByRole('region', { name: 'Feature inspector' });
+  await page.getByRole('button', { name: /^Box \(B\)/ }).click();
+  await inspector.getByRole('button', { name: /^Create/ }).click();
+  await page.getByRole('button', { name: /^Shell/ }).click();
+  await page
+    .getByRole('group', { name: 'Opening faces' })
+    .getByRole('button', { name: /Box 1 · Top face/ })
+    .click();
+  await page.getByRole('button', { name: 'Create shell' }).click();
+  const row = page.locator('.feature-row', { hasText: 'Shell' }).first();
+  await row.locator('.feature-row-main').click();
+  await expect(
+    page.getByRole('textbox', { name: 'Wall thickness', exact: true })
+  ).toBeVisible();
+  // Reach the history action through the keyboard while the floating editor
+  // occupies the same pointer lane as the row.
+  const actions = row.getByRole('button', { name: 'More actions for Shell' });
+  await actions.focus();
+  await actions.press('Enter');
+  await page.getByRole('menuitem', { name: 'Rename', exact: true }).click();
+  const rename = page.getByRole('textbox', { name: 'Rename Shell' });
+  await rename.fill('Renamed wall');
+  await rename.press('Enter');
+  await expect(
+    page.getByRole('textbox', { name: 'Wall thickness', exact: true })
+  ).toHaveCount(0);
+  const renamed = page
+    .locator('.feature-row', { hasText: 'Renamed wall' })
+    .first();
+  await renamed.locator('.feature-row-main').click();
+  await page
+    .getByRole('textbox', { name: 'Wall thickness', exact: true })
+    .fill('1.5');
+  await page.getByRole('button', { name: 'Apply shell' }).click();
+  await expect(
+    page.getByRole('textbox', { name: 'Wall thickness', exact: true })
+  ).toHaveCount(0);
+  await expect(renamed.locator('.feature-name')).toHaveText('Renamed wall');
+});

@@ -5,11 +5,10 @@ import {
 } from '@openzcad/document-core';
 import {
   isFeatureSuppressed,
-  type FaceTopology,
+  type GeometryBodyRepresentation,
   type FeatureNode,
   type FeatureWarning,
-  type ProjectDocument,
-  type SketchSectionReference
+  type ProjectDocument
 } from '@openzcad/shared';
 
 /** Analytic curved surfaces: what an exact sweep along a curved path keeps. */
@@ -36,7 +35,9 @@ const EXACT_CURVED_SURFACES = new Set(['cylinder', 'cone', 'sphere', 'torus']);
  * default or saved value changes.
  */
 export function sweepFacetingAdvisories(
-  document: ProjectDocument
+  document: ProjectDocument,
+  bodies: Readonly<Record<string, GeometryBodyRepresentation>> = document
+    .derived.bodyRepresentations
 ): FeatureWarning[] {
   const advisories: FeatureWarning[] = [];
   let scope: Record<string, number> | null = null;
@@ -52,8 +53,7 @@ export function sweepFacetingAdvisories(
       !feature.bodyId
     )
       continue;
-    const faces =
-      document.derived.bodyRepresentations[feature.bodyId]?.topology?.faces;
+    const faces = bodies[feature.bodyId]?.topology?.faces;
     if (!faces?.length) continue;
     const pathCurved =
       data.featureKind === 'helical-sweep' ||
@@ -67,14 +67,15 @@ export function sweepFacetingAdvisories(
       )
     )
       continue;
-    let detail = '';
-    try {
-      const shortfall = capShortfall(document, data.profile, faces, resolve);
-      if (shortfall !== null)
-        detail = `, and the profile's curved edges become straight chords (its end caps measure ${(Math.abs(shortfall) * 100).toFixed(2)}% ${shortfall > 0 ? 'less' : 'more'} area than the profile)`;
-    } catch {
-      // An unresolvable profile only loses the detail, never the advisory.
-    }
+    const ids = data.profile.profile.sourceEntityIds ?? [];
+    // Topology does not identify the caps. Disclose the chord approximation
+    // without guessing which planar face supplies an end-cap area.
+    const detail = ids.some((id) => {
+      const kind = objectOf(document, id)?.data.objectKind;
+      return kind === 'circle' || kind === 'arc';
+    })
+      ? ", and the profile's curved edges become straight chords"
+      : '';
     let smooth = '';
     if (
       data.featureKind === 'sweep' &&
@@ -108,35 +109,6 @@ function label(feature: FeatureNode): string {
 function objectOf(document: ProjectDocument, id: string) {
   const node = document.nodes[id];
   return node?.kind === 'sketch-object' ? node : undefined;
-}
-
-/**
- * How far the end caps fall short of the profile's exact area, when the
- * profile is one circle (its exact area is then πr² of its current radius, so
- * no stale stored area is ever compared). The cap is the exact planar face
- * nearest that area; a match more than 10% off is a wall facet, not a cap.
- */
-function capShortfall(
-  document: ProjectDocument,
-  section: SketchSectionReference,
-  faces: readonly FaceTopology[],
-  resolve: (value: Parameters<typeof resolveParamValue>[0]) => number
-): number | null {
-  const ids = section.profile.sourceEntityIds ?? [];
-  const circle = ids.length === 1 ? objectOf(document, ids[0]!) : undefined;
-  if (circle?.data.objectKind !== 'circle') return null;
-  const area = Math.PI * resolve(circle.data.radius) ** 2;
-  let closest = Infinity;
-  for (const { geometry } of faces) {
-    if (
-      geometry?.surfaceType !== 'plane' ||
-      geometry.areaProvenance !== 'exact'
-    )
-      continue;
-    const shortfall = (area - geometry.area) / area;
-    if (Math.abs(shortfall) < Math.abs(closest)) closest = shortfall;
-  }
-  return Math.abs(closest) > 1e-6 && Math.abs(closest) < 0.1 ? closest : null;
 }
 
 /** The kernel edges a sweep path becomes: one per line, quarter-turn arcs. */
