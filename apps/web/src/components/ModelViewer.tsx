@@ -11,6 +11,8 @@ import { axisDimensionLabel } from '../lib/primitiveDimensionLabel';
 import * as THREE from 'three';
 import type { HoleGhost } from '../lib/holeGhost';
 import { buildHoleGhostRig } from './viewer/holeGhostRig';
+import type { PrimitiveGhost } from '../lib/primitiveGhost';
+import { buildPrimitiveGhostRig } from './viewer/primitiveGhostRig';
 import {
   bodiesReachingNewSpace,
   type AutoFrameRequest
@@ -861,6 +863,8 @@ export interface ModelViewerProps {
    * it exists. Null while no hole can be placed.
    */
   holeGhost?: HoleGhost | null;
+  /** The solid the open primitive card would create, drawn before Create. */
+  primitiveGhost?: PrimitiveGhost | null;
   /**
    * What measuring the hovered target would report, for the preview chip.
    * Null when measuring is off or the pick has nothing honest to say.
@@ -1753,6 +1757,7 @@ export function ModelViewer({
   onHoverRegion,
   planePickerArmed,
   holeGhost = null,
+  primitiveGhost = null,
   planePickerOffset,
   onPickPlane,
   onMeasurePreview,
@@ -3422,6 +3427,8 @@ export function ModelViewer({
           bodyId?: string;
           normal: { x: number; y: number; z: number };
           select?: boolean;
+          /** Where on the face the click lands; the face's centroid if absent. */
+          point?: { x: number; y: number; z: number };
           resolve?: (
             face: { hasReference: boolean; lineageName?: string } | null
           ) => void;
@@ -3455,7 +3462,8 @@ export function ModelViewer({
         return;
       }
       if (detail?.select !== false) {
-        const anchor = face.geometry.centroid ?? face.geometry.center;
+        const anchor =
+          detail?.point ?? face.geometry.centroid ?? face.geometry.center;
         onSelectTopologyRef.current(
           {
             bodyId: body.bodyId,
@@ -10604,6 +10612,28 @@ export function ModelViewer({
       context.requestRender();
     };
   }, [holeGhost]);
+
+  // The open Box/Cylinder/… card's solid (viewer/primitiveGhostRig), three
+  // geometry rebuilt per value change — no kernel call per keystroke.
+  useEffect(() => {
+    const context = contextRef.current;
+    if (!context || !primitiveGhost) {
+      return;
+    }
+    const rig = buildPrimitiveGhostRig(primitiveGhost, SKETCH_COLOR);
+    context.scene.add(rig.group);
+    const canvas = context.renderer.domElement;
+    if (E2E_CANVAS_HOOKS_ENABLED) {
+      canvas.dataset.e2ePrimitiveGhost = JSON.stringify(primitiveGhost);
+    }
+    context.requestRender();
+    return () => {
+      context.scene.remove(rig.group);
+      rig.dispose();
+      delete canvas.dataset.e2ePrimitiveGhost;
+      context.requestRender();
+    };
+  }, [primitiveGhost]);
 
   // The viewport renders on demand, so a typed offset has to ask for the
   // frame that shows it; without this the ghosts only move on the next

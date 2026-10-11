@@ -1,5 +1,6 @@
 import type { ParameterPreviewBody } from '../lib/parameterVisualPreview';
 import type { HoleGhost } from '../lib/holeGhost';
+import type { PrimitiveGhost } from '../lib/primitiveGhost';
 import type { AutoFrameRequest } from '../lib/autoFrame';
 import { useMemo, useRef, type MutableRefObject, type ReactNode } from 'react';
 import {
@@ -269,6 +270,8 @@ interface ViewerShellProps {
   planePickerOffset: number;
   /** The open Hole card's bore, drawn before it exists. */
   holeGhost?: HoleGhost | null;
+  /** The open primitive card's solid, drawn before Create. */
+  primitiveGhost?: PrimitiveGhost | null;
   onPickPlane(plane: PlaneId): void;
   /** What measuring the hovered target would report; null when measure is off. */
   onMeasurePreview?:
@@ -409,6 +412,7 @@ export function ViewerShell({
   planePickerArmed,
   planePickerOffset,
   holeGhost = null,
+  primitiveGhost = null,
   onPickPlane,
   onMeasurePreview,
   regionHandle,
@@ -607,6 +611,7 @@ export function ViewerShell({
         planePickerArmed={planePickerArmed}
         planePickerOffset={planePickerOffset}
         holeGhost={holeGhost}
+        primitiveGhost={primitiveGhost}
         onPickPlane={onPickPlane}
         onMeasurePreview={onMeasurePreview}
         regionHandle={regionHandle}

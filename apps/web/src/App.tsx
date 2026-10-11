@@ -315,6 +315,7 @@ import {
 } from './lib/interactionDiagnostics';
 import { KERNEL_BUILD } from './lib/kernelBuild';
 import {
+  PRIMITIVE_TOOLS,
   SHORTCUT_TO_TOOL,
   TOOL_GROUPS,
   TOOL_META,
@@ -1210,7 +1211,13 @@ import {
   affectedFeatureTargets,
   type AffectedFeatureTarget
 } from './lib/affectedFeatureTargets';
-import { holePreview, type HolePreview } from './lib/holeGhost';
+import {
+  holePositionAnchor,
+  holePreview,
+  type HolePreview
+} from './lib/holeGhost';
+import { holePositionFromPick } from './lib/holePositionAxes';
+import type { PrimitiveGhost } from './lib/primitiveGhost';
 import type { HoleDraft } from './components/forms/ModelingOperationsForm';
 import { extrudeSketchGuidance } from './lib/extrudeGuidance';
 import {
@@ -2011,6 +2018,10 @@ export function App() {
    */
   /** The open Hole card's values, for the bore the viewport draws. */
   const [holeDraft, setHoleDraft] = useState<HoleDraft | null>(null);
+  /** The open primitive card's solid, for the ghost the viewport draws. */
+  const [primitiveGhost, setPrimitiveGhost] = useState<PrimitiveGhost | null>(
+    null
+  );
   /**
    * The last ghost and what it was computed from. A through hole scans the
    * body's mesh for its depth, which is not work to redo on every render.
@@ -11644,9 +11655,18 @@ export function App() {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [representations, exactGeometryReady]);
 
+  /** The open edit's stored hole anchor; null when no hole is being edited. */
+  function editedHoleAnchor(): { positionAnchor?: 'centroid' } | null {
+    if (!modelingEditFeature) return null;
+    return modelingEditFeature.data.featureKind === 'hole'
+      ? modelingEditFeature.data
+      : {};
+  }
+
   function handleFormFacePick(
     operation: FacePickOperation,
-    selection: TopologySelection | null
+    selection: TopologySelection | null,
+    detail?: PickDetail
   ) {
     const label = TOOL_META[operation].label;
     if (!selection) {
@@ -11691,7 +11711,28 @@ export function App() {
       return;
     }
     modelingPreflightRef.current = null;
-    setViewportFormFacePick(picked.pick);
+    // A Hole click places the hole where it landed (G7): the point, measured
+    // in the face's U/V frame from the anchor the hole is drilled against.
+    const face =
+      operation === 'hole' && detail
+        ? representations[targetBodyId]?.topology?.faces.find(
+            (candidate) => candidate.hash === picked.pick.hash
+          )?.geometry
+        : undefined;
+    const position =
+      face && detail
+        ? holePositionFromPick(
+            face,
+            holePositionAnchor(editedHoleAnchor(), face),
+            detail.point,
+            appSettings.sketching.snapEnabled
+              ? appSettings.sketching.linearSnap
+              : null
+          )
+        : null;
+    setViewportFormFacePick(
+      position ? { ...picked.pick, position } : picked.pick
+    );
     setSelectedTopology(picked.selection);
     setSelectedBodyIds([targetBodyId]);
     setSelectedEdges([]);
@@ -11785,7 +11826,7 @@ export function App() {
     // the click fills its face field instead of arming a drag handle and
     // replacing the form with the Offset Face card.
     if (modelingOperationPicksFaces(tool) && modelingTargetBodyId) {
-      handleFormFacePick(tool, selection);
+      handleFormFacePick(tool, selection, detail);
       return;
     }
     // The pick detail (click point + normal) anchors selection-first drag
@@ -18456,10 +18497,6 @@ export function App() {
     const face = body?.topology?.faces.find(
       (candidate) => candidate.hash === holeDraft.faceHash
     );
-    const editedAnchor =
-      modelingEditFeature?.data.featureKind === 'hole'
-        ? modelingEditFeature.data.positionAnchor
-        : undefined;
     // No representation yet (a rebuild in flight) is not a refusal: wait.
     const preview: HolePreview | null = body
       ? holePreview({
@@ -18469,13 +18506,7 @@ export function App() {
           // The anchor the submission will carry: a new hole measures from
           // the area centroid when the face reports one; an edited hole
           // keeps the anchor it was drilled against.
-          anchor: modelingEditFeature
-            ? editedAnchor === 'centroid'
-              ? 'centroid'
-              : 'center'
-            : face?.geometry?.centroid
-              ? 'centroid'
-              : 'center',
+          anchor: holePositionAnchor(editedHoleAnchor(), face?.geometry),
           u: holeDraft.u,
           v: holeDraft.v,
           diameter: holeDraft.diameter,
@@ -19489,6 +19520,9 @@ export function App() {
             planePickerArmed={!modelingLocked && tool === 'sketch'}
             planePickerOffset={sketchPlaneOffset}
             holeGhost={holePreviewState?.ghost ?? null}
+            primitiveGhost={
+              tool && PRIMITIVE_TOOLS.includes(tool) ? primitiveGhost : null
+            }
             onPickPlane={startSketchOnPlane}
             onMeasurePreview={measuring ? previewMeasurement : null}
             regionHandle={modelingLocked ? null : regionHandleTarget}
@@ -20084,6 +20118,7 @@ export function App() {
             ) : (
               <Inspector
                 tool={tool}
+                onPrimitiveGhostChange={setPrimitiveGhost}
                 commitError={featureFormError}
                 selectedFeature={selectedFeature}
                 documentVersion={doc.version}
