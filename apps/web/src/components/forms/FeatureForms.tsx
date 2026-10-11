@@ -24,6 +24,7 @@ import { edgeModifierSliderRange } from '../../lib/edgeModifierEdit';
 import { useFieldAutoFocus } from './fieldAutoFocus';
 import { isPickListRow } from './pickListRow';
 import { PRIMITIVE_ANCHORS } from '../../lib/primitivePlacement';
+import { ownedTopologyName } from '../../lib/topologyLabels';
 import { TextObjectFields, type TextAttributes } from '../TextObjectFields';
 import {
   PLANE_LABELS,
@@ -1073,9 +1074,7 @@ export function BooleanForm({
         </select>
       </label>
       <div className="field">
-        <span>
-          Bodies (numbered in the viewport · pick order sets the base)
-        </span>
+        <span>Bodies (numbered as you pick · the first is the base)</span>
         <div className="pick-list">
           {selectable.length === 0 && (
             <p className="muted">No bodies available.</p>
@@ -1313,9 +1312,11 @@ interface EdgeModifierFormProps {
   onClearEdges?: () => void;
   /**
    * The edges in `edgeHashes`, named, in order. A count alone ("2 exact
-   * edges selected") left the user to guess which two.
+   * edges selected") left the user to guess which two. `owner` is the body
+   * the edge is on: a row reads "Box 1 · Front · Top edge", as the viewport
+   * tag does, and a long owner is what gets cut short, never the edge.
    */
-  edgeRows?: readonly { hash: number; label: string }[];
+  edgeRows?: readonly { hash: number; label: string; owner?: string }[];
   /** Takes one edge off; absent, the rows carry no remove button. */
   onRemoveEdge?(hash: number): void;
   initial?: {
@@ -1511,7 +1512,7 @@ export function EdgeModifierForm({
     >
       <div className="selection-summary">
         {edgeHashes.length > 0
-          ? `${edgeHashes.length} exact edge${edgeHashes.length === 1 ? '' : 's'} selected`
+          ? `${edgeHashes.length} edge${edgeHashes.length === 1 ? '' : 's'} selected`
           : targetBodyId
             ? 'Select edges in the viewport or select every edge below.'
             : // Not "select a body or edge": arming this tool narrows picking
@@ -1525,30 +1526,43 @@ export function EdgeModifierForm({
           className="edge-pick-list"
           aria-label={kind === 'fillet' ? 'Filleted edges' : 'Chamfered edges'}
         >
-          {edgeRows.map((row, index) => (
-            <li key={row.hash} className="edge-pick-row">
-              <span className="pick-order mono">{index + 1}</span>
-              <span className="edge-pick-name">{row.label}</span>
-              {onRemoveEdge && (
-                <button
-                  type="button"
-                  className="edge-pick-remove"
-                  aria-label={`Remove ${index + 1} ${row.label}`}
-                  title={
-                    edgeRows.length === 1
-                      ? `A ${kind} needs at least one edge`
-                      : 'Remove this edge'
-                  }
-                  disabled={edgeRows.length === 1}
-                  onClick={() => {
-                    onRemoveEdge(row.hash);
-                  }}
-                >
-                  <X size={12} aria-hidden="true" />
-                </button>
-              )}
-            </li>
-          ))}
+          {edgeRows.map((row, index) => {
+            const fullName =
+              row.owner !== undefined
+                ? ownedTopologyName(row.owner, row.label)
+                : row.label;
+            return (
+              <li key={row.hash} className="edge-pick-row">
+                <span className="pick-order mono">{index + 1}</span>
+                <span className="edge-pick-name" title={fullName}>
+                  {row.owner !== undefined && (
+                    <span className="edge-pick-owner">
+                      {ownedTopologyName(row.owner, '')}
+                    </span>
+                  )}
+                  <span className="edge-pick-entity">{row.label}</span>
+                </span>
+                {onRemoveEdge && (
+                  <button
+                    type="button"
+                    className="edge-pick-remove"
+                    aria-label={`Remove ${index + 1} ${fullName}`}
+                    title={
+                      edgeRows.length === 1
+                        ? `A ${kind} needs at least one edge`
+                        : 'Remove this edge'
+                    }
+                    disabled={edgeRows.length === 1}
+                    onClick={() => {
+                      onRemoveEdge(row.hash);
+                    }}
+                  >
+                    <X size={12} aria-hidden="true" />
+                  </button>
+                )}
+              </li>
+            );
+          })}
         </ol>
       )}
       {targetBodyId &&

@@ -368,6 +368,15 @@ export interface BooleanInput {
   /** Zero passes through the first operand unchanged; omitted means active. */
   activeWhen?: ParamValue;
   name: string;
+  /**
+   * The result body's name for a union or an intersect, resolved by the
+   * caller (see `numberedBodyName`) and stored in the command so a replay
+   * reproduces it. Both treat their operands alike, so the merged bracket is
+   * "Union 1", not still "Box 1". A subtract ignores it: the base body with
+   * material cut away is still that body. Absent is the legacy naming, the
+   * base body's name, that every command recorded before this replays to.
+   */
+  bodyName?: string;
   operation: BooleanOperation;
   targetBodyIds: BodyId[];
   ids?: BodyFeatureIds;
@@ -1022,6 +1031,42 @@ export function numberedBodyName(
     }
   }
   return `${stem} ${highest + 1}`;
+}
+
+/**
+ * The name a feature made now takes in History: the name it was given, or,
+ * when another feature already carries that name, the next free number —
+ * "Hole", then "Hole 2", "Hole 3". Two rows both reading "Hole" could not be
+ * told apart in History or in the delete dialog. The first of a kind stays
+ * unnumbered, so a single Hole is still just "Hole".
+ *
+ * Only for features being made now: the caller puts the result in the
+ * command, and nothing renames a feature already in a document.
+ */
+export function numberedFeatureName(
+  document: ProjectDocument,
+  name: string
+): string {
+  const trimmed = name.trim();
+  const names = new Set(
+    listNodesByKind(document, 'feature').map((feature) => feature.name.trim())
+  );
+  if (trimmed.length === 0 || !names.has(trimmed)) {
+    return name;
+  }
+  // "Hole 2" taken again counts on from "Hole", not to "Hole 2 2".
+  const stem = /^(.*\S)\s+[1-9]\d*$/.exec(trimmed)?.[1] ?? trimmed;
+  const prefix = `${stem} `;
+  let highest = names.has(stem) ? 1 : 0;
+  for (const existing of names) {
+    const suffix = existing.startsWith(prefix)
+      ? existing.slice(prefix.length)
+      : '';
+    if (/^[1-9]\d*$/.test(suffix)) {
+      highest = Math.max(highest, Number(suffix));
+    }
+  }
+  return `${stem} ${Math.max(highest, 1) + 1}`;
 }
 
 /**
@@ -1911,13 +1956,18 @@ export function booleanBodies(
   next.nodes[bodyNodeId] = {
     id: bodyNodeId,
     kind: 'body',
-    // The result is still the base body with the others merged in or cut
-    // away, so it keeps the base body's name.
-    name: derivedBodyName(
-      document,
-      input.targetBodyIds[0],
-      `${input.name} Body`
-    ),
+    // A subtract's result is still the base body with material cut away, so
+    // it keeps the base body's name. A union or intersect made with a
+    // numbered name is a body of its own; one recorded without one keeps the
+    // base body's name, as it always did.
+    name:
+      input.bodyName !== undefined && input.operation !== 'subtract'
+        ? input.bodyName
+        : derivedBodyName(
+            document,
+            input.targetBodyIds[0],
+            `${input.name} Body`
+          ),
     parentId: next.activePartId,
     revisionId: null,
     bodyId,

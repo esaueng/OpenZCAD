@@ -3,7 +3,11 @@ import {
   composeCommands,
   type AnyCommand
 } from '@openzcad/command-system';
-import { listFeaturesInOrder, numberedBodyName } from '@openzcad/document-core';
+import {
+  listFeaturesInOrder,
+  numberedBodyName,
+  numberedFeatureName
+} from '@openzcad/document-core';
 import {
   isFeatureSuppressed,
   type BodyId,
@@ -123,7 +127,8 @@ export function primitivePlacement(
  * default Create stores the same single feature it did before. Elsewhere it
  * is one undo step: the primitive plus its placement Move.
  * The current document resolves the body's number into the command payload,
- * so a placed primitive has the same name after undo, redo and replay.
+ * so a placed primitive has the same name after undo, redo and replay. A
+ * second "Box" in History is numbered "Box 2" the same way.
  */
 export function createPrimitiveCommand(
   kind: PrimitiveKind,
@@ -132,8 +137,11 @@ export function createPrimitiveCommand(
   position: ParametricVector3,
   document?: ProjectDocument | null
 ): AnyCommand {
+  const featureName = document ? numberedFeatureName(document, name) : name;
   const add = commandFactories.addPrimitive({
-    name,
+    name: featureName,
+    // Numbered from the name as given, as bodies always were: "Box 3" for a
+    // third box even where History shows only "Box" and "Box 2".
     ...(document ? { bodyName: numberedBodyName(document, name) } : {}),
     primitiveKind: kind,
     dimensions
@@ -142,7 +150,7 @@ export function createPrimitiveCommand(
   return composeCommands(add.label, [
     add,
     commandFactories.transformBody({
-      name: `Place ${name}`,
+      name: `Place ${featureName}`,
       targetBodyId: add.payload.ids!.bodyId,
       translation: position
     })

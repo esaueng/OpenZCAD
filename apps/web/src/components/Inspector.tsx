@@ -1540,21 +1540,18 @@ export function Inspector(props: InspectorProps) {
               : undefined
           }
           onClearEdges={props.onClearSelectedEdges}
-          edgeRows={selectedEdges.flatMap((edge) =>
-            edge.hash === undefined
-              ? []
-              : [
-                  {
-                    hash: edge.hash,
-                    label: edgeLabel(
-                      edgeModifierBody ??
-                        props.bodyRepresentations?.[edge.bodyId],
-                      edge.hash,
-                      edge.topologyId
-                    )
-                  }
-                ]
-          )}
+          edgeRows={selectedEdges.flatMap((edge) => {
+            if (edge.hash === undefined) return [];
+            const owner =
+              edgeModifierBody ?? props.bodyRepresentations?.[edge.bodyId];
+            return [
+              {
+                hash: edge.hash,
+                label: edgeLabel(owner, edge.hash, edge.topologyId),
+                ...(owner ? { owner: owner.name } : {})
+              }
+            ];
+          })}
           {...(props.onRemoveSelectedEdge
             ? {
                 onRemoveEdge: (hash: number) => {
@@ -1856,15 +1853,16 @@ export function Inspector(props: InspectorProps) {
           targetBodyId={data.targetBodyId}
           edgeHashes={editEdgeHashes}
           edgeReferences={editEdgeReferences}
-          edgeRows={editEdgeHashes.map((hash) => ({
-            hash,
-            label: edgeLabel(
-              edgeSources.find((body) =>
-                body?.topology?.edges.some((edge) => edge.hash === hash)
-              ),
-              hash
-            )
-          }))}
+          edgeRows={editEdgeHashes.map((hash) => {
+            const owner = edgeSources.find((body) =>
+              body?.topology?.edges.some((edge) => edge.hash === hash)
+            );
+            return {
+              hash,
+              label: edgeLabel(owner, hash),
+              ...(owner ? { owner: owner.name } : {})
+            };
+          })}
           onRemoveEdge={(hash) => {
             setRemovedEdges({
               edit: editKey,

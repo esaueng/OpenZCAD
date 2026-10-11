@@ -154,8 +154,7 @@ export function TweakPanel({
             {/* How to change a value only where there is one to change. */}
             {parameters.length > 0 && (
               <p className="muted tweak-panel-intro">
-                Change a value and press Enter, or use an on/off toggle. The
-                design itself stays locked.
+                Change a value and press Enter, or use an on/off toggle.
               </p>
             )}
             {modelError && (

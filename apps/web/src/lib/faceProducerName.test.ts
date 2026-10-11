@@ -21,6 +21,8 @@ import {
   producedFaceName,
   producedFaceNames
 } from './faceProducerName';
+import { modelingFaceOptions } from './modelingOperations';
+import { topologySelectionLabel } from './topologyLabels';
 
 const user = toUserId('user_face_names');
 
@@ -100,7 +102,7 @@ describe('faces named by the feature that made them', () => {
     const second = featureOfBody(document, document.bodyOrder[1]!);
     const top = face(1, second.featureId, 'primitive.box.face.z-max');
     expect(producedFaceName(document, bodyWith([top]), top)).toBe(
-      'Box 2 · top'
+      'Box 2 · Top face'
     );
   });
 
@@ -128,7 +130,7 @@ describe('faces named by the feature that made them', () => {
       producedFaceNames(document, body, [kept, cap, wall]).map(
         (name) => name?.name
       )
-    ).toEqual(['Box 1 · top', 'Boss · top', 'Boss · front']);
+    ).toEqual(['Box 1 · Top face', 'Boss · Top face', 'Boss · Front face']);
   });
 
   it('follows a fillet copy of a box face back to the box', () => {
@@ -149,7 +151,7 @@ describe('faces named by the feature that made them', () => {
     const blend = face(2, fillet.featureId, 'modifier.box.face.blend.0');
     expect(faceProducingFeature(document, side)?.name).toBe('Box');
     expect(producedFaceName(document, bodyWith([side]), side)).toBe(
-      'Box 2 · right'
+      'Box 2 · Right face'
     );
     // A blend is the fillet's own face.
     expect(faceProducingFeature(document, blend)?.name).toBe('Fillet');
@@ -159,7 +161,9 @@ describe('faces named by the feature that made them', () => {
     const document = box(createProjectDocument('Legacy', user), false);
     const feature = featureOfBody(document, document.bodyOrder[0]!);
     const top = face(1, feature.featureId, 'primitive.box.face.z-max');
-    expect(producedFaceName(document, bodyWith([top]), top)).toBe('Box · top');
+    expect(producedFaceName(document, bodyWith([top]), top)).toBe(
+      'Box · Top face'
+    );
   });
 
   it('says nothing for a face whose lineage cannot place it', () => {
@@ -183,6 +187,38 @@ describe('faces named by the feature that made them', () => {
     }
   });
 
+  it('owns a face the lineage cannot place by its body, as the tag does', () => {
+    const document = box(box(createProjectDocument('Agree', user)));
+    const second = featureOfBody(document, document.bodyOrder[1]!);
+    const top = face(1, second.featureId, 'primitive.box.face.z-max');
+    // No lineage: a face a union merged from two boxes.
+    const merged = { ...face(2, second.featureId, 'x', { x: 0, y: 0, z: -1 }) };
+    delete (merged as { reference?: unknown }).reference;
+    const body: BodyRepresentation = {
+      ...bodyWith([top, merged]),
+      name: 'Union 1'
+    };
+    const labels = modelingFaceOptions(
+      body.topology,
+      body,
+      faceNamerFor(document)
+    ).map((option) => option.label);
+    // One list never mixes "Box 2 · Top face" with a bare "Bottom face", and
+    // both rows are spelled as the viewport tag spells a face.
+    expect(labels).toEqual(['Box 2 · Top face', 'Union 1 · Bottom face']);
+    expect(labels[1]).toBe(
+      topologySelectionLabel(body, {
+        kind: 'face',
+        hash: 2,
+        topologyId: 'face:2'
+      })
+    );
+    // Without the namer (still loading) every row is the tag's own name.
+    expect(
+      modelingFaceOptions(body.topology, body).map((option) => option.label)
+    ).toEqual(['Union 1 · Top face', 'Union 1 · Bottom face']);
+  });
+
   it('names a body once per document, however often the list renders', () => {
     const document = box(createProjectDocument('Cached', user));
     const feature = featureOfBody(document, document.bodyOrder[0]!);
@@ -190,7 +226,7 @@ describe('faces named by the feature that made them', () => {
     const body = bodyWith(faces);
     const namer = faceNamerFor(document);
     const first = namer(body, faces);
-    expect(first.map((name) => name?.name)).toEqual(['Box 1 · top']);
+    expect(first.map((name) => name?.name)).toEqual(['Box 1 · Top face']);
     expect(namer(body, faces)).toBe(first);
     // New topology is named afresh.
     expect(namer(body, [...faces])).not.toBe(first);

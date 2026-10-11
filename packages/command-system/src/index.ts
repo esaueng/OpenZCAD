@@ -2585,6 +2585,7 @@ export function commandsForCadPatch(
         scope.consume(targetBodyIds, 'boolean');
         return commandFactories.booleanBodies({
           name: operation.name,
+          bodyName: numberedBodyName(projectedDocument, operation.name),
           operation: operation.operation,
           targetBodyIds,
           ids

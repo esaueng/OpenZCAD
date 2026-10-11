@@ -27,7 +27,7 @@ import {
 } from '@openzcad/shared';
 import { evalParamValue, previewExpression } from './model';
 import type { FaceNamer } from './faceProducerName';
-import { faceLabel } from './topologyLabels';
+import { faceLabel, faceNameRank, ownedTopologyName } from './topologyLabels';
 
 export type ModelingOperationKind =
   | 'mirror'
@@ -577,9 +577,9 @@ export interface ModelingFaceOption {
   hash: number;
   topologyId: string;
   /**
-   * The feature that made the face and its role, "Box 2 · top", when the
-   * face's lineage says; otherwise what the viewport calls it: "Top face",
-   * "Through hole ⌀6".
+   * The face's owner and the viewport's name for it, "Box 2 · Top face":
+   * the owner is the feature that made the face when its lineage says,
+   * otherwise the body, as the viewport tag names it.
    */
   label: string;
   /** The carrier, lineage and fingerprint, for a tooltip. */
@@ -638,29 +638,6 @@ export function topologyFaceLabel(
   return `${carrier} ${identity} · #${hash}`;
 }
 
-/**
- * The faces a form can pick from, named the way the viewport names them.
- *
- * The list used to read "Plane face modifier · box · face · z max · #f5741e9d"
- * while the hover label on the same face said "Top face" — the one name the
- * user could match up was the one the list did not show. With a body to
- * resolve against, the viewport's name leads and the lineage moves to the
- * tooltip; two faces that share a name get an ordinal so they stay apart.
- */
-const FACE_NAME_ORDER = [
-  'Top face',
-  'Bottom face',
-  'Front face',
-  'Back face',
-  'Left face',
-  'Right face'
-];
-
-function faceNameRank(name: string): number {
-  const index = FACE_NAME_ORDER.indexOf(name);
-  return index < 0 ? FACE_NAME_ORDER.length : index;
-}
-
 /** Highest first, then front-most (lowest Y), then left-most (lowest X). */
 function compareFacePlaces(
   a: BodyTopology['faces'][number],
@@ -677,26 +654,47 @@ function compareFacePlaces(
   return delta(pb.z, pa.z) || delta(pa.y, pb.y) || delta(pa.x, pb.x);
 }
 
+/**
+ * The faces a form can pick from, named the way the viewport names them.
+ *
+ * The list used to read "Plane face modifier · box · face · z max · #f5741e9d"
+ * while the hover label on the same face said "Top face" — the one name the
+ * user could match up was the one the list did not show. With a body to
+ * resolve against, the viewport's name leads and the lineage moves to the
+ * tooltip; two faces that share a name get an ordinal so they stay apart.
+ */
 export function modelingFaceOptions(
   topology: BodyTopology | undefined,
   body?: BodyRepresentation,
   nameFaces?: FaceNamer
 ): ModelingFaceOption[] {
   const topologyFaces = topology?.faces ?? [];
-  // With a namer, a face named by lineage reads "Box 2 · top": on a union
-  // of two boxes, "Top face (1)" and "(2)" said nothing about which box each
-  // was. Faces the lineage cannot place keep the viewport's name. The namer
-  // is passed in rather than imported so it stays out of the entry chunk.
+  // With a namer, a face named by lineage reads "Box 2 · Top face": on a
+  // union of two boxes, "Top face (1)" and "(2)" said nothing about which box
+  // each was. A face the lineage cannot place — one a union merged from both
+  // boxes — is owned by the body, exactly as the viewport tag names it, so
+  // one list never mixes "Box 2 · Top face" with a bare "Bottom face". The
+  // namer is passed in rather than imported so it stays out of the entry
+  // chunk.
   const produced =
     body && nameFaces
       ? nameFaces(body, topologyFaces)
       : topologyFaces.map(() => null);
-  const names = body
+  const roles = body
     ? topologyFaces.map(
         (face, index) =>
-          produced[index]?.name ?? faceLabel(body, face.hash, face.topologyId)
+          produced[index]?.role ?? faceLabel(body, face.hash, face.topologyId)
       )
     : null;
+  const names =
+    body && roles
+      ? topologyFaces.map((_, index) => {
+          const owner = produced[index]?.owner ?? body.name;
+          return owner
+            ? ownedTopologyName(owner, roles[index]!)
+            : roles[index]!;
+        })
+      : null;
   // The kernel's face order is not stable across rebuilds, and the list (and
   // the "(1)", "(2)" that tell same-named faces apart) used to follow it:
   // "Top face" moved from second to sixth between two holes, and "Top face
@@ -709,7 +707,7 @@ export function modelingFaceOptions(
     const group = (index: number) =>
       produced[index]?.featureIndex ?? Number.POSITIVE_INFINITY;
     const rank = (index: number) =>
-      produced[index]?.roleRank ?? faceNameRank(names[index]!);
+      produced[index]?.roleRank ?? faceNameRank(roles![index]!);
     order.sort((a, b) => {
       const groupA = group(a.index);
       const groupB = group(b.index);
