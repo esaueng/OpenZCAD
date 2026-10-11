@@ -1,5 +1,10 @@
 import { describe, expect, it } from 'vitest';
-import { HOLE_MISSES_NOTICE, holePreview } from './holeGhost';
+import {
+  HOLE_MISSES_NOTICE,
+  holePositionAnchor,
+  holePreview
+} from './holeGhost';
+import { holePositionFromPick } from './holePositionAxes';
 
 // A 100 × 60 × 6 plate, corner at the origin: its top face at z = 6.
 const plate = new Float32Array([
@@ -143,6 +148,52 @@ describe('holePreview', () => {
   it('waits quietly while the body has no mesh', () => {
     expect(holePreview({ ...base, bodyPositions: new Float32Array() })).toEqual(
       { ghost: null, notice: null }
+    );
+  });
+});
+
+describe('a face click places the hole (G7)', () => {
+  it('drills where the click landed on the 100 × 60 × 6 plate', () => {
+    // A click near the +X end of the top face, a little toward −Y.
+    const click = { x: 90.3, y: 24.8, z: 6 };
+    const position = holePositionFromPick(top, 'centroid', click, 1)!;
+    expect(position).toEqual({ u: '5', v: '40' });
+    const { ghost } = holePreview({
+      ...base,
+      u: Number(position.u),
+      v: Number(position.v)
+    });
+    // Snapped to the 1 mm increment, the bore enters at the clicked spot.
+    expect(ghost!.entry.x).toBeCloseTo(90, 9);
+    expect(ghost!.entry.y).toBeCloseTo(25, 9);
+    expect(ghost!.entry.z).toBeCloseTo(6, 9);
+  });
+
+  it('measures from the anchor the hole is drilled against', () => {
+    // A face whose vertex mean is not its centroid: an edited hole anchored
+    // on the old centre keeps measuring from it.
+    const face = {
+      normal: { x: 0, y: 0, z: 1 },
+      centroid: { x: 50, y: 30, z: 6 },
+      center: { x: 40, y: 30, z: 6 }
+    };
+    const click = { x: 60, y: 30, z: 6 };
+    expect(holePositionFromPick(face, 'centroid', click, 1)).toEqual({
+      u: '0',
+      v: '10'
+    });
+    expect(holePositionFromPick(face, 'center', click, 1)).toEqual({
+      u: '0',
+      v: '20'
+    });
+  });
+
+  it('picks the anchor a new hole and an edited one are measured from', () => {
+    expect(holePositionAnchor(null, top)).toBe('centroid');
+    expect(holePositionAnchor(null, { centroid: undefined })).toBe('center');
+    expect(holePositionAnchor({}, top)).toBe('center');
+    expect(holePositionAnchor({ positionAnchor: 'centroid' }, top)).toBe(
+      'centroid'
     );
   });
 });

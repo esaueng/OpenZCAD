@@ -24,6 +24,10 @@ import { edgeModifierSliderRange } from '../../lib/edgeModifierEdit';
 import { useFieldAutoFocus } from './fieldAutoFocus';
 import { isPickListRow } from './pickListRow';
 import { PRIMITIVE_ANCHORS } from '../../lib/primitivePlacement';
+import {
+  primitiveGhostFor,
+  type PrimitiveGhost
+} from '../../lib/primitiveGhost';
 import { TextObjectFields, type TextAttributes } from '../TextObjectFields';
 import {
   PLANE_LABELS,
@@ -259,6 +263,12 @@ interface PrimitiveFormProps {
     position: ParametricVector3
   ): void;
   onCancel?: () => void;
+  /**
+   * The card's values as a ghost, on every change that moves it, so the
+   * viewport can draw the primitive before Create; null while a field does
+   * not resolve to a size that builds, and when the card closes.
+   */
+  onGhostChange?: (ghost: PrimitiveGhost | null) => void;
 }
 
 const POSITION_AXES = ['x', 'y', 'z'] as const;
@@ -271,7 +281,8 @@ export function PrimitiveForm({
   initialPosition,
   submitLabel,
   onSubmit,
-  onCancel
+  onCancel,
+  onGhostChange
 }: PrimitiveFormProps) {
   const fields = PRIMITIVE_FIELDS[kind];
   const anchor = PRIMITIVE_ANCHORS[kind];
@@ -352,6 +363,22 @@ export function PrimitiveForm({
     POSITION_AXES.every(
       (axis) => position[axis].trim() === documentPosition[axis]
     );
+  // Keyed on the resolved numbers, so a keystroke that leaves the value the
+  // same (`30` → `30.`, `w` while w = 30) does not rebuild the ghost.
+  const ghost = onGhostChange
+    ? primitiveGhostFor(kind, values, position, scope)
+    : null;
+  const ghostKey = ghost ? JSON.stringify(ghost) : null;
+  const ghostCallback = useRef(onGhostChange);
+  ghostCallback.current = onGhostChange;
+  useEffect(() => {
+    ghostCallback.current?.(
+      ghostKey ? (JSON.parse(ghostKey) as PrimitiveGhost) : null
+    );
+  }, [ghostKey]);
+  // Create, Cancel and Escape all close the card: the ghost goes with it.
+  useEffect(() => () => ghostCallback.current?.(null), []);
+
   const canSubmit =
     !unchanged &&
     name.trim().length > 0 &&

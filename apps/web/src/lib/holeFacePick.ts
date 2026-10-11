@@ -36,6 +36,12 @@ const PICK_LABELS: Record<FacePickOperation, string> = {
 export interface FormFacePick {
   bodyId: BodyId;
   hash: number;
+  /**
+   * Hole only: where on the face the click landed, as the card's U and V
+   * text. Absent for a pick with no click point (a face seeded from the
+   * selection, a keyboard pick), which leaves the typed position alone.
+   */
+  position?: { u: string; v: string };
 }
 
 export function resolveFormFacePick(

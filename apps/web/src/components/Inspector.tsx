@@ -64,6 +64,7 @@ import {
   type TransformFormValue
 } from './forms/FeatureForms';
 import { PRIMITIVE_TOOLS, TOOL_META, type ToolId } from '../lib/tools';
+import type { PrimitiveGhost } from '../lib/primitiveGhost';
 import {
   applyPrimitiveCommand,
   createPrimitiveCommand,
@@ -296,6 +297,11 @@ interface InspectorProps extends InspectorCallbacks {
    * title this panel.
    */
   featureSelectionSource: FeatureSelectionSource | null;
+  /**
+   * A new primitive's card, as the ghost the viewport draws before Create;
+   * null when its values do not build and when the card closes.
+   */
+  onPrimitiveGhostChange?(ghost: PrimitiveGhost | null): void;
 }
 
 function SketchAttachmentSummary({
@@ -1458,6 +1464,7 @@ export function Inspector(props: InspectorProps) {
             )
           }
           onCancel={props.onCancel}
+          onGhostChange={props.onPrimitiveGhostChange}
         />
       );
     } else if (tool === 'revolve') {

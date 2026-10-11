@@ -57,6 +57,16 @@ test('repairs legacy topology in Tweak and keeps parameter edits through reload'
   await page.goto('/');
   await page.getByLabel('Project name').fill('Parameter repair entry');
   await page.getByRole('button', { name: 'Create project' }).click();
+  // The new project finishes opening (and records itself as the active
+  // project) asynchronously; seeding the session before that settles lets
+  // the late write replace the seeded project id, and the reload then opens
+  // the empty project instead of the legacy one.
+  await expect(page.locator('.viewer-host canvas')).toBeVisible({
+    timeout: 30000
+  });
+  await expect(
+    page.getByRole('status', { name: 'Saved', exact: true })
+  ).toBeVisible({ timeout: 30000 });
   await page.evaluate(async (legacy) => {
     const db = await new Promise<IDBDatabase>((resolve, reject) => {
       const request = indexedDB.open('openzcad-v2');
