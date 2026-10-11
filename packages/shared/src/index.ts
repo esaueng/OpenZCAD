@@ -2913,7 +2913,7 @@ export const DEFAULT_APP_SETTINGS: AppSettings = {
     credentialSource: 'deployment',
     provider: 'openrouter',
     baseUrl: '',
-    model: 'openai/gpt-5.6-sol',
+    model: 'openai/gpt-6-luna',
     reasoningEffort: 'high',
     maxOutputTokens: 32_000,
     timeoutMs: 120_000,

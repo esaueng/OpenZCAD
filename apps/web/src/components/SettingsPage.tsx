@@ -383,10 +383,10 @@ function ControlReferenceCollection({
 
 function providerDefaults(provider: AppSettings['assistant']['provider']) {
   if (provider === 'openai') {
-    return { model: 'gpt-5.6-sol', baseUrl: '' };
+    return { model: 'gpt-6-luna', baseUrl: '' };
   }
   if (provider === 'openrouter') {
-    return { model: 'openai/gpt-5.6-sol', baseUrl: '' };
+    return { model: 'openai/gpt-6-luna', baseUrl: '' };
   }
   return { model: '', baseUrl: '' };
 }
