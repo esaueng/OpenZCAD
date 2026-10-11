@@ -224,10 +224,6 @@ export function CommandBar({
   const completion = listShown ? completionOf(typed, activeCommand) : '';
 
   useEffect(() => {
-    setActiveIndex(null);
-  }, [query]);
-
-  useEffect(() => {
     const input = inputRef.current;
     if (!input) {
       return;
@@ -246,6 +242,7 @@ export function CommandBar({
     }
     handledDraftId.current = draft.id;
     setQuery(draft.text);
+    setActiveIndex(null);
     onOpenChange(true);
     const input = inputRef.current;
     if (input) {
@@ -571,7 +568,13 @@ export function CommandBar({
                 event.preventDefault();
                 // The command's own spelling, not the typed case, and the
                 // slash only if one was typed.
-                setQuery(`${prefix}${activeCommand!.label}`);
+                const completed = activeCommand!;
+                setQuery(`${prefix}${completed.label}`);
+                setActiveIndex(
+                  rankedCommands(commands, completed.label).findIndex(
+                    (command) => command.id === completed.id
+                  )
+                );
               } else if (listShown && hasRows && event.key === 'ArrowDown') {
                 event.preventDefault();
                 setActiveIndex(Math.min(clampedIndex + 1, rowCount - 1));

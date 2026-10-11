@@ -115,13 +115,11 @@ describe(
         targetBodyIds: [cup.bodyId, tool.bodyId]
       });
       const derived = await adapter.syncDocument(fused.document);
-      const refused = (derived.featureWarnings ?? []).some(
-        (warning) =>
-          warning.featureName === 'Ear union' &&
-          (warning.kind === 'build-failed' || warning.kind === 'refusal')
+      const refusal = (derived.featureWarnings ?? []).find(
+        (warning) => warning.featureName === 'Ear union'
       );
       return {
-        refused,
+        refusal,
         body: derived.bodyRepresentations[fused.bodyId]
       };
     }
@@ -137,8 +135,17 @@ describe(
     });
 
     it('refuses or fuses exactly an ear that crosses the wall, never another body', async () => {
-      const { refused, body } = await union([4, 6, 4], [-3, 5, 3]);
-      if (!refused) {
+      const { refusal, body } = await union([4, 6, 4], [-3, 5, 3]);
+      if (refusal) {
+        expect(refusal).toMatchObject({
+          kind: 'build-failed',
+          kernelRefusal: {
+            family: 'boolean',
+            category: 'quality_refused',
+            code: 'exact_only_unattainable'
+          }
+        });
+      } else {
         expect(body?.volume).toBeCloseTo(CUP_WITH_BORE + EAR_OUTSIDE_WALL, 6);
         expect(body?.faceCount).toBe(17);
       }
@@ -147,8 +154,11 @@ describe(
     it('refuses or leaves the cup unchanged for a tool wholly inside the wall', async () => {
       // The pinned kernel's fuse answers this one `ok` with the tool's 24 mm³
       // added; only the adapter's union connectivity gate stops it.
-      const { refused, body } = await union([1, 6, 4], [0.5, 5, 3]);
-      if (!refused) expect(body?.volume).toBeCloseTo(CUP_WITH_BORE, 6);
+      const { refusal, body } = await union([1, 6, 4], [0.5, 5, 3]);
+      if (refusal) {
+        expect(refusal.kind).toBe('refusal');
+        expect(refusal.message).toContain('disconnected');
+      } else expect(body?.volume).toBeCloseTo(CUP_WITH_BORE, 6);
     });
   }
 );

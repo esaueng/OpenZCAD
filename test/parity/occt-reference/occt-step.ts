@@ -58,7 +58,8 @@ import {
   type ProjectDocument,
   type SketchId,
   type SketchNode,
-  type SketchObjectData
+  type SketchObjectData,
+  type UnitSystem
 } from '@openzcad/shared';
 import { displayTessellationForExtents } from '../../../packages/kernel-adapter/src/display-tessellation';
 import { importedMeshStl } from '../../../packages/kernel-adapter/src/imported-mesh';
@@ -1149,10 +1150,11 @@ export class OcctStepKernelAdapter {
 
   private buildPrimitive(
     data: Extract<FeatureNode['data'], { featureKind: 'primitive' }>,
-    scope: Record<string, number>
+    scope: Record<string, number>,
+    documentUnits: UnitSystem
   ): ShapeHandle {
     const dimension = (key: string): number =>
-      resolveParamValue(data.dimensions[key] ?? 0, scope, key);
+      resolveParamValue(data.dimensions[key] ?? 0, scope, key, documentUnits);
     switch (data.primitiveKind) {
       case 'box':
         return this.kernel.makeBox(
@@ -1449,7 +1451,11 @@ export class OcctStepKernelAdapter {
           }
           case 'primitive':
             if (feature.bodyId) {
-              const shape = this.buildPrimitive(feature.data, scope);
+              const shape = this.buildPrimitive(
+                feature.data,
+                scope,
+                document.units
+              );
               result.shapes.set(feature.bodyId, shape);
               result.lineages.set(
                 feature.bodyId,
@@ -2053,7 +2059,11 @@ export class OcctStepKernelAdapter {
       // remain real topology and must retain their witnesses and lineage.
       if (!range) {
         const length = this.kernel.curveLength(edgeShape);
-        if (!Number.isFinite(length) || length < 0 || length > GEOMETRY_EPSILON) {
+        if (
+          !Number.isFinite(length) ||
+          length < 0 ||
+          length > GEOMETRY_EPSILON
+        ) {
           throw new Error('OCCT omitted a non-degenerate edge display group.');
         }
       }

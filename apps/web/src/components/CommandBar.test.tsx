@@ -218,6 +218,22 @@ describe('CommandBar', () => {
     expect(search).toHaveValue('');
   });
 
+  it('runs the chosen command after Tab completes a plain-word search with an assistant', async () => {
+    const onAsk = vi.fn();
+    const run = vi.fn();
+    render(
+      <Bar
+        commands={[command('fillet', 'Fillet', 'Modify', { run })]}
+        onAsk={onAsk}
+      />
+    );
+    const search = searchField();
+    await userEvent.type(search, 'fil');
+    await userEvent.keyboard('{ArrowUp}{Tab}{Enter}');
+    expect(run).toHaveBeenCalledOnce();
+    expect(onAsk).not.toHaveBeenCalled();
+  });
+
   it('offers no ghost when the typed text is not the start of a name', async () => {
     render(
       <Bar

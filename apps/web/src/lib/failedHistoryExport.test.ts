@@ -3,6 +3,7 @@ import {
   addPrimitiveFeature,
   createProjectDocument,
   listFeaturesInOrder,
+  mirrorBody,
   shellBody
 } from '@openzcad/document-core';
 import {
@@ -83,6 +84,28 @@ describe('failed-history export guard', () => {
         featureId: shell.featureId,
         featureName: 'Housing wall'
       }
+    ]);
+  });
+
+  it('keeps the source of a failed mirror exportable while withholding its copy', () => {
+    const { document, housing, bracket } = fixture();
+    const mirrored = mirrorBody(document, {
+      name: 'Mirror',
+      targetBodyId: bracket,
+      plane: { origin: { x: 0, y: 0, z: 0 }, normal: { x: 1, y: 0, z: 0 } }
+    });
+    const feature = listFeaturesInOrder(mirrored.document).at(-1)!;
+    const failed = withShellWarning(
+      mirrored.document,
+      [housing, bracket, mirrored.bodyId],
+      {
+        featureId: feature.featureId,
+        featureName: feature.name,
+        kind: 'build-failed'
+      }
+    );
+    expect([...failedHistoryExportBodies(failed).keys()]).toEqual([
+      mirrored.bodyId
     ]);
   });
 

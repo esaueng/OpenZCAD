@@ -57,7 +57,8 @@ test('discloses a faceted round sweep in Diagnostics and explains Smooth', async
   const row = page.locator('.diagnostic-row');
   await expect(row).toHaveCount(1);
   await expect(row).toContainText('This sweep is a faceted approximation');
-  await expect(row).toContainText('2.02% less area than the profile');
+  await expect(row).toContainText('straight chords');
+  await expect(row).not.toContainText('end caps measure');
   await expect(row).toContainText('Its 902 faces');
   await expect(row).toContainText('this path is built from 3 edges');
   await testInfo.attach('faceted-sweep-diagnostics', {

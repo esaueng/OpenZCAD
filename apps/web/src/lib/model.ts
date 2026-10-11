@@ -59,7 +59,7 @@ export function previewExpression(
       value
     };
   } catch (error) {
-    const undefinedParameter = undefinedParameterIn(trimmed, scope);
+    const undefinedParameter = undefinedParameterIn(trimmed, scope, quantity);
     return {
       ok: false,
       text: error instanceof Error ? error.message : 'invalid',
@@ -88,7 +88,8 @@ const VALUE_REFUSAL =
  */
 function undefinedParameterIn(
   expression: string,
-  scope: Record<string, number>
+  scope: Record<string, number>,
+  quantity?: FieldQuantity
 ): string | undefined {
   const missing: string[] = [];
   const reading = new Proxy(scope, {
@@ -105,7 +106,8 @@ function undefinedParameterIn(
     }
   });
   try {
-    evaluateExpression(expression, reading);
+    if (quantity) evaluateFieldExpression(expression, reading, quantity);
+    else evaluateExpression(expression, reading);
   } catch (error) {
     if (!(error instanceof Error) || !VALUE_REFUSAL.test(error.message)) {
       return undefined;

@@ -5283,13 +5283,12 @@ export function App() {
     (previewDoc ?? doc)?.derived.warnings ??
     [];
   const diagnostics = useMemo(() => {
-    const shown = previewDoc ?? doc;
-    // Faceted sweeps are disclosed from the shown bodies' measured topology
-    // (see sweepFacetingAdvisories); transient previews carry none.
-    const faceting =
-      currentFaceGeometryPreview || currentGeometrySnapshot || !shown
-        ? []
-        : sweepFacetingAdvisories(shown);
+    const shown = currentFaceGeometryPreview?.document ?? previewDoc ?? doc;
+    const shownBodies =
+      currentFaceGeometryPreview?.geometry.bodyRepresentations ??
+      currentGeometrySnapshot?.bodyRepresentations ??
+      shown?.derived.bodyRepresentations;
+    const faceting = shown ? sweepFacetingAdvisories(shown, shownBodies) : [];
     const featureWarnings = currentFaceGeometryPreview
       ? currentFaceGeometryPreview.geometry.featureWarnings
       : currentGeometrySnapshot
@@ -5402,8 +5401,9 @@ export function App() {
           : completedViewerBodies
     ).filter((body) => !body.consumed && !hiddenBodyIds.has(body.bodyId));
     // G2: what a command preview would make is drawn in the preview hue
-    // until it is applied. A face drag shows its change band instead.
-    return previewDoc && !currentFaceGeometryPreview && !currentGeometrySnapshot
+    // until it is applied, including edits that retain an existing body ID.
+    return currentFaceGeometryPreview ||
+      (previewDoc && !currentGeometrySnapshot)
       ? tintPreviewResultBodies(bodies, representations)
       : bodies;
   }, [
@@ -13718,7 +13718,8 @@ export function App() {
    */
   async function handleSetParameter(
     name: string,
-    expression: string
+    expression: string,
+    addOnly = false
   ): Promise<string | null> {
     const manager = managerRef.current;
     if (!manager || !ensureCanEditParameters('change this parameter')) {
@@ -13756,7 +13757,8 @@ export function App() {
       if (!current()) return stale();
       const parameterCommand = commandFactories.setParameter({
         name,
-        expression
+        expression,
+        ...(addOnly ? { addOnly: true } : {})
       });
       parameterCommand.validate(base);
       let prospective = parameterCommand.apply(base);
@@ -13902,7 +13904,7 @@ export function App() {
       ? beginFieldDefinition(fieldDefinitions.current, name, live)
       : () => {};
     try {
-      const refusal = await handleSetParameter(name, expression);
+      const refusal = await handleSetParameter(name, expression, true);
       const committed = managerRef.current?.document;
       if (!refusal && committed) {
         editFormVersion(fieldDefinitions.current, committed);
@@ -16662,12 +16664,17 @@ export function App() {
       live.data.featureKind === 'sketch'
         ? findSketch(current, live.data.sketchId)
         : undefined;
-    executeTransaction(`Rename ${live.name} to ${next}`, [
+    const renamed = executeTransaction(`Rename ${live.name} to ${next}`, [
       commandFactories.renameNode({ nodeId: live.id, name: next }),
       ...(sketch
         ? [commandFactories.renameNode({ nodeId: sketch.id, name: next })]
         : [])
     ]);
+    // A modeling card owns a draft snapshot, including its name. Close it
+    // after the rename so applying that snapshot cannot restore the old name.
+    if (renamed && modelingEditFeature?.featureId === featureId) {
+      closeFeaturePanel();
+    }
   }
 
   function handleReorderFeature(featureId: FeatureId, toIndex: number) {
@@ -18886,7 +18893,8 @@ export function App() {
         signature,
         command,
         resultBodyId,
-        featureName: submission.input.name,
+        featureName:
+          (command.payload as { name?: string }).name ?? submission.input.name,
         baseVersion: current.version
       };
       return { status: 'ready' };
