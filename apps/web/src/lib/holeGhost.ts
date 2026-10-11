@@ -53,6 +53,22 @@ export interface HolePreview {
 export const HOLE_MISSES_NOTICE =
   'This position misses the body — the bore removes no material here, so Create will refuse it.';
 
+/**
+ * Which point of the entry face a hole's (u, v) is measured from — the anchor
+ * the submission will carry. A new hole measures from the area centroid when
+ * the face reports one; an edited hole keeps the anchor it was drilled
+ * against (`positionAnchor` is not patchable: re-anchoring would move it).
+ */
+export function holePositionAnchor(
+  edited: { positionAnchor?: 'centroid' } | null,
+  face: { centroid?: Vector3 } | undefined
+): 'centroid' | 'center' {
+  if (edited) {
+    return edited.positionAnchor === 'centroid' ? 'centroid' : 'center';
+  }
+  return face?.centroid ? 'centroid' : 'center';
+}
+
 function noPreview(reason: string): HolePreview {
   return { ghost: null, notice: `No preview — ${reason}` };
 }
