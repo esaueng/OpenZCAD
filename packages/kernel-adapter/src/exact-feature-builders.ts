@@ -416,9 +416,12 @@ function buildPrimitiveFeature(
   ctx: FeatureBuildContext,
   feature: FeatureNode
 ): void {
-  const { kernel, scope, result } = ctx;
+  const { kernel, scope, result, document } = ctx;
   if (feature.bodyId) {
-    result.shapes.set(feature.bodyId, buildPrimitive(kernel, feature, scope));
+    result.shapes.set(
+      feature.bodyId,
+      buildPrimitive(kernel, feature, scope, document.units)
+    );
   }
 }
 
