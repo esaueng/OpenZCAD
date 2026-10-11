@@ -52,12 +52,15 @@ import {
   Box,
   Camera,
   Check,
+  CirclePause,
+  CirclePlay,
   Combine,
   Crosshair,
   Download,
   Eye,
   FolderOpen,
   Grid3x3,
+  History as HistoryIcon,
   Layers3,
   Maximize2,
   Monitor,
@@ -857,6 +860,11 @@ const LazyDeleteFeatureDialog = lazyWithStaleChunkNotice(() =>
     default: module.DeleteFeatureDialog
   }))
 );
+const LazySuppressFeatureDialog = lazyWithStaleChunkNotice(() =>
+  import('./components/SuppressFeatureDialog').then((module) => ({
+    default: module.SuppressFeatureDialog
+  }))
+);
 const LazyUnappliedCardDialog = lazyWithStaleChunkNotice(() =>
   import('./components/UnappliedCardDialog').then((module) => ({
     default: module.UnappliedCardDialog
@@ -1046,6 +1054,16 @@ function DeleteFeatureDialog(
   );
 }
 
+function SuppressFeatureDialog(
+  props: ComponentProps<typeof LazySuppressFeatureDialog>
+) {
+  return (
+    <Suspense fallback={null}>
+      <LazySuppressFeatureDialog {...props} />
+    </Suspense>
+  );
+}
+
 function UnappliedCardDialog(
   props: ComponentProps<typeof LazyUnappliedCardDialog>
 ) {
@@ -1226,7 +1244,16 @@ import {
   suppressionRepairSnapshot,
   type SuppressionNotice
 } from './lib/suppressionFeedback';
-import { validateFeatureSuppression } from './lib/featureSuppression';
+import {
+  activeSuppressionPrompt,
+  FeatureSuppressionRefusal,
+  resolveSuppressionBranch,
+  suppressBranchLabel,
+  suppressCommands,
+  suppressedBranchMessage,
+  suppressionRefusal
+} from './lib/featureSuppression';
+import type { HistoryRowActions } from './components/HistoryTimeline';
 import {
   moveHasFiniteValues,
   moveHasUnappliedChange,
@@ -1898,6 +1925,13 @@ export function App() {
     featureId: FeatureId;
     name: string;
     dependents: string[];
+  } | null>(null);
+  /** A refused suppression, asking whether to pause its dependents too. */
+  const [pendingSuppression, setPendingSuppression] = useState<{
+    projectId: ProjectDocument['projectId'];
+    featureId: FeatureId;
+    name: string;
+    dependents: { featureId: FeatureId; name: string }[];
   } | null>(null);
   // Named `doc` (not `document`) so the global DOM document is never shadowed.
   const [doc, setDoc] = useState<ProjectDocument | null>(null);
@@ -3364,6 +3398,9 @@ export function App() {
     if (
       !current ||
       !error.featureId ||
+      // Answered by its own dialog, which names every dependent and offers
+      // to suppress them too; a second, red record would only repeat it.
+      error instanceof FeatureSuppressionRefusal ||
       (base &&
         (base.projectId !== current.projectId ||
           base.version !== current.version)) ||
@@ -4309,6 +4346,7 @@ export function App() {
     // command the new, empty one was somehow in the middle of.
     dispatchInteraction({ type: 'clear' });
     setPendingFeatureDelete(null);
+    setPendingSuppression(null);
     setPendingToolSwitch(null);
   }, [doc?.projectId]);
 
@@ -16451,6 +16489,25 @@ export function App() {
     }
   }
 
+  function handleRenameFeature(featureId: FeatureId, name: string) {
+    const current = managerRef.current?.document;
+    const live = current && findFeature(current, featureId);
+    const next = name.trim();
+    if (!current || !live || !next || next === live.name) return;
+    // A sketch feature and its sketch share one name everywhere it shows,
+    // as the sketch card's own rename keeps them.
+    const sketch =
+      live.data.featureKind === 'sketch'
+        ? findSketch(current, live.data.sketchId)
+        : undefined;
+    executeTransaction(`Rename ${live.name} to ${next}`, [
+      commandFactories.renameNode({ nodeId: live.id, name: next }),
+      ...(sketch
+        ? [commandFactories.renameNode({ nodeId: sketch.id, name: next })]
+        : [])
+    ]);
+  }
+
   function handleReorderFeature(featureId: FeatureId, toIndex: number) {
     const name =
       doc &&
@@ -16475,33 +16532,7 @@ export function App() {
         .downstream(liveFeature.featureId)
         .some((dependent) => !isFeatureSuppressed(dependent))
     ) {
-      const document = owner.document;
-      const label = `Suppress ${liveFeature.name}`;
-      void validatedFeature.runTransaction(
-        [
-          commandFactories.setNodeMetadata(
-            {
-              nodeId: liveFeature.id,
-              metadata: { [FEATURE_SUPPRESSED_METADATA_KEY]: true }
-            },
-            label
-          )
-        ],
-        {
-          label,
-          targets: [],
-          validateDerived: (derived) =>
-            validateFeatureSuppression(document, derived, liveFeature),
-          validatingMessage: `Checking dependents of ${liveFeature.name}…`,
-          successMessage: `Suppressed ${liveFeature.name}`,
-          onFailure: (message) => announce(message),
-          onSuccess: () =>
-            announce(`Suppressed ${liveFeature.name}`, {
-              label: 'Undo',
-              run: handleUndo
-            })
-        }
-      );
+      suppressBranch(liveFeature.featureId, liveFeature.name, []);
       return;
     }
     // Only a rebuild of this live version can establish what the toggle
@@ -16538,6 +16569,67 @@ export function App() {
         before
       };
     }
+  }
+
+  /**
+   * Suppresses a feature that later features use, together with
+   * `dependentIds`, as one undoable step — once an exact rebuild shows every
+   * other active dependent still builds. A refusal opens a dialog naming the
+   * dependents that would not, keeping any it already named, and offering to
+   * suppress them too.
+   */
+  function suppressBranch(
+    sourceId: FeatureId,
+    sourceName: string,
+    dependentIds: readonly FeatureId[]
+  ) {
+    const owner = managerRef.current;
+    if (!owner || !ensureCanEdit(`suppress ${sourceName}`)) return;
+    const document = owner.document;
+    const { source, features: branch } = resolveSuppressionBranch(
+      document,
+      sourceId,
+      dependentIds
+    );
+    if (!source) {
+      setStatus(`${sourceName} is no longer in this document.`);
+      return;
+    }
+    const message = suppressedBranchMessage(source.name, branch.length - 1);
+    const label = suppressBranchLabel(source.name, branch.length - 1);
+    const commands = suppressCommands(branch, label);
+    if (commands.length === 0) return;
+    let refusal: FeatureSuppressionRefusal | null = null;
+    void validatedFeature.runTransaction(commands, {
+      label,
+      targets: [],
+      validateDerived: (derived) => {
+        refusal = suppressionRefusal(document, derived, branch);
+        if (refusal) throw refusal;
+      },
+      validatingMessage: `Checking dependents of ${source.name}…`,
+      successMessage: message,
+      onFailure: (failure) => {
+        const refused: FeatureSuppressionRefusal | null = refusal;
+        if (!refused || managerRef.current !== owner) {
+          announce(failure);
+          return;
+        }
+        const named = new Set([
+          ...dependentIds,
+          ...refused.dependents.map((dependent) => dependent.featureId)
+        ]);
+        setPendingSuppression({
+          projectId: document.projectId,
+          featureId: source.featureId,
+          name: source.name,
+          dependents: listFeaturesInOrder(document)
+            .filter((feature) => named.has(feature.featureId))
+            .map(({ featureId, name }) => ({ featureId, name }))
+        });
+      },
+      onSuccess: () => announce(message, { label: 'Undo', run: handleUndo })
+    });
   }
 
   function handleResumeHistory() {
@@ -16919,7 +17011,8 @@ export function App() {
 
   function handleFeatureContextMenu(
     at: { clientX: number; clientY: number },
-    feature: FeatureNode
+    feature: FeatureNode,
+    row?: HistoryRowActions
   ) {
     const bodyId = feature.bodyId ?? null;
     const body = bodyId ? representations[bodyId] : null;
@@ -16931,6 +17024,20 @@ export function App() {
         item: { id: 'edit', label: 'Edit properties' },
         run: () => handleSelectFeatureFromTree(feature.id)
       },
+      // The row's hover buttons, in words: the tour sends people here for
+      // the row's actions, and a menu that lacked them hid half the row.
+      ...(row?.rename
+        ? [
+            {
+              item: {
+                id: 'rename',
+                label: 'Rename',
+                icon: <PenLine size={13} aria-hidden="true" />
+              },
+              run: row.rename
+            }
+          ]
+        : []),
       ...(repair
         ? [
             {
@@ -16969,6 +17076,46 @@ export function App() {
               },
               run: () => toggleSketchVisibility(sketchId)
             }
+          ]
+        : []),
+      ...(row
+        ? [
+            {
+              item: {
+                id: 'suppression',
+                label: isFeatureSuppressed(feature) ? 'Resume' : 'Suppress',
+                icon: isFeatureSuppressed(feature) ? (
+                  <CirclePlay size={13} aria-hidden="true" />
+                ) : (
+                  <CirclePause size={13} aria-hidden="true" />
+                ),
+                section: true
+              },
+              run: () => handleToggleFeatureSuppression(feature)
+            },
+            ...(row.endOfHistory === 'marker'
+              ? [
+                  {
+                    item: {
+                      id: 'rollback',
+                      label: 'Resume full history',
+                      icon: <HistoryIcon size={13} aria-hidden="true" />
+                    },
+                    run: row.resume
+                  }
+                ]
+              : row.endOfHistory === null
+                ? [
+                    {
+                      item: {
+                        id: 'rollback',
+                        label: 'Roll back to here',
+                        icon: <HistoryIcon size={13} aria-hidden="true" />
+                      },
+                      run: row.rollBack
+                    }
+                  ]
+                : [])
           ]
         : []),
       {
@@ -17019,6 +17166,7 @@ export function App() {
     !pendingShaprImport &&
     !meshExportOpen &&
     !pendingFeatureDelete &&
+    !activeSuppressionPrompt(pendingSuppression, doc?.projectId) &&
     !pendingToolSwitch;
   exactEntryInputEnabledRef.current =
     workspaceInputEnabled && !paletteOpen && !shortcutsOpen && !namingSave;
@@ -18853,6 +19001,7 @@ export function App() {
       onToggleFeatureSuppression={handleToggleFeatureSuppression}
       onRollbackAfterFeature={handleRollbackAfterFeature}
       onResumeHistory={handleResumeHistory}
+      onRenameFeature={handleRenameFeature}
       units={doc?.units ?? 'mm'}
       onConfigureToggle={(name, bodyIds) => {
         if (ensureCanEdit('configure an on/off parameter')) {
@@ -20625,6 +20774,25 @@ export function App() {
               }}
             />
           )}
+          {pendingSuppression &&
+            activeSuppressionPrompt(pendingSuppression, doc?.projectId) && (
+              <SuppressFeatureDialog
+                name={pendingSuppression.name}
+                dependents={pendingSuppression.dependents.map(
+                  (dependent) => dependent.name
+                )}
+                onCancel={() => setPendingSuppression(null)}
+                onSuppressAll={() => {
+                  const { featureId, name, dependents } = pendingSuppression;
+                  setPendingSuppression(null);
+                  suppressBranch(
+                    featureId,
+                    name,
+                    dependents.map((dependent) => dependent.featureId)
+                  );
+                }}
+              />
+            )}
           {pendingToolSwitch && doc && (
             <UnappliedCardDialog
               card="Move"

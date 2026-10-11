@@ -12,6 +12,8 @@ import {
   isFeatureSuppressed,
   toUserId,
   type BodyId,
+  type FeatureId,
+  type FeatureNode,
   type ProjectDocument
 } from '@openzcad/shared';
 import {
@@ -19,7 +21,17 @@ import {
   type ValidatedFeatureCommitOptions
 } from '../hooks/useValidatedFeatureCommit';
 import type { FeatureBuildError } from './featureValidation';
-import { validateFeatureSuppression } from './featureSuppression';
+import {
+  activeSuppressionPrompt,
+  FeatureSuppressionRefusal,
+  resolveSuppressionBranch,
+  suppressBranchLabel,
+  suppressCommands,
+  suppressedBranchMessage,
+  suppressionRefusal,
+  suppressionRefusalMessage,
+  validateFeatureSuppression
+} from './featureSuppression';
 
 function chain() {
   const manager = new CommandManager(
@@ -92,6 +104,19 @@ function body(
   };
 }
 
+/** Each refused dependent as `"Name": reason`, the reason kept for logs. */
+function refused(
+  document: ProjectDocument,
+  derived: ProjectDocument['derived'],
+  source: FeatureNode
+): string[] {
+  return (
+    suppressionRefusal(document, derived, source)?.dependents.map(
+      ({ name, reason }) => `"${name}": ${reason}`
+    ) ?? []
+  );
+}
+
 describe('exact suppression preflight', () => {
   it('refuses atomically with every active dependent and its exact reason', async () => {
     const { manager, feature, dependent, move, command, derived } = chain();
@@ -133,10 +158,123 @@ describe('exact suppression preflight', () => {
     expect(isFeatureSuppressed(listFeaturesInOrder(manager.document)[0]!)).toBe(
       false
     );
+    // One plain sentence: names only, no kernel reasons and no body ids.
     expect(onFailure).toHaveBeenCalledWith(
-      'Cannot suppress "Source". Dependent features cannot rebuild: "Copy": Target is unavailable.; "Move copy": Target is unavailable.'
+      '"Source" is used by 2 later features that cannot rebuild without it: "Copy" and "Move copy".'
     );
-    expect(onRejection.mock.calls[0]![0].featureId).toBe(dependent.featureId);
+    // Filed under the feature the user acted on, not its first dependent.
+    const rejection = onRejection.mock.calls[0]![0];
+    expect(rejection).toBeInstanceOf(FeatureSuppressionRefusal);
+    expect(rejection.featureId).toBe(feature.featureId);
+    expect(rejection.featureName).toBe('Source');
+    expect(
+      (rejection as FeatureSuppressionRefusal).dependents.map(
+        ({ featureId, reason }) => [featureId, reason]
+      )
+    ).toEqual([
+      [dependent.featureId, 'Target is unavailable.'],
+      [move.featureId, 'Target is unavailable.']
+    ]);
+  });
+
+  it('suppresses the source and its refused dependents in one undoable step', async () => {
+    const { manager, feature, dependent, move, derived } = chain();
+    const before = manager.document;
+    const branch = resolveSuppressionBranch(before, feature.featureId, [
+      move.featureId,
+      dependent.featureId
+    ]);
+    expect(branch.features.map((item) => item.name)).toEqual([
+      'Source',
+      'Move copy',
+      'Copy'
+    ]);
+    const label = suppressBranchLabel('Source', branch.features.length - 1);
+    expect(label).toBe('Suppress Source and 2 later features');
+    const commitTransaction = vi.fn<
+      ValidatedFeatureCommitOptions['commitTransaction']
+    >((label, commands) => {
+      manager.runTransaction(label, commands);
+      return true;
+    });
+    const { result } = renderHook(() =>
+      useValidatedFeatureCommit({
+        manager: () => manager,
+        derive: async () => derived,
+        commit: vi.fn(),
+        commitTransaction,
+        onBusy: vi.fn(),
+        onStatus: vi.fn()
+      })
+    );
+    await act(async () => {
+      expect(
+        await result.current.runTransaction(
+          suppressCommands(branch.features, label),
+          {
+            label,
+            targets: [],
+            validateDerived: (candidate) =>
+              validateFeatureSuppression(before, candidate, branch.features),
+            successMessage: suppressedBranchMessage('Source', 2)
+          }
+        )
+      ).toBe('committed');
+    });
+    expect(commitTransaction).toHaveBeenCalledTimes(1);
+    expect(
+      listFeaturesInOrder(manager.document).slice(0, 3).map(isFeatureSuppressed)
+    ).toEqual([true, true, true]);
+    manager.undo();
+    expect(
+      listFeaturesInOrder(manager.document).slice(0, 3).map(isFeatureSuppressed)
+    ).toEqual([false, false, false]);
+  });
+
+  it('skips already suppressed and deleted features when resolving a branch', () => {
+    const { manager, feature, dependent, move } = chain();
+    manager.execute(
+      commandFactories.setNodeMetadata({
+        nodeId: move.id,
+        metadata: { [FEATURE_SUPPRESSED_METADATA_KEY]: true }
+      })
+    );
+    const branch = resolveSuppressionBranch(
+      manager.document,
+      feature.featureId,
+      [dependent.featureId, move.featureId, 'feat_gone' as FeatureId]
+    );
+    expect(branch.source?.featureId).toBe(feature.featureId);
+    expect(branch.features.map((item) => item.name)).toEqual([
+      'Source',
+      'Copy',
+      'Move copy'
+    ]);
+    // Move copy is suppressed already, so it needs no command.
+    expect(suppressCommands(branch.features, 'Suppress')).toHaveLength(2);
+    expect(
+      resolveSuppressionBranch(manager.document, 'feat_gone' as FeatureId, [])
+    ).toEqual({ source: null, features: [] });
+  });
+
+  it('names at most three dependents in the sentence and counts the rest', () => {
+    expect(
+      suppressionRefusalMessage(
+        'Boss',
+        ['Place', 'Union', 'Fillet', 'Hole', 'Chamfer'].map((name) => ({
+          name
+        }))
+      )
+    ).toBe(
+      '"Boss" is used by 5 later features that cannot rebuild without it: "Place", "Union", "Fillet" and 2 more.'
+    );
+    expect(suppressionRefusalMessage('Boss', [{ name: 'Union' }])).toBe(
+      '"Boss" is used by 1 later feature that cannot rebuild without it: "Union".'
+    );
+    expect(suppressedBranchMessage('Boss', 0)).toBe('Suppressed Boss');
+    expect(suppressedBranchMessage('Boss', 1)).toBe(
+      'Suppressed Boss and 1 later feature'
+    );
   });
 
   it('commits a validated suppression once, with undo restoring the previous history', async () => {
@@ -249,9 +387,9 @@ describe('exact suppression preflight', () => {
       kind: 'refusal',
       message: 'Feature "Move copy": Exact reference is stale.'
     });
-    expect(() =>
-      validateFeatureSuppression(manager.document, derived, feature)
-    ).toThrow('"Move copy": Exact reference is stale.');
+    expect(refused(manager.document, derived, feature)).toContain(
+      '"Move copy": Exact reference is stale.'
+    );
     manager.runTransaction(
       'Pause dependents',
       [dependent, move].map((item) =>
@@ -279,9 +417,7 @@ describe('exact suppression preflight', () => {
     );
     derived.bodyRepresentations[copy.bodyId] = body(copy.bodyId);
     derived.bodyRepresentations[split.bodyId] = body(split.bodyId);
-    expect(() =>
-      validateFeatureSuppression(manager.document, derived, feature)
-    ).toThrow(
+    expect(refused(manager.document, derived, feature)).toContain(
       '"Split copy": The dependent feature did not produce its result body.'
     );
     derived.bodyRepresentations[split.secondBodyId] = body(split.secondBodyId);
@@ -323,8 +459,25 @@ describe('exact suppression preflight', () => {
         message: 'Feature "Attached profile": Attached face is stale.'
       }
     ];
-    expect(() =>
-      validateFeatureSuppression(manager.document, derived, feature)
-    ).toThrow('"Attached profile": Attached face is stale.');
+    expect(refused(manager.document, derived, feature)).toContain(
+      '"Attached profile": Attached face is stale.'
+    );
+  });
+});
+
+describe('suppression prompt scope', () => {
+  // Codex P2 on #630: a prompt left pending across a project switch hid its
+  // dialog but kept the new project's shortcuts and exact entry disabled.
+  it('belongs only to the project that raised it', () => {
+    const prompt = {
+      projectId: 'project_a',
+      featureId: 'feat_boss' as FeatureId,
+      name: 'Boss',
+      dependents: []
+    };
+    expect(activeSuppressionPrompt(prompt, 'project_a')).toBe(prompt);
+    expect(activeSuppressionPrompt(prompt, 'project_b')).toBeNull();
+    expect(activeSuppressionPrompt(prompt, undefined)).toBeNull();
+    expect(activeSuppressionPrompt(null, 'project_a')).toBeNull();
   });
 });

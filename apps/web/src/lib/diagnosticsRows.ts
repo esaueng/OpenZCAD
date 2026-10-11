@@ -28,6 +28,12 @@ const REWRITES: { pattern: RegExp; sentence: string }[] = [
   {
     pattern: /^Stored add target .*is unavailable\.?$/i,
     sentence: 'The body this feature adds to no longer exists.'
+  },
+  {
+    // Also what a suppressed or failed earlier feature leaves behind.
+    pattern: /^Boolean target .*is unavailable\.?$/i,
+    sentence:
+      'A body this feature combines is not built at this point in history.'
   }
 ];
 
