@@ -517,18 +517,16 @@ test('refuses suppression that would stale an attached sketch and allows pausing
 
   const box = page.locator('.feature-row', { hasText: /^Box/ });
   await box.getByRole('button', { name: 'Suppress Box' }).click();
-  const details = page.getByRole('region', { name: 'History details' });
-  await expect(details.getByRole('alert')).toContainText(
-    'Cannot suppress "Box"'
+  const refusal = page.getByRole('alertdialog', { name: 'Suppress “Box”?' });
+  await expect(refusal).toContainText(
+    'Box is used by 1 later feature that cannot rebuild without it'
   );
-  await expect(details.getByRole('alert')).toContainText('Sketch');
-  await expect(details.getByRole('alert')).toContainText(
-    "is unavailable at the sketch's history position"
-  );
+  await expect(refusal.getByRole('listitem')).toHaveText([/^Sketch/]);
+  await refusal.getByRole('button', { name: 'Cancel' }).click();
+  await expect(refusal).toBeHidden();
   await expect(box).not.toContainText('suppressed');
   await expect(page.locator('.diagnostic-row')).toHaveCount(0);
   await expectBodyCount(page, 1);
-  await details.getByRole('button', { name: 'Dismiss failure' }).click();
 
   const sketch = page.locator('.feature-row', { hasText: /^Sketch/ });
   await sketch.hover();

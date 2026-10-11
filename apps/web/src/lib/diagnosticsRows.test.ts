@@ -26,6 +26,18 @@ describe('presented diagnostics', () => {
     expect(row?.detail).toContain('body_cd3e23ce');
   });
 
+  it('says what an unavailable boolean target means, without its id', () => {
+    const [row] = presentedDiagnostics([
+      'Feature "Union boss": Boolean target body_fcbbf6c2-1d2e-4f50-8a9b-0c1d2e3f4a5b is unavailable.'
+    ]);
+    expect(row).toMatchObject({
+      featureName: 'Union boss',
+      message:
+        'A body this feature combines is not built at this point in history.'
+    });
+    expect(row?.message).not.toMatch(/body_/);
+  });
+
   it('translates a kernel sentence and keeps it as detail', () => {
     const [row] = presentedDiagnostics([
       'Feature "Subtract": exact-only policy: the exact boolean pipeline could not produce this result and the approximate fallback was declined'
