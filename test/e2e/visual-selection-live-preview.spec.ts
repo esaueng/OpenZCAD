@@ -344,11 +344,16 @@ test('reuses an exact frame on reversal and waits for complete validation on rel
   await expect(chip).toHaveAttribute('data-state', 'ready');
   expect(await readAxisLength()).toBeCloseTo(31, 4);
   expect(await requests()).toEqual(beforeReversal);
-  await page.evaluate(() =>
+  await page.evaluate(async () => {
     (
       window as typeof window & { facePreviewGate: FacePreviewGate }
-    ).facePreviewGate.releasePreview()
-  );
+    ).facePreviewGate.releasePreview();
+    // Let the ignored reply finish and React paint any degradation callback.
+    await new Promise<void>((resolve) =>
+      requestAnimationFrame(() => requestAnimationFrame(() => resolve()))
+    );
+  });
+  await expect(chip).toHaveAttribute('data-state', 'ready');
   expect(await readAxisLength()).toBeCloseTo(31, 4);
 
   await page.evaluate(() => {
@@ -701,6 +706,7 @@ test('clears the catching-up preview state when a degraded gesture is canceled',
   await page.addInitScript(() => {
     window.__openzcadE2ESlowFrameMs = 0;
   });
+  await installFacePreviewGate(page);
   const { chip, readAxisLength, handle, start, consoleErrors } =
     await armChamferedTopCapOffset(page);
 
@@ -711,14 +717,44 @@ test('clears the catching-up preview state when a degraded gesture is canceled',
     start.y + handle.dy * handle.pixelsPerUnit * 2,
     { steps: 1 }
   );
+  await expect
+    .poll(readAxisLength, { timeout: PREVIEW_BUDGET_MS })
+    .toBeCloseTo(30, 4);
+  // A slow frame that already caught up must leave the value ready. Keep
+  // the next value genuinely pending before expecting catching-up feedback.
+  await expect(chip).toHaveAttribute('data-state', 'ready');
+  await page.evaluate(() => {
+    (
+      window as typeof window & { facePreviewGate: FacePreviewGate }
+    ).facePreviewGate.holdPreview = true;
+  });
+  await page.mouse.move(
+    start.x + handle.dx * handle.pixelsPerUnit * 3,
+    start.y + handle.dy * handle.pixelsPerUnit * 3,
+    { steps: 1 }
+  );
   await expect(chip).toHaveAttribute('data-state', 'deferred', {
     timeout: PREVIEW_BUDGET_MS
   });
+  await expect
+    .poll(() =>
+      page.evaluate(
+        () =>
+          (window as typeof window & { facePreviewGate: FacePreviewGate })
+            .facePreviewGate.heldPreview
+      )
+    )
+    .toBe(1);
 
   // clear() re-arms the previewer, so the chip must leave its catching-up
   // state. It used to stay deferred until the next commit.
   await page.keyboard.press('Escape');
   await page.mouse.up();
+  await page.evaluate(() =>
+    (
+      window as typeof window & { facePreviewGate: FacePreviewGate }
+    ).facePreviewGate.releasePreview()
+  );
   await expect(chip).toHaveAttribute('data-state', 'ready', {
     timeout: PREVIEW_BUDGET_MS
   });
