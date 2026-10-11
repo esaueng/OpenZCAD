@@ -368,6 +368,15 @@ export interface BooleanInput {
   /** Zero passes through the first operand unchanged; omitted means active. */
   activeWhen?: ParamValue;
   name: string;
+  /**
+   * The result body's name for a union or an intersect, resolved by the
+   * caller (see `numberedBodyName`) and stored in the command so a replay
+   * reproduces it. Both treat their operands alike, so the merged bracket is
+   * "Union 1", not still "Box 1". A subtract ignores it: the base body with
+   * material cut away is still that body. Absent is the legacy naming, the
+   * base body's name, that every command recorded before this replays to.
+   */
+  bodyName?: string;
   operation: BooleanOperation;
   targetBodyIds: BodyId[];
   ids?: BodyFeatureIds;
@@ -542,6 +551,8 @@ export interface ShaprGuidedImportInput {
 export interface ParameterSetInput {
   name: string;
   expression: string;
+  /** Inline definitions must refuse a name added while validation awaited. */
+  addOnly?: boolean;
   ids?: ParameterIds;
 }
 
@@ -1022,6 +1033,42 @@ export function numberedBodyName(
     }
   }
   return `${stem} ${highest + 1}`;
+}
+
+/**
+ * The name a feature made now takes in History: the name it was given, or,
+ * when another feature already carries that name, the next free number —
+ * "Hole", then "Hole 2", "Hole 3". Two rows both reading "Hole" could not be
+ * told apart in History or in the delete dialog. The first of a kind stays
+ * unnumbered, so a single Hole is still just "Hole".
+ *
+ * Only for features being made now: the caller puts the result in the
+ * command, and nothing renames a feature already in a document.
+ */
+export function numberedFeatureName(
+  document: ProjectDocument,
+  name: string
+): string {
+  const trimmed = name.trim();
+  const names = new Set(
+    listNodesByKind(document, 'feature').map((feature) => feature.name.trim())
+  );
+  if (trimmed.length === 0 || !names.has(trimmed)) {
+    return name;
+  }
+  // "Hole 2" taken again counts on from "Hole", not to "Hole 2 2".
+  const stem = /^(.*\S)\s+[1-9]\d*$/.exec(trimmed)?.[1] ?? trimmed;
+  const prefix = `${stem} `;
+  let highest = names.has(stem) ? 1 : 0;
+  for (const existing of names) {
+    const suffix = existing.startsWith(prefix)
+      ? existing.slice(prefix.length)
+      : '';
+    if (/^[1-9]\d*$/.test(suffix)) {
+      highest = Math.max(highest, Number(suffix));
+    }
+  }
+  return `${stem} ${Math.max(highest, 1) + 1}`;
 }
 
 /**
@@ -1911,13 +1958,18 @@ export function booleanBodies(
   next.nodes[bodyNodeId] = {
     id: bodyNodeId,
     kind: 'body',
-    // The result is still the base body with the others merged in or cut
-    // away, so it keeps the base body's name.
-    name: derivedBodyName(
-      document,
-      input.targetBodyIds[0],
-      `${input.name} Body`
-    ),
+    // A subtract's result is still the base body with material cut away, so
+    // it keeps the base body's name. A union or intersect made with a
+    // numbered name is a body of its own; one recorded without one keeps the
+    // base body's name, as it always did.
+    name:
+      input.bodyName !== undefined && input.operation !== 'subtract'
+        ? input.bodyName
+        : derivedBodyName(
+            document,
+            input.targetBodyIds[0],
+            `${input.name} Body`
+          ),
     parentId: next.activePartId,
     revisionId: null,
     bodyId,
@@ -2534,6 +2586,11 @@ export function setParameter(
   const parameters = listParameters(next);
   const existing = parameters.find((parameter) => parameter.name === name);
   if (existing) {
+    if (input.addOnly) {
+      throw new Error(
+        `${name} already exists. Change it in the Parameters panel.`
+      );
+    }
     if (existing.toggle && !['0', '1'].includes(input.expression.trim())) {
       throw new Error('An on/off parameter must be 0 (off) or 1 (on).');
     }
@@ -4049,6 +4106,7 @@ function parseExpressionQuantity(
 ): ExpressionQuantity {
   const tokens = tokenizeExpression(expression);
   let position = 0;
+  let callError: Error | undefined;
 
   const peek = (): ExpressionToken | undefined => tokens[position];
   const next = (): ExpressionToken => {
@@ -4131,7 +4189,14 @@ function parseExpressionQuantity(
     if (fn.arity === 'nullary' && args.length !== 0) {
       throw new Error(`${name}() takes no arguments.`);
     }
-    return fn.apply(args);
+    try {
+      return fn.apply(args);
+    } catch (error) {
+      // Finish parsing before reporting a value/domain failure. Otherwise a
+      // failed guard can hide malformed trailing syntax from field guidance.
+      callError ??= error instanceof Error ? error : new Error(String(error));
+      return quantity(Number.NaN);
+    }
   }
 
   function parsePrimary(): ExpressionQuantity {
@@ -4311,6 +4376,7 @@ function parseExpressionQuantity(
   if (position < tokens.length) {
     throw new Error('Unexpected trailing tokens in expression.');
   }
+  if (callError !== undefined) throw callError;
   return result;
 }
 
@@ -4346,6 +4412,50 @@ export function evaluateExpression(
 export interface ExpressionDimensions {
   length: number;
   angle: number;
+}
+
+/** The quantity a typed field holds. */
+export type ExpressionDimension = 'length' | 'angle';
+
+/** A typed field: the document's units and the quantity it measures. */
+export interface FieldQuantity {
+  documentUnits: UnitSystem;
+  dimension: ExpressionDimension;
+}
+
+/**
+ * Evaluates a typed field's expression: unit suffixes convert into the
+ * document's units, and a result of another dimension is refused on the
+ * evaluator's usual throw path — an angle or an area in a length field, a
+ * length in an angle field. Unit-free results pass, because bare numbers and
+ * parameters are document-unit values (and degrees) by definition.
+ *
+ * One rule for every owner of a typed field (the keypad, expression inputs),
+ * so they cannot disagree about what `5 mm` or `30 deg` means. It is kept out
+ * of {@link evaluateExpression} so the kernel worker, which resolves through
+ * that, does not carry it inside its size-budgeted chunk.
+ */
+export function evaluateFieldExpression(
+  expression: string,
+  scope: Record<string, number>,
+  { documentUnits, dimension }: FieldQuantity
+): number {
+  const { value, length, angle } = parseExpressionQuantity(
+    expression,
+    scope,
+    documentUnits
+  );
+  if (!Number.isFinite(value)) {
+    throw new Error('Expression did not evaluate to a finite number.');
+  }
+  // `length * (length - 1)` is zero exactly when the length power is 0 or 1.
+  const angleField = dimension === 'angle';
+  if (angleField ? length !== 0 : angle !== 0 || length * (length - 1) !== 0) {
+    throw new Error(
+      `Incompatible dimensions in expression: expected ${angleField ? 'an angle, not a length' : 'a length, not an angle or area'}.`
+    );
+  }
+  return value;
 }
 
 /**

@@ -347,6 +347,19 @@
   background: var(--color-warning);
 }
 
+/* Why export is holding a body back: it stands in for a feature that failed
+   to rebuild. Body text with an amber rule, so the reason stays readable in
+   both themes rather than relying on amber text for contrast. */
+.topbar-menu-note {
+  display: block;
+  margin: 0 4px 4px;
+  padding: 3px 8px;
+  border-left: 2px solid var(--color-warning);
+  color: var(--color-text);
+  font-size: var(--fs-mini);
+  line-height: 1.35;
+}
+
 .topbar-menu-empty {
   display: block;
   padding: 2px 8px 6px;

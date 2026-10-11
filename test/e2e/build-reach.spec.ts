@@ -259,11 +259,12 @@ test('F30: an opened fillet lists its edges by name, lights them, and drops one'
   const inspector = page.getByRole('region', { name: 'Feature inspector' });
   const edges = inspector.getByRole('list', { name: 'Filleted edges' });
   await expect(inspector.locator('.selection-summary')).toContainText(
-    '2 exact edges selected'
+    '2 edges selected'
   );
+  // Each row is owned as the viewport tag names it: "<body> · Back · Top edge".
   await expect(edges.getByRole('listitem')).toHaveText([
-    /^1\s*Back · Top edge/,
-    /^2\s*Top · Front edge/
+    /^1\s*\S.* · Back · Top edge/,
+    /^2\s*\S.* · Top · Front edge/
   ]);
   // History lights the two stored blend faces as focus, separately from a
   // selection-first operation's live blend preview; the body is not lit whole.
@@ -273,11 +274,11 @@ test('F30: an opened fillet lists its edges by name, lights them, and drops one'
 
   // Taking one off previews the blend without it, and the light follows.
   await inspector
-    .getByRole('button', { name: 'Remove 2 Top · Front edge' })
+    .getByRole('button', { name: /^Remove 2 \S.* · Top · Front edge$/ })
     .click();
   await expect(edges.getByRole('listitem')).toHaveCount(1);
   await expect(inspector.locator('.selection-summary')).toContainText(
-    '1 exact edge selected'
+    '1 edge selected'
   );
   await expect(canvas).toHaveAttribute('data-e2e-focus-faces', '1', {
     timeout: 30_000
@@ -285,7 +286,7 @@ test('F30: an opened fillet lists its edges by name, lights them, and drops one'
   await expect(canvas).not.toHaveAttribute('data-e2e-preview-blend-count');
   // The last edge cannot be removed: a fillet needs one.
   await expect(
-    inspector.getByRole('button', { name: 'Remove 1 Back · Top edge' })
+    inspector.getByRole('button', { name: /^Remove 1 \S.* · Back · Top edge$/ })
   ).toBeDisabled();
 
   // Apply closes the card. Reopening reads the stored one-edge set from the
@@ -300,7 +301,7 @@ test('F30: an opened fillet lists its edges by name, lights them, and drops one'
     .locator('.feature-row-main', { hasText: 'Wall top edge break' })
     .click();
   await expect(edges.getByRole('listitem')).toHaveText([
-    /^1\s*Back · Top edge/
+    /^1\s*\S.* · Back · Top edge/
   ]);
   await expect(canvas).toHaveAttribute('data-e2e-focus-faces', '1');
   await expect(canvas).not.toHaveAttribute('data-e2e-preview-blend-count');

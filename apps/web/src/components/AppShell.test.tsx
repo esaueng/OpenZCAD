@@ -1,6 +1,7 @@
 import { act, render } from '@testing-library/react';
 import { describe, expect, it, vi } from 'vitest';
 import { AppShell } from './AppShell';
+import { useParameterDefinition } from './forms/parameterDefinition';
 
 function shell(
   inspector: React.ReactNode | null,
@@ -205,5 +206,33 @@ describe('AppShell', () => {
     const { container } = renderShell(null, null);
     expect(container.querySelector('.workspace-column-float')).toBeNull();
     expect(container.querySelector('.sidebar-resizer')).toBeNull();
+  });
+
+  // G5: every expression field in the workspace — command card, inspector,
+  // overlays — can define the parameter it names.
+  it('hands the parameter definition to every slot', () => {
+    const definition = { has: () => false, define: vi.fn(async () => null) };
+    const seen: unknown[] = [];
+    function Field() {
+      seen.push(useParameterDefinition());
+      return null;
+    }
+    render(
+      <AppShell
+        topBar={<header>top</header>}
+        toolBar={null}
+        sidebar={null}
+        viewer={<div className="viewer-shell">viewer</div>}
+        command={<Field />}
+        inspector={<Field />}
+        overlays={<Field />}
+        assistant={null}
+        sidebarWidth={252}
+        assistantWidth={360}
+        parameterDefinition={definition}
+      />
+    );
+    expect(seen).toHaveLength(3);
+    expect(seen.every((value) => value === definition)).toBe(true);
   });
 });

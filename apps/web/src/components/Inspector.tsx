@@ -6,10 +6,10 @@ import {
   loadMassDensitySelection,
   saveMassDensitySelection
 } from '../lib/massDensityPreference';
-import { Trash2, X } from 'lucide-react';
+import { Trash2 } from 'lucide-react';
 import { coerceParamValue } from '@openzcad/document-core';
 import { findFontFace } from '@openzcad/geometry';
-import { FEATURE_COLORS, featureColor } from '@openzcad/shared';
+import { BODY_COLOR_PRESETS, DEFAULT_BODY_COLOR } from '@openzcad/shared';
 import {
   MATERIAL_DENSITY_PRESETS,
   MAX_CUSTOM_DENSITY_KG_PER_M3,
@@ -64,6 +64,7 @@ import {
   type TransformFormValue
 } from './forms/FeatureForms';
 import { PRIMITIVE_TOOLS, TOOL_META, type ToolId } from '../lib/tools';
+import type { PrimitiveGhost } from '../lib/primitiveGhost';
 import {
   applyPrimitiveCommand,
   createPrimitiveCommand,
@@ -87,6 +88,7 @@ import {
 import { CARD_EYEBROWS } from '../lib/cardEyebrows';
 import { ExprInput } from './ExprInput';
 import { ColorPicker } from './ColorPicker';
+import { CardHeader } from './CardHeader';
 import { PanelOverflow } from './PanelOverflow';
 import { FieldAutoFocusProvider } from './forms/fieldAutoFocus';
 import type { BodyAppearancePreview } from './ModelViewer';
@@ -251,10 +253,13 @@ export interface InspectorCallbacks {
   onToggleImportedSolid(featureId: FeatureId, solidIndex: number): void;
   /** Drag-phase body appearance patch; null restores the committed look. */
   onPreviewBodyAppearance(preview: BodyAppearancePreview | null): void;
-  /** Commits body appearance through node metadata; null opacity resets. */
+  /**
+   * Commits body appearance through node metadata. A null colour returns the
+   * body to the default; a null opacity returns it to fully opaque.
+   */
   onCommitBodyAppearance(
     bodyId: BodyId,
-    appearance: { color?: string; opacity?: number | null }
+    appearance: { color?: string | null; opacity?: number | null }
   ): void;
 }
 
@@ -296,6 +301,11 @@ interface InspectorProps extends InspectorCallbacks {
    * title this panel.
    */
   featureSelectionSource: FeatureSelectionSource | null;
+  /**
+   * A new primitive's card, as the ghost the viewport draws before Create;
+   * null when its values do not build and when the card closes.
+   */
+  onPrimitiveGhostChange?(ghost: PrimitiveGhost | null): void;
 }
 
 function SketchAttachmentSummary({
@@ -794,9 +804,6 @@ function CollapsibleSection({
   );
 }
 
-/** Preset swatches: the feature palette, deduped, in the picker's grid. */
-const BODY_COLOR_PRESETS = [...new Set(Object.values(FEATURE_COLORS))];
-
 /**
  * Per-body display color and opacity. Edits stream to the viewport as a
  * material-level preview on every change and commit through node metadata on
@@ -809,9 +816,13 @@ function BodyAppearance({
 }: {
   body: BodyRepresentation;
   onPreview: InspectorCallbacks['onPreviewBodyAppearance'];
-  onCommit: (appearance: { color?: string; opacity?: number | null }) => void;
+  onCommit: (appearance: {
+    color?: string | null;
+    opacity?: number | null;
+  }) => void;
 }) {
-  const defaultColor = featureColor(body.source);
+  // G2: every body has one default colour, whatever feature last made it.
+  const defaultColor = DEFAULT_BODY_COLOR;
   const [draftColor, setDraftColor] = useState(body.color);
   const [draftOpacity, setDraftOpacity] = useState(body.opacity ?? 1);
   const [pickerOpen, setPickerOpen] = useState(false);
@@ -961,10 +972,12 @@ function BodyAppearance({
               committedRef.current = { color: defaultColor, opacity: 1 };
               setDraftColor(defaultColor);
               setDraftOpacity(1);
-              onCommit({ color: defaultColor, opacity: null });
+              // Clear the colour rather than store the default as a choice,
+              // so the body follows the default if it ever changes.
+              onCommit({ color: null, opacity: null });
             }}
           >
-            Reset to feature default
+            Reset to default
           </button>
         )}
       </div>
@@ -1444,6 +1457,7 @@ export function Inspector(props: InspectorProps) {
           key={`create-${tool}`}
           kind={kind}
           scope={scope}
+          documentUnits={units}
           initialName={TOOL_META[tool].label}
           submitLabel="Create"
           onSubmit={(name, dimensions, position) =>
@@ -1458,6 +1472,7 @@ export function Inspector(props: InspectorProps) {
             )
           }
           onCancel={props.onCancel}
+          onGhostChange={props.onPrimitiveGhostChange}
         />
       );
     } else if (tool === 'revolve') {
@@ -1516,7 +1531,12 @@ export function Inspector(props: InspectorProps) {
     } else if (tool === 'fillet' || tool === 'chamfer') {
       body = (
         <EdgeModifierForm
-          key={`create-${tool}-${edgeModifierBody?.bodyId ?? 'none'}`}
+          // One card per tool session, not per target body. The target drops
+          // to null and back whenever a rebuild publishes an analysis-pending
+          // snapshot — arming the tool or picking edges demands lineage, so
+          // that happens while the user is typing — and a body-keyed card
+          // remounted twice and replaced the typed size with the default.
+          key={`create-${tool}`}
           kind={tool}
           scope={scope}
           targetBodyId={edgeModifierBody?.bodyId ?? null}
@@ -1540,21 +1560,18 @@ export function Inspector(props: InspectorProps) {
               : undefined
           }
           onClearEdges={props.onClearSelectedEdges}
-          edgeRows={selectedEdges.flatMap((edge) =>
-            edge.hash === undefined
-              ? []
-              : [
-                  {
-                    hash: edge.hash,
-                    label: edgeLabel(
-                      edgeModifierBody ??
-                        props.bodyRepresentations?.[edge.bodyId],
-                      edge.hash,
-                      edge.topologyId
-                    )
-                  }
-                ]
-          )}
+          edgeRows={selectedEdges.flatMap((edge) => {
+            if (edge.hash === undefined) return [];
+            const owner =
+              edgeModifierBody ?? props.bodyRepresentations?.[edge.bodyId];
+            return [
+              {
+                hash: edge.hash,
+                label: edgeLabel(owner, edge.hash, edge.topologyId),
+                ...(owner ? { owner: owner.name } : {})
+              }
+            ];
+          })}
           {...(props.onRemoveSelectedEdge
             ? {
                 onRemoveEdge: (hash: number) => {
@@ -1634,6 +1651,7 @@ export function Inspector(props: InspectorProps) {
           key={editKey}
           kind={data.primitiveKind}
           scope={scope}
+          documentUnits={units}
           initialName={selectedFeature.name}
           initialDimensions={data.dimensions}
           initialPosition={placement.position}
@@ -1856,15 +1874,16 @@ export function Inspector(props: InspectorProps) {
           targetBodyId={data.targetBodyId}
           edgeHashes={editEdgeHashes}
           edgeReferences={editEdgeReferences}
-          edgeRows={editEdgeHashes.map((hash) => ({
-            hash,
-            label: edgeLabel(
-              edgeSources.find((body) =>
-                body?.topology?.edges.some((edge) => edge.hash === hash)
-              ),
-              hash
-            )
-          }))}
+          edgeRows={editEdgeHashes.map((hash) => {
+            const owner = edgeSources.find((body) =>
+              body?.topology?.edges.some((edge) => edge.hash === hash)
+            );
+            return {
+              hash,
+              label: edgeLabel(owner, hash),
+              ...(owner ? { owner: owner.name } : {})
+            };
+          })}
           onRemoveEdge={(hash) => {
             setRemovedEdges({
               edit: editKey,
@@ -2360,11 +2379,11 @@ export function Inspector(props: InspectorProps) {
         }
       }}
     >
-      <div className="panel-header">
-        <div className="panel-title-row">
-          <h2>{title}</h2>
-          <span className="panel-eyebrow">{eyebrow}</span>
-          {deleteAction ? (
+      <CardHeader
+        title={title}
+        eyebrow={eyebrow}
+        actions={
+          deleteAction ? (
             <PanelOverflow>
               <button
                 type="button"
@@ -2376,18 +2395,12 @@ export function Inspector(props: InspectorProps) {
                 {deleteAction.label}
               </button>
             </PanelOverflow>
-          ) : null}
-          <button
-            type="button"
-            className="icon-button panel-close"
-            title="Close"
-            aria-label="Close panel"
-            onClick={props.onClose ?? props.onCancel}
-          >
-            <X size={14} aria-hidden="true" />
-          </button>
-        </div>
-      </div>
+          ) : null
+        }
+        closeTitle="Close"
+        closeLabel="Close panel"
+        onClose={props.onClose ?? props.onCancel}
+      />
       {/*
         A create dialog is here because a tool was invoked, so it may take the
         keyboard; an edit panel is here because something was selected, and

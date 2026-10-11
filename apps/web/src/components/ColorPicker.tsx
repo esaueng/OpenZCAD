@@ -20,7 +20,7 @@ export function ColorPicker({
   onCommit
 }: {
   color: string;
-  presets?: string[];
+  presets?: readonly string[];
   onChange(color: string): void;
   onCommit(color: string): void;
 }) {

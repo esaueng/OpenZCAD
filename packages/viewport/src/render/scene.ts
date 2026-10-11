@@ -10,7 +10,7 @@ import type {
   BodyTopology,
   MeshGeometry
 } from '@openzcad/shared';
-import { VIEW_DIRECTIONS } from '../camera/views';
+import { tweenOrientationFor, VIEW_DIRECTIONS } from '../camera/views';
 import { keepProgram } from './programRetention';
 
 const CAD_CREASE_ANGLE = THREE.MathUtils.degToRad(30);
@@ -1134,19 +1134,38 @@ export interface CameraPose {
 }
 
 /**
+ * A sub-rectangle of the view in normalized device coordinates: -1..1 on
+ * each axis, +Y up. Fit uses it for the part of the canvas no floating
+ * panel covers (see `clearStageFrame`).
+ */
+export interface NdcFrame {
+  minX: number;
+  maxX: number;
+  minY: number;
+  maxY: number;
+}
+
+/**
  * Computes the fit pose without touching the live camera: the Z-up isometric
  * home orientation by default, or — given a direction from the target toward
- * the camera — the same framing seen from where the user already looks, which
- * is what an automatic reframe wants: it recentres and backs off without
- * spinning the model. `margin` is the inset on each side in normalized
- * device coordinates, as in `boxFullyInView`; the default leaves the existing
- * padding unchanged whenever it already fits.
+ * the camera — the same framing seen from where the user already looks, so a
+ * fit recentres and backs off without spinning the model. `margin` is the
+ * inset on each side in normalized device coordinates, as in
+ * `boxFullyInView`; the default leaves the existing padding unchanged
+ * whenever it already fits.
+ *
+ * `frame` frames the objects into that part of the view rather than the whole
+ * canvas: the camera keeps its direction but slides sideways, so the model's
+ * centre lands on the frame's centre and every corner stays inside it. The
+ * returned target is on the new view axis at the model centre's depth, which
+ * is where `CameraController.pivotOn` would put the orbit pivot.
  */
 export function computeFitPose(
   camera: THREE.PerspectiveCamera,
   objects: THREE.Object3D[],
   viewDirection?: THREE.Vector3,
-  margin = 0
+  margin = 0,
+  frame?: NdcFrame
 ): CameraPose {
   const box = new THREE.Box3();
   for (const object of objects) {
@@ -1165,7 +1184,7 @@ export function computeFitPose(
   const maxDim = Math.max(size.x, size.y, size.z) || 1;
   const halfFov = THREE.MathUtils.degToRad(camera.fov / 2);
   let distance = (maxDim / 2 / Math.tan(halfFov)) * 2.1;
-  // Fit lands on the home orientation unless told otherwise: the same iso
+  // Without a direction, fit lands on the home orientation: the same iso
   // direction the default camera pose and the ISO view preset use.
   const direction =
     viewDirection && viewDirection.lengthSq() > 1e-12
@@ -1173,12 +1192,12 @@ export function computeFitPose(
       : VIEW_DIRECTIONS.iso.clone();
   // Fit every corner against both projected spans, including its depth:
   // a corner nearer the camera needs more distance than the centre plane.
-  // The lookAt basis matches the camera's roll/up convention even for a
-  // direction parallel to up. Keep the established padding as a lower bound.
-  const basis = new THREE.Matrix4().lookAt(
-    direction,
-    new THREE.Vector3(),
-    camera.up
+  // The basis is the orientation the glide lands on (world up's projection),
+  // so the sideways shift below moves the model where the frame says even
+  // for a direction parallel to up. Keep the established padding as a lower
+  // bound.
+  const basis = new THREE.Matrix4().makeRotationFromQuaternion(
+    tweenOrientationFor(direction)
   );
   const right = new THREE.Vector3().setFromMatrixColumn(basis, 0);
   const up = new THREE.Vector3().setFromMatrixColumn(basis, 1);
@@ -1186,7 +1205,11 @@ export function computeFitPose(
   const tanVertical = Math.tan(
     THREE.MathUtils.degToRad(camera.getEffectiveFOV() / 2)
   );
-  const limit = 1 - margin;
+  const tanHorizontal = tanVertical * camera.aspect;
+  const centerX = frame ? (frame.minX + frame.maxX) / 2 : 0;
+  const centerY = frame ? (frame.minY + frame.maxY) / 2 : 0;
+  const limitX = (frame ? (frame.maxX - frame.minX) / 2 : 1) * (1 - margin);
+  const limitY = (frame ? (frame.maxY - frame.minY) / 2 : 1) * (1 - margin);
   const offset = new THREE.Vector3();
   let requiredDistance = 0;
   for (let index = 0; index < 8; index += 1) {
@@ -1197,20 +1220,42 @@ export function computeFitPose(
         index & 4 ? box.max.z : box.min.z
       )
       .sub(center);
+    const along = offset.dot(depth);
+    const across = offset.dot(right);
+    const above = offset.dot(up);
+    // With the camera slid so the centre projects to (centerX, centerY), a
+    // corner's offset from the frame centre on screen is
+    // (across + centerX·tanH·along) / ((D − along)·tanH), which bounds D
+    // linearly. A centred frame reduces this to the symmetric fit.
     requiredDistance = Math.max(
       requiredDistance,
-      offset.dot(depth) +
+      along +
         Math.max(
-          Math.abs(offset.dot(right)) / (tanVertical * camera.aspect * limit),
-          Math.abs(offset.dot(up)) / (tanVertical * limit)
-        )
+          Math.abs(across + centerX * tanHorizontal * along) /
+            (tanHorizontal * limitX),
+          Math.abs(above + centerY * tanVertical * along) /
+            (tanVertical * limitY)
+        ),
+      // The orthographic mirror of this pose (its frustum is the perspective
+      // span at the target) must fit too. A centred frame already implies
+      // this; an off-centre one can let a far corner's depth hide it.
+      Math.max(
+        Math.abs(across) / (tanHorizontal * limitX),
+        Math.abs(above) / (tanVertical * limitY)
+      )
     );
   }
   // Stay just inside the requested margin despite floating-point projection.
   distance = Math.max(distance, requiredDistance * (1 + 1e-6));
+  // Slide the camera and its target together, perpendicular to the view, so
+  // the model centre projects onto the frame's centre.
+  const target = center
+    .clone()
+    .addScaledVector(right, -centerX * distance * tanHorizontal)
+    .addScaledVector(up, -centerY * distance * tanVertical);
   return {
-    position: center.clone().addScaledVector(direction, distance),
-    target: center,
+    position: target.clone().addScaledVector(direction, distance),
+    target,
     near: Math.max(distance / 1000, 0.05),
     far: distance * 12 + maxDim * 4
   };

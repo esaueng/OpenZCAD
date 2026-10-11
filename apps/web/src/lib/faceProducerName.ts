@@ -6,11 +6,13 @@ import type {
   FeatureNode,
   ProjectDocument
 } from '@openzcad/shared';
-import { faceLabel } from './topologyLabels';
+import { faceLabel, faceNameRank, ownedTopologyName } from './topologyLabels';
 
 /**
- * Face names that say which feature made the face: "Box 2 · top",
- * "Base plate · front", "Hole · through hole Ø6".
+ * Face names that say which feature made the face: "Box 2 · Top face",
+ * "Base plate · Front face", "Hole · Through hole Ø6" — the owner and the
+ * viewport's own face name, spelled by `ownedTopologyName` as every other
+ * surface spells a face.
  *
  * "Top face (1)" and "Top face (2)" on a union of two boxes told the user
  * nothing about which box each top belonged to. The face's ADR-011 lineage
@@ -28,11 +30,6 @@ const TARGET = /^boolean\.face\.target\.(.+)$/;
 const TOOL = /^boolean\.face\.tool\.(.+)$/;
 /** A fillet's or chamfer's copy of its source box or cylinder's face. */
 const CARRIED = /^modifier\.(box|cylinder)\.face\.(?!blend)(.+)$/;
-
-const DIRECTION = /^(Top|Bottom|Front|Back|Left|Right) face$/;
-
-/** Roles in the order a face list shows them; anything else follows. */
-const ROLE_ORDER = ['top', 'bottom', 'front', 'back', 'left', 'right'];
 
 /** Features that start a body of their own rather than reshape one. */
 function startsBody(feature: FeatureNode): boolean {
@@ -146,7 +143,8 @@ export function faceProducingFeature(
  * named by that body ("Box 2"), because two features are both called "Box"
  * in history; one that reshapes a body (a hole, a fillet, a boss) by its own
  * name. A body still carrying the old "<feature> Body" name reads as its
- * feature, so an existing document says "Box · top", not "Box Body · top".
+ * feature, so an existing document says "Box · Top face", not
+ * "Box Body · Top face".
  */
 export function featureFaceOwnerName(
   document: ProjectDocument,
@@ -165,20 +163,12 @@ export function featureFaceOwnerName(
   return body.name;
 }
 
-/** "top" for an axis-aligned plane, otherwise the viewport's own face name. */
-function faceRole(body: GeometryBodyRepresentation, face: FaceTopology): string {
-  const label = faceLabel(body, face.hash, face.topologyId);
-  const direction = DIRECTION.exec(label);
-  if (direction) return direction[1]!.toLowerCase();
-  return `${label.charAt(0).toLowerCase()}${label.slice(1)}`;
-}
-
 export interface ProducedFaceName {
-  /** "Box 2 · top". */
+  /** "Box 2 · Top face". */
   name: string;
   /** "Box 2". */
   owner: string;
-  /** "top", "through hole Ø6". */
+  /** The viewport's name for the face: "Top face", "Through hole Ø6". */
   role: string;
   /** Position of the producing feature in history, for a stable list order. */
   featureIndex: number;
@@ -236,13 +226,13 @@ function nameFaces(
     const feature = faceProducingFeature(document, face, index);
     if (!feature) return null;
     const owner = featureFaceOwnerName(document, feature, index);
-    const role = faceRole(body, face);
+    const role = faceLabel(body, face.hash, face.topologyId);
     return {
-      name: `${owner} · ${role}`,
+      name: ownedTopologyName(owner, role),
       owner,
       role,
       featureIndex: index.order.get(feature.featureId) ?? index.order.size,
-      roleRank: faceRoleRank(role)
+      roleRank: faceNameRank(role)
     };
   });
 }
@@ -254,10 +244,4 @@ export function producedFaceName(
   face: FaceTopology
 ): string | null {
   return producedFaceNames(document, body, [face])[0]?.name ?? null;
-}
-
-/** Rank of a role in a face list: the six box directions first. */
-function faceRoleRank(role: string): number {
-  const rank = ROLE_ORDER.indexOf(role);
-  return rank < 0 ? ROLE_ORDER.length : rank;
 }

@@ -10,6 +10,24 @@ import {
 // SwiftShader than on a workstation. Budgets are upper bounds, not waits.
 const PREVIEW_BUDGET_MS = process.env.CI ? 60_000 : 30_000;
 
+const editPresentationMeasures = (page: Page) =>
+  page.evaluate(async () => {
+    // Flush the scheduled render as well as the synchronous mesh install.
+    await new Promise<void>((resolve) =>
+      requestAnimationFrame(() => requestAnimationFrame(() => resolve()))
+    );
+    return ['oz:edit.installed', 'oz:edit.frame'].flatMap((name) =>
+      performance.getEntriesByName(name, 'measure').map((entry) => ({
+        name,
+        detail: (entry as PerformanceMeasure).detail as {
+          projectId: string;
+          version: number;
+          analysis: 'pending' | 'ready';
+        }
+      }))
+    );
+  });
+
 const renderedWorldBounds = (page: Page) =>
   page.locator('.viewer-host canvas').evaluate(
     (element) =>
@@ -521,6 +539,17 @@ test('streams exact planar previews and restores invalid or canceled offsets', a
       };
     });
   const beforeDrag = await requests();
+  // The live base has a real trace; otherwise absence during preview would
+  // pass even if authoritative instrumentation were accidentally disabled.
+  await expect
+    .poll(async () =>
+      (await editPresentationMeasures(page)).some(
+        ({ name, detail }) =>
+          name === 'oz:edit.frame' && detail.analysis === 'ready'
+      )
+    )
+    .toBe(true);
+  const baseMeasures = await editPresentationMeasures(page);
   await page.mouse.move(start.x, start.y);
   await page.mouse.down();
   await page.mouse.move(
@@ -534,6 +563,7 @@ test('streams exact planar previews and restores invalid or canceled offsets', a
   const duringDrag = await requests();
   expect(duringDrag.preview).toBeGreaterThan(beforeDrag.preview);
   expect(duringDrag.full).toBe(beforeDrag.full);
+  expect(await editPresentationMeasures(page)).toEqual(baseMeasures);
   // A second pointer value after the first exact frame must replace it rather
   // than leaving the coalescer stuck on the first sample. Offset-face keeps
   // previewing after a slow frame, but the chip reports the lag as deferred
@@ -566,6 +596,7 @@ test('streams exact planar previews and restores invalid or canceled offsets', a
   // The drag has the stage: the drawer (and its History count) steps aside
   // until the gesture ends; the count is checked again once it has.
   await expect(page.locator('.model-drawer-float')).toHaveCount(0);
+  expect(await editPresentationMeasures(page)).toEqual(baseMeasures);
 
   // Still holding the button, drive the total below zero. The kernel refuses
   // it: the handle keeps tracking and the chip turns to its warning state,
@@ -626,6 +657,7 @@ test('streams exact planar previews and restores invalid or canceled offsets', a
   await expect(chip).toHaveAttribute('data-state', 'ready');
   await expect(page.getByRole('button', { name: 'History 2' })).toBeVisible();
 
+  const beforeTypedPreview = await editPresentationMeasures(page);
   await chip.click();
   keypad = page.getByRole('dialog', { name: 'Total value' });
   await keypad.getByRole('textbox').fill('35.7');
@@ -637,6 +669,7 @@ test('streams exact planar previews and restores invalid or canceled offsets', a
     keypad.getByRole('button', { name: 'Apply total' })
   ).toBeEnabled();
   await expect(page.getByRole('button', { name: 'History 2' })).toBeVisible();
+  expect(await editPresentationMeasures(page)).toEqual(beforeTypedPreview);
   const beforeApply = await requests();
   await keypad.getByRole('button', { name: 'Apply total' }).click();
   await expect(page.getByRole('contentinfo')).toContainText(
@@ -646,6 +679,22 @@ test('streams exact planar previews and restores invalid or canceled offsets', a
     .poll(readAxisLength, { timeout: PREVIEW_BUDGET_MS })
     .toBeCloseTo(35.7, 4);
   expect((await requests()).full).toBeGreaterThan(beforeApply.full);
+  const baseRevision = baseMeasures
+    .filter(({ name }) => name === 'oz:edit.frame')
+    .at(-1)!.detail;
+  for (const phase of ['oz:edit.installed', 'oz:edit.frame']) {
+    await expect
+      .poll(async () =>
+        (await editPresentationMeasures(page)).some(
+          ({ name, detail }) =>
+            name === phase &&
+            detail.projectId === baseRevision.projectId &&
+            detail.version > baseRevision.version &&
+            detail.analysis === 'ready'
+        )
+      )
+      .toBe(true);
+  }
   expect(consoleErrors).toEqual([]);
 });
 
@@ -860,8 +909,30 @@ test('streams an exact extrude preview while a region drag is held', async ({
   );
   await expect(canvas).toHaveAttribute('data-e2e-rendered-bodies', '1');
 
-  // The extrude stays open: the handle moves to the new cap, the chip reads
-  // the stored distance, and the card still says Extrude.
+  // Create closes the extrude as every other create card closes (design
+  // review G15): no card, no selection callout, no handle and no chip are
+  // left up over the solid it just made.
+  await expect(
+    page.getByRole('region', { name: 'Extrude operation' })
+  ).toHaveCount(0);
+  await expect(page.locator('.selection-callout-chip')).toHaveCount(0);
+  await expect(chip).toBeHidden();
+  await expect(canvas).not.toHaveAttribute('data-e2e-handle-x', /.+/);
+  await expect(canvas).not.toHaveAttribute('data-e2e-selected-face', /.+/);
+
+  // Picking the far cap arms its handle on demand: the chip reads the stored
+  // distance, and the card says Extrude.
+  const cap = await canvas.evaluate(
+    (element) =>
+      new Promise<{ hasReference: boolean } | null>((resolve) => {
+        element.dispatchEvent(
+          new CustomEvent('openzcad:e2e-select-planar-face', {
+            detail: { normal: { x: 0, y: 0, z: 1 }, resolve }
+          })
+        );
+      })
+  );
+  expect(cap).not.toBeNull();
   await expect(chip).toHaveText(/^\d+(\.\d+)? mm$/);
   await expect(
     page.getByRole('region', { name: 'Extrude operation' })

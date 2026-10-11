@@ -30,7 +30,7 @@ import {
 } from '../apps/web/src/lib/modelingOperations';
 import { buildDemoDocument, DEMO_DEFINITIONS } from '../apps/web/src/lib/demos';
 import { topologyReferenceRepairCommand } from '../apps/web/src/lib/topologyReferenceRepairs';
-import { validateFeatureSuppression } from '../apps/web/src/lib/featureSuppression';
+import { suppressionRefusal } from '../apps/web/src/lib/featureSuppression';
 
 /**
  * F1 follow-up from the 1 October 2026 design review: suppressing the fillet
@@ -326,20 +326,24 @@ describe('a suppressed feature passes its input body through', () => {
     const refusal = attributed?.find(
       (entry) => entry.featureName === 'Thicken band'
     );
-    expect(() =>
-      validateFeatureSuppression(
-        manager.document,
-        {
-          ...document.derived,
-          featureWarnings: attributed
-        },
-        listFeaturesInOrder(manager.document).find(
-          (feature) => feature.featureId === modifierIds!.featureId
-        )!
-      )
-    ).toThrow(
-      /Cannot suppress "Fillet".*"Thicken band": Thicken face is stale:/
+    const refusedSuppression = suppressionRefusal(
+      manager.document,
+      {
+        ...document.derived,
+        featureWarnings: attributed
+      },
+      listFeaturesInOrder(manager.document).find(
+        (feature) => feature.featureId === modifierIds!.featureId
+      )!
     );
+    // Filed under the feature the user acted on; the reason stays on the
+    // dependent, out of the user-facing sentence.
+    expect(refusedSuppression?.featureName).toBe('Fillet');
+    expect(
+      refusedSuppression?.dependents.find(
+        (dependent) => dependent.name === 'Thicken band'
+      )?.reason
+    ).toMatch(/^Thicken face is stale:/);
     expect(refusal?.kind).toBe('build-failed');
     expect(refusal?.message).toMatch(
       /^Feature "Thicken band": Thicken face is stale: /
@@ -388,20 +392,24 @@ describe('a suppressed feature passes its input body through', () => {
     const refusal = attributed?.find(
       (entry) => entry.featureName === 'Bevel hole'
     );
-    expect(() =>
-      validateFeatureSuppression(
-        manager.document,
-        {
-          ...document.derived,
-          featureWarnings: attributed
-        },
-        listFeaturesInOrder(manager.document).find(
-          (feature) => feature.featureId === modifierIds!.featureId
-        )!
-      )
-    ).toThrow(
-      /Cannot suppress "Chamfer".*"Bevel hole": A selected face no longer exists/
+    const refusedSuppression = suppressionRefusal(
+      manager.document,
+      {
+        ...document.derived,
+        featureWarnings: attributed
+      },
+      listFeaturesInOrder(manager.document).find(
+        (feature) => feature.featureId === modifierIds!.featureId
+      )!
     );
+    // Filed under the feature the user acted on; the reason stays on the
+    // dependent, out of the user-facing sentence.
+    expect(refusedSuppression?.featureName).toBe('Chamfer');
+    expect(
+      refusedSuppression?.dependents.find(
+        (dependent) => dependent.name === 'Bevel hole'
+      )?.reason
+    ).toMatch(/^A selected face no longer exists/);
     expect(refusal?.kind).toBe('build-failed');
     expect(refusal?.message).toBe(
       'Feature "Bevel hole": A selected face no longer exists. Re-select the face(s) and re-create this feature.'

@@ -52,12 +52,15 @@ import {
   Box,
   Camera,
   Check,
+  CirclePause,
+  CirclePlay,
   Combine,
   Crosshair,
   Download,
   Eye,
   FolderOpen,
   Grid3x3,
+  History as HistoryIcon,
   Layers3,
   Maximize2,
   Monitor,
@@ -76,8 +79,7 @@ import {
   Trash2,
   TriangleRight,
   Undo2,
-  Upload,
-  X
+  Upload
 } from 'lucide-react';
 import {
   CommandManager,
@@ -107,6 +109,7 @@ import {
   normalizeDocument,
   normalizeDocumentHistory,
   numberedBodyName,
+  numberedFeatureName,
   repairedDirectEditOperation,
   resolveParamValue,
   restoreFromSaveState,
@@ -137,6 +140,7 @@ import type {
   EntityId,
   FeatureId,
   FeatureNode,
+  FeatureWarning,
   FaceGeometry,
   FaceRecognitionSummary,
   ParamValue,
@@ -155,6 +159,7 @@ import type {
 } from '@openzcad/shared';
 import {
   applyOrganizationUpdate,
+  BODY_COLOR_CHOSEN_METADATA_KEY,
   BODY_COLOR_METADATA_KEY,
   BODY_OPACITY_METADATA_KEY,
   compareProjectSummaries,
@@ -223,7 +228,9 @@ import {
 } from './lib/staleChunk';
 import { watchBuildVersion } from './lib/buildVersionWatch';
 import { commandOutcomeMessage } from './lib/commandOutcome';
+import { tintPreviewResultBodies } from './lib/previewBodyTint';
 import { presentedDiagnostics } from './lib/diagnosticsRows';
+import { sweepFacetingAdvisories } from './lib/sweepFaceting';
 import { primitiveDimensionLabel } from './lib/primitiveDimensionLabel';
 import { useRememberedSectionPlane } from './hooks/useRememberedSectionPlane';
 import { newBlendFacePick } from './lib/blendRearm';
@@ -315,6 +322,7 @@ import {
 } from './lib/interactionDiagnostics';
 import { KERNEL_BUILD } from './lib/kernelBuild';
 import {
+  PRIMITIVE_TOOLS,
   SHORTCUT_TO_TOOL,
   TOOL_GROUPS,
   TOOL_META,
@@ -555,6 +563,7 @@ import {
 } from './lib/objectPolyline';
 import type { RegionPickData } from './components/viewer/regionOverlay';
 import { CommandBar, type PaletteCommand } from './components/CommandBar';
+import { featurePaletteLabel, withDistinctLabels } from './lib/paletteLabels';
 import { DISPLAY_MODE_LABELS } from './lib/displayMode';
 import { ContextMenu, type ContextMenuState } from './components/ContextMenu';
 import type { BodyFeatureIds } from '@openzcad/document-core';
@@ -564,6 +573,11 @@ import type {
 } from './lib/extrudeInference';
 import { isExtrudeSessionCurrent } from './lib/extrudeSession';
 import {
+  beginFieldDefinition,
+  createFieldDefinitionTracker,
+  editFormVersion
+} from './lib/fieldParameterDefinitions';
+import {
   resolvedExtrudePreviewKey,
   reuseResolvedExtrudePreview,
   reuseRunningExtrudePreview,
@@ -571,7 +585,6 @@ import {
 } from './lib/resolvedExtrudePreview';
 import {
   ExtrudeForm,
-  distanceKeypadText,
   type ExtrudeFormValue
 } from './components/forms/ExtrudeForm';
 import {
@@ -751,7 +764,7 @@ const LazyToolCard = lazyWithStaleChunkNotice(() =>
 );
 function ToolCard(props: ComponentProps<typeof LazyToolCard>) {
   return (
-    <Suspense fallback={null}>
+    <Suspense fallback={<CardSkeleton />}>
       <LazyToolCard {...props} />
     </Suspense>
   );
@@ -853,6 +866,11 @@ const LazySaveRevisionDialog = lazyWithStaleChunkNotice(() =>
 const LazyDeleteFeatureDialog = lazyWithStaleChunkNotice(() =>
   import('./components/DeleteFeatureDialog').then((module) => ({
     default: module.DeleteFeatureDialog
+  }))
+);
+const LazySuppressFeatureDialog = lazyWithStaleChunkNotice(() =>
+  import('./components/SuppressFeatureDialog').then((module) => ({
+    default: module.SuppressFeatureDialog
   }))
 );
 const LazyUnappliedCardDialog = lazyWithStaleChunkNotice(() =>
@@ -1044,6 +1062,16 @@ function DeleteFeatureDialog(
   );
 }
 
+function SuppressFeatureDialog(
+  props: ComponentProps<typeof LazySuppressFeatureDialog>
+) {
+  return (
+    <Suspense fallback={null}>
+      <LazySuppressFeatureDialog {...props} />
+    </Suspense>
+  );
+}
+
 function UnappliedCardDialog(
   props: ComponentProps<typeof LazyUnappliedCardDialog>
 ) {
@@ -1137,7 +1165,7 @@ function ShaprImportDialog(
 
 function Inspector(props: ComponentProps<typeof LazyInspector>) {
   return (
-    <Suspense fallback={null}>
+    <Suspense fallback={<CardSkeleton />}>
       <LazyInspector {...props} />
     </Suspense>
   );
@@ -1210,7 +1238,18 @@ import {
   affectedFeatureTargets,
   type AffectedFeatureTarget
 } from './lib/affectedFeatureTargets';
-import { holePreview, type HolePreview } from './lib/holeGhost';
+import {
+  holePositionAnchor,
+  holePreview,
+  type HolePreview
+} from './lib/holeGhost';
+import { holePositionFromPick } from './lib/holePositionAxes';
+import type { PrimitiveGhost } from './lib/primitiveGhost';
+import {
+  failedHistoryExportBodies,
+  withheldExportMessage,
+  type WithheldExportBody
+} from './lib/failedHistoryExport';
 import type { HoleDraft } from './components/forms/ModelingOperationsForm';
 import { extrudeSketchGuidance } from './lib/extrudeGuidance';
 import {
@@ -1218,7 +1257,16 @@ import {
   suppressionRepairSnapshot,
   type SuppressionNotice
 } from './lib/suppressionFeedback';
-import { validateFeatureSuppression } from './lib/featureSuppression';
+import {
+  activeSuppressionPrompt,
+  FeatureSuppressionRefusal,
+  resolveSuppressionBranch,
+  suppressBranchLabel,
+  suppressCommands,
+  suppressedBranchMessage,
+  suppressionRefusal
+} from './lib/featureSuppression';
+import type { HistoryRowActions } from './components/HistoryTimeline';
 import {
   moveHasFiniteValues,
   moveHasUnappliedChange,
@@ -1281,11 +1329,14 @@ import {
   editCardSessionMatches,
   type EditCardSession
 } from './lib/editCardLifecycle';
+import { CardHeader, CardSkeleton } from './components/CardHeader';
+import { useCommandCardPrefetch } from './lib/cardChunkPrefetch';
 import { PanelOverflow } from './components/PanelOverflow';
 import {
   clearActiveProject,
-  loadActiveProjectId,
   rememberActiveProject,
+  snapshotActiveProject,
+  type ActiveProjectSnapshot,
   type ViewportCameraState
 } from './lib/workspaceSession';
 import {
@@ -1520,6 +1571,17 @@ function summarizeLocalDocument(
   };
 }
 
+interface HydrateOptions {
+  restoreView?: boolean;
+  rememberProject?: boolean;
+  /**
+   * The active-project pointer when the open began. Opens await storage and
+   * the network before hydrating; a pointer that moved meanwhile is newer and
+   * is kept rather than overwritten.
+   */
+  activeProjectSince?: ActiveProjectSnapshot;
+}
+
 interface AccountProjectLoadResult {
   document: ProjectDocument | null;
   error?: unknown;
@@ -1744,13 +1806,20 @@ export function App() {
   // The active-project pointer is synchronous knowledge. Reading it lazily
   // lets the first render choose a stable restore surface instead of mounting
   // the launcher while IndexedDB and the optional cloud copy are still loading.
-  const [startupProjectId] = useState<string | null>(() =>
-    !pendingInvitationToken &&
-    !pendingShareToken &&
-    appSettings.general.reopenLastProject
-      ? loadActiveProjectId()
-      : null
-  );
+  // One read gives both the project to restore and the compare-and-set guard
+  // for it, so a write from another tab cannot fall between them.
+  const [{ startupPointer, startupProjectId }] = useState(() => {
+    const pointer = snapshotActiveProject();
+    return {
+      startupPointer: pointer,
+      startupProjectId:
+        !pendingInvitationToken &&
+        !pendingShareToken &&
+        appSettings.general.reopenLastProject
+          ? pointer.activeProjectId
+          : null
+    };
+  });
   const [startupState, setStartupState] = useState<
     'restoring' | 'loading-library' | 'ready'
   >(() => (startupProjectId ? 'restoring' : 'loading-library'));
@@ -1891,6 +1960,13 @@ export function App() {
     name: string;
     dependents: string[];
   } | null>(null);
+  /** A refused suppression, asking whether to pause its dependents too. */
+  const [pendingSuppression, setPendingSuppression] = useState<{
+    projectId: ProjectDocument['projectId'];
+    featureId: FeatureId;
+    name: string;
+    dependents: { featureId: FeatureId; name: string }[];
+  } | null>(null);
   // Named `doc` (not `document`) so the global DOM document is never shadowed.
   const [doc, setDoc] = useState<ProjectDocument | null>(null);
   const textOutlineBudgetError = useMemo(
@@ -2000,6 +2076,10 @@ export function App() {
    */
   /** The open Hole card's values, for the bore the viewport draws. */
   const [holeDraft, setHoleDraft] = useState<HoleDraft | null>(null);
+  /** The open primitive card's solid, for the ghost the viewport draws. */
+  const [primitiveGhost, setPrimitiveGhost] = useState<PrimitiveGhost | null>(
+    null
+  );
   /**
    * The last ghost and what it was computed from. A through hole scans the
    * body's mesh for its depth, which is not work to redo on every render.
@@ -2232,6 +2312,26 @@ export function App() {
    * never outlive the attempt that produced it.
    */
   const [featureFormError, setFeatureFormError] = useState<string | null>(null);
+  /**
+   * The typed feature-warning record for the derived state on screen.
+   * `commitDerivedState` strips it from the document (it is advice to this
+   * session, not saved state), so it is held here beside the exact `derived`
+   * object it describes; commands share `derived` by reference, so it applies
+   * for as long as that projection does and never to a newer one.
+   */
+  const [featureAttribution, setFeatureAttribution] = useState<{
+    derived: ProjectDocument['derived'];
+    featureWarnings: readonly FeatureWarning[];
+  } | null>(null);
+  function recordFeatureAttribution(
+    committed: ProjectDocument,
+    derived: ProjectDocument['derived']
+  ): void {
+    setFeatureAttribution({
+      derived: committed.derived,
+      featureWarnings: derived.featureWarnings ?? []
+    });
+  }
   const {
     projection,
     setProjection,
@@ -2747,6 +2847,7 @@ export function App() {
             : null
         );
         const validated = manager.commitDerivedState(derived);
+        recordFeatureAttribution(validated, derived);
         setParameterPreviewBase({ ...validated, derived });
         setDoc(validated);
         // Fresh meshes now reflect the document (worker results are dropped
@@ -3352,6 +3453,9 @@ export function App() {
     if (
       !current ||
       !error.featureId ||
+      // Answered by its own dialog, which names every dependent and offers
+      // to suppress them too; a second, red record would only repeat it.
+      error instanceof FeatureSuppressionRefusal ||
       (base &&
         (base.projectId !== current.projectId ||
           base.version !== current.version)) ||
@@ -3463,7 +3567,7 @@ export function App() {
           setStatus(
             warning ??
               (valid
-                ? 'Preview · Apply to save the exact result.'
+                ? 'Preview · Apply to save the result.'
                 : 'This size did not produce a valid body.')
           );
         }
@@ -3597,9 +3701,13 @@ export function App() {
       value.edgeHashes,
       value.edgeReferences
     );
-    const refreshedValue = namedReferences
-      ? { ...value, edgeReferences: namedReferences }
-      : value;
+    const refreshedValue = {
+      ...(namedReferences
+        ? { ...value, edgeReferences: namedReferences }
+        : value),
+      // Edits keep their name; a new fillet is numbered past any other.
+      name: feature ? value.name : newFeatureName(value.name)
+    };
     const command = edgeModifierCommand(feature, kind, refreshedValue);
     const bodyId =
       feature?.bodyId ??
@@ -3608,7 +3716,7 @@ export function App() {
     edgeFormPreview.clear();
     setEdgeFormSize(null);
     void executeValidatedFeature(command, {
-      featureName: value.name,
+      featureName: refreshedValue.name,
       resultBodyId: bodyId,
       ...(feature
         ? {
@@ -3618,7 +3726,7 @@ export function App() {
             )
           }
         : {}),
-      successMessage: `${value.name} applied.`,
+      successMessage: `${refreshedValue.name} applied.`,
       onSuccess: feature
         ? () => finishFeatureEdit(feature, editSession)
         : finishFeatureCreation,
@@ -4014,7 +4122,11 @@ export function App() {
         remoteDocument.projectId,
         remoteDocument.version
       );
-      hydrateDocument(remoteDocument, { restoreView: false });
+      hydrateDocument(remoteDocument, {
+        restoreView: false,
+        // The open project's own conflict: nothing to reopen differently.
+        rememberProject: false
+      });
       setAccountConflict(null);
       setStatus(
         `Using the version from your account; ${recoveryCopyNote(outcome)}.`
@@ -4297,6 +4409,7 @@ export function App() {
     // command the new, empty one was somehow in the middle of.
     dispatchInteraction({ type: 'clear' });
     setPendingFeatureDelete(null);
+    setPendingSuppression(null);
     setPendingToolSwitch(null);
   }, [doc?.projectId]);
 
@@ -4459,7 +4572,9 @@ export function App() {
               document.version
             );
             remoteVersionsRef.current.set(document.projectId, document.version);
-            hydrateDocument(document);
+            // A refresh of the open project is not a choice to reopen it, and
+            // must not revise the pointer under an open of another project.
+            hydrateDocument(document, { rememberProject: false });
           },
           saveBaseline: (document) =>
             saveLastSyncedVersion(document.projectId, document.version),
@@ -4676,7 +4791,9 @@ export function App() {
                 : 'synced'
         );
         if (startupProjectId && restoredDocument) {
-          hydrateDocument(restoredDocument);
+          hydrateDocument(restoredDocument, {
+            activeProjectSince: startupPointer
+          });
           if (accountDocumentNeedsRepair) {
             setSaveState('repair');
             setStatus(
@@ -4717,7 +4834,7 @@ export function App() {
           return;
         }
         if (startupProjectId) {
-          clearActiveProject();
+          clearActiveProject(undefined, startupPointer);
         }
         // The mode only: the shelf heading beside this footer counts the
         // parts, and a second count here said the same thing twice.
@@ -4732,7 +4849,7 @@ export function App() {
         );
       } catch (error) {
         if (!cancelled) {
-          clearActiveProject();
+          clearActiveProject(undefined, startupPointer);
           setStatus(errorMessage(error, 'Could not restore the workspace.'));
         }
       } finally {
@@ -5165,24 +5282,31 @@ export function App() {
     currentGeometrySnapshot?.warnings ??
     (previewDoc ?? doc)?.derived.warnings ??
     [];
-  const diagnostics = useMemo(
-    () =>
-      presentedDiagnostics(
-        warnings,
-        currentFaceGeometryPreview
-          ? currentFaceGeometryPreview.geometry.featureWarnings
-          : currentGeometrySnapshot
-            ? currentGeometrySnapshot.featureWarnings
-            : (previewDoc ?? doc)?.derived.featureWarnings
-      ),
-    [
-      warnings,
-      currentGeometrySnapshot,
-      currentFaceGeometryPreview,
-      previewDoc,
-      doc
-    ]
-  );
+  const diagnostics = useMemo(() => {
+    const shown = currentFaceGeometryPreview?.document ?? previewDoc ?? doc;
+    const shownBodies =
+      currentFaceGeometryPreview?.geometry.bodyRepresentations ??
+      currentGeometrySnapshot?.bodyRepresentations ??
+      shown?.derived.bodyRepresentations;
+    const faceting = shown ? sweepFacetingAdvisories(shown, shownBodies) : [];
+    const featureWarnings = currentFaceGeometryPreview
+      ? currentFaceGeometryPreview.geometry.featureWarnings
+      : currentGeometrySnapshot
+        ? currentGeometrySnapshot.featureWarnings
+        : shown?.derived.featureWarnings;
+    return presentedDiagnostics(
+      [...warnings, ...faceting.map((advisory) => advisory.message)],
+      faceting.length
+        ? [...(featureWarnings ?? []), ...faceting]
+        : featureWarnings
+    );
+  }, [
+    warnings,
+    currentGeometrySnapshot,
+    currentFaceGeometryPreview,
+    previewDoc,
+    doc
+  ]);
 
   // Keyed on the derived body table, not the whole document: commands clone
   // the document but share `derived` by reference, so keying on `doc` gave
@@ -5268,21 +5392,28 @@ export function App() {
     () => partBodies.filter((body) => !hiddenBodyIds.has(body.bodyId)),
     [partBodies, hiddenBodyIds]
   );
-  const viewerBodies = useMemo<GeometryBodyRepresentation[]>(
-    () =>
-      (currentFaceGeometryPreview
+  const viewerBodies = useMemo<GeometryBodyRepresentation[]>(() => {
+    const bodies = (
+      currentFaceGeometryPreview
         ? Object.values(currentFaceGeometryPreview.geometry.bodyRepresentations)
         : currentGeometrySnapshot
           ? Object.values(currentGeometrySnapshot.bodyRepresentations)
           : completedViewerBodies
-      ).filter((body) => !body.consumed && !hiddenBodyIds.has(body.bodyId)),
-    [
-      completedViewerBodies,
-      hiddenBodyIds,
-      currentGeometrySnapshot,
-      currentFaceGeometryPreview
-    ]
-  );
+    ).filter((body) => !body.consumed && !hiddenBodyIds.has(body.bodyId));
+    // G2: what a command preview would make is drawn in the preview hue
+    // until it is applied, including edits that retain an existing body ID.
+    return currentFaceGeometryPreview ||
+      (previewDoc && !currentGeometrySnapshot)
+      ? tintPreviewResultBodies(bodies, representations)
+      : bodies;
+  }, [
+    completedViewerBodies,
+    hiddenBodyIds,
+    currentGeometrySnapshot,
+    currentFaceGeometryPreview,
+    previewDoc,
+    representations
+  ]);
   const viewportGeometry = useMemo<ViewportGeometry<ParameterPreviewBody>>(
     () => ({
       document:
@@ -5524,32 +5655,68 @@ export function App() {
     parameterModelFailure.version === doc?.version
       ? parameterModelFailure.message
       : null;
-  const exportBodyIds = useMemo<BodyId[]>(() => {
+  // Bodies standing in for a feature that failed to rebuild. They stay drawn
+  // (Diagnostics names the failure) but are never written to an export file.
+  const failedHistoryBodies = useMemo(
+    () =>
+      doc && featureAttribution?.derived === doc.derived
+        ? failedHistoryExportBodies(doc, featureAttribution.featureWarnings)
+        : new Map<BodyId, WithheldExportBody>(),
+    [doc, featureAttribution]
+  );
+  const selectedBodyExportable = Boolean(
+    selectedBody &&
+    !selectedBody.consumed &&
+    selectedBody.exportableStep &&
+    !failedHistoryBodies.has(selectedBody.bodyId)
+  );
+  const { exportBodyIds, exportWithheldMessage } = useMemo<{
+    exportBodyIds: BodyId[];
+    exportWithheldMessage: string | null;
+  }>(() => {
     if (
       !doc ||
       currentGeometrySnapshot !== null ||
       currentFaceGeometryPreview !== null ||
       (tweakMode && parameterModelError)
     ) {
-      return [];
+      return { exportBodyIds: [], exportWithheldMessage: null };
     }
-    if (
-      selectedBody &&
-      !selectedBody.consumed &&
-      selectedBody.exportableStep &&
-      !parameterHiddenBodyIds.has(selectedBody.bodyId)
-    ) {
-      return [selectedBody.bodyId];
+    const bodyName = (bodyId: BodyId) =>
+      doc.derived.bodyRepresentations[bodyId]?.name ?? bodyId;
+    const exportable = (body: GeometryBodyRepresentation) =>
+      body.exportableStep &&
+      !body.consumed &&
+      !parameterHiddenBodyIds.has(body.bodyId);
+    if (selectedBody && exportable(selectedBody)) {
+      const withheld = failedHistoryBodies.get(selectedBody.bodyId);
+      return withheld
+        ? {
+            exportBodyIds: [],
+            exportWithheldMessage: withheldExportMessage([withheld], bodyName)
+          }
+        : {
+            exportBodyIds: [selectedBody.bodyId],
+            exportWithheldMessage: null
+          };
     }
-    return Object.values(doc.derived.bodyRepresentations)
-      .filter(
-        (body) =>
-          body.exportableStep &&
-          !body.consumed &&
-          !parameterHiddenBodyIds.has(body.bodyId)
+    const candidates = Object.values(doc.derived.bodyRepresentations).filter(
+      exportable
+    );
+    return {
+      exportBodyIds: candidates
+        .filter((body) => !failedHistoryBodies.has(body.bodyId))
+        .map((body) => body.bodyId),
+      exportWithheldMessage: withheldExportMessage(
+        candidates.flatMap((body) => {
+          const withheld = failedHistoryBodies.get(body.bodyId);
+          return withheld ? [withheld] : [];
+        }),
+        bodyName
       )
-      .map((body) => body.bodyId);
+    };
   }, [
+    failedHistoryBodies,
     doc,
     selectedBody,
     parameterHiddenBodyIds,
@@ -6048,7 +6215,7 @@ export function App() {
 
   function hydrateDocument(
     nextDocument: ProjectDocument,
-    options: { restoreView?: boolean; rememberProject?: boolean } = {}
+    options: HydrateOptions = {}
   ) {
     return timed('document.hydrate', () =>
       hydrateDocumentInner(nextDocument, options)
@@ -6057,7 +6224,7 @@ export function App() {
 
   function hydrateDocumentInner(
     nextDocument: ProjectDocument,
-    options: { restoreView?: boolean; rememberProject?: boolean } = {}
+    options: HydrateOptions = {}
   ) {
     let normalized: ProjectDocument;
     try {
@@ -6084,7 +6251,11 @@ export function App() {
       });
     }
     if (rememberProject) {
-      rememberActiveProject(normalized.projectId);
+      rememberActiveProject(
+        normalized.projectId,
+        undefined,
+        options.activeProjectSince
+      );
     }
     const current = managerRef.current?.document;
     if (
@@ -6293,6 +6464,7 @@ export function App() {
         // renders the new geometry in the same batch instead of flashing the
         // stale meshes until the broadcast rebuild echoes back.
         next = managerRef.current.commitDerivedState(derived);
+        recordFeatureAttribution(next, derived);
         setMoveCommitHold(null);
       }
       recordLocalCommit(next, before);
@@ -6326,6 +6498,7 @@ export function App() {
       let next = managerRef.current.runTransaction(label, commands);
       if (derived) {
         next = managerRef.current.commitDerivedState(derived);
+        recordFeatureAttribution(next, derived);
         setMoveCommitHold(null);
       }
       recordLocalCommit(next, before);
@@ -6363,6 +6536,16 @@ export function App() {
     return current
       ? numberedBodyName(current, featureName)
       : `${featureName.trim()} 1`;
+  }
+
+  /**
+   * "Hole", then "Hole 2": the History name a feature made now takes, so two
+   * holes are not two rows both reading "Hole". Stored in the command like
+   * `newBodyName`; features already in a document keep their names.
+   */
+  function newFeatureName(featureName: string): string {
+    const current = managerRef.current?.document;
+    return current ? numberedFeatureName(current, featureName) : featureName;
   }
 
   /**
@@ -7207,7 +7390,7 @@ export function App() {
       commandFactories.transformBody({
         // Whatever the gizmo's Name field holds, falling back to the default
         // rather than committing a feature with a blank name.
-        name: moveName.trim() || 'Move',
+        name: newFeatureName(moveName.trim() || 'Move'),
         targetBodyId: preview.bodyId as BodyId,
         ...values
       })
@@ -7555,7 +7738,7 @@ export function App() {
 
   function commitBodyAppearance(
     bodyId: BodyId,
-    appearance: { color?: string; opacity?: number | null }
+    appearance: { color?: string | null; opacity?: number | null }
   ) {
     if (!doc) {
       return;
@@ -7564,9 +7747,13 @@ export function App() {
     if (!bodyNode) {
       return;
     }
-    const metadata: Record<string, string | number | null> = {};
+    const metadata: Record<string, string | number | boolean | null> = {};
     if (appearance.color !== undefined) {
+      // Marked as chosen, so it is drawn even when it equals the stamp the
+      // body's feature wrote; null clears both and the default returns.
       metadata[BODY_COLOR_METADATA_KEY] = appearance.color;
+      metadata[BODY_COLOR_CHOSEN_METADATA_KEY] =
+        appearance.color === null ? null : true;
     }
     if (appearance.opacity !== undefined) {
       // null deletes the key, returning the body to fully opaque.
@@ -8205,6 +8392,7 @@ export function App() {
   }
 
   async function handleCreateProject(name: string, units: UnitSystem) {
+    const activeProjectSince = snapshotActiveProject();
     setAssistantCollapsed(true);
     setBusy(true);
     try {
@@ -8212,7 +8400,7 @@ export function App() {
       if (!session) {
         const localDocument = createProjectDocument(name, localUserId, units);
         await saveLocalProject(localDocument);
-        hydrateDocument(localDocument);
+        hydrateDocument(localDocument, { activeProjectSince });
         setProjects((current) => [
           summarizeLocalDocument(localDocument),
           ...current
@@ -8238,7 +8426,7 @@ export function App() {
       setCloudProjectIds((current) =>
         new Set(current).add(response.document.projectId)
       );
-      hydrateDocument(response.document);
+      hydrateDocument(response.document, { activeProjectSince });
       setProjects((current) => [response.project, ...current]);
       setStatus(`Created ${response.project.name}.`);
     } catch (error) {
@@ -8265,7 +8453,7 @@ export function App() {
         units
       );
       await saveLocalProject(localDocument);
-      hydrateDocument(localDocument);
+      hydrateDocument(localDocument, { activeProjectSince });
       setProjects((current) => [
         summarizeLocalDocument(localDocument),
         ...current
@@ -8414,6 +8602,8 @@ export function App() {
       await flushPendingLocalSave();
       const outcome = await adoptLocalProject(project.projectId);
       if (outcome.state === 'conflict') {
+        // Unguarded: the adoption can rekey the pointer to the account id
+        // before it reports a conflict.
         hydrateDocument(outcome.conflict.localDocument);
         cloudProjectAutosaveRef.current?.haltForConflict(project.projectId);
         setAccountConflict(outcome.conflict);
@@ -8598,12 +8788,13 @@ export function App() {
    */
 
   async function handleOpenDemo(definition: DemoDefinition) {
+    const activeProjectSince = snapshotActiveProject();
     setBusy(true);
     try {
       await flushPendingLocalSave();
       const existing = await loadLocalProject(definition.projectId);
       if (existing) {
-        hydrateDocument(existing);
+        hydrateDocument(existing, { activeProjectSince });
         setStatus(`Opened ${existing.name}.`);
         return;
       }
@@ -8621,7 +8812,7 @@ export function App() {
       // Rev A and Rev B can be restored rather than listed as "not stored".
       await saveLocalSaveStates(saveStates);
       await saveLocalProject(document);
-      hydrateDocument(document);
+      hydrateDocument(document, { activeProjectSince });
       setCloudAvailable(false);
       setProjects((current) => [
         summarizeLocalDocument(document),
@@ -8638,6 +8829,7 @@ export function App() {
   }
 
   async function handleOpenProject(projectId: string) {
+    const activeProjectSince = snapshotActiveProject();
     setBusy(true);
     try {
       await flushPendingLocalSave();
@@ -8684,7 +8876,7 @@ export function App() {
           ? projectId
           : null;
         setCloudAvailable(false);
-        hydrateDocument(localDocument);
+        hydrateDocument(localDocument, { activeProjectSince });
         setSaveState(needsRepair ? 'repair' : 'offline');
         setStatus(
           needsRepair
@@ -8723,7 +8915,7 @@ export function App() {
         // Both copies moved since this device last agreed with the account.
         // Open the local one — it is the work in front of the user — and ask
         // rather than discarding either side.
-        hydrateDocument(outcome.local);
+        hydrateDocument(outcome.local, { activeProjectSince });
         cloudProjectAutosaveRef.current?.haltForConflict(
           outcome.local.projectId
         );
@@ -8740,7 +8932,7 @@ export function App() {
         outcome.choice === 'remote' && localDocument
           ? withLocalDerived(outcome.document, localDocument)
           : outcome.document;
-      hydrateDocument(openedDocument);
+      hydrateDocument(openedDocument, { activeProjectSince });
       if (outcome.choice === 'remote') {
         await saveLocalProject(openedDocument);
         await saveLastSyncedVersion(projectId, openedDocument.version);
@@ -8833,6 +9025,7 @@ export function App() {
     if (!source || !shareSessionRef.current) {
       return;
     }
+    const activeProjectSince = snapshotActiveProject();
     setBusy(true);
     try {
       const copy = duplicateProjectDocument(
@@ -8853,7 +9046,7 @@ export function App() {
           summarizeLocalDocument(copy, DEFAULT_PROJECT_ORGANIZATION)
         ].sort(compareProjectSummaries)
       );
-      hydrateDocument(copy);
+      hydrateDocument(copy, { activeProjectSince });
       handleWorkspaceMode('build');
       setStatus(
         `${copy.name} is yours now — saved on this device. Build mode is open.`
@@ -11012,6 +11205,7 @@ export function App() {
     setProjectTransferBusy(true);
     setBusy(true);
     const origin = managerRef.current;
+    const activeProjectSince = snapshotActiveProject();
     const sink = createImportProgressSink();
     sink.start({
       kind: 'restore',
@@ -11038,7 +11232,7 @@ export function App() {
           setCloudAvailable(false);
           setSaveState('local');
           setSharingOpen(false);
-          hydrateDocument(backup.document);
+          hydrateDocument(backup.document, { activeProjectSince });
           handleWorkspaceMode('build');
         }
       }
@@ -11172,10 +11366,12 @@ export function App() {
         return;
       }
       const bodies = countLabel(exportBodyIds.length, 'body', 'bodies');
-      setStatus(
+      const outcome =
         produced.warnings > 0
           ? `Exported ${input.label} with ${countLabel(produced.warnings, 'warning', 'warnings')}.`
-          : `Exported ${bodies} to ${input.fileName}${archived ? ' and archived it' : ''}.`
+          : `Exported ${bodies} to ${input.fileName}${archived ? ' and archived it' : ''}.`;
+      setStatus(
+        exportWithheldMessage ? `${outcome} ${exportWithheldMessage}` : outcome
       );
       // A missing archive is only worth amber where one was on offer: a
       // signed-out or local-only session was never going to keep a copy,
@@ -11562,9 +11758,18 @@ export function App() {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [representations, exactGeometryReady]);
 
+  /** The open edit's stored hole anchor; null when no hole is being edited. */
+  function editedHoleAnchor(): { positionAnchor?: 'centroid' } | null {
+    if (!modelingEditFeature) return null;
+    return modelingEditFeature.data.featureKind === 'hole'
+      ? modelingEditFeature.data
+      : {};
+  }
+
   function handleFormFacePick(
     operation: FacePickOperation,
-    selection: TopologySelection | null
+    selection: TopologySelection | null,
+    detail?: PickDetail
   ) {
     const label = TOOL_META[operation].label;
     if (!selection) {
@@ -11609,15 +11814,36 @@ export function App() {
       return;
     }
     modelingPreflightRef.current = null;
-    setViewportFormFacePick(picked.pick);
+    // A Hole click places the hole where it landed (G7): the point, measured
+    // in the face's U/V frame from the anchor the hole is drilled against.
+    const face =
+      operation === 'hole' && detail
+        ? representations[targetBodyId]?.topology?.faces.find(
+            (candidate) => candidate.hash === picked.pick.hash
+          )?.geometry
+        : undefined;
+    const position =
+      face && detail
+        ? holePositionFromPick(
+            face,
+            holePositionAnchor(editedHoleAnchor(), face),
+            detail.point,
+            appSettings.sketching.snapEnabled
+              ? appSettings.sketching.linearSnap
+              : null
+          )
+        : null;
+    setViewportFormFacePick(
+      position ? { ...picked.pick, position } : picked.pick
+    );
     setSelectedTopology(picked.selection);
     setSelectedBodyIds([targetBodyId]);
     setSelectedEdges([]);
     setFormFacePickTarget(null);
     setStatus(
       operation === 'hole'
-        ? 'Hole entry face selected · adjust the hole and check the exact result.'
-        : `${label}: face picked · click more faces to add or remove them, then check the exact result.`
+        ? 'Hole entry face selected · adjust the hole and check the result.'
+        : `${label}: face picked · click more faces to add or remove them, then check the result.`
     );
   }
 
@@ -11703,7 +11929,7 @@ export function App() {
     // the click fills its face field instead of arming a drag handle and
     // replacing the form with the Offset Face card.
     if (modelingOperationPicksFaces(tool) && modelingTargetBodyId) {
-      handleFormFacePick(tool, selection);
+      handleFormFacePick(tool, selection, detail);
       return;
     }
     // The pick detail (click point + normal) anchors selection-first drag
@@ -11986,7 +12212,7 @@ export function App() {
       }
       setStatus(
         nextEdges.length > 0
-          ? `${nextEdges.length} exact edge${nextEdges.length === 1 ? '' : 's'} selected.`
+          ? `${nextEdges.length} edge${nextEdges.length === 1 ? '' : 's'} selected.`
           : 'Edge selection cleared.'
       );
       return;
@@ -12065,7 +12291,7 @@ export function App() {
     ) {
       dispatchInteraction({ type: 'set-edge-op', op: 'chamfer' });
     }
-    setStatus(`Selected all ${edges.length} exact edges on ${body.name}.`);
+    setStatus(`Selected all ${edges.length} edges on ${body.name}.`);
   }
 
   /**
@@ -12298,6 +12524,8 @@ export function App() {
           (candidate) => candidate.sketchId === interaction.session.sketchId
         )?.name ?? 'Sketch')
       : 'New sketch';
+  /** Parameters defined from an expression field, for edit forms (G5). */
+  const fieldDefinitions = useRef(createFieldDefinitionTracker());
   const parameterScopeRef = useRef(parameterScope);
   parameterScopeRef.current = parameterScope;
   // Solver diagnostics are transient UI state. Keep the entity ids beside
@@ -12609,6 +12837,36 @@ export function App() {
       return false;
     }
     return executeTransaction(label, commands, derived);
+  }
+
+  /**
+   * Commits a History sketch edit (plane, offset, profile or text) only after
+   * the exact branch built on that sketch rebuilds cleanly. A section edit
+   * that leaves a downstream shell, cut or blend unable to resolve its faces
+   * is refused, and the last valid model stays — the failed feature must not
+   * fall back to its input body and reach the viewport or an export as if it
+   * were the design. A sketch nothing depends on commits as before.
+   */
+  function applySketchHistoryEdit(
+    feature: FeatureNode,
+    editSession: EditCardSession | null,
+    label: string,
+    commands: AnyCommand[]
+  ): void {
+    const targets = doc ? affectedFeatureTargets(doc, feature.featureId) : [];
+    if (targets.length === 0) {
+      if (executeTransaction(label, commands)) {
+        finishFeatureEdit(feature, editSession);
+      }
+      return;
+    }
+    void validatedFeature.runTransaction(commands, {
+      label,
+      targets,
+      successMessage: commandOutcomeMessage(label),
+      onSuccess: () => finishFeatureEdit(feature, editSession),
+      cancelled: () => !editSessionIsCurrent(feature, editSession)
+    });
   }
 
   /**
@@ -13460,7 +13718,8 @@ export function App() {
    */
   async function handleSetParameter(
     name: string,
-    expression: string
+    expression: string,
+    addOnly = false
   ): Promise<string | null> {
     const manager = managerRef.current;
     if (!manager || !ensureCanEditParameters('change this parameter')) {
@@ -13498,7 +13757,8 @@ export function App() {
       if (!current()) return stale();
       const parameterCommand = commandFactories.setParameter({
         name,
-        expression
+        expression,
+        ...(addOnly ? { addOnly: true } : {})
       });
       parameterCommand.validate(base);
       let prospective = parameterCommand.apply(base);
@@ -13580,6 +13840,8 @@ export function App() {
       const toggle = listParameters(prospective).find(
         (p) => p.name === name
       )?.toggle;
+      // setParameter both adds and changes one; say which happened.
+      const added = !listParameters(base).some((p) => p.name === name);
       if (toggle)
         setHiddenBodyIds(
           (hidden) =>
@@ -13587,7 +13849,9 @@ export function App() {
               [...hidden].filter((id) => !toggle.bodyIds.includes(id as BodyId))
             )
         );
-      setStatus(`Parameter ${name} updated.`);
+      setStatus(
+        added ? `Added parameter ${name}.` : `Parameter ${name} updated.`
+      );
       return { kind: 'applied' };
     };
     setParameterEditPending(true);
@@ -13618,6 +13882,37 @@ export function App() {
         setParameterEditPending(false);
         setParameterCandidate(null);
       }
+    }
+  }
+
+  /**
+   * Defines a parameter from the expression field that first names it (G5):
+   * the Parameters panel's own validated set, as its own undo step, so the
+   * card's Create lands after it in history. It only ever adds — a name that
+   * exists by now (a collaborator's, or one whose expression is broken and so
+   * missing from the field's scope) is refused rather than overwritten.
+   */
+  async function handleDefineParameter(
+    name: string,
+    expression: string
+  ): Promise<string | null> {
+    const live = managerRef.current?.document;
+    if (live && listParameters(live).some((p) => p.name === name)) {
+      return `${name} already exists. Change it in the Parameters panel.`;
+    }
+    const settle = live
+      ? beginFieldDefinition(fieldDefinitions.current, name, live)
+      : () => {};
+    try {
+      const refusal = await handleSetParameter(name, expression, true);
+      const committed = managerRef.current?.document;
+      if (!refusal && committed) {
+        editFormVersion(fieldDefinitions.current, committed);
+        setStatus(`Added parameter ${name}.`);
+      }
+      return refusal;
+    } finally {
+      settle();
     }
   }
 
@@ -14161,11 +14456,11 @@ export function App() {
               area: target.area
             }
           ];
-    const name = regionExtrudeSettings.current?.name ?? 'Extrude';
+    const givenName = regionExtrudeSettings.current?.name ?? 'Extrude';
     return {
-      name,
+      name: newFeatureName(givenName),
       // The new-body name; an add or cut keeps its target's name instead.
-      bodyName: newBodyName(name),
+      bodyName: newBodyName(givenName),
       sketchId: target.sketchId as SketchId,
       distance,
       symmetric: regionExtrudeSettings.current?.symmetric ?? false,
@@ -14302,8 +14597,11 @@ export function App() {
           rounded,
           () => {
             setSelectedProfiles([]);
+            // G15: Create closes the extrude as Box, Hole and Fillet close
+            // theirs — nothing left selected, no cap handle armed, and the
+            // status line confirms. Picking the cap re-arms it on demand.
+            finishFeatureCreation();
             setRevertPill({ sketchId: target.sketchId as SketchId });
-            armExtrudeCapHandle(resultBodyId);
           },
           undefined,
           {
@@ -14323,58 +14621,6 @@ export function App() {
         if (request === regionExtrudeCommitRequest.current) setBusy(false);
       }
     })();
-  }
-
-  /**
-   * The extrude stays open after it lands. The region it was armed on is
-   * consumed by the feature, so the handle moves to the far cap of the new
-   * solid, where a drag or a typed value edits the stored distance through
-   * the same face-offset planner the cap would take if picked by hand.
-   */
-  function armExtrudeCapHandle(bodyId: BodyId) {
-    const document = managerRef.current?.document;
-    const faces =
-      document?.derived.bodyRepresentations[bodyId]?.topology?.faces ?? [];
-    for (const face of faces) {
-      const geometry = face.geometry;
-      if (
-        !document ||
-        geometry?.surfaceType !== 'plane' ||
-        !geometry.normal ||
-        !face.reference
-      ) {
-        continue;
-      }
-      const extrudeFields = faceOffsetTargetFields(
-        document,
-        bodyId,
-        face.reference,
-        face.hash
-      );
-      if (!extrudeFields.extrudeFeatureId) {
-        continue;
-      }
-      const point = geometry.centroid ?? geometry.center;
-      const target: FaceTarget = {
-        bodyId,
-        topologyId: face.topologyId,
-        hash: face.hash,
-        reference: face.reference,
-        point: [point.x, point.y, point.z],
-        normal: [geometry.normal.x, geometry.normal.y, geometry.normal.z],
-        surfaceCenter: [
-          geometry.center.x,
-          geometry.center.y,
-          geometry.center.z
-        ],
-        surfaceType: 'planar',
-        ...extrudeFields
-      };
-      // The body the commit selected stays the selection: the chip keeps
-      // reading the new solid's size while the handle waits on its cap.
-      dispatchInteraction({ type: 'select-face', target });
-      return;
-    }
   }
 
   /** Armed edge handle; memoized for the same rig-stability reason as faces. */
@@ -15058,8 +15304,9 @@ export function App() {
       return null;
     }
     const payload = {
-      name:
-        currentInteraction.op === 'fillet' ? 'Fillet edges' : 'Chamfer edges',
+      name: newFeatureName(
+        currentInteraction.op === 'fillet' ? 'Fillet edges' : 'Chamfer edges'
+      ),
       targetBodyId: bodyId,
       edgeHashes,
       ...(edges.length === edgeHashes.length &&
@@ -15400,9 +15647,7 @@ export function App() {
   function handleOpenOffsetKeypad(
     currentOffset: number,
     totalBaseline?: number,
-    totalSense: 1 | -1 = 1,
-    /** A form's own text for the value; a drag has none and is rounded. */
-    initialText?: string
+    totalSense: 1 | -1 = 1
   ): boolean {
     if (
       interaction.mode !== 'region' &&
@@ -15420,14 +15665,13 @@ export function App() {
             : 'Offset'
           : 'Total',
       initial:
-        initialText ??
-        (totalBaseline !== undefined || currentOffset !== 0
+        totalBaseline !== undefined || currentOffset !== 0
           ? String(
               Math.round(
                 ((totalBaseline ?? 0) + totalSense * currentOffset) * 100
               ) / 100
             )
-          : ''),
+          : '',
       unitKind: 'length',
       ...(totalBaseline === undefined ? {} : { totalBaseline, totalSense })
     });
@@ -16409,6 +16653,30 @@ export function App() {
     }
   }
 
+  function handleRenameFeature(featureId: FeatureId, name: string) {
+    const current = managerRef.current?.document;
+    const live = current && findFeature(current, featureId);
+    const next = name.trim();
+    if (!current || !live || !next || next === live.name) return;
+    // A sketch feature and its sketch share one name everywhere it shows,
+    // as the sketch card's own rename keeps them.
+    const sketch =
+      live.data.featureKind === 'sketch'
+        ? findSketch(current, live.data.sketchId)
+        : undefined;
+    const renamed = executeTransaction(`Rename ${live.name} to ${next}`, [
+      commandFactories.renameNode({ nodeId: live.id, name: next }),
+      ...(sketch
+        ? [commandFactories.renameNode({ nodeId: sketch.id, name: next })]
+        : [])
+    ]);
+    // A modeling card owns a draft snapshot, including its name. Close it
+    // after the rename so applying that snapshot cannot restore the old name.
+    if (renamed && modelingEditFeature?.featureId === featureId) {
+      closeFeaturePanel();
+    }
+  }
+
   function handleReorderFeature(featureId: FeatureId, toIndex: number) {
     const name =
       doc &&
@@ -16433,33 +16701,7 @@ export function App() {
         .downstream(liveFeature.featureId)
         .some((dependent) => !isFeatureSuppressed(dependent))
     ) {
-      const document = owner.document;
-      const label = `Suppress ${liveFeature.name}`;
-      void validatedFeature.runTransaction(
-        [
-          commandFactories.setNodeMetadata(
-            {
-              nodeId: liveFeature.id,
-              metadata: { [FEATURE_SUPPRESSED_METADATA_KEY]: true }
-            },
-            label
-          )
-        ],
-        {
-          label,
-          targets: [],
-          validateDerived: (derived) =>
-            validateFeatureSuppression(document, derived, liveFeature),
-          validatingMessage: `Checking dependents of ${liveFeature.name}…`,
-          successMessage: `Suppressed ${liveFeature.name}`,
-          onFailure: (message) => announce(message),
-          onSuccess: () =>
-            announce(`Suppressed ${liveFeature.name}`, {
-              label: 'Undo',
-              run: handleUndo
-            })
-        }
-      );
+      suppressBranch(liveFeature.featureId, liveFeature.name, []);
       return;
     }
     // Only a rebuild of this live version can establish what the toggle
@@ -16496,6 +16738,67 @@ export function App() {
         before
       };
     }
+  }
+
+  /**
+   * Suppresses a feature that later features use, together with
+   * `dependentIds`, as one undoable step — once an exact rebuild shows every
+   * other active dependent still builds. A refusal opens a dialog naming the
+   * dependents that would not, keeping any it already named, and offering to
+   * suppress them too.
+   */
+  function suppressBranch(
+    sourceId: FeatureId,
+    sourceName: string,
+    dependentIds: readonly FeatureId[]
+  ) {
+    const owner = managerRef.current;
+    if (!owner || !ensureCanEdit(`suppress ${sourceName}`)) return;
+    const document = owner.document;
+    const { source, features: branch } = resolveSuppressionBranch(
+      document,
+      sourceId,
+      dependentIds
+    );
+    if (!source) {
+      setStatus(`${sourceName} is no longer in this document.`);
+      return;
+    }
+    const message = suppressedBranchMessage(source.name, branch.length - 1);
+    const label = suppressBranchLabel(source.name, branch.length - 1);
+    const commands = suppressCommands(branch, label);
+    if (commands.length === 0) return;
+    let refusal: FeatureSuppressionRefusal | null = null;
+    void validatedFeature.runTransaction(commands, {
+      label,
+      targets: [],
+      validateDerived: (derived) => {
+        refusal = suppressionRefusal(document, derived, branch);
+        if (refusal) throw refusal;
+      },
+      validatingMessage: `Checking dependents of ${source.name}…`,
+      successMessage: message,
+      onFailure: (failure) => {
+        const refused: FeatureSuppressionRefusal | null = refusal;
+        if (!refused || managerRef.current !== owner) {
+          announce(failure);
+          return;
+        }
+        const named = new Set([
+          ...dependentIds,
+          ...refused.dependents.map((dependent) => dependent.featureId)
+        ]);
+        setPendingSuppression({
+          projectId: document.projectId,
+          featureId: source.featureId,
+          name: source.name,
+          dependents: listFeaturesInOrder(document)
+            .filter((feature) => named.has(feature.featureId))
+            .map(({ featureId, name }) => ({ featureId, name }))
+        });
+      },
+      onSuccess: () => announce(message, { label: 'Undo', run: handleUndo })
+    });
   }
 
   function handleResumeHistory() {
@@ -16877,7 +17180,8 @@ export function App() {
 
   function handleFeatureContextMenu(
     at: { clientX: number; clientY: number },
-    feature: FeatureNode
+    feature: FeatureNode,
+    row?: HistoryRowActions
   ) {
     const bodyId = feature.bodyId ?? null;
     const body = bodyId ? representations[bodyId] : null;
@@ -16889,6 +17193,20 @@ export function App() {
         item: { id: 'edit', label: 'Edit properties' },
         run: () => handleSelectFeatureFromTree(feature.id)
       },
+      // The row's hover buttons, in words: the tour sends people here for
+      // the row's actions, and a menu that lacked them hid half the row.
+      ...(row?.rename
+        ? [
+            {
+              item: {
+                id: 'rename',
+                label: 'Rename',
+                icon: <PenLine size={13} aria-hidden="true" />
+              },
+              run: row.rename
+            }
+          ]
+        : []),
       ...(repair
         ? [
             {
@@ -16927,6 +17245,46 @@ export function App() {
               },
               run: () => toggleSketchVisibility(sketchId)
             }
+          ]
+        : []),
+      ...(row
+        ? [
+            {
+              item: {
+                id: 'suppression',
+                label: isFeatureSuppressed(feature) ? 'Resume' : 'Suppress',
+                icon: isFeatureSuppressed(feature) ? (
+                  <CirclePlay size={13} aria-hidden="true" />
+                ) : (
+                  <CirclePause size={13} aria-hidden="true" />
+                ),
+                section: true
+              },
+              run: () => handleToggleFeatureSuppression(feature)
+            },
+            ...(row.endOfHistory === 'marker'
+              ? [
+                  {
+                    item: {
+                      id: 'rollback',
+                      label: 'Resume full history',
+                      icon: <HistoryIcon size={13} aria-hidden="true" />
+                    },
+                    run: row.resume
+                  }
+                ]
+              : row.endOfHistory === null
+                ? [
+                    {
+                      item: {
+                        id: 'rollback',
+                        label: 'Roll back to here',
+                        icon: <HistoryIcon size={13} aria-hidden="true" />
+                      },
+                      run: row.rollBack
+                    }
+                  ]
+                : [])
           ]
         : []),
       {
@@ -16977,6 +17335,7 @@ export function App() {
     !pendingShaprImport &&
     !meshExportOpen &&
     !pendingFeatureDelete &&
+    !activeSuppressionPrompt(pendingSuppression, doc?.projectId) &&
     !pendingToolSwitch;
   exactEntryInputEnabledRef.current =
     workspaceInputEnabled && !paletteOpen && !shortcutsOpen && !namingSave;
@@ -17302,7 +17661,7 @@ export function App() {
             const leftSketch = escapeTarget(interaction) === 'exit-sketch';
             dispatchInteraction({ type: 'escape' });
             if (leftSketch) {
-              setStatus('Sketch closed · sketch edits preserved.');
+              setStatus('Sketch closed.');
             }
             return;
           }
@@ -17461,6 +17820,8 @@ export function App() {
     window.addEventListener('keydown', listener);
     return () => window.removeEventListener('keydown', listener);
   }, []);
+  // A tool's first open would otherwise wait on its card's chunk (G16).
+  useCommandCardPrefetch(doc !== null);
 
   /**
    * Projects carrying an unresolved divergence marker. Recomputed from the
@@ -17771,7 +18132,8 @@ export function App() {
     );
   const modeShortcut = (mode: WorkspaceMode) =>
     mode === modeShortcutTarget ? 'Ctrl+Shift+M' : undefined;
-  const paletteCommands: PaletteCommand[] = [
+  // No two rows share a name: a repeated one is numbered.
+  const paletteCommands = withDistinctLabels<PaletteCommand>([
     // Modeling tools leave the palette entirely in the reading workspaces
     // rather than appearing greyed out: a list of things you cannot do is
     // not a menu.
@@ -18099,7 +18461,7 @@ export function App() {
             (feature) =>
               ({
                 id: `feature-${feature.id}`,
-                label: feature.name,
+                label: featurePaletteLabel(feature.name),
                 group: 'Feature',
                 icon: <ListOrdered size={16} aria-hidden="true" />,
                 run: () => {
@@ -18132,7 +18494,7 @@ export function App() {
           )
         ]
       : [])
-  ];
+  ]);
 
   const directMode =
     tool === 'sketch' || (tool === 'transform' && movePreview !== null);
@@ -18204,7 +18566,7 @@ export function App() {
           : tool === 'fillet' || tool === 'chamfer'
             ? selectedEdges.length > 0
               ? `${selectedEdges.length} edge${selectedEdges.length === 1 ? '' : 's'} selected · Shift+Click adjusts · Enter creates`
-              : 'Click edges with Shift or choose Select all edges · Esc cancels'
+              : 'Click an edge (Shift adds more) or choose Select all edges'
             : tool === 'union' || tool === 'subtract' || tool === 'intersect'
               ? selectedBodyIds.length >= 2
                 ? `${selectedBodyIds.length} bodies picked, numbered in the viewport · Click toggles · Enter creates`
@@ -18375,10 +18737,6 @@ export function App() {
     const face = body?.topology?.faces.find(
       (candidate) => candidate.hash === holeDraft.faceHash
     );
-    const editedAnchor =
-      modelingEditFeature?.data.featureKind === 'hole'
-        ? modelingEditFeature.data.positionAnchor
-        : undefined;
     // No representation yet (a rebuild in flight) is not a refusal: wait.
     const preview: HolePreview | null = body
       ? holePreview({
@@ -18388,13 +18746,7 @@ export function App() {
           // The anchor the submission will carry: a new hole measures from
           // the area centroid when the face reports one; an edited hole
           // keeps the anchor it was drilled against.
-          anchor: modelingEditFeature
-            ? editedAnchor === 'centroid'
-              ? 'centroid'
-              : 'center'
-            : face?.geometry?.centroid
-              ? 'centroid'
-              : 'center',
+          anchor: holePositionAnchor(editedHoleAnchor(), face?.geometry),
           u: holeDraft.u,
           v: holeDraft.v,
           diameter: holeDraft.diameter,
@@ -18427,8 +18779,14 @@ export function App() {
     : null;
 
   function commandForModelingSubmission(
-    submission: ModelingOperationSubmission
+    created: ModelingOperationSubmission
   ): AnyCommand {
+    // Only ever a new feature (an edit goes through updateFeature), so the
+    // name is numbered past any feature that already carries it.
+    const submission = {
+      ...created,
+      input: { ...created.input, name: newFeatureName(created.input.name) }
+    } as ModelingOperationSubmission;
     switch (submission.operation) {
       case 'mirror':
         return commandFactories.mirrorBody(submission.input);
@@ -18443,17 +18801,17 @@ export function App() {
       case 'loft':
         return commandFactories.loftSections({
           ...submission.input,
-          bodyName: newBodyName(submission.input.name)
+          bodyName: newBodyName(created.input.name)
         });
       case 'sweep':
         return commandFactories.sweepProfile({
           ...submission.input,
-          bodyName: newBodyName(submission.input.name)
+          bodyName: newBodyName(created.input.name)
         });
       case 'helical-sweep':
         return commandFactories.helicalSweepProfile({
           ...submission.input,
-          bodyName: newBodyName(submission.input.name)
+          bodyName: newBodyName(created.input.name)
         });
       case 'draft':
         return commandFactories.draftBody(submission.input);
@@ -18535,7 +18893,8 @@ export function App() {
         signature,
         command,
         resultBodyId,
-        featureName: submission.input.name,
+        featureName:
+          (command.payload as { name?: string }).name ?? submission.input.name,
         baseVersion: current.version
       };
       return { status: 'ready' };
@@ -18820,6 +19179,7 @@ export function App() {
       onToggleFeatureSuppression={handleToggleFeatureSuppression}
       onRollbackAfterFeature={handleRollbackAfterFeature}
       onResumeHistory={handleResumeHistory}
+      onRenameFeature={handleRenameFeature}
       units={doc?.units ?? 'mm'}
       onConfigureToggle={(name, bodyIds) => {
         if (ensureCanEdit('configure an on/off parameter')) {
@@ -18896,7 +19256,7 @@ export function App() {
           setTool(null);
           setSketchEditError(null);
           setSketchDiagnosticPoints([]);
-          setStatus(`${editingSketchName} finished · sketch edits preserved.`);
+          setStatus(`${editingSketchName} finished.`);
         }}
       >
         <Check size={16} aria-hidden="true" />
@@ -18954,6 +19314,14 @@ export function App() {
   return (
     <AppShell
       workspaceRef={workspaceRef}
+      parameterDefinition={
+        doc && !parameterEditDisabledReason
+          ? {
+              has: (name) => listParameters(doc).some((p) => p.name === name),
+              define: handleDefineParameter
+            }
+          : null
+      }
       onDropFiles={(files) => void handleDroppedFiles(files)}
       sidebarWidth={sidebarWidth}
       assistantWidth={assistantWidth}
@@ -18989,12 +19357,9 @@ export function App() {
             !parameterDraftActive
           }
           exportScope={
-            selectedBody &&
-            !selectedBody.consumed &&
-            selectedBody.exportableStep
-              ? selectedBody.name
-              : null
+            selectedBodyExportable && selectedBody ? selectedBody.name : null
           }
+          exportWithheld={exportWithheldMessage}
           saveState={presentedSaveState}
           saveToAccount={
             cloudFunctionsEnabled && !!session && !activeProjectIsCloud
@@ -19096,12 +19461,9 @@ export function App() {
               !parameterModelError
             }
             exportScope={
-              selectedBody &&
-              !selectedBody.consumed &&
-              selectedBody.exportableStep
-                ? selectedBody.name
-                : null
+              selectedBodyExportable && selectedBody ? selectedBody.name : null
             }
+            exportWithheld={exportWithheldMessage}
             onPreviewParameter={handlePreviewParameter}
             onSetParameter={(name, expression) =>
               handleSetParameter(name, expression)
@@ -19144,7 +19506,9 @@ export function App() {
           <ViewerShell
             projectId={doc.projectId}
             geometryTrace={
-              !previewDoc && (currentGeometrySnapshot || exactGeometryReady)
+              !previewDoc &&
+              !currentFaceGeometryPreview &&
+              (currentGeometrySnapshot || exactGeometryReady)
                 ? {
                     projectId: doc.projectId,
                     version: doc.version,
@@ -19408,6 +19772,9 @@ export function App() {
             planePickerArmed={!modelingLocked && tool === 'sketch'}
             planePickerOffset={sketchPlaneOffset}
             holeGhost={holePreviewState?.ghost ?? null}
+            primitiveGhost={
+              tool && PRIMITIVE_TOOLS.includes(tool) ? primitiveGhost : null
+            }
             onPickPlane={startSketchOnPlane}
             onMeasurePreview={measuring ? previewMeasurement : null}
             regionHandle={modelingLocked ? null : regionHandleTarget}
@@ -19696,14 +20063,6 @@ export function App() {
                       dispatchInteraction({ type: 'clear' });
                       cancelPanel();
                     }}
-                    onDistance={(value) =>
-                      handleOpenOffsetKeypad(
-                        resolveParamValue(value, parameterScope.scope),
-                        undefined,
-                        1,
-                        distanceKeypadText(value)
-                      )
-                    }
                   />
                 ) : undefined
               }
@@ -19879,18 +20238,18 @@ export function App() {
                   cancelPanel();
                 }}
               >
-                <div className="panel-header">
-                  <div className="panel-title-row">
-                    <h2>
-                      {modelingEditFeature?.name ??
-                        TOOL_META[modelingOperation].label}
-                    </h2>
-                    <span className="panel-eyebrow">
-                      {modelingEditFeature
-                        ? CARD_EYEBROWS.edit
-                        : CARD_EYEBROWS.create}
-                    </span>
-                    {modelingEditFeature ? (
+                <CardHeader
+                  title={
+                    modelingEditFeature?.name ??
+                    TOOL_META[modelingOperation].label
+                  }
+                  eyebrow={
+                    modelingEditFeature
+                      ? CARD_EYEBROWS.edit
+                      : CARD_EYEBROWS.create
+                  }
+                  actions={
+                    modelingEditFeature ? (
                       // The same overflow every Inspector edit card has: now
                       // that selecting the feature opens this form (F19),
                       // this is where its delete is.
@@ -19911,20 +20270,14 @@ export function App() {
                           Delete feature
                         </button>
                       </PanelOverflow>
-                    ) : null}
-                    <button
-                      type="button"
-                      className="icon-button panel-close"
-                      // Closes the panel and keeps the pick; Escape (and the
-                      // form's Cancel) return to nothing selected.
-                      title="Close"
-                      aria-label="Close panel"
-                      onClick={closeFeaturePanel}
-                    >
-                      <X size={14} aria-hidden="true" />
-                    </button>
-                  </div>
-                </div>
+                    ) : null
+                  }
+                  // Closes the panel and keeps the pick; Escape (and the
+                  // form's Cancel) return to nothing selected.
+                  closeTitle="Close"
+                  closeLabel="Close panel"
+                  onClose={closeFeaturePanel}
+                />
                 <div className="panel-body">
                   {modelingEditReferenceError ? (
                     <p role="alert" className="field-error">
@@ -20003,9 +20356,10 @@ export function App() {
             ) : (
               <Inspector
                 tool={tool}
+                onPrimitiveGhostChange={setPrimitiveGhost}
                 commitError={featureFormError}
                 selectedFeature={selectedFeature}
-                documentVersion={doc.version}
+                documentVersion={editFormVersion(fieldDefinitions.current, doc)}
                 onValidateSelection={validateSelectionEdit}
                 selectedSketch={selectedSketch}
                 selectedSketchObject={selectedSketchObject}
@@ -20058,28 +20412,38 @@ export function App() {
                   handleSelectTopologyFromViewer(edge, true)
                 }
                 onCreateRevolve={(value) => {
+                  const name = newFeatureName(value.name);
                   const command = commandFactories.revolveSketch({
                     ...value,
+                    name,
                     bodyName: newBodyName(value.name)
                   });
                   createValidatedFeature(
                     command,
-                    value.name,
+                    name,
                     command.payload.ids?.bodyId
                   );
                 }}
                 onCreateBoolean={(value) => {
-                  const command = commandFactories.booleanBodies(value);
+                  const name = newFeatureName(value.name);
+                  // A union or intersect result is named for itself
+                  // ("Union 1"); a subtract keeps its base body's name.
+                  const command = commandFactories.booleanBodies({
+                    ...value,
+                    name,
+                    bodyName: newBodyName(value.name)
+                  });
                   createValidatedFeature(
                     command,
-                    value.name,
+                    name,
                     command.payload.ids?.bodyId
                   );
                 }}
-                onCreateTransform={(value) =>
+                onCreateTransform={(value) => {
+                  const name = newFeatureName(value.name);
                   createValidatedFeature(
                     commandFactories.transformBody({
-                      name: value.name,
+                      name,
                       targetBodyId: value.targetBodyId,
                       translation: value.translation,
                       rotationDeg: value.rotationDeg,
@@ -20087,21 +20451,25 @@ export function App() {
                         ? { scale: value.scale }
                         : {})
                     }),
-                    value.name,
+                    name,
                     value.targetBodyId
-                  )
-                }
+                  );
+                }}
                 onPreviewEdgeModifier={previewEdgeForm}
                 onEdgeModifierSize={setEdgeFormSize}
                 onCreateEdgeModifier={(kind, value) =>
                   applyEdgeForm(null, kind, value)
                 }
                 onCreatePattern={(value) => {
-                  const command = commandFactories.patternBody(value);
+                  const name = newFeatureName(value.name);
+                  const command = commandFactories.patternBody({
+                    ...value,
+                    name
+                  });
                   const resultBodyId = command.payload.ids?.bodyId;
                   if (resultBodyId)
                     runPattern(command, {
-                      featureName: value.name,
+                      featureName: name,
                       resultBodyId,
                       successMessage: commandOutcomeMessage(command.label),
                       onSuccess: finishFeatureCreation
@@ -20160,9 +20528,12 @@ export function App() {
                       })
                     );
                   }
-                  if (executeTransaction(`Edit ${value.name}`, commands)) {
-                    finishFeatureEdit(feature, editSession);
-                  }
+                  applySketchHistoryEdit(
+                    feature,
+                    editSession,
+                    `Edit ${value.name}`,
+                    commands
+                  );
                 }}
                 onConvertSketchToFixedPlane={(sketch) => {
                   const planeRef = fixedPlaneRefForLegacyAttachment(
@@ -20215,9 +20586,12 @@ export function App() {
                       })
                     );
                   }
-                  if (executeTransaction(`Edit ${value.name}`, commands)) {
-                    finishFeatureEdit(feature, editSession);
-                  }
+                  applySketchHistoryEdit(
+                    feature,
+                    editSession,
+                    `Edit ${value.name}`,
+                    commands
+                  );
                 }}
                 onEditModelingFeature={openModelingFeatureEditor}
                 onEditSketchInViewport={(feature) => {
@@ -20588,6 +20962,25 @@ export function App() {
               }}
             />
           )}
+          {pendingSuppression &&
+            activeSuppressionPrompt(pendingSuppression, doc?.projectId) && (
+              <SuppressFeatureDialog
+                name={pendingSuppression.name}
+                dependents={pendingSuppression.dependents.map(
+                  (dependent) => dependent.name
+                )}
+                onCancel={() => setPendingSuppression(null)}
+                onSuppressAll={() => {
+                  const { featureId, name, dependents } = pendingSuppression;
+                  setPendingSuppression(null);
+                  suppressBranch(
+                    featureId,
+                    name,
+                    dependents.map((dependent) => dependent.featureId)
+                  );
+                }}
+              />
+            )}
           {pendingToolSwitch && doc && (
             <UnappliedCardDialog
               card="Move"
@@ -20660,9 +21053,7 @@ export function App() {
           {meshExportOpen && doc && exportBodyIds.length > 0 && (
             <ExportDialog
               scopeLabel={
-                selectedBody &&
-                !selectedBody.consumed &&
-                selectedBody.exportableStep
+                selectedBodyExportable && selectedBody
                   ? selectedBody.name
                   : `all bodies (${exportBodyIds.length})`
               }

@@ -1,14 +1,9 @@
 import { createRef } from 'react';
-import { act, fireEvent, render, screen } from '@testing-library/react';
+import { act, render, screen } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { describe, expect, it, vi } from 'vitest';
 import { toBodyId, toSketchId, type ParamValue } from '@openzcad/shared';
-import {
-  ExtrudeForm,
-  distanceKeypadText,
-  reversedDistance
-} from './ExtrudeForm';
-import { NumericKeypad } from '../NumericKeypad';
+import { ExtrudeForm, reversedDistance } from './ExtrudeForm';
 
 const sketchId = toSketchId('layout');
 const bodies = [{ bodyId: toBodyId('plate'), name: 'Mounting plate' }];
@@ -26,13 +21,11 @@ describe('shared extrusion editor', () => {
     const user = userEvent.setup();
     const onSubmit = vi.fn();
     const onPreview = vi.fn();
-    const onDistance = vi.fn();
     render(
       <ExtrudeForm
         {...base}
         onSubmit={onSubmit}
         onPreview={onPreview}
-        onDistance={onDistance}
         onCancel={vi.fn()}
       />
     );
@@ -52,8 +45,6 @@ describe('shared extrusion editor', () => {
         choice: { operation: 'cut', targetBodyId: 'plate' }
       })
     );
-    await user.click(screen.getByRole('button', { name: 'Distance…' }));
-    expect(onDistance).toHaveBeenCalledExactlyOnceWith('-thickness');
     await user.click(input);
     await user.keyboard('{Enter}');
     expect(onSubmit).toHaveBeenCalledExactlyOnceWith(
@@ -239,47 +230,20 @@ describe('zero-distance extrude', () => {
   });
 });
 
-describe('Distance… exact entry', () => {
+describe('direction', () => {
   /*
-    The keypad opened on the resolved number rounded to two decimals, and
-    Enter (which its hint offers) applied that: Distance 10/3 became a
-    3.33 mm extrude and lost its expression.
+    The 11 Oct 2026 review (G8) found three ways to flip an extrusion: the
+    distance's sign, Reverse direction, and a "Distance…" button that only
+    reopened the same number in the exact-entry keypad. The sign is the
+    direction and Reverse is the one control that flips it.
   */
-  it('opens the keypad on the distance as the form holds it', () => {
-    expect(distanceKeypadText('10/3')).toBe('10/3');
-    expect(distanceKeypadText('-thickness')).toBe('-thickness');
-    expect(distanceKeypadText(12.345)).toBe('12.345');
-    expect(distanceKeypadText(-8)).toBe('-8');
-    // Zero opens empty, so the first key types the value.
-    expect(distanceKeypadText(0)).toBe('');
-    expect(distanceKeypadText('')).toBe('');
-  });
-
-  it('re-commits that prefill as the expression, not a rounding of it', () => {
-    const onCommit = vi.fn<(value: number, raw: string) => void>();
-    render(
-      <NumericKeypad
-        request={{
-          kind: 'offset',
-          label: 'Distance',
-          initial: distanceKeypadText('10/3'),
-          unitKind: 'length'
-        }}
-        units="mm"
-        scope={{}}
-        anchorRef={{ current: null }}
-        onPreview={vi.fn()}
-        onCommit={onCommit}
-        onCancel={vi.fn()}
-      />
-    );
-    const field = screen.getByRole('textbox', { name: 'Distance' });
-    expect(field).toHaveValue('10/3');
-    fireEvent.keyDown(field, { key: 'Enter' });
-    expect(onCommit).toHaveBeenCalledOnce();
-    const [value, raw] = onCommit.mock.calls[0]!;
-    expect(value).toBeCloseTo(10 / 3, 9);
-    expect(raw).toBe('10/3');
+  it('offers the signed distance and one flip control, nothing else', () => {
+    render(<ExtrudeForm {...base} onSubmit={vi.fn()} onCancel={vi.fn()} />);
+    expect(screen.getByRole('textbox', { name: 'Distance' })).toHaveValue('-8');
+    expect(
+      screen.getAllByRole('button', { name: /reverse|direction|distance/i })
+    ).toEqual([screen.getByRole('button', { name: 'Reverse direction' })]);
+    expect(screen.queryByRole('button', { name: /Distance…/ })).toBeNull();
   });
 });
 

@@ -5,12 +5,16 @@ import {
   replayCommands
 } from '@openzcad/command-system';
 import {
+  createBodyFeatureIds,
   createProjectDocument,
   listNodesByKind
 } from '@openzcad/document-core';
 import {
+  BODY_COLOR_CHOSEN_METADATA_KEY,
   BODY_COLOR_METADATA_KEY,
   BODY_OPACITY_METADATA_KEY,
+  DEFAULT_BODY_COLOR,
+  featureColor,
   toUserId
 } from '@openzcad/shared';
 import {
@@ -171,5 +175,91 @@ describe('body appearance', { timeout: 30_000 }, () => {
     expect(
       derived.bodyRepresentations[bodyNode.bodyId]?.opacity
     ).toBeUndefined();
+  });
+
+  it('draws every body in one colour, whatever operation made it (G2)', async () => {
+    const manager = new CommandManager(
+      createProjectDocument('One colour', toUserId('user_one_colour'))
+    );
+    const plate = createBodyFeatureIds();
+    const flange = createBodyFeatureIds();
+    const union = createBodyFeatureIds();
+    manager.execute(
+      commandFactories.addPrimitive({
+        name: 'Plate',
+        primitiveKind: 'box',
+        dimensions: { width: 40, height: 20, depth: 5 },
+        ids: plate
+      })
+    );
+    let derived = await kernel.syncDocument(manager.document);
+    expect(derived.bodyRepresentations[plate.bodyId]?.color).toBe(
+      DEFAULT_BODY_COLOR
+    );
+
+    manager.execute(
+      commandFactories.addPrimitive({
+        name: 'Flange',
+        primitiveKind: 'box',
+        dimensions: { width: 40, height: 5, depth: 20 },
+        ids: flange
+      })
+    );
+    manager.execute(
+      commandFactories.booleanBodies({
+        name: 'Union',
+        operation: 'union',
+        targetBodyIds: [plate.bodyId, flange.bodyId],
+        ids: union
+      })
+    );
+    // The document still stamps the union's legend colour on its body...
+    const unionNode = listNodesByKind(manager.document, 'body').find(
+      (body) => body.bodyId === union.bodyId
+    );
+    expect(unionNode?.metadata?.[BODY_COLOR_METADATA_KEY]).toBe(
+      featureColor('boolean')
+    );
+    // ...but the part is drawn as it was before the union, not in it.
+    derived = await kernel.syncDocument(manager.document);
+    expect(derived.bodyRepresentations[union.bodyId]?.color).toBe(
+      DEFAULT_BODY_COLOR
+    );
+
+    // A colour someone chose is drawn, even when it is that very stamp.
+    manager.execute(
+      commandFactories.setNodeMetadata(
+        {
+          nodeId: unionNode!.id,
+          metadata: {
+            [BODY_COLOR_METADATA_KEY]: featureColor('boolean'),
+            [BODY_COLOR_CHOSEN_METADATA_KEY]: true
+          }
+        },
+        'Set Union appearance'
+      )
+    );
+    derived = await kernel.syncDocument(manager.document);
+    expect(derived.bodyRepresentations[union.bodyId]?.color).toBe(
+      featureColor('boolean')
+    );
+
+    // Reset clears the choice, and the default returns.
+    manager.execute(
+      commandFactories.setNodeMetadata(
+        {
+          nodeId: unionNode!.id,
+          metadata: {
+            [BODY_COLOR_METADATA_KEY]: null,
+            [BODY_COLOR_CHOSEN_METADATA_KEY]: null
+          }
+        },
+        'Reset Union appearance'
+      )
+    );
+    derived = await kernel.syncDocument(manager.document);
+    expect(derived.bodyRepresentations[union.bodyId]?.color).toBe(
+      DEFAULT_BODY_COLOR
+    );
   });
 });

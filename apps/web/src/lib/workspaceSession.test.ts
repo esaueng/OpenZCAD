@@ -6,7 +6,8 @@ import {
   loadProjectView,
   rememberActiveProject,
   rekeyWorkspaceProject,
-  saveProjectView
+  saveProjectView,
+  snapshotActiveProject
 } from './workspaceSession';
 
 class MemoryStorage {
@@ -56,6 +57,90 @@ describe('workspace session persistence', () => {
 
     expect(loadActiveProjectId(storage)).toBeNull();
     expect(loadProjectView('project-1', storage)).toEqual(view);
+  });
+
+  it('keeps a pointer written after the open began', () => {
+    const storage = new MemoryStorage();
+    rememberActiveProject('previous', storage);
+    const openBegan = snapshotActiveProject(storage);
+    // Another tab, or a test seeding the session, records a newer choice
+    // while the open is still awaiting storage.
+    rememberActiveProject('newer', storage);
+    saveProjectView('newer', view, storage);
+
+    expect(rememberActiveProject('opened', storage, openBegan)).toBe(false);
+
+    expect(loadActiveProjectId(storage)).toBe('newer');
+    expect(loadProjectView('newer', storage)).toEqual(view);
+  });
+
+  it('keeps a pointer rewritten to the id it held when the open began', () => {
+    const storage = new MemoryStorage();
+    rememberActiveProject('a', storage);
+    const openBegan = snapshotActiveProject(storage);
+    rememberActiveProject('b', storage);
+    rememberActiveProject('a', storage);
+
+    expect(rememberActiveProject('c', storage, openBegan)).toBe(false);
+    expect(loadActiveProjectId(storage)).toBe('a');
+
+    const homeBegan = snapshotActiveProject(storage);
+    clearActiveProject(storage);
+    const homeAgain = snapshotActiveProject(storage);
+    clearActiveProject(storage);
+
+    expect(rememberActiveProject('c', storage, homeBegan)).toBe(false);
+    expect(rememberActiveProject('c', storage, homeAgain)).toBe(false);
+    expect(loadActiveProjectId(storage)).toBeNull();
+  });
+
+  it('clears only a pointer that has not moved since the snapshot', () => {
+    const storage = new MemoryStorage();
+    rememberActiveProject('missing', storage);
+    const restoreBegan = snapshotActiveProject(storage);
+    rememberActiveProject('newer', storage);
+
+    expect(clearActiveProject(storage, restoreBegan)).toBe(false);
+    expect(loadActiveProjectId(storage)).toBe('newer');
+
+    const unchanged = snapshotActiveProject(storage);
+    expect(clearActiveProject(storage, unchanged)).toBe(true);
+    expect(loadActiveProjectId(storage)).toBeNull();
+  });
+
+  it('keeps a pointer seeded by a writer that knows no revision', () => {
+    const storage = new MemoryStorage();
+    const openBegan = snapshotActiveProject(storage);
+    storage.setItem(
+      WORKSPACE_SESSION_STORAGE_KEY,
+      JSON.stringify({ version: 1, activeProjectId: 'seeded', views: {} })
+    );
+
+    expect(rememberActiveProject('opened', storage, openBegan)).toBe(false);
+    expect(loadActiveProjectId(storage)).toBe('seeded');
+  });
+
+  it('records the open when the pointer has not moved since it began', () => {
+    const storage = new MemoryStorage();
+    const fromEmpty = snapshotActiveProject(storage);
+    expect(rememberActiveProject('first', storage, fromEmpty)).toBe(true);
+    expect(loadActiveProjectId(storage)).toBe('first');
+
+    const openBegan = snapshotActiveProject(storage);
+    // Camera writes touch the session but not the pointer.
+    saveProjectView('first', view, storage);
+    expect(rememberActiveProject('second', storage, openBegan)).toBe(true);
+    expect(loadActiveProjectId(storage)).toBe('second');
+
+    const cleared = snapshotActiveProject(storage);
+    rememberActiveProject('third', storage);
+    const newerOpen = snapshotActiveProject(storage);
+    // A pointer that already names this project is not a conflict, and is
+    // not rewritten: a newer open's snapshot must stay current.
+    expect(rememberActiveProject('third', storage, cleared)).toBe(true);
+    expect(snapshotActiveProject(storage)).toEqual(newerOpen);
+    expect(rememberActiveProject('fourth', storage, newerOpen)).toBe(true);
+    expect(loadActiveProjectId(storage)).toBe('fourth');
   });
 
   it('fails closed when browser storage is unavailable', () => {

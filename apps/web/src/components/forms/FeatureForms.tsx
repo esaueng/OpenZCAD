@@ -1,6 +1,6 @@
 import { useEffect, useMemo, useRef, useState, type ReactNode } from 'react';
 import { X } from 'lucide-react';
-import { coerceParamValue } from '@openzcad/document-core';
+import { coerceParamValue, type FieldQuantity } from '@openzcad/document-core';
 import {
   FULL_REVOLVE_ANGLE_DEG,
   MAX_SKETCH_POLYGON_SIDES,
@@ -17,6 +17,7 @@ import {
   type SketchId,
   type SketchObjectData,
   type SketchObjectKind,
+  type UnitSystem,
   type VariableFilletLaw
 } from '@openzcad/shared';
 import { ExprInput } from '../ExprInput';
@@ -24,6 +25,11 @@ import { edgeModifierSliderRange } from '../../lib/edgeModifierEdit';
 import { useFieldAutoFocus } from './fieldAutoFocus';
 import { isPickListRow } from './pickListRow';
 import { PRIMITIVE_ANCHORS } from '../../lib/primitivePlacement';
+import {
+  primitiveGhostFor,
+  type PrimitiveGhost
+} from '../../lib/primitiveGhost';
+import { ownedTopologyName } from '../../lib/topologyLabels';
 import { TextObjectFields, type TextAttributes } from '../TextObjectFields';
 import {
   PLANE_LABELS,
@@ -154,8 +160,12 @@ function FormShell({
   );
 }
 
-function fieldsValid(scope: Record<string, number>, values: string[]): boolean {
-  return values.every((value) => previewExpression(value, scope).ok);
+function fieldsValid(
+  scope: Record<string, number>,
+  values: string[],
+  quantity?: FieldQuantity
+): boolean {
+  return values.every((value) => previewExpression(value, scope, quantity).ok);
 }
 
 /**
@@ -248,6 +258,12 @@ const PRIMITIVE_FIELDS: Record<
 interface PrimitiveFormProps {
   kind: PrimitiveKind;
   scope: Record<string, number>;
+  /**
+   * The document's units. Every primitive field — each size and the anchor
+   * position — is a length, so a suffixed value such as `1 in + 25.4 mm`
+   * previews, validates and builds in these units, and an angle is refused.
+   */
+  documentUnits: UnitSystem;
   initialName: string;
   initialDimensions?: Record<string, ParamValue>;
   /** Where the anchor point sits now; absent means the origin. */
@@ -259,6 +275,12 @@ interface PrimitiveFormProps {
     position: ParametricVector3
   ): void;
   onCancel?: () => void;
+  /**
+   * The card's values as a ghost, on every change that moves it, so the
+   * viewport can draw the primitive before Create; null while a field does
+   * not resolve to a size that builds, and when the card closes.
+   */
+  onGhostChange?: (ghost: PrimitiveGhost | null) => void;
 }
 
 const POSITION_AXES = ['x', 'y', 'z'] as const;
@@ -266,15 +288,18 @@ const POSITION_AXES = ['x', 'y', 'z'] as const;
 export function PrimitiveForm({
   kind,
   scope,
+  documentUnits,
   initialName,
   initialDimensions,
   initialPosition,
   submitLabel,
   onSubmit,
-  onCancel
+  onCancel,
+  onGhostChange
 }: PrimitiveFormProps) {
   const fields = PRIMITIVE_FIELDS[kind];
   const anchor = PRIMITIVE_ANCHORS[kind];
+  const length = { documentUnits, dimension: 'length' } as const;
   const [name, setName] = useState(initialName);
   const documentValues = Object.fromEntries(
     fields.map((field) => [
@@ -316,7 +341,7 @@ export function PrimitiveForm({
 
   const dimensionErrors = Object.fromEntries(
     fields.map((field) => {
-      const preview = previewExpression(values[field.key] ?? '', scope);
+      const preview = previewExpression(values[field.key] ?? '', scope, length);
       const allowsZero = kind === 'cone' && field.key !== 'height';
       const invalid =
         preview.ok &&
@@ -335,8 +360,8 @@ export function PrimitiveForm({
   );
   if (
     kind === 'cone' &&
-    previewExpression(values.bottomRadius ?? '', scope).value === 0 &&
-    previewExpression(values.topRadius ?? '', scope).value === 0
+    previewExpression(values.bottomRadius ?? '', scope, length).value === 0 &&
+    previewExpression(values.topRadius ?? '', scope, length).value === 0
   ) {
     dimensionErrors.bottomRadius =
       'At least one radius must be greater than zero.';
@@ -352,13 +377,30 @@ export function PrimitiveForm({
     POSITION_AXES.every(
       (axis) => position[axis].trim() === documentPosition[axis]
     );
+  // Keyed on the resolved numbers, so a keystroke that leaves the value the
+  // same (`30` → `30.`, `w` while w = 30) does not rebuild the ghost.
+  const ghost = onGhostChange
+    ? primitiveGhostFor(kind, values, position, scope, documentUnits)
+    : null;
+  const ghostKey = ghost ? JSON.stringify(ghost) : null;
+  const ghostCallback = useRef(onGhostChange);
+  ghostCallback.current = onGhostChange;
+  useEffect(() => {
+    ghostCallback.current?.(
+      ghostKey ? (JSON.parse(ghostKey) as PrimitiveGhost) : null
+    );
+  }, [ghostKey]);
+  // Create, Cancel and Escape all close the card: the ghost goes with it.
+  useEffect(() => () => ghostCallback.current?.(null), []);
+
   const canSubmit =
     !unchanged &&
     name.trim().length > 0 &&
-    fieldsValid(scope, [
-      ...Object.values(values),
-      ...Object.values(position)
-    ]) &&
+    fieldsValid(
+      scope,
+      [...Object.values(values), ...Object.values(position)],
+      length
+    ) &&
     Object.values(dimensionErrors).every((error) => !error);
 
   return (
@@ -391,6 +433,7 @@ export function PrimitiveForm({
           label={field.label}
           value={values[field.key] ?? ''}
           scope={scope}
+          quantity={length}
           autoFocus={index === 0}
           error={dimensionErrors[field.key]}
           onChange={(value) =>
@@ -412,6 +455,7 @@ export function PrimitiveForm({
               label={`${anchor.label} ${axis.toUpperCase()}`}
               value={position[axis]}
               scope={scope}
+              quantity={length}
               onChange={(value) =>
                 setPosition((current) => ({ ...current, [axis]: value }))
               }
@@ -1073,9 +1117,7 @@ export function BooleanForm({
         </select>
       </label>
       <div className="field">
-        <span>
-          Bodies (numbered in the viewport · pick order sets the base)
-        </span>
+        <span>Bodies (numbered as you pick · the first is the base)</span>
         <div className="pick-list">
           {selectable.length === 0 && (
             <p className="muted">No bodies available.</p>
@@ -1313,9 +1355,11 @@ interface EdgeModifierFormProps {
   onClearEdges?: () => void;
   /**
    * The edges in `edgeHashes`, named, in order. A count alone ("2 exact
-   * edges selected") left the user to guess which two.
+   * edges selected") left the user to guess which two. `owner` is the body
+   * the edge is on: a row reads "Box 1 · Front · Top edge", as the viewport
+   * tag does, and a long owner is what gets cut short, never the edge.
    */
-  edgeRows?: readonly { hash: number; label: string }[];
+  edgeRows?: readonly { hash: number; label: string; owner?: string }[];
   /** Takes one edge off; absent, the rows carry no remove button. */
   onRemoveEdge?(hash: number): void;
   initial?: {
@@ -1511,7 +1555,7 @@ export function EdgeModifierForm({
     >
       <div className="selection-summary">
         {edgeHashes.length > 0
-          ? `${edgeHashes.length} exact edge${edgeHashes.length === 1 ? '' : 's'} selected`
+          ? `${edgeHashes.length} edge${edgeHashes.length === 1 ? '' : 's'} selected`
           : targetBodyId
             ? 'Select edges in the viewport or select every edge below.'
             : // Not "select a body or edge": arming this tool narrows picking
@@ -1525,30 +1569,43 @@ export function EdgeModifierForm({
           className="edge-pick-list"
           aria-label={kind === 'fillet' ? 'Filleted edges' : 'Chamfered edges'}
         >
-          {edgeRows.map((row, index) => (
-            <li key={row.hash} className="edge-pick-row">
-              <span className="pick-order mono">{index + 1}</span>
-              <span className="edge-pick-name">{row.label}</span>
-              {onRemoveEdge && (
-                <button
-                  type="button"
-                  className="edge-pick-remove"
-                  aria-label={`Remove ${index + 1} ${row.label}`}
-                  title={
-                    edgeRows.length === 1
-                      ? `A ${kind} needs at least one edge`
-                      : 'Remove this edge'
-                  }
-                  disabled={edgeRows.length === 1}
-                  onClick={() => {
-                    onRemoveEdge(row.hash);
-                  }}
-                >
-                  <X size={12} aria-hidden="true" />
-                </button>
-              )}
-            </li>
-          ))}
+          {edgeRows.map((row, index) => {
+            const fullName =
+              row.owner !== undefined
+                ? ownedTopologyName(row.owner, row.label)
+                : row.label;
+            return (
+              <li key={row.hash} className="edge-pick-row">
+                <span className="pick-order mono">{index + 1}</span>
+                <span className="edge-pick-name" title={fullName}>
+                  {row.owner !== undefined && (
+                    <span className="edge-pick-owner">
+                      {ownedTopologyName(row.owner, '')}
+                    </span>
+                  )}
+                  <span className="edge-pick-entity">{row.label}</span>
+                </span>
+                {onRemoveEdge && (
+                  <button
+                    type="button"
+                    className="edge-pick-remove"
+                    aria-label={`Remove ${index + 1} ${fullName}`}
+                    title={
+                      edgeRows.length === 1
+                        ? `A ${kind} needs at least one edge`
+                        : 'Remove this edge'
+                    }
+                    disabled={edgeRows.length === 1}
+                    onClick={() => {
+                      onRemoveEdge(row.hash);
+                    }}
+                  >
+                    <X size={12} aria-hidden="true" />
+                  </button>
+                )}
+              </li>
+            );
+          })}
         </ol>
       )}
       {targetBodyId &&

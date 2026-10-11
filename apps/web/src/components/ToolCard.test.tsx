@@ -9,6 +9,7 @@ describe('ToolCard', () => {
     const model = {
       icon: 'fillet' as const,
       title: 'Fillet',
+      eyebrow: 'create' as const,
       hint: 'Drag the handle.',
       phase: 'armed' as const
     };
@@ -40,6 +41,7 @@ describe('ToolCard', () => {
         model={{
           icon: 'offset-face',
           title: 'Offset Face',
+          eyebrow: 'direct',
           hint: 'Drag the arrow to offset the face.',
           badge: {
             label: 'Geometry-anchored',
@@ -66,6 +68,7 @@ describe('ToolCard', () => {
         model={{
           icon: 'offset-face',
           title: 'Offset Face',
+          eyebrow: 'direct',
           hint: 'Drag the arrow to offset the face.',
           phase: 'dragging',
           badge: {
@@ -106,6 +109,7 @@ describe('ToolCard', () => {
         model={{
           icon: 'offset-face',
           title: 'Offset Face',
+          eyebrow: 'direct',
           hint: 'Drag the arrow to offset the face.',
           phase: 'armed',
           actions: [
@@ -154,6 +158,7 @@ describe('ToolCard', () => {
         model={{
           icon: 'fillet',
           title: 'Fillet',
+          eyebrow: 'create',
           hint: 'Adjust the value and try again.',
           phase: 'failed',
           error: {
@@ -196,6 +201,7 @@ describe('ToolCard', () => {
         model={{
           icon: 'offset-face',
           title: 'Offset Face',
+          eyebrow: 'direct',
           hint: 'Adjust the value and try again.',
           phase: 'failed',
           error: { message: 'The offset removed the whole body.' }
@@ -214,6 +220,7 @@ describe('ToolCard', () => {
         model={{
           icon: 'offset-face',
           title: 'Offset Face',
+          eyebrow: 'direct',
           hint: 'Adjust the value and try again.',
           phase: 'failed',
           error: { message: 'The offset removed the whole body.' }
@@ -236,6 +243,7 @@ describe('pending extrusion cancellation', () => {
         model={{
           icon: 'extrude',
           title: 'Extrude',
+          eyebrow: 'create',
           hint: 'Checking geometry…',
           phase: 'validating'
         }}
@@ -251,23 +259,77 @@ describe('pending extrusion cancellation', () => {
 });
 
 describe('validating indicator', () => {
-  it('runs the orbit ring only while validating and keeps the glyph as-is', () => {
+  it('runs the orbit ring in the badge only while validating', () => {
     const model = {
       icon: 'fillet' as const,
       title: 'Edit Fillet',
+      eyebrow: 'edit' as const,
       hint: 'Checking geometry…'
     };
     const { container, rerender } = render(
       <ToolCard model={{ ...model, phase: 'validating' }} onClose={vi.fn()} />
     );
-    const icon = container.querySelector('.tool-card-icon')!;
-    expect(icon.querySelector('.tool-card-orbit')).not.toBeNull();
-    expect(icon.querySelectorAll('svg')).toHaveLength(2);
+    const badge = container.querySelector('.tool-card-phase')!;
+    expect(badge).toHaveTextContent('Validating');
+    expect(badge.querySelector('.tool-card-orbit')).not.toBeNull();
 
     rerender(
-      <ToolCard model={{ ...model, phase: 'armed' }} onClose={vi.fn()} />
+      <ToolCard model={{ ...model, phase: 'failed' }} onClose={vi.fn()} />
     );
-    expect(icon.querySelector('.tool-card-orbit')).toBeNull();
-    expect(icon.querySelectorAll('svg')).toHaveLength(1);
+    expect(container.querySelector('.tool-card-orbit')).toBeNull();
+  });
+});
+
+describe('header', () => {
+  /*
+    The 11 Oct 2026 review (G8): the region Extrude card drew an icon tile, a
+    "Ready" badge, a subtitle and a bare ×, while the Box, Hole, Fillet and
+    Union cards beside it wore a title, an eyebrow and a boxed close button.
+  */
+  it('wears the command-card header: title, eyebrow and the shared close', async () => {
+    const onClose = vi.fn();
+    const { container } = render(
+      <ToolCard
+        model={{
+          icon: 'extrude',
+          title: 'Extrude',
+          eyebrow: 'create',
+          hint: 'Drag the region to pull it into a solid.',
+          phase: 'armed'
+        }}
+        onClose={onClose}
+      />
+    );
+    const card = screen.getByRole('region', { name: 'Extrude operation' });
+    expect(card.querySelector('.panel-header h2')).toHaveTextContent('Extrude');
+    expect(card.querySelector('.panel-eyebrow')).toHaveTextContent(
+      'New feature'
+    );
+    const close = screen.getByRole('button', { name: 'Dismiss Extrude' });
+    expect(close).toHaveClass('icon-button', 'panel-close');
+    await userEvent.click(close);
+    expect(onClose).toHaveBeenCalledOnce();
+    // Armed is the resting state: no "Ready" badge says so, and no icon
+    // tile stands before the title.
+    expect(screen.queryByText('Ready')).toBeNull();
+    expect(container.querySelector('.tool-card-phase')).toBeNull();
+    expect(container.querySelector('.tool-card-icon')).toBeNull();
+  });
+
+  it.each([
+    ['direct', 'Direct edit'],
+    ['edit', 'Edit feature']
+  ] as const)('names a %s card with its eyebrow', (eyebrow, text) => {
+    render(
+      <ToolCard
+        model={{ icon: 'offset-face', title: 'Offset Face', eyebrow, hint: '' }}
+        onClose={vi.fn()}
+      />
+    );
+    expect(
+      screen
+        .getByRole('region', { name: 'Offset Face operation' })
+        .querySelector('.panel-eyebrow')
+    ).toHaveTextContent(text);
   });
 });
