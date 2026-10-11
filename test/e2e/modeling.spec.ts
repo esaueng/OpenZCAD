@@ -2248,7 +2248,7 @@ test('grounds an AI fillet request onto every selected edge', async ({
   await expect(page.getByRole('contentinfo')).toContainText('warnings0');
   await expect(promptField(page)).toHaveAttribute(
     'placeholder',
-    'Ask about the model, or / for a command'
+    'Search commands or ask about the model'
   );
   await expect(page.getByRole('button', { name: 'Deselect all' })).toHaveCount(
     0
