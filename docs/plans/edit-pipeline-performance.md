@@ -218,3 +218,22 @@ volumes. Its cause remains unexplained; no assertion or timeout was changed.
 Browser assertions are updated but have not run locally because the Chromium
 download was blocked by the network policy (HTTP 403). Hosted CI and
 target-device input-to-frame measurements remain necessary.
+
+### Face-preview follow-up, 2026-10-11
+
+The follow-up keeps one exact geometry request running during continuous input
+and retains only the newest pending value, with a 100 ms minimum start interval.
+It removes the previous complete-analysis cost prediction from these disposable
+frames; stop/release/cancel still invalidate obsolete work. A bounded,
+source-checked gesture cache avoids rebuilding a return to the live running
+value or one completed frame. Geometry-only results remain ephemeral, and
+Apply still requires complete authoritative analysis.
+
+Tangent planar-neighbour discovery now restricts candidates using the existing
+synchronous edge-incidence memo, preserving solid traversal order and all exact
+checks. Ownership coverage also detaches a published mesh and verifies live
+analysis/cache buffers. The
+[qualification report](../qa/2026-10-11/face-drag-responsiveness.md) distinguishes
+same-`2026.1.45` application comparisons, separate Remus `2026.1.46` →
+`2026.1.52` measurements, and final combined-package validation. Timings and
+target-device conclusions require their recorded evidence.
