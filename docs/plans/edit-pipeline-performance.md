@@ -165,3 +165,56 @@ HISTORY_COUNTS=33 HISTORY_SESSION=2000 HISTORY_FILTER=boxes \
   pnpm exec vitest run --config test/perf/history-cache.config.ts \
   --reporter=verbose --silent=false
 ```
+
+## Geometry-only face-drag previews
+
+Live broadcasts already publish accepted geometry before completing analysis.
+Explicit offset/radius drag frames previously called `syncOnce`, which waited
+for volume and imported-feature recognition before the preview appeared.
+
+These frames now call a distinct `previewGeometry` adapter/worker API. It runs
+the same exact builders, tessellation, topology and validation, then returns an
+owned `GeometryReadyState` before queued completion analysis. Builder safety
+checks still run, including any measurements they require. The response carries
+no volume or mass properties and never enters the complete-result cache or
+creates a mass-query epoch. Refusals/warnings are retained and judged by the
+existing preview acceptance rules. Modeling tolerances and deflections are
+unchanged.
+
+The viewport owns a separate ephemeral face-preview state, gated by base
+project/version and selected operation. Measurements, export actions and the
+Inspector do not substitute the base body's quantities for the displayed
+preview. Superseding pointer values coalesce and abort obsolete queued/running
+frames at the existing worker task boundaries; cancel and release invalidate
+late results. A single synchronous WASM call still finishes before cancellation
+is observed. Completed geometry-frame timings, excluding cancellations,
+replace the old complete-analysis prediction for later gestures.
+
+Release may retain the matching candidate's feature IDs, but always asks for
+a complete `syncOnce` result. Only that authoritative result can pass the
+commit gate and enter history. Full blend/extrude previews retain their existing
+complete-result reuse behavior.
+
+Regression coverage exercises absent quantities, buffer isolation, validation
+warnings, cancellation, geometry-only request routing and subsequent full
+completion. Imported analytic-fillet face moves match independent full meshes,
+bounds and volume. The existing NURBS-fillet fixture's unsupported adjacent
+NURBS move retains the same refusal as full rebuilding; this scheduling change
+does not broaden kernel geometry support. The existing browser preview flow
+now asserts geometry-only requests while dragging and full analysis on Apply.
+These checks do not establish an input-to-frame speedup on target hardware.
+
+Local verification on 2026-10-10: lint and typecheck pass; the unchanged
+full `pnpm test` passes on an idle cloud host with two workers: 4,040 root tests
+(eight skips) and 2,364 web tests. All 182 parity tests pass (one skip), and the
+production build passes the unchanged bundle/provenance budgets.
+
+Earlier root attempts exceeded the existing sequential-fillets 60 s limit,
+also reproduced at 62.1 s on untouched base `569cebf`. One attempt reported a
+normalized cache-volume signature mismatch after direct scalar comparisons
+passed. It did not recur in the final full suite or 16 diagnostic repetitions
+per revision, which showed plain numeric properties and correct raw/native box
+volumes. Its cause remains unexplained; no assertion or timeout was changed.
+Browser assertions are updated but have not run locally because the Chromium
+download was blocked by the network policy (HTTP 403). Hosted CI and
+target-device input-to-frame measurements remain necessary.

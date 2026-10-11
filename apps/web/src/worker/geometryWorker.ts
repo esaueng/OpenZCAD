@@ -59,6 +59,11 @@ export type GeometryBinaryExportFormat = Extract<
 
 export type GeometryWorkerRequest =
   | {
+      type: 'preview-geometry';
+      document: ProjectDocument;
+      requestId: string;
+    }
+  | {
       type: 'sync';
       document: ProjectDocument;
       requestId?: string;
@@ -294,6 +299,18 @@ export type GeometryRecognizeImportedFaceResult =
 
 export type GeometryWorkerResult =
   | {
+      type: 'preview-geometry';
+      ok: true;
+      requestId: string;
+      geometry: GeometryReadyState;
+    }
+  | {
+      type: 'preview-geometry';
+      ok: false;
+      requestId: string;
+      error: string;
+    }
+  | {
       type: 'projection-delta';
       projectId: ProjectId;
       version: number;
@@ -500,6 +517,41 @@ async function execute(job: GeometryWorkerJob): Promise<void> {
   };
   try {
     post(stateFor('starting', request, { stale: true }));
+
+    if (request.type === 'preview-geometry') {
+      if (exactKernelStatus !== 'ready')
+        post(stateFor('loading-remus', request, { stale: true }));
+      const exact = await loadExactKernel();
+      if (!exact) {
+        throw exactKernelError instanceof Error
+          ? exactKernelError
+          : new Error('The exact Remus kernel failed to load.');
+      }
+      await preloadDocumentFonts(document);
+      post(stateFor('rebuilding', request, { stale: true }));
+      const geometry = await exact.previewGeometry(document, {
+        cancellation: {
+          isCancelled: () => cancelledRequests.has(request.requestId)
+        },
+        yieldControl: geometryYield()
+      });
+      if (cancelledRequests.has(request.requestId)) return;
+      // Geometry-only work has no completed result-cache entry or live mass
+      // epoch. A release runs a full sync against its actual candidate.
+      lastExactSyncKey = null;
+      lastExactSyncEpoch = null;
+      post(
+        {
+          type: 'preview-geometry',
+          ok: true,
+          requestId: request.requestId,
+          geometry
+        },
+        derivedMeshTransferables(geometry)
+      );
+      post(stateFor('ready', request, { stale: false }));
+      return;
+    }
 
     if (request.type === 'mass-properties') {
       let result: MassPropertiesRead;
@@ -897,7 +949,14 @@ async function execute(job: GeometryWorkerJob): Promise<void> {
       return;
     }
     const message = errorMessage(error);
-    if (request.type === 'export') {
+    if (request.type === 'preview-geometry') {
+      post({
+        type: 'preview-geometry',
+        ok: false,
+        requestId: request.requestId,
+        error: message
+      });
+    } else if (request.type === 'export') {
       const result: GeometryExportResult = {
         type: 'export',
         ok: false,

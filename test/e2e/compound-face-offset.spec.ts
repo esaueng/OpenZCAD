@@ -26,7 +26,9 @@ test('previews and commits a compound STEP cap offset, then undoes, redoes and r
     Worker.prototype.postMessage = function (message, transfer) {
       if (
         scope.holdFaceEdit &&
-        (message as { type?: string } | null)?.type === 'sync'
+        ['sync', 'preview-geometry'].includes(
+          (message as { type?: string } | null)?.type ?? ''
+        )
       ) {
         scope.heldFaceEdits = (scope.heldFaceEdits ?? 0) + 1;
         pending.push(() =>
@@ -264,9 +266,8 @@ test('previews and commits a compound STEP cap offset, then undoes, redoes and r
     .poll(async () => {
       const projects = await readSavedProjects();
       return (
-        projects.find(
-          (project) => !preImportProjectIds.has(project.projectId)
-        )?.featureOrder?.length ?? 0
+        projects.find((project) => !preImportProjectIds.has(project.projectId))
+          ?.featureOrder?.length ?? 0
       );
     })
     .toBe(2);
