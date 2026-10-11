@@ -5,6 +5,8 @@ import {
   edgeLength,
   edgeLengthMeasurement,
   faceLabel,
+  faceNameRank,
+  ownedTopologyName,
   topologySelectionLabel
 } from './topologyLabels';
 
@@ -13,7 +15,11 @@ function makeBody(): BodyRepresentation {
     bodyId: 'body-1' as BodyRepresentation['bodyId'],
     name: 'Box',
     source: 'primitive',
-    mesh: { kind: 'mesh', vertices: Float32Array.from([]), indices: Uint32Array.from([]) },
+    mesh: {
+      kind: 'mesh',
+      vertices: Float32Array.from([]),
+      indices: Uint32Array.from([])
+    },
     faceCount: 6,
     color: '#fff',
     exportableStep: true,
@@ -213,5 +219,30 @@ describe('topologySelectionLabel', () => {
       })
     ).toBe('Box · Through hole Ø8');
     expect(topologySelectionLabel(body, { kind: 'body' })).toBe('Box');
+  });
+
+  // G9 of the 11 October 2026 review: the Hole card listed "Box 1 · top"
+  // while the viewport tag on the same face said "Box 1 · Top face".
+  it('spells every owned face and edge one way', () => {
+    expect(ownedTopologyName('Box 1', 'Top face')).toBe('Box 1 · Top face');
+    expect(ownedTopologyName('Box 1', 'Front · Top edge')).toBe(
+      'Box 1 · Front · Top edge'
+    );
+    expect(
+      topologySelectionLabel(body, {
+        kind: 'face',
+        hash: 1,
+        topologyId: 'face:1'
+      })
+    ).toBe(ownedTopologyName('Box', faceLabel(body, 1, 'face:1')));
+    expect(topologySelectionLabel(body, { kind: 'edge', hash: 11 })).toBe(
+      ownedTopologyName('Box', edgeLabel(body, 11))
+    );
+  });
+
+  it('sorts the six box directions first', () => {
+    expect(faceNameRank('Top face')).toBe(0);
+    expect(faceNameRank('Right face')).toBe(5);
+    expect(faceNameRank('Through hole Ø8')).toBe(6);
   });
 });

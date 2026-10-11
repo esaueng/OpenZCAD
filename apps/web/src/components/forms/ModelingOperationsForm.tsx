@@ -9,7 +9,10 @@ import type { BodyId } from '@openzcad/shared';
 import { ExprInput } from '../ExprInput';
 import { previewExpression } from '../../lib/model';
 import type { BodyOption } from './FeatureForms';
-import { holePositionLabels } from '../../lib/holePositionAxes';
+import {
+  holePositionFieldOrder,
+  holePositionLabels
+} from '../../lib/holePositionAxes';
 import { isPickListRow } from './pickListRow';
 import type { FormFacePick } from '../../lib/holeFacePick';
 import {
@@ -619,8 +622,20 @@ export function ModelingOperationsForm({
               }
             : current;
         case 'hole':
+          // A click places the hole where it landed: the face and, when the
+          // pick carries one, the position. Typed expressions survive every
+          // pick that has no point.
           return current.value.targetBodyId === bodyId
-            ? { ...current, value: { ...current.value, faceHash: hash } }
+            ? {
+                ...current,
+                value: {
+                  ...current.value,
+                  faceHash: hash,
+                  ...(viewportFacePick.position
+                    ? { position: { ...viewportFacePick.position } }
+                    : {})
+                }
+              }
             : current;
         case 'thicken':
           return current.value.targetBodyId === bodyId
@@ -762,6 +777,7 @@ export function ModelingOperationsForm({
       ? faceOptions.find((face) => face.hash === state.value.faceHash)
       : undefined;
   const positionLabels = holePositionLabels(selectedFace?.normal);
+  const positionOrder = holePositionFieldOrder(selectedFace?.normal);
   const profileOperation =
     state.operation === 'loft' ||
     state.operation === 'sweep' ||
@@ -1035,6 +1051,13 @@ export function ModelingOperationsForm({
               <option value="smooth">Smooth</option>
             </select>
           </label>
+          {state.value.guideId === '' && state.value.mode === 'smooth' ? (
+            <p className="muted">
+              Smooth samples a path of one line, or one arc of up to a quarter
+              turn, more finely. It does not make exact curved surfaces, and a
+              longer path builds the same body as Standard.
+            </p>
+          ) : null}
           {state.value.guideId === '' ? null : (
             <p className="muted">
               {state.value.mode === 'smooth'
@@ -1370,7 +1393,12 @@ export function ModelingOperationsForm({
               ) : null
             }
           >
-            {(['u', 'v'] as const).map((axis) => (
+            {/*
+              The X-like field first (V on a top face): the frame stays the
+              builder's, so saved holes keep their meaning, and each label
+              still names the way its own field runs.
+            */}
+            {positionOrder.map((axis) => (
               <ExprInput
                 key={axis}
                 // The face's frame decides which world axis U and V run

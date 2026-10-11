@@ -227,7 +227,7 @@ test('the viewport scale indicator tracks zoom in document units', async ({
   await expect(indicator).toBeVisible({ timeout: 15_000 });
   await expect(indicator).toHaveAttribute(
     'aria-label',
-    /^Viewport scale at the camera focus plane: .+ mm$/
+    /^Viewport scale at the model center plane: .+ mm$/
   );
 
   const canvas = page.locator('.viewer-host canvas');
@@ -1293,7 +1293,7 @@ test('double-clicking a filleted rim takes the whole run of edges', async ({
     .toBe(true);
 
   await page.mouse.click(rim!.x, rim!.y);
-  await expect(status).toContainText('exact edge selected');
+  await expect(status).toContainText('edge selected');
 
   // Selecting the probe edge creates a value chip at that exact point; a
   // physical double-click can then send its second click to the chip. Clear

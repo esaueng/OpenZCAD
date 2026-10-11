@@ -45,9 +45,15 @@ const BEVEL = 0.42;
  * facet plus a triangle on each adjacent face that shows. Deeper cuts stay
  * disjoint between corners for any bevel below 1, so no two corners can ever
  * compete for the same pixel; the area comes off the faces instead, which
- * can spare it (each keeps a centre disc ~18 px across at this depth).
+ * can spare it.
+ *
+ * The depth is set by the 24 px minimum pointer target: the corner turned
+ * toward the camera spans 1.5 cut-depths of foreshortened edge vertically,
+ * so at 0.8 it measured 24×20 px in the isometric view. At 0.96 it is
+ * 28×25, and every face keeps the diamond between its edge midpoints —
+ * just over half its area, its label at the centre.
  */
-const CORNER_HIT_BEVEL = 0.8;
+const CORNER_HIT_BEVEL = 0.96;
 /**
  * How far, in px, a corner's target reaches past the cube's silhouette.
  *
@@ -55,10 +61,11 @@ const CORNER_HIT_BEVEL = 0.8;
  * surface you can see on one side of the apex and nothing on the other: in
  * the isometric view those targets measured 10×17 and 20×6 px. The target
  * runs out through the apex into the empty margin instead, so it keeps at
- * least ~16 px on both axes there. The silhouette corners' apexes stand at
- * least a cube edge apart on screen, so the reaches never meet.
+ * least 24 px on both axes there (17×21 at a 6 px reach). The silhouette
+ * corners' apexes stand at least a cube edge apart on screen, so the reaches
+ * never meet; the SVG draws overflow, so a reach past its box still hits.
  */
-const CORNER_HIT_OVERHANG = 6;
+const CORNER_HIT_OVERHANG = 12;
 /**
  * The triad is anchored on the cube corner the model origin projects to, and
  * its arms run along the cube edges — through the far corners at 2 half-edges

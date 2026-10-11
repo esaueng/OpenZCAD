@@ -433,6 +433,145 @@ describe('computeFitPose', () => {
   );
 });
 
+describe('computeFitPose into a clear frame', () => {
+  // The drawer covers the right of a 1024-wide canvas: the clear stage is
+  // NDC x in [-1, 0.2]. Fit must land the part there, not behind the drawer.
+  const frame = { minX: -1, maxX: 0.2, minY: -1, maxY: 1 };
+
+  function projectCorners(camera: THREE.Camera, box: THREE.Box3) {
+    camera.updateMatrixWorld();
+    const corners: THREE.Vector3[] = [];
+    for (let index = 0; index < 8; index += 1) {
+      corners.push(
+        new THREE.Vector3(
+          index & 1 ? box.max.x : box.min.x,
+          index & 2 ? box.max.y : box.min.y,
+          index & 4 ? box.max.z : box.min.z
+        ).project(camera)
+      );
+    }
+    return corners;
+  }
+
+  function landOn(
+    camera: THREE.PerspectiveCamera,
+    pose: ReturnType<typeof computeFitPose>
+  ) {
+    camera.position.copy(pose.position);
+    camera.near = pose.near;
+    camera.far = pose.far;
+    camera.up.set(0, 0, 1);
+    camera.lookAt(pose.target);
+    camera.updateProjectionMatrix();
+    camera.updateMatrixWorld();
+  }
+
+  it.each([
+    { name: 'oblique', direction: new THREE.Vector3(-1, -2, 0.6) },
+    { name: 'front', direction: new THREE.Vector3(0, -1, 0) },
+    { name: 'top', direction: VIEW_DIRECTIONS.top.clone() },
+    { name: 'iso', direction: VIEW_DIRECTIONS.iso.clone() }
+  ])(
+    'keeps the $name direction and puts every corner inside the frame',
+    ({ direction }) => {
+      const camera = new THREE.PerspectiveCamera(45, 1024 / 704, 0.1, 4000);
+      camera.up.set(0, 0, 1);
+      const plate = new THREE.Mesh(new THREE.BoxGeometry(100, 60, 6));
+      plate.position.set(50, 30, 3);
+      plate.updateMatrixWorld();
+      const pose = computeFitPose(camera, [plate], direction, 0, frame);
+
+      expect(
+        pose.position
+          .clone()
+          .sub(pose.target)
+          .normalize()
+          .distanceTo(direction.clone().normalize())
+      ).toBeLessThan(1e-6);
+
+      landOn(camera, pose);
+      const box = new THREE.Box3().setFromObject(plate);
+      const center = box.getCenter(new THREE.Vector3()).project(camera);
+      expect(center.x).toBeCloseTo(-0.4, 6);
+      expect(center.y).toBeCloseTo(0, 6);
+      for (const corner of projectCorners(camera, box)) {
+        expect(corner.x).toBeGreaterThanOrEqual(frame.minX - 1e-9);
+        expect(corner.x).toBeLessThanOrEqual(frame.maxX + 1e-9);
+        expect(Math.abs(corner.y)).toBeLessThanOrEqual(1 + 1e-9);
+        expect(corner.z).toBeGreaterThanOrEqual(-1);
+        expect(corner.z).toBeLessThanOrEqual(1);
+      }
+
+      // The orthographic mirror of the pose: the frustum spans the
+      // perspective view at the target, as `syncOrthographic` builds it.
+      const halfHeight =
+        pose.position.distanceTo(pose.target) *
+        Math.tan(THREE.MathUtils.degToRad(camera.fov / 2));
+      const orthographic = new THREE.OrthographicCamera(
+        -halfHeight * camera.aspect,
+        halfHeight * camera.aspect,
+        halfHeight,
+        -halfHeight,
+        -2000,
+        pose.far
+      );
+      orthographic.position.copy(pose.position);
+      orthographic.quaternion.copy(camera.quaternion);
+      orthographic.updateProjectionMatrix();
+      for (const corner of projectCorners(orthographic, box)) {
+        expect(corner.x).toBeGreaterThanOrEqual(frame.minX - 1e-9);
+        expect(corner.x).toBeLessThanOrEqual(frame.maxX + 1e-9);
+        expect(Math.abs(corner.y)).toBeLessThanOrEqual(1 + 1e-9);
+      }
+    }
+  );
+
+  it('keeps the target on the view axis at the model centre depth', () => {
+    const camera = new THREE.PerspectiveCamera(45, 4 / 3, 0.1, 4000);
+    const mesh = new THREE.Mesh(new THREE.BoxGeometry(20, 20, 20));
+    mesh.position.set(5, -3, 8);
+    mesh.updateMatrixWorld();
+    const direction = new THREE.Vector3(1, -1, 0.4).normalize();
+    const pose = computeFitPose(camera, [mesh], direction, 0, frame);
+    const center = new THREE.Vector3(5, -3, 8);
+    // Sliding sideways leaves the target in the plane through the model
+    // centre perpendicular to the view, where `pivotOn` would put it.
+    expect(pose.target.clone().sub(center).dot(direction)).toBeCloseTo(0, 9);
+    expect(pose.target.distanceTo(center)).toBeGreaterThan(1);
+  });
+
+  it('matches the unframed fit for the whole canvas', () => {
+    const camera = new THREE.PerspectiveCamera(45, 16 / 9, 0.1, 4000);
+    const mesh = new THREE.Mesh(new THREE.BoxGeometry(80, 5, 40));
+    mesh.position.set(40, 2.5, 20);
+    mesh.updateMatrixWorld();
+    const direction = new THREE.Vector3(1, -2, 1);
+    const plain = computeFitPose(camera, [mesh], direction, 0.04);
+    const framed = computeFitPose(camera, [mesh], direction, 0.04, {
+      minX: -1,
+      maxX: 1,
+      minY: -1,
+      maxY: 1
+    });
+    expect(framed.position.distanceTo(plain.position)).toBeLessThan(1e-9);
+    expect(framed.target.distanceTo(plain.target)).toBeLessThan(1e-9);
+  });
+
+  it('backs off further for a narrower frame', () => {
+    // Portrait, and long in X, so the width rather than the established
+    // padding sets the fit.
+    const camera = new THREE.PerspectiveCamera(45, 0.5, 0.1, 4000);
+    const bar = new THREE.Mesh(new THREE.BoxGeometry(300, 10, 10));
+    bar.updateMatrixWorld();
+    const front = new THREE.Vector3(0, -1, 0);
+    const whole = computeFitPose(camera, [bar], front);
+    const narrow = computeFitPose(camera, [bar], front, 0, frame);
+    expect(narrow.position.distanceTo(narrow.target)).toBeGreaterThan(
+      whole.position.distanceTo(whole.target) * 1.5
+    );
+  });
+});
+
 describe('boxFullyInView', () => {
   function cameraAt(position: THREE.Vector3) {
     const camera = new THREE.PerspectiveCamera(45, 1, 0.1, 4000);

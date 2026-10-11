@@ -3281,11 +3281,62 @@ export const toSketchReferenceAnnotationId = (
 export const toShaprImportId = (value: string): ShaprImportId =>
   value as ShaprImportId;
 
-export const DEFAULT_BODY_COLOR = '#e1a948';
+/**
+ * The colour every solid is drawn in until someone chooses another (design
+ * review G2, 11 Oct 2026). One neutral steel, so a part does not change
+ * colour with each operation that rebuilds it, and the signal colours keep
+ * their meanings: the accent for selection, {@link PREVIEW_BODY_COLOR} for
+ * geometry not yet applied. It is a shade darker than the quiet-stage
+ * design's neutral (#b0b6cb), which the key light washed out on top faces so
+ * that a selected one barely lifted. The viewport stage is dark in both
+ * themes, so one value serves both.
+ */
+export const DEFAULT_BODY_COLOR = '#99a0b2';
 
+/**
+ * What a live command preview draws its result body in: the hue of the web
+ * chrome's `--color-preview` (#48cd8f), softened to the shaded mint of the
+ * quiet-stage face-offset design so a whole body in it does not shout. No
+ * body colour offered by default sits near it (`BODY_COLOR_PRESETS`), so
+ * the hue alone says "not applied yet".
+ */
+export const PREVIEW_BODY_COLOR = '#79c7a9';
+
+/**
+ * Body colours the appearance picker offers: the neutral default, a darker
+ * graphite and a spread of hues, none of them near
+ * {@link PREVIEW_BODY_COLOR}. Each is darker than the selection tint, so a
+ * picked face on any of them is drawn brighter, never duller.
+ */
+export const BODY_COLOR_PRESETS: readonly string[] = [
+  DEFAULT_BODY_COLOR,
+  '#6b7280',
+  '#e1a948',
+  '#fb923c',
+  '#e5534b',
+  '#f472b6',
+  '#a78bfa',
+  '#5f8fe8',
+  '#5fb3e8'
+];
+
+/**
+ * Set beside {@link BODY_COLOR_METADATA_KEY} when a person chose the colour.
+ * Bodies are still stamped with their feature's colour when they are made
+ * (documents written before G2 all carry one), so without this mark a chosen
+ * colour that happens to equal that stamp could not be told from it.
+ */
+export const BODY_COLOR_CHOSEN_METADATA_KEY = 'colorChosen' as const;
+
+/**
+ * The colour a feature kind stamps on the body it makes, and the kind's
+ * legend colour. Bodies are no longer DRAWN in it (`bodyDisplayColor`).
+ * Changing a value here turns that kind's existing stamps into colours that
+ * read as chosen, so a stamp must stay what it was when it was written.
+ */
 export const FEATURE_COLORS: Record<FeatureKind, string> = {
   primitive: '#e1a948',
-  sketch: DEFAULT_BODY_COLOR,
+  sketch: '#e1a948',
   extrude: '#4bb7a7',
   revolve: '#5fb3e8',
   loft: '#22c55e',
@@ -3309,7 +3360,40 @@ export const FEATURE_COLORS: Record<FeatureKind, string> = {
 };
 
 export const featureColor = (kind: FeatureKind): string =>
-  FEATURE_COLORS[kind] ?? DEFAULT_BODY_COLOR;
+  FEATURE_COLORS[kind] ?? FEATURE_COLORS.primitive;
+
+/**
+ * The colour a body's own metadata asks for, or null when it asks for none:
+ * no colour stored, or only the stamp its feature wrote when it made the
+ * body. A colour marked chosen ({@link BODY_COLOR_CHOSEN_METADATA_KEY}) is
+ * always kept; an unmarked colour other than the stamp was chosen before the
+ * mark existed (an older appearance pick, a demo finish) and is kept too.
+ * With no feature kind to name the stamp, only a marked colour counts.
+ *
+ * Deliberately small: this runs in the exact-kernel chunk, which sits at its
+ * bundle budget. A stamp is compared as written, since `featureColor` writes
+ * every stamp as the same lower-case literal.
+ */
+export function chosenBodyColor(
+  metadata: Readonly<Record<string, string | number | boolean>> | undefined,
+  featureKind?: FeatureKind
+): string | null {
+  const stored = metadata?.[BODY_COLOR_METADATA_KEY];
+  return typeof stored === 'string' &&
+    stored &&
+    (metadata[BODY_COLOR_CHOSEN_METADATA_KEY] === true ||
+      (featureKind && stored !== featureColor(featureKind)))
+    ? stored
+    : null;
+}
+
+/** The colour a body is drawn in: its chosen colour, or the neutral default. */
+export function bodyDisplayColor(
+  metadata: Readonly<Record<string, string | number | boolean>> | undefined,
+  featureKind?: FeatureKind
+): string {
+  return chosenBodyColor(metadata, featureKind) ?? DEFAULT_BODY_COLOR;
+}
 
 /** Millimetres per document unit, used by exporters that fix a unit. */
 export const UNIT_TO_MM: Record<UnitSystem, number> = {

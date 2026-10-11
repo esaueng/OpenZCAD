@@ -1,7 +1,10 @@
+import * as THREE from 'three';
+import { orbitPivotForPoint } from './views';
+
 export interface ViewportScale {
   /** Distance represented by the bar, in the document's current units. */
   value: number;
-  /** Screen width of that distance at the camera target plane. */
+  /** Screen width of that distance at the measured depth. */
   widthPx: number;
 }
 
@@ -41,6 +44,65 @@ export function chooseViewportScale(
     return null;
   }
   return { value, widthPx };
+}
+
+/**
+ * Where the scale bar measures: on the view axis, at the depth of the
+ * model's bounds centre. Measuring at the orbit pivot made the bar jump on
+ * a click — a pick moves the pivot to the picked point's depth while the
+ * camera stays still, so "50 mm" turned into "20 mm" with nothing on screen
+ * moving. The model centre's depth only changes when the camera or the
+ * model does. Without a model, or with its centre behind the camera, the
+ * orbit pivot is the fallback.
+ */
+export function scaleBarAnchor(
+  cameraPosition: THREE.Vector3,
+  viewDirection: THREE.Vector3,
+  modelCenter: THREE.Vector3 | null,
+  orbitTarget: THREE.Vector3
+): THREE.Vector3 {
+  return (
+    (modelCenter &&
+      orbitPivotForPoint(cameraPosition, viewDirection, modelCenter)) ??
+    orbitTarget
+  );
+}
+
+const presentedBox = new THREE.Box3();
+const meshBox = new THREE.Box3();
+
+/**
+ * The centre of what is drawn now: every visible mesh or line under
+ * `roots`, at its current transform. It reads live presentation, not the
+ * last committed build, so a Move preview that has posed a body elsewhere
+ * or a parameter preview that hides bodies and draws their replacements
+ * moves it as it happens, rather than the scale bar jumping at commit.
+ * Null when nothing visible has geometry.
+ */
+export function presentedBoundsCenter(
+  roots: readonly (THREE.Object3D | null | undefined)[],
+  target: THREE.Vector3
+): THREE.Vector3 | null {
+  presentedBox.makeEmpty();
+  for (const root of roots) {
+    root?.traverseVisible((object) => {
+      object.updateWorldMatrix(false, false);
+      const geometry = (object as Partial<THREE.Mesh>).geometry;
+      if (!(geometry instanceof THREE.BufferGeometry)) {
+        return;
+      }
+      if (!geometry.boundingBox) {
+        geometry.computeBoundingBox();
+      }
+      if (!geometry.boundingBox || geometry.boundingBox.isEmpty()) {
+        return;
+      }
+      presentedBox.union(
+        meshBox.copy(geometry.boundingBox).applyMatrix4(object.matrixWorld)
+      );
+    });
+  }
+  return presentedBox.isEmpty() ? null : presentedBox.getCenter(target);
 }
 
 /** Formats a nice scale value without adding noisy floating-point digits. */

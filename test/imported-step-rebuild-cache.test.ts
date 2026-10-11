@@ -214,15 +214,22 @@ describe('imported STEP rebuild cache', () => {
       logicalBytes: secondSource.byteLength
     };
     let reads = 0;
+    const resolveSourceBytes = async (ref: ImportedSourceReference) =>
+      ref.checksumSha256 === REFERENCE.checksumSha256 ? SOURCE : secondSource;
     const kernel = await createExactKernelAdapter({
       importedStepCacheBytes: budget,
       historyCheckpointLimit: 0,
       resolveSourceBytes: async (ref) => {
         reads += 1;
-        return ref.checksumSha256 === REFERENCE.checksumSha256
-          ? SOURCE
-          : secondSource;
+        return resolveSourceBytes(ref);
       }
+    });
+    // Never caches a source, a measurement or a checkpoint: an oracle that
+    // cannot share whatever state a wrong cached reading would come from.
+    const cold = await createExactKernelAdapter({
+      importedStepCacheBytes: 0,
+      historyCheckpointLimit: 0,
+      resolveSourceBytes
     });
     const manager = new CommandManager(documentWithImport());
     try {
@@ -242,23 +249,62 @@ describe('imported STEP rebuild cache', () => {
       const rebuilt = await kernel.syncDocument(manager.document);
       expect(reads).toBe(3);
       expect(rebuilt.warnings).toEqual([]);
-      for (const body of Object.values(combined.bodyRepresentations)) {
-        expect(rebuilt.bodyRepresentations[body.bodyId]!.volume).toBe(
-          body.volume
+      const fresh = await cold.syncDocument(manager.document);
+      const box = Object.values(fresh.bodyRepresentations).find(
+        (body) => body.name === 'Box'
+      );
+      // a-export-box.step is an axis-aligned 10 x 20 x 30 box.
+      expect(box?.volume).toBeCloseTo(6000, 6);
+      // A wrong reading copied from another body (a cached scalar keyed to the
+      // wrong solid) can agree between the two cached syncs, so check each
+      // against the cold build too, and name the body and sync that disagree.
+      for (const [label, derived] of [
+        ['combined', combined],
+        ['rebuilt', rebuilt]
+      ] as const) {
+        expect(Object.keys(derived.bodyRepresentations).sort()).toEqual(
+          Object.keys(fresh.bodyRepresentations).sort()
         );
+        for (const expected of Object.values(fresh.bodyRepresentations)) {
+          const actual = derived.bodyRepresentations[expected.bodyId]!;
+          expect(
+            Math.abs(actual.volume - expected.volume),
+            `${label} "${actual.name}" (${actual.bodyId}) volume ${actual.volume}, cold build ${expected.volume}`
+          ).toBeLessThanOrEqual(1e-9 * Math.max(1, Math.abs(expected.volume)));
+        }
+      }
+      for (const body of Object.values(combined.bodyRepresentations)) {
+        expect(
+          rebuilt.bodyRepresentations[body.bodyId]!.volume,
+          `"${body.name}" (${body.bodyId}) volume, rebuilt vs combined`
+        ).toBe(body.volume);
       }
       const rebuiltSignature = geometrySignatures(rebuilt);
       const combinedSignature = geometrySignatures(combined);
       // Check the persisted scalar snapshot independently of matcher traversal.
-      expect(JSON.stringify(rebuiltSignature)).toBe(
-        JSON.stringify(combinedSignature)
+      const differing = Object.entries(combinedSignature).flatMap(
+        ([id, signature]) =>
+          Object.entries(signature)
+            .filter(
+              ([field, value]) =>
+                JSON.stringify(value) !==
+                JSON.stringify(
+                  rebuiltSignature[id]?.[field as keyof typeof signature]
+                )
+            )
+            .map(([field]) => `${signature.name}.${field}`)
       );
+      expect(
+        JSON.stringify(rebuiltSignature),
+        `differing fields: ${differing.join(', ') || 'none (key order)'}`
+      ).toBe(JSON.stringify(combinedSignature));
       expect(rebuiltSignature).toEqual(combinedSignature);
       for (const [id, signature] of Object.entries(geometrySignatures(first))) {
         expect(geometrySignatures(rebuilt)[id]).toEqual(signature);
       }
     } finally {
       kernel.dispose();
+      cold.dispose();
     }
   }, 60_000);
 

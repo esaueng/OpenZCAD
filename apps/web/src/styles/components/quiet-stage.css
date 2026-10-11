@@ -802,6 +802,15 @@
   border-top: var(--border-thin);
 }
 
+/* Asking closes the list under a rule of its own: it is what Enter does
+   with plain words, not one more command. */
+.palette-list .palette-ask {
+  margin-top: 3px;
+  border-top: var(--border-thin);
+  border-top-left-radius: 0;
+  border-top-right-radius: 0;
+}
+
 /* While the list is up the lane stands over the assistant and the notice
    lanes, whose rows sit where the list opens. */
 .command-bar-lane:has(.command-bar.open) {
@@ -809,19 +818,19 @@
 }
 
 /* The list takes the conversation's place rather than floating over it: a
-   slash typed with the stream up hides the stream, and the list stands on
-   the bar where it stood, bar and list one surface. Hidden, not unmounted,
-   so the thread keeps its scroll position and comes straight back when the
-   slash is cleared or the command runs. */
-.workspace:has(.command-bar.open.command) .assistant-panel {
+   slash, or words that name a command, typed with the stream up hide the
+   stream, and the list stands on the bar where it stood, bar and list one
+   surface. Hidden, not unmounted, so the thread keeps its scroll position
+   and comes straight back when the words are cleared or the command runs. */
+.workspace:has(.command-bar.open.listing) .assistant-panel {
   visibility: hidden;
 }
 
 /* The status row stands where the list opens too. Shifted right of the
    tour card, its end stuck out past the list ("…el."). Faded rather than
    hidden, so its live region still speaks. */
-.workspace:has(.command-bar.open.command) .workspace-toast,
-.workspace:has(.command-bar.open.command) .workspace-toast-body {
+.workspace:has(.command-bar.open.listing) .workspace-toast,
+.workspace:has(.command-bar.open.listing) .workspace-toast-body {
   opacity: 0;
   pointer-events: none;
 }

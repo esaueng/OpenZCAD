@@ -1,8 +1,66 @@
-import { fireEvent, render, screen } from '@testing-library/react';
+import { act, fireEvent, render, screen } from '@testing-library/react';
+import { useState } from 'react';
 import { describe, expect, it, vi } from 'vitest';
 import { PrimitiveForm } from './FeatureForms';
+import {
+  ParameterDefinitionProvider,
+  type ParameterDefinition
+} from './parameterDefinition';
 
 describe('PrimitiveForm dimension validation', () => {
+  // Production QA CAD-004: an inch project refused both inputs as needing
+  // "the document's units", which the form had all along.
+  it('accepts unit-suffixed sizes in an inch document and previews them in inches', () => {
+    const onSubmit = vi.fn();
+    render(
+      <PrimitiveForm
+        kind="box"
+        scope={{}}
+        documentUnits="inch"
+        initialName="Imperial fixture"
+        submitLabel="Create"
+        onSubmit={onSubmit}
+      />
+    );
+    const width = screen.getByRole('textbox', { name: 'Width (X)' });
+    fireEvent.change(width, { target: { value: '1 in + 25.4 mm' } });
+    expect(width).not.toHaveAttribute('aria-invalid');
+    expect(width).toHaveAccessibleDescription('= 2');
+    const depth = screen.getByRole('textbox', { name: 'Depth (Y)' });
+    fireEvent.change(depth, { target: { value: '25.4 mm' } });
+    expect(depth).toHaveAccessibleDescription('= 1');
+    const cornerX = screen.getByRole('textbox', { name: 'Corner X' });
+    fireEvent.change(cornerX, { target: { value: '12.7 mm' } });
+    expect(cornerX).toHaveAccessibleDescription('= 0.5');
+    fireEvent.click(screen.getByRole('button', { name: 'Create' }));
+    expect(onSubmit).toHaveBeenCalledWith(
+      'Imperial fixture',
+      { width: '1 in + 25.4 mm', height: '25.4 mm', depth: 24 },
+      { x: '12.7 mm', y: 0, z: 0 }
+    );
+  });
+
+  it.each([
+    ['30 deg', 'expected a length, not an angle or area'],
+    ['(2 mm) * (3 mm)', 'expected a length, not an angle or area']
+  ])('refuses %s in a size field by its dimension', (value, reason) => {
+    render(
+      <PrimitiveForm
+        kind="box"
+        scope={{}}
+        documentUnits="inch"
+        initialName="Imperial fixture"
+        submitLabel="Create"
+        onSubmit={vi.fn()}
+      />
+    );
+    const width = screen.getByRole('textbox', { name: 'Width (X)' });
+    fireEvent.change(width, { target: { value } });
+    expect(width).toHaveAttribute('aria-invalid', 'true');
+    expect(width).toHaveAccessibleDescription(expect.stringContaining(reason));
+    expect(screen.getByRole('button', { name: 'Create' })).toBeDisabled();
+  });
+
   it.each(['-5', '0', 'w - 10'])(
     'rejects %s before mouse or keyboard submission and allows correction',
     (value) => {
@@ -11,6 +69,7 @@ describe('PrimitiveForm dimension validation', () => {
         <PrimitiveForm
           kind="box"
           scope={{ w: 5 }}
+          documentUnits="mm"
           initialName="QA Box"
           submitLabel="Create"
           onSubmit={onSubmit}
@@ -40,6 +99,7 @@ describe('PrimitiveForm dimension validation', () => {
       initialName: 'QA Box',
       initialDimensions: { width: 'w', height: 18, depth: 24 },
       submitLabel: 'Apply',
+      documentUnits: 'mm' as const,
       onSubmit: vi.fn()
     };
     const { rerender } = render(<PrimitiveForm {...props} scope={{ w: 30 }} />);
@@ -60,6 +120,7 @@ describe('PrimitiveForm dimension validation', () => {
       <PrimitiveForm
         kind="box"
         scope={{}}
+        documentUnits="mm"
         initialName="QA Box"
         initialDimensions={{ width: 30, height: 18, depth: 24 }}
         submitLabel="Apply"
@@ -78,6 +139,7 @@ describe('PrimitiveForm dimension validation', () => {
       <PrimitiveForm
         kind="cone"
         scope={{}}
+        documentUnits="mm"
         initialName="QA Cone"
         submitLabel="Create"
         onSubmit={vi.fn()}
@@ -103,6 +165,7 @@ describe('PrimitiveForm position row', () => {
       <PrimitiveForm
         kind={kind}
         scope={{}}
+        documentUnits="mm"
         initialName="Part"
         submitLabel="Create"
         onSubmit={vi.fn()}
@@ -124,6 +187,7 @@ describe('PrimitiveForm position row', () => {
       <PrimitiveForm
         kind="cylinder"
         scope={{ lift: 24 }}
+        documentUnits="mm"
         initialName="Cylinder"
         submitLabel="Create"
         onSubmit={onSubmit}
@@ -149,6 +213,7 @@ describe('PrimitiveForm position row', () => {
       <PrimitiveForm
         kind="box"
         scope={{}}
+        documentUnits="mm"
         initialName="Box"
         submitLabel="Create"
         onSubmit={onSubmit}
@@ -166,6 +231,7 @@ describe('PrimitiveForm position row', () => {
       <PrimitiveForm
         kind="box"
         scope={{}}
+        documentUnits="mm"
         initialName="Box"
         initialDimensions={{ width: 30, height: 18, depth: 24 }}
         initialPosition={{ x: 10, y: 0, z: 5 }}
@@ -193,6 +259,7 @@ describe('PrimitiveForm submit button', () => {
       <PrimitiveForm
         kind="box"
         scope={{}}
+        documentUnits="mm"
         initialName="Box"
         submitLabel="Create"
         onSubmit={vi.fn()}
@@ -205,5 +272,152 @@ describe('PrimitiveForm submit button', () => {
     expect(create).toHaveAttribute('aria-keyshortcuts', 'Enter');
     expect(create).toHaveAccessibleName('Create');
     expect(create).toHaveAccessibleDescription('');
+  });
+});
+
+describe('PrimitiveForm ghost (G6)', () => {
+  it('reports the primitive it would create, live, and clears on close', () => {
+    const onGhostChange = vi.fn();
+    const view = render(
+      <PrimitiveForm
+        documentUnits="mm"
+        kind="box"
+        scope={{ w: 100 }}
+        initialName="Box"
+        submitLabel="Create"
+        onSubmit={vi.fn()}
+        onGhostChange={onGhostChange}
+      />
+    );
+    expect(onGhostChange).toHaveBeenLastCalledWith({
+      kind: 'box',
+      dimensions: { width: 30, height: 18, depth: 24 },
+      position: { x: 0, y: 0, z: 0 }
+    });
+
+    fireEvent.change(screen.getByRole('textbox', { name: 'Width (X)' }), {
+      target: { value: '1 in' }
+    });
+    expect(onGhostChange).toHaveBeenLastCalledWith(
+      expect.objectContaining({
+        dimensions: { width: 25.4, height: 18, depth: 24 }
+      })
+    );
+
+    // Expressions resolve against the parameters, as Create would.
+    fireEvent.change(screen.getByRole('textbox', { name: 'Width (X)' }), {
+      target: { value: 'w' }
+    });
+    fireEvent.change(screen.getByRole('textbox', { name: 'Corner Z' }), {
+      target: { value: '5' }
+    });
+    expect(onGhostChange).toHaveBeenLastCalledWith({
+      kind: 'box',
+      dimensions: { width: 100, height: 18, depth: 24 },
+      position: { x: 0, y: 0, z: 5 }
+    });
+
+    // A keystroke that leaves the value the same does not redraw.
+    const calls = onGhostChange.mock.calls.length;
+    fireEvent.change(screen.getByRole('textbox', { name: 'Width (X)' }), {
+      target: { value: 'w ' }
+    });
+    expect(onGhostChange).toHaveBeenCalledTimes(calls);
+
+    // A size that cannot build draws nothing.
+    fireEvent.change(screen.getByRole('textbox', { name: 'Height (Z)' }), {
+      target: { value: '0' }
+    });
+    expect(onGhostChange).toHaveBeenLastCalledWith(null);
+    fireEvent.change(screen.getByRole('textbox', { name: 'Height (Z)' }), {
+      target: { value: '6' }
+    });
+    expect(onGhostChange).toHaveBeenLastCalledWith(
+      expect.objectContaining({
+        dimensions: { width: 100, height: 18, depth: 6 }
+      })
+    );
+
+    // Create, Cancel and Escape all close (unmount) the card.
+    view.unmount();
+    expect(onGhostChange).toHaveBeenLastCalledWith(null);
+  });
+
+  it('places a cylinder at its base centre', () => {
+    const onGhostChange = vi.fn();
+    render(
+      <PrimitiveForm
+        documentUnits="mm"
+        kind="cylinder"
+        scope={{}}
+        initialName="Cylinder"
+        submitLabel="Create"
+        onSubmit={vi.fn()}
+        onGhostChange={onGhostChange}
+      />
+    );
+    fireEvent.change(screen.getByRole('textbox', { name: 'Base center X' }), {
+      target: { value: '15' }
+    });
+    expect(onGhostChange).toHaveBeenLastCalledWith({
+      kind: 'cylinder',
+      dimensions: { radius: 6, height: 28 },
+      position: { x: 15, y: 0, z: 0 }
+    });
+  });
+});
+
+describe('PrimitiveForm defines a parameter from a field (G5)', () => {
+  it('creates a box over a parameter defined in its Width field', async () => {
+    const onSubmit = vi.fn();
+    const defined: Array<[string, string]> = [];
+    function Workspace() {
+      const [scope, setScope] = useState<Record<string, number>>({});
+      const definition: ParameterDefinition = {
+        has: (name) => name in scope,
+        define: async (name, expression) => {
+          defined.push([name, expression]);
+          setScope((current) => ({ ...current, [name]: Number(expression) }));
+          return null;
+        }
+      };
+      return (
+        <ParameterDefinitionProvider value={definition}>
+          <PrimitiveForm
+            documentUnits="mm"
+            kind="box"
+            scope={scope}
+            initialName="Box"
+            submitLabel="Create"
+            onSubmit={onSubmit}
+          />
+        </ParameterDefinitionProvider>
+      );
+    }
+    render(<Workspace />);
+    const width = screen.getByRole('textbox', { name: 'Width (X)' });
+    const previous = (width as HTMLInputElement).value;
+    fireEvent.change(width, { target: { value: 'width' } });
+    expect(screen.getByRole('button', { name: 'Create' })).toBeDisabled();
+    const value = await screen.findByRole('textbox', {
+      name: 'Value for new parameter width'
+    });
+    expect(value).toHaveValue(previous);
+    // Enter in the value defines; it does not reach the card's Enter.
+    await act(async () => {
+      fireEvent.keyDown(value, { key: 'Enter' });
+    });
+    expect(onSubmit).not.toHaveBeenCalled();
+    expect(defined).toEqual([['width', previous]]);
+    expect(screen.getByText(`= ${previous}`)).toBeVisible();
+    expect(screen.getByRole('button', { name: 'Create' })).toBeEnabled();
+    // Back in the field, Enter creates the box over the new parameter.
+    expect(width).toHaveFocus();
+    fireEvent.keyDown(width, { key: 'Enter' });
+    expect(onSubmit).toHaveBeenCalledWith(
+      'Box',
+      { width: 'width', height: 18, depth: 24 },
+      { x: 0, y: 0, z: 0 }
+    );
   });
 });

@@ -40,6 +40,11 @@ interface TopBarProps {
   canExport: boolean;
   /** Name of the body the export will target, or null for "all bodies". */
   exportScope: string | null;
+  /**
+   * Why export is holding bodies back: they stand in for a feature that
+   * failed to rebuild. Shown in the File menu beside the export items.
+   */
+  exportWithheld?: string | null;
   saveState: WorkspaceSaveState;
   geometryPending?: boolean;
   geometryFailed?: boolean;
@@ -176,6 +181,7 @@ export function TopBar({
   units,
   canExport,
   exportScope,
+  exportWithheld = null,
   saveState,
   geometryPending = false,
   geometryFailed = false,
@@ -389,8 +395,8 @@ export function TopBar({
 
   const exportTitle = (format: string) =>
     canExport
-      ? `Export ${exportScope ?? 'all bodies'} as ${format}`
-      : 'Create a body before exporting';
+      ? `Export ${exportScope ?? 'all bodies'} as ${format}${exportWithheld ? `. ${exportWithheld}` : ''}`
+      : (exportWithheld ?? 'Create a body before exporting');
   // A project that is not in the account has no room to join, so its room
   // status is `offline` — which, beside "Save to my account", read as a
   // connection problem rather than the plain fact that nothing is shared yet.
@@ -707,6 +713,11 @@ export function TopBar({
               )}
               <div className="topbar-menu-sep" />
               <strong className="topbar-menu-label">Export</strong>
+              {exportWithheld && (
+                <span className="topbar-menu-note" role="note">
+                  {exportWithheld}
+                </span>
+              )}
               <button
                 type="button"
                 className="topbar-menu-item"

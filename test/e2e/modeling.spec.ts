@@ -10,6 +10,7 @@ import {
   openAssistant,
   promptField,
   revealModelDrawer,
+  selectBodyFromItems,
   setSelectionFilter,
   shiftSelectTwoVisibleBoxEdges,
   stubApi,
@@ -517,18 +518,16 @@ test('refuses suppression that would stale an attached sketch and allows pausing
 
   const box = page.locator('.feature-row', { hasText: /^Box/ });
   await box.getByRole('button', { name: 'Suppress Box' }).click();
-  const details = page.getByRole('region', { name: 'History details' });
-  await expect(details.getByRole('alert')).toContainText(
-    'Cannot suppress "Box"'
+  const refusal = page.getByRole('alertdialog', { name: 'Suppress “Box”?' });
+  await expect(refusal).toContainText(
+    'Box is used by 1 later feature that cannot rebuild without it'
   );
-  await expect(details.getByRole('alert')).toContainText('Sketch');
-  await expect(details.getByRole('alert')).toContainText(
-    "is unavailable at the sketch's history position"
-  );
+  await expect(refusal.getByRole('listitem')).toHaveText([/^Sketch/]);
+  await refusal.getByRole('button', { name: 'Cancel' }).click();
+  await expect(refusal).toBeHidden();
   await expect(box).not.toContainText('suppressed');
   await expect(page.locator('.diagnostic-row')).toHaveCount(0);
   await expectBodyCount(page, 1);
-  await details.getByRole('button', { name: 'Dismiss failure' }).click();
 
   const sketch = page.locator('.feature-row', { hasText: /^Sketch/ });
   await sketch.hover();
@@ -1096,7 +1095,7 @@ test('fillets all twelve edges of a box in one exact feature', async ({
   const inspector = page.getByRole('region', { name: 'Feature inspector' });
   await inspector.getByRole('button', { name: 'Select all 12 edges' }).click();
   await expect(inspector.locator('.selection-summary')).toContainText(
-    '12 exact edges selected'
+    '12 edges selected'
   );
   await inspector.getByRole('button', { name: /^Create/ }).click();
 
@@ -1563,7 +1562,7 @@ test('preflights and drills a through hole into the top face', async ({
     lineageName: 'primitive.box.face.z-max'
   });
   await expect(
-    entry.getByRole('button', { name: /Box 1 · top/ })
+    entry.getByRole('button', { name: /Box 1 · Top face/ })
   ).toHaveAttribute('aria-pressed', 'true');
   await expect(
     page.getByRole('region', { name: 'Offset Face operation' })
@@ -1603,7 +1602,7 @@ test('preflights and drills a through hole into the top face', async ({
     page.getByRole('textbox', { name: 'Diameter', exact: true })
   ).toHaveValue('5');
   await expect(
-    entry.getByRole('button', { name: /Box 1 · top/ })
+    entry.getByRole('button', { name: /Box 1 · Top face/ })
   ).toHaveAttribute('aria-pressed', 'true');
   await page.getByRole('textbox', { name: 'Diameter', exact: true }).fill('8');
   // One press checks the exact result and, when it builds, commits it.
@@ -1643,7 +1642,7 @@ test('preflights and creates an exact open-top shell', async ({ page }) => {
 
   await page.getByRole('button', { name: /^Shell/ }).click();
   const openings = page.getByRole('group', { name: 'Opening faces' });
-  await openings.getByRole('button', { name: /Box 1 · top/ }).click();
+  await openings.getByRole('button', { name: /Box 1 · Top face/ }).click();
   // One press checks the exact result and, when it builds, commits it.
   await page.getByRole('button', { name: 'Create shell' }).click();
   await expect(
@@ -1677,7 +1676,7 @@ test('preflights and creates an exact open-top shell', async ({ page }) => {
   });
   await expect(thickness).toHaveValue('2');
   await expect(
-    openings.getByRole('button', { name: /Box 1 · top/ })
+    openings.getByRole('button', { name: /Box 1 · Top face/ })
   ).toHaveAttribute('aria-pressed', 'true');
   await thickness.fill('3');
   // One press checks the exact result and, when it builds, commits it.
@@ -1734,7 +1733,7 @@ for (const modifier of [
       name: 'Feature inspector'
     });
     await expect(inspector.locator('.selection-summary')).toContainText(
-      '2 exact edges selected'
+      '2 edges selected'
     );
     // The tool's card is the one surface for the command: the edge
     // operation's "Ready" chip no longer stands above it saying the same.
@@ -1787,7 +1786,7 @@ test('a refused fillet size marks the handle and says why in the card', async ({
   const edge = await locateEdge(page);
   await page.mouse.click(edge.x, edge.y);
   await expect(inspector.locator('.selection-summary')).toContainText(
-    '1 exact edge selected'
+    '1 edge selected'
   );
 
   const radius = inspector.getByRole('textbox', {
@@ -2248,7 +2247,7 @@ test('grounds an AI fillet request onto every selected edge', async ({
   await expect(page.getByRole('contentinfo')).toContainText('warnings0');
   await expect(promptField(page)).toHaveAttribute(
     'placeholder',
-    'Ask about the model, or / for a command'
+    'Search commands or ask about the model'
   );
   await expect(page.getByRole('button', { name: 'Deselect all' })).toHaveCount(
     0
@@ -2664,7 +2663,7 @@ test('imports a STEP solid, fillets it, and re-exports it', async ({
   const inspector = page.getByRole('region', { name: 'Feature inspector' });
   await inspector.getByRole('button', { name: 'Select all 12 edges' }).click();
   await expect(inspector.locator('.selection-summary')).toContainText(
-    '12 exact edges selected'
+    '12 edges selected'
   );
   await inspector.getByRole('button', { name: /^Create/ }).click();
 
@@ -3920,7 +3919,11 @@ test('each sketch plane label names the plane it actually opens', async ({
   const extrudeKeypad = page.getByRole('dialog', { name: 'Height value' });
   await extrudeKeypad.getByRole('textbox').fill('24');
   await extrudeKeypad.getByRole('button', { name: 'Apply height' }).click();
-  await expect(page.locator('.selection-callout-chip')).toBeVisible();
+  await expect(page.getByRole('contentinfo')).toContainText(
+    'Extruded region by 24 mm',
+    { timeout: 20_000 }
+  );
+  await selectBodyFromItems(page);
   // Read from the detail: the name beside it ("Extrude 1") ends in a digit.
   const chip =
     (await page
@@ -4031,8 +4034,11 @@ test('types an exact rectangle while drawing it', async ({ page }) => {
   const extrudeKeypad = page.getByRole('dialog', { name: 'Height value' });
   await extrudeKeypad.getByRole('textbox').fill('24');
   await extrudeKeypad.getByRole('button', { name: 'Apply height' }).click();
-
-  await expect(page.locator('.selection-callout-chip')).toBeVisible();
+  await expect(page.getByRole('contentinfo')).toContainText(
+    'Extruded region by 24 mm',
+    { timeout: 20_000 }
+  );
+  await selectBodyFromItems(page);
   // The size is read from the chip's detail: the body name beside it
   // ("Extrude 1") ends in a digit that would run into the first dimension.
   const chip =

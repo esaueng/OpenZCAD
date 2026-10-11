@@ -8,7 +8,13 @@ import {
 } from '@openzcad/document-core';
 import { toUserId, type ProjectDocument } from '@openzcad/shared';
 import type { Locator, Page } from '@playwright/test';
-import { test, expect, stubApi, expectBodyCount } from './openzcad-fixtures';
+import {
+  test,
+  expect,
+  stubApi,
+  expectBodyCount,
+  selectBodyFromItems
+} from './openzcad-fixtures';
 
 interface RegionHandle {
   x: number;
@@ -407,6 +413,7 @@ test('a glyph pick selects, arms and builds the whole word', async ({
     { timeout: 30_000 }
   );
   await expectBodyCount(page, 1);
+  await selectBodyFromItems(page);
   // The body spans all three letters (about 28 mm at this size), not the one
   // glyph that was clicked (an H alone is under 15 mm).
   const detail =

@@ -186,10 +186,11 @@ Each slice is one PR against `main`, recorded on the U04 row when it merges.
 
 ## Open questions
 
-- **Neutral solids.** The design shows committed bodies in neutral grey so the
-  signal colour carries selection. Body colours today are written into the
-  document at creation (`featureColor`), so changing the default is a
-  document-level decision, not a restyle. Not in any slice yet.
+- **Neutral solids.** Decided by design review G2 (11 Oct 2026): bodies draw
+  in one neutral steel (`DEFAULT_BODY_COLOR`). Documents still stamp
+  `featureColor` at creation; the stamp is read as "no choice", and a colour
+  someone picks is marked chosen (`colorChosen`), so no document is
+  rewritten.
 - **Sketch Discard.** The design has Discard beside Finish. Each sketch entity
   is committed as its own command, so there is no session to discard; slice 6
   ships Finish only unless a rollback is designed.

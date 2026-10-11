@@ -9,7 +9,13 @@ const zero = { x: 0, y: 0, z: 0 };
 /** Visible label and accessible name of every input with a label, in order. */
 function fieldNames(root: HTMLElement) {
   return Array.from(root.querySelectorAll('input')).flatMap((input) => {
-    const label = input.closest('label')?.querySelector(':scope > span');
+    // The Move card wraps each input in its label; an expression field's
+    // label points at its input from beside it (`for`).
+    const label =
+      input.closest('label')?.querySelector(':scope > span') ??
+      Array.from(root.querySelectorAll('label')).find(
+        (candidate) => input.id !== '' && candidate.htmlFor === input.id
+      );
     return label
       ? [{ label: label.textContent, name: input.getAttribute('aria-label') }]
       : [];

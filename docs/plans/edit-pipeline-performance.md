@@ -237,3 +237,14 @@ analysis/cache buffers. The
 same-`2026.1.45` application comparisons, separate Remus `2026.1.46` →
 `2026.1.52` measurements, and final combined-package validation. Timings and
 target-device conclusions require their recorded evidence.
+
+Tracing follow-up (11 October 2026, PR #624 review): geometry-only face-drag
+candidates now omit the authoritative `geometryTrace`. Their installations and
+rendered frames must not emit `oz:edit.installed` or `oz:edit.frame` for the live
+base revision. Accepted live geometry still carries `pending`, and complete
+committed revisions retain their normal tracing. The focused
+`visual-selection-live-preview.spec.ts` regression reproduces both false ready
+measures on unchanged main, then passes locally in headless Microsoft Edge with
+the guard: drag and typed candidates emit neither measure, while Apply emits
+ready installation/frame measures for the newer committed revision. This is
+tracing correctness evidence, not a new latency measurement.

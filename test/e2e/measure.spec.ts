@@ -93,7 +93,7 @@ test('measuring in View leaves the Build selection untouched', async ({
   await setSelectionFilter(page, 'Edge');
   const buildEdge = await locateEdge(page);
   await page.mouse.click(buildEdge.x, buildEdge.y);
-  await expect(status).toContainText('1 exact edge selected');
+  await expect(status).toContainText('1 edge selected');
   const selectedBefore = await page
     .locator('.selection-callout-chip .selection-callout-name')
     .textContent();

@@ -80,7 +80,7 @@ test('Hole: selecting the feature opens its form, and Apply closes it', async ({
   await createBox(page);
   await page.getByRole('button', { name: /^Hole/ }).click();
   const entry = page.getByRole('group', { name: 'Entry face' });
-  await entry.getByRole('button', { name: /Box 1 · top/ }).click();
+  await entry.getByRole('button', { name: /Box 1 · Top face/ }).click();
   await page.getByRole('textbox', { name: 'Diameter', exact: true }).fill('5');
   await page.getByRole('button', { name: 'Create hole' }).click();
   await expect(row(page, /^Hole/)).toBeVisible({ timeout: 20_000 });
@@ -96,7 +96,7 @@ test('Hole: selecting the feature opens its form, and Apply closes it', async ({
     inspector.getByRole('button', { name: 'Edit hole' })
   ).toHaveCount(0);
   await expect(
-    entry.getByRole('button', { name: /Box 1 · top/ })
+    entry.getByRole('button', { name: /Box 1 · Top face/ })
   ).toHaveAttribute('aria-pressed', 'true');
   await diameter.fill('8');
   await page.getByRole('button', { name: 'Apply hole' }).click();
@@ -180,6 +180,15 @@ test('Fillet: Apply closes the card, a refused Apply keeps it open with the reas
   await inspector.getByRole('button', { name: 'Select all 2 edges' }).click();
   const radius = inspector.getByLabel('Radius', { exact: true });
   await radius.fill('1');
+  // The edge pick demands lineage, and that rebuild drops the card's target
+  // and restores it while the radius is being typed. Wait for both edges to
+  // be listed again: the typed radius must still be the one Create sends.
+  await expect(
+    inspector
+      .getByRole('list', { name: 'Filleted edges' })
+      .getByRole('listitem')
+  ).toHaveCount(2);
+  await expect(radius).toHaveValue('1');
   await inspector.getByRole('button', { name: /^Create/ }).click();
   await expect(row(page, /^Fillet/)).toBeVisible({ timeout: 20_000 });
   await expect(inspector).toHaveCount(0);
@@ -209,4 +218,34 @@ test('Fillet: Apply closes the card, a refused Apply keeps it open with the reas
   await row(page, /^Fillet/).click();
   await expect(radius).toHaveValue('2');
   await expect(page.locator('.feature-row')).toHaveCount(2);
+});
+
+test('Fillet: a radius typed before the edges are picked is the one created', async ({
+  page
+}) => {
+  // QA 11 October 2026: an all-edges fillet typed as 99 was saved with the
+  // default radius 2, overwritten while the edge selection initialised.
+  test.setTimeout(90_000);
+  await createProject(page, 'Fillet typed first');
+  await page.getByRole('button', { name: /^Cylinder \(C\)/ }).click();
+  const inspector = inspectorOf(page);
+  await inspector.getByLabel('Radius', { exact: true }).fill('14');
+  await inspector.getByLabel('Height', { exact: true }).fill('28');
+  await inspector.getByRole('button', { name: /^Create/ }).click();
+  await page.getByRole('button', { name: /^Fillet/ }).click();
+  const radius = inspector.getByLabel('Radius', { exact: true });
+  await radius.fill('1.5');
+  await inspector.getByRole('button', { name: 'Select all 2 edges' }).click();
+  await expect(
+    inspector
+      .getByRole('list', { name: 'Filleted edges' })
+      .getByRole('listitem')
+  ).toHaveCount(2);
+  await expect(radius).toHaveValue('1.5');
+  await inspector.getByRole('button', { name: /^Create/ }).click();
+  await expect(row(page, /^Fillet/)).toBeVisible({ timeout: 20_000 });
+  await expect(inspector).toHaveCount(0);
+
+  await row(page, /^Fillet/).click();
+  await expect(radius).toHaveValue('1.5');
 });

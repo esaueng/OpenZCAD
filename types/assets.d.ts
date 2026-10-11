@@ -12,6 +12,8 @@ declare module '*.mjs?url' {
 interface ImportMetaEnv {
   /** Vite's own flag: true on the dev server (and in Vitest), false in builds. */
   readonly DEV: boolean;
+  /** Vite's mode: "production" in builds, "development" served, "test" in Vitest. */
+  readonly MODE: string;
   readonly VITE_E2E?: string;
   readonly OZ_PERF?: string;
   readonly OZ_BUILD_COMMIT: string;
