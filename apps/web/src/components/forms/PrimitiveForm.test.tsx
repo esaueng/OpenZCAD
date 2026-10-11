@@ -8,6 +8,59 @@ import {
 } from './parameterDefinition';
 
 describe('PrimitiveForm dimension validation', () => {
+  // Production QA CAD-004: an inch project refused both inputs as needing
+  // "the document's units", which the form had all along.
+  it('accepts unit-suffixed sizes in an inch document and previews them in inches', () => {
+    const onSubmit = vi.fn();
+    render(
+      <PrimitiveForm
+        kind="box"
+        scope={{}}
+        documentUnits="inch"
+        initialName="Imperial fixture"
+        submitLabel="Create"
+        onSubmit={onSubmit}
+      />
+    );
+    const width = screen.getByRole('textbox', { name: 'Width (X)' });
+    fireEvent.change(width, { target: { value: '1 in + 25.4 mm' } });
+    expect(width).not.toHaveAttribute('aria-invalid');
+    expect(width).toHaveAccessibleDescription('= 2');
+    const depth = screen.getByRole('textbox', { name: 'Depth (Y)' });
+    fireEvent.change(depth, { target: { value: '25.4 mm' } });
+    expect(depth).toHaveAccessibleDescription('= 1');
+    const cornerX = screen.getByRole('textbox', { name: 'Corner X' });
+    fireEvent.change(cornerX, { target: { value: '12.7 mm' } });
+    expect(cornerX).toHaveAccessibleDescription('= 0.5');
+    fireEvent.click(screen.getByRole('button', { name: 'Create' }));
+    expect(onSubmit).toHaveBeenCalledWith(
+      'Imperial fixture',
+      { width: '1 in + 25.4 mm', height: '25.4 mm', depth: 24 },
+      { x: '12.7 mm', y: 0, z: 0 }
+    );
+  });
+
+  it.each([
+    ['30 deg', 'expected a length, not an angle or area'],
+    ['(2 mm) * (3 mm)', 'expected a length, not an angle or area']
+  ])('refuses %s in a size field by its dimension', (value, reason) => {
+    render(
+      <PrimitiveForm
+        kind="box"
+        scope={{}}
+        documentUnits="inch"
+        initialName="Imperial fixture"
+        submitLabel="Create"
+        onSubmit={vi.fn()}
+      />
+    );
+    const width = screen.getByRole('textbox', { name: 'Width (X)' });
+    fireEvent.change(width, { target: { value } });
+    expect(width).toHaveAttribute('aria-invalid', 'true');
+    expect(width).toHaveAccessibleDescription(expect.stringContaining(reason));
+    expect(screen.getByRole('button', { name: 'Create' })).toBeDisabled();
+  });
+
   it.each(['-5', '0', 'w - 10'])(
     'rejects %s before mouse or keyboard submission and allows correction',
     (value) => {
@@ -16,6 +69,7 @@ describe('PrimitiveForm dimension validation', () => {
         <PrimitiveForm
           kind="box"
           scope={{ w: 5 }}
+          documentUnits="mm"
           initialName="QA Box"
           submitLabel="Create"
           onSubmit={onSubmit}
@@ -45,6 +99,7 @@ describe('PrimitiveForm dimension validation', () => {
       initialName: 'QA Box',
       initialDimensions: { width: 'w', height: 18, depth: 24 },
       submitLabel: 'Apply',
+      documentUnits: 'mm' as const,
       onSubmit: vi.fn()
     };
     const { rerender } = render(<PrimitiveForm {...props} scope={{ w: 30 }} />);
@@ -65,6 +120,7 @@ describe('PrimitiveForm dimension validation', () => {
       <PrimitiveForm
         kind="box"
         scope={{}}
+        documentUnits="mm"
         initialName="QA Box"
         initialDimensions={{ width: 30, height: 18, depth: 24 }}
         submitLabel="Apply"
@@ -83,6 +139,7 @@ describe('PrimitiveForm dimension validation', () => {
       <PrimitiveForm
         kind="cone"
         scope={{}}
+        documentUnits="mm"
         initialName="QA Cone"
         submitLabel="Create"
         onSubmit={vi.fn()}
@@ -108,6 +165,7 @@ describe('PrimitiveForm position row', () => {
       <PrimitiveForm
         kind={kind}
         scope={{}}
+        documentUnits="mm"
         initialName="Part"
         submitLabel="Create"
         onSubmit={vi.fn()}
@@ -129,6 +187,7 @@ describe('PrimitiveForm position row', () => {
       <PrimitiveForm
         kind="cylinder"
         scope={{ lift: 24 }}
+        documentUnits="mm"
         initialName="Cylinder"
         submitLabel="Create"
         onSubmit={onSubmit}
@@ -154,6 +213,7 @@ describe('PrimitiveForm position row', () => {
       <PrimitiveForm
         kind="box"
         scope={{}}
+        documentUnits="mm"
         initialName="Box"
         submitLabel="Create"
         onSubmit={onSubmit}
@@ -171,6 +231,7 @@ describe('PrimitiveForm position row', () => {
       <PrimitiveForm
         kind="box"
         scope={{}}
+        documentUnits="mm"
         initialName="Box"
         initialDimensions={{ width: 30, height: 18, depth: 24 }}
         initialPosition={{ x: 10, y: 0, z: 5 }}
@@ -198,6 +259,7 @@ describe('PrimitiveForm submit button', () => {
       <PrimitiveForm
         kind="box"
         scope={{}}
+        documentUnits="mm"
         initialName="Box"
         submitLabel="Create"
         onSubmit={vi.fn()}

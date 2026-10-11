@@ -80,6 +80,19 @@ follow-up; until then a length suffix typed into one of those fields is
 refused by name, so no field can silently read `5 mm` in an inch document as
 millimetres. Angle suffixes and unit-free expressions work everywhere.
 
+Follow-up, 11 October (production QA CAD-004): typed fields evaluate through
+`evaluateFieldExpression(expression, scope, { documentUnits, dimension })`,
+which converts suffixes into document units and refuses a result of another
+dimension (`'length' | 'angle'`) on the same throw path, with the keypad's
+wording (the keypad now uses it). `evaluateExpression` is unchanged. The
+primitive slice types `PrimitiveForm`'s sizes and anchor position as
+lengths, and `buildPrimitive` and the history summary resolve sizes in
+document units, so `1 in + 25.4 mm` builds 2 in in an inch document; the
+field refuses `30 deg` in a size, which previously built a 30-unit box. The
+kernel build does not repeat the dimension check (the kernel worker chunk is
+99 bytes under its size budget on `main`). Fields that declare no quantity
+behave exactly as above; the remaining scope-only helpers are unchanged.
+
 Edge note: zero-argument calls changed message only (still throw):
 `min()` was `Unexpected token`, now fails the finite-result check;
 `sin()` was `Unexpected token`, now `expects exactly one argument`.
