@@ -172,11 +172,40 @@ export function loadActiveProjectId(
   return readSession(storage).activeProjectId;
 }
 
+/**
+ * What the active-project pointer held when an open began. Opening a project
+ * awaits storage and the network before it records itself, and in that time
+ * another tab (or a test seeding the session) may have pointed the session
+ * somewhere newer.
+ */
+export interface ActiveProjectSnapshot {
+  readonly activeProjectId: string | null;
+}
+
+export function snapshotActiveProject(
+  storage: StorageLike | null = defaultStorage()
+): ActiveProjectSnapshot {
+  return { activeProjectId: readSession(storage).activeProjectId };
+}
+
+/**
+ * Points the session at `projectId`. Given the snapshot taken when the open
+ * began, this is a compare-and-set: a pointer that moved since then is a newer
+ * choice than this open, and is kept.
+ */
 export function rememberActiveProject(
   projectId: string,
-  storage: StorageLike | null = defaultStorage()
+  storage: StorageLike | null = defaultStorage(),
+  since?: ActiveProjectSnapshot
 ): boolean {
   const session = readSession(storage);
+  if (
+    since &&
+    session.activeProjectId !== since.activeProjectId &&
+    session.activeProjectId !== projectId
+  ) {
+    return false;
+  }
   return writeSession({ ...session, activeProjectId: projectId }, storage);
 }
 
