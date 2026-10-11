@@ -1284,7 +1284,6 @@ import {
 import { PanelOverflow } from './components/PanelOverflow';
 import {
   clearActiveProject,
-  loadActiveProjectId,
   rememberActiveProject,
   snapshotActiveProject,
   type ActiveProjectSnapshot,
@@ -1757,16 +1756,20 @@ export function App() {
   // The active-project pointer is synchronous knowledge. Reading it lazily
   // lets the first render choose a stable restore surface instead of mounting
   // the launcher while IndexedDB and the optional cloud copy are still loading.
-  const [startupProjectId] = useState<string | null>(() =>
-    !pendingInvitationToken &&
-    !pendingShareToken &&
-    appSettings.general.reopenLastProject
-      ? loadActiveProjectId()
-      : null
-  );
-  // Read in the same synchronous render, so the restore can tell whether the
-  // pointer was written while it loaded.
-  const [startupPointer] = useState(snapshotActiveProject);
+  // One read gives both the project to restore and the compare-and-set guard
+  // for it, so a write from another tab cannot fall between them.
+  const [{ startupPointer, startupProjectId }] = useState(() => {
+    const pointer = snapshotActiveProject();
+    return {
+      startupPointer: pointer,
+      startupProjectId:
+        !pendingInvitationToken &&
+        !pendingShareToken &&
+        appSettings.general.reopenLastProject
+          ? pointer.activeProjectId
+          : null
+    };
+  });
   const [startupState, setStartupState] = useState<
     'restoring' | 'loading-library' | 'ready'
   >(() => (startupProjectId ? 'restoring' : 'loading-library'));
