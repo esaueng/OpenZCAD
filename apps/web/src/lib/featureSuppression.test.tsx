@@ -22,6 +22,7 @@ import {
 } from '../hooks/useValidatedFeatureCommit';
 import type { FeatureBuildError } from './featureValidation';
 import {
+  activeSuppressionPrompt,
   FeatureSuppressionRefusal,
   resolveSuppressionBranch,
   suppressBranchLabel,
@@ -461,5 +462,22 @@ describe('exact suppression preflight', () => {
     expect(refused(manager.document, derived, feature)).toContain(
       '"Attached profile": Attached face is stale.'
     );
+  });
+});
+
+describe('suppression prompt scope', () => {
+  // Codex P2 on #630: a prompt left pending across a project switch hid its
+  // dialog but kept the new project's shortcuts and exact entry disabled.
+  it('belongs only to the project that raised it', () => {
+    const prompt = {
+      projectId: 'project_a',
+      featureId: 'feat_boss' as FeatureId,
+      name: 'Boss',
+      dependents: []
+    };
+    expect(activeSuppressionPrompt(prompt, 'project_a')).toBe(prompt);
+    expect(activeSuppressionPrompt(prompt, 'project_b')).toBeNull();
+    expect(activeSuppressionPrompt(prompt, undefined)).toBeNull();
+    expect(activeSuppressionPrompt(null, 'project_a')).toBeNull();
   });
 });

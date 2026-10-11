@@ -1237,6 +1237,7 @@ import {
   type SuppressionNotice
 } from './lib/suppressionFeedback';
 import {
+  activeSuppressionPrompt,
   FeatureSuppressionRefusal,
   resolveSuppressionBranch,
   suppressBranchLabel,
@@ -4333,6 +4334,7 @@ export function App() {
     // command the new, empty one was somehow in the middle of.
     dispatchInteraction({ type: 'clear' });
     setPendingFeatureDelete(null);
+    setPendingSuppression(null);
     setPendingToolSwitch(null);
   }, [doc?.projectId]);
 
@@ -17122,7 +17124,7 @@ export function App() {
     !pendingShaprImport &&
     !meshExportOpen &&
     !pendingFeatureDelete &&
-    !pendingSuppression &&
+    !activeSuppressionPrompt(pendingSuppression, doc?.projectId) &&
     !pendingToolSwitch;
   exactEntryInputEnabledRef.current =
     workspaceInputEnabled && !paletteOpen && !shortcutsOpen && !namingSave;
@@ -20736,7 +20738,7 @@ export function App() {
             />
           )}
           {pendingSuppression &&
-            doc?.projectId === pendingSuppression.projectId && (
+            activeSuppressionPrompt(pendingSuppression, doc?.projectId) && (
               <SuppressFeatureDialog
                 name={pendingSuppression.name}
                 dependents={pendingSuppression.dependents.map(
