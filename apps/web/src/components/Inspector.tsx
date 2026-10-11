@@ -1516,7 +1516,12 @@ export function Inspector(props: InspectorProps) {
     } else if (tool === 'fillet' || tool === 'chamfer') {
       body = (
         <EdgeModifierForm
-          key={`create-${tool}-${edgeModifierBody?.bodyId ?? 'none'}`}
+          // One card per tool session, not per target body. The target drops
+          // to null and back whenever a rebuild publishes an analysis-pending
+          // snapshot — arming the tool or picking edges demands lineage, so
+          // that happens while the user is typing — and a body-keyed card
+          // remounted twice and replaced the typed size with the default.
+          key={`create-${tool}`}
           kind={tool}
           scope={scope}
           targetBodyId={edgeModifierBody?.bodyId ?? null}
