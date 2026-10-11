@@ -284,13 +284,13 @@ export class SolidFaceAdjacency {
   }
 
   straightEdges(face: number): boolean {
-    return Array.from(this.kernel.getFaceEdges(face)).every(
+    return this.kernel.getFaceEdges(face).every(
       (edge) => this.kernel.getEdgeCurveType(edge) === 'LINE'
     );
   }
 
   edgeCount(face: number): number {
-    return Array.from(this.kernel.getFaceEdges(face)).length;
+    return this.kernel.getFaceEdges(face).length;
   }
 
   private readPlane(face: number): PlanarFaceWitness | null {
