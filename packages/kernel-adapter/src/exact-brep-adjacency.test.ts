@@ -1,5 +1,6 @@
 import { describe, expect, it } from 'vitest';
-import { tangentPlanarNeighbours } from './exact-brep';
+import { readAnalyticCylinder, tangentPlanarNeighbours } from './exact-brep';
+import { GEOMETRY_EPSILON } from './exact-math';
 import { SyncReadMemo, withSyncReadMemo } from './exact-sync-memo';
 import { RemusKernel } from './remus-runtime';
 
@@ -38,6 +39,50 @@ function bandFixture() {
 }
 
 describe('cylindrical blend adjacency', () => {
+  it('shares exact cylinder parsing without weakening radius, axis, or domain checks', () => {
+    const { kernel } = bandFixture();
+    kernel.getSolidFaces = () => Uint32Array.of(40, 10, 30);
+    kernel.getSurfaceDomain = () => Float64Array.of(0, Math.PI * 2, 5, -3);
+    kernel.getAnalyticSurfaceParams = () =>
+      JSON.stringify({ origin: [0, 0, 0], axis: [0, 0, 2], radius: 1 });
+    expect(readAnalyticCylinder(kernel, 7)).toEqual({
+      origin: { x: 0, y: 0, z: 0 },
+      axis: { x: 0, y: 0, z: 1 },
+      radius: 1,
+      axialMin: -3,
+      axialMax: 5
+    });
+    expect(tangentPlanarNeighbours(kernel, 7, 10)).toEqual([40, 30]);
+
+    const valid = { origin: [0, 0, 0], axis: [0, 0, 1], radius: 1 };
+    for (const invalid of [
+      'invalid JSON',
+      'null',
+      '3',
+      '[]',
+      JSON.stringify({ ...valid, origin: [0, 0] }),
+      JSON.stringify({ ...valid, axis: [0, 0, 0] }),
+      JSON.stringify({ ...valid, radius: GEOMETRY_EPSILON }),
+      JSON.stringify({ ...valid, radius: -1 }),
+      JSON.stringify({ ...valid, radius: '1' }),
+      '{"origin":[0,0,0],"axis":[0,0,1],"radius":1e999}'
+    ]) {
+      kernel.getAnalyticSurfaceParams = () => invalid;
+      expect(readAnalyticCylinder(kernel, 7), invalid).toBeNull();
+      expect(tangentPlanarNeighbours(kernel, 7, 10), invalid).toEqual([]);
+    }
+
+    kernel.getAnalyticSurfaceParams = () => JSON.stringify(valid);
+    for (const domain of [
+      Float64Array.of(0, 1, 2),
+      Float64Array.of(0, 1, 2, Number.NaN),
+      Float64Array.of(0, 1, 2, Number.POSITIVE_INFINITY)
+    ]) {
+      kernel.getSurfaceDomain = () => domain;
+      expect(readAnalyticCylinder(kernel, 7)).toBeNull();
+    }
+  });
+
   it('preserves the exhaustive tangency proof while skipping unrelated boundaries', () => {
     const { kernel, unrelated, edgeReads } = bandFixture();
     const exhaustive = tangentPlanarNeighbours(kernel, 7, 10);

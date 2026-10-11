@@ -50,6 +50,17 @@ export function analyticSurfaceRecord(
   }
 }
 
+/** Exact analytic cylinder data shared by solid and blend-band queries. */
+function cylinderSurface(
+  record: Record<string, unknown> | null
+): Pick<AnalyticCylinder, 'origin' | 'axis' | 'radius'> | null {
+  const origin = finiteVec3(record?.origin);
+  const rawAxis = finiteVec3(record?.axis);
+  const axis = rawAxis ? normalized(rawAxis) : null;
+  const radius = positiveFinite(record?.radius);
+  return origin && axis && radius !== null ? { origin, axis, radius } : null;
+}
+
 export function sameSphereSurface(kernel: RemusKernel, faces: number[]): boolean {
   if (
     faces.length !== 2 ||
@@ -190,7 +201,7 @@ export function brepEdgeCircle(
     // Any parameter on the underlying circle gives the same circle. The domain
     // start is simply one the kernel is certain to accept; nothing about the
     // range itself is used, and nothing about it is published.
-    const parameter = Array.from(kernel.getEdgeCurveParameters(edge))[0] ?? 0;
+    const parameter = kernel.getEdgeCurveParameters(edge)[0] ?? 0;
     curvature = Array.from(kernel.measureCurvatureAtEdge(edge, parameter));
     position = Array.from(kernel.evaluateEdgeCurve(edge, parameter));
   } catch {
@@ -199,16 +210,14 @@ export function brepEdgeCircle(
     // no published curve rather than a failed rebuild.
     return undefined;
   }
-  const curvatureValue = curvature[0];
+  const curvatureValue = positiveFinite(curvature[0]);
   const measuredTangent = finiteVec3(curvature.slice(1, 4));
   // Points at the centre of curvature, which is what turns a point on the
   // circle into the circle's centre.
   const measuredInward = finiteVec3(curvature.slice(4, 7));
   const anchor = finiteVec3(position.slice(0, 3));
   if (
-    typeof curvatureValue !== 'number' ||
-    !Number.isFinite(curvatureValue) ||
-    curvatureValue <= GEOMETRY_EPSILON ||
+    curvatureValue === null ||
     !measuredTangent ||
     !measuredInward ||
     !anchor
@@ -380,7 +389,7 @@ export function readAnalyticCylinder(
   kernel: RemusKernel,
   solid: number
 ): AnalyticCylinder | null {
-  const faces = Array.from(kernel.getSolidFaces(solid));
+  const faces = kernel.getSolidFaces(solid);
   const cylinderFaces = faces.filter(
     (face) => surfaceTypeOf(kernel, face) === 'cylinder'
   );
@@ -393,27 +402,12 @@ export function readAnalyticCylinder(
   }
 
   const face = cylinderFaces[0]!;
-  let parameters: unknown;
-  try {
-    parameters = JSON.parse(kernel.getAnalyticSurfaceParams(face));
-  } catch {
-    return null;
-  }
-  if (!parameters || typeof parameters !== 'object') {
-    return null;
-  }
-  const record = parameters as Record<string, unknown>;
-  const origin = finiteVec3(record.origin);
-  const rawAxis = finiteVec3(record.axis);
-  const axis = rawAxis ? normalized(rawAxis) : null;
-  const radius = record.radius;
-  const domain = Array.from(kernel.getSurfaceDomain(face));
+  const record = analyticSurfaceRecord(kernel, face);
+  if (!record) return null;
+  const cylinder = cylinderSurface(record);
+  const domain = kernel.getSurfaceDomain(face);
   if (
-    !origin ||
-    !axis ||
-    typeof radius !== 'number' ||
-    !Number.isFinite(radius) ||
-    radius <= GEOMETRY_EPSILON ||
+    !cylinder ||
     domain.length !== 4 ||
     !domain.every(Number.isFinite)
   ) {
@@ -421,9 +415,7 @@ export function readAnalyticCylinder(
   }
 
   return {
-    origin,
-    axis,
-    radius,
+    ...cylinder,
     axialMin: Math.min(domain[2]!, domain[3]!),
     axialMax: Math.max(domain[2]!, domain[3]!)
   };
@@ -475,20 +467,11 @@ export function tangentPlanarNeighbours(
   if (surfaceTypeOf(kernel, face) !== 'cylinder') {
     return [];
   }
-  let parameters: unknown;
-  try {
-    parameters = JSON.parse(kernel.getAnalyticSurfaceParams(face));
-  } catch {
+  const cylinder = cylinderSurface(analyticSurfaceRecord(kernel, face));
+  if (!cylinder) {
     return [];
   }
-  const record = (parameters ?? {}) as Record<string, unknown>;
-  const origin = finiteVec3(record.origin);
-  const rawAxis = finiteVec3(record.axis);
-  const axis = rawAxis ? normalized(rawAxis) : null;
-  const radius = positiveFinite(record.radius);
-  if (!origin || !axis || radius === null) {
-    return [];
-  }
+  const { origin, axis, radius } = cylinder;
   const bandEdges = new Set(kernel.getFaceEdges(face));
   const tolerance = Math.max(
     BLEND_TANGENCY_TOLERANCE * radius,
@@ -505,9 +488,7 @@ export function tangentPlanarNeighbours(
     if (
       neighbour === face ||
       surfaceTypeOf(kernel, neighbour) !== 'plane' ||
-      !Array.from(kernel.getFaceEdges(neighbour)).some((edge) =>
-        bandEdges.has(edge)
-      )
+      !kernel.getFaceEdges(neighbour).some((edge) => bandEdges.has(edge))
     ) {
       continue;
     }
@@ -579,13 +560,13 @@ export function selectionTouchesBlendFace(
     return false;
   }
   return selectedEdges.some((edge) =>
-    Array.from(kernel.getEdgeVertexHandles(edge)).some((vertex) =>
+    kernel.getEdgeVertexHandles(edge).some((vertex) =>
       blendVertices.has(vertex)
     )
   );
 }
 export function faceVertexCentroid(kernel: RemusKernel, face: number): Vec3 | null {
-  const vertices = Array.from(kernel.getFaceVertices(face));
+  const vertices = kernel.getFaceVertices(face);
   if (vertices.length === 0) {
     return null;
   }

@@ -106,6 +106,19 @@ describe('sync read memo', () => {
     expect(reads.edgeToFaceMap).toBe(1);
     expect(reads.solidLists).toBe(1);
   });
+
+  it('uses registered solid faces without reading their list again', () => {
+    const { kernel, reads } = fakeKernel({
+      7: { faces: [11, 10], edges: [1] }
+    });
+    const memo = new SyncReadMemo(kernel);
+    memo.registerSolid(7);
+    expect(reads.solidLists).toBe(1);
+    expect(memo.facesAdjacentToEdges(7, [1])).toEqual([11, 10]);
+    expect(memo.facesAdjacentToEdges(7, [99])).toEqual([]);
+    expect(reads.solidLists).toBe(1);
+    expect(reads.edgeToFaceMap).toBe(1);
+  });
 });
 
 describe('topology witness store', () => {
