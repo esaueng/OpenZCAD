@@ -79,6 +79,7 @@ import {
   chooseRotateSnapStep,
   chooseViewportScale,
   scaleBarAnchor,
+  presentedBoundsCenter,
   clearGroup,
   closestAxisT,
   composeMoveTransform,
@@ -1787,8 +1788,6 @@ export function ModelViewer({
   }, [suppliedBodies]);
   const hostRef = useRef<HTMLDivElement | null>(null);
   const contextRef = useRef<SceneContext | null>(null);
-  /** The rendered bodies' bounds centre: the depth the scale bar reads. */
-  const modelCenterRef = useRef<THREE.Vector3 | null>(null);
   const topologyPickListRef = useRef<TopologyPickList | null>(null);
   const onSelectTopologyRef = useRef(onSelectTopology);
   onSelectTopologyRef.current = onSelectTopology;
@@ -4937,6 +4936,7 @@ export function ModelViewer({
     }
 
     const scaleBarForward = new THREE.Vector3();
+    const scaleBarModelCenter = new THREE.Vector3();
     /** World units spanned by one screen pixel at the given point. */
     function worldPerPixelAt(point: THREE.Vector3): number {
       const height = Math.max(renderer.domElement.clientHeight, 1);
@@ -8525,7 +8525,12 @@ export function ModelViewer({
             scaleBarAnchor(
               cameraRig.activeCamera.position,
               cameraRig.activeCamera.getWorldDirection(scaleBarForward),
-              modelCenterRef.current,
+              // What is drawn this frame, previews included, so a Move or
+              // parameter preview does not leave the bar to jump at commit.
+              presentedBoundsCenter(
+                [bodyGroup, parameterPreviewController.current?.group],
+                scaleBarModelCenter
+              ),
               cameraRig.controls.target
             )
           )
@@ -9570,9 +9575,6 @@ export function ModelViewer({
       for (const child of context.bodyGroup.children) {
         sceneBox.expandByObject(child);
       }
-      modelCenterRef.current = sceneBox.isEmpty()
-        ? null
-        : sceneBox.getCenter(new THREE.Vector3());
       if (!sceneBox.isEmpty()) {
         const sceneSize = sceneBox.getSize(new THREE.Vector3());
         const sceneCenter = sceneBox.getCenter(new THREE.Vector3());
@@ -11352,8 +11354,10 @@ export function ModelViewer({
       context.camera,
       context.bodyGroup.children.filter((child) => child.visible),
       context.camera.position.clone().sub(context.controls.target),
-      AUTO_FRAME_MARGIN_NDC,
-      measureFitFrame(context.renderer.domElement)
+      // The whole canvas, like the trigger above: framing into the clear
+      // stage here moved the camera on commits whose result was already in
+      // view, because the clear stage changes with whatever card is open.
+      AUTO_FRAME_MARGIN_NDC
     );
     context.startCameraTween(
       pose,
