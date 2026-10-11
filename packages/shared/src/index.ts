@@ -3368,30 +3368,29 @@ export const featureColor = (kind: FeatureKind): string =>
  * body. A colour marked chosen ({@link BODY_COLOR_CHOSEN_METADATA_KEY}) is
  * always kept; an unmarked colour other than the stamp was chosen before the
  * mark existed (an older appearance pick, a demo finish) and is kept too.
+ * With no feature kind to name the stamp, only a marked colour counts.
+ *
+ * Deliberately small: this runs in the exact-kernel chunk, which sits at its
+ * bundle budget. A stamp is compared as written, since `featureColor` writes
+ * every stamp as the same lower-case literal.
  */
 export function chosenBodyColor(
   metadata: Readonly<Record<string, string | number | boolean>> | undefined,
-  featureKind: FeatureKind | undefined
+  featureKind?: FeatureKind
 ): string | null {
   const stored = metadata?.[BODY_COLOR_METADATA_KEY];
-  if (typeof stored !== 'string' || stored.trim() === '') {
-    return null;
-  }
-  if (metadata?.[BODY_COLOR_CHOSEN_METADATA_KEY] === true) {
-    return stored;
-  }
-  const color = stored.trim().toLowerCase();
-  // With no feature to say which stamp it would carry, any stamp is one.
-  const stamps = featureKind
-    ? [featureColor(featureKind)]
-    : Object.values(FEATURE_COLORS);
-  return stamps.some((stamp) => stamp.toLowerCase() === color) ? null : stored;
+  return typeof stored === 'string' &&
+    stored &&
+    (metadata[BODY_COLOR_CHOSEN_METADATA_KEY] === true ||
+      (featureKind && stored !== featureColor(featureKind)))
+    ? stored
+    : null;
 }
 
 /** The colour a body is drawn in: its chosen colour, or the neutral default. */
 export function bodyDisplayColor(
   metadata: Readonly<Record<string, string | number | boolean>> | undefined,
-  featureKind: FeatureKind | undefined
+  featureKind?: FeatureKind
 ): string {
   return chosenBodyColor(metadata, featureKind) ?? DEFAULT_BODY_COLOR;
 }

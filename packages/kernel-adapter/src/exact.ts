@@ -1384,11 +1384,9 @@ export class RemusKernelAdapter implements ExactKernelAdapter {
               bodyId: body.bodyId,
               name: body.name,
               source: 'boolean',
-              color: bodyDisplayColor(
-                body.metadata,
-                features.find((entry) => entry.featureId === body.featureId)
-                  ?.featureKind
-              ),
+              // A disposable projection: with no feature kind only a chosen
+              // colour shows, and the full build that follows decides.
+              color: bodyDisplayColor(body.metadata),
               consumed: result.consumed.has(body.bodyId),
               exportableStep: false,
               faceCount: 0,
