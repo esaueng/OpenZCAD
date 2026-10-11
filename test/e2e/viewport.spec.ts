@@ -227,7 +227,7 @@ test('the viewport scale indicator tracks zoom in document units', async ({
   await expect(indicator).toBeVisible({ timeout: 15_000 });
   await expect(indicator).toHaveAttribute(
     'aria-label',
-    /^Viewport scale at the camera focus plane: .+ mm$/
+    /^Viewport scale at the model center plane: .+ mm$/
   );
 
   const canvas = page.locator('.viewer-host canvas');
