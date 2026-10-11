@@ -909,3 +909,76 @@ describe('CameraController wheel zoom', () => {
     controller.dispose();
   });
 });
+
+describe('CameraController view direction', () => {
+  const liveDirection = (controller: CameraController) =>
+    controller.activeCamera.position
+      .clone()
+      .sub(controller.controls.target)
+      .normalize();
+
+  it('keeps the perspective master on an orthographic orbit', () => {
+    // Fit reads its direction from the perspective master and every glide
+    // starts from it; an ortho orbit used to leave it on the old view.
+    const { controller } = createController();
+    controller.applyProjection('orthographic');
+    const halfHeight = controller.orthographic.top;
+    controller.beginOrbitDrag();
+    controller.orbitByPixels(200, -40);
+    controller.endOrbitDrag();
+
+    const ortho = liveDirection(controller);
+    const master = controller.perspective.position
+      .clone()
+      .sub(controller.controls.target)
+      .normalize();
+    expect(master.distanceTo(ortho)).toBeLessThan(1e-9);
+    expect(controller.viewDirection().distanceTo(ortho)).toBeLessThan(1e-9);
+
+    // Re-mirroring the master reproduces the same ortho picture.
+    const zoom = controller.orthographic.zoom;
+    controller.syncOrthographic(false);
+    expect(controller.orthographic.top).toBeCloseTo(halfHeight, 9);
+    expect(controller.orthographic.zoom).toBe(zoom);
+    expect(liveDirection(controller).distanceTo(ortho)).toBeLessThan(1e-9);
+    controller.dispose();
+  });
+
+  it('starts an orthographic glide from the live view, not a stale one', () => {
+    const { controller } = createController(false);
+    controller.applyProjection('orthographic');
+    controller.beginOrbitDrag();
+    controller.orbitByPixels(240, 0);
+    controller.endOrbitDrag();
+    // Let the damping tail settle, so the glide's start is the view now.
+    vi.advanceTimersByTime(2_000);
+    const before = liveDirection(controller);
+    const target = controller.controls.target.clone();
+    controller.startTween({
+      position: target.clone().addScaledVector(before, 300),
+      target,
+      near: 0.1,
+      far: 4000
+    });
+    controller.stepTween(performance.now());
+    expect(liveDirection(controller).distanceTo(before)).toBeLessThan(1e-6);
+    controller.dispose();
+  });
+
+  it('reports the destination of a glide in flight', () => {
+    const { controller } = createController(false);
+    const front = new THREE.Vector3(0, -1, 0);
+    controller.startTween({
+      position: front.clone().multiplyScalar(200),
+      target: new THREE.Vector3(),
+      near: 0.1,
+      far: 4000
+    });
+    expect(controller.viewDirection().distanceTo(front)).toBeLessThan(1e-9);
+    controller.cancelTween();
+    expect(
+      controller.viewDirection().distanceTo(liveDirection(controller))
+    ).toBeLessThan(1e-9);
+    controller.dispose();
+  });
+});
