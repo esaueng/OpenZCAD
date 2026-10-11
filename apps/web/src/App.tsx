@@ -1764,6 +1764,9 @@ export function App() {
       ? loadActiveProjectId()
       : null
   );
+  // Read in the same synchronous render, so the restore can tell whether the
+  // pointer was written while it loaded.
+  const [startupPointer] = useState(snapshotActiveProject);
   const [startupState, setStartupState] = useState<
     'restoring' | 'loading-library' | 'ready'
   >(() => (startupProjectId ? 'restoring' : 'loading-library'));
@@ -4694,9 +4697,8 @@ export function App() {
                 : 'synced'
         );
         if (startupProjectId && restoredDocument) {
-          // The pointer named this project when the first render read it.
           hydrateDocument(restoredDocument, {
-            activeProjectSince: { activeProjectId: startupProjectId }
+            activeProjectSince: startupPointer
           });
           if (accountDocumentNeedsRepair) {
             setSaveState('repair');

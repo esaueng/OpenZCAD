@@ -74,6 +74,38 @@ describe('workspace session persistence', () => {
     expect(loadProjectView('newer', storage)).toEqual(view);
   });
 
+  it('keeps a pointer rewritten to the id it held when the open began', () => {
+    const storage = new MemoryStorage();
+    rememberActiveProject('a', storage);
+    const openBegan = snapshotActiveProject(storage);
+    rememberActiveProject('b', storage);
+    rememberActiveProject('a', storage);
+
+    expect(rememberActiveProject('c', storage, openBegan)).toBe(false);
+    expect(loadActiveProjectId(storage)).toBe('a');
+
+    const homeBegan = snapshotActiveProject(storage);
+    clearActiveProject(storage);
+    const homeAgain = snapshotActiveProject(storage);
+    clearActiveProject(storage);
+
+    expect(rememberActiveProject('c', storage, homeBegan)).toBe(false);
+    expect(rememberActiveProject('c', storage, homeAgain)).toBe(false);
+    expect(loadActiveProjectId(storage)).toBeNull();
+  });
+
+  it('keeps a pointer seeded by a writer that knows no revision', () => {
+    const storage = new MemoryStorage();
+    const openBegan = snapshotActiveProject(storage);
+    storage.setItem(
+      WORKSPACE_SESSION_STORAGE_KEY,
+      JSON.stringify({ version: 1, activeProjectId: 'seeded', views: {} })
+    );
+
+    expect(rememberActiveProject('opened', storage, openBegan)).toBe(false);
+    expect(loadActiveProjectId(storage)).toBe('seeded');
+  });
+
   it('records the open when the pointer has not moved since it began', () => {
     const storage = new MemoryStorage();
     const fromEmpty = snapshotActiveProject(storage);
