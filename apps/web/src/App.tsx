@@ -1334,8 +1334,9 @@ import { useCommandCardPrefetch } from './lib/cardChunkPrefetch';
 import { PanelOverflow } from './components/PanelOverflow';
 import {
   clearActiveProject,
-  loadActiveProjectId,
   rememberActiveProject,
+  snapshotActiveProject,
+  type ActiveProjectSnapshot,
   type ViewportCameraState
 } from './lib/workspaceSession';
 import {
@@ -1570,6 +1571,17 @@ function summarizeLocalDocument(
   };
 }
 
+interface HydrateOptions {
+  restoreView?: boolean;
+  rememberProject?: boolean;
+  /**
+   * The active-project pointer when the open began. Opens await storage and
+   * the network before hydrating; a pointer that moved meanwhile is newer and
+   * is kept rather than overwritten.
+   */
+  activeProjectSince?: ActiveProjectSnapshot;
+}
+
 interface AccountProjectLoadResult {
   document: ProjectDocument | null;
   error?: unknown;
@@ -1794,13 +1806,20 @@ export function App() {
   // The active-project pointer is synchronous knowledge. Reading it lazily
   // lets the first render choose a stable restore surface instead of mounting
   // the launcher while IndexedDB and the optional cloud copy are still loading.
-  const [startupProjectId] = useState<string | null>(() =>
-    !pendingInvitationToken &&
-    !pendingShareToken &&
-    appSettings.general.reopenLastProject
-      ? loadActiveProjectId()
-      : null
-  );
+  // One read gives both the project to restore and the compare-and-set guard
+  // for it, so a write from another tab cannot fall between them.
+  const [{ startupPointer, startupProjectId }] = useState(() => {
+    const pointer = snapshotActiveProject();
+    return {
+      startupPointer: pointer,
+      startupProjectId:
+        !pendingInvitationToken &&
+        !pendingShareToken &&
+        appSettings.general.reopenLastProject
+          ? pointer.activeProjectId
+          : null
+    };
+  });
   const [startupState, setStartupState] = useState<
     'restoring' | 'loading-library' | 'ready'
   >(() => (startupProjectId ? 'restoring' : 'loading-library'));
@@ -4103,7 +4122,11 @@ export function App() {
         remoteDocument.projectId,
         remoteDocument.version
       );
-      hydrateDocument(remoteDocument, { restoreView: false });
+      hydrateDocument(remoteDocument, {
+        restoreView: false,
+        // The open project's own conflict: nothing to reopen differently.
+        rememberProject: false
+      });
       setAccountConflict(null);
       setStatus(
         `Using the version from your account; ${recoveryCopyNote(outcome)}.`
@@ -4549,7 +4572,9 @@ export function App() {
               document.version
             );
             remoteVersionsRef.current.set(document.projectId, document.version);
-            hydrateDocument(document);
+            // A refresh of the open project is not a choice to reopen it, and
+            // must not revise the pointer under an open of another project.
+            hydrateDocument(document, { rememberProject: false });
           },
           saveBaseline: (document) =>
             saveLastSyncedVersion(document.projectId, document.version),
@@ -4766,7 +4791,9 @@ export function App() {
                 : 'synced'
         );
         if (startupProjectId && restoredDocument) {
-          hydrateDocument(restoredDocument);
+          hydrateDocument(restoredDocument, {
+            activeProjectSince: startupPointer
+          });
           if (accountDocumentNeedsRepair) {
             setSaveState('repair');
             setStatus(
@@ -4807,7 +4834,7 @@ export function App() {
           return;
         }
         if (startupProjectId) {
-          clearActiveProject();
+          clearActiveProject(undefined, startupPointer);
         }
         // The mode only: the shelf heading beside this footer counts the
         // parts, and a second count here said the same thing twice.
@@ -4822,7 +4849,7 @@ export function App() {
         );
       } catch (error) {
         if (!cancelled) {
-          clearActiveProject();
+          clearActiveProject(undefined, startupPointer);
           setStatus(errorMessage(error, 'Could not restore the workspace.'));
         }
       } finally {
@@ -6188,7 +6215,7 @@ export function App() {
 
   function hydrateDocument(
     nextDocument: ProjectDocument,
-    options: { restoreView?: boolean; rememberProject?: boolean } = {}
+    options: HydrateOptions = {}
   ) {
     return timed('document.hydrate', () =>
       hydrateDocumentInner(nextDocument, options)
@@ -6197,7 +6224,7 @@ export function App() {
 
   function hydrateDocumentInner(
     nextDocument: ProjectDocument,
-    options: { restoreView?: boolean; rememberProject?: boolean } = {}
+    options: HydrateOptions = {}
   ) {
     let normalized: ProjectDocument;
     try {
@@ -6224,7 +6251,11 @@ export function App() {
       });
     }
     if (rememberProject) {
-      rememberActiveProject(normalized.projectId);
+      rememberActiveProject(
+        normalized.projectId,
+        undefined,
+        options.activeProjectSince
+      );
     }
     const current = managerRef.current?.document;
     if (
@@ -8361,6 +8392,7 @@ export function App() {
   }
 
   async function handleCreateProject(name: string, units: UnitSystem) {
+    const activeProjectSince = snapshotActiveProject();
     setAssistantCollapsed(true);
     setBusy(true);
     try {
@@ -8368,7 +8400,7 @@ export function App() {
       if (!session) {
         const localDocument = createProjectDocument(name, localUserId, units);
         await saveLocalProject(localDocument);
-        hydrateDocument(localDocument);
+        hydrateDocument(localDocument, { activeProjectSince });
         setProjects((current) => [
           summarizeLocalDocument(localDocument),
           ...current
@@ -8394,7 +8426,7 @@ export function App() {
       setCloudProjectIds((current) =>
         new Set(current).add(response.document.projectId)
       );
-      hydrateDocument(response.document);
+      hydrateDocument(response.document, { activeProjectSince });
       setProjects((current) => [response.project, ...current]);
       setStatus(`Created ${response.project.name}.`);
     } catch (error) {
@@ -8421,7 +8453,7 @@ export function App() {
         units
       );
       await saveLocalProject(localDocument);
-      hydrateDocument(localDocument);
+      hydrateDocument(localDocument, { activeProjectSince });
       setProjects((current) => [
         summarizeLocalDocument(localDocument),
         ...current
@@ -8570,6 +8602,8 @@ export function App() {
       await flushPendingLocalSave();
       const outcome = await adoptLocalProject(project.projectId);
       if (outcome.state === 'conflict') {
+        // Unguarded: the adoption can rekey the pointer to the account id
+        // before it reports a conflict.
         hydrateDocument(outcome.conflict.localDocument);
         cloudProjectAutosaveRef.current?.haltForConflict(project.projectId);
         setAccountConflict(outcome.conflict);
@@ -8754,12 +8788,13 @@ export function App() {
    */
 
   async function handleOpenDemo(definition: DemoDefinition) {
+    const activeProjectSince = snapshotActiveProject();
     setBusy(true);
     try {
       await flushPendingLocalSave();
       const existing = await loadLocalProject(definition.projectId);
       if (existing) {
-        hydrateDocument(existing);
+        hydrateDocument(existing, { activeProjectSince });
         setStatus(`Opened ${existing.name}.`);
         return;
       }
@@ -8777,7 +8812,7 @@ export function App() {
       // Rev A and Rev B can be restored rather than listed as "not stored".
       await saveLocalSaveStates(saveStates);
       await saveLocalProject(document);
-      hydrateDocument(document);
+      hydrateDocument(document, { activeProjectSince });
       setCloudAvailable(false);
       setProjects((current) => [
         summarizeLocalDocument(document),
@@ -8794,6 +8829,7 @@ export function App() {
   }
 
   async function handleOpenProject(projectId: string) {
+    const activeProjectSince = snapshotActiveProject();
     setBusy(true);
     try {
       await flushPendingLocalSave();
@@ -8840,7 +8876,7 @@ export function App() {
           ? projectId
           : null;
         setCloudAvailable(false);
-        hydrateDocument(localDocument);
+        hydrateDocument(localDocument, { activeProjectSince });
         setSaveState(needsRepair ? 'repair' : 'offline');
         setStatus(
           needsRepair
@@ -8879,7 +8915,7 @@ export function App() {
         // Both copies moved since this device last agreed with the account.
         // Open the local one — it is the work in front of the user — and ask
         // rather than discarding either side.
-        hydrateDocument(outcome.local);
+        hydrateDocument(outcome.local, { activeProjectSince });
         cloudProjectAutosaveRef.current?.haltForConflict(
           outcome.local.projectId
         );
@@ -8896,7 +8932,7 @@ export function App() {
         outcome.choice === 'remote' && localDocument
           ? withLocalDerived(outcome.document, localDocument)
           : outcome.document;
-      hydrateDocument(openedDocument);
+      hydrateDocument(openedDocument, { activeProjectSince });
       if (outcome.choice === 'remote') {
         await saveLocalProject(openedDocument);
         await saveLastSyncedVersion(projectId, openedDocument.version);
@@ -8989,6 +9025,7 @@ export function App() {
     if (!source || !shareSessionRef.current) {
       return;
     }
+    const activeProjectSince = snapshotActiveProject();
     setBusy(true);
     try {
       const copy = duplicateProjectDocument(
@@ -9009,7 +9046,7 @@ export function App() {
           summarizeLocalDocument(copy, DEFAULT_PROJECT_ORGANIZATION)
         ].sort(compareProjectSummaries)
       );
-      hydrateDocument(copy);
+      hydrateDocument(copy, { activeProjectSince });
       handleWorkspaceMode('build');
       setStatus(
         `${copy.name} is yours now — saved on this device. Build mode is open.`
@@ -11168,6 +11205,7 @@ export function App() {
     setProjectTransferBusy(true);
     setBusy(true);
     const origin = managerRef.current;
+    const activeProjectSince = snapshotActiveProject();
     const sink = createImportProgressSink();
     sink.start({
       kind: 'restore',
@@ -11194,7 +11232,7 @@ export function App() {
           setCloudAvailable(false);
           setSaveState('local');
           setSharingOpen(false);
-          hydrateDocument(backup.document);
+          hydrateDocument(backup.document, { activeProjectSince });
           handleWorkspaceMode('build');
         }
       }
