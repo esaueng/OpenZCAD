@@ -96,11 +96,11 @@ export function diagnoseImportedSolid(
   }
   return {
     index,
-    faceCount: Array.from(kernel.getSolidFaces(solid)).length,
+    faceCount: kernel.getSolidFaces(solid).length,
     edgeCount,
     openEdgeCount,
     nonManifoldEdgeCount,
-    shellCount: Array.from(kernel.getSolidShells(solid)).length,
+    shellCount: kernel.getSolidShells(solid).length,
     strictErrorCount: strict.errorCount,
     relaxedErrorCount,
     ...(strictDescriptions.length > 0
@@ -412,7 +412,7 @@ export function buildPrimitiveLineage(
   const diagnostics: RemusLineageState[] = [];
   const faces = candidates.filter((candidate) => candidate.kind === 'face');
   const edges = candidates.filter((candidate) => candidate.kind === 'edge');
-  const boundsValues = Array.from(kernel.boundingBox(solid));
+  const boundsValues = kernel.boundingBox(solid);
   const bounds = {
     min: quantizedPoint({
       x: boundsValues[0]!,
@@ -722,7 +722,7 @@ export function rederiveBoxModifierLineage(
   ) {
     return null;
   }
-  const boundsValues = Array.from(kernel.boundingBox(solid));
+  const boundsValues = kernel.boundingBox(solid);
   const min = quantizedPoint({
     x: boundsValues[0]!,
     y: boundsValues[1]!,
@@ -833,7 +833,7 @@ export function rederiveCylinderModifierLineage(
   ) {
     return null;
   }
-  const boundsValues = Array.from(kernel.boundingBox(solid));
+  const boundsValues = kernel.boundingBox(solid);
   const zMin = quantizedPoint({
     x: boundsValues[0]!,
     y: boundsValues[1]!,
