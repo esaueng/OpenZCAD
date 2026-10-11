@@ -19,8 +19,8 @@ import {
 } from './assistantStreamDiagnostics';
 import { isPrivateHostname } from './privateNetwork';
 
-export const DEFAULT_AI_MODEL = 'gpt-5.6-sol';
-export const DEFAULT_OPENROUTER_MODEL = 'openai/gpt-5.6-sol';
+export const DEFAULT_AI_MODEL = 'gpt-6-luna';
+export const DEFAULT_OPENROUTER_MODEL = 'openai/gpt-6-luna';
 export const DEFAULT_AI_REASONING_EFFORT = 'high';
 export const DEFAULT_AI_MAX_OUTPUT_TOKENS = 32_000;
 export const DEFAULT_AI_TIMEOUT_MS = 90_000;
