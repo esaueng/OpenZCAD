@@ -523,8 +523,30 @@ test('streams an exact extrude preview while a region drag is held', async ({
   );
   await expect(canvas).toHaveAttribute('data-e2e-rendered-bodies', '1');
 
-  // The extrude stays open: the handle moves to the new cap, the chip reads
-  // the stored distance, and the card still says Extrude.
+  // Create closes the extrude as every other create card closes (design
+  // review G15): no card, no selection callout, no handle and no chip are
+  // left up over the solid it just made.
+  await expect(
+    page.getByRole('region', { name: 'Extrude operation' })
+  ).toHaveCount(0);
+  await expect(page.locator('.selection-callout-chip')).toHaveCount(0);
+  await expect(chip).toBeHidden();
+  await expect(canvas).not.toHaveAttribute('data-e2e-handle-x', /.+/);
+  await expect(canvas).not.toHaveAttribute('data-e2e-selected-face', /.+/);
+
+  // Picking the far cap arms its handle on demand: the chip reads the stored
+  // distance, and the card says Extrude.
+  const cap = await canvas.evaluate(
+    (element) =>
+      new Promise<{ hasReference: boolean } | null>((resolve) => {
+        element.dispatchEvent(
+          new CustomEvent('openzcad:e2e-select-planar-face', {
+            detail: { normal: { x: 0, y: 0, z: 1 }, resolve }
+          })
+        );
+      })
+  );
+  expect(cap).not.toBeNull();
   await expect(chip).toHaveText(/^\d+(\.\d+)? mm$/);
   await expect(
     page.getByRole('region', { name: 'Extrude operation' })

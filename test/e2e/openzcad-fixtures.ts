@@ -993,6 +993,25 @@ export async function revealModelDrawer(
 }
 
 /**
+ * Selects a body from its row in the Items panel, the way a user picks one
+ * without aiming at it, and waits for its selection chip. A create leaves
+ * nothing selected (design review G15), so a spec that reads the new body's
+ * chip asks for it first.
+ */
+export async function selectBodyFromItems(page: Page, name?: string) {
+  const items = page
+    .getByRole('toolbar', { name: 'Model panels' })
+    .getByRole('button', { name: 'Items panel' });
+  if ((await items.getAttribute('aria-pressed')) !== 'true') {
+    await items.click();
+  }
+  await expect(items).toHaveAttribute('aria-pressed', 'true');
+  const rows = page.locator('.body-row:not(.consumed) .body-row-main');
+  await (name ? rows.filter({ hasText: name }) : rows).first().click();
+  await expect(page.locator('.selection-callout-chip')).toBeVisible();
+}
+
+/**
  * Waits for the camera to come to rest — after the sketch entry glide, a
  * reframe, a placement. The render loop draws on demand and stops once
  * nothing moves, so a frame counter that holds still across a window proves

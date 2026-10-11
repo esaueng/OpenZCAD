@@ -1,6 +1,10 @@
 import * as THREE from 'three';
 import { describe, expect, it } from 'vitest';
-import { FEATURE_COLORS } from '@openzcad/shared';
+import {
+  BODY_COLOR_PRESETS,
+  DEFAULT_BODY_COLOR,
+  FEATURE_COLORS
+} from '@openzcad/shared';
 import { SELECTION_SEMANTICS } from './semantics';
 import { contextBodyColor, selectedFaceColor } from './selectionTint';
 
@@ -51,7 +55,14 @@ function accentFilm(color: string): THREE.Color {
   );
 }
 
-const featureColors = Object.entries(FEATURE_COLORS);
+// Every colour a body can be drawn in by default or from the picker's
+// presets (design review G2), and the feature palette older documents chose
+// from.
+const featureColors = [
+  ['default body', DEFAULT_BODY_COLOR],
+  ...BODY_COLOR_PRESETS.map((color) => [`preset ${color}`, color]),
+  ...Object.entries(FEATURE_COLORS)
+] as [string, string][];
 
 describe('selection tint (design review F8)', () => {
   it('draws the old accent film duller than the gold body it selected', () => {
