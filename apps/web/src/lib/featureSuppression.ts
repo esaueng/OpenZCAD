@@ -192,3 +192,17 @@ export function suppressedBranchMessage(
 ): string {
   return `Suppressed ${branchWords(sourceName, dependentCount)}`;
 }
+
+/**
+ * The suppression prompt that belongs to the open project, or null. A prompt
+ * raised in one project must neither show nor hold the keyboard in another:
+ * the workspace keeps shortcuts and exact entry off while a prompt is
+ * pending, and a hidden prompt from the last project left them off with no
+ * dialog to cancel.
+ */
+export function activeSuppressionPrompt<T extends { projectId: string }>(
+  pending: T | null,
+  projectId: string | null | undefined
+): T | null {
+  return pending && pending.projectId === projectId ? pending : null;
+}
