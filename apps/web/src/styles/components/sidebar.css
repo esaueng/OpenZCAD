@@ -1040,3 +1040,28 @@
 .parameter-feedback .activity-log-link {
   margin-left: 6px;
 }
+
+/* Rename in place, from the row's menu: the name becomes a field the size
+   of the row's main button, which it replaces until Enter, Escape or blur. */
+.feature-row-rename {
+  min-height: 28px;
+  min-width: 0;
+  flex: 1;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 2px 4px 2px 6px;
+}
+
+.feature-row-rename input {
+  min-width: 0;
+  flex: 1;
+  height: 24px;
+  padding: 0 6px;
+  color: var(--color-text);
+  font: inherit;
+  font-size: var(--fs-sm);
+  background: var(--color-surface);
+  border: 1px solid var(--color-accent);
+  border-radius: var(--radius-sm);
+}
