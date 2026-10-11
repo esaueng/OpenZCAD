@@ -1,4 +1,8 @@
-import { evaluateExpression } from '@openzcad/document-core';
+import {
+  evaluateExpression,
+  isValidParameterName,
+  UnknownIdentifierError
+} from '@openzcad/document-core';
 import type {
   FeatureKind,
   ParamValue,
@@ -19,6 +23,13 @@ export interface EvalPreview {
   text: string;
   /** The evaluated number, present exactly when `ok`. */
   value?: number;
+  /**
+   * Set when the expression's only problem is a name nobody has defined
+   * yet: the first such name, which a field can offer to define on the
+   * spot. Absent for anything else that is wrong with it — a syntax error,
+   * trailing tokens, a name that is not a valid parameter name.
+   */
+  undefinedParameter?: string;
 }
 
 /** Live evaluation preview for expression inputs ("= 42" or the error). */
@@ -38,11 +49,61 @@ export function previewExpression(
       value
     };
   } catch (error) {
+    const undefinedParameter = undefinedParameterIn(trimmed, scope, error);
     return {
       ok: false,
-      text: error instanceof Error ? error.message : 'invalid'
+      text: error instanceof Error ? error.message : 'invalid',
+      ...(undefinedParameter ? { undefinedParameter } : {})
     };
   }
+}
+
+/**
+ * Stand-in values for names not yet defined. The expression is valid if it
+ * evaluates with any of them: `sqrt(width - 5)` fails at 1 and is fine at
+ * 100, and the real value is whatever the user then gives the name.
+ */
+const UNDEFINED_PARAMETER_PROBES = [1, 100];
+
+/**
+ * The first undefined parameter an expression reads, when defining the names
+ * it is missing is all it would take to evaluate. The evaluator stops at the
+ * first unknown name, so each probe defines the names found so far and runs
+ * again until it evaluates, or fails for some other reason.
+ */
+function undefinedParameterIn(
+  expression: string,
+  scope: Record<string, number>,
+  error: unknown
+): string | undefined {
+  if (
+    !(error instanceof UnknownIdentifierError) ||
+    !isValidParameterName(error.identifier)
+  ) {
+    return undefined;
+  }
+  for (const probe of UNDEFINED_PARAMETER_PROBES) {
+    const probed = { ...scope };
+    let missing = error.identifier;
+    // Bounded by the expression's own names: each pass defines a new one.
+    for (;;) {
+      probed[missing] = probe;
+      try {
+        evaluateExpression(expression, probed);
+        return error.identifier;
+      } catch (next) {
+        if (
+          !(next instanceof UnknownIdentifierError) ||
+          !isValidParameterName(next.identifier) ||
+          Object.hasOwn(probed, next.identifier)
+        ) {
+          break;
+        }
+        missing = next.identifier;
+      }
+    }
+  }
+  return undefined;
 }
 
 /** Resolve a stored parametric value to a number, or null if it can't evaluate. */
