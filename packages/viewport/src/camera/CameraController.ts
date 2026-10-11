@@ -406,6 +406,7 @@ export class CameraController {
 
   /** Keeps the live pose current while parking durability on the settle path. */
   private handleOrbitChange = () => {
+    this.followOrthographic();
     this.emitViewChange();
     if (!this.flushingSettle) {
       this.scheduleSettledViewChange();
@@ -537,6 +538,38 @@ export class CameraController {
     this.orbit.target.copy(target);
   }
 
+  /**
+   * The reverse of `syncOrthographic`, for the view direction only.
+   * Orthographic navigation moves just the ortho camera, so without this
+   * the perspective master — which every glide starts from and Fit reads
+   * its direction from — kept the pose of the last sync: a glide after an
+   * ortho orbit snapped back to that stale direction before it set off. The
+   * master is re-seated on the ortho camera's live view axis, at the
+   * distance whose perspective span equals the ortho frustum, so the next
+   * `syncOrthographic(false)` draws the same picture. A glide owns the
+   * master while it runs, so it is left alone then.
+   */
+  private followOrthographic() {
+    if (this.mode !== 'orthographic' || this.tween) {
+      return;
+    }
+    const { perspective, orthographic } = this;
+    const offset = orthographic.position.clone().sub(this.orbit.target);
+    const length = offset.length();
+    const tan = Math.tan(THREE.MathUtils.degToRad(perspective.fov / 2));
+    if (!(length > 1e-9) || !(tan > 0)) {
+      return;
+    }
+    perspective.position
+      .copy(this.orbit.target)
+      .addScaledVector(
+        offset.divideScalar(length),
+        Math.abs(orthographic.top) / tan
+      );
+    perspective.quaternion.copy(orthographic.quaternion);
+    perspective.updateMatrixWorld();
+  }
+
   /** Mirrors the perspective pose onto the ortho camera and its frustum. */
   syncOrthographic(resetZoom: boolean) {
     const { perspective, orthographic } = this;
@@ -610,6 +643,7 @@ export class CameraController {
     this.orbitGlide = null;
     this.orbit.dampingFactor = DRAG_DAMPING;
     this.orbit.update();
+    this.followOrthographic();
     if (this.options.reducedMotion()) {
       this.tween = null;
       const offset = pose.position.clone().sub(pose.target);
@@ -667,6 +701,18 @@ export class CameraController {
       onComplete
     };
     this.options.requestRender();
+  }
+
+  /**
+   * The unit direction from the orbit target toward the camera that the
+   * view is settling on: a glide's destination while one runs, else the
+   * live view. Fit keeps this direction, so F pressed during a view change
+   * fits the view being changed to rather than a frame of the glide.
+   */
+  viewDirection(): THREE.Vector3 {
+    return new THREE.Vector3(0, 0, 1).applyQuaternion(
+      this.tween ? this.tween.toQuaternion : this.active.quaternion
+    );
   }
 
   cancelTween() {
@@ -866,6 +912,7 @@ export class CameraController {
     }
     this.orbit.target.copy(pivot);
     this.orbit.update();
+    this.followOrthographic();
     // OrbitControls only emits a change when the camera moves, which this
     // deliberately avoids. Publish the pivot to memory now; a press-and-hold
     // remains storage-free and its release re-arms this settle path.

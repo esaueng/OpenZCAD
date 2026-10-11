@@ -78,6 +78,7 @@ import {
   chooseMoveSnapStep,
   chooseRotateSnapStep,
   chooseViewportScale,
+  scaleBarAnchor,
   clearGroup,
   closestAxisT,
   composeMoveTransform,
@@ -203,6 +204,7 @@ import {
   SELECTION_CALLOUT_OBSTACLES,
   selectionCalloutObstacleShift
 } from '../lib/selectionCalloutView';
+import { measureFitFrame } from '../lib/fitFrame';
 import type { DimensionMode } from '../lib/keypad';
 import type { ViewportCameraState } from '../lib/workspaceSession';
 import type { MeasurementViewportAnnotation } from '../lib/measurements';
@@ -978,6 +980,8 @@ export interface SceneContext {
   syncOrthographic(resetZoom: boolean): void;
   /** Re-applies navigation preferences onto the live orbit controls. */
   refreshNavigation(): void;
+  /** Target-to-camera direction the view is settling on (a glide's end). */
+  viewDirection(): THREE.Vector3;
   /** Starts a glide toward a new pose; user input cancels it. */
   startCameraTween(
     pose: CameraPose,
@@ -1783,6 +1787,8 @@ export function ModelViewer({
   }, [suppliedBodies]);
   const hostRef = useRef<HTMLDivElement | null>(null);
   const contextRef = useRef<SceneContext | null>(null);
+  /** The rendered bodies' bounds centre: the depth the scale bar reads. */
+  const modelCenterRef = useRef<THREE.Vector3 | null>(null);
   const topologyPickListRef = useRef<TopologyPickList | null>(null);
   const onSelectTopologyRef = useRef(onSelectTopology);
   onSelectTopologyRef.current = onSelectTopology;
@@ -2502,6 +2508,7 @@ export function ModelViewer({
       applyProjection: (mode) => cameraRig.applyProjection(mode),
       syncOrthographic: (resetZoom) => cameraRig.syncOrthographic(resetZoom),
       refreshNavigation: () => cameraRig.refreshNavigationPreferences(),
+      viewDirection: () => cameraRig.viewDirection(),
       startCameraTween: (pose, onComplete, glide) =>
         cameraRig.startTween(pose, onComplete, glide),
       captureView: () => cameraRig.capture(),
@@ -4929,6 +4936,7 @@ export function ModelViewer({
       picker.setRayFromEvent(event);
     }
 
+    const scaleBarForward = new THREE.Vector3();
     /** World units spanned by one screen pixel at the given point. */
     function worldPerPixelAt(point: THREE.Vector3): number {
       const height = Math.max(renderer.domElement.clientHeight, 1);
@@ -8251,7 +8259,14 @@ export function ModelViewer({
       if (bodyGroup.children.length === 0) {
         return;
       }
-      const pose = computeFitPose(camera, bodyGroup.children);
+      // Like F: keep the view direction, frame into the clear stage.
+      const pose = computeFitPose(
+        camera,
+        bodyGroup.children,
+        cameraRig.viewDirection(),
+        0,
+        measureFitFrame(renderer.domElement)
+      );
       cameraRig.startTween(
         pose,
         () => {
@@ -8505,7 +8520,16 @@ export function ModelViewer({
       const offsetBodyProxyFrame = flushOffsetBodyProxy();
       updateOffsetChip();
       scaleIndicatorRef.current?.(
-        chooseViewportScale(worldPerPixelAt(cameraRig.controls.target))
+        chooseViewportScale(
+          worldPerPixelAt(
+            scaleBarAnchor(
+              cameraRig.activeCamera.position,
+              cameraRig.activeCamera.getWorldDirection(scaleBarForward),
+              modelCenterRef.current,
+              cameraRig.controls.target
+            )
+          )
+        )
       );
       updateStudioGrid(grid, context.activeCamera, cameraRig.controls.target);
       updateAxesGizmo(axes, context.activeCamera);
@@ -9546,6 +9570,9 @@ export function ModelViewer({
       for (const child of context.bodyGroup.children) {
         sceneBox.expandByObject(child);
       }
+      modelCenterRef.current = sceneBox.isEmpty()
+        ? null
+        : sceneBox.getCenter(new THREE.Vector3());
       if (!sceneBox.isEmpty()) {
         const sceneSize = sceneBox.getSize(new THREE.Vector3());
         const sceneCenter = sceneBox.getCenter(new THREE.Vector3());
@@ -11269,7 +11296,15 @@ export function ModelViewer({
     if (fitTargets.length === 0) {
       return;
     }
-    const pose = computeFitPose(context.camera, fitTargets);
+    // Fit keeps the view the user chose (`4` and the view menu give home)
+    // and frames into the stage the side panels leave clear.
+    const pose = computeFitPose(
+      context.camera,
+      fitTargets,
+      context.viewDirection(),
+      0,
+      measureFitFrame(context.renderer.domElement)
+    );
     context.startCameraTween(
       pose,
       () => {
@@ -11317,7 +11352,8 @@ export function ModelViewer({
       context.camera,
       context.bodyGroup.children.filter((child) => child.visible),
       context.camera.position.clone().sub(context.controls.target),
-      AUTO_FRAME_MARGIN_NDC
+      AUTO_FRAME_MARGIN_NDC,
+      measureFitFrame(context.renderer.domElement)
     );
     context.startCameraTween(
       pose,

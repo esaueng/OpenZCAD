@@ -1,7 +1,10 @@
+import type * as THREE from 'three';
+import { orbitPivotForPoint } from './views';
+
 export interface ViewportScale {
   /** Distance represented by the bar, in the document's current units. */
   value: number;
-  /** Screen width of that distance at the camera target plane. */
+  /** Screen width of that distance at the measured depth. */
   widthPx: number;
 }
 
@@ -41,6 +44,28 @@ export function chooseViewportScale(
     return null;
   }
   return { value, widthPx };
+}
+
+/**
+ * Where the scale bar measures: on the view axis, at the depth of the
+ * model's bounds centre. Measuring at the orbit pivot made the bar jump on
+ * a click — a pick moves the pivot to the picked point's depth while the
+ * camera stays still, so "50 mm" turned into "20 mm" with nothing on screen
+ * moving. The model centre's depth only changes when the camera or the
+ * model does. Without a model, or with its centre behind the camera, the
+ * orbit pivot is the fallback.
+ */
+export function scaleBarAnchor(
+  cameraPosition: THREE.Vector3,
+  viewDirection: THREE.Vector3,
+  modelCenter: THREE.Vector3 | null,
+  orbitTarget: THREE.Vector3
+): THREE.Vector3 {
+  return (
+    (modelCenter &&
+      orbitPivotForPoint(cameraPosition, viewDirection, modelCenter)) ??
+    orbitTarget
+  );
 }
 
 /** Formats a nice scale value without adding noisy floating-point digits. */
