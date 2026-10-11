@@ -130,5 +130,6 @@ cylinder hit.
 
 ## Upstream
 
-File the reproduction above against Remus. Both behaviours belong in the
-report: the exact refusal of a valid boolean, and the `ok` with a wrong volume.
+Filed as [remus#984](https://github.com/esaueng/remus/issues/984), with both
+behaviours: the exact refusal of a valid boolean, and the `ok` with a wrong
+volume.

@@ -154,7 +154,7 @@ describe(
 );
 
 /**
- * Kernel canary, raw Remus calls (the upstream reproduction). It pins the
+ * Kernel canary, raw Remus calls (the upstream reproduction, remus#984). It pins the
  * defect as it stands so the kernel update that fixes it fails here: then
  * flip these expectations to the exact answers, update the QA record and
  * ROADMAP K01, and recheck the housing union through the app.
