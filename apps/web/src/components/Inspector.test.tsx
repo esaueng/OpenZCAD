@@ -21,7 +21,7 @@ import {
   listFeaturesInOrder
 } from '@openzcad/document-core';
 import { CommandManager, type AnyCommand } from '@openzcad/command-system';
-import { toUserId } from '@openzcad/shared';
+import { DEFAULT_BODY_COLOR, toUserId } from '@openzcad/shared';
 import type { MassPropertiesRead } from '@openzcad/kernel-adapter/exact';
 import { MASS_DENSITY_STORAGE_KEY } from '../lib/massDensityPreference';
 import { Inspector } from './Inspector';
@@ -899,6 +899,34 @@ describe('body appearance color picker', () => {
     expect(props.onCancel).not.toHaveBeenCalled();
     fireEvent.keyDown(swatch, { key: 'Escape' });
     expect(props.onCancel).toHaveBeenCalledOnce();
+  });
+
+  it('resets a chosen colour by clearing it, back to the one default (G2)', () => {
+    const props = makeProps({
+      selectedBody: { ...body, color: '#a78bfa' },
+      selectedFeature: feature,
+      featureSelectionSource: 'pinned',
+      commandSession: null
+    });
+    render(<Inspector {...props} />);
+    fireEvent.click(screen.getByRole('button', { name: 'Reset to default' }));
+    expect(props.onCommitBodyAppearance).toHaveBeenCalledWith(body.bodyId, {
+      color: null,
+      opacity: null
+    });
+  });
+
+  it('offers no reset for a body already in the default colour', () => {
+    const props = makeProps({
+      selectedBody: { ...body, color: DEFAULT_BODY_COLOR },
+      selectedFeature: feature,
+      featureSelectionSource: 'pinned',
+      commandSession: null
+    });
+    render(<Inspector {...props} />);
+    expect(
+      screen.queryByRole('button', { name: 'Reset to default' })
+    ).not.toBeInTheDocument();
   });
 });
 

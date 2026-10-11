@@ -10,6 +10,7 @@ import {
   openAssistant,
   promptField,
   revealModelDrawer,
+  selectBodyFromItems,
   setSelectionFilter,
   shiftSelectTwoVisibleBoxEdges,
   stubApi,
@@ -3918,7 +3919,11 @@ test('each sketch plane label names the plane it actually opens', async ({
   const extrudeKeypad = page.getByRole('dialog', { name: 'Height value' });
   await extrudeKeypad.getByRole('textbox').fill('24');
   await extrudeKeypad.getByRole('button', { name: 'Apply height' }).click();
-  await expect(page.locator('.selection-callout-chip')).toBeVisible();
+  await expect(page.getByRole('contentinfo')).toContainText(
+    'Extruded region by 24 mm',
+    { timeout: 20_000 }
+  );
+  await selectBodyFromItems(page);
   // Read from the detail: the name beside it ("Extrude 1") ends in a digit.
   const chip =
     (await page
@@ -4029,8 +4034,11 @@ test('types an exact rectangle while drawing it', async ({ page }) => {
   const extrudeKeypad = page.getByRole('dialog', { name: 'Height value' });
   await extrudeKeypad.getByRole('textbox').fill('24');
   await extrudeKeypad.getByRole('button', { name: 'Apply height' }).click();
-
-  await expect(page.locator('.selection-callout-chip')).toBeVisible();
+  await expect(page.getByRole('contentinfo')).toContainText(
+    'Extruded region by 24 mm',
+    { timeout: 20_000 }
+  );
+  await selectBodyFromItems(page);
   // The size is read from the chip's detail: the body name beside it
   // ("Extrude 1") ends in a digit that would run into the first dimension.
   const chip =

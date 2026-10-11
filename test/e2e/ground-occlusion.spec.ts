@@ -68,11 +68,17 @@ for (const view of ['perspective', 'orthographic', 'below'] as const) {
         }
         const a = await decode(on!);
         const b = await decode(off!);
-        const solid = (i: number) =>
-          b.data[i]! > 100 &&
-          b.data[i + 1]! > 100 &&
-          b.data[i]! > b.data[i + 2]! * 1.3 &&
-          b.data[i + 1]! > b.data[i + 2]! * 1.2;
+        // The sphere is drawn in the neutral body colour (design review G2):
+        // lit, every channel sits far above the dark stage, and unlike the
+        // axes and the accent it is barely saturated. This used to match
+        // the gold the sphere was drawn in before bodies went neutral.
+        const solid = (i: number) => {
+          const channels = [b.data[i]!, b.data[i + 1]!, b.data[i + 2]!];
+          return (
+            Math.min(...channels) > 70 &&
+            Math.max(...channels) - Math.min(...channels) < 60
+          );
+        };
         let interior = 0;
         let changedInterior = 0;
         let changedBackground = 0;
