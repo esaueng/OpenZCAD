@@ -108,6 +108,14 @@ test('refuses an upstream section edit that strands a dependent shell, and keeps
     contentType: 'image/png'
   });
   await expect(status).toContainText('warnings0');
+  // History names the feature that could not rebuild and offers to open it.
+  const details = page.getByRole('region', { name: 'History details' });
+  await expect(details.getByRole('alert')).toContainText(
+    'The previous model is intact'
+  );
+  await expect(
+    details.getByRole('button', { name: 'Edit Open-ended duct wall' })
+  ).toBeVisible();
   await page.keyboard.press('Escape');
 
   inspector = await bodyReadout(page, /Offset rectangular transition/);
