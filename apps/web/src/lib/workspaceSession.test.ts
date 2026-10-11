@@ -134,9 +134,13 @@ describe('workspace session persistence', () => {
 
     const cleared = snapshotActiveProject(storage);
     rememberActiveProject('third', storage);
-    // A pointer that already names this project is not a conflict.
+    const newerOpen = snapshotActiveProject(storage);
+    // A pointer that already names this project is not a conflict, and is
+    // not rewritten: a newer open's snapshot must stay current.
     expect(rememberActiveProject('third', storage, cleared)).toBe(true);
-    expect(loadActiveProjectId(storage)).toBe('third');
+    expect(snapshotActiveProject(storage)).toEqual(newerOpen);
+    expect(rememberActiveProject('fourth', storage, newerOpen)).toBe(true);
+    expect(loadActiveProjectId(storage)).toBe('fourth');
   });
 
   it('fails closed when browser storage is unavailable', () => {
