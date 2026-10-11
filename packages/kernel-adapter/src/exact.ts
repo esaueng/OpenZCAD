@@ -66,9 +66,8 @@ export type {
 } from './exact-section';
 import {
   BODY_OPACITY_METADATA_KEY,
-  DEFAULT_BODY_COLOR,
   UNIT_TO_MM,
-  featureColor,
+  bodyDisplayColor,
   isFeatureSuppressed,
   isReadOnlyRecognizedImportedFeature,
   nowIso,
@@ -1385,7 +1384,11 @@ export class RemusKernelAdapter implements ExactKernelAdapter {
               bodyId: body.bodyId,
               name: body.name,
               source: 'boolean',
-              color: String(body.metadata?.color ?? DEFAULT_BODY_COLOR),
+              color: bodyDisplayColor(
+                body.metadata,
+                features.find((entry) => entry.featureId === body.featureId)
+                  ?.featureKind
+              ),
               consumed: result.consumed.has(body.bodyId),
               exportableStep: false,
               faceCount: 0,
@@ -2536,11 +2539,9 @@ export class RemusKernelAdapter implements ExactKernelAdapter {
             indices: measured.indices
           },
           faceCount: measured.faceCount,
-          color:
-            String(
-              body.metadata?.color ??
-                featureColor(feature?.featureKind ?? 'primitive')
-            ) || DEFAULT_BODY_COLOR,
+          // G2: one neutral colour unless someone chose one; the stamp the
+          // feature wrote is its legend colour, not the body's.
+          color: bodyDisplayColor(body.metadata, feature?.featureKind),
           opacity: bodyOpacityFromMetadata(
             body.metadata?.[BODY_OPACITY_METADATA_KEY]
           ),

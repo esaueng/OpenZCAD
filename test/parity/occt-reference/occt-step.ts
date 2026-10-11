@@ -43,9 +43,8 @@ import {
   type Vec3
 } from '@openzcad/geometry';
 import {
-  DEFAULT_BODY_COLOR,
   UNIT_TO_MM,
-  featureColor,
+  bodyDisplayColor,
   nowIso,
   type BodyId,
   type BodyRepresentation,
@@ -2102,11 +2101,7 @@ export class OcctStepKernelAdapter {
         indices: Uint32Array.from(mesh.indices)
       },
       faceCount: faces.length,
-      color:
-        String(
-          body.metadata?.color ??
-            featureColor(feature?.featureKind ?? 'primitive')
-        ) || DEFAULT_BODY_COLOR,
+      color: bodyDisplayColor(body.metadata, feature?.featureKind),
       exportableStep: body.exportableStep,
       consumed,
       volume: this.kernel.getVolume(shape),

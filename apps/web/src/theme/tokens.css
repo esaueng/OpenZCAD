@@ -100,7 +100,9 @@
   /* ── Viewport selection & manipulation ────────────────── */
   --color-select: #6798ff; /* selected geometry */
   --color-preselect: #81a9ff; /* hover preselection */
-  --color-preview: #48cd8f; /* ghost geometry during a command */
+  /* Ghost geometry during a command; the viewport draws a previewed result
+     body in a softened shade of it (PREVIEW_BODY_COLOR, @openzcad/shared). */
+  --color-preview: #48cd8f;
   /* Reference geometry (sketch construction lines). Magenta, well away from
      the signal hue so a construction line never reads as a selection. */
   --color-construction: #ef91ef;
