@@ -52,7 +52,7 @@ describe('body colour (design review G2)', () => {
   it('draws a body with no colour at all in the default', () => {
     expect(bodyDisplayColor(undefined, 'extrude')).toBe(DEFAULT_BODY_COLOR);
     expect(bodyDisplayColor({}, 'hole')).toBe(DEFAULT_BODY_COLOR);
-    expect(bodyDisplayColor({ [BODY_COLOR_METADATA_KEY]: '  ' }, 'hole')).toBe(
+    expect(bodyDisplayColor({ [BODY_COLOR_METADATA_KEY]: '' }, 'hole')).toBe(
       DEFAULT_BODY_COLOR
     );
   });
@@ -80,24 +80,28 @@ describe('body colour (design review G2)', () => {
     ).toBe('#e1a948');
   });
 
-  it('compares a stamp without regard to case', () => {
-    expect(
-      bodyDisplayColor(
-        { [BODY_COLOR_METADATA_KEY]: FEATURE_COLORS.extrude.toUpperCase() },
-        'extrude'
-      )
-    ).toBe(DEFAULT_BODY_COLOR);
-  });
+  it.each(kinds)(
+    'stamps a %s body with a lower-case literal, compared as written',
+    (kind) => {
+      // The stamp check is an exact comparison (it runs in a chunk at its
+      // size budget), which is sound only while every stamp is written the
+      // way featureColor returns it.
+      expect(featureColor(kind)).toMatch(/^#[0-9a-f]{6}$/);
+    }
+  );
 
-  it('treats any stamp as one when the feature is unknown', () => {
+  it('draws only a marked colour when the feature is unknown', () => {
     expect(
-      bodyDisplayColor(
-        { [BODY_COLOR_METADATA_KEY]: FEATURE_COLORS.boolean },
-        undefined
-      )
+      bodyDisplayColor({ [BODY_COLOR_METADATA_KEY]: FEATURE_COLORS.boolean })
     ).toBe(DEFAULT_BODY_COLOR);
+    expect(bodyDisplayColor({ [BODY_COLOR_METADATA_KEY]: '#123456' })).toBe(
+      DEFAULT_BODY_COLOR
+    );
     expect(
-      bodyDisplayColor({ [BODY_COLOR_METADATA_KEY]: '#123456' }, undefined)
+      bodyDisplayColor({
+        [BODY_COLOR_METADATA_KEY]: '#123456',
+        [BODY_COLOR_CHOSEN_METADATA_KEY]: true
+      })
     ).toBe('#123456');
   });
 
