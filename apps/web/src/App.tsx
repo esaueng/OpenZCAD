@@ -1188,8 +1188,8 @@ import {
 } from './lib/projectShelf';
 import { sharedThumbnailCapture } from './lib/sharedThumbnailCapture';
 import { useThumbnailCaptureActivity } from './hooks/useThumbnailCaptureActivity';
-import { LivePreview } from './lib/livePreview';
-import { PreviewRebuilds, predictedPreviewMs } from './lib/previewRebuilds';
+import { GEOMETRY_PREVIEW_SCHEDULING, LivePreview } from './lib/livePreview';
+import { PreviewRebuilds } from './lib/previewRebuilds';
 import {
   blendPreviewSelectionKey,
   canReuseBlendPreview
@@ -1382,17 +1382,6 @@ const E2E_SLOW_FRAME_MS =
   typeof window.__openzcadE2ESlowFrameMs === 'number'
     ? window.__openzcadE2ESlowFrameMs
     : undefined;
-
-/**
- * How long the handle must rest before a face edit is previewed on a body
- * whose earlier previews were all slow, or, before any, that is predictably
- * slow (see `expectedFacePreviewMs`). Each exact preview there outlasts the
- * drag that asked for it, and the worker cannot drop one it has started, so a
- * frame started mid-motion only delays the release's own rebuild. Resting
- * first means a release straight out of motion is the one rebuild, and a
- * release at a rested value reuses its frame.
- */
-const SLOW_PREVIEW_SETTLE_MS = 300;
 
 /**
  * How often an open cloud project checks whether another device has moved it.
@@ -2943,64 +2932,6 @@ export function App() {
   const previewRebuilds = useRef(
     new PreviewRebuilds<ProjectDocument['derived']>()
   ).current;
-  const facePreviewTimings = useRef(new Map<string, number[]>());
-  function previewRebuildKey(projectId: string, bodyId: string) {
-    return `${projectId}:${bodyId}`;
-  }
-  async function startFaceGeometryPreview(
-    candidate: {
-      document: ProjectDocument;
-      bodyId: BodyId;
-      baseProjectId: ProjectDocument['projectId'];
-    },
-    signal: AbortSignal
-  ) {
-    const started = performance.now();
-    const geometryReady = await geometry.previewGeometry(candidate.document, {
-      signal
-    });
-    if (!signal.aborted) {
-      const key = previewRebuildKey(candidate.baseProjectId, candidate.bodyId);
-      const recent = facePreviewTimings.current.get(key) ?? [];
-      facePreviewTimings.current.set(
-        key,
-        [...recent, performance.now() - started].slice(-3)
-      );
-    }
-    return geometryReady;
-  }
-  /**
-   * What the next offset or radius frame on the armed body should cost. Above
-   * the slow-frame budget the gesture starts degraded and rests before each
-   * exact frame (`SLOW_PREVIEW_SETTLE_MS`). Decided in this order:
-   *
-   * 1. Measured: the fastest of this body's last three preview frames this
-   *    session. A measurement always overrides the prior, in both directions.
-   * 2. Predicted, until any frame for the body has been measured: an imported
-   *    STEP body with at least 100 faces or at least 8 `bspline` faces is slow
-   *    (`predictedPreviewMs`, which records the calibration). That keeps the
-   *    first gesture on a body like the 160-face hammer holder from starting a
-   *    multi-second frame that a release at another value would queue behind.
-   * 3. Otherwise unknown: frames stream, and a slow one degrades the gesture
-   *    without a rest, as one slow frame is often just a cold kernel.
-   *
-   * Within a gesture, the first frame that lands in budget lifts the rest
-   * (`LivePreview`), and its timing becomes the measurement of step 1.
-   */
-  function expectedFacePreviewMs() {
-    const base = managerRef.current?.document;
-    const current = interactionRef.current;
-    if (!base || current.mode !== 'face') {
-      return undefined;
-    }
-    const bodyId = current.target.bodyId as BodyId;
-    const recent = facePreviewTimings.current.get(
-      previewRebuildKey(base.projectId, bodyId)
-    );
-    return recent?.length
-      ? Math.min(...recent)
-      : predictedPreviewMs(base.derived.bodyRepresentations[bodyId]);
-  }
   function previewBaseIsCurrent(candidate: {
     baseProjectId: ProjectDocument['projectId'];
     baseVersion: number;
@@ -3049,7 +2980,9 @@ export function App() {
         };
       },
       derive: async (candidate, signal) => {
-        const derived = await startFaceGeometryPreview(candidate, signal);
+        const derived = await geometry.previewGeometry(candidate.document, {
+          signal
+        });
         const rejection = offsetPreviewRejection({
           ...candidate,
           derived,
@@ -3080,13 +3013,8 @@ export function App() {
           errorMessage(error, 'Exact radius preview failed.'),
           value
         ),
-      publishIntermediate: true,
-      cancelSuperseded: true,
-      minIntervalMs: 100,
-      presentationTimeMs: () => previewPresentationMs.current,
-      continueAfterSlow: true,
-      slowSettleMs: SLOW_PREVIEW_SETTLE_MS,
-      expectedFrameMs: expectedFacePreviewMs
+      ...GEOMETRY_PREVIEW_SCHEDULING,
+      presentationTimeMs: () => previewPresentationMs.current
     })
   ).current;
 
@@ -3126,7 +3054,9 @@ export function App() {
         if (candidate.preflightRejection) {
           throw new Error(candidate.preflightRejection);
         }
-        const derived = await startFaceGeometryPreview(candidate, signal);
+        const derived = await geometry.previewGeometry(candidate.document, {
+          signal
+        });
         const live = managerRef.current;
         const documentMoved =
           !live ||
@@ -3149,9 +3079,7 @@ export function App() {
         return derived;
       },
       isCurrent: previewSelectionIsCurrent,
-      publishIntermediate: true,
-      cancelSuperseded: true,
-      minIntervalMs: 100,
+      ...GEOMETRY_PREVIEW_SCHEDULING,
       presentationTimeMs: () => previewPresentationMs.current,
       publish: (preview) => {
         if (!preview) {
@@ -3182,21 +3110,11 @@ export function App() {
         ),
       acceptValue: (offset) =>
         Number.isFinite(offset) && Math.abs(offset) > 1e-9,
-      // A slow rebuild no longer freezes the preview for the rest of the
-      // gesture: the exact solid keeps following the hand at whatever rate
-      // the kernel manages, and the chip reports when it is behind. On a body
-      // whose recent frames were all slow, or a large imported body not yet
-      // previewed, the gesture starts degraded and previews where the hand
-      // rests, so a release out of motion is not queued behind a frame for a
-      // value the hand already passed.
-      continueAfterSlow: true,
-      slowSettleMs: SLOW_PREVIEW_SETTLE_MS,
-      expectedFrameMs: expectedFacePreviewMs,
       ...(E2E_SLOW_FRAME_MS === undefined
         ? {}
         : { slowFrameMs: E2E_SLOW_FRAME_MS }),
       onDegrade: () => {
-        setPreviewDeferred(true);
+        setPreviewDeferred(offsetPreview.lagging);
         recordDirectEditOutcome('preview-degraded', {
           value: offsetPreviewValueRef.current ?? 0
         });
@@ -15655,6 +15573,7 @@ export function App() {
       return;
     }
     offsetPreview.request(offset);
+    setPreviewDeferred(offsetPreview.degraded && offsetPreview.lagging);
   }
 
   function handleOffsetCancel() {

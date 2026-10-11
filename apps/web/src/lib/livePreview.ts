@@ -89,6 +89,21 @@ export interface LivePreviewOptions<TDocument, TDerived> {
   now?(): number;
 }
 
+/**
+ * Disposable exact geometry finishes before model analysis. Let one frame
+ * complete during motion and retain only the newest pending value; canceling
+ * every pointer position can starve the display. Release and cancel still
+ * abort through stop()/clear(). A previous full rebuild's cost never makes
+ * these frames wait for the pointer to rest.
+ */
+export const GEOMETRY_PREVIEW_SCHEDULING = {
+  publishIntermediate: true,
+  cancelSuperseded: false,
+  minIntervalMs: 100,
+  continueAfterSlow: true,
+  slowSettleMs: 0
+} as const;
+
 /** A rebuild that has started and not yet settled. */
 export interface RunningPreview<TDocument, TDerived> {
   value: number;
@@ -112,6 +127,13 @@ export class LivePreview<TDocument, TDerived> {
     requestedAt: number;
   } | null = null;
   private runningPreview: RunningPreview<TDocument, TDerived> | null = null;
+  private runningGeneration: number | null = null;
+  /** One completed frame from this gesture, never a cross-document cache. */
+  private completedPreview: {
+    value: number;
+    document: TDocument;
+    derived: TDerived;
+  } | null = null;
   private abort: AbortController | null = null;
   private slow = false;
   /** Predicted slow: hold rebuilds until the hand rests (`slowSettleMs`). */
@@ -174,17 +196,40 @@ export class LivePreview<TDocument, TDerived> {
     if (this.slow && !this.options.continueAfterSlow) {
       return;
     }
+    const running =
+      this.runningGeneration === this.generation &&
+      this.abort?.signal.aborted === false &&
+      this.runningPreview?.value === value &&
+      (this.options.isCurrent?.(this.runningPreview.document) ?? true);
+    const completed =
+      this.completedPreview?.value === value &&
+      (this.options.isCurrent?.(this.completedPreview.document) ?? true);
     if (
       this.options.publishIntermediate &&
       this.active &&
-      this.lastValue === value
+      this.lastValue === value &&
+      (this.pending !== null || running || completed)
     ) {
       return;
     }
     this.lastValue = value;
-    this.pending = { value, token: ++this.token, requestedAt: this.now() };
-    if (this.options.cancelSuperseded) this.abort?.abort();
+    const token = ++this.token;
     this.active = true;
+    if (this.options.publishIntermediate && (running || completed)) {
+      // Returning to an exact frame needs no second rebuild. An aborted
+      // frame cannot be revived: only a still-live running frame qualifies.
+      this.pending = null;
+      if (this.timer !== null) clearTimeout(this.timer);
+      this.timer = null;
+      if (completed && this.completedPreview) {
+        if (this.options.cancelSuperseded) this.abort?.abort();
+        this.publishedToken = token;
+        this.options.publish(this.completedPreview);
+      }
+      return;
+    }
+    this.pending = { value, token, requestedAt: this.now() };
+    if (this.options.cancelSuperseded) this.abort?.abort();
     if (!this.inFlight) {
       this.schedule();
     }
@@ -228,6 +273,10 @@ export class LivePreview<TDocument, TDerived> {
       this.active &&
       generation === this.generation &&
       (!document || (this.options.isCurrent?.(document) ?? true));
+    const completionToken = () =>
+      this.options.publishIntermediate && this.lastValue === request.value
+        ? this.token
+        : request.token;
     try {
       document = this.options.build(request.value);
       if (!document) return;
@@ -235,24 +284,33 @@ export class LivePreview<TDocument, TDerived> {
       this.abort = abort;
       const result = this.options.derive(document, abort.signal);
       this.runningPreview = { value: request.value, document, result };
+      this.runningGeneration = generation;
       const derived = await result;
       rebuilt = true;
       if (
         !abort.signal.aborted &&
         current() &&
-        (this.options.publishIntermediate || request.token === this.token)
+        (this.options.publishIntermediate
+          ? completionToken() >= this.publishedToken
+          : request.token === this.token)
       ) {
-        this.publishedToken = request.token;
+        this.publishedToken = completionToken();
+        this.completedPreview = { value: request.value, document, derived };
         this.options.publish({ document, derived });
       }
     } catch (error) {
       // An older failure must not reject the value now under the pointer.
-      if (current() && request.token === this.token) {
+      if (
+        !this.abort?.signal.aborted &&
+        current() &&
+        completionToken() === this.token
+      ) {
         this.options.onFailure?.({ error, value: request.value });
       }
     } finally {
       const aborted = this.abort?.signal.aborted ?? false;
       this.runningPreview = null;
+      this.runningGeneration = null;
       this.abort = null;
       if (current()) {
         const interval = this.options.minIntervalMs ?? 0;
@@ -297,6 +355,7 @@ export class LivePreview<TDocument, TDerived> {
     this.timer = null;
     this.nextStartAt = 0;
     this.lastValue = null;
+    this.completedPreview = null;
     this.slow = false;
     this.settle = false;
     this.publishedToken = this.token;
