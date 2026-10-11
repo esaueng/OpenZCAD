@@ -323,9 +323,9 @@ function sectionLoops(
   deflection: number
 ): { loops: ExactSectionLoop[] } | ExactSectionRefusal {
   const loops: ExactSectionLoop[] = [];
-  for (const [index, wire] of Array.from(kernel.getFaceWires(face)).entries()) {
+  for (const [index, wire] of kernel.getFaceWires(face).entries()) {
     const points: SectionPoint3[] = [];
-    for (const edge of Array.from(kernel.getWireEdges(wire))) {
+    for (const edge of kernel.getWireEdges(wire)) {
       const flat = kernel.sampleEdge(edge, deflection);
       // Each edge's last sample is the next edge's first; dropping it keeps
       // the loop a clean closed polyline with no repeated point.
@@ -528,8 +528,8 @@ export function sectionDxfEntities(
   const frame = sectionPlaneFrame(plane, millimeterScale);
   const entities: DxfEntity[] = [];
   for (const face of faces) {
-    for (const wire of Array.from(kernel.getFaceWires(face))) {
-      for (const edge of Array.from(kernel.getWireEdges(wire))) {
+    for (const wire of kernel.getFaceWires(face)) {
+      for (const edge of kernel.getWireEdges(wire)) {
         entities.push(...edgeDxfEntities(kernel, edge, frame));
       }
     }

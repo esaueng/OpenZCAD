@@ -23,6 +23,8 @@
  *                         default is the largest +X planar face.
  *   OFFSET_PERF_TRACE=1   Attribute traced kernel calls to their callers.
  *   OFFSET_PERF_KERNEL_PHASES=1  Drain opt-in kernel substage timings.
+ *   OFFSET_PERF_PREVIEW=1 Time geometry-only previews where supported; legacy
+ *                         builds use their complete-sync preview path.
  *   OFFSET_PERF_FULL=1    Also time a second edit from the same base and the
  *                         undo back to the import.
  *   OFFSET_PERF_SAMPLES  Alternating warm edits (default 0). A fresh exact
@@ -63,6 +65,7 @@ import {
   type BodyId,
   type DerivedState,
   type FaceTopology,
+  type GeometryReadyState,
   type ProjectDocument
 } from '@openzcad/shared';
 import {
@@ -209,7 +212,13 @@ function stageRecorder() {
   };
 }
 
-function report(label: string, wall: number, stages: string[]): void {
+function report(
+  label: string,
+  wall: number,
+  stages: string[],
+  geometryReadyMs: number | null,
+  derived: DerivedState | GeometryReadyState
+): void {
   const methods = [...methodTotals.entries()].sort(
     (a, b) => b[1].time - a[1].time
   );
@@ -220,8 +229,17 @@ function report(label: string, wall: number, stages: string[]): void {
       `${JSON.stringify({
         label,
         wallMs: wall,
+        geometryReadyMs,
         kernelMs: kernel,
         jsMs: wall - kernel,
+        warnings: derived.warnings,
+        bodies: Object.values(derived.bodyRepresentations).map((body) => ({
+          volume: 'volume' in body ? body.volume : null,
+          bbox: body.bbox,
+          faces: body.topology?.faces.length,
+          vertices: body.mesh.vertices.length / 3,
+          triangles: body.mesh.indices.length / 3
+        })),
         methods: Object.fromEntries(methods),
         stages
       })}\n`
@@ -266,6 +284,7 @@ async function timedSync(
   callerTotals.clear();
   stages.reset();
   const start = performance.now();
+  let geometryReadyMs: number | null = null;
   const derived = await adapter.syncDocument(
     document,
     stages.listener,
@@ -273,6 +292,7 @@ async function timedSync(
     undefined,
     {
       onGeometryReady: (geometry) => {
+        geometryReadyMs = performance.now() - start;
         console.log(
           `geometry ready ${label}: ${(performance.now() - start).toFixed(1)} ms`
         );
@@ -284,7 +304,13 @@ async function timedSync(
       }
     }
   );
-  report(label, performance.now() - start, stages.lines());
+  report(
+    label,
+    performance.now() - start,
+    stages.lines(),
+    geometryReadyMs,
+    derived
+  );
   console.log(`warnings: ${JSON.stringify(derived.warnings)}`);
   if (phaseProbe?.drainPerformanceTrace) {
     const phases = JSON.parse(phaseProbe.drainPerformanceTrace()) as {
@@ -304,6 +330,27 @@ async function timedSync(
     );
   }
   return derived;
+}
+
+/** Match the app's preview API; older baselines used a complete sync. */
+async function timedFacePreview(
+  adapter: ExactKernelAdapter,
+  document: ProjectDocument,
+  label: string,
+  stages: ReturnType<typeof stageRecorder>
+) {
+  methodTotals.clear();
+  callerTotals.clear();
+  stages.reset();
+  const start = performance.now();
+  const result =
+    typeof adapter.previewGeometry === 'function'
+      ? await adapter.previewGeometry(document)
+      : await adapter.syncDocument(document, stages.listener);
+  const elapsed = performance.now() - start;
+  report(label, elapsed, stages.lines(), elapsed, result);
+  expect(result.warnings).toEqual([]);
+  return result;
 }
 
 /** The +X planar face nearest `area` in area, else the largest. */
@@ -412,6 +459,22 @@ it.skipIf(!stepPath)(
       const edited = new CommandManager(base).runTransaction('Offset', [
         plan!.command
       ]);
+      if (process.env.OFFSET_PERF_PREVIEW === '1') {
+        await timedFacePreview(adapter, edited, 'first face preview', stages);
+        for (let index = 0; index < 3; index++) {
+          const distance = offset - 0.2 * (index + 1);
+          const previewPlan = planAt(distance);
+          expect(previewPlan?.kind).toBe('direct-edit');
+          await timedFacePreview(
+            adapter,
+            new CommandManager(base).runTransaction('Offset', [
+              previewPlan!.command
+            ]),
+            `warm face preview ${index + 1}`,
+            stages
+          );
+        }
+      }
       const derived1 = await timedSync(
         adapter,
         edited,

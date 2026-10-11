@@ -282,7 +282,7 @@ export function resolveFaceByFingerprint(
     throw unresolvedReferenceError(
       'face',
       faceHash,
-      Array.from(kernel.getSolidFaces(solid)).length
+      kernel.getSolidFaces(solid).length
     );
   }
   if (matches.length > 1) {
@@ -325,7 +325,7 @@ function enlargeThroughHole(
   } catch (shortCutError) {
     const axis = normalized(subtract(geometry.axisEnd, geometry.axisStart));
     if (!axis) throw shortCutError;
-    const bounds = Array.from(kernel.boundingBox(solid));
+    const bounds = kernel.boundingBox(solid);
     if (bounds.length !== 6 || !bounds.every(Number.isFinite))
       throw shortCutError;
     const corners: Vec3[] = [];
