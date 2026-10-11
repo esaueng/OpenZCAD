@@ -1326,7 +1326,9 @@ function buildBooleanFeature(
   const operands = data.targetBodyIds.map((bodyId) => {
     const shape = result.shapes.get(bodyId);
     if (!shape) {
-      throw new Error(`Boolean target ${bodyId} is unavailable.`);
+      throw new Error(
+        `Boolean target ${bodyName(document, bodyId)} is unavailable.`
+      );
     }
     return shape;
   });

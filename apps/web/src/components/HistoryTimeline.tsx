@@ -123,12 +123,33 @@ export interface HistoryTimelineProps {
   onToggleSketchVisibility(sketchId: string): void;
   onFeatureContextMenu(
     at: { clientX: number; clientY: number },
-    feature: FeatureNode
+    feature: FeatureNode,
+    row?: HistoryRowActions
   ): void;
   onToggleFeatureSuppression(feature: FeatureNode): void;
   onRollbackAfterFeature(featureId: FeatureId, name: string): void;
   onResumeHistory(): void;
   onReorderFeature(featureId: FeatureId, toIndex: number): void;
+  /** Renames a feature in place. Without it the row offers no rename. */
+  onRenameFeature?(featureId: FeatureId, name: string): void;
+}
+
+/**
+ * What a row's context menu can do that only the row knows how to do: the
+ * end-of-history buttons drop a pending keyboard step first, and a rename
+ * edits the name where it is shown.
+ */
+export interface HistoryRowActions {
+  /**
+   * Where the row stands against the end of history: `last` when it is the
+   * final feature and nothing is rolled back (rolling back after it would
+   * do nothing), `marker` when history is rolled back to just after it, and
+   * null otherwise.
+   */
+  endOfHistory: 'last' | 'marker' | null;
+  rollBack(): void;
+  resume(): void;
+  rename?(): void;
 }
 
 function sketchIdOf(feature: FeatureNode): string | null {
@@ -150,6 +171,59 @@ function markedName(name: string, query: string): ReactNode {
       <mark className="history-match">{name.slice(at, at + query.length)}</mark>
       {name.slice(at + query.length)}
     </>
+  );
+}
+
+/**
+ * The row's name as a field, for Rename from the row's menu. Enter or leaving
+ * the field keeps the new name; Escape keeps the old one. An empty or
+ * unchanged name is no edit at all, so it adds nothing to history.
+ */
+function FeatureRenameField({
+  feature,
+  icon,
+  onCommit,
+  onDone
+}: {
+  feature: FeatureNode;
+  icon: ReactNode;
+  onCommit(name: string): void;
+  onDone(refocus: boolean): void;
+}) {
+  const inputRef = useRef<HTMLInputElement>(null);
+  const settled = useRef(false);
+  useEffect(() => {
+    inputRef.current?.focus();
+    inputRef.current?.select();
+  }, []);
+  function finish(keep: boolean, refocus: boolean) {
+    // Enter unmounts the field, and the blur that follows must not commit a
+    // second time.
+    if (settled.current) return;
+    settled.current = true;
+    const name = inputRef.current?.value.trim() ?? '';
+    if (keep && name && name !== feature.name) onCommit(name);
+    onDone(refocus);
+  }
+  return (
+    <span className="feature-row-rename">
+      <span className="feature-icon">{icon}</span>
+      <input
+        ref={inputRef}
+        type="text"
+        defaultValue={feature.name}
+        aria-label={`Rename ${feature.name}`}
+        onKeyDown={(event) => {
+          if (event.key === 'Enter' || event.key === 'Escape') {
+            event.preventDefault();
+            // Escape here cancels the rename, not the workspace's selection.
+            event.stopPropagation();
+            finish(event.key === 'Enter', true);
+          }
+        }}
+        onBlur={() => finish(true, false)}
+      />
+    </span>
   );
 }
 
@@ -219,9 +293,11 @@ export function HistoryTimeline({
   onToggleFeatureSuppression,
   onRollbackAfterFeature,
   onResumeHistory,
-  onReorderFeature
+  onReorderFeature,
+  onRenameFeature
 }: HistoryTimelineProps) {
   const [dragFeatureId, setDragFeatureId] = useState<string | null>(null);
+  const [renamingId, setRenamingId] = useState<FeatureId | null>(null);
   const [dropFeatureId, setDropFeatureId] = useState<string | null>(null);
   const [query, setQuery] = useState('');
   // Where the handle sits while it is being dragged or stepped from the
@@ -235,6 +311,16 @@ export function HistoryTimeline({
     features.map((feature) => feature.id),
     ARRIVAL_MS
   );
+
+  // A feature deleted (or undone away) mid-rename takes the field with it.
+  useEffect(() => {
+    if (
+      renamingId &&
+      !features.some((feature) => feature.featureId === renamingId)
+    ) {
+      setRenamingId(null);
+    }
+  }, [features, renamingId]);
 
   // The last feature still in the build when every later one is paused by
   // rollback; otherwise the history runs to its end.
@@ -370,6 +456,18 @@ export function HistoryTimeline({
     cancelPendingCommit();
     setPreviewEnd(null);
     onRollbackAfterFeature(feature.featureId, feature.name);
+  }
+
+  function rowActions(feature: FeatureNode, index: number): HistoryRowActions {
+    return {
+      endOfHistory:
+        index !== committedEnd ? null : committedEnd < last ? 'marker' : 'last',
+      rollBack: () => rollBackAfter(feature),
+      resume: resumeNow,
+      ...(onRenameFeature
+        ? { rename: () => setRenamingId(feature.featureId) }
+        : {})
+    };
   }
 
   function moveEndTo(target: number) {
@@ -632,7 +730,11 @@ export function HistoryTimeline({
               className={`feature-row${sketchId ? ' is-sketch' : ''}${selected ? ' selected' : ''}${consumed ? ' consumed' : ''}${hidden ? ' hidden-body' : ''}${manual ? ' suppressed' : ''}${paused ? ' paused' : ''}${failed ? ' failed' : ''}${dragFeatureId === feature.featureId ? ' is-dragging' : ''}${dropFeatureId === feature.featureId ? ' is-drop-target' : ''}${featureArrivals.has(feature.id) ? ' is-arrival' : ''}`}
               onContextMenu={(event) => {
                 event.preventDefault();
-                onFeatureContextMenu(event, feature);
+                onFeatureContextMenu(
+                  event,
+                  feature,
+                  rowActions(feature, index)
+                );
               }}
               onDragOver={(event) => {
                 if (!dragFeatureId || dragFeatureId === feature.featureId) {
@@ -706,29 +808,50 @@ export function HistoryTimeline({
               >
                 <GripVertical size={12} aria-hidden="true" />
               </button>
-              <button
-                type="button"
-                className="feature-row-main"
-                aria-pressed={selected}
-                onClick={() => onSelectFeature(feature.id)}
-                // Every row used to announce the same generic kind label, so
-                // a history read aloud was a list of identical items. The
-                // feature's own name comes first, as on screen.
-                title={`${feature.name} — ${FEATURE_KIND_LABELS[feature.featureKind]}${consumed ? ', combined into a later feature' : ''}, click to edit`}
-              >
-                <span className="feature-icon">{featureIcon(feature)}</span>
-                <span className="feature-name">
-                  {markedName(feature.name, needle)}
-                </span>
-                {failed && (
-                  <span
-                    className="feature-flag error"
-                    title="Feature failed to build"
-                  >
-                    <AlertTriangle size={11} aria-hidden="true" />
+              {renamingId === feature.featureId && onRenameFeature ? (
+                <FeatureRenameField
+                  feature={feature}
+                  icon={featureIcon(feature)}
+                  onCommit={(name) => onRenameFeature(feature.featureId, name)}
+                  onDone={(refocus) => {
+                    setRenamingId(null);
+                    if (!refocus) return;
+                    // The field unmounts with focus in it; give it back to
+                    // the row it replaced rather than dropping it on the page.
+                    requestAnimationFrame(() =>
+                      listRef.current
+                        ?.querySelector<HTMLElement>(
+                          `[data-node-id="${CSS.escape(feature.id)}"] .feature-row-main`
+                        )
+                        ?.focus()
+                    );
+                  }}
+                />
+              ) : (
+                <button
+                  type="button"
+                  className="feature-row-main"
+                  aria-pressed={selected}
+                  onClick={() => onSelectFeature(feature.id)}
+                  // Every row used to announce the same generic kind label, so
+                  // a history read aloud was a list of identical items. The
+                  // feature's own name comes first, as on screen.
+                  title={`${feature.name} — ${FEATURE_KIND_LABELS[feature.featureKind]}${consumed ? ', combined into a later feature' : ''}, click to edit`}
+                >
+                  <span className="feature-icon">{featureIcon(feature)}</span>
+                  <span className="feature-name">
+                    {markedName(feature.name, needle)}
                   </span>
-                )}
-              </button>
+                  {failed && (
+                    <span
+                      className="feature-flag error"
+                      title="Feature failed to build"
+                    >
+                      <AlertTriangle size={11} aria-hidden="true" />
+                    </span>
+                  )}
+                </button>
+              )}
               <span className="history-row-tail">
                 <span className="history-row-value mono">{value}</span>
                 <span className="history-row-actions">
@@ -774,7 +897,8 @@ export function HistoryTimeline({
                       const box = event.currentTarget.getBoundingClientRect();
                       onFeatureContextMenu(
                         { clientX: box.left, clientY: box.bottom + 2 },
-                        feature
+                        feature,
+                        rowActions(feature, index)
                       );
                     }}
                   >

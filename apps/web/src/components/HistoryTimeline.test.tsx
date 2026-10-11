@@ -404,6 +404,69 @@ describe('HistoryTimeline', () => {
     expect(target.id).toBe('node-2');
   });
 
+  it('hands the row menu the same roll-back and resume the row buttons run', () => {
+    const { props } = renderTimeline({
+      features: [feature(1), feature(2), feature(3, undefined, rolledBack)]
+    });
+    const menuFor = (name: string) => {
+      fireEvent.contextMenu(row(name));
+      return vi.mocked(props.onFeatureContextMenu).mock.calls.at(-1)![2]!;
+    };
+    // Rolled back to just after Feature 2: its menu resumes instead.
+    expect(menuFor('Feature 2').endOfHistory).toBe('marker');
+    menuFor('Feature 2').resume();
+    expect(props.onResumeHistory).toHaveBeenCalledTimes(1);
+    const first = menuFor('Feature 1');
+    expect(first.endOfHistory).toBeNull();
+    first.rollBack();
+    expect(props.onRollbackAfterFeature).toHaveBeenCalledWith(
+      'feature-1',
+      'Feature 1'
+    );
+    // No rename without a handler for it.
+    expect(first.rename).toBeUndefined();
+  });
+
+  it('marks the last row when nothing is rolled back', () => {
+    const { props } = renderTimeline();
+    fireEvent.contextMenu(row('Feature 4'));
+    expect(
+      vi.mocked(props.onFeatureContextMenu).mock.calls[0]![2]!.endOfHistory
+    ).toBe('last');
+  });
+
+  it('renames in place from the row menu: Enter keeps, Escape cancels', async () => {
+    const user = userEvent.setup();
+    const onRenameFeature = vi.fn();
+    const { props } = renderTimeline({ onRenameFeature });
+    const renameFrom = (name: string) => {
+      fireEvent.contextMenu(row(name));
+      act(() =>
+        vi.mocked(props.onFeatureContextMenu).mock.calls.at(-1)![2]!.rename!()
+      );
+    };
+
+    renameFrom('Feature 2');
+    const field = screen.getByRole('textbox', { name: 'Rename Feature 2' });
+    await waitFor(() => expect(field).toHaveFocus());
+    await user.clear(field);
+    await user.type(field, '  Boss  {Enter}');
+    expect(onRenameFeature).toHaveBeenCalledTimes(1);
+    expect(onRenameFeature).toHaveBeenCalledWith('feature-2', 'Boss');
+    expect(screen.queryByRole('textbox')).toBeNull();
+
+    renameFrom('Feature 3');
+    const other = screen.getByRole('textbox', { name: 'Rename Feature 3' });
+    await user.type(other, 'x{Escape}');
+    expect(onRenameFeature).toHaveBeenCalledTimes(1);
+    expect(screen.queryByRole('textbox')).toBeNull();
+
+    // An empty or unchanged name is no edit.
+    renameFrom('Feature 1');
+    fireEvent.blur(screen.getByRole('textbox', { name: 'Rename Feature 1' }));
+    expect(onRenameFeature).toHaveBeenCalledTimes(1);
+  });
+
   it('keeps a Show button on a hidden sketch', async () => {
     const user = userEvent.setup();
     const { props } = renderTimeline({
