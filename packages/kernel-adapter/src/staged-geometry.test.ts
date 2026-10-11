@@ -287,6 +287,15 @@ describe('validated geometry before analysis', () => {
             // A display observer cannot corrupt retained measurement or topology.
             body.mesh.vertices.fill(999);
             body.topology!.faces.length = 0;
+            // Display publications may transfer their mesh buffers to the UI;
+            // detaching it must leave final analysis and cached meshes live.
+            const transferred = structuredClone(body.mesh, {
+              transfer: [body.mesh.vertices.buffer, body.mesh.indices.buffer]
+            });
+            expect(transferred.vertices.length).toBeGreaterThan(0);
+            expect(transferred.indices.length).toBeGreaterThan(0);
+            expect(body.mesh.vertices.byteLength).toBe(0);
+            expect(body.mesh.indices.byteLength).toBe(0);
           }
         }
       );
@@ -294,12 +303,15 @@ describe('validated geometry before analysis', () => {
       const body = result.bodyRepresentations[doc.bodyOrder[0]!]!;
       expect(body.volume).toBeCloseTo(480, 10);
       expect(body.topology!.faces).toHaveLength(6);
+      expect(body.mesh.vertices.length).toBeGreaterThan(0);
+      expect(body.mesh.indices.length).toBeGreaterThan(0);
       expect(body.mesh.vertices.every((value) => value !== 999)).toBe(true);
       expect(result.warnings).toEqual([]);
-      expect(
-        (await adapter.syncDocument(doc)).bodyRepresentations[body.bodyId]!
-          .volume
-      ).toBe(body.volume);
+      const cached = (await adapter.syncDocument(doc)).bodyRepresentations[
+        body.bodyId
+      ]!;
+      expect(cached.volume).toBe(body.volume);
+      expect(cached.mesh).toEqual(body.mesh);
     } finally {
       adapter.dispose();
     }

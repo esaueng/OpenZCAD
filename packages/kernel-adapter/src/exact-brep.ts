@@ -6,7 +6,7 @@
  */
 import type { RemusKernel } from './remus-runtime';
 import { canonicalDirection } from './topology-fingerprint';
-import { surfaceTypeOf } from './exact-sync-memo';
+import { surfaceTypeOf, syncReadMemoFor } from './exact-sync-memo';
 import type { Vec3 } from '@openzcad/geometry';
 import type { EdgeCurve } from '@openzcad/shared';
 import {
@@ -495,7 +495,13 @@ export function tangentPlanarNeighbours(
     GEOMETRY_EPSILON
   );
   const tangent: number[] = [];
-  for (const neighbour of kernel.getSolidFaces(solid)) {
+  // A cylindrical band has only a few incident faces. During a sync the
+  // shared incidence map avoids reading every unrelated planar boundary for
+  // every cylinder; the original edge and tangency proofs remain below.
+  const neighbours =
+    syncReadMemoFor(kernel)?.facesAdjacentToEdges(solid, bandEdges) ??
+    kernel.getSolidFaces(solid);
+  for (const neighbour of neighbours) {
     if (
       neighbour === face ||
       surfaceTypeOf(kernel, neighbour) !== 'plane' ||

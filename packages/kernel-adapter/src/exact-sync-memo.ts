@@ -144,6 +144,7 @@ export class SyncReadMemo {
   private readonly records = new Map<number, SolidWitnessRecord>();
   private readonly faceValues = new Map<string, Map<number, unknown>>();
   private readonly edgeToFaceMaps = new Map<number, EdgeToFaceMap>();
+  private readonly solidFaceOrders = new Map<number, Map<number, number>>();
 
   constructor(
     readonly kernel: RemusKernel,
@@ -221,6 +222,31 @@ export class SyncReadMemo {
       this.edgeToFaceMaps.set(solid, map);
     }
     return map;
+  }
+
+  /**
+   * Faces that use one of `edges`, in the solid's original traversal order.
+   * The kernel's solid-scoped incidence map narrows candidates only; callers
+   * still verify the shared edge and geometry before publishing a proof.
+   */
+  facesAdjacentToEdges(solid: number, edges: Iterable<number>): number[] {
+    let order = this.solidFaceOrders.get(solid);
+    if (!order) {
+      const faces =
+        this.records.get(solid)?.faces ?? this.kernel.getSolidFaces(solid);
+      order = new Map(Array.from(faces, (face, index) => [face, index]));
+      this.solidFaceOrders.set(solid, order);
+    }
+    const incidence = this.edgeToFaceMap(solid);
+    const candidates = new Set<number>();
+    for (const edge of edges) {
+      for (const face of incidence[String(edge)] ?? []) {
+        if (order.has(face)) candidates.add(face);
+      }
+    }
+    return [...candidates].sort(
+      (left, right) => order.get(left)! - order.get(right)!
+    );
   }
 }
 

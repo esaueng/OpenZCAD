@@ -90,6 +90,22 @@ describe('sync read memo', () => {
     expect(memo.faceValue('probe', 3, read)).toBe(2);
     expect(memo.faceValue('probe', 3, read)).toBe(2);
   });
+
+  it('narrows adjacent faces in solid traversal order with one incidence read', () => {
+    const { kernel, reads } = fakeKernel({
+      7: { faces: [40, 10, 30, 20], edges: [1, 2] }
+    });
+    kernel.edgeToFaceMap = () => {
+      reads.edgeToFaceMap += 1;
+      return '{"1":[30,40,999],"2":[20,30,40]}';
+    };
+    const memo = new SyncReadMemo(kernel);
+    expect(memo.facesAdjacentToEdges(7, [2, 1])).toEqual([40, 30, 20]);
+    expect(memo.facesAdjacentToEdges(7, [1])).toEqual([40, 30]);
+    expect(memo.facesAdjacentToEdges(7, [99])).toEqual([]);
+    expect(reads.edgeToFaceMap).toBe(1);
+    expect(reads.solidLists).toBe(1);
+  });
 });
 
 describe('topology witness store', () => {

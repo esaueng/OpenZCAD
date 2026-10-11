@@ -1,5 +1,5 @@
 import { describe, expect, it, vi } from 'vitest';
-import { LivePreview } from './livePreview';
+import { GEOMETRY_PREVIEW_SCHEDULING, LivePreview } from './livePreview';
 
 interface Doc {
   value: number;
@@ -496,6 +496,188 @@ describe('lagging', () => {
 });
 
 describe('bounded progressive gestures', () => {
+  it('reuses a still-live running frame when the pointer returns to its value', async () => {
+    const first = deferred();
+    const built: number[] = [];
+    const published: number[] = [];
+    const preview = new LivePreview<Doc, string>({
+      build: (value) => {
+        built.push(value);
+        return { value };
+      },
+      derive: () => first.promise,
+      publish: (frame) => {
+        if (frame) published.push(frame.document.value);
+      },
+      publishIntermediate: true
+    });
+    preview.request(1);
+    preview.request(2);
+    preview.request(1);
+    first.resolve('same exact frame');
+    await settle();
+    expect(built).toEqual([1]);
+    expect(published).toEqual([1]);
+    expect(preview.running).toBeNull();
+    expect(preview.lagging).toBe(false);
+  });
+
+  it('never revives a cancelled frame when the pointer returns to its value', async () => {
+    const first = deferred();
+    const signals: AbortSignal[] = [];
+    const published: string[] = [];
+    const preview = new LivePreview<Doc, string>({
+      build: (value) => ({ value }),
+      derive: (_document, signal) => {
+        signals.push(signal);
+        return signals.length === 1
+          ? first.promise
+          : Promise.resolve('new geometry');
+      },
+      publish: (frame) => {
+        if (frame) published.push(frame.derived);
+      },
+      publishIntermediate: true,
+      cancelSuperseded: true
+    });
+    preview.request(1);
+    preview.request(2);
+    preview.request(1);
+    first.resolve('aborted geometry');
+    await settle();
+    expect(signals).toHaveLength(2);
+    expect(signals[0]!.aborted).toBe(true);
+    expect(signals[1]!.aborted).toBe(false);
+    expect(published).toEqual(['new geometry']);
+    expect(preview.lagging).toBe(false);
+  });
+
+  it.each([false, true])(
+    'returns to the displayed frame without rebuilding (cancelSuperseded=%s)',
+    async (cancelSuperseded) => {
+      const second = deferred();
+      const built: number[] = [];
+      const published: number[] = [];
+      let secondSignal: AbortSignal | undefined;
+      const preview = new LivePreview<Doc, string>({
+        build: (value) => {
+          built.push(value);
+          return { value };
+        },
+        derive: (document, signal) => {
+          if (document.value === 2) {
+            secondSignal = signal;
+            return second.promise;
+          }
+          return Promise.resolve('first');
+        },
+        publish: (frame) => {
+          if (frame) published.push(frame.document.value);
+        },
+        publishIntermediate: true,
+        cancelSuperseded
+      });
+      preview.request(1);
+      await settle();
+      preview.request(2);
+      preview.request(3);
+      preview.request(1);
+      expect(preview.lagging).toBe(false);
+      expect(secondSignal?.aborted).toBe(cancelSuperseded);
+      second.resolve('obsolete');
+      await settle();
+      expect(built).toEqual([1, 2]);
+      expect(published).toEqual([1, 1]);
+      expect(preview.lagging).toBe(false);
+    }
+  );
+
+  it('reports a running frame refusal when the pointer returned to its value', async () => {
+    const first = deferred();
+    const failures: number[] = [];
+    const preview = new LivePreview<Doc, string>({
+      build: (value) => ({ value }),
+      derive: () => first.promise,
+      publish: () => undefined,
+      onFailure: ({ value }) => failures.push(value),
+      publishIntermediate: true
+    });
+    preview.request(1);
+    preview.request(2);
+    preview.request(1);
+    first.reject(new Error('the current value cannot build'));
+    await settle();
+    expect(failures).toEqual([1]);
+    expect(preview.running).toBeNull();
+  });
+
+  it('rebuilds a repeated value after its source document changes', async () => {
+    let baseVersion = 1;
+    const built: number[] = [];
+    const published: number[] = [];
+    const preview = new LivePreview<Doc & { baseVersion: number }, string>({
+      build: (value) => {
+        built.push(baseVersion);
+        return { value, baseVersion };
+      },
+      derive: () => Promise.resolve('derived'),
+      isCurrent: (document) => document.baseVersion === baseVersion,
+      publish: (frame) => {
+        if (frame) published.push(frame.document.baseVersion);
+      },
+      publishIntermediate: true
+    });
+    preview.request(1);
+    await settle();
+    baseVersion = 2;
+    preview.request(1);
+    await settle();
+    expect(built).toEqual([1, 2]);
+    expect(published).toEqual([1, 2]);
+  });
+
+  it('can retry the same value after a failed progressive frame', async () => {
+    let calls = 0;
+    const published: number[] = [];
+    const preview = new LivePreview<Doc, string>({
+      build: (value) => ({ value }),
+      derive: () =>
+        ++calls === 1
+          ? Promise.reject(new Error('worker unavailable'))
+          : Promise.resolve('derived'),
+      publish: (frame) => {
+        if (frame) published.push(frame.document.value);
+      },
+      publishIntermediate: true
+    });
+    preview.request(1);
+    await settle();
+    preview.request(1);
+    await settle();
+    expect(calls).toBe(2);
+    expect(published).toEqual([1]);
+    expect(preview.lagging).toBe(false);
+  });
+
+  it.each(['stop', 'clear'] as const)(
+    'does not reuse completed geometry after %s',
+    async (end) => {
+      const derive = vi.fn(async () => 'derived');
+      const preview = new LivePreview<Doc, string>({
+        build: (value) => ({ value }),
+        derive,
+        publish: () => undefined,
+        publishIntermediate: true
+      });
+      preview.request(1);
+      await settle();
+      preview[end]();
+      preview.request(1);
+      await settle();
+      expect(derive).toHaveBeenCalledTimes(2);
+    }
+  );
+
   it('keeps the minimum start interval when superseded derives reject immediately', async () => {
     vi.useFakeTimers();
     try {
@@ -589,6 +771,81 @@ describe('bounded progressive gestures', () => {
       preview.request(50);
       await vi.advanceTimersByTimeAsync(1000);
       expect(builds).toBe(idleBuilds);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it('finishes exact frames while pointer input outruns the worker', async () => {
+    vi.useFakeTimers();
+    try {
+      const published: number[] = [];
+      const signals: AbortSignal[] = [];
+      let activeDerives = 0;
+      let peakDerives = 0;
+      const preview = new LivePreview<Doc, string>({
+        build: (value) => ({ value }),
+        derive: async (_document, signal) => {
+          signals.push(signal);
+          peakDerives = Math.max(peakDerives, ++activeDerives);
+          await new Promise((resolve) => setTimeout(resolve, 100));
+          activeDerives -= 1;
+          return 'exact geometry';
+        },
+        publish: (frame) => {
+          if (frame) published.push(frame.document.value);
+        },
+        ...GEOMETRY_PREVIEW_SCHEDULING,
+        now: () => Date.now()
+      });
+      for (let value = 1; value <= 100; value += 1) {
+        preview.request(value);
+        await vi.advanceTimersByTimeAsync(8);
+      }
+      // The pointer has never rested for a worker frame. Completed exact
+      // values must still become visible before the gesture finishes.
+      expect(published.length).toBeGreaterThanOrEqual(7);
+      expect(peakDerives).toBe(1);
+      expect(signals.every((signal) => !signal.aborted)).toBe(true);
+      preview.stop();
+      expect(signals.at(-1)!.aborted).toBe(true);
+      const shownBeforeRelease = [...published];
+      await vi.runAllTimersAsync();
+      expect(published).toEqual(shownBeforeRelease);
+      expect(preview.running).toBeNull();
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it('starts geometry-only frames immediately even with a slow full-rebuild prediction', async () => {
+    vi.useFakeTimers();
+    try {
+      const published: number[] = [];
+      const preview = new LivePreview<Doc, string>({
+        build: (value) => ({ value }),
+        derive: async () => {
+          await new Promise((resolve) => setTimeout(resolve, 100));
+          return 'exact geometry';
+        },
+        publish: (frame) => {
+          if (frame) published.push(frame.document.value);
+        },
+        ...GEOMETRY_PREVIEW_SCHEDULING,
+        expectedFrameMs: () => 5000,
+        now: () => Date.now()
+      });
+      preview.request(1);
+      expect(preview.running?.value).toBe(1);
+      for (let value = 2; value <= 20; value += 1) {
+        await vi.advanceTimersByTimeAsync(8);
+        preview.request(value);
+      }
+      expect(published).toEqual([1]);
+      expect(preview.running?.value).toBeGreaterThan(1);
+      preview.clear();
+      await vi.runAllTimersAsync();
+      expect(published).toEqual([1]);
     } finally {
       vi.useRealTimers();
     }
