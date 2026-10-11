@@ -3103,7 +3103,7 @@ export function App() {
         ? {}
         : { slowFrameMs: E2E_SLOW_FRAME_MS }),
       onDegrade: () => {
-        setPreviewDeferred(true);
+        setPreviewDeferred(offsetPreview.lagging);
         recordDirectEditOutcome('preview-degraded', {
           value: offsetPreviewValueRef.current ?? 0
         });
@@ -15532,6 +15532,7 @@ export function App() {
       return;
     }
     offsetPreview.request(offset);
+    setPreviewDeferred(offsetPreview.degraded && offsetPreview.lagging);
   }
 
   function handleOffsetCancel() {

@@ -558,6 +558,8 @@ describe('bounded progressive gestures', () => {
       const second = deferred();
       const built: number[] = [];
       const published: number[] = [];
+      const laggingWhenDegraded: boolean[] = [];
+      let clock = 0;
       let secondSignal: AbortSignal | undefined;
       const preview = new LivePreview<Doc, string>({
         build: (value) => {
@@ -575,7 +577,9 @@ describe('bounded progressive gestures', () => {
           if (frame) published.push(frame.document.value);
         },
         publishIntermediate: true,
-        cancelSuperseded
+        cancelSuperseded,
+        now: () => clock,
+        onDegrade: () => laggingWhenDegraded.push(preview.lagging)
       });
       preview.request(1);
       await settle();
@@ -584,11 +588,13 @@ describe('bounded progressive gestures', () => {
       preview.request(1);
       expect(preview.lagging).toBe(false);
       expect(secondSignal?.aborted).toBe(cancelSuperseded);
+      clock = 500;
       second.resolve('obsolete');
       await settle();
       expect(built).toEqual([1, 2]);
       expect(published).toEqual([1, 1]);
       expect(preview.lagging).toBe(false);
+      expect(laggingWhenDegraded).toEqual(cancelSuperseded ? [] : [false]);
     }
   );
 
