@@ -5,7 +5,10 @@ import {
   commandsForCadPatch,
   type AnyCommand
 } from '@openzcad/command-system';
-import { createBodyFeatureIds } from '@openzcad/document-core';
+import {
+  createBodyFeatureIds,
+  numberedFeatureName
+} from '@openzcad/document-core';
 import {
   isLocalBodyRef,
   normalizeLocalId,
@@ -333,7 +336,9 @@ async function materializePatchCommands(
   const edges = selectedExactEdges(exactPrefix, targetBodyId, staged.operation);
   const ids = createBodyFeatureIds();
   const payload = {
-    name: staged.operation.name,
+    // Numbered past the prefix's features, as commandsForCadPatch numbers
+    // every other feature a patch adds.
+    name: numberedFeatureName(prefixCandidate, staged.operation.name),
     targetBodyId,
     edgeHashes: edges.map((edge) => edge.hash),
     edgeReferences: edges.map((edge) => edge.reference!),

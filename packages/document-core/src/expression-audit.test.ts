@@ -4,6 +4,7 @@ import {
   coerceParamValue,
   createProjectDocument,
   evaluateExpression as evaluateWithOptions,
+  evaluateFieldExpression,
   getExpressionDimensions as dimensionsWithOptions,
   getParameterScope,
   listParameters,
@@ -411,5 +412,59 @@ describe('F05 audit: callers without document units', () => {
   it('keep unit-free and angle-suffixed inputs working', () => {
     expect(evaluateWithOptions('2 * 3 + 4', {})).toBe(10);
     expect(evaluateWithOptions('sin(90deg)', {})).toBeCloseTo(1, 12);
+  });
+});
+
+describe('F05 typed fields: the dimension a field holds', () => {
+  const length = (units: UnitSystem) =>
+    ({ documentUnits: units, dimension: 'length' }) as const;
+
+  it('evaluates the QA CAD-004 inputs into document units, both ways round', () => {
+    // Inch document: 1 in + 25.4 mm is 2 in; 50.8 mm alone is 2 in.
+    expect(evaluateFieldExpression('1 in + 25.4 mm', {}, length('inch'))).toBe(
+      2
+    );
+    expect(evaluateFieldExpression('50.8 mm', {}, length('inch'))).toBeCloseTo(
+      2,
+      12
+    );
+    // Millimetre document: the same quantities read 50.8 mm.
+    expect(evaluateFieldExpression('1 in + 25.4 mm', {}, length('mm'))).toBe(
+      50.8
+    );
+    expect(evaluateFieldExpression('2 in', {}, length('mm'))).toBe(50.8);
+    // Bare numbers and parameters are document-unit lengths already.
+    expect(evaluateFieldExpression('w / 2', { w: 3 }, length('inch'))).toBe(
+      1.5
+    );
+  });
+
+  it('refuses another dimension in a length field on the existing throw path', () => {
+    for (const input of ['30 deg', '(2 mm) * (3 mm)', '1 in + 30deg']) {
+      let caught: unknown;
+      try {
+        evaluateFieldExpression(input, {}, length('inch'));
+      } catch (error) {
+        caught = error;
+      }
+      expect(caught).toBeInstanceOf(Error);
+      expect((caught as Error).message).toMatch(/Incompatible dimensions/);
+    }
+  });
+
+  it('refuses a length in an angle field and keeps degrees working', () => {
+    const angle = { documentUnits: 'inch', dimension: 'angle' } as const;
+    expect(() => evaluateFieldExpression('5 mm', {}, angle)).toThrow(
+      'Incompatible dimensions in expression: expected an angle, not a length.'
+    );
+    expect(evaluateFieldExpression('90deg', {}, angle)).toBe(90);
+    expect(evaluateFieldExpression('45', {}, angle)).toBe(45);
+  });
+
+  it('leaves untyped evaluation exactly as it was', () => {
+    expect(
+      evaluateWithOptions('(2 mm) * (3 mm)', {}, { documentUnits: 'mm' })
+    ).toBe(6);
+    expect(() => evaluateWithOptions('5 mm', {})).toThrow(/document's units/);
   });
 });

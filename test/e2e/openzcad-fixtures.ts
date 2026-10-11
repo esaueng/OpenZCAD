@@ -469,7 +469,7 @@ export async function shiftSelectTwoVisibleBoxEdges(page: Page) {
   const first = await locateEdge(page);
   await page.mouse.click(first.x, first.y);
   const status = page.getByRole('contentinfo');
-  await expect(status).toContainText('1 exact edge selected');
+  await expect(status).toContainText('1 edge selected');
 
   await page.getByRole('button', { name: 'Close panel' }).click();
   const second = await locateEdge(page, { exclude: [first.topologyId] });
@@ -480,7 +480,7 @@ export async function shiftSelectTwoVisibleBoxEdges(page: Page) {
     await page.keyboard.up('Shift');
   }
 
-  await expect(status).toContainText('2 exact edges selected');
+  await expect(status).toContainText('2 edges selected');
   await expect(
     page.locator('.selection-callout-chip .selection-callout-name')
   ).toHaveText('2 edges');
@@ -990,6 +990,25 @@ export async function revealModelDrawer(
     .getByRole('button', { name: `${section} panel` })
     .click();
   await expect(drawer).toBeVisible();
+}
+
+/**
+ * Selects a body from its row in the Items panel, the way a user picks one
+ * without aiming at it, and waits for its selection chip. A create leaves
+ * nothing selected (design review G15), so a spec that reads the new body's
+ * chip asks for it first.
+ */
+export async function selectBodyFromItems(page: Page, name?: string) {
+  const items = page
+    .getByRole('toolbar', { name: 'Model panels' })
+    .getByRole('button', { name: 'Items panel' });
+  if ((await items.getAttribute('aria-pressed')) !== 'true') {
+    await items.click();
+  }
+  await expect(items).toHaveAttribute('aria-pressed', 'true');
+  const rows = page.locator('.body-row:not(.consumed) .body-row-main');
+  await (name ? rows.filter({ hasText: name }) : rows).first().click();
+  await expect(page.locator('.selection-callout-chip')).toBeVisible();
 }
 
 /**

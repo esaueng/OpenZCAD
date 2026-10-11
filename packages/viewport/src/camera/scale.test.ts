@@ -1,8 +1,11 @@
 import { describe, expect, it } from 'vitest';
+import * as THREE from 'three';
 import {
   chooseViewportScale,
   DEFAULT_SCALE_BAR_MAX_WIDTH_PX,
-  formatViewportScale
+  formatViewportScale,
+  presentedBoundsCenter,
+  scaleBarAnchor
 } from './scale';
 
 describe('viewport scale indicator', () => {
@@ -41,5 +44,103 @@ describe('viewport scale indicator', () => {
     expect(formatViewportScale(0.005, 'mm')).toBe('0.005 mm');
     expect(formatViewportScale(2, 'inch')).toBe('2 in');
     expect(formatViewportScale(0.00001, 'mm')).toBe('1e-5 mm');
+  });
+});
+
+describe('scale bar anchor', () => {
+  const camera = new THREE.Vector3(0, -200, 0);
+  const forward = new THREE.Vector3(0, 1, 0);
+  const modelCenter = new THREE.Vector3(10, 20, 5);
+  const heightPx = 700;
+  const fov = 45;
+  const worldPerPixel = (point: THREE.Vector3) =>
+    (2 *
+      camera.distanceTo(point) *
+      Math.tan(THREE.MathUtils.degToRad(fov / 2))) /
+    heightPx;
+
+  it('measures on the view axis at the model centre depth', () => {
+    const anchor = scaleBarAnchor(
+      camera,
+      forward,
+      modelCenter,
+      new THREE.Vector3(0, 0, 0)
+    );
+    expect(anchor.toArray()).toEqual([0, 20, 0]);
+  });
+
+  it('keeps the bar when a pick moves the orbit pivot', () => {
+    // A face pick pivots the orbit on the picked point's depth while the
+    // camera stays still; the bar must read the same before and after.
+    const before = chooseViewportScale(
+      worldPerPixel(
+        scaleBarAnchor(camera, forward, modelCenter, new THREE.Vector3())
+      )
+    );
+    const after = chooseViewportScale(
+      worldPerPixel(
+        scaleBarAnchor(
+          camera,
+          forward,
+          modelCenter,
+          new THREE.Vector3(0, -150, 0)
+        )
+      )
+    );
+    expect(after).toEqual(before);
+    // Measured at the pivot, as before the fix, the same pick changed it.
+    expect(
+      chooseViewportScale(worldPerPixel(new THREE.Vector3(0, -150, 0)))
+    ).not.toEqual(chooseViewportScale(worldPerPixel(new THREE.Vector3())));
+  });
+
+  it('falls back to the orbit pivot without a model in front', () => {
+    const pivot = new THREE.Vector3(0, 40, 0);
+    expect(scaleBarAnchor(camera, forward, null, pivot)).toBe(pivot);
+    const behind = new THREE.Vector3(0, -300, 0);
+    expect(scaleBarAnchor(camera, forward, behind, pivot)).toBe(pivot);
+  });
+});
+
+describe('presented bounds centre', () => {
+  function body(x: number) {
+    const mesh = new THREE.Mesh(new THREE.BoxGeometry(10, 10, 10));
+    mesh.position.set(x, 0, 0);
+    const group = new THREE.Group();
+    group.add(mesh);
+    return group;
+  }
+
+  it('follows a Move preview without a rebuild', () => {
+    const bodies = new THREE.Group();
+    const moving = body(0);
+    bodies.add(moving, body(100));
+    const center = new THREE.Vector3();
+    expect(presentedBoundsCenter([bodies], center)?.x).toBeCloseTo(50, 9);
+    // The Move preview poses the object; no geometry is rebuilt.
+    moving.position.x = 40;
+    expect(presentedBoundsCenter([bodies], center)?.x).toBeCloseTo(70, 9);
+  });
+
+  it('counts a parameter preview and leaves out the bodies it hides', () => {
+    const bodies = new THREE.Group();
+    const replaced = body(0);
+    bodies.add(replaced, body(100));
+    const preview = new THREE.Group();
+    preview.add(body(300));
+    replaced.visible = false;
+    const center = presentedBoundsCenter(
+      [bodies, preview],
+      new THREE.Vector3()
+    );
+    expect(center?.x).toBeCloseTo(200, 9);
+  });
+
+  it('is null when nothing visible has geometry', () => {
+    const hidden = body(0);
+    hidden.visible = false;
+    expect(
+      presentedBoundsCenter([hidden, null, undefined], new THREE.Vector3())
+    ).toBeNull();
   });
 });

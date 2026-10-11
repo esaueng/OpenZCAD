@@ -191,9 +191,18 @@ for (const kind of ['loft', 'sweep', 'helical-sweep'] as const) {
     const errors: string[] = [];
     page.on('pageerror', (error) => errors.push(error.message));
     await openFixture(page, data.document);
-    await expect(page.getByRole('contentinfo')).toContainText('warnings0', {
-      timeout: 30_000
-    });
+    // A helical sweep is built from facets, and Diagnostics says so
+    // (production QA CAD-003); the line and arc-free fixtures stay exact.
+    const expectedWarnings =
+      kind === 'helical-sweep' ? 'warnings1' : 'warnings0';
+    await expect(page.getByRole('contentinfo')).toContainText(
+      expectedWarnings,
+      { timeout: 30_000 }
+    );
+    if (kind === 'helical-sweep')
+      await expect(page.locator('.diagnostic-row')).toContainText(
+        'This helical sweep is a faceted approximation'
+      );
     const inspector = page.getByRole('region', { name: 'Feature inspector' });
     const label = kind.replaceAll('-', ' ');
     const openEditor = async () => {
@@ -226,7 +235,9 @@ for (const kind of ['loft', 'sweep', 'helical-sweep'] as const) {
         'Edited Authored feature.',
         { timeout: 30_000 }
       );
-      await expect(page.getByRole('contentinfo')).toContainText('warnings0');
+      await expect(page.getByRole('contentinfo')).toContainText(
+        expectedWarnings
+      );
     };
     const volume = async () => {
       const bodies = page.getByRole('button', { name: /^Bodies \d/ });

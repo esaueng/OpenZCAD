@@ -27,7 +27,11 @@ import type {
   UnitSystem
 } from '@openzcad/shared';
 import type { PanelState, SidebarSectionId } from '../lib/panelState';
-import { findRollbackMarkerIndex, HistoryTimeline } from './HistoryTimeline';
+import {
+  findRollbackMarkerIndex,
+  HistoryTimeline,
+  type HistoryRowActions
+} from './HistoryTimeline';
 import { AddParameterRow, ParameterRow } from './ParameterRows';
 
 /**
@@ -128,11 +132,14 @@ interface SidebarProps {
   /** Opens the feature menu at a point: a right-click, or a row's ⋯ button. */
   onFeatureContextMenu(
     at: { clientX: number; clientY: number },
-    feature: FeatureNode
+    feature: FeatureNode,
+    row?: HistoryRowActions
   ): void;
   onToggleFeatureSuppression(feature: FeatureNode): void;
   onRollbackAfterFeature(featureId: FeatureId, name: string): void;
   onResumeHistory(): void;
+  /** Renames a history feature in place, from its row's menu. */
+  onRenameFeature?(featureId: FeatureId, name: string): void;
   /** The document's length unit, for the value each history row shows. */
   units: UnitSystem;
   onConfigureToggle?: (name: string, bodyIds: BodyId[]) => void;
@@ -229,6 +236,7 @@ export function Sidebar({
   onToggleFeatureSuppression,
   onRollbackAfterFeature,
   onResumeHistory,
+  onRenameFeature,
   units,
   onConfigureToggle,
   onSetParameter,
@@ -515,6 +523,7 @@ export function Sidebar({
           onRollbackAfterFeature={onRollbackAfterFeature}
           onResumeHistory={onResumeHistory}
           onReorderFeature={onReorderFeature}
+          onRenameFeature={onRenameFeature}
         />
         {/* Below the list, so selecting a row never pushes the rows down. */}
         {historyDetails}

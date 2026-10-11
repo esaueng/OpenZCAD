@@ -386,6 +386,60 @@ describe('exact kernel adapter', { timeout: 30_000 }, () => {
     }
   });
 
+  it('names a suppressed boolean operand by its body, never by its id', async () => {
+    const withPlate = addPrimitiveFeature(
+      createProjectDocument(
+        'Suppressed operand',
+        toUserId('user_suppressed_operand')
+      ),
+      {
+        name: 'Plate',
+        primitiveKind: 'box',
+        dimensions: { width: 20, height: 20, depth: 4 }
+      }
+    );
+    const plateId = withPlate.bodyOrder.at(-1)!;
+    const withBoss = addPrimitiveFeature(withPlate, {
+      name: 'Boss',
+      primitiveKind: 'box',
+      dimensions: { width: 5, height: 5, depth: 10 }
+    });
+    const bossId = withBoss.bodyOrder.at(-1)!;
+    const manager = new CommandManager(withBoss);
+    manager.execute(
+      commandFactories.booleanBodies({
+        name: 'Union boss',
+        operation: 'union',
+        targetBodyIds: [plateId, bossId]
+      })
+    );
+    const boss = listFeaturesInOrder(manager.document).find(
+      (feature) => feature.bodyId === bossId
+    )!;
+    manager.execute(
+      commandFactories.setNodeMetadata({
+        nodeId: boss.id,
+        metadata: { [FEATURE_SUPPRESSED_METADATA_KEY]: true }
+      })
+    );
+    const bossBody = Object.values(manager.document.nodes).find(
+      (node) => node.kind === 'body' && node.bodyId === bossId
+    )!;
+    const remus = new RemusKernelAdapter();
+    try {
+      const derived = await remus.syncDocument(manager.document);
+      const refusal = derived.warnings.find((warning) =>
+        warning.startsWith('Feature "Union boss":')
+      );
+      expect(refusal).toBe(
+        `Feature "Union boss": Boolean target ${bossBody.name} is unavailable.`
+      );
+      expect(refusal).not.toContain(String(bossId));
+    } finally {
+      remus.dispose();
+    }
+  });
+
   it('converts a legacy face attachment to the same fixed geometry without a warning', async () => {
     const base = addPrimitiveFeature(
       createProjectDocument(

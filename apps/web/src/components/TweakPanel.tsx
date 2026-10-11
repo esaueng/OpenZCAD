@@ -15,6 +15,8 @@ interface TweakPanelProps {
   modelError?: string | null;
   /** Name of the body the export will target, or null for "all bodies". */
   exportScope: string | null;
+  /** As TopBar's: why export is holding bodies back. */
+  exportWithheld?: string | null;
   onPreviewParameter?(name: string, expression: string | null): void;
   onSetParameter(
     name: string,
@@ -59,6 +61,7 @@ export function TweakPanel({
   canExport,
   modelError,
   exportScope,
+  exportWithheld = null,
   onSetParameter,
   onViewActivityLog,
   onPreviewParameter,
@@ -71,10 +74,10 @@ export function TweakPanel({
 }: TweakPanelProps) {
   const exportTitle = (format: string) =>
     canExport
-      ? `Export ${exportScope ?? 'all bodies'} as ${format}`
+      ? `Export ${exportScope ?? 'all bodies'} as ${format}${exportWithheld ? `. ${exportWithheld}` : ''}`
       : modelError
         ? 'Enter a valid parameter value before exporting'
-        : 'The model has no body to export';
+        : (exportWithheld ?? 'The model has no body to export');
   return (
     <>
       <div className="tweak-rail" role="toolbar" aria-label="Tweak tools">
@@ -154,8 +157,7 @@ export function TweakPanel({
             {/* How to change a value only where there is one to change. */}
             {parameters.length > 0 && (
               <p className="muted tweak-panel-intro">
-                Change a value and press Enter, or use an on/off toggle. The
-                design itself stays locked.
+                Change a value and press Enter, or use an on/off toggle.
               </p>
             )}
             {modelError && (

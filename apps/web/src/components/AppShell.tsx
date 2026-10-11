@@ -8,6 +8,10 @@ import {
   type Ref
 } from 'react';
 import { OVERLAY_EXIT_MS, useDelayedUnmount } from '../hooks/useDelayedUnmount';
+import {
+  ParameterDefinitionProvider,
+  type ParameterDefinition
+} from './forms/parameterDefinition';
 
 // Off the entry chunk, which has no room left; it mounts long before anyone
 // could have started dragging a file toward the window.
@@ -120,6 +124,11 @@ interface AppShellProps {
    * area is not a drop target and the browser keeps its default.
    */
   onDropFiles?(files: File[]): void;
+  /**
+   * Lets every expression field in the workspace define a parameter it
+   * names before one exists. Absent, a field only reports the unknown name.
+   */
+  parameterDefinition?: ParameterDefinition | null;
 }
 
 /**
@@ -146,7 +155,8 @@ export function AppShell({
   sidebarResizer,
   readout,
   overlays,
-  onDropFiles
+  onDropFiles,
+  parameterDefinition = null
 }: AppShellProps) {
   // The inspector fades out rather than vanishing. `has-inspector` still
   // follows the live prop, so the lane is released on the frame it closes.
@@ -166,68 +176,70 @@ export function AppShell({
     '--assistant-w': `${assistantWidth}px`
   } as CSSProperties;
   return (
-    <div className="app-shell column-layout">
-      {topBar}
-      <main
-        ref={workspaceRef}
-        className={`workspace no-sidebar column-layout${
-          assistantDocked ? ' with-assistant' : ''
-        }`}
-        style={widths}
-      >
-        <div
-          className={`viewer-area${inspector ? ' has-inspector' : ''}${
-            inspector && inspectorOwnsLane ? ' inspector-owns-lane' : ''
-          }${command ? ' has-command' : ''}${drawer ? ' has-drawer' : ''}`}
+    <ParameterDefinitionProvider value={parameterDefinition}>
+      <div className="app-shell column-layout">
+        {topBar}
+        <main
+          ref={workspaceRef}
+          className={`workspace no-sidebar column-layout${
+            assistantDocked ? ' with-assistant' : ''
+          }`}
+          style={widths}
         >
-          {viewer}
-          {columnExit.rendered && (
-            <ExitingFloat
-              className={`workspace-column-float${columnExit.closing ? ' closing' : ''}`}
-              closing={columnExit.closing}
-            >
-              {columnExit.rendered}
-            </ExitingFloat>
-          )}
-          {sidebar && sidebarResizer}
-          {stripExit.rendered && (
-            <ExitingFloat
-              className={`palette-float${stripExit.closing ? ' closing' : ''}`}
-              closing={stripExit.closing}
-            >
-              {stripExit.rendered}
-            </ExitingFloat>
-          )}
-          {/* The right lane, beside the instrument rail: the command card,
+          <div
+            className={`viewer-area${inspector ? ' has-inspector' : ''}${
+              inspector && inspectorOwnsLane ? ' inspector-owns-lane' : ''
+            }${command ? ' has-command' : ''}${drawer ? ' has-drawer' : ''}`}
+          >
+            {viewer}
+            {columnExit.rendered && (
+              <ExitingFloat
+                className={`workspace-column-float${columnExit.closing ? ' closing' : ''}`}
+                closing={columnExit.closing}
+              >
+                {columnExit.rendered}
+              </ExitingFloat>
+            )}
+            {sidebar && sidebarResizer}
+            {stripExit.rendered && (
+              <ExitingFloat
+                className={`palette-float${stripExit.closing ? ' closing' : ''}`}
+                closing={stripExit.closing}
+              >
+                {stripExit.rendered}
+              </ExitingFloat>
+            )}
+            {/* The right lane, beside the instrument rail: the command card,
               then the inspector, then the drawer, one column, so none of
               them pushes into the canvas or paints over another. The
               wrapper always renders and every slot keeps its place, so a
               card arriving or the drawer opening never remounts an
               inspector form mid-edit. */}
-          <div className="stage-right">
-            {command && <div className="command-float">{command}</div>}
-            {inspectorExit.rendered && (
-              <ExitingFloat
-                // A panel reopened during its own exit is a fresh panel.
-                key={inspectorExit.generation}
-                className={`inspector-float${inspectorExit.closing ? ' closing' : ''}`}
-                closing={inspectorExit.closing}
-              >
-                {inspectorExit.rendered}
-              </ExitingFloat>
+            <div className="stage-right">
+              {command && <div className="command-float">{command}</div>}
+              {inspectorExit.rendered && (
+                <ExitingFloat
+                  // A panel reopened during its own exit is a fresh panel.
+                  key={inspectorExit.generation}
+                  className={`inspector-float${inspectorExit.closing ? ' closing' : ''}`}
+                  closing={inspectorExit.closing}
+                >
+                  {inspectorExit.rendered}
+                </ExitingFloat>
+              )}
+              {drawer && <div className="model-drawer-float">{drawer}</div>}
+            </div>
+            {readout}
+            {onDropFiles && (
+              <Suspense fallback={null}>
+                <LazyFileDropTarget onDrop={onDropFiles} />
+              </Suspense>
             )}
-            {drawer && <div className="model-drawer-float">{drawer}</div>}
           </div>
-          {readout}
-          {onDropFiles && (
-            <Suspense fallback={null}>
-              <LazyFileDropTarget onDrop={onDropFiles} />
-            </Suspense>
-          )}
-        </div>
-        {assistant}
-      </main>
-      {overlays}
-    </div>
+          {assistant}
+        </main>
+        {overlays}
+      </div>
+    </ParameterDefinitionProvider>
   );
 }

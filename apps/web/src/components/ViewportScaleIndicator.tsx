@@ -115,7 +115,7 @@ export function ViewportScaleIndicator({
       value.textContent = label;
       root.setAttribute(
         'aria-label',
-        `Viewport scale at the camera focus plane: ${label}`
+        `Viewport scale at the model center plane: ${label}`
       );
       lastRenderedRef.current = { ...scale, units };
     };

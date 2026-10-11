@@ -1,7 +1,4 @@
-import {
-  evaluateExpression,
-  getExpressionDimensions
-} from '@openzcad/document-core';
+import { evaluateFieldExpression } from '@openzcad/document-core';
 import { UNIT_TO_MM, type UnitSystem } from '@openzcad/shared';
 
 /**
@@ -239,36 +236,17 @@ export function evaluateKeypadInput(
   try {
     // Unit-suffixed quantities convert into document units here, exactly as
     // the parameter table does; bare scope values already are document units.
-    const value = evaluateExpression(trimmed, scope, { documentUnits });
-    if (!Number.isFinite(value)) {
-      return { ok: false, isExpression: true, error: 'not finite' };
-    }
     // A length in an angle field (or an angle/area in a length field) is a
     // dimensional refusal, not a value: it previously threw as an unknown
     // identifier, and the audit keeps it refused. Dimensionless legacy
-    // expressions (plain parameters, degree-based trig) still pass.
-    const dimensions = getExpressionDimensions(trimmed, scope, {
-      documentUnits
+    // expressions (plain parameters, degree-based trig) still pass. The rule
+    // is the evaluator's, shared with every typed expression field.
+    const value = evaluateFieldExpression(trimmed, scope, {
+      documentUnits,
+      dimension: entryUnit === 'deg' ? 'angle' : 'length'
     });
-    if (entryUnit === 'deg') {
-      if (dimensions.length !== 0) {
-        return {
-          ok: false,
-          isExpression: true,
-          error:
-            'Incompatible dimensions in expression: expected an angle, not a length.'
-        };
-      }
-    } else if (
-      dimensions.angle !== 0 ||
-      (dimensions.length !== 0 && dimensions.length !== 1)
-    ) {
-      return {
-        ok: false,
-        isExpression: true,
-        error:
-          'Incompatible dimensions in expression: expected a length, not an angle or area.'
-      };
+    if (!Number.isFinite(value)) {
+      return { ok: false, isExpression: true, error: 'not finite' };
     }
     return normalize(value, true);
   } catch (error) {

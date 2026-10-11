@@ -3,7 +3,8 @@ import {
   fireEvent,
   render,
   screen,
-  waitFor
+  waitFor,
+  within
 } from '@testing-library/react';
 import { describe, expect, it, vi } from 'vitest';
 import { toBodyId, toSketchId } from '@openzcad/shared';
@@ -552,6 +553,114 @@ describe('Hole position', () => {
     fireEvent.click(screen.getByRole('button', { name: 'Top face' }));
     expect(screen.getByLabelText('U · along −Y')).toHaveValue('0');
     expect(screen.getByLabelText('V · along +X')).toHaveValue('0');
+  });
+
+  it('lists the field along X first on a top face (G7)', () => {
+    render(
+      <ModelingOperationsForm
+        operation="hole"
+        scope={{}}
+        bodies={bodies}
+        faceOptions={[topFace]}
+        onPreflight={vi.fn()}
+        onSubmit={vi.fn()}
+      />
+    );
+    fireEvent.click(screen.getByRole('button', { name: 'Top face' }));
+    const group = screen
+      .getByText('Position on face (from center)')
+      .closest('fieldset')!;
+    const fields = within(group as HTMLElement).getAllByRole('textbox');
+    expect(fields[0]).toBe(screen.getByLabelText('V · along +X'));
+    expect(fields[1]).toBe(screen.getByLabelText('U · along −Y'));
+  });
+
+  it('places the hole where a face click landed, and moves it on the next click (G7)', () => {
+    const onHoleDraftChange = vi.fn();
+    const props = {
+      operation: 'hole' as const,
+      scope: { offset: 12 },
+      bodies,
+      faceOptions: [topFace],
+      onPreflight: vi.fn(),
+      onSubmit: vi.fn(),
+      onHoleDraftChange
+    };
+    const view = render(
+      <ModelingOperationsForm
+        {...props}
+        viewportFacePick={{
+          bodyId,
+          hash: 7,
+          position: { u: '-15', v: '40' }
+        }}
+      />
+    );
+    expect(screen.getByLabelText('U · along −Y')).toHaveValue('-15');
+    expect(screen.getByLabelText('V · along +X')).toHaveValue('40');
+    expect(onHoleDraftChange).toHaveBeenLastCalledWith(
+      expect.objectContaining({ faceHash: 7, u: -15, v: 40 })
+    );
+
+    // A typed expression stands until the user clicks again.
+    fireEvent.change(screen.getByLabelText('V · along +X'), {
+      target: { value: 'offset' }
+    });
+    view.rerender(<ModelingOperationsForm {...props} />);
+    expect(screen.getByLabelText('V · along +X')).toHaveValue('offset');
+    // A pick with no click point (seeded from the selection) keeps it too.
+    view.rerender(
+      <ModelingOperationsForm
+        {...props}
+        viewportFacePick={{ bodyId, hash: 7 }}
+      />
+    );
+    expect(screen.getByLabelText('V · along +X')).toHaveValue('offset');
+    expect(screen.getByLabelText('U · along −Y')).toHaveValue('-15');
+
+    view.rerender(
+      <ModelingOperationsForm
+        {...props}
+        viewportFacePick={{ bodyId, hash: 7, position: { u: '5', v: '-38' } }}
+      />
+    );
+    expect(screen.getByLabelText('U · along −Y')).toHaveValue('5');
+    expect(screen.getByLabelText('V · along +X')).toHaveValue('-38');
+  });
+
+  it('switches the face and takes the position from a click on another face', () => {
+    const sideFace: ModelingFaceOption = {
+      hash: 8,
+      topologyId: 'face:8',
+      label: 'Front face',
+      surfaceType: 'plane',
+      normal: { x: 0, y: -1, z: 0 }
+    };
+    const props = {
+      operation: 'hole' as const,
+      scope: {},
+      bodies,
+      faceOptions: [topFace, sideFace],
+      onPreflight: vi.fn(),
+      onSubmit: vi.fn()
+    };
+    const view = render(
+      <ModelingOperationsForm
+        {...props}
+        viewportFacePick={{ bodyId, hash: 7, position: { u: '1', v: '2' } }}
+      />
+    );
+    view.rerender(
+      <ModelingOperationsForm
+        {...props}
+        viewportFacePick={{ bodyId, hash: 8, position: { u: '30', v: '-2' } }}
+      />
+    );
+    expect(
+      screen.getByRole('button', { name: '1 Front face' })
+    ).toHaveAttribute('aria-pressed', 'true');
+    expect(screen.getByLabelText('U · along +X')).toHaveValue('30');
+    expect(screen.getByLabelText('V · along +Z')).toHaveValue('-2');
   });
 
   it('puts a refusal about where the hole sits under its position', async () => {

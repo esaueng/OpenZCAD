@@ -119,6 +119,7 @@ import {
   type NodeMetadataInput,
   type NodeRenameInput,
   numberedBodyName,
+  numberedFeatureName,
   offsetSolidBody,
   type ParameterDeleteInput,
   type ParameterDescribeInput,
@@ -2307,8 +2308,20 @@ export function commandsForCadPatch(
   };
 
   const commandForOperation = (
-    operation: CadPatchProposal['operations'][number]
+    proposed: CadPatchProposal['operations'][number]
   ): AnyCommand => {
+    // A feature the patch adds is numbered past any feature already carrying
+    // its name ("Union", then "Union 2"), as one made in the app is. Resolved
+    // against the projected document and stored in the command, so a replay
+    // reproduces it. Body numbers still count from the name as proposed.
+    const proposedName = 'name' in proposed ? proposed.name : '';
+    const operation: CadPatchProposal['operations'][number] =
+      proposed.kind.startsWith('add_') && 'name' in proposed
+        ? {
+            ...proposed,
+            name: numberedFeatureName(projectedDocument, proposed.name)
+          }
+        : proposed;
     switch (operation.kind) {
       case 'add_raised_feature_control': {
         const bodyId = resolveBody(operation.targetBodyId);
@@ -2407,7 +2420,7 @@ export function commandsForCadPatch(
         scope.declare(operation.localId, ids.bodyId);
         return commandFactories.addPrimitive({
           name: operation.name,
-          bodyName: numberedBodyName(projectedDocument, operation.name),
+          bodyName: numberedBodyName(projectedDocument, proposedName),
           primitiveKind: operation.primitiveKind,
           dimensions,
           ids
@@ -2506,7 +2519,7 @@ export function commandsForCadPatch(
         scope.declare(operation.localId, ids.bodyId);
         return commandFactories.extrudeSketch({
           name: operation.name,
-          bodyName: numberedBodyName(projectedDocument, operation.name),
+          bodyName: numberedBodyName(projectedDocument, proposedName),
           sketchId: sketch.sketchId,
           distance: operation.distance,
           profile,
@@ -2518,7 +2531,7 @@ export function commandsForCadPatch(
         scope.declare(operation.localId, ids.bodyId);
         return commandFactories.revolveSketch({
           name: operation.name,
-          bodyName: numberedBodyName(projectedDocument, operation.name),
+          bodyName: numberedBodyName(projectedDocument, proposedName),
           sketchId: resolveSketch(operation.sketchId).sketchId,
           axis: operation.axis,
           // Null is the schema's way of saying "omitted"; a full turn.
@@ -2585,6 +2598,7 @@ export function commandsForCadPatch(
         scope.consume(targetBodyIds, 'boolean');
         return commandFactories.booleanBodies({
           name: operation.name,
+          bodyName: numberedBodyName(projectedDocument, proposedName),
           operation: operation.operation,
           targetBodyIds,
           ids
@@ -2673,7 +2687,7 @@ export function commandsForCadPatch(
         scope.declare(operation.localId, ids.bodyId);
         return commandFactories.extrudeSketch({
           name: operation.name,
-          bodyName: numberedBodyName(projectedDocument, operation.name),
+          bodyName: numberedBodyName(projectedDocument, proposedName),
           sketchId: sketch.sketchId,
           distance: operation.distance,
           profiles: dedupeProfileReferences(

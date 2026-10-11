@@ -242,6 +242,11 @@ test('keeps every history row control inside a narrow sidebar', async ({
  * F20: suppressing Boss on the demo turned six later rows "needs repair" and
  * the warning count to 7 with no message at all. Unsafe suppression now
  * refuses before changing the model; a safe toggle still offers Undo.
+ *
+ * G1 (11 Oct review): the refusal was then one lane sentence cut off after a
+ * few words, carrying raw body ids, and filed under the first dependent. It
+ * is now a dialog that names the dependents and suppresses the whole branch
+ * in one undoable step.
  */
 test('unsafe suppression names its dependents and safe suppression offers undo', async ({
   page
@@ -269,24 +274,45 @@ test('unsafe suppression names its dependents and safe suppression offers undo',
   await bossRow
     .getByRole('button', { name: 'Suppress Boss', exact: true })
     .click();
-  const details = page.getByRole('region', { name: 'History details' });
-  await expect(details.getByRole('alert')).toContainText(
-    'Cannot suppress "Boss"',
+  const dialog = page.getByRole('alertdialog', { name: 'Suppress “Boss”?' });
+  await expect(dialog).toContainText(
+    /Boss is used by \d+ later features? that cannot rebuild without it/,
     { timeout: 60_000 }
   );
-  await expect(details.getByRole('alert')).toContainText(
-    'Dependent features cannot rebuild'
-  );
-  await expect(details.getByRole('alert')).toContainText(
-    'The previous model is intact'
-  );
+  await expect(dialog).toContainText('Place boss on wall');
+  await expect(dialog).not.toContainText(/body_[0-9a-f]/);
+  // Escape cancels, and the refusal leaves nothing behind: no red record
+  // under a dependent, no change to the model.
+  await page.keyboard.press('Escape');
+  await expect(dialog).toBeHidden();
+  const details = page.getByRole('region', { name: 'History details' });
+  await expect(details.getByRole('alert')).toHaveCount(0);
   await expect(bossRow).not.toContainText('suppressed');
   await expect(failedRows).toHaveCount(0);
-  await expect(
-    page.getByRole('button', { name: 'Undo', exact: true })
-  ).toBeDisabled();
+  // The rail's Undo: the toast carries an Undo button of its own.
+  const undo = page.getByLabel('Undo', { exact: true });
+  await expect(undo).toBeDisabled();
   await expectBodyCount(page, 1);
-  await details.getByRole('button', { name: 'Dismiss failure' }).click();
+
+  // Suppress them too: the branch goes in one step and comes back in one.
+  await bossRow.hover();
+  await bossRow
+    .getByRole('button', { name: 'Suppress Boss', exact: true })
+    .click();
+  await dialog
+    .getByRole('button', { name: /^Suppress (them|it) too$/ })
+    .click();
+  await expect(bossRow).toHaveClass(/\bsuppressed\b/, { timeout: 60_000 });
+  await expect(page.locator('.toast .toast-message')).toHaveText(
+    /^Suppressed Boss and \d+ later features?$/
+  );
+  await expect(failedRows).toHaveCount(0);
+  const suppressedRows = await page.locator('.feature-row.suppressed').count();
+  expect(suppressedRows).toBeGreaterThan(1);
+  await page.locator('.toast').getByRole('button', { name: 'Undo' }).click();
+  await expect(page.locator('.feature-row.suppressed')).toHaveCount(0);
+  await expect(failedRows).toHaveCount(0);
+  await expect(undo).toBeDisabled();
 
   // With nothing resting on it, the toast names the feature alone, and
   // resuming it says so too.

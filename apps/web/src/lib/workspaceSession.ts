@@ -33,6 +33,12 @@ interface StoredProjectView extends ProjectViewState {
 interface WorkspaceSession {
   version: typeof WORKSPACE_SESSION_VERSION;
   activeProjectId: string | null;
+  /**
+   * Bumped by every pointer write, so a snapshot sees a write that left the
+   * same id behind (A→B→A, or a second return home). Sessions written before
+   * it, or by hand, read as 0; the id comparison still catches those.
+   */
+  pointerRevision: number;
   views: Record<string, StoredProjectView>;
 }
 
@@ -50,6 +56,7 @@ function emptySession(): WorkspaceSession {
   return {
     version: WORKSPACE_SESSION_VERSION,
     activeProjectId: null,
+    pointerRevision: 0,
     views: {}
   };
 }
@@ -144,6 +151,12 @@ function readSession(storage: StorageLike | null): WorkspaceSession {
         typeof parsed.activeProjectId === 'string'
           ? parsed.activeProjectId
           : null,
+      pointerRevision:
+        typeof parsed.pointerRevision === 'number' &&
+        Number.isSafeInteger(parsed.pointerRevision) &&
+        parsed.pointerRevision >= 0
+          ? parsed.pointerRevision
+          : 0,
       views
     };
   } catch {
@@ -166,25 +179,81 @@ function writeSession(
   }
 }
 
+function pointerMovedSince(
+  session: WorkspaceSession,
+  since: ActiveProjectSnapshot | undefined
+): boolean {
+  return Boolean(
+    since &&
+    (session.activeProjectId !== since.activeProjectId ||
+      session.pointerRevision !== since.pointerRevision)
+  );
+}
+
+function withPointer(
+  session: WorkspaceSession,
+  activeProjectId: string | null
+): WorkspaceSession {
+  return {
+    ...session,
+    activeProjectId,
+    pointerRevision: session.pointerRevision + 1
+  };
+}
+
 export function loadActiveProjectId(
   storage: StorageLike | null = defaultStorage()
 ): string | null {
   return readSession(storage).activeProjectId;
 }
 
-export function rememberActiveProject(
-  projectId: string,
-  storage: StorageLike | null = defaultStorage()
-): boolean {
-  const session = readSession(storage);
-  return writeSession({ ...session, activeProjectId: projectId }, storage);
+/**
+ * What the active-project pointer held when an open began. Opening a project
+ * awaits storage and the network before it records itself, and in that time
+ * another tab (or a test seeding the session) may have pointed the session
+ * somewhere newer.
+ */
+export interface ActiveProjectSnapshot {
+  readonly activeProjectId: string | null;
+  readonly pointerRevision: number;
 }
 
-export function clearActiveProject(
+export function snapshotActiveProject(
   storage: StorageLike | null = defaultStorage()
+): ActiveProjectSnapshot {
+  const { activeProjectId, pointerRevision } = readSession(storage);
+  return { activeProjectId, pointerRevision };
+}
+
+/**
+ * Points the session at `projectId`. Given the snapshot taken when the open
+ * began, this is a compare-and-set: a pointer written since then, even back to
+ * the same id, is a newer choice than this open, and is kept.
+ */
+export function rememberActiveProject(
+  projectId: string,
+  storage: StorageLike | null = defaultStorage(),
+  since?: ActiveProjectSnapshot
 ): boolean {
   const session = readSession(storage);
-  return writeSession({ ...session, activeProjectId: null }, storage);
+  if (pointerMovedSince(session, since)) {
+    // Already pointing here is success, but rewriting it would bump the
+    // revision and make a newer open's snapshot look stale.
+    return session.activeProjectId === projectId;
+  }
+  return writeSession(withPointer(session, projectId), storage);
+}
+
+/** With a snapshot, keeps a pointer written since it, as remembering does. */
+export function clearActiveProject(
+  storage: StorageLike | null = defaultStorage(),
+  since?: ActiveProjectSnapshot
+): boolean {
+  const session = readSession(storage);
+  if (pointerMovedSince(session, since)) {
+    return false;
+  }
+  return writeSession(withPointer(session, null), storage);
 }
 
 /** Transfers device view state without changing its recorded camera or time. */
@@ -201,14 +270,9 @@ export function rekeyWorkspaceProject(
     if (!preserveSource) delete views[sourceProjectId];
   }
   return writeSession(
-    {
-      ...session,
-      views,
-      activeProjectId:
-        session.activeProjectId === sourceProjectId
-          ? targetProjectId
-          : session.activeProjectId
-    },
+    session.activeProjectId === sourceProjectId
+      ? { ...withPointer(session, targetProjectId), views }
+      : { ...session, views },
     storage
   );
 }

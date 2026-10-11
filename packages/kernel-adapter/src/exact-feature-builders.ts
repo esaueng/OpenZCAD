@@ -416,9 +416,12 @@ function buildPrimitiveFeature(
   ctx: FeatureBuildContext,
   feature: FeatureNode
 ): void {
-  const { kernel, scope, result } = ctx;
+  const { kernel, scope, result, document } = ctx;
   if (feature.bodyId) {
-    result.shapes.set(feature.bodyId, buildPrimitive(kernel, feature, scope));
+    result.shapes.set(
+      feature.bodyId,
+      buildPrimitive(kernel, feature, scope, document.units)
+    );
   }
 }
 
@@ -1326,7 +1329,9 @@ function buildBooleanFeature(
   const operands = data.targetBodyIds.map((bodyId) => {
     const shape = result.shapes.get(bodyId);
     if (!shape) {
-      throw new Error(`Boolean target ${bodyId} is unavailable.`);
+      throw new Error(
+        `Boolean target ${bodyName(document, bodyId)} is unavailable.`
+      );
     }
     return shape;
   });

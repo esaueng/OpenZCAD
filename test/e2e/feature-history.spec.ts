@@ -181,16 +181,20 @@ test('refuses suppression with dependent details and keeps the current model and
   await source
     .getByRole('button', { name: 'Suppress Base profile', exact: true })
     .click();
-  const details = page.getByRole('region', { name: 'History details' });
-  await expect(details.getByRole('alert')).toContainText(
-    'Cannot suppress "Base profile"',
+  const dialog = page.getByRole('alertdialog', {
+    name: 'Suppress “Base profile”?'
+  });
+  await expect(dialog).toContainText(
+    /Base profile is used by \d+ later features that cannot rebuild without it/,
     { timeout: 30_000 }
   );
-  await expect(details.getByRole('alert')).toContainText('Extrude base');
-  await expect(details.getByRole('alert')).toContainText('Base corner fillets');
-  await expect(details.getByRole('alert')).toContainText(
-    'The previous model is intact'
-  );
+  await expect(dialog).toContainText('Extrude base');
+  await expect(dialog).toContainText('Base corner fillets');
+  await page.screenshot({
+    path: test.info().outputPath('suppression-refused.png')
+  });
+  await dialog.getByRole('button', { name: 'Cancel' }).click();
+  await expect(dialog).toBeHidden();
   await expect(source).not.toContainText('suppressed');
   await expect(
     page.locator('.feature-row.needs-repair, .feature-row.failed')
@@ -201,10 +205,68 @@ test('refuses suppression with dependent details and keeps the current model and
       .getByRole('button', { name: 'Undo', exact: true })
   ).toBeDisabled();
   await expectBodyCount(page, 1);
-  await page.screenshot({
-    path: test.info().outputPath('suppression-refused.png')
-  });
   expect(errors).toEqual([]);
+});
+
+/**
+ * G10 (11 Oct review): the row menu offered Edit properties and Delete only,
+ * although the tour sends people there for the row's actions. It now carries
+ * the hover buttons too, and Rename.
+ */
+test("a history row's menu suppresses, rolls back and renames", async ({
+  page
+}) => {
+  test.setTimeout(90_000);
+  await stubApi(page);
+  await page.goto('/');
+  await page.getByRole('button', { name: /Heat Sink/ }).click();
+  // A cold demo build can outlast the 5 s local assertion default.
+  await expect(
+    page
+      .getByRole('group', { name: 'Workspace status' })
+      .getByLabel(/ · \d+ features? · 1 body\. Sync /)
+  ).toBeVisible({ timeout: 60_000 });
+  const rows = page.locator('.feature-row');
+  const last = rows.last();
+  const lastName = (await last.locator('.feature-name').textContent())!.trim();
+  const menu = page.getByRole('menu');
+
+  await last.click({ button: 'right' });
+  await expect(menu.getByRole('menuitem')).toContainText([
+    'Edit properties',
+    'Rename',
+    'Suppress',
+    'Delete'
+  ]);
+  // The last row has nothing after it to roll back.
+  await expect(
+    menu.getByRole('menuitem', { name: 'Roll back to here' })
+  ).toHaveCount(0);
+  await menu.getByRole('menuitem', { name: 'Rename' }).click();
+  const field = page.getByRole('textbox', { name: `Rename ${lastName}` });
+  await expect(field).toBeFocused();
+  await field.fill('Renamed step');
+  await field.press('Enter');
+  await expect(last.locator('.feature-name')).toHaveText('Renamed step');
+
+  await last.click({ button: 'right' });
+  await menu.getByRole('menuitem', { name: 'Suppress' }).click();
+  await expect(last).toHaveClass(/\bsuppressed\b/, { timeout: 60_000 });
+  await last.click({ button: 'right' });
+  await menu.getByRole('menuitem', { name: 'Resume' }).click();
+  await expect(last).not.toHaveClass(/\bsuppressed\b/, { timeout: 60_000 });
+
+  const first = rows.first();
+  await first.click({ button: 'right' });
+  await menu.getByRole('menuitem', { name: 'Roll back to here' }).click();
+  await expect(page.locator('.history-rollback')).toContainText('Rolled back', {
+    timeout: 60_000
+  });
+  await first.click({ button: 'right' });
+  await menu.getByRole('menuitem', { name: 'Resume full history' }).click();
+  await expect(page.locator('.history-rollback')).toHaveCount(0, {
+    timeout: 60_000
+  });
 });
 
 test.describe('on a touch screen', () => {
@@ -329,4 +391,52 @@ test('a seeded demo stores every revision it promises, and restores one', async 
     page.locator('.feature-row-main', { hasText: 'Boss' })
   ).toHaveCount(0);
   await expectBodyCount(page, 1);
+});
+
+test('renaming a modeling feature closes its stale editor and keeps the new name on the next edit', async ({
+  page
+}) => {
+  test.setTimeout(90_000);
+  await stubApi(page);
+  await page.goto('/');
+  await page.getByLabel('Project name').fill('Rename open shell');
+  await page.getByRole('button', { name: 'Create project' }).click();
+  const inspector = page.getByRole('region', { name: 'Feature inspector' });
+  await page.getByRole('button', { name: /^Box \(B\)/ }).click();
+  await inspector.getByRole('button', { name: /^Create/ }).click();
+  await page.getByRole('button', { name: /^Shell/ }).click();
+  await page
+    .getByRole('group', { name: 'Opening faces' })
+    .getByRole('button', { name: /Box 1 · Top face/ })
+    .click();
+  await page.getByRole('button', { name: 'Create shell' }).click();
+  const row = page.locator('.feature-row', { hasText: 'Shell' }).first();
+  await row.locator('.feature-row-main').click();
+  await expect(
+    page.getByRole('textbox', { name: 'Wall thickness', exact: true })
+  ).toBeVisible();
+  // Reach the history action through the keyboard while the floating editor
+  // occupies the same pointer lane as the row.
+  const actions = row.getByRole('button', { name: 'More actions for Shell' });
+  await actions.focus();
+  await actions.press('Enter');
+  await page.getByRole('menuitem', { name: 'Rename', exact: true }).click();
+  const rename = page.getByRole('textbox', { name: 'Rename Shell' });
+  await rename.fill('Renamed wall');
+  await rename.press('Enter');
+  await expect(
+    page.getByRole('textbox', { name: 'Wall thickness', exact: true })
+  ).toHaveCount(0);
+  const renamed = page
+    .locator('.feature-row', { hasText: 'Renamed wall' })
+    .first();
+  await renamed.locator('.feature-row-main').click();
+  await page
+    .getByRole('textbox', { name: 'Wall thickness', exact: true })
+    .fill('1.5');
+  await page.getByRole('button', { name: 'Apply shell' }).click();
+  await expect(
+    page.getByRole('textbox', { name: 'Wall thickness', exact: true })
+  ).toHaveCount(0);
+  await expect(renamed.locator('.feature-name')).toHaveText('Renamed wall');
 });

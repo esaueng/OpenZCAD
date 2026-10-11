@@ -71,7 +71,8 @@ const SIZED_TARGETS = [
   '.history-timeline .feature-row-grip',
   '.revision-action',
   '.param-row .param-expose',
-  '.param-row .row-delete'
+  '.param-row .row-delete',
+  '.param-row .param-name-button'
 ];
 const REACHING_TARGETS = [
   'button.brand',
