@@ -6,56 +6,55 @@
    Direct manipulation: tool card + handle value chip
    --------------------------------------------------------------------------- */
 
-/* The card is one shape at every width: a header row that always holds the
-   icon, the title, the state pill and the close button, and — when the
-   selection offers more than one operation — a full-width action row under
-   it. Rows cannot collide. The single flex row this replaces could not
-   survive a narrow viewport: the action tabs do not shrink, so the copy was
-   squeezed to two characters ("R…", "Dr…") and the tabs still overflowed
-   across the pill.
+/* The card wears every command card's header (CardHeader: title, eyebrow,
+   badge slot, close — inspector.css) over a body holding the hint, the
+   action row when the selection offers more than one operation, and
+   whatever the card is handed (the region Extrude form). It used to draw a
+   header of its own — an icon tile, a "Ready" pill and a bare × — so the
+   region Extrude card and the Box, Hole or Fillet card beside it looked like
+   two different products.
    It is the first card of the right lane (AppShell's command slot,
    quiet-stage.css), as wide as the lane, so the drawer yields below it
    rather than being painted over. The width never follows the content:
-   the hint and the phase pill change on every phase, and the copy
+   the hint and the phase badge change on every phase, and the copy
    truncates inside a stable box instead. */
 .tool-card {
   position: relative;
-  display: grid;
-  grid-template-columns: auto minmax(0, 1fr) auto;
-  align-items: start;
-  column-gap: 10px;
-  row-gap: 8px;
+  display: flex;
+  flex-direction: column;
   box-sizing: border-box;
   width: 100%;
-  padding: 8px 8px 8px 10px;
   color: var(--color-text);
-  background: var(--color-surface-2);
-  border: 1px solid var(--color-border-strong);
+  background: var(--color-surface);
+  border: var(--border-thin);
   border-radius: var(--radius-md);
   box-shadow: var(--shadow-2);
   animation: tool-card-in var(--dur-fast) var(--ease-out);
 }
 
-/* Whatever else the card is handed — the region Extrude form, a keypad —
-   takes a row of its own; the four fixed parts claim their cells. */
-.tool-card > * {
-  grid-column: 1 / -1;
+/* The title yields before the badge and the eyebrow, which are short and
+   carry state. */
+.tool-card .panel-title-row h2 {
+  flex: 0 1 auto;
 }
 
-.tool-card-icon {
-  grid-column: 1;
-  grid-row: 1;
+/* A phase badge is news and takes the eyebrow's place at the right while
+   it shows: the lane has no room for the title, both and the close, and
+   squeezed "Extrude" to "Extr…" while it validated. */
+.tool-card .panel-title-row:has(.tool-card-phase) .panel-eyebrow {
+  display: none;
 }
 
-.tool-card-copy {
-  grid-column: 2;
-  grid-row: 1;
+.tool-card .tool-card-phase {
+  margin-left: auto;
+}
+
+.tool-card-body {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
   min-width: 0;
-}
-
-.tool-card-close {
-  grid-column: 3;
-  grid-row: 1;
+  padding: 10px 16px 12px;
 }
 
 @keyframes tool-card-in {
@@ -70,36 +69,26 @@
 }
 
 /* Without motion the segment would freeze wherever the collapsed animation
-   ended; a full, quieter ring still marks the tile as busy. */
-[data-reduced-motion='true'] .tool-card-orbit rect {
+   ended; a full, quieter ring still marks the badge as busy. */
+[data-reduced-motion='true'] .tool-card-orbit circle {
   stroke-dasharray: none;
   opacity: 0.5;
   animation: none;
 }
 
 @media (prefers-reduced-motion: reduce) {
-  .tool-card-orbit rect {
+  .tool-card-orbit circle {
     stroke-dasharray: none;
     opacity: 0.5;
     animation: none;
   }
 }
 
-.tool-card-icon {
-  position: relative;
-  display: grid;
-  place-items: center;
-  width: 28px;
-  height: 28px;
-  color: var(--color-accent-hi);
-  background: var(--color-accent-dim);
-  border-radius: var(--radius-sm);
-}
-
 .tool-card-copy {
   display: flex;
   flex-direction: column;
   gap: 1px;
+  min-width: 0;
   white-space: nowrap;
 }
 
@@ -112,27 +101,13 @@
   text-overflow: ellipsis;
 }
 
-.tool-card-copy strong {
-  display: flex;
-  align-items: center;
-  gap: 8px;
-  font-size: var(--fs-sm);
-  font-weight: 600;
-}
-
-/* The title yields before the pill and the badge, which are short and are
-   the parts that carry state. */
-.tool-card-title {
-  flex: 0 1 auto;
-  min-width: 0;
-  overflow: hidden;
-  text-overflow: ellipsis;
-}
-
-/* Explicit command-state pill so armed/dragging/validating/failed read at a
-   glance instead of only through hint copy. */
+/* The header's state badge: exact entry, validating or failed, in a tone
+   that reads at a glance. Armed is the resting state and has none. */
 .tool-card-phase {
   flex: 0 0 auto;
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
   padding: 1px 7px;
   font-size: var(--fs-xs);
   font-weight: 500;
@@ -165,7 +140,9 @@
 
 /* During a captured drag the value at the handle is the useful feedback.
    Collapse the command card to a quiet operation marker so it does not cover
-   the model with instructions and controls the user cannot use mid-gesture. */
+   the model with instructions and controls the user cannot use mid-gesture.
+   A card holding a form (the region Extrude editor) keeps its form, which
+   shows the distance being dragged, and only gains the marker. */
 .tool-card-phase-dot {
   flex: 0 0 auto;
   width: 7px;
@@ -175,29 +152,25 @@
   box-shadow: 0 0 0 3px var(--color-accent-dim);
 }
 
-.tool-card.phase-dragging {
-  grid-template-columns: auto minmax(0, auto);
+.tool-card.phase-dragging:not(:has(.extrude-form)) {
   width: auto;
   max-width: min(240px, calc(100% - 20px));
-  padding: 6px 10px 6px 7px;
-  column-gap: 7px;
   opacity: 0.86;
 }
 
-.tool-card.phase-dragging .tool-card-icon {
-  width: 24px;
-  height: 24px;
+.tool-card.phase-dragging:not(:has(.extrude-form)) .panel-header {
+  padding: 6px 12px;
+  border-bottom: 0;
 }
 
-.tool-card.phase-dragging .tool-card-copy {
-  align-self: center;
+.tool-card.phase-dragging:not(:has(.extrude-form)) .panel-title-row h2 {
+  font-size: var(--fs-sm);
 }
 
-.tool-card.phase-dragging .tool-card-copy > small,
-.tool-card.phase-dragging .tool-card-badge,
-.tool-card.phase-dragging .tool-card-submode,
-.tool-card.phase-dragging .tool-card-actions,
-.tool-card.phase-dragging .tool-card-close {
+.tool-card.phase-dragging:not(:has(.extrude-form)) .tool-card-body,
+.tool-card.phase-dragging:not(:has(.extrude-form)) .panel-eyebrow,
+.tool-card.phase-dragging:not(:has(.extrude-form)) .panel-close,
+.tool-card.phase-dragging .tool-card-badge {
   display: none;
 }
 
@@ -231,7 +204,6 @@
   flex-direction: column;
   min-width: 0;
   gap: 4px;
-  margin-top: 2px;
   padding: 6px 8px;
   border: 1px solid var(--color-error);
   border-radius: var(--radius-sm);
@@ -258,24 +230,22 @@
   background: var(--color-surface-hover);
 }
 
-/* The busy tile keeps its glyph still and runs a short segment round its
-   own edge. The ring is drawn on the 28px tile with pathLength="1", so the
-   dash reads as a fraction of the perimeter at any tile size. */
+/* The busy badge runs a short segment round a small ring beside its label.
+   The ring is drawn with pathLength="1", so the dash reads as a fraction of
+   the circumference at any size. */
 .tool-card-orbit {
-  position: absolute;
-  inset: 0;
-  width: 100%;
-  height: 100%;
+  flex: 0 0 auto;
+  width: 10px;
+  height: 10px;
   overflow: visible;
-  pointer-events: none;
 }
 
-.tool-card-orbit rect {
+.tool-card-orbit circle {
   fill: none;
-  stroke: var(--color-accent-hi);
-  stroke-width: 2;
+  stroke: currentColor;
+  stroke-width: 1.75;
   stroke-linecap: round;
-  stroke-dasharray: 0.22 0.78;
+  stroke-dasharray: 0.3 0.7;
   animation: tool-card-orbit 1100ms linear infinite;
 }
 
@@ -341,23 +311,6 @@
   color: var(--color-text-muted);
   opacity: var(--opacity-disabled);
   cursor: not-allowed;
-}
-
-.tool-card-close {
-  display: grid;
-  place-items: center;
-  width: 24px;
-  height: 24px;
-  color: var(--color-text-dim);
-  background: transparent;
-  border: 0;
-  border-radius: var(--radius-sm);
-  cursor: pointer;
-}
-
-.tool-card-close:hover {
-  color: var(--color-text);
-  background: var(--color-surface-hover);
 }
 
 /* The handle chips paint on the viewport's dark stage, which never
@@ -1636,12 +1589,9 @@
 }
 
 .tool-card .extrude-form {
-  flex: 1 0 100%;
   min-width: 0;
 }
 
 .tool-card:has(.extrude-form) .tool-card-copy {
-  flex: 1;
-  min-width: 0;
   white-space: normal;
 }

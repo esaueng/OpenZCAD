@@ -6,7 +6,7 @@ import {
   loadMassDensitySelection,
   saveMassDensitySelection
 } from '../lib/massDensityPreference';
-import { Trash2, X } from 'lucide-react';
+import { Trash2 } from 'lucide-react';
 import { coerceParamValue } from '@openzcad/document-core';
 import { findFontFace } from '@openzcad/geometry';
 import { FEATURE_COLORS, featureColor } from '@openzcad/shared';
@@ -87,6 +87,7 @@ import {
 import { CARD_EYEBROWS } from '../lib/cardEyebrows';
 import { ExprInput } from './ExprInput';
 import { ColorPicker } from './ColorPicker';
+import { CardHeader } from './CardHeader';
 import { PanelOverflow } from './PanelOverflow';
 import { FieldAutoFocusProvider } from './forms/fieldAutoFocus';
 import type { BodyAppearancePreview } from './ModelViewer';
@@ -2360,11 +2361,11 @@ export function Inspector(props: InspectorProps) {
         }
       }}
     >
-      <div className="panel-header">
-        <div className="panel-title-row">
-          <h2>{title}</h2>
-          <span className="panel-eyebrow">{eyebrow}</span>
-          {deleteAction ? (
+      <CardHeader
+        title={title}
+        eyebrow={eyebrow}
+        actions={
+          deleteAction ? (
             <PanelOverflow>
               <button
                 type="button"
@@ -2376,18 +2377,12 @@ export function Inspector(props: InspectorProps) {
                 {deleteAction.label}
               </button>
             </PanelOverflow>
-          ) : null}
-          <button
-            type="button"
-            className="icon-button panel-close"
-            title="Close"
-            aria-label="Close panel"
-            onClick={props.onClose ?? props.onCancel}
-          >
-            <X size={14} aria-hidden="true" />
-          </button>
-        </div>
-      </div>
+          ) : null
+        }
+        closeTitle="Close"
+        closeLabel="Close panel"
+        onClose={props.onClose ?? props.onCancel}
+      />
       {/*
         A create dialog is here because a tool was invoked, so it may take the
         keyboard; an edit panel is here because something was selected, and
