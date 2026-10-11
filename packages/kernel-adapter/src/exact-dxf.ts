@@ -144,7 +144,7 @@ export function faceDxfEntities(
 
   const entities: DxfEntity[] = [];
   for (const wire of wires) {
-    for (const edge of Array.from(kernel.getWireEdges(wire))) {
+    for (const edge of kernel.getWireEdges(wire)) {
       entities.push(...edgeDxfEntities(kernel, edge, frame));
     }
   }
