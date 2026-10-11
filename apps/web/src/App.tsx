@@ -140,6 +140,7 @@ import type {
   EntityId,
   FeatureId,
   FeatureNode,
+  FeatureWarning,
   FaceGeometry,
   FaceRecognitionSummary,
   ParamValue,
@@ -1243,6 +1244,11 @@ import {
 } from './lib/holeGhost';
 import { holePositionFromPick } from './lib/holePositionAxes';
 import type { PrimitiveGhost } from './lib/primitiveGhost';
+import {
+  failedHistoryExportBodies,
+  withheldExportMessage,
+  type WithheldExportBody
+} from './lib/failedHistoryExport';
 import type { HoleDraft } from './components/forms/ModelingOperationsForm';
 import { extrudeSketchGuidance } from './lib/extrudeGuidance';
 import {
@@ -2286,6 +2292,26 @@ export function App() {
    * never outlive the attempt that produced it.
    */
   const [featureFormError, setFeatureFormError] = useState<string | null>(null);
+  /**
+   * The typed feature-warning record for the derived state on screen.
+   * `commitDerivedState` strips it from the document (it is advice to this
+   * session, not saved state), so it is held here beside the exact `derived`
+   * object it describes; commands share `derived` by reference, so it applies
+   * for as long as that projection does and never to a newer one.
+   */
+  const [featureAttribution, setFeatureAttribution] = useState<{
+    derived: ProjectDocument['derived'];
+    featureWarnings: readonly FeatureWarning[];
+  } | null>(null);
+  function recordFeatureAttribution(
+    committed: ProjectDocument,
+    derived: ProjectDocument['derived']
+  ): void {
+    setFeatureAttribution({
+      derived: committed.derived,
+      featureWarnings: derived.featureWarnings ?? []
+    });
+  }
   const {
     projection,
     setProjection,
@@ -2801,6 +2827,7 @@ export function App() {
             : null
         );
         const validated = manager.commitDerivedState(derived);
+        recordFeatureAttribution(validated, derived);
         setParameterPreviewBase({ ...validated, derived });
         setDoc(validated);
         // Fresh meshes now reflect the document (worker results are dropped
@@ -5592,32 +5619,68 @@ export function App() {
     parameterModelFailure.version === doc?.version
       ? parameterModelFailure.message
       : null;
-  const exportBodyIds = useMemo<BodyId[]>(() => {
+  // Bodies standing in for a feature that failed to rebuild. They stay drawn
+  // (Diagnostics names the failure) but are never written to an export file.
+  const failedHistoryBodies = useMemo(
+    () =>
+      doc && featureAttribution?.derived === doc.derived
+        ? failedHistoryExportBodies(doc, featureAttribution.featureWarnings)
+        : new Map<BodyId, WithheldExportBody>(),
+    [doc, featureAttribution]
+  );
+  const selectedBodyExportable = Boolean(
+    selectedBody &&
+    !selectedBody.consumed &&
+    selectedBody.exportableStep &&
+    !failedHistoryBodies.has(selectedBody.bodyId)
+  );
+  const { exportBodyIds, exportWithheldMessage } = useMemo<{
+    exportBodyIds: BodyId[];
+    exportWithheldMessage: string | null;
+  }>(() => {
     if (
       !doc ||
       currentGeometrySnapshot !== null ||
       currentFaceGeometryPreview !== null ||
       (tweakMode && parameterModelError)
     ) {
-      return [];
+      return { exportBodyIds: [], exportWithheldMessage: null };
     }
-    if (
-      selectedBody &&
-      !selectedBody.consumed &&
-      selectedBody.exportableStep &&
-      !parameterHiddenBodyIds.has(selectedBody.bodyId)
-    ) {
-      return [selectedBody.bodyId];
+    const bodyName = (bodyId: BodyId) =>
+      doc.derived.bodyRepresentations[bodyId]?.name ?? bodyId;
+    const exportable = (body: GeometryBodyRepresentation) =>
+      body.exportableStep &&
+      !body.consumed &&
+      !parameterHiddenBodyIds.has(body.bodyId);
+    if (selectedBody && exportable(selectedBody)) {
+      const withheld = failedHistoryBodies.get(selectedBody.bodyId);
+      return withheld
+        ? {
+            exportBodyIds: [],
+            exportWithheldMessage: withheldExportMessage([withheld], bodyName)
+          }
+        : {
+            exportBodyIds: [selectedBody.bodyId],
+            exportWithheldMessage: null
+          };
     }
-    return Object.values(doc.derived.bodyRepresentations)
-      .filter(
-        (body) =>
-          body.exportableStep &&
-          !body.consumed &&
-          !parameterHiddenBodyIds.has(body.bodyId)
+    const candidates = Object.values(doc.derived.bodyRepresentations).filter(
+      exportable
+    );
+    return {
+      exportBodyIds: candidates
+        .filter((body) => !failedHistoryBodies.has(body.bodyId))
+        .map((body) => body.bodyId),
+      exportWithheldMessage: withheldExportMessage(
+        candidates.flatMap((body) => {
+          const withheld = failedHistoryBodies.get(body.bodyId);
+          return withheld ? [withheld] : [];
+        }),
+        bodyName
       )
-      .map((body) => body.bodyId);
+    };
   }, [
+    failedHistoryBodies,
     doc,
     selectedBody,
     parameterHiddenBodyIds,
@@ -6361,6 +6424,7 @@ export function App() {
         // renders the new geometry in the same batch instead of flashing the
         // stale meshes until the broadcast rebuild echoes back.
         next = managerRef.current.commitDerivedState(derived);
+        recordFeatureAttribution(next, derived);
         setMoveCommitHold(null);
       }
       recordLocalCommit(next, before);
@@ -6394,6 +6458,7 @@ export function App() {
       let next = managerRef.current.runTransaction(label, commands);
       if (derived) {
         next = managerRef.current.commitDerivedState(derived);
+        recordFeatureAttribution(next, derived);
         setMoveCommitHold(null);
       }
       recordLocalCommit(next, before);
@@ -11254,10 +11319,12 @@ export function App() {
         return;
       }
       const bodies = countLabel(exportBodyIds.length, 'body', 'bodies');
-      setStatus(
+      const outcome =
         produced.warnings > 0
           ? `Exported ${input.label} with ${countLabel(produced.warnings, 'warning', 'warnings')}.`
-          : `Exported ${bodies} to ${input.fileName}${archived ? ' and archived it' : ''}.`
+          : `Exported ${bodies} to ${input.fileName}${archived ? ' and archived it' : ''}.`;
+      setStatus(
+        exportWithheldMessage ? `${outcome} ${exportWithheldMessage}` : outcome
       );
       // A missing archive is only worth amber where one was on offer: a
       // signed-out or local-only session was never going to keep a copy,
@@ -12723,6 +12790,36 @@ export function App() {
       return false;
     }
     return executeTransaction(label, commands, derived);
+  }
+
+  /**
+   * Commits a History sketch edit (plane, offset, profile or text) only after
+   * the exact branch built on that sketch rebuilds cleanly. A section edit
+   * that leaves a downstream shell, cut or blend unable to resolve its faces
+   * is refused, and the last valid model stays — the failed feature must not
+   * fall back to its input body and reach the viewport or an export as if it
+   * were the design. A sketch nothing depends on commits as before.
+   */
+  function applySketchHistoryEdit(
+    feature: FeatureNode,
+    editSession: EditCardSession | null,
+    label: string,
+    commands: AnyCommand[]
+  ): void {
+    const targets = doc ? affectedFeatureTargets(doc, feature.featureId) : [];
+    if (targets.length === 0) {
+      if (executeTransaction(label, commands)) {
+        finishFeatureEdit(feature, editSession);
+      }
+      return;
+    }
+    void validatedFeature.runTransaction(commands, {
+      label,
+      targets,
+      successMessage: commandOutcomeMessage(label),
+      onSuccess: () => finishFeatureEdit(feature, editSession),
+      cancelled: () => !editSessionIsCurrent(feature, editSession)
+    });
   }
 
   /**
@@ -19205,12 +19302,9 @@ export function App() {
             !parameterDraftActive
           }
           exportScope={
-            selectedBody &&
-            !selectedBody.consumed &&
-            selectedBody.exportableStep
-              ? selectedBody.name
-              : null
+            selectedBodyExportable && selectedBody ? selectedBody.name : null
           }
+          exportWithheld={exportWithheldMessage}
           saveState={presentedSaveState}
           saveToAccount={
             cloudFunctionsEnabled && !!session && !activeProjectIsCloud
@@ -19312,12 +19406,9 @@ export function App() {
               !parameterModelError
             }
             exportScope={
-              selectedBody &&
-              !selectedBody.consumed &&
-              selectedBody.exportableStep
-                ? selectedBody.name
-                : null
+              selectedBodyExportable && selectedBody ? selectedBody.name : null
             }
+            exportWithheld={exportWithheldMessage}
             onPreviewParameter={handlePreviewParameter}
             onSetParameter={(name, expression) =>
               handleSetParameter(name, expression)
@@ -20382,9 +20473,12 @@ export function App() {
                       })
                     );
                   }
-                  if (executeTransaction(`Edit ${value.name}`, commands)) {
-                    finishFeatureEdit(feature, editSession);
-                  }
+                  applySketchHistoryEdit(
+                    feature,
+                    editSession,
+                    `Edit ${value.name}`,
+                    commands
+                  );
                 }}
                 onConvertSketchToFixedPlane={(sketch) => {
                   const planeRef = fixedPlaneRefForLegacyAttachment(
@@ -20437,9 +20531,12 @@ export function App() {
                       })
                     );
                   }
-                  if (executeTransaction(`Edit ${value.name}`, commands)) {
-                    finishFeatureEdit(feature, editSession);
-                  }
+                  applySketchHistoryEdit(
+                    feature,
+                    editSession,
+                    `Edit ${value.name}`,
+                    commands
+                  );
                 }}
                 onEditModelingFeature={openModelingFeatureEditor}
                 onEditSketchInViewport={(feature) => {
@@ -20901,9 +20998,7 @@ export function App() {
           {meshExportOpen && doc && exportBodyIds.length > 0 && (
             <ExportDialog
               scopeLabel={
-                selectedBody &&
-                !selectedBody.consumed &&
-                selectedBody.exportableStep
+                selectedBodyExportable && selectedBody
                   ? selectedBody.name
                   : `all bodies (${exportBodyIds.length})`
               }
