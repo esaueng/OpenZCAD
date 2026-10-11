@@ -9,7 +9,7 @@ import {
 import { Trash2, X } from 'lucide-react';
 import { coerceParamValue } from '@openzcad/document-core';
 import { findFontFace } from '@openzcad/geometry';
-import { FEATURE_COLORS, featureColor } from '@openzcad/shared';
+import { BODY_COLOR_PRESETS, DEFAULT_BODY_COLOR } from '@openzcad/shared';
 import {
   MATERIAL_DENSITY_PRESETS,
   MAX_CUSTOM_DENSITY_KG_PER_M3,
@@ -252,10 +252,13 @@ export interface InspectorCallbacks {
   onToggleImportedSolid(featureId: FeatureId, solidIndex: number): void;
   /** Drag-phase body appearance patch; null restores the committed look. */
   onPreviewBodyAppearance(preview: BodyAppearancePreview | null): void;
-  /** Commits body appearance through node metadata; null opacity resets. */
+  /**
+   * Commits body appearance through node metadata. A null colour returns the
+   * body to the default; a null opacity returns it to fully opaque.
+   */
   onCommitBodyAppearance(
     bodyId: BodyId,
-    appearance: { color?: string; opacity?: number | null }
+    appearance: { color?: string | null; opacity?: number | null }
   ): void;
 }
 
@@ -800,9 +803,6 @@ function CollapsibleSection({
   );
 }
 
-/** Preset swatches: the feature palette, deduped, in the picker's grid. */
-const BODY_COLOR_PRESETS = [...new Set(Object.values(FEATURE_COLORS))];
-
 /**
  * Per-body display color and opacity. Edits stream to the viewport as a
  * material-level preview on every change and commit through node metadata on
@@ -815,9 +815,13 @@ function BodyAppearance({
 }: {
   body: BodyRepresentation;
   onPreview: InspectorCallbacks['onPreviewBodyAppearance'];
-  onCommit: (appearance: { color?: string; opacity?: number | null }) => void;
+  onCommit: (appearance: {
+    color?: string | null;
+    opacity?: number | null;
+  }) => void;
 }) {
-  const defaultColor = featureColor(body.source);
+  // G2: every body has one default colour, whatever feature last made it.
+  const defaultColor = DEFAULT_BODY_COLOR;
   const [draftColor, setDraftColor] = useState(body.color);
   const [draftOpacity, setDraftOpacity] = useState(body.opacity ?? 1);
   const [pickerOpen, setPickerOpen] = useState(false);
@@ -967,10 +971,12 @@ function BodyAppearance({
               committedRef.current = { color: defaultColor, opacity: 1 };
               setDraftColor(defaultColor);
               setDraftOpacity(1);
-              onCommit({ color: defaultColor, opacity: null });
+              // Clear the colour rather than store the default as a choice,
+              // so the body follows the default if it ever changes.
+              onCommit({ color: null, opacity: null });
             }}
           >
-            Reset to feature default
+            Reset to default
           </button>
         )}
       </div>

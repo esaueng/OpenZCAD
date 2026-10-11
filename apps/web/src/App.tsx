@@ -159,6 +159,7 @@ import type {
 } from '@openzcad/shared';
 import {
   applyOrganizationUpdate,
+  BODY_COLOR_CHOSEN_METADATA_KEY,
   BODY_COLOR_METADATA_KEY,
   BODY_OPACITY_METADATA_KEY,
   compareProjectSummaries,
@@ -227,6 +228,7 @@ import {
 } from './lib/staleChunk';
 import { watchBuildVersion } from './lib/buildVersionWatch';
 import { commandOutcomeMessage } from './lib/commandOutcome';
+import { tintPreviewResultBodies } from './lib/previewBodyTint';
 import { presentedDiagnostics } from './lib/diagnosticsRows';
 import { primitiveDimensionLabel } from './lib/primitiveDimensionLabel';
 import { useRememberedSectionPlane } from './hooks/useRememberedSectionPlane';
@@ -5323,21 +5325,27 @@ export function App() {
     () => partBodies.filter((body) => !hiddenBodyIds.has(body.bodyId)),
     [partBodies, hiddenBodyIds]
   );
-  const viewerBodies = useMemo<GeometryBodyRepresentation[]>(
-    () =>
-      (currentFaceGeometryPreview
+  const viewerBodies = useMemo<GeometryBodyRepresentation[]>(() => {
+    const bodies = (
+      currentFaceGeometryPreview
         ? Object.values(currentFaceGeometryPreview.geometry.bodyRepresentations)
         : currentGeometrySnapshot
           ? Object.values(currentGeometrySnapshot.bodyRepresentations)
           : completedViewerBodies
-      ).filter((body) => !body.consumed && !hiddenBodyIds.has(body.bodyId)),
-    [
-      completedViewerBodies,
-      hiddenBodyIds,
-      currentGeometrySnapshot,
-      currentFaceGeometryPreview
-    ]
-  );
+    ).filter((body) => !body.consumed && !hiddenBodyIds.has(body.bodyId));
+    // G2: what a command preview would make is drawn in the preview hue
+    // until it is applied. A face drag shows its change band instead.
+    return previewDoc && !currentFaceGeometryPreview && !currentGeometrySnapshot
+      ? tintPreviewResultBodies(bodies, representations)
+      : bodies;
+  }, [
+    completedViewerBodies,
+    hiddenBodyIds,
+    currentGeometrySnapshot,
+    currentFaceGeometryPreview,
+    previewDoc,
+    representations
+  ]);
   const viewportGeometry = useMemo<ViewportGeometry<ParameterPreviewBody>>(
     () => ({
       document:
@@ -7620,7 +7628,7 @@ export function App() {
 
   function commitBodyAppearance(
     bodyId: BodyId,
-    appearance: { color?: string; opacity?: number | null }
+    appearance: { color?: string | null; opacity?: number | null }
   ) {
     if (!doc) {
       return;
@@ -7629,9 +7637,13 @@ export function App() {
     if (!bodyNode) {
       return;
     }
-    const metadata: Record<string, string | number | null> = {};
+    const metadata: Record<string, string | number | boolean | null> = {};
     if (appearance.color !== undefined) {
+      // Marked as chosen, so it is drawn even when it equals the stamp the
+      // body's feature wrote; null clears both and the default returns.
       metadata[BODY_COLOR_METADATA_KEY] = appearance.color;
+      metadata[BODY_COLOR_CHOSEN_METADATA_KEY] =
+        appearance.color === null ? null : true;
     }
     if (appearance.opacity !== undefined) {
       // null deletes the key, returning the body to fully opaque.
@@ -14401,8 +14413,11 @@ export function App() {
           rounded,
           () => {
             setSelectedProfiles([]);
+            // G15: Create closes the extrude as Box, Hole and Fillet close
+            // theirs — nothing left selected, no cap handle armed, and the
+            // status line confirms. Picking the cap re-arms it on demand.
+            finishFeatureCreation();
             setRevertPill({ sketchId: target.sketchId as SketchId });
-            armExtrudeCapHandle(resultBodyId);
           },
           undefined,
           {
@@ -14422,58 +14437,6 @@ export function App() {
         if (request === regionExtrudeCommitRequest.current) setBusy(false);
       }
     })();
-  }
-
-  /**
-   * The extrude stays open after it lands. The region it was armed on is
-   * consumed by the feature, so the handle moves to the far cap of the new
-   * solid, where a drag or a typed value edits the stored distance through
-   * the same face-offset planner the cap would take if picked by hand.
-   */
-  function armExtrudeCapHandle(bodyId: BodyId) {
-    const document = managerRef.current?.document;
-    const faces =
-      document?.derived.bodyRepresentations[bodyId]?.topology?.faces ?? [];
-    for (const face of faces) {
-      const geometry = face.geometry;
-      if (
-        !document ||
-        geometry?.surfaceType !== 'plane' ||
-        !geometry.normal ||
-        !face.reference
-      ) {
-        continue;
-      }
-      const extrudeFields = faceOffsetTargetFields(
-        document,
-        bodyId,
-        face.reference,
-        face.hash
-      );
-      if (!extrudeFields.extrudeFeatureId) {
-        continue;
-      }
-      const point = geometry.centroid ?? geometry.center;
-      const target: FaceTarget = {
-        bodyId,
-        topologyId: face.topologyId,
-        hash: face.hash,
-        reference: face.reference,
-        point: [point.x, point.y, point.z],
-        normal: [geometry.normal.x, geometry.normal.y, geometry.normal.z],
-        surfaceCenter: [
-          geometry.center.x,
-          geometry.center.y,
-          geometry.center.z
-        ],
-        surfaceType: 'planar',
-        ...extrudeFields
-      };
-      // The body the commit selected stays the selection: the chip keeps
-      // reading the new solid's size while the handle waits on its cap.
-      dispatchInteraction({ type: 'select-face', target });
-      return;
-    }
   }
 
   /** Armed edge handle; memoized for the same rig-stability reason as faces. */
