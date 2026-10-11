@@ -25,7 +25,8 @@ import {
   type SketchNode,
   type SketchObjectData,
   type SketchPathReference,
-  type SketchSectionReference
+  type SketchSectionReference,
+  type UnitSystem
 } from '@openzcad/shared';
 import type { ExactBuildResult, ExactShape } from './exact-types';
 import {
@@ -322,17 +323,24 @@ export function makeProfileFace(
   return kernel.makePlanarFaceFromWire(wire);
 }
 
+/**
+ * Every primitive dimension is a length in the document's units, so a
+ * suffixed size (`1 in + 25.4 mm`) builds what the form previewed. The form
+ * refuses an angle or area typed into a size; this build does not repeat
+ * that check, to keep the kernel worker chunk inside its size budget.
+ */
 export function buildPrimitive(
   kernel: RemusKernel,
   feature: FeatureNode,
-  scope: Record<string, number>
+  scope: Record<string, number>,
+  documentUnits: UnitSystem
 ): ExactShape {
   if (feature.data.featureKind !== 'primitive') {
     throw new Error('Expected a primitive feature.');
   }
   const data = feature.data;
   const dimension = (key: string): number =>
-    resolveParamValue(data.dimensions[key] ?? 0, scope, key);
+    resolveParamValue(data.dimensions[key] ?? 0, scope, key, documentUnits);
   let solid: number;
   switch (data.primitiveKind) {
     case 'box':

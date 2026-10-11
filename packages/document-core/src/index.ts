@@ -4398,6 +4398,50 @@ export interface ExpressionDimensions {
   angle: number;
 }
 
+/** The quantity a typed field holds. */
+export type ExpressionDimension = 'length' | 'angle';
+
+/** A typed field: the document's units and the quantity it measures. */
+export interface FieldQuantity {
+  documentUnits: UnitSystem;
+  dimension: ExpressionDimension;
+}
+
+/**
+ * Evaluates a typed field's expression: unit suffixes convert into the
+ * document's units, and a result of another dimension is refused on the
+ * evaluator's usual throw path — an angle or an area in a length field, a
+ * length in an angle field. Unit-free results pass, because bare numbers and
+ * parameters are document-unit values (and degrees) by definition.
+ *
+ * One rule for every owner of a typed field (the keypad, expression inputs),
+ * so they cannot disagree about what `5 mm` or `30 deg` means. It is kept out
+ * of {@link evaluateExpression} so the kernel worker, which resolves through
+ * that, does not carry it inside its size-budgeted chunk.
+ */
+export function evaluateFieldExpression(
+  expression: string,
+  scope: Record<string, number>,
+  { documentUnits, dimension }: FieldQuantity
+): number {
+  const { value, length, angle } = parseExpressionQuantity(
+    expression,
+    scope,
+    documentUnits
+  );
+  if (!Number.isFinite(value)) {
+    throw new Error('Expression did not evaluate to a finite number.');
+  }
+  // `length * (length - 1)` is zero exactly when the length power is 0 or 1.
+  const angleField = dimension === 'angle';
+  if (angleField ? length !== 0 : angle !== 0 || length * (length - 1) !== 0) {
+    throw new Error(
+      `Incompatible dimensions in expression: expected ${angleField ? 'an angle, not a length' : 'a length, not an angle or area'}.`
+    );
+  }
+  return value;
+}
+
 /**
  * Reports the dimensions {@link evaluateExpression} computed for an
  * expression, throwing identically on anything it would refuse. Field
