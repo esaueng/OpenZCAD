@@ -28,7 +28,7 @@ test('a question typed into the prompt goes to the stream standing on it', async
   await expect(search).toBeVisible({ timeout: 30_000 });
   await expect(search).toHaveAttribute(
     'placeholder',
-    'Ask about the model, or / for a command'
+    'Search commands or ask about the model'
   );
   await expect(page.locator('.assistant-panel')).toHaveCount(0);
   const viewerBefore = await page.locator('.viewer-area').boundingBox();
@@ -194,10 +194,12 @@ test('search names a feature and opens it in the drawer', async ({ page }) => {
   await expect(page.getByRole('button', { name: /^Fillet/ })).toBeEnabled();
   await expect(page.locator('.model-drawer-float')).toHaveCount(0);
 
+  // The feature's row says where it goes, so a feature named after its
+  // tool never reads as a second copy of that tool.
   await promptField(page).fill('/base');
   await page
     .getByRole('option')
-    .filter({ hasText: 'Base plate' })
+    .filter({ hasText: 'Go to Base plate' })
     .filter({ hasText: 'Feature' })
     .click();
 
@@ -273,10 +275,44 @@ test('a slash lists commands with ghost completion, and Tab accepts it', async (
   await expect(search).toHaveValue('');
   await inspector.getByRole('button', { name: /^Create/ }).click();
 
-  // The same words without the slash are a question, not the command.
-  await askAssistant(page, 'box');
+  // The same words without the slash list the command above an ask row,
+  // but Enter asks: the ask row is the one highlighted.
+  await search.fill('box');
+  await expect(
+    page.getByRole('option', { name: /^Box/ }).first()
+  ).toBeVisible();
+  await expect(
+    page.getByRole('option', { name: /^Ask “box”/ })
+  ).toHaveAttribute('aria-selected', 'true');
+  await search.press('Enter');
+  await expect(search).toHaveValue('');
   await expect(page.locator('.assistant-thread')).toContainText('box');
   await expect(page.locator('.assistant-card.proposal')).toContainText(
     'Add a 10 mm cube.'
   );
+});
+
+test('without an assistant, plain words search the commands and Enter runs one', async ({
+  page
+}) => {
+  // Signed out, "fil" and Enter did nothing: only "/fil" listed Fillet.
+  await page.setViewportSize({ width: 1440, height: 900 });
+  await stubApi(page);
+  await createProject(page, 'Plain Search Part');
+
+  const search = promptField(page);
+  await expect(search).toBeVisible({ timeout: 30_000 });
+  await expect(search).toHaveAttribute('placeholder', 'Search commands');
+
+  await search.fill('cyl');
+  const list = page.getByRole('listbox', { name: 'Commands' });
+  await expect(list).toBeVisible();
+  await expect(list.getByRole('option').first()).toContainText('Cylinder');
+  await expect(page.getByRole('option', { name: /^Ask/ })).toHaveCount(0);
+  await search.press('Enter');
+
+  await expect(
+    page.getByRole('region', { name: 'Feature inspector' })
+  ).toBeVisible();
+  await expect(search).toHaveValue('');
 });

@@ -13,8 +13,14 @@ const LIST_ID = 'command-palette-list';
 const ASK_HINT_ID = 'command-bar-ask-hint';
 const optionId = (index: number) => `command-palette-option-${index}`;
 
-/** The grammar: a leading slash means a command, anything else is an ask. */
+/**
+ * The grammar: a leading slash means a command. Plain words search the
+ * commands too, and with an assistant to answer, Enter asks it instead.
+ */
 export const COMMAND_PREFIX = '/';
+
+const KEYS_RUN = '↑↓ move · Tab completes · Enter runs · Esc clears';
+const KEYS_ASK = '↑ picks a command · Enter asks the assistant · Esc clears';
 
 export interface PaletteCommand {
   id: string;
@@ -41,13 +47,15 @@ interface CommandBarProps {
   /**
    * Sends the typed text to the assistant. Present, anything typed without
    * the slash is a question that Enter sends, so search and asking are one
-   * prompt line.
+   * prompt line; the commands it names still list above the ask.
    */
   onAsk?(question: string): void;
   /**
-   * No model provider answers right now. The bar still hands a typed line to
-   * the assistant (its built-in recipes need no provider), but it stops
-   * inviting questions the footer would only answer with "Unavailable".
+   * No model provider answers right now. Plain words are then a command
+   * search like the slash, and Enter runs the best match; only a line that
+   * matches no command still goes to the assistant, whose built-in recipes
+   * need no provider. The bar stops inviting questions the footer would
+   * only answer with "Unavailable".
    */
   askUnavailable?: boolean;
   /** The platform's shortcut for the bar: ⌘K or Ctrl+K. */
@@ -144,13 +152,17 @@ function completionOf(typed: string, command: PaletteCommand | undefined) {
 /**
  * The prompt line at the foot of the stage, the one text field on it.
  *
- * Plain words are a question for the assistant, and Enter sends them. A
- * leading slash is a command: the list of matches stands on the bar, the
- * highlighted one completes in ghost text, Tab accepts it, arrows move and
- * Enter runs it. Empty, Enter applies the proposal waiting in the stream, `p`
- * previews it and Escape rejects it; Escape otherwise clears the field and
- * hands focus back to where it was in the same press, so the next key ("?"
- * for the shortcuts) reaches the workspace instead of the field.
+ * Typed words search the commands: the list of matches stands on the bar,
+ * the highlighted one completes in ghost text, Tab accepts it, arrows move
+ * and Enter runs it. With an assistant to answer, plain words are a
+ * question as well: the list ends in an "Ask" row, highlighted, so Enter
+ * sends them unless an arrow picked a command first. A leading slash is
+ * always a command. (Signed out, "fil" and Enter used to do nothing.)
+ *
+ * Empty, Enter applies the proposal waiting in the stream, `p` previews it
+ * and Escape rejects it; Escape otherwise clears the field and hands focus
+ * back to where it was in the same press, so the next key ("?" for the
+ * shortcuts) reaches the workspace instead of the field.
  */
 export function CommandBar({
   commands,
@@ -165,34 +177,54 @@ export function CommandBar({
   draft = null
 }: CommandBarProps) {
   const [query, setQuery] = useState('');
-  const [activeIndex, setActiveIndex] = useState(0);
+  // Null is the default row: the ask row when there is one, else the best
+  // match.
+  const [activeIndex, setActiveIndex] = useState<number | null>(null);
   const inputRef = useRef<HTMLInputElement | null>(null);
   const listRef = useRef<HTMLDivElement | null>(null);
   // Where focus was before the bar took it, for Escape and for a command
   // that has run: the canvas keeps its keys instead of landing on <body>.
   const returnFocusRef = useRef<HTMLElement | null>(null);
 
-  const commandMode = query.startsWith(COMMAND_PREFIX);
-  const typed = commandMode ? query.slice(COMMAND_PREFIX.length) : '';
+  const canAsk = Boolean(onAsk) && !askUnavailable;
+  const slashMode = query.startsWith(COMMAND_PREFIX);
+  const question = slashMode ? '' : query.trim();
+  // Plain words search as the slash does. Without an assistant they are
+  // only a search, so the bar reads as one (the glyph turns, the stream
+  // steps aside) exactly as it does for "/".
+  const searching = slashMode || question.length > 0;
+  const commandMode = slashMode || (question.length > 0 && !canAsk);
+  const prefix = slashMode ? COMMAND_PREFIX : '';
+  const typed = query.slice(prefix.length);
   // The host rebuilds the command list every render; only rank it while
   // the list is up.
   const matches = useMemo(
-    () => (open && commandMode ? rankedCommands(commands, typed) : []),
-    [commands, open, commandMode, typed]
+    () => (open && searching ? rankedCommands(commands, typed) : []),
+    [commands, open, searching, typed]
   );
-  const question = commandMode ? '' : query.trim();
-  const clampedIndex = Math.min(activeIndex, Math.max(matches.length - 1, 0));
-  const listShown = open && commandMode;
   const hasMatches = matches.length > 0;
-  // Plain words list nothing, so "fil" looked like a search that found
-  // nothing. Say what Enter will do with them, and where commands are.
-  const askHintShown = open && question.length > 0;
-  const completion = listShown
-    ? completionOf(typed, matches[clampedIndex])
-    : '';
+  // A question that names commands lists them above an "Ask" row; one that
+  // names none keeps the hint alone, so a sentence does not cover the
+  // stream with an empty list.
+  const askRow = canAsk && question.length > 0 && hasMatches;
+  const rowCount = matches.length + (askRow ? 1 : 0);
+  const askIndex = askRow ? matches.length : -1;
+  const clampedIndex = Math.min(
+    activeIndex ?? (askRow ? askIndex : 0),
+    Math.max(rowCount - 1, 0)
+  );
+  const activeCommand =
+    clampedIndex === askIndex ? undefined : matches[clampedIndex];
+  const listShown = open && (commandMode || askRow);
+  const hasRows = rowCount > 0;
+  // Words matching no command list nothing, so "fil" looked like a search
+  // that found nothing. Say what Enter will do with them, and where the
+  // commands are.
+  const askHintShown = open && canAsk && question.length > 0 && !askRow;
+  const completion = listShown ? completionOf(typed, activeCommand) : '';
 
   useEffect(() => {
-    setActiveIndex(0);
+    setActiveIndex(null);
   }, [query]);
 
   useEffect(() => {
@@ -239,7 +271,7 @@ export function CommandBar({
 
   function reset() {
     setQuery('');
-    setActiveIndex(0);
+    setActiveIndex(null);
   }
 
   function dismiss() {
@@ -263,14 +295,22 @@ export function CommandBar({
     command.run();
   }
 
+  function ask() {
+    if (!onAsk || !question) {
+      return;
+    }
+    dismiss();
+    onAsk(question);
+  }
+
   function placeholder(): string {
-    if (!onAsk || askUnavailable) {
-      return 'Type / for a command';
+    if (!canAsk) {
+      return 'Search commands';
     }
     if (context) {
       return `Ask about ${context}…`;
     }
-    return 'Ask about the model, or / for a command';
+    return 'Search commands or ask about the model';
   }
 
   const empty = query.length === 0;
@@ -281,7 +321,9 @@ export function CommandBar({
       <div
         className={`command-bar${open ? ' open' : ''}${
           commandMode ? ' command' : ''
-        }${busy ? ' busy' : ''}${unread ? ' unread' : ''}`}
+        }${listShown ? ' listing' : ''}${busy ? ' busy' : ''}${
+          unread ? ' unread' : ''
+        }`}
         onMouseDown={(event) => {
           // The glyph and the key badge are part of the field: a press on
           // them focuses it rather than whatever lies behind.
@@ -302,12 +344,12 @@ export function CommandBar({
                 mounted with the list so the message lands in a live region
                 that already exists. */}
             <p
-              className={hasMatches ? 'visually-hidden' : 'palette-empty'}
+              className={hasRows ? 'visually-hidden' : 'palette-empty'}
               role="status"
             >
-              {hasMatches ? '' : 'No matching command.'}
+              {hasRows ? '' : 'No matching command.'}
             </p>
-            {hasMatches && (
+            {hasRows && (
               <div
                 className="palette-list"
                 id={LIST_ID}
@@ -358,11 +400,35 @@ export function CommandBar({
                     )}
                   </button>
                 ))}
+                {askRow && (
+                  // Last, beside the field the words were typed in, and
+                  // highlighted until an arrow picks a command above it.
+                  <button
+                    type="button"
+                    id={optionId(askIndex)}
+                    role="option"
+                    aria-selected={clampedIndex === askIndex}
+                    tabIndex={-1}
+                    className={`palette-row palette-ask ${
+                      clampedIndex === askIndex ? 'active' : ''
+                    }`}
+                    onMouseMove={() => {
+                      if (clampedIndex !== askIndex) {
+                        setActiveIndex(askIndex);
+                      }
+                    }}
+                    onClick={ask}
+                  >
+                    <span className="palette-icon" />
+                    <span className="palette-label">Ask “{question}”</span>
+                    <small className="palette-group">Assistant</small>
+                  </button>
+                )}
               </div>
             )}
-            {hasMatches && (
+            {hasRows && (
               <p className="command-bar-keys" aria-hidden="true">
-                ↑↓ move · Tab completes · Enter runs · Esc clears
+                {clampedIndex === askIndex ? KEYS_ASK : KEYS_RUN}
               </p>
             )}
           </div>
@@ -373,9 +439,7 @@ export function CommandBar({
             onMouseDown={(event) => event.preventDefault()}
           >
             <p className="command-bar-keys" id={ASK_HINT_ID}>
-              {onAsk && !askUnavailable
-                ? 'Enter asks the assistant · type / for commands'
-                : 'Type / for commands'}
+              Enter asks the assistant · type / for commands
             </p>
           </div>
         )}
@@ -450,11 +514,11 @@ export function CommandBar({
               .replace('Cmd', 'Meta')
               .replace('Ctrl', 'Control')}
             aria-autocomplete="list"
-            aria-expanded={listShown && hasMatches}
+            aria-expanded={listShown && hasRows}
             aria-describedby={askHintShown ? ASK_HINT_ID : undefined}
-            aria-controls={listShown && hasMatches ? LIST_ID : undefined}
+            aria-controls={listShown && hasRows ? LIST_ID : undefined}
             aria-activedescendant={
-              listShown && hasMatches ? optionId(clampedIndex) : undefined
+              listShown && hasRows ? optionId(clampedIndex) : undefined
             }
             onFocus={(event) => {
               const from = event.relatedTarget;
@@ -468,7 +532,12 @@ export function CommandBar({
               reset();
               onOpenChange(false);
             }}
-            onChange={(event) => setQuery(event.target.value)}
+            onChange={(event) => {
+              // With the text, in one render: a highlight kept from the
+              // last query must not pick the row Enter acts on.
+              setQuery(event.target.value);
+              setActiveIndex(null);
+            }}
             onPaste={(event) => {
               // A pasted screenshot or drawing attaches to the next ask;
               // pasted text is typed as usual.
@@ -478,6 +547,12 @@ export function CommandBar({
               }
             }}
             onKeyDown={(event) => {
+              // An input method's keys are its own: the Enter that commits a
+              // composed word must not also run the command it now matches,
+              // nor its Escape drop the field.
+              if (event.nativeEvent.isComposing || event.keyCode === 229) {
+                return;
+              }
               const meta = event.metaKey || event.ctrlKey;
               if (event.key === 'Escape') {
                 event.preventDefault();
@@ -494,26 +569,24 @@ export function CommandBar({
               } else if (event.key === 'Tab' && !event.shiftKey && completion) {
                 // Shift+Tab still leaves the field, so Tab never traps focus.
                 event.preventDefault();
-                // The command's own spelling, not the typed case.
-                setQuery(`${COMMAND_PREFIX}${matches[clampedIndex]!.label}`);
-              } else if (listShown && event.key === 'ArrowDown') {
+                // The command's own spelling, not the typed case, and the
+                // slash only if one was typed.
+                setQuery(`${prefix}${activeCommand!.label}`);
+              } else if (listShown && hasRows && event.key === 'ArrowDown') {
                 event.preventDefault();
-                setActiveIndex((index) =>
-                  Math.min(index + 1, matches.length - 1)
-                );
-              } else if (listShown && event.key === 'ArrowUp') {
+                setActiveIndex(Math.min(clampedIndex + 1, rowCount - 1));
+              } else if (listShown && hasRows && event.key === 'ArrowUp') {
                 event.preventDefault();
-                setActiveIndex((index) => Math.max(index - 1, 0));
+                setActiveIndex(Math.max(clampedIndex - 1, 0));
               } else if (event.key === 'Enter') {
                 event.preventDefault();
-                if (commandMode) {
-                  runCommand(matches[clampedIndex]);
+                if (activeCommand) {
+                  runCommand(activeCommand);
                 } else if (question) {
-                  if (onAsk) {
-                    dismiss();
-                    onAsk(question);
-                  }
-                } else {
+                  // The ask row; or, with no provider, words that matched no
+                  // command, which only the built-in recipes may still take.
+                  ask();
+                } else if (!searching) {
                   sendAssistantPromptKey('apply');
                 }
               } else if (empty && event.key === 'p' && !meta) {
