@@ -903,7 +903,7 @@ function curvedSurfaceCensus(
   solid: number
 ): Map<string, number> {
   const census = new Map<string, number>();
-  for (const face of Array.from(kernel.getSolidFaces(solid))) {
+  for (const face of kernel.getSolidFaces(solid)) {
     const surfaceType = kernel.getSurfaceType(face);
     if (surfaceType === 'plane') continue;
     census.set(surfaceType, (census.get(surfaceType) ?? 0) + 1);

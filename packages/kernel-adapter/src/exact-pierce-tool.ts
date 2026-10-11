@@ -150,7 +150,7 @@ function coplanarFaces(
 ): number[] {
   const faces: number[] = [];
   for (const solid of solids) {
-    for (const face of Array.from(kernel.getSolidFaces(solid))) {
+    for (const face of kernel.getSolidFaces(solid)) {
       let frame;
       try {
         frame = readFacePlaneFrame(kernel, face);
@@ -262,7 +262,7 @@ function planeRegion(
       -Infinity
     ];
     let probe: [number, number] | null = null;
-    for (const edge of Array.from(kernel.getWireEdges(wire))) {
+    for (const edge of kernel.getWireEdges(wire)) {
       const values = kernel.sampleEdge(edge, deflection);
       let previous: [number, number] | null = null;
       for (let at = 0; at + 2 < values.length; at += 3) {
@@ -472,16 +472,16 @@ function pierceBandClear(
 ): boolean {
   const boundingEdges = new Set<number>();
   for (const face of partnerFaces) {
-    for (const edge of Array.from(kernel.getFaceEdges(face))) {
+    for (const edge of kernel.getFaceEdges(face)) {
       boundingEdges.add(edge);
     }
   }
   const excluded = new Set(partnerFaces);
   for (const solid of partnerSolids) {
-    for (const face of Array.from(kernel.getSolidFaces(solid))) {
+    for (const face of kernel.getSolidFaces(solid)) {
       if (excluded.has(face)) continue;
       if (
-        Array.from(kernel.getFaceEdges(face)).some((edge) =>
+        kernel.getFaceEdges(face).some((edge) =>
           boundingEdges.has(edge)
         )
       ) {
