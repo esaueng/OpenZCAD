@@ -13651,7 +13651,7 @@ export function App() {
       const committed = managerRef.current?.document;
       if (!refusal && committed) {
         editFormVersion(fieldDefinitions.current, committed);
-        setStatus(`Parameter ${name} defined.`);
+        setStatus(`Added parameter ${name}.`);
       }
       return refusal;
     } finally {

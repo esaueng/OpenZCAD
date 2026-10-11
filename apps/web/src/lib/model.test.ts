@@ -20,11 +20,17 @@ describe('previewExpression undefined parameters (G5)', () => {
     );
   });
 
-  it('accepts an expression that only builds for some values', () => {
-    // At 1 the square root is of a negative number; at 100 it is not.
-    expect(previewExpression('sqrt(width - 5)', {}).undefinedParameter).toBe(
-      'width'
-    );
+  it.each([
+    // Most values of `width` fail these; whether it builds depends on the
+    // value it is given, not on the expression, so the name is offered.
+    'sqrt(width - 5)',
+    'sqrt(width - 1000)',
+    '1 / (width - 1)',
+    'require_min(width, 5000)',
+    'mod(10, width)',
+    'asin(width)'
+  ])('offers the name in %s whatever values would fail', (expression) => {
+    expect(previewExpression(expression, {}).undefinedParameter).toBe('width');
   });
 
   it.each([
@@ -35,7 +41,10 @@ describe('previewExpression undefined parameters (G5)', () => {
     ['width + 90 deg', 'incompatible dimensions'],
     ['width + 5 mm', 'a length suffix the field cannot convert'],
     ['width $', 'an unexpected character'],
-    ['nope(width)', 'an unknown function']
+    ['nope(width)', 'an unknown function'],
+    ['sqrt(width) + sqrt', 'a function name read as a value'],
+    ['width * 2 + 3 mm', 'a length suffix after the name'],
+    ['abs(width, 2)', 'the wrong number of arguments']
   ])('offers nothing for %s (%s)', (expression) => {
     const preview = previewExpression(expression, {});
     expect(preview.ok).toBe(false);

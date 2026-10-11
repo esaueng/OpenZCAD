@@ -1,7 +1,6 @@
 import {
   evaluateExpression,
-  isValidParameterName,
-  UnknownIdentifierError
+  isValidParameterName
 } from '@openzcad/document-core';
 import type {
   FeatureKind,
@@ -49,7 +48,7 @@ export function previewExpression(
       value
     };
   } catch (error) {
-    const undefinedParameter = undefinedParameterIn(trimmed, scope, error);
+    const undefinedParameter = undefinedParameterIn(trimmed, scope);
     return {
       ok: false,
       text: error instanceof Error ? error.message : 'invalid',
@@ -59,51 +58,49 @@ export function previewExpression(
 }
 
 /**
- * Stand-in values for names not yet defined. The expression is valid if it
- * evaluates with any of them: `sqrt(width - 5)` fails at 1 and is fine at
- * 100, and the real value is whatever the user then gives the name.
+ * Refusals of a value rather than of the expression: what a name with no
+ * value yet (read as NaN below) trips once it reaches a guard. Anything else
+ * (syntax, trailing tokens, a reserved name, a unit or a dimension) is wrong
+ * with the expression itself.
  */
-const UNDEFINED_PARAMETER_PROBES = [1, 100];
+const VALUE_REFUSAL =
+  /^(?:Expression did not evaluate to a finite number|require_(?:min|one_of) needs a finite|a(?:sin|cos)\(\) expects an argument between)/;
 
 /**
  * The first undefined parameter an expression reads, when defining the names
- * it is missing is all it would take to evaluate. The evaluator stops at the
- * first unknown name, so each probe defines the names found so far and runs
- * again until it evaluates, or fails for some other reason.
+ * it is missing is all it would take for it to parse. Decided by the
+ * evaluator's own parser, never by trying sample values: the scope records
+ * every valid parameter name the parse reads that it does not hold and
+ * answers NaN, so `sqrt(width - 1000)` names `width` although most values of
+ * it would fail. Done here rather than as a parser mode in document-core,
+ * whose chunk has no room left under the bundle budget.
  */
 function undefinedParameterIn(
   expression: string,
-  scope: Record<string, number>,
-  error: unknown
+  scope: Record<string, number>
 ): string | undefined {
-  if (
-    !(error instanceof UnknownIdentifierError) ||
-    !isValidParameterName(error.identifier)
-  ) {
-    return undefined;
-  }
-  for (const probe of UNDEFINED_PARAMETER_PROBES) {
-    const probed = { ...scope };
-    let missing = error.identifier;
-    // Bounded by the expression's own names: each pass defines a new one.
-    for (;;) {
-      probed[missing] = probe;
-      try {
-        evaluateExpression(expression, probed);
-        return error.identifier;
-      } catch (next) {
-        if (
-          !(next instanceof UnknownIdentifierError) ||
-          !isValidParameterName(next.identifier) ||
-          Object.hasOwn(probed, next.identifier)
-        ) {
-          break;
-        }
-        missing = next.identifier;
+  const missing: string[] = [];
+  const reading = new Proxy(scope, {
+    get(target, key, receiver) {
+      if (
+        typeof key === 'string' &&
+        !Object.hasOwn(target, key) &&
+        isValidParameterName(key)
+      ) {
+        if (!missing.includes(key)) missing.push(key);
+        return Number.NaN;
       }
+      return Reflect.get(target, key, receiver) as unknown;
+    }
+  });
+  try {
+    evaluateExpression(expression, reading);
+  } catch (error) {
+    if (!(error instanceof Error) || !VALUE_REFUSAL.test(error.message)) {
+      return undefined;
     }
   }
-  return undefined;
+  return missing[0];
 }
 
 /** Resolve a stored parametric value to a number, or null if it can't evaluate. */
