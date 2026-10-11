@@ -149,12 +149,16 @@
   white-space: nowrap;
 }
 
+/* 24 px tall, the minimum pointer target: the row is already 26 px for its
+   expression field, so the button fills height the row has anyway. Its
+   text-height box was 19 px. */
 .param-name-button {
   display: flex;
   align-items: center;
   justify-content: flex-start;
   gap: 5px;
   min-width: 0;
+  min-height: 24px;
   padding: 2px 0;
   border: 0;
   background: transparent;

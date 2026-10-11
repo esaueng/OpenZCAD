@@ -1,4 +1,4 @@
-import { X } from 'lucide-react';
+import { CardHeader } from './CardHeader';
 import { displayLengthName, type UnitSystem } from '@openzcad/shared';
 import { CARD_EYEBROWS } from '../lib/cardEyebrows';
 import { moveHasFiniteValues } from '../lib/moveCard';
@@ -202,20 +202,12 @@ export function MoveOverlay({
         }
       }}
     >
-      <div className="panel-header">
-        <div className="panel-title-row">
-          <h2>{hideRotation ? 'Move' : 'Move / Rotate'}</h2>
-          <span className="panel-eyebrow">{CARD_EYEBROWS.direct}</span>
-          <button
-            type="button"
-            className="icon-button panel-close"
-            aria-label="Cancel move"
-            onClick={onCancel}
-          >
-            <X size={14} aria-hidden="true" />
-          </button>
-        </div>
-      </div>
+      <CardHeader
+        title={hideRotation ? 'Move' : 'Move / Rotate'}
+        eyebrow={CARD_EYEBROWS.direct}
+        closeLabel="Cancel move"
+        onClose={onCancel}
+      />
       {name !== undefined && onName ? (
         <label className="field move-name">
           <span>Name</span>

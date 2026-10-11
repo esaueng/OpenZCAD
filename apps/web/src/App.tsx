@@ -76,8 +76,7 @@ import {
   Trash2,
   TriangleRight,
   Undo2,
-  Upload,
-  X
+  Upload
 } from 'lucide-react';
 import {
   CommandManager,
@@ -571,7 +570,6 @@ import {
 } from './lib/resolvedExtrudePreview';
 import {
   ExtrudeForm,
-  distanceKeypadText,
   type ExtrudeFormValue
 } from './components/forms/ExtrudeForm';
 import {
@@ -751,7 +749,7 @@ const LazyToolCard = lazyWithStaleChunkNotice(() =>
 );
 function ToolCard(props: ComponentProps<typeof LazyToolCard>) {
   return (
-    <Suspense fallback={null}>
+    <Suspense fallback={<CardSkeleton />}>
       <LazyToolCard {...props} />
     </Suspense>
   );
@@ -1137,7 +1135,7 @@ function ShaprImportDialog(
 
 function Inspector(props: ComponentProps<typeof LazyInspector>) {
   return (
-    <Suspense fallback={null}>
+    <Suspense fallback={<CardSkeleton />}>
       <LazyInspector {...props} />
     </Suspense>
   );
@@ -1281,6 +1279,8 @@ import {
   editCardSessionMatches,
   type EditCardSession
 } from './lib/editCardLifecycle';
+import { CardHeader, CardSkeleton } from './components/CardHeader';
+import { useCommandCardPrefetch } from './lib/cardChunkPrefetch';
 import { PanelOverflow } from './components/PanelOverflow';
 import {
   clearActiveProject,
@@ -15482,9 +15482,7 @@ export function App() {
   function handleOpenOffsetKeypad(
     currentOffset: number,
     totalBaseline?: number,
-    totalSense: 1 | -1 = 1,
-    /** A form's own text for the value; a drag has none and is rounded. */
-    initialText?: string
+    totalSense: 1 | -1 = 1
   ): boolean {
     if (
       interaction.mode !== 'region' &&
@@ -15502,14 +15500,13 @@ export function App() {
             : 'Offset'
           : 'Total',
       initial:
-        initialText ??
-        (totalBaseline !== undefined || currentOffset !== 0
+        totalBaseline !== undefined || currentOffset !== 0
           ? String(
               Math.round(
                 ((totalBaseline ?? 0) + totalSense * currentOffset) * 100
               ) / 100
             )
-          : ''),
+          : '',
       unitKind: 'length',
       ...(totalBaseline === undefined ? {} : { totalBaseline, totalSense })
     });
@@ -17542,6 +17539,8 @@ export function App() {
     window.addEventListener('keydown', listener);
     return () => window.removeEventListener('keydown', listener);
   }, []);
+  // A tool's first open would otherwise wait on its card's chunk (G16).
+  useCommandCardPrefetch(doc !== null);
 
   /**
    * Projects carrying an unresolved divergence marker. Recomputed from the
@@ -19777,14 +19776,6 @@ export function App() {
                       dispatchInteraction({ type: 'clear' });
                       cancelPanel();
                     }}
-                    onDistance={(value) =>
-                      handleOpenOffsetKeypad(
-                        resolveParamValue(value, parameterScope.scope),
-                        undefined,
-                        1,
-                        distanceKeypadText(value)
-                      )
-                    }
                   />
                 ) : undefined
               }
@@ -19960,18 +19951,18 @@ export function App() {
                   cancelPanel();
                 }}
               >
-                <div className="panel-header">
-                  <div className="panel-title-row">
-                    <h2>
-                      {modelingEditFeature?.name ??
-                        TOOL_META[modelingOperation].label}
-                    </h2>
-                    <span className="panel-eyebrow">
-                      {modelingEditFeature
-                        ? CARD_EYEBROWS.edit
-                        : CARD_EYEBROWS.create}
-                    </span>
-                    {modelingEditFeature ? (
+                <CardHeader
+                  title={
+                    modelingEditFeature?.name ??
+                    TOOL_META[modelingOperation].label
+                  }
+                  eyebrow={
+                    modelingEditFeature
+                      ? CARD_EYEBROWS.edit
+                      : CARD_EYEBROWS.create
+                  }
+                  actions={
+                    modelingEditFeature ? (
                       // The same overflow every Inspector edit card has: now
                       // that selecting the feature opens this form (F19),
                       // this is where its delete is.
@@ -19992,20 +19983,14 @@ export function App() {
                           Delete feature
                         </button>
                       </PanelOverflow>
-                    ) : null}
-                    <button
-                      type="button"
-                      className="icon-button panel-close"
-                      // Closes the panel and keeps the pick; Escape (and the
-                      // form's Cancel) return to nothing selected.
-                      title="Close"
-                      aria-label="Close panel"
-                      onClick={closeFeaturePanel}
-                    >
-                      <X size={14} aria-hidden="true" />
-                    </button>
-                  </div>
-                </div>
+                    ) : null
+                  }
+                  // Closes the panel and keeps the pick; Escape (and the
+                  // form's Cancel) return to nothing selected.
+                  closeTitle="Close"
+                  closeLabel="Close panel"
+                  onClose={closeFeaturePanel}
+                />
                 <div className="panel-body">
                   {modelingEditReferenceError ? (
                     <p role="alert" className="field-error">
