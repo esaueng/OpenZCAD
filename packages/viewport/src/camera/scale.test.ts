@@ -4,6 +4,7 @@ import {
   chooseViewportScale,
   DEFAULT_SCALE_BAR_MAX_WIDTH_PX,
   formatViewportScale,
+  presentedBoundsCenter,
   scaleBarAnchor
 } from './scale';
 
@@ -98,5 +99,48 @@ describe('scale bar anchor', () => {
     expect(scaleBarAnchor(camera, forward, null, pivot)).toBe(pivot);
     const behind = new THREE.Vector3(0, -300, 0);
     expect(scaleBarAnchor(camera, forward, behind, pivot)).toBe(pivot);
+  });
+});
+
+describe('presented bounds centre', () => {
+  function body(x: number) {
+    const mesh = new THREE.Mesh(new THREE.BoxGeometry(10, 10, 10));
+    mesh.position.set(x, 0, 0);
+    const group = new THREE.Group();
+    group.add(mesh);
+    return group;
+  }
+
+  it('follows a Move preview without a rebuild', () => {
+    const bodies = new THREE.Group();
+    const moving = body(0);
+    bodies.add(moving, body(100));
+    const center = new THREE.Vector3();
+    expect(presentedBoundsCenter([bodies], center)?.x).toBeCloseTo(50, 9);
+    // The Move preview poses the object; no geometry is rebuilt.
+    moving.position.x = 40;
+    expect(presentedBoundsCenter([bodies], center)?.x).toBeCloseTo(70, 9);
+  });
+
+  it('counts a parameter preview and leaves out the bodies it hides', () => {
+    const bodies = new THREE.Group();
+    const replaced = body(0);
+    bodies.add(replaced, body(100));
+    const preview = new THREE.Group();
+    preview.add(body(300));
+    replaced.visible = false;
+    const center = presentedBoundsCenter(
+      [bodies, preview],
+      new THREE.Vector3()
+    );
+    expect(center?.x).toBeCloseTo(200, 9);
+  });
+
+  it('is null when nothing visible has geometry', () => {
+    const hidden = body(0);
+    hidden.visible = false;
+    expect(
+      presentedBoundsCenter([hidden, null, undefined], new THREE.Vector3())
+    ).toBeNull();
   });
 });
