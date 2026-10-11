@@ -33,7 +33,15 @@ export function featureValueSummary(
   const data = feature.data;
   switch (data.featureKind) {
     case 'primitive': {
-      const d = (key: string) => num(data.dimensions[key]);
+      // Primitive sizes are lengths, so a suffixed size summarises in
+      // document units as the kernel builds it.
+      const d = (key: string) => {
+        const resolved = evalParamValue(data.dimensions[key] ?? '', scope, {
+          documentUnits: units,
+          dimension: 'length'
+        });
+        return resolved === null ? null : formatNumber(resolved);
+      };
       switch (data.primitiveKind) {
         case 'box': {
           // makeBox(width, height, depth) is X × Y × Z; the form calls Y

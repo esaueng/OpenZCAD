@@ -1,4 +1,5 @@
 import { useId } from 'react';
+import type { FieldQuantity } from '@openzcad/document-core';
 import { previewExpression } from '../lib/model';
 import { useFieldAutoFocus } from './forms/fieldAutoFocus';
 
@@ -23,6 +24,14 @@ interface ExprInputProps {
    * that creates a Move does.
    */
   ariaLabel?: string;
+  /**
+   * The quantity this field holds, in the document's units. A typed field
+   * evaluates unit suffixes (`1 in + 25.4 mm`) into document units and
+   * refuses another dimension; both are required together so no field can
+   * accept a suffix without also checking what it measures. Absent, a unit
+   * suffix is refused, as it always was.
+   */
+  quantity?: FieldQuantity;
 }
 
 /**
@@ -39,11 +48,12 @@ export function ExprInput({
   optional,
   autoFocus,
   error,
-  ariaLabel
+  ariaLabel,
+  quantity
 }: ExprInputProps) {
   const id = useId();
   const mayAutoFocus = useFieldAutoFocus(autoFocus);
-  const preview = previewExpression(value, scope);
+  const preview = previewExpression(value, scope, quantity);
   // A blank optional field is a valid choice, not a missing value: its
   // preview said "required" under "End radius (blank = constant)".
   const blankOptional = Boolean(optional) && value.trim().length === 0;

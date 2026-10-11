@@ -1444,6 +1444,7 @@ export function Inspector(props: InspectorProps) {
           key={`create-${tool}`}
           kind={kind}
           scope={scope}
+          documentUnits={units}
           initialName={TOOL_META[tool].label}
           submitLabel="Create"
           onSubmit={(name, dimensions, position) =>
@@ -1634,6 +1635,7 @@ export function Inspector(props: InspectorProps) {
           key={editKey}
           kind={data.primitiveKind}
           scope={scope}
+          documentUnits={units}
           initialName={selectedFeature.name}
           initialDimensions={data.dimensions}
           initialPosition={placement.position}

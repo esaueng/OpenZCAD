@@ -1,6 +1,6 @@
 import { useEffect, useMemo, useRef, useState, type ReactNode } from 'react';
 import { X } from 'lucide-react';
-import { coerceParamValue } from '@openzcad/document-core';
+import { coerceParamValue, type FieldQuantity } from '@openzcad/document-core';
 import {
   FULL_REVOLVE_ANGLE_DEG,
   MAX_SKETCH_POLYGON_SIDES,
@@ -17,6 +17,7 @@ import {
   type SketchId,
   type SketchObjectData,
   type SketchObjectKind,
+  type UnitSystem,
   type VariableFilletLaw
 } from '@openzcad/shared';
 import { ExprInput } from '../ExprInput';
@@ -154,8 +155,12 @@ function FormShell({
   );
 }
 
-function fieldsValid(scope: Record<string, number>, values: string[]): boolean {
-  return values.every((value) => previewExpression(value, scope).ok);
+function fieldsValid(
+  scope: Record<string, number>,
+  values: string[],
+  quantity?: FieldQuantity
+): boolean {
+  return values.every((value) => previewExpression(value, scope, quantity).ok);
 }
 
 /**
@@ -248,6 +253,12 @@ const PRIMITIVE_FIELDS: Record<
 interface PrimitiveFormProps {
   kind: PrimitiveKind;
   scope: Record<string, number>;
+  /**
+   * The document's units. Every primitive field — each size and the anchor
+   * position — is a length, so a suffixed value such as `1 in + 25.4 mm`
+   * previews, validates and builds in these units, and an angle is refused.
+   */
+  documentUnits: UnitSystem;
   initialName: string;
   initialDimensions?: Record<string, ParamValue>;
   /** Where the anchor point sits now; absent means the origin. */
@@ -266,6 +277,7 @@ const POSITION_AXES = ['x', 'y', 'z'] as const;
 export function PrimitiveForm({
   kind,
   scope,
+  documentUnits,
   initialName,
   initialDimensions,
   initialPosition,
@@ -275,6 +287,7 @@ export function PrimitiveForm({
 }: PrimitiveFormProps) {
   const fields = PRIMITIVE_FIELDS[kind];
   const anchor = PRIMITIVE_ANCHORS[kind];
+  const length = { documentUnits, dimension: 'length' } as const;
   const [name, setName] = useState(initialName);
   const documentValues = Object.fromEntries(
     fields.map((field) => [
@@ -316,7 +329,7 @@ export function PrimitiveForm({
 
   const dimensionErrors = Object.fromEntries(
     fields.map((field) => {
-      const preview = previewExpression(values[field.key] ?? '', scope);
+      const preview = previewExpression(values[field.key] ?? '', scope, length);
       const allowsZero = kind === 'cone' && field.key !== 'height';
       const invalid =
         preview.ok &&
@@ -335,8 +348,8 @@ export function PrimitiveForm({
   );
   if (
     kind === 'cone' &&
-    previewExpression(values.bottomRadius ?? '', scope).value === 0 &&
-    previewExpression(values.topRadius ?? '', scope).value === 0
+    previewExpression(values.bottomRadius ?? '', scope, length).value === 0 &&
+    previewExpression(values.topRadius ?? '', scope, length).value === 0
   ) {
     dimensionErrors.bottomRadius =
       'At least one radius must be greater than zero.';
@@ -355,10 +368,11 @@ export function PrimitiveForm({
   const canSubmit =
     !unchanged &&
     name.trim().length > 0 &&
-    fieldsValid(scope, [
-      ...Object.values(values),
-      ...Object.values(position)
-    ]) &&
+    fieldsValid(
+      scope,
+      [...Object.values(values), ...Object.values(position)],
+      length
+    ) &&
     Object.values(dimensionErrors).every((error) => !error);
 
   return (
@@ -391,6 +405,7 @@ export function PrimitiveForm({
           label={field.label}
           value={values[field.key] ?? ''}
           scope={scope}
+          quantity={length}
           autoFocus={index === 0}
           error={dimensionErrors[field.key]}
           onChange={(value) =>
@@ -412,6 +427,7 @@ export function PrimitiveForm({
               label={`${anchor.label} ${axis.toUpperCase()}`}
               value={position[axis]}
               scope={scope}
+              quantity={length}
               onChange={(value) =>
                 setPosition((current) => ({ ...current, [axis]: value }))
               }
