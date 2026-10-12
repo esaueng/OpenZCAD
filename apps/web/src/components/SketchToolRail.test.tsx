@@ -28,6 +28,7 @@ function renderRail(
     onEditTool: vi.fn(),
     onEditConstraint: vi.fn(),
     onDeleteConstraint: vi.fn(),
+    onSelectConstraintObject: vi.fn(),
     onSolve: vi.fn(),
     onDiagnostics: vi.fn(),
     onExtrude: vi.fn(),
@@ -51,6 +52,120 @@ function renderRelations(
 }
 
 describe('SketchToolRail', () => {
+  it('opens and focuses constraint recovery from a warning without guessing a culprit', async () => {
+    const user = userEvent.setup();
+    renderRail({
+      constraints: [
+        {
+          constraintId: 'scon_1',
+          label: 'Horizontal · Line 1',
+          editable: false
+        }
+      ],
+      solveStatus: {
+        label: 'Over-constrained',
+        tone: 'warn',
+        definedState: 'over-constrained',
+        conflictingConstraintIds: []
+      }
+    });
+    expect(
+      screen.getByRole('region', { name: 'Constraint feedback' })
+    ).toHaveTextContent('Over-constrained');
+    await user.click(
+      screen.getByRole('button', { name: 'Review constraints' })
+    );
+    const group = screen.getByRole('group', { name: 'Constraints' });
+    expect(group).toHaveFocus();
+    expect(group).toHaveTextContent(
+      'The solver did not identify a conflicting constraint.'
+    );
+    expect(
+      screen.getByText('Horizontal · Line 1').closest('li')
+    ).not.toHaveAttribute('data-conflicted');
+  });
+
+  it('reveals the exact referenced entities and keeps edit and deletion separate', async () => {
+    const user = userEvent.setup();
+    const { props, rerender } = renderRail({
+      paletteOpen: true,
+      selectedObjectId: 'ent_1',
+      constraints: [
+        {
+          constraintId: 'scon_1',
+          label: 'Distance · Line 1 ↔ Line 2',
+          editable: true,
+          conflicted: true,
+          targets: [
+            { objectId: 'ent_1', label: 'Line 1' },
+            { objectId: 'ent_2', label: 'Line 2' }
+          ]
+        }
+      ],
+      solveStatus: { label: 'Constraints conflict', tone: 'warn' }
+    });
+    const show = screen.getByRole('button', {
+      name: 'Show geometry for constraint: Distance · Line 1 ↔ Line 2'
+    });
+    show.focus();
+    await user.keyboard('{Enter}');
+    expect(show).toHaveAttribute('aria-expanded', 'true');
+    expect(
+      screen.getByRole('button', { name: 'Select geometry: Line 1' })
+    ).toHaveAttribute('aria-pressed', 'true');
+    await user.click(
+      screen.getByRole('button', { name: 'Select geometry: Line 2' })
+    );
+    expect(props.onSelectConstraintObject).toHaveBeenCalledWith(
+      'scon_1',
+      'ent_2'
+    );
+    expect(props.onEditConstraint).not.toHaveBeenCalled();
+    expect(props.onDeleteConstraint).not.toHaveBeenCalled();
+    rerender(<SketchToolRail {...props} solving />);
+    expect(
+      screen.getByRole('button', { name: 'Select geometry: Line 2' })
+    ).toBeDisabled();
+    expect(
+      screen.getByRole('button', {
+        name: 'Delete constraint: Distance · Line 1 ↔ Line 2'
+      })
+    ).toBeDisabled();
+    rerender(<SketchToolRail {...props} constraints={[]} solveStatus={null} />);
+    expect(
+      screen.queryByRole('button', { name: 'Select geometry: Line 2' })
+    ).not.toBeInTheDocument();
+    expect(
+      screen.queryByRole('region', { name: 'Constraint feedback' })
+    ).not.toBeInTheDocument();
+  });
+
+  it('explains unavailable geometry instead of offering a stale target', async () => {
+    const user = userEvent.setup();
+    renderRail({
+      paletteOpen: true,
+      constraints: [
+        {
+          constraintId: 'scon_gone',
+          label: 'Radius · Deleted circle',
+          editable: true,
+          targets: []
+        }
+      ]
+    });
+    await user.click(
+      screen.getByRole('button', {
+        name: 'Show geometry for constraint: Radius · Deleted circle'
+      })
+    );
+    expect(
+      screen.getByText('The referenced geometry is no longer available.')
+    ).toBeVisible();
+    expect(
+      screen.queryByRole('button', { name: /^Select geometry:/ })
+    ).not.toBeInTheDocument();
+  });
+
   it('preserves extrusion readiness and solving guards with tooltips', async () => {
     const user = userEvent.setup();
     const { props, rerender } = renderRail({ canExtrude: false });
@@ -163,6 +278,7 @@ describe('SketchToolRail', () => {
           onEditTool={vi.fn()}
           onEditConstraint={vi.fn()}
           onDeleteConstraint={vi.fn()}
+          onSelectConstraintObject={vi.fn()}
           onSolve={vi.fn()}
           onDiagnostics={vi.fn()}
           onExtrude={vi.fn()}
