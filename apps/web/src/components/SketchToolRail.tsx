@@ -74,6 +74,7 @@ export interface SketchSolveStatus {
 
 interface SketchToolRailProps {
   workflow?: ReactNode;
+  referenceDimensions?: ReactNode;
   /** The sketch being edited, named at the head of the palette flyout. */
   sketchName?: string;
   /**
@@ -291,6 +292,7 @@ function SnapSpacingField({
 /** The sketch rail: the sketch's tools as one icon column, plus its flyouts. */
 export function SketchToolRail({
   workflow,
+  referenceDimensions,
   entityEditor,
   sketchName,
   canExtrude = true,
@@ -788,6 +790,7 @@ export function SketchToolRail({
               </ul>
             </fieldset>
           ) : null}
+          {referenceDimensions}
           <p className="sketch-palette-help">
             <Magnet size={12} aria-hidden="true" />
             Tab cycles overlaps · Shift suppresses snaps

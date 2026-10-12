@@ -8,6 +8,64 @@ import {
 } from './sketchDimensions';
 
 describe('sketch dimension overlay', () => {
+  it('never edits a reference value on click or keyboard activation; moves its tagged identity only', () => {
+    const edit = vi.fn();
+    const move = vi.fn();
+    const overlay = buildSketchDimensions(
+      [
+        {
+          id: 'sref_radius',
+          identity: { kind: 'reference', annotationId: 'sref_radius' as never },
+          kind: 'radius',
+          label: '(R 5 mm)',
+          anchor: { x: 2, y: 3 },
+          baseAnchor: { x: 2, y: 3 },
+          lines: []
+        }
+      ],
+      {
+        origin: { x: 0, y: 0, z: 0 },
+        u: { x: 1, y: 0, z: 0 },
+        v: { x: 0, y: 1, z: 0 },
+        normal: { x: 0, y: 0, z: 1 }
+      },
+      { width: 1000, height: 700 },
+      edit,
+      (x, y) => ({ x: x / 10, y: y / 10 }),
+      move
+    );
+    const label = overlay.group.children.find(
+      (child) => child instanceof CSS2DObject
+    ) as CSS2DObject;
+    document.body.append(label.element);
+    expect(label.element.getAttribute('aria-label')).toBe(
+      'Reference radius, (R 5 mm)'
+    );
+    expect(label.element.dataset.constraintId).toBeUndefined();
+    label.element.click();
+    fireEvent.keyDown(label.element, { key: 'Enter' });
+    fireEvent.keyDown(label.element, { key: ' ' });
+    expect(edit).not.toHaveBeenCalled();
+    fireEvent.keyDown(label.element, { key: 'ArrowRight' });
+    expect(move).toHaveBeenLastCalledWith(
+      { kind: 'reference', annotationId: 'sref_radius' },
+      { x: 1, y: 0 }
+    );
+    fireEvent.pointerDown(label.element, {
+      pointerId: 1,
+      button: 0,
+      clientX: 20,
+      clientY: 30
+    });
+    fireEvent.pointerMove(document, { pointerId: 1, clientX: 60, clientY: 90 });
+    fireEvent.pointerUp(document, { pointerId: 1 });
+    expect(move).toHaveBeenLastCalledWith(
+      { kind: 'reference', annotationId: 'sref_radius' },
+      { x: 4, y: 6 }
+    );
+    expect(edit).not.toHaveBeenCalled();
+    overlay.dispose();
+  });
   it('maps an offset YZ sketch into world space, edits its identity, and disposes labels', () => {
     const edit = vi.fn();
     const overlay = buildSketchDimensions(
@@ -104,66 +162,72 @@ describe('sketch dimension overlay', () => {
     overlay.dispose();
   });
 
-  it('moves a persisted label clear of an occupied viewport rail', () => {
-    const root = document.createElement('div');
-    const container = document.createElement('div');
-    const rail = document.createElement('div');
-    const label = document.createElement('button');
-    rail.className = 'viewer-rail-stack';
-    label.className = 'sketch-dimension-label';
-    root.append(container, rail);
-    container.append(label);
-    document.body.appendChild(root);
-    Object.defineProperty(container, 'getBoundingClientRect', {
-      configurable: true,
-      value: () => ({
-        left: 0,
-        right: 500,
-        top: 0,
-        bottom: 400,
-        width: 500,
-        height: 400
-      })
-    });
-    Object.defineProperty(rail, 'getBoundingClientRect', {
-      configurable: true,
-      value: () => ({
-        left: 400,
-        right: 500,
-        top: 100,
-        bottom: 200,
-        width: 100,
-        height: 100
-      })
-    });
-    Object.defineProperty(label, 'getBoundingClientRect', {
-      configurable: true,
-      value: () => {
-        const marginLeft = parseFloat(label.style.marginLeft) || 0;
-        const marginTop = parseFloat(label.style.marginTop) || 0;
-        return {
-          left: 390 + marginLeft,
-          right: 490 + marginLeft,
-          top: 120 + marginTop,
-          bottom: 145 + marginTop,
+  it.each(['viewer-rail-stack', 'workspace-column-float', 'sketch-flyouts'])(
+    'moves a persisted label clear of an occupied %s beside the viewport',
+    (className) => {
+      const root = document.createElement('div');
+      root.className = 'viewer-area';
+      const host = document.createElement('div');
+      const container = document.createElement('div');
+      const rail = document.createElement('div');
+      const label = document.createElement('button');
+      rail.className = className;
+      label.className = 'sketch-dimension-label';
+      root.append(host, rail);
+      host.append(container);
+      container.append(label);
+      document.body.appendChild(root);
+      Object.defineProperty(container, 'getBoundingClientRect', {
+        configurable: true,
+        value: () => ({
+          left: 0,
+          right: 500,
+          top: 0,
+          bottom: 400,
+          width: 500,
+          height: 400
+        })
+      });
+      Object.defineProperty(rail, 'getBoundingClientRect', {
+        configurable: true,
+        value: () => ({
+          left: 400,
+          right: 500,
+          top: 100,
+          bottom: 200,
           width: 100,
-          height: 25
-        };
-      }
-    });
+          height: 100
+        })
+      });
+      Object.defineProperty(label, 'getBoundingClientRect', {
+        configurable: true,
+        value: () => {
+          const marginLeft = parseFloat(label.style.marginLeft) || 0;
+          const marginTop = parseFloat(label.style.marginTop) || 0;
+          return {
+            left: 390 + marginLeft,
+            right: 490 + marginLeft,
+            top: 120 + marginTop,
+            bottom: 145 + marginTop,
+            width: 100,
+            height: 25
+          };
+        }
+      });
 
-    avoidSketchDimensionOverlays(container, root);
+      avoidSketchDimensionOverlays(container, root);
 
-    const placed = label.getBoundingClientRect();
-    expect(
-      placed.right <= 400 ||
-        placed.left >= 500 ||
-        placed.bottom <= 100 ||
-        placed.top >= 200
-    ).toBe(true);
-    expect(label.style.marginLeft !== '' || label.style.marginTop !== '').toBe(
-      true
-    );
-    root.remove();
-  });
+      const placed = label.getBoundingClientRect();
+      expect(
+        placed.right <= 400 ||
+          placed.left >= 500 ||
+          placed.bottom <= 100 ||
+          placed.top >= 200
+      ).toBe(true);
+      expect(
+        label.style.marginLeft !== '' || label.style.marginTop !== ''
+      ).toBe(true);
+      root.remove();
+    }
+  );
 });
