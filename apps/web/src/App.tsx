@@ -205,6 +205,11 @@ import {
   type DrivingDimensionKind
 } from './lib/sketch/constraints';
 import { sketchDimensionAnnotations } from './lib/sketch/dimensionAnnotations';
+import {
+  sketchGeometryDeleteRefusal,
+  sketchSolveEvidenceKey
+} from './lib/sketch/solveEvidence';
+import type { SketchDimensionIdentity } from '@openzcad/shared';
 import { constraintInspectionTargets } from './lib/sketch/constraintInspection';
 import {
   solveStatusLabel,
@@ -852,6 +857,11 @@ const LazySketchToolRail = lazyWithStaleChunkNotice(() =>
     default: module.SketchToolRail
   }))
 );
+const LazySketchReferenceDimensions = lazyWithStaleChunkNotice(() =>
+  import('./components/SketchReferenceDimensions').then((module) => ({
+    default: module.SketchReferenceDimensions
+  }))
+);
 const LazySketchRelationsRail = lazyWithStaleChunkNotice(() =>
   import('./components/SketchToolRail').then((module) => ({
     default: module.SketchRelationsRail
@@ -1025,6 +1035,16 @@ function SketchToolRail(props: ComponentProps<typeof LazySketchToolRail>) {
   return (
     <Suspense fallback={null}>
       <LazySketchToolRail {...props} />
+    </Suspense>
+  );
+}
+
+function SketchReferenceDimensions(
+  props: ComponentProps<typeof LazySketchReferenceDimensions>
+) {
+  return (
+    <Suspense fallback={null}>
+      <LazySketchReferenceDimensions {...props} />
     </Suspense>
   );
 }
@@ -12699,7 +12719,8 @@ export function App() {
         (value) =>
           evalParamValue(value, parameterScope.scope, doc.units) ?? undefined,
         doc.units,
-        sketch?.dimensionLabelPositions
+        sketch?.dimensionLabelPositions,
+        sketch?.referenceDimensions
       ),
       diagnosticPoints: sketchDiagnosticPoints
     };
@@ -13007,6 +13028,16 @@ export function App() {
     ) {
       return;
     }
+    const refusal = sketchGeometryDeleteRefusal(
+      managerRef.current?.document,
+      interaction.session.sketchId,
+      interaction.session.selectedObjectId
+    );
+    if (refusal) {
+      setSketchEditError(refusal);
+      setStatus(refusal);
+      return;
+    }
     setSketchDiagnosticPoints([]);
     if (
       executeCommand(
@@ -13027,8 +13058,14 @@ export function App() {
   // ---------------------------------------------------------------------
   // Sketch constraints: pick routing, driving-value entry, CRUD, and solve.
   // ---------------------------------------------------------------------
+  const activeSolveSketchId =
+    interaction.mode === 'sketch' ? interaction.session.sketchId : null;
+  const currentSketchSolveKey = useMemo(
+    () => sketchSolveEvidenceKey(doc, activeSolveSketchId),
+    [doc, activeSolveSketchId]
+  );
   const [sketchSolveSnapshot, setSketchSolveSnapshot] = useState<{
-    version: number;
+    key: string | null;
     sketchId: string | null;
     status: SketchSolveStatus;
   } | null>(null);
@@ -13038,7 +13075,12 @@ export function App() {
     setSketchSolveSnapshot(
       status
         ? {
-            version: managerRef.current?.document.version ?? 0,
+            key: sketchSolveEvidenceKey(
+              managerRef.current?.document,
+              interactionRef.current.mode === 'sketch'
+                ? interactionRef.current.session.sketchId
+                : null
+            ),
             sketchId:
               interactionRef.current.mode === 'sketch'
                 ? interactionRef.current.session.sketchId
@@ -13049,7 +13091,7 @@ export function App() {
     );
   }
   const sketchSolveStatus =
-    sketchSolveSnapshot?.version === doc?.version &&
+    sketchSolveSnapshot?.key === currentSketchSolveKey &&
     interaction.mode === 'sketch' &&
     sketchSolveSnapshot?.sketchId === interaction.session.sketchId
       ? sketchSolveSnapshot.status
@@ -13163,6 +13205,8 @@ export function App() {
     setSketchDiagnosticPoints([]);
     setSketchSolveDiagnosticObjectIds([]);
     setSketchDefinedObjectIds([]);
+  }, [currentSketchSolveKey, editingSketchNode?.sketchId]);
+  useEffect(() => {
     setSketchEditError(null);
   }, [doc?.version, editingSketchNode?.sketchId]);
 
@@ -13545,7 +13589,7 @@ export function App() {
   }
 
   function handleMoveSketchDimension(
-    constraintId: string,
+    identity: SketchDimensionIdentity,
     offset: { x: number; y: number }
   ) {
     const base = managerRef.current?.document;
@@ -13555,6 +13599,17 @@ export function App() {
     }
     const sketchId = session.session.sketchId as SketchId;
     const sketch = findSketch(base, sketchId);
+    if (identity.kind === 'reference') {
+      executeCommand(
+        commandFactories.setSketchReferenceLabelPosition({
+          sketchId,
+          annotationId: identity.annotationId,
+          position: offset
+        })
+      );
+      return;
+    }
+    const constraintId = String(identity.constraintId);
     if (
       !sketch?.constraints?.some(
         (constraint) => String(constraint.constraintId) === constraintId
@@ -19130,6 +19185,18 @@ export function App() {
   const sketchRail =
     interaction.mode === 'sketch' ? (
       <SketchToolRail
+        referenceDimensions={
+          editingSketchNode ? (
+            <SketchReferenceDimensions
+              sketch={editingSketchNode}
+              objects={sketchOverview.objects}
+              units={doc.units}
+              resolve={resolveDocumentValue}
+              disabled={sketchSolving || geometryBusy}
+              onCommand={executeCommand}
+            />
+          ) : null
+        }
         entityEditor={sketchEntityEditor}
         sketchName={editingSketchName}
         workflow={

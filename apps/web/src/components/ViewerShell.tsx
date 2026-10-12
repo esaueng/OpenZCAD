@@ -1,4 +1,5 @@
 import type { ParameterPreviewBody } from '../lib/parameterVisualPreview';
+import type { SketchDimensionIdentity } from '@openzcad/shared';
 import type { HoleGhost } from '../lib/holeGhost';
 import type { PrimitiveGhost } from '../lib/primitiveGhost';
 import type { AutoFrameRequest } from '../lib/autoFrame';
@@ -245,7 +246,10 @@ interface ViewerShellProps {
   sketchTextAnchorRef?: MutableRefObject<{ x: number; y: number } | null>;
   onSketchCommit(object: SketchObjectData): void;
   onEditSketchDimension(id: string, anchor: { x: number; y: number }): void;
-  onMoveSketchDimension(id: string, offset: { x: number; y: number }): void;
+  onMoveSketchDimension(
+    identity: SketchDimensionIdentity,
+    offset: { x: number; y: number }
+  ): void;
   onSketchDrawingChange(drawing: boolean): void;
   sketchMoveEnabled?: ModelViewerProps['sketchMoveEnabled'];
   onSketchMoveChange?: ModelViewerProps['onSketchMoveChange'];

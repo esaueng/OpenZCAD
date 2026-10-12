@@ -39,6 +39,7 @@ export {
 } from './growing-holder';
 import {
   createId,
+  createSketchReferenceAnnotationId,
   assertDocumentHistory,
   assertDocumentTextBudget,
   isVariableFilletLaw,
@@ -60,6 +61,12 @@ import {
   type UnitSystem
 } from '@openzcad/shared';
 import {
+  addSketchReferenceDimension,
+  deleteSketchReferenceDimension,
+  setSketchReferenceLabelPosition,
+  type SketchReferenceDimensionAddInput,
+  type SketchReferenceDimensionDeleteInput,
+  type SketchReferenceLabelPositionInput,
   archiveHistorySources,
   applyDocumentChanges,
   recordDocumentEdit,
@@ -195,6 +202,9 @@ export type CommandKind =
   | 'sketch.constraint.add'
   | 'sketch.constraint.delete'
   | 'sketch.constraint.label-position'
+  | 'reference-dimension.add'
+  | 'reference-dimension.delete'
+  | 'reference-dimension.label-position'
   | 'feature.extrude'
   | 'feature.revolve'
   | 'feature.loft'
@@ -251,6 +261,9 @@ export type AnyCommand =
   | CommandDefinition<SketchConstraintAddInput>
   | CommandDefinition<SketchConstraintDeleteInput>
   | CommandDefinition<SketchDimensionLabelPositionInput>
+  | CommandDefinition<SketchReferenceDimensionAddInput>
+  | CommandDefinition<SketchReferenceDimensionDeleteInput>
+  | CommandDefinition<SketchReferenceLabelPositionInput>
   | CommandDefinition<ExtrudeInput>
   | CommandDefinition<RevolveInput>
   | CommandDefinition<LoftInput>
@@ -1190,6 +1203,43 @@ export const commandFactories = {
           );
         }
       }
+    );
+  },
+  addSketchReferenceDimension(
+    payload: SketchReferenceDimensionAddInput,
+    label = 'Add reference dimension'
+  ): CommandDefinition<SketchReferenceDimensionAddInput> {
+    const withIds = {
+      ...payload,
+      ids: payload.ids ?? { annotationId: createSketchReferenceAnnotationId() }
+    };
+    return makeCommand(
+      'reference-dimension.add',
+      label,
+      withIds,
+      (document) => addSketchReferenceDimension(document, withIds).document
+    );
+  },
+  deleteSketchReferenceDimension(
+    payload: SketchReferenceDimensionDeleteInput,
+    label = 'Delete reference dimension'
+  ): CommandDefinition<SketchReferenceDimensionDeleteInput> {
+    return makeCommand(
+      'reference-dimension.delete',
+      label,
+      payload,
+      (document) => deleteSketchReferenceDimension(document, payload)
+    );
+  },
+  setSketchReferenceLabelPosition(
+    payload: SketchReferenceLabelPositionInput,
+    label = 'Move reference dimension label'
+  ): CommandDefinition<SketchReferenceLabelPositionInput> {
+    return makeCommand(
+      'reference-dimension.label-position',
+      label,
+      payload,
+      (document) => setSketchReferenceLabelPosition(document, payload)
     );
   },
   updateSketch(
@@ -3185,6 +3235,24 @@ export function replayCommands(
         break;
       case 'feature.extrude':
         next = extrudeSketch(next, command.payload as ExtrudeInput).document;
+        break;
+      case 'reference-dimension.add':
+        next = addSketchReferenceDimension(
+          next,
+          command.payload as SketchReferenceDimensionAddInput
+        ).document;
+        break;
+      case 'reference-dimension.delete':
+        next = deleteSketchReferenceDimension(
+          next,
+          command.payload as SketchReferenceDimensionDeleteInput
+        );
+        break;
+      case 'reference-dimension.label-position':
+        next = setSketchReferenceLabelPosition(
+          next,
+          command.payload as SketchReferenceLabelPositionInput
+        );
         break;
       case 'feature.revolve':
         next = revolveSketch(next, command.payload as RevolveInput).document;
