@@ -2715,7 +2715,8 @@ test('refuses an unparseable STEP file without leaving a feature behind', async 
   // before any geometry ran, so a file Remus cannot parse produced a success
   // toast next to a history row flagged "Feature failed to build", no body,
   // and a blank viewport that Fit View could not rescue. Nothing enters
-  // history now, and the status bar carries the kernel's own verdict.
+  // history now. The import offers a fresh STEP export while keeping the
+  // kernel's exact diagnostic in the Activity log.
   test.setTimeout(90_000);
   await stubApi(page);
   await page.goto('/');
@@ -2739,11 +2740,17 @@ test('refuses an unparseable STEP file without leaving a feature behind', async 
       )
     );
 
-  // Verbatim, entity number included — that is the part that says which line
-  // of the file to look at.
-  await expect(page.getByRole('contentinfo')).toContainText(
-    'parse error: entity #999999 not found'
+  const guidance =
+    'This STEP file could not be read. Export a fresh STEP file from the source CAD project and try again.';
+  await expect(page.getByRole('contentinfo')).toContainText(guidance);
+  await expect(page.getByRole('region', { name: 'File import' })).toContainText(
+    guidance
   );
+  await page.getByRole('button', { name: /^Open activity log/ }).click();
+  await expect(
+    page.getByRole('region', { name: 'Activity log' })
+  ).toContainText('parse error: entity #999999 not found');
+  await page.keyboard.press('Escape');
   await expect(page.getByRole('contentinfo')).not.toContainText(
     'Imported editable STEP solid'
   );
