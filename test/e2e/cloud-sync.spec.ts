@@ -848,10 +848,23 @@ test('syncs View measurements to a second device without changing the CAD docume
       reason: 'body-missing'
     };
 
+    // Device A also publishes its view session. Wait for that real handoff
+    // before opening B, then explicitly keep B's default view: the resume
+    // dialog otherwise races the Measure click and blocks the entire test.
+    await expect
+      .poll(() => api.sessions.length, { timeout: SYNC_BUDGET_MS })
+      .toBeGreaterThan(0);
     await pageB.goto('/');
     await pageB
       .locator('.start-tile-open', { hasText: 'Measured Across Devices' })
       .click();
+    const resume = pageB.getByRole('dialog', {
+      name: 'Resume where you left off?'
+    });
+    await resume
+      .getByRole('button', { name: 'Open with default view' })
+      .click();
+    await expect(resume).toHaveCount(0);
     await switchWorkspace(pageB, 'View');
     await armMeasure(pageB);
     await expect(

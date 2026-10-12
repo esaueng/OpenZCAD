@@ -1,4 +1,14 @@
 import type { ProjectDocument } from '@openzcad/shared';
+import { localAutosaveFailedStatus } from './localAutosaveFailure';
+
+/** A failed durability barrier keeps its recovery guidance through any
+ * operation's catch block; the original storage diagnostic remains available. */
+export class LocalProjectSaveError extends Error {
+  constructor(cause: unknown) {
+    super(localAutosaveFailedStatus(cause), { cause });
+    this.name = 'LocalProjectSaveError';
+  }
+}
 
 /** Derived rebuilds retain the canonical fields' references. Include history,
  * checkpoints, ownership and version here, even when geometry is unchanged. */
@@ -74,7 +84,7 @@ export class LocalProjectAutosave {
           this.options.onError(error);
           // An awaited flush is a durability barrier for in-app departure and
           // identity transfer too. It must not release ownership after failure.
-          throw error;
+          throw new LocalProjectSaveError(error);
         }
       }
     } finally {

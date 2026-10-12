@@ -3,8 +3,14 @@ import { createProjectDocument } from '@openzcad/document-core';
 import { toUserId, type ProjectDocument } from '@openzcad/shared';
 import {
   LocalProjectAutosave,
+  LocalProjectSaveError,
   sameLocalProjectContent
 } from './localProjectAutosave';
+import { errorMessage } from './errors';
+import {
+  LOCAL_AUTOSAVE_FAILED_STATUS,
+  LOCAL_AUTOSAVE_QUOTA_STATUS
+} from './localAutosaveFailure';
 
 const baseDocument = createProjectDocument(
   'QA save',
@@ -144,7 +150,10 @@ describe('local save departure safety', () => {
     const { queue, onSaved, onError } = harness(write);
     const document = documentAt(1);
     queue.enqueue(document);
-    await expect(queue.flush()).rejects.toBe(error);
+    await expect(queue.flush()).rejects.toMatchObject({
+      message: LOCAL_AUTOSAVE_QUOTA_STATUS,
+      cause: error
+    });
     expect(queue.dirty).toBe(true);
     expect(onSaved).not.toHaveBeenCalled();
     expect(onError).toHaveBeenCalledWith(error);
@@ -165,8 +174,12 @@ describe('local save departure safety', () => {
     await Promise.resolve();
     const newer = documentAt(2);
     queue.enqueue(newer);
-    first.reject(new Error('Device unavailable'));
-    await expect(flush).rejects.toThrow('Device unavailable');
+    const error = new Error('Device unavailable');
+    first.reject(error);
+    await expect(flush).rejects.toMatchObject({
+      message: LOCAL_AUTOSAVE_FAILED_STATUS,
+      cause: error
+    });
     expect(queue.dirty).toBe(true);
     await queue.flush();
     expect(write.mock.calls.map(([document]) => document.version)).toEqual([
@@ -184,7 +197,7 @@ describe('local save departure safety', () => {
       .mockResolvedValueOnce(true);
     const { queue, onError } = harness(write);
     queue.enqueue(documentAt(1));
-    await expect(queue.flush()).rejects.toThrow('Denied');
+    await expect(queue.flush()).rejects.toThrow(LOCAL_AUTOSAVE_FAILED_STATUS);
     expect(onError).toHaveBeenCalledTimes(1);
     expect(queue.dirty).toBe(true);
     await queue.flush();
@@ -206,6 +219,38 @@ describe('local save departure safety', () => {
     expect(openDifferentProject).not.toHaveBeenCalled();
     expect(queue.dirty).toBe(true);
   });
+
+  it.each([
+    [
+      new DOMException('Full', 'QuotaExceededError'),
+      LOCAL_AUTOSAVE_QUOTA_STATUS
+    ],
+    [new Error('Device unavailable'), LOCAL_AUTOSAVE_FAILED_STATUS]
+  ])(
+    'keeps device recovery guidance when an operation catches a rejected barrier',
+    async (cause, guidance) => {
+      const { queue, onError } = harness(
+        vi.fn(async () => {
+          throw cause;
+        })
+      );
+      queue.enqueue(documentAt(1));
+      const operate = vi.fn();
+      const setStatus = vi.fn();
+      try {
+        await queue.flush();
+        operate();
+      } catch (error) {
+        expect(error).toBeInstanceOf(LocalProjectSaveError);
+        expect((error as Error).cause).toBe(cause);
+        setStatus(errorMessage(error, 'Could not restore that save state.'));
+      }
+      expect(setStatus).toHaveBeenCalledWith(guidance);
+      expect(onError).toHaveBeenCalledWith(cause);
+      expect(operate).not.toHaveBeenCalled();
+      expect(queue.dirty).toBe(true);
+    }
+  );
 
   it('does not announce a saved document when ownership refuses the write', async () => {
     const { queue, onSaved } = harness(vi.fn(async () => false));
