@@ -25,7 +25,8 @@ import type {
   FeatureNode,
   ProjectDocument,
   QuantizedTopologyPoint,
-  SketchObjectData
+  SketchObjectData,
+  UnitSystem
 } from '@openzcad/shared';
 import {
   createRemusSemanticLineage,
@@ -1067,7 +1068,8 @@ export function buildExtrudeLineage(
   data: SketchObjectData,
   basis: PlaneBasis,
   distance: number,
-  scope: Record<string, number>
+  scope: Record<string, number>,
+  documentUnits: UnitSystem
 ): RemusLineageState {
   const candidates = topologyCandidatesForSolid(kernel, solid);
   const assignments: RemusSemanticAssignment[] = [];
@@ -1097,12 +1099,17 @@ export function buildExtrudeLineage(
     const center = pointOnPlane(
       basis,
       {
-        x: resolveParamValue(data.centerX, scope, 'center X'),
-        y: resolveParamValue(data.centerY, scope, 'center Y')
+        x: resolveParamValue(data.centerX, scope, 'center X', documentUnits),
+        y: resolveParamValue(data.centerY, scope, 'center Y', documentUnits)
       },
       0
     );
-    const radius = resolveParamValue(data.radius, scope, 'radius');
+    const radius = resolveParamValue(
+      data.radius,
+      scope,
+      'radius',
+      documentUnits
+    );
     addFaceCarrierRole(
       candidates,
       cylinderCarrier(center, basis.normal, radius),
@@ -1130,7 +1137,7 @@ export function buildExtrudeLineage(
       diagnostics
     );
   } else {
-    const localPoints = profilePoints(data, scope);
+    const localPoints = profilePoints(data, scope, documentUnits);
     const startPoints = localPoints.map((point) =>
       pointOnPlane(basis, point, 0)
     );
@@ -1193,7 +1200,8 @@ export function buildRevolveLineage(
   basis: PlaneBasis,
   axisDirection: Vec3,
   axisPoint: Vec3,
-  scope: Record<string, number>
+  scope: Record<string, number>,
+  documentUnits: UnitSystem
 ): RemusLineageState {
   const candidates = topologyCandidatesForSolid(kernel, solid);
   const assignments: RemusSemanticAssignment[] = [];
@@ -1210,7 +1218,7 @@ export function buildRevolveLineage(
       'sweep'
     );
   } else {
-    const points = profilePoints(data, scope).map((point) =>
+    const points = profilePoints(data, scope, documentUnits).map((point) =>
       pointOnPlane(basis, point, 0)
     );
     const axis = normalized(axisDirection)!;

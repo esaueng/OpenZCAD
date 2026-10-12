@@ -700,3 +700,211 @@ describe('editor feedback', () => {
     );
   });
 });
+
+describe('sketch field unit context', () => {
+  const rectangle: SketchObjectData = {
+    objectKind: 'rectangle',
+    width: 10,
+    height: 4,
+    centerX: 0,
+    centerY: 0
+  };
+
+  it.each([
+    { units: 'mm', expression: '5 mm + 2 cm', preview: '= 25' },
+    { units: 'cm', expression: '5 mm + 2 cm', preview: '= 2.5' },
+    { units: 'inch', expression: '1 in + 25.4 mm', preview: '= 2' }
+  ] as const)(
+    'previews lengths in $units and applies the authored expression',
+    async ({ units, expression, preview }) => {
+      const user = userEvent.setup();
+      const onApply = vi.fn();
+      render(
+        <SketchEntityEditor
+          data={rectangle}
+          scope={{}}
+          units={units}
+          onApply={onApply}
+          onDelete={vi.fn()}
+          onClose={vi.fn()}
+        />
+      );
+      const width = screen.getByLabelText('Width');
+      await user.clear(width);
+      await user.type(width, expression);
+      expect(width).toHaveAccessibleDescription(preview);
+      expect(width).not.toHaveAttribute('aria-invalid');
+      expect(screen.getByRole('button', { name: /apply/i })).toBeEnabled();
+      expect(onApply).not.toHaveBeenCalled();
+      await user.click(screen.getByRole('button', { name: /apply/i }));
+      expect(onApply).toHaveBeenCalledExactlyOnceWith({
+        ...rectangle,
+        width: expression
+      });
+    }
+  );
+
+  it.each(['0 mm', '-1 cm'])(
+    'refuses the resolved non-positive width %s before Apply',
+    async (expression) => {
+      const user = userEvent.setup();
+      const onApply = vi.fn();
+      render(
+        <SketchEntityEditor
+          data={rectangle}
+          scope={{}}
+          units="cm"
+          onApply={onApply}
+          onDelete={vi.fn()}
+          onClose={vi.fn()}
+        />
+      );
+      const width = screen.getByLabelText('Width');
+      await user.clear(width);
+      await user.type(width, expression);
+      expect(screen.getByRole('alert')).toHaveTextContent(
+        'Lengths and radii must be greater than zero.'
+      );
+      expect(screen.getByRole('button', { name: /apply/i })).toBeDisabled();
+      await user.keyboard('{Enter}');
+      expect(onApply).not.toHaveBeenCalled();
+    }
+  );
+
+  it('checks the line minimum in document units after converting endpoints', async () => {
+    const user = userEvent.setup();
+    const onApply = vi.fn();
+    render(
+      <SketchEntityEditor
+        data={{ objectKind: 'line', x1: 0, y1: 0, x2: 1, y2: 0 }}
+        scope={{}}
+        units="cm"
+        onApply={onApply}
+        onDelete={vi.fn()}
+        onClose={vi.fn()}
+      />
+    );
+    const end = screen.getByLabelText('End X');
+    await user.clear(end);
+    await user.type(end, '4 mm');
+    expect(end).toHaveAccessibleDescription('= 0.4');
+    expect(screen.getByRole('alert')).toHaveTextContent(
+      'Line endpoints must be at least 0.5 units apart.'
+    );
+    expect(screen.getByRole('button', { name: /apply/i })).toBeDisabled();
+    await user.clear(end);
+    await user.type(end, '5 mm');
+    expect(screen.queryByRole('alert')).not.toBeInTheDocument();
+    await user.keyboard('{Enter}');
+    expect(onApply).toHaveBeenCalledExactlyOnceWith({
+      objectKind: 'line',
+      x1: 0,
+      y1: 0,
+      x2: '5 mm',
+      y2: 0
+    });
+  });
+
+  it.each(['30 deg', '2 mm * 3 mm'])(
+    'refuses another dimension in a length field: %s',
+    async (expression) => {
+      const user = userEvent.setup();
+      const onApply = vi.fn();
+      render(
+        <SketchEntityEditor
+          data={rectangle}
+          scope={{}}
+          units="cm"
+          onApply={onApply}
+          onDelete={vi.fn()}
+          onClose={vi.fn()}
+        />
+      );
+      const width = screen.getByLabelText('Width');
+      await user.clear(width);
+      await user.type(width, expression);
+      expect(width).toHaveAttribute('aria-invalid', 'true');
+      expect(width).toHaveAccessibleDescription(/expected a length/);
+      expect(screen.getByRole('button', { name: /apply/i })).toBeDisabled();
+      await user.keyboard('{Enter}');
+      expect(onApply).not.toHaveBeenCalled();
+    }
+  );
+
+  it('converts angle units for arc limits and refuses a length as an angle', async () => {
+    const user = userEvent.setup();
+    const onApply = vi.fn();
+    render(
+      <SketchEntityEditor
+        data={{
+          objectKind: 'arc',
+          radius: 10,
+          centerX: 0,
+          centerY: 0,
+          startAngleDeg: 0,
+          endAngleDeg: 90
+        }}
+        scope={{}}
+        units="inch"
+        onApply={onApply}
+        onDelete={vi.fn()}
+        onClose={vi.fn()}
+      />
+    );
+    const end = screen.getByLabelText('End angle');
+    await user.clear(end);
+    await user.type(end, '4 * 3.141592653589793 rad');
+    expect(end).toHaveAccessibleDescription('= 720');
+    expect(screen.getByRole('alert')).toHaveTextContent('360 degrees');
+    expect(screen.getByRole('button', { name: /apply/i })).toBeDisabled();
+    await user.clear(end);
+    await user.type(end, '1 mm');
+    expect(end).toHaveAccessibleDescription(/expected an angle/);
+    expect(screen.getByRole('button', { name: /apply/i })).toBeDisabled();
+    await user.clear(end);
+    await user.type(end, '3.141592653589793 rad');
+    expect(end).toHaveAccessibleDescription('= 180');
+    await user.click(screen.getByRole('button', { name: /apply/i }));
+    expect(onApply).toHaveBeenCalledExactlyOnceWith(
+      expect.objectContaining({ endAngleDeg: '3.141592653589793 rad' })
+    );
+  });
+
+  it('keeps polygon sides dimensionless while its radius accepts length units', async () => {
+    const user = userEvent.setup();
+    const onApply = vi.fn();
+    render(
+      <SketchEntityEditor
+        data={{
+          objectKind: 'polygon',
+          sides: 6,
+          radius: 2,
+          centerX: 0,
+          centerY: 0
+        }}
+        scope={{}}
+        units="cm"
+        onApply={onApply}
+        onDelete={vi.fn()}
+        onClose={vi.fn()}
+      />
+    );
+    const radius = screen.getByLabelText('Radius');
+    await user.clear(radius);
+    await user.type(radius, '1 in');
+    expect(radius).toHaveAccessibleDescription('= 2.54');
+    const sides = screen.getByLabelText('Sides');
+    await user.clear(sides);
+    await user.type(sides, '6 mm');
+    expect(sides).toHaveAccessibleDescription(/a number without units/);
+    expect(screen.getByRole('button', { name: /apply/i })).toBeDisabled();
+    await user.keyboard('{Enter}');
+    expect(onApply).not.toHaveBeenCalled();
+    await user.clear(sides);
+    await user.type(sides, '3 + 3');
+    await user.click(screen.getByRole('button', { name: /apply/i }));
+    expect(onApply).toHaveBeenCalledExactlyOnceWith(
+      expect.objectContaining({ sides: '3 + 3', radius: '1 in' })
+    );
+  });
+});

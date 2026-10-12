@@ -1744,6 +1744,7 @@ export function Inspector(props: InspectorProps) {
         <ExtrudeForm
           key={editKey}
           scope={scope}
+          units={units}
           sketches={sketches}
           initial={{
             name: selectedFeature.name,
