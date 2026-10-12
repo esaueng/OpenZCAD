@@ -7,6 +7,7 @@ import {
 } from '@openzcad/document-core';
 import {
   toUserId,
+  toSketchReferenceAnnotationId,
   type SketchConstraintData,
   type SketchObjectData
 } from '@openzcad/shared';
@@ -49,6 +50,70 @@ const line: SketchObjectData = {
 };
 
 describe('persistent sketch dimensions', () => {
+  it('tags reference identities, measures current geometry and places an arc radius on the arc', () => {
+    const arcId = 'ent_arc' as never;
+    const lineId = 'ent_line' as never;
+    const objects = [
+      {
+        id: lineId,
+        data: { objectKind: 'line' as const, x1: 0, y1: 0, x2: 3, y2: 4 }
+      },
+      {
+        id: arcId,
+        data: {
+          objectKind: 'arc' as const,
+          centerX: 0,
+          centerY: 0,
+          radius: 'r',
+          startAngleDeg: 180,
+          endAngleDeg: 270
+        }
+      }
+    ];
+    const refs = [
+      {
+        annotationId: toSketchReferenceAnnotationId('sref_distance'),
+        data: {
+          dimensionKind: 'distance' as const,
+          a: { objectId: lineId, point: 'start' as const },
+          b: { objectId: lineId, point: 'end' as const }
+        }
+      },
+      {
+        annotationId: toSketchReferenceAnnotationId('sref_radius'),
+        data: { dimensionKind: 'radius' as const, objectId: arcId }
+      }
+    ];
+    const before = JSON.stringify(objects);
+    const annotations = sketchDimensionAnnotations(
+      objects,
+      [],
+      (value) =>
+        value === 'r' ? 2 : typeof value === 'number' ? value : undefined,
+      'mm',
+      { sref_distance: { x: 1, y: 2 } },
+      refs
+    );
+    expect(annotations).toHaveLength(2);
+    expect(annotations[0]).toMatchObject({
+      identity: { kind: 'reference', annotationId: 'sref_distance' },
+      label: '(5 mm)',
+      labelOffset: { x: 1, y: 2 }
+    });
+    expect(annotations[1]!.span!.end.x).toBeCloseTo(-Math.sqrt(2), 12);
+    expect(annotations[1]!.span!.end.y).toBeCloseTo(-Math.sqrt(2), 12);
+    const updated = sketchDimensionAnnotations(
+      objects,
+      [],
+      (value) =>
+        value === 'r' ? 4 : typeof value === 'number' ? value : undefined,
+      'mm',
+      undefined,
+      refs
+    );
+    expect(updated[1]).toMatchObject({ id: 'sref_radius', label: '(R 4 mm)' });
+    expect(JSON.stringify(objects)).toBe(before);
+  });
   it('keeps a stored label offset as geometry and parameters change', () => {
     const { entries, constraints } = fixture([line], (sketch) => ({
       constraintKind: 'distance',

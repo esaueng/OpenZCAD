@@ -24,6 +24,7 @@ import {
   buildSketchDimensions
 } from './viewer/sketchDimensions';
 import type { SketchDimensionAnnotation } from '../lib/sketch/dimensionAnnotations';
+import type { SketchDimensionIdentity } from '@openzcad/shared';
 import {
   disposeRetiringOverlays,
   disposeSettledOverlays,
@@ -890,7 +891,10 @@ export interface ModelViewerProps {
   /** A drawing gesture completed an entity. */
   onSketchCommit(object: SketchObjectData): void;
   onEditSketchDimension(id: string, anchor: { x: number; y: number }): void;
-  onMoveSketchDimension(id: string, offset: { x: number; y: number }): void;
+  onMoveSketchDimension(
+    identity: SketchDimensionIdentity,
+    offset: { x: number; y: number }
+  ): void;
   /** Mirrors chain/drag liveness into the interaction machine. */
   onSketchDrawingChange(drawing: boolean): void;
   /**
@@ -1962,6 +1966,7 @@ export function ModelViewer({
     typeof buildSketchDimensions
   > | null>(null);
   const editSketchDimensionRef = useRef(onEditSketchDimension);
+  const focusedReferenceDimensionRef = useRef<string | null>(null);
   editSketchDimensionRef.current = onEditSketchDimension;
   const moveSketchDimensionRef = useRef(onMoveSketchDimension);
   moveSketchDimensionRef.current = onMoveSketchDimension;
@@ -8631,10 +8636,7 @@ export function ModelViewer({
         renderer.domElement.clientHeight
       );
       labelRenderer.render(scene, context.activeCamera);
-      avoidSketchDimensionOverlays(
-        labelRenderer.domElement,
-        viewerHost.parentElement
-      );
+      avoidSketchDimensionOverlays(labelRenderer.domElement);
       if (cylinderRadiusProxyFrame && import.meta.env.OZ_PERF === '1') {
         mark('cylinder-radius.proxy-frame', {
           latencyMs: Math.max(
@@ -10731,7 +10733,20 @@ export function ModelViewer({
     context.scene.add(overlay.group);
     sketchDimensionsRef.current = overlay;
     context.requestRender();
+    const focusedReference = focusedReferenceDimensionRef.current;
+    focusedReferenceDimensionRef.current = null;
+    const focusFrame = focusedReference
+      ? requestAnimationFrame(() => {
+          if (document.activeElement === document.body)
+            overlay.focusReference(focusedReference);
+        })
+      : null;
     return () => {
+      if (focusFrame !== null) cancelAnimationFrame(focusFrame);
+      focusedReferenceDimensionRef.current =
+        document.activeElement instanceof HTMLElement
+          ? (document.activeElement.dataset.annotationId ?? null)
+          : null;
       context.scene.remove(overlay.group);
       overlay.dispose();
       if (sketchDimensionsRef.current === overlay)
