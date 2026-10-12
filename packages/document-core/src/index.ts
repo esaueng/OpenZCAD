@@ -1,4 +1,9 @@
 import { rewriteNodeExpressions } from './parameter-expressions';
+import {
+  assertNoReferenceDimensionDependents,
+  assertSketchReferenceDimensions
+} from './sketch-reference-dimensions';
+export * from './sketch-reference-dimensions';
 export {
   constantRigidTransform,
   rigidImportedSource
@@ -707,6 +712,9 @@ export function createProjectDocument(
  */
 export function normalizeDocument(document: ProjectDocument): ProjectDocument {
   assertDocumentHistory(document);
+  for (const node of documentNodesWithHistory(document)) {
+    if (node.kind === 'sketch') assertSketchReferenceDimensions(node);
+  }
   if (document.schemaVersion > PROJECT_DOCUMENT_SCHEMA_VERSION) {
     throw new Error(
       `Unsupported project schema (v${document.schemaVersion}). Update OpenZCAD to open it.`
@@ -1443,6 +1451,12 @@ export function deleteSketchObject(
   document: ProjectDocument,
   input: SketchObjectDeleteInput
 ): ProjectDocument {
+  const original = requireSketchObject(
+    document,
+    input.sketchId,
+    input.objectId
+  );
+  assertNoReferenceDimensionDependents(original.sketch, input.objectId);
   const next = cloneDocument(document);
   const { sketch } = requireSketchObject(next, input.sketchId, input.objectId);
   sketch.objectIds = sketch.objectIds.filter((id) => id !== input.objectId);
