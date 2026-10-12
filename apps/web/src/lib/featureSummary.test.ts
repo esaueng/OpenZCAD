@@ -66,6 +66,77 @@ describe('featureValueSummary', () => {
     ).toBe('12 mm');
   });
 
+  it.each([
+    ['mm', '50.8', '12.7', 'mm'],
+    ['cm', '5.08', '1.27', 'cm'],
+    ['inch', '2', '0.5', 'in']
+  ] as const)(
+    'summarizes authored extrusion units in a %s document',
+    (units, distance, back, label) => {
+      const data = {
+        featureKind: 'extrude' as const,
+        distance: '1 in + 25.4 mm'
+      };
+      expect(featureValueSummary(feature(data), {}, units)).toBe(
+        `${distance} ${label}`
+      );
+      expect(
+        featureValueSummary(feature({ ...data, symmetric: true }), {}, units)
+      ).toBe(`${distance} ${label} symmetric`);
+      expect(
+        featureValueSummary(
+          feature({ ...data, backDistance: '12.7 mm' }),
+          {},
+          units
+        )
+      ).toBe(`${distance} + ${back} ${label}`);
+      expect(
+        featureValueSummary(
+          feature({ ...data, backDistance: '0 mm' }),
+          {},
+          units
+        )
+      ).toBe(`${distance} ${label}`);
+      expect(
+        featureValueSummary(
+          feature({ featureKind: 'extrude', distance: 12, backDistance: 3 }),
+          {},
+          units
+        )
+      ).toBe(`12 + 3 ${label}`);
+    }
+  );
+
+  it('keeps typed extrusion summaries fail-closed without dropping an invalid back distance', () => {
+    expect(
+      featureValueSummary(
+        feature({ featureKind: 'extrude', distance: '12 mm' }),
+        {},
+        'mm'
+      )
+    ).toBe('12 mm');
+    for (const invalid of ['missing + 1 mm', '30 deg', '(2 mm) * (3 mm)']) {
+      expect(
+        featureValueSummary(
+          feature({ featureKind: 'extrude', distance: invalid }),
+          {},
+          'mm'
+        )
+      ).toBeNull();
+      expect(
+        featureValueSummary(
+          feature({
+            featureKind: 'extrude',
+            distance: '12 mm',
+            backDistance: invalid
+          }),
+          {},
+          'mm'
+        )
+      ).toBeNull();
+    }
+  });
+
   it('treats an absent revolve angle as a full turn', () => {
     expect(
       featureValueSummary(feature({ featureKind: 'revolve' }), {}, 'mm')

@@ -11,12 +11,15 @@ import type { Locator, Page } from '@playwright/test';
 import { expect, stubApi, test } from './openzcad-fixtures';
 
 /**
- * F05/U01: the sketch editor and both extrusion distances must interpret a
- * length in the document's units at every owner, not just in the keypad.
+ * F05/U01: the viewport and History sketch editors, both extrusion distances,
+ * and the History summary must interpret a length in the document's units.
  * These are the same physical plate in three documents. The viewer hook reads
  * the real preview/replayed mesh; the sketch hook reads the authored expression.
  */
 const READ_TIMEOUT = { timeout: 30_000 };
+// The API fixture reopens its device copy as local-only. Both stable states
+// mean the device write finished; saving and device-failed must not pass.
+const SAVED_ON_DEVICE = /\bis-(?:local|synced)(?:\s|$)/;
 const WIDTH = '5.4 mm + 2 cm';
 const DISTANCE = '12.7 mm';
 const BACK = '2.54 mm';
@@ -189,9 +192,66 @@ for (const [units, mmPerUnit] of [
       .getByRole('button', { name: 'Finish Sketch', exact: true })
       .click();
 
-    await page
-      .locator('.feature-row-main', { hasText: 'Plate outline' })
-      .click();
+    // History owns a different sketch form. A unit expression authored in the
+    // viewport must remain valid there, even for an unrelated name edit.
+    const outline = page.locator('.feature-row-main', {
+      hasText: 'Plate outline'
+    });
+    const outlineName = outline.locator('.feature-name');
+    const inspector = page.getByRole('region', { name: 'Feature inspector' });
+    const historyWidth = inspector.getByRole('textbox', {
+      name: 'Width',
+      exact: true
+    });
+    const historyName = inspector.getByRole('textbox', {
+      name: 'Name',
+      exact: true
+    });
+    const renamed = 'Plate outline reviewed';
+    await outline.click();
+    await expect(historyWidth).toHaveValue(WIDTH);
+    await expect(historyWidth).not.toHaveAttribute('aria-invalid');
+    await expect(historyWidth).toHaveAccessibleDescription(
+      `= ${25.4 / mmPerUnit}`
+    );
+    await historyName.fill(renamed);
+    await expect(
+      inspector.getByRole('button', { name: 'Apply', exact: true })
+    ).toBeEnabled();
+    await testInfo.attach(`${units}-history-sketch-expression`, {
+      body: await page.screenshot({
+        path: testInfo.outputPath(`${units}-history-sketch.png`)
+      }),
+      contentType: 'image/png'
+    });
+    await historyName.press('Enter');
+    await expect(historyWidth).toHaveCount(0);
+    await expect(outlineName).toHaveText(renamed);
+
+    // The rename and unchanged expression are one History transaction. Undo
+    // returns to the original name, and Redo/reopen retain the authored width.
+    await page.getByRole('button', { name: 'Undo', exact: true }).click();
+    await expect(outlineName).toHaveText('Plate outline');
+    await outline.click();
+    await expect(historyWidth).toHaveValue(WIDTH);
+    await expect(historyWidth).not.toHaveAttribute('aria-invalid');
+    await historyWidth.press('Escape');
+    await page.getByRole('button', { name: 'Redo', exact: true }).click();
+    await expect(outlineName).toHaveText(renamed);
+    await expect(page.locator('.save-state')).toHaveClass(SAVED_ON_DEVICE);
+    await page.reload();
+    await outline.click();
+    await expect(historyName).toHaveValue(renamed);
+    await expect(historyWidth).toHaveValue(WIDTH);
+    await expect(historyWidth).toHaveAccessibleDescription(
+      `= ${25.4 / mmPerUnit}`
+    );
+    await expect(
+      inspector.getByRole('button', { name: 'Apply', exact: true })
+    ).toBeEnabled();
+    await historyWidth.press('Escape');
+
+    await outline.click();
     await page.keyboard.press('e');
     const extrude = page.getByRole('form', { name: 'Extrude settings' });
     const distance = extrude.getByRole('textbox', {
@@ -211,6 +271,10 @@ for (const [units, mmPerUnit] of [
     ).toBeEnabled();
     await expectPlate(canvas, mmPerUnit);
     const extrusion = page.locator('.feature-row-main', { hasText: 'Extrude' });
+    const extrusionSummary = page
+      .locator('.feature-row', { has: extrusion })
+      .locator('.history-row-value');
+    const expectedSummary = `${12.7 / mmPerUnit} + ${2.54 / mmPerUnit} ${units === 'inch' ? 'in' : units}`;
     await expect(extrusion).toHaveCount(0);
     await testInfo.attach(`${units}-unit-expression-preview`, {
       body: await page.screenshot({
@@ -220,6 +284,7 @@ for (const [units, mmPerUnit] of [
     });
     await distance.press('Enter');
     await expect(extrusion).toHaveCount(1);
+    await expect(extrusionSummary).toHaveText(expectedSummary);
     await expect(extrude).toHaveCount(0);
     await expectPlate(canvas, mmPerUnit);
 
@@ -246,11 +311,13 @@ for (const [units, mmPerUnit] of [
     );
     await page.getByRole('button', { name: 'Redo', exact: true }).click();
     await expect(extrusion).toHaveCount(1);
+    await expect(extrusionSummary).toHaveText(expectedSummary);
     await expectPlate(canvas, mmPerUnit);
 
-    await expect(page.locator('.save-state')).toHaveClass(/is-synced/);
+    await expect(page.locator('.save-state')).toHaveClass(SAVED_ON_DEVICE);
     await page.reload();
     await expectPlate(canvas, mmPerUnit);
+    await expect(extrusionSummary).toHaveText(expectedSummary);
     await extrusion.click();
     await expect(distance).toHaveValue(DISTANCE);
     await expect(back).toHaveValue(BACK);

@@ -30,18 +30,22 @@ export function featureValueSummary(
     const text = num(value);
     return text === null ? null : `${text} ${unit}`;
   };
+  const lengthValue = (value: ParamValue | undefined): string | null => {
+    if (value === undefined) {
+      return null;
+    }
+    const resolved = evalParamValue(value, scope, {
+      documentUnits: units,
+      dimension: 'length'
+    });
+    return resolved === null ? null : formatNumber(resolved);
+  };
   const data = feature.data;
   switch (data.featureKind) {
     case 'primitive': {
       // Primitive sizes are lengths, so a suffixed size summarises in
       // document units as the kernel builds it.
-      const d = (key: string) => {
-        const resolved = evalParamValue(data.dimensions[key] ?? '', scope, {
-          documentUnits: units,
-          dimension: 'length'
-        });
-        return resolved === null ? null : formatNumber(resolved);
-      };
+      const d = (key: string) => lengthValue(data.dimensions[key] ?? '');
       switch (data.primitiveKind) {
         case 'box': {
           // makeBox(width, height, depth) is X × Y × Z; the form calls Y
@@ -69,7 +73,7 @@ export function featureValueSummary(
       return null;
     }
     case 'extrude': {
-      const distance = num(data.distance);
+      const distance = lengthValue(data.distance);
       if (distance === null) {
         return null;
       }
@@ -77,8 +81,11 @@ export function featureValueSummary(
         return `${distance} ${unit} symmetric`;
       }
       const back =
-        data.backDistance === undefined ? null : num(data.backDistance);
-      return back !== null && back !== '0'
+        data.backDistance === undefined ? '0' : lengthValue(data.backDistance);
+      if (back === null) {
+        return null;
+      }
+      return back !== '0'
         ? `${distance} + ${back} ${unit}`
         : `${distance} ${unit}`;
     }
