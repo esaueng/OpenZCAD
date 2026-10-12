@@ -2108,7 +2108,8 @@ button.command-rail:disabled {
   display: flex;
   flex-direction: column;
   gap: var(--island-gap);
-  pointer-events: none;
+  overflow-y: auto;
+  pointer-events: auto;
 }
 
 /* An open flyout takes the strip's place beside the rail; the strip moves
@@ -2137,23 +2138,17 @@ button.command-rail:disabled {
 
 .sketch-flyouts > * {
   pointer-events: auto;
-  /* The islands give way to the stage's cap and scroll: the palette first,
-     down to its header and a few rows, so the editor keeps its Apply in
-     view; only a window too short for both squeezes the editor too. */
-  flex: 0 1 auto;
+  /* One scroll path keeps feedback, the editor and every relation reachable
+     together, even when selecting geometry adds a tall editor. */
+  flex: 0 0 auto;
   min-height: 0;
-}
-
-.sketch-flyouts > .sketch-palette {
-  flex-shrink: 1000;
-  min-height: min(120px, 100%);
 }
 
 .sketch-flyouts .sketch-entity-dock {
   position: static;
   width: auto;
-  overflow-y: auto;
-  scrollbar-width: none;
+  grid-template-columns: minmax(0, 1fr);
+  overflow: visible;
   padding: 6px;
   background: var(--color-surface);
   border: var(--border-thin);
@@ -2164,11 +2159,26 @@ button.command-rail:disabled {
 
 .sketch-flyouts .sketch-entity-editor,
 .sketch-flyouts .sketch-entity-constraints {
+  min-width: 0;
   box-shadow: none;
 }
 
-/* The dock is the scroller here; the drawer-era phone rule's own 44vh
-   scroll box nested a second one inside it. */
+/* Solver refusals and long relation names must wrap within the flyout,
+   never widen the editor and push Apply or Close past its clipped edge. */
+.sketch-flyouts .sketch-entity-values {
+  min-inline-size: 0;
+}
+
+.sketch-flyouts .sketch-entity-constraints {
+  grid-template-columns: minmax(0, 1fr);
+}
+
+.sketch-flyouts .sketch-entity-editor .form-error,
+.sketch-flyouts .sketch-entity-constraints .muted {
+  overflow-wrap: anywhere;
+}
+
+/* The flyout stack owns scrolling; editor fields stay in the same path. */
 .sketch-flyouts .sketch-entity-editor {
   max-height: none;
   overflow: visible;
@@ -2182,9 +2192,8 @@ button.command-rail:disabled {
 .sketch-flyouts .sketch-palette {
   position: static;
   width: auto;
-  max-height: calc(100vh - var(--stage-top) - var(--island-gap) * 2);
-  overflow-y: auto;
-  scrollbar-width: none;
+  max-height: none;
+  overflow: visible;
   background: var(--color-surface);
   border: var(--border-thin);
   border-radius: var(--radius-lg);
@@ -2290,6 +2299,18 @@ button.command-rail:disabled {
    greyed, and each one's tooltip names it. */
 @media (max-height: 540px) {
   .instrument-rail > .sketch-relations .sketch-relation-name {
+    display: none;
+  }
+}
+
+/* A narrow sketch flyout needs the space reserved beside the icon rails.
+   Relation labels would otherwise cover its recovery and editor controls;
+   the existing tooltips and accessible button names still name each tool. */
+@media (max-width: 640px) {
+  .viewer-area:has(.sketch-flyouts > *)
+    .instrument-rail
+    > .sketch-relations
+    .sketch-relation-name {
     display: none;
   }
 }

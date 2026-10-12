@@ -982,7 +982,7 @@
   pointer-events: none;
 }
 
-/* Constraint list in the palette: label + trailing delete per row. */
+/* Constraint list in the palette: label, inspection, and undoable delete. */
 .sketch-constraint-list {
   display: flex;
   flex-direction: column;
@@ -998,6 +998,98 @@
   justify-content: space-between;
   gap: 6px;
   min-width: 0;
+}
+
+.sketch-palette .sketch-constraint-list li {
+  flex-wrap: wrap;
+}
+
+/* Recovery actions must remain discoverable without hover. */
+.sketch-constraint-list .row-delete {
+  opacity: 1;
+}
+
+.sketch-constraint-show {
+  display: grid;
+  place-items: center;
+  flex: 0 0 auto;
+  width: 28px;
+  height: 28px;
+  border-radius: var(--radius-sm);
+  color: var(--color-text-muted);
+}
+
+.sketch-constraint-show:hover,
+.sketch-constraint-show[aria-expanded='true'] {
+  color: var(--color-accent);
+  background: var(--color-accent-dim);
+}
+
+.sketch-constraint-targets {
+  display: grid;
+  gap: 5px;
+  flex-basis: 100%;
+  padding: 7px;
+  color: var(--color-text-muted);
+  background: var(--color-surface);
+  border: 1px solid var(--color-border);
+  border-radius: var(--radius-sm);
+  font-size: var(--fs-xs);
+  overflow-wrap: anywhere;
+}
+
+.sketch-constraint-targets button {
+  min-height: 28px;
+  padding: 4px 7px;
+  color: var(--color-text);
+  text-align: left;
+  border: 1px solid var(--color-border-strong);
+  border-radius: var(--radius-sm);
+  overflow-wrap: anywhere;
+}
+
+.sketch-constraint-targets button[aria-pressed='true'] {
+  color: var(--color-accent);
+  background: var(--color-accent-dim);
+  border-color: var(--color-accent-border);
+}
+
+.sketch-constraint-explanation,
+.sketch-solve-feedback {
+  color: var(--color-text-muted);
+  font-size: var(--fs-xs);
+  line-height: 1.5;
+  overflow-wrap: anywhere;
+}
+
+.sketch-constraint-explanation p,
+.sketch-constraint-targets p,
+.sketch-solve-feedback p {
+  margin: 0;
+}
+
+.sketch-solve-feedback {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  padding: 9px;
+  color: var(--color-error-text);
+  background: var(--color-surface-2);
+  border: 1px solid var(--color-border-strong);
+  border-radius: var(--radius-md);
+}
+
+.sketch-solve-feedback button {
+  flex: 0 0 auto;
+  max-width: 100%;
+  white-space: normal;
+  min-height: 28px;
+  padding: 4px 7px;
+  color: var(--color-text);
+  border: 1px solid var(--color-border-strong);
+  border-radius: var(--radius-sm);
 }
 
 /* A row that only deletes takes the rest of the row, like the edit button

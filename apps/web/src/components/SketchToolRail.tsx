@@ -1,4 +1,11 @@
-import { useId, useState, type KeyboardEvent, type ReactNode } from 'react';
+import {
+  useEffect,
+  useId,
+  useRef,
+  useState,
+  type KeyboardEvent,
+  type ReactNode
+} from 'react';
 import {
   CircleDot,
   Construction,
@@ -30,6 +37,7 @@ import {
 } from '../lib/interaction/machine';
 import { CONSTRAINT_TOOL_SPECS } from '../lib/sketch/constraints';
 import type { SketchDefinedState } from '../lib/sketch/constraints';
+import type { ConstraintInspectionTarget } from '../lib/sketch/constraintInspection';
 import { SKETCH_EDIT_TOOL_SPECS } from '../lib/sketch/edits';
 import { CONSTRAINT_ICONS } from './constraintIcons';
 import { Tooltip } from './Tooltip';
@@ -39,6 +47,7 @@ export interface SketchConstraintListItem {
   constraintId: string;
   label: string;
   editable: boolean;
+  targets?: ConstraintInspectionTarget[];
   conflicted?: boolean;
   /**
    * True while the last solve proved the whole sketch fully defined. Rows
@@ -91,6 +100,7 @@ interface SketchToolRailProps {
   /** Armed modify tool, if any. */
   pendingEdit: PendingSketchEdit | null;
   constraints: SketchConstraintListItem[];
+  selectedObjectId?: string | null;
   solveStatus: SketchSolveStatus | null;
   solving: boolean;
   onTool(tool: SketchToolId): void;
@@ -104,6 +114,7 @@ interface SketchToolRailProps {
     anchor: { x: number; y: number }
   ): void;
   onDeleteConstraint(constraintId: string): void;
+  onSelectConstraintObject(constraintId: string, objectId: string): void;
   onSolve(): void;
   onDiagnostics(): void;
   onExtrude(): void;
@@ -294,6 +305,7 @@ export function SketchToolRail({
   canConstrain,
   pendingEdit,
   constraints,
+  selectedObjectId,
   solveStatus,
   solving,
   onTool,
@@ -303,6 +315,7 @@ export function SketchToolRail({
   onEditTool,
   onEditConstraint,
   onDeleteConstraint,
+  onSelectConstraintObject,
   onSolve,
   onDiagnostics,
   onExtrude
@@ -312,6 +325,43 @@ export function SketchToolRail({
   const paletteOpen = paletteOpenProp ?? paletteOpenState;
   const togglePalette = () =>
     onTogglePalette ? onTogglePalette() : setPaletteOpenState((open) => !open);
+  const constraintGroupRef = useRef<HTMLFieldSetElement>(null);
+  const reviewRequested = useRef(false);
+  const [inspectedConstraintId, setInspectedConstraintId] = useState<
+    string | null
+  >(null);
+  const focusConstraints = () => {
+    constraintGroupRef.current?.focus();
+    constraintGroupRef.current?.scrollIntoView?.({ block: 'nearest' });
+  };
+  useEffect(() => {
+    if (paletteOpen && reviewRequested.current) {
+      reviewRequested.current = false;
+      constraintGroupRef.current?.focus();
+      constraintGroupRef.current?.scrollIntoView?.({ block: 'nearest' });
+    }
+  }, [paletteOpen]);
+  const reviewConstraints = () => {
+    if (paletteOpen) {
+      focusConstraints();
+    } else {
+      reviewRequested.current = true;
+      togglePalette();
+    }
+  };
+  const warning = solveStatus?.tone === 'warn';
+  // Only rows still present in the live sketch can be recovery targets. A
+  // refused prospective dimension may have residuals for its uncommitted ID.
+  const hasAttributedConflict = constraints.some((item) => item.conflicted);
+  const solveExplanation = warning
+    ? hasAttributedConflict
+      ? 'Marked constraints have measured residuals. Show their geometry, then edit a value or delete a relation.'
+      : 'The solver did not identify a conflicting constraint. Review the relations below.'
+    : solveStatus?.definedState === 'fully-defined'
+      ? 'All sketch geometry is fully constrained.'
+      : solveStatus?.definedState === 'under-defined'
+        ? 'Remaining freedom is reported for the whole sketch, not individual entities.'
+        : null;
   const patchSettings = (patch: Partial<AppSettings['sketching']>) =>
     onSettings({ ...settings, ...patch });
 
@@ -467,13 +517,15 @@ export function SketchToolRail({
           <Play size={16} aria-hidden="true" />
         </button>
       </Tooltip>
-      <span
-        className="sketch-solve-pill visually-hidden"
-        data-tone={solveStatus?.tone}
-        role="status"
-      >
-        {solveStatus?.label ?? ''}
-      </span>
+      {!warning && (
+        <span
+          className="sketch-solve-pill visually-hidden"
+          data-tone={solveStatus?.tone}
+          role="status"
+        >
+          {solveStatus?.label ?? ''}
+        </span>
+      )}
     </>
   );
   const utilityTools = (
@@ -608,12 +660,28 @@ export function SketchToolRail({
               </span>
             </label>
           </fieldset>
-          {constraints.length > 0 ? (
-            <fieldset>
+          {constraints.length > 0 || solveStatus ? (
+            <fieldset ref={constraintGroupRef} tabIndex={-1}>
               <legend>Constraints</legend>
+              {solveStatus && (
+                <div
+                  className="sketch-constraint-explanation"
+                  data-tone={solveStatus.tone}
+                >
+                  <strong>{solveStatus.label}</strong>
+                  {solveExplanation && <p>{solveExplanation}</p>}
+                </div>
+              )}
               <ul className="sketch-constraint-list">
                 {constraints.map(
-                  ({ constraintId, label, editable, conflicted, defined }) => (
+                  ({
+                    constraintId,
+                    label,
+                    editable,
+                    conflicted,
+                    defined,
+                    targets = []
+                  }) => (
                     <li
                       key={constraintId}
                       data-conflicted={conflicted ? 'true' : undefined}
@@ -655,16 +723,65 @@ export function SketchToolRail({
                           <span>{label}</span>
                         </Tooltip>
                       )}
+                      <Tooltip label={`Show geometry for constraint: ${label}`}>
+                        <button
+                          type="button"
+                          className="sketch-constraint-show"
+                          aria-label={`Show geometry for constraint: ${label}`}
+                          aria-expanded={inspectedConstraintId === constraintId}
+                          disabled={solving}
+                          onClick={() =>
+                            setInspectedConstraintId((current) =>
+                              current === constraintId ? null : constraintId
+                            )
+                          }
+                        >
+                          <ScanSearch size={14} aria-hidden="true" />
+                        </button>
+                      </Tooltip>
                       <Tooltip label={`Delete constraint: ${label}`}>
                         <button
                           type="button"
                           className="row-delete"
                           aria-label={`Delete constraint: ${label}`}
+                          disabled={solving}
                           onClick={() => onDeleteConstraint(constraintId)}
                         >
                           <Trash2 size={12} aria-hidden="true" />
                         </button>
                       </Tooltip>
+                      {inspectedConstraintId === constraintId && (
+                        <div
+                          className="sketch-constraint-targets"
+                          role="group"
+                          aria-label={`Geometry for constraint: ${label}`}
+                        >
+                          <span>Referenced geometry</span>
+                          {targets.length === 0 ? (
+                            <p>
+                              The referenced geometry is no longer available.
+                            </p>
+                          ) : (
+                            targets.map(({ objectId, label: targetLabel }) => (
+                              <button
+                                key={objectId}
+                                type="button"
+                                aria-label={`Select geometry: ${targetLabel}`}
+                                aria-pressed={selectedObjectId === objectId}
+                                disabled={solving}
+                                onClick={() =>
+                                  onSelectConstraintObject(
+                                    constraintId,
+                                    objectId
+                                  )
+                                }
+                              >
+                                {targetLabel}
+                              </button>
+                            ))
+                          )}
+                        </div>
+                      )}
                     </li>
                   )
                 )}
@@ -708,6 +825,17 @@ export function SketchToolRail({
         )}
       </div>
       <div className="sketch-flyouts" data-rail-flyouts="">
+        {warning && (
+          <section
+            className="sketch-solve-feedback"
+            aria-label="Constraint feedback"
+          >
+            <p role="status">{solveStatus.label}</p>
+            <button type="button" onClick={reviewConstraints}>
+              Review constraints
+            </button>
+          </section>
+        )}
         {entityEditor}
         {palette}
       </div>

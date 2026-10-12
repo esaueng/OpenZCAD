@@ -205,6 +205,7 @@ import {
   type DrivingDimensionKind
 } from './lib/sketch/constraints';
 import { sketchDimensionAnnotations } from './lib/sketch/dimensionAnnotations';
+import { constraintInspectionTargets } from './lib/sketch/constraintInspection';
 import {
   solveStatusLabel,
   solvedSketchCommands
@@ -13183,6 +13184,11 @@ export function App() {
       ({ constraintId, data }) => ({
         constraintId: String(constraintId),
         label: describeConstraint(data, nameOf),
+        targets: constraintInspectionTargets(
+          doc,
+          editingSketchNode,
+          String(constraintId)
+        ),
         conflicted: conflicting.has(String(constraintId)),
         defined: fullyDefined,
         editable:
@@ -13989,6 +13995,38 @@ export function App() {
     return executeCommand(command)
       ? null
       : 'The parameter could not be renamed.';
+  }
+
+  function handleSelectConstraintObject(
+    constraintId: string,
+    objectId: string
+  ) {
+    const live = managerRef.current?.document;
+    const session = interactionRef.current;
+    if (
+      !live ||
+      session.mode !== 'sketch' ||
+      !session.session.sketchId ||
+      sketchSolving ||
+      geometryBusy
+    ) {
+      return;
+    }
+    const sketch = findSketch(live, session.session.sketchId as SketchId);
+    const target = constraintInspectionTargets(live, sketch, constraintId).find(
+      (candidate) => candidate.objectId === objectId
+    );
+    if (!target) {
+      setStatus(
+        'The constraint or its referenced geometry is no longer available.'
+      );
+      return;
+    }
+    // Inspect through the normal selection/editor path without clearing solve
+    // evidence or writing a command. The next edit still owns its transaction.
+    dispatchInteraction({ type: 'sketch-tool', tool: 'select' });
+    dispatchInteraction({ type: 'sketch-select-object', objectId });
+    setStatus(`Selected ${target.label}, referenced by this constraint.`);
   }
 
   function handleDeleteSketchConstraint(constraintId: string) {
@@ -19157,6 +19195,7 @@ export function App() {
         canConstrain={Boolean(interaction.session.sketchId)}
         pendingEdit={interaction.session.pendingEdit}
         constraints={sketchConstraintItems}
+        selectedObjectId={interaction.session.selectedObjectId}
         solveStatus={sketchSolveStatus}
         solving={sketchSolving}
         onEditTool={(kind, hint) => {
@@ -19166,6 +19205,7 @@ export function App() {
           }
         }}
         onDeleteConstraint={handleDeleteSketchConstraint}
+        onSelectConstraintObject={handleSelectConstraintObject}
         onEditConstraint={handleEditSketchDimension}
         onSolve={() => {
           void handleSolveSketch();
