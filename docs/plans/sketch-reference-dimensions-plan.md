@@ -1,9 +1,23 @@
 # S02 — Driven and reference sketch dimensions
 
-**Status:** design only. This document defines the first implementation slices;
-it adds no runtime schema, command, solver, or viewport behavior.
+**Status:** primitive S02-A/B/C implemented. `ROADMAP.md` remains the delivery
+ledger. S02-D composite/datum consumers, horizontal/vertical distance variants
+and a separate display-unit selector remain open.
 
-**Baseline:** OpenZCAD `main` at `efa2662910199e6d23d63f337e35d3d591614d21a`.
+The implementation uses the already merged optional `referenceDimensions` field
+on schema v16; it introduces no new schema envelope. The existing sketch palette
+authors primitive reference distances, radii and angles. Values are measured and
+read-only, labels carry Reference identity, and placement/deletion are ordinary
+replayable commands. Annotation edits preserve GCS evidence and exact-history
+cache keys. Removing a referenced object requires an explicit reference deletion
+first. Invalid saved targets remain unresolved and removable.
+
+Evidence: `test/sketch-reference-commands.test.ts`,
+`test/sketch-reference-exact.test.ts`, component/graphic regressions and
+`test/e2e/sketch-reference-dimensions.spec.ts`. The original design below records
+the contracts and remaining consumers; it is not another priority queue.
+
+**Original design baseline:** OpenZCAD `main` at `efa2662910199e6d23d63f337e35d3d591614d21a`.
 The current canonical document schema is v15. The implementation must recheck
 the merged S01/S04/R01 base and join their single additive migration envelope;
 S02 must not reserve a separate schema bump.

@@ -239,6 +239,51 @@
   cursor: grabbing;
 }
 
+.sketch-dimension-label[data-dimension-role='reference'] {
+  color: #d2dfec;
+  border-style: dashed;
+}
+
+.sketch-reference-dimensions {
+  display: grid;
+  gap: 8px;
+  min-width: 0;
+}
+.sketch-reference-dimensions p {
+  margin: 0;
+  overflow-wrap: anywhere;
+  color: var(--color-text-muted);
+}
+.sketch-palette .sketch-reference-dimensions label {
+  display: grid;
+  gap: 4px;
+  min-width: 0;
+}
+.sketch-reference-dimensions select {
+  min-width: 0;
+  width: 100%;
+}
+.sketch-reference-dimensions button {
+  min-height: 28px;
+  white-space: normal;
+}
+.sketch-reference-dimensions ul {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+}
+.sketch-reference-dimensions li {
+  display: grid;
+  gap: 6px;
+  margin-top: 8px;
+  padding-top: 8px;
+  border-top: var(--border-thin);
+  overflow-wrap: anywhere;
+}
+.sketch-reference-dimensions output {
+  font-weight: var(--fw-medium);
+}
+
 /* The ring stands 2px off the pill, on the viewport's dark stage, which
    never re-themes: the viewport's accent, not the chrome's text colour,
    which went dark-on-dark in the light theme. */
