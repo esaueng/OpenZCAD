@@ -1,7 +1,6 @@
 import type { Locator, Page } from '@playwright/test';
-import type { SketchObjectData } from '@openzcad/shared';
+import type { SketchObjectData, UnitSystem } from '@openzcad/shared';
 import {
-  createProject,
   expect,
   stubApi,
   test,
@@ -37,9 +36,18 @@ const textObjects = (state: LiveSketchState) =>
     data.objectKind === 'text' ? [data] : []
   );
 
-async function startTopSketch(page: Page) {
+async function startTopSketch(
+  page: Page,
+  {
+    name = 'Lettering',
+    units = 'mm'
+  }: { name?: string; units?: UnitSystem } = {}
+) {
   await stubApi(page);
-  await createProject(page, 'Lettering');
+  await page.goto('/');
+  await page.getByLabel('Project name').fill(name);
+  await page.getByLabel('Units').selectOption(units);
+  await page.getByRole('button', { name: 'Create project' }).click();
   await page.getByRole('button', { name: /^Sketch \(S\)/ }).click();
   await page.getByRole('button', { name: 'Top (XY)' }).click();
   await expect(
@@ -234,3 +242,136 @@ test('the rail tile opens the same card, and Escape while composing leaves nothi
       .getByLabel('Text', { exact: true })
   ).toHaveValue('');
 });
+
+for (const [units, mmPerUnit] of [
+  ['mm', 1],
+  ['cm', 10],
+  ['inch', 25.4]
+] as const satisfies readonly (readonly [UnitSystem, number])[]) {
+  test(`unit-bearing typed text previews, places and reopens in ${units}`, async ({
+    page
+  }, testInfo) => {
+    test.setTimeout(90_000);
+    const errors: string[] = [];
+    page.on('pageerror', (error) => errors.push(error.message));
+    page.on('console', (message) => {
+      if (message.type() === 'error') errors.push(message.text());
+    });
+    await page.setViewportSize({ width: 1440, height: 1000 });
+    const { canvas, bounds } = await startTopSketch(page, {
+      name: `QA typed text units ${units}`,
+      units
+    });
+    await expect(page).toHaveTitle('OpenZCAD');
+    await expect(page.locator('vite-error-overlay')).toHaveCount(0);
+    await page.keyboard.press('t');
+    const card = page.getByRole('form', { name: 'Place text' });
+    const size = card.getByLabel('Size (em)');
+    const place = card.getByRole('button', { name: 'Place', exact: true });
+    await card.getByLabel('Text', { exact: true }).fill('Boa');
+    const target = {
+      x: bounds.x + bounds.width * 0.55,
+      y: bounds.y + bounds.height * 0.6
+    };
+
+    // The card and the canvas must both refuse an angle in a length field.
+    // A click cannot sneak an invalid draft past the disabled Place button.
+    await size.fill('30 deg');
+    await expect(size).toHaveAttribute('aria-invalid', 'true');
+    await expect(place).toBeDisabled();
+    await expect
+      .poll(async () => (await readLiveSketch(canvas)).textPreview)
+      .toBeNull();
+    await size.press('Enter');
+    await page.mouse.click(target.x, target.y);
+    await expect(card).toBeVisible();
+    expect(textObjects(await readLiveSketch(canvas))).toEqual([]);
+
+    // This is the same physical em size in all three documents. The outline
+    // exists before any object does, then the card and the plane use the
+    // same original expression when placing it.
+    await size.fill('1 in');
+    await expect(size).not.toHaveAttribute('aria-invalid');
+    await expect(size).toHaveAccessibleDescription(`= ${25.4 / mmPerUnit}`);
+    await expect(place).toBeEnabled();
+    await page.mouse.move(target.x - 40, target.y + 20);
+    await page.mouse.move(target.x, target.y, { steps: 4 });
+    await expect
+      .poll(async () => (await readLiveSketch(canvas)).textPreview?.loops ?? 0)
+      .toBeGreaterThan(0);
+    const preview = (await readLiveSketch(canvas)).textPreview!;
+    expect(textObjects(await readLiveSketch(canvas))).toEqual([]);
+    await testInfo.attach(`${units}-typed-text-preview`, {
+      body: await page.screenshot({
+        path: testInfo.outputPath(`${units}-text-preview.png`)
+      }),
+      contentType: 'image/png'
+    });
+    // Exercise both actual entry points, not only their enabled appearance.
+    if (units === 'cm') await place.click();
+    else await page.mouse.click(target.x, target.y);
+    await expect(card).toHaveCount(0);
+    await expect
+      .poll(async () => textObjects(await readLiveSketch(canvas)).length)
+      .toBe(1);
+    const placed = textObjects(await readLiveSketch(canvas))[0]!;
+    expect(placed).toMatchObject({ text: 'Boa', size: '1 in' });
+    expect(Number(placed.x)).toBeCloseTo(preview.origin.x, 6);
+    expect(Number(placed.y)).toBeCloseTo(preview.origin.y, 6);
+    expect((await readLiveSketch(canvas)).textPreview).toBeNull();
+    const editor = page.getByRole('form', { name: 'Edit text' });
+    await expect(editor.getByLabel('Size (em)')).toHaveValue('1 in');
+    await expect(editor.getByLabel('Size (em)')).toHaveAccessibleDescription(
+      `= ${25.4 / mmPerUnit}`
+    );
+    await page
+      .getByRole('button', { name: 'Finish Sketch', exact: true })
+      .click();
+
+    // Wait for a completed device write, then reopen the authored sketch.
+    // Reopening the stubbed project presents the saved device copy as local.
+    await expect(page.locator('.save-state')).toHaveClass(
+      /\bis-(?:local|synced)(?:\s|$)/
+    );
+    await page.reload();
+    await expect(page.locator('.feature-row-main')).toHaveCount(1);
+    await page.locator('.feature-row-main').click();
+    await page
+      .getByRole('button', { name: 'Edit sketch in viewport', exact: true })
+      .click();
+    const palette = page.getByRole('button', {
+      name: 'Sketch palette',
+      exact: true
+    });
+    await expect(palette).toBeVisible();
+    if ((await palette.getAttribute('aria-expanded')) !== 'true')
+      await palette.click();
+    const overview = page.getByRole('region', { name: 'Sketch overview' });
+    await expect(overview).toBeVisible();
+    await expect
+      .poll(async () => textObjects(await readLiveSketch(canvas)).length)
+      .toBe(1);
+    const object = (await readLiveSketch(canvas)).objects[0]!;
+    expect(object.data).toMatchObject({ text: 'Boa', size: '1 in' });
+    await overview.getByLabel('Selected geometry').selectOption(object.id);
+    await expect(editor.getByLabel('Text', { exact: true })).toHaveValue('Boa');
+    await expect(editor.getByLabel('Size (em)')).toHaveValue('1 in');
+    await expect(editor.getByLabel('Size (em)')).not.toHaveAttribute(
+      'aria-invalid'
+    );
+    await expect(editor.getByLabel('Size (em)')).toHaveAccessibleDescription(
+      `= ${25.4 / mmPerUnit}`
+    );
+    await testInfo.attach(`${units}-typed-text-reopened`, {
+      body: await page.screenshot({
+        path: testInfo.outputPath(`${units}-text-reopened.png`)
+      }),
+      contentType: 'image/png'
+    });
+    await page
+      .getByRole('button', { name: 'Finish Sketch', exact: true })
+      .click();
+    await expect(page.getByRole('contentinfo')).toContainText('warnings0');
+    expect(errors).toEqual([]);
+  });
+}

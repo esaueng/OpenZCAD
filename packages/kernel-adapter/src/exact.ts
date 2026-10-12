@@ -3015,6 +3015,7 @@ export class RemusKernelAdapter implements ExactKernelAdapter {
           }),
           scope,
           basis,
+          documentUnits: document.units,
           millimeterScale: UNIT_TO_MM[document.units]
         });
         if (outcome.status === 'refused') {

@@ -7,7 +7,8 @@
 import {
   documentTextBudgetError,
   type ProjectDocument,
-  type SketchObjectData
+  type SketchObjectData,
+  type UnitSystem
 } from '@openzcad/shared';
 import type { SketchTextDraft } from '../interaction/machine';
 import { evalParamValue } from '../model';
@@ -40,16 +41,20 @@ export function textObjectFromPoint(
 }
 
 /**
- * The draft's em size resolved against the parameter scope as it is now, or
+ * The draft's em size resolved in document units against the current scope, or
  * null when it does not resolve to a positive length. Evaluated at call time,
  * never stored: a size written as `h` stops being placeable the moment `h`
  * changes to 0 in the Parameters panel, with no edit to the card.
  */
 export function resolvedTextDraftSize(
   draft: SketchTextDraft,
-  scope: Record<string, number>
+  scope: Record<string, number>,
+  documentUnits: UnitSystem = 'mm'
 ): number | null {
-  const size = evalParamValue(draft.size, scope);
+  const size = evalParamValue(draft.size, scope, {
+    documentUnits,
+    dimension: 'length'
+  });
   return size !== null && size > 0 ? size : null;
 }
 
@@ -60,12 +65,13 @@ export function resolvedTextDraftSize(
  */
 export function textDraftPlaceable(
   draft: SketchTextDraft | null | undefined,
-  scope: Record<string, number>
+  scope: Record<string, number>,
+  documentUnits: UnitSystem = 'mm'
 ): boolean {
   return Boolean(
     draft &&
     draft.text.length > 0 &&
-    resolvedTextDraftSize(draft, scope) !== null
+    resolvedTextDraftSize(draft, scope, documentUnits) !== null
   );
 }
 
@@ -77,10 +83,13 @@ export function textDraftPlaceable(
 export function canPlaceTextDraft(
   draft: SketchTextDraft | null | undefined,
   scope: Record<string, number>,
-  blockers: { busy?: boolean; budgetError?: string | null }
+  blockers: { busy?: boolean; budgetError?: string | null },
+  documentUnits: UnitSystem = 'mm'
 ): boolean {
   return (
-    textDraftPlaceable(draft, scope) && !blockers.busy && !blockers.budgetError
+    textDraftPlaceable(draft, scope, documentUnits) &&
+    !blockers.busy &&
+    !blockers.budgetError
   );
 }
 

@@ -205,6 +205,76 @@ describe('exportSketchDxf', { timeout: 120_000 }, () => {
     expect(header).toContainEqual([70, '1']);
   });
 
+  it.each(['mm', 'cm', 'inch'] as const)(
+    'exports mixed-unit %s sketch expressions as the same millimetre geometry',
+    async (units) => {
+      const objects: SketchObjectData[] = [
+        { objectKind: 'line', x1: '2 mm', y1: '3 mm', x2: '1 cm', y2: '3 mm' },
+        {
+          objectKind: 'circle',
+          radius: '2 mm',
+          centerX: '3 mm',
+          centerY: '4 mm'
+        },
+        {
+          objectKind: 'arc',
+          radius: '4 mm',
+          centerX: 0,
+          centerY: 0,
+          startAngleDeg: '45 deg',
+          endAngleDeg: '135 deg'
+        },
+        {
+          objectKind: 'rectangle',
+          width: '5 mm + 2 cm',
+          height: '1 cm',
+          centerX: 0,
+          centerY: 0
+        },
+        {
+          objectKind: 'polygon',
+          sides: '3 + 1',
+          radius: '5 mm',
+          centerX: 0,
+          centerY: 0
+        }
+      ];
+      const { document, sketchId } = sketchDocument(
+        'Mixed-unit export',
+        objects,
+        { type: 'canonical', plane: 'XY', offset: 0 },
+        units
+      );
+      const text = await adapter.exportSketchDxf(document, sketchId);
+      const all = entities(text);
+      expect(all.map((entity) => entity.type)).toEqual([
+        'LINE',
+        'CIRCLE',
+        'ARC',
+        ...Array<string>(8).fill('LINE')
+      ]);
+      expect([num(all[0]!, 10), num(all[0]!, 20)]).toEqual([2, 3]);
+      expect([num(all[0]!, 11), num(all[0]!, 21)]).toEqual([10, 3]);
+      expect([num(all[1]!, 10), num(all[1]!, 20), num(all[1]!, 40)]).toEqual([
+        3, 4, 2
+      ]);
+      expect([num(all[2]!, 40), num(all[2]!, 50), num(all[2]!, 51)]).toEqual([
+        4, 45, 135
+      ]);
+      expect([num(all[3]!, 10), num(all[3]!, 20)]).toEqual([-12.5, -5]);
+      expect([num(all[3]!, 11), num(all[3]!, 21)]).toEqual([12.5, -5]);
+      expect([num(all[7]!, 10), num(all[7]!, 20)]).toEqual([0, 5]);
+      expect(num(all[7]!, 11)).toBeCloseTo(-5, 9);
+      expect(num(all[7]!, 21)).toBeCloseTo(0, 9);
+      // Export is read-only and byte-stable for the same authored document.
+      expect(await adapter.exportSketchDxf(document, sketchId)).toBe(text);
+      const sketch = findSketch(document, sketchId)!;
+      expect(document.nodes[sketch.objectIds[3]!]).toMatchObject({
+        data: objects[3]
+      });
+    }
+  );
+
   it('keeps circles analytic and arcs directed, converting only raw +360°', async () => {
     const { document, sketchId } = sketchDocument('Arcs', [
       { objectKind: 'circle', radius: 3, centerX: 7, centerY: -2 },
@@ -747,6 +817,7 @@ describe('sketchDxfEntities (pure)', () => {
       ],
       scope: {},
       basis: unit,
+      documentUnits: 'mm',
       millimeterScale: 1
     });
     expect(outcome.status).toBe('ok');
@@ -779,6 +850,7 @@ describe('sketchDxfEntities (pure)', () => {
       ],
       scope: {},
       basis: unit,
+      documentUnits: 'mm',
       millimeterScale: 1
     });
     expect(outcome.status).toBe('ok');
@@ -805,6 +877,7 @@ describe('sketchDxfEntities (pure)', () => {
         objects,
         scope: {},
         basis,
+        documentUnits: 'mm',
         millimeterScale: 1
       });
       expect(outcome.status).toBe('refused');

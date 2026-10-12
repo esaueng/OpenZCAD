@@ -8,7 +8,7 @@
  * so these tests pin the two properties that matter: the text is editable,
  * and what Apply produces is still the text object.
  */
-import { render, screen } from '@testing-library/react';
+import { fireEvent, render, screen } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { describe, expect, it, vi } from 'vitest';
 import type { SketchObjectData } from '@openzcad/shared';
@@ -103,4 +103,96 @@ describe('TextSketchForm', () => {
     await user.click(screen.getByRole('button', { name: /apply/i }));
     expect(onSubmit).not.toHaveBeenCalled();
   });
+});
+
+describe('history text sketch unit context', () => {
+  const unitObject = {
+    ...TEXT_OBJECT,
+    size: '1 in + 25.4 mm',
+    rotation: '1.5707963267948966 rad',
+    x: '1 cm',
+    y: '-5 mm'
+  };
+
+  it.each([
+    { units: 'mm', size: '= 50.8', x: '= 10' },
+    { units: 'cm', size: '= 5.08', x: '= 1' },
+    { units: 'inch', size: '= 2', x: '= 0.394' }
+  ] as const)(
+    'can rename saved text in $units while retaining authored lengths and rotation',
+    ({ units, size, x }) => {
+      const onSubmit = vi.fn();
+      render(
+        <TextSketchForm
+          scope={{}}
+          units={units}
+          initial={{ name: 'Text profile', object: unitObject }}
+          onSubmit={onSubmit}
+        />
+      );
+      expect(screen.getByLabelText('Size (em)')).toHaveAccessibleDescription(
+        size
+      );
+      expect(screen.getByLabelText('Rotation')).toHaveAccessibleDescription(
+        '= 90'
+      );
+      expect(screen.getByLabelText('X')).toHaveAccessibleDescription(x);
+      expect(screen.getByRole('button', { name: 'Apply' })).toBeEnabled();
+      fireEvent.change(screen.getByLabelText('Name'), {
+        target: { value: 'Renamed text' }
+      });
+      fireEvent.keyDown(screen.getByLabelText('Name'), { key: 'Enter' });
+      expect(onSubmit).toHaveBeenCalledExactlyOnceWith({
+        name: 'Renamed text',
+        data: unitObject
+      });
+    }
+  );
+
+  it.each([
+    { label: 'Size (em)', expression: '30 deg', expected: /expected a length/ },
+    { label: 'Rotation', expression: '5 mm', expected: /expected an angle/ },
+    { label: 'X', expression: '2 mm * 3 mm', expected: /expected a length/ }
+  ])(
+    'refuses a wrong dimension in $label',
+    ({ label, expression, expected }) => {
+      const onSubmit = vi.fn();
+      render(
+        <TextSketchForm
+          scope={{}}
+          units="cm"
+          initial={{ name: 'Text profile', object: unitObject }}
+          onSubmit={onSubmit}
+        />
+      );
+      const input = screen.getByRole('textbox', { name: label });
+      fireEvent.change(input, { target: { value: expression } });
+      expect(input).toHaveAttribute('aria-invalid', 'true');
+      expect(input).toHaveAccessibleDescription(expected);
+      expect(screen.getByRole('button', { name: 'Apply' })).toBeDisabled();
+      fireEvent.keyDown(input, { key: 'Enter' });
+      expect(onSubmit).not.toHaveBeenCalled();
+    }
+  );
+
+  it.each(['0 mm', '-1 cm'])(
+    'refuses a converted non-positive text size %s',
+    (expression) => {
+      const onSubmit = vi.fn();
+      render(
+        <TextSketchForm
+          scope={{}}
+          units="inch"
+          initial={{ name: 'Text profile', object: unitObject }}
+          onSubmit={onSubmit}
+        />
+      );
+      const size = screen.getByLabelText('Size (em)');
+      fireEvent.change(size, { target: { value: expression } });
+      expect(size).toHaveAccessibleDescription('Must be greater than zero.');
+      expect(screen.getByRole('button', { name: 'Apply' })).toBeDisabled();
+      fireEvent.keyDown(size, { key: 'Enter' });
+      expect(onSubmit).not.toHaveBeenCalled();
+    }
+  );
 });

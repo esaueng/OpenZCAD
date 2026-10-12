@@ -1685,6 +1685,7 @@ export function Inspector(props: InspectorProps) {
           <TextSketchForm
             key={editKey}
             scope={scope}
+            units={units}
             initial={{
               name: selectedFeature.name,
               object: selectedSketchObject
@@ -1717,6 +1718,7 @@ export function Inspector(props: InspectorProps) {
         <SketchForm
           key={editKey}
           scope={scope}
+          units={units}
           initial={{
             name: selectedFeature.name,
             plane: selectedSketch.planeRef.plane,
@@ -1744,6 +1746,7 @@ export function Inspector(props: InspectorProps) {
         <ExtrudeForm
           key={editKey}
           scope={scope}
+          units={units}
           sketches={sketches}
           initial={{
             name: selectedFeature.name,

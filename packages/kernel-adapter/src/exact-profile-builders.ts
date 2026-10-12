@@ -142,12 +142,18 @@ function resolveExtrudeSpan(
   data: { symmetric?: boolean; backDistance?: ParamValue },
   basis: PlaneBasis,
   distance: number,
-  scope: Record<string, number>
+  scope: Record<string, number>,
+  documentUnits: UnitSystem
 ): { extrudeBasis: PlaneBasis; totalDistance: number } {
   const back =
     data.backDistance === undefined
       ? 0
-      : resolveParamValue(data.backDistance, scope, 'back distance');
+      : resolveParamValue(
+          data.backDistance,
+          scope,
+          'back distance',
+          documentUnits
+        );
   if (back !== 0 && data.symmetric) {
     throw new Error(
       'Extrude cannot be both symmetric and two-sided; set symmetric or backDistance, not both.'
@@ -284,14 +290,15 @@ export function makeProfileFace(
   data: SketchObjectData,
   basis: PlaneBasis,
   offset: number,
-  scope: Record<string, number>
+  scope: Record<string, number>,
+  documentUnits: UnitSystem
 ): number {
   if (data.objectKind === 'circle') {
     const center = pointOnPlane(
       basis,
       {
-        x: resolveParamValue(data.centerX, scope, 'center X'),
-        y: resolveParamValue(data.centerY, scope, 'center Y')
+        x: resolveParamValue(data.centerX, scope, 'center X', documentUnits),
+        y: resolveParamValue(data.centerY, scope, 'center Y', documentUnits)
       },
       offset
     );
@@ -302,13 +309,13 @@ export function makeProfileFace(
       basis.normal.x,
       basis.normal.y,
       basis.normal.z,
-      resolveParamValue(data.radius, scope, 'radius')
+      resolveParamValue(data.radius, scope, 'radius', documentUnits)
     );
     const wire = kernel.makeWire(Uint32Array.of(edge), true);
     return kernel.makePlanarFaceFromWire(wire);
   }
 
-  const points = profilePoints(data, scope).map((point) =>
+  const points = profilePoints(data, scope, documentUnits).map((point) =>
     pointOnPlane(basis, point, offset)
   );
   const edges: number[] = [];
@@ -573,7 +580,8 @@ export function makeRegionFace(
 function sourceSegmentIndex(
   curve: Extract<RegionCurve, { kind: 'line' }>,
   data: SketchObjectData | undefined,
-  scope: Record<string, number>
+  scope: Record<string, number>,
+  documentUnits: UnitSystem
 ): number | null {
   if (
     !data ||
@@ -583,7 +591,7 @@ function sourceSegmentIndex(
   }
   let points: Vec2Like[];
   try {
-    points = profilePoints(data, scope);
+    points = profilePoints(data, scope, documentUnits);
   } catch {
     return null;
   }
@@ -640,6 +648,7 @@ function addRegionSideRoles(input: {
   totalDistance: number;
   objectsById: ReadonlyMap<string, SketchObjectData>;
   scope: Record<string, number>;
+  documentUnits: UnitSystem;
   assignments: RemusSemanticAssignment[];
   diagnostics: RemusLineageState[];
 }) {
@@ -654,7 +663,12 @@ function addRegionSideRoles(input: {
       const data = input.objectsById.get(curve.sourceObjectId);
       const prefix = `sweep.face.side.region.${input.token}.${curve.sourceObjectId}`;
       if (curve.kind === 'line') {
-        const index = sourceSegmentIndex(curve, data, input.scope);
+        const index = sourceSegmentIndex(
+          curve,
+          data,
+          input.scope,
+          input.documentUnits
+        );
         const key =
           index !== null
             ? `${index}`
@@ -741,7 +755,8 @@ export function buildRegionExtrude(
     data,
     basis,
     distance,
-    scope
+    scope,
+    document.units
   );
   // A profile whose loops are a polyline approximation of curves the font
   // actually draws is a degradation the user can see in the result and in
@@ -816,6 +831,7 @@ export function buildRegionExtrude(
         totalDistance,
         objectsById,
         scope,
+        documentUnits: document.units,
         assignments,
         diagnostics
       });
@@ -1773,7 +1789,8 @@ export function buildSweep(
       feature.data,
       basis,
       distance,
-      scope
+      scope,
+      document.units
     );
     const sweep = forwardSweep(extrudeBasis, totalDistance);
     const face = makeProfileFace(
@@ -1781,7 +1798,8 @@ export function buildSweep(
       object.data,
       sweep.faceBasis,
       0,
-      scope
+      scope,
+      document.units
     );
     const solid = kernel.extrude(
       face,
@@ -1800,11 +1818,19 @@ export function buildSweep(
         object.data,
         extrudeBasis,
         totalDistance,
-        scope
+        scope,
+        document.units
       )
     };
   }
-  const face = makeProfileFace(kernel, object.data, basis, 0, scope);
+  const face = makeProfileFace(
+    kernel,
+    object.data,
+    basis,
+    0,
+    scope,
+    document.units
+  );
 
   const direction = feature.data.axis === 'vertical' ? basis.v : basis.u;
   const point = pointOnPlane(basis, { x: 0, y: 0 }, 0);
@@ -1833,7 +1859,8 @@ export function buildSweep(
           basis,
           direction,
           point,
-          scope
+          scope,
+          document.units
         )
       : remusHashOnlyLineage('sweep', PARTIAL_REVOLVE_HASH_ONLY_REASON)
   };

@@ -14,7 +14,11 @@ import {
   type Vec2,
   type Vec3
 } from '@openzcad/geometry';
-import type { ParamValue, SketchObjectData } from '@openzcad/shared';
+import type {
+  ParamValue,
+  SketchObjectData,
+  UnitSystem
+} from '@openzcad/shared';
 
 export const GEOMETRY_EPSILON = 1e-9;
 export const ANALYTIC_MATCH_EPSILON = 1e-7;
@@ -193,28 +197,29 @@ export function pointOnPlane(basis: PlaneBasis, point: Vec2, offset: number): Ve
 
 export function profilePoints(
   data: SketchObjectData,
-  scope: Record<string, number>
+  scope: Record<string, number>,
+  documentUnits: UnitSystem
 ): Vec2[] {
   switch (data.objectKind) {
     case 'rectangle':
       return rectangleProfile(
-        resolveParamValue(data.width, scope, 'width'),
-        resolveParamValue(data.height, scope, 'height'),
-        resolveParamValue(data.centerX, scope, 'center X'),
-        resolveParamValue(data.centerY, scope, 'center Y')
+        resolveParamValue(data.width, scope, 'width', documentUnits),
+        resolveParamValue(data.height, scope, 'height', documentUnits),
+        resolveParamValue(data.centerX, scope, 'center X', documentUnits),
+        resolveParamValue(data.centerY, scope, 'center Y', documentUnits)
       );
     case 'circle':
       return circleProfile(
-        resolveParamValue(data.radius, scope, 'radius'),
-        resolveParamValue(data.centerX, scope, 'center X'),
-        resolveParamValue(data.centerY, scope, 'center Y')
+        resolveParamValue(data.radius, scope, 'radius', documentUnits),
+        resolveParamValue(data.centerX, scope, 'center X', documentUnits),
+        resolveParamValue(data.centerY, scope, 'center Y', documentUnits)
       );
     case 'polygon':
       return polygonProfile(
-        resolveParamValue(data.sides, scope, 'sides'),
-        resolveParamValue(data.radius, scope, 'radius'),
-        resolveParamValue(data.centerX, scope, 'center X'),
-        resolveParamValue(data.centerY, scope, 'center Y')
+        resolveParamValue(data.sides, scope, 'sides', documentUnits),
+        resolveParamValue(data.radius, scope, 'radius', documentUnits),
+        resolveParamValue(data.centerX, scope, 'center X', documentUnits),
+        resolveParamValue(data.centerY, scope, 'center Y', documentUnits)
       );
     case 'line':
     case 'arc':
