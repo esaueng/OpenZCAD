@@ -1,5 +1,28 @@
 import { describe, expect, it } from 'vitest';
-import { plainRefusal } from './refusalLanguage';
+import { plainRefusal, stepImportRefusal } from './refusalLanguage';
+
+describe('stepImportRefusal', () => {
+  it('offers a fresh export while retaining the complete STEP parser diagnostic', () => {
+    const raw =
+      'parse error: entity #999999 not found\nReferenced by ADVANCED_FACE #42.';
+    expect(stepImportRefusal(raw)).toEqual({
+      message:
+        'This STEP file could not be read. Export a fresh STEP file from the source CAD project and try again.',
+      detail: raw
+    });
+  });
+
+  it('leaves other import and kernel refusals unchanged', () => {
+    for (const raw of [
+      'The source file contains no solid bodies.',
+      'Error: unsupported STEP entity: OFFSET_SURFACE',
+      'exact-only policy: the exact boolean pipeline could not produce this result',
+      'glTF binary import failed: parse error: not a GLB file'
+    ]) {
+      expect(stepImportRefusal(raw)).toEqual({ message: raw });
+    }
+  });
+});
 
 describe('plainRefusal', () => {
   it('keeps a sentence the adapter wrote, and its detail', () => {

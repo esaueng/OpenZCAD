@@ -22,6 +22,22 @@ export interface PlainRefusal {
 }
 
 /**
+ * A STEP parser refusal needs an action as well as the broken entity number.
+ * Keep this at the import boundary: a generic kernel failure must not tell a
+ * person to re-export a file that was never part of the operation.
+ */
+export function stepImportRefusal(text: string): PlainRefusal {
+  if (!/^parse error:/i.test(text.trimStart())) {
+    return { message: text };
+  }
+  return {
+    message:
+      'This STEP file could not be read. Export a fresh STEP file from the source CAD project and try again.',
+    detail: text.trim()
+  };
+}
+
+/**
  * One sentence per kernel failure category.
  *
  * The category comes from `FeatureWarning.kernelRefusal`, which the adapter

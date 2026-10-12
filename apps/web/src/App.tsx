@@ -257,10 +257,11 @@ import {
   type ImportProgressSink,
   type ImportRunState
 } from './lib/importProgress';
+import { localAutosaveFailedStatus } from './lib/localAutosaveFailure';
 import {
-  localAutosaveFailedStatus,
-  reparkFailedAutosave
-} from './lib/localAutosaveFailure';
+  LocalProjectAutosave,
+  type LocalProjectAutosaveOptions
+} from './lib/localProjectAutosave';
 import {
   inspectShaprPair,
   type ShaprPairInspection
@@ -2992,7 +2993,6 @@ export function App() {
   const projectTransferRef = useRef(false);
   const [projectTransferBusy, setProjectTransferBusy] = useState(false);
   const importInputRef = useRef<HTMLInputElement | null>(null);
-  const pendingLocalSaveRef = useRef<ProjectDocument | null>(null);
   const localSaveTimeoutRef = useRef<number | null>(null);
   // Reached from the page-hide listener, which is registered once and would
   // otherwise hold the first render's closure.
@@ -3014,6 +3014,39 @@ export function App() {
    * the claim exists to prevent.
    */
   const projectOwnershipSettledRef = useRef<Promise<void> | null>(null);
+  const [localSaveDirty, setLocalSaveDirty] = useState(false);
+  const [localSaveFailed, setLocalSaveFailed] = useState(false);
+  const localSaveCallbacksRef = useRef<LocalProjectAutosaveOptions>({
+    write: writePendingLocalDocument,
+    onSaved: localDocumentSaved,
+    onError: localDocumentSaveFailed,
+    onDirtyChange: setLocalSaveDirty
+  });
+  localSaveCallbacksRef.current = {
+    write: writePendingLocalDocument,
+    onSaved: localDocumentSaved,
+    onError: localDocumentSaveFailed,
+    onDirtyChange: setLocalSaveDirty
+  };
+  const [localAutosave] = useState(
+    () =>
+      new LocalProjectAutosave({
+        write: (pending) => localSaveCallbacksRef.current.write(pending),
+        onSaved: (pending, newerQueued) =>
+          localSaveCallbacksRef.current.onSaved(pending, newerQueued),
+        onError: (error) => localSaveCallbacksRef.current.onError(error),
+        onDirtyChange: (dirty) =>
+          localSaveCallbacksRef.current.onDirtyChange(dirty)
+      })
+  );
+  const flushPendingLocalSave = useCallback((): Promise<void> => {
+    if (localSaveTimeoutRef.current !== null) {
+      window.clearTimeout(localSaveTimeoutRef.current);
+      localSaveTimeoutRef.current = null;
+    }
+    return localAutosave.flush();
+  }, [localAutosave]);
+  flushPendingLocalSaveRef.current = flushPendingLocalSave;
   const previewPresentationMs = useRef(0);
   const reusableRadiusPreview = useRef<{
     candidate: RadiusPreviewCandidate;
@@ -4354,7 +4387,7 @@ export function App() {
    * The tab that does not hold the project opens read-only instead, and takes
    * over if the owner goes away.
    */
-  useEffect(() => {
+  useLayoutEffect(() => {
     const projectId = doc?.projectId ?? null;
     if (!projectId || shareSession) {
       // A shared-link session never writes device storage, so it has no
@@ -4399,6 +4432,20 @@ export function App() {
       claim?.release();
     };
   }, [doc?.projectId, shareSession, setStatus]);
+
+  useLayoutEffect(() => {
+    if (!localSaveDirty) return;
+    const beforeUnload = (event: BeforeUnloadEvent) => {
+      // pagehide cannot keep an asynchronous IndexedDB write alive. Protect
+      // queued, in-flight and failed writes until the device transaction commits.
+      if (!localAutosave.dirty) return;
+      void flushPendingLocalSaveRef.current().catch(() => undefined);
+      event.preventDefault();
+      event.returnValue = 'Your latest edits are not yet saved on this device.';
+    };
+    window.addEventListener('beforeunload', beforeUnload);
+    return () => window.removeEventListener('beforeunload', beforeUnload);
+  }, [localAutosave, localSaveDirty]);
 
   useEffect(() => {
     // An armed face re-pick names a feature by id; a different project's
@@ -4449,14 +4496,15 @@ export function App() {
       // The device write comes first and the account drain is chained behind
       // it: the controller only learns of an edit once the local save has
       // stored it, so draining the account copy first would miss an edit still
-      // sitting in the 450 ms debounce and the tab would take it with it.
+      // queued or in flight and the tab would take it with it.
       // `keepalive` lets the account write started during teardown outlive
       // the page; without it the browser aborts the fetch with the document.
       void flushPendingLocalSaveRef
         .current()
         .then(() =>
           cloudProjectAutosaveRef.current?.flushPending({ keepalive: true })
-        );
+        )
+        .catch(() => undefined);
       // Independent of the document write and synchronous inside: the card
       // for whatever geometry was last ready, so a tab discarded from the
       // background still lists with a picture.
@@ -4868,7 +4916,7 @@ export function App() {
     // should not re-run project discovery or reopen a different document.
   }, [startupProjectId]);
 
-  useEffect(() => {
+  useLayoutEffect(() => {
     if (!doc) {
       return;
     }
@@ -4885,10 +4933,17 @@ export function App() {
       return;
     }
     setSaveState('saving');
-    pendingLocalSaveRef.current = doc;
+    setLocalSaveFailed(false);
+    const canonicalChange = localAutosave.enqueue(doc);
+    if (canonicalChange) {
+      // History is already accepted and visible: start its device transaction
+      // now, before paint. Only derived rebuild bookkeeping stays debounced.
+      void flushPendingLocalSave().catch(() => undefined);
+      return;
+    }
     const timeout = window.setTimeout(() => {
       localSaveTimeoutRef.current = null;
-      void flushPendingLocalSave();
+      void flushPendingLocalSave().catch(() => undefined);
     }, 450);
     localSaveTimeoutRef.current = timeout;
     return () => {
@@ -4897,7 +4952,7 @@ export function App() {
         localSaveTimeoutRef.current = null;
       }
     };
-  }, [doc, cloudAvailable, shareSession]);
+  }, [doc, cloudAvailable, shareSession, localAutosave, flushPendingLocalSave]);
 
   useEffect(() => {
     const projectId = doc?.projectId;
@@ -5028,7 +5083,7 @@ export function App() {
     [doc]
   );
   const presentedSaveState = presentedWorkspaceSaveState(
-    saveState,
+    localSaveDirty ? (localSaveFailed ? 'device-failed' : 'saving') : saveState,
     localOnlySources.length
   );
   const parameterScope = useMemo(
@@ -6324,20 +6379,15 @@ export function App() {
     setStatus('Editing this project here now.');
   }
 
-  async function flushPendingLocalSave() {
-    if (localSaveTimeoutRef.current !== null) {
-      window.clearTimeout(localSaveTimeoutRef.current);
-      localSaveTimeoutRef.current = null;
-    }
+  async function writePendingLocalDocument(
+    pending: ProjectDocument
+  ): Promise<boolean> {
     if (shareSessionRef.current) {
       // Belt to the autosave effect's braces: a shared-link document must
       // never reach this device's project store under the owner's id.
-      pendingLocalSaveRef.current = null;
-      return;
+      return false;
     }
-    const pending = pendingLocalSaveRef.current;
-    pendingLocalSaveRef.current = null;
-    // The debounce can come due before the claim has been answered. Writing on
+    // The first save can start before the claim has been answered. Writing on
     // the strength of not having heard "no" yet is the overwrite this is here
     // to prevent, so wait for the answer rather than assume it.
     await projectOwnershipSettledRef.current;
@@ -6345,56 +6395,42 @@ export function App() {
       // Another tab owns this project's storage. Its copy is the one being
       // kept up to date; writing here would land on top of it.
       setSaveState('local');
+      return false;
+    }
+    await saveLocalProject(pending);
+    return true;
+  }
+
+  function localDocumentSaved(
+    pending: ProjectDocument,
+    newerQueued: boolean
+  ): void {
+    setLocalSaveFailed(false);
+    if (managerRef.current?.document.projectId !== pending.projectId) return;
+    if (accountDocumentUnavailableProjectIdRef.current === pending.projectId) {
+      setSaveState('repair');
       return;
     }
-    if (!pending) {
-      return;
-    }
-    try {
-      await saveLocalProject(pending);
-      if (
-        accountDocumentUnavailableProjectIdRef.current === pending.projectId
-      ) {
-        setSaveState('repair');
-        return;
-      }
-      // The device write is the save; the account copy follows on its own
-      // schedule. Handing the document over here rather than from the edit
-      // effect means nothing is ever queued for the account that this device
-      // has not already stored.
-      const controller = cloudProjectAutosaveRef.current;
-      if (!controller) {
-        setSaveState(cloudAvailable ? 'synced' : 'local');
-      } else if (controller.holdsDocument(pending)) {
-        // An adoption, not an edit: the account already has this exact
-        // version, so there is nothing to mirror back.
-        setSaveState('synced');
-      } else {
-        controller.schedule(pending);
-      }
-    } catch (error) {
-      // The document goes back in the queue rather than on the floor. It was
-      // taken out of the ref above so a write that LANDS is not repeated, but a
-      // write that did not land leaves this closure holding the only copy of
-      // those edits — and simply returning loses them outright.
-      const repark = reparkFailedAutosave({
-        pending,
-        queued: pendingLocalSaveRef.current
-      });
-      if (repark) {
-        pendingLocalSaveRef.current = repark;
-      }
-      // Not `offline`: that state's own tooltip promises the work is saved on
-      // this device, which is the one thing a failed device write disproves.
-      // The account copy is never queued either — `controller.schedule` sits
-      // after the write above — so the document exists only in this tab.
-      console.error('Local autosave failed.', error);
-      setSaveState('device-failed');
-      setStatus(localAutosaveFailedStatus(error));
+    // Nothing reaches the account until its device transaction has committed.
+    // The displayed state stays Saving while any newer device write is pending.
+    const controller = cloudProjectAutosaveRef.current;
+    if (!controller) {
+      if (!newerQueued) setSaveState(cloudAvailable ? 'synced' : 'local');
+    } else if (controller.holdsDocument(pending)) {
+      if (!newerQueued) setSaveState('synced');
+    } else {
+      controller.schedule(pending);
     }
   }
 
-  flushPendingLocalSaveRef.current = flushPendingLocalSave;
+  function localDocumentSaveFailed(error: unknown): void {
+    // The queue retains the latest snapshot, including when an older write
+    // failed. Keep the unload guard and never promise a durable device copy.
+    console.error('Local autosave failed.', error);
+    setLocalSaveFailed(true);
+    setSaveState('device-failed');
+    setStatus(localAutosaveFailedStatus(error));
+  }
 
   function handleViewportChange(camera: ViewportCameraState) {
     updateCameraPose(doc?.projectId ?? null, camera);
@@ -8397,6 +8433,13 @@ export function App() {
     setBusy(true);
     try {
       await flushPendingLocalSave();
+    } catch {
+      // This is a failed device save, not a cloud-create failure. Do not enter
+      // the offline fallback and replace the unsaved project on screen.
+      setBusy(false);
+      return;
+    }
+    try {
       if (!session) {
         const localDocument = createProjectDocument(name, localUserId, units);
         await saveLocalProject(localDocument);
@@ -8755,6 +8798,8 @@ export function App() {
           ? `Saved ${countLabel(saved, 'part', 'parts')} to your account.`
           : `Saved ${countLabel(saved, 'part', 'parts')} · ${failed} could not be saved.`
       );
+    } catch {
+      // The local writer already reported the failure and retained the model.
     } finally {
       setBusy(false);
     }
@@ -8776,6 +8821,8 @@ export function App() {
     try {
       await flushPendingLocalSave();
       await syncOneToAccount(entry);
+    } catch {
+      // Keep failed local work open instead of starting an account transfer.
     } finally {
       setBusy(false);
     }
@@ -9110,7 +9157,13 @@ export function App() {
   }
 
   async function handleGoHome() {
-    await flushPendingLocalSave();
+    try {
+      await flushPendingLocalSave();
+    } catch {
+      // Keep the failed document open, with its export/retry guidance. Opening
+      // another project would otherwise replace the only unsaved snapshot.
+      return;
+    }
     const draining = cloudProjectAutosaveRef.current?.flushPending();
     // A manual checkpoint now shares the account queue. The device is safe;
     // navigation need not wait for its network response. Its continuation is
