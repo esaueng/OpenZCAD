@@ -38,6 +38,10 @@
 
 .sidebar-section .section-title {
   width: 100%;
+  /* Give the disclosure its own 24px row. The shared ::after reach already
+     enlarged its pointer area, but the text-height box made the visible
+     header harder to aim at and understated its target in layout audits. */
+  min-height: 24px;
   display: flex;
   align-items: center;
   gap: 5px;

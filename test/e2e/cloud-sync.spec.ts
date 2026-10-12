@@ -549,19 +549,15 @@ async function storedProjectNames(page: Page): Promise<string[]> {
 }
 
 /**
- * The device write is the save, so it has to survive the tab going away while
- * an edit is still inside the 450 ms local-save debounce.
+ * A canonical edit must start its device write without waiting for the
+ * derived-state debounce or a departure event.
  *
  * Timers are frozen before the edit so that debounce provably cannot fire on
- * its own, which leaves the page-hide flush as the only thing that can reach
- * IndexedDB. Freezing has to wait for the app to go quiet first: a real timer
- * armed before the fake clock is installed stays scheduled, and when it lands
- * it stores whatever edit is pending by then — which looks exactly like the
- * behaviour under test. The mid-test assertion that the old name is still
- * stored is what keeps this honest; if the freeze ever stops working, the test
- * fails there instead of passing for the wrong reason.
+ * its own. Freezing has to wait for the app to go quiet first: a real timer
+ * armed before the fake clock is installed stays scheduled, and could store
+ * the edit even if canonical changes still incorrectly waited for a timer.
  */
-test('stores an edit made inside the autosave debounce when the tab goes away', async ({
+test('writes a canonical edit without waiting for the autosave debounce', async ({
   page
 }) => {
   await stubApi(page);
@@ -574,13 +570,10 @@ test('stores an edit made inside the autosave debounce when the tab goes away', 
 
   await page.clock.install();
   await page.clock.pauseAt(Date.now());
-  await renameProject(page, 'Saved On Page Hide');
-  expect(await storedProjectNames(page)).toEqual(['Debounce Window']);
-
-  await page.evaluate(() => window.dispatchEvent(new Event('pagehide')));
+  await renameProject(page, 'Saved Without Departure');
   await expect
     .poll(() => storedProjectNames(page), { timeout: SYNC_BUDGET_MS })
-    .toContain('Saved On Page Hide');
+    .toContain('Saved Without Departure');
 });
 
 /**
@@ -855,10 +848,23 @@ test('syncs View measurements to a second device without changing the CAD docume
       reason: 'body-missing'
     };
 
+    // Device A also publishes its view session. Wait for that real handoff
+    // before opening B, then explicitly keep B's default view: the resume
+    // dialog otherwise races the Measure click and blocks the entire test.
+    await expect
+      .poll(() => api.sessions.length, { timeout: SYNC_BUDGET_MS })
+      .toBeGreaterThan(0);
     await pageB.goto('/');
     await pageB
       .locator('.start-tile-open', { hasText: 'Measured Across Devices' })
       .click();
+    const resume = pageB.getByRole('dialog', {
+      name: 'Resume where you left off?'
+    });
+    await resume
+      .getByRole('button', { name: 'Open with default view' })
+      .click();
+    await expect(resume).toHaveCount(0);
     await switchWorkspace(pageB, 'View');
     await armMeasure(pageB);
     await expect(

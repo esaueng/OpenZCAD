@@ -39,6 +39,7 @@ import type {
 } from '@openzcad/shared';
 
 import { errorMessage } from './errors';
+import { stepImportRefusal } from './refusalLanguage';
 import { inspectStepSolidsInWorker } from './stepImportWorkerClient';
 import {
   settleImportSource,
@@ -136,7 +137,7 @@ export const localStepImportSourceStore: StepImportSourceStore = {
 /** Where a refusal goes. Both surfaces, because either alone has been wrong. */
 export interface StepImportStatusSink {
   /** The status bar: one clipped line, always present. */
-  setStatus(message: string): void;
+  setStatus(message: string, options?: { detail?: string }): void;
   /**
    * Inline on whichever surface the user is looking at. A refusal that reached
    * only the status bar read as the import having silently done nothing.
@@ -599,15 +600,26 @@ export async function runStepImport(
         // Kept here, though, because the progress card is this import's own
         // surface: it can say why the file was refused instead of leaving
         // the reason in a status line that the next message overwrites.
-        rejection = message;
+        const refusal = stepImportRefusal(message);
+        rejection = refusal.message;
+        if (refusal.detail) {
+          status.setStatus(refusal.message, { detail: refusal.detail });
+        }
       }
     });
   } catch (error) {
     if (isCancellation(error, signal)) {
       outcome = 'cancelled';
     } else {
-      thrown = errorMessage(error, 'STEP import failed.');
-      status.setStatus(thrown);
+      const refusal = stepImportRefusal(
+        errorMessage(error, 'STEP import failed.')
+      );
+      thrown = refusal.message;
+      if (refusal.detail) {
+        status.setStatus(thrown, { detail: refusal.detail });
+      } else {
+        status.setStatus(thrown);
+      }
     }
   } finally {
     // `run` released the lock itself; this covers every path that never reached
