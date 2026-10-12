@@ -481,7 +481,13 @@ export default defineConfig(async ({ command, isPreview, mode }) => {
               // resident before leave-time flush. Reuse this preloaded chunk.
               id.includes('/apps/web/src/lib/projectThumbnailCapture.ts') ||
               id.includes('/apps/web/src/lib/sharedThumbnailCapture.ts') ||
-              id.includes('/apps/web/src/lib/projectShelf.ts')
+              id.includes('/apps/web/src/lib/projectShelf.ts') ||
+              // Device durability and its save indicators are synchronous
+              // workspace dependencies. Keep them resident in this existing
+              // preloaded chunk, including before a reload or navigation.
+              id.includes('/apps/web/src/lib/localProjectAutosave.ts') ||
+              id.includes('/apps/web/src/lib/localAutosaveFailure.ts') ||
+              id.includes('/apps/web/src/lib/workspaceSaveStatePresentation.ts')
             ) {
               return 'model';
             }

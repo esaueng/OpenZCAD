@@ -47,6 +47,7 @@ import {
   type StepImportResult,
   type StepImportSourceStore
 } from '../lib/stepImportRun';
+import { inspectStepSolidsInWorker } from '../lib/stepImportWorkerClient';
 
 // Orchestration tests supply geometry verdicts; real worker discovery is covered
 // by the browser import regression and the exact adapter tests.
@@ -1499,7 +1500,7 @@ interface ImportSession {
   marks: StepImportMarks;
   reserve(): ValidatedFeatureReservation | null;
   document(): ProjectDocument;
-  onStatus?(message: string): void;
+  onStatus?(message: string, options?: { detail?: string }): void;
   /**
    * The inline sink — whichever feature form is open. Separate from the status
    * bar because a refusal that reached only the status bar reads as the import
@@ -1560,7 +1561,7 @@ function importOnce(
     ...(deps.signal ? { signal: deps.signal } : {}),
     validatedFeature: { reserve: deps.reserve, run: deps.run },
     status: {
-      setStatus: (message) => deps.onStatus?.(message),
+      setStatus: (message, options) => deps.onStatus?.(message, options),
       setFeatureFormError: (message) => deps.onFeatureFormError?.(message)
     },
     marks: deps.marks,
@@ -3114,29 +3115,58 @@ describe('what an import reports while it runs', () => {
     });
   });
 
-  /**
-   * The kernel's own words. They already reach the status bar, which the next
-   * message overwrites; the card is this import's own surface and can keep
-   * them.
-   */
-  it('ends a refusal with the reason the kernel gave', async () => {
+  it('ends a STEP parse refusal with recovery guidance and keeps its diagnostic in the status detail', async () => {
     const device = createDevice();
     const { session, result } = oneTab(device, refusesFile('Frame'));
     const progress = recorder();
+    const onStatus = vi.fn();
 
     await act(async () => {
       await importOnce(file, {
         ...session,
+        onStatus,
         progress,
         run: (command, options) => result.current.run(command, options)
       });
     });
 
     expect(progress.ended?.tone).toBe('error');
-    // The kernel's diagnosis, not a generic "import failed" — this is the one
-    // sentence that tells the user what to fix upstream.
-    expect(progress.ended?.message).toBe(DANGLING_REFERENCE_PARSE_ERROR);
+    const message =
+      'This STEP file could not be read. Export a fresh STEP file from the source CAD project and try again.';
+    expect(progress.ended?.message).toBe(message);
+    expect(onStatus).toHaveBeenLastCalledWith(message, {
+      detail: DANGLING_REFERENCE_PARSE_ERROR
+    });
     expect(progress.ended?.action).toBeUndefined();
+  });
+
+  it('also presents a STEP parse failure during initial solid discovery without adding history', async () => {
+    vi.mocked(inspectStepSolidsInWorker).mockRejectedValueOnce(
+      new Error(DANGLING_REFERENCE_PARSE_ERROR)
+    );
+    const device = createDevice();
+    const { session, result, manager } = oneTab(device);
+    const progress = recorder();
+    const onStatus = vi.fn();
+
+    await act(async () => {
+      await importOnce(file, {
+        ...session,
+        onStatus,
+        progress,
+        run: (command, options) => result.current.run(command, options)
+      });
+    });
+
+    const message =
+      'This STEP file could not be read. Export a fresh STEP file from the source CAD project and try again.';
+    expect(progress.ended).toEqual({ tone: 'error', message });
+    expect(onStatus).toHaveBeenLastCalledWith(message, {
+      detail: DANGLING_REFERENCE_PARSE_ERROR
+    });
+    expect(listFeaturesInOrder(manager.document)).toHaveLength(0);
+    expect(manager.document.bodyOrder).toHaveLength(0);
+    expect(manager.canUndo).toBe(false);
   });
 
   /**
