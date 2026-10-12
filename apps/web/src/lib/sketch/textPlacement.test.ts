@@ -191,6 +191,51 @@ describe('textDraftPlaceable', () => {
     // `h` removed: the expression no longer resolves.
     expect(canPlaceTextDraft(draft, {}, {})).toBe(false);
   });
+
+  it.each([
+    { units: 'mm', expected: 50.8 },
+    { units: 'cm', expected: 5.08 },
+    { units: 'inch', expected: 2 }
+  ] as const)(
+    'resolves the text outline size in $units for preview and placement',
+    ({ units, expected }) => {
+      const draft = {
+        ...newSketchTextDraft(),
+        text: 'A',
+        size: '1 in + 25.4 mm'
+      };
+      expect(resolvedTextDraftSize(draft, {}, units)).toBeCloseTo(expected);
+      expect(textDraftPlaceable(draft, {}, units)).toBe(true);
+      expect(canPlaceTextDraft(draft, {}, {}, units)).toBe(true);
+      expect(canPlaceTextDraft(draft, {}, { busy: true }, units)).toBe(false);
+      expect(
+        canPlaceTextDraft(
+          draft,
+          {},
+          { budgetError: 'Project text exceeds' },
+          units
+        )
+      ).toBe(false);
+      expect(resolvedTextDraftSize({ ...draft, size: 10 }, {}, units)).toBe(10);
+    }
+  );
+
+  it.each(['30 deg', '2 mm * 3 mm', '1 in - 25.4 mm', '-1 cm'])(
+    'refuses a non-length or non-positive outline size: %s',
+    (size) => {
+      const draft = { ...newSketchTextDraft(), text: 'A', size };
+      expect(resolvedTextDraftSize(draft, {}, 'cm')).toBeNull();
+      expect(textDraftPlaceable(draft, {}, 'cm')).toBe(false);
+      expect(canPlaceTextDraft(draft, {}, {}, 'cm')).toBe(false);
+    }
+  );
+
+  it('uses the current parameter value in a unit-bearing size expression', () => {
+    const draft = { ...newSketchTextDraft(), text: 'A', size: 'h * 1 mm' };
+    expect(resolvedTextDraftSize(draft, { h: 8 }, 'cm')).toBeCloseTo(0.8);
+    expect(canPlaceTextDraft(draft, { h: 0 }, {}, 'cm')).toBe(false);
+    expect(canPlaceTextDraft(draft, {}, {}, 'cm')).toBe(false);
+  });
 });
 
 describe('canPlaceTextDraft', () => {

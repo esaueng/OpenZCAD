@@ -7892,10 +7892,15 @@ export function ModelViewer({
           const draft = mode.textDraft;
           if (
             draft &&
-            canPlaceTextDraft(draft, mode.parameterScope, {
-              busy: mode.textDraftBusy,
-              budgetError: mode.textDraftBudgetError
-            })
+            canPlaceTextDraft(
+              draft,
+              mode.parameterScope,
+              {
+                busy: mode.textDraftBusy,
+                budgetError: mode.textDraftBudgetError
+              },
+              mode.units
+            )
           ) {
             onSketchCommitRef.current(textObjectFromPoint(point, draft));
           }
@@ -11109,7 +11114,7 @@ export function ModelViewer({
     if (
       !sketchMode ||
       !draft ||
-      !textDraftPlaceable(draft, sketchMode.parameterScope)
+      !textDraftPlaceable(draft, sketchMode.parameterScope, sketchMode.units)
     ) {
       rig.setTextPreview(null, [], () => 0);
     } else {

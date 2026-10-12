@@ -14,16 +14,16 @@ import {
   type SketchObjectData
 } from '@openzcad/shared';
 
-const EMPTY_DOCUMENT = { nodes: {} } as Pick<
+const EMPTY_DOCUMENT = { nodes: {}, units: 'mm' } as Pick<
   ProjectDocument,
-  'nodes' | 'editHistory'
+  'nodes' | 'editHistory' | 'units'
 >;
 
 /** `count` one-letter text objects, `perSketch` to a sketch. */
 function documentWithText(
   count: number,
   perSketch = MAX_SKETCH_TEXT_OBJECTS
-): Pick<ProjectDocument, 'nodes' | 'editHistory'> {
+): Pick<ProjectDocument, 'nodes' | 'editHistory' | 'units'> {
   const nodes: Record<string, unknown> = {};
   for (let sketch = 0; sketch * perSketch < count; sketch += 1) {
     const objectIds: string[] = [];
@@ -44,7 +44,10 @@ function documentWithText(
       objectIds
     };
   }
-  return { nodes } as unknown as Pick<ProjectDocument, 'nodes' | 'editHistory'>;
+  return { nodes, units: 'mm' } as unknown as Pick<
+    ProjectDocument,
+    'nodes' | 'editHistory' | 'units'
+  >;
 }
 import { SketchTextCard } from './SketchTextCard';
 import {
@@ -62,7 +65,7 @@ function Harness({
 }: {
   onPlace?: (object: SketchObjectData) => void;
   onCancel?: () => void;
-  document?: Pick<ProjectDocument, 'nodes' | 'editHistory'>;
+  document?: Pick<ProjectDocument, 'nodes' | 'editHistory' | 'units'>;
   sketchId?: string | null;
   anchor?: { x: number; y: number } | null;
   initial?: SketchTextDraft;
@@ -160,6 +163,108 @@ describe('SketchTextCard', () => {
       'Size must resolve to a number greater than zero.'
     );
   });
+
+  it.each([
+    { units: 'mm', preview: '= 50.8' },
+    { units: 'cm', preview: '= 5.08' },
+    { units: 'inch', preview: '= 2' }
+  ] as const)(
+    'previews a composed length in $units and places the authored expression',
+    ({ units, preview }) => {
+      const onPlace = vi.fn();
+      render(
+        <Harness
+          document={{ ...EMPTY_DOCUMENT, units }}
+          initial={{ ...newSketchTextDraft(), text: 'Unit text' }}
+          anchor={{ x: 12, y: -3 }}
+          onPlace={onPlace}
+        />
+      );
+      const size = screen.getByLabelText('Size (em)');
+      fireEvent.change(size, { target: { value: '1 in + 25.4 mm' } });
+      expect(size).toHaveAccessibleDescription(preview);
+      expect(size).not.toHaveAttribute('aria-invalid');
+      expect(screen.queryByRole('alert')).not.toBeInTheDocument();
+      expect(screen.getByRole('button', { name: 'Place' })).toBeEnabled();
+      fireEvent.click(screen.getByRole('button', { name: 'Place' }));
+      expect(onPlace).toHaveBeenCalledExactlyOnceWith({
+        objectKind: 'text',
+        text: 'Unit text',
+        fontFamily: 'open-sans',
+        fontStyle: 'regular',
+        size: '1 in + 25.4 mm',
+        x: 12,
+        y: -3
+      });
+      expect(draftOf().size).toBe('1 in + 25.4 mm');
+    }
+  );
+
+  it('updates the size preview when document units change without editing the draft', () => {
+    const initial = { ...newSketchTextDraft(), text: 'A', size: '1 in' };
+    const view = render(<Harness initial={initial} />);
+    expect(screen.getByLabelText('Size (em)')).toHaveAccessibleDescription(
+      '= 25.4'
+    );
+    view.rerender(
+      <Harness
+        initial={initial}
+        document={{ ...EMPTY_DOCUMENT, units: 'inch' }}
+      />
+    );
+    expect(screen.getByLabelText('Size (em)')).toHaveAccessibleDescription(
+      '= 1'
+    );
+    expect(screen.getByRole('button', { name: 'Place' })).toBeEnabled();
+    expect(draftOf().size).toBe('1 in');
+  });
+
+  it.each([
+    { expression: '30 deg', expected: /expected a length/ },
+    { expression: '2 mm * 3 mm', expected: /expected a length/ }
+  ])(
+    'refuses a composed size with the wrong dimension: $expression',
+    ({ expression, expected }) => {
+      const onPlace = vi.fn();
+      render(
+        <Harness
+          document={{ ...EMPTY_DOCUMENT, units: 'cm' }}
+          initial={{ ...newSketchTextDraft(), text: 'A' }}
+          onPlace={onPlace}
+        />
+      );
+      const size = screen.getByLabelText('Size (em)');
+      fireEvent.change(size, { target: { value: expression } });
+      expect(size).toHaveAttribute('aria-invalid', 'true');
+      expect(size).toHaveAccessibleDescription(expected);
+      expect(screen.getByRole('button', { name: 'Place' })).toBeDisabled();
+      fireEvent.click(screen.getByRole('button', { name: 'Place' }));
+      expect(onPlace).not.toHaveBeenCalled();
+    }
+  );
+
+  it.each(['1 in - 25.4 mm', '-1 cm'])(
+    'refuses a converted non-positive size: %s',
+    (expression) => {
+      const onPlace = vi.fn();
+      render(
+        <Harness
+          document={{ ...EMPTY_DOCUMENT, units: 'inch' }}
+          initial={{ ...newSketchTextDraft(), text: 'A' }}
+          onPlace={onPlace}
+        />
+      );
+      fireEvent.change(screen.getByLabelText('Size (em)'), {
+        target: { value: expression }
+      });
+      expect(screen.getByRole('alert')).toHaveTextContent(
+        'Size must resolve to a number greater than zero.'
+      );
+      expect(screen.getByRole('button', { name: 'Place' })).toBeDisabled();
+      fireEvent.click(screen.getByRole('button', { name: 'Place' }));
+      expect(onPlace).not.toHaveBeenCalled();
+    }
+  );
 
   it('sets the family, style and alignment on the draft', async () => {
     const user = userEvent.setup();
