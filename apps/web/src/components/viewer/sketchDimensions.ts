@@ -9,6 +9,10 @@ import {
   type FatLineResolution
 } from '@openzcad/viewport';
 import type { SketchDimensionAnnotation } from '../../lib/sketch/dimensionAnnotations';
+import {
+  toSketchConstraintId,
+  type SketchDimensionIdentity
+} from '@openzcad/shared';
 
 interface LayoutRect {
   left: number;
@@ -31,7 +35,8 @@ function overlaps(a: LayoutRect, b: LayoutRect) {
  */
 export function avoidSketchDimensionOverlays(
   container: HTMLElement,
-  occupiedRoot: HTMLElement | null = container.parentElement
+  occupiedRoot: HTMLElement | null = container.closest('.viewer-area') ??
+    container.parentElement
 ) {
   const labels = [
     ...container.querySelectorAll<HTMLElement>('.sketch-dimension-label')
@@ -41,7 +46,7 @@ export function avoidSketchDimensionOverlays(
   const occupied = occupiedRoot
     ? [
         ...occupiedRoot.querySelectorAll<HTMLElement>(
-          '.viewer-rail-stack, .viewer-rail, .viewport-readout, .sketch-relations'
+          '.viewer-rail-stack, .viewer-rail, .viewport-readout, .sketch-relations, .sketch-flyouts, .model-drawer-float, .workspace-column-float'
         )
       ]
         .map((element) => element.getBoundingClientRect())
@@ -130,9 +135,13 @@ export function buildSketchDimensions(
     clientX: number,
     clientY: number
   ) => { x: number; y: number } | null = () => null,
-  move: (id: string, offset: { x: number; y: number }) => void = () => {}
+  move: (
+    identity: SketchDimensionIdentity,
+    offset: { x: number; y: number }
+  ) => void = () => {}
 ) {
   const group = new THREE.Group();
+  const referenceLabels = new Map<string, HTMLButtonElement>();
   group.name = 'sketch-dimensions';
   const spans: {
     graphic: DimensionGraphic;
@@ -146,8 +155,14 @@ export function buildSketchDimensions(
       basis.origin.z + basis.u.z * point.x + basis.v.z * point.y
     );
   for (const annotation of annotations) {
+    const identity = annotation.identity ?? {
+      kind: 'constraint',
+      constraintId: toSketchConstraintId(annotation.id)
+    };
+    const reference = identity.kind === 'reference';
+    const color = reference ? 0xb3c4d6 : 0x81a9ff;
     if (annotation.span) {
-      const graphic = createDimensionGraphic({ color: 0x81a9ff });
+      const graphic = createDimensionGraphic({ color });
       const start = world(annotation.span.start);
       const end = world(annotation.span.end);
       graphic.update(start, end, 1);
@@ -156,7 +171,7 @@ export function buildSketchDimensions(
     }
     for (const points of annotation.lines) {
       const line = createFatLine(points.map(world), {
-        color: 0x81a9ff,
+        color,
         linewidth: 1.5,
         depthTest: false,
         resolution
@@ -167,14 +182,21 @@ export function buildSketchDimensions(
     const button = document.createElement('button');
     button.type = 'button';
     button.className = 'sketch-dimension-label';
-    button.dataset.constraintId = annotation.id;
+    if (reference) button.dataset.annotationId = annotation.id;
+    else button.dataset.constraintId = annotation.id;
+    button.dataset.dimensionRole = reference ? 'reference' : 'driving';
     button.dataset.dimensionKind = annotation.kind;
-    button.textContent = `${annotation.label} · Driving`;
+    button.textContent = `${annotation.label} · ${reference ? 'Reference' : 'Driving'}`;
     button.setAttribute(
       'aria-label',
-      `Edit driving ${annotation.kind}: ${annotation.label}`
+      reference
+        ? `Reference ${annotation.kind}, ${annotation.label}`
+        : `Edit driving ${annotation.kind}: ${annotation.label}`
     );
-    button.title = 'Driving constraint target; click to edit';
+    button.title = reference
+      ? 'Measured reference; edit geometry to change its value. Drag or use arrow keys to move this label.'
+      : 'Driving constraint target; click to edit';
+    if (reference) referenceLabels.set(annotation.id, button);
     button.style.touchAction = 'none';
     let dragged = false;
     button.addEventListener('pointerdown', (event) => {
@@ -208,10 +230,11 @@ export function buildSketchDimensions(
         document.removeEventListener('pointercancel', finishLabelDrag);
         if (next.type === 'pointercancel') {
           dragged = false;
+          label.position.copy(world(annotation.anchor));
           return;
         }
         if (dragged && latest) {
-          move(annotation.id, {
+          move(identity, {
             x: latest.x - (annotation.baseAnchor ?? annotation.anchor).x,
             y: latest.y - (annotation.baseAnchor ?? annotation.anchor).y
           });
@@ -224,6 +247,30 @@ export function buildSketchDimensions(
     button.addEventListener('dblclick', (event) => event.stopPropagation());
     button.addEventListener('keydown', (event) => {
       if (event.key === 'Enter' || event.key === ' ') event.stopPropagation();
+      if (
+        reference &&
+        ['ArrowLeft', 'ArrowRight', 'ArrowUp', 'ArrowDown'].includes(event.key)
+      ) {
+        event.preventDefault();
+        event.stopPropagation();
+        const step = event.shiftKey ? 10 : 1;
+        move(identity, {
+          x:
+            (annotation.labelOffset?.x ?? 0) +
+            (event.key === 'ArrowRight'
+              ? step
+              : event.key === 'ArrowLeft'
+                ? -step
+                : 0),
+          y:
+            (annotation.labelOffset?.y ?? 0) +
+            (event.key === 'ArrowUp'
+              ? step
+              : event.key === 'ArrowDown'
+                ? -step
+                : 0)
+        });
+      }
     });
     button.addEventListener('click', (event) => {
       event.stopPropagation();
@@ -233,6 +280,7 @@ export function buildSketchDimensions(
         return;
       }
       const rect = button.getBoundingClientRect();
+      if (reference) return;
       edit(annotation.id, {
         x: rect.left + rect.width / 2,
         y: rect.top + rect.height / 2
@@ -247,6 +295,9 @@ export function buildSketchDimensions(
   });
   return {
     group,
+    focusReference(id: string) {
+      referenceLabels.get(id)?.focus({ preventScroll: true });
+    },
     update(scaleAt: (point: THREE.Vector3) => number, camera?: THREE.Camera) {
       for (const span of spans) {
         if (camera) {

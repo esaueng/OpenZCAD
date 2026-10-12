@@ -1,8 +1,15 @@
 import type {
   SketchConstraint,
+  SketchDimensionIdentity,
+  SketchReferenceDimension,
   SketchDimensionLabelPosition,
   SketchObjectData,
   SketchPointRef
+} from '@openzcad/shared';
+import {
+  resolveSketchReferenceDimension,
+  toSketchConstraintId,
+  type EntityId
 } from '@openzcad/shared';
 import { formatNumber } from '../model';
 import { boundedArcSweepDegrees } from '@openzcad/geometry';
@@ -12,6 +19,7 @@ type Resolve = (value: number | string) => number | undefined;
 
 export interface SketchDimensionAnnotation {
   id: string;
+  identity?: SketchDimensionIdentity;
   kind: 'distance' | 'angle' | 'radius';
   label: string;
   /** Derived placement before the user's persistent decluttering offset. */
@@ -29,7 +37,8 @@ export function sketchDimensionAnnotations(
   constraints: readonly SketchConstraint[],
   resolve: Resolve,
   units: string,
-  labelPositions?: Readonly<Record<string, SketchDimensionLabelPosition>>
+  labelPositions?: Readonly<Record<string, SketchDimensionLabelPosition>>,
+  references: readonly SketchReferenceDimension[] = []
 ): SketchDimensionAnnotation[] {
   const byId = new Map(objects.map((object) => [object.id, object.data]));
   const scalar = (value: number | string): number | undefined => {
@@ -81,6 +90,10 @@ export function sketchDimensionAnnotations(
         : { x: 0, y: 0 };
     return {
       ...annotation,
+      identity: annotation.identity ?? {
+        kind: 'constraint',
+        constraintId: toSketchConstraintId(annotation.id)
+      },
       baseAnchor,
       labelOffset,
       anchor: {
@@ -206,6 +219,108 @@ export function sketchDimensionAnnotations(
           id: constraint.constraintId,
           kind: 'angle',
           label: format(data.valueDeg, target, '°'),
+          anchor: at(startAngle + sweep / 2),
+          lines: [[center, arc[0]!], arc, [center, arc[32]!]]
+        })
+      );
+    }
+  }
+  for (const reference of references) {
+    const outcome = resolveSketchReferenceDimension(
+      byId as Map<EntityId, SketchObjectData>,
+      reference,
+      scalar
+    );
+    if (outcome.status !== 'current') continue; // The palette retains the named unresolved row.
+    const base = {
+      id: String(reference.annotationId),
+      identity: {
+        kind: 'reference' as const,
+        annotationId: reference.annotationId
+      },
+      kind: outcome.dimensionKind
+    };
+    if (outcome.dimensionKind === 'distance') {
+      const { a, b, value } = outcome;
+      const length = Math.hypot(b.x - a.x, b.y - a.y);
+      const shift = { x: -(b.y - a.y) * 0.15, y: (b.x - a.x) * 0.15 };
+      const start = { x: a.x + shift.x, y: a.y + shift.y };
+      const end = { x: b.x + shift.x, y: b.y + shift.y };
+      result.push(
+        positioned({
+          ...base,
+          label: `(${formatNumber(value)} ${units === 'inch' ? 'in' : units})`,
+          anchor: { x: (start.x + end.x) / 2, y: (start.y + end.y) / 2 },
+          ...(length > 1e-9 ? { span: { start, end } } : {}),
+          lines:
+            length > 1e-9
+              ? [
+                  [a, start],
+                  [b, end]
+                ]
+              : []
+        })
+      );
+    } else if (outcome.dimensionKind === 'radius') {
+      const { center, radius } = outcome;
+      const object =
+        reference.data.dimensionKind === 'radius'
+          ? byId.get(reference.data.objectId)
+          : undefined;
+      let angle = Math.PI / 4;
+      if (object?.objectKind === 'arc') {
+        const start = scalar(object.startAngleDeg);
+        const end = scalar(object.endAngleDeg);
+        if (start === undefined || end === undefined) continue;
+        try {
+          angle =
+            ((start + boundedArcSweepDegrees(start, end) / 2) * Math.PI) / 180;
+        } catch {
+          continue;
+        }
+      }
+      const end = {
+        x: center.x + radius * Math.cos(angle),
+        y: center.y + radius * Math.sin(angle)
+      };
+      result.push(
+        positioned({
+          ...base,
+          label: `(R ${formatNumber(radius)} ${units === 'inch' ? 'in' : units})`,
+          anchor: {
+            x: center.x + (end.x - center.x) * 0.6,
+            y: center.y + (end.y - center.y) * 0.6
+          },
+          span: { start: center, end },
+          lines: []
+        })
+      );
+    } else {
+      const { a, b, c, d } = outcome;
+      const lengthA = Math.hypot(b.x - a.x, b.y - a.y);
+      const lengthB = Math.hypot(d.x - c.x, d.y - c.y);
+      const u = { x: (b.x - a.x) / lengthA, y: (b.y - a.y) / lengthA };
+      const v = { x: (d.x - c.x) / lengthB, y: (d.y - c.y) / lengthB };
+      const cross = u.x * v.y - u.y * v.x;
+      const sweep = Math.atan2(cross, u.x * v.x + u.y * v.y);
+      const t =
+        Math.abs(cross) > 1e-6
+          ? ((c.x - a.x) * v.y - (c.y - a.y) * v.x) / cross
+          : 0;
+      const center = { x: a.x + t * u.x, y: a.y + t * u.y };
+      const radius = Math.min(lengthA, lengthB) * 0.3;
+      const startAngle = Math.atan2(u.y, u.x);
+      const at = (angle: number) => ({
+        x: center.x + radius * Math.cos(angle),
+        y: center.y + radius * Math.sin(angle)
+      });
+      const arc = Array.from({ length: 33 }, (_, i) =>
+        at(startAngle + (sweep * i) / 32)
+      );
+      result.push(
+        positioned({
+          ...base,
+          label: `(${formatNumber(outcome.valueDeg)}°)`,
           anchor: at(startAngle + sweep / 2),
           lines: [[center, arc[0]!], arc, [center, arc[32]!]]
         })

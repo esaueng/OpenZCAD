@@ -162,8 +162,13 @@ export function historyFeatureDigest(
     }
     // The objects live in their own nodes: `objectIds` alone would keep a
     // radius edit invisible to the digest and serve stale geometry.
+    const {
+      referenceDimensions: _references,
+      dimensionLabelPositions: _positions,
+      ...geometrySketch
+    } = sketch;
     return {
-      sketch,
+      sketch: geometrySketch,
       objects: sketch.objectIds.map(
         (objectId) => document.nodes[objectId] ?? null
       )
