@@ -711,14 +711,14 @@ export function createProjectDocument(
  * incomplete model, so a newer schema is refused instead.
  */
 export function normalizeDocument(document: ProjectDocument): ProjectDocument {
-  assertDocumentHistory(document);
-  for (const node of documentNodesWithHistory(document)) {
-    if (node.kind === 'sketch') assertSketchReferenceDimensions(node);
-  }
   if (document.schemaVersion > PROJECT_DOCUMENT_SCHEMA_VERSION) {
     throw new Error(
       `Unsupported project schema (v${document.schemaVersion}). Update OpenZCAD to open it.`
     );
+  }
+  assertDocumentHistory(document);
+  for (const node of documentNodesWithHistory(document)) {
+    if (node.kind === 'sketch') assertSketchReferenceDimensions(node);
   }
   const revisions = Array.isArray(document.revisions)
     ? document.revisions
