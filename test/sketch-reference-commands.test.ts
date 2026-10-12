@@ -18,6 +18,7 @@ import {
 import {
   resolveSketchReferenceDimension,
   documentNodesWithHistory,
+  PROJECT_DOCUMENT_SCHEMA_VERSION,
   sketchConstraintsForSolve,
   toSketchReferenceAnnotationId,
   toUserId,
@@ -57,6 +58,63 @@ function fixture(units: UnitSystem = 'mm') {
 }
 
 describe('S02 reference dimension commands', () => {
+  describe.each(['current', 'undo', 'redo'] as const)(
+    'future reference records in %s nodes',
+    (location) => {
+      it.each(['metadata', 'dimension kind'])(
+        'reports the schema upgrade before validating unknown %s',
+        (extension) => {
+          const f = fixture();
+          const manager = new CommandManager(f.document);
+          const add = commandFactories.addSketchReferenceDimension({
+            sketchId: f.sketchId,
+            data: { dimensionKind: 'radius', objectId: f.ids[2]! }
+          });
+          manager.execute(add);
+          if (location === 'undo') {
+            manager.execute(
+              commandFactories.deleteSketchReferenceDimension({
+                sketchId: f.sketchId,
+                annotationId: add.payload.ids!.annotationId
+              })
+            );
+          } else if (location === 'redo') {
+            manager.undo();
+          }
+          const persisted = JSON.parse(
+            JSON.stringify(manager.document)
+          ) as ProjectDocument;
+          const node = [...documentNodesWithHistory(persisted)].find(
+            (candidate) =>
+              candidate.kind === 'sketch' &&
+              candidate.referenceDimensions?.length
+          );
+          if (node?.kind !== 'sketch')
+            throw new Error('Missing saved reference');
+          Object.assign(
+            node.referenceDimensions![0]!.data,
+            extension === 'metadata'
+              ? { precision: 4 }
+              : { dimensionKind: 'diameter' }
+          );
+          // Current documents still reject records outside their schema.
+          expect(() => normalizeDocument(persisted)).toThrow(
+            /without driving values/
+          );
+          const future = {
+            ...persisted,
+            schemaVersion: PROJECT_DOCUMENT_SCHEMA_VERSION + 1
+          } as unknown as ProjectDocument;
+          const before = JSON.stringify(future);
+          expect(() => normalizeDocument(future)).toThrow(
+            `Unsupported project schema (v${future.schemaVersion}). Update OpenZCAD to open it.`
+          );
+          expect(JSON.stringify(future)).toBe(before);
+        }
+      );
+    }
+  );
+
   it('validates annotations retained only by undo/redo history', () => {
     const f = fixture();
     const manager = new CommandManager(f.document);
