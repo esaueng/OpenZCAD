@@ -35,7 +35,7 @@ interface SketchTextCardProps {
    * The document the object would join, and the session's sketch (null until
    * the first object creates it): the draft is budgeted as if already added.
    */
-  document: Pick<ProjectDocument, 'nodes' | 'editHistory'>;
+  document: Pick<ProjectDocument, 'nodes' | 'editHistory' | 'units'>;
   sketchId: string | null;
   /**
    * Where the live outline sits on the plane, written by the viewport as the
@@ -84,7 +84,8 @@ export function SketchTextCard({
   // whether it resolves is decided from the current scope wherever it is
   // asked, so a parameter change elsewhere is seen at once.
   const [sizeText, setSizeText] = useState(() => paramValueText(draft.size));
-  const sizeValid = resolvedTextDraftSize(draft, scope) !== null;
+  const sizeValid =
+    resolvedTextDraftSize(draft, scope, document.units) !== null;
   const empty = draft.text.length === 0;
   // The same document-wide check the commit asserts, run with the draft
   // added, so Place is never offered for an add the commit would refuse.
@@ -95,10 +96,12 @@ export function SketchTextCard({
         : textPlacementBudgetError(document, sketchId, draft.text),
     [document, sketchId, draft.text]
   );
-  const canPlace = canPlaceTextDraft(draft, scope, {
-    busy: disabled,
-    budgetError: error
-  });
+  const canPlace = canPlaceTextDraft(
+    draft,
+    scope,
+    { busy: disabled, budgetError: error },
+    document.units
+  );
 
   function submit(event: FormEvent) {
     // Enter in a field is not placement; the click on the plane is.
@@ -144,6 +147,7 @@ export function SketchTextCard({
               label="Size (em)"
               value={sizeText}
               scope={scope}
+              quantity={{ documentUnits: document.units, dimension: 'length' }}
               onChange={(value) => {
                 setSizeText(value);
                 onChange({ size: coerceParamValue(value) });

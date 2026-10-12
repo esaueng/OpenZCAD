@@ -4415,7 +4415,7 @@ export interface ExpressionDimensions {
 }
 
 /** The quantity a typed field holds. */
-export type ExpressionDimension = 'length' | 'angle';
+export type ExpressionDimension = 'length' | 'angle' | 'number';
 
 /** A typed field: the document's units and the quantity it measures. */
 export interface FieldQuantity {
@@ -4427,7 +4427,8 @@ export interface FieldQuantity {
  * Evaluates a typed field's expression: unit suffixes convert into the
  * document's units, and a result of another dimension is refused on the
  * evaluator's usual throw path — an angle or an area in a length field, a
- * length in an angle field. Unit-free results pass, because bare numbers and
+ * length or squared angle in an angle field, units in a count field.
+ * Unit-free results pass, because bare numbers and
  * parameters are document-unit values (and degrees) by definition.
  *
  * One rule for every owner of a typed field (the keypad, expression inputs),
@@ -4450,9 +4451,15 @@ export function evaluateFieldExpression(
   }
   // `length * (length - 1)` is zero exactly when the length power is 0 or 1.
   const angleField = dimension === 'angle';
-  if (angleField ? length !== 0 : angle !== 0 || length * (length - 1) !== 0) {
+  if (
+    dimension === 'number'
+      ? length !== 0 || angle !== 0
+      : angleField
+        ? length !== 0 || angle * (angle - 1) !== 0
+        : angle !== 0 || length * (length - 1) !== 0
+  ) {
     throw new Error(
-      `Incompatible dimensions in expression: expected ${angleField ? 'an angle, not a length' : 'a length, not an angle or area'}.`
+      `Incompatible dimensions in expression: expected ${dimension === 'number' ? 'a number without units' : angleField ? 'an angle, not a length' : 'a length, not an angle or area'}.`
     );
   }
   return value;

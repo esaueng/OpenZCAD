@@ -286,9 +286,9 @@ type SketchMoveEvent = Extract<
   { type: 'sketch-move-start' | 'sketch-move-commit' | 'sketch-move-cancel' }
 >;
 import type { PlaneBasis } from '@openzcad/geometry';
-import type { ParamValue, PlaneId, SketchObjectData } from '@openzcad/shared';
+import type { PlaneId, SketchObjectData } from '@openzcad/shared';
 import { buildPlanePickerRig } from './viewer/planePickerRig';
-import { evalParamValue } from '../lib/model';
+import { sketchValueResolver } from '../lib/sketch/valueResolver';
 import { reducesMotion } from '../lib/reducedMotion';
 import {
   readWheelDeviceMemory,
@@ -398,6 +398,7 @@ export interface SketchModeState {
   profiles: { outer: SketchPoint[]; holes: SketchPoint[][] }[];
   selectedObjectId: string | null;
   parameterScope: Record<string, number>;
+  units?: UnitSystem;
   /** Plane-local endpoints highlighted by Profile diagnostics on request. */
   diagnosticPoints: { x: number; y: number }[];
   /** Solver-named entities with a measured non-zero residual. */
@@ -453,8 +454,7 @@ interface SketchMoveDrag {
 
 /** Evaluates a sketch value in the session's parameter scope. */
 function sketchModeResolver(mode: SketchModeState) {
-  return (value: unknown) =>
-    evalParamValue(value as ParamValue, mode.parameterScope) ?? 0;
+  return sketchValueResolver(mode.parameterScope, mode.units ?? 'mm');
 }
 
 /**
@@ -7892,10 +7892,15 @@ export function ModelViewer({
           const draft = mode.textDraft;
           if (
             draft &&
-            canPlaceTextDraft(draft, mode.parameterScope, {
-              busy: mode.textDraftBusy,
-              budgetError: mode.textDraftBudgetError
-            })
+            canPlaceTextDraft(
+              draft,
+              mode.parameterScope,
+              {
+                busy: mode.textDraftBusy,
+                budgetError: mode.textDraftBudgetError
+              },
+              mode.units
+            )
           ) {
             onSketchCommitRef.current(textObjectFromPoint(point, draft));
           }
@@ -11040,8 +11045,7 @@ export function ModelViewer({
       setSketchSnapRefusal(null);
       return;
     }
-    const resolve = (value: unknown) =>
-      evalParamValue(value as ParamValue, sketchMode.parameterScope) ?? 0;
+    const resolve = sketchModeResolver(sketchMode);
     // The machine changes when a drag starts and when it is released, and
     // each change lands here; keep drawing the moved object rather than its
     // stored position until the edit it became has answered.
@@ -11110,12 +11114,11 @@ export function ModelViewer({
     if (
       !sketchMode ||
       !draft ||
-      !textDraftPlaceable(draft, sketchMode.parameterScope)
+      !textDraftPlaceable(draft, sketchMode.parameterScope, sketchMode.units)
     ) {
       rig.setTextPreview(null, [], () => 0);
     } else {
-      const resolve = (value: unknown) =>
-        evalParamValue(value as ParamValue, sketchMode.parameterScope) ?? 0;
+      const resolve = sketchModeResolver(sketchMode);
       rig.setTextPreview(
         textObjectFromPoint(textAnchorRef.current ?? { x: 0, y: 0 }, draft),
         sketchMode.objects,

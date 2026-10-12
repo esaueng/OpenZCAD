@@ -175,9 +175,10 @@ function fieldsValid(
  */
 function positiveError(
   value: string,
-  scope: Record<string, number>
+  scope: Record<string, number>,
+  quantity?: FieldQuantity
 ): string | undefined {
-  const preview = previewExpression(value, scope);
+  const preview = previewExpression(value, scope, quantity);
   return preview.ok && preview.value !== undefined && !(preview.value > 0)
     ? 'Must be greater than zero.'
     : undefined;
@@ -193,9 +194,10 @@ function countError(
   scope: Record<string, number>,
   min: number,
   max: number,
-  whole: boolean
+  whole: boolean,
+  quantity?: FieldQuantity
 ): string | undefined {
-  const preview = previewExpression(value, scope);
+  const preview = previewExpression(value, scope, quantity);
   if (!preview.ok || preview.value === undefined) return undefined;
   const count = whole ? preview.value : Math.round(preview.value);
   if (Number.isInteger(count) && count >= min && count <= max) return undefined;
@@ -481,6 +483,7 @@ export interface SketchFormValue {
 
 interface SketchFormProps {
   scope: Record<string, number>;
+  units?: UnitSystem;
   initial?: SketchFormValue;
   submitLabel: string;
   onSubmit(value: SketchFormValue): void;
@@ -521,6 +524,7 @@ export interface TextSketchFormValue {
 
 interface TextSketchFormProps {
   scope: Record<string, number>;
+  units?: UnitSystem;
   initial: {
     name: string;
     object: Extract<SketchObjectData, { objectKind: 'text' }>;
@@ -544,6 +548,7 @@ interface TextSketchFormProps {
  */
 export function TextSketchForm({
   scope,
+  units = 'mm',
   initial,
   onSubmit,
   onCancel,
@@ -562,10 +567,19 @@ export function TextSketchForm({
     x: paramValueText(initial.object.x),
     y: paramValueText(initial.object.y)
   }));
+  const length = { documentUnits: units, dimension: 'length' } as const;
+  const angle = { documentUnits: units, dimension: 'angle' } as const;
+  const sizeError = positiveError(values.size ?? '', scope, length);
   const canSubmit =
     name.trim().length > 0 &&
     text.text.length > 0 &&
-    fieldsValid(scope, Object.values(values));
+    fieldsValid(
+      scope,
+      ['size', 'x', 'y'].map((key) => values[key] ?? ''),
+      length
+    ) &&
+    fieldsValid(scope, [values.rotation ?? '0'], angle) &&
+    !sizeError;
 
   const setValue = (key: string) => (value: string) =>
     setValues((current) => ({ ...current, [key]: value }));
@@ -599,12 +613,15 @@ export function TextSketchForm({
           label="Size (em)"
           value={values.size ?? ''}
           scope={scope}
+          quantity={length}
+          error={sizeError}
           onChange={setValue('size')}
         />
         <ExprInput
           label="Rotation"
           value={values.rotation ?? ''}
           scope={scope}
+          quantity={angle}
           onChange={setValue('rotation')}
         />
       </div>
@@ -613,12 +630,14 @@ export function TextSketchForm({
           label="X"
           value={values.x ?? ''}
           scope={scope}
+          quantity={length}
           onChange={setValue('x')}
         />
         <ExprInput
           label="Y"
           value={values.y ?? ''}
           scope={scope}
+          quantity={length}
           onChange={setValue('y')}
         />
       </div>
@@ -633,6 +652,7 @@ export function TextSketchForm({
 
 export function SketchForm({
   scope,
+  units = 'mm',
   initial,
   submitLabel,
   onSubmit,
@@ -674,24 +694,32 @@ export function SketchForm({
         ? ['radius']
         : ['sides', 'radius'];
   const activeKeys = [...shapeKeys, 'centerX', 'centerY'];
+  const length = { documentUnits: units, dimension: 'length' } as const;
+  const number = { documentUnits: units, dimension: 'number' } as const;
   const shapeErrors: Record<string, string | undefined> = {
-    width: positiveError(values.width ?? '', scope),
-    height: positiveError(values.height ?? '', scope),
-    radius: positiveError(values.radius ?? '', scope),
+    width: positiveError(values.width ?? '', scope, length),
+    height: positiveError(values.height ?? '', scope, length),
+    radius: positiveError(values.radius ?? '', scope, length),
     sides: countError(
       values.sides ?? '',
       scope,
       3,
       MAX_SKETCH_POLYGON_SIDES,
-      true
+      true,
+      number
     )
   };
   const canSubmit =
     name.trim().length > 0 &&
-    fieldsValid(scope, [
-      offset,
-      ...activeKeys.map((key) => values[key] ?? '')
-    ]) &&
+    fieldsValid(scope, [offset], length) &&
+    activeKeys.every(
+      (key) =>
+        previewExpression(
+          values[key] ?? '',
+          scope,
+          key === 'sides' ? number : length
+        ).ok
+    ) &&
     shapeKeys.every((key) => !shapeErrors[key]);
 
   const setValue = (key: string) => (value: string) =>
@@ -778,6 +806,7 @@ export function SketchForm({
             label="Width"
             value={values.width ?? ''}
             scope={scope}
+            quantity={length}
             autoFocus
             onChange={setValue('width')}
             error={shapeErrors.width}
@@ -786,6 +815,7 @@ export function SketchForm({
             label="Height"
             value={values.height ?? ''}
             scope={scope}
+            quantity={length}
             onChange={setValue('height')}
             error={shapeErrors.height}
           />
@@ -796,6 +826,7 @@ export function SketchForm({
           label="Radius"
           value={values.radius ?? ''}
           scope={scope}
+          quantity={length}
           autoFocus
           onChange={setValue('radius')}
           error={shapeErrors.radius}
@@ -806,6 +837,7 @@ export function SketchForm({
           label="Sides"
           value={values.sides ?? ''}
           scope={scope}
+          quantity={number}
           onChange={setValue('sides')}
           error={shapeErrors.sides}
         />
@@ -815,12 +847,14 @@ export function SketchForm({
           label="Center X"
           value={values.centerX ?? ''}
           scope={scope}
+          quantity={length}
           onChange={setValue('centerX')}
         />
         <ExprInput
           label="Center Y"
           value={values.centerY ?? ''}
           scope={scope}
+          quantity={length}
           onChange={setValue('centerY')}
         />
       </div>
@@ -828,6 +862,7 @@ export function SketchForm({
         label="Plane offset"
         value={offset}
         scope={scope}
+        quantity={length}
         onChange={setOffset}
       />
     </FormShell>

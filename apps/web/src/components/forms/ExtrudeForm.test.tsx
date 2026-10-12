@@ -277,3 +277,198 @@ describe('Reverse direction', () => {
     );
   });
 });
+
+describe('extrusion field unit context', () => {
+  it.each([
+    {
+      units: 'mm',
+      expression: '5 mm + 2 cm',
+      distancePreview: '= 25',
+      backPreview: '= 5'
+    },
+    {
+      units: 'cm',
+      expression: '5 mm + 2 cm',
+      distancePreview: '= 2.5',
+      backPreview: '= 0.5'
+    },
+    {
+      units: 'inch',
+      expression: '1 in + 25.4 mm',
+      distancePreview: '= 2',
+      backPreview: '= 0.197'
+    }
+  ] as const)(
+    'previews both distances in $units and Enter commits the authored draft',
+    async ({ units, expression, distancePreview, backPreview }) => {
+      const user = userEvent.setup();
+      const onSubmit = vi.fn();
+      const onPreview = vi.fn();
+      render(
+        <ExtrudeForm
+          {...base}
+          units={units}
+          onSubmit={onSubmit}
+          onPreview={onPreview}
+          onCancel={vi.fn()}
+        />
+      );
+      const distance = screen.getByRole('textbox', { name: 'Distance' });
+      const back = screen.getByRole('textbox', { name: 'Back distance' });
+      await user.clear(distance);
+      await user.type(distance, expression);
+      await user.clear(back);
+      await user.type(back, '5 mm');
+      expect(distance).toHaveAccessibleDescription(distancePreview);
+      expect(back).toHaveAccessibleDescription(backPreview);
+      expect(screen.getByRole('button', { name: 'Apply' })).toBeEnabled();
+      expect(onSubmit).not.toHaveBeenCalled();
+      const draft = {
+        distance: expression,
+        backDistance: '5 mm',
+        symmetric: false
+      };
+      expect(onPreview).toHaveBeenLastCalledWith(
+        expect.objectContaining(draft)
+      );
+      await user.keyboard('{Enter}');
+      expect(onSubmit).toHaveBeenCalledExactlyOnceWith(
+        expect.objectContaining(draft)
+      );
+    }
+  );
+
+  it('reverses a unit-bearing expression without flattening it to a number', async () => {
+    const user = userEvent.setup();
+    const onSubmit = vi.fn();
+    const onPreview = vi.fn();
+    render(
+      <ExtrudeForm
+        {...base}
+        units="cm"
+        initial={{ ...initial, distance: '12 mm' }}
+        onSubmit={onSubmit}
+        onPreview={onPreview}
+        onCancel={vi.fn()}
+      />
+    );
+    await user.click(screen.getByRole('button', { name: 'Reverse direction' }));
+    const distance = screen.getByRole('textbox', { name: 'Distance' });
+    expect(distance).toHaveValue('-(12 mm)');
+    expect(distance).toHaveAccessibleDescription('= -1.2');
+    expect(onPreview).toHaveBeenLastCalledWith(
+      expect.objectContaining({ distance: '-(12 mm)' })
+    );
+    await user.click(screen.getByRole('button', { name: 'Apply' }));
+    expect(onSubmit).toHaveBeenCalledExactlyOnceWith(
+      expect.objectContaining({ distance: '-(12 mm)' })
+    );
+  });
+
+  it.each(['0 mm', '1 cm - 10 mm'])(
+    'refuses a converted zero distance %s for preview and Enter',
+    async (expression) => {
+      const user = userEvent.setup();
+      const onSubmit = vi.fn();
+      const onPreview = vi.fn();
+      render(
+        <ExtrudeForm
+          {...base}
+          units="inch"
+          onSubmit={onSubmit}
+          onPreview={onPreview}
+          onCancel={vi.fn()}
+        />
+      );
+      const distance = screen.getByRole('textbox', { name: 'Distance' });
+      await user.clear(distance);
+      await user.type(distance, expression);
+      expect(distance).toHaveAccessibleDescription(/Distance cannot be zero/);
+      expect(onPreview).toHaveBeenLastCalledWith(null);
+      expect(screen.getByRole('button', { name: 'Apply' })).toBeDisabled();
+      await user.keyboard('{Enter}');
+      expect(onSubmit).not.toHaveBeenCalled();
+    }
+  );
+
+  it('refuses a converted negative back distance, then discards it for symmetric extrusion', async () => {
+    const user = userEvent.setup();
+    const onSubmit = vi.fn();
+    const onPreview = vi.fn();
+    render(
+      <ExtrudeForm
+        {...base}
+        units="cm"
+        initial={{ ...initial, distance: '12 mm' }}
+        onSubmit={onSubmit}
+        onPreview={onPreview}
+        onCancel={vi.fn()}
+      />
+    );
+    const back = screen.getByRole('textbox', { name: 'Back distance' });
+    await user.clear(back);
+    await user.type(back, '-2 mm');
+    expect(back).toHaveAccessibleDescription(
+      'Back distance cannot be negative.'
+    );
+    expect(onPreview).toHaveBeenLastCalledWith(null);
+    expect(screen.getByRole('button', { name: 'Apply' })).toBeDisabled();
+    await user.keyboard('{Enter}');
+    expect(onSubmit).not.toHaveBeenCalled();
+    const symmetric = screen.getByRole('checkbox', {
+      name: 'Symmetric about the sketch plane'
+    });
+    await user.click(symmetric);
+    expect(screen.queryByRole('textbox', { name: 'Back distance' })).toBeNull();
+    expect(screen.getByRole('button', { name: 'Apply' })).toBeEnabled();
+    expect(onPreview).toHaveBeenLastCalledWith(
+      expect.objectContaining({
+        distance: '12 mm',
+        symmetric: true,
+        backDistance: 0
+      })
+    );
+    await user.click(symmetric);
+    expect(onPreview).toHaveBeenLastCalledWith(null);
+    expect(screen.getByRole('button', { name: 'Apply' })).toBeDisabled();
+    await user.click(symmetric);
+    await user.click(screen.getByRole('button', { name: 'Apply' }));
+    expect(onSubmit).toHaveBeenCalledExactlyOnceWith(
+      expect.objectContaining({
+        distance: '12 mm',
+        symmetric: true,
+        backDistance: 0
+      })
+    );
+  });
+
+  it.each([
+    { label: 'Distance', expression: '30 deg' },
+    { label: 'Back distance', expression: '2 mm * 3 mm' }
+  ])(
+    'refuses a wrong dimension in $label for preview and commit',
+    async ({ label, expression }) => {
+      const user = userEvent.setup();
+      const onSubmit = vi.fn();
+      const onPreview = vi.fn();
+      render(
+        <ExtrudeForm
+          {...base}
+          units="cm"
+          onSubmit={onSubmit}
+          onPreview={onPreview}
+          onCancel={vi.fn()}
+        />
+      );
+      const input = screen.getByRole('textbox', { name: label });
+      await user.clear(input);
+      await user.type(input, expression);
+      expect(input).toHaveAttribute('aria-invalid', 'true');
+      expect(input).toHaveAccessibleDescription(/expected a length/);
+      expect(onPreview).toHaveBeenLastCalledWith(null);
+      expect(screen.getByRole('button', { name: 'Apply' })).toBeDisabled();
+      await user.keyboard('{Enter}');
+      expect(onSubmit).not.toHaveBeenCalled();
+    }
+  );
+});

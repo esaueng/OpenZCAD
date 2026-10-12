@@ -1,5 +1,42 @@
 import { describe, expect, it } from 'vitest';
-import { previewExpression } from './model';
+import { evalParamValue, previewExpression } from './model';
+import {
+  requiredValueResolver,
+  sketchValueResolver
+} from './sketch/valueResolver';
+
+describe('stored sketch values in document units', () => {
+  it.each([
+    ['mm', 25],
+    ['cm', 2.5],
+    ['inch', 25 / 25.4]
+  ] as const)(
+    'resolves mixed length and angle fields in %s',
+    (documentUnits, width) => {
+      const context = { documentUnits };
+      const required = requiredValueResolver({}, documentUnits);
+      expect(required('5 mm + 2 cm')).toBeCloseTo(width, 12);
+      expect(() => required('missing')).toThrow(/missing/);
+      expect(() => requiredValueResolver({})('5 mm')).toThrow(
+        /document's units/
+      );
+      const resolve = sketchValueResolver({}, documentUnits);
+      expect(resolve('5 mm + 2 cm')).toBeCloseTo(width, 12);
+      expect(resolve('90 deg')).toBe(90);
+      expect(resolve('missing')).toBe(0);
+      expect(evalParamValue('5 mm + 2 cm', {}, documentUnits)).toBeCloseTo(
+        width,
+        12
+      );
+      expect(evalParamValue('90 deg', {}, documentUnits)).toBe(90);
+      expect(evalParamValue('missing', {}, documentUnits)).toBeNull();
+      expect(evalParamValue('5 mm + 2 cm', {})).toBeNull();
+      expect(
+        evalParamValue('30 deg', {}, { ...context, dimension: 'length' })
+      ).toBeNull();
+    }
+  );
+});
 
 describe('previewExpression undefined parameters (G5)', () => {
   it('names an undefined parameter when that is all that is wrong', () => {

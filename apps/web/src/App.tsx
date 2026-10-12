@@ -312,6 +312,11 @@ import {
   formatNumber,
   inferContentType
 } from './lib/model';
+import {
+  sketchValueResolver,
+  requiredValueResolver
+} from './lib/sketch/valueResolver';
+import { countClosedProfileSketches } from './lib/sketch/profileAvailability';
 import { useDocumentFonts } from './lib/textFonts';
 import { createProjectDiagnosticBundle } from './lib/projectDiagnostics';
 import type { DirectEditFixtureOutcome } from './lib/directEditFixture';
@@ -3682,9 +3687,7 @@ export function App() {
         bodyId: feature.bodyId,
         extrude: feature.featureId
       };
-      edgeFormPreview.request(
-        Math.abs(resolveParamValue(value.distance, parameterScope.scope))
-      );
+      edgeFormPreview.request(Math.abs(resolveDocumentValue(value.distance)));
     } catch (error) {
       setFeatureFormError(
         errorMessage(error, 'Unable to preview this extrusion.')
@@ -5090,6 +5093,10 @@ export function App() {
     () => (doc ? getParameterScope(doc) : { scope: {}, errors: [] }),
     [doc]
   );
+  const resolveDocumentValue = useMemo(
+    () => requiredValueResolver(parameterScope.scope, doc?.units),
+    [parameterScope.scope, doc?.units]
+  );
 
   // Text profiles resolve faces synchronously on this thread as well as in the
   // worker, so the faces this document names have to be parsed here too.
@@ -5952,6 +5959,8 @@ export function App() {
       return [];
     }
     const scope = parameterScope.scope;
+    const resolve = (value: ParamValue) =>
+      evalParamValue(value, scope, doc.units);
     return listNodesByKind(doc, 'sketch').flatMap((sketch) => {
       const objectNode = sketch.objectIds[0]
         ? doc.nodes[sketch.objectIds[0]]
@@ -5969,29 +5978,29 @@ export function App() {
         // and the region overlay renders it.
         return [];
       }
-      const centerX = evalParamValue(data.centerX, scope);
-      const centerY = evalParamValue(data.centerY, scope);
+      const centerX = resolve(data.centerX);
+      const centerY = resolve(data.centerY);
       if (centerX === null || centerY === null) {
         return [];
       }
       let profile: Vec2[];
       try {
         if (data.objectKind === 'rectangle') {
-          const width = evalParamValue(data.width, scope);
-          const height = evalParamValue(data.height, scope);
+          const width = resolve(data.width);
+          const height = resolve(data.height);
           if (width === null || height === null) {
             return [];
           }
           profile = rectangleProfile(width, height, centerX, centerY);
         } else if (data.objectKind === 'circle') {
-          const radius = evalParamValue(data.radius, scope);
+          const radius = resolve(data.radius);
           if (radius === null) {
             return [];
           }
           profile = circleProfile(radius, centerX, centerY);
         } else {
-          const sides = evalParamValue(data.sides, scope);
-          const radius = evalParamValue(data.radius, scope);
+          const sides = resolve(data.sides);
+          const radius = resolve(data.radius);
           if (sides === null || radius === null) {
             return [];
           }
@@ -6005,7 +6014,7 @@ export function App() {
         basis = resolvedSketchPlaneBasis(
           doc,
           sketch.planeRef,
-          (value) => evalParamValue(value, scope) ?? 0,
+          (value) => resolve(value) ?? 0,
           sketch.name
         );
       } catch {
@@ -6089,26 +6098,10 @@ export function App() {
         : 0,
     [liveBodyRepresentations, hiddenBodyIds]
   );
-  const closedProfileSketchCount = useMemo(() => {
-    if (!doc) return 0;
-    const scope = parameterScope.scope;
-    const resolve = (value: unknown): number =>
-      evalParamValue(value as ParamValue, scope) ?? 0;
-    return listNodesByKind(doc, 'sketch').filter((sketch) => {
-      const objects = sketch.objectIds.flatMap((objectId) => {
-        const node = doc.nodes[objectId];
-        return node?.kind === 'sketch-object'
-          ? [{ id: objectId, data: node.data }]
-          : [];
-      });
-      if (objects.length === 0) return false;
-      try {
-        return computeSketchRegions(objects, resolve).length > 0;
-      } catch {
-        return false;
-      }
-    }).length;
-  }, [doc, parameterScope]);
+  const closedProfileSketchCount = useMemo(
+    () => countClosedProfileSketches(doc, parameterScope.scope),
+    [doc, parameterScope]
+  );
   const availability: ToolAvailability = {
     editDisabledReason,
     sketchCount: sketchOptions.length,
@@ -12554,7 +12547,12 @@ export function App() {
       if (distance) {
         try {
           regionExtrudePreview.request(
-            resolveParamValue(distance, parameterScopeRef.current.scope)
+            resolveParamValue(
+              distance,
+              parameterScopeRef.current.scope,
+              'distance',
+              managerRef.current?.document.units
+            )
           );
         } catch {
           // Incomplete expressions keep the form open without a preview.
@@ -12603,7 +12601,10 @@ export function App() {
       return resolvedSketchPlaneBasis(
         sessionDocument,
         sketchSessionPlane,
-        (value) => evalParamValue(value, parameterScopeRef.current.scope) ?? 0,
+        sketchValueResolver(
+          parameterScopeRef.current.scope,
+          sessionDocument.units
+        ),
         sketchSessionNameRef.current
       );
     } catch {
@@ -12629,8 +12630,7 @@ export function App() {
           ? [{ id: objectId, data: node.data }]
           : [];
       }) ?? [];
-    const resolve = (value: unknown): number =>
-      evalParamValue(value as ParamValue, parameterScope.scope) ?? 0;
+    const resolve = sketchValueResolver(parameterScope.scope, doc.units);
     const textDraft = composingTextDraft(interaction);
     let profiles: {
       outer: { x: number; y: number }[];
@@ -12683,6 +12683,7 @@ export function App() {
       profiles,
       selectedObjectId: session.selectedObjectId,
       parameterScope: parameterScope.scope,
+      units: doc.units,
       constraintDiagnosticObjectIds: sketchSolveDiagnosticObjectIds,
       textOutlineBudgetError,
       definedObjectIds: sketchDefinedObjectIds,
@@ -12694,7 +12695,8 @@ export function App() {
       dimensions: sketchDimensionAnnotations(
         objects,
         sketch?.constraints ?? [],
-        (value) => evalParamValue(value, parameterScope.scope) ?? undefined,
+        (value) =>
+          evalParamValue(value, parameterScope.scope, doc.units) ?? undefined,
         doc.units,
         sketch?.dimensionLabelPositions
       ),
@@ -13144,9 +13146,7 @@ export function App() {
     try {
       return {
         objects,
-        analysis: computeSketchProfileAnalysis(objects, (value) =>
-          resolveParamValue(value, parameterScope.scope, 'sketch dimension')
-        ),
+        analysis: computeSketchProfileAnalysis(objects, resolveDocumentValue),
         error: null
       };
     } catch (error) {
@@ -13156,7 +13156,7 @@ export function App() {
         error: errorMessage(error, 'Unable to analyze this sketch.')
       };
     }
-  }, [editingSketchNode, doc, parameterScope.scope]);
+  }, [editingSketchNode, doc, resolveDocumentValue]);
 
   useEffect(() => {
     setSketchDiagnosticPoints([]);
@@ -13312,7 +13312,8 @@ export function App() {
         editingSketchNode,
         pending.kind as DrivingDimensionKind,
         pending.picks,
-        (value) => evalParamValue(value, parameterScope.scope) ?? undefined
+        (value) =>
+          evalParamValue(value, parameterScope.scope, doc.units) ?? undefined
       );
       if ('error' in measured) {
         setStatus(measured.error);
@@ -13402,7 +13403,7 @@ export function App() {
       setError: setSketchEditError,
       setBusy: setSketchSolving,
       resolve: (value) =>
-        evalParamValue(value, parameterScope.scope) ?? undefined,
+        evalParamValue(value, parameterScope.scope, base.units) ?? undefined,
       addPick: (objectId) =>
         dispatchInteraction({ type: 'sketch-edit-pick', objectId }),
       askValue: (kind, picks, label, initial) => {
@@ -13831,8 +13832,8 @@ export function App() {
                   : undefined;
             return (
               typeof value === 'string' &&
-              evalParamValue(value, beforeScope) !==
-                evalParamValue(value, afterScope)
+              evalParamValue(value, beforeScope, base.units) !==
+                evalParamValue(value, afterScope, prospective.units)
             );
           }) ?? false
       );
@@ -14100,8 +14101,7 @@ export function App() {
       return [];
     }
     const scope = parameterScope.scope;
-    const resolve = (value: unknown): number =>
-      evalParamValue(value as ParamValue, scope) ?? 0;
+    const resolve = sketchValueResolver(scope, doc.units);
     return listNodesByKind(doc, 'sketch').flatMap((sketch) => {
       const active =
         interaction.mode === 'sketch' &&
@@ -14349,7 +14349,7 @@ export function App() {
     const sketch = findSketch(current, sketchId as SketchId);
     if (!sketch) return null;
     const scope = getParameterScope(current).scope;
-    const resolve = (value: ParamValue) => evalParamValue(value, scope) ?? 0;
+    const resolve = sketchValueResolver(scope, current.units);
     try {
       resolvedSketchPlaneBasis(current, sketch.planeRef, resolve, sketch.name);
       // A curve pick carries only SketchId; open sketches are valid selections.
@@ -19010,7 +19010,11 @@ export function App() {
   // The palette names an offset plane as the status line does, not bare.
   const sketchOverviewOffset =
     sketchOverviewPlane?.type === 'canonical'
-      ? evalParamValue(sketchOverviewPlane.offset, parameterScope.scope)
+      ? evalParamValue(
+          sketchOverviewPlane.offset,
+          parameterScope.scope,
+          doc?.units
+        )
       : null;
   // The selected entity's editor rides in the sketch card, under the tools:
   // the card changes with the pick, and the right side stays the relations'.
@@ -19050,6 +19054,7 @@ export function App() {
       error={sketchEditError}
       data={selectedSketchEntity.data}
       scope={parameterScope.scope}
+      units={doc?.units}
       onApply={(data) => {
         void handleUpdateSketchEntity(data);
       }}
@@ -20069,6 +20074,7 @@ export function App() {
                     }}
                     sketches={sketchOptions}
                     scope={parameterScope.scope}
+                    units={doc.units}
                     profileCount={Math.max(1, selectedProfiles.length)}
                     bodies={doc.bodyOrder.flatMap((bodyId) => {
                       const body = doc.derived.bodyRepresentations[bodyId];
@@ -20092,21 +20098,18 @@ export function App() {
                       regionExtrudePreview.clear();
                       setLastValidPreview(null);
                       if (!value) return;
-                      offsetSetterRef.current?.(
-                        resolveParamValue(value.distance, parameterScope.scope)
-                      );
+                      const distance = resolveDocumentValue(value.distance);
+                      offsetSetterRef.current?.(distance);
                       dispatchInteraction({
                         type: 'set-extrude-choice',
                         choice: value.choice
                       });
-                      regionExtrudePreview.request(
-                        resolveParamValue(value.distance, parameterScope.scope)
-                      );
+                      regionExtrudePreview.request(distance);
                     }}
                     onSubmit={(value) => {
                       regionExtrudeSettings.current = value;
                       handleRegionExtrudeCommit(
-                        resolveParamValue(value.distance, parameterScope.scope),
+                        resolveDocumentValue(value.distance),
                         value.distance
                       );
                     }}

@@ -459,6 +459,9 @@ describe('F05 typed fields: the dimension a field holds', () => {
     );
     expect(evaluateFieldExpression('90deg', {}, angle)).toBe(90);
     expect(evaluateFieldExpression('45', {}, angle)).toBe(45);
+    expect(() =>
+      evaluateFieldExpression('(2 deg) * (3 deg)', {}, angle)
+    ).toThrow(/Incompatible dimensions/);
   });
 
   it('leaves untyped evaluation exactly as it was', () => {
@@ -466,5 +469,16 @@ describe('F05 typed fields: the dimension a field holds', () => {
       evaluateWithOptions('(2 mm) * (3 mm)', {}, { documentUnits: 'mm' })
     ).toBe(6);
     expect(() => evaluateWithOptions('5 mm', {})).toThrow(/document's units/);
+  });
+
+  it('requires dimensionless results for count fields without changing arithmetic', () => {
+    const number = { documentUnits: 'cm', dimension: 'number' } as const;
+    expect(evaluateFieldExpression('sides * 2', { sides: 3 }, number)).toBe(6);
+    expect(evaluateFieldExpression('(2 cm) / (5 mm)', {}, number)).toBe(4);
+    for (const expression of ['6 mm', '6 deg', '(2 cm) * (3 cm)']) {
+      expect(() => evaluateFieldExpression(expression, {}, number)).toThrow(
+        'expected a number without units'
+      );
+    }
   });
 });

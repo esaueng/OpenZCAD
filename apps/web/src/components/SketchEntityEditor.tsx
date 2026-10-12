@@ -1,9 +1,14 @@
 import { useState, type FormEvent } from 'react';
-import { coerceParamValue, evaluateExpression } from '@openzcad/document-core';
+import {
+  coerceParamValue,
+  evaluateFieldExpression,
+  type ExpressionDimension
+} from '@openzcad/document-core';
 import {
   MAX_SKETCH_ARC_SWEEP_DEGREES,
   MAX_SKETCH_POLYGON_SIDES,
-  type SketchObjectData
+  type SketchObjectData,
+  type UnitSystem
 } from '@openzcad/shared';
 import type { SketchConstraintToolKind } from '../lib/interaction/machine';
 import { CONSTRAINT_ICONS } from './constraintIcons';
@@ -24,6 +29,7 @@ export interface EntityConstraintItem {
 interface SketchEntityEditorProps {
   data: SketchObjectData;
   scope: Record<string, number>;
+  units?: UnitSystem;
   disabled?: boolean;
   error?: string | null;
   onApply(data: SketchObjectData): void;
@@ -45,6 +51,7 @@ interface SketchEntityEditorProps {
 interface FieldDefinition {
   key: string;
   label: string;
+  dimension?: ExpressionDimension;
   /**
    * Shown when the object carries no value for this key. Optional fields —
    * a text object's `rotation` — are absent on every object created before
@@ -73,7 +80,7 @@ const FIELDS: Record<SketchObjectData['objectKind'], FieldDefinition[]> = {
     { key: 'centerY', label: 'Center Y' }
   ],
   polygon: [
-    { key: 'sides', label: 'Sides' },
+    { key: 'sides', label: 'Sides', dimension: 'number' },
     { key: 'radius', label: 'Radius' },
     { key: 'centerX', label: 'Center X' },
     { key: 'centerY', label: 'Center Y' }
@@ -82,8 +89,8 @@ const FIELDS: Record<SketchObjectData['objectKind'], FieldDefinition[]> = {
     { key: 'radius', label: 'Radius' },
     { key: 'centerX', label: 'Center X' },
     { key: 'centerY', label: 'Center Y' },
-    { key: 'startAngleDeg', label: 'Start angle' },
-    { key: 'endAngleDeg', label: 'End angle' }
+    { key: 'startAngleDeg', label: 'Start angle', dimension: 'angle' },
+    { key: 'endAngleDeg', label: 'End angle', dimension: 'angle' }
   ],
   // Only the numeric fields. The string, family and style need a dedicated
   // editor (the text tool's form) rather than an expression input, so this
@@ -96,7 +103,7 @@ const FIELDS: Record<SketchObjectData['objectKind'], FieldDefinition[]> = {
     // size / unitsPerEm), not the capital height: Open Sans capitals stand
     // 0.714 of it. The label says which.
     { key: 'size', label: 'Size (em)' },
-    { key: 'rotation', label: 'Rotation', fallback: '0' },
+    { key: 'rotation', label: 'Rotation', fallback: '0', dimension: 'angle' },
     { key: 'x', label: 'X' },
     { key: 'y', label: 'Y' }
   ]
@@ -277,14 +284,18 @@ function nextData(
 function geometryError(
   kind: SketchObjectData['objectKind'],
   values: Record<string, string>,
-  scope: Record<string, number>
+  scope: Record<string, number>,
+  units: UnitSystem
 ): string | null {
   let resolved: Record<string, number>;
   try {
     resolved = Object.fromEntries(
-      FIELDS[kind].map(({ key }) => [
+      FIELDS[kind].map(({ key, dimension = 'length' }) => [
         key,
-        evaluateExpression(values[key] ?? '', scope)
+        evaluateFieldExpression(values[key] ?? '', scope, {
+          documentUnits: units,
+          dimension
+        })
       ])
     );
   } catch {
@@ -334,6 +345,7 @@ function geometryError(
 export function SketchEntityEditor({
   data,
   scope,
+  units = 'mm',
   disabled = false,
   error,
   onApply,
@@ -359,10 +371,14 @@ export function SketchEntityEditor({
   }
   const fields = FIELDS[data.objectKind];
   const expressionsValid = fields.every(
-    ({ key }) => previewExpression(values[key] ?? '', scope).ok
+    ({ key, dimension = 'length' }) =>
+      previewExpression(values[key] ?? '', scope, {
+        documentUnits: units,
+        dimension
+      }).ok
   );
   const semanticError = expressionsValid
-    ? geometryError(data.objectKind, values, scope)
+    ? geometryError(data.objectKind, values, scope, units)
     : null;
   const valid = expressionsValid && !semanticError;
 
@@ -402,12 +418,13 @@ export function SketchEntityEditor({
             <TextObjectFields value={textAttrs} onChange={setTextAttrs} />
           )}
           <div className="sketch-entity-fields">
-            {fields.map(({ key, label }) => (
+            {fields.map(({ key, label, dimension = 'length' }) => (
               <ExprInput
                 key={key}
                 label={label}
                 value={values[key] ?? ''}
                 scope={scope}
+                quantity={{ documentUnits: units, dimension }}
                 onChange={(value) =>
                   setValues((current) => ({ ...current, [key]: value }))
                 }
