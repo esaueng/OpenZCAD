@@ -1897,7 +1897,8 @@ button.command-rail:disabled {
   pointer-events: none;
 }
 
-.model-drawer-float > .sidebar {
+.model-drawer-float > .sidebar,
+.model-drawer-float > .error-boundary {
   flex: 1;
   min-width: 0;
   overflow-y: auto;
