@@ -906,28 +906,29 @@ function pointOnPlane(basis: PlaneBasis, point: Vec2, offset: number): Vec3 {
 
 function profilePoints(
   data: SketchObjectData,
-  scope: Record<string, number>
+  scope: Record<string, number>,
+  documentUnits: UnitSystem
 ): Vec2[] {
   switch (data.objectKind) {
     case 'rectangle':
       return rectangleProfile(
-        resolveParamValue(data.width, scope, 'width'),
-        resolveParamValue(data.height, scope, 'height'),
-        resolveParamValue(data.centerX, scope, 'center X'),
-        resolveParamValue(data.centerY, scope, 'center Y')
+        resolveParamValue(data.width, scope, 'width', documentUnits),
+        resolveParamValue(data.height, scope, 'height', documentUnits),
+        resolveParamValue(data.centerX, scope, 'center X', documentUnits),
+        resolveParamValue(data.centerY, scope, 'center Y', documentUnits)
       );
     case 'circle':
       return circleProfile(
-        resolveParamValue(data.radius, scope, 'radius'),
-        resolveParamValue(data.centerX, scope, 'center X'),
-        resolveParamValue(data.centerY, scope, 'center Y')
+        resolveParamValue(data.radius, scope, 'radius', documentUnits),
+        resolveParamValue(data.centerX, scope, 'center X', documentUnits),
+        resolveParamValue(data.centerY, scope, 'center Y', documentUnits)
       );
     case 'polygon':
       return polygonProfile(
-        resolveParamValue(data.sides, scope, 'sides'),
-        resolveParamValue(data.radius, scope, 'radius'),
-        resolveParamValue(data.centerX, scope, 'center X'),
-        resolveParamValue(data.centerY, scope, 'center Y')
+        resolveParamValue(data.sides, scope, 'sides', documentUnits),
+        resolveParamValue(data.radius, scope, 'radius', documentUnits),
+        resolveParamValue(data.centerX, scope, 'center X', documentUnits),
+        resolveParamValue(data.centerY, scope, 'center Y', documentUnits)
       );
     case 'line':
     case 'arc':
@@ -1002,7 +1003,12 @@ function sweepSemanticDescriptor(
     return { kind: 'revolve', sourceKey, sourceKind };
   }
   const basis = sketch ? (sketchBases.get(sketch.sketchId) ?? null) : null;
-  const distance = resolveParamValue(feature.data.distance, scope, 'distance');
+  const distance = resolveParamValue(
+    feature.data.distance,
+    scope,
+    'distance',
+    document.units
+  );
   const direction = basis
     ? {
         x: basis.normal.x * distance,
@@ -1020,7 +1026,7 @@ function sweepSemanticDescriptor(
   ) {
     return { kind: 'extrude', sourceKey, sourceKind, direction };
   }
-  const points = profilePoints(object.data, scope);
+  const points = profilePoints(object.data, scope, document.units);
   const sideAnchors = points.map((start, index) => {
     const end = points[(index + 1) % points.length]!;
     const profileMidpoint = pointOnPlane(
@@ -1077,7 +1083,7 @@ export class OcctStepKernelAdapter {
         );
       }
       return frameForPlaneRef(planeRef, (value) =>
-        resolveParamValue(value, scope, 'sketch offset')
+        resolveParamValue(value, scope, 'sketch offset', document.units)
       );
     }
 
@@ -1120,26 +1126,27 @@ export class OcctStepKernelAdapter {
     data: SketchObjectData,
     basis: PlaneBasis,
     offset: number,
-    scope: Record<string, number>
+    scope: Record<string, number>,
+    documentUnits: UnitSystem
   ): ShapeHandle {
     if (data.objectKind === 'circle') {
       const center = pointOnPlane(
         basis,
         {
-          x: resolveParamValue(data.centerX, scope, 'center X'),
-          y: resolveParamValue(data.centerY, scope, 'center Y')
+          x: resolveParamValue(data.centerX, scope, 'center X', documentUnits),
+          y: resolveParamValue(data.centerY, scope, 'center Y', documentUnits)
         },
         offset
       );
       const edge = this.kernel.makeCircleEdge(
         center,
         basis.normal,
-        resolveParamValue(data.radius, scope, 'radius')
+        resolveParamValue(data.radius, scope, 'radius', documentUnits)
       );
       return this.kernel.makeFace(this.kernel.makeWire([edge]));
     }
 
-    const points = profilePoints(data, scope).map((point) =>
+    const points = profilePoints(data, scope, documentUnits).map((point) =>
       pointOnPlane(basis, point, offset)
     );
     const edges = points.map((start, index) =>
@@ -1311,7 +1318,12 @@ export class OcctStepKernelAdapter {
     warn: (message: string) => void
   ): ShapeHandle {
     const regions = resolveRegionProfiles(document, sketch, data, scope);
-    const distance = resolveParamValue(data.distance, scope, 'distance');
+    const distance = resolveParamValue(
+      data.distance,
+      scope,
+      'distance',
+      document.units
+    );
     const flattenedOutlines = regions.filter(
       (region) => region.outline?.fidelity === 'flattened'
     ).length;
@@ -1398,13 +1410,20 @@ export class OcctStepKernelAdapter {
         `Sketch "${sketch.name}" plane did not resolve at its history position.`
       );
     }
-    const face = this.makeProfileFace(object.data, basis, 0, scope);
+    const face = this.makeProfileFace(
+      object.data,
+      basis,
+      0,
+      scope,
+      document.units
+    );
 
     if (feature.data.featureKind === 'extrude') {
       const distance = resolveParamValue(
         feature.data.distance,
         scope,
-        'distance'
+        'distance',
+        document.units
       );
       return this.kernel.extrude(
         face,

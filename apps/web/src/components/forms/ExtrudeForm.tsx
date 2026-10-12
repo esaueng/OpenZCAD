@@ -1,6 +1,11 @@
 import { useEffect, useRef, useState, type MutableRefObject } from 'react';
 import { coerceParamValue } from '@openzcad/document-core';
-import type { BodyId, ParamValue, SketchId } from '@openzcad/shared';
+import type {
+  BodyId,
+  ParamValue,
+  SketchId,
+  UnitSystem
+} from '@openzcad/shared';
 import type { ExtrudeChoice } from '../../lib/extrudeInference';
 import { paramValueText, previewExpression } from '../../lib/model';
 import { ExprInput } from '../ExprInput';
@@ -17,6 +22,7 @@ export interface ExtrudeFormValue {
 
 interface ExtrudeFormProps {
   scope: Record<string, number>;
+  units?: UnitSystem;
   sketches: { sketchId: SketchId; name: string }[];
   bodies: { bodyId: BodyId; name: string }[];
   initial: {
@@ -69,6 +75,7 @@ export function reversedDistance(distance: string): string {
 /** The same draft editor for a selected profile and an existing feature. */
 export function ExtrudeForm({
   scope,
+  units = 'mm',
   sketches,
   bodies,
   initial,
@@ -96,13 +103,14 @@ export function ExtrudeForm({
   // the zero-distance error waits for that edit (or an attempt to submit)
   // rather than greeting the card in red. Create stays disabled either way.
   const [distanceEdited, setDistanceEdited] = useState(false);
-  const distance = previewExpression(draft.distance, scope);
-  const back = previewExpression(draft.backDistance, scope);
+  const quantity = { documentUnits: units, dimension: 'length' } as const;
+  const distance = previewExpression(draft.distance, scope, quantity);
+  const back = previewExpression(draft.backDistance, scope, quantity);
   const valid = valueFor(draft) !== null;
 
   function valueFor(next: typeof draft): ExtrudeFormValue | null {
-    const d = previewExpression(next.distance, scope);
-    const b = previewExpression(next.backDistance, scope);
+    const d = previewExpression(next.distance, scope, quantity);
+    const b = previewExpression(next.backDistance, scope, quantity);
     const targetRequired =
       next.choice.operation === 'add' || next.choice.operation === 'cut';
     const targetBodyId = targetRequired ? next.choice.targetBodyId : undefined;
@@ -207,6 +215,7 @@ export function ExtrudeForm({
           label="Distance"
           value={draft.distance}
           scope={scope}
+          quantity={quantity}
           onChange={(distance) => change({ distance })}
           error={
             distanceEdited && distance.ok && distance.value === 0
@@ -243,6 +252,7 @@ export function ExtrudeForm({
             label="Back distance"
             value={draft.backDistance}
             scope={scope}
+            quantity={quantity}
             onChange={(backDistance) => change({ backDistance })}
             error={
               back.ok && back.value !== undefined && back.value < 0

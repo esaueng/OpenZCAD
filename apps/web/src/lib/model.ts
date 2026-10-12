@@ -8,7 +8,8 @@ import type {
   FeatureKind,
   ParamValue,
   PlaneId,
-  RevolveAxis
+  RevolveAxis,
+  UnitSystem
 } from '@openzcad/shared';
 
 /** Raw text shown in an editable field for a stored parametric value. */
@@ -120,15 +121,16 @@ function undefinedParameterIn(
 export function evalParamValue(
   value: ParamValue,
   scope: Record<string, number>,
-  quantity?: FieldQuantity
+  quantity?: FieldQuantity | UnitSystem
 ): number | null {
   if (typeof value === 'number') {
     return Number.isFinite(value) ? value : null;
   }
   try {
-    const result = quantity
-      ? evaluateFieldExpression(value, scope, quantity)
-      : evaluateExpression(value, scope);
+    const result =
+      typeof quantity === 'object'
+        ? evaluateFieldExpression(value, scope, quantity)
+        : evaluateExpression(value, scope, { documentUnits: quantity });
     return Number.isFinite(result) ? result : null;
   } catch {
     return null;

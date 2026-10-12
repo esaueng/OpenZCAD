@@ -27,7 +27,8 @@ import type { DxfEntity } from '@openzcad/io-dxf';
 import {
   MAX_SKETCH_ARC_SWEEP_DEGREES,
   type ParamValue,
-  type SketchObjectData
+  type SketchObjectData,
+  type UnitSystem
 } from '@openzcad/shared';
 
 /**
@@ -85,8 +86,11 @@ export interface SketchDxfInput {
   readonly objects: readonly SketchDxfInputObject[];
   readonly scope: Readonly<Record<string, number>>;
   readonly basis: PlaneBasis;
+  readonly documentUnits: UnitSystem;
   readonly millimeterScale: number;
 }
+
+type SketchDxfContext = Pick<SketchDxfInput, 'scope' | 'documentUnits'>;
 
 /**
  * The existing error/refusal path is a thrown `Error` whose message the
@@ -196,7 +200,7 @@ export function validateSketchDxfBasis(
 /** Resolve one parametric scalar; an unresolvable expression refuses the file. */
 function resolveScalar(
   value: ParamValue,
-  scope: Readonly<Record<string, number>>,
+  context: SketchDxfContext,
   label: string,
   objectId: string
 ): number {
@@ -210,7 +214,12 @@ function resolveScalar(
     );
   }
   try {
-    resolved = resolveParamValue(value, scope, label);
+    resolved = resolveParamValue(
+      value,
+      context.scope,
+      label,
+      context.documentUnits
+    );
   } catch (error) {
     refuse(
       'parameters-invalid',
@@ -228,14 +237,14 @@ function resolveScalar(
 
 function lineEntities(
   data: Extract<SketchObjectData, { objectKind: 'line' }>,
-  scope: Readonly<Record<string, number>>,
+  context: SketchDxfContext,
   objectId: string,
   millimeterScale: number
 ): DxfEntity[] {
-  const x1 = resolveScalar(data.x1, scope, 'line x1', objectId);
-  const y1 = resolveScalar(data.y1, scope, 'line y1', objectId);
-  const x2 = resolveScalar(data.x2, scope, 'line x2', objectId);
-  const y2 = resolveScalar(data.y2, scope, 'line y2', objectId);
+  const x1 = resolveScalar(data.x1, context, 'line x1', objectId);
+  const y1 = resolveScalar(data.y1, context, 'line y1', objectId);
+  const x2 = resolveScalar(data.x2, context, 'line x2', objectId);
+  const y2 = resolveScalar(data.y2, context, 'line y2', objectId);
   if (x1 === x2 && y1 === y2) {
     refuse(
       'invalid-geometry',
@@ -253,13 +262,13 @@ function lineEntities(
 
 function circleEntities(
   data: Extract<SketchObjectData, { objectKind: 'circle' }>,
-  scope: Readonly<Record<string, number>>,
+  context: SketchDxfContext,
   objectId: string,
   millimeterScale: number
 ): DxfEntity[] {
-  const centerX = resolveScalar(data.centerX, scope, 'center X', objectId);
-  const centerY = resolveScalar(data.centerY, scope, 'center Y', objectId);
-  const radius = resolveScalar(data.radius, scope, 'radius', objectId);
+  const centerX = resolveScalar(data.centerX, context, 'center X', objectId);
+  const centerY = resolveScalar(data.centerY, context, 'center Y', objectId);
+  const radius = resolveScalar(data.radius, context, 'radius', objectId);
   if (!(radius > 0)) {
     refuse(
       'invalid-geometry',
@@ -277,14 +286,14 @@ function circleEntities(
 
 function arcEntities(
   data: Extract<SketchObjectData, { objectKind: 'arc' }>,
-  scope: Readonly<Record<string, number>>,
+  context: SketchDxfContext,
   objectId: string,
   millimeterScale: number,
   diagnostics: string[]
 ): DxfEntity[] {
-  const centerX = resolveScalar(data.centerX, scope, 'center X', objectId);
-  const centerY = resolveScalar(data.centerY, scope, 'center Y', objectId);
-  const radius = resolveScalar(data.radius, scope, 'radius', objectId);
+  const centerX = resolveScalar(data.centerX, context, 'center X', objectId);
+  const centerY = resolveScalar(data.centerY, context, 'center Y', objectId);
+  const radius = resolveScalar(data.radius, context, 'radius', objectId);
   if (!(radius > 0)) {
     refuse(
       'invalid-geometry',
@@ -293,11 +302,11 @@ function arcEntities(
   }
   const start = resolveScalar(
     data.startAngleDeg,
-    scope,
+    context,
     'start angle',
     objectId
   );
-  const end = resolveScalar(data.endAngleDeg, scope, 'end angle', objectId);
+  const end = resolveScalar(data.endAngleDeg, context, 'end angle', objectId);
   // Classify the RAW difference before any modulo normalization: `end - start
   // === 0` is a zero sweep, while an allowed raw `+360°` is full-circle intent
   // (DXF R12 has no portable full-turn arc). A normalization that turned
@@ -351,14 +360,14 @@ function arcEntities(
 
 function rectangleEntities(
   data: Extract<SketchObjectData, { objectKind: 'rectangle' }>,
-  scope: Readonly<Record<string, number>>,
+  context: SketchDxfContext,
   objectId: string,
   millimeterScale: number
 ): DxfEntity[] {
-  const width = resolveScalar(data.width, scope, 'width', objectId);
-  const height = resolveScalar(data.height, scope, 'height', objectId);
-  const centerX = resolveScalar(data.centerX, scope, 'center X', objectId);
-  const centerY = resolveScalar(data.centerY, scope, 'center Y', objectId);
+  const width = resolveScalar(data.width, context, 'width', objectId);
+  const height = resolveScalar(data.height, context, 'height', objectId);
+  const centerX = resolveScalar(data.centerX, context, 'center X', objectId);
+  const centerY = resolveScalar(data.centerY, context, 'center Y', objectId);
   let corners: Vec2[];
   try {
     corners = rectangleProfile(width, height, centerX, centerY);
@@ -380,14 +389,14 @@ function rectangleEntities(
 
 function polygonEntities(
   data: Extract<SketchObjectData, { objectKind: 'polygon' }>,
-  scope: Readonly<Record<string, number>>,
+  context: SketchDxfContext,
   objectId: string,
   millimeterScale: number
 ): DxfEntity[] {
-  const sides = resolveScalar(data.sides, scope, 'sides', objectId);
-  const radius = resolveScalar(data.radius, scope, 'radius', objectId);
-  const centerX = resolveScalar(data.centerX, scope, 'center X', objectId);
-  const centerY = resolveScalar(data.centerY, scope, 'center Y', objectId);
+  const sides = resolveScalar(data.sides, context, 'sides', objectId);
+  const radius = resolveScalar(data.radius, context, 'radius', objectId);
+  const centerX = resolveScalar(data.centerX, context, 'center X', objectId);
+  const centerY = resolveScalar(data.centerY, context, 'center Y', objectId);
   let points: Vec2[];
   try {
     points = polygonProfile(sides, radius, centerX, centerY);
@@ -447,24 +456,19 @@ export function sketchDxfEntities(input: SketchDxfInput): SketchDxfOutcome {
       switch (data.objectKind) {
         case 'line':
           entities.push(
-            ...lineEntities(data, input.scope, object.id, input.millimeterScale)
+            ...lineEntities(data, input, object.id, input.millimeterScale)
           );
           break;
         case 'circle':
           entities.push(
-            ...circleEntities(
-              data,
-              input.scope,
-              object.id,
-              input.millimeterScale
-            )
+            ...circleEntities(data, input, object.id, input.millimeterScale)
           );
           break;
         case 'arc':
           entities.push(
             ...arcEntities(
               data,
-              input.scope,
+              input,
               object.id,
               input.millimeterScale,
               diagnostics
@@ -473,22 +477,12 @@ export function sketchDxfEntities(input: SketchDxfInput): SketchDxfOutcome {
           break;
         case 'rectangle':
           entities.push(
-            ...rectangleEntities(
-              data,
-              input.scope,
-              object.id,
-              input.millimeterScale
-            )
+            ...rectangleEntities(data, input, object.id, input.millimeterScale)
           );
           break;
         case 'polygon':
           entities.push(
-            ...polygonEntities(
-              data,
-              input.scope,
-              object.id,
-              input.millimeterScale
-            )
+            ...polygonEntities(data, input, object.id, input.millimeterScale)
           );
           break;
         case 'text':

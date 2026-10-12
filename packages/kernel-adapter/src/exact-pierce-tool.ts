@@ -34,7 +34,7 @@ import {
   type PlaneBasis,
   type Vec3
 } from '@openzcad/geometry';
-import type { FeatureNode } from '@openzcad/shared';
+import type { FeatureNode, UnitSystem } from '@openzcad/shared';
 import { buildSweep } from './exact-profile-builders';
 import { classifySolidPoint } from './exact-measure';
 import { isBuildCancelled } from './exact-cancellation';
@@ -645,13 +645,19 @@ export function pierceGateHolds(
 function piercedFeatureNode(
   feature: FeatureNode,
   scope: Record<string, number>,
-  travel: number
+  travel: number,
+  documentUnits: UnitSystem
 ): FeatureNode | null {
   const data = feature.data;
   if (data.featureKind !== 'extrude' || data.symmetric) return null;
   if (
     data.backDistance !== undefined &&
-    resolveParamValue(data.backDistance, scope, 'back distance') !== 0
+    resolveParamValue(
+      data.backDistance,
+      scope,
+      'back distance',
+      documentUnits
+    ) !== 0
   ) {
     return null;
   }
@@ -685,7 +691,7 @@ export function piercedExtrudeTool(
   const travel = pierceTravel(
     modelScale(kernel, [...partnerSolids, ...toolSolids])
   );
-  const node = piercedFeatureNode(feature, scope, travel);
+  const node = piercedFeatureNode(feature, scope, travel, document.units);
   if (!node) return null;
   // The tool runs from the plane along sign(distance) × normal; the pierce
   // runs the other way, across the plane.
