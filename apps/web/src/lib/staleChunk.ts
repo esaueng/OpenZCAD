@@ -1,12 +1,10 @@
 import { lazy, type ComponentType, type LazyExoticComponent } from 'react';
 
 /**
- * Every merge to main deploys, and a deploy renames every hashed chunk. A tab
- * that was open across one asks for a chunk that no longer exists the next
- * time it opens a lazy panel. The chunk is not coming back, but the workspace
- * around the panel still works and may hold unsaved edits, so the page is not
- * reloaded for the user: the failure is named for what it is, and a Reload
- * action is offered where the user can take it.
+ * A lazy chunk can fail after a deploy or a connection loss. The browser's
+ * error does not distinguish those causes; only the build-version watch can
+ * confirm an update. Preserve the workspace and offer user-controlled retry
+ * or reload rather than claiming a deploy or reloading unsaved work.
  */
 
 export function isChunkLoadError(error: unknown): boolean {
@@ -25,12 +23,28 @@ export function isChunkLoadError(error: unknown): boolean {
 }
 
 export const STALE_CHUNK_MESSAGE =
-  'OpenZCAD was updated while this tab was open. Reload to load the new version.';
+  'Part of OpenZCAD could not load. Check your connection, then reload the workspace to try again.';
+
+/** Avoid poisoning the browser module cache with a known-offline download. */
+export async function loadWhenOnline<T>(load: () => Promise<T>): Promise<T> {
+  if (navigator.onLine === false) {
+    await new Promise<void>((resolve) => {
+      const connected = () => {
+        if (navigator.onLine === false) return;
+        window.removeEventListener('online', connected);
+        resolve();
+      };
+      window.addEventListener('online', connected);
+      connected();
+    });
+  }
+  return load();
+}
 
 type StaleChunkListener = () => void;
 const listeners = new Set<StaleChunkListener>();
 
-/** Called once per stale-chunk failure; returns the unsubscribe. */
+/** Reports a chunk-load symptom, not proof of a newer deployment. */
 export function onStaleChunk(listener: StaleChunkListener): () => void {
   listeners.add(listener);
   return () => {
@@ -43,7 +57,7 @@ export function reportStaleChunk(): void {
 }
 
 /**
- * `React.lazy` that tells the workspace when a chunk is missing before the
+ * `React.lazy` that tells the workspace when a chunk cannot load before the
  * error reaches the panel's boundary, so the boundary's fallback and a
  * Reload notice land together.
  */

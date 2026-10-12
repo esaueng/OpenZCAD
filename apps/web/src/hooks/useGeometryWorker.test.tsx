@@ -579,7 +579,7 @@ describe('useGeometryWorker', () => {
     );
   });
 
-  it('stops retrying missing worker assets and offers reload after a deployment', async () => {
+  it('stops retrying missing worker assets and offers a connection and reload action', async () => {
     installWorker();
     vi.stubEnv('OZ_BUILD_COMMIT', 'old-build');
     vi.stubGlobal(
@@ -601,7 +601,7 @@ describe('useGeometryWorker', () => {
     );
     const pending = result.current.syncOnce(document);
     const rejected = expect(pending).rejects.toThrow(
-      'Reload to load the new version'
+      'Check your connection, then reload the workspace'
     );
     await act(async () => {
       FakeWorker.instances[0]!.onerror?.({} as ErrorEvent);
@@ -613,7 +613,7 @@ describe('useGeometryWorker', () => {
     expect(result.current.isReadyFor(document)).toBe(false);
     expect(onDerived).not.toHaveBeenCalled();
     expect(onError).toHaveBeenCalledWith(
-      expect.stringContaining('Reload to load the new version')
+      expect.stringContaining('Check your connection, then reload the workspace')
     );
   });
 
