@@ -20,7 +20,7 @@ concurrency:
 jobs:
   update:
     runs-on: ubuntu-latest
-    timeout-minutes: 30
+    timeout-minutes: 45
     steps:
       - name: Check for an existing Remus update PR
         id: existing-pr
@@ -260,6 +260,48 @@ jobs:
             echo "package_version=$package_version"
           } >> "$GITHUB_OUTPUT"
 
+      # Load time is reviewed beside the byte sizes: the current pin and the
+      # candidate are measured on this runner with alternating samples, so the
+      # comparison holds on hosted hardware whose absolute speed differs from
+      # the reference host behind the budgets in
+      # docs/kernel-wasm-size-policy.md. The section is a review signal only;
+      # a failed measurement is reported in the PR body and never blocks the
+      # update.
+      - name: Measure kernel load time against the current pin
+        if: steps.existing-pr.outputs.skip != 'true' && steps.update.outputs.changed == 'true'
+        continue-on-error: true
+        env:
+          GH_TOKEN: ${{ github.token }}
+          OLD_SHA: ${{ steps.update.outputs.old_sha }}
+        run: |
+          set -euo pipefail
+          baseline="$RUNNER_TEMP/remus-wasm-baseline"
+          report="$RUNNER_TEMP/kernel-load.md"
+          mkdir -p "$baseline"
+          for file in package.json remus_wasm_bg.js remus_wasm_bg.wasm; do
+            blob_sha="$(
+              gh api \
+                "repos/esaueng/remus/contents/crates/wasm/pkg/$file?ref=$OLD_SHA" \
+                --jq .sha
+            )"
+            gh api "repos/esaueng/remus/git/blobs/$blob_sha" --jq .content \
+              | base64 --decode > "$baseline/$file"
+          done
+          pnpm exec playwright install --with-deps chromium
+          : > "$report.partial"
+          for profile in desktop mobile; do
+            node scripts/measure-remus-wasm-load.mjs \
+              --package packages/kernel-adapter/node_modules/remus-wasm \
+              --baseline-package "$baseline" \
+              --profile "$profile" \
+              --runs 20 \
+              --kernel-ready-only \
+              --check \
+              --markdown "$report.partial" \
+              --out "$RUNNER_TEMP/kernel-load-$profile.json"
+          done
+          mv "$report.partial" "$report"
+
       # GITHUB_TOKEN-authored pull requests do not trigger ordinary
       # pull_request workflows. Fail closed on an actual update until a
       # repository-scoped GitHub App identity is configured for normal CI.
@@ -377,6 +419,16 @@ jobs:
             fi
             if [[ "$SIZE_BUDGET_FAILURE" == 'true' ]]; then
               echo "> **The package exceeds a hard budget:** $SIZE_BUDGET_FAILURES. CI must remain red; do not raise the budget in this routine pin PR."
+              echo
+            fi
+            if [[ -s "$RUNNER_TEMP/kernel-load.md" ]]; then
+              echo '## Kernel load time'
+              echo
+              cat "$RUNNER_TEMP/kernel-load.md"
+            else
+              echo '## Kernel load time'
+              echo
+              echo "> The load-time measurement did not complete; see the workflow run. Measure locally with \`pnpm perf:remus-wasm\` before merging."
               echo
             fi
             echo '## Reproducibility'

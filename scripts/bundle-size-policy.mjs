@@ -167,3 +167,101 @@ export function kernelPolicyToolchain() {
     brotliQuality: KERNEL_WASM_POLICY.brotliQuality
   };
 }
+
+/**
+ * Kernel load-time review budgets: p95 of kernel-ready in milliseconds over
+ * at least `minimumRuns` samples of `scripts/measure-remus-wasm-load.mjs`.
+ * Each budget is the worst p95 measured for remus-wasm 2026.1.53 and
+ * 2026.1.56 on the reference host plus max(25 ms, 5%), rounded up, and never
+ * above the proposed 2 s / 5 s / 0.5 s targets. `regression` is the allowed
+ * median growth over the current pin, measured on one host with alternating
+ * samples. Evidence: `docs/kernel-wasm-size-policy.md`.
+ */
+export const KERNEL_LOAD_POLICY = Object.freeze({
+  minimumRuns: 20,
+  profiles: Object.freeze({
+    desktop: Object.freeze({
+      coldReadyP95Ms: 110,
+      warmReadyP95Ms: 110
+    }),
+    mobile: Object.freeze({
+      coldReadyP95Ms: 3800,
+      warmReadyP95Ms: 150
+    })
+  }),
+  regression: Object.freeze({
+    desktop: Object.freeze({ ratio: 0.05, floorMs: 10 }),
+    mobile: Object.freeze({ ratio: 0.05, floorMs: 10 })
+  })
+});
+
+export function evaluateKernelLoad(profile, metrics) {
+  const budgets = KERNEL_LOAD_POLICY.profiles[profile];
+  if (!budgets) {
+    throw new Error(`No kernel load budget for profile ${profile}`);
+  }
+  const results = [
+    {
+      code: `kernel-load-${profile}-cold-review`,
+      p95Ms: metrics.coldReadyP95Ms,
+      budgetMs: budgets.coldReadyP95Ms,
+      reason: `Cold kernel-ready (${profile}) requires a load-time review`
+    },
+    {
+      code: `kernel-load-${profile}-warm-review`,
+      p95Ms: metrics.warmReadyP95Ms,
+      budgetMs: budgets.warmReadyP95Ms,
+      reason: `Warm kernel-ready (${profile}) requires a load-time review`
+    }
+  ].map((result) => {
+    if (!Number.isFinite(result.p95Ms)) {
+      throw new Error(`${result.code} has no p95 measurement`);
+    }
+    return { ...result, withinBudget: result.p95Ms <= result.budgetMs };
+  });
+  return {
+    profile,
+    results,
+    warnings: results.filter((result) => !result.withinBudget)
+  };
+}
+
+/**
+ * Candidate-versus-baseline review for a kernel change measured on one host
+ * with alternating samples (`--baseline-package`). It compares medians: on a
+ * shared or hosted runner a p95 of 20–30 samples moves by tens of
+ * milliseconds between identical kernels, while medians agree within a few.
+ * Absolute p95 budgets are calibrated on reference hardware; this relative
+ * check is what stays meaningful on a noisier or slower CI runner.
+ */
+export function evaluateKernelLoadRegression(profile, baseline, candidate) {
+  const allowance = KERNEL_LOAD_POLICY.regression[profile];
+  if (!allowance) {
+    throw new Error(`No kernel load regression allowance for ${profile}`);
+  }
+  const results = ['cold', 'warm'].map((phase) => {
+    const key = `${phase}ReadyP50Ms`;
+    const baselineP50Ms = baseline[key];
+    const candidateP50Ms = candidate[key];
+    if (!Number.isFinite(baselineP50Ms) || !Number.isFinite(candidateP50Ms)) {
+      throw new Error(`${phase} kernel-ready has no median measurement`);
+    }
+    const allowedP50Ms = Math.max(
+      baselineP50Ms * (1 + allowance.ratio),
+      baselineP50Ms + allowance.floorMs
+    );
+    return {
+      code: `kernel-load-${profile}-${phase}-regression`,
+      reason: `${phase === 'cold' ? 'Cold' : 'Warm'} kernel-ready (${profile}) is slower than the current pin`,
+      baselineP50Ms,
+      candidateP50Ms,
+      allowedP50Ms,
+      withinBudget: candidateP50Ms <= allowedP50Ms
+    };
+  });
+  return {
+    profile,
+    results,
+    warnings: results.filter((result) => !result.withinBudget)
+  };
+}
