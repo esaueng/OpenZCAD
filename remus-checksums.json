@@ -1,7 +1,7 @@
 {
-  "commit": "877e2e4a894b7cb569255a5de1196c3e34567752",
+  "commit": "1dbb583fa16fbd0c47ca82c00d0cc6d519b7c229",
   "files": {
-    "remus-wasm/remus_wasm_bg.wasm": "2ec1c9cc722288e469fa63f3a671eb755119a76d",
-    "remus-wasm-io/remus_wasm_io_bg.wasm": "b1eaa3eab8fec08cde2730a26ab968d3487ed6ac"
+    "remus-wasm/remus_wasm_bg.wasm": "8b0a012c490d72faba0628216a24d714c68ef7b1",
+    "remus-wasm-io/remus_wasm_io_bg.wasm": "dc1c1840b4c0c792e604cdcfd1eac59a674106d6"
   }
 }
