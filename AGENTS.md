@@ -170,12 +170,15 @@ Consequences:
 verify`. Merging before the shards reported has already put a red `main`
   in front of us once, before protection existed: #55 went in with three
   Playwright shards outstanding, and shard 3 was failing.
-- **Read `gh pr checks` and see `validate`, `e2e`, and `Cloudflare version /
-verify` pass before merging.** `validate` is the slow one at roughly seven
-  minutes. `e2e` is the aggregate over the six Playwright shards (it fails,
-  rather than skips, when a shard fails), and `Cloudflare version / verify`
-  proves the Worker config still dry-run deploys. Those three are the merge
-  gate; `apple-silicon` is not one of them — see below.
+- **Read `gh pr checks` and see `validate`, `e2e`, `commit-privacy`, and
+  `Cloudflare version / verify` pass before merging.** `validate` is the slow
+  one at roughly seven minutes. `e2e` is the aggregate over the six
+  Playwright shards (it fails, rather than skips, when a shard fails),
+  `commit-privacy` checks the author and committer identity of every new
+  commit, and `Cloudflare version / verify` proves the Worker config still
+  dry-run deploys. Those four are the merge gate, admin merges included:
+  protection would let an admin merge through without them, so wait for
+  each to pass. `apple-silicon` is not one of them — see below.
 - **Verify those from the check runs themselves, not from a passing check
   suite.** Several GitHub Apps report suites here, and the Cloudflare ones
   complete within a minute of a push — reading "suite succeeded" as "CI
@@ -193,19 +196,19 @@ verify` pass before merging.** `validate` is the slow one at roughly seven
   only, while its other heads triggered normally). Absence of red is not
   green — match a run's `head_sha` to the PR's, and dispatch `ci.yml`
   manually when none exists.
-- **A branch behind `main` cannot merge, however green it is.** GitHub
-  refuses with "the base branch policy prohibits the merge" (the PR's
-  `mergeStateStatus` reads `BEHIND`, then `BLOCKED`). Merge `main` into the
-  branch, push, and wait for `validate`, `e2e`, and `Cloudflare version /
-verify` to pass on that new head: green checks on the old head do not
-  carry over. Budget one full CI cycle for it whenever `main` moved after
-  the PR's last push.
 - **Do not manually dispatch `Cloudflare version` to fill that gap.** Its
   `upload` job is gated `if: github.event_name != 'pull_request'`, so a
   `workflow_dispatch` runs a real `wrangler versions upload`, which fails on
   absent credentials and leaves a red check that belongs to the dispatch
   rather than to the code. `verify` — the half that is a merge gate — already
   runs on `pull_request` on its own.
+- **A branch behind `main` cannot merge, however green it is.** GitHub
+  refuses with "the base branch policy prohibits the merge" (the PR's
+  `mergeStateStatus` reads `BEHIND`, then `BLOCKED`). Merge `main` into the
+  branch, push, and wait for the whole merge gate — `validate`, `e2e`,
+  `commit-privacy`, and `Cloudflare version / verify` — to pass on that new
+  head: green checks on the old head do not carry over. Budget one full CI
+  cycle for it whenever `main` moved after the PR's last push.
 
 **Never dispatch `apple-silicon` unless it is explicitly asked for.** It is
 macOS-runner time and costs real money, so it is `workflow_dispatch`-only and
