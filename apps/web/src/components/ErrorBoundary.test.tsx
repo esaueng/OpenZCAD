@@ -20,18 +20,22 @@ describe('ErrorBoundary', () => {
     );
   }
 
-  it('names a stale chunk at page scope as an update, not a crash', () => {
+  it('does not claim a deployment from a failed chunk download', () => {
     renderFailing(
       new TypeError('Failed to fetch dynamically imported module: /a.js'),
       'page'
     );
     expect(
-      screen.getByRole('heading', { name: 'OpenZCAD has been updated' })
+      screen.getByRole('heading', { name: 'Part of OpenZCAD could not load' })
     ).toBeTruthy();
     expect(screen.queryByText(/could not be rendered/)).toBeNull();
     expect(
-      screen.getByRole('button', { name: 'Reload to update' })
+      screen.getByRole('button', { name: 'Reload workspace' })
     ).toBeTruthy();
+    expect(screen.getByRole('alert')).toHaveTextContent(
+      'Check your connection'
+    );
+    expect(screen.queryByText(/new version was released/i)).toBeNull();
     expect(screen.queryByText('Error details')).toBeNull();
   });
 

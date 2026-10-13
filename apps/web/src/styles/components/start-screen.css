@@ -67,6 +67,11 @@
   overflow: hidden;
 }
 
+/* Download recovery remains actionable above the library, below Settings. */
+.start-screen ~ .toast {
+  z-index: calc(var(--z-start-screen) + 1);
+}
+
 /* The column's surface, drawn once behind its blocks so each block can be a
    separate grid item. */
 .start-screen::before {

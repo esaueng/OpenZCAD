@@ -86,7 +86,7 @@ export function WorkspaceTour({
   const step = WORKSPACE_TOUR_STEPS[index];
 
   // Outline the chrome region the step talks about. Imperative by design:
-  // the targets (tool palette, sidebar) are other components' roots, and
+  // the targets (tool palette, History control) belong to other components, and
   // threading a "tour is pointing at you" prop through each of them would
   // couple them all to a card that exists for one session on one device.
   // The tool palette arrives in its own chunk after the workspace paints,
