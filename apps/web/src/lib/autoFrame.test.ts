@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import { toBodyId, type BodyRepresentation } from '@openzcad/shared';
-import { bodiesReachingNewSpace } from './autoFrame';
+import { createdBodiesToFrame } from './autoFrame';
 
 function body(
   id: string,
@@ -33,43 +33,39 @@ function map(...bodies: BodyRepresentation[]) {
   return Object.fromEntries(bodies.map((entry) => [entry.bodyId, entry]));
 }
 
-describe('bodiesReachingNewSpace', () => {
+describe('createdBodiesToFrame', () => {
   const plate = body('plate', [0, 0, 0], [80, 40, 5]);
 
   it('names a body the commit created', () => {
     // The bracket recipe's second box: the flange did not exist before.
     const flange = body('flange', [0, 0, 0], [80, 5, 40]);
-    expect(bodiesReachingNewSpace(map(plate), map(plate, flange))).toEqual([
+    expect(createdBodiesToFrame(map(plate), map(plate, flange))).toEqual([
       toBodyId('flange')
     ]);
   });
 
-  it('names a body that grew or moved past its old bounds', () => {
+  it('preserves the camera when an existing body grows or moves', () => {
     const wider = body('plate', [0, 0, 0], [120, 40, 5]);
-    expect(bodiesReachingNewSpace(map(plate), map(wider))).toEqual([
-      toBodyId('plate')
-    ]);
+    expect(createdBodiesToFrame(map(plate), map(wider))).toEqual([]);
     const moved = body('plate', [200, 0, 0], [280, 40, 5]);
-    expect(bodiesReachingNewSpace(map(plate), map(moved))).toEqual([
-      toBodyId('plate')
-    ]);
+    expect(createdBodiesToFrame(map(plate), map(moved))).toEqual([]);
   });
 
   it('ignores a body that kept or shrank its bounds', () => {
     const filleted = body('plate', [0, 0, 0], [80, 40, 5 - 1e-9]);
     const narrower = body('plate', [0, 0, 0], [60, 40, 5]);
-    expect(bodiesReachingNewSpace(map(plate), map(filleted))).toEqual([]);
-    expect(bodiesReachingNewSpace(map(plate), map(narrower))).toEqual([]);
+    expect(createdBodiesToFrame(map(plate), map(filleted))).toEqual([]);
+    expect(createdBodiesToFrame(map(plate), map(narrower))).toEqual([]);
   });
 
-  it('skips consumed bodies and treats a revived one as new', () => {
+  it('preserves the camera when an edit replaces or revives a body', () => {
     const consumedPlate = body('plate', [0, 0, 0], [80, 40, 5], true);
     const union = body('union', [0, 0, 0], [80, 40, 40]);
-    expect(
-      bodiesReachingNewSpace(map(plate), map(consumedPlate, union))
-    ).toEqual([toBodyId('union')]);
-    expect(bodiesReachingNewSpace(map(consumedPlate), map(plate))).toEqual([
-      toBodyId('plate')
-    ]);
+    expect(createdBodiesToFrame(map(plate), map(consumedPlate, union))).toEqual(
+      []
+    );
+    expect(createdBodiesToFrame(map(plate), map(union))).toEqual([]);
+    expect(createdBodiesToFrame(map(consumedPlate), map(plate))).toEqual([]);
+    expect(createdBodiesToFrame(map(plate), map(consumedPlate))).toEqual([]);
   });
 });
