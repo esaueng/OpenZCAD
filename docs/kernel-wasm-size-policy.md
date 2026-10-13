@@ -9,11 +9,18 @@ kB.
 
 | Control            |                         Threshold | CI behavior                           |
 | ------------------ | --------------------------------: | ------------------------------------- |
-| Raw review         |           9 MiB (9,437,184 bytes) | Warning; mandatory kernel-size review |
-| Raw hard limit     |         10 MiB (10,485,760 bytes) | Failure above the limit               |
-| Gzip hard limit    |         3.5 MiB (3,670,016 bytes) | Failure above the limit               |
-| Brotli review      |         2.5 MiB (2,621,440 bytes) | Warning; mandatory kernel-size review |
+| Raw review         |         11 MiB (11,534,336 bytes) | Warning; mandatory kernel-size review |
+| Raw hard limit     |         12 MiB (12,582,912 bytes) | Failure above the limit               |
+| Gzip hard limit    |         4.5 MiB (4,718,592 bytes) | Failure above the limit               |
+| Brotli review      |           3 MiB (3,145,728 bytes) | Warning; mandatory kernel-size review |
 | Per-pin raw growth | More than 256 KiB or more than 3% | Mandatory kernel-size review          |
+
+These are the step 1 values of October 2026; the previous ceiling was 9 MiB
+raw review, 10 MiB raw hard, 3.5 MiB gzip hard and 2.5 MiB Brotli review. The
+evidence for the change is recorded under
+[Ceiling change 2026-10 (step 1)](#ceiling-change-2026-10-step-1). Remus
+mirrors the same values in its `scripts/wasm-size-policy.mjs`, which
+`cargo xtask wasm-build` evaluates on every kernel it builds.
 
 The policy covers the kernel asset (`assets/remus_wasm_bg-*.wasm`) only. The
 file-format translators ship as the separate `remus-wasm-io` package and
@@ -195,3 +202,153 @@ Raw size primarily protects download-independent compilation and memory
 pressure. Gzip and Brotli describe transfer size under specific encoders.
 Neither compressed measurement substitutes for browser load, compilation,
 instantiation, or runtime-memory measurements.
+
+## Ceiling change 2026-10 (step 1)
+
+Approved by the owner on 2026-10-13 as step 1 of the Remus browser-kernel size
+plan (Remus `docs/design/kernel-wasm-size-architecture.md`, workstream W2), and
+paired with the identical change in Remus `scripts/wasm-size-policy.mjs`
+(esaueng/remus#1028). It is a separate change, not part of a pin update, and
+it leaves the per-pin growth review (256 KiB or 3%) and the load-time budgets
+unchanged.
+
+| Control         | Before                    | After                     |
+| --------------- | ------------------------- | ------------------------- |
+| Raw review      | 9 MiB (9,437,184 bytes)   | 11 MiB (11,534,336 bytes) |
+| Raw hard limit  | 10 MiB (10,485,760 bytes) | 12 MiB (12,582,912 bytes) |
+| Gzip hard limit | 3.5 MiB (3,670,016 bytes) | 4.5 MiB (4,718,592 bytes) |
+| Brotli review   | 2.5 MiB (2,621,440 bytes) | 3 MiB (3,145,728 bytes)   |
+| Per-pin growth  | 256 KiB or 3%             | 256 KiB or 3% (unchanged) |
+
+The kernel measured is Remus main's committed `remus-wasm` 2026.1.56 (built
+from `fdf3cbbf`): 10,481,536 raw / 3,673,853 gzip / 2,595,062 Brotli bytes. It
+is 3,837 bytes over the old gzip hard limit, so no pin update could take it
+under the old policy. The seven items of
+[Raising the hard ceiling](#raising-the-hard-ceiling) follow.
+
+**1. Toolchains.**
+
+| Tool                     | Version     | Where it is fixed                                                                                                                                                                      |
+| ------------------------ | ----------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| Rust                     | 1.96.0      | Remus `rust-toolchain.toml`                                                                                                                                                            |
+| `wasm-bindgen`           | 0.2.126     | Remus `Cargo.toml` (`=0.2.126`); `cargo xtask wasm-build` refuses a different local `wasm-bindgen-cli`                                                                                 |
+| `wasm-pack`              | 0.15.0      | `wasm-pack@0.15.0` in Remus `wasm-version.yml`; the publishing and CI builds install it through `taiki-e/install-action` pinned by commit SHA, whose manifest there resolves to 0.15.0 |
+| Binaryen `wasm-opt`      | version_117 | Hard-coded in `wasm-pack` 0.15.0, which downloads that release; the flags (`-Oz --enable-simd`) are in the Remus crate metadata                                                        |
+| Compression (both repos) | Node `zlib` | `gzipSync()` defaults and Brotli quality 11, here and in Remus `scripts/wasm-size-policy.mjs`; each report records the Node, zlib and Brotli versions                                  |
+
+`wasm-pack` and Binaryen are fixed only through those pins: `cargo xtask
+wasm-build` neither checks their versions nor records them in the package, so
+moving the install-action SHA can move both. The Node major also differs
+(OpenZCAD CI runs Node 22, Remus CI Node 24); the measurements below use Node
+22.23.1 (zlib 1.3.1, Brotli 1.1.0). Brotli therefore stays a review signal.
+
+**2. Optimized against `--skip-opt`.** The same cargo artifact as the shipped
+build, before and after `wasm-opt -Oz --enable-simd`:
+
+| Build of `fdf3cbbf`                                 |        Raw |      Gzip |    Brotli |
+| --------------------------------------------------- | ---------: | --------: | --------: |
+| `wasm-bindgen` output, no `wasm-opt` (`--skip-opt`) | 12,282,461 | 3,920,893 | 2,686,738 |
+| Optimized, `cargo xtask wasm-build`                 | 10,482,141 | 3,673,544 | 2,594,190 |
+| Committed package 2026.1.56                         | 10,481,536 | 3,673,853 | 2,595,062 |
+
+`wasm-opt` removes 1,800,320 raw bytes (−14.7%), 247,349 gzip bytes (−6.3%)
+and 92,548 Brotli bytes (−3.4%). The local build reproduces the committed one
+within 605 raw bytes. Other `wasm-opt` levels are larger (`-Os` 10,567,208,
+`-O3` 10,576,138 raw bytes); `-Oz --converge` saves only 6,633 bytes.
+
+**3. Attribution.** Function bytes before `wasm-opt`, grouped by the first
+Remus crate in each symbol (Remus W0 attribution):
+
+| Group                                                             | Share |
+| ----------------------------------------------------------------- | ----: |
+| std/core/alloc/hashbrown generics with no Remus type in the name  | 32.4% |
+| `remus_operations`                                                | 19.0% |
+| Binding layer and glue (`BrepKernel`, wasm-bindgen, serde, tsify) | 14.9% |
+| `remus_algo`                                                      | 11.4% |
+| math, topology, check, blend, heal, offset, sketch, io, geometry  | 18.0% |
+| Other (`robust`, data, miscellaneous)                             |  2.9% |
+
+Generic monomorphization is about 30% of code (largest family
+`hashbrown::RawTable::reserve_rehash`, 282 instances, 258 KB); serde,
+serde_json and tsify are about 0.55 MB. Since the translator split (7,602,120
+raw bytes on 2026-09-04) the kernel grew 2.88 MB in 38 days, spread over
+qualified roadmap capabilities of 100–300 KB each, for example the affine
+transforms (Remus B74, +271 KB), blend reconstruction and entity history
+(+251 KB), directional curve projection (P-Class 7.4, +222 KB) and the UV
+arrangement (O2.3b, +127 KB).
+
+**4. Load measurements.** The [load-time baseline](#baseline-2026-10-13)
+above covers this kernel: desktop cold p95 54.5 ms sequential and 72.4 ms
+interleaved, mobile-class cold p95 3,512 and 3,505 ms, warm p95 at most
+98.7 ms; all within the budgets. Mobile-class cold load is transfer-bound at
+about 89 ms per additional 100 KB of gzip, so a kernel at the new 4.5 MiB gzip
+ceiling (+1,044,739 bytes) projects to about 4.42 s p50 and 4.44 s p95
+(+930 ms): below the proposed 5 s target, but above the 3,800 ms review
+budget. That budget trips after roughly 276–324 KB more gzip (3,800 ms less
+the 3,554 ms worst or 3,512 ms current p95), so load-time review flags growth
+well before the gzip hard limit; the byte ceiling does not loosen it. Desktop
+loads from loopback, so transfer does not grow; if compilation and
+instantiation grew in proportion to raw size, the 20% raw headroom would add
+about 15 ms to the 72.4 ms worst p95 (an estimate, not a measurement), inside
+the 110 ms budget.
+
+**5. Gating and splitting considered.**
+
+- **Lazy modules (Remus W4).** Each candidate's bindings were removed from a
+  default build to measure the most it could take out of the core, before the
+  lazy module's own copy of shared code is counted:
+
+  | Candidate                                       | Core raw | Core gzip |
+  | ----------------------------------------------- | -------: | --------: |
+  | Sketch solver only (sketch state stays in core) | −254 KiB | −64,182 B |
+  | All sketch and 2D polygon bindings              | −316 KiB | −88,064 B |
+  | Directional curve projection                    | −216 KiB | −78,238 B |
+  | Import repair (heal, analysis, NURBS reuse)     | −175 KiB | −63,887 B |
+  | Read-only analysis                              |  −81 KiB | −28,874 B |
+  | NURBS reuse                                     |  −67 KiB | −26,705 B |
+  | Heal                                            |  −18 KiB |  −5,127 B |
+
+  None clears the 250 KiB net bar. The sketch-solver module alone is 315,601
+  raw bytes, more than it removes from the core, and its round trip costs
+  5–10% per small solve, which the no-speed-regression rule forbids. Removing
+  every sketch binding is not a split: the editor needs them.
+
+- **One dispatch path (Remus W3.1).** Removing `executeBatch` entirely saves
+  at most 157 KB raw (29,320 bytes gzip), the ceiling for unifying the direct
+  and batch paths.
+- **Smaller optimization level.** Whole-graph `opt-level = "s"` would cut 17%
+  raw and 447 KB gzip but makes steady-state workloads 18–70% slower, so it
+  was rejected (esaueng/remus#1028). No per-crate mix saves bytes at equal
+  speed.
+- **Name section and features.** The shipped module has no name section
+  (code is 96.5% of it). The file-format translators are already a lazy
+  module ([ADR-023](adrs/ADR-023-remus-translator-module.md)) and the kernel
+  is built with `--no-default-features`.
+
+**6. Why the code stays in the initial kernel.** The Remus tier rule puts in
+the core anything that edits the live modeling session (handles, journal and
+evolution, persistent naming, checkpoints, transactions) and the modeling
+operations the first edit needs (primitives, booleans, blends, sweeps, direct
+edit, tessellation, measurement). The growth above is of that kind; moving it
+out would need arena-document round trips that lose handle identity and
+history continuity. Sketch state stays in core by owner decision, so undo and
+restore stay atomic with body history. The document-in/document-out
+candidates are the item 5 list; none pays for itself yet, and new Remus
+capabilities now declare their tier before implementation.
+
+**7. Raw, gzip and Brotli reviewed separately.** At the historical growth of
+about 0.5 MB raw and 0.175 MB gzip per week (Brotli about 0.124 MB), from the
+2026.1.56 kernel:
+
+| Control             |           Headroom (bytes) | Runway        | Kind     |
+| ------------------- | -------------------------: | ------------- | -------- |
+| Mobile load review  | about 276,000–324,000 gzip | 1.6–1.9 weeks | Review   |
+| Raw review 11 MiB   |                  1,052,800 | 2.1 weeks     | Review   |
+| Raw hard 12 MiB     |                  2,101,376 | 4.2 weeks     | **Hard** |
+| Brotli review 3 MiB |                    550,666 | 4.4 weeks     | Review   |
+| Gzip hard 4.5 MiB   |                  1,044,739 | 6.0 weeks     | Hard     |
+
+The raw hard limit binds first, at about four weeks. Step 1 therefore buys
+time for the Remus size reductions (W3) and lazy modules (W4), not room for
+unreviewed growth. The next raise (16 MiB raw / 6 MiB gzip) stays deferred and
+needs the same evidence.

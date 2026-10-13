@@ -22,6 +22,20 @@ function metrics(
 }
 
 describe('kernel WASM size policy', () => {
+  it('holds the approved ceiling step 1 thresholds', () => {
+    const MIB = 1024 * 1024;
+    expect(KERNEL_WASM_POLICY).toEqual({
+      rawReviewBytes: 11 * MIB,
+      rawHardBytes: 12 * MIB,
+      gzipHardBytes: 4.5 * MIB,
+      brotliReviewBytes: 3 * MIB,
+      brotliQuality: 11,
+      pinRawGrowthReviewBytes: 256 * 1024,
+      pinRawGrowthReviewRatio: 0.03
+    });
+    expect(Object.isFrozen(KERNEL_WASM_POLICY)).toBe(true);
+  });
+
   it('warns at the raw review threshold without failing', () => {
     const below = evaluateKernelWasm(
       metrics({ rawBytes: KERNEL_WASM_POLICY.rawReviewBytes - 1 })

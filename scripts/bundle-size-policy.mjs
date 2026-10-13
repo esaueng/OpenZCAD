@@ -47,11 +47,17 @@ export const LAZY_ENTRY_PATTERNS = [
   /^assets\/meshImportWorker-.*\.js$/
 ];
 
+/**
+ * Kernel byte thresholds. Ceiling step 1 (2026-10) raised them from
+ * 9 / 10 / 3.5 / 2.5 MiB; the evidence record is in
+ * `docs/kernel-wasm-size-policy.md`. Remus mirrors these values in its
+ * `scripts/wasm-size-policy.mjs`; change both together.
+ */
 export const KERNEL_WASM_POLICY = Object.freeze({
-  rawReviewBytes: 9 * MIB,
-  rawHardBytes: 10 * MIB,
-  gzipHardBytes: 3.5 * MIB,
-  brotliReviewBytes: 2.5 * MIB,
+  rawReviewBytes: 11 * MIB,
+  rawHardBytes: 12 * MIB,
+  gzipHardBytes: 4.5 * MIB,
+  brotliReviewBytes: 3 * MIB,
   brotliQuality: 11,
   pinRawGrowthReviewBytes: 256 * 1024,
   pinRawGrowthReviewRatio: 0.03
