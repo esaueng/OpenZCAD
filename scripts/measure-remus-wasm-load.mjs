@@ -949,30 +949,34 @@ export async function runBenchmark(args) {
   const candidateArtifact = args.packageDirectory
     ? resolvePackageArtifact(args.packageDirectory)
     : resolveKernelArtifact(args.dist);
-  const targets = [
-    await openTarget(
+  // Every opened server is closed by the `finally` below, including when a
+  // later target (a missing or mismatched baseline package) fails to open:
+  // an open server would otherwise keep the process alive instead of
+  // reporting the error.
+  const targets = [];
+  const samples = [];
+  const baselineSamples = [];
+  const loadAverageBefore = os.loadavg();
+  const freeMemoryBeforeBytes = os.freemem();
+  let candidate;
+  let baseline;
+  try {
+    candidate = await openTarget(
       candidateArtifact,
       args.glueDirectory ??
         args.packageDirectory ??
         DEFAULT_PACKAGE_GLUE_DIRECTORY,
       args.encoding
-    )
-  ];
-  if (args.baselinePackageDirectory) {
-    targets.push(
-      await openTarget(
+    );
+    targets.push(candidate);
+    if (args.baselinePackageDirectory) {
+      baseline = await openTarget(
         resolvePackageArtifact(args.baselinePackageDirectory),
         args.baselinePackageDirectory,
         args.encoding
-      )
-    );
-  }
-  const [candidate, baseline] = targets;
-  const samples = [];
-  const baselineSamples = [];
-  const loadAverageBefore = os.loadavg();
-  const freeMemoryBeforeBytes = os.freemem();
-  try {
+      );
+      targets.push(baseline);
+    }
     for (let index = 0; index < args.runs; index += 1) {
       process.stderr.write(`sample ${index + 1}/${args.runs}\r`);
       if (!baseline) {
