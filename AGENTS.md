@@ -158,11 +158,12 @@ entry that stops matching fails as stale, so the list cannot quietly rot.
 
 **`main` is protected, but the protection is narrower than the merge gate.**
 The repository is public, so branch protection is available on GitHub Free:
-`main` requires the `validate` and `e2e` check runs to pass before a merge.
-Three gaps remain, so the checks still have to be read by hand:
-`Cloudflare version / verify` is not a required check, `enforce_admins` is
-off (an admin merge bypasses the requirement), and the rule does not require
-the branch to be up to date with `main`. Consequences:
+`main` requires the `validate`, `e2e`, and `commit-privacy` check runs to
+pass before a merge, and it requires the branch to be up to date with `main`
+(strict status checks). Two gaps remain, so the checks still have to be read
+by hand: `Cloudflare version / verify` is not a required check, and
+`enforce_admins` is off (an admin merge bypasses the requirement).
+Consequences:
 
 - **Never `gh pr merge --auto` here.** Auto-merge fires the moment the
   _required_ checks pass, so it never waits for `Cloudflare version /
@@ -192,6 +193,13 @@ verify` pass before merging.** `validate` is the slow one at roughly seven
   only, while its other heads triggered normally). Absence of red is not
   green — match a run's `head_sha` to the PR's, and dispatch `ci.yml`
   manually when none exists.
+- **A branch behind `main` cannot merge, however green it is.** GitHub
+  refuses with "the base branch policy prohibits the merge" (the PR's
+  `mergeStateStatus` reads `BEHIND`, then `BLOCKED`). Merge `main` into the
+  branch, push, and wait for `validate`, `e2e`, and `Cloudflare version /
+verify` to pass on that new head: green checks on the old head do not
+  carry over. Budget one full CI cycle for it whenever `main` moved after
+  the PR's last push.
 - **Do not manually dispatch `Cloudflare version` to fill that gap.** Its
   `upload` job is gated `if: github.event_name != 'pull_request'`, so a
   `workflow_dispatch` runs a real `wrangler versions upload`, which fails on
