@@ -82,6 +82,7 @@ export function assertCacheProtocol(
 ): void;
 export function assertFirstOperationResults(result: FirstOperationResult): void;
 export function firstOperationOrder(index: number): FirstOperationOrder;
+export function firstOperationGatesApply(runs: number): boolean;
 export function summarizeFirstOperations(
   samples: Array<{
     kernelReady: Record<

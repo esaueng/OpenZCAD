@@ -1162,6 +1162,16 @@ export function firstOperationOrder(index) {
   return Math.floor(index / 2) % 2 === 0 ? 'solid-first' : 'sketch-first';
 }
 
+/**
+ * Whether a first-operation run has enough samples to evaluate its review
+ * gates: each workload order gets half of the runs, and each needs the
+ * --check minimum for a p95. Smaller exploratory runs leave the gates
+ * unevaluated rather than reporting a verdict from too few samples.
+ */
+export function firstOperationGatesApply(runs) {
+  return runs >= 2 * KERNEL_LOAD_POLICY.minimumRuns;
+}
+
 async function measureSample(server, artifact, args, index) {
   const ready = await runKernelReadySample(
     server,
@@ -1297,14 +1307,15 @@ export async function runBenchmark(args) {
   const gates = args.firstOperations
     ? null
     : evaluateKernelLoad(args.profile, readyStatistics(summary));
-  const firstOperationGates = summary.firstOperation
-    ? evaluateKernelFirstOperation(args.profile, {
-        coldSolidP95Ms: summary.firstOperation.cold.solidFirstMs.p95,
-        warmSolidP95Ms: summary.firstOperation.warm.solidFirstMs.p95,
-        coldSketchP95Ms: summary.firstOperation.cold.sketchFirstMs.p95,
-        warmSketchP95Ms: summary.firstOperation.warm.sketchFirstMs.p95
-      })
-    : null;
+  const firstOperationGates =
+    summary.firstOperation && firstOperationGatesApply(args.runs)
+      ? evaluateKernelFirstOperation(args.profile, {
+          coldSolidP95Ms: summary.firstOperation.cold.solidFirstMs.p95,
+          warmSolidP95Ms: summary.firstOperation.warm.solidFirstMs.p95,
+          coldSketchP95Ms: summary.firstOperation.cold.sketchFirstMs.p95,
+          warmSketchP95Ms: summary.firstOperation.warm.sketchFirstMs.p95
+        })
+      : null;
   const baselineSummary = baseline
     ? summarizeSamples(baselineSamples, args)
     : null;

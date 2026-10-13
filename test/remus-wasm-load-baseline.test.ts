@@ -2,9 +2,11 @@ import { mkdtempSync, mkdirSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterEach, describe, expect, it } from 'vitest';
+import { KERNEL_LOAD_POLICY } from '../scripts/bundle-size-policy.mjs';
 import {
   assertCacheProtocol,
   assertFirstOperationResults,
+  firstOperationGatesApply,
   firstOperationOrder,
   LOAD_PROFILES,
   markdownSection,
@@ -357,6 +359,20 @@ describe('Remus WASM first-operation phase', () => {
         result({ sketch: [sketch, { converged: false, x: 12, y: 8 }] })
       )
     ).toThrow('did not solve to (12, 8)');
+  });
+});
+
+describe('Remus WASM first-operation gate sample minimum', () => {
+  it('evaluates the gates only when each workload order has a full p95 sample', () => {
+    const minimum = 2 * KERNEL_LOAD_POLICY.minimumRuns;
+    expect([1, 2, 3, minimum - 1].map(firstOperationGatesApply)).toEqual([
+      false,
+      false,
+      false,
+      false
+    ]);
+    expect(firstOperationGatesApply(minimum)).toBe(true);
+    expect(firstOperationGatesApply(minimum + 1)).toBe(true);
   });
 });
 
