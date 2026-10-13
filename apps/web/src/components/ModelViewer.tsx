@@ -13,10 +13,7 @@ import type { HoleGhost } from '../lib/holeGhost';
 import { buildHoleGhostRig } from './viewer/holeGhostRig';
 import type { PrimitiveGhost } from '../lib/primitiveGhost';
 import { buildPrimitiveGhostRig } from './viewer/primitiveGhostRig';
-import {
-  bodiesReachingNewSpace,
-  type AutoFrameRequest
-} from '../lib/autoFrame';
+import { createdBodiesToFrame, type AutoFrameRequest } from '../lib/autoFrame';
 import { mark, measure, timed } from '../lib/perf';
 import { recordEditPhase } from '../lib/editTrace';
 import {
@@ -675,9 +672,8 @@ export interface ModelViewerProps {
   /** Increment to re-fit the camera to the current geometry. */
   fitSignal: number;
   /**
-   * A local commit and the exact bodies it published. When a body it created
-   * or grew leaves the view, the camera glides back to frame the model from
-   * where the user already looks; when everything is in view, nothing moves.
+   * A local commit and the exact bodies it published. An independently added
+   * body outside the view may be framed; edits preserve the user's camera.
    */
   autoFrame?: AutoFrameRequest | null;
   /** Set to move the camera to a view target; nonce forces re-runs. */
@@ -11349,11 +11345,9 @@ export function ModelViewer({
     );
   }, [fitSignal]);
 
-  // A commit that put a body somewhere new — the bracket's second box, a
-  // width that grew, a body moved away — reframes only when that body is not
-  // already wholly on screen; a result the user can see never moves the
-  // camera. It glides along the user's own view direction rather than to the
-  // iso home Fit uses, and never under a drag: a gesture owns the camera.
+  // Bring an independently added body into view when needed. Changes to an
+  // existing body must leave the camera alone, even if the result extends
+  // outside the canvas. The user can explicitly Fit when they want to reframe.
   useEffect(() => {
     const context = contextRef.current;
     if (
@@ -11368,9 +11362,10 @@ export function ModelViewer({
       return;
     }
     const reached = new THREE.Box3();
-    for (const bodyId of bodiesReachingNewSpace(
+    for (const bodyId of createdBodiesToFrame(
       autoFrame.before,
-      autoFrame.after
+      autoFrame.after,
+      autoFrame.features
     )) {
       const object = context.objectsByBodyId.get(bodyId);
       if (object?.visible) reached.expandByObject(object);
