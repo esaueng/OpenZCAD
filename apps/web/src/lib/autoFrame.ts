@@ -1,4 +1,4 @@
-import type { BodyId, BodyRepresentation, BoundingBox } from '@openzcad/shared';
+import type { BodyId, BodyRepresentation } from '@openzcad/shared';
 
 /**
  * One committed change to frame for: the body projections from before the
@@ -10,41 +10,27 @@ export interface AutoFrameRequest {
   after: Readonly<Record<string, BodyRepresentation>>;
 }
 
-function contains(
-  outer: BoundingBox,
-  inner: BoundingBox,
-  tolerance: number
-): boolean {
-  return (['x', 'y', 'z'] as const).every(
-    (axis) =>
-      inner.min[axis] >= outer.min[axis] - tolerance &&
-      inner.max[axis] <= outer.max[axis] + tolerance
-  );
-}
-
 /**
- * The live bodies a commit put somewhere new: created by it, or reaching past
- * the box they filled before (grown, or moved). Only these are worth moving
- * the camera for. A body that kept or shrank its bounds is still wherever the
- * user had it framed, and a consumed one is not drawn at all.
+ * Only independently added bodies may request framing. Editing an existing
+ * body preserves the user's camera, even when it grows or moves out of view.
  *
- * The tolerance is relative to the body's size, so a rebuild's float noise on
- * an unchanged body never reads as growth.
+ * Result features can replace a body with a new BodyId. Consuming a previously
+ * visible body identifies that replacement as an edit, rather than treating
+ * its result as a newly created part and unexpectedly reframing it.
  */
-export function bodiesReachingNewSpace(
+export function createdBodiesToFrame(
   before: Readonly<Record<string, BodyRepresentation>>,
   after: Readonly<Record<string, BodyRepresentation>>
 ): BodyId[] {
-  return Object.values(after).flatMap((body) => {
-    if (body.consumed) {
-      return [];
-    }
-    const previous = before[body.bodyId];
-    if (!previous || previous.consumed) {
-      return [body.bodyId];
-    }
-    const { min, max } = body.bbox;
-    const size = Math.max(max.x - min.x, max.y - min.y, max.z - min.z, 1e-9);
-    return contains(previous.bbox, body.bbox, size * 1e-6) ? [] : [body.bodyId];
-  });
+  if (
+    Object.values(before).some((body) => {
+      const result = after[body.bodyId];
+      return !body.consumed && (!result || result.consumed);
+    })
+  ) {
+    return [];
+  }
+  return Object.values(after)
+    .filter((body) => !body.consumed && !before[body.bodyId])
+    .map((body) => body.bodyId);
 }
