@@ -11,6 +11,7 @@ import {
   resolveKernelArtifact,
   resolveKernelGlue,
   resolvePackageArtifact,
+  runBenchmark,
   summarize
 } from '../scripts/measure-remus-wasm-load.mjs';
 
@@ -254,4 +255,62 @@ describe('Remus WASM load pull-request section', () => {
     );
     expect(section).toContain('| --- | ---: |');
   });
+});
+
+describe('Remus WASM load benchmark setup failures', () => {
+  const listeningServers = () =>
+    process
+      .getActiveResourcesInfo()
+      .filter((resource) => resource === 'TCPServerWrap').length;
+
+  it.each([
+    ['missing', () => join(remusPackage().directory, 'absent')],
+    [
+      'not a WebAssembly module',
+      () => {
+        const fixture = remusPackage();
+        writeFileSync(join(fixture.directory, 'remus_wasm_bg.wasm'), 'text');
+        return fixture.directory;
+      }
+    ],
+    [
+      'not the remus-wasm package',
+      () => {
+        const fixture = remusPackage();
+        writeFileSync(
+          join(fixture.directory, 'package.json'),
+          JSON.stringify({ name: 'remus-wasm-io', version: '1' })
+        );
+        return fixture.directory;
+      }
+    ]
+  ])(
+    'rejects a %s baseline and closes the candidate server',
+    async (_label, baselineDirectory) => {
+      const candidate = remusPackage();
+      const args = parseArgs([
+        '--package',
+        candidate.directory,
+        '--baseline-package',
+        baselineDirectory(),
+        '--runs',
+        '20',
+        '--kernel-ready-only'
+      ]);
+      const before = listeningServers();
+
+      // Before the fix the candidate server stayed open and kept the
+      // process alive; the rejection must come promptly and leave nothing
+      // listening.
+      await expect(runBenchmark(args)).rejects.toThrow();
+      // libuv releases a closed server handle a few loop turns later; an
+      // unclosed one never goes away.
+      const deadline = Date.now() + 1_000;
+      while (listeningServers() > before && Date.now() < deadline) {
+        await new Promise((resolve) => setTimeout(resolve, 10));
+      }
+      expect(listeningServers()).toBe(before);
+    },
+    5_000
+  );
 });
