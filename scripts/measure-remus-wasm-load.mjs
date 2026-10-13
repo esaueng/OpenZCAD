@@ -374,7 +374,12 @@ function sketchWorkload(kernel) {
   const raw = kernel.gcsSolve(sketch, 100, 1e-10);
   const result = typeof raw === 'string' ? JSON.parse(raw) : raw;
   const corner = kernel.gcsPointPosition(sketch, p[2]);
-  return { converged: result.converged === true, x: corner[0], y: corner[1] };
+  return {
+    converged: result.converged === true,
+    x: corner[0],
+    y: corner[1],
+    radius: kernel.gcsCircleRadius(sketch, circle)
+  };
 }
 
 function timed(run) {
@@ -753,11 +758,14 @@ export function assertFirstOperationResults(result) {
   for (const sketch of result.sketch) {
     if (
       !sketch.converged ||
+      // NaN fails every comparison, so finiteness is checked first.
+      ![sketch.x, sketch.y, sketch.radius].every(Number.isFinite) ||
       Math.abs(sketch.x - 12) > 1e-6 ||
-      Math.abs(sketch.y - 8) > 1e-6
+      Math.abs(sketch.y - 8) > 1e-6 ||
+      Math.abs(sketch.radius - 3) > 1e-6
     ) {
       throw new Error(
-        `First-operation sketch did not solve to (12, 8): ${JSON.stringify(sketch)}`
+        `First-operation sketch did not solve to (12, 8) with radius 3: ${JSON.stringify(sketch)}`
       );
     }
   }

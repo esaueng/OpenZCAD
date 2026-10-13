@@ -49,7 +49,7 @@ export interface FirstOperationResult {
   sketchFirstMs: number;
   sketchSecondMs: number;
   solid: Array<{ volume: number; triangles: number }>;
-  sketch: Array<{ converged: boolean; x: number; y: number }>;
+  sketch: Array<{ converged: boolean; x: number; y: number; radius: number }>;
 }
 
 export const LOAD_PROFILES: Readonly<{

@@ -322,7 +322,7 @@ describe('Remus WASM load benchmark setup failures', () => {
 
 describe('Remus WASM first-operation phase', () => {
   const solid = { volume: 3867.86, triangles: 208 };
-  const sketch = { converged: true, x: 12, y: 8 };
+  const sketch = { converged: true, x: 12, y: 8, radius: 3 };
   const result = (overrides = {}) => ({
     order: 'solid-first' as const,
     solidFirstMs: 60,
@@ -356,9 +356,29 @@ describe('Remus WASM first-operation phase', () => {
     ).toThrow('First-operation solid workload');
     expect(() =>
       assertFirstOperationResults(
-        result({ sketch: [sketch, { converged: false, x: 12, y: 8 }] })
+        result({ sketch: [sketch, { ...sketch, converged: false }] })
       )
     ).toThrow('did not solve to (12, 8)');
+  });
+
+  it('refuses an ignored radius constraint or non-finite sketch values', () => {
+    expect(() =>
+      assertFirstOperationResults(
+        result({ sketch: [sketch, { ...sketch, radius: 2 }] })
+      )
+    ).toThrow('with radius 3');
+    for (const bad of [
+      { x: Number.NaN },
+      { y: Number.NaN },
+      { radius: Number.NaN },
+      { x: undefined }
+    ]) {
+      expect(() =>
+        assertFirstOperationResults(
+          result({ sketch: [sketch, { ...sketch, ...bad }] })
+        )
+      ).toThrow('did not solve to (12, 8)');
+    }
   });
 });
 
