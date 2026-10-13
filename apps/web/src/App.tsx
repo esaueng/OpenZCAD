@@ -2193,10 +2193,11 @@ export function App() {
   // outcome is otherwise invisible in the viewport raise one.
   const [toast, setToast] = useState<ToastModel | null>(null);
   /**
-   * A newer build is out. The workspace says so in a toast; the start screen
-   * has no toast lane, so it keeps a Reload offer above its cloud card.
+   * A confirmed update and an interrupted download are separate facts. Keep
+   * their Reload offers on the start screen after the toast expires.
    */
   const [newBuildAvailable, setNewBuildAvailable] = useState(false);
+  const [downloadInterrupted, setDownloadInterrupted] = useState(false);
   const toastIdRef = useRef(0);
   const announce = useCallback((message: string, action?: ToastAction) => {
     toastIdRef.current += 1;
@@ -2233,6 +2234,7 @@ export function App() {
     const stopStale = onStaleChunk(() => {
       // A failed download alone also occurs offline. Only the version watch
       // above can prove that an update exists and enable the update control.
+      setDownloadInterrupted(true);
       announce(STALE_CHUNK_MESSAGE, reloadNotice);
     });
     const stopPreload = watchPreloadErrors();
@@ -18052,6 +18054,9 @@ export function App() {
           status={status}
           onReloadForUpdate={
             newBuildAvailable ? () => window.location.reload() : undefined
+          }
+          onReloadForLoadFailure={
+            downloadInterrupted ? () => window.location.reload() : undefined
           }
           // Discovery must finish before a new/opened part can commit: the
           // startup result would otherwise replace its session and listing.

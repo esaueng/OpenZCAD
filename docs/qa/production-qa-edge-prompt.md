@@ -197,10 +197,10 @@ addEventListener('unhandledrejection', (e) =>
   dialog blocks the page and the tools. If calls hang or the page stops
   responding after a click, take a screenshot. If a native dialog is
   showing, ask the user to dismiss it, and note which control opened it.
-- **Body colours.** A body's colour comes from the feature that produced it:
-  gold for primitives, mint for extrudes, orange for booleans, purple for
-  mirrors. A body turning mint after an Extrude is its own colour, not a
-  stuck selection. Whether it reads as a preview is a design question (G2).
+- **Body colours.** Committed bodies use the neutral default unless the user
+  chose a colour or a demo carries its own finish. Unapplied previews use a
+  distinct tint (G2). Check the body's chosen appearance and whether an edit
+  is still previewing before filing a colour change as a stuck selection.
 - **One tab per project.** Opening the same project in two tabs makes one
   read-only through the edit lock. That is designed behaviour, but check that
   it says why.

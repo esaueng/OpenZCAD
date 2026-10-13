@@ -493,7 +493,8 @@ export default defineConfig(async ({ command, isPreview, mode }) => {
               // Chunk recovery is shared by the launcher, worker and lazy
               // panels. Keep it resident beside device durability in the
               // existing preloaded chunk, including while offline.
-              id.includes('/apps/web/src/lib/staleChunk.ts')
+              id.includes('/apps/web/src/lib/staleChunk.ts') ||
+              id.includes('/apps/web/src/lib/buildVersionWatch.ts')
             ) {
               return 'model';
             }
