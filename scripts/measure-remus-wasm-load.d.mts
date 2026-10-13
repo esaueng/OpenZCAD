@@ -36,7 +36,24 @@ export interface LoadBenchmarkArgs {
   check: boolean;
   baselinePackageDirectory: string | null;
   modulePhases: boolean;
+  firstOperations: boolean;
   markdown: string | null;
+}
+
+export type FirstOperationOrder = 'solid-first' | 'sketch-first';
+
+export interface FirstOperationResult {
+  order: FirstOperationOrder;
+  solidFirstMs: number;
+  solidSecondMs: number;
+  sketchFirstMs: number;
+  sketchSecondMs: number;
+  solid: Array<{ volume: number; triangles: number }>;
+  sketch: Array<{
+    converged: boolean;
+    points: Array<[number, number]>;
+    radius: number;
+  }>;
 }
 
 export const LOAD_PROFILES: Readonly<{
@@ -67,5 +84,17 @@ export function assertCacheProtocol(
     };
   }>
 ): void;
+export function assertFirstOperationResults(result: FirstOperationResult): void;
+export function firstOperationOrder(index: number): FirstOperationOrder;
+export function firstOperationGatesApply(runs: number): boolean;
+export function summarizeFirstOperations(
+  samples: Array<{
+    kernelReady: Record<
+      'cold' | 'warm',
+      { firstOperations: FirstOperationResult }
+    >;
+  }>,
+  phase: 'cold' | 'warm'
+): Record<string, unknown>;
 export function markdownSection(report: unknown): string;
 export function runBenchmark(args: LoadBenchmarkArgs): Promise<unknown>;
