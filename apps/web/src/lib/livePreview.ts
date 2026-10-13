@@ -94,12 +94,14 @@ export interface LivePreviewOptions<TDocument, TDerived> {
  * complete during motion and retain only the newest pending value; canceling
  * every pointer position can starve the display. Release and cancel still
  * abort through stop()/clear(). A previous full rebuild's cost never makes
- * these frames wait for the pointer to rest.
+ * these frames wait for the pointer to rest. A 32 ms start floor coalesces
+ * fast geometry without imposing a 100 ms wait on every subsequent frame;
+ * slower builds remain single-in-flight and retain the presentation yield.
  */
 export const GEOMETRY_PREVIEW_SCHEDULING = {
   publishIntermediate: true,
   cancelSuperseded: false,
-  minIntervalMs: 100,
+  minIntervalMs: 32,
   continueAfterSlow: true,
   slowSettleMs: 0
 } as const;
