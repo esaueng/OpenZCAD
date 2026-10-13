@@ -322,7 +322,17 @@ describe('Remus WASM load benchmark setup failures', () => {
 
 describe('Remus WASM first-operation phase', () => {
   const solid = { volume: 3867.86, triangles: 208 };
-  const sketch = { converged: true, x: 12, y: 8, radius: 3 };
+  const points: Array<[number, number]> = [
+    [0, 0],
+    [12, 0],
+    [12, 8],
+    [0, 8]
+  ];
+  const sketch = { converged: true, points, radius: 3 };
+  const withPoint = (index: number, value: [number, number]) => ({
+    ...sketch,
+    points: points.map((point, i) => (i === index ? value : point))
+  });
   const result = (overrides = {}) => ({
     order: 'solid-first' as const,
     solidFirstMs: 60,
@@ -358,26 +368,24 @@ describe('Remus WASM first-operation phase', () => {
       assertFirstOperationResults(
         result({ sketch: [sketch, { ...sketch, converged: false }] })
       )
-    ).toThrow('did not solve to (12, 8)');
+    ).toThrow('did not solve to the 12 x 8 rectangle');
   });
 
-  it('refuses an ignored radius constraint or non-finite sketch values', () => {
-    expect(() =>
-      assertFirstOperationResults(
-        result({ sketch: [sketch, { ...sketch, radius: 2 }] })
-      )
-    ).toThrow('with radius 3');
-    for (const bad of [
-      { x: Number.NaN },
-      { y: Number.NaN },
-      { radius: Number.NaN },
-      { x: undefined }
-    ]) {
+  it('refuses an ignored radius or rectangle constraint and non-finite values', () => {
+    const bad = [
+      { ...sketch, radius: 2 },
+      { ...sketch, radius: Number.NaN },
+      // The last two edges unconstrained: p[2] still lands on (12, 8).
+      withPoint(3, [-1, 6]),
+      withPoint(1, [12, 0.5]),
+      withPoint(2, [Number.NaN, 8]),
+      withPoint(0, [0, Number.NaN]),
+      { ...sketch, points: points.slice(0, 3) }
+    ];
+    for (const sample of bad) {
       expect(() =>
-        assertFirstOperationResults(
-          result({ sketch: [sketch, { ...sketch, ...bad }] })
-        )
-      ).toThrow('did not solve to (12, 8)');
+        assertFirstOperationResults(result({ sketch: [sketch, sample] }))
+      ).toThrow('did not solve to the 12 x 8 rectangle with radius 3');
     }
   });
 });

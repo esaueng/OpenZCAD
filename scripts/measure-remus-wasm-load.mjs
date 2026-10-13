@@ -373,11 +373,9 @@ function sketchWorkload(kernel) {
   }
   const raw = kernel.gcsSolve(sketch, 100, 1e-10);
   const result = typeof raw === 'string' ? JSON.parse(raw) : raw;
-  const corner = kernel.gcsPointPosition(sketch, p[2]);
   return {
     converged: result.converged === true,
-    x: corner[0],
-    y: corner[1],
+    points: p.map((point) => Array.from(kernel.gcsPointPosition(sketch, point))),
     radius: kernel.gcsCircleRadius(sketch, circle)
   };
 }
@@ -743,6 +741,29 @@ const FIRST_OPERATION_VOLUME = 3867.86;
  * a refused fillet or an unconverged sketch would otherwise be timed as a
  * fast first operation.
  */
+// Every rectangle corner the constraints fix, in point order.
+const SKETCH_REFERENCE_POINTS = Object.freeze([
+  [0, 0],
+  [12, 0],
+  [12, 8],
+  [0, 8]
+]);
+
+// NaN fails every comparison, so finiteness is checked before tolerance.
+function sketchMatchesReference(sketch) {
+  const near = (value, expected) =>
+    Number.isFinite(value) && Math.abs(value - expected) <= 1e-6;
+  return (
+    Array.isArray(sketch.points) &&
+    sketch.points.length === SKETCH_REFERENCE_POINTS.length &&
+    SKETCH_REFERENCE_POINTS.every(
+      ([x, y], index) =>
+        near(sketch.points[index]?.[0], x) && near(sketch.points[index]?.[1], y)
+    ) &&
+    near(sketch.radius, 3)
+  );
+}
+
 export function assertFirstOperationResults(result) {
   for (const solid of result.solid) {
     if (
@@ -756,16 +777,9 @@ export function assertFirstOperationResults(result) {
     }
   }
   for (const sketch of result.sketch) {
-    if (
-      !sketch.converged ||
-      // NaN fails every comparison, so finiteness is checked first.
-      ![sketch.x, sketch.y, sketch.radius].every(Number.isFinite) ||
-      Math.abs(sketch.x - 12) > 1e-6 ||
-      Math.abs(sketch.y - 8) > 1e-6 ||
-      Math.abs(sketch.radius - 3) > 1e-6
-    ) {
+    if (!sketch.converged || !sketchMatchesReference(sketch)) {
       throw new Error(
-        `First-operation sketch did not solve to (12, 8) with radius 3: ${JSON.stringify(sketch)}`
+        `First-operation sketch did not solve to the 12 x 8 rectangle with radius 3: ${JSON.stringify(sketch)}`
       );
     }
   }
