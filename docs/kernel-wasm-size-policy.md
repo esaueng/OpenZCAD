@@ -265,12 +265,17 @@ Remus crate in each symbol (Remus W0 attribution):
 | `remus_operations`                                                | 19.0% |
 | Binding layer and glue (`BrepKernel`, wasm-bindgen, serde, tsify) | 14.9% |
 | `remus_algo`                                                      | 11.4% |
-| math, topology, check, blend, heal, offset, sketch, io, geometry  | 18.0% |
-| Other (`robust`, data, miscellaneous)                             |  2.9% |
+| math, topology, check, blend, heal, offset, sketch, io, geometry  | 19.3% |
+| Other (`robust`, std formatting/panic, `remus_wasm`, misc.)       |  3.0% |
 
-Generic monomorphization is about 30% of code (largest family
-`hashbrown::RawTable::reserve_rehash`, 282 instances, 258 KB); serde,
-serde_json and tsify are about 0.55 MB. Since the translator split (7,602,120
+The groups total 100.0% of function bytes (the name section and data
+segments are not function bytes and are excluded). Generic monomorphization
+is about 30% of code. Before `wasm-opt` the largest family looks like
+`hashbrown::RawTable::reserve_rehash` (282 instances, 258 KB), but after
+`wasm-opt` merges identical copies it is stable sort: about 1.07 MB in 267
+per-comparator copies, reduced by Remus #1031. serde, serde_json and tsify
+are about 0.55 MB, mostly the arena-document codec, reduced by Remus #1029.
+Since the translator split (7,602,120
 raw bytes on 2026-09-04) the kernel grew 2.88 MB in 38 days, spread over
 qualified roadmap capabilities of 100–300 KB each, for example the affine
 transforms (Remus B74, +271 KB), blend reconstruction and entity history
