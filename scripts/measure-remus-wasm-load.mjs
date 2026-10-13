@@ -16,6 +16,7 @@ import { chromium } from '@playwright/test';
 import {
   KERNEL_LOAD_POLICY,
   KERNEL_WASM_ASSET_PATTERN,
+  evaluateKernelFirstOperation,
   evaluateKernelLoad,
   evaluateKernelLoadRegression,
   measureKernelWasm
@@ -203,6 +204,7 @@ export function parseArgs(argv) {
     check: false,
     baselinePackageDirectory: null,
     modulePhases: true,
+    firstOperations: false,
     markdown: null
   };
   for (let index = 0; index < argv.length; index += 1) {
@@ -231,6 +233,8 @@ export function parseArgs(argv) {
       args.check = true;
     } else if (arg === '--baseline-package') {
       args.baselinePackageDirectory = path.resolve(argv[++index]);
+    } else if (arg === '--first-operation') {
+      args.firstOperations = true;
     } else if (arg === '--kernel-ready-only') {
       args.modulePhases = false;
     } else if (arg === '--markdown') {
@@ -254,6 +258,15 @@ export function parseArgs(argv) {
   }
   if (!Number.isInteger(args.warmSettleMs) || args.warmSettleMs < 0) {
     throw new Error('--warm-settle-ms expects a non-negative integer.');
+  }
+  if (
+    args.check &&
+    args.firstOperations &&
+    args.runs < 2 * KERNEL_LOAD_POLICY.minimumRuns
+  ) {
+    throw new Error(
+      `--check with --first-operation needs at least ${2 * KERNEL_LOAD_POLICY.minimumRuns} runs: each workload order gets half of them.`
+    );
   }
   if (
     (args.check || args.baselinePackageDirectory) &&
@@ -313,6 +326,111 @@ export async function measureKernelReady(url) {
     encodedBodyBytes: timing ? timing.encodedBodySize : null,
     decodedBodyBytes: timing ? timing.decodedBodySize : null
   };
+}
+
+// A representative first edit: two primitives, a boolean cut, a two-edge
+// fillet (one edge pair meeting at a corner), tessellation and volume.
+function solidWorkload(kernel) {
+  const box = kernel.makeBox(20, 20, 10);
+  const cylinder = kernel.makeCylinder(4, 30);
+  const cut = kernel.cut(box, cylinder);
+  const lines = Array.from(kernel.getSolidEdges(cut)).filter(
+    (edge) => kernel.getEdgeCurveType(edge) === 'LINE'
+  );
+  const filleted = kernel.fillet(cut, Uint32Array.from(lines.slice(3, 5)), 1);
+  const mesh = kernel.tessellateSolid(filleted, 0.1);
+  const triangles = mesh.indices.length / 3;
+  mesh.free();
+  return { volume: kernel.volume(filleted, 0.1), triangles };
+}
+
+// A first sketch: a constrained rectangle and a sized circle on its corner.
+function sketchWorkload(kernel) {
+  const sketch = kernel.gcsNew();
+  const p = [
+    kernel.gcsAddPoint(sketch, 0, 0, false),
+    kernel.gcsAddPoint(sketch, 9, 1, false),
+    kernel.gcsAddPoint(sketch, 11, 7, false),
+    kernel.gcsAddPoint(sketch, -1, 6, false)
+  ];
+  const lines = p.map((point, index) =>
+    kernel.gcsAddLine(sketch, point, p[(index + 1) % p.length])
+  );
+  const circle = kernel.gcsAddCircle(sketch, p[2], 2);
+  const constraints = [
+    { type: 'fixX', point: p[0], value: 0 },
+    { type: 'fixY', point: p[0], value: 0 },
+    { type: 'horizontal', line: lines[0] },
+    { type: 'vertical', line: lines[1] },
+    { type: 'horizontal', line: lines[2] },
+    { type: 'vertical', line: lines[3] },
+    { type: 'distance', a: p[0], b: p[1], value: 12 },
+    { type: 'distance', a: p[1], b: p[2], value: 8 },
+    { type: 'circleRadius', circle, value: 3 }
+  ];
+  for (const constraint of constraints) {
+    kernel.gcsAddConstraint(sketch, JSON.stringify(constraint));
+  }
+  const raw = kernel.gcsSolve(sketch, 100, 1e-10);
+  const result = typeof raw === 'string' ? JSON.parse(raw) : raw;
+  return {
+    converged: result.converged === true,
+    points: p.map((point) => Array.from(kernel.gcsPointPosition(sketch, point))),
+    radius: kernel.gcsCircleRadius(sketch, circle)
+  };
+}
+
+function timed(run) {
+  const start = performance.now();
+  const value = run();
+  return { ms: performance.now() - start, value };
+}
+
+/**
+ * First-call against second-call time of the same operations in a fresh
+ * kernel. V8 compiles WebAssembly functions lazily, so the first call pays
+ * compilation (or a code-cache load) and first-touch memory growth; the
+ * second call of identical work does not. The workload that runs first also
+ * compiles the code both share (allocator, arena, history), so the caller
+ * alternates the order and reads each workload's first-call cost only from
+ * the samples in which it ran first.
+ */
+export function measureFirstOperations(order) {
+  const kernel = new glue.BrepKernel();
+  try {
+    const runSolid = () => [
+      timed(() => solidWorkload(kernel)),
+      timed(() => solidWorkload(kernel))
+    ];
+    const runSketch = () => [
+      timed(() => sketchWorkload(kernel)),
+      timed(() => sketchWorkload(kernel))
+    ];
+    let solidFirst;
+    let solidSecond;
+    let sketchFirst;
+    let sketchSecond;
+    if (order === 'sketch-first') {
+      [sketchFirst, sketchSecond] = runSketch();
+      [solidFirst, solidSecond] = runSolid();
+    } else if (order === 'solid-first') {
+      [solidFirst, solidSecond] = runSolid();
+      [sketchFirst, sketchSecond] = runSketch();
+    } else {
+      throw new Error('Unknown first-operation order ' + order);
+    }
+    return {
+      order,
+      solidFirstMs: solidFirst.ms,
+      solidSecondMs: solidSecond.ms,
+      sketchFirstMs: sketchFirst.ms,
+      sketchSecondMs: sketchSecond.ms,
+      solid: [solidFirst.value, solidSecond.value],
+      sketch: [sketchFirst.value, sketchSecond.value]
+    };
+  } finally {
+    kernel.free();
+  }
 }
 `;
 
@@ -586,7 +704,14 @@ async function runModuleSample(server, artifact, args) {
   }
 }
 
-async function measureReadyOnFreshDocument(page, cdp, server, args, assetUrl) {
+async function measureReadyOnFreshDocument(
+  page,
+  cdp,
+  server,
+  args,
+  assetUrl,
+  workloadOrder
+) {
   await page.goto(server.baseUrl, { waitUntil: 'load' });
   // Re-assert the profile on the new document; CDP emulation is per target
   // and a navigation must not silently drop the throttle.
@@ -596,7 +721,68 @@ async function measureReadyOnFreshDocument(page, cdp, server, args, assetUrl) {
     const harness = await import('/harness.mjs');
     return harness.measureKernelReady(url);
   }, assetUrl);
-  return { ...result, networkRequests: server.requestCount() - requestStart };
+  const ready = {
+    ...result,
+    networkRequests: server.requestCount() - requestStart
+  };
+  if (!args.firstOperations) return ready;
+  const firstOperations = await page.evaluate(async (order) => {
+    const harness = await import('/harness.mjs');
+    return harness.measureFirstOperations(order);
+  }, workloadOrder);
+  assertFirstOperationResults(firstOperations);
+  return { ...ready, firstOperations };
+}
+
+const FIRST_OPERATION_VOLUME = 3867.86;
+
+/**
+ * Refuse a first-operation sample whose work differs from the reference:
+ * a refused fillet or an unconverged sketch would otherwise be timed as a
+ * fast first operation.
+ */
+// Every rectangle corner the constraints fix, in point order.
+const SKETCH_REFERENCE_POINTS = Object.freeze([
+  [0, 0],
+  [12, 0],
+  [12, 8],
+  [0, 8]
+]);
+
+// NaN fails every comparison, so finiteness is checked before tolerance.
+function sketchMatchesReference(sketch) {
+  const near = (value, expected) =>
+    Number.isFinite(value) && Math.abs(value - expected) <= 1e-6;
+  return (
+    Array.isArray(sketch.points) &&
+    sketch.points.length === SKETCH_REFERENCE_POINTS.length &&
+    SKETCH_REFERENCE_POINTS.every(
+      ([x, y], index) =>
+        near(sketch.points[index]?.[0], x) && near(sketch.points[index]?.[1], y)
+    ) &&
+    near(sketch.radius, 3)
+  );
+}
+
+export function assertFirstOperationResults(result) {
+  for (const solid of result.solid) {
+    if (
+      !Number.isFinite(solid.volume) ||
+      Math.abs(solid.volume - FIRST_OPERATION_VOLUME) > 0.01 ||
+      !(solid.triangles > 0)
+    ) {
+      throw new Error(
+        `First-operation solid workload produced volume ${solid.volume} and ${solid.triangles} triangles; expected ${FIRST_OPERATION_VOLUME}.`
+      );
+    }
+  }
+  for (const sketch of result.sketch) {
+    if (!sketch.converged || !sketchMatchesReference(sketch)) {
+      throw new Error(
+        `First-operation sketch did not solve to the 12 x 8 rectangle with radius 3: ${JSON.stringify(sketch)}`
+      );
+    }
+  }
 }
 
 /**
@@ -605,7 +791,7 @@ async function measureReadyOnFreshDocument(page, cdp, server, args, assetUrl) {
  * which Chromium may write the compiled module into its code cache, a new
  * document in the same profile loads the kernel again.
  */
-async function runKernelReadySample(server, artifact, args) {
+async function runKernelReadySample(server, artifact, args, workloadOrder) {
   const context = await launchContext(args.executablePath);
   try {
     const page = context.pages()[0] ?? (await context.newPage());
@@ -616,7 +802,8 @@ async function runKernelReadySample(server, artifact, args) {
       cdp,
       server,
       args,
-      assetUrl
+      assetUrl,
+      workloadOrder
     );
     if (args.warmSettleMs > 0) await page.waitForTimeout(args.warmSettleMs);
     const warm = await measureReadyOnFreshDocument(
@@ -624,7 +811,8 @@ async function runKernelReadySample(server, artifact, args) {
       cdp,
       server,
       args,
-      assetUrl
+      assetUrl,
+      workloadOrder
     );
     return {
       kernelReady: { cold, warm },
@@ -686,6 +874,39 @@ function summarizeReady(samples, phase) {
   };
 }
 
+/**
+ * Each workload's first-call statistics come only from the samples in which
+ * it ran first, on a module nothing had compiled yet; the "after" entries are
+ * the same workload run second, after the other one compiled the shared code.
+ */
+export function summarizeFirstOperations(samples, phase) {
+  const runs = samples.map(
+    (sample) => sample.kernelReady[phase].firstOperations
+  );
+  const ordered = (order) => runs.filter((run) => run.order === order);
+  const solidFirst = ordered('solid-first');
+  const sketchFirst = ordered('sketch-first');
+  const stat = (subset, read) => summarize(subset.map(read));
+  return {
+    solidFirstSamples: solidFirst.length,
+    sketchFirstSamples: sketchFirst.length,
+    solidFirstMs: stat(solidFirst, (run) => run.solidFirstMs),
+    solidSecondMs: stat(solidFirst, (run) => run.solidSecondMs),
+    solidOverheadMs: stat(
+      solidFirst,
+      (run) => run.solidFirstMs - run.solidSecondMs
+    ),
+    solidAfterSketchMs: stat(sketchFirst, (run) => run.solidFirstMs),
+    sketchFirstMs: stat(sketchFirst, (run) => run.sketchFirstMs),
+    sketchSecondMs: stat(sketchFirst, (run) => run.sketchSecondMs),
+    sketchOverheadMs: stat(
+      sketchFirst,
+      (run) => run.sketchFirstMs - run.sketchSecondMs
+    ),
+    sketchAfterSolidMs: stat(solidFirst, (run) => run.sketchFirstMs)
+  };
+}
+
 function cpuGovernor() {
   try {
     return readFileSync(
@@ -737,6 +958,26 @@ function printSummary(report, args) {
         metric,
         printable(values.median, unit),
         printable(values.p95, unit)
+      ]);
+    }
+  }
+  for (const phase of report.summary.firstOperation ? ['cold', 'warm'] : []) {
+    for (const metric of [
+      'solidFirstMs',
+      'solidSecondMs',
+      'solidOverheadMs',
+      'solidAfterSketchMs',
+      'sketchFirstMs',
+      'sketchSecondMs',
+      'sketchOverheadMs',
+      'sketchAfterSolidMs'
+    ]) {
+      const values = report.summary.firstOperation[phase][metric];
+      rows.push([
+        `first-operation ${phase}`,
+        metric,
+        printable(values.median, 'ms'),
+        printable(values.p95, 'ms')
       ]);
     }
   }
@@ -863,35 +1104,103 @@ export function markdownSection(report) {
   );
   for (const phase of ['cold', 'warm']) {
     const after = report.summary.kernelReady[phase].readyMs;
-    const gate = report.gates.results.find((result) =>
+    const gate = report.gates?.results.find((result) =>
       result.code.endsWith(`-${phase}-review`)
     );
     const regression = report.regression?.results.find((result) =>
       result.code.endsWith(`-${phase}-regression`)
     );
     const flags = [
-      ...(gate.withinBudget ? [] : ['over budget']),
+      ...(gate && !gate.withinBudget ? ['over budget'] : []),
       ...(regression && !regression.withinBudget ? ['slower than pin'] : [])
     ];
+    // A budget that was not evaluated is never reported as passing.
     const result =
-      flags.length === 0 ? 'ok' : `**review: ${flags.join(', ')}**`;
+      flags.length > 0
+        ? `**review: ${flags.join(', ')}**`
+        : gate
+          ? 'ok'
+          : 'not evaluated';
     if (baseline) {
       const before = report.baseline.summary.kernelReady[phase].readyMs;
       lines.push(
-        `| ${phase} | ${markdownMs(before.median)} | ${markdownMs(after.median)} | ${markdownMs(before.p95)} | ${markdownMs(after.p95)} | ${markdownMs(regression.allowedP50Ms)} | ${markdownMs(gate.budgetMs)} | ${result} |`
+        `| ${phase} | ${markdownMs(before.median)} | ${markdownMs(after.median)} | ${markdownMs(before.p95)} | ${markdownMs(after.p95)} | ${markdownMs(regression?.allowedP50Ms)} | ${markdownMs(gate?.budgetMs)} | ${result} |`
       );
     } else {
       lines.push(
-        `| ${phase} | ${markdownMs(after.median)} | ${markdownMs(after.p95)} | ${markdownMs(gate.budgetMs)} | ${result} |`
+        `| ${phase} | ${markdownMs(after.median)} | ${markdownMs(after.p95)} | ${markdownMs(gate?.budgetMs)} | ${result} |`
       );
     }
   }
-  lines.push('', '');
+  lines.push('');
+  if (report.summary.firstOperation) {
+    lines.push(...firstOperationMarkdown(report), '');
+  }
+  lines.push('');
   return lines.join('\n');
 }
 
-async function measureSample(server, artifact, args) {
-  const ready = await runKernelReadySample(server, artifact, args);
+const FIRST_OPERATION_ROWS = [
+  ['cold', 'solid', 'solidFirstMs', 'Solid edit'],
+  ['warm', 'solid', 'solidFirstMs', 'Solid edit'],
+  ['cold', 'sketch', 'sketchFirstMs', 'Sketch solve'],
+  ['warm', 'sketch', 'sketchFirstMs', 'Sketch solve']
+];
+
+/**
+ * First-operation rows: each workload's first call after kernel-ready, from
+ * the samples where it ran first, against its review budget.
+ */
+function firstOperationMarkdown(report) {
+  const lines = [
+    'First operation after kernel-ready (first call, from the samples where the workload ran first):',
+    '',
+    '| Phase | Workload | p50 | p95 | Review budget | Result |',
+    '| --- | --- | ---: | ---: | ---: | ---: |'
+  ];
+  for (const [phase, slug, metric, label] of FIRST_OPERATION_ROWS) {
+    const measured = report.summary.firstOperation[phase][metric];
+    const gate = report.firstOperationGates?.results.find((result) =>
+      result.code.endsWith(`-${phase}-${slug}-review`)
+    );
+    const result = !gate
+      ? 'not evaluated'
+      : gate.withinBudget
+        ? 'ok'
+        : '**review: over budget**';
+    lines.push(
+      `| ${phase} | ${label} | ${markdownMs(measured.median)} | ${markdownMs(measured.p95)} | ${markdownMs(gate?.budgetMs)} | ${result} |`
+    );
+  }
+  return lines;
+}
+
+/**
+ * The first-operation workload order for sample `index`: two samples of one
+ * order, then two of the other, so with alternating kernels each kernel sees
+ * each order equally often and from both run positions.
+ */
+export function firstOperationOrder(index) {
+  return Math.floor(index / 2) % 2 === 0 ? 'solid-first' : 'sketch-first';
+}
+
+/**
+ * Whether a first-operation run has enough samples to evaluate its review
+ * gates: each workload order gets half of the runs, and each needs the
+ * --check minimum for a p95. Smaller exploratory runs leave the gates
+ * unevaluated rather than reporting a verdict from too few samples.
+ */
+export function firstOperationGatesApply(runs) {
+  return runs >= 2 * KERNEL_LOAD_POLICY.minimumRuns;
+}
+
+async function measureSample(server, artifact, args, index) {
+  const ready = await runKernelReadySample(
+    server,
+    artifact,
+    args,
+    firstOperationOrder(index)
+  );
   if (!args.modulePhases) return ready;
   const moduleSample = await runModuleSample(server, artifact, args);
   return {
@@ -909,6 +1218,12 @@ function summarizeSamples(samples, args) {
       warm: summarizeReady(samples, 'warm')
     }
   };
+  if (args.firstOperations) {
+    summary.firstOperation = {
+      cold: summarizeFirstOperations(samples, 'cold'),
+      warm: summarizeFirstOperations(samples, 'warm')
+    };
+  }
   if (args.modulePhases) {
     summary.cold = summarizePhase(samples, 'cold');
     summary.warm = summarizePhase(samples, 'warm');
@@ -981,7 +1296,7 @@ export async function runBenchmark(args) {
       process.stderr.write(`sample ${index + 1}/${args.runs}\r`);
       if (!baseline) {
         samples.push(
-          await measureSample(candidate.server, candidate.artifact, args)
+          await measureSample(candidate.server, candidate.artifact, args, index)
         );
         continue;
       }
@@ -993,7 +1308,8 @@ export async function runBenchmark(args) {
         const sample = await measureSample(
           target.server,
           target.artifact,
-          args
+          args,
+          index
         );
         (target === candidate ? samples : baselineSamples).push(sample);
       }
@@ -1007,17 +1323,34 @@ export async function runBenchmark(args) {
 
   const profile = LOAD_PROFILES[args.profile];
   const summary = summarizeSamples(samples, args);
-  const gates = evaluateKernelLoad(args.profile, readyStatistics(summary));
+  // The first-operation phase runs heavy work in the cold document, which
+  // slows the warm load that follows; kernel-ready budgets are calibrated
+  // without it, so they are evaluated only on plain runs.
+  const gates = args.firstOperations
+    ? null
+    : evaluateKernelLoad(args.profile, readyStatistics(summary));
+  const firstOperationGates =
+    summary.firstOperation && firstOperationGatesApply(args.runs)
+      ? evaluateKernelFirstOperation(args.profile, {
+          coldSolidP95Ms: summary.firstOperation.cold.solidFirstMs.p95,
+          warmSolidP95Ms: summary.firstOperation.warm.solidFirstMs.p95,
+          coldSketchP95Ms: summary.firstOperation.cold.sketchFirstMs.p95,
+          warmSketchP95Ms: summary.firstOperation.warm.sketchFirstMs.p95
+        })
+      : null;
   const baselineSummary = baseline
     ? summarizeSamples(baselineSamples, args)
     : null;
-  const regression = baseline
-    ? evaluateKernelLoadRegression(
-        args.profile,
-        readyStatistics(baselineSummary),
-        readyStatistics(summary)
-      )
-    : null;
+  // The same contamination applies to the pin comparison: first-operation
+  // runs leave the kernel-ready regression unevaluated.
+  const regression =
+    baseline && !args.firstOperations
+      ? evaluateKernelLoadRegression(
+          args.profile,
+          readyStatistics(baselineSummary),
+          readyStatistics(summary)
+        )
+      : null;
   const first = samples[0];
   const report = {
     format: 'openzcad-remus-wasm-load-baseline',
@@ -1054,6 +1387,9 @@ export async function runBenchmark(args) {
       kernelReadyCold:
         'fresh Chromium profile: empty HTTP cache, no compiled-module cache',
       kernelReadyWarm: `new document in the same profile after ${args.warmSettleMs} ms settle: HTTP cache hit, compiled-module cache when Chromium wrote one`,
+      firstOperation: args.firstOperations
+        ? "after kernel-ready in the same document: a fresh BrepKernel runs makeBox + makeCylinder + cut + two-edge fillet + tessellateSolid + volume twice and a constrained GCS sketch build-and-solve twice, in an order that alternates every two samples; each workload's first-call statistics come only from samples where it ran first; first minus second call approximates lazy compilation plus first-touch"
+        : null,
       comparison: baseline
         ? 'baseline and candidate samples alternate, each in its own fresh profile and origin'
         : null,
@@ -1072,6 +1408,7 @@ export async function runBenchmark(args) {
     },
     summary,
     gates,
+    firstOperationGates,
     baseline: baseline
       ? {
           provenance: provenance(
@@ -1096,7 +1433,8 @@ export async function runBenchmark(args) {
   };
   printSummary(report, args);
   if (baseline) printComparison(report);
-  if (args.check) reportGates(gates);
+  if (args.check && gates) reportGates(gates);
+  if (args.check && firstOperationGates) reportGates(firstOperationGates);
   if (regression) reportRegression(regression);
   if (args.out) {
     writeFileSync(args.out, `${JSON.stringify(report, null, 2)}\n`);

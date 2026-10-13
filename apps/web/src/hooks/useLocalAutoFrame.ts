@@ -1,5 +1,6 @@
 import { useCallback, useEffect, useRef, useState } from 'react';
 import type { ProjectDocument } from '@openzcad/shared';
+import { listFeaturesInOrder } from '@openzcad/document-core';
 import type { AutoFrameRequest } from '../lib/autoFrame';
 
 /** A local commit owns its fit request only until the document is replaced. */
@@ -40,6 +41,7 @@ export function useLocalAutoFrame(
     const pending = baseline.current;
     if (
       !pending ||
+      !document ||
       !representations ||
       version === undefined ||
       !exactGeometryReady ||
@@ -56,8 +58,19 @@ export function useLocalAutoFrame(
       // Topology-reference normalization can advance the local version after
       // its rebuild without changing geometry. Replacements cancel above,
       // so that newer local result still belongs to this commit.
-      setAutoFrame({ before: pending.before, after: representations });
+      setAutoFrame({
+        before: pending.before,
+        after: representations,
+        features: listFeaturesInOrder(document)
+      });
     }
-  }, [representations, projectId, version, exactGeometryReady, previewing]);
+  }, [
+    document,
+    representations,
+    projectId,
+    version,
+    exactGeometryReady,
+    previewing
+  ]);
   return { autoFrame, recordLocalCommit, clearAutoFrame };
 }
