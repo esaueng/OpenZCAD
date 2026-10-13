@@ -155,17 +155,23 @@ for (const [units, distance] of [
     });
     const undo = page.getByRole('button', { name: 'Undo', exact: true });
     const redo = page.getByRole('button', { name: 'Redo', exact: true });
-    await page.getByRole('button', { name: 'Solve', exact: true }).click();
-    const initialStatus = await page
-      .locator('.sketch-solve-pill')
-      .textContent();
+    const solve = page.getByRole('button', { name: 'Solve', exact: true });
+    const solveStatus = page.locator('.sketch-solve-pill');
+    await solve.click();
+    // The solve runs in the geometry worker, so the pill is still empty when
+    // the click returns. Wait for its settled label (two lines and a circle,
+    // one horizontal constraint: 11 - 1 DOF) and for the solve to finish, so
+    // the reference is added to a solved sketch rather than racing the solve.
+    await expect(solveStatus).toHaveText('10 DOF remaining', READ_TIMEOUT);
+    await expect(solve).toBeEnabled();
     const baseline = await exportDocument(page);
     await addDistance(panel, f.ids[0]!);
     await expect(panel.getByRole('listitem')).toHaveCount(1);
     await expect(panel.getByRole('listitem')).toContainText(
       distance + ' · Reference'
     );
-    await expect(page.locator('.sketch-solve-pill')).toHaveText(initialStatus!);
+    // A read-only reference is not solve evidence: the status must survive it.
+    await expect(solveStatus).toHaveText('10 DOF remaining');
     const label = page.getByRole('button', {
       name: `Reference distance, (${distance})`,
       exact: true
