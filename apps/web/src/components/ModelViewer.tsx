@@ -754,6 +754,12 @@ export interface ModelViewerProps {
     additive: boolean,
     detail?: PickDetail
   ): void;
+  /**
+   * True while `onSelectTopology` refuses picks: the bodies drawn are worker
+   * meshes the document has not committed yet. The e2e select hooks then
+   * report no selection instead of one the host dropped.
+   */
+  topologyPicksHeld?: boolean;
   /** What the pointer is allowed to select. */
   selectionFilter: SelectionFilter;
   /** Bodies swept by a drag rectangle; empty clears the selection. */
@@ -1729,6 +1735,7 @@ export function ModelViewer({
   scaleIndicatorRef,
   sketchGridReadoutRef,
   onSelectTopology,
+  topologyPicksHeld = false,
   onSelectEdgeChain,
   selectionFilter,
   onBoxSelect,
@@ -1799,6 +1806,8 @@ export function ModelViewer({
   const topologyPickListRef = useRef<TopologyPickList | null>(null);
   const onSelectTopologyRef = useRef(onSelectTopology);
   onSelectTopologyRef.current = onSelectTopology;
+  const topologyPicksHeldRef = useRef(topologyPicksHeld);
+  topologyPicksHeldRef.current = topologyPicksHeld;
   const onSelectEdgeChainRef = useRef(onSelectEdgeChain);
   onSelectEdgeChainRef.current = onSelectEdgeChain;
   // Read per pick rather than rebuilding the scene: changing the filter must
@@ -3471,6 +3480,9 @@ export function ModelViewer({
         detail?.resolve?.(null);
         return;
       }
+      // A held pick still reaches the host, which refuses it ("The model is
+      // still updating"); it reports no selection so the caller retries.
+      const held = detail?.select !== false && topologyPicksHeldRef.current;
       if (detail?.select !== false) {
         const anchor =
           detail?.point ?? face.geometry.centroid ?? face.geometry.center;
@@ -3491,6 +3503,10 @@ export function ModelViewer({
             }
           }
         );
+      }
+      if (held) {
+        detail?.resolve?.(null);
+        return;
       }
       detail?.resolve?.({
         hasReference:
@@ -3616,6 +3632,9 @@ export function ModelViewer({
         detail?.resolve?.(null);
         return;
       }
+      // A held pick still reaches the host, which refuses it ("The model is
+      // still updating"); it reports no selection so the caller retries.
+      const held = detail?.select !== false && topologyPicksHeldRef.current;
       if (detail?.select !== false) {
         onSelectTopologyRef.current(
           {
@@ -3630,6 +3649,10 @@ export function ModelViewer({
             normal: { x: normal.x, y: normal.y, z: normal.z }
           }
         );
+      }
+      if (held) {
+        detail?.resolve?.(null);
+        return;
       }
       detail?.resolve?.({
         surfaceType: geometry.surfaceType,
@@ -3700,8 +3723,15 @@ export function ModelViewer({
         hash: edge.hash,
         ...(edge.reference ? { reference: edge.reference } : {})
       };
+      // A held pick still reaches the host, which refuses it ("The model is
+      // still updating"); it reports no selection so the caller retries.
+      const held = detail?.select !== false && topologyPicksHeldRef.current;
       if (detail?.select !== false) {
         onSelectTopologyRef.current(selection, false);
+      }
+      if (held) {
+        detail?.resolve?.(null);
+        return;
       }
       const first = new THREE.Vector3().fromArray(edge.points, 0);
       const last = new THREE.Vector3().fromArray(
@@ -3829,6 +3859,9 @@ export function ModelViewer({
         detail?.resolve?.(null);
         return;
       }
+      // A held pick still reaches the host, which refuses it ("The model is
+      // still updating"); it reports no selection so the caller retries.
+      const held = detail?.select !== false && topologyPicksHeldRef.current;
       if (detail?.select !== false) {
         onSelectTopologyRef.current(
           {
@@ -3844,6 +3877,10 @@ export function ModelViewer({
             normal: { x: normal.x, y: normal.y, z: normal.z }
           }
         );
+      }
+      if (held) {
+        detail?.resolve?.(null);
+        return;
       }
       detail?.resolve?.({
         ...metadata,

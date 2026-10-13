@@ -20086,6 +20086,7 @@ export function App() {
             projection={projection}
             orientationRef={orientationRef}
             onSelectTopology={handleSelectTopologyFromViewer}
+            topologyPicksHeld={currentGeometrySnapshot !== null}
             onSelectEdgeChain={handleSelectEdgeChainFromViewer}
             selectionFilter={selectionFilter}
             onBoxSelect={handleBoxSelectFromViewer}
