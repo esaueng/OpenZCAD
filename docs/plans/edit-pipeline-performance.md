@@ -248,3 +248,92 @@ measures on unchanged main, then passes locally in headless Microsoft Edge with
 the guard: drag and typed candidates emit neither measure, while Apply emits
 ready installation/frame measures for the newer committed revision. This is
 tracing correctness evidence, not a new latency measurement.
+
+### Fast exact-drag scheduling, 2026-10-13
+
+Refreshed OpenZCAD `main` at `5689adba`, including merged #624 and the subsequent
+coalescing/tracing fixes, before measuring. Both builds use the unchanged
+Remus `2026.1.53` pair pinned to `81fc3a30645462fbd811c147f407d8c16f08425a`.
+The measured bottleneck on a small exact workload is the 100 ms minimum start
+interval, rather than geometry or mesh installation. Reduce only that floor
+to 32 ms. The single in-flight request, newest-value coalescing, one-frame
+reversal cache, 8–32 ms presentation yield, source guards and cancellation stay
+in place. Expensive builds still determine their own slower cadence. Exact
+builders, tessellation, tolerances, refusal thresholds and complete-analysis
+commit requirements are unchanged.
+
+Local comparison: Apple M5 Pro, macOS 27.0.1, headless Chrome 155, ANGLE Metal,
+1440×1000, device pixel ratio 1, production preview with `VITE_E2E=1`. Browser
+plugin unavailable; used the repository Playwright workflow with installed
+Chrome (`channel: 'chrome'` in a temporary external config). Three serial,
+fresh-project runs per build and operation, with no concurrent validation
+jobs. The public fixture is a radius-14 mm, height-28 mm cylinder with 1 mm
+chamfers on both rims, created through the UI. The chamfers force both cap
+offset and wall radius through the exact geometry worker, rather than the
+viewport proxy. A real pointer-down arms the handle; in-page pointer-move
+samples use its pointer ID, projected axis and pixels-per-unit, with Shift
+snap bypass. Each next sample follows the previous rendered frame, without
+automation round trips or a rest period. This characterizes fast sequential
+updates, not the age of a coalesced value during uninterrupted high-rate input.
+
+Medians in milliseconds. Subsequent columns pool six updates (+3 through +8 mm)
+from each run: 18 samples per operation/build. First is +2 mm (three samples).
+Worker includes queueing, build, transport and receipt; presentation includes
+React, mesh installation and drawing. Frame ends after `renderer.render`,
+not physical display presentation.
+
+| Operation       | Build       | First input → frame | Subsequent input → dispatch | Dispatch → reply | Reply → frame | Subsequent input → frame (range) |
+| --------------- | ----------- | ------------------: | --------------------------: | ---------------: | ------------: | -------------------------------: |
+| Face offset     | Baseline    |                24.1 |                        80.4 |              7.2 |          11.0 |                98.9 (97.8–116.0) |
+| Face offset     | 32 ms floor |                22.9 |                         9.8 |              7.7 |          14.7 |                 32.2 (17.3–33.0) |
+| Cylinder radius | Baseline    |                23.3 |                        79.5 |              8.9 |          10.7 |                99.3 (98.1–100.2) |
+| Cylinder radius | 32 ms floor |                24.6 |                         7.7 |              8.9 |          14.7 |                 32.6 (17.0–32.9) |
+
+The approximately 67% lower subsequent input-to-frame median is attributable to
+less scheduling wait; it is not a faster kernel or full regeneration claim.
+First-frame timing is essentially unchanged. Small sample counts do not
+establish a p95 budget. The deterministic `livePreview.test.ts` regression
+requires a fast exact update within 50 ms, retains coalescing, and fails under
+the old floor. Existing slow-frame, single-in-flight, reversal, cancellation
+and stale-result assertions remain in force.
+
+Reproduce both actual drag probes (timings are opt-in observations, not CI
+wall-clock gates):
+
+```bash
+OZ_PERF=1 pnpm test:e2e visual-selection-live-preview -g 'measures exact' \
+  --workers=1 --repeat-each=3
+```
+
+The probe emits/attaches `exact-drag-latency.json` per test, separates dispatch,
+reply and changed rendered-frame timestamps, and verifies seven exact replies
+with no quantities/warnings and no full sync during motion. Release must issue
+a full sync; holding its result keeps model details pending and history
+unchanged. Releasing it must preserve the preview bounds, and Undo restores
+the original bounds. The same probe can run against either application build;
+keep the fixture, package pin, browser and renderer identical.
+
+A separate post-release ready-frame diagnostic intermittently observed no new
+`oz:edit.frame` tagged `ready` for radius, despite successful completion in the
+release/Undo probe. This slice does not change that tracing path or qualify
+committed-frame latency. The release oracle is the held full worker response,
+withheld model details, success state and restored Undo bounds; preview frame
+timing uses changed rendered bounds after the geometry reply.
+
+H02 remains Partial. This fixture/device does not qualify large/private STEP
+parts, retained worker heap or raw B-rep/lineage equivalence, sustained thermal
+load, lower-powered/Windows devices, touch input, physical input/display
+latency, or the desktop WKWebView. No native workflow was dispatched. A slower
+exact WASM call still cannot be interrupted mid-call. Full analysis on release
+still costs time, and target-device/private acceptance remains required.
+
+Local verification: lint passes with 17 existing warnings; typecheck passes;
+all 4,234 root tests and 2,597 web tests pass (eight existing root skips);
+185 parity tests pass (one existing skip); full build passes unchanged bundle
+and package-provenance gates. The regression fails with the old floor and all
+49 preview scheduler tests pass with the change. Sixteen existing focused
+Chrome browser tests pass across exact face previews, compound STEP
+offset/undo/redo/reopen and cylinder proxies. All six repeated actual-drag
+probes pass, including both full-analysis release gates and Undo. Hosted
+full-suite checks remain
+separate from these local results.
