@@ -1108,7 +1108,6 @@ export function StartScreen({
             <input
               value={name}
               aria-label="Project name"
-              autoFocus
               aria-invalid={nameTooLong || undefined}
               aria-describedby={nameTooLong ? 'project-name-error' : undefined}
               onChange={(event) => setName(event.target.value)}
