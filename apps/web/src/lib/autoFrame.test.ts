@@ -132,6 +132,44 @@ describe('createdBodiesToFrame', () => {
     ).toEqual([shell.bodyId]);
   });
 
+  it.each(['mirror', 'thicken'] as const)(
+    'frames an independent %s after another feature consumes its result',
+    (kind) => {
+      const copy = body('copy', [200, 0, 0], [280, 40, 5], true);
+      const finished = body('finished', [200, 0, 0], [280, 40, 5]);
+      const operation: FeatureData =
+        kind === 'mirror'
+          ? {
+              featureKind: kind,
+              targetBodyId: plate.bodyId,
+              plane: {
+                origin: { x: 100, y: 0, z: 0 },
+                normal: { x: 1, y: 0, z: 0 }
+              }
+            }
+          : {
+              featureKind: kind,
+              targetBodyId: plate.bodyId,
+              faceHash: 1,
+              thickness: 5
+            };
+      const copyFeature = feature('copy', operation);
+      expect(
+        createdBodiesToFrame(
+          map(plate),
+          map(plate, { ...copy, consumed: false }),
+          [copyFeature]
+        )
+      ).toEqual([copy.bodyId]);
+      expect(
+        createdBodiesToFrame(map(plate), map(plate, copy, finished), [
+          copyFeature,
+          replacement('finished', 'copy')
+        ])
+      ).toEqual([finished.bodyId]);
+    }
+  );
+
   it('frames an independent mirror but keeps both halves of an existing-body split still', () => {
     const mirror = body('mirror', [200, 0, 0], [280, 40, 5]);
     const positive = body('positive', [0, 0, 0], [40, 40, 5]);
