@@ -1,4 +1,4 @@
-import type { BodyId, BodyRepresentation, BoundingBox } from '@openzcad/shared';
+import type { BodyId, BodyRepresentation, FeatureNode } from '@openzcad/shared';
 
 /**
  * One committed change to frame for: the body projections from before the
@@ -8,43 +8,39 @@ import type { BodyId, BodyRepresentation, BoundingBox } from '@openzcad/shared';
 export interface AutoFrameRequest {
   before: Readonly<Record<string, BodyRepresentation>>;
   after: Readonly<Record<string, BodyRepresentation>>;
-}
-
-function contains(
-  outer: BoundingBox,
-  inner: BoundingBox,
-  tolerance: number
-): boolean {
-  return (['x', 'y', 'z'] as const).every(
-    (axis) =>
-      inner.min[axis] >= outer.min[axis] - tolerance &&
-      inner.max[axis] <= outer.max[axis] + tolerance
-  );
+  /** Committed history order distinguishes edit results from independent additions. */
+  features: readonly FeatureNode[];
 }
 
 /**
- * The live bodies a commit put somewhere new: created by it, or reaching past
- * the box they filled before (grown, or moved). Only these are worth moving
- * the camera for. A body that kept or shrank its bounds is still wherever the
- * user had it framed, and a consumed one is not drawn at all.
+ * Only independently added bodies may request framing. Editing an existing
+ * body preserves the user's camera, even when it grows or moves out of view.
  *
- * The tolerance is relative to the body's size, so a rebuild's float noise on
- * an unchanged body never reads as growth.
+ * Follow each result's body inputs through history so replacement chains stay
+ * edits, while unrelated additions in the same transaction can still frame.
  */
-export function bodiesReachingNewSpace(
+export function createdBodiesToFrame(
   before: Readonly<Record<string, BodyRepresentation>>,
-  after: Readonly<Record<string, BodyRepresentation>>
+  after: Readonly<Record<string, BodyRepresentation>>,
+  features: readonly FeatureNode[]
 ): BodyId[] {
-  return Object.values(after).flatMap((body) => {
-    if (body.consumed) {
-      return [];
-    }
-    const previous = before[body.bodyId];
-    if (!previous || previous.consumed) {
-      return [body.bodyId];
-    }
-    const { min, max } = body.bbox;
-    const size = Math.max(max.x - min.x, max.y - min.y, max.z - min.z, 1e-9);
-    return contains(previous.bbox, body.bbox, size * 1e-6) ? [] : [body.bodyId];
-  });
+  const existing = new Set(Object.values(before).map((body) => body.bodyId));
+  for (const feature of features) {
+    const data = feature.data;
+    // Mirror and Thicken create independent bodies and keep their sources.
+    if (data.featureKind === 'mirror' || data.featureKind === 'thicken')
+      continue;
+    const inputs =
+      'targetBodyIds' in data
+        ? data.targetBodyIds
+        : 'targetBodyId' in data && data.targetBodyId
+          ? [data.targetBodyId]
+          : [];
+    if (!inputs.some((bodyId) => existing.has(bodyId))) continue;
+    if (feature.bodyId) existing.add(feature.bodyId);
+    if (data.featureKind === 'split') existing.add(data.secondBodyId);
+  }
+  return Object.values(after)
+    .filter((body) => !body.consumed && !existing.has(body.bodyId))
+    .map((body) => body.bodyId);
 }

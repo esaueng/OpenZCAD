@@ -49,6 +49,14 @@ without overshoot (`camera/orbitGlide.ts`), matching the reference CAD's
 10–12-frame stops; the former 800 ms cap was a low-frame-rate allowance the
 vsync-floor audit retired.
 
+Editing a body preserves the current camera position, target, viewing angle
+and zoom through preview and commit, even when the result extends off screen.
+This also applies when an edit replaces its source with a new body identity.
+Initial framing and bringing an independently added body into view remain
+automatic; reframing an edited body requires an explicit Fit View action.
+In a transaction combining edits and new parts, only the independent additions
+may request automatic framing; replacement results keep their edit semantics.
+
 The same measurements showed the reference spends its entire motion budget on
 the camera and on panel-content crossfades: geometry state (selection fills,
 extrude previews, boolean commits) changes on the next frame, deliberately.
