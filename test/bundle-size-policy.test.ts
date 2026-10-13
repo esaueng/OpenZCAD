@@ -1,7 +1,10 @@
 import { describe, expect, it } from 'vitest';
 import {
+  evaluateKernelLoad,
+  evaluateKernelLoadRegression,
   evaluateKernelPinGrowth,
   evaluateKernelWasm,
+  KERNEL_LOAD_POLICY,
   KERNEL_WASM_POLICY,
   LAZY_ENTRY_PATTERNS,
   measureKernelWasm
@@ -165,5 +168,84 @@ describe('lazy entry patterns', () => {
         false
       );
     }
+  });
+});
+
+describe('kernel load-time review budgets', () => {
+  for (const profile of ['desktop', 'mobile'] as const) {
+    it(`accepts the exact ${profile} budgets and reviews above them`, () => {
+      const budgets = KERNEL_LOAD_POLICY.profiles[profile];
+      const at = evaluateKernelLoad(profile, {
+        coldReadyP95Ms: budgets.coldReadyP95Ms,
+        warmReadyP95Ms: budgets.warmReadyP95Ms
+      });
+      const above = evaluateKernelLoad(profile, {
+        coldReadyP95Ms: budgets.coldReadyP95Ms + 0.01,
+        warmReadyP95Ms: budgets.warmReadyP95Ms + 0.01
+      });
+
+      expect(at.warnings).toEqual([]);
+      expect(above.warnings.map(({ code }) => code)).toEqual([
+        `kernel-load-${profile}-cold-review`,
+        `kernel-load-${profile}-warm-review`
+      ]);
+    });
+  }
+
+  it('never loosens the proposed load targets', () => {
+    expect(KERNEL_LOAD_POLICY.minimumRuns).toBeGreaterThanOrEqual(20);
+    expect(
+      KERNEL_LOAD_POLICY.profiles.desktop.coldReadyP95Ms
+    ).toBeLessThanOrEqual(2000);
+    expect(
+      KERNEL_LOAD_POLICY.profiles.mobile.coldReadyP95Ms
+    ).toBeLessThanOrEqual(5000);
+    expect(
+      KERNEL_LOAD_POLICY.profiles.desktop.warmReadyP95Ms
+    ).toBeLessThanOrEqual(500);
+    expect(
+      KERNEL_LOAD_POLICY.profiles.mobile.warmReadyP95Ms
+    ).toBeLessThanOrEqual(500);
+  });
+
+  it('refuses a missing measurement or an unknown profile', () => {
+    expect(() =>
+      evaluateKernelLoad('desktop', { coldReadyP95Ms: null, warmReadyP95Ms: 1 })
+    ).toThrow('no p95 measurement');
+    expect(() =>
+      evaluateKernelLoad('tablet', { coldReadyP95Ms: 1, warmReadyP95Ms: 1 })
+    ).toThrow('No kernel load budget');
+  });
+});
+
+describe('kernel load regression review', () => {
+  it('allows the larger of the ratio and the floor over the baseline', () => {
+    const { ratio, floorMs } = KERNEL_LOAD_POLICY.regression.mobile;
+    const slow = 10_000;
+    const fast = floorMs / ratio / 2;
+    const result = evaluateKernelLoadRegression(
+      'mobile',
+      { coldReadyP50Ms: slow, warmReadyP50Ms: fast },
+      { coldReadyP50Ms: slow * (1 + ratio), warmReadyP50Ms: fast + floorMs }
+    );
+
+    expect(result.results.map(({ allowedP50Ms }) => allowedP50Ms)).toEqual([
+      slow * (1 + ratio),
+      fast + floorMs
+    ]);
+    expect(result.warnings).toEqual([]);
+  });
+
+  it('reviews a candidate beyond the allowance', () => {
+    const { ratio, floorMs } = KERNEL_LOAD_POLICY.regression.desktop;
+    const baseline = { coldReadyP50Ms: 1000, warmReadyP50Ms: 40 };
+    const result = evaluateKernelLoadRegression('desktop', baseline, {
+      coldReadyP50Ms: Math.max(1000 * (1 + ratio), 1000 + floorMs) + 1,
+      warmReadyP50Ms: 40
+    });
+
+    expect(result.warnings.map(({ code }) => code)).toEqual([
+      'kernel-load-desktop-cold-regression'
+    ]);
   });
 });
