@@ -55,8 +55,8 @@ interface StartScreenProps {
   projects: ProjectSummary[];
   status: string;
   /**
-   * Present once a newer build is out (a chunk this tab asked for is gone,
-   * or the version watch saw a new commit): the footer offers the reload.
+   * Present once the version watch confirms a newer build: the footer offers
+   * the reload. Download failures have their own actionable toast.
    */
   onReloadForUpdate?: () => void;
   busy: boolean;

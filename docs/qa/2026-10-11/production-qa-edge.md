@@ -3,8 +3,9 @@
 ## Environment and scope
 
 Site: <https://zcad.app>. This is a production browser assessment, with no
-application changes. ROADMAP U03 owns the UX assessment context; this report
-does not change delivery status or certify the full feature catalogue.
+application changes. ROADMAP [L01](../../../ROADMAP.md#l01) owns the EDGE-03
+persistence finding; [U03](../../../ROADMAP.md#u03) owns the UX assessment
+context. This report does not certify the full feature catalogue.
 
 | Item                   | Recorded value                                                                                                                    |
 | ---------------------- | --------------------------------------------------------------------------------------------------------------------------------- |

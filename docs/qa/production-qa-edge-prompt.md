@@ -247,8 +247,9 @@ screenshot of every new state.
    favicon and the page title.
 4. **Start screen.** Check:
    - The empty state with no projects.
-   - All four demos are listed: Mounting Bracket, Pipe Flange, Heat Sink and
-     Visual Selection Reference.
+   - All three production demos are listed: Mounting Bracket, Pipe Flange
+     and Heat Sink. Visual Selection Reference is E2E-only and is intentionally
+     unavailable in production.
    - Create project, import, settings and the tagline.
    - Long project names and many projects (create five, with names of 1, 40
      and 200 characters).
@@ -346,7 +347,7 @@ dead ends) and compare with the 11 October review.
     mode, check Measure (`M`): record several measurements, stop with
     Escape, and delete one with Delete. Check that nothing in View mode can
     change the model.
-11. **Demos.** Open all four. For each, check that it renders completely and
+11. **Demos.** Open all three production demos. For each, check that it renders completely and
     that the feature history matches the model. Change one parameter, and
     try to suppress a used feature.
 12. **Import.** Use `file_upload` on the import input; do not click it, which
@@ -453,7 +454,10 @@ dead ends) and compare with the 11 October review.
       chip.
     - Thumbnails.
     - Account storage, read-only.
-    - The conflict dialog, using two tabs on one QA project.
+    - The conflict dialog, using two independent browser contexts/profiles or
+      devices, each separately signed in to the same account on one QA project.
+      Two tabs in one context exercise the local edit lock instead: the second
+      tab should open read-only.
     - The sharing dialog, view only, with no invites.
 
     Never use "Delete cloud data".

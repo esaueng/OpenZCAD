@@ -18092,6 +18092,7 @@ export function App() {
           publishThumbnail={publishThumbnail}
         />
         {settingsOverlay}
+        <ToastHost toast={toast} onDismiss={dismissToast} />
       </>
     );
   }

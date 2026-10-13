@@ -487,7 +487,13 @@ export default defineConfig(async ({ command, isPreview, mode }) => {
               // preloaded chunk, including before a reload or navigation.
               id.includes('/apps/web/src/lib/localProjectAutosave.ts') ||
               id.includes('/apps/web/src/lib/localAutosaveFailure.ts') ||
-              id.includes('/apps/web/src/lib/workspaceSaveStatePresentation.ts')
+              id.includes(
+                '/apps/web/src/lib/workspaceSaveStatePresentation.ts'
+              ) ||
+              // Chunk recovery is shared by the launcher, worker and lazy
+              // panels. Keep it resident beside device durability in the
+              // existing preloaded chunk, including while offline.
+              id.includes('/apps/web/src/lib/staleChunk.ts')
             ) {
               return 'model';
             }
