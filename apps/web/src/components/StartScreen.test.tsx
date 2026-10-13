@@ -192,13 +192,14 @@ describe('StartScreen properties', () => {
 });
 
 describe('StartScreen new part suggestion', () => {
-  it('focuses the generated name without selecting its text', () => {
+  it('suggests a generated name without focusing the field', () => {
     renderStartScreen();
 
     const input = screen.getByLabelText<HTMLInputElement>('Project name');
-    expect(input).toHaveFocus();
+    // Opening or reloading the library must not drop the caret into the
+    // name field: typing should not land there until the user picks it.
+    expect(input).not.toHaveFocus();
     expect(input).not.toHaveValue('New Part');
-    expect(input.selectionStart).toBe(input.selectionEnd);
   });
 
   it('generates a new suggestion for each fresh mount', () => {
