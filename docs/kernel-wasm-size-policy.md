@@ -402,8 +402,9 @@ round):
 | Desktop      | 130 ms (worst 100.2) |    40 ms (10.5) |       30 ms (4.9) |       30 ms (0.3) |
 | Mobile-class |       630 ms (594.6) |    80 ms (53.6) |      60 ms (25.9) |       30 ms (1.8) |
 
-`pnpm perf:remus-wasm -- --profile <desktop|mobile> --first-operation --check`
-reports them as review lines, like the load budgets. Compilation scales with
+`pnpm perf:remus-wasm -- --profile <desktop|mobile> --first-operation --check --runs 40`
+reports them as review lines, like the load budgets (`--check` with
+`--first-operation` needs at least 40 runs, 20 per workload order). Compilation scales with
 the code a first operation reaches, not with the whole module, so a ceiling
 raise moves these budgets only when the added code sits on the first edit's
 path. That is what the review checks.
