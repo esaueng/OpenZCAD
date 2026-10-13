@@ -569,6 +569,17 @@ or memory gate needs matched quiet-host repeats on at least one desktop and one
 constrained/mobile-class target, using the real worker/glue startup path; until
 then this report is a comparison baseline, not pass/fail policy.
 
+**Update (2026-10-13).** The harness now also times kernel-ready through the
+real glue startup path (`instantiateStreaming`, `__wbindgen_start`, the first
+`BrepKernel`) in a desktop and a mobile-class profile, and
+[`docs/kernel-wasm-size-policy.md`](kernel-wasm-size-policy.md#load-time-budget)
+sets review budgets from that baseline. Those runs shared a loaded host, so the
+budgets are review signals rather than hard gates. The module phase above now
+instantiates asynchronously: Chromium refuses the synchronous
+`new WebAssembly.Instance` on the main thread for modules over 8 MB, and the
+pinned 2026.1.53 kernel is 10,406,201 bytes, so the unchanged harness failed
+on it.
+
 The three eager UI assets total about 362.9 kB gzip. PDF worker/runtime assets
 are emitted separately and are loaded only when reference-document support is
 used. Reproduce the complete raw/gzip inventory with `pnpm build:report`; the

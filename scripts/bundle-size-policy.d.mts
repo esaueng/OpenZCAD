@@ -57,3 +57,62 @@ export function kernelPolicyToolchain(): {
   brotli: string | null;
   brotliQuality: number;
 };
+
+export interface KernelLoadMetrics {
+  coldReadyP95Ms: number | null;
+  warmReadyP95Ms: number | null;
+}
+
+export interface KernelLoadMedians {
+  coldReadyP50Ms: number | null;
+  warmReadyP50Ms: number | null;
+}
+
+export interface KernelLoadResult {
+  code: string;
+  p95Ms: number;
+  budgetMs: number;
+  reason: string;
+  withinBudget: boolean;
+}
+
+export interface KernelLoadRegressionResult {
+  code: string;
+  reason: string;
+  baselineP50Ms: number;
+  candidateP50Ms: number;
+  allowedP50Ms: number;
+  withinBudget: boolean;
+}
+
+export const KERNEL_LOAD_POLICY: Readonly<{
+  minimumRuns: number;
+  profiles: Readonly<
+    Record<
+      'desktop' | 'mobile',
+      Readonly<{ coldReadyP95Ms: number; warmReadyP95Ms: number }>
+    >
+  >;
+  regression: Readonly<
+    Record<'desktop' | 'mobile', Readonly<{ ratio: number; floorMs: number }>>
+  >;
+}>;
+
+export function evaluateKernelLoad(
+  profile: string,
+  metrics: KernelLoadMetrics
+): {
+  profile: string;
+  results: KernelLoadResult[];
+  warnings: KernelLoadResult[];
+};
+
+export function evaluateKernelLoadRegression(
+  profile: string,
+  baseline: KernelLoadMedians,
+  candidate: KernelLoadMedians
+): {
+  profile: string;
+  results: KernelLoadRegressionResult[];
+  warnings: KernelLoadRegressionResult[];
+};
