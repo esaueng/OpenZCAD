@@ -260,6 +260,30 @@ describe('Remus WASM load pull-request section', () => {
     );
     expect(section).toContain('| --- | ---: |');
   });
+
+  it('leaves a first-operation pin comparison unevaluated', () => {
+    const section = markdownSection({
+      protocol: { profile: 'mobile', runs: 40, firstOperations: false },
+      provenance: { remusVersion: '2026.1.57' },
+      summary: {
+        kernelReady: { cold: ready(3400, 3500), warm: ready(180, 190) }
+      },
+      gates: null,
+      baseline: {
+        provenance: { remusVersion: '2026.1.53' },
+        summary: {
+          kernelReady: { cold: ready(3450, 3500), warm: ready(80, 95) }
+        }
+      },
+      regression: null
+    });
+
+    expect(section).toContain(
+      '| warm | 80 ms | 180 ms | 95 ms | 190 ms | — | — | not evaluated |'
+    );
+    expect(section).not.toContain('slower than pin');
+    expect(section).not.toMatch(/\| ok \|/);
+  });
 });
 
 describe('Remus WASM load benchmark setup failures', () => {

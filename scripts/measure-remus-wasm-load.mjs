@@ -1124,7 +1124,7 @@ export function markdownSection(report) {
     if (baseline) {
       const before = report.baseline.summary.kernelReady[phase].readyMs;
       lines.push(
-        `| ${phase} | ${markdownMs(before.median)} | ${markdownMs(after.median)} | ${markdownMs(before.p95)} | ${markdownMs(after.p95)} | ${markdownMs(regression.allowedP50Ms)} | ${markdownMs(gate?.budgetMs)} | ${result} |`
+        `| ${phase} | ${markdownMs(before.median)} | ${markdownMs(after.median)} | ${markdownMs(before.p95)} | ${markdownMs(after.p95)} | ${markdownMs(regression?.allowedP50Ms)} | ${markdownMs(gate?.budgetMs)} | ${result} |`
       );
     } else {
       lines.push(
@@ -1341,13 +1341,16 @@ export async function runBenchmark(args) {
   const baselineSummary = baseline
     ? summarizeSamples(baselineSamples, args)
     : null;
-  const regression = baseline
-    ? evaluateKernelLoadRegression(
-        args.profile,
-        readyStatistics(baselineSummary),
-        readyStatistics(summary)
-      )
-    : null;
+  // The same contamination applies to the pin comparison: first-operation
+  // runs leave the kernel-ready regression unevaluated.
+  const regression =
+    baseline && !args.firstOperations
+      ? evaluateKernelLoadRegression(
+          args.profile,
+          readyStatistics(baselineSummary),
+          readyStatistics(summary)
+        )
+      : null;
   const first = samples[0];
   const report = {
     format: 'openzcad-remus-wasm-load-baseline',
