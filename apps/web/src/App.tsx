@@ -228,6 +228,7 @@ import {
 } from './lib/holeFacePick';
 import {
   lazyWithStaleChunkNotice,
+  loadWhenOnline,
   onStaleChunk,
   watchPreloadErrors,
   STALE_CHUNK_MESSAGE
@@ -352,6 +353,12 @@ import {
 import { StatusActivityLog } from './components/StatusActivityLog';
 import { PanelResizer } from './components/PanelResizer';
 import { ErrorBoundary } from './components/ErrorBoundary';
+import { createLazyPanel } from './components/LazyPanel';
+import type { Sidebar as SidebarComponent } from './components/Sidebar';
+import type * as SidebarModule from './components/Sidebar';
+import type { FeatureHistoryPanel as FeatureHistoryComponent } from './components/FeatureHistoryPanel';
+import type { TweakPanel as TweakPanelComponent } from './components/TweakPanel';
+import type { ViewModeBar as ViewModeBarComponent } from './components/ViewModeBar';
 import { TopBar } from './components/TopBar';
 import { SketchTextCardFallback } from './components/SketchTextCardFallback';
 import {
@@ -726,7 +733,9 @@ const LazyViewerShell = lazyWithStaleChunkNotice(() =>
     default: module.ViewerShell
   }))
 );
-const LazyViewModeBar = lazyWithStaleChunkNotice(() =>
+const ViewModeBar = createLazyPanel<
+  ComponentProps<typeof ViewModeBarComponent>
+>('View tools', () =>
   import('./components/ViewModeBar').then((module) => ({
     default: module.ViewModeBar
   }))
@@ -783,11 +792,15 @@ function ToolCard(props: ComponentProps<typeof LazyToolCard>) {
 }
 // The model browser only renders inside the drawer, which starts closed; its
 // History timeline took the entry chunk past its budget.
-const loadSidebar = () => import('./components/Sidebar');
-const LazySidebar = lazyWithStaleChunkNotice(() =>
-  loadSidebar().then((module) => ({
-    default: module.Sidebar
-  }))
+let sidebarModule: Promise<typeof SidebarModule> | undefined;
+const loadSidebar = () =>
+  (sidebarModule ??= loadWhenOnline(() => import('./components/Sidebar')));
+const Sidebar = createLazyPanel<ComponentProps<typeof SidebarComponent>>(
+  'Model drawer',
+  () =>
+    loadSidebar().then((module) => ({
+      default: module.Sidebar
+    }))
 );
 /**
  * Focuses a field inside the drawer once it exists. The drawer's browser is
@@ -804,14 +817,9 @@ function focusInDrawerWhenMounted(selector: string, frames = 60) {
     );
   }
 }
-function Sidebar(props: ComponentProps<typeof LazySidebar>) {
-  return (
-    <Suspense fallback={null}>
-      <LazySidebar {...props} />
-    </Suspense>
-  );
-}
-const LazyFeatureHistoryPanel = lazyWithStaleChunkNotice(() =>
+const FeatureHistoryPanel = createLazyPanel<
+  ComponentProps<typeof FeatureHistoryComponent>
+>('Feature history', () =>
   import('./components/FeatureHistoryPanel').then((module) => ({
     default: module.FeatureHistoryPanel
   }))
@@ -821,15 +829,6 @@ const LazySketchWorkflow = lazyWithStaleChunkNotice(() =>
     default: module.SketchWorkflow
   }))
 );
-function FeatureHistoryPanel(
-  props: ComponentProps<typeof LazyFeatureHistoryPanel>
-) {
-  return (
-    <Suspense fallback={null}>
-      <LazyFeatureHistoryPanel {...props} />
-    </Suspense>
-  );
-}
 function SketchWorkflow(props: ComponentProps<typeof LazySketchWorkflow>) {
   return (
     <Suspense fallback={null}>
@@ -906,10 +905,12 @@ const LazySketchEntityEditor = lazyWithStaleChunkNotice(() =>
   }))
 );
 // Tweak's panel shows only in Tweak mode; Build and View never load it.
-const LazyTweakPanel = lazyWithStaleChunkNotice(() =>
-  import('./components/TweakPanel').then((module) => ({
-    default: module.TweakPanel
-  }))
+const TweakPanel = createLazyPanel<ComponentProps<typeof TweakPanelComponent>>(
+  'Parameters panel',
+  () =>
+    import('./components/TweakPanel').then((module) => ({
+      default: module.TweakPanel
+    }))
 );
 // The text tool's card exists only while text is being composed.
 const LazySketchTextCard = lazyWithStaleChunkNotice(() =>
@@ -995,14 +996,6 @@ function ViewerShell(props: ComponentProps<typeof LazyViewerShell>) {
       }
     >
       <LazyViewerShell {...props} />
-    </Suspense>
-  );
-}
-
-function ViewModeBar(props: ComponentProps<typeof LazyViewModeBar>) {
-  return (
-    <Suspense fallback={null}>
-      <LazyViewModeBar {...props} />
     </Suspense>
   );
 }
@@ -1125,14 +1118,6 @@ function SketchEntityEditor(
   return (
     <Suspense fallback={null}>
       <LazySketchEntityEditor {...props} />
-    </Suspense>
-  );
-}
-
-function TweakPanel(props: ComponentProps<typeof LazyTweakPanel>) {
-  return (
-    <Suspense fallback={null}>
-      <LazyTweakPanel {...props} />
     </Suspense>
   );
 }
@@ -2246,7 +2231,8 @@ export function App() {
       }
     });
     const stopStale = onStaleChunk(() => {
-      setNewBuildAvailable(true);
+      // A failed download alone also occurs offline. Only the version watch
+      // above can prove that an update exists and enable the update control.
       announce(STALE_CHUNK_MESSAGE, reloadNotice);
     });
     const stopPreload = watchPreloadErrors();
@@ -10586,35 +10572,22 @@ export function App() {
           setFeatureFormError(message);
           return;
         }
-        let parsed;
         try {
-          parsed = parseStl(contents, file.name);
-        } catch (error) {
-          const message = errorMessage(error, 'STL import failed.');
-          progress.finish({ tone: 'error', message });
-          setStatus(message);
-          return;
-        } finally {
-          // Parse-only failures release here; the run below adopts the
-          // reservation and releases it when it settles.
-          if (parsed === undefined) {
-            reservation.release();
-          }
-        }
-        progress.update({ phase: 'building', fraction: null });
-        const { createBodyFeatureIds } =
-          await import('@openzcad/document-core');
-        const previewIds = createBodyFeatureIds();
-        const previewCommand = commandFactories.importMesh({
-          name: parsed.name,
-          artifactId: `artifact_local_${crypto.randomUUID()}`,
-          sourceName: parsed.name,
-          triangleCount: parsed.triangleCount,
-          vertices: parsed.vertices,
-          indices: parsed.indices,
-          ids: previewIds
-        });
-        try {
+          const parsed = parseStl(contents, file.name);
+          progress.update({ phase: 'building', fraction: null });
+          const { createBodyFeatureIds } =
+            await import('@openzcad/document-core');
+          const previewIds = createBodyFeatureIds();
+          const previewCommand = commandFactories.importMesh({
+            name: parsed.name,
+            artifactId: `artifact_local_${crypto.randomUUID()}`,
+            sourceName: parsed.name,
+            triangleCount: parsed.triangleCount,
+            vertices: parsed.vertices,
+            indices: parsed.indices,
+            ids: previewIds
+          });
+          let rejection: string | null = null;
           const outcome = await validatedFeature.run(previewCommand, {
             featureName: parsed.name,
             resultBodyId: previewIds.bodyId,
@@ -10630,6 +10603,11 @@ export function App() {
             // hook still re-checks the project at commit, and drops a stale
             // derived rather than blanking whatever else landed meanwhile.
             revalidateOnDocumentMove: false,
+            // Imports own their refusal card; do not leave the diagnostic in
+            // whichever unrelated feature form happens to be open.
+            onFailure: (message) => {
+              rejection = message;
+            },
             finalize: async () => {
               const blockedReason = editDisabledReasonRef.current;
               if (blockedReason) {
@@ -10675,7 +10653,16 @@ export function App() {
               });
             }
           });
-          if (outcome === 'cancelled') {
+          // Every terminal result settles the card before its abort handle is
+          // retired. A committed mesh previously left "Archiving a copy"
+          // running forever; Cancel then had no live operation to withdraw.
+          if (outcome === 'committed') {
+            progress.finish({
+              tone: 'ok',
+              message: `${parsed.triangleCount} triangles`,
+              landed: true
+            });
+          } else if (outcome === 'cancelled') {
             progress.finish({
               tone: 'cancelled',
               message: 'nothing was added'
@@ -10686,9 +10673,23 @@ export function App() {
               tone: 'warning',
               message: 'another exact operation was still running'
             });
+          } else {
+            progress.finish({
+              tone: outcome === 'superseded' ? 'warning' : 'error',
+              message: rejection ?? 'the file was refused'
+            });
           }
         } finally {
           reservation.release();
+        }
+      } catch (error) {
+        if (abort.signal.aborted) {
+          progress.finish({ tone: 'cancelled', message: 'nothing was added' });
+          setStatus(`${file.name} was not imported: you cancelled it.`);
+        } else {
+          const message = errorMessage(error, 'STL import failed.');
+          progress.finish({ tone: 'error', message });
+          setStatus(message);
         }
       } finally {
         finishImportAbort(abort);
