@@ -782,6 +782,55 @@ describe('bounded progressive gestures', () => {
     }
   });
 
+  it('presents fast exact frames within 50 ms while coalescing input and yielding', async () => {
+    vi.useFakeTimers();
+    try {
+      const started: { at: number; value: number }[] = [];
+      const published: { at: number; value: number }[] = [];
+      const begin = Date.now();
+      const preview = new LivePreview<Doc, string>({
+        build: (value) => {
+          started.push({ at: Date.now() - begin, value });
+          return { value };
+        },
+        derive: async () => {
+          await new Promise((resolve) => setTimeout(resolve, 8));
+          return 'exact geometry';
+        },
+        publish: (frame) => {
+          if (frame)
+            published.push({
+              at: Date.now() - begin,
+              value: frame.document.value
+            });
+        },
+        ...GEOMETRY_PREVIEW_SCHEDULING,
+        now: () => Date.now()
+      });
+      preview.request(1);
+      await vi.advanceTimersByTimeAsync(8);
+      preview.request(2);
+      await vi.advanceTimersByTimeAsync(8);
+      preview.request(3);
+      await vi.advanceTimersByTimeAsync(33);
+      // Two pointer values coalesce into one exact rebuild. The old 100 ms
+      // floor left the display at 1 through this whole input-to-frame budget.
+      expect(started).toEqual([
+        { at: 0, value: 1 },
+        { at: 32, value: 3 }
+      ]);
+      expect(published).toEqual([
+        { at: 8, value: 1 },
+        { at: 40, value: 3 }
+      ]);
+      expect(preview.lagging).toBe(false);
+      preview.clear();
+      await vi.runAllTimersAsync();
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
   it('finishes exact frames while pointer input outruns the worker', async () => {
     vi.useFakeTimers();
     try {
