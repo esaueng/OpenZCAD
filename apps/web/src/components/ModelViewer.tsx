@@ -11364,7 +11364,8 @@ export function ModelViewer({
     const reached = new THREE.Box3();
     for (const bodyId of createdBodiesToFrame(
       autoFrame.before,
-      autoFrame.after
+      autoFrame.after,
+      autoFrame.features
     )) {
       const object = context.objectsByBodyId.get(bodyId);
       if (object?.visible) reached.expandByObject(object);

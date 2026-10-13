@@ -93,7 +93,8 @@ describe('useLocalAutoFrame', () => {
     hook.rerender({ document: exact, ready: true, previewing: false });
     expect(hook.result.current.autoFrame).toEqual({
       before,
-      after: exact.derived.bodyRepresentations
+      after: exact.derived.bodyRepresentations,
+      features: listFeaturesInOrder(exact)
     });
   });
 
@@ -244,7 +245,8 @@ describe('useLocalAutoFrame', () => {
     hook.rerender({ document: normalized, ready: true, previewing: false });
     expect(hook.result.current.autoFrame).toEqual({
       before,
-      after: normalized.derived.bodyRepresentations
+      after: normalized.derived.bodyRepresentations,
+      features: listFeaturesInOrder(normalized)
     });
   });
 
