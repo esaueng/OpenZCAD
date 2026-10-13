@@ -1,9 +1,11 @@
 import { describe, expect, it } from 'vitest';
 import {
+  evaluateKernelFirstOperation,
   evaluateKernelLoad,
   evaluateKernelLoadRegression,
   evaluateKernelPinGrowth,
   evaluateKernelWasm,
+  KERNEL_FIRST_OPERATION_POLICY,
   KERNEL_LOAD_POLICY,
   KERNEL_WASM_POLICY,
   LAZY_ENTRY_PATTERNS,
@@ -261,5 +263,45 @@ describe('kernel load regression review', () => {
     expect(result.warnings.map(({ code }) => code)).toEqual([
       'kernel-load-desktop-cold-regression'
     ]);
+  });
+});
+
+describe('kernel first-operation review budgets', () => {
+  for (const profile of ['desktop', 'mobile'] as const) {
+    it(`accepts the exact ${profile} budgets and reviews above them`, () => {
+      const budgets = KERNEL_FIRST_OPERATION_POLICY[profile];
+      const at = evaluateKernelFirstOperation(profile, budgets);
+      const above = evaluateKernelFirstOperation(profile, {
+        coldSolidP95Ms: budgets.coldSolidP95Ms + 0.01,
+        warmSolidP95Ms: budgets.warmSolidP95Ms,
+        coldSketchP95Ms: budgets.coldSketchP95Ms,
+        warmSketchP95Ms: budgets.warmSketchP95Ms + 0.01
+      });
+
+      expect(at.warnings).toEqual([]);
+      expect(above.warnings.map(({ code }) => code)).toEqual([
+        `kernel-first-op-${profile}-cold-solid-review`,
+        `kernel-first-op-${profile}-warm-sketch-review`
+      ]);
+    });
+  }
+
+  it('refuses a missing measurement or an unknown profile', () => {
+    expect(() =>
+      evaluateKernelFirstOperation('desktop', {
+        coldSolidP95Ms: 1,
+        warmSolidP95Ms: null,
+        coldSketchP95Ms: 1,
+        warmSketchP95Ms: 1
+      })
+    ).toThrow('warmSolidP95Ms has no p95 measurement');
+    expect(() =>
+      evaluateKernelFirstOperation('tablet', {
+        coldSolidP95Ms: 1,
+        warmSolidP95Ms: 1,
+        coldSketchP95Ms: 1,
+        warmSketchP95Ms: 1
+      })
+    ).toThrow('No first-operation budget');
   });
 });

@@ -201,6 +201,60 @@ export const KERNEL_LOAD_POLICY = Object.freeze({
   })
 });
 
+/**
+ * First-operation review budgets: p95 milliseconds of the first call of the
+ * harness's representative solid edit and sketch solve after kernel-ready
+ * (`--first-operation`), which carries V8's lazy WebAssembly compilation.
+ * Each is the worst p95 measured for remus-wasm 2026.1.53 and 2026.1.57 on
+ * the reference host plus max(25 ms, 5%), rounded up to 10 ms. Evidence:
+ * `docs/kernel-wasm-size-policy.md`.
+ */
+export const KERNEL_FIRST_OPERATION_POLICY = Object.freeze({
+  desktop: Object.freeze({
+    coldSolidP95Ms: 130,
+    warmSolidP95Ms: 40,
+    coldSketchP95Ms: 40,
+    warmSketchP95Ms: 30
+  }),
+  mobile: Object.freeze({
+    coldSolidP95Ms: 630,
+    warmSolidP95Ms: 80,
+    coldSketchP95Ms: 70,
+    warmSketchP95Ms: 30
+  })
+});
+
+export function evaluateKernelFirstOperation(profile, metrics) {
+  const budgets = KERNEL_FIRST_OPERATION_POLICY[profile];
+  if (!budgets) {
+    throw new Error(`No first-operation budget for profile ${profile}`);
+  }
+  const results = [
+    ['cold', 'Solid', 'solid'],
+    ['warm', 'Solid', 'solid'],
+    ['cold', 'Sketch', 'sketch'],
+    ['warm', 'Sketch', 'sketch']
+  ].map(([phase, kind, slug]) => {
+    const key = `${phase}${kind}P95Ms`;
+    const p95Ms = metrics[key];
+    if (!Number.isFinite(p95Ms)) {
+      throw new Error(`${key} has no p95 measurement`);
+    }
+    return {
+      code: `kernel-first-op-${profile}-${phase}-${slug}-review`,
+      p95Ms,
+      budgetMs: budgets[key],
+      reason: `First ${slug} operation after a ${phase} load (${profile}) requires a load-time review`,
+      withinBudget: p95Ms <= budgets[key]
+    };
+  });
+  return {
+    profile,
+    results,
+    warnings: results.filter((result) => !result.withinBudget)
+  };
+}
+
 export function evaluateKernelLoad(profile, metrics) {
   const budgets = KERNEL_LOAD_POLICY.profiles[profile];
   if (!budgets) {

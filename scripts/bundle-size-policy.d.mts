@@ -116,3 +116,31 @@ export function evaluateKernelLoadRegression(
   results: KernelLoadRegressionResult[];
   warnings: KernelLoadRegressionResult[];
 };
+
+export interface KernelFirstOperationMetrics {
+  coldSolidP95Ms: number | null;
+  warmSolidP95Ms: number | null;
+  coldSketchP95Ms: number | null;
+  warmSketchP95Ms: number | null;
+}
+
+export const KERNEL_FIRST_OPERATION_POLICY: Readonly<
+  Record<
+    'desktop' | 'mobile',
+    Readonly<{
+      coldSolidP95Ms: number;
+      warmSolidP95Ms: number;
+      coldSketchP95Ms: number;
+      warmSketchP95Ms: number;
+    }>
+  >
+>;
+
+export function evaluateKernelFirstOperation(
+  profile: string,
+  metrics: KernelFirstOperationMetrics
+): {
+  profile: string;
+  results: KernelLoadResult[];
+  warnings: KernelLoadResult[];
+};

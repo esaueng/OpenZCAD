@@ -4,6 +4,7 @@ import { join } from 'node:path';
 import { afterEach, describe, expect, it } from 'vitest';
 import {
   assertCacheProtocol,
+  assertFirstOperationResults,
   LOAD_PROFILES,
   markdownSection,
   parseArgs,
@@ -313,4 +314,45 @@ describe('Remus WASM load benchmark setup failures', () => {
     },
     5_000
   );
+});
+
+describe('Remus WASM first-operation phase', () => {
+  const solid = { volume: 3867.86, triangles: 208 };
+  const sketch = { converged: true, x: 12, y: 8 };
+  const result = (overrides = {}) => ({
+    solidFirstMs: 60,
+    solidSecondMs: 5,
+    sketchFirstMs: 4,
+    sketchSecondMs: 0.1,
+    solid: [solid, solid],
+    sketch: [sketch, sketch],
+    ...overrides
+  });
+
+  it('is off by default and enabled by --first-operation', () => {
+    expect(parseArgs([]).firstOperations).toBe(false);
+    expect(parseArgs(['--first-operation']).firstOperations).toBe(true);
+  });
+
+  it('accepts the reference solid and sketch results', () => {
+    expect(() => assertFirstOperationResults(result())).not.toThrow();
+  });
+
+  it('refuses a refused fillet or an unconverged sketch', () => {
+    expect(() =>
+      assertFirstOperationResults(
+        result({ solid: [solid, { volume: 3870.04, triangles: 78 }] })
+      )
+    ).toThrow('expected 3867.86');
+    expect(() =>
+      assertFirstOperationResults(
+        result({ solid: [{ volume: Number.NaN, triangles: 0 }, solid] })
+      )
+    ).toThrow('First-operation solid workload');
+    expect(() =>
+      assertFirstOperationResults(
+        result({ sketch: [sketch, { converged: false, x: 12, y: 8 }] })
+      )
+    ).toThrow('did not solve to (12, 8)');
+  });
 });

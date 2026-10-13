@@ -36,7 +36,17 @@ export interface LoadBenchmarkArgs {
   check: boolean;
   baselinePackageDirectory: string | null;
   modulePhases: boolean;
+  firstOperations: boolean;
   markdown: string | null;
+}
+
+export interface FirstOperationResult {
+  solidFirstMs: number;
+  solidSecondMs: number;
+  sketchFirstMs: number;
+  sketchSecondMs: number;
+  solid: Array<{ volume: number; triangles: number }>;
+  sketch: Array<{ converged: boolean; x: number; y: number }>;
 }
 
 export const LOAD_PROFILES: Readonly<{
@@ -67,5 +77,6 @@ export function assertCacheProtocol(
     };
   }>
 ): void;
+export function assertFirstOperationResults(result: FirstOperationResult): void;
 export function markdownSection(report: unknown): string;
 export function runBenchmark(args: LoadBenchmarkArgs): Promise<unknown>;

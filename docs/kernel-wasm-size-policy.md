@@ -100,7 +100,14 @@ byte-identical to the measured asset.
   mid-range phone, not a device measurement.
 - V8 compiles WebAssembly lazily, so kernel-ready covers decoding, validation
   and instantiation; functions compile on first call, inside the first
-  operation, which the operation harnesses measure.
+  operation. `--first-operation` measures that cost: after kernel-ready, in
+  the same document, a fresh `BrepKernel` runs a representative edit
+  (`makeBox`, `makeCylinder`, `cut`, a two-edge `fillet`, `tessellateSolid`,
+  `volume`) twice, then builds and solves a constrained GCS sketch twice. The
+  first call minus the second approximates lazy compilation plus first-touch
+  memory. A sample whose volume or solved sketch differs from the reference
+  fails the run. That phase loads the warm document behind cold-document
+  work, so the kernel-ready budgets are evaluated only on runs without it.
 
 Commands:
 
@@ -275,12 +282,48 @@ is about 30% of code. Before `wasm-opt` the largest family looks like
 `wasm-opt` merges identical copies it is stable sort: about 1.07 MB in 267
 per-comparator copies, reduced by Remus #1031. serde, serde_json and tsify
 are about 0.55 MB, mostly the arena-document codec, reduced by Remus #1029.
-Since the translator split (7,602,120
-raw bytes on 2026-09-04) the kernel grew 2.88 MB in 38 days, spread over
-qualified roadmap capabilities of 100–300 KB each, for example the affine
-transforms (Remus B74, +271 KB), blend reconstruction and entity history
-(+251 KB), directional curve projection (P-Class 7.4, +222 KB) and the UV
-arrangement (O2.3b, +127 KB).
+
+That table is the kernel's composition. Its growth is attributed separately.
+From the first package after the translator split (7,602,120 raw bytes,
+Remus `3ec7132803`, 2026-09-04) to the 2026-10-12 package 2026.1.55
+(10,479,386 bytes, `259683c5ec`), the kernel grew **+2,877,266 bytes**. Each
+of the 106 package refreshes after it was measured with `git ls-tree -l`. Each
+refresh delta is assigned to the Remus PRs merged between its build source
+and the previous one. The deltas telescope, so the rows below sum exactly to
+the net growth:
+
+| Capability (Remus PRs)                                                                                     |      Raw delta |  Share |
+| ---------------------------------------------------------------------------------------------------------- | -------------: | -----: |
+| Persistent edit and heal history: journal, entity references through resize and removal (#338, #346, #348) |       +362,155 |  12.6% |
+| Integration batches (#902, #922, #811, #749, #511, #485)                                                   |       +315,004 |  10.9% |
+| Other boolean, intersection, tessellation and import correctness rows (B10–B71, O1.1d, #701)               |       +288,562 |  10.0% |
+| Directional curve projection, P-Class 7.4 (#938)                                                           |       +274,262 |   9.5% |
+| B74 affine transforms, planar arrangement, bounded curved offset (#864, #860, #849)                        |       +271,242 |   9.4% |
+| Bounded blend reconstruction and entity history (#608)                                                     |       +255,285 |   8.9% |
+| Resource bounds, heal and history completeness (#550–#587, #816, #925)                                     |       +182,216 |   6.3% |
+| UV arrangement core O2.3b and its window (#691, #682, #651)                                                |       +135,358 |   4.7% |
+| Offset-face latency integration (#963)                                                                     |       +117,965 |   4.1% |
+| Quadric boolean seam and band qualification (#297–#299, #305, #307)                                        |       +114,936 |   4.0% |
+| Typed operation results O4.7, B18 offset history, construction twins (#354, #637, #638, #730)              |       +113,039 |   3.9% |
+| Local boolean stages 1–4 and the performance deep dive (#991–#1021)                                        |       +110,614 |   3.8% |
+| Blends and direct edit (#274, #308, #496, #590, #896)                                                      |       +108,738 |   3.8% |
+| Material, identity, loft and cavity correctness (#942, #945)                                               |        +91,495 |   3.2% |
+| Topology queries for consumers, B16 (#455, #911)                                                           |        +87,368 |   3.0% |
+| Hammer model boolean repairs (#357, #361, #363–#375, #391)                                                 |        +82,829 |   2.9% |
+| Sketch: B75 constrained ellipse, PERF-S02 components (#882, #867)                                          |        +75,452 |   2.6% |
+| Unattributed: rebuild jitter in dependency, CI and release-only windows (18 refreshes)                     |         +2,865 |   0.1% |
+| Performance work and other net-shrinking windows (#435, #457, #470, #975, #982)                            |       −112,119 |  −3.9% |
+| **Total**                                                                                                  | **+2,877,266** | 100.0% |
+
+A refresh that carries several PRs cannot be split without rebuilding each
+PR, so it goes to the capability that dominates it. The appendix
+[Remus kernel growth attribution](kernel-wasm-growth-attribution-2026-10.md)
+lists every refresh, its delta, its row and the PRs in its window, so the
+grouping can be checked. Only the 2,865-byte row is unattributed: those
+windows changed no kernel source, so their deltas are rebuild jitter. Since
+the window closed, Remus #1029 (hand-written arena document codec) and #1031
+(generic sort bloat) shrank the kernel to 9,412,128 bytes (2026.1.57),
+−1,069,408 bytes against 2026.1.56, about 37% of the growth above.
 
 **4. Load measurements.** The [load-time baseline](#baseline-2026-10-13)
 above covers this kernel: desktop cold p95 54.5 ms sequential and 72.4 ms
@@ -292,10 +335,54 @@ ceiling (+1,044,739 bytes) projects to about 4.42 s p50 and 4.44 s p95
 budget. That budget trips after roughly 276–324 KB more gzip (3,800 ms less
 the 3,554 ms worst or 3,512 ms current p95), so load-time review flags growth
 well before the gzip hard limit; the byte ceiling does not loosen it. Desktop
-loads from loopback, so transfer does not grow; if compilation and
-instantiation grew in proportion to raw size, the 20% raw headroom would add
-about 15 ms to the 72.4 ms worst p95 (an estimate, not a measurement), inside
-the 110 ms budget.
+loads from loopback, so transfer does not grow. Compilation is lazy and is
+measured on first use below.
+
+**First-operation compilation.** Kernel-ready excludes the functions V8
+compiles lazily on first use, so `--first-operation` measured them directly.
+The runs used the pinned 2026.1.53 and Remus main's 2026.1.57 (9,412,128 raw
+bytes, after Remus #1029 and #1031) interleaved, 30 samples each, in two
+rounds per profile; the host load average was 5–35. Values are p50 / p95 of
+the first call; "overhead" is the first call minus the second.
+
+| Profile      | Kernel    | Round | Cold solid edit |  Cold overhead | Warm solid edit | Cold sketch solve | Warm sketch solve |
+| ------------ | --------- | ----- | --------------: | -------------: | --------------: | ----------------: | ----------------: |
+| Desktop      | 2026.1.53 | 1     |  60.6 / 62.9 ms | 56.1 / 58.1 ms |    6.3 / 6.9 ms |      3.7 / 3.8 ms |      0.2 / 0.3 ms |
+| Desktop      | 2026.1.57 | 1     |  61.0 / 63.0 ms | 56.3 / 58.1 ms |    6.0 / 6.7 ms |      3.7 / 4.0 ms |      0.2 / 0.2 ms |
+| Desktop      | 2026.1.53 | 2     | 94.6 / 100.2 ms | 87.4 / 92.9 ms |   9.1 / 10.2 ms |      5.7 / 6.1 ms |      0.3 / 0.5 ms |
+| Desktop      | 2026.1.57 | 2     |  94.0 / 98.1 ms | 86.9 / 91.0 ms |   8.5 / 10.5 ms |      5.7 / 6.2 ms |      0.3 / 1.1 ms |
+| Mobile-class | 2026.1.53 | 1     |    282 / 569 ms |   261 / 523 ms |  27.6 / 53.6 ms |    19.4 / 38.1 ms |      0.9 / 2.3 ms |
+| Mobile-class | 2026.1.57 | 1     |    302 / 595 ms |   281 / 553 ms |  26.9 / 50.9 ms |    20.5 / 42.4 ms |      0.9 / 3.1 ms |
+| Mobile-class | 2026.1.53 | 2     |    268 / 299 ms |   248 / 271 ms |  25.2 / 32.3 ms |    18.8 / 22.7 ms |      0.9 / 1.7 ms |
+| Mobile-class | 2026.1.57 | 2     |    267 / 359 ms |   245 / 332 ms |  23.9 / 38.1 ms |    18.5 / 36.1 ms |      1.0 / 1.7 ms |
+
+The second call of the same edit takes 4.6–7.2 ms on desktop and 21–22 ms on
+the mobile-class profile, so about 90% of a cold first edit is compilation and
+first touch: 56–87 ms on desktop and 245–281 ms (p50) on the mobile-class
+profile. After a warm load, Chromium's code cache supplies the compiled
+functions and the overhead falls to 2–3 ms and 6–9 ms. The sketch solver pays
+3.6–5.6 ms and 18–20 ms cold. Within a round the two kernels agree: desktop
+medians within 0.6 ms, mobile-class medians 1 ms apart in round 2 and 20 ms
+in round 1, inside that profile's round-to-round spread. The 1.07 MB removed
+by Remus #1029 and #1031 did not measurably change first-operation cost on
+this workload. Between rounds
+the desktop cold edit moved from 61 to 94 ms as host load rose, which is why
+these are review budgets.
+
+First-operation review budgets (`KERNEL_FIRST_OPERATION_POLICY`), set like the
+load budgets from the worst p95 above plus max(25 ms, 5%), rounded up to
+10 ms:
+
+| Profile      |      Cold solid edit | Warm solid edit | Cold sketch solve | Warm sketch solve |
+| ------------ | -------------------: | --------------: | ----------------: | ----------------: |
+| Desktop      | 130 ms (worst 100.2) |    40 ms (10.5) |       40 ms (6.2) |       30 ms (1.1) |
+| Mobile-class |       630 ms (594.6) |    80 ms (53.6) |      70 ms (42.4) |       30 ms (3.1) |
+
+`pnpm perf:remus-wasm -- --profile <desktop|mobile> --first-operation --check`
+reports them as review lines, like the load budgets. Compilation scales with
+the code a first operation reaches, not with the whole module, so a ceiling
+raise moves these budgets only when the added code sits on the first edit's
+path. That is what the review checks.
 
 **5. Gating and splitting considered.**
 

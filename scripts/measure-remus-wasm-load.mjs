@@ -16,6 +16,7 @@ import { chromium } from '@playwright/test';
 import {
   KERNEL_LOAD_POLICY,
   KERNEL_WASM_ASSET_PATTERN,
+  evaluateKernelFirstOperation,
   evaluateKernelLoad,
   evaluateKernelLoadRegression,
   measureKernelWasm
@@ -203,6 +204,7 @@ export function parseArgs(argv) {
     check: false,
     baselinePackageDirectory: null,
     modulePhases: true,
+    firstOperations: false,
     markdown: null
   };
   for (let index = 0; index < argv.length; index += 1) {
@@ -231,6 +233,8 @@ export function parseArgs(argv) {
       args.check = true;
     } else if (arg === '--baseline-package') {
       args.baselinePackageDirectory = path.resolve(argv[++index]);
+    } else if (arg === '--first-operation') {
+      args.firstOperations = true;
     } else if (arg === '--kernel-ready-only') {
       args.modulePhases = false;
     } else if (arg === '--markdown') {
@@ -313,6 +317,87 @@ export async function measureKernelReady(url) {
     encodedBodyBytes: timing ? timing.encodedBodySize : null,
     decodedBodyBytes: timing ? timing.decodedBodySize : null
   };
+}
+
+// A representative first edit: two primitives, a boolean cut, a two-edge
+// fillet (one edge pair meeting at a corner), tessellation and volume.
+function solidWorkload(kernel) {
+  const box = kernel.makeBox(20, 20, 10);
+  const cylinder = kernel.makeCylinder(4, 30);
+  const cut = kernel.cut(box, cylinder);
+  const lines = Array.from(kernel.getSolidEdges(cut)).filter(
+    (edge) => kernel.getEdgeCurveType(edge) === 'LINE'
+  );
+  const filleted = kernel.fillet(cut, Uint32Array.from(lines.slice(3, 5)), 1);
+  const mesh = kernel.tessellateSolid(filleted, 0.1);
+  const triangles = mesh.indices.length / 3;
+  mesh.free();
+  return { volume: kernel.volume(filleted, 0.1), triangles };
+}
+
+// A first sketch: a constrained rectangle and a sized circle on its corner.
+function sketchWorkload(kernel) {
+  const sketch = kernel.gcsNew();
+  const p = [
+    kernel.gcsAddPoint(sketch, 0, 0, false),
+    kernel.gcsAddPoint(sketch, 9, 1, false),
+    kernel.gcsAddPoint(sketch, 11, 7, false),
+    kernel.gcsAddPoint(sketch, -1, 6, false)
+  ];
+  const lines = p.map((point, index) =>
+    kernel.gcsAddLine(sketch, point, p[(index + 1) % p.length])
+  );
+  const circle = kernel.gcsAddCircle(sketch, p[2], 2);
+  const constraints = [
+    { type: 'fixX', point: p[0], value: 0 },
+    { type: 'fixY', point: p[0], value: 0 },
+    { type: 'horizontal', line: lines[0] },
+    { type: 'vertical', line: lines[1] },
+    { type: 'horizontal', line: lines[2] },
+    { type: 'vertical', line: lines[3] },
+    { type: 'distance', a: p[0], b: p[1], value: 12 },
+    { type: 'distance', a: p[1], b: p[2], value: 8 },
+    { type: 'circleRadius', circle, value: 3 }
+  ];
+  for (const constraint of constraints) {
+    kernel.gcsAddConstraint(sketch, JSON.stringify(constraint));
+  }
+  const raw = kernel.gcsSolve(sketch, 100, 1e-10);
+  const result = typeof raw === 'string' ? JSON.parse(raw) : raw;
+  const corner = kernel.gcsPointPosition(sketch, p[2]);
+  return { converged: result.converged === true, x: corner[0], y: corner[1] };
+}
+
+function timed(run) {
+  const start = performance.now();
+  const value = run();
+  return { ms: performance.now() - start, value };
+}
+
+/**
+ * First-call against second-call time of the same operations in a fresh
+ * kernel. V8 compiles WebAssembly functions lazily, so the first call pays
+ * compilation (or a code-cache load) and first-touch memory growth; the
+ * second call of identical work does not.
+ */
+export function measureFirstOperations() {
+  const kernel = new glue.BrepKernel();
+  try {
+    const solidFirst = timed(() => solidWorkload(kernel));
+    const solidSecond = timed(() => solidWorkload(kernel));
+    const sketchFirst = timed(() => sketchWorkload(kernel));
+    const sketchSecond = timed(() => sketchWorkload(kernel));
+    return {
+      solidFirstMs: solidFirst.ms,
+      solidSecondMs: solidSecond.ms,
+      sketchFirstMs: sketchFirst.ms,
+      sketchSecondMs: sketchSecond.ms,
+      solid: [solidFirst.value, solidSecond.value],
+      sketch: [sketchFirst.value, sketchSecond.value]
+    };
+  } finally {
+    kernel.free();
+  }
 }
 `;
 
@@ -596,7 +681,49 @@ async function measureReadyOnFreshDocument(page, cdp, server, args, assetUrl) {
     const harness = await import('/harness.mjs');
     return harness.measureKernelReady(url);
   }, assetUrl);
-  return { ...result, networkRequests: server.requestCount() - requestStart };
+  const ready = {
+    ...result,
+    networkRequests: server.requestCount() - requestStart
+  };
+  if (!args.firstOperations) return ready;
+  const firstOperations = await page.evaluate(async () => {
+    const harness = await import('/harness.mjs');
+    return harness.measureFirstOperations();
+  });
+  assertFirstOperationResults(firstOperations);
+  return { ...ready, firstOperations };
+}
+
+const FIRST_OPERATION_VOLUME = 3867.86;
+
+/**
+ * Refuse a first-operation sample whose work differs from the reference:
+ * a refused fillet or an unconverged sketch would otherwise be timed as a
+ * fast first operation.
+ */
+export function assertFirstOperationResults(result) {
+  for (const solid of result.solid) {
+    if (
+      !Number.isFinite(solid.volume) ||
+      Math.abs(solid.volume - FIRST_OPERATION_VOLUME) > 0.01 ||
+      !(solid.triangles > 0)
+    ) {
+      throw new Error(
+        `First-operation solid workload produced volume ${solid.volume} and ${solid.triangles} triangles; expected ${FIRST_OPERATION_VOLUME}.`
+      );
+    }
+  }
+  for (const sketch of result.sketch) {
+    if (
+      !sketch.converged ||
+      Math.abs(sketch.x - 12) > 1e-6 ||
+      Math.abs(sketch.y - 8) > 1e-6
+    ) {
+      throw new Error(
+        `First-operation sketch did not solve to (12, 8): ${JSON.stringify(sketch)}`
+      );
+    }
+  }
 }
 
 /**
@@ -686,6 +813,23 @@ function summarizeReady(samples, phase) {
   };
 }
 
+function summarizeFirstOperations(samples, phase) {
+  const values = (read) =>
+    samples.map((sample) => read(sample.kernelReady[phase].firstOperations));
+  return {
+    solidFirstMs: summarize(values((first) => first.solidFirstMs)),
+    solidSecondMs: summarize(values((first) => first.solidSecondMs)),
+    solidOverheadMs: summarize(
+      values((first) => first.solidFirstMs - first.solidSecondMs)
+    ),
+    sketchFirstMs: summarize(values((first) => first.sketchFirstMs)),
+    sketchSecondMs: summarize(values((first) => first.sketchSecondMs)),
+    sketchOverheadMs: summarize(
+      values((first) => first.sketchFirstMs - first.sketchSecondMs)
+    )
+  };
+}
+
 function cpuGovernor() {
   try {
     return readFileSync(
@@ -737,6 +881,24 @@ function printSummary(report, args) {
         metric,
         printable(values.median, unit),
         printable(values.p95, unit)
+      ]);
+    }
+  }
+  for (const phase of report.summary.firstOperation ? ['cold', 'warm'] : []) {
+    for (const metric of [
+      'solidFirstMs',
+      'solidSecondMs',
+      'solidOverheadMs',
+      'sketchFirstMs',
+      'sketchSecondMs',
+      'sketchOverheadMs'
+    ]) {
+      const values = report.summary.firstOperation[phase][metric];
+      rows.push([
+        `first-operation ${phase}`,
+        metric,
+        printable(values.median, 'ms'),
+        printable(values.p95, 'ms')
       ]);
     }
   }
@@ -863,14 +1025,14 @@ export function markdownSection(report) {
   );
   for (const phase of ['cold', 'warm']) {
     const after = report.summary.kernelReady[phase].readyMs;
-    const gate = report.gates.results.find((result) =>
+    const gate = report.gates?.results.find((result) =>
       result.code.endsWith(`-${phase}-review`)
     );
     const regression = report.regression?.results.find((result) =>
       result.code.endsWith(`-${phase}-regression`)
     );
     const flags = [
-      ...(gate.withinBudget ? [] : ['over budget']),
+      ...(gate && !gate.withinBudget ? ['over budget'] : []),
       ...(regression && !regression.withinBudget ? ['slower than pin'] : [])
     ];
     const result =
@@ -878,11 +1040,11 @@ export function markdownSection(report) {
     if (baseline) {
       const before = report.baseline.summary.kernelReady[phase].readyMs;
       lines.push(
-        `| ${phase} | ${markdownMs(before.median)} | ${markdownMs(after.median)} | ${markdownMs(before.p95)} | ${markdownMs(after.p95)} | ${markdownMs(regression.allowedP50Ms)} | ${markdownMs(gate.budgetMs)} | ${result} |`
+        `| ${phase} | ${markdownMs(before.median)} | ${markdownMs(after.median)} | ${markdownMs(before.p95)} | ${markdownMs(after.p95)} | ${markdownMs(regression.allowedP50Ms)} | ${markdownMs(gate?.budgetMs)} | ${result} |`
       );
     } else {
       lines.push(
-        `| ${phase} | ${markdownMs(after.median)} | ${markdownMs(after.p95)} | ${markdownMs(gate.budgetMs)} | ${result} |`
+        `| ${phase} | ${markdownMs(after.median)} | ${markdownMs(after.p95)} | ${markdownMs(gate?.budgetMs)} | ${result} |`
       );
     }
   }
@@ -909,6 +1071,12 @@ function summarizeSamples(samples, args) {
       warm: summarizeReady(samples, 'warm')
     }
   };
+  if (args.firstOperations) {
+    summary.firstOperation = {
+      cold: summarizeFirstOperations(samples, 'cold'),
+      warm: summarizeFirstOperations(samples, 'warm')
+    };
+  }
   if (args.modulePhases) {
     summary.cold = summarizePhase(samples, 'cold');
     summary.warm = summarizePhase(samples, 'warm');
@@ -1007,7 +1175,20 @@ export async function runBenchmark(args) {
 
   const profile = LOAD_PROFILES[args.profile];
   const summary = summarizeSamples(samples, args);
-  const gates = evaluateKernelLoad(args.profile, readyStatistics(summary));
+  // The first-operation phase runs heavy work in the cold document, which
+  // slows the warm load that follows; kernel-ready budgets are calibrated
+  // without it, so they are evaluated only on plain runs.
+  const gates = args.firstOperations
+    ? null
+    : evaluateKernelLoad(args.profile, readyStatistics(summary));
+  const firstOperationGates = summary.firstOperation
+    ? evaluateKernelFirstOperation(args.profile, {
+        coldSolidP95Ms: summary.firstOperation.cold.solidFirstMs.p95,
+        warmSolidP95Ms: summary.firstOperation.warm.solidFirstMs.p95,
+        coldSketchP95Ms: summary.firstOperation.cold.sketchFirstMs.p95,
+        warmSketchP95Ms: summary.firstOperation.warm.sketchFirstMs.p95
+      })
+    : null;
   const baselineSummary = baseline
     ? summarizeSamples(baselineSamples, args)
     : null;
@@ -1054,6 +1235,9 @@ export async function runBenchmark(args) {
       kernelReadyCold:
         'fresh Chromium profile: empty HTTP cache, no compiled-module cache',
       kernelReadyWarm: `new document in the same profile after ${args.warmSettleMs} ms settle: HTTP cache hit, compiled-module cache when Chromium wrote one`,
+      firstOperation: args.firstOperations
+        ? 'after kernel-ready in the same document: a fresh BrepKernel runs makeBox + makeCylinder + cut + two-edge fillet + tessellateSolid + volume twice, then a constrained GCS sketch build-and-solve twice; first minus second call approximates lazy compilation plus first-touch'
+        : null,
       comparison: baseline
         ? 'baseline and candidate samples alternate, each in its own fresh profile and origin'
         : null,
@@ -1072,6 +1256,7 @@ export async function runBenchmark(args) {
     },
     summary,
     gates,
+    firstOperationGates,
     baseline: baseline
       ? {
           provenance: provenance(
@@ -1096,7 +1281,8 @@ export async function runBenchmark(args) {
   };
   printSummary(report, args);
   if (baseline) printComparison(report);
-  if (args.check) reportGates(gates);
+  if (args.check && gates) reportGates(gates);
+  if (args.check && firstOperationGates) reportGates(firstOperationGates);
   if (regression) reportRegression(regression);
   if (args.out) {
     writeFileSync(args.out, `${JSON.stringify(report, null, 2)}\n`);
