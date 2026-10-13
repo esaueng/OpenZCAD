@@ -259,37 +259,68 @@ async function releaseProjectStorage(page: Page) {
   });
 }
 
-test('warns before reload while a device save is blocked and keeps work after cancellation', async ({
-  page
-}) => {
-  await prepareLocalBox(page, 'Blocked local departure');
-  const baseline = await storedProject(page);
-  expect(baseline).not.toBeNull();
-  const blocker = await page.context().newPage();
-  try {
-    await holdProjectStorage(blocker, baseline!.projectId);
-    await page.bringToFront();
-    await addPrimitive(page, /^Sphere/);
-    await expectBoxAndSphere(page);
-    await expect(page.getByRole('status', { name: /^Saving/ })).toBeVisible();
+for (const connectivity of ['online', 'offline edit'] as const) {
+  test(`warns before reload while a device save is blocked and keeps work after cancellation (${connectivity})`, async ({
+    page
+  }) => {
+    await prepareLocalBox(page, `Blocked local departure ${connectivity}`);
+    const baseline = await storedProject(page);
+    expect(baseline).not.toBeNull();
+    const blocker = await page.context().newPage();
+    try {
+      await holdProjectStorage(blocker, baseline!.projectId);
+      await page.bringToFront();
+      // Load the lazy card before disconnecting so the offline case exercises
+      // saving and departure, independently of fetching the tool's UI chunk.
+      await page.getByRole('button', { name: /^Sphere/ }).click();
+      if (connectivity === 'offline edit') {
+        await page.context().setOffline(true);
+      }
+      await page
+        .getByRole('region', { name: 'Feature inspector' })
+        .getByRole('button', { name: 'Create', exact: true })
+        .click();
+      await expectBoxAndSphere(page);
+      await expect(page.getByRole('status', { name: /^Saving/ })).toBeVisible();
 
-    // A real navigation exercises the browser's native unload decision; a
-    // synthetic pagehide leaves JavaScript alive and cannot prove this guard.
-    expect(await attemptReload(page)).toBe(true);
-    await expectBoxAndSphere(page);
+      // A real navigation exercises the browser's native unload decision; a
+      // synthetic pagehide leaves JavaScript alive and cannot prove this guard.
+      expect(await attemptReload(page)).toBe(true);
+      await expectBoxAndSphere(page);
 
-    await releaseProjectStorage(blocker);
-    await expect(
-      page.getByRole('status', { name: 'Local only', exact: true })
-    ).toBeVisible({ timeout: SAVE_BUDGET_MS });
-    expect((await storedProject(page))?.featureOrder).toHaveLength(2);
-    expect(await attemptReload(page)).toBe(false);
-    await expectBoxAndSphere(page);
-  } finally {
-    await releaseProjectStorage(blocker);
-    await blocker.close();
-  }
-});
+      await releaseProjectStorage(blocker);
+      await expect(
+        page.getByRole('status', { name: 'Local only', exact: true })
+      ).toBeVisible({ timeout: SAVE_BUDGET_MS });
+      const committed = await storedProject(page);
+      expect(committed?.featureOrder).toHaveLength(2);
+      expect(committed?.projectId).toBe(baseline!.projectId);
+      if (connectivity === 'offline edit') {
+        // The edit, native warning, cancellation and device commit all happen
+        // offline. Reconnect only to fetch the app shell for the actual reload.
+        expect(await page.evaluate(() => navigator.onLine)).toBe(false);
+        await page.context().setOffline(false);
+      }
+      expect(await attemptReload(page)).toBe(false);
+      await expectBoxAndSphere(page);
+      expect((await storedProject(page))?.featureOrder).toEqual(
+        committed!.featureOrder
+      );
+      // The accepted edit's replay history must survive alongside its geometry.
+      await page.getByRole('button', { name: 'Undo', exact: true }).click();
+      await expectBodyCount(page, 1);
+      await expect(
+        page.locator('.feature-row-main', { hasText: 'Sphere' })
+      ).toHaveCount(0);
+      await page.getByRole('button', { name: 'Redo', exact: true }).click();
+      await expectBoxAndSphere(page);
+    } finally {
+      await page.context().setOffline(false);
+      await releaseProjectStorage(blocker);
+      await blocker.close();
+    }
+  });
+}
 
 test('keeps the failed workspace open on internal departure and retries before reload', async ({
   page
