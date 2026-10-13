@@ -752,6 +752,16 @@ describe('StartScreen scrolling project grid', () => {
 });
 
 describe('StartScreen update notice', () => {
+  it('offers a persistent download-recovery action without claiming an update', () => {
+    const onReload = vi.fn();
+    renderStartScreen({ onReloadForLoadFailure: onReload });
+    const notice = screen.getByRole('alert');
+    expect(notice).toHaveTextContent('Check your connection');
+    expect(notice).not.toHaveTextContent('new version');
+    fireEvent.click(within(notice).getByRole('button', { name: 'Reload' }));
+    expect(onReload).toHaveBeenCalledOnce();
+  });
+
   it('offers a reload once a newer build is out, and not before', () => {
     const { rerender } = renderStartScreen();
     expect(screen.queryByRole('alert')).not.toBeInTheDocument();

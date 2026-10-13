@@ -124,6 +124,39 @@ describe('WorkspaceTour', () => {
     }
   });
 
+  it('points to the History control with the drawer closed and releases it on Next', async () => {
+    const { unmount } = render(
+      <WorkspaceTour
+        {...idle}
+        featureCount={1}
+        hasSelection
+        onDismiss={vi.fn()}
+      />
+    );
+    expect(screen.getByText('The history is the model')).toBeTruthy();
+    expect(document.querySelector('.sidebar')).toBeNull();
+
+    // The rail can arrive after the tour, just like the first step's palette.
+    const rail = document.createElement('div');
+    rail.className = 'rail-panels';
+    const history = document.createElement('button');
+    history.setAttribute('aria-label', 'History panel');
+    rail.appendChild(history);
+    document.body.appendChild(rail);
+    try {
+      await waitFor(() => expect(history).toHaveClass('tour-target'));
+      expect(
+        screen.getByText(/Open History from the rail on the right/)
+      ).toBeTruthy();
+      fireEvent.click(screen.getByRole('button', { name: 'Next' }));
+      expect(screen.getByText('Take it with you')).toBeTruthy();
+      expect(history).not.toHaveClass('tour-target');
+    } finally {
+      unmount();
+      rail.remove();
+    }
+  });
+
   it('outlines the chrome region the current step points at', () => {
     const palette = document.createElement('nav');
     palette.className = 'tool-palette';

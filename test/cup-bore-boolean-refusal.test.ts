@@ -13,16 +13,9 @@ import { toUserId, type ProjectDocument } from '@openzcad/shared';
 import { RemusKernel } from '../packages/kernel-adapter/src/remus-runtime';
 
 /**
- * Production QA CAD-001 (2026-10-11): a mounting ear overlapping the wall of a
- * shelled gearbox housing would not union with it. Reduced on the pinned
- * kernel (record: docs/qa/2026-10-11/cad-001-cup-bore-boolean.md) to any
- * open cup whose bounding-box centre line runs through a round through-hole
- * in its floor: the kernel's internal sub-face classifier calls material
- * inside the cup "outside", so every boolean with a tool touching it is
- * refused exact-only — and one fuse returns `ok` with the wrong volume.
- *
- * The adapter must stay fail-closed: either a typed refusal, or the exact
- * answer once upstream fixes the classifier. Never a different body.
+ * CAD-001 / remus#984: a centre-line bore used to make a crossing-wall fuse
+ * refuse and a contained-wall fuse silently add material. Remus 2026.1.53
+ * fixes both cases. Require exact results through the adapter and raw WASM.
  */
 const CUP_WITH_BORE = 20 * 20 * 10 - 16 * 16 * 8 - Math.PI * 9 * 2; // 1895.4513
 const EAR_OUTSIDE_WALL = 3 * 6 * 4; // the part of a 4 × 6 × 4 ear past x = 0
@@ -134,46 +127,27 @@ describe(
       );
     });
 
-    it('refuses or fuses exactly an ear that crosses the wall, never another body', async () => {
+    it('fuses exactly an ear that crosses the wall', async () => {
       const { refusal, body } = await union([4, 6, 4], [-3, 5, 3]);
-      if (refusal) {
-        expect(refusal).toMatchObject({
-          kind: 'build-failed',
-          kernelRefusal: {
-            family: 'boolean',
-            category: 'quality_refused',
-            code: 'exact_only_unattainable'
-          }
-        });
-      } else {
-        expect(body?.volume).toBeCloseTo(CUP_WITH_BORE + EAR_OUTSIDE_WALL, 6);
-        expect(body?.faceCount).toBe(17);
-      }
+      expect(refusal).toBeUndefined();
+      expect(body?.volume).toBeCloseTo(CUP_WITH_BORE + EAR_OUTSIDE_WALL, 6);
+      expect(body?.faceCount).toBe(17);
     });
 
-    it('refuses or leaves the cup unchanged for a tool wholly inside the wall', async () => {
-      // The pinned kernel's fuse answers this one `ok` with the tool's 24 mm³
-      // added; only the adapter's union connectivity gate stops it.
+    it('leaves the cup unchanged for a tool wholly inside the wall', async () => {
       const { refusal, body } = await union([1, 6, 4], [0.5, 5, 3]);
-      if (refusal) {
-        expect(refusal.kind).toBe('refusal');
-        expect(refusal.message).toContain('disconnected');
-      } else expect(body?.volume).toBeCloseTo(CUP_WITH_BORE, 6);
+      expect(refusal).toBeUndefined();
+      expect(body?.volume).toBeCloseTo(CUP_WITH_BORE, 6);
     });
   }
 );
 
-/**
- * Kernel canary, raw Remus calls (the upstream reproduction, remus#984). It pins the
- * defect as it stands so the kernel update that fixes it fails here: then
- * flip these expectations to the exact answers, update the QA record and
- * ROADMAP K01, and recheck the housing union through the app.
- */
-describe('kernel canary: centre-line bore misclassification', () => {
+/** Keep the former refusal and silent wrong result fixed in the installed WASM. */
+describe('kernel regression: centre-line bore classification', () => {
   const T = (x: number, y: number, z: number) =>
     new Float64Array([1, 0, 0, x, 0, 1, 0, y, 0, 0, 1, z, 0, 0, 0, 1]);
 
-  it('still refuses the exact fuse and still mis-fuses a tool inside the wall', () => {
+  it('fuses crossing and contained tools exactly without changing the operands', () => {
     const k = new RemusKernel();
     try {
       const box = (
@@ -200,21 +174,45 @@ describe('kernel canary: centre-line bore misclassification', () => {
       expect(k.volume(bored, 1e-3)).toBeCloseTo(CUP_WITH_BORE, 6);
       expect(k.classifyPoint(bored, 0.5, 8, 5, 1e-7)).toBe('inside');
 
-      // Expected: ok, 17 faces, CUP_WITH_BORE + 72. Actual: exact-only refusal.
-      const ear = k.fuseDetailed(bored, box(-3, 5, 3, 4, 6, 4)) as {
-        status: string;
-        code?: string;
+      const earTool = box(-3, 5, 3, 4, 6, 4);
+      const insideTool = box(0.5, 5, 3, 1, 6, 4);
+      const operands = new Uint32Array([bored, earTool, insideTool]);
+      const before = k.serializeSolids(operands);
+      const exact = (solid: number, volume: number) => {
+        expect(k.volume(solid, 1e-3)).toBeCloseTo(volume, 6);
+        const mass: unknown = k.massProperties(solid);
+        const quality: unknown = k.meshQuality(solid, 0.05);
+        if (typeof mass !== 'string' || typeof quality !== 'string') {
+          throw new Error('Expected kernel mass and mesh JSON payloads.');
+        }
+        const massPayload: unknown = JSON.parse(mass);
+        const meshPayload: unknown = JSON.parse(quality);
+        expect(massPayload).toHaveProperty('volume', expect.closeTo(volume, 6));
+        expect(k.validateSolid(solid)).toBe(0);
+        expect(meshPayload).toMatchObject({
+          isWatertight: true,
+          boundaryEdges: 0,
+          nonManifoldEdges: 0
+        });
       };
-      expect(ear.status).toBe('error');
-      expect(ear.code).toBe('exact_only_unattainable');
-      // The same ear on the cup without the bore fuses exactly.
-      expect(
-        k.volume(ok(k.fuseDetailed(cup, box(-3, 5, 3, 4, 6, 4))), 1e-3)
-      ).toBeCloseTo(20 * 20 * 10 - 16 * 16 * 8 + EAR_OUTSIDE_WALL, 6);
 
-      // Expected: the cup unchanged. Actual: `ok` with the tool added.
-      const inside = ok(k.fuseDetailed(bored, box(0.5, 5, 3, 1, 6, 4)));
-      expect(k.volume(inside, 1e-3)).toBeCloseTo(CUP_WITH_BORE + 24, 3);
+      const ear = ok(k.fuseDetailed(bored, earTool));
+      exact(ear, CUP_WITH_BORE + EAR_OUTSIDE_WALL);
+      expect(k.getSolidFaces(ear)).toHaveLength(17);
+      expect(k.classifyPoint(ear, -2, 8, 5, 1e-7)).toBe('inside');
+      expect(k.classifyPoint(ear, 10, 10, 1, 1e-7)).toBe('outside');
+      // The same ear on the cup without the bore still fuses exactly.
+      exact(
+        ok(k.fuseDetailed(cup, box(-3, 5, 3, 4, 6, 4))),
+        20 * 20 * 10 - 16 * 16 * 8 + EAR_OUTSIDE_WALL
+      );
+
+      const inside = ok(k.fuseDetailed(bored, insideTool));
+      exact(inside, CUP_WITH_BORE);
+      expect(k.getSolidFaces(inside)).toHaveLength(
+        k.getSolidFaces(bored).length
+      );
+      expect(k.serializeSolids(operands)).toEqual(before);
     } finally {
       k.free();
     }
