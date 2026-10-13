@@ -2,8 +2,12 @@ import { mkdtempSync, mkdirSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterEach, describe, expect, it } from 'vitest';
+import { KERNEL_LOAD_POLICY } from '../scripts/bundle-size-policy.mjs';
 import {
   assertCacheProtocol,
+  assertFirstOperationResults,
+  firstOperationGatesApply,
+  firstOperationOrder,
   LOAD_PROFILES,
   markdownSection,
   parseArgs,
@@ -12,7 +16,8 @@ import {
   resolveKernelGlue,
   resolvePackageArtifact,
   runBenchmark,
-  summarize
+  summarize,
+  summarizeFirstOperations
 } from '../scripts/measure-remus-wasm-load.mjs';
 
 const temporaryDirectories: string[] = [];
@@ -255,6 +260,30 @@ describe('Remus WASM load pull-request section', () => {
     );
     expect(section).toContain('| --- | ---: |');
   });
+
+  it('leaves a first-operation pin comparison unevaluated', () => {
+    const section = markdownSection({
+      protocol: { profile: 'mobile', runs: 40, firstOperations: false },
+      provenance: { remusVersion: '2026.1.57' },
+      summary: {
+        kernelReady: { cold: ready(3400, 3500), warm: ready(180, 190) }
+      },
+      gates: null,
+      baseline: {
+        provenance: { remusVersion: '2026.1.53' },
+        summary: {
+          kernelReady: { cold: ready(3450, 3500), warm: ready(80, 95) }
+        }
+      },
+      regression: null
+    });
+
+    expect(section).toContain(
+      '| warm | 80 ms | 180 ms | 95 ms | 190 ms | — | — | not evaluated |'
+    );
+    expect(section).not.toContain('slower than pin');
+    expect(section).not.toMatch(/\| ok \|/);
+  });
 });
 
 describe('Remus WASM load benchmark setup failures', () => {
@@ -313,4 +342,246 @@ describe('Remus WASM load benchmark setup failures', () => {
     },
     5_000
   );
+});
+
+describe('Remus WASM first-operation phase', () => {
+  const solid = { volume: 3867.86, triangles: 208 };
+  const points: Array<[number, number]> = [
+    [0, 0],
+    [12, 0],
+    [12, 8],
+    [0, 8]
+  ];
+  const sketch = { converged: true, points, radius: 3 };
+  const withPoint = (index: number, value: [number, number]) => ({
+    ...sketch,
+    points: points.map((point, i) => (i === index ? value : point))
+  });
+  const result = (overrides = {}) => ({
+    order: 'solid-first' as const,
+    solidFirstMs: 60,
+    solidSecondMs: 5,
+    sketchFirstMs: 4,
+    sketchSecondMs: 0.1,
+    solid: [solid, solid],
+    sketch: [sketch, sketch],
+    ...overrides
+  });
+
+  it('is off by default and enabled by --first-operation', () => {
+    expect(parseArgs([]).firstOperations).toBe(false);
+    expect(parseArgs(['--first-operation']).firstOperations).toBe(true);
+  });
+
+  it('accepts the reference solid and sketch results', () => {
+    expect(() => assertFirstOperationResults(result())).not.toThrow();
+  });
+
+  it('refuses a refused fillet or an unconverged sketch', () => {
+    expect(() =>
+      assertFirstOperationResults(
+        result({ solid: [solid, { volume: 3870.04, triangles: 78 }] })
+      )
+    ).toThrow('expected 3867.86');
+    expect(() =>
+      assertFirstOperationResults(
+        result({ solid: [{ volume: Number.NaN, triangles: 0 }, solid] })
+      )
+    ).toThrow('First-operation solid workload');
+    expect(() =>
+      assertFirstOperationResults(
+        result({ sketch: [sketch, { ...sketch, converged: false }] })
+      )
+    ).toThrow('did not solve to the 12 x 8 rectangle');
+  });
+
+  it('refuses an ignored radius or rectangle constraint and non-finite values', () => {
+    const bad = [
+      { ...sketch, radius: 2 },
+      { ...sketch, radius: Number.NaN },
+      // The last two edges unconstrained: p[2] still lands on (12, 8).
+      withPoint(3, [-1, 6]),
+      withPoint(1, [12, 0.5]),
+      withPoint(2, [Number.NaN, 8]),
+      withPoint(0, [0, Number.NaN]),
+      { ...sketch, points: points.slice(0, 3) }
+    ];
+    for (const sample of bad) {
+      expect(() =>
+        assertFirstOperationResults(result({ sketch: [sketch, sample] }))
+      ).toThrow('did not solve to the 12 x 8 rectangle with radius 3');
+    }
+  });
+});
+
+describe('Remus WASM first-operation gate sample minimum', () => {
+  it('evaluates the gates only when each workload order has a full p95 sample', () => {
+    const minimum = 2 * KERNEL_LOAD_POLICY.minimumRuns;
+    expect([1, 2, 3, minimum - 1].map(firstOperationGatesApply)).toEqual([
+      false,
+      false,
+      false,
+      false
+    ]);
+    expect(firstOperationGatesApply(minimum)).toBe(true);
+    expect(firstOperationGatesApply(minimum + 1)).toBe(true);
+  });
+});
+
+describe('Remus WASM first-operation order', () => {
+  it('alternates the workload order every two samples', () => {
+    expect([0, 1, 2, 3, 4, 5, 6, 7].map(firstOperationOrder)).toEqual([
+      'solid-first',
+      'solid-first',
+      'sketch-first',
+      'sketch-first',
+      'solid-first',
+      'solid-first',
+      'sketch-first',
+      'sketch-first'
+    ]);
+  });
+
+  it('reads each first call only from samples where it ran first', () => {
+    const run = (
+      order: 'solid-first' | 'sketch-first',
+      solid: number,
+      sketch: number
+    ) => ({
+      order,
+      solidFirstMs: solid,
+      solidSecondMs: 5,
+      sketchFirstMs: sketch,
+      sketchSecondMs: 1,
+      solid: [],
+      sketch: []
+    });
+    const sample = (first: ReturnType<typeof run>) => ({
+      kernelReady: {
+        cold: { firstOperations: first },
+        warm: { firstOperations: first }
+      }
+    });
+    const summary = summarizeFirstOperations(
+      [sample(run('solid-first', 60, 4)), sample(run('sketch-first', 55, 20))],
+      'cold'
+    );
+
+    expect(summary).toMatchObject({
+      solidFirstSamples: 1,
+      sketchFirstSamples: 1,
+      solidFirstMs: { median: 60 },
+      solidAfterSketchMs: { median: 55 },
+      sketchFirstMs: { median: 20 },
+      sketchAfterSolidMs: { median: 4 },
+      solidOverheadMs: { median: 55 },
+      sketchOverheadMs: { median: 19 }
+    });
+  });
+
+  it('needs twenty samples per order before it checks budgets', () => {
+    expect(() =>
+      parseArgs(['--first-operation', '--check', '--runs', '20'])
+    ).toThrow('at least 40 runs');
+    expect(
+      parseArgs(['--first-operation', '--check', '--runs', '40']).runs
+    ).toBe(40);
+  });
+});
+
+describe('Remus WASM first-operation Markdown', () => {
+  const ready = (median: number, p95: number) => ({ readyMs: { median, p95 } });
+  const measured = (median: number, p95: number) => ({ median, p95 });
+
+  it('reports an over-budget first operation and never passes an unevaluated gate', () => {
+    const section = markdownSection({
+      protocol: { profile: 'mobile', runs: 40 },
+      provenance: { remusVersion: '2026.1.57' },
+      summary: {
+        kernelReady: { cold: ready(3300, 3460), warm: ready(100, 187) },
+        firstOperation: {
+          cold: {
+            solidFirstMs: measured(300, 700),
+            sketchFirstMs: measured(20, 42)
+          },
+          warm: {
+            solidFirstMs: measured(27, 51),
+            sketchFirstMs: measured(0.9, 3.1)
+          }
+        }
+      },
+      gates: null,
+      firstOperationGates: {
+        results: [
+          {
+            code: 'kernel-first-op-mobile-cold-solid-review',
+            budgetMs: 630,
+            withinBudget: false
+          },
+          {
+            code: 'kernel-first-op-mobile-warm-solid-review',
+            budgetMs: 80,
+            withinBudget: true
+          },
+          {
+            code: 'kernel-first-op-mobile-cold-sketch-review',
+            budgetMs: 70,
+            withinBudget: true
+          },
+          {
+            code: 'kernel-first-op-mobile-warm-sketch-review',
+            budgetMs: 30,
+            withinBudget: true
+          }
+        ]
+      },
+      baseline: null,
+      regression: null
+    });
+
+    expect(section).toContain(
+      '| cold | 3300 ms | 3460 ms | — | not evaluated |'
+    );
+    expect(section).not.toMatch(
+      /\| (?:cold|warm) \| \d+ ms \| \d+ ms \| — \| ok \|/
+    );
+    expect(section).toContain(
+      '| cold | Solid edit | 300 ms | 700 ms | 630 ms | **review: over budget** |'
+    );
+    expect(section).toContain(
+      '| warm | Solid edit | 27 ms | 51 ms | 80 ms | ok |'
+    );
+    expect(section).toContain(
+      '| cold | Sketch solve | 20 ms | 42 ms | 70 ms | ok |'
+    );
+  });
+
+  it('marks first operations without gates as not evaluated', () => {
+    const section = markdownSection({
+      protocol: { profile: 'desktop', runs: 4 },
+      provenance: { remusVersion: '2026.1.57' },
+      summary: {
+        kernelReady: { cold: ready(34, 42), warm: ready(40, 47) },
+        firstOperation: {
+          cold: {
+            solidFirstMs: measured(65, 68),
+            sketchFirstMs: measured(4, 4)
+          },
+          warm: {
+            solidFirstMs: measured(6, 6),
+            sketchFirstMs: measured(0.2, 0.2)
+          }
+        }
+      },
+      gates: null,
+      firstOperationGates: null,
+      baseline: null,
+      regression: null
+    });
+
+    expect(section).toContain(
+      '| cold | Solid edit | 65 ms | 68 ms | — | not evaluated |'
+    );
+    expect(section).not.toContain('| ok |');
+  });
 });
