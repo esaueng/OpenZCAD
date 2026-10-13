@@ -27,8 +27,9 @@ export function createdBodiesToFrame(
   const existing = new Set(Object.values(before).map((body) => body.bodyId));
   for (const feature of features) {
     const data = feature.data;
-    // A mirror is an independent copy: its source stays where it was.
-    if (data.featureKind === 'mirror') continue;
+    // Mirror and Thicken create independent bodies and keep their sources.
+    if (data.featureKind === 'mirror' || data.featureKind === 'thicken')
+      continue;
     const inputs =
       'targetBodyIds' in data
         ? data.targetBodyIds
