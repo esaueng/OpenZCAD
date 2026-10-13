@@ -4,6 +4,9 @@ Production QA finding CAD-001 (P2), 2026-10-11, production `a90f51ad` with
 Remus 2026.1.45 (`a04b5c86`). Re-verified on the `c2cd99d0` pin in `main`.
 ROADMAP [K01](../../../ROADMAP.md#k01) (secondary: K07).
 
+The report below records the earlier defect. The 13 October installed-WASM
+follow-up at the end qualifies the reduced cases on Remus 2026.1.53.
+
 ## Report
 
 A rectangular mounting ear overlapping the wall of a shelled gearbox housing
@@ -133,3 +136,24 @@ cylinder hit.
 Filed as [remus#984](https://github.com/esaueng/remus/issues/984), with both
 behaviours: the exact refusal of a valid boolean, and the `ok` with a wrong
 volume.
+
+## Installed-WASM follow-up — 13 October 2026
+
+The updater PR #651 pins both packages to Remus **2026.1.53**, commit
+`81fc3a30645462fbd811c147f407d8c16f08425a`, containing the upstream
+[remus#986](https://github.com/esaueng/remus/pull/986) classifier repair.
+The reduced consumer regression now requires success rather than accepting a
+refusal, and the raw-kernel canary requires the exact answers:
+
+- Crossing-wall union: `1952 - 18π + 72 = 1967.451332235384 mm³`, 17 faces.
+- Contained-wall union: `1952 - 18π = 1895.451332235384 mm³`, with the same
+  face count as the bored cup; the tool adds no material.
+- Both raw results have matching mass-property volumes, validate with zero
+  errors, and tessellate watertight with zero boundary/non-manifold edges.
+- Serialized input operands remain unchanged, the protruding ear is material,
+  and the through-bore remains empty. The no-bore control remains exact.
+
+All four tests in `test/cup-bore-boolean-refusal.test.ts` pass locally against
+the installed packages. These are synthetic raw-WASM and adapter results;
+the original saved housing was not rerun through the production UI. Full PR
+CI, the actual merge and public deployment remain separate delivery evidence.

@@ -30,6 +30,7 @@ import {
   type LucideIcon
 } from 'lucide-react';
 import { isLibraryModeStatus } from '../lib/libraryStatus';
+import { STALE_CHUNK_MESSAGE } from '../lib/staleChunk';
 import {
   daysUntilPurge,
   MAX_PROJECT_NAME_LENGTH,
@@ -55,10 +56,12 @@ interface StartScreenProps {
   projects: ProjectSummary[];
   status: string;
   /**
-   * Present once a newer build is out (a chunk this tab asked for is gone,
-   * or the version watch saw a new commit): the footer offers the reload.
+   * Present once the version watch confirms a newer build: the footer offers
+   * the reload. Download failures have their own actionable toast.
    */
   onReloadForUpdate?: () => void;
+  /** Remains available after a download failure, without claiming an update. */
+  onReloadForLoadFailure?: () => void;
   busy: boolean;
   /** Discovery is pending; an empty array and absent session are not results. */
   loading?: boolean;
@@ -224,6 +227,7 @@ export function StartScreen({
   projects,
   status,
   onReloadForUpdate,
+  onReloadForLoadFailure,
   busy,
   loading = false,
   demos,
@@ -1423,17 +1427,19 @@ export function StartScreen({
           while it is on screen, and the status line speaks only with news
           the sentence does not already carry. */}
       <aside className="start-cloud" aria-label="Cloud sync">
-        {onReloadForUpdate ? (
-          // A deploy renamed the chunks this tab loads lazily, so the next
-          // demo, import or panel would fail. The failure used to surface as
-          // "Failed to fetch dynamically imported module" in the status text,
-          // with nothing happening on the card that was clicked.
+        {onReloadForUpdate || onReloadForLoadFailure ? (
+          // Module failures can stay cached until navigation. This action
+          // outlives the toast, whether or not an update was confirmed.
           <span className="start-update" role="alert">
-            <span>A new version of OpenZCAD is available.</span>
+            <span>
+              {onReloadForUpdate
+                ? 'A new version of OpenZCAD is available.'
+                : STALE_CHUNK_MESSAGE}
+            </span>
             <button
               type="button"
               className="primary"
-              onClick={onReloadForUpdate}
+              onClick={onReloadForUpdate ?? onReloadForLoadFailure}
             >
               Reload
             </button>

@@ -86,16 +86,16 @@ export class ErrorBoundary extends Component<
             <BrandMark />
           </span>
           <span className="error-page-eyebrow">
-            {stale ? 'Update available' : 'Something went wrong'}
+            {stale ? 'Loading interrupted' : 'Something went wrong'}
           </span>
           <h1 id="error-page-title">
             {stale
-              ? 'OpenZCAD has been updated'
+              ? 'Part of OpenZCAD could not load'
               : `${this.props.label} could not be rendered.`}
           </h1>
           <p role="alert">
             {stale
-              ? 'A new version was released while this tab was open, and this tab can no longer load the parts it needs. Reload to continue on the new version.'
+              ? STALE_CHUNK_MESSAGE
               : 'An unexpected error stopped the workspace. Reload to recover.'}
           </p>
           <p className="error-page-note">
@@ -108,7 +108,7 @@ export class ErrorBoundary extends Component<
             onClick={reload}
             autoFocus
           >
-            {stale ? 'Reload to update' : 'Reload workspace'}
+            Reload workspace
           </button>
           {!stale && this.state.message ? (
             <details className="error-page-details">

@@ -51,8 +51,8 @@ export const WORKSPACE_TOUR_STEPS: readonly WorkspaceTourStep[] = [
   {
     id: 'history',
     title: 'The history is the model',
-    body: 'Every feature lands in the History panel and replays in order. Drag the grip to reorder, right-click a row for actions, and roll back with the clock on a row.',
-    targetSelector: '.sidebar',
+    body: 'Open History from the rail on the right. Every feature lands there and replays in order. Drag the grip to reorder, right-click a row for actions, and roll back with the clock on a row.',
+    targetSelector: '.rail-panels [aria-label="History panel"]',
     isComplete: () => false
   },
   {
