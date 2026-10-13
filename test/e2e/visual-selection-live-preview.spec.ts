@@ -978,3 +978,309 @@ test('streams an exact extrude preview while a region drag is held', async ({
   ).toHaveCount(1);
   expect(consoleErrors).toEqual([]);
 });
+
+interface DragTimingRequest {
+  id: string;
+  at: number;
+  responseAt?: number;
+  ok?: boolean;
+  warnings?: string[];
+  hasQuantities?: boolean;
+}
+interface DragTimingSample {
+  delta: number;
+  at: number;
+  requestStart: number;
+  frameAt?: number;
+}
+interface ExactDragProbe {
+  requests: DragTimingRequest[];
+  samples: DragTimingSample[];
+  pointerId?: number;
+}
+declare global {
+  interface Window {
+    __ozExactDragProbe: ExactDragProbe;
+  }
+}
+
+// Opt-in timing evidence, never a wall-clock CI gate. Reuse the exact fixture
+// and actual drag handler above, rather than measuring typed input or a proxy.
+// OZ_PERF=1 pnpm test:e2e visual-selection-live-preview -g 'measures exact' \
+//   --workers=1 --repeat-each=3
+for (const surface of ['top-cap', 'wall'] as const) {
+  test(`measures exact ${surface} drag input, worker reply and rendered frame`, async ({
+    page,
+    browser
+  }) => {
+    test.skip(process.env.OZ_PERF !== '1', 'Set OZ_PERF=1 for drag timing.');
+    test.setTimeout(process.env.CI ? 240_000 : 120_000);
+    await installFacePreviewGate(page);
+    await page.addInitScript(() => {
+      const probe: ExactDragProbe = { requests: [], samples: [] };
+      window.__ozExactDragProbe = probe;
+      const send = Worker.prototype.postMessage;
+      const watched = new WeakSet<Worker>();
+      Worker.prototype.postMessage = function (message, transfer) {
+        const input = message as { type?: string; requestId: string };
+        if (input?.type === 'preview-geometry')
+          probe.requests.push({ id: input.requestId, at: performance.now() });
+        if (!watched.has(this)) {
+          watched.add(this);
+          this.addEventListener(
+            'message',
+            (event: MessageEvent) => {
+              const result = event.data as {
+                type?: string;
+                requestId?: string;
+                ok?: boolean;
+                geometry?: {
+                  warnings: string[];
+                  bodyRepresentations: Record<string, { volume?: number }>;
+                };
+              };
+              if (result.type !== 'preview-geometry') return;
+              const request = probe.requests.find(
+                (entry) => entry.id === result.requestId
+              );
+              if (!request) return;
+              request.responseAt = performance.now();
+              request.ok = result.ok;
+              request.warnings = result.geometry?.warnings;
+              request.hasQuantities = Object.values(
+                result.geometry?.bodyRepresentations ?? {}
+              ).some((body) => body.volume !== undefined);
+            },
+            { capture: true }
+          );
+        }
+        return send.call(this, message, transfer as StructuredSerializeOptions);
+      };
+    });
+    const { canvas, consoleErrors } = await armChamferedTopCapOffset(page);
+    await expect(page).toHaveURL(
+      new URL('/', test.info().project.use.baseURL).href
+    );
+    await expect(page).toHaveTitle('OpenZCAD');
+    await canvas.evaluate(
+      (element, surface) =>
+        element.dispatchEvent(
+          new CustomEvent('openzcad:e2e-select-cylinder', {
+            detail: { surface }
+          })
+        ),
+      surface
+    );
+    await expect(canvas).toHaveAttribute(
+      'data-e2e-chip-anchor-rig',
+      surface === 'wall' ? 'cylinder-radius' : 'offset-face'
+    );
+    await canvas.evaluate(
+      () =>
+        new Promise<void>((resolve) =>
+          requestAnimationFrame(() => requestAnimationFrame(() => resolve()))
+        )
+    );
+    const handle = await canvas.evaluate((element) => ({
+      x: Number(element.dataset.e2eHandleX),
+      y: Number(element.dataset.e2eHandleY),
+      dx: Number(element.dataset.e2eHandleDx),
+      dy: Number(element.dataset.e2eHandleDy),
+      scale: Number(element.dataset.e2eHandlePixelsPerUnit)
+    }));
+    expect(Object.values(handle).every(Number.isFinite)).toBe(true);
+    const box = (await canvas.boundingBox())!;
+    const start = { x: box.x + handle.x, y: box.y + handle.y };
+    const before = await renderedWorldBounds(page);
+    const beforeMeasures = await editPresentationMeasures(page);
+    const fullRequests = () =>
+      page.evaluate(
+        () =>
+          (
+            window as typeof window & { facePreviewRequests: string[] }
+          ).facePreviewRequests.filter((type) => type === 'sync').length
+      );
+    const fullBefore = await fullRequests();
+    await canvas.evaluate((element) =>
+      element.addEventListener(
+        'pointerdown',
+        (event) => {
+          window.__ozExactDragProbe.pointerId = (
+            event as PointerEvent
+          ).pointerId;
+        },
+        { once: true }
+      )
+    );
+    await page.mouse.move(start.x, start.y);
+    await page.mouse.down();
+    await canvas.evaluate(
+      async (element, { handle, start, surface, budget }) => {
+        const probe = window.__ozExactDragProbe;
+        for (let delta = 2; delta <= 8; delta += 1) {
+          const sample: DragTimingSample = {
+            delta,
+            at: performance.now(),
+            requestStart: probe.requests.length
+          };
+          probe.samples.push(sample);
+          await new Promise<void>((resolve, reject) => {
+            const timer = setTimeout(() => {
+              element.removeEventListener('openzcad:e2e-camera-frame', frame);
+              reject(new Error(`Exact ${surface} frame ${delta} timed out.`));
+            }, budget);
+            const frame = () => {
+              element.dispatchEvent(
+                new CustomEvent('openzcad:e2e-render-policy', {
+                  detail: {
+                    resolve: (state: {
+                      bodyFaces: { worldBounds?: { max: number[] } }[];
+                    }) => {
+                      const bounds = state.bodyFaces[0]?.worldBounds;
+                      const axis = surface === 'wall' ? 0 : 2;
+                      const expected = (surface === 'wall' ? 14 : 28) + delta;
+                      if (
+                        !bounds ||
+                        Math.abs(bounds.max[axis]! - expected) > 1e-4
+                      )
+                        return;
+                      sample.frameAt = performance.now();
+                      clearTimeout(timer);
+                      element.removeEventListener(
+                        'openzcad:e2e-camera-frame',
+                        frame
+                      );
+                      resolve();
+                    }
+                  }
+                })
+              );
+            };
+            element.addEventListener('openzcad:e2e-camera-frame', frame);
+            element.dispatchEvent(
+              new PointerEvent('pointermove', {
+                bubbles: true,
+                cancelable: true,
+                pointerType: 'mouse',
+                isPrimary: true,
+                pointerId: probe.pointerId!,
+                buttons: 1,
+                shiftKey: true,
+                clientX: start.x + handle.dx * handle.scale * delta,
+                clientY: start.y + handle.dy * handle.scale * delta
+              })
+            );
+          });
+        }
+      },
+      { handle, start, surface, budget: PREVIEW_BUDGET_MS }
+    );
+    const observation = await page.evaluate(() => {
+      const probe = window.__ozExactDragProbe;
+      const canvas = document.querySelector<HTMLCanvasElement>(
+        '.viewer-host canvas'
+      )!;
+      const gl = canvas.getContext('webgl2')!;
+      const debug = gl.getExtension('WEBGL_debug_renderer_info');
+      return {
+        requests: probe.requests,
+        samples: probe.samples.map((sample) => {
+          const request = probe.requests[sample.requestStart]!;
+          return {
+            delta: sample.delta,
+            inputToRequestMs: request.at - sample.at,
+            requestToReplyMs: request.responseAt! - request.at,
+            replyToFrameMs: sample.frameAt! - request.responseAt!,
+            inputToFrameMs: sample.frameAt! - sample.at
+          };
+        }),
+        userAgent: navigator.userAgent,
+        viewport: { width: innerWidth, height: innerHeight, devicePixelRatio },
+        renderer: String(
+          gl.getParameter(debug ? debug.UNMASKED_RENDERER_WEBGL : gl.RENDERER)
+        )
+      };
+    });
+    expect(observation.requests).toHaveLength(7);
+    for (const request of observation.requests) {
+      expect(request.ok).toBe(true);
+      expect(request.warnings).toEqual([]);
+      expect(request.hasQuantities).toBe(false);
+    }
+    for (const sample of observation.samples) {
+      for (const elapsed of [
+        sample.inputToRequestMs,
+        sample.requestToReplyMs,
+        sample.replyToFrameMs
+      ]) {
+        expect(Number.isFinite(elapsed)).toBe(true);
+        expect(elapsed).toBeGreaterThanOrEqual(0);
+      }
+    }
+    await expect(canvas).not.toHaveAttribute(
+      'data-e2e-cylinder-proxy-radius',
+      /.+/
+    );
+    await expect(canvas).not.toHaveAttribute(
+      'data-e2e-height-proxy-offset',
+      /.+/
+    );
+    expect(await fullRequests()).toBe(fullBefore);
+    const previewBounds = await renderedWorldBounds(page);
+    // In-page move samples avoid automation round trips. Synchronize the
+    // trusted pointer before release, whose coordinates Playwright owns.
+    await page.mouse.move(
+      start.x + handle.dx * handle.scale * 8,
+      start.y + handle.dy * handle.scale * 8
+    );
+    await page.evaluate(() => {
+      (
+        window as typeof window & { facePreviewGate: FacePreviewGate }
+      ).facePreviewGate.holdFinal = true;
+    });
+    await page.mouse.up();
+    await expect
+      .poll(() =>
+        page.evaluate(
+          () =>
+            (window as typeof window & { facePreviewGate: FacePreviewGate })
+              .facePreviewGate.heldFinal
+        )
+      )
+      .toBe(1);
+    expect(await fullRequests()).toBe(fullBefore + 1);
+    await page
+      .getByRole('button', { name: 'Items panel', exact: true })
+      .click();
+    await expect(page.getByText('Preparing model details…')).toBeVisible();
+    // The preview cannot change history before the complete worker result.
+    await page
+      .getByRole('button', { name: 'History panel', exact: true })
+      .click();
+    await expect(page.locator('.feature-row')).toHaveCount(2);
+    expect(await editPresentationMeasures(page)).toEqual(beforeMeasures);
+    await page.evaluate(() =>
+      (
+        window as typeof window & { facePreviewGate: FacePreviewGate }
+      ).facePreviewGate.releaseFinal()
+    );
+    await expect(page.getByText('Preparing model details…')).toBeHidden();
+    await expect(page.getByRole('contentinfo')).toContainText(
+      surface === 'wall' ? 'Adjusted cylinder diameter' : 'height set'
+    );
+    expect(await renderedWorldBounds(page)).toEqual(previewBounds);
+    await page.getByRole('button', { name: 'Undo', exact: true }).click();
+    await expect.poll(() => renderedWorldBounds(page)).toEqual(before);
+    expect(consoleErrors).toEqual([]);
+    const evidence = {
+      surface,
+      browserVersion: browser.version(),
+      ...observation
+    };
+    await test.info().attach('exact-drag-latency.json', {
+      body: JSON.stringify(evidence),
+      contentType: 'application/json'
+    });
+    console.log('[exact drag latency]', JSON.stringify(evidence));
+  });
+}
