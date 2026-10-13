@@ -204,22 +204,23 @@ export const KERNEL_LOAD_POLICY = Object.freeze({
 /**
  * First-operation review budgets: p95 milliseconds of the first call of the
  * harness's representative solid edit and sketch solve after kernel-ready
- * (`--first-operation`), which carries V8's lazy WebAssembly compilation.
- * Each is the worst p95 measured for remus-wasm 2026.1.53 and 2026.1.57 on
- * the reference host plus max(25 ms, 5%), rounded up to 10 ms. Evidence:
+ * (`--first-operation`), which carries V8's lazy WebAssembly compilation,
+ * taken from the samples in which that workload ran first. Each is the worst
+ * p95 measured for remus-wasm 2026.1.53 and 2026.1.57 on the reference host
+ * plus max(25 ms, 5%), rounded up to 10 ms. Evidence:
  * `docs/kernel-wasm-size-policy.md`.
  */
 export const KERNEL_FIRST_OPERATION_POLICY = Object.freeze({
   desktop: Object.freeze({
     coldSolidP95Ms: 130,
     warmSolidP95Ms: 40,
-    coldSketchP95Ms: 40,
+    coldSketchP95Ms: 30,
     warmSketchP95Ms: 30
   }),
   mobile: Object.freeze({
     coldSolidP95Ms: 630,
     warmSolidP95Ms: 80,
-    coldSketchP95Ms: 70,
+    coldSketchP95Ms: 60,
     warmSketchP95Ms: 30
   })
 });

@@ -103,10 +103,14 @@ byte-identical to the measured asset.
   operation. `--first-operation` measures that cost: after kernel-ready, in
   the same document, a fresh `BrepKernel` runs a representative edit
   (`makeBox`, `makeCylinder`, `cut`, a two-edge `fillet`, `tessellateSolid`,
-  `volume`) twice, then builds and solves a constrained GCS sketch twice. The
+  `volume`) twice and builds and solves a constrained GCS sketch twice. The
   first call minus the second approximates lazy compilation plus first-touch
-  memory. A sample whose volume or solved sketch differs from the reference
-  fails the run. That phase loads the warm document behind cold-document
+  memory. Whichever workload runs first also compiles the code both share, so
+  the order alternates every two samples and each workload's first-call
+  figures come only from the samples where it ran first (`--check` therefore
+  needs 40 runs, 20 per order); the other order is reported as
+  `solidAfterSketchMs` and `sketchAfterSolidMs`. A sample whose volume or
+  solved sketch differs from the reference fails the run. That phase loads the warm document behind cold-document
   work, so the kernel-ready budgets are evaluated only on runs without it.
 
 Commands:
@@ -343,7 +347,9 @@ compiles lazily on first use, so `--first-operation` measured them directly.
 The runs used the pinned 2026.1.53 and Remus main's 2026.1.57 (9,412,128 raw
 bytes, after Remus #1029 and #1031) interleaved, 30 samples each, in two
 rounds per profile; the host load average was 5–35. Values are p50 / p95 of
-the first call; "overhead" is the first call minus the second.
+the first call; "overhead" is the first call minus the second. In these two
+rounds the sketch always ran after the solid edit, so its columns are the
+sketch's cost once the shared code was compiled.
 
 | Profile      | Kernel    | Round | Cold solid edit |  Cold overhead | Warm solid edit | Cold sketch solve | Warm sketch solve |
 | ------------ | --------- | ----- | --------------: | -------------: | --------------: | ----------------: | ----------------: |
@@ -356,12 +362,29 @@ the first call; "overhead" is the first call minus the second.
 | Mobile-class | 2026.1.53 | 2     |    268 / 299 ms |   248 / 271 ms |  25.2 / 32.3 ms |    18.8 / 22.7 ms |      0.9 / 1.7 ms |
 | Mobile-class | 2026.1.57 | 2     |    267 / 359 ms |   245 / 332 ms |  23.9 / 38.1 ms |    18.5 / 36.1 ms |      1.0 / 1.7 ms |
 
+A third round alternated the order: 40 samples per kernel and profile, 20 of
+them with the sketch first on a module nothing had compiled (host load
+average 7–15).
+
+| Profile      | Kernel    | Cold solid edit, run first | Cold sketch, run first | Cold sketch after the edit | Warm sketch, run first |
+| ------------ | --------- | -------------------------: | ---------------------: | -------------------------: | ---------------------: |
+| Desktop      | 2026.1.53 |             60.2 / 81.0 ms |           3.8 / 4.9 ms |               3.7 / 4.7 ms |           0.2 / 0.3 ms |
+| Desktop      | 2026.1.57 |             61.7 / 71.3 ms |           3.8 / 4.5 ms |               3.7 / 5.0 ms |           0.2 / 0.3 ms |
+| Mobile-class | 2026.1.53 |               300 / 399 ms |         17.9 / 24.6 ms |             21.0 / 27.3 ms |           1.0 / 1.5 ms |
+| Mobile-class | 2026.1.57 |               286 / 393 ms |         19.2 / 25.9 ms |             20.3 / 28.1 ms |           1.1 / 1.8 ms |
+
+A sketch run first costs the same as one run after the edit: the edit does
+not compile the solver's path, so the earlier rounds did not understate the
+cold sketch. Alternating the order in one profile was chosen over a separate
+browser profile per workload because it measures both orders on the same
+samples at half the cost, and it shows directly whether order matters.
+
 The second call of the same edit takes 4.6–7.2 ms on desktop and 21–22 ms on
 the mobile-class profile, so about 90% of a cold first edit is compilation and
 first touch: 56–87 ms on desktop and 245–281 ms (p50) on the mobile-class
 profile. After a warm load, Chromium's code cache supplies the compiled
 functions and the overhead falls to 2–3 ms and 6–9 ms. The sketch solver pays
-3.6–5.6 ms and 18–20 ms cold. Within a round the two kernels agree: desktop
+3.6–5.6 ms and 18–20 ms cold (see the third round below for the order). Within a round the two kernels agree: desktop
 medians within 0.6 ms, mobile-class medians 1 ms apart in round 2 and 20 ms
 in round 1, inside that profile's round-to-round spread. The 1.07 MB removed
 by Remus #1029 and #1031 did not measurably change first-operation cost on
@@ -371,12 +394,13 @@ these are review budgets.
 
 First-operation review budgets (`KERNEL_FIRST_OPERATION_POLICY`), set like the
 load budgets from the worst p95 above plus max(25 ms, 5%), rounded up to
-10 ms:
+10 ms. Sketch budgets use only the samples where the sketch ran first (third
+round):
 
 | Profile      |      Cold solid edit | Warm solid edit | Cold sketch solve | Warm sketch solve |
 | ------------ | -------------------: | --------------: | ----------------: | ----------------: |
-| Desktop      | 130 ms (worst 100.2) |    40 ms (10.5) |       40 ms (6.2) |       30 ms (1.1) |
-| Mobile-class |       630 ms (594.6) |    80 ms (53.6) |      70 ms (42.4) |       30 ms (3.1) |
+| Desktop      | 130 ms (worst 100.2) |    40 ms (10.5) |       30 ms (4.9) |       30 ms (0.3) |
+| Mobile-class |       630 ms (594.6) |    80 ms (53.6) |      60 ms (25.9) |       30 ms (1.8) |
 
 `pnpm perf:remus-wasm -- --profile <desktop|mobile> --first-operation --check`
 reports them as review lines, like the load budgets. Compilation scales with

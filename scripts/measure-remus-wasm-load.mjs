@@ -260,6 +260,15 @@ export function parseArgs(argv) {
     throw new Error('--warm-settle-ms expects a non-negative integer.');
   }
   if (
+    args.check &&
+    args.firstOperations &&
+    args.runs < 2 * KERNEL_LOAD_POLICY.minimumRuns
+  ) {
+    throw new Error(
+      `--check with --first-operation needs at least ${2 * KERNEL_LOAD_POLICY.minimumRuns} runs: each workload order gets half of them.`
+    );
+  }
+  if (
     (args.check || args.baselinePackageDirectory) &&
     args.runs < KERNEL_LOAD_POLICY.minimumRuns
   ) {
@@ -378,16 +387,37 @@ function timed(run) {
  * First-call against second-call time of the same operations in a fresh
  * kernel. V8 compiles WebAssembly functions lazily, so the first call pays
  * compilation (or a code-cache load) and first-touch memory growth; the
- * second call of identical work does not.
+ * second call of identical work does not. The workload that runs first also
+ * compiles the code both share (allocator, arena, history), so the caller
+ * alternates the order and reads each workload's first-call cost only from
+ * the samples in which it ran first.
  */
-export function measureFirstOperations() {
+export function measureFirstOperations(order) {
   const kernel = new glue.BrepKernel();
   try {
-    const solidFirst = timed(() => solidWorkload(kernel));
-    const solidSecond = timed(() => solidWorkload(kernel));
-    const sketchFirst = timed(() => sketchWorkload(kernel));
-    const sketchSecond = timed(() => sketchWorkload(kernel));
+    const runSolid = () => [
+      timed(() => solidWorkload(kernel)),
+      timed(() => solidWorkload(kernel))
+    ];
+    const runSketch = () => [
+      timed(() => sketchWorkload(kernel)),
+      timed(() => sketchWorkload(kernel))
+    ];
+    let solidFirst;
+    let solidSecond;
+    let sketchFirst;
+    let sketchSecond;
+    if (order === 'sketch-first') {
+      [sketchFirst, sketchSecond] = runSketch();
+      [solidFirst, solidSecond] = runSolid();
+    } else if (order === 'solid-first') {
+      [solidFirst, solidSecond] = runSolid();
+      [sketchFirst, sketchSecond] = runSketch();
+    } else {
+      throw new Error('Unknown first-operation order ' + order);
+    }
     return {
+      order,
       solidFirstMs: solidFirst.ms,
       solidSecondMs: solidSecond.ms,
       sketchFirstMs: sketchFirst.ms,
@@ -671,7 +701,14 @@ async function runModuleSample(server, artifact, args) {
   }
 }
 
-async function measureReadyOnFreshDocument(page, cdp, server, args, assetUrl) {
+async function measureReadyOnFreshDocument(
+  page,
+  cdp,
+  server,
+  args,
+  assetUrl,
+  workloadOrder
+) {
   await page.goto(server.baseUrl, { waitUntil: 'load' });
   // Re-assert the profile on the new document; CDP emulation is per target
   // and a navigation must not silently drop the throttle.
@@ -686,10 +723,10 @@ async function measureReadyOnFreshDocument(page, cdp, server, args, assetUrl) {
     networkRequests: server.requestCount() - requestStart
   };
   if (!args.firstOperations) return ready;
-  const firstOperations = await page.evaluate(async () => {
+  const firstOperations = await page.evaluate(async (order) => {
     const harness = await import('/harness.mjs');
-    return harness.measureFirstOperations();
-  });
+    return harness.measureFirstOperations(order);
+  }, workloadOrder);
   assertFirstOperationResults(firstOperations);
   return { ...ready, firstOperations };
 }
@@ -732,7 +769,7 @@ export function assertFirstOperationResults(result) {
  * which Chromium may write the compiled module into its code cache, a new
  * document in the same profile loads the kernel again.
  */
-async function runKernelReadySample(server, artifact, args) {
+async function runKernelReadySample(server, artifact, args, workloadOrder) {
   const context = await launchContext(args.executablePath);
   try {
     const page = context.pages()[0] ?? (await context.newPage());
@@ -743,7 +780,8 @@ async function runKernelReadySample(server, artifact, args) {
       cdp,
       server,
       args,
-      assetUrl
+      assetUrl,
+      workloadOrder
     );
     if (args.warmSettleMs > 0) await page.waitForTimeout(args.warmSettleMs);
     const warm = await measureReadyOnFreshDocument(
@@ -751,7 +789,8 @@ async function runKernelReadySample(server, artifact, args) {
       cdp,
       server,
       args,
-      assetUrl
+      assetUrl,
+      workloadOrder
     );
     return {
       kernelReady: { cold, warm },
@@ -813,20 +852,36 @@ function summarizeReady(samples, phase) {
   };
 }
 
-function summarizeFirstOperations(samples, phase) {
-  const values = (read) =>
-    samples.map((sample) => read(sample.kernelReady[phase].firstOperations));
+/**
+ * Each workload's first-call statistics come only from the samples in which
+ * it ran first, on a module nothing had compiled yet; the "after" entries are
+ * the same workload run second, after the other one compiled the shared code.
+ */
+export function summarizeFirstOperations(samples, phase) {
+  const runs = samples.map(
+    (sample) => sample.kernelReady[phase].firstOperations
+  );
+  const ordered = (order) => runs.filter((run) => run.order === order);
+  const solidFirst = ordered('solid-first');
+  const sketchFirst = ordered('sketch-first');
+  const stat = (subset, read) => summarize(subset.map(read));
   return {
-    solidFirstMs: summarize(values((first) => first.solidFirstMs)),
-    solidSecondMs: summarize(values((first) => first.solidSecondMs)),
-    solidOverheadMs: summarize(
-      values((first) => first.solidFirstMs - first.solidSecondMs)
+    solidFirstSamples: solidFirst.length,
+    sketchFirstSamples: sketchFirst.length,
+    solidFirstMs: stat(solidFirst, (run) => run.solidFirstMs),
+    solidSecondMs: stat(solidFirst, (run) => run.solidSecondMs),
+    solidOverheadMs: stat(
+      solidFirst,
+      (run) => run.solidFirstMs - run.solidSecondMs
     ),
-    sketchFirstMs: summarize(values((first) => first.sketchFirstMs)),
-    sketchSecondMs: summarize(values((first) => first.sketchSecondMs)),
-    sketchOverheadMs: summarize(
-      values((first) => first.sketchFirstMs - first.sketchSecondMs)
-    )
+    solidAfterSketchMs: stat(sketchFirst, (run) => run.solidFirstMs),
+    sketchFirstMs: stat(sketchFirst, (run) => run.sketchFirstMs),
+    sketchSecondMs: stat(sketchFirst, (run) => run.sketchSecondMs),
+    sketchOverheadMs: stat(
+      sketchFirst,
+      (run) => run.sketchFirstMs - run.sketchSecondMs
+    ),
+    sketchAfterSolidMs: stat(solidFirst, (run) => run.sketchFirstMs)
   };
 }
 
@@ -889,9 +944,11 @@ function printSummary(report, args) {
       'solidFirstMs',
       'solidSecondMs',
       'solidOverheadMs',
+      'solidAfterSketchMs',
       'sketchFirstMs',
       'sketchSecondMs',
-      'sketchOverheadMs'
+      'sketchOverheadMs',
+      'sketchAfterSolidMs'
     ]) {
       const values = report.summary.firstOperation[phase][metric];
       rows.push([
@@ -1035,8 +1092,13 @@ export function markdownSection(report) {
       ...(gate && !gate.withinBudget ? ['over budget'] : []),
       ...(regression && !regression.withinBudget ? ['slower than pin'] : [])
     ];
+    // A budget that was not evaluated is never reported as passing.
     const result =
-      flags.length === 0 ? 'ok' : `**review: ${flags.join(', ')}**`;
+      flags.length > 0
+        ? `**review: ${flags.join(', ')}**`
+        : gate
+          ? 'ok'
+          : 'not evaluated';
     if (baseline) {
       const before = report.baseline.summary.kernelReady[phase].readyMs;
       lines.push(
@@ -1048,12 +1110,65 @@ export function markdownSection(report) {
       );
     }
   }
-  lines.push('', '');
+  lines.push('');
+  if (report.summary.firstOperation) {
+    lines.push(...firstOperationMarkdown(report), '');
+  }
+  lines.push('');
   return lines.join('\n');
 }
 
-async function measureSample(server, artifact, args) {
-  const ready = await runKernelReadySample(server, artifact, args);
+const FIRST_OPERATION_ROWS = [
+  ['cold', 'solid', 'solidFirstMs', 'Solid edit'],
+  ['warm', 'solid', 'solidFirstMs', 'Solid edit'],
+  ['cold', 'sketch', 'sketchFirstMs', 'Sketch solve'],
+  ['warm', 'sketch', 'sketchFirstMs', 'Sketch solve']
+];
+
+/**
+ * First-operation rows: each workload's first call after kernel-ready, from
+ * the samples where it ran first, against its review budget.
+ */
+function firstOperationMarkdown(report) {
+  const lines = [
+    'First operation after kernel-ready (first call, from the samples where the workload ran first):',
+    '',
+    '| Phase | Workload | p50 | p95 | Review budget | Result |',
+    '| --- | --- | ---: | ---: | ---: | ---: |'
+  ];
+  for (const [phase, slug, metric, label] of FIRST_OPERATION_ROWS) {
+    const measured = report.summary.firstOperation[phase][metric];
+    const gate = report.firstOperationGates?.results.find((result) =>
+      result.code.endsWith(`-${phase}-${slug}-review`)
+    );
+    const result = !gate
+      ? 'not evaluated'
+      : gate.withinBudget
+        ? 'ok'
+        : '**review: over budget**';
+    lines.push(
+      `| ${phase} | ${label} | ${markdownMs(measured.median)} | ${markdownMs(measured.p95)} | ${markdownMs(gate?.budgetMs)} | ${result} |`
+    );
+  }
+  return lines;
+}
+
+/**
+ * The first-operation workload order for sample `index`: two samples of one
+ * order, then two of the other, so with alternating kernels each kernel sees
+ * each order equally often and from both run positions.
+ */
+export function firstOperationOrder(index) {
+  return Math.floor(index / 2) % 2 === 0 ? 'solid-first' : 'sketch-first';
+}
+
+async function measureSample(server, artifact, args, index) {
+  const ready = await runKernelReadySample(
+    server,
+    artifact,
+    args,
+    firstOperationOrder(index)
+  );
   if (!args.modulePhases) return ready;
   const moduleSample = await runModuleSample(server, artifact, args);
   return {
@@ -1149,7 +1264,7 @@ export async function runBenchmark(args) {
       process.stderr.write(`sample ${index + 1}/${args.runs}\r`);
       if (!baseline) {
         samples.push(
-          await measureSample(candidate.server, candidate.artifact, args)
+          await measureSample(candidate.server, candidate.artifact, args, index)
         );
         continue;
       }
@@ -1161,7 +1276,8 @@ export async function runBenchmark(args) {
         const sample = await measureSample(
           target.server,
           target.artifact,
-          args
+          args,
+          index
         );
         (target === candidate ? samples : baselineSamples).push(sample);
       }
@@ -1236,7 +1352,7 @@ export async function runBenchmark(args) {
         'fresh Chromium profile: empty HTTP cache, no compiled-module cache',
       kernelReadyWarm: `new document in the same profile after ${args.warmSettleMs} ms settle: HTTP cache hit, compiled-module cache when Chromium wrote one`,
       firstOperation: args.firstOperations
-        ? 'after kernel-ready in the same document: a fresh BrepKernel runs makeBox + makeCylinder + cut + two-edge fillet + tessellateSolid + volume twice, then a constrained GCS sketch build-and-solve twice; first minus second call approximates lazy compilation plus first-touch'
+        ? "after kernel-ready in the same document: a fresh BrepKernel runs makeBox + makeCylinder + cut + two-edge fillet + tessellateSolid + volume twice and a constrained GCS sketch build-and-solve twice, in an order that alternates every two samples; each workload's first-call statistics come only from samples where it ran first; first minus second call approximates lazy compilation plus first-touch"
         : null,
       comparison: baseline
         ? 'baseline and candidate samples alternate, each in its own fresh profile and origin'

@@ -40,7 +40,10 @@ export interface LoadBenchmarkArgs {
   markdown: string | null;
 }
 
+export type FirstOperationOrder = 'solid-first' | 'sketch-first';
+
 export interface FirstOperationResult {
+  order: FirstOperationOrder;
   solidFirstMs: number;
   solidSecondMs: number;
   sketchFirstMs: number;
@@ -78,5 +81,15 @@ export function assertCacheProtocol(
   }>
 ): void;
 export function assertFirstOperationResults(result: FirstOperationResult): void;
+export function firstOperationOrder(index: number): FirstOperationOrder;
+export function summarizeFirstOperations(
+  samples: Array<{
+    kernelReady: Record<
+      'cold' | 'warm',
+      { firstOperations: FirstOperationResult }
+    >;
+  }>,
+  phase: 'cold' | 'warm'
+): Record<string, unknown>;
 export function markdownSection(report: unknown): string;
 export function runBenchmark(args: LoadBenchmarkArgs): Promise<unknown>;

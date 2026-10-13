@@ -5,6 +5,7 @@ import { afterEach, describe, expect, it } from 'vitest';
 import {
   assertCacheProtocol,
   assertFirstOperationResults,
+  firstOperationOrder,
   LOAD_PROFILES,
   markdownSection,
   parseArgs,
@@ -13,7 +14,8 @@ import {
   resolveKernelGlue,
   resolvePackageArtifact,
   runBenchmark,
-  summarize
+  summarize,
+  summarizeFirstOperations
 } from '../scripts/measure-remus-wasm-load.mjs';
 
 const temporaryDirectories: string[] = [];
@@ -320,6 +322,7 @@ describe('Remus WASM first-operation phase', () => {
   const solid = { volume: 3867.86, triangles: 208 };
   const sketch = { converged: true, x: 12, y: 8 };
   const result = (overrides = {}) => ({
+    order: 'solid-first' as const,
     solidFirstMs: 60,
     solidSecondMs: 5,
     sketchFirstMs: 4,
@@ -354,5 +357,163 @@ describe('Remus WASM first-operation phase', () => {
         result({ sketch: [sketch, { converged: false, x: 12, y: 8 }] })
       )
     ).toThrow('did not solve to (12, 8)');
+  });
+});
+
+describe('Remus WASM first-operation order', () => {
+  it('alternates the workload order every two samples', () => {
+    expect([0, 1, 2, 3, 4, 5, 6, 7].map(firstOperationOrder)).toEqual([
+      'solid-first',
+      'solid-first',
+      'sketch-first',
+      'sketch-first',
+      'solid-first',
+      'solid-first',
+      'sketch-first',
+      'sketch-first'
+    ]);
+  });
+
+  it('reads each first call only from samples where it ran first', () => {
+    const run = (
+      order: 'solid-first' | 'sketch-first',
+      solid: number,
+      sketch: number
+    ) => ({
+      order,
+      solidFirstMs: solid,
+      solidSecondMs: 5,
+      sketchFirstMs: sketch,
+      sketchSecondMs: 1,
+      solid: [],
+      sketch: []
+    });
+    const sample = (first: ReturnType<typeof run>) => ({
+      kernelReady: {
+        cold: { firstOperations: first },
+        warm: { firstOperations: first }
+      }
+    });
+    const summary = summarizeFirstOperations(
+      [sample(run('solid-first', 60, 4)), sample(run('sketch-first', 55, 20))],
+      'cold'
+    );
+
+    expect(summary).toMatchObject({
+      solidFirstSamples: 1,
+      sketchFirstSamples: 1,
+      solidFirstMs: { median: 60 },
+      solidAfterSketchMs: { median: 55 },
+      sketchFirstMs: { median: 20 },
+      sketchAfterSolidMs: { median: 4 },
+      solidOverheadMs: { median: 55 },
+      sketchOverheadMs: { median: 19 }
+    });
+  });
+
+  it('needs twenty samples per order before it checks budgets', () => {
+    expect(() =>
+      parseArgs(['--first-operation', '--check', '--runs', '20'])
+    ).toThrow('at least 40 runs');
+    expect(
+      parseArgs(['--first-operation', '--check', '--runs', '40']).runs
+    ).toBe(40);
+  });
+});
+
+describe('Remus WASM first-operation Markdown', () => {
+  const ready = (median: number, p95: number) => ({ readyMs: { median, p95 } });
+  const measured = (median: number, p95: number) => ({ median, p95 });
+
+  it('reports an over-budget first operation and never passes an unevaluated gate', () => {
+    const section = markdownSection({
+      protocol: { profile: 'mobile', runs: 40 },
+      provenance: { remusVersion: '2026.1.57' },
+      summary: {
+        kernelReady: { cold: ready(3300, 3460), warm: ready(100, 187) },
+        firstOperation: {
+          cold: {
+            solidFirstMs: measured(300, 700),
+            sketchFirstMs: measured(20, 42)
+          },
+          warm: {
+            solidFirstMs: measured(27, 51),
+            sketchFirstMs: measured(0.9, 3.1)
+          }
+        }
+      },
+      gates: null,
+      firstOperationGates: {
+        results: [
+          {
+            code: 'kernel-first-op-mobile-cold-solid-review',
+            budgetMs: 630,
+            withinBudget: false
+          },
+          {
+            code: 'kernel-first-op-mobile-warm-solid-review',
+            budgetMs: 80,
+            withinBudget: true
+          },
+          {
+            code: 'kernel-first-op-mobile-cold-sketch-review',
+            budgetMs: 70,
+            withinBudget: true
+          },
+          {
+            code: 'kernel-first-op-mobile-warm-sketch-review',
+            budgetMs: 30,
+            withinBudget: true
+          }
+        ]
+      },
+      baseline: null,
+      regression: null
+    });
+
+    expect(section).toContain(
+      '| cold | 3300 ms | 3460 ms | — | not evaluated |'
+    );
+    expect(section).not.toMatch(
+      /\| (?:cold|warm) \| \d+ ms \| \d+ ms \| — \| ok \|/
+    );
+    expect(section).toContain(
+      '| cold | Solid edit | 300 ms | 700 ms | 630 ms | **review: over budget** |'
+    );
+    expect(section).toContain(
+      '| warm | Solid edit | 27 ms | 51 ms | 80 ms | ok |'
+    );
+    expect(section).toContain(
+      '| cold | Sketch solve | 20 ms | 42 ms | 70 ms | ok |'
+    );
+  });
+
+  it('marks first operations without gates as not evaluated', () => {
+    const section = markdownSection({
+      protocol: { profile: 'desktop', runs: 4 },
+      provenance: { remusVersion: '2026.1.57' },
+      summary: {
+        kernelReady: { cold: ready(34, 42), warm: ready(40, 47) },
+        firstOperation: {
+          cold: {
+            solidFirstMs: measured(65, 68),
+            sketchFirstMs: measured(4, 4)
+          },
+          warm: {
+            solidFirstMs: measured(6, 6),
+            sketchFirstMs: measured(0.2, 0.2)
+          }
+        }
+      },
+      gates: null,
+      firstOperationGates: null,
+      baseline: null,
+      regression: null
+    });
+
+    expect(section).toContain(
+      '| cold | Solid edit | 65 ms | 68 ms | — | not evaluated |'
+    );
+    expect(section).not.toContain('| ok |');
   });
 });
