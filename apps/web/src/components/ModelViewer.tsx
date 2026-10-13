@@ -9870,11 +9870,14 @@ export function ModelViewer({
       !geometryTrace ||
       context.renderedBodies !== bodies ||
       (installed?.projectId === geometryTrace.projectId &&
-        installed.version === geometryTrace.version)
+        installed.version === geometryTrace.version &&
+        installed.analysis === geometryTrace.analysis)
     )
       return;
-    // A committed revision can reuse geometry already drawn by its preview.
-    // Record its acceptance and a real frame without uploading that mesh again.
+    // A committed revision can reuse geometry already drawn by its preview,
+    // and a revision drawn before its analysis keeps that mesh once analysis
+    // is ready. Record its acceptance and a real frame without uploading that
+    // mesh again.
     installedEditRevisionRef.current = geometryTrace;
     recordEditPhase(geometryTrace, 'installed', {
       analysis: geometryTrace.analysis,

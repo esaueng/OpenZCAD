@@ -224,6 +224,29 @@ test('draws accepted geometry before analysis, then completes without reinstalli
       () => performance.getEntriesByName('oz:viewer.bodies').length
     )
   ).toBe(installs);
+  // The mesh drawn before analysis stays, but the revision's acceptance is
+  // still traced once analysis is ready. Deduping on the revision alone
+  // dropped this record (visual-selection-live-preview.spec.ts:696).
+  const tracedPhases = () =>
+    page.evaluate(() =>
+      ['oz:edit.installed', 'oz:edit.frame'].flatMap((name) =>
+        performance.getEntriesByName(name).map((entry) => {
+          const detail = (entry as PerformanceMeasure).detail as {
+            version: number;
+            analysis: string;
+          };
+          return `${name}:${detail.version}:${detail.analysis}`;
+        })
+      )
+    );
+  const pendingFrame = (await tracedPhases()).find(
+    (entry) => entry.startsWith('oz:edit.frame:') && entry.endsWith(':pending')
+  );
+  expect(pendingFrame).toBeDefined();
+  const version = pendingFrame!.split(':')[2];
+  for (const phase of ['oz:edit.installed', 'oz:edit.frame']) {
+    await expect.poll(tracedPhases).toContain(`${phase}:${version}:ready`);
+  }
   expect(errors).toEqual([]);
 });
 
