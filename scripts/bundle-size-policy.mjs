@@ -47,11 +47,17 @@ export const LAZY_ENTRY_PATTERNS = [
   /^assets\/meshImportWorker-.*\.js$/
 ];
 
+/**
+ * Kernel byte thresholds. Ceiling step 1 (2026-10) raised them from
+ * 9 / 10 / 3.5 / 2.5 MiB; the evidence record is in
+ * `docs/kernel-wasm-size-policy.md`. Remus mirrors these values in its
+ * `scripts/wasm-size-policy.mjs`; change both together.
+ */
 export const KERNEL_WASM_POLICY = Object.freeze({
-  rawReviewBytes: 9 * MIB,
-  rawHardBytes: 10 * MIB,
-  gzipHardBytes: 3.5 * MIB,
-  brotliReviewBytes: 2.5 * MIB,
+  rawReviewBytes: 11 * MIB,
+  rawHardBytes: 12 * MIB,
+  gzipHardBytes: 4.5 * MIB,
+  brotliReviewBytes: 3 * MIB,
   brotliQuality: 11,
   pinRawGrowthReviewBytes: 256 * 1024,
   pinRawGrowthReviewRatio: 0.03
@@ -194,6 +200,61 @@ export const KERNEL_LOAD_POLICY = Object.freeze({
     mobile: Object.freeze({ ratio: 0.05, floorMs: 10 })
   })
 });
+
+/**
+ * First-operation review budgets: p95 milliseconds of the first call of the
+ * harness's representative solid edit and sketch solve after kernel-ready
+ * (`--first-operation`), which carries V8's lazy WebAssembly compilation,
+ * taken from the samples in which that workload ran first. Each is the worst
+ * p95 measured for remus-wasm 2026.1.53 and 2026.1.57 on the reference host
+ * plus max(25 ms, 5%), rounded up to 10 ms. Evidence:
+ * `docs/kernel-wasm-size-policy.md`.
+ */
+export const KERNEL_FIRST_OPERATION_POLICY = Object.freeze({
+  desktop: Object.freeze({
+    coldSolidP95Ms: 130,
+    warmSolidP95Ms: 40,
+    coldSketchP95Ms: 30,
+    warmSketchP95Ms: 30
+  }),
+  mobile: Object.freeze({
+    coldSolidP95Ms: 630,
+    warmSolidP95Ms: 80,
+    coldSketchP95Ms: 60,
+    warmSketchP95Ms: 30
+  })
+});
+
+export function evaluateKernelFirstOperation(profile, metrics) {
+  const budgets = KERNEL_FIRST_OPERATION_POLICY[profile];
+  if (!budgets) {
+    throw new Error(`No first-operation budget for profile ${profile}`);
+  }
+  const results = [
+    ['cold', 'Solid', 'solid'],
+    ['warm', 'Solid', 'solid'],
+    ['cold', 'Sketch', 'sketch'],
+    ['warm', 'Sketch', 'sketch']
+  ].map(([phase, kind, slug]) => {
+    const key = `${phase}${kind}P95Ms`;
+    const p95Ms = metrics[key];
+    if (!Number.isFinite(p95Ms)) {
+      throw new Error(`${key} has no p95 measurement`);
+    }
+    return {
+      code: `kernel-first-op-${profile}-${phase}-${slug}-review`,
+      p95Ms,
+      budgetMs: budgets[key],
+      reason: `First ${slug} operation after a ${phase} load (${profile}) requires a load-time review`,
+      withinBudget: p95Ms <= budgets[key]
+    };
+  });
+  return {
+    profile,
+    results,
+    warnings: results.filter((result) => !result.withinBudget)
+  };
+}
 
 export function evaluateKernelLoad(profile, metrics) {
   const budgets = KERNEL_LOAD_POLICY.profiles[profile];
