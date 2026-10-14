@@ -4,6 +4,7 @@ import {
   DEFAULT_PROJECT_ORGANIZATION,
   duplicateProjectName,
   documentNodesWithHistory,
+  importedSourceReferenceOf,
   isPurgeDue,
   MAX_ACTIVE_ARTIFACT_UPLOAD_SESSIONS,
   MAX_ACCOUNT_ARTIFACT_BYTES,
@@ -151,9 +152,8 @@ export function sharedDocumentReferencesImport(
   for (const node of documentNodesWithHistory(document)) {
     if (
       node.kind === 'feature' &&
-      node.data.featureKind === 'imported-step' &&
-      node.data.stepSourceRef !== undefined &&
-      node.data.artifactId === artifactId
+      importedSourceReferenceOf(node.data) !== undefined &&
+      (node.data as { artifactId: string }).artifactId === artifactId
     ) {
       return true;
     }
@@ -969,7 +969,7 @@ export class InMemoryPersistenceService implements PersistenceService {
     if (
       !artifact ||
       artifact.projectId !== shared.projectId ||
-      artifact.kind !== 'step-import'
+      (artifact.kind !== 'step-import' && artifact.kind !== 'mesh-payload')
     ) {
       return null;
     }

@@ -2,6 +2,7 @@ import { countLabel } from './toasts';
 import { CommandManager } from '@openzcad/command-system';
 import {
   documentNodesWithHistory,
+  importedSourceReferenceOf,
   type ProjectDocument
 } from '@openzcad/shared';
 import {
@@ -54,16 +55,11 @@ export function applyAccountSourceArchives(
   if (current.projectId !== acknowledged.projectId) return current;
   const archived = new Map<string, string>();
   for (const node of documentNodesWithHistory(acknowledged)) {
-    if (
-      node.kind === 'feature' &&
-      node.data.featureKind === 'imported-step' &&
-      node.data.stepSourceRef &&
-      !node.data.artifactId.startsWith('artifact_local_')
-    ) {
-      archived.set(
-        node.data.stepSourceRef.checksumSha256,
-        node.data.artifactId
-      );
+    if (node.kind !== 'feature') continue;
+    const sourceRef = importedSourceReferenceOf(node.data);
+    const { artifactId } = node.data as { artifactId: string };
+    if (sourceRef && !artifactId.startsWith('artifact_local_')) {
+      archived.set(sourceRef.checksumSha256, artifactId);
     }
   }
   const manager = new CommandManager(current);
@@ -76,8 +72,9 @@ export function applyAccountSourceArchives(
       (node) =>
         node.kind === 'feature' &&
         node.featureId === source.featureId &&
-        node.data.featureKind === 'imported-step' &&
-        node.data.stepSourceRef?.checksumSha256 !== source.checksumSha256
+        importedSourceReferenceOf(node.data) !== undefined &&
+        importedSourceReferenceOf(node.data)?.checksumSha256 !==
+          source.checksumSha256
     );
     if (!changedSource) manager.archiveSource(source.featureId, artifactId);
   }

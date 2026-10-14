@@ -2,6 +2,7 @@ import { describe, expect, it, vi } from 'vitest';
 import { CommandManager, commandFactories } from '@openzcad/command-system';
 import { createProjectDocument, findFeature } from '@openzcad/document-core';
 import {
+  IMPORTED_MESH_PAYLOAD_CONTENT_TYPE,
   toUserId,
   type ImportedSourceReference,
   type ProjectDocument
@@ -9,6 +10,7 @@ import {
 import {
   archiveLocalOnlyImportSources,
   createInFlightImportChecksums,
+  importSourceChecksums,
   discardUnreferencedImportSource,
   listLocalOnlyImportSources,
   settleImportSource,
@@ -473,3 +475,101 @@ function listStepFeatureData(document: ProjectDocument) {
         : []
     );
 }
+
+/**
+ * Mesh payloads are content-addressed import bytes exactly like STEP sources:
+ * every walk that keeps, lists or uploads those must see them too, or a
+ * referenced mesh is the one import other devices can never rebuild.
+ */
+describe('mesh payload references', () => {
+  function managerWithMeshes(): CommandManager {
+    const manager = new CommandManager(
+      createProjectDocument('Mesh sources', toUserId('user_archival'))
+    );
+    manager.execute(
+      commandFactories.importMesh({
+        name: 'Local mesh',
+        artifactId: 'artifact_local_mesh',
+        sourceName: 'scan.stl',
+        triangleCount: 1,
+        meshPayloadRef: referenceFor('mesh')
+      })
+    );
+    manager.execute(
+      commandFactories.importMesh({
+        name: 'Embedded mesh',
+        artifactId: 'artifact_local_embedded',
+        sourceName: 'old.stl',
+        triangleCount: 1,
+        vertices: [0, 0, 0, 1, 0, 0, 0, 1, 0],
+        indices: [0, 1, 2]
+      })
+    );
+    manager.execute(
+      commandFactories.importStep({
+        name: 'Local import',
+        artifactId: 'artifact_local_abc',
+        sourceName: 'local.step',
+        stepSourceRef: referenceFor('local')
+      })
+    );
+    return manager;
+  }
+
+  it('lists a referenced mesh as local-only, never an embedded one', () => {
+    expect(listLocalOnlyImportSources(managerWithMeshes().document)).toEqual([
+      expect.objectContaining({
+        sourceName: 'scan.stl',
+        checksumSha256: referenceFor('mesh').checksumSha256,
+        kind: 'mesh-payload'
+      }),
+      expect.objectContaining({ sourceName: 'local.step', kind: 'step-source' })
+    ]);
+  });
+
+  it('protects a referenced payload from refused-import cleanup, history included', () => {
+    const manager = managerWithMeshes();
+    expect(importSourceChecksums(manager.document)).toContain(
+      referenceFor('mesh').checksumSha256
+    );
+    manager.undo();
+    manager.undo();
+    manager.undo();
+    // Only undo history names the mesh now; redo would need its bytes.
+    expect(manager.document.featureOrder).toEqual([]);
+    expect(importSourceChecksums(manager.document)).toContain(
+      referenceFor('mesh').checksumSha256
+    );
+  });
+
+  it('uploads a payload as a mesh-payload artifact and a STEP source as a step-import', async () => {
+    const manager = managerWithMeshes();
+    const uploads: { fileName: string; kind: string; type: string }[] = [];
+    const result = await archiveLocalOnlyImportSources({
+      document: manager.document,
+      loadSourceBytes: async () => new Uint8Array([1, 2, 3]),
+      archive: async (input) => {
+        uploads.push({
+          fileName: input.fileName,
+          kind: input.kind,
+          type: input.contentType
+        });
+        return `artifact_cloud_${uploads.length}`;
+      },
+      applyArtifactId: (featureId, artifactId) => {
+        manager.archiveSource(featureId, artifactId);
+        return true;
+      }
+    });
+    expect(result.archived).toEqual(['scan.stl', 'local.step']);
+    expect(uploads).toEqual([
+      {
+        fileName: 'scan.stl.ozmesh',
+        kind: 'mesh-payload',
+        type: IMPORTED_MESH_PAYLOAD_CONTENT_TYPE
+      },
+      { fileName: 'local.step', kind: 'step-import', type: 'model/step' }
+    ]);
+    expect(listLocalOnlyImportSources(manager.document)).toEqual([]);
+  });
+});

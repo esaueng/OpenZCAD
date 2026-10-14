@@ -8,6 +8,7 @@ import {
   assertDocumentTextBudget,
   documentStructureError,
   documentEnvelopeError,
+  hasValidImportedMeshSources,
   hasValidImportedStepSources,
   isDocumentHistory
 } from '@openzcad/shared';
@@ -1126,7 +1127,7 @@ export class D1R2PersistenceService implements PersistenceService {
        INNER JOIN projects p ON p.id = a.project_id
        LEFT JOIN user_settings owner_settings ON owner_settings.user_id = p.user_id
        WHERE l.token_hash = ? AND l.revoked_at IS NULL
-         AND a.id = ? AND a.kind = 'step-import'
+         AND a.id = ? AND a.kind IN ('step-import', 'mesh-payload')
          AND p.status != 'deleted'
          AND COALESCE(
            CASE WHEN json_valid(owner_settings.settings_json)
@@ -6140,6 +6141,12 @@ function checkClientDocument(value: unknown): CollaborationRejection | null {
     return {
       code: 'document-invalid',
       message: 'Collaboration document has invalid imported STEP source data.'
+    };
+  }
+  if (!hasValidImportedMeshSources(value as unknown as ProjectDocument)) {
+    return {
+      code: 'document-invalid',
+      message: 'Collaboration document has invalid imported mesh data.'
     };
   }
   return null;

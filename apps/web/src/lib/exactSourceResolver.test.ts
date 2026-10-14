@@ -2,8 +2,16 @@ import 'fake-indexeddb/auto';
 import { Blob as NodeBlob } from 'node:buffer';
 import { IDBFactory } from 'fake-indexeddb';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
-import { createProjectDocument, importStepBody } from '@openzcad/document-core';
-import { toUserId, type ProjectDocument } from '@openzcad/shared';
+import {
+  createProjectDocument,
+  importMeshBody,
+  importStepBody
+} from '@openzcad/document-core';
+import {
+  encodeImportedMeshPayload,
+  toUserId,
+  type ProjectDocument
+} from '@openzcad/shared';
 import { loadSourceBlob } from './localProjectStore';
 import { preloadSharedImportSources } from './exactSourceResolver';
 
@@ -79,5 +87,43 @@ describe('anonymous shared STEP source preload', () => {
       preloadSharedImportSources(local.document, 'share_token', fetcher)
     ).rejects.toThrow('needs to save the source file');
     expect(fetcher).not.toHaveBeenCalled();
+  });
+});
+
+describe('anonymous shared mesh payload preload', () => {
+  it('fetches a referenced mesh payload through the share link before opening', async () => {
+    const payload = encodeImportedMeshPayload({
+      vertices: [0, 0, 0, 1, 0, 0, 0, 1, 0],
+      indices: [0, 1, 2]
+    });
+    const checksumSha256 = Array.from(
+      new Uint8Array(await crypto.subtle.digest('SHA-256', payload)),
+      (byte) => byte.toString(16).padStart(2, '0')
+    ).join('');
+    const document = importMeshBody(
+      createProjectDocument('Shared mesh', toUserId('source_owner')),
+      {
+        name: 'Scan',
+        sourceName: 'scan.stl',
+        artifactId: 'artifact_payload',
+        triangleCount: 1,
+        meshPayloadRef: {
+          marker: 'openzcad-source-ref',
+          version: 1,
+          hashAlgorithm: 'sha256',
+          checksumSha256,
+          logicalBytes: payload.byteLength
+        }
+      }
+    ).document;
+    const fetcher = vi
+      .fn<typeof fetch>()
+      .mockResolvedValue(new Response(payload));
+    await preloadSharedImportSources(document, 'share_token', fetcher);
+    expect(fetcher).toHaveBeenCalledWith(
+      '/api/share/share_token/sources/artifact_payload',
+      { credentials: 'omit' }
+    );
+    expect(await loadSourceBlob(checksumSha256)).toEqual(payload);
   });
 });

@@ -324,8 +324,9 @@ export function parseStl(buffer: ArrayBuffer, fileName: string): ParsedStl {
 
 export interface StlExportMesh {
   name: string;
-  vertices: number[];
-  indices: number[];
+  /** Plain or typed: an imported mesh's decoded payload is a Float64Array. */
+  vertices: ArrayLike<number>;
+  indices: ArrayLike<number>;
 }
 
 export class StlWriteError extends Error {
@@ -336,7 +337,7 @@ export class StlWriteError extends Error {
 }
 
 function facetNormal(
-  vertices: number[],
+  vertices: ArrayLike<number>,
   a: number,
   b: number,
   c: number

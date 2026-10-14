@@ -522,8 +522,18 @@ export interface ImportedMeshInput {
   artifactId: string;
   sourceName: string;
   triangleCount: number;
-  vertices: number[];
-  indices: number[];
+  /**
+   * Embedded form, still written when blob storage is unavailable rather than
+   * only by old imports. Exactly one of `vertices`+`indices` and
+   * `meshPayloadRef`.
+   */
+  vertices?: number[];
+  indices?: number[];
+  /**
+   * Content-addressed form; the encoded triangles live in the source blob
+   * store. This is also what the `import.mesh` command log entry carries.
+   */
+  meshPayloadRef?: ImportedSourceReference;
   ids?: BodyFeatureIds;
 }
 
@@ -2417,6 +2427,15 @@ export function importMeshBody(
   document: ProjectDocument,
   input: ImportedMeshInput
 ): { document: ProjectDocument; bodyId: BodyId } {
+  const embedded = input.vertices !== undefined && input.indices !== undefined;
+  if (
+    embedded === (input.meshPayloadRef !== undefined) ||
+    (!embedded && (input.vertices ?? input.indices) !== undefined)
+  ) {
+    throw new Error(
+      'A mesh import needs exactly one of vertices+indices and meshPayloadRef.'
+    );
+  }
   const next = cloneDocument(document);
   const { featureId, featureNodeId, bodyId, bodyNodeId } =
     input.ids ?? createBodyFeatureIds();
@@ -2435,8 +2454,9 @@ export function importMeshBody(
       artifactId: toArtifactId(input.artifactId),
       sourceName: input.sourceName,
       triangleCount: input.triangleCount,
-      vertices: input.vertices,
-      indices: input.indices
+      ...(input.meshPayloadRef
+        ? { meshPayloadRef: { ...input.meshPayloadRef } }
+        : { vertices: input.vertices!, indices: input.indices! })
     }
   };
 
@@ -3051,7 +3071,8 @@ const FEATURE_DATA_KEYS: Record<FeatureKind, readonly string[]> = {
     'sourceName',
     'triangleCount',
     'vertices',
-    'indices'
+    'indices',
+    'meshPayloadRef'
   ]
 };
 

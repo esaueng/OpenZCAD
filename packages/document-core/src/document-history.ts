@@ -1,6 +1,7 @@
 import {
   documentNodesWithHistory,
   HISTORY_FIELDS,
+  importedSourceReferenceOf,
   MAX_UNDO_BYTES,
   MAX_UNDO_STEPS,
   type DocumentChange,
@@ -246,18 +247,17 @@ export function archiveHistorySources(
   const byChecksum = new Map<string, string>();
   const local = new Map<string, string>();
   for (const node of documentNodesWithHistory(document)) {
-    if (
-      node.kind !== 'feature' ||
-      node.data.featureKind !== 'imported-step' ||
-      !node.data.stepSourceRef
-    )
-      continue;
-    const { artifactId, stepSourceRef } = node.data;
+    if (node.kind !== 'feature') continue;
+    // STEP sources and mesh payloads alike: an archived checksum is archived
+    // wherever undo history still names it.
+    const sourceRef = importedSourceReferenceOf(node.data);
+    if (!sourceRef) continue;
+    const { artifactId } = node.data as { artifactId: string };
     if (replacement && node.featureId === replacement.featureId)
-      byChecksum.set(stepSourceRef.checksumSha256, replacement.artifactId);
+      byChecksum.set(sourceRef.checksumSha256, replacement.artifactId);
     if (artifactId.startsWith('artifact_local_'))
-      local.set(artifactId, stepSourceRef.checksumSha256);
-    else byChecksum.set(stepSourceRef.checksumSha256, artifactId);
+      local.set(artifactId, sourceRef.checksumSha256);
+    else byChecksum.set(sourceRef.checksumSha256, artifactId);
   }
   const ids = new Map(
     [...local].flatMap(([id, checksum]) => {
