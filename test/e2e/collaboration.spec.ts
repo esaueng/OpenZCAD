@@ -376,6 +376,107 @@ test('opens and switches public links in an already-open Settings tab', async ({
   await expect(page.locator('.breadcrumb')).toContainText(second.name);
 });
 
+for (const active of [false, true]) {
+  test(`cleans up an invalid invitation during ${active ? 'an active' : 'a pending'} share`, async ({
+    page
+  }) => {
+    await stubAnonymousApi(page);
+    const document = createProjectDocument(
+      'Invalid invitation source',
+      toUserId('owner')
+    );
+    let release!: () => void;
+    let requested = false;
+    const gate = new Promise<void>((resolve) => {
+      release = resolve;
+    });
+    await page.route('**/api/share/*', async (route) => {
+      requested = true;
+      await gate;
+      await route.fulfill({
+        json: { document, project: { name: document.name }, mode: 'tweak' }
+      });
+    });
+    await page.goto('/');
+    await expect(page.getByRole('tab', { name: 'Parts 0' })).toBeVisible();
+    await page.evaluate(() => {
+      window.location.hash = `share=${'c'.repeat(43)}`;
+    });
+    await expect.poll(() => requested).toBe(true);
+    if (active) {
+      release();
+      await expect(
+        page.getByRole('button', { name: 'Make a copy', exact: true })
+      ).toBeVisible();
+    }
+    await page.evaluate(
+      ({ key, token }) => {
+        sessionStorage.setItem(key, token);
+        window.location.hash = 'invite=truncated';
+      },
+      { key: PROJECT_INVITATION_SESSION_KEY, token: invitationToken }
+    );
+    if (!active) {
+      const response = page.waitForResponse(/\/api\/share\//);
+      release();
+      await response;
+      await page.waitForTimeout(250);
+    }
+    await expect(page.getByRole('tab', { name: 'Parts 0' })).toBeVisible();
+    await expect(
+      page.getByRole('button', { name: 'Create project', exact: true })
+    ).toBeEnabled();
+    await expect(
+      page.getByRole('button', { name: 'Make a copy', exact: true })
+    ).toHaveCount(0);
+    expect(new URL(page.url()).hash).toBe('');
+    expect(
+      await page.evaluate(
+        (key) => sessionStorage.getItem(key),
+        PROJECT_INVITATION_SESSION_KEY
+      )
+    ).toBeNull();
+  });
+}
+
+for (const status of [404, 503]) {
+  test(`restores the active model URL when a replacement share returns ${status}`, async ({
+    page
+  }) => {
+    await stubAnonymousApi(page);
+    const document = createProjectDocument(
+      'Retained shared model',
+      toUserId('owner')
+    );
+    await page.route('**/api/share/*', (route) =>
+      route.request().url().endsWith('a'.repeat(43))
+        ? route.fulfill({
+            json: { document, project: { name: document.name }, mode: 'tweak' }
+          })
+        : route.fulfill({ status, json: { error: 'Replacement unavailable.' } })
+    );
+    await page.goto(`/#share=${'a'.repeat(43)}`);
+    await expect(
+      page.getByRole('button', { name: 'Make a copy', exact: true })
+    ).toBeVisible();
+    await page.evaluate(() => {
+      window.location.hash = `share=${'b'.repeat(43)}`;
+    });
+    await expect(page.getByRole('contentinfo')).toContainText(
+      status === 404
+        ? 'This share link is no longer available'
+        : 'Replacement unavailable.'
+    );
+    expect(new URL(page.url()).hash).toBe(`#share=${'a'.repeat(43)}`);
+    await expect(page.locator('.breadcrumb')).toContainText(document.name);
+    await expect(
+      page.getByRole('button', { name: 'Make a copy', exact: true })
+    ).toBeEnabled();
+    await page.reload();
+    await expect(page.locator('.breadcrumb')).toContainText(document.name);
+  });
+}
+
 test('keeps revoked-link guidance visible after delayed startup completes', async ({
   page
 }) => {

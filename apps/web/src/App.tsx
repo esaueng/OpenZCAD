@@ -378,6 +378,7 @@ import type { DemoDefinition } from './lib/demoDefinitions';
 import { createProjectSharingClient } from './lib/projectSharing';
 import {
   captureProjectInvitationLink,
+  projectInvitationTokenFromHash,
   clearPendingProjectInvitation
 } from './lib/projectInvitationLink';
 import {
@@ -1767,6 +1768,12 @@ export function App() {
       clearPendingProjectInvitation();
       return null;
     }
+    const hash = globalThis.location?.hash ?? '';
+    if (hash.startsWith('#invite=') && !projectInvitationTokenFromHash(hash)) {
+      captureProjectInvitationLink();
+      clearPendingProjectInvitation();
+      return null;
+    }
     return captureProjectInvitationLink();
   });
   /**
@@ -1800,36 +1807,37 @@ export function App() {
     const openFragment = () => {
       const navigation = ++fragmentNavigationRef.current;
       if (window.location.hash.startsWith('#invite=')) {
-        const token = captureProjectInvitationLink();
-        if (!token) return;
-        pendingInvitationAttemptRef.current = null;
-        setPendingInvitationError(null);
-        setPendingInvitationToken(token);
-        setPendingShareToken(null);
-        updateSettingsViewState({ open: true, activeSection: 'account' });
-        setSettingsOpen(true);
-      } else {
-        const wasOpeningInvitation =
-          pendingInvitationAttemptRef.current !== null;
-        clearPendingProjectInvitation();
-        pendingInvitationAttemptRef.current = null;
-        setPendingInvitationToken(null);
-        setPendingInvitationError(null);
-        const token = captureProjectShareToken();
-        const wasOpeningShare = shareOpenAttemptRef.current !== null;
-        shareOpenAttemptRef.current = null;
-        setPendingShareToken(token);
-        if (!token) {
-          if (wasOpeningShare || wasOpeningInvitation) setBusy(false);
-          if (shareSessionRef.current) {
-            void leaveShareSessionRef.current(
-              () => fragmentNavigationRef.current === navigation
-            );
-          }
+        const token = projectInvitationTokenFromHash(window.location.hash);
+        captureProjectInvitationLink();
+        if (token) {
+          pendingInvitationAttemptRef.current = null;
+          setPendingInvitationError(null);
+          setPendingInvitationToken(token);
+          setPendingShareToken(null);
+          updateSettingsViewState({ open: true, activeSection: 'account' });
+          setSettingsOpen(true);
           return;
         }
-        setShareNavigation((current) => current + 1);
       }
+      const wasOpeningInvitation = pendingInvitationAttemptRef.current !== null;
+      clearPendingProjectInvitation();
+      pendingInvitationAttemptRef.current = null;
+      setPendingInvitationToken(null);
+      setPendingInvitationError(null);
+      const token = captureProjectShareToken();
+      const wasOpeningShare = shareOpenAttemptRef.current !== null;
+      shareOpenAttemptRef.current = null;
+      setPendingShareToken(token);
+      if (!token) {
+        if (wasOpeningShare || wasOpeningInvitation) setBusy(false);
+        if (shareSessionRef.current) {
+          void leaveShareSessionRef.current(
+            () => fragmentNavigationRef.current === navigation
+          );
+        }
+        return;
+      }
+      setShareNavigation((current) => current + 1);
     };
     window.addEventListener('hashchange', openFragment);
     return () => window.removeEventListener('hashchange', openFragment);
@@ -9159,6 +9167,18 @@ export function App() {
     const navigation = fragmentNavigationRef.current;
     const isCurrent = () =>
       !cancelled && fragmentNavigationRef.current === navigation;
+    const restoreActiveShare = () => {
+      const active = shareSessionRef.current;
+      if (!active || active.token === pendingShareToken) return;
+      window.history.replaceState(
+        window.history.state,
+        '',
+        `${window.location.pathname}${window.location.search}#share=${active.token}`
+      );
+      shareOpenAttemptRef.current = active.token;
+      setBusy(false);
+      setPendingShareToken(active.token);
+    };
     setBusy(true);
     updateSettingsViewState({ open: false });
     setSettingsOpen(false);
@@ -9170,6 +9190,7 @@ export function App() {
         const shared = await loadSharedProject(pendingShareToken, isCurrent);
         if (!isCurrent()) return;
         if (!shared) {
+          restoreActiveShare();
           setStatus(
             'This share link is no longer available. It may have been revoked.',
             { sticky: true }
@@ -9199,6 +9220,7 @@ export function App() {
         );
       } catch (error) {
         if (isCurrent()) {
+          restoreActiveShare();
           setStatus(errorMessage(error, 'Could not open the share link.'), {
             sticky: true
           });
