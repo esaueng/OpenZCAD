@@ -129,10 +129,12 @@ export async function preloadDocumentFonts(
 }
 
 /**
- * Resolves true once a face the document names, missing when called, has
- * loaded — with no budget. The geometry worker uses it to rebuild text whose
- * face outlived the preload budget; false means nothing new arrived (no face
- * was missing, or every missing one failed to load).
+ * Resolves true as soon as any face the document names, missing when called,
+ * has loaded — with no budget, and without waiting on the others: one stalled
+ * face must not hold back text that another has made buildable. The geometry
+ * worker uses it to rebuild text whose face outlived the preload budget, and
+ * the rebuild watches whatever is still missing. False means nothing new can
+ * arrive (no face was missing, or every missing one failed to load).
  */
 export async function documentFontsArrived(
   document: ProjectDocument
@@ -145,12 +147,12 @@ export async function documentFontsArrived(
   const missing = wanted.filter(
     ({ family, style }) => !library.peek(family, style)
   );
-  await Promise.all(
-    missing.map(({ family, style }) =>
-      library.load(family, style).catch(() => undefined)
-    )
+  return Promise.any(
+    missing.map(({ family, style }) => library.load(family, style))
+  ).then(
+    () => true,
+    () => false
   );
-  return missing.some(({ family, style }) => library.peek(family, style));
 }
 
 /** Loads one face on demand — for previews in the font picker. */

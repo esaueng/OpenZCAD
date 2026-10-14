@@ -752,6 +752,28 @@ describe('geometry worker rebuild coordination', () => {
       expect(live.syncDocument).toHaveBeenCalledTimes(2);
     });
 
+    it('watches the faces still missing on the re-run a first face triggers', async () => {
+      const second = deferred<boolean>();
+      const arrivals = [Promise.resolve(true), second.promise];
+      let call = 0;
+      const live = await transientLive(
+        () => arrivals[call++] ?? new Promise<boolean>(() => undefined),
+        false
+      );
+      await live.finish();
+      // One face landed: the document re-runs, still misses the other face,
+      // and that rebuild watches it afresh.
+      await vi.waitFor(() =>
+        expect(live.syncDocument).toHaveBeenCalledTimes(2)
+      );
+      await settle();
+      expect(live.syncDocument).toHaveBeenCalledTimes(2);
+      second.resolve(true);
+      await vi.waitFor(() =>
+        expect(live.syncDocument).toHaveBeenCalledTimes(3)
+      );
+    });
+
     it('re-runs when the connection returns for a source it could not fetch', async () => {
       const live = await transientLive(async () => false);
       await live.finish();
