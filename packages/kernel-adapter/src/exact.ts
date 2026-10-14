@@ -216,6 +216,7 @@ import {
   ownedMeshFaceOffsets
 } from './owned-mesh-output';
 import { PrimitiveBuildCache } from './exact-primitive-cache';
+import { isBooleanEvolutionProbeEligible } from './exact-boolean-evolution';
 export type { RebuildCacheEvent };
 export {
   booleanEvolutionProbeNeeded,
@@ -1245,6 +1246,17 @@ export class RemusKernelAdapter implements ExactKernelAdapter {
           )
         )
       : [];
+    // A request that may skip a boolean's probe can still restore a
+    // checkpoint where the probe ran: it adds lineage to the same geometry.
+    // Previews and exports pass no demand, so without this every switch back
+    // to the idle sync replayed everything after the first boolean.
+    const probedDigests = normalizedDemand
+      ? features.map((feature, index) =>
+          cachingEnabled && isBooleanEvolutionProbeEligible(feature)
+            ? historyFeatureDigest(document, feature, index, scope)
+            : undefined
+        )
+      : [];
 
     let kernel = this.historyKernel;
     let startIndex = 0;
@@ -1305,7 +1317,9 @@ export class RemusKernelAdapter implements ExactKernelAdapter {
           entry.featureIndex !== checkpointIndices[index] ||
           entry.digests.length !== entry.featureIndex - from + 1 ||
           entry.digests.some(
-            (digest, offset) => digest !== digests[from + offset]
+            (digest, offset) =>
+              digest !== digests[from + offset] &&
+              digest !== probedDigests[from + offset]
           )
         ) {
           break;
