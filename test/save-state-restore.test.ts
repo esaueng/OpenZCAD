@@ -4,6 +4,7 @@ import {
   appendRevision,
   createCheckpoint,
   createProjectDocument,
+  listFeaturesInOrder,
   restoreFromSaveState
 } from '@openzcad/document-core';
 import { toUserId, type ProjectDocument } from '@openzcad/shared';
@@ -23,11 +24,10 @@ function restore(
     appendRevision(manager.document, 'Before restore'),
     'Before restore'
   );
-  const restored = createCheckpoint(
-    restoreFromSaveState(guarded, snapshot, reason),
+  const restored = manager.applyDocumentEdit(
+    createCheckpoint(restoreFromSaveState(guarded, snapshot, reason), reason),
     reason
   );
-  manager.applyDocumentEdit(restored, reason);
   return { guarded, restored };
 }
 
@@ -114,6 +114,44 @@ describe('restoring a save state through the command manager', () => {
     // future replay would then have to drag along.
     expect(manager.document.commandLog).toEqual(saved.commandLog);
     expect(manager.document.commandLog.length).toBeLessThan(logLength);
+  });
+
+  it('persists the undo entry that puts the restore back', () => {
+    const manager = new CommandManager(
+      createProjectDocument('Bracket', user())
+    );
+    const add = (name: string) =>
+      manager.execute(
+        commandFactories.addPrimitive({
+          name,
+          primitiveKind: 'box',
+          dimensions: { width: 10, height: 10, depth: 10 }
+        })
+      );
+    add('A');
+    manager.document = createCheckpoint(manager.document, 'One box');
+    const snapshot = manager.document;
+    add('B');
+    add('C');
+
+    const { guarded, restored } = restore(
+      manager,
+      snapshot,
+      'Restored “One box”'
+    );
+    // The snapshot's own undo stack belongs to the moment it was saved.
+    expect(
+      restoreFromSaveState(guarded, snapshot, 'Restored').editHistory
+    ).toBeUndefined();
+    expect(restored.editHistory).toEqual(manager.document.editHistory);
+
+    // What autosave wrote, reopened: Undo still puts the restore back.
+    const reopened = new CommandManager(structuredClone(restored));
+    expect(reopened.undoLabel).toBe('Restored “One box”');
+    reopened.undo();
+    expect(
+      listFeaturesInOrder(reopened.document).map((feature) => feature.name)
+    ).toEqual(['A', 'B', 'C']);
   });
 
   it('undoes an edit made after a restore without undoing the restore', () => {

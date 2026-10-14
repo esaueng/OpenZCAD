@@ -3,7 +3,6 @@ import {
   compareProjectSummaries,
   DEFAULT_PROJECT_ORGANIZATION,
   duplicateProjectName,
-  documentNodesWithHistory,
   importedSourceReferenceOf,
   isPurgeDue,
   MAX_ACTIVE_ARTIFACT_UPLOAD_SESSIONS,
@@ -25,6 +24,7 @@ import {
   toArtifactId,
   toProjectId,
   toUploadSessionId,
+  toUserId,
   type AccountStorageUsage,
   type ListRevisionsResponse,
   type ProjectBranchPoint,
@@ -119,13 +119,48 @@ export interface CreateProjectShareLinkInput {
 
 /**
  * A shared project resolved purely by token hash. The token IS the
- * authorization, so no user identity participates in this read.
+ * authorization, so no user identity participates in this read. `document`
+ * is always {@link sharedProjectSnapshotDocument}'s projection.
  */
 export interface SharedProjectSnapshot {
   projectId: string;
   name: string;
   mode: ProjectShareLinkMode;
   document: ProjectDocument;
+}
+
+/** The owner a share-link visitor sees in place of the real account id. */
+const SHARED_PROJECT_OWNER_USER_ID = toUserId('user_shared');
+
+/**
+ * What an anonymous share link serves: the owner's current model and nothing
+ * about how it got there.
+ *
+ * The stored document also carries its own past. `editHistory` holds the
+ * before/after values of recent edits, `commandLog` the payload of every
+ * command ever run, `revisions`/`checkpoints` the owner's save-state names and
+ * `branchedFrom` another project's name — so a feature deleted before sharing
+ * reached the visitor with its name and dimensions, and one Undo in the
+ * visitor's tab put it back. Rebuilding and tweaking need none of it: a
+ * CommandManager over this document starts the visitor's own undo history
+ * from the model as shared. The owner id goes too; it is derived from the
+ * owner's email.
+ */
+export function sharedProjectSnapshotDocument(
+  document: ProjectDocument
+): ProjectDocument {
+  const {
+    editHistory: _editHistory,
+    branchedFrom: _branchedFrom,
+    ...current
+  } = withoutDerivedProjection(document);
+  return {
+    ...current,
+    ownerUserId: SHARED_PROJECT_OWNER_USER_ID,
+    revisions: [],
+    checkpoints: [],
+    commandLog: []
+  };
 }
 
 /** One decoded import-source asset served to a share-link visitor. */
@@ -144,12 +179,16 @@ export interface SharedProjectImportDownload {
   body: ArtifactBody;
 }
 
-/** Grant only source artifacts actually named by the shared model's history. */
+/**
+ * Grant only source artifacts the shared model currently uses. Undo history
+ * is deliberately not consulted: an import the owner deleted before sharing
+ * is not part of what they shared.
+ */
 export function sharedDocumentReferencesImport(
   document: ProjectDocument,
   artifactId: string
 ): boolean {
-  for (const node of documentNodesWithHistory(document)) {
+  for (const node of Object.values(document.nodes)) {
     if (
       node.kind === 'feature' &&
       importedSourceReferenceOf(node.data) !== undefined &&
@@ -941,7 +980,7 @@ export class InMemoryPersistenceService implements PersistenceService {
       projectId: link.projectId,
       name: document.name,
       mode: link.mode,
-      document: withoutDerivedProjection(normalizeDocument(document))
+      document: sharedProjectSnapshotDocument(normalizeDocument(document))
     };
   }
 
