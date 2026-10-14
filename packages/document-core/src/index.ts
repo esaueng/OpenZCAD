@@ -12,6 +12,7 @@ export {
 } from './imported-source-placement';
 export {
   archiveHistorySources,
+  type ImportedSourceArchiveIdentity,
   applyDocumentChanges,
   recordDocumentEdit,
   normalizeDocumentHistory
