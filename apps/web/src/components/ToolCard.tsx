@@ -47,10 +47,13 @@ interface ToolCardProps {
    * value selected, as a create card's first field takes it — so E then "10"
    * types the extrude distance. A pick leaves the keyboard with the
    * workspace, whose status line offers E and where a digit opens the
-   * handle's exact entry. A request that lands mid-drag lapses rather than
-   * pulling the keyboard out from under the gesture.
+   * handle's exact entry. A request waits for its field to be enabled, but
+   * lapses on a drag or a later pointer/focus change rather than pulling the
+   * keyboard out from under that gesture or another control.
    */
   focusRequest?: unknown;
+  /** Whether the requested field's form is currently enabled. */
+  focusReady?: boolean;
   onClose(): void;
 }
 
@@ -71,19 +74,45 @@ export function ToolCard({
   keepLastValid,
   selectAllEdges,
   focusRequest,
+  focusReady = true,
   onClose
 }: ToolCardProps) {
   const bodyRef = useRef<HTMLDivElement | null>(null);
-  const phase = useRef(model.phase);
-  phase.current = model.phase;
+  const previousFocusRequest = useRef<unknown>(undefined);
+  const pendingFocus = useRef<{ owner: Element | null } | null>(null);
   useEffect(() => {
-    if (focusRequest && phase.current !== 'dragging') {
-      // Focusing an expression field selects its value.
-      bodyRef.current
-        ?.querySelector<HTMLInputElement>('.expr-field input')
-        ?.focus();
+    const body = bodyRef.current;
+    if (!body) return;
+    const doc = body.ownerDocument;
+    if (focusRequest !== previousFocusRequest.current) {
+      previousFocusRequest.current = focusRequest;
+      pendingFocus.current = focusRequest ? { owner: doc.activeElement } : null;
     }
-  }, [focusRequest]);
+    const pending = pendingFocus.current;
+    if (!pending) return;
+    if (model.phase === 'dragging' || doc.activeElement !== pending.owner) {
+      pendingFocus.current = null;
+      return;
+    }
+    const input = body.querySelector<HTMLInputElement>('.expr-field input');
+    if (focusReady && input && !input.matches(':disabled')) {
+      pendingFocus.current = null;
+      // Focusing an expression field selects its value.
+      input.focus();
+      return;
+    }
+    // A canvas click can leave focus on <body>; focus ownership alone would
+    // miss it and steal the keyboard when the operation later completes.
+    const cancel = () => {
+      pendingFocus.current = null;
+    };
+    doc.addEventListener('pointerdown', cancel, true);
+    doc.addEventListener('focusin', cancel, true);
+    return () => {
+      doc.removeEventListener('pointerdown', cancel, true);
+      doc.removeEventListener('focusin', cancel, true);
+    };
+  }, [focusRequest, focusReady, model.phase]);
   const status = (
     <>
       {model.phase === 'dragging' ? (

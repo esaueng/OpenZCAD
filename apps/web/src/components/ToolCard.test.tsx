@@ -351,11 +351,16 @@ describe('ToolCard keyboard for the region Extrude', () => {
     hint: 'Drag the arrow to extrude the profile.',
     phase: 'armed' as const
   };
-  function card(focusRequest?: unknown, phase: 'armed' | 'dragging' = 'armed') {
+  function card(
+    focusRequest?: unknown,
+    phase: 'armed' | 'dragging' = 'armed',
+    focusReady = true
+  ) {
     return (
       <ToolCard
         model={{ ...model, phase }}
         focusRequest={focusRequest}
+        focusReady={focusReady}
         onClose={vi.fn()}
       >
         <ExtrudeForm
@@ -364,6 +369,7 @@ describe('ToolCard keyboard for the region Extrude', () => {
           sketches={[{ sketchId, name: 'Sketch 01' }]}
           bodies={[]}
           scope={{}}
+          disabled={!focusReady}
           submitLabel="Create"
           onSubmit={vi.fn()}
           onCancel={vi.fn()}
@@ -396,6 +402,54 @@ describe('ToolCard keyboard for the region Extrude', () => {
 
   it('never takes the keyboard in the middle of a drag', () => {
     render(card([], 'dragging'));
+    expect(screen.getByRole('textbox', { name: 'Distance' })).not.toHaveFocus();
+  });
+
+  it('waits for the field to be enabled, then consumes the focus request once', async () => {
+    const user = userEvent.setup();
+    const request: unknown[] = [];
+    const { rerender } = render(card(request, 'armed', false));
+    const distance = screen.getByRole('textbox', { name: 'Distance' });
+    expect(distance).not.toHaveFocus();
+    rerender(card(request));
+    expect(distance).toHaveFocus();
+    await user.keyboard('10');
+    expect(distance).toHaveValue('10');
+    distance.blur();
+    rerender(card(request, 'armed', false));
+    rerender(card(request));
+    expect(distance).not.toHaveFocus();
+  });
+
+  it('drops a waiting request when a drag starts before the field is enabled', () => {
+    const request: unknown[] = [];
+    const { rerender } = render(card(request, 'armed', false));
+    rerender(card(request, 'dragging', false));
+    rerender(card(request));
+    expect(screen.getByRole('textbox', { name: 'Distance' })).not.toHaveFocus();
+  });
+
+  it('keeps focus with another control chosen while the field was disabled', () => {
+    const request: unknown[] = [];
+    const workspace = (ready: boolean) => (
+      <>
+        <input aria-label="Other control" />
+        {card(request, 'armed', ready)}
+      </>
+    );
+    const { rerender } = render(workspace(false));
+    const other = screen.getByRole('textbox', { name: 'Other control' });
+    other.focus();
+    rerender(workspace(true));
+    expect(other).toHaveFocus();
+    expect(screen.getByRole('textbox', { name: 'Distance' })).not.toHaveFocus();
+  });
+
+  it('leaves the keyboard with the canvas after a pointer gesture while waiting', () => {
+    const request: unknown[] = [];
+    const { rerender } = render(card(request, 'armed', false));
+    fireEvent.pointerDown(document.body);
+    rerender(card(request));
     expect(screen.getByRole('textbox', { name: 'Distance' })).not.toHaveFocus();
   });
 });

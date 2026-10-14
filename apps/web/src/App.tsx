@@ -20148,6 +20148,11 @@ export function App() {
                 selectedProfiles === extrudeCommandProfiles.current &&
                 selectedProfiles
               }
+              focusReady={
+                !geometryBusy &&
+                (interaction.mode !== 'region' ||
+                  interaction.phase !== 'validating')
+              }
               selectAllEdges={
                 interaction.mode === 'edges' &&
                 edgeModifierBody?.topology &&
