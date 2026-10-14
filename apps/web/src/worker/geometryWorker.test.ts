@@ -341,6 +341,40 @@ describe('geometry worker rebuild coordination', () => {
     );
     expect(readCurrentMassProperties).toHaveBeenCalledTimes(2);
   });
+  it('announces a mass query as a rebuild before it restores exact history', async () => {
+    const restore = deferred<number>();
+    const prepareMassPropertiesForDocument = vi.fn(() => restore.promise);
+    const { scope } = await installWorker(async () => derived('exact'), {
+      currentMassPropertiesEpoch: () => null,
+      prepareMassPropertiesForDocument
+    });
+    const document = addPrimitiveFeature(
+      createProjectDocument('Long mass', toUserId('user')),
+      {
+        name: 'Box',
+        primitiveKind: 'box',
+        dimensions: { width: 1, height: 1, depth: 1 }
+      }
+    );
+    post(scope, {
+      type: 'mass-properties',
+      document,
+      bodyId: document.bodyOrder[0]!,
+      requestId: 'long-mass'
+    });
+    await vi.waitFor(() =>
+      expect(prepareMassPropertiesForDocument).toHaveBeenCalled()
+    );
+    // The host watchdog budgets a silent replay by the last announced
+    // phase; a restore left at `starting` would get fifteen seconds.
+    const phases = scope.postMessage.mock.calls.flatMap(([message]) =>
+      message.type === 'state' && message.requestId === 'long-mass'
+        ? [message.phase]
+        : []
+    );
+    expect(phases.at(-1)).toBe('rebuilding');
+    restore.resolve(2);
+  });
   it('transfers each owned mesh buffer once without detaching adapter or cached meshes', async () => {
     const bodyId = toBodyId('body_transfer');
     const aliasId = toBodyId('body_alias');

@@ -567,12 +567,17 @@ async function execute(job: GeometryWorkerJob): Promise<void> {
         };
       } else {
         const key = canonicalProjectContentKey(document);
+        if (exactKernelStatus !== 'ready')
+          post(stateFor('loading-remus', request, { stale: true }));
         const exact = await loadExactKernel();
         if (!exact) {
           throw exactKernelError instanceof Error
             ? exactKernelError
             : new Error('The exact Remus kernel failed to load.');
         }
+        // Preparing can replay the whole history; announce it so the host's
+        // watchdog budgets a rebuild here, not a fifteen-second start.
+        post(stateFor('rebuilding', request, { stale: true }));
         const prepare = async () => {
           await preloadDocumentFonts(document);
           const nextEpoch =
