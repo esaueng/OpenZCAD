@@ -46,6 +46,7 @@ interface ProjectObjectStorageReadinessRow {
   pointer_indexes: number;
   quota_triggers: number;
   revision_owner_trigger: number;
+  cleanup_claims_ready: number;
 }
 
 interface ProjectMeasurementReadinessRow {
@@ -60,6 +61,7 @@ const READY_ARTIFACT_UPLOAD_ACCOUNTING_SCHEMA = {
   parts_table: 1,
   session_columns: 7,
   indexes: 2,
+  cleanup_claims_ready: 1,
   triggers: 15
 };
 
@@ -78,6 +80,7 @@ const READY_PROJECT_OBJECT_STORAGE_SCHEMA: ProjectObjectStorageReadinessRow = {
   storage_assets_index: 1,
   pointer_indexes: 2,
   quota_triggers: 11,
+  cleanup_claims_ready: 1,
   revision_owner_trigger: 1
 };
 
@@ -1301,7 +1304,20 @@ describe('worker api routes', () => {
   it('requires an email-code identity for cloud routes', async () => {
     const response = await worker.fetch(
       new Request('https://example.com/api/projects'),
-      { ...env, AUTH_MODE: 'email-code', ARTIFACTS: undefined, DB: {prepare: () => ({first: async () => ({trigger_count:7, revision_owner_trigger:1})})} } as never
+      {
+        ...env,
+        AUTH_MODE: 'email-code',
+        ARTIFACTS: undefined,
+        DB: {
+          prepare: () => ({
+            first: async () => ({
+              trigger_count: 7,
+              cleanup_claims_ready: 1,
+              revision_owner_trigger: 1
+            })
+          })
+        }
+      } as never
     );
     expect(response.status).toBe(401);
   });
@@ -2862,6 +2878,7 @@ describe('worker api routes', () => {
         storage_assets_index: 0,
         pointer_indexes: 0,
         quota_triggers: 0,
+        cleanup_claims_ready: 1,
         revision_owner_trigger: 0
       }
     );
@@ -2883,8 +2900,8 @@ describe('worker api routes', () => {
   });
 
   it.each([
-    { trigger_count: 6, revision_owner_trigger: 1 },
-    { trigger_count: 7, revision_owner_trigger: 0 }
+    { trigger_count: 6, cleanup_claims_ready: 1, revision_owner_trigger: 1 },
+    { trigger_count: 7, cleanup_claims_ready: 1, revision_owner_trigger: 0 }
   ])(
     'fails D1 project routes closed when a required guard is missing',
     async (schema) => {

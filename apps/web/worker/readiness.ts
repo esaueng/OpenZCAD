@@ -12,6 +12,7 @@ interface DocumentStorageAccountingSchema {
 }
 
 interface ProjectObjectStorageSchema {
+  cleanup_claims_ready: number;
   project_columns: number;
   revision_pointer: number;
   document_objects_table: number;
@@ -42,12 +43,32 @@ interface ProjectMeasurementSchema {
 }
 
 interface ArtifactUploadAccountingSchema {
+  cleanup_claims_ready: number;
   usage_table: number;
   parts_table: number;
   session_columns: number;
   indexes: number;
   triggers: number;
 }
+
+const CLEANUP_CLAIMS_READINESS_SQL = `(
+  (SELECT COUNT(*) FROM pragma_table_info('artifact_mesh_discards')
+   WHERE name IN ('artifact_id', 'project_id', 'object_key', 'claimed_at')) = 4
+  AND (SELECT COUNT(*) FROM pragma_table_info('project_copy_cleanup_claims')
+       WHERE name IN ('project_id', 'claimed_at')) = 2
+  AND (SELECT COUNT(*) FROM pragma_table_info('project_copy_source_archives')
+       WHERE name IN ('project_id', 'kind', 'checksum_sha256', 'logical_bytes', 'artifact_id')) = 5
+  AND EXISTS (SELECT 1 FROM pragma_foreign_key_list('artifact_mesh_discards')
+              WHERE "table" = 'projects' AND "from" = 'project_id' AND on_delete = 'CASCADE')
+  AND EXISTS (SELECT 1 FROM pragma_foreign_key_list('project_copy_cleanup_claims')
+              WHERE "table" = 'projects' AND "from" = 'project_id' AND on_delete = 'CASCADE')
+  AND EXISTS (SELECT 1 FROM pragma_foreign_key_list('project_copy_source_archives')
+              WHERE "table" = 'projects' AND "from" = 'project_id' AND on_delete = 'CASCADE')
+  AND EXISTS (SELECT 1 FROM pragma_foreign_key_list('project_copy_source_archives')
+              WHERE "table" = 'artifacts' AND "from" = 'artifact_id' AND on_delete = 'CASCADE')
+  AND EXISTS (SELECT 1 FROM sqlite_schema WHERE type = 'index'
+              AND name = 'idx_project_copy_source_archive_artifact')
+) AS cleanup_claims_ready`;
 
 /** Whether durable upload accounting and the current upload protocol are installed. */
 export async function isArtifactUploadAccountingReady(
@@ -58,6 +79,7 @@ export async function isArtifactUploadAccountingReady(
     const schema = await db
       .prepare(
         `SELECT
+          ${CLEANUP_CLAIMS_READINESS_SQL},
           EXISTS (
             SELECT 1 FROM sqlite_schema
             WHERE type = 'table' AND name = 'artifact_account_usage'
@@ -104,7 +126,8 @@ export async function isArtifactUploadAccountingReady(
       )
       .first<ArtifactUploadAccountingSchema>();
     return (
-      schema?.usage_table === 1 &&
+      schema?.cleanup_claims_ready === 1 &&
+      schema.usage_table === 1 &&
       schema.parts_table === 1 &&
       schema.session_columns === 7 &&
       schema.indexes === 2 &&
@@ -361,6 +384,7 @@ export async function isProjectObjectStorageReady(
     const schema = await db
       .prepare(
         `SELECT
+          ${CLEANUP_CLAIMS_READINESS_SQL},
           (
             SELECT COUNT(*)
             FROM pragma_table_info('projects')
@@ -423,7 +447,8 @@ export async function isProjectObjectStorageReady(
       .first<ProjectObjectStorageSchema>();
 
     return (
-      schema?.project_columns === 3 &&
+      schema?.cleanup_claims_ready === 1 &&
+      schema.project_columns === 3 &&
       schema.revision_pointer === 1 &&
       schema.document_objects_table === 1 &&
       schema.storage_assets_table === 1 &&
@@ -449,6 +474,7 @@ export async function isD1ProjectStorageReady(
     const row = await db
       .prepare(
         `SELECT
+          ${CLEANUP_CLAIMS_READINESS_SQL},
           (SELECT COUNT(*) FROM sqlite_schema
            WHERE type = 'trigger' AND name IN (
              'project_account_count_before_insert',
@@ -466,8 +492,16 @@ export async function isD1ProjectStorageReady(
               AND tbl_name = 'revisions'
           ) AS revision_owner_trigger`
       )
-      .first<{ trigger_count: number; revision_owner_trigger: number }>();
-    return row?.trigger_count === 7 && row.revision_owner_trigger === 1;
+      .first<{
+        trigger_count: number;
+        revision_owner_trigger: number;
+        cleanup_claims_ready: number;
+      }>();
+    return (
+      row?.trigger_count === 7 &&
+      row.revision_owner_trigger === 1 &&
+      row.cleanup_claims_ready === 1
+    );
   } catch {
     return false;
   }

@@ -25,10 +25,7 @@ import {
   resolveExactSourceBytes,
   SOURCE_DOWNLOAD_IDLE_MS
 } from './exactSourceResolver';
-import {
-  archiveAccountImportSources,
-  localizeImportedSourceArtifacts
-} from './accountImportSources';
+import { archiveAccountImportSources } from './accountImportSources';
 import {
   listLocalOnlyImportSources,
   meshPayloadArchive
@@ -159,9 +156,7 @@ describe('anonymous shared mesh payload preload', () => {
       'owner_share_token',
       vi.fn<typeof fetch>().mockResolvedValue(new Response(payload))
     );
-    const copy = localizeImportedSourceArtifacts(
-      duplicateProjectDocument(source, 'My scan', visitor)
-    );
+    const copy = duplicateProjectDocument(source, 'My scan', visitor);
     await saveLocalProject(copy);
     // The persisted copy protects cached bytes even while its archive is pending.
     expect(await deleteSourceBlobIfUnreferenced({ checksumSha256 })).toBe(
