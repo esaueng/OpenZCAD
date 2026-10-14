@@ -1787,6 +1787,9 @@ export function App() {
   const acceptPendingInvitationRef = useRef<(token: string) => Promise<void>>(
     async () => undefined
   );
+  const leaveShareSessionRef = useRef<() => Promise<void>>(
+    async () => undefined
+  );
   useEffect(() => {
     const openFragment = () => {
       if (window.location.hash.startsWith('#invite=')) {
@@ -1800,9 +1803,14 @@ export function App() {
         setSettingsOpen(true);
       } else {
         const token = captureProjectShareToken();
-        if (!token) return;
+        const wasOpeningShare = shareOpenAttemptRef.current !== null;
         shareOpenAttemptRef.current = null;
         setPendingShareToken(token);
+        if (!token) {
+          if (wasOpeningShare) setBusy(false);
+          if (shareSessionRef.current) void leaveShareSessionRef.current();
+          return;
+        }
         setShareNavigation((current) => current + 1);
       }
     };
@@ -8953,6 +8961,8 @@ export function App() {
     setBusy(true);
     try {
       await flushPendingLocalSave();
+      const draining = cloudProjectAutosaveRef.current?.flushPending();
+      if (!accountSavePendingRef.current) await draining;
       await sharedThumbnailCapture.flush();
       sharedThumbnailCapture.discard();
       if (
@@ -9312,6 +9322,7 @@ export function App() {
       setStatus(errorMessage(error, 'Failed to refresh projects.'));
     }
   }
+  leaveShareSessionRef.current = handleGoHome;
 
   /**
    * Records shelf state in both stores. The device copy is written first and

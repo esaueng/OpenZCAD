@@ -250,6 +250,60 @@ test('keeps revoked-link guidance visible after delayed startup completes', asyn
   ).toBeVisible();
 });
 
+test('cancels a pending share on Back and leaves an active share when its fragment is removed', async ({
+  page
+}) => {
+  await stubAnonymousApi(page);
+  const document = createProjectDocument('Cancelled share', toUserId('owner'));
+  let release!: () => void;
+  const delayed = new Promise<void>((resolve) => {
+    release = resolve;
+  });
+  let delay = true;
+  let requested = false;
+  await page.route('**/api/share/*', async (route) => {
+    requested = true;
+    if (delay) await delayed;
+    await route.fulfill({
+      json: { document, project: { name: document.name }, mode: 'tweak' }
+    });
+  });
+  await page.goto('/');
+  await expect(page.getByRole('tab', { name: 'Parts 0' })).toBeVisible();
+  await page.evaluate(() => {
+    window.location.hash = `share=${'c'.repeat(43)}`;
+  });
+  await expect.poll(() => requested).toBe(true);
+  await page.goBack();
+  const response = page.waitForResponse(/\/api\/share\//);
+  release();
+  await response;
+  // Let the old loader process its delayed response before checking that it
+  // cannot replace the library after navigation has cancelled it.
+  await page.waitForTimeout(250);
+  await expect(page.getByRole('tab', { name: 'Parts 0' })).toBeVisible();
+  await expect(
+    page.getByRole('button', { name: 'Make a copy', exact: true })
+  ).toHaveCount(0);
+  await expect(
+    page.getByRole('button', { name: 'Create project', exact: true })
+  ).toBeEnabled();
+  delay = false;
+  await page.evaluate(() => {
+    window.location.hash = `share=${'c'.repeat(43)}`;
+  });
+  await expect(
+    page.getByRole('button', { name: 'Make a copy', exact: true })
+  ).toBeVisible();
+  await page.evaluate(() => {
+    window.location.hash = '';
+  });
+  await expect(page.getByRole('tab', { name: 'Parts 0' })).toBeVisible();
+  await expect(
+    page.getByRole('button', { name: 'Make a copy', exact: true })
+  ).toHaveCount(0);
+});
+
 test('saves incoming member updates through the room without refused account writes', async ({
   page
 }) => {
