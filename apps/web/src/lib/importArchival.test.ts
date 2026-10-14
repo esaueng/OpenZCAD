@@ -13,11 +13,35 @@ import {
   importSourceChecksums,
   discardUnreferencedImportSource,
   listLocalOnlyImportSources,
+  meshPayloadArchive,
   settleImportSource,
   sourceBlobClaimExpired,
   sourceBlobClaimHolds,
   SOURCE_BLOB_CLAIM_TTL_MS
 } from './importArchival';
+import { parseCreateUploadSessionRequest } from '../../worker/validation';
+
+it.each([249, 250, 251, 252, 253, 254, 255])(
+  'archives a mesh payload with an accepted %i-character source filename',
+  (length) => {
+    const sourceName = `${'x'.repeat(length - 4)}.stl`;
+    expect(() =>
+      parseCreateUploadSessionRequest({
+        projectId: 'proj_filename',
+        fileName: sourceName,
+        contentType: 'model/stl',
+        kind: 'stl-import'
+      })
+    ).not.toThrow();
+    const archive = meshPayloadArchive(sourceName);
+    const request = parseCreateUploadSessionRequest({
+      projectId: 'proj_filename',
+      ...archive
+    });
+    expect(request.fileName).toHaveLength(255);
+    expect(request.fileName.endsWith('.ozmesh')).toBe(true);
+  }
+);
 
 function referenceFor(text: string): ImportedSourceReference {
   return {
