@@ -138,6 +138,13 @@ Probes are referenced by name; they live with the review notes, and every fix PR
 - Sketch dimension graphics are rebuilt on every interaction change in sketch mode (`App.tsx:12719`) — not measured.
 - Legacy documents without checkpoints get a random checkpoint id on normalize (`packages/document-core/src/index.ts:736`), so two devices normalize to different canonical content — not probed.
 
+## Follow-ups found while reviewing the fix PRs
+
+Both predate the review and behave the same on `ab3c1f1b`; they are recorded under ROADMAP F04.
+
+- A mesh import whose file read is still pending when the user switches projects lands in the newly open project, for every mesh format. Refuse an import whose project changed mid-read.
+- A padded binary STL whose 80-byte header reads like an ASCII `vertex` statement with coordinates is routed to the ASCII reader and refused. Binary plausibility should outrank that match.
+
 ## Checked and sound
 
 - **Access control:** every non-public route authenticates first; roles come from D1 per request; no IDOR on project, revision, artifact, upload, measurement or workspace ids. The room strips client `x-openzcad-*` headers and rechecks membership on hello, presence, broadcast, write and lease; tickets are single-use, 30 s and project-bound.
