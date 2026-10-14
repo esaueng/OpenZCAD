@@ -55,65 +55,127 @@ test('loads the OpenZCAD shell', async ({ page }) => {
   await expect(page.getByText('parametric cad in the browser')).toBeVisible();
 });
 
-test('accepts a signed-in invitation in an already-open Settings tab without reload', async ({
-  page
-}) => {
-  const document = createProjectDocument(
-    'Invited Link Part',
-    toUserId('user_invitation_owner')
-  );
-  let accepted = false;
-  await stubApi(page, { collaborationRole: 'viewer' });
-  await page.route('**/api/project-invitations/accept', (route) => {
-    expect(route.request().postDataJSON()).toEqual({ token: invitationToken });
-    accepted = true;
-    return route.fulfill({
-      json: { projectId: document.projectId, role: 'viewer' }
+for (const fromPublicShare of [false, true]) {
+  test(`accepts a signed-in invitation from ${fromPublicShare ? 'a public share' : 'Settings'} without reload`, async ({
+    page
+  }) => {
+    const document = createProjectDocument(
+      'Invited Link Part',
+      toUserId('user_invitation_owner')
+    );
+    let accepted = false;
+    await stubApi(page, {
+      collaborationRole: fromPublicShare ? 'editor' : 'viewer'
     });
+    if (fromPublicShare) {
+      await page.route('**/api/collaboration/config', (route) =>
+        route.fulfill({
+          json: {
+            sharingEnabled: true,
+            editLeasesEnforced: false,
+            personalSyncEnabled: false,
+            canary: false
+          }
+        })
+      );
+    }
+    const publicDocument = createProjectDocument(
+      'Public snapshot',
+      toUserId('public_owner')
+    );
+    await page.route('**/api/share/*', (route) =>
+      route.fulfill({
+        json: {
+          document: publicDocument,
+          project: { name: publicDocument.name },
+          mode: 'tweak'
+        }
+      })
+    );
+    await page.route('**/api/project-invitations/accept', (route) => {
+      expect(route.request().postDataJSON()).toEqual({
+        token: invitationToken
+      });
+      accepted = true;
+      return route.fulfill({
+        json: {
+          projectId: document.projectId,
+          role: fromPublicShare ? 'editor' : 'viewer'
+        }
+      });
+    });
+    await page.route('**/api/projects', (route) =>
+      route.fulfill({
+        json: {
+          projects: accepted
+            ? [
+                {
+                  projectId: document.projectId,
+                  name: document.name,
+                  revisionCount: 0,
+                  documentVersion: document.version,
+                  updatedAt: document.derived.updatedAt
+                }
+              ]
+            : []
+        }
+      })
+    );
+    await page.route(`**/api/projects/${document.projectId}`, (route) =>
+      route.fulfill({ json: document })
+    );
+
+    await page.goto('/');
+    await expect(page.getByRole('tab', { name: 'Parts 0' })).toBeVisible();
+    if (fromPublicShare) {
+      await page.evaluate(() => {
+        window.location.hash = `share=${'p'.repeat(43)}`;
+      });
+      await expect(
+        page.getByRole('button', { name: 'Make a copy', exact: true })
+      ).toBeVisible();
+    }
+    await page.getByRole('button', { name: 'Open settings' }).click();
+    await page.evaluate((token) => {
+      window.location.hash = `invite=${token}`;
+    }, invitationToken);
+
+    if (fromPublicShare) {
+      await expect(
+        page
+          .getByRole('group', { name: 'Workspace mode' })
+          .getByRole('button', { name: 'Build' })
+      ).toBeEnabled();
+      await expect(
+        page.getByRole('button', { name: 'Make a copy', exact: true })
+      ).toHaveCount(0);
+    } else {
+      await expect(
+        page.getByRole('button', { name: 'Rename project' })
+      ).toHaveCount(0);
+    }
+    await expect(page.locator('.breadcrumb')).toContainText(document.name);
+    await expect(page.getByRole('contentinfo')).toContainText(
+      `Opened ${document.name}`
+    );
+    expect(await page.evaluate(() => window.location.hash)).toBe('');
+    expect(
+      await page.evaluate(
+        (key) => window.sessionStorage.getItem(key),
+        PROJECT_INVITATION_SESSION_KEY
+      )
+    ).toBeNull();
+    if (fromPublicShare) {
+      await page.getByTitle('Back to projects').click();
+      await expect(
+        page.locator('.start-tile-open', { hasText: publicDocument.name })
+      ).toHaveCount(0);
+      await expect(
+        page.locator('.start-tile-open', { hasText: document.name })
+      ).toBeVisible();
+    }
   });
-  await page.route('**/api/projects', (route) =>
-    route.fulfill({
-      json: {
-        projects: accepted
-          ? [
-              {
-                projectId: document.projectId,
-                name: document.name,
-                revisionCount: 0,
-                documentVersion: document.version,
-                updatedAt: document.derived.updatedAt
-              }
-            ]
-          : []
-      }
-    })
-  );
-  await page.route(`**/api/projects/${document.projectId}`, (route) =>
-    route.fulfill({ json: document })
-  );
-
-  await page.goto('/');
-  await expect(page.getByRole('tab', { name: 'Parts 0' })).toBeVisible();
-  await page.getByRole('button', { name: 'Open settings' }).click();
-  await page.evaluate((token) => {
-    window.location.hash = `invite=${token}`;
-  }, invitationToken);
-
-  await expect(
-    page.getByRole('button', { name: 'Rename project' })
-  ).toHaveCount(0);
-  await expect(page.locator('.breadcrumb')).toContainText(document.name);
-  await expect(page.getByRole('contentinfo')).toContainText(
-    `Opened ${document.name}`
-  );
-  expect(await page.evaluate(() => window.location.hash)).toBe('');
-  expect(
-    await page.evaluate(
-      (key) => window.sessionStorage.getItem(key),
-      PROJECT_INVITATION_SESSION_KEY
-    )
-  ).toBeNull();
-});
+}
 
 test('opens and switches public links in an already-open Settings tab', async ({
   page

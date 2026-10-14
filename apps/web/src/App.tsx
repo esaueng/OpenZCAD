@@ -9082,6 +9082,9 @@ export function App() {
       setCloudProjectIds(listed.cloudProjectIds);
       setAccountProjectListReached(listed.remoteReached);
       setStatus(`Invitation accepted with ${accepted.role} access.`);
+      // Leave the anonymous workspace completely before opening member access.
+      // Clearing only its flag would briefly persist the public snapshot.
+      if (shareSessionRef.current) await handleGoHome();
       await handleOpenProject(accepted.projectId);
     } catch (error) {
       setStatus(errorMessage(error, 'Could not accept the invitation.'));
@@ -9131,6 +9134,10 @@ export function App() {
           return;
         }
         await flushPendingLocalSaveRef.current();
+        if (cancelled) return;
+        // The device write queues its account mirror. Drain that queue before
+        // entering a public session, whose effect closes the account writer.
+        await cloudProjectAutosaveRef.current?.flushPending();
         if (cancelled) return;
         // Before the document lands: the collaboration hook and the cloud
         // autosave controller must treat this project as not account-backed,
