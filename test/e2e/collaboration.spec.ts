@@ -304,6 +304,62 @@ test('cancels a pending share on Back and leaves an active share when its fragme
   ).toHaveCount(0);
 });
 
+test('keeps a newer share open when an earlier departure finishes later', async ({
+  page
+}) => {
+  await stubApi(page);
+  const documents = [
+    createProjectDocument('First departure share', toUserId('owner')),
+    createProjectDocument('Latest navigation share', toUserId('owner'))
+  ];
+  let release!: () => void;
+  const delayed = new Promise<void>((resolve) => {
+    release = resolve;
+  });
+  let blockListing = false;
+  let listingRequested = false;
+  await page.route('**/api/projects', async (route) => {
+    if (blockListing) {
+      listingRequested = true;
+      await delayed;
+    }
+    await route.fulfill({ json: { projects: [] } });
+  });
+  await page.route('**/api/share/*', (route) => {
+    const document =
+      documents[route.request().url().endsWith('a'.repeat(43)) ? 0 : 1]!;
+    return route.fulfill({
+      json: { document, project: { name: document.name }, mode: 'tweak' }
+    });
+  });
+  await page.goto('/');
+  await expect(page.getByRole('tab', { name: 'Parts 0' })).toBeVisible();
+  await page.evaluate(() => {
+    window.location.hash = `share=${'a'.repeat(43)}`;
+  });
+  await expect(page.locator('.breadcrumb')).toContainText(documents[0]!.name);
+  blockListing = true;
+  await page.evaluate(() => {
+    window.location.hash = '';
+  });
+  await expect.poll(() => listingRequested).toBe(true);
+  await page.evaluate(() => {
+    window.location.hash = `share=${'b'.repeat(43)}`;
+  });
+  await expect(page.locator('.breadcrumb')).toContainText(documents[1]!.name);
+  const response = page.waitForResponse(
+    (r) => new URL(r.url()).pathname === '/api/projects'
+  );
+  release();
+  await response;
+  await page.waitForTimeout(250);
+  await expect(page.locator('.breadcrumb')).toContainText(documents[1]!.name);
+  await expect(page.getByRole('contentinfo')).toContainText(
+    `Opened shared model ${documents[1]!.name}`
+  );
+  expect(new URL(page.url()).hash).toBe(`#share=${'b'.repeat(43)}`);
+});
+
 test('saves incoming member updates through the room without refused account writes', async ({
   page
 }) => {

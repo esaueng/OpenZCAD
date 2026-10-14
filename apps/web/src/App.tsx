@@ -1787,11 +1787,13 @@ export function App() {
   const acceptPendingInvitationRef = useRef<(token: string) => Promise<void>>(
     async () => undefined
   );
-  const leaveShareSessionRef = useRef<() => Promise<void>>(
-    async () => undefined
-  );
+  const fragmentNavigationRef = useRef(0);
+  const leaveShareSessionRef = useRef<
+    (isCurrent: () => boolean) => Promise<void>
+  >(async () => undefined);
   useEffect(() => {
     const openFragment = () => {
+      const navigation = ++fragmentNavigationRef.current;
       if (window.location.hash.startsWith('#invite=')) {
         const token = captureProjectInvitationLink();
         if (!token) return;
@@ -1808,7 +1810,11 @@ export function App() {
         setPendingShareToken(token);
         if (!token) {
           if (wasOpeningShare) setBusy(false);
-          if (shareSessionRef.current) void leaveShareSessionRef.current();
+          if (shareSessionRef.current) {
+            void leaveShareSessionRef.current(
+              () => fragmentNavigationRef.current === navigation
+            );
+          }
           return;
         }
         setShareNavigation((current) => current + 1);
@@ -9271,7 +9277,7 @@ export function App() {
     closeSettings();
   }
 
-  async function handleGoHome() {
+  async function handleGoHome(isCurrent: () => boolean = () => true) {
     try {
       await flushPendingLocalSave();
     } catch {
@@ -9279,15 +9285,18 @@ export function App() {
       // another project would otherwise replace the only unsaved snapshot.
       return;
     }
+    if (!isCurrent()) return;
     const draining = cloudProjectAutosaveRef.current?.flushPending();
     // A manual checkpoint now shares the account queue. The device is safe;
     // navigation need not wait for its network response. Its continuation is
     // guarded by the originating manager, and closing discards stale mirrors.
     if (!accountSavePendingRef.current) await draining;
+    if (!isCurrent()) return;
     // The card is written before the shelf that shows it is listed. Then
     // forgotten: a project trashed from that shelf must not get its record
     // written back by a later flush.
     await sharedThumbnailCapture.flush();
+    if (!isCurrent()) return;
     sharedThumbnailCapture.discard();
     if (shareSessionRef.current) {
       // Leaving the shared session drops it: the shelf that follows is this
@@ -9311,6 +9320,7 @@ export function App() {
     setTool(null);
     try {
       const listed = await loadProjectSummaries(Boolean(session));
+      if (!isCurrent()) return;
       setProjects(listed.projects);
       setCloudProjectIds(listed.cloudProjectIds);
       setAccountProjectListReached(listed.remoteReached);
@@ -9319,7 +9329,9 @@ export function App() {
       // the account answered, so a listing leaves the status line empty.
       setStatus('');
     } catch (error) {
-      setStatus(errorMessage(error, 'Failed to refresh projects.'));
+      if (isCurrent()) {
+        setStatus(errorMessage(error, 'Failed to refresh projects.'));
+      }
     }
   }
   leaveShareSessionRef.current = handleGoHome;
