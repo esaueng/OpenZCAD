@@ -753,11 +753,16 @@ export interface ExactKernelAdapterOptions {
    * only legacy embedded imports can rebuild — a reference then fails with an
    * explicit error instead of silently dropping the body. A rejection is a
    * miss this device may recover from (retried by the next sync, never
-   * checkpointed) unless the error carries `permanent: true`.
+   * checkpointed) unless the error carries `permanent: true`. `signal`
+   * aborts when the build that asked is superseded.
    */
   resolveSourceBytes?: (
     ref: ImportedSourceReference,
-    context: { artifactId: ArtifactId; sourceName: string }
+    context: {
+      artifactId: ArtifactId;
+      sourceName: string;
+      signal?: AbortSignal;
+    }
   ) => Promise<Uint8Array>;
   /**
    * Overrides {@link MAX_IMPORTED_STEP_CACHE_BYTES}. Zero disables import
@@ -1651,19 +1656,19 @@ export class RemusKernelAdapter implements ExactKernelAdapter {
       if (this.importedSteps.lookup(ref.checksumSha256)) {
         continue;
       }
-      if (!this.options.resolveSourceBytes) {
+      const resolveSourceBytes = this.options.resolveSourceBytes;
+      if (!resolveSourceBytes) {
         continue;
       }
+      const { artifactId, sourceName } = feature.data;
       try {
         sources.set(
           ref.checksumSha256,
           // A stalled download must not hold the serialized worker queue
           // once a newer edit has superseded this build.
           await raceBuildCancellation(
-            this.options.resolveSourceBytes(ref, {
-              artifactId: feature.data.artifactId,
-              sourceName: feature.data.sourceName
-            }),
+            (signal) =>
+              resolveSourceBytes(ref, { artifactId, sourceName, signal }),
             cancellation
           )
         );

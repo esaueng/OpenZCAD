@@ -432,7 +432,7 @@ describe('syncDocument cancellation', { timeout: 120_000 }, () => {
     }
   });
 
-  it('a superseded sync stops while its source download is stalled', async () => {
+  it('a superseded sync stops while its source download is stalled, and lets go of it', async () => {
     const document = importStepBody(createProjectDocument('Stalled', user), {
       name: 'Bracket',
       artifactId: 'artifact_cloud_stalled',
@@ -446,10 +446,12 @@ describe('syncDocument cancellation', { timeout: 120_000 }, () => {
       }
     }).document;
     let fetchStarted = false;
+    let downloadSignal: AbortSignal | undefined;
     const adapter = await createExactKernelAdapter({
       // A response that never arrives (stalled socket, captive portal).
-      resolveSourceBytes: () => {
+      resolveSourceBytes: (_ref, { signal }) => {
         fetchStarted = true;
+        downloadSignal = signal;
         return new Promise<Uint8Array>(() => undefined);
       }
     });
@@ -473,6 +475,9 @@ describe('syncDocument cancellation', { timeout: 120_000 }, () => {
         new Promise((resolve) => setTimeout(resolve, 3_000, 'still pending'))
       ]);
       expect(settled).toBe('cancelled');
+      // The resolver hears it too, so the abandoned transfer can stop or be
+      // taken over by the next build rather than run on unseen.
+      expect(downloadSignal?.aborted).toBe(true);
     } finally {
       adapter.dispose();
     }
