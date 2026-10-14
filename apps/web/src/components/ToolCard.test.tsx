@@ -1,6 +1,6 @@
 import { fireEvent, render, screen } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
-import { describe, expect, it, vi } from 'vitest';
+import { afterEach, describe, expect, it, vi } from 'vitest';
 import { toSketchId } from '@openzcad/shared';
 import { ExtrudeForm } from './forms/ExtrudeForm';
 import { ToolCard } from './ToolCard';
@@ -351,7 +351,11 @@ describe('ToolCard keyboard for the region Extrude', () => {
     hint: 'Drag the arrow to extrude the profile.',
     phase: 'armed' as const
   };
-  function card(focusRequest?: unknown, phase: 'armed' | 'dragging' = 'armed') {
+  function card(
+    focusRequest?: unknown,
+    phase: 'armed' | 'dragging' = 'armed',
+    disabled = false
+  ) {
     return (
       <ToolCard
         model={{ ...model, phase }}
@@ -365,11 +369,31 @@ describe('ToolCard keyboard for the region Extrude', () => {
           bodies={[]}
           scope={{}}
           submitLabel="Create"
+          disabled={disabled}
           onSubmit={vi.fn()}
           onCancel={vi.fn()}
         />
       </ToolCard>
     );
+  }
+
+  afterEach(() => {
+    vi.restoreAllMocks();
+  });
+
+  /**
+   * As browsers do, and happy-dom does not: a control inside a disabled
+   * fieldset cannot take focus, so focus() on it does nothing.
+   */
+  function refuseFocusInDisabledFieldsets() {
+    const focus = HTMLInputElement.prototype.focus;
+    vi.spyOn(HTMLInputElement.prototype, 'focus').mockImplementation(function (
+      this: HTMLInputElement,
+      options?: FocusOptions
+    ) {
+      if (this.closest('fieldset[disabled]')) return;
+      focus.call(this, options);
+    });
   }
 
   it('types the distance straight after the Extrude command opens it', async () => {
@@ -395,7 +419,35 @@ describe('ToolCard keyboard for the region Extrude', () => {
   });
 
   it('never takes the keyboard in the middle of a drag', () => {
-    render(card([], 'dragging'));
+    const request: unknown[] = [];
+    const { rerender } = render(card(request, 'dragging'));
+    const distance = screen.getByRole('textbox', { name: 'Distance' });
+    expect(distance).not.toHaveFocus();
+    // The request lapsed: the drag ending does not pull the keyboard after it.
+    rerender(card(request));
+    expect(distance).not.toHaveFocus();
+  });
+
+  it('waits for the field while an exact rebuild holds the form disabled', () => {
+    // E during a rebuild opened the card with its fieldset disabled: focus()
+    // did nothing there, and nothing asked again once the rebuild finished.
+    refuseFocusInDisabledFieldsets();
+    const request: unknown[] = [];
+    const { rerender } = render(card(request, 'armed', true));
+    const distance = screen.getByRole('textbox', { name: 'Distance' });
+    expect(distance).not.toHaveFocus();
+    rerender(card(request));
+    expect(distance).toHaveFocus();
+    expect(distance).toHaveProperty('selectionStart', 0);
+    expect(distance).toHaveProperty('selectionEnd', 1);
+  });
+
+  it('drops a waiting request once a drag starts', () => {
+    refuseFocusInDisabledFieldsets();
+    const request: unknown[] = [];
+    const { rerender } = render(card(request, 'armed', true));
+    rerender(card(request, 'dragging', true));
+    rerender(card(request));
     expect(screen.getByRole('textbox', { name: 'Distance' })).not.toHaveFocus();
   });
 });

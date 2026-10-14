@@ -74,16 +74,33 @@ export function ToolCard({
   onClose
 }: ToolCardProps) {
   const bodyRef = useRef<HTMLDivElement | null>(null);
-  const phase = useRef(model.phase);
-  phase.current = model.phase;
+  /** The request last taken in, and whether it still waits for its field. */
+  const request = useRef<{ value: unknown; pending: boolean }>({
+    value: undefined,
+    pending: false
+  });
+  // After every render, not only when the request changes: an exact rebuild
+  // can hold the form disabled when the request arrives, and a disabled
+  // field cannot take focus, so the request waits for the render that
+  // enables it. A drag in progress, or one that starts while it waits,
+  // makes it lapse.
   useEffect(() => {
-    if (focusRequest && phase.current !== 'dragging') {
-      // Focusing an expression field selects its value.
-      bodyRef.current
-        ?.querySelector<HTMLInputElement>('.expr-field input')
-        ?.focus();
+    if (focusRequest !== request.current.value) {
+      request.current = {
+        value: focusRequest,
+        pending: Boolean(focusRequest) && model.phase !== 'dragging'
+      };
+    } else if (model.phase === 'dragging') {
+      request.current.pending = false;
     }
-  }, [focusRequest]);
+    if (!request.current.pending) return;
+    const field =
+      bodyRef.current?.querySelector<HTMLInputElement>('.expr-field input');
+    if (!field || field.closest(':disabled, fieldset[disabled]')) return;
+    request.current.pending = false;
+    // Focusing an expression field selects its value.
+    field.focus();
+  });
   const status = (
     <>
       {model.phase === 'dragging' ? (
