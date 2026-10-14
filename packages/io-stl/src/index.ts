@@ -164,25 +164,41 @@ function parseAsciiStl(text: string, fileName: string): ParsedStl {
     index = mark;
     return token === null ? '' : keywordOf(token);
   };
-  /** The first line feed at or after `index`, reused while still ahead. */
-  let lineEnd = -1;
+  /**
+   * Where `pattern` next matches at or after `index` (the text's length when
+   * it does not). Searched again only once `index` has passed the last answer,
+   * so a file of many solids is still searched once over.
+   */
+  const nextMatch = (pattern: RegExp) => {
+    let found = -1;
+    return () => {
+      if (index > found) {
+        pattern.lastIndex = index;
+        found = pattern.exec(text)?.index ?? length;
+      }
+      return found;
+    };
+  };
+  const nextLineBreak = nextMatch(/[\r\n]/g);
+  const nextEndfacet = nextMatch(/endfacet/gi);
   /**
    * Skips the name after `solid` or `endsolid`: the rest of its line, whatever
-   * words it holds. A file written on one line has no line end to stop at,
-   * so there the first facet — `facet` then `normal` or `outer` — ends it.
+   * words it holds, `facet normal` included. Only a line that also holds a
+   * whole facet — a file written on one line — needs the name told apart from
+   * the geometry after it, and there the first `facet` followed by `normal`
+   * or `outer` ends the name.
    */
   const skipName = () => {
-    if (index > lineEnd) {
-      const found = text.indexOf('\n', index);
-      lineEnd = found < 0 ? length : found;
-    }
+    const lineEnd = nextLineBreak();
+    const oneLine = nextEndfacet() < lineEnd;
     for (;;) {
       const mark = index;
       const token = next();
       if (token === null) return;
       if (
         start > lineEnd ||
-        (keywordOf(token) === 'facet' &&
+        (oneLine &&
+          keywordOf(token) === 'facet' &&
           ['normal', 'outer'].includes(peekKeyword()))
       ) {
         index = mark;

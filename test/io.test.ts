@@ -247,12 +247,39 @@ describe('STL parsing', () => {
       }
     });
 
-    it('reads keywords in a solid name as part of the name', () => {
+    it.each([
+      'my facet vertex 1 2 part',
+      'facet normal bracket',
+      'FACET OUTER bracket'
+    ])('reads keywords in the solid name "%s" as part of the name', (name) => {
+      for (const ending of ['\n', '\r\n']) {
+        const text = [
+          `solid ${name}`,
+          'facet normal 0 0 1',
+          'outer loop',
+          'vertex 0 0 0',
+          'vertex 1 0 0',
+          'vertex 0 1 0',
+          'endloop',
+          'endfacet',
+          `endsolid ${name}`,
+          ''
+        ].join(ending);
+        const parsed = parseStl(
+          new TextEncoder().encode(text).buffer,
+          'named.stl'
+        );
+        expect(parsed.triangleCount).toBe(1);
+        expect(parsed.vertices).toEqual([0, 0, 0, 1, 0, 0, 0, 1, 0]);
+      }
+    });
+
+    it('reads a one-line ASCII STL that ends with a line break', () => {
       const text =
-        'solid my facet vertex 1 2 part\nfacet normal 0 0 1\nouter loop\nvertex 0 0 0\nvertex 1 0 0\nvertex 0 1 0\nendloop\nendfacet\nendsolid my facet part\n';
+        'solid x facet normal 0 0 1 outer loop vertex 0 0 0 vertex 1 0 0 vertex 0 1 0 endloop endfacet endsolid x\n';
       const parsed = parseStl(
         new TextEncoder().encode(text).buffer,
-        'named.stl'
+        'one-line.stl'
       );
       expect(parsed.triangleCount).toBe(1);
       expect(parsed.vertices).toEqual([0, 0, 0, 1, 0, 0, 0, 1, 0]);
