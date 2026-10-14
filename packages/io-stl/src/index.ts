@@ -102,14 +102,27 @@ function coordinate(token: string | null): number {
 }
 
 /**
- * Whether the text holds a `vertex` keyword, in either letter case, at the
- * start or after whitespace and followed by whitespace — wherever the line
- * breaks fall. A literal search that checks the one character before each
- * hit: putting that alternation in the pattern made the sniff of a large
- * whitespace-padded file several times slower.
+ * A token that reads as a coordinate, well formed or not: a sign, then a
+ * digit, a decimal point, `nan` or `inf`, then anything. Broad on purpose — an
+ * ASCII file whose vertices hold `nan`, `1.#QNAN`, `-1.#IND` or `inf` must
+ * still reach the ASCII reader to be refused there — but never a plain word.
+ */
+const SNIFFED_COORDINATE = String.raw`\s+[-+]?(?:\d|\.\d|nan|inf)\S*`;
+/** `vertex` followed by three coordinate-like tokens, in either letter case. */
+const SNIFFED_VERTEX = new RegExp(`vertex${SNIFFED_COORDINATE.repeat(3)}`, 'gi');
+
+/**
+ * Whether the text holds a `vertex` statement: the keyword, in either letter
+ * case, at the start or after whitespace, followed by three coordinate-like
+ * tokens — wherever the line breaks fall. A binary STL's 80-byte header is
+ * free text that may say `solid … vertex colors`, and a padded binary file
+ * fails the exact-size test, so the keyword alone would send it to the ASCII
+ * reader to be refused. A literal search that checks the one character
+ * before each hit: putting that alternation in the pattern made the sniff of
+ * a large whitespace-padded file several times slower.
  */
 function hasVertexStatement(text: string): boolean {
-  for (const match of text.matchAll(/vertex\s/gi)) {
+  for (const match of text.matchAll(SNIFFED_VERTEX)) {
     if (match.index === 0 || isSeparator(text.charCodeAt(match.index - 1))) {
       return true;
     }
