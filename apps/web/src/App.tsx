@@ -247,6 +247,7 @@ import type { SketchSolveStatus } from './components/SketchToolRail';
 import { ApiError, api, isProjectDocumentUnavailableError } from './lib/api';
 import {
   applyAccountSourceArchives,
+  localizeImportedSourceArtifacts,
   sourceUploadMessage
 } from './lib/accountImportSources';
 import {
@@ -9066,13 +9067,15 @@ export function App() {
     const activeProjectSince = snapshotActiveProject();
     setBusy(true);
     try {
-      const copy = duplicateProjectDocument(
-        source,
-        duplicateProjectName(
-          source.name,
-          projects.map((summary) => summary.name)
-        ),
-        session?.userId ?? localUserId
+      const copy = localizeImportedSourceArtifacts(
+        duplicateProjectDocument(
+          source,
+          duplicateProjectName(
+            source.name,
+            projects.map((summary) => summary.name)
+          ),
+          session?.userId ?? localUserId
+        )
       );
       setShareSession(null);
       shareSessionRef.current = null;
