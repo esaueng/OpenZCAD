@@ -2,6 +2,7 @@ import { describe, expect, it, vi } from 'vitest';
 import { D1R2PersistenceService } from '@openzcad/cloudflare-adapters';
 import {
   InMemoryPersistenceService,
+  ProjectNotFoundError,
   ProjectSharingError
 } from '@openzcad/persistence';
 import {
@@ -12,7 +13,9 @@ import {
   PROJECT_INVITATION_TTL_SECONDS,
   projectInvitationUrl
 } from '../apps/web/worker/sharing';
+import { createProjectDocument } from '@openzcad/document-core';
 import { toUserId } from '@openzcad/shared';
+import { migratedDatabase, sqliteD1 } from './support/sqlite-d1';
 
 describe('project sharing invitations', () => {
   it('builds an escaped multipart email with a fragment-only invitation link', () => {
@@ -387,5 +390,198 @@ describe('project sharing invitations', () => {
     expect(conditionalUpdate?.query).toContain('revoked_at IS NULL');
     expect(conditionalUpdate?.query).toContain('expires_at >= ?');
     expect(batch).toHaveBeenCalledTimes(2);
+  });
+});
+
+/**
+ * The D1 sharing statements, executed against real SQLite with every
+ * migration applied. The cases above match query text or run the in-memory
+ * service, so removing an owner check from a D1 method left them all green;
+ * these exercise the same authorization through the production SQL.
+ */
+describe('project sharing (D1 against SQLite)', () => {
+  const owner = toUserId('user_owner');
+  const member = toUserId('user_member');
+  const stranger = toUserId('user_stranger');
+  const now = 1_800_000_000;
+
+  function sharingD1() {
+    const db = migratedDatabase();
+    for (const [id, email] of [
+      [owner, 'owner@example.com'],
+      [member, 'member@example.com'],
+      [stranger, 'stranger@example.com']
+    ]) {
+      db.prepare(
+        'INSERT INTO users (id, email, created_at) VALUES (?, ?, ?)'
+      ).run(id!, email!, '2026-10-14T00:00:00.000Z');
+    }
+    db.prepare(
+      `INSERT INTO projects (id, user_id, name, document_json, updated_at)
+       VALUES ('project_a', ?, 'A', ?, '2026-10-14T00:00:00.000Z')`
+    ).run(
+      owner,
+      JSON.stringify({
+        ...createProjectDocument('A', owner),
+        projectId: 'project_a'
+      })
+    );
+    return new D1R2PersistenceService({ DB: sqliteD1(db) });
+  }
+
+  const invitation = (invitationId: string, email: string) => ({
+    invitationId,
+    email,
+    role: 'editor' as const,
+    tokenHash: invitationId.padEnd(64, 'x'),
+    createdAt: now,
+    expiresAt: now + PROJECT_INVITATION_TTL_SECONDS
+  });
+
+  it('lets only the owner create, list and revoke share links', async () => {
+    const service = sharingD1();
+    const link = {
+      shareLinkId: 'share_1',
+      mode: 'view' as const,
+      tokenHash: 'h'.repeat(64),
+      createdAt: now
+    };
+
+    await expect(
+      service.createProjectShareLink(stranger, 'project_a', link)
+    ).rejects.toThrow(ProjectNotFoundError);
+    await service.createProjectShareLink(owner, 'project_a', link);
+    await expect(
+      service.listProjectShareLinks(stranger, 'project_a')
+    ).rejects.toThrow(ProjectNotFoundError);
+    await expect(
+      service.listProjectShareLinks(owner, 'project_a')
+    ).resolves.toEqual([
+      {
+        shareLinkId: 'share_1',
+        projectId: 'project_a',
+        mode: 'view',
+        createdAt: now,
+        revokedAt: null
+      }
+    ]);
+    await expect(
+      service.revokeProjectShareLink(stranger, 'project_a', 'share_1', now)
+    ).rejects.toThrow(ProjectNotFoundError);
+    await expect(
+      service.loadSharedProjectByTokenHash('h'.repeat(64))
+    ).resolves.not.toBeNull();
+    await service.revokeProjectShareLink(owner, 'project_a', 'share_1', now);
+    await expect(
+      service.revokeProjectShareLink(owner, 'project_a', 'share_1', now)
+    ).rejects.toMatchObject({ code: 'SHARE_LINK_NOT_FOUND' });
+    await expect(
+      service.loadSharedProjectByTokenHash('h'.repeat(64))
+    ).resolves.toBeNull();
+  });
+
+  it('lets only the owner invite and revoke, and only the addressee accept', async () => {
+    const service = sharingD1();
+
+    await expect(
+      service.createProjectInvitation(
+        stranger,
+        'project_a',
+        invitation('inv_s', 'x@example.com')
+      )
+    ).rejects.toThrow(ProjectNotFoundError);
+    await service.createProjectInvitation(
+      owner,
+      'project_a',
+      invitation('inv_1', 'member@example.com')
+    );
+    await expect(
+      service.revokeProjectInvitation(stranger, 'project_a', 'inv_1', now)
+    ).rejects.toThrow(ProjectNotFoundError);
+    await expect(
+      service.acceptProjectInvitation(
+        stranger,
+        'stranger@example.com',
+        'inv_1'.padEnd(64, 'x'),
+        now
+      )
+    ).rejects.toMatchObject({ code: 'INVITATION_NOT_FOUND' });
+    await expect(
+      service.acceptProjectInvitation(
+        member,
+        'member@example.com',
+        'inv_1'.padEnd(64, 'x'),
+        now
+      )
+    ).resolves.toEqual({ projectId: 'project_a', role: 'editor' });
+    await expect(
+      service.listProjectSharing(stranger, 'project_a', now)
+    ).rejects.toThrow(ProjectNotFoundError);
+    const sharing = await service.listProjectSharing(owner, 'project_a', now);
+    expect(sharing.members.map(({ userId, role }) => [userId, role])).toEqual([
+      [member, 'editor']
+    ]);
+
+    // A revoked invitation cannot be accepted, whoever it was addressed to.
+    await service.createProjectInvitation(
+      owner,
+      'project_a',
+      invitation('inv_2', 'stranger@example.com')
+    );
+    await service.revokeProjectInvitation(owner, 'project_a', 'inv_2', now);
+    await expect(
+      service.acceptProjectInvitation(
+        stranger,
+        'stranger@example.com',
+        'inv_2'.padEnd(64, 'x'),
+        now
+      )
+    ).rejects.toMatchObject({ code: 'INVITATION_NOT_FOUND' });
+  });
+
+  it('lets only the owner change or remove a member', async () => {
+    const service = sharingD1();
+    await service.createProjectInvitation(
+      owner,
+      'project_a',
+      invitation('inv_1', 'member@example.com')
+    );
+    await service.acceptProjectInvitation(
+      member,
+      'member@example.com',
+      'inv_1'.padEnd(64, 'x'),
+      now
+    );
+    const roles = async () =>
+      (await service.listProjectSharing(owner, 'project_a', now)).members.map(
+        ({ role }) => role
+      );
+
+    for (const actor of [stranger, member]) {
+      await expect(
+        service.updateProjectMemberRole(
+          actor,
+          'project_a',
+          member,
+          'viewer',
+          now
+        )
+      ).rejects.toThrow(ProjectNotFoundError);
+      await expect(
+        service.removeProjectMember(actor, 'project_a', member, now)
+      ).rejects.toThrow(ProjectNotFoundError);
+    }
+    await expect(roles()).resolves.toEqual(['editor']);
+
+    await service.updateProjectMemberRole(
+      owner,
+      'project_a',
+      member,
+      'viewer',
+      now
+    );
+    await expect(roles()).resolves.toEqual(['viewer']);
+    await service.removeProjectMember(owner, 'project_a', member, now);
+    await expect(roles()).resolves.toEqual([]);
   });
 });
