@@ -36,6 +36,12 @@ Reviewed 2026-09-30 through the installed FreeCAD 1.1.3 interface
 This pass sharpens existing sketch, expression, reference, drawing and assembly
 acceptance; it adds no delivery claim or new specialist-workbench lane.
 
+Reviewed 2026-10-14 in a full project review
+([record](docs/reviews/project-review-2026-10-14.md)): 39 confirmed bugs and 16
+improvements across persistence, sharing, import, the kernel boundary, the
+viewport and tooling. Its fix PRs record their evidence in the rows they touch;
+the pass adds no rows and changes no delivery status.
+
 Start here to choose work. The documents in [Supporting plans](#supporting-plans)
 retain specifications, acceptance details and historical evidence; their old
 phase numbers, priorities and status tables no longer define independent queues.
