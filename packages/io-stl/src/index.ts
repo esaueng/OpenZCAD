@@ -11,11 +11,22 @@ export interface ParsedStl {
 const BINARY_STL_HEADER_BYTES = 84;
 const BINARY_STL_TRIANGLE_BYTES = 50;
 /** One coordinate as an ASCII STL writes it: a plain decimal, nothing else. */
-const ASCII_COORDINATE = '[-+]?(?:\\d+\\.?\\d*|\\.\\d+)(?:[eE][-+]?\\d+)?';
-/** What follows the `vertex` keyword: exactly three coordinates. */
-const ASCII_VERTEX_TAIL = new RegExp(
-  `^[ \\t]+(${ASCII_COORDINATE})[ \\t]+(${ASCII_COORDINATE})[ \\t]+(${ASCII_COORDINATE})[ \\t]*$`
-);
+const ASCII_COORDINATE = /^[-+]?(?:\d+\.?\d*|\.\d+)(?:[eE][-+]?\d+)?$/;
+/**
+ * The words that open or close an ASCII STL statement. A token after a
+ * vertex's third coordinate must be one of them.
+ */
+const ASCII_KEYWORDS = new Set([
+  'solid',
+  'endsolid',
+  'facet',
+  'normal',
+  'outer',
+  'loop',
+  'vertex',
+  'endloop',
+  'endfacet'
+]);
 
 /** Guard against imports that would stall the browser tab. */
 export const MAX_IMPORT_TRIANGLES = 200_000;
@@ -74,23 +85,34 @@ function assertBinaryStlLength(
   }
 }
 
-/** A statement short enough to quote in a refusal. */
-function quoted(statement: string): string {
-  const trimmed = statement.trim();
-  return `"${trimmed.length > 60 ? `${trimmed.slice(0, 60)}…` : trimmed}"`;
+/** Whether a UTF-16 code unit is ASCII whitespace, which separates tokens. */
+function isSeparator(code: number): boolean {
+  return code === 0x20 || (code >= 0x09 && code <= 0x0d);
+}
+
+/** A vertex statement as read, short enough to quote in a refusal. */
+function vertexStatement(...tokens: (string | null)[]): string {
+  const statement = ['vertex', ...tokens].filter(Boolean).join(' ');
+  return `"${statement.length > 60 ? `${statement.slice(0, 60)}…` : statement}"`;
+}
+
+/** A coordinate token's value, or NaN when it is not a plain decimal. */
+function coordinate(token: string | null): number {
+  return token !== null && ASCII_COORDINATE.test(token) ? Number(token) : NaN;
 }
 
 /**
- * Whether the text holds a `vertex` statement opening a line, in either
- * letter case. A literal search with a look back over the blanks before each
- * hit: anchoring the pattern itself to line starts made the sniff of a large
+ * Whether the text holds a `vertex` keyword, in either letter case, at the
+ * start or after whitespace and followed by whitespace — wherever the line
+ * breaks fall. A literal search that checks the one character before each
+ * hit: putting that alternation in the pattern made the sniff of a large
  * whitespace-padded file several times slower.
  */
 function hasVertexStatement(text: string): boolean {
   for (const match of text.matchAll(/vertex\s/gi)) {
-    let index = match.index - 1;
-    while (text[index] === ' ' || text[index] === '\t') index -= 1;
-    if (index < 0 || text[index] === '\n' || text[index] === '\r') return true;
+    if (match.index === 0 || isSeparator(text.charCodeAt(match.index - 1))) {
+      return true;
+    }
   }
   return false;
 }
@@ -101,6 +123,10 @@ function hasVertexStatement(text: string): boolean {
  * finite numbers each. Keywords match in either letter case, since exporters
  * write both.
  *
+ * The text is read as whitespace-separated tokens, not lines: line breaks
+ * carry no meaning in the format, so a file written on one line, or with CRLF
+ * or bare CR endings, reads the same as one statement per line.
+ *
  * Nothing is skipped. Pairing vertex statements three at a time wherever they
  * appear let one unreadable coordinate (`nan`, `1.#QNAN`, `-1.#IND`) shift
  * every later vertex into a triangle the file does not contain, so a vertex
@@ -110,13 +136,86 @@ function hasVertexStatement(text: string): boolean {
  */
 function parseAsciiStl(text: string, fileName: string): ParsedStl {
   const vertices: number[] = [];
+  const length = text.length;
+  let index = 0;
+  /** Where the token `next` last returned starts. */
+  let start = 0;
+  /** The next token, or null at the end of the text. */
+  const next = (): string | null => {
+    while (index < length && isSeparator(text.charCodeAt(index))) index += 1;
+    if (index >= length) return null;
+    start = index;
+    while (index < length && !isSeparator(text.charCodeAt(index))) index += 1;
+    return text.slice(start, index);
+  };
+  /** A token's keyword, lower-cased, or '' for any other token. */
+  const keywordOf = (token: string): string => {
+    // Only a letter can start a keyword, so numbers stop here.
+    const letter = token.charCodeAt(0) | 0x20;
+    if (letter < 0x61 || letter > 0x7a) return '';
+    if (ASCII_KEYWORDS.has(token)) return token;
+    const word = token.toLowerCase();
+    return ASCII_KEYWORDS.has(word) ? word : '';
+  };
+  /** The keyword of the token after the current one, without consuming it. */
+  const peekKeyword = (): string => {
+    const mark = index;
+    const token = next();
+    index = mark;
+    return token === null ? '' : keywordOf(token);
+  };
+  /** The first line feed at or after `index`, reused while still ahead. */
+  let lineEnd = -1;
+  /**
+   * Skips the name after `solid` or `endsolid`: the rest of its line, whatever
+   * words it holds. A file written on one line has no line end to stop at,
+   * so there the first facet — `facet` then `normal` or `outer` — ends it.
+   */
+  const skipName = () => {
+    if (index > lineEnd) {
+      const found = text.indexOf('\n', index);
+      lineEnd = found < 0 ? length : found;
+    }
+    for (;;) {
+      const mark = index;
+      const token = next();
+      if (token === null) return;
+      if (
+        start > lineEnd ||
+        (keywordOf(token) === 'facet' &&
+          ['normal', 'outer'].includes(peekKeyword()))
+      ) {
+        index = mark;
+        return;
+      }
+    }
+  };
+
   let facets = 0;
   /** Vertices read in the open facet, or -1 between facets. */
   let facetVertices = -1;
-  // Each statement: its first word, then the rest of its line.
-  for (const [line, word, rest] of text.matchAll(/^[ \t]*(\S+)([^\r\n]*)/gm)) {
-    const keyword = word!.toLowerCase();
-    if (keyword === 'facet') {
+  /** The last token read was a vertex's third coordinate, `a b c`. */
+  let afterVertex = false;
+  let a: string | null = null;
+  let b: string | null = null;
+  let c: string | null = null;
+  for (let token = next(); token !== null; token = next()) {
+    const keyword = keywordOf(token);
+    // Exactly three coordinates: whatever follows them opens a statement.
+    if (afterVertex && keyword === '') {
+      throw new StlParseError(
+        `ASCII STL facet ${facets} has a vertex that is not three finite numbers: ${vertexStatement(a, b, c, token)}.`
+      );
+    }
+    afterVertex = false;
+    if (keyword === 'solid' || keyword === 'endsolid') {
+      if (facetVertices >= 0) {
+        throw new StlParseError(
+          `ASCII STL facet ${facets} is not closed by "endfacet".`
+        );
+      }
+      skipName();
+    } else if (keyword === 'facet') {
       if (facetVertices >= 0) {
         throw new StlParseError(
           `ASCII STL facet ${facets} is not closed by "endfacet".`
@@ -128,19 +227,20 @@ function parseAsciiStl(text: string, fileName: string): ParsedStl {
       assertTriangleBudget(facets);
       facetVertices = 0;
     } else if (keyword === 'vertex') {
+      a = next();
+      b = next();
+      c = next();
       if (facetVertices < 0) {
         throw new StlParseError(
-          `ASCII STL has a vertex outside any facet: ${quoted(line)}.`
+          `ASCII STL has a vertex outside any facet: ${vertexStatement(a, b, c)}.`
         );
       }
-      // A tail that is not three coordinates reads as NaN, and so refuses.
-      const coordinates = ASCII_VERTEX_TAIL.exec(rest!) ?? [];
-      const x = Number(coordinates[1]);
-      const y = Number(coordinates[2]);
-      const z = Number(coordinates[3]);
+      const x = coordinate(a);
+      const y = coordinate(b);
+      const z = coordinate(c);
       if (!Number.isFinite(x) || !Number.isFinite(y) || !Number.isFinite(z)) {
         throw new StlParseError(
-          `ASCII STL facet ${facets} has a vertex that is not three finite numbers: ${quoted(line)}.`
+          `ASCII STL facet ${facets} has a vertex that is not three finite numbers: ${vertexStatement(a, b, c)}.`
         );
       }
       if (facetVertices === 3) {
@@ -150,6 +250,7 @@ function parseAsciiStl(text: string, fileName: string): ParsedStl {
       }
       vertices.push(x, y, z);
       facetVertices += 1;
+      afterVertex = true;
     } else if (keyword === 'endfacet') {
       if (facetVertices !== 3) {
         throw new StlParseError(
@@ -159,11 +260,9 @@ function parseAsciiStl(text: string, fileName: string): ParsedStl {
         );
       }
       facetVertices = -1;
-    } else if (keyword === 'endsolid' && facetVertices >= 0) {
-      throw new StlParseError(
-        `ASCII STL facet ${facets} is not closed by "endfacet".`
-      );
     }
+    // `normal`, `outer`, `loop`, `endloop` and the normal's components carry
+    // nothing this reader needs.
   }
   if (facetVertices >= 0) {
     throw new StlParseError(

@@ -103,10 +103,10 @@ describe('STL parsing', () => {
   });
 
   describe('ASCII facet structure', () => {
-    function asciiStl(
+    function asciiStlText(
       facets: string[][],
       keyword: (word: string) => string = (word) => word
-    ): ArrayBuffer {
+    ): string {
       const lines = [`${keyword('solid')} probe`];
       for (const vertices of facets) {
         lines.push(
@@ -118,7 +118,14 @@ describe('STL parsing', () => {
         lines.push(`    ${keyword('endloop')}`, `  ${keyword('endfacet')}`);
       }
       lines.push(`${keyword('endsolid')} probe`, '');
-      return new TextEncoder().encode(lines.join('\n')).buffer;
+      return lines.join('\n');
+    }
+
+    function asciiStl(
+      facets: string[][],
+      keyword?: (word: string) => string
+    ): ArrayBuffer {
+      return new TextEncoder().encode(asciiStlText(facets, keyword)).buffer;
     }
 
     it('refuses a vertex that is not three finite numbers instead of re-pairing the rest', () => {
@@ -205,6 +212,50 @@ describe('STL parsing', () => {
       );
       expect(parsed.triangleCount).toBe(1);
       expect(parsed.vertices).toEqual([0, 0, 0, 1, 0, 0, 2, 0, 0]);
+    });
+
+    // Line breaks carry no meaning in ASCII STL: statements are
+    // whitespace-separated tokens, however the exporter wrapped them.
+    const TWO_FACETS = [0, 0, 0, 1, 0, 0, 0, 1, 0, 0, 0, 0, 0, 1, 0, 0, 0, 1];
+
+    it('reads an ASCII STL written on one line', () => {
+      const text =
+        'solid x facet normal 0 0 1 outer loop vertex 0 0 0 vertex 1 0 0 vertex 0 1 0 endloop endfacet ' +
+        'facet normal 1 0 0 outer loop vertex 0 0 0 vertex 0 1 0 vertex 0 0 1 endloop endfacet endsolid x';
+      const parsed = parseStl(
+        new TextEncoder().encode(text).buffer,
+        'one-line.stl'
+      );
+      expect(parsed.format).toBe('ascii');
+      expect(parsed.triangleCount).toBe(2);
+      expect(parsed.vertices).toEqual(TWO_FACETS);
+    });
+
+    it('reads an ASCII STL with CRLF or bare CR line endings', () => {
+      for (const ending of ['\r\n', '\r']) {
+        const text = asciiStlText([
+          ['0 0 0', '1 0 0', '0 1 0'],
+          ['0 0 0', '0 1 0', '0 0 1']
+        ]).replaceAll('\n', ending);
+        const parsed = parseStl(
+          new TextEncoder().encode(text).buffer,
+          'crlf.stl'
+        );
+        expect(parsed.format).toBe('ascii');
+        expect(parsed.triangleCount).toBe(2);
+        expect(parsed.vertices).toEqual(TWO_FACETS);
+      }
+    });
+
+    it('reads keywords in a solid name as part of the name', () => {
+      const text =
+        'solid my facet vertex 1 2 part\nfacet normal 0 0 1\nouter loop\nvertex 0 0 0\nvertex 1 0 0\nvertex 0 1 0\nendloop\nendfacet\nendsolid my facet part\n';
+      const parsed = parseStl(
+        new TextEncoder().encode(text).buffer,
+        'named.stl'
+      );
+      expect(parsed.triangleCount).toBe(1);
+      expect(parsed.vertices).toEqual([0, 0, 0, 1, 0, 0, 0, 1, 0]);
     });
   });
 
