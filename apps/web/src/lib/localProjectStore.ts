@@ -1549,7 +1549,9 @@ export function syncComparableDocument(document: ProjectDocument): unknown {
 
 /** JSON-equivalent structural equality without depending on object key order. */
 function jsonValuesEqual(left: unknown, right: unknown): boolean {
-  if (Object.is(left, right)) {
+  // `===`, not `Object.is`: JSON writes -0 as 0, so the account's copy of a
+  // grid-snapped coordinate is 0 where IndexedDB kept -0.
+  if (left === right) {
     return true;
   }
   if (left === null || right === null) {

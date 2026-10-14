@@ -198,7 +198,9 @@ test('draws accepted geometry before analysis, then completes without reinstalli
         );
       })
   );
-  expect(stagedFace).not.toBeNull();
+  // The face is drawn, so the pick reaches the workspace, which refuses it;
+  // the hook reports that no selection landed.
+  expect(stagedFace).toBeNull();
   await expect(page.getByRole('contentinfo')).toContainText(
     'The model is still updating. Try that selection again when it finishes.'
   );
@@ -222,7 +224,90 @@ test('draws accepted geometry before analysis, then completes without reinstalli
       () => performance.getEntriesByName('oz:viewer.bodies').length
     )
   ).toBe(installs);
+  // The mesh drawn before analysis stays, but the revision's acceptance is
+  // still traced once analysis is ready. Deduping on the revision alone
+  // dropped this record (visual-selection-live-preview.spec.ts:696).
+  const tracedPhases = () =>
+    page.evaluate(() =>
+      ['oz:edit.installed', 'oz:edit.frame'].flatMap((name) =>
+        performance.getEntriesByName(name).map((entry) => {
+          const detail = (entry as PerformanceMeasure).detail as {
+            version: number;
+            analysis: string;
+          };
+          return `${name}:${detail.version}:${detail.analysis}`;
+        })
+      )
+    );
+  const pendingFrame = (await tracedPhases()).find(
+    (entry) => entry.startsWith('oz:edit.frame:') && entry.endsWith(':pending')
+  );
+  expect(pendingFrame).toBeDefined();
+  const version = pendingFrame!.split(':')[2];
+  for (const phase of ['oz:edit.installed', 'oz:edit.frame']) {
+    await expect.poll(tracedPhases).toContain(`${phase}:${version}:ready`);
+  }
   expect(errors).toEqual([]);
+});
+
+test('an edge hook pick refused before analysis reports no selection, then lands', async ({
+  page
+}) => {
+  test.setTimeout(90_000);
+  await stubApi(page);
+  await installAnalysisGate(page);
+  await page.goto('/');
+  await page.getByLabel('Project name').fill('Staged edge pick');
+  await page.getByRole('button', { name: 'Create project' }).click();
+  await expectBodyCount(page, 0);
+  await page.getByRole('button', { name: /^Cylinder \(C\)/ }).click();
+  await page.evaluate(() => {
+    (window as typeof window & { holdAnalysis: boolean }).holdAnalysis = true;
+  });
+  await page
+    .getByRole('region', { name: 'Feature inspector' })
+    .getByRole('button', { name: /^Create/ })
+    .click();
+  await expect
+    .poll(() =>
+      page.evaluate(
+        () => (window as typeof window & { heldAnalysis: number }).heldAnalysis
+      )
+    )
+    .toBeGreaterThan(0);
+  const canvas = page.locator('.viewer-host canvas');
+  const selectCircularEdge = () =>
+    canvas.evaluate(
+      (element) =>
+        new Promise<boolean>((resolve) => {
+          element.dispatchEvent(
+            new CustomEvent('openzcad:e2e-select-edge', {
+              detail: {
+                curve: 'circle',
+                resolve: (selection: unknown) => resolve(selection !== null)
+              }
+            })
+          );
+        })
+    );
+  const filletOperation = page.getByRole('region', {
+    name: 'Fillet operation'
+  });
+  // The staged cylinder is drawn, edges and all, but the workspace refuses
+  // the pick. The hook used to report it selected anyway, so a poll on it
+  // passed and the operation chip never came (blend-preview-commit-reuse).
+  expect(await selectCircularEdge()).toBe(false);
+  await expect(page.getByRole('contentinfo')).toContainText(
+    'The model is still updating. Try that selection again when it finishes.'
+  );
+  await expect(filletOperation).toHaveCount(0);
+  await page.evaluate(() =>
+    (
+      window as typeof window & { releaseAnalysis: () => void }
+    ).releaseAnalysis()
+  );
+  await expect.poll(selectCircularEdge).toBe(true);
+  await expect(filletOperation).toBeVisible();
 });
 
 test('acknowledges appearance edits without reinstalling on later selection', async ({
