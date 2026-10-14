@@ -183,8 +183,11 @@ const LOWER_F = 0x66;
  * line inside the byte ceiling allocated gigabytes of heap before it was
  * refused (measured: a 126 MB one-face file grew the process by 1.7 GB). This
  * counts face references the way the translator fans them — a face of n
- * references is n − 2 triangles — without allocating, stops at the first one
- * over the budget, and refuses with the translator's own words.
+ * references is n − 2 triangles — without allocating, and stops at the first
+ * one over the browser's triangle ceiling. That ceiling, not the translator's
+ * three-times-larger entity budget, is the fence: a file over it is refused
+ * after the translator in any case, so letting one through only spends the
+ * allocation this check exists to avoid.
  */
 function assertObjTriangleBudget(
   data: Uint8Array,
@@ -204,10 +207,10 @@ function assertObjTriangleBudget(
         const byte = data[index];
         if (byte === undefined || byte === LINE_FEED || byte === HASH) break;
         references += 1;
-        if (references > 2 && ++triangles > policy.maxEntities) {
+        if (references > 2 && ++triangles > MAX_IMPORT_TRIANGLES) {
           throw new Error(
-            `${policy.label} import failed: import limit exceeded for OBJ ` +
-              `triangles: ${triangles} > ${policy.maxEntities}`
+            `${policy.label} has more than ${MAX_IMPORT_TRIANGLES} triangles; ` +
+              `the browser import limit is ${MAX_IMPORT_TRIANGLES}.`
           );
         }
         while (index < data.length && !isBlank(data[index])) {
