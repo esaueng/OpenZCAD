@@ -157,6 +157,20 @@ function parseAsciiStl(text: string, fileName: string): ParsedStl {
     const word = token.toLowerCase();
     return ASCII_KEYWORDS.has(word) ? word : '';
   };
+  /**
+   * The next line break at or after `index` (the text's length when there is
+   * none). Searched again only once `index` has passed the last answer, so a
+   * file of many solids is still searched once over.
+   */
+  let lineBreak = -1;
+  const nextLineBreak = (): number => {
+    if (index > lineBreak) {
+      const found = /[\r\n]/g;
+      found.lastIndex = index;
+      lineBreak = found.exec(text)?.index ?? length;
+    }
+    return lineBreak;
+  };
   /** The keyword of the token after the current one, without consuming it. */
   const peekKeyword = (): string => {
     const mark = index;
@@ -164,42 +178,29 @@ function parseAsciiStl(text: string, fileName: string): ParsedStl {
     index = mark;
     return token === null ? '' : keywordOf(token);
   };
+  /** Whether the whole file is one line, trailing line breaks aside. */
+  const body = text.trimEnd();
+  const oneLine = !body.includes('\n') && !body.includes('\r');
   /**
-   * Where `pattern` next matches at or after `index` (the text's length when
-   * it does not). Searched again only once `index` has passed the last answer,
-   * so a file of many solids is still searched once over.
-   */
-  const nextMatch = (pattern: RegExp) => {
-    let found = -1;
-    return () => {
-      if (index > found) {
-        pattern.lastIndex = index;
-        found = pattern.exec(text)?.index ?? length;
-      }
-      return found;
-    };
-  };
-  const nextLineBreak = nextMatch(/[\r\n]/g);
-  const nextEndfacet = nextMatch(/endfacet/gi);
-  /**
-   * Skips the name after `solid` or `endsolid`: the rest of its line, whatever
-   * words it holds, `facet normal` included. Only a line that also holds a
-   * whole facet — a file written on one line — needs the name told apart from
-   * the geometry after it, and there the first `facet` followed by `normal`
-   * or `outer` ends the name.
+   * Skips the name after `solid` or `endsolid`. In a file of several lines
+   * the name is the rest of its line, always, whatever words it holds. A
+   * one-line file has no line end to stop at, so there the name ends at the
+   * first `facet` followed by `normal` or `outer`, and everything from it on
+   * is geometry — a malformed facet is refused, never read as a name. The
+   * cost is that a one-line file whose name itself says `facet normal` is
+   * refused.
    */
   const skipName = () => {
-    const lineEnd = nextLineBreak();
-    const oneLine = nextEndfacet() < lineEnd;
+    const lineEnd = oneLine ? length : nextLineBreak();
     for (;;) {
       const mark = index;
       const token = next();
       if (token === null) return;
       if (
-        start > lineEnd ||
-        (oneLine &&
-          keywordOf(token) === 'facet' &&
-          ['normal', 'outer'].includes(peekKeyword()))
+        oneLine
+          ? keywordOf(token) === 'facet' &&
+            ['normal', 'outer'].includes(peekKeyword())
+          : start > lineEnd
       ) {
         index = mark;
         return;
