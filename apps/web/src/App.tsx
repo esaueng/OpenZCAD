@@ -185,8 +185,7 @@ import type {
 import {
   toShaprImportId,
   toSketchConstraintId,
-  toUserId,
-  UNIT_TO_MM
+  toUserId
 } from '@openzcad/shared';
 import {
   buildConstraint,
@@ -259,6 +258,7 @@ import {
   listLocalOnlyImportSources,
   type ArchiveLocalSourcesResult
 } from './lib/importArchival';
+import { importedMeshCommand } from './lib/importedMeshCommand';
 import {
   coalesceImportProgress,
   type ImportProgressSink,
@@ -296,6 +296,7 @@ import {
 import {
   CloudProjectAutosave,
   currentVersionOf,
+  PROJECT_TOO_LARGE_FOR_ACCOUNT,
   type WorkspaceSaveState
 } from './lib/cloudProjectAutosave';
 import { applyAccountProjectRefresh } from './lib/accountProjectRefresh';
@@ -4318,12 +4319,7 @@ export function App() {
             'The account copy needs repair. Your work remains saved on this device; click Repair needed to retry.'
           );
         } else if (status.state === 'refused') {
-          setStatus(
-            errorMessage(
-              status.error,
-              'This document is too large for the account. It stays saved on this device.'
-            )
-          );
+          setStatus(errorMessage(status.error, PROJECT_TOO_LARGE_FOR_ACCOUNT));
         }
       },
       onSynced({ projectId, version }) {
@@ -10580,15 +10576,14 @@ export function App() {
           const { createBodyFeatureIds } =
             await import('@openzcad/document-core');
           const previewIds = createBodyFeatureIds();
-          const previewCommand = commandFactories.importMesh({
-            name: parsed.name,
-            artifactId: `artifact_local_${crypto.randomUUID()}`,
-            sourceName: parsed.name,
-            triangleCount: parsed.triangleCount,
-            vertices: parsed.vertices,
-            indices: parsed.indices,
-            ids: previewIds
-          });
+          // Through the shared builder, so the preview and the commit both
+          // adopt the millimetre triangles in this document's units.
+          const previewCommand = importedMeshCommand(
+            parsed,
+            doc.units,
+            `artifact_local_${crypto.randomUUID()}`,
+            previewIds
+          );
           let rejection: string | null = null;
           const outcome = await validatedFeature.run(previewCommand, {
             featureName: parsed.name,
@@ -10644,15 +10639,12 @@ export function App() {
                   'AbortError'
                 );
               }
-              return commandFactories.importMesh({
-                name: parsed.name,
+              return importedMeshCommand(
+                parsed,
+                doc.units,
                 artifactId,
-                sourceName: parsed.name,
-                triangleCount: parsed.triangleCount,
-                vertices: parsed.vertices,
-                indices: parsed.indices,
-                ids: previewIds
-              });
+                previewIds
+              );
             }
           });
           // Every terminal result settles the card before its abort handle is
@@ -10755,14 +10747,14 @@ export function App() {
   }
 
   /**
-   * The half of a mesh import every format shares: scale the triangles into
-   * document units, archive the original upload, and commit one
-   * `imported-mesh` feature.
+   * The kernel-read formats' half of a mesh import: archive the original
+   * upload, and commit one `imported-mesh` feature in document units.
    *
-   * STL and the kernel-read formats differ only in how the triangles were
-   * produced. Sharing the commit is what keeps them the same feature — a mesh
-   * body from a 3MF is indistinguishable downstream from one out of an STL,
-   * including in autosave, reopen and export.
+   * STL commits through the validated-feature run instead, but builds the
+   * same command with the same `importedMeshCommand` — that shared builder,
+   * units included, is what keeps them the same feature: a mesh body from a
+   * 3MF is indistinguishable downstream from one out of an STL, including in
+   * autosave, reopen and export.
    */
   async function commitImportedMesh(input: {
     file: File;
@@ -10788,17 +10780,6 @@ export function App() {
       // and `doc` is the same render's value throughout.
       return;
     }
-    // The triangles arrive in millimetres — a 3MF's declared unit and glTF's
-    // metres are applied by the importer, and the formats that declare none
-    // follow the STL interchange convention. The mesh exports multiply by
-    // UNIT_TO_MM on the way out, so adopting the vertices at 1/UNIT_TO_MM
-    // keeps a non-mm document's round trip at the same physical size.
-    const meshScale = 1 / UNIT_TO_MM[doc.units];
-    const vertices =
-      meshScale === 1
-        ? mesh.vertices
-        : mesh.vertices.map((value) => value * meshScale);
-
     // Best-effort archive of the original upload; the mesh itself lives in
     // the document, so a storage failure must not block the import.
     let artifactId = `artifact_local_${crypto.randomUUID()}`;
@@ -10819,23 +10800,17 @@ export function App() {
     // Between the entry check and here are two awaits, the second an
     // upload of up to 128 MB. This path shows no busy state and no import
     // card, so Home and the project shelf stay live throughout — and the
-    // vertices were already scaled by the units of the document that was
-    // open when the file was read, so landing them anywhere else is both
-    // the wrong project and the wrong size. The STEP path is guarded by
-    // `useValidatedFeatureCommit`; this one had nothing.
+    // import's rebuild check ran in the units of the document that was open
+    // when the file was read, which also scale the vertices below, so landing
+    // them anywhere else is both the wrong project and the wrong size. The
+    // STEP path is guarded by `useValidatedFeatureCommit`; this one had
+    // nothing.
     if (managerRef.current !== importManager) {
       setStatus('The project changed while the import finished.');
       return;
     }
     const created = executeCommand(
-      commandFactories.importMesh({
-        name: mesh.name,
-        artifactId,
-        sourceName: mesh.name,
-        triangleCount: mesh.triangleCount,
-        vertices,
-        indices: mesh.indices
-      })
+      importedMeshCommand(mesh, doc.units, artifactId)
     );
     if (created) {
       // A converted file says so: the numbers in the document are not the

@@ -1,9 +1,17 @@
-import type {
-  ProjectDocument,
-  SaveProjectDocumentResponse
+import {
+  DOCUMENT_VALUES_REFUSAL,
+  type ProjectDocument,
+  type SaveProjectDocumentResponse
 } from '@openzcad/shared';
 import { withoutDerivedProjection } from '@openzcad/document-core';
 import { ApiError, isProjectDocumentUnavailableError } from './api';
+
+/**
+ * What a `refused` write says when the account will never hold the document
+ * as it stands. The device copy is untouched, which is the half that matters.
+ */
+export const PROJECT_TOO_LARGE_FOR_ACCOUNT =
+  'This project is too large to save to your account. It stays saved on this device.';
 
 /**
  * How long editing has to pause before the account is written. Much longer than
@@ -608,11 +616,18 @@ export class CloudProjectAutosave {
     }
 
     // Too large, or refused outright. Waiting changes nothing, so say so
-    // instead of retrying until the user assumes it worked.
-    if (status === 413 || status === 403) {
+    // instead of retrying until the user assumes it worked. A document over
+    // the shared value ceiling gets the same verdict as a 400, which used to
+    // be retried as "offline" for good; it is reported in the user's terms.
+    const overValueCeiling =
+      status === 400 && (error as ApiError).message === DOCUMENT_VALUES_REFUSAL;
+    if (status === 413 || status === 403 || overValueCeiling) {
       this.#requeue(next);
       this.#halted = 'refused';
-      this.#emit('refused', error);
+      this.#emit(
+        'refused',
+        overValueCeiling ? new Error(PROJECT_TOO_LARGE_FOR_ACCOUNT) : error
+      );
       return { state: 'halted' };
     }
 
