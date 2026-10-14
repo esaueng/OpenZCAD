@@ -30,6 +30,7 @@ import {
   RevisionIdCollisionError,
   RevisionNotFoundError,
   sharedDocumentReferencesImport,
+  sharedProjectSnapshotDocument,
   UPLOAD_SESSION_TTL_MS,
   type ArtifactBody,
   type CreateProjectInvitationInput,
@@ -258,6 +259,14 @@ export const CLOUDFLARE_BOOLEAN_FLAGS = [
 export type CloudflareBooleanFlag = (typeof CLOUDFLARE_BOOLEAN_FLAGS)[number];
 
 const ENABLED_BOOLEAN_ENV_VALUES = new Set(['1', 'true', 'yes', 'on']);
+
+/**
+ * Most projects one `destroyProjects` call may take. Its object-key UNION
+ * binds the id list twice, and D1 refuses a statement with more than 100
+ * bound parameters — a ceiling local SQLite does not share, so only D1 shows
+ * the failure.
+ */
+const PROJECT_DESTROY_BATCH_SIZE = 50;
 
 /**
  * Feature flags default closed and opt in only through a recognized true
@@ -1013,7 +1022,7 @@ export class D1R2PersistenceService implements PersistenceService {
       projectId: row.project_id,
       name: row.name,
       mode: row.mode,
-      document: withoutDerivedProjection(document)
+      document: sharedProjectSnapshotDocument(document)
     };
   }
 
@@ -1447,10 +1456,7 @@ export class D1R2PersistenceService implements PersistenceService {
       .bind(userId)
       .all<{ id: string }>();
     const projectIds = (rows.results ?? []).map((row) => row.id);
-    // Keep statement sizes, bound parameters, and object-deletion fanout small.
-    for (let start = 0; start < projectIds.length; start += 50) {
-      await this.destroyProjects(projectIds.slice(start, start + 50));
-    }
+    await this.destroyProjectsInBatches(projectIds);
     return projectIds.map(toProjectId);
   }
 
@@ -1465,7 +1471,10 @@ export class D1R2PersistenceService implements PersistenceService {
       .bind(userId, cutoff)
       .all<{ id: string }>();
     const projectIds = (expired.results ?? []).map((row) => row.id);
-    await this.destroyProjects(projectIds);
+    // Up to 100 ids, so batched like account deletion: in one call, 51 expired
+    // projects bound 102 parameters, D1 refused the statement, and because the
+    // same rows were selected again next time the purge could never succeed.
+    await this.destroyProjectsInBatches(projectIds);
     return projectIds.map(toProjectId);
   }
 
@@ -3740,11 +3749,27 @@ export class D1R2PersistenceService implements PersistenceService {
     );
   }
 
+  /** Keeps statement sizes, bound parameters and object-deletion fanout small. */
+  private async destroyProjectsInBatches(projectIds: string[]): Promise<void> {
+    for (
+      let start = 0;
+      start < projectIds.length;
+      start += PROJECT_DESTROY_BATCH_SIZE
+    ) {
+      await this.destroyProjects(
+        projectIds.slice(start, start + PROJECT_DESTROY_BATCH_SIZE)
+      );
+    }
+  }
+
   /**
    * Irreversibly removes projects and their stored bytes. R2 objects are swept
    * first because deleting their index rows first could strand unreferenced
    * user data. Child rows are then removed explicitly so correctness does not
    * depend on D1 foreign-key enforcement being enabled on this connection.
+   *
+   * Takes at most {@link PROJECT_DESTROY_BATCH_SIZE} ids; larger sets go
+   * through {@link destroyProjectsInBatches}.
    */
   private async destroyProjects(projectIds: string[]): Promise<void> {
     if (projectIds.length === 0) {
