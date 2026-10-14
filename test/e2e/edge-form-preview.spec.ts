@@ -38,6 +38,15 @@ for (const [tool, field] of [
     await expect(feature).toBeVisible();
     await feature.locator('.feature-row-main').click();
     await expect(inspector.getByLabel(field, { exact: true })).toHaveValue('1');
+    // Reopened from History it is an edit card: its button and its preview
+    // line both say Apply.
+    await expect(
+      inspector.getByRole('button', { name: /^Apply/ })
+    ).toBeVisible();
+    await inspector.getByLabel(field, { exact: true }).fill('2');
+    await expect(page.getByRole('contentinfo')).toContainText(
+      'Preview · Apply to save the result.'
+    );
     await expect(page.getByTitle('Feature failed to build')).toHaveCount(0);
   });
 }
