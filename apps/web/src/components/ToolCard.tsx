@@ -80,6 +80,8 @@ export function ToolCard({
   const bodyRef = useRef<HTMLDivElement | null>(null);
   const previousFocusRequest = useRef<unknown>(undefined);
   const pendingFocus = useRef<{ owner: Element | null } | null>(null);
+  // Check after each render: the child form may become enabled even when
+  // the request and operation phase have not changed.
   useEffect(() => {
     const body = bodyRef.current;
     if (!body) return;
@@ -95,7 +97,11 @@ export function ToolCard({
       return;
     }
     const input = body.querySelector<HTMLInputElement>('.expr-field input');
-    if (focusReady && input && !input.matches(':disabled')) {
+    if (
+      focusReady &&
+      input &&
+      !input.closest(':disabled, fieldset[disabled]')
+    ) {
       pendingFocus.current = null;
       // Focusing an expression field selects its value.
       input.focus();
@@ -112,7 +118,7 @@ export function ToolCard({
       doc.removeEventListener('pointerdown', cancel, true);
       doc.removeEventListener('focusin', cancel, true);
     };
-  }, [focusRequest, focusReady, model.phase]);
+  });
   const status = (
     <>
       {model.phase === 'dragging' ? (
