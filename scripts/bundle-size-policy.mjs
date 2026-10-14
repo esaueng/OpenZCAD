@@ -44,8 +44,35 @@ export const LAZY_ENTRY_PATTERNS = [
   TRANSLATOR_WASM_ASSET_PATTERN,
   /^assets\/sqlite3-.*\.wasm$/,
   /^assets\/shaprImportWorker-.*\.js$/,
-  /^assets\/meshImportWorker-.*\.js$/
+  /^assets\/meshImportWorker-.*\.js$/,
+  /^assets\/text-loader-.*\.js$/
 ];
+
+/**
+ * Libraries that must never be inside a launcher-loaded chunk, identified by
+ * a string each one carries through minification.
+ *
+ * `LAZY_ENTRY_PATTERNS` only sees file names, so it cannot notice a lazy
+ * library that a `manualChunks` rule folds into a chunk the launcher already
+ * preloads: opentype.js sat in the eager `geometry` chunk for two months
+ * (235 kB of font parser before the start screen paints) because the
+ * `/packages/geometry/` rule captured its only import site.
+ */
+export const LAUNCHER_FORBIDDEN_MARKERS = [
+  {
+    marker: 'Unsupported OpenType signature',
+    library: 'opentype.js, loaded only when a document first shows text'
+  }
+];
+
+/** The forbidden markers each launcher-loaded JavaScript asset contains. */
+export function launcherMarkerLeaks(assets) {
+  return assets.flatMap(({ file, contents }) =>
+    LAUNCHER_FORBIDDEN_MARKERS.filter(({ marker }) =>
+      contents.includes(marker)
+    ).map(({ library }) => ({ file, library }))
+  );
+}
 
 /**
  * Kernel byte thresholds. Ceiling step 1 (2026-10) raised them from
