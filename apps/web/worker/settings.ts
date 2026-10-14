@@ -781,12 +781,22 @@ export async function isProjectSharingPreferenceEnabled(
   return DEFAULT_APP_SETTINGS.collaboration.enabled;
 }
 
+/** A committed settings write, and the settings it replaced. */
+export interface AppSettingsUpdate {
+  response: AppSettingsResponse;
+  /**
+   * What the account held before this write, so side effects can fire on a
+   * transition rather than on every save that happens to carry a value.
+   */
+  previous: AppSettings;
+}
+
 export async function updateAppSettings(
   userId: UserId,
   request: UpdateAppSettingsRequest,
   env: CloudflareEnv,
   email?: string
-): Promise<AppSettingsResponse> {
+): Promise<AppSettingsUpdate> {
   if (!env.DB) {
     throw new HttpError(503, 'Account settings storage is unavailable.');
   }
@@ -828,7 +838,10 @@ export async function updateAppSettings(
       'Settings changed elsewhere. Reload and try again.'
     );
   }
-  return getAppSettings(userId, env, email);
+  return {
+    response: await getAppSettings(userId, env, email),
+    previous: current.settings
+  };
 }
 
 function assistantConnectionFingerprint(settings: AppSettings): string {

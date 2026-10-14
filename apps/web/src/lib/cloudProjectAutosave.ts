@@ -3,7 +3,10 @@ import {
   type ProjectDocument,
   type SaveProjectDocumentResponse
 } from '@openzcad/shared';
-import { withoutDerivedProjection } from '@openzcad/document-core';
+import {
+  withEchoedSavePoints,
+  withoutDerivedProjection
+} from '@openzcad/document-core';
 import { ApiError, isProjectDocumentUnavailableError } from './api';
 
 /**
@@ -186,6 +189,8 @@ export class CloudProjectAutosave {
   #projectEpoch = 0;
   #editEpoch = 0;
   #pending: PendingSave | null = null;
+  /** Writes taken off `#pending` and chained on `#queue`, not yet started. */
+  readonly #queued = new Set<PendingSave>();
   #timer: ReturnType<typeof setTimeout> | null = null;
   #queue: Promise<SaveResult> = Promise.resolve({ state: 'stale' });
   #automaticRetries = 0;
@@ -445,6 +450,7 @@ export class CloudProjectAutosave {
 
     const epoch = this.#project.epoch;
     this.#pending = null;
+    this.#queued.add(next);
     const save = this.#queue.then(
       () => this.#persist(next, epoch),
       () => this.#persist(next, epoch)
@@ -527,6 +533,14 @@ export class CloudProjectAutosave {
         if (this.#pending && this.#pending.editEpoch <= editEpoch) {
           this.#pending = null;
         }
+        // Writes debounced or queued behind this checkpoint carry documents
+        // edited while it was in flight, without the save point the account
+        // just minted; the next of them would replace the account copy and
+        // the named save with it. They take the save point along instead.
+        for (const waiting of [this.#pending, ...this.#queued]) {
+          if (waiting?.projectId === projectId)
+            waiting.document = withEchoedSavePoints(waiting.document, saved);
+        }
         this.#options.onSynced?.({ projectId, version: saved.version });
       }
       return saved;
@@ -555,6 +569,7 @@ export class CloudProjectAutosave {
   }
 
   async #persist(next: PendingSave, epoch: number): Promise<SaveResult> {
+    this.#queued.delete(next);
     if (!this.#isActive(epoch, next.projectId)) {
       return { state: 'stale' };
     }

@@ -69,6 +69,14 @@ describe('snapSketchPoint / sketchObjectFromDrag', () => {
     });
   });
 
+  it('snaps a small negative coordinate to 0, never -0', () => {
+    // JSON writes -0 as 0, so a stored -0 made the device and account copies
+    // of one document compare as different work.
+    const snapped = snapSketchPoint({ x: -0.3, y: -0.2 }, 1);
+    expect(Object.is(snapped.x, 0)).toBe(true);
+    expect(Object.is(snapped.y, 0)).toBe(true);
+  });
+
   it('uses a deterministic direction for click-then-type exact entry', () => {
     expect(
       pointAtDistanceAlongDirection({ x: 2, y: 3 }, { x: 2, y: 3 }, 25)
