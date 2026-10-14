@@ -250,7 +250,12 @@ describe('STL parsing', () => {
     it.each([
       'my facet vertex 1 2 part',
       'facet normal bracket',
-      'FACET OUTER bracket'
+      'FACET OUTER bracket',
+      // Terminator words in a name are still the name: only a whole facet on
+      // the name's own line is geometry.
+      'endfacet facet normal bracket',
+      'facet normal endfacet vertex 1 2 3 bracket',
+      'facet normal vertex 1 2 3 endfacet bracket'
     ])('reads keywords in the solid name "%s" as part of the name', (name) => {
       for (const ending of ['\n', '\r\n']) {
         const text = [
@@ -280,6 +285,17 @@ describe('STL parsing', () => {
       const parsed = parseStl(
         new TextEncoder().encode(text).buffer,
         'one-line.stl'
+      );
+      expect(parsed.triangleCount).toBe(1);
+      expect(parsed.vertices).toEqual([0, 0, 0, 1, 0, 0, 0, 1, 0]);
+    });
+
+    it('ends a one-line solid name at the first whole facet', () => {
+      const text =
+        'solid facet normal endfacet bracket facet normal 0 0 1 outer loop vertex 0 0 0 vertex 1 0 0 vertex 0 1 0 endloop endfacet endsolid facet normal bracket\n';
+      const parsed = parseStl(
+        new TextEncoder().encode(text).buffer,
+        'one-line-named.stl'
       );
       expect(parsed.triangleCount).toBe(1);
       expect(parsed.vertices).toEqual([0, 0, 0, 1, 0, 0, 0, 1, 0]);
