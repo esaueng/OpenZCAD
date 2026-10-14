@@ -133,6 +133,89 @@ export async function preloadSharedImportSources(
 }
 
 /**
+ * One download per source, shared by every rebuild that asks for it. An edit
+ * that superseded a rebuild mid-download used to leave that transfer running
+ * while the next rebuild started another, each able to buffer up to the
+ * import budget. A superseding rebuild now joins the running transfer, and
+ * one that no rebuild has wanted for the idle budget is aborted.
+ */
+interface SourceDownload {
+  bytes: Promise<Uint8Array | null>;
+  abort(): void;
+  /** Callers waiting on it whose rebuilds have not been superseded. */
+  wanted: number;
+  unwanted?: ReturnType<typeof setTimeout>;
+}
+let downloads: Map<string, SourceDownload> | undefined;
+
+function startDownload(key: string, artifactId: ArtifactId): SourceDownload {
+  const controller = new AbortController();
+  const forget = () => {
+    if (downloads?.get(key) === download) downloads.delete(key);
+  };
+  let idle: ReturnType<typeof setTimeout> | undefined;
+  const progressed = () => {
+    clearTimeout(idle);
+    idle = setTimeout(() => controller.abort(), SOURCE_DOWNLOAD_IDLE_MS);
+  };
+  progressed();
+  // An abandoned transfer is never joined while it winds down.
+  controller.signal.addEventListener('abort', forget);
+  const download: SourceDownload = {
+    wanted: 0,
+    abort: () => controller.abort(),
+    bytes: (async () => {
+      const response = await fetch(
+        `/api/artifacts/${encodeURIComponent(artifactId)}/download`,
+        { signal: controller.signal }
+      );
+      progressed();
+      return response.ok
+        ? readResponseBytes(response, MAX_ARTIFACT_DOWNLOAD_BYTES, progressed)
+        : null;
+    })()
+      // Stalled, abandoned (aborted) or failed: reported as unavailable.
+      .catch(() => null)
+      .then(async (bytes) => {
+        clearTimeout(idle);
+        clearTimeout(download.unwanted);
+        if (!bytes || (await sha256Hex(bytes)) !== key) return null;
+        await putSourceBlob(bytes);
+        return bytes;
+      })
+      .finally(forget)
+  };
+  return download;
+}
+
+function joinDownload(
+  key: string,
+  artifactId: ArtifactId,
+  signal?: AbortSignal
+): Promise<Uint8Array | null> {
+  downloads ??= new Map();
+  let download = downloads.get(key);
+  if (!download) {
+    download = startDownload(key, artifactId);
+    downloads.set(key, download);
+  }
+  const joined = download;
+  clearTimeout(joined.unwanted);
+  joined.wanted += 1;
+  // A caller with no signal wants the bytes for good. A superseded one lets
+  // go; the rebuild that superseded it normally joins within moments.
+  const release = () => {
+    joined.wanted -= 1;
+    if (joined.wanted === 0) {
+      joined.unwanted = setTimeout(joined.abort, SOURCE_DOWNLOAD_IDLE_MS);
+    }
+  };
+  if (signal?.aborted) release();
+  else signal?.addEventListener('abort', release, { once: true });
+  return joined.bytes;
+}
+
+/**
  * Resolves reference-form exact imports in any browser geometry worker.
  *
  * Local bytes win. The archive is other people's data as often as our own —
@@ -143,7 +226,7 @@ export async function preloadSharedImportSources(
  */
 export async function resolveExactSourceBytes(
   ref: ImportedSourceReference,
-  context: { artifactId: ArtifactId; sourceName: string }
+  context: { artifactId: ArtifactId; sourceName: string; signal?: AbortSignal }
 ): Promise<Uint8Array> {
   const local = await loadSourceBlob(ref.checksumSha256);
   if (local) {
@@ -151,31 +234,15 @@ export async function resolveExactSourceBytes(
   }
   // A device-only source missing here can never arrive; a cloud copy can.
   const permanent = context.artifactId.startsWith('artifact_local_');
-  if (!permanent) {
-    const controller = new AbortController();
-    let idle: ReturnType<typeof setTimeout> | undefined;
-    const progressed = () => {
-      clearTimeout(idle);
-      idle = setTimeout(() => controller.abort(), SOURCE_DOWNLOAD_IDLE_MS);
-    };
-    progressed();
-    const bytes = await (async () => {
-      const response = await fetch(
-        `/api/artifacts/${encodeURIComponent(context.artifactId)}/download`,
-        { signal: controller.signal }
+  const bytes = permanent
+    ? null
+    : await joinDownload(
+        ref.checksumSha256,
+        context.artifactId,
+        context.signal
       );
-      progressed();
-      return response.ok
-        ? readResponseBytes(response, MAX_ARTIFACT_DOWNLOAD_BYTES, progressed)
-        : null;
-    })()
-      // Stalled (aborted) or failed: reported as unavailable below.
-      .catch(() => null)
-      .finally(() => clearTimeout(idle));
-    if (bytes && (await sha256Hex(bytes)) === ref.checksumSha256) {
-      await putSourceBlob(bytes);
-      return bytes;
-    }
+  if (bytes) {
+    return bytes;
   }
   throw Object.assign(
     new Error(

@@ -120,23 +120,29 @@ export function throwIfBuildCancelled(
 }
 
 /**
- * Awaits work that cannot observe the signal itself — a source download —
- * but settles with the typed cancellation once the signal fires, sampled
- * every `intervalMs`. The abandoned work runs on; its outcome is dropped.
+ * Runs work that cannot poll the signal itself — a source download — and
+ * settles with the typed cancellation once the signal fires, sampled every
+ * `intervalMs`. The work's own abort signal fires with it, so the work can
+ * stop (or let a later build take it over) instead of running on unseen.
  */
 export function raceBuildCancellation<T>(
-  work: Promise<T>,
+  work: (abort: AbortSignal) => Promise<T>,
   signal?: BuildCancellationSignal,
   intervalMs = 50
 ): Promise<T> {
-  if (!signal) return work;
+  const controller = new AbortController();
+  const running = work(controller.signal);
+  if (!signal) return running;
   let timer: ReturnType<typeof setInterval> | undefined;
   const cancelled = new Promise<never>((_, reject) => {
     timer = setInterval(() => {
-      if (signal.isCancelled()) reject(cancelledBuildRefusal());
+      if (signal.isCancelled()) {
+        controller.abort();
+        reject(cancelledBuildRefusal());
+      }
     }, intervalMs);
   });
-  return Promise.race([work, cancelled]).finally(() => clearInterval(timer));
+  return Promise.race([running, cancelled]).finally(() => clearInterval(timer));
 }
 
 /** Whether an error is a typed cancellation, however deeply it was wrapped. */
