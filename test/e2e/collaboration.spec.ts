@@ -202,7 +202,8 @@ for (const stage of ['accept', 'document', 'public share'] as const) {
     let oldRequested = false;
     let newRequested = false;
     await page.route('**/api/project-invitations/accept', async (route) => {
-      const old = route.request().postDataJSON().token === invitationToken;
+      const payload = route.request().postDataJSON() as { token: string };
+      const old = payload.token === invitationToken;
       if (old && stage === 'accept') {
         oldRequested = true;
         await oldGate;
@@ -260,7 +261,8 @@ for (const stage of ['accept', 'document', 'public share'] as const) {
     const oldResponse = page.waitForResponse((r) =>
       stage === 'accept'
         ? r.url().endsWith('/api/project-invitations/accept') &&
-          r.request().postDataJSON().token === invitationToken
+          (r.request().postDataJSON() as { token: string }).token ===
+            invitationToken
         : r.url().endsWith(`/api/projects/${oldDocument.projectId}`)
     );
     releaseOld();
