@@ -1,9 +1,11 @@
 import { describe, expect, it } from 'vitest';
+import { CommandManager, commandFactories } from '@openzcad/command-system';
 import {
   adoptProjectDocument,
   appendRevision,
   createCheckpoint,
-  createProjectDocument
+  createProjectDocument,
+  withoutDerivedProjection
 } from '@openzcad/document-core';
 import {
   MAX_PROJECT_CHECKPOINTS,
@@ -16,7 +18,8 @@ import {
   projectMatchesInterruptedAdoption,
   projectPreservesLocalWork,
   projectsHaveSameCanonicalContent,
-  selectProjectDocument
+  selectProjectDocument,
+  withMatchingLocalDerived
 } from '../apps/web/src/lib/localProjectStore';
 
 const owner = toUserId('user_owner');
@@ -190,6 +193,68 @@ describe('choosing between the two copies of a project', () => {
     expect(projectsHaveSameCanonicalContent(local, remote)).toBe(true);
     expect(chooseProjectDocument(local, remote, null)).toMatchObject({
       choice: 'remote'
+    });
+  });
+
+  describe('a -0 coordinate, which the account copy stores as 0', () => {
+    /** A circle centred a hair left of the Y axis, snapped to x = -0. */
+    function withNegativeZero(): ProjectDocument {
+      const manager = new CommandManager(
+        createProjectDocument('Negative zero', owner),
+        owner
+      );
+      manager.execute(
+        commandFactories.addSketch({
+          name: 'Sketch 01',
+          planeRef: { type: 'canonical', plane: 'XY', offset: 0 },
+          objects: [
+            { objectKind: 'circle', radius: 5, centerX: -0, centerY: 12 }
+          ]
+        })
+      );
+      return {
+        ...manager.document,
+        derived: { ...manager.document.derived, exportableBodyIds: ['marker'] }
+      } as ProjectDocument;
+    }
+    /** IndexedDB keeps -0 (structured clone); the account stores JSON. */
+    const accountCopy = (document: ProjectDocument) =>
+      JSON.parse(
+        JSON.stringify(withoutDerivedProjection(document))
+      ) as ProjectDocument;
+
+    it('compares as the same work', () => {
+      const local = withNegativeZero();
+      const circle = Object.values(local.nodes).find(
+        (node) => node.kind === 'sketch-object'
+      );
+      expect(
+        circle?.kind === 'sketch-object' &&
+          circle.data.objectKind === 'circle' &&
+          Object.is(circle.data.centerX, -0)
+      ).toBe(true);
+      expect(projectsHaveSameCanonicalContent(local, accountCopy(local))).toBe(
+        true
+      );
+    });
+
+    it('reopens an autosaved project without a conflict', () => {
+      const local = withNegativeZero();
+      expect(
+        chooseProjectDocument(
+          structuredClone(local),
+          accountCopy(local),
+          local.version
+        ).choice
+      ).toBe('remote');
+    });
+
+    it('keeps the device meshes on the save echo', () => {
+      const local = withNegativeZero();
+      expect(
+        withMatchingLocalDerived(accountCopy(local), local).derived
+          .exportableBodyIds
+      ).toEqual(['marker']);
     });
   });
 

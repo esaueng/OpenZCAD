@@ -127,17 +127,20 @@ class HoverFaceMeshSlot {
    */
   private steppedHiddenFaceTarget = Number.NaN;
 
+  /**
+   * The film and its x-ray pass draw the same face slice, so they share one
+   * geometry: one index copy and one upload per hover crossing, not two.
+   */
   install(
     parent: THREE.Object3D,
     key: string,
     geometry: THREE.BufferGeometry,
-    hiddenGeometry: THREE.BufferGeometry,
     xrayEnabled: boolean
   ) {
     this.release(false);
     this.key = key;
     this.faceMesh.geometry = geometry;
-    this.hiddenFaceMesh.geometry = hiddenGeometry;
+    this.hiddenFaceMesh.geometry = geometry;
     // The film cuts in at its resting opacity; the x-ray pass rises to its.
     this.faceMesh.material.opacity = HOVER_FACE_OPACITY;
     this.hiddenFaceMesh.material.opacity = 0;
@@ -225,7 +228,9 @@ class HoverFaceMeshSlot {
     this.faceMesh.removeFromParent();
     this.hiddenFaceMesh.removeFromParent();
     this.faceMesh.geometry.dispose();
-    this.hiddenFaceMesh.geometry.dispose();
+    if (this.hiddenFaceMesh.geometry !== this.faceMesh.geometry) {
+      this.hiddenFaceMesh.geometry.dispose();
+    }
     if (installEmptyGeometry) {
       this.faceMesh.geometry = new THREE.BufferGeometry();
       this.hiddenFaceMesh.geometry = new THREE.BufferGeometry();
@@ -463,10 +468,7 @@ export class SelectionManager {
       return;
     }
     const geometry = createFaceHighlightGeometry(object, face);
-    const hiddenGeometry = createFaceHighlightGeometry(object, face);
-    if (!geometry || !hiddenGeometry) {
-      geometry?.dispose();
-      hiddenGeometry?.dispose();
+    if (!geometry) {
       return;
     }
     const incomingSlot =
@@ -475,16 +477,9 @@ export class SelectionManager {
       ) ?? this.hoverFaceSlots.find((slot) => slot !== outgoingSlot);
     if (!incomingSlot) {
       geometry.dispose();
-      hiddenGeometry.dispose();
       return;
     }
-    incomingSlot.install(
-      object,
-      key,
-      geometry,
-      hiddenGeometry,
-      this.xrayEnabled
-    );
+    incomingSlot.install(object, key, geometry, this.xrayEnabled);
     this.activeHoverFaceSlot = incomingSlot;
     this.options.requestRender();
   }

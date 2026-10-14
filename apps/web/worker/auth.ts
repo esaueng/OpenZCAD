@@ -220,7 +220,7 @@ async function hashedUserId(
 }
 
 async function hmacUserId(
-  prefix: 'user_anon',
+  prefix: 'user_anon' | 'user_ai',
   identity: string,
   secret: string
 ): Promise<AuthSession['userId']> {
@@ -1473,4 +1473,34 @@ export async function identifyAssistantRequest(
   env: CloudflareEnv
 ): Promise<AuthSession['userId']> {
   return (await identifyAssistantIdentity(request, env)).userId;
+}
+
+/**
+ * The pseudonym the assistant hands its model provider for a caller (OpenAI's
+ * `safety_identifier`, OpenRouter's `user`).
+ *
+ * A signed-in user id is `user_` plus an unsalted SHA-256 prefix of the email,
+ * so forwarding it let anyone holding provider logs confirm an address by
+ * hashing candidates. Keyed with the Worker-only pepper anonymous identities
+ * already use, it stays stable per user — provider abuse tracking and sticky
+ * routing keep working — without being computable from the email.
+ */
+export async function assistantProviderIdentity(
+  userId: AuthSession['userId'],
+  env: CloudflareEnv
+): Promise<string> {
+  const pepper = env.AI_IDENTITY_PEPPER?.trim();
+  if (!pepper) {
+    // Development identities are not derived from an email, and a hosted
+    // email-code deployment refuses to publish without the pepper.
+    if (env.AUTH_MODE !== 'email-code') {
+      return userId;
+    }
+    throw new AuthFlowError(
+      503,
+      'AI_IDENTITY_UNAVAILABLE',
+      'The modeling assistant identity service is unavailable.'
+    );
+  }
+  return hmacUserId('user_ai', `openzcad-ai-provider-v1:${userId}`, pepper);
 }
