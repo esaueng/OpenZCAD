@@ -27,7 +27,7 @@ export type SketchReferenceAnnotationId = Brand<
 >;
 export type ShaprImportId = Brand<string, 'ShaprImportId'>;
 
-export const PROJECT_DOCUMENT_SCHEMA_VERSION = 16 as const;
+export const PROJECT_DOCUMENT_SCHEMA_VERSION = 17 as const;
 export type ProjectDocumentSchemaVersion =
   typeof PROJECT_DOCUMENT_SCHEMA_VERSION;
 
@@ -1106,7 +1106,8 @@ export type FeatureData =
        * triangles in document units. The bytes live in the source blob store
        * and in the `mesh-payload` artifact named by `artifactId`, so neither
        * this node, its `import.mesh` command nor its undo entry repeats the
-       * mesh.
+       * mesh. Schema v17 keeps clients that only understand embedded meshes
+       * from accepting this document and silently omitting its imported body.
        */
       meshPayloadRef?: ImportedSourceReference;
     }

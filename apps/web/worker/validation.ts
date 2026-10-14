@@ -127,6 +127,14 @@ function requireString(
   return trimmed;
 }
 
+export function parseDiscardMeshPayloadRequest(body: unknown): {
+  projectId: string;
+} {
+  return {
+    projectId: requireString(asRecord(body, 'Request body'), 'projectId', 200)
+  };
+}
+
 export function parseCreateProjectRequest(body: unknown): CreateProjectRequest {
   const record = asRecord(body, 'Request body');
   const name = requireString(record, 'name', MAX_NAME_LENGTH);
