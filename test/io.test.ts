@@ -250,9 +250,14 @@ describe('STL parsing', () => {
     it.each([
       'my facet vertex 1 2 part',
       'facet normal bracket',
-      'FACET OUTER bracket'
+      'FACET OUTER bracket',
+      // In a file of several lines a name is the rest of its line, whatever
+      // keywords it spells.
+      'endfacet facet normal bracket',
+      'facet normal endfacet vertex 1 2 3 bracket',
+      'facet normal vertex 1 2 3 endfacet bracket'
     ])('reads keywords in the solid name "%s" as part of the name', (name) => {
-      for (const ending of ['\n', '\r\n']) {
+      for (const ending of ['\n', '\r\n', '\r']) {
         const text = [
           `solid ${name}`,
           'facet normal 0 0 1',
@@ -283,6 +288,30 @@ describe('STL parsing', () => {
       );
       expect(parsed.triangleCount).toBe(1);
       expect(parsed.vertices).toEqual([0, 0, 0, 1, 0, 0, 0, 1, 0]);
+    });
+
+    // A one-line file has no line end to close its name, so the name ends at
+    // the first `facet normal` / `facet outer` and everything after it is
+    // geometry. A one-line name that says `facet normal` is the accepted cost.
+    it('reads `facet normal` in a one-line solid name as geometry, and refuses it', () => {
+      const text =
+        'solid facet normal bracket facet normal 0 0 1 outer loop vertex 0 0 0 vertex 1 0 0 vertex 0 1 0 endloop endfacet endsolid x\n';
+      expect(() =>
+        parseStl(new TextEncoder().encode(text).buffer, 'one-line-named.stl')
+      ).toThrow('ASCII STL facet 1 is not closed by "endfacet".');
+    });
+
+    it('refuses a malformed first facet in a one-line file, not reads it as the name', () => {
+      // Read as part of the solid name, the bad facet vanished and only the
+      // valid one after it imported.
+      const text =
+        'solid x facet normal 0 0 1 outer loop vertex nan 0 0 vertex 1 0 0 vertex 0 1 0 endloop endfacet ' +
+        'facet normal 0 0 1 outer loop vertex 0 0 0 vertex 1 0 0 vertex 0 1 0 endloop endfacet endsolid x';
+      expect(() =>
+        parseStl(new TextEncoder().encode(text).buffer, 'one-line-nan.stl')
+      ).toThrow(
+        'ASCII STL facet 1 has a vertex that is not three finite numbers: "vertex nan 0 0".'
+      );
     });
   });
 
