@@ -61,7 +61,13 @@ export async function createProjectBackup(
   measurements?: StoredMeasurementRecord
 ): Promise<string> {
   const snapshot = withoutDerivedProjection(structuredClone(document));
-  const files = await loadProjectBackupFiles(snapshot.projectId);
+  const storedFiles = await loadProjectBackupFiles(snapshot.projectId);
+  // Internal mesh payloads belong in sources, where their content key makes
+  // one copy serve the current document, undo history and saved states.
+  // Keep older backups' file bytes available as a source-resolution fallback.
+  const files = storedFiles.filter(
+    (file) => file.artifact.kind !== 'mesh-payload'
+  );
   const backup: ProjectBackup = {
     format: 'openzcad-project',
     version: 1,
@@ -84,6 +90,7 @@ export async function createProjectBackup(
     const archived = await api.listArtifacts(snapshot.projectId);
     for (const artifact of archived.artifacts) {
       if (
+        artifact.kind === 'mesh-payload' ||
         files.some((file) => file.artifact.artifactId === artifact.artifactId)
       )
         continue;
@@ -133,9 +140,9 @@ export async function createProjectBackup(
         continue;
       let bytes = await loadSourceBlob(ref.checksumSha256);
       if (!bytes) {
-        const archived = files.find(
-          (file) => file.artifact.artifactId === artifactId
-        );
+        const archived =
+          storedFiles.find((file) => file.artifact.artifactId === artifactId) ??
+          files.find((file) => file.artifact.artifactId === artifactId);
         bytes = archived
           ? backupFileBytes(archived)
           : await readBackupResponse(

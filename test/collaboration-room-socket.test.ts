@@ -456,12 +456,22 @@ describe('collaboration room socket handling', () => {
       DB: {
         prepare: (sql: string) => ({
           bind: () => ({
+            all: async () => {
+              expect(sql).toContain('FROM project_copy_source_archives');
+              return { results: [] };
+            },
             first: async () =>
-              sql.startsWith('SELECT user_id, document_version FROM projects')
-                ? { user_id: 'user_room' }
-                : memberRole
-                  ? { role: memberRole, collaboration_enabled: 1 }
-                  : null
+              sql.includes('user_id AS owner_user_id')
+                ? { owner_user_id: 'user_room' }
+                : sql.startsWith('SELECT 1 AS allowed')
+                  ? { allowed: 1 }
+                  : sql.startsWith(
+                        'SELECT user_id, document_version FROM projects'
+                      )
+                    ? { user_id: 'user_room' }
+                    : memberRole
+                      ? { role: memberRole, collaboration_enabled: 1 }
+                      : null
           })
         })
       }
@@ -505,7 +515,15 @@ describe('collaboration room socket handling', () => {
       DB: {
         prepare: (query: string) => ({
           bind: () => ({
+            all: async () => {
+              expect(query).toContain('FROM project_copy_source_archives');
+              return { results: [] };
+            },
             first: async () => {
+              if (query.includes('user_id AS owner_user_id'))
+                return { owner_user_id: 'user_room' };
+              if (query.startsWith('SELECT 1 AS allowed'))
+                return { allowed: 1 };
               if (query.includes('account_erasure_requests')) return null;
               if (query.includes('SELECT user_id'))
                 return query.includes('AND user_id')
@@ -568,7 +586,14 @@ describe('collaboration room socket handling', () => {
       DB: {
         prepare: (sql: string) => ({
           bind: (_projectId: string, userId: string) => ({
+            all: async () => {
+              expect(sql).toContain('FROM project_copy_source_archives');
+              return { results: [] };
+            },
             first: async () => {
+              if (sql.includes('user_id AS owner_user_id'))
+                return { owner_user_id: 'user_room' };
+              if (sql.startsWith('SELECT 1 AS allowed')) return { allowed: 1 };
               if (
                 sql.startsWith(
                   'SELECT user_id, document_version FROM projects'

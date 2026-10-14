@@ -3,11 +3,12 @@ import { resolve } from 'node:path';
 import { describe, expect, it } from 'vitest';
 
 /**
- * The light theme repaints the chrome and leaves the viewport dark, so any
- * overlay that paints its own dark stage and then reads `--color-text` goes
- * dark-on-dark the moment the theme flips: the rotate-view icons, the scale
- * bar and the topology pick list all vanished that way. Those overlays read
- * the viewport text tokens instead, and those tokens never re-theme.
+ * HUD cards over the stage paint their own dark ground in every theme, so
+ * any of them that reads `--color-text` goes dark-on-dark the moment the
+ * theme flips: the rotate-view icons and the topology pick list both
+ * vanished that way. Those cards read the viewport text tokens instead, and
+ * those tokens never re-theme. (What is drawn straight on the stage, with no
+ * card, reads the stage ink, which does — see contrast.test.ts.)
  */
 const tokens = readFileSync(resolve(__dirname, './tokens.css'), 'utf8');
 

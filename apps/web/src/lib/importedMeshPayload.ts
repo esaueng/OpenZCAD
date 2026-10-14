@@ -218,22 +218,38 @@ export async function archiveImportedMesh(deps: {
     body: Blob;
     metadata: Record<string, string>;
     signal?: AbortSignal;
+    onCleanupFailure?(error: unknown): void;
   }): Promise<string>;
   /** Defaults to `crypto.randomUUID`. */
   newId?(): string;
   signal?: AbortSignal;
+  onCleanupFailure?(error: unknown): void;
 }): Promise<ImportedMeshArchive> {
   const { signal } = deps;
   const attempt = async (
     input: Parameters<typeof deps.archive>[0]
   ): Promise<string | null> => {
+    signal?.throwIfAborted();
     try {
-      return await deps.archive({ ...input, ...(signal ? { signal } : {}) });
+      return await deps.archive({
+        ...input,
+        ...(signal ? { signal } : {}),
+        ...(deps.onCleanupFailure
+          ? { onCleanupFailure: deps.onCleanupFailure }
+          : {})
+      });
     } catch (error) {
       if (isAbort(error, signal)) throw error;
       return null;
     }
   };
+  // Archive the user-visible original first. Cancelling that transfer must
+  // not leave a finalized, hidden payload occupying the account's quota
+  // when the import is about to discard its only local reference.
+  const originalArtifactId = await attempt({
+    ...deps.original,
+    metadata: { source: 'direct-upload' }
+  });
   let payloadArtifactId: string | null = null;
   if (deps.hold.bytes) {
     const archive = meshPayloadArchive(deps.sourceName);
@@ -243,10 +259,7 @@ export async function archiveImportedMesh(deps: {
       metadata: { source: 'direct-upload' }
     });
   }
-  const originalArtifactId = await attempt({
-    ...deps.original,
-    metadata: { source: 'direct-upload' }
-  });
+  signal?.throwIfAborted();
   const localArtifactId = `artifact_local_${(deps.newId ?? (() => crypto.randomUUID()))()}`;
   const payloadArchived = deps.hold.bytes ? payloadArtifactId !== null : null;
   const originalArchived = originalArtifactId !== null;
@@ -264,6 +277,25 @@ export async function archiveImportedMesh(deps: {
           ? '.'
           : ' (original file not archived: upload unavailable).'
   };
+}
+
+/** Dispose only the hidden payload created by an import that did not commit. */
+export async function cleanupUncommittedMeshArchive(
+  archive: ImportedMeshArchive | null,
+  committed: boolean,
+  discard: (artifactId: string) => Promise<{ deleted: boolean }>
+): Promise<Error | null> {
+  if (committed || archive?.payloadArchived !== true) return null;
+  try {
+    const result = await discard(archive.artifactId);
+    if (!result.deleted)
+      throw new Error('Cloud mesh cleanup has not completed.');
+    return null;
+  } catch (error) {
+    return error instanceof Error
+      ? error
+      : new Error('Cloud mesh cleanup failed.', { cause: error });
+  }
 }
 
 /**

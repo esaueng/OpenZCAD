@@ -30,8 +30,8 @@
   pointer-events: auto;
   touch-action: none;
   cursor: grab;
-  /* Dark seams between the opaque facets draw the cube's edges and bevels. */
-  stroke: #12161a;
+  /* Seams between the opaque facets draw the cube's edges and bevels. */
+  stroke: var(--color-cube-seam);
   stroke-width: 2.5;
   stroke-linejoin: round;
   transition: fill var(--dur-fast) ease;
@@ -61,10 +61,20 @@
   cursor: grabbing;
 }
 
-/* A CSS rule outranks the presentation attribute the frame loop writes. */
+/* Lit by facing angle alone: the frame loop writes each facet's
+   --cube-facing (0 glancing, 1 head-on) and the theme supplies both ends. */
+.cube-face,
+.cube-corner {
+  fill: color-mix(
+    in srgb,
+    var(--color-cube-frontal) calc(var(--cube-facing, 1) * 100%),
+    var(--color-cube-glancing)
+  );
+}
+
 .cube-face:hover,
 .cube-corner-target:hover .cube-corner {
-  fill: #4a5767;
+  fill: var(--color-cube-hover);
 }
 
 /* Clicking a facet leaves it focused; never let the browser draw its native
@@ -74,13 +84,13 @@
   outline: none;
 }
 
-/* The cube is drawn on the dark stage in either theme, so its focus reads
-   the viewport's preselection blue rather than the chrome accent, which the
-   light theme darkens to 1.7:1 on a facet. The hover lift goes with it: the
-   faces painted after the focused one draw over its shared seams. */
+/* The focus stroke reads the viewport's preselection blue rather than the
+   chrome accent, which the light theme darkens to 1.7:1 on a dark facet.
+   The hover lift goes with it: the faces painted after the focused one draw
+   over its shared seams. */
 .cube-face:focus-visible,
 .cube-corner-target:has(.cube-corner-hit:focus-visible) .cube-corner {
-  fill: #4a5767;
+  fill: var(--color-cube-hover);
   stroke: var(--color-preselect);
   stroke-width: 1.5;
 }
@@ -91,11 +101,9 @@
 }
 
 .cube-face-label {
-  /* Drawn on the viewport's dark stage, which never re-themes — so this is
-     --color-viewport-text, not --color-text. Under the light chrome
-     --color-text resolves to #1f242b and the face labels fell to 1.25:1
-     against #0a0b0d. */
-  fill: var(--color-viewport-text);
+  /* Drawn on the cube's own facets, so it follows the cube's palette rather
+     than --color-text: the chrome and the cube need not turn together. */
+  fill: var(--color-cube-label);
   font-size: 9px;
   font-weight: var(--fw-medium);
   letter-spacing: 0.02em;
