@@ -810,15 +810,32 @@ describe('project edit lease', () => {
     let memberRole: string | null = 'editor';
     const env = {
       PROJECT_EDIT_LEASES_ENFORCED: 'true',
+      PROJECT_SHARING_ENABLED: 'true',
       DB: {
         prepare: (sql: string) => ({
-          bind: () => ({
+          bind: (...bindings: unknown[]) => ({
+            all: async () => {
+              expect(sql).toContain('FROM project_copy_source_archives');
+              return { results: [] };
+            },
             first: async () =>
-              sql.includes('SELECT user_id, document_version FROM projects')
-                ? { user_id: document.ownerUserId }
-                : memberRole
-                  ? { role: memberRole }
-                  : null
+              sql.startsWith('SELECT 1 AS allowed')
+                ? { allowed: 1 }
+                : sql.includes('AS resolved_role')
+                  ? {
+                      owner_user_id: document.ownerUserId,
+                      resolved_role:
+                        bindings[0] === document.ownerUserId
+                          ? 'owner'
+                          : memberRole
+                    }
+                  : sql.includes(
+                        'SELECT user_id, document_version FROM projects'
+                      )
+                    ? { user_id: document.ownerUserId }
+                    : memberRole
+                      ? { role: memberRole }
+                      : null
           })
         })
       }
@@ -867,15 +884,32 @@ describe('project edit lease', () => {
     let memberRole: string | null = 'editor';
     const env = {
       PROJECT_EDIT_LEASES_ENFORCED: 'true',
+      PROJECT_SHARING_ENABLED: 'true',
       DB: {
         prepare: (sql: string) => ({
-          bind: () => ({
+          bind: (...bindings: unknown[]) => ({
+            all: async () => {
+              expect(sql).toContain('FROM project_copy_source_archives');
+              return { results: [] };
+            },
             first: async () =>
-              sql.includes('SELECT user_id, document_version FROM projects')
-                ? { user_id: document.ownerUserId }
-                : memberRole
-                  ? { role: memberRole }
-                  : null
+              sql.startsWith('SELECT 1 AS allowed')
+                ? { allowed: 1 }
+                : sql.includes('AS resolved_role')
+                  ? {
+                      owner_user_id: document.ownerUserId,
+                      resolved_role:
+                        bindings[0] === document.ownerUserId
+                          ? 'owner'
+                          : memberRole
+                    }
+                  : sql.includes(
+                        'SELECT user_id, document_version FROM projects'
+                      )
+                    ? { user_id: document.ownerUserId }
+                    : memberRole
+                      ? { role: memberRole }
+                      : null
           })
         })
       }
