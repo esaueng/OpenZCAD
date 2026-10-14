@@ -52,4 +52,29 @@ describe('immutable Remus updates', () => {
       'packages/kernel-adapter/package\\.json|pnpm-lock\\.yaml'
     );
   });
+
+  it('reviews kernel load time against the current pin without blocking the update', () => {
+    const workflow = readFileSync('.github/workflows/update-remus.yml', 'utf8');
+    const start = workflow.indexOf(
+      '- name: Measure kernel load time against the current pin'
+    );
+    const end = workflow.indexOf('- name:', start + 1);
+    const step = workflow.slice(start, end);
+
+    expect(start).toBeGreaterThan(
+      workflow.indexOf('pnpm install --frozen-lockfile')
+    );
+    expect(end).toBe(
+      workflow.indexOf('- name: Require CI-triggering GitHub App credentials')
+    );
+    expect(step).toContain('continue-on-error: true');
+    expect(step).toContain('set -euo pipefail');
+    expect(step).toContain('--baseline-package "$baseline"');
+    expect(step).toContain('--runs 20');
+    expect(step).toMatch(/for profile in desktop mobile/);
+    // Measurement output stays out of the checkout, so it can never join
+    // the narrow manifest-and-lockfile commit.
+    expect(step).not.toMatch(/--(?:out|markdown) (?!"\$RUNNER_TEMP|"\$report)/);
+    expect(workflow).toContain('cat "$RUNNER_TEMP/kernel-load.md"');
+  });
 });

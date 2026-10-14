@@ -310,6 +310,38 @@ describe('worker api routes', () => {
     ).toBe(true);
   });
 
+  it('still lists projects when collecting the expired bin fails', async () => {
+    const created = await createProject('Survives Purge Failure');
+    const purge = vi
+      .spyOn(getInMemoryPersistence(), 'purgeExpiredProjects')
+      .mockRejectedValue(new Error('D1_ERROR: too many SQL variables'));
+    const consoleError = vi
+      .spyOn(console, 'error')
+      .mockImplementation(() => undefined);
+    try {
+      const listResponse = await worker.fetch(
+        new Request('https://example.com/api/projects'),
+        env
+      );
+      // Housekeeping failed, and kept failing on every arrival: the list
+      // answered 500 instead of the user's projects.
+      expect(listResponse.status).toBe(200);
+      const listed = (await listResponse.json()) as {
+        projects: Array<{ projectId: string }>;
+      };
+      expect(listed.projects.map((project) => project.projectId)).toContain(
+        created.project.projectId
+      );
+      expect(purge).toHaveBeenCalledOnce();
+      expect(JSON.stringify(consoleError.mock.calls)).toContain(
+        'trash_purge_failed'
+      );
+    } finally {
+      purge.mockRestore();
+      consoleError.mockRestore();
+    }
+  });
+
   it('duplicates, archives, bins, restores, and destroys a project', async () => {
     const created = await createProject('Shelf Test');
     const projectId = created.project.projectId;
@@ -1107,14 +1139,80 @@ describe('worker api routes', () => {
         } as never
       );
 
-      expect(response.status).toBe(500);
+      // The setting is already committed and rooms recheck the owner's
+      // preference whenever a member acts, so a room that missed the eager
+      // kick is logged rather than turning the saved setting into a 500.
+      expect(response.status).toBe(200);
+      expect(storedSettings.collaboration.enabled).toBe(false);
       expect(getByName.mock.calls.map(([projectId]) => projectId)).toEqual([
         'project_failing',
         'project_notified'
       ]);
+      expect(JSON.stringify(errorSpy.mock.calls)).toContain(
+        'collaboration_disable_rooms_unnotified'
+      );
     } finally {
       errorSpy.mockRestore();
     }
+  });
+
+  it('leaves rooms alone when a save keeps sharing off', async () => {
+    const off = structuredClone(DEFAULT_APP_SETTINGS);
+    off.collaboration.enabled = false;
+    let storedSettings = structuredClone(off);
+    let storedRevision = 1;
+    const prepare = vi.fn((query: string) => {
+      let values: unknown[] = [];
+      const statement = {
+        bind(...next: unknown[]) {
+          values = next;
+          return statement;
+        },
+        async first() {
+          return query.includes('FROM user_settings')
+            ? {
+                settings_json: JSON.stringify(storedSettings),
+                revision: storedRevision
+              }
+            : null;
+        },
+        async run() {
+          if (query.includes('UPDATE user_settings')) {
+            storedSettings = JSON.parse(
+              String(values[0])
+            ) as typeof storedSettings;
+            storedRevision = Number(values[1]);
+            return { meta: { changes: 1 } };
+          }
+          return { meta: { changes: 0 } };
+        },
+        async all() {
+          return query.includes('SELECT id FROM projects')
+            ? {
+                results: Array.from({ length: 100 }, (_, index) => ({
+                  id: `project_${index}`
+                }))
+              }
+            : { results: [] };
+        }
+      };
+      return statement;
+    });
+    const roomFetch = vi.fn(async () => new Response(null, { status: 204 }));
+    const getByName = vi.fn(() => ({ fetch: roomFetch }));
+    const themeOnly = structuredClone(off);
+    themeOnly.appearance.theme = 'dark';
+
+    const response = await worker.fetch(
+      patch('/api/settings', { settings: themeOnly, expectedRevision: 1 }),
+      { ...env, DB: { prepare }, PROJECT_ROOM: { getByName } } as never
+    );
+
+    expect(response.status).toBe(200);
+    expect(storedSettings.appearance.theme).toBe('dark');
+    // Settings save on every cosmetic change: this used to wake all 100
+    // owned rooms to repeat news they had already been told.
+    expect(roomFetch).not.toHaveBeenCalled();
   });
 
   it('reports assistant configuration without exposing secrets', async () => {
@@ -2005,6 +2103,47 @@ describe('worker api routes', () => {
     expect(retry.status).toBe(200);
     await retry.body?.cancel();
     expect(providerFetch).toHaveBeenCalledTimes(2);
+  });
+
+  it('sends the provider a peppered pseudonym rather than the account id', async () => {
+    const providerFetch = vi.fn(
+      async (_url: string | URL | Request, _init?: RequestInit) =>
+        new Response('data: {"type":"response.completed"}\n\n', {
+          headers: { 'content-type': 'text/event-stream' }
+        })
+    );
+    vi.stubGlobal('fetch', providerFetch);
+    const response = await worker.fetch(
+      new Request('https://example.com/api/assistant/proposals', {
+        method: 'POST',
+        body: JSON.stringify({
+          prompt: 'Make it wider',
+          digest: {
+            schemaVersion: 3,
+            projectId: 'proj_ai_identity',
+            name: 'Bracket',
+            units: 'mm',
+            version: 1,
+            parameters: [],
+            features: [],
+            warnings: []
+          }
+        })
+      }),
+      withEnabledDeploymentAssistant({
+        AI_PROVIDER: 'responses-compatible',
+        AI_API_KEY: 'test-key',
+        AI_BASE_URL: 'https://models.example.test/v1/responses',
+        AI_IDENTITY_PEPPER: 'route-test-pepper'
+      })
+    );
+    expect(response.status).toBe(200);
+    await response.body?.cancel();
+    const body = providerFetch.mock.calls[0]?.[1]?.body;
+    expect(typeof body).toBe('string');
+    const sent = JSON.parse(body as string) as { safety_identifier?: string };
+    expect(sent.safety_identifier).toMatch(/^user_ai_[a-f0-9]{24}$/);
+    expect(sent.safety_identifier).not.toContain('user_beta_dev');
   });
 
   it('rejects oversized assistant digests before provider dispatch', async () => {

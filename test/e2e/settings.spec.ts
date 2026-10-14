@@ -58,7 +58,7 @@ test('hides profile details by default, keeps disclosure across reopen and reset
   ).toBeVisible();
 });
 
-test('suggests a fresh part name without selecting it', async ({ page }) => {
+test('suggests a fresh part name without focusing it', async ({ page }) => {
   await page.addInitScript(() => {
     const storageKey = '__openzcad_e2e_cute_name_seed';
     const seed = Number(window.sessionStorage.getItem(storageKey) ?? '0') + 1;
@@ -80,27 +80,15 @@ test('suggests a fresh part name without selecting it', async ({ page }) => {
   await page.goto('/');
 
   const projectName = page.getByLabel('Project name');
-  await expect(projectName).toBeFocused();
+  await expect(projectName).toBeVisible();
+  await expect(projectName).not.toBeFocused();
   await expect(projectName).not.toHaveValue('New Part');
   const initialName = await projectName.inputValue();
-  const initialSelection = await projectName.evaluate(
-    (input: HTMLInputElement) => ({
-      start: input.selectionStart,
-      end: input.selectionEnd
-    })
-  );
-  expect(initialSelection.start).toBe(initialSelection.end);
 
   await page.reload();
-  await expect(projectName).toBeFocused();
+  await expect(projectName).toBeVisible();
+  await expect(projectName).not.toBeFocused();
   await expect(projectName).not.toHaveValue(initialName);
-  const reloadedSelection = await projectName.evaluate(
-    (input: HTMLInputElement) => ({
-      start: input.selectionStart,
-      end: input.selectionEnd
-    })
-  );
-  expect(reloadedSelection.start).toBe(reloadedSelection.end);
 });
 
 test('keeps command names visible at the compact desktop breakpoint', async ({
