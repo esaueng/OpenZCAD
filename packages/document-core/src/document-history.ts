@@ -1,6 +1,7 @@
 import {
   documentNodesWithHistory,
   HISTORY_FIELDS,
+  isHistoryCommandKinds,
   MAX_UNDO_BYTES,
   MAX_UNDO_STEPS,
   type DocumentChange,
@@ -161,18 +162,38 @@ export function applyDocumentChanges(
   return result;
 }
 
+function utf8Bytes(value: unknown): number {
+  return new TextEncoder().encode(JSON.stringify(value)).byteLength;
+}
+
+/**
+ * Serializes each entry once and keeps a running total as entries drop.
+ * Re-serializing the whole history per dropped entry cost seconds on the main
+ * thread for one mid-size mesh import. The total is exact: the history's JSON
+ * is its envelope (the counters, re-measured as they change) plus the entries
+ * joined by commas inside the envelope's `[]`.
+ */
 function bounded(history: DocumentHistory): DocumentHistory {
   const result = { ...history, entries: [...history.entries] };
+  const sizes = result.entries.map(utf8Bytes);
+  let entryBytes = sizes.reduce((total, size) => total + size, 0);
   while (
     result.entries.length > MAX_UNDO_STEPS ||
-    new TextEncoder().encode(JSON.stringify(result)).byteLength > MAX_UNDO_BYTES
+    utf8Bytes({ ...result, entries: [] }) +
+      entryBytes +
+      Math.max(sizes.length - 1, 0) >
+      MAX_UNDO_BYTES
   ) {
     if (!result.entries.length) break;
     // Drop the oldest undo first; a redo-only timeline drops its farthest future.
     if (result.cursor > 0) {
       result.entries.shift();
+      entryBytes -= sizes.shift()!;
       result.cursor--;
-    } else result.entries.pop();
+    } else {
+      result.entries.pop();
+      entryBytes -= sizes.pop()!;
+    }
     result.trimmed++;
   }
   return result;
@@ -190,11 +211,16 @@ export function recordDocumentEdit(
       ? before.editHistory
       : undefined;
   const entries = previous?.entries.slice(0, previous.cursor) ?? [];
+  // Distinct kinds answer every question asked of them. A list the validator
+  // would still refuse is left out — unknown, which Tweak treats as modeling —
+  // because storing it would make the project unopenable: a "Roll back after"
+  // over 100 features or a 101-solid STEP import used to.
+  const kinds = commandKinds && [...new Set(commandKinds)];
   entries.push({
     id: crypto.randomUUID(),
     label: label.slice(0, 256),
     changes: documentChanges(before, after),
-    ...(commandKinds ? { commandKinds: [...commandKinds] } : {})
+    ...(isHistoryCommandKinds(kinds) ? { commandKinds: kinds } : {})
   });
   return archiveHistorySources({
     ...after,
