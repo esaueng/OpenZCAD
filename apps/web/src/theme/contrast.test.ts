@@ -10,10 +10,7 @@ import { resolve } from 'node:path';
  * land on. These check every text token against every surface it can sit on,
  * in both themes, so a future colour edit cannot quietly reintroduce that.
  */
-const tokens = readFileSync(
-  resolve(__dirname, './tokens.css'),
-  'utf8'
-);
+const tokens = readFileSync(resolve(__dirname, './tokens.css'), 'utf8');
 
 function tokenBlock(selector: string): Record<string, string> {
   const start = tokens.indexOf(selector);
@@ -113,6 +110,47 @@ describe.each([
     expect(
       contrastRatio(palette['--color-on-accent']!, palette['--color-accent']!)
     ).toBeGreaterThanOrEqual(4.5);
+  });
+});
+
+describe.each([
+  ['dark', ':root {'],
+  ['light', ":root[data-theme='light'] {"]
+])('%s stage', (_name, selector) => {
+  // The stage re-themes with the chrome (lib/stagePalette.ts paints the
+  // WebGL backdrop from these), and whatever is drawn straight on it — the
+  // scale bar, the snap refusal — reads the stage ink, which must clear the
+  // whole backdrop gradient.
+  const palette = { ...tokenBlock(':root {'), ...tokenBlock(selector) };
+
+  it('keeps the stage ink legible across the backdrop gradient', () => {
+    for (const ground of [
+      '--color-stage-top',
+      '--color-viewport-bg',
+      '--color-stage-bottom'
+    ]) {
+      expect(palette[ground], ground).toMatch(/^#[0-9a-f]{6}$/);
+      expect(
+        contrastRatio(palette['--color-stage-ink']!, palette[ground]!),
+        ground
+      ).toBeGreaterThanOrEqual(7);
+      expect(
+        contrastRatio(palette['--color-stage-ink-muted']!, palette[ground]!),
+        ground
+      ).toBeGreaterThanOrEqual(4.5);
+    }
+  });
+
+  it('draws grid lines that separate from the stage', () => {
+    for (const line of [
+      '--color-stage-grid-minor',
+      '--color-stage-grid-major'
+    ]) {
+      expect(
+        contrastRatio(palette[line]!, palette['--color-viewport-bg']!),
+        line
+      ).toBeGreaterThanOrEqual(1.4);
+    }
   });
 });
 
