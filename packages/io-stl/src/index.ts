@@ -157,49 +157,67 @@ function parseAsciiStl(text: string, fileName: string): ParsedStl {
     const word = token.toLowerCase();
     return ASCII_KEYWORDS.has(word) ? word : '';
   };
-  /** The keyword of the token after the current one, without consuming it. */
-  const peekKeyword = (): string => {
-    const mark = index;
-    const token = next();
-    index = mark;
-    return token === null ? '' : keywordOf(token);
+  /**
+   * The next line break at or after `index` (the text's length when there is
+   * none). Searched again only once `index` has passed the last answer, so a
+   * file of many solids is still searched once over.
+   */
+  let lineBreak = -1;
+  const nextLineBreak = (): number => {
+    if (index > lineBreak) {
+      const found = /[\r\n]/g;
+      found.lastIndex = index;
+      lineBreak = found.exec(text)?.index ?? length;
+    }
+    return lineBreak;
   };
   /**
-   * Where `pattern` next matches at or after `index` (the text's length when
-   * it does not). Searched again only once `index` has passed the last answer,
-   * so a file of many solids is still searched once over.
+   * Whether the `facet` just read opens a whole facet before `lineEnd`: three
+   * vertex statements of three coordinates each, then `endfacet`. Words in a
+   * name never pass, whichever keywords they spell; only geometry does. Reads
+   * ahead without consuming, and stops at the first token that settles it.
    */
-  const nextMatch = (pattern: RegExp) => {
-    let found = -1;
-    return () => {
-      if (index > found) {
-        pattern.lastIndex = index;
-        found = pattern.exec(text)?.index ?? length;
+  const opensFacetBefore = (lineEnd: number): boolean => {
+    const mark = index;
+    let found = 0;
+    let complete = false;
+    for (
+      let token = next();
+      token !== null && start < lineEnd;
+      token = next()
+    ) {
+      const word = keywordOf(token);
+      if (word === 'vertex') {
+        const point = [next(), next(), next()].map(coordinate);
+        found += 1;
+        if (start > lineEnd || found > 3 || !point.every(Number.isFinite)) {
+          break;
+        }
+      } else if (word === 'endfacet') {
+        complete = found === 3;
+        break;
+      } else if (word === 'facet' || word === 'solid' || word === 'endsolid') {
+        break;
       }
-      return found;
-    };
+    }
+    index = mark;
+    return complete;
   };
-  const nextLineBreak = nextMatch(/[\r\n]/g);
-  const nextEndfacet = nextMatch(/endfacet/gi);
   /**
    * Skips the name after `solid` or `endsolid`: the rest of its line, whatever
-   * words it holds, `facet normal` included. Only a line that also holds a
-   * whole facet — a file written on one line — needs the name told apart from
-   * the geometry after it, and there the first `facet` followed by `normal`
-   * or `outer` ends the name.
+   * words it holds. Only when that line also holds geometry — a file written
+   * on one line — does the name end sooner, at the first `facet` that opens a
+   * whole facet on the same line.
    */
   const skipName = () => {
     const lineEnd = nextLineBreak();
-    const oneLine = nextEndfacet() < lineEnd;
     for (;;) {
       const mark = index;
       const token = next();
       if (token === null) return;
       if (
         start > lineEnd ||
-        (oneLine &&
-          keywordOf(token) === 'facet' &&
-          ['normal', 'outer'].includes(peekKeyword()))
+        (keywordOf(token) === 'facet' && opensFacetBefore(lineEnd))
       ) {
         index = mark;
         return;
