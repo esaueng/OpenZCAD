@@ -348,6 +348,112 @@ for (const stage of ['accept', 'document'] as const) {
   });
 }
 
+for (const stage of ['accept', 'document', 'public share'] as const) {
+  test(`dismisses an invitation during ${stage} without blocking the current workspace`, async ({
+    page
+  }) => {
+    await stubApi(page, { collaborationRole: 'owner' });
+    await page.route('**/api/collaboration/config', (route) =>
+      route.fulfill({
+        json: {
+          sharingEnabled: true,
+          editLeasesEnforced: false,
+          personalSyncEnabled: false,
+          canary: false
+        }
+      })
+    );
+    const invited = createProjectDocument(
+      'Dismissed invitation',
+      toUserId('other_owner')
+    );
+    const shared = createProjectDocument(
+      'Retained public workspace',
+      toUserId('other_owner')
+    );
+    let release!: () => void;
+    let pending = false;
+    const gate = new Promise<void>((resolve) => {
+      release = resolve;
+    });
+    await page.route('**/api/project-invitations/accept', async (route) => {
+      if (stage !== 'document') {
+        pending = true;
+        await gate;
+      }
+      await route.fulfill({
+        json: { projectId: invited.projectId, role: 'viewer' }
+      });
+    });
+    await page.route(`**/api/projects/${invited.projectId}`, async (route) => {
+      if (stage === 'document') {
+        pending = true;
+        await gate;
+      }
+      await route.fulfill({ json: invited });
+    });
+    await page.route('**/api/share/*', (route) =>
+      route.fulfill({
+        json: {
+          document: shared,
+          project: { name: shared.name },
+          mode: 'tweak'
+        }
+      })
+    );
+    await page.goto('/');
+    await expect(page.getByRole('tab', { name: 'Parts 0' })).toBeVisible();
+    if (stage === 'public share') {
+      await page.evaluate(() => {
+        window.location.hash = `share=${'p'.repeat(43)}`;
+      });
+      await expect(
+        page.getByRole('button', { name: 'Make a copy', exact: true })
+      ).toBeVisible();
+    } else {
+      await page.getByLabel('Project name').fill('Workspace retained');
+      await page.getByRole('button', { name: 'Create project' }).click();
+      await expect(
+        page.getByRole('button', { name: 'Rename project' })
+      ).toBeVisible();
+    }
+    await page.evaluate((token) => {
+      window.location.hash = `invite=${token}`;
+    }, invitationToken);
+    await expect.poll(() => pending).toBe(true);
+    await page.getByRole('button', { name: 'Not now', exact: true }).click();
+    await expect(page.getByRole('dialog', { name: 'Settings' })).toHaveCount(0);
+    if (stage === 'public share') {
+      await expect(
+        page.getByRole('button', { name: 'Make a copy', exact: true })
+      ).toBeEnabled();
+      expect(new URL(page.url()).hash).toBe(`#share=${'p'.repeat(43)}`);
+    } else {
+      await page.getByRole('button', { name: 'Rename project' }).click();
+      await page.getByLabel('Project name').fill('Edits after dismissal');
+      await page.getByLabel('Project name').press('Enter');
+    }
+    const response = page.waitForResponse((r) =>
+      stage === 'document'
+        ? r.url().endsWith(`/api/projects/${invited.projectId}`)
+        : r.url().endsWith('/api/project-invitations/accept')
+    );
+    release();
+    await response;
+    await page.waitForTimeout(250);
+    await expect(page.locator('.breadcrumb')).toContainText(
+      stage === 'public share' ? shared.name : 'Edits after dismissal'
+    );
+    await expect(page.getByRole('dialog', { name: 'Settings' })).toHaveCount(0);
+    expect(
+      await page.evaluate(
+        (key) => sessionStorage.getItem(key),
+        PROJECT_INVITATION_SESSION_KEY
+      )
+    ).toBeNull();
+  });
+}
+
 test('retries the same invitation after a failed acceptance', async ({
   page
 }) => {
@@ -430,6 +536,10 @@ test('allows signed-out invitation sign-in while a superseded share request is p
   await expect(page.getByRole('dialog', { name: 'Settings' })).toBeVisible();
   await expect(
     page.getByRole('button', { name: 'Email me a code' })
+  ).toBeEnabled();
+  await page.getByRole('button', { name: 'Not now', exact: true }).click();
+  await expect(
+    page.getByRole('button', { name: 'Create project', exact: true })
   ).toBeEnabled();
 });
 
