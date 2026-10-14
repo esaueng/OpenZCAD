@@ -29,7 +29,9 @@ a new author segment. Existing role and lease checks remain in force. Diverged
 documents use ADR-016's recovery-first conflict resolution, never a history
 merge. Mismatched patch endpoints are refused without modifying the document.
 Newer-schema rejection and history validation also apply at collaboration and
-HTTP boundaries.
+HTTP boundaries. Loading a document drops a history that fails validation, so
+undo starts empty rather than the model being refused; those write boundaries
+still refuse one.
 
 ## Workspace sessions
 

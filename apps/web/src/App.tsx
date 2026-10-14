@@ -114,6 +114,7 @@ import {
   resolveParamValue,
   restoreFromSaveState,
   staleDirectEditFaceRepair,
+  withEchoedSavePoints,
   withoutDerivedProjection,
   type ExtrudeInput,
   type StaleDirectEditFaceRepair
@@ -246,6 +247,7 @@ import type { SketchSolveStatus } from './components/SketchToolRail';
 import { ApiError, api, isProjectDocumentUnavailableError } from './lib/api';
 import {
   applyAccountSourceArchives,
+  localizeImportedSourceArtifacts,
   sourceUploadMessage
 } from './lib/accountImportSources';
 import {
@@ -3937,19 +3939,12 @@ export function App() {
       : panelState.workspaceMode;
   const viewMode = resolvedWorkspaceMode === 'view';
   const tweakMode = resolvedWorkspaceMode === 'tweak';
-  // Toolbar undo affordance in Tweak: live only for a parameter-only top
-  // entry. Computed at render from the manager's tracked kinds — unknown
-  // (pre-kind histories) reads as unavailable, matching handleUndo.
-  const parameterOnlyUndoAvailable = (() => {
-    const kinds = managerRef.current?.undoEntryKinds;
-    return (
-      (managerRef.current?.canUndo ?? false) &&
-      kinds !== null &&
-      kinds !== undefined &&
-      kinds.length > 0 &&
-      kinds.every((kind) => kind === 'parameter.set')
-    );
-  })();
+  // Undo/redo affordances for the toolbar and the palette. In Tweak each is
+  // live only for a parameter-only entry — the one that command would apply.
+  // Computed at render from the manager's tracked kinds — unknown (pre-kind
+  // histories) reads as unavailable, matching handleUndo and handleRedo.
+  const undoAvailable = managerRef.current?.canUndoIn(tweakMode) ?? false;
+  const redoAvailable = managerRef.current?.canRedoIn(tweakMode) ?? false;
   // Both reading workspaces disarm every modeling surface — tools, handles,
   // sketches, the inspector. Tweak differs from View in one thing only: the
   // parameter guard below lets `parameter.set` commands through.
@@ -9072,13 +9067,15 @@ export function App() {
     const activeProjectSince = snapshotActiveProject();
     setBusy(true);
     try {
-      const copy = duplicateProjectDocument(
-        source,
-        duplicateProjectName(
-          source.name,
-          projects.map((summary) => summary.name)
-        ),
-        session?.userId ?? localUserId
+      const copy = localizeImportedSourceArtifacts(
+        duplicateProjectDocument(
+          source,
+          duplicateProjectName(
+            source.name,
+            projects.map((summary) => summary.name)
+          ),
+          session?.userId ?? localUserId
+        )
       );
       setShareSession(null);
       shareSessionRef.current = null;
@@ -9526,11 +9523,15 @@ export function App() {
       // Written before anything is replaced: this is the way back.
       await saveLocalProject(guarded);
       const reason = `Restored “${checkpoint.reason}”`;
-      const restored = createCheckpoint(
-        restoreFromSaveState(guarded, snapshot, reason),
+      // The manager's document, not its input: only it carries the undo entry
+      // that puts the restore back, and autosave persists what is shown.
+      const restored = manager.applyDocumentEdit(
+        createCheckpoint(
+          restoreFromSaveState(guarded, snapshot, reason),
+          reason
+        ),
         reason
       );
-      manager.applyDocumentEdit(restored, reason);
       clearAutoFrame();
       // The meshes on screen belong to the document being left, and the
       // restored history has to be rebuilt from scratch to replace them.
@@ -9657,11 +9658,7 @@ export function App() {
     // a typo made seconds ago is one keypress away. Anything else — a
     // feature edit, a mixed batch, or an entry from before kind tracking —
     // keeps the modeling refusal rather than reverting unseen work.
-    const undoKinds = managerRef.current.undoEntryKinds;
-    const parametersOnly =
-      undoKinds !== null &&
-      undoKinds.length > 0 &&
-      undoKinds.every((kind) => kind === 'parameter.set');
+    const parametersOnly = managerRef.current.undoIsParameterOnly;
     if (!parametersOnly && !ensureCanEdit('undo')) {
       return;
     }
@@ -9693,13 +9690,9 @@ export function App() {
       return;
     }
     // Same split as undo: redoing a parameter-only step is a parameter edit,
-    // redoing anything else is modeling. (The redo entry's kinds are not
-    // tracked separately; the undone entry still on the stack decides.)
-    const undoKinds = managerRef.current.undoEntryKinds;
-    const parametersOnly =
-      undoKinds !== null &&
-      undoKinds.length > 0 &&
-      undoKinds.every((kind) => kind === 'parameter.set');
+    // redoing anything else is modeling. Redo applies the entry at the
+    // cursor, so its kinds decide — not the undo entry below it.
+    const parametersOnly = managerRef.current.redoIsParameterOnly;
     if (!parametersOnly && !ensureCanEdit('redo')) {
       return;
     }
@@ -10174,7 +10167,10 @@ export function App() {
         // the pre-edit snapshot this handler sent; adopting its echo would
         // erase those edits from the canonical document while their undo
         // entries survive. Record the account version so the next autosave
-        // fences correctly and let it carry the newer edits up.
+        // fences correctly and let it carry the newer edits up — with the
+        // save point the echo minted, or that push would replace it. The
+        // controller gives it to writes already queued; this, to the model.
+        showAccountEcho(withEchoedSavePoints(savingManager.document, saved));
         setCloudAvailable(true);
         setStatus(sourceWarning ?? 'Saved revision.');
         return;
@@ -18438,13 +18434,7 @@ export function App() {
       group: 'Edit',
       shortcut: 'Ctrl+Z',
       icon: <Undo2 size={16} aria-hidden="true" />,
-      disabledReason: (
-        tweakMode
-          ? parameterOnlyUndoAvailable
-          : (managerRef.current?.canUndo ?? false)
-      )
-        ? null
-        : 'Nothing to undo',
+      disabledReason: undoAvailable ? null : 'Nothing to undo',
       run: handleUndo
     },
     {
@@ -18453,13 +18443,7 @@ export function App() {
       group: 'Edit',
       shortcut: 'Ctrl+Shift+Z',
       icon: <Redo2 size={16} aria-hidden="true" />,
-      disabledReason: (
-        tweakMode
-          ? parameterOnlyUndoAvailable
-          : (managerRef.current?.canRedo ?? false)
-      )
-        ? null
-        : 'Nothing to redo',
+      disabledReason: redoAvailable ? null : 'Nothing to redo',
       run: handleRedo
     },
     {
@@ -19832,18 +19816,8 @@ export function App() {
             selectionCallout={calloutWithOperation}
             focusGhostBodies={focusGhostBodies}
             {...(focusFaces ? { focusFaces } : {})}
-            canUndo={
-              !viewMode &&
-              (tweakMode
-                ? parameterOnlyUndoAvailable
-                : (managerRef.current?.canUndo ?? false))
-            }
-            canRedo={
-              !viewMode &&
-              (tweakMode
-                ? parameterOnlyUndoAvailable
-                : (managerRef.current?.canRedo ?? false))
-            }
+            canUndo={!viewMode && undoAvailable}
+            canRedo={!viewMode && redoAvailable}
             onUndo={handleUndo}
             onRedo={handleRedo}
             key={`workspace-view-${resumeViewGeneration}`}

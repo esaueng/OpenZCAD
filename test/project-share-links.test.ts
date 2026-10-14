@@ -2,12 +2,19 @@ import type { ProjectDocument } from '@openzcad/shared';
 import { describe, expect, it, vi } from 'vitest';
 import worker from '../apps/web/worker/index';
 import { D1R2PersistenceService } from '@openzcad/cloudflare-adapters';
+import { CommandManager, commandFactories } from '@openzcad/command-system';
 import {
   InMemoryPersistenceService,
   ProjectNotFoundError,
   getInMemoryPersistence
 } from '@openzcad/persistence';
-import { importStepBody } from '@openzcad/document-core';
+import {
+  createCheckpoint,
+  createProjectDocument,
+  importStepBody,
+  listFeaturesInOrder
+} from '@openzcad/document-core';
+import { migratedDatabase, sqliteD1 } from './support/sqlite-d1';
 import {
   createShareLink,
   hashProjectInvitationToken,
@@ -16,6 +23,8 @@ import {
 } from '../apps/web/worker/sharing';
 import {
   toArtifactId,
+  toProjectId,
+  toRevisionId,
   toUserId,
   type CreateProjectResponse
 } from '@openzcad/shared';
@@ -302,6 +311,230 @@ describe('project share links (persistence)', () => {
       service.loadSharedProjectImportSource('hash_source', artifactId)
     ).resolves.toBeNull();
     expect(get).not.toHaveBeenCalled();
+  });
+});
+
+/**
+ * The owner models a CONFIDENTIAL insert, deletes it, and shares what is left.
+ * The stored document still remembers the insert — its undo history and
+ * command log hold the feature with its dimensions, a save-state name
+ * mentions it, and the project was branched off another one whose name is
+ * private too. Dimensions use four decimals so no timestamp can contain them.
+ */
+function ownerDocumentWithDeletedFeature(
+  base: ProjectDocument
+): ProjectDocument {
+  const manager = new CommandManager(base, base.ownerUserId);
+  manager.execute(
+    commandFactories.setParameter({ name: 'plate_width', expression: '80' })
+  );
+  manager.execute(
+    commandFactories.addPrimitive({
+      name: 'Bracket',
+      primitiveKind: 'box',
+      dimensions: { width: 80, depth: 40, height: 6 }
+    })
+  );
+  manager.execute(
+    commandFactories.addPrimitive({
+      name: 'CONFIDENTIAL insert',
+      primitiveKind: 'cylinder',
+      dimensions: { radius: 7.2531, height: 31.4159 }
+    })
+  );
+  const secret = listFeaturesInOrder(manager.document).at(-1)!;
+  manager.execute(
+    commandFactories.deleteFeature({ featureId: secret.featureId })
+  );
+  return {
+    ...createCheckpoint(
+      manager.document,
+      'Before removing the CONFIDENTIAL insert'
+    ),
+    branchedFrom: {
+      projectId: toProjectId('proj_private_source'),
+      revisionId: toRevisionId('rev_private_source'),
+      projectName: 'CONFIDENTIAL customer program',
+      checkpointReason: 'Saved',
+      branchedAt: '2026-01-01T00:00:00.000Z'
+    }
+  };
+}
+
+function featureNames(document: ProjectDocument): string[] {
+  return listFeaturesInOrder(document).map((feature) => feature.name);
+}
+
+/** What a share-link visitor may and may not receive, from either backend. */
+function expectCurrentModelOnly(document: ProjectDocument): void {
+  expect(featureNames(document)).toEqual(['Bracket']);
+  const payload = JSON.stringify(document);
+  expect(payload).not.toContain('CONFIDENTIAL');
+  expect(payload).not.toContain('7.2531');
+  expect(payload).not.toContain('31.4159');
+  expect(document.editHistory).toBeUndefined();
+  expect(document.commandLog).toEqual([]);
+  expect(document.revisions).toEqual([]);
+  expect(document.checkpoints).toEqual([]);
+  expect(document.branchedFrom).toBeUndefined();
+  expect(document.ownerUserId).toBe('user_shared');
+
+  // The signed-out visitor's workspace builds a CommandManager over the
+  // snapshot as the shared owner. Undo used to walk the owner's history and
+  // put the deleted insert back in the visitor's tab.
+  const visitor = new CommandManager(document, document.ownerUserId);
+  expect(visitor.canUndo).toBe(false);
+  visitor.undo();
+  expect(featureNames(visitor.document)).toEqual(['Bracket']);
+  // Tweak still works: a parameter edit starts the visitor's own history.
+  visitor.execute(
+    commandFactories.setParameter({ name: 'plate_width', expression: '90' })
+  );
+  expect(visitor.undoEntryKinds).toEqual(['parameter.set']);
+  visitor.undo();
+  expect(visitor.canUndo).toBe(false);
+  expect(visitor.document.nodes).toEqual(document.nodes);
+}
+
+/** A real-SQLite D1 holding one project, as its owner saved it, and one link. */
+function sharedProjectD1(document: ProjectDocument) {
+  const db = migratedDatabase();
+  db.prepare(`INSERT INTO users (id, email, created_at) VALUES (?, ?, ?)`).run(
+    document.ownerUserId,
+    'owner@example.com',
+    '2026-01-01T00:00:00.000Z'
+  );
+  db.prepare(
+    `INSERT INTO projects (id, user_id, name, document_json, updated_at)
+     VALUES (?, ?, ?, ?, ?)`
+  ).run(
+    document.projectId,
+    document.ownerUserId,
+    document.name,
+    JSON.stringify(document),
+    '2026-01-01T00:00:00.000Z'
+  );
+  db.prepare(
+    `INSERT INTO project_share_links
+       (id, project_id, mode, token_hash, created_by_user_id, created_at)
+     VALUES ('share_projection', ?, 'tweak', 'hash_projection', ?, 1)`
+  ).run(document.projectId, document.ownerUserId);
+  return db;
+}
+
+describe('project share links (visitor snapshot)', () => {
+  it('serves the current model without the history behind it (in memory)', async () => {
+    const owner = toUserId('user_share_history_owner');
+    const service = new InMemoryPersistenceService();
+    const created = await service.createProject(owner, { name: 'Bracket' });
+    await service.saveDocument(owner, {
+      projectId: created.document.projectId,
+      expectedVersion: created.document.version,
+      document: ownerDocumentWithDeletedFeature(created.document)
+    });
+    await service.createProjectShareLink(owner, created.document.projectId, {
+      shareLinkId: 'share_history',
+      mode: 'tweak',
+      tokenHash: 'hash_history',
+      createdAt: 1
+    });
+
+    const shared = await service.loadSharedProjectByTokenHash('hash_history');
+    expect(shared).not.toBeNull();
+    expectCurrentModelOnly(shared!.document);
+    // The owner's own copy is untouched: the projection is for visitors only.
+    const own = await service.loadProject(owner, created.document.projectId);
+    expect(own?.editHistory?.entries.length).toBeGreaterThan(0);
+    expect(JSON.stringify(own)).toContain('CONFIDENTIAL');
+  });
+
+  it('serves the same projection from D1', async () => {
+    const document = ownerDocumentWithDeletedFeature(
+      createProjectDocument('Bracket', toUserId('user_share_history_d1'))
+    );
+    const service = new D1R2PersistenceService({
+      DB: sqliteD1(sharedProjectD1(document))
+    });
+
+    const shared =
+      await service.loadSharedProjectByTokenHash('hash_projection');
+    expect(shared).toMatchObject({
+      projectId: document.projectId,
+      name: 'Bracket',
+      mode: 'tweak'
+    });
+    expectCurrentModelOnly(shared!.document);
+  });
+
+  it('serves only the import sources the current model uses', async () => {
+    const owner = toUserId('user_share_sources_d1');
+    const sourceRef = (seed: string) => ({
+      marker: 'openzcad-source-ref' as const,
+      version: 1 as const,
+      hashAlgorithm: 'sha256' as const,
+      checksumSha256: seed.repeat(64),
+      logicalBytes: 4
+    });
+    const manager = new CommandManager(
+      createProjectDocument('Sources', owner),
+      owner
+    );
+    manager.execute(
+      commandFactories.importStep({
+        name: 'Kept import',
+        sourceName: 'kept.step',
+        artifactId: toArtifactId('artifact_kept'),
+        stepSourceRef: sourceRef('a')
+      })
+    );
+    manager.execute(
+      commandFactories.importStep({
+        name: 'Deleted import',
+        sourceName: 'deleted.step',
+        artifactId: toArtifactId('artifact_deleted'),
+        stepSourceRef: sourceRef('b')
+      })
+    );
+    const deleted = listFeaturesInOrder(manager.document).at(-1)!;
+    manager.execute(
+      commandFactories.deleteFeature({ featureId: deleted.featureId })
+    );
+    const db = sharedProjectD1(manager.document);
+    for (const id of ['artifact_kept', 'artifact_deleted']) {
+      db.prepare(
+        `INSERT INTO artifacts
+           (id, project_id, kind, name, object_key, content_type, metadata_json,
+            created_at, bytes)
+         VALUES (?, ?, 'step-import', ?, ?, 'application/step', '{}', ?, 4)`
+      ).run(
+        id,
+        manager.document.projectId,
+        `${id}.step`,
+        `objects/${id}`,
+        '2026-01-01T00:00:00.000Z'
+      );
+    }
+    const get = vi.fn(async () => ({ body: new Response('STEP').body }));
+    const service = new D1R2PersistenceService({
+      DB: sqliteD1(db),
+      ARTIFACTS: { get } as unknown as R2Bucket
+    });
+
+    const kept = await service.loadSharedProjectImportSource(
+      'hash_projection',
+      'artifact_kept'
+    );
+    expect(await new Response(kept?.body).text()).toBe('STEP');
+    // Reachable only through undo history: the owner deleted it before
+    // sharing, so its source is not part of what they shared.
+    await expect(
+      service.loadSharedProjectImportSource(
+        'hash_projection',
+        'artifact_deleted'
+      )
+    ).resolves.toBeNull();
+    expect(get).toHaveBeenCalledTimes(1);
+    expect(get).toHaveBeenCalledWith('objects/artifact_kept');
   });
 });
 

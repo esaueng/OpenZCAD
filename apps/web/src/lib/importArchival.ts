@@ -92,8 +92,11 @@ export function meshPayloadArchive(sourceName: string): {
   contentType: string;
   kind: 'mesh-payload';
 } {
+  // Upload sessions accept at most 255 characters, including this suffix.
+  // The original filename is unchanged; this is only an internal payload.
+  const suffix = '.ozmesh';
   return {
-    fileName: `${sourceName}.ozmesh`,
+    fileName: `${sourceName.slice(0, 255 - suffix.length)}${suffix}`,
     contentType: IMPORTED_MESH_PAYLOAD_CONTENT_TYPE,
     kind: 'mesh-payload'
   };

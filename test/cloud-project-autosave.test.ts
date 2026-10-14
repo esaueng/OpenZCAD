@@ -1,5 +1,9 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
-import { createProjectDocument } from '@openzcad/document-core';
+import {
+  appendRevision,
+  createProjectDocument,
+  createSavedRevision
+} from '@openzcad/document-core';
 import {
   toUserId,
   type ProjectDocument,
@@ -233,6 +237,60 @@ describe('explicit checkpoints', () => {
     expect(controller.hasPendingChanges).toBe(true);
     await controller.flushPending();
     expect(saves).toEqual([{ expectedVersion: 2, version: 3 }]);
+    controller.dispose();
+  });
+
+  it('carries the save point a checkpoint minted into edits queued behind it', async () => {
+    const sent: ProjectDocument[] = [];
+    const { controller } = harness({
+      respond: async ({ document }) => {
+        sent.push(document);
+        return {
+          projectId: document.projectId,
+          version: document.version,
+          updatedAt: ''
+        };
+      }
+    });
+    let live = documentAt(2);
+    controller.openProject(live.projectId, 1);
+    const held = gate();
+    const started = gate();
+    const saving = controller.saveCheckpoint(
+      live.projectId,
+      () => live,
+      async ({ document }) => {
+        started.open();
+        await held.wait;
+        // The account checkpoints the document it was sent.
+        return createSavedRevision(document, 'Client review');
+      }
+    );
+    await started.wait;
+    // Two edits land while the request is in flight: the first one's
+    // debounce expires, queueing its write behind the checkpoint; the
+    // second is still debouncing when the echo arrives.
+    live = appendRevision(live, 'Edit 1');
+    controller.schedule(live);
+    const queued = controller.flush();
+    live = appendRevision(live, 'Edit 2');
+    controller.schedule(live);
+    held.open();
+    const echo = await saving;
+    await queued;
+    await controller.flushPending();
+
+    expect(sent.map((document) => document.version)).toEqual([3, 4]);
+    const savePoint = echo!.checkpoints.at(-1)!;
+    expect(savePoint.reason).toBe('Client review');
+    for (const [index, document] of sent.entries()) {
+      // Neither write may replace the account copy without the save point.
+      expect(document.checkpoints.at(-1)).toEqual(savePoint);
+      expect(document.revisions.map((revision) => revision.reason)).toEqual([
+        ...echo!.revisions.map((revision) => revision.reason),
+        ...['Edit 1', 'Edit 2'].slice(0, index + 1)
+      ]);
+    }
     controller.dispose();
   });
 
