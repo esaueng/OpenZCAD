@@ -1,8 +1,10 @@
-import { readFileSync, readdirSync } from 'node:fs';
-import { DatabaseSync } from 'node:sqlite';
+import { createHash } from 'node:crypto';
 import { afterEach, describe, expect, it, vi } from 'vitest';
+import { toUserId } from '@openzcad/shared';
+import { migratedDatabase, sqliteD1 } from './support/sqlite-d1';
 
 import {
+  assistantProviderIdentity,
   authenticateBrowserSession,
   authenticateRequest,
   clearSessionCookie,
@@ -52,6 +54,7 @@ async function verificationD1(
   let attempts = 0;
   let consumedAt: number | null = null;
   let incorrectUpdates = 0;
+  const sessionHashes = new Set<string>();
   const expiresAt = Math.floor(Date.now() / 1000) + 600;
   let releaseLegacyIncorrectUpdates!: () => void;
   const legacyIncorrectUpdateGate = new Promise<void>((resolve) => {
@@ -80,40 +83,44 @@ async function verificationD1(
         return null;
       },
       async run() {
-        if (query.includes('SET attempts = CASE')) {
-          const codeMatches = Number(values[0]) === 1;
-          if (!codeMatches) {
-            incorrectUpdates += 1;
-          }
+        if (query.includes('INSERT INTO auth_sessions')) {
           if (
             consumedAt !== null ||
-            attempts >= Number(values[4]) ||
-            expiresAt < Number(values[5])
+            attempts >= Number(values[6]) ||
+            expiresAt < Number(values[7])
           ) {
             return { success: true, meta: { changes: 0 } };
           }
-          if (codeMatches) {
-            consumedAt = Number(values[2]);
-          } else {
-            attempts += 1;
-          }
+          sessionHashes.add(String(values[0]));
           return { success: true, meta: { changes: 1 } };
         }
         if (query.includes('SET attempts = attempts + 1')) {
           incorrectUpdates += 1;
-          if (options.stallLegacyIncorrectUpdates) {
+          if (
+            options.stallLegacyIncorrectUpdates &&
+            !query.includes('AND attempts < ?')
+          ) {
             await legacyIncorrectUpdateGate;
           }
-          if (consumedAt === null) {
-            attempts += 1;
+          if (
+            consumedAt !== null ||
+            attempts >= Number(values[1]) ||
+            expiresAt < Number(values[2])
+          ) {
+            return { success: true, meta: { changes: 0 } };
           }
+          attempts += 1;
           return { success: true, meta: { changes: 1 } };
         }
         if (
           query.includes('UPDATE auth_email_challenges') &&
           query.includes('SET consumed_at')
         ) {
-          if (consumedAt !== null) {
+          if (
+            consumedAt !== null ||
+            (query.includes('FROM auth_sessions') &&
+              !sessionHashes.has(String(values[2])))
+          ) {
             return { success: true, meta: { changes: 0 } };
           }
           consumedAt = Number(values[0]);
@@ -130,7 +137,9 @@ async function verificationD1(
   const db: D1Database = {
     prepare,
     async batch(statements) {
-      return Promise.all(statements.map((statement) => statement.run()));
+      const results = [];
+      for (const statement of statements) results.push(await statement.run());
+      return results;
     }
   };
   return {
@@ -202,43 +211,6 @@ function loginStartD1() {
   return { db, challenge: () => challenge };
 }
 
-const MIGRATIONS = new URL('../apps/web/migrations/', import.meta.url);
-
-/** D1 over in-memory SQLite carrying every migration. */
-function migratedSqliteD1(): D1Database {
-  const sqlite = new DatabaseSync(':memory:');
-  for (const file of readdirSync(MIGRATIONS).sort()) {
-    sqlite.exec(readFileSync(new URL(file, MIGRATIONS), 'utf8'));
-  }
-  const statement = (query: string, bindings: unknown[]) => ({
-    bind: (...next: unknown[]) => statement(query, next),
-    first: async () =>
-      (sqlite.prepare(query).get(...(bindings as never[])) as unknown) ?? null,
-    all: async () => ({
-      results: sqlite.prepare(query).all(...(bindings as never[]))
-    }),
-    run: async () => {
-      const result = sqlite.prepare(query).run(...(bindings as never[]));
-      return { success: true, meta: { changes: Number(result.changes) } };
-    }
-  });
-  return {
-    prepare: (query: string) => statement(query, []),
-    batch: async (statements: Array<{ run(): Promise<unknown> }>) => {
-      sqlite.exec('BEGIN IMMEDIATE');
-      try {
-        const results = [];
-        for (const item of statements) results.push(await item.run());
-        sqlite.exec('COMMIT');
-        return results;
-      } catch (error) {
-        sqlite.exec('ROLLBACK');
-        throw error;
-      }
-    }
-  } as unknown as D1Database;
-}
-
 /**
  * Real sign-in code flow for one email on migrated SQLite, with Turnstile
  * and the email binding stubbed. `start(ip)` requests a code from that
@@ -249,7 +221,7 @@ function signInHarness(email = 'person@example.com') {
   const env = {
     ENVIRONMENT: 'beta' as const,
     AUTH_MODE: 'email-code' as const,
-    DB: migratedSqliteD1(),
+    DB: sqliteD1(migratedDatabase()),
     EMAIL: {
       send: async (message: EmailMessageBuilder) => {
         sent.push(message.subject.slice(0, 6));
@@ -667,6 +639,19 @@ describe('worker authentication', () => {
 // an address keep that account from signing in with ~3 Turnstile solves per
 // 15 minutes.
 describe('sign-in cannot be denied by someone who only knows the email', () => {
+  async function reachFailureLimit(
+    harness: ReturnType<typeof signInHarness>
+  ): Promise<void> {
+    for (let host = 1; host <= 4; host += 1) {
+      const challenge = await harness.start(`203.0.113.${host}`);
+      for (let attempt = 0; attempt < 5; attempt += 1) {
+        await expect(
+          harness.verify(challenge.challengeId, wrongCode(harness.sent.at(-1)!))
+        ).rejects.toMatchObject({ code: 'AUTH_CODE_INVALID' });
+      }
+    }
+  }
+
   it("keeps the victim's pending code valid when someone else requests one", async () => {
     const { sent, start, verify } = signInHarness();
     const victim = await start('198.51.100.7');
@@ -711,6 +696,55 @@ describe('sign-in cannot be denied by someone who only knows the email', () => {
     });
   });
 
+  it('resumes an earlier usable code when the newest code has spent its one try', async () => {
+    const harness = signInHarness();
+    const { sent, start, verify } = harness;
+    await reachFailureLimit(harness);
+    await start('198.51.100.7');
+    const usable = await start('198.51.100.7');
+    const usableCode = sent.at(-1)!;
+    const locked = await start('198.51.100.7');
+    await expect(
+      verify(locked.challengeId, wrongCode(sent.at(-1)!))
+    ).rejects.toMatchObject({ code: 'AUTH_CODE_INVALID' });
+
+    const sentCount = sent.length;
+    const repeat = await start('198.51.100.7');
+
+    expect(sent).toHaveLength(sentCount);
+    expect(repeat.challengeId).toBe(usable.challengeId);
+    await expect(verify(repeat.challengeId, usableCode)).resolves.toMatchObject(
+      {
+        session: { email: 'person@example.com' }
+      }
+    );
+  });
+
+  it('returns no spent one-try challenge when a requester has no usable code left', async () => {
+    const harness = signInHarness();
+    const { sent, start, verify } = harness;
+    await reachFailureLimit(harness);
+    const spent = [];
+    for (let request = 0; request < 3; request += 1) {
+      const challenge = await start('198.51.100.7');
+      spent.push(challenge.challengeId);
+      await expect(
+        verify(challenge.challengeId, wrongCode(sent.at(-1)!))
+      ).rejects.toMatchObject({ code: 'AUTH_CODE_INVALID' });
+    }
+
+    const sentCount = sent.length;
+    const repeat = await start('198.51.100.7');
+
+    expect(sent).toHaveLength(sentCount);
+    expect(spent).not.toContain(repeat.challengeId);
+    await expect(
+      verify(repeat.challengeId, sent.at(-1)!)
+    ).rejects.toMatchObject({
+      code: 'AUTH_CODE_INVALID'
+    });
+  });
+
   it('caps codes per email across requesters without a refusal', async () => {
     const { sent, start, verify } = signInHarness();
     for (let host = 1; host <= 10; host += 1) {
@@ -737,6 +771,94 @@ describe('sign-in cannot be denied by someone who only knows the email', () => {
     await expect(verify(second.challengeId, sent[1]!)).rejects.toMatchObject({
       code: 'AUTH_CODE_INVALID'
     });
+  });
+
+  it('permits only one session when sibling verifications overlap', async () => {
+    const { env, sent, start, verify } = signInHarness();
+    const first = await start('198.51.100.7');
+    const second = await start('203.0.113.1');
+    const batch = env.DB.batch.bind(env.DB);
+    let entered!: () => void;
+    const waiting = new Promise<void>((resolve) => {
+      entered = resolve;
+    });
+    let release!: () => void;
+    const gate = new Promise<void>((resolve) => {
+      release = resolve;
+    });
+    // Stop the first sign-in just before its session transaction. On the
+    // regressed implementation its individual code was already consumed.
+    vi.spyOn(env.DB, 'batch').mockImplementationOnce(async (statements) => {
+      entered();
+      await gate;
+      return batch(statements);
+    });
+    const pending = verify(first.challengeId, sent[0]!);
+    const firstOutcome = expect(pending).rejects.toMatchObject({
+      code: 'AUTH_CODE_INVALID'
+    });
+    await waiting;
+    try {
+      await expect(
+        verify(second.challengeId, sent[1]!)
+      ).resolves.toHaveProperty('cookie');
+    } finally {
+      release();
+    }
+    await firstOutcome;
+    const sessions = await env.DB.prepare(
+      'SELECT COUNT(*) AS count FROM auth_sessions'
+    ).first<{ count: number }>();
+    expect(sessions?.count).toBe(1);
+  });
+
+  it('consumes a code once when the same correct verification arrives concurrently', async () => {
+    const { env, sent, start, verify } = signInHarness();
+    const challenge = await start('198.51.100.7');
+    const outcomes = await Promise.allSettled([
+      verify(challenge.challengeId, sent[0]!),
+      verify(challenge.challengeId, sent[0]!)
+    ]);
+
+    expect(
+      outcomes.filter((outcome) => outcome.status === 'fulfilled')
+    ).toHaveLength(1);
+    const rejected = outcomes.filter(
+      (outcome) => outcome.status === 'rejected'
+    );
+    expect(rejected).toHaveLength(1);
+    expect(rejected[0]).toMatchObject({
+      reason: { code: 'AUTH_CODE_INVALID' }
+    });
+    const sessions = await env.DB.prepare(
+      'SELECT COUNT(*) AS count FROM auth_sessions'
+    ).first<{ count: number }>();
+    expect(sessions?.count).toBe(1);
+  });
+
+  it('leaves every code usable if the session transaction rolls back', async () => {
+    const { env, sent, start, verify } = signInHarness();
+    const first = await start('198.51.100.7');
+    const second = await start('203.0.113.1');
+    const batch = env.DB.batch.bind(env.DB);
+    vi.spyOn(env.DB, 'batch').mockImplementationOnce((statements) =>
+      batch([...statements, env.DB.prepare('SELECT * FROM missing_auth_table')])
+    );
+
+    await expect(verify(first.challengeId, sent[0]!)).rejects.toThrow(
+      'no such table'
+    );
+    const pending = await env.DB.prepare(
+      'SELECT COUNT(*) AS count FROM auth_email_challenges WHERE consumed_at IS NULL'
+    ).first<{ count: number }>();
+    const sessions = await env.DB.prepare(
+      'SELECT COUNT(*) AS count FROM auth_sessions'
+    ).first<{ count: number }>();
+    expect(pending?.count).toBe(2);
+    expect(sessions?.count).toBe(0);
+    await expect(verify(second.challengeId, sent[1]!)).resolves.toHaveProperty(
+      'cookie'
+    );
   });
 
   it('allows one try per code after a day of failed codes, without locking out', async () => {
@@ -851,6 +973,64 @@ describe('assistant request identity', () => {
       status: 503,
       code: 'AI_IDENTITY_UNAVAILABLE'
     });
+  });
+
+  it('hands providers a peppered pseudonym, never the email-derived account id', async () => {
+    const fixture = await verificationD1('123456');
+    const env = {
+      ENVIRONMENT: 'beta' as const,
+      AUTH_MODE: 'email-code' as const,
+      DB: fixture.db,
+      EMAIL: { send: async () => ({ messageId: 'message-test' }) },
+      AUTH_EMAIL_FROM: 'login@auth.example.com',
+      AUTH_OTP_PEPPER: fixture.secret,
+      TURNSTILE_SITE_KEY: 'site-key',
+      TURNSTILE_SECRET_KEY: 'secret-key',
+      AI_IDENTITY_PEPPER: 'identity-test-pepper'
+    };
+    const { session } = await verifyEmailLogin(
+      { challengeId: fixture.challengeId, code: '123456' },
+      env
+    );
+    const emailHash = createHash('sha256')
+      .update(fixture.email)
+      .digest('hex')
+      .slice(0, 24);
+    // The account id itself is unchanged: projects and quotas are keyed by it.
+    expect(session.userId).toBe(`user_${emailHash}`);
+
+    // It used to reach the provider as-is, so anyone with provider logs could
+    // confirm an address by hashing it.
+    const sent = await assistantProviderIdentity(session.userId, env);
+    expect(sent).toMatch(/^user_ai_[a-f0-9]{24}$/);
+    expect(sent).not.toContain(emailHash);
+    await expect(assistantProviderIdentity(session.userId, env)).resolves.toBe(
+      sent
+    );
+    await expect(
+      assistantProviderIdentity(session.userId, {
+        ...env,
+        AI_IDENTITY_PEPPER: 'different-pepper'
+      })
+    ).resolves.not.toBe(sent);
+  });
+
+  it('fails closed without the pepper for signed-in email-code identities', async () => {
+    await expect(
+      assistantProviderIdentity(toUserId('user_signed_in'), {
+        AUTH_MODE: 'email-code',
+        DB: emptyD1()
+      })
+    ).rejects.toMatchObject({
+      status: 503,
+      code: 'AI_IDENTITY_UNAVAILABLE'
+    });
+    // Development identities are not derived from an email address.
+    await expect(
+      assistantProviderIdentity(toUserId('user_beta_dev'), {
+        AUTH_MODE: 'development'
+      })
+    ).resolves.toBe('user_beta_dev');
   });
 
   it('does not downgrade an invalid session cookie to public identity', async () => {

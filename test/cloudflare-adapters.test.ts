@@ -19,6 +19,7 @@ import {
   createProjectDocument
 } from '@openzcad/document-core';
 import { CommandManager, commandFactories } from '@openzcad/command-system';
+import { RevisionConflictError } from '@openzcad/persistence';
 import type { ProjectDocument } from '@openzcad/shared';
 import {
   createRoomContext,
@@ -26,6 +27,11 @@ import {
   settleRoom,
   storedValueBytes
 } from './collaboration-room-harness';
+import {
+  D1_MAX_BOUND_PARAMETERS,
+  migratedDatabase,
+  sqliteD1
+} from './support/sqlite-d1';
 
 /** SQLite-backed Durable Object storage refuses a value over 2 MiB. */
 const DURABLE_VALUE_LIMIT_BYTES = 2 * 1024 * 1024;
@@ -1018,6 +1024,151 @@ describe('cloudflare adapters', () => {
     ).rejects.toThrow('R2 unavailable');
     expect(batch).not.toHaveBeenCalled();
   });
+
+  it.each([
+    ['document objects', true],
+    ['inline JSON', false]
+  ] as const)(
+    'commits only one of two interleaved saves from the same version (%s)',
+    async (_storage, objectStorage) => {
+      const owner = toUserId('user_cas_owner');
+      const db = migratedDatabase();
+      db.prepare(
+        `INSERT INTO users (id, email, created_at) VALUES (?, ?, ?)`
+      ).run(owner, 'owner@example.com', '2026-01-01T00:00:00.000Z');
+      const objects = new Map<string, ArrayBuffer>();
+      // Hold each document upload until both saves have made one, so both
+      // pass the version precheck before either commits: only the UPDATE's
+      // `document_version = ?` predicate is left to refuse the loser.
+      let gated = false;
+      let uploads = 0;
+      let releaseUploads!: () => void;
+      const bothUploading = new Promise<void>((resolve) => {
+        releaseUploads = resolve;
+      });
+      const bucket = {
+        put: async (key: string, body: ArrayBuffer) => {
+          objects.set(key, body);
+          if (!gated) return null;
+          uploads += 1;
+          if (uploads === 2) releaseUploads();
+          if (uploads <= 2) await bothUploading;
+          return null;
+        },
+        get: async (key: string) => {
+          const body = objects.get(key);
+          return body ? { arrayBuffer: async () => body.slice(0) } : null;
+        },
+        delete: async (key: string) => {
+          objects.delete(key);
+        }
+      } as unknown as R2Bucket;
+      const service = new D1R2PersistenceService({
+        DB: sqliteD1(db),
+        ...(objectStorage ? { ARTIFACTS: bucket } : {})
+      });
+      const created = await service.createProject(owner, { name: 'CAS' });
+      gated = true;
+      const edit = (name: string) => {
+        const manager = new CommandManager(created.document, owner);
+        manager.execute(
+          commandFactories.addPrimitive({
+            name,
+            primitiveKind: 'box',
+            dimensions: { width: 1, height: 1, depth: 1 }
+          })
+        );
+        return manager.document;
+      };
+      const first = edit('From tab A');
+      const second = edit('From tab B');
+      expect(first.version).toBe(second.version);
+
+      const outcomes = await Promise.allSettled(
+        [first, second].map((document) =>
+          service.saveDocument(owner, {
+            projectId: created.document.projectId,
+            expectedVersion: created.document.version,
+            document
+          })
+        )
+      );
+
+      const saved = outcomes.filter(
+        (outcome) => outcome.status === 'fulfilled'
+      );
+      const refused = outcomes.filter(
+        (outcome) => outcome.status === 'rejected'
+      );
+      expect(saved).toHaveLength(1);
+      expect(refused).toHaveLength(1);
+      expect((refused[0] as PromiseRejectedResult).reason).toBeInstanceOf(
+        RevisionConflictError
+      );
+      const winner = outcomes[0]!.status === 'fulfilled' ? first : second;
+      const stored = await service.loadProject(
+        owner,
+        created.document.projectId
+      );
+      expect(stored?.version).toBe(winner.version);
+      expect(
+        Object.values(stored!.nodes)
+          .filter((node) => node.kind === 'feature')
+          .map((node) => node.name)
+      ).toEqual(
+        Object.values(winner.nodes)
+          .filter((node) => node.kind === 'feature')
+          .map((node) => node.name)
+      );
+    }
+  );
+
+  it.each([50, 51, 100])(
+    'purges %i expired projects within D1 bound-parameter limit',
+    async (count) => {
+      const owner = toUserId('user_purge_owner');
+      const db = migratedDatabase();
+      db.prepare(
+        `INSERT INTO users (id, email, created_at) VALUES (?, ?, ?)`
+      ).run(owner, 'owner@example.com', '2026-01-01T00:00:00.000Z');
+      const expired = new Date(Date.now() - 40 * 86_400_000).toISOString();
+      for (let index = 0; index < count; index += 1) {
+        db.prepare(
+          `INSERT INTO projects (id, user_id, name, document_json, updated_at, status, deleted_at)
+           VALUES (?, ?, ?, '{}', ?, 'deleted', ?)`
+        ).run(`proj_trash_${index}`, owner, `Old ${index}`, expired, expired);
+      }
+      let widest = 0;
+      const service = new D1R2PersistenceService({
+        DB: sqliteD1(db, {
+          onStatement: (_sql, bindings) => {
+            widest = Math.max(widest, bindings.length);
+          }
+        }),
+        // A bucket makes the purge sweep artifacts, document objects and
+        // storage assets — the object-key UNION binds the id list twice.
+        ARTIFACTS: {
+          get: async () => null,
+          put: async () => null,
+          delete: async () => undefined
+        } as unknown as R2Bucket
+      });
+
+      // 51 used to bind 102 parameters in one statement. D1 refused it, and
+      // the same rows were selected again on every project listing.
+      await expect(service.purgeExpiredProjects(owner)).resolves.toHaveLength(
+        count
+      );
+      expect(widest).toBeLessThanOrEqual(D1_MAX_BOUND_PARAMETERS);
+      expect(
+        db
+          .prepare(
+            'SELECT COUNT(*) AS remaining FROM projects WHERE user_id = ?'
+          )
+          .get(owner)
+      ).toEqual({ remaining: 0 });
+    }
+  );
 
   it('accepts newer collaboration documents and rejects divergent peers', () => {
     const base = createProjectDocument('Room', toUserId('user_room'));
