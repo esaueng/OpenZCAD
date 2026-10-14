@@ -91,6 +91,28 @@ function orbitGestureRotates(orbit: OrbitControls<THREE.Camera>): boolean {
   return state !== undefined && ORBIT_ROTATE_STATES.has(state);
 }
 
+/**
+ * Removes OrbitControls' Control-key interceptors from `root`. It adds the
+ * keydown one to the canvas's root node on connect, and the keyup one there
+ * while Control is held; neither is part of the published typings.
+ */
+function releaseOrbitKeyInterceptors(
+  orbit: OrbitControls<THREE.Camera>,
+  root: Node
+) {
+  const { _interceptControlDown: down, _interceptControlUp: up } =
+    orbit as unknown as {
+      _interceptControlDown?: EventListener;
+      _interceptControlUp?: EventListener;
+    };
+  if (down) {
+    root.removeEventListener('keydown', down, { capture: true });
+  }
+  if (up) {
+    root.removeEventListener('keyup', up, { capture: true });
+  }
+}
+
 /** Orbit radius of the home pose on a fresh document, before any fit runs. */
 const DEFAULT_ORBIT_RADIUS = 150;
 
@@ -229,9 +251,11 @@ export class CameraController {
     this.orthographic.position.copy(this.perspective.position);
 
     this.active = this.perspective;
+    // Read while the canvas is attached: teardown can run after the host has
+    // detached it, when getRootNode() is the detached canvas instead.
+    this.controlRoot = options.domElement.getRootNode();
     this.orbit = this.createOrbit(this.perspective);
     this.orbit.target.set(0, 0, 0);
-    this.controlRoot = options.domElement.getRootNode();
     this.wheelElement = options.wheelElement ?? options.host;
     this.controlRoot.addEventListener('keydown', this.handleControlKeyDown, {
       passive: true,
@@ -530,12 +554,25 @@ export class CameraController {
 
   private rebindControls(nextCamera: THREE.Camera) {
     const target = this.orbit.target.clone();
+    this.disposeOrbit();
+    this.orbit = this.createOrbit(nextCamera);
+    this.orbit.target.copy(target);
+  }
+
+  /**
+   * OrbitControls' `disconnect` removes its Control-key interceptors from
+   * `domElement.getRootNode()` as that reads at the time. The viewer is torn
+   * down after its canvas has left the document, when that is the detached
+   * canvas, so the document kept the keydown listener — and through it these
+   * controls, the canvas and its WebGL context — for every retired viewer.
+   * Remove them from the root read while the canvas was attached as well.
+   */
+  private disposeOrbit() {
     this.orbit.removeEventListener('start', this.beginGesture);
     this.orbit.removeEventListener('end', this.settleDamping);
     this.orbit.removeEventListener('change', this.handleOrbitChange);
     this.orbit.dispose();
-    this.orbit = this.createOrbit(nextCamera);
-    this.orbit.target.copy(target);
+    releaseOrbitKeyInterceptors(this.orbit, this.controlRoot);
   }
 
   /**
@@ -1105,9 +1142,6 @@ export class CameraController {
       window.clearTimeout(this.settleTimeout);
       this.settleTimeout = null;
     }
-    this.orbit.removeEventListener('start', this.beginGesture);
-    this.orbit.removeEventListener('end', this.settleDamping);
-    this.orbit.removeEventListener('change', this.handleOrbitChange);
-    this.orbit.dispose();
+    this.disposeOrbit();
   }
 }
