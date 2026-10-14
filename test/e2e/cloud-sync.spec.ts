@@ -447,6 +447,41 @@ async function renameProject(page: Page, name: string): Promise<void> {
   ).toContainText(name);
 }
 
+test('drains a pending account edit before opening a public share', async ({
+  page
+}) => {
+  const api = new SharedCloudProjectApi();
+  await api.install(page);
+  const shared = createProjectDocument(
+    'Public navigation target',
+    toUserId('other_owner')
+  );
+  await page.route('**/api/share/*', (route) =>
+    route.fulfill({
+      json: { document: shared, project: { name: shared.name }, mode: 'tweak' }
+    })
+  );
+  await page.goto('/');
+  await page.getByLabel('Project name').fill('Account before navigation');
+  await page.getByRole('button', { name: 'Create project' }).click();
+  await expect(
+    page.getByRole('status', { name: 'Saved', exact: true })
+  ).toBeVisible();
+  await page.waitForTimeout(1500);
+  await page.clock.install();
+  await page.clock.pauseAt(Date.now());
+  await renameProject(page, 'Account edit retained');
+  expect(api.project?.name).toBe('Account before navigation');
+  await page.evaluate(() => {
+    window.location.hash = `share=${'p'.repeat(43)}`;
+  });
+  await expect(page.locator('.breadcrumb')).toContainText(shared.name);
+  expect(api.project?.name).toBe('Account edit retained');
+  await expect(
+    page.getByRole('button', { name: 'Make a copy', exact: true })
+  ).toBeVisible();
+});
+
 for (const action of ['edit', 'leave', 'switch'] as const) {
   test(`preserves the active workspace after a pending manual save and ${action}`, async ({
     page
