@@ -3,6 +3,7 @@ import { CommandManager, commandFactories } from '@openzcad/command-system';
 import { createProjectDocument, findFeature } from '@openzcad/document-core';
 import {
   IMPORTED_MESH_PAYLOAD_CONTENT_TYPE,
+  documentNodesWithHistory,
   toUserId,
   type ImportedSourceReference,
   type ProjectDocument
@@ -717,5 +718,85 @@ describe('mesh payload references', () => {
     expect(archive).toHaveBeenCalledOnce();
     expect(archive.mock.calls[0]?.[0]).toMatchObject({ kind: 'step-import' });
     expect(discard).not.toHaveBeenCalled();
+  });
+
+  it('keeps a restored current mesh local while an older upload archives only its retained source', async () => {
+    const manager = managerWithMeshes();
+    const initial = manager.document;
+    const featureId = initial.featureOrder[0]!;
+    const newer = { ...referenceFor('different mesh'), logicalBytes: 23 };
+    const result = await archiveLocalOnlyImportSources({
+      document: initial,
+      currentDocument: () => manager.document,
+      loadSourceBytes: async () => new Uint8Array([1, 2, 3]),
+      archive: async ({ kind }) => {
+        if (kind === 'mesh-payload')
+          manager.execute(
+            commandFactories.updateFeature({
+              featureId,
+              data: {
+                artifactId: 'artifact_local_restored' as never,
+                meshPayloadRef: newer
+              }
+            })
+          );
+        return kind === 'mesh-payload'
+          ? 'artifact_cloud_old_mesh'
+          : 'artifact_cloud_step';
+      },
+      applyArtifactId: (id, artifactId, source) => {
+        manager.archiveSource(id, artifactId, source);
+        return true;
+      }
+    });
+    expect(result.archived).toEqual(['scan.stl', 'local.step']);
+    expect(findFeature(manager.document, featureId)!.data).toMatchObject({
+      artifactId: 'artifact_local_restored',
+      meshPayloadRef: newer
+    });
+    expect(
+      listLocalOnlyImportSources(manager.document).map(
+        (source) => source.checksumSha256
+      )
+    ).toEqual([newer.checksumSha256]);
+    manager.undo();
+    expect(findFeature(manager.document, featureId)!.data).toMatchObject({
+      artifactId: 'artifact_cloud_old_mesh',
+      meshPayloadRef: referenceFor('mesh')
+    });
+  });
+
+  it('discards the uploaded payload when a restore removes its model and retained history', async () => {
+    const manager = managerWithMeshes();
+    const initial = manager.document;
+    const discard = vi.fn(async () => ({ deleted: true }));
+    const result = await archiveLocalOnlyImportSources({
+      document: initial,
+      currentDocument: () => manager.document,
+      loadSourceBytes: async () => new Uint8Array([1, 2, 3]),
+      archive: async () => {
+        manager.document = {
+          ...createProjectDocument('Restored empty', initial.ownerUserId),
+          projectId: initial.projectId
+        };
+        return 'artifact_cloud_unused';
+      },
+      applyArtifactId: (id, artifactId, source) => {
+        const next = manager.archiveSource(id, artifactId, source);
+        return [...documentNodesWithHistory(next)].some(
+          (node) =>
+            node.kind === 'feature' &&
+            'artifactId' in node.data &&
+            node.data.artifactId === artifactId
+        );
+      },
+      discardMeshPayload: discard
+    });
+    expect(result.failed).toEqual(['scan.stl', 'local.step']);
+    expect(discard).toHaveBeenCalledExactlyOnceWith(
+      initial.projectId,
+      'artifact_cloud_unused'
+    );
+    expect(manager.document.featureOrder).toEqual([]);
   });
 });

@@ -1,7 +1,11 @@
 import { describe, it, expect, vi } from 'vitest';
 import { CommandManager, commandFactories } from '@openzcad/command-system';
 import { createProjectDocument } from '@openzcad/document-core';
-import { toUserId, toArtifactId } from '@openzcad/shared';
+import {
+  documentNodesWithHistory,
+  toUserId,
+  toArtifactId
+} from '@openzcad/shared';
 import {
   archiveAccountImportSources,
   applyAccountSourceArchives,
@@ -199,6 +203,21 @@ it('does not relabel a replaced source as the old uploaded bytes', async () => {
   expect(
     listLocalOnlyImportSources(merged).some(
       (s) => s.checksumSha256 === 'c'.repeat(64)
+    )
+  ).toBe(true);
+  const historical = [...documentNodesWithHistory(merged)].filter(
+    (node) =>
+      node.kind === 'feature' &&
+      node.data.featureKind === 'imported-step' &&
+      node.data.stepSourceRef?.checksumSha256 === 'a'.repeat(64)
+  );
+  expect(historical.length).toBeGreaterThan(0);
+  expect(
+    historical.every(
+      (node) =>
+        node.kind === 'feature' &&
+        'artifactId' in node.data &&
+        !node.data.artifactId.startsWith('artifact_local_')
     )
   ).toBe(true);
 });

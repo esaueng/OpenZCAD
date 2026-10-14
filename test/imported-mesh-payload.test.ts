@@ -365,6 +365,52 @@ describe('imported mesh feature forms', () => {
       meshPayloadRef: ref
     });
   });
+
+  it.each(['distinct ids', 'reused local id'] as const)(
+    'archives only the uploaded source identity across restored history with %s',
+    (ids) => {
+      const manager = referencedMeshDocument(ref, 12, 'artifact_local_old');
+      const featureId = manager.document.featureOrder[0]!;
+      const newer = {
+        ...ref,
+        checksumSha256: 'b'.repeat(64),
+        logicalBytes: ref.logicalBytes + 16
+      };
+      const localNew =
+        ids === 'reused local id' ? 'artifact_local_old' : 'artifact_local_new';
+      manager.execute(
+        commandFactories.updateFeature({
+          featureId,
+          data: {
+            artifactId: toArtifactId(localNew),
+            meshPayloadRef: newer
+          }
+        })
+      );
+      const archived = manager.archiveSource(featureId, 'artifact_cloud_old', {
+        kind: 'mesh-payload',
+        checksumSha256: ref.checksumSha256,
+        logicalBytes: ref.logicalBytes
+      });
+      expect(meshFeature(archived).data).toMatchObject({
+        artifactId: localNew,
+        meshPayloadRef: newer
+      });
+      const text = JSON.stringify(archived.commandLog);
+      expect(text).toContain('artifact_cloud_old');
+      expect(text).toContain(localNew);
+      manager.undo();
+      expect(meshFeature(manager.document).data).toMatchObject({
+        artifactId: 'artifact_cloud_old',
+        meshPayloadRef: ref
+      });
+      manager.redo();
+      expect(meshFeature(manager.document).data).toMatchObject({
+        artifactId: localNew,
+        meshPayloadRef: newer
+      });
+    }
+  );
 });
 
 describe(
