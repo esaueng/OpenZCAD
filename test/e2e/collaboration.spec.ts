@@ -177,6 +177,157 @@ for (const fromPublicShare of [false, true]) {
   });
 }
 
+for (const stage of ['accept', 'document', 'public share'] as const) {
+  test(`ignores a superseded invitation after delayed ${stage}`, async ({
+    page
+  }) => {
+    await stubApi(page, { collaborationRole: 'viewer' });
+    const oldDocument = createProjectDocument(
+      'Old invitation',
+      toUserId('owner')
+    );
+    const latest = createProjectDocument(
+      'Latest destination',
+      toUserId('owner')
+    );
+    const newerToken = 'n'.repeat(43);
+    let releaseOld!: () => void;
+    let releaseNew!: () => void;
+    const oldGate = new Promise<void>((resolve) => {
+      releaseOld = resolve;
+    });
+    const newGate = new Promise<void>((resolve) => {
+      releaseNew = resolve;
+    });
+    let oldRequested = false;
+    let newRequested = false;
+    await page.route('**/api/project-invitations/accept', async (route) => {
+      const old = route.request().postDataJSON().token === invitationToken;
+      if (old && stage === 'accept') {
+        oldRequested = true;
+        await oldGate;
+      }
+      if (!old) {
+        newRequested = true;
+        await newGate;
+      }
+      await route.fulfill({
+        json: {
+          projectId: (old ? oldDocument : latest).projectId,
+          role: 'viewer'
+        }
+      });
+    });
+    await page.route(
+      `**/api/projects/${oldDocument.projectId}`,
+      async (route) => {
+        if (stage !== 'accept') {
+          oldRequested = true;
+          await oldGate;
+        }
+        await route.fulfill({ json: oldDocument });
+      }
+    );
+    await page.route(`**/api/projects/${latest.projectId}`, (route) =>
+      route.fulfill({ json: latest })
+    );
+    await page.route('**/api/share/*', (route) =>
+      route.fulfill({
+        json: {
+          document: latest,
+          project: { name: latest.name },
+          mode: 'tweak'
+        }
+      })
+    );
+    await page.goto('/');
+    await expect(page.getByRole('tab', { name: 'Parts 0' })).toBeVisible();
+    await page.evaluate((token) => {
+      window.location.hash = `invite=${token}`;
+    }, invitationToken);
+    await expect.poll(() => oldRequested).toBe(true);
+    await page.evaluate(
+      ({ stage, token }) => {
+        window.location.hash = `${stage === 'public share' ? 'share' : 'invite'}=${token}`;
+      },
+      { stage, token: newerToken }
+    );
+    if (stage === 'public share') {
+      await expect(page.locator('.breadcrumb')).toContainText(latest.name);
+    } else {
+      await expect.poll(() => newRequested).toBe(true);
+    }
+    const oldResponse = page.waitForResponse((r) =>
+      stage === 'accept'
+        ? r.url().endsWith('/api/project-invitations/accept') &&
+          r.request().postDataJSON().token === invitationToken
+        : r.url().endsWith(`/api/projects/${oldDocument.projectId}`)
+    );
+    releaseOld();
+    await oldResponse;
+    await page.waitForTimeout(250);
+    if (stage !== 'public share') {
+      expect(
+        await page.evaluate(
+          (key) => sessionStorage.getItem(key),
+          PROJECT_INVITATION_SESSION_KEY
+        )
+      ).toBe(newerToken);
+      await expect(
+        page.getByRole('dialog', { name: 'Settings' })
+      ).toBeVisible();
+      releaseNew();
+    }
+    await expect(page.locator('.breadcrumb')).toContainText(latest.name);
+    await expect(page.getByRole('dialog', { name: 'Settings' })).toHaveCount(0);
+    await expect(page.getByText(oldDocument.name, { exact: true })).toHaveCount(
+      0
+    );
+    expect(
+      await page.evaluate(
+        (key) => sessionStorage.getItem(key),
+        PROJECT_INVITATION_SESSION_KEY
+      )
+    ).toBeNull();
+  });
+}
+
+test('opens a public link instead of resuming an older retained invitation', async ({
+  page
+}) => {
+  await stubApi(page, { collaborationRole: 'viewer' });
+  await page.addInitScript(
+    ({ key, token }) => sessionStorage.setItem(key, token),
+    { key: PROJECT_INVITATION_SESSION_KEY, token: invitationToken }
+  );
+  const document = createProjectDocument(
+    'Explicit public destination',
+    toUserId('owner')
+  );
+  let acceptCalls = 0;
+  await page.route('**/api/project-invitations/accept', (route) => {
+    acceptCalls++;
+    return route.fulfill({ status: 410, json: { error: 'Expired' } });
+  });
+  await page.route('**/api/share/*', (route) =>
+    route.fulfill({
+      json: { document, project: { name: document.name }, mode: 'tweak' }
+    })
+  );
+  await page.goto(`/#share=${'p'.repeat(43)}`);
+  await expect(page.locator('.breadcrumb')).toContainText(document.name);
+  await expect(
+    page.getByRole('button', { name: 'Make a copy', exact: true })
+  ).toBeVisible();
+  expect(acceptCalls).toBe(0);
+  expect(
+    await page.evaluate(
+      (key) => sessionStorage.getItem(key),
+      PROJECT_INVITATION_SESSION_KEY
+    )
+  ).toBeNull();
+});
+
 test('opens and switches public links in an already-open Settings tab', async ({
   page
 }) => {

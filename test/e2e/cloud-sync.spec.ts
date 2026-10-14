@@ -468,8 +468,8 @@ test('drains a pending account edit before opening a public share', async ({
     page.getByRole('status', { name: 'Saved', exact: true })
   ).toBeVisible();
   await page.waitForTimeout(1500);
-  await page.clock.install();
-  await page.clock.pauseAt(Date.now());
+  await page.clock.install({ time: 0 });
+  await page.clock.pauseAt(60_000);
   await renameProject(page, 'Account edit retained');
   expect(api.project?.name).toBe('Account before navigation');
   await page.evaluate(() => {
@@ -515,8 +515,8 @@ test('drains a pending account edit before opening an invitation', async ({
     page.getByRole('status', { name: 'Saved', exact: true })
   ).toBeVisible();
   await page.waitForTimeout(1500);
-  await page.clock.install();
-  await page.clock.pauseAt(Date.now());
+  await page.clock.install({ time: 0 });
+  await page.clock.pauseAt(60_000);
   await renameProject(page, 'Invitation edit retained');
   expect(api.project?.name).toBe('Account before invitation');
   await page.evaluate(() => {

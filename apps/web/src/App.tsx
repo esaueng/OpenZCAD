@@ -1761,9 +1761,14 @@ export function App() {
   const [desktopAuthorizationAttempt] = useState(
     desktopAuthorizationAttemptFromLocation
   );
-  const [pendingInvitationToken, setPendingInvitationToken] = useState(
-    captureProjectInvitationLink
-  );
+  const [pendingInvitationToken, setPendingInvitationToken] = useState(() => {
+    // An explicit public link supersedes an invitation retained for sign-in.
+    if (captureProjectShareToken()) {
+      clearPendingProjectInvitation();
+      return null;
+    }
+    return captureProjectInvitationLink();
+  });
   /**
    * A `#share=` link opened at startup or by same-document navigation. Non-null
    * turns this into a shared-link session: the shared document is fetched
@@ -1784,9 +1789,9 @@ export function App() {
     string | null
   >(null);
   const pendingInvitationAttemptRef = useRef<string | null>(null);
-  const acceptPendingInvitationRef = useRef<(token: string) => Promise<void>>(
-    async () => undefined
-  );
+  const acceptPendingInvitationRef = useRef<
+    (token: string, isCurrent: () => boolean) => Promise<void>
+  >(async () => undefined);
   const fragmentNavigationRef = useRef(0);
   const leaveShareSessionRef = useRef<
     (isCurrent: () => boolean) => Promise<void>
@@ -1804,12 +1809,18 @@ export function App() {
         updateSettingsViewState({ open: true, activeSection: 'account' });
         setSettingsOpen(true);
       } else {
+        const wasOpeningInvitation =
+          pendingInvitationAttemptRef.current !== null;
+        clearPendingProjectInvitation();
+        pendingInvitationAttemptRef.current = null;
+        setPendingInvitationToken(null);
+        setPendingInvitationError(null);
         const token = captureProjectShareToken();
         const wasOpeningShare = shareOpenAttemptRef.current !== null;
         shareOpenAttemptRef.current = null;
         setPendingShareToken(token);
         if (!token) {
-          if (wasOpeningShare) setBusy(false);
+          if (wasOpeningShare || wasOpeningInvitation) setBusy(false);
           if (shareSessionRef.current) {
             void leaveShareSessionRef.current(
               () => fragmentNavigationRef.current === navigation
@@ -8962,14 +8973,20 @@ export function App() {
     }
   }
 
-  async function handleOpenProject(projectId: string) {
+  async function handleOpenProject(
+    projectId: string,
+    isCurrent: () => boolean = () => true
+  ) {
     const activeProjectSince = snapshotActiveProject();
     setBusy(true);
     try {
       await flushPendingLocalSave();
+      if (!isCurrent()) return;
       const draining = cloudProjectAutosaveRef.current?.flushPending();
       if (!accountSavePendingRef.current) await draining;
+      if (!isCurrent()) return;
       await sharedThumbnailCapture.flush();
+      if (!isCurrent()) return;
       sharedThumbnailCapture.discard();
       if (
         accountDocumentUnavailableProjectIdRef.current !== null &&
@@ -8994,6 +9011,7 @@ export function App() {
           )
         ]);
       const remoteDocument = remoteResult.document;
+      if (!isCurrent()) return;
       setArtifacts(artifactList);
       // A project this device holds alone is not in the account, and the
       // account says so with a 404. That is the ordinary answer, not an
@@ -9073,19 +9091,24 @@ export function App() {
         await saveLocalProject(openedDocument);
         await saveLastSyncedVersion(projectId, openedDocument.version);
       }
+      if (!isCurrent()) return;
       setStatus(
         outcome.choice === 'local' && remoteDocument
           ? `Opened newer local edits for ${openedDocument.name}.`
           : `Opened ${openedDocument.name}.`
       );
     } catch (error) {
-      setStatus(errorMessage(error, 'Failed to open project.'));
+      if (isCurrent())
+        setStatus(errorMessage(error, 'Failed to open project.'));
     } finally {
-      setBusy(false);
+      if (isCurrent()) setBusy(false);
     }
   }
 
-  async function handleAcceptProjectInvitation(token: string) {
+  async function handleAcceptProjectInvitation(
+    token: string,
+    isCurrent: () => boolean
+  ) {
     if (!session || !projectSharingEnabled) {
       throw new Error('Project sharing is not enabled for this account.');
     }
@@ -9093,20 +9116,24 @@ export function App() {
     setStatus('Accepting project invitation…');
     try {
       const accepted = await projectSharingClient.acceptInvitation(token);
+      if (!isCurrent()) return;
       const listed = await loadProjectSummaries(true);
+      if (!isCurrent()) return;
       setProjects(listed.projects);
       setCloudProjectIds(listed.cloudProjectIds);
       setAccountProjectListReached(listed.remoteReached);
       setStatus(`Invitation accepted with ${accepted.role} access.`);
       // Leave the anonymous workspace completely before opening member access.
       // Clearing only its flag would briefly persist the public snapshot.
-      if (shareSessionRef.current) await handleGoHome();
-      await handleOpenProject(accepted.projectId);
+      if (shareSessionRef.current) await handleGoHome(isCurrent);
+      if (!isCurrent()) return;
+      await handleOpenProject(accepted.projectId, isCurrent);
     } catch (error) {
+      if (!isCurrent()) return;
       setStatus(errorMessage(error, 'Could not accept the invitation.'));
       throw error;
     } finally {
-      setBusy(false);
+      if (isCurrent()) setBusy(false);
     }
   }
   acceptPendingInvitationRef.current = handleAcceptProjectInvitation;
@@ -9129,6 +9156,9 @@ export function App() {
     }
     shareOpenAttemptRef.current = pendingShareToken;
     let cancelled = false;
+    const navigation = fragmentNavigationRef.current;
+    const isCurrent = () =>
+      !cancelled && fragmentNavigationRef.current === navigation;
     setBusy(true);
     updateSettingsViewState({ open: false });
     setSettingsOpen(false);
@@ -9136,12 +9166,9 @@ export function App() {
     void (async () => {
       try {
         const { loadSharedProject } = await import('./lib/sharedProjectLoader');
-        if (cancelled) return;
-        const shared = await loadSharedProject(
-          pendingShareToken,
-          () => !cancelled
-        );
-        if (cancelled) return;
+        if (!isCurrent()) return;
+        const shared = await loadSharedProject(pendingShareToken, isCurrent);
+        if (!isCurrent()) return;
         if (!shared) {
           setStatus(
             'This share link is no longer available. It may have been revoked.',
@@ -9150,11 +9177,11 @@ export function App() {
           return;
         }
         await flushPendingLocalSaveRef.current();
-        if (cancelled) return;
+        if (!isCurrent()) return;
         // The device write queues its account mirror. Drain that queue before
         // entering a public session, whose effect closes the account writer.
         await cloudProjectAutosaveRef.current?.flushPending();
-        if (cancelled) return;
+        if (!isCurrent()) return;
         // Before the document lands: the collaboration hook and the cloud
         // autosave controller must treat this project as not account-backed,
         // whatever this browser knew about the account before.
@@ -9168,13 +9195,13 @@ export function App() {
           `Opened shared model ${shared.project.name} · adjust its parameters and export. Make a copy to build on it.`
         );
       } catch (error) {
-        if (!cancelled) {
+        if (isCurrent()) {
           setStatus(errorMessage(error, 'Could not open the share link.'), {
             sticky: true
           });
         }
       } finally {
-        if (!cancelled) setBusy(false);
+        if (isCurrent()) setBusy(false);
       }
     })();
     return () => {
@@ -9240,11 +9267,17 @@ export function App() {
       return;
     }
     pendingInvitationAttemptRef.current = attempt;
+    const navigation = fragmentNavigationRef.current;
+    const isCurrent = () =>
+      fragmentNavigationRef.current === navigation &&
+      sessionRef.current?.userId === session.userId &&
+      pendingInvitationAttemptRef.current === attempt;
     setPendingInvitationError(null);
     setSettingsMessage('Opening the shared project…');
     void acceptPendingInvitationRef
-      .current(pendingInvitationToken)
+      .current(pendingInvitationToken, isCurrent)
       .then(() => {
+        if (!isCurrent()) return;
         clearPendingProjectInvitation();
         setPendingInvitationToken(null);
         setPendingInvitationError(null);
@@ -9252,6 +9285,7 @@ export function App() {
         setSettingsOpen(false);
       })
       .catch(() => {
+        if (!isCurrent()) return;
         setPendingInvitationError(
           'This invitation could not be accepted. It may be expired, revoked, or intended for a different email address.'
         );
