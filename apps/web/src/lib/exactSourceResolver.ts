@@ -17,13 +17,23 @@ import { sharedImportSourceUrl } from './projectShareClient';
 const MAX_ARTIFACT_DOWNLOAD_BYTES = 128 * 1024 * 1024;
 
 /**
+ * How long a source download may make no progress — no response, no body
+ * chunk — before the rebuild treats the source as unavailable. A stalled
+ * socket used to hold the serialized geometry queue, every later edit and
+ * export behind it, until the host's fifteen-minute watchdog. Idle time, not
+ * total time: a large file on a slow but live connection still completes.
+ */
+export const SOURCE_DOWNLOAD_IDLE_MS = 30_000;
+
+/**
  * Buffers a response body with a hard byte ceiling, returning null when the
  * body exceeds it. The content-length check is advisory only — a missing or
  * understated header must not let the body grow past the cap while reading.
  */
 async function readResponseBytes(
   response: Response,
-  maxBytes: number
+  maxBytes: number,
+  onChunk?: () => void
 ): Promise<Uint8Array<ArrayBuffer> | null> {
   const declared = Number(response.headers.get('content-length') ?? '');
   if (Number.isFinite(declared) && declared > maxBytes) {
@@ -43,6 +53,7 @@ async function readResponseBytes(
       if (done) {
         break;
       }
+      onChunk?.();
       totalBytes += value.byteLength;
       if (totalBytes > maxBytes) {
         overflow = true;
@@ -138,22 +149,38 @@ export async function resolveExactSourceBytes(
   if (local) {
     return local;
   }
-  if (!context.artifactId.startsWith('artifact_local_')) {
-    const response = await fetch(
-      `/api/artifacts/${encodeURIComponent(context.artifactId)}/download`
-    );
-    if (response.ok) {
-      const bytes = await readResponseBytes(
-        response,
-        MAX_ARTIFACT_DOWNLOAD_BYTES
+  // A device-only source missing here can never arrive; a cloud copy can.
+  const permanent = context.artifactId.startsWith('artifact_local_');
+  if (!permanent) {
+    const controller = new AbortController();
+    let idle: ReturnType<typeof setTimeout> | undefined;
+    const progressed = () => {
+      clearTimeout(idle);
+      idle = setTimeout(() => controller.abort(), SOURCE_DOWNLOAD_IDLE_MS);
+    };
+    progressed();
+    const bytes = await (async () => {
+      const response = await fetch(
+        `/api/artifacts/${encodeURIComponent(context.artifactId)}/download`,
+        { signal: controller.signal }
       );
-      if (bytes && (await sha256Hex(bytes)) === ref.checksumSha256) {
-        await putSourceBlob(bytes);
-        return bytes;
-      }
+      progressed();
+      return response.ok
+        ? readResponseBytes(response, MAX_ARTIFACT_DOWNLOAD_BYTES, progressed)
+        : null;
+    })()
+      // Stalled (aborted) or failed: reported as unavailable below.
+      .catch(() => null)
+      .finally(() => clearTimeout(idle));
+    if (bytes && (await sha256Hex(bytes)) === ref.checksumSha256) {
+      await putSourceBlob(bytes);
+      return bytes;
     }
   }
-  throw new Error(
-    `Import source for "${context.sourceName}" is not in local storage and could not be fetched.`
+  throw Object.assign(
+    new Error(
+      `Import source for "${context.sourceName}" is not in local storage and could not be fetched.`
+    ),
+    { permanent }
   );
 }

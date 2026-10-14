@@ -87,9 +87,9 @@ export function loadedFontStyle(family: string, style: FontStyle): FontStyle {
   return resolveFontStyle(family, style) ?? style;
 }
 
-export async function preloadDocumentFonts(
+function documentFaces(
   document: ProjectDocument
-): Promise<void> {
+): { family: string; style: FontStyle }[] {
   const wanted = new Map<string, { family: string; style: FontStyle }>();
   for (const node of Object.values(document.nodes)) {
     if (node.kind !== 'sketch-object' || node.data.objectKind !== 'text') {
@@ -99,21 +99,53 @@ export async function preloadDocumentFonts(
     const style = loadedFontStyle(family, node.data.fontStyle);
     wanted.set(`${family}|${style}`, { family, style });
   }
+  return [...wanted.values()];
+}
+
+export async function preloadDocumentFonts(
+  document: ProjectDocument
+): Promise<void> {
+  const wanted = documentFaces(document);
   // A document with no text never pays for the font parser at all.
-  if (wanted.size === 0) {
+  if (wanted.length === 0) {
     return;
   }
   await Promise.race([
     (async () => {
       const library = await fontLibrary();
       await Promise.all(
-        [...wanted.values()].map(async ({ family, style }) =>
+        wanted.map(async ({ family, style }) =>
           library.load(family, style).catch(() => undefined)
         )
       );
     })(),
     new Promise((resolve) => setTimeout(resolve, FONT_PRELOAD_BUDGET_MS))
   ]).catch(() => undefined);
+}
+
+/**
+ * Resolves true once a face the document names, missing when called, has
+ * loaded — with no budget. The geometry worker uses it to rebuild text whose
+ * face outlived the preload budget; false means nothing new arrived (no face
+ * was missing, or every missing one failed to load).
+ */
+export async function documentFontsArrived(
+  document: ProjectDocument
+): Promise<boolean> {
+  const wanted = documentFaces(document);
+  if (wanted.length === 0) {
+    return false;
+  }
+  const library = await fontLibrary();
+  const missing = wanted.filter(
+    ({ family, style }) => !library.peek(family, style)
+  );
+  await Promise.all(
+    missing.map(({ family, style }) =>
+      library.load(family, style).catch(() => undefined)
+    )
+  );
+  return missing.some(({ family, style }) => library.peek(family, style));
 }
 
 /** Loads one face on demand — for previews in the font picker. */

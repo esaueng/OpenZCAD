@@ -1,4 +1,4 @@
-import { beforeEach, describe, expect, it, vi } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import {
   addPrimitiveFeature,
   addSketchFeature,
@@ -61,6 +61,7 @@ async function installWorker(
   const createExactKernelAdapter = vi.fn(async () => ({
     syncDocument,
     currentMassPropertiesEpoch: vi.fn(() => 1),
+    hasTransientFailures: vi.fn(() => false),
     prepareMassPropertiesForDocument: vi.fn(async () => 2),
     readCurrentMassProperties: vi.fn(() => ({
       status: 'unavailable',
@@ -589,6 +590,7 @@ describe('geometry worker rebuild coordination', () => {
       .mockResolvedValue({
         syncDocument,
         currentMassPropertiesEpoch: vi.fn(() => 1),
+        hasTransientFailures: vi.fn(() => false),
         exportStep: vi.fn(),
         exportStl: vi.fn(),
         inspectStep: vi.fn(),
@@ -678,6 +680,75 @@ describe('geometry worker rebuild coordination', () => {
       .filter((message) => message.type === 'projection-delta');
     expect(broadcastResults).toHaveLength(1);
     expect(broadcastResults[0]).toMatchObject({ version: newest.version });
+  });
+
+  describe('a live rebuild that waited on this device', () => {
+    function liveWarnings(scope: FakeWorkerScope): string[][] {
+      return scope.postMessage.mock.calls.flatMap(([message]) =>
+        message.type === 'projection-delta'
+          ? [message.packet.state.warnings]
+          : []
+      );
+    }
+
+    async function transientLive(fontArrives: Promise<boolean>) {
+      const documentFontsArrived = vi.fn(() => fontArrives);
+      vi.doMock('../lib/textFonts', () => ({
+        preloadDocumentFonts: vi.fn(async () => undefined),
+        documentFontsArrived
+      }));
+      // The first build ran before a font face or source bytes arrived.
+      const missing = derived('waiting');
+      const syncDocument = vi
+        .fn()
+        .mockResolvedValueOnce(missing)
+        .mockResolvedValue(derived('built'));
+      const { scope } = await installWorker(syncDocument, {
+        hasTransientFailures: (result: object) => result === missing
+      });
+      const document = addPrimitiveFeature(
+        createProjectDocument('Waiting', toUserId('user')),
+        {
+          name: 'Box',
+          primitiveKind: 'box',
+          dimensions: { width: 10, height: 20, depth: 30 }
+        }
+      );
+      post(scope, { type: 'sync', document });
+      await vi.waitFor(() => expect(documentFontsArrived).toHaveBeenCalled());
+      expect(liveWarnings(scope)).toEqual([['waiting']]);
+      return { scope, syncDocument };
+    }
+
+    afterEach(() => {
+      vi.doUnmock('../lib/textFonts');
+    });
+
+    it('re-runs, uncached, once a late font face lands', async () => {
+      const arrived = deferred<boolean>();
+      const { scope, syncDocument } = await transientLive(arrived.promise);
+      expect(syncDocument).toHaveBeenCalledOnce();
+      arrived.resolve(true);
+      await vi.waitFor(() =>
+        expect(liveWarnings(scope)).toEqual([['waiting'], ['built']])
+      );
+      // Settled: a later connectivity change has nothing left to re-run.
+      (scope as { ononline?: () => void }).ononline?.();
+      await new Promise((resolve) => setTimeout(resolve, 20));
+      expect(syncDocument).toHaveBeenCalledTimes(2);
+    });
+
+    it('re-runs when the connection returns for a source it could not fetch', async () => {
+      const { scope, syncDocument } = await transientLive(
+        Promise.resolve(false)
+      );
+      await new Promise((resolve) => setTimeout(resolve, 20));
+      expect(syncDocument).toHaveBeenCalledOnce();
+      (scope as { ononline?: () => void }).ononline?.();
+      await vi.waitFor(() =>
+        expect(liveWarnings(scope)).toEqual([['waiting'], ['built']])
+      );
+    });
   });
 
   it('supplies task yields and drops a superseded interactive projection', async () => {
@@ -1304,6 +1375,7 @@ describe('resolveSourceBytes download safeguards', () => {
         resolveSourceBytes = deps.resolveSourceBytes;
         return {
           syncDocument: vi.fn(async () => derived('unused')),
+          hasTransientFailures: vi.fn(() => false),
           exportStep: vi.fn(),
           exportStl: vi.fn(),
           exportMesh: vi.fn(),

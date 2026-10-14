@@ -3,9 +3,18 @@ import { Blob as NodeBlob } from 'node:buffer';
 import { IDBFactory } from 'fake-indexeddb';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { createProjectDocument, importStepBody } from '@openzcad/document-core';
-import { toUserId, type ProjectDocument } from '@openzcad/shared';
+import {
+  toUserId,
+  type ArtifactId,
+  type ImportedSourceReference,
+  type ProjectDocument
+} from '@openzcad/shared';
 import { loadSourceBlob } from './localProjectStore';
-import { preloadSharedImportSources } from './exactSourceResolver';
+import {
+  preloadSharedImportSources,
+  resolveExactSourceBytes,
+  SOURCE_DOWNLOAD_IDLE_MS
+} from './exactSourceResolver';
 
 beforeEach(() => {
   globalThis.indexedDB = new IDBFactory();
@@ -79,5 +88,125 @@ describe('anonymous shared STEP source preload', () => {
       preloadSharedImportSources(local.document, 'share_token', fetcher)
     ).rejects.toThrow('needs to save the source file');
     expect(fetcher).not.toHaveBeenCalled();
+  });
+});
+
+describe('reference source download budget', () => {
+  afterEach(() => vi.useRealTimers());
+
+  const context = {
+    artifactId: 'artifact_cloud_source' as ArtifactId,
+    sourceName: 'bracket.step'
+  };
+
+  function referenceTo(
+    source: Uint8Array,
+    checksumSha256: string
+  ): ImportedSourceReference {
+    return {
+      marker: 'openzcad-source-ref',
+      version: 1,
+      hashAlgorithm: 'sha256',
+      checksumSha256,
+      logicalBytes: source.byteLength
+    };
+  }
+
+  /** A download that never progresses until its fetch signal aborts. */
+  function stalledFetch(stage: 'headers' | 'body') {
+    return vi.fn<typeof fetch>((_input, init) => {
+      const signal = init?.signal;
+      const aborted = () =>
+        new DOMException('The operation was aborted.', 'AbortError');
+      if (stage === 'headers') {
+        return new Promise<Response>((_, reject) =>
+          signal?.addEventListener('abort', () => reject(aborted()))
+        );
+      }
+      const body = new ReadableStream<Uint8Array>({
+        start(controller) {
+          controller.enqueue(new Uint8Array([73, 83, 79]));
+          signal?.addEventListener('abort', () => controller.error(aborted()));
+        }
+      });
+      return Promise.resolve(new Response(body));
+    });
+  }
+
+  it.each(['headers', 'body'] as const)(
+    'gives up on a download whose %s stall, as an unavailable source',
+    async (stage) => {
+      const { source, checksumSha256 } = await sharedImport('artifact_source');
+      const fetcher = stalledFetch(stage);
+      vi.stubGlobal('fetch', fetcher);
+      vi.useFakeTimers({ toFake: ['setTimeout', 'clearTimeout'] });
+      const outcome = resolveExactSourceBytes(
+        referenceTo(source, checksumSha256),
+        context
+      ).then(
+        () => 'resolved',
+        (error: Error) => error.message
+      );
+      await vi.waitFor(() => expect(fetcher).toHaveBeenCalledOnce());
+      await vi.advanceTimersByTimeAsync(SOURCE_DOWNLOAD_IDLE_MS + 1);
+      expect(await outcome).toBe(
+        'Import source for "bracket.step" is not in local storage and could not be fetched.'
+      );
+    }
+  );
+
+  it('marks only a device-only miss as one no later sync can recover', async () => {
+    vi.stubGlobal(
+      'fetch',
+      vi
+        .fn<typeof fetch>()
+        .mockResolvedValue(new Response(null, { status: 503 }))
+    );
+    const { source, checksumSha256 } = await sharedImport('artifact_source');
+    const ref = referenceTo(source, checksumSha256);
+    await expect(resolveExactSourceBytes(ref, context)).rejects.toMatchObject({
+      permanent: false
+    });
+    await expect(
+      resolveExactSourceBytes(ref, {
+        ...context,
+        artifactId: 'artifact_local_source' as ArtifactId
+      })
+    ).rejects.toMatchObject({ permanent: true });
+  });
+
+  it('lets a slow download finish while it keeps making progress', async () => {
+    const { source, checksumSha256 } = await sharedImport('artifact_source');
+    const half = Math.ceil(source.byteLength / 2);
+    let push: ((chunk: Uint8Array | null) => void) | undefined;
+    vi.stubGlobal(
+      'fetch',
+      vi.fn<typeof fetch>(() =>
+        Promise.resolve(
+          new Response(
+            new ReadableStream<Uint8Array>({
+              start(controller) {
+                push = (chunk) =>
+                  chunk ? controller.enqueue(chunk) : controller.close();
+              }
+            })
+          )
+        )
+      )
+    );
+    vi.useFakeTimers({ toFake: ['setTimeout', 'clearTimeout'] });
+    const resolved = resolveExactSourceBytes(
+      referenceTo(source, checksumSha256),
+      context
+    );
+    await vi.waitFor(() => expect(push).toBeDefined());
+    // Longer in total than the idle budget, but never idle for that long.
+    await vi.advanceTimersByTimeAsync(SOURCE_DOWNLOAD_IDLE_MS - 1_000);
+    push!(source.slice(0, half));
+    await vi.advanceTimersByTimeAsync(SOURCE_DOWNLOAD_IDLE_MS - 1_000);
+    push!(source.slice(half));
+    push!(null);
+    await expect(resolved).resolves.toEqual(source);
+    expect(await loadSourceBlob(checksumSha256)).toEqual(source);
   });
 });
