@@ -209,4 +209,70 @@ describe('reference source download budget', () => {
     await expect(resolved).resolves.toEqual(source);
     expect(await loadSourceBlob(checksumSha256)).toEqual(source);
   });
+
+  /** A download whose body the test feeds; it errors once its fetch aborts. */
+  function feedableFetch() {
+    const fed: { push?: (chunk: Uint8Array | null) => void } = {};
+    const signals: AbortSignal[] = [];
+    const fetcher = vi.fn<typeof fetch>((_input, init) => {
+      const signal = init!.signal!;
+      signals.push(signal);
+      const body = new ReadableStream<Uint8Array>({
+        start(controller) {
+          fed.push = (chunk) =>
+            chunk ? controller.enqueue(chunk) : controller.close();
+          signal.addEventListener('abort', () =>
+            controller.error(new DOMException('Aborted', 'AbortError'))
+          );
+        }
+      });
+      return Promise.resolve(new Response(body));
+    });
+    vi.stubGlobal('fetch', fetcher);
+    return { fed, signals, fetcher };
+  }
+
+  it('lets the rebuild that superseded another join its running download', async () => {
+    const { source, checksumSha256 } = await sharedImport('artifact_source');
+    const ref = referenceTo(source, checksumSha256);
+    const { fed, fetcher } = feedableFetch();
+    // An edit supersedes the first rebuild mid-download...
+    const superseded = new AbortController();
+    void resolveExactSourceBytes(ref, {
+      ...context,
+      signal: superseded.signal
+    }).catch(() => undefined);
+    await vi.waitFor(() => expect(fed.push).toBeDefined());
+    fed.push!(source.slice(0, 4));
+    superseded.abort();
+    // ...and the rebuild that replaced it takes the transfer over.
+    const next = resolveExactSourceBytes(ref, {
+      ...context,
+      signal: new AbortController().signal
+    });
+    fed.push!(source.slice(4));
+    fed.push!(null);
+    await expect(next).resolves.toEqual(source);
+    expect(fetcher).toHaveBeenCalledOnce();
+  });
+
+  it('aborts a download no rebuild has wanted for the idle budget', async () => {
+    const { source, checksumSha256 } = await sharedImport('artifact_source');
+    const { fed, signals } = feedableFetch();
+    vi.useFakeTimers({ toFake: ['setTimeout', 'clearTimeout'] });
+    const superseded = new AbortController();
+    void resolveExactSourceBytes(referenceTo(source, checksumSha256), {
+      ...context,
+      signal: superseded.signal
+    }).catch(() => undefined);
+    await vi.waitFor(() => expect(fed.push).toBeDefined());
+    superseded.abort();
+    // Still progressing, so only the abandonment can end it.
+    for (let second = 0; second < SOURCE_DOWNLOAD_IDLE_MS; second += 10_000) {
+      expect(signals[0]!.aborted).toBe(false);
+      fed.push!(new Uint8Array(1));
+      await vi.advanceTimersByTimeAsync(10_000);
+    }
+    expect(signals[0]!.aborted).toBe(true);
+  });
 });
