@@ -171,53 +171,36 @@ function parseAsciiStl(text: string, fileName: string): ParsedStl {
     }
     return lineBreak;
   };
-  /**
-   * Whether the `facet` just read opens a whole facet before `lineEnd`: three
-   * vertex statements of three coordinates each, then `endfacet`. Words in a
-   * name never pass, whichever keywords they spell; only geometry does. Reads
-   * ahead without consuming, and stops at the first token that settles it.
-   */
-  const opensFacetBefore = (lineEnd: number): boolean => {
+  /** The keyword of the token after the current one, without consuming it. */
+  const peekKeyword = (): string => {
     const mark = index;
-    let found = 0;
-    let complete = false;
-    for (
-      let token = next();
-      token !== null && start < lineEnd;
-      token = next()
-    ) {
-      const word = keywordOf(token);
-      if (word === 'vertex') {
-        const point = [next(), next(), next()].map(coordinate);
-        found += 1;
-        if (start > lineEnd || found > 3 || !point.every(Number.isFinite)) {
-          break;
-        }
-      } else if (word === 'endfacet') {
-        complete = found === 3;
-        break;
-      } else if (word === 'facet' || word === 'solid' || word === 'endsolid') {
-        break;
-      }
-    }
+    const token = next();
     index = mark;
-    return complete;
+    return token === null ? '' : keywordOf(token);
   };
+  /** Whether the whole file is one line, trailing line breaks aside. */
+  const body = text.trimEnd();
+  const oneLine = !body.includes('\n') && !body.includes('\r');
   /**
-   * Skips the name after `solid` or `endsolid`: the rest of its line, whatever
-   * words it holds. Only when that line also holds geometry — a file written
-   * on one line — does the name end sooner, at the first `facet` that opens a
-   * whole facet on the same line.
+   * Skips the name after `solid` or `endsolid`. In a file of several lines
+   * the name is the rest of its line, always, whatever words it holds. A
+   * one-line file has no line end to stop at, so there the name ends at the
+   * first `facet` followed by `normal` or `outer`, and everything from it on
+   * is geometry — a malformed facet is refused, never read as a name. The
+   * cost is that a one-line file whose name itself says `facet normal` is
+   * refused.
    */
   const skipName = () => {
-    const lineEnd = nextLineBreak();
+    const lineEnd = oneLine ? length : nextLineBreak();
     for (;;) {
       const mark = index;
       const token = next();
       if (token === null) return;
       if (
-        start > lineEnd ||
-        (keywordOf(token) === 'facet' && opensFacetBefore(lineEnd))
+        oneLine
+          ? keywordOf(token) === 'facet' &&
+            ['normal', 'outer'].includes(peekKeyword())
+          : start > lineEnd
       ) {
         index = mark;
         return;
