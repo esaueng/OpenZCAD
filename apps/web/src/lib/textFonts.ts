@@ -40,13 +40,18 @@ async function fontLibrary(): Promise<FontLibrary> {
   // it cannot move anything into a separate chunk (rollup says so, loudly).
   // `setTextFontProvider` comes from the provider module, which has no
   // opentype dependency and is free to stay in the entry bundle.
-  libraryPromise ??= import('@openzcad/geometry/text-loader').then(
-    ({ FontLibrary, fetchFontDataSource }) => {
+  libraryPromise ??= import('@openzcad/geometry/text-loader')
+    .then(({ FontLibrary, fetchFontDataSource }) => {
       const created = new FontLibrary(fetchFontDataSource());
       setTextFontProvider((family, style) => created.peek(family, style));
       return created;
-    }
-  );
+    })
+    .catch((error: unknown) => {
+      // A failed chunk fetch is usually transient; the next preload or
+      // recovery check must load afresh rather than replay this rejection.
+      libraryPromise = null;
+      throw error;
+    });
   return libraryPromise;
 }
 

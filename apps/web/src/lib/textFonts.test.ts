@@ -94,4 +94,36 @@ describe('text font loading', () => {
     // Nothing is missing any more, so nothing new can arrive.
     expect(await documentFontsArrived(document)).toBe(false);
   });
+
+  it('loads the font parser afresh after its chunk failed to load', async () => {
+    vi.resetModules();
+    let attempts = 0;
+    vi.doMock('@openzcad/geometry/text-loader', () => {
+      attempts += 1;
+      if (attempts === 1) {
+        throw new Error('Failed to fetch dynamically imported module');
+      }
+      return {
+        FontLibrary: class {
+          peek() {
+            return undefined;
+          }
+        },
+        fetchFontDataSource: () => async () => new Uint8Array()
+      };
+    });
+    try {
+      const fresh = await import('./textFonts');
+      await expect(fresh.installTextFontProvider()).rejects.toThrow(
+        /Failed to fetch|error when mocking/
+      );
+      // The chunk is reachable again; a memoized rejection would leave text
+      // unbuildable for the worker's life, whatever recovery re-ran.
+      await expect(fresh.installTextFontProvider()).resolves.toBeUndefined();
+      expect(attempts).toBe(2);
+    } finally {
+      vi.doUnmock('@openzcad/geometry/text-loader');
+      vi.resetModules();
+    }
+  });
 });
