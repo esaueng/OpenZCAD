@@ -76,6 +76,49 @@ describe('STL parsing', () => {
     expect(parsed.vertices[0]).toBeCloseTo(1.5, 6);
   });
 
+  it.each(['solid exported with vertex colors', 'SOLID part VERTEX 1 of 3'])(
+    'reads a padded binary STL whose header says "%s" as binary',
+    (header) => {
+      // The header is free text. The word `vertex` in it, without three
+      // coordinates after it, is not an ASCII vertex statement.
+      const triangleCount = 3;
+      const buffer = new ArrayBuffer(84 + triangleCount * 50 + 2);
+      const bytes = new Uint8Array(buffer);
+      bytes.set(new TextEncoder().encode(header), 0);
+      bytes.set([0x0d, 0x0a], buffer.byteLength - 2); // trailing padding
+      const view = new DataView(buffer);
+      view.setUint32(80, triangleCount, true);
+      view.setFloat32(84 + 12, 1.5, true);
+
+      const parsed = parseStl(buffer, 'header-vertex.stl');
+      expect(parsed.format).toBe('binary');
+      expect(parsed.triangleCount).toBe(triangleCount);
+      expect(parsed.vertices[0]).toBeCloseTo(1.5, 6);
+    }
+  );
+
+  it('refuses an ASCII STL whose only vertices are malformed as ASCII', () => {
+    // Malformed coordinates still read as a vertex statement, so the file
+    // reaches the ASCII reader's refusal instead of a binary one.
+    const text = [
+      'solid bad',
+      'facet normal 0 0 1',
+      'outer loop',
+      'vertex nan 0 0',
+      'vertex 1.#QNAN 0 0',
+      'vertex -1.#IND inf 0',
+      'endloop',
+      'endfacet',
+      'endsolid bad',
+      ''
+    ].join('\n');
+    expect(() =>
+      parseStl(new TextEncoder().encode(text).buffer, 'bad.stl')
+    ).toThrow(
+      'ASCII STL facet 1 has a vertex that is not three finite numbers: "vertex nan 0 0".'
+    );
+  });
+
   it('rejects an ASCII STL with no facets', () => {
     const buffer = new TextEncoder().encode('solid empty\nendsolid empty\n').buffer;
     expect(() => parseStl(buffer, 'empty.stl')).toThrowError(StlParseError);
