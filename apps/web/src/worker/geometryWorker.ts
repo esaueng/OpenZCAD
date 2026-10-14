@@ -452,21 +452,28 @@ type GeometryWorkerWorkRequest = Exclude<
  * on this device's moment — a font face past its preload budget, a source
  * download that failed. That result was never cached; the broadcast re-runs
  * once a face lands or the connection returns, so the missing body appears
- * without another edit.
+ * without another edit. A recovery during the rebuild is latched and re-runs
+ * it as soon as it completes; each live rebuild clears both flags.
  */
 let latestBroadcast: GeometryWorkerWorkRequest | null = null;
 let broadcastAwaitsEnvironment = false;
+let environmentRecovered = false;
 
-function rerunAwaitingBroadcast(): void {
-  if (!broadcastAwaitsEnvironment || !latestBroadcast) return;
+function rerunLatestBroadcast(): void {
   broadcastAwaitsEnvironment = false;
-  queue.enqueue({
-    request: latestBroadcast,
-    queuedAtMs: performance.now(),
-    broadcastToken: broadcastGate.issue(true)
-  });
+  if (latestBroadcast)
+    queue.enqueue({
+      request: latestBroadcast,
+      queuedAtMs: performance.now(),
+      broadcastToken: broadcastGate.issue(true)
+    });
 }
-self.ononline = rerunAwaitingBroadcast;
+
+function environmentRecovery(): void {
+  environmentRecovered = true;
+  if (broadcastAwaitsEnvironment) rerunLatestBroadcast();
+}
+self.ononline = environmentRecovery;
 
 interface GeometryWorkerJob {
   request: GeometryWorkerWorkRequest;
@@ -649,7 +656,18 @@ async function execute(job: GeometryWorkerJob): Promise<void> {
     // document names has to be parsed before the rebuild reads it. A miss is
     // reported as a profile diagnostic rather than thrown, so this never
     // blocks the rest of the model on one unavailable font.
+    if (!job.requestId) {
+      broadcastAwaitsEnvironment = environmentRecovered = false;
+    }
     await preloadDocumentFonts(document);
+    // Watched from here, not from the result: a face that outlived the
+    // budget may land while the rebuild is still running.
+    if (!job.requestId) {
+      void documentFontsArrived(document).then(
+        (arrived) => arrived && environmentRecovery(),
+        () => undefined
+      );
+    }
 
     if (
       request.type === 'export' ||
@@ -966,13 +984,8 @@ async function execute(job: GeometryWorkerJob): Promise<void> {
         },
         projectionTransferables(packet)
       );
-      broadcastAwaitsEnvironment = transient;
-      if (transient) {
-        void documentFontsArrived(document).then(
-          (arrived) => arrived && rerunAwaitingBroadcast(),
-          () => undefined
-        );
-      }
+      if (transient && environmentRecovered) rerunLatestBroadcast();
+      else broadcastAwaitsEnvironment = transient;
     }
     post(stateFor('ready', request, { stale: false }));
   } catch (error) {
