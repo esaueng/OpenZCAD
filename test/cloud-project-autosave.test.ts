@@ -11,9 +11,14 @@ import {
   PROJECT_AUTOSAVE_IDLE_MS,
   PROJECT_AUTOSAVE_IDLE_RETRY_MS,
   PROJECT_AUTOSAVE_MAX_WAIT_MS,
+  PROJECT_TOO_LARGE_FOR_ACCOUNT,
   type CloudProjectAutosaveConnectivity,
   type CloudProjectAutosaveStatus
 } from '../apps/web/src/lib/cloudProjectAutosave';
+import {
+  parseSaveProjectDocumentRequest,
+  type HttpError
+} from '../apps/web/worker/validation';
 
 const owner = toUserId('user_owner');
 
@@ -618,6 +623,47 @@ describe('cloud project autosave — refusals', () => {
 
     expect(attempts).toBe(1);
     expect(lastState(statuses)).toBe('refused');
+    controller.dispose();
+  });
+
+  it('stops on a document over the value ceiling instead of retrying it as offline', async () => {
+    // The save edge refuses a document over MAX_DOCUMENT_VALUES — an imported
+    // mesh of ~21k triangles is enough — with a 400, not a 413. No retry can
+    // store it, and "offline" promised one would, for as long as the tab ran.
+    const document = documentAt(2);
+    let refusal: HttpError | null = null;
+    try {
+      parseSaveProjectDocumentRequest(
+        {
+          projectId: document.projectId,
+          expectedVersion: 2,
+          document: { ...document, padding: new Array(500_001).fill(0) }
+        },
+        document.projectId
+      );
+    } catch (error) {
+      refusal = error as HttpError;
+    }
+    expect(refusal?.status).toBe(400);
+    let attempts = 0;
+    const { controller, statuses } = harness({
+      respond: () => {
+        attempts += 1;
+        return Promise.reject(new ApiError(400, refusal!.message));
+      }
+    });
+    controller.openProject(document.projectId, 2);
+    controller.schedule(documentAt(3, document));
+    await vi.advanceTimersByTimeAsync(PROJECT_AUTOSAVE_IDLE_RETRY_MS * 3);
+    await controller.whenIdle();
+
+    expect(attempts).toBe(1);
+    expect(lastState(statuses)).toBe('refused');
+    expect((statuses.at(-1)?.error as Error | undefined)?.message).toBe(
+      PROJECT_TOO_LARGE_FOR_ACCOUNT
+    );
+    // Refused, not dropped: the edit stays queued against an explicit retry.
+    expect(controller.hasPendingChanges).toBe(true);
     controller.dispose();
   });
 
