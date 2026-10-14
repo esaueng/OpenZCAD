@@ -9383,9 +9383,16 @@ export function App() {
   ]);
 
   function dismissProjectInvitation() {
+    const request = pendingInvitationRequestRef.current;
+    const dismissesActiveRequest =
+      request !== null &&
+      request.navigation === fragmentNavigationRef.current &&
+      request.token === pendingInvitationToken &&
+      pendingInvitationAttemptRef.current ===
+        `${sessionRef.current?.userId}:${request.token}`;
     beginProjectNavigation();
     restoreShareSessionFragment();
-    setBusy(false);
+    if (dismissesActiveRequest) setBusy(false);
     setStatus('Invitation dismissed.');
     closeSettings();
   }
