@@ -752,7 +752,66 @@ export function createStudioHemisphereLight(): THREE.HemisphereLight {
 }
 
 /**
- * Vertical engineering-studio gradient: graphite above, near-black below.
+ * The stage colours a theme repaints: the backdrop gradient, the grid lines
+ * and the ground shadow's strength. Everything else in the scene (bodies,
+ * edges, axes, handles) reads on either stage.
+ */
+export interface StagePalette {
+  backdropTop: string;
+  backdropMiddle: string;
+  backdropBottom: string;
+  gridMinor: string;
+  gridMajor: string;
+  /** Opacity of the soft ground shadow under the model. */
+  shadowOpacity: number;
+}
+
+/** The graphite stage: the scene's colours before any theme is applied. */
+export const DARK_STAGE_PALETTE: Readonly<StagePalette> = {
+  backdropTop: '#171a1f',
+  backdropMiddle: '#101215',
+  backdropBottom: '#0b0c0f',
+  gridMinor: '#5c6573',
+  gridMajor: '#838d9c',
+  shadowOpacity: 0.55
+};
+
+/**
+ * Repaints the stage in place, without rebuilding any material, so a theme
+ * change costs one render rather than a shader relink.
+ */
+export function applyStagePalette(
+  stage: {
+    scene?: THREE.Scene;
+    backdrop?: THREE.Mesh;
+    grid?: THREE.Mesh;
+    shadowCatcher?: THREE.Mesh;
+  },
+  palette: Readonly<StagePalette>
+): void {
+  if (stage.scene?.background instanceof THREE.Color) {
+    stage.scene.background.set(palette.backdropBottom);
+  }
+  if (stage.backdrop) {
+    const uniforms = (stage.backdrop.material as THREE.ShaderMaterial).uniforms;
+    (uniforms.topColor!.value as THREE.Color).set(palette.backdropTop);
+    (uniforms.middleColor!.value as THREE.Color).set(palette.backdropMiddle);
+    (uniforms.bottomColor!.value as THREE.Color).set(palette.backdropBottom);
+  }
+  if (stage.grid) {
+    const uniforms = (stage.grid.material as THREE.ShaderMaterial).uniforms;
+    (uniforms.minorColor!.value as THREE.Color).set(palette.gridMinor);
+    (uniforms.majorColor!.value as THREE.Color).set(palette.gridMajor);
+  }
+  if (stage.shadowCatcher) {
+    (stage.shadowCatcher.material as THREE.ShadowMaterial).opacity =
+      palette.shadowOpacity;
+  }
+}
+
+/**
+ * Vertical engineering-studio gradient: graphite above, near-black below
+ * (or the light theme's pale greys, through applyStagePalette).
  *
  * A CanvasTexture quantises these near-black stops before WebGL sees them.
  * Screen capture then exaggerates the broad flat bands into rectangular codec
@@ -769,9 +828,13 @@ export function createGradientBackdrop(): THREE.Mesh {
     fog: false,
     toneMapped: false,
     uniforms: {
-      topColor: { value: new THREE.Color('#171a1f') },
-      middleColor: { value: new THREE.Color('#101215') },
-      bottomColor: { value: new THREE.Color('#0b0c0f') },
+      topColor: { value: new THREE.Color(DARK_STAGE_PALETTE.backdropTop) },
+      middleColor: {
+        value: new THREE.Color(DARK_STAGE_PALETTE.backdropMiddle)
+      },
+      bottomColor: {
+        value: new THREE.Color(DARK_STAGE_PALETTE.backdropBottom)
+      },
       middleStop: { value: 0.45 }
     },
     vertexShader: /* glsl */ `
@@ -850,8 +913,8 @@ export function createStudioGrid(): THREE.Mesh {
     uniforms: {
       minorStep: { value: 1 },
       levelFract: { value: 0 },
-      minorColor: { value: new THREE.Color('#5c6573') },
-      majorColor: { value: new THREE.Color('#838d9c') },
+      minorColor: { value: new THREE.Color(DARK_STAGE_PALETTE.gridMinor) },
+      majorColor: { value: new THREE.Color(DARK_STAGE_PALETTE.gridMajor) },
       fadeRadius: { value: 300 },
       fadeCenter: { value: new THREE.Vector2(0, 0) }
     },
@@ -1059,7 +1122,7 @@ export function createShadowCatcher(): THREE.Mesh {
     new THREE.ShadowMaterial({
       ...DECORATION_STENCIL_TEST,
       color: '#000000',
-      opacity: 0.55,
+      opacity: DARK_STAGE_PALETTE.shadowOpacity,
       // An invisible floor must not occlude later transparent geometry.
       depthWrite: false
     })
