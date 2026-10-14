@@ -9180,7 +9180,10 @@ export function App() {
         if (!isCurrent()) return;
         // The device write queues its account mirror. Drain that queue before
         // entering a public session, whose effect closes the account writer.
-        await cloudProjectAutosaveRef.current?.flushPending();
+        const draining = cloudProjectAutosaveRef.current?.flushPending();
+        // Checkpoints are fenced to their originating manager. As with Home,
+        // a safe device copy may leave without their network response.
+        if (!accountSavePendingRef.current) await draining;
         if (!isCurrent()) return;
         // Before the document lands: the collaboration hook and the cloud
         // autosave controller must treat this project as not account-backed,
