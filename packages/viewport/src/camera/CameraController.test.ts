@@ -982,3 +982,79 @@ describe('CameraController view direction', () => {
     controller.dispose();
   });
 });
+
+describe('CameraController teardown', () => {
+  /** What the controller's Control-key handlers test events against. */
+  class ControlKeyEvent {
+    constructor(readonly key: string) {}
+  }
+
+  /** A root node that keeps the listeners still registered on it. */
+  function trackingRoot() {
+    const live: { type: string; listener: unknown; capture: boolean }[] = [];
+    const captureOf = (options: unknown) =>
+      typeof options === 'boolean'
+        ? options
+        : Boolean((options as { capture?: boolean } | undefined)?.capture);
+    const find = (type: string, listener: unknown, options: unknown) =>
+      live.findIndex(
+        (entry) =>
+          entry.type === type &&
+          entry.listener === listener &&
+          entry.capture === captureOf(options)
+      );
+    return {
+      live,
+      addEventListener(type: string, listener: unknown, options?: unknown) {
+        if (find(type, listener, options) < 0) {
+          live.push({ type, listener, capture: captureOf(options) });
+        }
+      },
+      removeEventListener(type: string, listener: unknown, options?: unknown) {
+        const index = find(type, listener, options);
+        if (index >= 0) {
+          live.splice(index, 1);
+        }
+      }
+    };
+  }
+
+  it('leaves no key listener on the document after its canvas is detached', () => {
+    // The viewer is torn down after React has detached its canvas, when the
+    // canvas is its own root node. OrbitControls removes its Control-key
+    // interceptors from that root, so they stayed on the document and kept
+    // every retired viewer's canvas and WebGL context reachable.
+    vi.stubGlobal('KeyboardEvent', ControlKeyEvent);
+    const root = trackingRoot();
+    const canvas = fakeElement(800, 600);
+    let attached = true;
+    canvas.getRootNode = () => (attached ? root : canvas) as unknown as Node;
+    const controller = new CameraController({
+      host: fakeElement(800, 600),
+      domElement: canvas,
+      requestRender: vi.fn(),
+      onViewChange: vi.fn(),
+      onViewSettled: vi.fn(),
+      reducedMotion: () => true,
+      zoomToCursor: () => true,
+      middleDrag: () => 'pan'
+    });
+    // Control is down at teardown, so OrbitControls' keyup interceptor is
+    // registered as well.
+    for (const { type, listener } of [...root.live]) {
+      if (type === 'keydown') {
+        (listener as (event: unknown) => void)(new ControlKeyEvent('Control'));
+      }
+    }
+    expect(root.live.map((entry) => entry.type).sort()).toEqual([
+      'keydown',
+      'keydown',
+      'keyup',
+      'keyup'
+    ]);
+
+    attached = false;
+    controller.dispose();
+    expect(root.live).toEqual([]);
+  });
+});
