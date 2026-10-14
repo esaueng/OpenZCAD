@@ -466,8 +466,8 @@ describe('referenced mesh rebuilds', { timeout: 120_000 }, () => {
 
   beforeAll(async () => {
     adapter = await createExactKernelAdapter({
-      async resolveSourceBytes(ref, context) {
-        requests.push({ checksum: ref.checksumSha256, ...context });
+      async resolveSourceBytes(ref, { artifactId, sourceName }) {
+        requests.push({ checksum: ref.checksumSha256, artifactId, sourceName });
         const bytes = payloads.get(ref.checksumSha256);
         if (!bytes) throw new Error('not here');
         return bytes;
