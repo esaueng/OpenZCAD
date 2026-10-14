@@ -7,6 +7,7 @@ import {
 } from '@openzcad/shared';
 import type { FeatureId, ProjectDocument, ProjectId } from '@openzcad/shared';
 import { importSourceChecksums } from './sourceBlobClaims';
+import type { ImportedSourceArchiveIdentity } from '@openzcad/document-core';
 
 export {
   importSourceChecksums,
@@ -23,7 +24,7 @@ export {
  */
 export const LOCAL_ARTIFACT_ID_PREFIX = 'artifact_local_';
 
-export interface LocalOnlyImportSource {
+export interface LocalOnlyImportSource extends ImportedSourceArchiveIdentity {
   featureId: FeatureId;
   sourceName: string;
   /** Content-addressed reference; the bytes it names live only on this device. */
@@ -72,12 +73,16 @@ export function listLocalOnlyImportSources(
       featureId: feature.featureId,
       sourceName: (feature.data as { sourceName: string }).sourceName,
       checksumSha256: ref.checksumSha256,
+      logicalBytes: ref.logicalBytes,
       kind
     });
   }
   return [
     ...new Map(
-      sources.map((source) => [source.checksumSha256, source])
+      sources.map((source) => [
+        `${source.kind}:${source.checksumSha256}:${source.logicalBytes}`,
+        source
+      ])
     ).values()
   ];
 }
@@ -344,7 +349,11 @@ export async function archiveLocalOnlyImportSources(deps: {
     metadata: Record<string, string>;
   }): Promise<string>;
   /** Applies the artifact id to the feature; false when the edit refused. */
-  applyArtifactId(featureId: FeatureId, artifactId: string): boolean;
+  applyArtifactId(
+    featureId: FeatureId,
+    artifactId: string,
+    source: ImportedSourceArchiveIdentity
+  ): boolean;
   discardMeshPayload?(
     projectId: ProjectId,
     artifactId: string
@@ -380,7 +389,7 @@ export async function archiveLocalOnlyImportSources(deps: {
         metadata: { source: 'retry-archive' }
       });
       if (source.kind === 'mesh-payload') meshArtifactId = artifactId;
-      applied = deps.applyArtifactId(source.featureId, artifactId);
+      applied = deps.applyArtifactId(source.featureId, artifactId, source);
       if (applied) {
         result.archived.push(source.sourceName);
       } else {

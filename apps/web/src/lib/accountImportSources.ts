@@ -25,8 +25,8 @@ export async function archiveAccountImportSources(
   const result = await archiveLocalOnlyImportSources({
     document,
     ...dependencies,
-    applyArtifactId(featureId, artifactId) {
-      manager.archiveSource(featureId, artifactId);
+    applyArtifactId(featureId, artifactId, source) {
+      manager.archiveSource(featureId, artifactId, source);
       return true;
     }
   });
@@ -61,24 +61,18 @@ export function applyAccountSourceArchives(
     const sourceRef = importedSourceReferenceOf(node.data);
     const { artifactId } = node.data as { artifactId: string };
     if (sourceRef && !artifactId.startsWith('artifact_local_')) {
-      archived.set(sourceRef.checksumSha256, artifactId);
+      archived.set(
+        `${node.data.featureKind === 'imported-mesh' ? 'mesh-payload' : 'step-source'}:${sourceRef.checksumSha256}:${sourceRef.logicalBytes}`,
+        artifactId
+      );
     }
   }
   const manager = new CommandManager(current);
   for (const source of listLocalOnlyImportSources(current)) {
-    const artifactId = archived.get(source.checksumSha256);
-    if (!artifactId) continue;
-    // A replaced import can retain its feature ID. Its new bytes must not be
-    // relabelled as the old source that just finished uploading.
-    const changedSource = [...documentNodesWithHistory(current)].some(
-      (node) =>
-        node.kind === 'feature' &&
-        node.featureId === source.featureId &&
-        importedSourceReferenceOf(node.data) !== undefined &&
-        importedSourceReferenceOf(node.data)?.checksumSha256 !==
-          source.checksumSha256
+    const artifactId = archived.get(
+      `${source.kind}:${source.checksumSha256}:${source.logicalBytes}`
     );
-    if (!changedSource) manager.archiveSource(source.featureId, artifactId);
+    if (artifactId) manager.archiveSource(source.featureId, artifactId, source);
   }
   return manager.document;
 }

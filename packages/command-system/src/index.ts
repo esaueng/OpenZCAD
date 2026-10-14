@@ -68,6 +68,7 @@ import {
   type SketchReferenceDimensionDeleteInput,
   type SketchReferenceLabelPositionInput,
   archiveHistorySources,
+  type ImportedSourceArchiveIdentity,
   applyDocumentChanges,
   recordDocumentEdit,
   normalizeDocumentHistory,
@@ -3105,10 +3106,15 @@ export class CommandManager {
     return this.document;
   }
 
-  archiveSource(featureId: string, artifactId: string): ProjectDocument {
+  archiveSource(
+    featureId: string,
+    artifactId: string,
+    source?: ImportedSourceArchiveIdentity
+  ): ProjectDocument {
     const next = archiveHistorySources(this.document, {
       featureId,
-      artifactId
+      artifactId,
+      ...(source ? { source } : {})
     });
     if (next !== this.document)
       this.document = appendRevision(next, 'Archive imported source');

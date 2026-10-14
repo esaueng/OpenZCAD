@@ -11175,15 +11175,40 @@ export function App() {
       archive: (input) => archiveArtifact(input),
       discardMeshPayload: api.discardMeshPayload,
       onCleanupFailure: (sourceName) => cleanupFailures.push(sourceName),
-      applyArtifactId: (featureId, artifactId) => {
+      applyArtifactId: (featureId, artifactId, source) => {
         if (
           !originatingManager ||
           managerRef.current !== originatingManager ||
           !ensureCanEdit('archive import sources')
         )
           return false;
-        setDoc(originatingManager.archiveSource(featureId, artifactId));
-        return true;
+        const next = originatingManager.archiveSource(
+          featureId,
+          artifactId,
+          source
+        );
+        setDoc(next);
+        return [...documentNodesWithHistory(next)].some((node) => {
+          if (
+            node.kind !== 'feature' ||
+            !('artifactId' in node.data) ||
+            node.data.artifactId !== artifactId
+          )
+            return false;
+          const ref =
+            node.data.featureKind === 'imported-mesh'
+              ? node.data.meshPayloadRef
+              : node.data.featureKind === 'imported-step'
+                ? node.data.stepSourceRef
+                : undefined;
+          return (
+            ref?.checksumSha256 === source.checksumSha256 &&
+            ref.logicalBytes === source.logicalBytes &&
+            (node.data.featureKind === 'imported-mesh'
+              ? 'mesh-payload'
+              : 'step-source') === source.kind
+          );
+        });
       }
     });
     if (managerRef.current !== originatingManager) return result;

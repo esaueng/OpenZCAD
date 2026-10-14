@@ -2,6 +2,7 @@ import {
   documentNodesWithHistory,
   HISTORY_FIELDS,
   importedSourceReferenceOf,
+  isImportedSourceReference,
   isHistoryCommandKinds,
   MAX_UNDO_BYTES,
   MAX_UNDO_STEPS,
@@ -265,41 +266,117 @@ export function normalizeDocumentHistory(
   return { ...after, editHistory: bounded({ ...history, entries }) };
 }
 
+export interface ImportedSourceArchiveIdentity {
+  kind: 'step-source' | 'mesh-payload';
+  checksumSha256: string;
+  logicalBytes: number;
+}
+
 /** Uploading source bytes is durable metadata, so undo must not resurrect a device-only artifact id. */
 export function archiveHistorySources(
   document: ProjectDocument,
-  replacement?: { featureId: string; artifactId: string }
-): ProjectDocument {
-  const byChecksum = new Map<string, string>();
-  const local = new Map<string, string>();
-  for (const node of documentNodesWithHistory(document)) {
-    if (node.kind !== 'feature') continue;
-    // STEP sources and mesh payloads alike: an archived checksum is archived
-    // wherever undo history still names it.
-    const sourceRef = importedSourceReferenceOf(node.data);
-    if (!sourceRef) continue;
-    const { artifactId } = node.data as { artifactId: string };
-    if (replacement && node.featureId === replacement.featureId)
-      byChecksum.set(sourceRef.checksumSha256, replacement.artifactId);
-    if (artifactId.startsWith('artifact_local_'))
-      local.set(artifactId, sourceRef.checksumSha256);
-    else byChecksum.set(sourceRef.checksumSha256, artifactId);
+  replacement?: {
+    featureId: string;
+    artifactId: string;
+    source?: ImportedSourceArchiveIdentity;
   }
-  const ids = new Map(
-    [...local].flatMap(([id, checksum]) => {
-      const archived = byChecksum.get(checksum);
-      return archived ? [[id, archived] as const] : [];
-    })
-  );
-  if (!ids.size) return document;
-  const { derived, ...content } = document;
-  const rewritten = JSON.parse(
-    JSON.stringify(content, (key, value: unknown) =>
-      key === 'artifactId' && typeof value === 'string'
-        ? (ids.get(value) ?? value)
-        : value
+): ProjectDocument {
+  const identity = (
+    value: unknown
+  ): ImportedSourceArchiveIdentity | undefined => {
+    if (!value || typeof value !== 'object') return;
+    const data = value as Record<string, unknown>;
+    const kind =
+      data.featureKind === 'imported-step'
+        ? 'step-source'
+        : data.featureKind === 'imported-mesh' ||
+            data.meshPayloadRef !== undefined
+          ? 'mesh-payload'
+          : 'step-source';
+    const ref =
+      kind === 'mesh-payload' ? data.meshPayloadRef : data.stepSourceRef;
+    if (isImportedSourceReference(ref))
+      return {
+        kind,
+        checksumSha256: ref.checksumSha256,
+        logicalBytes: ref.logicalBytes
+      };
+  };
+  const key = (source: ImportedSourceArchiveIdentity) =>
+    `${source.kind}:${source.checksumSha256}:${source.logicalBytes}`;
+  const archived = new Map<string, string>();
+  const local = new Map<string, Set<string>>();
+  const retained = new Map<string, ImportedSourceArchiveIdentity>();
+  let current: ImportedSourceArchiveIdentity | undefined;
+  for (const node of documentNodesWithHistory(document)) {
+    if (node.kind !== 'feature' || !importedSourceReferenceOf(node.data))
+      continue;
+    const source = identity(node.data);
+    if (!source) continue;
+    const sourceKey = key(source);
+    if (replacement && node.featureId === replacement.featureId) {
+      retained.set(sourceKey, source);
+      if (document.nodes[node.id] === node) current = source;
+    }
+    const { artifactId } = node.data as { artifactId: string };
+    if (artifactId.startsWith('artifact_local_')) {
+      const sources = local.get(artifactId) ?? new Set<string>();
+      sources.add(sourceKey);
+      local.set(artifactId, sources);
+    } else archived.set(sourceKey, artifactId);
+  }
+  if (replacement) {
+    // Legacy calls infer the current source, or the sole retained source when
+    // undone. A delayed upload passes its captured identity explicitly.
+    const source =
+      replacement.source ??
+      current ??
+      (retained.size === 1 ? retained.values().next().value : undefined);
+    if (source) archived.set(key(source), replacement.artifactId);
+  }
+  if (
+    ![...local.values()].some((sources) =>
+      [...sources].some((source) => archived.has(source))
     )
-  ) as Omit<ProjectDocument, 'derived'>;
+  )
+    return document;
+  const { derived, ...content } = document;
+  const rewritten = structuredClone(content);
+  const pending: unknown[] = [rewritten];
+  const targets: Record<string, unknown>[] = [];
+  while (pending.length) {
+    const value = pending.pop();
+    if (!value || typeof value !== 'object') continue;
+    const object = value as Record<string, unknown>;
+    const id = object.artifactId;
+    if (typeof id === 'string' && id.startsWith('artifact_local_')) {
+      targets.push(object);
+      const source = identity(object);
+      if (source) {
+        const sources = local.get(id) ?? new Set<string>();
+        sources.add(key(source));
+        local.set(id, sources);
+      }
+    }
+    for (const child of Object.values(object))
+      if (child && typeof child === 'object') pending.push(child);
+  }
+  for (const object of targets) {
+    const source = identity(object);
+    const id = object.artifactId as string;
+    const sources = local.get(id);
+    // Bare command metadata can inherit an id only when its content is
+    // unambiguous. Embedded legacy geometry keeps its original-file id.
+    const sourceKey = source
+      ? key(source)
+      : object.vertices === undefined &&
+          object.stepText === undefined &&
+          sources?.size === 1
+        ? sources.values().next().value
+        : undefined;
+    const artifactId = sourceKey ? archived.get(sourceKey) : undefined;
+    if (artifactId) object.artifactId = artifactId;
+  }
   return {
     ...rewritten,
     derived,
