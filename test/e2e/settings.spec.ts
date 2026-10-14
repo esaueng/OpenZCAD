@@ -444,9 +444,12 @@ test('settings name their sections and search individual settings', async ({
 
 // The page ground and an island surface in each palette (theme/tokens.css).
 const DARK_GROUND = 'rgb(16, 18, 21)';
-const LIGHT_GROUND = 'rgb(238, 241, 245)';
+const LIGHT_GROUND = 'rgb(242, 242, 242)';
 const DARK_SURFACE = 'rgb(24, 27, 31)';
-const LIGHT_SURFACE = 'rgb(247, 249, 251)';
+const LIGHT_SURFACE = 'rgb(250, 250, 250)';
+// The 3D stage behind the canvas turns with the chrome.
+const DARK_STAGE = 'rgb(16, 18, 21)';
+const LIGHT_STAGE = 'rgb(238, 238, 238)';
 
 function pageGround(page: Page) {
   return page.evaluate(() => getComputedStyle(document.body).backgroundColor);
@@ -504,14 +507,20 @@ test('System follows a light OS on the start screen and in the workspace alike',
   const surface = () =>
     island.evaluate((element) => getComputedStyle(element).backgroundColor);
   expect(await surface()).toBe(LIGHT_SURFACE);
+  const viewer = page.locator('.viewer-shell').first();
+  const stage = () =>
+    viewer.evaluate((element) => getComputedStyle(element).backgroundColor);
+  expect(await stage()).toBe(LIGHT_STAGE);
   await expect(page.locator('html')).toHaveAttribute('data-theme', 'system');
 
   // An OS change repaints the workspace on the frame it lands, with no
   // listener to wait for: read straight after the switch, never polled.
   await page.emulateMedia({ colorScheme: 'dark' });
   expect(await surface()).toBe(DARK_SURFACE);
+  expect(await stage()).toBe(DARK_STAGE);
   await page.emulateMedia({ colorScheme: 'light' });
   expect(await surface()).toBe(LIGHT_SURFACE);
+  expect(await stage()).toBe(LIGHT_STAGE);
 });
 
 test('turns project sharing off without disabling cloud saves', async ({
