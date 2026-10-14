@@ -31,10 +31,12 @@ const FONT_DIR = fontDirectory();
 
 const fetched: string[] = [];
 const unreachable = new Set<string>();
+const stalled = new Set<string>();
 vi.stubGlobal('fetch', async (input: string | URL) => {
   const file = String(input).split('/').pop()!;
   fetched.push(file);
   if (unreachable.has(file)) throw new TypeError('Failed to fetch');
+  if (stalled.has(file)) return new Promise<Response>(() => undefined);
   const bytes = await readFile(path.join(FONT_DIR, file));
   return new Response(bytes);
 });
@@ -67,25 +69,28 @@ describe('text font loading', () => {
     expect(loops?.length ?? 0).toBeGreaterThan(0);
   });
 
-  it('reports a late face only once it has actually loaded', async () => {
-    const { document } = addSketchFeature(
-      createProjectDocument('Late face', toUserId('user')),
+  /** A sketch with one text object per named family, regular style. */
+  function textDocument(...families: string[]) {
+    return addSketchFeature(
+      createProjectDocument('Late faces', toUserId('user')),
       {
         name: 'Label',
         planeRef: { type: 'canonical', plane: 'XY', offset: 0 },
-        objects: [
-          {
-            objectKind: 'text',
-            text: 'Late',
-            fontFamily: 'lora',
-            fontStyle: 'regular',
-            size: 10,
-            x: 0,
-            y: 0
-          }
-        ]
+        objects: families.map((fontFamily, index) => ({
+          objectKind: 'text' as const,
+          text: 'Late',
+          fontFamily,
+          fontStyle: 'regular' as const,
+          size: 10,
+          x: 0,
+          y: index * 20
+        }))
       }
-    );
+    ).document;
+  }
+
+  it('reports a late face only once it has actually loaded', async () => {
+    const document = textDocument('lora');
     // A face that cannot load is no reason for the worker to rebuild.
     unreachable.add('lora-regular.ttf');
     expect(await documentFontsArrived(document)).toBe(false);
@@ -93,6 +98,25 @@ describe('text font loading', () => {
     expect(await documentFontsArrived(document)).toBe(true);
     // Nothing is missing any more, so nothing new can arrive.
     expect(await documentFontsArrived(document)).toBe(false);
+  });
+
+  it('reports the first missing face to land without waiting on a stalled one', async () => {
+    // Text drawn with the face that loads is buildable now, whatever the
+    // stalled face does; the rebuild this triggers watches it again.
+    stalled.add('oswald-regular.ttf');
+    await expect(
+      documentFontsArrived(textDocument('oswald', 'roboto-slab'))
+    ).resolves.toBe(true);
+  });
+
+  it('does not count a failed face as arrived while another is stalled', async () => {
+    unreachable.add('jetbrains-mono-regular.ttf');
+    const outcome = await Promise.race([
+      documentFontsArrived(textDocument('oswald', 'jetbrains-mono')),
+      new Promise((resolve) => setTimeout(resolve, 50, 'still waiting'))
+    ]);
+    expect(outcome).toBe('still waiting');
+    unreachable.clear();
   });
 
   it('loads the font parser afresh after its chunk failed to load', async () => {
