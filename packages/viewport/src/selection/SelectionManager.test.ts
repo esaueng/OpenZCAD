@@ -954,6 +954,27 @@ describe('face hover hop', () => {
   const hoverFaceKey = (mesh: THREE.Object3D) =>
     String(mesh.userData.hoverFaceKey ?? '');
 
+  it('slices a hovered face once for its film and x-ray pass', () => {
+    // Both passes draw the same face range. Slicing it for each was two index
+    // copies and two uploads per crossing where one shared geometry will do.
+    const { manager, bodyId } = threeFaceBody();
+    manager.setHoverFace({ bodyId, kind: 'face', topologyId: 'face-a' });
+    const film = manager.hoverFaceMesh.geometry;
+    expect(film.getIndex()).not.toBeNull();
+    expect(manager.hoverHiddenFaceMesh.geometry.getIndex()).toBe(
+      film.getIndex()
+    );
+    let disposals = 0;
+    film.addEventListener('dispose', () => {
+      disposals += 1;
+    });
+
+    manager.setHoverFace({ bodyId, kind: 'face', topologyId: 'face-b' });
+    settle(manager);
+    // Released once, with the slot, not once per pass.
+    expect(disposals).toBe(1);
+  });
+
   it('cuts between neighbours in one frame, then releases the old slot', () => {
     const { manager, bodyId, object } = threeFaceBody();
 

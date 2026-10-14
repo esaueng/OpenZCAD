@@ -8861,6 +8861,9 @@ export function ModelViewer({
         (disposable.material as THREE.Material).dispose();
       }
       environment.dispose();
+      // The key light's shadow map is a render target of its own, which no
+      // scene-graph clear reaches.
+      keyLight.dispose();
       clearGroup(axes); // the triad is three fat lines now, not one helper
       cameraRig.dispose();
       // Rigs still fading out have no render loop left to finish them.
@@ -8869,6 +8872,10 @@ export function ModelViewer({
       }
       retiringRigsRef.current = [];
       renderer.dispose();
+      // dispose() frees three's own caches but leaves the context to the
+      // garbage collector, and browsers cap live contexts by evicting the
+      // oldest. Every project open builds a fresh viewer, so release now.
+      renderer.forceContextLoss();
       host.removeChild(renderer.domElement);
       host.removeChild(labelRenderer.domElement);
       offsetChip.removeEventListener('click', handleChipClick);
