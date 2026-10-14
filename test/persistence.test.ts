@@ -6,9 +6,12 @@ import {
   ArtifactQuotaError
 } from '@openzcad/persistence';
 import type { RevisionConflictError } from '@openzcad/persistence';
+import { CommandManager, commandFactories } from '@openzcad/command-system';
 import {
   addPrimitiveFeature,
-  createProjectDocument
+  createProjectDocument,
+  withEchoedSavePoints,
+  withoutDerivedProjection
 } from '@openzcad/document-core';
 import {
   MAX_PROJECT_REVISIONS,
@@ -565,7 +568,11 @@ describe('project shelves', () => {
       kind: 'stl-import'
     });
     const sixteenBytes = new ArrayBuffer(16);
-    await service.putUpload(userId, first.session.uploadSessionId, sixteenBytes);
+    await service.putUpload(
+      userId,
+      first.session.uploadSessionId,
+      sixteenBytes
+    );
     await service.finalizeArtifact(userId, {
       projectId,
       uploadSessionId: first.session.uploadSessionId,
@@ -666,6 +673,71 @@ describe('save-state history', () => {
     );
     expect(restored?.featureOrder).toEqual([]);
     expect(second.featureOrder).toHaveLength(1);
+  });
+
+  it('keeps a named save when an edit lands while it is in flight', async () => {
+    const service = new InMemoryPersistenceService();
+    const { document: created } = await service.createProject(userId, {
+      name: 'Bracket',
+      units: 'mm'
+    });
+    const projectId = created.projectId;
+    const manager = new CommandManager(created, userId);
+    manager.execute(
+      commandFactories.addPrimitive({
+        name: 'Plate',
+        primitiveKind: 'box',
+        dimensions: { width: 80, depth: 40, height: 6 }
+      })
+    );
+    let fence = (
+      await service.saveDocument(userId, {
+        projectId,
+        expectedVersion: created.version,
+        document: withoutDerivedProjection(manager.document)
+      })
+    ).version;
+
+    // Save "Client review"; the user keeps working while it is in flight.
+    const sent = manager.document;
+    const request = service.saveRevision(userId, {
+      projectId,
+      expectedVersion: fence,
+      document: withoutDerivedProjection(sent),
+      reason: 'Client review'
+    });
+    manager.execute(
+      commandFactories.setParameter({ name: 'width', expression: '90' })
+    );
+    const saved = await request;
+    fence = saved.version;
+    expect(manager.document.version).not.toBe(sent.version);
+
+    // The live document stays, carrying the echo's save point; autosave then
+    // pushes it under the acknowledged fence.
+    manager.document = withEchoedSavePoints(manager.document, saved);
+    await service.saveDocument(userId, {
+      projectId,
+      expectedVersion: fence,
+      document: withoutDerivedProjection(manager.document)
+    });
+
+    const account = await service.loadProject(userId, projectId);
+    for (const document of [account!, manager.document]) {
+      expect(document.checkpoints.at(-1)).toEqual(saved.checkpoints.at(-1));
+      // The newest revision still names the newest model, not the save.
+      expect(document.revisions.at(-1)?.reason).toBe('Set parameter width');
+      expect(
+        document.revisions.map((revision) => revision.revisionId)
+      ).toContain(saved.checkpoints.at(-1)!.revisionId);
+    }
+    expect(account!.parameterOrder).toHaveLength(1);
+    const stored = await service.loadRevision(
+      userId,
+      projectId,
+      saved.checkpoints.at(-1)!.revisionId
+    );
+    expect(stored?.parameterOrder).toHaveLength(0);
   });
 
   it('reports a save it no longer stores rather than failing', async () => {

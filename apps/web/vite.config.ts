@@ -505,6 +505,16 @@ export default defineConfig(async ({ command, isPreview, mode }) => {
             // first paint, and an unnamed chunk makes that impossible to tell
             // apart from a deliberate shared dependency. This one is
             // deliberate: Build mode needs it immediately.
+            // The text loader is the sole opentype.js import site and is
+            // reached only through `textFonts.ts`'s dynamic import. Name it
+            // before the geometry rule claims it, or the font parser rides
+            // in the preloaded `geometry` chunk for every cold visit.
+            if (
+              id.includes('/packages/geometry/src/text/loader.ts') ||
+              id.includes('/node_modules/opentype.js/')
+            ) {
+              return 'text-loader';
+            }
             if (id.includes('/packages/geometry/')) {
               return 'geometry';
             }

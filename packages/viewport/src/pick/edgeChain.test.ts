@@ -393,3 +393,74 @@ describe('directions read from the exact curve', () => {
     ).toEqual(['arc', 'line']);
   });
 });
+
+describe('the run index', () => {
+  /** `edges` with every read of an edge's polyline counted. */
+  function counted(edges: EdgeTopology[]) {
+    const reads = { points: 0 };
+    const wrapped = edges.map((source) => {
+      const copy = { ...source };
+      Object.defineProperty(copy, 'points', {
+        get() {
+          reads.points += 1;
+          return source.points;
+        }
+      });
+      return copy;
+    });
+    return { edges: wrapped, reads };
+  }
+
+  it('is built once per edge array, not once per hovered edge', () => {
+    // Hover walks the run under every newly hovered edge inside the render
+    // frame; re-reading every polyline each time cost a 20k-edge import
+    // around 5 ms a hover change.
+    const { edges, reads } = counted([
+      edge('left', [[0, 0, 0], [10, 0, 0]]),
+      edge('middle', [[10, 0, 0], [20, 0, 0]]),
+      edge('right', [[20, 0, 0], [30, 0, 0]]),
+      edge('up', [[30, 0, 0], [30, 10, 0]])
+    ]);
+    expect(edgeRunFrom(edges, 'middle')).toEqual(['left', 'middle', 'right']);
+    const firstWalk = reads.points;
+    expect(firstWalk).toBeGreaterThanOrEqual(edges.length);
+
+    expect(edgeRunFrom(edges, 'left')).toEqual(['left', 'middle', 'right']);
+    expect(edgeRunFrom(edges, 'up')).toEqual(['up']);
+    // A wider cone walks the same index round the corner.
+    expect(edgeRunFrom(edges, 'right', { tangentToleranceDeg: 95 })).toEqual([
+      'left',
+      'middle',
+      'right',
+      'up'
+    ]);
+    expect(reads.points).toBe(firstWalk);
+  });
+
+  it('indexes a rebuilt body afresh', () => {
+    const before = [
+      edge('a', [[0, 0, 0], [10, 0, 0]]),
+      edge('b', [[10, 0, 0], [20, 0, 0]])
+    ];
+    expect(edgeRunFrom(before, 'a')).toEqual(['a', 'b']);
+    // A rebuild hands over a new array; the same ids may now meet at a corner.
+    const after = [
+      edge('a', [[0, 0, 0], [10, 0, 0]]),
+      edge('b', [[10, 0, 0], [10, 10, 0]])
+    ];
+    expect(edgeRunFrom(after, 'a')).toEqual(['a']);
+  });
+
+  it('keeps an explicit weld tolerance apart from the derived one', () => {
+    const edges = [
+      edge('a', [[0, 0, 0], [10, 0, 0]]),
+      edge('gapped', [[10.5, 0, 0], [20, 0, 0]])
+    ];
+    expect(edgeRunFrom(edges, 'a')).toEqual(['a']);
+    expect(edgeRunFrom(edges, 'a', { weldTolerance: 1 })).toEqual([
+      'a',
+      'gapped'
+    ]);
+    expect(edgeRunFrom(edges, 'a')).toEqual(['a']);
+  });
+});

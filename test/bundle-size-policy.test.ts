@@ -9,6 +9,7 @@ import {
   KERNEL_LOAD_POLICY,
   KERNEL_WASM_POLICY,
   LAZY_ENTRY_PATTERNS,
+  launcherMarkerLeaks,
   measureKernelWasm
 } from '../scripts/bundle-size-policy.mjs';
 
@@ -173,6 +174,14 @@ describe('lazy entry patterns', () => {
     ).toBe(true);
   });
 
+  it('covers the lazy text loader chunk', () => {
+    expect(
+      LAZY_ENTRY_PATTERNS.some((pattern) =>
+        pattern.test('assets/text-loader-B2kQ9xVd.js')
+      )
+    ).toBe(true);
+  });
+
   it('leaves the launcher entry and its named shared chunks alone', () => {
     for (const file of [
       'assets/index-CIzyUy_T.js',
@@ -184,6 +193,33 @@ describe('lazy entry patterns', () => {
         false
       );
     }
+  });
+});
+
+describe('launcher chunk contents', () => {
+  it('reports a launcher chunk that carries the font parser', () => {
+    // A named chunk passes `LAZY_ENTRY_PATTERNS` by name alone; only its
+    // contents show that a manualChunks rule folded opentype.js into it.
+    const leaks = launcherMarkerLeaks([
+      { file: 'assets/index-a.js', contents: 'createRoot(el)' },
+      {
+        file: 'assets/geometry-b.js',
+        contents: 'throw new Error("Unsupported OpenType signature "+t)'
+      }
+    ]);
+    expect(leaks.map(({ file }) => file)).toEqual(['assets/geometry-b.js']);
+    expect(leaks[0]?.library).toContain('opentype.js');
+  });
+
+  it('passes launcher chunks that only reference the lazy loader', () => {
+    expect(
+      launcherMarkerLeaks([
+        {
+          file: 'assets/index-a.js',
+          contents: 'import("./text-loader-c.js")'
+        }
+      ])
+    ).toEqual([]);
   });
 });
 
