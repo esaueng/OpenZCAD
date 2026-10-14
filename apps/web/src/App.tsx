@@ -114,6 +114,7 @@ import {
   resolveParamValue,
   restoreFromSaveState,
   staleDirectEditFaceRepair,
+  withEchoedSavePoints,
   withoutDerivedProjection,
   type ExtrudeInput,
   type StaleDirectEditFaceRepair
@@ -3940,16 +3941,8 @@ export function App() {
   // Toolbar undo affordance in Tweak: live only for a parameter-only top
   // entry. Computed at render from the manager's tracked kinds — unknown
   // (pre-kind histories) reads as unavailable, matching handleUndo.
-  const parameterOnlyUndoAvailable = (() => {
-    const kinds = managerRef.current?.undoEntryKinds;
-    return (
-      (managerRef.current?.canUndo ?? false) &&
-      kinds !== null &&
-      kinds !== undefined &&
-      kinds.length > 0 &&
-      kinds.every((kind) => kind === 'parameter.set')
-    );
-  })();
+  const parameterOnlyUndoAvailable =
+    managerRef.current?.undoIsParameterOnly ?? false;
   // Both reading workspaces disarm every modeling surface — tools, handles,
   // sketches, the inspector. Tweak differs from View in one thing only: the
   // parameter guard below lets `parameter.set` commands through.
@@ -9531,11 +9524,15 @@ export function App() {
       // Written before anything is replaced: this is the way back.
       await saveLocalProject(guarded);
       const reason = `Restored “${checkpoint.reason}”`;
-      const restored = createCheckpoint(
-        restoreFromSaveState(guarded, snapshot, reason),
+      // The manager's document, not its input: only it carries the undo entry
+      // that puts the restore back, and autosave persists what is shown.
+      const restored = manager.applyDocumentEdit(
+        createCheckpoint(
+          restoreFromSaveState(guarded, snapshot, reason),
+          reason
+        ),
         reason
       );
-      manager.applyDocumentEdit(restored, reason);
       clearAutoFrame();
       // The meshes on screen belong to the document being left, and the
       // restored history has to be rebuilt from scratch to replace them.
@@ -9662,11 +9659,7 @@ export function App() {
     // a typo made seconds ago is one keypress away. Anything else — a
     // feature edit, a mixed batch, or an entry from before kind tracking —
     // keeps the modeling refusal rather than reverting unseen work.
-    const undoKinds = managerRef.current.undoEntryKinds;
-    const parametersOnly =
-      undoKinds !== null &&
-      undoKinds.length > 0 &&
-      undoKinds.every((kind) => kind === 'parameter.set');
+    const parametersOnly = managerRef.current.undoIsParameterOnly;
     if (!parametersOnly && !ensureCanEdit('undo')) {
       return;
     }
@@ -9698,13 +9691,9 @@ export function App() {
       return;
     }
     // Same split as undo: redoing a parameter-only step is a parameter edit,
-    // redoing anything else is modeling. (The redo entry's kinds are not
-    // tracked separately; the undone entry still on the stack decides.)
-    const undoKinds = managerRef.current.undoEntryKinds;
-    const parametersOnly =
-      undoKinds !== null &&
-      undoKinds.length > 0 &&
-      undoKinds.every((kind) => kind === 'parameter.set');
+    // redoing anything else is modeling. Redo applies the entry at the
+    // cursor, so its kinds decide — not the undo entry below it.
+    const parametersOnly = managerRef.current.redoIsParameterOnly;
     if (!parametersOnly && !ensureCanEdit('redo')) {
       return;
     }
@@ -10179,7 +10168,9 @@ export function App() {
         // the pre-edit snapshot this handler sent; adopting its echo would
         // erase those edits from the canonical document while their undo
         // entries survive. Record the account version so the next autosave
-        // fences correctly and let it carry the newer edits up.
+        // fences correctly and let it carry the newer edits up — with the
+        // save point the echo minted, or that push would replace it.
+        showAccountEcho(withEchoedSavePoints(savingManager.document, saved));
         setCloudAvailable(true);
         setStatus(sourceWarning ?? 'Saved revision.');
         return;

@@ -2977,6 +2977,10 @@ export function commandsForCadPatch(
   return commands;
 }
 
+function parameterOnly(kinds: string[] | null): boolean {
+  return !!kinds?.length && kinds.every((kind) => kind === 'parameter.set');
+}
+
 /** Owns the canonical document, including its durable undo/redo position. */
 export class CommandManager {
   constructor(
@@ -3015,6 +3019,26 @@ export class CommandManager {
   }
   get redoLabel(): string | null {
     return this.history?.entries[this.history.cursor]?.label ?? null;
+  }
+  /**
+   * Command kinds of the entry Ctrl+Shift+Z would redo, or null when there is
+   * nothing to redo. Redo applies this entry, not the one below the cursor, so
+   * the Tweak-mode check for redo must read these.
+   */
+  get redoEntryKinds(): string[] | null {
+    return this.history?.entries[this.history.cursor]?.commandKinds ?? null;
+  }
+  /**
+   * Whether undo would revert parameter sets only — Tweak mode's own
+   * vocabulary. Unknown kinds (an entry recorded before kinds were tracked,
+   * or one whose kinds were left out) read as modeling.
+   */
+  get undoIsParameterOnly(): boolean {
+    return parameterOnly(this.undoEntryKinds);
+  }
+  /** The same question for the entry redo would apply. */
+  get redoIsParameterOnly(): boolean {
+    return parameterOnly(this.redoEntryKinds);
   }
 
   execute(command: AnyCommand): ProjectDocument {
