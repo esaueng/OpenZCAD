@@ -119,6 +119,26 @@ export function throwIfBuildCancelled(
   }
 }
 
+/**
+ * Awaits work that cannot observe the signal itself — a source download —
+ * but settles with the typed cancellation once the signal fires, sampled
+ * every `intervalMs`. The abandoned work runs on; its outcome is dropped.
+ */
+export function raceBuildCancellation<T>(
+  work: Promise<T>,
+  signal?: BuildCancellationSignal,
+  intervalMs = 50
+): Promise<T> {
+  if (!signal) return work;
+  let timer: ReturnType<typeof setInterval> | undefined;
+  const cancelled = new Promise<never>((_, reject) => {
+    timer = setInterval(() => {
+      if (signal.isCancelled()) reject(cancelledBuildRefusal());
+    }, intervalMs);
+  });
+  return Promise.race([work, cancelled]).finally(() => clearInterval(timer));
+}
+
 /** Whether an error is a typed cancellation, however deeply it was wrapped. */
 export function isBuildCancelled(error: unknown): boolean {
   return kernelRefusalCategoryOf(error) === 'cancelled';

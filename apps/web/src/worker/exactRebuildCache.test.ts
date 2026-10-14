@@ -145,6 +145,30 @@ describe('bounded exact rebuild cache', () => {
     );
     first.resolve(1);
   });
+
+  it('hands back but never retains a result its owner marks uncacheable', async () => {
+    const transient = new WeakSet<object>();
+    const cache = new ExactRebuildCache<{ bodies: number }>({
+      maxEntries: 2,
+      maxBytes: 1024,
+      maxInFlight: 1,
+      cacheable: (value) => !transient.has(value)
+    });
+    let fontLoaded = false;
+    const load = vi.fn(async () => {
+      // Text built before its face arrived: same content key, no body.
+      const result = { bodies: fontLoaded ? 1 : 0 };
+      if (!fontLoaded) transient.add(result);
+      return result;
+    });
+
+    await expect(cache.get('text', load)).resolves.toEqual({ bodies: 0 });
+    expect(cache.entryCount).toBe(0);
+    fontLoaded = true;
+    await expect(cache.get('text', load)).resolves.toEqual({ bodies: 1 });
+    await expect(cache.get('text', load)).resolves.toEqual({ bodies: 1 });
+    expect(load).toHaveBeenCalledTimes(2);
+  });
 });
 
 describe('newest broadcast publication', () => {
