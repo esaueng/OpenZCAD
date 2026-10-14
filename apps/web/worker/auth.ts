@@ -229,7 +229,7 @@ async function hashedUserId(
 }
 
 async function hmacUserId(
-  prefix: 'user_anon',
+  prefix: 'user_anon' | 'user_ai',
   identity: string,
   secret: string
 ): Promise<AuthSession['userId']> {
@@ -633,11 +633,25 @@ export async function startEmailLogin(
       `SELECT id, expires_at
        FROM auth_email_challenges
        WHERE email = ? AND id LIKE ?
-         AND consumed_at IS NULL AND attempts < ? AND expires_at >= ?
+         AND consumed_at IS NULL AND expires_at >= ?
+         AND attempts < CASE
+           WHEN (SELECT COALESCE(SUM(recent.attempts), 0)
+                 FROM auth_email_challenges AS recent
+                 WHERE recent.email = auth_email_challenges.email
+                   AND recent.created_at >= ?) >= ? THEN 1
+           ELSE ?
+         END
        ORDER BY created_at DESC, rowid DESC
        LIMIT 1`
     )
-      .bind(email, `${requesterTag}.%`, LOGIN_CODE_MAX_ATTEMPTS, timestamp)
+      .bind(
+        email,
+        `${requesterTag}.%`,
+        timestamp,
+        timestamp - LOGIN_FAILURE_WINDOW_SECONDS,
+        LOGIN_EMAIL_FAILURE_LIMIT,
+        LOGIN_CODE_MAX_ATTEMPTS
+      )
       .first<{ id: string; expires_at: number }>();
     return pending
       ? {
@@ -773,39 +787,23 @@ export async function verifyEmailLogin(
     env.AUTH_OTP_PEPPER
   );
   const codeMatches = constantTimeEqual(challenge.code_hash, expectedHash);
-  const decision = await env.DB.prepare(
-    `UPDATE auth_email_challenges
-     SET attempts = CASE WHEN ? = 1 THEN attempts ELSE attempts + 1 END,
-         consumed_at = CASE WHEN ? = 1 THEN ? ELSE consumed_at END
-     WHERE id = ?
-       AND consumed_at IS NULL
-       AND attempts < ?
-       AND expires_at >= ?`
-  )
-    .bind(
-      codeMatches ? 1 : 0,
-      codeMatches ? 1 : 0,
-      timestamp,
-      challengeId,
-      maxAttempts,
-      timestamp
-    )
-    .run();
   if (!codeMatches) {
+    await env.DB.prepare(
+      `UPDATE auth_email_challenges
+       SET attempts = attempts + 1
+       WHERE id = ?
+         AND consumed_at IS NULL
+         AND attempts < ?
+         AND expires_at >= ?`
+    )
+      .bind(challengeId, maxAttempts, timestamp)
+      .run();
     throw new AuthFlowError(
       400,
       'AUTH_CODE_INVALID',
       'The login code is invalid or expired.'
     );
   }
-  if (decision.meta?.changes !== 1) {
-    throw new AuthFlowError(
-      400,
-      'AUTH_CODE_INVALID',
-      'The login code is invalid or expired.'
-    );
-  }
-
   const legacyOwnerEmail = env.AUTH_LEGACY_OWNER_EMAIL?.trim().toLowerCase();
   const userId =
     legacyOwnerEmail && challenge.email === legacyOwnerEmail
@@ -817,7 +815,7 @@ export async function verifyEmailLogin(
   const tokenHash = await sha256(sessionToken);
   const maxAgeSeconds = configuredSessionDays(env) * 24 * 60 * 60;
   const expiresAt = timestamp + maxAgeSeconds;
-  await env.DB.batch([
+  const decision = await env.DB.batch([
     env.DB.prepare(
       `INSERT INTO users (id, email, created_at)
          VALUES (?, ?, ?)
@@ -826,15 +824,40 @@ export async function verifyEmailLogin(
     env.DB.prepare(
       `INSERT INTO auth_sessions
            (token_hash, user_id, created_at, expires_at)
-         VALUES (?, ?, ?, ?)`
-    ).bind(tokenHash, userId, timestamp, expiresAt),
-    // A new code request no longer voids pending codes, so signing in does.
+         SELECT ?, ?, ?, ?
+         WHERE EXISTS (
+           SELECT 1 FROM auth_email_challenges
+           WHERE id = ? AND email = ? AND consumed_at IS NULL
+             AND attempts < ? AND expires_at >= ?
+         )`
+    ).bind(
+      tokenHash,
+      userId,
+      timestamp,
+      expiresAt,
+      challengeId,
+      challenge.email,
+      maxAttempts,
+      timestamp
+    ),
+    // The session claim and every sibling's consumption share one transaction.
+    // Another correct code can create no session after this batch commits.
     env.DB.prepare(
       `UPDATE auth_email_challenges
          SET consumed_at = ?
-         WHERE email = ? AND consumed_at IS NULL`
-    ).bind(timestamp, challenge.email)
+         WHERE email = ? AND consumed_at IS NULL
+           AND EXISTS (
+             SELECT 1 FROM auth_sessions WHERE token_hash = ?
+           )`
+    ).bind(timestamp, challenge.email, tokenHash)
   ]);
+  if (decision[1]?.meta?.changes !== 1) {
+    throw new AuthFlowError(
+      400,
+      'AUTH_CODE_INVALID',
+      'The login code is invalid or expired.'
+    );
+  }
   const session: AuthSession = {
     userId,
     displayName: challenge.email.split('@')[0] || challenge.email,
@@ -1548,4 +1571,34 @@ export async function identifyAssistantRequest(
   env: CloudflareEnv
 ): Promise<AuthSession['userId']> {
   return (await identifyAssistantIdentity(request, env)).userId;
+}
+
+/**
+ * The pseudonym the assistant hands its model provider for a caller (OpenAI's
+ * `safety_identifier`, OpenRouter's `user`).
+ *
+ * A signed-in user id is `user_` plus an unsalted SHA-256 prefix of the email,
+ * so forwarding it let anyone holding provider logs confirm an address by
+ * hashing candidates. Keyed with the Worker-only pepper anonymous identities
+ * already use, it stays stable per user — provider abuse tracking and sticky
+ * routing keep working — without being computable from the email.
+ */
+export async function assistantProviderIdentity(
+  userId: AuthSession['userId'],
+  env: CloudflareEnv
+): Promise<string> {
+  const pepper = env.AI_IDENTITY_PEPPER?.trim();
+  if (!pepper) {
+    // Development identities are not derived from an email, and a hosted
+    // email-code deployment refuses to publish without the pepper.
+    if (env.AUTH_MODE !== 'email-code') {
+      return userId;
+    }
+    throw new AuthFlowError(
+      503,
+      'AI_IDENTITY_UNAVAILABLE',
+      'The modeling assistant identity service is unavailable.'
+    );
+  }
+  return hmacUserId('user_ai', `openzcad-ai-provider-v1:${userId}`, pepper);
 }
