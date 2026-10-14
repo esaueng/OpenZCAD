@@ -6,8 +6,10 @@ import { CommandManager } from '@openzcad/command-system';
 import { createProjectDocument } from '@openzcad/document-core';
 import { parseStl } from '@openzcad/io-stl';
 import {
+  ARTIFACT_UPLOAD_PART_BYTES,
   decodeImportedMeshPayload,
   documentStructureError,
+  toProjectId,
   toUserId,
   type ProjectDocument
 } from '@openzcad/shared';
@@ -30,6 +32,10 @@ import {
 } from './localProjectStore';
 import { createProjectBackup } from './projectBackupTransfer';
 import { parseProjectBackup } from './projectBackup';
+import {
+  archiveArtifact,
+  type ArchiveArtifactTransport
+} from './archiveArtifact';
 
 beforeEach(() => {
   globalThis.indexedDB = new IDBFactory();
@@ -175,8 +181,8 @@ describe('archiving a mesh import', () => {
       newId
     });
     expect(uploads).toEqual([
-      'mesh-payload:scan.stl.ozmesh',
-      'stl-import:scan.stl'
+      'stl-import:scan.stl',
+      'mesh-payload:scan.stl.ozmesh'
     ]);
     expect(archived).toEqual({
       artifactId: 'artifact_mesh-payload',
@@ -237,6 +243,136 @@ describe('archiving a mesh import', () => {
         signal: abort.signal
       })
     ).rejects.toThrow('stopped');
+  });
+
+  it('never uploads a hidden payload when the original upload is cancelled', async () => {
+    const controller = new AbortController();
+    const reason = new DOMException('original upload stopped', 'AbortError');
+    const finalizedPayloads: string[] = [];
+    const archive = vi.fn(async (input: { kind: string }) => {
+      // With the old order, this succeeds before the original is cancelled
+      // below and the hidden finalized artifact becomes an orphan.
+      if (input.kind === 'mesh-payload') {
+        finalizedPayloads.push('artifact_payload');
+        return 'artifact_payload';
+      }
+      controller.abort(reason);
+      throw reason;
+    });
+    await expect(
+      archiveImportedMesh({
+        hold: { bytes: new Uint8Array([1, 2, 3]) },
+        sourceName: 'scan.stl',
+        original,
+        archive,
+        signal: controller.signal
+      })
+    ).rejects.toBe(reason);
+    expect(finalizedPayloads).toEqual([]);
+    expect(archive).toHaveBeenCalledOnce();
+    expect(archive).toHaveBeenCalledWith(
+      expect.objectContaining({ kind: 'stl-import' })
+    );
+  });
+
+  it('checks cancellation between the original and payload even when the upload returns an id', async () => {
+    const controller = new AbortController();
+    const reason = new DOMException('stopped before payload', 'AbortError');
+    const archive = vi.fn(async () => {
+      controller.abort(reason);
+      return 'artifact_original';
+    });
+    await expect(
+      archiveImportedMesh({
+        hold: { bytes: new Uint8Array([1, 2, 3]) },
+        sourceName: 'scan.stl',
+        original,
+        archive,
+        signal: controller.signal
+      })
+    ).rejects.toBe(reason);
+    expect(archive).toHaveBeenCalledOnce();
+  });
+
+  it('archives a usable payload when the courtesy original cannot upload', async () => {
+    const archived = await archiveImportedMesh({
+      hold: { bytes: new Uint8Array([1, 2, 3]) },
+      sourceName: 'scan.stl',
+      original,
+      archive: async (input) => {
+        if (input.kind === 'stl-import')
+          throw new Error('original unavailable');
+        return 'artifact_payload';
+      }
+    });
+    expect(archived.artifactId).toBe('artifact_payload');
+    expect(archived.payloadArchived).toBe(true);
+    expect(archived.originalArchived).toBe(false);
+  });
+
+  it('does not return a committable archive when cancellation reaches a finalized payload', async () => {
+    const controller = new AbortController();
+    const reason = new DOMException('stopped at finalization', 'AbortError');
+    await expect(
+      archiveImportedMesh({
+        hold: { bytes: new Uint8Array([1, 2, 3]) },
+        sourceName: 'scan.stl',
+        original,
+        archive: async (input) => {
+          if (input.kind === 'mesh-payload') controller.abort(reason);
+          return `artifact_${input.kind}`;
+        },
+        signal: controller.signal
+      })
+    ).rejects.toBe(reason);
+  });
+
+  it('aborts the payload multipart session without finalizing a hidden artifact', async () => {
+    const controller = new AbortController();
+    const reason = new DOMException('payload upload stopped', 'AbortError');
+    const transport: ArchiveArtifactTransport = {
+      createUploadSession: vi.fn(async (input) => ({
+        session: {
+          uploadSessionId: `upload_${input.kind}`,
+          artifactId: `artifact_${input.kind}`,
+          uploadUrl: 'https://upload.test/put'
+        }
+      })) as unknown as ArchiveArtifactTransport['createUploadSession'],
+      uploadArtifact: vi.fn(async () => undefined),
+      createMultipartUpload: vi.fn(async () => ({
+        uploadId: 'multipart_mesh'
+      })),
+      uploadArtifactPart: vi.fn(async (_session, _uploadId, partNumber) => {
+        controller.abort(reason);
+        return { partNumber, etag: `etag_${partNumber}` };
+      }),
+      completeMultipartUpload: vi.fn(async () => undefined),
+      abortMultipartUpload: vi.fn(async () => undefined),
+      finalizeArtifact: vi.fn(async (input) => ({
+        artifactId: input.artifactId
+      })),
+      getArtifactMetadata: vi.fn(async () => ({ artifact: null }))
+    };
+    await expect(
+      archiveImportedMesh({
+        hold: { bytes: new Uint8Array(ARTIFACT_UPLOAD_PART_BYTES + 1) },
+        sourceName: 'scan.stl',
+        original,
+        signal: controller.signal,
+        archive: (input) =>
+          archiveArtifact(transport, toProjectId('proj_mesh_upload'), input)
+      })
+    ).rejects.toBe(reason);
+    expect(transport.uploadArtifactPart).toHaveBeenCalledOnce();
+    expect(transport.abortMultipartUpload).toHaveBeenCalledWith(
+      'upload_mesh-payload',
+      'multipart_mesh'
+    );
+    expect(transport.completeMultipartUpload).not.toHaveBeenCalled();
+    expect(transport.finalizeArtifact).toHaveBeenCalledOnce();
+    expect(transport.finalizeArtifact).toHaveBeenCalledWith(
+      expect.objectContaining({ artifactId: 'artifact_stl-import' })
+    );
   });
 });
 

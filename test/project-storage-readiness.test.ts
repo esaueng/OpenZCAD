@@ -16,6 +16,7 @@ const readyRow = {
   storage_assets_index: 1,
   pointer_indexes: 2,
   quota_triggers: 11,
+  cleanup_claims_ready: 1,
   revision_owner_trigger: 1
 };
 
@@ -52,7 +53,11 @@ describe('R2 project storage readiness', () => {
   });
 
   it('fails closed before the revision ownership trigger is installed', async () => {
-    const { db } = database({ ...readyRow, revision_owner_trigger: 0 });
+    const { db } = database({
+      ...readyRow,
+      cleanup_claims_ready: 1,
+      revision_owner_trigger: 0
+    });
     await expect(isProjectObjectStorageReady(db, bucket())).resolves.toBe(
       false
     );
@@ -78,6 +83,7 @@ describe('D1 project storage readiness', () => {
   it('requires both account quota and revision ownership triggers', async () => {
     const first = vi.fn(async () => ({
       trigger_count: 7,
+      cleanup_claims_ready: 1,
       revision_owner_trigger: 1
     }));
     const prepare = vi.fn((_sql: string) => ({ first }));
@@ -89,6 +95,7 @@ describe('D1 project storage readiness', () => {
     );
     first.mockResolvedValueOnce({
       trigger_count: 7,
+      cleanup_claims_ready: 1,
       revision_owner_trigger: 0
     });
     await expect(
@@ -96,6 +103,7 @@ describe('D1 project storage readiness', () => {
     ).resolves.toBe(false);
     first.mockResolvedValueOnce({
       trigger_count: 6,
+      cleanup_claims_ready: 1,
       revision_owner_trigger: 1
     });
     await expect(
@@ -134,6 +142,7 @@ describe('artifact upload accounting readiness', () => {
     parts_table: 1,
     session_columns: 7,
     indexes: 2,
+    cleanup_claims_ready: 1,
     triggers: 15
   };
 

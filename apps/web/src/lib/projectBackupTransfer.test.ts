@@ -5,9 +5,16 @@ import { beforeEach, afterEach, expect, it, vi } from 'vitest';
 import {
   createCheckpoint,
   createProjectDocument,
+  importMeshBody,
   importStepBody
 } from '@openzcad/document-core';
-import { toUserId, toArtifactId } from '@openzcad/shared';
+import {
+  decodeImportedMeshPayload,
+  encodeImportedMeshPayload,
+  toUserId,
+  toArtifactId,
+  type ArtifactRecord
+} from '@openzcad/shared';
 import { api } from './api';
 import {
   createProjectBackup,
@@ -15,6 +22,8 @@ import {
 } from './projectBackupTransfer';
 import {
   importProjectCopy,
+  backupFileBytes,
+  checksum,
   packBackupFile,
   parseProjectBackup
 } from './projectBackup';
@@ -31,6 +40,7 @@ import {
   saveLocalProject,
   saveProjectMeasurements
 } from './localProjectStore';
+import * as localProjectStore from './localProjectStore';
 
 beforeEach(() => {
   globalThis.indexedDB = new IDBFactory();
@@ -171,4 +181,131 @@ it('rolls back all companion data when a project import transaction fails', asyn
   await expect(saveImportedProject(backup)).rejects.toThrow('Quota exhausted');
   expect(await loadLocalProject(backup.document.projectId)).toBeNull();
   expect(await listLocalProjects()).toEqual([]);
+});
+
+async function referencedMeshProject() {
+  const triangles = {
+    vertices: [0, 0, 0, 1, 0, 0, 0, 1, 0],
+    indices: [0, 1, 2]
+  };
+  const bytes = encodeImportedMeshPayload(triangles);
+  const ref = await putSourceBlob(bytes);
+  const initial = createProjectDocument('Mesh archive', toUserId('owner'));
+  const document = importMeshBody(initial, {
+    name: 'Mesh',
+    sourceName: 'scan.stl',
+    artifactId: 'artifact_payload',
+    triangleCount: 1,
+    meshPayloadRef: ref
+  }).document;
+  const payload: ArtifactRecord = {
+    artifactId: toArtifactId('artifact_payload'),
+    projectId: document.projectId,
+    kind: 'mesh-payload',
+    name: 'scan.stl.ozmesh',
+    contentType: 'application/octet-stream',
+    bytes: bytes.length,
+    objectKey: 'payload',
+    metadata: {},
+    createdAt: new Date().toISOString()
+  };
+  return { document, initial, bytes, ref, payload, triangles };
+}
+
+it('backs up a cloud mesh payload once as a source while keeping its original file', async () => {
+  const { document, initial, bytes, ref, payload, triangles } =
+    await referencedMeshProject();
+  const originalBytes = new TextEncoder().encode('solid scan\nendsolid scan');
+  const original: ArtifactRecord = {
+    ...payload,
+    artifactId: toArtifactId('artifact_original'),
+    kind: 'stl-import',
+    name: 'scan.stl',
+    contentType: 'model/stl',
+    bytes: originalBytes.length,
+    objectKey: 'original'
+  };
+  vi.spyOn(api, 'listArtifacts').mockResolvedValue({
+    artifacts: [payload, original]
+  });
+  vi.spyOn(api, 'loadRevision').mockResolvedValue(initial);
+  const fetch = vi.fn(async () => new Response(originalBytes));
+  vi.stubGlobal('fetch', fetch);
+  const text = await createProjectBackup(document, true);
+  const backup = await parseProjectBackup(text);
+  expect(backup.files.map((file) => file.artifact.artifactId)).toEqual([
+    'artifact_original'
+  ]);
+  expect(backup.sources).toHaveLength(1);
+  expect(backup.sources![0]!.sha256).toBe(ref.checksumSha256);
+  expect(text.split(backup.sources![0]!.base64)).toHaveLength(2);
+  const duplicated = JSON.stringify({
+    ...backup,
+    files: [...backup.files, await packBackupFile(payload, bytes.buffer)]
+  });
+  expect(
+    new NodeBlob([duplicated]).size - new NodeBlob([text]).size
+  ).toBeGreaterThan(backup.sources![0]!.base64.length);
+  expect(fetch).toHaveBeenCalledOnce();
+  expect(fetch).toHaveBeenCalledWith(
+    '/api/artifacts/artifact_original/download'
+  );
+
+  // A new device restores the payload even though it has no file entry, and
+  // rebuilding still gets exactly the imported triangles.
+  globalThis.indexedDB = new IDBFactory();
+  const copy = importProjectCopy(backup, toUserId('new-owner'));
+  await saveImportedProject(copy);
+  const restored = await loadSourceBlob(ref.checksumSha256);
+  expect(restored).toEqual(bytes);
+  expect(Array.from(decodeImportedMeshPayload(restored!).vertices)).toEqual(
+    triangles.vertices
+  );
+  const restoredFiles = await loadProjectBackupFiles(copy.document.projectId);
+  expect(restoredFiles).toHaveLength(1);
+  expect(restoredFiles[0]!.artifact.name).toBe('scan.stl');
+  expect(backupFileBytes(restoredFiles[0]!)).toEqual(originalBytes);
+});
+
+it('downloads a missing cloud mesh payload once into sources instead of files too', async () => {
+  const { document, initial, bytes, ref, payload } =
+    await referencedMeshProject();
+  globalThis.indexedDB = new IDBFactory();
+  vi.spyOn(api, 'listArtifacts').mockResolvedValue({ artifacts: [payload] });
+  vi.spyOn(api, 'loadRevision').mockResolvedValue(initial);
+  const fetch = vi.fn(async () => new Response(bytes));
+  vi.stubGlobal('fetch', fetch);
+  const backup = await parseProjectBackup(
+    await createProjectBackup(document, true)
+  );
+  expect(backup.files).toEqual([]);
+  expect(backup.sources).toHaveLength(1);
+  expect(backup.sources![0]!.sha256).toBe(await checksum(bytes));
+  expect(backup.sources![0]!.logicalBytes).toBe(ref.logicalBytes);
+  expect(fetch).toHaveBeenCalledOnce();
+  expect(fetch).toHaveBeenCalledWith(
+    '/api/artifacts/artifact_payload/download'
+  );
+});
+
+it('uses an older backup payload file when the local source cache misses', async () => {
+  const { document, bytes, ref, payload } = await referencedMeshProject();
+  const older = await parseProjectBackup(
+    await createProjectBackup(document, false)
+  );
+  older.files.push(await packBackupFile(payload, bytes.buffer));
+  globalThis.indexedDB = new IDBFactory();
+  await saveImportedProject(older);
+  vi.spyOn(localProjectStore, 'loadSourceBlob').mockResolvedValue(null);
+  const fetch = vi.fn(() => {
+    throw new Error('An offline backup must use its stored payload file.');
+  });
+  vi.stubGlobal('fetch', fetch);
+  const backup = await parseProjectBackup(
+    await createProjectBackup(document, false)
+  );
+  expect(backup.files).toEqual([]);
+  expect(backup.sources).toHaveLength(1);
+  expect(backup.sources![0]!.sha256).toBe(ref.checksumSha256);
+  expect(fetch).not.toHaveBeenCalled();
 });

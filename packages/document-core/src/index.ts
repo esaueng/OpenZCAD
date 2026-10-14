@@ -1,4 +1,6 @@
 import { rewriteNodeExpressions } from './parameter-expressions';
+import { localizeImportedSourceArtifacts } from './imported-source-artifacts';
+export { localizeImportedSourceArtifacts } from './imported-source-artifacts';
 import {
   assertNoReferenceDimensionDependents,
   assertSketchReferenceDimensions
@@ -802,6 +804,9 @@ export function normalizeDocument(input: ProjectDocument): ProjectDocument {
   // `constraints`, so nothing needs rewriting.
   // Schema v15 -> v16 adds the canonical-plane basis marker. Never synthesize
   // it while migrating: unmarked saved sketches must retain revision 1 geometry.
+  // Schema v16 -> v17 allows reference-form mesh payloads. Keep existing
+  // embedded triangles and pre-release references as written; the version
+  // boundary prevents older clients from accepting meshes they cannot rebuild.
   return {
     ...document,
     schemaVersion: PROJECT_DOCUMENT_SCHEMA_VERSION,
@@ -857,21 +862,23 @@ export function duplicateProjectDocument(
   const reason = branchedFrom
     ? `Branched from ${branchedFrom.projectName} · ${branchedFrom.checkpointReason}`
     : `Duplicated from ${source.name}`;
-  return createCheckpoint(
-    appendRevision(
-      {
-        ...copy,
-        projectId,
-        ownerUserId,
-        name,
-        // A branch of a branch records where it actually came from, not where
-        // its parent did.
-        ...(branchedFrom ? { branchedFrom } : {}),
-        derived: { ...copy.derived, updatedAt: nowIso() }
-      },
+  return localizeImportedSourceArtifacts(
+    createCheckpoint(
+      appendRevision(
+        {
+          ...copy,
+          projectId,
+          ownerUserId,
+          name,
+          // A branch of a branch records where it actually came from, not where
+          // its parent did.
+          ...(branchedFrom ? { branchedFrom } : {}),
+          derived: { ...copy.derived, updatedAt: nowIso() }
+        },
+        reason
+      ),
       reason
-    ),
-    reason
+    )
   );
 }
 

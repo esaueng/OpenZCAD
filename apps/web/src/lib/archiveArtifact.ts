@@ -21,6 +21,10 @@ export interface ArchiveArtifactTransport extends ArtifactUploadTransport {
     payload: FinalizeArtifactRequest
   ): Promise<{ artifactId: string | null }>;
   getArtifactMetadata(artifactId: string): Promise<ArtifactMetadataResponse>;
+  discardMeshPayload?(
+    projectId: ProjectId,
+    artifactId: string
+  ): Promise<{ deleted: boolean }>;
 }
 
 export interface ArchiveArtifactInput {
@@ -43,6 +47,8 @@ export interface ArchiveArtifactInput {
    * had already said the import was cancelled.
    */
   signal?: AbortSignal;
+  /** Cleanup cannot replace the failure that stopped the import. */
+  onCleanupFailure?(error: unknown): void;
 }
 
 /**
@@ -72,28 +78,67 @@ export async function archiveArtifact(
   if (!upload.uploadUrl) {
     throw new Error('Artifact upload is unavailable.');
   }
-  // Chunked above the part size, single PUT below; retries each part and
-  // aborts the multipart state if the upload cannot finish.
-  await uploadArtifactBody(
-    transport,
-    { uploadSessionId: upload.uploadSessionId, uploadUrl: upload.uploadUrl },
-    input.body,
-    {
-      ...(input.onUploadProgress
-        ? { onProgress: input.onUploadProgress }
-        : {}),
-      ...(input.signal ? { signal: input.signal } : {})
+  try {
+    // Chunked above the part size, single PUT below; retries each part and
+    // aborts the multipart state if the upload cannot finish.
+    await uploadArtifactBody(
+      transport,
+      { uploadSessionId: upload.uploadSessionId, uploadUrl: upload.uploadUrl },
+      input.body,
+      {
+        ...(input.onUploadProgress
+          ? { onProgress: input.onUploadProgress }
+          : {}),
+        ...(input.signal ? { signal: input.signal } : {})
+      }
+    );
+    input.signal?.throwIfAborted();
+    const finalized = await transport.finalizeArtifact({
+      projectId,
+      uploadSessionId: upload.uploadSessionId,
+      artifactId: upload.artifactId
+    });
+    if (finalized.artifactId !== upload.artifactId) {
+      throw new Error('The artifact could not be finalized.');
     }
-  );
-  input.signal?.throwIfAborted();
-  await transport.finalizeArtifact({
-    projectId,
-    uploadSessionId: upload.uploadSessionId,
-    artifactId: upload.artifactId
-  });
-  const stored = await transport.getArtifactMetadata(upload.artifactId);
-  if (stored.artifact) {
-    onArtifactStored?.(stored.artifact);
+    input.signal?.throwIfAborted();
+    const stored = await transport.getArtifactMetadata(upload.artifactId);
+    input.signal?.throwIfAborted();
+    if (
+      input.kind === 'mesh-payload' &&
+      (!stored.artifact ||
+        stored.artifact.artifactId !== upload.artifactId ||
+        stored.artifact.projectId !== projectId ||
+        stored.artifact.kind !== 'mesh-payload')
+    ) {
+      throw new Error('The mesh archive could not be verified.');
+    }
+    if (stored.artifact) {
+      onArtifactStored?.(stored.artifact);
+    }
+    return upload.artifactId;
+  } catch (error) {
+    // The server may have finalized before a response or metadata lookup was
+    // cancelled. Compensate using this upload's ID and its captured project,
+    // without passing the already-aborted signal to cleanup.
+    if (input.kind === 'mesh-payload' && transport.discardMeshPayload) {
+      try {
+        const result = await transport.discardMeshPayload(
+          projectId,
+          upload.artifactId
+        );
+        if (!result.deleted)
+          throw new Error('Cloud mesh cleanup has not completed.', {
+            cause: error
+          });
+      } catch (cleanupError) {
+        try {
+          input.onCleanupFailure?.(cleanupError);
+        } catch {
+          // An observer must not replace the failure that stopped the import.
+        }
+      }
+    }
+    throw error;
   }
-  return upload.artifactId;
 }

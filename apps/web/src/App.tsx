@@ -247,13 +247,9 @@ import type { SketchSolveStatus } from './components/SketchToolRail';
 import { ApiError, api, isProjectDocumentUnavailableError } from './lib/api';
 import {
   applyAccountSourceArchives,
-  localizeImportedSourceArtifacts,
   sourceUploadMessage
 } from './lib/accountImportSources';
-import {
-  archiveArtifact as archiveArtifactBody,
-  type ArchiveArtifactInput
-} from './lib/archiveArtifact';
+import type { ArchiveArtifactInput } from './lib/archiveArtifact';
 import {
   archiveLocalOnlyImportSources,
   createInFlightImportChecksums,
@@ -9067,15 +9063,13 @@ export function App() {
     const activeProjectSince = snapshotActiveProject();
     setBusy(true);
     try {
-      const copy = localizeImportedSourceArtifacts(
-        duplicateProjectDocument(
-          source,
-          duplicateProjectName(
-            source.name,
-            projects.map((summary) => summary.name)
-          ),
-          session?.userId ?? localUserId
-        )
+      const copy = duplicateProjectDocument(
+        source,
+        duplicateProjectName(
+          source.name,
+          projects.map((summary) => summary.name)
+        ),
+        session?.userId ?? localUserId
       );
       setShareSession(null);
       shareSessionRef.current = null;
@@ -10384,6 +10378,8 @@ export function App() {
       );
     }
     const owner = doc.projectId;
+    const { archiveArtifact: archiveArtifactBody } =
+      await import('./lib/archiveArtifact');
     return archiveArtifactBody(api, owner, input, (artifact) => {
       // The upload can outlive the project it archived for. The artifacts
       // list is keyed to the OPEN project — the effect that fills it clears
@@ -10400,6 +10396,15 @@ export function App() {
         )
       ]);
     });
+  }
+
+  function reportMeshCleanupFailure(error: unknown) {
+    if (!error) return;
+    setStatusEntry((current) => ({
+      ...current,
+      text: `${current.text} Cloud cleanup failed: ${errorMessage(error, 'Unused mesh data could not be removed.')}`,
+      at: Date.now()
+    }));
   }
 
   async function handleImportFile(file: File) {
@@ -10525,6 +10530,7 @@ export function App() {
       // outlive-its-project specs perform (PR #349 R-C2).
       const abort = startImportAbort();
       const progress = createImportProgressSink();
+      let meshCleanupFailure: unknown = null;
       progress.start({
         fileName: file.name,
         phases: ['reading', 'building', 'archiving']
@@ -10584,6 +10590,9 @@ export function App() {
             'failed';
           let note = '.';
           let rejection: string | null = null;
+          let meshArchive: Awaited<
+            ReturnType<typeof meshImport.archiveImportedMesh>
+          > | null = null;
           try {
             outcome = await validatedFeature.run(
               meshImport.importedMeshCommand(
@@ -10623,18 +10632,22 @@ export function App() {
                   progress.update({ phase: 'archiving', fraction: 0 });
                   // Best-effort; a cancelled upload rethrows so the run ends
                   // cancelled and nothing commits.
-                  const archived = await meshImport.archiveImportedMesh({
-                    hold,
-                    sourceName: parsed.name,
-                    original: {
-                      fileName: file.name,
-                      contentType,
-                      kind: 'stl-import',
-                      body: file
-                    },
-                    archive: archiveArtifact,
-                    signal: abort.signal
-                  });
+                  const archived = (meshArchive =
+                    await meshImport.archiveImportedMesh({
+                      hold,
+                      sourceName: parsed.name,
+                      original: {
+                        fileName: file.name,
+                        contentType,
+                        kind: 'stl-import',
+                        body: file
+                      },
+                      archive: archiveArtifact,
+                      signal: abort.signal,
+                      onCleanupFailure: (error) => {
+                        meshCleanupFailure = error;
+                      }
+                    }));
                   note = archived.note;
                   if (abort.signal.aborted) {
                     throw new DOMException(
@@ -10652,6 +10665,13 @@ export function App() {
               }
             );
           } finally {
+            meshCleanupFailure =
+              (await meshImport.cleanupUncommittedMeshArchive(
+                meshArchive,
+                outcome === 'committed',
+                (artifactId) =>
+                  api.discardMeshPayload(doc.projectId, artifactId)
+              )) ?? meshCleanupFailure;
             // Kept for a commit, removed for a refusal or a cancel — and
             // never left behind by a run that threw on the way.
             await hold.settle(
@@ -10702,6 +10722,7 @@ export function App() {
         }
       } finally {
         finishImportAbort(abort);
+        reportMeshCleanupFailure(meshCleanupFailure);
       }
       return;
     }
@@ -10802,9 +10823,13 @@ export function App() {
       importMarks()
     );
     let created = false;
+    let meshArchive: Awaited<
+      ReturnType<typeof meshImport.archiveImportedMesh>
+    > | null = null;
+    let meshCleanupFailure: unknown = null;
     try {
       // Best-effort: a storage failure must not block the import.
-      const archived = await meshImport.archiveImportedMesh({
+      const archived = (meshArchive = await meshImport.archiveImportedMesh({
         hold,
         sourceName: mesh.name,
         original: {
@@ -10813,8 +10838,11 @@ export function App() {
           kind: artifactKind,
           body: file
         },
-        archive: archiveArtifact
-      });
+        archive: archiveArtifact,
+        onCleanupFailure: (error) => {
+          meshCleanupFailure = error;
+        }
+      }));
 
       // Between the entry check and here are several awaits, among them an
       // upload of up to 128 MB. This path shows no busy state and no import
@@ -10843,10 +10871,17 @@ export function App() {
         );
       }
     } finally {
+      meshCleanupFailure =
+        (await meshImport.cleanupUncommittedMeshArchive(
+          meshArchive,
+          created,
+          (artifactId) => api.discardMeshPayload(doc.projectId, artifactId)
+        )) ?? meshCleanupFailure;
       await hold.settle(
         created ? 'committed' : 'refused',
         managerRef.current?.document ?? null
       );
+      reportMeshCleanupFailure(meshCleanupFailure);
     }
   }
 
