@@ -161,10 +161,10 @@ export type GeometryWorkerRequest =
        * Abandon a caller-owned request. A job still queued is skipped
        * without executing or posting anything; a job already running
        * completes (wasm cannot be interrupted) and the main thread discards
-       * its result. Never applies to broadcasts, which have no request id.
+       * its result. Without an id, abandon the live broadcast and its retries.
        */
       type: 'cancel';
-      requestId: string;
+      requestId?: string;
     };
 
 export type GeometryWorkerPhase =
@@ -451,15 +451,38 @@ type GeometryWorkerWorkRequest = Exclude<
  * The newest live broadcast, and whether its last completed rebuild waited
  * on this device's moment — a font face past its preload budget, a source
  * download that failed. That result was never cached; the broadcast re-runs
- * once a face lands or the connection returns, so the missing body appears
- * without another edit. A recovery during the rebuild is latched and re-runs
- * it as soon as it completes; each live rebuild clears both flags.
+ * on bounded timers, once a face lands or the connection returns, so the
+ * missing body appears without another edit. A recovery during the rebuild
+ * is latched and re-runs it as soon as it completes; each live rebuild clears
+ * both flags.
  */
 let latestBroadcast: GeometryWorkerWorkRequest | null = null;
 let broadcastAwaitsEnvironment = false;
 let environmentRecovered = false;
+const ENVIRONMENT_RETRY_DELAYS_MS = [1_000, 5_000, 15_000];
+let environmentRetry = 0;
+let environmentRetryTimer: ReturnType<typeof setTimeout> | undefined;
+
+function clearEnvironmentRetry(): void {
+  clearTimeout(environmentRetryTimer);
+  environmentRetryTimer = undefined;
+}
+
+function scheduleEnvironmentRetry(): void {
+  const request = latestBroadcast;
+  const delay = ENVIRONMENT_RETRY_DELAYS_MS[environmentRetry];
+  if (!request || delay === undefined) return;
+  environmentRetryTimer = setTimeout(() => {
+    environmentRetryTimer = undefined;
+    if (latestBroadcast === request && broadcastAwaitsEnvironment) {
+      environmentRetry += 1;
+      rerunLatestBroadcast();
+    }
+  }, delay);
+}
 
 function rerunLatestBroadcast(): void {
+  clearEnvironmentRetry();
   broadcastAwaitsEnvironment = false;
   if (latestBroadcast)
     queue.enqueue({
@@ -526,6 +549,7 @@ function errorMessage(error: unknown): string {
 const DEFAULT_EXPORT_DEFLECTION = 0.08;
 
 async function execute(job: GeometryWorkerJob): Promise<void> {
+  if (!broadcastGate.isCurrent(job.broadcastToken)) return;
   if (job.requestId && cancelledRequests.delete(job.requestId)) {
     return; // Cancelled while queued; the caller already dropped its promise.
   }
@@ -664,7 +688,10 @@ async function execute(job: GeometryWorkerJob): Promise<void> {
     // budget may land while the rebuild is still running.
     if (!job.requestId) {
       void documentFontsArrived(document).then(
-        (arrived) => arrived && environmentRecovery(),
+        (arrived) =>
+          arrived &&
+          broadcastGate.isCurrent(job.broadcastToken) &&
+          environmentRecovery(),
         () => undefined
       );
     }
@@ -985,7 +1012,10 @@ async function execute(job: GeometryWorkerJob): Promise<void> {
         projectionTransferables(packet)
       );
       if (transient && environmentRecovered) rerunLatestBroadcast();
-      else broadcastAwaitsEnvironment = transient;
+      else {
+        broadcastAwaitsEnvironment = transient;
+        if (transient) scheduleEnvironmentRetry();
+      }
     }
     post(stateFor('ready', request, { stale: false }));
   } catch (error) {
@@ -1089,11 +1119,22 @@ self.onmessage = (event: MessageEvent<GeometryWorkerRequest>) => {
   // — the rebuild, the cache key, the history digest — expects plain arrays.
   const request = unpackWorkerRequest(event.data);
   if (request.type === 'cancel') {
-    cancelledRequests.add(request.requestId);
+    if (request.requestId !== undefined) cancelledRequests.add(request.requestId);
+    else {
+      clearEnvironmentRetry();
+      latestBroadcast = null;
+      broadcastAwaitsEnvironment = environmentRecovered = false;
+      broadcastGate.issue(true);
+    }
     return;
   }
   const isBroadcast = request.type === 'sync' && !request.requestId;
-  if (isBroadcast) latestBroadcast = request;
+  if (isBroadcast) {
+    clearEnvironmentRetry();
+    environmentRetry = 0;
+    broadcastAwaitsEnvironment = environmentRecovered = false;
+    latestBroadcast = request;
+  }
   queue.enqueue({
     request,
     queuedAtMs: performance.now(),
