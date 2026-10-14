@@ -104,6 +104,10 @@ describe('project quota preflight', () => {
     const prepare = vi.fn((query: string) => {
       const statement = {
         bind: () => statement,
+        all: async () => {
+          expect(query).toContain('FROM project_copy_source_archives');
+          return { results: [] };
+        },
         first: async () =>
           query.includes('user_id AS owner_user_id')
             ? { owner_user_id: owner }

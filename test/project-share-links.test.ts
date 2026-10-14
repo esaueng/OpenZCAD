@@ -256,6 +256,11 @@ describe('project share links (persistence)', () => {
     const queries: string[] = [];
     const prepare = vi.fn((query: string) => ({
       bind: (...bindings: unknown[]) => ({
+        all: async () => {
+          expect(query).toContain('FROM project_copy_source_archives');
+          expect(bindings).toEqual([base.projectId]);
+          return { results: [] };
+        },
         first: async () => {
           queries.push(query);
           if (query.includes('FROM project_share_links l')) {
