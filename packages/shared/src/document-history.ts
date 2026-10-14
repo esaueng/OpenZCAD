@@ -2,6 +2,7 @@ import type { ProjectDocument, UserId } from './index';
 
 export const MAX_UNDO_STEPS = 100;
 export const MAX_UNDO_BYTES = 8_000_000;
+export const MAX_HISTORY_COMMAND_KINDS = 100;
 export const HISTORY_FIELDS = [
   'rootNodeId',
   'rootAssemblyId',
@@ -42,10 +43,11 @@ export interface DocumentHistoryEntry {
   label: string;
   changes: DocumentChange[];
   /**
-   * Top-level command kinds the entry applied (e.g. `parameter.set`), oldest
-   * first. Lets Tweak mode allow undo when the entry touched parameters only.
-   * Absent on histories recorded before it existed — treated as unknown, not
-   * as parameter-only.
+   * Distinct command kinds the entry applied (e.g. `parameter.set`), in the
+   * order first applied. Lets Tweak mode allow undo when the entry touched
+   * parameters only. Absent on histories recorded before it existed, and on an
+   * entry whose kinds {@link isHistoryCommandKinds} would refuse — treated as
+   * unknown, not as parameter-only.
    */
   commandKinds?: string[];
 }
@@ -61,6 +63,19 @@ export interface DocumentHistory {
 
 function record(value: unknown): value is Record<string, unknown> {
   return typeof value === 'object' && value !== null && !Array.isArray(value);
+}
+
+/**
+ * The one rule for an entry's `commandKinds`, shared by the validator and the
+ * writer: a writer that stores a list this refuses makes the whole project
+ * unopenable and every account save a 400.
+ */
+export function isHistoryCommandKinds(value: unknown): value is string[] {
+  return (
+    Array.isArray(value) &&
+    value.length <= MAX_HISTORY_COMMAND_KINDS &&
+    value.every((kind) => typeof kind === 'string' && kind.length <= 64)
+  );
 }
 
 /** Validate before traversing data received from disk, a backup, or a peer. */
@@ -95,11 +110,7 @@ export function isDocumentHistory(
       !Array.isArray(entry.changes) ||
       entry.changes.length > 100_000 ||
       (entry.commandKinds !== undefined &&
-        (!Array.isArray(entry.commandKinds) ||
-          entry.commandKinds.length > 100 ||
-          entry.commandKinds.some(
-            (kind) => typeof kind !== 'string' || kind.length > 64
-          )))
+        !isHistoryCommandKinds(entry.commandKinds))
     )
       return false;
     ids.add(entry.id);

@@ -442,12 +442,78 @@ function pointExtent(edges: EdgeTopology[]): number {
   return Math.max(...spans);
 }
 
+/** One body's edges, indexed once for every walk that starts on them. */
+interface RunIndex {
+  /** The `weldTolerance` option this was built for. */
+  requestedWeld: number | undefined;
+  weld: number;
+  /** The first walkable entry for each topology id, for finding the seed. */
+  byId: Map<string, EdgeEnds>;
+  /** Every non-seam edge, walkable or not. */
+  visibleIds: Set<string>;
+  incidence: Incidence;
+}
+
+function buildRunIndex(
+  edges: EdgeTopology[],
+  weldTolerance: number | undefined
+): RunIndex {
+  const visibleEdges = edges.filter((edge) => edge.displayRole !== 'seam');
+  // Zero unless something here has to be reached by position: a body whose
+  // edges all name their vertices is walked without a length anywhere in it.
+  const weld =
+    weldTolerance ??
+    (visibleEdges.some((edge) => edge.vertexIds === undefined)
+      ? pointExtent(visibleEdges) * RELATIVE_WELD_TOLERANCE
+      : 0);
+  const ends = visibleEdges
+    .map((edge) => edgeEnds(edge, weld))
+    .filter((entry): entry is EdgeEnds => entry !== null);
+  const byId = new Map<string, EdgeEnds>();
+  for (const entry of ends) {
+    if (!byId.has(entry.topologyId)) {
+      byId.set(entry.topologyId, entry);
+    }
+  }
+  return {
+    requestedWeld: weldTolerance,
+    weld,
+    byId,
+    visibleIds: new Set(visibleEdges.map((edge) => edge.topologyId)),
+    incidence: indexEdges(ends)
+  };
+}
+
+/**
+ * The last index built for each edge array. Hover walks the run under every
+ * newly hovered edge, inside the render frame, and re-indexing a 20k-edge
+ * import each time cost around 5 ms of it. A body's `topology.edges` is
+ * replaced, never edited, when the body rebuilds, so the array identifies
+ * its contents and a retired body's index goes with it.
+ */
+const runIndexes = new WeakMap<EdgeTopology[], RunIndex>();
+
+function runIndexFor(
+  edges: EdgeTopology[],
+  weldTolerance: number | undefined
+): RunIndex {
+  let index = runIndexes.get(edges);
+  if (!index || index.requestedWeld !== weldTolerance) {
+    index = buildRunIndex(edges, weldTolerance);
+    runIndexes.set(edges, index);
+  }
+  return index;
+}
+
 /**
  * Every edge on the same smooth run as `seedTopologyId`, in order along the
  * run, with the seed included.
  *
  * Returns just the seed when nothing continues from it — a lone edge is a run
  * of one, so callers need no separate empty case.
+ *
+ * `edges` must not be edited after the first call: the index built from it
+ * is kept for as long as the array lives.
  */
 export function edgeRunFrom(
   edges: EdgeTopology[],
@@ -457,28 +523,20 @@ export function edgeRunFrom(
   const minDot = Math.cos(
     ((options.tangentToleranceDeg ?? TANGENT_TOLERANCE_DEG) * Math.PI) / 180
   );
-  const visibleEdges = edges.filter((edge) => edge.displayRole !== 'seam');
-  // Zero unless something here has to be reached by position: a body whose
-  // edges all name their vertices is walked without a length anywhere in it.
-  const weld =
-    options.weldTolerance ??
-    (visibleEdges.some((edge) => edge.vertexIds === undefined)
-      ? pointExtent(visibleEdges) * RELATIVE_WELD_TOLERANCE
-      : 0);
-  const ends = visibleEdges
-    .map((edge) => edgeEnds(edge, weld))
-    .filter((entry): entry is EdgeEnds => entry !== null);
-  const seed = ends.find((entry) => entry.topologyId === seedTopologyId);
+  const {
+    weld,
+    byId,
+    visibleIds,
+    incidence: index
+  } = runIndexFor(edges, options.weldTolerance);
+  const seed = byId.get(seedTopologyId);
   if (!seed) {
-    return visibleEdges.some((edge) => edge.topologyId === seedTopologyId)
-      ? [seedTopologyId]
-      : [];
+    return visibleIds.has(seedTopologyId) ? [seedTopologyId] : [];
   }
   if (seed.closed) {
     return [seed.topologyId];
   }
 
-  const index = indexEdges(ends);
   const visited = new Set([seed.topologyId]);
   const forward: string[] = [];
   let step: Step | null = stepForward(seed);

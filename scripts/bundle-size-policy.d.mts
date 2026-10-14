@@ -29,6 +29,12 @@ export const TRANSLATOR_WASM_ASSET_PATTERN: RegExp;
 
 export const LAZY_ENTRY_PATTERNS: RegExp[];
 
+export const LAUNCHER_FORBIDDEN_MARKERS: { marker: string; library: string }[];
+
+export function launcherMarkerLeaks(
+  assets: { file: string; contents: string }[]
+): { file: string; library: string }[];
+
 export const KERNEL_WASM_POLICY: Readonly<{
   rawReviewBytes: number;
   rawHardBytes: number;

@@ -134,6 +134,46 @@ export function createDimensionLineMaterial(
   return material;
 }
 
+/**
+ * Places a one-segment fat line by rewriting its buffers in place.
+ *
+ * `LineGeometry.setPositions` and `computeLineDistances` each allocate a new
+ * instanced buffer, and three never frees the GPU buffer of the one they
+ * replace. `update` runs every drawn frame for each dimension on screen, so
+ * that orphaned two GL buffers a frame per line — six for a measurement with
+ * its witness ticks. The buffers are built once here and written in place,
+ * as `changeBand` does.
+ */
+function segmentWriter(line: Line2) {
+  const geometry = line.geometry;
+  geometry.setPositions([0, 0, 0, 0, 0, 0]);
+  line.computeLineDistances();
+  const positions = (
+    geometry.getAttribute('instanceStart') as THREE.InterleavedBufferAttribute
+  ).data;
+  const distances = (
+    geometry.getAttribute(
+      'instanceDistanceStart'
+    ) as THREE.InterleavedBufferAttribute
+  ).data;
+  return (from: THREE.Vector3, to: THREE.Vector3) => {
+    const segment = positions.array;
+    segment[0] = from.x;
+    segment[1] = from.y;
+    segment[2] = from.z;
+    segment[3] = to.x;
+    segment[4] = to.y;
+    segment[5] = to.z;
+    positions.needsUpdate = true;
+    // The dash runs from 0 at the start, as computeLineDistances lays it.
+    distances.array[1] = from.distanceTo(to);
+    distances.needsUpdate = true;
+    // setPositions refreshed these too; culling and picking read them.
+    geometry.computeBoundingBox();
+    geometry.computeBoundingSphere();
+  };
+}
+
 export function createDimensionGraphic(
   options: DimensionGraphicOptions = {}
 ): DimensionGraphic {
@@ -145,7 +185,6 @@ export function createDimensionGraphic(
   object.name = 'dimension-graphic';
 
   const lineGeometry = new LineGeometry();
-  lineGeometry.setPositions([0, 0, 0, 0, 0, 0]);
   const line = new Line2(
     lineGeometry,
     createDimensionLineMaterial({
@@ -158,7 +197,7 @@ export function createDimensionGraphic(
       ...(options.dashed === undefined ? {} : { dashed: options.dashed })
     })
   );
-  line.computeLineDistances();
+  const placeLine = segmentWriter(line);
   line.renderOrder = renderOrder;
   object.add(line);
   const keepPrograms = options.keepProgram === true;
@@ -191,10 +230,11 @@ export function createDimensionGraphic(
 
   const witnessGeometries: LineGeometry[] = [];
   const witnesses: Line2[] = [];
+  const placeWitnesses: ((from: THREE.Vector3, to: THREE.Vector3) => void)[] =
+    [];
   if (options.witnessLines) {
     for (let index = 0; index < 2; index += 1) {
       const geometry = new LineGeometry();
-      geometry.setPositions([0, 0, 0, 0, 0, 0]);
       const witness = new Line2(
         geometry,
         new LineMaterial({
@@ -208,9 +248,20 @@ export function createDimensionGraphic(
       witness.renderOrder = renderOrder;
       witnessGeometries.push(geometry);
       witnesses.push(witness);
+      placeWitnesses.push(segmentWriter(witness));
       object.add(witness);
     }
   }
+
+  // What the line and ticks were last written for. Most frames re-apply the
+  // same points (orbiting moves only the pixel scale), and an unchanged
+  // segment needs no upload.
+  const placedStart = new THREE.Vector3(Number.NaN, 0, 0);
+  const placedEnd = new THREE.Vector3(Number.NaN, 0, 0);
+  let placedScale = Number.NaN;
+  const tickAcross = new THREE.Vector3();
+  const tickFrom = new THREE.Vector3();
+  const tickTo = new THREE.Vector3();
 
   const anchor = new THREE.Vector3();
   const axis = new THREE.Vector3();
@@ -277,15 +328,10 @@ export function createDimensionGraphic(
       hasAxis = true;
       axis.divideScalar(length);
 
-      lineGeometry.setPositions([
-        start.x,
-        start.y,
-        start.z,
-        end.x,
-        end.y,
-        end.z
-      ]);
-      line.computeLineDistances();
+      const moved = !start.equals(placedStart) || !end.equals(placedEnd);
+      if (moved) {
+        placeLine(start, end);
+      }
 
       startHead.scale.setScalar(scale);
       endHead.scale.setScalar(scale);
@@ -300,33 +346,27 @@ export function createDimensionGraphic(
         .addScaledVector(axis, (-DIMENSION_ARROW_LENGTH / 2) * scale);
       aimHeads();
 
-      if (witnesses.length === 2) {
+      if (placeWitnesses.length === 2 && (moved || scale !== placedScale)) {
         // Ticks run perpendicular to the dimension, in whichever direction is
         // least degenerate against the axis.
-        const reference =
-          Math.abs(axis.y) > 0.9
-            ? new THREE.Vector3(1, 0, 0)
-            : new THREE.Vector3(0, 1, 0);
-        const across = new THREE.Vector3()
-          .crossVectors(axis, reference)
-          .normalize();
+        if (Math.abs(axis.y) > 0.9) {
+          tickAcross.set(1, 0, 0);
+        } else {
+          tickAcross.set(0, 1, 0);
+        }
+        tickAcross.crossVectors(axis, tickAcross).normalize();
         const back = DIMENSION_ARROW_LENGTH * WITNESS_STANDOFF * scale;
         const over = DIMENSION_ARROW_LENGTH * WITNESS_OVERSHOOT * scale;
         const ends: [THREE.Vector3, THREE.Vector3] = [start, end];
         ends.forEach((point, index) => {
-          const from = point.clone().addScaledVector(across, -back);
-          const to = point.clone().addScaledVector(across, over);
-          witnessGeometries[index]!.setPositions([
-            from.x,
-            from.y,
-            from.z,
-            to.x,
-            to.y,
-            to.z
-          ]);
-          witnesses[index]!.computeLineDistances();
+          tickFrom.copy(point).addScaledVector(tickAcross, -back);
+          tickTo.copy(point).addScaledVector(tickAcross, over);
+          placeWitnesses[index]!(tickFrom, tickTo);
         });
       }
+      placedStart.copy(start);
+      placedEnd.copy(end);
+      placedScale = scale;
 
       // 45% along, matching the radius rig's inline callout placement rather
       // than the midpoint: dead centre collides with the dimension line's own

@@ -1,5 +1,7 @@
 import * as THREE from 'three';
 import type { Line2 } from 'three/examples/jsm/lines/Line2.js';
+import { WebGLAttributes } from 'three/src/renderers/webgl/WebGLAttributes.js';
+import { WebGLGeometries } from 'three/src/renderers/webgl/WebGLGeometries.js';
 import { describe, expect, it } from 'vitest';
 import {
   DIMENSION_ARROW_LENGTH,
@@ -229,6 +231,117 @@ describe('witness lines', () => {
     for (const value of positions) {
       expect(Number.isNaN(value)).toBe(false);
     }
+    graphic.dispose();
+  });
+});
+
+/**
+ * A GL stub that counts buffers, driven by three's own WebGLAttributes and
+ * WebGLGeometries bookkeeping — exactly what WebGLRenderer runs for each
+ * object it draws.
+ */
+function countingRenderer() {
+  const counts = {
+    created: 0,
+    live: new Set<object>(),
+    uploads: [] as number[][]
+  };
+  const gl = {
+    ARRAY_BUFFER: 0x8892,
+    ELEMENT_ARRAY_BUFFER: 0x8893,
+    FLOAT: 0x1406,
+    createBuffer() {
+      const buffer = {};
+      counts.created += 1;
+      counts.live.add(buffer);
+      return buffer;
+    },
+    deleteBuffer(buffer: object) {
+      counts.live.delete(buffer);
+    },
+    bindBuffer() {},
+    bufferData() {},
+    bufferSubData(_target: number, _offset: number, data: Float32Array) {
+      counts.uploads.push(Array.from(data));
+    }
+  };
+  // Both are factory functions in three; the published typings call them
+  // classes.
+  const attributes = (WebGLAttributes as unknown as (gl: unknown) => unknown)(
+    gl
+  );
+  const geometries = (
+    WebGLGeometries as unknown as (
+      gl: unknown,
+      attributes: unknown,
+      info: unknown,
+      bindingStates: unknown
+    ) => WebGLGeometries
+  )(
+    gl,
+    attributes,
+    { memory: { geometries: 0 } },
+    { releaseStatesOfGeometry() {} }
+  );
+  /** What WebGLRenderer does for each drawn object (objects.update). */
+  const drawFrame = (root: THREE.Object3D) => {
+    root.traverse((child) => {
+      const mesh = child as THREE.Mesh;
+      if (mesh.isMesh) {
+        geometries.get(mesh, mesh.geometry);
+        geometries.update(mesh.geometry);
+      }
+    });
+  };
+  return { counts, drawFrame };
+}
+
+describe('GPU buffers across drawn frames', () => {
+  it('keeps a constant buffer count for a steady dimension redrawn per frame', () => {
+    // The viewer re-applies every pinned measurement each drawn frame. Placing
+    // the line by setPositions/computeLineDistances allocated a fresh buffer
+    // per call and three never freed the replaced ones: 3,600 orphaned GL
+    // buffers per measurement over ten seconds of orbiting.
+    const { counts, drawFrame } = countingRenderer();
+    const graphic = createDimensionGraphic({ witnessLines: true });
+    const start = at(0, 0, 0);
+    const end = at(40, 0, 0);
+    graphic.update(start, end, 0.1);
+    drawFrame(graphic.object);
+    const afterFirstFrame = counts.created;
+
+    // Orbiting at 60 fps: the measured points hold, the pixel scale moves.
+    for (let frame = 0; frame < 600; frame += 1) {
+      graphic.update(start, end, 0.1 + frame * 1e-4);
+      drawFrame(graphic.object);
+    }
+    expect(counts.created).toBe(afterFirstFrame);
+    graphic.dispose();
+    expect(counts.live.size).toBe(0);
+  });
+
+  it('uploads a moved line in place and skips an unchanged one', () => {
+    const { counts, drawFrame } = countingRenderer();
+    const graphic = createDimensionGraphic();
+    graphic.update(at(0, 0, 0), at(10, 0, 0), 1);
+    drawFrame(graphic.object);
+    const created = counts.created;
+
+    counts.uploads.length = 0;
+    graphic.update(at(0, 0, 0), at(10, 0, 0), 2);
+    drawFrame(graphic.object);
+    expect(counts.uploads).toEqual([]);
+
+    graphic.update(at(0, 0, 0), at(25, 0, 0), 2);
+    drawFrame(graphic.object);
+    expect(counts.created).toBe(created);
+    // The segment's endpoints, then its dash distances.
+    expect(counts.uploads).toEqual([
+      [0, 0, 0, 25, 0, 0],
+      [0, 25]
+    ]);
+    const line = graphic.object.children[0] as Line2;
+    expect(line.geometry.boundingBox?.max.x).toBe(25);
     graphic.dispose();
   });
 });
