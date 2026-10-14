@@ -5,7 +5,7 @@ import {
   isImportedMeshSourceData,
   isImportedStepSourceData
 } from '@openzcad/shared';
-import type { FeatureId, ProjectDocument } from '@openzcad/shared';
+import type { FeatureId, ProjectDocument, ProjectId } from '@openzcad/shared';
 import { importSourceChecksums } from './sourceBlobClaims';
 
 export {
@@ -333,6 +333,8 @@ export interface ArchiveLocalSourcesResult {
  */
 export async function archiveLocalOnlyImportSources(deps: {
   document: ProjectDocument;
+  /** The originating manager's latest model, including retained history. */
+  currentDocument?(): ProjectDocument | null;
   loadSourceBytes(checksumSha256: string): Promise<Uint8Array | null>;
   archive(input: {
     fileName: string;
@@ -343,7 +345,14 @@ export async function archiveLocalOnlyImportSources(deps: {
   }): Promise<string>;
   /** Applies the artifact id to the feature; false when the edit refused. */
   applyArtifactId(featureId: FeatureId, artifactId: string): boolean;
+  discardMeshPayload?(
+    projectId: ProjectId,
+    artifactId: string
+  ): Promise<{ deleted: boolean }>;
+  /** Cleanup must not replace the edit failure or stop the other sources. */
+  onCleanupFailure?(sourceName: string, error: unknown): void;
 }): Promise<ArchiveLocalSourcesResult> {
+  const projectId = deps.document.projectId;
   const result: ArchiveLocalSourcesResult = {
     archived: [],
     missing: [],
@@ -359,6 +368,8 @@ export async function archiveLocalOnlyImportSources(deps: {
       result.missing.push(source.sourceName);
       continue;
     }
+    let meshArtifactId: string | null = null;
+    let applied = false;
     try {
       const archive = importSourceArchive(source);
       const artifactId = await deps.archive({
@@ -368,13 +379,57 @@ export async function archiveLocalOnlyImportSources(deps: {
         }),
         metadata: { source: 'retry-archive' }
       });
-      if (deps.applyArtifactId(source.featureId, artifactId)) {
+      if (source.kind === 'mesh-payload') meshArtifactId = artifactId;
+      applied = deps.applyArtifactId(source.featureId, artifactId);
+      if (applied) {
         result.archived.push(source.sourceName);
       } else {
         result.failed.push(source.sourceName);
       }
     } catch {
       result.failed.push(source.sourceName);
+    } finally {
+      if (meshArtifactId && !applied && deps.discardMeshPayload) {
+        let cleanupIncomplete = false;
+        let cleanupFailure: unknown;
+        try {
+          // An edit can update the manager before a later UI step throws.
+          // Preserve those bytes until the model and its history are saved.
+          const references = (document: ProjectDocument | null) =>
+            document &&
+            [...documentNodesWithHistory(document)].some(
+              (node) =>
+                node.kind === 'feature' &&
+                'artifactId' in node.data &&
+                node.data.artifactId === meshArtifactId
+            );
+          if (
+            !references(deps.document) &&
+            !references(deps.currentDocument?.() ?? null)
+          ) {
+            const discarded = await deps.discardMeshPayload(
+              projectId,
+              meshArtifactId
+            );
+            if (!discarded.deleted) {
+              cleanupIncomplete = true;
+              cleanupFailure = new Error(
+                'Cloud mesh cleanup has not completed.'
+              );
+            }
+          }
+        } catch (error) {
+          cleanupIncomplete = true;
+          cleanupFailure = error;
+        }
+        if (cleanupIncomplete) {
+          try {
+            deps.onCleanupFailure?.(source.sourceName, cleanupFailure);
+          } catch {
+            // Observer failures cannot replace the original archive result.
+          }
+        }
+      }
     }
   }
   return result;

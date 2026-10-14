@@ -11164,13 +11164,17 @@ export function App() {
       return;
     }
     const originatingManager = managerRef.current;
+    const cleanupFailures: string[] = [];
     setStatus(
       `Archiving ${countLabel(localOnlySources.length, 'local import source', 'local import sources')}…`
     );
     const result = await archiveLocalOnlyImportSources({
       document: doc,
+      currentDocument: () => originatingManager?.document ?? null,
       loadSourceBytes: loadSourceBlob,
       archive: (input) => archiveArtifact(input),
+      discardMeshPayload: api.discardMeshPayload,
+      onCleanupFailure: (sourceName) => cleanupFailures.push(sourceName),
       applyArtifactId: (featureId, artifactId) => {
         if (
           !originatingManager ||
@@ -11194,6 +11198,11 @@ export function App() {
     }
     if (result.failed.length > 0) {
       notes.push(`upload failed for ${result.failed.join(', ')} — try again`);
+    }
+    if (cleanupFailures.length > 0) {
+      notes.push(
+        `cloud cleanup incomplete for ${cleanupFailures.join(', ')} — try again`
+      );
     }
     setStatus(
       notes.length > 0
