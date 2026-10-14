@@ -1,3 +1,5 @@
+import { readFileSync, readdirSync } from 'node:fs';
+import { DatabaseSync } from 'node:sqlite';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 
 import {
@@ -198,6 +200,92 @@ function loginStartD1() {
     }
   };
   return { db, challenge: () => challenge };
+}
+
+const MIGRATIONS = new URL('../apps/web/migrations/', import.meta.url);
+
+/** D1 over in-memory SQLite carrying every migration. */
+function migratedSqliteD1(): D1Database {
+  const sqlite = new DatabaseSync(':memory:');
+  for (const file of readdirSync(MIGRATIONS).sort()) {
+    sqlite.exec(readFileSync(new URL(file, MIGRATIONS), 'utf8'));
+  }
+  const statement = (query: string, bindings: unknown[]) => ({
+    bind: (...next: unknown[]) => statement(query, next),
+    first: async () =>
+      (sqlite.prepare(query).get(...(bindings as never[])) as unknown) ?? null,
+    all: async () => ({
+      results: sqlite.prepare(query).all(...(bindings as never[]))
+    }),
+    run: async () => {
+      const result = sqlite.prepare(query).run(...(bindings as never[]));
+      return { success: true, meta: { changes: Number(result.changes) } };
+    }
+  });
+  return {
+    prepare: (query: string) => statement(query, []),
+    batch: async (statements: Array<{ run(): Promise<unknown> }>) => {
+      sqlite.exec('BEGIN IMMEDIATE');
+      try {
+        const results = [];
+        for (const item of statements) results.push(await item.run());
+        sqlite.exec('COMMIT');
+        return results;
+      } catch (error) {
+        sqlite.exec('ROLLBACK');
+        throw error;
+      }
+    }
+  } as unknown as D1Database;
+}
+
+/**
+ * Real sign-in code flow for one email on migrated SQLite, with Turnstile
+ * and the email binding stubbed. `start(ip)` requests a code from that
+ * address; `sent` holds every emailed code in order.
+ */
+function signInHarness(email = 'person@example.com') {
+  const sent: string[] = [];
+  const env = {
+    ENVIRONMENT: 'beta' as const,
+    AUTH_MODE: 'email-code' as const,
+    DB: migratedSqliteD1(),
+    EMAIL: {
+      send: async (message: EmailMessageBuilder) => {
+        sent.push(message.subject.slice(0, 6));
+        return { messageId: `message-${sent.length}` };
+      }
+    },
+    AUTH_EMAIL_FROM: 'login@auth.example.com',
+    AUTH_OTP_PEPPER: 'test-pepper',
+    TURNSTILE_SITE_KEY: 'site-key',
+    TURNSTILE_SECRET_KEY: 'turnstile-secret'
+  };
+  vi.stubGlobal(
+    'fetch',
+    vi.fn(async () =>
+      Response.json({
+        success: true,
+        action: 'email-code',
+        hostname: 'example.com'
+      })
+    )
+  );
+  const start = (ip: string) =>
+    startEmailLogin(
+      new Request('https://example.com/api/auth/email/start', {
+        headers: { 'cf-connecting-ip': ip }
+      }),
+      { email, turnstileToken: 'turnstile-token' },
+      env
+    );
+  const verify = (challengeId: string, code: string) =>
+    verifyEmailLogin({ challengeId, code }, env);
+  return { env, sent, start, verify };
+}
+
+function wrongCode(code: string): string {
+  return code === '000000' ? '000001' : '000000';
 }
 
 afterEach(() => {
@@ -571,6 +659,132 @@ describe('worker authentication', () => {
     expect(failures.every((result) => result.status === 'rejected')).toBe(true);
     expect(fixture.attempts()).toBe(5);
     expect(fixture.consumedAt()).toBeNull();
+  });
+});
+
+// SEC-3 (project review, 14 October 2026): one shared per-email request
+// limit, and every new request voiding the pending code, let anyone who knew
+// an address keep that account from signing in with ~3 Turnstile solves per
+// 15 minutes.
+describe('sign-in cannot be denied by someone who only knows the email', () => {
+  it("keeps the victim's pending code valid when someone else requests one", async () => {
+    const { sent, start, verify } = signInHarness();
+    const victim = await start('198.51.100.7');
+    const victimCode = sent.at(-1)!;
+
+    await start('203.0.113.1');
+
+    await expect(verify(victim.challengeId, victimCode)).resolves.toMatchObject(
+      { session: { email: 'person@example.com' } }
+    );
+  });
+
+  it('sends the victim a code after three requests from other addresses', async () => {
+    const { sent, start, verify } = signInHarness();
+    await start('203.0.113.1');
+    await start('203.0.113.2');
+    await start('203.0.113.3');
+
+    const victim = await start('198.51.100.7');
+
+    expect(victim.expiresInSeconds).toBe(600);
+    expect(sent).toHaveLength(4);
+    await expect(verify(victim.challengeId, sent[3]!)).resolves.toMatchObject({
+      session: { email: 'person@example.com' }
+    });
+  });
+
+  it("answers a requester's throttled repeat with its pending code and sends nothing", async () => {
+    const { sent, start, verify } = signInHarness();
+    await start('198.51.100.7');
+    await start('198.51.100.7');
+    const third = await start('198.51.100.7');
+
+    const repeat = await start('198.51.100.7');
+
+    expect(sent).toHaveLength(3);
+    expect(repeat.challengeId).toBe(third.challengeId);
+    expect(repeat.expiresInSeconds).toBeGreaterThan(0);
+    expect(repeat.expiresInSeconds).toBeLessThanOrEqual(600);
+    await expect(verify(repeat.challengeId, sent[2]!)).resolves.toMatchObject({
+      session: { email: 'person@example.com' }
+    });
+  });
+
+  it('caps codes per email across requesters without a refusal', async () => {
+    const { sent, start, verify } = signInHarness();
+    for (let host = 1; host <= 10; host += 1) {
+      await start(`203.0.113.${host}`);
+    }
+    expect(sent).toHaveLength(10);
+
+    const capped = await start('198.51.100.7');
+
+    expect(sent).toHaveLength(10);
+    expect(capped.expiresInSeconds).toBe(600);
+    await expect(verify(capped.challengeId, sent[9]!)).rejects.toMatchObject({
+      code: 'AUTH_CODE_INVALID'
+    });
+  });
+
+  it("cancels every one of the email's pending codes on a successful sign-in", async () => {
+    const { sent, start, verify } = signInHarness();
+    const first = await start('198.51.100.7');
+    const second = await start('203.0.113.1');
+
+    await verify(first.challengeId, sent[0]!);
+
+    await expect(verify(second.challengeId, sent[1]!)).rejects.toMatchObject({
+      code: 'AUTH_CODE_INVALID'
+    });
+  });
+
+  it('allows one try per code after a day of failed codes, without locking out', async () => {
+    const { sent, start, verify } = signInHarness();
+    let clock = Date.parse('2026-10-14T08:00:00Z');
+    const now = vi.spyOn(Date, 'now').mockImplementation(() => clock);
+    try {
+      // Twenty wrong codes: four codes, five failures each.
+      for (let host = 1; host <= 4; host += 1) {
+        const { challengeId } = await start(`203.0.113.${host}`);
+        for (let attempt = 0; attempt < 5; attempt += 1) {
+          await expect(
+            verify(challengeId, wrongCode(sent.at(-1)!))
+          ).rejects.toMatchObject({ code: 'AUTH_CODE_INVALID' });
+        }
+      }
+
+      // An hour later every one of those codes has expired, and the
+      // failures still count.
+      clock += 60 * 60 * 1000;
+      const oneTry = await start('198.51.100.7');
+      const oneTryCode = sent.at(-1)!;
+      await expect(
+        verify(oneTry.challengeId, wrongCode(oneTryCode))
+      ).rejects.toMatchObject({ code: 'AUTH_CODE_INVALID' });
+      await expect(
+        verify(oneTry.challengeId, oneTryCode)
+      ).rejects.toMatchObject({ status: 429, code: 'AUTH_CODE_LOCKED' });
+
+      // The owner still signs in with a code entered correctly first time.
+      const owner = await start('198.51.100.8');
+      await expect(
+        verify(owner.challengeId, sent.at(-1)!)
+      ).resolves.toMatchObject({ session: { email: 'person@example.com' } });
+
+      // A day after those failures every code gets five tries again.
+      clock += 24 * 60 * 60 * 1000;
+      const nextDay = await start('198.51.100.7');
+      const nextDayCode = sent.at(-1)!;
+      await expect(
+        verify(nextDay.challengeId, wrongCode(nextDayCode))
+      ).rejects.toMatchObject({ code: 'AUTH_CODE_INVALID' });
+      await expect(
+        verify(nextDay.challengeId, nextDayCode)
+      ).resolves.toMatchObject({ session: { email: 'person@example.com' } });
+    } finally {
+      now.mockRestore();
+    }
   });
 });
 
