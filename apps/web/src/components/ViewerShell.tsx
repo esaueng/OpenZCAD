@@ -199,6 +199,8 @@ interface ViewerShellProps {
     additive: boolean,
     detail?: PickDetail
   ): void;
+  /** See `ModelViewerProps.topologyPicksHeld`. */
+  topologyPicksHeld?: boolean;
   offsetHandle: OffsetHandleTarget | null;
   onOffsetPreview(offset: number, exactGeometry?: boolean): void;
   onOffsetCommit(offset: number): boolean;
@@ -369,6 +371,7 @@ export function ViewerShell({
   onWheelDeviceLearned,
   orientationRef,
   onSelectTopology,
+  topologyPicksHeld,
   onSelectEdgeChain,
   selectionFilter,
   onBoxSelect,
@@ -567,6 +570,7 @@ export function ViewerShell({
         scaleIndicatorRef={scaleIndicatorRef}
         sketchGridReadoutRef={sketchGridReadoutRef}
         onSelectTopology={onSelectTopology}
+        topologyPicksHeld={topologyPicksHeld}
         onSelectEdgeChain={onSelectEdgeChain}
         selectionFilter={selectionFilter}
         onBoxSelect={onBoxSelect}
