@@ -3938,11 +3938,12 @@ export function App() {
       : panelState.workspaceMode;
   const viewMode = resolvedWorkspaceMode === 'view';
   const tweakMode = resolvedWorkspaceMode === 'tweak';
-  // Toolbar undo affordance in Tweak: live only for a parameter-only top
-  // entry. Computed at render from the manager's tracked kinds — unknown
-  // (pre-kind histories) reads as unavailable, matching handleUndo.
-  const parameterOnlyUndoAvailable =
-    managerRef.current?.undoIsParameterOnly ?? false;
+  // Undo/redo affordances for the toolbar and the palette. In Tweak each is
+  // live only for a parameter-only entry — the one that command would apply.
+  // Computed at render from the manager's tracked kinds — unknown (pre-kind
+  // histories) reads as unavailable, matching handleUndo and handleRedo.
+  const undoAvailable = managerRef.current?.canUndoIn(tweakMode) ?? false;
+  const redoAvailable = managerRef.current?.canRedoIn(tweakMode) ?? false;
   // Both reading workspaces disarm every modeling surface — tools, handles,
   // sketches, the inspector. Tweak differs from View in one thing only: the
   // parameter guard below lets `parameter.set` commands through.
@@ -10169,7 +10170,8 @@ export function App() {
         // erase those edits from the canonical document while their undo
         // entries survive. Record the account version so the next autosave
         // fences correctly and let it carry the newer edits up — with the
-        // save point the echo minted, or that push would replace it.
+        // save point the echo minted, or that push would replace it. The
+        // controller gives it to writes already queued; this, to the model.
         showAccountEcho(withEchoedSavePoints(savingManager.document, saved));
         setCloudAvailable(true);
         setStatus(sourceWarning ?? 'Saved revision.');
@@ -18423,13 +18425,7 @@ export function App() {
       group: 'Edit',
       shortcut: 'Ctrl+Z',
       icon: <Undo2 size={16} aria-hidden="true" />,
-      disabledReason: (
-        tweakMode
-          ? parameterOnlyUndoAvailable
-          : (managerRef.current?.canUndo ?? false)
-      )
-        ? null
-        : 'Nothing to undo',
+      disabledReason: undoAvailable ? null : 'Nothing to undo',
       run: handleUndo
     },
     {
@@ -18438,13 +18434,7 @@ export function App() {
       group: 'Edit',
       shortcut: 'Ctrl+Shift+Z',
       icon: <Redo2 size={16} aria-hidden="true" />,
-      disabledReason: (
-        tweakMode
-          ? parameterOnlyUndoAvailable
-          : (managerRef.current?.canRedo ?? false)
-      )
-        ? null
-        : 'Nothing to redo',
+      disabledReason: redoAvailable ? null : 'Nothing to redo',
       run: handleRedo
     },
     {
@@ -19817,18 +19807,8 @@ export function App() {
             selectionCallout={calloutWithOperation}
             focusGhostBodies={focusGhostBodies}
             {...(focusFaces ? { focusFaces } : {})}
-            canUndo={
-              !viewMode &&
-              (tweakMode
-                ? parameterOnlyUndoAvailable
-                : (managerRef.current?.canUndo ?? false))
-            }
-            canRedo={
-              !viewMode &&
-              (tweakMode
-                ? parameterOnlyUndoAvailable
-                : (managerRef.current?.canRedo ?? false))
-            }
+            canUndo={!viewMode && undoAvailable}
+            canRedo={!viewMode && redoAvailable}
             onUndo={handleUndo}
             onRedo={handleRedo}
             key={`workspace-view-${resumeViewGeneration}`}

@@ -395,6 +395,29 @@ describe('undo history the loaders and the account accept', () => {
     expect(manager.undoIsParameterOnly).toBe(false);
     expect(manager.redoIsParameterOnly).toBe(true);
   });
+
+  it('offers Tweak redo after undoing its only parameter edit', () => {
+    const manager = new CommandManager(initial());
+    manager.execute(
+      commandFactories.setParameter({ name: 'w', expression: '5' })
+    );
+    expect(manager.canUndoIn(true)).toBe(true);
+    expect(manager.canRedoIn(true)).toBe(false);
+    manager.undo();
+    // Nothing is left to undo, but the parameter set waits to be redone; the
+    // toolbar and palette read redo's availability from that entry.
+    expect(manager.canUndoIn(true)).toBe(false);
+    expect(manager.canRedoIn(true)).toBe(true);
+    expect(manager.canRedoIn(false)).toBe(true);
+
+    manager.redo();
+    manager.execute(box());
+    manager.undo();
+    // A modeling step waiting to be redone is Build's, never Tweak's.
+    expect(manager.canUndoIn(true)).toBe(true);
+    expect(manager.canRedoIn(true)).toBe(false);
+    expect(manager.canRedoIn(false)).toBe(true);
+  });
 });
 
 describe('undo byte bound', () => {

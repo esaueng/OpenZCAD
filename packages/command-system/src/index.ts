@@ -3040,6 +3040,17 @@ export class CommandManager {
   get redoIsParameterOnly(): boolean {
     return parameterOnly(this.redoEntryKinds);
   }
+  /**
+   * Whether undo is available, in a workspace that allows parameter edits
+   * only (Tweak) or one that allows anything (Build).
+   */
+  canUndoIn(parametersOnly: boolean): boolean {
+    return parametersOnly ? this.undoIsParameterOnly : this.canUndo;
+  }
+  /** Redo's availability is decided by the entry redo applies. */
+  canRedoIn(parametersOnly: boolean): boolean {
+    return parametersOnly ? this.redoIsParameterOnly : this.canRedo;
+  }
 
   execute(command: AnyCommand): ProjectDocument {
     command.validate(this.document);
