@@ -683,6 +683,8 @@ describe('geometry worker rebuild coordination', () => {
   });
 
   describe('a live rebuild that waited on this device', () => {
+    const liveWorkers: FakeWorkerScope[] = [];
+
     function liveWarnings(scope: FakeWorkerScope): string[][] {
       return scope.postMessage.mock.calls.flatMap(([message]) =>
         message.type === 'projection-delta'
@@ -693,7 +695,8 @@ describe('geometry worker rebuild coordination', () => {
 
     async function transientLive(
       fontsArrived: () => Promise<boolean>,
-      recovers = true
+      recovers = true,
+      transient = true
     ) {
       vi.doMock('../lib/textFonts', () => ({
         preloadDocumentFonts: vi.fn(async () => undefined),
@@ -703,14 +706,16 @@ describe('geometry worker rebuild coordination', () => {
       const missing = derived('waiting');
       const first = deferred<ProjectDocument['derived']>();
       const syncDocument = vi
-        .fn()
+        .fn<ExactKernelAdapter['syncDocument']>()
         .mockImplementationOnce(() => first.promise)
         .mockImplementation(async () =>
           recovers ? derived('built') : missing
         );
       const { scope } = await installWorker(syncDocument, {
-        hasTransientFailures: (result: object) => result === missing
+        hasTransientFailures: (result: object) =>
+          transient && result === missing
       });
+      liveWorkers.push(scope);
       const document = addPrimitiveFeature(
         createProjectDocument('Waiting', toUserId('user')),
         {
@@ -728,13 +733,112 @@ describe('geometry worker rebuild coordination', () => {
         );
       };
       const online = () => (scope as { ononline?: () => void }).ononline?.();
-      return { scope, syncDocument, finish, online };
+      return { scope, syncDocument, finish, online, document };
     }
 
     const settle = () => new Promise((resolve) => setTimeout(resolve, 20));
 
     afterEach(() => {
+      for (const scope of liveWorkers.splice(0))
+        post(scope, { type: 'cancel' });
+      if (vi.isFakeTimers()) vi.clearAllTimers();
+      vi.useRealTimers();
       vi.doUnmock('../lib/textFonts');
+    });
+
+    it('retries a temporary source failure while the browser stays online', async () => {
+      vi.useFakeTimers();
+      const live = await transientLive(async () => false);
+      await live.finish();
+      await vi.advanceTimersByTimeAsync(1_000);
+      expect(liveWarnings(live.scope)).toEqual([['waiting'], ['built']]);
+      await vi.advanceTimersByTimeAsync(60_000);
+      expect(live.syncDocument).toHaveBeenCalledTimes(2);
+    });
+
+    it('stops polling after three unsuccessful timed retries', async () => {
+      vi.useFakeTimers();
+      const live = await transientLive(async () => false, false);
+      await live.finish();
+      for (const delay of [1_000, 5_000, 15_000])
+        await vi.advanceTimersByTimeAsync(delay);
+      expect(live.syncDocument).toHaveBeenCalledTimes(4);
+      await vi.advanceTimersByTimeAsync(60 * 60_000);
+      expect(live.syncDocument).toHaveBeenCalledTimes(4);
+    });
+
+    it('does not poll a permanent missing source', async () => {
+      vi.useFakeTimers();
+      const live = await transientLive(async () => false, false, false);
+      await live.finish();
+      await vi.advanceTimersByTimeAsync(60 * 60_000);
+      expect(live.syncDocument).toHaveBeenCalledOnce();
+    });
+
+    it('cancels pending retries and ignores late recovery after the project closes', async () => {
+      vi.useFakeTimers();
+      const arrived = deferred<boolean>();
+      const live = await transientLive(() => arrived.promise);
+      await live.finish();
+      post(live.scope, { type: 'cancel' });
+      arrived.resolve(true);
+      live.online();
+      await vi.advanceTimersByTimeAsync(60 * 60_000);
+      expect(live.syncDocument).toHaveBeenCalledOnce();
+    });
+
+    it('drops a queued recovery after close while preserving a caller-owned sync', async () => {
+      vi.useFakeTimers();
+      const live = await transientLive(async () => false);
+      await live.finish();
+      const explicit = deferred<ProjectDocument['derived']>();
+      live.syncDocument.mockImplementationOnce(() => explicit.promise);
+      post(live.scope, {
+        type: 'sync',
+        document: { ...live.document, name: 'Explicit candidate' },
+        requestId: 'candidate'
+      });
+      await vi.waitFor(() =>
+        expect(live.syncDocument).toHaveBeenCalledTimes(2)
+      );
+      await vi.advanceTimersByTimeAsync(1_000);
+      post(live.scope, { type: 'cancel' });
+      explicit.resolve(derived('candidate'));
+      await vi.advanceTimersByTimeAsync(10);
+      expect(live.syncDocument).toHaveBeenCalledTimes(2);
+      expect(live.scope.postMessage).toHaveBeenCalledWith(
+        expect.objectContaining({
+          type: 'sync',
+          ok: true,
+          requestId: 'candidate'
+        })
+      );
+    });
+
+    it('does not retry the old project or accept its font recovery after a switch', async () => {
+      vi.useFakeTimers();
+      const arrived = deferred<boolean>();
+      const live = await transientLive(() => arrived.promise);
+      await live.finish();
+      await vi.advanceTimersByTimeAsync(500);
+      const newest = addPrimitiveFeature(
+        createProjectDocument('New project', toUserId('user')),
+        {
+          name: 'New box',
+          primitiveKind: 'box',
+          dimensions: { width: 20, height: 30, depth: 40 }
+        }
+      );
+      post(live.scope, { type: 'sync', document: newest });
+      await vi.waitFor(() =>
+        expect(live.syncDocument).toHaveBeenCalledTimes(2)
+      );
+      arrived.resolve(true);
+      await vi.advanceTimersByTimeAsync(60 * 60_000);
+      expect(live.syncDocument).toHaveBeenCalledTimes(2);
+      expect(
+        live.syncDocument.mock.calls.map(([document]) => document.projectId)
+      ).toEqual([live.document.projectId, newest.projectId]);
     });
 
     it('re-runs, uncached, once a late font face lands', async () => {

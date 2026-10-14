@@ -5,7 +5,7 @@ import {
 import { beginEditTrace, recordEditPhase } from '../lib/editTrace';
 import type { GeometryReadyState } from '@openzcad/shared';
 import type { EditAnalysisRequest } from '@openzcad/shared';
-import { useEffect, useRef, useState } from 'react';
+import { useCallback, useEffect, useRef, useState } from 'react';
 import { documentForWorker, documentForRebuild } from '../lib/meshTransport';
 import { canonicalProjectContentKey } from '../worker/exactRebuildCache';
 import { describeWorkerFailure } from '../lib/workerFailure';
@@ -323,6 +323,21 @@ export function useGeometryWorker(host: GeometryWorkerHost): GeometryWorkerApi {
   const hostRef = useRef(host);
   hostRef.current = host;
 
+  const pendingRequests = useCallback(
+    (): Map<string, PendingRequest<never>>[] => [
+      exportRequests.current,
+      meshQualityRequests.current,
+      massPropertiesRequests.current,
+      solveSketchRequests.current,
+      sectionRequests.current,
+      sketchPlanarRequests.current,
+      recognizeImportedFaceRequests.current,
+      syncRequests.current,
+      geometryPreviewRequests.current
+    ],
+    []
+  );
+
   useEffect(() => {
     // A crashed worker used to stay installed as a corpse: outstanding
     // requests were rejected, but every LATER sync or export posted into the
@@ -345,18 +360,6 @@ export function useGeometryWorker(host: GeometryWorkerHost): GeometryWorkerApi {
     let lastWorkerMessageAt = 0;
     let quietBudgetPhase: 'loading-remus' | 'rebuilding' | null = null;
     let quietBudgetUntil = 0;
-
-    const pendingRequests = (): Map<string, PendingRequest<never>>[] => [
-      exportRequests.current,
-      meshQualityRequests.current,
-      massPropertiesRequests.current,
-      solveSketchRequests.current,
-      sectionRequests.current,
-      sketchPlanarRequests.current,
-      recognizeImportedFaceRequests.current,
-      syncRequests.current,
-      geometryPreviewRequests.current
-    ];
 
     const rejectOutstanding = (error: Error) => {
       for (const pending of pendingRequests()) {
@@ -861,7 +864,7 @@ export function useGeometryWorker(host: GeometryWorkerHost): GeometryWorkerApi {
       workerRef.current?.terminate();
       workerRef.current = null;
     };
-  }, []);
+  }, [pendingRequests]);
 
   /**
    * One-off request boilerplate shared by syncOnce, mesh-quality,
@@ -900,7 +903,18 @@ export function useGeometryWorker(host: GeometryWorkerHost): GeometryWorkerApi {
     },
     sync(document, lineageDemand) {
       const worker = workerRef.current;
-      if (!document || !worker) {
+      if (!worker) {
+        return;
+      }
+      if (!document) {
+        if (broadcastDocument.current) {
+          worker.postMessage({ type: 'cancel' });
+          broadcastDocument.current = readyDocument.current = null;
+          lastSyncedKey.current = null;
+          armedRef.current = pendingRequests().some(
+            (pending) => pending.size > 0
+          );
+        }
         return;
       }
       if (lineageDemand !== undefined) {
