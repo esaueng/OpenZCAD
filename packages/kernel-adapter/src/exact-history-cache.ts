@@ -24,7 +24,17 @@ import {
   getParameterScope,
   keyableImportedNodeData
 } from '@openzcad/document-core';
-import type { FeatureNode, ProjectDocument, SketchId } from '@openzcad/shared';
+import {
+  findFontFamily,
+  resolveFontStyle,
+  textFontProvider
+} from '@openzcad/geometry';
+import {
+  importedSourceReferenceOf,
+  type FeatureNode,
+  type ProjectDocument,
+  type SketchId
+} from '@openzcad/shared';
 import type { BodyId } from '@openzcad/shared';
 import type {
   ExactBuildResult,
@@ -205,6 +215,51 @@ export function historyFeatureDigest(
         }
       : {})
   });
+}
+
+/**
+ * Whether a feature's build waits on something this device may still
+ * provide: a text face (or the font library itself) that has not loaded, or
+ * an import source whose resolve failed and may yet succeed. Its failure
+ * describes the moment, not the document, so it must never be retained as
+ * the feature's checkpointed result — the digest has no input for it.
+ * Callers skip the text walk for documents without text.
+ */
+export function featureAwaitsEnvironment(
+  document: ProjectDocument,
+  feature: FeatureNode,
+  unresolvedSources: ReadonlySet<string>,
+  hasText: boolean
+): boolean {
+  const { data } = feature;
+  if (
+    data.featureKind === 'imported-step' ||
+    data.featureKind === 'imported-mesh'
+  ) {
+    return unresolvedSources.has(
+      importedSourceReferenceOf(data)?.checksumSha256 ?? ''
+    );
+  }
+  if (!hasText) return false;
+  const sketchIds = new Set<string>();
+  collectSketchIds(data, sketchIds);
+  const provider = textFontProvider();
+  return [...sketchIds].some((sketchId) =>
+    findSketch(document, sketchId as SketchId)?.objectIds.some((objectId) => {
+      const node = document.nodes[objectId];
+      if (node?.kind !== 'sketch-object' || node.data.objectKind !== 'text')
+        return false;
+      const { fontFamily, fontStyle } = node.data;
+      // An unknown family is a property of the document, not the moment.
+      return (
+        findFontFamily(fontFamily) !== undefined &&
+        !provider?.(
+          fontFamily,
+          resolveFontStyle(fontFamily, fontStyle) ?? fontStyle
+        )
+      );
+    })
+  );
 }
 
 /**

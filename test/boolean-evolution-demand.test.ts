@@ -6,11 +6,13 @@ import {
   filletEdges,
   listFeaturesInOrder,
   transformBody,
+  updateFeature,
   withoutDerivedProjection
 } from '@openzcad/document-core';
 import {
   createExactKernelAdapter,
-  type ExactKernelAdapter
+  type ExactKernelAdapter,
+  type RebuildCacheEvent
 } from '@openzcad/kernel-adapter/exact';
 import { toUserId } from '@openzcad/shared';
 import type {
@@ -382,5 +384,65 @@ describe('on-demand probe rebuild behaviour', { timeout: 120_000 }, () => {
     const persisted = JSON.stringify(withoutDerivedProjection(document));
     expect(persisted).not.toContain('lineageDemand');
     expect(persisted).not.toContain('boolean.edge.demand');
+  });
+
+  it('lets an idle commit restore the checkpoints a probing preview built', async () => {
+    // Previews, exports and mass queries pass no demand, so they probe every
+    // boolean; the idle sync passes one and skips. Switching between them
+    // used to replay everything after the first boolean.
+    const events: RebuildCacheEvent[] = [];
+    const caching = await createExactKernelAdapter({
+      onRebuildCacheEvent: (event) => events.push(event)
+    });
+    try {
+      let { document } = fusedPlateDocument();
+      for (let index = 0; index < 4; index += 1) {
+        document = addPrimitiveFeature(document, {
+          name: `Tag ${index}`,
+          primitiveKind: 'box',
+          dimensions: { width: 4, height: 4, depth: 4 }
+        });
+        document = transformBody(document, {
+          name: `Move tag ${index}`,
+          targetBodyId: document.bodyOrder.at(-1)!,
+          translation: { x: 60 + index * 6, y: 0, z: 0 }
+        }).document;
+      }
+      const moveLast = (from: ProjectDocument, x: number) => {
+        const last = listFeaturesInOrder(from).at(-1)!;
+        if (last.data.featureKind !== 'transform') throw new Error('no move');
+        return updateFeature(from, {
+          featureId: last.featureId,
+          data: {
+            transform: {
+              ...last.data.transform,
+              translation: { x, y: 0, z: 0 }
+            }
+          }
+        });
+      };
+      await caching.syncDocument(
+        document,
+        undefined,
+        undefined,
+        undefined,
+        IDLE_SYNC
+      );
+      // One drag frame, then its release as an ordinary idle sync.
+      const dragged = moveLast(document, 90);
+      await caching.previewGeometry(dragged);
+      await caching.syncDocument(
+        dragged,
+        undefined,
+        undefined,
+        undefined,
+        IDLE_SYNC
+      );
+      // The frame already built this exact history, so its release replays
+      // nothing rather than everything after the boolean.
+      expect(events.at(-1)).toMatchObject({ restored: 11, replayed: 0 });
+    } finally {
+      caching.dispose();
+    }
   });
 });

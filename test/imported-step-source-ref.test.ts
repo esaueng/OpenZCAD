@@ -3,10 +3,14 @@ import { describe, expect, it } from 'vitest';
 import { createCadDocumentDigest } from '@openzcad/ai-contracts';
 import { CommandManager, commandFactories } from '@openzcad/command-system';
 import {
+  addPrimitiveFeature,
   createProjectDocument,
   importStepBody
 } from '@openzcad/document-core';
-import { createExactKernelAdapter } from '@openzcad/kernel-adapter/exact';
+import {
+  createExactKernelAdapter,
+  type RebuildCacheEvent
+} from '@openzcad/kernel-adapter/exact';
 import {
   hydrateProjectStorageSnapshot,
   prepareProjectStorageSnapshot
@@ -16,6 +20,7 @@ import {
   toUserId,
   type BodyId,
   type BodyRepresentation,
+  type DerivedState,
   type ImportedSourceReference,
   type ProjectDocument
 } from '@openzcad/shared';
@@ -154,6 +159,108 @@ describe('imported source references', () => {
       )
     ).toBe(true);
     expect(derived.bodyRepresentations[firstBodyId(document)]).toBeUndefined();
+  });
+
+  async function boxStepBytes(): Promise<Uint8Array> {
+    const seed = new CommandManager(
+      createProjectDocument('Seed', toUserId('user_source_ref'))
+    );
+    seed.execute(
+      commandFactories.addPrimitive({
+        name: 'Box',
+        primitiveKind: 'box',
+        dimensions: { width: 10, height: 4, depth: 6 }
+      })
+    );
+    const plain = await createExactKernelAdapter();
+    try {
+      return new TextEncoder().encode(
+        await plain.exportStep(seed.document, [firstBodyId(seed.document)])
+      );
+    } finally {
+      plain.dispose();
+    }
+  }
+
+  const laterBox = (document: ProjectDocument) =>
+    addPrimitiveFeature(document, {
+      name: 'Later box',
+      primitiveKind: 'box',
+      dimensions: { width: 5, height: 5, depth: 5 }
+    });
+
+  const liveBodies = (derived: DerivedState) =>
+    Object.values(derived.bodyRepresentations).filter(
+      (body) => !body.consumed && body.volume > 0
+    ).length;
+
+  it('retries a source that failed to resolve instead of restoring the miss', async () => {
+    const bytes = await boxStepBytes();
+    const { document } = referencedImportDocument(
+      referenceFor(new TextDecoder().decode(bytes))
+    );
+    // The first resolve fails the way the browser resolver does on a network
+    // blip or a stalled download; every later one succeeds.
+    let calls = 0;
+    const adapter = await createExactKernelAdapter({
+      resolveSourceBytes: async () => {
+        calls += 1;
+        if (calls === 1) {
+          throw new Error(
+            'Import source for "referenced.step" is not in local storage and could not be fetched.'
+          );
+        }
+        return bytes;
+      }
+    });
+    try {
+      const offline = await adapter.syncDocument(document);
+      expect(liveBodies(offline)).toBe(0);
+      expect(adapter.hasTransientFailures(offline)).toBe(true);
+
+      const retried = await adapter.syncDocument(document);
+      const afterEdit = await adapter.syncDocument(laterBox(document));
+      expect({
+        resolverCalls: calls,
+        retried: liveBodies(retried),
+        afterEdit: liveBodies(afterEdit),
+        retriedWarnings: retried.warnings.filter((warning) =>
+          warning.includes('not available on this device')
+        ).length
+      }).toEqual({
+        resolverCalls: 2,
+        retried: 1,
+        afterEdit: 2,
+        retriedWarnings: 0
+      });
+    } finally {
+      adapter.dispose();
+    }
+  });
+
+  it('still checkpoints past a source this device can never resolve', async () => {
+    const { document } = referencedImportDocument(
+      referenceFor('ISO-10303-21;')
+    );
+    const appended = laterBox(document);
+    const events: RebuildCacheEvent[] = [];
+    const adapter = await createExactKernelAdapter({
+      resolveSourceBytes: async () => {
+        throw Object.assign(new Error('A device-only source.'), {
+          permanent: true
+        });
+      },
+      onRebuildCacheEvent: (event) => events.push(event)
+    });
+    try {
+      const first = await adapter.syncDocument(appended);
+      expect(adapter.hasTransientFailures(first)).toBe(false);
+      await adapter.syncDocument(appended);
+      // A permanent miss is document state: the repeat restores both features.
+      expect(events.at(-1)).toMatchObject({ restored: 2, replayed: 0 });
+    } finally {
+      adapter.dispose();
+    }
   });
 
   it('round-trips a referenced import through cloud object storage untouched', async () => {

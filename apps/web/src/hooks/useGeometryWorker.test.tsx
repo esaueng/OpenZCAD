@@ -1139,5 +1139,188 @@ describe('useGeometryWorker', () => {
       });
       expect(FakeWorker.instances).toHaveLength(2);
     });
+
+    function tagged(
+      document: ReturnType<typeof createProjectDocument>,
+      phase: 'starting' | 'rebuilding' | 'ready',
+      requestId?: string
+    ): GeometryWorkerResult {
+      return {
+        type: 'state',
+        phase,
+        stale: phase !== 'ready',
+        projectId: document.projectId,
+        version: document.version,
+        ...(requestId ? { requestId } : {})
+      };
+    }
+
+    it('respawns a request-tagged job that wedges after the live document is ready', async () => {
+      vi.useFakeTimers();
+      installWorker();
+      const document = createProjectDocument('Wedged export', toUserId('user'));
+      const manager = { document } as unknown as CommandManager;
+      const onError = vi.fn();
+      const { result } = renderHook(() =>
+        useGeometryWorker({
+          manager: () => manager,
+          onDerived: vi.fn(),
+          onError
+        })
+      );
+      const worker = FakeWorker.instances[0]!;
+      act(() => {
+        result.current.sync(document);
+        worker.emit(tagged(document, 'ready'));
+      });
+
+      // The export announces its rebuild, then one WASM call never returns.
+      const exported = expect(
+        result.current.exportModel('step', document, [])
+      ).rejects.toThrow('stopped responding');
+      const exportId = (
+        worker.postMessage.mock.calls.at(-1)![0] as { requestId: string }
+      ).requestId;
+      act(() => worker.emit(tagged(document, 'rebuilding', exportId)));
+      // The user keeps editing; the broadcast queues behind the stuck job.
+      const edited = { ...document, version: document.version + 1 };
+      act(() => {
+        manager.document = edited;
+        result.current.sync(edited);
+      });
+
+      // Within the rebuild budget the slow job is left alone...
+      act(() => {
+        vi.advanceTimersByTime(14 * 60_000);
+      });
+      expect(FakeWorker.instances).toHaveLength(1);
+      // ...and past it the worker is replaced, the export settles and the
+      // replacement owes the edited document its rebuild.
+      act(() => {
+        vi.advanceTimersByTime(60_000 + 2_000);
+      });
+      expect({
+        respawned: FakeWorker.instances.length,
+        liveReady: result.current.isReadyFor(edited)
+      }).toEqual({ respawned: 2, liveReady: false });
+      expect(onError).toHaveBeenCalledWith(
+        expect.stringContaining('stopped responding during "rebuilding"')
+      );
+      expect(FakeWorker.instances[1]!.postMessage).toHaveBeenCalledWith({
+        type: 'sync',
+        document: edited,
+        lineageDemand: []
+      });
+      await exported;
+    });
+
+    it('keeps watching a request whose live document reported ready after it was posted', async () => {
+      vi.useFakeTimers();
+      installWorker();
+      const document = createProjectDocument('Queued mass', toUserId('user'));
+      const { result } = renderHook(() =>
+        useGeometryWorker({
+          manager: () => null,
+          onDerived: vi.fn(),
+          onError: vi.fn()
+        })
+      );
+      const worker = FakeWorker.instances[0]!;
+      result.current.sync(document);
+      const pending = result.current.massProperties(
+        document,
+        toBodyId('body_mass')
+      );
+      const rejected = expect(pending).rejects.toThrow('stopped responding');
+      const massId = (
+        worker.postMessage.mock.calls.at(-1)![0] as { requestId: string }
+      ).requestId;
+      // The live rebuild finishes (which disarms the live watch), then the
+      // queued mass query starts and goes silent.
+      act(() => {
+        worker.emit(tagged(document, 'ready'));
+        worker.emit(tagged(document, 'starting', massId));
+        worker.emit(tagged(document, 'rebuilding', massId));
+        vi.advanceTimersByTime(15 * 60_000 + 1_000);
+      });
+      expect(FakeWorker.instances).toHaveLength(2);
+      await rejected;
+    });
+
+    it('budgets a queued request by the job that announced last', () => {
+      vi.useFakeTimers();
+      installWorker();
+      const document = createProjectDocument('Behind cancel', toUserId('user'));
+      const { result } = renderHook(() =>
+        useGeometryWorker({
+          manager: () => null,
+          onDerived: vi.fn(),
+          onError: vi.fn()
+        })
+      );
+      const worker = FakeWorker.instances[0]!;
+      const controller = new AbortController();
+      void result.current
+        .exportModel('step', document, [], { signal: controller.signal })
+        .catch(() => undefined);
+      const exportId = (
+        worker.postMessage.mock.calls.at(-1)![0] as { requestId: string }
+      ).requestId;
+      act(() => {
+        worker.emit(tagged(document, 'starting', exportId));
+        worker.emit(tagged(document, 'rebuilding', exportId));
+        // A running WASM build cannot be interrupted; the cancelled export
+        // keeps the worker busy while a section waits behind it.
+        controller.abort();
+      });
+      void result.current
+        .sectionOutline(document, { origin: [0, 0, 0], normal: [0, 0, 1] }, [])
+        .catch(() => undefined);
+      act(() => {
+        vi.advanceTimersByTime(15 * 60_000);
+      });
+      // Not the 15 s start budget: the queue is behind a long rebuild.
+      expect(FakeWorker.instances).toHaveLength(1);
+      act(() => {
+        vi.advanceTimersByTime(2_000);
+      });
+      expect(FakeWorker.instances).toHaveLength(2);
+    });
+
+    it('leaves an idle worker alone after a cancelled preview ends without a terminal state', () => {
+      vi.useFakeTimers();
+      installWorker();
+      const document = createProjectDocument(
+        'Cancelled drag',
+        toUserId('user')
+      );
+      const { result } = renderHook(() =>
+        useGeometryWorker({
+          manager: () => null,
+          onDerived: vi.fn(),
+          onError: vi.fn()
+        })
+      );
+      const worker = FakeWorker.instances[0]!;
+      act(() => {
+        result.current.sync(document);
+        worker.emit(tagged(document, 'ready'));
+      });
+      const controller = new AbortController();
+      void result.current
+        .previewGeometry(document, { signal: controller.signal })
+        .catch(() => undefined);
+      const previewId = (
+        worker.postMessage.mock.calls.at(-1)![0] as { requestId: string }
+      ).requestId;
+      act(() => {
+        worker.emit(tagged(document, 'starting', previewId));
+        worker.emit(tagged(document, 'rebuilding', previewId));
+        // The worker drops a cancelled preview's result and final state.
+        controller.abort();
+        vi.advanceTimersByTime(60 * 60_000);
+      });
+      expect(FakeWorker.instances).toHaveLength(1);
+    });
   });
 });

@@ -3,6 +3,7 @@ import {
   addPrimitiveFeature,
   booleanBodies,
   createProjectDocument,
+  importStepBody,
   transformBody
 } from '@openzcad/document-core';
 import {
@@ -428,6 +429,57 @@ describe('syncDocument cancellation', { timeout: 120_000 }, () => {
     } finally {
       signalled.dispose();
       fresh.dispose();
+    }
+  });
+
+  it('a superseded sync stops while its source download is stalled, and lets go of it', async () => {
+    const document = importStepBody(createProjectDocument('Stalled', user), {
+      name: 'Bracket',
+      artifactId: 'artifact_cloud_stalled',
+      sourceName: 'bracket.step',
+      stepSourceRef: {
+        marker: 'openzcad-source-ref',
+        version: 1,
+        hashAlgorithm: 'sha256',
+        checksumSha256: 'a'.repeat(64),
+        logicalBytes: 1024
+      }
+    }).document;
+    let fetchStarted = false;
+    let downloadSignal: AbortSignal | undefined;
+    const adapter = await createExactKernelAdapter({
+      // A response that never arrives (stalled socket, captive portal).
+      resolveSourceBytes: (_ref, { signal }) => {
+        fetchStarted = true;
+        downloadSignal = signal;
+        return new Promise<Uint8Array>(() => undefined);
+      }
+    });
+    try {
+      let superseded = false;
+      const outcome = adapter
+        .syncDocument(document, undefined, undefined, undefined, {
+          cancellation: { isCancelled: () => superseded }
+        })
+        .then(
+          () => 'built',
+          (error: unknown) => (isBuildCancelled(error) ? 'cancelled' : 'failed')
+        );
+      await new Promise((resolve) => setTimeout(resolve, 50));
+      expect(fetchStarted).toBe(true);
+      // A newer edit supersedes the build; the serialized worker queue must
+      // not wait on the download for the host watchdog's fifteen minutes.
+      superseded = true;
+      const settled = await Promise.race([
+        outcome,
+        new Promise((resolve) => setTimeout(resolve, 3_000, 'still pending'))
+      ]);
+      expect(settled).toBe('cancelled');
+      // The resolver hears it too, so the abandoned transfer can stop or be
+      // taken over by the next build rather than run on unseen.
+      expect(downloadSignal?.aborted).toBe(true);
+    } finally {
+      adapter.dispose();
     }
   });
 });
