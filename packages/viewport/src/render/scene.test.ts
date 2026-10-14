@@ -1,11 +1,14 @@
 import { describe, expect, it } from 'vitest';
 import * as THREE from 'three';
 import {
+  applyStagePalette,
   computeFitPose,
   createAxesGizmo,
   createBodyMaterial,
   createGradientBackdrop,
+  createShadowCatcher,
   createStudioGrid,
+  DARK_STAGE_PALETTE,
   shouldShowGroundShadow,
   sameBodyPickingTopology,
   sameBodyRenderGeometry,
@@ -165,6 +168,52 @@ describe('opacity-only body updates', () => {
       material.dispose();
     }
   );
+});
+
+describe('applyStagePalette', () => {
+  it('repaints the backdrop, grid, shadow and clear colour in place', () => {
+    const scene = new THREE.Scene();
+    scene.background = new THREE.Color(DARK_STAGE_PALETTE.backdropBottom);
+    const backdrop = createGradientBackdrop();
+    const grid = createStudioGrid();
+    const shadowCatcher = createShadowCatcher();
+    const backdropMaterial = backdrop.material as THREE.ShaderMaterial;
+    const gridMaterial = grid.material as THREE.ShaderMaterial;
+    const hex = (material: THREE.ShaderMaterial, name: string) =>
+      (material.uniforms[name]!.value as THREE.Color).getHexString();
+
+    applyStagePalette(
+      { scene, backdrop, grid, shadowCatcher },
+      {
+        backdropTop: '#f5f5f5',
+        backdropMiddle: '#eeeeee',
+        backdropBottom: '#e6e6e6',
+        gridMinor: '#c4c4c4',
+        gridMajor: '#b0b0b0',
+        shadowOpacity: 0.18
+      }
+    );
+
+    // Same materials, new values: a theme change never relinks a shader.
+    expect(backdrop.material).toBe(backdropMaterial);
+    expect(hex(backdropMaterial, 'topColor')).toBe('f5f5f5');
+    expect(hex(backdropMaterial, 'middleColor')).toBe('eeeeee');
+    expect(hex(backdropMaterial, 'bottomColor')).toBe('e6e6e6');
+    expect(hex(gridMaterial, 'minorColor')).toBe('c4c4c4');
+    expect(hex(gridMaterial, 'majorColor')).toBe('b0b0b0');
+    expect((shadowCatcher.material as THREE.ShadowMaterial).opacity).toBe(0.18);
+    expect(scene.background.getHexString()).toBe('e6e6e6');
+
+    applyStagePalette({ backdrop, grid, shadowCatcher }, DARK_STAGE_PALETTE);
+    expect(hex(backdropMaterial, 'middleColor')).toBe('101215');
+    expect(hex(gridMaterial, 'majorColor')).toBe('838d9c');
+    expect((shadowCatcher.material as THREE.ShadowMaterial).opacity).toBe(0.55);
+
+    for (const mesh of [backdrop, grid, shadowCatcher]) {
+      mesh.geometry.dispose();
+      (mesh.material as THREE.Material).dispose();
+    }
+  });
 });
 
 describe('createGradientBackdrop', () => {
