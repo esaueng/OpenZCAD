@@ -750,6 +750,12 @@ export interface ModelViewerProps {
     additive: boolean,
     detail?: PickDetail
   ): void;
+  /**
+   * True while `onSelectTopology` refuses picks: the bodies drawn are worker
+   * meshes the document has not committed yet. The e2e select hooks then
+   * report no selection instead of one the host dropped.
+   */
+  topologyPicksHeld?: boolean;
   /** What the pointer is allowed to select. */
   selectionFilter: SelectionFilter;
   /** Bodies swept by a drag rectangle; empty clears the selection. */
@@ -1725,6 +1731,7 @@ export function ModelViewer({
   scaleIndicatorRef,
   sketchGridReadoutRef,
   onSelectTopology,
+  topologyPicksHeld = false,
   onSelectEdgeChain,
   selectionFilter,
   onBoxSelect,
@@ -1795,6 +1802,8 @@ export function ModelViewer({
   const topologyPickListRef = useRef<TopologyPickList | null>(null);
   const onSelectTopologyRef = useRef(onSelectTopology);
   onSelectTopologyRef.current = onSelectTopology;
+  const topologyPicksHeldRef = useRef(topologyPicksHeld);
+  topologyPicksHeldRef.current = topologyPicksHeld;
   const onSelectEdgeChainRef = useRef(onSelectEdgeChain);
   onSelectEdgeChainRef.current = onSelectEdgeChain;
   // Read per pick rather than rebuilding the scene: changing the filter must
@@ -3467,6 +3476,9 @@ export function ModelViewer({
         detail?.resolve?.(null);
         return;
       }
+      // A held pick still reaches the host, which refuses it ("The model is
+      // still updating"); it reports no selection so the caller retries.
+      const held = detail?.select !== false && topologyPicksHeldRef.current;
       if (detail?.select !== false) {
         const anchor =
           detail?.point ?? face.geometry.centroid ?? face.geometry.center;
@@ -3487,6 +3499,10 @@ export function ModelViewer({
             }
           }
         );
+      }
+      if (held) {
+        detail?.resolve?.(null);
+        return;
       }
       detail?.resolve?.({
         hasReference:
@@ -3612,6 +3628,9 @@ export function ModelViewer({
         detail?.resolve?.(null);
         return;
       }
+      // A held pick still reaches the host, which refuses it ("The model is
+      // still updating"); it reports no selection so the caller retries.
+      const held = detail?.select !== false && topologyPicksHeldRef.current;
       if (detail?.select !== false) {
         onSelectTopologyRef.current(
           {
@@ -3626,6 +3645,10 @@ export function ModelViewer({
             normal: { x: normal.x, y: normal.y, z: normal.z }
           }
         );
+      }
+      if (held) {
+        detail?.resolve?.(null);
+        return;
       }
       detail?.resolve?.({
         surfaceType: geometry.surfaceType,
@@ -3696,8 +3719,15 @@ export function ModelViewer({
         hash: edge.hash,
         ...(edge.reference ? { reference: edge.reference } : {})
       };
+      // A held pick still reaches the host, which refuses it ("The model is
+      // still updating"); it reports no selection so the caller retries.
+      const held = detail?.select !== false && topologyPicksHeldRef.current;
       if (detail?.select !== false) {
         onSelectTopologyRef.current(selection, false);
+      }
+      if (held) {
+        detail?.resolve?.(null);
+        return;
       }
       const first = new THREE.Vector3().fromArray(edge.points, 0);
       const last = new THREE.Vector3().fromArray(
@@ -3825,6 +3855,9 @@ export function ModelViewer({
         detail?.resolve?.(null);
         return;
       }
+      // A held pick still reaches the host, which refuses it ("The model is
+      // still updating"); it reports no selection so the caller retries.
+      const held = detail?.select !== false && topologyPicksHeldRef.current;
       if (detail?.select !== false) {
         onSelectTopologyRef.current(
           {
@@ -3840,6 +3873,10 @@ export function ModelViewer({
             normal: { x: normal.x, y: normal.y, z: normal.z }
           }
         );
+      }
+      if (held) {
+        detail?.resolve?.(null);
+        return;
       }
       detail?.resolve?.({
         ...metadata,
@@ -8824,6 +8861,9 @@ export function ModelViewer({
         (disposable.material as THREE.Material).dispose();
       }
       environment.dispose();
+      // The key light's shadow map is a render target of its own, which no
+      // scene-graph clear reaches.
+      keyLight.dispose();
       clearGroup(axes); // the triad is three fat lines now, not one helper
       cameraRig.dispose();
       // Rigs still fading out have no render loop left to finish them.
@@ -8832,6 +8872,10 @@ export function ModelViewer({
       }
       retiringRigsRef.current = [];
       renderer.dispose();
+      // dispose() frees three's own caches but leaves the context to the
+      // garbage collector, and browsers cap live contexts by evicting the
+      // oldest. Every project open builds a fresh viewer, so release now.
+      renderer.forceContextLoss();
       host.removeChild(renderer.domElement);
       host.removeChild(labelRenderer.domElement);
       offsetChip.removeEventListener('click', handleChipClick);
@@ -9829,11 +9873,14 @@ export function ModelViewer({
       !geometryTrace ||
       context.renderedBodies !== bodies ||
       (installed?.projectId === geometryTrace.projectId &&
-        installed.version === geometryTrace.version)
+        installed.version === geometryTrace.version &&
+        installed.analysis === geometryTrace.analysis)
     )
       return;
-    // A committed revision can reuse geometry already drawn by its preview.
-    // Record its acceptance and a real frame without uploading that mesh again.
+    // A committed revision can reuse geometry already drawn by its preview,
+    // and a revision drawn before its analysis keeps that mesh once analysis
+    // is ready. Record its acceptance and a real frame without uploading that
+    // mesh again.
     installedEditRevisionRef.current = geometryTrace;
     recordEditPhase(geometryTrace, 'installed', {
       analysis: geometryTrace.analysis,

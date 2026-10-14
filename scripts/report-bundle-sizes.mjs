@@ -11,6 +11,7 @@ import {
   evaluateKernelWasm,
   KERNEL_WASM_ASSET_PATTERN,
   LAZY_ENTRY_PATTERNS,
+  launcherMarkerLeaks,
   TRANSLATOR_WASM_ASSET_PATTERN,
   KERNEL_WASM_POLICY,
   kernelPolicyToolchain,
@@ -36,7 +37,8 @@ const APPROVED_LAZY_ASSETS = [
   {
     pattern: /^assets\/occt-wasm-.*\.wasm$/,
     maxBytes: 24 * 1024 * 1024,
-    reason: 'OCCT BREP-to-STEP converter, loaded only in the disposable FreeCAD import worker'
+    reason:
+      'OCCT BREP-to-STEP converter, loaded only in the disposable FreeCAD import worker'
   },
   {
     pattern: /^assets\/three-.*\.js$/,
@@ -161,6 +163,19 @@ for (const file of initialAssets) {
       reason: 'Lazy workspace asset is referenced by the launcher HTML'
     });
   }
+}
+for (const { file, library } of launcherMarkerLeaks(
+  initialAssets
+    .filter((file) => extname(file) === '.js')
+    .map((file) => ({
+      file,
+      contents: readFileSync(join(DIST, file), 'utf8')
+    }))
+)) {
+  failures.push({
+    file,
+    reason: `Launcher chunk contains a lazy library: ${library}`
+  });
 }
 
 const metadata = JSON.parse(

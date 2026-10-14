@@ -152,7 +152,7 @@ describe('account adoption from an unopened device snapshot', () => {
     expect(reopened.document.nodes[sketch!.id]).toEqual(sketch);
   });
 
-  it('refuses future schemas and corrupt history before sending a request', () => {
+  it('refuses future schemas before sending a request', () => {
     const future = {
       ...legacyDocument(),
       schemaVersion: PROJECT_DOCUMENT_SCHEMA_VERSION + 1
@@ -160,11 +160,24 @@ describe('account adoption from an unopened device snapshot', () => {
     expect(() => api.adoptProject(future)).toThrow(
       'Unsupported project schema'
     );
+    expect(desktopFetch).not.toHaveBeenCalled();
+  });
+
+  it('adopts the model of a snapshot whose undo history is corrupt, without the history', async () => {
     const corrupt = legacyDocument();
     corrupt.editHistory!.cursor = -1;
-    expect(() => api.adoptProject(corrupt)).toThrow(
-      'Invalid or unsupported project undo history.'
-    );
-    expect(desktopFetch).not.toHaveBeenCalled();
+    const store = new InMemoryPersistenceService();
+    vi.mocked(desktopFetch).mockImplementation(async (_input, init) => {
+      if (typeof init?.body !== 'string') throw new Error('Expected JSON body');
+      const request = parseCreateProjectRequest(JSON.parse(init.body));
+      // The corrupt history never reaches the account.
+      expect(request.document?.editHistory).toBeUndefined();
+      return Response.json(await store.createProject(owner, request));
+    });
+    const adopted = await api.adoptProject(corrupt);
+    const saved = (await store.loadProject(owner, adopted.document.projectId))!;
+    expect(saved.name).toBe(corrupt.name);
+    expect(saved.editHistory).toBeUndefined();
+    expect(new CommandManager(saved).canUndo).toBe(false);
   });
 });
