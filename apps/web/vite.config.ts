@@ -319,11 +319,21 @@ export default defineConfig(async ({ command, isPreview, mode }) => {
         preserveEntrySignatures: false,
         output: {
           // Worker builds have their own output configuration. Keep the
-          // analysis split there without pulling unrelated dependencies into
-          // every worker. Preserve evaluation order across the split.
+          // exact adapter splits there without pulling unrelated dependencies
+          // into every worker. Preserve evaluation order across the split.
           strictExecutionOrder: true,
           codeSplitting: {
             groups: [
+              {
+                name: 'exact-mesh-payload',
+                test: (id: string) =>
+                  id.includes(
+                    '/packages/kernel-adapter/src/imported-mesh-payload.ts'
+                  ),
+                // Keep mesh payload helpers behind the exact adapter's lazy
+                // boundary without moving the shared document dependencies.
+                includeDependenciesRecursively: false
+              },
               {
                 name: 'exact-analysis',
                 test: (id: string) =>

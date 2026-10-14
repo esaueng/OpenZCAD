@@ -112,11 +112,11 @@ import {
   exactIntersectWithCancellation,
   throwIfBuildCancelled
 } from './exact-cancellation';
+import { meshBooleanUnsupportedError } from './imported-mesh';
 import {
   importedMeshStl,
-  importedMeshTriangles,
-  meshBooleanUnsupportedError
-} from './imported-mesh';
+  importedMeshTriangles
+} from './imported-mesh-payload';
 import {
   extrudeVolumeTolerance,
   type ExtrudeInferenceBody

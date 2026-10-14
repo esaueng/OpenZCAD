@@ -155,6 +155,15 @@ describe('kernel pin growth policy', () => {
  */
 describe('lazy entry patterns', () => {
   it.each([
+    'assets/exact-mesh-payload-B2kQ9xVd.js',
+    'assets/exact-analysis-B2kQ9xVd.js'
+  ])('keeps the split exact helpers out of the launcher: %s', (file) => {
+    expect(LAZY_ENTRY_PATTERNS.some((pattern) => pattern.test(file))).toBe(
+      true
+    );
+  });
+
+  it.each([
     'assets/meshImportWorker-nqCWfpSW.js',
     'assets/shaprImportWorker-CCF_vbm3.js'
   ])('covers the disposable import worker %s', (file) => {

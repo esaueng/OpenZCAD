@@ -4200,11 +4200,21 @@ test('imports an STL mesh and measures the body the worker rebuilt', async ({
   // anyway. That failure shows up in the rebuild cache key instead, where
   // `Array.isArray` is false, and `meshTransport.test.ts` is what pins it.
   test.setTimeout(90_000);
+  const meshPayloadRequests: string[] = [];
+  page.on('request', (request) => {
+    if (/\/assets\/exact-mesh-payload-.*\.js$/.test(request.url())) {
+      meshPayloadRequests.push(request.url());
+    }
+  });
   await stubApi(page);
   await page.goto('/');
+  await expect(page.getByLabel('Project name')).toBeVisible();
+  expect(meshPayloadRequests).toEqual([]);
   await page.getByLabel('Project name').fill('Imported Mesh');
   await page.getByRole('button', { name: 'Create project' }).click();
   await expect(page.getByRole('region', { name: '3D viewport' })).toBeVisible();
+  await expectBodyCount(page, 0);
+  expect(meshPayloadRequests).toEqual([]);
 
   await page
     .getByLabel(/^Import FreeCAD, STEP or /)
@@ -4220,6 +4230,7 @@ test('imports an STL mesh and measures the body the worker rebuilt', async ({
     0
   );
   await expectBodyCount(page, 1);
+  expect(meshPayloadRequests.length).toBeGreaterThan(0);
 
   // Two triangles spanning 20x20 in the XY plane. The size is what proves the
   // vertices survived the round trip with their values intact — a corrupted
