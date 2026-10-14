@@ -691,18 +691,23 @@ describe('geometry worker rebuild coordination', () => {
       );
     }
 
-    async function transientLive(fontArrives: Promise<boolean>) {
-      const documentFontsArrived = vi.fn(() => fontArrives);
+    async function transientLive(
+      fontsArrived: () => Promise<boolean>,
+      recovers = true
+    ) {
       vi.doMock('../lib/textFonts', () => ({
         preloadDocumentFonts: vi.fn(async () => undefined),
-        documentFontsArrived
+        documentFontsArrived: vi.fn(fontsArrived)
       }));
-      // The first build ran before a font face or source bytes arrived.
+      // The first build runs before a font face or source bytes arrived.
       const missing = derived('waiting');
+      const first = deferred<ProjectDocument['derived']>();
       const syncDocument = vi
         .fn()
-        .mockResolvedValueOnce(missing)
-        .mockResolvedValue(derived('built'));
+        .mockImplementationOnce(() => first.promise)
+        .mockImplementation(async () =>
+          recovers ? derived('built') : missing
+        );
       const { scope } = await installWorker(syncDocument, {
         hasTransientFailures: (result: object) => result === missing
       });
@@ -715,10 +720,18 @@ describe('geometry worker rebuild coordination', () => {
         }
       );
       post(scope, { type: 'sync', document });
-      await vi.waitFor(() => expect(documentFontsArrived).toHaveBeenCalled());
-      expect(liveWarnings(scope)).toEqual([['waiting']]);
-      return { scope, syncDocument };
+      await vi.waitFor(() => expect(syncDocument).toHaveBeenCalledOnce());
+      const finish = async () => {
+        first.resolve(missing);
+        await vi.waitFor(() =>
+          expect(liveWarnings(scope)[0]).toEqual(['waiting'])
+        );
+      };
+      const online = () => (scope as { ononline?: () => void }).ononline?.();
+      return { scope, syncDocument, finish, online };
     }
+
+    const settle = () => new Promise((resolve) => setTimeout(resolve, 20));
 
     afterEach(() => {
       vi.doUnmock('../lib/textFonts');
@@ -726,27 +739,69 @@ describe('geometry worker rebuild coordination', () => {
 
     it('re-runs, uncached, once a late font face lands', async () => {
       const arrived = deferred<boolean>();
-      const { scope, syncDocument } = await transientLive(arrived.promise);
-      expect(syncDocument).toHaveBeenCalledOnce();
+      const live = await transientLive(() => arrived.promise);
+      await live.finish();
+      expect(live.syncDocument).toHaveBeenCalledOnce();
       arrived.resolve(true);
       await vi.waitFor(() =>
-        expect(liveWarnings(scope)).toEqual([['waiting'], ['built']])
+        expect(liveWarnings(live.scope)).toEqual([['waiting'], ['built']])
       );
       // Settled: a later connectivity change has nothing left to re-run.
-      (scope as { ononline?: () => void }).ononline?.();
-      await new Promise((resolve) => setTimeout(resolve, 20));
-      expect(syncDocument).toHaveBeenCalledTimes(2);
+      live.online();
+      await settle();
+      expect(live.syncDocument).toHaveBeenCalledTimes(2);
     });
 
     it('re-runs when the connection returns for a source it could not fetch', async () => {
-      const { scope, syncDocument } = await transientLive(
-        Promise.resolve(false)
-      );
-      await new Promise((resolve) => setTimeout(resolve, 20));
-      expect(syncDocument).toHaveBeenCalledOnce();
-      (scope as { ononline?: () => void }).ononline?.();
+      const live = await transientLive(async () => false);
+      await live.finish();
+      await settle();
+      expect(live.syncDocument).toHaveBeenCalledOnce();
+      live.online();
       await vi.waitFor(() =>
-        expect(liveWarnings(scope)).toEqual([['waiting'], ['built']])
+        expect(liveWarnings(live.scope)).toEqual([['waiting'], ['built']])
+      );
+    });
+
+    it.each(['font face', 'connection'] as const)(
+      'latches a %s recovery that arrives while the rebuild still runs',
+      async (recovery) => {
+        // As in the browser: once the face has landed it is no longer
+        // missing, so asking after the rebuild would report nothing new.
+        let faceLoaded = false;
+        const landed = deferred<void>();
+        const live = await transientLive(async () => {
+          if (faceLoaded || recovery === 'connection') return false;
+          await landed.promise;
+          return true;
+        });
+        if (recovery === 'font face') {
+          faceLoaded = true;
+          landed.resolve();
+        } else {
+          live.online();
+        }
+        await settle();
+        await live.finish();
+        await vi.waitFor(() =>
+          expect(liveWarnings(live.scope)).toEqual([['waiting'], ['built']])
+        );
+      }
+    );
+
+    it('re-runs once per recovery, not again while still waiting', async () => {
+      const live = await transientLive(async () => false, false);
+      live.online();
+      await live.finish();
+      await vi.waitFor(() =>
+        expect(live.syncDocument).toHaveBeenCalledTimes(2)
+      );
+      await settle();
+      expect(live.syncDocument).toHaveBeenCalledTimes(2);
+      // The next recovery re-runs the still-waiting document once more.
+      live.online();
+      await vi.waitFor(() =>
+        expect(live.syncDocument).toHaveBeenCalledTimes(3)
       );
     });
   });
