@@ -9,7 +9,9 @@ import {
   ARTIFACT_UPLOAD_PART_BYTES,
   decodeImportedMeshPayload,
   documentStructureError,
+  toArtifactId,
   toProjectId,
+  toUploadSessionId,
   toUserId,
   type ProjectDocument
 } from '@openzcad/shared';
@@ -331,26 +333,39 @@ describe('archiving a mesh import', () => {
     const controller = new AbortController();
     const reason = new DOMException('payload upload stopped', 'AbortError');
     const transport: ArchiveArtifactTransport = {
-      createUploadSession: vi.fn(async (input) => ({
+      createUploadSession: vi.fn<
+        ArchiveArtifactTransport['createUploadSession']
+      >(async (input) => ({
         session: {
-          uploadSessionId: `upload_${input.kind}`,
-          artifactId: `artifact_${input.kind}`,
-          uploadUrl: 'https://upload.test/put'
+          uploadSessionId: toUploadSessionId(`upload_${input.kind}`),
+          artifactId: toArtifactId(`artifact_${input.kind}`),
+          projectId: input.projectId,
+          objectKey: `objects/${input.kind}`,
+          uploadUrl: 'https://upload.test/put',
+          expiresAt: '2026-01-01T00:00:00.000Z',
+          fileName: input.fileName,
+          contentType: input.contentType,
+          kind: input.kind,
+          metadata: input.metadata ?? {}
         }
-      })) as unknown as ArchiveArtifactTransport['createUploadSession'],
+      })),
       uploadArtifact: vi.fn(async () => undefined),
       createMultipartUpload: vi.fn(async () => ({
         uploadId: 'multipart_mesh'
       })),
-      uploadArtifactPart: vi.fn(async (_session, _uploadId, partNumber) => {
-        controller.abort(reason);
-        return { partNumber, etag: `etag_${partNumber}` };
-      }),
+      uploadArtifactPart: vi.fn<ArchiveArtifactTransport['uploadArtifactPart']>(
+        async (_session, _uploadId, partNumber) => {
+          controller.abort(reason);
+          return { partNumber, etag: `etag_${partNumber}` };
+        }
+      ),
       completeMultipartUpload: vi.fn(async () => undefined),
       abortMultipartUpload: vi.fn(async () => undefined),
-      finalizeArtifact: vi.fn(async (input) => ({
-        artifactId: input.artifactId
-      })),
+      finalizeArtifact: vi.fn<ArchiveArtifactTransport['finalizeArtifact']>(
+        async (input) => ({
+          artifactId: input.artifactId
+        })
+      ),
       getArtifactMetadata: vi.fn(async () => ({ artifact: null }))
     };
     await expect(
