@@ -55,7 +55,7 @@ test('loads the OpenZCAD shell', async ({ page }) => {
   await expect(page.getByText('parametric cad in the browser')).toBeVisible();
 });
 
-test('accepts a signed-in project invitation link and scrubs the token', async ({
+test('accepts a signed-in invitation in an already-open Settings tab without reload', async ({
   page
 }) => {
   const document = createProjectDocument(
@@ -92,7 +92,12 @@ test('accepts a signed-in project invitation link and scrubs the token', async (
     route.fulfill({ json: document })
   );
 
-  await page.goto(`/#invite=${invitationToken}`);
+  await page.goto('/');
+  await expect(page.getByRole('tab', { name: 'Parts 0' })).toBeVisible();
+  await page.getByRole('button', { name: 'Open settings' }).click();
+  await page.evaluate((token) => {
+    window.location.hash = `invite=${token}`;
+  }, invitationToken);
 
   await expect(
     page.getByRole('button', { name: 'Rename project' })
@@ -108,6 +113,176 @@ test('accepts a signed-in project invitation link and scrubs the token', async (
       PROJECT_INVITATION_SESSION_KEY
     )
   ).toBeNull();
+});
+
+test('opens and switches public links in an already-open Settings tab', async ({
+  page
+}) => {
+  await stubAnonymousApi(page);
+  const first = createProjectDocument('First shared model', toUserId('owner'));
+  const second = createProjectDocument(
+    'Second shared model',
+    toUserId('owner')
+  );
+  const tokens = ['a'.repeat(43), 'b'.repeat(43)];
+  await page.route('**/api/share/*', (route) => {
+    const index = tokens.indexOf(route.request().url().split('/').at(-1)!);
+    const document = [first, second][index]!;
+    return route.fulfill({
+      json: {
+        document,
+        mode: 'tweak',
+        project: {
+          projectId: document.projectId,
+          name: document.name,
+          documentVersion: document.version,
+          revisionCount: 1,
+          updatedAt: document.derived.updatedAt
+        }
+      }
+    });
+  });
+  await page.goto('/');
+  await expect(page.getByRole('tab', { name: 'Parts 0' })).toBeVisible();
+  await page.getByRole('button', { name: 'Open settings' }).click();
+  await page.evaluate((token) => {
+    window.location.hash = `share=${token}`;
+  }, tokens[0]);
+  await expect(page.locator('.breadcrumb')).toContainText(first.name);
+  await expect(page.getByRole('dialog', { name: 'Settings' })).toHaveCount(0);
+  await expect(
+    page
+      .getByRole('group', { name: 'Workspace mode' })
+      .getByRole('button', { name: 'Build' })
+  ).toBeDisabled();
+  await page.evaluate((token) => {
+    window.location.hash = `share=${token}`;
+  }, tokens[1]);
+  await expect(page.locator('.breadcrumb')).toContainText(second.name);
+});
+
+test('keeps revoked-link guidance visible after delayed startup completes', async ({
+  page
+}) => {
+  await stubAnonymousApi(page);
+  await page.route('**/api/share/*', (route) =>
+    route.fulfill({ status: 404, json: { error: 'Unavailable' } })
+  );
+  await page.route('**/api/session', async (route) => {
+    await new Promise((resolve) => setTimeout(resolve, 500));
+    await route.fulfill({ status: 401, json: { error: 'Signed out' } });
+  });
+  await page.goto(`/#share=${'a'.repeat(43)}`);
+  await expect(page.getByRole('tab', { name: 'Parts 0' })).toBeVisible();
+  await expect(
+    page
+      .getByRole('status')
+      .filter({ hasText: 'This share link is no longer available' })
+  ).toBeVisible();
+  // Status lifetime must not erase the explanation before the user reads it.
+  await page.waitForTimeout(6500);
+  await expect(
+    page.getByText(
+      'This share link is no longer available. It may have been revoked.'
+    )
+  ).toBeVisible();
+});
+
+test('saves incoming member updates through the room without refused account writes', async ({
+  page
+}) => {
+  const document = createProjectDocument(
+    'Member model',
+    toUserId('other_owner')
+  );
+  const summary = {
+    projectId: document.projectId,
+    name: document.name,
+    revisionCount: 1,
+    documentVersion: document.version,
+    updatedAt: document.derived.updatedAt
+  };
+  await stubApi(page, { collaborationRole: 'viewer' });
+  await page.route('**/api/projects', (route) =>
+    route.fulfill({
+      json:
+        route.request().method() === 'POST'
+          ? { project: summary, document }
+          : { projects: [summary] }
+    })
+  );
+  let accountWrites = 0;
+  await page.route(
+    `**/api/projects/${document.projectId}/document`,
+    (route) => {
+      accountWrites += 1;
+      return route.fulfill({
+        status: 404,
+        json: { error: 'Lease checked room required' }
+      });
+    }
+  );
+  await page.addInitScript(() => {
+    const browser = window as unknown as { __memberSocket: WebSocket };
+    const Original = window.WebSocket;
+    window.WebSocket = class extends Original {
+      constructor(url: string | URL, protocols?: string | string[]) {
+        super(url, protocols);
+        browser.__memberSocket = this;
+      }
+    };
+  });
+  await page.goto('/');
+  await page.getByLabel('Project name').fill(document.name);
+  await page.getByRole('button', { name: 'Create project' }).click();
+  await expect(
+    page.getByRole('button', { name: /Open project sharing/ })
+  ).toContainText('Read-only');
+  const incoming = {
+    ...document,
+    name: 'Updated member model',
+    version: document.version + 1
+  };
+  await page.evaluate(
+    ({ document, incoming }) => {
+      const socket = (window as unknown as { __memberSocket: WebSocket })
+        .__memberSocket;
+      for (const frame of [
+        { type: 'state', members: [], document, role: 'viewer', lease: null },
+        { type: 'document', clientId: 'owner', document: incoming }
+      ])
+        socket.dispatchEvent(
+          new MessageEvent('message', { data: JSON.stringify(frame) })
+        );
+    },
+    { document, incoming }
+  );
+  await expect(page.locator('.breadcrumb')).toContainText(incoming.name);
+  await expect(
+    page.getByRole('status', { name: 'Saved', exact: true })
+  ).toBeVisible();
+  await page.waitForTimeout(4500);
+  expect(accountWrites).toBe(0);
+  await expect(
+    page.getByRole('status', { name: 'Saved', exact: true })
+  ).toBeVisible();
+  // Opening this same cached project by a public link must stay session-local,
+  // even though the account listing still contains its member project ID.
+  await page.route('**/api/share/*', (route) =>
+    route.fulfill({
+      json: { document: incoming, project: summary, mode: 'tweak' }
+    })
+  );
+  await page.evaluate(() => {
+    window.location.hash = `share=${'p'.repeat(43)}`;
+  });
+  await expect(
+    page.getByRole('button', { name: 'Make a copy', exact: true })
+  ).toBeVisible();
+  await expect(
+    page.getByRole('status', { name: 'Local only', exact: true })
+  ).toBeVisible();
+  expect(accountWrites).toBe(0);
 });
 
 test('focuses signed-out invitation links on email sign-in and resumes them', async ({

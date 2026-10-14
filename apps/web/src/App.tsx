@@ -384,8 +384,6 @@ import {
   captureProjectShareToken,
   clearProjectShareFragment
 } from './lib/projectShareLink';
-import { fetchSharedProject } from './lib/projectShareClient';
-import { preloadSharedImportSources } from './lib/exactSourceResolver';
 import type {
   ExportProgress,
   MeshExportDialogFormat
@@ -1767,18 +1765,21 @@ export function App() {
     captureProjectInvitationLink
   );
   /**
-   * A `#share=` link this tab was opened with, read once at mount. Non-null
+   * A `#share=` link opened at startup or by same-document navigation. Non-null
    * turns this into a shared-link session: the shared document is fetched
    * anonymously, pinned to the Tweak workspace, and never written to this
    * device's storage — Make a copy is the one road out.
    */
-  const [pendingShareToken] = useState(captureProjectShareToken);
+  const [pendingShareToken, setPendingShareToken] = useState(
+    captureProjectShareToken
+  );
   const [shareSession, setShareSession] = useState<{ token: string } | null>(
     null
   );
   const shareSessionRef = useRef(shareSession);
   shareSessionRef.current = shareSession;
-  const shareOpenAttemptRef = useRef(false);
+  const shareOpenAttemptRef = useRef<string | null>(null);
+  const [shareNavigation, setShareNavigation] = useState(0);
   const [pendingInvitationError, setPendingInvitationError] = useState<
     string | null
   >(null);
@@ -1786,6 +1787,28 @@ export function App() {
   const acceptPendingInvitationRef = useRef<(token: string) => Promise<void>>(
     async () => undefined
   );
+  useEffect(() => {
+    const openFragment = () => {
+      if (window.location.hash.startsWith('#invite=')) {
+        const token = captureProjectInvitationLink();
+        if (!token) return;
+        pendingInvitationAttemptRef.current = null;
+        setPendingInvitationError(null);
+        setPendingInvitationToken(token);
+        setPendingShareToken(null);
+        updateSettingsViewState({ open: true, activeSection: 'account' });
+        setSettingsOpen(true);
+      } else {
+        const token = captureProjectShareToken();
+        if (!token) return;
+        shareOpenAttemptRef.current = null;
+        setPendingShareToken(token);
+        setShareNavigation((current) => current + 1);
+      }
+    };
+    window.addEventListener('hashchange', openFragment);
+    return () => window.removeEventListener('hashchange', openFragment);
+  }, []);
   const [cloudFunctionsEnabled, setCloudFunctionsEnabledState] = useState(
     cloudFunctionsAreEnabled
   );
@@ -3815,6 +3838,14 @@ export function App() {
     (cloudProjectIds.has(doc.projectId) ||
       remoteVersionsRef.current.has(doc.projectId))
   );
+  // Member edits use the lease-checked room. The account document endpoint
+  // deliberately refuses editor writes while leases are enforced.
+  const sharedAccountProject = Boolean(
+    !shareSession &&
+    activeProjectIsCloud &&
+    session &&
+    doc?.ownerUserId !== session.userId
+  );
 
   const collaboration = useCollaboration({
     enabled: cloudFunctionsEnabled,
@@ -3874,7 +3905,11 @@ export function App() {
         controller?.syncedVersion ??
         remoteVersionsRef.current.get(remoteDocument.projectId) ??
         null;
-      if (controller && accountVersion !== null) {
+      if (
+        controller &&
+        accountVersion !== null &&
+        remoteDocument.ownerUserId === sessionRef.current?.userId
+      ) {
         controller.adoptAccountVersion(
           remoteDocument.projectId,
           accountVersion
@@ -4375,6 +4410,8 @@ export function App() {
       !cloudFunctionsEnabled ||
       !projectId ||
       !session ||
+      shareSession ||
+      sharedAccountProject ||
       accountDocumentUnavailableProjectIdRef.current === projectId ||
       accountVersion === undefined
     ) {
@@ -4382,7 +4419,34 @@ export function App() {
       return;
     }
     controller.openProject(projectId, accountVersion);
-  }, [cloudFunctionsEnabled, doc?.projectId, session]);
+  }, [
+    cloudFunctionsEnabled,
+    doc?.projectId,
+    session,
+    shareSession,
+    sharedAccountProject
+  ]);
+
+  useEffect(() => {
+    if (!sharedAccountProject || localSaveDirty || localSaveFailed) return;
+    setSaveState(
+      collaboration.conflict
+        ? 'conflict'
+        : collaboration.status === 'offline'
+          ? 'offline'
+          : collaboration.roomVersion === doc?.version
+            ? 'synced'
+            : 'syncing'
+    );
+  }, [
+    sharedAccountProject,
+    localSaveDirty,
+    localSaveFailed,
+    collaboration.conflict,
+    collaboration.status,
+    collaboration.roomVersion,
+    doc?.version
+  ]);
 
   /**
    * Exactly one tab writes a project's device storage.
@@ -4545,7 +4609,13 @@ export function App() {
    * which is what the room is for.
    */
   useEffect(() => {
-    if (!cloudFunctionsEnabled || !doc?.projectId || !session) {
+    if (
+      !cloudFunctionsEnabled ||
+      !doc?.projectId ||
+      !session ||
+      shareSession ||
+      sharedAccountProject
+    ) {
       return;
     }
     let cancelled = false;
@@ -4663,7 +4733,13 @@ export function App() {
       window.removeEventListener('focus', onFocus);
       window.removeEventListener('online', onFocus);
     };
-  }, [cloudFunctionsEnabled, doc?.projectId, session]);
+  }, [
+    cloudFunctionsEnabled,
+    doc?.projectId,
+    session,
+    shareSession,
+    sharedAccountProject
+  ]);
 
   useEffect(() => {
     syncCloudSettingsSession(
@@ -6407,6 +6483,7 @@ export function App() {
       setSaveState('repair');
       return;
     }
+    if (sharedAccountProject) return;
     // Nothing reaches the account until its device transaction has committed.
     // The displayed state stays Saving while any newer device write is pending.
     const controller = cloudProjectAutosaveRef.current;
@@ -9021,41 +9098,66 @@ export function App() {
    * document. Reloading re-fetches the owner's current model; Make a copy is
    * how the visitor keeps a project. Source bytes use the local rebuild cache.
    */
+  const hydrateSharedDocumentRef = useRef(hydrateDocument);
+  hydrateSharedDocumentRef.current = hydrateDocument;
   useEffect(() => {
-    if (!pendingShareToken || shareOpenAttemptRef.current) {
+    if (
+      startupState !== 'ready' ||
+      !pendingShareToken ||
+      shareOpenAttemptRef.current === pendingShareToken
+    ) {
       return;
     }
-    shareOpenAttemptRef.current = true;
+    shareOpenAttemptRef.current = pendingShareToken;
+    let cancelled = false;
     setBusy(true);
+    updateSettingsViewState({ open: false });
+    setSettingsOpen(false);
+    setSharingOpen(false);
     void (async () => {
       try {
-        const shared = await fetchSharedProject(pendingShareToken);
+        const { loadSharedProject } = await import('./lib/sharedProjectLoader');
+        if (cancelled) return;
+        const shared = await loadSharedProject(
+          pendingShareToken,
+          () => !cancelled
+        );
+        if (cancelled) return;
         if (!shared) {
           setStatus(
-            'This share link is no longer available. It may have been revoked.'
+            'This share link is no longer available. It may have been revoked.',
+            { sticky: true }
           );
           return;
         }
-        await preloadSharedImportSources(shared.document, pendingShareToken);
+        await flushPendingLocalSaveRef.current();
+        if (cancelled) return;
         // Before the document lands: the collaboration hook and the cloud
         // autosave controller must treat this project as not account-backed,
         // whatever this browser knew about the account before.
         setCloudAvailable(false);
         setShareSession({ token: pendingShareToken });
         shareSessionRef.current = { token: pendingShareToken };
-        hydrateDocument(shared.document, {
+        hydrateSharedDocumentRef.current(shared.document, {
           rememberProject: false
         });
         setStatus(
           `Opened shared model ${shared.project.name} · adjust its parameters and export. Make a copy to build on it.`
         );
       } catch (error) {
-        setStatus(errorMessage(error, 'Could not open the share link.'));
+        if (!cancelled) {
+          setStatus(errorMessage(error, 'Could not open the share link.'), {
+            sticky: true
+          });
+        }
       } finally {
-        setBusy(false);
+        if (!cancelled) setBusy(false);
       }
     })();
-  }, [pendingShareToken]);
+    return () => {
+      cancelled = true;
+    };
+  }, [pendingShareToken, shareNavigation, startupState, setStatus]);
 
   /**
    * The road out of a shared-link session: the shared document becomes an
