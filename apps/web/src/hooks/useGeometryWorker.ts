@@ -74,6 +74,14 @@ function respawnBudget(phase: GeometryWorkerPhase): number | null {
     : RESPAWN_BUDGET_MS[phase];
 }
 
+/** One outstanding request-tagged job, as the watchdog sees it. */
+interface RequestClock {
+  /** Its silence is never measured from before it was posted. */
+  postedAt: number;
+  /** The phase the worker last announced for it; null while still queued. */
+  phase: GeometryWorkerPhase | null;
+}
+
 /**
  * Shared posting discipline for broadcast syncs: dedupe per project/version
  * (+ lineage demand) so a rebuild storm cannot loop, and record the key so a
@@ -297,6 +305,13 @@ export function useGeometryWorker(host: GeometryWorkerHost): GeometryWorkerApi {
   // An unarmed worker is legitimately idle and must never be judged silent
   // by the watchdog.
   const armedRef = useRef(false);
+  // Request-tagged jobs in post order. Entries whose promise has settled or
+  // been cancelled are pruned by the watchdog.
+  const requestClocks = useRef(new Map<string, RequestClock>());
+  const watchRequest = (requestId: string) => {
+    armedRef.current = true;
+    requestClocks.current.set(requestId, { postedAt: Date.now(), phase: null });
+  };
   const [state, setState] = useState<GeometryWorkerState>({
     type: 'state',
     phase: 'starting',
@@ -325,48 +340,43 @@ export function useGeometryWorker(host: GeometryWorkerHost): GeometryWorkerApi {
     // request-tagged job (an export, a preview) is itself in a long phase
     // while the live document waits behind it in the job queue.
     let livePhase: GeometryWorkerPhase = 'starting';
+    // The phase of the newest state message from any job, live or tagged.
+    let workerPhase: GeometryWorkerPhase = 'starting';
     let lastWorkerMessageAt = 0;
     let quietBudgetPhase: 'loading-remus' | 'rebuilding' | null = null;
     let quietBudgetUntil = 0;
 
+    const pendingRequests = (): Map<string, PendingRequest<never>>[] => [
+      exportRequests.current,
+      meshQualityRequests.current,
+      massPropertiesRequests.current,
+      solveSketchRequests.current,
+      sectionRequests.current,
+      sketchPlanarRequests.current,
+      recognizeImportedFaceRequests.current,
+      syncRequests.current,
+      geometryPreviewRequests.current
+    ];
+
     const rejectOutstanding = (error: Error) => {
-      for (const request of exportRequests.current.values()) {
-        request.reject(error);
+      for (const pending of pendingRequests()) {
+        for (const request of pending.values()) {
+          request.reject(error);
+        }
+        pending.clear();
       }
-      exportRequests.current.clear();
-      for (const request of meshQualityRequests.current.values()) {
-        request.reject(error);
-      }
-      meshQualityRequests.current.clear();
-      for (const request of massPropertiesRequests.current.values()) {
-        request.reject(error);
-      }
-      massPropertiesRequests.current.clear();
-      for (const request of solveSketchRequests.current.values()) {
-        request.reject(error);
-      }
-      solveSketchRequests.current.clear();
-      for (const request of sectionRequests.current.values()) {
-        request.reject(error);
-      }
-      sectionRequests.current.clear();
-      for (const request of sketchPlanarRequests.current.values()) {
-        request.reject(error);
-      }
-      sketchPlanarRequests.current.clear();
-      for (const request of recognizeImportedFaceRequests.current.values()) {
-        request.reject(error);
-      }
-      recognizeImportedFaceRequests.current.clear();
-      for (const request of syncRequests.current.values()) {
-        request.reject(error);
-      }
-      syncRequests.current.clear();
-      for (const request of geometryPreviewRequests.current.values()) {
-        request.reject(error);
-      }
-      geometryPreviewRequests.current.clear();
       stateSubscribers.current.clear();
+      requestClocks.current.clear();
+    };
+
+    const oldestOutstandingRequest = (): RequestClock | null => {
+      for (const [requestId, clock] of requestClocks.current) {
+        if (pendingRequests().some((pending) => pending.has(requestId))) {
+          return clock;
+        }
+        requestClocks.current.delete(requestId); // Settled or cancelled.
+      }
+      return null;
     };
 
     const failAndMaybeRespawn = (
@@ -450,6 +460,7 @@ export function useGeometryWorker(host: GeometryWorkerHost): GeometryWorkerApi {
       workerRef.current = worker;
       lastWorkerMessageAt = Date.now();
       livePhase = 'starting';
+      workerPhase = 'starting';
       quietBudgetPhase = null;
       quietBudgetUntil = 0;
 
@@ -553,6 +564,9 @@ export function useGeometryWorker(host: GeometryWorkerHost): GeometryWorkerApi {
           return;
         }
         if (message.type === 'state') {
+          workerPhase = message.phase;
+          const clock = requestClocks.current.get(message.requestId ?? '');
+          if (clock) clock.phase = message.phase;
           // The rejected job queued ready before it received our recovery
           // request. Only an accepted completed projection can settle it.
           if (
@@ -796,24 +810,46 @@ export function useGeometryWorker(host: GeometryWorkerHost): GeometryWorkerApi {
     // re-request the visible document's rebuild.
     const watchdog = setInterval(() => {
       const worker = workerRef.current;
-      if (!worker || !armedRef.current) {
+      if (!worker) {
         return;
       }
-      const budget = respawnBudget(livePhase);
-      if (budget === null) {
-        return;
+      const now = Date.now();
+      let phase = livePhase;
+      let deadline = -Infinity;
+      const budget = armedRef.current ? respawnBudget(livePhase) : null;
+      if (budget !== null) {
+        const floor =
+          quietBudgetPhase !== null && now < quietBudgetUntil
+            ? RESPAWN_BUDGET_MS[quietBudgetPhase]
+            : 0;
+        deadline = lastWorkerMessageAt + Math.max(budget, floor);
       }
-      const quietFor = Date.now() - lastWorkerMessageAt;
-      const floor =
-        quietBudgetPhase !== null && Date.now() < quietBudgetUntil
-          ? RESPAWN_BUDGET_MS[quietBudgetPhase]
-          : 0;
-      if (quietFor <= Math.max(budget, floor)) {
+      // A ready live document says nothing about a tagged job behind it: an
+      // export, section or mass query wedged in one WASM call used to hold
+      // the queue forever. Explicit jobs run one at a time in post order, so
+      // the oldest outstanding one is running in the phase it announced, or
+      // waits behind whatever job announced last.
+      const request = oldestOutstandingRequest();
+      if (request) {
+        let requestPhase = request.phase ?? workerPhase;
+        // The last job finished; the next one is about to announce itself.
+        if (requestPhase === 'ready' || requestPhase === 'failed') {
+          requestPhase = 'starting';
+        }
+        const requestDeadline =
+          Math.max(lastWorkerMessageAt, request.postedAt) +
+          RESPAWN_BUDGET_MS[requestPhase];
+        if (requestDeadline > deadline) {
+          deadline = requestDeadline;
+          phase = requestPhase;
+        }
+      }
+      if (deadline === -Infinity || now <= deadline) {
         return;
       }
       failAndMaybeRespawn(
         worker,
-        `The geometry worker stopped responding during "${livePhase}".`
+        `The geometry worker stopped responding during "${phase}".`
       );
     }, WATCHDOG_TICK_MS);
 
@@ -846,7 +882,7 @@ export function useGeometryWorker(host: GeometryWorkerHost): GeometryWorkerApi {
     const promise = new Promise<T>((resolve, reject) => {
       pending.set(requestId, { resolve, reject });
     });
-    armedRef.current = true;
+    watchRequest(requestId);
     worker.postMessage({ ...message, requestId });
     return { ok: true, requestId, promise };
   };
@@ -926,7 +962,7 @@ export function useGeometryWorker(host: GeometryWorkerHost): GeometryWorkerApi {
           }
         });
         options?.signal?.addEventListener('abort', onAbort, { once: true });
-        armedRef.current = true;
+        watchRequest(requestId);
         worker.postMessage({
           type: 'preview-geometry',
           requestId,
@@ -970,7 +1006,7 @@ export function useGeometryWorker(host: GeometryWorkerHost): GeometryWorkerApi {
           stateSubscribers.current.set(requestId, options.onState);
         }
         options?.signal?.addEventListener('abort', onAbort, { once: true });
-        armedRef.current = true;
+        watchRequest(requestId);
         worker.postMessage({
           type: 'export',
           requestId,
@@ -1043,7 +1079,7 @@ export function useGeometryWorker(host: GeometryWorkerHost): GeometryWorkerApi {
       const requestId = crypto.randomUUID();
       return new Promise((resolve, reject) => {
         sectionRequests.current.set(requestId, { resolve, reject });
-        armedRef.current = true;
+        watchRequest(requestId);
         worker.postMessage({
           type: 'section',
           requestId,
@@ -1085,7 +1121,7 @@ export function useGeometryWorker(host: GeometryWorkerHost): GeometryWorkerApi {
       const requestId = crypto.randomUUID();
       return new Promise((resolve, reject) => {
         sketchPlanarRequests.current.set(requestId, { resolve, reject });
-        armedRef.current = true;
+        watchRequest(requestId);
         worker.postMessage({
           type: 'sketch-2d-op',
           requestId,
