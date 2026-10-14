@@ -1,4 +1,4 @@
-import { beforeEach, describe, expect, it, vi } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import {
   addPrimitiveFeature,
   addSketchFeature,
@@ -61,6 +61,7 @@ async function installWorker(
   const createExactKernelAdapter = vi.fn(async () => ({
     syncDocument,
     currentMassPropertiesEpoch: vi.fn(() => 1),
+    hasTransientFailures: vi.fn(() => false),
     prepareMassPropertiesForDocument: vi.fn(async () => 2),
     readCurrentMassProperties: vi.fn(() => ({
       status: 'unavailable',
@@ -341,6 +342,40 @@ describe('geometry worker rebuild coordination', () => {
     );
     expect(readCurrentMassProperties).toHaveBeenCalledTimes(2);
   });
+  it('announces a mass query as a rebuild before it restores exact history', async () => {
+    const restore = deferred<number>();
+    const prepareMassPropertiesForDocument = vi.fn(() => restore.promise);
+    const { scope } = await installWorker(async () => derived('exact'), {
+      currentMassPropertiesEpoch: () => null,
+      prepareMassPropertiesForDocument
+    });
+    const document = addPrimitiveFeature(
+      createProjectDocument('Long mass', toUserId('user')),
+      {
+        name: 'Box',
+        primitiveKind: 'box',
+        dimensions: { width: 1, height: 1, depth: 1 }
+      }
+    );
+    post(scope, {
+      type: 'mass-properties',
+      document,
+      bodyId: document.bodyOrder[0]!,
+      requestId: 'long-mass'
+    });
+    await vi.waitFor(() =>
+      expect(prepareMassPropertiesForDocument).toHaveBeenCalled()
+    );
+    // The host watchdog budgets a silent replay by the last announced
+    // phase; a restore left at `starting` would get fifteen seconds.
+    const phases = scope.postMessage.mock.calls.flatMap(([message]) =>
+      message.type === 'state' && message.requestId === 'long-mass'
+        ? [message.phase]
+        : []
+    );
+    expect(phases.at(-1)).toBe('rebuilding');
+    restore.resolve(2);
+  });
   it('transfers each owned mesh buffer once without detaching adapter or cached meshes', async () => {
     const bodyId = toBodyId('body_transfer');
     const aliasId = toBodyId('body_alias');
@@ -555,6 +590,7 @@ describe('geometry worker rebuild coordination', () => {
       .mockResolvedValue({
         syncDocument,
         currentMassPropertiesEpoch: vi.fn(() => 1),
+        hasTransientFailures: vi.fn(() => false),
         exportStep: vi.fn(),
         exportStl: vi.fn(),
         inspectStep: vi.fn(),
@@ -644,6 +680,152 @@ describe('geometry worker rebuild coordination', () => {
       .filter((message) => message.type === 'projection-delta');
     expect(broadcastResults).toHaveLength(1);
     expect(broadcastResults[0]).toMatchObject({ version: newest.version });
+  });
+
+  describe('a live rebuild that waited on this device', () => {
+    function liveWarnings(scope: FakeWorkerScope): string[][] {
+      return scope.postMessage.mock.calls.flatMap(([message]) =>
+        message.type === 'projection-delta'
+          ? [message.packet.state.warnings]
+          : []
+      );
+    }
+
+    async function transientLive(
+      fontsArrived: () => Promise<boolean>,
+      recovers = true
+    ) {
+      vi.doMock('../lib/textFonts', () => ({
+        preloadDocumentFonts: vi.fn(async () => undefined),
+        documentFontsArrived: vi.fn(fontsArrived)
+      }));
+      // The first build runs before a font face or source bytes arrived.
+      const missing = derived('waiting');
+      const first = deferred<ProjectDocument['derived']>();
+      const syncDocument = vi
+        .fn()
+        .mockImplementationOnce(() => first.promise)
+        .mockImplementation(async () =>
+          recovers ? derived('built') : missing
+        );
+      const { scope } = await installWorker(syncDocument, {
+        hasTransientFailures: (result: object) => result === missing
+      });
+      const document = addPrimitiveFeature(
+        createProjectDocument('Waiting', toUserId('user')),
+        {
+          name: 'Box',
+          primitiveKind: 'box',
+          dimensions: { width: 10, height: 20, depth: 30 }
+        }
+      );
+      post(scope, { type: 'sync', document });
+      await vi.waitFor(() => expect(syncDocument).toHaveBeenCalledOnce());
+      const finish = async () => {
+        first.resolve(missing);
+        await vi.waitFor(() =>
+          expect(liveWarnings(scope)[0]).toEqual(['waiting'])
+        );
+      };
+      const online = () => (scope as { ononline?: () => void }).ononline?.();
+      return { scope, syncDocument, finish, online };
+    }
+
+    const settle = () => new Promise((resolve) => setTimeout(resolve, 20));
+
+    afterEach(() => {
+      vi.doUnmock('../lib/textFonts');
+    });
+
+    it('re-runs, uncached, once a late font face lands', async () => {
+      const arrived = deferred<boolean>();
+      const live = await transientLive(() => arrived.promise);
+      await live.finish();
+      expect(live.syncDocument).toHaveBeenCalledOnce();
+      arrived.resolve(true);
+      await vi.waitFor(() =>
+        expect(liveWarnings(live.scope)).toEqual([['waiting'], ['built']])
+      );
+      // Settled: a later connectivity change has nothing left to re-run.
+      live.online();
+      await settle();
+      expect(live.syncDocument).toHaveBeenCalledTimes(2);
+    });
+
+    it('watches the faces still missing on the re-run a first face triggers', async () => {
+      const second = deferred<boolean>();
+      const arrivals = [Promise.resolve(true), second.promise];
+      let call = 0;
+      const live = await transientLive(
+        () => arrivals[call++] ?? new Promise<boolean>(() => undefined),
+        false
+      );
+      await live.finish();
+      // One face landed: the document re-runs, still misses the other face,
+      // and that rebuild watches it afresh.
+      await vi.waitFor(() =>
+        expect(live.syncDocument).toHaveBeenCalledTimes(2)
+      );
+      await settle();
+      expect(live.syncDocument).toHaveBeenCalledTimes(2);
+      second.resolve(true);
+      await vi.waitFor(() =>
+        expect(live.syncDocument).toHaveBeenCalledTimes(3)
+      );
+    });
+
+    it('re-runs when the connection returns for a source it could not fetch', async () => {
+      const live = await transientLive(async () => false);
+      await live.finish();
+      await settle();
+      expect(live.syncDocument).toHaveBeenCalledOnce();
+      live.online();
+      await vi.waitFor(() =>
+        expect(liveWarnings(live.scope)).toEqual([['waiting'], ['built']])
+      );
+    });
+
+    it.each(['font face', 'connection'] as const)(
+      'latches a %s recovery that arrives while the rebuild still runs',
+      async (recovery) => {
+        // As in the browser: once the face has landed it is no longer
+        // missing, so asking after the rebuild would report nothing new.
+        let faceLoaded = false;
+        const landed = deferred<void>();
+        const live = await transientLive(async () => {
+          if (faceLoaded || recovery === 'connection') return false;
+          await landed.promise;
+          return true;
+        });
+        if (recovery === 'font face') {
+          faceLoaded = true;
+          landed.resolve();
+        } else {
+          live.online();
+        }
+        await settle();
+        await live.finish();
+        await vi.waitFor(() =>
+          expect(liveWarnings(live.scope)).toEqual([['waiting'], ['built']])
+        );
+      }
+    );
+
+    it('re-runs once per recovery, not again while still waiting', async () => {
+      const live = await transientLive(async () => false, false);
+      live.online();
+      await live.finish();
+      await vi.waitFor(() =>
+        expect(live.syncDocument).toHaveBeenCalledTimes(2)
+      );
+      await settle();
+      expect(live.syncDocument).toHaveBeenCalledTimes(2);
+      // The next recovery re-runs the still-waiting document once more.
+      live.online();
+      await vi.waitFor(() =>
+        expect(live.syncDocument).toHaveBeenCalledTimes(3)
+      );
+    });
   });
 
   it('supplies task yields and drops a superseded interactive projection', async () => {
@@ -1270,6 +1452,7 @@ describe('resolveSourceBytes download safeguards', () => {
         resolveSourceBytes = deps.resolveSourceBytes;
         return {
           syncDocument: vi.fn(async () => derived('unused')),
+          hasTransientFailures: vi.fn(() => false),
           exportStep: vi.fn(),
           exportStl: vi.fn(),
           exportMesh: vi.fn(),

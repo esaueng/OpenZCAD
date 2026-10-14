@@ -38,7 +38,7 @@ import {
   unpackWorkerRequest
 } from '../lib/meshTransport';
 import { resolveExactSourceBytes } from '../lib/exactSourceResolver';
-import { preloadDocumentFonts } from '../lib/textFonts';
+import { documentFontsArrived, preloadDocumentFonts } from '../lib/textFonts';
 
 /**
  * `step`, `stl`, and `dxf` produce text (STEP data, ASCII STL, DXF R12);
@@ -428,10 +428,13 @@ function loadExactKernel(): Promise<ExactKernel | null> {
   return exactKernelPromise;
 }
 
+/** Results the adapter says waited on a font face or source still to come. */
+const transientResults = new WeakSet<object>();
 const rebuildCache = new ExactRebuildCache<ProjectDocument['derived']>({
   maxEntries: 8,
   maxBytes: 32 * 1024 * 1024,
-  maxInFlight: 4
+  maxInFlight: 4,
+  cacheable: (derived) => !transientResults.has(derived)
 });
 const broadcastGate = new LatestBroadcastGate();
 const projectionSender = new ProjectionSender();
@@ -443,6 +446,34 @@ type GeometryWorkerWorkRequest = Exclude<
   GeometryWorkerRequest,
   { type: 'cancel' }
 >;
+
+/**
+ * The newest live broadcast, and whether its last completed rebuild waited
+ * on this device's moment — a font face past its preload budget, a source
+ * download that failed. That result was never cached; the broadcast re-runs
+ * once a face lands or the connection returns, so the missing body appears
+ * without another edit. A recovery during the rebuild is latched and re-runs
+ * it as soon as it completes; each live rebuild clears both flags.
+ */
+let latestBroadcast: GeometryWorkerWorkRequest | null = null;
+let broadcastAwaitsEnvironment = false;
+let environmentRecovered = false;
+
+function rerunLatestBroadcast(): void {
+  broadcastAwaitsEnvironment = false;
+  if (latestBroadcast)
+    queue.enqueue({
+      request: latestBroadcast,
+      queuedAtMs: performance.now(),
+      broadcastToken: broadcastGate.issue(true)
+    });
+}
+
+function environmentRecovery(): void {
+  environmentRecovered = true;
+  if (broadcastAwaitsEnvironment) rerunLatestBroadcast();
+}
+self.ononline = environmentRecovery;
 
 interface GeometryWorkerJob {
   request: GeometryWorkerWorkRequest;
@@ -504,6 +535,7 @@ async function execute(job: GeometryWorkerJob): Promise<void> {
   const queueMs = workerStartedMs - job.queuedAtMs;
   rebuildMetrics = {};
   let resultCacheHit = true;
+  let transient = false;
   let forceFull = request.type === 'sync' && request.forceFull === true;
   const post = (message: GeometryWorkerResult, transfer?: Transferable[]) => {
     if (!broadcastGate.isCurrent(job.broadcastToken)) {
@@ -567,12 +599,17 @@ async function execute(job: GeometryWorkerJob): Promise<void> {
         };
       } else {
         const key = canonicalProjectContentKey(document);
+        if (exactKernelStatus !== 'ready')
+          post(stateFor('loading-remus', request, { stale: true }));
         const exact = await loadExactKernel();
         if (!exact) {
           throw exactKernelError instanceof Error
             ? exactKernelError
             : new Error('The exact Remus kernel failed to load.');
         }
+        // Preparing can replay the whole history; announce it so the host's
+        // watchdog budgets a rebuild here, not a fifteen-second start.
+        post(stateFor('rebuilding', request, { stale: true }));
         const prepare = async () => {
           await preloadDocumentFonts(document);
           const nextEpoch =
@@ -619,7 +656,18 @@ async function execute(job: GeometryWorkerJob): Promise<void> {
     // document names has to be parsed before the rebuild reads it. A miss is
     // reported as a profile diagnostic rather than thrown, so this never
     // blocks the rest of the model on one unavailable font.
+    if (!job.requestId) {
+      broadcastAwaitsEnvironment = environmentRecovered = false;
+    }
     await preloadDocumentFonts(document);
+    // Watched from here, not from the result: a face that outlived the
+    // budget may land while the rebuild is still running.
+    if (!job.requestId) {
+      void documentFontsArrived(document).then(
+        (arrived) => arrived && environmentRecovery(),
+        () => undefined
+      );
+    }
 
     if (
       request.type === 'export' ||
@@ -891,6 +939,10 @@ async function execute(job: GeometryWorkerJob): Promise<void> {
                     : {})
                 }
               );
+              if (exact.hasTransientFailures(result)) {
+                transientResults.add(result);
+                transient = true;
+              }
               lastExactSyncKey = contentKey;
               lastExactSyncEpoch = exact.currentMassPropertiesEpoch();
               return result;
@@ -932,6 +984,8 @@ async function execute(job: GeometryWorkerJob): Promise<void> {
         },
         projectionTransferables(packet)
       );
+      if (transient && environmentRecovered) rerunLatestBroadcast();
+      else broadcastAwaitsEnvironment = transient;
     }
     post(stateFor('ready', request, { stale: false }));
   } catch (error) {
@@ -1039,6 +1093,7 @@ self.onmessage = (event: MessageEvent<GeometryWorkerRequest>) => {
     return;
   }
   const isBroadcast = request.type === 'sync' && !request.requestId;
+  if (isBroadcast) latestBroadcast = request;
   queue.enqueue({
     request,
     queuedAtMs: performance.now(),
