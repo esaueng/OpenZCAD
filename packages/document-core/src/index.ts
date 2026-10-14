@@ -14,7 +14,7 @@ export {
   recordDocumentEdit,
   normalizeDocumentHistory
 } from './document-history';
-import { assertDocumentHistory } from '@openzcad/shared';
+import { isDocumentHistory } from '@openzcad/shared';
 import {
   MAX_CHECKPOINT_REASON_LENGTH,
   UNIT_TO_MM,
@@ -703,6 +703,27 @@ export function createProjectDocument(
 }
 
 /**
+ * `document` without an undo history this code cannot read.
+ *
+ * The history is a convenience on top of the model, so an unreadable one costs
+ * the undo stack, not the project. Refusing the whole document instead left a
+ * model whose only fault was an entry an older writer recorded unopenable on
+ * every device, with every account save refused as well. Nothing traverses a
+ * dropped history, so dropping it is as safe as refusing it; the validators of
+ * incoming writes (the Worker, the room, `CommandManager`) stay strict.
+ */
+function withReadableHistory(document: ProjectDocument): ProjectDocument {
+  if (
+    document.editHistory === undefined ||
+    isDocumentHistory(document.editHistory, document.projectId)
+  ) {
+    return document;
+  }
+  const { editHistory: _unreadable, ...readable } = document;
+  return readable;
+}
+
+/**
  * Fills in collections that older saved documents may lack, so loading a
  * pre-parametric document does not crash newer code paths.
  *
@@ -710,13 +731,13 @@ export function createProjectDocument(
  * and silently skipping unknown feature kinds would show and export a quietly
  * incomplete model, so a newer schema is refused instead.
  */
-export function normalizeDocument(document: ProjectDocument): ProjectDocument {
-  if (document.schemaVersion > PROJECT_DOCUMENT_SCHEMA_VERSION) {
+export function normalizeDocument(input: ProjectDocument): ProjectDocument {
+  if (input.schemaVersion > PROJECT_DOCUMENT_SCHEMA_VERSION) {
     throw new Error(
-      `Unsupported project schema (v${document.schemaVersion}). Update OpenZCAD to open it.`
+      `Unsupported project schema (v${input.schemaVersion}). Update OpenZCAD to open it.`
     );
   }
-  assertDocumentHistory(document);
+  const document = withReadableHistory(input);
   for (const node of documentNodesWithHistory(document)) {
     if (node.kind === 'sketch') assertSketchReferenceDimensions(node);
   }
@@ -867,7 +888,12 @@ export function restoreFromSaveState(
   snapshot: ProjectDocument,
   reason: string
 ): ProjectDocument {
-  const restored = cloneDocument(normalizeDocument(snapshot));
+  // The snapshot's undo stack belongs to the moment it was saved. The undo
+  // stack of this document is the caller's to record (`applyDocumentEdit`);
+  // carrying the snapshot's would persist a history that matches neither.
+  const { editHistory: _snapshotHistory, ...restored } = cloneDocument(
+    normalizeDocument(snapshot)
+  );
   return appendRevision(
     {
       ...restored,
@@ -3559,6 +3585,43 @@ export function createSavedRevision(
 ): ProjectDocument {
   const appended = appendRevision(document, reason);
   return createCheckpoint({ ...appended, version: document.version }, reason);
+}
+
+/**
+ * `live` carrying the save points an account echo minted that it lacks.
+ *
+ * An account Save checkpoints the document it was sent. When edits land while
+ * that request is in flight, `live` is the document to keep — adopting the
+ * echo would erase them — but it has to take the new save point along, or the
+ * next fenced autosave replaces the account copy and the named save vanishes
+ * from both. The echo's revisions go first, so the newest revision still names
+ * the newest model: the edits' own revisions follow the one the save minted.
+ */
+export function withEchoedSavePoints(
+  live: ProjectDocument,
+  echo: ProjectDocument
+): ProjectDocument {
+  const revisionIds = new Set(
+    echo.revisions.map((revision) => revision.revisionId)
+  );
+  const checkpointIds = new Set(
+    echo.checkpoints.map((checkpoint) => checkpoint.checkpointId)
+  );
+  return {
+    ...live,
+    revisions: [
+      ...echo.revisions,
+      ...live.revisions.filter(
+        (revision) => !revisionIds.has(revision.revisionId)
+      )
+    ].slice(-MAX_PROJECT_REVISION_RECORDS),
+    checkpoints: [
+      ...echo.checkpoints,
+      ...live.checkpoints.filter(
+        (checkpoint) => !checkpointIds.has(checkpoint.checkpointId)
+      )
+    ].slice(-MAX_PROJECT_CHECKPOINTS)
+  };
 }
 
 /**

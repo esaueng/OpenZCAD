@@ -64,6 +64,7 @@ import {
   assistantQuotaCost
 } from './assistantRateLimit';
 import {
+  assistantProviderIdentity,
   authenticateBrowserSession,
   authenticateRequest,
   approveDesktopAuthorization,
@@ -475,6 +476,15 @@ async function notifyProjectRoleChange(
   }
 }
 
+/**
+ * Tells every owned room to drop its non-owner sockets now that the owner
+ * turned sharing off.
+ *
+ * Best-effort by design: it runs after the settings write has committed, and
+ * it is the eager half only. Rooms re-read the owner's preference from D1
+ * whenever a member acts, so a room that misses this still refuses that member
+ * on use — while throwing here turned an already-saved setting into a 500.
+ */
 async function notifyOwnedRoomsCollaborationDisabled(
   env: Env,
   ownerUserId: string
@@ -487,7 +497,14 @@ async function notifyOwnedRoomsCollaborationDisabled(
     'SELECT id FROM projects WHERE user_id = ?'
   )
     .bind(ownerUserId)
-    .all<{ id: string }>();
+    .all<{ id: string }>()
+    .catch(() => null);
+  if (!owned) {
+    console.error(
+      JSON.stringify({ event: 'collaboration_disable_rooms_unlisted' })
+    );
+    return;
+  }
   const notifications = await Promise.allSettled(
     (owned.results ?? []).map(async ({ id: projectId }) => {
       const response = await rooms.getByName(projectId).fetch(
@@ -509,10 +526,17 @@ async function notifyOwnedRoomsCollaborationDisabled(
       }
     })
   );
-  if (
-    notifications.some((notification) => notification.status === 'rejected')
-  ) {
-    throw new Error('A project room rejected a collaboration disable update.');
+  const failed = notifications.filter(
+    (notification) => notification.status === 'rejected'
+  ).length;
+  if (failed > 0) {
+    console.error(
+      JSON.stringify({
+        event: 'collaboration_disable_rooms_unnotified',
+        failed,
+        total: notifications.length
+      })
+    );
   }
 }
 
@@ -676,6 +700,8 @@ async function handleApiRequest(request: Request, env: Env): Promise<Response> {
     if (!shared) {
       return sharedNotFound();
     }
+    // Already the share projection: the current model only, with no undo
+    // history, command log, save-state names or owner id.
     return json(
       {
         project: {
@@ -683,18 +709,7 @@ async function handleApiRequest(request: Request, env: Env): Promise<Response> {
           name: shared.name,
           mode: shared.mode
         },
-        document: {
-          ...shared.document,
-          ownerUserId: toUserId('user_shared'),
-          ...(shared.document.editHistory
-            ? {
-                editHistory: {
-                  ...shared.document.editHistory,
-                  actorUserId: toUserId('user_shared')
-                }
-              }
-            : {})
-        }
+        document: shared.document
       },
       200,
       { 'cache-control': 'no-store' }
@@ -1017,6 +1032,7 @@ async function handleApiRequest(request: Request, env: Env): Promise<Response> {
         503
       );
     }
+    const providerIdentity = await assistantProviderIdentity(userId, env);
     const maxOutputTokens =
       assistant.runtime?.maxOutputTokens ?? maxOutputTokensFor(env);
     const permit = await acquireAssistantPermit(request, userId, env, {
@@ -1033,7 +1049,7 @@ async function handleApiRequest(request: Request, env: Env): Promise<Response> {
       response = await streamAssistantProposal(
         payload,
         env,
-        assistantSafetyIdentifier(userId, payload.retryAttempt),
+        assistantSafetyIdentifier(providerIdentity, payload.retryAttempt),
         assistant.runtime ?? undefined
       );
     } catch (error) {
@@ -1152,13 +1168,19 @@ async function handleApiRequest(request: Request, env: Env): Promise<Response> {
       env.ENVIRONMENT,
       env.AI_ALLOWED_BASE_URL_HOSTS
     );
-    const updated = await updateAppSettings(
+    const { response: updated, previous } = await updateAppSettings(
       userId,
       payload,
       env,
       session.email
     );
-    if (!updated.settings.collaboration.enabled) {
+    // Only the switch turning off is news to the rooms. Settings save on every
+    // cosmetic change, and each owned project costs a Durable Object call, so
+    // re-announcing an already-off switch woke every room on a theme change.
+    if (
+      previous.collaboration.enabled &&
+      !updated.settings.collaboration.enabled
+    ) {
       await notifyOwnedRoomsCollaborationDisabled(env, userId);
     }
     return json(updated);
@@ -1246,7 +1268,21 @@ async function handleApiRequest(request: Request, env: Env): Promise<Response> {
     // Listing is the one call every client makes on arrival, which makes it
     // the natural place to collect the bin: retention is measured in days, so
     // nothing needs a scheduled job to notice a window has closed.
-    await persistence.purgeExpiredProjects(userId);
+    //
+    // Collecting it is housekeeping, though, and must not cost the user their
+    // project list. A purge that fails keeps its rows and is retried by the
+    // next listing; letting it throw here answered every arrival with a 500
+    // for as long as the failure lasted.
+    try {
+      await persistence.purgeExpiredProjects(userId);
+    } catch (error) {
+      console.error(
+        JSON.stringify({
+          event: 'trash_purge_failed',
+          errorName: error instanceof Error ? error.name : 'UnknownError'
+        })
+      );
+    }
     return json(await persistence.listProjects(userId));
   }
 

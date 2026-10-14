@@ -1,6 +1,9 @@
+import { createHash } from 'node:crypto';
 import { afterEach, describe, expect, it, vi } from 'vitest';
+import { toUserId } from '@openzcad/shared';
 
 import {
+  assistantProviderIdentity,
   authenticateBrowserSession,
   authenticateRequest,
   clearSessionCookie,
@@ -637,6 +640,64 @@ describe('assistant request identity', () => {
       status: 503,
       code: 'AI_IDENTITY_UNAVAILABLE'
     });
+  });
+
+  it('hands providers a peppered pseudonym, never the email-derived account id', async () => {
+    const fixture = await verificationD1('123456');
+    const env = {
+      ENVIRONMENT: 'beta' as const,
+      AUTH_MODE: 'email-code' as const,
+      DB: fixture.db,
+      EMAIL: { send: async () => ({ messageId: 'message-test' }) },
+      AUTH_EMAIL_FROM: 'login@auth.example.com',
+      AUTH_OTP_PEPPER: fixture.secret,
+      TURNSTILE_SITE_KEY: 'site-key',
+      TURNSTILE_SECRET_KEY: 'secret-key',
+      AI_IDENTITY_PEPPER: 'identity-test-pepper'
+    };
+    const { session } = await verifyEmailLogin(
+      { challengeId: fixture.challengeId, code: '123456' },
+      env
+    );
+    const emailHash = createHash('sha256')
+      .update(fixture.email)
+      .digest('hex')
+      .slice(0, 24);
+    // The account id itself is unchanged: projects and quotas are keyed by it.
+    expect(session.userId).toBe(`user_${emailHash}`);
+
+    // It used to reach the provider as-is, so anyone with provider logs could
+    // confirm an address by hashing it.
+    const sent = await assistantProviderIdentity(session.userId, env);
+    expect(sent).toMatch(/^user_ai_[a-f0-9]{24}$/);
+    expect(sent).not.toContain(emailHash);
+    await expect(assistantProviderIdentity(session.userId, env)).resolves.toBe(
+      sent
+    );
+    await expect(
+      assistantProviderIdentity(session.userId, {
+        ...env,
+        AI_IDENTITY_PEPPER: 'different-pepper'
+      })
+    ).resolves.not.toBe(sent);
+  });
+
+  it('fails closed without the pepper for signed-in email-code identities', async () => {
+    await expect(
+      assistantProviderIdentity(toUserId('user_signed_in'), {
+        AUTH_MODE: 'email-code',
+        DB: emptyD1()
+      })
+    ).rejects.toMatchObject({
+      status: 503,
+      code: 'AI_IDENTITY_UNAVAILABLE'
+    });
+    // Development identities are not derived from an email address.
+    await expect(
+      assistantProviderIdentity(toUserId('user_beta_dev'), {
+        AUTH_MODE: 'development'
+      })
+    ).resolves.toBe('user_beta_dev');
   });
 
   it('does not downgrade an invalid session cookie to public identity', async () => {
