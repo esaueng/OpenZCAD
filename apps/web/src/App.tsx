@@ -1818,6 +1818,17 @@ export function App() {
     setPendingShareToken(null);
     return () => fragmentNavigationRef.current === navigation;
   }
+  const restoreShareSessionFragment = useCallback(() => {
+    const active = shareSessionRef.current;
+    if (!active) return;
+    window.history.replaceState(
+      window.history.state,
+      '',
+      `${window.location.pathname}${window.location.search}#share=${active.token}`
+    );
+    shareOpenAttemptRef.current = active.token;
+    setPendingShareToken(active.token);
+  }, []);
   useEffect(() => {
     const openFragment = () => {
       const repeatedInvitation = projectInvitationTokenFromHash(
@@ -9201,14 +9212,8 @@ export function App() {
     const restoreActiveShare = () => {
       const active = shareSessionRef.current;
       if (!active || active.token === pendingShareToken) return;
-      window.history.replaceState(
-        window.history.state,
-        '',
-        `${window.location.pathname}${window.location.search}#share=${active.token}`
-      );
-      shareOpenAttemptRef.current = active.token;
+      restoreShareSessionFragment();
       setBusy(false);
-      setPendingShareToken(active.token);
     };
     setBusy(true);
     updateSettingsViewState({ open: false });
@@ -9263,7 +9268,13 @@ export function App() {
     return () => {
       cancelled = true;
     };
-  }, [pendingShareToken, shareNavigation, startupState, setStatus]);
+  }, [
+    pendingShareToken,
+    shareNavigation,
+    startupState,
+    setStatus,
+    restoreShareSessionFragment
+  ]);
 
   /**
    * The road out of a shared-link session: the shared document becomes an
@@ -9372,10 +9383,10 @@ export function App() {
   ]);
 
   function dismissProjectInvitation() {
-    clearPendingProjectInvitation();
-    pendingInvitationAttemptRef.current = null;
-    setPendingInvitationToken(null);
-    setPendingInvitationError(null);
+    beginProjectNavigation();
+    restoreShareSessionFragment();
+    setBusy(false);
+    setStatus('Invitation dismissed.');
     closeSettings();
   }
 
