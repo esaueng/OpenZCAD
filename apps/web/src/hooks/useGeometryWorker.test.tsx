@@ -37,6 +37,30 @@ afterEach(() => {
 });
 
 describe('useGeometryWorker', () => {
+  it('cancels the live broadcast on close and rebuilds if the same project is reopened', () => {
+    installWorker();
+    const document = createProjectDocument(
+      'Reopened project',
+      toUserId('user')
+    );
+    const { result } = renderHook(() =>
+      useGeometryWorker({
+        manager: () => null,
+        onDerived: vi.fn(),
+        onError: vi.fn()
+      })
+    );
+    const worker = FakeWorker.instances[0]!;
+    act(() => result.current.sync(document));
+    act(() => result.current.sync(null));
+    expect(worker.postMessage).toHaveBeenLastCalledWith({ type: 'cancel' });
+    act(() => result.current.sync(document));
+    expect(worker.postMessage).toHaveBeenCalledTimes(3);
+    expect(worker.postMessage).toHaveBeenLastCalledWith(
+      expect.objectContaining({ type: 'sync' })
+    );
+  });
+
   it('retains only a completed live result across metadata changes, without another worker sync', () => {
     installWorker();
     const document = createProjectDocument('Saved model', toUserId('user'));
