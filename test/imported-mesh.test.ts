@@ -15,7 +15,6 @@ import {
 } from '@openzcad/kernel-adapter/exact';
 import {
   toUserId,
-  toArtifactId,
   type BodyId,
   type BodyNode,
   type ProjectDocument
@@ -358,8 +357,6 @@ describe('imported mesh document validation', () => {
   it('rejects malformed persisted triangle indices before serialization', () => {
     expect(() =>
       importedMeshStl({
-        featureKind: 'imported-mesh',
-        artifactId: toArtifactId('artifact_bad'),
         sourceName: 'bad.stl',
         triangleCount: 1,
         vertices: [0, 0, 0, 1, 0, 0, 0, 1, 0],

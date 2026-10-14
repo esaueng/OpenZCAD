@@ -68,6 +68,7 @@ import {
   BODY_OPACITY_METADATA_KEY,
   UNIT_TO_MM,
   bodyDisplayColor,
+  importedSourceReferenceOf,
   isFeatureSuppressed,
   isReadOnlyRecognizedImportedFeature,
   nowIso,
@@ -851,6 +852,16 @@ export class RemusKernelAdapter implements ExactKernelAdapter {
   }
 
   /**
+   * The mesh payloads the last document referenced, by checksum. References
+   * are fetched before every rebuild, whether or not a checkpoint then
+   * restores past the mesh; without these a referenced mesh was re-read from
+   * the blob store on every edit. Content-addressed bytes never change, so a
+   * hit is exact, and keeping only the current document's working set bounds
+   * it by what that document's rebuild holds anyway.
+   */
+  private meshPayloads = new Map<string, Uint8Array>();
+
+  /**
    * Imported STEP results, keyed by the source checksum that fully determines
    * them. An import's geometry depends on nothing else in the document, so a
    * hit is exact by construction — the checksum names the bytes.
@@ -1573,37 +1584,55 @@ export class RemusKernelAdapter implements ExactKernelAdapter {
   }> {
     const sources = new Map<string, Uint8Array>();
     const pinned = new Set<string>();
+    const meshPayloads = new Map<string, Uint8Array>();
     for (const feature of listFeaturesInOrder(document)) {
+      // STEP sources and mesh payloads: both rebuild from bytes held by
+      // checksum outside the document. An import that also embeds its data
+      // rebuilds from that and reads nothing.
+      const ref = importedSourceReferenceOf(feature.data);
+      const data = feature.data as {
+        artifactId: ArtifactId;
+        sourceName: string;
+        stepText?: string;
+        vertices?: number[];
+      };
       if (
-        feature.data.featureKind !== 'imported-step' ||
-        feature.data.stepText !== undefined ||
-        isFeatureSuppressed(feature)
+        !ref ||
+        data.stepText !== undefined ||
+        data.vertices !== undefined ||
+        isFeatureSuppressed(feature) ||
+        sources.has(ref.checksumSha256)
       ) {
         continue;
       }
-      const ref = feature.data.stepSourceRef;
-      if (!ref || sources.has(ref.checksumSha256)) {
+      const mesh = feature.data.featureKind === 'imported-mesh';
+      const kept = mesh ? this.meshPayloads.get(ref.checksumSha256) : undefined;
+      if (kept) {
+        sources.set(ref.checksumSha256, kept);
+        meshPayloads.set(ref.checksumSha256, kept);
         continue;
       }
-      pinned.add(ref.checksumSha256);
-      if (this.importedSteps.lookup(ref.checksumSha256)) {
-        continue;
+      if (!mesh) {
+        pinned.add(ref.checksumSha256);
+        if (this.importedSteps.lookup(ref.checksumSha256)) {
+          continue;
+        }
       }
       if (!this.options.resolveSourceBytes) {
         continue;
       }
       try {
-        sources.set(
-          ref.checksumSha256,
-          await this.options.resolveSourceBytes(ref, {
-            artifactId: feature.data.artifactId,
-            sourceName: feature.data.sourceName
-          })
-        );
+        const bytes = await this.options.resolveSourceBytes(ref, {
+          artifactId: data.artifactId,
+          sourceName: data.sourceName
+        });
+        sources.set(ref.checksumSha256, bytes);
+        if (mesh) meshPayloads.set(ref.checksumSha256, bytes);
       } catch {
-        // The imported-step case reports the miss with the feature's name.
+        // Each import case reports the miss with the feature's name.
       }
     }
+    this.meshPayloads = meshPayloads;
     return { sources, pinned };
   }
 
@@ -3406,6 +3435,7 @@ export class RemusKernelAdapter implements ExactKernelAdapter {
     // kernel and its checkpoints are adapter-scoped and must be released.
     this.invalidateHistoryCache();
     this.importedSteps.clear();
+    this.meshPayloads.clear();
     this.heldDisplayDeflections.clear();
   }
 

@@ -365,7 +365,7 @@ function verifyMeshRebuilds(
         {
           name: 'import-check',
           vertices: stored,
-          indices: indices as number[]
+          indices
         }
       ])
     );
