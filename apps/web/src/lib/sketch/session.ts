@@ -23,11 +23,14 @@ export interface SketchPoint {
 
 const MIN_PROFILE_SIZE = 0.5;
 
-/** Quantizes a sketch point to the linear snap grid. */
+/**
+ * Quantizes a sketch point to the linear snap grid. `+ 0` folds the -0 that
+ * rounding a small negative coordinate yields, which JSON cannot represent.
+ */
 export function snapSketchPoint(point: SketchPoint, step = 1): SketchPoint {
   return {
-    x: Math.round(point.x / step) * step,
-    y: Math.round(point.y / step) * step
+    x: Math.round(point.x / step) * step + 0,
+    y: Math.round(point.y / step) * step + 0
   };
 }
 

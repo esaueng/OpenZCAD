@@ -202,10 +202,11 @@ export const api = {
     // Shelf saves read IndexedDB without opening the project. Upgrade that
     // snapshot before the Worker checks its schema, keeping undo/redo endpoints
     // consistent with any migrated nodes. Reloading alone never rewrites it.
-    const prepared = normalizeDocumentHistory(
-      document,
-      normalizeDocument(document)
-    );
+    // An unreadable history is dropped by normalization; never re-attach it.
+    const normalized = normalizeDocument(document);
+    const prepared = normalized.editHistory
+      ? normalizeDocumentHistory(document, normalized)
+      : normalized;
     return requestJson<CreateProjectResponse>('/api/projects', {
       method: 'POST',
       body: JSON.stringify({
@@ -333,7 +334,10 @@ export const api = {
       body: JSON.stringify(payload)
     }),
   uploadArtifact: async (uploadUrl: string, body: Blob) => {
-    if (!isDesktopApp() && new URL(uploadUrl, window.location.href).origin !== window.location.origin) {
+    if (
+      !isDesktopApp() &&
+      new URL(uploadUrl, window.location.href).origin !== window.location.origin
+    ) {
       throw new Error('Artifact upload URL must use the application origin.');
     }
     const response = await desktopFetch(uploadUrl, {
