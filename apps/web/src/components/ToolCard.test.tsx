@@ -1,6 +1,8 @@
 import { fireEvent, render, screen } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { describe, expect, it, vi } from 'vitest';
+import { toSketchId } from '@openzcad/shared';
+import { ExtrudeForm } from './forms/ExtrudeForm';
 import { ToolCard } from './ToolCard';
 
 describe('ToolCard', () => {
@@ -331,5 +333,69 @@ describe('header', () => {
         .getByRole('region', { name: 'Offset Face operation' })
         .querySelector('.panel-eyebrow')
     ).toHaveTextContent(text);
+  });
+});
+
+describe('ToolCard keyboard for the region Extrude', () => {
+  /*
+    E opened the Extrude card with nothing focused, so typing "10" went to
+    the workspace and was dropped while Distance stayed 0. The command now
+    asks the card for its Distance field; a pick on the canvas, whose status
+    line says "press E", leaves the keyboard alone.
+  */
+  const sketchId = toSketchId('layout');
+  const model = {
+    icon: 'extrude' as const,
+    title: 'Extrude',
+    eyebrow: 'create' as const,
+    hint: 'Drag the arrow to extrude the profile.',
+    phase: 'armed' as const
+  };
+  function card(focusRequest?: unknown, phase: 'armed' | 'dragging' = 'armed') {
+    return (
+      <ToolCard
+        model={{ ...model, phase }}
+        focusRequest={focusRequest}
+        onClose={vi.fn()}
+      >
+        <ExtrudeForm
+          creating
+          initial={{ name: 'Extrude', sketchId, distance: 0 }}
+          sketches={[{ sketchId, name: 'Sketch 01' }]}
+          bodies={[]}
+          scope={{}}
+          submitLabel="Create"
+          onSubmit={vi.fn()}
+          onCancel={vi.fn()}
+        />
+      </ToolCard>
+    );
+  }
+
+  it('types the distance straight after the Extrude command opens it', async () => {
+    const user = userEvent.setup();
+    render(card([]));
+    const distance = screen.getByRole('textbox', { name: 'Distance' });
+    expect(distance).toHaveFocus();
+    await user.keyboard('10');
+    expect(distance).toHaveValue('10');
+    expect(screen.getByRole('button', { name: 'Create' })).toBeEnabled();
+  });
+
+  it('leaves the keyboard alone for a canvas pick, and takes it when E follows', () => {
+    const { rerender } = render(card(undefined));
+    const distance = screen.getByRole('textbox', { name: 'Distance' });
+    expect(distance).not.toHaveFocus();
+    // The card is already open from the pick: E asks again, with its own
+    // selection, and the value is selected so the first digit replaces it.
+    rerender(card([]));
+    expect(distance).toHaveFocus();
+    expect(distance).toHaveProperty('selectionStart', 0);
+    expect(distance).toHaveProperty('selectionEnd', 1);
+  });
+
+  it('never takes the keyboard in the middle of a drag', () => {
+    render(card([], 'dragging'));
+    expect(screen.getByRole('textbox', { name: 'Distance' })).not.toHaveFocus();
   });
 });

@@ -3268,6 +3268,12 @@ export function App() {
   const regionDistanceSetter = useRef<((value: ParamValue) => void) | null>(
     null
   );
+  /**
+   * The profiles the Extrude command selected. While they are still the
+   * selection, the region card asks for its Distance field to hold the
+   * keyboard; a canvas pick replaces them and leaves it with the workspace.
+   */
+  const extrudeCommandProfiles = useRef<RegionPickData[]>([]);
   const extrudeEditRequest = useRef(0);
   const reusableRegionExtrudePreview = useRef<ResolvedExtrudePreview | null>(
     null
@@ -3611,10 +3617,12 @@ export function App() {
                 : (warning ?? 'This size did not produce a valid body.')
             );
           }
+          // In the card's own verb: with a tool open this is its create
+          // card, whose button says Create; an edit card's says Apply.
           setStatus(
             warning ??
               (valid
-                ? 'Preview · Apply to save the result.'
+                ? `Preview · ${toolRef.current ? 'Create' : 'Apply'} to save the result.`
                 : 'This size did not produce a valid body.')
           );
         }
@@ -6763,6 +6771,7 @@ export function App() {
     setSelectedEdges([]);
     setSelectedBodyIds([]);
     setSelectedSketchProfileId(sketchId);
+    extrudeCommandProfiles.current = chosen;
     setSelectedProfiles(chosen);
     setTool(null);
     if (activeSketch) {
@@ -14699,8 +14708,11 @@ export function App() {
           choice,
           ...(faceAttachment ? { faceAttachment } : {})
         };
-        const { regionInferenceRefusal, resolveCurrentExtrude } =
-          await extrudeInference();
+        const {
+          regionExtrudeOutcome,
+          regionInferenceRefusal,
+          resolveCurrentExtrude
+        } = await extrudeInference();
         const agreement = {
           ...options,
           derive: (document: ProjectDocument) => geometry.syncOnce(document)
@@ -14742,7 +14754,7 @@ export function App() {
         await executeValidatedDirectEdit(
           command,
           resultBodyId,
-          `Extruded region by ${rounded} ${doc?.units ?? ''} (${resolved.inference.operation}).`,
+          regionExtrudeOutcome(resolved, rounded, doc?.units),
           rounded,
           () => {
             setSelectedProfiles([]);
@@ -20161,6 +20173,10 @@ export function App() {
           calloutOperationModel ? null : (
             <ToolCard
               model={contextualToolCard}
+              focusRequest={
+                selectedProfiles === extrudeCommandProfiles.current &&
+                selectedProfiles
+              }
               selectAllEdges={
                 interaction.mode === 'edges' &&
                 edgeModifierBody?.topology &&

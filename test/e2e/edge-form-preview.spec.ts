@@ -25,8 +25,9 @@ for (const [tool, field] of [
     await page.getByRole('button', { name: new RegExp(`^${tool}`) }).click();
     await inspector.getByRole('button', { name: 'Select all 2 edges' }).click();
     await inspector.getByLabel(field, { exact: true }).fill('1');
+    // The card's own verb: its button says Create, not Apply.
     await expect(page.getByRole('contentinfo')).toContainText(
-      'Preview · Apply to save the result.'
+      'Preview · Create to save the result.'
     );
     await expect(inspector.getByLabel(field, { exact: true })).toHaveValue('1');
     await expect(page.locator('.feature-row')).toHaveCount(1);

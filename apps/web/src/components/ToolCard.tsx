@@ -1,4 +1,4 @@
-import type { ReactNode } from 'react';
+import { useEffect, useRef, type ReactNode } from 'react';
 import { Anchor } from 'lucide-react';
 import type { OperationPhase, ToolCardModel } from '../lib/interaction/machine';
 import type { SelectionActionId } from '../lib/interaction/capabilities';
@@ -41,6 +41,16 @@ interface ToolCardProps {
    */
   keepLastValid?: { label: string; keep(): void };
   selectAllEdges?: { count: number; select(): void };
+  /**
+   * Set by the command that opened this card, never by a pick on the canvas:
+   * each new value hands the card's first value field the keyboard, its
+   * value selected, as a create card's first field takes it — so E then "10"
+   * types the extrude distance. A pick leaves the keyboard with the
+   * workspace, whose status line offers E and where a digit opens the
+   * handle's exact entry. A request that lands mid-drag lapses rather than
+   * pulling the keyboard out from under the gesture.
+   */
+  focusRequest?: unknown;
   onClose(): void;
 }
 
@@ -60,8 +70,20 @@ export function ToolCard({
   onViewDetails,
   keepLastValid,
   selectAllEdges,
+  focusRequest,
   onClose
 }: ToolCardProps) {
+  const bodyRef = useRef<HTMLDivElement | null>(null);
+  const phase = useRef(model.phase);
+  phase.current = model.phase;
+  useEffect(() => {
+    if (focusRequest && phase.current !== 'dragging') {
+      // Focusing an expression field selects its value.
+      bodyRef.current
+        ?.querySelector<HTMLInputElement>('.expr-field input')
+        ?.focus();
+    }
+  }, [focusRequest]);
   const status = (
     <>
       {model.phase === 'dragging' ? (
@@ -121,7 +143,7 @@ export function ToolCard({
         }
         onClose={onClose}
       />
-      <div className="tool-card-body">
+      <div ref={bodyRef} className="tool-card-body">
         <div className="tool-card-copy">
           {model.error ? (
             <span className="tool-card-diagnostic" role="alert">
