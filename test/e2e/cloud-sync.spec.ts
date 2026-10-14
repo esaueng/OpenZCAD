@@ -482,6 +482,50 @@ test('drains a pending account edit before opening a public share', async ({
   ).toBeVisible();
 });
 
+test('drains a pending account edit before opening an invitation', async ({
+  page
+}) => {
+  const api = new SharedCloudProjectApi();
+  await stubApi(page, { collaborationRole: 'owner' });
+  await api.install(page);
+  const invited = createProjectDocument(
+    'Invitation navigation target',
+    toUserId('other_owner')
+  );
+  await page.route('**/api/collaboration/config', (route) =>
+    route.fulfill({
+      json: {
+        sharingEnabled: true,
+        editLeasesEnforced: false,
+        personalSyncEnabled: false,
+        canary: false
+      }
+    })
+  );
+  await page.route('**/api/project-invitations/accept', (route) =>
+    route.fulfill({ json: { projectId: invited.projectId, role: 'editor' } })
+  );
+  await page.route(`**/api/projects/${invited.projectId}`, (route) =>
+    route.fulfill({ json: invited })
+  );
+  await page.goto('/');
+  await page.getByLabel('Project name').fill('Account before invitation');
+  await page.getByRole('button', { name: 'Create project' }).click();
+  await expect(
+    page.getByRole('status', { name: 'Saved', exact: true })
+  ).toBeVisible();
+  await page.waitForTimeout(1500);
+  await page.clock.install();
+  await page.clock.pauseAt(Date.now());
+  await renameProject(page, 'Invitation edit retained');
+  expect(api.project?.name).toBe('Account before invitation');
+  await page.evaluate(() => {
+    window.location.hash = `invite=${'i'.repeat(43)}`;
+  });
+  await expect(page.locator('.breadcrumb')).toContainText(invited.name);
+  expect(api.project?.name).toBe('Invitation edit retained');
+});
+
 for (const action of ['edit', 'leave', 'switch'] as const) {
   test(`preserves the active workspace after a pending manual save and ${action}`, async ({
     page
