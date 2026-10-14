@@ -76,20 +76,44 @@
   /* Material removed by a cut. Distinct from --color-error: a cut is an
      intended result, not a failure. */
   --color-cut: #ff644d;
+  /* The 3D stage. ModelViewer reads these (lib/stagePalette.ts) and paints
+     the WebGL backdrop gradient, grid and ground shadow from them, so the
+     stage follows the theme with the chrome. --color-viewport-bg is the
+     gradient's middle stop and the colour behind the canvas before it
+     draws. */
   --color-viewport-bg: #101215;
+  --color-stage-top: #171a1f;
+  --color-stage-bottom: #0b0c0f;
+  --color-stage-grid-minor: #5c6573;
+  --color-stage-grid-major: #838d9c;
+  --stage-shadow-opacity: 0.55;
+  /* Text and rules drawn straight on the stage, with no card of their own
+     (the scale bar, the snap refusal). They re-theme with the stage; the
+     viewport-text set below is for HUD cards that paint their own dark
+     ground. */
+  --color-stage-ink: #ebedef;
+  --color-stage-ink-muted: #9ba2ab;
   /* Part cards are rendered on a near-black stage and stored that way. On
      the dark palette `lighten` lets that stage take the card's own surface;
      on the light one it would wash the part out, so the picture stays as
      captured there. */
   --thumbnail-blend: lighten;
-  /* Overlays drawn on the viewport's dark stage (orientation widget, scale
-     bar, pick lists, callouts) keep light text in every theme — the light
-     theme repaints the chrome, not the canvas. Never use --color-text there. */
+  /* HUD cards that paint their own dark ground over the stage (orientation
+     widget, pick lists, callouts, value chips) keep light text in every
+     theme: a dark card reads on either stage. Never use --color-text there. */
   --color-viewport-text: #ebedef;
   --color-viewport-text-muted: #9ba2ab;
   /* Borders on those same overlays: --color-border re-themes to a light grey
      and drew a pale ring round the dark rotate-view button in light theme. */
   --color-viewport-border: rgba(235, 237, 239, 0.18);
+  /* The view cube: facets mix from glancing to frontal as they turn toward
+     the camera. Its own set, so it can turn light with the stage while the
+     dark HUD cards beside it keep the viewport-text set. */
+  --color-cube-glancing: #222a34;
+  --color-cube-frontal: #3a4450;
+  --color-cube-hover: #4a5767;
+  --color-cube-seam: #12161a;
+  --color-cube-label: #ebedef;
   /* The warning hue on the stage: the light theme deepens --color-warning
      to a brown that reads on chrome but turns muddy on the dark canvas. */
   --color-viewport-warning: #f59e0b;
@@ -242,11 +266,10 @@
    ships `data-theme="system"`) can never disagree with the OS or lag it.
    The two blocks must stay identical; theme/systemTheme.test.ts checks.
 
-   Only the CHROME re-themes: panels, text, borders, semantic hues. The
-   3D viewport keeps its dark stage (--color-viewport-bg and every
-   viewport-overlay color are deliberately not overridden) — a dark
-   modeling canvas under light chrome is the standard CAD arrangement,
-   and the WebGL scene's own materials are tuned for it.
+   The chrome and the 3D stage re-theme together: neutral greys, a pale
+   stage and a darker grid. The HUD cards over the stage keep their dark
+   ground and the viewport-text set (they read on either stage), and the
+   viewport selection hues are never overridden.
 
    The layout, typography, spacing, motion and z-index tokens are shared:
    a theme may only repaint, never move anything.
@@ -254,25 +277,25 @@
 
 :root[data-theme='light'] {
   color-scheme: light;
-  /* Surfaces & text — the cool-steel ramp, inverted. */
-  --color-bg: #eef1f5;
-  --color-surface: #f7f9fb;
-  --color-surface-2: #e7ebf1;
-  --color-surface-hover: #dfe5ec;
-  --color-border: #cdd5de;
-  --color-border-strong: #aeb9c6;
-  --color-text: #1a2330;
-  --color-text-muted: #5b6572;
+  /* Surfaces & text — plain neutral greys: a pale stage, near-white
+     islands and near-black ink. Unlike the dark theme there is no steel
+     tint; on a light ground it read as blue-grey haze. */
+  --color-bg: #f2f2f2;
+  --color-surface: #fafafa;
+  --color-surface-2: #ececec;
+  --color-surface-hover: #e6e6e6;
+  --color-border: #d6d6d6;
+  --color-border-strong: #b4b4b4;
+  --color-text: #1d1d1f;
+  --color-text-muted: #56565b;
   /*
-    Measured against every surface in this theme, not just the lightest one.
-    At their previous values these cleared #f7f9fb and failed everywhere else:
-    subtle text reached only 3.54:1 on the hover surface, and accent, warning
-    and success all sat under 4.0 on three of the four. Each is now the
-    lightest value of its own hue that holds 4.5:1 against all four, so the
-    palette does not depend on which surface a label happens to land on.
+    Measured against every surface in this theme, not just the lightest one
+    (theme/contrast.test.ts): subtle text, accent, warning and success each
+    hold 4.5:1 on all four surfaces, so the palette does not depend on which
+    surface a label happens to land on.
   */
-  --color-text-subtle: #5e6773;
-  --color-text-dim: #7a8390;
+  --color-text-subtle: #5a5a5f;
+  --color-text-dim: #7b7b80;
 
   /* Semantic — deeper hues, so text and borders clear the light ground. */
   --color-accent: #1c64c2;
@@ -284,24 +307,40 @@
   --color-error: #dc2626;
   --color-error-text: #b91c1c;
   --color-success: #137638;
-  --color-scroll-shade: rgba(26, 35, 48, 0.14);
+  --color-scroll-shade: rgba(0, 0, 0, 0.1);
   --thumbnail-blend: normal;
+
+  /* The stage: a pale studio grey, a grid a few steps darker, and a ground
+     shadow light enough not to read as a dark slab under the part. */
+  --color-viewport-bg: #eeeeee;
+  --color-stage-top: #f5f5f5;
+  --color-stage-bottom: #e6e6e6;
+  --color-stage-grid-minor: #c4c4c4;
+  --color-stage-grid-major: #b0b0b0;
+  --stage-shadow-opacity: 0.18;
+  --color-stage-ink: #1d1d1f;
+  --color-stage-ink-muted: #56565b;
+  --color-cube-glancing: #d9d9d9;
+  --color-cube-frontal: #ffffff;
+  --color-cube-hover: #e2e9f8;
+  --color-cube-seam: #8e8e93;
+  --color-cube-label: #1d1d1f;
 }
 
 /* 'system' under a light OS: the same palette, resolved by the browser. */
 @media (prefers-color-scheme: light) {
   :root[data-theme='system'] {
     color-scheme: light;
-    --color-bg: #eef1f5;
-    --color-surface: #f7f9fb;
-    --color-surface-2: #e7ebf1;
-    --color-surface-hover: #dfe5ec;
-    --color-border: #cdd5de;
-    --color-border-strong: #aeb9c6;
-    --color-text: #1a2330;
-    --color-text-muted: #5b6572;
-    --color-text-subtle: #5e6773;
-    --color-text-dim: #7a8390;
+    --color-bg: #f2f2f2;
+    --color-surface: #fafafa;
+    --color-surface-2: #ececec;
+    --color-surface-hover: #e6e6e6;
+    --color-border: #d6d6d6;
+    --color-border-strong: #b4b4b4;
+    --color-text: #1d1d1f;
+    --color-text-muted: #56565b;
+    --color-text-subtle: #5a5a5f;
+    --color-text-dim: #7b7b80;
     --color-accent: #1c64c2;
     --color-accent-hi: #1858ad;
     --color-accent-dim: rgba(31, 111, 214, 0.1);
@@ -311,8 +350,21 @@
     --color-error: #dc2626;
     --color-error-text: #b91c1c;
     --color-success: #137638;
-    --color-scroll-shade: rgba(26, 35, 48, 0.14);
+    --color-scroll-shade: rgba(0, 0, 0, 0.1);
     --thumbnail-blend: normal;
+    --color-viewport-bg: #eeeeee;
+    --color-stage-top: #f5f5f5;
+    --color-stage-bottom: #e6e6e6;
+    --color-stage-grid-minor: #c4c4c4;
+    --color-stage-grid-major: #b0b0b0;
+    --stage-shadow-opacity: 0.18;
+    --color-stage-ink: #1d1d1f;
+    --color-stage-ink-muted: #56565b;
+    --color-cube-glancing: #d9d9d9;
+    --color-cube-frontal: #ffffff;
+    --color-cube-hover: #e2e9f8;
+    --color-cube-seam: #8e8e93;
+    --color-cube-label: #1d1d1f;
   }
 }
 

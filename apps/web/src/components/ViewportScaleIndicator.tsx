@@ -1,6 +1,7 @@
 import { Grid3x3 } from 'lucide-react';
 import { useEffect, useRef, type MutableRefObject } from 'react';
 import { formatViewportScale, type ViewportScale } from '@openzcad/viewport';
+import { watchStageTheme } from '../lib/stagePalette';
 
 const BAR_HEIGHT_PX = 18;
 const DIVISIONS = 10;
@@ -29,12 +30,11 @@ function drawRule(canvas: HTMLCanvasElement, widthPx: number) {
   context.setTransform(pixelRatio, 0, 0, pixelRatio, 0, 0);
   context.clearRect(0, 0, cssWidth, BAR_HEIGHT_PX);
 
-  // The bar is drawn on the viewport's dark stage, which never re-themes, so
-  // it reads the viewport tokens: the chrome ones turn dark in the light
-  // theme and drew the rule dark-on-dark beneath its light label.
+  // The bar is drawn straight on the stage, so it reads the stage ink, which
+  // re-themes with the stage: dark on the light stage, light on the dark.
   const styles = window.getComputedStyle(canvas);
-  const primary = cssColor(styles, '--color-viewport-text', '#ebedef');
-  const secondary = cssColor(styles, '--color-viewport-text-muted', '#9ba2ab');
+  const primary = cssColor(styles, '--color-stage-ink', '#ebedef');
+  const secondary = cssColor(styles, '--color-stage-ink-muted', '#9ba2ab');
   const accent = cssColor(styles, '--color-preselect', '#81a9ff');
   const left = 1;
   const right = Math.max(cssWidth - 1, left);
@@ -122,7 +122,14 @@ export function ViewportScaleIndicator({
 
     scaleSinkRef.current = update;
     update(lastScaleRef.current);
+    // The rule's colours are baked into the canvas, so a theme change has to
+    // redraw it; the label is CSS and follows on its own.
+    const stopWatchingTheme = watchStageTheme(() => {
+      lastRenderedRef.current = null;
+      update(lastScaleRef.current);
+    });
     return () => {
+      stopWatchingTheme();
       if (scaleSinkRef.current === update) {
         scaleSinkRef.current = null;
       }
