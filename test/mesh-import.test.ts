@@ -2,7 +2,7 @@ import { readFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 
-import { afterAll, beforeAll, describe, expect, it } from 'vitest';
+import { afterAll, beforeAll, describe, expect, it, vi } from 'vitest';
 import { createProjectDocument, importMeshBody } from '@openzcad/document-core';
 import { solidFromTriangles, solidVolume } from '@openzcad/geometry';
 import { parseStl, writeAsciiStl } from '@openzcad/io-stl';
@@ -19,6 +19,7 @@ import {
 } from '@openzcad/kernel-adapter/exact';
 import { InMemoryPersistenceService } from '@openzcad/persistence';
 import { toUserId, type ProjectDocument } from '@openzcad/shared';
+import { loadRemusTranslators } from '../packages/kernel-adapter/src/remus-runtime';
 
 import {
   coincidentBoxSoup,
@@ -681,6 +682,26 @@ describe('mesh file imports', { timeout: 30_000 }, () => {
       ).rejects.toThrow(/import failed: .*import limit exceeded/i);
     }
   );
+
+  it('refuses an over-budget OBJ polygon before the translator reads it', async () => {
+    // The translator charges a face only once its whole `f` line is
+    // materialized, so one long polygon inside the byte ceiling cost
+    // gigabytes of heap before the refusal (a 126 MB one-face file: +1.7 GB).
+    // The fence is charged first, per reference, as the translator fans it.
+    const io = await loadRemusTranslators();
+    const importObj = vi.spyOn(io, 'importObj');
+    try {
+      const polygon = new TextEncoder().encode(
+        `v 0 0 0\nv 1 0 0\nv 0 1 0\nf${' 1 2 3'.repeat(1_000_000)}\n`
+      );
+      await expect(importMeshFile('obj', polygon, 'mm')).rejects.toThrow(
+        'OBJ import failed: import limit exceeded for OBJ triangles: 600001 > 600000'
+      );
+      expect(importObj).not.toHaveBeenCalled();
+    } finally {
+      importObj.mockRestore();
+    }
+  });
 
   /**
    * The rebuild check runs at the units the document stores, not millimetres.

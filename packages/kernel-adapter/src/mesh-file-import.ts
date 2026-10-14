@@ -93,6 +93,9 @@ export async function importMeshFile(
   if (data.byteLength > policy.maxInputBytes) {
     throw new Error(meshImportTooLargeMessage(format, data.byteLength));
   }
+  if (format === 'obj') {
+    assertObjTriangleBudget(data, policy);
+  }
   // Read before parsing: a package that cannot be read, or that asks for
   // something this import will not do, refuses without spending the parse.
   const pkg = format === '3mf' ? await readThreeMfPackage(data) : null;
@@ -163,6 +166,59 @@ export async function importMeshFile(
         ? { sourceUnit: 'meter' }
         : {})
   };
+}
+
+const LINE_FEED = 0x0a;
+const CARRIAGE_RETURN = 0x0d;
+const SPACE = 0x20;
+const TAB = 0x09;
+const HASH = 0x23;
+const LOWER_F = 0x66;
+
+/**
+ * The OBJ triangle fence, charged before the translator runs.
+ *
+ * The pinned translator charges a face's triangles against its entity budget
+ * only once the whole `f` line has been materialized, so a single polygon
+ * line inside the byte ceiling allocated gigabytes of heap before it was
+ * refused (measured: a 126 MB one-face file grew the process by 1.7 GB). This
+ * counts face references the way the translator fans them — a face of n
+ * references is n − 2 triangles — without allocating, stops at the first one
+ * over the budget, and refuses with the translator's own words.
+ */
+function assertObjTriangleBudget(
+  data: Uint8Array,
+  policy: MeshImportPolicy
+): void {
+  const isBlank = (byte: number | undefined) =>
+    byte === SPACE || byte === TAB || byte === CARRIAGE_RETURN;
+  let triangles = 0;
+  let index = 0;
+  while (index < data.length) {
+    while (data[index] === SPACE || data[index] === TAB) index += 1;
+    if (data[index] === LOWER_F && isBlank(data[index + 1])) {
+      index += 1;
+      let references = 0;
+      for (;;) {
+        while (isBlank(data[index])) index += 1;
+        const byte = data[index];
+        if (byte === undefined || byte === LINE_FEED || byte === HASH) break;
+        references += 1;
+        if (references > 2 && ++triangles > policy.maxEntities) {
+          throw new Error(
+            `${policy.label} import failed: import limit exceeded for OBJ ` +
+              `triangles: ${triangles} > ${policy.maxEntities}`
+          );
+        }
+        while (index < data.length && !isBlank(data[index])) {
+          if (data[index] === LINE_FEED) break;
+          index += 1;
+        }
+      }
+    }
+    const lineEnd = data.indexOf(LINE_FEED, index);
+    index = lineEnd < 0 ? data.length : lineEnd + 1;
+  }
 }
 
 function identityPlacement(solid: number): MeshPlacement {
