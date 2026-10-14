@@ -94,9 +94,118 @@ describe('STL parsing', () => {
   });
 
   it('rejects an ASCII STL that exceeds the triangle budget', () => {
-    const text = `solid big\n${'vertex 0 0 0\n'.repeat((MAX_IMPORT_TRIANGLES + 1) * 3)}endsolid big\n`;
+    // Whole facets: the reader refuses a vertex statement outside one.
+    const facet =
+      'facet normal 0 0 0\nouter loop\nvertex 0 0 0\nvertex 0 0 0\nvertex 0 0 0\nendloop\nendfacet\n';
+    const text = `solid big\n${facet.repeat(MAX_IMPORT_TRIANGLES + 1)}endsolid big\n`;
     const buffer = new TextEncoder().encode(text).buffer;
     expect(() => parseStl(buffer, 'big.stl')).toThrow(/browser import limit/);
+  });
+
+  describe('ASCII facet structure', () => {
+    function asciiStl(
+      facets: string[][],
+      keyword: (word: string) => string = (word) => word
+    ): ArrayBuffer {
+      const lines = [`${keyword('solid')} probe`];
+      for (const vertices of facets) {
+        lines.push(
+          `  ${keyword('facet normal')} 0 0 0`,
+          `    ${keyword('outer loop')}`
+        );
+        for (const vertex of vertices)
+          lines.push(`      ${keyword('vertex')} ${vertex}`);
+        lines.push(`    ${keyword('endloop')}`, `  ${keyword('endfacet')}`);
+      }
+      lines.push(`${keyword('endsolid')} probe`, '');
+      return new TextEncoder().encode(lines.join('\n')).buffer;
+    }
+
+    it('refuses a vertex that is not three finite numbers instead of re-pairing the rest', () => {
+      // One unreadable (MSVC-style NaN) vertex per facet keeps the vertex count
+      // a multiple of three, so the old reader skipped them and paired the six
+      // it could read into two triangles that were never in the file.
+      const buffer = asciiStl([
+        ['0 0 0', '1 0 0', '1.#QNAN 0 0'],
+        ['10 0 0', '-1.#IND 0 0', '10 1 0'],
+        ['nan 0 0', '20 0 0', '20 1 0']
+      ]);
+      expect(() => parseStl(buffer, 'nan.stl')).toThrowError(StlParseError);
+      expect(() => parseStl(buffer, 'nan.stl')).toThrow(
+        'ASCII STL facet 1 has a vertex that is not three finite numbers: "vertex 1.#QNAN 0 0".'
+      );
+    });
+
+    it.each([
+      ['two coordinates', '1 0'],
+      ['four coordinates', '1 0 0 0'],
+      ['an overflowing coordinate', '1e999 0 0'],
+      ['a decimal comma', '1,5 0 0']
+    ])('refuses a vertex with %s', (_label, vertex) => {
+      expect(() =>
+        parseStl(asciiStl([['0 0 0', '0 1 0', vertex]]), 'bad.stl')
+      ).toThrow(/facet 1 has a vertex that is not three finite numbers/);
+    });
+
+    it('refuses a facet that does not hold exactly three vertices', () => {
+      expect(() =>
+        parseStl(
+          asciiStl([
+            ['0 0 0', '1 0 0'],
+            ['0 0 0', '1 0 0', '0 1 0', '0 0 1']
+          ]),
+          'short.stl'
+        )
+      ).toThrow('ASCII STL facet 1 has 2 vertices; a facet needs three.');
+      expect(() =>
+        parseStl(asciiStl([['0 0 0', '1 0 0', '0 1 0', '0 0 1']]), 'long.stl')
+      ).toThrow('ASCII STL facet 1 has more than three vertices.');
+    });
+
+    it('refuses a vertex outside any facet and a file that ends inside one', () => {
+      const stray = new TextEncoder().encode(
+        'solid stray\nvertex 0 0 0\nendsolid stray\n'
+      ).buffer;
+      expect(() => parseStl(stray, 'stray.stl')).toThrow(
+        /vertex outside any facet/
+      );
+
+      const truncated = new TextEncoder().encode(
+        'solid cut\nfacet normal 0 0 1\nouter loop\nvertex 0 0 0\nvertex 1 0 0\nvertex 0 1 0\n'
+      ).buffer;
+      expect(() => parseStl(truncated, 'cut.stl')).toThrow(
+        /ends inside facet 1/
+      );
+    });
+
+    it('reads an upper-case ASCII STL as ASCII, not as a corrupt binary one', () => {
+      const parsed = parseStl(
+        asciiStl(
+          [
+            ['0 0 0', '1 0 0', '0 1 0'],
+            ['0 0 0', '0 1 0', '0 0 1']
+          ],
+          (word) => word.toUpperCase()
+        ),
+        'UPPER.STL'
+      );
+      expect(parsed.format).toBe('ascii');
+      expect(parsed.triangleCount).toBe(2);
+      expect(parsed.vertices).toEqual([
+        0, 0, 0, 1, 0, 0, 0, 1, 0, 0, 0, 0, 0, 1, 0, 0, 0, 1
+      ]);
+    });
+
+    it('ignores the facet normal, which exports recompute', () => {
+      const text =
+        'solid seam\nfacet normal nan nan nan\nouter loop\nvertex 0 0 0\nvertex 1 0 0\nvertex 2 0 0\nendloop\nendfacet\nendsolid seam\n';
+      const parsed = parseStl(
+        new TextEncoder().encode(text).buffer,
+        'seam.stl'
+      );
+      expect(parsed.triangleCount).toBe(1);
+      expect(parsed.vertices).toEqual([0, 0, 0, 1, 0, 0, 2, 0, 0]);
+    });
   });
 
   it('round-trips write -> parse -> solid', () => {

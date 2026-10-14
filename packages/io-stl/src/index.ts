@@ -10,8 +10,12 @@ export interface ParsedStl {
 
 const BINARY_STL_HEADER_BYTES = 84;
 const BINARY_STL_TRIANGLE_BYTES = 50;
-const ASCII_VERTEX_SOURCE =
-  'vertex\\s+([-+0-9.eE]+)\\s+([-+0-9.eE]+)\\s+([-+0-9.eE]+)';
+/** One coordinate as an ASCII STL writes it: a plain decimal, nothing else. */
+const ASCII_COORDINATE = '[-+]?(?:\\d+\\.?\\d*|\\.\\d+)(?:[eE][-+]?\\d+)?';
+/** What follows the `vertex` keyword: exactly three coordinates. */
+const ASCII_VERTEX_TAIL = new RegExp(
+  `^[ \\t]+(${ASCII_COORDINATE})[ \\t]+(${ASCII_COORDINATE})[ \\t]+(${ASCII_COORDINATE})[ \\t]*$`
+);
 
 /** Guard against imports that would stall the browser tab. */
 export const MAX_IMPORT_TRIANGLES = 200_000;
@@ -70,30 +74,106 @@ function assertBinaryStlLength(
   }
 }
 
+/** A statement short enough to quote in a refusal. */
+function quoted(statement: string): string {
+  const trimmed = statement.trim();
+  return `"${trimmed.length > 60 ? `${trimmed.slice(0, 60)}…` : trimmed}"`;
+}
+
+/**
+ * Whether the text holds a `vertex` statement opening a line, in either
+ * letter case. A literal search with a look back over the blanks before each
+ * hit: anchoring the pattern itself to line starts made the sniff of a large
+ * whitespace-padded file several times slower.
+ */
+function hasVertexStatement(text: string): boolean {
+  for (const match of text.matchAll(/vertex\s/gi)) {
+    let index = match.index - 1;
+    while (text[index] === ' ' || text[index] === '\t') index -= 1;
+    if (index < 0 || text[index] === '\n' || text[index] === '\r') return true;
+  }
+  return false;
+}
+
+/**
+ * Reads an ASCII STL by its facet structure: each `facet … endfacet` block is
+ * one triangle, and must hold exactly three `vertex` statements of three
+ * finite numbers each. Keywords match in either letter case, since exporters
+ * write both.
+ *
+ * Nothing is skipped. Pairing vertex statements three at a time wherever they
+ * appear let one unreadable coordinate (`nan`, `1.#QNAN`, `-1.#IND`) shift
+ * every later vertex into a triangle the file does not contain, so a vertex
+ * this reader cannot read refuses the file, naming the facet. The facet
+ * normal is not read — exports recompute it — so an exporter's `facet normal
+ * nan nan nan` on a degenerate facet is not a refusal.
+ */
 function parseAsciiStl(text: string, fileName: string): ParsedStl {
-  const vertexPattern = new RegExp(ASCII_VERTEX_SOURCE, 'g');
   const vertices: number[] = [];
-  for (const match of text.matchAll(vertexPattern)) {
-    const x = Number(match[1]);
-    const y = Number(match[2]);
-    const z = Number(match[3]);
-    if (!Number.isFinite(x) || !Number.isFinite(y) || !Number.isFinite(z)) {
-      throw new StlParseError('ASCII STL contains a malformed vertex.');
-    }
-    vertices.push(x, y, z);
-    // Enforce the budget while accumulating so an oversized file is rejected
-    // before its vertices are all held in memory.
-    if (vertices.length > MAX_IMPORT_TRIANGLES * 9) {
-      assertTriangleBudget(Math.ceil(vertices.length / 9));
+  let facets = 0;
+  /** Vertices read in the open facet, or -1 between facets. */
+  let facetVertices = -1;
+  // Each statement: its first word, then the rest of its line.
+  for (const [line, word, rest] of text.matchAll(/^[ \t]*(\S+)([^\r\n]*)/gm)) {
+    const keyword = word!.toLowerCase();
+    if (keyword === 'facet') {
+      if (facetVertices >= 0) {
+        throw new StlParseError(
+          `ASCII STL facet ${facets} is not closed by "endfacet".`
+        );
+      }
+      facets += 1;
+      // Charged per facet, so an oversized file is refused before its
+      // vertices are all held in memory.
+      assertTriangleBudget(facets);
+      facetVertices = 0;
+    } else if (keyword === 'vertex') {
+      if (facetVertices < 0) {
+        throw new StlParseError(
+          `ASCII STL has a vertex outside any facet: ${quoted(line)}.`
+        );
+      }
+      // A tail that is not three coordinates reads as NaN, and so refuses.
+      const coordinates = ASCII_VERTEX_TAIL.exec(rest!) ?? [];
+      const x = Number(coordinates[1]);
+      const y = Number(coordinates[2]);
+      const z = Number(coordinates[3]);
+      if (!Number.isFinite(x) || !Number.isFinite(y) || !Number.isFinite(z)) {
+        throw new StlParseError(
+          `ASCII STL facet ${facets} has a vertex that is not three finite numbers: ${quoted(line)}.`
+        );
+      }
+      if (facetVertices === 3) {
+        throw new StlParseError(
+          `ASCII STL facet ${facets} has more than three vertices.`
+        );
+      }
+      vertices.push(x, y, z);
+      facetVertices += 1;
+    } else if (keyword === 'endfacet') {
+      if (facetVertices !== 3) {
+        throw new StlParseError(
+          facetVertices < 0
+            ? 'ASCII STL has an "endfacet" with no facet open.'
+            : `ASCII STL facet ${facets} has ${facetVertices} vertices; a facet needs three.`
+        );
+      }
+      facetVertices = -1;
+    } else if (keyword === 'endsolid' && facetVertices >= 0) {
+      throw new StlParseError(
+        `ASCII STL facet ${facets} is not closed by "endfacet".`
+      );
     }
   }
-  if (vertices.length === 0) {
+  if (facetVertices >= 0) {
+    throw new StlParseError(
+      `ASCII STL ends inside facet ${facets}; the file may be truncated.`
+    );
+  }
+  if (facets === 0) {
     throw new StlParseError('ASCII STL contains no facets.');
   }
-  if (vertices.length % 9 !== 0) {
-    throw new StlParseError('ASCII STL vertex count is not a multiple of three.');
-  }
-  const triangleCount = vertices.length / 9;
+  const triangleCount = facets;
   const indices: number[] = [];
   for (let i = 0; i < triangleCount; i++) {
     const base = i * 3;
@@ -125,9 +205,10 @@ export function parseStl(buffer: ArrayBuffer, fileName: string): ParsedStl {
     const text = new TextDecoder().decode(bytes);
     // A binary exporter's "solid" header carries no vertex statements; only
     // commit to ASCII when the body has at least one, otherwise fall through
-    // to the tolerant binary branch.
+    // to the tolerant binary branch. Either letter case: an upper-case ASCII
+    // file read as binary was refused as a corrupt binary one.
     if (
-      new RegExp(ASCII_VERTEX_SOURCE).test(text) ||
+      hasVertexStatement(text) ||
       buffer.byteLength < BINARY_STL_HEADER_BYTES
     ) {
       return parseAsciiStl(text, fileName);
