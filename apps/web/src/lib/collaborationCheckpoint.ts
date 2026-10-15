@@ -25,6 +25,7 @@ export interface CheckpointControls {
   lease(): ProjectEditLease | null;
   baseVersion(): number | null;
   clientId: string;
+  observeEcho(listener: (document: ProjectDocument) => void): void;
   confirm(saved: ProjectDocument, current: ProjectDocument): void;
 }
 
@@ -121,6 +122,16 @@ export async function saveCollaborationCheckpoint(
       lease.expiresAt <= Date.now()
     )
       throw new Error('A named save requires the active project edit lease.');
+    // A committed checkpoint can arrive over the room before its HTTP reply.
+    // Keep that exact body even when the user buffers later edits or names.
+    controls.observeEcho((echo) => {
+      if (
+        controls.isCurrent() &&
+        options.isCurrent() &&
+        confirmsCheckpoint(snapshot, echo, label)
+      )
+        authoritative = echo;
+    });
     const response = await abortableCheckpoint(
       desktopFetch(
         `/api/projects/${encodeURIComponent(snapshot.projectId)}/collaboration`,

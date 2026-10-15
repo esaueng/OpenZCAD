@@ -156,6 +156,9 @@ export function useCollaboration({
   } | null>(null);
   const sendCurrentDocumentRef = useRef<(() => void) | null>(null);
   const checkpointRef = useRef<AbortController | null>(null);
+  const checkpointEchoRef = useRef<
+    ((document: ProjectDocument) => void) | null
+  >(null);
   const checkpointDrainRef = useRef<{
     resolve(): void;
     reject(error: Error): void;
@@ -709,6 +712,8 @@ export function useCollaboration({
             // rendered from reading this client as divergent.
             documentRef.current = message.document;
             baseVersionRef.current = message.document.version;
+            if (message.clientId === id)
+              checkpointEchoRef.current?.(message.document);
             remoteHandlerRef.current(message.document);
           }
           return;
@@ -964,6 +969,7 @@ export function useCollaboration({
       const socket = socketRef.current;
       // Reserve the outgoing barrier before the dynamic import or ACK drain.
       checkpointRef.current = controller;
+      checkpointEchoRef.current = null;
       const isCurrent = () =>
         roomEpochRef.current === epoch &&
         socketRef.current === socket &&
@@ -995,6 +1001,10 @@ export function useCollaboration({
                 roleRef.current === 'viewer' ? null : leaseRef.current,
               baseVersion: () => baseVersionRef.current,
               clientId: clientId(),
+              observeEcho: (listener) => {
+                if (checkpointRef.current === controller)
+                  checkpointEchoRef.current = listener;
+              },
               confirm: (saved, current) => {
                 documentRef.current = current;
                 lastSentVersionRef.current = saved.version;
@@ -1017,6 +1027,7 @@ export function useCollaboration({
           window.clearTimeout(timer);
           if (checkpointRef.current !== controller) return;
           checkpointRef.current = null;
+          checkpointEchoRef.current = null;
           if (isCurrent() && options.isCurrent())
             sendCurrentDocumentRef.current?.();
         });
