@@ -58,7 +58,7 @@ function textSolid(family = 'open-sans') {
 
 async function fontFault(
   context: BrowserContext,
-  failure: 'fetch' | 'evaluation' | null
+  failure: 'fetch' | 'evaluation' | 'stall' | null
 ) {
   const assets = 'apps/web/dist/assets';
   const loaders = new Set(
@@ -75,10 +75,18 @@ async function fontFault(
   expect(loaders.size).toBeGreaterThan(0);
   let recovering = false;
   const urls: string[] = [];
+  let release!: () => void;
+  const held = new Promise<void>((resolve) => {
+    release = resolve;
+  });
   await context.route('**/assets/*loader-*.js*', async (route) => {
     if (!loaders.has(new URL(route.request().url()).pathname))
       return route.continue();
     urls.push(route.request().url());
+    if (!recovering && failure === 'stall') {
+      await held;
+      return route.continue().catch(() => undefined);
+    }
     if (!recovering && failure === 'fetch')
       return route.abort('internetdisconnected');
     if (!recovering && failure === 'evaluation') {
@@ -94,7 +102,8 @@ async function fontFault(
     urls,
     recover: () => {
       recovering = true;
-    }
+    },
+    release
   };
 }
 
@@ -309,6 +318,60 @@ test('a non-text solid never fetches the font parser', async ({
   await page.waitForTimeout(100);
   expect(fault.urls).toHaveLength(0);
   await live.worker.evaluate(() => self.close());
+});
+
+test('the unchanged text solid retries a stalled font-loader module in the same worker', async ({
+  page,
+  context
+}) => {
+  test.setTimeout(45_000);
+  const fault = await fontFault(context, 'stall');
+  await stubAnonymousApi(page);
+  await page.goto('/');
+  const document = textSolid();
+  const live = await liveWorker(page, document);
+  try {
+    await expect.poll(() => fault.urls.length).toBe(1);
+    expect(new URL(fault.urls[0]!).search).toBe('');
+    // Only the first request remains held. No edit, online event or worker
+    // replacement prompts recovery when its module deadline expires.
+    fault.recover();
+    await expect.poll(() => fault.urls.length, { timeout: 15_000 }).toBe(2);
+    await expect
+      .poll(
+        async () =>
+          (await live.messages()).some(
+            (message) => message.phase === 'ready' && message.stale === false
+          ),
+        { timeout: 10_000 }
+      )
+      .toBe(true);
+    const messages = await live.messages();
+    expect(
+      messages.filter((message) => message.phase === 'ready').at(-1)
+    ).toMatchObject({ version: document.version, stale: false });
+    const final = messages
+      .filter((message) => message.type === 'projection-delta')
+      .at(-1)!;
+    expect(final.packet?.state.exportableBodyIds).toEqual(document.bodyOrder);
+    expect(final.packet?.state.warnings).toEqual([]);
+    expect(new URL(fault.urls[1]!).pathname).toBe(
+      new URL(fault.urls[0]!).pathname
+    );
+    expect(
+      new URL(fault.urls[1]!).searchParams.get('openzcad-font-retry')
+    ).toBe('2');
+    expect(
+      page.workers().filter((worker) => worker.url() === live.worker.url())
+    ).toEqual([live.worker]);
+    fault.release();
+    await live.worker.evaluate(() => self.dispatchEvent(new Event('online')));
+    await page.waitForTimeout(100);
+    expect(fault.urls).toHaveLength(2);
+  } finally {
+    fault.release();
+    await live.worker.evaluate(() => self.close());
+  }
 });
 
 test('the unchanged text solid restarts a stalled font download without replacing its worker', async ({
