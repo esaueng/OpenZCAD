@@ -1048,6 +1048,9 @@ for (const uploadAvailable of [true, false]) {
     await expect(
       page.getByRole('dialog', { name: 'This project changed in two places' })
     ).toHaveCount(0);
+    // Finish the original device before clearing its optional view handoff.
+    // A late session write would otherwise open the fresh device's resume UI.
+    await page.close();
     api.sessions = [];
     const device = await browser.newContext();
     try {
