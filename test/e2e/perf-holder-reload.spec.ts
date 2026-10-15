@@ -1,3 +1,5 @@
+import { execFileSync } from 'node:child_process';
+import { createHash } from 'node:crypto';
 import { mkdir, readFile, writeFile } from 'node:fs/promises';
 import { fileURLToPath } from 'node:url';
 import { expect, test, type Page } from '@playwright/test';
@@ -81,6 +83,7 @@ interface EditSample {
   statusText: string;
   /** Every worker state message received while the edit settled. */
   states: StateLog[];
+  cacheEvents: RebuildCacheEvent[];
   preflight: { firstStageAt: number; readyAt: number; stages: StageLog[] };
   live: { readyAt: number; stages: StageLog[] };
 }
@@ -88,6 +91,7 @@ interface EditSample {
 declare global {
   interface Window {
     __ozWorkerLog: StateLog[];
+    __ozExactCounts?: { bodies: number; faces: number };
   }
 }
 
@@ -98,6 +102,7 @@ async function installWorkerLog(page: Page) {
     class LoggedWorker extends Original {
       constructor(...args: ConstructorParameters<typeof Worker>) {
         super(...args);
+        const facesByBody = new Map<string, number>();
         this.addEventListener('message', (event: MessageEvent) => {
           const data = event.data as {
             type?: string;
@@ -105,7 +110,30 @@ async function installWorkerLog(page: Page) {
             stale?: boolean;
             requestId?: string;
             version?: number;
+            transient?: boolean;
+            packet?: {
+              base: number | null;
+              removed: string[];
+              changes: Record<string, { metadata: { faceCount: number } }>;
+            };
           };
+          if (
+            data?.type === 'projection-delta' &&
+            !data.transient &&
+            data.packet
+          ) {
+            if (data.packet.base === null) facesByBody.clear();
+            for (const id of data.packet.removed) facesByBody.delete(id);
+            for (const [id, change] of Object.entries(data.packet.changes))
+              facesByBody.set(id, change.metadata.faceCount);
+            window.__ozExactCounts = {
+              bodies: facesByBody.size,
+              faces: [...facesByBody.values()].reduce(
+                (sum, count) => sum + count,
+                0
+              )
+            };
+          }
           if (data?.type === 'state') {
             window.__ozWorkerLog.push({
               t: performance.now(),
@@ -259,12 +287,14 @@ async function clockOffset(page: Page): Promise<number> {
 async function measureEdit(
   page: Page,
   stages: StageLog[],
+  caches: RebuildCacheEvent[],
   offset: number,
   label: string,
   name: string,
   value: string
 ): Promise<EditSample> {
   const stageStart = stages.length;
+  const cacheStart = caches.length;
   const logStart = (await workerLog(page)).length;
   await page.evaluate(() => performance.clearMeasures?.());
   const field = page.getByLabel(`Expression for ${name}`);
@@ -272,7 +302,9 @@ async function measureEdit(
   const inputAt = await pageNow(page);
   await field.press('Enter');
   await expect(field).toHaveValue(value);
-  await expect(page.getByRole('contentinfo').getByRole('status')).toHaveText(
+  // The readout can append live rebuild progress before exact readiness.
+  // Require the successful commit message even while that suffix is present.
+  await expect(page.getByRole('contentinfo').getByRole('status')).toContainText(
     `Parameter ${name} updated.`,
     { timeout: 180_000 }
   );
@@ -300,6 +332,10 @@ async function measureEdit(
         .getEntriesByName('oz:parameter.preview.install', 'measure')
         .at(-1)?.duration ?? null
   );
+  if (process.env.H02_CACHE_MODE)
+    console.log(
+      `[H02 probe] ${label}: ${(exactEnd - inputAt).toFixed(0)} ms exact completion`
+    );
   const editStages = stages.slice(stageStart).map((s) => ({
     ...s,
     t: s.t - offset
@@ -313,6 +349,7 @@ async function measureEdit(
     exactMs: exactEnd - inputAt,
     statusText,
     states: log,
+    cacheEvents: caches.slice(cacheStart),
     preflight: {
       firstStageAt:
         editStages.find((s) => s.requestId === preflightId)?.t ?? NaN,
@@ -324,6 +361,81 @@ async function measureEdit(
       stages: editStages.filter((s) => !s.requestId)
     }
   };
+}
+
+/** Optional Chromium evidence, sampled after every timed edit has finished. */
+async function retainedWorkerHeap(page: Page) {
+  if (!process.env.H02_CACHE_MODE) return null;
+  const browser = page.context().browser();
+  if (!browser) return null;
+  const session = await browser.newBrowserCDPSession();
+  try {
+    const pageSession = await page.context().newCDPSession(page);
+    const { targetInfo } = await pageSession.send('Target.getTargetInfo');
+    await pageSession.detach();
+    const { targetInfos } = await session.send('Target.getTargets');
+    const workers = targetInfos.filter(
+      (target) =>
+        target.type === 'worker' &&
+        target.browserContextId === targetInfo.browserContextId &&
+        /geometryWorker-/.test(target.url)
+    );
+    if (workers.length !== 1) return null;
+    const { sessionId } = await session.send('Target.attachToTarget', {
+      targetId: workers[0]!.targetId,
+      flatten: false
+    });
+    let requestId = 0;
+    const command = (method: string): Promise<Record<string, number>> =>
+      new Promise((resolve, reject) => {
+        const id = ++requestId;
+        const timer = setTimeout(() => {
+          session.off('Target.receivedMessageFromTarget', receive);
+          reject(new Error('Worker heap probe timed out.'));
+        }, 10_000);
+        const receive = (event: { sessionId: string; message: string }) => {
+          if (event.sessionId !== sessionId) return;
+          const response = JSON.parse(event.message) as {
+            id?: number;
+            error?: unknown;
+            result?: Record<string, number>;
+          };
+          if (response.id !== id) return;
+          clearTimeout(timer);
+          session.off('Target.receivedMessageFromTarget', receive);
+          if (response.error)
+            reject(new Error('Worker heap probe unsupported.'));
+          else resolve(response.result ?? {});
+        };
+        session.on('Target.receivedMessageFromTarget', receive);
+        void session
+          .send('Target.sendMessageToTarget', {
+            sessionId,
+            message: JSON.stringify({ id, method })
+          })
+          .catch(() => {
+            clearTimeout(timer);
+            session.off('Target.receivedMessageFromTarget', receive);
+            reject(new Error('Worker heap transport unavailable.'));
+          });
+      });
+    await command('HeapProfiler.collectGarbage');
+    const heap = await command('Runtime.getHeapUsage');
+    await session.send('Target.detachFromTarget', { sessionId });
+    return {
+      retainedJSHeapBytes: heap.usedSize ?? null,
+      embedderHeapUsedBytes: heap.embedderHeapUsedSize ?? null,
+      backingStorageBytes: heap.backingStorageSize ?? null,
+      method:
+        'Chromium geometry-worker isolate, forced GC then Runtime.getHeapUsage'
+    };
+  } catch {
+    // Optional telemetry never substitutes an estimate or turns missing heap
+    // support into an exact-geometry failure. No private CDP error is logged.
+    return null;
+  } finally {
+    await session.detach();
+  }
 }
 
 interface Scenario {
@@ -415,6 +527,11 @@ for (const scenario of scenarios) {
     await installWorkerLog(page);
     collectStages(page, stages, caches);
 
+    const cacheModes: string[] = [];
+    page.on('console', (message) => {
+      if (message.text().startsWith('[H02 cache mode] '))
+        cacheModes.push(message.text().slice('[H02 cache mode] '.length));
+    });
     const name = scenario.parameter;
     const field = () => page.getByLabel(`Expression for ${name}`);
     await importHolder(page, await scenario.source(), 'Holder reload perf');
@@ -437,6 +554,7 @@ for (const scenario of scenarios) {
     const afterApply = await measureEdit(
       page,
       stages,
+      caches,
       offset,
       'first edit after assistant apply',
       name,
@@ -445,6 +563,7 @@ for (const scenario of scenarios) {
     const warmBefore = await measureEdit(
       page,
       stages,
+      caches,
       offset,
       'warm edit before reload',
       name,
@@ -486,6 +605,8 @@ for (const scenario of scenarios) {
             projectId: project.projectId,
             name: project.name,
             version: project.version,
+            documentBytes: new TextEncoder().encode(JSON.stringify(project))
+              .byteLength,
             parameterValue: Object.values(project.nodes ?? {}).find(
               (node) => node.kind === 'parameter' && node.name === parameterName
             )?.expression
@@ -525,6 +646,7 @@ for (const scenario of scenarios) {
     const first = await measureEdit(
       page,
       stages,
+      caches,
       offset,
       'first edit after reload',
       name,
@@ -533,6 +655,7 @@ for (const scenario of scenarios) {
     const second = await measureEdit(
       page,
       stages,
+      caches,
       offset,
       'second edit after reload',
       name,
@@ -558,6 +681,7 @@ for (const scenario of scenarios) {
     const immediate = await measureEdit(
       page,
       stages,
+      caches,
       offset,
       'immediate edit after reload',
       name,
@@ -576,6 +700,24 @@ for (const scenario of scenarios) {
 
     const sample = {
       recordedAt: new Date().toISOString(),
+      cacheMode: process.env.H02_CACHE_MODE ?? 'enabled',
+      observedCacheModes: cacheModes,
+      pair: process.env.H02_PAIR ?? null,
+      sourceCommit: execFileSync('git', ['rev-parse', 'HEAD'], {
+        encoding: 'utf8'
+      }).trim(),
+      lockfileSha256: createHash('sha256')
+        .update(await readFile('pnpm-lock.yaml'))
+        .digest('hex'),
+      sourceSha256: process.env.OZ_PERF_HOLDER_STEP
+        ? createHash('sha256')
+            .update(await readFile(process.env.OZ_PERF_HOLDER_STEP))
+            .digest('hex')
+        : null,
+      // Adapter byte accounting and WASM capacity are recorded in cacheEvents.
+      // Neither is a worker retained-heap measurement.
+      workerHeap: await retainedWorkerHeap(page),
+      exactCounts: await page.evaluate(() => window.__ozExactCounts ?? null),
       repeat: testInfo.repeatEachIndex,
       fixture: scenario.fixture,
       scenario: scenario.title,
@@ -597,6 +739,27 @@ for (const scenario of scenarios) {
       edits: [afterApply, warmBefore, first, second, immediate],
       cacheEvents: caches
     };
+    // Retain completed samples even when a regression budget fails.
+    const out =
+      process.env.OZ_PERF_OUT ?? 'perf-results/perf-holder-reload.jsonl';
+    await mkdir(out.slice(0, out.lastIndexOf('/')), { recursive: true });
+    await writeFile(out, `${JSON.stringify(sample)}\n`, { flag: 'a' });
+    if (process.env.H02_CACHE_MODE) {
+      expect(
+        cacheModes.length,
+        'Benchmark seam must be active'
+      ).toBeGreaterThan(0);
+      expect(new Set(cacheModes)).toEqual(
+        new Set([process.env.H02_CACHE_MODE])
+      );
+      if (process.env.H02_CACHE_MODE === 'disabled') {
+        expect(first.cacheEvents.length).toBeGreaterThan(0);
+        for (const event of first.cacheEvents) {
+          expect(event.restored).toBe(0);
+          expect(event.reusedMeasurements).toBe(0);
+        }
+      }
+    }
     if (process.env.OZ_PERF_BUDGET) {
       // H02 budgets: the first edit after a settled reload is a warm edit, and
       // an edit typed during the reload pays the reload once.
@@ -604,7 +767,10 @@ for (const scenario of scenarios) {
       expect(immediate.exactMs).toBeLessThanOrEqual(
         (secondReload.firstReadyAt ?? reloadReadyAt) + warmBefore.exactMs + 250
       );
-      if (scenario.parameter === 'holder_height') {
+      if (
+        scenario.parameter === 'holder_height' &&
+        process.env.H02_CACHE_MODE !== 'disabled'
+      ) {
         expect(
           first.preflight.stages.filter(
             (stage) => stage.stage === 'feature' && stage.name === 'Text'
@@ -613,10 +779,6 @@ for (const scenario of scenarios) {
         ).toHaveLength(0);
       }
     }
-    const out =
-      process.env.OZ_PERF_OUT ?? 'perf-results/perf-holder-reload.jsonl';
-    await mkdir(out.slice(0, out.lastIndexOf('/')), { recursive: true });
-    await writeFile(out, `${JSON.stringify(sample)}\n`, { flag: 'a' });
     console.log(
       `[perf-holder-reload] reload ready ${reloadReadyAt.toFixed(0)} ms; ` +
         `warm-before ${warmBefore.exactMs.toFixed(0)} ms; ` +
