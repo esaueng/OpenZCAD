@@ -50,6 +50,20 @@ interface ParameterRowProps extends ToggleBindingProps {
    * meant to explain.
    */
   onDescribe?: (name: string, description: string) => void;
+  /**
+   * The whole table this row sits in, as `parameterTable` writes it. A
+   * refusal answers the table it was measured against: once that changes —
+   * another row's edit landed, an undo, a collaborator — it is stale and
+   * clears, rather than piling up beside the edits that went through.
+   */
+  table?: string;
+}
+
+/** Every name and expression in a parameter table, for `ParameterRow.table`. */
+export function parameterTable(parameters: readonly ParameterNode[]): string {
+  return parameters
+    .map((parameter) => `${parameter.name}=${parameter.expression}`)
+    .join('\n');
 }
 
 export function ParameterRow({
@@ -65,7 +79,8 @@ export function ParameterRow({
   exposedInTweak,
   onDescribe,
   bodies = [],
-  onConfigureToggle
+  onConfigureToggle,
+  table
 }: ParameterRowProps) {
   const [expression, setExpression] = useState(parameter.expression);
   const [editing, setEditing] = useState(false);
@@ -140,6 +155,11 @@ export function ParameterRow({
       setExpression(parameter.expression);
       changedByUser.current = false;
     }
+  }
+  const [syncedTable, setSyncedTable] = useState(table);
+  if (table !== syncedTable) {
+    setSyncedTable(table);
+    setError(null);
   }
 
   async function commit() {
