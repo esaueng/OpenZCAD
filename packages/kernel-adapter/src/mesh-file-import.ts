@@ -193,8 +193,7 @@ function assertObjTriangleBudget(
   data: Uint8Array,
   policy: MeshImportPolicy
 ): void {
-  const isBlank = (byte: number | undefined) =>
-    byte === SPACE || byte === TAB || byte === CARRIAGE_RETURN;
+  const isBlank = (byte: number | undefined) => byte === SPACE || byte === TAB;
   let triangles = 0;
   let index = 0;
   while (index < data.length) {
@@ -205,7 +204,13 @@ function assertObjTriangleBudget(
       for (;;) {
         while (isBlank(data[index])) index += 1;
         const byte = data[index];
-        if (byte === undefined || byte === LINE_FEED || byte === HASH) break;
+        if (
+          byte === undefined ||
+          byte === LINE_FEED ||
+          byte === CARRIAGE_RETURN ||
+          byte === HASH
+        )
+          break;
         references += 1;
         if (references > 2 && ++triangles > MAX_IMPORT_TRIANGLES) {
           throw new Error(
@@ -214,13 +219,19 @@ function assertObjTriangleBudget(
           );
         }
         while (index < data.length && !isBlank(data[index])) {
-          if (data[index] === LINE_FEED) break;
+          if (data[index] === LINE_FEED || data[index] === CARRIAGE_RETURN)
+            break;
           index += 1;
         }
       }
     }
-    const lineEnd = data.indexOf(LINE_FEED, index);
-    index = lineEnd < 0 ? data.length : lineEnd + 1;
+    while (
+      index < data.length &&
+      data[index] !== LINE_FEED &&
+      data[index] !== CARRIAGE_RETURN
+    )
+      index += 1;
+    index += 1;
   }
 }
 
