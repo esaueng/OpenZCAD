@@ -3,7 +3,10 @@ import { Blob as NodeBlob } from 'node:buffer';
 import { IDBFactory } from 'fake-indexeddb';
 import { afterEach, beforeEach, expect, it, vi } from 'vitest';
 import { CommandManager, commandFactories } from '@openzcad/command-system';
-import { createProjectDocument } from '@openzcad/document-core';
+import {
+  createProjectDocument,
+  duplicateProjectDocument
+} from '@openzcad/document-core';
 import {
   documentNodesWithHistory,
   encodeImportedMeshPayload,
@@ -291,4 +294,46 @@ it('does not replace a reopened project with the departed upload manager', async
   expect((await loadLocalProject(clicked.projectId))!.version).toBe(
     reopened.document.version
   );
+});
+
+it('does not start the old project archive against a replacement editor after the lazy import', async () => {
+  const original = await imports();
+  const clicked = original.document;
+  const replacement = new CommandManager(
+    duplicateProjectDocument(clicked, 'Other account copy', toUserId('owner'))
+  );
+  const before = structuredClone(replacement.document);
+  expect(replacement.document.projectId).not.toBe(clicked.projectId);
+  expect(replacement.document.featureOrder[0]).toBe(clicked.featureOrder[0]);
+  const upload = vi.fn(async () => 'artifact_archived_under_original_project');
+  // This is the App closure's actual shape: document/upload owner come from
+  // the old render; the archival run reads managerRef only when it starts.
+  const archive = vi.fn(() =>
+    archiveLocalOnlyImportSources({
+      document: clicked,
+      currentDocument: () => replacement.document,
+      loadSourceBytes: loadSourceBlob,
+      archive: upload,
+      applyArtifactId(featureId, artifactId, source) {
+        replacement.archiveSource(featureId, artifactId, source);
+        return [...documentNodesWithHistory(replacement.document)].some(
+          (node) =>
+            node.kind === 'feature' &&
+            'artifactId' in node.data &&
+            node.data.artifactId === artifactId
+        );
+      }
+    })
+  );
+  const save = vi.spyOn(api, 'saveProjectDocument');
+  await expect(
+    restore(clicked, 1, {
+      archive,
+      currentDocument: () => null
+    })
+  ).rejects.toThrow();
+  expect(save).not.toHaveBeenCalled();
+  expect(replacement.document).toEqual(before);
+  expect(archive).not.toHaveBeenCalled();
+  expect(upload).not.toHaveBeenCalled();
 });

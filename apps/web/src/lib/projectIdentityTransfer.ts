@@ -443,6 +443,10 @@ export async function restoreAccountProjectFromDevice(
     throw new Error('The account record could not be verified.');
   sources.remoteVersions.set(document.projectId, expectedVersion);
   if (listLocalOnlyImportSources(document).length) {
+    if (sources.currentDocument()?.projectId !== document.projectId)
+      throw new Error(
+        'The project changed. The account copy was not restored; reopen it to retry.'
+      );
     await sources.archive();
     const current = sources.currentDocument();
     if (current?.projectId === document.projectId) {
