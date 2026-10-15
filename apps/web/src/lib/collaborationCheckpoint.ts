@@ -24,6 +24,7 @@ export type { CheckpointOptions } from './collaborationCheckpointFallback';
 
 export interface CheckpointControls {
   controller: AbortController;
+  /** The same room identity; recording a committed echo needs no write lease. */
   isCurrent(): boolean;
   drain(signal: AbortSignal): Promise<ProjectDocument | null>;
   lease(): ProjectEditLease | null;
@@ -110,7 +111,6 @@ export async function saveCollaborationCheckpoint(
   const label = normalizeCheckpointReason(reason);
   let authoritative: ProjectDocument | null = null;
   let confirmed = false;
-  let checkpointLease: ProjectEditLease | null = null;
   const confirm = (
     saved: ProjectDocument,
     current = mergeCheckpointEcho(options.readDocument(), snapshot, saved)
@@ -154,7 +154,6 @@ export async function saveCollaborationCheckpoint(
       lease.expiresAt <= Date.now()
     )
       throw new Error('A named save requires the active project edit lease.');
-    checkpointLease = lease;
     // A committed checkpoint can arrive over the room before its HTTP reply.
     // Keep that exact body even when the user buffers later edits or names.
     controls.observeEcho((echo) => {
@@ -218,8 +217,7 @@ export async function saveCollaborationCheckpoint(
       authoritative &&
       !confirmed &&
       controls.isCurrent() &&
-      options.isCurrent() &&
-      controls.lease()?.leaseId === checkpointLease?.leaseId
+      options.isCurrent()
     ) {
       try {
         // The broadcast proves the room committed this exact named state.
