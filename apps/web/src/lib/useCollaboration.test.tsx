@@ -3,6 +3,7 @@ import * as React from 'react';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import {
   addPrimitiveFeature,
+  appendRevision,
   importMeshBody,
   createProjectDocument
 } from '@openzcad/document-core';
@@ -525,7 +526,11 @@ describe('useCollaboration lease ordering', () => {
     });
     expect(
       socket.frames().filter((frame) => frame.type === 'document')
-    ).toHaveLength(2);
+    ).toHaveLength(1);
+    expect(socket.frames().at(-1)).toMatchObject({
+      baseVersion: base.version,
+      document: { version: first.version }
+    });
     act(() => socket.receive({ type: 'ack', version: first.version }));
     expect(socket.frames().at(-1)).toMatchObject({
       type: 'document',
@@ -642,7 +647,7 @@ describe('useCollaboration lease ordering', () => {
     unmount();
   });
 
-  it('resubmits its unchanged local document after reconnecting with a fresh lease', () => {
+  it('does not resubmit an unchanged room document after reconnecting with a fresh lease', () => {
     const base = createProjectDocument(
       'Reconnected',
       toUserId('user_reconnected')
@@ -665,10 +670,9 @@ describe('useCollaboration lease ordering', () => {
       })
     );
     act(() => replacement.receive({ type: 'lease-granted', lease }));
-    expect(replacement.frames().at(-1)).toMatchObject({
-      type: 'document',
-      document: { version: base.version }
-    });
+    expect(
+      replacement.frames().filter((frame) => frame.type === 'document')
+    ).toHaveLength(0);
     unmount();
   });
 
@@ -1290,6 +1294,142 @@ describe('useCollaboration lease ordering', () => {
     expect(result.current.conflict).toBeNull();
     expect(readUnresolvedConflict(base.projectId, 'room')).toBeNull();
     unmount();
+  });
+});
+
+describe('collaboration observer adoption', () => {
+  it.each(['owner', 'editor'] as const)(
+    'adopts edits while the %s is denied a lease and submits nothing on handoff',
+    (role) => {
+      vi.stubGlobal('WebSocket', FakeWebSocket);
+      const base = createProjectDocument('Shared model', toUserId('owner'));
+      const onConflict = vi.fn();
+      let setDocument!: React.Dispatch<React.SetStateAction<ProjectDocument>>;
+      const hook = renderHook(() => {
+        const [document, update] = React.useState(base);
+        setDocument = update;
+        return {
+          document,
+          room: useCollaboration({
+            enabled: true,
+            document,
+            session: session(role),
+            onRemoteDocument: update,
+            onConflict
+          })
+        };
+      });
+      const socket = FakeWebSocket.instances[0]!;
+      act(() => {
+        socket.open();
+        socket.receive({
+          type: 'state',
+          members: [],
+          document: base,
+          role,
+          lease: null
+        });
+        socket.receive({
+          type: 'lease-denied',
+          reason: 'held',
+          expiresAt: Date.now() + 30_000
+        });
+      });
+      const edited = addPrimitiveFeature(base, {
+        name: 'Editor box',
+        primitiveKind: 'box',
+        dimensions: { width: 60, depth: 40, height: 20 }
+      });
+      act(() =>
+        socket.receive({
+          type: 'document',
+          clientId: 'other',
+          document: edited
+        })
+      );
+      expect(hook.result.current.document.featureOrder).toEqual(
+        edited.featureOrder
+      );
+      expect(hook.result.current.room.conflict).toBeNull();
+      expect(onConflict).not.toHaveBeenCalled();
+      act(() =>
+        socket.receive({
+          type: 'lease-granted',
+          lease: {
+            leaseId: 'handoff',
+            projectId: base.projectId,
+            clientId: 'observer',
+            userId: toUserId(role),
+            expiresAt: Date.now() + 30_000
+          }
+        })
+      );
+      expect(
+        socket.frames().filter((frame) => frame.type === 'document')
+      ).toHaveLength(0);
+      // A subsequent local edit is fenced against the adopted version.
+      const next = addPrimitiveFeature(edited, {
+        name: 'Observer sphere',
+        primitiveKind: 'sphere',
+        dimensions: { radius: 2 }
+      });
+      vi.useFakeTimers();
+      act(() => setDocument(next));
+      act(() => {
+        vi.advanceTimersByTime(500);
+      });
+      expect(socket.frames().at(-1)).toMatchObject({
+        type: 'document',
+        baseVersion: edited.version
+      });
+      hook.unmount();
+    }
+  );
+
+  it('adopts a descendant on reopen without overwriting the room', () => {
+    vi.stubGlobal('WebSocket', FakeWebSocket);
+    const base = addPrimitiveFeature(
+      createProjectDocument('Reopened model', toUserId('owner')),
+      {
+        name: 'Initial box',
+        primitiveKind: 'box',
+        dimensions: { width: 1, depth: 1, height: 1 }
+      }
+    );
+    const edited = appendRevision(
+      addPrimitiveFeature(base, {
+        name: 'Editor box',
+        primitiveKind: 'box',
+        dimensions: { width: 1, depth: 2, height: 3 }
+      }),
+      'Editor added box'
+    );
+    const onRemoteDocument = vi.fn();
+    const hook = renderHook(() =>
+      useCollaboration({
+        enabled: true,
+        document: base,
+        session: session('owner'),
+        onRemoteDocument,
+        onConflict: vi.fn()
+      })
+    );
+    const socket = FakeWebSocket.instances[0]!;
+    act(() => {
+      socket.open();
+      socket.receive({
+        type: 'state',
+        members: [],
+        document: edited,
+        role: 'owner',
+        lease: null
+      });
+    });
+    expect(onRemoteDocument).toHaveBeenCalledWith(edited, { adopted: true });
+    expect(
+      socket.frames().filter((frame) => frame.type === 'document')
+    ).toHaveLength(0);
+    hook.unmount();
   });
 });
 
